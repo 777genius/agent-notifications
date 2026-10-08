@@ -12,6 +12,8 @@
 #include <wrl.h>
 #include <winrt/Windows.Data.Json.h>
 #include <winrt/Windows.Data.Xml.Dom.h>
+#include <winrt/Windows.Security.Cryptography.h>
+#include <winrt/Windows.Storage.Streams.h>
 #include <winrt/Windows.Management.Deployment.h>
 #include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.ApplicationModel.h>
@@ -169,6 +171,73 @@ static std::string fileSHA(HANDLE file) {
  for (auto byte : digest) { out += digits[byte>>4]; out += digits[byte&15]; }
  return out;
 }
+static uint32_t codexProtocols(const std::vector<uint8_t>& raw) {
+ require(!raw.empty() && raw.size() <= 65536);
+ using namespace winrt::Windows::Data::Xml::Dom;
+ archiveAt("manifest_xml_settings");
+ XmlLoadSettings settings; settings.ProhibitDtd(true); settings.ResolveExternals(false);
+ archiveAt("manifest_xml_document");
+ XmlDocument document;
+ archiveAt("manifest_buffer_create");
+ const auto buffer = winrt::Windows::Security::Cryptography::CryptographicBuffer::CreateFromByteArray(
+  winrt::array_view<const uint8_t>(raw.data(),raw.data()+raw.size()));
+ // GetStream provides XML bytes, not a UTF8 string. Let the documented byte
+ // overload interpret the encoding, preserving the exact bounded byte sequence.
+ archiveAt("manifest_xml_load");
+ document.LoadXmlFromBuffer(buffer,settings);
+ archiveAt("manifest_protocol_query");
+ return document.SelectNodes(L"//*[local-name()='Protocol' and @Name='codex']").Size();
+}
+// Breakage: raw UTF16 is wrongly converted as UTF8, or byte loading accepts a
+// DTD/external declaration, malformed bytes/document or duplicate codex registration.
+// Literal independent documents test the real SDK parser in memory only.
+static void xmlContracts() {
+ const std::string utf8 = "<?xml version='1.0' encoding='UTF-8'?><Package><Protocol Name='codex'/></Package>";
+ const std::string utf16 = "<?xml version='1.0' encoding='UTF-16'?><Package><Protocol Name='codex'/></Package>";
+ auto bytes8 = [](const std::string& text) { return std::vector<uint8_t>(text.begin(),text.end()); };
+ auto bytes16 = [](const std::string& text, bool bom) {
+  std::vector<uint8_t> out;
+  if (bom) out = {0xff,0xfe};
+  for (unsigned char c : text) { out.push_back(c); out.push_back(0); }
+  return out;
+ };
+ const auto plain8 = bytes8(utf8);
+ std::vector<uint8_t> bom8{0xef,0xbb,0xbf}; bom8.insert(bom8.end(),plain8.begin(),plain8.end());
+ const auto plain16 = bytes16(utf16,false), bom16 = bytes16(utf16,true);
+ for (const auto& valid : {plain8,bom8,plain16,bom16}) require(codexProtocols(valid) == 1);
+ // Breakage: permissive UTF8 replacement preserves the codex count and hides
+ // a corrupt byte in unrelated text. Only an actual parser error passes.
+ auto invalid8 = bytes8("<?xml version='1.0' encoding='UTF-8'?><Package><Ignored>");
+ invalid8.push_back(0xff);
+ const auto suffix = bytes8("</Ignored><Protocol Name='codex'/></Package>");
+ invalid8.insert(invalid8.end(),suffix.begin(),suffix.end());
+ bool encodingRejected = false;
+ try { codexProtocols(invalid8); }
+ catch (const winrt::hresult_error&) { encodingRejected = true; }
+ require(encodingRejected);
+ for (const auto& invalid : {
+   "<Package><Protocol Name='codex'></Package>",
+   "<!DOCTYPE Package [<!ENTITY id 'codex'>]><Package><Protocol Name='&id;'/></Package>",
+   "<!DOCTYPE Package SYSTEM 'https://TEST.invalid/blocked.dtd'><Package><Protocol Name='codex'/></Package>",
+   "<Package><Protocol Name='codex'/><Protocol Name='codex'/></Package>"}) {
+  bool rejected = false;
+  try { require(codexProtocols(bytes8(invalid)) == 1); }
+  catch (const winrt::hresult_error&) { rejected = true; }
+  catch (const std::runtime_error&) { rejected = true; }
+  require(rejected);
+ }
+ // Demonstrate the old boundary's failure on a plausible raw XML encoding.
+ // This is not a claim that the downloaded vendor manifest uses this encoding.
+ bool oldRejected = false;
+ try {
+  using namespace winrt::Windows::Data::Xml::Dom;
+  XmlLoadSettings settings; settings.ProhibitDtd(true); settings.ResolveExternals(false);
+  XmlDocument old;
+  old.LoadXml(wide(std::string(bom16.begin(),bom16.end())),settings);
+ } catch (const winrt::hresult_error&) { oldRejected = true; }
+ require(oldRejected);
+ std::cout << "TEST byte XML contracts passed; legacy UTF16 string-load rejected; no native target effects\n";
+}
 struct Archive {
  Handle file;
  ComPtr<IAppxManifestPackageId> id;
@@ -266,31 +335,29 @@ struct Archive {
   num(*archiveFacts,L"manifest_bytes_read",xmlSize);
   archiveAt("manifest_xml_byte_bound");
   require(xmlSize && xmlSize <= 65536);
-  using namespace winrt::Windows::Data::Xml::Dom;
-  archiveAt("manifest_xml_settings");
-  XmlLoadSettings settings; settings.ProhibitDtd(true); settings.ResolveExternals(false);
-  archiveAt("manifest_xml_document");
-  XmlDocument document;
-  archiveAt("manifest_utf8_conversion");
-  const auto xmlText = wide(std::string(xmlBytes.begin(),xmlBytes.begin()+xmlSize));
-  archiveAt("manifest_xml_load");
-  document.LoadXml(xmlText,settings);
-  archiveAt("manifest_protocol_query");
-  const auto protocols = document.SelectNodes(L"//*[local-name()='Protocol' and @Name='codex']");
-  num(*archiveFacts,L"codex_protocol_count",protocols.Size());
+  xmlBytes.resize(xmlSize);
+  put(*archiveFacts,L"manifest_sha",sha(xmlBytes));
+  const char* digits = "0123456789abcdef"; std::string prefix;
+  for (size_t i = 0; i < std::min<size_t>(4,xmlBytes.size()); ++i) {
+   prefix += digits[xmlBytes[i]>>4]; prefix += digits[xmlBytes[i]&15];
+  }
+  put(*archiveFacts,L"manifest_first4_hex",prefix);
+  const auto protocolCount = codexProtocols(xmlBytes);
+  num(*archiveFacts,L"codex_protocol_count",protocolCount);
   auto intake = fact(); put(intake,L"archive_sha",digest); put(intake,L"name",narrow(name));
+  put(intake,L"manifest_sha",sha(xmlBytes)); put(intake,L"manifest_first4_hex",prefix);
   put(intake,L"publisher",narrow(publisher)); put(intake,L"family",narrow(family));
   put(intake,L"full_name",narrow(full)); num(intake,L"architecture",arch);
   intake.Insert(L"resource_absent",JsonValue::CreateBooleanValue(empty));
   intake.Insert(L"dependencies_present",JsonValue::CreateBooleanValue(any != FALSE));
-  num(intake,L"codex_protocol_count",protocols.Size()); put(intake,L"signature","system_trust");
+  num(intake,L"codex_protocol_count",protocolCount); put(intake,L"signature","system_trust");
   const auto leaf = phase == "deploy" ? L"deployment-intake.json" : L"intake.json";
   archiveAt("intake_publication");
   publish(leaf,intake);
   archiveAt("strict_identity_architecture_resource_dependency_protocol_contract");
   require(name == L"OpenAI.Codex" && publisher == L"CN=50BDFD77-8903-4850-9FFE-6E8522F64D5B"
    && family == L"OpenAI.Codex_2p2nqsd0c76g0" && arch == APPX_PACKAGE_ARCHITECTURE_X64
-   && empty && !any && protocols.Size() == 1);
+   && empty && !any && protocolCount == 1);
   archiveAt("original_archive_budget"); budget();
  }
 };
@@ -651,6 +718,19 @@ static void click() {
 }
 
 int wmain(int argc, wchar_t** argv) {
+ if (argc == 2 && !wcscmp(argv[1],L"--inert-xml")) {
+  try {
+   std::thread([limit=GetTickCount64()+10000] {
+    while (GetTickCount64() < limit) Sleep(10);
+    ExitProcess(124); // Only this inert TEST observer; no target operation exists.
+   }).detach();
+   winrt::init_apartment(winrt::apartment_type::multi_threaded);
+   xmlContracts(); return 0;
+  } catch (...) {
+   std::cerr << "TEST inert XML contracts failed\n";
+   return 1;
+  }
+ }
  try {
   require(argc == 5);
   const std::wstring mode = argv[1]; phase = narrow(mode); root = argv[2]; nonce = narrow(argv[3]); source = narrow(argv[4]);
