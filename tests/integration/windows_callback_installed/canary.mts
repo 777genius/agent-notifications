@@ -8,6 +8,8 @@ import path from 'node:path';
 import { callbackJoin, envelope, sha, type Receiver, type Tuple } from './evidence.mts';
 type Artifact = {source: string; helperSHA256: string; binarySHA256: string; helperExecuted: boolean; installedQualified: boolean};
 type Ledger = {Generation: number; WindowsRetained?: {SnapshotPath: string; SHA256: string}[]};
+type Prerequisites = Tuple & {sid: string; session: number; integrity_rid: number; native_machine: number; process_machine: number;
+  windows11_client: boolean; 'Software\\Classes\\CLSID': string; 'Software\\Classes\\AppUserModelId': string};
 const env = process.env;
 assert.equal(env.GITHUB_ACTIONS,'true'); assert.equal(env.GITHUB_EVENT_NAME,'workflow_dispatch');
 assert.equal(env.GITHUB_RUN_ATTEMPT,'1'); assert.equal(env.TEST_INSTALLED_ADMISSION,'one-fresh-disposable-installed-callback');
@@ -142,10 +144,23 @@ async function main(): Promise<void> {
   // A separate reviewed intake freezes authority before even TEST package deployment.
   assert.equal(intake.archive_sha,env.TEST_EXPECTED_ARCHIVE_SHA);
   assert.equal(intake.full_name,env.TEST_EXPECTED_FULL_NAME);
-  const prerequisite = JSON.parse((await boundedRead(path.join(root,'prerequisites.json'))).toString()) as Record<string,string>;
-  assert.equal(prerequisite['Software\\Classes\\CLSID'],'present');
-  assert.equal(prerequisite['Software\\Classes\\AppUserModelId'],'present');
+  const prerequisite = JSON.parse((await boundedRead(path.join(root,'prerequisites.json'))).toString()) as Prerequisites;
+  assert.equal(prerequisite.source,source); assert.equal(prerequisite.nonce,tuple.nonce);
+  assert.equal(prerequisite.windows11_client,true);
+  assert(typeof prerequisite.sid === 'string' && /^S-1-[0-9]+(?:-[0-9]+)+$/.test(prerequisite.sid));
+  for (const key of ['session','integrity_rid','native_machine','process_machine'] as const) {
+    assert(Number.isSafeInteger(prerequisite[key]) && prerequisite[key] >= 0);
+  }
+  assert(prerequisite.session > 0 && prerequisite.native_machine > 0);
   await actor('deploy');
+  await actor('prerequisites-post-deploy');
+  const post = JSON.parse((await boundedRead(path.join(root,'post-deployment-prerequisites.json'))).toString()) as Prerequisites;
+  assert.equal(post.source,source); assert.equal(post.nonce,tuple.nonce); assert.equal(post.windows11_client,true);
+  for (const key of ['sid','session','integrity_rid','native_machine','process_machine'] as const) {
+    assert.equal(post[key],prerequisite[key]);
+  }
+  assert.equal(post['Software\\Classes\\CLSID'],'present');
+  assert.equal(post['Software\\Classes\\AppUserModelId'],'present');
   const staged = await open(path.join(stage,entry),'wx'); try { await staged.writeFile(binary); await staged.sync(); } finally { await staged.close(); }
   await run('install',original,['internal-install-runtime','--stage',stage,'--target',bin,'--entry',entry,'--control-root',control]);
   const config = await open(global,'wx');
