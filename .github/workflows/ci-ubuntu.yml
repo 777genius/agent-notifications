@@ -103,7 +103,7 @@ jobs:
               assert len(source) == pins['sourceBytes'] and hashlib.sha256(source).hexdigest() == pins['sourceSHA256'], 'exact source length/hash'
               return source
 
-          pins = {'encodedBytes': 65459, 'frameBytes': 209397, 'xzBytes': 52344, 'transportBytes': 52367, 'transportSHA256': '0384e0dd88903852dfd4ddfa28848d7244e176ed7ddd847f20d7344dcb1a8a25', 'sourceBytes': 217668, 'sourceSHA256': '9049769de8a83f7f7cb24e89c9b9808d72ce10dbb9bc5c860ec253ae4c79e5bb'}
+          pins = {'encodedBytes': 65444, 'frameBytes': 209407, 'xzBytes': 52332, 'transportBytes': 52355, 'transportSHA256': 'af3af5eba4069b4bb0dbebae441244147bbfcdff01731e5366e9ed843313c92b', 'sourceBytes': 217678, 'sourceSHA256': '044a57b8d14e9060e135ecee153b8e8a1e5a29045f3d7a4d2f07efb38a326b26'}
           candidate = decode(os.environ['CURSOR_CARRIER_B64'],pins)
           compile(candidate,'native_case.py','exec')
           target = pathlib.Path(tempfile.mkdtemp(prefix='TEST-cursor-carrier-',dir=os.environ['RUNNER_TEMP']))
@@ -136,7 +136,7 @@ jobs:
           import sys
           import time
 
-          SOURCE_SHA = '9049769de8a83f7f7cb24e89c9b9808d72ce10dbb9bc5c860ec253ae4c79e5bb'
+          SOURCE_SHA = '044a57b8d14e9060e135ecee153b8e8a1e5a29045f3d7a4d2f07efb38a326b26'
           LIMIT = 1 << 20
           DEADLINE = time.monotonic() + 30
 
@@ -508,7 +508,7 @@ jobs:
               assert len(source) == pins['sourceBytes'] and hashlib.sha256(source).hexdigest() == pins['sourceSHA256'], 'exact source length/hash'
               return source
 
-          pins = {'encodedBytes': 65459, 'frameBytes': 209397, 'xzBytes': 52344, 'transportBytes': 52367, 'transportSHA256': '0384e0dd88903852dfd4ddfa28848d7244e176ed7ddd847f20d7344dcb1a8a25', 'sourceBytes': 217668, 'sourceSHA256': '9049769de8a83f7f7cb24e89c9b9808d72ce10dbb9bc5c860ec253ae4c79e5bb'}
+          pins = {'encodedBytes': 65444, 'frameBytes': 209407, 'xzBytes': 52332, 'transportBytes': 52355, 'transportSHA256': 'af3af5eba4069b4bb0dbebae441244147bbfcdff01731e5366e9ed843313c92b', 'sourceBytes': 217678, 'sourceSHA256': '044a57b8d14e9060e135ecee153b8e8a1e5a29045f3d7a4d2f07efb38a326b26'}
           candidate = decode(os.environ['CURSOR_CARRIER_B64'],pins)
           compile(candidate,'native_case.py','exec')
           parent = pathlib.Path(subprocess.check_output(
@@ -1086,7 +1086,7 @@ jobs:
               parser.add_argument('--gid', type=int)
               raise SystemExit(main(parser.parse_args()))
           PY_EVIDENCE
-          sudo /usr/bin/python3 -B -S "$export_dir/case_evidence.py" --runner-temp "$CURSOR_CASE_PARENT" --source-sha 9049769de8a83f7f7cb24e89c9b9808d72ce10dbb9bc5c860ec253ae4c79e5bb --destination "$export_dir" --uid "$(id -u)" --gid "$(id -g)"
+          sudo /usr/bin/python3 -B -S "$export_dir/case_evidence.py" --runner-temp "$CURSOR_CASE_PARENT" --source-sha 044a57b8d14e9060e135ecee153b8e8a1e5a29045f3d7a4d2f07efb38a326b26 --destination "$export_dir" --uid "$(id -u)" --gid "$(id -g)"
       - name: Always retain SAME-case TEST evidence and bounded preparation records
         if: always()
         timeout-minutes: 3
