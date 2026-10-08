@@ -290,6 +290,11 @@ def run(args):
         require(sha(binary) != sha(updated_binary), "actual_update_artifacts_identical")
         shutil.copyfile(updated_binary, evidence_dir / ("claude-notifications-update-" + args.platform + "-" + args.arch + extension))
         (evidence_dir / "go-version-m-update.txt").write_bytes(update_metadata)
+        frame_classifier = root / ("gemini-frame-classifier" + extension)
+        command("build_frame_classifier", [go, "build", "-trimpath", "-buildvcs=true", "-ldflags=-s -w", "-o", frame_classifier,
+                                         "./tests/integration/gemini_frame_classifier"], timeout=180)
+        evidence["frame_classifier"] = {"sha256": sha(frame_classifier), "SDK_version": modules[SDK]["Version"],
+                                        "source_package": "tests/integration/gemini_frame_classifier"}
         install = root / "cli"
         install.mkdir(mode=0o700)
         (install / MARKER).write_text("fresh exact TEST CLI installation\n", encoding="utf-8")
@@ -314,7 +319,7 @@ def run(args):
         for label, driver, extra, manifest, limit in (
             ("G0", g0path, [], "evidence.json", 280),
             ("G5", g5path, ["--trusted-orchestrator", "--binary", binary, "--update-binary", updated_binary, "--g0-driver", g0path,
-                           "--sdk-module-root", staged["sdk"], "--installer-module-root", staged["agentplugins"]],
+                           "--sdk-module-root", staged["sdk"], "--installer-module-root", staged["agentplugins"], "--frame-classifier", frame_classifier],
              "production-evidence.json", 650)):
             lab = root / ("TEST-" + label)
             try:
@@ -371,7 +376,7 @@ def run(args):
                     # Fixed classifications and version metadata only, never provider or terminal text.
                     print(json.dumps({"native_driver": label, **{key: driver_facts[key] for key in
                         ("classification", "exception_type", "native_version_probe", "setup_failure", "setup_cleanup_failure", "settle_failure",
-                         "bridge_failure", "provider_endpoints", "provider_cleanup_classification", "cleanup_classification", "native_execution", "driver")
+                         "bridge_failure", "sdk_frame_analysis", "provider_endpoints", "provider_cleanup_classification", "cleanup_classification", "native_execution", "driver")
                         if key in driver_facts}}), flush=True)
         require(all(evidence.get(label) == "passed_implemented_scenarios" for label in ("G0", "G5")), "native_qualification_failed")
         evidence["status"] = "passed_implemented_scenarios_with_external_gates_pending"

@@ -203,14 +203,34 @@ type Handler struct {
 }
 
 func (h *Handler) Handle(ctx context.Context, sender, key, token string) error {
-	if !validKey(key) || token == "" || len(token) > 4096 || strings.ContainsAny(token, "\x00\r\n") || h.Clock == nil || h.ReadOwners == nil || h.Verify == nil || h.Launch == nil {
-		return ErrUnavailable
+	boot, start, e := h.entrySample()
+	if e != nil {
+		return e
+	}
+	return h.handle(ctx, sender, key, token, boot, start)
+}
+
+func (h *Handler) entrySample() (string, float64, error) {
+	if h == nil || h.Clock == nil {
+		return "", 0, ErrUnavailable
 	}
 	boot, start, e := h.Clock.Now()
 	if e != nil || boot == "" || start < 0 || math.IsNaN(start) || math.IsInf(start, 0) {
+		return "", 0, ErrUnavailable
+	}
+	return boot, start, nil
+}
+
+func (h *Handler) handle(ctx context.Context, sender, key, token, boot string, start float64) error {
+	if !validKey(key) || token == "" || len(token) > 4096 || strings.ContainsAny(token, "\x00\r\n") || h.Clock == nil || h.ReadOwners == nil || h.Verify == nil || h.Launch == nil {
 		return ErrUnavailable
 	}
-	operation, cancel := context.WithTimeout(ctx, 3*time.Second)
+	currentBoot, now, e := h.entrySample()
+	if e != nil || currentBoot != boot || now < start || now-start >= 3 {
+		return ErrUnavailable
+	}
+	// Preserve the original callback-entry budget across admission/validation.
+	operation, cancel := context.WithTimeout(ctx, time.Duration((3-(now-start))*float64(time.Second)))
 	defer cancel()
 	live := func() bool {
 		b, n, e := h.Clock.Now()
@@ -288,14 +308,23 @@ func launch(ctx context.Context, s Snapshot, uri, token string) error {
 type application struct {
 	handler  *Handler
 	lifetime context.Context
+	cancel   context.CancelFunc
 	mu       sync.Mutex
 	closed   bool
+	ready    bool
+	startup  <-chan struct{}
+	active   int
+	workers  sync.WaitGroup
 }
 
 // dbus.Sender is injected from HeaderFieldSender by godbus and is absent from
 // the wire signature. Platform data and action arguments cannot forge it.
 func (a *application) ActivateAction(sender dbus.Sender, name string, parameters []dbus.Variant, data map[string]dbus.Variant) *dbus.Error {
-	if a.lifetime == nil || a.lifetime.Err() != nil || name != "open" || len(parameters) != 1 || len(data) > 3 {
+	if a.lifetime == nil || a.handler == nil {
+		return dbus.MakeFailedError(ErrUnavailable)
+	}
+	boot, start, e := a.handler.entrySample()
+	if e != nil || a.lifetime.Err() != nil || name != "open" || len(parameters) != 1 || len(data) > 3 {
 		return dbus.MakeFailedError(ErrUnavailable)
 	}
 	for k, v := range data {
@@ -315,19 +344,62 @@ func (a *application) ActivateAction(sender dbus.Sender, name string, parameters
 	if !ok {
 		return dbus.MakeFailedError(ErrUnavailable)
 	}
-	// No queued callback can extend its budget while another attempt is active.
-	if !a.mu.TryLock() {
-		return dbus.MakeFailedError(errors.New("callback_busy"))
+	// Name ownership may complete before RequestName returns to Serve. Keep
+	// that initial delivery within its original budget until the outcome is
+	// published; this is startup synchronization, not an admitted work queue.
+	if a.startup != nil {
+		currentBoot, now, err := a.handler.entrySample()
+		if err != nil || currentBoot != boot || now < start || now-start >= 3 {
+			return dbus.MakeFailedError(ErrUnavailable)
+		}
+		timer := time.NewTimer(time.Duration((3 - (now - start)) * float64(time.Second)))
+		defer timer.Stop()
+		select {
+		case <-a.startup:
+		case <-a.lifetime.Done():
+			return dbus.MakeFailedError(ErrUnavailable)
+		case <-timer.C:
+			return dbus.MakeFailedError(ErrUnavailable)
+		}
 	}
-	defer a.mu.Unlock()
-	if a.closed || a.lifetime.Err() != nil {
+	// Admission is bounded and has no work queue; separate targets do not share
+	// a verifier lock or deadline. Add is ordered against shutdown's Wait.
+	a.mu.Lock()
+	if a.closed || !a.ready || a.lifetime.Err() != nil {
+		a.mu.Unlock()
 		return dbus.MakeFailedError(ErrUnavailable)
 	}
-	if e := a.handler.Handle(a.lifetime, string(sender), key, token); e != nil {
+	if a.active >= 2 {
+		a.mu.Unlock()
+		return dbus.MakeFailedError(errors.New("callback_busy"))
+	}
+	a.active++
+	a.workers.Add(1)
+	a.mu.Unlock()
+	defer func() {
+		// A canceled context does not release a still-running sync verifier.
+		a.mu.Lock()
+		a.active--
+		a.mu.Unlock()
+		a.workers.Done()
+	}()
+	if e := a.handler.handle(a.lifetime, string(sender), key, token, boot, start); e != nil {
 		return dbus.MakeFailedError(e)
 	}
 	return nil
 }
+
+func (a *application) stop() {
+	a.mu.Lock()
+	a.closed, a.ready = true, false
+	a.mu.Unlock()
+	if a.cancel != nil {
+		a.cancel()
+	}
+	// Handler includes its joined watchdog, not the selected client's reaper.
+	a.workers.Wait()
+}
+
 func Serve(ctx context.Context, binding notification.LinuxBinding) error {
 	s, e := Load(binding)
 	if e != nil {
@@ -338,12 +410,16 @@ func Serve(ctx context.Context, binding notification.LinuxBinding) error {
 		return e
 	}
 	defer func() { _ = c.Close() }() // Best-effort service transport cleanup after shutdown or failure.
-	a := &application{lifetime: ctx, handler: &Handler{Snapshot: s, Binding: binding, Clock: continuousClock{}, ReadOwners: func(ctx context.Context) (Owners, error) { return owners(ctx, c) }, Verify: func(ctx context.Context, s Snapshot) error {
+	service, cancel := context.WithCancel(ctx)
+	startup := make(chan struct{})
+	a := &application{lifetime: service, cancel: cancel, startup: startup, handler: &Handler{Snapshot: s, Binding: binding, Clock: continuousClock{}, ReadOwners: func(ctx context.Context) (Owners, error) { return owners(ctx, c) }, Verify: func(ctx context.Context, s Snapshot) error {
 		if e := CheckInstallation(binding, s); e != nil {
 			return e
 		}
 		return CheckSelectedContext(ctx, s)
 	}, Launch: launch}}
+	// Close admission and drain on every exported-service exit before c.Close.
+	defer a.stop()
 	path := dbus.ObjectPath("/" + strings.ReplaceAll(s.ApplicationID, ".", "/"))
 	if e = c.Export(a, path, "org.freedesktop.Application"); e != nil {
 		return e
@@ -355,11 +431,12 @@ func Serve(ctx context.Context, binding notification.LinuxBinding) error {
 	if reply != dbus.RequestNameReplyPrimaryOwner {
 		return ErrUnavailable
 	}
+	a.mu.Lock()
+	a.ready = service.Err() == nil
+	a.mu.Unlock()
+	close(startup)
 	// Bounded cold service, independent of sender lifetime; future activations
 	// are handled by the transaction-installed D-Bus service reader again.
-	<-ctx.Done()
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.closed = true
+	<-service.Done()
 	return nil
 }
