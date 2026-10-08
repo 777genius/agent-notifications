@@ -101,12 +101,31 @@ jobs:
       - name: Download dependencies
         run: go mod download
 
+      - name: Compile retained Windows SDK callback asset
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          ./native/windows-callback/build.ps1 -OutputDirectory "$env:RUNNER_TEMP\windows-callback-release" -EmbedAsset
+
+      - name: Retain Windows callback compile custody evidence
+        if: matrix.platform == 'windows'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7 repository pin
+        with:
+          name: windows-callback-build-${{ github.sha }}
+          path: ${{ runner.temp }}/windows-callback-release
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Build binaries
         env:
           CGO_ENABLED: '1'
         shell: bash
         run: |
           mkdir -p dist
+          if [ "${{ matrix.platform }}" = "windows" ]; then
+            # Exact helper bytes compiled above remain inert until installed qualification.
+            export GOFLAGS="-tags=windows_callback_asset"
+          fi
           echo "Building claude-notifications..."
           go build -ldflags="-s -w" -trimpath -o "dist/${{ matrix.binary }}" ./cmd/claude-notifications
           echo "Building sound-preview..."
@@ -127,6 +146,12 @@ jobs:
             FOCUS_BINARY="${FOCUS_BINARY%.exe}-focus.exe"
             go build -ldflags="-s -w -H=windowsgui" -trimpath -o "dist/$FOCUS_BINARY" ./cmd/claude-notifications
           fi
+
+      - name: Verify Windows release embeds exact trusted helper bytes
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          ./native/windows-callback/verify-embedded.ps1 -Executable "dist/${{ matrix.binary }}" -Helper "$env:RUNNER_TEMP\windows-callback-release\helper.exe"
 
       - name: Build version-bound portable package
         env:
