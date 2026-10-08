@@ -18,6 +18,7 @@
 #include <winrt/Windows.System.h>
 #include <thread>
 #include <atomic>
+#include <optional>
 #include <iostream>
 #include "../../../native/windows-callback/custody.h"
 using namespace wcb;
@@ -28,6 +29,11 @@ static fs::path root;
 static std::string nonce, source;
 static uint64_t end;
 static std::string phase = "entry";
+// No WinRT activation at initialization. Collected only for this fixed archive
+// intake, and exported only if its original strict contract fails.
+static std::optional<JsonObject> archiveFacts;
+static std::string archiveStep;
+static void archiveAt(const char* step) { archiveStep = step; }
 static std::vector<Handle> roots;
 static void budget() { require(GetTickCount64() < end); }
 static void put(JsonObject& j, const wchar_t* k, const std::string& v) {
@@ -169,9 +175,11 @@ struct Archive {
  std::wstring full;
  std::string digest;
  Archive():file(open(root/L"client.msix",false)) {
+  archiveAt("archive_size");
   LARGE_INTEGER size{};
   require(GetFileSizeEx(file.h,&size) && size.QuadPart > 0 && size.QuadPart <= 1073741824);
-  digest = fileSHA(file.h);
+  archiveAt("archive_sha256");
+  digest = fileSHA(file.h); put(*archiveFacts,L"archive_sha",digest);
   // System APPX SIP/catalog trust, not a user-provided hash or TEST certificate.
   WINTRUST_FILE_INFO info{sizeof(info)};
   const auto path = (root/L"client.msix").wstring();
@@ -181,64 +189,95 @@ struct Archive {
   trust.dwUnionChoice = WTD_CHOICE_FILE; trust.pFile = &info;
   trust.dwStateAction = WTD_STATEACTION_VERIFY;
   GUID action = WINTRUST_ACTION_GENERIC_VERIFY_V2;
+  archiveAt("winverifytrust");
   budget(); const auto result = WinVerifyTrust(nullptr,&action,&trust);
   auto signature = fact(); put(signature,L"archive_sha",digest);
   num(signature,L"winverifytrust_result",DWORD(result));
   if (result == ERROR_SUCCESS) {
+   archiveAt("signature_provider");
    auto provider = WTHelperProvDataFromStateData(trust.hWVTStateData);
    require(provider != nullptr);
+   archiveAt("signature_signer");
    auto signer = WTHelperGetProvSignerFromChain(provider,0,FALSE,0);
    require(signer && signer->csCertChain && signer->csCertChain <= 32 && signer->pasCertChain[0].pCert);
    const auto cert = signer->pasCertChain[0].pCert;
+   archiveAt("signature_certificate_bound");
    require(cert->cbCertEncoded > 0 && cert->cbCertEncoded <= 65536);
    put(signature,L"signer_cert_sha",sha(std::vector<uint8_t>(cert->pbCertEncoded,cert->pbCertEncoded+cert->cbCertEncoded)));
    wchar_t subject[1024]{};
+   archiveAt("signature_subject");
    const auto size = CertGetNameStringW(cert,CERT_NAME_SIMPLE_DISPLAY_TYPE,0,nullptr,subject,1024);
    require(size > 1 && size < 1024); put(signature,L"signer_display_name",narrow(subject));
    num(signature,L"chain_cert_count",signer->csCertChain); num(signature,L"counter_signers",signer->csCounterSigners);
   }
   trust.dwStateAction = WTD_STATEACTION_CLOSE;
+  archiveAt("signature_state_close");
   const auto closed = WinVerifyTrust(nullptr,&action,&trust);
   num(signature,L"trust_state_close_result",DWORD(closed));
+  archiveAt("signature_publication");
   publish(phase == "deploy" ? L"deployment-signature.json" : L"signature.json",signature);
+  archiveAt("signature_result_and_original_budget");
   require(result == ERROR_SUCCESS && closed == ERROR_SUCCESS); budget();
   ComPtr<IStream> stream;
+  archiveAt("archive_stream");
   winrt::check_hresult(SHCreateStreamOnFileEx(path.c_str(),STGM_READ|STGM_SHARE_DENY_WRITE,
    FILE_ATTRIBUTE_NORMAL,FALSE,nullptr,&stream));
   ComPtr<IAppxFactory> factory;
+  archiveAt("appx_factory");
   winrt::check_hresult(CoCreateInstance(CLSID_AppxFactory,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&factory)));
   ComPtr<IAppxPackageReader> package;
+  archiveAt("appx_package_reader");
   winrt::check_hresult(factory->CreatePackageReader(stream.Get(),&package));
   ComPtr<IAppxManifestReader> manifest;
+  archiveAt("appx_manifest");
   winrt::check_hresult(package->GetManifest(&manifest));
+  archiveAt("manifest_package_id");
   winrt::check_hresult(manifest->GetPackageId(&id));
-  auto value = [&](auto getter) {
+  auto value = [&](const wchar_t* key, auto getter) {
+   archiveAt(narrow(key).c_str());
    LPWSTR p = nullptr; winrt::check_hresult((id.Get()->*getter)(&p));
    require(p != nullptr); std::wstring out(p); CoTaskMemFree(p);
-   require(!out.empty() && out.size() <= 256); return out;
+   require(!out.empty() && out.size() <= 256); put(*archiveFacts,key,narrow(out)); return out;
   };
-  const auto name = value(&IAppxManifestPackageId::GetName);
-  const auto publisher = value(&IAppxManifestPackageId::GetPublisher);
-  const auto family = value(&IAppxManifestPackageId::GetPackageFamilyName);
-  full = value(&IAppxManifestPackageId::GetPackageFullName);
+  const auto name = value(L"name",&IAppxManifestPackageId::GetName);
+  const auto publisher = value(L"publisher",&IAppxManifestPackageId::GetPublisher);
+  const auto family = value(L"family",&IAppxManifestPackageId::GetPackageFamilyName);
+  full = value(L"full_name",&IAppxManifestPackageId::GetPackageFullName);
   APPX_PACKAGE_ARCHITECTURE arch{};
-  winrt::check_hresult(id->GetArchitecture(&arch));
+  archiveAt("manifest_architecture");
+  winrt::check_hresult(id->GetArchitecture(&arch)); num(*archiveFacts,L"architecture",arch);
   LPWSTR resource = nullptr;
+  archiveAt("manifest_resource_id");
   winrt::check_hresult(id->GetResourceId(&resource));
   const bool empty = !resource || !*resource; CoTaskMemFree(resource);
+  archiveFacts->Insert(L"resource_absent",JsonValue::CreateBooleanValue(empty));
   // This slice does not install frameworks. A dependency is an explicit prerequisite refusal.
   ComPtr<IAppxManifestPackageDependenciesEnumerator> dependencies;
+  archiveAt("manifest_dependencies");
   winrt::check_hresult(manifest->GetPackageDependencies(&dependencies));
+  archiveAt("manifest_dependencies_current");
   BOOL any = FALSE; winrt::check_hresult(dependencies->GetHasCurrent(&any));
+  archiveFacts->Insert(L"dependencies_present",JsonValue::CreateBooleanValue(any != FALSE));
+  archiveAt("manifest_xml_stream");
   ComPtr<IStream> xmlStream; winrt::check_hresult(manifest->GetStream(&xmlStream));
   std::vector<uint8_t> xmlBytes(65537); ULONG xmlSize = 0;
+  archiveAt("manifest_xml_read");
   winrt::check_hresult(xmlStream->Read(xmlBytes.data(),ULONG(xmlBytes.size()),&xmlSize));
+  num(*archiveFacts,L"manifest_bytes_read",xmlSize);
+  archiveAt("manifest_xml_byte_bound");
   require(xmlSize && xmlSize <= 65536);
   using namespace winrt::Windows::Data::Xml::Dom;
+  archiveAt("manifest_xml_settings");
   XmlLoadSettings settings; settings.ProhibitDtd(true); settings.ResolveExternals(false);
+  archiveAt("manifest_xml_document");
   XmlDocument document;
-  document.LoadXml(wide(std::string(xmlBytes.begin(),xmlBytes.begin()+xmlSize)),settings);
+  archiveAt("manifest_utf8_conversion");
+  const auto xmlText = wide(std::string(xmlBytes.begin(),xmlBytes.begin()+xmlSize));
+  archiveAt("manifest_xml_load");
+  document.LoadXml(xmlText,settings);
+  archiveAt("manifest_protocol_query");
   const auto protocols = document.SelectNodes(L"//*[local-name()='Protocol' and @Name='codex']");
+  num(*archiveFacts,L"codex_protocol_count",protocols.Size());
   auto intake = fact(); put(intake,L"archive_sha",digest); put(intake,L"name",narrow(name));
   put(intake,L"publisher",narrow(publisher)); put(intake,L"family",narrow(family));
   put(intake,L"full_name",narrow(full)); num(intake,L"architecture",arch);
@@ -246,11 +285,13 @@ struct Archive {
   intake.Insert(L"dependencies_present",JsonValue::CreateBooleanValue(any != FALSE));
   num(intake,L"codex_protocol_count",protocols.Size()); put(intake,L"signature","system_trust");
   const auto leaf = phase == "deploy" ? L"deployment-intake.json" : L"intake.json";
+  archiveAt("intake_publication");
   publish(leaf,intake);
+  archiveAt("strict_identity_architecture_resource_dependency_protocol_contract");
   require(name == L"OpenAI.Codex" && publisher == L"CN=50BDFD77-8903-4850-9FFE-6E8522F64D5B"
    && family == L"OpenAI.Codex_2p2nqsd0c76g0" && arch == APPX_PACKAGE_ARCHITECTURE_X64
    && empty && !any && protocols.Size() == 1);
-  budget();
+  archiveAt("original_archive_budget"); budget();
  }
 };
 static void packages(const std::wstring& expected, bool absent) {
@@ -266,13 +307,17 @@ static void packages(const std::wstring& expected, bool absent) {
  require(count == (absent ? 0U : 1U)); budget();
 }
 static void archive(bool deploy) {
+ archiveFacts = fact(); num(*archiveFacts,L"original_deadline_boot_ms",end);
+ archiveAt("open_archive");
  Archive held;
- packages(held.full,true);
+ archiveAt("current_user_family_absence"); packages(held.full,true);
  auto report = fact(); put(report,L"full_name",narrow(held.full));
  put(report,L"family","OpenAI.Codex_2p2nqsd0c76g0"); put(report,L"signature","system_trust"); put(report,L"archive_sha",held.digest);
- if (!deploy) { publish(L"archive.json",report); return; }
+ if (!deploy) { archiveAt("accepted_archive_publication"); publish(L"archive.json",report); return; }
+ archiveAt("deployment_intake_join");
  auto frozen = read(L"archive.json"); join(frozen);
  require(string(frozen,L"full_name") == held.full && string(frozen,L"archive_sha") == wide(held.digest));
+ archiveAt("archive_intake_join_complete");
  wchar_t uri[32768]{}; DWORD n = 32768;
  winrt::check_hresult(UrlCreateFromPathW((root/L"client.msix").c_str(),uri,&n,0));
  const winrt::Windows::Foundation::Uri target(uri);
@@ -632,6 +677,15 @@ int wmain(int argc, wchar_t** argv) {
   return 0;
  } catch (...) {
   try { auto report = fact(); put(report,L"phase",phase); put(report,L"outcome","refused_or_unknown");
+   if (archiveFacts) {
+    put(report,L"last_archive_step",archiveStep); report.Insert(L"archive_observations",*archiveFacts);
+    try { throw; }
+    catch (const winrt::hresult_error& error) {
+     put(report,L"failure_kind","hresult"); num(report,L"hresult",DWORD(error.code().value));
+    }
+    catch (const std::exception&) { put(report,L"failure_kind","contract_or_io_refusal"); }
+    catch (...) { put(report,L"failure_kind","unknown_exception"); }
+   }
    report.Insert(L"retained_until_job_teardown",JsonValue::CreateBooleanValue(true));
    publish((wide(phase)+L".failure.json").c_str(),report); } catch (...) {}
   return 1;
