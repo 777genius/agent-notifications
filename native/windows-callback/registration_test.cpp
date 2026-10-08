@@ -133,6 +133,9 @@ static void linkRefusesChild(HKEY source,HKEY target,const Generation& g,uint64_
 static bool registryContracts(){
   stage("child_generation_custody");
   Generation g;
+  // The actual constructor must hold the volume ancestor, not start at its leaf.
+  stage("child_held_drive_ancestor");
+  require(!g.guards.empty()&&physical(g.guards.front().h)==g.root.wstring().substr(0,7));
   stage("child_profile");
   Profile profile(g);
   const auto end=GetTickCount64()+30000;
