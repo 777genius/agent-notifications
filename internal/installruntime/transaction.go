@@ -354,11 +354,11 @@ func Commit(ctx context.Context, r Request) (result Ledger, resultErr error) {
 	}
 	unlock, err := lockComponent(ctx, filepath.Join(root, ".component-install.lock"))
 	if err != nil {
-		return Ledger{}, fmt.Errorf("component-lock admission: %w", err)
+		return Ledger{}, admission("component_lock_admission", AdmissionComponent, err)
 	}
 	defer unlock()
 	if err := privateDirectory(root); err != nil {
-		return Ledger{}, fmt.Errorf("control-directory admission: %w", err)
+		return Ledger{}, admission("control_directory_admission", AdmissionControl, err)
 	}
 	// Match policy lock identity in the same physical spelling as ConfigPaths.
 	// Supported Darwin /var aliases must not turn LockExisting into Lock.
@@ -368,7 +368,18 @@ func Commit(ctx context.Context, r Request) (result Ledger, resultErr error) {
 	}
 	policyPath := filepath.Join(policyRoot, "agent-notifications.json")
 	r.ConfigPaths = append(append([]string(nil), r.ConfigPaths...), policyPath)
-	paths := append([]string(nil), r.ConfigPaths...)
+	type configAdmission struct {
+		path   string
+		origin AdmissionOrigin
+	}
+	paths := make([]configAdmission, 0, len(r.ConfigPaths))
+	for i, p := range r.ConfigPaths {
+		origin := AdmissionExternalConfig
+		if i == len(r.ConfigPaths)-1 {
+			origin = AdmissionPolicy
+		}
+		paths = append(paths, configAdmission{p, origin})
+	}
 	// Recovery may include configuration from a different adapter invocation.
 	var pending transaction
 	marker := filepath.Join(root, "transaction.json")
@@ -387,11 +398,14 @@ func Commit(ctx context.Context, r Request) (result Ledger, resultErr error) {
 		if r.PolicyOnly {
 			return Ledger{}, ErrPolicyRecovery
 		}
-		paths = append(paths, pending.ConfigPaths...)
+		for _, p := range pending.ConfigPaths {
+			paths = append(paths, configAdmission{p, AdmissionRecoveryConfig})
+		}
 	}
 
-	for i, p := range paths {
-		p, err = filepath.Abs(p)
+	for i, entry := range paths {
+		p, e := filepath.Abs(entry.path)
+		err = e
 		if err != nil {
 			return Ledger{}, err
 		}
@@ -399,11 +413,15 @@ func Commit(ctx context.Context, r Request) (result Ledger, resultErr error) {
 		if e == nil {
 			p = filepath.Join(parent, filepath.Base(p))
 		}
-		paths[i] = p
+		paths[i].path = p
+		if p == policyPath {
+			paths[i].origin = AdmissionPolicy
+		}
 	}
-	sort.Strings(paths)
-	for i, p := range paths {
-		if i > 0 && paths[i-1] == p {
+	sort.SliceStable(paths, func(i, j int) bool { return paths[i].path < paths[j].path })
+	for i, entry := range paths {
+		p := entry.path
+		if i > 0 && paths[i-1].path == p {
 			continue
 		}
 		lockConfig := Lock
@@ -412,7 +430,7 @@ func Commit(ctx context.Context, r Request) (result Ledger, resultErr error) {
 		}
 		release, e := lockConfig(ctx, p+".lock")
 		if e != nil {
-			return Ledger{}, fmt.Errorf("config-lock admission: %w", e)
+			return Ledger{}, admission("config_lock_admission", entry.origin, e)
 		}
 		defer release()
 	}

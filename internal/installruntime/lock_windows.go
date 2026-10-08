@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"unsafe"
 
 	"github.com/777genius/agent-notifications/internal/windowsacl"
@@ -170,7 +171,7 @@ func privateWindowsHandle(h windows.Handle) error {
 func inspectPrivateWindowsHandle(h windows.Handle) (bool, error) {
 	sd, err := windows.GetSecurityInfo(h, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION)
 	if err != nil {
-		return false, err
+		return false, observedWindowsAPI("GetSecurityInfo", err)
 	}
 	owner, _, err := sd.Owner()
 	if err != nil {
@@ -193,7 +194,7 @@ func inspectPrivateWindowsHandle(h windows.Handle) (bool, error) {
 	for i := uint32(0); i < uint32(acl.AceCount); i++ {
 		var ace *windows.ACCESS_ALLOWED_ACE
 		if err := windows.GetAce(acl, i, &ace); err != nil {
-			return false, err
+			return false, observedWindowsAPI("GetAce", err)
 		}
 		if ace.Header.AceType == windows.ACCESS_DENIED_ACE_TYPE {
 			continue
@@ -203,7 +204,9 @@ func inspectPrivateWindowsHandle(h windows.Handle) (bool, error) {
 		}
 		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
 		if !sid.Equals(user.User.Sid) && !sid.IsWellKnown(windows.WinLocalSystemSid) && !sid.IsWellKnown(windows.WinBuiltinAdministratorsSid) && !windowsacl.AllowsForeignReadOnly(ace.Mask) {
-			return false, fmt.Errorf("managed inode DACL grants foreign access (ace_type=%d ace_flags=%d access_mask=0x%08x)", ace.Header.AceType, ace.Header.AceFlags, ace.Mask)
+			kind, flags, mask := ace.Header.AceType, ace.Header.AceFlags, uint32(ace.Mask)
+			return false, &admissionObservation{Classification: "foreign_mutation_ace", ACEType: &kind, ACEFlags: &flags, AccessMask: &mask,
+				Err: fmt.Errorf("managed inode DACL grants foreign access (ace_type=%d ace_flags=%d access_mask=0x%08x)", kind, flags, mask)}
 		}
 	}
 	return canonicalPrivateWindowsDescriptor(sd, user.User.Sid)
@@ -311,4 +314,14 @@ func RestrictPrivatePath(path string) error {
 	}
 	defer windows.CloseHandle(h)
 	return restrictPrivateWindowsHandle(h)
+}
+
+// Only an error returned by this immediate API call can supply its numeric code.
+func observedWindowsAPI(api string, err error) error {
+	var code syscall.Errno
+	if !errors.As(err, &code) {
+		return err
+	}
+	number := uint32(code)
+	return &admissionObservation{Classification: "windows_api_error", API: api, ErrorCode: &number, Err: err}
 }
