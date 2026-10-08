@@ -323,11 +323,19 @@ async function main(): Promise<void> {
   const setupFlag = process.env.NAVIGATION_WINDOWS_OOBE_SETUP_TEST;
   if (setupFlag !== undefined && setupFlag !== '0' && setupFlag !== '1') throw new Error('invalid OOBE setup flag');
   const setupOnly = setupFlag === '1';
+  const sampleFlag = process.env.NAVIGATION_WINDOWS_PUBLIC_SAMPLE_TEST;
+  if (sampleFlag !== undefined && sampleFlag !== '0' && sampleFlag !== '1') throw new Error('invalid public-sample flag');
+  const publicSample = sampleFlag === '1';
+  if (publicSample && diagnosticOnly) throw new Error('public sample requires explicit native TEST submission');
+  evidence.nativeSubmissionProfile = publicSample ? 'public_sample_one_show' : 'strict_setting';
+  if (publicSample) evidence.scope = 'explicit TEST public-sample Show, readiness unqualified, cold COM callback only';
+  evidence.notifierReadinessQualified = false;
+
   if ((surfaceOnly || taskbarOnly || captureOnly || oobeOnly || setupOnly) && !diagnosticOnly
       || Number(surfaceOnly) + Number(taskbarOnly) + Number(captureOnly) + Number(oobeOnly) + Number(setupOnly) > 1) {
     throw new Error('selected TEST modes are exclusive');
   }
-  if ((captureOnly || oobeOnly || setupOnly) && (process.env.GITHUB_REPOSITORY !== '777genius/agent-notifications'
+  if ((captureOnly || oobeOnly || setupOnly || publicSample) && (process.env.GITHUB_REPOSITORY !== '777genius/agent-notifications'
       || process.env.GITHUB_EVENT_NAME !== 'workflow_dispatch' || process.env.GITHUB_RUN_ATTEMPT !== '1'
       || process.arch !== 'arm64'
       || !/^[0-9a-f]{40}$/.test(process.env.NAVIGATION_SOURCE_SHA ?? ''))) {
@@ -595,7 +603,7 @@ async function main(): Promise<void> {
   installed = true; evidence.submissionIntent = true; evidence.showAttempts = null;
   evidence.showCallOutcome = 'unknown'; evidence.nativeEffectUncertain = true;
   writeFileSync(join(root, 'submission-attempted'), nonce, { flag: 'wx' });
-  const sender = run('send', 20_000);
+  const sender = run(publicSample ? 'send-public-sample' : 'send', 20_000);
   if (existsSync(join(root, 'sender.json'))) evidence.sender = read('sender.json');
   if (existsSync(join(root, 'aumid-identity.json'))) evidence.aumidIdentity = read('aumid-identity.json');
   observeShow(sender);
@@ -613,16 +621,104 @@ async function main(): Promise<void> {
   }
   evidence.submitted = read('submitted.json');
   const senderReceipt = evidence.sender as Json;
+  if (senderReceipt.submissionProfile !== evidence.nativeSubmissionProfile
+      || senderReceipt.readinessQualified !== !publicSample
+      || (publicSample ? senderReceipt.notificationSetting !== null : senderReceipt.notificationSetting !== 0)) {
+    throw new Error('native submission profile/readiness receipt mismatch');
+  }
   if (senderReceipt.pid !== sender.pid || senderReceipt.nonce !== nonce || senderReceipt.showCalledAtReceipt !== false
       || evidence.showAttempts !== 1 || evidence.showReturned !== true) {
     throw new Error('native sender correlation mismatch');
   }
+  evidence.notifierReadinessQualified = !publicSample;
   evidence.senderExitedBeforeInvoke = true; evidence.senderExitedAt = sender.exitedAt;
+  if (publicSample) {
+    const show = read('show-outcome.json');
+    if (senderReceipt.aumid !== `AgentNotify.Navigation.TEST.${nonce}` || senderReceipt.session !== desktop?.session
+        || typeof senderReceipt.userSid !== 'string' || !/^S-1-[0-9-]{1,184}$/.test(senderReceipt.userSid)
+        || typeof senderReceipt.creationTicks !== 'string' || !/^[0-9]{15,20}$/.test(senderReceipt.creationTicks)
+        || senderReceipt.executable !== binary || senderReceipt.executableSHA256 !== evidence.binarySHA256
+        || senderReceipt.sourceSHA !== evidence.sourceSHA || senderReceipt.submissionProfile !== 'public_sample_one_show'
+        || senderReceipt.notificationSetting !== null || senderReceipt.readinessQualified !== false
+        || createHash('sha256').update(readFileSync(binary!)).digest('hex') !== evidence.binarySHA256
+        || show.pid !== sender.pid || show.nonce !== nonce || show.showCallEntered !== true || show.showCallReturned !== true) {
+      throw new Error('public sample collected sender authority invalid');
+    }
+    const senderBirth = BigInt(senderReceipt.creationTicks as string) / 10000n - 11644473600000n;
+    if (senderBirth < 0n || senderBirth > BigInt(sender.exitedAt)) throw new Error('native sender birth exceeds collected exit');
+    const authority = { ...senderReceipt, schema: 1, collected: true, exitCode: sender.status, collectedAt: sender.exitedAt,
+      senderReceiptSHA256: createHash('sha256').update(readFileSync(join(root, 'sender.json'))).digest('hex'),
+      showOutcomeSHA256: createHash('sha256').update(readFileSync(join(root, 'show-outcome.json'))).digest('hex') };
+    const bytes = JSON.stringify(authority);
+    if (Buffer.byteLength(bytes) > 16_384) throw new Error('public sample authority exceeds bound');
+    writeFileSync(join(root, 'public-sample-invoke-authority.json'), bytes, { flag: 'wx', flush: true });
+    evidence.publicSampleInvokeAuthoritySHA256 = createHash('sha256').update(bytes).digest('hex');
+    evidence.invokeEffectUncertain = true;
+  }
   // No controller call to callback mode/CoCreateInstance. OS is the only cold-server launcher.
   const invoke = run('invoke', 30_000);
+  if (publicSample && existsSync(join(root, 'ui-invoke-intent.json'))) evidence.uiInvokeIntent = read('ui-invoke-intent.json');
   if (existsSync(join(root, 'ui-invoke.json'))) evidence.uiInvoke = read('ui-invoke.json');
   requireSuccess(invoke);
   if ((evidence.uiInvoke as Json).invokeHRESULT !== 0) throw new Error('UI provider did not accept native Invoke');
+  if (publicSample) {
+    const intent = evidence.uiInvokeIntent as Json | undefined, returned = evidence.uiInvoke as Json | undefined;
+    if (!intent || !returned || intent.nonce !== nonce || intent.pid !== invoke.pid
+        || intent.authorityProfile !== 'public_sample_one_show' || intent.selectionKind !== 'toast_default'
+        || intent.controlType !== 50007 || intent.specSHA256 !== evidence.publicSampleInvokeAuthoritySHA256
+        || intent.invokeBoundaryArmed !== true || intent.invokeCallEntered !== false
+        || intent.exactTitleVerified !== true || intent.offscreen !== false || intent.enabled !== true
+        || !Number.isInteger(intent.providerPID) || Number(intent.providerPID) <= 0 || Number(intent.providerPID) > 0xffffffff
+        || typeof intent.providerCreationTicks !== 'string' || !/^[0-9]{15,20}$/.test(intent.providerCreationTicks)
+        || typeof intent.providerImagePathKind !== 'string'
+        || !['windows_explorer', 'system32_shellhost', 'systemapps_shellexperiencehost', 'systemapps_cbs_shellhost'].includes(intent.providerImagePathKind)) {
+      throw new Error('public sample row Invoke authority invalid');
+    }
+    const runtime = (value: unknown) => Array.isArray(value) && value.length >= 1 && value.length <= 64
+      && value.every(part => Number.isInteger(part) && Number(part) >= -2147483648 && Number(part) <= 2147483647);
+    if (![intent.runtimeID, intent.titleRuntimeID, intent.containerRuntimeID].every(runtime)
+        || !Array.isArray(intent.titleRuntimeIDs) || intent.titleRuntimeIDs.length < 1 || intent.titleRuntimeIDs.length > 512
+        || !intent.titleRuntimeIDs.every(runtime)
+        || !intent.titleRuntimeIDs.some(value => JSON.stringify(value) === JSON.stringify(intent.titleRuntimeID))
+        || new Set(intent.titleRuntimeIDs.map(value => JSON.stringify(value))).size !== intent.titleRuntimeIDs.length) {
+      throw new Error('public sample row title identity set invalid');
+    }
+    if (!runtime(intent.groupRuntimeID) || intent.groupControlType !== 50026 || intent.commonGroupVerified !== true
+        || intent.groupCensusComplete !== true || intent.eligibleListItemsInGroup !== 1
+        || !Number.isInteger(intent.inspectedListItemsInGroup) || Number(intent.inspectedListItemsInGroup) < 1 || Number(intent.inspectedListItemsInGroup) > 512
+        || JSON.stringify(intent.groupRuntimeID) === JSON.stringify(intent.runtimeID)
+        || intent.titleRuntimeIDs.some(value => JSON.stringify(value) === JSON.stringify(intent.groupRuntimeID)
+          || JSON.stringify(value) === JSON.stringify(intent.runtimeID))
+        || !Array.isArray(intent.titleAssociations) || intent.titleAssociations.length !== intent.titleRuntimeIDs.length) {
+      throw new Error('public sample complete common Group proof invalid');
+    }
+    const expectedTitles = new Set(intent.titleRuntimeIDs.map(value => JSON.stringify(value))), observedTitles = new Set<string>();
+    let rowText = false;
+    for (const value of intent.titleAssociations) {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('public sample title association absent');
+      const association = value as Json, id = JSON.stringify(association.runtimeID);
+      if (Object.keys(association).length !== 3 || !runtime(association.runtimeID) || !expectedTitles.has(id) || observedTitles.has(id)
+          || (association.role === 'row_text' ? !runtime(association.nearestRowRuntimeID)
+            || JSON.stringify(association.nearestRowRuntimeID) !== JSON.stringify(intent.runtimeID)
+            : association.role !== 'group_header' || association.nearestRowRuntimeID !== null)) {
+        throw new Error('public sample nearest Group title role binding invalid');
+      }
+      observedTitles.add(id); rowText ||= association.role === 'row_text';
+    }
+    if (!rowText || observedTitles.size !== expectedTitles.size) throw new Error('public sample full title role set incomplete');
+    for (const key of ['nonce', 'pid', 'authorityProfile', 'selectionKind', 'controlType', 'specSHA256', 'invokeDeadlineBootMs', 'providerPID',
+      'providerCreationTicks', 'providerImagePathKind', 'runtimeID', 'titleRuntimeID', 'titleRuntimeIDs', 'containerRuntimeID',
+      'exactTitleVerified', 'offscreen', 'enabled', 'groupRuntimeID', 'groupControlType', 'commonGroupVerified',
+      'groupCensusComplete', 'eligibleListItemsInGroup', 'inspectedListItemsInGroup', 'titleAssociations']) {
+      if (JSON.stringify(intent[key]) !== JSON.stringify(returned[key])) throw new Error('public sample Invoke binding changed');
+    }
+    if (returned.invokeCallEntered !== true || returned.invokeCallReturned !== true
+        || !Number.isSafeInteger(intent.invokeDeadlineBootMs) || Number(intent.invokeDeadlineBootMs) <= 0
+        || !Number.isSafeInteger(returned.returnedBootMs) || Number(returned.returnedBootMs) <= 0
+        || Number(returned.returnedBootMs) >= Number(intent.invokeDeadlineBootMs)) throw new Error('public sample timely Invoke terminal absent');
+    evidence.invokeEffectUncertain = false;
+    evidence.publicSampleDefaultRowInvokeObserved = true;
+  }
   for (let i = 0; i < 100 && !existsSync(join(root, 'callback.json')); i++) await delay(100);
   if (!existsSync(join(root, 'callback.json'))) throw new Error('no OS-launched COM callback receipt');
   const callback = read('callback.json'); evidence.callback = callback;
@@ -667,7 +763,7 @@ try {
       } else { evidence.setupRecordPublicationError = 'bounded packet overflow'; evidence.oobeSetupQualified = false; exitCode = 1; }
       if (evidence.setupRecordErrors || evidence.oobeSetupQualified !== true) { evidence.status = 'failed'; exitCode = 1; }
     }
-    for (const name of ['center-policy.json', 'preflight.json', 'capture-preflight.json', 'capture-after-preflight.json', 'desktop-capture-intent.json', 'desktop-capture.json', 'oobe-preflight.json', 'oobe-after-preflight.json', 'oobe-intent.json', 'oobe-uia.json', 'shortcut-location.json', 'aumid-identity.json', 'sender.json', 'sender-failure.json', 'show-outcome.json', 'submitted.json', 'callback-started.json', 'callback.json', 'ui-candidate.json', 'ui-invoke.json', 'center-open.json']) {
+    for (const name of ['center-policy.json', 'preflight.json', 'capture-preflight.json', 'capture-after-preflight.json', 'desktop-capture-intent.json', 'desktop-capture.json', 'oobe-preflight.json', 'oobe-after-preflight.json', 'oobe-intent.json', 'oobe-uia.json', 'shortcut-location.json', 'aumid-identity.json', 'sender.json', 'sender-failure.json', 'show-outcome.json', 'submitted.json', 'callback-started.json', 'callback.json', 'public-sample-invoke-authority.json', 'ui-invoke-intent.json', 'ui-candidate.json', 'ui-invoke.json', ...(evidence.nativeSubmissionProfile === 'public_sample_one_show' ? ['toast-selector-failure.json', 'ui-owned-snapshot.json'] : []), 'center-open.json']) {
       if (!existsSync(join(root, name))) continue;
       try { evidence[name] = read(name); } catch (error: unknown) { evidence[`${name}ReadError`] = String(error); }
     }
