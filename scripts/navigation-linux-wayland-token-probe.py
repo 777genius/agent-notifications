@@ -38,7 +38,7 @@ def activate_arguments(message):
     return json.loads(match[1]), json.loads(match[2]), entries
 
 
-def native_click_chain(full_trace, pre_click_characters, events, mako_owner, gtk_owner, app_id, nonce, native_id, surface, entered_pointer):
+def native_click_chain(full_trace, pre_click_characters, events, mako_owner, gtk_owner, app_id, nonce, native_id, surface, entered_pointer, action_key=None):
     entry_pattern = r'wl_pointer@(\d+)\.enter\(\d+, wl_surface@' + surface + r','
     token_requests = re.findall(r'xdg_activation_token_v1@(\d+)\.set_serial\((\d+), wl_seat@(\d+)\)', full_trace)
     if len(token_requests) != 1: raise RuntimeError('single_click_token_request_unproved')
@@ -73,7 +73,8 @@ def native_click_chain(full_trace, pre_click_characters, events, mako_owner, gtk
     if 'sender=' + gtk_owner + ' ' not in activates[0].splitlines()[0] or 'path=' + expected_path + ';' not in activates[0].splitlines()[0]:
         raise RuntimeError('ActivateAction_sender_path_unbound')
     action_name, target, platform = activate_arguments(activates[0])
-    if action_name != 'open' or target != 'notification-navigation-test:' + nonce: raise RuntimeError('ActivateAction_target_mismatch')
+    if action_key is not None and not re.fullmatch('[0-9a-f]{64}', action_key): raise RuntimeError('shipping_action_key_invalid')
+    if action_name != 'open' or target != (action_key if action_key is not None else 'notification-navigation-test:' + nonce): raise RuntimeError('ActivateAction_target_mismatch')
     if set(platform) - {'activation-token', 'desktop-startup-id'}: raise RuntimeError('unexpected_platform_key')
     forwarded = platform == {'activation-token': done[0], 'desktop-startup-id': done[0]}
     return dict(token=done[0], tokenSHA256=token_hash, forwarded=forwarded, platform=platform, offsets=offsets, activateSender=activates[0].splitlines()[0])

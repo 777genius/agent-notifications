@@ -12,7 +12,6 @@ import (
 
 	local "github.com/777genius/agent-notifications/internal/copilotvscodeevent"
 	"github.com/777genius/agent-notifications/internal/notification/observation"
-	"github.com/777genius/agent-notifications/internal/notifier"
 )
 
 // Red: the context sender follows a redirect, reports submitted, or an uncertain
@@ -39,7 +38,7 @@ func checkLocalRedirect(t *testing.T, status int) {
 		w.WriteHeader(status)
 	}))
 	defer origin.Close()
-	root, clock := cacheRoot(t), notifier.SystemBootClock{}
+	root, clock := cacheRoot(t), new(testClock)
 	g := testGate{channels: local.Channels{Webhook: true}}
 	c := local.Consumer{Binding: binding(), Gate: g, Config: cfg(t, origin.URL), Clock: clock, Cache: &observation.RecentCache{Root: root, Clock: clock}}
 	c.SendWebhook = leasedSender(t, g, c.Binding, root)

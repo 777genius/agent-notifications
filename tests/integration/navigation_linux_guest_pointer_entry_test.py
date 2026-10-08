@@ -26,13 +26,17 @@ def main():
     module_spec = importlib.util.spec_from_file_location('owned_TEST_callback', SEED / 'client-callback.py')
     callback = importlib.util.module_from_spec(module_spec)
     module_spec.loader.exec_module(callback)
-    session, _ = callback.context()
     spec_path = ROOT / 'pointer-spec.json'
     metadata = spec_path.lstat()
     if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != 0 or stat.S_IMODE(metadata.st_mode) != 0o444 or metadata.st_size > 8192:
         raise RuntimeError('root_owned_pointer_spec_required')
     spec = json.loads(spec_path.read_text())
-    if set(spec) != {'nonce', 'y', 'entrySHA256', 'librarySHA256'} or spec['nonce'] != session['nonce'] or type(spec['y']) is not int or not 0 <= spec['y'] < 720:
+    if set(spec) != {'nonce', 'y', 'entrySHA256', 'librarySHA256', 'shipping'} or type(spec['shipping']) is not bool or type(spec['y']) is not int or not 0 <= spec['y'] < 720:
+        raise RuntimeError('fixed_TEST_pointer_spec_required')
+    # Only this root-owned spec selects shipping directory admission. Other
+    # callback/producer callers retain the strict prototype default.
+    session, _ = callback.context(shipping_pointer=spec['shipping'])
+    if spec['nonce'] != session['nonce']:
         raise RuntimeError('fixed_TEST_pointer_spec_required')
     source, library_path = Path(__file__).resolve(), SEED / 'guest-pointer.so'
     if source != SEED / 'guest-pointer-entry.py' or callback.digest(source) != spec['entrySHA256'] or library_path.resolve() != library_path or callback.digest(library_path) != spec['librarySHA256']:
