@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"reflect"
+	"strings"
 
 	"github.com/777genius/agent-notifications/internal/agentnotify/setupwizard"
 	"github.com/777genius/agent-notifications/internal/config"
@@ -228,39 +229,80 @@ func preflightBootstrapIntent(ctx context.Context, i confirmedBootstrapIntent, a
 }
 
 func bootstrapIntentSummary(i confirmedBootstrapIntent, policy map[string]json.RawMessage) ([]string, error) {
-	raw := []string{"Notifications installation plan; product selection alone does not authorize effects."}
+	raw := []string{"Installation summary", "", "Components to install"}
 	for _, u := range i.Units {
-		raw = append(raw, fmt.Sprintf("%s: hooks=%t native-plugin/hooks=%t MCP=%t skill=%t preserved-off=%t desktop=%t webhook=%t", u.Product, u.Hooks, u.Native, u.MCP, u.Skill, u.PreservedOff, u.Desktop, u.Webhook))
-	}
-	for _, key := range intentScalarKeys {
-		if p, ok := i.Scopes[key]; ok {
-			raw = append(raw, key+"="+string(p))
+		parts := []string{}
+		for _, part := range []struct {
+			on    bool
+			label string
+		}{{u.Hooks, "automatic notification hooks"}, {u.Native, "native plugin/hooks"}, {u.MCP, "agent-notify MCP"}, {u.Skill, "agent-notify skill"}, {u.PreservedOff, "agent-notify stays off"}} {
+			if part.on {
+				parts = append(parts, part.label)
+			}
+		}
+		raw = append(raw, "  "+productLabels[u.Product]+": "+strings.Join(parts, ", "))
+		if u.Native || u.Product == "cursor" {
+			raw = append(raw, "    Channels: Desktop "+bootstrapOnOff(u.Desktop)+", Webhook "+bootstrapOnOff(u.Webhook))
 		}
 	}
+	if containsProduct(i.Request.Products, "claude") || containsProduct(i.Request.Products, "codex") {
+		raw = append(raw, "  Claude Code/Codex channels use your existing notification settings.")
+	}
+	raw = append(raw, "", "Notification preferences")
 	c := i.Request.Configure
 	if c.Route != nil {
-		raw = append(raw, fmt.Sprintf("requested route: local=%t app=%s team=%s allow-unknown-caller=%t allow-caller-asserted=%t", c.Route.LocalRouting, c.Route.ApplicationPath, c.Route.TeamID, c.Route.AllowUnknownCaller, c.Route.AllowCallerAsserted))
-		raw = append(raw, fmt.Sprintf("preserve-policy=%t preserve-enabled=%t policy-only=%t request-permission=%t", c.PreservePolicy, c.PreserveEnabled, c.PolicyOnly, c.RequestPermission))
 		if c.PreservePolicy {
-			preserved, err := setupwizard.BootstrapPolicyRows(policy)
+			raw = append(raw, "  Keep existing notification and click-navigation preferences.")
+			preserved, err := bootstrapPreservedPolicyRows(policy)
 			if err != nil {
 				return nil, err
 			}
 			raw = append(raw, preserved...)
-		} else if value, ok := policy["enabled"]; ok {
-			raw = append(raw, "preserved enabled="+string(value))
+		} else {
+			raw = append(raw, "  Update click-navigation preferences as shown below.")
+			if value, ok := policy["enabled"]; ok {
+				shown := string(value)
+				var enabled *bool
+				if json.Unmarshal(value, &enabled) == nil && enabled != nil {
+					shown = bootstrapOnOff(*enabled)
+				}
+				raw = append(raw, "  Notification service: "+shown+" (kept)")
+			}
 		}
+		if c.PreserveEnabled {
+			raw = append(raw, "  Keep the current notification service enabled/disabled setting.")
+		}
+		if c.PolicyOnly {
+			raw = append(raw, "  Navigation setup only writes preferences.")
+		}
+		raw = append(raw, "  Notification permission request: "+bootstrapOnOff(c.RequestPermission))
+	} else if containsProduct(i.Request.Products, "cursor") {
+		raw = append(raw, "  Update shared Cursor Desktop/Webhook preferences to the channels shown above.", "  Keep other shared notification preferences.")
+	} else {
+		raw = append(raw, "  Keep existing shared notification preferences.")
 	}
 	if i.MCP.AllowPolicySeed {
-		raw = append(raw, fmt.Sprintf("absent shared policy: shown initial enabled seed=%t; preserve-enabled keeps the resulting decision", i.MCP.SeedEnabled))
+		raw = append(raw, "  If shared preferences are absent, initialize the service enabled setting to "+bootstrapOnOff(i.MCP.SeedEnabled)+"; keep that choice afterward.")
 	}
-	raw = append(raw, "helper release="+i.Provenance.Version, "helper source="+i.Provenance.SourceCommit, "helper SHA256="+i.Provenance.SHA256)
+	raw = append(raw, "", "Before you finish", "  Restart/trust may be required. Gemini hook-enable/security settings remain user controlled.", "  Webhook is optional and works alongside Desktop. Delivery requires an enabled destination.", "  Products install separately. A later failure can leave a partial installation.", "  Installation does not verify activation, authentication, or notification delivery.", "", "Technical details - installation locations")
+	for _, key := range intentScalarKeys {
+		if p, ok := i.Scopes[key]; ok {
+			raw = append(raw, "  "+bootstrapScopeLabel(key)+": "+bootstrapAuthority(string(p)))
+		}
+	}
+	if c.Route != nil {
+		raw = append(raw, "", "Technical details - click navigation")
+		if c.PreservePolicy {
+			raw = append(raw, "  These defaults apply only where no existing preference is set.")
+		}
+		raw = append(raw, "  Local click navigation: "+bootstrapOnOff(c.Route.LocalRouting), "  Desktop application: "+bootstrapAuthority(c.Route.ApplicationPath), "  Application signing team: "+bootstrapAuthority(c.Route.TeamID), "  Allow unrecognized callers: "+bootstrapOnOff(c.Route.AllowUnknownCaller), "  Allow caller-asserted identity: "+bootstrapOnOff(c.Route.AllowCallerAsserted))
+	}
+	raw = append(raw, "", "Technical details - verified installer", "  Release: "+i.Provenance.Version, "  Source commit: "+i.Provenance.SourceCommit, "  SHA256: "+i.Provenance.SHA256)
 	for _, b := range i.MCP.Projection.Bindings {
-		raw = append(raw, fmt.Sprintf("%s portable installation=%s binding=%s target=%s", b.Client, i.MCP.Projection.InstallationID, b.ID, string(b.Target)))
+		raw = append(raw, fmt.Sprintf("  %s MCP: installation %s; binding %s; target %s", b.Client, i.MCP.Projection.InstallationID, b.ID, bootstrapAuthority(string(b.Target))))
 	}
 	for _, d := range i.MCP.Projection.Direct {
-		raw = append(raw, "owned direct MCP="+d.ID+" config="+string(d.Config))
+		raw = append(raw, "  Existing direct MCP entry: "+d.ID+"; config: "+bootstrapAuthority(string(d.Config)))
 	}
-	raw = append(raw, "Restart/trust may be required. Gemini hook-enable/security settings remain user controlled. Webhook delivery requires an enabled destination.", "Products use separate existing transactions. A later failure may leave partial installation; activation/authentication/delivery are not attested.")
-	return setupwizard.EscapeConfirmationRows(raw)
+	return escapeProductRows(raw)
 }
