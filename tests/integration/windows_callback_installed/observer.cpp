@@ -377,6 +377,51 @@ static void packages(const std::wstring& expected, bool absent) {
  }
  require(count == (absent ? 0U : 1U)); budget();
 }
+// The physical file/directory handles stay canonical and held. Only the URI
+// adapter strips the documented extended DOS prefix, never UNC/device aliases.
+static winrt::Windows::Foundation::Uri deploymentUri(const std::wstring& canonical) {
+ archiveAt("deployment_uri_drive_path_contract");
+ require(rootGrammar(narrow(canonical)) && canonical.size()-4 < MAX_PATH);
+ const auto dos = canonical.substr(4);
+ wchar_t url[32768]{}; DWORD n = 32768;
+ archiveAt("deployment_uri_conversion");
+ winrt::check_hresult(UrlCreateFromPathW(dos.c_str(),url,&n,0));
+ archiveAt("deployment_winrt_uri_constructor");
+ const winrt::Windows::Foundation::Uri target(url);
+ archiveAt("deployment_file_uri_roundtrip");
+ require(target.SchemeName() == L"file" && target.Host().empty()
+  && target.Query().empty() && target.Fragment().empty());
+ wchar_t roundtrip[MAX_PATH]{}; n = MAX_PATH;
+ winrt::check_hresult(PathCreateFromUrlW(target.AbsoluteUri().c_str(),roundtrip,&n,0));
+ require(std::wstring(roundtrip) == dos);
+ return target;
+}
+// Breakage: the actual URL/WinRT boundary refuses extended DOS paths, or loses
+// literal spaces/#/%/Unicode when mapping the held local path to a file URI.
+static void uriContracts() {
+ bool oldRejected = false;
+ const char* oldStage = "UrlCreateFromPathW";
+ try {
+  wchar_t oldUrl[32768]{}; DWORD n = 32768;
+  winrt::check_hresult(UrlCreateFromPathW(L"\\\\?\\C:\\TEST-installed\\client.msix",oldUrl,&n,0));
+  oldStage = "WinRTUri";
+  const winrt::Windows::Foundation::Uri old(oldUrl);
+ } catch (const winrt::hresult_error& error) { oldRejected = error.code().value == E_INVALIDARG; }
+ require(oldRejected);
+ const std::wstring canonical = L"\\\\?\\C:\\TEST installed # %20 \u03a9\u4e2d\\client.msix";
+ const auto target = deploymentUri(canonical);
+ wchar_t roundtrip[MAX_PATH]{}; DWORD n = MAX_PATH;
+ winrt::check_hresult(PathCreateFromUrlW(target.AbsoluteUri().c_str(),roundtrip,&n,0));
+ require(std::wstring(roundtrip) == L"C:\\TEST installed # %20 \u03a9\u4e2d\\client.msix");
+ for (const auto invalid : {L"\\\\?\\UNC\\server\\share\\client.msix",L"\\\\.\\C:\\client.msix",L"C:\\client.msix"}) {
+  bool rejected = false;
+  try { deploymentUri(invalid); }
+  catch (const std::runtime_error&) { rejected = true; }
+  require(rejected);
+ }
+ std::cout << "TEST file URI contracts passed; legacy extended DOS rejected E_INVALIDARG at "
+  << oldStage << "; no target effects\n";
+}
 static void archive(bool deploy) {
  archiveFacts = fact(); num(*archiveFacts,L"original_deadline_boot_ms",end);
  archiveAt("open_archive");
@@ -388,11 +433,12 @@ static void archive(bool deploy) {
  archiveAt("deployment_intake_join");
  auto frozen = read(L"archive.json"); join(frozen);
  require(string(frozen,L"full_name") == held.full && string(frozen,L"archive_sha") == wide(held.digest));
- archiveAt("archive_intake_join_complete");
- wchar_t uri[32768]{}; DWORD n = 32768;
- winrt::check_hresult(UrlCreateFromPathW((root/L"client.msix").c_str(),uri,&n,0));
- const winrt::Windows::Foundation::Uri target(uri);
+ archiveAt("archive_intake_join_complete"); budget();
+ archiveAt("deployment_archive_physical_path");
+ const auto target = deploymentUri(physical(held.file.h));
+ archiveAt("deployment_package_manager_constructor"); budget();
  PackageManager manager;
+ archiveAt("deployment_intent_publication"); budget();
  publish(L"deployment.intent.json",report); budget();
  auto operation = manager.AddPackageAsync(target,nullptr,DeploymentOptions::None);
  using winrt::Windows::Foundation::AsyncStatus;
@@ -722,16 +768,18 @@ static void click() {
 }
 
 int wmain(int argc, wchar_t** argv) {
- if (argc == 2 && !wcscmp(argv[1],L"--inert-xml")) {
+ if (argc == 2 && (!wcscmp(argv[1],L"--inert-xml") || !wcscmp(argv[1],L"--inert-uri"))) {
   try {
    std::thread([limit=GetTickCount64()+10000] {
     while (GetTickCount64() < limit) Sleep(10);
     ExitProcess(124); // Only this inert TEST observer; no target operation exists.
    }).detach();
    winrt::init_apartment(winrt::apartment_type::multi_threaded);
-   xmlContracts(); return 0;
+   if (!wcscmp(argv[1],L"--inert-xml")) xmlContracts();
+   else uriContracts();
+   return 0;
   } catch (...) {
-   std::cerr << "TEST inert XML contracts failed\n";
+   std::cerr << "TEST inert contracts failed\n";
    return 1;
   }
  }

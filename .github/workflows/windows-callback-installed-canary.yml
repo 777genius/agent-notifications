@@ -65,7 +65,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'proof typecheck failed' }
           node tests/integration/windows_callback_installed/evidence.test.mts
           if ($LASTEXITCODE -ne 0) { throw 'inert evidence joins failed' }
-      - name: Compile shipping bytes; read-image proof and inert XML contracts
+      - name: Compile shipping bytes; read-image proof and inert XML/URI contracts
         shell: pwsh
         run: |
           if ((git rev-parse HEAD) -cne $env:SOURCE_SHA) { throw 'source mismatch' }
@@ -84,6 +84,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'observer compile failed' }
           & "$out\TEST-installed-observer.exe" --inert-xml
           if ($LASTEXITCODE -ne 0) { throw 'inert byte XML contracts failed' }
+          & "$out\TEST-installed-observer.exe" --inert-uri
+          if ($LASTEXITCODE -ne 0) { throw 'inert file URI contracts failed' }
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         id: upload
         with:
