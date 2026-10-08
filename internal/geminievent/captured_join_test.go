@@ -27,8 +27,8 @@ type capturedJoinInput struct {
 
 type capturedJoinResult struct {
 	Class            string `json:"class"`
-	Matched          bool `json:"matched"`
-	WebhookAttempted bool `json:"webhook_attempted"`
+	Matched          bool   `json:"matched"`
+	WebhookAttempted bool   `json:"webhook_attempted"`
 }
 
 // Pure TEST reader: the real SDK decoder and private production marker are used,
