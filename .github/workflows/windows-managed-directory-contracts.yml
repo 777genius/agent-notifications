@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - 'internal/installruntime/**'
+      - 'internal/agentnotify/setup/**'
+      - 'cmd/claude-notifications/agent_notify_setup*'
       - 'go.mod'
       - 'go.sum'
       - '.github/workflows/windows-managed-directory-contracts.yml'
@@ -22,7 +24,7 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-      - name: Compile exact baseline overlay and current filesystem test binaries
+      - name: Compile exact baseline overlays and current filesystem/setup test binaries
         shell: pwsh
         env:
           SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -37,6 +39,8 @@ jobs:
           "TEST_FS_ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           $evidence = [ordered]@{ sourceSHA=$env:SOURCE_SHA; baselineSHA='25b956732717d86a3bdb7fea9bef86ce1f6c4940';
             baselineKind='exact baseline archive plus head lock_windows_test.go overlay';
+            setupBaselineSHA='a0ee25796a5312b829a55e24303e5578d848cd46';
+            setupBaselineKind='exact a0ee archive plus head CLI admission test overlay';
             filesystemOnly=$true; installedCallbackQualified=$false; qualified=$false; actors=@() }
           # Redirect to files rather than inherited output pipes. A successful exit is
           # insufficient until both files can be opened exclusively and boundedly read.
@@ -147,6 +151,7 @@ jobs:
           }
           $headObserved = $false
           $baselineObserved = $false
+          $setupBaselineObserved = $false
           try {
             if ((git rev-parse HEAD) -cne $env:SOURCE_SHA -or $LASTEXITCODE -ne 0) { throw 'head source mismatch' }
             $status = git status --porcelain
@@ -169,6 +174,25 @@ jobs:
             $evidence.overlayTestSHA256 = (Get-FileHash -LiteralPath (Join-Path $baseline $test) -Algorithm SHA256).Hash.ToLowerInvariant()
             $evidence.baselineOverlayBefore = Source-Digest $baseline $evidence.baselineSHA
             $baselineObserved = $true
+            $evidence.setupBaselineTree = git rev-parse "$($evidence.setupBaselineSHA)^{tree}"
+            if ($LASTEXITCODE -ne 0) { throw 'exact setup baseline is unavailable' }
+            $setupArchive = Join-Path $root 'setup-baseline.tar'
+            git archive --format=tar --output=$setupArchive $evidence.setupBaselineSHA
+            if ($LASTEXITCODE -ne 0) { throw 'exact setup baseline archive failed' }
+            $evidence.setupBaselineArchiveSHA256 = (Get-FileHash -LiteralPath $setupArchive -Algorithm SHA256).Hash.ToLowerInvariant()
+            $setupBaseline = Join-Path $root 'setup-baseline'
+            New-Item -ItemType Directory -Path $setupBaseline | Out-Null
+            tar -xf $setupArchive -C $setupBaseline
+            if ($LASTEXITCODE -ne 0) { throw 'setup baseline extraction failed' }
+            $setupTest = 'cmd/claude-notifications/agent_notify_setup_admission_windows_test.go'
+            $evidence.setupOverlaySourceSHA256 = (Get-FileHash -LiteralPath (Join-Path $env:GITHUB_WORKSPACE $setupTest) -Algorithm SHA256).Hash.ToLowerInvariant()
+            Copy-Item -LiteralPath (Join-Path $env:GITHUB_WORKSPACE $setupTest) -Destination (Join-Path $setupBaseline $setupTest)
+            # This new test is absent from the baseline tree: bind it separately
+            # as well as hashing every original archive member before/after.
+            $evidence.setupOverlayTestBefore = (Get-FileHash -LiteralPath (Join-Path $setupBaseline $setupTest) -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($evidence.setupOverlayTestBefore -cne $evidence.setupOverlaySourceSHA256) { throw 'setup overlay differs from exact head test' }
+            $evidence.setupBaselineBefore = Source-Digest $setupBaseline $evidence.setupBaselineSHA
+            $setupBaselineObserved = $true
             $go = (Get-Command go).Source
             $evidence.goVersion = & $go version
             if ($LASTEXITCODE -ne 0) { throw 'Go version observation failed' }
@@ -230,6 +254,43 @@ jobs:
               }
               if ($newText -notmatch $terminal) { throw "required terminal test observation missing: $name" }
             }
+            foreach ($case in @(@{name='old-setup'; directory=$setupBaseline}, @{name='new-setup'; directory=$env:GITHUB_WORKSPACE})) {
+              $exe = Join-Path $root "$($case.name).test.exe"
+              $fact = Invoke-Owned "$($case.name)-compile" $go @('test', '-c', '-mod=readonly', '-trimpath', '-o', ('"' + $exe + '"'), './cmd/claude-notifications') $case.directory 240
+              Require-Collected $fact 0
+              $evidence["$($case.name)BinarySHA256"] = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant()
+            }
+            $setupName = 'TestWindowsSetupGlobalConfigAdmissionDiagnostic'
+            $oldSetup = Invoke-Owned 'old-setup-test' (Join-Path $root 'old-setup.test.exe') @('-test.v', "-test.run=^$setupName$", '-test.timeout=60s', '-test.count=1') $setupBaseline 90
+            Require-Collected $oldSetup 1
+            $oldSetupText = [IO.File]::ReadAllText("$root/old-setup-test.stdout.txt") + [IO.File]::ReadAllText("$root/old-setup-test.stderr.txt")
+            if ($oldSetupText -notmatch "(?m)^=== RUN   $setupName/foreign_mutation_true\r?$" -or
+                $oldSetupText -notmatch "(?m)^--- FAIL: $setupName \([0-9.]+s\)\r?$" -or
+                $oldSetupText -notmatch "(?m)^\s+--- PASS: $setupName/foreign_mutation_false \([0-9.]+s\)\r?$" -or
+                $oldSetupText -notmatch "(?m)^\s+--- FAIL: $setupName/foreign_mutation_true \([0-9.]+s\)\r?$" -or
+                $oldSetupText -notmatch 'missing/wrong measured diagnostic: \{"reason":"policy_commit_failed","generation":3\}' -or
+                $oldSetupText -match 'panic:|test timed out|no tests to run' -or
+                [regex]::Matches($oldSetupText, '(?m)^\s+[^\r\n]+\.go:[0-9]+: ').Count -ne 1) {
+              throw 'setup baseline did not observe only the required missing-attribution boundary'
+            }
+            $evidence.setupBaselineNamedMissingDiagnosticFailure = $true
+            $newSetup = Invoke-Owned 'new-setup-test' (Join-Path $root 'new-setup.test.exe') @('-test.v', "-test.run=^$setupName$", '-test.timeout=60s', '-test.count=1') $env:GITHUB_WORKSPACE 90
+            Require-Collected $newSetup 0
+            $newSetupText = [IO.File]::ReadAllText("$root/new-setup-test.stdout.txt") + [IO.File]::ReadAllText("$root/new-setup-test.stderr.txt")
+            if ($newSetupText -notmatch "(?m)^--- PASS: $setupName \([0-9.]+s\)\r?$" -or
+                $newSetupText -match 'panic:|test timed out|no tests to run') { throw 'new setup contract did not pass' }
+            foreach ($subcase in @('foreign_mutation_false', 'foreign_mutation_true')) {
+              if ($newSetupText -notmatch "(?m)^=== RUN   $setupName/$subcase\r?$" -or
+                  $newSetupText -notmatch "(?m)^\s+--- PASS: $setupName/$subcase \([0-9.]+s\)\r?$") {
+                throw 'required actual setup subcase did not pass'
+              }
+            }
+            $evidence.setupAdmissionSubcasesPassed = $true
+            $evidence.setupBaselineAfter = Source-Digest $setupBaseline $evidence.setupBaselineSHA
+            $evidence.setupOverlayTestAfter = (Get-FileHash -LiteralPath (Join-Path $setupBaseline $setupTest) -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($evidence.setupBaselineBefore -cne $evidence.setupBaselineAfter -or $evidence.setupOverlayTestBefore -cne $evidence.setupOverlayTestAfter) {
+              throw 'setup baseline/overlay changed during compilation/execution'
+            }
             $evidence.headSourceAfter = Source-Digest $env:GITHUB_WORKSPACE $env:SOURCE_SHA
             $evidence.baselineOverlayAfter = Source-Digest $baseline $evidence.baselineSHA
             $status = git status --porcelain
@@ -247,6 +308,11 @@ jobs:
             try {
               if ($headObserved) { $evidence.headSourceAfter = Source-Digest $env:GITHUB_WORKSPACE $env:SOURCE_SHA }
               if ($baselineObserved) { $evidence.baselineOverlayAfter = Source-Digest $baseline $evidence.baselineSHA }
+              if ($setupBaselineObserved) {
+                $evidence.setupBaselineAfter = Source-Digest $setupBaseline $evidence.setupBaselineSHA
+                $evidence.setupOverlayTestAfter = (Get-FileHash -LiteralPath (Join-Path $setupBaseline $setupTest) -Algorithm SHA256).Hash.ToLowerInvariant()
+                if ($evidence.setupBaselineBefore -cne $evidence.setupBaselineAfter -or $evidence.setupOverlayTestBefore -cne $evidence.setupOverlayTestAfter) { $evidence.qualified = $false }
+              }
               if ($evidence.headSourceBefore -cne $evidence.headSourceAfter -or $evidence.baselineOverlayBefore -cne $evidence.baselineOverlayAfter) { $evidence.qualified = $false }
             } catch { $evidence.sourceAfterUnknown = $true; $evidence.qualified = $false }
             $evidence | ConvertTo-Json -Depth 7 | Set-Content -LiteralPath "$root/evidence.json" -Encoding utf8

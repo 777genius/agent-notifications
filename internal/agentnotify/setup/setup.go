@@ -458,3 +458,13 @@ func Inspect(ctx context.Context, o Options, r Request, preparedGlobal []byte) e
 	}
 	return o.validatePrepared(ctx, candidate, preparedGlobal)
 }
+
+// CommitDiagnostic projects measured admission facts for this caller's sole
+// external config. It preserves named reasons and the original error chain.
+func CommitDiagnostic(err error) *installruntime.AdmissionDiagnostic {
+	var e *Error
+	if !errors.As(err, &e) || e.Reason != "policy_commit_failed" {
+		return nil
+	}
+	return installruntime.ProjectAdmission(e.Err, "global_config")
+}

@@ -299,6 +299,7 @@ func agentNotifySetupExecute(ctx context.Context, args []string, out io.Writer, 
 		return executeSetupWizard(ctx, args[1:], out)
 	}
 	a, help, e := parseAgentNotifySetup(args)
+	var diagnostic *installruntime.AdmissionDiagnostic
 	emit := func(r agentNotifySetupResult, code int) int {
 		permissionOp := a.operation == "permission-status" || a.operation == "request-permission"
 		if r.Permission == "" {
@@ -326,9 +327,10 @@ func agentNotifySetupExecute(ctx context.Context, args []string, out io.Writer, 
 				}{r, r.Changed, r.Ready})
 			} else if code != 0 && (a.operation != "status" || r.Configuration == "") {
 				err = json.NewEncoder(out).Encode(struct {
-					Reason     string `json:"reason"`
-					Generation uint64 `json:"generation,omitempty"`
-				}{r.Reason, r.Generation})
+					Reason     string                              `json:"reason"`
+					Generation uint64                              `json:"generation,omitempty"`
+					Diagnostic *installruntime.AdmissionDiagnostic `json:"diagnostic,omitempty"`
+				}{r.Reason, r.Generation, diagnostic})
 			} else {
 				err = json.NewEncoder(out).Encode(r)
 			}
@@ -588,6 +590,7 @@ func agentNotifySetupExecute(ctx context.Context, args []string, out io.Writer, 
 	r.Generation = result.Generation
 	if err != nil {
 		r.Reason = agentNotifySetupReason(ctx, err)
+		diagnostic = notifysetup.CommitDiagnostic(err)
 		return emit(r, 1)
 	}
 	r.Reason = "enabled"
