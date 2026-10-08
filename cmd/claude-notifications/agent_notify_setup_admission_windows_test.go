@@ -27,7 +27,14 @@ func TestWindowsSetupGlobalConfigAdmissionDiagnostic(t *testing.T) {
 		t.Run(fmt.Sprintf("foreign_mutation_%t", foreign), func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
-			root := filepath.Join(t.TempDir(), "TEST-private")
+			// The CLI requires exact physical spelling, including Windows long
+			// names/case. Resolve the existing owned temp ancestor before deriving
+			// the private TEST suffix, as the normal setup fixtures already do.
+			physicalTemp, err := filepath.EvalSymlinks(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			root := filepath.Join(physicalTemp, "TEST-private")
 			_ = setupAdmissionDirectory(t, root, false)
 			parent := filepath.Join(root, "ordinary-global")
 			held := setupAdmissionDirectory(t, parent, foreign)
