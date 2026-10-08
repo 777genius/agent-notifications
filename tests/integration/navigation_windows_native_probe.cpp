@@ -1748,19 +1748,19 @@ static void composedAction(const JsonObject& callback, ULONGLONG entry) {
             && compositionTicks(callback, L"creationTicks") > compositionTicks(sender, L"exitTicks"), "cold inline action custody missing");
         exactInstalled(); winrt::Windows::Foundation::Uri uri(L"codex://threads/" + uuid);
         auto intent = JsonObject::Parse(result.Stringify()); compositionBool(intent, L"queryBoundaryArmed", true);
-        compositionString(intent, L"familyName", vendorFamily); compositionString(intent, L"fullName", vendorFull);
+        compositionString(intent, L"familyName", NavigationVendorTEST::vendorFamily); compositionString(intent, L"fullName", NavigationVendorTEST::vendorFull);
         compositionString(intent, L"uri", std::wstring(uri.RawUri())); compositionString(intent, L"senderCreationTicks", compositionText(sender, L"creationTicks"));
         compositionPublish("vendor-callback-query-intent.json", intent);
         const auto queryDeadline = std::min(deadline, GetTickCount64() + 10000);
         compositionNumber(result, L"queryDeadlineBootMs", queryDeadline); compositionDemand(GetTickCount64() < queryDeadline, "query admission expired");
         composedAdmitted = true; queryEntered = true;
-        auto support = await(Launcher::QueryUriSupportAsync(uri, LaunchQuerySupportType::Uri, vendorFamily), 10000, queryDeadline);
+        auto support = await(Launcher::QueryUriSupportAsync(uri, LaunchQuerySupportType::Uri, NavigationVendorTEST::vendorFamily), 10000, queryDeadline);
         queryReturned = true; compositionNumber(result, L"uriSupport", static_cast<int>(support));
         if (support != LaunchQuerySupportStatus::Available) outcome = L"unavailable";
         else {
             exactInstalled(); compositionDemand(GetTickCount64() < deadline, "launch admission expired");
             compositionBool(intent, L"launchBoundaryArmed", true); compositionPublish("vendor-callback-launch-intent.json", intent);
-            LauncherOptions options; options.TargetApplicationPackageFamilyName(vendorFamily); options.FallbackUri(nullptr);
+            LauncherOptions options; options.TargetApplicationPackageFamilyName(NavigationVendorTEST::vendorFamily); options.FallbackUri(nullptr);
             const auto launchDeadline = std::min(deadline, GetTickCount64() + 15000);
             compositionNumber(result, L"launchDeadlineBootMs", launchDeadline); compositionDemand(GetTickCount64() < launchDeadline, "launch boundary expired");
             launchEntered = true; bool accepted = await(Launcher::LaunchUriAsync(uri, options), 15000, launchDeadline);
