@@ -440,15 +440,25 @@ def main():
         defaults = work / 'defaults.json'
         owned_fixture(defaults, b'{"notifications":{"desktop":{"enabled":true,"sound":false,"clickToFocus":true}}}')
         commands = []; report['setupCommands'] = commands
+        update = shipping.get('update'); current_sha = shipping['files']['shipping-client']
+        update_stage = None
+        if update:
+            update_stage = work / 'update-stage'; update_stage.mkdir(mode=0o700); os.chown(update_stage, 1000, 1000)
+            owned_fixture(update_stage / staged.name, (SEED / 'update-shipping-client').read_bytes(), 0o700)
 
-        def command(label, argv, allowed=(0,)):
+        def command(label, argv, allowed=(0,), executor=None, expected=None):
             remaining = deadline - now()
             if remaining <= 0: raise RuntimeError('shipping_setup_budget_expired')
-            result = subprocess.run([str(cli if cli.exists() else staged)] + argv,
+            executable = executor or (cli if cli.exists() else staged)
+            if update and sha(executable) != (expected or current_sha): raise RuntimeError('actual_managed_writer_source_role_required')
+            remaining = deadline - now()
+            if remaining <= 0: raise RuntimeError('shipping_setup_budget_expired')
+            result = subprocess.run([str(executable)] + argv,
                 cwd=work, env=env, preexec_fn=drop, capture_output=True, timeout=min(45, remaining))
             if len(result.stdout) + len(result.stderr) > 65536: raise RuntimeError('shipping_CLI_output_bound')
             commands.append(dict(label=label, argv=argv, exitCode=result.returncode,
                 stdout=result.stdout.decode(), stderr=result.stderr.decode(), collectedBoot=now()))
+            if update: commands[-1].update(writerSHA256=expected or current_sha, sourceRole='old' if (expected or current_sha) == shipping['files']['shipping-client'] else 'update')
             if result.returncode not in allowed: raise RuntimeError('shipping_normal_CLI_failed_' + label)
             return result.stdout.decode()
 
@@ -500,7 +510,7 @@ raise SystemExit(0 if result['passed'] else 1)
                 '--expected-generation', generation(label), '--json'])
             binding = json.loads(read(control / 'agent-notifications.json'))['route']['linuxCallbackSnapshot']
             path = Path(binding['snapshotPath']); snapshot = json.loads(read(path))
-            if sha(path) != binding['sha256'] or snapshot['ReaderSHA256'] != shipping['files']['shipping-client'] or snapshot['ManifestSHA256'] != shipping['files']['shipping-vendor-manifest.json']:
+            if sha(path) != binding['sha256'] or snapshot['ReaderSHA256'] != current_sha or snapshot['ManifestSHA256'] != shipping['files']['shipping-vendor-manifest.json']:
                 raise RuntimeError('actual_immutable_shipping_snapshot_unbound')
             saved = {str(p): sha(p) for p in (path, Path(snapshot['Reader']),
                 Path(snapshot['DataRoot']) / 'applications' / (snapshot['ApplicationID'] + '.desktop'),
@@ -550,8 +560,42 @@ raise SystemExit(0 if result['passed'] else 1)
             if mako_owner == old_owner: raise RuntimeError('notification_owner_restart_unproved')
             report['ownerRestart'] = dict(old=old_owner, current=mako_owner)
             report['providerOwners'] = dict(mako=mako_owner, gtk=gtk_owner, frontend=frontend_owner)
+        def managed_state(expected):
+            ledger = json.loads(read(control / 'ownership.json'))
+            if cli.is_symlink() or sha(cli) != expected or type(ledger.get('Generation')) is not int or ledger['Generation'] <= 0 or type(ledger.get('WriterFloor')) is not int or not 1 <= ledger['WriterFloor'] <= 5:
+                raise RuntimeError('actual_managed_bytes_generation_floor_required')
+            return dict(binarySHA256=expected, generation=ledger['Generation'], writerFloor=ledger['WriterFloor'])
+
+        def transition(label, source_stage, executor, executor_sha, next_sha):
+            before = managed_state(current_sha)
+            for path, digest in a['retained'].items():
+                if sha(Path(path)) != digest: raise RuntimeError('retained_A_mutated_before_transition')
+            markers = {1: b'agent-notifications-managed-writer-protocol-v1', 2: b'agent-notifications-managed-writer-protocol-v1',
+                3: b'agent-notifications-managed-writer-protocol-v3', 4: b'agent-notifications-managed-writer-protocol-v4', 5: b'agent-notifications-managed-writer-protocol-v5'}
+            candidate = (source_stage / staged.name).read_bytes()
+            if hashlib.sha256(candidate).hexdigest() != next_sha or markers[before['writerFloor']] not in candidate or (before['writerFloor'] == 5 and markers[4] not in candidate):
+                raise RuntimeError('compatible_managed_transition_input_required')
+            command(label, ['internal-install-runtime', '--stage', str(source_stage), '--entry', staged.name,
+                '--target', str(managed / 'bin'), '--control-root', str(control), '--consumer', 'claude-hooks', '--refresh'], executor=executor, expected=executor_sha)
+            after = managed_state(next_sha)
+            if after['generation'] <= before['generation'] or after['writerFloor'] != before['writerFloor'] or any(sha(Path(path)) != digest for path, digest in a['retained'].items()):
+                raise RuntimeError('managed_transition_or_retained_A_unproved')
+            report.setdefault('managedTransitions', []).append(dict(label=label, before=before, after=after, retainedAUnchanged=True))
+
+        if update:
+            transition('update', update_stage, update_stage / staged.name, update['files']['update-shipping-client'], update['files']['update-shipping-client'])
+            current_sha = update['files']['update-shipping-client']
         b = bind('B')
         if shipping['scenario'] == 'restart_b': selected = submit('B', b)
+        if update:
+            transition('rollback', stage, cli, current_sha, shipping['files']['shipping-client'])
+            current_sha = shipping['files']['shipping-client']
+            status = json.loads(command('status-rollback', ['setup-notifications', 'status', '--global-config', str(global_config), '--json']))
+            if status.get('configuration') != 'configured' or status.get('globalConfiguration') != 'configured' or status.get('offlineCapability') != 'eligible' or status.get('generation') != managed_state(current_sha)['generation']:
+                raise RuntimeError('compatible_rollback_offline_readiness_unproved')
+            if json.loads(read(control / 'agent-notifications.json'))['route']['linuxCallbackSnapshot'] != b['binding']:
+                raise RuntimeError('compatible_rollback_binding_changed')
+            report['updateRollbackObserved'] = True
         if a['binding'] == b['binding'] or any(sha(Path(path)) != digest for path, digest in a['retained'].items()):
             raise RuntimeError('retained_A_changed_after_setup_B')
         report['retainedA'] = a; report['currentB'] = b; report['normalSetupObserved'] = True
@@ -560,7 +604,7 @@ raise SystemExit(0 if result['passed'] else 1)
         # installation ledger/ownership markers remain intact. No directory rm.
         mutable = [global_config, control / 'agent-notifications.json'] + [control / 'state/journal' / name for name in ('namespace', 'journal.json', 'lock')]
         removed = []; report['removedProducerState'] = removed
-        for path in mutable + [cli, staged]:
+        for path in mutable + [cli, staged] + ([update_stage / staged.name] if update else []):
             before = path.lstat()
             if not path.is_relative_to(work) or path.resolve() != path or not stat.S_ISREG(before.st_mode) or before.st_uid != 1000 or before.st_nlink != 1 or before.st_mode & 0o077:
                 raise RuntimeError('exact_owned_TEST_mutable_file_required')
