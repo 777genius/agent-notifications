@@ -80,10 +80,15 @@ Checkpoint B draft operator/capacity extension (not installed qualification):
   verifies installed participants and finishes policy/binding publication;
   changed values or objects are never silently repaired. Private generations
   from interrupted/rolled-back setup remain charged toward the maximum of four.
-* Fixed shared registry parents must already exist. The operator never silently
-  creates Software/Classes/CLSID or AppUserModelId outside its concrete unique
-  participant. Missing parents refuse setup. Fresh installed qualification must
-  record this prerequisite without pre-creating those parents to force success.
+* Software and Classes must already exist and admit regular-key handles. After
+  the durable participant intent, normal setup may create only missing fixed
+  CLSID or AppUserModelId containers with inherited ACLs. Shared containers have
+  no generation stamp and are never deleted or repaired during rollback; empty
+  containers may remain after failed setup. Denied, linked or unknown parents
+  refuse admission. Owned leaves are created relative to held parent handles;
+  atomic exclusion of same-user namespace replacement is not claimed. Fresh
+  installed qualification records parents before setup and verifies both after
+  normal setup, without harness pre-creation or registry repair.
 * Go discovery currently requires exactly one returned family package and an
   official x64 main package with absent/empty resourceId. NULL resourceId is a
   documented absence; malformed spans or nonempty resource IDs refuse. Multiple

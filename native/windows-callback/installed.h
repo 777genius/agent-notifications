@@ -65,25 +65,80 @@ namespace wcb {
     require(status==ERROR_SUCCESS);
     return false;
   }
-  inline Key* createKey(const Generation& g,const std::wstring& path,Key& key,uint64_t end){
+  inline void regularRegistryKey(HKEY key){
+    DWORD type=0,size=0;
+    // Open with OPEN_LINK first: never inspect the link target as the container.
+    require(RegQueryValueExW(key,L"SymbolicLinkValue",nullptr,&type,nullptr,&size)==ERROR_FILE_NOT_FOUND);
+  }
+  struct SharedRegistryParent {
+    Key software,classes,key;
+    void open(const wchar_t* name,uint64_t end){
+      require(!wcscmp(name,L"CLSID")||!wcscmp(name,L"AppUserModelId"));
+      auto regular=[&](HKEY from,const wchar_t* leaf,HKEY admitted){
+        regularRegistryKey(admitted);
+        // Additional read-only rejection of an unresolved link. Successful
+        // path lookup is not proof of identity with the held OPEN_LINK handle.
+        Key resolved;
+        installedBudget(end);
+        require(RegOpenKeyExW(from,leaf,0,KEY_READ,&resolved.h)==ERROR_SUCCESS);
+        regularRegistryKey(resolved.h);
+        resolved.close();
+        installedBudget(end);
+      };
+      auto existing=[&](HKEY from,const wchar_t* leaf,REGSAM access,Key& to){
+        installedBudget(end);
+        require(RegOpenKeyExW(from,leaf,REG_OPTION_OPEN_LINK,access,&to.h)==ERROR_SUCCESS);
+        regular(from,leaf,to.h);
+      };
+      existing(HKEY_CURRENT_USER,L"Software",KEY_READ,software);
+      existing(software.h,L"Classes",KEY_READ|KEY_CREATE_SUB_KEY,classes);
+      installedBudget(end);
+      auto status=RegOpenKeyExW(classes.h,name,REG_OPTION_OPEN_LINK,KEY_READ|KEY_CREATE_SUB_KEY,&key.h);
+      installedBudget(end);
+      if(status==ERROR_FILE_NOT_FOUND){
+        DWORD disposition=0;
+        // Inherit normal shared-container ACLs. No ownership stamp/ACL repair.
+        // OPEN_LINK support is required: unsupported API behavior has no fallback.
+        installedBudget(end);
+        status=RegCreateKeyExW(classes.h,name,0,nullptr,REG_OPTION_OPEN_LINK,
+          KEY_READ|KEY_CREATE_SUB_KEY,nullptr,&key.h,&disposition);
+        installedBudget(end);
+        require(status==ERROR_SUCCESS&&disposition==REG_CREATED_NEW_KEY);
+        regularRegistryKey(key.h);
+        installedBudget(end);
+        require(RegFlushKey(key.h)==ERROR_SUCCESS);
+        installedBudget(end);
+      }else{
+        require(status==ERROR_SUCCESS);
+        regular(classes.h,name,key.h);
+      }
+    }
+    void close(){
+      key.close();
+      classes.close();
+      software.close();
+    }
+  };
+  inline Key* createKey(const Generation& g,HKEY parent,const std::wstring& leaf,Key& key,uint64_t end){
+    require(!leaf.empty()&&leaf.find_first_of(L"\\/")==std::wstring::npos);
+    regularRegistryKey(parent);
     PSECURITY_DESCRIPTOR sd=nullptr;
     auto acl=L"O:"+wide(g.sid)+L"D:P(A;;KA;;;"+wide(g.sid)+L")(A;;KA;;;SY)";
     require(ConvertStringSecurityDescriptorToSecurityDescriptorW(acl.c_str(),SDDL_REVISION_1,&sd,nullptr));
-    SECURITY_ATTRIBUTES sa{
-      sizeof(sa),sd,FALSE
-    };
+    struct Free {
+      PSECURITY_DESCRIPTOR p;
+      ~Free(){LocalFree(p);}
+    } free{sd};
+    SECURITY_ATTRIBUTES sa{sizeof(sa),sd,FALSE};
     DWORD disposition=0;
-    Key parent;
-    const auto slash=path.find_last_of(L'\\');
-    require(slash!=std::wstring::npos);
-    require(RegOpenKeyExW(HKEY_CURRENT_USER,path.substr(0,slash).c_str(),0,KEY_READ|KEY_WRITE,&parent.h)==ERROR_SUCCESS);
     installedBudget(end);
-    auto status=RegCreateKeyExW(parent.h,path.substr(slash+1).c_str(),0,nullptr,0,KEY_READ|KEY_WRITE,&sa,&key.h,&disposition);
-    LocalFree(sd);
+    auto status=RegCreateKeyExW(parent,leaf.c_str(),0,nullptr,REG_OPTION_OPEN_LINK,
+      KEY_READ|KEY_WRITE,&sa,&key.h,&disposition);
     installedBudget(end);
     require(status==ERROR_SUCCESS);
+    regularRegistryKey(key.h);
     if(disposition==REG_CREATED_NEW_KEY)put(key.h,L"OwnerGeneration",stamp(g),end);
-    else require(value(key.h,L"OwnerGeneration")==stamp(g));
+    else require(disposition==REG_OPENED_EXISTING_KEY&&value(key.h,L"OwnerGeneration")==stamp(g));
     return &key;
   }
   inline void ownedRegistry(HKEY key,const Generation& g){
@@ -267,15 +322,17 @@ namespace wcb {
     }
   }
   inline void applyClass(const Generation& g,uint64_t end){
+    SharedRegistryParent parent;
+    parent.open(L"CLSID",end);
     Key cls,local;
-    createKey(g,classPath(g),cls,end);
+    createKey(g,parent.key.h,wide(g.snapshot.clsid),cls,end);
     expectedValues(cls.h,g,{
       {
         L"OwnerGeneration",stamp(g)
       }
     },true);
     classChildren(cls.h);
-    createKey(g,classPath(g)+L"\\LocalServer32",local,end);
+    createKey(g,cls.h,L"LocalServer32",local,end);
     expectedValues(local.h,g,{
       {
         L"OwnerGeneration",stamp(g)
@@ -292,10 +349,13 @@ namespace wcb {
     installedBudget(end);
     local.close();
     cls.close();
+    parent.close();
   }
   inline void applyApp(const Generation& g,uint64_t end){
+    SharedRegistryParent parent;
+    parent.open(L"AppUserModelId",end);
     Key app;
-    createKey(g,appPath(g),app,end);
+    createKey(g,parent.key.h,wide(g.snapshot.aumid),app,end);
     expectedValues(app.h,g,{
       {
         L"OwnerGeneration",stamp(g)
@@ -312,6 +372,7 @@ namespace wcb {
     require(RegFlushKey(app.h)==ERROR_SUCCESS);
     installedBudget(end);
     app.close();
+    parent.close();
   }
   inline Handle writableLeaf(const fs::path& p,const Generation& g){
     Handle file(CreateFileW(p.c_str(),GENERIC_READ|READ_CONTROL|DELETE,FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_FLAG_OPEN_REPARSE_POINT,nullptr));
