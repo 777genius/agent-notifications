@@ -702,6 +702,67 @@ def classify_captured_frame(g0, args, lab, env, event, raw):
         return unavailable  # Never publish helper stderr, arbitrary fields or errors.
 
 
+def owned_input_cleanup_qualified(evidence, collection_known, spool):
+    return (collection_known and evidence.get("final_cleanup") == "verified_revoked"
+            and "provider_cleanup_classification" not in evidence and not spool["error"])
+
+
+def classify_owned_inputs(capture, classify, deadline=None):
+    """Pure decoder observation after teardown; no admission or delivery receipt."""
+    result = {"class": "unqualified_prefix", "SDK_flush_complete": False,
+              "absence_means": "unknown", "rows": []}
+    frames = capture.get("frames", []) if type(capture) is dict else []
+    if type(capture) is not dict or capture.get("qualified") is not True:
+        return result
+    # First deficit has seven known invocations. Fail closed on extra input;
+    # this diagnostic does not extend the native/settle/cleanup budgets.
+    if type(frames) is not list or len(frames) > 7:
+        result["class"] = "input_bound_exceeded"
+        return result
+    if type(deadline) not in (int, float) or not math.isfinite(deadline):
+        result["class"] = "diagnostic_budget_gap"
+        return result
+    result["class"] = "classified_prefix"
+    for frame in frames:
+        try:
+            require(type(frame) is dict and frame.get("role") in OWN and frame.get("case") in
+                    ("plain", "equal", "approve", "deny", "cancel", "recovery")
+                    and type(frame.get("raw")) is bytes and 0 < len(frame["raw"]) <= 1024 * 1024
+                    and all(type(frame.get(k)) is str and HEX.fullmatch(frame[k]) for k in
+                            ("payload_sha256", "session_sha256", "timestamp_sha256"))
+                    and sha(frame["raw"]) == frame["payload_sha256"]
+                    and type(frame.get("foreign_payload_match")) is bool, "owned_input_shape")
+            # bounded_process has <=3s process wait plus <=8s drain/cleanup.
+            # Reserve 12s before each call inside the ORIGINAL native deadline.
+            # No new analysis window, timeout reset or extension is permitted.
+            if deadline - time.monotonic() < 12:
+                result["class"] = "diagnostic_budget_gap"
+                break
+            value = classify(frame["role"], frame["raw"])
+            fields = {"version", "classification", "eligible", "timestamp_present", "session_sha256",
+                      "timestamp_sha256", "event", "payload_sha256", "bytes"}
+            require(type(value) is dict and set(value) <= fields and value.get("event") == frame["role"]
+                    and value.get("payload_sha256") == frame["payload_sha256"]
+                    and value.get("classification") in ("decoded", "invalid")
+                    and type(value.get("eligible")) is bool and type(value.get("timestamp_present")) is bool,
+                    "owned_input_classifier_projection")
+            row = {"role": frame["role"], "case": frame["case"],
+                   "payload_sha256": frame["payload_sha256"], "session_sha256": frame["session_sha256"],
+                   "timestamp_sha256": frame["timestamp_sha256"],
+                   "foreign_payload_match": frame["foreign_payload_match"],
+                   "classification": value["classification"], "eligible": value["eligible"],
+                   "timestamp_present": value["timestamp_present"]}
+            if value["classification"] == "decoded":
+                row["source_identity_match"] = all(value.get(k) == frame[k] for k in
+                                                    ("session_sha256", "timestamp_sha256"))
+            result["rows"].append(row)  # Preserve each invocation, including duplicates.
+        except Exception:
+            result["class"] = "analysis_unavailable"
+            break  # Never emit raw fields, paths, stderr or arbitrary exceptions.
+    require(len(json.dumps(result).encode()) <= 65536, "owned_input_projection_bound")
+    return result
+
+
 def run(args):
     require(args.trusted_orchestrator, "native_execution_requires_trusted_orchestrator")
     require(60 <= args.timeout <= 240, "native_watchdog_bounds")
@@ -730,7 +791,7 @@ def run(args):
     require(not update_hash or update_hash != artifact_hash, "changed_update_requires_distinct_actual_artifact")
     active_hash = artifact_hash
     capture_frames = sys.platform == "linux" and bool(getattr(args, "frame_classifier", None))
-    if capture_frames:
+    if getattr(args, "frame_classifier", None):
         args.frame_classifier = str(test_artifact(args.frame_classifier))
         classifier_hash = sha(bounded_read(Path(args.frame_classifier), 32 * 1024 * 1024))
     lab = g0.new_lab(args.lab_root)
@@ -756,6 +817,8 @@ def run(args):
     stop, spool = threading.Event(), {"receipts": [], "error": None}
     watcher, terminal, env, damaged_preimage = None, None, None, None
     capture_collection_known = True
+    owned_input_capture = None
+    owned_input_deadline = None
     if capture_frames:
         from gemini_frame_capture import prepare
         prepare(lab)
@@ -822,6 +885,9 @@ def run(args):
             fixture.arm("plain")
             evidence["attempt_cache_baseline"], cache_baseline = attempt_cache_snapshot(lab)
             capture_collection_known = False
+            # Conservative lower bound on the first bridge's existing watchdog:
+            # its actual timer starts later, after Terminal starts the child.
+            owned_input_deadline = time.monotonic() + args.timeout
             terminal = g0.Terminal(node, executable, install, lab, env, ui, args.timeout)
             cases, rows = g0.exercise(lab, fixture, terminal, ui, observer=lambda p: native_rows(g0, p))
             before_remove_counts = settle(g0, lab, fixture, terminal, delivery_counts(rows), cache_baseline=cache_baseline)
@@ -965,6 +1031,7 @@ def run(args):
                 evidence["driver"] = "failed"
                 evidence["cleanup_classification"] = str(cleanup) if isinstance(cleanup, g0.Red) else "bridge_cleanup_error"
             evidence["bridge_failure"] = terminal.failure_facts()
+            owned_input_capture = getattr(terminal, "owned_input_capture", None)
         if capture_frames:
             from gemini_frame_capture import finish
             evidence["sdk_frame_analysis"] = finish(lab, lambda event, raw: classify_captured_frame(g0, args, lab, env, event, raw), capture_collection_known)
@@ -1001,6 +1068,17 @@ def run(args):
                 evidence["driver"] = "failed"
         if evidence["driver"] == "failed":
             levels[platform]["native_cli/provider_substitute"] = "failed"
+        # All original bounded teardown and closed projections have completed.
+        # Only the first actual settle deficit needs this owned-input diagnostic.
+        if (evidence.get("settle_failure", {}).get("phase") == "exercise_settle"
+                and getattr(args, "frame_classifier", None)):
+            if owned_input_cleanup_qualified(evidence, capture_collection_known, spool):
+                evidence["owned_sdk_input_analysis"] = classify_owned_inputs(owned_input_capture,
+                    lambda event, raw: classify_captured_frame(g0, args, lab, env, event, raw), owned_input_deadline)
+            else:
+                evidence["owned_sdk_input_analysis"] = {"class": "cleanup_unqualified", "rows": [],
+                    "SDK_flush_complete": False, "absence_means": "unknown"}
+            evidence["frame_classifier_sha256"] = classifier_hash
         write_json(lab / "production-evidence.json", evidence)
     require(evidence["driver"] != "failed", "production_driver_failed")
     return {"driver": evidence["driver"], "evidence": str(lab / "production-evidence.json"), "inspect": evidence["inspect"],
@@ -1012,6 +1090,72 @@ def snapshot_settings_equal(path, state):
 
 
 class PureChecks(unittest.TestCase):
+    def test_owned_input_refuses_provider_cleanup_failure(self):
+        # RED if consent revocation alone admits analysis despite provider
+        # teardown failure; any retained provider classification refuses it.
+        evidence, spool = {"final_cleanup": "verified_revoked"}, {"error": None}
+        self.assertTrue(owned_input_cleanup_qualified(evidence, True, spool))
+        for classification in ("provider_shutdown_unconfirmed", "", None):
+            self.assertFalse(owned_input_cleanup_qualified(
+                dict(evidence, provider_cleanup_classification=classification), True, spool))
+
+    def test_owned_input_prefix_join_multiplicity_and_closed_projection(self):
+        # RED if actual owned bytes are replaced by foreign bytes, duplicate
+        # invocations collapse, ambiguous cases classify, or private text leaks.
+        g0, _ = load_g0()
+        with tempfile.TemporaryDirectory(prefix="TEST-owned-input-") as root:
+            lab = Path(root).resolve()
+            private = lab / "sdk-private"
+            private.mkdir(mode=0o700)
+            body = json.dumps({"hook_event_name": "AfterAgent", "session_id": "PRIVATE-session",
+                "timestamp": "2026-10-08T00:00:00Z", "cwd": str(lab / "profile"),
+                "stop_hook_active": False, "response": "PRIVATE-response"}).encode()
+            session, timestamp = sha(b"PRIVATE-session"), sha(b"2026-10-08T00:00:00Z")
+            foreign = dict(event="AfterAgent", case="plain", valid=True, neutral=True,
+                session_sha256=session, timestamp_sha256=timestamp, payload_sha256=sha(body))
+            (lab / "events.jsonl").write_text(json.dumps(foreign) + "\n")
+            record = {"attributes": {"event.name": "gemini_cli.hook_call", "hook_type": "command",
+                "hook_name": OWN["AfterAgent"], "hook_event_name": "AfterAgent",
+                "hook_input": body.decode(), "exit_code": 0, "success": True}}
+            path = private / "telemetry.json"
+            path.write_text((json.dumps(record) + "\n") * 2)
+            path.chmod(0o600)
+            captured = g0.capture_sdk_hook_outcomes(lab)
+            self.assertTrue(captured["qualified"])
+            self.assertEqual([frame["raw"] for frame in captured["frames"]], [body, body])
+            # This oracle exercises the collector/projection boundary only;
+            # exact-source decoding requires the already built TEST classifier.
+            def observed_decode(event, raw):
+                self.assertEqual((event, raw), ("AfterAgent", body))
+                return dict(version=1, classification="decoded", eligible=True, timestamp_present=True,
+                    event=event, payload_sha256=sha(raw), bytes=len(raw),
+                    session_sha256=session, timestamp_sha256=timestamp)
+            deadline = time.monotonic() + 60  # Synthetic existing owner deadline.
+            public = classify_owned_inputs(captured, observed_decode, deadline)
+            self.assertEqual(public["class"], "classified_prefix")
+            self.assertEqual(len(public["rows"]), 2)
+            self.assertTrue(all(row["case"] == "plain" and row["eligible"] and row["timestamp_present"]
+                and row["foreign_payload_match"] and row["source_identity_match"] for row in public["rows"]))
+            serialized = json.dumps(public) + (lab / "sdk-hook-outcomes.json").read_text()
+            for secret in ("PRIVATE-session", "PRIVATE-response", str(lab), "hook_input", "raw"):
+                self.assertNotIn(secret, serialized)
+            self.assertFalse(public["SDK_flush_complete"])
+            self.assertEqual(public["absence_means"], "unknown")
+            # Real duplicate foreign identities cannot select a known case.
+            (lab / "events.jsonl").write_text((json.dumps(foreign) + "\n") * 2)
+            ambiguous = g0.capture_sdk_hook_outcomes(lab)
+            self.assertEqual(ambiguous["frames"], [])
+            self.assertEqual(read_json(lab / "sdk-hook-outcomes.json")["unjoined_owned_calls"], 2)
+            rejected = classify_owned_inputs(captured, lambda event, raw: dict(observed_decode(event, raw),
+                                                                             prompt="PRIVATE-prompt"), deadline)
+            self.assertEqual(rejected["class"], "analysis_unavailable")
+            self.assertEqual(rejected["rows"], [])
+            for unavailable_deadline in (None, time.monotonic()):
+                gap = classify_owned_inputs(captured, lambda event, raw: self.fail("deadline must prevent call"),
+                                            unavailable_deadline)
+                self.assertEqual(gap["class"], "diagnostic_budget_gap")
+                self.assertEqual(gap["rows"], [])
+
     def cache_view(self, lab, baseline=None):
         return attempt_cache_snapshot(lab, baseline)[0]
 
