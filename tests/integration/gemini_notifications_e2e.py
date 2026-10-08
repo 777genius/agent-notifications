@@ -99,7 +99,7 @@ def write_json(path, value):
     path.chmod(0o600)
 
 
-def attempt_cache_snapshot(lab, baseline=None):
+def attempt_cache_snapshot(lab, baseline=None, private_join=None):
     """Return public aggregates and private (boot, clock, zero) context separately."""
     if sys.platform != "linux":
         return {"class": "unsupported_platform"}, None
@@ -199,6 +199,8 @@ def attempt_cache_snapshot(lab, baseline=None):
         complete = (baseline is not None and baseline[2] and baseline[0] == boot
                     and 0 <= now - baseline[1] < 60 and state["boot"] == boot
                     and live == len(seen) and len(seen) < 256)
+        if private_join is not None and complete:
+            private_join.update(entries=[{"key": entry["key"], "bits": entry["bits"]} for entry in state["entries"] or []])
         return {"class": "observed_complete_window" if complete else "observed_unqualified",
                 "keys": len(seen), "attempted_bits": histograms, "boot_matches": state["boot"] == boot,
                 "live_keys": live, "expired_keys": sum(histograms["expired"].values()),
@@ -624,10 +626,11 @@ def configure(lab, url, desktop):
     return path
 
 
-def classify_captured_frame(g0, args, lab, env, event, raw):
+def classify_captured_frame(g0, args, lab, env, event, raw, cache_join=None):
     # Pure helper only; captured frames never reach an installed consumer.
     unavailable = {"classification": "analyzer_unavailable", "event": event}
     code, out, _ = g0.bounded_process([args.frame_classifier, event], raw, lab / "profile", env, 3)
+    join_entered, join_collected = False, False
     try:
         require(code == 0 and len(out) <= 2048, "TEST_classifier_result")
         value = json.loads(out)
@@ -642,8 +645,36 @@ def classify_captured_frame(g0, args, lab, env, event, raw):
         else:
             require(not value["eligible"] and not value["timestamp_present"] and not (set(value) & {"session_sha256", "timestamp_sha256"}),
                     "TEST_classifier_invalid_projection")
-        return dict(value, event=event, payload_sha256=sha(raw), bytes=len(raw))
+        joined = {"class": "outside_initial_slice"}
+        identity = (event, value.get("session_sha256"), value.get("timestamp_sha256"))
+        if cache_join and identity in cache_join.get("frames", {}):
+            joined = {"class": "unavailable", "case": cache_join["frames"][identity]}
+            if "entries" in cache_join:
+                try:
+                    import base64
+                    require(sha(bounded_read(Path(args.cache_join_reader), 32 * 1024 * 1024)) == args.cache_join_sha256,
+                            "TEST_cache_join_reader_changed")
+                    request = dict(cache_join["binding"], event=event, payload=base64.b64encode(raw).decode(), entries=cache_join["entries"])
+                    join_entered = True
+                    code, response, _ = g0.bounded_process([args.cache_join_reader, "--AN-TEST-captured-cache-join"],
+                        json.dumps(request).encode(), lab / "profile", env, 3)
+                    join_collected = True
+                    require(code == 0 and len(response) <= 256, "TEST_cache_join_result")
+                    result = json.loads(response)
+                    require(type(result) is dict and set(result) == {"class", "matched", "webhook_attempted"}
+                            and result["class"] in ("joined", "unavailable")
+                            and type(result["matched"]) is bool and type(result["webhook_attempted"]) is bool
+                            and (result["class"] == "joined" or not result["matched"] and not result["webhook_attempted"])
+                            and (not result["webhook_attempted"] or result["matched"]), "TEST_cache_join_protocol")
+                    joined = dict(result, case=cache_join["frames"][identity])
+                except Exception:
+                    if join_entered and not join_collected:
+                        raise Red("TEST_cache_join_collection_unknown")
+                    pass  # Optional join cannot erase independently decoded facts.
+        return dict(value, event=event, payload_sha256=sha(raw), bytes=len(raw), cache_join=joined)
     except Exception:
+        if join_entered and not join_collected:
+            raise Red("TEST_cache_join_collection_unknown")  # Preserve sealed private recovery frames.
         return unavailable  # Never publish helper stderr, arbitrary fields or errors.
 
 
@@ -678,6 +709,11 @@ def run(args):
     if capture_frames:
         args.frame_classifier = str(test_artifact(args.frame_classifier))
         classifier_hash = sha(bounded_read(Path(args.frame_classifier), 32 * 1024 * 1024))
+    if getattr(args, "cache_join_reader", None):
+        require(capture_frames, "TEST_cache_join_requires_private_capture")
+        args.cache_join_reader = str(test_artifact(args.cache_join_reader))
+        join_hash = sha(bounded_read(Path(args.cache_join_reader), 32 * 1024 * 1024))
+        args.cache_join_sha256 = join_hash
     lab = g0.new_lab(args.lab_root)
     levels = {osname: {"build/contracts": "unverified_external_evidence_required", "native_cli/provider_substitute": "unverified",
                        "OS_API": "unverified", "visual": "unverified"} for osname in ("darwin", "linux", "windows")}
@@ -701,10 +737,21 @@ def run(args):
     stop, spool = threading.Event(), {"receipts": [], "error": None}
     watcher, terminal, env, damaged_preimage = None, None, None, None
     capture_collection_known = True
+    cache_join, initial_join_active, cache_baseline = {}, False, None
+    def seal_initial_join():
+        if getattr(args, "cache_join_reader", None) and capture_frames and cache_baseline is not None:
+            rows = native_rows(g0, lab)
+            require(len(rows) <= 64 and all(row.get("case") in g0.CASES for row in rows), "TEST_join_case_bound")
+            attempt_cache_snapshot(lab, cache_baseline, cache_join)
+            cache_join["frames"] = {(row["event"], row["session_sha256"], row["timestamp_sha256"]): row["case"] for row in rows}
+            require(len(cache_join["frames"]) == len(rows), "TEST_join_ambiguous_native_identity")
+            cache_join["binding"] = {"installation_id": first["ledger"]["ID"], "generation": first["ledger"]["Generation"]}
     if capture_frames:
         from gemini_frame_capture import prepare
         prepare(lab)
         evidence["frame_classifier_sha256"] = classifier_hash
+        if getattr(args, "cache_join_reader", None):
+            evidence["cache_join_reader_sha256"] = join_hash
     evidence["sdk_frame_analysis"] = {"class": "pending" if capture_frames else "unsupported", "cleanup": "unverified" if capture_frames else "not_applicable"}
     try:
         env = g0.minimal_env(lab, node, shell, args.system_root)
@@ -768,8 +815,11 @@ def run(args):
             evidence["attempt_cache_baseline"], cache_baseline = attempt_cache_snapshot(lab)
             capture_collection_known = False
             terminal = g0.Terminal(node, executable, install, lab, env, ui, args.timeout)
+            initial_join_active = True
             cases, rows = g0.exercise(lab, fixture, terminal, ui, observer=lambda p: native_rows(g0, p))
             before_remove_counts = settle(g0, lab, fixture, terminal, delivery_counts(rows), cache_baseline=cache_baseline)
+            seal_initial_join()
+            initial_join_active = False
             require(snapshot(lab, active_hash)[0] == first, "live_session_installation_mutation")
             if args.update_binary:
                 # Keep this same native CLI and its loaded command binding alive
@@ -884,6 +934,11 @@ def run(args):
         evidence["driver"] = "passed_implemented_scenarios_with_external_gates_pending"
         levels[platform]["native_cli/provider_substitute"] = "passed_implemented_scenarios"
     except Exception as exc:
+        if initial_join_active:
+            try:
+                seal_initial_join()
+            except Exception:
+                cache_join.clear()  # Optional read-only join never replaces original failure.
         evidence["classification"] = str(exc) if isinstance(exc, (Red, g0.Red)) else "production_harness_error"
         if hasattr(exc, "settle_failure"):
             evidence["settle_failure"] = exc.settle_failure
@@ -912,7 +967,7 @@ def run(args):
             evidence["bridge_failure"] = terminal.failure_facts()
         if capture_frames:
             from gemini_frame_capture import finish
-            evidence["sdk_frame_analysis"] = finish(lab, lambda event, raw: classify_captured_frame(g0, args, lab, env, event, raw), capture_collection_known)
+            evidence["sdk_frame_analysis"] = finish(lab, lambda event, raw: classify_captured_frame(g0, args, lab, env, event, raw, cache_join), capture_collection_known)
         if env is not None:
             try:
                 if damaged_preimage:
@@ -1361,7 +1416,7 @@ def main():
     parser.add_argument("--desktop", action="store_true")
     parser.add_argument("--timeout", type=int, default=240)
     for flag in ("binary", "update-binary", "native-app", "gemini-executable", "node-executable", "cli-install-root", "lab-root", "hook-shell", "system-root",
-                 "ui-contract", "g0-driver", "sdk-module-root", "installer-module-root", "frame-classifier"):
+                 "ui-contract", "g0-driver", "sdk-module-root", "installer-module-root", "frame-classifier", "cache-join-reader"):
         parser.add_argument("--" + flag)
     args = parser.parse_args()
     if args.self_test:
