@@ -4,8 +4,8 @@ import { readFileSync, mkdirSync, writeFileSync, realpathSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
-const candidate = '1f5cf76a6cd3468fb23ef88d762cfb0f6d691820';
-const signingRun = '37632615999';
+const candidate = '016707404d4e47af77937e6d7ad26828e874c110';
+const signingRun = '37687161334';
 function need(value: unknown, reason: string): asserts value { if (!value) throw Error(reason); }
 const hash = (body: Buffer | string): string => createHash('sha256').update(body).digest('hex');
 function command(binary: string, args: string[], cwd: string, env = process.env): string {
@@ -34,7 +34,7 @@ need(mode === 'prepare' || mode === 'execute', 'explicit mode required');
   const config = { mode, source, tools, candidate, signingRun, operatorSHA,
     adapterSHA256: hash(readFileSync(join(operator, 'scripts/macos-release-qualification.mts'))),
     consumerSHA256: hash(consumer), arch: process.env.AN_ARCH, version: process.env.AN_VERSION,
-    parentSHA256: process.env.AN_EVIDENCE_SHA256, currentRun: process.env.GITHUB_RUN_ID };
+    parentSHA256: process.env.AN_EVIDENCE_SHA256, currentRun: process.env.GITHUB_RUN_ID, currentAttempt: process.env.GITHUB_RUN_ATTEMPT };
   const configPath = join(tools, 'configuration.json');
   writeFileSync(configPath, JSON.stringify(config), { flag: 'wx', mode: 0o600 });
   const nativeEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) =>
@@ -91,7 +91,7 @@ def check_run():
     for arch in ('amd64','arm64'):
         root=art/('signed-'+arch)
         need((root/'source-sha.txt').read_text().strip()==candidate
-             and (root/'candidate-version.txt').read_text().strip()=='v1.48.2','signed_native_source_version')
+             and (root/'candidate-version.txt').read_text().strip()=='v1.48.3','signed_native_source_version')
         checked=set()
         for line in (root/'SHA256SUMS').read_text().splitlines():
             digest,name=line.split(None,1); name=name.lstrip('*')
@@ -102,24 +102,36 @@ def check_run():
         need(binary in checked and {'source-sha.txt','candidate-version.txt'}<=checked
              and sha(repo/'dist'/binary)==sha(root/binary),'signed_native_bytes_changed')
     return custody
-def check_prior_custody():
+def check_current_custody():
+    need(re.fullmatch('[1-9][0-9]*',str(c['currentRun'])) is not None
+         and re.fullmatch('[1-9][0-9]*',str(c['currentAttempt'])) is not None,'current_custody_identity_required')
     value=json.loads((art/'custody-run.json').read_text())
-    need(value['id']==37645007119 and value['run_attempt']==1 and value['status']=='completed'
-         and value['head_sha']=='23786c97ea926b4dfea5faf8780ccf519b4c09c2'
+    need(value['id']==int(c['currentRun']) and value['run_attempt']==int(c['currentAttempt'])
+         and value['head_sha']==c['operatorSHA']
+         and ((value['status']=='in_progress' and value['conclusion'] is None)
+              or (value['status']=='completed' and value['conclusion']=='success'))
          and value['event']=='workflow_dispatch' and value['actor']['login']=='777genius'
-         and value['triggering_actor']['login']=='777genius','owner_exact_prior_custody_run')
+         and value['triggering_actor']['login']=='777genius','owner_exact_current_custody_run')
     jobs=json.loads((art/'custody-jobs.json').read_text())
-    need(jobs['total_count']==len(jobs['jobs']),'complete_prior_custody_jobs')
+    need(jobs['total_count']==len(jobs['jobs']),'complete_current_custody_jobs')
+    job_ids=[job['id'] for job in jobs['jobs']]
+    need(all(type(job_id) is int and job_id>0 for job_id in job_ids)
+         and len(job_ids)==len(set(job_ids)),'unique_current_custody_job_ids')
+    expected={ 'Build additional custody only '+platform+'/'+arch
+               for platform,arch in (('linux','amd64'),('linux','arm64'),('windows','amd64')) }
+    custody_jobs=[job for job in jobs['jobs'] if job['name'].startswith('Build additional custody only ')]
+    need(len(custody_jobs)==3 and {job['name'] for job in custody_jobs}==expected,
+         'exact_three_current_custody_job_names')
     selected=[]
-    for platform,arch,job_id in (('linux','amd64',112873389471),('linux','arm64',112873389132),('windows','amd64',112873388956)):
+    for platform,arch in (('linux','amd64'),('linux','arm64'),('windows','amd64')):
         name='Build additional custody only '+platform+'/'+arch
-        matching=[job for job in jobs['jobs'] if job['name']==name]
-        need(len(matching)==1 and matching[0]['id']==job_id and matching[0]['run_id']==value['id']
+        matching=[job for job in custody_jobs if job['name']==name]
+        need(len(matching)==1 and matching[0]['run_id']==value['id']
              and matching[0]['head_sha']==value['head_sha']
              and matching[0]['status']=='completed' and matching[0]['conclusion']=='success',
-             'successful_exact_prior_custody_job')
+             'successful_exact_current_custody_job')
         binary=repo/'dist'/('claude-notifications-'+platform+'-'+arch+('.exe' if platform=='windows' else ''))
-        need(binary.is_file() and not binary.is_symlink(),'prior_custody_binary_missing')
+        need(binary.is_file() and not binary.is_symlink(),'current_custody_binary_missing')
         selected.append({'jobID':matching[0]['id'],'name':name,'binary':record(binary)})
     return {'runID':value['id'],'runAttempt':value['run_attempt'],'operatorSHA':value['head_sha'],
             'overallConclusion':value['conclusion'],'jobs':selected,'qualificationGranted':False}
@@ -128,7 +140,7 @@ h=load('opencode-platform-clock-prequalification.py')
 need(all(v is False for v in h.QUALIFICATIONS.values()),'clock_grants_must_remain_false')
 if c['mode']=='prepare':
     custody=check_run()
-    prior_custody=check_prior_custody()
+    current_custody=check_current_custody()
     inputs=load('release-opencode-inputs.py'); inputs.FIXTURES=repo/'scripts/testdata/opencode-native-e2e'
     helper=art/'release-helper/ClaudeNotifier.app.zip'; helper.parent.mkdir(mode=0o700)
     shutil.copyfile(art/'signed/ClaudeNotifier-smoke.app.zip',helper)
@@ -159,11 +171,11 @@ if c['mode']=='prepare':
                 'sidecar':{'path':prefix+'ClaudeNotifier.app.managed-runtime.json','sha256':sha(sidecar)}}
     (parent/'manifest.json').write_text(json.dumps(manifest,sort_keys=True)+'\n')
     receipt=json.loads((parent/'release-inputs-receipt.json').read_text())
-    receipt.update(purpose='exact-source signed macOS and prior operator binary custody, no qualification grant',
+    receipt.update(purpose='exact-source signed macOS and current operator binary custody, no qualification grant',
                    runId=run,operatorRunID=c['currentRun'],operatorSHA=c['operatorSHA'],
                    signingCustody=custody,adapterSHA256=c['adapterSHA256'],consumerSHA256=c['consumerSHA256'],
-                   priorOperatorCustody=prior_custody,
-                   otherNativeBinaries='prior_operator_run_custody_only_no_platform_promotion')
+                   currentOperatorCustody=current_custody,
+                   otherNativeBinaries='current_operator_run_custody_only_no_platform_promotion')
     (parent/'release-inputs-receipt.json').write_text(json.dumps(receipt,sort_keys=True)+'\n')
     archive.unlink(); digest=inputs.seal_archive(parent,archive)
     with open(os.environ['GITHUB_OUTPUT'],'a') as out: out.write('parent_sha256='+digest+'\n')

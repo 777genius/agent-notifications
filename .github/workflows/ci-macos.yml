@@ -43,7 +43,7 @@ jobs:
 
   test:
     needs: scope
-    if: ${{ !cancelled() && !(github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null)) && needs.scope.outputs.mode != 'docs' }}
+    if: ${{ !cancelled() && !(github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null)) && needs.scope.outputs.mode != 'docs' && needs.scope.outputs.mode != 'windows-only' }}
     name: ${{ github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null) && format('Metadata edit ignored (macOS {0})', matrix.go) || format('Test on macOS ({0})', matrix.go) }}
     runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.use_github_runner && matrix.os || github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && matrix.os || matrix.os == 'macos-15' && (vars.CI_MACOS_15_RUNNER || 'macos-15') || matrix.os == 'macos-26' && (vars.CI_MACOS_26_RUNNER || 'macos-26') || matrix.os }}
     timeout-minutes: 30
@@ -95,7 +95,15 @@ jobs:
       # test-env.sh preserves prepared Go caches. Wait for both suites before help.
       - parallel:
           - name: Run tests
-            run: go test -timeout 20m -v -race -coverprofile=coverage.txt -covermode=atomic ./...
+            run: |
+              skip_args=()
+              if [ '${{ matrix.go }}' = '1.25' ]; then
+                # Audited portable tests still run in the full Go 1.26 cell.
+                # Exact names leave every unknown/new test enabled; all packages
+                # and test files still compile in this single race-enabled run.
+                skip_args=(-skip '^(TestWizardInstallOrUpdateBootstrapE2E|TestSetupWizardRepairMixedRevisionsKeepsSiblingE2E|TestSetupWizardTTYMixedRepairPlanShowsPerBindingDigestsE2E|TestGeminiEventTransportTotalBudget|TestWizardTTYAddSecondClientKeepProposesNewDefaults|TestWizardTTYKeepBoundMixedCancels)$')
+              fi
+              go test -timeout 20m -v -race -coverprofile=coverage.txt -covermode=atomic "${skip_args[@]}" ./...
           - name: Run install.sh unit tests
             run: bash bin/install_test.sh
 
@@ -150,7 +158,7 @@ jobs:
 
   swift-test:
     needs: scope
-    if: ${{ !cancelled() && !(github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null)) && needs.scope.outputs.mode != 'docs' }}
+    if: ${{ !cancelled() && !(github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null)) && needs.scope.outputs.mode != 'docs' && needs.scope.outputs.mode != 'windows-only' }}
     name: ${{ github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null) && 'Metadata edit ignored (Swift)' || 'Swift notifier tests' }}
     runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.use_github_runner && 'macos-15' || github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'macos-15' || vars.CI_MACOS_15_RUNNER || 'macos-15' }}
     timeout-minutes: 30

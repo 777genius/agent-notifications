@@ -121,8 +121,8 @@
   },
   "limitations": [
     "Independent acceptance applies only to this owned TEST retained-A record; source-bound live-kernel/command observations are not independently retained complete streams.",
-    "25 guest kernel incarnations are counted separately from sender/QEMU/controller collection facts, not summed into28.",
-    "Source and telemetry changes belong to TEST harness; production binary remains the authenticated9b2 source artifact.",
+    "25 guest kernel incarnations are counted separately from sender/QEMU/controller collection facts, not summed into 28.",
+    "Source and telemetry changes belong to TEST harness; production binary remains the authenticated 9b2 source artifact.",
     "No raw URI, token, argv, environment or private identity is published.",
     "New raw clickTrace contains one press and ends at token.done; release/CLICKED is source-bound collection, not exported release wire proof. Old forensic release bytes belong only to the old negative case."
   ]
