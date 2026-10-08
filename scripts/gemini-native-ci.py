@@ -14,6 +14,7 @@ from pathlib import Path
 import platform
 import re
 import shutil
+import stat
 import sys
 import tempfile
 import unittest
@@ -325,6 +326,42 @@ def run(args):
             except Exception:
                 evidence[label] = "failed"
             finally:
+                # Closed pre-teardown projection only; never upload sdk-private or raw telemetry.
+                diagnostic = lab / "sdk-hook-outcomes.json"
+                try:
+                    identity = diagnostic.lstat()
+                    require(stat.S_ISREG(identity.st_mode) and identity.st_nlink == 1 and identity.st_size <= 65536,
+                            "SDK_hook_projection_identity")
+                    fd = os.open(diagnostic, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+                    with os.fdopen(fd, "rb") as stream:
+                        held = os.fstat(stream.fileno())
+                        require(stat.S_ISREG(held.st_mode) and (held.st_dev, held.st_ino, held.st_size) ==
+                                (identity.st_dev, identity.st_ino, identity.st_size), "SDK_hook_projection_changed")
+                        raw = stream.read(65537)
+                    require(len(raw) <= 65536, "SDK_hook_projection_bound")
+                    facts = json.loads(raw)
+                    keys = {"capture", "identity_checked", "snapshot_stable", "parse_complete", "SDK_flush_complete",
+                            "absence_means", "records", "owned_calls", "unjoined_owned_calls", "outcomes", "bytes",
+                            "role", "case", "claim_failures", "SDK_exit_code", "SDK_duration_ms", "SDK_success",
+                            "phase", "classification", "code", "elapsed_ns", "stage_ns", "budget_ns", "budget_state", "publication_possible"}
+                    words = {"unavailable", "bounded_prefix", "incomplete_or_invalid_JSON_prefix", "bounded_capture_or_parse_failed",
+                             "projection_bound_exceeded",
+                             "unknown", "AfterAgent", "Notification", *g0.CASES, "validate", "path", "root", "prepare", "lock", "clock",
+                             "read", "decode", "record", "encode", "publish", "published", "invalid_request", "invalid_path", "validation",
+                             "invalid_clock", "none", "invalid_document", "deadline", "canceled", "os_error", "sharing_violation",
+                             "lock_violation", "permission", "not_found", "not_started", "active"}
+                    def closed(value):
+                        if isinstance(value, dict): return set(value) <= keys and all(closed(v) for v in value.values())
+                        if isinstance(value, list): return len(value) <= 64 and all(closed(v) for v in value)
+                        return type(value) is bool or type(value) in (int, float) and -256 <= value <= 10**18 or type(value) is str and value in words
+                    require(isinstance(facts, dict) and closed(facts), "SDK_hook_projection_not_closed")
+                except Exception:
+                    facts = {"capture": "public_projection_unavailable", "absence_means": "unknown"}
+                try:
+                    write_json(evidence_dir / (label + "-SDK-hook-outcomes.json"), facts)
+                    print(json.dumps({"native_driver": label, "SDK_hook_outcomes": facts}), flush=True)
+                except Exception:
+                    pass  # Optional diagnostics must not replace the original driver failure/manifests.
                 # These two trusted driver manifests contain fixed facts/hashes,
                 # never native payloads, provider bodies or terminal transcripts.
                 if (lab / manifest).is_file():
@@ -333,7 +370,7 @@ def run(args):
                     driver_facts = json.loads((lab / manifest).read_bytes())
                     # Fixed classifications and version metadata only, never provider or terminal text.
                     print(json.dumps({"native_driver": label, **{key: driver_facts[key] for key in
-                        ("classification", "exception_type", "native_version_probe", "setup_failure", "setup_cleanup_failure",
+                        ("classification", "exception_type", "native_version_probe", "setup_failure", "setup_cleanup_failure", "settle_failure",
                          "bridge_failure", "provider_endpoints", "provider_cleanup_classification", "cleanup_classification", "native_execution", "driver")
                         if key in driver_facts}}), flush=True)
         require(all(evidence.get(label) == "passed_implemented_scenarios" for label in ("G0", "G5")), "native_qualification_failed")

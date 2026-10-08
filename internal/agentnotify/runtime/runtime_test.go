@@ -116,19 +116,19 @@ func TestRequestSnapshotsSharedLimiterReplayAndClose(t *testing.T) {
 	entered := make(chan string, 2)
 	release := make(chan struct{})
 	var releaseOnce sync.Once
-	unblock := func() { releaseOnce.Do(func() { close(release) }) }
-	defer unblock()
+	closeRelease := func() { releaseOnce.Do(func() { close(release) }) }
+	defer closeRelease()
 	var mu sync.Mutex
 	seen := map[string]string{}
 	o.DeliveryFactory = func(m notifier.ManagedInstallation, _ string, _ notifier.BootClock) Delivery {
 		return fakeDelivery{ready: func(r notification.Request) { entered <- m.Expected.Ledger.ID; <-release }, send: func(r notification.Request) string {
 			mu.Lock()
 			defer mu.Unlock()
-			path := r.Target.ApplicationPath
+			target := r.Target.ApplicationPath
 			if goruntime.GOOS == "linux" {
-				path = r.Target.Linux.SnapshotPath
+				target = r.Target.Linux.SnapshotPath
 			}
-			seen[m.Expected.Ledger.ID] = path
+			seen[m.Expected.Ledger.ID] = target
 			return "submitted"
 		}}
 	}
@@ -136,24 +136,29 @@ func TestRequestSnapshotsSharedLimiterReplayAndClose(t *testing.T) {
 	results := make(chan agentnotify.Receipt, 2)
 	go func() { results <- notify(b, "A") }()
 	go func() { results <- notify(b, "B") }()
-	admissionDeadline := time.NewTimer(5 * time.Second)
-	defer admissionDeadline.Stop()
+	entryTimer := time.NewTimer(10 * time.Second)
+	defer entryTimer.Stop()
 	for range 2 {
 		select {
 		case <-entered:
-		case r := <-results:
-			t.Fatalf("request completed before readiness: %+v", r)
-		case <-admissionDeadline.C:
-			t.Fatal("requests did not reach readiness")
+		case early := <-results:
+			t.Fatalf("Notify returned before readiness: %+v", early)
+		case <-entryTimer.C:
+			t.Fatal("Notify did not reach readiness within fixture budget")
 		}
 	}
 	if r := notify(b, "C"); r.Reason != "busy" {
 		t.Fatalf("third: %+v", r)
 	}
-	unblock()
+	closeRelease()
 	for range 2 {
-		if r := <-results; r.Status != "submitted" {
-			t.Fatalf("send: %+v", r)
+		select {
+		case r := <-results:
+			if r.Status != "submitted" {
+				t.Fatalf("send: %+v", r)
+			}
+		case <-entryTimer.C:
+			t.Fatal("Notify did not complete within fixture budget")
 		}
 	}
 	if loads.Load() != 2 || len(seen) != 2 {

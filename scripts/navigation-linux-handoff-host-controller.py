@@ -1,5 +1,5 @@
 """Owned TEST host controller; never run before complete assembly review."""
-import base64, hashlib, json, os, pathlib, re, stat, subprocess, sys, time, uuid
+import base64, hashlib, importlib.util, json, os, pathlib, re, stat, subprocess, sys, time, uuid
 
 if not __debug__: raise RuntimeError('optimized_interpreter_not_supported')
 if len(sys.argv) != 2:
@@ -126,7 +126,7 @@ try:
         assert digest == sources[filename]['sha256'] == context['expectedSources'][filename]
         decoded[filename] = data
     manifest = context['manifest']
-    assert set(manifest) == {'files', 'frontendSHA256', 'backendSHA256'}
+    assert set(manifest) == {'files', 'frontendSHA256', 'backendSHA256'} | ({'shipping'} if 'shipping' in manifest else set())
     assert set(manifest['files']) == SOURCE_NAMES - {'probe.py', 'runtime-stage.py', 'guest-bootstrap.py'}
     assert all(manifest['files'][name] == context['expectedSources'][name] for name in manifest['files'])
     assert manifest['frontendSHA256'] == '7fe62c1a938985b8ca4ec335a768ad36f1d17abe027098624fa4f5989c0b4594'
@@ -142,6 +142,15 @@ try:
     for filename, data in decoded.items():
         with (ROOT / filename).open('xb') as out: out.write(data)
         (ROOT / filename).chmod(0o444)
+    if 'shipping' in manifest:
+        spec = importlib.util.spec_from_file_location('TEST_shipping_assets', ROOT / 'guest-bootstrap.py')
+        assets = importlib.util.module_from_spec(spec); spec.loader.exec_module(assets)
+        assets.shipping_inputs(ROOT, manifest)
+        for filename in manifest['shipping']['files']:
+            info = (ROOT / filename).lstat()
+            assert info.st_uid == 1000 and stat.S_IMODE(info.st_mode) == 0o444
+        report['shipping'] = manifest['shipping']
+        report['scope'] = 'offline_shipping_go_native_handoff_TEST'
     with (ROOT / 'manifest.json').open('x') as out: json.dump(manifest, out, sort_keys=True)
     (ROOT / 'manifest.json').chmod(0o444)
     report['manifestSHA256'] = sha(ROOT / 'manifest.json')
@@ -175,6 +184,8 @@ try:
     for key in ('notificationAttempted', 'clickAttempted'):
         value = native.get(key); report[key] = value if isinstance(value, bool) else None
     report['passed'] = rc == 0 and terminal_clean and native.get('passed') is True and native.get('sourceSHA256') == report['sourceSHA256'] and native.get('guestSourceSHA256') == report['guestSourceSHA256']
+    if 'shipping' in manifest:
+        report['passed'] = report['passed'] and native.get('shipping') == manifest['shipping']
 except Exception as error:
     report['failure'] = type(error).__name__ + ': ' + str(error)
 finally:
@@ -197,6 +208,7 @@ finally:
               (str(pathlib.Path(__file__).resolve()), report['operatorSHA256'], 'operator')]
     checks += [(name, digest, name) for name, digest in context['expectedSources'].items()]
     checks += [(name, digest, name) for name, digest in ARCHIVE_HASHES.items()]
+    checks += [(name, digest, name) for name, digest in context['manifest'].get('shipping', {}).get('files', {}).items()]
     integrity_errors = []
     for filename, expected, label in checks:
         try:
