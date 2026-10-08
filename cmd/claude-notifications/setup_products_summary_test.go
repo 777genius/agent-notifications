@@ -118,3 +118,23 @@ func TestSetupProductsConfirmationDisplayBudget(t *testing.T) {
 		}
 	}
 }
+
+// Cursor channel consent updates the shared route leaf. Its summary must not
+// promise that all existing shared preferences stay unchanged.
+func TestBootstrapCursorChannelPreferencesSummary(t *testing.T) {
+	i, _ := bootstrapCodecFixture(t)
+	a, err := parseSetupProducts([]string{"confirm", "--products", "cursor", "--webhook"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	i.Request = a
+	i.Units = []bootstrapProductUnits{{Product: "cursor", MCP: true, Skill: true, Webhook: true}}
+	rows, err := bootstrapIntentSummary(i, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shown := strings.Join(rows, "\n")
+	if !strings.Contains(shown, "Update shared Cursor Desktop/Webhook preferences to the channels shown above.") || !strings.Contains(shown, "Channels: Desktop off, Webhook on") || strings.Contains(shown, "Keep existing shared notification preferences.") {
+		t.Fatalf("Cursor channel update is not disclosed: %s", shown)
+	}
+}

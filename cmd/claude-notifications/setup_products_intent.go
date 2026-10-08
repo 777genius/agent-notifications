@@ -271,6 +271,8 @@ func bootstrapIntentSummary(i confirmedBootstrapIntent, policy map[string]json.R
 			raw = append(raw, "  Navigation setup only writes preferences.")
 		}
 		raw = append(raw, "  Notification permission request: "+bootstrapOnOff(c.RequestPermission))
+	} else if containsProduct(i.Request.Products, "cursor") {
+		raw = append(raw, "  Update shared Cursor Desktop/Webhook preferences to the channels shown above.", "  Keep other shared notification preferences.")
 	} else {
 		raw = append(raw, "  Keep existing shared notification preferences.")
 	}

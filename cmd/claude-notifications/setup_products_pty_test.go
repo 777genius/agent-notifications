@@ -911,7 +911,7 @@ func TestBootstrapNormalizedRouteConsent(t *testing.T) {
 			t.Fatalf("supported normalized route refused: %+v", r)
 		}
 		f.unchanged(before)
-		if !strings.Contains(r.screen, "allow-unknown-caller=false allow-caller-asserted=false") {
+		if !strings.Contains(r.screen, "Allow unrecognized callers: off") || !strings.Contains(r.screen, "Allow caller-asserted identity: off") {
 			t.Fatalf("caller decision missing from visible consent: %s", r.screen)
 		}
 	})
