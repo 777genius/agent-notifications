@@ -34,7 +34,14 @@ static JsonObject record(const wchar_t* phase) {
     JsonObject j; put(j, L"nonce", nonce); put(j, L"phase", std::wstring(phase)); num(j, L"pid", GetCurrentProcessId());
     put(j, L"birth", birth(GetCurrentProcess())); num(j, L"bootMs", static_cast<double>(GetTickCount64())); return j;
 }
-static void publish(const wchar_t* leaf, const JsonObject& j) { durable(root + L"\\" + leaf, winrt::to_string(j.Stringify())); }
+static void publish(const wchar_t* leaf, const JsonObject& j) {
+    const std::wstring final = root + L"\\" + leaf;
+    const std::wstring pending = final + L".pending";
+    // CREATE_NEW reserves this receipt; durable closes it before final becomes visible.
+    durable(pending, winrt::to_string(j.Stringify()));
+    // Same-directory move only: never replace, copy across volumes, retry, or remove a failed reservation.
+    require(MoveFileExW(pending.c_str(), final.c_str(), 0) != FALSE, "PublishOwnPhaseEvidence");
+}
 static JsonObject read(const wchar_t* leaf) {
     const auto path = root + L"\\" + leaf; regular(path); File f;
     f.h = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
