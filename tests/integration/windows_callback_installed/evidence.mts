@@ -2,6 +2,33 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 export const sha = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex');
 export type Tuple = {source: string; nonce: string};
+export type Prerequisites = Tuple & {
+  sid: string; session: number; integrity_rid: number; native_machine: number; process_machine: number;
+  windows_build: number; windows_product_type: number; windows11_client: boolean;
+} & Record<string, unknown>;
+// Missing shared parents are legitimate only before ordinary product setup.
+// Refusal flags alone cannot distinguish absence from denied/unknown access.
+export function prerequisiteAdmission(value: unknown, tuple: Tuple,
+  stage: 'pre-setup' | 'post-setup', baseline?: Prerequisites): Prerequisites {
+  assert(stage === 'pre-setup' || stage === 'post-setup');
+  assert(value !== null && typeof value === 'object' && !Array.isArray(value));
+  const row = value as Prerequisites;
+  assert.equal(row.source,tuple.source); assert.equal(row.nonce,tuple.nonce);
+  assert.equal(row.windows11_client,true);
+  assert(typeof row.sid === 'string' && /^S-1-[0-9]+(?:-[0-9]+)+$/.test(row.sid));
+  const numbers = ['session','integrity_rid','native_machine','process_machine','windows_build','windows_product_type'] as const;
+  for (const key of numbers) assert(Number.isSafeInteger(row[key]) && row[key] >= 0);
+  assert(row.session > 0 && row.native_machine > 0 && row.windows_build >= 22000 && row.windows_product_type === 1);
+  for (const key of ['Software\\Classes\\CLSID','Software\\Classes\\AppUserModelId']) {
+    const status = row[key+'_open_status'];
+    assert(Number.isSafeInteger(status));
+    assert((status === 0 && row[key] === 'present')
+      || (stage === 'pre-setup' && status === 2 && row[key] === 'refused'));
+  }
+  if (baseline) for (const key of ['sid','windows11_client',...numbers] as const) assert.equal(row[key],baseline[key]);
+  if (stage === 'post-setup') assert(baseline !== undefined);
+  return row;
+}
 export type Receiver = Tuple & {
   snapshot_sha: string; reference: string; generation: string; selected_full_name: string;
   collected: boolean; receiver_exit_code: number; click_boot_ms: number;

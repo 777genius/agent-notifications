@@ -144,11 +144,12 @@ static void interactive() {
   && std::wstring(name) == L"Default" && std::wstring(name) == current;
  require(CloseDesktop(desktop) && same);
 }
-enum class PrerequisiteStage { baseline, postDeployment };
+enum class PrerequisiteStage { baseline, postDeployment, postSetup };
 static void prerequisites(PrerequisiteStage stage) {
- require(stage == PrerequisiteStage::baseline || stage == PrerequisiteStage::postDeployment);
+ require(stage == PrerequisiteStage::baseline || stage == PrerequisiteStage::postDeployment || stage == PrerequisiteStage::postSetup);
  const auto leaf = stage == PrerequisiteStage::baseline
-  ? L"prerequisites.json" : L"post-deployment-prerequisites.json";
+  ? L"prerequisites.json" : stage == PrerequisiteStage::postDeployment
+   ? L"post-deployment-prerequisites.json" : L"post-setup-prerequisites.json";
  budget(); interactive();
  OSVERSIONINFOEXW version{}; version.dwOSVersionInfoSize = sizeof(version);
  using Version = LONG (WINAPI*)(OSVERSIONINFOW*);
@@ -871,6 +872,7 @@ int wmain(int argc, wchar_t** argv) {
   winrt::init_apartment(winrt::apartment_type::multi_threaded);
   if (mode == L"prerequisites") prerequisites(PrerequisiteStage::baseline);
   else if (mode == L"prerequisites-post-deploy") prerequisites(PrerequisiteStage::postDeployment);
+  else if (mode == L"prerequisites-post-setup") prerequisites(PrerequisiteStage::postSetup);
   else if (mode == L"archive") archive(false);
   else if (mode == L"deploy") archive(true);
   else if (mode == L"click") click();

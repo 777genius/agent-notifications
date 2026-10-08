@@ -16,7 +16,7 @@ archive refuses, with no alternate URL, architecture, credential or retry.
 The ARM64 Windows 11 runner builds a native observer and consumes same-run,
 source-bound x64 Go/helper bytes. This is an explicit x64 emulation experiment.
 The actual machine/token/session facts are evidence, not native x64 transfer.
-Server/absent desktop, preexisting package family, absent shared registry parents,
+Server/absent desktop, preexisting package family, unknown/denied shared registry parents,
 permission Disabled, ambiguous UI and unknown collections refuse. Parents are
 observed before setup and never created to force success. A missing visible
 banner/default row fails; there is no alternate input or OOBE path.
@@ -49,3 +49,13 @@ Accepted without actual timely drain, wrong source/generation, uncollected
 receiver and literal-percent URI corruption. Existing A codec/custody tests are
 not duplicated. Process supervision and installed effects require actual CI;
 source/typechecking cannot prove them. Reports are finite synthetic evidence.
+
+Shared parents are observed without mutation: before normal product setup only
+exact open status 0/present or 2/refused is admissible. Vendor deployment is not
+the creator contract. Baseline and post-vendor account/session/integrity/machine/
+Windows facts must match exactly. After successful normal shipping setup, a
+separate readonly post-setup census requires both parents 0/present and the same
+authority before any Show. The harness never repairs roots or registers dummy
+SDK identities. This source must be composed with the separately reviewed core
+parent-preparation implementation before dispatch; old core 950222e does not
+close this prerequisite and current native qualification remains pending.
