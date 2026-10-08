@@ -350,6 +350,7 @@ def run(args):
                             "role", "case", "claim_failures", "SDK_exit_code", "SDK_duration_ms", "SDK_success",
                             "phase", "classification", "code", "elapsed_ns", "stage_ns", "budget_ns", "budget_state", "publication_possible"}
                     words = {"unavailable", "bounded_prefix", "incomplete_or_invalid_JSON_prefix", "bounded_capture_or_parse_failed",
+                             "projection_bound_exceeded",
                              "unknown", "AfterAgent", "Notification", *g0.CASES, "validate", "path", "root", "prepare", "lock", "clock",
                              "read", "decode", "record", "encode", "publish", "published", "invalid_request", "invalid_path", "validation",
                              "invalid_clock", "none", "invalid_document", "deadline", "canceled", "os_error", "sharing_violation",

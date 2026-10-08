@@ -472,7 +472,9 @@ raise SystemExit(0 if result['passed'] else 1)
             sender = start('sender-' + label, [str(cli), 'notify', '--context-file', str(context_file)], input_pipe=True)
             payload = dict(title=title, body='Shipping Go TEST', category='info', request_id=nonce + '-' + label, navigation='required')
             sender.stdin.write(json.dumps(payload).encode()); sender.stdin.close()
-            code = sender.wait(timeout=min(20, deadline - now())); exited = now()
+            remaining = deadline - now()
+            if remaining <= 0: raise RuntimeError('deadline_before_sender_collection')
+            code = sender.wait(timeout=min(20, remaining)); exited = now()
             receipt = json.loads(read(ROOT / ('sender-' + label + '.stdout')))
             if code or receipt['status'] != 'submitted' or receipt['navigation']['Precision'] != 'chat_id' or receipt['navigation']['Scope'] != 'selected_linux_installation':
                 raise RuntimeError('shipping_actual_admission_receipt_unproved')
@@ -535,10 +537,12 @@ raise SystemExit(0 if result['passed'] else 1)
             # Same UID does not authenticate the wire sender. This control cannot
             # isolate owner-fence rejection, and does not substitute for B click.
             path = '/' + old_selected['app'].replace('.', '/')
+            remaining = deadline - now()
+            if remaining <= 0: raise RuntimeError('deadline_before_forged_sender_control')
             forged = subprocess.run(['/usr/bin/gdbus', 'call', '--session', '--dest', old_selected['app'],
                 '--object-path', path, '--method', 'org.freedesktop.Application.ActivateAction', 'open',
                 "[<'" + old_selected['key'] + "'>]", "{'activation-token': <'TEST-forged-token'>}"],
-                cwd=work, env=env, preexec_fn=drop, capture_output=True, timeout=min(5, deadline - now()))
+                cwd=work, env=env, preexec_fn=drop, capture_output=True, timeout=min(5, remaining))
             calls = [m for m in messages() if 'interface=org.freedesktop.Application; member=ActivateAction\n' in m and 'destination=' + old_selected['app'] + ' ' in m.splitlines()[0]]
             if forged.returncode != 1 or len(calls) != 1 or 'sender=' + gtk_owner + ' ' in calls[0].splitlines()[0] or protocol.activate_arguments(calls[0]) != ('open', old_selected['key'], {'activation-token': 'TEST-forged-token'}):
                 raise RuntimeError('actual_borrowed_UID_sender_rejection_unproved')
@@ -740,7 +744,9 @@ raise SystemExit(0 if result['passed'] else 1)
         else:
             report['notificationAttempted'] = True; persist()
             sender = start('sender', ['/usr/bin/python3', str(SEED / 'client-sender.py')])
-            code = sender.wait(timeout=min(12, deadline - now())); exited = now()
+            remaining = deadline - now()
+            if remaining <= 0: raise RuntimeError('deadline_before_sender_collection')
+            code = sender.wait(timeout=min(12, remaining)); exited = now()
             report['senderExit'] = dict(pid=sender.pid, collected=True, exitCode=code, exitedBoot=exited)
             if code or bus('NameHasOwner', app_id) != '(false,)' or (work / 'callback/service-start.json').exists():
                 raise RuntimeError('sender_exit_or_cold_callback_absence_unproved')
