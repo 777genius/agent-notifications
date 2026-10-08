@@ -111,27 +111,34 @@ struct SDKOperations {
   auto op=Launcher::LaunchUriAsync(uri,options);return await(op,end,unknown,launchCompletionKnown);
  }
 };
- static int operatorMain(const std::wstring& mode,uint64_t end,const std::string& nonce){
+ static int operatorMain(const std::wstring& mode,uint64_t end,const std::string& nonce,OperatorDiagnostic& diagnostic){
   bool showEntered=false;
   std::string attempt;
   try{
+   diagnostic.enter("operator_deadline");
    installedBudget(end);
+   diagnostic.enter("generation_custody");
    Generation generation;
    Handle permit;
    if(mode==L"show"||mode.rfind(L"apply-",0)==0||mode.rfind(L"restore-",0)==0){
+    diagnostic.enter("operator_permit");
     permit=open(generation.root/L"operator.pending",false);
     owned(permit.h,generation.sid);
     const auto fields=decode(bytes(permit.h,4096),4,4);
     require(fields[0]==nonce&&fields[1]==narrow(mode)&&fields[2]==std::to_string(end)&&fields[3]==generation.snapshotDigest);
    }
+   diagnostic.enter("desktop_admission");
    desktop();
    SDKOperations ops{
     generation
    }
    ;
    ops.metadataEnd=end;
+   diagnostic.enter("package_identity");
    ops.exact(generation.snapshot);
+   diagnostic.enter("operator_deadline");
    installedBudget(end);
+   diagnostic.enter("operator_dispatch");
    if(mode==L"observe"){
     require(absentKey(classPath(generation))&&absentKey(appPath(generation)));
     auto p=shortcutPath(generation);
@@ -140,7 +147,7 @@ struct SDKOperations {
    else if(mode==L"verify-clsid")classReadback(generation);
    else if(mode==L"verify-aumid")appReadback(generation);
    else if(mode==L"verify-shortcut")shortcutReadback(generation);
-   else if(mode==L"apply-clsid")applyClass(generation,end);
+   else if(mode==L"apply-clsid")applyClass(generation,end,&diagnostic);
    else if(mode==L"apply-aumid")applyApp(generation,end);
    else if(mode==L"apply-shortcut")applyShortcut(generation,end);
    else if(mode==L"restore-clsid")restoreClass(generation,end);
@@ -203,11 +210,14 @@ struct SDKOperations {
     return 0;
    }
    else require(false);
+   diagnostic.enter("operator_deadline");
    installedBudget(end);
+   diagnostic.enter("operator_terminal");
    std::cout<<"WCB1 ready not_checked 0\n";
    return 0;
   }
   catch(...){
+   diagnostic.emit();
    std::cout<<(showEntered?"WCB1 unknown unknown 1\n":"WCB1 unavailable not_checked 0\n");
    return 2;
   }
@@ -281,9 +291,11 @@ int WINAPI wWinMain(HINSTANCE,HINSTANCE,PWSTR command,int){
  // COM publication. Blocking SDK/COM calls cannot extend it. This never
  // certifies global quiescence; unresolved durable intents remain unknown.
  std::thread([lease]{while(GetTickCount64()<lease)Sleep(10);TerminateProcess(GetCurrentProcess(),124);}).detach();
+ wcb::OperatorDiagnostic diagnostic;
  try{
   winrt::init_apartment(winrt::apartment_type::multi_threaded);
  if(!callback){
+  diagnostic.enter("entry_arguments");
   int count=0;
   auto args=CommandLineToArgvW(GetCommandLineW(),&count);
   wcb::require(args&&count==5&&std::wstring(args[1])==L"--operator");
@@ -293,8 +305,9 @@ int WINAPI wWinMain(HINSTANCE,HINSTANCE,PWSTR command,int){
   wcb::require(number.size()<=20&&!number.empty()&&number.find_first_not_of(L"0123456789")==std::wstring::npos);
   const auto end=std::stoull(number);
   LocalFree(args);
+  diagnostic.enter("entry_deadline");
   wcb::require(end>GetTickCount64()&&end<=lease-65000+wcb::actionBudget);
-  return wcb::operatorMain(mode,end,nonce);
+  return wcb::operatorMain(mode,end,nonce,diagnostic);
  }
   auto generation=std::make_shared<wcb::Generation>();
   wcb::desktop();
@@ -312,5 +325,5 @@ int WINAPI wWinMain(HINSTANCE,HINSTANCE,PWSTR command,int){
    TerminateProcess(GetCurrentProcess(),124);return 124;
   }
   return 0;
- }catch(...){return 2;}
+ }catch(...){if(!callback)diagnostic.emit();return 2;}
 }

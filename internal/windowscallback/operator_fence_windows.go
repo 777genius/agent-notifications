@@ -73,6 +73,18 @@ func (f *operatorFence) collected(pid, exit int) error {
 	// proves SDK/global quiescence. WaitDelay/error paths retain pending refusal.
 	return writeAt(f.g.rootHandle, "operator.collected", f.g.SID, f.collectionFact(pid, exit))
 }
+
+// One fixed <=4KiB diagnostic leaf, never a completion/retry certificate.
+func (f *operatorFence) failure(pid, exit int, diagnostic []string) error {
+	if f.held == 0 {
+		return ErrUnknown
+	}
+	value, e := operatorFailureReceipt(f.ticket, pid, exit, diagnostic)
+	if e != nil || len(value) > 4096 {
+		return ErrUnknown
+	}
+	return writeAt(f.g.rootHandle, "operator.failure", f.g.SID, value)
+}
 func sameFile(a, b windows.ByHandleFileInformation) bool {
 	return a.VolumeSerialNumber == b.VolumeSerialNumber && a.FileIndexHigh == b.FileIndexHigh && a.FileIndexLow == b.FileIndexLow
 }

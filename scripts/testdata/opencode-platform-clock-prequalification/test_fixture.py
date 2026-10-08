@@ -163,6 +163,56 @@ class PureVectors(unittest.TestCase):
                 owned.message(state, 'helper_request', H.time.monotonic() + 2)
             if widths is good: self.assertEqual(caught.exception.nativeComparisonWidths, good)
 
+    def test_optional_stage_schema_cannot_change_failed_span(self):
+        good = {'clock': 'js-performance.now', 'round': 1, 'offsetsUS': {
+            'beforeSampleReturned': 0, 'requestWriteReturned': 3, 'responseParsed': 400, 'afterSampleReturned': 405}}
+        variants = [good, dict(good, round=0), dict(good, round=True), dict(good, round=1.5), dict(good, extra=1),
+                    {**good, 'offsetsUS': {**good['offsetsUS'], 'unexpected': 1}},
+                    {**good, 'offsetsUS': {**good['offsetsUS'], 'responseParsed': None}}]
+        for key, value in [('responseParsed', True), ('responseParsed', 1.5), ('responseParsed', -1),
+                           ('responseParsed', 25000001), ('responseParsed', 2)]:
+            variants.append({**good, 'offsetsUS': {**good['offsetsUS'], key: value}})
+        for value in variants:
+            owned = H.Owned(H.time.monotonic() + 2)
+            state = {'overflow': False, 'pipeError': False, 'lines': H.queue.Queue()}
+            state['lines'].put(H.canonical({'kind': 'failure', 'reason': 'actual_translation_counter_span',
+                'nativeComparisonWidths': {'round': 1, 'outerWidthNs': 225000001, 'goWidthNs': 7000},
+                'jsStageTimings': value, **H.QUALIFICATIONS}))
+            with self.assertRaisesRegex(RuntimeError, '^actual_translation_counter_span$') as caught:
+                owned.message(state, 'helper_request', H.time.monotonic() + 2)
+            self.assertEqual(caught.exception.nativeComparisonWidths['outerWidthNs'], 225000001)
+            self.assertEqual(hasattr(caught.exception, 'jsStageTimings'), value is good)
+        self.assertEqual(H.stage_projection(good, 'js-performance.now', 1), good)
+        self.assertIsNone(H.stage_projection(good, 'python-time.monotonic', 1))
+        self.assertTrue(all(v is False for v in H.QUALIFICATIONS.values()))
+
+    def test_close_timing_observes_wait_then_actual_eof_join(self):
+        # Controlled actual Owned.close seam; Popen remains prohibited.
+        now = [100.0]
+        class Process:
+            pid = 17; returncode = 0; stdin = stdout = stderr = None
+            def wait(self, timeout): now[0] += .001
+        class EOF:
+            def __init__(self, incomplete): self.incomplete = incomplete
+            def join(self, timeout): now[0] += .002
+            def is_alive(self): return self.incomplete
+        for incomplete in [False, True]:
+            now[0] = 100.0
+            owned = H.Owned(101.0)
+            state = {'p': Process(), 'label': 'helper', 'threads': [EOF(False), EOF(incomplete)],
+                     'overflow': False, 'pipeError': False}
+            owned.live[17] = state
+            timing = dict.fromkeys(H.STAGE_KEYS['python-time.monotonic'])
+            with patch.object(H.time, 'monotonic', side_effect=lambda: now[0]):
+                if incomplete:
+                    with self.assertRaisesRegex(RuntimeError, '^actual_pipe_eof_required$'): owned.close(state, 101.0, timing=timing)
+                else: owned.close(state, 101.0, timing=timing)
+            self.assertAlmostEqual(timing['actualWaitReturned'], 100.001)
+            if incomplete:
+                self.assertIsNone(timing['bothPipeEOFJoined']); self.assertIn(17, owned.live)
+            else:
+                self.assertAlmostEqual(timing['bothPipeEOFJoined'], 100.005); self.assertFalse(owned.live)
+
     def test_helper_hash_preflight_launch_budget(self):
         with tempfile.TemporaryDirectory(prefix='TEST-helper-preflight-', dir=ROOT) as directory:
             helper = Path(directory) / 'private-helper-bytes'
