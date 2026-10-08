@@ -163,7 +163,26 @@ func runtimeWindowsMachine(process, native, pe uint16, arch string) bool {
 	return arch == "amd64" && process == 0 && native == 0x8664 && pe == native
 }
 func runtimeDarwinMachine(cpu, subtype uint32, arch string) bool {
-	return (arch == "amd64" && cpu == 0x01000007 && subtype == 3) || (arch == "arm64" && cpu == 0x0100000c && subtype == 0)
+	_, ok := runtimeDarwinCanonicalSubtype(cpu, subtype, arch)
+	return ok
+}
+
+func runtimeDarwinCanonicalSubtype(cpu, subtype uint32, arch string) (uint32, bool) {
+	// CPU_SUBTYPE_LIB64 is the only supported capability bit, and only for
+	// x86_64 ALL. Do not mask arbitrary capability bits or admit other subtypes.
+	if arch == "amd64" && cpu == 0x01000007 && (subtype == 3 || subtype == 0x80000003) {
+		return 3, true
+	}
+	if arch == "arm64" && cpu == 0x0100000c && subtype == 0 {
+		return 0, true
+	}
+	return 0, false
+}
+
+func runtimeDarwinMachinesMatch(cpu, subtype, liveCPU, liveSubtype uint32, arch string) bool {
+	fileCanonical, fileOK := runtimeDarwinCanonicalSubtype(cpu, subtype, arch)
+	liveCanonical, liveOK := runtimeDarwinCanonicalSubtype(liveCPU, liveSubtype, arch)
+	return fileOK && liveOK && cpu == liveCPU && fileCanonical == liveCanonical
 }
 
 func runtimeRegionAdvance(address, begin, size uint64) (uint64, bool) {
