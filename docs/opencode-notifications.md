@@ -26,10 +26,13 @@ Existing installations must run update and restart OpenCode to load the new bund
 
 ## Platforms and observed delivery
 
-The [platform channels](PLATFORM_RELEASE_CHANNELS.md) select macOS arm64/amd64
-**1.48.3** and Linux arm64/amd64 / Windows amd64 **1.48.1**. GitHub global
-Latest remains **1.46.1** for legacy installers. macOS 1.48.3 includes a signed,
-notarized helper and native/portable packages.
+The [platform channels](PLATFORM_RELEASE_CHANNELS.md) and GitHub Latest select
+**1.48.4** for macOS arm64/amd64, Linux arm64/amd64 and Windows amd64, with
+native/portable packages and a signed, notarized macOS helper.
+The v1.48.4 installed-business qualification is scoped to its exact release
+reports. It does not establish full native E2E, source-epoch/time-policy,
+cold-start or visible desktop qualification; older observations below do not
+qualify new release bytes.
 For native Windows shell installation use **Git Bash**, not WSL or PowerShell.
 Desktop delivery uses the signed macOS helper, the Linux desktop notification
 service or Windows toasts. Linux needs an available desktop session/D-Bus service.
@@ -40,13 +43,13 @@ service or Windows toasts. Linux needs an available desktop session/D-Bus servic
 - Historical V1 lifecycle/webhook checks covered all five targets; retained V2
   native completion observations provide corroboration. They do not qualify new
   release bytes by themselves.
-- The 1.48.1 release gate covers seven native Linux/Windows cells and three
+- The historical 1.48.1 release gate covered seven native Linux/Windows cells and three
   artifact canaries, as detailed below. Exact release reports establish which checks
   passed; configured workflow lanes alone are not evidence.
-- macOS 1.48.3 has four installed basic-business/lifecycle checks: V1 1.18.33
+- Historical macOS 1.48.3 evidence has four installed basic-business/lifecycle checks: V1 1.18.33
   and V2 2.0.21 with Apple Silicon binaries run natively and Intel binaries run
   under Rosetta. Physical Intel execution, full native E2E and visible OpenCode
-  banners are not proved for this release. Historical desktop observations do
+  banners were not proved for that release. Historical desktop observations do
   not extend that scope.
 
 **Windows V1 limitation:** stock OpenCode V1 events do not always allow the

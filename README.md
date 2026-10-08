@@ -51,13 +51,13 @@ The installer selects a verified complete release for your platform:
 
 | Platform | Version | Agents |
 | --- | --- | --- |
-| Linux amd64 / arm64 | 1.48.1 | Claude, Codex, OpenCode, Gemini |
-| Windows amd64 | 1.48.1 | Claude, Codex, OpenCode, Gemini |
-| macOS amd64 / arm64 | 1.48.3 | Claude, Codex, OpenCode |
+| Linux amd64 / arm64 | 1.48.4 | Claude, Codex, OpenCode, Gemini |
+| Windows amd64 | 1.48.4 | Claude, Codex, OpenCode, Gemini |
+| macOS amd64 / arm64 | 1.48.4 | Claude, Codex, OpenCode |
 
 Run the command once to migrate a normal Claude marketplace installation to its platform channel. Claude's plugin updater then follows that channel; rerun setup to update a standalone Codex bundle. Explicitly pinned/custom marketplace sources are retained.
 
-macOS 1.48.3 includes Intel and Apple Silicon binaries, portable packages and the signed, notarized ClaudeNotifier.app helper. Linux and Windows remain on 1.48.1. GitHub's global Latest stays 1.46.1 for older installers; the current installer selects the release from [platform channels](docs/PLATFORM_RELEASE_CHANNELS.md).
+Version 1.48.4 is GitHub's Latest and includes native binaries and portable packages for all five targets, plus the signed, notarized ClaudeNotifier.app helper for macOS. The installer selects this release from [platform channels](docs/PLATFORM_RELEASE_CHANNELS.md). Gemini CLI remains supported on Linux/Windows only.
 
 <details>
 <summary>Non-interactive installation and optional notification tools</summary>

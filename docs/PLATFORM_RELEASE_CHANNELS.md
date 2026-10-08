@@ -6,12 +6,12 @@ release commit, an immutable source commit, and its platform branch.
 
 | Platform | Qualified version | Source branch |
 | --- | --- | --- |
-| Linux amd64 / arm64, Windows amd64 | 1.48.1 | `release/platform-linux-windows` |
-| macOS amd64 / arm64 | 1.48.3 | `release/platform-macos` |
+| Linux amd64 / arm64, Windows amd64 | 1.48.4 | `release/platform-linux-windows` |
+| macOS amd64 / arm64 | 1.48.4 | `release/platform-macos` |
 
-GitHub Latest and legacy main manifests stay 1.46.1. macOS selects the separately
-qualified 1.48.3 release; Linux and Windows retain 1.48.1. Each release contains
-only its qualified platform assets. A platform channel can select an explicitly
+All five platform rows, GitHub Latest and main manifests select 1.48.4. This
+complete release includes Linux, Windows and macOS native/portable assets and
+the signed, notarized macOS helper. A platform channel can also select an explicitly
 qualified partial release even when GitHub labels it Pre-release.
 No scan for the newest tag or fallback to Latest is used. Invalid/missing rows,
 unsupported architectures and failed downloads stop selection before installation.
