@@ -632,11 +632,69 @@ async function main(): Promise<void> {
   }
   evidence.notifierReadinessQualified = !publicSample;
   evidence.senderExitedBeforeInvoke = true; evidence.senderExitedAt = sender.exitedAt;
+  if (publicSample) {
+    const show = read('show-outcome.json');
+    if (senderReceipt.aumid !== `AgentNotify.Navigation.TEST.${nonce}` || senderReceipt.session !== desktop?.session
+        || typeof senderReceipt.userSid !== 'string' || !/^S-1-[0-9-]{1,184}$/.test(senderReceipt.userSid)
+        || typeof senderReceipt.creationTicks !== 'string' || !/^[0-9]{15,20}$/.test(senderReceipt.creationTicks)
+        || senderReceipt.executable !== binary || senderReceipt.executableSHA256 !== evidence.binarySHA256
+        || senderReceipt.sourceSHA !== evidence.sourceSHA || senderReceipt.submissionProfile !== 'public_sample_one_show'
+        || senderReceipt.notificationSetting !== null || senderReceipt.readinessQualified !== false
+        || createHash('sha256').update(readFileSync(binary!)).digest('hex') !== evidence.binarySHA256
+        || show.pid !== sender.pid || show.nonce !== nonce || show.showCallEntered !== true || show.showCallReturned !== true) {
+      throw new Error('public sample collected sender authority invalid');
+    }
+    const senderBirth = BigInt(senderReceipt.creationTicks as string) / 10000n - 11644473600000n;
+    if (senderBirth < 0n || senderBirth > BigInt(sender.exitedAt)) throw new Error('native sender birth exceeds collected exit');
+    const authority = { ...senderReceipt, schema: 1, collected: true, exitCode: sender.status, collectedAt: sender.exitedAt,
+      senderReceiptSHA256: createHash('sha256').update(readFileSync(join(root, 'sender.json'))).digest('hex'),
+      showOutcomeSHA256: createHash('sha256').update(readFileSync(join(root, 'show-outcome.json'))).digest('hex') };
+    const bytes = JSON.stringify(authority);
+    if (Buffer.byteLength(bytes) > 16_384) throw new Error('public sample authority exceeds bound');
+    writeFileSync(join(root, 'public-sample-invoke-authority.json'), bytes, { flag: 'wx', flush: true });
+    evidence.publicSampleInvokeAuthoritySHA256 = createHash('sha256').update(bytes).digest('hex');
+    evidence.invokeEffectUncertain = true;
+  }
   // No controller call to callback mode/CoCreateInstance. OS is the only cold-server launcher.
   const invoke = run('invoke', 30_000);
+  if (publicSample && existsSync(join(root, 'ui-invoke-intent.json'))) evidence.uiInvokeIntent = read('ui-invoke-intent.json');
   if (existsSync(join(root, 'ui-invoke.json'))) evidence.uiInvoke = read('ui-invoke.json');
   requireSuccess(invoke);
   if ((evidence.uiInvoke as Json).invokeHRESULT !== 0) throw new Error('UI provider did not accept native Invoke');
+  if (publicSample) {
+    const intent = evidence.uiInvokeIntent as Json | undefined, returned = evidence.uiInvoke as Json | undefined;
+    if (!intent || !returned || intent.nonce !== nonce || intent.pid !== invoke.pid
+        || intent.authorityProfile !== 'public_sample_one_show' || intent.selectionKind !== 'toast_default'
+        || intent.controlType !== 50007 || intent.specSHA256 !== evidence.publicSampleInvokeAuthoritySHA256
+        || intent.invokeBoundaryArmed !== true || intent.invokeCallEntered !== false
+        || intent.exactTitleVerified !== true || intent.offscreen !== false || intent.enabled !== true
+        || !Number.isInteger(intent.providerPID) || Number(intent.providerPID) <= 0 || Number(intent.providerPID) > 0xffffffff
+        || typeof intent.providerCreationTicks !== 'string' || !/^[0-9]{15,20}$/.test(intent.providerCreationTicks)
+        || typeof intent.providerImagePathKind !== 'string'
+        || !['windows_explorer', 'system32_shellhost', 'systemapps_shellexperiencehost', 'systemapps_cbs_shellhost'].includes(intent.providerImagePathKind)) {
+      throw new Error('public sample row Invoke authority invalid');
+    }
+    const runtime = (value: unknown) => Array.isArray(value) && value.length >= 1 && value.length <= 64
+      && value.every(part => Number.isInteger(part) && Number(part) >= -2147483648 && Number(part) <= 2147483647);
+    if (![intent.runtimeID, intent.titleRuntimeID, intent.containerRuntimeID].every(runtime)
+        || !Array.isArray(intent.titleRuntimeIDs) || intent.titleRuntimeIDs.length < 1 || intent.titleRuntimeIDs.length > 512
+        || !intent.titleRuntimeIDs.every(runtime)
+        || !intent.titleRuntimeIDs.some(value => JSON.stringify(value) === JSON.stringify(intent.titleRuntimeID))
+        || new Set(intent.titleRuntimeIDs.map(value => JSON.stringify(value))).size !== intent.titleRuntimeIDs.length) {
+      throw new Error('public sample row title identity set invalid');
+    }
+    for (const key of ['nonce', 'pid', 'authorityProfile', 'selectionKind', 'controlType', 'specSHA256', 'invokeDeadlineBootMs', 'providerPID',
+      'providerCreationTicks', 'providerImagePathKind', 'runtimeID', 'titleRuntimeID', 'titleRuntimeIDs', 'containerRuntimeID',
+      'exactTitleVerified', 'offscreen', 'enabled']) {
+      if (JSON.stringify(intent[key]) !== JSON.stringify(returned[key])) throw new Error('public sample Invoke binding changed');
+    }
+    if (returned.invokeCallEntered !== true || returned.invokeCallReturned !== true
+        || !Number.isSafeInteger(intent.invokeDeadlineBootMs) || Number(intent.invokeDeadlineBootMs) <= 0
+        || !Number.isSafeInteger(returned.returnedBootMs) || Number(returned.returnedBootMs) <= 0
+        || Number(returned.returnedBootMs) >= Number(intent.invokeDeadlineBootMs)) throw new Error('public sample timely Invoke terminal absent');
+    evidence.invokeEffectUncertain = false;
+    evidence.publicSampleDefaultRowInvokeObserved = true;
+  }
   for (let i = 0; i < 100 && !existsSync(join(root, 'callback.json')); i++) await delay(100);
   if (!existsSync(join(root, 'callback.json'))) throw new Error('no OS-launched COM callback receipt');
   const callback = read('callback.json'); evidence.callback = callback;
@@ -681,7 +739,7 @@ try {
       } else { evidence.setupRecordPublicationError = 'bounded packet overflow'; evidence.oobeSetupQualified = false; exitCode = 1; }
       if (evidence.setupRecordErrors || evidence.oobeSetupQualified !== true) { evidence.status = 'failed'; exitCode = 1; }
     }
-    for (const name of ['center-policy.json', 'preflight.json', 'capture-preflight.json', 'capture-after-preflight.json', 'desktop-capture-intent.json', 'desktop-capture.json', 'oobe-preflight.json', 'oobe-after-preflight.json', 'oobe-intent.json', 'oobe-uia.json', 'shortcut-location.json', 'aumid-identity.json', 'sender.json', 'sender-failure.json', 'show-outcome.json', 'submitted.json', 'callback-started.json', 'callback.json', 'ui-candidate.json', 'ui-invoke.json', 'center-open.json']) {
+    for (const name of ['center-policy.json', 'preflight.json', 'capture-preflight.json', 'capture-after-preflight.json', 'desktop-capture-intent.json', 'desktop-capture.json', 'oobe-preflight.json', 'oobe-after-preflight.json', 'oobe-intent.json', 'oobe-uia.json', 'shortcut-location.json', 'aumid-identity.json', 'sender.json', 'sender-failure.json', 'show-outcome.json', 'submitted.json', 'callback-started.json', 'callback.json', 'public-sample-invoke-authority.json', 'ui-invoke-intent.json', 'ui-candidate.json', 'ui-invoke.json', 'center-open.json']) {
       if (!existsSync(join(root, name))) continue;
       try { evidence[name] = read(name); } catch (error: unknown) { evidence[`${name}ReadError`] = String(error); }
     }
