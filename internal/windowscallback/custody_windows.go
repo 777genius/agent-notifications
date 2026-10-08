@@ -146,7 +146,9 @@ func at(parent windows.Handle, name string, access, disposition, options uint32,
 	if options&windows.FILE_DIRECTORY_FILE != 0 {
 		share |= windows.FILE_SHARE_WRITE
 	}
-	e = windows.NtCreateFile(&h, access|windows.SYNCHRONIZE, &attrs, &status, nil, windows.FILE_ATTRIBUTE_NORMAL, share, disposition, options|windows.FILE_OPEN_REPARSE_POINT|windows.FILE_SYNCHRONOUS_IO_NONALERT, 0, 0)
+	// Every admitted handle is queried for attributes before it can be used.
+	// FILE_GENERIC_WRITE does not include this metadata-read permission.
+	e = windows.NtCreateFile(&h, access|windows.SYNCHRONIZE|windows.FILE_READ_ATTRIBUTES, &attrs, &status, nil, windows.FILE_ATTRIBUTE_NORMAL, share, disposition, options|windows.FILE_OPEN_REPARSE_POINT|windows.FILE_SYNCHRONOUS_IO_NONALERT, 0, 0)
 	if nt, ok := e.(windows.NTStatus); ok {
 		e = nt.Errno()
 	}
