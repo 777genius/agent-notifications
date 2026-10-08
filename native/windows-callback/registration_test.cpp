@@ -118,6 +118,106 @@ struct Profile {
     }
   }
 };
+struct UserView {
+  bool mapped=false;
+  explicit UserView(HKEY root){
+    require(registryStatus("RegOverridePredefKey",RegOverridePredefKey(HKEY_USERS,root))==ERROR_SUCCESS);
+    mapped=true;
+  }
+  ~UserView(){if(mapped)RegOverridePredefKey(HKEY_USERS,nullptr);}
+  void close(){
+    require(registryStatus("RegOverridePredefKey",RegOverridePredefKey(HKEY_USERS,nullptr))==ERROR_SUCCESS);
+    mapped=false;
+  }
+};
+static void aliasContracts(const Generation& g,uint64_t end,bool chain){
+  installedBudget(end);
+  Profile profile(g);
+  Key software,source,users,hive,foreign;
+  Descriptor descriptor(ownACL(L"KA"));
+  auto sa=descriptor.attributes();
+  stage("alias_private_roots");
+  testCreate(profile.root.h,L"Software",software,&sa);
+  testCreate(profile.root.h,L"Users",users,&sa);
+  testCreate(users.h,L"ForeignTarget",foreign,&sa);
+  put(foreign.h,L"sentinel",L"unchanged",end);
+  const auto leaf=wide(g.sid)+L"_Classes";
+  const auto route=L"\\Registry\\User\\"+leaf;
+  testCreate(users.h,leaf.c_str(),hive,&sa,chain?REG_OPTION_CREATE_LINK:0);
+  if(chain){
+    profile.containsLinks=true;
+    const auto target=L"\\Registry\\User\\"+wide(g.sid)+L"\\Software\\"+profile.leaf+L"\\Users\\ForeignTarget";
+    require(registryStatus("RegSetValueExW",RegSetValueExW(hive.h,L"SymbolicLinkValue",0,REG_LINK,
+      reinterpret_cast<const BYTE*>(target.data()),DWORD(target.size()*2)))==ERROR_SUCCESS);
+  }else put(hive.h,L"TESTAnchor",L"private-fixed-classes",end);
+  testCreate(software.h,L"Classes",source,&sa,REG_OPTION_CREATE_LINK);
+  profile.containsLinks=true;
+  const auto sourceSecurity=security(source.h),hiveSecurity=security(hive.h),foreignSecurity=security(foreign.h);
+  UserView view(users.h);
+  std::vector<uint8_t> admittedRoute;
+  const std::string foreignSID=g.sid=="S-1-5-18"?"S-1-5-19":"S-1-5-18";
+  auto setRoute=[&](const std::vector<uint8_t>& bytes){
+    installedBudget(end);
+    require(registryStatus("RegSetValueExW",RegSetValueExW(source.h,L"SymbolicLinkValue",0,REG_LINK,bytes.data(),DWORD(bytes.size())))==ERROR_SUCCESS);
+    admittedRoute=bytes;
+    installedBudget(end);
+  };
+  auto encoded=[](const std::wstring& text){
+    const auto p=reinterpret_cast<const uint8_t*>(text.data());
+    return std::vector<uint8_t>(p,p+text.size()*sizeof(wchar_t));
+  };
+  auto unchanged=[&]{
+    DWORD type=0,size=512;
+    std::array<uint8_t,512> bytes{};
+    require(registryStatus("RegQueryValueExW",RegQueryValueExW(source.h,L"SymbolicLinkValue",nullptr,&type,bytes.data(),&size))==ERROR_SUCCESS);
+    require(type==REG_LINK&&size==admittedRoute.size()&&std::equal(admittedRoute.begin(),admittedRoute.end(),bytes.begin()));
+    missing(hive.h,L"CLSID");
+    missing(hive.h,L"AppUserModelId");
+    require(value(foreign.h,L"sentinel")==L"unchanged");
+    require(security(source.h)==sourceSecurity&&security(hive.h)==hiveSecurity&&security(foreign.h)==foreignSecurity);
+  };
+  if(chain){
+    // Breakage: the fixed target itself is a link and a chained target is followed.
+    stage("alias_chained_target_refused");
+    setRoute(encoded(route));
+    refused([&]{ClassesAnchor anchor;anchor.open(g.sid,end,KEY_READ);},end);
+    unchanged();
+  }else{
+    // Breakage: documented owner-bound Classes aliases are all refused, or the
+    // alias is followed instead of admitting the separate fixed private anchor.
+    // This positive is READ ONLY: absolute native links bypass HKU overrides.
+    stage("alias_exact_target_admitted_read_only");
+    for(const auto& text : {route,route+std::wstring(1,L'\0')}){
+      setRoute(encoded(text));
+      ClassesAnchor anchor;
+      anchor.open(g.sid,end,KEY_READ);
+      require(value(anchor.root(),L"TESTAnchor")==L"private-fixed-classes");
+      require(security(anchor.root())==hiveSecurity);
+      anchor.close();
+      unchanged();
+    }
+    // Breakage: foreign targets, embedded/multiple NUL or malformed UTF-16
+    // become authority for opening an alias-selected hive.
+    stage("alias_malformed_target_refused");
+    auto embedded=route;embedded[1]=L'\0';
+    auto odd=encoded(route);odd.pop_back();
+    auto surrogate=encoded(route);surrogate[0]=0;surrogate[1]=0xd8;
+    for(const auto& bytes : {encoded(L"\\Registry\\User\\"+wide(foreignSID)+L"_Classes"),encoded(route+L"\\Foreign"),
+        encoded(embedded),encoded(route+std::wstring(2,L'\0')),odd,surrogate}){
+      setRoute(bytes);
+      refused([&]{ClassesAnchor anchor;anchor.open(g.sid,end,KEY_READ);},end);
+      unchanged();
+    }
+    stage("alias_foreign_owner_refused");
+    setRoute(encoded(route));
+    refused([&]{ClassesAnchor anchor;anchor.open(foreignSID,end,KEY_READ);},end);
+    unchanged();
+  }
+  view.close();
+  foreign.close();hive.close();users.close();source.close();software.close();
+  stage("alias_profile_close");
+  profile.close(g);
+}
 static bool registryContracts(){
   stage("child_generation_custody");
   Generation g;
@@ -188,7 +288,7 @@ static bool registryContracts(){
   stage("child_apply_class");
   applyClass(g,end);
   stage("child_registry_readback");
-  registryReadback(g);
+  registryReadback(g,end);
   stage("child_shared_parent_security");
   Key parent,foreign;
   require(registryStatus("RegOpenKeyExW",RegOpenKeyExW(classes.h,L"AppUserModelId",REG_OPTION_OPEN_LINK,KEY_ALL_ACCESS,&parent.h))==ERROR_SUCCESS);
@@ -242,7 +342,7 @@ static bool registryContracts(){
   // Breakage: the genuine denied shared-parent API loses numeric provenance.
   OperatorDiagnostic diagnostic;
   bool classified=false;
-  try{SharedRegistryParent observed;observed.open(L"AppUserModelId",end,&diagnostic);}
+  try{SharedRegistryParent observed;observed.open(g,L"AppUserModelId",end,&diagnostic);}
   catch(const RegistryFailure& error){
     require(error.code==ERROR_ACCESS_DENIED&&!strcmp(error.phase,"shared_container_open"));
     classified=true;diagnostic.emit();
@@ -326,7 +426,11 @@ static bool registryContracts(){
   software.close();
   stage("child_profile_close");
   profile.close(g);
-  if(linksQualified)std::cout<<"TEST real registry contracts passed; private process-local HKCU mapping only\n";
+  if(linksQualified){
+    aliasContracts(g,end,false);
+    aliasContracts(g,end,true);
+    std::cout<<"TEST real registry contracts passed; private process-local HKCU mapping only\n";
+  }
   return linksQualified;
 }
 static void writePrivate(const fs::path& path,const std::vector<uint8_t>& data,SECURITY_ATTRIBUTES& sa){
