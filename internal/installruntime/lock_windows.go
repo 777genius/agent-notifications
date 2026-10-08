@@ -1,14 +1,76 @@
 package installruntime
 
 import (
+	"context"
 	"errors"
 	"fmt"
-	"golang.org/x/sys/windows"
 	"os"
+	"path/filepath"
+	"strings"
 	"unsafe"
 
 	"github.com/777genius/agent-notifications/internal/windowsacl"
+	"golang.org/x/sys/windows"
 )
+
+// Create only managed suffixes with the existing private policy at creation.
+// Existing system ancestors require structural custody, not private ACLs.
+func ensureLockDirectory(ctx context.Context, path string, _ os.FileMode) (resultErr error) {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	handles, anchors, err := windowsParentsWithSharing(path, false, false)
+	defer func() {
+		for i := len(handles) - 1; i >= 0; i-- {
+			resultErr = errors.Join(resultErr, windows.CloseHandle(handles[i]))
+		}
+	}()
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if len(handles) == 0 || len(handles) != len(anchors) {
+		return fmt.Errorf("managed directory ancestor custody unavailable")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	suffix, err := filepath.Rel(anchors[len(anchors)-1].Path, path)
+	if err != nil {
+		return err
+	}
+	security, err := privateWindowsSecurityDescriptor(true)
+	if err != nil {
+		return err
+	}
+	for _, leaf := range strings.Split(suffix, `\`) {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		// FILE_OPEN_IF never replaces security on an existing/raced directory.
+		handle, err := windowsOpenAtWithSharing(handles[len(handles)-1], leaf,
+			windows.FILE_READ_ATTRIBUTES|windows.READ_CONTROL|windows.FILE_TRAVERSE,
+			windows.FILE_OPEN_IF, windows.FILE_DIRECTORY_FILE, security,
+			windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE)
+		if err != nil {
+			return err
+		}
+		handles = append(handles, handle)
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		var info windows.ByHandleFileInformation
+		if err := windows.GetFileInformationByHandle(handle, &info); err != nil {
+			return err
+		}
+		if info.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 || info.FileAttributes&windows.FILE_ATTRIBUTE_DIRECTORY == 0 {
+			return fmt.Errorf("managed directory requires a non-reparse inode")
+		}
+		if err := privateWindowsHandle(handle); err != nil {
+			return err
+		}
+	}
+	return ctx.Err()
+}
 
 func tryLock(f *os.File) (bool, error) {
 	var overlapped windows.Overlapped
@@ -141,7 +203,7 @@ func inspectPrivateWindowsHandle(h windows.Handle) (bool, error) {
 		}
 		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
 		if !sid.Equals(user.User.Sid) && !sid.IsWellKnown(windows.WinLocalSystemSid) && !sid.IsWellKnown(windows.WinBuiltinAdministratorsSid) && !windowsacl.AllowsForeignReadOnly(ace.Mask) {
-			return false, fmt.Errorf("managed inode DACL grants foreign access")
+			return false, fmt.Errorf("managed inode DACL grants foreign access (ace_type=%d ace_flags=%d access_mask=0x%08x)", ace.Header.AceType, ace.Header.AceFlags, ace.Mask)
 		}
 	}
 	return canonicalPrivateWindowsDescriptor(sd, user.User.Sid)
