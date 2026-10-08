@@ -5,6 +5,9 @@ on:
       - '.github/workflows/navigation-windows-native-e2e.yml'
       - 'tests/integration/navigation_windows_native_probe.cpp'
       - 'tests/integration/navigation_windows_native_e2e.ts'
+      - 'tests/integration/navigation_windows_token_queries.h'
+      - 'tests/integration/navigation_windows_vendor_sdk_test.h'
+      - 'tests/integration/navigation_windows_vendor_acquisition.ts'
       - 'opencode-plugin/package.json'
       - 'opencode-plugin/package-lock.json'
   workflow_dispatch:
@@ -23,6 +26,7 @@ on:
           - native_callback
           - oobe_then_native_callback
           - oobe_then_public_sample_callback
+          - oobe_then_public_sample_vendor_callback
 permissions:
   contents: read
 # Supersede only older checks for this PR; dispatch runs remain independent.
@@ -39,13 +43,14 @@ jobs:
       AGENT_NOTIFY_NAVIGATION_WINDOWS_E2E: '1'
       NAVIGATION_WINDOWS_RUNNER: windows-11-vs2026-arm
       NAVIGATION_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-      NAVIGATION_WINDOWS_PREFLIGHT_ONLY: ${{ (inputs.mode == 'native_callback' || inputs.mode == 'oobe_then_native_callback' || inputs.mode == 'oobe_then_public_sample_callback') && '0' || '1' }}
+      NAVIGATION_WINDOWS_PREFLIGHT_ONLY: ${{ (inputs.mode == 'native_callback' || inputs.mode == 'oobe_then_native_callback' || (inputs.mode == 'oobe_then_public_sample_callback' || inputs.mode == 'oobe_then_public_sample_vendor_callback')) && '0' || '1' }}
       NAVIGATION_WINDOWS_CENTER_SURFACE: ${{ inputs.mode == 'center_surface' && '1' || '0' }}
       NAVIGATION_WINDOWS_TASKBAR_UIA: ${{ inputs.mode == 'taskbar_uia' && '1' || '0' }}
       NAVIGATION_WINDOWS_DESKTOP_CAPTURE_TEST: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'desktop_capture' && '1' || '0' }}
       NAVIGATION_WINDOWS_OOBE_PREFLIGHT_TEST: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'oobe_preflight' && '1' || '0' }}
       NAVIGATION_WINDOWS_OOBE_SETUP_TEST: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'oobe_setup' && '1' || '0' }}
-      NAVIGATION_WINDOWS_PUBLIC_SAMPLE_TEST: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'oobe_then_public_sample_callback' && '1' || '0' }}
+      NAVIGATION_WINDOWS_COMPOSED_TEST: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'oobe_then_public_sample_vendor_callback' && '1' || '0' }}
+      NAVIGATION_WINDOWS_PUBLIC_SAMPLE_TEST: ${{ github.event_name == 'workflow_dispatch' && (inputs.mode == 'oobe_then_public_sample_callback' || inputs.mode == 'oobe_then_public_sample_vendor_callback') && '1' || '0' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -67,7 +72,7 @@ jobs:
         run: |
           npm ci --prefix opencode-plugin --ignore-scripts --no-audit --no-fund
           if ($LASTEXITCODE -ne 0) { throw 'locked tooling install failed' }
-          & ./opencode-plugin/node_modules/.bin/tsc.cmd --ignoreConfig --noEmit --strict --target ES2023 --module ESNext --moduleResolution bundler --types node --typeRoots ./opencode-plugin/node_modules/@types tests/integration/navigation_windows_native_e2e.ts
+          & ./opencode-plugin/node_modules/.bin/tsc.cmd --ignoreConfig --noEmit --allowImportingTsExtensions --strict --target ES2023 --module ESNext --moduleResolution bundler --types node --typeRoots ./opencode-plugin/node_modules/@types tests/integration/navigation_windows_native_e2e.ts
           if ($LASTEXITCODE -ne 0) { throw 'native harness typecheck failed' }
       - name: Compile native TEST probe with image SDK
         shell: pwsh
@@ -79,6 +84,16 @@ jobs:
           $cmd = '"' + $vs + '\Common7\Tools\VsDevCmd.bat" -arch=arm64 -host_arch=arm64 && cl /nologo /std:c++20 /EHsc /W4 /DUNICODE /D_UNICODE "' + $source + '" /Fe:"' + $out + '" /Fo:"' + $env:RUNNER_TEMP + '\navigation-native-probe.obj" /link windowsapp.lib ole32.lib oleaut32.lib shell32.lib propsys.lib advapi32.lib user32.lib uuid.lib uiautomationcore.lib'
           cmd.exe /d /s /c $cmd
           if ($LASTEXITCODE -ne 0) { throw 'native probe compile failed' }
+          if ('${{ inputs.mode }}' -eq 'oobe_then_public_sample_vendor_callback') {
+            $sdk = Get-ChildItem -LiteralPath "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Directory |
+              Where-Object { $_.Name -match '^10\.0\.\d+\.\d+$' -and (Test-Path -LiteralPath (Join-Path $_.FullName 'arm64\signtool.exe')) } |
+              Sort-Object { [version]$_.Name } -Descending | Select-Object -First 1
+            if (!$sdk) { throw 'ARM64 signature verifier absent' }
+            $tool = Join-Path $sdk.FullName 'arm64\signtool.exe'
+            "NAVIGATION_WINDOWS_TEST_SIGNTOOL=$tool" >> $env:GITHUB_ENV
+            "NAVIGATION_WINDOWS_TEST_SIGNTOOL_SHA256=$((Get-FileHash -LiteralPath $tool -Algorithm SHA256).Hash.ToLowerInvariant())" >> $env:GITHUB_ENV
+            "NAVIGATION_WINDOWS_TEST_OWNER_SID=$([Security.Principal.WindowsIdentity]::GetCurrent().User.Value)" >> $env:GITHUB_ENV
+          }
       - name: Parse composed operators without native effects
         shell: pwsh
         run: |
@@ -93,11 +108,12 @@ jobs:
             if ($errors.Count) { $errors | Format-List; throw 'target operator parse failed' }
           }
       - name: One finite OOBE setup on this same disposable desktop
-        if: github.event_name == 'workflow_dispatch' && (inputs.mode == 'oobe_then_native_callback' || inputs.mode == 'oobe_then_public_sample_callback')
+        if: github.event_name == 'workflow_dispatch' && (inputs.mode == 'oobe_then_native_callback' || (inputs.mode == 'oobe_then_public_sample_callback' || inputs.mode == 'oobe_then_public_sample_vendor_callback'))
         id: bootstrap
         shell: pwsh
         env:
           NAVIGATION_WINDOWS_PUBLIC_SAMPLE_TEST: '0'
+          NAVIGATION_WINDOWS_COMPOSED_TEST: '0'
           NAVIGATION_WINDOWS_PREFLIGHT_ONLY: '1'
           NAVIGATION_WINDOWS_OOBE_SETUP_TEST: '1'
           NAVIGATION_WINDOWS_CENTER_SURFACE: '0'
@@ -149,13 +165,13 @@ jobs:
           $file = [IO.File]::Open((Join-Path $root 'same-job-bootstrap.json'), [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
           try { $file.Write($bytes, 0, $bytes.Length); $file.Flush($true) } finally { $file.Dispose() }
       - name: Selected TEST preflight or single native callback attempt
-        if: github.event_name == 'workflow_dispatch' && ((inputs.mode != 'oobe_then_native_callback' && inputs.mode != 'oobe_then_public_sample_callback') || steps.bootstrap.outcome == 'success')
+        if: github.event_name == 'workflow_dispatch' && ((inputs.mode != 'oobe_then_native_callback' && inputs.mode != 'oobe_then_public_sample_callback' && inputs.mode != 'oobe_then_public_sample_vendor_callback') || steps.bootstrap.outcome == 'success')
         id: probe
         shell: pwsh
         env:
           NAVIGATION_WINDOWS_TEST_BOOTSTRAP_ROOT: ${{ steps.bootstrap.outputs.evidence_root }}
         run: |
-          if ('${{ inputs.mode }}' -in @('oobe_then_native_callback', 'oobe_then_public_sample_callback')) {
+          if ('${{ inputs.mode }}' -in @('oobe_then_native_callback', 'oobe_then_public_sample_callback', 'oobe_then_public_sample_vendor_callback')) {
             if ($env:GITHUB_RUN_ATTEMPT -ne '1') { throw 'no native replay' }
             $root = $env:NAVIGATION_WINDOWS_TEST_BOOTSTRAP_ROOT
             $handoffPath = Join-Path $root 'same-job-bootstrap.json'
@@ -208,7 +224,9 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: navigation-windows-native-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ steps.probe.outputs.evidence_root }}
+          path: |
+            ${{ steps.probe.outputs.evidence_root }}
+            !${{ steps.probe.outputs.evidence_root }}/client.msix
           if-no-files-found: error
           include-hidden-files: true
           retention-days: 14
