@@ -202,9 +202,17 @@ static void aliasContracts(const Generation& g,uint64_t end,bool chain){
     auto embedded=route;embedded[1]=L'\0';
     auto odd=encoded(route);odd.pop_back();
     auto surrogate=encoded(route);surrogate[0]=0;surrogate[1]=0xd8;
-    for(const auto& bytes : {encoded(L"\\Registry\\User\\"+wide(foreignSID)+L"_Classes"),encoded(route+L"\\Foreign"),
-        encoded(embedded),encoded(route+std::wstring(2,L'\0')),odd,surrogate}){
-      setRoute(bytes);
+    const std::vector<std::pair<const char*,std::vector<uint8_t>>> malformed{
+      {"alias_foreign_target",encoded(L"\\Registry\\User\\"+wide(foreignSID)+L"_Classes")},
+      {"alias_suffix_target",encoded(route+L"\\Foreign")},
+      {"alias_embedded_nul",encoded(embedded)},
+      {"alias_multiple_nul",encoded(route+std::wstring(2,L'\0'))},
+      {"alias_odd_bytes",odd},
+      {"alias_surrogate",surrogate}
+    };
+    for(const auto& item : malformed){
+      stage(item.first);
+      setRoute(item.second);
       refused([&]{ClassesAnchor anchor;anchor.open(g.sid,end,KEY_READ);},end);
       unchanged();
     }
