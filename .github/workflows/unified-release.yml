@@ -71,7 +71,7 @@ jobs:
           test "$(jq -er '.version' .codex-plugin/plugin.json)" = 1.48.4
           test "$(jq -er '.metadata.version' .claude-plugin/marketplace.json)" = 1.48.4
           test "$(jq -er '.plugins[] | select(.name=="claude-notifications-go") | .version' .claude-plugin/marketplace.json)" = 1.48.4
-          rg '^## \[1\.48\.4\]' CHANGELOG.md
+          grep -E '^## \[1\.48\.4\]' CHANGELOG.md
   build-matrix:
     name: Build ${{ matrix.platform }} ${{ matrix.arch }}
     needs: verify-version
@@ -339,7 +339,7 @@ jobs:
       - uses: actions/checkout@v7
         with: {ref: '${{ github.sha }}', path: operator, persist-credentials: false}
       - uses: actions/setup-go@v7
-        with: {go-version: '${{ matrix.platform == ''darwin'' && ''1.26'' || ''1.27.1'' }}', cache: false}
+        with: {go-version: '${{ matrix.platform == ''darwin'' && (matrix.arch == ''amd64'' && ''1.26.7'' || ''1.26.8'') || ''1.27.1'' }}', cache: false}
       - uses: actions/setup-node@v6
         with: {node-version: '24.21.0', package-manager-cache: false}
       - uses: actions/setup-python@v7
