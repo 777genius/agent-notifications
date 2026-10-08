@@ -98,6 +98,20 @@ function createOwned(context:OwnedContext,executable:string,args:string[],budget
   return {p,done,remainingMS:()=>Math.max(0,deadline-performance.now()),pending:()=>p.exitCode===null&&p.signalCode===null&&!finishing,stop:()=>{error=Error('owned operation cancelled');finish();return done.catch(()=>{});}};
  }
 
+const notificationPlist='/System/Library/LaunchAgents/com.apple.notificationcenterui.plist',notificationProgram='/System/Library/CoreServices/NotificationCenter.app/Contents/MacOS/NotificationCenter';
+function notificationService(label:string,program:string,consoleUID:number,controllerUID:number|undefined):string{assert(consoleUID===501&&controllerUID===501,'fresh GHA console/controller UID');assert(['com.apple.notificationcenterui','com.apple.notificationcenterui.agent'].includes(label)&&program===notificationProgram,'fixed Apple NotificationCenter identity');return 'gui/501/'+label;}
+function notificationState(text:string,label:string):{loaded:boolean;pid:number|null}{
+ const escaped=label.replace(/\./g,'\\.');const lines=text.split('\n').filter(line=>new RegExp('^\\s*[0-9-]+\\s+[0-9-]+\\s+'+escaped+'\\s*$').test(line));assert(lines.length<=1,'ambiguous Apple service');return {loaded:lines.length===1,pid:lines.length&&/^\s*[0-9]+/.test(lines[0]!)?Number(lines[0]!.trim().split(/\s+/)[0]):null};
+}
+async function prepareNotificationCenter(run:(exe:string,args:string[],budget?:number)=>Promise<string>,rows:()=>Promise<AppProcess[]>,report:Record<string,unknown>,consoleUID:number,controllerUID:number|undefined):Promise<void>{
+ assert(consoleUID===501&&controllerUID===501,'fresh GHA console/controller UID');const plistStat=lstatSync(notificationPlist);assert(plistStat.isFile()&&!plistStat.isSymbolicLink()&&plistStat.uid===0&&(plistStat.mode&0o022)===0,'Apple plist custody');
+ const label=(await run('/usr/libexec/PlistBuddy',['-c','Print :Label',notificationPlist])).trim(),program=(await run('/usr/libexec/PlistBuddy',['-c','Print :Program',notificationPlist])).trim();const service=notificationService(label,program,consoleUID,controllerUID);const programStat=lstatSync(program);assert(realpathSync(program)===program&&programStat.isFile()&&!programStat.isSymbolicLink()&&programStat.uid===0&&(programStat.mode&0o022)===0,'Apple program physical custody');
+ const domain='gui/501',disabledText=await run('/bin/launchctl',['print-disabled',domain]),matches=disabledText.split('\n').filter(line=>line.trim().startsWith('"'+label+'" => ')),disabled=matches.length===1&&matches[0]!.trim()==='"'+label+'" => true'?true:matches.length===1&&matches[0]!.trim()==='"'+label+'" => false'?false:null;
+ const beforeReceipt:Record<string,unknown>={disabled,disabledEntryCount:matches.length,disabledOutputSHA256:createHash('sha256').update(disabledText).digest('hex')},receipt:Record<string,unknown>={label,program,plistSHA256:hash(notificationPlist),AppleImageSHA256:hash(program),consoleUID,controllerUID,configurationSource:'f10516542b8f2fef89b652a8d5f5de63aa543b77',before:beforeReceipt};report.notificationCenterPrerequisite=receipt;assert(disabled===true,'actual VM disabled prerequisite');const before=notificationState(await run('/bin/launchctl',['print',domain]),label);Object.assign(beforeReceipt,before);
+ await run('/bin/launchctl',['enable',service]);if(!before.loaded)await run('/bin/launchctl',['bootstrap',domain,notificationPlist]);const kicked=(await run('/bin/launchctl',['kickstart','-p',service])).trim();assert(/^[0-9]+$/.test(kicked),'actual Apple kickstart PID');const pid=Number(kicked);assert(Number.isSafeInteger(pid)&&pid>1);
+ const job=await run('/bin/launchctl',['print',service]);assert(/^\s*state = running\s*$/m.test(job)&&new RegExp('^\\s*pid = '+pid+'\\s*$','m').test(job)&&job.split('\n').some(line=>line.trim()==='program = '+program),'actual loaded Apple service identity');const process=(await rows()).find(row=>row.pid===pid);assert(process&&process.args===program,'actual Apple program running');const afterDisabled=await run('/bin/launchctl',['print-disabled',domain]);assert(afterDisabled.split('\n').some(line=>line.trim()==='"'+label+'" => false'),'actual Apple service enabled');receipt.after={disabled:false,loaded:true,running:true,pid,actualProcessObserved:true};
+}
+
 async function main():Promise<void>{
  assert.equal(process.argv.length,2,'closed recovery CLI');assert(process.platform==='darwin'&&process.arch==='x64','native Intel controller only');
  const e=process.env;assert(e.GITHUB_ACTIONS==='true'&&e.GITHUB_REPOSITORY==='777genius/agent-notifications'&&e.GITHUB_ACTOR==='777genius'&&e.GITHUB_TRIGGERING_ACTOR==='777genius');
@@ -129,6 +143,7 @@ async function main():Promise<void>{
   const plist=join(app,'Contents/Info.plist');for(const [key,expected] of [['CFBundleIdentifier',bundle],['CFBundleDisplayName',display],['CFBundleName',display],['CFBundlePackageType','APPL']])assert.equal((await run('/usr/libexec/PlistBuddy',['-c','Print :'+key,plist])).trim(),expected);
   const uiPath=join(root,'permission-ui.jxa');writeFileSync(uiPath,jxa,{mode:0o600,flag:'wx'});
   const ui=async(mode:string,pid=0,choice:unknown=null):Promise<Snapshot>=>JSON.parse(await run('/usr/bin/osascript',['-l','JavaScript',uiPath,mode,String(pid),bundle,JSON.stringify(choice)],4000)) as Snapshot;
+  await prepareNotificationCenter(run,processRows,report,lstatSync('/dev/console').uid,process.getuid?.());
   const before=await ui('probe');report.lastUIObservation=safeUI(before);assert.equal(candidates(before).length,0,'no preexisting matching alert');report.actualUICapability=true;
   registrationAttempted=true;await run(ls,['-f',app]);
   const caps=JSON.parse(await run(exe,['--capabilities-json'],2000));assert.deepEqual(caps,{schemaVersion:1,protocolVersions:[1],actionKinds:['none','desktop_thread_v1'],receiptSupport:true,backend:'macos.usernotifications',explicitFeatureEnabledByDefault:false});
@@ -205,6 +220,9 @@ function run(argv){
 }
 `;
 async function selfTest():Promise<void>{
+ for(const label of ['com.apple.notificationcenterui','com.apple.notificationcenterui.agent']){assert.equal(notificationService(label,notificationProgram,501,501),'gui/501/'+label);assert.deepEqual(notificationState('services = {\n 123 0 '+label+'\n}',label),{loaded:true,pid:123});assert.deepEqual(notificationState('services = {\n 123 0 '+label+'.foreign\n}',label),{loaded:false,pid:null});assert.throws(()=>notificationState('123 0 '+label+'\n124 0 '+label,label));}
+ assert.throws(()=>notificationService('foreign',notificationProgram,501,501));assert.throws(()=>notificationService('com.apple.notificationcenterui',notificationProgram+'.foreign',501,501));assert.throws(()=>notificationService('com.apple.notificationcenterui',notificationProgram,502,501));assert.throws(()=>notificationService('com.apple.notificationcenterui',notificationProgram,501,502));
+
  let probeClosed=false,probeRecorded=false;
  const execute=((...params:unknown[])=>{const p=Object.assign(new EventEmitter(),{pid:12345,stdout:new PassThrough(),stderr:new PassThrough(),kill:()=>true});const callback=params[3] as (err:Error,text:string,stderr:string)=>void;queueMicrotask(()=>{callback(Error('injected spawn error'),'','');assert(!probeRecorded);queueMicrotask(()=>{probeClosed=true;p.emit('close',1);});});return p;}) as unknown as typeof execFile;
  await assert.rejects(processProbe({root:'/TEST',env:{},execute,record:(_pid,actualClose,failed)=>{assert(probeClosed&&actualClose&&failed);probeRecorded=true;}},1000));assert(probeRecorded);
