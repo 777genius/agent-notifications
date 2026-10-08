@@ -42,6 +42,7 @@ using namespace NavigationTokenTEST;
 #include <cstring>
 #include <cstdint>
 #include <map>
+#include <source_location>
 #include <appxpackaging.h>
 #include <shlwapi.h>
 #pragma comment(lib, "Shlwapi.lib")
@@ -957,10 +958,21 @@ static std::string toastTitleSet(const ToastRow& row) {
 }
 static int invokeToastDefault(bool publicSample = false) {
     const ULONGLONG deadline = GetTickCount64() + 30000;
+    const char* phase = "authority_inputs"; unsigned guardLine = 0, censusIndex = 0, nodes = 0, roots = 0, titles = 0, eligibleRows = 0;
+    ComPtr<IUIAutomation> automation;
+    try {
     ToastInput spec(publicSample ? "public-sample-invoke-authority.json" : "msix-spec.json"),
         ready(publicSample ? "sender.json" : "identity-ready.json"), show("show-outcome.json"),
         exited(publicSample ? "public-sample-invoke-authority.json" : "sender-exit.json");
-    auto demand = [](bool ok) { if (!ok) throw std::runtime_error("packaged toast authority unavailable"); };
+    auto demand = [&](bool ok, std::source_location at = std::source_location::current()) {
+        if (!ok) { guardLine = at.line();
+            throw std::runtime_error(publicSample ? std::string("public sample toast guard ") + phase + " line=" + std::to_string(guardLine)
+                                                  : "packaged toast authority unavailable"); }
+    };
+    auto check = [&](HRESULT hr, std::source_location at = std::source_location::current()) {
+        if (FAILED(hr)) guardLine = at.line();
+        ::check(hr);
+    };
     auto field = [](auto& object, const wchar_t* key) { return std::wstring(object.GetNamedString(key)); };
     DWORD session{}; demand(ProcessIdToSessionId(GetCurrentProcessId(), &session) && session != 0);
     const auto user = tokenUser(GetCurrentProcess()); LPWSTR rawSid = nullptr;
@@ -1031,6 +1043,7 @@ static int invokeToastDefault(bool publicSample = false) {
         {custody.windows + L"\\systemapps\\microsoftwindows.client.cbs_cw5n1h2txyewy\\shellhost.exe", "systemapps_cbs_shellhost"}};
     std::map<DWORD, std::wstring> heldPaths;
     auto shellPath = [&](SurfaceOwner* owner, DWORD pid) {
+        phase = "provider_closed_path";
         wchar_t image[32768]{}; DWORD length = 32768;
         demand(owner && owner->live() && QueryFullProcessImageNameW(owner->process, 0, image, &length));
         std::wstring path(image, length), canonical = fs::canonical(path).wstring();
@@ -1040,15 +1053,15 @@ static int invokeToastDefault(bool publicSample = false) {
         auto found = heldPaths.find(pid); demand(found == heldPaths.end() || found->second == path);
         heldPaths.emplace(pid, path); return path;
     };
-    ComPtr<IUIAutomation> automation; check(CoCreateInstance(CLSID_CUIAutomation, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&automation)));
+    phase = "automation_create"; check(CoCreateInstance(CLSID_CUIAutomation, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&automation)));
     ComPtr<IUIAutomationTreeWalker> walker; check(automation->get_RawViewWalker(&walker));
     auto census = [&](unsigned index) {
-        std::map<std::string, ToastRow> rows; unsigned nodes = 0, roots = 0, titles = 0;
-        auto budget = [&] { demand(nodes <= 512 && roots <= 64 && GetTickCount64() < deadline); };
-        ComPtr<IUIAutomationElement> desktop, child;
+        std::map<std::string, ToastRow> rows; censusIndex = index; nodes = roots = titles = eligibleRows = 0;
+        auto budget = [&] { phase = "census_budget"; demand(nodes <= 512 && roots <= 64 && GetTickCount64() < deadline); };
+        phase = "census_root"; ComPtr<IUIAutomationElement> desktop, child;
         check(automation->GetRootElement(&desktop)); check(walker->GetFirstChildElement(desktop.Get(), &child));
         while (child) {
-            ++roots; budget(); int pid{}; check(child->get_CurrentProcessId(&pid));
+            ++roots; budget(); phase = "census_provider"; int pid{}; check(child->get_CurrentProcessId(&pid));
             auto owner = pid > 0 ? custody.owner(static_cast<DWORD>(pid)) : nullptr;
             if (custody.errors || custody.truncated) throw std::runtime_error("toast provider census incomplete");
             if (owner) {
@@ -1056,7 +1069,7 @@ static int invokeToastDefault(bool publicSample = false) {
                 struct Node { ComPtr<IUIAutomationElement> element; unsigned depth; };
                 std::vector<Node> pending{{child, 0}};
                 while (!pending.empty()) {
-                    auto node = std::move(pending.back()); pending.pop_back(); ++nodes; budget(); demand(owner->live());
+                    auto node = std::move(pending.back()); pending.pop_back(); ++nodes; budget(); phase = "census_node_provider"; demand(owner->live());
                     int provider{}; CONTROLTYPEID type{}; check(node.element->get_CurrentProcessId(&provider));
                     demand(provider == pid); check(node.element->get_CurrentControlType(&type));
                     BSTR name = nullptr; check(node.element->get_CurrentName(&name));
@@ -1064,24 +1077,24 @@ static int invokeToastDefault(bool publicSample = false) {
                         && std::wstring(name, SysStringLen(name)) == L"Navigation TEST " + uuid;
                     SysFreeString(name);
                     if (exact) {
-                        ++titles; demand(type == UIA_TextControlTypeId && (publicSample || titles == 1));
-                        ToastRow found; found.title = node.element; found.pid = pid;
+                        phase = "exact_title_type"; ++titles; demand(type == UIA_TextControlTypeId && (publicSample || titles == 1));
+                        phase = "title_runtime_ids"; ToastRow found; found.title = node.element; found.pid = pid;
                         found.titleRuntime = toastRuntime(node.element.Get()); found.containerRuntime = toastRuntime(child.Get());
-                        ComPtr<IUIAutomationElement> parent = node.element;
+                        phase = "nearest_row"; ComPtr<IUIAutomationElement> parent = node.element;
                         for (unsigned depth = 0; depth < std::min(8U, node.depth); ++depth) {
                             ComPtr<IUIAutomationElement> next; check(walker->GetParentElement(parent.Get(), &next)); demand(next != nullptr);
                             check(next->get_CurrentProcessId(&provider)); demand(provider == pid);
                             check(next->get_CurrentControlType(&type)); parent = next;
                             if (type == UIA_ListItemControlTypeId) { found.row = next; break; }
                         }
-                        demand(found.row != nullptr); BOOL offscreen = TRUE, enabled = FALSE;
+                        demand(found.row != nullptr); phase = "row_visibility"; BOOL offscreen = TRUE, enabled = FALSE;
                         check(found.title->get_CurrentIsOffscreen(&offscreen)); demand(!offscreen);
                         check(found.row->get_CurrentIsOffscreen(&offscreen)); check(found.row->get_CurrentIsEnabled(&enabled));
                         demand(!offscreen && enabled); ComPtr<IUIAutomationInvokePattern> pattern;
-                        check(found.row->GetCurrentPatternAs(UIA_InvokePatternId, IID_PPV_ARGS(&pattern)));
+                        phase = "row_invokable"; check(found.row->GetCurrentPatternAs(UIA_InvokePatternId, IID_PPV_ARGS(&pattern)));
                         found.runtime = toastRuntime(found.row.Get()); const auto key = found.runtime;
                         found.titles.emplace(found.titleRuntime, found.title);
-                        auto existing = rows.find(key);
+                        phase = "same_row_dedup"; auto existing = rows.find(key);
                         if (existing == rows.end()) rows.emplace(key, std::move(found));
                         else {
                             auto& row = existing->second; BOOL same = FALSE;
@@ -1092,8 +1105,9 @@ static int invokeToastDefault(bool publicSample = false) {
                                 check(automation->CompareElements(title->second.Get(), found.title.Get(), &same)); demand(same);
                             } else row.titles.emplace(found.titleRuntime, found.title);
                         }
+                        eligibleRows = static_cast<unsigned>(rows.size());
                     }
-                    ComPtr<IUIAutomationElement> next; check(walker->GetFirstChildElement(node.element.Get(), &next));
+                    phase = "census_subtree"; ComPtr<IUIAutomationElement> next; check(walker->GetFirstChildElement(node.element.Get(), &next));
                     if (next && node.depth >= 16) throw std::runtime_error("toast subtree depth incomplete");
                     while (next) { demand(pending.size() + nodes < 512); pending.push_back({next, node.depth + 1});
                         ComPtr<IUIAutomationElement> sibling; check(walker->GetNextSiblingElement(next.Get(), &sibling)); next = sibling; }
@@ -1101,7 +1115,7 @@ static int invokeToastDefault(bool publicSample = false) {
             }
             ComPtr<IUIAutomationElement> next; check(walker->GetNextSiblingElement(child.Get(), &next)); child = next;
         }
-        budget(); demand(rows.size() <= 1);
+        budget(); phase = "final_census_unique_row"; demand(rows.size() <= 1);
         const auto name = "toast-census-" + std::to_string(index) + ".json";
         report(name.c_str(), "{\"nonce\":" + jsonQuote(uuid) + ",\"pid\":" + std::to_string(GetCurrentProcessId())
             + ",\"nodes\":" + std::to_string(nodes) + ",\"roots\":" + std::to_string(roots)
@@ -1112,7 +1126,7 @@ static int invokeToastDefault(bool publicSample = false) {
         auto rows = census(attempt);
         if (!rows.empty()) {
             const auto selected = rows.begin()->second; auto fresh = census(40);
-            demand(fresh.size() == 1 && fresh.begin()->second.runtime == selected.runtime
+            phase = "fresh_identity_set"; demand(fresh.size() == 1 && fresh.begin()->second.runtime == selected.runtime
                 && fresh.begin()->second.titleRuntime == selected.titleRuntime && fresh.begin()->second.pid == selected.pid
                 && fresh.begin()->second.containerRuntime == selected.containerRuntime
                 && toastTitleSet(fresh.begin()->second) == toastTitleSet(selected));
@@ -1121,24 +1135,24 @@ static int invokeToastDefault(bool publicSample = false) {
                 check(automation->CompareElements(title.Get(), fresh.begin()->second.titles.at(runtime).Get(), &same)); demand(same);
             }
             auto owner = custody.owner(selected.pid); demand(owner && owner->live());
-            FILETIME birth{}, exit{}, kernel{}, used{}; ULARGE_INTEGER ticks{};
+            phase = "retained_provider_incarnation"; FILETIME birth{}, exit{}, kernel{}, used{}; ULARGE_INTEGER ticks{};
             demand(GetProcessTimes(owner->process, &birth, &exit, &kernel, &used) != FALSE);
             ticks.LowPart = birth.dwLowDateTime; ticks.HighPart = birth.dwHighDateTime;
             demand(preflight("toast-default-immediate-preflight.json") && owner->live() && GetTickCount64() < deadline);
             // Re-read the exact title/nearest row and retained kernel authority after desktop preflight.
             auto immediate = [&] {
-                demand(owner->live() && GetProcessId(owner->process) == static_cast<DWORD>(selected.pid));
+                phase = "immediate_provider"; demand(owner->live() && GetProcessId(owner->process) == static_cast<DWORD>(selected.pid));
                 DWORD nowSession{}, length = 32768; wchar_t image[32768]{};
                 demand(ProcessIdToSessionId(selected.pid, &nowSession) && nowSession == session
                     && QueryFullProcessImageNameW(owner->process, 0, image, &length));
                 demand(shellPath(owner, selected.pid) == heldPaths.at(selected.pid));
-                const auto nowUser = tokenUser(owner->process);
+                phase = "immediate_provider"; const auto nowUser = tokenUser(owner->process);
                 demand(EqualSid(reinterpret_cast<const TOKEN_USER*>(nowUser.data())->User.Sid,
                     reinterpret_cast<const TOKEN_USER*>(user.data())->User.Sid) != FALSE);
                 FILETIME nowBirth{}; demand(GetProcessTimes(owner->process, &nowBirth, &exit, &kernel, &used) != FALSE
                     && CompareFileTime(&nowBirth, &birth) == 0);
                 auto& current = fresh.begin()->second; int pid{}; CONTROLTYPEID type{}; BOOL offscreen = TRUE, enabled = FALSE;
-                for (const auto& [titleRuntime, title] : current.titles) {
+                phase = "immediate_title_ancestry"; for (const auto& [titleRuntime, title] : current.titles) {
                 BSTR name = nullptr; check(title->get_CurrentName(&name));
                 const bool exact = name && std::wstring(name, SysStringLen(name)) == L"Navigation TEST " + uuid;
                 SysFreeString(name); demand(exact); check(title->get_CurrentControlType(&type)); demand(type == UIA_TextControlTypeId);
@@ -1152,7 +1166,7 @@ static int invokeToastDefault(bool publicSample = false) {
                     if (type == UIA_ListItemControlTypeId) { check(automation->CompareElements(next.Get(), current.row.Get(), &same)); nearest = same; break; } }
                 demand(nearest && toastRuntime(title.Get()) == titleRuntime && toastRuntime(current.row.Get()) == selected.runtime);
                 }
-                check(current.row->get_CurrentProcessId(&pid)); demand(pid == selected.pid);
+                phase = "immediate_row_visibility"; check(current.row->get_CurrentProcessId(&pid)); demand(pid == selected.pid);
                 check(current.row->get_CurrentIsOffscreen(&offscreen)); check(current.row->get_CurrentIsEnabled(&enabled));
                 demand(!offscreen && enabled && owner->live() && GetTickCount64() < deadline);
             };
@@ -1165,17 +1179,17 @@ static int invokeToastDefault(bool publicSample = false) {
                 + ",\"titleRuntimeID\":" + selected.titleRuntime + ",\"containerRuntimeID\":" + selected.containerRuntime + ",\"exactTitleVerified\":true,\"offscreen\":false,\"enabled\":true"
                 + ",\"specSHA256\":\"" + oobeStateHash(spec.bytes) + "\""
                 + (publicSample ? ",\"authorityProfile\":\"public_sample_one_show\",\"invokeDeadlineBootMs\":" + std::to_string(deadline) + ",\"titleRuntimeIDs\":" + toastTitleSet(selected) : "");
-            demand(binding.size() <= 16000);
+            phase = "durable_invoke_intent"; demand(binding.size() <= 16000);
             oobeDurableIntent("ui-invoke-intent.json", "{" + binding + ",\"invokeBoundaryArmed\":true,\"invokeCallEntered\":false}\n");
             immediate();
             // Exactly one public Shell UI Invoke. Missing terminal after arming is unknown, never replayable.
-            HRESULT result = pattern->Invoke();
+            phase = "invoke_call"; HRESULT result = pattern->Invoke();
             report("ui-invoke.json", "{" + binding + ",\"invokeCallEntered\":true,\"invokeCallReturned\":true,\"invokeHRESULT\":" + std::to_string(result)
                 + (publicSample ? ",\"returnedBootMs\":" + std::to_string(GetTickCount64()) : "") + "}\n");
             check(result); return 0;
         }
         if (attempt == 10) {
-            INPUT keys[4]{}; for (auto& key : keys) key.type = INPUT_KEYBOARD;
+            phase = "center_chord"; INPUT keys[4]{}; for (auto& key : keys) key.type = INPUT_KEYBOARD;
             keys[0].ki.wVk = VK_LWIN; keys[1].ki.wVk = 'N'; keys[2].ki.wVk = 'N'; keys[2].ki.dwFlags = KEYEVENTF_KEYUP;
             keys[3].ki.wVk = VK_LWIN; keys[3].ki.dwFlags = KEYEVENTF_KEYUP;
             report("center-open.json", "{\"keysAccepted\":" + std::to_string(SendInput(4, keys, sizeof(INPUT))) + "}\n");
@@ -1184,6 +1198,20 @@ static int invokeToastDefault(bool publicSample = false) {
     }
     report("ui-invoke.json", "{\"selectionKind\":\"toast_default\",\"found\":false}\n");
     snapshotOwnedShellUI(automation.Get()); return 5;
+    } catch (...) {
+        if (publicSample) {
+            // Diagnostic failures cannot replace the original exception or establish no-Invoke proof.
+            try {
+                report("toast-selector-failure.json", "{\"nonce\":" + jsonQuote(uuid) + ",\"pid\":" + std::to_string(GetCurrentProcessId())
+                    + ",\"diagnosticOnly\":true,\"nativeCallbackQualified\":false,\"navigationQualified\":false,\"negativeIsAbsenceProof\":false"
+                    + ",\"phase\":" + jsonQuote(winrt::to_hstring(phase).c_str()) + ",\"guardLine\":" + std::to_string(guardLine)
+                    + ",\"censusIndex\":" + std::to_string(censusIndex) + ",\"nodes\":" + std::to_string(nodes) + ",\"roots\":" + std::to_string(roots)
+                    + ",\"exactTitles\":" + std::to_string(titles) + ",\"eligibleRows\":" + std::to_string(eligibleRows) + ",\"partialCensus\":true}\n");
+            } catch (...) {}
+            if (automation && GetTickCount64() + 2000 < deadline) snapshotOwnedShellUI(automation.Get());
+        }
+        throw;
+    }
 }
 static int invoke() {
     wchar_t profile[8]{};

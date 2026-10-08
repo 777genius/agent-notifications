@@ -739,7 +739,7 @@ try {
       } else { evidence.setupRecordPublicationError = 'bounded packet overflow'; evidence.oobeSetupQualified = false; exitCode = 1; }
       if (evidence.setupRecordErrors || evidence.oobeSetupQualified !== true) { evidence.status = 'failed'; exitCode = 1; }
     }
-    for (const name of ['center-policy.json', 'preflight.json', 'capture-preflight.json', 'capture-after-preflight.json', 'desktop-capture-intent.json', 'desktop-capture.json', 'oobe-preflight.json', 'oobe-after-preflight.json', 'oobe-intent.json', 'oobe-uia.json', 'shortcut-location.json', 'aumid-identity.json', 'sender.json', 'sender-failure.json', 'show-outcome.json', 'submitted.json', 'callback-started.json', 'callback.json', 'public-sample-invoke-authority.json', 'ui-invoke-intent.json', 'ui-candidate.json', 'ui-invoke.json', 'center-open.json']) {
+    for (const name of ['center-policy.json', 'preflight.json', 'capture-preflight.json', 'capture-after-preflight.json', 'desktop-capture-intent.json', 'desktop-capture.json', 'oobe-preflight.json', 'oobe-after-preflight.json', 'oobe-intent.json', 'oobe-uia.json', 'shortcut-location.json', 'aumid-identity.json', 'sender.json', 'sender-failure.json', 'show-outcome.json', 'submitted.json', 'callback-started.json', 'callback.json', 'public-sample-invoke-authority.json', 'ui-invoke-intent.json', 'ui-candidate.json', 'ui-invoke.json', ...(evidence.nativeSubmissionProfile === 'public_sample_one_show' ? ['toast-selector-failure.json', 'ui-owned-snapshot.json'] : []), 'center-open.json']) {
       if (!existsSync(join(root, name))) continue;
       try { evidence[name] = read(name); } catch (error: unknown) { evidence[`${name}ReadError`] = String(error); }
     }
