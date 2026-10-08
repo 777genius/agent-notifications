@@ -7,9 +7,10 @@ on:
   workflow_dispatch:
     inputs:
       cursor_carrier_b64:
-        description: 'Exact reviewed base85/gzip/xz lossless carrier; name retained from original input'
+        description: 'Reviewed base85 carrier (API max 65535); empty selects pinned repository fixture only with consume_cursor_e=true'
         type: string
-        required: true
+        required: false
+        default: ''
       mkdir_diagnostic:
         description: 'R576 filesystem-only diagnostic; excludes all preparation/build/native effects'
         type: boolean
@@ -41,22 +42,82 @@ jobs:
           persist-credentials: false
       - name: Require source checkpoint merged into main
         timeout-minutes: 1
+        env:
+          CURSOR_FIXTURE_SHA: ${{ github.sha }}
+          CURSOR_REPOSITORY_MODE: ${{ inputs.cursor_carrier_b64 == '' && inputs.consume_cursor_e == true }}
         run: |
           set -euo pipefail
           git fetch --no-tags origin main
           git merge-base --is-ancestor 9f014e72af510783d58d00ad3d2db455a2f8117b FETCH_HEAD
+          if [ "$CURSOR_REPOSITORY_MODE" = "true" ]; then
+            [[ "$CURSOR_FIXTURE_SHA" =~ ^[0-9a-f]{40}$ ]]
+            git fetch --no-tags origin "$CURSOR_FIXTURE_SHA"
+          fi
       - name: Verify fixed carrier transport without executing its payload
         timeout-minutes: 1
         env:
           CURSOR_CARRIER_B64: ${{ inputs.cursor_carrier_b64 }}
+          CURSOR_FIXTURE_SHA: ${{ github.sha }}
+          CURSOR_REPOSITORY_MODE: ${{ inputs.cursor_carrier_b64 == '' && inputs.consume_cursor_e == true }}
         run: |
           python3 -B -S - <<'PY_VERIFY'
-          import base64, hashlib, lzma, struct, zlib, os, pathlib, tempfile
+          import base64, hashlib, lzma, struct, zlib, os, pathlib, tempfile, subprocess, select, time, re, json
+          FIXTURE_PATH = '.github/fixtures/cursor-installed-e/native-case.b85'
+          FIXTURE_BYTES = 65749
+          FIXTURE_SHA256 = '04becf0a1f39c44bb1785d32fdc8fcb18017f2a6afb2cbb985b87b2a1bdb8bb5'
+
+          def bounded_git(arguments, limit):
+              process = subprocess.Popen(['git','--literal-pathspecs',*arguments],stdout=subprocess.PIPE,stderr=subprocess.DEVNULL)
+              result = bytearray()
+              deadline = time.monotonic()+10
+              try:
+                  while True:
+                      remaining = deadline-time.monotonic()
+                      assert remaining > 0, 'carrier Git read deadline'
+                      ready, _, _ = select.select([process.stdout],[],[],remaining)
+                      assert ready, 'carrier Git read deadline'
+                      part = os.read(process.stdout.fileno(),min(4096,limit+1-len(result)))
+                      if not part: break
+                      result.extend(part)
+                      assert len(result) <= limit, 'carrier Git read bound'
+                  assert process.wait(timeout=max(.001,deadline-time.monotonic())) == 0, 'carrier Git object unavailable'
+                  return bytes(result)
+              finally:
+                  process.stdout.close()
+                  if process.poll() is None:
+                      process.kill()
+                      process.wait(timeout=2)
+
+          def load_carrier(encoded, repository_authorized, workflow_sha):
+              assert type(encoded) is str, 'carrier input type'
+              if encoded != '':
+                  assert len(encoded) <= MAX_ENCODED, 'API carrier bound'
+                  return encoded, MAX_ENCODED, {'origin':'api','workflowSHA':None,'encodedSHA256':hashlib.sha256(encoded.encode('ascii')).hexdigest()}
+              assert repository_authorized is True, 'repository carrier requires explicit consume authorization'
+              assert type(workflow_sha) is str and re.fullmatch('[0-9a-f]{40}',workflow_sha), 'exact workflow SHA required'
+              head = bounded_git(['rev-parse','HEAD'],41)
+              assert bounded_git(['cat-file','-t',workflow_sha],7) == b'commit\n', 'workflow object must be a commit'
+              row = bounded_git(['ls-tree','-z',workflow_sha,'--',FIXTURE_PATH],512)
+              fields = row.split(b'\t')
+              assert len(fields) == 2 and fields[1] == FIXTURE_PATH.encode('ascii')+b'\0', 'one fixed fixture entry required'
+              metadata = fields[0].split()
+              assert len(metadata) == 3 and metadata[:2] == [b'100644',b'blob'], 'fixture must be a regular immutable blob'
+              object_id = metadata[2].decode('ascii')
+              assert re.fullmatch('[0-9a-f]{40}',object_id), 'fixture object identity'
+              size = bounded_git(['cat-file','-s',object_id],32)
+              assert size == str(FIXTURE_BYTES).encode('ascii')+b'\n', 'exact fixture blob length'
+              raw = bounded_git(['cat-file','blob',object_id],FIXTURE_BYTES)
+              assert len(raw) == FIXTURE_BYTES and hashlib.sha256(raw).hexdigest() == FIXTURE_SHA256, 'exact fixture bytes/hash'
+              assert bounded_git(['rev-parse','HEAD'],41) == head, 'product checkout changed during carrier read'
+              encoded = raw.decode('ascii')
+              return encoded, MAX_REPOSITORY_ENCODED, {'origin':'repository','workflowSHA':workflow_sha,'fixturePath':FIXTURE_PATH,'blob':object_id,'encodedSHA256':FIXTURE_SHA256}
+
           MAGIC = b'R363T2\0'
           MAX_SOURCE = 1 << 20
           MAX_FRAME = 1 << 20
           MAX_XZ = 1 << 17
           MAX_ENCODED = 65535
+          MAX_REPOSITORY_ENCODED = 65749
           MAX_RECORDS = 1024
 
           def decode_frame(frame):
@@ -88,8 +149,9 @@ jobs:
               assert source, 'empty source'
               return source
 
-          def decode(encoded, pins):
-              assert type(encoded) is str and len(encoded) == pins['encodedBytes'] <= MAX_ENCODED
+          def decode(encoded, pins, encoded_bound=MAX_ENCODED):
+              assert encoded_bound in (MAX_ENCODED,MAX_REPOSITORY_ENCODED), 'known transport origin bound'
+              assert type(encoded) is str and len(encoded) == pins['encodedBytes'] <= encoded_bound
               compressed = base64.b85decode(encoded.encode('ascii'))
               assert base64.b85encode(compressed).decode('ascii') == encoded, 'noncanonical base85'
               assert len(compressed) == pins['transportBytes'] and hashlib.sha256(compressed).hexdigest() == pins['transportSHA256']
@@ -103,11 +165,14 @@ jobs:
               assert len(source) == pins['sourceBytes'] and hashlib.sha256(source).hexdigest() == pins['sourceSHA256'], 'exact source length/hash'
               return source
 
-          pins = {'encodedBytes': 65444, 'frameBytes': 209743, 'xzBytes': 52332, 'transportBytes': 52355, 'transportSHA256': '514ceaef7e8dc8d5ec1db5d7d1d46f8cb1ceb993a1088c47b0c2053ffd4bad72', 'sourceBytes': 218014, 'sourceSHA256': 'a62f7d2e4ad22a37b50cf103da2e10d21cc69f7b663ac97d5963760f3fcb4b8a'}
-          candidate = decode(os.environ['CURSOR_CARRIER_B64'],pins)
+          pins = {'encodedBytes': 65749, 'frameBytes': 211117, 'xzBytes': 52576, 'transportBytes': 52599, 'transportSHA256': '708c3649045eebce7f2cb815cedf2fb3045aafb305ff14884bc4e8515d3eeee8', 'sourceBytes': 219388, 'sourceSHA256': '12df814b18960a9087228781b94e1b9e5fb169715cd1cd84aaaeec90259a3deb'}
+          encoded, encoded_bound, origin = load_carrier(os.environ['CURSOR_CARRIER_B64'],os.environ['CURSOR_REPOSITORY_MODE'] == 'true',os.environ['CURSOR_FIXTURE_SHA'])
+          candidate = decode(encoded,pins,encoded_bound)
+          print(json.dumps({'carrierTransport':origin,'sourceSHA256':pins['sourceSHA256'],'transportSHA256':pins['transportSHA256']},sort_keys=True),flush=True)
           compile(candidate,'native_case.py','exec')
           target = pathlib.Path(tempfile.mkdtemp(prefix='TEST-cursor-carrier-',dir=os.environ['RUNNER_TEMP']))
           (target/'native_case.py').write_bytes(candidate)
+          (target/'carrier-transport.json').write_text(json.dumps({'origin':origin,'sourceSHA256':pins['sourceSHA256'],'transportSHA256':pins['transportSHA256']},sort_keys=True)+'\n')
           with open(os.environ['GITHUB_ENV'],'a') as environment:
               environment.write('CURSOR_CARRIER='+str(target/'native_case.py')+'\n')
           PY_VERIFY
@@ -136,7 +201,7 @@ jobs:
           import sys
           import time
 
-          SOURCE_SHA = 'a62f7d2e4ad22a37b50cf103da2e10d21cc69f7b663ac97d5963760f3fcb4b8a'
+          SOURCE_SHA = '12df814b18960a9087228781b94e1b9e5fb169715cd1cd84aaaeec90259a3deb'
           LIMIT = 1 << 20
           DEADLINE = time.monotonic() + 30
 
@@ -442,10 +507,17 @@ jobs:
           persist-credentials: false
       - name: Require source checkpoint merged into main
         timeout-minutes: 1
+        env:
+          CURSOR_FIXTURE_SHA: ${{ github.sha }}
+          CURSOR_REPOSITORY_MODE: ${{ inputs.cursor_carrier_b64 == '' && inputs.consume_cursor_e == true }}
         run: |
           set -euo pipefail
           git fetch --no-tags origin main
           git merge-base --is-ancestor 9f014e72af510783d58d00ad3d2db455a2f8117b FETCH_HEAD
+          if [ "$CURSOR_REPOSITORY_MODE" = "true" ]; then
+            [[ "$CURSOR_FIXTURE_SHA" =~ ^[0-9a-f]{40}$ ]]
+            git fetch --no-tags origin "$CURSOR_FIXTURE_SHA"
+          fi
       - uses: actions/setup-go@v7
         timeout-minutes: 3
         with:
@@ -454,14 +526,67 @@ jobs:
         timeout-minutes: 1
         env:
           CURSOR_CARRIER_B64: ${{ inputs.cursor_carrier_b64 }}
+          CURSOR_FIXTURE_SHA: ${{ github.sha }}
+          CURSOR_REPOSITORY_MODE: ${{ inputs.cursor_carrier_b64 == '' && inputs.consume_cursor_e == true }}
         run: |
           python3 -B -S - <<'PY_VERIFY'
-          import base64, hashlib, lzma, struct, zlib, os, pathlib, tempfile, subprocess
+          import base64, hashlib, lzma, struct, zlib, os, pathlib, tempfile, subprocess, json, re, select, time
+          FIXTURE_PATH = '.github/fixtures/cursor-installed-e/native-case.b85'
+          FIXTURE_BYTES = 65749
+          FIXTURE_SHA256 = '04becf0a1f39c44bb1785d32fdc8fcb18017f2a6afb2cbb985b87b2a1bdb8bb5'
+
+          def bounded_git(arguments, limit):
+              process = subprocess.Popen(['git','--literal-pathspecs',*arguments],stdout=subprocess.PIPE,stderr=subprocess.DEVNULL)
+              result = bytearray()
+              deadline = time.monotonic()+10
+              try:
+                  while True:
+                      remaining = deadline-time.monotonic()
+                      assert remaining > 0, 'carrier Git read deadline'
+                      ready, _, _ = select.select([process.stdout],[],[],remaining)
+                      assert ready, 'carrier Git read deadline'
+                      part = os.read(process.stdout.fileno(),min(4096,limit+1-len(result)))
+                      if not part: break
+                      result.extend(part)
+                      assert len(result) <= limit, 'carrier Git read bound'
+                  assert process.wait(timeout=max(.001,deadline-time.monotonic())) == 0, 'carrier Git object unavailable'
+                  return bytes(result)
+              finally:
+                  process.stdout.close()
+                  if process.poll() is None:
+                      process.kill()
+                      process.wait(timeout=2)
+
+          def load_carrier(encoded, repository_authorized, workflow_sha):
+              assert type(encoded) is str, 'carrier input type'
+              if encoded != '':
+                  assert len(encoded) <= MAX_ENCODED, 'API carrier bound'
+                  return encoded, MAX_ENCODED, {'origin':'api','workflowSHA':None,'encodedSHA256':hashlib.sha256(encoded.encode('ascii')).hexdigest()}
+              assert repository_authorized is True, 'repository carrier requires explicit consume authorization'
+              assert type(workflow_sha) is str and re.fullmatch('[0-9a-f]{40}',workflow_sha), 'exact workflow SHA required'
+              head = bounded_git(['rev-parse','HEAD'],41)
+              assert bounded_git(['cat-file','-t',workflow_sha],7) == b'commit\n', 'workflow object must be a commit'
+              row = bounded_git(['ls-tree','-z',workflow_sha,'--',FIXTURE_PATH],512)
+              fields = row.split(b'\t')
+              assert len(fields) == 2 and fields[1] == FIXTURE_PATH.encode('ascii')+b'\0', 'one fixed fixture entry required'
+              metadata = fields[0].split()
+              assert len(metadata) == 3 and metadata[:2] == [b'100644',b'blob'], 'fixture must be a regular immutable blob'
+              object_id = metadata[2].decode('ascii')
+              assert re.fullmatch('[0-9a-f]{40}',object_id), 'fixture object identity'
+              size = bounded_git(['cat-file','-s',object_id],32)
+              assert size == str(FIXTURE_BYTES).encode('ascii')+b'\n', 'exact fixture blob length'
+              raw = bounded_git(['cat-file','blob',object_id],FIXTURE_BYTES)
+              assert len(raw) == FIXTURE_BYTES and hashlib.sha256(raw).hexdigest() == FIXTURE_SHA256, 'exact fixture bytes/hash'
+              assert bounded_git(['rev-parse','HEAD'],41) == head, 'product checkout changed during carrier read'
+              encoded = raw.decode('ascii')
+              return encoded, MAX_REPOSITORY_ENCODED, {'origin':'repository','workflowSHA':workflow_sha,'fixturePath':FIXTURE_PATH,'blob':object_id,'encodedSHA256':FIXTURE_SHA256}
+
           MAGIC = b'R363T2\0'
           MAX_SOURCE = 1 << 20
           MAX_FRAME = 1 << 20
           MAX_XZ = 1 << 17
           MAX_ENCODED = 65535
+          MAX_REPOSITORY_ENCODED = 65749
           MAX_RECORDS = 1024
 
           def decode_frame(frame):
@@ -493,8 +618,9 @@ jobs:
               assert source, 'empty source'
               return source
 
-          def decode(encoded, pins):
-              assert type(encoded) is str and len(encoded) == pins['encodedBytes'] <= MAX_ENCODED
+          def decode(encoded, pins, encoded_bound=MAX_ENCODED):
+              assert encoded_bound in (MAX_ENCODED,MAX_REPOSITORY_ENCODED), 'known transport origin bound'
+              assert type(encoded) is str and len(encoded) == pins['encodedBytes'] <= encoded_bound
               compressed = base64.b85decode(encoded.encode('ascii'))
               assert base64.b85encode(compressed).decode('ascii') == encoded, 'noncanonical base85'
               assert len(compressed) == pins['transportBytes'] and hashlib.sha256(compressed).hexdigest() == pins['transportSHA256']
@@ -508,8 +634,10 @@ jobs:
               assert len(source) == pins['sourceBytes'] and hashlib.sha256(source).hexdigest() == pins['sourceSHA256'], 'exact source length/hash'
               return source
 
-          pins = {'encodedBytes': 65444, 'frameBytes': 209743, 'xzBytes': 52332, 'transportBytes': 52355, 'transportSHA256': '514ceaef7e8dc8d5ec1db5d7d1d46f8cb1ceb993a1088c47b0c2053ffd4bad72', 'sourceBytes': 218014, 'sourceSHA256': 'a62f7d2e4ad22a37b50cf103da2e10d21cc69f7b663ac97d5963760f3fcb4b8a'}
-          candidate = decode(os.environ['CURSOR_CARRIER_B64'],pins)
+          pins = {'encodedBytes': 65749, 'frameBytes': 211117, 'xzBytes': 52576, 'transportBytes': 52599, 'transportSHA256': '708c3649045eebce7f2cb815cedf2fb3045aafb305ff14884bc4e8515d3eeee8', 'sourceBytes': 219388, 'sourceSHA256': '12df814b18960a9087228781b94e1b9e5fb169715cd1cd84aaaeec90259a3deb'}
+          encoded, encoded_bound, origin = load_carrier(os.environ['CURSOR_CARRIER_B64'],os.environ['CURSOR_REPOSITORY_MODE'] == 'true',os.environ['CURSOR_FIXTURE_SHA'])
+          candidate = decode(encoded,pins,encoded_bound)
+          print(json.dumps({'carrierTransport':origin,'sourceSHA256':pins['sourceSHA256'],'transportSHA256':pins['transportSHA256']},sort_keys=True),flush=True)
           compile(candidate,'native_case.py','exec')
           parent = pathlib.Path(subprocess.check_output(
               ['/usr/bin/sudo', '-n', '/usr/bin/python3', '-B', '-S', '-c',
@@ -521,6 +649,7 @@ jobs:
           target = parent/'carrier';target.mkdir(mode=0o755)
           target.chmod(0o755)
           (target/'native_case.py').write_bytes(candidate)
+          (target/'carrier-transport.json').write_text(json.dumps({'origin':origin,'sourceSHA256':pins['sourceSHA256'],'transportSHA256':pins['transportSHA256']},sort_keys=True)+'\n')
           (target/'native_case.py').chmod(0o644)
           with open(os.environ['GITHUB_ENV'],'a') as environment:
               environment.write('CURSOR_CARRIER='+str(target/'native_case.py')+'\n')
@@ -1086,7 +1215,7 @@ jobs:
               parser.add_argument('--gid', type=int)
               raise SystemExit(main(parser.parse_args()))
           PY_EVIDENCE
-          sudo /usr/bin/python3 -B -S "$export_dir/case_evidence.py" --runner-temp "$CURSOR_CASE_PARENT" --source-sha a62f7d2e4ad22a37b50cf103da2e10d21cc69f7b663ac97d5963760f3fcb4b8a --destination "$export_dir" --uid "$(id -u)" --gid "$(id -g)"
+          sudo /usr/bin/python3 -B -S "$export_dir/case_evidence.py" --runner-temp "$CURSOR_CASE_PARENT" --source-sha 12df814b18960a9087228781b94e1b9e5fb169715cd1cd84aaaeec90259a3deb --destination "$export_dir" --uid "$(id -u)" --gid "$(id -g)"
       - name: Always retain SAME-case TEST evidence and bounded preparation records
         if: always()
         timeout-minutes: 3
