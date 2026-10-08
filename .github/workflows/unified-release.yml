@@ -71,7 +71,7 @@ jobs:
           test "$(jq -er '.version' .codex-plugin/plugin.json)" = 1.48.4
           test "$(jq -er '.metadata.version' .claude-plugin/marketplace.json)" = 1.48.4
           test "$(jq -er '.plugins[] | select(.name=="claude-notifications-go") | .version' .claude-plugin/marketplace.json)" = 1.48.4
-          rg '^## \[1\.48\.4\]' CHANGELOG.md
+          grep -E '^## \[1\.48\.4\]' CHANGELOG.md
   build-matrix:
     name: Build ${{ matrix.platform }} ${{ matrix.arch }}
     needs: verify-version
