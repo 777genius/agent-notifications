@@ -261,7 +261,12 @@ func bootstrapIntentSummary(i confirmedBootstrapIntent, policy map[string]json.R
 		} else {
 			raw = append(raw, "  Update click-navigation preferences as shown below.")
 			if value, ok := policy["enabled"]; ok {
-				raw = append(raw, "  Current service enabled setting (kept): "+string(value))
+				shown := string(value)
+				var enabled *bool
+				if json.Unmarshal(value, &enabled) == nil && enabled != nil {
+					shown = bootstrapOnOff(*enabled)
+				}
+				raw = append(raw, "  Notification service: "+shown+" (kept)")
 			}
 		}
 		if c.PreserveEnabled {
