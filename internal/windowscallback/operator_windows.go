@@ -32,20 +32,6 @@ func Deadline(ctx context.Context) uint64 {
 	return BootMilliseconds() + uint64(remaining/time.Millisecond)
 }
 
-type cappedOutput struct {
-	bytes.Buffer
-	overflow bool
-}
-
-func (b *cappedOutput) Write(p []byte) (int, error) {
-	n := len(p)
-	if b.Len()+n > 256 {
-		b.overflow = true
-		return n, nil
-	}
-	return b.Buffer.Write(p)
-}
-
 // Operator executes exclusively the physically guarded retained helper. The
 // fixed command vocabulary and stdin envelope contain no paths/URI/commands.
 func (g *Custody) Operator(ctx context.Context, mode string, fields []string, end uint64) (Observation, error) {
@@ -100,9 +86,9 @@ func (g *Custody) Operator(ctx context.Context, mode string, fields []string, en
 	child.WaitDelay = 5 * time.Second
 	child.Env = []string{}
 	child.Stdin = bytes.NewReader(input)
-	var output cappedOutput
+	var output, stderr cappedOutput
 	child.Stdout = &output
-	child.Stderr = &cappedOutput{}
+	child.Stderr = &stderr
 	if budget(ctx, end) != nil {
 		if fence != nil {
 			_ = fence.clear(0, -1)
@@ -168,7 +154,11 @@ func (g *Custody) Operator(ctx context.Context, mode string, fields []string, en
 	if fence != nil {
 		defer func() {
 			if fence.held != 0 {
-				_ = fence.collected(child.Process.Pid, child.ProcessState.ExitCode())
+				if fence.collected(child.Process.Pid, child.ProcessState.ExitCode()) == nil {
+					if fields := collectedOperatorDiagnostic(err, child.Process.Pid, child.ProcessState.ExitCode(), mutating, &output, &stderr); fields != nil {
+						_ = fence.failure(child.Process.Pid, child.ProcessState.ExitCode(), fields)
+					}
+				}
 			}
 		}()
 	}

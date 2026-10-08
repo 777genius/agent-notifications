@@ -198,6 +198,15 @@ static bool registryContracts(){
   testCreate(classes.h,L"AppUserModelId",denied,&denySA,0,KEY_READ|WRITE_DAC|DELETE);
   const auto deniedSecurity=security(denied.h);
   refused([&]{applyApp(g,end);},end);
+  // Breakage: the genuine denied shared-parent API loses numeric provenance.
+  OperatorDiagnostic diagnostic;
+  bool classified=false;
+  try{SharedRegistryParent observed;observed.open(L"AppUserModelId",end,&diagnostic);}
+  catch(const RegistryFailure& error){
+    require(error.code==ERROR_ACCESS_DENIED&&!strcmp(error.phase,"shared_container_open"));
+    classified=true;diagnostic.emit();
+  }
+  require(classified);
   missing(denied.h,wide(g.snapshot.aumid));
   require(security(denied.h)==deniedSecurity);
   // TEST-owned ACL cleanup only, after the production refusal assertion.
