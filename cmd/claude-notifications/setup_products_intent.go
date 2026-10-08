@@ -241,7 +241,7 @@ func bootstrapIntentSummary(i confirmedBootstrapIntent, policy map[string]json.R
 			}
 		}
 		raw = append(raw, "  "+productLabels[u.Product]+": "+strings.Join(parts, ", "))
-		if u.Native {
+		if u.Native || u.Product == "cursor" {
 			raw = append(raw, "    Channels: Desktop "+bootstrapOnOff(u.Desktop)+", Webhook "+bootstrapOnOff(u.Webhook))
 		}
 	}

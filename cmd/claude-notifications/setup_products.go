@@ -193,7 +193,7 @@ func runSetupProductsContext(ctx context.Context, args []string, input io.Reader
 	if a.Operation == "channels" {
 		products := []string{}
 		for _, id := range a.Products {
-			if id == "opencode" || id == "gemini" {
+			if id == "opencode" || id == "gemini" || id == "cursor" {
 				products = append(products, productLabels[id])
 			}
 		}

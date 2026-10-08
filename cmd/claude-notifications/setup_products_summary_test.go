@@ -18,27 +18,29 @@ func TestSetupProductsChannelsDefaults(t *testing.T) {
 	for _, key := range []string{"HOME", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "OPENCODE_CONFIG_DIR", "GEMINI_CLI_HOME", "AGENT_NOTIFICATIONS_CONTROL_ROOT"} {
 		t.Setenv(key, filepath.Join(root, key))
 	}
-	for _, tc := range []struct{ name, input, want string }{
-		{"enter", "\n", "desktop\n"},
-		{"both", "desktop,webhook\n", "desktop,webhook\n"},
-		{"webhook-only", "webhook\n", "webhook\n"},
-		{"cancel", "cancel\n", ""},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			var out, prompt bytes.Buffer
-			code := runSetupProducts([]string{"channels", "--products", "claude,codex,opencode,gemini"}, strings.NewReader(tc.input), &out, &prompt)
-			if code != 0 || out.String() != tc.want {
-				t.Fatalf("code=%d output=%q prompt=%s", code, out.String(), prompt.String())
-			}
-			for _, want := range []string{"Notification channels for OpenCode, Gemini CLI", "Desktop notifications (recommended)", "requires a configured destination"} {
-				if !strings.Contains(prompt.String(), want) {
-					t.Fatalf("missing %q: %s", want, prompt.String())
+	for _, product := range []struct{ ids, title string }{{"claude,codex,opencode,gemini", "Notification channels for OpenCode, Gemini CLI"}, {"cursor", "Notification channels for Cursor CLI (explicit profile)"}} {
+		for _, tc := range []struct{ name, input, want string }{
+			{"enter", "\n", "desktop\n"},
+			{"both", "desktop,webhook\n", "desktop,webhook\n"},
+			{"webhook-only", "webhook\n", "webhook\n"},
+			{"cancel", "cancel\n", ""},
+		} {
+			t.Run(product.ids+"/"+tc.name, func(t *testing.T) {
+				var out, prompt bytes.Buffer
+				code := runSetupProducts([]string{"channels", "--products", product.ids}, strings.NewReader(tc.input), &out, &prompt)
+				if code != 0 || out.String() != tc.want {
+					t.Fatalf("code=%d output=%q prompt=%s", code, out.String(), prompt.String())
 				}
-			}
-			if tc.want == "" && !strings.Contains(prompt.String(), "Installation cancelled. No changes were applied.") {
-				t.Fatal("cancellation was silent")
-			}
-		})
+				for _, want := range []string{product.title, "Desktop notifications (recommended)", "requires a configured destination"} {
+					if !strings.Contains(prompt.String(), want) {
+						t.Fatalf("missing %q: %s", want, prompt.String())
+					}
+				}
+				if tc.want == "" && !strings.Contains(prompt.String(), "Installation cancelled. No changes were applied.") {
+					t.Fatal("cancellation was silent")
+				}
+			})
+		}
 	}
 	entries, err := os.ReadDir(root)
 	if err != nil || len(entries) != 0 {
@@ -60,6 +62,7 @@ func TestBootstrapReadableSummary(t *testing.T) {
 		{Product: "codex", Hooks: true, PreservedOff: true},
 		{Product: "opencode", Native: true, Desktop: true},
 		{Product: "gemini", Native: true, Desktop: true},
+		{Product: "cursor", MCP: true, Skill: true, Webhook: true},
 	}
 	for _, key := range intentScalarKeys {
 		i.Scopes[key] = []byte("/TEST " + key + "/exact-end")
@@ -73,7 +76,8 @@ func TestBootstrapReadableSummary(t *testing.T) {
 	}
 	shown := strings.Join(rows, "\n")
 	for _, want := range []string{
-		"Installation summary", "Claude Code: automatic notification hooks, agent-notify MCP, agent-notify skill", "Codex: automatic notification hooks, agent-notify stays off",
+		"Installation summary", "Claude: automatic notification hooks, agent-notify MCP, agent-notify skill", "Codex: automatic notification hooks, agent-notify stays off",
+		"Cursor CLI (explicit profile): agent-notify MCP, agent-notify skill\n    Channels: Desktop off, Webhook on", "Cursor workspace: /TEST scope-root/exact-end", "Cursor agent executable: /TEST client-executable/exact-end",
 		"Channels: Desktop on, Webhook off", "channels use your existing notification settings", "Notification service: off (kept)",
 		`raw-\xff-\x1b[31m/\u202e/end`, `Codex home: \"/TEST trailing \"`, `Desktop application: \"/TEST saved \" (kept)`,
 		i.Provenance.SourceCommit, i.Provenance.SHA256, "partial installation", "enabled destination",

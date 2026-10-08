@@ -67,6 +67,7 @@ func bootstrapScopeLabel(key string) string {
 		"gemini-config-root": "Gemini settings", "control-root": "Shared installation state", "runtime-root": "Notification runtime",
 		"global-config": "Shared notification settings", "claude-executable": "Claude Code executable", "codex-executable": "Codex executable",
 		"opencode-executable": "OpenCode executable", "gemini-executable": "Gemini executable",
+		"scope-root": "Cursor workspace", "client-executable": "Cursor agent executable",
 	}
 	if label, ok := labels[key]; ok {
 		return label
