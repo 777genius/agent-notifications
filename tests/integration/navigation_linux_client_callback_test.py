@@ -81,7 +81,7 @@ def peer(path, expected_pid, expected_birth):
         os.close(fd)
 
 
-def context():
+def context(*, shipping_pointer=False):
     if os.getuid() != 1000 or Path('/.dockerenv').exists() or len(sys.argv) != 1:
         raise RuntimeError('offline_TEST_guest_callback_only')
     mounts = [row.split() for row in Path('/proc/mounts').read_text().splitlines()]
@@ -91,7 +91,10 @@ def context():
         raise RuntimeError('TEST_seed_marker_required')
     if sorted(p.name for p in Path('/sys/class/net').iterdir()) != ['lo']:
         raise RuntimeError('offline_guest_no_NIC_required')
-    if ROOT.resolve() != ROOT or ROOT.stat().st_uid != 0 or stat.S_IMODE(ROOT.stat().st_mode) != 0o710:
+    if type(shipping_pointer) is not bool:
+        raise RuntimeError('explicit_TEST_pointer_contract_required')
+    expected_root_mode = 0o750 if shipping_pointer else 0o710
+    if ROOT.resolve() != ROOT or ROOT.stat().st_uid != 0 or ROOT.stat().st_gid != 1000 or stat.S_IMODE(ROOT.stat().st_mode) != expected_root_mode:
         raise RuntimeError('root_owned_TEST_directory_required')
     spec_path = ROOT / 'callback-spec.json'
     if spec_path.is_symlink() or spec_path.stat().st_uid != 0 or stat.S_IMODE(spec_path.stat().st_mode) != 0o444 or spec_path.stat().st_size > 8192:
