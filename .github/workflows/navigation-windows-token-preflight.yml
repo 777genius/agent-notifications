@@ -1,0 +1,72 @@
+name: Navigation Windows read-only token prerequisite
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/navigation-windows-token-preflight.yml'
+      - 'tests/integration/navigation_windows_token_probe.cpp'
+      - 'tests/integration/navigation_windows_token_preflight.ts'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: token-preflight-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  token-prerequisite:
+    if: github.repository == '777genius/agent-notifications' && github.run_attempt == 1
+    runs-on: windows-11-vs2026-arm
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # repository pin
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # repository pin
+        with:
+          node-version: '24.21.0'
+      - name: Locked tooling and strict fixture typecheck
+        shell: pwsh
+        env:
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          if ((git rev-parse HEAD) -cne $env:SOURCE_SHA) { throw 'source mismatch' }
+          npm ci --prefix opencode-plugin --ignore-scripts --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { throw 'locked tooling install failed' }
+          & ./opencode-plugin/node_modules/.bin/tsc.cmd --ignoreConfig --noEmit --strict --target ES2023 --module ESNext --moduleResolution bundler --types node --typeRoots ./opencode-plugin/node_modules/@types tests/integration/navigation_windows_token_preflight.ts
+          if ($LASTEXITCODE -ne 0) { throw 'fixture typecheck failed' }
+      - name: Compile Win32-only ARM64 TEST probe
+        id: compile
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP ('TEST-token-compile-' + [guid]::NewGuid().ToString())
+          New-Item -ItemType Directory -Path $dir -ErrorAction Stop | Out-Null
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products '*' -property installationPath
+          if (!$vs) { throw 'Visual Studio absent' }
+          $source = Join-Path $env:GITHUB_WORKSPACE 'tests\integration\navigation_windows_token_probe.cpp'
+          $exe = Join-Path $dir 'TEST-token-probe.exe'
+          $obj = Join-Path $dir 'TEST-token-probe.obj'
+          $cmd = '"' + $vs + '\Common7\Tools\VsDevCmd.bat" -arch=arm64 -host_arch=arm64 && cl /nologo /EHsc /W4 /std:c++20 /DUNICODE /D_UNICODE "' + $source + '" /Fe:"' + $exe + '" /Fo:"' + $obj + '" /link advapi32.lib bcrypt.lib user32.lib wtsapi32.lib'
+          & cmd /d /s /c $cmd
+          if ($LASTEXITCODE -ne 0) { throw 'Win32 TEST probe compile failed' }
+          "exe=$exe" >> $env:GITHUB_OUTPUT
+          "sha256=$((Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+      - name: Measure own TEST token once (explicit dispatch only)
+        if: github.event_name == 'workflow_dispatch'
+        id: measure
+        shell: pwsh
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+          TOKEN_PROBE_EXE: ${{ steps.compile.outputs.exe }}
+          TOKEN_PROBE_SHA256: ${{ steps.compile.outputs.sha256 }}
+        run: |
+          if ((git rev-parse HEAD) -cne $env:SOURCE_SHA) { throw 'source mismatch' }
+          node tests/integration/navigation_windows_token_preflight.ts
+          if ($LASTEXITCODE -ne 0) { throw 'token prerequisite unknown; retained evidence; no retry' }
+      - name: Preserve own TEST evidence only
+        if: always() && github.event_name == 'workflow_dispatch' && steps.measure.outputs.evidence_root != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # repository pin
+        with:
+          name: TEST-token-preflight-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.measure.outputs.evidence_root }}/token-evidence.json
+          if-no-files-found: error
+          retention-days: 14
