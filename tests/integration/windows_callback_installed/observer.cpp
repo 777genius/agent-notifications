@@ -20,6 +20,8 @@
 #include <winrt/Windows.System.h>
 #include <thread>
 #include <atomic>
+#include <algorithm>
+#include <utility>
 #include <optional>
 #include <iostream>
 #include "../../../native/windows-callback/custody.h"
@@ -392,6 +394,12 @@ static void packages(const std::wstring& expected, bool absent) {
  }
  require(count == (absent ? 0U : 1U)); budget();
 }
+// Only decoded ordinary DOS output accepts '/' as a Windows separator.
+// Never use this value to open a file or normalize the canonical held path.
+static std::wstring dosSeparators(std::wstring decoded) {
+ std::replace(decoded.begin(),decoded.end(),L'/',L'\\');
+ return decoded;
+}
 // The physical file/directory handles stay canonical and held. Only the URI
 // adapter strips the documented extended DOS prefix, never UNC/device aliases.
 static winrt::Windows::Foundation::Uri deploymentUri(const std::wstring& canonical) {
@@ -412,7 +420,7 @@ static winrt::Windows::Foundation::Uri deploymentUri(const std::wstring& canonic
  winrt::check_hresult(PathCreateFromUrlW(target.AbsoluteUri().c_str(),roundtrip,&n,0));
  inertUriNote("new_roundtrip",roundtrip); inertUriNote("expected_dos",dos);
  archiveAt("deployment_file_uri_exact_roundtrip_contract");
- require(std::wstring(roundtrip) == dos);
+ require(dosSeparators(roundtrip) == dos);
  return target;
 }
 // Breakage: the actual URL/WinRT boundary refuses extended DOS paths, or loses
@@ -443,7 +451,24 @@ static void uriContracts() {
  const auto target = deploymentUri(canonical);
  wchar_t roundtrip[MAX_PATH]{}; DWORD n = MAX_PATH;
  winrt::check_hresult(PathCreateFromUrlW(target.AbsoluteUri().c_str(),roundtrip,&n,0));
- require(std::wstring(roundtrip) == L"C:\\TEST installed # %20 \u03a9\u4e2d\\client.msix");
+ require(dosSeparators(roundtrip) == L"C:\\TEST installed # %20 \u03a9\u4e2d\\client.msix");
+ // Breakage: separator conversion also decodes percent text, folds case,
+ // resolves dot segments, changes drives, or merges independently named paths.
+ auto decoded = [](const winrt::Windows::Foundation::Uri& uri) {
+  wchar_t path[MAX_PATH]{}; DWORD n = MAX_PATH;
+  winrt::check_hresult(PathCreateFromUrlW(uri.AbsoluteUri().c_str(),path,&n,0));
+  return dosSeparators(path);
+ };
+ for (const auto& pair : std::array<std::pair<const wchar_t*,const wchar_t*>,3>{{
+   {L"\\\\?\\C:\\TEST%20value\\client.msix",L"\\\\?\\C:\\TEST value\\client.msix"},
+   {L"\\\\?\\C:\\TEST%23value\\client.msix",L"\\\\?\\C:\\TEST#value\\client.msix"},
+   {L"\\\\?\\C:\\TEST%2Fvalue\\client.msix",L"\\\\?\\C:\\TEST\\value\\client.msix"}}}) {
+  const auto left = deploymentUri(pair.first), right = deploymentUri(pair.second);
+  require(left.AbsoluteUri() != right.AbsoluteUri() && decoded(left) != decoded(right));
+ }
+ const std::wstring expected = L"C:\\TEST\\client.msix";
+ for (const auto changed : {L"D:/TEST/client.msix",L"C:/test/client.msix",L"C:/TEST/./client.msix",L"C:/OTHER/client.msix"})
+  require(dosSeparators(changed) != expected);
  for (const auto invalid : {L"\\\\?\\UNC\\server\\share\\client.msix",L"\\\\.\\C:\\client.msix",L"C:\\client.msix"}) {
   bool rejected = false;
   try { deploymentUri(invalid); }
