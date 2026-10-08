@@ -354,11 +354,11 @@ func Commit(ctx context.Context, r Request) (result Ledger, resultErr error) {
 	}
 	unlock, err := lockComponent(ctx, filepath.Join(root, ".component-install.lock"))
 	if err != nil {
-		return Ledger{}, err
+		return Ledger{}, fmt.Errorf("component-lock admission: %w", err)
 	}
 	defer unlock()
 	if err := privateDirectory(root); err != nil {
-		return Ledger{}, err
+		return Ledger{}, fmt.Errorf("control-directory admission: %w", err)
 	}
 	// Match policy lock identity in the same physical spelling as ConfigPaths.
 	// Supported Darwin /var aliases must not turn LockExisting into Lock.
@@ -412,7 +412,7 @@ func Commit(ctx context.Context, r Request) (result Ledger, resultErr error) {
 		}
 		release, e := lockConfig(ctx, p+".lock")
 		if e != nil {
-			return Ledger{}, e
+			return Ledger{}, fmt.Errorf("config-lock admission: %w", e)
 		}
 		defer release()
 	}
