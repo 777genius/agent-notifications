@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { closeSync, fstatSync, lstatSync, openSync, readSync, realpathSync, writeFileSync } from 'node:fs';
 import type { Stats } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
+import { performance } from 'node:perf_hooks';
 
 const [outArg, packagesArg, lockArg, dotnetArg, ...extra] = process.argv.slice(2);
 const out = resolve(outArg ?? '.');
@@ -57,12 +58,14 @@ function run(dotnet: string, phase: string, args: string[], timeout: number): st
   Object.assign(env, { DOTNET_CLI_UI_LANGUAGE: 'en-US', DOTNET_CLI_HOME: out,
     DOTNET_GENERATE_ASPNET_CERTIFICATE: 'false', DOTNET_CLI_TELEMETRY_OPTOUT: '1',
     DOTNET_ADD_GLOBAL_TOOLS_TO_PATH: 'false', DOTNET_NOLOGO: '1' });
+  const started = performance.now();
   const child = spawnSync(dotnet, args, { cwd: out, env, timeout, maxBuffer: 65_536, windowsHide: true });
+  const elapsedMs = performance.now() - started;
   const stdout = child.stdout ?? Buffer.alloc(0), stderr = child.stderr ?? Buffer.alloc(0);
   for (const [label, data] of [['stdout', stdout], ['stderr', stderr]] as const) {
     writeFileSync(join(out, `${target.prefix}-${phase}.${label}`), data.subarray(0, 65_536), { flag: 'wx' });
   }
-  (report.steps as unknown[]).push({ phase, pid: child.pid, status: child.status, signal: child.signal,
+  (report.steps as unknown[]).push({ phase, configuredTimeoutMs: timeout, elapsedMs, pid: child.pid, status: child.status, signal: child.signal,
     errorCode: child.error ? (child.error as NodeJS.ErrnoException).code ?? 'error' : null,
     collected: !child.error && !child.signal && child.status !== null,
     stdoutTruncated: stdout.length > 65_536, stderrTruncated: stderr.length > 65_536,
@@ -82,7 +85,7 @@ try {
   if (packages !== join(resolve(process.env.RUNNER_TEMP!), 'TEST-windows-appsdk-packages') || basename(dotnet).toLowerCase() !== 'dotnet.exe') throw new Error('unexpected input path');
   for (const path of [packages, join(packages, target.folder), join(packages, target.folder, target.version)]) physical(path, true);
   report.dotnetSHA256 = hashFile(dotnet, 32 << 20);
-  const version = run(dotnet, 'version', ['--version'], 10_000).trim();
+  const version = run(dotnet, 'version', ['--version'], target.prefix === 'runtime' ? 30_000 : 10_000).trim();
   if (!/^(?:1[0-9]|[2-9][0-9])\.\d+\.\d+$/.test(version)) throw new Error('installed stable .NET SDK10+ unavailable');
   report.dotnetSDK = version;
   lockPath = resolve(lockArg); const lockBytes = boundedRead(lockPath, 1 << 20);
