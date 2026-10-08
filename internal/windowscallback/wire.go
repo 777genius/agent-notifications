@@ -182,7 +182,11 @@ func ActivationArgument(reference string) (string, error) {
 }
 
 func rootGrammar(root string) bool {
-	if !text(root, 32768) || !strings.HasPrefix(root, `\\?\`) || len(root) < 7 || !((root[4] >= 'A' && root[4] <= 'Z') || (root[4] >= 'a' && root[4] <= 'z')) || root[5] != ':' || root[6] != '\\' || strings.Contains(root, "/") {
+	if !text(root, 32768) || !strings.HasPrefix(root, `\\?\`) || len(root) < 7 {
+		return false
+	}
+	asciiDrive := (root[4] >= 'A' && root[4] <= 'Z') || (root[4] >= 'a' && root[4] <= 'z')
+	if !asciiDrive || root[5] != ':' || root[6] != '\\' || strings.Contains(root, "/") {
 		return false
 	}
 	for _, part := range strings.Split(root[7:], `\`) {
