@@ -38,6 +38,7 @@ using namespace NavigationTokenTEST;
 #include <utility>
 #include <optional>
 #include <exception>
+#include <cstdlib>
 #include <memory>
 #include <cstring>
 #include <cstdint>
@@ -54,6 +55,17 @@ static std::wstring uuid, aumid, action;
 static GUID clsid;
 static std::atomic<bool> activated{false};
 static std::wstring activeMode;
+using winrt::Windows::Data::Json::JsonObject;
+using winrt::Windows::Data::Json::JsonValue;
+static bool composed = false;
+static std::wstring composedDigest;
+static std::atomic<bool> composedSeen{false}, composedDone{false}, composedValid{false}, composedDuplicate{false};
+static bool composedAdmitted = false;
+static ULONGLONG composedDeadline = 0;
+static std::wstring composedInvokerBirth;
+static HRESULT composedActivate(LPCWSTR app, LPCWSTR args, ULONG count, ULONGLONG entry);
+static int composedServer();
+static void composedAdmission(ULONGLONG deadline);
 static bool ownedRootValidated = false, showCallEntered = false, showCallReturned = false;
 static std::string currentSendStage = "not_started";
 static unsigned sendStageIndex = 0;
@@ -96,7 +108,7 @@ static void sendStage(const char* phase) {
         + ",\"pid\":" + std::to_string(GetCurrentProcessId()) + ",\"nonce\":" + jsonQuote(uuid) + "}\n");
 }
 static void sendFailure(HRESULT hr) noexcept {
-    if (!ownedRootValidated || (activeMode != L"send" && activeMode != L"send-public-sample")) return;
+    if (!ownedRootValidated || (activeMode != L"send" && activeMode != L"send-public-sample" && activeMode != L"send-public-sample-composed")) return;
     try {
         report("sender-failure.json", "{\"phase\":" + jsonQuote(winrt::to_hstring(currentSendStage).c_str())
             + ",\"hresult\":" + std::to_string(hr) + ",\"pid\":" + std::to_string(GetCurrentProcessId())
@@ -289,7 +301,8 @@ static void installAppIdentity() {
     }
 }
 static std::wstring serverCommand() {
-    return L"\"" + (root / L"navigation-native-probe.exe").wstring() + L"\" callback \"" + root.wstring() + L"\" " + uuid;
+    return L"\"" + (root / L"navigation-native-probe.exe").wstring() + L"\" " + (composed ? L"callback-composed" : L"callback") + L" \"" + root.wstring() + L"\" " + uuid
+        + (composed ? L" " + composedDigest : L"");
 }
 static bool ownRegistryProof() {
     std::ifstream proof(root / ".registry-owned"); std::string text; std::getline(proof, text);
@@ -772,6 +785,8 @@ public:
     ULONG STDMETHODCALLTYPE AddRef() override { return ++refs; }
     ULONG STDMETHODCALLTYPE Release() override { ULONG n = --refs; if (!n) delete this; return n; }
     HRESULT STDMETHODCALLTYPE Activate(LPCWSTR app, LPCWSTR args, const NOTIFICATION_USER_INPUT_DATA*, ULONG count) override {
+        const auto entry = GetTickCount64();
+        if (composed) return composedActivate(app, args, count, entry);
         try {
             // Reject unbounded OS arguments before reading or serializing them.
             if (!app || !args || wcsnlen_s(app, 129) > 128 || wcsnlen_s(args, 37) > 36) return E_INVALIDARG;
@@ -801,6 +816,7 @@ public:
     HRESULT STDMETHODCALLTYPE LockServer(BOOL) override { return S_OK; }
 };
 static int callback() {
+    if (composed) return composedServer();
     report("callback-started.json", "{\"pid\":" + std::to_string(GetCurrentProcessId())
         + ",\"nonce\":" + jsonQuote(uuid) + ",\"startedAt\":" + std::to_string(processStartedAt()) + "}\n");
     Factory* factory = new Factory; DWORD cookie = 0;
@@ -970,7 +986,8 @@ static std::string toastTitleAssociations(const ToastRow& row) {
     return result + ']';
 }
 static int invokeToastDefault(bool publicSample = false) {
-    const ULONGLONG deadline = GetTickCount64() + 30000;
+    ULONGLONG deadline = GetTickCount64() + 30000;
+    if (composed) { composedAdmission(deadline); deadline = composedDeadline; }
     const char* phase = "authority_inputs"; unsigned guardLine = 0, censusIndex = 0, nodes = 0, roots = 0, titles = 0, eligibleRows = 0;
     ComPtr<IUIAutomation> automation;
     try {
@@ -1285,6 +1302,7 @@ static int invokeToastDefault(bool publicSample = false) {
                 + jsonQuote(winrt::to_hstring(shellPaths.at(heldPaths.at(selected.pid))).c_str()) + ",\"runtimeID\":" + selected.runtime
                 + ",\"titleRuntimeID\":" + selected.titleRuntime + ",\"containerRuntimeID\":" + selected.containerRuntime + ",\"exactTitleVerified\":true,\"offscreen\":false,\"enabled\":true"
                 + ",\"specSHA256\":\"" + oobeStateHash(spec.bytes) + "\""
+                + (composed ? ",\"invokerCreationTicks\":" + jsonQuote(composedInvokerBirth) + ",\"composedSpecSHA256\":" + jsonQuote(composedDigest) : "")
                 + (publicSample ? ",\"authorityProfile\":\"public_sample_one_show\",\"invokeDeadlineBootMs\":" + std::to_string(deadline) + ",\"titleRuntimeIDs\":" + toastTitleSet(selected)
                     + ",\"groupRuntimeID\":" + selected.groupRuntime + ",\"groupControlType\":50026,\"commonGroupVerified\":true,\"groupCensusComplete\":true,\"eligibleListItemsInGroup\":1,\"inspectedListItemsInGroup\":"
                     + std::to_string(selected.inspectedListItems) + ",\"titleAssociations\":" + toastTitleAssociations(selected) : "");
@@ -1568,6 +1586,293 @@ struct VendorHashFile {
 };
 static std::string toastExecutableHash(ULONGLONG deadline) {
     return VendorHashFile(root / L"navigation-native-probe.exe", 67108864, deadline).digest;
+}
+// Composed TEST only. Kernel incarnation is authority; receipt PID alone is not.
+static JsonObject composedSpec{nullptr};
+static std::shared_ptr<ToastInput> heldComposedSpec;
+static void compositionDemand(bool ok, const char* reason) { if (!ok) throw std::runtime_error(reason); }
+static std::wstring compositionText(const JsonObject& value, const wchar_t* key) { return std::wstring(value.GetNamedString(key)); }
+static ULONGLONG compositionTicks(const JsonObject& value, const wchar_t* key) {
+    auto text = compositionText(value, key);
+    compositionDemand(!text.empty() && text.size() <= 20 && text.find_first_not_of(L"0123456789") == std::wstring::npos, "bounded incarnation ticks required");
+    return std::stoull(text);
+}
+static void compositionPublish(const char* name, const JsonObject& value) {
+    // Composed evidence/intents require checked durability before crossing an SDK boundary.
+    const auto bytes = winrt::to_string(value.Stringify()); compositionDemand(bytes.size() <= 16384, "composed publication bound");
+    fs::path final = root / name, temporary = final; temporary += L".tmp";
+    HANDLE file = CreateFileW(temporary.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+    compositionDemand(file != INVALID_HANDLE_VALUE, "exclusive composed publication failed");
+    DWORD count{}; const bool written = WriteFile(file, bytes.data(), static_cast<DWORD>(bytes.size()), &count, nullptr) && count == bytes.size();
+    const bool flushed = FlushFileBuffers(file) != FALSE, closed = CloseHandle(file) != FALSE;
+    if (!written || !flushed || !closed || !MoveFileExW(temporary.c_str(), final.c_str(), MOVEFILE_WRITE_THROUGH)) {
+        DeleteFileW(temporary.c_str()); throw std::runtime_error("composed publication write/flush/close/rename failed; boundary not admitted");
+    }
+}
+static JsonObject compositionLoad(const char* name) { return ToastInput(name).json; }
+static void compositionNumber(JsonObject& value, const wchar_t* key, ULONGLONG n) { value.SetNamedValue(key, JsonValue::CreateNumberValue(static_cast<double>(n))); }
+static void compositionString(JsonObject& value, const wchar_t* key, const std::wstring& text) { value.SetNamedValue(key, JsonValue::CreateStringValue(text)); }
+static void compositionBool(JsonObject& value, const wchar_t* key, bool flag) { value.SetNamedValue(key, JsonValue::CreateBooleanValue(flag)); }
+static ULONGLONG compositionUtc() { FILETIME ft{}; GetSystemTimePreciseAsFileTime(&ft); ULARGE_INTEGER t{}; t.LowPart = ft.dwLowDateTime; t.HighPart = ft.dwHighDateTime; return t.QuadPart; }
+static JsonObject compositionIdentity(HANDLE process, DWORD pid, ULONGLONG deadline) {
+    wchar_t image[32768]{}; DWORD size = 32768, session{};
+    compositionDemand(QueryFullProcessImageNameW(process, 0, image, &size) && size && size < 32768
+        && fs::canonical(std::wstring(image, size)) == root / L"navigation-native-probe.exe", "physical composed executable mismatch");
+    compositionDemand(ProcessIdToSessionId(pid, &session) && session == composedSpec.GetNamedNumber(L"session"), "composed session mismatch");
+    auto user = tokenUser(process); LPWSTR raw{};
+    check(ConvertSidToStringSidW(reinterpret_cast<TOKEN_USER*>(user.data())->User.Sid, &raw) ? S_OK : HRESULT_FROM_WIN32(GetLastError()));
+    std::wstring sid(raw); LocalFree(raw);
+    compositionDemand(sid == compositionText(composedSpec, L"userSid") && toastExecutableHash(deadline) == winrt::to_string(composedSpec.GetNamedString(L"binarySHA256")), "composed SID/executable digest mismatch");
+    FILETIME c{}, e{}, k{}, u{}; check(GetProcessTimes(process, &c, &e, &k, &u) ? S_OK : HRESULT_FROM_WIN32(GetLastError()));
+    ULARGE_INTEGER birth{}; birth.LowPart = c.dwLowDateTime; birth.HighPart = c.dwHighDateTime;
+    JsonObject value; compositionNumber(value, L"pid", pid); compositionNumber(value, L"session", session);
+    compositionString(value, L"creationTicks", std::to_wstring(birth.QuadPart)); compositionString(value, L"nonce", uuid);
+    compositionString(value, L"aumid", aumid); compositionString(value, L"userSid", sid);
+    compositionString(value, L"sourceSHA", compositionText(composedSpec, L"sourceSHA"));
+    compositionString(value, L"executable", std::wstring(image, size));
+    compositionString(value, L"executableSHA256", compositionText(composedSpec, L"binarySHA256"));
+    compositionString(value, L"composedSpecSHA256", composedDigest); return value;
+}
+static JsonObject compositionToken(HANDLE process, DWORD pid) {
+    // enabledAdmins uses DuplicateTokenEx solely to query membership, requiring TOKEN_DUPLICATE.
+    Token token; require(OpenProcessToken(process, TOKEN_QUERY | TOKEN_DUPLICATE, &token.handle) != FALSE, "ComposedReceiverToken");
+    const auto observed = facts(token.handle); DWORD session{};
+    compositionDemand(ProcessIdToSessionId(pid, &session) && observed.session == session, "receiver token session mismatch");
+    auto value = JsonObject::Parse(winrt::to_hstring(factsJson(observed)));
+    compositionBool(value, L"enabledAdmins", enabledAdmins(token.handle)); return value;
+}
+static void compositionSame(const JsonObject& a, const JsonObject& b, bool token = false) {
+    for (auto key : {L"pid", L"session"}) compositionDemand(a.GetNamedNumber(key) == b.GetNamedNumber(key), "held identity numeric mismatch");
+    for (auto key : {L"nonce", L"aumid", L"creationTicks", L"userSid", L"sourceSHA", L"executable", L"executableSHA256", L"composedSpecSHA256"})
+        compositionDemand(compositionText(a, key) == compositionText(b, key), "held identity binding mismatch");
+    if (token) {
+        auto x = a.GetNamedObject(L"receiverToken"), y = b.GetNamedObject(L"receiverToken");
+        for (auto key : {L"sidSHA256", L"authLUIDSHA256"}) compositionDemand(compositionText(x, key) == compositionText(y, key), "held token identity mismatch");
+        for (auto key : {L"session", L"elevationType", L"integrityRID"}) compositionDemand(x.GetNamedNumber(key) == y.GetNamedNumber(key), "held token facts mismatch");
+        for (auto key : {L"elevated", L"enabledAdmins"}) compositionDemand(x.GetNamedBoolean(key) == y.GetNamedBoolean(key), "held token authority mismatch");
+    }
+}
+static void loadComposed(const std::wstring& pinned) {
+    heldComposedSpec = std::make_shared<ToastInput>("composed-spec.json"); composedSpec = heldComposedSpec->json;
+    auto digest = winrt::to_hstring(oobeStateHash(heldComposedSpec->bytes));
+    compositionDemand(pinned.empty() || pinned == digest, "registered composed spec digest mismatch"); composedDigest = digest;
+    compositionDemand(composedSpec.GetNamedNumber(L"schema") == 1 && compositionText(composedSpec, L"nonce") == uuid
+        && compositionText(composedSpec, L"aumid") == aumid && compositionText(composedSpec, L"root") == root.wstring()
+        && compositionText(composedSpec, L"job") == L"native-client" && composedSpec.GetNamedNumber(L"runAttempt") == 1
+        && !compositionText(composedSpec, L"runID").empty() && compositionText(composedSpec, L"runID").size() <= 20
+        && compositionText(composedSpec, L"runID").find_first_not_of(L"0123456789") == std::wstring::npos
+        && compositionText(composedSpec, L"profile") == L"public_sample_one_show"
+        && !composedSpec.GetNamedBoolean(L"readinessQualified") && composedSpec.GetNamedValue(L"notificationSetting").ValueType() == winrt::Windows::Data::Json::JsonValueType::Null
+        && compositionText(composedSpec, L"name") == NavigationVendorTEST::vendorName
+        && compositionText(composedSpec, L"publisher") == NavigationVendorTEST::vendorPublisher
+        && compositionText(composedSpec, L"version") == L"26.930.7945.0" && composedSpec.GetNamedNumber(L"architecture") == 12
+        && compositionText(composedSpec, L"familyName") == NavigationVendorTEST::vendorFamily
+        && compositionText(composedSpec, L"fullName") == NavigationVendorTEST::vendorFull
+        && compositionText(composedSpec, L"archiveSHA256") == L"a208d373c7c84aa3e0452cd3dd8406a6794d8139ec1260c64a770c2a00fbeeb8"
+        && compositionText(composedSpec, L"sourceSHA").size() == 40
+        && compositionText(composedSpec, L"sourceSHA").find_first_not_of(L"0123456789abcdef") == std::wstring::npos, "fixed composed authority invalid");
+    compositionIdentity(GetCurrentProcess(), GetCurrentProcessId(), GetTickCount64() + 2000); composed = true;
+}
+struct CompositionProcess {
+    HANDLE process; JsonObject owner; const char* cleanupName; bool complete = false;
+    ~CompositionProcess() noexcept {
+        if (!complete) try {
+            DWORD state = WaitForSingleObject(process, 0); bool terminated = false;
+            if (state == WAIT_TIMEOUT) { terminated = TerminateProcess(process, 125) != FALSE; state = WaitForSingleObject(process, 3000); }
+            DWORD code = STILL_ACTIVE; bool collected = state == WAIT_OBJECT_0 && GetExitCodeProcess(process, &code);
+            compositionBool(owner, L"terminateReturned", terminated); compositionBool(owner, L"collected", collected);
+            compositionNumber(owner, L"exitCode", code); compositionPublish(cleanupName, owner);
+        } catch (...) { /* Missing cleanup stays unknown. */ }
+    }
+};
+static int composedSender() {
+    const auto deadline = GetTickCount64() + 20000;
+    std::wstring command = L"\"" + (root / L"navigation-native-probe.exe").wstring() + L"\" send-public-sample-composed \"" + root.wstring() + L"\" " + uuid + L" " + composedDigest;
+    STARTUPINFOW startup{}; startup.cb = sizeof(startup); PROCESS_INFORMATION child{};
+    compositionDemand(CreateProcessW((root / L"navigation-native-probe.exe").c_str(), command.data(), nullptr, nullptr, FALSE, 0, nullptr, root.c_str(), &startup, &child), "single TEST sender creation failed");
+    SurfaceOwner process(child.hProcess), thread(child.hThread);
+    // The returned CreateProcess handle owns this one child even if subsequent identity queries fail.
+    JsonObject created; compositionNumber(created, L"pid", child.dwProcessId); compositionString(created, L"nonce", uuid);
+    CompositionProcess cleanup{process.process, created, "sender-failure-cleanup.json"};
+    auto retained = compositionIdentity(process.process, child.dwProcessId, deadline); cleanup.owner = retained;
+    compositionDemand(GetTickCount64() < deadline && WaitForSingleObject(process.process, static_cast<DWORD>(deadline - GetTickCount64())) == WAIT_OBJECT_0, "sender collection deadline");
+    DWORD code{}; check(GetExitCodeProcess(process.process, &code) ? S_OK : HRESULT_FROM_WIN32(GetLastError()));
+    FILETIME c{}, e{}, k{}, u{}; check(GetProcessTimes(process.process, &c, &e, &k, &u) ? S_OK : HRESULT_FROM_WIN32(GetLastError()));
+    ULARGE_INTEGER exit{}; exit.LowPart = e.dwLowDateTime; exit.HighPart = e.dwHighDateTime;
+    compositionNumber(retained, L"exitCode", code); compositionBool(retained, L"collected", true);
+    compositionString(retained, L"exitTicks", std::to_wstring(exit.QuadPart)); compositionString(retained, L"collectedUtcTicks", std::to_wstring(compositionUtc()));
+    compositionNumber(retained, L"collectedBootMs", GetTickCount64()); compositionNumber(retained, L"wrapperPID", GetCurrentProcessId());
+    compositionPublish("sender-exit.json", retained); cleanup.complete = true;
+    compositionDemand(code == 0, "actual sender failed"); return 0;
+}
+static void composedAdmission(ULONGLONG deadline) {
+    wchar_t raw[32]{}; const auto n = GetEnvironmentVariableW(L"NAVIGATION_WINDOWS_COMPOSED_DEADLINE_UTC_MS", raw, 32);
+    compositionDemand(n > 0 && n < 32 && std::wstring(raw, n).find_first_not_of(L"0123456789") == std::wstring::npos, "parent composed deadline absent");
+    const auto parent = std::stoull(std::wstring(raw, n)), now = compositionUtc() / 10000 - 11644473600000ULL;
+    compositionDemand(parent > now && parent - now <= 30000, "parent composed scope expired");
+    composedDeadline = std::min(deadline, GetTickCount64() + parent - now);
+    auto admission = compositionIdentity(GetCurrentProcess(), GetCurrentProcessId(), composedDeadline);
+    composedInvokerBirth = compositionText(admission, L"creationTicks");
+    compositionNumber(admission, L"deadlineBootMs", composedDeadline); compositionNumber(admission, L"parentDeadlineUtcMs", parent);
+    compositionPublish("composed-attempt.json", admission);
+}
+static void composedAction(const JsonObject& callback, ULONGLONG entry) {
+    using namespace NavigationVendorTEST; using namespace winrt::Windows::System;
+    // TEST lease cap only: the original Invoke scope supplies the earlier deadline.
+    const auto deadline = std::min(entry + 30000, composedDeadline - 5000);
+    auto result = JsonObject::Parse(callback.Stringify());
+    compositionNumber(result, L"entryBootMs", entry); compositionNumber(result, L"actionDeadlineBootMs", deadline);
+    compositionNumber(result, L"leaseDeadlineBootMs", composedDeadline);
+    bool queryEntered = false, queryReturned = false, launchEntered = false, launchReturned = false; HRESULT hr = S_OK; std::wstring outcome = L"unknown";
+    try {
+        compositionDemand(GetTickCount64() < deadline, "action budget expired");
+        VendorHashFile add(root / L"vendor-install-completed.proof", 1024, deadline);
+        compositionDemand(add.digest == winrt::to_string(composedSpec.GetNamedString(L"addProofSHA256")), "owned Add proof changed");
+        ToastInput authority("public-sample-invoke-authority.json"), attemptInput("composed-attempt.json"), uiInput("ui-invoke-intent.json"), senderInput("sender-exit.json");
+        auto sender = senderInput.json, ui = uiInput.json, attempt = attemptInput.json;
+        compositionString(result, L"uiInvokeIntentSHA256", winrt::to_hstring(oobeStateHash(uiInput.bytes)).c_str());
+        compositionDemand(compositionText(ui, L"specSHA256") == std::wstring(winrt::to_hstring(oobeStateHash(authority.bytes)))
+            && compositionText(attempt, L"composedSpecSHA256") == composedDigest
+            && compositionText(ui, L"composedSpecSHA256") == composedDigest
+            && compositionText(ui, L"invokerCreationTicks") == compositionText(attempt, L"creationTicks")
+            && attempt.GetNamedNumber(L"deadlineBootMs") == composedDeadline, "inline attempt/spec custody changed");
+        for (auto key : {L"nonce", L"aumid", L"creationTicks", L"userSid", L"sourceSHA", L"executable", L"executableSHA256"})
+            compositionDemand(compositionText(authority.json, key) == compositionText(sender, key), "inline sender authority mismatch");
+        compositionDemand(authority.json.GetNamedNumber(L"pid") == sender.GetNamedNumber(L"pid")
+            && authority.json.GetNamedNumber(L"session") == sender.GetNamedNumber(L"session"), "inline sender numeric binding mismatch");
+        compositionDemand(sender.GetNamedBoolean(L"collected") && sender.GetNamedNumber(L"exitCode") == 0
+            && compositionText(sender, L"composedSpecSHA256") == composedDigest && ui.GetNamedNumber(L"pid") == attempt.GetNamedNumber(L"pid")
+            && compositionText(ui, L"nonce") == uuid && ui.GetNamedNumber(L"invokeDeadlineBootMs") == composedDeadline
+            && ui.GetNamedBoolean(L"invokeBoundaryArmed") && compositionText(ui, L"authorityProfile") == L"public_sample_one_show"
+            && compositionTicks(callback, L"creationTicks") >= compositionTicks(sender, L"collectedUtcTicks")
+            && compositionTicks(callback, L"creationTicks") > compositionTicks(sender, L"exitTicks"), "cold inline action custody missing");
+        exactInstalled(); winrt::Windows::Foundation::Uri uri(L"codex://threads/" + uuid);
+        auto intent = JsonObject::Parse(result.Stringify()); compositionBool(intent, L"queryBoundaryArmed", true);
+        compositionString(intent, L"familyName", vendorFamily); compositionString(intent, L"fullName", vendorFull);
+        compositionString(intent, L"uri", std::wstring(uri.RawUri())); compositionString(intent, L"senderCreationTicks", compositionText(sender, L"creationTicks"));
+        compositionPublish("vendor-callback-query-intent.json", intent);
+        const auto queryDeadline = std::min(deadline, GetTickCount64() + 10000);
+        compositionNumber(result, L"queryDeadlineBootMs", queryDeadline); compositionDemand(GetTickCount64() < queryDeadline, "query admission expired");
+        composedAdmitted = true; queryEntered = true;
+        auto support = await(Launcher::QueryUriSupportAsync(uri, LaunchQuerySupportType::Uri, vendorFamily), 10000, queryDeadline);
+        queryReturned = true; compositionNumber(result, L"uriSupport", static_cast<int>(support));
+        if (support != LaunchQuerySupportStatus::Available) outcome = L"unavailable";
+        else {
+            exactInstalled(); compositionDemand(GetTickCount64() < deadline, "launch admission expired");
+            compositionBool(intent, L"launchBoundaryArmed", true); compositionPublish("vendor-callback-launch-intent.json", intent);
+            LauncherOptions options; options.TargetApplicationPackageFamilyName(vendorFamily); options.FallbackUri(nullptr);
+            const auto launchDeadline = std::min(deadline, GetTickCount64() + 15000);
+            compositionNumber(result, L"launchDeadlineBootMs", launchDeadline); compositionDemand(GetTickCount64() < launchDeadline, "launch boundary expired");
+            launchEntered = true; bool accepted = await(Launcher::LaunchUriAsync(uri, options), 15000, launchDeadline);
+            launchReturned = true; outcome = accepted ? L"handoff_accepted" : L"declined";
+        }
+    } catch (const winrt::hresult_error& e) { hr = e.code(); } catch (...) { hr = E_FAIL; }
+    compositionString(result, L"outcome", outcome); result.SetNamedValue(L"hresult", JsonValue::CreateNumberValue(hr));
+    compositionBool(result, L"queryCallEntered", queryEntered); compositionBool(result, L"queryCallReturned", queryReturned);
+    compositionBool(result, L"launchCallEntered", launchEntered); compositionBool(result, L"launchCallReturned", launchReturned);
+    compositionBool(result, L"retryAllowed", false); compositionBool(result, L"targetConfirmed", false);
+    compositionPublish("effect.json", result); compositionNumber(result, L"publishedBootMs", GetTickCount64());
+    compositionBool(result, L"timely", GetTickCount64() < deadline); compositionPublish("vendor-callback-published.json", result);
+}
+static HRESULT composedActivate(LPCWSTR app, LPCWSTR args, ULONG count, ULONGLONG entry) {
+    if (!app || !args || wcsnlen_s(app, 129) > 128 || wcsnlen_s(args, 37) != 36 || app != aumid || args != uuid || count != 0) return E_INVALIDARG;
+    if (composedSeen.exchange(true)) { composedDuplicate = true; try { JsonObject value; compositionBool(value, L"duplicate", true); compositionPublish("callback-duplicate.json", value); } catch (...) {} return E_UNEXPECTED; }
+    HRESULT result = E_FAIL;
+    try {
+        compositionDemand(GetTickCount64() + 5000 < composedDeadline, "callback lease admission expired");
+        auto value = compositionIdentity(GetCurrentProcess(), GetCurrentProcessId(), composedDeadline - 5000);
+        value.SetNamedValue(L"receiverToken", compositionToken(GetCurrentProcess(), GetCurrentProcessId())); compositionBool(value, L"matches", true);
+        compositionPublish("callback.json", value); composedAction(value, entry);
+        composedValid = composedAdmitted; result = composedAdmitted ? S_OK : E_FAIL;
+    } catch (...) { result = composedAdmitted ? S_OK : E_FAIL; }
+    // SDK work and local object destruction precede release; no global reads follow it.
+    composedDone.store(true, std::memory_order_release); return result;
+}
+[[noreturn]] static void compositionExit(UINT code) {
+    // Owned self only. Never run CRT/global destructors concurrently with MTA callbacks.
+    TerminateProcess(GetCurrentProcess(), code); std::_Exit(125);
+}
+static int composedServer() {
+    auto attempt = compositionLoad("composed-attempt.json"), ui = compositionLoad("ui-invoke-intent.json");
+    const auto deadline = attempt.GetNamedNumber(L"deadlineBootMs");
+    compositionDemand(deadline > GetTickCount64() + 5000 && deadline <= GetTickCount64() + 30000
+        && deadline == static_cast<ULONGLONG>(deadline) && ui.GetNamedNumber(L"invokeDeadlineBootMs") == deadline
+        && compositionText(attempt, L"composedSpecSHA256") == composedDigest && compositionText(ui, L"nonce") == uuid
+        && compositionText(ui, L"composedSpecSHA256") == composedDigest
+        && compositionText(ui, L"invokerCreationTicks") == compositionText(attempt, L"creationTicks")
+        && ui.GetNamedNumber(L"pid") == attempt.GetNamedNumber(L"pid"), "original composed lease missing");
+    composedDeadline = static_cast<ULONGLONG>(deadline);
+    auto started = compositionIdentity(GetCurrentProcess(), GetCurrentProcessId(), composedDeadline - 5000);
+    compositionNumber(started, L"observedBootMs", GetTickCount64()); compositionNumber(started, L"leaseDeadlineBootMs", composedDeadline);
+    compositionPublish("callback-started.json", started); compositionPublish("callback-lease.json", started);
+    Factory* factory = new Factory; DWORD cookie{}; HRESULT hr = CoRegisterClassObject(clsid, factory, CLSCTX_LOCAL_SERVER, REGCLS_MULTIPLEUSE, &cookie); factory->Release(); check(hr);
+    try {
+    while (!composedDone.load(std::memory_order_acquire) && GetTickCount64() < composedDeadline) Sleep(25);
+    if (!composedDone.load(std::memory_order_acquire)) compositionExit(124); // SDK completion remains unknown.
+    while (composedValid && !fs::exists(root / "callback-exit-permit.json") && GetTickCount64() < composedDeadline) Sleep(25);
+    bool permitted = false;
+    try { auto permit = compositionLoad("callback-exit-permit.json"); compositionSame(started, permit); permitted = true; } catch (...) {}
+    CoRevokeClassObject(cookie); auto terminal = JsonObject::Parse(started.Stringify());
+    compositionBool(terminal, L"valid", composedValid && !composedDuplicate && permitted); compositionBool(terminal, L"duplicate", composedDuplicate);
+    compositionBool(terminal, L"exitPermitValidated", permitted); compositionPublish("callback-terminal.json", terminal);
+    compositionExit(composedValid && !composedDuplicate && permitted ? 0 : 4);
+    } catch (...) { compositionExit(125); } // Publication failure cannot unwind shared callback globals.
+}
+static int composedCollect() {
+    auto started = compositionLoad("callback-started.json"), sender = compositionLoad("sender-exit.json");
+    const auto numeric = started.GetNamedNumber(L"pid"), deadline = started.GetNamedNumber(L"leaseDeadlineBootMs");
+    compositionDemand(numeric >= 1 && numeric <= MAXDWORD && numeric == static_cast<DWORD>(numeric)
+        && numeric != sender.GetNamedNumber(L"pid") && numeric != GetCurrentProcessId() && deadline > GetTickCount64() && deadline <= GetTickCount64() + 30000
+        && deadline == static_cast<ULONGLONG>(deadline), "bounded cold receiver identity required");
+    SurfaceOwner process(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE | PROCESS_TERMINATE, FALSE, static_cast<DWORD>(numeric)));
+    compositionDemand(process.process != nullptr, "cold receiver handle unavailable");
+    auto held = compositionIdentity(process.process, static_cast<DWORD>(numeric), static_cast<ULONGLONG>(deadline)); compositionSame(started, held);
+    CompositionProcess cleanup{process.process, held, "callback-failure-cleanup.json"};
+    compositionDemand(sender.GetNamedBoolean(L"collected") && sender.GetNamedNumber(L"exitCode") == 0
+        && compositionTicks(held, L"creationTicks") >= compositionTicks(sender, L"collectedUtcTicks")
+        && compositionTicks(held, L"creationTicks") > compositionTicks(sender, L"exitTicks")
+        && compositionText(sender, L"composedSpecSHA256") == composedDigest
+        && started.GetNamedNumber(L"observedBootMs") >= sender.GetNamedNumber(L"collectedBootMs") && process.live(), "held receiver not cold/live");
+    held.SetNamedValue(L"receiverToken", compositionToken(process.process, static_cast<DWORD>(numeric)));
+    compositionPublish("callback-retained.json", held);
+    auto callback = compositionLoad("callback.json"), effect = compositionLoad("effect.json"), published = compositionLoad("vendor-callback-published.json");
+    compositionSame(held, callback, true); compositionSame(held, effect, true); compositionSame(held, published, true);
+    compositionDemand(published.GetNamedNumber(L"leaseDeadlineBootMs") == deadline && callback.GetNamedBoolean(L"matches") && process.live() && GetTickCount64() < deadline, "callback action lease mismatch");
+    // Receiver stays held while the existing invoker returns its COM acknowledgement and exits.
+    while (!fs::exists(root / "invoker-collected.json") && GetTickCount64() < deadline) Sleep(25);
+    compositionDemand(GetTickCount64() < deadline, "invoker acknowledgement collection expired");
+    ToastInput invokedInput("ui-invoke.json"), collectedInput("invoker-collected.json"), attemptInput("composed-attempt.json");
+    auto invoked = invokedInput.json, collected = collectedInput.json, attempt = attemptInput.json;
+    compositionDemand(collected.GetNamedBoolean(L"collected") && collected.GetNamedNumber(L"exitCode") == 0
+        && collected.GetNamedNumber(L"pid") == attempt.GetNamedNumber(L"pid")
+        && compositionText(collected, L"creationTicks") == compositionText(attempt, L"creationTicks")
+        && compositionText(collected, L"composedSpecSHA256") == composedDigest && compositionText(collected, L"nonce") == uuid
+        && compositionText(collected, L"uiInvokeSHA256") == std::wstring(winrt::to_hstring(oobeStateHash(invokedInput.bytes)))
+        && invoked.GetNamedNumber(L"pid") == collected.GetNamedNumber(L"pid")
+        && compositionText(invoked, L"invokerCreationTicks") == compositionText(collected, L"creationTicks")
+        && invoked.GetNamedBoolean(L"invokeCallReturned") && invoked.GetNamedNumber(L"invokeHRESULT") == 0
+        && invoked.GetNamedNumber(L"invokeDeadlineBootMs") == deadline && invoked.GetNamedNumber(L"returnedBootMs") < deadline,
+        "actual invoker collection/COM acknowledgement missing");
+    compositionBool(held, L"receiverTokenMatched", true); compositionPublish("callback-exit-permit.json", held);
+    compositionDemand(GetTickCount64() < deadline && WaitForSingleObject(process.process, static_cast<DWORD>(std::min(5000.0, deadline - GetTickCount64()))) == WAIT_OBJECT_0, "actual receiver exit uncollected");
+    DWORD code{}; check(GetExitCodeProcess(process.process, &code) ? S_OK : HRESULT_FROM_WIN32(GetLastError()));
+    compositionNumber(held, L"exitCode", code); compositionBool(held, L"collected", true); compositionPublish("callback-exit.json", held);
+    auto terminal = compositionLoad("callback-terminal.json"); compositionSame(held, terminal);
+    compositionDemand(code == 0 && terminal.GetNamedBoolean(L"valid") && terminal.GetNamedBoolean(L"exitPermitValidated") && !terminal.GetNamedBoolean(L"duplicate") && !fs::exists(root / "callback-duplicate.json"), "actual receiver terminal failed");
+    cleanup.complete = true; return 0;
+}
+static int composedStop() {
+    // Failure collection only. Never changes SDK outcome or permits vendor removal.
+    if (!fs::exists(root / "callback-started.json")) {
+        JsonObject unknown; compositionString(unknown, L"nonce", uuid); compositionBool(unknown, L"collected", false);
+        compositionPublish("callback-stop.json", unknown); return 1;
+    }
+    auto started = compositionLoad("callback-started.json"); auto pid = started.GetNamedNumber(L"pid");
+    compositionDemand(pid >= 1 && pid <= MAXDWORD && pid == static_cast<DWORD>(pid) && pid != GetCurrentProcessId(), "cleanup receiver PID invalid");
+    SurfaceOwner process(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE | PROCESS_TERMINATE, FALSE, static_cast<DWORD>(pid)));
+    compositionDemand(process.process != nullptr, "original receiver exit remains uncollected");
+    auto owned = compositionIdentity(process.process, static_cast<DWORD>(pid), GetTickCount64() + 2000); compositionSame(owned, started);
+    CompositionProcess cleanup{process.process, owned, "callback-stop.json"}; return 0;
 }
 static std::string publicSampleSenderIdentity() {
     DWORD session{}; check(ProcessIdToSessionId(GetCurrentProcessId(), &session) ? S_OK : HRESULT_FROM_WIN32(GetLastError()));
@@ -2277,7 +2582,7 @@ int wmain(int argc, wchar_t** argv) {
         wchar_t gate[8]{}, ci[8]{}, actions[8]{};
         // The OS-created COM process need not inherit the runner's environment.
         // Its authority is the exact owned root/binary/UUID installed by the opt-in controller.
-        if (mode != L"callback" && (!GetEnvironmentVariableW(vendorMode(mode) ? L"NAVIGATION_WINDOWS_VENDOR_NATIVE_TEST" : L"AGENT_NOTIFY_NAVIGATION_WINDOWS_E2E", gate, 8)
+        if (mode != L"callback" && mode != L"callback-composed" && (!GetEnvironmentVariableW(vendorMode(mode) ? L"NAVIGATION_WINDOWS_VENDOR_NATIVE_TEST" : L"AGENT_NOTIFY_NAVIGATION_WINDOWS_E2E", gate, 8)
             || std::wstring(gate) != L"1" || !GetEnvironmentVariableW(L"CI", ci, 8) || std::wstring(ci) != L"true"
             || !GetEnvironmentVariableW(L"GITHUB_ACTIONS", actions, 8) || std::wstring(actions) != L"true")) return 2;
         root = fs::canonical(argv[2]); uuid = argv[3];
@@ -2291,9 +2596,18 @@ int wmain(int argc, wchar_t** argv) {
             || fs::canonical(ownExe) != root / L"navigation-native-probe.exe") return 2;
         ownedRootValidated = true;
         aumid = L"AgentNotify.Navigation.TEST." + uuid; action = L"TEST open " + uuid;
-        if (mode == L"callback" && (!ownRegistryProof() || registeredCommand() != serverCommand()
-            || !ownAppIdentityProof() || !appIdentityMatches())) return 2;
         winrt::init_apartment(winrt::apartment_type::multi_threaded);
+        if (mode == L"callback-composed") {
+            // LocalServer32 activation appends this documented COM argument.
+            if (argc != 6 || std::wstring(argv[5]) != L"-Embedding") return 2; loadComposed(argv[4]);
+        } else if (mode == L"send-public-sample-composed") {
+            if (argc != 5) return 2; loadComposed(argv[4]);
+        } else if (mode == L"collect-public-sample-sender" || mode == L"invoke" || mode == L"collect-composed-callback"
+                || mode == L"stop-composed-callback" || mode == L"cleanup") { wchar_t flag[8]{};
+            if (GetEnvironmentVariableW(L"NAVIGATION_WINDOWS_COMPOSED_TEST", flag, 8) == 1 && flag[0] == L'1') loadComposed(L""); }
+        if (mode == L"callback" && composed) return 2;
+        if ((mode == L"callback" || mode == L"callback-composed") && (!ownRegistryProof() || registeredCommand() != serverCommand()
+            || !ownAppIdentityProof() || !appIdentityMatches())) return 2;
         if (vendorMode(mode)) { if (argc != 4) return 2; return vendorNative(mode); }
         if (mode == L"package-metadata") { packageMetadata(); return 0; }
         if (mode == L"center-policy") return centerPolicy() ? 0 : 3;
@@ -2303,19 +2617,22 @@ int wmain(int argc, wchar_t** argv) {
         if (mode == L"oobe-setup") { if (argc != 4) return 2; return oobeSetup() ? 0 : 1; }
         if (mode == L"center-surface") return centerSurface() ? 0 : 3;
         if (mode == L"taskbar-uia") return taskbarUI() ? 0 : 3;
-        if (mode == L"send-public-sample") {
+        if (mode == L"collect-public-sample-sender") { if (!composed || argc != 4) return 2; return composedSender(); }
+        if (mode == L"stop-composed-callback") { if (!composed || argc != 4) return 2; return composedStop(); }
+        if (mode == L"collect-composed-callback") { if (!composed || argc != 4) return 2; return composedCollect(); }
+        if (mode == L"send-public-sample" || mode == L"send-public-sample-composed") {
             const auto exactEnv = [](const wchar_t* name, const wchar_t* expected) {
                 wchar_t value[128]{}; const DWORD size = GetEnvironmentVariableW(name, value, 128);
                 return size > 0 && size < 128 && std::wstring(value, size) == expected;
             };
-            if (argc != 4 || !exactEnv(L"NAVIGATION_WINDOWS_PUBLIC_SAMPLE_TEST", L"1")
+            if ((argc != (composed ? 5 : 4)) || !exactEnv(L"NAVIGATION_WINDOWS_PUBLIC_SAMPLE_TEST", L"1")
                 || !exactEnv(L"GITHUB_EVENT_NAME", L"workflow_dispatch")
                 || !exactEnv(L"GITHUB_RUN_ATTEMPT", L"1")
                 || !exactEnv(L"GITHUB_REPOSITORY", L"777genius/agent-notifications")) return 2;
             return send(true);
         }
         if (mode == L"send") return send();
-        if (mode == L"callback") return callback();
+        if (mode == L"callback" || mode == L"callback-composed") return callback();
         if (mode == L"invoke") return invoke();
         if (mode == L"cleanup") { cleanup(); return 0; }
         return 2;

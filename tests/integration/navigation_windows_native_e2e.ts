@@ -1,9 +1,10 @@
 // Windows client CI only. Native source is compiled from this exact checkout.
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { randomUUID, createHash } from 'node:crypto';
 import { mkdirSync, writeFileSync, readFileSync, existsSync, realpathSync, copyFileSync, statSync, lstatSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
+import { download, hash as streamedHash } from './navigation_windows_vendor_acquisition.ts';
 import { setTimeout as delay } from 'node:timers/promises';
 
 type Json = Record<string, unknown>;
@@ -21,6 +22,12 @@ let root: string | undefined;
 let binary: string | undefined;
 let nonce: string | undefined;
 let installed = false;
+let composed = false, vendorKnown = false, vendorEffectsKnown = true;
+const vendorPin = { name: 'OpenAI.Codex', publisher: 'CN=50BDFD77-8903-4850-9FFE-6E8522F64D5B',
+  familyName: 'OpenAI.Codex_2p2nqsd0c76g0', fullName: 'OpenAI.Codex_26.930.7945.0_arm64__2p2nqsd0c76g0',
+  version: '26.930.7945.0', architecture: 12 };
+const vendorArchiveHash = 'a208d373c7c84aa3e0452cd3dd8406a6794d8139ec1260c64a770c2a00fbeeb8';
+const hashFile = (path: string) => createHash('sha256').update(readFileSync(path)).digest('hex');
 let exitCode = 1;
 let setupActor: Step | undefined;
 const setupRecords: Record<string, Json> = {};
@@ -50,6 +57,8 @@ function run(mode: string, timeout: number): Step {
     'NAVIGATION_WINDOWS_DESKTOP_CAPTURE_TEST', 'NAVIGATION_WINDOWS_OOBE_PREFLIGHT_TEST', 'NAVIGATION_WINDOWS_OOBE_SETUP_TEST',
   ].filter(key => process.env[key] !== undefined).map(key => [key, process.env[key]])) : { ...process.env };
   env.AGENT_NOTIFY_NAVIGATION_WINDOWS_E2E = '1';
+  env.NAVIGATION_WINDOWS_COMPOSED_TEST = composed && existsSync(join(root, 'composed-spec.json')) ? '1' : '0';
+  if (composed && mode.startsWith('vendor-')) env.NAVIGATION_WINDOWS_VENDOR_NATIVE_TEST = '1';
   // The follow-up is read-only and only runs after the setup actor was collected/qualified.
   if (mode === 'desktop-capture' && evidence.oobeSetupQualified === true) env.NAVIGATION_WINDOWS_DESKTOP_CAPTURE_TEST = '1';
   const result = spawnSync(binary, [mode, root, nonce], { cwd: root, encoding: 'utf8',
@@ -284,6 +293,193 @@ function verifySetup(step: Step): void {
   }
   evidence.oobeSetupQualified = true; evidence.invokeEffectUncertain = false;
 }
+function vendorRecord(name: string, actor: Step): Json {
+  const value = read(name);
+  if (value.pid !== actor.pid || value.nonce !== nonce || value.familyName !== vendorPin.familyName
+      || value.fullName !== vendorPin.fullName || value.showAttempts !== 0 || value.targetConfirmed !== false
+      || value.toastCallbackQualified !== false) throw new Error('vendor record custody mismatch');
+  return value;
+}
+async function prepareComposed(desktop: Json): Promise<void> {
+  const tool = process.env.NAVIGATION_WINDOWS_TEST_SIGNTOOL;
+  const sid = process.env.NAVIGATION_WINDOWS_TEST_OWNER_SID;
+  if (!tool || hashFile(tool) !== process.env.NAVIGATION_WINDOWS_TEST_SIGNTOOL_SHA256
+      || !sid || !/^S-1-[0-9-]{1,184}$/.test(sid) || !Number.isInteger(desktop.session)) throw new Error('captured TEST owner/tool missing');
+  const acquisition: Json = {}, archive = join(root!, 'client.msix');
+  evidence.vendorAcquisition = acquisition;
+  const digest = await download(archive, acquisition);
+  if (digest !== vendorArchiveHash) throw new Error('official selected vendor bytes changed');
+  const signature = spawnSync(tool, ['verify', '/pa', '/all', '/v', archive], { encoding: 'utf8', timeout: 60000, maxBuffer: 65536 });
+  const signatureStep: Step = { mode: 'vendor-signature', pid: signature.pid, status: signature.status, signal: signature.signal,
+    stdout: signature.stdout ?? '', stderr: signature.stderr ?? '', exitedAt: Date.now(), ...(signature.error ? { error: signature.error.message } : {}) };
+  steps.push(signatureStep); evidence.steps = steps;
+  if (signature.error || signature.signal || signature.status !== 0) throw new Error('official vendor signature verification failed');
+  const metadataActor = run('package-metadata', 15000); requireSuccess(metadataActor);
+  const metadata = read('package-metadata.json');
+  if (metadata.pid !== metadataActor.pid || metadata.nonce !== nonce
+      || Object.entries(vendorPin).some(([key, value]) => metadata[key] !== value)
+      || await streamedHash(archive) !== digest || hashFile(binary!) !== evidence.binarySHA256
+      || hashFile(tool) !== process.env.NAVIGATION_WINDOWS_TEST_SIGNTOOL_SHA256) throw new Error('vendor archive metadata/custody mismatch');
+  const custody = `TEST vendor custody ${nonce}\nsigntool-pa-all-success\n${digest}\n${evidence.binarySHA256}\n`;
+  writeFileSync(join(root!, 'vendor-custody.proof'), custody, { flag: 'wx', flush: true });
+  const before = run('vendor-state-before', 15000); requireSuccess(before);
+  const absent = vendorRecord('vendor-before.json', before);
+  if (absent.readOnly !== true || absent.installedCount !== 0 || absent.exactFullName !== false) throw new Error('vendor family preexists');
+  const absence = readFileSync(join(root!, 'vendor-absent.proof'), 'utf8').split('\n');
+  if (absence.length !== 3 || absence[0] !== nonce || !/^(?:[0-9a-f]{2}){8,68}$/.test(absence[1] ?? '') || absence[2] !== '') throw new Error('vendor absence proof invalid');
+  const intent = custody + `absent-before-install\n${absence[1]}\n`;
+  vendorEffectsKnown = false; evidence.vendorInstallOutcomeUnknown = true;
+  const add = run('vendor-install', 165000); requireSuccess(add);
+  const added = vendorRecord('vendor-install-result.json', add);
+  if (added.operationCompleted !== true || added.extendedError !== 0
+      || readFileSync(join(root!, 'vendor-install-intent.proof'), 'utf8') !== intent
+      || readFileSync(join(root!, 'vendor-install-completed.proof'), 'utf8') !== intent) throw new Error('known vendor Add success absent');
+  vendorKnown = true; vendorEffectsKnown = true; evidence.vendorInstallOutcomeUnknown = false;
+  const after = run('vendor-state-after', 15000); requireSuccess(after);
+  const selected = vendorRecord('vendor-after.json', after);
+  if (selected.readOnly !== true || selected.installedCount !== 1 || selected.exactFullName !== true) throw new Error('exact selected installation absent');
+  evidence.compositionSourceSHA256 = Object.fromEntries(['navigation_windows_native_probe.cpp', 'navigation_windows_native_e2e.ts',
+    'navigation_windows_token_queries.h', 'navigation_windows_vendor_sdk_test.h', 'navigation_windows_vendor_acquisition.ts'].map(name => {
+      const captured = join(root!, name); copyFileSync(resolve('tests/integration', name), captured); return [name, hashFile(captured)];
+    }));
+  if (!/^[0-9]{1,20}$/.test(process.env.GITHUB_RUN_ID ?? '') || process.env.GITHUB_JOB !== 'native-client'
+      || process.env.GITHUB_RUN_ATTEMPT !== '1') throw new Error('same-job composed authority missing');
+  const spec = { schema: 1, root, nonce, aumid: `AgentNotify.Navigation.TEST.${nonce}`, sourceSHA: evidence.sourceSHA,
+    binarySHA256: evidence.binarySHA256, runID: process.env.GITHUB_RUN_ID, job: process.env.GITHUB_JOB, runAttempt: 1, userSid: sid, session: desktop.session, profile: 'public_sample_one_show',
+    notificationSetting: null, readinessQualified: false, ...vendorPin, archiveSHA256: digest,
+    addProofSHA256: hashFile(join(root!, 'vendor-install-completed.proof')) };
+  const bytes = JSON.stringify(spec);
+  if (Buffer.byteLength(bytes) > 16384) throw new Error('composed spec bound exceeded');
+  writeFileSync(join(root!, 'composed-spec.json'), bytes, { flag: 'wx', flush: true });
+  evidence.composedSpecSHA256 = hashFile(join(root!, 'composed-spec.json'));
+  evidence.compositionWorkflowSHA256 = hashFile(resolve('.github/workflows/navigation-windows-native-e2e.yml'));
+}
+function composedActor(mode: string, deadline: number, parentUtc: number) {
+  const env: NodeJS.ProcessEnv = { ...process.env, AGENT_NOTIFY_NAVIGATION_WINDOWS_E2E: '1', NAVIGATION_WINDOWS_COMPOSED_TEST: '1',
+    NAVIGATION_WINDOWS_COMPOSED_DEADLINE_UTC_MS: String(parentUtc) };
+  delete env.GH_TOKEN; delete env.GITHUB_TOKEN;
+  const child = spawn(binary!, [mode, root!, nonce!], { cwd: root, env, windowsHide: false });
+  let stdout = '', stderr = '', error: string | undefined, done = false;
+  const stop = () => { if (!done) child.kill('SIGKILL'); };
+  const timer = setTimeout(() => { error = 'original composed deadline expired'; stop(); }, Math.max(1, deadline - performance.now()));
+  const result = new Promise<Step>(resolveStep => {
+    child.on('error', value => { error = value.message; });
+    const append = (kind: 'stdout' | 'stderr', data: Buffer) => {
+      if (Buffer.byteLength(stdout) + Buffer.byteLength(stderr) + data.length > 65536) { error = 'bounded actor output exceeded'; stop(); return; }
+      if (kind === 'stdout') stdout += data.toString('utf8'); else stderr += data.toString('utf8');
+    };
+    child.stdout.on('data', data => append('stdout', data)); child.stderr.on('data', data => append('stderr', data));
+    const finish = (status: number | null, signal: string | null) => {
+      if (done) return; done = true; clearTimeout(timer); clearTimeout(collection);
+      if (status === null && signal === null) { child.unref(); child.stdout.destroy(); child.stderr.destroy(); }
+      const step: Step = { mode, pid: child.pid ?? 0, status, signal, stdout, stderr, exitedAt: Date.now(), ...(error ? { error } : {}) };
+      steps.push(step); evidence.steps = steps; resolveStep(step);
+    };
+    child.on('close', finish);
+    const collection = setTimeout(() => { error = 'owned actor collection unknown'; finish(null, null); }, Math.max(1, deadline - performance.now()) + 3000);
+  });
+  return { result, stop };
+}
+function observeComposedReceiver(): void {
+  const callback = read('callback.json'), held = read('callback-retained.json'), exited = read('callback-exit.json'), sender = read('sender-exit.json');
+  const keys = ['nonce', 'pid', 'creationTicks', 'aumid', 'userSid', 'session', 'sourceSHA', 'executable', 'executableSHA256', 'composedSpecSHA256'];
+  for (const record of [held, exited, read('callback-started.json'), read('callback-terminal.json')]) {
+    if (keys.some(key => record[key] !== callback[key])) throw new Error('held receiver identity mismatch');
+  }
+  const started = read('callback-started.json');
+  if (callback.composedSpecSHA256 !== evidence.composedSpecSHA256 || callback.sourceSHA !== evidence.sourceSHA
+      || callback.executable !== binary || callback.executableSHA256 !== evidence.binarySHA256
+      || callback.nonce !== nonce || callback.aumid !== `AgentNotify.Navigation.TEST.${nonce}`
+      || !Number.isInteger(callback.pid) || Number(callback.pid) <= 0 || Number(callback.pid) > 0xffffffff
+      || [sender.pid, sender.wrapperPID, process.pid, ...steps.filter(step => ['invoke', 'collect-composed-callback'].includes(step.mode)).map(step => step.pid)].includes(Number(callback.pid))
+      || callback.matches !== true || typeof callback.creationTicks !== 'string' || !/^[0-9]{15,20}$/.test(callback.creationTicks)
+      || BigInt(callback.creationTicks) < BigInt(String(sender.collectedUtcTicks))
+      || BigInt(callback.creationTicks) <= BigInt(String(sender.exitTicks))
+      || !Number.isSafeInteger(started.observedBootMs) || Number(started.observedBootMs) < Number(sender.collectedBootMs)
+      || held.session !== sender.session || held.userSid !== sender.userSid || exited.receiverTokenMatched !== true
+      || exited.collected !== true || exited.exitCode !== 0) throw new Error('actual cold receiver custody absent');
+  const fields = ['sidSHA256', 'authLUIDSHA256', 'session', 'elevated', 'elevationType', 'integrityRID', 'enabledAdmins'];
+  const tokens = [callback, held, exited].map(record => {
+    const value = record.receiverToken;
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('receiver token absent');
+    const token = value as Json;
+    if (Object.keys(token).length !== 7 || fields.some(key => !(key in token))
+        || typeof token.sidSHA256 !== 'string' || typeof token.authLUIDSHA256 !== 'string'
+        || !/^[0-9a-f]{64}$/.test(token.sidSHA256) || !/^[0-9a-f]{64}$/.test(token.authLUIDSHA256)
+        || !Number.isInteger(token.session) || Number(token.session) < 0 || Number(token.session) > 0xffffffff || token.session !== record.session
+        || typeof token.elevated !== 'boolean' || typeof token.enabledAdmins !== 'boolean'
+        || !Number.isInteger(token.elevationType) || ![1, 2, 3].includes(Number(token.elevationType))
+        || !Number.isInteger(token.integrityRID) || Number(token.integrityRID) < 0 || Number(token.integrityRID) > 0xffffffff) throw new Error('seven typed token facts invalid');
+    return Object.fromEntries(fields.map(key => [key, token[key]]));
+  });
+  if (tokens.some(token => JSON.stringify(token) !== JSON.stringify(tokens[0]))) throw new Error('entry/held receiver token mismatch');
+  const token = tokens[0], medium = token.integrityRID === 8192 && token.elevated === false && token.enabledAdmins === false;
+  evidence.unpackagedClassicReceiverToken = token; evidence.unpackagedClassicReceiverTokenMeasured = true;
+  evidence.unpackagedClassicReceiverTokenClassification = medium ? 'medium_unelevated_no_enabled_admins' : token.integrityRID === 12288 ? 'high' : 'other';
+  evidence.unpackagedClassicMediumTokenObserved = medium;
+  const terminal = read('callback-terminal.json');
+  if (terminal.valid !== true || terminal.exitPermitValidated !== true || terminal.duplicate !== false
+      || existsSync(join(root!, 'callback-duplicate.json'))) throw new Error('receiver terminal failed');
+  evidence.unpackagedClassicReceiverCollected = true;
+  evidence.processQuiescenceQualified = true;
+}
+async function composedInvoke(): Promise<Step> {
+  const deadline = performance.now() + 30000, parentUtc = Date.now() + 30000;
+  const invoker = composedActor('invoke', deadline, parentUtc); let collector: ReturnType<typeof composedActor> | undefined;
+  vendorEffectsKnown = false;
+  try {
+    while (!existsSync(join(root!, 'vendor-callback-published.json')) && performance.now() < deadline) await delay(20);
+    if (performance.now() >= deadline) throw new Error('callback action terminal missing in original scope');
+    const action = read('vendor-callback-published.json'), callback = read('callback.json');
+    if (action.nonce !== nonce || action.pid !== callback.pid || action.creationTicks !== callback.creationTicks
+        || action.composedSpecSHA256 !== evidence.composedSpecSHA256) throw new Error('action terminal custody invalid');
+    collector = composedActor('collect-composed-callback', Math.min(deadline, performance.now() + 5000), parentUtc);
+    const invoke = await invoker.result;
+    requireSuccess(invoke); const invoked = read('ui-invoke.json'), admitted = read('composed-attempt.json');
+    if (invoked.pid !== invoke.pid || invoked.invokeCallReturned !== true || invoked.invokeHRESULT !== 0
+        || invoked.invokerCreationTicks !== admitted.creationTicks || admitted.pid !== invoke.pid
+        || invoked.composedSpecSHA256 !== evidence.composedSpecSHA256) throw new Error('returned invoker receipt custody invalid');
+    writeFileSync(join(root!, 'invoker-collected.json'), JSON.stringify({ nonce, pid: invoke.pid, creationTicks: admitted.creationTicks,
+      composedSpecSHA256: evidence.composedSpecSHA256, collected: true, exitCode: invoke.status, collectedAt: invoke.exitedAt,
+      uiInvokeSHA256: hashFile(join(root!, 'ui-invoke.json')) }), { flag: 'wx', flush: true });
+    const collect = await collector.result;
+    evidence.composedOwnedActorsCollected = [invoke, collect].every(actor => !actor.error && !actor.signal && actor.status !== null);
+    requireSuccess(collect); observeComposedReceiver(); requireSuccess(invoke);
+    const effect = read('effect.json'), lease = read('callback-lease.json'), attempt = read('composed-attempt.json');
+    for (const key of ['nonce', 'pid', 'creationTicks', 'composedSpecSHA256', 'receiverToken', 'entryBootMs', 'actionDeadlineBootMs',
+      'leaseDeadlineBootMs', 'uiInvokeIntentSHA256', 'outcome', 'hresult', 'queryCallEntered', 'queryCallReturned', 'launchCallEntered', 'launchCallReturned', 'uriSupport']) {
+      if (JSON.stringify(effect[key]) !== JSON.stringify(action[key])) throw new Error('effect/action terminal mismatch');
+    }
+    if (['entryBootMs', 'actionDeadlineBootMs', 'leaseDeadlineBootMs', 'publishedBootMs'].some(key => !Number.isSafeInteger(action[key]) || Number(action[key]) <= 0)
+        || action.actionDeadlineBootMs !== Math.min(Number(action.entryBootMs) + 30000, Number(action.leaseDeadlineBootMs) - 5000)
+        || action.leaseDeadlineBootMs !== lease.leaseDeadlineBootMs || lease.pid !== action.pid || lease.creationTicks !== action.creationTicks
+        || attempt.deadlineBootMs !== action.leaseDeadlineBootMs || attempt.pid !== invoke.pid || attempt.parentDeadlineUtcMs !== parentUtc
+        || attempt.composedSpecSHA256 !== evidence.composedSpecSHA256 || action.uiInvokeIntentSHA256 !== hashFile(join(root!, 'ui-invoke-intent.json'))
+        || !Number.isSafeInteger(action.queryDeadlineBootMs) || Number(action.queryDeadlineBootMs) > Number(action.actionDeadlineBootMs)
+        || Number(action.queryDeadlineBootMs) <= Number(action.entryBootMs)
+        || action.launchCallEntered === true && (!Number.isSafeInteger(action.launchDeadlineBootMs)
+          || Number(action.launchDeadlineBootMs) > Number(action.actionDeadlineBootMs) || Number(action.launchDeadlineBootMs) <= Number(action.entryBootMs))
+        || action.timely !== true
+        || Number(action.publishedBootMs) >= Number(action.actionDeadlineBootMs) || performance.now() >= deadline
+        || action.hresult !== 0 || action.retryAllowed !== false || action.targetConfirmed !== false
+        || action.queryCallEntered !== true || action.queryCallReturned !== true) throw new Error('absolute action/lease outcome unknown');
+    const sender = read('sender-exit.json');
+    for (const name of ['vendor-callback-query-intent.json', ...(action.launchCallEntered === true ? ['vendor-callback-launch-intent.json'] : [])]) {
+      const intent = read(name);
+      for (const key of ['nonce', 'pid', 'creationTicks', 'composedSpecSHA256', 'entryBootMs', 'actionDeadlineBootMs', 'leaseDeadlineBootMs']) {
+        if (intent[key] !== action[key]) throw new Error('inline SDK intent custody changed');
+      }
+      if (intent.queryBoundaryArmed !== true || intent.familyName !== vendorPin.familyName || intent.fullName !== vendorPin.fullName
+          || intent.uri !== `codex://threads/${nonce}` || intent.senderCreationTicks !== sender.creationTicks
+          || name.includes('launch') && intent.launchBoundaryArmed !== true) throw new Error('inline SDK target binding invalid');
+    }
+    const known = action.outcome === 'unavailable' ? action.launchCallEntered === false && action.launchCallReturned === false && Number.isInteger(action.uriSupport) && action.uriSupport !== 0
+      : ['declined', 'handoff_accepted'].includes(String(action.outcome)) && action.launchCallEntered === true && action.launchCallReturned === true && action.uriSupport === 0;
+    if (!known) throw new Error('SDK outcome unknown');
+    vendorEffectsKnown = true; evidence.vendorActionOutcomeUnknown = false; evidence.vendorAction = action; evidence.vendorHandoffAccepted = action.outcome === 'handoff_accepted';
+    return invoke;
+  } finally { invoker.stop(); collector?.stop(); await Promise.all([invoker.result, ...(collector ? [collector.result] : [])]); }
+}
 async function main(): Promise<void> {
   if (process.env.AGENT_NOTIFY_NAVIGATION_WINDOWS_E2E !== '1' || process.env.CI !== 'true'
       || process.env.GITHUB_ACTIONS !== 'true' || process.platform !== 'win32') {
@@ -326,9 +522,16 @@ async function main(): Promise<void> {
   const sampleFlag = process.env.NAVIGATION_WINDOWS_PUBLIC_SAMPLE_TEST;
   if (sampleFlag !== undefined && sampleFlag !== '0' && sampleFlag !== '1') throw new Error('invalid public-sample flag');
   const publicSample = sampleFlag === '1';
+  const composedFlag = process.env.NAVIGATION_WINDOWS_COMPOSED_TEST;
+  if (composedFlag !== undefined && composedFlag !== '0' && composedFlag !== '1') throw new Error('invalid composed flag');
+  composed = composedFlag === '1';
+  if (composed && (!publicSample || diagnosticOnly)) throw new Error('composition requires explicit public sample mode');
+  if (composed) Object.assign(evidence, { scope: 'unpackaged TEST cold classic COM selected-package SDK handoff',
+    vendorCompositionQualified: false, processQuiescenceQualified: false, appNotificationManagerQualified: false, vendorHandoffAccepted: false, vendorActionOutcomeUnknown: false,
+    unpackagedClassicReceiverTokenMeasured: false, unpackagedClassicReceiverTokenClassification: 'unknown', targetConfirmed: false });
   if (publicSample && diagnosticOnly) throw new Error('public sample requires explicit native TEST submission');
   evidence.nativeSubmissionProfile = publicSample ? 'public_sample_one_show' : 'strict_setting';
-  if (publicSample) evidence.scope = 'explicit TEST public-sample Show, readiness unqualified, cold COM callback only';
+  if (publicSample && !composed) evidence.scope = 'explicit TEST public-sample Show, readiness unqualified, cold COM callback only';
   evidence.notifierReadinessQualified = false;
 
   if ((surfaceOnly || taskbarOnly || captureOnly || oobeOnly || setupOnly) && !diagnosticOnly
@@ -600,10 +803,26 @@ async function main(): Promise<void> {
     throw new Error('Center disable policy configured; no settings changed or submission attempted');
   }
   // This records submission intent only. Native terminal records establish the Show count.
+  if (composed) await prepareComposed(desktop);
   installed = true; evidence.submissionIntent = true; evidence.showAttempts = null;
   evidence.showCallOutcome = 'unknown'; evidence.nativeEffectUncertain = true;
   writeFileSync(join(root, 'submission-attempted'), nonce, { flag: 'wx' });
-  const sender = run(publicSample ? 'send-public-sample' : 'send', 20_000);
+  if (composed) { vendorEffectsKnown = false; evidence.vendorActionOutcomeUnknown = true; }
+  const wrapper = run(composed ? 'collect-public-sample-sender' : publicSample ? 'send-public-sample' : 'send', composed ? 23000 : 20000);
+  let sender = wrapper;
+  if (composed) {
+    requireSuccess(wrapper); const child = read('sender-exit.json');
+    if (!Number.isInteger(child.pid) || Number(child.pid) < 1 || Number(child.pid) > 0xffffffff || child.pid === wrapper.pid
+        || child.wrapperPID !== wrapper.pid || child.collected !== true || child.exitCode !== 0
+        || child.composedSpecSHA256 !== evidence.composedSpecSHA256 || child.sourceSHA !== evidence.sourceSHA
+        || child.executable !== binary || child.executableSHA256 !== evidence.binarySHA256
+        || ['creationTicks', 'exitTicks', 'collectedUtcTicks'].some(key => typeof child[key] !== 'string' || !/^[0-9]{15,20}$/.test(child[key] as string))
+        || BigInt(String(child.exitTicks)) < BigInt(String(child.creationTicks)) || BigInt(String(child.collectedUtcTicks)) < BigInt(String(child.exitTicks))
+        || !Number.isSafeInteger(child.collectedBootMs) || Number(child.collectedBootMs) <= 0) throw new Error('actual sender child exit custody invalid');
+    sender = { ...wrapper, mode: 'send-public-sample-composed', pid: Number(child.pid), status: 0,
+      exitedAt: Number(BigInt(String(child.collectedUtcTicks)) / 10000n - 11644473600000n) };
+    evidence.senderWrapperCollected = true; evidence.actualSenderExit = child;
+  }
   if (existsSync(join(root, 'sender.json'))) evidence.sender = read('sender.json');
   if (existsSync(join(root, 'aumid-identity.json'))) evidence.aumidIdentity = read('aumid-identity.json');
   observeShow(sender);
@@ -638,6 +857,7 @@ async function main(): Promise<void> {
         || typeof senderReceipt.userSid !== 'string' || !/^S-1-[0-9-]{1,184}$/.test(senderReceipt.userSid)
         || typeof senderReceipt.creationTicks !== 'string' || !/^[0-9]{15,20}$/.test(senderReceipt.creationTicks)
         || senderReceipt.executable !== binary || senderReceipt.executableSHA256 !== evidence.binarySHA256
+        || composed && senderReceipt.creationTicks !== (evidence.actualSenderExit as Json).creationTicks
         || senderReceipt.sourceSHA !== evidence.sourceSHA || senderReceipt.submissionProfile !== 'public_sample_one_show'
         || senderReceipt.notificationSetting !== null || senderReceipt.readinessQualified !== false
         || createHash('sha256').update(readFileSync(binary!)).digest('hex') !== evidence.binarySHA256
@@ -656,7 +876,8 @@ async function main(): Promise<void> {
     evidence.invokeEffectUncertain = true;
   }
   // No controller call to callback mode/CoCreateInstance. OS is the only cold-server launcher.
-  const invoke = run('invoke', 30_000);
+  if (composed) { vendorEffectsKnown = false; evidence.vendorActionOutcomeUnknown = true; }
+  const invoke = composed ? await composedInvoke() : run('invoke', 30_000);
   if (publicSample && existsSync(join(root, 'ui-invoke-intent.json'))) evidence.uiInvokeIntent = read('ui-invoke-intent.json');
   if (existsSync(join(root, 'ui-invoke.json'))) evidence.uiInvoke = read('ui-invoke.json');
   requireSuccess(invoke);
@@ -716,27 +937,54 @@ async function main(): Promise<void> {
         || !Number.isSafeInteger(intent.invokeDeadlineBootMs) || Number(intent.invokeDeadlineBootMs) <= 0
         || !Number.isSafeInteger(returned.returnedBootMs) || Number(returned.returnedBootMs) <= 0
         || Number(returned.returnedBootMs) >= Number(intent.invokeDeadlineBootMs)) throw new Error('public sample timely Invoke terminal absent');
+    if (composed) {
+      const attempt = read('composed-attempt.json');
+      if (intent.composedSpecSHA256 !== evidence.composedSpecSHA256 || intent.invokerCreationTicks !== attempt.creationTicks
+          || returned.composedSpecSHA256 !== intent.composedSpecSHA256 || returned.invokerCreationTicks !== intent.invokerCreationTicks) throw new Error('composed Invoke incarnation/spec changed');
+    }
     evidence.invokeEffectUncertain = false;
     evidence.publicSampleDefaultRowInvokeObserved = true;
   }
-  for (let i = 0; i < 100 && !existsSync(join(root, 'callback.json')); i++) await delay(100);
+  if (!composed) for (let i = 0; i < 100 && !existsSync(join(root, 'callback.json')); i++) await delay(100);
   if (!existsSync(join(root, 'callback.json'))) throw new Error('no OS-launched COM callback receipt');
   const callback = read('callback.json'); evidence.callback = callback;
   const expectedAUMID = `AgentNotify.Navigation.TEST.${nonce}`;
   if (callback.matches !== true || callback.nonce !== nonce || callback.aumid !== expectedAUMID
       || typeof callback.pid !== 'number' || callback.pid <= 0 || callback.pid === sender.pid
       || callback.pid === invoke.pid || callback.pid === process.pid
-      || typeof callback.startedAt !== 'number' || callback.startedAt < sender.exitedAt) {
+      || (!composed && (typeof callback.startedAt !== 'number' || callback.startedAt < sender.exitedAt))) {
     throw new Error('cold callback identity/correlation/post-sender-exit contract violated');
   }
   evidence.status = 'qualified'; evidence.nativeCallbackQualified = true;
-  evidence.actualNativeUIInvoke = true; evidence.freshCallbackPID = true; exitCode = 0;
+  evidence.actualNativeUIInvoke = true; evidence.freshCallbackPID = true;
+  if (composed) {
+    if (evidence.vendorHandoffAccepted !== true) throw new Error('selected package did not accept handoff');
+    evidence.vendorCompositionQualified = true;
+  }
+  exitCode = 0;
 }
 try {
   await main();
 } catch (error: unknown) {
   evidence.error = error instanceof Error ? error.message : String(error);
+  if (composed) evidence.status = 'failed';
 } finally {
+  if (root && composed && installed && evidence.processQuiescenceQualified !== true) {
+    try { const stop = run('stop-composed-callback', 8000); evidence.receiverFailureCleanupActorCollected = !stop.error && !stop.signal && stop.status !== null;
+      if (existsSync(join(root, 'callback-stop.json'))) evidence.receiverFailureCleanup = read('callback-stop.json');
+    } catch (error: unknown) { evidence.receiverFailureCleanupError = String(error); }
+  }
+  if (root && composed && vendorKnown) {
+    // Any timeout, signal or missing collection blocks Remove, including pre-Show readback actors.
+    const priorActorsCollected = steps.every(actor => !actor.error && !actor.signal && actor.status !== null);
+    evidence.priorActorsCollectedBeforeVendorRemove = priorActorsCollected;
+    if (vendorEffectsKnown && priorActorsCollected && (!installed || evidence.composedOwnedActorsCollected === true && evidence.processQuiescenceQualified === true)) {
+      try { const remove = run('vendor-remove', 165000); requireSuccess(remove);
+        const removed = vendorRecord('vendor-removed.json', remove);
+        if (removed.currentUserFamilyAbsent !== true) throw new Error('owned vendor absence not proven'); evidence.vendorCleanupQualified = true;
+      } catch (error: unknown) { evidence.vendorCleanupError = String(error); evidence.vendorCompositionQualified = false; evidence.status = 'failed'; exitCode = 1; }
+    } else { evidence.vendorCleanupUnknown = true; evidence.vendorCompositionQualified = false; evidence.status = 'failed'; exitCode = 1; }
+  }
   if (root && installed) {
     // Only the UUID registration/shortcut/toast history. Native callback exits itself in <=30s.
     const cleanup = run('cleanup', 15_000);
@@ -747,6 +995,7 @@ try {
       && cleanupRecord?.ownAumidIdentityRemoved !== true;
     if (cleanup.error || cleanup.status !== 0 || cleanup.signal || identityCleanupMissing) {
       evidence.cleanupFailed = true; evidence.nativeCallbackQualified = false;
+      if (composed) evidence.vendorCompositionQualified = false;
       evidence.status = 'failed'; exitCode = 1;
     }
   }
@@ -763,7 +1012,7 @@ try {
       } else { evidence.setupRecordPublicationError = 'bounded packet overflow'; evidence.oobeSetupQualified = false; exitCode = 1; }
       if (evidence.setupRecordErrors || evidence.oobeSetupQualified !== true) { evidence.status = 'failed'; exitCode = 1; }
     }
-    for (const name of ['center-policy.json', 'preflight.json', 'capture-preflight.json', 'capture-after-preflight.json', 'desktop-capture-intent.json', 'desktop-capture.json', 'oobe-preflight.json', 'oobe-after-preflight.json', 'oobe-intent.json', 'oobe-uia.json', 'shortcut-location.json', 'aumid-identity.json', 'sender.json', 'sender-failure.json', 'show-outcome.json', 'submitted.json', 'callback-started.json', 'callback.json', 'public-sample-invoke-authority.json', 'ui-invoke-intent.json', 'ui-candidate.json', 'ui-invoke.json', ...(evidence.nativeSubmissionProfile === 'public_sample_one_show' ? ['toast-selector-failure.json', 'ui-owned-snapshot.json'] : []), 'center-open.json']) {
+    for (const name of [...(composed ? ['composed-spec.json', 'composed-attempt.json', 'invoker-collected.json', 'sender-exit.json', 'sender-failure-cleanup.json', 'callback-lease.json', 'callback-retained.json', 'callback-exit-permit.json', 'callback-exit.json', 'callback-terminal.json', 'callback-failure-cleanup.json', 'callback-stop.json', 'callback-duplicate.json', 'effect.json', 'vendor-callback-query-intent.json', 'vendor-callback-launch-intent.json', 'vendor-callback-published.json', 'vendor-before.json', 'vendor-after.json', 'vendor-install-result.json', 'vendor-remove-result.json', 'vendor-removed.json'] : []), 'center-policy.json', 'preflight.json', 'capture-preflight.json', 'capture-after-preflight.json', 'desktop-capture-intent.json', 'desktop-capture.json', 'oobe-preflight.json', 'oobe-after-preflight.json', 'oobe-intent.json', 'oobe-uia.json', 'shortcut-location.json', 'aumid-identity.json', 'sender.json', 'sender-failure.json', 'show-outcome.json', 'submitted.json', 'callback-started.json', 'callback.json', 'public-sample-invoke-authority.json', 'ui-invoke-intent.json', 'ui-candidate.json', 'ui-invoke.json', ...(evidence.nativeSubmissionProfile === 'public_sample_one_show' ? ['toast-selector-failure.json', 'ui-owned-snapshot.json'] : []), 'center-open.json']) {
       if (!existsSync(join(root, name))) continue;
       try { evidence[name] = read(name); } catch (error: unknown) { evidence[`${name}ReadError`] = String(error); }
     }
