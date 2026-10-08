@@ -3,6 +3,8 @@
 #include <cstdio>
 #include <cstddef>
 #include <memory>
+#include <aclapi.h>
+#include <algorithm>
 
 struct Handle {
     HANDLE value = nullptr;
@@ -26,45 +28,145 @@ struct Attributes {
     LPPROC_THREAD_ATTRIBUTE_LIST list = nullptr;
     ~Attributes() { if (list) DeleteProcThreadAttributeList(list); }
 };
-struct Facts {
-    std::string sid, auth;
-    DWORD session = 0, rid = 0;
-    DWORD elevated = 0;
-    TOKEN_ELEVATION_TYPE type{};
-};
-static Facts facts(HANDLE token) {
-    Facts f;
-    auto user = queryToken(token, TokenUser, "TokenUser", sizeof(TOKEN_USER));
-    const auto sid = reinterpret_cast<TOKEN_USER*>(user.data())->User.Sid;
-    f.sid = digest(reinterpret_cast<const BYTE*>(sid), boundedSidSize(user, sid, "TokenUserSID"));
-    const auto statistics = queryFixedToken<TOKEN_STATISTICS>(token, TokenStatistics, "TokenStatistics");
-    f.auth = digest(reinterpret_cast<const BYTE*>(&statistics.AuthenticationId), sizeof(LUID));
-    f.session = queryFixedToken<DWORD>(token, TokenSessionId, "TokenSessionId");
-    f.elevated = queryFixedToken<TOKEN_ELEVATION>(token, TokenElevation, "TokenElevation").TokenIsElevated;
-    f.type = queryFixedToken<TOKEN_ELEVATION_TYPE>(token, TokenElevationType, "TokenElevationType");
-    auto integrity = queryToken(token, TokenIntegrityLevel, "TokenIntegrityLevel", sizeof(TOKEN_MANDATORY_LABEL));
-    const auto level = reinterpret_cast<TOKEN_MANDATORY_LABEL*>(integrity.data())->Label.Sid;
-    boundedSidSize(integrity, level, "IntegritySID");
-    const BYTE count = *GetSidSubAuthorityCount(level);
-    if (!count || f.elevated > 1 || f.type < TokenElevationTypeDefault || f.type > TokenElevationTypeLimited)
-        throw Failure{"TokenValue", ERROR_INVALID_DATA};
-    f.rid = *GetSidSubAuthority(level, count - 1);
-    return f;
-}
-static std::string factsJson(const Facts& f) {
-    return "{\"sidSHA256\":\"" + f.sid + "\",\"authLUIDSHA256\":\"" + f.auth +
-        "\",\"session\":" + std::to_string(f.session) + ",\"elevated\":" + (f.elevated ? "true" : "false") +
-        ",\"elevationType\":" + std::to_string(f.type) + ",\"integrityRID\":" + std::to_string(f.rid) + "}";
-}
-static std::string quoted(const std::string& input) {
-    std::string out = "\"";
-    for (unsigned char c : input) {
-        if (c == '"' || c == '\\') { out += '\\'; out += static_cast<char>(c); }
-        else if (c < 32 || c >= 127) {
-            out += "\\u00"; out += "0123456789abcdef"[c >> 4]; out += "0123456789abcdef"[c & 15];
-        } else out += static_cast<char>(c);
+struct LocalMemory { void* value = nullptr; ~LocalMemory() { if (value) LocalFree(value); } };
+static void privateDescriptor(PSID user, PSID system, bool directory, SECURITY_DESCRIPTOR& sd, LocalMemory& aclMemory) {
+    EXPLICIT_ACCESSW entries[2]{};
+    for (unsigned i = 0; i < 2; ++i) {
+        entries[i].grfAccessPermissions = FILE_ALL_ACCESS; entries[i].grfAccessMode = SET_ACCESS;
+        entries[i].grfInheritance = directory ? SUB_CONTAINERS_AND_OBJECTS_INHERIT : NO_INHERITANCE;
+        entries[i].Trustee.TrusteeForm = TRUSTEE_IS_SID;
+        entries[i].Trustee.ptstrName = reinterpret_cast<LPWSTR>(i ? system : user);
     }
-    return out + "\"";
+    PACL acl = nullptr;
+    DWORD error = SetEntriesInAclW(EqualSid(user, system) ? 1 : 2, entries, nullptr, &acl); aclMemory.value = acl;
+    if (error) throw Failure{"PrivateACLBuild", error};
+    require(InitializeSecurityDescriptor(&sd, SECURITY_DESCRIPTOR_REVISION) != FALSE, "PrivateSDInit");
+    require(SetSecurityDescriptorOwner(&sd, user, FALSE) != FALSE, "ExplicitOwnOwner");
+    require(SetSecurityDescriptorDacl(&sd, TRUE, acl, FALSE) != FALSE, "ExplicitOwnDACL");
+    require(SetSecurityDescriptorControl(&sd, SE_DACL_PROTECTED, SE_DACL_PROTECTED) != FALSE, "ExplicitProtectedDACL");
+}
+static void privateAcl(HANDLE object, PSID user, PSID system, bool directory) {
+    LocalMemory aclMemory, descriptor; SECURITY_DESCRIPTOR desired{};
+    privateDescriptor(user, system, directory, desired, aclMemory);
+    DWORD error = SetSecurityInfo(object, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                            nullptr, nullptr, static_cast<PACL>(aclMemory.value), nullptr);
+    if (error) throw Failure{"SealOwnObject", error};
+    PSECURITY_DESCRIPTOR sd = nullptr; PACL actual = nullptr;
+    error = GetSecurityInfo(object, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, nullptr, nullptr, &actual, nullptr, &sd);
+    descriptor.value = sd;
+    if (error) throw Failure{"SealedACLReadback", error};
+    SECURITY_DESCRIPTOR_CONTROL control{}; DWORD revision = 0;
+    require(GetSecurityDescriptorControl(sd, &control, &revision) != FALSE, "SealedACLControl");
+    const DWORD expectedEntries = EqualSid(user, system) ? 1 : 2;
+    if (!(control & SE_DACL_PROTECTED) || !actual || actual->AceCount != expectedEntries) throw Failure{"SealedACLShape", ERROR_INVALID_ACL};
+    bool sawUser = false, sawSystem = false;
+    for (DWORD i = 0; i < expectedEntries; ++i) {
+        ACCESS_ALLOWED_ACE* ace = nullptr;
+        require(GetAce(actual, i, reinterpret_cast<LPVOID*>(&ace)) != FALSE, "SealedACE");
+        if (!ace || ace->Header.AceType != ACCESS_ALLOWED_ACE_TYPE || ace->Mask != FILE_ALL_ACCESS ||
+            ace->Header.AceFlags != (directory ? OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE : 0))
+            throw Failure{"SealedACEPolicy", ERROR_INVALID_ACL};
+        PSID sid = &ace->SidStart;
+        const bool isUser = EqualSid(sid, user) != FALSE, isSystem = EqualSid(sid, system) != FALSE;
+        if (!isUser && !isSystem) throw Failure{"ForeignSealedACE", ERROR_INVALID_ACL};
+        sawUser = sawUser || isUser; sawSystem = sawSystem || isSystem;
+    }
+    if (!sawUser || !sawSystem) throw Failure{"SealedPrincipalAbsent", ERROR_INVALID_ACL};
+}
+static void boundOwned(Handle& handle, const std::wstring& path, PSID user, bool directory) {
+    handle.value = CreateFileW(path.c_str(), READ_CONTROL | WRITE_DAC | FILE_READ_ATTRIBUTES, FILE_SHARE_READ,
+        nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    require(handle.value != INVALID_HANDLE_VALUE, "BindOwnObject");
+    BY_HANDLE_FILE_INFORMATION info{}; require(GetFileInformationByHandle(handle.value, &info) != FALSE, "OwnObjectIdentity");
+    if ((info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) ||
+        !!(info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != directory || (!directory && info.nNumberOfLinks != 1))
+        throw Failure{"OwnObjectRedirected", ERROR_INVALID_DATA};
+    wchar_t finalPath[32768]{}; const DWORD length = GetFinalPathNameByHandleW(handle.value, finalPath, 32768, FILE_NAME_NORMALIZED);
+    if (!length || length >= 32768 || _wcsicmp(finalPath, (L"\\\\?\\" + path).c_str()))
+        throw Failure{"OwnObjectPhysicalPath", ERROR_INVALID_DATA};
+    LocalMemory descriptor; PSECURITY_DESCRIPTOR sd = nullptr; PSID owner = nullptr;
+    const DWORD error = GetSecurityInfo(handle.value, SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION, &owner, nullptr, nullptr, nullptr, &sd);
+    descriptor.value = sd;
+    if (error) throw Failure{"OwnObjectOwner", error};
+    if (!owner || !EqualSid(owner, user)) throw Failure{"ForeignObjectOwner", ERROR_ACCESS_DENIED};
+}
+static std::vector<std::wstring> closedLeaves(const std::wstring& nonce) {
+    return {L"TEST-launcher-" + nonce + L".exe", L"TEST-sdk-" + nonce + L".exe",
+        L"Microsoft.WindowsAppRuntime.Bootstrap.dll", L"TEST-module-pins.txt", L"Microsoft.WindowsAppRuntime.2.msix",
+        L"Microsoft.WindowsAppRuntime.DDLM.2.msix", L"Microsoft.WindowsAppRuntime.Main.2.msix", L"Microsoft.WindowsAppRuntime.Singleton.2.msix",
+        L"Microsoft.WindowsAppRuntime.2.msix.manifest.xml", L"Microsoft.WindowsAppRuntime.DDLM.2.msix.manifest.xml",
+        L"Microsoft.WindowsAppRuntime.Main.2.msix.manifest.xml", L"Microsoft.WindowsAppRuntime.Singleton.2.msix.manifest.xml"};
+}
+static void freshRootPath(const std::wstring& root, const std::wstring& nonce) {
+        wchar_t temp[32768]{}, canonical[32768]{};
+        const DWORD n = GetEnvironmentVariableW(L"RUNNER_TEMP", temp, 32768);
+        if (!n || n >= 32768) throw Failure{"PrivateRunnerTemp", ERROR_INVALID_PARAMETER};
+        const DWORD length = GetFullPathNameW(temp, 32768, canonical, nullptr);
+        if (!length || length >= 32768) throw Failure{"PrivateTempCanonical", ERROR_INVALID_PARAMETER};
+        std::wstring parent(canonical); while (parent.size() > 3 && parent.back() == L'\\') parent.pop_back();
+        if (root != parent + L"\\TEST-lua-preflight-" + nonce) throw Failure{"PrivateFreshRootNonce", ERROR_INVALID_PARAMETER};
+}
+static int createPrivateRoot(int argc, wchar_t** argv) {
+    if (argc != 5 || !validNonce(argv[2])) return 64;
+    const bool deployment = !wcscmp(argv[4], L"deploy");
+    if (!deployment && wcscmp(argv[4], L"bootstrap")) return 64;
+    const std::wstring root(argv[3]), wideNonce(argv[2]); const std::string nonce(wideNonce.begin(), wideNonce.end());
+    try {
+        freshRootPath(root, wideNonce);
+        Token token; require(OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token.handle) != FALSE, "PrivateOwnToken");
+        auto userData = queryToken(token.handle, TokenUser, "PrivateTokenUser", sizeof(TOKEN_USER));
+        const PSID user = reinterpret_cast<TOKEN_USER*>(userData.data())->User.Sid; boundedSidSize(userData, user, "PrivateUserSID");
+        BYTE system[SECURITY_MAX_SID_SIZE]{}; DWORD bytes = sizeof(system);
+        require(CreateWellKnownSid(WinLocalSystemSid, nullptr, system, &bytes) != FALSE, "PrivateSystemSID");
+        LocalMemory rootAcl, fileAcl; SECURITY_DESCRIPTOR rootSD{}, fileSD{};
+        privateDescriptor(user, system, true, rootSD, rootAcl); privateDescriptor(user, system, false, fileSD, fileAcl);
+        SECURITY_ATTRIBUTES rootSA{sizeof(rootSA), &rootSD, FALSE}, fileSA{sizeof(fileSA), &fileSD, FALSE};
+        require(CreateDirectoryW(root.c_str(), &rootSA) != FALSE, "CreateFreshPrivateRoot");
+        Handle directory; boundOwned(directory, root, user, true); privateAcl(directory.value, user, system, true);
+        const auto leaves = closedLeaves(wideNonce); const unsigned count = deployment ? 12 : 4;
+        for (unsigned i = 0; i < count; ++i) {
+            const auto path = root + L"\\" + leaves[i]; Handle created;
+            created.value = CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE | READ_CONTROL | WRITE_DAC,
+                0, &fileSA, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+            require(created.value != INVALID_HANDLE_VALUE, "CreatePrivateClosedLeaf");
+            privateAcl(created.value, user, system, false);
+        }
+        std::printf("{\"nonce\":\"%s\",\"pid\":%lu,\"created\":true,\"protectedDACL\":true,\"files\":%u}\n", nonce.c_str(), GetCurrentProcessId(), count);
+        return 0;
+    } catch (const Failure& f) {
+        std::printf("{\"nonce\":\"%s\",\"pid\":%lu,\"created\":false,\"query\":\"%s\",\"error\":%lu}\n",
+            nonce.c_str(), GetCurrentProcessId(), f.query, f.error); return 1;
+    } catch (...) { return 1; }
+}
+static int sealRoot(int argc, wchar_t** argv) {
+    if (argc != 4 || !validNonce(argv[2])) return 64;
+    const std::wstring root(argv[3]), nonceWide(argv[2]); const std::string nonce(nonceWide.begin(), nonceWide.end());
+    try {
+        freshRootPath(root, nonceWide);
+        Token token; require(OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token.handle) != FALSE, "SealOwnToken");
+        auto userData = queryToken(token.handle, TokenUser, "SealTokenUser", sizeof(TOKEN_USER));
+        const PSID user = reinterpret_cast<TOKEN_USER*>(userData.data())->User.Sid; boundedSidSize(userData, user, "SealUserSID");
+        BYTE system[SECURITY_MAX_SID_SIZE]{}; DWORD bytes = sizeof(system);
+        require(CreateWellKnownSid(WinLocalSystemSid, nullptr, system, &bytes) != FALSE, "SealSystemSID");
+        Handle heldRoot; boundOwned(heldRoot, root, user, true); privateAcl(heldRoot.value, user, system, true);
+        const auto allowed = closedLeaves(nonceWide);
+        WIN32_FIND_DATAW entry{}; HANDLE enumeration = FindFirstFileW((root + L"\\*").c_str(), &entry);
+        require(enumeration != INVALID_HANDLE_VALUE, "SealClosedFiles"); unsigned count = 0;
+        try {
+            do {
+                const std::wstring leaf(entry.cFileName); if (leaf == L"." || leaf == L"..") continue;
+                if (std::find(allowed.begin(), allowed.end(), leaf) == allowed.end()) throw Failure{"SealForeignLeaf", ERROR_INVALID_DATA};
+                Handle file; boundOwned(file, root + L"\\" + leaf, user, false); privateAcl(file.value, user, system, false); ++count;
+            } while (FindNextFileW(enumeration, &entry));
+            if (GetLastError() != ERROR_NO_MORE_FILES || (count != 4 && count != 12)) throw Failure{"SealClosedSetCount", ERROR_INVALID_DATA};
+        } catch (...) { FindClose(enumeration); throw; }
+        FindClose(enumeration);
+        std::printf("{\"nonce\":\"%s\",\"pid\":%lu,\"sealed\":true,\"protectedDACL\":true,\"files\":%u}\n", nonce.c_str(), GetCurrentProcessId(), count);
+        return 0;
+    } catch (const Failure& f) {
+        std::printf("{\"nonce\":\"%s\",\"pid\":%lu,\"sealed\":false,\"query\":\"%s\",\"error\":%lu}\n",
+            nonce.c_str(), GetCurrentProcessId(), f.query, f.error); return 1;
+    } catch (...) { return 1; }
 }
 static void file(Handle& h, const std::wstring& path) {
     SECURITY_ATTRIBUTES sa{sizeof(sa), nullptr, TRUE};
@@ -84,21 +186,14 @@ static std::string readOutput(HANDLE fileHandle) {
     if (received != data.size()) throw Failure{"OwnOutputLength", ERROR_INVALID_DATA};
     return data;
 }
-static bool enabledAdmins(HANDLE token) {
-    Token duplicate;
-    require(DuplicateTokenEx(token, TOKEN_QUERY, nullptr, SecurityIdentification, TokenImpersonation,
-                             &duplicate.handle) != FALSE, "QueryOnlyDuplicate");
-    BYTE sid[SECURITY_MAX_SID_SIZE]{};
-    DWORD bytes = sizeof(sid);
-    require(CreateWellKnownSid(WinBuiltinAdministratorsSid, nullptr, sid, &bytes) != FALSE, "AdministratorsSID");
-    BOOL member = FALSE;
-    require(CheckTokenMembership(duplicate.handle, sid, &member) != FALSE, "CheckTokenMembership");
-    return member != FALSE;
-}
 int wmain(int argc, wchar_t** argv) {
+    if (argc >= 2 && !wcscmp(argv[1], L"--TEST-create-private-sdk-root")) return createPrivateRoot(argc, argv);
+    if (argc >= 2 && !wcscmp(argv[1], L"--TEST-seal-sdk-root")) return sealRoot(argc, argv);
     if (argc != 5 || !validNonce(argv[2])) return 64;
-    const bool medium = wcscmp(argv[1], L"--TEST-lua-medium-token-preflight") == 0;
-    if (!medium && wcscmp(argv[1], L"--TEST-lua-token-preflight")) return 64;
+    const bool deploy = wcscmp(argv[1], L"--TEST-sdk-deployment") == 0;
+    const bool sdk = deploy || wcscmp(argv[1], L"--TEST-sdk-bootstrap") == 0;
+    const bool medium = !deploy && (sdk || wcscmp(argv[1], L"--TEST-lua-medium-token-preflight") == 0);
+    if (!sdk && !medium && wcscmp(argv[1], L"--TEST-lua-token-preflight")) return 64;
     const std::wstring wideNonce(argv[2]), root(argv[3]), probe(argv[4]);
     const std::string nonce(wideNonce.begin(), wideNonce.end());
     std::string baseline = "null", held = "null", output, stderrText, birth = "null";
@@ -117,7 +212,7 @@ int wmain(int argc, wchar_t** argv) {
         const DWORD attrs = GetFileAttributesW(root.c_str());
         if (!length || length >= 32768 || root != canonical || basename.rfind(L"TEST-lua-preflight-", 0) != 0 ||
             attrs == INVALID_FILE_ATTRIBUTES || !(attrs & FILE_ATTRIBUTE_DIRECTORY) || (attrs & FILE_ATTRIBUTE_REPARSE_POINT) ||
-            probe != root + L"\\TEST-token-" + wideNonce + L".exe")
+            probe != root + (sdk ? L"\\TEST-sdk-" : L"\\TEST-token-") + wideNonce + L".exe")
             throw Failure{"OwnTESTPath", ERROR_INVALID_PARAMETER};
         const DWORD probeAttrs = GetFileAttributesW(probe.c_str());
         if (probeAttrs == INVALID_FILE_ATTRIBUTES || (probeAttrs & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)))
@@ -131,7 +226,7 @@ int wmain(int argc, wchar_t** argv) {
         require(ProcessIdToSessionId(GetCurrentProcessId(), &ownSession) != FALSE, "OwnProcessSession");
         if (ownSession != before.session) throw Failure{"OwnSessionMismatch", ERROR_INVALID_DATA};
         baseline = factsJson(before);
-        require(CreateRestrictedToken(parent.handle, LUA_TOKEN, 0, nullptr, 0, nullptr, 0, nullptr,
+        if (!deploy) require(CreateRestrictedToken(parent.handle, LUA_TOKEN, 0, nullptr, 0, nullptr, 0, nullptr,
                                       &restricted.handle) != FALSE, "CreateRestrictedTokenLUA");
         if (medium) {
             const auto initial = facts(restricted.handle); restrictedBefore = factsJson(initial);
@@ -190,8 +285,11 @@ int wmain(int argc, wchar_t** argv) {
         if (!windowsLength || windowsLength >= 32768) throw Failure{"SystemRoot", ERROR_INVALID_DATA};
         std::wstring environment = L"SystemRoot=" + std::wstring(windows) + L'\0' + L"TEMP=" + root + L'\0' + L"TMP=" + root;
         environment.push_back(L'\0'); environment.push_back(L'\0');
-        std::wstring command = L"\"" + probe + L"\" --read-only-TEST-token-preflight " + wideNonce;
-        require(CreateProcessAsUserW(restricted.handle, probe.c_str(), command.data(), nullptr, nullptr, TRUE,
+        std::wstring command = L"\"" + probe + L"\" " + (sdk ? (deploy ? L"--TEST-sdk-deploy " : L"--TEST-sdk-bootstrap ") : L"--read-only-TEST-token-preflight ") + wideNonce;
+        if (sdk) command += L" \"" + root + L"\" " + std::wstring(before.sid.begin(), before.sid.end()) + L" " +
+            std::wstring(before.auth.begin(), before.auth.end()) + L" " + std::to_wstring(before.session);
+        const ULONGLONG sdkDeadline = GetTickCount64() + (deploy ? 90000 : 30000);
+        require(CreateProcessAsUserW(deploy ? parent.handle : restricted.handle, probe.c_str(), command.data(), nullptr, nullptr, TRUE,
                   CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT,
                   environment.data(), root.c_str(), &startup.StartupInfo, &child.pi) != FALSE, "CreateOwnRestrictedChild");
         childPid = child.pi.dwProcessId;
@@ -211,9 +309,12 @@ int wmain(int argc, wchar_t** argv) {
         require(ProcessIdToSessionId(childPid, &heldSession) != FALSE, "HeldProcessSession");
         if (heldSession != after.session) throw Failure{"HeldSessionMismatch", ERROR_INVALID_DATA};
         identity = before.sid == after.sid && before.auth == after.auth && before.session == after.session;
+        if (deploy && factsJson(after) != baseline) throw Failure{"DeploymentPrimaryChanged", ERROR_INVALID_DATA};
+        if (sdk && !deploy && (after.rid != SECURITY_MANDATORY_MEDIUM_RID || after.elevated || admin))
+            throw Failure{"SDKMediumHeldAdmission", ERROR_INVALID_DATA};
         if (!identity) throw Failure{"SameIdentitySession", ERROR_INVALID_DATA};
         require(ResumeThread(child.pi.hThread) == 1, "ResumeOwnChildOnce");
-        const ULONGLONG deadline = GetTickCount64() + 12000;
+        const ULONGLONG deadline = sdk ? sdkDeadline : GetTickCount64() + 12000;
         DWORD wait = WAIT_TIMEOUT;
         while (GetTickCount64() < deadline && wait == WAIT_TIMEOUT)
             wait = WaitForSingleObject(child.pi.hProcess, static_cast<DWORD>((deadline - GetTickCount64()) > 100 ? 100 : 1));
@@ -252,7 +353,7 @@ int wmain(int argc, wchar_t** argv) {
         }
     }
     const std::string record = "{\"nonce\":" + quoted(nonce) + ",\"pid\":" + std::to_string(GetCurrentProcessId()) +
-        ",\"variant\":" + quoted(medium ? "lua-medium" : "lua-only") + ",\"restrictedBefore\":" + restrictedBefore +
+        ",\"variant\":" + quoted(sdk ? (deploy ? "sdk-deploy" : "sdk-bootstrap") : (medium ? "lua-medium" : "lua-only")) + ",\"restrictedBefore\":" + restrictedBefore +
         ",\"restrictedAfter\":" + restrictedAfter + ",\"parentAfter\":" + parentAfter +
         ",\"loweringAttempted\":" + (loweringAttempted ? "true" : "false") + ",\"integrityLowered\":" + (integrityLowered ? "true" : "false") +
         ",\"baseline\":" + baseline + ",\"held\":" + held + ",\"childPid\":" + std::to_string(childPid) +
