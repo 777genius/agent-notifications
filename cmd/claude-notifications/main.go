@@ -37,6 +37,9 @@ var (
 )
 
 func main() {
+	if len(os.Args) > 1 && (os.Args[1] == "internal-linux-callback" || os.Args[1] == "setup-linux-callback") {
+		os.Exit(linuxCallbackMain(os.Args[1], os.Args[2:]))
+	}
 	if len(os.Args) > 1 && os.Args[1] == "opencode-runtime-profile" {
 		os.Exit(runOpenCodeRuntimeProfile(os.Args[2:], os.Stdin, os.Stdout))
 	}

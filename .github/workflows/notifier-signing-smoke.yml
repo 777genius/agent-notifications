@@ -12,9 +12,6 @@ on:
         required: false
         default: false
         type: boolean
-  push:
-    tags:
-      - "smoke-notary-*"
   workflow_dispatch:
     inputs:
       use_github_runner:
@@ -33,6 +30,8 @@ permissions:
 
 jobs:
   smoke-notifier:
+    if: ${{ github.actor == github.repository_owner && github.triggering_actor == github.repository_owner && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/release/macos-signing' }}
+    environment: macos-signing
     name: Build, Sign, Optionally Notarize ClaudeNotifier.app
     runs-on: ${{ inputs.use_github_runner && 'macos-15' || github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'macos-15' || vars.CI_MACOS_15_RUNNER || 'macos-15' }}
     timeout-minutes: 60
@@ -40,6 +39,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Verify Apple signing credentials
         env:
