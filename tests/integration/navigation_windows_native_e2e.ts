@@ -683,9 +683,33 @@ async function main(): Promise<void> {
         || new Set(intent.titleRuntimeIDs.map(value => JSON.stringify(value))).size !== intent.titleRuntimeIDs.length) {
       throw new Error('public sample row title identity set invalid');
     }
+    if (!runtime(intent.groupRuntimeID) || intent.groupControlType !== 50026 || intent.commonGroupVerified !== true
+        || intent.groupCensusComplete !== true || intent.eligibleListItemsInGroup !== 1
+        || !Number.isInteger(intent.inspectedListItemsInGroup) || Number(intent.inspectedListItemsInGroup) < 1 || Number(intent.inspectedListItemsInGroup) > 512
+        || JSON.stringify(intent.groupRuntimeID) === JSON.stringify(intent.runtimeID)
+        || intent.titleRuntimeIDs.some(value => JSON.stringify(value) === JSON.stringify(intent.groupRuntimeID)
+          || JSON.stringify(value) === JSON.stringify(intent.runtimeID))
+        || !Array.isArray(intent.titleAssociations) || intent.titleAssociations.length !== intent.titleRuntimeIDs.length) {
+      throw new Error('public sample complete common Group proof invalid');
+    }
+    const expectedTitles = new Set(intent.titleRuntimeIDs.map(value => JSON.stringify(value))), observedTitles = new Set<string>();
+    let rowText = false;
+    for (const value of intent.titleAssociations) {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('public sample title association absent');
+      const association = value as Json, id = JSON.stringify(association.runtimeID);
+      if (Object.keys(association).length !== 3 || !runtime(association.runtimeID) || !expectedTitles.has(id) || observedTitles.has(id)
+          || (association.role === 'row_text' ? !runtime(association.nearestRowRuntimeID)
+            || JSON.stringify(association.nearestRowRuntimeID) !== JSON.stringify(intent.runtimeID)
+            : association.role !== 'group_header' || association.nearestRowRuntimeID !== null)) {
+        throw new Error('public sample nearest Group title role binding invalid');
+      }
+      observedTitles.add(id); rowText ||= association.role === 'row_text';
+    }
+    if (!rowText || observedTitles.size !== expectedTitles.size) throw new Error('public sample full title role set incomplete');
     for (const key of ['nonce', 'pid', 'authorityProfile', 'selectionKind', 'controlType', 'specSHA256', 'invokeDeadlineBootMs', 'providerPID',
       'providerCreationTicks', 'providerImagePathKind', 'runtimeID', 'titleRuntimeID', 'titleRuntimeIDs', 'containerRuntimeID',
-      'exactTitleVerified', 'offscreen', 'enabled']) {
+      'exactTitleVerified', 'offscreen', 'enabled', 'groupRuntimeID', 'groupControlType', 'commonGroupVerified',
+      'groupCensusComplete', 'eligibleListItemsInGroup', 'inspectedListItemsInGroup', 'titleAssociations']) {
       if (JSON.stringify(intent[key]) !== JSON.stringify(returned[key])) throw new Error('public sample Invoke binding changed');
     }
     if (returned.invokeCallEntered !== true || returned.invokeCallReturned !== true

@@ -950,10 +950,23 @@ struct ToastRow {
     int pid{};
     std::string runtime, titleRuntime, containerRuntime;
     std::map<std::string, ComPtr<IUIAutomationElement>> titles;
+    ComPtr<IUIAutomationElement> group;
+    std::string groupRuntime;
+    std::map<std::string, std::string> titleRoles;
+    unsigned inspectedListItems = 0;
 };
 static std::string toastTitleSet(const ToastRow& row) {
     std::string result = "[";
     for (const auto& title : row.titles) { if (result.size() > 1) result += ','; result += title.first; }
+    return result + ']';
+}
+static std::string toastTitleAssociations(const ToastRow& row) {
+    std::string result = "[";
+    for (const auto& [runtime, role] : row.titleRoles) {
+        if (result.size() > 1) result += ',';
+        result += "{\"runtimeID\":" + runtime + ",\"role\":\"" + role + "\",\"nearestRowRuntimeID\":"
+            + (role == "row_text" ? row.runtime : "null") + '}';
+    }
     return result + ']';
 }
 static int invokeToastDefault(bool publicSample = false) {
@@ -1055,8 +1068,89 @@ static int invokeToastDefault(bool publicSample = false) {
     };
     phase = "automation_create"; check(CoCreateInstance(CLSID_CUIAutomation, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&automation)));
     ComPtr<IUIAutomationTreeWalker> walker; check(automation->get_RawViewWalker(&walker));
+    // Public consumer only: first same-provider Group bounds both row text and sibling header.
+    auto groupAssociation = [&](IUIAutomationElement* element, int pid) {
+        phase = "nearest_common_group"; ToastRow path; ComPtr<IUIAutomationElement> parent = element;
+        for (unsigned depth = 0; depth < 8; ++depth) {
+            demand(GetTickCount64() < deadline); ComPtr<IUIAutomationElement> next; check(walker->GetParentElement(parent.Get(), &next)); demand(next != nullptr);
+            int provider{}; CONTROLTYPEID type{}; check(next->get_CurrentProcessId(&provider)); demand(provider == pid);
+            check(next->get_CurrentControlType(&type)); parent = next;
+            if (type == UIA_GroupControlTypeId) { path.group = next; break; }
+            if (type == UIA_ListItemControlTypeId && !path.row) path.row = next;
+        }
+        demand(path.group != nullptr); return path;
+    };
+    auto collectPublicTitle = [&](ToastRow& proof, IUIAutomationElement* title, int pid, const std::string& container) {
+        BOOL offscreen = TRUE, enabled = FALSE; phase = "public_title_visibility";
+        check(title->get_CurrentIsOffscreen(&offscreen)); check(title->get_CurrentIsEnabled(&enabled)); demand(!offscreen && enabled);
+        auto path = groupAssociation(title, pid); BOOL same = FALSE;
+        if (!proof.group) { proof.group = path.group; proof.pid = pid; proof.containerRuntime = container; proof.groupRuntime = toastRuntime(path.group.Get()); }
+        demand(proof.pid == pid && proof.containerRuntime == container && proof.groupRuntime == toastRuntime(path.group.Get()));
+        check(automation->CompareElements(proof.group.Get(), path.group.Get(), &same)); demand(same);
+        if (path.row) {
+            if (!proof.row) { proof.row = path.row; proof.runtime = toastRuntime(path.row.Get()); }
+            check(automation->CompareElements(proof.row.Get(), path.row.Get(), &same)); demand(same && proof.runtime == toastRuntime(path.row.Get()));
+        }
+        const auto runtime = toastRuntime(title); const std::string role = path.row ? "row_text" : "group_header";
+        auto previous = proof.titles.find(runtime);
+        if (previous != proof.titles.end()) { check(automation->CompareElements(previous->second.Get(), title, &same)); demand(same && proof.titleRoles.at(runtime) == role); }
+        else { proof.titles.emplace(runtime, title); proof.titleRoles.emplace(runtime, role); }
+    };
+    auto verifyPublicGroup = [&](ToastRow& proof) {
+        phase = "common_group_state"; int provider{}; CONTROLTYPEID type{}; BOOL offscreen = TRUE, enabled = FALSE;
+        check(proof.group->get_CurrentProcessId(&provider)); check(proof.group->get_CurrentControlType(&type));
+        check(proof.group->get_CurrentIsOffscreen(&offscreen)); check(proof.group->get_CurrentIsEnabled(&enabled));
+        demand(provider == proof.pid && type == UIA_GroupControlTypeId && !offscreen && enabled && toastRuntime(proof.group.Get()) == proof.groupRuntime);
+        demand(proof.row != nullptr && proof.groupRuntime != proof.runtime && !proof.titles.contains(proof.runtime) && !proof.titles.contains(proof.groupRuntime));
+        struct Node { ComPtr<IUIAutomationElement> element; unsigned depth; };
+        std::vector<Node> pending{{proof.group, 0}}; unsigned eligible = 0; proof.inspectedListItems = 0; ToastRow observed;
+        std::map<std::string, ComPtr<IUIAutomationElement>> inspectedRows;
+        auto owner = custody.owner(proof.pid); demand(owner && owner->live());
+        while (!pending.empty()) {
+            auto node = std::move(pending.back()); pending.pop_back(); ++nodes; phase = "group_complete_census";
+            demand(nodes <= 512 && roots <= 64 && GetTickCount64() < deadline && owner->live());
+            check(node.element->get_CurrentProcessId(&provider)); demand(provider == proof.pid); check(node.element->get_CurrentControlType(&type));
+            BSTR name = nullptr; check(node.element->get_CurrentName(&name));
+            const bool exact = name && std::wstring(name, SysStringLen(name)) == L"Navigation TEST " + uuid; SysFreeString(name);
+            if (exact) { demand(type == UIA_TextControlTypeId); collectPublicTitle(observed, node.element.Get(), proof.pid, proof.containerRuntime); }
+            if (type == UIA_ListItemControlTypeId) {
+                ++proof.inspectedListItems; phase = "group_listitem_eligibility";
+                const auto runtime = toastRuntime(node.element.Get()); auto previous = inspectedRows.find(runtime);
+                if (previous != inspectedRows.end()) { BOOL same = FALSE; check(automation->CompareElements(previous->second.Get(), node.element.Get(), &same)); demand(same); }
+                else inspectedRows.emplace(runtime, node.element);
+                demand(runtime != proof.groupRuntime && !proof.titles.contains(runtime));
+                auto path = groupAssociation(node.element.Get(), proof.pid); BOOL same = FALSE;
+                check(automation->CompareElements(path.group.Get(), proof.group.Get(), &same)); demand(same);
+                phase = "group_listitem_eligibility"; check(node.element->get_CurrentIsOffscreen(&offscreen)); check(node.element->get_CurrentIsEnabled(&enabled));
+                VARIANT value{}; const HRESULT hr = node.element->GetCurrentPropertyValue(UIA_IsInvokePatternAvailablePropertyId, &value);
+                const bool known = value.vt == VT_BOOL && (value.boolVal == VARIANT_FALSE || value.boolVal == VARIANT_TRUE), invokable = known && value.boolVal == VARIANT_TRUE; VariantClear(&value); check(hr); demand(known);
+                if (!offscreen && enabled && invokable) {
+                    ++eligible; demand(eligible == 1); check(automation->CompareElements(node.element.Get(), proof.row.Get(), &same));
+                    demand(same && toastRuntime(node.element.Get()) == proof.runtime);
+                    ComPtr<IUIAutomationInvokePattern> pattern; check(node.element->GetCurrentPatternAs(UIA_InvokePatternId, IID_PPV_ARGS(&pattern)));
+                }
+            }
+            ComPtr<IUIAutomationElement> child; check(walker->GetFirstChildElement(node.element.Get(), &child)); demand(!child || node.depth < 16);
+            while (child) { demand(pending.size() + nodes < 512 && GetTickCount64() < deadline); pending.push_back({child, node.depth + 1});
+                ComPtr<IUIAutomationElement> sibling; check(walker->GetNextSiblingElement(child.Get(), &sibling)); child = sibling; }
+        }
+        phase = "common_group_complete_proof"; demand(eligible == 1 && toastTitleSet(observed) == toastTitleSet(proof) && observed.titleRoles == proof.titleRoles);
+        BOOL same = FALSE; check(automation->CompareElements(observed.group.Get(), proof.group.Get(), &same));
+        demand(same && observed.groupRuntime == proof.groupRuntime && toastRuntime(proof.group.Get()) == proof.groupRuntime);
+        check(automation->CompareElements(observed.row.Get(), proof.row.Get(), &same)); demand(same && observed.runtime == proof.runtime);
+        for (const auto& [runtime, title] : proof.titles) { BOOL same = FALSE;
+            check(automation->CompareElements(title.Get(), observed.titles.at(runtime).Get(), &same)); demand(same); }
+    };
+    auto samePublicProof = [&](const ToastRow& selected, const ToastRow& current) {
+        phase = "common_group_identity_set"; BOOL same = FALSE;
+        demand(selected.pid == current.pid && selected.containerRuntime == current.containerRuntime && selected.groupRuntime == current.groupRuntime
+            && selected.titleRoles == current.titleRoles && selected.inspectedListItems == current.inspectedListItems);
+        check(automation->CompareElements(selected.group.Get(), current.group.Get(), &same)); demand(same);
+        check(automation->CompareElements(selected.row.Get(), current.row.Get(), &same)); demand(same && selected.runtime == current.runtime && toastTitleSet(selected) == toastTitleSet(current));
+        for (const auto& [runtime, title] : selected.titles) { check(automation->CompareElements(title.Get(), current.titles.at(runtime).Get(), &same)); demand(same); }
+    };
     auto census = [&](unsigned index) {
-        std::map<std::string, ToastRow> rows; censusIndex = index; nodes = roots = titles = eligibleRows = 0;
+        std::map<std::string, ToastRow> rows; ToastRow publicProof; censusIndex = index; nodes = roots = titles = eligibleRows = 0;
         auto budget = [&] { phase = "census_budget"; demand(nodes <= 512 && roots <= 64 && GetTickCount64() < deadline); };
         phase = "census_root"; ComPtr<IUIAutomationElement> desktop, child;
         check(automation->GetRootElement(&desktop)); check(walker->GetFirstChildElement(desktop.Get(), &child));
@@ -1078,6 +1172,8 @@ static int invokeToastDefault(bool publicSample = false) {
                     SysFreeString(name);
                     if (exact) {
                         phase = "exact_title_type"; ++titles; demand(type == UIA_TextControlTypeId && (publicSample || titles == 1));
+                        if (publicSample) collectPublicTitle(publicProof, node.element.Get(), pid, toastRuntime(child.Get()));
+                        else {
                         phase = "title_runtime_ids"; ToastRow found; found.title = node.element; found.pid = pid;
                         found.titleRuntime = toastRuntime(node.element.Get()); found.containerRuntime = toastRuntime(child.Get());
                         phase = "nearest_row"; ComPtr<IUIAutomationElement> parent = node.element;
@@ -1106,6 +1202,7 @@ static int invokeToastDefault(bool publicSample = false) {
                             } else row.titles.emplace(found.titleRuntime, found.title);
                         }
                         eligibleRows = static_cast<unsigned>(rows.size());
+                        }
                     }
                     phase = "census_subtree"; ComPtr<IUIAutomationElement> next; check(walker->GetFirstChildElement(node.element.Get(), &next));
                     if (next && node.depth >= 16) throw std::runtime_error("toast subtree depth incomplete");
@@ -1114,6 +1211,10 @@ static int invokeToastDefault(bool publicSample = false) {
                 }
             }
             ComPtr<IUIAutomationElement> next; check(walker->GetNextSiblingElement(child.Get(), &next)); child = next;
+        }
+        if (publicSample && titles) {
+            verifyPublicGroup(publicProof); publicProof.title = publicProof.titles.begin()->second; publicProof.titleRuntime = publicProof.titles.begin()->first;
+            const auto key = publicProof.runtime; rows.emplace(key, std::move(publicProof)); eligibleRows = static_cast<unsigned>(rows.size());
         }
         budget(); phase = "final_census_unique_row"; demand(rows.size() <= 1);
         const auto name = "toast-census-" + std::to_string(index) + ".json";
@@ -1134,6 +1235,8 @@ static int invokeToastDefault(bool publicSample = false) {
             for (const auto& [runtime, title] : selected.titles) {
                 check(automation->CompareElements(title.Get(), fresh.begin()->second.titles.at(runtime).Get(), &same)); demand(same);
             }
+            if (publicSample) samePublicProof(selected, fresh.begin()->second);
+            unsigned immediateIndex = 40;
             auto owner = custody.owner(selected.pid); demand(owner && owner->live());
             phase = "retained_provider_incarnation"; FILETIME birth{}, exit{}, kernel{}, used{}; ULARGE_INTEGER ticks{};
             demand(GetProcessTimes(owner->process, &birth, &exit, &kernel, &used) != FALSE);
@@ -1151,6 +1254,8 @@ static int invokeToastDefault(bool publicSample = false) {
                     reinterpret_cast<const TOKEN_USER*>(user.data())->User.Sid) != FALSE);
                 FILETIME nowBirth{}; demand(GetProcessTimes(owner->process, &nowBirth, &exit, &kernel, &used) != FALSE
                     && CompareFileTime(&nowBirth, &birth) == 0);
+                if (publicSample) { auto currentState = census(++immediateIndex); demand(currentState.size() == 1);
+                    samePublicProof(selected, currentState.begin()->second); }
                 auto& current = fresh.begin()->second; int pid{}; CONTROLTYPEID type{}; BOOL offscreen = TRUE, enabled = FALSE;
                 phase = "immediate_title_ancestry"; for (const auto& [titleRuntime, title] : current.titles) {
                 BSTR name = nullptr; check(title->get_CurrentName(&name));
@@ -1158,6 +1263,7 @@ static int invokeToastDefault(bool publicSample = false) {
                 SysFreeString(name); demand(exact); check(title->get_CurrentControlType(&type)); demand(type == UIA_TextControlTypeId);
                 check(title->get_CurrentProcessId(&pid)); demand(pid == selected.pid);
                 check(title->get_CurrentIsOffscreen(&offscreen)); demand(!offscreen);
+                if (!publicSample) {
                 ComPtr<IUIAutomationElement> parent = title; bool nearest = false;
                 for (unsigned depth = 0; depth < 8; ++depth) { ComPtr<IUIAutomationElement> next;
                     check(walker->GetParentElement(parent.Get(), &next)); demand(next != nullptr);
@@ -1165,6 +1271,7 @@ static int invokeToastDefault(bool publicSample = false) {
                     check(next->get_CurrentControlType(&type)); parent = next;
                     if (type == UIA_ListItemControlTypeId) { check(automation->CompareElements(next.Get(), current.row.Get(), &same)); nearest = same; break; } }
                 demand(nearest && toastRuntime(title.Get()) == titleRuntime && toastRuntime(current.row.Get()) == selected.runtime);
+                } else demand(toastRuntime(title.Get()) == titleRuntime);
                 }
                 phase = "immediate_row_visibility"; check(current.row->get_CurrentProcessId(&pid)); demand(pid == selected.pid);
                 check(current.row->get_CurrentIsOffscreen(&offscreen)); check(current.row->get_CurrentIsEnabled(&enabled));
@@ -1178,7 +1285,9 @@ static int invokeToastDefault(bool publicSample = false) {
                 + jsonQuote(winrt::to_hstring(shellPaths.at(heldPaths.at(selected.pid))).c_str()) + ",\"runtimeID\":" + selected.runtime
                 + ",\"titleRuntimeID\":" + selected.titleRuntime + ",\"containerRuntimeID\":" + selected.containerRuntime + ",\"exactTitleVerified\":true,\"offscreen\":false,\"enabled\":true"
                 + ",\"specSHA256\":\"" + oobeStateHash(spec.bytes) + "\""
-                + (publicSample ? ",\"authorityProfile\":\"public_sample_one_show\",\"invokeDeadlineBootMs\":" + std::to_string(deadline) + ",\"titleRuntimeIDs\":" + toastTitleSet(selected) : "");
+                + (publicSample ? ",\"authorityProfile\":\"public_sample_one_show\",\"invokeDeadlineBootMs\":" + std::to_string(deadline) + ",\"titleRuntimeIDs\":" + toastTitleSet(selected)
+                    + ",\"groupRuntimeID\":" + selected.groupRuntime + ",\"groupControlType\":50026,\"commonGroupVerified\":true,\"groupCensusComplete\":true,\"eligibleListItemsInGroup\":1,\"inspectedListItemsInGroup\":"
+                    + std::to_string(selected.inspectedListItems) + ",\"titleAssociations\":" + toastTitleAssociations(selected) : "");
             phase = "durable_invoke_intent"; demand(binding.size() <= 16000);
             oobeDurableIntent("ui-invoke-intent.json", "{" + binding + ",\"invokeBoundaryArmed\":true,\"invokeCallEntered\":false}\n");
             immediate();
