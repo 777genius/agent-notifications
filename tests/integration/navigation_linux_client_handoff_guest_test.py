@@ -80,6 +80,41 @@ def selected_command_hint(command, executable, uri):
     return None
 
 
+def selected_environment_measurement(sample, pid, birth, read_begin, read_end):
+    """Sample digest only; raw-name excess includes malformed/empty records."""
+    if sample is None:
+        return dict(outcome='read_unavailable', pid=pid, startTicks=int(birth),
+            readBeginBoot=read_begin, readEndBoot=read_end, postReadIdentity='unobserved')
+    records = sample.split(b'\0')[:-1] if sample.endswith(b'\0') else sample.split(b'\0')
+    names = [record.split(b'=', 1)[0] for record in records]
+    trailing = 0
+    for record in reversed(records):
+        if record: break
+        trailing += 1
+    fixed = ('XDG_ACTIVATION_TOKEN', 'DESKTOP_STARTUP_ID', 'DISPLAY', 'WAYLAND_DISPLAY',
+             'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS', 'HOME', 'USER', 'LOGNAME', 'PATH')
+    summary = dict(outcome='structure_only', pid=pid, startTicks=int(birth),
+        readBeginBoot=read_begin, readEndBoot=read_end, postReadIdentity='unobserved',
+        sampleBytes=len(sample), sampleSHA256=hashlib.sha256(sample).hexdigest(),
+        digestScope='captured_sample', terminalNul=sample.endswith(b'\0'),
+        sampleBound='overflow_prefix' if len(sample) > 65536 else 'within_bound',
+        emptyRecords=records.count(b''), trailingEmptyRecords=trailing,
+        malformedRecords=sum(b'=' not in record for record in records),
+        duplicateNameExcess=len(names) - len(set(names)),
+        duplicateDefinition='raw_name_excess',
+        fixedOccurrences={name: names.count(name.encode('ascii')) for name in fixed})
+    if len(json.dumps(summary, sort_keys=True).encode()) > 1024:
+        return dict(outcome='summary_exceeds_bound')
+    return summary
+
+
+def parse_selected_environment(environment):
+    if len(environment) > 65536 or not environment.endswith(b'\0'): raise RuntimeError('bounded_selected_environment_required')
+    entries = [value.split(b'=', 1) for value in environment.split(b'\0')[:-1]]
+    if any(len(pair) != 2 for pair in entries) or len({pair[0] for pair in entries}) != len(entries): raise RuntimeError('unambiguous_selected_environment_required')
+    return {key.decode(): value.decode() for key, value in entries}
+
+
 def client_activation_surfaces(trace, token):
     # Client and system libwayland can use different object-ID delimiters.
     pattern = (r'xdg_activation_v1(?P<separator>[@#])\d+\.activate\("' +
@@ -659,12 +694,23 @@ raise SystemExit(0 if result['passed'] else 1)
         if not found: return None
         if len(found) != 1: raise RuntimeError('sole_selected_command_hint_process_unproved')
         predicate_begin('selected_peer_and_environment')
-        client_pid = found[0]['pid']; selected_peer(client_pid, 'selected-launch')
-        with Path('/proc', str(client_pid), 'environ').open('rb') as stream: environment = stream.read(65537)
-        if len(environment) > 65536 or not environment.endswith(b'\0'): raise RuntimeError('bounded_selected_environment_required')
-        entries = [value.split(b'=', 1) for value in environment.split(b'\0')[:-1]]
-        if any(len(pair) != 2 for pair in entries) or len({pair[0] for pair in entries}) != len(entries): raise RuntimeError('unambiguous_selected_environment_required')
-        report['selectedEnvironment'] = {key.decode(): value.decode() for key, value in entries}
+        client_pid = found[0]['pid']; peer = selected_peer(client_pid, 'selected-launch')
+        try: read_begin = now()
+        except Exception: read_begin = None  # Timing diagnostics cannot replace parser failures.
+        try:
+            with Path('/proc', str(client_pid), 'environ').open('rb') as stream: environment = stream.read(65537)
+        except Exception:
+            try:
+                predicate_capture['selectedEnvironmentSample'] = selected_environment_measurement(None,
+                    client_pid, peer['startTicks'], read_begin, now())
+            except Exception: pass  # Preserve the original read failure.
+            raise
+        try:
+            predicate_capture['selectedEnvironmentSample'] = selected_environment_measurement(environment,
+                client_pid, peer['startTicks'], read_begin, now())
+        except Exception:
+            predicate_capture['selectedEnvironmentSample'] = dict(outcome='measurement_unavailable')
+        report['selectedEnvironment'] = parse_selected_environment(environment)
         alive(client_pid)
         hint = selected_command_hint(found[0]['command'], bytes(kernel.EXE), uri.encode())
         report['selectedCommandObservation'] = dict(discoveryHint=hint, nulSeparatedArgvObserved=hint == 'argv',
