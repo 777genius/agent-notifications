@@ -68,6 +68,14 @@ jobs:
         shell: python
         run: |
           import hashlib,json,os,pathlib,subprocess
+          # The unchanged Windows clock driver requires a literal short C:\ base.
+          # Keep the actual GitHub runner temp in custody; adapt only tool staging.
+          runner_temp=os.environ['RUNNER_TEMP']; staging_base=pathlib.Path(r'C:\AN1484W')
+          assert not staging_base.exists(), 'preexisting_short_staging_base'
+          for path in (staging_base,*staging_base.parents):
+              assert not path.is_symlink() and not path.is_junction(), 'nonliteral_short_staging_base'
+          staging_base.mkdir()
+          assert staging_base.resolve(strict=True)==staging_base, 'noncanonical_short_staging_base'
           root=pathlib.Path('operator'); revision=os.environ['OPERATOR_SHA']; rows=[]
           assert subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip()==revision
           assert subprocess.check_output(['git','rev-parse','HEAD'],cwd='source',text=True).strip()==os.environ['RELEASE_CANDIDATE_SHA']
@@ -76,7 +84,10 @@ jobs:
               assert actual==original, 'raw_operator_source_changed:'+name
               rows.append({'path':name,'sha256':hashlib.sha256(actual).hexdigest(),'rawGitEquality':True})
           evidence={key:os.environ[key] for key in ('RELEASE_CANDIDATE_SHA','OPERATOR_SHA','RELEASE_SIGNING_RUN','ORIGINAL_SEAL_RUN','AN_EVIDENCE_SHA256','AN_VERSION','GITHUB_RUN_ID','GITHUB_RUN_ATTEMPT','GITHUB_SHA','GITHUB_REF')}
-          evidence.update(scope='two_fresh_Windows_business_cells_original_assets_no_reseal',operatorSources=rows)
+          evidence.update(scope='two_fresh_Windows_business_cells_original_assets_no_reseal',operatorSources=rows,
+                          actualRunnerTemp=runner_temp,requestedClockStagingBase=str(staging_base),
+                          shortStagingBaseFresh=True,shortStagingBaseCanonical=True,
+                          privateChildDACLAuthority='unchanged_candidate_clock_driver')
           target=pathlib.Path('source/.task-tools/artifacts/windows-recovery-custody.json'); target.parent.mkdir(parents=True,exist_ok=True)
           target.write_text(json.dumps(evidence,sort_keys=True)+'\n',encoding='utf8')
       - uses: actions/download-artifact@v8
@@ -94,7 +105,7 @@ jobs:
           (cd opencode-plugin && npm ci --ignore-scripts)
       - name: Execute the unchanged operator once in fresh owned Windows profiles
         shell: bash
-        run: node "$OPERATOR_ROOT/scripts/unified-release-qualification.mts" execute
+        run: RUNNER_TEMP='C:\AN1484W' node "$OPERATOR_ROOT/scripts/unified-release-qualification.mts" execute
       - name: Preserve original report paths and recovery custody even on failure
         if: always()
         uses: actions/upload-artifact@v7
