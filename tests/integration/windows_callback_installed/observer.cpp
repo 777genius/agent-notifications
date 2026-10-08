@@ -163,6 +163,7 @@ static void prerequisites(PrerequisiteStage stage) {
   const auto status = RegOpenKeyExW(HKEY_CURRENT_USER,key,0,KEY_READ,&h);
   if (status == ERROR_SUCCESS) require(RegCloseKey(h) == ERROR_SUCCESS);
   put(report,key,status == ERROR_SUCCESS ? "present" : "refused");
+  num(report,(std::wstring(key)+L"_open_status").c_str(),DWORD(status));
  }
  DWORD integrity = 0;
  put(report,L"sid",processSID(GetCurrentProcess(),integrity));
