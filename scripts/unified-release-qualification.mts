@@ -44,7 +44,7 @@ need(mode === 'prepare' || mode === 'execute', 'explicit mode required');
   nativeEnv.SOURCE_COMMIT = candidate;
   const bridgePath = join(tools, 'bridge.py');
   writeFileSync(bridgePath, bridge, { flag: 'wx', mode: 0o600 });
-  const result = spawnSync('python3', ['-B', bridgePath, configPath], { cwd: source, env: nativeEnv, stdio: 'inherit' });
+  const result = spawnSync(process.platform === 'win32' ? 'python' : 'python3', ['-B', bridgePath, configPath], { cwd: source, env: nativeEnv, stdio: 'inherit' });
   need(!result.error && result.status === 0, 'qualification stopped; preserve failed report');
 }
 

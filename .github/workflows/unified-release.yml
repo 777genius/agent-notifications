@@ -41,6 +41,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          test "$GITHUB_REF" = refs/heads/main
           test "$GITHUB_ACTOR" = "$OWNER"
           test "$TRIGGER" = "$OWNER"
           test "$GITHUB_REPOSITORY" = 777genius/agent-notifications
@@ -54,9 +55,10 @@ jobs:
             .actor.login==$owner and .triggering_actor.login==$owner' "$RUNNER_TEMP/signing-run.json"
           gh api "repos/$GITHUB_REPOSITORY/commits/$RELEASE_CANDIDATE_SHA/check-runs?per_page=100" > "$RUNNER_TEMP/checks.json"
           jq -e '.total_count==(.check_runs|length) and
-            ([.check_runs[]|select(.conclusion=="failure" or .conclusion=="cancelled" or .conclusion=="timed_out")]|length)==0 and
-            (["Test on Ubuntu (1.25)","Test on Ubuntu (1.26)","Test on Windows (1.25)","Test on Windows (1.26)","Full macOS CI required","Lint","OpenCode plugin bundle"] |
-             all(. as $name | any($ARGS.named.checks.check_runs[]; .name==$name and .status=="completed" and .conclusion=="success")))'              --argjson checks "$(cat "$RUNNER_TEMP/checks.json")" "$RUNNER_TEMP/checks.json"
+            (.check_runs | group_by(.name) | map(max_by(.id))) as $latest |
+            ([$latest[]|select(.conclusion=="failure" or .conclusion=="cancelled" or .conclusion=="timed_out")]|length)==0 and
+            (["Test on Ubuntu (1.25)","Test on Ubuntu (1.26)","Test on Windows (1.25)","Test on Windows (1.26)","Test on macOS (1.25)","Test on macOS (1.26)","Swift notifier tests","Full macOS CI required","Lint","OpenCode plugin bundle"] |
+             all(. as $name | any($latest[]; .name==$name and .status=="completed" and .conclusion=="success")))' "$RUNNER_TEMP/checks.json"
       - uses: actions/checkout@v7
         with: {ref: '${{ inputs.candidate_sha }}', persist-credentials: false}
       - name: Verify all five version values and changelog
