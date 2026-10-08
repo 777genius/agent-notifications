@@ -43,9 +43,26 @@ func decodeOperatorDiagnostic(raw []byte) ([]string, error) {
 		"shared_software_open", "shared_classes_open", "shared_resolved_open", "shared_container_open",
 		"shared_container_create", "shared_container_flush", "owned_leaf_create", "owned_leaf_descriptor", "owned_leaf_stamp", "class_leaf_create",
 		"class_postimage", "class_children", "local_leaf_create", "local_postimage", "local_children",
-		"local_default_value", "local_flush", "class_flush", "registry_close":
+		"local_default_value", "local_flush", "class_flush", "registry_close",
+		"registry_software_query", "registry_software_link_value", "registry_software_other_value",
+		"registry_classes_query", "registry_classes_link_value", "registry_classes_other_value",
+		"registry_shared_query", "registry_shared_link_value", "registry_shared_other_value",
+		"registry_resolved_query", "registry_resolved_link_value", "registry_resolved_other_value",
+		"registry_owned_query", "registry_owned_link_value", "registry_owned_other_value":
 	default:
 		return nil, ErrUnavailable
+	}
+	// Value-presence phases follow an actual successful metadata query, not an
+	// API failure. Keep that semantic refusal distinct from numeric errors.
+	switch fields[1] {
+	case "registry_software_link_value", "registry_software_other_value",
+		"registry_classes_link_value", "registry_classes_other_value",
+		"registry_shared_link_value", "registry_shared_other_value",
+		"registry_resolved_link_value", "registry_resolved_other_value",
+		"registry_owned_link_value", "registry_owned_other_value":
+		if fields[2] != "other" {
+			return nil, ErrUnavailable
+		}
 	}
 	switch fields[2] {
 	case "other":

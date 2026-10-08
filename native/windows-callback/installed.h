@@ -67,35 +67,40 @@ namespace wcb {
     require(status==ERROR_SUCCESS);
     return false;
   }
-  inline void regularRegistryKey(HKEY key,OperatorDiagnostic* diagnostic=nullptr){
+  inline void regularRegistryKey(HKEY key,OperatorDiagnostic* diagnostic=nullptr,RegistryRole role=RegistryRole::OwnedLeaf){
     DWORD type=0,size=0;
     // Open with OPEN_LINK first: never inspect the link target as the container.
-    registryResult(diagnostic,"registry_link_guard",RegQueryValueExW(key,L"SymbolicLinkValue",nullptr,&type,nullptr,&size),ERROR_FILE_NOT_FOUND);
+    const auto phases=registryPhases(role);
+    if(diagnostic)diagnostic->enter(phases.query);
+    const auto status=RegQueryValueExW(key,L"SymbolicLinkValue",nullptr,&type,nullptr,&size);
+    const char* phase=phases.query;
+    if(status==ERROR_SUCCESS)phase=type==REG_LINK?phases.linkValue:phases.otherValue;
+    registryResult(diagnostic,phase,status,ERROR_FILE_NOT_FOUND);
   }
   struct SharedRegistryParent {
     Key software,classes,key;
     void open(const wchar_t* name,uint64_t end,OperatorDiagnostic* diagnostic=nullptr){
       require(!wcscmp(name,L"CLSID")||!wcscmp(name,L"AppUserModelId"));
-      auto regular=[&](HKEY from,const wchar_t* leaf,HKEY admitted){
-        regularRegistryKey(admitted,diagnostic);
+      auto regular=[&](HKEY from,const wchar_t* leaf,HKEY admitted,RegistryRole role){
+        regularRegistryKey(admitted,diagnostic,role);
         // Additional read-only rejection of an unresolved link. Successful
         // path lookup is not proof of identity with the held OPEN_LINK handle.
         Key resolved;
         installedBudget(end,diagnostic);
         registryResult(diagnostic,"shared_resolved_open",RegOpenKeyExW(from,leaf,0,KEY_READ,&resolved.h));
-        regularRegistryKey(resolved.h,diagnostic);
+        regularRegistryKey(resolved.h,diagnostic,RegistryRole::Resolved);
         if(diagnostic)diagnostic->enter("registry_close");
         resolved.close();
         installedBudget(end,diagnostic);
       };
-      auto existing=[&](HKEY from,const wchar_t* leaf,REGSAM access,Key& to){
+      auto existing=[&](HKEY from,const wchar_t* leaf,REGSAM access,Key& to,RegistryRole role){
         installedBudget(end,diagnostic);
         registryResult(diagnostic,!wcscmp(leaf,L"Software")?"shared_software_open":"shared_classes_open",
           RegOpenKeyExW(from,leaf,REG_OPTION_OPEN_LINK,access,&to.h));
-        regular(from,leaf,to.h);
+        regular(from,leaf,to.h,role);
       };
-      existing(HKEY_CURRENT_USER,L"Software",KEY_READ,software);
-      existing(software.h,L"Classes",KEY_READ|KEY_CREATE_SUB_KEY,classes);
+      existing(HKEY_CURRENT_USER,L"Software",KEY_READ,software,RegistryRole::Software);
+      existing(software.h,L"Classes",KEY_READ|KEY_CREATE_SUB_KEY,classes,RegistryRole::Classes);
       installedBudget(end,diagnostic);
       if(diagnostic)diagnostic->enter("shared_container_open");
       auto status=RegOpenKeyExW(classes.h,name,REG_OPTION_OPEN_LINK,KEY_READ|KEY_CREATE_SUB_KEY,&key.h);
@@ -110,13 +115,13 @@ namespace wcb {
         installedBudget(end,diagnostic);
         registryResult(diagnostic,"shared_container_create",status);
         require(disposition==REG_CREATED_NEW_KEY);
-        regularRegistryKey(key.h,diagnostic);
+        regularRegistryKey(key.h,diagnostic,RegistryRole::SharedContainer);
         installedBudget(end,diagnostic);
         registryResult(diagnostic,"shared_container_flush",RegFlushKey(key.h));
         installedBudget(end,diagnostic);
       }else{
         registryResult(diagnostic,"shared_container_open",status);
-        regular(classes.h,name,key.h);
+        regular(classes.h,name,key.h,RegistryRole::SharedContainer);
       }
     }
     void close(){
@@ -125,9 +130,9 @@ namespace wcb {
       software.close();
     }
   };
-  inline Key* createKey(const Generation& g,HKEY parent,const std::wstring& leaf,Key& key,uint64_t end,OperatorDiagnostic* diagnostic=nullptr){
+  inline Key* createKey(const Generation& g,HKEY parent,const std::wstring& leaf,Key& key,uint64_t end,OperatorDiagnostic* diagnostic=nullptr,RegistryRole parentRole=RegistryRole::SharedContainer){
     require(!leaf.empty()&&leaf.find_first_of(L"\\/")==std::wstring::npos);
-    regularRegistryKey(parent,diagnostic);
+    regularRegistryKey(parent,diagnostic,parentRole);
     if(diagnostic)diagnostic->enter("owned_leaf_descriptor");
     PSECURITY_DESCRIPTOR sd=nullptr;
     auto acl=L"O:"+wide(g.sid)+L"D:P(A;;KA;;;"+wide(g.sid)+L")(A;;KA;;;SY)";
@@ -344,7 +349,7 @@ namespace wcb {
     if(diagnostic)diagnostic->enter("class_children");
     classChildren(cls.h);
     if(diagnostic)diagnostic->enter("local_leaf_create");
-    createKey(g,cls.h,L"LocalServer32",local,end,diagnostic);
+    createKey(g,cls.h,L"LocalServer32",local,end,diagnostic,RegistryRole::OwnedLeaf);
     if(diagnostic)diagnostic->enter("local_postimage");
     expectedValues(local.h,g,{
       {

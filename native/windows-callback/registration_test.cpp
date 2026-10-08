@@ -82,7 +82,7 @@ struct Profile {
     stage("profile_open_software");
     require(registryStatus("RegOpenKeyExW",RegOpenKeyExW(HKEY_CURRENT_USER,L"Software",REG_OPTION_OPEN_LINK,KEY_READ|KEY_WRITE|DELETE,&realSoftware.h))==ERROR_SUCCESS);
     stage("profile_software_regular");
-    regularRegistryKey(realSoftware.h);
+    regularRegistryKey(realSoftware.h,nullptr,RegistryRole::Software);
     stage("profile_private_descriptor");
     Descriptor descriptor(ownACL(L"KA"));
     auto sa=descriptor.attributes();
@@ -135,6 +135,47 @@ static bool registryContracts(){
   testCreate(HKEY_CURRENT_USER,L"Software",software,&sharedSA);
   stage("child_synthetic_classes");
   testCreate(software.h,L"Classes",classes,&sharedSA);
+  // Breakage: a successful non-link value query is mistaken for an API error,
+  // or loses its actual caller role while rejecting normal applyClass.
+  stage("child_guard_nonlink_presence");
+  const auto softwareSecurity=security(software.h);
+  const auto initialClassesSecurity=security(classes.h);
+  put(software.h,L"SymbolicLinkValue",L"synthetic-nonlink",end);
+  {
+    OperatorDiagnostic diagnostic;
+    bool classified=false;
+    try{applyClass(g,end,&diagnostic);}
+    catch(const RegistryFailure&){require(false);}
+    catch(const std::runtime_error&){
+      require(!strcmp(diagnostic.phase,"registry_software_other_value"));
+      classified=true;diagnostic.emit();
+    }
+    require(classified);
+  }
+  missing(classes.h,L"CLSID");
+  require(value(software.h,L"SymbolicLinkValue")==L"synthetic-nonlink");
+  require(security(software.h)==softwareSecurity&&security(classes.h)==initialClassesSecurity);
+  // Breakage: a genuinely unqueryable held handle is called value-presence
+  // refusal or assigned a historical code instead of its actual returned5.
+  stage("child_guard_query_access_denied");
+  {
+    Key writeOnly;
+    require(registryStatus("RegOpenKeyExW",RegOpenKeyExW(HKEY_CURRENT_USER,L"Software",REG_OPTION_OPEN_LINK,KEY_WRITE,&writeOnly.h))==ERROR_SUCCESS);
+    OperatorDiagnostic diagnostic;
+    bool classified=false;
+    try{regularRegistryKey(writeOnly.h,&diagnostic,RegistryRole::Software);}
+    catch(const RegistryFailure& error){
+      require(error.code==ERROR_ACCESS_DENIED&&!strcmp(error.phase,"registry_software_query"));
+      classified=true;diagnostic.emit();
+    }
+    require(classified);
+    writeOnly.close();
+  }
+  require(security(software.h)==softwareSecurity&&security(classes.h)==initialClassesSecurity);
+  stage("child_guard_fixture_cleanup");
+  installedBudget(end);
+  require(registryStatus("RegDeleteValueW",RegDeleteValueW(software.h,L"SymbolicLinkValue"))==ERROR_SUCCESS);
+  installedBudget(end);
   // Breakage: old setup requires the shared parent and fails on a fresh profile.
   // The literal old admission returns missing; actual apply creates valid own keys.
   stage("child_shared_parents_missing");
@@ -251,6 +292,20 @@ static bool registryContracts(){
     DWORD linkType=0,linkBytes=0;
     require(registryStatus("RegQueryValueExW",RegQueryValueExW(nofollow.h,L"SymbolicLinkValue",nullptr,&linkType,nullptr,&linkBytes))==ERROR_SUCCESS
       &&linkType==REG_LINK&&linkBytes==route.size()*2);
+    // Breakage: the real configured source REG_LINK loses its distinct type
+    // class; no target payload or raw type is emitted by the production guard.
+    stage("child_guard_link_presence");
+    {
+      OperatorDiagnostic diagnostic;
+      bool classified=false;
+      try{regularRegistryKey(nofollow.h,&diagnostic,RegistryRole::SharedContainer);}
+      catch(const RegistryFailure&){require(false);}
+      catch(const std::runtime_error&){
+        require(!strcmp(diagnostic.phase,"registry_shared_link_value"));
+        classified=true;diagnostic.emit();
+      }
+      require(classified);
+    }
     nofollow.close();
     link.close();
     stage("child_configured_link_apply_refused");
