@@ -9,6 +9,9 @@ on:
       - 'tests/integration/gemini_native_e2e.py'
       - 'tests/integration/gemini_native_pty.cjs'
       - 'tests/integration/gemini_notifications_e2e.py'
+      - 'tests/integration/gemini_frame_capture.py'
+      - 'tests/integration/gemini_frame_capture_test.py'
+      - 'tests/integration/gemini_frame_classifier/**'
       - 'tests/integration/gemini-ui-contract.json'
       - 'cmd/claude-notifications/**'
       - 'internal/**'
@@ -67,6 +70,11 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev
       - name: Pure runner checks
         run: python -B scripts/gemini-native-ci.py --self-test
+      - name: Pure native-driver evidence guards
+        run: python -B tests/integration/gemini_notifications_e2e.py --self-test
+      - name: Pure private capture custody checks
+        if: matrix.platform == 'linux'
+        run: python -B tests/integration/gemini_frame_capture_test.py -v
       - name: Build actual artifacts and qualify native webhook events
         # pwsh is also an explicit physical hook-shell input on Windows.
         # Native child environments are constructed by G0, never inherited here.

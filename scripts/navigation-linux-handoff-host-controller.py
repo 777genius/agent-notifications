@@ -1,11 +1,26 @@
 """Owned TEST host controller; never run before complete assembly review."""
-import base64, hashlib, json, os, pathlib, re, stat, subprocess, sys, time, uuid
+import base64, hashlib, importlib.util, json, os, pathlib, re, stat, subprocess, sys, time, uuid
 
 if not __debug__: raise RuntimeError('optimized_interpreter_not_supported')
 if len(sys.argv) != 2:
     raise RuntimeError('one_owned_TEST_root_argument_required')
 if pathlib.Path(sys.argv[1]).is_symlink(): raise RuntimeError('symlink_TEST_root_argument_refused')
-ROOT = pathlib.Path(sys.argv[1]).resolve()
+ROOT = pathlib.Path(sys.argv[1]).absolute()
+assert ROOT.resolve(strict=True) == ROOT
+helper = pathlib.Path(__file__).absolute().with_name('navigation-linux-test-storage.py')
+assert helper.resolve(strict=True) == helper
+fd = os.open(helper, os.O_RDONLY | os.O_NOFOLLOW)
+try:
+    before = os.fstat(fd); assert stat.S_ISREG(before.st_mode) and before.st_size <= 16384
+    helper_bytes = os.read(fd, 16385); after = os.fstat(fd)
+    assert len(helper_bytes) == before.st_size <= 16384 and (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns) == (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns)
+finally: os.close(fd)
+assert hashlib.sha256(helper_bytes).hexdigest() == '3ce3727a336ba1494821428576e76f821f9d07af24878c1c25756fd867780900'
+sys.dont_write_bytecode = True
+storage = importlib.util.module_from_spec(importlib.util.spec_from_loader('TEST_storage', loader=None))
+exec(compile(helper_bytes, str(helper), 'exec'), storage.__dict__)
+scratch = storage.Scratch(ROOT)
+scratch_proof = scratch.prove()
 context = json.loads((ROOT / 'operator-context.json').read_text())
 IMAGE = 'sha256:3d6d8f7204a993dd58b7a2aa02312fbf4190cfecfe5c539d65d0a0eda3a0725c'
 FROZEN = pathlib.Path('/tmp/navigation-guest-stage-TEST-b976acd4eef542a5ae2507425c8e96de')
@@ -34,10 +49,18 @@ assert set(context) == {'expectedMachineID', 'expectedSources', 'manifest'}
 assert context['expectedMachineID'] == 'd856d40da5ad4e23b4f67773e5942842'
 assert pathlib.Path('/etc/machine-id').read_text().strip() == context['expectedMachineID']
 assert set(context['expectedSources']) == SOURCE_NAMES
-assert os.getuid() == 1000 and ROOT.parent == pathlib.Path('/tmp') and re.fullmatch(r'navigation-handoff-stage-TEST-[0-9a-f]{32}', ROOT.name)
+assert os.getuid() == 1000 and ROOT.parent == pathlib.Path('/srv/workers') and re.fullmatch(r'navigation-handoff-stage-TEST-[0-9a-f]{32}', ROOT.name)
 assert (ROOT / '.host-test-root').read_text() == 'Linux offline guest handoff TEST only\n'
 assert ROOT.stat().st_uid == 1000 and ROOT.stat().st_mode & 0o777 == 0o700
+for leaf in ('tmp', 'cache'):
+    scratch.prove()
+    (ROOT / leaf).mkdir(mode=0o700)
+os.environ.update(TMPDIR=str(ROOT / 'tmp'), TMP=str(ROOT / 'tmp'), TEMP=str(ROOT / 'tmp'),
+                  XDG_CACHE_HOME=str(ROOT / 'cache'), PIP_CACHE_DIR=str(ROOT / 'cache' / 'pip'),
+                  PYTHONPYCACHEPREFIX=str(ROOT / 'cache' / 'python'))
+sys.dont_write_bytecode = True
 # No automatic retry after this immutable native-intent gate has been created.
+scratch.prove()
 with (ROOT / 'started.json').open('x') as started:
     json.dump({'operatorSHA256': sha(pathlib.Path(__file__)), 'boot': time.clock_gettime(time.CLOCK_BOOTTIME)}, started)
 nonce = uuid.uuid4().hex
@@ -47,13 +70,14 @@ report = dict(scope='offline_selected_client_native_handoff_TEST', root=str(ROOT
     retryAllowed=False, containerRemoved=False, applicationLaunchOutcome='not_started',
     notificationAttempted=False, clickAttempted=False, handoffQualified=False, activationQualified=False,
     clientSandboxQualified=False, navigationQualified=False,
-    commands=[])
+    commands=[], scratch=scratch_proof, storageHelperSHA256=hashlib.sha256(helper_bytes).hexdigest(), stagedCopies=[])
 docker = ['sudo', '-n', 'docker']
 created_id = None
 create_intent = False
 
 
 def persist():
+    scratch.prove()
     temp = ROOT / 'operator-result.json.tmp'
     temp.write_text(json.dumps(report, indent=2) + '\n')
     temp.replace(ROOT / 'operator-result.json')
@@ -100,6 +124,7 @@ def owned_container(label, security):
 try:
     assert stat.S_ISCHR(pathlib.Path('/dev/kvm').stat().st_mode) and pathlib.Path('/dev/kvm').stat().st_gid == 994
     available = int(next(row for row in pathlib.Path('/proc/meminfo').read_text().splitlines() if row.startswith('MemAvailable:')).split()[1]) * 1024
+    scratch.prove(BASE.stat().st_size + PROVISIONED.stat().st_size + 2 * 1024**3)
     filesystem = os.statvfs(ROOT)
     report['resources'] = dict(memoryAvailable=available, diskAvailable=filesystem.f_bavail * filesystem.f_frsize)
     if available < 7 * 1024**3 or report['resources']['diskAvailable'] < 2 * 1024**3:
@@ -109,11 +134,8 @@ try:
     image = json.loads(raw)[0]
     assert image['Id'] == IMAGE and image['Config']['Labels']['navigation.owner'] == 'e1ebe48b80e84a8fa5fc4973051dbb46'
     assert image['Config']['Labels']['navigation.test'] == 'true' and image['Config']['Labels']['navigation.source'] == '4be5d1481f684a891df96e6c6e69a51037f20350afc682c689cb70b3096f1be3'
-    assert sha(BASE) == EXPECTED_BASE and sha(PROVISIONED) == EXPECTED_PROVISIONED
-    assert BASE.stat().st_mode & 0o222 == 0 and PROVISIONED.stat().st_mode & 0o222 == 0
-    # Read-only hardlinks within the owned TEST storage preserve the frozen inputs.
-    os.link(BASE, ROOT / 'base.img'); os.link(PROVISIONED, ROOT / 'provisioned.qcow2')
-    assert sha(ROOT / 'base.img') == EXPECTED_BASE and sha(ROOT / 'provisioned.qcow2') == EXPECTED_PROVISIONED
+    report['stagedCopies'].append(scratch.copy(BASE, 'base.img', EXPECTED_BASE, 625612288)); persist()
+    report['stagedCopies'].append(scratch.copy(PROVISIONED, 'provisioned.qcow2', EXPECTED_PROVISIONED, 3137798144)); persist()
     if (ROOT / 'sources.json').stat().st_size > 4 * 1024**2:
         raise RuntimeError('bounded_source_capsule_required')
     sources = json.loads((ROOT / 'sources.json').read_text())
@@ -126,22 +148,27 @@ try:
         assert digest == sources[filename]['sha256'] == context['expectedSources'][filename]
         decoded[filename] = data
     manifest = context['manifest']
-    assert set(manifest) == {'files', 'frontendSHA256', 'backendSHA256'}
+    assert set(manifest) == {'files', 'frontendSHA256', 'backendSHA256'} | ({'shipping'} if 'shipping' in manifest else set())
     assert set(manifest['files']) == SOURCE_NAMES - {'probe.py', 'runtime-stage.py', 'guest-bootstrap.py'}
     assert all(manifest['files'][name] == context['expectedSources'][name] for name in manifest['files'])
     assert manifest['frontendSHA256'] == '7fe62c1a938985b8ca4ec335a768ad36f1d17abe027098624fa4f5989c0b4594'
     assert manifest['backendSHA256'] == 'b95c473ae8fe4e3b51e7ca4bf27d4f4719786d552524443e246d1b40468d40af'
     for filename, digest in ARCHIVE_HASHES.items():
         source = ARCHIVES / filename
-        assert source.is_file() and not source.is_symlink() and source.stat().st_size < 64 * 1024**2
-        assert sha(source) == digest
-        with source.open('rb') as inp, (ROOT / filename).open('xb') as out:
-            for block in iter(lambda: inp.read(1048576), b''): out.write(block)
-        (ROOT / filename).chmod(0o444)
-        assert sha(ROOT / filename) == digest
+        assert 0 < source.lstat().st_size < 64 * 1024**2
+        report['stagedCopies'].append(scratch.copy(source, filename, digest, source.lstat().st_size, readonly_required=False)); persist()
     for filename, data in decoded.items():
         with (ROOT / filename).open('xb') as out: out.write(data)
         (ROOT / filename).chmod(0o444)
+    if 'shipping' in manifest:
+        spec = importlib.util.spec_from_file_location('TEST_shipping_assets', ROOT / 'guest-bootstrap.py')
+        assets = importlib.util.module_from_spec(spec); spec.loader.exec_module(assets)
+        assets.shipping_inputs(ROOT, manifest)
+        for filename in manifest['shipping']['files']:
+            info = (ROOT / filename).lstat()
+            assert info.st_uid == 1000 and stat.S_IMODE(info.st_mode) == 0o444
+        report['shipping'] = manifest['shipping']
+        report['scope'] = 'offline_shipping_go_native_handoff_TEST'
     with (ROOT / 'manifest.json').open('x') as out: json.dump(manifest, out, sort_keys=True)
     (ROOT / 'manifest.json').chmod(0o444)
     report['manifestSHA256'] = sha(ROOT / 'manifest.json')
@@ -153,7 +180,8 @@ try:
         '--group-add', '994', '--device', '/dev/kvm:/dev/kvm:rw', '--label', 'navigation.test=true',
         '--label', 'navigation.owner=' + nonce, '--network=none', '--cap-drop=ALL',
         '--security-opt=no-new-privileges', '--pids-limit=128', '--memory=6g', '--cpus=2',
-        '-e', 'NAVIGATION_GUEST_HANDOFF_TEST=1', '-v', str(ROOT) + ':/evidence:rw',
+        '-e', 'NAVIGATION_GUEST_HANDOFF_TEST=1', '-e', 'TMPDIR=/evidence/tmp', '-e', 'TMP=/evidence/tmp',
+        '-e', 'TEMP=/evidence/tmp', '-e', 'XDG_CACHE_HOME=/evidence/cache', '-e', 'PYTHONDONTWRITEBYTECODE=1', '-v', str(ROOT) + ':/evidence:rw',
         '--entrypoint', '/usr/bin/python3', IMAGE, '-I', '/evidence/probe.py'])
     assert rc == 0
     candidate = raw.decode().strip()
@@ -175,6 +203,8 @@ try:
     for key in ('notificationAttempted', 'clickAttempted'):
         value = native.get(key); report[key] = value if isinstance(value, bool) else None
     report['passed'] = rc == 0 and terminal_clean and native.get('passed') is True and native.get('sourceSHA256') == report['sourceSHA256'] and native.get('guestSourceSHA256') == report['guestSourceSHA256']
+    if 'shipping' in manifest:
+        report['passed'] = report['passed'] and native.get('shipping') == manifest['shipping']
 except Exception as error:
     report['failure'] = type(error).__name__ + ': ' + str(error)
 finally:
@@ -194,9 +224,13 @@ finally:
               ('manifest.json', report.get('manifestSHA256'), 'manifest'),
               ('base.img', EXPECTED_BASE, 'base'), ('provisioned.qcow2', EXPECTED_PROVISIONED, 'provisioned'),
               ('operator-context.json', report['contextSHA256'], 'context'),
-              (str(pathlib.Path(__file__).resolve()), report['operatorSHA256'], 'operator')]
+              (str(pathlib.Path(__file__).resolve()), report['operatorSHA256'], 'operator'),
+              (str(helper), report['storageHelperSHA256'], 'storageHelper'),
+              (str(BASE), EXPECTED_BASE, 'originalBase'), (str(PROVISIONED), EXPECTED_PROVISIONED, 'originalProvisioned')]
     checks += [(name, digest, name) for name, digest in context['expectedSources'].items()]
     checks += [(name, digest, name) for name, digest in ARCHIVE_HASHES.items()]
+    checks += [(str(ARCHIVES / name), digest, 'original_' + name) for name, digest in ARCHIVE_HASHES.items()]
+    checks += [(name, digest, name) for name, digest in context['manifest'].get('shipping', {}).get('files', {}).items()]
     integrity_errors = []
     for filename, expected, label in checks:
         try:
@@ -204,10 +238,15 @@ finally:
             if not report[label + 'Unchanged']: integrity_errors.append(label + '_changed')
         except Exception as error:
             report[label + 'Unchanged'] = False; integrity_errors.append(label + ': ' + str(error))
+    for copy in report['stagedCopies']:
+        try:
+            if storage.identity(pathlib.Path(copy['source']).lstat()) != copy['sourceAfter'] or storage.identity((ROOT / copy['destination']).lstat()) != copy['destinationIdentity']:
+                integrity_errors.append(copy['destination'] + '_storage_identity_changed')
+        except Exception as error: integrity_errors.append(copy['destination'] + '_storage_identity: ' + str(error))
     report['integrityErrors'] = integrity_errors
     report['cleanupUnknown'] = create_intent and not report['containerRemoved']
     report['passed'] = report['passed'] and report['containerRemoved'] and not integrity_errors
     report['handoffQualified'] = report['passed'] and report.get('nativeResult', {}).get('handoffQualified') is True
     report['activationQualified'] = report['passed'] and report.get('nativeResult', {}).get('activationQualified') is True
-    persist(); print(json.dumps(report), flush=True)
+    persist(); print(json.dumps(report), flush=True); scratch.close()
 raise SystemExit(0 if report['passed'] else 1)

@@ -29,9 +29,9 @@ def sha(path):
     return digest.hexdigest()
 
 
-def decode_guest_frame(serial_bytes):
+def decode_guest_frame(serial_bytes, shipping=False):
     """One bounded complete hash-checked frame, even after a serial getty prompt."""
-    marker = b'NAVIGATION_TEST_HANDOFF_V1 '
+    marker = b'NAVIGATION_TEST_SHIPPING_GO_V1 ' if shipping else b'NAVIGATION_TEST_HANDOFF_V1 '
     if len(serial_bytes) > 16 * 1024 * 1024 or serial_bytes.count(marker) != 1:
         raise RuntimeError('unique_bounded_guest_completion_required')
     start = serial_bytes.index(marker)
@@ -47,9 +47,24 @@ def decode_guest_frame(serial_bytes):
 
 
 
-def qualified_guest_result(guest, sources):
+def qualified_guest_result(guest, sources, shipping=None):
     """A complete native chain and collected cleanup; never an exact-chat claim."""
-    if not isinstance(guest, dict) or guest.get('scope') != 'offline_selected_client_native_handoff_TEST':
+    scope = 'offline_shipping_go_native_handoff_TEST' if shipping else 'offline_selected_client_native_handoff_TEST'
+    if not isinstance(guest, dict) or guest.get('scope') != scope:
+        return False
+    if shipping:
+        cpu = guest.get('guestCPUObservation', {})
+        processors = cpu.get('processors', [])
+        if guest.get('cpuProfileRequested') != 'host,vmx=off,svm=off' or cpu.get('source') != '/proc/cpuinfo' or cpu.get('beforeSelectedTreeRead') is not True or type(cpu.get('rawBytes')) is not int or not 0 < cpu['rawBytes'] <= 32768 or len(cpu.get('rawSHA256', '')) != 64 or [p.get('processor') for p in processors] != [0, 1]:
+            return False
+        for processor in processors:
+            flags = processor.get('flags', [])
+            if not isinstance(processor.get('modelName'), str) or not 0 < len(processor['modelName']) <= 512 or not isinstance(flags, list) or not 0 < len(flags) <= 256 or any(not isinstance(flag, str) or len(flag) > 64 for flag in flags) or 'vmx' in flags or 'svm' in flags:
+                return False
+        times = (cpu.get('beginBoot'), cpu.get('endBoot'), guest.get('firstSelectedVendorReadBeginBoot'))
+        if any(type(value) not in (int, float) for value in times) or not 0 <= times[0] <= times[1] <= times[2]:
+            return False
+    if shipping and (guest.get('shipping') != shipping or any(guest.get(key) is not True for key in ('normalSetupObserved', 'producerRemoved', 'mutableProducerStateRemoved', 'lateClickObserved', 'coldGoReaderObserved', 'exactURIObserved'))):
         return False
     if guest.get('sourceSHA256') != sources:
         return False
@@ -77,11 +92,15 @@ def main():
     if sorted(path.name for path in Path('/sys/class/net').iterdir()) != ['lo']:
         raise RuntimeError('offline_outer_container_required')
     manifest = json.loads((ROOT / 'manifest.json').read_text())
-    if set(manifest) != {'files', 'frontendSHA256', 'backendSHA256'} or set(manifest['files']) != FILES:
+    if set(manifest) != {'files', 'frontendSHA256', 'backendSHA256'} | ({'shipping'} if 'shipping' in manifest else set()) or set(manifest['files']) != FILES:
         raise RuntimeError('complete_handoff_manifest_required')
     for filename, digest in manifest['files'].items():
         if not isinstance(digest, str) or len(digest) != 64 or sha(ROOT / filename) != digest:
             raise RuntimeError('accepted_guest_source_required_before_boot')
+    if 'shipping' in manifest:
+        spec = importlib.util.spec_from_file_location('TEST_shipping_assets', ROOT / 'guest-bootstrap.py')
+        assets = importlib.util.module_from_spec(spec); spec.loader.exec_module(assets)
+        assets.shipping_inputs(ROOT, manifest)
     if sha(ROOT / 'runtime-stage.py') != STAGE_SHA:
         raise RuntimeError('accepted_runtime_stager_required')
     stage_spec = importlib.util.spec_from_file_location('TEST_runtime_stage', ROOT / 'runtime-stage.py')
@@ -93,6 +112,8 @@ def main():
         sourceSHA256=sha(Path(__file__)), guestSourceSHA256=manifest['files'],
         bootstrapSHA256=sha(ROOT / 'guest-bootstrap.py'), manifestSHA256=sha(ROOT / 'manifest.json'),
         runtimeStageSHA256=STAGE_SHA)
+    if 'shipping' in manifest:
+        report.update(scope='offline_shipping_go_native_handoff_TEST', shipping=manifest['shipping'], cpuProfileRequested='host,vmx=off,svm=off')
     child = None
     connection = None
 
@@ -124,6 +145,8 @@ def main():
         # Hard links stay inside the single owned fixture; no shared filesystem in guest.
         for filename in FILES | {'guest-bootstrap.py', 'manifest.json'}:
             os.link(ROOT / filename, seed_dir / filename)
+        for filename in manifest.get('shipping', {}).get('files', {}):
+            os.link(ROOT / filename, seed_dir / filename)
         catalog = stage.stage_runtime_archives(ROOT, seed_dir / 'runtime')
         (seed_dir / 'runtime-hashes.json').write_text(json.dumps(catalog, sort_keys=True) + '\n')
         (seed_dir / 'navigation.marker').write_text('Linux selected-client handoff TEST only\n')
@@ -141,6 +164,7 @@ def main():
         report['launchIntentBoot'] = time.clock_gettime(time.CLOCK_BOOTTIME); persist()
         with (ROOT / 'qemu.stdout').open('xb') as out, (ROOT / 'qemu.stderr').open('xb') as err:
             child = subprocess.Popen(['/usr/bin/qemu-system-x86_64', '-machine', 'q35,accel=kvm',
+                '-cpu', 'host,vmx=off,svm=off',
                 '-S', '-m', '4096M', '-smp', '2', '-nographic', '-display', 'none', '-monitor', 'none',
                 '-qmp', 'unix:' + str(endpoint) + ',server=on,wait=off',
                 '-serial', 'file:' + str(ROOT / 'serial.log'), '-no-reboot',
@@ -263,15 +287,35 @@ def main():
             serial_bytes = serial.read(16 * 1024 * 1024 + 1)
         if len(serial_bytes) > 16 * 1024 * 1024:
             raise RuntimeError('serial_read_budget_exceeded')
-        payload = decode_guest_frame(serial_bytes)
+        payload = decode_guest_frame(serial_bytes, 'shipping' in manifest)
         guest = json.loads(payload)
+        # Keep raw argv in owned private evidence, including for negative guests.
+        # The public result projection contains only bounded metadata/booleans.
+        private = guest.pop('shippingPredicatePrivateBase64', None)
         report['guestResult'] = guest
         (ROOT / 'guest-result.json').write_bytes(payload)
+        if private is not None:
+            capture = guest.get('shippingPredicateCapture', {})
+            if 'shipping' not in manifest or not isinstance(private, str) or len(private) > 10924:
+                raise RuntimeError('bounded_shipping_predicate_payload_required')
+            raw = base64.b64decode(private, validate=True)
+            if not 0 < len(raw) <= 8192 or capture.get('bytes') != len(raw) or capture.get('sha256') != hashlib.sha256(raw).hexdigest() or capture.get('capturedBeforeCleanup') is not True:
+                raise RuntimeError('shipping_predicate_payload_binding_failed')
+            observed = json.loads(raw)
+            if not isinstance(observed, dict) or observed.get('scope') != 'shipping_predicate_private_TEST':
+                raise RuntimeError('shipping_predicate_private_scope_required')
+            with (ROOT / 'shipping-predicate-private.json').open('xb') as stream:
+                os.fchmod(stream.fileno(), 0o600); stream.write(raw); stream.flush(); os.fsync(stream.fileno())
+            report['shippingPredicatePrivateArtifact'] = dict(bytes=len(raw), sha256=capture['sha256'],
+                saved=True, outcome='hash_bound_private_capture')
+        elif guest.get('shippingPredicateCapture') is not None:
+            report['shippingPredicatePrivateArtifact'] = dict(saved=False,
+                outcome=guest.get('shippingPredicatePrivateTransport', 'payload_not_in_serial_frame'))
         if isinstance(guest, dict):
             for key in ('notificationAttempted', 'clickAttempted'):
                 value = guest.get(key)
                 report[key] = value if isinstance(value, bool) else None
-        if not qualified_guest_result(guest, manifest['files']):
+        if not qualified_guest_result(guest, manifest['files'], manifest.get('shipping')):
             raise RuntimeError('guest_native_contract_failed')
         report['guestClientLaunchOutcome'] = 'observed_once'
         report['notificationAttempted'] = True
@@ -311,6 +355,7 @@ def main():
                   ('gtk.tar', stage.QUALIFIED['gtk'][0], 'gtkArchive'),
                   ('native-seed.iso', report.get('seedSHA256'), 'seed')]
         checks += [(name, digest, name) for name, digest in manifest['files'].items()]
+        checks += [(name, digest, name) for name, digest in manifest.get('shipping', {}).get('files', {}).items()]
         for name, expected, label in checks:
             try:
                 actual = sha(ROOT / name)
