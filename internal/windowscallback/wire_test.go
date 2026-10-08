@@ -98,9 +98,9 @@ func TestStrictFieldValidation(t *testing.T) {
 	}
 }
 
-// Breakage: the unqualified checkpoint accidentally enables a native call even
-// when trusted helper bytes are available. None never composes this port.
-func TestPortRemainsUnavailable(t *testing.T) {
+// Breakage: an unbound or cancelled request performs a native probe. None
+// never composes this port, even when trusted helper bytes are available.
+func TestUnboundPortUnavailable(t *testing.T) {
 	if e := (Port{}).CheckReadiness(context.Background(), Binding{"must-not-open", ""}, 123); e != ErrUnavailable {
 		t.Fatal(e)
 	}

@@ -1,5 +1,6 @@
 // Package setup is the trusted existing-installer opt-in use case. It accepts no
-// notification/model arguments and never registers clients or invokes native.
+// notification/model arguments. Explicit Windows opt-in owns only its fixed
+// native generation participants through the managed transaction.
 package setup
 
 import (
@@ -23,11 +24,31 @@ import (
 // Application is an operator-selected local identity, never a payload route.
 type Application struct{ Path, TeamID string }
 type Route struct {
-	LocalRouting        bool   `json:"localRouting"`
-	AllowUnknownCaller  bool   `json:"allowUnknownCaller"`
-	AllowCallerAsserted bool   `json:"allowCallerAsserted"`
-	ApplicationPath     string `json:"applicationPath"`
-	TeamID              string `json:"teamID"`
+	LocalRouting        bool                        `json:"localRouting"`
+	AllowUnknownCaller  bool                        `json:"allowUnknownCaller"`
+	AllowCallerAsserted bool                        `json:"allowCallerAsserted"`
+	ApplicationPath     string                      `json:"applicationPath"`
+	TeamID              string                      `json:"teamID"`
+	Windows             notification.WindowsBinding `json:"windowsCallbackSnapshot,omitempty"`
+}
+
+// Omit the absent value binding from ordinary macOS/Linux policy writes.
+// A pointer is used only for serialization, never for the captured route domain.
+func (r Route) MarshalJSON() ([]byte, error) {
+	type fields struct {
+		LocalRouting        bool                         `json:"localRouting"`
+		AllowUnknownCaller  bool                         `json:"allowUnknownCaller"`
+		AllowCallerAsserted bool                         `json:"allowCallerAsserted"`
+		ApplicationPath     string                       `json:"applicationPath"`
+		TeamID              string                       `json:"teamID"`
+		Windows             *notification.WindowsBinding `json:"windowsCallbackSnapshot,omitempty"`
+	}
+	wire := fields{r.LocalRouting, r.AllowUnknownCaller, r.AllowCallerAsserted, r.ApplicationPath, r.TeamID, nil}
+	if r.Windows != (notification.WindowsBinding{}) {
+		value := r.Windows
+		wire.Windows = &value
+	}
+	return json.Marshal(wire)
 }
 
 // Rates permits partial defaults exactly as the runtime reader does. A supplied
@@ -54,7 +75,8 @@ type Options struct {
 	VerifyApplication                                         func(context.Context, Application) error
 	// VerifyLinuxBinding checks an already installed immutable callback and its
 	// selected vendor resources offline. It never registers or activates native.
-	VerifyLinuxBinding func(context.Context, notification.LinuxBinding) error
+	VerifyLinuxBinding  func(context.Context, notification.LinuxBinding) error
+	skipWindowsReadback bool
 	// Fault is an inert test seam at durable provisioning boundaries.
 	Fault func(string) error
 }
@@ -170,11 +192,19 @@ func Apply(ctx context.Context, o Options, r Request) (result Result, err error)
 	if e != nil {
 		return result, e
 	}
+	w, e := stageWindowsRoute(ctx, o, r, fields)
+	if e != nil {
+		return result, fail("windows_callback_unavailable", e)
+	}
 	candidate, e := preview(s, fields, r.Enabled)
 	if e != nil {
 		return result, e
 	}
-	if e = o.validate(ctx, candidate); e != nil {
+	validationOptions := o
+	if w != nil {
+		validationOptions.skipWindowsReadback = true
+	}
+	if e = validationOptions.validate(ctx, candidate); e != nil {
 		return result, e
 	}
 	unlock, e := installruntime.Lock(ctx, filepath.Join(o.ControlRoot, ".setup.lock"))
@@ -203,6 +233,7 @@ func Apply(ctx context.Context, o Options, r Request) (result Result, err error)
 	}
 	k := o.kernel(current.Installation.Ledger.Generation)
 	k.ExpectedPolicy = &pre
+	k.Windows = w
 	k.PolicyFields = fields
 	k.PolicyEnabled = r.Enabled
 	// Global managed writers share this config lock. Revalidate the exact
@@ -214,7 +245,7 @@ func Apply(ctx context.Context, o Options, r Request) (result Result, err error)
 				return nil, e
 			}
 		}
-		return nil, o.validate(ctx, candidate)
+		return nil, validationOptions.validate(ctx, candidate)
 	}
 	l, e := installruntime.Commit(ctx, k)
 	if e != nil {
@@ -341,7 +372,16 @@ func (o Options) validatePrepared(ctx context.Context, s installruntime.PolicySn
 	if e != nil {
 		return fail("configuration_invalid", e)
 	}
-	if p.Route.LocalRouting && o.Platform != "darwin" {
+	if p.Route.LocalRouting && o.Platform == "windows" {
+		if p.Route.ApplicationPath != "" || p.Route.TeamID != "" || p.Route.Windows == (notification.WindowsBinding{}) {
+			return fail("windows_callback_unavailable", fmt.Errorf("explicit selected Windows generation required"))
+		}
+		if !o.skipWindowsReadback {
+			if e = verifyWindowsRoute(ctx, p.Route.Windows); e != nil {
+				return fail("windows_callback_unavailable", e)
+			}
+		}
+	} else if p.Route.LocalRouting && o.Platform != "darwin" {
 		if o.Platform != "linux" || p.Route.ApplicationPath != "" || p.Route.TeamID != "" {
 			return fail("unsupported_platform", fmt.Errorf("%s does not support the selected application route", o.Platform))
 		}

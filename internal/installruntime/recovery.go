@@ -192,6 +192,15 @@ func decodeTransactionBlobs(data []byte, blobDir string) (transaction, error) {
 	if !acceptedTransactionSchema(tx.Schema) || tx.After.Generation <= tx.Before.Generation || tx.After.PolicyGeneration <= tx.Before.PolicyGeneration || tx.After.ID == "" || tx.After.Consumers == nil || tx.After.Files == nil || tx.Before.Consumers == nil || tx.Before.Files == nil {
 		return tx, fmt.Errorf("invalid transaction schema")
 	}
+	if validateWindowsRetained(tx.Before) != nil || validateWindowsRetained(tx.After) != nil {
+		return tx, fmt.Errorf("invalid Windows retained journal")
+	}
+	if e := validateWindowsPayload(tx.Windows); e != nil {
+		return tx, e
+	}
+	if tx.Windows != nil && (tx.Schema != 5 || tx.After.WriterFloor < WindowsGenerationWriterFloor) {
+		return tx, fmt.Errorf("Windows participant requires schema/floor5")
+	}
 	seen := map[string]bool{}
 	for _, f := range tx.Files {
 		if !filepath.IsAbs(f.Path) || seen[f.Path] {
@@ -320,7 +329,18 @@ func reverseTransaction(current Ledger, tx transaction) (transaction, error) {
 			}
 		}
 	}
+	// Retain every charged Windows generation, including a private generation
+	// from an interrupted setup. Absence/process exit never releases capacity.
+	after.WindowsRetained = append([]windowscallback.Binding(nil), tx.After.WindowsRetained...)
 	reverse := transaction{Schema: transactionSchemaFor(after, Request{}), Before: current, After: after, ConfigPaths: tx.ConfigPaths, Rollback: true}
+	if tx.Windows != nil {
+		if windowsCommitDecided(tx.Windows) {
+			return transaction{}, ErrPolicyRecovery
+		}
+		w := *tx.Windows
+		w.Phase = "rollback_decided"
+		reverse.Windows = &w
+	}
 	if tx.Native != nil && after.Native != nil {
 		parents, err := pathAnchors(after.Native.Path, false)
 		if err != nil {
@@ -386,7 +406,7 @@ type transactionV4 struct {
 }
 
 func marshalTransaction(tx transaction) ([]byte, error) {
-	if tx.Schema != transactionSchemaV4 {
+	if tx.Schema != transactionSchemaV4 && tx.Schema != 5 {
 		return json.Marshal(tx)
 	}
 	wire := transactionV4{transaction: &tx}
@@ -395,7 +415,7 @@ func marshalTransaction(tx transaction) ([]byte, error) {
 }
 
 func unmarshalTransaction(data []byte, schema int, tx *transaction) error {
-	if schema != transactionSchemaV4 {
+	if schema != transactionSchemaV4 && schema != 5 {
 		return json.Unmarshal(data, tx)
 	}
 	if err := validateTransactionV4Files(data); err != nil {
