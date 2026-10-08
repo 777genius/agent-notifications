@@ -93,7 +93,7 @@ func advanceWindows(ctx context.Context, root string, tx *transaction, fault fun
 	}
 	if w.Phase == "rollback_decided" {
 		if !tx.Rollback {
-			return fmt.Errorf("Windows reverse decision requires reverse owner journal")
+			return fmt.Errorf("windows reverse decision requires reverse owner journal")
 		}
 		if !w.Observed {
 			return nil

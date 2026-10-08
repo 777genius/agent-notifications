@@ -200,7 +200,7 @@ func decodeTransactionBlobs(data []byte, blobDir string) (transaction, error) {
 		return tx, e
 	}
 	if tx.Windows != nil && (tx.Schema != 5 || tx.After.WriterFloor < WindowsGenerationWriterFloor) {
-		return tx, fmt.Errorf("Windows participant requires schema/floor5")
+		return tx, fmt.Errorf("windows participant requires schema/floor5")
 	}
 	seen := map[string]bool{}
 	for _, f := range tx.Files {

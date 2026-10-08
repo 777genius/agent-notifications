@@ -427,7 +427,7 @@ func TestSchema4PublicRecoveryIntegrity(t *testing.T) {
 				case "legacy-v1", "legacy-v2", "legacy-v3":
 					tx["Schema"] = json.RawMessage(strings.TrimPrefix(kind, "legacy-v"))
 				case "unsupported-schema-before-blob":
-					tx["Schema"] = json.RawMessage("5")
+					tx["Schema"] = json.RawMessage("6")
 				case "unsupported-floor-before-blob":
 					var after map[string]json.RawMessage
 					if err := json.Unmarshal(tx["After"], &after); err != nil {

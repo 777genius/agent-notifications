@@ -14,7 +14,7 @@ const StorageBytes = 64 * 1024 * 1024
 const AttemptReservation = 32 * 1024
 
 var ErrUnknown = errors.New("native Windows handoff uncertain")
-var ErrDisabled = errors.New("Windows notifications disabled")
+var ErrDisabled = errors.New("windows notifications disabled")
 var ErrCapacity = errors.New("retained callback capacity unavailable")
 
 func Digest(b []byte) string { d := sha256.Sum256(b); return hex.EncodeToString(d[:]) }

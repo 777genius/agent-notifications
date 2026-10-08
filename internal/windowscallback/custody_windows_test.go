@@ -23,25 +23,25 @@ func inertGeneration(t *testing.T) (*Custody, Binding) {
 	root := t.TempDir()
 	parent, e := hold(root)
 	if e != nil {
-		t.Fatal(e)
+		t.Fatalf("fixture hold control root: %v", e)
 	}
 	canonical, sid := parent.Root, parent.SID
 	if e = parent.Close(); e != nil {
-		t.Fatal(e)
+		t.Fatalf("fixture close control root: %v", e)
 	}
 	s := Snapshot{Generation: strings.Repeat("a", 32), CanonicalRoot: filepath.Join(canonical, "windows-callback", strings.Repeat("a", 32)), OwnerSID: sid, HelperSHA256: digest, AUMID: "AgentNotifications.TEST", CLSID: "{11111111-1111-1111-1111-111111111111}", VendorName: VendorName, Publisher: VendorPublisher, Family: VendorFamily, FullName: "OpenAI.Codex_26.930.7945.0_x64__2p2nqsd0c76g0"}
 	b, e := EncodeSnapshot(s)
 	if e != nil {
-		t.Fatal(e)
+		t.Fatalf("fixture encode snapshot: %v", e)
 	}
 	binding := Binding{filepath.Join(s.CanonicalRoot, "generation.wne"), Digest(b)}
 	end := BootMilliseconds() + 10000
 	if e = Bootstrap(context.Background(), s, end); e != nil {
-		t.Fatal(e)
+		t.Fatalf("fixture bootstrap generation: %v", e)
 	}
 	g, e := Open(context.Background(), binding, end)
 	if e != nil {
-		t.Fatal(e)
+		t.Fatalf("fixture open generation custody: %v", e)
 	}
 	t.Cleanup(func() { _ = g.Close() })
 	return g, binding
