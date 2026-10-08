@@ -28,6 +28,25 @@ for arg in "$@"; do
     esac
 done
 
+# Explicit stable release metadata only; absent input retains the non-release template.
+native_release_versions() {
+    [[ "$1" =~ ^v([1-9][0-9]{0,3})\.(0|[1-9][0-9]?)\.(0|[1-9][0-9]?)$ ]] || {
+        echo "Error: RELEASE_TAG must be canonical stable vX.Y.Z" >&2; return 1;
+    }
+    local major="${BASH_REMATCH[1]}" minor="${BASH_REMATCH[2]}" patch="${BASH_REMATCH[3]}"
+    [ "$major" -le 9997 ] || { echo "Error: RELEASE_TAG major exceeds build range" >&2; return 1; }
+    # Build epoch +2 orders new stable releases above historical fixed 2.0.0.
+    printf '%s.%s.%s %s.%s.%s\n' "$major" "$minor" "$patch" "$((major + 2))" "$minor" "$patch"
+}
+NATIVE_MARKETING_VERSION=""
+NATIVE_BUILD_VERSION=""
+if [ -n "${RELEASE_TAG:-}" ]; then
+    NATIVE_VERSIONS="$(native_release_versions "$RELEASE_TAG")" || exit 1
+    read -r NATIVE_MARKETING_VERSION NATIVE_BUILD_VERSION <<< "$NATIVE_VERSIONS"
+else
+    echo "Non-release helper build: retaining template bundle versions"
+fi
+
 # CI requires the selected publisher before compiling or contacting Apple.
 SIGNING_IDENTITY="${APPLE_SIGNING_IDENTITY:-DBF74EF5BF85404EE5355248F22C883027857C94}"
 if [ "$CI_MODE" = true ]; then
@@ -88,6 +107,12 @@ mkdir -p "${APP_BUNDLE}/Contents/Resources"
 
 cp "$BINARY" "${APP_BUNDLE}/Contents/MacOS/${BINARY_NAME}"
 cp "${PROJECT_DIR}/Resources/Info.plist" "${APP_BUNDLE}/Contents/"
+if [ -n "$NATIVE_MARKETING_VERSION" ]; then
+    /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $NATIVE_MARKETING_VERSION" "$APP_BUNDLE/Contents/Info.plist"
+    /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $NATIVE_BUILD_VERSION" "$APP_BUNDLE/Contents/Info.plist"
+    test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_BUNDLE/Contents/Info.plist")" = "$NATIVE_MARKETING_VERSION"
+    test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP_BUNDLE/Contents/Info.plist")" = "$NATIVE_BUILD_VERSION"
+fi
 
 if [ -f "$ICON_SRC" ]; then
     echo "Generating app icon..."
