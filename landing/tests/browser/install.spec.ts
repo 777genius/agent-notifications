@@ -508,10 +508,10 @@ test("released agents toggle independently, copied commands and configuration co
   const prefix = "curl -fsSL https://agent-notifications.com/install.sh | bash -s -- --product ";
   const cases = [
     { selected: ["claude"], expected: prefix + "claude" },
-    { selected: ["claude", "opencode"], expected: "(set -o pipefail; " + prefix.replace("--product ", "--products ") + "claude,opencode --desktop)" },
-    { selected: ["claude", "codex", "opencode"], expected: "(set -o pipefail; " + prefix.replace("--product ", "--products ") + "claude,codex,opencode --desktop)" },
-    { selected: ["codex", "opencode"], expected: "(set -o pipefail; " + prefix.replace("--product ", "--products ") + "codex,opencode --desktop)" },
-    { selected: ["opencode"], expected: prefix + "opencode --desktop" },
+    { selected: ["claude", "opencode"], expected: "(set -o pipefail; " + prefix.replace("--product ", "--products ") + "claude,opencode)" },
+    { selected: ["claude", "codex", "opencode"], expected: "(set -o pipefail; " + prefix.replace("--product ", "--products ") + "claude,codex,opencode)" },
+    { selected: ["codex", "opencode"], expected: "(set -o pipefail; " + prefix.replace("--product ", "--products ") + "codex,opencode)" },
+    { selected: ["opencode"], expected: prefix + "opencode" },
     { selected: ["codex"], expected: prefix + "codex" },
     { selected: ["claude", "codex"], expected: "(set -o pipefail; " + prefix.replace("--product ", "--products ") + "claude,codex)" },
   ] as const;
@@ -529,7 +529,7 @@ test("released agents toggle independently, copied commands and configuration co
   await chooseAgents(page, ["claude", "codex", "opencode"]);
   await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
   await page.getByRole("button", { name: "Copy command" }).click();
-  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("(set -o pipefail; " + prefix.replace("--product ", "--products ") + "claude,codex,opencode --desktop)");
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("(set -o pipefail; " + prefix.replace("--product ", "--products ") + "claude,codex,opencode)");
   const table = page.getByRole("table", { name: "Compare agent features" });
   await expect(table.getByRole("columnheader")).toHaveText(["Feature", "Claude", "Codex CLI", "OpenCode", /Gemini CLI\s*Linux \/ Windows/]);
   await expect(table.getByRole("row", { name: /^Completed/ }).getByRole("cell")).toHaveText(["✓Supported", "✓Supported", "✓Supported", "✓Supported"]);
@@ -562,7 +562,7 @@ test("released agents toggle independently, copied commands and configuration co
   await expect(page.getByText(/Restart OpenCode to load the global plugin/)).toBeVisible();
   await chooseAgents(page, ["opencode"]);
   await expect(agentNotify).toHaveCount(0);
-  await expect(page.getByLabel("Install command", { exact: true })).toHaveValue(prefix + "opencode --desktop");
+  await expect(page.getByLabel("Install command", { exact: true })).toHaveValue(prefix + "opencode");
 });
 
 test("first feature explains supported click-to-focus and its agent scope", async ({ page }) => {
@@ -622,13 +622,13 @@ test("Gemini selection stays disabled on macOS while capabilities remain visible
   await expect(gemini).toHaveAttribute("aria-pressed", "false");
   await expect(page.getByLabel("Install command", { exact: true })).toHaveValue(/--product claude$/);
   await chooseAgents(page, ["claude", "codex", "opencode"]);
-  await expect(page.getByLabel("Install command", { exact: true })).toHaveValue(/--products claude,codex,opencode --desktop/);
+  await expect(page.getByLabel("Install command", { exact: true })).toHaveValue(/--products claude,codex,opencode/);
   await page.getByRole("button", { name: "Configure", exact: true }).click();
   await expect(page.locator(".configuration")).toContainText("/claude-notifications-go:settings");
   await expect(page.locator(".configuration")).toContainText("config path");
   await expect(gemini).toBeDisabled();
   await page.getByRole("button", { name: "Install", exact: true }).click();
-  await expect(page.getByLabel("Install command", { exact: true })).toHaveValue(/--products claude,codex,opencode --desktop/);
+  await expect(page.getByLabel("Install command", { exact: true })).toHaveValue(/--products claude,codex,opencode/);
 });
 
 // Manual instructions must remain available for the released agents in both intents.
@@ -672,7 +672,7 @@ test("agent comparison stays readable on mobile and keeps all agents visible", a
       expect(comparison!.y).toBeGreaterThanOrEqual(bounds!.y + bounds!.height);
     }
     await expect(page.getByRole("checkbox")).toHaveCount(0);
-    await expect(page.getByLabel("Install command", { exact: true })).toHaveValue(/--product opencode --desktop$/);
+    await expect(page.getByLabel("Install command", { exact: true })).toHaveValue(/--product opencode$/);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     for (const logo of await table.locator("img").evaluateAll((nodes) => nodes.map((node) => (node as HTMLImageElement).naturalWidth)))
       expect(logo).toBeGreaterThan(0);
@@ -688,9 +688,9 @@ test("platform channels enable Gemini and reset unsupported selections", async (
     await expect(page.locator(".install-release-version")).toContainText("1.48.4");
     await expect(page.getByRole("button", { name: "Gemini CLI", exact: true })).toBeEnabled();
     await chooseAgents(page, ["gemini"]);
-    await expect(page.getByLabel("Install command", { exact: true })).toHaveValue(/--product gemini --desktop$/);
+    await expect(page.getByLabel("Install command", { exact: true })).toHaveValue(/--product gemini$/);
     await page.getByRole("button", { name: "Update", exact: true }).click();
-    await expect(page.getByLabel("Update command", { exact: true })).toHaveValue(/--product gemini --desktop$/);
+    await expect(page.getByLabel("Update command", { exact: true })).toHaveValue(/--product gemini$/);
     await page.getByRole("button", { name: "Install", exact: true }).click();
     await chooseOS(page, "manual");
     await expect(page.getByRole("button", { name: "Gemini CLI", exact: true })).toHaveAttribute("aria-pressed", "true");

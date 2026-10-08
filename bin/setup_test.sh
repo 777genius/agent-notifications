@@ -422,9 +422,9 @@ def run_runtime_case(name, python=False, node=False, expected=0, stub_python=Fal
 
 
 # Regression: pending JSON previously acquired a helper and entered UI; malformed
-# UI flags and incomplete multi observers must also stop before acquisition.
+# Invalid flags and pending product UI stop before acquisition.
 for args in [['--json'], ['--product', 'gemini', '--json'],
-             ['--products', 'opencode'], ['--ui=wat'],
+             ['--products', 'opencode,opencode'], ['--ui=wat'],
              ['--plain', '--ui=rich'], ['--yes'], ['--unknown']]:
     run_case('pure parse refuses ' + repr(args), args=args, no_network=True)
 for args in [['--plain'], ['--ui=plain'], ['--product', 'gemini', '--plain']]:
@@ -497,7 +497,7 @@ for selection in ['claude','codex','opencode','gemini','codex,claude',
     product_sets.append((selection, routed))
     run_case('product set ' + selection, args=args, calls=routed, expected=0)
 # Focused native Bash 3.2 coverage protects optional-channel parsing under
-# nounset. Check every advertised set and the intended consent error with
+# nounset. Check every advertised set and omitted-channel forwarding with
 # /bin/bash both as the loader interpreter and as fixture PATH's bash.
 if sys.platform == 'darwin':
     native_bash = '/bin/bash'
@@ -511,12 +511,17 @@ if sys.platform == 'darwin':
             run_case('native Bash 3.2 product set ' + selection,
                      args=args, calls=routed, expected=0, bash_executable=native_bash)
         for selection in ['opencode', 'claude,opencode']:
-            run_case('native Bash 3.2 missing consent ' + selection,
-                     args=['--products', selection], no_network=True,
-                     message='Selected observers require explicit --desktop and/or --webhook consent.',
+            run_case('native Bash 3.2 default channels ' + selection,
+                     args=['--products', selection], calls=[['--products',selection]], expected=0,
                      bash_executable=native_bash)
     else:
         print('SKIP native Bash 3.2 fixtures: /bin/bash is ' + native_version)
+for selection in ['opencode','gemini','claude,codex,opencode,gemini']:
+    run_case('omitted observer defaults '+selection,
+             args=['--products',selection],calls=[['--products',selection]],expected=0,piped=True)
+run_case('explicit disabled observer flags survive the loader',
+         args=['--products','opencode,gemini','--desktop=false','--webhook=false'],
+         calls=[['--products','opencode,gemini','--desktop=false','--webhook=false']],expected=0)
 run_case('scoped flags and equals selector',
          args=['--webhook', '--products=opencode,claude,codex,gemini', '--skip-agent-notify', '--desktop'],
          calls=[['--products','opencode,claude,codex,gemini','--skip-agent-notify','--webhook','--desktop']], expected=0, piped=True)
@@ -532,7 +537,7 @@ for args in [
     ['--products', 'claude,claude'], ['--products', 'codex,codex'],
     ['--products', 'opencode,opencode', '--desktop'],
     ['--products','gemini,gemini','--webhook'],
-    ['--products','gemini'],
+    ['--products','gemini,unknown'],
     ['--products','gemini','--desktop','--skip-agent-notify'],
     ['--products', 'both'], ['--products', 'Claude'], ['--products', 'claude, codex'],
     ['--products', '*'], ['--products', 'claude,$(touch marker)'],
@@ -541,7 +546,7 @@ for args in [
     ['--product', 'claude', '--products', 'codex'],
     ['--products', 'claude', '--product', 'codex'],
     ['--products', 'claude', '--product=codex'],
-    ['--products', 'opencode'],
+    ['--products', 'opencode,'],
     ['--products', 'claude', '--desktop'], ['--products', 'codex', '--webhook'],
     ['--products', 'opencode', '--desktop', '--skip-agent-notify'],
     ['--products', 'opencode', '--desktop', '--agent-notify'],

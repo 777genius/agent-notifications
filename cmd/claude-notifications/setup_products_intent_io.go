@@ -259,7 +259,17 @@ func validateBootstrapIntent(i confirmedBootstrapIntent) error {
 		}
 		u := i.Units[n]
 		portable := id == "claude" || id == "codex" || id == "cursor"
-		if u.Product != id || u.Hooks != (portable && id != "cursor") || u.Native == portable || u.MCP != containsProduct(i.MCP.Selected, id) || u.Skill != u.MCP || u.PreservedOff != containsProduct(i.MCP.Skipped, id) || u.Desktop != ((!portable || id == "cursor") && i.Request.Desktop) || u.Webhook != ((!portable || id == "cursor") && i.Request.Webhook) {
+
+		desktop, webhook := false, false
+		if !portable {
+			desktop, webhook, err = resolveBootstrapChannels(i.Request, id, i.Initial.ChannelPolicy)
+			if err != nil {
+				return invalid()
+			}
+		} else if id == "cursor" {
+			desktop, webhook = i.Request.Desktop, i.Request.Webhook
+		}
+		if u.Product != id || u.Hooks != (portable && id != "cursor") || u.Native == portable || u.MCP != containsProduct(i.MCP.Selected, id) || u.Skill != u.MCP || u.PreservedOff != containsProduct(i.MCP.Skipped, id) || u.Desktop != desktop || u.Webhook != webhook {
 			return invalid()
 		}
 	}
@@ -288,6 +298,20 @@ func writeIntentScalars(out io.Writer, i confirmedBootstrapIntent) error {
 			b.WriteByte(0)
 		}
 	}
+	for _, u := range i.Units {
+		if u.Product == "opencode" || u.Product == "gemini" {
+			key := "openCodeNotifications"
+			if u.Product == "gemini" {
+				key = "geminiNotifications"
+			}
+			preimage, err := installruntime.ObserverChannelPreimage(i.Initial.ChannelPolicy, key)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(&b, "%s-channel-preimage%c%s%c", u.Product, 0, preimage, 0)
+			fmt.Fprintf(&b, "%s-desktop%c%t%c%s-webhook%c%t%c", u.Product, 0, u.Desktop, 0, u.Product, 0, u.Webhook, 0)
+		}
+	}
 	if b.Len() > maxBootstrapIntent {
 		return fmt.Errorf("intent scalar budget exceeded")
 	}
@@ -311,11 +335,19 @@ func validateBootstrapEffectRequest(r setupProductsArgs) error {
 	if r.SkipAgentNotify {
 		args = append(args, "--skip-agent-notify")
 	}
-	if r.Desktop {
-		args = append(args, "--desktop")
+	if r.DesktopSet {
+		if containsProduct(r.Products, "cursor") {
+			args = append(args, "--desktop")
+		} else {
+			args = append(args, "--desktop="+fmt.Sprint(r.Desktop))
+		}
 	}
-	if r.Webhook {
-		args = append(args, "--webhook")
+	if r.WebhookSet {
+		if containsProduct(r.Products, "cursor") {
+			args = append(args, "--webhook")
+		} else {
+			args = append(args, "--webhook="+fmt.Sprint(r.Webhook))
+		}
 	}
 	c := r.Configure
 	if c.Route != nil {
@@ -340,7 +372,7 @@ func validateBootstrapEffectRequest(r setupProductsArgs) error {
 	if err != nil {
 		return err
 	}
-	if !reflect.DeepEqual(normalized.Configure, r.Configure) {
+	if normalized.Desktop != r.Desktop || normalized.Webhook != r.Webhook || normalized.DesktopSet != r.DesktopSet || normalized.WebhookSet != r.WebhookSet || !reflect.DeepEqual(normalized.Configure, r.Configure) {
 		return errors.New("invalid frozen normalized configure request")
 	}
 	return nil

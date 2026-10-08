@@ -3,6 +3,7 @@ package opencodeinstall
 import (
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -566,5 +567,64 @@ func TestSharedPluginCannotBeRemovedBeforeRegistration(t *testing.T) {
 	}
 	if _, ok := l.Consumers[consumerID]; ok {
 		t.Fatal("registration remains")
+	}
+}
+
+// A preserved disabled product must remain upgradeable without re-enabling it.
+func TestDisabledChannelsInstallRepeat(t *testing.T) {
+	ctx, r, _ := fixture(t)
+	r.Desktop, r.Webhook = false, false
+	for _, action := range []Action{Install, Install, Update} {
+		r.Action = action
+		if err := Apply(ctx, r); err != nil {
+			t.Fatal(err)
+		}
+		snapshot, err := installruntime.ReadPolicySnapshot(ctx, r.ControlRoot)
+		if err != nil {
+			t.Fatal(err)
+		}
+		desktop, webhook := policyChannels(snapshot.Fields)
+		if desktop || webhook {
+			t.Fatal("disabled channels revived by setup")
+		}
+	}
+}
+
+// Revocation after the outer bootstrap checkpoint must not be overwritten by
+// either registration's fresh snapshot or the later channel writer snapshot.
+func TestFrozenChannelsRefuseLaterRevocation(t *testing.T) {
+	ctx, r, _ := fixture(t)
+	if err := Apply(ctx, r); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := installruntime.ReadPolicySnapshot(ctx, r.ControlRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected, err := installruntime.ObserverChannelPreimage(snapshot.Fields["route"], "openCodeNotifications")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.ChannelPreimage = expected
+	if err := RevokeChannels(ctx, r.ControlRoot, r.RuntimeRoot); err != nil {
+		t.Fatal(err)
+	}
+	if err := Apply(ctx, r); err == nil {
+		t.Fatal("frozen upgrade overwrote later revocation")
+	}
+	if err := setChannels(ctx, r.ControlRoot, r.RuntimeRoot, r.Desktop, r.Webhook, expected); err == nil {
+		t.Fatal("final channel writer overwrote later revocation")
+	}
+	after, err := installruntime.ReadPolicySnapshot(ctx, r.ControlRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields struct{ Desktop, Webhook bool }
+	var route map[string]json.RawMessage
+	if err := json.Unmarshal(after.Fields["route"], &route); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(route["openCodeNotifications"], &fields); err != nil || fields.Desktop || fields.Webhook {
+		t.Fatalf("revoked decision changed: %+v %v", fields, err)
 	}
 }
