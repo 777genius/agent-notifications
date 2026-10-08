@@ -48,13 +48,15 @@ function parseProcesses(text:string):AppProcess[]{return text.trim().split('\n')
 function sameProcess(a:AppProcess,b:AppProcess):boolean{return a.pid===b.pid&&a.birth===b.birth&&a.args===b.args;}
 function ownApp(rows:AppProcess[],argv:string):AppProcess|undefined{const matches=rows.filter(row=>row.args===argv);assert(matches.length<=1,'ambiguous owned LS request');return matches[0];}
 function descendants(rows:AppProcess[],pid:number):AppProcess[]{const found:AppProcess[]=[];let parents=[pid];while(parents.length){const next=rows.filter(row=>parents.includes(row.ppid)&&!found.some(p=>p.pid===row.pid));found.push(...next);assert(found.length<32,'LS descendant bound');parents=next.map(row=>row.pid);}return found;}
-interface ProbeContext {root:string;env:NodeJS.ProcessEnv;execute:typeof execFile;record:(pid:number|undefined,actualClose:boolean,failed:boolean)=>void;}
-async function processProbe(c:ProbeContext,remainingMS:number):Promise<AppProcess[]>{return await new Promise((yes,no)=>{
- let callbackDone=false,closed=false,error:unknown,text='',settled=false;
- const settle=()=>{if(!callbackDone||!closed||settled)return;settled=true;clearTimeout(fence);c.record(child.pid,true,Boolean(error));if(error)return no(error);try{yes(parseProcesses(text));}catch(err){no(err);}};
- const child=c.execute('/bin/ps',['-ww','-axo','pid=,ppid=,lstart=,args='],{cwd:c.root,env:c.env,encoding:'utf8',timeout:Math.max(1,Math.min(500,remainingMS)),killSignal:'SIGKILL',maxBuffer:1024*1024},(err,value)=>{callbackDone=true;error=err;text=value;settle();});
- const fence=setTimeout(()=>{if(settled)return;settled=true;child.kill('SIGKILL');child.stdout?.destroy();child.stderr?.destroy();c.record(child.pid,closed,true);no(Error('process probe actual close deadline'));},Math.max(1,Math.min(1000,remainingMS)));
- child.once('close',()=>{closed=true;settle();});
+interface ProbeFacts {reason:'completed'|'command_failed'|'close_deadline';code:string|null;exitCode:number|null;signal:string|null;killed:boolean;elapsedMS:number;budgetMS:number;stdoutBytes:number;stderrBytes:number;}
+interface ProbeContext {root:string;env:NodeJS.ProcessEnv;execute:typeof execFile;record:(pid:number|undefined,actualClose:boolean,failed:boolean,facts:ProbeFacts)=>void;}
+async function processProbe(c:ProbeContext,remainingMS:number):Promise<AppProcess[]>{assert(Number.isFinite(remainingMS)&&remainingMS>0,'process probe remaining budget');return await new Promise((yes,no)=>{
+ const started=performance.now(),budgetMS=Math.min(2000,remainingMS);let callbackDone=false,closed=false,error:unknown,text='',stderr='',settled=false,exitCode:number|null=null,signal:string|null=null;
+ const record=(reason:ProbeFacts['reason'])=>{const e=error as {code?:unknown;signal?:unknown;killed?:unknown}|undefined;const safeSignal=(value:unknown)=>typeof value==='string'&&['SIGKILL','SIGTERM','SIGABRT','SIGSEGV','SIGPIPE','SIGINT'].includes(value)?value:null;c.record(child.pid,closed,reason!=='completed',{reason,code:typeof e?.code==='string'&&/^E[A-Z0-9_]{1,40}$/.test(e.code)?e.code:null,exitCode:exitCode??(typeof e?.code==='number'&&Number.isSafeInteger(e.code)?e.code:null),signal:safeSignal(signal)??safeSignal(e?.signal),killed:e?.killed===true,elapsedMS:performance.now()-started,budgetMS,stdoutBytes:Buffer.byteLength(text),stderrBytes:Buffer.byteLength(stderr)});};
+ const settle=()=>{if(!callbackDone||!closed||settled)return;settled=true;clearTimeout(fence);record(error?'command_failed':'completed');if(error)return no(error);try{yes(parseProcesses(text));}catch(err){no(err);}};
+ const child=c.execute('/bin/ps',['-ww','-axo','pid=,ppid=,lstart=,args='],{cwd:c.root,env:c.env,encoding:'utf8',timeout:Math.max(1,Math.min(1500,budgetMS)),killSignal:'SIGKILL',maxBuffer:1024*1024},(err,value,errText)=>{callbackDone=true;error=err;text=value;stderr=errText;settle();});
+ const fence=setTimeout(()=>{if(settled)return;settled=true;child.kill('SIGKILL');child.stdout?.destroy();child.stderr?.destroy();record('close_deadline');no(Error('process probe actual close deadline'));},Math.max(1,budgetMS));
+ child.once('close',(code:number|null,sig:string|null)=>{closed=true;exitCode=code;signal=sig;settle();});
 });}
 interface LSCleanup {state:{lease?:AppProcess;argv?:string;unexpectedDescendants:boolean};report:Record<string,unknown>;rows:(remainingMS:number)=>Promise<AppProcess[]>;verify:()=>void;signal:(pid:number,sig:'SIGTERM'|'SIGKILL')=>void;pause:(ms:number)=>Promise<void>;now:()=>number;}
 async function closeLSApp(c:LSCleanup):Promise<void>{
@@ -111,7 +113,7 @@ async function main():Promise<void>{
  const run=async(executable:string,args:string[],budget=10000)=>await owned(executable,args,budget).done;
  const ls='/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister';
  const app=join(root,'native/ClaudeNotifier.app'),exe=join(app,'Contents/MacOS/terminal-notifier-modern');let registrationAttempted=false,request:ReturnType<typeof owned>|undefined,failure:unknown,appLease:AppProcess|undefined,requestArgv:string|undefined,unexpectedDescendants=false;
- const processRows=async(remainingMS=1000)=>await processProbe({root,env,execute:execFile,record:(pid,actualClose,failed)=>(report.children as unknown[]).push({pid,executable:'/bin/ps',processIdentityProbe:true,actualClose,failed})},remainingMS);
+ const processRows=async(remainingMS=2000)=>await processProbe({root,env,execute:execFile,record:(pid,actualClose,failed,facts)=>(report.children as unknown[]).push({pid,executable:'/bin/ps',processIdentityProbe:true,actualClose,failed,...facts})},remainingMS);
  const callback=join(root,'request-stdout.jsonl'),callbackError=join(root,'request-stderr.log');
  const closeApp=async()=>await closeLSApp({state:{lease:appLease,argv:requestArgv,unexpectedDescendants},report,rows:processRows,verify:()=>assert(hash(exe)===report.executableSHA256&&realpathSync(exe)===exe),signal:(pid,sig)=>process.kill(pid,sig),pause:pauses,now:()=>performance.now()});
  try{
@@ -204,8 +206,17 @@ function run(argv){
 `;
 async function selfTest():Promise<void>{
  let probeClosed=false,probeRecorded=false;
- const execute=((...params:unknown[])=>{const p=Object.assign(new EventEmitter(),{pid:12345,stdout:new PassThrough(),stderr:new PassThrough(),kill:()=>true});const callback=params[3] as (err:Error,text:string)=>void;queueMicrotask(()=>{callback(Error('injected spawn error'),'');assert(!probeRecorded);queueMicrotask(()=>{probeClosed=true;p.emit('close',1);});});return p;}) as unknown as typeof execFile;
+ const execute=((...params:unknown[])=>{const p=Object.assign(new EventEmitter(),{pid:12345,stdout:new PassThrough(),stderr:new PassThrough(),kill:()=>true});const callback=params[3] as (err:Error,text:string,stderr:string)=>void;queueMicrotask(()=>{callback(Error('injected spawn error'),'','');assert(!probeRecorded);queueMicrotask(()=>{probeClosed=true;p.emit('close',1);});});return p;}) as unknown as typeof execFile;
  await assert.rejects(processProbe({root:'/TEST',env:{},execute,record:(_pid,actualClose,failed)=>{assert(probeClosed&&actualClose&&failed);probeRecorded=true;}},1000));assert(probeRecorded);
+ for(const mode of ['completed','killed','late-close']){
+  let facts:ProbeFacts|undefined,actualClose=false;const children:EventEmitter[]=[];
+  const mocked=((...params:unknown[])=>{const options=params[2] as {timeout:number};assert(options.timeout<=1500);const child=Object.assign(new EventEmitter(),{pid:12345,stdout:new PassThrough(),stderr:new PassThrough(),kill:()=>true});children.push(child);const callback=params[3] as (err:Error|null,text:string,stderr:string)=>void;queueMicrotask(()=>{callback(mode==='killed'?Object.assign(Error('must not retain command text'),{code:'ETIMEDOUT',signal:'SIGKILL',killed:true}):null,'','');if(mode!=='late-close')queueMicrotask(()=>child.emit('close',mode==='killed'?null:0,mode==='killed'?'SIGKILL':null));});return child;}) as unknown as typeof execFile;
+  const operation=processProbe({root:'/TEST',env:{},execute:mocked,record:(_pid,closed,_failed,observed)=>{facts=observed;actualClose=closed;}},mode==='late-close'?10:2000);
+  if(mode==='completed')assert.deepEqual(await operation,[]);else await assert.rejects(operation);
+  assert(facts);assert.equal(facts.budgetMS,mode==='late-close'?10:2000);assert.equal(actualClose,mode!=='late-close');assert.equal(facts.reason,mode==='completed'?'completed':mode==='killed'?'command_failed':'close_deadline');assert.equal(facts.stdoutBytes,0);assert.equal(facts.stderrBytes,0);assert(facts.elapsedMS>=0);
+  if(mode==='killed'){assert.equal(facts.code,'ETIMEDOUT');assert.equal(facts.signal,'SIGKILL');assert.equal(facts.killed,true);}if(mode==='late-close'){const saved=facts;children[0]!.emit('close',0,null);assert.equal(facts,saved);}
+ }
+
  const args='/TEST/private/helper --request-permission-json --correlation-id UUID --nonce NONCE -launchedViaLaunchServices',lease=parseProcesses('123 1 Thu Oct  8 10:00:00 2026 '+args+'\n')[0]!;
  assert.equal(ownApp([lease],args),lease);assert.throws(()=>ownApp([lease,lease],args));assert(!sameProcess(lease,{...lease,birth:'different'}));assert.equal(ownApp([{...lease,args:args+' foreign'}],args),undefined);
  for(const mode of ['normal','late-empty','changed','descendant','never-seen']){
