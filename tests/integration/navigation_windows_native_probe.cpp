@@ -95,7 +95,7 @@ static void sendStage(const char* phase) {
         + ",\"pid\":" + std::to_string(GetCurrentProcessId()) + ",\"nonce\":" + jsonQuote(uuid) + "}\n");
 }
 static void sendFailure(HRESULT hr) noexcept {
-    if (!ownedRootValidated || activeMode != L"send") return;
+    if (!ownedRootValidated || (activeMode != L"send" && activeMode != L"send-public-sample")) return;
     try {
         report("sender-failure.json", "{\"phase\":" + jsonQuote(winrt::to_hstring(currentSendStage).c_str())
             + ",\"hresult\":" + std::to_string(hr) + ",\"pid\":" + std::to_string(GetCurrentProcessId())
@@ -710,7 +710,7 @@ static void install() {
     report(".shortcut-owned", narrow(linkPath.wstring()) + "\n");
     sendStage("install_complete");
 }
-static int send() {
+static int send(bool publicSample = false) {
     install();
     sendStage("shortcut_readback");
     if (!shortcutMatches(true)) throw std::runtime_error("saved TEST shortcut binding mismatch");
@@ -723,13 +723,19 @@ static int send() {
         + jsonQuote(linkPath.wstring()) + ",\"returned\":true}\n");
     sendStage("notifier_create");
     auto notifier = ToastNotificationManager::CreateToastNotifier(aumid);
-    sendStage("notifier_readiness");
-    auto setting = measuredReadiness(notifier);
+    // Explicit TEST discriminator follows the public sample, without claiming readiness.
+    // The strict default still requires measured Setting; unknown is never Enabled.
+    sendStage(publicSample ? "public_sample_no_setting_preflight" : "notifier_readiness");
+    const std::optional<NotificationSetting> setting = publicSample ? std::nullopt
+        : std::optional<NotificationSetting>{measuredReadiness(notifier)};
     sendStage("sender_receipt");
     report("sender.json", "{\"pid\":" + std::to_string(GetCurrentProcessId()) + ",\"aumid\":" + jsonQuote(aumid)
-        + ",\"nonce\":" + jsonQuote(uuid) + ",\"notificationSetting\":" + std::to_string(static_cast<int>(setting))
+        + ",\"nonce\":" + jsonQuote(uuid) + ",\"notificationSetting\":"
+        + (setting ? std::to_string(static_cast<int>(*setting)) : "null")
+        + ",\"submissionProfile\":" + jsonQuote(publicSample ? L"public_sample_one_show" : L"strict_setting")
+        + ",\"readinessQualified\":" + (setting && *setting == NotificationSetting::Enabled ? "true" : "false")
         + ",\"showCalledAtReceipt\":false}\n");
-    if (setting != NotificationSetting::Enabled) return 3;
+    if (setting && *setting != NotificationSetting::Enabled) return 3;
     std::wstring xml = L"<toast launch='" + uuid + L"'><visual><binding template='ToastGeneric'><text>Navigation TEST "
         + uuid + L"</text><text>Synthetic CI lifecycle probe</text></binding></visual><actions><action content='"
         + action + L"' arguments='" + uuid + L"' activationType='foreground'/></actions><audio silent='true'/></toast>";
@@ -2071,6 +2077,17 @@ int wmain(int argc, wchar_t** argv) {
         if (mode == L"oobe-setup") { if (argc != 4) return 2; return oobeSetup() ? 0 : 1; }
         if (mode == L"center-surface") return centerSurface() ? 0 : 3;
         if (mode == L"taskbar-uia") return taskbarUI() ? 0 : 3;
+        if (mode == L"send-public-sample") {
+            const auto exactEnv = [](const wchar_t* name, const wchar_t* expected) {
+                wchar_t value[128]{}; const DWORD size = GetEnvironmentVariableW(name, value, 128);
+                return size > 0 && size < 128 && std::wstring(value, size) == expected;
+            };
+            if (argc != 4 || !exactEnv(L"NAVIGATION_WINDOWS_PUBLIC_SAMPLE_TEST", L"1")
+                || !exactEnv(L"GITHUB_EVENT_NAME", L"workflow_dispatch")
+                || !exactEnv(L"GITHUB_RUN_ATTEMPT", L"1")
+                || !exactEnv(L"GITHUB_REPOSITORY", L"777genius/agent-notifications")) return 2;
+            return send(true);
+        }
         if (mode == L"send") return send();
         if (mode == L"callback") return callback();
         if (mode == L"invoke") return invoke();

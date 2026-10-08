@@ -323,11 +323,19 @@ async function main(): Promise<void> {
   const setupFlag = process.env.NAVIGATION_WINDOWS_OOBE_SETUP_TEST;
   if (setupFlag !== undefined && setupFlag !== '0' && setupFlag !== '1') throw new Error('invalid OOBE setup flag');
   const setupOnly = setupFlag === '1';
+  const sampleFlag = process.env.NAVIGATION_WINDOWS_PUBLIC_SAMPLE_TEST;
+  if (sampleFlag !== undefined && sampleFlag !== '0' && sampleFlag !== '1') throw new Error('invalid public-sample flag');
+  const publicSample = sampleFlag === '1';
+  if (publicSample && diagnosticOnly) throw new Error('public sample requires explicit native TEST submission');
+  evidence.nativeSubmissionProfile = publicSample ? 'public_sample_one_show' : 'strict_setting';
+  if (publicSample) evidence.scope = 'explicit TEST public-sample Show, readiness unqualified, cold COM callback only';
+  evidence.notifierReadinessQualified = false;
+
   if ((surfaceOnly || taskbarOnly || captureOnly || oobeOnly || setupOnly) && !diagnosticOnly
       || Number(surfaceOnly) + Number(taskbarOnly) + Number(captureOnly) + Number(oobeOnly) + Number(setupOnly) > 1) {
     throw new Error('selected TEST modes are exclusive');
   }
-  if ((captureOnly || oobeOnly || setupOnly) && (process.env.GITHUB_REPOSITORY !== '777genius/agent-notifications'
+  if ((captureOnly || oobeOnly || setupOnly || publicSample) && (process.env.GITHUB_REPOSITORY !== '777genius/agent-notifications'
       || process.env.GITHUB_EVENT_NAME !== 'workflow_dispatch' || process.env.GITHUB_RUN_ATTEMPT !== '1'
       || process.arch !== 'arm64'
       || !/^[0-9a-f]{40}$/.test(process.env.NAVIGATION_SOURCE_SHA ?? ''))) {
@@ -595,7 +603,7 @@ async function main(): Promise<void> {
   installed = true; evidence.submissionIntent = true; evidence.showAttempts = null;
   evidence.showCallOutcome = 'unknown'; evidence.nativeEffectUncertain = true;
   writeFileSync(join(root, 'submission-attempted'), nonce, { flag: 'wx' });
-  const sender = run('send', 20_000);
+  const sender = run(publicSample ? 'send-public-sample' : 'send', 20_000);
   if (existsSync(join(root, 'sender.json'))) evidence.sender = read('sender.json');
   if (existsSync(join(root, 'aumid-identity.json'))) evidence.aumidIdentity = read('aumid-identity.json');
   observeShow(sender);
@@ -613,10 +621,16 @@ async function main(): Promise<void> {
   }
   evidence.submitted = read('submitted.json');
   const senderReceipt = evidence.sender as Json;
+  if (senderReceipt.submissionProfile !== evidence.nativeSubmissionProfile
+      || senderReceipt.readinessQualified !== !publicSample
+      || (publicSample ? senderReceipt.notificationSetting !== null : senderReceipt.notificationSetting !== 0)) {
+    throw new Error('native submission profile/readiness receipt mismatch');
+  }
   if (senderReceipt.pid !== sender.pid || senderReceipt.nonce !== nonce || senderReceipt.showCalledAtReceipt !== false
       || evidence.showAttempts !== 1 || evidence.showReturned !== true) {
     throw new Error('native sender correlation mismatch');
   }
+  evidence.notifierReadinessQualified = !publicSample;
   evidence.senderExitedBeforeInvoke = true; evidence.senderExitedAt = sender.exitedAt;
   // No controller call to callback mode/CoCreateInstance. OS is the only cold-server launcher.
   const invoke = run('invoke', 30_000);

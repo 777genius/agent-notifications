@@ -22,6 +22,7 @@ on:
           - oobe_setup
           - native_callback
           - oobe_then_native_callback
+          - oobe_then_public_sample_callback
 permissions:
   contents: read
 # Supersede only older checks for this PR; dispatch runs remain independent.
@@ -38,12 +39,13 @@ jobs:
       AGENT_NOTIFY_NAVIGATION_WINDOWS_E2E: '1'
       NAVIGATION_WINDOWS_RUNNER: windows-11-vs2026-arm
       NAVIGATION_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-      NAVIGATION_WINDOWS_PREFLIGHT_ONLY: ${{ (inputs.mode == 'native_callback' || inputs.mode == 'oobe_then_native_callback') && '0' || '1' }}
+      NAVIGATION_WINDOWS_PREFLIGHT_ONLY: ${{ (inputs.mode == 'native_callback' || inputs.mode == 'oobe_then_native_callback' || inputs.mode == 'oobe_then_public_sample_callback') && '0' || '1' }}
       NAVIGATION_WINDOWS_CENTER_SURFACE: ${{ inputs.mode == 'center_surface' && '1' || '0' }}
       NAVIGATION_WINDOWS_TASKBAR_UIA: ${{ inputs.mode == 'taskbar_uia' && '1' || '0' }}
       NAVIGATION_WINDOWS_DESKTOP_CAPTURE_TEST: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'desktop_capture' && '1' || '0' }}
       NAVIGATION_WINDOWS_OOBE_PREFLIGHT_TEST: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'oobe_preflight' && '1' || '0' }}
       NAVIGATION_WINDOWS_OOBE_SETUP_TEST: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'oobe_setup' && '1' || '0' }}
+      NAVIGATION_WINDOWS_PUBLIC_SAMPLE_TEST: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'oobe_then_public_sample_callback' && '1' || '0' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -91,10 +93,11 @@ jobs:
             if ($errors.Count) { $errors | Format-List; throw 'target operator parse failed' }
           }
       - name: One finite OOBE setup on this same disposable desktop
-        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'oobe_then_native_callback'
+        if: github.event_name == 'workflow_dispatch' && (inputs.mode == 'oobe_then_native_callback' || inputs.mode == 'oobe_then_public_sample_callback')
         id: bootstrap
         shell: pwsh
         env:
+          NAVIGATION_WINDOWS_PUBLIC_SAMPLE_TEST: '0'
           NAVIGATION_WINDOWS_PREFLIGHT_ONLY: '1'
           NAVIGATION_WINDOWS_OOBE_SETUP_TEST: '1'
           NAVIGATION_WINDOWS_CENTER_SURFACE: '0'
@@ -146,13 +149,13 @@ jobs:
           $file = [IO.File]::Open((Join-Path $root 'same-job-bootstrap.json'), [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
           try { $file.Write($bytes, 0, $bytes.Length); $file.Flush($true) } finally { $file.Dispose() }
       - name: Selected TEST preflight or single native callback attempt
-        if: github.event_name == 'workflow_dispatch' && (inputs.mode != 'oobe_then_native_callback' || steps.bootstrap.outcome == 'success')
+        if: github.event_name == 'workflow_dispatch' && ((inputs.mode != 'oobe_then_native_callback' && inputs.mode != 'oobe_then_public_sample_callback') || steps.bootstrap.outcome == 'success')
         id: probe
         shell: pwsh
         env:
           NAVIGATION_WINDOWS_TEST_BOOTSTRAP_ROOT: ${{ steps.bootstrap.outputs.evidence_root }}
         run: |
-          if ('${{ inputs.mode }}' -ceq 'oobe_then_native_callback') {
+          if ('${{ inputs.mode }}' -in @('oobe_then_native_callback', 'oobe_then_public_sample_callback')) {
             if ($env:GITHUB_RUN_ATTEMPT -ne '1') { throw 'no native replay' }
             $root = $env:NAVIGATION_WINDOWS_TEST_BOOTSTRAP_ROOT
             $handoffPath = Join-Path $root 'same-job-bootstrap.json'
