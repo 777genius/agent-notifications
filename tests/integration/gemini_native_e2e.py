@@ -583,9 +583,22 @@ def capture_sdk_hook_outcomes(lab):
                      snapshot_stable=(before.st_size, before.st_mtime_ns) == (after.st_size, after.st_mtime_ns),
                      bytes=len(raw))
         # Retain the actual prefix privately even if later SDK writes/teardown append.
-        snapshot = path.parent / ("pre-teardown-" + str(time.monotonic_ns()) + ".json")
-        with snapshot.open("xb") as stream:
-            os.chmod(snapshot, 0o600); stream.write(raw)
+        stamp = str(time.monotonic_ns())
+        # Windows Python 3.12's monotonic clock can repeat within one tick.
+        # Exclusive creation disambiguates owned names without overwriting any
+        # retained prefix, sleeping, or extending teardown deadlines.
+        for slot in range(7):
+            suffix = "" if slot == 0 else "-" + str(slot)
+            snapshot = path.parent / ("pre-teardown-" + stamp + suffix + ".json")
+            try:
+                stream = snapshot.open("xb")
+            except FileExistsError:
+                continue
+            with stream:
+                os.chmod(snapshot, 0o600); stream.write(raw)
+            break
+        else:
+            raise Red("SDK_prefix_snapshot_slot_bound")
         rows = observations(lab)
         joined = {}
         bodies = {}

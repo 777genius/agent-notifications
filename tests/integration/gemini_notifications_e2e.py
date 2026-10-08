@@ -1147,7 +1147,14 @@ class PureChecks(unittest.TestCase):
             path = private / "telemetry.json"
             path.write_text((json.dumps(record) + "\n") * 2)
             path.chmod(0o600)
-            captured = g0.capture_sdk_hook_outcomes(lab)
+            # Real filesystem collision, deterministic on every platform:
+            # old code refuses before parsing and leaves unjoined count zero.
+            collision = private / "pre-teardown-123.json"
+            collision.write_bytes(b"PRIVATE-existing-snapshot")
+            collision.chmod(0o600)
+            collision_identity = (collision.stat().st_dev, collision.stat().st_ino)
+            with patch.object(g0.time, "monotonic_ns", return_value=123):
+                captured = g0.capture_sdk_hook_outcomes(lab)
             self.assertTrue(captured["qualified"])
             self.assertEqual([frame["raw"] for frame in captured["frames"]], [body, body])
             # This oracle exercises the collector/projection boundary only;
@@ -1170,9 +1177,15 @@ class PureChecks(unittest.TestCase):
             self.assertEqual(public["absence_means"], "unknown")
             # Real duplicate foreign identities cannot select a known case.
             (lab / "events.jsonl").write_text((json.dumps(foreign) + "\n") * 2)
-            ambiguous = g0.capture_sdk_hook_outcomes(lab)
+            with patch.object(g0.time, "monotonic_ns", return_value=123):
+                ambiguous = g0.capture_sdk_hook_outcomes(lab)
             self.assertEqual(ambiguous["frames"], [])
             self.assertEqual(read_json(lab / "sdk-hook-outcomes.json")["unjoined_owned_calls"], 2)
+            self.assertEqual(collision.read_bytes(), b"PRIVATE-existing-snapshot")
+            self.assertEqual((collision.stat().st_dev, collision.stat().st_ino), collision_identity)
+            snapshots = sorted(private.glob("pre-teardown-123-*.json"))
+            self.assertEqual(len(snapshots), 2)
+            self.assertTrue(all(snapshot.read_bytes() == path.read_bytes() for snapshot in snapshots))
             rejected = classify_owned_inputs(captured, lambda event, raw: dict(observed_decode(event, raw),
                                                                              prompt="PRIVATE-prompt"), deadline)
             self.assertEqual(rejected["class"], "analysis_unavailable")
