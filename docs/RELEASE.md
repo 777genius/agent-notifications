@@ -7,10 +7,11 @@ For a release that skips a platform, promote only its qualified
 rows and global Latest on the previously qualified version. Publish source
 branches before activating the immutable source SHAs in the channel index.
 
-The current partial channels are v1.48.1 for Linux amd64/arm64 and Windows
-amd64, and v1.48.3 for macOS amd64/arm64. GitHub global Latest remains v1.46.1
-until a complete, qualified all-platform release replaces it. v1.48.1 itself
-contains no Darwin binaries, portable packages or ClaudeNotifier.app assets.
+The current all-platform channels and GitHub Latest select v1.48.4. Before
+the unified promotion, Linux amd64/arm64 and Windows amd64 selected
+v1.48.1, macOS amd64/arm64 selected v1.48.3, and global Latest remained v1.46.1.
+The historical v1.48.1 release contains no Darwin binaries, portable packages
+or ClaudeNotifier.app assets.
 
 The earlier v1.48.0 draft and tag are retained unpublished: a repeated Windows
 clock tick exposed a floating-point admission-budget bug. v1.48.1 fixes it
