@@ -198,7 +198,7 @@ func TestCursorDiscoveryPlatformReasonPreservesPresence(t *testing.T) {
 			}
 			supported := runtime.GOOS == "linux" && runtime.GOARCH == "amd64"
 			if !supported {
-				wantReason = "unsupported release platform"
+				wantReason = "Cursor agent notifications are currently qualified only on Linux amd64"
 			}
 			found := false
 			for _, f := range facts {
