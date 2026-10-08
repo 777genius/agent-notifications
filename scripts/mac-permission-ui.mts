@@ -34,6 +34,15 @@ function envelope(text:string,correlation:string,nonce:string):string{
  assert.deepEqual(Object.keys(row).sort(),['schemaVersion','correlationID','nonce','backend','permission'].sort());assert(row.schemaVersion===1&&row.correlationID===correlation&&row.nonce===nonce&&row.backend==='macos.usernotifications');
  assert(['allowed','undetermined','denied','unavailable'].includes(String(row.permission)));return String(row.permission);
 }
+// macOS supplies these two trusted command spellings through system symlinks.
+const systemAliases:Readonly<Record<string,string>>={
+ '/usr/bin/tar':'/usr/bin/bsdtar',
+ '/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister':'/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister',
+};
+function canonicalExecutable(requested:string,physical:(path:string)=>string=realpathSync):string{
+ assert(requested.startsWith('/'),'absolute owned executable required');const resolved=physical(requested);
+ assert(resolved===requested||systemAliases[requested]===resolved,'unrecognized executable alias');return resolved;
+}
 interface OutputSink {feed:(chunk:Buffer)=>void;finish:()=>void;}
 function registrationAbsence(app:string,record:Record<string,unknown>,limit=64*1024*1024):OutputSink{
  let carry=Buffer.alloc(0),bytes=0,lines=0,matched=false;const digest=createHash('sha256');
@@ -46,7 +55,7 @@ function registrationAbsence(app:string,record:Record<string,unknown>,limit=64*1
 interface OwnedContext {root:string;env:NodeJS.ProcessEnv;report:Record<string,unknown>;census:()=>Promise<{pid:number;pgid:number}[]>;pauses:(ms:number)=>Promise<void>;spawnChild:typeof spawn;}
 function createOwned(context:OwnedContext,executable:string,args:string[],budget:number,sink?:OutputSink){
  const {root,env,report,census,pauses,spawnChild}=context;
-  assert(executable.startsWith('/')&&realpathSync(executable)===executable);const deadline=performance.now()+budget,p=spawnChild(executable,args,{cwd:root,env,detached:true,stdio:['ignore','pipe','pipe']});let stdout='',bytes=0,closed=false,code:number|null=null,error:unknown,finishing=false,notifyClose:()=>void=()=>{};
+  const requestedExecutable=executable;executable=canonicalExecutable(executable);const deadline=performance.now()+budget,p=spawnChild(executable,args,{cwd:root,env,detached:true,stdio:['ignore','pipe','pipe']});let stdout='',bytes=0,closed=false,code:number|null=null,error:unknown,finishing=false,notifyClose:()=>void=()=>{};
   const closeEvent=new Promise<void>(done=>{notifyClose=done;});let complete:(value:string)=>void=()=>{},reject:(error:unknown)=>void=()=>{};
   const done=new Promise<string>((yes,no)=>{complete=yes;reject=no;});done.catch(()=>{});
   const finish=()=>{if(finishing)return;finishing=true;clearTimeout(timer);const start=performance.now();void(async()=>{
@@ -56,7 +65,7 @@ function createOwned(context:OwnedContext,executable:string,args:string[],budget
     }
     if(!closed)await new Promise<void>((yes,no)=>{const timer=setTimeout(()=>no(Error('owned EOF deadline')),Math.max(0,3000-(performance.now()-start)));void closeEvent.then(()=>{clearTimeout(timer);yes();});});
     assert(closed&&performance.now()-start<3000&&!error&&code===0,'actual owned close required');sink?.finish();complete(stdout);
-   }catch(err){p.stdout.destroy();p.stderr.destroy();reject(err);}finally{(report.children as unknown[]).push({pid:p.pid,executable,groupAbsent,actualClose:closed,elapsedMS:performance.now()-start});}
+   }catch(err){p.stdout.destroy();p.stderr.destroy();reject(err);}finally{(report.children as unknown[]).push({pid:p.pid,requestedExecutable,executable,groupAbsent,actualClose:closed,elapsedMS:performance.now()-start});}
   })();};
   const timer=setTimeout(()=>{error=Error('owned operation deadline');finish();},budget);
   p.stdout.on('data',b=>{try{if(sink)sink.feed(b);else{stdout+=b.toString();bytes+=b.length;assert(bytes<=1024*1024,'owned output bound');}}catch(err){error=err;finish();}});p.stderr.on('data',b=>{bytes+=b.length;if(bytes>1024*1024){error=Error('owned output bound');finish();}});
@@ -154,6 +163,9 @@ function run(argv){
 }
 `;
 async function selfTest():Promise<void>{
+ const literal='/bin/bash',tar='/usr/bin/tar',ls='/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister';
+ assert.equal(canonicalExecutable(literal,p=>p),literal);assert.equal(canonicalExecutable(tar,()=>'/usr/bin/bsdtar'),'/usr/bin/bsdtar');assert.equal(canonicalExecutable(ls,()=>'/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister'),'/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister');
+ assert.throws(()=>canonicalExecutable(tar,()=>'/TEST/foreign'));assert.throws(()=>canonicalExecutable('/TEST/helper',()=>'/TEST/foreign'));assert.throws(()=>canonicalExecutable('tar',()=>'/usr/bin/bsdtar'));
  const win:Window={hostBundle:systemBundles[0]!,index:0,role:'AXWindow',texts:['“Agent Notifications” Would Like to Send You Notifications'],buttons:[{name:'Allow',path:[0,1],enabled:true},{name:'Don’t Allow',path:[0,2],enabled:true}]};
  assert.throws(()=>requireClickBudget(5000,5000));assert.throws(()=>requireClickBudget(4000,5000));requireClickBudget(6001,6000);
  const snapshot:Snapshot={uiEnabled:true,requesterPID:123,requesterBundle:bundle,windows:[win]};assert.equal(select(snapshot,123).button.name,'Allow');
@@ -185,6 +197,6 @@ async function selfTest():Promise<void>{
  assert.equal(await createOwned(ctx,'/bin/bash',[],10000).done,'');mode='nonzero';const nonzeroProof:Record<string,unknown>={};await assert.rejects(createOwned(ctx,'/bin/bash',[],10000,registrationAbsence(app,nonzeroProof)).done);assert.equal(nonzeroProof.actualEOF,undefined);
  mode='missing-close';const noEOFProof:Record<string,unknown>={};await assert.rejects(createOwned(ctx,'/bin/bash',[],10000,registrationAbsence(app,noEOFProof)).done);assert.equal(noEOFProof.actualEOF,undefined);assert(destroyed>0);
  assert((report.children as {actualClose:boolean}[]).some(row=>row.actualClose===false));
- console.log('permission UI uniqueness/ownership/AX failure, envelope, nonzero missing-close, late-request zero-click, click-margin and bounded streaming LS tests passed');
+ console.log('permission UI uniqueness/ownership/AX failure, envelope, nonzero missing-close, late-request zero-click, click-margin, canonical command custody and bounded streaming LS tests passed');
 }
 if(process.argv[2]==='--self-test'){assert.equal(process.argv.length,3);await selfTest();}else await main();
