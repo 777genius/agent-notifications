@@ -10,6 +10,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
@@ -37,6 +38,7 @@ func inertGeneration(t *testing.T) (*Custody, Binding) {
 	binding := Binding{filepath.Join(s.CanonicalRoot, "generation.wne"), Digest(b)}
 	end := BootMilliseconds() + 10000
 	if e = Bootstrap(context.Background(), s, end); e != nil {
+		bootstrapFixtureMetadata(t, canonical, s, end)
 		t.Fatalf("fixture bootstrap generation: %v", e)
 	}
 	g, e := Open(context.Background(), binding, end)
@@ -45,6 +47,87 @@ func inertGeneration(t *testing.T) (*Custody, Binding) {
 	}
 	t.Cleanup(func() { _ = g.Close() })
 	return g, binding
+}
+
+// Failure-only metadata from eight fixed TEST objects. No payload reads,
+// filesystem mutation, ACL repair, helper or SDK entry is permitted here.
+func bootstrapFixtureMetadata(t *testing.T, control string, s Snapshot, end uint64) {
+	t.Helper()
+	t.Logf("fixture bootstrap checks: snapshot=%v budget=%v", s.Validate(), budget(context.Background(), end))
+	parent, e := hold(control)
+	if e != nil {
+		t.Logf("fixture metadata hold control: %v", e)
+		return
+	}
+	defer func() {
+		if e := parent.Close(); e != nil {
+			t.Logf("fixture metadata close control: %v", e)
+		}
+	}()
+	t.Logf("fixture metadata control: canonical_match=%t owner_match=%t", parent.Root == control, parent.SID == s.OwnerSID)
+	inspect := func(root windows.Handle, name, expected string, directory bool) windows.Handle {
+		options := uint32(windows.FILE_NON_DIRECTORY_FILE)
+		access := uint32(windows.FILE_READ_ATTRIBUTES | windows.READ_CONTROL)
+		if directory {
+			options = windows.FILE_DIRECTORY_FILE
+			access |= windows.FILE_LIST_DIRECTORY | windows.FILE_TRAVERSE
+		}
+		h, e := at(root, name, access, windows.FILE_OPEN, options, nil)
+		if e != nil {
+			t.Logf("fixture metadata %s open: %v", name, e)
+			return 0
+		}
+		var info windows.ByHandleFileInformation
+		statErr := windows.GetFileInformationByHandle(h, &info)
+		named, pathErr := physical(h)
+		t.Logf("fixture metadata %s: stat=%v attributes=%#x links=%d size=%d physical=%v path_match=%t admission=%v", name, statErr, info.FileAttributes, info.NumberOfLinks, uint64(info.FileSizeHigh)<<32|uint64(info.FileSizeLow), pathErr, named == expected, ownedHandle(h, s.OwnerSID))
+		sd, e := windows.GetSecurityInfo(h, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION)
+		if e != nil {
+			t.Logf("fixture metadata %s security: %v", name, e)
+			return h
+		}
+		who, _, ownerErr := sd.Owner()
+		control, _, controlErr := sd.Control()
+		acl, _, aclErr := sd.DACL()
+		t.Logf("fixture metadata %s security: owner=%v owner_match=%t control=%#x control_error=%v dacl=%v", name, ownerErr, who != nil && who.String() == s.OwnerSID, control, controlErr, aclErr)
+		if aclErr == nil && acl != nil {
+			t.Logf("fixture metadata %s ACE count=%d", name, acl.AceCount)
+			for i := uint32(0); i < uint32(acl.AceCount) && i < 8; i++ {
+				var ace *windows.ACCESS_ALLOWED_ACE
+				if e := windows.GetAce(acl, i, &ace); e != nil {
+					t.Logf("fixture metadata %s ACE %d: %v", name, i, e)
+					continue
+				}
+				if ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE || ace.Header.AceSize < 12 {
+					t.Logf("fixture metadata %s ACE %d: type=%d flags=%#x size=%d", name, i, ace.Header.AceType, ace.Header.AceFlags, ace.Header.AceSize)
+					continue
+				}
+				value := (*windows.SID)(unsafe.Pointer(&ace.SidStart)).String()
+				t.Logf("fixture metadata %s ACE %d: type=%d flags=%#x mask=%#x owner_match=%t system=%t", name, i, ace.Header.AceType, ace.Header.AceFlags, ace.Mask, value == s.OwnerSID, value == "S-1-5-18")
+			}
+		}
+		return h
+	}
+	closeHandle := func(h windows.Handle) {
+		if e := windows.CloseHandle(h); e != nil {
+			t.Logf("fixture metadata close object: %v", e)
+		}
+	}
+	root := inspect(parent.handles[len(parent.handles)-1], "windows-callback", filepath.Dir(s.CanonicalRoot), true)
+	if root == 0 {
+		return
+	}
+	defer closeHandle(root)
+	gen := inspect(root, s.Generation, s.CanonicalRoot, true)
+	if gen == 0 {
+		return
+	}
+	defer closeHandle(gen)
+	for _, name := range []string{"records", "attempts", "helper.exe", "generation.wne", "capacity.state", "capacity.lock"} {
+		if h := inspect(gen, name, filepath.Join(s.CanonicalRoot, name), name == "records" || name == "attempts"); h != 0 {
+			closeHandle(h)
+		}
+	}
 }
 
 // Breakage: an admitted snapshot/helper can change or move while the native
