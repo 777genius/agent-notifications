@@ -182,6 +182,15 @@ abort_if_wsl_environment() {
 
 # ──────────────────────────────────────────────
 
+# Keep untrusted CLI output and paths printable and bounded in diagnostics.
+bootstrap_diagnostic_quote() {
+    local LC_ALL=C
+    local value=${1:0:512} quoted
+    printf -v quoted '%q' "$value"
+    printf '%s' "${quoted:0:512}"
+    if [ "${#1}" -gt 512 ] || [ "${#quoted}" -gt 512 ]; then printf '...'; fi
+}
+
 check_prerequisites() {
     if { [ "${PRODUCT:-claude}" = claude ] || [ "$PRODUCT" = both ]; } && ! command -v "$_CLAUDE_EXEC" &>/dev/null; then
         echo -e "${RED}✗ claude CLI not found in PATH${NC}" >&2
@@ -214,7 +223,7 @@ check_prerequisites() {
             TMPDIR="$probe/tmp" XDG_CONFIG_HOME="$probe/profile/.config" OPENCODE_CONFIG_DIR="$probe/profile/opencode" \
             "$opencode_cli" --version </dev/null) || probe_status=$?
         rm -rf "$probe"
-        [ "$probe_status" -eq 0 ] || { echo "Cannot determine OpenCode version." >&2; return 1; }
+        [ "$probe_status" -eq 0 ] || { printf 'Cannot determine OpenCode version. CLI: %s\n' "$(bootstrap_diagnostic_quote "$opencode_cli")" >&2; return 1; }
         # Accept one complete stable version, never an embedded compatibility
         # number, prerelease or an unknown future API generation.
         local host_supported=false
@@ -227,7 +236,10 @@ check_prerequisites() {
         if [ "$host_supported" = true ]; then
             echo "OpenCode notifications were tested with 1.18.33, 2.0.0 and 2.0.21; detected $host_version."
         else
-            echo "Unsupported OpenCode version. Requires stable V1 >= 1.18.29 or V2 >= 2.0.0; tested: 1.18.33, 2.0.0 and 2.0.21." >&2
+            printf 'Unsupported OpenCode version; detected %s. CLI: %s\n' "$(bootstrap_diagnostic_quote "$host_version")" "$(bootstrap_diagnostic_quote "$opencode_cli")" >&2
+            echo "Requires stable V1 >= 1.18.29 or V2 >= 2.0.0; tested: 1.18.33, 2.0.0 and 2.0.21." >&2
+            echo "Older OpenCode V1 releases have not been verified with this installed notification plugin." >&2
+            echo "Update the selected OpenCode CLI shown above; the desktop app and CLI can have different versions." >&2
             exit 1
         fi
         [ "$(bootstrap_release_os_arch)" != "windows arm64" ] || { echo "Windows arm64 is not supported." >&2; exit 1; }

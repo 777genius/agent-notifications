@@ -231,9 +231,10 @@ func discoverProductsWithDetector(ctx context.Context, a setupProductsArgs, e pr
 		}
 		if id == "cursor" {
 			// Editor detection/version cannot describe the separate agent CLI.
+			const cursorPlatformReason = "Cursor agent notifications are currently qualified only on Linux amd64"
 			f := productFact{ID: id, Label: productLabels[id], Profile: scopes["scope-root"], Selectable: runtime.GOOS == "linux" && runtime.GOARCH == "amd64"}
 			if !f.Selectable {
-				f.Reason = "unsupported release platform"
+				f.Reason = cursorPlatformReason
 			}
 			if scopes["scope-root"] == "" || scopes["client-executable"] == "" {
 				f.Selectable = false
@@ -250,7 +251,7 @@ func discoverProductsWithDetector(ctx context.Context, a setupProductsArgs, e pr
 			}
 			if err == nil {
 				f.Present, f.Executable = true, p
-			} else if f.Reason != "unsupported release platform" {
+			} else if f.Reason != cursorPlatformReason {
 				f.Reason = "Cursor agent not found in selected PATH"
 			}
 			facts = append(facts, f)
