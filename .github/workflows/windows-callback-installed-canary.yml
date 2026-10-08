@@ -155,6 +155,7 @@ jobs:
             ${{ runner.temp }}/TEST-installed-*/control/windows-callback/*/generation.wne
             ${{ runner.temp }}/TEST-installed-*/control/windows-callback/*/operator.pending
             ${{ runner.temp }}/TEST-installed-*/control/windows-callback/*/operator.collected
+            ${{ runner.temp }}/TEST-installed-*/control/windows-callback/*/operator.failure
             ${{ runner.temp }}/TEST-installed-*/control/windows-callback/*/records/*.wne
             ${{ runner.temp }}/TEST-installed-*/control/windows-callback/*/attempts/*
           if-no-files-found: warn
