@@ -93,23 +93,66 @@ jobs:
               throw "owned filesystem actor did not qualify: $($fact.name)"
             }
           }
-          function Source-Digest([string]$directory, [string[]]$files) {
-            $lines = foreach ($relative in ($files | Sort-Object -CaseSensitive)) {
+          function Source-Digest([string]$directory, [string]$revision) {
+            # The exact tree enumerates dangling links too; never traverse a link target.
+            $evidence.lastSourceDigestOperation = 'tree_inventory'
+            $entries = @(git -c core.quotePath=false ls-tree -r --full-tree $revision)
+            if ($LASTEXITCODE -ne 0 -or $entries.Count -eq 0) { throw 'source tree inventory failed' }
+            $lines = foreach ($entry in ($entries | Sort-Object -CaseSensitive)) {
+              if ($entry -notmatch '^(100644|100755|120000) blob ([0-9a-f]{40})\t([^\t\r\n]+)$') { throw 'unsupported source tree entry' }
+              $mode, $oid, $relative = $Matches[1], $Matches[2], $Matches[3]
+              if ($relative.StartsWith('"')) { throw 'quoted source path unsupported' }
               $file = Join-Path $directory $relative
-              "$relative`0$((Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant())"
+              $item = [IO.FileInfo]::new($file)
+              $evidence.lastSourceDigestOperation = 'link_target_metadata'
+              $target = $item.LinkTarget
+              if ($mode -eq '120000') {
+                if ($null -ne $target) {
+                  # LinkTarget is raw metadata: a missing target must remain admissible.
+                  $kind = 'real-link'
+                  $payload = [Text.Encoding]::UTF8.GetBytes($target)
+                } else {
+                  $evidence.lastSourceDigestOperation = 'emulated_link_metadata'
+                  $attributes = $item.Attributes
+                  if ($attributes -eq -1 -or ($attributes -band [IO.FileAttributes]::Directory)) { throw 'missing/directory emulated link' }
+                  if ($attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'unclassified source reparse point' }
+                  if ($item.Length -gt 32768) { throw 'emulated link payload over bound' }
+                  $kind = 'emulated-link-file'
+                  $evidence.lastSourceDigestOperation = 'emulated_link_payload_read'
+                  $payload = [IO.File]::ReadAllBytes($file)
+                }
+                $evidence.lastSourceDigestOperation = 'link_payload_verification'
+                if ($payload.Length -eq 0 -or $payload.Length -gt 32768) { throw 'source link payload outside bound' }
+                # Git's blob OID binds committed raw link bytes; emulation must not
+                # add CRLF or point at the target's contents. No URL/path normalization.
+                $header = [Text.Encoding]::ASCII.GetBytes("blob $($payload.Length)`0")
+                $actualOID = [Convert]::ToHexString([Security.Cryptography.SHA1]::HashData([byte[]]($header + $payload))).ToLowerInvariant()
+                if ($actualOID -cne $oid) { throw 'source link differs from committed payload' }
+                $hash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($payload)).ToLowerInvariant()
+              } else {
+                $evidence.lastSourceDigestOperation = 'regular_file_metadata'
+                $attributes = $item.Attributes
+                if ($attributes -eq -1 -or ($attributes -band [IO.FileAttributes]::Directory)) { throw 'missing/directory regular source' }
+                if ($null -ne $target -or ($attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'regular source replaced by link' }
+                $kind = 'regular-file'
+                $evidence.lastSourceDigestOperation = 'regular_content_hash'
+                $hash = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant()
+              }
+              "$mode`0$oid`0$relative`0$kind`0$hash"
             }
+            $evidence.lastSourceDigestOperation = 'source_digest_complete'
             $bytes = [Text.Encoding]::UTF8.GetBytes(($lines -join "`n"))
             return [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant()
           }
-          $headFiles = $null
-          $baselineFiles = $null
+          $headObserved = $false
+          $baselineObserved = $false
           try {
             if ((git rev-parse HEAD) -cne $env:SOURCE_SHA -or $LASTEXITCODE -ne 0) { throw 'head source mismatch' }
             $status = git status --porcelain
             if ($LASTEXITCODE -ne 0 -or $status) { throw 'head source is dirty or unobserved' }
-            $headFiles = @(git ls-files)
-            if ($LASTEXITCODE -ne 0) { throw 'head source inventory failed' }
-            $evidence.headSourceBefore = Source-Digest $env:GITHUB_WORKSPACE $headFiles
+            $evidence.sourceDigestKind = 'exact committed mode/blob plus actual checkout representation/content; links never followed'
+            $evidence.headSourceBefore = Source-Digest $env:GITHUB_WORKSPACE $env:SOURCE_SHA
+            $headObserved = $true
             $evidence.baselineTree = git rev-parse "$($evidence.baselineSHA)^{tree}"
             if ($LASTEXITCODE -ne 0) { throw 'exact baseline is unavailable' }
             $archive = Join-Path $root 'baseline.tar'
@@ -123,8 +166,8 @@ jobs:
             $test = 'internal/installruntime/lock_windows_test.go'
             Copy-Item -LiteralPath (Join-Path $env:GITHUB_WORKSPACE $test) -Destination (Join-Path $baseline $test)
             $evidence.overlayTestSHA256 = (Get-FileHash -LiteralPath (Join-Path $baseline $test) -Algorithm SHA256).Hash.ToLowerInvariant()
-            $baselineFiles = @(Get-ChildItem -LiteralPath $baseline -File -Recurse | ForEach-Object { [IO.Path]::GetRelativePath($baseline, $_.FullName) })
-            $evidence.baselineOverlayBefore = Source-Digest $baseline $baselineFiles
+            $evidence.baselineOverlayBefore = Source-Digest $baseline $evidence.baselineSHA
+            $baselineObserved = $true
             $go = (Get-Command go).Source
             $evidence.goVersion = & $go version
             if ($LASTEXITCODE -ne 0) { throw 'Go version observation failed' }
@@ -161,8 +204,8 @@ jobs:
               }
               if ($newText -notmatch $terminal) { throw "required terminal test observation missing: $name" }
             }
-            $evidence.headSourceAfter = Source-Digest $env:GITHUB_WORKSPACE $headFiles
-            $evidence.baselineOverlayAfter = Source-Digest $baseline $baselineFiles
+            $evidence.headSourceAfter = Source-Digest $env:GITHUB_WORKSPACE $env:SOURCE_SHA
+            $evidence.baselineOverlayAfter = Source-Digest $baseline $evidence.baselineSHA
             $status = git status --porcelain
             if ($LASTEXITCODE -ne 0 -or $status -or $evidence.headSourceBefore -cne $evidence.headSourceAfter -or $evidence.baselineOverlayBefore -cne $evidence.baselineOverlayAfter) {
               throw 'test source changed during compilation/execution'
@@ -171,10 +214,13 @@ jobs:
             if ($evidence.reparseSkipped -and $newText -notmatch 'TEST symlink creation unsupported') { throw 'unknown reparse skip' }
             $evidence.qualified = $true
           } finally {
+            if ($evidence.Contains('lastSourceDigestOperation') -and $evidence.lastSourceDigestOperation -cne 'source_digest_complete') {
+              $evidence.sourceDigestFailureOperation = $evidence.lastSourceDigestOperation
+            }
             # Record exact source observations even after a refused phase.
             try {
-              if ($null -ne $headFiles) { $evidence.headSourceAfter = Source-Digest $env:GITHUB_WORKSPACE $headFiles }
-              if ($null -ne $baselineFiles) { $evidence.baselineOverlayAfter = Source-Digest $baseline $baselineFiles }
+              if ($headObserved) { $evidence.headSourceAfter = Source-Digest $env:GITHUB_WORKSPACE $env:SOURCE_SHA }
+              if ($baselineObserved) { $evidence.baselineOverlayAfter = Source-Digest $baseline $evidence.baselineSHA }
               if ($evidence.headSourceBefore -cne $evidence.headSourceAfter -or $evidence.baselineOverlayBefore -cne $evidence.baselineOverlayAfter) { $evidence.qualified = $false }
             } catch { $evidence.sourceAfterUnknown = $true; $evidence.qualified = $false }
             $evidence | ConvertTo-Json -Depth 7 | Set-Content -LiteralPath "$root/evidence.json" -Encoding utf8
