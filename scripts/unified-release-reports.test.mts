@@ -30,3 +30,19 @@ test('draft gate rejects missing/duplicate cells, old custody, unclosed effects 
   const windows = reports(); windows.find(row => row.os === 'windows')!.unifiedWindowsRenderCustody = [];
   assert.throws(() => validate(windows, binding));
 });
+test('draft gate rejects a Windows registration with both installed SHA fields omitted', () => {
+  const rows = reports();
+  const custody = rows.find(row => row.os === 'windows')!.unifiedWindowsRenderCustody as Record<string, unknown>[];
+  delete custody[0]!.renderedInstalledSHA256;
+  delete custody[0]!.actualLedgerBundleSHA256;
+  assert.throws(() => validate(rows, binding), 'absent hashes must not prove installed byte equality');
+});
+test('draft gate independently requires two lowercase SHA-256 installed hashes', () => {
+  for (const value of [undefined, null, '', '5'.repeat(63), 'A'.repeat(64), 'g'.repeat(64), 123]) {
+    const rows = reports();
+    const custody = rows.find(row => row.os === 'windows')!.unifiedWindowsRenderCustody as Record<string, unknown>[];
+    custody[0]!.renderedInstalledSHA256 = value;
+    custody[0]!.actualLedgerBundleSHA256 = value;
+    assert.throws(() => validate(rows, binding), 'equal invalid values must not prove installed byte equality');
+  }
+});

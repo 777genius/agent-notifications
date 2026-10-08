@@ -46,6 +46,9 @@ export function validate(rows: Row[], binding: Binding): void {
         assert.equal(item.lineEndings, 'LF');
         assert.equal(item.originBound, true);
         assert.equal(item.rawInstalledEquality, true);
+        for (const hash of ['renderedInstalledSHA256', 'actualLedgerBundleSHA256']) {
+          assert(typeof item[hash] === 'string' && /^[a-f0-9]{64}$/.test(item[hash]), 'actual installed and ledger hashes required');
+        }
         assert.equal(item.renderedInstalledSHA256, item.actualLedgerBundleSHA256);
       }
     }
