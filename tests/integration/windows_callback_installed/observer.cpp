@@ -35,6 +35,21 @@ static std::string phase = "entry";
 // intake, and exported only if its original strict contract fails.
 static std::optional<JsonObject> archiveFacts;
 static std::string archiveStep;
+// Enabled only by exact --inert-uri, whose inputs are private fixed literals.
+static bool inertUriDiagnostics = false;
+static std::string inertUriFacts;
+static void inertUriNote(const char* key, const std::wstring& value) {
+ if (inertUriDiagnostics) inertUriFacts += std::string(key)+"="+narrow(value.substr(0,256))+"\n";
+}
+static void inertUriAttributes(const char* label, const winrt::Windows::Foundation::Uri& uri) {
+ inertUriNote(label,uri.AbsoluteUri().c_str());
+ inertUriNote("scheme",uri.SchemeName().c_str()); inertUriNote("host",uri.Host().c_str());
+ inertUriNote("query",uri.Query().c_str()); inertUriNote("fragment",uri.Fragment().c_str());
+ wchar_t roundtrip[MAX_PATH]{}; DWORD n = MAX_PATH;
+ const auto status = PathCreateFromUrlW(uri.AbsoluteUri().c_str(),roundtrip,&n,0);
+ inertUriNote("attribute_roundtrip_hresult",std::to_wstring(DWORD(status)));
+ if (SUCCEEDED(status)) inertUriNote("attribute_roundtrip",roundtrip);
+}
 static void archiveAt(const char* step) { archiveStep = step; }
 static std::vector<Handle> roots;
 static void budget() { require(GetTickCount64() < end); }
@@ -388,11 +403,15 @@ static winrt::Windows::Foundation::Uri deploymentUri(const std::wstring& canonic
  winrt::check_hresult(UrlCreateFromPathW(dos.c_str(),url,&n,0));
  archiveAt("deployment_winrt_uri_constructor");
  const winrt::Windows::Foundation::Uri target(url);
+ archiveAt("deployment_file_uri_attributes");
+ if (inertUriDiagnostics) inertUriAttributes("new_absolute_uri",target);
  archiveAt("deployment_file_uri_roundtrip");
  require(target.SchemeName() == L"file" && target.Host().empty()
   && target.Query().empty() && target.Fragment().empty());
  wchar_t roundtrip[MAX_PATH]{}; n = MAX_PATH;
  winrt::check_hresult(PathCreateFromUrlW(target.AbsoluteUri().c_str(),roundtrip,&n,0));
+ inertUriNote("new_roundtrip",roundtrip); inertUriNote("expected_dos",dos);
+ archiveAt("deployment_file_uri_exact_roundtrip_contract");
  require(std::wstring(roundtrip) == dos);
  return target;
 }
@@ -403,12 +422,24 @@ static void uriContracts() {
  const char* oldStage = "UrlCreateFromPathW";
  try {
   wchar_t oldUrl[32768]{}; DWORD n = 32768;
-  winrt::check_hresult(UrlCreateFromPathW(L"\\\\?\\C:\\TEST-installed\\client.msix",oldUrl,&n,0));
-  oldStage = "WinRTUri";
+  archiveAt("inert_old_url_conversion");
+  inertUriNote("old_raw_path",L"\\\\?\\C:\\TEST-installed\\client.msix");
+  const auto status = UrlCreateFromPathW(L"\\\\?\\C:\\TEST-installed\\client.msix",oldUrl,&n,0);
+  inertUriNote("old_url_hresult",std::to_wstring(DWORD(status)));
+  winrt::check_hresult(status); inertUriNote("old_url",oldUrl);
+  oldStage = "WinRTUri"; archiveAt("inert_old_winrt_uri_constructor");
   const winrt::Windows::Foundation::Uri old(oldUrl);
- } catch (const winrt::hresult_error& error) { oldRejected = error.code().value == E_INVALIDARG; }
- require(oldRejected);
+  inertUriNote("old_chain",L"accepted");
+  archiveAt("inert_old_uri_attributes"); inertUriAttributes("old_absolute_uri",old);
+ } catch (const winrt::hresult_error& error) {
+  const bool chainStage = archiveStep == "inert_old_url_conversion"
+   || archiveStep == "inert_old_winrt_uri_constructor";
+  inertUriNote("old_probe_hresult",std::to_wstring(DWORD(error.code().value)));
+  inertUriNote("old_probe_failure_stage",wide(archiveStep));
+  oldRejected = chainStage && error.code().value == E_INVALIDARG;
+ }
  const std::wstring canonical = L"\\\\?\\C:\\TEST installed # %20 \u03a9\u4e2d\\client.msix";
+ inertUriNote("new_raw_path",canonical);
  const auto target = deploymentUri(canonical);
  wchar_t roundtrip[MAX_PATH]{}; DWORD n = MAX_PATH;
  winrt::check_hresult(PathCreateFromUrlW(target.AbsoluteUri().c_str(),roundtrip,&n,0));
@@ -419,6 +450,8 @@ static void uriContracts() {
   catch (const std::runtime_error&) { rejected = true; }
   require(rejected);
  }
+ // Preserve the old assertion, after collecting the new literal observations.
+ archiveAt("inert_old_E_INVALIDARG_contract"); require(oldRejected);
  std::cout << "TEST file URI contracts passed; legacy extended DOS rejected E_INVALIDARG at "
   << oldStage << "; no target effects\n";
 }
@@ -774,12 +807,21 @@ int wmain(int argc, wchar_t** argv) {
     while (GetTickCount64() < limit) Sleep(10);
     ExitProcess(124); // Only this inert TEST observer; no target operation exists.
    }).detach();
+   inertUriDiagnostics = !wcscmp(argv[1],L"--inert-uri");
+   archiveAt("inert_winrt_initialize");
    winrt::init_apartment(winrt::apartment_type::multi_threaded);
    if (!wcscmp(argv[1],L"--inert-xml")) xmlContracts();
    else uriContracts();
    return 0;
   } catch (...) {
-   std::cerr << "TEST inert contracts failed\n";
+   std::cerr << "TEST inert contracts failed stage=" << archiveStep << "\n";
+   if (inertUriDiagnostics) std::cerr << inertUriFacts;
+   try { throw; }
+   catch (const winrt::hresult_error& error) {
+    std::cerr << "hresult=" << DWORD(error.code().value) << "\n";
+   }
+   catch (const std::exception&) { std::cerr << "failure_kind=contract_or_standard_exception\n"; }
+   catch (...) { std::cerr << "failure_kind=unknown_exception\n"; }
    return 1;
   }
  }
