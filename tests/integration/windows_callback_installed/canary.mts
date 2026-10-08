@@ -22,7 +22,7 @@ const observer = path.resolve(env.TEST_INSTALLED_OBSERVER!);
 const entry = 'claude-notifications-windows-amd64.exe';
 const original = path.join(artifact,entry);
 const stage = path.join(root,'stage'), runtime = path.join(root,'runtime'), bin = path.join(runtime,'bin');
-const control = path.join(root,'control'), global = path.join(root,'TEST-global.json');
+const control = path.join(root,'control'), global = path.join(root,'TEST-global-parent','TEST-global.json');
 const title = 'Navigation TEST '+tuple.nonce, body = 'Cold callback TEST '+tuple.nonce;
 const thread = 'TEST/'+tuple.nonce+'/percent%雪';
 let count = 0, unknown = false, removed = false;
@@ -144,6 +144,14 @@ async function main(): Promise<void> {
   // A separate reviewed intake freezes authority before even TEST package deployment.
   assert.equal(intake.archive_sha,env.TEST_EXPECTED_ARCHIVE_SHA);
   assert.equal(intake.full_name,env.TEST_EXPECTED_FULL_NAME);
+  await actor('prepare-global-parent');
+  const parentFact = JSON.parse((await boundedRead(path.join(root,'private-global-parent.json'))).toString()) as Tuple & Record<string,unknown>;
+  assert.deepEqual(Object.keys(parentFact).sort(),['source','nonce','boot_ms','role','created_exclusive','physical_checked',
+    'owner_matches','protected','policy_matches','retained_until_job_teardown'].sort());
+  assert.equal(parentFact.source,source); assert.equal(parentFact.nonce,tuple.nonce); assert.equal(parentFact.role,'global_config');
+  assert(Number.isSafeInteger(parentFact.boot_ms) && (parentFact.boot_ms as number) >= 0);
+  for (const key of ['created_exclusive','physical_checked','owner_matches','protected','policy_matches','retained_until_job_teardown'])
+    assert.equal(parentFact[key],true);
   await actor('deploy');
   await actor('prerequisites-post-deploy');
   prerequisiteAdmission(JSON.parse((await boundedRead(path.join(root,'post-deployment-prerequisites.json'))).toString()),tuple,'pre-setup',prerequisite);

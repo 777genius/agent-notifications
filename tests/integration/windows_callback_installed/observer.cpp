@@ -23,6 +23,7 @@
 #include <algorithm>
 #include <utility>
 #include <optional>
+#include <cstddef>
 #include <iostream>
 #include "../../../native/windows-callback/custody.h"
 using namespace wcb;
@@ -111,6 +112,84 @@ static std::string processSID(HANDLE process, DWORD& integrity) {
  auto label = reinterpret_cast<TOKEN_MANDATORY_LABEL*>(level.data())->Label.Sid;
  integrity = *GetSidSubAuthority(label,*GetSidSubAuthorityCount(label)-1);
  return sid;
+}
+static void closeGlobalParentRoots() {
+ bool collected = true;
+ for (auto i = roots.rbegin(); i != roots.rend(); ++i) if (i->h != INVALID_HANDLE_VALUE) {
+  const auto closing = i->h; i->h = INVALID_HANDLE_VALUE;
+  if (!CloseHandle(closing)) collected = false;
+ }
+ require(collected);
+}
+// TEST fixture creation, not an ACL repair or production admission exception.
+static void prepareGlobalParent() {
+ Handle token, child;
+ LPWSTR userText = nullptr;
+ PSECURITY_DESCRIPTOR creation = nullptr, observed = nullptr;
+ auto cleanup = [&] {
+  bool collected = true;
+  for (const auto handle : {&child,&token}) if (handle->h != INVALID_HANDLE_VALUE) {
+   const auto closing = handle->h; handle->h = INVALID_HANDLE_VALUE;
+   if (!CloseHandle(closing)) collected = false;
+  }
+  for (const auto allocation : {static_cast<void*>(userText),static_cast<void*>(creation),static_cast<void*>(observed)})
+   if (allocation && LocalFree(allocation) != nullptr) collected = false;
+  userText = nullptr; creation = nullptr; observed = nullptr;
+  require(collected);
+ };
+ try {
+  budget();
+  require(OpenProcessToken(GetCurrentProcess(),TOKEN_QUERY,&token.h));
+  DWORD needed = 0;
+  const bool negotiated = GetTokenInformation(token.h,TokenUser,nullptr,0,&needed) != FALSE;
+  const auto negotiationError = negotiated ? ERROR_SUCCESS : GetLastError();
+  require(!negotiated && negotiationError == ERROR_INSUFFICIENT_BUFFER && needed >= sizeof(TOKEN_USER) && needed <= 65536);
+  std::vector<uint8_t> user(needed);
+  require(GetTokenInformation(token.h,TokenUser,user.data(),needed,&needed));
+  auto userSID = reinterpret_cast<TOKEN_USER*>(user.data())->User.Sid;
+  require(IsValidSid(userSID) && ConvertSidToStringSidW(userSID,&userText));
+  const auto descriptor = L"O:"+std::wstring(userText)+L"D:P(A;OICI;FA;;;"+userText
+   +L")(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)";
+  require(ConvertStringSecurityDescriptorToSecurityDescriptorW(descriptor.c_str(),SDDL_REVISION_1,&creation,nullptr));
+  SECURITY_ATTRIBUTES attributes{sizeof(attributes),creation,FALSE};
+  const auto path = root/L"TEST-global-parent";
+  budget();
+  require(CreateDirectoryW(path.c_str(),&attributes)); // existing/raced paths refuse, never adopt
+  budget();
+  child = open(path,true); // actual regular directory; no reparse and no delete sharing
+  require(physical(child.h) == path.wstring());
+  PSID owner = nullptr; PACL dacl = nullptr;
+  require(GetSecurityInfo(child.h,SE_FILE_OBJECT,OWNER_SECURITY_INFORMATION|DACL_SECURITY_INFORMATION,
+   &owner,nullptr,&dacl,nullptr,&observed) == ERROR_SUCCESS);
+  require(observed && IsValidSecurityDescriptor(observed) && GetSecurityDescriptorLength(observed) <= 65536);
+  SECURITY_DESCRIPTOR_CONTROL control{}; DWORD revision = 0;
+  require(owner && EqualSid(owner,userSID) && dacl && IsValidAcl(dacl) && dacl->AceCount == 3
+   && GetSecurityDescriptorControl(observed,&control,&revision) && (control&SE_DACL_PROTECTED));
+  BYTE system[SECURITY_MAX_SID_SIZE]{}, admin[SECURITY_MAX_SID_SIZE]{};
+  DWORD systemSize = sizeof(system), adminSize = sizeof(admin);
+  require(CreateWellKnownSid(WinLocalSystemSid,nullptr,system,&systemSize)
+   && CreateWellKnownSid(WinBuiltinAdministratorsSid,nullptr,admin,&adminSize));
+  PSID expected[]{userSID,system,admin}; bool seen[3]{};
+  for (DWORD i = 0; i < dacl->AceCount; ++i) {
+   void* raw = nullptr; require(GetAce(dacl,i,&raw));
+   const auto ace = static_cast<ACCESS_ALLOWED_ACE*>(raw);
+   require(ace->Header.AceType == ACCESS_ALLOWED_ACE_TYPE
+    && ace->Header.AceFlags == (OBJECT_INHERIT_ACE|CONTAINER_INHERIT_ACE) && ace->Mask == FILE_ALL_ACCESS
+    && ace->Header.AceSize >= offsetof(ACCESS_ALLOWED_ACE,SidStart)+8);
+   const auto sid = reinterpret_cast<SID*>(&ace->SidStart);
+   require(sid->SubAuthorityCount <= SID_MAX_SUB_AUTHORITIES
+    && offsetof(ACCESS_ALLOWED_ACE,SidStart)+8+4*sid->SubAuthorityCount <= ace->Header.AceSize && IsValidSid(sid));
+   bool matched = false;
+   for (unsigned j = 0; j < 3; ++j) if (!seen[j] && EqualSid(sid,expected[j])) { seen[j] = true; matched = true; break; }
+   require(matched);
+  }
+  require(seen[0] && seen[1] && seen[2]);
+  budget(); cleanup(); budget();
+  auto receipt = fact(); put(receipt,L"role","global_config");
+  for (const auto key : {L"created_exclusive",L"physical_checked",L"owner_matches",L"protected",L"policy_matches",L"retained_until_job_teardown"})
+   receipt.Insert(key,JsonValue::CreateBooleanValue(true));
+  budget(); publish(L"private-global-parent.json",receipt); budget();
+ } catch (...) { cleanup(); throw; }
 }
 static uint64_t birth(HANDLE h) {
  FILETIME created{}, exited{}, kernel{}, user{};
@@ -870,7 +949,11 @@ int wmain(int argc, wchar_t** argv) {
    ExitProcess(124);
   }).detach();
   winrt::init_apartment(winrt::apartment_type::multi_threaded);
-  if (mode == L"prerequisites") prerequisites(PrerequisiteStage::baseline);
+  if (mode == L"prepare-global-parent") {
+   prepareGlobalParent();
+   closeGlobalParentRoots(); budget();
+  }
+  else if (mode == L"prerequisites") prerequisites(PrerequisiteStage::baseline);
   else if (mode == L"prerequisites-post-deploy") prerequisites(PrerequisiteStage::postDeployment);
   else if (mode == L"prerequisites-post-setup") prerequisites(PrerequisiteStage::postSetup);
   else if (mode == L"archive") archive(false);
@@ -891,6 +974,7 @@ int wmain(int argc, wchar_t** argv) {
    }
    report.Insert(L"retained_until_job_teardown",JsonValue::CreateBooleanValue(true));
    publish((wide(phase)+L".failure.json").c_str(),report); } catch (...) {}
+  if (phase == "prepare-global-parent") { try { closeGlobalParentRoots(); } catch (...) {} }
   return 1;
  }
 }
