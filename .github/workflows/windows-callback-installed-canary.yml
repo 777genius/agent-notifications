@@ -1,0 +1,162 @@
+name: Windows installed shipping callback TEST proof
+on:
+  pull_request:
+    paths:
+      - 'tests/integration/windows_callback_installed/**'
+      - '.github/workflows/windows-callback-installed-canary.yml'
+      - 'native/windows-callback/**'
+      - 'internal/windowscallback/**'
+  workflow_dispatch:
+    inputs:
+      admission:
+        description: 'Enter one-fresh-disposable-installed-callback for ONE fresh TEST VM/profile run'
+        required: true
+        type: string
+      phase:
+        description: 'Intake first; installed needs exact independently reviewed signed archive SHA and FullName'
+        required: true
+        default: archive_intake
+        type: choice
+        options: [archive_intake, installed]
+      expectedArchiveSHA:
+        description: 'Required for installed, raw archive SHA256 from accepted intake'
+        type: string
+      expectedFullName:
+        description: 'Required for installed, exact x64 FullName from accepted intake'
+        type: string
+      scenario:
+        description: 'One Show, one genuine Shell action; retained also sets B then removes producer/config'
+        required: true
+        default: basic
+        type: choice
+        options: [basic, retained]
+permissions:
+  contents: read
+concurrency:
+  group: windows-installed-${{ github.run_id }}
+  cancel-in-progress: false
+jobs:
+  compile:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    outputs:
+      artifact: ${{ steps.upload.outputs.artifact-id }}
+    env:
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      GOTOOLCHAIN: local
+      CGO_ENABLED: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.27.1'
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: '24.21.0'
+      - name: Source typecheck and inert evidence joins (no installed effects)
+        shell: pwsh
+        run: |
+          npm ci --prefix opencode-plugin --ignore-scripts --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { throw 'locked tooling failed' }
+          & ./opencode-plugin/node_modules/.bin/tsc.cmd --ignoreConfig --noEmit --allowImportingTsExtensions --strict --target ES2023 --module ESNext --moduleResolution bundler --types node --typeRoots ./opencode-plugin/node_modules/@types tests/integration/windows_callback_installed/canary.mts tests/integration/windows_callback_installed/evidence.mts tests/integration/windows_callback_installed/evidence.test.mts
+          if ($LASTEXITCODE -ne 0) { throw 'proof typecheck failed' }
+          node tests/integration/windows_callback_installed/evidence.test.mts
+          if ($LASTEXITCODE -ne 0) { throw 'inert evidence joins failed' }
+      - name: Compile shipping bytes; read-image proof and inert XML/URI contracts
+        shell: pwsh
+        run: |
+          if ((git rev-parse HEAD) -cne $env:SOURCE_SHA) { throw 'source mismatch' }
+          $out = "$env:RUNNER_TEMP\TEST-installed-build"
+          ./native/windows-callback/build.ps1 -OutputDirectory $out -EmbedAsset
+          $binary = Join-Path $out 'claude-notifications-windows-amd64.exe'
+          go build -tags windows_callback_asset -trimpath -ldflags='-s -w' -o $binary ./cmd/claude-notifications
+          if ($LASTEXITCODE -ne 0) { throw 'stripped normal CLI build failed' }
+          if ((Get-Item -LiteralPath $binary).Length -gt 33554432) { throw 'managed input exceeds 32 MiB' }
+          $proof = ./native/windows-callback/verify-embedded.ps1 -Executable $binary -Helper "$out\helper.exe" | ConvertFrom-Json
+          $proof | Add-Member source $env:SOURCE_SHA
+          $proof | ConvertTo-Json | Set-Content -LiteralPath "$out\manifest.json" -Encoding utf8NoBOM
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products '*' -property installationPath
+          if (!$vs) { throw 'MSVC unavailable' }
+          & "$vs\MSBuild\Current\Bin\MSBuild.exe" tests/integration/windows_callback_installed/Observer.vcxproj /t:Build /p:Configuration=Release /p:Platform=x64 "/p:OutDir=$out\" "/p:IntDir=$out\observer-obj\" /verbosity:minimal
+          if ($LASTEXITCODE -ne 0) { throw 'observer compile failed' }
+          & "$out\TEST-installed-observer.exe" --inert-xml
+          if ($LASTEXITCODE -ne 0) { throw 'inert byte XML contracts failed' }
+          & "$out\TEST-installed-observer.exe" --inert-uri
+          if ($LASTEXITCODE -ne 0) { throw 'inert file URI contracts failed' }
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        id: upload
+        with:
+          name: TEST-installed-input-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/TEST-installed-build/claude-notifications-windows-amd64.exe
+            ${{ runner.temp }}/TEST-installed-build/helper.exe
+            ${{ runner.temp }}/TEST-installed-build/manifest.json
+            ${{ runner.temp }}/TEST-installed-build/TEST-installed-observer.exe
+          if-no-files-found: error
+          retention-days: 14
+  installed:
+    needs: compile
+    if: github.event_name == 'workflow_dispatch' && github.repository == '777genius/agent-notifications' && github.run_attempt == 1 && inputs.admission == 'one-fresh-disposable-installed-callback'
+    # Native observer is ARM64; shipping Go/helper/client are verified x64.
+    # This is an explicit emulation experiment, never native x64 proof transfer.
+    runs-on: windows-11-vs2026-arm
+    timeout-minutes: 15
+    env:
+      TEST_INSTALLED_ADMISSION: ${{ inputs.admission }}
+      TEST_INSTALLED_SCENARIO: ${{ inputs.scenario }}
+      TEST_INSTALLED_PHASE: ${{ inputs.phase }}
+      TEST_EXPECTED_ARCHIVE_SHA: ${{ inputs.expectedArchiveSHA }}
+      TEST_EXPECTED_FULL_NAME: ${{ inputs.expectedFullName }}
+    steps:
+      - name: Bind fixed TEST scratch paths from the actual runner environment
+        shell: pwsh
+        run: |
+          "TEST_INSTALLED_ARTIFACT=$(Join-Path $env:RUNNER_TEMP 'TEST-installed-input')" >> $env:GITHUB_ENV
+          "TEST_INSTALLED_OBSERVER=$(Join-Path $env:RUNNER_TEMP 'TEST-installed-observer\TEST-installed-observer.exe')" >> $env:GITHUB_ENV
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: '24.21.0'
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8 verified official ref
+        with:
+          artifact-ids: ${{ needs.compile.outputs.artifact }}
+          path: ${{ env.TEST_INSTALLED_ARTIFACT }}
+          merge-multiple: true
+      - name: Compile native observer only; no OOBE/package/COM effects
+        shell: pwsh
+        run: |
+          if ((git rev-parse HEAD) -cne $env:GITHUB_SHA) { throw 'effect source mismatch' }
+          $out = Split-Path $env:TEST_INSTALLED_OBSERVER
+          New-Item -ItemType Directory -Path $out -ErrorAction Stop | Out-Null
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products '*' -property installationPath
+          if (!$vs) { throw 'native ARM64 MSVC unavailable' }
+          & "$vs\MSBuild\Current\Bin\MSBuild.exe" tests/integration/windows_callback_installed/Observer.vcxproj /t:Build /p:Configuration=Release /p:Platform=ARM64 "/p:OutDir=$out\" "/p:IntDir=$out\obj\" /verbosity:minimal
+          if ($LASTEXITCODE -ne 0) { throw 'native observer compile failed' }
+      - name: ONE normal shipping setup/Show and genuine default Shell action
+        shell: pwsh
+        run: |
+          node tests/integration/windows_callback_installed/canary.mts
+          if ($LASTEXITCODE -ne 0) { throw 'installed qualification refused/failed; no retry' }
+      - name: Retain finite evidence; VM teardown owns retained readers/vendor
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: TEST-installed-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/TEST-installed-*/*.json
+            ${{ runner.temp }}/TEST-installed-*/control/ownership.json
+            ${{ runner.temp }}/TEST-installed-*/control/transaction.json
+            ${{ runner.temp }}/TEST-installed-*/control/windows-callback/*/generation.wne
+            ${{ runner.temp }}/TEST-installed-*/control/windows-callback/*/operator.pending
+            ${{ runner.temp }}/TEST-installed-*/control/windows-callback/*/operator.collected
+            ${{ runner.temp }}/TEST-installed-*/control/windows-callback/*/operator.failure
+            ${{ runner.temp }}/TEST-installed-*/control/windows-callback/*/records/*.wne
+            ${{ runner.temp }}/TEST-installed-*/control/windows-callback/*/attempts/*
+          if-no-files-found: warn
+          retention-days: 14
