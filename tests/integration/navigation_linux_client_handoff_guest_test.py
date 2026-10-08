@@ -71,6 +71,15 @@ def observe_guest_cpu():
     return observation
 
 
+def selected_command_hint(command, executable, uri):
+    """Mutable /proc argv/title discovers a candidate, never proves exec argv."""
+    expected = [executable, b'--ozone-platform=wayland', uri]
+    if command == expected: return 'argv'
+    # Electron may replace NUL-separated argv with one process-title value.
+    if command == [b' '.join(expected)]: return 'process_title'
+    return None
+
+
 def client_activation_surfaces(trace, token):
     # Client and system libwayland can use different object-ID delimiters.
     pattern = (r'xdg_activation_v1(?P<separator>[@#])\d+\.activate\("' +
@@ -637,17 +646,18 @@ raise SystemExit(0 if result['passed'] else 1)
             try:
                 client = kernel.snapshot(int(value))
                 if client['executable'] == str(kernel.EXE):
-                    exact = client['command'] == [bytes(kernel.EXE), b'--ozone-platform=wayland', uri.encode()]
+                    hint = selected_command_hint(client['command'], bytes(kernel.EXE), uri.encode())
+                    exact = hint == 'argv'
                     if len(predicate_capture['candidates']) < 3:
                         predicate_capture['candidates'].append(dict(pid=client['pid'], startTicks=client['startTicks'],
                             observedAtBoot=now(), observedPoll=predicate_capture['polls'],
-                            exactURIArgvMatch=exact, argv=predicate_argv(client['command'], 1024)))
+                            exactURIArgvMatch=exact, discoveryHint=hint, argv=predicate_argv(client['command'], 1024)))
                     else: predicate_capture['omittedCandidates'] += 1
-                    if exact: found.append(client)
+                    if hint is not None: found.append(client)
             except (FileNotFoundError, ProcessLookupError): pass
-        predicate_end('exact_candidate_present' if found else 'exact_candidate_absent')
+        predicate_end('command_hint_candidate_present' if found else 'command_hint_candidate_absent')
         if not found: return None
-        if len(found) != 1: raise RuntimeError('sole_selected_exact_URI_process_unproved')
+        if len(found) != 1: raise RuntimeError('sole_selected_command_hint_process_unproved')
         predicate_begin('selected_peer_and_environment')
         client_pid = found[0]['pid']; selected_peer(client_pid, 'selected-launch')
         with Path('/proc', str(client_pid), 'environ').open('rb') as stream: environment = stream.read(65537)
@@ -656,6 +666,10 @@ raise SystemExit(0 if result['passed'] else 1)
         if any(len(pair) != 2 for pair in entries) or len({pair[0] for pair in entries}) != len(entries): raise RuntimeError('unambiguous_selected_environment_required')
         report['selectedEnvironment'] = {key.decode(): value.decode() for key, value in entries}
         alive(client_pid)
+        hint = selected_command_hint(found[0]['command'], bytes(kernel.EXE), uri.encode())
+        report['selectedCommandObservation'] = dict(discoveryHint=hint, nulSeparatedArgvObserved=hint == 'argv',
+            scope='mutable_process_command_not_exec_boundary', pid=client_pid,
+            startTicks=found[0]['startTicks'], observedAtBoot=now())
         report['coldGoReader'] = kernel.public_snapshot(reader); report['coldGoReaderObserved'] = True
         report['exactURI'] = uri; report['exactURIObserved'] = True
         predicate_end('fully_admitted')
