@@ -189,6 +189,7 @@ type lockDirectoryDescriptor struct {
 	control windows.SECURITY_DESCRIPTOR_CONTROL
 	raw     []byte
 }
+
 func lockDirectorySecurity(t *testing.T, path string) lockDirectoryDescriptor {
 	t.Helper()
 	name, err := windows.UTF16PtrFromString(path)

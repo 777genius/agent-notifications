@@ -1,0 +1,193 @@
+# Focused real-filesystem regression gate; full main CI remains mandatory.
+name: Windows managed directory filesystem contracts
+on:
+  pull_request:
+    paths:
+      - 'internal/installruntime/**'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/windows-managed-directory-contracts.yml'
+permissions:
+  contents: read
+jobs:
+  real-filesystem-regression:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7 repository pin
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Compile exact baseline overlay and current filesystem test binaries
+        shell: pwsh
+        env:
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          CGO_ENABLED: '0'
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = Join-Path $env:RUNNER_TEMP "TEST-managed-directory-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          New-Item -ItemType Directory -Path $root | Out-Null
+          $privateLogs = Join-Path $root 'private-logs'
+          New-Item -ItemType Directory -Path $privateLogs | Out-Null
+          "TEST_FS_ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          $evidence = [ordered]@{ sourceSHA=$env:SOURCE_SHA; baselineSHA='25b956732717d86a3bdb7fea9bef86ce1f6c4940';
+            baselineKind='exact baseline archive plus head lock_windows_test.go overlay';
+            filesystemOnly=$true; installedCallbackQualified=$false; qualified=$false; actors=@() }
+          # Redirect to files rather than inherited output pipes. A successful exit is
+          # insufficient until both files can be opened exclusively and boundedly read.
+          function Invoke-Owned([string]$name, [string]$exe, [string[]]$arguments, [string]$cwd, [int]$seconds) {
+            $out = Join-Path $privateLogs "$name.stdout.txt"
+            $err = Join-Path $privateLogs "$name.stderr.txt"
+            $fact = [ordered]@{ name=$name; collected=$false; streamsCollected=$false; timedOut=$false;
+              unknown=$true; exitCode=$null; bounded=$false }
+            $p = $null
+            try {
+              $p = Start-Process -FilePath $exe -ArgumentList $arguments -WorkingDirectory $cwd -NoNewWindow -PassThru -RedirectStandardOutput $out -RedirectStandardError $err
+              if (!$p.WaitForExit($seconds * 1000)) {
+                $fact.timedOut = $true
+                try { $p.Kill($true) } catch { }
+                if (!$p.WaitForExit(5000)) { return $fact }
+              }
+              $fact.collected = $true
+              $p.Refresh()
+              $fact.exitCode = $p.ExitCode
+              if ($null -eq $fact.exitCode) { return $fact }
+              $handles = @()
+              try {
+                foreach ($file in @($out, $err)) {
+                  $handles += [IO.File]::Open($file, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::None)
+                }
+                $fact.streamsCollected = $true
+                $fact.stdoutBytes = $handles[0].Length
+                $fact.stderrBytes = $handles[1].Length
+                $fact.bounded = (($handles[0].Length + $handles[1].Length) -le 65536)
+                if ($fact.bounded) {
+                  foreach ($i in @(0, 1)) {
+                    $suffix = @('stdout', 'stderr')[$i]
+                    $destination = [IO.File]::Open((Join-Path $root "$name.$suffix.txt"), [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+                    try { $handles[$i].CopyTo($destination) } finally { $destination.Dispose() }
+                  }
+                }
+              } finally { foreach ($h in $handles) { $h.Dispose() } }
+              $fact.unknown = $false
+              if ($fact.bounded) {
+                $fact.stdoutSHA256 = (Get-FileHash -LiteralPath "$root/$name.stdout.txt" -Algorithm SHA256).Hash.ToLowerInvariant()
+                $fact.stderrSHA256 = (Get-FileHash -LiteralPath "$root/$name.stderr.txt" -Algorithm SHA256).Hash.ToLowerInvariant()
+              }
+            } catch { $fact.unknown = $true }
+            finally {
+              if ($null -ne $p) { $p.Dispose() }
+              # Raw/uncollected/unbounded output is never matched by artifact paths.
+              # Failed actors retain TEST scratch until disposable CI job teardown.
+              $evidence.actors += $fact
+              $evidence | ConvertTo-Json -Depth 7 | Set-Content -LiteralPath "$root/evidence.json" -Encoding utf8
+            }
+            return $fact
+          }
+          function Require-Collected($fact, [int]$code) {
+            if (!$fact.collected -or !$fact.streamsCollected -or $fact.unknown -or $fact.timedOut -or !$fact.bounded -or $fact.exitCode -ne $code) {
+              throw "owned filesystem actor did not qualify: $($fact.name)"
+            }
+          }
+          function Source-Digest([string]$directory, [string[]]$files) {
+            $lines = foreach ($relative in ($files | Sort-Object -CaseSensitive)) {
+              $file = Join-Path $directory $relative
+              "$relative`0$((Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant())"
+            }
+            $bytes = [Text.Encoding]::UTF8.GetBytes(($lines -join "`n"))
+            return [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant()
+          }
+          $headFiles = $null
+          $baselineFiles = $null
+          try {
+            if ((git rev-parse HEAD) -cne $env:SOURCE_SHA -or $LASTEXITCODE -ne 0) { throw 'head source mismatch' }
+            $status = git status --porcelain
+            if ($LASTEXITCODE -ne 0 -or $status) { throw 'head source is dirty or unobserved' }
+            $headFiles = @(git ls-files)
+            if ($LASTEXITCODE -ne 0) { throw 'head source inventory failed' }
+            $evidence.headSourceBefore = Source-Digest $env:GITHUB_WORKSPACE $headFiles
+            $evidence.baselineTree = git rev-parse "$($evidence.baselineSHA)^{tree}"
+            if ($LASTEXITCODE -ne 0) { throw 'exact baseline is unavailable' }
+            $archive = Join-Path $root 'baseline.tar'
+            git archive --format=tar --output=$archive $evidence.baselineSHA
+            if ($LASTEXITCODE -ne 0) { throw 'exact baseline archive failed' }
+            $evidence.baselineArchiveSHA256 = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+            $baseline = Join-Path $root 'baseline'
+            New-Item -ItemType Directory -Path $baseline | Out-Null
+            tar -xf $archive -C $baseline
+            if ($LASTEXITCODE -ne 0) { throw 'baseline extraction failed' }
+            $test = 'internal/installruntime/lock_windows_test.go'
+            Copy-Item -LiteralPath (Join-Path $env:GITHUB_WORKSPACE $test) -Destination (Join-Path $baseline $test)
+            $evidence.overlayTestSHA256 = (Get-FileHash -LiteralPath (Join-Path $baseline $test) -Algorithm SHA256).Hash.ToLowerInvariant()
+            $baselineFiles = @(Get-ChildItem -LiteralPath $baseline -File -Recurse | ForEach-Object { [IO.Path]::GetRelativePath($baseline, $_.FullName) })
+            $evidence.baselineOverlayBefore = Source-Digest $baseline $baselineFiles
+            $go = (Get-Command go).Source
+            $evidence.goVersion = & $go version
+            if ($LASTEXITCODE -ne 0) { throw 'Go version observation failed' }
+            foreach ($case in @(@{name='old'; directory=$baseline}, @{name='new'; directory=$env:GITHUB_WORKSPACE})) {
+              $exe = Join-Path $root "$($case.name)-installruntime.test.exe"
+              # Build and execution are distinct: a compiler failure cannot count as RED.
+              $fact = Invoke-Owned "$($case.name)-compile" $go @('test', '-c', '-mod=readonly', '-trimpath', '-o', ('"' + $exe + '"'), './internal/installruntime') $case.directory 240
+              Require-Collected $fact 0
+              $evidence["$($case.name)BinarySHA256"] = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant()
+            }
+            $old = Invoke-Owned 'old-test' (Join-Path $root 'old-installruntime.test.exe') @('-test.v', '-test.run=^TestWindowsLockCreatesPrivateManagedSuffix$', '-test.timeout=45s', '-test.count=1') $baseline 60
+            Require-Collected $old 1
+            $oldText = [IO.File]::ReadAllText("$root/old-test.stdout.txt") + [IO.File]::ReadAllText("$root/old-test.stderr.txt")
+            if ($oldText -notmatch '(?m)^=== RUN   TestWindowsLockCreatesPrivateManagedSuffix\r?$' -or
+                $oldText -notmatch '(?m)^--- FAIL: TestWindowsLockCreatesPrivateManagedSuffix \([0-9.]+s\)\r?$' -or
+                $oldText -notmatch 'managed inode DACL grants foreign access' -or $oldText -match 'panic:|test timed out|no tests to run') {
+              throw 'baseline did not observe the required named foreign-ACL failure'
+            }
+            $evidence.baselineNamedForeignACLFailure = $true
+            $names = @('TestWindowsLockCreatesPrivateManagedSuffix', 'TestWindowsLockRefusesForeignDirectoryWithoutRepair',
+              'TestWindowsLockDirectoryCreationRace', 'TestWindowsLockRejectsReparseDirectory',
+              'TestPrivateWindowsHandleForeignReadOnlyACE', 'TestLockWithInheritedForeignReadOnlyACE',
+              'TestCanonicalPrivateWindowsDescriptor', 'TestCanonicalPrivateWindowsDescriptorSystemUser', 'TestLockRequiresDeadline')
+            $pattern = '^(' + ($names -join '|') + ')$'
+            $new = Invoke-Owned 'new-test' (Join-Path $root 'new-installruntime.test.exe') @('-test.v', "-test.run=$pattern", '-test.timeout=60s', '-test.count=1') $env:GITHUB_WORKSPACE 90
+            Require-Collected $new 0
+            $newText = [IO.File]::ReadAllText("$root/new-test.stdout.txt") + [IO.File]::ReadAllText("$root/new-test.stderr.txt")
+            foreach ($name in $names) {
+              if ($newText -notmatch ('(?m)^=== RUN   ' + $name + '\r?$')) { throw "required test did not run: $name" }
+              $terminal = '(?m)^--- PASS: ' + $name + ' \([0-9.]+s\)\r?$'
+              # Only the real symlink prerequisite may be unsupported on this identity.
+              if ($name -eq 'TestWindowsLockRejectsReparseDirectory') {
+                $terminal = '(?m)^--- (PASS|SKIP): ' + $name + ' \([0-9.]+s\)\r?$'
+              }
+              if ($newText -notmatch $terminal) { throw "required terminal test observation missing: $name" }
+            }
+            $evidence.headSourceAfter = Source-Digest $env:GITHUB_WORKSPACE $headFiles
+            $evidence.baselineOverlayAfter = Source-Digest $baseline $baselineFiles
+            $status = git status --porcelain
+            if ($LASTEXITCODE -ne 0 -or $status -or $evidence.headSourceBefore -cne $evidence.headSourceAfter -or $evidence.baselineOverlayBefore -cne $evidence.baselineOverlayAfter) {
+              throw 'test source changed during compilation/execution'
+            }
+            $evidence.reparseSkipped = ($newText -match '(?m)^--- SKIP: TestWindowsLockRejectsReparseDirectory ')
+            if ($evidence.reparseSkipped -and $newText -notmatch 'TEST symlink creation unsupported') { throw 'unknown reparse skip' }
+            $evidence.qualified = $true
+          } finally {
+            # Record exact source observations even after a refused phase.
+            try {
+              if ($null -ne $headFiles) { $evidence.headSourceAfter = Source-Digest $env:GITHUB_WORKSPACE $headFiles }
+              if ($null -ne $baselineFiles) { $evidence.baselineOverlayAfter = Source-Digest $baseline $baselineFiles }
+              if ($evidence.headSourceBefore -cne $evidence.headSourceAfter -or $evidence.baselineOverlayBefore -cne $evidence.baselineOverlayAfter) { $evidence.qualified = $false }
+            } catch { $evidence.sourceAfterUnknown = $true; $evidence.qualified = $false }
+            $evidence | ConvertTo-Json -Depth 7 | Set-Content -LiteralPath "$root/evidence.json" -Encoding utf8
+          }
+          if (!$evidence.qualified) { throw 'filesystem source/collection gate did not qualify' }
+      - name: Retain bounded filesystem evidence only
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7 repository pin
+        with:
+          name: windows-managed-directory-contracts-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/TEST-managed-directory-${{ github.run_id }}-${{ github.run_attempt }}/evidence.json
+            ${{ runner.temp }}/TEST-managed-directory-${{ github.run_id }}-${{ github.run_attempt }}/*.stdout.txt
+            ${{ runner.temp }}/TEST-managed-directory-${{ github.run_id }}-${{ github.run_attempt }}/*.stderr.txt
+          if-no-files-found: error
+          retention-days: 14
