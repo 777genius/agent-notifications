@@ -123,7 +123,7 @@ func TestSetupProductsConfirmationDisplayBudget(t *testing.T) {
 // promise that all existing shared preferences stay unchanged.
 func TestBootstrapCursorChannelPreferencesSummary(t *testing.T) {
 	i, _ := bootstrapCodecFixture(t)
-	a, err := parseSetupProducts([]string{"confirm", "--products", "cursor", "--webhook"})
+	a, err := parseSetupProducts([]string{"confirm", "--products", "cursor", "--webhook", "--scope-root", string(i.Provenance.Stage), "--client-executable", filepath.Join(string(i.Provenance.Stage), "TEST-cursor-agent")})
 	if err != nil {
 		t.Fatal(err)
 	}
