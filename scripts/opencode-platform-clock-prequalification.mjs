@@ -133,7 +133,7 @@ async function execute(rootInput) {
   need(process.env.BUN_BE_BUN === '1' && Object.keys(process.env).every(k => m.environmentKeys.includes(k)), 'minimal_actual_environment');
   const fixture = contained(root, fileURLToPath(import.meta.url));
   const imagePath = contained(root, realpathSync(process.execPath)), image = heldImage(imagePath);
-  let clock, lines, disposed = false, previous, samples = 0, measuredInstances = 0, warmupSample, nativeComparisonWidths, abortMeasured;
+  let clock, lines, disposed = false, previous, samples = 0, measuredInstances = 0, warmupSample, nativeComparisonWidths, abortMeasured, jsTimingRaw;
   const globalStart = performance.now();
   const watchdog = setTimeout(() => { process.exitCode = 1; process.stdin.destroy(); }, budgets.jsMs);
   try {
@@ -238,12 +238,14 @@ async function execute(rootInput) {
       for (let chunk = 0; chunk < budgets.chunkSize; chunk++) {
         budgetCheck(performance.now(), operationStart, samples, chunk + 1); sample();
       }
-      const before = sample();
-      send({ kind: 'helper_request', round, before });
-      const reply = await receive('helper_response');
+      jsTimingRaw = { round, beforeSampleReturned: null, requestWriteReturned: null, responseParsed: null, afterSampleReturned: null };
+      const before = sample(); jsTimingRaw.beforeSampleReturned = performance.now();
+      send({ kind: 'helper_request', round, before }); jsTimingRaw.requestWriteReturned = performance.now();
+      const reply = await receive('helper_response'); jsTimingRaw.responseParsed = performance.now();
       need(reply.round === round && typeof reply.raw === 'string' && reply.raw.length <= 1368, 'helper_response_identity');
       budgetCheck(performance.now(), operationStart, samples, 0);
-      const after = sample(), bytes = Buffer.from(reply.raw, 'base64');
+      const after = sample(); jsTimingRaw.afterSampleReturned = performance.now();
+      const bytes = Buffer.from(reply.raw, 'base64');
       need(bytes.toString('base64') === reply.raw, 'canonical_helper_base64');
       const go = helperFrame(bytes, process.platform);
       let comparison;
@@ -300,9 +302,16 @@ async function execute(rootInput) {
     budgetCheck(performance.now(), operationStart, samples, 0);
     need(performance.now() - globalStart < budgets.jsMs, 'original_js_deadline');
   } catch (error) {
+    // Conversion/publication is after the original compare failure, never discounted.
+    let jsStageTimings;
+    if (error?.message === 'actual_translation_counter_span' && jsTimingRaw) {
+      const { round, ...rawStages } = jsTimingRaw, origin = rawStages.beforeSampleReturned;
+      jsStageTimings = { clock: 'js-performance.now', round, offsetsUS: Object.fromEntries(
+        Object.entries(rawStages).map(([key, value]) => [key, value === null ? null : Math.floor((value - origin) * 1000)])) };
+    }
     try { send({ kind: 'failure', reason: error?.message === 'clock_unavailable' ? 'actual_create_platform_clock_unavailable' :
       /^[a-z0-9_]{1,80}$/.test(error?.message ?? '') ? error.message : 'actual_module_exception',
-      ...(nativeComparisonWidths ? { nativeComparisonWidths } : {}), ...qualifications }); } catch {}
+      ...(nativeComparisonWidths ? { nativeComparisonWidths } : {}), ...(jsStageTimings ? { jsStageTimings } : {}), ...qualifications }); } catch {}
     process.exitCode = 1;
   } finally {
     clearTimeout(watchdog);

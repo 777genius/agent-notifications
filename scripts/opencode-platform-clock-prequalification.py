@@ -178,6 +178,37 @@ def closed_inputs(value):
     return value
 
 
+STAGE_KEYS = {
+    'python-time.monotonic': ('requestParsed', 'helperAdmissionVerified', 'spawnReturned', 'actualWaitReturned',
+                              'bothPipeEOFJoined', 'collectionValidated', 'responseFlushReturned'),
+    'js-performance.now': ('beforeSampleReturned', 'requestWriteReturned', 'responseParsed', 'afterSampleReturned')}
+
+
+def stage_projection(record, clock, round_number):
+    # Optional telemetry never changes the original failure/qualification.
+    if not isinstance(record, dict) or set(record) != {'clock', 'round', 'offsetsUS'}: return None
+    if clock not in STAGE_KEYS or record['clock'] != clock or type(record['round']) is not int or record['round'] != round_number or not 0 <= round_number < 3: return None
+    offsets = record['offsetsUS']; keys = STAGE_KEYS[clock]
+    if not isinstance(offsets, dict) or set(offsets) != set(keys) or type(offsets[keys[0]]) is not int or offsets[keys[0]] != 0: return None
+    previous, missing = 0, False
+    for key in keys:
+        value = offsets[key]
+        if value is None: missing = True; continue
+        if missing or type(value) is not int or not previous <= value <= 25000000: return None
+        previous = value
+    return record
+
+
+def parent_stage_projection(raw, round_number):
+    try:
+        origin = raw['requestParsed']
+        offsets = {key: None if raw[key] is None else int((raw[key] - origin) * 1000000)
+                   for key in STAGE_KEYS['python-time.monotonic']}
+        return stage_projection({'clock': 'python-time.monotonic', 'round': round_number, 'offsetsUS': offsets},
+                                'python-time.monotonic', round_number)
+    except (TypeError, ValueError, OverflowError): return None
+
+
 class Owned:
     """Actual wait AND both pipe EOFs retain ownership; kills never prove success."""
     def __init__(self, job_end):
@@ -244,15 +275,18 @@ class Owned:
                      224000000 < widths['outerWidthNs'] <= 2000000000 and
                      0 <= widths['goWidthNs'] <= 100000000, 'closed_comparison_width_diagnostic')
                 error.nativeComparisonWidths = widths
+                timing = stage_projection(value.get('jsStageTimings'), 'js-performance.now', widths['round'])
+                if timing is not None: error.jsStageTimings = timing
             raise error
         need(not s['overflow'] and not s['pipeError'] and value.get('kind') == kind, 'child_frame_order_or_failure')
         return value
 
-    def send(self, s, value, end):
+    def send(self, s, value, end, timing=None):
         remaining(end); remaining(self.end)
         raw = canonical(value) + b'\n'
         need(len(raw) <= BUDGETS['frameBytes'] and s['p'].poll() is None, 'owned_parent_frame')
         s['p'].stdin.write(raw); s['p'].stdin.flush()
+        if timing is not None: timing['responseFlushReturned'] = time.monotonic()
         remaining(end)
 
     def kill(self, s):
@@ -264,12 +298,14 @@ class Owned:
                 os.killpg(p.pid, signal.SIGKILL)
             s['killRequested'] = True  # request only; wait/EOF must still prove closure
 
-    def close(self, s, end, natural=True):
+    def close(self, s, end, natural=True, timing=None):
         p = s['p']
         if not natural: self.kill(s)
         p.wait(timeout=remaining(end))
+        if timing is not None: timing['actualWaitReturned'] = time.monotonic()
         for t in s['threads']: t.join(timeout=remaining(end))
         need(not any(t.is_alive() for t in s['threads']), 'actual_pipe_eof_required')
+        if timing is not None: timing['bothPipeEOFJoined'] = time.monotonic()
         for stream in (p.stdin, p.stdout, p.stderr):
             if stream is not None: stream.close()
         remaining(end)
@@ -301,7 +337,7 @@ class Owned:
                  for s, original in ((os.fstat(fd), fd_original), (helper.lstat(), path_original))),
              'held_helper_image_changed')
 
-    def start_helper(self, helper, expected_sha, cwd, env, operation_end):
+    def start_helper(self, helper, expected_sha, cwd, env, operation_end, timing=None):
         # Actual module cases hold the preflight SHA-verified file; cheap exact
         # fd/path identity checks preserve custody inside the native224ms span.
         remaining(operation_end); remaining(self.end)
@@ -312,8 +348,10 @@ class Owned:
             remaining(operation_end); remaining(self.end)
             need(actual_sha == expected_sha, 'actual_helper_hash')
         launch_start = time.monotonic()
+        if timing is not None: timing['helperAdmissionVerified'] = launch_start
         end = min(operation_end, self.end, launch_start + BUDGETS['goMs'] / 1000)
         s = self.start([str(helper), 'opencode-clock', '--protocol', '1'], cwd, env, 'helper', 1024)
+        if timing is not None: timing['spawnReturned'] = time.monotonic()
         if self.held_helper is not None: self.verify_helper(helper, expected_sha)
         return s, end
 
@@ -717,6 +755,7 @@ def require_repeated_sampler_nonincrease(baseline, observed, expected):
 def run_case(root, metadata, os_name, arch, job_end):
     case_started = time.monotonic(); operation_started = None; round_number = None
     stage = 'initial_custody'; disposed_observed = False
+    parent_timings = [dict.fromkeys(STAGE_KEYS['python-time.monotonic']) for _ in range(3)]; js_timing = None
     def observation():
         now = time.monotonic()
         return {'stage': stage, 'caseElapsedMs': round((now - case_started) * 1000, 3),
@@ -804,14 +843,17 @@ def run_case(root, metadata, os_name, arch, job_end):
         helper_lifecycle = []
         for round_number in range(3):
             stage = 'helper_round'
+            timing = parent_timings[round_number]
             request = own.message(host, 'helper_request', operation_end)
+            timing['requestParsed'] = time.monotonic()
             need(request['round'] == round_number, 'single_planned_round')
-            s, end = own.start_helper(helper, metadata['helperSha256'], root, env, operation_end)
+            s, end = own.start_helper(helper, metadata['helperSha256'], root, env, operation_end, timing)
             try:
-                own.close(s, end)
+                own.close(s, end, timing=timing)
                 own.verify_helper(helper, metadata['helperSha256'])
                 need(not s['buffers'][1], 'helper_stderr_refused')
                 raw = bytes(s['buffers'][0]); frame(raw, os_name)
+                timing['collectionValidated'] = time.monotonic()
                 st = helper.stat()
                 helper_lifecycle.append({'pid': s['p'].pid, 'argv': [str(helper), 'opencode-clock', '--protocol', '1'],
                     'helperSHA256': metadata['helperSha256'], 'fileIdentity': {'device': st.st_dev, 'inode': st.st_ino,
@@ -826,7 +868,7 @@ def run_case(root, metadata, os_name, arch, job_end):
                 remaining(end)
                 stage = 'helper_response'
                 own.send(host, {'kind': 'helper_response', 'round': round_number,
-                                'raw': base64.b64encode(raw).decode()}, operation_end)
+                                'raw': base64.b64encode(raw).decode()}, operation_end, timing)
             finally:
                 if s['p'].pid in own.live: own.cleanup()
             if os_name == 'windows':
@@ -903,6 +945,10 @@ def run_case(root, metadata, os_name, arch, job_end):
         safe['failureReason'] = failure_reason(error)
         safe['failureObservation'] = observation()
         if hasattr(error, 'nativeComparisonWidths'): safe['nativeComparisonWidths'] = error.nativeComparisonWidths
+        # The next request may receive the prior round's compare failure.
+        last_admitted = next((i for i in range(len(parent_timings) - 1, -1, -1)
+                              if parent_timings[i]['requestParsed'] is not None), None)
+        js_timing = stage_projection(getattr(error, 'jsStageTimings', None), 'js-performance.now', last_admitted)
         if hasattr(error, 'path_failure'): safe['pathFailure'] = error.path_failure
     finally:
         own.cleanup()
@@ -919,6 +965,10 @@ def run_case(root, metadata, os_name, arch, job_end):
         if safe['status'] == 'module_prequalification_observed' and time.monotonic() >= js_end:
             safe.update(status='unqualified', failureReason='original_js_deadline')
             safe['failureObservation'] = observation()
+    if safe.get('failureReason') == 'actual_translation_counter_span':
+        records = [parent_stage_projection(raw, i) for i, raw in enumerate(parent_timings)]
+        safe['parentStageTimings'] = [record for record in records if record is not None]
+        if js_timing is not None: safe['jsStageTimings'] = js_timing
     return safe
 
 
