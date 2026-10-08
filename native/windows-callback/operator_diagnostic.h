@@ -5,6 +5,23 @@
 #include <cstdio>
 #include <stdexcept>
 namespace wcb {
+enum class RegistryRole { Software, Classes, SharedContainer, Resolved, OwnedLeaf };
+struct RegistryPhases { const char* query; const char* linkValue; const char* otherValue; };
+inline RegistryPhases registryPhases(RegistryRole role)noexcept{
+ switch(role){
+ case RegistryRole::Software:
+  return {"registry_software_query","registry_software_link_value","registry_software_other_value"};
+ case RegistryRole::Classes:
+  return {"registry_classes_query","registry_classes_link_value","registry_classes_other_value"};
+ case RegistryRole::SharedContainer:
+  return {"registry_shared_query","registry_shared_link_value","registry_shared_other_value"};
+ case RegistryRole::Resolved:
+  return {"registry_resolved_query","registry_resolved_link_value","registry_resolved_other_value"};
+ case RegistryRole::OwnedLeaf:
+  return {"registry_owned_query","registry_owned_link_value","registry_owned_other_value"};
+ }
+ return {"registry_link_guard","registry_link_guard","registry_link_guard"};
+}
 struct RegistryFailure : std::runtime_error {
  const char* phase;DWORD code;
  RegistryFailure(const char* p,DWORD value):std::runtime_error("registry operation rejected"),phase(p),code(value){}

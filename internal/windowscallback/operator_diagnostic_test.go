@@ -13,13 +13,17 @@ import (
 // Breakage: extra/untrusted diagnostics are accepted or success/unknown pipe
 // collection becomes a failure receipt. These are independent wire/copy vectors.
 func TestOperatorDiagnosticClosedFrame(t *testing.T) {
-	for _, raw := range []string{"WCD1 shared_container_open win32 5\n", "WCD1 package_identity hresult 2147942487\n", "WCD1 class_postimage other -\n"} {
+	for _, raw := range []string{"WCD1 shared_container_open win32 5\n", "WCD1 package_identity hresult 2147942487\n", "WCD1 class_postimage other -\n",
+		"WCD1 registry_link_guard other -\n", "WCD1 registry_software_query win32 5\n",
+		"WCD1 registry_software_other_value other -\n", "WCD1 registry_shared_link_value other -\n"} {
 		if _, e := decodeOperatorDiagnostic([]byte(raw)); e != nil {
 			t.Fatal(raw, e)
 		}
 	}
 	for _, raw := range []string{"", "WCD1 registry_link_guard win32 0\n", "WCD1 shared_container_open win32 05\n",
 		"WCD1 package_identity hresult 4294967296\n", "WCD1 package_identity hresult -1\n", "WCD1 class_postimage other 5\n",
+		"WCD1 registry_software_other_value win32 5\n", "WCD1 registry_shared_link_value hresult 2147942487\n",
+		"WCD1 registry_arbitrary_query win32 5\n", "WCD1 registry_shared_raw_type other -\n",
 		"WCD1 arbitrary win32 5\n", "WCD1 class_postimage unknown -\n", "WCD1 class_postimage other -",
 		"WCD1 class_postimage other -\r\n", "WCD1 class_postimage other -\n\n", "WCD1 class_postimage other -\x00\n",
 		"WCD1  class_postimage other -\n", "WCD1 class_postimage other - extra\n", strings.Repeat("x", 257)} {
