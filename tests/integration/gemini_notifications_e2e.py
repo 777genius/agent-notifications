@@ -266,13 +266,16 @@ def changed_update(before, after):
 def native_rows(g0, lab):
     rows = g0.observations(lab)
     for row in rows:
-        fields = {"event", "valid", "neutral", "session_sha256", "timestamp_sha256",
+        fields = {"event", "valid", "neutral", "session_sha256", "timestamp_sha256", "payload_sha256",
                   "shell", "shell_version", "case", "stop_hook_active", "subtype", "frame_capture", "frame_capture_ms"}
         require(set(row) <= fields and row["event"] in OWN and row["case"] in g0.CASES,
                 "observer_field_whitelist")
         require(row["valid"] is True and row["neutral"] is True, "foreign_observer_invalid")
         require(all(isinstance(row.get(k), str) and HEX.fullmatch(row[k]) for k in
                     ("session_sha256", "timestamp_sha256")), "observer_hash_contract")
+        if "payload_sha256" in row:
+            require(type(row["payload_sha256"]) is str and HEX.fullmatch(row["payload_sha256"]),
+                    "observer_payload_hash_contract")
         require(row.get("shell") in ("bash", "powershell") and isinstance(row.get("shell_version"), str)
                 and re.fullmatch(r"[0-9][0-9A-Za-z.()_-]*", row["shell_version"]), "observer_shell_contract")
         if row["event"] == "AfterAgent":
@@ -1090,6 +1093,30 @@ def snapshot_settings_equal(path, state):
 
 
 class PureChecks(unittest.TestCase):
+    def test_native_observer_payload_digest_through_actual_row_parser(self):
+        # RED before the fix: a valid recorder row fails observer_field_whitelist.
+        # Invalid digest/private fields and nonneutral rows must still fail.
+        g0, _ = load_g0()
+        with tempfile.TemporaryDirectory(prefix="TEST-observer-digest-") as root:
+            lab = Path(root).resolve()
+            path = lab / "events.jsonl"
+            for event in OWN:
+                row = dict(event=event, valid=True, neutral=True, case="plain",
+                    session_sha256="a" * 64, timestamp_sha256="b" * 64, payload_sha256="c" * 64,
+                    shell="bash", shell_version="5.2.37")
+                row.update({"stop_hook_active": False} if event == "AfterAgent" else {"subtype": "ToolPermission"})
+                path.write_text(json.dumps(row) + "\n")
+                self.assertEqual(native_rows(g0, lab), [row])
+                for digest in (None, True, 64, "", "c" * 63, "C" * 64, "PRIVATE-payload"):
+                    with self.subTest(event=event, digest=digest):
+                        path.write_text(json.dumps(dict(row, payload_sha256=digest)) + "\n")
+                        with self.assertRaisesRegex(Red, "^observer_payload_hash_contract$"):
+                            native_rows(g0, lab)
+                for changed in (dict(row, prompt="PRIVATE-prompt"), dict(row, neutral=False), dict(row, valid=False)):
+                    path.write_text(json.dumps(changed) + "\n")
+                    with self.assertRaises((Red, g0.Red)):
+                        native_rows(g0, lab)
+
     def test_owned_input_refuses_provider_cleanup_failure(self):
         # RED if consent revocation alone admits analysis despite provider
         # teardown failure; any retained provider classification refuses it.
