@@ -5,6 +5,20 @@ from pathlib import Path
 import sys
 
 REQUIRED = {
+    'TestBootstrapConfirmationDefaults',
+    'TestBootstrapConfirmationDefaults/rich_Enter_installs',
+    'TestBootstrapConfirmationDefaults/rich_Right_then_Enter_cancels',
+    'TestBootstrapConfirmationDefaults/plain_Enter_installs',
+    'TestBootstrapConfirmationDefaults/plain_No_cancels',
+    'TestBootstrapPublicConfirmationDefaults',
+    'TestBootstrapPublicConfirmationDefaults/rich_Enter_installs',
+    'TestBootstrapPublicConfirmationDefaults/rich_Right_then_Enter_cancels',
+    'TestBootstrapPublicConfirmationDefaults/plain_Enter_installs',
+    'TestBootstrapPublicConfirmationDefaults/plain_No_cancels',
+    'TestBootstrapPublicDesktopDefaults',
+    'TestBootstrapPublicDesktopDefaults/rich',
+    'TestBootstrapPublicDesktopDefaults/plain',
+    'TestBootstrapNativeExistingRuntime',
     "TestSetupProductsScopedPresence",
     "TestBootstrapSelectorPTY",
     "TestBootstrapSelectionDoesNotApproveConsent",
