@@ -63,8 +63,8 @@ jobs:
           python3 -B -S - <<'PY_VERIFY'
           import base64, hashlib, lzma, struct, zlib, os, pathlib, tempfile, subprocess, select, time, re, json
           FIXTURE_PATH = '.github/fixtures/cursor-installed-e/native-case.b85'
-          FIXTURE_BYTES = 65749
-          FIXTURE_SHA256 = '04becf0a1f39c44bb1785d32fdc8fcb18017f2a6afb2cbb985b87b2a1bdb8bb5'
+          FIXTURE_BYTES = 65914
+          FIXTURE_SHA256 = '890c30c974ace4c8b41b00d875c0c46a674f5215e42ef5f13cf43810ae373724'
 
           def bounded_git(arguments, limit):
               process = subprocess.Popen(['git','--literal-pathspecs',*arguments],stdout=subprocess.PIPE,stderr=subprocess.DEVNULL)
@@ -117,7 +117,7 @@ jobs:
           MAX_FRAME = 1 << 20
           MAX_XZ = 1 << 17
           MAX_ENCODED = 65535
-          MAX_REPOSITORY_ENCODED = 65749
+          MAX_REPOSITORY_ENCODED = 65914
           MAX_RECORDS = 1024
 
           def decode_frame(frame):
@@ -165,7 +165,7 @@ jobs:
               assert len(source) == pins['sourceBytes'] and hashlib.sha256(source).hexdigest() == pins['sourceSHA256'], 'exact source length/hash'
               return source
 
-          pins = {'encodedBytes': 65749, 'frameBytes': 211117, 'xzBytes': 52576, 'transportBytes': 52599, 'transportSHA256': '708c3649045eebce7f2cb815cedf2fb3045aafb305ff14884bc4e8515d3eeee8', 'sourceBytes': 219388, 'sourceSHA256': '12df814b18960a9087228781b94e1b9e5fb169715cd1cd84aaaeec90259a3deb'}
+          pins = {'encodedBytes': 65914, 'frameBytes': 211738, 'xzBytes': 52708, 'transportBytes': 52731, 'transportSHA256': '9d5b0e2d158d15301afc16c99f62634da62afae1de2d454fa1b94b752e10d36e', 'sourceBytes': 220009, 'sourceSHA256': '8ad60297ab7dd21899350cda073c25c4689df5af9c60ad54a508295e6b41975b'}
           encoded, encoded_bound, origin = load_carrier(os.environ['CURSOR_CARRIER_B64'],os.environ['CURSOR_REPOSITORY_MODE'] == 'true',os.environ['CURSOR_FIXTURE_SHA'])
           candidate = decode(encoded,pins,encoded_bound)
           print(json.dumps({'carrierTransport':origin,'sourceSHA256':pins['sourceSHA256'],'transportSHA256':pins['transportSHA256']},sort_keys=True),flush=True)
@@ -201,7 +201,7 @@ jobs:
           import sys
           import time
 
-          SOURCE_SHA = '12df814b18960a9087228781b94e1b9e5fb169715cd1cd84aaaeec90259a3deb'
+          SOURCE_SHA = '8ad60297ab7dd21899350cda073c25c4689df5af9c60ad54a508295e6b41975b'
           LIMIT = 1 << 20
           DEADLINE = time.monotonic() + 30
 
@@ -532,8 +532,8 @@ jobs:
           python3 -B -S - <<'PY_VERIFY'
           import base64, hashlib, lzma, struct, zlib, os, pathlib, tempfile, subprocess, json, re, select, time
           FIXTURE_PATH = '.github/fixtures/cursor-installed-e/native-case.b85'
-          FIXTURE_BYTES = 65749
-          FIXTURE_SHA256 = '04becf0a1f39c44bb1785d32fdc8fcb18017f2a6afb2cbb985b87b2a1bdb8bb5'
+          FIXTURE_BYTES = 65914
+          FIXTURE_SHA256 = '890c30c974ace4c8b41b00d875c0c46a674f5215e42ef5f13cf43810ae373724'
 
           def bounded_git(arguments, limit):
               process = subprocess.Popen(['git','--literal-pathspecs',*arguments],stdout=subprocess.PIPE,stderr=subprocess.DEVNULL)
@@ -586,7 +586,7 @@ jobs:
           MAX_FRAME = 1 << 20
           MAX_XZ = 1 << 17
           MAX_ENCODED = 65535
-          MAX_REPOSITORY_ENCODED = 65749
+          MAX_REPOSITORY_ENCODED = 65914
           MAX_RECORDS = 1024
 
           def decode_frame(frame):
@@ -634,7 +634,7 @@ jobs:
               assert len(source) == pins['sourceBytes'] and hashlib.sha256(source).hexdigest() == pins['sourceSHA256'], 'exact source length/hash'
               return source
 
-          pins = {'encodedBytes': 65749, 'frameBytes': 211117, 'xzBytes': 52576, 'transportBytes': 52599, 'transportSHA256': '708c3649045eebce7f2cb815cedf2fb3045aafb305ff14884bc4e8515d3eeee8', 'sourceBytes': 219388, 'sourceSHA256': '12df814b18960a9087228781b94e1b9e5fb169715cd1cd84aaaeec90259a3deb'}
+          pins = {'encodedBytes': 65914, 'frameBytes': 211738, 'xzBytes': 52708, 'transportBytes': 52731, 'transportSHA256': '9d5b0e2d158d15301afc16c99f62634da62afae1de2d454fa1b94b752e10d36e', 'sourceBytes': 220009, 'sourceSHA256': '8ad60297ab7dd21899350cda073c25c4689df5af9c60ad54a508295e6b41975b'}
           encoded, encoded_bound, origin = load_carrier(os.environ['CURSOR_CARRIER_B64'],os.environ['CURSOR_REPOSITORY_MODE'] == 'true',os.environ['CURSOR_FIXTURE_SHA'])
           candidate = decode(encoded,pins,encoded_bound)
           print(json.dumps({'carrierTransport':origin,'sourceSHA256':pins['sourceSHA256'],'transportSHA256':pins['transportSHA256']},sort_keys=True),flush=True)
@@ -1215,7 +1215,7 @@ jobs:
               parser.add_argument('--gid', type=int)
               raise SystemExit(main(parser.parse_args()))
           PY_EVIDENCE
-          sudo /usr/bin/python3 -B -S "$export_dir/case_evidence.py" --runner-temp "$CURSOR_CASE_PARENT" --source-sha 12df814b18960a9087228781b94e1b9e5fb169715cd1cd84aaaeec90259a3deb --destination "$export_dir" --uid "$(id -u)" --gid "$(id -g)"
+          sudo /usr/bin/python3 -B -S "$export_dir/case_evidence.py" --runner-temp "$CURSOR_CASE_PARENT" --source-sha 8ad60297ab7dd21899350cda073c25c4689df5af9c60ad54a508295e6b41975b --destination "$export_dir" --uid "$(id -u)" --gid "$(id -g)"
       - name: Always retain SAME-case TEST evidence and bounded preparation records
         if: always()
         timeout-minutes: 3
