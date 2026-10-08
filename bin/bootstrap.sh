@@ -1402,7 +1402,7 @@ complete_configure_route() {
         if { [ "${LEGACY_PRODUCT:-$PRODUCT}" = codex ] || [ "${LEGACY_PRODUCT:-$PRODUCT}" = both ]; } && [ "$(uname -s)" = Darwin ]; then
             if app=$(bootstrap_default_codex_app); then
                 CONFIGURE_ARGS+=(--app "$app" --team-id 2DC432GLL2)
-                echo "Verified Codex Desktop default: $app. Existing navigation policy is preserved." >&2
+                echo "Codex Desktop found and verified: $app. Your current click-navigation preferences will be kept." >&2
             else
                 CONFIGURE_ARGS+=(--navigation none)
                 echo "No registered, verified official Codex Desktop app found; defaulting to navigation none. Existing navigation policy is preserved." >&2

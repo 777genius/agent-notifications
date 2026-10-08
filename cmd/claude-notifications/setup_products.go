@@ -13,6 +13,10 @@ import (
 	"github.com/777genius/plugin-kit-ai/cli/installerui"
 )
 
+// Existing ownership may include several release binaries. Confirmation and
+// preflight fingerprint that state repeatedly; CLI discovery has a smaller budget.
+const bootstrapInspectionTimeout = 30 * time.Second
+
 // setup-products continues PR283's stdout-clean command. Line injection is the
 // legacy test/embedding seam. Actual file handles always require the shared
 // terminal constructor; a pipe is never treated as an interactive answer.
@@ -57,7 +61,7 @@ func runSetupProductsContext(ctx context.Context, args []string, input io.Reader
 		if a.Operation == "intent-args" {
 			err = writeIntentScalars(output, intent)
 		} else {
-			checkpoint, cancel := context.WithTimeout(ctx, 2*time.Second)
+			checkpoint, cancel := context.WithTimeout(ctx, bootstrapInspectionTimeout)
 			defer cancel()
 			err = preflightBootstrapIntent(checkpoint, intent, a)
 		}
@@ -135,7 +139,7 @@ func runSetupProductsContext(ctx context.Context, args []string, input io.Reader
 		if err != nil {
 			return fail(2, err)
 		}
-		observe, cancel := context.WithTimeout(ctx, 2*time.Second)
+		observe, cancel := context.WithTimeout(ctx, bootstrapInspectionTimeout)
 		intent, rows, err := buildConfirmedBootstrapIntent(observe, a, env, provenance)
 		cancel()
 		if err != nil {
@@ -145,7 +149,11 @@ func runSetupProductsContext(ctx context.Context, args []string, input io.Reader
 		if err != nil {
 			return fail(1, err)
 		}
-		req := installerui.ConfirmRequest{Title: "Apply this plan?", Summary: rows, Default: false}
+		req := installerui.ConfirmRequest{Title: setupProductsConfirmationTitle, Summary: rows, Default: true}
+		req.Summary, err = setupProductsConfirmationRows(rows, terminal != nil && terminal.Mode() == installerui.ModeRich)
+		if err != nil {
+			return fail(1, err)
+		}
 		var answer installerui.Confirmation
 		if terminal != nil {
 			answer, err = terminal.Confirm(ctx, req)
@@ -156,6 +164,9 @@ func runSetupProductsContext(ctx context.Context, args []string, input io.Reader
 			return fail(1, err)
 		}
 		if answer.Cancelled || !answer.Accepted {
+			if err := writeSelectorResult(ctx, prompts, "Installation cancelled. No changes were applied.\n"); err != nil {
+				return fail(1, err)
+			}
 			return 0
 		}
 		if err := ctx.Err(); err != nil {
@@ -180,9 +191,15 @@ func runSetupProductsContext(ctx context.Context, args []string, input io.Reader
 	}
 	title := "Install notifications for"
 	if a.Operation == "channels" {
-		title = "Notification channels for " + strings.Join(a.Products, ",")
-		options = []installerui.Option{{ID: "desktop", Label: "Desktop notifications"}, {ID: "webhook", Label: "Webhook notifications"}}
-		defaults = nil
+		products := []string{}
+		for _, id := range a.Products {
+			if id == "opencode" || id == "gemini" || id == "cursor" {
+				products = append(products, productLabels[id])
+			}
+		}
+		title = "Notification channels for " + strings.Join(products, ", ")
+		options = []installerui.Option{{ID: "desktop", Label: "Desktop notifications (recommended)"}, {ID: "webhook", Label: "Webhook notifications (optional; requires a configured destination)"}}
+		defaults = []string{"desktop"}
 	}
 	request := installerui.SelectRequest{Title: title, Options: options, Defaults: defaults}
 	var selection installerui.Selection
@@ -195,6 +212,9 @@ func runSetupProductsContext(ctx context.Context, args []string, input io.Reader
 		return fail(1, err)
 	}
 	if selection.Cancelled || !selection.Accepted || len(selection.IDs) == 0 {
+		if err := writeSelectorResult(ctx, prompts, "Installation cancelled. No changes were applied.\n"); err != nil {
+			return fail(1, err)
+		}
 		return 0
 	}
 	if err := writeSelectorResult(ctx, output, strings.Join(selection.IDs, ",")+"\n"); err != nil {

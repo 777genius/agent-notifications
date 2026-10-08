@@ -473,8 +473,42 @@ func (f *bootstrapFixture) noAcquisition() {
 	}
 }
 
+// A fresh Enter on default Yes installs. Choosing No visibly cancels without
+// effects in either renderer; the fixture owns every profile and agent.
+func TestBootstrapConfirmationDefaults(t *testing.T) {
+	for _, tc := range []struct {
+		name, mode, answer string
+		install            bool
+	}{{"rich Enter installs", "rich", "\r", true}, {"rich Right then Enter cancels", "rich", "\x1b[C\r", false},
+		{"plain Enter installs", "plain", "\n", true}, {"plain No cancels", "plain", "n\n", false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newBootstrapFixture(t)
+			before := f.snapshot()
+			// Explicitly choose Webhook only so this keyboard test never asks for
+			// desktop permissions or launches a notification helper.
+			channels := promptStep{"Notification channels", " \x1b[B \r", nil}
+			if tc.mode == "plain" {
+				channels = promptStep{"comma-separated", "webhook\n", nil}
+			}
+			r := f.terminal([]string{"--product", "opencode", "--ui=" + tc.mode},
+				channels,
+				promptStep{setupProductsConfirmationTitle, tc.answer, nil})
+			requireBootstrapSuccess(t, r)
+			if tc.install {
+				f.assertConsumer("opencode-notifications", true)
+			} else {
+				f.unchanged(before)
+				if !strings.Contains(r.screen, "Installation cancelled. No changes were applied.") {
+					t.Fatalf("Enter cancelled silently: %s", r.screen)
+				}
+			}
+		})
+	}
+}
+
 // Regression: an Enter/y queued behind selecting a product granted Yes at the
-// next process's consent question. The fresh default-No must still be needed.
+// next process's consent question. A fresh confirmation must still be needed
+// even when its default is Yes.
 func TestBootstrapSelectionDoesNotApproveConsent(t *testing.T) {
 	for _, queued := range []string{"\n", "y\n"} {
 		t.Run(fmt.Sprintf("queued %q", queued), func(t *testing.T) {
@@ -877,7 +911,7 @@ func TestBootstrapNormalizedRouteConsent(t *testing.T) {
 			t.Fatalf("supported normalized route refused: %+v", r)
 		}
 		f.unchanged(before)
-		if !strings.Contains(r.screen, "allow-unknown-caller=false allow-caller-asserted=false") {
+		if !strings.Contains(r.screen, "Allow unrecognized callers: off") || !strings.Contains(r.screen, "Allow caller-asserted identity: off") {
 			t.Fatalf("caller decision missing from visible consent: %s", r.screen)
 		}
 	})
