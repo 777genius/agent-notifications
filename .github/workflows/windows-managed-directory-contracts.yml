@@ -26,7 +26,8 @@ jobs:
         shell: pwsh
         env:
           SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-          CGO_ENABLED: '0'
+          CGO_ENABLED: '1'
+          CC: 'C:\mingw64\bin\gcc.exe'
         run: |
           $ErrorActionPreference = 'Stop'
           $root = Join-Path $env:RUNNER_TEMP "TEST-managed-directory-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
@@ -171,6 +172,31 @@ jobs:
             $go = (Get-Command go).Source
             $evidence.goVersion = & $go version
             if ($LASTEXITCODE -ne 0) { throw 'Go version observation failed' }
+            # Use the image's existing MinGW, as normal Windows CI/release does.
+            # No downloads, compiler fallback, or ARM64/emulated qualification.
+            $evidence.runnerArchitecture = $env:RUNNER_ARCH
+            $evidence.osArchitecture = [Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
+            $evidence.processArchitecture = [Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture.ToString()
+            if ($env:RUNNER_ARCH -cne 'X64' -or $evidence.osArchitecture -cne 'X64' -or $evidence.processArchitecture -cne 'X64') {
+              throw 'native x64 Windows filesystem runner required'
+            }
+            $fact = Invoke-Owned 'go-build-environment' $go @('env', '-json', 'GOOS', 'GOARCH', 'GOHOSTOS', 'GOHOSTARCH', 'CGO_ENABLED', 'CC') $env:GITHUB_WORKSPACE 10
+            Require-Collected $fact 0
+            $buildEnv = [IO.File]::ReadAllText("$root/go-build-environment.stdout.txt") | ConvertFrom-Json
+            $evidence.goBuildEnvironment = $buildEnv
+            if ($buildEnv.GOOS -cne 'windows' -or $buildEnv.GOHOSTOS -cne 'windows' -or $buildEnv.GOARCH -cne 'amd64' -or
+                $buildEnv.GOHOSTARCH -cne 'amd64' -or $buildEnv.CGO_ENABLED -cne '1' -or $buildEnv.CC -cne $env:CC) {
+              throw 'Go native x64 CGO environment mismatch'
+            }
+            $evidence.compilerSHA256 = (Get-FileHash -LiteralPath $env:CC -Algorithm SHA256).Hash.ToLowerInvariant()
+            $fact = Invoke-Owned 'c-compiler-target' $env:CC @('-dumpmachine') $env:GITHUB_WORKSPACE 10
+            Require-Collected $fact 0
+            $evidence.compilerTarget = [IO.File]::ReadAllText("$root/c-compiler-target.stdout.txt").Trim()
+            if ($evidence.compilerTarget -cne 'x86_64-w64-mingw32') { throw 'MinGW x64 Windows compiler target required' }
+            $fact = Invoke-Owned 'c-compiler-version' $env:CC @('-dumpfullversion') $env:GITHUB_WORKSPACE 10
+            Require-Collected $fact 0
+            $evidence.compilerVersion = [IO.File]::ReadAllText("$root/c-compiler-version.stdout.txt").Trim()
+            if ($evidence.compilerVersion -notmatch '^[0-9]+\.[0-9]+(\.[0-9]+)?$') { throw 'compiler version observation invalid' }
             foreach ($case in @(@{name='old'; directory=$baseline}, @{name='new'; directory=$env:GITHUB_WORKSPACE})) {
               $exe = Join-Path $root "$($case.name)-installruntime.test.exe"
               # Build and execution are distinct: a compiler failure cannot count as RED.
