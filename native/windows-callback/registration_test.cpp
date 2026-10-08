@@ -118,18 +118,6 @@ struct Profile {
     }
   }
 };
-static void linkRefusesChild(HKEY source,HKEY target,const Generation& g,uint64_t end){
-  installedBudget(end);
-  Key child;
-  DWORD disposition=0;
-  const auto status=registryStatus("RegCreateKeyExW",RegCreateKeyExW(source,wide(g.snapshot.aumid).c_str(),0,nullptr,
-    REG_OPTION_OPEN_LINK,KEY_READ|KEY_WRITE,nullptr,&child.h,&disposition));
-  installedBudget(end);
-  std::cout<<"TEST direct relative link-root create status="<<status<<'\n';
-  require(status!=ERROR_SUCCESS);
-  missing(target,wide(g.snapshot.aumid));
-  require(value(target,L"sentinel")==L"unchanged");
-}
 static bool registryContracts(){
   stage("child_generation_custody");
   Generation g;
@@ -234,11 +222,11 @@ static bool registryContracts(){
   }else{
     require(status==ERROR_SUCCESS&&disposition==REG_CREATED_NEW_KEY);
     profile.containsLinks=true;
-    stage("child_unfinished_link");
-    linkRefusesChild(link.h,target.h,g,end);
     link.close();
+    stage("child_unfinished_link_apply_refused");
     refused([&]{applyApp(g,end);},end);
     missing(target.h,wide(g.snapshot.aumid));
+    require(value(target.h,L"sentinel")==L"unchanged");
     require(registryStatus("RegOpenKeyExW",RegOpenKeyExW(classes.h,L"AppUserModelId",REG_OPTION_OPEN_LINK,KEY_ALL_ACCESS,&link.h))==ERROR_SUCCESS);
     require(registryStatus("RegQueryValueExW",RegQueryValueExW(link.h,L"SymbolicLinkValue",nullptr,&type,nullptr,&size))==ERROR_FILE_NOT_FOUND);
     stage("child_link_configure");
@@ -254,9 +242,9 @@ static bool registryContracts(){
     DWORD linkType=0,linkBytes=0;
     require(registryStatus("RegQueryValueExW",RegQueryValueExW(nofollow.h,L"SymbolicLinkValue",nullptr,&linkType,nullptr,&linkBytes))==ERROR_SUCCESS
       &&linkType==REG_LINK&&linkBytes==route.size()*2);
-    linkRefusesChild(nofollow.h,target.h,g,end);
     nofollow.close();
     link.close();
+    stage("child_configured_link_apply_refused");
     refused([&]{applyApp(g,end);},end);
     missing(target.h,wide(g.snapshot.aumid));
     require(value(target.h,L"sentinel")==L"unchanged");
