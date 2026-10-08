@@ -1,0 +1,118 @@
+{
+  "schemaVersion": 1,
+  "scope": "offline_TEST_shipping_binary_callback_handoff_and_activation",
+  "executedSource": {
+    "binaryCommit": "9b2e5ca9bb21d61bf1f345905c1abcf2c27b0187",
+    "harnessBaseCommit": "df677a96ee13052a2788307b132ff5b757854076",
+    "testOverlaySHA256": {
+      "scripts/navigation-linux-handoff-guest-probe.py": "2420433672e5576102c6b4ff7e13e32b31e5f30c2fa9e8a754cb2a49f283995c",
+      "tests/integration/navigation_linux_client_handoff_guest_test.py": "9f8e5bd0637a155890239711ec6595ff90e3083b80cfada4b436b7e56fbbd622",
+      "tests/integration/navigation_linux_client_callback_test.py": "d96b75cdfd38ca41cff49f9f9d684f15cb5b13f9f5b9ece597b99083b09fb1b1",
+      "tests/integration/navigation_linux_guest_pointer_entry_test.py": "cd1abb49e4534209b8de48dd757f281782e671b87528028d9a2835f31502f515"
+    },
+    "sourceCapsuleSHA256": "d39fc45e9200f9cd458f9b5303e86a8de0b0e4e9f5a49ef4f8f5c739be3d6668",
+    "coreSourceFreezeSHA256": "3683c72b02d0d0e3ebaa1cb9aeed5ce5e43a9bb9ad1aaf3403933731e10f3a7a",
+    "assemblyPlanSHA256": "45889a02aa57a43d91787cd2a4e3a4cd3a182093c1b173751854998352c8520f",
+    "finalLaunchSourceSHA256": "2bb99dce8a6cc28fb2c279fb58908a3a190bd6dd6fde79384b6de16c3bf96191",
+    "launchFinalBindingSHA256": "8b7b6ee5baed858e555a7ace9935832eee7c5c08c588a7746500bb264844343e",
+    "shippingBinarySHA256": "096154c9f305ebff9b96e6f1bded2e569bd3e119c48c1d69a26cfd0422ef08f5",
+    "vendorCatalogSHA256": "0d90a150c5066973b5884e2086b632737536bcbf362404ed81bb284d3b37f326"
+  },
+  "publicationCommitExecuted": false,
+  "cells": {
+    "restart_b": {
+      "rawStdoutSHA256": "14921649c50f99b2874824568aadb3e1c2e65ec52471f98e24df5c000893d878",
+      "nativeExitCode": 0,
+      "passed": true,
+      "notificationAttempted": true,
+      "clickAttempted": true,
+      "handoffQualified": true,
+      "activationQualified": true,
+      "tokenForwardingQualified": true,
+      "focusQualified": true,
+      "navigationQualified": false,
+      "humanRenderQualified": false,
+      "retryAllowed": false,
+      "cleanup": {
+        "containerRemoved": true,
+        "containerExitObserved": true,
+        "qemuCollected": true,
+        "qemuExitCode": 0,
+        "guestPoweroffObserved": true,
+        "cgroupEmptyObserved": true,
+        "trackedKernelExitCount": 28,
+        "allTrackedKernelExitsObserved": true,
+        "outerInputsUnchanged": 24,
+        "innerInputsUnchanged": 22,
+        "sourceAndInputIntegrityPassed": true,
+        "cleanupKnown": true
+      },
+      "coldGoReaderObserved": true,
+      "exactURIObserved": true,
+      "tokenEqualityObserved": true,
+      "clientActivationRequestObserved": true,
+      "serverFocusObserved": true,
+      "serverSurfaceFocusJoinObserved": true,
+      "effectObservation": "handoff_activation_and_focus_observed"
+    },
+    "retained_a": {
+      "rawStdoutSHA256": "95ae6dfa67745eff769840e7a604175d31f6e4e165fa2355ea509f00eecd9091",
+      "nativeExitCode": 1,
+      "passed": false,
+      "notificationAttempted": true,
+      "clickAttempted": true,
+      "handoffQualified": false,
+      "activationQualified": false,
+      "tokenForwardingQualified": false,
+      "focusQualified": false,
+      "navigationQualified": false,
+      "humanRenderQualified": false,
+      "retryAllowed": false,
+      "cleanup": {
+        "containerRemoved": true,
+        "containerExitObserved": true,
+        "qemuCollected": true,
+        "qemuExitCode": 0,
+        "guestPoweroffObserved": true,
+        "cgroupEmptyObserved": true,
+        "trackedKernelExitCount": 24,
+        "allTrackedKernelExitsObserved": true,
+        "outerInputsUnchanged": 24,
+        "innerInputsUnchanged": 22,
+        "sourceAndInputIntegrityPassed": true,
+        "cleanupKnown": true
+      },
+      "failure": "expired_observation_cannot_admit_effect",
+      "expiredPhase": "postpredicate_wait_shipping_started_12s",
+      "coldGoReaderObservationRecorded": false,
+      "exactURIObservationRecorded": false,
+      "effectObservation": "unknown_after_click",
+      "automaticReplayAllowed": false
+    }
+  },
+  "preservedNegativeEvidence": {
+    "componentCold3": {
+      "outcome": "deadline_exceeded",
+      "approximatelySeconds": 3.002,
+      "coldAvailabilityQualified": false
+    },
+    "earlierNativeRawStdoutSHA256": {
+      "restart_b": "badf42404c215e5ab263558349e196b023b760fe9c9ab333d62a784060200d21",
+      "retained_a": "6b129f43f77d3b6dc19c16ac7a1a8f7baebb03729e57a7b1afe18ffc6783435d"
+    },
+    "earlierFailuresReclassifiedAsPass": false
+  },
+  "independentActualResourceAudit": {
+    "sha256": "3a4a84703167b759e97f4ae549d2c199fa135a35ef813a5b90b81a96845ede8e",
+    "overallOriginalAcceptanceComplete": false,
+    "reviewPerformedNativeEffects": false
+  },
+  "limitations": [
+    "The observations bind the executed binary, harness base and exact TEST overlays, not a future publication commit.",
+    "Restart PASS qualifies observed handoff, token forwarding, activation and focus; navigation UI and full client sandbox remain unqualified.",
+    "Retained FAIL records a click followed by admission expiry. Missing URI and cold-Go observations do not prove absence of callback or vendor effect; no replay is admitted.",
+    "Individual remote command streams, original CPUinfo bytes, executable-digest measurements and complete original guest trace/serial bytes were not separately transferred locally. Embedded digests do not constitute recomputation of original bytes.",
+    "The complete pointer trace and guest clock-tick raw field were not separately retained locally; final one-click checks and cold-birth ordering are admitted by accepted measured source.",
+    "Full private reports remain retained outside the repository. No payloads, tokens, environment values, host identities or thread identifiers are published."
+  ]
+}

@@ -1146,6 +1146,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-navigation-linux-sender-manifest.py
           python3 -c "from pathlib import Path; [compile(p.read_text(), str(p), 'exec') for p in (Path('scripts/navigation-linux-handoff-host-controller.py'), Path('tests/integration/navigation_linux_handoff_bootstrap_test.py'))]"
           python3 -c "from pathlib import Path; [compile(p.read_text(), str(p), 'exec') for p in (Path('tests/integration/navigation_linux_client_sender_test.py'), Path('tests/integration/navigation_linux_guest_pointer_entry_test.py'), Path('tests/integration/navigation_linux_client_handoff_guest_test.py'))]"
+          PYTHONDONTWRITEBYTECODE=1 python3 -c "import runpy; runpy.run_path('tests/integration/navigation_linux_client_handoff_guest_test.py', run_name='pure_contract')['test_post_cleanup_completion_contract'](); runpy.run_path('tests/integration/navigation_linux_handoff_bootstrap_test.py', run_name='pure_contract')['test_shipping_inputs_contract']()"
 
       - name: Download dependencies
         run: go mod download
@@ -1250,7 +1251,7 @@ jobs:
           fail_ci_if_error: false
 
       - name: Build binary
-        run: go build -o bin/claude-notifications ./cmd/claude-notifications
+        run: go build -ldflags="-s -w" -trimpath -o bin/claude-notifications ./cmd/claude-notifications
 
       - name: Test binary execution (help)
         run: ./bin/claude-notifications help

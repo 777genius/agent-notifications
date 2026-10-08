@@ -51,8 +51,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Keep Linux recovery coverage even for cheap intermediate prose heads.
-        os: ${{ fromJSON(needs.scope.outputs.mode == 'docs' && '["ubuntu-latest"]' || '["ubuntu-latest","macos-15"]') }}
+        # Keep Linux recovery coverage for cheap intermediate prose/Windows heads.
+        os: ${{ fromJSON((needs.scope.outputs.mode == 'docs' || needs.scope.outputs.mode == 'windows-only') && '["ubuntu-latest"]' || '["ubuntu-latest","macos-15"]') }}
     steps:
       - uses: actions/checkout@v7
         with:

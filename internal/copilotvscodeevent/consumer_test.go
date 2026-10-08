@@ -288,7 +288,7 @@ func TestLocalEligibilityAtEffectBoundary(t *testing.T) {
 	}
 }
 
-// Red: HTTP uses a fresh four-second lease or survives continuous-clock expiry.
+// Red: an entered HTTP request survives continuous-clock expiry.
 func TestLocalStalledHTTPCanceledByRemainingBudget(t *testing.T) {
 	entered := make(chan struct{})
 	finished := make(chan struct{})
@@ -309,14 +309,18 @@ func TestLocalStalledHTTPCanceledByRemainingBudget(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer cancel()
-	clock.seconds.Store(3)
 	done := make(chan local.Receipt, 1)
 	go func() { done <- c.Consume(ctx, facts(t, frame), d) }()
+	// Readiness uses the original admission budget, not a one-second lease
+	// shared with cache IO and scheduling. Only observed HTTP tests expiry.
 	select {
 	case <-entered:
-	case <-time.After(time.Second):
-		t.Fatal("HTTP not entered")
+	case r := <-done:
+		t.Fatalf("HTTP not entered: consumer completed early: %+v", r)
+	case <-time.After(observation.TotalBudget):
+		t.Fatal("HTTP not entered within admission budget")
 	}
+	clock.seconds.Store(3)
 	start := time.Now()
 	clock.seconds.Store(4)
 	select {
