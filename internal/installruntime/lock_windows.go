@@ -204,7 +204,7 @@ func inspectPrivateWindowsHandle(h windows.Handle) (bool, error) {
 		}
 		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
 		if !sid.Equals(user.User.Sid) && !sid.IsWellKnown(windows.WinLocalSystemSid) && !sid.IsWellKnown(windows.WinBuiltinAdministratorsSid) && !windowsacl.AllowsForeignReadOnly(ace.Mask) {
-			kind, flags, mask := ace.Header.AceType, ace.Header.AceFlags, ace.Mask
+			kind, flags, mask := ace.Header.AceType, ace.Header.AceFlags, uint32(ace.Mask)
 			return false, &admissionObservation{Classification: "foreign_mutation_ace", ACEType: &kind, ACEFlags: &flags, AccessMask: &mask,
 				Err: fmt.Errorf("managed inode DACL grants foreign access (ace_type=%d ace_flags=%d access_mask=0x%08x)", kind, flags, mask)}
 		}
