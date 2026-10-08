@@ -106,9 +106,12 @@ jobs:
       TEST_INSTALLED_PHASE: ${{ inputs.phase }}
       TEST_EXPECTED_ARCHIVE_SHA: ${{ inputs.expectedArchiveSHA }}
       TEST_EXPECTED_FULL_NAME: ${{ inputs.expectedFullName }}
-      TEST_INSTALLED_ARTIFACT: ${{ runner.temp }}/TEST-installed-input
-      TEST_INSTALLED_OBSERVER: ${{ runner.temp }}/TEST-installed-observer/TEST-installed-observer.exe
     steps:
+      - name: Bind fixed TEST scratch paths from the actual runner environment
+        shell: pwsh
+        run: |
+          "TEST_INSTALLED_ARTIFACT=$(Join-Path $env:RUNNER_TEMP 'TEST-installed-input')" >> $env:GITHUB_ENV
+          "TEST_INSTALLED_OBSERVER=$(Join-Path $env:RUNNER_TEMP 'TEST-installed-observer\TEST-installed-observer.exe')" >> $env:GITHUB_ENV
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.sha }}
