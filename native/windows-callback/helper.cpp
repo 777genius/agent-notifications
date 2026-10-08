@@ -1,6 +1,7 @@
 // Retained classic unpackaged callback and fixed explicit installed operator.
 #define NOMINMAX
 #include <windows.h>
+#include <shellapi.h>
 #include <notificationactivationcallback.h>
 #include <wrl.h>
 #include <wtsapi32.h>

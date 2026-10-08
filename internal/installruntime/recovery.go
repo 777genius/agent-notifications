@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/777genius/agent-notifications/internal/strictjson"
+	"github.com/777genius/agent-notifications/internal/windowscallback"
 )
 
 // A checksum detects valid-JSON corruption of the recovery record. It is not

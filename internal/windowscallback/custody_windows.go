@@ -19,6 +19,9 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+// FILE_ALL_ACCESS from the Windows SDK; x/sys does not export this mask.
+const fileAllAccess uint32 = windows.STANDARD_RIGHTS_REQUIRED | windows.SYNCHRONIZE | 0x1ff
+
 type Custody struct {
 	mutex      sync.Mutex
 	active     int // admitted native operators and record filesystem work
@@ -108,7 +111,7 @@ func ownedHandle(h windows.Handle, sid string) error {
 	seen := map[string]bool{}
 	for i := uint32(0); i < 2; i++ {
 		var ace *windows.ACCESS_ALLOWED_ACE
-		if windows.GetAce(acl, i, &ace) != nil || ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE || ace.Header.AceFlags != 0 || uint32(ace.Mask) != windows.FILE_ALL_ACCESS {
+		if windows.GetAce(acl, i, &ace) != nil || ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE || ace.Header.AceFlags != 0 || uint32(ace.Mask) != fileAllAccess {
 			return ErrUnavailable
 		}
 		value := (*windows.SID)(unsafe.Pointer(&ace.SidStart)).String()
