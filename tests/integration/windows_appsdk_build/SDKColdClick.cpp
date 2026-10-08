@@ -607,7 +607,7 @@ int wmain(int argc, wchar_t** argv) {
         if (argc == 3 && nonce == argv[2] && !wcscmp(argv[1], L"--TEST-sdk-cold-invoke-own-foreground")) return invoke(true);
         if (argc == 3 && nonce == argv[2] && !wcscmp(argv[1], L"--TEST-sdk-cold-invoke-global-shortcut")) return invoke(false, true);
         // SDK 2.5.1 registers this exact activation command. It selects the receiver, never admits an effect.
-        if (argc == 2 && !wcscmp(argv[1], L"----AppNotificationActivated:")) return receiver();
+        if ((argc == 2 || (argc == 3 && !wcscmp(argv[2], L"-Embedding"))) && !wcscmp(argv[1], L"----AppNotificationActivated:")) return receiver();
         return 64;
     } catch (...) { return 1; }
 }
