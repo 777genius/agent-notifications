@@ -225,6 +225,59 @@ def delivery_counts(rows):
                         and not row.get("stop_hook_active", False) for row in rows) for status in COPY}
 
 
+def own_hook_snapshot(lab):
+    """Deficit-only Linux TEST reads; claims are attempts, never delivery receipts."""
+    if sys.platform != "linux":
+        return {"classification": "unqualified_platform"}
+    facts = {}
+    for label, relative, limit in (
+        ("attempt_cache", "gemini-observations/observations.json", 48 * 1024),
+        ("ownership", "ownership.json", 65536),
+        ("receipt", "gemini-receipt.json", 16384),
+        ("consent", "agent-notifications.json", 65536)):
+        try:
+            value = read_json(lab / "an-control" / relative, limit)
+            require(type(value) is dict, "diagnostic_shape")
+            if label == "attempt_cache":
+                entries = value.get("entries")
+                require(set(value) == {"boot", "entries"} and isinstance(value["boot"], str)
+                        and HEX.fullmatch(value["boot"]) and type(entries) is list
+                        and len(entries) <= 256, "diagnostic_shape")
+                require(all(type(x) is dict and set(x) == {"key", "until", "bits"}
+                            and isinstance(x["key"], str) and HEX.fullmatch(x["key"])
+                            and type(x["bits"]) is int and 1 <= x["bits"] <= 3
+                            and type(x["until"]) in (int, float) and math.isfinite(x["until"])
+                            and 0 <= x["until"] <= 2 ** 53 for x in entries), "diagnostic_shape")
+                require(len({x["key"] for x in entries}) == len(entries), "diagnostic_shape")
+                selected = {"entry_count": len(entries),
+                            "webhook_claimed_entries": sum(bool(x["bits"] & 2) for x in entries),
+                            "desktop_claimed_entries": sum(bool(x["bits"] & 1) for x in entries)}
+            elif label == "ownership":
+                generation, consumers = value.get("Generation"), value.get("Consumers")
+                require(type(generation) is int and 0 < generation <= 65535
+                        and type(consumers) is dict, "diagnostic_shape")
+                selected = {"generation": generation, "gemini_consumer_present": CONSUMER in consumers}
+            elif label == "receipt":
+                binding = value.get("binding")
+                require(type(value.get("version")) is int and value["version"] == 1
+                        and isinstance(binding, str)
+                        and re.fullmatch(r"[0-9a-f]{32}", binding), "diagnostic_shape")
+                selected = {"binding_sha256": sha(binding.encode())}
+            else:
+                channels = value.get("route", {}).get("geminiNotifications", {})
+                require(type(channels) is dict and set(channels) == {"desktop", "webhook"}
+                        and all(type(x) is bool for x in channels.values()), "diagnostic_shape")
+                selected = {"desktop": channels["desktop"], "webhook": channels["webhook"]}
+            facts[label] = {"classification": "observed", **selected}
+        except FileNotFoundError:
+            facts[label] = {"classification": "missing"}
+        except (Red, ValueError, UnicodeError):
+            facts[label] = {"classification": "invalid"}
+        except Exception:
+            facts[label] = {"classification": "unavailable"}
+    return facts
+
+
 def settle(g0, lab, fixture, terminal, expected, seconds=6, phase="exercise_settle"):
     started = time.monotonic()
     try:
@@ -274,6 +327,8 @@ def settle(g0, lab, fixture, terminal, expected, seconds=6, phase="exercise_sett
             exc.settle_failure = {"phase": phase, "class": kind, "expected": dict(expected),
                                   "actual": actual, "elapsed_seconds": elapsed, "limit_seconds": seconds,
                                   "native_rows": rows, "native_rows_total": total}
+            if kind == "deficit":
+                exc.settle_failure["own_hook_state"] = own_hook_snapshot(lab)
         except Exception:
             pass
         raise
