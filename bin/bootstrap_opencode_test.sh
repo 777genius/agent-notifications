@@ -92,7 +92,7 @@ PY
 # this assertion red. Host PATH shims answer --version only in TEST profiles;
 # neither native agent nor provider is launched.
 python3 -I - "$ROOT" "$SANDBOX" "$TEST_BINARY" "$control" "$installed" "$TEST_NATIVE_ZIP" <<'PYBUNDLE'
-import hashlib, json, os, pathlib, shlex, shutil, subprocess, sys, tarfile
+import hashlib, json, os, pathlib, plistlib, shlex, shutil, subprocess, sys, tarfile
 root, lab, binary, control, installed = map(pathlib.Path, sys.argv[1:6])
 native_zip = pathlib.Path(sys.argv[6]) if sys.argv[6] else None
 if os.name == 'nt':
@@ -329,8 +329,27 @@ if native_zip is not None:
             identity = app.stat()
             assert record['DirectoryID'] == str(identity.st_dev)+':'+str(identity.st_ino), 'native cleanup inode changed'
             assert app.name != 'generation-16777233:1200666067.app', 'retained real generation cleanup refused'
-            subprocess.run(['/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister',
-                            '-u',str(app)],check=True,capture_output=True,text=True,timeout=10)
+            with (app/'Contents/Info.plist').open('rb') as metadata:
+                assert plistlib.load(metadata)['CFBundleIdentifier'] == 'com.777genius.agent-notifications', 'unexpected TEST bundle ID'
+            unregister = subprocess.run(['/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister',
+                                         '-u',str(app)],capture_output=True,text=True,timeout=10)
+            # lsregister can report -10814 for an app never indexed by Spotlight.
+            # Require independent exact-path absence proof, even after exit 0.
+            query = ('ObjC.import("AppKit"); var urls=$.NSWorkspace.sharedWorkspace.'
+                     'URLsForApplicationsWithBundleIdentifier("com.777genius.agent-notifications"); '
+                     'var found=false; for(var i=0;i<Number(urls.count);i++){'
+                     'if(ObjC.unwrap(urls.objectAtIndex(i).path.stringByResolvingSymlinksInPath)==='+json.dumps(str(app.resolve()))+
+                     ') found=true;} JSON.stringify({registered:found});')
+            observed = subprocess.run(['/usr/bin/osascript','-l','JavaScript','-e',query],
+                                      check=True,capture_output=True,text=True,timeout=10)
+            assert json.loads(observed.stdout) == {'registered':False}, 'TEST helper remains registered'
+            failure_lines = unregister.stderr.splitlines()
+            not_found = (unregister.returncode == 1 and not unregister.stdout.strip() and failure_lines
+                         and failure_lines[0] == 'failed to scan '+str(app)+': -10814'
+                         and all(line.strip() == 'from spotlight' for line in failure_lines[1:]))
+            if unregister.returncode != 0 and not not_found:
+                raise RuntimeError('TEST native unregister failed: '+unregister.stdout+unregister.stderr)
+            print('TEST native registration absent after cleanup: '+str(app),flush=True)
             cleaned.add(str(app))
         if status == 0 and records and cleaned:
             cleanup_marker.unlink()
