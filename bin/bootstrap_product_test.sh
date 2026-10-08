@@ -226,6 +226,11 @@ HOST_VERSION
     if diagnostic=$(check_prerequisites 2>&1); then exit 1; fi
     [[ "$diagnostic" == *"detected $(printf '%512s' '' | tr ' ' x)..."* ]]
     [ "${#diagnostic}" -lt 1600 ]
+    # Escaping control bytes must not expand the diagnostic beyond its cap.
+    printf '%512s' '' | tr ' ' '\001' > "$SANDBOX/version-cli/version"
+    if diagnostic=$(check_prerequisites 2>&1); then exit 1; fi
+    [ "${#diagnostic}" -lt 1600 ]
+    [[ "$diagnostic" != *$'\e'* && "$diagnostic" != *$'\r'* && "$diagnostic" != *$'\001'* ]]
     rm "$SANDBOX/version-cli/version"
     if diagnostic=$(check_prerequisites 2>&1); then exit 1; fi
     [[ "$diagnostic" == *"Cannot determine OpenCode version. CLI: $quoted_cli"* ]]

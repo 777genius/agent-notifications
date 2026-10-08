@@ -184,9 +184,11 @@ abort_if_wsl_environment() {
 
 # Keep untrusted CLI output and paths printable and bounded in diagnostics.
 bootstrap_diagnostic_quote() {
-    local value=${1:0:512}
-    LC_ALL=C printf '%q' "$value"
-    if [ "${#1}" -gt 512 ]; then printf '...'; fi
+    local LC_ALL=C
+    local value=${1:0:512} quoted
+    printf -v quoted '%q' "$value"
+    printf '%s' "${quoted:0:512}"
+    if [ "${#1}" -gt 512 ] || [ "${#quoted}" -gt 512 ]; then printf '...'; fi
 }
 
 check_prerequisites() {
