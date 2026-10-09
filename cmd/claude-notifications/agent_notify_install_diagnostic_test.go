@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -18,7 +19,7 @@ import (
 func installDiagnosticIsolation(t *testing.T) string {
 	t.Helper()
 	root := setupCommandRoot(t)
-	for _, key := range []string{"HOME", "USERPROFILE", "CODEX_HOME", "CLAUDE_HOME", "CLAUDE_CONFIG_DIR", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_RUNTIME_DIR", "APPDATA", "LOCALAPPDATA", "TMPDIR"} {
+	for _, key := range []string{"HOME", "USERPROFILE", "CODEX_HOME", "CLAUDE_HOME", "CLAUDE_CONFIG_DIR", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_RUNTIME_DIR", "APPDATA", "LOCALAPPDATA", "TMPDIR", "TMP", "TEMP"} {
 		dir := filepath.Join(root, key)
 		if err := os.Mkdir(dir, 0700); err != nil {
 			t.Fatal(err)
@@ -90,66 +91,66 @@ func TestInstallDiagnosticStatus(t *testing.T) {
 }
 
 func TestInstallDiagnosticEscapedBoundedPath(t *testing.T) {
-	installDiagnosticIsolation(t)
+	fakeUser := installDiagnosticIsolation(t)
+	sentinel := filepath.Join(fakeUser, "HOME", "sentinel")
+	setupCommandWrite(t, sentinel, "fake outside secret", 0600)
 	root := setupCommandRoot(t)
 	runtime := filepath.Join(root, "runtime")
-	// Real tracked path with terminal controls and a length over the diagnostic
-	// budget; short components keep the fixture below the filesystem path limit.
-	path := runtime
-	for i := 0; i < 6; i++ {
-		path = filepath.Join(path, strings.Repeat("x", 180))
-	}
-	path = filepath.Join(path, "quoted\"\n\x1bfile")
+	// This short native filename is valid on Linux and Darwin. Long and invalid
+	// UTF-8 diagnostic strings are exercised without filesystem IO in installruntime.
+	path := filepath.Join(runtime, "quoted\"\n\x1b-hook")
 	control := filepath.Join(root, "control")
-	global := filepath.Join(root, "global.json")
-	ledger, err := installruntime.Commit(setupCommandContext(t), installruntime.Request{ControlRoot: control, RuntimeRoot: runtime, Owner: "existing-installer", ConsumerID: "hooks", Files: []installruntime.File{{Path: path, Data: []byte("private"), Mode: 0600}}})
+	ledger, err := installruntime.Commit(setupCommandContext(t), installruntime.Request{
+		ControlRoot: control, RuntimeRoot: runtime, Owner: "existing-installer", ConsumerID: "hooks",
+		Files: []installruntime.File{{Path: path, Data: []byte("private payload"), Mode: 0600}},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
-	composition := agentNotifySetupComposition{globalConfigPath: func() (string, error) { return global, nil }}
-	var out bytes.Buffer
-	if code := agentNotifySetupExecute(context.Background(), []string{"status", "--control-root", control, "--json"}, &out, composition); code != 1 {
-		t.Fatalf("exit=%d", code)
-	}
-	var result struct {
-		Generation uint64                            `json:"generation"`
-		Diagnostic installruntime.SnapshotDiagnostic `json:"diagnostic"`
-	}
-	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
-		t.Fatal(err)
-	}
-	if result.Generation != ledger.Generation || result.Diagnostic.Code != "managed_file_missing" || len(result.Diagnostic.Path) > 1024 || !strings.HasSuffix(result.Diagnostic.Path, "...") {
-		t.Fatalf("bad result: %+v", result)
-	}
-	// Short path preserves controls for JSON escaping and quoted human output.
-	short := filepath.Join(runtime, "quoted\"\n\x1bfile")
-	// A second fresh fixture avoids repairing the intentionally invalid one.
-	control2 := filepath.Join(root, "control2")
-	if _, err := installruntime.Commit(setupCommandContext(t), installruntime.Request{ControlRoot: control2, RuntimeRoot: runtime, Owner: "existing-installer", ConsumerID: "hooks", Files: []installruntime.File{{Path: short, Data: []byte("private"), Mode: 0600}}}); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Remove(short); err != nil {
-		t.Fatal(err)
-	}
-	out.Reset()
-	if code := agentNotifySetupExecute(context.Background(), []string{"status", "--control-root", control2, "--json"}, &out, composition); code != 1 {
-		t.Fatalf("exit=%d", code)
-	}
-	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
-		t.Fatal(err)
-	}
-	if result.Diagnostic.Path != short || strings.Contains(out.String(), "\x1b") || strings.Count(out.String(), "\n") != 1 {
-		t.Fatalf("unsafe JSON: %q", out.String())
-	}
-	out.Reset()
-	if code := agentNotifySetupExecute(context.Background(), []string{"status", "--control-root", control2}, &out, composition); code != 1 {
-		t.Fatalf("exit=%d", code)
-	}
-	if strings.Contains(out.String(), "\x1b") || strings.Count(out.String(), "\n") != 1 {
-		t.Fatalf("unsafe human output: %q", out.String())
+	before, userBefore := setupCommandTree(t, root), setupCommandTree(t, fakeUser)
+	composition := agentNotifySetupComposition{globalConfigPath: func() (string, error) { return filepath.Join(root, "global.json"), nil }}
+	const action = "Read the installer's read-only recovery preview, or reinstall from a trusted source; then reread status."
+	for _, format := range []string{"json", "human"} {
+		t.Run(format, func(t *testing.T) {
+			args := []string{"status", "--control-root", control}
+			if format == "json" {
+				args = append(args, "--json")
+			}
+			var out bytes.Buffer
+			if code := agentNotifySetupExecute(context.Background(), args, &out, composition); code != 1 {
+				t.Fatalf("exit=%d output=%q", code, out.String())
+			}
+			output := out.String()
+			if strings.Count(output, "\n") != 1 || !strings.HasSuffix(output, "\n") || strings.Contains(output, "\x1b") || strings.Contains(output, "private payload") || strings.Contains(output, "fake outside secret") {
+				t.Fatalf("unsafe output: %q", output)
+			}
+			if format == "json" {
+				var result agentNotifySetupResult
+				if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+					t.Fatal(err)
+				}
+				if result.Generation != ledger.Generation || result.Reason != "installation_invalid" || result.Diagnostic == nil || result.Diagnostic.Code != "managed_file_missing" || result.Diagnostic.Path != path || result.Diagnostic.Action != action {
+					t.Fatalf("bad result: %+v output=%q", result, output)
+				}
+				if !strings.Contains(output, `quoted\"\n\u001b-hook`) {
+					t.Fatalf("missing escaped JSON path: %q", output)
+				}
+			} else {
+				// Independent literal escaping of the hostile basename proves the
+				// production formatter quotes the real snapshot diagnostic path.
+				escapedPath := "\"" + runtime + `/quoted\"\n\x1b-hook` + "\""
+				want := "installation_invalid; generation=" + strconv.FormatUint(ledger.Generation, 10) + "; diagnostic=managed_file_missing; path=" + escapedPath + ". " + action + "\n"
+				if output != want {
+					t.Fatalf("human output=%q want=%q", output, want)
+				}
+			}
+			if !reflect.DeepEqual(before, setupCommandTree(t, root)) || !reflect.DeepEqual(userBefore, setupCommandTree(t, fakeUser)) {
+				t.Fatal("status mutated installation or fake outside sentinel tree")
+			}
+		})
 	}
 }
 

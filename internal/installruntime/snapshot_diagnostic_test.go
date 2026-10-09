@@ -15,7 +15,7 @@ import (
 func snapshotDiagnosticIsolation(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
-	for _, key := range []string{"HOME", "USERPROFILE", "CODEX_HOME", "CLAUDE_HOME", "CLAUDE_CONFIG_DIR", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_RUNTIME_DIR", "APPDATA", "LOCALAPPDATA", "TMPDIR"} {
+	for _, key := range []string{"HOME", "USERPROFILE", "CODEX_HOME", "CLAUDE_HOME", "CLAUDE_CONFIG_DIR", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_RUNTIME_DIR", "APPDATA", "LOCALAPPDATA", "TMPDIR", "TMP", "TEMP"} {
 		dir := filepath.Join(root, key)
 		if err := os.Mkdir(dir, 0700); err != nil {
 			t.Fatal(err)
@@ -97,7 +97,11 @@ func TestSnapshotDiagnosticManagedFiles(t *testing.T) {
 		t.Run(map[bool]string{true: "missing", false: "changed"}[missing], func(t *testing.T) {
 			fakeUser := snapshotDiagnosticIsolation(t)
 			ctx, r := request(t)
-			first, last := filepath.Join(r.RuntimeRoot, "a"), filepath.Join(r.RuntimeRoot, "z")
+			// Use normal multi-character filenames, like the transaction fixtures'
+			// "hook" and "payload". One-character names can produce a rename
+			// information buffer below the Windows native API's minimum size.
+			// Reverse request order still tests deterministic diagnostic selection.
+			first, last := filepath.Join(r.RuntimeRoot, "a-hook"), filepath.Join(r.RuntimeRoot, "z-hook")
 			r.Files = []File{{Path: last, Data: []byte("last"), Mode: 0600}, {Path: first, Data: []byte("first"), Mode: 0600}}
 			l, err := Commit(ctx, r)
 			if err != nil {
@@ -273,9 +277,22 @@ func TestSnapshotDiagnosticSafeUnknownAndBounds(t *testing.T) {
 	if d.Code != "snapshot_invalid" || d.Path != "" {
 		t.Fatalf("unknown code leaked: %+v", d)
 	}
-	path := strings.Repeat("é", 1000) + "\xff"
-	d = SnapshotDiagnosticFor(snapshotFailure("managed_file_changed", path, secret))
-	if len(d.Path) > 1024 || !utf8.ValidString(d.Path) || !strings.HasSuffix(d.Path, "...") {
-		t.Fatalf("unbounded or invalid path: %q", d.Path)
+	const budget = 1024
+	prefix := "quoted\"\n\x1b/"
+	for _, tc := range []struct {
+		name, path, want string
+	}{
+		{"invalid-UTF8", "before\xffafter", "before\uFFFDafter"},
+		{"at-budget", strings.Repeat("a", budget), strings.Repeat("a", budget)},
+		{"over-budget", strings.Repeat("a", budget+1), strings.Repeat("a", budget-3) + "..."},
+		{"hostile-multibyte", prefix + strings.Repeat("é", 1000) + "\xff", prefix + strings.Repeat("é", (budget-3-len(prefix))/2) + "..."},
+		{"invalid-UTF8-before-bound", "\xff" + strings.Repeat("é", 1000), "\uFFFD" + strings.Repeat("é", (budget-3-len("\uFFFD"))/2) + "..."},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := SnapshotDiagnosticFor(snapshotFailure("managed_file_changed", tc.path, secret))
+			if d.Code != "managed_file_changed" || d.Action == "" || d.Path != tc.want || len(d.Path) > budget || !utf8.ValidString(d.Path) {
+				t.Fatalf("diagnostic=%+v want path=%q (%d bytes)", d, tc.want, len(tc.want))
+			}
+		})
 	}
 }
