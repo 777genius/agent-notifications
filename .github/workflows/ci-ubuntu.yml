@@ -63,8 +63,8 @@ jobs:
           python3 -B -S - <<'PY_VERIFY'
           import base64, hashlib, lzma, struct, zlib, os, pathlib, tempfile, subprocess, select, time, re, json
           FIXTURE_PATH = '.github/fixtures/cursor-installed-e/native-case.b85'
-          FIXTURE_BYTES = 66129
-          FIXTURE_SHA256 = '4a26edb509e81775ed41cfdccba53b42dbe6351c751337b18e41368e55674bc3'
+          FIXTURE_BYTES = 71994
+          FIXTURE_SHA256 = 'b725f35460bd26d893df02135efba091e43b9a9de42c1522d30f20b8f43d6fd7'
 
           def bounded_git(arguments, limit):
               process = subprocess.Popen(['git','--literal-pathspecs',*arguments],stdout=subprocess.PIPE,stderr=subprocess.DEVNULL)
@@ -117,7 +117,7 @@ jobs:
           MAX_FRAME = 1 << 20
           MAX_XZ = 1 << 17
           MAX_ENCODED = 65535
-          MAX_REPOSITORY_ENCODED = 66129
+          MAX_REPOSITORY_ENCODED = 71994
           MAX_RECORDS = 1024
 
           def decode_frame(frame):
@@ -165,7 +165,7 @@ jobs:
               assert len(source) == pins['sourceBytes'] and hashlib.sha256(source).hexdigest() == pins['sourceSHA256'], 'exact source length/hash'
               return source
 
-          pins = {'encodedBytes': 66129, 'frameBytes': 212501, 'xzBytes': 52880, 'transportBytes': 52903, 'transportSHA256': 'b36302afdf600fdfc8142f93067fd24aa678d5b1c901f4156ef63ec17c2fdce9', 'sourceBytes': 220772, 'sourceSHA256': 'e43635d1045cb7146e2d05fc69e1d4d838ff51e3baab59951e8616e4a0f567f1'}
+          pins = {'encodedBytes': 71994, 'frameBytes': 237134, 'xzBytes': 57572, 'transportBytes': 57595, 'transportSHA256': '51dfced9c000d7cee7074e49404c36e5649509110aa39bfc741bf41f2d65ded7', 'sourceBytes': 245402, 'sourceSHA256': '8f1781d05cd102adb5c06807866cc40622cba5769214cb4161f676a68c04a20b'}
           encoded, encoded_bound, origin = load_carrier(os.environ['CURSOR_CARRIER_B64'],os.environ['CURSOR_REPOSITORY_MODE'] == 'true',os.environ['CURSOR_FIXTURE_SHA'])
           candidate = decode(encoded,pins,encoded_bound)
           print(json.dumps({'carrierTransport':origin,'sourceSHA256':pins['sourceSHA256'],'transportSHA256':pins['transportSHA256']},sort_keys=True),flush=True)
@@ -201,7 +201,7 @@ jobs:
           import sys
           import time
 
-          SOURCE_SHA = 'e43635d1045cb7146e2d05fc69e1d4d838ff51e3baab59951e8616e4a0f567f1'
+          SOURCE_SHA = '8f1781d05cd102adb5c06807866cc40622cba5769214cb4161f676a68c04a20b'
           LIMIT = 1 << 20
           DEADLINE = time.monotonic() + 30
 
@@ -496,7 +496,7 @@ jobs:
   cursor-installed-e:
     if: github.event_name == 'workflow_dispatch' && inputs.consume_cursor_e && !inputs.mkdir_diagnostic
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    timeout-minutes: 210
     permissions:
       contents: read
     steps:
@@ -512,12 +512,12 @@ jobs:
           CURSOR_REPOSITORY_MODE: ${{ inputs.cursor_carrier_b64 == '' && inputs.consume_cursor_e == true }}
         run: |
           set -euo pipefail
+          python3 -B -S -c 'import os,time; open(os.environ["GITHUB_ENV"],"a").write("CURSOR_PROOF_JOB_START="+str(time.monotonic()-120)+"\n")'
           git fetch --no-tags origin main
           git merge-base --is-ancestor 9f014e72af510783d58d00ad3d2db455a2f8117b FETCH_HEAD
-          if [ "$CURSOR_REPOSITORY_MODE" = "true" ]; then
-            [[ "$CURSOR_FIXTURE_SHA" =~ ^[0-9a-f]{40}$ ]]
-            git fetch --no-tags origin "$CURSOR_FIXTURE_SHA"
-          fi
+          # consume_cursor_e authorizes both transport forms in this job.
+          [[ "$CURSOR_FIXTURE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          git fetch --no-tags origin "$CURSOR_FIXTURE_SHA"
       - uses: actions/setup-go@v7
         timeout-minutes: 3
         with:
@@ -529,11 +529,40 @@ jobs:
           CURSOR_FIXTURE_SHA: ${{ github.sha }}
           CURSOR_REPOSITORY_MODE: ${{ inputs.cursor_carrier_b64 == '' && inputs.consume_cursor_e == true }}
         run: |
+          set -euo pipefail
+          test "$(id -u)" = 1000
+          sudo -n /usr/bin/python3 -B -S - <<'PY_SAME'
+          import os,pathlib,platform,stat,sys
+          assert platform.machine() == 'x86_64' and platform.release() == '6.17.0-1022-azure'
+          release=pathlib.Path('/etc/os-release').read_text(); assert '\nID=ubuntu\n' in '\n'+release and 'VERSION="24.04.5 LTS' in release
+          values=dict(row.split(':',1) for row in pathlib.Path('/proc/self/status').read_text().splitlines() if ':' in row)
+          assert os.geteuid() == 0 and int(values['CapEff'],16) & ((1<<19)|(1<<21)) == ((1<<19)|(1<<21)) and values['Seccomp'].strip() == '0'
+          assert pathlib.Path('/proc/self/attr/current').read_text().strip() == 'unconfined' and pathlib.Path('/proc/sys/kernel/yama/ptrace_scope').read_text().strip() in ('0','1','2')
+          assert os.readlink('/proc/self/ns/pid') == os.readlink('/proc/1/ns/pid'), 'host PID namespace'
+          def qualify(fd,path):
+              f=os.fstat(fd); assert stat.S_ISDIR(f.st_mode) and f.st_uid == f.st_gid == 0 and f.st_mode & 1 and not f.st_mode & 0o022
+              assert (f.st_dev,f.st_ino) == (os.lstat(path).st_dev,os.lstat(path).st_ino), 'ancestor changed'
+              rows=[row.partition(' - ') for row in pathlib.Path('/proc/self/mountinfo').read_text().splitlines()]; matches=[(len(left.split()[4]),right.split()[0]) for left,sep,right in rows if sep and (left.split()[4]=='/' or str(path)==left.split()[4] or str(path).startswith(left.split()[4]+'/'))]; longest=max(n for n,fs in matches); assert [fs for n,fs in matches if n==longest] == ['ext4']
+          root=os.open('/',os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+          try:
+              qualify(root,'/'); srv=os.open('srv',os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=root)
+              try:
+                  qualify(srv,'/srv'); mask=os.umask(0o022)
+                  try:
+                      try: os.mkdir('workers',0o755,dir_fd=srv)
+                      except FileExistsError: pass  # Never repair a foreign existing ancestor.
+                  finally: os.umask(mask)
+                  workers=os.open('workers',os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=srv)
+                  try: qualify(workers,'/srv/workers'); qualify(srv,'/srv'); qualify(root,'/')
+                  finally: os.close(workers)
+              finally: os.close(srv)
+          finally: os.close(root)
+          PY_SAME
           python3 -B -S - <<'PY_VERIFY'
           import base64, hashlib, lzma, struct, zlib, os, pathlib, tempfile, subprocess, json, re, select, time
           FIXTURE_PATH = '.github/fixtures/cursor-installed-e/native-case.b85'
-          FIXTURE_BYTES = 66129
-          FIXTURE_SHA256 = '4a26edb509e81775ed41cfdccba53b42dbe6351c751337b18e41368e55674bc3'
+          FIXTURE_BYTES = 71994
+          FIXTURE_SHA256 = 'b725f35460bd26d893df02135efba091e43b9a9de42c1522d30f20b8f43d6fd7'
 
           def bounded_git(arguments, limit):
               process = subprocess.Popen(['git','--literal-pathspecs',*arguments],stdout=subprocess.PIPE,stderr=subprocess.DEVNULL)
@@ -586,7 +615,7 @@ jobs:
           MAX_FRAME = 1 << 20
           MAX_XZ = 1 << 17
           MAX_ENCODED = 65535
-          MAX_REPOSITORY_ENCODED = 66129
+          MAX_REPOSITORY_ENCODED = 71994
           MAX_RECORDS = 1024
 
           def decode_frame(frame):
@@ -634,7 +663,7 @@ jobs:
               assert len(source) == pins['sourceBytes'] and hashlib.sha256(source).hexdigest() == pins['sourceSHA256'], 'exact source length/hash'
               return source
 
-          pins = {'encodedBytes': 66129, 'frameBytes': 212501, 'xzBytes': 52880, 'transportBytes': 52903, 'transportSHA256': 'b36302afdf600fdfc8142f93067fd24aa678d5b1c901f4156ef63ec17c2fdce9', 'sourceBytes': 220772, 'sourceSHA256': 'e43635d1045cb7146e2d05fc69e1d4d838ff51e3baab59951e8616e4a0f567f1'}
+          pins = {'encodedBytes': 71994, 'frameBytes': 237134, 'xzBytes': 57572, 'transportBytes': 57595, 'transportSHA256': '51dfced9c000d7cee7074e49404c36e5649509110aa39bfc741bf41f2d65ded7', 'sourceBytes': 245402, 'sourceSHA256': '8f1781d05cd102adb5c06807866cc40622cba5769214cb4161f676a68c04a20b'}
           encoded, encoded_bound, origin = load_carrier(os.environ['CURSOR_CARRIER_B64'],os.environ['CURSOR_REPOSITORY_MODE'] == 'true',os.environ['CURSOR_FIXTURE_SHA'])
           candidate = decode(encoded,pins,encoded_bound)
           print(json.dumps({'carrierTransport':origin,'sourceSHA256':pins['sourceSHA256'],'transportSHA256':pins['transportSHA256']},sort_keys=True),flush=True)
@@ -654,6 +683,47 @@ jobs:
           with open(os.environ['GITHUB_ENV'],'a') as environment:
               environment.write('CURSOR_CARRIER='+str(target/'native_case.py')+'\n')
               environment.write('CURSOR_CASE_PARENT='+str(parent)+'\n')
+          # One public immutable transport identity; private input HEAD is never public evidence.
+          transport_sha = os.environ['CURSOR_FIXTURE_SHA']
+          assert type(transport_sha) is str and re.fullmatch('[0-9a-f]{40}',transport_sha), 'trusted exact workflow/source commit required'
+          assert bounded_git(['rev-parse','HEAD'],41) == b'9f014e72af510783d58d00ad3d2db455a2f8117b\n'
+          assert bounded_git(['cat-file','-t',transport_sha],7) == b'commit\n'
+          tuples = (
+              ('contract-fixtures-r1364/MATRIX_README.md', 26860, 'fc62bf0e31a51c2d7892b79097fb6ec2f99f4173f058dcc58c2803d1736a90cc'),
+              ('contract-fixtures-r1364/REMAINING_SOURCE_REVIEW.md', 13054, 'a29f64098ec2d7617a650a8929859bc5166b663bb84f41a336efcf98bfc656c3'),
+              ('contract-fixtures-r1364/build_fixtures.py', 9654, 'c55040ebeac2ab4da5f1ea50023e0329c75878a2d66e1d7e8cbb8c43e0bda7a9'),
+              ('contract-fixtures-r1364/held_child.c', 2333, '0d7d8df99fe89445ad5be0f3ef88b753d30d32d86ee415af9f4ee800d2e2bd33'),
+              ('contract-fixtures-r1364/integrated_pair.py', 108436, 'cbd6e4d14b0c4600c228abffd7a41d1590d26ab33594b2672a50d211bfb63a53'),
+              ('contract-fixtures-r1364/lifecycle.py', 20273, 'f7cec502b3a56459f49667da7c437de2ce458fcc2f1d07a475dfc2728dbc27ac'),
+              ('contract-fixtures-r1364/matrix-go.mod', 149, '1baa91c9635240cb9433575d68989fff5213f03298abbbf50ea8006fa3120f52'),
+              ('contract-fixtures-r1364/matrix-go.sum', 322, '7556b81d5e8726d4d82ddf008b6c89eab585731afaf27c4a6b27ee6a8ae3e8be'),
+              ('contract-fixtures-r1364/matrix_actor.c', 3889, '0541d4e8e3d61269aaaa5dcdf6f5f8a5cd09a3fe5651fda077e689a08f5eb390'),
+              ('contract-fixtures-r1364/matrix_controller.py', 7832, '735964e05acd4056633f1cd98f1264b765743c5e730ebf28bad309f1f1cbc493'),
+              ('contract-fixtures-r1364/matrix_helper.go', 9374, '63d21b9d2db208b3398d021900886dd49cafb893447a534466b7a691345f6065'),
+              ('contract-fixtures-r1364/original_reader_boundary.py', 3958, 'df314e86e0a5edec6fbf78042f40fe7b0fdd98f7431a45280ef8416f8084112a'),
+              ('contract-fixtures-r1364/pure_checks.py', 4610, 'e228bea229023ff62d529742172dd1e3bf72600832c653eb14dc9d046e3b3234'),
+              ('exact-old-executor/linux_contract.py', 11950, 'ef77db92d6adc58b6dbf18c52ab3085118981ae15a2824fa46add7e7ef467752'),
+              ('exact-old-executor/native_case.py', 277880, '07047821776a91e3095eb5d4baed8467eb019ad31a8649fd58d67ca5ce46b6cc'),
+              ('linux_contract.py', 33465, 'e8163418c1e5e4cc653fa8cfdb93f4afa1585940d945ed51ff683154cce14b4b'),
+              ('native_case.py', 286172, '6711958e74161cc2bbc0c71404694dedcddb5cdf8dbe486cfb70ef1a919af240'),
+              ('src/defs.h', 70911, '9914057470fbec3428b051c4a307fe48e7c19207192a936b88c5b14b8a624eae'),
+              ('src/strace.c', 133140, '656ccbcd614055b777a11d69bc55e35a0256426f421ea4f7c58026e95fa029e5'),
+              ('src/syscall.c', 38750, '390ff1bc410226b4c843ee046ba8e576879e0edc2b3b3087c79afb4ceb506803'),
+              ('exact-old-executor/src/strace.c', 125181, '7953842ccb83b6419172217943b0f1c40ce4b10f3514a093ea9feb333f1da452'),
+          )
+          assert len(tuples) == 21 and sum(row[1] for row in tuples) == 1188193
+          workspace = pathlib.Path(subprocess.check_output(['/usr/bin/sudo','-n','/usr/bin/python3','-B','-S','-c',"import os,pathlib,tempfile; p=pathlib.Path(tempfile.mkdtemp(prefix='TEST-cursor-proof-',dir='/srv/workers')); p.chmod(0o755); (p/'source').mkdir(mode=0o755); os.chown(p/'source',int(os.environ['SUDO_UID']),int(os.environ['SUDO_GID'])); print(p)"],text=True,timeout=5).strip())
+          assert workspace.parent == pathlib.Path('/srv/workers') and workspace.name.startswith('TEST-cursor-proof-') and workspace.resolve(strict=True) == workspace and workspace.stat().st_uid == 0
+          with open(os.environ['GITHUB_ENV'],'a') as environment: environment.write('CURSOR_PROOF_WORKSPACE='+str(workspace)+'\n')
+          for relative,size,pin in tuples:
+              path = 'test_fixtures/TEST-cursor-observer-repair-r1353/implementation/'+relative
+              row = bounded_git(['ls-tree','-z',transport_sha,'--',path],512).split(b'\t')
+              assert len(row) == 2 and row[1] == path.encode()+b'\0' and row[0].split()[:2] == [b'100644',b'blob'], 'exact regular source entry'
+              oid = row[0].split()[2].decode(); assert re.fullmatch('[0-9a-f]{40}',oid)
+              assert bounded_git(['cat-file','-s',oid],32) == str(size).encode()+b'\n'
+              raw = bounded_git(['cat-file','blob',oid],size); assert len(raw) == size and hashlib.sha256(raw).hexdigest() == pin
+              target = workspace/'source'/relative; target.parent.mkdir(parents=True,exist_ok=True); target.write_bytes(raw); target.chmod(0o644); assert target.read_bytes() == raw and target.lstat().st_mode & 0o777 == 0o644
+          assert bounded_git(['rev-parse','HEAD'],41) == b'9f014e72af510783d58d00ad3d2db455a2f8117b\n', 'product HEAD changed'
           PY_VERIFY
       - name: Check SAME actual runner before preparation or fixed archive acquisition
         timeout-minutes: 1
@@ -680,6 +750,174 @@ jobs:
           for tool in strace dbus-daemon dbus-monitor dbus-send dunst Xvfb xauth nsenter setpriv; do test -x "/usr/bin/$tool"; done
           # No kernel/CAP/LSM/sysctl changes or attach probing; actual permission
           # and session readiness remain fail-closed gates in the ONE carrier.
+      - name: SAME accepted-source whole Linux proof only; native remains HOLD
+        timeout-minutes: 190
+        run: |
+          set -euo pipefail
+          trap 'echo "HOLD: proof-only failure; native --execute is forbidden"' EXIT
+          sudo -n env GITHUB_ENV="$GITHUB_ENV" CURSOR_PROOF_JOB_START="$CURSOR_PROOF_JOB_START" CURSOR_PROOF_PRODUCT_ROOT="$PWD" CURSOR_PROOF_WORKSPACE="$CURSOR_PROOF_WORKSPACE" CURSOR_PROOF_GO="$(command -v go)" /usr/bin/python3 -B -S - <<'PY_PROOF'
+          import hashlib,json,os,pathlib,shutil,subprocess,urllib.request,time,stat,platform,signal
+          started=time.monotonic(); end=min(started+190*60,float(os.environ['CURSOR_PROOF_JOB_START'])+204*60)
+          prep_end=started+492; pairs_left=87; machine_id=None
+          w=pathlib.Path(os.environ['CURSOR_PROOF_WORKSPACE']); source=w/'source'; fixtures=source/'contract-fixtures-r1364'; old=source/'exact-old-executor'
+          def sha(path): return hashlib.sha256(path.read_bytes()).hexdigest()
+          def check_host():
+              assert os.geteuid() == 0 and platform.machine() == 'x86_64' and platform.release() == '6.17.0-1022-azure'
+              release=pathlib.Path('/etc/os-release').read_text(); assert '\nID=ubuntu\n' in '\n'+release and 'VERSION="24.04.5 LTS' in release
+              values=dict(row.split(':',1) for row in pathlib.Path('/proc/self/status').read_text().splitlines() if ':' in row)
+              assert int(values['CapEff'],16) & ((1<<19)|(1<<21)) == ((1<<19)|(1<<21)) and values['Seccomp'].strip() == '0'
+              assert pathlib.Path('/proc/self/attr/current').read_text().strip() == 'unconfined' and pathlib.Path('/proc/sys/kernel/yama/ptrace_scope').read_text().strip() in ('0','1','2')
+              assert os.readlink('/proc/self/ns/pid') == os.readlink('/proc/1/ns/pid')
+              for path in (pathlib.Path('/'),pathlib.Path('/srv'),pathlib.Path('/srv/workers'),w,source,w/'scratch'):
+                  fd=os.open(path,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+                  try:
+                      f=os.fstat(fd); assert f.st_uid == f.st_gid == 0 and f.st_mode & 1 and not f.st_mode & 0o022
+                      assert (f.st_dev,f.st_ino) == (path.lstat().st_dev,path.lstat().st_ino)
+                      rows=[r.partition(' - ') for r in pathlib.Path('/proc/self/mountinfo').read_text().splitlines()]; matches=[(len(l.split()[4]),r.split()[0]) for l,sep,r in rows if sep and (l.split()[4]=='/' or str(path)==l.split()[4] or str(path).startswith(l.split()[4]+'/'))]; longest=max(n for n,fs in matches); assert [fs for n,fs in matches if n==longest] == ['ext4']
+                  finally: os.close(fd)
+              if machine_id is not None: assert pathlib.Path('/etc/machine-id').read_text().strip() == machine_id, 'qualified machine changed'
+          def budget(pair=False,work=0):
+              left=end-time.monotonic(); assert left >= pairs_left*124+120+work, 'insufficient remaining whole-proof budget'
+              if not pair: assert prep_end-time.monotonic() >= work, 'insufficient preparation admission budget'
+          def run(argv,label,cwd=w,limit=None,pair=False,env=None,tracing=False):
+              t=time.monotonic()
+              # 492 is an admission budget, never a signal to a cleanup owner.
+              # 124 is the inherited scheduling allowance, not an outer SIGKILL.
+              budget(pair); check_host()
+              driver=124 if pair else limit or 492
+              if not (tracing or pair):
+                  driver=min(driver,prep_end-time.monotonic()-5,end-time.monotonic()-pairs_left*124-120-5)
+                  assert driver > 0, 'command work/cancellation/join admission reserve'
+              reserve=0 if pair else driver+4
+              budget(pair,work=reserve)
+              child=None; first_error=None
+              record={'exitCode':None,'disposition':'START_FAILED','elapsedSeconds':0,'schedulingAllowanceSeconds':driver,
+                      'cleanup':'UNKNOWN','descendantJoins':'UNKNOWN','cleanupErrors':[]}
+              path=w/'logs'/(label+'.exit')
+              def publish():
+                  record['elapsedSeconds']=time.monotonic()-t; path.write_text(json.dumps(record)+'\n')
+                  assert json.loads(path.read_text()) == record, 'exit receipt readback mismatch'
+                  return time.monotonic()-t
+              publish()
+              try:
+                  with (w/'logs'/(label+'.stdout')).open('xb') as out,(w/'logs'/(label+'.stderr')).open('xb') as err:
+                      child=subprocess.Popen([str(a) for a in argv],cwd=cwd,env=env,stdout=out,stderr=err,start_new_session=True)
+                      try:
+                          record.update(disposition='RUNNING',pid=child.pid); publish()
+                          # Tracing/lifecycle/fixture supervisors own their internal
+                          # deadlines and joins. Never kill them at a cumulative cap.
+                          record['exitCode']=child.wait() if tracing or pair else child.wait(timeout=driver)
+                      except BaseException as error:
+                          first_error=error
+                          if tracing or pair:
+                              # Keep both streams open until the launched owner joins.
+                              # A failed join cannot replace the original exception.
+                              try:
+                                  record['exitCode']=child.wait(); record['directChildJoined']=True
+                              except BaseException as cleanup_error:
+                                  record['cleanupErrors'].append(type(cleanup_error).__name__)
+                          raise
+                  record.update(disposition='RETURNED',directChildJoined=True,streamsClosed=True,
+                                cleanup='DRIVER_RECEIPT_REQUIRED' if tracing or pair else 'DIRECT_CHILD_ONLY')
+              except BaseException as error:
+                  first_error=first_error if first_error is not None else error
+                  record['disposition']=type(first_error).__name__
+                  record['firstFailure']=type(first_error).__name__+':'+str(first_error)[:240]
+                  if child is not None and not (tracing or pair):
+                      try:
+                          if child.returncode is None:
+                              raw=(pathlib.Path('/proc')/str(child.pid)/'stat').read_text(); tail=raw[raw.rindex(')')+2:].split()
+                              assert int(tail[1]) == os.getpid() and int(tail[2]) == int(tail[3]) == child.pid, 'exact owned command group'
+                              os.killpg(child.pid,signal.SIGKILL); record['groupCancellation']='SIGKILL_SENT'
+                          child.wait(timeout=2); record['directChildJoined']=True
+                      except BaseException as cleanup_error: record['cleanupErrors'].append(type(cleanup_error).__name__)
+                  # Direct-child exit is never descendant join evidence.
+                  record['cleanup']='UNKNOWN'; raise first_error
+              finally:
+                  try: publish()
+                  except BaseException:
+                      if 'firstFailure' not in record: raise
+              output=(w/'logs'/(label+'.stdout')).read_bytes()
+              record.update(fullInvocationElapsedSeconds=publish(),remainingSeconds=end-time.monotonic())
+              elapsed=publish()  # Includes stream closure, output and final receipt readback.
+              if pair and elapsed > 124:
+                  record.update(disposition='LATE',timing='FAIL',fullInvocationElapsedSeconds=elapsed,
+                                remainingSeconds=end-time.monotonic(),firstFailure=record.get('firstFailure',label+' exceeded 124s full invocation'))
+                  publish()
+                  raise RuntimeError(label+' LATE/FAIL; refuse dependent launch')
+              assert record['exitCode'] == 0, label+' failed; retain actual receipts'
+              budget(pair)  # Recheck after final publication/readback, before any next case.
+              return output
+          try:
+              for name in ('scratch','builds','logs'): (w/name).mkdir(mode=0o755)
+              (source/'scratch').mkdir(mode=0o755)
+              os.environ.update(TMPDIR=str(w/'scratch'),GOWORK='off',GOTOOLCHAIN='local',CURSOR_PROOF_PREP_END=str(prep_end))
+              for path in [source,*source.rglob('*')]: os.chown(path,0,0)
+              for name in ('defs.h','syscall.c'): shutil.copyfile(source/'src'/name,old/'src'/name)
+              check_host(); budget()
+              # Reuse the existing physical/P1 commands on this actual runner, as UID1000.
+              physical=w/'scratch/TEST-cursor-physical'; physical.mkdir(mode=0o755)
+              for name in ('tmp','cache','module-cache','gopath','home'):
+                  path=physical/name; path.mkdir(mode=0o700); os.chown(path,1000,1000)
+              penv=dict(os.environ,TMPDIR=str(physical/'tmp'),GOTMPDIR=str(physical/'tmp'),GOCACHE=str(physical/'cache'),GOMODCACHE=str(physical/'module-cache'),GOPATH=str(physical/'gopath'),HOME=str(physical/'home'),GOENV='off')
+              go=os.environ['CURSOR_PROOF_GO']; product=pathlib.Path(os.environ['CURSOR_PROOF_PRODUCT_ROOT'])
+              commands=(
+                  ('native',['github.com/777genius/plugin-kit-ai/install/integrationctl/adapters/directoryidentity','github.com/777genius/plugin-kit-ai/install/integrationctl/adapters/dirswap'],['ACTUAL_IOCTL=SUCCESS; fd_tuple=SUPPORTED;','QUALIFICATION=SUPPORTED; same-byte replacement denied','QUALIFICATION=SUPPORTED; substituted ancestor denied with unchanged child','FRESH_PROCESS_REVALIDATED']),
+                  ('cursor',['./internal/copilotvscodeinstall','-run','^TestCursor'],['ACTUAL_TEST_PHYSICAL_HOST: tuple=linux/amd64','P1_ORIGINAL_TOKEN_REVALIDATED=true; PUBLIC_SELECTED_ACK_PROJECTION_DATA_ADMISSION=true','SIBLING_R2_SELECTED_R1_POSITIVE=true']),
+                  ('materializer',['./internal/agentnotify/portablesetup','-run','^TestMaterializerSelectedCursorPublicProjectionAndAcknowledgement$'],['QUALIFIED_TEST_MATERIALIZER_SELECTED_PROJECTION_ACK_DATA_ORIGINAL_TOKEN=true','--- PASS: TestMaterializerSelectedCursorPublicProjectionAndAcknowledgement ']),
+                  ('caller',['./cmd/claude-notifications','-run','^(TestCursorCallerAcknowledgedTokenAndMatchingPendingRetry|TestCursorCallerFirstHandoffMissingToken|TestCursorCallerMissingPackageRefusalAndOwnedCleanup|TestCursorConfirmationReachesWizardAdmissionWithFrozenOptOut)$'],['QUALIFIED_TEST_CALLER_ORIGINAL_TOKEN_AND_MATCHING_RESUME=true','QUALIFIED_TEST_FIRST_HANDOFF=true','QUALIFIED_TEST_PENDING_A_TO_B=true','--- PASS: TestCursorCallerFirstHandoffMissingToken ','--- PASS: TestCursorCallerMissingPackageRefusalAndOwnedCleanup ','--- PASS: TestCursorConfirmationReachesWizardAdmissionWithFrozenOptOut ']),
+                  ('caller-package',['./internal/agentnotify/setupwizard','-run','^TestPackageCompositionCleanupPreservesSharedAndPendingSource$'],['--- PASS: TestPackageCompositionCleanupPreservesSharedAndPendingSource ']),
+              )
+              for label,args,markers in commands:
+                  raw=run(['/usr/bin/setpriv','--reuid=1000','--regid=1000','--clear-groups',go,'test','-count=1','-timeout=3m','-v',*args],'P1-'+label,cwd=product,limit=180,env=penv)
+                  raw+=(w/'logs'/('P1-'+label+'.stderr')).read_bytes()
+                  assert b'NOT_RUN positive' not in raw and all(m.encode() in raw for m in markers), 'fresh positive P1 required'
+              machine_id=pathlib.Path('/etc/machine-id').read_text().strip(); assert machine_id and all(c in '0123456789abcdef' for c in machine_id) and len(machine_id)==32
+              os.environ['CURSOR_PROOF_MACHINE_ID']=machine_id; check_host()
+              (w/'logs/P1-machine.json').write_text(json.dumps({'machineID':machine_id,'kernel':platform.release(),'osRelease':pathlib.Path('/etc/os-release').read_text(),'uid':1000,'positiveLogs':['P1-'+c[0] for c in commands],'status':pathlib.Path('/proc/self/status').read_text(),'lsm':pathlib.Path('/proc/self/attr/current').read_text(),'yama':pathlib.Path('/proc/sys/kernel/yama/ptrace_scope').read_text(),'mountinfo':pathlib.Path('/proc/self/mountinfo').read_text(),'pidNS':os.readlink('/proc/self/ns/pid')})+'\n')
+              with open(os.environ['GITHUB_ENV'],'a') as environment: environment.write('CURSOR_PROOF_MACHINE_ID='+machine_id+'\n')
+              assert run(['/usr/bin/dpkg-query','-W','-f=${Version}','strace'],'stock-version').strip() == b'6.8-0ubuntu2'
+              run(['/usr/bin/dpkg-query','-S','/usr/bin/strace'],'stock-owner'); run(['/usr/bin/sha256sum','/usr/bin/strace'],'stock-sha')
+              budget(); check_host(); archive=w/'builds/strace-6.8.tar.xz'
+              with urllib.request.urlopen('https://strace.io/files/6.8/strace-6.8.tar.xz',timeout=30) as response: raw=response.read(2457949)
+              assert len(raw)==2457948 and hashlib.sha256(raw).hexdigest()=='ba6950a96824cdf93a584fa04f0a733896d2a6bc5f0ad9ffe505d9b41e970149'; archive.write_bytes(raw)
+              bindings={}
+              for comparison,original in (('NEW',source),('OLD',old)):
+                  tree=w/'builds'/comparison; tree.mkdir(mode=0o755); run(['/usr/bin/tar','-xJf',archive,'--strip-components=1','-C',tree],comparison+'-archive')
+                  base={'strace.c':('21fe0b653612b9354ff783a9ca1643d39682d85fd38bf32a14b09cdea41febd1',110346),'defs.h':('16103f7dcdb390ecaaa2b0715b041f946652a1e3597b078b52fc571ea324a020',70554),'syscall.c':('0d8c5449b011a8cd16f0b5d0864f57fa633867876682270fee294390bb0e62b1',38689)}
+                  for name,(pin,size) in base.items():
+                      assert sha(tree/'src'/name)==pin and (tree/'src'/name).stat().st_size==size
+                      shutil.copyfile(tree/'src'/name,tree/(name+'.official')); shutil.copyfile(original/'src'/name,tree/'src'/name)
+                  before_headers={str(p.relative_to(tree)):sha(p) for p in tree.rglob('*.h') if p.is_file()}; budget()
+                  compiler=pathlib.Path('/usr/bin/gcc').resolve(strict=True); compiler_sha=sha(compiler); build_env=dict(os.environ,CC=str(compiler)); run([compiler,'--version'],comparison+'-compiler'); run([tree/'configure','--disable-mpers'],comparison+'-configure',tree,env=build_env)
+                  run(['/usr/bin/make','-j2','V=1','CC='+str(compiler)],comparison+'-full-link',tree,env=build_env); derived=tree/'src/strace'; assert derived.read_bytes()[:4]==b'\x7fELF'
+                  with (tree/'current.patch').open('wb') as output:
+                      for name in base: assert subprocess.run(['/usr/bin/diff','-u',str(tree/(name+'.official')),str(tree/'src'/name)],stdout=output,timeout=5).returncode in (0,1)
+                  budget(); check_host()
+                  assert sha(compiler) == compiler_sha, 'compiler changed during build'
+                  generated_cc=[line for line in (tree/'src/Makefile').read_text().splitlines() if line.startswith('CC = ')]; assert generated_cc == ['CC = '+str(compiler)], 'generated CC differs from recorded compiler'
+                  provenance={'compilerExecutable':str(compiler),'generatedCC':generated_cc,'configureFlags':['--disable-mpers'],'makeArguments':['-j2','V=1','CC='+str(compiler)],'patchSHA256':sha(tree/'current.patch'),'archiveSHA256':sha(archive),'base':base,'current':{name:sha(tree/'src'/name) for name in base},'compilerSHA256':compiler_sha,'derivedSHA256':sha(derived),'generated':{str(p.relative_to(tree)):sha(p) for p in tree.rglob('*') if p.is_file() and ((p.suffix=='.h' and before_headers.get(str(p.relative_to(tree))) != sha(p)) or p.name in ('config.log','config.status','Makefile'))}}
+                  (tree/'build-provenance.json').write_text(json.dumps(provenance,indent=2)+'\n')
+                  receipt=json.loads(run(['/usr/bin/python3','-B',fixtures/'build_fixtures.py','--go',os.environ['CURSOR_PROOF_GO'],'--compiler',compiler,'--derived',derived,'--derived-sha256',sha(derived),'--workspace',w,'--scratch-parent',w/'scratch','--comparison',comparison,'--original-source-root',original],comparison+'-fixtures',limit=120,tracing=True))
+                  bindings[comparison]=(derived,receipt,original)
+              derived,receipt,original=bindings['NEW']; run(['/usr/bin/python3','-B',source/'linux_contract.py','--derived',derived,'--derived-sha256',sha(derived)],'lower-proof',limit=10+2+18*(12+4),tracing=True)
+              for comparison,(derived,receipt,original) in bindings.items():
+                  common=['--workspace',w,'--scratch-parent',w/'scratch']
+                  run(['/usr/bin/python3','-B',fixtures/'lifecycle.py','--harness',original/'linux_contract.py','--harness-sha256',sha(original/'linux_contract.py'),'--native-sha256',sha(original/'native_case.py'),'--fixture',receipt['heldChild'],'--fixture-sha256',receipt['heldChildSHA256'],'--expected','NEW_GREEN' if comparison=='NEW' else 'OLD_RED',*common],comparison+'-setup',limit=180,tracing=True)
+              budget(); preparation_elapsed=time.monotonic()-started
+              for comparison,(derived,receipt,original) in bindings.items():
+                  common=['--workspace',w,'--scratch-parent',w/'scratch']
+                  cases='fork thread vfork-exit vfork-exec execve execveat exec-tid-remap clone-orders bus-close delayed-controls alias-close dup2 dup3 shutdown close-range-unshare exit-group shared-close shared-alias-close shared-dup2 shared-dup3 shared-shutdown shared-close-range-unshare thread-exit last-table-exit owner-exit connect-refused hello-refused auth-absent auth-refused hello-absent double-name wrong-home wrong-fd0 wrong-exe wrong-birth wrong-name wrong-socket wrong-table output-reader-failure debug-reader-failure output-reader-deadline fatal-die diagnostic-eof pid-control-eof uid-control-eof monitor-eof diagnostic-race final-ack-race final-incarnation-drift control-eof credential-deadline session-child-failure session-fd-failure tracer-child-failure session-netfd-failure session-identity-failure tracer-identity-failure session-thread-start-1 session-thread-start-2 session-thread-start-3 session-thread-start-4 session-thread-start-5 session-thread-start-6 session-thread-start-7 session-thread-start-8 tracer-thread-start-1 tracer-thread-start-2 tracer-thread-start-3'.split()
+                  if comparison=='OLD': cases=[c for c in cases if c.startswith(('session-','tracer-')) or c in ('diagnostic-race','final-ack-race')]
+                  assert len(cases)==(68 if comparison=='NEW' else 19)
+                  for case in cases:
+                      run(['/usr/bin/python3','-B',source/'linux_contract.py','--original-pair','--case',case,'--machine-id',os.environ['CURSOR_PROOF_MACHINE_ID'],'--comparison',comparison,'--original-source-root',original,'--derived',derived,'--derived-sha256',sha(derived),'--helper',receipt['helper'],'--helper-sha256',receipt['helperSHA256'],'--actor',receipt['actor'],'--actor-sha256',receipt['actorSHA256'],'--build-bindings',pathlib.Path(receipt['scratch'])/'fixture-build-bindings.json',*common],comparison+'-'+case,pair=True)
+                      pairs_left-=1; budget(pair=True)
+          finally:
+              if (w/'logs').is_dir(): (w/'logs/budget.json').write_text(json.dumps({'elapsedSeconds':time.monotonic()-started,'preparationElapsedSeconds':locals().get('preparation_elapsed'),'remainingSeconds':end-time.monotonic(),'pairsRemaining':pairs_left,'preparationCapSeconds':492,'pairSchedulingAllowanceSeconds':124,'supervisorCancellation':'NONE','unboundedReadonlyLauncherReceiptGap':True,'finalReserveSeconds':120,'timingQualification':'NOT_RUN until actual full closure'})+'\n')
+              print('HOLD: proof-only; WholeContract INCOMPLETE; native --execute is forbidden',flush=True)
+          raise SystemExit(1)
+          PY_PROOF
       - name: Build exact source package and bridge and produce real thirteen-key inputs
         timeout-minutes: 15
         run: |
@@ -1154,6 +1392,108 @@ jobs:
                           raw = read_at(parent, name)
                           item['sha256'] = hashlib.sha256(raw).hexdigest()
                           add(path, raw, facts)
+                  def selected(parent, relative, prefix='TEST-cursor-proof'):
+                      parts=relative.split('/'); opened=[]; fd=parent
+                      try:
+                          assert all(p and p not in ('.','..') for p in parts), 'selected export path'
+                          for part in parts[:-1]:
+                              fd=open_directory(fd,part); opened.append(fd)
+                          copy(fd,parts[-1],prefix+'/'+relative,0)
+                      except (OSError,AssertionError) as error:
+                          errors.append({'path':prefix+'/'+relative,'error':type(error).__name__+':'+str(error)[:240]})
+                      finally:
+                          for fd in reversed(opened): os.close(fd)
+                  if os.environ.get('CURSOR_PROOF_WORKSPACE'):
+                      proof=None
+                      try:
+                          proof=os.open(os.environ['CURSOR_PROOF_WORKSPACE'],os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+                          assert os.fstat(proof).st_uid == 0 and not os.fstat(proof).st_mode & 0o022
+                          # Required actual streams/dispositions and receipts precede build records.
+                          selected(proof,'logs')
+                          try:
+                              scratch=open_directory(proof,'scratch')
+                              try:
+                                  names=sorted(os.listdir(scratch)); assert len(names) <= 92, 'finite proof scratch roots'
+                                  for name in names:
+                                      if name.startswith('TEST-r1366-') and not name.startswith('TEST-r1366-build-'):
+                                          for leaf in ('outer-receipt.json','outer-bindings.json','evidence'): selected(proof,'scratch/'+name+'/'+leaf)
+                                      elif name.startswith('TEST-lifecycle-r1364-'):
+                                          selected(proof,'scratch/'+name+'/lifecycle-receipt.json')
+                                          for case in ('stall-ready','bad-ready','ready-eof','stderr-open','spawn-failure'):
+                                              relative='scratch/'+name+'/'+case
+                                              for leaf in ('observations-before-outer.json','worker.stdout','worker.stderr'): selected(proof,relative+'/'+leaf)
+                                              try:
+                                                  lifecycle=open_directory(scratch,name)
+                                                  try:
+                                                      case_fd=open_directory(lifecycle,case)
+                                                      try:
+                                                          present=set(os.listdir(case_fd)); assert len(present) <= ENTRY_LIMIT
+                                                          for leaf in ('fixture-allocation.json','fixture.pid','fork-None.stderr','fork-None.trace','fork-None.control','fork-None.actor.stdout','fork-None.raw-receipt.json'):
+                                                              if leaf in present: selected(proof,relative+'/'+leaf)
+                                                      finally: os.close(case_fd)
+                                                  finally: os.close(lifecycle)
+                                              except (OSError,AssertionError,ValueError,KeyError) as error:
+                                                  errors.append({'path':'TEST-cursor-proof/'+relative,'error':type(error).__name__+':'+str(error)[:240]})
+                                      elif name.startswith('TEST-r1366-build-'):
+                                          selected(proof,'scratch/'+name+'/fixture-build-bindings.json')
+                                          for label in ('go-version','compiler-version','actor-build','held-child-build','helper-build','helper-build-info'):
+                                              for ext in ('.stdout','.stderr'): selected(proof,'scratch/'+name+'/'+label+ext)
+                                      elif name != 'TEST-cursor-physical':
+                                          errors.append({'path':'TEST-cursor-proof/scratch/'+name,'error':'unexpected scratch root; excluded'})
+                              finally: os.close(scratch)
+                          except (OSError,AssertionError,ValueError,KeyError) as error:
+                              errors.append({'path':'TEST-cursor-proof/scratch','error':type(error).__name__+':'+str(error)[:240]})
+                          try:
+                              source_fd=open_directory(proof,'source')
+                              try:
+                                  lower=open_directory(source_fd,'scratch')
+                                  try:
+                                      names=sorted(os.listdir(lower)); assert len(names) <= 1, 'one lower proof root'
+                                      for name in names:
+                                          relative='source/scratch/'+name
+                                          try:
+                                              assert name.startswith('TEST-linux-r1364-')
+                                              for leaf in ('linux-receipt-r1364.json','held-child-build-binding.json','TEST-held-child.c','TEST-held-child'): selected(proof,relative+'/'+leaf)
+                                              child=open_directory(lower,name)
+                                              try:
+                                                  present=set(os.listdir(child)); assert len(present) <= ENTRY_LIMIT
+                                                  # Only the unchanged finite lower cases and new consumed-byte files.
+                                                  cases=['fork-passive',*[mode+'-None' for mode in ('fork','vfork','exec','thread')],*['fork-'+refusal for refusal in ('invalid','wrong-tracer','wrong-sequence','wrong-phase','wrong-pid','wrong-birth','wrong-child','wrong-child-birth','wrong-syscall','wrong-flags','wrong-arg','eof','deadline')]]
+                                                  for case in cases:
+                                                      for suffix in ('.stderr','.trace','.control','.actor.stdout','.raw-receipt.json'):
+                                                          selected(proof,relative+'/'+case+suffix)
+                                              finally: os.close(child)
+                                          except (OSError,AssertionError,ValueError,KeyError) as error:
+                                              errors.append({'path':'TEST-cursor-proof/'+relative,'error':type(error).__name__+':'+str(error)[:240]})
+                                  finally: os.close(lower)
+                              finally: os.close(source_fd)
+                          except (OSError,AssertionError,ValueError,KeyError) as error:
+                              errors.append({'path':'TEST-cursor-proof/source/scratch','error':type(error).__name__+':'+str(error)[:240]})
+                          for comparison in ('NEW','OLD'):
+                              relative='builds/'+comparison
+                              for leaf in ('current.patch','build-provenance.json','config.log','config.status','Makefile','src/Makefile','src/strace'):
+                                  selected(proof,relative+'/'+leaf)
+                              try:
+                                  tree=open_directory(proof,'builds')
+                                  try:
+                                      build=open_directory(tree,comparison)
+                                      try:
+                                          provenance=strict_json(read_at(build,'build-provenance.json'))
+                                          generated=provenance['generated']; assert isinstance(generated,dict) and len(generated) <= ENTRY_LIMIT
+                                          for path in sorted(generated):
+                                              try:
+                                                  assert path.endswith('.h') or path.rsplit('/',1)[-1] in ('Makefile','config.log','config.status'), 'generated configuration selection'
+                                                  if path not in ('config.log','config.status','Makefile','src/Makefile'): selected(proof,relative+'/'+path)
+                                              except (AssertionError,TypeError) as error:
+                                                  errors.append({'path':'TEST-cursor-proof/'+relative,'error':type(error).__name__+':'+str(error)[:240]})
+                                      finally: os.close(build)
+                                  finally: os.close(tree)
+                              except (OSError,AssertionError,ValueError,KeyError,TypeError) as error:
+                                  errors.append({'path':'TEST-cursor-proof/'+relative+'/build-provenance.json','error':type(error).__name__+':'+str(error)[:240]})
+                      except (OSError,AssertionError,ValueError,KeyError) as error:
+                          errors.append({'path':'TEST-cursor-proof','error':type(error).__name__+':'+str(error)[:240]})
+                      finally:
+                          if proof is not None: os.close(proof)
                   for root, names in (('TEST-cursor-installed-one', ('evidence', 'recipe')),
                                       ('TEST-cursor-installed-preparation', PREPARATION)):
                       try:
@@ -1215,7 +1555,7 @@ jobs:
               parser.add_argument('--gid', type=int)
               raise SystemExit(main(parser.parse_args()))
           PY_EVIDENCE
-          sudo /usr/bin/python3 -B -S "$export_dir/case_evidence.py" --runner-temp "$CURSOR_CASE_PARENT" --source-sha e43635d1045cb7146e2d05fc69e1d4d838ff51e3baab59951e8616e4a0f567f1 --destination "$export_dir" --uid "$(id -u)" --gid "$(id -g)"
+          sudo env CURSOR_PROOF_WORKSPACE="${CURSOR_PROOF_WORKSPACE:-}" /usr/bin/python3 -B -S "$export_dir/case_evidence.py" --runner-temp "$CURSOR_CASE_PARENT" --source-sha 8f1781d05cd102adb5c06807866cc40622cba5769214cb4161f676a68c04a20b --destination "$export_dir" --uid "$(id -u)" --gid "$(id -g)"
       - name: Always retain SAME-case TEST evidence and bounded preparation records
         if: always()
         timeout-minutes: 3
