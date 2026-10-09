@@ -10,6 +10,47 @@ macOS keeps Claude, Codex and OpenCode. GitHub Latest remains 1.46.1 for legacy
 installers. Rerun setup once to adopt a normal Claude marketplace's platform
 channel. [Channel selection and promotion](PLATFORM_RELEASE_CHANNELS.md).
 
+## Local installer preview (macOS)
+
+From a clean checkout, open a terminal and run:
+
+```bash
+make preview-installer
+# Optional line prompts and a custom reusable cache:
+make preview-installer PREVIEW_ARGS='--plain --state-dir /path/to/private-TEST-cache'
+# Use an explicitly installed Gemini CLI in the TEST profile:
+make preview-installer PREVIEW_ARGS='--gemini-cli /absolute/path/to/gemini'
+```
+
+This builds the committed source and its real portable package into a private
+reusable TEST cache, then runs the installer with fresh HOME, working directory
+and client profiles. It discovers the actual Claude, Codex, OpenCode and Gemini
+executables before creating the private PATH. Missing CLIs remain absent; an
+unsupported installed version is reported by the real installer. The optional
+`--gemini-cli` override selects a real executable for this preview only.
+Select the clients, then review and confirm the plan. Use `--plain` for line prompts.
+
+Python 3.9+, Go and macOS signing/sandbox tools are required. `gh` downloads the
+latest signed public helper and verifies its published checksum; alternatively
+pass `--native-zip /path/to/ClaudeNotifier.app.zip`. `--binary /path/to/binary`
+skips the main build only when its supported source provenance matches clean HEAD.
+Go still builds the portable package using the exact committed source and binary.
+
+Real CLI proxies permit only version checks and the installer's exact local
+plugin registration/listing commands. They deny CLI network access, Keychain and
+host credential/profile reads. Git acquisition of this repository is redirected
+to a private bare snapshot of the same commit; finite release downloads resolve
+to the candidate binary, native helper, real portable zip and checksum manifest.
+Unexpected downloads and CLI commands fail. The native installer runs outside
+the CLI sandbox so it can perform its normal macOS app registration.
+
+This previews installation only. It does not launch an agent/model session or
+verify notification delivery or release qualification. Source proof, acquisition
+and real CLI command logs remain in the printed TEST directory, along with all
+profiles and native app registrations. Keep that directory until its TEST
+registration has been inspected and safely removed. No automatic deletion occurs.
+Use `--state-dir /path/to/private-TEST-cache` to reuse your own mode-700 cache.
+
 ## Prerequisites
 
 - Claude, Codex CLI and/or OpenCode for stable setup (published OpenCode support is tested with 1.18.33; published V2 support is not declared). The dual-API candidate targets 1.18.33, 2.0.0 and 2.0.21; final platform qualification and publication remain pending. See [OpenCode candidate setup and limits](opencode-notifications.md), including the stock Windows V1 original-event-age limitation. Gemini CLI 0.62.0 is the tested host on Linux/Windows.
