@@ -212,7 +212,8 @@ def cli_proxies(commands, lab, installed, env, sha):
                        '(deny mach-lookup (global-name "com.apple.securityd") '
                        '(global-name "com.apple.securityd.xpc") (global-name "com.apple.KeychainCircleNotification") '
                        '(global-name-regex #".*(securityd|SecurityAgent|keychain).*"))\n'
-                       '(deny file-write* (require-not (subpath '+quoted(lab)+')))\n'+
+                       '(deny file-write* (require-all (require-not (subpath '+quoted(lab)+')) '
+                       '(require-not (literal "/dev/null"))))\n'+
                        ''.join('(deny file-read* file-write* (subpath '+quoted(p)+'))\n' for p in blocked))
     # Empty Gemini system/user inputs prevent upward .env/settings/trust search.
     for directory in (lab,Path(env['HOME']),Path(env['GEMINI_CLI_HOME']),Path(env['HOME'])/'.gemini'):
@@ -282,8 +283,16 @@ for key in ('HOME','CODEX_HOME','CLAUDE_CONFIG_DIR','GEMINI_CLI_HOME','TMPDIR'):
 with (lab/'cli-commands.jsonl').open('a') as log:
     log.write(json.dumps({'cli':name,'executable':D['installed'][name],'args':args})+'\n')
 try:
+    version_probe = args == ['--version']
     result = subprocess.run(['/usr/bin/sandbox-exec','-f',D['profile'],D['installed'][name]]+args,
-                            cwd=lab,env=env,timeout=60)
+                            cwd=lab,env=env,timeout=60,
+                            capture_output=version_probe)
+    if version_probe:
+        with (lab/'cli-commands.jsonl').open('a') as log:
+            log.write(json.dumps({'cli':name,'args':args,'exit_code':result.returncode,
+                                  'stderr':result.stderr.decode(errors='replace')})+'\n')
+        sys.stdout.buffer.write(result.stdout)
+        if result.returncode: sys.stderr.buffer.write(result.stderr)
     sys.exit(result.returncode)
 except subprocess.TimeoutExpired:
     sys.exit('TEST CLI command exceeded 60 seconds')
