@@ -13,7 +13,7 @@ func escapeProductNotice(raw string) ([]string, error) {
 	return escapeProductRows([]string{raw})
 }
 
-const setupProductsConfirmationTitle = "Apply this plan? (Yes: install / No: cancel; default: Yes)"
+const setupProductsConfirmationTitle = "Apply this plan?"
 
 func setupProductsConfirmationRows(rows []string, rich bool) ([]string, error) {
 	help := "Press Enter or type y to install; type n to cancel."
