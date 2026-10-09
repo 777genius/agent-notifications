@@ -16,8 +16,8 @@ github.com/777genius/plugin-kit-ai/cli v0.0.0-20261001182617-f05fe750bb7a h1:IXv
 github.com/777genius/plugin-kit-ai/cli v0.0.0-20261001182617-f05fe750bb7a/go.mod h1:Q5LcHECoKVFDqi8RH8BGPbKtHdkYMxaHzsmzsyfuRp0=
 github.com/777genius/plugin-kit-ai/cli v0.0.0-20261001223030-8064798523dc h1:D2nNlBywARUZtMg09gwRI1M/dCLwFxFLh1nWA5Qa2rk=
 github.com/777genius/plugin-kit-ai/cli v0.0.0-20261001223030-8064798523dc/go.mod h1:Q5LcHECoKVFDqi8RH8BGPbKtHdkYMxaHzsmzsyfuRp0=
-github.com/777genius/plugin-kit-ai/cli v0.0.0-20261009161635-d3d9b6b5cf44 h1:iI7jqTxLM9DsJmZj8yfoSCIe4ys8dMbMgjfm1YnNW/k=
-github.com/777genius/plugin-kit-ai/cli v0.0.0-20261009161635-d3d9b6b5cf44/go.mod h1:Q5LcHECoKVFDqi8RH8BGPbKtHdkYMxaHzsmzsyfuRp0=
+github.com/777genius/plugin-kit-ai/cli v0.0.0-20261009162352-e303c5896f02 h1:Z1wwcNlLCbivQrhUI5v/sje9/NzlcM6RRzreUVWheXw=
+github.com/777genius/plugin-kit-ai/cli v0.0.0-20261009162352-e303c5896f02/go.mod h1:Q5LcHECoKVFDqi8RH8BGPbKtHdkYMxaHzsmzsyfuRp0=
 github.com/777genius/plugin-kit-ai/install/integrationctl v0.1.0 h1:6ZdwqmX9a/zgzlqNoYQ/O9iguM305rZNdbchcfQYC6w=
 github.com/777genius/plugin-kit-ai/install/integrationctl v0.1.0/go.mod h1:+4skxdhGnVAQduEPhpO1gP+DZP5f0K3l9rljiFA+hm0=
 github.com/777genius/plugin-kit-ai/install/integrationctl v0.1.1-0.20261001182617-f05fe750bb7a h1:hEZw3LdlIBjeXAFbMgSEO2vI92wibGdRzT1eUUgaKlM=
