@@ -1,0 +1,504 @@
+name: Basic v1.48.5 five-platform draft
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: Exact independently reviewed release source SHA (five versions must be 1.48.5)
+        type: string
+        required: true
+      release_tag:
+        description: Basic five-platform candidate; this bounded operator accepts v1.48.5 only
+        type: string
+        required: true
+        default: v1.48.5
+      signing_run:
+        description: Completed owner macos-qualification run for this exact source SHA
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: basic-v1485-${{ inputs.candidate_sha }}
+  cancel-in-progress: false
+
+env:
+  RELEASE_CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+  RELEASE_TAG: ${{ inputs.release_tag }}
+  RELEASE_SIGNING_RUN: ${{ inputs.signing_run }}
+
+jobs:
+  verify-version:
+    name: Verify owner and exact basic candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require owner manual dispatch before candidate execution
+        env: {GH_TOKEN: '${{ github.token }}', OWNER: '${{ github.repository_owner }}', TRIGGER: '${{ github.triggering_actor }}'}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_ACTOR" = "$OWNER"
+          test "$TRIGGER" = "$OWNER"
+          test "$GITHUB_REPOSITORY" = 777genius/agent-notifications
+          [[ "$RELEASE_CANDIDATE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$RELEASE_SIGNING_RUN" =~ ^[1-9][0-9]*$ ]]
+          test "$RELEASE_TAG" = v1.48.5
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RELEASE_SIGNING_RUN" > "$RUNNER_TEMP/signing-run.json"
+          jq -e --arg source "$RELEASE_CANDIDATE_SHA" --arg owner "$OWNER" '
+            .head_sha==$source and .conclusion=="success" and .event=="workflow_dispatch" and
+            .head_branch=="release/macos-signing" and .path==".github/workflows/macos-qualification.yml" and
+            .actor.login==$owner and .triggering_actor.login==$owner' "$RUNNER_TEMP/signing-run.json"
+          gh api "repos/$GITHUB_REPOSITORY/commits/$RELEASE_CANDIDATE_SHA/check-runs?per_page=100" > "$RUNNER_TEMP/checks.json"
+          jq -e '.total_count==(.check_runs|length) and
+            (.check_runs | group_by(.name) | map(max_by(.id))) as $latest |
+            ([$latest[]|select(.conclusion=="failure" or .conclusion=="cancelled" or .conclusion=="timed_out")]|length)==0 and
+            (["Test on Ubuntu (1.25)","Test on Ubuntu (1.26)","Test on Windows (1.25)","Test on Windows (1.26)","Test on macOS (1.25)","Test on macOS (1.26)","Swift notifier tests","Full macOS CI required","Lint","OpenCode plugin bundle"] |
+             all(. as $name | any($latest[]; .name==$name and .status=="completed" and .conclusion=="success")))' "$RUNNER_TEMP/checks.json"
+      - name: Require unused immutable tag and no existing release
+        env: {GH_TOKEN: '${{ github.token }}'}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for endpoint in "git/ref/tags/$RELEASE_TAG" "releases/tags/$RELEASE_TAG"; do
+            response="$RUNNER_TEMP/basic-absence-${endpoint%%/*}.txt"
+            if gh api --include "repos/$GITHUB_REPOSITORY/$endpoint" > "$response" 2> "$response.stderr"; then
+              echo 'Existing tag or release requires explicit reconciliation; no overwrite.' >&2
+              exit 1
+            fi
+            grep -Eq '^HTTP/[0-9.]+ 404( |$)' "$response"
+          done
+      - uses: actions/checkout@v7
+        with: {ref: '${{ inputs.candidate_sha }}', persist-credentials: false}
+      - name: Verify all five version values and changelog
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$RELEASE_CANDIDATE_SHA"
+          test "$(sed -n 's/^var ConsumerVersion = "\([^" ]*\)"$/\1/p' internal/config/runtime.go)" = 1.48.5
+          test "$(jq -er '.version' .claude-plugin/plugin.json)" = 1.48.5
+          test "$(jq -er '.version' .codex-plugin/plugin.json)" = 1.48.5
+          test "$(jq -er '.metadata.version' .claude-plugin/marketplace.json)" = 1.48.5
+          test "$(jq -er '.plugins[] | select(.name=="claude-notifications-go") | .version' .claude-plugin/marketplace.json)" = 1.48.5
+          grep -E '^## \[1\.48\.5\]' CHANGELOG.md
+          grep -Fx "      - '!v1.48.5'" .github/workflows/release.yml
+  build-matrix:
+    name: Build ${{ matrix.platform }} ${{ matrix.arch }}
+    needs: verify-version
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && matrix.os || matrix.os == 'ubuntu-22.04' && (vars.CI_LINUX_2204_RUNNER || 'ubuntu-22.04') || matrix.os == 'ubuntu-22.04-arm' && (vars.CI_LINUX_ARM_2204_RUNNER || 'ubuntu-22.04-arm') || matrix.os == 'macos-15' && (vars.CI_MACOS_15_RUNNER || 'macos-15') || matrix.os }}
+    timeout-minutes: 30
+
+    strategy:
+      matrix:
+        include:
+          # Linux builds - use native runners
+          - os: ubuntu-22.04
+            platform: linux
+            arch: amd64
+            binary: claude-notifications-linux-amd64
+          - os: ubuntu-22.04-arm
+            platform: linux
+            arch: arm64
+            binary: claude-notifications-linux-arm64
+
+          # Windows builds - amd64 only (arm64 not supported with CGO)
+          - os: windows-latest
+            platform: windows
+            arch: amd64
+            binary: claude-notifications-windows-amd64.exe
+
+    steps:
+      - name: Preserve canonical source bytes on Windows
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.eol lf
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.candidate_sha }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: '1.27.2'
+
+      - name: Install Linux dependencies
+        if: matrix.platform == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Compile retained Windows SDK callback asset
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          ./native/windows-callback/build.ps1 -OutputDirectory "$env:RUNNER_TEMP\windows-callback-release" -EmbedAsset
+
+      - name: Retain Windows callback compile custody evidence
+        if: matrix.platform == 'windows'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7 repository pin
+        with:
+          name: windows-callback-build-${{ inputs.candidate_sha }}
+          path: ${{ runner.temp }}/windows-callback-release
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Build binaries
+        env:
+          CGO_ENABLED: '1'
+        shell: bash
+        run: |
+          mkdir -p dist
+          if [ "${{ matrix.platform }}" = "windows" ]; then
+            # Exact helper bytes compiled above remain inert until installed qualification.
+            export GOFLAGS="-tags=windows_callback_asset"
+          fi
+          echo "Building claude-notifications..."
+          go build -ldflags="-s -w" -trimpath -o "dist/${{ matrix.binary }}" ./cmd/claude-notifications
+          echo "Building sound-preview..."
+          SOUND_PREVIEW_BINARY="${{ matrix.binary }}"
+          SOUND_PREVIEW_BINARY="${SOUND_PREVIEW_BINARY//claude-notifications/sound-preview}"
+          go build -ldflags="-s -w" -trimpath -o "dist/$SOUND_PREVIEW_BINARY" ./cmd/sound-preview
+          echo "Building list-devices..."
+          LIST_DEVICES_BINARY="${{ matrix.binary }}"
+          LIST_DEVICES_BINARY="${LIST_DEVICES_BINARY//claude-notifications/list-devices}"
+          go build -ldflags="-s -w" -trimpath -o "dist/$LIST_DEVICES_BINARY" ./cmd/list-devices
+          echo "Building list-sounds..."
+          LIST_SOUNDS_BINARY="${{ matrix.binary }}"
+          LIST_SOUNDS_BINARY="${LIST_SOUNDS_BINARY//claude-notifications/list-sounds}"
+          go build -ldflags="-s -w" -trimpath -o "dist/$LIST_SOUNDS_BINARY" ./cmd/list-sounds
+          if [ "${{ matrix.platform }}" = "windows" ]; then
+            echo "Building claude-notifications focus-handler (GUI subsystem, no console flash on toast click)..."
+            FOCUS_BINARY="${{ matrix.binary }}"
+            FOCUS_BINARY="${FOCUS_BINARY%.exe}-focus.exe"
+            go build -ldflags="-s -w -H=windowsgui" -trimpath -o "dist/$FOCUS_BINARY" ./cmd/claude-notifications
+          fi
+
+      - name: Verify Windows release embeds exact trusted helper bytes
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          ./native/windows-callback/verify-embedded.ps1 -Executable "dist/${{ matrix.binary }}" -Helper "$env:RUNNER_TEMP\windows-callback-release\helper.exe"
+
+      - name: Build version-bound portable package
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        shell: bash
+        run: |
+          version="${RELEASE_TAG#v}"
+          zip_name="agent-notify-portable-${{ matrix.platform }}-${{ matrix.arch }}.zip"
+          go run ./cmd/build-portable-package \
+            -version "$version" \
+            -os "${{ matrix.platform }}" \
+            -arch "${{ matrix.arch }}" \
+            -executable "dist/${{ matrix.binary }}" \
+            -output "dist/$zip_name" \
+            -workdir "${RUNNER_TEMP}/portable-${{ matrix.platform }}-${{ matrix.arch }}"
+
+      - name: Upload binary artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: binaries-${{ matrix.platform }}-${{ matrix.arch }}
+          path: dist/*
+          retention-days: 14
+
+
+  import-darwin:
+    name: Import same-source signed Darwin custody
+    needs: verify-version
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      matrix: {arch: [arm64, amd64]}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.signing_run }}
+          name: macos-candidate-${{ matrix.arch }}-${{ inputs.candidate_sha }}
+          path: signed
+      - name: Check source/version and every signed-run leaf
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(cat signed/source-sha.txt)" = "$RELEASE_CANDIDATE_SHA"
+          test "$(cat signed/candidate-version.txt)" = "$RELEASE_TAG"
+          test -z "$(find signed -type l -print)"
+          (cd signed && sha256sum -c SHA256SUMS)
+          mkdir dist
+          for name in claude-notifications sound-preview list-devices list-sounds; do
+            cp "signed/$name-darwin-${{ matrix.arch }}" dist/
+          done
+          cp "signed/agent-notify-portable-darwin-${{ matrix.arch }}.zip" dist/
+      - uses: actions/upload-artifact@v7
+        with: {name: 'binaries-darwin-${{ matrix.arch }}', path: 'dist/*', if-no-files-found: error, retention-days: 14}
+
+  test-binaries:
+    name: Test ${{ matrix.platform }} ${{ matrix.arch }} binary
+    needs: [build-matrix, import-darwin]
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && matrix.os || matrix.os == 'ubuntu-latest' && (vars.CI_LINUX_RUNNER || 'ubuntu-latest') || matrix.os == 'ubuntu-24.04-arm' && (vars.CI_LINUX_ARM_RUNNER || 'ubuntu-24.04-arm') || matrix.os == 'macos-26' && (vars.CI_MACOS_26_RUNNER || 'macos-26') || matrix.os }}
+    timeout-minutes: 15
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+            arch: amd64
+            binary: claude-notifications-linux-amd64
+          - os: ubuntu-24.04-arm
+            platform: linux
+            arch: arm64
+            binary: claude-notifications-linux-arm64
+          - os: windows-latest
+            platform: windows
+            arch: amd64
+            binary: claude-notifications-windows-amd64.exe
+          - os: macos-15
+            platform: darwin
+            arch: arm64
+            binary: claude-notifications-darwin-arm64
+          - os: macos-15-intel
+            platform: darwin
+            arch: amd64
+            binary: claude-notifications-darwin-amd64
+
+    steps:
+      - name: Preserve canonical source bytes on Windows
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.eol lf
+      - name: Checkout artifact qualification tests
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.candidate_sha }}
+
+      - name: Set up Go for artifact identity and private Windows roots
+        uses: actions/setup-go@v7
+        with:
+          go-version: ${{ matrix.platform == 'darwin' && '1.26' || '1.27.2' }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Download binary artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: binaries-${{ matrix.platform }}-${{ matrix.arch }}
+          path: dist
+
+      - name: Verify artifact set
+        env:
+          MAIN_BINARY: ${{ matrix.binary }}
+        run: |
+          for prefix in claude-notifications sound-preview list-devices list-sounds; do
+            binary="${MAIN_BINARY/claude-notifications/$prefix}"
+            if [ ! -s "dist/$binary" ]; then
+              echo "Missing or empty artifact: $binary"
+              exit 1
+            fi
+          done
+          if [ "${{ matrix.platform }}" = "windows" ]; then
+            focus_binary="${MAIN_BINARY%.exe}-focus.exe"
+            if [ ! -s "dist/$focus_binary" ]; then
+              echo "Missing or empty artifact: $focus_binary"
+              exit 1
+            fi
+          fi
+          portable_zip="agent-notify-portable-${{ matrix.platform }}-${{ matrix.arch }}.zip"
+          if [ ! -s "dist/$portable_zip" ]; then
+            echo "Missing or empty artifact: $portable_zip"
+            exit 1
+          fi
+        shell: bash
+
+      - name: Make binaries executable (Unix)
+        if: runner.os != 'Windows'
+        run: chmod +x dist/*
+
+      - name: Test main binary version
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          output="$("./dist/${{ matrix.binary }}" version)"
+          expected="claude-notifications $RELEASE_TAG"
+          if [ "$output" != "$expected" ]; then
+            echo "Unexpected version output: '$output' (expected '$expected')"
+            exit 1
+          fi
+        shell: bash
+
+      - name: Smoke-test companion binaries
+        env:
+          MAIN_BINARY: ${{ matrix.binary }}
+        run: |
+          sound_preview="${MAIN_BINARY/claude-notifications/sound-preview}"
+          list_sounds="${MAIN_BINARY/claude-notifications/list-sounds}"
+          "./dist/$sound_preview" --help
+          "./dist/$list_sounds" --help
+        shell: bash
+
+      - name: Qualify configuration and notification delivery
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: python scripts/release-artifact-e2e.py --binary "dist/${{ matrix.binary }}" --version "$RELEASE_TAG"
+        shell: bash
+
+  create-release:
+    name: Prepare basic five-platform draft; macOS E2E remains separate
+    needs: [test-binaries, build-matrix, import-darwin]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions: {contents: write, actions: read}
+    steps:
+      - uses: actions/checkout@v7
+        with: {ref: '${{ inputs.candidate_sha }}', path: source, persist-credentials: false}
+      - uses: actions/setup-python@v7
+        with: {python-version: '3.12'}
+      - uses: actions/download-artifact@v8
+        with: {pattern: 'binaries-*', merge-multiple: true, path: dist}
+      - uses: actions/download-artifact@v8
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.signing_run }}
+          name: ClaudeNotifier-smoke
+          path: signed-helper
+      - name: Fetch current same-source signing provenance
+        env: {GH_TOKEN: '${{ github.token }}'}
+        shell: bash
+        run: gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RELEASE_SIGNING_RUN" > "$RUNNER_TEMP/basic-signing-run.json"
+      - name: Seal exactly twenty-nine assets and verify signed helper custody
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C source rev-parse HEAD)" = "$RELEASE_CANDIDATE_SHA"
+          python -B - <<'PY'
+          import hashlib, json, os, pathlib, shutil, zipfile
+          P = pathlib.Path
+          source, dist, helper = P('source'), P('dist'), P('signed-helper')
+          candidate, tag, signing = (os.environ[key] for key in ('RELEASE_CANDIDATE_SHA', 'RELEASE_TAG', 'RELEASE_SIGNING_RUN'))
+          def need(ok, reason):
+              if not ok: raise ValueError(reason)
+          def digest(path):
+              need(path.is_file() and not path.is_symlink() and path.stat().st_size > 0, 'regular_nonempty_asset_required')
+              return hashlib.sha256(path.read_bytes()).hexdigest()
+          need(tag == 'v1.48.5', 'exact_basic_candidate_tag_required')
+          run = json.loads((P(os.environ['RUNNER_TEMP']) / 'basic-signing-run.json').read_text())
+          need(run['id'] == int(signing) and run['head_sha'] == candidate and run['conclusion'] == 'success'
+               and run['event'] == 'workflow_dispatch' and run['head_branch'] == 'release/macos-signing'
+               and run['path'] == '.github/workflows/macos-qualification.yml'
+               and run['actor']['login'] == '777genius' and run['triggering_actor']['login'] == '777genius',
+               'owner_exact_signing_run_required')
+          custody = json.loads((helper / 'ClaudeNotifier-smoke.custody.json').read_text())
+          archive = helper / 'ClaudeNotifier-smoke.app.zip'
+          need(custody['sourceSHA'] == candidate and custody['workflowSHA'] == candidate
+               and custody['runID'] == signing and custody['runAttempt'] == str(run['run_attempt'])
+               and custody['signingTeam'] == '86399583GS' and custody['bundleID'] == 'com.777genius.agent-notifications'
+               and custody['signatureVerified'] is True and custody['archiveSHA256'] == digest(archive),
+               'same_run_signed_helper_custody_required')
+          def safe_zip(path, limit):
+              digest(path)
+              need(path.stat().st_size <= limit, 'archive_size_limit')
+              packed = zipfile.ZipFile(path)
+              names = set(); total = 0
+              for member in packed.infolist():
+                  name = member.filename; pure = pathlib.PurePosixPath(name)
+                  need(name and not pure.is_absolute() and name == pure.as_posix() + ('/' if member.is_dir() else '') and member.orig_filename == name
+                       and '..' not in pure.parts and '\\' not in name and ':' not in name
+                       and name.casefold() not in names and not member.flag_bits & 1
+                       and (member.external_attr >> 16) & 0o170000 in (0, 0o100000, 0o040000),
+                       'unsafe_or_duplicate_archive_member')
+                  names.add(name.casefold()); total += member.file_size
+                  need(member.file_size <= limit and total <= limit, 'archive_expansion_limit')
+              return packed
+          with safe_zip(archive, 16 * 1024 * 1024) as packed:
+              for member, expected in [
+                  ('ClaudeNotifier.app/Contents/MacOS/terminal-notifier-modern', custody['executableSHA256']),
+                  ('ClaudeNotifier.app.managed-runtime.json', custody['attestationSHA256'])]:
+                  need(hashlib.sha256(packed.read(member)).hexdigest() == expected, 'signed_helper_leaf_changed')
+          names = set()
+          for target in ('linux-amd64', 'linux-arm64', 'windows-amd64', 'darwin-amd64', 'darwin-arm64'):
+              suffix = '.exe' if target.startswith('windows') else ''
+              names.update(command + '-' + target + suffix for command in ('claude-notifications', 'sound-preview', 'list-devices', 'list-sounds'))
+              names.add('agent-notify-portable-' + target + '.zip')
+          names.add('claude-notifications-windows-amd64-focus.exe')
+          need({path.name for path in dist.iterdir()} == names, 'exact_twenty_six_downloaded_assets_required')
+          for name in names: digest(dist / name)
+          for target in ('linux-amd64', 'linux-arm64', 'windows-amd64', 'darwin-amd64', 'darwin-arm64'):
+              binary_name = 'claude-notifications' + ('.exe' if target.startswith('windows') else '')
+              public_binary = dist / ('claude-notifications-' + target + ('.exe' if target.startswith('windows') else ''))
+              with safe_zip(dist / ('agent-notify-portable-' + target + '.zip'), 96 * 1024 * 1024) as packed:
+                  expected_files = {'plugin.json', 'mcp.json', 'THIRD_PARTY_NOTICES.txt',
+                                    'skills/agent-notifications/SKILL.md', 'bin/' + binary_name}
+                  expected_dirs = {'bin/', 'skills/', 'skills/agent-notifications/'}
+                  need({item.filename for item in packed.infolist() if not item.is_dir()} == expected_files
+                       and {item.filename for item in packed.infolist() if item.is_dir()} <= expected_dirs,
+                       'exact_portable_layout_required')
+                  plugin = json.loads(packed.read('plugin.json'))
+                  need(plugin == {'$schema': 'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json',
+                                  'name': 'agent-notify', 'version': '1.48.5'}, 'portable_version_identity_required')
+                  mcp = json.loads(packed.read('mcp.json'))
+                  need(mcp == {'$schema': 'https://agent-plugins.org/schemas/1.0.0/mcp.schema.json',
+                               'mcpServers': {'agent-notify': {'type': 'stdio', 'command': './bin/' + binary_name,
+                                                             'args': [], 'env': {}}}}, 'portable_mcp_layout_required')
+                  need(hashlib.sha256(packed.read('bin/' + binary_name)).hexdigest() == digest(public_binary),
+                       'portable_executable_must_equal_public_binary')
+                  need(packed.read('THIRD_PARTY_NOTICES.txt') == (source / 'internal/thirdpartynotices/THIRD_PARTY_NOTICES.txt').read_bytes()
+                       and len(packed.read('skills/agent-notifications/SKILL.md')) > 0, 'portable_notices_and_skill_required')
+          shutil.copyfile(archive, dist / 'ClaudeNotifier.app.zip')
+          notices = source / 'internal/thirdpartynotices/THIRD_PARTY_NOTICES.txt'
+          digest(notices)
+          shutil.copyfile(notices, dist / notices.name)
+          names.update(('ClaudeNotifier.app.zip', notices.name))
+          need(len(names) == 28 and {path.name for path in dist.iterdir()} == names, 'exact_public_asset_inventory_required')
+          checksums = ''.join(digest(dist / name) + '  ' + name + '\n' for name in sorted(names))
+          with (dist / 'checksums.txt').open('x') as output: output.write(checksums)
+          need(len(list(dist.iterdir())) == 29, 'twenty_nine_assets_required')
+          report = {'status': 'basic_five_platform_artifact_checks_complete', 'releaseTag': tag, 'candidateSHA': candidate,
+                    'operatorSHA': os.environ['GITHUB_SHA'], 'signingRun': signing, 'signingAttempt': str(run['run_attempt']),
+                    'assetCount': 29, 'platformCount': 5, 'installedBusinessQualified': False, 'fullNativeQualified': False,
+                    'visibleDesktopQualified': False, 'macosE2EQualified': False, 'publicationAuthorized': False}
+          (P(os.environ['RUNNER_TEMP']) / 'basic-release-report.json').write_text(json.dumps(report, sort_keys=True) + '\n')
+          PY
+          (cd dist && sha256sum -c checksums.txt)
+      - name: Preserve basic qualification scope and asset custody
+        uses: actions/upload-artifact@v7
+        with:
+          name: basic-release-custody-${{ inputs.candidate_sha }}
+          path: |
+            ${{ runner.temp }}/basic-release-report.json
+            ${{ runner.temp }}/basic-signing-run.json
+            signed-helper/ClaudeNotifier-smoke.custody.json
+            dist/checksums.txt
+          if-no-files-found: error
+          retention-days: 14
+      - name: Create unused immutable tag and complete draft, never publish or promote Latest
+        env: {GH_TOKEN: '${{ github.token }}'}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for endpoint in "git/ref/tags/$RELEASE_TAG" "releases/tags/$RELEASE_TAG"; do
+            response="$RUNNER_TEMP/basic-final-absence-${endpoint%%/*}.txt"
+            if gh api --include "repos/$GITHUB_REPOSITORY/$endpoint" > "$response" 2> "$response.stderr"; then
+              echo 'Existing tag or release requires explicit reconciliation; no overwrite.' >&2
+              exit 1
+            fi
+            grep -Eq '^HTTP/[0-9.]+ 404( |$)' "$response"
+          done
+          gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" -f "ref=refs/tags/$RELEASE_TAG" -f "sha=$RELEASE_CANDIDATE_SHA" > "$RUNNER_TEMP/basic-tag.json"
+          jq -e --arg sha "$RELEASE_CANDIDATE_SHA" '.object.type=="commit" and .object.sha==$sha' "$RUNNER_TEMP/basic-tag.json"
+          gh release create "$RELEASE_TAG" --verify-tag --draft --prerelease=false --latest=false --title "$RELEASE_TAG" --notes 'Owner-approved basic five-platform artifact qualification: native version, CLI/config/local webhook checks and same-source signed/notarized macOS custody. OpenCode eleven-cell installed business qualification was not run. This draft grants no full native, clock/source-epoch, visible desktop or cold-start qualification. Publication requires separate draft-asset canaries and macOS E2E evidence.' dist/*
