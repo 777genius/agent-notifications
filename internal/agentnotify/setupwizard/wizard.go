@@ -1491,9 +1491,18 @@ func markInspectedIdentity(view uapinstaller.Inspection, out Result) Result {
 // per-client opt-out bit, so an absent sibling requires an explicit Add.
 // A read error or ambiguous state must never be interpreted as a fresh install.
 func BootstrapAutoTargets(ctx context.Context, req Request, before Result) (selected, skipped []string, err error) {
+	if ctx == nil {
+		return nil, nil, ErrRefused
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, nil, fmt.Errorf("MCP inspection interrupted: %w", err)
+	}
 	view, err := inspectUAPState(ctx, req)
 	if err != nil {
 		return nil, nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, nil, fmt.Errorf("MCP inspection interrupted: %w", err)
 	}
 	if view.Recovery.Required || len(view.Installations) > 1 {
 		return nil, nil, fmt.Errorf("existing portable installation requires inspection")
@@ -1504,7 +1513,7 @@ func BootstrapAutoTargets(ctx context.Context, req Request, before Result) (sele
 			continue
 		}
 		if target.Outcome == "unknown" {
-			return nil, nil, fmt.Errorf("existing MCP registration could not be inspected")
+			return nil, nil, bootstrapMCPInspectionError(target)
 		}
 		if target.Outcome == "installed" {
 			live[target.Client] = true

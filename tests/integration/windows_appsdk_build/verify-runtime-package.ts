@@ -4,12 +4,19 @@ import { createHash } from 'node:crypto';
 import { closeSync, fstatSync, lstatSync, openSync, readSync, realpathSync, writeFileSync } from 'node:fs';
 import type { Stats } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
+import { performance } from 'node:perf_hooks';
 
 const [outArg, packagesArg, lockArg, dotnetArg, ...extra] = process.argv.slice(2);
 const out = resolve(outArg ?? '.');
+const targets = [
+  {id: 'Microsoft.WindowsAppSDK.Runtime', folder: 'microsoft.windowsappsdk.runtime', version: '2.5.1', prefix: 'runtime'},
+  {id: 'Microsoft.WindowsAppSDK.Foundation', folder: 'microsoft.windowsappsdk.foundation', version: '2.3.12', prefix: 'foundation'},
+] as const;
+let anyFailure = false;
+for (const target of targets) {
 const report: Record<string, unknown> = { status: 'failed', sourceSHA: process.env.SOURCE_SHA,
   runID: process.env.GITHUB_RUN_ID, job: process.env.GITHUB_JOB, image: process.env.ImageVersion,
-  scope: 'CI-restored runtime package only', packageVerified: false, runtimeCodeExecuted: false,
+  scope: `CI-restored ${target.prefix === 'runtime' ? 'runtime' : 'Foundation'} package only`, packageVerified: false, runtimeCodeExecuted: false,
   localArchiveQualified: false, automaticRetry: false, steps: [] };
 let fd: number | undefined;
 let before: Stats | undefined;
@@ -51,12 +58,14 @@ function run(dotnet: string, phase: string, args: string[], timeout: number): st
   Object.assign(env, { DOTNET_CLI_UI_LANGUAGE: 'en-US', DOTNET_CLI_HOME: out,
     DOTNET_GENERATE_ASPNET_CERTIFICATE: 'false', DOTNET_CLI_TELEMETRY_OPTOUT: '1',
     DOTNET_ADD_GLOBAL_TOOLS_TO_PATH: 'false', DOTNET_NOLOGO: '1' });
+  const started = performance.now();
   const child = spawnSync(dotnet, args, { cwd: out, env, timeout, maxBuffer: 65_536, windowsHide: true });
+  const elapsedMs = performance.now() - started;
   const stdout = child.stdout ?? Buffer.alloc(0), stderr = child.stderr ?? Buffer.alloc(0);
   for (const [label, data] of [['stdout', stdout], ['stderr', stderr]] as const) {
-    writeFileSync(join(out, `runtime-${phase}.${label}`), data.subarray(0, 65_536), { flag: 'wx' });
+    writeFileSync(join(out, `${target.prefix}-${phase}.${label}`), data.subarray(0, 65_536), { flag: 'wx' });
   }
-  (report.steps as unknown[]).push({ phase, pid: child.pid, status: child.status, signal: child.signal,
+  (report.steps as unknown[]).push({ phase, configuredTimeoutMs: timeout, elapsedMs, pid: child.pid, status: child.status, signal: child.signal,
     errorCode: child.error ? (child.error as NodeJS.ErrnoException).code ?? 'error' : null,
     collected: !child.error && !child.signal && child.status !== null,
     stdoutTruncated: stdout.length > 65_536, stderrTruncated: stderr.length > 65_536,
@@ -74,28 +83,28 @@ try {
       || !/^v24\./.test(process.version)) throw new Error('owned CI guard refused');
   const packages = resolve(packagesArg), dotnet = resolve(dotnetArg);
   if (packages !== join(resolve(process.env.RUNNER_TEMP!), 'TEST-windows-appsdk-packages') || basename(dotnet).toLowerCase() !== 'dotnet.exe') throw new Error('unexpected input path');
-  for (const path of [packages, join(packages, 'microsoft.windowsappsdk.runtime'), join(packages, 'microsoft.windowsappsdk.runtime', '2.5.1')]) physical(path, true);
+  for (const path of [packages, join(packages, target.folder), join(packages, target.folder, target.version)]) physical(path, true);
   report.dotnetSHA256 = hashFile(dotnet, 32 << 20);
-  const version = run(dotnet, 'version', ['--version'], 10_000).trim();
+  const version = run(dotnet, 'version', ['--version'], target.prefix === 'runtime' ? 30_000 : 10_000).trim();
   if (!/^(?:1[0-9]|[2-9][0-9])\.\d+\.\d+$/.test(version)) throw new Error('installed stable .NET SDK10+ unavailable');
   report.dotnetSDK = version;
   lockPath = resolve(lockArg); const lockBytes = boundedRead(lockPath, 1 << 20);
   report.lockSHA256 = createHash('sha256').update(lockBytes).digest('hex');
   const locked = JSON.parse(lockBytes.toString('utf8')) as { dependencies?: Record<string, Record<string, { resolved?: string; contentHash?: string }>> };
-  const entry = locked.dependencies?.['native,Version=v0.0']?.['Microsoft.WindowsAppSDK.Runtime'];
-  if (entry?.resolved !== '2.5.1' || !entry.contentHash || !/^[A-Za-z0-9+/]{86}==$/.test(entry.contentHash)) throw new Error('runtime lock missing/invalid');
+  const entry = locked.dependencies?.['native,Version=v0.0']?.[target.id];
+  if (entry?.resolved !== target.version || !entry.contentHash || !/^[A-Za-z0-9+/]{86}==$/.test(entry.contentHash)) throw new Error('runtime lock missing/invalid');
   report.expectedContentHash = entry.contentHash;
-  packagePath = join(packages, 'microsoft.windowsappsdk.runtime', '2.5.1', 'microsoft.windowsappsdk.runtime.2.5.1.nupkg');
+  packagePath = join(packages, target.folder, target.version, `${target.folder}.${target.version}.nupkg`);
   physical(join(dirname(packagePath), '.nupkg.metadata'), false); physical(packagePath, false);
   fd = openSync(packagePath, 'r'); before = fstatSync(fd);
   if (before.size <= 0 || before.size > 170 * 1024 * 1024) throw new Error('archive size invalid');
   report.archiveBytes = before.size; report.archiveSHA256Before = archiveHash(fd);
-  const config = join(out, 'runtime-verify.nuget.config');
+  const config = join(out, `${target.prefix}-verify.nuget.config`);
   writeFileSync(config, '<configuration><packageSources><clear /></packageSources></configuration>\n', { flag: 'wx' });
   const output = run(dotnet, 'verify', ['nuget', 'verify', packagePath, '--all', '--verbosity', 'normal', '--configfile', config], 120_000);
   const hashes = [...output.matchAll(/^Content hash: ([A-Za-z0-9+/]{86}==)\r?$/gm)];
   report.actualContentHash = hashes.length === 1 ? hashes[0]?.[1] : null;
-  const success = "Successfully verified package 'Microsoft.WindowsAppSDK.Runtime.2.5.1'.";
+  const success = `Successfully verified package '${target.id}.${target.version}'.`;
   if (hashes.length !== 1 || hashes[0]?.[1] !== entry.contentHash || output.split(/\r?\n/).filter(line => line === success).length !== 1
       || output.includes('Package signature validation failed.')) throw new Error('NuGet content/signature proof absent');
   report.verificationReturned = true; exitCode = 0;
@@ -122,6 +131,9 @@ finally {
       originalEvidenceSHA256: createHash('sha256').update(data).digest('hex'), runtimeCodeExecuted: false,
       localArchiveQualified: false, automaticRetry: false }) + '\n';
   }
-  if (admitted) { physical(out, true); writeFileSync(join(out, 'runtime-verification.json'), data, { flag: 'wx' }); }
-  process.exitCode = exitCode;
+  if (admitted) { physical(out, true); writeFileSync(join(out, `${target.prefix}-verification.json`), data, { flag: 'wx' }); }
+  if (exitCode !== 0) anyFailure = true;
 }
+
+}
+process.exitCode = anyFailure ? 1 : 0;

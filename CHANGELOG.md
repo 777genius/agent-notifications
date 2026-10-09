@@ -7,8 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.48.4] - 2026-10-08
+
 ### Added
 - **Replace per-session desktop banners (macOS, opt-in)** — `notifications.replaceNotificationsPerSession` (default `false`) keys `terminal-notifier -group` on the Claude/Codex session id so a session's newest notification replaces its previous banner in place instead of stacking, while other sessions stay separate. Sessions with no id (or `unknown`) stay unique. Conversation grouping in Notification Center is unchanged and still uses the session thread. Useful for hosts that emit many attention events per session, such as Codex "Approve for me" auto-review.
+
+- Inactive Windows SDK callback and release-embedding foundation, with source-bound custody and cold-click contract fixtures ([#421](https://github.com/777genius/agent-notifications/pull/421)).
+
+### Changed
+- Unified release source includes the current Linux/Windows fixes and macOS runtime-profile fixes. Platform artifacts must pass checks against this candidate before release promotion.
+
+### Fixed
+- OpenCode V2 Intel macOS profiling accepts the stock Mach-O LIB64 subtype while preserving the closed architecture allowlist and live image continuity ([#301](https://github.com/777genius/agent-notifications/issues/301), [#302](https://github.com/777genius/agent-notifications/issues/302)).
+- OpenCode version probes use private HOME, XDG, configuration and temporary directories. Bounded cold startup gets a 30-second probe budget, with 35 seconds for the Go operation and 38 seconds for the profile handoff; earlier caller deadlines still shorten execution and child closure remains required ([#301](https://github.com/777genius/agent-notifications/issues/301), [#302](https://github.com/777genius/agent-notifications/issues/302)).
+- Windows callback census excludes positively identified foreign images before checking owned files ([#422](https://github.com/777genius/agent-notifications/pull/422)).
+
+### Platform notes
+- The Windows callback foundation remains inactive. Its contract and embedding checks do not qualify installed setup, runtime readiness, notification delivery or real click execution.
+- Historical platform checks do not qualify these new release bytes. OpenCode remains silent and informational, with no sound or click-to-focus support; the Windows V1 delayed-event limitation remains unchanged.
 
 ## [1.48.1] - 2026-10-06
 

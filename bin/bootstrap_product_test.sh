@@ -196,6 +196,7 @@ done
 [ "$#" -eq 1 ] && [ "$1" = --version ] || exit 2
 [ "$PWD" -ef "$HOME" ] && [ "$HOME" -ef "$USERPROFILE" ] || exit 3
 case "$PWD" in */bootstrap-opencode-TEST-*/profile) ;; *) exit 4 ;; esac
+[ -f "${BASH_SOURCE[0]%/*}/version" ] || exit 7
 cat "${BASH_SOURCE[0]%/*}/version"
 HOST_VERSION
     chmod +x "$SANDBOX/version-cli/opencode"
@@ -206,13 +207,33 @@ HOST_VERSION
         printf '%s\n' "$version" > "$SANDBOX/version-cli/version"
         check_prerequisites
     done
-    for version in '1.18.28' '1.17.99' '3.0.0' '2.0.0-beta.1' '2.0.0+build' '02.0.0' '2.00.0' '2.0.000' '2.9999999.0' 'OpenCode v2.0.0 (compatibility 1.18.33)' 'unknown' $'2.0.0\n1.18.33'; do
+    for version in '1.18.4' '1.18.28' '1.17.99' '3.0.0' '2.0.0-beta.1' '2.0.0+build' '02.0.0' '2.00.0' '2.0.000' '2.9999999.0' 'OpenCode v2.0.0 (compatibility 1.18.33)' 'unknown' $'2.0.0\n1.18.33' $'unknown\e[31m\rterminal-control'; do
         printf '%s\n' "$version" > "$SANDBOX/version-cli/version"
-        if ( check_prerequisites ); then
+        if diagnostic=$(check_prerequisites 2>&1); then
             echo "accepted unsupported host output: $version" >&2
             exit 1
         fi
+        quoted_version=$(LC_ALL=C printf '%q' "$version")
+        quoted_cli=$(LC_ALL=C printf '%q' "$SANDBOX/version-cli/opencode")
+        [[ "$diagnostic" == *"detected $quoted_version"* ]]
+        [[ "$diagnostic" == *"CLI: $quoted_cli"* ]]
+        [[ "$diagnostic" == *"Older OpenCode V1 releases have not been verified with this installed notification plugin."* ]]
+        [[ "$diagnostic" == *"Update the selected OpenCode CLI shown above; the desktop app and CLI can have different versions."* ]]
+        [[ "$diagnostic" != *$'\e'* && "$diagnostic" != *$'\r'* ]]
     done
+    # Untrusted output is bounded before quoting, while the guard still rejects it.
+    printf '%700s\n' '' | tr ' ' x > "$SANDBOX/version-cli/version"
+    if diagnostic=$(check_prerequisites 2>&1); then exit 1; fi
+    [[ "$diagnostic" == *"detected $(printf '%512s' '' | tr ' ' x)..."* ]]
+    [ "${#diagnostic}" -lt 1600 ]
+    # Escaping control bytes must not expand the diagnostic beyond its cap.
+    printf '%512s' '' | tr ' ' '\001' > "$SANDBOX/version-cli/version"
+    if diagnostic=$(check_prerequisites 2>&1); then exit 1; fi
+    [ "${#diagnostic}" -lt 1600 ]
+    [[ "$diagnostic" != *$'\e'* && "$diagnostic" != *$'\r'* && "$diagnostic" != *$'\001'* ]]
+    rm "$SANDBOX/version-cli/version"
+    if diagnostic=$(check_prerequisites 2>&1); then exit 1; fi
+    [[ "$diagnostic" == *"Cannot determine OpenCode version. CLI: $quoted_cli"* ]]
 )
 # Gemini's prerequisite may execute only the disposable version fixture here.
 # Assert actual isolated cwd/home, dotenv sentinels and system redirects rather
@@ -667,7 +688,7 @@ EARLY_CANARY
         chmod +x "$SANDBOX/early-canaries/$tool"
     done
     export PATH="$SANDBOX/early-canaries:$PATH" EARLY_CANARY_LOG="$SANDBOX/early-effects"
-    for args in '--products opencode' '--products claude,gemini' '--json' '--product gemini --json' '--ui=bad' '--plain --ui=rich' '--navigation none' '--agent-notify --agent-notify'; do
+    for args in '--products opencode,opencode' '--products claude,unknown' '--json' '--product gemini --json' '--ui=bad' '--plain --ui=rich' '--navigation none' '--agent-notify --agent-notify'; do
         status=0
         bash "$ROOT/bin/bootstrap.sh" $args >"$SANDBOX/early-output" 2>&1 || status=$?
         [ "$status" -eq 1 ] || { echo "Wrong early refusal status $status for $args" >&2; exit 1; }

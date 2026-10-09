@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup><TargetName>SDKRuntimePrerequisite</TargetName></PropertyGroup>
+  <Import Project="SDKContract.vcxproj" />
+  <PropertyGroup><ProjectGuid>{D5886908-982B-4437-BE1D-397475D0588D}</ProjectGuid><TargetName>SDKRuntimePrerequisite</TargetName></PropertyGroup>
+  <ItemGroup><ClCompile Remove="SDKContract.cpp" /><ClCompile Include="SDKRuntimePrerequisite.cpp" /></ItemGroup>
+  <ItemDefinitionGroup>
+    <ClCompile><RuntimeLibrary>MultiThreaded</RuntimeLibrary></ClCompile>
+    <Link><AdditionalDependencies>advapi32.lib;bcrypt.lib;wintrust.lib;crypt32.lib;version.lib;psapi.lib;%(AdditionalDependencies)</AdditionalDependencies></Link>
+  </ItemDefinitionGroup>
+</Project>

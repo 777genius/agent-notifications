@@ -473,8 +473,41 @@ func (f *bootstrapFixture) noAcquisition() {
 	}
 }
 
+// A fresh Enter on default Yes installs. Choosing No visibly cancels without
+// effects in either renderer; the fixture owns every profile and agent.
+func TestBootstrapConfirmationDefaults(t *testing.T) {
+	for _, tc := range []struct {
+		name, mode, answer string
+		install            bool
+	}{{"rich Enter installs", "rich", "\r", true}, {"rich Right then Enter cancels", "rich", "\x1b[C\r", false},
+		{"plain Enter installs", "plain", "\n", true}, {"plain No cancels", "plain", "n\n", false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newBootstrapFixture(t)
+			before := f.snapshot()
+			// Explicitly choose Webhook only so this keyboard test never asks for
+			// desktop permissions or launches a notification helper.
+			selection := promptStep{"enter", " \x1b[B \x1b[B\x1b[B \r", nil}
+			if tc.mode == "plain" {
+				selection = promptStep{"comma-separated", "opencode\n", nil}
+			}
+			r := f.terminal([]string{"--webhook", "--ui=" + tc.mode}, selection,
+				promptStep{setupProductsConfirmationTitle, tc.answer, nil})
+			requireBootstrapSuccess(t, r)
+			if tc.install {
+				f.assertConsumer("opencode-notifications", true)
+			} else {
+				f.unchanged(before)
+				if !strings.Contains(r.screen, "Installation cancelled. No changes were applied.") {
+					t.Fatalf("Enter cancelled silently: %s", r.screen)
+				}
+			}
+		})
+	}
+}
+
 // Regression: an Enter/y queued behind selecting a product granted Yes at the
-// next process's consent question. The fresh default-No must still be needed.
+// next process's consent question. A fresh confirmation must still be needed
+// even when its default is Yes.
 func TestBootstrapSelectionDoesNotApproveConsent(t *testing.T) {
 	for _, queued := range []string{"\n", "y\n"} {
 		t.Run(fmt.Sprintf("queued %q", queued), func(t *testing.T) {
@@ -498,14 +531,14 @@ func TestBootstrapSelectionDoesNotApproveConsent(t *testing.T) {
 	})
 }
 
-// Regression: singleton channels used a shell read and skipped final consent;
-// incomplete --products asked questions instead of failing before acquisition.
+// Product selection must still require final confirmation; malformed explicit
+// products must fail before acquisition even though channel omission is valid.
 func TestBootstrapInteractiveChannelConsent(t *testing.T) {
 	for _, answer := range []string{"n\n", "cancel\n", "\x04"} {
 		t.Run(fmt.Sprintf("final %q", answer), func(t *testing.T) {
 			f := newBootstrapFixture(t)
 			before := f.snapshot()
-			r := f.terminal([]string{"--product", "opencode", "--plain"}, promptStep{"comma-separated", "webhook\n", nil}, promptStep{"[y/n]", answer, nil})
+			r := f.terminal([]string{"--webhook", "--plain"}, promptStep{"comma-separated", "opencode\n", nil}, promptStep{"[y/n]", answer, nil})
 			if answer == "\x04" {
 				if r.code != 1 {
 					t.Fatalf("EOF: %+v", r)
@@ -516,11 +549,11 @@ func TestBootstrapInteractiveChannelConsent(t *testing.T) {
 			f.unchanged(before)
 		})
 	}
-	t.Run("incomplete multi", func(t *testing.T) {
+	t.Run("duplicate multi", func(t *testing.T) {
 		f := newBootstrapFixture(t)
-		r := f.noTTY("--products", "opencode,gemini")
+		r := f.noTTY("--products", "opencode,opencode")
 		if r.code != 1 {
-			t.Fatalf("incomplete multi: %+v", r)
+			t.Fatalf("duplicate multi: %+v", r)
 		}
 		f.noAcquisition()
 	})
@@ -567,7 +600,7 @@ func TestBootstrapStrictResultBytes(t *testing.T) {
 			f := newBootstrapFixture(t)
 			before := f.snapshot()
 			f.corruptResult(row.operation, []byte(row.data), row.status)
-			r := f.terminal([]string{"--product", "opencode", "--plain"}, promptStep{"comma-separated", "webhook\n", nil}, promptStep{"[y/n]", "y\n", nil})
+			r := f.terminal([]string{"--webhook", "--plain"}, promptStep{"comma-separated", "opencode\n", nil}, promptStep{"[y/n]", "y\n", nil})
 			if r.code == 0 || (row.status != 0 && r.code != row.status) {
 				t.Fatalf("unsafe approval/checkpoint: %+v", r)
 			}
@@ -582,7 +615,7 @@ func TestBootstrapStrictResultBytes(t *testing.T) {
 		f := newBootstrapFixture(t)
 		before := f.snapshot()
 		f.corruptProjection([]byte("home\x00/TEST\x00"), 143)
-		r := f.terminal([]string{"--product", "opencode", "--plain"}, promptStep{"comma-separated", "webhook\n", nil}, promptStep{"[y/n]", "y\n", nil})
+		r := f.terminal([]string{"--webhook", "--plain"}, promptStep{"comma-separated", "opencode\n", nil}, promptStep{"[y/n]", "y\n", nil})
 		if r.code != 143 {
 			t.Fatalf("getter child status/prefix accepted: %+v", r)
 		}
@@ -593,7 +626,7 @@ func TestBootstrapStrictResultBytes(t *testing.T) {
 			f := newBootstrapFixture(t)
 			before := f.snapshot()
 			f.corruptProjection([]byte(data), 0)
-			r := f.terminal([]string{"--product", "opencode", "--plain"}, promptStep{"comma-separated", "webhook\n", nil}, promptStep{"[y/n]", "y\n", nil})
+			r := f.terminal([]string{"--webhook", "--plain"}, promptStep{"comma-separated", "opencode\n", nil}, promptStep{"[y/n]", "y\n", nil})
 			if r.code == 0 {
 				t.Fatalf("invalid frozen projection accepted: %+v", r)
 			}
@@ -634,7 +667,7 @@ func TestBootstrapStaleSelectedFacts(t *testing.T) {
 	t.Run("selected executable disappears", func(t *testing.T) {
 		f := newBootstrapFixture(t)
 		before := f.snapshot()
-		r := f.terminal([]string{"--product", "opencode", "--plain"}, promptStep{"comma-separated", "webhook\n", nil}, promptStep{"[y/n]", "y\n", func() {
+		r := f.terminal([]string{"--webhook", "--plain"}, promptStep{"comma-separated", "opencode\n", nil}, promptStep{"[y/n]", "y\n", func() {
 			if err := os.Remove(filepath.Join(f.tools, "opencode")); err != nil {
 				t.Fatal(err)
 			}
@@ -667,7 +700,7 @@ func TestBootstrapStaleSelectedFacts(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		r := f.terminal([]string{"--product", "gemini", "--plain"}, promptStep{"comma-separated", "webhook\n", nil}, promptStep{"[y/n]", "y\n", func() {
+		r := f.terminal([]string{"--webhook", "--plain"}, promptStep{"comma-separated", "gemini\n", nil}, promptStep{"[y/n]", "y\n", func() {
 			if err := os.Remove(alias); err != nil {
 				t.Fatal(err)
 			}
@@ -877,7 +910,7 @@ func TestBootstrapNormalizedRouteConsent(t *testing.T) {
 			t.Fatalf("supported normalized route refused: %+v", r)
 		}
 		f.unchanged(before)
-		if !strings.Contains(r.screen, "allow-unknown-caller=false allow-caller-asserted=false") {
+		if !strings.Contains(r.screen, "Allow unrecognized callers: off") || !strings.Contains(r.screen, "Allow caller-asserted identity: off") {
 			t.Fatalf("caller decision missing from visible consent: %s", r.screen)
 		}
 	})

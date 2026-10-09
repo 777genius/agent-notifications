@@ -149,6 +149,9 @@ def source(value, default):
 def run(args):
     require(args.trusted_github_runner and os.environ.get("GITHUB_ACTIONS") == "true" and
             os.environ.get("RUNNER_ENVIRONMENT") == "github-hosted", "trusted_GitHub_runner_required")
+    if args.g5_only:
+        require(args.platform == "linux" and args.arch == "amd64" and os.environ.get("GITHUB_RUN_ATTEMPT") == "1",
+                "fresh_G5_only_admission")
     temp = Path(os.environ["RUNNER_TEMP"]).resolve(strict=True)
     forbidden = (REPO, Path.cwd().resolve(), Path.home().resolve())
     # Hosted Linux/Mac RUNNER_TEMP can be underneath the runner's HOME. It is
@@ -295,6 +298,21 @@ def run(args):
                                          "./tests/integration/gemini_frame_classifier"], timeout=180)
         evidence["frame_classifier"] = {"sha256": sha(frame_classifier), "SDK_version": modules[SDK]["Version"],
                                         "source_package": "tests/integration/gemini_frame_classifier"}
+        join_args = []
+        if args.platform == "linux":
+            join_reader = root / "gemini-cache-join.test"
+            command("build_cache_join_reader", [go, "test", "-c", "-trimpath", "-ldflags=-s -w", "-o", join_reader, "./internal/geminievent"], timeout=180)
+            reader_hash = sha(join_reader)
+            contract_out = command("fixed_cache_join_contract", [join_reader, "-test.run=^TestCapturedCacheJoinFixedKeyAndPrivacy$", "-test.count=1", "-test.timeout=10s", "-test.v"], cwd=root, timeout=15)
+            require(re.fullmatch(rb"=== RUN   TestCapturedCacheJoinFixedKeyAndPrivacy\n--- PASS: TestCapturedCacheJoinFixedKeyAndPrivacy \([0-9]+\.[0-9]+s\)\nPASS\n", contract_out) is not None,
+                    "TEST_fixed_cache_join_contract_not_executed")
+            require(sha(join_reader) == reader_hash, "TEST_cache_join_reader_changed_during_contract")
+            evidence["cache_join_reader"] = {"sha256": reader_hash, "source_package": "internal/geminievent", "pure_read_decode_marker": True,
+                                             "fixed_key_privacy_contract": "passed_collected"}
+            join_args = ["--cache-join-reader", join_reader]
+        if args.g5_only:
+            evidence["G0"] = "not_run_fresh_G5_only"
+            evidence["qualification_scope"] = "G5_only"
         install = root / "cli"
         install.mkdir(mode=0o700)
         (install / MARKER).write_text("fresh exact TEST CLI installation\n", encoding="utf-8")
@@ -319,14 +337,21 @@ def run(args):
         for label, driver, extra, manifest, limit in (
             ("G0", g0path, [], "evidence.json", 280),
             ("G5", g5path, ["--trusted-orchestrator", "--binary", binary, "--update-binary", updated_binary, "--g0-driver", g0path,
-                           "--sdk-module-root", staged["sdk"], "--installer-module-root", staged["agentplugins"], "--frame-classifier", frame_classifier],
+                           "--sdk-module-root", staged["sdk"], "--installer-module-root", staged["agentplugins"], "--frame-classifier", frame_classifier, *join_args],
              "production-evidence.json", 650)):
+            if args.g5_only and label == "G0":
+                continue
             lab = root / ("TEST-" + label)
             try:
                 command(label, [python, "-B", driver, *common, "--lab-root", lab, *extra], child_env=env, timeout=limit)
                 facts = json.loads((lab / manifest).read_bytes())
                 require(facts.get("native_execution") == "passed_scenarios" if label == "G0" else
                         facts.get("driver", "").startswith("passed_"), "driver_success_manifest_missing")
+                if args.g5_only:
+                    joined = [row.get("cache_join", {}) for row in facts.get("sdk_frame_analysis", {}).get("rows", [])
+                              if row.get("cache_join", {}).get("class") != "outside_initial_slice"]
+                    require(len(joined) == 7 and all(row.get("class") == "joined" and row.get("matched") is True
+                            and row.get("webhook_attempted") is True for row in joined), "fresh_G5_cache_join_unproved")
                 evidence[label] = "passed_implemented_scenarios"
             except Exception:
                 evidence[label] = "failed"
@@ -378,7 +403,7 @@ def run(args):
                         ("classification", "exception_type", "native_version_probe", "setup_failure", "setup_cleanup_failure", "settle_failure",
                          "bridge_failure", "sdk_frame_analysis", "provider_endpoints", "provider_cleanup_classification", "cleanup_classification", "native_execution", "driver")
                         if key in driver_facts}}), flush=True)
-        require(all(evidence.get(label) == "passed_implemented_scenarios" for label in ("G0", "G5")), "native_qualification_failed")
+        require(all(evidence.get(label) == "passed_implemented_scenarios" for label in (("G5",) if args.g5_only else ("G0", "G5"))), "native_qualification_failed")
         evidence["status"] = "passed_implemented_scenarios_with_external_gates_pending"
     except Exception as exc:
         known = isinstance(exc, Red) or ("g0" in locals() and isinstance(exc, g0.Red))
@@ -433,6 +458,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--trusted-github-runner", action="store_true")
+    parser.add_argument("--g5-only", action="store_true")
     for name in ("platform", "arch", "commit", "hook-shell", "system-root", "g0-driver", "g5-driver", "ui-contract"):
         parser.add_argument("--" + name)
     args = parser.parse_args()

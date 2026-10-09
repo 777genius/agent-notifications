@@ -249,23 +249,10 @@ func portProbeSettled(t *testing.T, in runtimeProfileInput) {
 	if json.Unmarshal(data, &p) != nil {
 		t.Fatal("invalid fixture proof")
 	}
-	if strings.Join(p.Argv, ",") != "--version" || !strings.Contains(filepath.Base(p.Cwd), "agentplugins-version-probe-") || p.Cwd == in.ControlRoot {
+	if strings.Join(p.Argv, ",") != "--version" || !strings.Contains(filepath.Base(p.Cwd), "agentplugins-opencode-probe-") || p.Cwd == in.ControlRoot {
 		t.Fatal("probe argv/cwd changed")
 	}
-	pathSeen := false
-	for _, v := range p.Env {
-		if v == "PATH=" {
-			pathSeen = true
-			continue
-		}
-		if runtime.GOOS == "windows" && strings.HasPrefix(strings.ToUpper(v), "SYSTEMROOT=") {
-			continue
-		}
-		t.Fatal("ambient probe environment")
-	}
-	if !pathSeen {
-		t.Fatal("probe PATH changed")
-	}
+	assertRuntimeProbePrivateEnvironment(t, p.Cwd, p.Env)
 	portAssertProcessSettled(t, p.PID)
 	if _, e = os.Stat(p.Cwd); !os.IsNotExist(e) {
 		t.Fatal("private cwd survived Wait")

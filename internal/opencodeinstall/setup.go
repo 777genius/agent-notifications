@@ -64,6 +64,7 @@ type Request struct {
 	ControlRoot, RuntimeRoot, BinarySource    string
 	NativeSource                              string
 	HomeDir, XDGConfigHome, OpenCodeConfigDir string
+	ChannelPreimage                           string
 	Desktop, Webhook                          bool
 	// Platform is supplied by the CLI. Tests use disposable platform fixtures.
 	GOOS, GOARCH string
@@ -105,9 +106,6 @@ func Apply(ctx context.Context, r Request) error {
 	}
 	if r.Action == Update && !registered {
 		return errors.New("OpenCode consumer is not installed")
-	}
-	if r.Action != Remove && !r.Desktop && !r.Webhook {
-		return errors.New("choose --desktop or --webhook explicitly")
 	}
 	if r.NativeSource != "" && (p.goos != "darwin" || !r.Desktop || !filepath.IsAbs(r.NativeSource)) {
 		return errors.New("absolute --native-app source requires macOS desktop consent")
@@ -173,7 +171,7 @@ func Apply(ctx context.Context, r Request) error {
 		return fmt.Errorf("OpenCode plugin conflict: %s", plugin.ConflictReason)
 	}
 	var expectedPolicy *installruntime.Identity
-	if !registered {
+	if !registered || r.ChannelPreimage != "" {
 		policy, err := installruntime.ReadPolicySnapshot(ctx, root)
 		if errors.Is(err, os.ErrNotExist) && ledger.ID == "" {
 			// A precreated private control directory has no lock inodes yet.
@@ -193,11 +191,14 @@ func Apply(ctx context.Context, r Request) error {
 		}
 		// A stale/manual true intent must never become active merely because the
 		// first transaction publishes a previously absent registration.
-		if desktop, webhook := policyChannels(policy.Fields); desktop || webhook {
+		if desktop, webhook := policyChannels(policy.Fields); !registered && (desktop || webhook) {
 			return errors.New("stale OpenCode consent must be revoked before installation")
 		}
+		if err := installruntime.CheckObserverChannelPreimage(policy.Fields["route"], "openCodeNotifications", r.ChannelPreimage); err != nil {
+			return err
+		}
 		expectedPolicy = &policy.Preimage
-		if _, owned := installruntime.OwnedFile(ledger, plugin.Target); owned {
+		if _, owned := installruntime.OwnedFile(ledger, plugin.Target); !registered && owned {
 			return errors.New("OpenCode plugin path is owned by another consumer")
 		}
 	}
@@ -260,7 +261,7 @@ func Apply(ctx context.Context, r Request) error {
 			return err
 		}
 	}
-	return setChannels(ctx, root, r.RuntimeRoot, r.Desktop, r.Webhook)
+	return setChannels(ctx, root, r.RuntimeRoot, r.Desktop, r.Webhook, r.ChannelPreimage)
 }
 
 func plan(r Request, ledger installruntime.Ledger, desired []byte) (uap.Placement, installruntime.Identity, error) {
@@ -341,10 +342,15 @@ func binaryMatchesPlatform(data []byte, p platform) bool {
 	return false
 }
 
-func setChannels(ctx context.Context, root, runtimeRoot string, desktop, webhook bool) error {
+func setChannels(ctx context.Context, root, runtimeRoot string, desktop, webhook bool, expected ...string) error {
 	s, err := installruntime.ReadPolicySnapshot(ctx, root)
 	if err != nil {
 		return err
+	}
+	if len(expected) > 0 {
+		if err := installruntime.CheckObserverChannelPreimage(s.Fields["route"], "openCodeNotifications", expected[0]); err != nil {
+			return err
+		}
 	}
 	if s.Installation.Recovery {
 		return errors.New("installation recovery required")
