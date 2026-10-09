@@ -54,10 +54,10 @@ test("Bowser OS suggestions and mobile exclusions", () => {
   assert.equal(detectTarget("unknown"), "unknown");
 });
 
-test("OpenCode command preserves defaults unless channels are explicitly selected", () => {
+test("OpenCode command requires explicit selected channels and omits MCP flags", () => {
   for (const target of ["macos", "linux", "windows"] as const) {
     const prefix = "curl -fsSL https://agent-notifications.com/install.sh | bash -s -- --product opencode";
-    assert.equal(command("opencode", target, "install"), prefix);
+    assert.equal(command("opencode", target, "install"), prefix + " --desktop");
     assert.equal(command("opencode", target, "update", false, { desktop: false, webhook: true }), prefix + " --webhook");
     assert.equal(command("opencode", target, "install", true, { desktop: true, webhook: true }), prefix + " --desktop --webhook");
     assert.equal(command("opencode", target, "install", true, { desktop: false, webhook: false }), null);
@@ -117,7 +117,7 @@ test("all seven selections produce one loader command with host-scoped consent",
 test("mixed loader uses a canonical product list", () => {
   assert.equal(
     command(["opencode", "claude", "opencode", "codex"], "linux", "install"),
-    "(set -o pipefail; curl -fsSL https://agent-notifications.com/install.sh | bash -s -- --products claude,codex,opencode)",
+    "(set -o pipefail; curl -fsSL https://agent-notifications.com/install.sh | bash -s -- --products claude,codex,opencode --desktop)",
   );
 });
 
@@ -164,7 +164,7 @@ test("Gemini released commands preserve canonical selectors and shared observer 
       assert.equal(command(products, "unknown", "install"), null);
       assert.equal(command(products, "manual", "install"), null);
     }
-  assert.equal(command("gemini", "linux", "install"), prefix + "--product gemini");
+  assert.equal(command("gemini", "linux", "install"), prefix + "--product gemini --desktop");
   assert.equal(command("gemini", "linux", "install", false, { desktop: true, webhook: true }), prefix + "--product gemini --desktop --webhook");
 });
 
@@ -187,7 +187,7 @@ test("Gemini copied pipelines deliver exact installer argv", () => {
     },
     {
       snippet: command(["gemini", "opencode"], "linux", "update", false)!,
-      argv: ["--products", "opencode,gemini"],
+      argv: ["--products", "opencode,gemini", "--desktop"],
     },
     {
       snippet: command(["gemini", "opencode", "codex", "claude", "gemini"], "linux", "install", false, { desktop: true, webhook: true })!,

@@ -56,7 +56,7 @@ export function command(
   intent: Intent,
   agentNotify = true,
   // The fifth argument remains compatible; channels apply to both observer agents.
-  openCodeChannels?: { desktop: boolean; webhook: boolean },
+  openCodeChannels: { desktop: boolean; webhook: boolean } = { desktop: true, webhook: false },
 ): string | null {
   if (intent === "configure" || target === "unknown" || target === "manual")
     return null;
@@ -68,13 +68,13 @@ export function command(
       : product;
   if (!selected.length || (target === "macos" && selected.includes("gemini"))) return null;
   const hasObserver = selected.includes("opencode") || selected.includes("gemini");
-  if (hasObserver && openCodeChannels && !openCodeChannels.desktop && !openCodeChannels.webhook)
+  if (hasObserver && !openCodeChannels.desktop && !openCodeChannels.webhook)
     return null;
   const hasClaude = selected.includes("claude");
   const hasCodex = selected.includes("codex");
   const skip = (hasClaude || hasCodex) && !agentNotify ? " --skip-agent-notify" : "";
   if (hasObserver) {
-    const channels = `${openCodeChannels?.desktop ? " --desktop" : ""}${openCodeChannels?.webhook ? " --webhook" : ""}`;
+    const channels = `${openCodeChannels.desktop ? " --desktop" : ""}${openCodeChannels.webhook ? " --webhook" : ""}`;
     const productFlag = new Set(selected).size > 1
       ? `--products ${(["claude", "codex", "opencode", "gemini"] as const).filter((value) => selected.includes(value)).join(",")}`
       : `--product ${selected.includes("gemini") ? "gemini" : "opencode"}`;

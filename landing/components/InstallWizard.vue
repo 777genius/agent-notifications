@@ -56,8 +56,7 @@ const copyStatus = ref("");
 const commandField = ref<HTMLTextAreaElement>();
 const agentNotify = ref(true);
 const snippet = computed(() =>
-  // v1.48.4 requires explicit observer channels; omit after a compatible helper release.
-  command(selection.value, target.value, intent.value, agentNotify.value, { desktop: true, webhook: false }),
+  command(selection.value, target.value, intent.value, agentNotify.value),
 );
 const qualifiedVersion = computed(() => platformReleaseVersion(channelSnapshot, target.value));
 watch(target, (value) => {

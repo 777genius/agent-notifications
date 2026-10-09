@@ -501,7 +501,7 @@ test("guided reference layout, detected OS and mode focus", async ({
   await context.close();
 });
 
-test("released agents toggle independently and copied commands keep v1.48.4 observer consent", async ({ page }) => {
+test("released agents toggle independently, copied commands and configuration cover the selection", async ({ page }) => {
   await page.goto("");
   await chooseOS(page, "macos");
   const labels = { claude: "Claude", codex: "Codex CLI", opencode: "OpenCode", gemini: "Gemini CLI" };
@@ -622,13 +622,13 @@ test("Gemini selection stays disabled on macOS while capabilities remain visible
   await expect(gemini).toHaveAttribute("aria-pressed", "false");
   await expect(page.getByLabel("Install command", { exact: true })).toHaveValue(/--product claude$/);
   await chooseAgents(page, ["claude", "codex", "opencode"]);
-  await expect(page.getByLabel("Install command", { exact: true })).toHaveValue(/--products claude,codex,opencode/);
+  await expect(page.getByLabel("Install command", { exact: true })).toHaveValue(/--products claude,codex,opencode --desktop/);
   await page.getByRole("button", { name: "Configure", exact: true }).click();
   await expect(page.locator(".configuration")).toContainText("/claude-notifications-go:settings");
   await expect(page.locator(".configuration")).toContainText("config path");
   await expect(gemini).toBeDisabled();
   await page.getByRole("button", { name: "Install", exact: true }).click();
-  await expect(page.getByLabel("Install command", { exact: true })).toHaveValue(/--products claude,codex,opencode/);
+  await expect(page.getByLabel("Install command", { exact: true })).toHaveValue(/--products claude,codex,opencode --desktop/);
 });
 
 // Manual instructions must remain available for the released agents in both intents.

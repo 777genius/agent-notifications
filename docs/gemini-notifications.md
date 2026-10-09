@@ -36,10 +36,11 @@ Do not install Linux/Windows assets on macOS.
 On Linux or Windows, use:
 
 ```bash
-curl -fsSL https://agent-notifications.com/install.sh | bash -s -- --product gemini
+curl -fsSL https://agent-notifications.com/install.sh | bash -s -- --product gemini --desktop
 ```
 
-A fresh installation enables Desktop and leaves Webhook off. Updates preserve the saved channels for each selected product, including explicit disabled choices. There is no separate channel question. For advanced overrides, add `--desktop` for desktop only, `--webhook` for webhook only, or both flags for both. Webhook URLs must be configured separately.
+For webhook-only delivery, replace `--desktop` with `--webhook`; for both, specify both.
+Choose at least one channel. Webhook URLs must be configured separately.
 
 The combined selector is one pipeline, in canonical product order:
 

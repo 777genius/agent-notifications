@@ -87,10 +87,10 @@ or V2 by themselves.
 ## Install or update
 
 Install OpenCode first. In the [guided installer](https://777genius.github.io/agent-notifications/#install),
-select **OpenCode**. The guided command enables Desktop and leaves Webhook off on a fresh installation. Updates preserve each product's saved channels, including disabled channels. Webhook destinations and delivery can be configured later. You can also select Claude or Codex CLI in the same setup. The copied command uses one loader, for example:
+select **OpenCode**. The guided command enables desktop notifications; webhook destinations and delivery can be configured later. You can also select Claude or Codex CLI in the same setup. The copied command uses one loader, for example:
 
 ```bash
-(set -o pipefail; curl -fsSL https://agent-notifications.com/install.sh | bash -s -- --products claude,opencode)
+(set -o pipefail; curl -fsSL https://agent-notifications.com/install.sh | bash -s -- --products claude,opencode --desktop)
 ```
 
 Channel flags grant consent only for OpenCode; webhook URLs still need separate configuration. Claude/Codex setup runs first. If a later setup fails, earlier successful installations remain installed; fix the error and rerun the command.
@@ -101,10 +101,10 @@ from the same release. The loader pins installer source to the release's exact
 commit.
 
 ```bash
-(set -o pipefail; curl -fsSL https://agent-notifications.com/install.sh | bash -s -- --product opencode)
+(set -o pipefail; curl -fsSL https://agent-notifications.com/install.sh | bash -s -- --product opencode --desktop)
 ```
 
-Advanced overrides remain available: `--desktop` selects desktop only, `--webhook` selects webhook only, and both flags select both. Omit both flags to preserve existing choices, or use the fresh Desktop-on/Webhook-off defaults.
+Use `--webhook` instead of `--desktop` for webhook-only consent, or supply both.
 Webhook consent alone does not configure a destination: add your endpoint to the
 [installed OpenCode settings](#edit-installed-opencode-settings), enable the desired
 webhook and status channel, and restart OpenCode. Saved settings can further
@@ -112,7 +112,8 @@ restrict authorized delivery; setup does not enable portable MCP notifications.
 The OpenCode installer does not register Claude marketplace plugins or Codex hooks.
 
 Run the same command to update. It uses the idempotent `setup-opencode install`
-action and reuses the runtime recorded in an existing ownership ledger. Explicit channel flags replace the selected product's channel choices; without them, updates retain saved choices. **Restart OpenCode
+action and reuses the runtime recorded in an existing ownership ledger. Each run
+sets the OpenCode channels to the flags you explicitly select. **Restart OpenCode
 after installation or update** to load the current global plugin bytes.
 
 ## Installed locations and manual setup
