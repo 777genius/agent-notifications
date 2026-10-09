@@ -16,7 +16,7 @@ import tempfile
 REPO = '777genius/agent-notifications'
 TOOLS = ('bash sh env python3 node tar gzip unzip zip mktemp rm cat cp mv chmod mkdir ln '
          'uname tr wc head cmp grep sed awk dirname basename find sort sha256sum shasum '
-         'cut xargs sleep date stat diff touch readlink dd od git').split()
+         'cut xargs sleep date stat diff touch readlink dd od git codesign xattr').split()
 PRIVATE_KEYS = ('HOME USERPROFILE APPDATA LOCALAPPDATA XDG_CONFIG_HOME XDG_CACHE_HOME '
                 'XDG_DATA_HOME XDG_STATE_HOME XDG_RUNTIME_DIR XDG_CONFIG_DIRS XDG_DATA_DIRS '
                 'CODEX_HOME CLAUDE_HOME CLAUDE_CONFIG_DIR TMPDIR TMP TEMP '
