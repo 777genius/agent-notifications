@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.48.5] - 2026-10-10
+
+### Added
+- Reusable macOS TEST installer preview with isolated client profiles, exact-source binaries, optional utilities and a retained installation summary. The preview exercises installation without running agents or proving notification delivery.
+
+### Changed
+- The guided installer resolves notification channels without a separate selection step. Fresh OpenCode and Gemini installations default to Desktop on and Webhook off; saved per-product preferences and explicit choices remain preserved.
+- Installation summaries show selected clients, installed components, notification channels and actionable recovery details. Final confirmation defaults to Yes.
+
+### Fixed
+- Partial Claude and Codex CLI registration can recover after interrupted or incomplete marketplace operations while retaining completed installation work.
+- Read-only managed installation status explains invalid or missing assets with a diagnostic code, affected path and repair guidance instead of only reporting `installation_invalid`.
+
+### Platform notes
+- Scoped artifact, installation and protocol checks do not establish full native qualification, visible desktop delivery or cold click-to-focus behavior. OpenCode remains informational, without sound or click-to-focus support.
+
 ## [1.48.4] - 2026-10-08
 
 ### Added
