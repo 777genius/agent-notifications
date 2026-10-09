@@ -431,7 +431,15 @@ func TestOrphanRecoveryCLIEvidenceOverrideRejectsFixtureAliases(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.RemoveAll(root)
+	defer func() {
+		if t.Failed() {
+			t.Logf("preserved failed evidence fixture: %s", root)
+			return
+		}
+		if err := os.RemoveAll(root); err != nil {
+			t.Errorf("remove evidence fixture %s; remaining evidence preserved: %v", root, err)
+		}
+	}()
 	for _, path := range []string{root, filepath.Join(root, "tmp", "evidence"), filepath.Join(root, "control"), filepath.Join(root, "codex", "evidence"), filepath.Dir(root), "relative"} {
 		if err := orphanCLIValidateEvidence(root, path); err == nil {
 			t.Fatalf("unsafe evidence accepted: %s", path)

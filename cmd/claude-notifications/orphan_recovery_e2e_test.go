@@ -3,6 +3,7 @@
 package main
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -118,6 +119,160 @@ var orphanCLIBuild struct {
 	Err              error
 }
 
+type orphanCLICompiler struct {
+	Path string
+	Env  []string
+}
+
+// Observe only compiler configuration before HOME isolation. These values are
+// used for builds only; sender processes retain the finite TEST environment.
+func orphanCLIObserveCompiler() (orphanCLICompiler, error) {
+	goPath, err := exec.LookPath("go")
+	if err != nil {
+		return orphanCLICompiler{}, err
+	}
+	env := []string{"GOENV=off", "GOTOOLCHAIN=local", "GOTELEMETRY=off", "GOPROXY=off", "GOSUMDB=off"}
+	for _, key := range []string{"PATH", "HOME", "USERPROFILE", "XDG_CACHE_HOME", "GOROOT", "GOPATH", "GOMODCACHE", "GOCACHE", "GOTMPDIR", "TMPDIR", "TMP", "TEMP", "GOMAXPROCS", "CGO_ENABLED", "CC", "CXX", "CGO_CFLAGS", "CGO_LDFLAGS", "PKG_CONFIG_PATH", "SDKROOT", "DEVELOPER_DIR"} {
+		if value := os.Getenv(key); value != "" {
+			env = append(env, key+"="+value)
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, goPath, "env", "-json", "GOROOT", "GOMODCACHE", "GOCACHE")
+	cmd.Env, cmd.WaitDelay = env, time.Second
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		return orphanCLICompiler{}, fmt.Errorf("observe compiler caches: %w; stderr: %s", err, &stderr)
+	}
+	var caches map[string]string
+	if err := json.Unmarshal(stdout.Bytes(), &caches); err != nil {
+		return orphanCLICompiler{}, err
+	}
+	compiler := orphanCLICompiler{Path: goPath}
+	for _, key := range []string{"GOROOT", "GOMODCACHE", "GOCACHE"} {
+		if !filepath.IsAbs(caches[key]) {
+			return orphanCLICompiler{}, fmt.Errorf("invalid compiler %s: %q", key, caches[key])
+		}
+		compiler.Env = append(compiler.Env, key+"="+caches[key])
+	}
+	for _, key := range []string{"GOPATH", "GOTMPDIR", "GOMAXPROCS", "CGO_ENABLED", "CC", "CXX", "CGO_CFLAGS", "CGO_LDFLAGS", "PKG_CONFIG_PATH", "SDKROOT", "DEVELOPER_DIR"} {
+		if value := os.Getenv(key); value != "" {
+			compiler.Env = append(compiler.Env, key+"="+value)
+		}
+	}
+	return compiler, nil
+}
+
+func (compiler orphanCLICompiler) buildEnvironment(env []string) []string {
+	result := append([]string(nil), env...)
+	result = append(result, compiler.Env...)
+	return append(result, "GOENV=off", "GOTOOLCHAIN=local", "GOTELEMETRY=off", "GOPROXY=off", "GOSUMDB=off")
+}
+
+func TestOrphanCLICompilerCachesSurviveRuntimeIsolation(t *testing.T) {
+	goPath, err := exec.LookPath("go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Prepare only this fixture's implicit caches, with no user/global state.
+	for _, key := range []string{"GOPATH", "GOMODCACHE", "GOCACHE"} {
+		t.Setenv(key, "")
+		if err := os.Unsetenv(key); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for key, leaf := range map[string]string{"HOME": "compiler-home", "USERPROFILE": "compiler-home", "XDG_CACHE_HOME": "compiler-cache"} {
+		path := filepath.Join(root, leaf)
+		if err := os.MkdirAll(path, 0700); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv(key, path)
+	}
+	compiler, err := orphanCLIObserveCompiler()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cleanupCancel()
+		cmd := exec.CommandContext(cleanupCtx, compiler.Path, "clean", "-modcache")
+		cmd.Env = compiler.buildEnvironment([]string{"PATH=/usr/bin:/bin", "HOME=" + filepath.Join(root, "compiler-home"), "TMPDIR=" + root})
+		cmd.WaitDelay = time.Second
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Errorf("remove private readonly module cache: %v\n%s", err, out)
+		}
+	})
+	proxy := filepath.Join(root, "proxy", "example.com", "fixture", "@v")
+	mod := []byte("module example.com/fixture\n\ngo 1.25.8\n")
+	embeddedPut(t, filepath.Join(proxy, "v1.0.0.mod"), mod, 0600)
+	embeddedPut(t, filepath.Join(proxy, "v1.0.0.info"), []byte(`{"Version":"v1.0.0","Time":"2026-01-01T00:00:00Z"}`), 0600)
+	var archive bytes.Buffer
+	zw := zip.NewWriter(&archive)
+	for name, data := range map[string][]byte{"go.mod": mod, "fixture.go": []byte("package fixture\nconst Value = \"prepared offline cache\"\n")} {
+		file, err := zw.Create("example.com/fixture@v1.0.0/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := file.Write(data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	embeddedPut(t, filepath.Join(proxy, "v1.0.0.zip"), archive.Bytes(), 0600)
+	moduleRoot := filepath.Join(root, "module")
+	embeddedPut(t, filepath.Join(moduleRoot, "go.mod"), []byte("module example.com/cache-contract\n\ngo 1.25.8\n\nrequire example.com/fixture v1.0.0\n"), 0600)
+	embeddedPut(t, filepath.Join(moduleRoot, "main.go"), []byte("package main\nimport (\"fmt\"; \"example.com/fixture\")\nfunc main() { fmt.Println(fixture.Value) }\n"), 0600)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	prepare := exec.CommandContext(ctx, goPath, "mod", "download", "example.com/fixture")
+	prepare.Dir, prepare.WaitDelay = moduleRoot, time.Second
+	prepare.Env = compiler.buildEnvironment([]string{"PATH=/usr/bin:/bin", "HOME=" + filepath.Join(root, "compiler-home"), "TMPDIR=" + root})
+	for i, value := range prepare.Env {
+		if strings.HasPrefix(value, "GOPROXY=") {
+			prepare.Env[i] = "GOPROXY=file://" + filepath.Join(root, "proxy")
+		}
+	}
+	if out, err := prepare.CombinedOutput(); err != nil {
+		t.Fatalf("prepare private module cache: %v\n%s", err, out)
+	}
+	warm := exec.CommandContext(ctx, compiler.Path, "build", "-buildvcs=false", "-mod=readonly", "-trimpath", "-o", filepath.Join(root, "prepared"), ".")
+	warm.Dir, warm.Env, warm.WaitDelay = moduleRoot, compiler.buildEnvironment([]string{"PATH=/usr/bin:/bin", "HOME=" + filepath.Join(root, "compiler-home"), "TMPDIR=" + root}), time.Second
+	if out, err := warm.CombinedOutput(); err != nil {
+		t.Fatalf("prepare private compiler cache: %v\n%s", err, out)
+	}
+	if err := os.RemoveAll(filepath.Join(root, "proxy")); err != nil {
+		t.Fatal(err)
+	}
+	env := orphanCLIEnvironment(t, filepath.Join(root, "runtime"))
+	// Without the observation, the same isolated offline build cannot find the
+	// dependency. This proves the fixture actually exercises the lost-cache case.
+	lost := exec.CommandContext(ctx, compiler.Path, "build", "-buildvcs=false", "-mod=readonly", "-trimpath", "-o", filepath.Join(root, "lost-cache"), ".")
+	lost.Dir, lost.Env, lost.WaitDelay = moduleRoot, append(append([]string(nil), env...), "GOENV=off", "GOTOOLCHAIN=local", "GOTELEMETRY=off", "GOPROXY=off", "GOSUMDB=off"), time.Second
+	if out, err := lost.CombinedOutput(); err == nil || !strings.Contains(string(out), "module lookup disabled by GOPROXY=off") {
+		t.Fatalf("lost-cache control did not reproduce offline dependency failure: %v\n%s", err, out)
+	} else {
+		t.Logf("lost-cache control: %v\n%s", err, out)
+	}
+	build := exec.CommandContext(ctx, compiler.Path, "build", "-buildvcs=false", "-mod=readonly", "-trimpath", "-o", filepath.Join(root, "sender"), ".")
+	build.Dir, build.Env, build.WaitDelay = moduleRoot, compiler.buildEnvironment(env), time.Second
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("offline build after runtime HOME isolation: %v\n%s", err, out)
+	}
+	run := exec.CommandContext(ctx, filepath.Join(root, "sender"))
+	run.Env, run.WaitDelay = env, time.Second
+	if out, err := run.CombinedOutput(); err != nil || string(out) != "prepared offline cache\n" {
+		t.Fatalf("cached dependency execution: %v\n%s", err, out)
+	}
+}
+
 func orphanCLIValidateEvidence(root, evidence string) error {
 	if !filepath.IsAbs(evidence) || filepath.Clean(evidence) != evidence {
 		return fmt.Errorf("evidence requires a clean absolute path")
@@ -132,7 +287,7 @@ func orphanCLIValidateEvidence(root, evidence string) error {
 	return nil
 }
 
-func orphanCLIRealBinary(t *testing.T, env []string, root string) (string, string) {
+func orphanCLIRealBinary(t *testing.T, compiler orphanCLICompiler, env []string, root string) (string, string) {
 	t.Helper()
 	orphanCLIBuild.Do(func() {
 		evidence := os.Getenv("ORPHAN_CLI_EVIDENCE_DIR")
@@ -162,22 +317,11 @@ func orphanCLIRealBinary(t *testing.T, env []string, root string) (string, strin
 			return
 		}
 		orphanCLIBuild.Binary = filepath.Join(evidence, "claude-notifications")
-		goPath, err := exec.LookPath("go")
-		if err != nil {
-			orphanCLIBuild.Err = err
-			return
-		}
-		buildEnv := append([]string(nil), env...)
-		// Only the job's prepared compiler/cache configuration crosses this boundary.
-		for _, key := range []string{"GOROOT", "GOPATH", "GOMODCACHE", "GOCACHE", "GOTMPDIR", "GOMAXPROCS", "CGO_ENABLED", "CC", "CXX", "CGO_CFLAGS", "CGO_LDFLAGS", "PKG_CONFIG_PATH", "SDKROOT", "DEVELOPER_DIR"} {
-			if value := os.Getenv(key); value != "" {
-				buildEnv = append(buildEnv, key+"="+value)
-			}
-		}
-		buildEnv = append(buildEnv, "GOTOOLCHAIN=local", "GOTELEMETRY=off", "GOPROXY=off", "GOSUMDB=off")
+		buildEnv := compiler.buildEnvironment(env)
+		orphanCLIArtifact(t, evidence, "compiler.json", compiler)
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 		defer cancel()
-		cmd := exec.CommandContext(ctx, goPath, "build", "-mod=readonly", "-trimpath", "-ldflags=-s -w", "-o", orphanCLIBuild.Binary, ".")
+		cmd := exec.CommandContext(ctx, compiler.Path, "build", "-mod=readonly", "-trimpath", "-ldflags=-s -w", "-o", orphanCLIBuild.Binary, ".")
 		cmd.Env = buildEnv
 		cmd.WaitDelay = time.Second
 		output, err := cmd.CombinedOutput()
@@ -185,7 +329,7 @@ func orphanCLIRealBinary(t *testing.T, env []string, root string) (string, strin
 		if cmd.ProcessState != nil {
 			exit = cmd.ProcessState.ExitCode()
 		}
-		log := fmt.Sprintf("command: %s build -mod=readonly -trimpath '-ldflags=-s -w' -o %s .\nexit: %d\n%s", goPath, orphanCLIBuild.Binary, exit, output)
+		log := fmt.Sprintf("command: %s build -mod=readonly -trimpath '-ldflags=-s -w' -o %s .\nexit: %d\nerror: %v\ncombined stdout/stderr:\n%s", compiler.Path, orphanCLIBuild.Binary, exit, err, output)
 		if e := os.WriteFile(filepath.Join(evidence, "build.log"), []byte(log), 0600); e != nil {
 			orphanCLIBuild.Err = e
 			return
@@ -246,6 +390,10 @@ func orphanCLIRun(t *testing.T, binary string, env []string, evidence string, wa
 // setup-codex generated the sibling hooks.json and all eight opaque commands.
 // Kernel fault replay and native APFS qualification remain in their owned lanes.
 func TestOrphanRecoveryRealCLI21Absent28Retained(t *testing.T) {
+	compiler, err := orphanCLIObserveCompiler()
+	if err != nil {
+		t.Fatal(err)
+	}
 	parent := os.Getenv("TMPDIR")
 	root, err := os.MkdirTemp(parent, "TEST-orphan-real-cli-")
 	if err != nil {
@@ -261,7 +409,7 @@ func TestOrphanRecoveryRealCLI21Absent28Retained(t *testing.T) {
 	t.Logf("TEST fixture=%s (preserved on failure)", root)
 	// Capture cache settings before isolating runtime HOME/config in this process.
 	env := orphanCLIEnvironment(t, root)
-	binary, evidence := orphanCLIRealBinary(t, env, root)
+	binary, evidence := orphanCLIRealBinary(t, compiler, env, root)
 	control, err := installruntime.ControlRoot()
 	if err != nil {
 		t.Fatal(err)

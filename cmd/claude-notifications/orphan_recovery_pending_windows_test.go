@@ -73,6 +73,11 @@ func TestRuntimePendingWindowsReplaysOrdinaryInterruptedCommit(t *testing.T) {
 				t.Fatalf("no-journal refusal mutated installation: %v", err)
 			}
 			interrupted := errors.New("TEST ordinary transaction interruption")
+			identityBefore, err := installruntime.Fingerprint(payload)
+			if err != nil || !identityBefore.Exists || before.Files[payload] != identityBefore {
+				t.Fatalf("initial ownership/payload disagree: %v", err)
+			}
+			request.Files[0].Before = identityBefore
 			request.Files[0].Data = []byte("after")
 			request.Fault = func(phase string) error {
 				if phase == "transaction" {

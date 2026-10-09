@@ -191,7 +191,7 @@ func meaningfulOrphanIdentity(id Identity) bool {
 func orphanCommandPaths(id string, c Consumer) ([]string, error) {
 	if strings.HasPrefix(id, "codex:") {
 		if c.Registration != filepath.Join(filepath.Dir(c.RuntimeRoot), "hooks.json") || id != "codex:"+c.Registration || filepath.Base(c.RuntimeRoot) != codexcommand.InstallDirName || !reflect.DeepEqual(c.Commands, codexcommand.Commands(c.RuntimeRoot)) {
-			return nil, orphanConflict("command_codec", c.RuntimeRoot, fmt.Errorf("Codex registration must match the exact generated command set"))
+			return nil, orphanConflict("command_codec", c.RuntimeRoot, fmt.Errorf("codex registration must match the exact generated command set"))
 		}
 		return []string{filepath.Join(c.RuntimeRoot, "bin", "codex-hook-wrapper.cmd"), filepath.Join(c.RuntimeRoot, "bin", "codex-hook-wrapper.sh")}, nil
 	}
@@ -625,9 +625,9 @@ func validateOrphanLive(root string, tx transaction) error {
 	}
 	var generation runtimePolicy
 	if json.Unmarshal(data, &generation) != nil ||
-		!(generation == (runtimePolicy{tx.Before.PolicyGeneration, tx.Before.Enabled}) ||
-			generation.Generation == tx.After.PolicyGeneration && (!generation.Enabled || generation.Enabled == tx.After.Enabled) ||
-			tx.Rollback && generation == (runtimePolicy{d.SourcePolicyGeneration + 1, false})) {
+		generation != (runtimePolicy{tx.Before.PolicyGeneration, tx.Before.Enabled}) &&
+			(generation.Generation != tx.After.PolicyGeneration || generation.Enabled && generation.Enabled != tx.After.Enabled) &&
+			(!tx.Rollback || generation != (runtimePolicy{d.SourcePolicyGeneration + 1, false})) {
 		return orphanConflict("policy_generation", root, fmt.Errorf("policy generation does not belong to the pending decision"))
 	}
 	policy, _, preimage, err := readPolicyForUpdate(root)

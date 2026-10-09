@@ -51,6 +51,7 @@ func TestOrphanPermissionDenialIsConflictNotAbsence(t *testing.T) {
 					t.Fatal("permission fixture thread still has DAC bypass capabilities")
 				}
 			}
+			evidenceParent := os.Getenv("TMPDIR")
 			f := newOrphanFixture(t)
 			f.abandon(t, false)
 			if replay {
@@ -60,7 +61,22 @@ func TestOrphanPermissionDenialIsConflictNotAbsence(t *testing.T) {
 			if err := os.Chmod(parent, 0000); err != nil {
 				t.Fatal(err)
 			}
-			defer os.Chmod(parent, 0700)
+			defer func() {
+				if err := os.Chmod(parent, 0700); err != nil {
+					t.Errorf("restore permissions for %s: %v", parent, err)
+					// Move outside TempDir's cleanup tree to retain the failed fixture.
+					evidence, err := os.MkdirTemp(evidenceParent, "TEST-orphan-permission-cleanup-failed-")
+					if err != nil {
+						t.Errorf("preserve permission fixture %s: %v", f.root, err)
+						return
+					}
+					if err := os.Rename(f.root, filepath.Join(evidence, "fixture")); err != nil {
+						t.Errorf("preserve permission fixture %s in %s: %v", f.root, evidence, err)
+						return
+					}
+					t.Logf("preserved failed permission fixture: %s", evidence)
+				}
+			}()
 			if _, err := os.Open(parent); !errors.Is(err, os.ErrPermission) {
 				t.Fatalf("permission fixture still has DAC bypass: %v", err)
 			}
