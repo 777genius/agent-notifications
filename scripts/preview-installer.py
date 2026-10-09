@@ -10,6 +10,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import tarfile
 import tempfile
 
 REPO = '777genius/agent-notifications'
@@ -53,15 +54,30 @@ def build_binary(root, state, sha, go):
     compiler = shutil.which(go)
     if not compiler:
         raise ValueError('Go is required unless --binary supplies an exact-source build')
-    env = {'PATH': '/usr/bin:/bin', 'GOMAXPROCS': '2', 'GOTELEMETRY': 'off'}
+    env = {'PATH': '/usr/bin:/bin', 'GOMAXPROCS': '2', 'GOTELEMETRY': 'off', 'GOWORK': 'off'}
     for key, leaf in (('HOME','build-home'),('GOCACHE','go-cache'),('GOMODCACHE','go-modules'),('TMPDIR','build-tmp')):
         env[key] = str(private_directory(state/leaf))
+    # Build exactly the committed tree: ignored go.work/vendor and untracked Go
+    # files in the caller's checkout must never acquire a false HEAD stamp.
+    sources = private_directory(state/'sources')
+    source = Path(tempfile.mkdtemp(prefix=sha+'-', dir=sources))
+    archive = source/'committed-source.tar'
+    subprocess.run(['/usr/bin/git', '-C', str(root), 'archive', '--format=tar',
+                    '--output', str(archive), sha], check=True)
+    tree = private_directory(source/'tree')
+    with tarfile.open(archive) as committed:
+        for member in committed.getmembers():
+            destination = tree/member.name
+            if (not destination.resolve().is_relative_to(tree) or
+                    not (member.isfile() or member.isdir())):
+                raise ValueError('Unsafe committed source archive member: '+member.name)
+        committed.extractall(tree)
     fd, temporary = tempfile.mkstemp(prefix='build-', dir=output.parent)
     os.close(fd)
     try:
         print('Building clean source '+sha+' (private reusable Go cache)...', flush=True)
-        subprocess.run([compiler, 'build', '-ldflags', '-s -w -X main.selectorSourceCommit='+sha,
-                        '-o', temporary, './cmd/claude-notifications'], cwd=root, env=env, check=True)
+        subprocess.run([compiler, 'build', '-mod=readonly', '-ldflags', '-s -w -X main.selectorSourceCommit='+sha,
+                        '-o', temporary, './cmd/claude-notifications'], cwd=tree, env=env, check=True)
         source_identity(root, sha)
         os.replace(temporary, output)
     finally:
