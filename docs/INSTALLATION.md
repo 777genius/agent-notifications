@@ -10,6 +10,28 @@ macOS keeps Claude, Codex and OpenCode. GitHub Latest remains 1.46.1 for legacy
 installers. Rerun setup once to adopt a normal Claude marketplace's platform
 channel. [Channel selection and promotion](PLATFORM_RELEASE_CHANNELS.md).
 
+## Local installer preview (macOS OpenCode)
+
+From a clean checkout, open a terminal and run:
+
+```bash
+bash scripts/preview-installer.sh
+```
+
+This builds the current source into a private reusable TEST cache and previews the
+real installer with a fresh HOME. Select OpenCode, then review and confirm the
+plan. Terminal UI settings are inherited; use `--plain` for line prompts.
+Python 3.9+, Go and macOS signing tools are required. `gh` downloads the latest
+signed public helper and verifies its published checksum; alternatively pass
+`--native-zip /path/to/ClaudeNotifier.app.zip`. `--binary /path/to/binary` skips
+building only when the binary's source provenance matches clean HEAD.
+
+Only a version-only OpenCode TEST adapter is available. No agent, account or
+provider is launched; this does not qualify notification delivery or all products.
+Profiles and native app registrations are retained at the printed path. Keep that
+directory until its TEST registration has been inspected and safely removed.
+Use `--state-dir /path/to/private-TEST-cache` to reuse your own mode-700 cache.
+
 ## Prerequisites
 
 - Claude, Codex CLI and/or OpenCode for stable setup (published OpenCode support is tested with 1.18.33; published V2 support is not declared). The dual-API candidate targets 1.18.33, 2.0.0 and 2.0.21; final platform qualification and publication remain pending. See [OpenCode candidate setup and limits](opencode-notifications.md), including the stock Windows V1 original-event-age limitation. Gemini CLI 0.62.0 is the tested host on Linux/Windows.
