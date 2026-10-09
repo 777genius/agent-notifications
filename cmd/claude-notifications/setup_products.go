@@ -119,7 +119,9 @@ func runSetupProductsContext(ctx context.Context, args []string, input io.Reader
 	var line *installerui.UI
 	// Confirm's read-only facts and bounded summary are composed before a question
 	// is rendered; the record is published only after fresh Yes and cleanup.
-	if a.Operation == "confirm" {
+	if a.Operation == "confirm" || a.Operation == "prepare" {
+		prepare := a.Operation == "prepare"
+		a.Operation = "confirm"
 		provenance, err := currentSelectorProvenance()
 		if err != nil {
 			return fail(1, err)
@@ -144,6 +146,18 @@ func runSetupProductsContext(ctx context.Context, args []string, input io.Reader
 		cancel()
 		if err != nil {
 			return fail(setupProductErrorCode(err), err)
+		}
+		if prepare {
+			if a.IntentFile == "" {
+				return fail(2, errors.New("prepare requires intent-file"))
+			}
+			if err := writeBootstrapIntent(a.IntentFile, intent); err != nil {
+				return fail(1, err)
+			}
+			if err := writeSelectorResult(ctx, output, "prepared\n"); err != nil {
+				return fail(1, errors.Join(err, removeBootstrapIntent(a.IntentFile, provenance)))
+			}
+			return 0
 		}
 		terminal, line, err = newSetupProductsPrompt(input, prompts, a.Mode)
 		if err != nil {

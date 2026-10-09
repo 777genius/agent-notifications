@@ -34,6 +34,7 @@ type bootstrapInitialObservation struct {
 	LedgerID, Owner string
 	Generation      uint64
 	Policy          installruntime.Identity
+	ChannelPolicy   []byte
 }
 
 var intentScalarKeys = []string{"home", "claude-config", "claude-mcp-config", "codex-home", "codex-mcp-config", "opencode-config-dir", "gemini-config-root", "control-root", "runtime-root", "global-config", "claude-executable", "codex-executable", "opencode-executable", "gemini-executable", "scope-root", "client-executable"}
@@ -75,7 +76,11 @@ func buildConfirmedBootstrapIntent(ctx context.Context, a setupProductsArgs, e p
 	if snapshot.Installation.Recovery || ledger.PendingMutation != nil {
 		return i, nil, errors.New("pending recovery or setup intent requires inspection")
 	}
-	i.Initial = bootstrapInitialObservation{ledger.ID, ledger.Owner, ledger.Generation, snapshot.Preimage}
+	i.Initial = bootstrapInitialObservation{LedgerID: ledger.ID, Owner: ledger.Owner, Generation: ledger.Generation, Policy: snapshot.Preimage}
+	i.Initial.ChannelPolicy, err = selectedBootstrapChannelPolicy(a.Products, snapshot.Fields["route"])
+	if err != nil {
+		return i, nil, err
+	}
 	if ledger.ID != "" && ledger.Owner != "existing-installer" {
 		return i, nil, errors.New("foreign installation owner")
 	}
@@ -152,9 +157,13 @@ func buildConfirmedBootstrapIntent(ctx context.Context, a setupProductsArgs, e p
 	for _, id := range a.Products {
 		portable := id == "claude" || id == "codex" || id == "cursor"
 		u := bootstrapProductUnits{Product: id, Hooks: portable && id != "cursor", Native: !portable, MCP: containsProduct(i.MCP.Selected, id), Skill: containsProduct(i.MCP.Selected, id), PreservedOff: containsProduct(i.MCP.Skipped, id)}
-		if !portable || id == "cursor" {
-			u.Desktop = a.Desktop
-			u.Webhook = a.Webhook
+		if !portable {
+			u.Desktop, u.Webhook, err = resolveBootstrapChannels(a, id, i.Initial.ChannelPolicy)
+			if err != nil {
+				return i, nil, err
+			}
+		} else if id == "cursor" {
+			u.Desktop, u.Webhook = a.Desktop, a.Webhook
 		}
 		i.Units = append(i.Units, u)
 	}
@@ -305,4 +314,50 @@ func bootstrapIntentSummary(i confirmedBootstrapIntent, policy map[string]json.R
 		raw = append(raw, "  Existing direct MCP entry: "+d.ID+"; config: "+bootstrapAuthority(string(d.Config)))
 	}
 	return escapeProductRows(raw)
+}
+
+// Omission preserves this product's complete stored decision. A destination in
+// shared settings grants no channel authority to a newly installed product.
+func resolveBootstrapChannels(a setupProductsArgs, product string, raw json.RawMessage) (bool, bool, error) {
+	if a.DesktopSet || a.WebhookSet {
+		return a.Desktop, a.Webhook, nil
+	}
+	var route map[string]json.RawMessage
+	if len(raw) > 0 && (json.Unmarshal(raw, &route) != nil || route == nil) {
+		return false, false, errors.New("invalid observer channel policy")
+	}
+	key := "openCodeNotifications"
+	if product == "gemini" {
+		key = "geminiNotifications"
+	}
+	value, present := route[key]
+	if !present {
+		return true, false, nil
+	}
+	var channels struct{ Desktop, Webhook *bool }
+	if json.Unmarshal(value, &channels) != nil || channels.Desktop == nil || channels.Webhook == nil {
+		return false, false, errors.New("both observer channel fields are required")
+	}
+	return *channels.Desktop, *channels.Webhook, nil
+}
+
+// Freeze only selected leaves. The shared policy has a larger document budget
+// than the bounded host handoff, and unrelated preferences never drive defaults.
+func selectedBootstrapChannelPolicy(products []string, raw []byte) ([]byte, error) {
+	selected := map[string]json.RawMessage{}
+	if !containsProduct(products, "opencode") && !containsProduct(products, "gemini") {
+		return nil, nil
+	}
+	var route map[string]json.RawMessage
+	if len(raw) > 0 && (json.Unmarshal(raw, &route) != nil || route == nil) {
+		return nil, errors.New("invalid observer channel policy")
+	}
+	for _, pair := range [][2]string{{"opencode", "openCodeNotifications"}, {"gemini", "geminiNotifications"}} {
+		if containsProduct(products, pair[0]) {
+			if leaf, ok := route[pair[1]]; ok {
+				selected[pair[1]] = leaf
+			}
+		}
+	}
+	return json.Marshal(selected)
 }

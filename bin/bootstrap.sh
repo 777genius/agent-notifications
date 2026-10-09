@@ -69,6 +69,8 @@ AGENT_NOTIFY_REQUEST=auto
 CONFIGURE_BINARY=""
 CONFIGURE_ARGS=()
 OPENCODE_ARGS=()
+_FROZEN_OPENCODE_CHANNELS=()
+_FROZEN_GEMINI_CHANNELS=()
 CLAUDE_AGENT_NOTIFY_STATUS="not configured by this run"
 CODEX_AGENT_NOTIFY_STATUS="not configured by this run"
 SELECTED_PRODUCTS=()
@@ -268,7 +270,7 @@ check_prerequisites() {
         [ "$(bootstrap_release_os_arch)" != "windows arm64" ] || { echo "Windows arm64 is not supported." >&2; return 1; }
     fi
     if { [ "$PRODUCT" = opencode ] || [ "$PRODUCT" = gemini ]; } && [ "$(uname -s)" = Darwin ] &&
-        [[ " ${OPENCODE_ARGS[*]-} " = *" --desktop "* ]] && ! command -v unzip >/dev/null 2>&1; then
+        { [[ " ${OPENCODE_ARGS[*]-} " = *" --desktop "* ]] || [[ " ${OPENCODE_ARGS[*]-} " = *" --desktop=true "* ]] || [[ " ${_FROZEN_OPENCODE_CHANNELS[*]-} ${_FROZEN_GEMINI_CHANNELS[*]-} " = *" --desktop=true "* ]]; } && ! command -v unzip >/dev/null 2>&1; then
         echo "unzip is required for the signed macOS notification helper." >&2
         exit 1
     fi
@@ -1475,7 +1477,7 @@ select_product() {
                     *) PRODUCT=${1#--products=}; shift ;;
                 esac
                 PRODUCT="bundle:$PRODUCT" ;;
-            --desktop|--webhook)
+            --desktop|--webhook|--desktop=true|--desktop=false|--webhook=true|--webhook=false)
                 local existing
                 for existing in ${OPENCODE_ARGS[@]+"${OPENCODE_ARGS[@]}"}; do
                     [ "$existing" != "$1" ] || { echo "Use each observer channel once." >&2; return 1; }
@@ -1553,7 +1555,7 @@ select_product() {
         PRODUCT=select
         _SELECTION_PENDING=true
         _INTERACTIVE_INTENT=true
-        case " ${CONFIGURE_ARGS[*]-} " in *" --json "*) echo "Pending questions require complete explicit product/route/channel input with --json." >&2; return 1 ;; esac
+        case " ${CONFIGURE_ARGS[*]-} " in *" --json "*) echo "Pending questions require complete explicit product/route input with --json." >&2; return 1 ;; esac
         # Pure syntax only; applicability is checked after product selection.
         local selected_scope_count=0
         [ -z "$scope_root" ] || selected_scope_count=4
@@ -1601,14 +1603,6 @@ select_product() {
         esac
         case "$remaining" in *,*) remaining=${remaining#*,} ;; *) break ;; esac
     done
-    if [ "$observers" -gt 0 ] && [ "${#OPENCODE_ARGS[@]}" -eq 0 ]; then
-        if [[ "$PRODUCT" = bundle:* ]] && [ "$_INTERACTIVE_INTENT" != true ]; then
-            echo "Selected observers require explicit --desktop and/or --webhook consent." >&2; return 1
-        fi
-        _CHANNEL_PENDING=true
-        _INTERACTIVE_INTENT=true
-        case " ${CONFIGURE_ARGS[*]-} " in *" --json "*) echo "Pending questions require complete explicit product/route/channel input with --json." >&2; return 1 ;; esac
-    fi
     if [ "$observers" -eq 0 ] && [ "${#OPENCODE_ARGS[@]}" -gt 0 ]; then
         echo "--desktop/--webhook require OpenCode or Gemini." >&2; return 1
     fi
@@ -2095,6 +2089,8 @@ opencode_remove_command() { observer_remove_command "$1" setup-opencode; }
 # the managed installation. It never launches or installs the OpenCode host.
 install_opencode() {
     local root binary runtime os arch base native native_root config_path installed
+    local channels=(${OPENCODE_ARGS[@]+"${OPENCODE_ARGS[@]}"})
+    if [ -n "$_SELECTOR_INTENT" ]; then channels=("${_FROZEN_OPENCODE_CHANNELS[@]}"); fi
     root=$(bootstrap_control_root) || return 1
     read -r os arch < <(bootstrap_release_os_arch) || return 1
     [ "$os-$arch" != windows-arm64 ] || { echo "Windows arm64 is not a supported release target." >&2; return 1; }
@@ -2105,14 +2101,14 @@ install_opencode() {
         binary=$(cygpath -m "$binary") || return 1
         runtime=$(cygpath -m "$runtime") || return 1
     fi
-    set -- setup-opencode install --binary "$binary" "${OPENCODE_ARGS[@]}"
+    set -- setup-opencode install --binary "$binary" "${channels[@]}"
     if [ -n "$_SELECTOR_INTENT" ]; then
         set -- "$@" --control-root "$root" --home "$INSTALLER_HOME"
         set -- "$@" --opencode-config-dir "$_FROZEN_OPENCODE"
     fi
     # Existing shared components supply their authoritative runtime directory.
     [ -e "$root/ownership.json" ] || set -- "$@" --runtime-root "$runtime"
-    if [ "$os" = darwin ] && [[ " ${OPENCODE_ARGS[*]-} " = *" --desktop "* ]]; then
+    if [ "$os" = darwin ] && { [[ " ${channels[*]-} " = *" --desktop "* ]] || [[ " ${channels[*]-} " = *" --desktop=true "* ]]; }; then
         base="${BOOTSTRAP_RELEASES_BASE_URL:-https://github.com/${REPO}/releases}/download/$BOOTSTRAP_TAG"
         native="$_CONFIG_STAGE/ClaudeNotifier.app"
         if [ ! -d "$native" ]; then
@@ -2142,12 +2138,12 @@ run_setup_stage "Installing OpenCode notifications" "$_CONFIG_HELPER" "$@" </dev
         echo "  Delivery has not been verified."
         echo "  Silent completion, question, permission and error alerts; no click-to-focus."
         printf '  Shared settings: %s\n' "$config_path"
-        if [ "$os" = darwin ] && [[ " ${OPENCODE_ARGS[*]-} " = *" --desktop "* ]]; then
+        if [ "$os" = darwin ] && { [[ " ${channels[*]-} " = *" --desktop "* ]] || [[ " ${channels[*]-} " = *" --desktop=true "* ]]; }; then
             echo "  Check OS notification permission; grant it only if needed."
             printf '    Check: %s\n' "$(quote_shell_command "$installed" setup-opencode permission-status)"
             printf '    Grant if needed: %s\n' "$(quote_shell_command "$installed" setup-opencode request-permission)"
         fi
-        if [[ " ${OPENCODE_ARGS[*]-} " = *" --webhook "* ]]; then
+        if { [[ " ${channels[*]-} " = *" --webhook "* ]] || [[ " ${channels[*]-} " = *" --webhook=true "* ]]; }; then
             echo "  Webhook consent recorded; configure and enable its destination and status channel in shared settings."
         fi
         echo "  Restart OpenCode, then complete a task to check notification delivery."
@@ -2161,6 +2157,8 @@ run_setup_stage "Installing OpenCode notifications" "$_CONFIG_HELPER" "$@" </dev
 
 install_gemini() {
     local root binary runtime os arch base native native_root config_path installed
+    local channels=(${OPENCODE_ARGS[@]+"${OPENCODE_ARGS[@]}"})
+    if [ -n "$_SELECTOR_INTENT" ]; then channels=("${_FROZEN_GEMINI_CHANNELS[@]}"); fi
     root=$(bootstrap_control_root) || return 1
     read -r os arch < <(bootstrap_release_os_arch) || return 1
     [ "$os-$arch" != windows-arm64 ] || { echo "Windows arm64 is not a supported release target." >&2; return 1; }
@@ -2171,14 +2169,14 @@ install_gemini() {
         binary=$(cygpath -w "$binary") || return 1
         runtime=$(cygpath -m "$runtime") || return 1
     fi
-    set -- setup-gemini install --binary "$binary" "${OPENCODE_ARGS[@]}"
+    set -- setup-gemini install --binary "$binary" "${channels[@]}"
     if [ -n "$_SELECTOR_INTENT" ]; then
         set -- "$@" --control-root "$root" --home "$INSTALLER_HOME"
         set -- "$@" --config-root "$_FROZEN_GEMINI"
     fi
     # Existing shared components supply their authoritative runtime directory.
     [ -e "$root/ownership.json" ] || set -- "$@" --runtime-root "$runtime"
-    if [ "$os" = darwin ] && [[ " ${OPENCODE_ARGS[*]-} " = *" --desktop "* ]]; then
+    if [ "$os" = darwin ] && { [[ " ${channels[*]-} " = *" --desktop "* ]] || [[ " ${channels[*]-} " = *" --desktop=true "* ]]; }; then
         base="${BOOTSTRAP_RELEASES_BASE_URL:-https://github.com/${REPO}/releases}/download/$BOOTSTRAP_TAG"
         native="$_CONFIG_STAGE/ClaudeNotifier.app"
         if [ ! -d "$native" ]; then
@@ -2209,13 +2207,13 @@ run_setup_stage "Installing Gemini CLI notifications" "$_CONFIG_HELPER" "$@" </d
         printf '  Shared settings: %s\n' "$config_path"
         echo "  Restart Gemini CLI and enable/trust the user hooks, then complete a task to check delivery."
         echo "  Silent turn completion and tool permission alerts; existing hook/security settings were preserved."
-        echo "  Gemini's built-in desktop notifications may duplicate alerts; choose one desktop source or use --webhook only."
+        echo "  Gemini's built-in desktop notifications may duplicate alerts; choose one desktop source or explicitly use --webhook."
         printf '  Inspect registration and consent: %s\n' "$(quote_shell_command "$installed" setup-gemini inspect --control-root "$native_root")"
-        if [ "$os" = darwin ] && [[ " ${OPENCODE_ARGS[*]-} " = *" --desktop "* ]]; then
+        if [ "$os" = darwin ] && { [[ " ${channels[*]-} " = *" --desktop "* ]] || [[ " ${channels[*]-} " = *" --desktop=true "* ]]; }; then
             printf '  Check permission: %s\n' "$(quote_shell_command "$installed" setup-gemini permission-status --control-root "$native_root")"
             printf '  Grant if needed: %s\n' "$(quote_shell_command "$installed" setup-gemini request-permission --control-root "$native_root")"
         fi
-        if [[ " ${OPENCODE_ARGS[*]-} " = *" --webhook "* ]]; then
+        if { [[ " ${channels[*]-} " = *" --webhook "* ]] || [[ " ${channels[*]-} " = *" --webhook=true "* ]]; }; then
             echo "  Webhook consent recorded; configure and enable its destination and status channel in shared settings."
         fi
         printf '  Remove: %s\n' "$(gemini_remove_command "$installed" "$native_root")"
@@ -2372,6 +2370,29 @@ load_frozen_dispatch() {
         case ",$seen," in *",$key,"*) return 1 ;; esac
         seen=${seen:+$seen,}$key
         [ "${#value}" -le 4096 ] || return 1
+        case "$key" in
+            opencode-channel-preimage|gemini-channel-preimage)
+                if [ "$value" != absent ]; then
+                    [ "${#value}" -eq 64 ] || return 1
+                    case "$value" in *[!0-9a-f]*) return 1 ;; esac
+                fi
+                case ",$_PRODUCT_CSV," in *",${key%%-*},"*) ;; *) return 1 ;; esac
+                case "$key" in
+                    opencode-*) _FROZEN_OPENCODE_CHANNELS+=("--channel-preimage=$value") ;;
+                    gemini-*) _FROZEN_GEMINI_CHANNELS+=("--channel-preimage=$value") ;;
+                esac
+                continue ;;
+        esac
+        case "$key" in
+            opencode-desktop|opencode-webhook|gemini-desktop|gemini-webhook)
+                case "$value" in true|false) ;; *) return 1 ;; esac
+                case ",$_PRODUCT_CSV," in *",${key%-*},"*) ;; *) return 1 ;; esac
+                case "$key" in
+                    opencode-*) _FROZEN_OPENCODE_CHANNELS+=("--${key#opencode-}=$value") ;;
+                    gemini-*) _FROZEN_GEMINI_CHANNELS+=("--${key#gemini-}=$value") ;;
+                esac
+                continue ;;
+        esac
         case "$value" in /*|[A-Za-z]:/*|[A-Za-z]:\\*) ;; *) return 1 ;; esac
         case "$key" in
             home) INSTALLER_HOME=$value ;;
@@ -2401,8 +2422,8 @@ load_frozen_dispatch() {
         case "$selected" in
             claude) required="$required claude-config claude-mcp-config claude-executable" ;;
             codex) required="$required codex-home codex-mcp-config codex-executable" ;;
-            opencode) required="$required opencode-config-dir opencode-executable" ;;
-            gemini) required="$required gemini-config-root gemini-executable" ;;
+            opencode) required="$required opencode-config-dir opencode-executable opencode-desktop opencode-webhook opencode-channel-preimage" ;;
+            gemini) required="$required gemini-config-root gemini-executable gemini-desktop gemini-webhook gemini-channel-preimage" ;;
             cursor) required="$required scope-root client-executable runtime-root" ;;
         esac
     done
@@ -2478,7 +2499,7 @@ main() {
     install_cleanup_traps
     if [ "$_INTERACTIVE_INTENT" = true ]; then
         if ! { exec 3<>/dev/tty; } 2>/dev/null; then
-            echo "No controlling TTY. Specify complete explicit product/route/channel input." >&2; return 1
+            echo "No controlling TTY. Specify complete explicit product/route input." >&2; return 1
         fi
         _PROMPT_OPEN=true
     fi
@@ -2528,6 +2549,15 @@ main() {
         [ -s "$_SELECTOR_RESULT" ] || { close_prompt; return 0; }
         selector_exact approved confirm || return 1
         [ -f "$_SELECTOR_INTENT" ] && [ ! -L "$_SELECTOR_INTENT" ] || { echo "Missing confirmed intent." >&2; return 1; }
+    fi
+    if [ "$_INTERACTIVE_INTENT" != true ]; then
+        case ",$_PRODUCT_CSV," in
+            *,opencode,*|*,gemini,*)
+                _SELECTOR_INTENT="$_CONFIG_STAGE/selector-intent.json"
+                selector_scope_args
+                selector_collect prepare "${_EFFECT_ARGS[@]}" ${_SCOPE_ARGS[@]+"${_SCOPE_ARGS[@]}"} --intent-file "$_SELECTOR_INTENT" || return $?
+                selector_exact prepared prepare || return 1 ;;
+        esac
     fi
     close_prompt
     if [ -n "$_SELECTOR_INTENT" ]; then load_frozen_dispatch || return $?; fi

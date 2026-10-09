@@ -51,7 +51,7 @@ main() (
                 if [ "$selector" = --product ]; then
                     case "$singleton" in claude|codex|both|opencode|gemini) ;; *) echo "Invalid product." >&2; exit 1 ;; esac
                 fi ;;
-            --desktop|--webhook) channels=$((channels + 1)); shift ;;
+            --desktop|--webhook|--desktop=true|--desktop=false|--webhook=true|--webhook=false) channels=$((channels + 1)); shift ;;
             --json) json=1; shift ;;
             --agent-notify|--skip-agent-notify|--request-permission|--preserve-policy|--navigation|--navigation=*|--app|--app=*|--team-id|--team-id=*|--allow-unknown-caller|--allow-unknown-caller=*|--allow-caller-asserted|--allow-caller-asserted=*|--codex-home|--codex-home=*)
                 case ",$route_seen," in *",$key,"*) echo "Use $key once." >&2; exit 1 ;; esac
@@ -97,14 +97,14 @@ main() (
         [ -z "$route_seen" ] && [ "$json" -eq 0 ] || { echo "Observers use channel flags only." >&2; exit 1; }
     fi
     set -- ${original_args[@]+"${original_args[@]}"}
-    if [ -z "$selector" ] || { [ "$selector" = --product ] && [ "$channels" -eq 0 ] && { [ "$singleton" = opencode ] || [ "$singleton" = gemini ]; }; }; then
+    if [ -z "$selector" ]; then
         pending=1
     fi
     if [ "$pending" -eq 1 ] && [ -n "$unknown_arg" ]; then
         echo "Unknown option: $unknown_arg." >&2; exit 1
     fi
     if [ "$pending" -eq 1 ] && [ "$json" -eq 1 ]; then
-        echo "Pending questions require complete explicit product/route/channel input with --json." >&2; exit 1
+        echo "Pending questions require complete explicit product/route input with --json." >&2; exit 1
     fi
     previous=""
     # No arguments delegates interactive selection to the released bootstrap.
@@ -159,7 +159,7 @@ main() (
                     [ -z "$notify" ] || { echo "Use one agent-notify option once." >&2; exit 1; }
                     notify=$1
                     legacy_args+=("$1") ;;
-                --desktop|--webhook)
+                --desktop|--webhook|--desktop=true|--desktop=false|--webhook=true|--webhook=false)
                     for channel in ${opencode_args[@]+"${opencode_args[@]}"}; do
                         [ "$channel" != "$1" ] || { echo "Use each observer channel once." >&2; exit 1; }
                     done
@@ -175,7 +175,7 @@ main() (
         done
         if [ "$help" -eq 1 ]; then
             echo "Usage: bash install.sh --products claude,codex,opencode,gemini [--agent-notify|--skip-agent-notify] [--desktop] [--webhook]"
-            echo "Choose any nonempty subset. Agent-notify options apply to Claude/Codex; Observers require --desktop and/or --webhook."
+            echo "Choose any nonempty subset. Agent-notify options apply to Claude/Codex; Observer channel flags apply to OpenCode/Gemini."
             exit 0
         fi
         if [ "$claude" -eq 1 ] && [ "$codex" -eq 1 ]; then
@@ -188,11 +188,7 @@ main() (
         [ -z "$notify" ] || [ -n "$legacy_product" ] || {
             echo "Agent-notify options require Claude or Codex in --products." >&2; exit 1;
         }
-        if [ "$opencode" -eq 1 ] || [ "$gemini" -eq 1 ]; then
-            [ "$opencode_channels" -gt 0 ] || {
-                echo "Selected observers require explicit --desktop and/or --webhook consent." >&2; exit 1;
-            }
-        elif [ "$opencode_channels" -gt 0 ]; then
+        if [ "$opencode" -eq 0 ] && [ "$gemini" -eq 0 ] && [ "$opencode_channels" -gt 0 ]; then
             echo "--desktop/--webhook require OpenCode or Gemini in --products." >&2; exit 1
         fi
     fi

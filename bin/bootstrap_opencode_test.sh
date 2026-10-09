@@ -9,16 +9,26 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-env.sh"
 test_env_enter "$0" "$@"
 set -euo pipefail
 trap 'printf "TEST OpenCode fixture failed: %s (status %s)\n" "$BASH_COMMAND" "$?" >&2' ERR
-[ "$#" -eq 1 ] || { echo "Usage: bash bin/bootstrap_opencode_test.sh /absolute/native/test-binary" >&2; exit 2; }
+[ "$#" -ge 1 ] && [ "$#" -le 2 ] || { echo "Usage: bash bin/bootstrap_opencode_test.sh /absolute/native/test-binary [/absolute/signed/ClaudeNotifier.app.zip]" >&2; exit 2; }
 TEST_BINARY="$1"
+TEST_NATIVE_ZIP="${2:-}"
+if [ -n "$TEST_NATIVE_ZIP" ]; then
+    [ "$(uname -s)" = Darwin ] && [ -f "$TEST_NATIVE_ZIP" ] || exit 2
+    case "$TEST_NATIVE_ZIP" in /*) ;; *) exit 2 ;; esac
+fi
 [ -f "$TEST_BINARY" ] || exit 2
 # CI qualifies release-mode bytes: unstripped Windows debug symbols can exceed
 # the product's existing 32 MiB executable bound. Keep the actual size visible.
 source_size=$(wc -c < "$TEST_BINARY" | tr -d '[:space:]')
 printf 'OpenCode fixture native source: %s bytes\n' "$source_size"
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-SANDBOX=$(mktemp -d "${TMPDIR:-/tmp}/bootstrap-opencode-TEST-XXXXXX")
-trap 'rm -rf "$SANDBOX"' EXIT
+if [ -n "$TEST_NATIVE_ZIP" ]; then
+    # Keep a failed LS cleanup recoverable beyond the env-isolation wrapper.
+    SANDBOX=$(mktemp -d /private/tmp/bootstrap-opencode-TEST-XXXXXX)
+else
+    SANDBOX=$(mktemp -d "${TMPDIR:-/tmp}/bootstrap-opencode-TEST-XXXXXX")
+fi
+trap 'if [ -e "$SANDBOX/native-cleanup-pending" ]; then printf "TEST native cleanup needs inspection; retained: %s\n" "$SANDBOX" >&2; else rm -rf "$SANDBOX"; fi' EXIT
 # Give all Windows sandbox children the established private inherited DACL
 # before creating HOME/config/plugin paths. chmod alone does not create it.
 case "$(uname -s)" in
@@ -81,9 +91,10 @@ PY
 # Missing Gemini route/capability, a command stub, or separate consent would leave
 # this assertion red. Host PATH shims answer --version only in TEST profiles;
 # neither native agent nor provider is launched.
-python3 -I - "$ROOT" "$SANDBOX" "$TEST_BINARY" "$control" "$installed" <<'PYBUNDLE'
-import hashlib, json, os, pathlib, shlex, shutil, subprocess, sys, tarfile
-root, lab, binary, control, installed = map(pathlib.Path, sys.argv[1:])
+python3 -I - "$ROOT" "$SANDBOX" "$TEST_BINARY" "$control" "$installed" "$TEST_NATIVE_ZIP" <<'PYBUNDLE'
+import hashlib, json, os, pathlib, plistlib, shlex, shutil, subprocess, sys, tarfile
+root, lab, binary, control, installed = map(pathlib.Path, sys.argv[1:6])
+native_zip = pathlib.Path(sys.argv[6]) if sys.argv[6] else None
 if os.name == 'nt':
     print('SKIP mixed candidate bootstrap fixture: Windows native path qualification is separate')
     sys.exit()
@@ -104,6 +115,10 @@ assets = lab/'bundle-fixture-assets'
 assets.mkdir()
 shutil.copyfile(binary,assets/name)
 (assets/'checksums.txt').write_text(hashlib.sha256(binary.read_bytes()).hexdigest()+'  '+name+'\n')
+if native_zip is not None:
+    shutil.copyfile(native_zip, assets/'ClaudeNotifier.app.zip')
+    with (assets/'checksums.txt').open('a') as manifest:
+        manifest.write(hashlib.sha256(native_zip.read_bytes()).hexdigest()+'  ClaudeNotifier.app.zip\n')
 version = subprocess.check_output([str(binary),'--version'],text=True).strip().split()[-1]
 assert version.startswith('v'), version
 commit = '0123456789abcdef0123456789abcdef01234567'
@@ -140,6 +155,8 @@ case "$url" in
   cp '''+shlex.quote(str(assets/'checksums.txt'))+''' "$out" ;;
  https://candidate-fixture.invalid/releases/download/'''+version+'''/'''+name+''')
   cp '''+shlex.quote(str(assets/name))+''' "$out" ;;
+ https://candidate-fixture.invalid/releases/download/'''+version+'''/ClaudeNotifier.app.zip)
+  cp '''+shlex.quote(str(assets/'ClaudeNotifier.app.zip'))+''' "$out" ;;
  https://candidate-fixture.invalid/releases/download/'''+version+'''/config.json)
   cp '''+shlex.quote(str(assets/'config.json'))+''' "$out" ;;
  https://candidate-fixture.invalid/source/'''+commit+'''.tar.gz)
@@ -177,7 +194,7 @@ def loader_command(args=()):
     command = 'set -o pipefail; curl -fsSL '+shlex.quote(public_loader)+' | bash'
     return command + (' -s -- '+' '.join(map(shlex.quote,args)) if args else '')
 
-def run_tty(answer, channels=None):
+def run_tty(answer, approve=False):
     before = persistent_state()
     requests_before = len((lab/'loader-requests').read_text().splitlines()) if (lab/'loader-requests').exists() else 0
     pid, terminal = pty.fork()
@@ -186,7 +203,6 @@ def run_tty(answer, channels=None):
         os.execvpe('bash',['bash','-c',loader_command()],env)
     transcript = b''
     sent = False
-    consent_sent = False
     approved = False
     deadline = time.monotonic()+30
     status = None
@@ -202,10 +218,7 @@ def run_tty(answer, channels=None):
                 if b'comma-separated' in transcript and not sent:
                     os.write(terminal,answer)
                     sent = True
-                if channels is not None and b'Notification channels' in transcript and not consent_sent:
-                    os.write(terminal,channels)
-                    consent_sent = True
-                if channels is not None and b'Apply this plan?' in transcript and not approved:
+                if approve and b'Apply this plan?' in transcript and not approved:
                     os.write(terminal,b'y\n')
                     approved = True
             finished, code = os.waitpid(pid,os.WNOHANG)
@@ -216,10 +229,12 @@ def run_tty(answer, channels=None):
         requests = (lab/'loader-requests').read_text().splitlines()[requests_before:]
         for request in (public_loader,raw+'/bootstrap.sh','https://api.github.com/repos/777genius/agent-notifications/commits/'+version):
             assert requests.count(request) == 1, ('interactive loader acquisition',requests)
-        if channels is None:
+        assert b'Notification channels' not in transcript, transcript.decode(errors='replace')
+        if not approve:
             assert persistent_state() == before, 'cancel/empty mutated persistent product roots'
         else:
-            assert consent_sent and approved, 'successful selection omitted channel selection or final consent'
+            assert approved, 'successful selection omitted final confirmation'
+            assert b'Channels: Desktop off, Webhook on' in transcript, transcript.decode(errors='replace')
         for label in (b'Claude',b'Codex',b'OpenCode',b'Gemini CLI'):
             assert label in transcript, transcript.decode(errors='replace')
     finally:
@@ -229,10 +244,126 @@ def run_tty(answer, channels=None):
             os.waitpid(pid,0)
         os.close(terminal)
 
+# Optional fresh macOS Desktop preview uses the genuine installer, signature
+# verifier and native decoder checks. No agent/provider or notification runs.
+if native_zip is not None:
+    assert sys.platform == 'darwin'
+    fresh = lab/'fresh Desktop TEST'
+    fresh_env = dict(env, TERM='dumb', NO_COLOR='1')
+    for key in ('HOME','USERPROFILE','APPDATA','LOCALAPPDATA','XDG_CONFIG_HOME','XDG_CACHE_HOME',
+                'XDG_DATA_HOME','XDG_STATE_HOME','XDG_RUNTIME_DIR','XDG_CONFIG_DIRS','XDG_DATA_DIRS',
+                'CODEX_HOME','CLAUDE_HOME','CLAUDE_CONFIG_DIR','TMPDIR','TMP','TEMP',
+                'OPENCODE_CONFIG_DIR','GEMINI_CLI_HOME'):
+        directory = fresh/key
+        directory.mkdir(parents=True,exist_ok=True,mode=0o700)
+        fresh_env[key] = str(directory)
+    for key in ('AGENT_NOTIFICATIONS_CONTROL_ROOT','AGENT_NOTIFICATIONS_CONFIG'):
+        fresh_env.pop(key,None)
+    fresh_control = pathlib.Path(fresh_env['HOME'])/'Library/Application Support/agent-notifications'
+    cleanup_marker = lab/'native-cleanup-pending'
+    cleanup_marker.write_text(str(fresh_control)+'\n')
+    pid, terminal = pty.fork()
+    if pid == 0:
+        os.chdir(fresh)
+        os.execvpe('bash',['bash','-c',loader_command(['--plain'])],fresh_env)
+    transcript = b''
+    selected = approved = False
+    status = None
+    try:
+        deadline = time.monotonic()+120
+        while time.monotonic()<deadline:
+            readable,_,_ = select.select([terminal],[],[],0.1)
+            if readable:
+                try: chunk = os.read(terminal,65536)
+                except OSError as error:
+                    if error.errno != errno.EIO: raise
+                    chunk = b''
+                transcript += chunk
+                if b'comma-separated' in transcript and not selected:
+                    os.write(terminal,b'opencode\n'); selected = True
+                if b'Apply this plan?' in transcript and not approved:
+                    os.write(terminal,b'y\n'); approved = True
+            finished,code = os.waitpid(pid,os.WNOHANG)
+            if finished:
+                status = os.waitstatus_to_exitcode(code); break
+        print('\nActual fresh macOS TEST installer transcript:\n'+transcript.decode(errors='replace'),flush=True)
+        assert status == 0 and selected and approved, 'fresh Desktop installation did not complete'
+        assert b'Notification channels' not in transcript, 'removed channel question reappeared'
+        assert b'Channels: Desktop on, Webhook off' in transcript, 'wrong fresh channel summary'
+        policy = json.loads((fresh_control/'agent-notifications.json').read_text())
+        assert policy['route']['openCodeNotifications'] == {'desktop':True,'webhook':False}, policy
+        ledger = json.loads((fresh_control/'ownership.json').read_text())
+        assert set(ledger['Consumers']) == {'opencode-notifications'}, ledger
+        native = ledger['Native']
+        assert native['DecoderFloor'] >= 1 and native['SHA256'] and native['Attestation'], native
+        assert pathlib.Path(native['Path']).resolve().is_relative_to(fresh.resolve()), native
+        assert (pathlib.Path(fresh_env['OPENCODE_CONFIG_DIR'])/'plugins/agent-notifications.js').is_file()
+        runtime = pathlib.Path(ledger['Consumers']['opencode-notifications']['Commands'][0])
+        assert runtime.is_file() and runtime.resolve().is_relative_to(fresh.resolve())
+        print('PASS fresh macOS Desktop on/Webhook off with owned runtime and verified native helper',flush=True)
+    finally:
+        if status is None:
+            try: os.killpg(pid,signal.SIGKILL)
+            except ProcessLookupError: pass
+            os.waitpid(pid,0)
+        os.close(terminal)
+        # Unregister only recorded app paths from this newly created TEST root.
+        # Retained real helper generations, including generation-16777233:1200666067.app,
+        # are outside this prefix and can never be cleanup candidates.
+        def native_records(value):
+            if not isinstance(value,dict): return
+            if value.get('Path') and value.get('DirectoryID'): yield value
+            for child in value.values():
+                if isinstance(child,dict): yield from native_records(child)
+                elif isinstance(child,list):
+                    for item in child: yield from native_records(item)
+        records = []
+        for leaf in ('ownership.json','transaction.json'):
+            path = fresh_control/leaf
+            if path.is_file(): records.extend(native_records(json.loads(path.read_text()).get('Native',{})))
+        cleaned = set()
+        for record in records:
+            app = pathlib.Path(record['Path'])
+            if not app.exists() or str(app) in cleaned: continue
+            assert app.resolve().is_relative_to(fresh.resolve()) and app.suffix == '.app', 'foreign native cleanup refused'
+            identity = app.stat()
+            assert record['DirectoryID'] == str(identity.st_dev)+':'+str(identity.st_ino), 'native cleanup inode changed'
+            assert app.name != 'generation-16777233:1200666067.app', 'retained real generation cleanup refused'
+            with (app/'Contents/Info.plist').open('rb') as metadata:
+                assert plistlib.load(metadata)['CFBundleIdentifier'] == 'com.777genius.agent-notifications', 'unexpected TEST bundle ID'
+            unregister = subprocess.run(['/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister',
+                                         '-u',str(app)],capture_output=True,text=True,timeout=10)
+            # lsregister can report -10814 for an app never indexed by Spotlight.
+            # Require independent exact-path absence proof, even after exit 0.
+            query = ('ObjC.import("AppKit"); var urls=$.NSWorkspace.sharedWorkspace.'
+                     'URLsForApplicationsWithBundleIdentifier("com.777genius.agent-notifications"); '
+                     'var found=false; for(var i=0;i<Number(urls.count);i++){'
+                     'if(ObjC.unwrap(urls.objectAtIndex(i).path.stringByResolvingSymlinksInPath)==='+json.dumps(str(app.resolve()))+
+                     ') found=true;} JSON.stringify({registered:found});')
+            observed = subprocess.run(['/usr/bin/osascript','-l','JavaScript','-e',query],
+                                      check=True,capture_output=True,text=True,timeout=10)
+            assert json.loads(observed.stdout) == {'registered':False}, 'TEST helper remains registered'
+            failure_lines = unregister.stderr.splitlines()
+            not_found = (unregister.returncode == 1 and not unregister.stdout.strip() and failure_lines
+                         and failure_lines[0] == 'failed to scan '+str(app)+': -10814'
+                         and all(line.strip() == 'from spotlight' for line in failure_lines[1:]))
+            if unregister.returncode != 0 and not not_found:
+                raise RuntimeError('TEST native unregister failed: '+unregister.stdout+unregister.stderr)
+            print('TEST native registration absent after cleanup: '+str(app),flush=True)
+            cleaned.add(str(app))
+        if status == 0 and records and cleaned:
+            cleanup_marker.unlink()
+        else:
+            print("TEST native attempt needs inspection; retaining "+str(fresh),file=sys.stderr,flush=True)
+
 run_tty(b'cancel\n')
 # Detected products are defaults; none tests accepted-empty without proceeding.
 run_tty(b'none\n')
-run_tty(b'3,4\n', b'2\n')
+# Seed the independent Gemini webhook choice explicitly before the omitted upgrade.
+seed = subprocess.run(['bash','-c',loader_command(['--product','gemini','--webhook'])],
+                      cwd=project,env=env,text=True,capture_output=True,timeout=60)
+assert seed.returncode == 0, seed.stdout+'\n'+seed.stderr
+run_tty(b'3,4\n', approve=True)
 assert set(json.loads((control/'ownership.json').read_text())['Consumers']) == {'opencode-notifications','gemini-notifications'}, 'interactive loader did not install both selections'
 interactive_policy = json.loads((control/'agent-notifications.json').read_text())
 for observer in ('openCodeNotifications','geminiNotifications'):
@@ -240,7 +371,7 @@ for observer in ('openCodeNotifications','geminiNotifications'):
 assert all(key in settings.read_text() for key in ('"AfterAgent"','"Notification"','foreign TEST comment')), 'interactive loader omitted owned hooks or lost foreign settings'
 for attempt in range(2):
     requests_before = len((lab/'loader-requests').read_text().splitlines())
-    result = subprocess.run(['bash','-c',loader_command(['--products','opencode,gemini','--webhook'])],
+    result = subprocess.run(['bash','-c',loader_command(['--products','opencode,gemini'])],
                             cwd=project,env=env,text=True,capture_output=True,timeout=60)
     assert result.returncode == 0, result.stdout+'\n'+result.stderr
     requests = (lab/'loader-requests').read_text().splitlines()[requests_before:]
@@ -335,7 +466,7 @@ shutil.copytree(os.environ['TEST_SOURCE'],plugin,dirs_exist_ok=True)
         directory.mkdir(parents=True,exist_ok=True,mode=0o700)
         all_env[key] = str(directory)
     result = subprocess.run(['bash','-c',loader_command(['--products','claude,codex,opencode,gemini',
-                            '--skip-agent-notify','--webhook'])],cwd=all_four,env=all_env,
+                            '--skip-agent-notify'])],cwd=all_four,env=all_env,
                             text=True,capture_output=True,timeout=90)
     assert result.returncode == 0, result.stdout+'\n'+result.stderr
     assert result.stdout.count('Installation complete') == 1, result.stdout
@@ -355,7 +486,7 @@ shutil.copytree(os.environ['TEST_SOURCE'],plugin,dirs_exist_ok=True)
     assert all(key in native_settings for key in ('"AfterAgent"','"Notification"')), native_settings
     policy = json.loads((all_control/'agent-notifications.json').read_text())
     for observer in ('openCodeNotifications','geminiNotifications'):
-        assert policy['route'][observer] == {'desktop':False,'webhook':True}, policy
+        assert policy['route'][observer] == {'desktop':True,'webhook':False}, policy
     print('PASS actual piped loader all-four registration with native TEST installers (Linux)')
 PYBUNDLE
 

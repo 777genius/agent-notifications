@@ -24,7 +24,7 @@ func TestSetupProductsNormalizedArguments(t *testing.T) {
 		{"skip-route", []string{"confirm", "--products", "claude", "--skip-agent-notify", "--request-permission"}, false},
 		{"observers-mcp", []string{"confirm", "--products", "gemini", "--webhook", "--agent-notify"}, false},
 		{"portable-channels", []string{"confirm", "--products", "codex", "--desktop"}, false},
-		{"observer-channels-required", []string{"confirm", "--products", "opencode"}, false},
+		{"observer-default-channels", []string{"confirm", "--products", "opencode"}, true},
 		{"channels", []string{"channels", "--products", "claude,gemini", "--plain"}, true},
 		{"channels-pure-portable", []string{"channels", "--products", "claude"}, false},
 		{"json", []string{"select", "--json"}, false},
