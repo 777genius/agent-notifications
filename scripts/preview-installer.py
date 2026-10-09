@@ -243,12 +243,13 @@ def local(value):
 def marketplace(value):
     if not local(value): return False
     root = pathlib.Path(value)
-    path = root/'.github/plugin/marketplace.json'
+    path = root/'.agents/plugins/marketplace.json'
     try:
         doc = json.loads(path.read_text())
         expected = 'agentplugins-'+hashlib.sha256(root.name.encode()).hexdigest()[:12]
         if doc.get('name') != expected: return False
         if [p.get('name') for p in doc.get('plugins',[])] != ['agent-notify']: return False
+        if doc['plugins'][0].get('source') != {'source':'local','path':'./'}: return False
         known.add(expected)
         registry.write_text(json.dumps(sorted(known)))
         return True
@@ -271,6 +272,8 @@ if name == 'codex':
     allowed |= args in [['plugin','marketplace',verb,key,'--json'] for verb in ('update','remove') for key in known]
     allowed |= args in [['plugin',verb,'agent-notify@'+key,'--json'] for verb in ('add','remove') for key in known]
 if not allowed or name not in D['installed']:
+    with (lab/'cli-commands.jsonl').open('a') as log:
+        log.write(json.dumps({'cli':name,'args':args,'rejected':True,'exit_code':99})+'\n')
     print('Rejected TEST CLI command: '+name+' '+repr(args),file=sys.stderr)
     sys.exit(99)
 # SDK native adapters intentionally filter ambient environment. Restore only
