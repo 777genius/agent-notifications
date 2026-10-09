@@ -6,12 +6,15 @@ release commit, an immutable source commit, and its platform branch.
 
 | Platform | Qualified version | Source branch |
 | --- | --- | --- |
-| Linux amd64 / arm64, Windows amd64 | 1.48.4 | `release/platform-linux-windows` |
-| macOS amd64 / arm64 | 1.48.4 | `release/platform-macos` |
+| Linux amd64 / arm64, Windows amd64 | 1.48.5 | `release/platform-linux-windows` |
+| macOS amd64 / arm64 | 1.48.5 | `release/platform-macos` |
 
-All five platform rows, GitHub Latest and main manifests select 1.48.4. This
-complete release includes Linux, Windows and macOS native/portable assets and
-the signed, notarized macOS helper. A platform channel can also select an explicitly
+All five platform rows, GitHub Latest and main manifests select 1.48.5. This
+complete asset set includes Linux, Windows and macOS native/portable packages and
+the signed, notarized macOS helper. Release checks use the owner-approved basic
+five-platform artifact profile and separate macOS E2E. The eleven-cell OpenCode
+installed-business suite was not run; these checks do not establish full native,
+clock/source-epoch, visible desktop or cold-start qualification. A platform channel can also select an explicitly
 qualified partial release even when GitHub labels it Pre-release.
 No scan for the newest tag or fallback to Latest is used. Invalid/missing rows,
 unsupported architectures and failed downloads stop selection before installation.

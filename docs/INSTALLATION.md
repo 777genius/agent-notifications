@@ -4,9 +4,9 @@
 
 ## Gemini availability
 
-The public installer selects **1.48.4 for Linux amd64/arm64, Windows amd64 and
+The public installer selects **1.48.5 for Linux amd64/arm64, Windows amd64 and
 macOS amd64/arm64**. Gemini CLI is available on Linux/Windows; macOS includes
-Claude, Codex and OpenCode. GitHub Latest is 1.48.4. Rerun setup once to adopt a normal Claude marketplace's platform
+Claude, Codex and OpenCode. GitHub Latest is 1.48.5. Rerun setup once to adopt a normal Claude marketplace's platform
 channel. [Channel selection and promotion](PLATFORM_RELEASE_CHANNELS.md).
 
 ## Local installer preview (macOS)
