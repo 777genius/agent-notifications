@@ -78,7 +78,7 @@ install: build ## Install binary to /usr/local/bin
 	@echo "Installation complete!"
 
 # Local plugin workflows
-preview-installer: ## Preview installer in isolated macOS OpenCode TEST profiles (PREVIEW_ARGS optional)
+preview-installer: ## Preview installer with real CLIs in isolated macOS TEST profiles (PREVIEW_ARGS optional)
 	@bash scripts/preview-installer.sh $(PREVIEW_ARGS)
 
 dev-local-install: ## Install plugin in isolated Claude config

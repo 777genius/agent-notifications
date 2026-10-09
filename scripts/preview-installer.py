@@ -1,4 +1,4 @@
-"""Preview the real macOS OpenCode installer in a retained, fresh TEST profile."""
+"""Preview the real macOS installer with installed CLIs in a retained, fresh TEST profile."""
 import argparse
 import hashlib
 import json
@@ -16,7 +16,7 @@ import tempfile
 REPO = '777genius/agent-notifications'
 TOOLS = ('bash sh env python3 node tar gzip unzip zip mktemp rm cat cp mv chmod mkdir ln '
          'uname tr wc head cmp grep sed awk dirname basename find sort sha256sum shasum '
-         'cut xargs sleep date stat diff touch readlink dd od').split()
+         'cut xargs sleep date stat diff touch readlink dd od git').split()
 PRIVATE_KEYS = ('HOME USERPROFILE APPDATA LOCALAPPDATA XDG_CONFIG_HOME XDG_CACHE_HOME '
                 'XDG_DATA_HOME XDG_STATE_HOME XDG_RUNTIME_DIR XDG_CONFIG_DIRS XDG_DATA_DIRS '
                 'CODEX_HOME CLAUDE_HOME CLAUDE_CONFIG_DIR TMPDIR TMP TEMP '
@@ -46,17 +46,7 @@ def source_identity(root, expected=None):
     return sha
 
 
-def build_binary(root, state, sha, go):
-    output = state/'binaries'/sha/'claude-notifications'
-    private_directory(output.parent)
-    if output.is_file():
-        return output
-    compiler = shutil.which(go)
-    if not compiler:
-        raise ValueError('Go is required unless --binary supplies an exact-source build')
-    env = {'PATH': '/usr/bin:/bin', 'GOMAXPROCS': '2', 'GOTELEMETRY': 'off', 'GOWORK': 'off'}
-    for key, leaf in (('HOME','build-home'),('GOCACHE','go-cache'),('GOMODCACHE','go-modules'),('TMPDIR','build-tmp')):
-        env[key] = str(private_directory(state/leaf))
+def committed_tree(root, state, sha):
     # Build exactly the committed tree: ignored go.work/vendor and untracked Go
     # files in the caller's checkout must never acquire a false HEAD stamp.
     sources = private_directory(state/'sources')
@@ -92,6 +82,21 @@ def build_binary(root, state, sha, go):
                 raise ValueError('Invalid committed source symlink chain: '+str(destination)) from error
             if not resolved.is_relative_to(tree):
                 raise ValueError('Committed source symlink escapes tree: '+str(destination))
+    return tree
+
+
+def build_binary(root, state, sha, go):
+    output = state/'binaries'/sha/'claude-notifications'
+    private_directory(output.parent)
+    if output.is_file():
+        return output
+    compiler = shutil.which(go)
+    if not compiler:
+        raise ValueError('Go is required unless --binary supplies an exact-source build')
+    env = {'PATH': '/usr/bin:/bin', 'GOMAXPROCS': '2', 'GOTELEMETRY': 'off', 'GOWORK': 'off'}
+    for key, leaf in (('HOME','build-home'),('GOCACHE','go-cache'),('GOMODCACHE','go-modules'),('TMPDIR','build-tmp')):
+        env[key] = str(private_directory(state/leaf))
+    tree = committed_tree(root, state, sha)
     fd, temporary = tempfile.mkstemp(prefix='build-', dir=output.parent)
     os.close(fd)
     try:
@@ -127,13 +132,174 @@ def native_archive(state, supplied):
     return archive
 
 
+def build_portable(root, state, sha, go, binary, version, arch):
+    # The official builder embeds the committed skills/manifest and supplied
+    # exact-source executable; no hand-written substitute package is accepted.
+    output = state/'portable'/sha/('agent-notify-portable-darwin-'+arch+'.zip')
+    private_directory(output.parent)
+    proof = output.with_suffix('.json')
+    expected = {'SourceCommit': sha, 'BinarySHA256': digest(binary)}
+    if output.is_file() and proof.is_file():
+        cached = json.loads(proof.read_text())
+        if cached == dict(expected, ArchiveSHA256=digest(output)):
+            return output
+    compiler = shutil.which(go)
+    if not compiler:
+        raise ValueError('Go is required to build the real portable package')
+    tree = committed_tree(root, state, sha)
+    env = {'PATH': '/usr/bin:/bin', 'GOMAXPROCS': '2', 'GOTELEMETRY': 'off', 'GOWORK': 'off'}
+    for key, leaf in (('HOME','build-home'),('GOCACHE','go-cache'),('GOMODCACHE','go-modules'),('TMPDIR','build-tmp')):
+        env[key] = str(private_directory(state/leaf))
+    subprocess.run([compiler,'run','-mod=readonly','./cmd/build-portable-package',
+                    '-version',version[1:],'-os','darwin','-arch',arch,
+                    '-executable',str(binary),'-output',str(output),
+                    '-workdir',str(output.parent/'expanded')], cwd=tree, env=env,check=True)
+    source_identity(root,sha)
+    proof.write_text(json.dumps(dict(expected, ArchiveSHA256=digest(output))))
+    return output
+
+
+def discover_clis(args):
+    result = {}
+    for name in ('claude','codex','opencode','gemini'):
+        found = str(args.gemini_cli) if name == 'gemini' and args.gemini_cli else shutil.which(name)
+        if found:
+            path = Path(found).resolve(strict=True)
+            if not path.is_file() or not os.access(path,os.X_OK):
+                raise ValueError('CLI must be an actual executable: '+str(path))
+            result[name] = str(path)
+    return result
+
+
+def local_git_snapshot(root, lab, sha, env):
+    snapshot = lab/'source.git'
+    git_env = {'PATH':'/usr/bin:/bin','HOME':env['HOME'],
+               'GIT_CONFIG_NOSYSTEM':'1','GIT_CONFIG_GLOBAL':'/dev/null',
+               'GIT_CONFIG_SYSTEM':'/dev/null','GIT_TERMINAL_PROMPT':'0'}
+    subprocess.run(['/usr/bin/git','init','--bare',str(snapshot)],env=git_env,check=True,stdout=subprocess.DEVNULL)
+    subprocess.run(['/usr/bin/git','-C',str(snapshot),'-c','protocol.file.allow=always',
+                    'fetch','--depth=1',str(root),sha],env=git_env,check=True)
+    for ref in ('refs/tags/dist/platform-source/'+sha,'refs/heads/release/platform-macos'):
+        subprocess.run(['/usr/bin/git','-C',str(snapshot),'update-ref',ref,sha],env=git_env,check=True)
+    subprocess.run(['/usr/bin/git','-C',str(snapshot),'symbolic-ref','HEAD','refs/heads/release/platform-macos'],env=git_env,check=True)
+    config = lab/'gitconfig'
+    urls = ('https://github.com/'+REPO+'.git','https://github.com/'+REPO,
+            'git@github.com:'+REPO+'.git','git@github.com:'+REPO,
+            'ssh://git@github.com/'+REPO+'.git','ssh://git@github.com/'+REPO)
+    config.write_text('[protocol]\n\tallow = never\n[protocol "file"]\n\tallow = always\n'
+                      '[credential]\n\thelper =\n[core]\n\thooksPath = /dev/null\n'+
+                      '[url "'+snapshot.as_uri()+'"]\n'+''.join('\tinsteadOf = '+url+'\n' for url in urls))
+    env.update(GIT_CONFIG_GLOBAL=str(config),GIT_CONFIG_SYSTEM='/dev/null',
+               GIT_CONFIG_NOSYSTEM='1',GIT_TERMINAL_PROMPT='0',GIT_ASKPASS='/usr/bin/false',
+               SSH_ASKPASS='/usr/bin/false')
+
+
+def cli_proxies(commands, lab, installed, env, sha):
+    if not Path('/usr/bin/sandbox-exec').is_file():
+        raise ValueError('Real CLI preview requires macOS sandbox-exec')
+    home = Path.home().resolve()
+    blocked = [home/leaf for leaf in ('.claude','.claude.json','.codex','.gemini','.config',
+                                    '.gitconfig','.git-credentials','.ssh','.aws',
+                                    'Library/Keychains','Library/Application Support/Claude',
+                                    'Library/Application Support/Codex')]
+    blocked.append(Path('/Library/Keychains'))
+    profile = lab/'cli.sb'
+    quoted = lambda value: json.dumps(str(value))
+    profile.write_text('(version 1)\n(allow default)\n(deny network*)\n'
+                       '(deny process-exec (literal "/usr/bin/security"))\n'
+                       '(deny mach-lookup (global-name "com.apple.securityd") '
+                       '(global-name "com.apple.securityd.xpc") (global-name "com.apple.KeychainCircleNotification") '
+                       '(global-name-regex #".*(securityd|SecurityAgent|keychain).*"))\n'
+                       '(deny file-write* (require-not (subpath '+quoted(lab)+')))\n'+
+                       ''.join('(deny file-read* file-write* (subpath '+quoted(p)+'))\n' for p in blocked))
+    # Empty Gemini system/user inputs prevent upward .env/settings/trust search.
+    for directory in (lab,Path(env['HOME']),Path(env['GEMINI_CLI_HOME']),Path(env['HOME'])/'.gemini'):
+        private_directory(directory)
+        (directory/'.env').write_text('')
+    for key,leaf in (('GEMINI_CLI_SYSTEM_SETTINGS_PATH','gemini-system.json'),
+                     ('GEMINI_CLI_SYSTEM_DEFAULTS_PATH','gemini-defaults.json'),
+                     ('GEMINI_CLI_TRUSTED_FOLDERS_PATH','gemini-trust.json')):
+        path = lab/leaf
+        path.write_text('{}\n')
+        env[key] = str(path)
+    env.update(DISABLE_AUTOUPDATER='1',CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC='1',
+               DISABLE_TELEMETRY='1',DO_NOT_TRACK='1',OTEL_SDK_DISABLED='true',
+               GEMINI_TELEMETRY_ENABLED='false',OPENCODE_DISABLE_AUTOUPDATE='1')
+    data = {'lab':str(lab),'installed':installed,'env':env,'profile':str(profile),
+            'sha':sha,'repo':REPO}
+    settings = lab/'cli-proxy.json'
+    settings.write_text(json.dumps(data))
+    code = r'''import hashlib, json, os, pathlib, re, subprocess, sys
+D = json.loads(pathlib.Path(SETTINGS).read_text())
+lab = pathlib.Path(D['lab'])
+name = pathlib.Path(sys.argv[0]).name
+args = sys.argv[1:]
+def local(value):
+    p = pathlib.Path(value)
+    return p.is_absolute() and p.resolve().is_relative_to(lab)
+def marketplace(value):
+    if not local(value): return False
+    root = pathlib.Path(value)
+    path = root/'.github/plugin/marketplace.json'
+    try:
+        doc = json.loads(path.read_text())
+        expected = 'agentplugins-'+hashlib.sha256(root.name.encode()).hexdigest()[:12]
+        if doc.get('name') != expected: return False
+        if [p.get('name') for p in doc.get('plugins',[])] != ['agent-notify']: return False
+        known.add(expected)
+        registry.write_text(json.dumps(sorted(known)))
+        return True
+    except (OSError,ValueError,KeyError): return False
+registry = lab/'allowed-codex-marketplaces.json'
+known = set(json.loads(registry.read_text())) if registry.exists() else set()
+allowed = args == ['--version']
+if name == 'claude':
+    exact = 'claude-notifications-go@claude-notifications-go'
+    allowed |= args in [['plugin','list','--json'],['plugin','marketplace','list','--json']]
+    allowed |= args in [['plugin',verb,exact] for verb in ('install','update','uninstall')]
+    check = args
+    if len(check) > 2 and check[0] == '--settings' and local(check[1]): check = check[2:]
+    sources = [D['repo']+'#'+ref for ref in ('dist/platform-source/'+D['sha'],'release/platform-macos')]
+    allowed |= check in [['plugin','marketplace','add',source] for source in sources]
+if name == 'codex':
+    allowed |= args == ['plugin','list','--json']
+    if len(args) == 5 and args[:3] == ['plugin','marketplace','add'] and args[4] == '--json':
+        allowed |= marketplace(args[3])
+    allowed |= args in [['plugin','marketplace',verb,key,'--json'] for verb in ('update','remove') for key in known]
+    allowed |= args in [['plugin',verb,'agent-notify@'+key,'--json'] for verb in ('add','remove') for key in known]
+if not allowed or name not in D['installed']:
+    print('Rejected TEST CLI command: '+name+' '+repr(args),file=sys.stderr)
+    sys.exit(99)
+# SDK native adapters intentionally filter ambient environment. Restore only
+# this harness's fixed private environment, preserving their private profile.
+env = dict(D['env'])
+for key in ('HOME','CODEX_HOME','CLAUDE_CONFIG_DIR','GEMINI_CLI_HOME','TMPDIR'):
+    if key in os.environ:
+        if not local(os.environ[key]): sys.exit('Rejected non-TEST CLI profile')
+        env[key] = os.environ[key]
+with (lab/'cli-commands.jsonl').open('a') as log:
+    log.write(json.dumps({'cli':name,'executable':D['installed'][name],'args':args})+'\n')
+try:
+    result = subprocess.run(['/usr/bin/sandbox-exec','-f',D['profile'],D['installed'][name]]+args,
+                            cwd=lab,env=env,timeout=60)
+    sys.exit(result.returncode)
+except subprocess.TimeoutExpired:
+    sys.exit('TEST CLI command exceeded 60 seconds')
+'''.replace('SETTINGS',repr(str(settings)))
+    for name in installed:
+        path = commands/name
+        path.write_text('#!'+str(Path(sys.executable).resolve())+' -I\n'+code)
+        path.chmod(0o700)
+
+
 def offline_transport(commands, assets, root, sha, version, name, requests):
     raw = 'https://raw.githubusercontent.com/'+REPO+'/'+sha
     mapping = {raw+'/bin/'+leaf: root/'bin'/leaf
                for leaf in ('setup.sh','bootstrap.sh','release-channel.sh','install.sh')}
     mapping[raw+'/release-channels.tsv'] = assets/'channels.tsv'
+    mapping['https://github.com/'+REPO+'/archive/'+sha+'.tar.gz'] = assets/'source.tar.gz'
     base = 'https://preview-installer.invalid/releases/download/'+version+'/'
-    mapping.update({base+leaf: assets/leaf for leaf in ('checksums.txt',name,'ClaudeNotifier.app.zip')})
+    mapping.update({base+leaf: assets/leaf for leaf in ('checksums.txt',name,'ClaudeNotifier.app.zip','agent-notify-portable-darwin-'+('arm64' if os.uname().machine == 'arm64' else 'amd64')+'.zip')})
     # Copy source inputs so every acquisition sees the verified source snapshot.
     for url, source in list(mapping.items()):
         if source.is_relative_to(root):
@@ -167,7 +333,6 @@ esac
 if [ -n "$out" ]; then cp "$source" "$out"; else cat "$source"; fi
 '''.replace('REQUESTS', shlex.quote(str(requests))).replace('API_MAIN', shlex.quote('https://api.github.com/repos/'+REPO+'/commits/main')).replace('API_TAG', shlex.quote('https://api.github.com/repos/'+REPO+'/commits/'+version)).replace('COMMIT', shlex.quote(sha)).replace('CLAUSES', clauses)
     (commands/'curl').write_text(script)
-    (commands/'opencode').write_text('#!/bin/bash\n[ "$#" -eq 1 ] && [ "$1" = --version ] || exit 99\nprintf "1.18.33\\n"\n')
     for path in commands.iterdir():
         path.chmod(0o700)
 
@@ -182,7 +347,8 @@ def preview(args):
         raise ValueError('Keep TEST state outside the source checkout')
     binary = args.binary.resolve(strict=True) if args.binary else build_binary(root,state,sha,args.go)
     archive = native_archive(state,args.native_zip)
-    lab = Path(tempfile.mkdtemp(prefix='OpenCode-TEST-',dir=state))
+    installed = discover_clis(args)
+    lab = Path(tempfile.mkdtemp(prefix='AllAgents-TEST-',dir=state))
     print('Retained TEST profile: '+str(lab), flush=True)
     commands = private_directory(lab/'fixture-tools')
     trusted = private_directory(lab/'trusted-tools')
@@ -204,13 +370,19 @@ def preview(args):
     if not re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+',version):
         raise ValueError('Unexpected candidate binary version')
     shutil.copyfile(archive,assets/'ClaudeNotifier.app.zip')
-    (assets/'checksums.txt').write_text(''.join(digest(assets/leaf)+'  '+leaf+'\n' for leaf in (name,'ClaudeNotifier.app.zip')))
+    portable = build_portable(root, state, sha, args.go, staged, version, arch)
+    shutil.copyfile(portable, assets/portable.name)
+    subprocess.run(['/usr/bin/git','-C',str(root),'archive','--format=tar.gz',
+                    '--prefix=agent-notifications-'+sha+'/', '--output',str(assets/'source.tar.gz'),sha],check=True)
+    (assets/'checksums.txt').write_text(''.join(digest(assets/leaf)+'  '+leaf+'\n' for leaf in (name,'ClaudeNotifier.app.zip',portable.name)))
     rows = ['# agent-notifications-platform-channels-v1']
     for platform, cpu in (('darwin','amd64'),('darwin','arm64'),('linux','amd64'),('linux','arm64'),('windows','amd64')):
         ref = 'release/platform-macos' if platform == 'darwin' else 'release/platform-linux-windows'
         rows.append('\t'.join([platform,cpu,version,sha,sha,ref]))
     (assets/'channels.tsv').write_text('\n'.join(rows)+'\n')
     offline_transport(commands,assets,root,sha,version,name,lab/'acquisitions.log')
+    local_git_snapshot(root, lab, sha, env)
+    cli_proxies(commands, lab, installed, env, sha)
     env['BOOTSTRAP_RELEASES_BASE_URL'] = 'https://preview-installer.invalid/releases'
     # Supported read-only intent verifies the executable, not its filename/cache key.
     intent = assets/'source-proof.json'
@@ -222,11 +394,10 @@ def preview(args):
     proof = json.loads(intent.read_text())['provenance']
     if proof['SourceCommit'] != sha or proof['SHA256'] != digest(staged):
         raise ValueError('Binary SourceCommit/SHA256 does not match clean repository HEAD')
-    intent.unlink()
     source_identity(root,sha)
-    print('TEST environment: only the OpenCode version adapter is exposed.',flush=True)
-    print('Installed host CLIs are hidden; menu detection applies to TEST PATH only.',flush=True)
-    print('Select OpenCode. Fresh Desktop on/Webhook off.',flush=True)
+    print('Actual installed CLIs (missing CLIs remain absent): '+json.dumps(installed),flush=True)
+    print('Select the installed clients. Fresh Desktop on/Webhook off.',flush=True)
+    print('CLI registration uses a local source snapshot; CLI network and host credentials are denied.',flush=True)
     print('This previews installation only; it does not run agents or verify notification delivery.',flush=True)
     command = [str(trusted/'bash'),str(assets/'setup.sh')]+(['--plain'] if args.plain else [])
     try:
@@ -237,11 +408,12 @@ def preview(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__, epilog='Requires macOS, Python 3.9+, Bash, system signing tools, and Go (or --binary). Without --native-zip, gh downloads the latest signed public helper and verifies checksums. No agent/account/provider execution. TEST profiles are retained.')
+    parser = argparse.ArgumentParser(description=__doc__, epilog='Requires macOS, Python 3.9+, Bash, system signing/sandbox tools, and Go (also for the portable package). Without --native-zip, gh downloads the latest signed public helper and verifies checksums. No agent/account/provider execution. TEST profiles are retained.')
     parser.add_argument('--binary',type=Path,help='prebuilt binary whose supported SourceCommit matches clean HEAD')
     parser.add_argument('--native-zip',type=Path,help='existing signed ClaudeNotifier.app.zip; installer verifies signature/attestation')
     parser.add_argument('--state-dir',type=Path,help='private mode-700 TEST directory outside checkout for caches/profiles (default: OS temporary cache by UID)')
     parser.add_argument('--go',default='go',help='Go executable for source build (default: go from PATH)')
+    parser.add_argument('--gemini-cli',type=Path,help='explicit real Gemini CLI executable for TEST only (for example an isolated 0.62.0 install)')
     parser.add_argument('--plain',action='store_true',help='explicit accessible line prompts instead of automatic terminal UI')
     args = parser.parse_args()
     try:

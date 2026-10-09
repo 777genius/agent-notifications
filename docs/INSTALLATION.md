@@ -10,7 +10,7 @@ macOS keeps Claude, Codex and OpenCode. GitHub Latest remains 1.46.1 for legacy
 installers. Rerun setup once to adopt a normal Claude marketplace's platform
 channel. [Channel selection and promotion](PLATFORM_RELEASE_CHANNELS.md).
 
-## Local installer preview (macOS OpenCode)
+## Local installer preview (macOS)
 
 From a clean checkout, open a terminal and run:
 
@@ -18,25 +18,37 @@ From a clean checkout, open a terminal and run:
 make preview-installer
 # Optional line prompts and a custom reusable cache:
 make preview-installer PREVIEW_ARGS='--plain --state-dir /path/to/private-TEST-cache'
-# Direct script invocation is also supported:
-bash scripts/preview-installer.sh --plain
+# Use an explicitly installed Gemini CLI in the TEST profile:
+make preview-installer PREVIEW_ARGS='--gemini-cli /absolute/path/to/gemini'
 ```
 
-This builds the current source into a private reusable TEST cache and previews the
-real installer with a fresh HOME. Select OpenCode, then review and confirm the
-plan. Terminal UI settings are inherited; use `--plain` for line prompts.
-Python 3.9+, Go and macOS signing tools are required. `gh` downloads the latest
-signed public helper and verifies its published checksum; alternatively pass
-`--native-zip /path/to/ClaudeNotifier.app.zip`. `--binary /path/to/binary` skips
-building only when the binary's source provenance matches clean HEAD.
+This builds the committed source and its real portable package into a private
+reusable TEST cache, then runs the installer with fresh HOME, working directory
+and client profiles. It discovers the actual Claude, Codex, OpenCode and Gemini
+executables before creating the private PATH. Missing CLIs remain absent; an
+unsupported installed version is reported by the real installer. The optional
+`--gemini-cli` override selects a real executable for this preview only.
+Select the clients, then review and confirm the plan. Use `--plain` for line prompts.
 
-Only a version-only OpenCode TEST adapter is available in the isolated TEST PATH;
-real host CLIs are deliberately hidden. A menu status of CLI absent refers to that
-TEST PATH, not your actual installation. Each run uses fresh TEST profiles, so
-existing host profiles do not affect the menu. No agent, account or provider is
-launched; this does not qualify notification delivery or all products.
-Profiles and native app registrations are retained at the printed path. Keep that
-directory until its TEST registration has been inspected and safely removed.
+Python 3.9+, Go and macOS signing/sandbox tools are required. `gh` downloads the
+latest signed public helper and verifies its published checksum; alternatively
+pass `--native-zip /path/to/ClaudeNotifier.app.zip`. `--binary /path/to/binary`
+skips the main build only when its supported source provenance matches clean HEAD.
+Go still builds the portable package using the exact committed source and binary.
+
+Real CLI proxies permit only version checks and the installer's exact local
+plugin registration/listing commands. They deny CLI network access, Keychain and
+host credential/profile reads. Git acquisition of this repository is redirected
+to a private bare snapshot of the same commit; finite release downloads resolve
+to the candidate binary, native helper, real portable zip and checksum manifest.
+Unexpected downloads and CLI commands fail. The native installer runs outside
+the CLI sandbox so it can perform its normal macOS app registration.
+
+This previews installation only. It does not launch an agent/model session or
+verify notification delivery or release qualification. Source proof, acquisition
+and real CLI command logs remain in the printed TEST directory, along with all
+profiles and native app registrations. Keep that directory until its TEST
+registration has been inspected and safely removed. No automatic deletion occurs.
 Use `--state-dir /path/to/private-TEST-cache` to reuse your own mode-700 cache.
 
 ## Prerequisites
