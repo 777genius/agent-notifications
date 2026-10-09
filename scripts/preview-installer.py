@@ -176,9 +176,9 @@ def local_git_snapshot(root, lab, sha, env):
     git_env = {'PATH':'/usr/bin:/bin','HOME':env['HOME'],
                'GIT_CONFIG_NOSYSTEM':'1','GIT_CONFIG_GLOBAL':'/dev/null',
                'GIT_CONFIG_SYSTEM':'/dev/null','GIT_TERMINAL_PROMPT':'0'}
-    subprocess.run(['/usr/bin/git','init','--bare',str(snapshot)],env=git_env,check=True,stdout=subprocess.DEVNULL)
+    subprocess.run(['/usr/bin/git','-c','init.defaultBranch=main','init','--quiet','--bare',str(snapshot)],env=git_env,check=True,stdout=subprocess.DEVNULL)
     subprocess.run(['/usr/bin/git','-C',str(snapshot),'-c','protocol.file.allow=always',
-                    'fetch','--depth=1',str(root),sha],env=git_env,check=True)
+                    'fetch','--quiet','--depth=1',str(root),sha],env=git_env,check=True)
     for ref in ('refs/tags/dist/platform-source/'+sha,'refs/heads/release/platform-macos'):
         subprocess.run(['/usr/bin/git','-C',str(snapshot),'update-ref',ref,sha],env=git_env,check=True)
     subprocess.run(['/usr/bin/git','-C',str(snapshot),'symbolic-ref','HEAD','refs/heads/release/platform-macos'],env=git_env,check=True)
@@ -197,12 +197,14 @@ def local_git_snapshot(root, lab, sha, env):
 def cli_proxies(commands, lab, installed, env, sha):
     if not Path('/usr/bin/sandbox-exec').is_file():
         raise ValueError('Real CLI preview requires macOS sandbox-exec')
-    home = Path.home().resolve()
+    home = Path.home()
     blocked = [home/leaf for leaf in ('.claude','.claude.json','.codex','.gemini','.config',
-                                    '.gitconfig','.git-credentials','.ssh','.aws',
+                                    '.gitconfig','.git-credentials','.ssh','.aws','.npmrc','.local/share/opencode',
                                     'Library/Keychains','Library/Application Support/Claude',
                                     'Library/Application Support/Codex')]
     blocked.append(Path('/Library/Keychains'))
+    # Cover the spelling a CLI may open and the actual target of host symlinks.
+    blocked = sorted({str(path) for entry in blocked for path in (entry, entry.resolve())})
     profile = lab/'cli.sb'
     quoted = lambda value: json.dumps(str(value))
     profile.write_text('(version 1)\n(allow default)\n(deny network*)\n'
@@ -399,7 +401,7 @@ def preview(args):
     print('Select the installed clients. Fresh Desktop on/Webhook off.',flush=True)
     print('CLI registration uses a local source snapshot; CLI network and host credentials are denied.',flush=True)
     print('This previews installation only; it does not run agents or verify notification delivery.',flush=True)
-    command = [str(trusted/'bash'),str(assets/'setup.sh')]+(['--plain'] if args.plain else [])
+    command = [str(trusted/'bash'),str(assets/'setup.sh')]+(['--plain'] if args.plain else ['--ui','auto'])
     try:
         return subprocess.run(command,cwd=lab,env=env).returncode
     finally:
