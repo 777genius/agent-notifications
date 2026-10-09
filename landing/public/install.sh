@@ -175,7 +175,7 @@ main() (
         done
         if [ "$help" -eq 1 ]; then
             echo "Usage: bash install.sh --products claude,codex,opencode,gemini [--agent-notify|--skip-agent-notify] [--desktop] [--webhook]"
-            echo "Choose any nonempty subset. Agent-notify options apply to Claude/Codex; Fresh observers use Desktop on/Webhook off; updates preserve saved channels."
+            echo "Choose any nonempty subset. Agent-notify options apply to Claude/Codex; Observer channel flags apply to OpenCode/Gemini."
             exit 0
         fi
         if [ "$claude" -eq 1 ] && [ "$codex" -eq 1 ]; then
