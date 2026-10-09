@@ -716,7 +716,7 @@ jobs:
           assert workspace.parent == pathlib.Path('/srv/workers') and workspace.name.startswith('TEST-cursor-proof-') and workspace.resolve(strict=True) == workspace and workspace.stat().st_uid == 0
           with open(os.environ['GITHUB_ENV'],'a') as environment: environment.write('CURSOR_PROOF_WORKSPACE='+str(workspace)+'\n')
           for relative,size,pin in tuples:
-              path = 'test_fixtures/TEST-cursor-observer-repair-r1353/implementation/'+relative
+              path = '.github/fixtures/cursor-installed-e/proof-source/'+relative
               row = bounded_git(['ls-tree','-z',transport_sha,'--',path],512).split(b'\t')
               assert len(row) == 2 and row[1] == path.encode()+b'\0' and row[0].split()[:2] == [b'100644',b'blob'], 'exact regular source entry'
               oid = row[0].split()[2].decode(); assert re.fullmatch('[0-9a-f]{40}',oid)
