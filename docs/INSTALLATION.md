@@ -4,10 +4,9 @@
 
 ## Gemini availability
 
-The public installer selects **1.47.1 for Linux amd64/arm64 and Windows amd64**,
-and **1.46.1 for macOS amd64/arm64**. Gemini CLI is available on Linux/Windows;
-macOS keeps Claude, Codex and OpenCode. GitHub Latest remains 1.46.1 for legacy
-installers. Rerun setup once to adopt a normal Claude marketplace's platform
+The public installer selects **1.48.4 for Linux amd64/arm64, Windows amd64 and
+macOS amd64/arm64**. Gemini CLI is available on Linux/Windows; macOS includes
+Claude, Codex and OpenCode. GitHub Latest is 1.48.4. Rerun setup once to adopt a normal Claude marketplace's platform
 channel. [Channel selection and promotion](PLATFORM_RELEASE_CHANNELS.md).
 
 ## Local installer preview (macOS)
@@ -28,19 +27,24 @@ and client profiles. It discovers the actual Claude, Codex, OpenCode and Gemini
 executables before creating the private PATH. Missing CLIs remain absent; an
 unsupported installed version is reported by the real installer. The optional
 `--gemini-cli` override selects a real executable for this preview only.
+Native Claude installations use a private local copy of the installed executable
+to avoid launch delays on external disks. SHA256 and the macOS signature are
+verified; logs retain both the installed path and the TEST execution path.
 Select the clients, then review and confirm the plan. Use `--plain` for line prompts.
 
 Python 3.9+, Go and macOS signing/sandbox tools are required. `gh` downloads the
 latest signed public helper and verifies its published checksum; alternatively
 pass `--native-zip /path/to/ClaudeNotifier.app.zip`. `--binary /path/to/binary`
 skips the main build only when its supported source provenance matches clean HEAD.
-Go still builds the portable package using the exact committed source and binary.
+Go still builds optional sound/device utilities from the exact committed source
+and builds the portable package from that source and the verified binary.
 
 Real CLI proxies permit only version checks and the installer's exact local
 plugin registration/listing commands. They deny CLI network access, Keychain and
 host credential/profile reads. Git acquisition of this repository is redirected
 to a private bare snapshot of the same commit; finite release downloads resolve
-to the candidate binary, native helper, real portable zip and checksum manifest.
+to the candidate binary, native helper, real portable zip, optional utilities
+and checksum manifest.
 Unexpected downloads and CLI commands fail. The native installer runs outside
 the CLI sandbox so it can perform its normal macOS app registration.
 

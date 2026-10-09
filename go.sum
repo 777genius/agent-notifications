@@ -16,6 +16,8 @@ github.com/777genius/plugin-kit-ai/cli v0.0.0-20261001182617-f05fe750bb7a h1:IXv
 github.com/777genius/plugin-kit-ai/cli v0.0.0-20261001182617-f05fe750bb7a/go.mod h1:Q5LcHECoKVFDqi8RH8BGPbKtHdkYMxaHzsmzsyfuRp0=
 github.com/777genius/plugin-kit-ai/cli v0.0.0-20261001223030-8064798523dc h1:D2nNlBywARUZtMg09gwRI1M/dCLwFxFLh1nWA5Qa2rk=
 github.com/777genius/plugin-kit-ai/cli v0.0.0-20261001223030-8064798523dc/go.mod h1:Q5LcHECoKVFDqi8RH8BGPbKtHdkYMxaHzsmzsyfuRp0=
+github.com/777genius/plugin-kit-ai/cli v0.0.0-20261009180127-66c4943e0c83 h1:DfDulWk5jo3WP4T2e+4q8L7KOjNcsZ8K2CXYQWcGNNc=
+github.com/777genius/plugin-kit-ai/cli v0.0.0-20261009180127-66c4943e0c83/go.mod h1:Q5LcHECoKVFDqi8RH8BGPbKtHdkYMxaHzsmzsyfuRp0=
 github.com/777genius/plugin-kit-ai/install/integrationctl v0.1.0 h1:6ZdwqmX9a/zgzlqNoYQ/O9iguM305rZNdbchcfQYC6w=
 github.com/777genius/plugin-kit-ai/install/integrationctl v0.1.0/go.mod h1:+4skxdhGnVAQduEPhpO1gP+DZP5f0K3l9rljiFA+hm0=
 github.com/777genius/plugin-kit-ai/install/integrationctl v0.1.1-0.20261001182617-f05fe750bb7a h1:hEZw3LdlIBjeXAFbMgSEO2vI92wibGdRzT1eUUgaKlM=
@@ -62,6 +64,8 @@ github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins v0.0.0-20
 github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins v0.0.0-20261007205908-29f0b7dec6f3/go.mod h1:WET4vFo589qPYCrYVIzDJ2XdKDW8M1FypXzko9H9X2E=
 github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins v0.0.0-20261008101612-9499634b07bc h1:R7EDiLQ0NSdOklWGpP3gzohl74f6/IlVqsb2zyIN7Ck=
 github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins v0.0.0-20261008101612-9499634b07bc/go.mod h1:WET4vFo589qPYCrYVIzDJ2XdKDW8M1FypXzko9H9X2E=
+github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins v0.0.0-20261009185634-b4bca9c96f6b h1:/FNH/ef2O0tUxH72kNLoPcUkpOGmx3ZTnMY5HGxpyNc=
+github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins v0.0.0-20261009185634-b4bca9c96f6b/go.mod h1:WET4vFo589qPYCrYVIzDJ2XdKDW8M1FypXzko9H9X2E=
 github.com/777genius/plugin-kit-ai/plugininstall v0.0.0-20260920081413-a5644312f7af h1:HSQLdGxhHBB0QZtA77y27o+KpixsB7bAi6lDPI02PRw=
 github.com/777genius/plugin-kit-ai/plugininstall v0.0.0-20260920081413-a5644312f7af/go.mod h1:c0CmoYlHZaAYEcO1IfyTFybxHvglm3ucFSnnLaP41jY=
 github.com/777genius/plugin-kit-ai/sdk v1.2.1-0.20261001061845-2d2a26bf372a h1:PzdFFfhms83PaTuByl4UIAEJXHq6imBa1EISdR7xstM=

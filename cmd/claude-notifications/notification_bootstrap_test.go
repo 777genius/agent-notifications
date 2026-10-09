@@ -223,6 +223,7 @@ print_header() { :; }
 abort_if_wsl_environment() { :; }
 check_prerequisites() { :; }
 detect_platform() { :; }
+bootstrap_macos_command() { return 1; }
 install_cleanup_traps() { :; }
 resolve_bootstrap_release() { :; }
 stage_config_helper() { _CONFIG_STAGE=$(mktemp -d "$HOME/bootstrap-fixture-XXXXXX"); }
@@ -506,6 +507,7 @@ print_header() { :; }
 abort_if_wsl_environment() { :; }
 check_prerequisites() { :; }
 detect_platform() { :; }
+bootstrap_macos_command() { return 1; }
 install_cleanup_traps() { :; }
 resolve_bootstrap_release() { BOOTSTRAP_TAG=v1.43.0; }
 stage_config_helper() { _CONFIG_STAGE=$(mktemp -d "$HOME/bootstrap-fixture-XXXXXX"); }
