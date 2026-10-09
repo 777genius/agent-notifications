@@ -66,12 +66,29 @@ def build_binary(root, state, sha, go):
                     '--output', str(archive), sha], check=True)
     tree = private_directory(source/'tree')
     with tarfile.open(archive) as committed:
-        for member in committed.getmembers():
+        members = committed.getmembers()
+        links = []
+        for member in members:
             destination = tree/member.name
             if (not destination.resolve().is_relative_to(tree) or
-                    not (member.isfile() or member.isdir())):
+                    not (member.isfile() or member.isdir() or member.issym())):
                 raise ValueError('Unsafe committed source archive member: '+member.name)
-        committed.extractall(tree)
+            if member.issym():
+                target = Path(member.linkname)
+                if target.is_absolute() or not (destination.parent/target).resolve().is_relative_to(tree):
+                    raise ValueError('Unsafe committed source symlink: '+member.name)
+                links.append((destination, target))
+        # Materialize committed files first; symlinks cannot redirect extraction.
+        committed.extractall(tree, members=[m for m in members if not m.issym()])
+        for destination, target in links:
+            destination.symlink_to(target)
+        for destination, _ in links:
+            try:
+                resolved = destination.resolve()
+            except RuntimeError as error:
+                raise ValueError('Committed source symlink cycle: '+str(destination)) from error
+            if not resolved.is_relative_to(tree):
+                raise ValueError('Committed source symlink escapes tree: '+str(destination))
     fd, temporary = tempfile.mkstemp(prefix='build-', dir=output.parent)
     os.close(fd)
     try:
