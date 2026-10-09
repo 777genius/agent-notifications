@@ -15,7 +15,11 @@ channel. [Channel selection and promotion](PLATFORM_RELEASE_CHANNELS.md).
 From a clean checkout, open a terminal and run:
 
 ```bash
-bash scripts/preview-installer.sh
+make preview-installer
+# Optional line prompts and a custom reusable cache:
+make preview-installer PREVIEW_ARGS='--plain --state-dir /path/to/private-TEST-cache'
+# Direct script invocation is also supported:
+bash scripts/preview-installer.sh --plain
 ```
 
 This builds the current source into a private reusable TEST cache and previews the
@@ -26,8 +30,11 @@ signed public helper and verifies its published checksum; alternatively pass
 `--native-zip /path/to/ClaudeNotifier.app.zip`. `--binary /path/to/binary` skips
 building only when the binary's source provenance matches clean HEAD.
 
-Only a version-only OpenCode TEST adapter is available. No agent, account or
-provider is launched; this does not qualify notification delivery or all products.
+Only a version-only OpenCode TEST adapter is available in the isolated TEST PATH;
+real host CLIs are deliberately hidden. A menu status of CLI absent refers to that
+TEST PATH, not your actual installation. Each run uses fresh TEST profiles, so
+existing host profiles do not affect the menu. No agent, account or provider is
+launched; this does not qualify notification delivery or all products.
 Profiles and native app registrations are retained at the printed path. Keep that
 directory until its TEST registration has been inspected and safely removed.
 Use `--state-dir /path/to/private-TEST-cache` to reuse your own mode-700 cache.

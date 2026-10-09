@@ -224,7 +224,9 @@ def preview(args):
         raise ValueError('Binary SourceCommit/SHA256 does not match clean repository HEAD')
     intent.unlink()
     source_identity(root,sha)
-    print('Select OpenCode; other agent CLIs are absent. Fresh Desktop on/Webhook off.',flush=True)
+    print('TEST environment: only the OpenCode version adapter is exposed.',flush=True)
+    print('Installed host CLIs are hidden; menu detection applies to TEST PATH only.',flush=True)
+    print('Select OpenCode. Fresh Desktop on/Webhook off.',flush=True)
     print('This previews installation only; it does not run agents or verify notification delivery.',flush=True)
     command = [str(trusted/'bash'),str(assets/'setup.sh')]+(['--plain'] if args.plain else [])
     try:

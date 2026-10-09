@@ -2,7 +2,7 @@
 	dev-local-install dev-local-update dev-local-bootstrap dev-local-status dev-local-reset \
 	dev-real-local dev-real-remote dev-real-toggle dev-real-status \
 	e2e-status e2e-smoke e2e-smoke-installed e2e-manual e2e-manual-installed \
-	linux-focus-debug
+	linux-focus-debug preview-installer
 
 # Binary names
 BINARY=claude-notifications
@@ -78,6 +78,9 @@ install: build ## Install binary to /usr/local/bin
 	@echo "Installation complete!"
 
 # Local plugin workflows
+preview-installer: ## Preview installer in isolated macOS OpenCode TEST profiles (PREVIEW_ARGS optional)
+	@bash scripts/preview-installer.sh $(PREVIEW_ARGS)
+
 dev-local-install: ## Install plugin in isolated Claude config
 	@bash scripts/dev-local-plugin.sh install
 
