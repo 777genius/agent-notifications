@@ -16,7 +16,7 @@ import tempfile
 REPO = '777genius/agent-notifications'
 TOOLS = ('bash sh env python3 node tar gzip unzip zip mktemp rm cat cp mv chmod mkdir ln '
          'uname tr wc head cmp grep sed awk dirname basename find sort sha256sum shasum '
-         'cut xargs sleep date stat diff touch readlink dd od git codesign xattr').split()
+         'cut xargs sleep date stat diff touch readlink dd od git codesign xattr file sips iconutil').split()
 PRIVATE_KEYS = ('HOME USERPROFILE APPDATA LOCALAPPDATA XDG_CONFIG_HOME XDG_CACHE_HOME '
                 'XDG_DATA_HOME XDG_STATE_HOME XDG_RUNTIME_DIR XDG_CONFIG_DIRS XDG_DATA_DIRS '
                 'CODEX_HOME CLAUDE_HOME CLAUDE_CONFIG_DIR TMPDIR TMP TEMP '
@@ -159,6 +159,57 @@ def build_portable(root, state, sha, go, binary, version, arch):
     return output
 
 
+def build_optional_utilities(root, state, sha, go, arch):
+    if arch not in ('arm64','amd64'):
+        raise ValueError('Unsupported macOS utility architecture')
+    source_identity(root,sha)
+    utilities = private_directory(state/'utilities')
+    source_cache = private_directory(utilities/sha)
+    cache = private_directory(source_cache/arch)
+    if not cache.is_relative_to(state.resolve()):
+        raise ValueError('TEST utility cache escapes private state')
+    outputs = {name: cache/(name+'-darwin-'+arch)
+               for name in ('sound-preview','list-devices','list-sounds')}
+    proof = cache/'source-proof.json'
+    expected = {'SourceCommit': sha, 'OS': 'darwin', 'Arch': arch}
+    paths = [*outputs.values(), proof]
+    if any(path.is_symlink() for path in paths):
+        raise ValueError('TEST utility cache must not contain symlinks')
+    if all(path.is_file() for path in paths):
+        for path in paths:
+            identity = path.stat()
+            if identity.st_uid != os.getuid() or stat.S_IMODE(identity.st_mode) & 0o077:
+                raise ValueError('TEST utility cache must be private: '+str(path))
+        cached = json.loads(proof.read_text())
+        hashes = {path.name: digest(path) for path in outputs.values()}
+        if cached == dict(expected, SHA256=hashes):
+            source_identity(root,sha)
+            return outputs
+    compiler = shutil.which(go)
+    if not compiler:
+        raise ValueError('Go is required to build the real optional utilities')
+    tree = committed_tree(root,state,sha)
+    env = {'PATH':'/usr/bin:/bin','GOMAXPROCS':'2','GOTELEMETRY':'off',
+           'GOWORK':'off','GOOS':'darwin','GOARCH':arch}
+    for key,leaf in (('HOME','build-home'),('GOCACHE','go-cache'),('GOMODCACHE','go-modules'),('TMPDIR','build-tmp')):
+        env[key] = str(private_directory(state/leaf))
+    print('Building clean-source optional utilities '+sha+'...',flush=True)
+    for name,output in outputs.items():
+        fd,temporary = tempfile.mkstemp(prefix='build-',dir=cache)
+        os.close(fd)
+        try:
+            subprocess.run([compiler,'build','-mod=readonly','-o',temporary,'./cmd/'+name],
+                           cwd=tree,env=env,check=True)
+            source_identity(root,sha)
+            Path(temporary).chmod(0o700)
+            os.replace(temporary,output)
+        finally:
+            Path(temporary).unlink(missing_ok=True)
+    proof.write_text(json.dumps(dict(expected,SHA256={path.name:digest(path) for path in outputs.values()})))
+    proof.chmod(0o600)
+    return outputs
+
+
 def discover_clis(args):
     result = {}
     for name in ('claude','codex','opencode','gemini'):
@@ -169,6 +220,97 @@ def discover_clis(args):
                 raise ValueError('CLI must be an actual executable: '+str(path))
             result[name] = str(path)
     return result
+
+
+def private_cache_leaf(path, executable=False):
+    try:
+        identity = path.lstat()
+    except FileNotFoundError:
+        return False
+    check_private_cache_identity(path, identity, executable)
+    return True
+
+
+def check_private_cache_identity(path, identity, executable=False):
+    mode = stat.S_IMODE(identity.st_mode)
+    if (not stat.S_ISREG(identity.st_mode) or identity.st_uid != os.getuid() or
+            mode & 0o077 or (executable and not mode & 0o100) or
+            (not executable and mode != 0o600)):
+        raise ValueError('Unsafe private Claude cache file: '+str(path))
+
+
+def private_cache_bytes(path, executable=False):
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    with os.fdopen(fd, 'rb') as stream:
+        check_private_cache_identity(path, os.fstat(stream.fileno()), executable)
+        return stream.read()
+
+
+def write_private_cache_proof(path, proof):
+    # Revalidate both private cache ancestors before unsandboxed metadata writes.
+    for parent in (path.parent.parent, path.parent):
+        identity = parent.lstat()
+        if (not stat.S_ISDIR(identity.st_mode) or identity.st_uid != os.getuid() or
+                stat.S_IMODE(identity.st_mode) != 0o700):
+            raise ValueError('Unsafe private Claude cache directory: '+str(parent))
+    private_cache_leaf(path)
+    fd, temporary = tempfile.mkstemp(prefix='proof-',dir=path.parent)
+    try:
+        with os.fdopen(fd, 'w') as stream:
+            os.fchmod(stream.fileno(),0o600)
+            json.dump(proof,stream)
+        private_cache_leaf(path)
+        os.replace(temporary,path)  # Replaces the leaf itself; never follows it.
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
+
+def stage_claude_cli(installed):
+    """Retain signed installed Claude bytes locally to avoid external-volume dyld stalls."""
+    source = Path(installed['claude']) if 'claude' in installed else None
+    if source is None:
+        return {}
+    with source.open('rb') as executable:
+        magic = executable.read(4)
+    if magic not in (b'\xcf\xfa\xed\xfe', b'\xfe\xed\xfa\xcf',
+                     b'\xca\xfe\xba\xbe', b'\xbe\xba\xfe\xca',
+                     b'\xca\xfe\xba\xbf', b'\xbf\xba\xfe\xca'):
+        return {}  # Script/npm installations require their original directory layout.
+    checksum = digest(source)
+    # Keep this cache on the system's local temporary disk even when --state-dir
+    # deliberately places the installer/native TEST profile on an external disk.
+    cache = private_directory(Path('/private/tmp')/('agent-notifications-cli-preview-TEST-'+str(os.getuid())))
+    directory = private_directory(cache/checksum)
+    snapshot = directory/'claude'
+    path = directory/'proof.json'
+    snapshot_exists = private_cache_leaf(snapshot,executable=True)
+    proof_exists = private_cache_leaf(path)
+    if not snapshot_exists or hashlib.sha256(private_cache_bytes(snapshot,executable=True)).hexdigest() != checksum:
+        fd, temporary = tempfile.mkstemp(prefix='claude-',dir=directory)
+        try:
+            with os.fdopen(fd,'wb') as output, source.open('rb') as original:
+                shutil.copyfileobj(original,output)
+                os.fchmod(output.fileno(),0o700)
+            if digest(Path(temporary)) != checksum:
+                raise ValueError('Installed Claude changed while creating its TEST snapshot')
+            private_cache_leaf(snapshot,executable=True)
+            os.replace(temporary,snapshot)
+        finally:
+            Path(temporary).unlink(missing_ok=True)
+    subprocess.run(['/usr/bin/codesign','--verify','--strict',str(snapshot)],
+                   check=True,capture_output=True,timeout=20)
+    if digest(source) != checksum:
+        raise ValueError('Installed Claude changed during TEST snapshot verification')
+    proof = {'original':str(source),'execution':str(snapshot),
+             'original_sha256':checksum,'snapshot_sha256':hashlib.sha256(private_cache_bytes(snapshot,executable=True)).hexdigest(),
+             'codesign':'verified-strict','original_device':source.stat().st_dev,
+             'snapshot_device':snapshot.stat().st_dev}
+    if proof_exists:
+        cached = json.loads(private_cache_bytes(path))
+        if all(cached.get(key) == value for key,value in proof.items()) and 'actual_version' in cached:
+            proof['actual_version'] = cached['actual_version']
+    write_private_cache_proof(path,proof)
+    return {'claude':dict(proof,proof_path=str(path))}
 
 
 def local_git_snapshot(root, lab, sha, env):
@@ -194,7 +336,7 @@ def local_git_snapshot(root, lab, sha, env):
                SSH_ASKPASS='/usr/bin/false')
 
 
-def cli_proxies(commands, lab, installed, env, sha):
+def cli_proxies(commands, lab, installed, env, sha, snapshots=None):
     if not Path('/usr/bin/sandbox-exec').is_file():
         raise ValueError('Real CLI preview requires macOS sandbox-exec')
     home = Path.home()
@@ -228,12 +370,59 @@ def cli_proxies(commands, lab, installed, env, sha):
     env.update(DISABLE_AUTOUPDATER='1',CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC='1',
                DISABLE_TELEMETRY='1',DO_NOT_TRACK='1',OTEL_SDK_DISABLED='true',
                GEMINI_TELEMETRY_ENABLED='false',OPENCODE_DISABLE_AUTOUPDATE='1')
-    data = {'lab':str(lab),'installed':installed,'env':env,'profile':str(profile),
+    snapshots = snapshots or {}
+    execution = {name:snapshots[name]['execution'] if name in snapshots else path
+                 for name,path in installed.items()}
+    data = {'lab':str(lab),'installed':installed,'execution':execution,'snapshots':snapshots,
+            'env':env,'profile':str(profile),
             'sha':sha,'repo':REPO}
     settings = lab/'cli-proxy.json'
     settings.write_text(json.dumps(data))
-    code = r'''import hashlib, json, os, pathlib, re, subprocess, sys
+    code = r'''import hashlib, json, os, pathlib, re, stat, subprocess, sys, tempfile
 D = json.loads(pathlib.Path(SETTINGS).read_text())
+def private_cache_leaf(path, executable=False):
+    try:
+        identity = path.lstat()
+    except FileNotFoundError:
+        return False
+    check_private_cache_identity(path, identity, executable)
+    return True
+
+
+def check_private_cache_identity(path, identity, executable=False):
+    mode = stat.S_IMODE(identity.st_mode)
+    if (not stat.S_ISREG(identity.st_mode) or identity.st_uid != os.getuid() or
+            mode & 0o077 or (executable and not mode & 0o100) or
+            (not executable and mode != 0o600)):
+        raise ValueError('Unsafe private Claude cache file: '+str(path))
+
+
+def private_cache_bytes(path, executable=False):
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    with os.fdopen(fd, 'rb') as stream:
+        check_private_cache_identity(path, os.fstat(stream.fileno()), executable)
+        return stream.read()
+
+
+def write_private_cache_proof(path, proof):
+    # Revalidate both private cache ancestors before unsandboxed metadata writes.
+    for parent in (path.parent.parent, path.parent):
+        identity = parent.lstat()
+        if (not stat.S_ISDIR(identity.st_mode) or identity.st_uid != os.getuid() or
+                stat.S_IMODE(identity.st_mode) != 0o700):
+            raise ValueError('Unsafe private Claude cache directory: '+str(parent))
+    private_cache_leaf(path)
+    fd, temporary = tempfile.mkstemp(prefix='proof-',dir=path.parent)
+    try:
+        with os.fdopen(fd, 'w') as stream:
+            os.fchmod(stream.fileno(),0o600)
+            json.dump(proof,stream)
+        private_cache_leaf(path)
+        os.replace(temporary,path)  # Replaces the leaf itself; never follows it.
+    finally:
+        pathlib.Path(temporary).unlink(missing_ok=True)
+
+
 lab = pathlib.Path(D['lab'])
 name = pathlib.Path(sys.argv[0]).name
 args = sys.argv[1:]
@@ -284,15 +473,26 @@ for key in ('HOME','CODEX_HOME','CLAUDE_CONFIG_DIR','GEMINI_CLI_HOME','TMPDIR'):
         if not local(os.environ[key]): sys.exit('Rejected non-TEST CLI profile')
         env[key] = os.environ[key]
 with (lab/'cli-commands.jsonl').open('a') as log:
-    log.write(json.dumps({'cli':name,'executable':D['installed'][name],'args':args})+'\n')
+    log.write(json.dumps({'cli':name,'executable':D['installed'][name],
+                          'execution':D['execution'][name],'args':args})+'\n')
 try:
+    if name in D['snapshots']:
+        snapshot = D['snapshots'][name]
+        private_cache_leaf(pathlib.Path(snapshot['execution']),executable=True)
+        private_cache_leaf(pathlib.Path(snapshot['proof_path']))
     version_probe = args == ['--version']
-    result = subprocess.run(['/usr/bin/sandbox-exec','-f',D['profile'],D['installed'][name]]+args,
+    result = subprocess.run(['/usr/bin/sandbox-exec','-f',D['profile'],D['execution'][name]]+args,
                             cwd=lab,env=env,timeout=60,
                             capture_output=version_probe)
     if version_probe:
+        if not result.returncode and name in D['snapshots']:
+            snapshot = D['snapshots'][name]
+            proof = {key:value for key,value in snapshot.items() if key != 'proof_path'}
+            proof['actual_version'] = result.stdout.decode(errors='replace').strip()
+            write_private_cache_proof(pathlib.Path(snapshot['proof_path']),proof)
         with (lab/'cli-commands.jsonl').open('a') as log:
             log.write(json.dumps({'cli':name,'args':args,'exit_code':result.returncode,
+                                  'stdout':result.stdout.decode(errors='replace'),
                                   'stderr':result.stderr.decode(errors='replace')})+'\n')
         sys.stdout.buffer.write(result.stdout)
         if result.returncode: sys.stderr.buffer.write(result.stderr)
@@ -314,6 +514,9 @@ def offline_transport(commands, assets, root, sha, version, name, requests):
     mapping['https://github.com/'+REPO+'/archive/'+sha+'.tar.gz'] = assets/'source.tar.gz'
     base = 'https://preview-installer.invalid/releases/download/'+version+'/'
     mapping.update({base+leaf: assets/leaf for leaf in ('checksums.txt',name,'ClaudeNotifier.app.zip','agent-notify-portable-darwin-'+('arm64' if os.uname().machine == 'arm64' else 'amd64')+'.zip')})
+    arch = 'arm64' if os.uname().machine == 'arm64' else 'amd64'
+    mapping.update({base+utility+'-darwin-'+arch: assets/(utility+'-darwin-'+arch)
+                    for utility in ('sound-preview','list-devices','list-sounds')})
     # Copy source inputs so every acquisition sees the verified source snapshot.
     for url, source in list(mapping.items()):
         if source.is_relative_to(root):
@@ -386,9 +589,13 @@ def preview(args):
     shutil.copyfile(archive,assets/'ClaudeNotifier.app.zip')
     portable = build_portable(root, state, sha, args.go, staged, version, arch)
     shutil.copyfile(portable, assets/portable.name)
+    utilities = build_optional_utilities(root,state,sha,args.go,arch)
+    for utility in utilities.values():
+        shutil.copyfile(utility,assets/utility.name)
+        (assets/utility.name).chmod(0o700)
     subprocess.run(['/usr/bin/git','-C',str(root),'archive','--format=tar.gz',
                     '--prefix=agent-notifications-'+sha+'/', '--output',str(assets/'source.tar.gz'),sha],check=True)
-    (assets/'checksums.txt').write_text(''.join(digest(assets/leaf)+'  '+leaf+'\n' for leaf in (name,'ClaudeNotifier.app.zip',portable.name)))
+    (assets/'checksums.txt').write_text(''.join(digest(assets/leaf)+'  '+leaf+'\n' for leaf in (name,'ClaudeNotifier.app.zip',portable.name,*(path.name for path in utilities.values()))))
     rows = ['# agent-notifications-platform-channels-v1']
     for platform, cpu in (('darwin','amd64'),('darwin','arm64'),('linux','amd64'),('linux','arm64'),('windows','amd64')):
         ref = 'release/platform-macos' if platform == 'darwin' else 'release/platform-linux-windows'
@@ -396,7 +603,8 @@ def preview(args):
     (assets/'channels.tsv').write_text('\n'.join(rows)+'\n')
     offline_transport(commands,assets,root,sha,version,name,lab/'acquisitions.log')
     local_git_snapshot(root, lab, sha, env)
-    cli_proxies(commands, lab, installed, env, sha)
+    snapshots = stage_claude_cli(installed)
+    cli_proxies(commands, lab, installed, env, sha, snapshots)
     env['BOOTSTRAP_RELEASES_BASE_URL'] = 'https://preview-installer.invalid/releases'
     # Supported read-only intent verifies the executable, not its filename/cache key.
     intent = assets/'source-proof.json'
@@ -410,6 +618,8 @@ def preview(args):
         raise ValueError('Binary SourceCommit/SHA256 does not match clean repository HEAD')
     source_identity(root,sha)
     print('Actual installed CLIs (missing CLIs remain absent): '+json.dumps(installed),flush=True)
+    for name, snapshot in snapshots.items():
+        print(name+' TEST execution snapshot: '+snapshot['execution']+' (SHA256 '+snapshot['snapshot_sha256']+')',flush=True)
     print('Select the installed clients. Fresh Desktop on/Webhook off.',flush=True)
     print('CLI registration uses a local source snapshot; CLI network and host credentials are denied.',flush=True)
     print('This previews installation only; it does not run agents or verify notification delivery.',flush=True)
