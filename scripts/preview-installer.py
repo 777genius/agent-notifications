@@ -79,14 +79,17 @@ def build_binary(root, state, sha, go):
                     raise ValueError('Unsafe committed source symlink: '+member.name)
                 links.append((destination, target))
         # Materialize committed files first; symlinks cannot redirect extraction.
-        committed.extractall(tree, members=[m for m in members if not m.issym()])
+        options = {"filter": "fully_trusted"} if sys.version_info >= (3, 12) else {}
+        committed.extractall(tree, members=[m for m in members if not m.issym()], **options)
         for destination, target in links:
             destination.symlink_to(target)
         for destination, _ in links:
             try:
-                resolved = destination.resolve()
-            except RuntimeError as error:
-                raise ValueError('Committed source symlink cycle: '+str(destination)) from error
+                resolved = destination.resolve(strict=True)
+            except FileNotFoundError:
+                resolved = destination.resolve(strict=False)
+            except (OSError, RuntimeError) as error:
+                raise ValueError('Invalid committed source symlink chain: '+str(destination)) from error
             if not resolved.is_relative_to(tree):
                 raise ValueError('Committed source symlink escapes tree: '+str(destination))
     fd, temporary = tempfile.mkstemp(prefix='build-', dir=output.parent)
