@@ -1,6 +1,8 @@
-// Inert wire + lifecycle tests. No Windows API calls, registration or UI effects.
+// Inert wire + lifecycle tests. No registration, SDK target or UI effects; finite fixture/hash operations.
+#define NOMINMAX
 #include "wire.h"
 #include "attempt.h"
+#include "capacity.h"
 #include <fstream>
 #include <iterator>
 #include <iostream>
@@ -124,5 +126,13 @@ int main(int argc,char** argv){try{
  first.drain();
  one.join();
  check(slots.pending()==0);
+ // Breakage: concurrent producer/callback charge limits disagree, or a valid
+ // independent overflow ledger is accepted. These fixtures were authored from
+ // the numeric wire layout independently of both production codecs.
+ const auto quota=CapacityState::read(fixture(std::string(argv[1])+"/capacity.wcap"));
+ check(quota.records==1023&&quota.attempts==2047&&quota.attemptBytes==67076096);
+ const auto full=CapacityState::read(quota.nextAttempt());check(full.attempts==2048&&full.attemptBytes==67108864);
+ bool refused=false;try{full.nextAttempt();}catch(...){refused=true;}check(refused);
+ refused=false;try{CapacityState::read(fixture(std::string(argv[1])+"/capacity-overflow.wcap"));}catch(...){refused=true;}check(refused);
  std::cout<<"inert WinEnvelope1 and callback lifecycle contracts passed\n";return 0;
  }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}

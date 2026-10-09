@@ -138,15 +138,49 @@ func TestWindowsNoneSetupProvisionsJournalWithoutNative(t *testing.T) {
 	}
 }
 
-func TestWindowsLocalRoutingRejected(t *testing.T) {
+func TestWindowsLocalRoutingRejectsMacAppIdentity(t *testing.T) {
 	o, r := windowsNoneFixture(t)
 	r.Route = &Route{LocalRouting: true, ApplicationPath: `C:\Chosen.app`, TeamID: "TEAM123456"}
+	type entryState struct {
+		Mode   os.FileMode
+		Digest [32]byte
+	}
+	tree := func() map[string]entryState {
+		t.Helper()
+		entries := make(map[string]entryState)
+		if err := filepath.WalkDir(filepath.Dir(o.ControlRoot), func(path string, entry os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			info, err := entry.Info()
+			if err != nil {
+				return err
+			}
+			value := entryState{Mode: info.Mode()}
+			if !entry.IsDir() {
+				data, err := os.ReadFile(path)
+				if err != nil {
+					return err
+				}
+				value.Digest = sha256.Sum256(data)
+			}
+			entries[path] = value
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return entries
+	}
+	before := tree()
 	_, e := Apply(windowsContext(t), o, r)
 	if e == nil {
 		t.Fatal("windows local routing accepted")
 	}
 	var se *Error
-	if !errors.As(e, &se) || se.Reason != "unsupported_platform" {
-		t.Fatalf("wanted unsupported_platform, got %v", e)
+	if !errors.As(e, &se) || se.Reason != "windows_callback_unavailable" {
+		t.Fatalf("wanted windows_callback_unavailable, got %v", e)
+	}
+	if !reflect.DeepEqual(before, tree()) {
+		t.Fatal("failure mutated state")
 	}
 }

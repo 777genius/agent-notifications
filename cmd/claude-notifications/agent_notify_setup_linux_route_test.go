@@ -80,9 +80,12 @@ func TestSetupLinuxDesktopThreadBinding(t *testing.T) {
 			if wantCode != 0 {
 				wantReason := "linux_callback_unavailable"
 				if scenario == "windows" {
-					wantReason = "unsupported_platform"
+					wantReason = "windows_callback_unavailable"
 				}
-				if result.Reason != wantReason || !reflect.DeepEqual(before, setupCommandTree(t, f.root)) {
+				if result.Reason != wantReason {
+					t.Fatalf("wanted %s, got %s", wantReason, result.Reason)
+				}
+				if !reflect.DeepEqual(before, setupCommandTree(t, f.root)) {
 					t.Fatal("unavailable setup mutated state", result)
 				}
 				return

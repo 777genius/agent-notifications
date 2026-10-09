@@ -1,4 +1,4 @@
-name: Windows callback source contracts (inert)
+name: Windows callback source and private registry TEST contracts
 on:
   pull_request:
     paths:
@@ -11,6 +11,7 @@ permissions:
   contents: read
 jobs:
   compile-and-inert-contracts:
+    name: SDK compile, inert wire and private registry TEST contracts
     runs-on: windows-latest
     timeout-minutes: 15
     steps:
@@ -48,6 +49,61 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'linked Windows binary build failed' }
           ./native/windows-callback/verify-embedded.ps1 -Executable $binary -Helper "$env:RUNNER_TEMP\windows-callback-contracts\helper.exe" |
             Set-Content -LiteralPath "$env:RUNNER_TEMP\windows-callback-contracts\embedded-evidence.json" -Encoding utf8
+      - name: Compile and run actual private HKCU registration TEST
+        shell: pwsh
+        env:
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ((git rev-parse HEAD) -cne $env:SOURCE_SHA) { throw 'fixture source SHA mismatch' }
+          $root = "$env:RUNNER_TEMP\windows-callback-registration-test"
+          New-Item -ItemType Directory -Path $root | Out-Null
+          $out = Join-Path $root 'out'
+          $obj = Join-Path $root 'obj'
+          New-Item -ItemType Directory -Path $out, $obj | Out-Null
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (!$vs) { throw 'fixture MSVC installation unavailable' }
+          $msbuild = Join-Path $vs 'MSBuild\Current\Bin\MSBuild.exe'
+          & $msbuild 'native/windows-callback/RegistrationContracts.vcxproj' /t:Build /p:Configuration=Release /p:Platform=x64 "/p:OutDir=$out\" "/p:IntDir=$obj\" /verbosity:minimal
+          if ($LASTEXITCODE -ne 0) { throw 'private registry TEST build failed' }
+          $exe = Join-Path $out 'TEST-registration-contracts.exe'
+          # This executes a real TEST-owned registry fixture, never the shipping helper.
+          & $exe 1> "$root\fixture.stdout.txt" 2> "$root\fixture.stderr.txt"
+          $code = $LASTEXITCODE
+          $streams = @{}
+          $bounded = $true
+          foreach ($name in @('fixture.stdout.txt', 'fixture.stderr.txt')) {
+            $file = Get-Item -LiteralPath (Join-Path $root $name)
+            $ok = $file.Length -le 16384
+            $streams[$name] = @{ bytes=$file.Length; retained=$ok }
+            if ($ok) {
+              $streams[$name].sha256 = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            } else {
+              $bounded = $false
+              Move-Item -LiteralPath $file.FullName -Destination ($file.FullName + '.overcap-private')
+            }
+          }
+          $pins = @{}
+          foreach ($name in @('RegistrationContracts.vcxproj', 'registration_test.cpp', 'installed.h')) {
+            $pins[$name] = (Get-FileHash -LiteralPath "native/windows-callback/$name" -Algorithm SHA256).Hash.ToLowerInvariant()
+          }
+          @{ sourceSHA=$env:SOURCE_SHA; sourceFiles=$pins; exitCode=$code; console=$streams;
+             fixtureSHA256=(Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant();
+             privateRegistryTest=$true; publicInstalledCallbackQualified=$false; passed=($code -eq 0 -and $bounded) } |
+            ConvertTo-Json -Depth 5 | Set-Content -LiteralPath "$root\fixture-evidence.json" -Encoding utf8
+          if ($code -ne 0 -or !$bounded) { throw 'private registry TEST did not qualify' }
+      - name: Retain separate private registry TEST evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7 repository pin
+        with:
+          name: windows-callback-registration-test-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/windows-callback-registration-test/fixture-evidence.json
+            ${{ runner.temp }}/windows-callback-registration-test/fixture.stdout.txt
+            ${{ runner.temp }}/windows-callback-registration-test/fixture.stderr.txt
+          if-no-files-found: warn
+          retention-days: 14
       - name: Retain source-bound native compile evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7 repository pin

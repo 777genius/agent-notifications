@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/777genius/agent-notifications/internal/strictjson"
+	"github.com/777genius/agent-notifications/internal/windowscallback"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -52,6 +53,7 @@ type Consumer struct {
 	OpenCode     *OpenCodeRegistration `json:",omitempty"`
 }
 type Ledger struct {
+	WindowsRetained  []windowscallback.Binding `json:",omitempty"`
 	WriterFloor      int
 	Enabled          bool
 	Native           *NativeRecord
@@ -67,8 +69,9 @@ type Ledger struct {
 	PendingMutation  *PendingMutation `json:",omitempty"`
 }
 type transaction struct {
-	OpenCodeInit  *File      `json:",omitempty"`
-	OpenCodePurge *PurgeTree `json:",omitempty"`
+	Windows       *WindowsChange `json:",omitempty"`
+	OpenCodeInit  *File          `json:",omitempty"`
+	OpenCodePurge *PurgeTree     `json:",omitempty"`
 	ConfigPaths   []string
 	Native        *NativeChange
 	Schema        int
@@ -83,6 +86,7 @@ type transaction struct {
 // Request stages ordinary file bytes before Commit. Prepare runs under the
 // component and config locks, and may only compute adapter-owned JSON changes.
 type Request struct {
+	Windows *WindowsChange
 	// RevokeOpenCode permits only the exact desktop/webhook false policy patch
 	// when delivery assets are damaged. It still requires a registered consumer,
 	// generation and policy CAS; no asset, native or other policy mutation is allowed.
@@ -181,7 +185,10 @@ func readLedger(root string) (Ledger, error) {
 	if err == nil && (!acceptedLedgerSchema(l.Schema) || l.ID == "" || l.Generation == 0 || l.Consumers == nil || l.Files == nil) {
 		err = fmt.Errorf("invalid ownership ledger")
 	}
-	if err == nil && l.Consumers[openCodeConsumer].OpenCode != nil && (l.Schema != 4 || l.WriterFloor < OpenCodeWriterFloor) {
+	if err == nil && validateWindowsRetained(l) != nil {
+		return l, fmt.Errorf("invalid retained Windows generation ledger")
+	}
+	if err == nil && l.Consumers[openCodeConsumer].OpenCode != nil && ((l.Schema != 4 && l.Schema != 5) || l.WriterFloor < OpenCodeWriterFloor) {
 		err = fmt.Errorf("private registration requires compatible persisted protocol")
 	}
 	return l, err
@@ -347,11 +354,11 @@ func Commit(ctx context.Context, r Request) (result Ledger, resultErr error) {
 	}
 	unlock, err := lockComponent(ctx, filepath.Join(root, ".component-install.lock"))
 	if err != nil {
-		return Ledger{}, err
+		return Ledger{}, admission("component_lock_admission", AdmissionComponent, err)
 	}
 	defer unlock()
 	if err := privateDirectory(root); err != nil {
-		return Ledger{}, err
+		return Ledger{}, admission("control_directory_admission", AdmissionControl, err)
 	}
 	// Match policy lock identity in the same physical spelling as ConfigPaths.
 	// Supported Darwin /var aliases must not turn LockExisting into Lock.
@@ -361,7 +368,18 @@ func Commit(ctx context.Context, r Request) (result Ledger, resultErr error) {
 	}
 	policyPath := filepath.Join(policyRoot, "agent-notifications.json")
 	r.ConfigPaths = append(append([]string(nil), r.ConfigPaths...), policyPath)
-	paths := append([]string(nil), r.ConfigPaths...)
+	type configAdmission struct {
+		path   string
+		origin AdmissionOrigin
+	}
+	paths := make([]configAdmission, 0, len(r.ConfigPaths))
+	for i, p := range r.ConfigPaths {
+		origin := AdmissionExternalConfig
+		if i == len(r.ConfigPaths)-1 {
+			origin = AdmissionPolicy
+		}
+		paths = append(paths, configAdmission{p, origin})
+	}
 	// Recovery may include configuration from a different adapter invocation.
 	var pending transaction
 	marker := filepath.Join(root, "transaction.json")
@@ -380,11 +398,14 @@ func Commit(ctx context.Context, r Request) (result Ledger, resultErr error) {
 		if r.PolicyOnly {
 			return Ledger{}, ErrPolicyRecovery
 		}
-		paths = append(paths, pending.ConfigPaths...)
+		for _, p := range pending.ConfigPaths {
+			paths = append(paths, configAdmission{p, AdmissionRecoveryConfig})
+		}
 	}
 
-	for i, p := range paths {
-		p, err = filepath.Abs(p)
+	for i, entry := range paths {
+		p, e := filepath.Abs(entry.path)
+		err = e
 		if err != nil {
 			return Ledger{}, err
 		}
@@ -392,11 +413,15 @@ func Commit(ctx context.Context, r Request) (result Ledger, resultErr error) {
 		if e == nil {
 			p = filepath.Join(parent, filepath.Base(p))
 		}
-		paths[i] = p
+		paths[i].path = p
+		if p == policyPath {
+			paths[i].origin = AdmissionPolicy
+		}
 	}
-	sort.Strings(paths)
-	for i, p := range paths {
-		if i > 0 && paths[i-1] == p {
+	sort.SliceStable(paths, func(i, j int) bool { return paths[i].path < paths[j].path })
+	for i, entry := range paths {
+		p := entry.path
+		if i > 0 && paths[i-1].path == p {
 			continue
 		}
 		lockConfig := Lock
@@ -405,7 +430,7 @@ func Commit(ctx context.Context, r Request) (result Ledger, resultErr error) {
 		}
 		release, e := lockConfig(ctx, p+".lock")
 		if e != nil {
-			return Ledger{}, e
+			return Ledger{}, admission("config_lock_admission", entry.origin, e)
 		}
 		defer release()
 	}
@@ -428,6 +453,10 @@ func Commit(ctx context.Context, r Request) (result Ledger, resultErr error) {
 			return l, err
 		}
 		if r.RollbackPending {
+			if windowsCommitDecided(pending.Windows) {
+				return l, ErrPolicyRecovery
+			}
+
 			if !ledgerMatchesJournal(l, pending.Before, pending.Native) && !ledgerMatchesJournal(l, pending.After, pending.Native) {
 				return l, fmt.Errorf("rollback ledger mismatch")
 			}
@@ -510,7 +539,7 @@ func Commit(ctx context.Context, r Request) (result Ledger, resultErr error) {
 	}
 	previous, registered := l.Consumers[r.ConsumerID]
 	if r.PolicyDocument != nil && (!registered || previous.RuntimeRoot != r.RuntimeRoot ||
-		l.ID == "" || l.Schema != 4 || l.WriterFloor != OpenCodeWriterFloor || l.PolicyGeneration == 0 ||
+		l.ID == "" || (l.Schema != 4 && l.Schema != 5) || l.WriterFloor < OpenCodeWriterFloor || l.PolicyGeneration == 0 ||
 		!validRawPolicyRegistration(l, previous)) {
 		return l, fmt.Errorf("raw policy requires an existing origin-bound OpenCode registration")
 	}
@@ -906,7 +935,24 @@ func Commit(ctx context.Context, r Request) (result Ledger, resultErr error) {
 	if err := validateWriterFilesAtFloor(files, next.WriterFloor); err != nil {
 		return l, err
 	}
-	tx := transaction{Schema: transactionSchemaFor(next, r), Before: l, After: next, Files: files, Native: native, ConfigPaths: r.ConfigPaths, OpenCodeInit: init, OpenCodePurge: purge}
+	if r.Windows != nil {
+		if r.Windows.Phase != "preparing" || r.Windows.Applied != 0 || r.Windows.Observed {
+			return l, windowscallback.ErrUnavailable
+		}
+		if len(l.WindowsRetained) >= windowscallback.MaxGenerations {
+			return l, windowscallback.ErrCapacity
+		}
+		if e := validateWindowsChange(r.Windows, root); e != nil {
+			return l, e
+		}
+		for _, b := range l.WindowsRetained {
+			if b.SnapshotPath == r.Windows.Binding.SnapshotPath {
+				return l, windowscallback.ErrCapacity
+			}
+		}
+		next.WindowsRetained = append(append([]windowscallback.Binding(nil), l.WindowsRetained...), r.Windows.Binding)
+	}
+	tx := transaction{Windows: r.Windows, Schema: transactionSchemaFor(next, r), Before: l, After: next, Files: files, Native: native, ConfigPaths: r.ConfigPaths, OpenCodeInit: init, OpenCodePurge: purge}
 	// Global disable is also reconstructible, but an explicit Cursor request
 	// must preserve the ledger's global intent even when its leaves were already false.
 	if r.RevokeCursor && (tx.Before.Enabled != tx.After.Enabled || !boundedPolicyRevocation(root, tx)) {
@@ -1034,6 +1080,9 @@ func recoverTransaction(ctx context.Context, root string, current Ledger, tx tra
 	if err := qualifyRetirement(ctx, tx.Native); err != nil {
 		return err
 	}
+	if err := advanceWindows(ctx, root, &tx, fault); err != nil {
+		return err
+	}
 	// Policy revocation becomes visible before file removals/new admissions.
 	if err := writeJSON(filepath.Join(root, "policy-generation.json"), struct {
 		Generation uint64
@@ -1073,6 +1122,17 @@ func recoverTransaction(ctx context.Context, root string, current Ledger, tx tra
 			}
 		}
 	}
+	if tx.Windows != nil && !tx.Rollback {
+		tx.Windows.Phase = "binding_published"
+		if err := writeTransaction(filepath.Join(root, "transaction.json"), tx); err != nil {
+			return err
+		}
+		if fault != nil {
+			if err := fault("windows:binding_published"); err != nil {
+				return err
+			}
+		}
+	}
 	after := tx.After
 	if !preserveNative {
 		var err error
@@ -1098,6 +1158,17 @@ func recoverTransaction(ctx context.Context, root string, current Ledger, tx tra
 	// Publish the final policy only after all assets and the ledger are durable.
 	if err := writeJSON(filepath.Join(root, "policy-generation.json"), runtimePolicy{tx.After.PolicyGeneration, tx.After.Enabled}); err != nil {
 		return err
+	}
+	if tx.Windows != nil && !tx.Rollback {
+		tx.Windows.Phase = "committed"
+		if err := writeTransaction(filepath.Join(root, "transaction.json"), tx); err != nil {
+			return err
+		}
+		if fault != nil {
+			if err := fault("windows:committed"); err != nil {
+				return err
+			}
+		}
 	}
 	if err := os.Remove(filepath.Join(root, "transaction.json")); err != nil {
 		return err

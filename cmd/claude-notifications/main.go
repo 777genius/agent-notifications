@@ -91,6 +91,7 @@ func main() {
 		if len(os.Args) == 3 && os.Args[2] == "--all" {
 			fmt.Println(installruntime.LocalWriterProtocolMarker)
 			fmt.Println(installruntime.OpenCodeWriterProtocolMarker)
+			fmt.Println(installruntime.WindowsWriterProtocolMarker)
 		}
 	case "internal-install-runtime":
 		if err := installRuntime(os.Args[2:], os.Stdout); err != nil {

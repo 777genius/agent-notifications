@@ -244,14 +244,14 @@ func validateOpenCodeDecision(root string, tx transaction) error {
 	}
 	if next != nil && !reflect.DeepEqual(old, next) {
 		owned, ok := OwnedFile(tx.After, tx.After.Consumers[openCodeConsumer].Registration)
-		if tx.After.Schema != 4 || tx.After.WriterFloor < OpenCodeWriterFloor || !next.Valid() || !ok || owned.SHA256 != next.BundleSHA256 || owned.Link != "" {
+		if (tx.After.Schema != 4 && tx.After.Schema != 5) || tx.After.WriterFloor < OpenCodeWriterFloor || !next.Valid() || !ok || owned.SHA256 != next.BundleSHA256 || owned.Link != "" {
 			return fmt.Errorf("private recovery bundle mismatch")
 		}
 	}
 	if tx.OpenCodeInit == nil && tx.OpenCodePurge == nil {
 		return nil
 	}
-	if tx.Schema != 4 || tx.After.Schema != 4 || tx.After.WriterFloor != OpenCodeWriterFloor || tx.Rollback {
+	if (tx.Schema != 4 && tx.Schema != 5) || (tx.After.Schema != 4 && tx.After.Schema != 5) || tx.After.WriterFloor < OpenCodeWriterFloor || tx.Rollback {
 		return fmt.Errorf("invalid private state protocol")
 	}
 	if f := tx.OpenCodeInit; f != nil {

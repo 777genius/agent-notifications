@@ -36,12 +36,12 @@ func TestManagedWriterProtocolProductionDeclarations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, floor := range []int{1, 2, 3, 4} {
+	for _, floor := range []int{1, 2, 3, 4, 5} {
 		if !installruntime.WriterCompatibleAtFloor(data, floor) {
 			t.Fatalf("production CLI bytes fail supported writer floor %d", floor)
 		}
 	}
-	if installruntime.WriterCompatibleAtFloor(data, 5) {
+	if installruntime.WriterCompatibleAtFloor(data, 6) {
 		t.Fatal("production CLI granted unknown writer floor")
 	}
 	for _, tc := range []struct {
@@ -49,7 +49,7 @@ func TestManagedWriterProtocolProductionDeclarations(t *testing.T) {
 		want string
 	}{
 		{[]string{"internal-writer-protocol"}, "agent-notifications-managed-writer-protocol-v1\n"},
-		{[]string{"internal-writer-protocol", "--all"}, "agent-notifications-managed-writer-protocol-v1\nagent-notifications-managed-writer-protocol-v3\nagent-notifications-managed-writer-protocol-v4\n"},
+		{[]string{"internal-writer-protocol", "--all"}, "agent-notifications-managed-writer-protocol-v1\nagent-notifications-managed-writer-protocol-v3\nagent-notifications-managed-writer-protocol-v4\nagent-notifications-managed-writer-protocol-v5\n"},
 	} {
 		cmd := exec.CommandContext(ctx, binary, tc.args...)
 		cmd.Env = managedFixture.compilerEnv

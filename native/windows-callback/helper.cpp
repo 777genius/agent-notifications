@@ -1,6 +1,7 @@
-// Retained classic unpackaged Windows SDK callback. No installation effects.
+// Retained classic unpackaged callback and fixed explicit installed operator.
 #define NOMINMAX
 #include <windows.h>
+#include <shellapi.h>
 #include <notificationactivationcallback.h>
 #include <wrl.h>
 #include <wtsapi32.h>
@@ -11,6 +12,7 @@
 #include <winrt/Windows.System.h>
 #include "custody.h"
 #include "attempt.h"
+#include "installed.h"
 #include <thread>
 #include <cwchar>
 #include <exception>
@@ -43,13 +45,19 @@ struct SDKOperations {
   return (!queryEntered||queryCompletionKnown)&&(!launchEntered||launchCompletionKnown);
  }
  Tick now(){return GetTickCount64();}
+ Tick metadataEnd=0;
  void exact(const Snapshot& s){
-  winrt::Windows::Management::Deployment::PackageManager manager;unsigned count=0;
-  for(auto const& package:manager.FindPackagesForUser(L"",wide(s.family))){require(++count<=8);
-  const auto id=package.Id();
-  require(id.Name()==wide(s.name)&&id.Publisher()==wide(s.publisher)&&id.FamilyName()==wide(s.family)&&id.FullName()==wide(s.full));
+  require(now()<metadataEnd);winrt::Windows::Management::Deployment::PackageManager manager;unsigned count=0;
+  require(now()<metadataEnd);const auto packages=manager.FindPackagesForUser(L"",wide(s.family));
+  for(auto const& package:packages){require(now()<metadataEnd&&++count<=8);const auto id=package.Id();
+   require(now()<metadataEnd&&id.Name()==wide(s.name));
+   require(now()<metadataEnd&&id.Publisher()==wide(s.publisher));
+   require(now()<metadataEnd&&id.FamilyName()==wide(s.family));
+   require(now()<metadataEnd&&id.FullName()==wide(s.full));
+   require(now()<metadataEnd&&!package.IsResourcePackage());
+   require(now()<metadataEnd&&id.Architecture()==winrt::Windows::System::ProcessorArchitecture::X64);
   }
-  require(count==1);
+  require(now()<metadataEnd&&count==1);
  }
  void intent(const Attempt& a){generation.publish(a.id,L".intent","WinAttempt1 "+a.id+" "+std::to_string(a.entry)+" "+std::to_string(a.deadline)+" "+a.reference+" "+a.snapshotDigest+"\n");
  }
@@ -103,6 +111,117 @@ struct SDKOperations {
   auto op=Launcher::LaunchUriAsync(uri,options);return await(op,end,unknown,launchCompletionKnown);
  }
 };
+ static int operatorMain(const std::wstring& mode,uint64_t end,const std::string& nonce,OperatorDiagnostic& diagnostic){
+  bool showEntered=false;
+  std::string attempt;
+  try{
+   diagnostic.enter("operator_deadline");
+   installedBudget(end);
+   diagnostic.enter("generation_custody");
+   Generation generation;
+   Handle permit;
+   if(mode==L"show"||mode.rfind(L"apply-",0)==0||mode.rfind(L"restore-",0)==0){
+    diagnostic.enter("operator_permit");
+    permit=open(generation.root/L"operator.pending",false);
+    owned(permit.h,generation.sid);
+    const auto fields=decode(bytes(permit.h,4096),4,4);
+    require(fields[0]==nonce&&fields[1]==narrow(mode)&&fields[2]==std::to_string(end)&&fields[3]==generation.snapshotDigest);
+   }
+   diagnostic.enter("desktop_admission");
+   desktop();
+   SDKOperations ops{
+    generation
+   }
+   ;
+   ops.metadataEnd=end;
+   diagnostic.enter("package_identity");
+   ops.exact(generation.snapshot);
+   diagnostic.enter("operator_deadline");
+   installedBudget(end);
+   diagnostic.enter("operator_dispatch");
+   if(mode==L"observe"){
+    require(absentRegistration(generation,L"CLSID",wide(generation.snapshot.clsid),end)&&absentRegistration(generation,L"AppUserModelId",wide(generation.snapshot.aumid),end));
+    auto p=shortcutPath(generation);
+    require(GetFileAttributesW(p.c_str())==INVALID_FILE_ATTRIBUTES&&GetLastError()==ERROR_FILE_NOT_FOUND);
+   }
+   else if(mode==L"verify-clsid")classReadback(generation,end);
+   else if(mode==L"verify-aumid")appReadback(generation,end);
+   else if(mode==L"verify-shortcut")shortcutReadback(generation);
+   else if(mode==L"apply-clsid")applyClass(generation,end,&diagnostic);
+   else if(mode==L"apply-aumid")applyApp(generation,end);
+   else if(mode==L"apply-shortcut")applyShortcut(generation,end);
+   else if(mode==L"restore-clsid")restoreClass(generation,end);
+   else if(mode==L"restore-aumid")restoreApp(generation,end);
+   else if(mode==L"restore-shortcut")restoreShortcut(generation,end);
+   else if(mode==L"readback"||mode==L"ready"||mode==L"show"){
+    registryReadback(generation,end);
+    shortcutReadback(generation);
+    installedBudget(end);
+    if(mode==L"readback"){
+     std::cout<<"WCB1 ready not_checked 0\n";
+     return 0;
+    }
+    using namespace winrt::Windows::UI::Notifications;
+    auto notifier=ToastNotificationManager::CreateToastNotifier(wide(generation.snapshot.aumid));
+    installedBudget(end);
+    std::string permission="enabled";
+    try{
+     const auto setting=notifier.Setting();
+     installedBudget(end);
+     switch(setting){
+      case NotificationSetting::Enabled:break;
+      case NotificationSetting::DisabledForApplication:case NotificationSetting::DisabledForUser:
+      case NotificationSetting::DisabledByGroupPolicy:case NotificationSetting::DisabledByManifest:
+      std::cout<<"WCB1 declined disabled 0\n";
+      return 2;
+      default:require(false);
+     }
+    }
+    catch(const winrt::hresult_error& e){
+     require(e.code().value==static_cast<HRESULT>(0x80070490));
+     permission="permission_unknown";
+    }
+    installedBudget(end);
+    if(mode==L"ready"){
+     std::cout<<"WCB1 ready "<<permission<<" 0\n";
+     return 0;
+    }
+    const auto fields=operatorFields();
+    require(hex(fields[0],32)&&text(fields[1],4096)&&(fields[2].empty()||text(fields[2],4096))&&(fields[3]=="0"||fields[3]=="1"));
+    generation.record(fields[0]);
+    ops.exact(generation.snapshot);
+    installedBudget(end);
+    attempt=randomID();
+    reserveAttempt(generation,attempt,end);
+    const std::wstring launch=L"WinEnvelope1:open_thread:"+wide(fields[0]);
+    const std::wstring payload=L"<toast launch=\""+launch+L"\"><visual><binding template=\"ToastGeneric\"><text>"+xml(fields[1])+L"</text><text>"+xml(fields[2])+L"</text></binding></visual><audio silent=\""+(fields[3]=="1"?L"true":L"false")+L"\"/></toast>";
+    winrt::Windows::Data::Xml::Dom::XmlDocument doc;
+    doc.LoadXml(payload);
+    ToastNotification toast(doc);
+    installedBudget(end);
+    generation.publish(attempt,L".intent","WinShow1 "+attempt+" "+fields[0]+" "+generation.snapshotDigest+" "+std::to_string(end)+"\n");
+    installedBudget(end);
+    showEntered=true;
+    notifier.Show(toast);
+    installedBudget(end);
+    generation.publish(attempt,L".result","show_returned=1 effect_entered=1\n");
+    installedBudget(end);
+    std::cout<<"WCB1 submitted "<<permission<<" 1\n";
+    return 0;
+   }
+   else require(false);
+   diagnostic.enter("operator_deadline");
+   installedBudget(end);
+   diagnostic.enter("operator_terminal");
+   std::cout<<"WCB1 ready not_checked 0\n";
+   return 0;
+  }
+  catch(...){
+   diagnostic.emit();
+   std::cout<<(showEntered?"WCB1 unknown unknown 1\n":"WCB1 unavailable not_checked 0\n");
+   return 2;
+  }
+ }
 struct Server {
  std::shared_ptr<Generation> generation;Tick lease;Slots slots;
  Server(std::shared_ptr<Generation> value,Tick end):generation(std::move(value)),lease(end){}
@@ -124,11 +243,11 @@ public:
    const auto reference=narrow(argument.substr(prefix.size()));require(hex(reference,32));
    // Two nonqueued guard/work slots; a full route rejects before admission.
    auto record=server->generation->record(reference);require(GetTickCount64()<end);desktop();require(GetTickCount64()<end);
-   Attempt attempt{entry,end,randomID()};auto state=server;
+   Attempt attempt{entry,end,randomID()};reserveAttempt(*server->generation,attempt.id,end);auto state=server;
    std::thread([state,attempt=std::move(attempt),record=std::move(record)]()mutable{
     // Keep completion knowledge outside publication/init exception scopes.
     // An entered SDK creation that throws still owns this worker and slot.
-    SDKOperations ops{*state->generation};
+    SDKOperations ops{*state->generation};ops.metadataEnd=attempt.deadline;
     try{winrt::init_apartment(winrt::apartment_type::multi_threaded);
     run(attempt,record,state->generation->snapshot,ops);
     state->generation->publish(attempt.id,L".worker-returned",std::string("worker_returned=1 operations_completion_known=")+(ops.operationsComplete()?"1":"0")+"\n");
@@ -165,15 +284,31 @@ public:
 }
 int WINAPI wWinMain(HINSTANCE,HINSTANCE,PWSTR command,int){
  // Only the retained, exact LocalServer32 command may compose a callback server.
- // Checkpoint B owns publishing that command. No setup command exists here.
- if(std::wstring(command)!=L"--callback -Embedding")return 2;
+ // Explicit setup operators have a separate bounded vocabulary and deadline.
  const auto lease=GetTickCount64()+65000;
+ const bool callback=std::wstring(command)==L"--callback -Embedding";
  // Establish the hard own-incarnation collection lease before any guard or
  // COM publication. Blocking SDK/COM calls cannot extend it. This never
  // certifies global quiescence; unresolved durable intents remain unknown.
  std::thread([lease]{while(GetTickCount64()<lease)Sleep(10);TerminateProcess(GetCurrentProcess(),124);}).detach();
+ wcb::OperatorDiagnostic diagnostic;
  try{
   winrt::init_apartment(winrt::apartment_type::multi_threaded);
+ if(!callback){
+  diagnostic.enter("entry_arguments");
+  int count=0;
+  auto args=CommandLineToArgvW(GetCommandLineW(),&count);
+  wcb::require(args&&count==5&&std::wstring(args[1])==L"--operator");
+  const std::wstring mode=args[2],number=args[3];
+  const auto nonce=wcb::narrow(args[4]);
+  wcb::require(wcb::hex(nonce,32));
+  wcb::require(number.size()<=20&&!number.empty()&&number.find_first_not_of(L"0123456789")==std::wstring::npos);
+  const auto end=std::stoull(number);
+  LocalFree(args);
+  diagnostic.enter("entry_deadline");
+  wcb::require(end>GetTickCount64()&&end<=lease-65000+wcb::actionBudget);
+  return wcb::operatorMain(mode,end,nonce,diagnostic);
+ }
   auto generation=std::make_shared<wcb::Generation>();
   wcb::desktop();
   wcb::require(GetTickCount64()<lease-wcb::collectionReserve);
@@ -190,5 +325,5 @@ int WINAPI wWinMain(HINSTANCE,HINSTANCE,PWSTR command,int){
    TerminateProcess(GetCurrentProcess(),124);return 124;
   }
   return 0;
- }catch(...){return 2;}
+ }catch(...){if(!callback)diagnostic.emit();return 2;}
 }
