@@ -381,7 +381,7 @@ func observeOrphanControl(root string) ([]PathAnchor, []PathAnchor, error) {
 	var locks []PathAnchor
 	for _, name := range []string{".component-install.lock", "agent-notifications.json.lock"} {
 		path := filepath.Join(root, name)
-		id, err := regularObjectID(path)
+		id, err := orphanPermanentLockIdentity(path)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -677,7 +677,7 @@ func validateOrphanLive(root string, tx transaction) error {
 	}
 	parentDev := objectDevice(controlID)
 	for _, lock := range d.ControlLocks {
-		fresh, err := regularObjectID(lock.Path)
+		fresh, err := orphanPermanentLockIdentity(lock.Path)
 		if err != nil || !MatchPersistedDirectory(lock.Identity, fresh, parentDev) {
 			return orphanConflict("control_lock", lock.Path, fmt.Errorf("permanent lock inode changed"))
 		}

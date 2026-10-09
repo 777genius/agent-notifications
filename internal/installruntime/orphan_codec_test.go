@@ -162,7 +162,7 @@ func TestOrphanSeamPreservesLegacyTransactionBytes(t *testing.T) {
 	for _, schema := range []int{1, 2, 3, 4} {
 		tx := recoveryTransaction()
 		tx.Schema = schema
-		tx.Files = []File{{Path: filepath.Join(string(filepath.Separator), "test", "asset"), Data: []byte("payload"), Mode: 0600}}
+		tx.Files = []File{{Path: filepath.Join(t.TempDir(), "asset"), Data: []byte("payload"), Mode: 0600}}
 		if schema == 4 {
 			tx.After.WriterFloor = LocalPolicyWriterFloor
 		}
