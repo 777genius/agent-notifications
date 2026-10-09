@@ -252,19 +252,20 @@ func parseAgentNotifySetup(args []string) (a agentNotifySetupArgs, help bool, er
 }
 
 type agentNotifySetupResult struct {
-	GlobalConfiguration string `json:"globalConfiguration,omitempty"`
-	Source              string `json:"source,omitempty"`
-	Changed             bool   `json:"changed,omitempty"`
-	Ready               bool   `json:"ready,omitempty"`
-	Reason              string `json:"reason"`
-	Generation          uint64 `json:"generation,omitempty"`
-	ExplicitIntent      bool   `json:"explicitIntent"`
-	RuntimeEligible     bool   `json:"runtimeEligible"`
-	Configuration       string `json:"configuration,omitempty"`
-	DesktopEnabled      *bool  `json:"desktopEnabled,omitempty"`
-	OfflineCapability   string `json:"offlineCapability,omitempty"`
-	Permission          string `json:"permission"`
-	Activation          string `json:"activation"`
+	Diagnostic          *installruntime.SnapshotDiagnostic `json:"diagnostic,omitempty"`
+	GlobalConfiguration string                             `json:"globalConfiguration,omitempty"`
+	Source              string                             `json:"source,omitempty"`
+	Changed             bool                               `json:"changed,omitempty"`
+	Ready               bool                               `json:"ready,omitempty"`
+	Reason              string                             `json:"reason"`
+	Generation          uint64                             `json:"generation,omitempty"`
+	ExplicitIntent      bool                               `json:"explicitIntent"`
+	RuntimeEligible     bool                               `json:"runtimeEligible"`
+	Configuration       string                             `json:"configuration,omitempty"`
+	DesktopEnabled      *bool                              `json:"desktopEnabled,omitempty"`
+	OfflineCapability   string                             `json:"offlineCapability,omitempty"`
+	Permission          string                             `json:"permission"`
+	Activation          string                             `json:"activation"`
 }
 
 // Composition overrides are private to hosted tests. Production always uses the
@@ -326,14 +327,17 @@ func agentNotifySetupExecute(ctx context.Context, args []string, out io.Writer, 
 				}{r, r.Changed, r.Ready})
 			} else if code != 0 && (a.operation != "status" || r.Configuration == "") {
 				err = json.NewEncoder(out).Encode(struct {
-					Reason     string `json:"reason"`
-					Generation uint64 `json:"generation,omitempty"`
-				}{r.Reason, r.Generation})
+					Reason     string                             `json:"reason"`
+					Generation uint64                             `json:"generation,omitempty"`
+					Diagnostic *installruntime.SnapshotDiagnostic `json:"diagnostic,omitempty"`
+				}{r.Reason, r.Generation, r.Diagnostic})
 			} else {
 				err = json.NewEncoder(out).Encode(r)
 			}
 		} else if code != 0 && permissionOp {
 			_, err = fmt.Fprintf(out, "%s; generation=%d. Permission: unavailable. Read-only permission-status may clarify; consult setup-notifications --help for prerequisites.\n", r.Reason, r.Generation)
+		} else if code != 0 && r.Diagnostic != nil {
+			_, err = fmt.Fprintf(out, "%s; generation=%d; diagnostic=%s; path=%q. %s\n", r.Reason, r.Generation, r.Diagnostic.Code, r.Diagnostic.Path, r.Diagnostic.Action)
 		} else if code != 0 {
 			_, err = fmt.Fprintf(out, "%s; generation=%d. Read setup-notifications --help; prepare or repair managed installation/settings with the existing installer, then reread status before retrying.\n", r.Reason, r.Generation)
 		} else {
@@ -415,7 +419,13 @@ func agentNotifySetupExecute(ctx context.Context, args []string, out io.Writer, 
 	// Snapshot can return its ledger with an unavailable native artifact; that
 	// must not turn native health into a prerequisite for explicit disable.
 	if e != nil && (a.operation != "disable" || s.Ledger.ID == "") {
-		return emit(agentNotifySetupResult{Reason: "installation_invalid"}, 1)
+		r := agentNotifySetupResult{Reason: "installation_invalid"}
+		if a.operation == "status" {
+			r.Generation = s.Ledger.Generation
+			d := installruntime.SnapshotDiagnosticFor(e)
+			r.Diagnostic = &d
+		}
+		return emit(r, 1)
 	}
 	if s.Ledger.ID == "" {
 		return emit(agentNotifySetupResult{Reason: "managed_runtime_required"}, 1)
