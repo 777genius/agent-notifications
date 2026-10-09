@@ -196,3 +196,47 @@ If a notification does not arrive, check OS permissions and notification setting
 Skipped agent-notify setup is reported separately from installed automatic hooks.
 For detailed download and setup diagnostics, prefix the final installer command
 with `BOOTSTRAP_VERBOSE=1`. Failed stages always print their diagnostics.
+
+### Recover an entirely absent installer consumer
+
+Ordinary install and removal remain strict about every managed asset. For an
+abandoned secondary runtime, use the exact consumer ID, physical runtime root,
+installation ID and positive generation from that installation's ownership
+record. A missing registration alone does not establish an orphan. Keep retained
+assets intact and preview first:
+
+```sh
+claude-notifications internal-install-runtime --recover-orphan-consumer \
+  --consumer 'codex:/absolute/TEST/codex/hooks.json' \
+  --runtime-root /absolute/TEST/codex/claude-notifications-go \
+  --control-root /absolute/TEST/config/agent-notifications \
+  --expected-installation-id INSTALLATION_ID --expected-generation 18 \
+  --dry-run --json
+```
+
+After inspecting the bounded result, repeat the same command without `--dry-run`.
+The transaction removes only that consumer's absent runtime file ownership; it
+preserves retained consumers and policy, and never deletes or recreates payload
+or the separately recorded sibling registration. Any surviving registration,
+changed retained asset, stale generation or unsupported ownership is a conflict.
+Use `setup-notifications status --control-root ABS --json` before and after.
+Preview and status are read-only and do not execute native qualification probes.
+Recovery has a three-minute deadline and cannot combine with ordinary installer
+flags, native purge, refresh or relocation. There is no force/hash bypass.
+
+An interrupted transaction is a separate explicit operation:
+
+```sh
+claude-notifications internal-install-runtime --recover-pending --control-root ABS --json
+claude-notifications internal-install-runtime --rollback-pending --control-root ABS --json
+```
+
+Select one pending operation; do not add orphan selection, stage or target flags.
+Pending modes require an existing private managed control root, valid ownership
+and an existing transaction journal and permanent locks. An installation with no
+pending journal is refused without creating locks or changing its generation.
+The durable journal supplies its own before/after fences, so these modes do not
+accept an orphan generation or consumer. Rollback restores ownership metadata,
+not missing payload, and can leave status invalid. If replay detects reappearance
+or retained corruption, preserve the marker and inspect the conflict; never
+remove the marker manually or combine pending replay with a new orphan decision.
