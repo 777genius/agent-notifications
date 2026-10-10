@@ -1458,7 +1458,14 @@ class PassiveStrace:
         assert time.monotonic() < end, 'trace/native leader synchronization deadline'
         assert actual['ppid'] == self.controller['pid'] and actual['ns'] == local['ns']
         assert actual['pgid'] == actual['sid'] == actual['pid']
-        task['nativeLeader'] = True
+        with self.parser.changed:
+            assert self.error is None and self.session.error is None, self.error or self.session.error
+            fresh = trace_task_identity(actual['pid'])
+            assert fresh == {field:actual[field] for field in fresh}, 'selected leader metadata bookend'
+            assert all(fresh[field] == task['facts'][field] for field in fresh if field not in ('pgid','sid')), 'selected leader immutable metadata drift'
+            assert time.monotonic() < end, 'trace/native leader synchronization deadline'
+            task['facts'].update(pgid=fresh['pgid'],sid=fresh['sid'])
+            task['nativeLeader'] = True
         return actual
 
     def begin_phase(self):
