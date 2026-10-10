@@ -184,6 +184,7 @@ class Observations:
         self.original_children = {'session':[],'trace':[]}
         self.killed_controls = []; self.control_eofs = []; self.diagnostic_eofs = []
         self.credential_gate = None
+        self.exec_record_gate = None
         self.held_channel_eofs = []
         self.code = {
             native.OwnedNotificationsSession.__init__.__code__:'session-init',
@@ -210,6 +211,7 @@ class Observations:
         if tag is None: return
         try:
             local = frame.f_locals
+            exec_wait = None
             with self.lock:
                 if event == 'call':
                     if tag == 'session-init': self.session = local['self']
@@ -317,6 +319,36 @@ class Observations:
                             elif (self.case == 'pid-control-eof' and method == methods[0]) or (self.case == 'uid-control-eof' and method == methods[1]):
                                 self.killed_controls.append({'child':local['child'],'identity':result,'method':method})
                                 local['child'].kill()
+                if event == 'call' and self.case == 'wrong-home' and self.active and tag in ('trace','request'):
+                    if tag == 'trace' and self.exec_record_gate is None:
+                        for returned in re.finditer(b'^([1-9][0-9]*) <\\.\\.\\. (execve|execveat) resumed>[^\\n]*\\s=\\s0\\n',self.trace_bytes,re.M):
+                            tid = int(returned[1]); syscall = returned[2].decode('ascii')
+                            prefix = self.trace.parser.pending.get(tid,'')
+                            if not prefix.startswith(syscall+'('): continue
+                            argtext = prefix.partition('[')[2].partition(']')[0]
+                            argv = [native.decoded_hex_string(value).decode('utf-8','strict')
+                                    for value in re.findall('"(?:\\\\x[0-9a-fA-F]{2})*"',argtext)]
+                            if argv != self.trace.parser.helper_argv: continue
+                            checkpoints = re.findall(b'^# R1353 ([1-9][0-9]{0,6})\\n',self.trace_bytes[:returned.start()],re.M)
+                            assert checkpoints, 'wrong HOME actual exec checkpoint absent'
+                            birth = self.trace.parser.tasks[tid]['key'][1]
+                            expected = ['R1353',self.trace.incarnation,str(self.trace.tracer['pid']),
+                                        str(int(checkpoints[-1])+1),'record',str(tid),str(birth),'0','0',syscall]
+                            self.exec_record_gate = exec_wait = {'expected':expected,'release':threading.Event()}
+                            break
+                    if self.exec_record_gate is not None:
+                        gate = self.exec_record_gate
+                        matching = [packet for packet in self.requests
+                                    if packet.decode('ascii','strict').split()[:10] == gate['expected']
+                                    and len(packet.decode('ascii','strict').split()) == 17]
+                        assert len(matching) <= 1, 'duplicate wrong HOME original exec record'
+                        if matching:
+                            gate['packet'] = matching[0]; gate['release'].set()
+            if exec_wait is not None:
+                # The original pump holds parser.changed here. Only the call
+                # witness before ack_held takes that lock releases this gate.
+                # No witness lock, ACK, or parser/checkpoint completion is awaited.
+                assert exec_wait['release'].wait(self.trace.clock.wait(1)), 'wrong HOME original exec record deadline'
             if event == 'call' and tag == 'request' and self.case == 'wrong-birth' and self.active and self.birth_refusal is None:
                 self.original_birth_refusal(local['self'],local['packet'])
             if event == 'c_return' and tag == 'trace-pump' and self.reader_armed and self.reader_fault is None and getattr(result,'__name__',None) == 'read':
