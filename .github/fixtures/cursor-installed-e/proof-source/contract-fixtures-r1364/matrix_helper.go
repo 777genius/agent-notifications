@@ -153,6 +153,8 @@ func main() {
             default: panic("TEST unknown shared operation")
             }
         })
+        // Alias-only case leaves the original socket for observed exit_group cleanup.
+        if operation == "alias-close" { return }
         // UNSHARE preserves main's descriptor; shared close already closed it.
         err = conn.Close()
         if err != nil && !(operation == "close" && errors.Is(err, syscall.EBADF)) { panic(err) }
