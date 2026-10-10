@@ -372,7 +372,7 @@ assert all(key in settings.read_text() for key in ('"AfterAgent"','"Notification
 for attempt in range(2):
     requests_before = len((lab/'loader-requests').read_text().splitlines())
     result = subprocess.run(['bash','-c',loader_command(['--products','opencode,gemini'])],
-                            cwd=project,env=env,text=True,capture_output=True,timeout=60)
+                            cwd=project,env=dict(env, BOOTSTRAP_VERBOSE=str(attempt)),text=True,capture_output=True,timeout=60)
     assert result.returncode == 0, result.stdout+'\n'+result.stderr
     requests = (lab/'loader-requests').read_text().splitlines()[requests_before:]
     assert requests.count(public_loader) == 1 and requests.count(raw+'/bootstrap.sh') == 1, requests
@@ -472,7 +472,9 @@ shutil.copytree(os.environ['TEST_SOURCE'],plugin,dirs_exist_ok=True)
     assert result.stdout.count('Installation complete') == 1, result.stdout
     for client in ('Claude', 'Codex', 'OpenCode', 'Gemini CLI'):
         assert client + ' - installed;' in result.stdout, result.stdout
-    assert 'Delivery has not been verified.' in result.stdout, result.stdout
+    assert result.stdout.count('Delivery has not been verified.') == 1, result.stdout
+    for detail in ('OpenCode notifications were tested', 'Shared settings:', 'Remove:', 'Inspect registration and consent:'):
+        assert detail not in result.stdout, result.stdout
     claude_home, codex_home = pathlib.Path(all_env['CLAUDE_CONFIG_DIR']), pathlib.Path(all_env['CODEX_HOME'])
     registered = json.loads((claude_home/'plugins/installed_plugins.json').read_text())['plugins']['claude-notifications-go@claude-notifications-go'][0]
     assert registered['version'] == version[1:] and (pathlib.Path(registered['installPath'])/'bin'/name).read_bytes() == binary.read_bytes()
@@ -497,7 +499,7 @@ if [ "$os" = windows ]; then
     mkdir -p "$gemini_profile/.gemini"
     printf '{"foreign":{"TEST":"keep"}}\n' > "$gemini_profile/.gemini/settings.json"
     export GEMINI_CLI_HOME="$(cygpath -w "$gemini_profile")"
-    install_gemini > "$SANDBOX/gemini-output"
+    BOOTSTRAP_VERBOSE=1 install_gemini > "$SANDBOX/gemini-output"
     printed=$(sed -n 's/^[[:space:]]*Remove: //p' "$SANDBOX/gemini-output")
     other_default="$SANDBOX/different default TEST config"
     mkdir -p "$other_default"

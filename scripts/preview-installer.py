@@ -571,6 +571,8 @@ def preview(args):
     trusted = private_directory(lab/'trusted-tools')
     assets = private_directory(lab/'assets')
     env = {key:os.environ[key] for key in ('TERM','COLORTERM','TERM_PROGRAM','NO_COLOR','LANG','LC_CTYPE') if key in os.environ}
+    if os.environ.get('BOOTSTRAP_VERBOSE') == '1':
+        env['BOOTSTRAP_VERBOSE'] = '1'
     env['PATH'] = str(commands)+os.pathsep+str(trusted)
     for tool in TOOLS:
         source = shutil.which(tool)

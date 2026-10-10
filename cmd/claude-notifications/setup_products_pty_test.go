@@ -863,7 +863,7 @@ func TestBootstrapPartialProgress(t *testing.T) {
 	t.Run("mixed actual completion", func(t *testing.T) {
 		f := newBootstrapFixture(t)
 		r := f.noTTY("--products", "opencode,gemini", "--webhook")
-		if r.code != 0 || !strings.Contains(r.screen, "opencode: completed") || !strings.Contains(r.screen, "gemini: completed") {
+		if r.code != 0 || !strings.Contains(r.out, "OpenCode - installed;") || !strings.Contains(r.out, "Gemini CLI - installed;") || strings.Count(r.out, "Delivery has not been verified.") != 1 {
 			t.Fatalf("mixed completion: %+v", r)
 		}
 		f.assertConsumer("opencode-notifications", true)
