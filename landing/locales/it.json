@@ -12,7 +12,7 @@
     "items": {
       "1": { "label": "TORNA CON UN CLIC", "title": "Torna con un clic", "text": "Fai clic su una notifica per tornare al suo terminale, editor o scheda, dove supportato. Solo Claude e Codex CLI; dipende dal terminale e dal sistema operativo." },
       "2": { "label": "CONTROLLI AUDIO", "title": "Un suono per ogni momento", "text": "Scegli i suoni, regola il volume e seleziona un dispositivo audio. Mantieni gli avvisi che vuoi e silenzia gli altri. Solo Claude e Codex CLI." },
-      "3": { "label": "INTEGRAZIONI WEBHOOK", "title": "Il tuo flusso di lavoro, connesso", "text": "Invia aggiornamenti a Slack, Discord, Telegram, Teams e altri servizi. Configura i webhook per gli strumenti che usi." }
+      "3": { "label": "INTEGRAZIONI WEBHOOK", "title": "Il tuo flusso di lavoro, connesso", "text": "Invia aggiornamenti a Slack, Discord, Telegram, Lark/Feishu e webhook personalizzati. Configura le destinazioni per il tuo ambiente di lavoro." }
     },
     "preview": { "focus":"Fai clic per tornare","return":"Torna al terminale","done": "Il tuo agente ha finito", "ready": "Pronto quando vuoi.", "sound": "Il tuo suono. Il tuo volume.", "event": "Evento dell'agente" },
     "foot": "Il supporto per la messa a fuoco con un clic dipende dal terminale e dal sistema operativo. OpenCode: avvisi silenziosi di completamento, domande, permessi ed errori per la sessione principale. Senza suoni né attivazione della finestra al clic.", "details": "Vedi i dettagli delle piattaforme"
@@ -36,7 +36,7 @@
       "none": "Non supportato"
     },
     "legend": "«Scheda/pannello esatto» mette a fuoco esattamente lo split o la scheda giusta. «Livello finestra» porta in primo piano l'intera finestra dell'app. «Miglior tentativo» significa che il plugin prova una corrispondenza generica che potrebbe centrare la finestra sbagliata.",
-    "windowsNote": "Su Windows il focus è sempre a livello di finestra — non esiste un'API pubblica per puntare a una scheda specifica dentro Windows Terminal.",
+    "windowsNote": "Windows Terminal supporta il focus a livello di finestra. Warp può selezionare una scheda o un riquadro preciso su Windows; il supporto varia per terminale.",
     "fallbackNote": "Qualsiasi altro terminale funziona comunque tramite corrispondenza generica della finestra. Su macOS puoi sostituire l'app rilevata con un bundle ID personalizzato.",
     "detailsLink": "Tutti i dettagli su permessi e compositor",
     "notes": {
@@ -82,11 +82,11 @@
   "faq": {
     "eyebrow": "QUALCHE COSA DA SAPERE", "title": "Domande frequenti", "subtitle": "Tutto ciò che serve per tornare al lavoro.",
     "items": {
-      "1": { "question": "Devo installare tutti gli agenti?", "answer": "Scegli qualsiasi combinazione di Claude, Codex CLI e OpenCode. Installa prima gli agenti scelti; i comandi seguenti installano le notifiche." },
+      "1": { "question": "Devo installare tutti gli agenti?", "answer": "Scegli una combinazione di Claude, Codex CLI, OpenCode e Gemini CLI (solo Linux / Windows). Installa prima gli agenti scelti; i comandi seguenti installano le notifiche." },
       "2": { "question": "Gli hook di Codex vengono installati automaticamente?", "answer": "Sì. Il programma di installazione registra gli hook e salva una copia stabile del runtime. Apri /hooks in Codex per verificarli e autorizzarli. Le definizioni modificate richiedono una nuova verifica." },
       "3": { "question": "Un aggiornamento azzera le mie impostazioni?", "answer": "Il programma di installazione conserva la configurazione condivisa e gli hook di Codex di terze parti. Installazione e aggiornamento usano lo stesso comando. Riavvia l'agente selezionato dopo l'aggiornamento." },
       "4": { "question": "Posso scegliere quali eventi emettono un suono?", "answer": "Sì. Configura suoni, volume, dispositivo audio e canali di notifica. Scegli Configura nella guida per i passaggi specifici del tuo agente. Solo Claude e Codex CLI." },
-      "5": { "question": "La messa a fuoco con un clic funziona ovunque?", "answer": "Il supporto varia in base al sistema operativo e al terminale. iTerm2 richiede la sua API Python per selezionare la scheda esatta. Windows porta in primo piano una finestra, non una scheda specifica. OpenCode: avvisi silenziosi di completamento, domande, permessi ed errori per la sessione principale. Senza suoni né attivazione della finestra al clic.", "link": "Consulta gli ambienti supportati." },
+      "5": { "question": "La messa a fuoco con un clic funziona ovunque?", "answer": "Il supporto varia in base al sistema operativo e al terminale. iTerm2 richiede la sua API Python per selezionare la scheda esatta. Windows Terminal porta in primo piano una finestra; Warp può selezionare una scheda o un riquadro preciso. OpenCode: avvisi silenziosi di completamento, domande, permessi ed errori per la sessione principale. Senza suoni né attivazione della finestra al clic.", "link": "Consulta gli ambienti supportati." },
       "6": { "question": "E se non ricevo una notifica?", "answer": "Controlla le autorizzazioni delle notifiche del sistema operativo e i canali scelti. Per Codex, verifica che gli hook siano autorizzati.", "link": "Segui la risoluzione dei problemi per i controlli specifici della piattaforma." }
     }
   },
@@ -123,7 +123,7 @@
   "select": { "scrollUp": "Scorri le opzioni verso l'alto", "scrollDown": "Scorri le opzioni verso il basso" },
   "install": {
     "platformRelease": "Versione verificata per {os}: {version}.",
-    "agentNotify": {"label": "Consenti agli agenti di inviarti notifiche quando serve la tua attenzione", "hint": "Aggiunge uno strumento di notifica per Claude e Codex CLI durante un’attività, non solo alla fine."},
+    "agentNotify": {"label": "Consenti agli agenti di inviarti notifiche quando serve la tua attenzione", "hint": "Controlla la configurazione di uno strumento di notifica per Claude e Codex CLI durante un’attività. Se selezionato segue le preferenze salvate; se deselezionato salta la configurazione per questa esecuzione e conserva lo strumento esistente."},
     "title": "Configura le notifiche", "intro": "Segui i passaggi per aggiungere notifiche a {agent}.", "chooseAgent": "Scegli i tuoi agenti", "requires": "Richiede {agent}", "bothAgents": "Entrambi gli agenti", "bothSelected": "✓ Entrambi gli agenti selezionati", "installBoth": "Installa per entrambi gli agenti", "chooseComputer": "Scegli il computer su cui è in esecuzione il tuo agente", "selected": "Selezionato", "detected": "Rilevato automaticamente", "change": "Cambia", "targetOs": "Sistema operativo di destinazione",
     "products": { "claude": "Claude", "codex": "Codex CLI", "both": "Claude + Codex CLI",
       "opencode": "OpenCode",
@@ -145,8 +145,9 @@
       "gemini": "Gemini CLI (Linux / Windows): avvisi silenziosi di turno concluso e permesso per strumenti. Un turno concluso non implica successo né risposta finale. Nessun suono, focus al clic, domanda, errore, piano, revisione o parità per agenti annidati."
     },
     "gemini": {
-      "version": "Linux / Windows: 1.48.5 (Gemini CLI 0.62.0). macOS: 1.48.5 (Claude, Codex CLI, OpenCode; Gemini non disponibile)",
+      "version": "Gemini CLI richiede esattamente la versione 0.62.0. Disponibile solo su Linux / Windows; le altre versioni CLI vengono rifiutate.",
       "guide": "Configurazione e limiti di Gemini",
+      "restart": "Riavvia Gemini CLI per caricare l’osservatore delle notifiche.",
       "configure": "Consulta la guida Gemini per consenso ai canali e impostazioni condivise; nessun MCP o skill installato. Gli avvisi integrati possono duplicarsi. Scegli una fonte desktop o solo webhook; le impostazioni integrate non vengono modificate."
     },
     "observer": {
@@ -157,13 +158,13 @@
       "channelsTitle": "Canali di notifica OpenCode",
       "channelsHint": "Queste scelte valgono solo per OpenCode. Autorizza almeno un canale; gli URL dei webhook si configurano separatamente.",
       "scope": "OpenCode: avvisi silenziosi di completamento, domande, permessi ed errori per la sessione principale. Senza suoni né attivazione della finestra al clic.",
-      "version": "Testato con OpenCode 1.18.33. Richiede il plugin 1.46.0 o successivo. OpenCode V2 non è supportato.",
+      "version": "Sono accettate le versioni stabili di OpenCode V1 ≥1.18.29 e V2 ≥2.0.0. La validazione varia per versione e piattaforma; consulta la guida alla configurazione.",
       "desktop": "Consenti notifiche desktop",
       "webhook": "Consenti notifiche webhook",
       "chooseChannel": "Scegli almeno un canale di notifica.",
       "guide": "Configurazione e limiti di OpenCode",
       "restart": "Riavvia OpenCode per caricare il plugin globale. Su macOS, autorizza le notifiche seguendo la guida.",
-      "configure": "Usa config path per le impostazioni condivise. Autorizza desktop/webhook con setup-opencode; configura separatamente le destinazioni webhook."
+      "configure": "Usa config path --target opencode per le impostazioni OpenCode. Autorizza desktop/webhook con setup-opencode; configura separatamente le destinazioni webhook."
     }
   },
   "agentSupport": {
@@ -175,7 +176,7 @@
     "conditional": "Supportata con limiti",
     "legend": "✓ Supportata · ✕ Non supportata · ✓* Con limiti",
     "conditions": "* Le domande di Codex dipendono dalla modalità; errori e limiti vengono rilevati dal messaggio finale. Il focus al clic dipende dal sistema e dal terminale.",
-    "qualification": "Codex: la consegna tramite hook su Windows e l'hook delle domande non sono ancora verificati in sessioni reali.",
+    "qualification": "Le richieste di permesso Claude appaiono come domande. Gli hook delle domande Codex sono sperimentali; errori e limiti sono dedotti dal testo del messaggio finale. Consulta le guide collegate per i dettagli della validazione.",
     "v2Link": "Cos'è OpenCode V2?",
     "rows": {
       "completion": "Completato",

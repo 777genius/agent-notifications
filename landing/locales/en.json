@@ -51,7 +51,7 @@
       "3": {
         "label": "WEBHOOK INTEGRATIONS",
         "title": "Your workflow, connected",
-        "text": "Send updates to Slack, Discord, Telegram, Teams and more. Configure webhooks for wherever you work."
+        "text": "Send updates to Slack, Discord, Telegram, Lark/Feishu and custom webhooks. Configure destinations for wherever you work."
       }
     },
     "preview": {
@@ -84,7 +84,7 @@
       "none": "Not supported"
     },
     "legend": "Exact tab/pane focuses the precise split or tab. Window-level raises the whole app window. Best-effort means the plugin tries a generic match that may land on the wrong window.",
-    "windowsNote": "On Windows, focus is always window-level — there is no public API to target one tab inside Windows Terminal.",
+    "windowsNote": "Windows Terminal supports window-level focus. Warp can target an exact tab or pane on Windows; support varies by terminal.",
     "fallbackNote": "Any other terminal still works through generic window matching. Override the detected app with a custom bundle ID on macOS.",
     "detailsLink": "Full permission & compositor details",
     "notes": {
@@ -134,7 +134,7 @@
     "items": {
       "1": {
         "question": "Do I need every agent installed?",
-        "answer": "Select any combination of Claude, Codex CLI and OpenCode. Install the selected agents first; the commands below install notifications."
+        "answer": "Select any combination of Claude, Codex CLI, OpenCode and Gemini CLI (Linux / Windows only). Install the selected agents first; the commands below install notifications."
       },
       "2": {
         "question": "Are Codex hooks installed automatically?",
@@ -150,7 +150,7 @@
       },
       "5": {
         "question": "Does click-to-focus work everywhere?",
-        "answer": "Support varies by OS and terminal. iTerm2 needs its Python API for precise tab targeting. Windows focuses a window, not an exact tab. OpenCode: silent completion, question, permission and error alerts for root sessions. No sound or click-to-focus.",
+        "answer": "Support varies by OS and terminal. iTerm2 needs its Python API for precise tab targeting. Windows Terminal focuses a window; Warp can target an exact tab or pane. OpenCode: silent completion, question, permission and error alerts for root sessions. No sound or click-to-focus.",
         "link": "Check supported environments."
       },
       "6": {
@@ -281,7 +281,7 @@
     "configureSettings": "⚙ Configure settings",
     "agentNotify": {
       "label": "Let agents send you notifications when they need your attention",
-      "hint": "Adds a notification tool for Claude and Codex CLI during a task, not only when work stops."
+      "hint": "Controls setup of a notification tool for Claude and Codex CLI during a task. Checked follows saved setup preferences; unchecked skips setup for this run and retains any existing tool."
     },
     "capabilities": {
       "title": "Selected agent capabilities",
@@ -292,8 +292,9 @@
       "gemini": "Gemini CLI (Linux / Windows): silent turn-completed and tool-permission alerts. A completed turn does not imply success or a final answer. No sound, click-to-focus, question, error, plan, review or nested-agent parity."
     },
     "gemini": {
-      "version": "Linux / Windows: 1.48.5 (Gemini CLI 0.62.0). macOS: 1.48.5 (Claude, Codex CLI, OpenCode; Gemini unavailable)",
+      "version": "Gemini CLI requires exactly version 0.62.0. Available on Linux / Windows only; other CLI versions are rejected.",
       "guide": "Gemini setup and limits",
+      "restart": "Restart Gemini CLI to load the notification observer.",
       "configure": "Use the Gemini guide for channel consent and shared settings; no MCP tool or skill is installed. Built-in Gemini notifications can duplicate desktop alerts. Choose one desktop source or webhook-only; built-in settings are not changed."
     },
     "observer": {
@@ -304,13 +305,13 @@
       "channelsTitle": "OpenCode notification channels",
       "channelsHint": "These choices apply only to OpenCode. Allow at least one channel; webhook URLs are configured separately.",
       "scope": "OpenCode: silent completion, question, permission and error alerts for root sessions. No sound or click-to-focus.",
-      "version": "Tested with OpenCode 1.18.33. Requires plugin release 1.46.0 or newer. OpenCode V2 is not supported.",
+      "version": "Stable OpenCode V1 ≥1.18.29 and V2 ≥2.0.0 are accepted. Qualification varies by version and platform; see the setup guide.",
       "desktop": "Allow desktop notifications",
       "webhook": "Allow webhook notifications",
       "chooseChannel": "Choose at least one notification channel.",
       "guide": "OpenCode setup and limitations",
       "restart": "Restart OpenCode to load the global plugin. On macOS, grant notification permission using the setup guide.",
-      "configure": "Use config path for shared settings. Enable desktop/webhook consent with setup-opencode; configure webhook endpoints separately."
+      "configure": "Use config path --target opencode for OpenCode settings. Enable desktop/webhook consent with setup-opencode; configure webhook endpoints separately."
     }
   },
   "agentSupport": {
@@ -322,7 +323,7 @@
     "conditional": "Supported with limitations",
     "legend": "✓ Supported · ✕ Not supported · ✓* Supported with limitations",
     "conditions": "* Codex questions depend on the active mode; errors and limits are detected from the final message. Click-to-focus depends on your OS and terminal.",
-    "qualification": "Codex: Windows hook delivery and the question tool hook are not yet qualified in live sessions.",
+    "qualification": "Claude permission prompts appear as Question alerts. Codex question hooks are experimental; error and limit detection uses final-message heuristics. See the linked guides for qualification details.",
     "v2Link": "What is OpenCode V2?",
     "rows": {
       "completion": "Completed",

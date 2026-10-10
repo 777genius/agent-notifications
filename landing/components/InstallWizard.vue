@@ -219,6 +219,7 @@ async function copy() {
           >{{ t("install.manual.codex") }}</a
         >
       </p>
+      <p v-if="selectedProducts.opencode"><a :href="repo + '/blob/main/docs/opencode-notifications.md'">{{ t("install.opencode.guide") }}</a></p>
       <p v-if="selectedProducts.gemini">{{ t("install.gemini.version") }} <a :href="repo + '/blob/main/docs/gemini-notifications.md'">{{ t("install.gemini.guide") }}</a></p>
     </div>
     <div v-else-if="!snippet" class="setup-panel instructions">
@@ -335,6 +336,7 @@ async function copy() {
               {{ t("install.steps.restartCodex") }}
             </p>
             <p v-if="selectedProducts.opencode">{{ t("install.opencode.restart") }}</p>
+            <p v-if="selectedProducts.gemini">{{ t("install.gemini.restart") }}</p>
           </div>
         </article>
       </div>
