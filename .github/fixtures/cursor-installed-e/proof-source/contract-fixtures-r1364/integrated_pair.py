@@ -1195,7 +1195,7 @@ def run_pair(args,root):
             elif args.case == 'wrong-table': result['actualTableRefusal'] = wrong_table_refusal(witness,watched)
             elif args.case in ('output-reader-failure','debug-reader-failure','output-reader-deadline'):
                 witness.reader_armed = True
-                native.control_send(outer,{'kind':'pulse'},clock)
+                native.control_send(outer,{'kind':'pulse-fd'} if args.case == 'output-reader-deadline' else {'kind':'pulse'},clock)
             elif args.case == 'fatal-die':
                 assert witness.blocked_hold and witness.blocked_hold['context'] is watched
                 assert native.proc_identity(trace.child.pid,trace.tracer) == trace.tracer

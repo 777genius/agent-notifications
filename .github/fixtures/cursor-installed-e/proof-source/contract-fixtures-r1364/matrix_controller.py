@@ -3,6 +3,7 @@ import argparse
 import array
 import stat
 import ctypes
+import fcntl
 import importlib.util
 import json
 import os
@@ -88,8 +89,10 @@ def main():
                     native.control_send(peer,{'kind':'exported-socket','socket':[facts.st_dev,facts.st_ino]},clock)
             if select.select([peer],[],[],.001)[0]:
                 command = native.control_receive(peer,clock)
-                if command == {'kind':'pulse'}:
+                if command in ({'kind':'pulse'},{'kind':'pulse-fd'}):
                     native.control_send(peer,{'kind':'pulse-observed'},clock)
+                    if command == {'kind':'pulse-fd'}:
+                        fcntl.fcntl(peer.fileno(),fcntl.F_GETFD)
                 elif command == {'kind':'shutdown-exported'}:
                     assert exported is not None and environment['helperMode'] == 'final-incarnation-drift'
                     before = os.fstat(exported.fileno())
