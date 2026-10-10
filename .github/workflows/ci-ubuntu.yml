@@ -692,12 +692,12 @@ jobs:
           assert bounded_git(['rev-parse','HEAD'],41) == b'9f014e72af510783d58d00ad3d2db455a2f8117b\n'
           assert bounded_git(['cat-file','-t',transport_sha],7) == b'commit\n'
           tuples = (
-              ('contract-fixtures-r1364/MATRIX_README.md', 26982, 'f40cc69a021f0252ed47f6682f1d089e433eb418cc0e0e6d347e01178c694743'),
+              ('contract-fixtures-r1364/MATRIX_README.md', 26982, 'c0664460faffad85b3ebfc9c6a4bbbe3934fee779ab751d3f215132b90821c42'),
               ('contract-fixtures-r1364/REMAINING_SOURCE_REVIEW.md', 13054, 'a29f64098ec2d7617a650a8929859bc5166b663bb84f41a336efcf98bfc656c3'),
-              ('contract-fixtures-r1364/build_fixtures.py', 9654, '9749eee30c4a57a1f4c1f12dd2be20af51201eafcffc257c3ab96b9348b6bd35'),
+              ('contract-fixtures-r1364/build_fixtures.py', 9654, 'ef08ec3985eeb79c52a3fb5a2f9f3fb8581a64e9b2cd8cc2f1102a921dfc11d3'),
               ('contract-fixtures-r1364/held_child.c', 2333, '0d7d8df99fe89445ad5be0f3ef88b753d30d32d86ee415af9f4ee800d2e2bd33'),
-              ('contract-fixtures-r1364/integrated_pair.py', 109358, 'ff190c541471293282a89a66aaff2fab2d4209fbef9791ae44ba9b6f8bd79eb7'),
-              ('contract-fixtures-r1364/lifecycle.py', 20374, 'b86910dbc5be63e35e6f99159fd5e0ae2f9f6e554ecbaa65465152a9064a44d5'),
+              ('contract-fixtures-r1364/integrated_pair.py', 109358, '24befaa9de44dec6daeacbc902f03426ecd17d7efe8ae5b052c3e7a0ff4cb7aa'),
+              ('contract-fixtures-r1364/lifecycle.py', 20374, '4a959b3c17a3fe1c192c1ed8bcbfe6192b3718e43f3e69dbc9402393210c6802'),
               ('contract-fixtures-r1364/matrix-go.mod', 149, '1baa91c9635240cb9433575d68989fff5213f03298abbbf50ea8006fa3120f52'),
               ('contract-fixtures-r1364/matrix-go.sum', 322, '7556b81d5e8726d4d82ddf008b6c89eab585731afaf27c4a6b27ee6a8ae3e8be'),
               ('contract-fixtures-r1364/matrix_actor.c', 3889, '0541d4e8e3d61269aaaa5dcdf6f5f8a5cd09a3fe5651fda077e689a08f5eb390'),
@@ -708,13 +708,13 @@ jobs:
               ('exact-old-executor/linux_contract.py', 11950, 'ef77db92d6adc58b6dbf18c52ab3085118981ae15a2824fa46add7e7ef467752'),
               ('exact-old-executor/native_case.py', 277880, '07047821776a91e3095eb5d4baed8467eb019ad31a8649fd58d67ca5ce46b6cc'),
               ('linux_contract.py', 33794, '4a988581ec81e813c8f1aa0a2056a202dcf71f2ad66580fa22b1596e23edffe8'),
-              ('native_case.py', 286788, '29bded614d80a1a1ffe6d075d1f847e45f7d6eee6c63241bf8f4634188787e6e'),
+              ('native_case.py', 288648, 'b99478b2b5b23cef65cf58f31d19ff382cfe4ddb4fcb185caa8856255310e113'),
               ('src/defs.h', 70911, '9914057470fbec3428b051c4a307fe48e7c19207192a936b88c5b14b8a624eae'),
               ('src/strace.c', 133140, '656ccbcd614055b777a11d69bc55e35a0256426f421ea4f7c58026e95fa029e5'),
               ('src/syscall.c', 38750, '390ff1bc410226b4c843ee046ba8e576879e0edc2b3b3087c79afb4ceb506803'),
               ('exact-old-executor/src/strace.c', 125181, '7953842ccb83b6419172217943b0f1c40ce4b10f3514a093ea9feb333f1da452'),
           )
-          assert len(tuples) == 21 and sum(row[1] for row in tuples) == 1190458
+          assert len(tuples) == 21 and sum(row[1] for row in tuples) == 1192318
           workspace = pathlib.Path(subprocess.check_output(['/usr/bin/sudo','-n','/usr/bin/python3','-B','-S','-c',"import os,pathlib,tempfile; p=pathlib.Path(tempfile.mkdtemp(prefix='TEST-cursor-proof-',dir='/srv/workers')); p.chmod(0o755); (p/'source').mkdir(mode=0o755); os.chown(p/'source',int(os.environ['SUDO_UID']),int(os.environ['SUDO_GID'])); print(p)"],text=True,timeout=5).strip())
           assert workspace.parent == pathlib.Path('/srv/workers') and workspace.name.startswith('TEST-cursor-proof-') and workspace.resolve(strict=True) == workspace and workspace.stat().st_uid == 0
           with open(os.environ['GITHUB_ENV'],'a') as environment: environment.write('CURSOR_PROOF_WORKSPACE='+str(workspace)+'\n')

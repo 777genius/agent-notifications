@@ -541,6 +541,7 @@ class StdinAliasTrace:
         self.tasks = {}
         self.pending = {}
         self.pending_reads = {}
+        self.acked_fd_entries = {}
         self.selected = []
         self.total = self.events = 0
         self.fragment = b''
@@ -856,11 +857,15 @@ class StdinAliasTrace:
                     capture['reading'] = tid
             self.pending[tid] = prefix
             return
+        fd_entry = None
         resumed = re.fullmatch(r'<\.\.\. (\w+) resumed>(.*)',call)
         if resumed:
             assert tid in self.pending, 'resumed without unfinished'
             prefix = self.pending.pop(tid)
             assert prefix.startswith(resumed[1]+'('), 'resumed syscall mismatch'
+            fd_entry = self.acked_fd_entries.get(tid)
+            if fd_entry is not None:
+                assert fd_entry['key'] == task['key'] and fd_entry['prefix'] == prefix and fd_entry['table'] is task['fds'], 'ACKed FD return incarnation'
             call = prefix+resumed[2]
             if tid in self.pending_reads:
                 fd,old,table = self.pending_reads.pop(tid)
@@ -939,7 +944,9 @@ class StdinAliasTrace:
         elif name in ('dup','dup2','dup3') and number is not None and number >= 0:
             old = int(args.split(',',1)[0])
             if name != 'dup': assert number == int(args.split(',')[1]), 'dup target mismatch'
-            if name == 'dup2' and old == number: return  # POSIX no-op preserves FD_CLOEXEC.
+            if name == 'dup2' and old == number:
+                if fd_entry is not None: self.acked_fd_entries.pop(tid)
+                return  # POSIX no-op preserves FD_CLOEXEC.
             task['fds'][number] = dict(task['fds'].get(old,{'lineage':False}))
             task['fds'][number]['cloexec'] = 'O_CLOEXEC' in args
             if capture and old == 0 and task['fds'][number].get('lineage') and number != 0:
@@ -1003,10 +1010,11 @@ class StdinAliasTrace:
         if capture and name in ('dup','dup2','dup3','fcntl','close','close_range','clone','clone3','fork','vfork','exit','exit_group'):
             assert len(capture['events']) < 4096, 'selected lineage event budget'
             capture['events'].append({'tidBirth':task['key'],'syscall':call})
+        if fd_entry is not None: self.acked_fd_entries.pop(tid)
 
     def finish(self):
         with self.lock:
-            assert not self.fragment and not self.pending and not self.pending_reads and self.error is None and not self.clone_edges and not self.checkpoints and not any(task.get('earlyChildCalls') for task in self.tasks.values()), 'partial trace stream/unknown child ancestry'
+            assert not self.fragment and not self.pending and not self.pending_reads and not self.acked_fd_entries and self.error is None and not self.clone_edges and not self.checkpoints and not any(task.get('earlyChildCalls') for task in self.tasks.values()), 'partial trace stream/unknown child ancestry'
             assert all(c['exited'] and c['eof'] and c['reading'] is None for c in self.selected), 'unfinished helper stream'
             return self.selected
 
@@ -1321,9 +1329,19 @@ class PassiveStrace:
                     assert fresh_child['tgid'] == task['facts']['tgid'] or fresh_child['ppid'] == task['facts']['tgid'], 'owned held child parent/group'
                     self.custody_keys.add((child,child_birth))
                 table = task['fds']
-                if phase == 'clone': self.parser.held_clone(tid,child,birth,child_birth,int(fields[10]))
+                if phase == 'clone':
+                    # The trace pump must consume returns before fresh FD snapshots.
+                    # Only exact ACKed entries can run; unACKed held work must not wait.
+                    assert self.parser.changed.wait_for(lambda:self.error or not any(
+                        entry['table'] is table for entry in self.parser.acked_fd_entries.values()),
+                        self.clock.wait(1)), 'ACKed shared FD return deadline'
+                    assert self.error is None and self.session.error is None, self.error or self.session.error
+                    self.parser.held_clone(tid,child,birth,child_birth,int(fields[10]))
                 conn = self.parser.held_entry(task,fields[9],arguments,self.session) if phase == 'entry' else None
                 capture = task.get('capture')
+                if phase == 'clone':
+                    self.complete_held((packet,seq,phase,tid,birth,fields[9],arguments,table,capture,None))
+                    return  # Keep both FD proofs and ACK atomic against other entry ACKs.
             context = (packet,seq,phase,tid,birth,fields[9],arguments,table,capture,conn)
             if conn is not None:
                 with self.parser.changed:
@@ -1370,8 +1388,14 @@ class PassiveStrace:
                                 assert all(self.session.roundtrip_present(call) for call in self.session.credential_receipts[name]), 'consumed original credential roundtrips lost'
                             assert self.clock.wait(1) > 0 and self.error is None and self.session.error is None, 'held ACK deadline/first error'
                             assert packet not in self.pending_acks, 'duplicate ACK authority'
+                            fd_entry = None
+                            if phase == 'entry' and syscall in ('close','close_range','dup2','dup3'):
+                                prefix = self.parser.pending.get(tid,'')
+                                assert prefix.startswith(syscall+'(') and tid not in self.parser.acked_fd_entries, 'exact held FD entry ACK'
+                                fd_entry = {'sequence':seq,'key':task['key'],'prefix':prefix,'table':table}
                             self.pending_acks[packet] = keys
                             assert self.observer_peer.send(b'ACK '+packet,socket.MSG_DONTWAIT) == len(packet)+4, 'exact held ACK write'
+                            if fd_entry is not None: self.parser.acked_fd_entries[tid] = fd_entry
                             if conn is not None:
                                 conn['acked'] = True  # Publish only after the exact ACK is accepted by the channel.
                                 capture.setdefault('busLifetimeReceipts',[]).append({'sequence':seq,'tidBirth':task['key'],

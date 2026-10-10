@@ -30,7 +30,7 @@ import time
 HERE = Path(__file__).resolve().parent
 IMPLEMENTATION = HERE.parent
 ORIGINAL_ROOT = IMPLEMENTATION
-PINS = {'native_case.py':'29bded614d80a1a1ffe6d075d1f847e45f7d6eee6c63241bf8f4634188787e6e',
+PINS = {'native_case.py':'b99478b2b5b23cef65cf58f31d19ff382cfe4ddb4fcb185caa8856255310e113',
         'src/strace.c':'656ccbcd614055b777a11d69bc55e35a0256426f421ea4f7c58026e95fa029e5',
         'src/defs.h':'9914057470fbec3428b051c4a307fe48e7c19207192a936b88c5b14b8a624eae',
         'src/syscall.c':'390ff1bc410226b4c843ee046ba8e576879e0edc2b3b3087c79afb4ceb506803'}
