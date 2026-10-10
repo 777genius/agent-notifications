@@ -1106,14 +1106,15 @@ def run_pair(args,root):
             with trace.parser.lock: progress = trace.parser.events
             idle_end = min(absolute_end,time.monotonic()+.6)
             while True:
-                now = time.monotonic()
-                assert now < min(absolute_end,idle_end), 'actual held destructive context absolute/no-progress deadline'
-                if trace.error or owner.first: raise RuntimeError(trace.error or owner.first)
-                watched = witness.snapshot_context()
-                if watched is not None: break
+                assert time.monotonic() < absolute_end, 'actual held destructive context absolute deadline'
                 with trace.parser.lock: current_progress = trace.parser.events
                 if current_progress > progress:
                     progress = current_progress; idle_end = min(absolute_end,time.monotonic()+.6)
+                assert time.monotonic() < min(absolute_end,idle_end), 'actual held destructive context absolute/no-progress deadline'
+                if trace.error or owner.first: raise RuntimeError(trace.error or owner.first)
+                watched = witness.snapshot_context()
+                assert time.monotonic() < min(absolute_end,idle_end), 'actual held destructive context late acquisition'
+                if watched is not None: break
                 time.sleep(min(.005,max(0,min(absolute_end,idle_end)-time.monotonic())))
             if args.case == 'monitor-eof': session.monitor['child'].kill()
             elif args.case in ('diagnostic-race','final-ack-race'):
