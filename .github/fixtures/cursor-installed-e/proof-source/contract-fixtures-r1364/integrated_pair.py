@@ -211,7 +211,7 @@ class Observations:
         if tag is None: return
         try:
             local = frame.f_locals
-            exec_wait = None
+            exec_wait = None; exec_notify = False
             with self.lock:
                 if event == 'call':
                     if tag == 'session-init': self.session = local['self']
@@ -343,12 +343,17 @@ class Observations:
                                     and len(packet.decode('ascii','strict').split()) == 17]
                         assert len(matching) <= 1, 'duplicate wrong HOME original exec record'
                         if matching:
-                            gate['packet'] = matching[0]; gate['release'].set()
+                            gate['packet'] = matching[0]; gate['release'].set(); exec_notify = True
+            if exec_notify:
+                with self.trace.parser.changed: self.trace.parser.changed.notify_all()
             if exec_wait is not None:
-                # The original pump holds parser.changed here. Only the call
-                # witness before ack_held takes that lock releases this gate.
+                # The original pump holds parser.changed here. Its Condition
+                # releases every RLock level so pending DONE receipts can pass.
                 # No witness lock, ACK, or parser/checkpoint completion is awaited.
-                assert exec_wait['release'].wait(self.trace.clock.wait(1)), 'wrong HOME original exec record deadline'
+                with self.trace.parser.changed:
+                    assert self.trace.parser.changed.wait_for(lambda:self.trace.error or self.session.error or
+                        exec_wait['release'].is_set(),self.trace.clock.wait(1)), 'wrong HOME original exec record deadline'
+                    assert self.trace.error is None and self.session.error is None, self.trace.error or self.session.error
             if event == 'call' and tag == 'request' and self.case == 'wrong-birth' and self.active and self.birth_refusal is None:
                 self.original_birth_refusal(local['self'],local['packet'])
             if event == 'c_return' and tag == 'trace-pump' and self.reader_armed and self.reader_fault is None and getattr(result,'__name__',None) == 'read':
