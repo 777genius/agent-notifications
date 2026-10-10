@@ -2,7 +2,7 @@
 	dev-local-install dev-local-update dev-local-bootstrap dev-local-status dev-local-reset \
 	dev-real-local dev-real-remote dev-real-toggle dev-real-status \
 	e2e-status e2e-smoke e2e-smoke-installed e2e-manual e2e-manual-installed \
-	linux-focus-debug preview-installer
+	linux-focus-debug preview-installer release-preflight release-tools-check codex-release-smoke
 
 # Binary names
 BINARY=claude-notifications
@@ -76,6 +76,22 @@ install: build ## Install binary to /usr/local/bin
 	@echo "Installing $(BINARY) to /usr/local/bin..."
 	@cp $(BINARY_PATH) /usr/local/bin/$(BINARY)
 	@echo "Installation complete!"
+
+# Release operator checks (install locked tool dependencies once with npm ci).
+release-preflight: ## Check published metadata before release preparation (RELEASE_PREFLIGHT_ARGS optional)
+	@node scripts/release-preflight.mts $(if $(strip $(RELEASE_PREFLIGHT_ARGS)),$(RELEASE_PREFLIGHT_ARGS),--mode snapshot)
+
+release-tools-check: ## Typecheck and test release tooling without agents, native registration or GitHub effects
+	@npm --prefix scripts/codex-offline-release-smoke run typecheck
+	@scripts/codex-offline-release-smoke/node_modules/.bin/tsc --noEmit -p scripts/release-tools-tsconfig.json
+	@npm --prefix scripts/codex-offline-release-smoke test
+	@node --test scripts/release-progress.test.mts scripts/release-preflight.test.mts scripts/basic-release-assets/assets.test.mts
+	@bash scripts/codex-release-gate_test.sh
+	@python3 scripts/stage-released-loader-test.py
+
+codex-release-smoke: ## Run one explicit isolated Codex E2E phase (SMOKE_PHASE, SMOKE_INPUTS required)
+	@test -n "$(SMOKE_PHASE)" && test -n "$(SMOKE_INPUTS)" || { echo 'Set SMOKE_PHASE and SMOKE_INPUTS (see scripts/codex-offline-release-smoke/README.md)' >&2; exit 2; }
+	@node scripts/codex-offline-release-smoke/run-phase.mts "$(SMOKE_PHASE)" "$(SMOKE_INPUTS)"
 
 # Local plugin workflows
 preview-installer: ## Preview installer with real CLIs in isolated macOS TEST profiles (PREVIEW_ARGS optional)

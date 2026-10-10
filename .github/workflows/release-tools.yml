@@ -1,0 +1,24 @@
+name: Release tooling contracts
+on:
+  pull_request:
+    paths: ['scripts/release-*', 'scripts/basic-release-assets*', 'scripts/basic-release-assets/**', 'scripts/codex-offline-release-smoke/**', 'scripts/codex-release-gate*', 'scripts/stage-released-loader*', '.github/workflows/basic-release.yml', '.github/workflows/release-tools.yml', 'Makefile']
+  push:
+    branches: [main]
+    paths: ['scripts/release-*', 'scripts/basic-release-assets*', 'scripts/basic-release-assets/**', 'scripts/codex-offline-release-smoke/**', 'scripts/codex-release-gate*', 'scripts/stage-released-loader*', '.github/workflows/basic-release.yml', '.github/workflows/release-tools.yml', 'Makefile']
+permissions:
+  contents: read
+jobs:
+  contracts:
+    name: Release tooling contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - run: npm --prefix scripts/codex-offline-release-smoke ci
+      - run: make release-tools-check
+      - run: make release-preflight

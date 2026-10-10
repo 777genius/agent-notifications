@@ -2,6 +2,9 @@
 
 Step-by-step guide for publishing a new version.
 
+For early preflight, parallel preparation, resumable drafts and evidence timing,
+follow [the basic release fast path](RELEASE_SPEED.md).
+
 For a release that skips a platform, promote only its qualified
 [platform release channels](PLATFORM_RELEASE_CHANNELS.md). Keep skipped-platform
 rows and global Latest on the previously qualified version. Publish source
@@ -50,6 +53,23 @@ clock/source-epoch, visible desktop or cold-start qualification.
 6. Only after those checks, publish under the owner's release authorization,
    verify public checksums, promote Latest and all five platform channels, then
    land the version bump on `main`. The workflow never publishes automatically.
+
+### Subsequent basic releases and explicit resume
+
+The basic operator now accepts stable semver tags. Before dispatch, run the
+[candidate and prepared-promotion preflight](RELEASE_SPEED.md), retain current-C
+CI/signing and explicitly exclude the new tag from the legacy full release
+workflow in both candidate C and executed operator main O. The historical
+v1.48.5 basic scope above remains the minimum, not an installed-business claim.
+
+The workflow stores an immutable complete seal before tag creation. If draft
+creation or upload fails, use the same `candidate_sha`, `release_tag` and
+`signing_run`, plus `resume_run` and `resume_attempt` for the original sealed
+attempt. Do not rerun the build or reconstruct a seal. Resume reconciles remote
+identity/content and uploads only missing matching assets. See
+[seal, provenance and recovery contracts](../scripts/basic-release-assets/README.md).
+The workflow still stops at an unpublished draft; publication requires the
+separate downloaded-asset canaries, macOS/Codex E2E and final verified fan-in.
 
 ### Unified v1.48.4 operator
 

@@ -2,12 +2,10 @@ name: Landing
 
 on:
   pull_request:
-    paths: ['landing/**', '.github/workflows/landing.yml', 'scripts/stage-released-loader*', 'release-channels.tsv', 'bin/setup.sh', 'bin/release-channel.sh']
+    paths: ['landing/**', '.github/workflows/landing.yml', 'scripts/stage-released-loader*', 'scripts/release-preflight*', 'README.md', 'release-channels.tsv', 'bin/setup.sh', 'bin/release-channel.sh']
   push:
     branches: [main]
-    paths: ['landing/**', '.github/workflows/landing.yml', 'scripts/stage-released-loader*', 'release-channels.tsv', 'bin/setup.sh', 'bin/release-channel.sh']
-  release:
-    types: [published]
+    paths: ['landing/**', '.github/workflows/landing.yml', 'scripts/stage-released-loader*', 'scripts/release-preflight*', 'README.md', 'release-channels.tsv', 'bin/setup.sh', 'bin/release-channel.sh']
   workflow_dispatch:
 
 permissions:
@@ -19,7 +17,7 @@ concurrency:
 
 jobs:
   verify:
-    if: github.event_name != 'release' || !github.event.release.prerelease
+    if: github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main'
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || vars.CI_LINUX_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 20
     defaults:
@@ -27,12 +25,16 @@ jobs:
         working-directory: landing
     steps:
       - uses: actions/checkout@v7
-        with:
-          ref: ${{ github.event_name == 'release' && 'main' || '' }}
       - uses: actions/setup-node@v7
         with:
           node-version: '22'
+      - name: Verify published channel documentation before dependency installation
+        run: node --experimental-strip-types ../scripts/release-preflight.mts --mode snapshot --root ..
+      - name: Test release preflight contracts
+        run: node --experimental-strip-types --test ../scripts/release-preflight.test.mts
       - run: npm ci
+      - name: Typecheck release preflight tooling
+        run: npx tsc --noEmit --strict --target es2023 --module nodenext --moduleResolution nodenext --allowImportingTsExtensions --types node --typeRoots node_modules/@types ../scripts/release-preflight.mts ../scripts/release-preflight.test.mts
       - run: npm run typecheck
       - run: npm run test
       - name: Verify release loader staging contract
@@ -59,7 +61,7 @@ jobs:
           path: landing/test-results
 
   deploy:
-    if: github.event_name == 'release' || (github.ref == 'refs/heads/main' && github.event_name != 'pull_request')
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     needs: verify
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || vars.CI_LINUX_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 20
