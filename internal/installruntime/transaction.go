@@ -67,14 +67,15 @@ type Ledger struct {
 	PendingMutation  *PendingMutation `json:",omitempty"`
 }
 type transaction struct {
-	OpenCodeInit  *File      `json:",omitempty"`
-	OpenCodePurge *PurgeTree `json:",omitempty"`
-	ConfigPaths   []string
-	Native        *NativeChange
-	Schema        int
-	Before        Ledger
-	After         Ledger
-	Files         []File
+	OrphanRecovery *orphanDecision `json:",omitempty"`
+	OpenCodeInit   *File           `json:",omitempty"`
+	OpenCodePurge  *PurgeTree      `json:",omitempty"`
+	ConfigPaths    []string
+	Native         *NativeChange
+	Schema         int
+	Before         Ledger
+	After          Ledger
+	Files          []File
 	// Rollback marks a durable reverse decision. Retry must resume it instead
 	// of reversing the reverse and republishing the interrupted upgrade.
 	Rollback bool `json:",omitempty"`
@@ -83,6 +84,9 @@ type transaction struct {
 // Request stages ordinary file bytes before Commit. Prepare runs under the
 // component and config locks, and may only compute adapter-owned JSON changes.
 type Request struct {
+	// OrphanRecovery is an exclusive absence-only metadata transaction.
+	// ExpectedPolicy may additionally fence preview's raw policy observation.
+	OrphanRecovery *OrphanRecoveryRequest
 	// RevokeOpenCode permits only the exact desktop/webhook false policy patch
 	// when delivery assets are damaged. It still requires a registered consumer,
 	// generation and policy CAS; no asset, native or other policy mutation is allowed.
@@ -282,6 +286,9 @@ func retainedPortablePrimaryFiles(l Ledger, oldRoot, newRoot, movingID string, s
 // order. The durable redo record precedes every live mutation. Recovery checks
 // every identity before changing anything and refuses ambiguous foreign edits.
 func Commit(ctx context.Context, r Request) (result Ledger, resultErr error) {
+	if r.OrphanRecovery != nil {
+		return commitOrphan(ctx, r)
+	}
 	journalAttempted := false
 	if r.PolicyDocument != nil {
 		defer func() {
@@ -341,8 +348,22 @@ func Commit(ctx context.Context, r Request) (result Ledger, resultErr error) {
 			return recoverOnlyNoJournal(root)
 		}
 	}
+	// A schema5 marker never authorizes creation of a replacement permanent
+	// lock. This preliminary read selects stricter locking only; the complete
+	// decision is decoded and fenced again under those locks below.
+	orphanPending := false
+	if data, e := readRegularFile(filepath.Join(root, "transaction.json")); e == nil {
+		var envelope transactionEnvelope
+		var header struct{ Schema int }
+		orphanPending = json.Unmarshal(data, &envelope) == nil && json.Unmarshal(envelope.Transaction, &header) == nil && header.Schema == transactionSchemaV5
+	}
+	if orphanPending {
+		if err := orphanControl(root); err != nil {
+			return Ledger{}, err
+		}
+	}
 	lockComponent := Lock
-	if r.PolicyOnly {
+	if r.PolicyOnly || orphanPending {
 		lockComponent = LockExisting
 	}
 	unlock, err := lockComponent(ctx, filepath.Join(root, ".component-install.lock"))
@@ -400,7 +421,7 @@ func Commit(ctx context.Context, r Request) (result Ledger, resultErr error) {
 			continue
 		}
 		lockConfig := Lock
-		if r.PolicyOnly && p == policyPath {
+		if (r.PolicyOnly || orphanPending) && p == policyPath {
 			lockConfig = LockExisting
 		}
 		release, e := lockConfig(ctx, p+".lock")
@@ -961,6 +982,11 @@ func validateRetainedNative(native *NativeRecord) error {
 }
 
 func recoverTransaction(ctx context.Context, root string, current Ledger, tx transaction, fault func(string) error) error {
+	if tx.OrphanRecovery != nil || tx.Schema == transactionSchemaV5 {
+		if err := validateOrphanLive(root, tx); err != nil {
+			return err
+		}
+	}
 	if current.WriterFloor > SupportedWriterFloor || tx.Before.WriterFloor > SupportedWriterFloor || tx.After.WriterFloor > SupportedWriterFloor {
 		return fmt.Errorf("installed writer floor requires a newer compatible kernel")
 	}
@@ -1074,6 +1100,11 @@ func recoverTransaction(ctx context.Context, root string, current Ledger, tx tra
 		}
 	}
 	after := tx.After
+	if tx.OrphanRecovery != nil {
+		if err := validateOrphanLive(root, tx); err != nil {
+			return err
+		}
+	}
 	if !preserveNative {
 		var err error
 		after, err = refreshLedgerIdentities(after)
@@ -1096,6 +1127,11 @@ func recoverTransaction(ctx context.Context, root string, current Ledger, tx tra
 		return err
 	}
 	// Publish the final policy only after all assets and the ledger are durable.
+	if tx.OrphanRecovery != nil {
+		if err := validateOrphanLive(root, tx); err != nil {
+			return err
+		}
+	}
 	if err := writeJSON(filepath.Join(root, "policy-generation.json"), runtimePolicy{tx.After.PolicyGeneration, tx.After.Enabled}); err != nil {
 		return err
 	}

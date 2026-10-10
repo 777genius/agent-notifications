@@ -172,11 +172,23 @@ func decodeTransactionBlobs(data []byte, blobDir string) (transaction, error) {
 	if json.Unmarshal(envelope.Transaction, &header) != nil || !acceptedTransactionSchema(header.Schema) {
 		return tx, fmt.Errorf("unsupported transaction schema")
 	}
+	if header.Schema == transactionSchemaV5 {
+		if err := validateOrphanEnvelope(data); err != nil {
+			return tx, err
+		}
+	}
 	if err := unmarshalTransaction(envelope.Transaction, header.Schema, &tx); err != nil {
 		return tx, err
 	}
 	if tx.Before.WriterFloor > SupportedWriterFloor || tx.After.WriterFloor > SupportedWriterFloor {
 		return tx, fmt.Errorf("unsupported transaction writer floor")
+	}
+	if tx.Schema == transactionSchemaV5 {
+		if err := validateOrphanTransaction(tx); err != nil {
+			return tx, err
+		}
+	} else if tx.OrphanRecovery != nil {
+		return tx, fmt.Errorf("orphan decision requires schema5")
 	}
 	if blobDir != "" {
 		if err := attachTransactionBlobs(&tx, blobDir); err != nil {
@@ -232,6 +244,9 @@ func checkPolicyGeneration(root string, l Ledger) error {
 // snapshots. It never restores an entire directory and never downgrades an
 // already promoted callback reader. A foreign edit makes rollback refuse.
 func reverseTransaction(current Ledger, tx transaction) (transaction, error) {
+	if tx.OrphanRecovery != nil {
+		return reverseOrphanTransaction(current, tx)
+	}
 	if tx.OpenCodeInit != nil || tx.OpenCodePurge != nil {
 		return transaction{}, fmt.Errorf("private registration/removal requires forward recovery")
 	}
@@ -386,6 +401,9 @@ type transactionV4 struct {
 }
 
 func marshalTransaction(tx transaction) ([]byte, error) {
+	if tx.Schema == transactionSchemaV5 {
+		return marshalOrphanTransaction(tx)
+	}
 	if tx.Schema != transactionSchemaV4 {
 		return json.Marshal(tx)
 	}
@@ -395,6 +413,9 @@ func marshalTransaction(tx transaction) ([]byte, error) {
 }
 
 func unmarshalTransaction(data []byte, schema int, tx *transaction) error {
+	if schema == transactionSchemaV5 {
+		return unmarshalOrphanTransaction(data, tx)
+	}
 	if schema != transactionSchemaV4 {
 		return json.Unmarshal(data, tx)
 	}

@@ -23,13 +23,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/777genius/agent-notifications/internal/codexcommand"
 	"github.com/777genius/agent-notifications/internal/installruntime"
 )
 
 // InstallDirName is the stable directory (inside the Codex home) that holds
 // the plugin copy the hooks point at. Frozen: it is part of the hook command
 // string and therefore of the Codex trust hash.
-const InstallDirName = "claude-notifications-go"
+const InstallDirName = codexcommand.InstallDirName
 
 // hookTimeoutSeconds matches the shipped hooks-codex.json contract.
 const hookTimeoutSeconds = 30
@@ -259,25 +260,21 @@ func ResolveCodexHome(override string) (string, error) {
 // command string feeds the Codex trust hash, that divergence would cost every
 // user a re-approval once corrected.
 func HookCommands(installDir, event string) (posix string, windows string) {
-	posixLauncher := filepath.ToSlash(filepath.Join(installDir, "bin", "codex-hook-wrapper.sh"))
-	windowsLauncher := filepath.FromSlash(filepath.Join(installDir, "bin", "codex-hook-wrapper.cmd"))
-	posix = fmt.Sprintf("sh %s handle-hook %s --product codex", posixQuote(posixLauncher), event)
-	windows = fmt.Sprintf(`cmd.exe /d /v:off /s /c "%s handle-hook %s --product codex"`, windowsQuote(windowsLauncher), event)
-	return posix, windows
+	return codexcommand.HookCommands(installDir, event)
 }
 
 // posixQuote wraps a path for `sh -c`. Single quotes are used so nothing
 // inside is expanded: an absolute path may legitimately contain `$` or a
 // backslash, both of which are special inside double quotes.
 func posixQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+	return codexcommand.POSIXQuote(s)
 }
 
 // windowsQuote wraps a path for cmd.exe. Backslashes are literal there and a
 // double quote cannot appear in a Windows path, so no escaping is possible or
 // needed.
 func windowsQuote(s string) string {
-	return `"` + strings.ReplaceAll(s, `"`, "") + `"`
+	return codexcommand.WindowsQuote(s)
 }
 
 // ownsHandler reports whether a handler was registered by this plugin. The
