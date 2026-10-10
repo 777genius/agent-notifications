@@ -928,14 +928,36 @@ run_setup_stage 'Installing Claude notifications' emit_stage || status=$?
 [ "${_PROGRESS_OUTCOMES[0]}" = registration_committed ] || exit 92
 [ -z "$_PROGRESS_PID" ] && [ -z "$_PROGRESS_EVENTS" ] || exit 93
 printf 'STATE_SURVIVED\\n'
+if [ "${TEST_PROGRESS_SUMMARY:-0}" = 1 ]; then
+    BOOTSTRAP_SUMMARY_FILE="$TMPDIR/summary"
+    PRODUCT=both
+    CLAUDE_AGENT_NOTIFY_STATUS='not installed (existing opt-out kept)'
+    CODEX_AGENT_NOTIFY_STATUS=installed
+    print_iterm2_python_api_notice() { :; }
+    print_success
+    printf '%s\\n' '  OpenCode - installed; restart required to load the global plugin.' \
+        '  Gemini CLI - installed; restart required.' \
+        '  Enable/trust the user hooks in Gemini CLI after restart.' \
+        "  Gemini desktop sources may duplicate alerts; choose one source." \
+        '  Webhook consent recorded; configure and enable its destination.' \
+        '  warning: preserved summary advice' >> "$BOOTSTRAP_SUMMARY_FILE"
+    cp "$BOOTSTRAP_SUMMARY_FILE" "$TMPDIR/summary-before"
+    _PROGRESS_IDS=(claude codex opencode gemini)
+    _PROGRESS_PHASES=(complete complete complete complete)
+    _PROGRESS_OUTCOMES=(completed completed completed completed)
+    if [ "${TEST_PROGRESS_SUMMARY_TRANSFORM_FAIL:-0}" = 1 ]; then awk() { return 7; }; fi
+    if [ "${TEST_PROGRESS_SUMMARY_REPLACE_FAIL:-0}" = 1 ]; then mv() { return 7; }; fi
+fi
 report_progress "$status"
 exit "$status"
 ''')
-def run(name, mode='auto', old=False, color=False, terminal=True, helper_path=helper, failure=0, cancel=False, broken=False, stop_failure=False):
+def run(name, mode='auto', old=False, color=False, terminal=True, helper_path=helper, failure=0, cancel=False, broken=False, stop_failure=False, summary=False, summary_transform_failure=False, summary_replace_failure=False, verbose=False):
     tmp = sandbox / ('progress-' + name); tmp.mkdir()
     env = os.environ.copy()
     env.update(TERM='xterm-256color', TMPDIR=str(tmp), TEST_PROGRESS_SOURCE=str(sandbox/'functions.sh'),
                TEST_PROGRESS_MODE=mode, TEST_PROGRESS_HELPER=str(helper_path or ''),
+               TEST_PROGRESS_SUMMARY=str(int(summary)), TEST_PROGRESS_SUMMARY_TRANSFORM_FAIL=str(int(summary_transform_failure)),
+               TEST_PROGRESS_SUMMARY_REPLACE_FAIL=str(int(summary_replace_failure)), BOOTSTRAP_VERBOSE=str(int(verbose)),
                TEST_PROGRESS_OLD=str(int(old)), TEST_PROGRESS_STOP_FAIL=str(int(stop_failure)), TEST_PROGRESS_BROKEN=str(int(broken)), TEST_PROGRESS_FAILURE=str(failure),
                TEST_PROGRESS_PID=str(tmp/'pid'), TEST_PROGRESS_COPY=str(tmp/'events'))
     env.pop('NO_COLOR', None)
@@ -975,20 +997,43 @@ def run(name, mode='auto', old=False, color=False, terminal=True, helper_path=he
         return
     assert proc.returncode == failure, (name, proc.returncode, out, err)
     assert b'STATE_SURVIVED' in out and b'warning: visible fixture warning' in err
-    assert b'hidden technical stdout' not in out
-    rich = terminal and mode != 'plain' and not old and not color
+    assert (b'hidden technical stdout' in out) == verbose, (name, out)
+    rich = terminal and mode != 'plain' and not old and not color and not verbose
+    if summary:
+        result = (tmp/'summary').read_text()
+        compact = rich and not broken and failure == 0 and not summary_transform_failure and not summary_replace_failure
+        duplicate_rows = [
+            '  Claude - installed; restart required.', '  Codex - installed; restart required.',
+            '  OpenCode - installed; restart required to load the global plugin.',
+            '  Gemini CLI - installed; restart required.',
+        ]
+        for row in duplicate_rows:
+            assert (row in result.splitlines()) != compact, (name, result)
+        if compact:
+            assert '  Claude notification tool: not installed (existing opt-out kept).' in result, (name, result)
+            assert '  Codex notification tool: installed.' in result, (name, result)
+        else:
+            assert (tmp/'summary').read_bytes() == (tmp/'summary-before').read_bytes(), (name, 'fallback summary changed')
+            assert result.count('    Agent notification tool: ') == 2, (name, result)
+        assert 'Run /hooks in Codex, review the entries and trust them.' in result
+        assert 'Enable/trust the user hooks in Gemini CLI after restart.' in result
+        assert 'duplicate alerts; choose one source.' in result
+        assert 'Webhook consent recorded; configure and enable its destination.' in result
+        assert 'Delivery has not been verified.' in result
+        assert 'warning: preserved summary advice' in result
+        assert not list(tmp.glob('summary.rich-*')), (name, 'summary transform leaked temp')
     if stop_failure:
         assert err.count(b'OBSERVER_START') == 1, (name, 'incomplete final file launched observer', err)
         assert err.index(b'OBSERVER_INTERRUPTED') < err.index(b'warning: visible fixture warning'), (name, err)
         assert not (tmp/'events').exists(), (name, 'observer consumed incomplete final file')
-    elif helper_path and rich and not broken:
+    elif helper_path and rich and not broken and not summary:
         assert b'OBSERVER_START' in err, (name, err)
         assert err.index(b'OBSERVER_STOP') < err.index(b'warning: visible fixture warning'), (name, err)
         rows = (tmp/'events').read_text()
         assert 'claude\tconfig\tregistration_committed\n' in rows, (name, rows)
         assert 'codex\tpending\tnot_started\n' in rows, (name, rows)
         assert 'gemini\tpending\tnot_started\n' in rows, (name, rows)
-    else: assert b'OBSERVER_START' not in err, (name, err)
+    elif not summary: assert b'OBSERVER_START' not in err, (name, err)
     if not rich: assert b'\x1b' not in err and b'\r' not in err.replace(b'\r\n', b'\n'), (name, err)
     if not helper_path: assert b'3 bytes received' in err and b'\x1b[2K' in err, (name, err)
 run('rich-delayed')
@@ -1001,6 +1046,14 @@ run('spinner', helper_path=None)
 run('broken-renderer', broken=True)
 run('unwritable-stop', stop_failure=True)
 run('cancel', cancel=True)
+run('summary-rich', summary=True)
+run('summary-plain', mode='plain', summary=True)
+run('summary-old', old=True, summary=True)
+run('summary-renderer-failed', broken=True, summary=True)
+run('summary-install-failed', failure=3, summary=True)
+run('summary-transform-failed', summary=True, summary_transform_failure=True)
+run('summary-replace-failed', summary=True, summary_replace_failure=True)
+run('summary-verbose', summary=True, verbose=True)
 print('PASS shell progress state, stderr, lifecycle, fallback and cancellation fixtures')
 PY_PROGRESS
 

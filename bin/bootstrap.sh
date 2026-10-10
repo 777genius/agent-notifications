@@ -2403,6 +2403,42 @@ progress_phase() {
     done
 }
 
+# The final board already presents registration and restart status. Compact only
+# our generated display summary after that board successfully renders; this does
+# not change installation state or any recovery, trust or delivery instruction.
+compact_rich_setup_summary() {
+    local summary=${BOOTSTRAP_SUMMARY_FILE:-} combined
+    [ -n "$summary" ] && [ -f "$summary" ] && [ ! -L "$summary" ] || return 0
+    combined=$(mktemp "${summary}.rich-XXXXXX") || return 0
+    if awk -v selected=" ${_PROGRESS_IDS[*]} " '
+        function chosen(client) { return index(selected, " " client " ") != 0 }
+        BEGIN { tool_prefix = "    Agent notification tool: " }
+        {
+            client = ""
+            if ($0 == "  Claude - installed; restart required.") client = "claude"
+            if ($0 == "  Codex - installed; restart required.") client = "codex"
+            if ($0 == "  OpenCode - installed; restart required to load the global plugin.") client = "opencode"
+            if ($0 == "  Gemini CLI - installed; restart required.") client = "gemini"
+            if (client != "") {
+                current = client
+                if (chosen(client)) next
+            }
+            if ((current == "claude" || current == "codex") && chosen(current) &&
+                index($0, tool_prefix) == 1) {
+                label = current == "claude" ? "Claude" : "Codex"
+                print "  " label " notification tool: " substr($0, length(tool_prefix) + 1)
+                next
+            }
+            print
+        }
+    ' "$summary" > "$combined"; then
+        mv -f -- "$combined" "$summary" || rm -f "$combined"
+    else
+        rm -f "$combined"
+    fi
+    return 0
+}
+
 progress_write_final_snapshot() {
     local i=0
     while [ "$i" -lt "${#_PROGRESS_IDS[@]}" ]; do
@@ -2423,7 +2459,9 @@ report_progress() {
             if progress_write_final_snapshot > "$events"; then
                 "$_CONFIG_HELPER" installer-progress --events "$events" --ui "${_UI_MODE:-auto}" --owner-pid "$$" </dev/null >/dev/null &
                 _PROGRESS_PID=$!
-                wait "$_PROGRESS_PID" 2>/dev/null || true
+                if wait "$_PROGRESS_PID" 2>/dev/null; then
+                    [ "${1:-0}" -ne 0 ] || compact_rich_setup_summary
+                fi
                 _PROGRESS_PID=""
             fi
             rm -f "$events"
@@ -2760,7 +2798,9 @@ main() {
         _PROGRESS_IDS+=("$selected"); _PROGRESS_PHASES+=(pending); _PROGRESS_OUTCOMES+=(not_started)
     done
     PRODUCT=$original_product
-    [ -n "${BOOTSTRAP_SUMMARY_FILE:-}" ] || print_header
+    if [ -z "${BOOTSTRAP_SUMMARY_FILE:-}" ]; then
+        if ! progress_rich_available || ! progress_helper_available; then print_header; fi
+    fi
     local own_summary=false
     if [ "${#SELECTED_PRODUCTS[@]}" -gt 1 ] && [ -z "${BOOTSTRAP_SUMMARY_FILE:-}" ]; then
         BOOTSTRAP_SUMMARY_FILE="$_CONFIG_STAGE/summary.txt"

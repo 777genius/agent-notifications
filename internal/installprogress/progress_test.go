@@ -120,7 +120,9 @@ func TestAppendLifecyclePaintsAndAnimatesBeforeCompletion(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = f.WriteString("claude\tcomplete\tcompleted\nstop\t\t\n")
-	f.Close()
+	if closeErr := f.Close(); closeErr != nil {
+		t.Fatal(closeErr)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,6 +131,37 @@ func TestAppendLifecyclePaintsAndAnimatesBeforeCompletion(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "✓ Claude Code") || !strings.HasSuffix(out.String(), "\x1b[0m\x1b[?25h") {
 		t.Fatal("final board or cursor restoration missing")
+	}
+}
+
+func TestLiveUncertaintyShowsWorkButStopPreservesFinalTruth(t *testing.T) {
+	path := eventFile(t, "global\tinstalling-claude\trunning\nclaude\tregistration\tstate_requires_inspection\ncodex\tregistration\tregistration_committed\n")
+	out := &observedOutput{frames: make(chan string, 64)}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- Run(ctx, path, Options{Output: out, Rich: true, Interval: time.Millisecond}) }()
+	live := waitFrame(t, out, "Registered · follow-up pending")
+	if !strings.Contains(live, "Registering notifications") || strings.Contains(live, "needs inspection") || strings.Contains(live, "partial") || strings.Contains(live, "✓") {
+		t.Fatalf("normal live work shown as an alarm or success: %q", live)
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = f.WriteString("stop\t\t\n")
+	if closeErr := f.Close(); closeErr != nil {
+		t.Fatal(closeErr)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	final := waitFrame(t, out, "needs inspection")
+	if !strings.Contains(final, "registration committed (partial)") || !strings.Contains(final, "! Claude Code") || !strings.Contains(final, "! Codex CLI") || strings.Contains(final, "✓") || strings.Contains(final, "Registering notifications") {
+		t.Fatalf("stopped board lost authoritative uncertainty: %q", final)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -146,7 +179,9 @@ func TestFragmentedEventWaitsForNewlineAndCancellationRestoresCursor(t *testing.
 		t.Fatal(err)
 	}
 	_, err = f.WriteString("ning\n")
-	f.Close()
+	if closeErr := f.Close(); closeErr != nil {
+		t.Fatal(closeErr)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}

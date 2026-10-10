@@ -2,18 +2,36 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
+func TestInstallerProgressCapabilityFailsWhenStdoutCannotBeWritten(t *testing.T) {
+	for _, short := range []bool{false, true} {
+		if code := installerProgressMain([]string{"--capabilities"}, capabilityFailedOutput{short: short}, nil); code == 0 {
+			t.Fatalf("capability reported available after failed output (short=%v)", short)
+		}
+	}
+}
+
+type capabilityFailedOutput struct{ short bool }
+
+func (w capabilityFailedOutput) Write(p []byte) (int, error) {
+	if w.short {
+		return len(p) - 1, nil
+	}
+	return 0, io.ErrClosedPipe
+}
+
 func TestInstallerProgressCapabilityHasNoTerminalEffects(t *testing.T) {
 	errout, err := os.Create(filepath.Join(t.TempDir(), "stderr"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer errout.Close()
+	defer func() { _ = errout.Close() }()
 	var stdout bytes.Buffer
 	if code := installerProgressMain([]string{"--capabilities"}, &stdout, errout); code != 0 {
 		t.Fatalf("capability exit %d", code)
@@ -37,7 +55,7 @@ func TestInstallerProgressNonTerminalFallbackKeepsStdoutClean(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer errout.Close()
+	defer func() { _ = errout.Close() }()
 	var stdout bytes.Buffer
 	if code := installerProgressMain([]string{"--events", path, "--ui", "rich"}, &stdout, errout); code != 0 {
 		t.Fatalf("observer exit %d", code)

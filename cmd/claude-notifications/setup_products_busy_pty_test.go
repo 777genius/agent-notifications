@@ -16,8 +16,8 @@ func TestSetupProductsBusyTerminalFallback(t *testing.T) {
 	if err != nil {
 		t.Skipf("native PTY unavailable: %v", err)
 	}
-	defer master.Close()
-	defer slave.Close()
+	defer func() { _ = master.Close() }()
+	defer func() { _ = slave.Close() }()
 	if err := pty.Setsize(master, &pty.Winsize{Rows: 30, Cols: 100}); err != nil {
 		t.Fatal(err)
 	}
@@ -43,8 +43,8 @@ func TestSetupProductsBusyTerminalFallback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer reader.Close()
-	defer writer.Close()
+	defer func() { _ = reader.Close() }()
+	defer func() { _ = writer.Close() }()
 	if setupProductsBusyRich(slave, writer, "rich") || setupProductsBusyRich(reader, slave, "auto") {
 		t.Fatal("pipe enabled busy animation")
 	}

@@ -82,6 +82,7 @@ type board struct {
 	rows    []event
 	painted int
 	frame   int
+	stopped bool
 }
 
 func (b *board) update(e event) bool {
@@ -107,6 +108,17 @@ func (b *board) running() bool {
 	return false
 }
 
+func (b *board) globalPhase() string {
+	if !b.stopped {
+		for _, row := range b.rows {
+			if row.client == "global" && row.outcome == "running" {
+				return row.phase
+			}
+		}
+	}
+	return ""
+}
+
 func (b *board) paint() error {
 	if !b.options.Rich {
 		return nil
@@ -128,11 +140,16 @@ func (b *board) paint() error {
 		title := "─ Agent Notifications "
 		lines = []string{"\x1b[36m  ╭" + title + strings.Repeat("─", innerWidth-utf8.RuneCountInString(title)) + "╮\x1b[0m"}
 	}
+	globalPhase := b.globalPhase()
+	spinner := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}[b.frame%10]
 	for _, row := range b.rows {
+		if b.stopped && row.client == "global" {
+			continue
+		}
 		mark, color := "○", "\x1b[2m"
 		switch row.outcome {
 		case "running":
-			mark, color = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}[b.frame%10], "\x1b[36m"
+			mark, color = spinner, "\x1b[36m"
 		case "done", "completed":
 			mark, color = "✓", "\x1b[32m"
 		case "failed":
@@ -143,6 +160,21 @@ func (b *board) paint() error {
 			mark = "-"
 		}
 		line := fmt.Sprintf("  %s %-12s  %s: %s", mark, clients[row.client], phases[row.phase], outcomes[row.outcome])
+		// The shell records uncertainty before its writer starts. During the
+		// matching live operation, present that as work in progress; keep the
+		// exact underlying outcome for the final board and unrelated failures.
+		active := globalPhase == "installing-"+row.client || (row.phase == "config" && (globalPhase == "notification-settings" || globalPhase == "notification-tools"))
+		if row.client != "global" && active && row.outcome == "state_requires_inspection" && (row.phase == "registration" || row.phase == "config") {
+			label := "Registering notifications"
+			if row.phase == "config" {
+				label = "Configuring notifications"
+			}
+			color = "\x1b[36m"
+			line = fmt.Sprintf("  %s %-12s  %s", spinner, clients[row.client], label)
+		} else if row.client != "global" && globalPhase != "" && (row.outcome == "registration_committed" || row.outcome == "registration_committed_follow_up_not_started") {
+			color = "\x1b[2m"
+			line = fmt.Sprintf("  ○ %-12s  Registered · follow-up pending", clients[row.client])
+		}
 		if row.client == "global" && row.outcome == "running" {
 			line = fmt.Sprintf("  %s %-12s  %s", mark, clients[row.client], phases[row.phase])
 		}
@@ -192,6 +224,16 @@ func (b *board) clear() {
 	_, _ = io.WriteString(b.options.Output, out.String())
 }
 
+func (b *board) finish() error {
+	if b.globalPhase() == "" {
+		return nil
+	}
+	b.clear()
+	b.painted = 0
+	b.stopped = true
+	return b.paint()
+}
+
 func clip(text string, width int) string {
 	// All labels are ASCII, apart from the single-column progress marks. Keep a
 	// spare column so a terminal never wraps and invalidates cursor accounting.
@@ -226,7 +268,7 @@ func Run(ctx context.Context, path string, options Options) error {
 	if err != nil {
 		return errors.New("cannot open progress events")
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	info, err = f.Stat()
 	if err != nil || !info.Mode().IsRegular() {
 		return errors.New("progress events must be a regular file")
@@ -235,9 +277,14 @@ func Run(ctx context.Context, path string, options Options) error {
 	if options.Rich {
 		// Restore the borrowed terminal even if the first frame or later write
 		// fails. No stdin reader, raw mode, alternate screen, or terminal probing.
-		defer io.WriteString(options.Output, "\x1b[0m\x1b[?25h")
+		defer func() { _, _ = io.WriteString(options.Output, "\x1b[0m\x1b[?25h") }()
 		if options.Transient {
 			defer b.clear()
+		} else {
+			// Owner death, cancellation and malformed input also end the live
+			// projection. Preserve final client uncertainty before restoring the
+			// cursor; a failed output still gets a best-effort cleanup attempt.
+			defer func() { _ = b.finish() }()
 		}
 		if err := writeText(options.Output, "\x1b[?25l"); err != nil {
 			return err
@@ -284,6 +331,9 @@ func Run(ctx context.Context, path string, options Options) error {
 				}
 				pending = pending[end+1:]
 				if stop {
+					if options.Rich && !options.Transient {
+						return b.finish()
+					}
 					return nil
 				}
 				if b.update(e) {
