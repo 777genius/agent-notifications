@@ -79,8 +79,10 @@ channels, public loader version/controller SHA and retained legacy routes.
 ## Measure before further optimization
 
 Initial target is at most 60 minutes from frozen reviewed C to a publicly verified
-installer for an ordinary basic release, not a guarantee. For v1.48.5 this took
-1:41:53. Candidate CI took 28:55, final promotion CI 28:09, signing 9:29, basic
+installer for an ordinary basic release, not a guarantee. For v1.48.5, frozen C
+to successful Pages deployment took 1:41:53; the separate public verification
+receipt has no completion timestamp. Candidate CI took 28:55, final promotion
+CI 28:09, signing 9:29, basic
 artifacts 4:25; overlapping intervals must not be added. A failed draft step and
 late metadata fixes introduced recovery and another head's CI.
 
