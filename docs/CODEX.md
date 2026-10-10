@@ -12,18 +12,23 @@ runtime copy. Then start Codex and approve the entries in `/hooks`.
 
 ### Manual Codex registration
 
-Skip this section if you used the one-command installer. For manual setup, download the
-latest stable release's matching bundle and binary. The Go registration command needs
-no `jq` and is not automatically added to your `PATH`.
+Skip this section if you used the one-command installer. For manual setup, download and extract the source bundle for the release selected by your [platform channel](PLATFORM_RELEASE_CHANNELS.md). Use matching source and native binaries, not source from `main` with an older release binary. The Go registration command needs no `jq` and is not automatically added to your `PATH`.
 
-From the bundle directory:
+From the extracted bundle directory, first acquire the matching runtime and create the platform launchers. This script verifies release checksums and prepares the macOS helper where needed. See [prerequisites](INSTALLATION.md#prerequisites).
+
+```bash
+bash bin/install.sh
+```
+
+On Windows, run that preparation command in Git Bash. Do not rely on the symlinks shipped in the source archive: they can point to a different platform, and Windows `.bat` launchers do not exist until preparation succeeds.
+
+Then register Codex on macOS/Linux:
 
 ```bash
 ./bin/agent-notifications setup-codex --plugin-root .
 ```
 
-For manual registration on Windows, run the installed primary launcher in PowerShell (the downloaded
-`claude-notifications-windows-amd64.exe` remains compatible):
+For manual registration on Windows, run the prepared launcher in PowerShell:
 
 ```powershell
 .\bin\agent-notifications.bat setup-codex --plugin-root .

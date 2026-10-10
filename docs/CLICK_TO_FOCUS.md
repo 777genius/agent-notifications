@@ -54,12 +54,12 @@ In the shared file selected by `config path`:
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `clickToFocus` | `true` | Enable click-to-focus on macOS and Linux |
+| `clickToFocus` | `true` | Enable click-to-focus on supported macOS, Linux and Windows terminals |
 | `terminalBundleId` | `""` | macOS only: override auto-detected terminal. Use bundle ID like `com.googlecode.iterm2` |
 
 ## macOS
 
-Auto-detects your terminal via `TERM_PROGRAM` / `__CFBundleIdentifier`. Uses `terminal-notifier` (auto-installed via `/claude-notifications-go:init`).
+Auto-detects your terminal via `TERM_PROGRAM` / `__CFBundleIdentifier`. The installer provides the signed, notarized `ClaudeNotifier.app` helper. Its bundled `terminal-notifier-modern` executable handles delivery; this is not a dependency on the standalone `terminal-notifier` package.
 
 | Terminal | Focus method |
 |----------|-------------|
