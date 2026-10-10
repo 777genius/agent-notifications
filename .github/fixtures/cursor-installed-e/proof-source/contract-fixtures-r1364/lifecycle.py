@@ -176,7 +176,7 @@ def main():
     assert sha(args.harness) == args.harness_sha256, 'exact OLD/NEW harness binding'
     assert sha(args.harness.parent/'native_case.py') == args.native_sha256, 'exact original imported module binding'
     assert sha(args.fixture) == args.fixture_sha256, 'exact built TEST fixture binding'
-    expected_native = '6711958e74161cc2bbc0c71404694dedcddb5cdf8dbe486cfb70ef1a919af240' if args.expected == 'NEW_GREEN' else '07047821776a91e3095eb5d4baed8467eb019ad31a8649fd58d67ca5ce46b6cc'
+    expected_native = 'acf854926851a96407aafa893ac1b3f0c0a2101495baa34c66ab098e825e6ca0' if args.expected == 'NEW_GREEN' else '07047821776a91e3095eb5d4baed8467eb019ad31a8649fd58d67ca5ce46b6cc'
     assert args.native_sha256 == expected_native, 'accepted exact NEW/OLD original module'
     if args.expected == 'NEW_GREEN':
         assert args.harness_sha256 == sha(Path(__file__).resolve().parents[1]/'linux_contract.py'), 'accepted current NEW executor'

@@ -692,12 +692,12 @@ jobs:
           assert bounded_git(['rev-parse','HEAD'],41) == b'9f014e72af510783d58d00ad3d2db455a2f8117b\n'
           assert bounded_git(['cat-file','-t',transport_sha],7) == b'commit\n'
           tuples = (
-              ('contract-fixtures-r1364/MATRIX_README.md', 26982, 'faae3c549fdaf812a896d8e27b0d35535125d8af8c982bb44c4003b08d2ea0cb'),
+              ('contract-fixtures-r1364/MATRIX_README.md', 26982, '32ea9115ac59af7b39e7aa8bd01f1812ee5223432f2f8e12f6fb5e3756d35d11'),
               ('contract-fixtures-r1364/REMAINING_SOURCE_REVIEW.md', 13054, 'a29f64098ec2d7617a650a8929859bc5166b663bb84f41a336efcf98bfc656c3'),
-              ('contract-fixtures-r1364/build_fixtures.py', 9654, 'c55040ebeac2ab4da5f1ea50023e0329c75878a2d66e1d7e8cbb8c43e0bda7a9'),
+              ('contract-fixtures-r1364/build_fixtures.py', 9654, '4bd5e7cfeb888456a043a739d92ca98a49fba216251647d7ee13a3f3407eeee8'),
               ('contract-fixtures-r1364/held_child.c', 2333, '0d7d8df99fe89445ad5be0f3ef88b753d30d32d86ee415af9f4ee800d2e2bd33'),
-              ('contract-fixtures-r1364/integrated_pair.py', 108436, 'cbd6e4d14b0c4600c228abffd7a41d1590d26ab33594b2672a50d211bfb63a53'),
-              ('contract-fixtures-r1364/lifecycle.py', 20374, 'cb8366c5043e65f2c0ee8c08b4e0de0aaf9fa28e19cb7985e310c5f1296f088b'),
+              ('contract-fixtures-r1364/integrated_pair.py', 108436, '1d7d174c2f0f9903ed3839e3a50270544f985f6c57438059ea443b92bd9249d5'),
+              ('contract-fixtures-r1364/lifecycle.py', 20374, '2bc4424c0523941a7c6e6d12bb4c35ebed64b3335fa65ba2367e76f14308f363'),
               ('contract-fixtures-r1364/matrix-go.mod', 149, '1baa91c9635240cb9433575d68989fff5213f03298abbbf50ea8006fa3120f52'),
               ('contract-fixtures-r1364/matrix-go.sum', 322, '7556b81d5e8726d4d82ddf008b6c89eab585731afaf27c4a6b27ee6a8ae3e8be'),
               ('contract-fixtures-r1364/matrix_actor.c', 3889, '0541d4e8e3d61269aaaa5dcdf6f5f8a5cd09a3fe5651fda077e689a08f5eb390'),

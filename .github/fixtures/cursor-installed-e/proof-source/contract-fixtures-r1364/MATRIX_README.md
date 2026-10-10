@@ -166,7 +166,7 @@ Root must rerun all five; no NEW five-case GREEN is claimed here.
 python3 -B contract-fixtures-r1364/lifecycle.py \
   --harness /ABS/NEW/implementation/linux_contract.py \
   --harness-sha256 EXACT_CURRENT_LINUX_SHA256 \
-  --native-sha256 6711958e74161cc2bbc0c71404694dedcddb5cdf8dbe486cfb70ef1a919af240 \
+  --native-sha256 acf854926851a96407aafa893ac1b3f0c0a2101495baa34c66ab098e825e6ca0 \
   --fixture /ABS/BUILD/TEST-held-child --fixture-sha256 EXACT_HELD_ELF_SHA256 \
   --workspace /srv/workers/OWN/WORKSPACE \
   --scratch-parent /srv/workers/OWN/WORKSPACE/scratch --expected NEW_GREEN
