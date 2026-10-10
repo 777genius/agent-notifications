@@ -34,7 +34,7 @@ jobs:
         run: node --experimental-strip-types --test ../scripts/release-preflight.test.mts
       - run: npm ci
       - name: Typecheck release preflight tooling
-        run: npx tsc --noEmit --strict --target es2023 --module nodenext --moduleResolution nodenext --allowImportingTsExtensions --types node --typeRoots node_modules/@types ../scripts/release-preflight.mts ../scripts/release-preflight.test.mts
+        run: npx tsc --ignoreConfig --noEmit --strict --target es2023 --module nodenext --moduleResolution nodenext --allowImportingTsExtensions --types node --typeRoots node_modules/@types ../scripts/release-preflight.mts ../scripts/release-preflight.test.mts
       - run: npm run typecheck
       - run: npm run test
       - name: Verify release loader staging contract

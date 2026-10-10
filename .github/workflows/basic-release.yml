@@ -393,7 +393,7 @@ jobs:
         with: {ref: '${{ inputs.candidate_sha }}', path: source, persist-credentials: false}
       - uses: actions/checkout@v7
         with: {ref: '${{ github.sha }}', path: operator, persist-credentials: false}
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with: {node-version: '24'}
       - uses: actions/setup-python@v7
         with: {python-version: '3.12'}
@@ -551,7 +551,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with: {ref: '${{ github.sha }}', path: operator, persist-credentials: false}
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with: {node-version: '24'}
       - name: Require exact owner producer run, attempt and ancestry before downloading sealed bytes
         shell: bash
