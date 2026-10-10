@@ -284,8 +284,9 @@ def run(binary, fixture, scratch, mode='fork', refusal=None, timeout=12):
         for kind,suffix,cap in (('trace','.trace',8*native.LIMIT),('control','.control',8*native.LIMIT),('actor','.actor.stdout',65536+64)):
             path = scratch/(case+suffix)
             raw_files[kind] = (path.open('xb'),{'path':str(path),'bytes':0,'disposition':'CONSUMED_ONLY'},cap)
+        actor_cwd = scratch/(case+'.actor'); actor_cwd.mkdir()
         root, root_record = owner.spawn([str(fixture),mode],stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,start_new_session=True,bufsize=0,cwd=scratch,
+            stdout=subprocess.PIPE,start_new_session=True,bufsize=0,cwd=actor_cwd,
             env={'PATH':'/usr/bin:/bin','LANG':'C','TMPDIR':str(scratch/'tmp')})
         observation['actor'] = owner.qualify(root_record)
         observation['phase'] = 'actor-readiness'
