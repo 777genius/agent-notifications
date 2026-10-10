@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 
 	"github.com/777genius/agent-notifications/internal/agentnotify/portable"
 	"github.com/777genius/agent-notifications/internal/agentnotify/portablesetup"
@@ -381,6 +382,11 @@ func commitConfirmedLocalConsent(ctx context.Context, r setupwizard.Request, res
 	}
 	if consentErr != nil {
 		return deny(consentErr)
+	}
+	if runtime.GOOS == "darwin" && i.Request.DesktopSet && i.Request.Desktop {
+		if _, err := copilotvscodeinstall.PrepareNativeSpool(ctx, b.ControlRoot); err != nil {
+			return deny(err)
+		}
 	}
 	choices := copilotvscodeinstall.Choices{Manual: i.Request.Manual}
 	if i.Request.DesktopSet {

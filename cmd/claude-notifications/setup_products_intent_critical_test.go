@@ -617,6 +617,9 @@ func TestLocalConfirmedConsentRefusesPreparedOnlyAndDrift(t *testing.T) {
 	if _, err := commitConfirmedLocalConsent(setupCommandContext(t), r, result, i); err == nil {
 		t.Fatal("generic target completion manufactured installed Local acknowledgement")
 	}
+	if _, err := os.Lstat(filepath.Join(f.control, "copilot-vscode-native-spool")); !os.IsNotExist(err) {
+		t.Fatal("unqualified Local desktop consent prepared native assets", err)
+	}
 	setupCommandWrite(t, filepath.Join(f.control, "agent-notifications.json"), before+"\n", 0600)
 	if _, err := commitConfirmedLocalConsent(setupCommandContext(t), r, result, i); !errors.Is(err, portablesetup.ErrConcurrentChange) {
 		t.Fatal("same-generation byte drift borrowed", err)
