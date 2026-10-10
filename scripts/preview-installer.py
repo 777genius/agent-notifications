@@ -1,5 +1,6 @@
 """Preview the real macOS installer with installed CLIs in a retained, fresh TEST profile."""
 import argparse
+from contextvars import ContextVar
 import hashlib
 import json
 import os
@@ -7,11 +8,13 @@ from pathlib import Path
 import re
 import shlex
 import shutil
+import signal
 import stat
 import subprocess
 import sys
 import tarfile
 import tempfile
+import threading
 
 REPO = '777genius/agent-notifications'
 TOOLS = ('bash sh env python3 node tar gzip unzip zip mktemp rm cat cp mv chmod mkdir ln '
@@ -21,6 +24,147 @@ PRIVATE_KEYS = ('HOME USERPROFILE APPDATA LOCALAPPDATA XDG_CONFIG_HOME XDG_CACHE
                 'XDG_DATA_HOME XDG_STATE_HOME XDG_RUNTIME_DIR XDG_CONFIG_DIRS XDG_DATA_DIRS '
                 'CODEX_HOME CLAUDE_HOME CLAUDE_CONFIG_DIR TMPDIR TMP TEMP '
                 'OPENCODE_CONFIG_DIR GEMINI_CLI_HOME').split()
+
+
+_PREPARATION = ContextVar('preview_preparation', default=None)
+
+
+class Preparation:
+    """Own startup output only; release the terminal before interactive setup."""
+    def __init__(self, log_path, plain=False, stream=None, environment=None):
+        self.log_path = log_path
+        self.stream = stream if stream is not None else sys.stdout
+        environment = os.environ if environment is None else environment
+        self.verbose = environment.get('BOOTSTRAP_VERBOSE') == '1'
+        self.rich = (not plain and not self.verbose and self.stream.isatty() and
+                     environment.get('TERM', '') not in ('', 'dumb') and
+                     not bool(environment.get('NO_COLOR')))
+        self.stopped = threading.Event()
+        self.lock = threading.Lock()
+        self.label = ''
+        self.frame = 0
+        self.worker = None
+
+    def __enter__(self):
+        self.log = self.log_path.open('a', encoding='utf-8')
+        self.log_path.chmod(0o600)
+        self.token = _PREPARATION.set(self)
+        self.stream.write('TEST preview: isolated profile; installation only (delivery unverified).\n')
+        self.stage('Checking preview source')
+        if self.rich:
+            self.worker = threading.Thread(target=self._animate, name='preview-preparation', daemon=True)
+            self.worker.start()
+        return self
+
+    def _render(self):
+        frame = '|/-\\'[self.frame % 4]
+        self.frame += 1
+        self.stream.write('\r\x1b[2K  \x1b[36m'+frame+'\x1b[0m '+self.label+'...')
+        self.stream.flush()
+
+    def _animate(self):
+        while not self.stopped.wait(0.12):
+            with self.lock:
+                self._render()
+
+    def stage(self, label):
+        with self.lock:
+            self.label = label
+            self.log.write('Stage: '+label+'\n')
+            self.log.flush()
+            if self.rich:
+                self._render()  # The first frame must precede any slow operation.
+            else:
+                self.stream.write(label+'...\n')
+                self.stream.flush()
+
+    def detail(self, value):
+        self.log.write(value+'\n')
+        self.log.flush()
+        if self.verbose:
+            self.stream.write(value+'\n')
+            self.stream.flush()
+
+    def __exit__(self, kind, error, traceback):
+        self.stopped.set()
+        if self.worker is not None:
+            self.worker.join()
+        with self.lock:
+            if self.rich:
+                self.stream.write('\r\x1b[2K')
+                self.stream.flush()
+        if error is not None:
+            self.log.write(('Preparation cancelled' if kind is KeyboardInterrupt else 'Preparation failed')+
+                           ': '+str(error)+'\n')
+        _PREPARATION.reset(self.token)
+        self.log.close()
+
+
+def detail(value):
+    preparation = _PREPARATION.get()
+    if preparation is None:
+        print(value, flush=True)
+    else:
+        preparation.detail(value)
+
+
+def run_command(*args, **kwargs):
+    preparation = _PREPARATION.get()
+    if preparation is None:
+        return subprocess.run(*args, **kwargs)
+    preparation.detail('$ '+shlex.join(str(value) for value in args[0]))
+    check = kwargs.pop('check', False)
+    captured = kwargs.get('capture_output', False)
+    if not captured:
+        kwargs.setdefault('stdout', subprocess.PIPE if preparation.verbose else preparation.log)
+        kwargs.setdefault('stderr', subprocess.PIPE if preparation.verbose else preparation.log)
+    kwargs.setdefault('stdin', subprocess.DEVNULL)
+    preparation.log.flush()
+    timeout = kwargs.pop('timeout', None)
+    if captured:
+        kwargs.pop('capture_output')
+        kwargs['stdout'] = kwargs['stderr'] = subprocess.PIPE
+    # Preparation never reads interactive input. A separate process group lets
+    # cancellation stop a builder and its children before releasing the terminal.
+    with subprocess.Popen(*args, start_new_session=True, **kwargs) as process:
+        try:
+            stdout, stderr = process.communicate(timeout=timeout)
+        except BaseException as error:
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            try:
+                stdout, stderr = process.communicate(timeout=2)
+            except subprocess.TimeoutExpired:
+                # The leader may still be alive or a descendant may hold pipes.
+                pass
+            finally:
+                # A reaped leader does not prove its group stopped. In particular,
+                # redirected log output lets a TERM-resistant descendant outlive
+                # communicate(). Escalate this command's private group regardless.
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            stdout, stderr = process.communicate()
+            for output in (stdout, stderr):
+                if output:
+                    preparation.detail(output.decode(errors='replace') if isinstance(output, bytes) else output)
+            if isinstance(error, subprocess.TimeoutExpired):
+                error.output, error.stderr = stdout, stderr
+            raise
+        result = subprocess.CompletedProcess(process.args, process.returncode, stdout, stderr)
+    for output in (result.stdout, result.stderr):
+        if output:
+            preparation.detail(output.decode(errors='replace') if isinstance(output, bytes) else output)
+    if check:
+        result.check_returncode()
+    return result
+
+
+def command_output(*args, **kwargs):
+    return run_command(*args, stdout=subprocess.PIPE, check=True, **kwargs).stdout
 
 
 def digest(path):
@@ -39,10 +183,10 @@ def private_directory(path):
 
 def source_identity(root, expected=None):
     env = {'PATH': '/usr/bin:/bin', 'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': '/dev/null'}
-    sha = subprocess.check_output(['/usr/bin/git', '-C', str(root), 'rev-parse', 'HEAD'], env=env, text=True).strip()
+    sha = command_output(['/usr/bin/git', '-C', str(root), 'rev-parse', 'HEAD'], env=env, text=True).strip()
     if not re.fullmatch('[0-9a-f]{40}', sha) or expected and sha != expected:
         raise ValueError('Repository HEAD changed during preview preparation')
-    subprocess.run(['/usr/bin/git', '-C', str(root), 'diff', '--quiet', 'HEAD', '--'], env=env, check=True)
+    run_command(['/usr/bin/git', '-C', str(root), 'diff', '--quiet', 'HEAD', '--'], env=env, check=True)
     return sha
 
 
@@ -52,7 +196,7 @@ def committed_tree(root, state, sha):
     sources = private_directory(state/'sources')
     source = Path(tempfile.mkdtemp(prefix=sha+'-', dir=sources))
     archive = source/'committed-source.tar'
-    subprocess.run(['/usr/bin/git', '-C', str(root), 'archive', '--format=tar',
+    run_command(['/usr/bin/git', '-C', str(root), 'archive', '--format=tar',
                     '--output', str(archive), sha], check=True)
     tree = private_directory(source/'tree')
     with tarfile.open(archive) as committed:
@@ -100,8 +244,8 @@ def build_binary(root, state, sha, go):
     fd, temporary = tempfile.mkstemp(prefix='build-', dir=output.parent)
     os.close(fd)
     try:
-        print('Building clean source '+sha+' (private reusable Go cache)...', flush=True)
-        subprocess.run([compiler, 'build', '-mod=readonly', '-ldflags', '-s -w -X main.selectorSourceCommit='+sha,
+        detail('Building clean source '+sha+' (private reusable Go cache)...')
+        run_command([compiler, 'build', '-mod=readonly', '-ldflags', '-s -w -X main.selectorSourceCommit='+sha,
                         '-o', temporary, './cmd/claude-notifications'], cwd=tree, env=env, check=True)
         source_identity(root, sha)
         os.replace(temporary, output)
@@ -116,14 +260,14 @@ def native_archive(state, supplied):
     gh = shutil.which('gh')
     if not gh:
         raise ValueError('Provide --native-zip or install/authenticate GitHub CLI (gh)')
-    release = json.loads(subprocess.check_output([gh, 'release', 'view', '--repo', REPO,
+    release = json.loads(command_output([gh, 'release', 'view', '--repo', REPO,
                                                  '--json', 'tagName'], text=True))['tagName']
     if not re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+', release):
         raise ValueError('Unexpected public release tag')
     cache = private_directory(state/'native'/release)
     archive, manifest = cache/'ClaudeNotifier.app.zip', cache/'checksums.txt'
     if not archive.exists() or not manifest.exists():
-        subprocess.run([gh, 'release', 'download', release, '--repo', REPO, '--dir', str(cache),
+        run_command([gh, 'release', 'download', release, '--repo', REPO, '--dir', str(cache),
                         '--pattern', 'ClaudeNotifier.app.zip', '--pattern', 'checksums.txt', '--clobber'], check=True)
     matches = [line.split()[0] for line in manifest.read_text().splitlines()
                if len(line.split()) == 2 and line.split()[1] == 'ClaudeNotifier.app.zip']
@@ -150,7 +294,7 @@ def build_portable(root, state, sha, go, binary, version, arch):
     env = {'PATH': '/usr/bin:/bin', 'GOMAXPROCS': '2', 'GOTELEMETRY': 'off', 'GOWORK': 'off'}
     for key, leaf in (('HOME','build-home'),('GOCACHE','go-cache'),('GOMODCACHE','go-modules'),('TMPDIR','build-tmp')):
         env[key] = str(private_directory(state/leaf))
-    subprocess.run([compiler,'run','-mod=readonly','./cmd/build-portable-package',
+    run_command([compiler,'run','-mod=readonly','./cmd/build-portable-package',
                     '-version',version[1:],'-os','darwin','-arch',arch,
                     '-executable',str(binary),'-output',str(output),
                     '-workdir',str(output.parent/'expanded')], cwd=tree, env=env,check=True)
@@ -193,12 +337,12 @@ def build_optional_utilities(root, state, sha, go, arch):
            'GOWORK':'off','GOOS':'darwin','GOARCH':arch}
     for key,leaf in (('HOME','build-home'),('GOCACHE','go-cache'),('GOMODCACHE','go-modules'),('TMPDIR','build-tmp')):
         env[key] = str(private_directory(state/leaf))
-    print('Building clean-source optional utilities '+sha+'...',flush=True)
+    detail('Building clean-source optional utilities '+sha+'...')
     for name,output in outputs.items():
         fd,temporary = tempfile.mkstemp(prefix='build-',dir=cache)
         os.close(fd)
         try:
-            subprocess.run([compiler,'build','-mod=readonly','-o',temporary,'./cmd/'+name],
+            run_command([compiler,'build','-mod=readonly','-o',temporary,'./cmd/'+name],
                            cwd=tree,env=env,check=True)
             source_identity(root,sha)
             Path(temporary).chmod(0o700)
@@ -297,7 +441,7 @@ def stage_claude_cli(installed):
             os.replace(temporary,snapshot)
         finally:
             Path(temporary).unlink(missing_ok=True)
-    subprocess.run(['/usr/bin/codesign','--verify','--strict',str(snapshot)],
+    run_command(['/usr/bin/codesign','--verify','--strict',str(snapshot)],
                    check=True,capture_output=True,timeout=20)
     if digest(source) != checksum:
         raise ValueError('Installed Claude changed during TEST snapshot verification')
@@ -318,12 +462,12 @@ def local_git_snapshot(root, lab, sha, env):
     git_env = {'PATH':'/usr/bin:/bin','HOME':env['HOME'],
                'GIT_CONFIG_NOSYSTEM':'1','GIT_CONFIG_GLOBAL':'/dev/null',
                'GIT_CONFIG_SYSTEM':'/dev/null','GIT_TERMINAL_PROMPT':'0'}
-    subprocess.run(['/usr/bin/git','-c','init.defaultBranch=main','init','--quiet','--bare',str(snapshot)],env=git_env,check=True,stdout=subprocess.DEVNULL)
-    subprocess.run(['/usr/bin/git','-C',str(snapshot),'-c','protocol.file.allow=always',
+    run_command(['/usr/bin/git','-c','init.defaultBranch=main','init','--quiet','--bare',str(snapshot)],env=git_env,check=True,stdout=subprocess.DEVNULL)
+    run_command(['/usr/bin/git','-C',str(snapshot),'-c','protocol.file.allow=always',
                     'fetch','--quiet','--depth=1',str(root),sha],env=git_env,check=True)
     for ref in ('refs/tags/dist/platform-source/'+sha,'refs/heads/release/platform-macos'):
-        subprocess.run(['/usr/bin/git','-C',str(snapshot),'update-ref',ref,sha],env=git_env,check=True)
-    subprocess.run(['/usr/bin/git','-C',str(snapshot),'symbolic-ref','HEAD','refs/heads/release/platform-macos'],env=git_env,check=True)
+        run_command(['/usr/bin/git','-C',str(snapshot),'update-ref',ref,sha],env=git_env,check=True)
+    run_command(['/usr/bin/git','-C',str(snapshot),'symbolic-ref','HEAD','refs/heads/release/platform-macos'],env=git_env,check=True)
     config = lab/'gitconfig'
     urls = ('https://github.com/'+REPO+'.git','https://github.com/'+REPO,
             'git@github.com:'+REPO+'.git','git@github.com:'+REPO,
@@ -558,79 +702,106 @@ def preview(args):
     if sys.platform != 'darwin' or not os.isatty(0) or not os.isatty(1):
         raise ValueError('This macOS preview requires an interactive terminal')
     root = Path(__file__).resolve().parent.parent
-    sha = source_identity(root)
     state = private_directory(args.state_dir or Path(tempfile.gettempdir())/('agent-notifications-preview-TEST-'+str(os.getuid())))
     if state.is_relative_to(root):
         raise ValueError('Keep TEST state outside the source checkout')
-    binary = args.binary.resolve(strict=True) if args.binary else build_binary(root,state,sha,args.go)
-    archive = native_archive(state,args.native_zip)
-    installed = discover_clis(args)
     lab = Path(tempfile.mkdtemp(prefix='AllAgents-TEST-',dir=state))
-    print('Retained TEST profile: '+str(lab), flush=True)
-    commands = private_directory(lab/'fixture-tools')
-    trusted = private_directory(lab/'trusted-tools')
-    assets = private_directory(lab/'assets')
-    env = {key:os.environ[key] for key in ('TERM','COLORTERM','TERM_PROGRAM','NO_COLOR','LANG','LC_CTYPE') if key in os.environ}
-    if os.environ.get('BOOTSTRAP_VERBOSE') == '1':
-        env['BOOTSTRAP_VERBOSE'] = '1'
-    env['PATH'] = str(commands)+os.pathsep+str(trusted)
-    for tool in TOOLS:
-        source = shutil.which(tool)
-        if source:
-            (trusted/tool).symlink_to(source)
-    for key in PRIVATE_KEYS:
-        env[key] = str(private_directory(lab/key))
-    arch = 'arm64' if os.uname().machine == 'arm64' else 'amd64'
-    name = 'claude-notifications-darwin-'+arch
-    staged = assets/name
-    shutil.copyfile(binary,staged)
-    staged.chmod(0o700)
-    version = subprocess.check_output([str(staged),'--version'],env=env,text=True).strip().split()[-1]
-    if not re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+',version):
-        raise ValueError('Unexpected candidate binary version')
-    shutil.copyfile(archive,assets/'ClaudeNotifier.app.zip')
-    portable = build_portable(root, state, sha, args.go, staged, version, arch)
-    shutil.copyfile(portable, assets/portable.name)
-    utilities = build_optional_utilities(root,state,sha,args.go,arch)
-    for utility in utilities.values():
-        shutil.copyfile(utility,assets/utility.name)
-        (assets/utility.name).chmod(0o700)
-    subprocess.run(['/usr/bin/git','-C',str(root),'archive','--format=tar.gz',
-                    '--prefix=agent-notifications-'+sha+'/', '--output',str(assets/'source.tar.gz'),sha],check=True)
-    (assets/'checksums.txt').write_text(''.join(digest(assets/leaf)+'  '+leaf+'\n' for leaf in (name,'ClaudeNotifier.app.zip',portable.name,*(path.name for path in utilities.values()))))
-    rows = ['# agent-notifications-platform-channels-v1']
-    for platform, cpu in (('darwin','amd64'),('darwin','arm64'),('linux','amd64'),('linux','arm64'),('windows','amd64')):
-        ref = 'release/platform-macos' if platform == 'darwin' else 'release/platform-linux-windows'
-        rows.append('\t'.join([platform,cpu,version,sha,sha,ref]))
-    (assets/'channels.tsv').write_text('\n'.join(rows)+'\n')
-    offline_transport(commands,assets,root,sha,version,name,lab/'acquisitions.log')
-    local_git_snapshot(root, lab, sha, env)
-    snapshots = stage_claude_cli(installed)
-    cli_proxies(commands, lab, installed, env, sha, snapshots)
-    env['BOOTSTRAP_RELEASES_BASE_URL'] = 'https://preview-installer.invalid/releases'
-    # Supported read-only intent verifies the executable, not its filename/cache key.
-    intent = assets/'source-proof.json'
-    result = subprocess.run([str(staged),'setup-products','prepare','--products','opencode',
-                             '--intent-file',str(intent),'--plain'],cwd=lab,env=env,
-                            text=True,capture_output=True,timeout=40)
-    if result.returncode or result.stdout != 'prepared\n':
-        raise ValueError('Read-only source verification failed: '+result.stdout+result.stderr)
-    proof = json.loads(intent.read_text())['provenance']
-    if proof['SourceCommit'] != sha or proof['SHA256'] != digest(staged):
-        raise ValueError('Binary SourceCommit/SHA256 does not match clean repository HEAD')
-    source_identity(root,sha)
-    print('Actual installed CLIs (missing CLIs remain absent): '+json.dumps(installed),flush=True)
-    for name, snapshot in snapshots.items():
-        print(name+' TEST execution snapshot: '+snapshot['execution']+' (SHA256 '+snapshot['snapshot_sha256']+')',flush=True)
-    print('Select the installed clients. Fresh Desktop on/Webhook off.',flush=True)
-    print('CLI registration uses a local source snapshot; CLI network and host credentials are denied.',flush=True)
-    print('This previews installation only; it does not run agents or verify notification delivery.',flush=True)
-    command = [str(trusted/'bash'),str(assets/'setup.sh')]+(['--plain'] if args.plain else ['--ui','auto'])
+    log_path = lab/'preparation.log'
     try:
+        with Preparation(log_path, plain=args.plain) as preparation:
+            sha = source_identity(root)
+            detail('Retained TEST profile: '+str(lab))
+            detail('Private reusable TEST cache: '+str(state))
+            preparation.stage('Preparing preview executable')
+            binary = args.binary.resolve(strict=True) if args.binary else build_binary(root,state,sha,args.go)
+            detail('Preview executable: '+str(binary))
+            preparation.stage('Preparing signed desktop helper')
+            archive = native_archive(state,args.native_zip)
+            detail('Signed desktop helper archive: '+str(archive))
+            installed = discover_clis(args)
+            commands = private_directory(lab/'fixture-tools')
+            trusted = private_directory(lab/'trusted-tools')
+            assets = private_directory(lab/'assets')
+            preparation.stage('Creating isolated preview inputs')
+            env = {key:os.environ[key] for key in ('TERM','COLORTERM','TERM_PROGRAM','NO_COLOR','LANG','LC_CTYPE') if key in os.environ}
+            if os.environ.get('BOOTSTRAP_VERBOSE') == '1':
+                env['BOOTSTRAP_VERBOSE'] = '1'
+            env['PATH'] = str(commands)+os.pathsep+str(trusted)
+            for tool in TOOLS:
+                source = shutil.which(tool)
+                if source:
+                    (trusted/tool).symlink_to(source)
+            for key in PRIVATE_KEYS:
+                env[key] = str(private_directory(lab/key))
+            arch = 'arm64' if os.uname().machine == 'arm64' else 'amd64'
+            name = 'claude-notifications-darwin-'+arch
+            staged = assets/name
+            shutil.copyfile(binary,staged)
+            staged.chmod(0o700)
+            version = command_output([str(staged),'--version'],env=env,text=True).strip().split()[-1]
+            if not re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+',version):
+                raise ValueError('Unexpected candidate binary version')
+            shutil.copyfile(archive,assets/'ClaudeNotifier.app.zip')
+            preparation.stage('Preparing portable package')
+            portable = build_portable(root, state, sha, args.go, staged, version, arch)
+            detail('Portable package cache: '+str(portable))
+            shutil.copyfile(portable, assets/portable.name)
+            preparation.stage('Preparing sound and device utilities')
+            utilities = build_optional_utilities(root,state,sha,args.go,arch)
+            detail('Optional utility cache: '+json.dumps({name:str(path) for name,path in utilities.items()}))
+            for utility in utilities.values():
+                shutil.copyfile(utility,assets/utility.name)
+                (assets/utility.name).chmod(0o700)
+            run_command(['/usr/bin/git','-C',str(root),'archive','--format=tar.gz',
+                            '--prefix=agent-notifications-'+sha+'/', '--output',str(assets/'source.tar.gz'),sha],check=True)
+            (assets/'checksums.txt').write_text(''.join(digest(assets/leaf)+'  '+leaf+'\n' for leaf in (name,'ClaudeNotifier.app.zip',portable.name,*(path.name for path in utilities.values()))))
+            rows = ['# agent-notifications-platform-channels-v1']
+            for platform, cpu in (('darwin','amd64'),('darwin','arm64'),('linux','amd64'),('linux','arm64'),('windows','amd64')):
+                ref = 'release/platform-macos' if platform == 'darwin' else 'release/platform-linux-windows'
+                rows.append('\t'.join([platform,cpu,version,sha,sha,ref]))
+            (assets/'channels.tsv').write_text('\n'.join(rows)+'\n')
+            preparation.stage('Preparing offline CLI registration')
+            offline_transport(commands,assets,root,sha,version,name,lab/'acquisitions.log')
+            local_git_snapshot(root, lab, sha, env)
+            snapshots = stage_claude_cli(installed)
+            cli_proxies(commands, lab, installed, env, sha, snapshots)
+            env['BOOTSTRAP_RELEASES_BASE_URL'] = 'https://preview-installer.invalid/releases'
+            # Supported read-only intent verifies the executable, not its filename/cache key.
+            preparation.stage('Verifying preview provenance')
+            intent = assets/'source-proof.json'
+            result = run_command([str(staged),'setup-products','prepare','--products','opencode',
+                                     '--intent-file',str(intent),'--plain'],cwd=lab,env=env,
+                                    text=True,capture_output=True,timeout=40)
+            if result.returncode or result.stdout != 'prepared\n':
+                raise ValueError('Read-only source verification failed: '+result.stdout+result.stderr)
+            proof = json.loads(intent.read_text())['provenance']
+            if proof['SourceCommit'] != sha or proof['SHA256'] != digest(staged):
+                raise ValueError('Binary SourceCommit/SHA256 does not match clean repository HEAD')
+            source_identity(root,sha)
+            detail('Actual installed CLIs (missing CLIs remain absent): '+json.dumps(installed))
+            for name, snapshot in snapshots.items():
+                detail(name+' TEST execution snapshot: '+snapshot['execution']+' (SHA256 '+snapshot['snapshot_sha256']+')')
+            detail('CLI registration uses a local source snapshot; CLI network and host credentials are denied.')
+            detail('This previews installation only; it does not run agents or verify notification delivery.')
+        print('Preview ready. Select clients; Desktop on / Webhook off.', flush=True)
+        command = [str(trusted/'bash'),str(assets/'setup.sh')]+(['--plain'] if args.plain else ['--ui','auto'])
         return subprocess.run(command,cwd=lab,env=env).returncode
+    except KeyboardInterrupt:
+        print('\nPreview cancelled.', file=sys.stderr, flush=True)
+        return 130
+    except (ValueError,OSError,subprocess.SubprocessError) as error:
+        if isinstance(error, subprocess.CalledProcessError):
+            message = Path(error.cmd[0]).name+' exited with status '+str(error.returncode)+'; see preparation log'
+        elif isinstance(error, subprocess.TimeoutExpired):
+            message = Path(error.cmd[0]).name+' timed out; see preparation log'
+        else:
+            message = str(error)
+        print('Preview failed: '+message, file=sys.stderr, flush=True)
+        return 1
     finally:
-        print('\nTEST artifacts retained: '+str(lab),flush=True)
-        print('Keep this directory while its native app registration may exist; no automatic deletion.',flush=True)
+        print('\nTEST profile retained: '+str(lab), flush=True)
+        print('Preparation log: '+str(log_path), flush=True)
+        print('Keep the profile while its native app registration may exist; no automatic deletion.', flush=True)
 
 
 def main():

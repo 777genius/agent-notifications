@@ -14,6 +14,8 @@ From a clean checkout, open a terminal and run:
 make preview-installer
 # Optional line prompts and a custom reusable cache:
 make preview-installer PREVIEW_ARGS='--plain --state-dir /path/to/private-TEST-cache'
+# Show technical preparation and bootstrap diagnostics:
+BOOTSTRAP_VERBOSE=1 make preview-installer
 # Use an explicitly installed Gemini CLI in the TEST profile:
 make preview-installer PREVIEW_ARGS='--gemini-cli /absolute/path/to/gemini'
 ```
@@ -28,6 +30,14 @@ Native Claude installations use a private local copy of the installed executable
 to avoid launch delays on external disks. SHA256 and the macOS signature are
 verified; logs retain both the installed path and the TEST execution path.
 Select the clients, then review and confirm the plan. Use `--plain` for line prompts.
+
+Preparation shows a spinner with the current stage in a capable terminal.
+`--plain`, `NO_COLOR` and `TERM=dumb` use concise stage lines. Build output,
+source identities, executable paths and snapshot details stay in the retained
+TEST profile's `preparation.log`; the final output prints its location even if
+preparation fails or is cancelled. Set exactly `BOOTSTRAP_VERBOSE=1` to show
+those details and the bootstrap diagnostics. The spinner stops before client
+selection begins.
 
 Python 3.9+, Go and macOS signing/sandbox tools are required. `gh` downloads the
 latest signed public helper and verifies its published checksum; alternatively

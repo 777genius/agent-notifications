@@ -97,6 +97,13 @@ _GEMINI_EXEC=gemini
 _PROGRESS_IDS=()
 _PROGRESS_PHASES=()
 _PROGRESS_OUTCOMES=()
+_PROGRESS_PID=""
+_PROGRESS_EVENTS=""
+_PROGRESS_KIND=""
+_PROGRESS_GLOBAL_PHASE=preparation
+_PROGRESS_LOG=""
+_PROGRESS_CAP_HELPER=""
+_PROGRESS_CAP_SUPPORTED=false
 
 # Isolated JSON/checksum runtime. Prefer python3 -I; Node is the supported
 # fallback because Claude Code already ships it. iTerm2 venv still needs a
@@ -1267,12 +1274,126 @@ setup_iterm2_venv() {
 
 # ──────────────────────────────────────────────
 
+# Progress observes shell-owned state. Never background an installation function:
+# its arrays, staged paths and recovery decisions must survive in this shell.
+progress_rich_available() {
+    [ "${BOOTSTRAP_VERBOSE:-0}" != 1 ] && [ "${_UI_MODE:-auto}" != plain ] &&
+        [ -z "${NO_COLOR:-}" ] && [ "${TERM:-dumb}" != dumb ] && [ -t 2 ]
+}
+
+progress_helper_available() {
+    [ -n "$_CONFIG_HELPER" ] && [ -x "$_CONFIG_HELPER" ] || return 1
+    if [ "$_PROGRESS_CAP_HELPER" != "$_CONFIG_HELPER" ]; then
+        _PROGRESS_CAP_HELPER=$_CONFIG_HELPER
+        _PROGRESS_CAP_SUPPORTED=false
+        local capability
+        capability=$("$_CONFIG_HELPER" installer-progress --capabilities </dev/null 2>/dev/null) || return 1
+        [ "$capability" != installer-progress-v1 ] || _PROGRESS_CAP_SUPPORTED=true
+    fi
+    [ "$_PROGRESS_CAP_SUPPORTED" = true ]
+}
+
+progress_event() {
+    [ -n "$_PROGRESS_EVENTS" ] && [ "$_PROGRESS_KIND" = helper ] || return 0
+    printf '%s\t%s\t%s\n' "$1" "$2" "$3" >> "$_PROGRESS_EVENTS" || true
+}
+
+progress_start() {
+    progress_rich_available || return 0
+    [ -z "$_PROGRESS_PID" ] || return 0
+    _PROGRESS_GLOBAL_PHASE=preparation
+    case "$1" in
+        "Preparing verified installer") _PROGRESS_GLOBAL_PHASE=verified-installer ;;
+        "Checking existing installation") _PROGRESS_GLOBAL_PHASE=existing-installation ;;
+        "Checking shared settings") _PROGRESS_GLOBAL_PHASE=shared-settings ;;
+        "Preparing notification settings") _PROGRESS_GLOBAL_PHASE=notification-settings ;;
+        "Configuring agent notification tools") _PROGRESS_GLOBAL_PHASE=notification-tools ;;
+        "Installing Claude notifications") _PROGRESS_GLOBAL_PHASE=installing-claude ;;
+        "Installing Codex notifications") _PROGRESS_GLOBAL_PHASE=installing-codex ;;
+        "Installing OpenCode notifications") _PROGRESS_GLOBAL_PHASE=installing-opencode ;;
+        "Installing Gemini CLI notifications") _PROGRESS_GLOBAL_PHASE=installing-gemini ;;
+    esac
+    # Older verified helpers retain the existing plain stage output.
+    if [ -n "$_CONFIG_HELPER" ]; then
+        progress_helper_available || return 0
+        _PROGRESS_EVENTS=$(mktemp "${TMPDIR:-/tmp}/bootstrap-progress-XXXXXX") || return 0
+        _PROGRESS_KIND=helper
+        local i=0
+        while [ "$i" -lt "${#_PROGRESS_IDS[@]}" ]; do
+            progress_event "${_PROGRESS_IDS[$i]}" "${_PROGRESS_PHASES[$i]}" "${_PROGRESS_OUTCOMES[$i]}"
+            i=$((i + 1))
+        done
+        progress_event global "$_PROGRESS_GLOBAL_PHASE" running
+        "$_CONFIG_HELPER" installer-progress --events "$_PROGRESS_EVENTS" --ui "${_UI_MODE:-auto}" --transient --owner-pid "$$" </dev/null >/dev/null &
+        _PROGRESS_PID=$!
+    else
+        _PROGRESS_KIND=spinner
+        _PROGRESS_EVENTS=$(mktemp "${TMPDIR:-/tmp}/bootstrap-progress-XXXXXX") || return 0
+        # Only this display loop is asynchronous. The owner remains synchronous.
+        (
+            trap 'exit 0' INT TERM HUP
+            local frame=0 frames='|/-\' label="$1" file="" bytes="" next_label=""
+            while :; do
+                if [ -s "$_PROGRESS_EVENTS" ]; then
+                    { IFS= read -r next_label; IFS= read -r file; } < "$_PROGRESS_EVENTS" || true
+                    [ -z "$next_label" ] || label=$next_label
+                fi
+                bytes=""
+                if [ -n "$file" ] && [ -f "$file" ]; then
+                    bytes=$(wc -c < "$file" 2>/dev/null | tr -d '[:space:]') || bytes=""
+                    [ -z "$bytes" ] || bytes=" ($bytes bytes received)"
+                fi
+                printf '\r\033[2K  %s %s%s' "${frames:frame:1}" "$label" "$bytes" >&2
+                frame=$(((frame + 1) % 4))
+                sleep 0.1
+            done
+        ) </dev/null >/dev/null &
+        _PROGRESS_PID=$!
+    fi
+}
+
+# A file's current byte count is measured, never a guessed percentage.
+progress_download_activity() {
+    [ "$_PROGRESS_KIND" = spinner ] && [ -n "$_PROGRESS_EVENTS" ] || return 0
+    local label="Downloading installer files"
+    case "${1##*/}" in
+        checksums.txt) label="Downloading release checksums" ;;
+        claude-notifications-*) label="Downloading verified installer helper" ;;
+        install.sh) label="Downloading runtime installer" ;;
+        source.tar.gz) label="Downloading source bundle" ;;
+        ClaudeNotifier.app.zip) label="Downloading macOS notifier" ;;
+    esac
+    printf '%s\n%s\n' "$label" "$1" > "$_PROGRESS_EVENTS" || true
+}
+
+progress_stop() {
+    local status=${1:-0} pid=$_PROGRESS_PID
+    if [ -n "$pid" ]; then
+        if [ "$_PROGRESS_KIND" = helper ]; then
+            if [ "$status" -eq 0 ]; then progress_event global "$_PROGRESS_GLOBAL_PHASE" done
+            else progress_event global "$_PROGRESS_GLOBAL_PHASE" failed; fi
+            # A full disk or inaccessible event file must not strand the observer.
+            if ! printf 'stop\t\t\n' >> "$_PROGRESS_EVENTS"; then
+                kill "$pid" 2>/dev/null || true
+            fi
+        else
+            kill "$pid" 2>/dev/null || true
+        fi
+        wait "$pid" 2>/dev/null || true
+        [ "$_PROGRESS_KIND" != spinner ] || printf '\r\033[2K' >&2
+    fi
+    [ -z "$_PROGRESS_EVENTS" ] || rm -f "$_PROGRESS_EVENTS"
+    _PROGRESS_PID=""; _PROGRESS_EVENTS=""; _PROGRESS_KIND=""
+}
+
 # Keep low-level installer diagnostics available without printing nested success
 # banners or machine JSON. Functions run in this shell so their state survives.
 run_setup_stage() {
     local label="$1" log status=0
     shift
-    if [ "${BOOTSTRAP_VERBOSE:-0}" = 1 ] || [[ "$label" = Installing* ]]; then
+    if progress_rich_available && progress_helper_available; then
+        : # The transient board owns rich stage labels.
+    elif [ "${BOOTSTRAP_VERBOSE:-0}" = 1 ] || [[ "$label" = Installing* ]] || progress_rich_available; then
         printf '%s...\n' "$label"
     fi
     if [ "${BOOTSTRAP_VERBOSE:-0}" = 1 ]; then
@@ -1280,7 +1401,10 @@ run_setup_stage() {
         return $?
     fi
     log=$(mktemp "${TMPDIR:-/tmp}/bootstrap-output-XXXXXX") || return 1
+    _PROGRESS_LOG=$log
+    progress_start "$label"
     if "$@" > "$log" 2> "$log.stderr"; then
+        progress_stop 0
         # Preserve all stderr, including skipped/partial setup recovery advice.
         grep -vE '^(phase (prepare|preflight|hooks|agent-notify|complete)|Setting up notifications: (prepare|preflight|hooks|agent notify|complete)\.\.\.)$' "$log.stderr" >&2 || true
         # Keep indented recovery advice with its warning, including colorized lines.
@@ -1297,9 +1421,11 @@ run_setup_stage() {
         }' "$log"
     else
         status=$?
+        progress_stop "$status"
         cat "$log" "$log.stderr" >&2
     fi
     rm -f "$log" "$log.stderr"
+    _PROGRESS_LOG=""
     if [ "$status" -ne 0 ]; then
         printf 'Setup stopped while %s. Review the details above.\n' "$label" >&2
         return "$status"
@@ -1647,6 +1773,8 @@ select_product() {
 }
 
 bootstrap_cleanup() {
+    progress_stop 1
+    [ -z "$_PROGRESS_LOG" ] || rm -f "$_PROGRESS_LOG" "$_PROGRESS_LOG.stderr"
     close_prompt
     [ -z "$_BOOTSTRAP_TMP" ] || rm -f "$_BOOTSTRAP_TMP"
     [ -z "$_BOOTSTRAP_STAGE" ] || rm -rf "$_BOOTSTRAP_STAGE"
@@ -1679,6 +1807,7 @@ install_runtime() {
 }
 
 fetch_bootstrap_file() {
+    progress_download_activity "$2"
     if command -v curl >/dev/null 2>&1; then
         curl -fsSL --connect-timeout 15 --max-time 120 "$1" -o "$2"
     else
@@ -2266,13 +2395,79 @@ progress_phase() {
     local i=0
     while [ "$i" -lt "${#_PROGRESS_IDS[@]}" ]; do
         if [ "${_PROGRESS_IDS[$i]}" = "$1" ]; then
-            _PROGRESS_PHASES[$i]=$2; _PROGRESS_OUTCOMES[$i]=$3; return 0
+            _PROGRESS_PHASES[$i]=$2; _PROGRESS_OUTCOMES[$i]=$3
+            progress_event "$1" "$2" "$3"
+            return 0
         fi
         i=$((i + 1))
     done
 }
 
+# The final board already presents registration and restart status. Compact only
+# our generated display summary after that board successfully renders; this does
+# not change installation state or any recovery, trust or delivery instruction.
+compact_rich_setup_summary() {
+    local summary=${BOOTSTRAP_SUMMARY_FILE:-} combined
+    [ -n "$summary" ] && [ -f "$summary" ] && [ ! -L "$summary" ] || return 0
+    combined=$(mktemp "${summary}.rich-XXXXXX") || return 0
+    if awk -v selected=" ${_PROGRESS_IDS[*]} " '
+        function chosen(client) { return index(selected, " " client " ") != 0 }
+        BEGIN { tool_prefix = "    Agent notification tool: " }
+        {
+            client = ""
+            if ($0 == "  Claude - installed; restart required.") client = "claude"
+            if ($0 == "  Codex - installed; restart required.") client = "codex"
+            if ($0 == "  OpenCode - installed; restart required to load the global plugin.") client = "opencode"
+            if ($0 == "  Gemini CLI - installed; restart required.") client = "gemini"
+            if (client != "") {
+                current = client
+                if (chosen(client)) next
+            }
+            if ((current == "claude" || current == "codex") && chosen(current) &&
+                index($0, tool_prefix) == 1) {
+                label = current == "claude" ? "Claude" : "Codex"
+                print "  " label " notification tool: " substr($0, length(tool_prefix) + 1)
+                next
+            }
+            print
+        }
+    ' "$summary" > "$combined"; then
+        mv -f -- "$combined" "$summary" || rm -f "$combined"
+    else
+        rm -f "$combined"
+    fi
+    return 0
+}
+
+progress_write_final_snapshot() {
+    local i=0
+    while [ "$i" -lt "${#_PROGRESS_IDS[@]}" ]; do
+        printf '%s\t%s\t%s\n' "${_PROGRESS_IDS[$i]}" "${_PROGRESS_PHASES[$i]}" "${_PROGRESS_OUTCOMES[$i]}" || return 1
+        i=$((i + 1))
+    done
+    printf 'stop\t\t\n'
+}
+
 report_progress() {
+    progress_stop "${1:-0}"
+    if progress_rich_available && progress_helper_available; then
+        local events
+        events=$(mktemp "${TMPDIR:-/tmp}/bootstrap-progress-final-XXXXXX") || events=""
+        if [ -n "$events" ]; then
+            _PROGRESS_EVENTS=$events; _PROGRESS_KIND=final
+            # Spawn only after every row and the stop sentinel are safely written.
+            if progress_write_final_snapshot > "$events"; then
+                "$_CONFIG_HELPER" installer-progress --events "$events" --ui "${_UI_MODE:-auto}" --owner-pid "$$" </dev/null >/dev/null &
+                _PROGRESS_PID=$!
+                if wait "$_PROGRESS_PID" 2>/dev/null; then
+                    [ "${1:-0}" -ne 0 ] || compact_rich_setup_summary
+                fi
+                _PROGRESS_PID=""
+            fi
+            rm -f "$events"
+            _PROGRESS_EVENTS=""; _PROGRESS_KIND=""
+        fi
+    fi
     local i=0 outcome
     while [ "$i" -lt "${#_PROGRESS_IDS[@]}" ]; do
         outcome=${_PROGRESS_OUTCOMES[$i]}
@@ -2603,7 +2798,9 @@ main() {
         _PROGRESS_IDS+=("$selected"); _PROGRESS_PHASES+=(pending); _PROGRESS_OUTCOMES+=(not_started)
     done
     PRODUCT=$original_product
-    [ -n "${BOOTSTRAP_SUMMARY_FILE:-}" ] || print_header
+    if [ -z "${BOOTSTRAP_SUMMARY_FILE:-}" ]; then
+        if ! progress_rich_available || ! progress_helper_available; then print_header; fi
+    fi
     local own_summary=false
     if [ "${#SELECTED_PRODUCTS[@]}" -gt 1 ] && [ -z "${BOOTSTRAP_SUMMARY_FILE:-}" ]; then
         BOOTSTRAP_SUMMARY_FILE="$_CONFIG_STAGE/summary.txt"
