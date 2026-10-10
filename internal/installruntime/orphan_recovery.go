@@ -1,18 +1,23 @@
 package installruntime
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"runtime"
 	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/777genius/agent-notifications/internal/codexcommand"
+	"github.com/777genius/agent-notifications/internal/strictjson"
 )
 
 const transactionSchemaV5 = 5
@@ -134,18 +139,13 @@ func orphanSelection(root string, l Ledger, req OrphanRecoveryRequest) ([]string
 		if !cleanPhysicalPath(retained.RuntimeRoot) || orphanOverlap(req.RuntimeRoot, retained.RuntimeRoot) || c.Registration != "" && orphanOverlap(c.Registration, retained.RuntimeRoot) || retained.OpenCode != nil {
 			return nil, nil, orphanConflict("shared_ownership", retained.RuntimeRoot, fmt.Errorf("overlapping or private retained consumer"))
 		}
-		if retained.Registration != "" {
-			if !cleanPhysicalPath(retained.Registration) || orphanOverlap(req.RuntimeRoot, retained.Registration) || c.Registration != "" && orphanOverlap(c.Registration, retained.Registration) {
-				return nil, nil, orphanConflict("shared_reference", retained.Registration, fmt.Errorf("retained registration cannot be excluded"))
-			}
-		}
-		paths, err := orphanCommandPaths(id, retained)
+		paths, err := orphanRetainedPaths(root, l, id, retained)
 		if err != nil {
 			return nil, nil, orphanConflict("shared_reference", retained.RuntimeRoot, err)
 		}
 		for _, path := range paths {
 			if orphanOverlap(req.RuntimeRoot, path) || c.Registration != "" && orphanOverlap(c.Registration, path) {
-				return nil, nil, orphanConflict("shared_reference", path, fmt.Errorf("retained command references selected namespace"))
+				return nil, nil, orphanConflict("shared_reference", path, fmt.Errorf("retained reference overlaps selected namespace"))
 			}
 		}
 	}
@@ -176,6 +176,114 @@ func orphanSelection(root string, l Ledger, req OrphanRecoveryRequest) ([]string
 		}
 	}
 	return selected, wrappers, nil
+}
+
+// Only retained consumers use these codecs. Selected-consumer recovery remains
+// limited to the existing absence/registration contract, and replay derives the
+// same references from its complete before-image through orphanSelection.
+func orphanRetainedPaths(root string, l Ledger, id string, c Consumer) ([]string, error) {
+	if strings.HasPrefix(id, "portable:") {
+		return orphanPortablePaths(root, l, id, c)
+	}
+	var paths []string
+	if c.Registration != "" {
+		if !cleanPhysicalPath(c.Registration) {
+			return nil, fmt.Errorf("unsupported retained registration")
+		}
+		paths = append(paths, c.Registration)
+	}
+	if id == openCodeConsumer {
+		// Legacy OpenCode stores argv, not a list of paths. Private modern
+		// registrations remain excluded by orphanSelection's ownership fence.
+		if c.OpenCode != nil || len(c.Commands) != 4 || c.Commands[1] != "opencode-event" || c.Commands[2] != "--protocol" || c.Commands[3] != "1" ||
+			c.Registration == "" || filepath.Base(c.Registration) != "agent-notifications.js" || !orphanOwnedExecutable(l, c.RuntimeRoot, c.Commands[0]) {
+			return nil, fmt.Errorf("unsupported legacy OpenCode references")
+		}
+		binary := "claude-notifications-" + runtime.GOOS + "-" + runtime.GOARCH
+		if runtime.GOOS == "windows" {
+			binary += ".exe"
+		}
+		if c.Commands[0] != filepath.Join(c.RuntimeRoot, binary) {
+			return nil, fmt.Errorf("unsupported legacy OpenCode executable")
+		}
+		return append(paths, c.Commands[0]), nil
+	}
+	commands, err := orphanCommandPaths(id, c)
+	return append(paths, commands...), err
+}
+
+func orphanOwnedExecutable(l Ledger, root, path string) bool {
+	id, owned := l.Files[path]
+	return owned && meaningfulOrphanIdentity(id) && id.Link == "" && cleanPhysicalPath(path) && pathWithinRoot(root, path) &&
+		(id.Mode&0111 != 0 || runtime.GOOS == "windows" && filepath.Ext(path) == ".exe")
+}
+
+// A bounded structural projection of portable's immutable v1 wire identity.
+// portable imports installruntime, so the kernel cannot import its Binding.
+// Exact fields/canonical bytes/hash prevent unknown references being discarded;
+// this projection grants no portable setup or delivery authority.
+type orphanPortableBinding struct {
+	Version        int    `json:"version"`
+	Integration    string `json:"integration"`
+	InstallationID string `json:"installationID"`
+	BindingID      string `json:"bindingID"`
+	ScopeID        string `json:"scopeID"`
+	ComponentID    string `json:"componentID"`
+	Owner          string `json:"owner"`
+	ScopeRoot      string `json:"scopeRoot"`
+	DataRoot       string `json:"dataRoot"`
+	ControlRoot    string `json:"controlRoot"`
+	GlobalConfig   string `json:"globalConfig"`
+	RuntimeRoot    string `json:"runtimeRoot"`
+	Primary        string `json:"primary"`
+}
+
+var orphanPortableID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$`)
+
+func orphanPortablePaths(root string, l Ledger, key string, c Consumer) ([]string, error) {
+	raw := []byte(c.Registration)
+	if strictjson.Validate(raw, strictjson.Budget{Bytes: 16384, Depth: 2, Entries: 13}) != nil || exactOrphanJSON(raw, reflect.TypeOf(orphanPortableBinding{})) != nil {
+		return nil, fmt.Errorf("unsupported portable reference codec")
+	}
+	var b orphanPortableBinding
+	if json.Unmarshal(raw, &b) != nil {
+		return nil, fmt.Errorf("invalid portable identity")
+	}
+	canonical, err := json.Marshal(b)
+	sum := sha256.Sum256(raw)
+	if err != nil || !bytes.Equal(canonical, raw) || key != "portable:"+hex.EncodeToString(sum[:]) || b.Version != 1 ||
+		b.Owner != l.Owner || b.ComponentID != l.ID || b.ControlRoot != root || b.RuntimeRoot != c.RuntimeRoot || len(c.Commands) != 1 {
+		return nil, fmt.Errorf("portable identity differs from recorded installation")
+	}
+	switch b.Integration {
+	case "claude", "codex", "copilot-vscode", "cursor":
+	default:
+		return nil, fmt.Errorf("unsupported portable integration")
+	}
+	for _, id := range []string{b.InstallationID, b.BindingID, b.ScopeID, b.ComponentID} {
+		if !orphanPortableID.MatchString(id) {
+			return nil, fmt.Errorf("invalid portable identity field")
+		}
+	}
+	paths := []string{b.ScopeRoot, b.DataRoot, b.ControlRoot, b.GlobalConfig, b.RuntimeRoot}
+	for _, path := range paths {
+		if !cleanPhysicalPath(path) {
+			return nil, fmt.Errorf("invalid portable reference path")
+		}
+	}
+	if b.Primary == "" || len(b.Primary) > 512 || strings.ContainsAny(b.Primary, `\:`) || !filepath.IsLocal(filepath.FromSlash(b.Primary)) {
+		return nil, fmt.Errorf("invalid portable primary")
+	}
+	for _, part := range strings.Split(b.Primary, "/") {
+		if !orphanPortableID.MatchString(part) || part == "." || part == ".." {
+			return nil, fmt.Errorf("invalid portable primary segment")
+		}
+	}
+	primary := filepath.Join(b.RuntimeRoot, filepath.FromSlash(b.Primary))
+	if c.Commands[0] != primary || !orphanOwnedExecutable(l, b.RuntimeRoot, primary) {
+		return nil, fmt.Errorf("portable primary differs from owned executable")
+	}
+	return append(paths, primary), nil
 }
 
 func meaningfulOrphanIdentity(id Identity) bool {
