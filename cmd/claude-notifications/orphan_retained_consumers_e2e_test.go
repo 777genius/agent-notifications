@@ -124,15 +124,15 @@ func TestOrphanRecoveryRealCLISixKnownConsumers(t *testing.T) {
 		return result
 	}
 	primaryCommand := filepath.Join(primary, filepath.FromSlash(portable.PlatformPrimary()))
-	before := commit(primary, "claude-hooks", installruntime.Consumer{Commands: []string{primaryCommand}}, files(primary, primaryNames))
+	commit(primary, "claude-hooks", installruntime.Consumer{Commands: []string{primaryCommand}}, files(primary, primaryNames))
 	liveRegistration := filepath.Join(filepath.Dir(liveCodex), "hooks.json")
 	embeddedPut(t, liveRegistration, []byte("TEST retained generated Codex registration\n"), 0600)
-	before = commit(liveCodex, "codex:"+liveRegistration, installruntime.Consumer{Registration: liveRegistration, Commands: codexcommand.Commands(liveCodex)}, files(liveCodex, payloadNames))
+	commit(liveCodex, "codex:"+liveRegistration, installruntime.Consumer{Registration: liveRegistration, Commands: codexcommand.Commands(liveCodex)}, files(liveCodex, payloadNames))
 	embeddedPut(t, registration, []byte("TEST deleted Codex registration\n"), 0600)
-	before = commit(orphan, orphanID, installruntime.Consumer{Registration: registration, Commands: codexcommand.Commands(orphan)}, files(orphan, payloadNames))
+	commit(orphan, orphanID, installruntime.Consumer{Registration: registration, Commands: codexcommand.Commands(orphan)}, files(orphan, payloadNames))
 	legacyRegistration := filepath.Join(root, "config", "opencode", "plugins", "agent-notifications.js")
 	embeddedPut(t, legacyRegistration, []byte("// TEST retained legacy OpenCode registration\n"), 0600)
-	before = commit(primary, "opencode-notifications", installruntime.Consumer{Registration: legacyRegistration, Commands: []string{filepath.Join(primary, filepath.Base(portable.PlatformPrimary())), "opencode-event", "--protocol", "1"}}, nil)
+	before := commit(primary, "opencode-notifications", installruntime.Consumer{Registration: legacyRegistration, Commands: []string{filepath.Join(primary, filepath.Base(portable.PlatformPrimary())), "opencode-event", "--protocol", "1"}}, nil)
 	for _, integration := range []portable.Integration{portable.Claude, portable.Codex} {
 		binding := portable.Binding{Version: 1, Integration: integration, InstallationID: "TEST-six-consumers", BindingID: "TEST-" + string(integration), ScopeID: "user", ComponentID: before.ID, Owner: before.Owner, ScopeRoot: filepath.Join(root, string(integration)), DataRoot: filepath.Join(root, "data"), ControlRoot: control, GlobalConfig: filepath.Join(control, "agent-notifications.json"), RuntimeRoot: primary, Primary: portable.PlatformPrimary()}
 		id, consumer, _, e := binding.Registration()
