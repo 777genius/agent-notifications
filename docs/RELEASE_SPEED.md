@@ -114,3 +114,77 @@ for preparation, real TTY trust, exactly one turn and owned-server closure. The
 Make target runs one explicit phase, never silently applies an installation or
 submits a model turn when asking for a plan. CI runs type/fixture contracts only;
 actual signed macOS and installed Codex E2E remains a separately scoped TEST run.
+
+## Executable fast path
+
+The implementation/acceptance plan is
+[release-fast-path-2026-10-10.md](plans/release-fast-path-2026-10-10.md).
+
+Before freezing C, use the existing `make preview-installer` in a real terminal
+for an isolated installation preview. It uses clean committed source, retains
+TEST native profiles and does not execute agent/model turns. Do not introduce a
+second preview runner or infer signed/draft delivery qualification from preview.
+After preparing C and P, run their cheap preflights together:
+
+```sh
+make release-prepare RELEASE_VERSION=X.Y.Z CANDIDATE_SHA=C \
+  CANDIDATE_ROOT=/absolute/candidate PROMOTION_ROOT=/absolute/promotion
+```
+
+Start C CI and signing independently; prepare P and start its CI immediately.
+Use one `make release-wait RELEASE_WAIT_INPUTS=/private/tmp/TEST-wait.json`
+process instead of serially watching the three lanes. The input shape is:
+
+```json
+{
+  "repository": "777genius/agent-notifications",
+  "candidateSHA": "C_EXACT_40_CHARACTER_SHA",
+  "operatorSHA": "O_EXACT_40_CHARACTER_SHA",
+  "version": "vX.Y.Z",
+  "candidate": {"pr": "C_PR_NUMBER", "checks": ["ALL_EXPECTED_CURRENT_C_CHECK_NAMES"]},
+  "promotion": {"pr": "P_PR_NUMBER", "headSHA": "P_EXACT_40_CHARACTER_SHA", "checks": ["ALL_EXPECTED_CURRENT_P_CHECK_NAMES"]},
+  "signing": {"runID": "SIGNING_RUN_ID", "attempt": "SIGNING_ATTEMPT"},
+  "receipt": "/private/tmp/TEST-source-signing-promotion-fan-in.json"
+}
+```
+
+Replace every placeholder and supply the complete expected check sets from the
+current workflows, including mandatory aggregate gates. The command validates
+exact PR heads and signing identity before/after observing, starts one observer
+per lane concurrently, waits for all observers even if one fails, and writes an
+exclusive timestamped receipt. It cannot submit an agent turn, rebuild, retry,
+merge or publish. A failed receipt is retained; a recovery observation needs a
+new receipt path and only the missing phase should be rerun.
+
+An explicitly enumerated release-tools-only PR may use scoped tooling contracts
+instead of expensive native runtime CI. Unknown paths, runtime/installer/hook/
+native changes, source version changes, Makefile, workflows and classifier
+changes keep full CI. `ci:full` always forces full. Scoped checks have distinct
+names; skipped native and recovery jobs are not native success and cannot qualify a new C.
+Promotion P still has its current-head checks; this optimization does not grant
+an arbitrary P permission to reuse C's native qualification.
+
+On a draft/upload failure, use the existing `resume_run`/`resume_attempt` inputs.
+Authenticated paginated discovery finds drafts that the published-tag endpoint
+cannot return, revalidates their release IDs, and rejects duplicate/conflicting
+state. A complete resume checks inventory without traversing 29 already present
+uploads; any actual missing upload retains before/after remote conflict checks.
+Builds/signing are never repeated merely because publication transport failed.
+
+After the separately qualified assets are public, source refs/main are promoted
+and the exact-main Pages run succeeds, perform one final read-only fan-in:
+
+```sh
+make release-verify SEALED_DIR=/absolute/original-seal MAIN_SHA=EXACT_MAIN_SHA \
+  PUBLIC_LOADER_URL=https://agent-notifications.com/install.sh PAGES_RUN_ID=RUN_ID \
+  > /private/tmp/TEST-public-release-verification.json
+```
+
+Require exit zero and the success JSON. It verifies the original seal, all public
+asset identities/hashes, Latest, source references, all five channel selections,
+exact main/controller and Pages jobs, public loader and retained legacy script.
+This receipt does not apply an installation or prove native permission, agent
+activation, business delivery, banners or callbacks. Keep those separate actual
+TEST observations and the independent technical review. A failed verification
+requires repairing only the mismatched delivery phase, never rebuilding the
+immutable released tag.

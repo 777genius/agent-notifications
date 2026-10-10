@@ -42,7 +42,7 @@ function fixture() {
     actor: { login: '777genius' }, triggering_actor: { login: '777genius' } }));
   writeFileSync(join(temp, 'ancestry.json'), JSON.stringify({ base_commit: { sha: O }, merge_base_commit: { sha: O }, status: 'identical' }));
   writeFileSync(statePath, JSON.stringify({ tag: null, release: null, assets: [], mutations: [] }));
-  const run = (stage: string, overrides: Record<string, string> = {}) => spawnSync(process.execPath, [tool, stage, root],
+  const run = (stage: string, overrides: Record<string, string> = {}) => spawnSync(process.execPath, [tool, stage, ...(stage === 'unused' ? [] : [root])],
     { cwd: temp, env: { ...environment, ...overrides }, encoding: 'utf8' });
   const read = () => JSON.parse(readFileSync(statePath, 'utf8')) as State;
   const update = (patch: Partial<State>) => writeFileSync(statePath, JSON.stringify({ ...read(), ...patch }));
@@ -56,6 +56,10 @@ test('CLI from outside checkout: immutable seal, partial-upload interruption and
   const f = fixture();
   try {
     f.ok('seal'); f.ok('verify'); f.ok('tag'); f.ok('draft');
+    const publishedLookup = spawnSync(process.execPath, [fake, 'api', '--include', `repos/777genius/agent-notifications/releases/tags/${tag}`],
+      { env: { TEST_GH_STATE: join(f.temp, 'remote.json') }, encoding: 'utf8' });
+    assert.equal(publishedLookup.status, 1); assert.match(publishedLookup.stdout, /HTTP\/2.0 404/);
+    assert.equal(f.read().release?.draft, true);
     f.update({ interruptAfterUpload: true });
     const failed = f.run('upload'); assert.notEqual(failed.status, 0); assert.match(failed.stderr, /remote read failed/);
     assert.equal(f.read().assets.length, 1);
@@ -151,5 +155,88 @@ test('resume preserves producer O under a descendant controller and rejects wron
       assert.notEqual(f.run('verify', { GITHUB_SHA: controller }).status, 0);
     }
     assert.equal(f.read().mutations.length, 0);
+  } finally { f.clean(); }
+});
+
+// A draft on a later API page must resume; an early match never proves uniqueness.
+test('authenticated draft listing paginates past 100 unrelated releases and detects later duplicates', () => {
+  const f = fixture();
+  try {
+    f.ok('seal'); f.ok('tag'); f.ok('draft');
+    const good = f.read();
+    const older = Array.from({ length: 100 }, (_, i) => ({ id: i + 100, tag_name: `v0.0.${i}`, draft: false }));
+    f.update({ otherReleases: older });
+    f.ok('draft'); assert.deepEqual(f.read().mutations, good.mutations);
+    assert.ok((f.read().reads as string[]).includes('releases?per_page=100&page=2'));
+    f.update({ otherReleases: [{ ...good.release, id: 18 }, ...older] });
+    const result = f.run('draft'); assert.notEqual(result.status, 0); assert.match(result.stderr, /duplicate remote release tag/);
+    assert.deepEqual(f.read().mutations, good.mutations);
+  } finally { f.clean(); }
+});
+
+// Unknown or incomplete discovery must never be interpreted as absence and create a draft.
+// A listing match must also be rechecked directly so stale list state cannot authorize uploads.
+test('incomplete listing and changed direct-ID state fail closed before mutation', () => {
+  const f = fixture();
+  try {
+    f.ok('seal'); f.ok('tag'); f.ok('draft'); const good = f.read();
+    const page = Array.from({ length: 100 }, (_, i) => ({ id: i + 100, tag_name: `v0.0.${i}` }));
+    const fullPages = Array.from({ length: 20 }, (_, p) => page.map((r, i) => ({ ...r, id: 100 + p * 100 + i })));
+    const variants: Array<{ patch: Partial<State>; error: RegExp }> = [
+      { patch: { releasePages: [null] }, error: /release list incomplete/ },
+      { patch: { releasePages: [page], failListPage: 2 }, error: /remote read failed/ },
+      { patch: { releasePages: fullPages }, error: /bounded pagination/ },
+      { patch: { releasePages: [[good.release, good.release]] }, error: /repeated release listing/ },
+      { patch: { directRelease: null }, error: /expected JSON object/ },
+      ...[{ id: 18 }, { draft: false }, { prerelease: true }, { tag_name: 'v0.0.1' }, { target_commitish: O }]
+        .map(patch => ({ patch: { directRelease: { ...good.release, ...patch } }, error: /remote (draft identity\/state|release id) mismatch/ })),
+      { patch: { release: { ...good.release, prerelease: true } }, error: /remote draft identity\/state mismatch/ },
+    ];
+    for (const { patch, error } of variants) {
+      writeFileSync(join(f.temp, 'remote.json'), JSON.stringify({ ...good, ...patch }));
+      const result = f.run('draft'); assert.notEqual(result.status, 0); assert.match(result.stderr, error);
+      assert.deepEqual(f.read().mutations, good.mutations);
+    }
+  } finally { f.clean(); }
+});
+
+test('remote conflicts introduced during an upload stop the next write', () => {
+  const f = fixture();
+  try {
+    f.ok('seal'); f.ok('tag'); f.ok('draft'); f.update({ addConflictAfterUpload: true });
+    const result = f.run('upload'); assert.notEqual(result.status, 0); assert.match(result.stderr, /unexpected remote asset/);
+    assert.equal(f.read().uploadAttempts, 1);
+    assert.equal(f.read().mutations.length, 3);
+  } finally { f.clean(); }
+});
+
+// Prebuild absence checks must reject a draft even when it has no Git tag and is
+// invisible to the published-only tag endpoint, without needing a local seal.
+test('unused CLI rejects any existing tag or release and uncertain discovery without mutations', () => {
+  const f = fixture();
+  try {
+    const empty = f.read(); f.ok('unused');
+    const release = { id: 17, tag_name: tag, target_commitish: C, draft: true, prerelease: false };
+    const variants: Partial<State>[] = [
+      { tag: { ref: `refs/tags/${tag}`, object: { type: 'commit', sha: C } } },
+      { release },
+      { release: { ...release, draft: false } },
+      { release: { ...release, target_commitish: O } },
+      { release: { ...release, prerelease: true } },
+      { failListPage: 1 },
+      { failReads: 1 },
+      { releasePages: [null] },
+    ];
+    for (const variant of variants) {
+      writeFileSync(join(f.temp, 'remote.json'), JSON.stringify({ ...empty, ...variant }));
+      const result = f.run('unused'); assert.notEqual(result.status, 0, JSON.stringify(variant));
+      assert.deepEqual(f.read().mutations, []);
+    }
+    writeFileSync(join(f.temp, 'remote.json'), JSON.stringify(empty));
+    const invalidInputs: Record<string, string>[] = [{ GITHUB_REPOSITORY: 'other/repo' }, { RELEASE_TAG: 'unstable' }, { RELEASE_CANDIDATE_SHA: 'main' }];
+    for (const overrides of invalidInputs) {
+      assert.notEqual(f.run('unused', overrides).status, 0);
+      assert.deepEqual(f.read().mutations, []);
+    }
   } finally { f.clean(); }
 });

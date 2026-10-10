@@ -3,7 +3,9 @@
 Step-by-step guide for publishing a new version.
 
 For early preflight, parallel preparation, resumable drafts and evidence timing,
-follow [the basic release fast path](RELEASE_SPEED.md).
+follow [the basic release fast path](RELEASE_SPEED.md), including `make release-prepare`,
+`make release-wait` and `make release-verify`. Preview installation before freezing
+source with the existing `make preview-installer` command.
 
 For a release that skips a platform, promote only its qualified
 [platform release channels](PLATFORM_RELEASE_CHANNELS.md). Keep skipped-platform

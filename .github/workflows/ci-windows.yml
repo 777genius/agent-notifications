@@ -4,6 +4,7 @@ on:
   push:
     branches: [ main, develop ]
   pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled, ready_for_review]
 
 # Only a newer run for the same PR supersedes its checks.
 concurrency:
@@ -11,7 +12,50 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  scope:
+    name: Classify release tooling scope
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      mode: ${{ steps.classify.outputs.mode }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Test conservative release scope with disposable Git fixtures
+        run: python3 -B tools/ci_release_scope_test.py
+      - name: Classify exact PR revision (errors retain full CI)
+        id: classify
+        run: python3 -B tools/ci_release_scope.py classify
+
+  release-tools:
+    name: Release tools scoped contract (Windows)
+    needs: scope
+    if: needs.scope.outputs.mode == 'release-tools'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.27.2'
+          cache: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - run: npm --prefix scripts/codex-offline-release-smoke ci
+      - run: make release-tools-check
+      - run: make release-preflight
+
   test:
+    needs: scope
+    if: ${{ !cancelled() && needs.scope.outputs.mode != 'release-tools' }}
     name: Test on Windows
     runs-on: windows-latest
     timeout-minutes: 30

@@ -2,7 +2,7 @@
 	dev-local-install dev-local-update dev-local-bootstrap dev-local-status dev-local-reset \
 	dev-real-local dev-real-remote dev-real-toggle dev-real-status \
 	e2e-status e2e-smoke e2e-smoke-installed e2e-manual e2e-manual-installed \
-	linux-focus-debug preview-installer release-preflight release-tools-check release-workflow-check codex-release-smoke
+	linux-focus-debug preview-installer release-preflight release-tools-check release-workflow-check codex-release-smoke release-prepare release-wait release-verify
 
 # Binary names
 BINARY=claude-notifications
@@ -82,19 +82,34 @@ release-preflight: ## Check published metadata before release preparation (RELEA
 	@node scripts/release-preflight.mts $(if $(strip $(RELEASE_PREFLIGHT_ARGS)),$(RELEASE_PREFLIGHT_ARGS),--mode snapshot)
 
 release-workflow-check: ## Validate release workflow expressions with pinned actionlint
-	@go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -shellcheck= -pyflakes= .github/workflows/basic-release.yml .github/workflows/landing.yml .github/workflows/release-tools.yml
+	@go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -shellcheck= -pyflakes= .github/workflows/basic-release.yml .github/workflows/landing.yml .github/workflows/release-tools.yml .github/workflows/ci-ubuntu.yml .github/workflows/ci-windows.yml .github/workflows/install-recovery-e2e.yml
 
 release-tools-check: release-workflow-check ## Typecheck and test release tooling without agents, native registration or GitHub effects
 	@npm --prefix scripts/codex-offline-release-smoke run typecheck
 	@scripts/codex-offline-release-smoke/node_modules/.bin/tsc --noEmit -p scripts/release-tools-tsconfig.json
 	@npm --prefix scripts/codex-offline-release-smoke test
-	@node --test scripts/release-progress.test.mts scripts/release-preflight.test.mts scripts/basic-release-assets/assets.test.mts
+	@node --test scripts/release-progress.test.mts scripts/release-preflight.test.mts scripts/basic-release-assets/assets.test.mts scripts/release-wait.test.mts scripts/release-public-verify.test.mts
+	@python3 -B tools/ci_release_scope_test.py
 	@bash scripts/codex-release-gate_test.sh
 	@python3 scripts/stage-released-loader-test.py
 
 codex-release-smoke: ## Run one explicit isolated Codex E2E phase (SMOKE_PHASE, SMOKE_INPUTS required)
 	@test -n "$(SMOKE_PHASE)" && test -n "$(SMOKE_INPUTS)" || { echo 'Set SMOKE_PHASE and SMOKE_INPUTS (see scripts/codex-offline-release-smoke/README.md)' >&2; exit 2; }
 	@node scripts/codex-offline-release-smoke/run-phase.mts "$(SMOKE_PHASE)" "$(SMOKE_INPUTS)"
+
+# Preparation and read-only fan-in: never publish, submit a turn or apply setup.
+release-prepare: ## Preflight frozen C and prepared P together (RELEASE_VERSION, CANDIDATE_SHA, CANDIDATE_ROOT, PROMOTION_ROOT)
+	@test -n "$(RELEASE_VERSION)" && test -n "$(CANDIDATE_SHA)" && test -n "$(CANDIDATE_ROOT)" && test -n "$(PROMOTION_ROOT)" || { echo 'Set RELEASE_VERSION, CANDIDATE_SHA, CANDIDATE_ROOT and PROMOTION_ROOT' >&2; exit 2; }
+	@node scripts/release-preflight.mts --mode candidate --version "$(RELEASE_VERSION)" --source-sha "$(CANDIDATE_SHA)" --root "$(CANDIDATE_ROOT)"
+	@node scripts/release-preflight.mts --mode prepared-promotion --version "$(RELEASE_VERSION)" --source-sha "$(CANDIDATE_SHA)" --root "$(PROMOTION_ROOT)"
+
+release-wait: ## Join C/P CI and signing concurrently (RELEASE_WAIT_INPUTS JSON; no effects/retries)
+	@test -n "$(RELEASE_WAIT_INPUTS)" || { echo 'Set RELEASE_WAIT_INPUTS (see docs/RELEASE_SPEED.md)' >&2; exit 2; }
+	@node scripts/release-wait.mts "$(RELEASE_WAIT_INPUTS)"
+
+release-verify: ## Verify one public release/Latest/channels/Pages/loader (no installation)
+	@test -n "$(SEALED_DIR)" && test -n "$(MAIN_SHA)" && test -n "$(PUBLIC_LOADER_URL)" && test -n "$(PAGES_RUN_ID)" || { echo 'Set SEALED_DIR, MAIN_SHA, PUBLIC_LOADER_URL and PAGES_RUN_ID' >&2; exit 2; }
+	@node scripts/release-public-verify.mts "$(SEALED_DIR)" "$(MAIN_SHA)" "$(PUBLIC_LOADER_URL)" "$(PAGES_RUN_ID)"
 
 # Local plugin workflows
 preview-installer: ## Preview installer with real CLIs in isolated macOS TEST profiles (PREVIEW_ARGS optional)

@@ -4,6 +4,7 @@ on:
   push:
     branches: [ main, develop ]
   pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled, ready_for_review]
   workflow_dispatch:
     inputs:
       cursor_carrier_b64:
@@ -27,6 +28,48 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  scope:
+    if: github.event_name != 'workflow_dispatch'
+    name: Classify release tooling scope
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      mode: ${{ steps.classify.outputs.mode }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Test conservative release scope with disposable Git fixtures
+        run: python3 -B tools/ci_release_scope_test.py
+      - name: Classify exact PR revision (errors retain full CI)
+        id: classify
+        run: python3 -B tools/ci_release_scope.py classify
+
+  release-tools:
+    name: Release tools scoped contract (Ubuntu)
+    needs: scope
+    if: needs.scope.outputs.mode == 'release-tools'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.27.2'
+          cache: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - run: npm --prefix scripts/codex-offline-release-smoke ci
+      - run: make release-tools-check
+      - run: make release-preflight
+
   cursor-mkdir-diagnostic:
     if: github.event_name == 'workflow_dispatch' && inputs.mkdir_diagnostic
     runs-on: ubuntu-24.04
@@ -1085,7 +1128,8 @@ jobs:
           if-no-files-found: error
           retention-days: 7
   opencode-plugin:
-    if: github.event_name != 'workflow_dispatch'
+    needs: scope
+    if: ${{ !cancelled() && github.event_name != 'workflow_dispatch' && needs.scope.outputs.mode != 'release-tools' }}
     name: OpenCode plugin bundle
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || vars.CI_LINUX_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 10
@@ -1108,7 +1152,8 @@ jobs:
       - run: git diff --exit-code -- internal/opencodeplugin/dist/agent-notifications.js
 
   test:
-    if: github.event_name != 'workflow_dispatch'
+    needs: scope
+    if: ${{ !cancelled() && github.event_name != 'workflow_dispatch' && needs.scope.outputs.mode != 'release-tools' }}
     name: Test on Ubuntu
     # Go 1.26 runs the frozen Cursor physical Ubuntu/kernel qualification.
     runs-on: ${{ matrix.go == '1.26' && 'ubuntu-24.04' || github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || vars.CI_LINUX_RUNNER || 'ubuntu-24.04' }}
@@ -1309,7 +1354,8 @@ jobs:
         continue-on-error: true
 
   lint:
-    if: github.event_name != 'workflow_dispatch'
+    needs: scope
+    if: ${{ !cancelled() && github.event_name != 'workflow_dispatch' && needs.scope.outputs.mode != 'release-tools' }}
     name: Lint
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || vars.CI_LINUX_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 15
