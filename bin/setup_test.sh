@@ -645,7 +645,16 @@ if os.name != 'nt':
             (case/'bin').mkdir(); (case/'tmp space').mkdir()
             slow_curl = curl_stub.replace('# Return a failure AFTER emitting valid bytes, to catch accidental execution.', '''
 if [ "$kind" = bootstrap ]; then
-    sleep "${TEST_LOADER_DELAY:-0.35}"
+    # This fake transport owns a sleep child; real curl blocks within its own
+    # process. Clean up the fake child when the loader cancels the transport.
+    delay_pid=""
+    trap '[ -z "$delay_pid" ] || { kill "$delay_pid" 2>/dev/null || true; wait "$delay_pid" 2>/dev/null || true; }' EXIT
+    trap 'exit 143' TERM
+    sleep "${TEST_LOADER_DELAY:-0.35}" &
+    delay_pid=$!
+    wait "$delay_pid"
+    delay_pid=""
+    trap - EXIT TERM
     echo 'warning: TEST delayed download diagnostic' >&2
 fi
 # Return failure after emitting bytes.''')

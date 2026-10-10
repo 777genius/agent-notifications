@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Usage: curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash
 # Keep this entry point small: installation runs from one exact release commit.
-main() (
+# This entry point runs once in its own Bash process. Keep signal cleanup in
+# that process so its caller observes exit only after owned children are joined.
+main() {
     set -euo pipefail
     # Only opt into loader parsing when the new selector is present. Every
     # existing invocation is forwarded verbatim to the released bootstrap.
@@ -203,22 +205,44 @@ main() (
     fi
     stage=$(mktemp -d "${TMPDIR:-/tmp}/agent-notifications-setup.XXXXXX")
     loader_progress_pid=""
+    loader_download_pid=""
+    loader_child_stop() {
+        local target="$1" running
+        # A child already reaped by wait is no longer ours to signal, even if
+        # its numeric PID has since been reused by another process.
+        for running in $(jobs -pr); do
+            if [ "$running" = "$target" ]; then
+                kill "$target" 2>/dev/null || true
+                break
+            fi
+        done
+        wait "$target" 2>/dev/null || true
+    }
+    loader_download_stop() {
+        [ -n "$loader_download_pid" ] || return 0
+        loader_child_stop "$loader_download_pid"
+        loader_download_pid=""
+    }
     loader_progress_stop() {
         [ -n "$loader_progress_pid" ] || return 0
-        kill "$loader_progress_pid" 2>/dev/null || true
-        wait "$loader_progress_pid" 2>/dev/null || true
+        loader_child_stop "$loader_progress_pid"
         loader_progress_pid=""
         printf '\r\033[2K' >&2
     }
-    trap 'loader_progress_stop; rm -rf "$stage"' EXIT
+    trap 'loader_download_stop; loader_progress_stop; rm -rf "$stage"' EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM
     trap 'exit 129' HUP
     # A thin observer works before the verified Go helper is available.
-    # Downloads stay synchronous; only this stderr display owns a child PID.
+    # loader_fetch stays synchronous. Own the external curl PID and use wait so
+    # signal traps can cancel it immediately, before joining the display child.
     loader_fetch() {
         local label="$1" output="$2" status=0
         shift 2
+        # Record the transport before any visible activity. No installer function
+        # runs in a subshell, and no verified artifact is used before wait succeeds.
+        curl -fsSL "$@" -o "$output" 2> "$stage/download.stderr" &
+        loader_download_pid=$!
         if [ "${BOOTSTRAP_VERBOSE:-0}" != 1 ] && [ "$ui_mode" != plain ] &&
             [ -z "${NO_COLOR:-}" ] && [ "${TERM:-dumb}" != dumb ] && [ -t 2 ]; then
             (
@@ -239,7 +263,8 @@ main() (
         else
             printf '%s...\n' "$label" >&2
         fi
-        curl -fsSL "$@" -o "$output" 2> "$stage/download.stderr" || status=$?
+        wait "$loader_download_pid" || status=$?
+        loader_download_pid=""
         loader_progress_stop
         cat "$stage/download.stderr" >&2
         return "$status"
@@ -323,7 +348,7 @@ main() (
             printf '\nDetailed installer output: rerun with BOOTSTRAP_VERBOSE=1.\n'
         fi
     fi
-)
+}
 
 # All loader code is parsed before the piped entry point performs any work.
 main "$@"
