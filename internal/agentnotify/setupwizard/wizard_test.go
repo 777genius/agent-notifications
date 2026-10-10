@@ -28,7 +28,9 @@ import (
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/adapters/profileauthority"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients/codex"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients/vscode"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/domain"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/vscodelocalhooks"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/ports"
 
 	"github.com/777genius/agent-notifications/install/uapinstaller"
@@ -62,7 +64,11 @@ func main() { json.NewEncoder(os.Stdout).Encode(map[string]any{"ok": true}) }
 		t.Fatal(err)
 	}
 	out := filepath.Join(dir, "probe")
-	cmd := exec.Command("go", "build", "-o", out, src)
+	compiler, err := exec.LookPath("go")
+	if err != nil {
+		t.Fatalf("locate TEST Go compiler: %v", err)
+	}
+	cmd := exec.Command(compiler, "build", "-o", out, src)
 	cmd.Env = append(os.Environ(), "GOTOOLCHAIN=local")
 	if body, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("build probe: %s %v", body, err)
@@ -7816,7 +7822,11 @@ func writeCodexListStub(t *testing.T, dir, listJSON string) string {
 		t.Fatal(err)
 	}
 	path := filepath.Join(dir, "codex-stub")
-	cmd := exec.Command("go", "build", "-o", path, src)
+	compiler, err := exec.LookPath("go")
+	if err != nil {
+		t.Fatalf("locate TEST Go compiler: %v", err)
+	}
+	cmd := exec.Command(compiler, "build", "-o", path, src)
 	cmd.Env = append(os.Environ(), "GOTOOLCHAIN=local")
 	if body, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("build codex stub: %s %v", body, err)
@@ -8528,6 +8538,134 @@ func TestCursorWizardMissingOrChangedFactsDenied(t *testing.T) {
 			}
 			if _, err := os.Lstat(filepath.Join(root, "uap")); !os.IsNotExist(err) {
 				t.Fatalf("denied facts wrote store: %v", err)
+			}
+		})
+	}
+}
+
+func TestLocalExplicitSelectionAndIntentRetry(t *testing.T) {
+	root := t.TempDir()
+	for bits := 1; bits < 8; bits++ {
+		t.Run(strconv.Itoa(bits), func(t *testing.T) {
+			cfg := &vscode.LocalConfig{ProfileSettingsPath: filepath.Join(root, "settings.json"), QualifiedTuple: vscode.QualifiedDarwinTESTTuple(), TargetShell: vscodelocalhooks.Target{Shell: vscodelocalhooks.MacOSSH}, NativeStop: bits&1 != 0}
+			if bits&2 != 0 {
+				cfg.MCPServers = []string{"agent-notify"}
+			}
+			if bits&4 != 0 {
+				cfg.Skills = []string{"agent-notifications"}
+			}
+			req := Request{Action: ActionInstall, Agents: []string{"copilot-vscode"}, LocalConfig: cfg, ScopeRoot: root, Helper: filepath.Join(root, "TEST-helper"), ClientExecutable: filepath.Join(root, "TEST-code"), InstallationID: "TEST-id", BindingIDs: map[string]string{"copilot-vscode": "TEST-binding"}}
+			agents, err := normalizeAgents(req.Agents)
+			if err != nil {
+				t.Fatal(err)
+			}
+			hooks, notify := selectedUnits(req, agents)
+			if len(hooks) != 0 || len(notify) != 1 {
+				t.Fatal("Local native-only selection was dropped or added legacy hooks")
+			}
+			intent := portablesetup.Intent{Targets: wizardIntentTargets(req, hooks, notify), Primary: "bin/claude-notifications"}
+			// Actual JSON carrier round trip, not just a copied in-memory Request.
+			body, err := json.Marshal(intent)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var durable portablesetup.Intent
+			if err := json.Unmarshal(body, &durable); err != nil {
+				t.Fatal(err)
+			}
+			retry := retryRequestFromIntent(Request{Helper: req.Helper, ClientExecutable: req.ClientExecutable}, durable)
+			if retry.LocalConfig == nil || retry.LocalConfig.ProfileSettingsPath != cfg.ProfileSettingsPath || retry.LocalConfig.QualifiedTuple != cfg.QualifiedTuple || retry.LocalConfig.TargetShell != cfg.TargetShell || retry.LocalConfig.NativeStop != cfg.NativeStop || len(retry.LocalConfig.MCPServers) != len(cfg.MCPServers) || len(retry.LocalConfig.Skills) != len(cfg.Skills) {
+				t.Fatalf("Local retry scope lost: %+v", retry.LocalConfig)
+			}
+			cmd := strings.Join(localRetryCommand(retry), " ")
+			for _, expected := range []string{"--local-settings " + cfg.ProfileSettingsPath, "--helper " + req.Helper, "--local-native-stop " + strconv.FormatBool(cfg.NativeStop), "--local-mcp " + strconv.FormatBool(bits&2 != 0), "--local-skills " + strconv.FormatBool(bits&4 != 0)} {
+				if !strings.Contains(cmd, expected) {
+					t.Fatal("retry argv lost", expected, cmd)
+				}
+			}
+			off := false
+			req.AgentNotify = &off
+			_, selected := selectedUnits(req, agents)
+			if len(selected) != 1 {
+				t.Fatal("legacy MCP/manual opt-out changed Local native selection")
+			}
+		})
+	}
+	legacy, err := normalizeAgents([]string{"claude", "codex"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hooks, notify := selectedUnits(Request{Action: ActionInstall}, legacy)
+	if len(hooks) != 2 || len(notify) != 2 {
+		t.Fatal("omitted legacy defaults changed")
+	}
+}
+
+func TestLocalExplicitEmptyLifecycleSelection(t *testing.T) {
+	for _, action := range []Action{ActionInstall, ActionUpdate, ActionUninstall} {
+		req := Request{Action: action, Agents: []string{"copilot-vscode"}, LocalConfig: &vscode.LocalConfig{}, InstallationID: "TEST-existing", BindingIDs: map[string]string{"copilot-vscode": "TEST-binding"}}
+		_, notify := selectedUnits(req, []portable.Integration{portable.CopilotVSCode})
+		want := 1
+		if action == ActionInstall {
+			want = 0
+		}
+		if len(notify) != want {
+			t.Fatalf("%s empty existing target selection: %v", action, notify)
+		}
+	}
+	req := Request{Action: ActionUpdate, LocalConfig: &vscode.LocalConfig{}}
+	_, notify := selectedUnits(req, []portable.Integration{portable.CopilotVSCode})
+	if len(notify) != 0 {
+		t.Fatal("empty new selection gained authority")
+	}
+}
+
+// Regression: the outer Local wrapper must not replace the frozen action or
+// independent delivery units advertised by the pending-intent conflict.
+func TestLocalPendingConflictPreservesAuthoritativeCommand(t *testing.T) {
+	for _, conflict := range []string{"action", "units"} {
+		t.Run(conflict, func(t *testing.T) {
+			ctx := testCtx(t)
+			control, runtimeRoot, global, _, gen := managedRuntime(t)
+			profile := filepath.Join(filepath.Dir(control), "TEST-local-profile")
+			if err := os.MkdirAll(profile, 0700); err != nil {
+				t.Fatal(err)
+			}
+			cfg := &vscode.LocalConfig{ProfileSettingsPath: filepath.Join(profile, "settings.json"), QualifiedTuple: vscode.QualifiedDarwinTESTTuple(), TargetShell: vscodelocalhooks.Target{Shell: vscodelocalhooks.MacOSSH}, NativeStop: true, MCPServers: []string{"agent-notify"}}
+			frozen := Request{Action: ActionInstall, Agents: []string{"copilot-vscode"}, LocalConfig: cfg, ScopeRoot: profile, InstallationID: "TEST-local-pending", Helper: filepath.Join(runtimeRoot, "TEST-helper"), ClientExecutable: filepath.Join(runtimeRoot, "TEST-code")}
+			hooks, notify := selectedUnits(frozen, []portable.Integration{portable.CopilotVSCode})
+			intent := portablesetup.Intent{Version: 1, SetupIntentID: "TEST-local-pending-intent", Action: "install", Stage: "retire-direct", ExpectedGeneration: gen, Targets: wizardIntentTargets(frozen, hooks, notify)}
+			plantPendingIntent(t, ctx, control, runtimeRoot, gen, intent)
+			req := frozen
+			req.ControlRoot, req.RuntimeRoot, req.GlobalConfig = control, runtimeRoot, global
+			req.Yes = true
+			cp := *cfg
+			req.LocalConfig = &cp
+			if conflict == "action" {
+				req.Action = ActionUninstall
+			} else {
+				req.LocalConfig.NativeStop = false
+				req.LocalConfig.Skills = []string{"agent-notifications"}
+			}
+			for _, boundary := range []string{"run", "plan"} {
+				var out Result
+				var err error
+				if boundary == "run" {
+					out, err = Run(ctx, req)
+				} else {
+					var plan SetupPlan
+					plan, err = Plan(ctx, req)
+					out = plan.Result
+				}
+				if err == nil || out.Reason != "pending_intent_conflict" {
+					t.Fatalf("%s: %+v %v", boundary, out, err)
+				}
+				command := strings.Join(out.Command, " ")
+				for _, want := range []string{"--action install", "--local-settings " + cfg.ProfileSettingsPath, "--local-native-stop true", "--local-mcp true", "--local-skills false"} {
+					if !strings.Contains(command, want) {
+						t.Fatalf("%s frozen retry lost %q: %s", boundary, want, command)
+					}
+				}
 			}
 		})
 	}

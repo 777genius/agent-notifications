@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"path/filepath"
 	"testing"
 )
@@ -87,5 +88,25 @@ func TestCursorChannelQuestionRequiresOnlySingleSelection(t *testing.T) {
 	}
 	if _, err := parseSetupProducts([]string{"confirm", "--products", "cursor", "--desktop"}); err == nil {
 		t.Fatal("native choice bypassed explicit profile/executable")
+	}
+}
+
+func TestSetupProductsLocalIndependentSelection(t *testing.T) {
+	root := t.TempDir()
+	for bits := 0; bits < 8; bits++ {
+		args := []string{"confirm", "--products", "copilot-vscode", "--scope-root", root, "--local-settings", filepath.Join(root, "settings.json"), "--client-executable", filepath.Join(root, "TEST-code"), "--local-native-stop", fmt.Sprint(bits&1 != 0), "--local-mcp", fmt.Sprint(bits&2 != 0), "--local-skills", fmt.Sprint(bits&4 != 0)}
+		r, err := parseSetupProducts(args)
+		if err != nil || r.LocalNativeStop == nil || *r.LocalNativeStop != (bits&1 != 0) || r.LocalMCP == nil || *r.LocalMCP != (bits&2 != 0) || r.LocalSkills == nil || *r.LocalSkills != (bits&4 != 0) || r.Configure.Route != nil || r.Manual != nil {
+			t.Fatalf("independent bits %d: %+v %v", bits, r, err)
+		}
+		if _, err := parseSetupProducts(append(args, "--manual=true", "--desktop=false", "--webhook=true")); err != nil {
+			t.Fatal("independent explicit consent", err)
+		}
+	}
+	if _, err := parseSetupProducts([]string{"confirm", "--products", "copilot-vscode", "--scope-root", root, "--client-executable", filepath.Join(root, "TEST-code")}); err == nil {
+		t.Fatal("missing independent Local selections admitted")
+	}
+	if _, err := parseSetupProducts([]string{"confirm", "--products", "claude", "--local-native-stop=true"}); err == nil {
+		t.Fatal("Local selection expanded legacy request")
 	}
 }

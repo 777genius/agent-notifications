@@ -45,7 +45,7 @@ installation is offered inspect, add/reinstall, uninstall, update, or repair.
   --action install|uninstall|inspect|update|repair
   --install-or-update       Bootstrap-only: install selected clients or update owned bindings first
   --preserve-existing-units Bootstrap auto mode: leave absent MCP units off when another binding already exists
-  --agents claude,codex|cursor   Cursor requires explicit --scope-root and --client-executable; select separately
+  --agents claude,codex|cursor|copilot-vscode   Cursor requires explicit --scope-root and --client-executable; select separately
   Omit on inspect to report both clients
   --hooks true|false          Omit on install of new targets to include hooks; omit on update/repair to keep live units; omit on uninstall to select all units
   --agent-notify true|false   Omit on install of new targets to include portable MCP+skill; omit on update/repair to keep live units
@@ -68,6 +68,10 @@ installation is offered inspect, add/reinstall, uninstall, update, or repair.
   --codex-executable PATH     Codex executable when installing both clients
   --helper PATH               Managed stdio helper (default: runtime primary)
   --scope-root PATH
+  --local-settings PATH       Explicit Local settings.json in the selected profile
+  --local-native-stop true|false  Independent Local Stop selection
+  --local-mcp true|false       Independent Local MCP selection
+  --local-skills true|false    Independent Local skill selection
   --installation-id ID
   --mcp-config PATH           Owned Codex MCP config to hand off; omit to use an existing config.toml in the selected Codex profile
   --claude-mcp-config PATH    Owned Claude MCP config to hand off; omit to use an existing .claude.json in the selected Claude profile
@@ -260,11 +264,21 @@ func executeSetupWizardWith(ctx context.Context, args []string, out, errOut io.W
 			return writeSetupWizardResult(out, jsonOut, setupwizard.Result{Action: string(req.Action), Outcome: "incomplete", Reason: "cursor_identity_unavailable"}, setupwizard.ErrRefused)
 		}
 	}
+	if containsProduct(req.Agents, "copilot-vscode") {
+		var early *setupwizard.Result
+		req, early, err = prepareLocalWizard(ctx, req, confirmed)
+		if early != nil {
+			return writeSetupWizardResult(out, jsonOut, *early, err)
+		}
+		if err != nil {
+			return writeSetupWizardResult(out, jsonOut, setupwizard.Result{Action: string(req.Action), Outcome: "incomplete", Reason: "local_composition_required"}, err)
+		}
+	}
 	req, err = composeCursorWizard(ctx, req)
 	if err != nil {
 		return writeSetupWizardResult(out, jsonOut, setupwizard.Result{Action: string(req.Action), Outcome: "incomplete", Reason: "cursor_composition_required"}, err)
 	}
-	if confirmed != nil && containsProduct(confirmed.Request.Products, "cursor") {
+	if confirmed != nil && (containsProduct(confirmed.Request.Products, "cursor") || containsProduct(confirmed.Request.Products, "copilot-vscode")) {
 		// The command already fenced and consumed the one immutable selection.
 		// Legacy BootstrapMCP evaluation captures a new policy observation; retain
 		// our original CAS instead of allowing that path to adopt an opt-out.
@@ -302,8 +316,12 @@ func executeSetupWizardWith(ctx context.Context, args []string, out, errOut io.W
 	} else {
 		result, err = setupwizard.Run(ctx, req)
 	}
-	if err == nil && result.ExitCode() == 0 && confirmed != nil && containsProduct(confirmed.MCP.Selected, "cursor") {
-		result, err = commitConfirmedCursorConsent(ctx, req, result, *confirmed)
+	if err == nil && result.ExitCode() == 0 && confirmed != nil && (containsProduct(confirmed.MCP.Selected, "cursor") || containsProduct(confirmed.MCP.Selected, "copilot-vscode")) {
+		if containsProduct(req.Agents, "copilot-vscode") {
+			result, err = commitConfirmedLocalConsent(ctx, req, result, *confirmed)
+		} else {
+			result, err = commitConfirmedCursorConsent(ctx, req, result, *confirmed)
+		}
 	}
 	return writeSetupWizardResult(out, jsonOut, result, err)
 }
@@ -343,7 +361,7 @@ func validInstallOrUpdateRequest(req setupwizard.Request) bool {
 	}
 	seen := map[string]bool{}
 	for _, agent := range req.Agents {
-		if (agent != "claude" && agent != "codex" && (agent != "cursor" || len(req.Agents) != 1)) || seen[agent] {
+		if (agent != "claude" && agent != "codex" && ((agent != "cursor" && agent != "copilot-vscode") || len(req.Agents) != 1)) || seen[agent] {
 			return false
 		}
 		seen[agent] = true
@@ -563,7 +581,7 @@ func wizardPrintableCommand(command []string) []string {
 
 func parseSetupWizard(args []string) (setupwizard.Request, bool, error) {
 	var req setupwizard.Request
-	if len(args) > 48 {
+	if len(args) > 64 {
 		return req, false, errors.New("invalid_arguments")
 	}
 	total := 0
@@ -580,6 +598,7 @@ func parseSetupWizard(args []string) (setupwizard.Request, bool, error) {
 	jsonOut := false
 	allowed := map[string]bool{
 		"action": true, "agents": true, "hooks": true, "agent-notify": true,
+		"local-settings": true, "local-native-stop": true, "local-mcp": true, "local-skills": true,
 		"claude-hooks": true, "codex-hooks": true, "claude-agent-notify": true, "codex-agent-notify": true,
 		"package": true, "plugin-root": true, "control-root": true, "runtime-root": true, "global-config": true,
 		"codex-home": true, "claude-config": true, "client-executable": true, "helper": true,
@@ -631,7 +650,7 @@ func parseSetupWizard(args []string) (setupwizard.Request, bool, error) {
 		}
 		values[key] = value
 	}
-	for _, key := range []string{"package", "plugin-root", "control-root", "runtime-root", "global-config", "codex-home", "claude-config", "client-executable", "helper", "scope-root", "mcp-config", "claude-mcp-config", "claude-executable", "codex-executable"} {
+	for _, key := range []string{"package", "plugin-root", "control-root", "runtime-root", "global-config", "codex-home", "claude-config", "client-executable", "helper", "scope-root", "mcp-config", "claude-mcp-config", "claude-executable", "codex-executable", "local-settings"} {
 		if values[key] == "" {
 			continue
 		}
@@ -741,6 +760,44 @@ func parseSetupWizard(args []string) (setupwizard.Request, bool, error) {
 		req.ClientExecutables = map[string]string{"cursor": req.ClientExecutable}
 	}
 	req.InstallationID = values["installation-id"]
+	if containsProduct(req.Agents, "copilot-vscode") {
+		if len(req.Agents) != 1 || req.ScopeRoot == "" || req.ClientExecutable == "" {
+			return req, jsonOut, errors.New("invalid_arguments")
+		}
+		req.ClientExecutables = map[string]string{"copilot-vscode": req.ClientExecutable}
+		if values["local-settings"] != "" || values["local-native-stop"] != "" || values["local-mcp"] != "" || values["local-skills"] != "" {
+			if values["local-settings"] != filepath.Join(req.ScopeRoot, "settings.json") {
+				return req, jsonOut, errors.New("invalid_arguments")
+			}
+			req.LocalConfig = localWizardConfig(values["local-settings"])
+			for key, dest := range map[string]*bool{"local-native-stop": &req.LocalConfig.NativeStop} {
+				if value := values[key]; value != "" {
+					on, e := parseBoolFlag(value)
+					if e != nil {
+						return req, jsonOut, e
+					}
+					*dest = on
+				}
+			}
+			for key, dest := range map[string]*[]string{"local-mcp": &req.LocalConfig.MCPServers, "local-skills": &req.LocalConfig.Skills} {
+				if value := values[key]; value != "" {
+					on, e := parseBoolFlag(value)
+					if e != nil {
+						return req, jsonOut, e
+					}
+					if on {
+						name := "agent-notify"
+						if key == "local-skills" {
+							name = "agent-notifications"
+						}
+						*dest = []string{name}
+					}
+				}
+			}
+		}
+	} else if values["local-settings"] != "" || values["local-native-stop"] != "" || values["local-mcp"] != "" || values["local-skills"] != "" {
+		return req, jsonOut, errors.New("invalid_arguments")
+	}
 	if values["mcp-config"] != "" || values["claude-mcp-config"] != "" {
 		req.MCPConfig = map[string]string{}
 		if values["mcp-config"] != "" {
@@ -855,7 +912,7 @@ func admitBootstrapWizardIntent(path string, r setupwizard.Request) (setupwizard
 		return r, nil, errors.New("bootstrap request differs from confirmed intent")
 	}
 	r.BootstrapMCP = &intent.MCP
-	if containsProduct(intent.Request.Products, "cursor") {
+	if containsProduct(intent.Request.Products, "cursor") || containsProduct(intent.Request.Products, "copilot-vscode") {
 		generation, policy := intent.Initial.Generation, intent.Initial.Policy
 		r.BootstrapExpectedGeneration, r.BootstrapExpectedPolicy = &generation, &policy
 	}
@@ -1020,7 +1077,10 @@ func commitConfirmedCursorConsent(ctx context.Context, r setupwizard.Request, re
 	return result, nil
 }
 func sameWizardBootstrapScope(actual, expected setupwizard.Request) bool {
-	if strings.Join(actual.Agents, ",") != strings.Join(expected.Agents, ",") || actual.ControlRoot != expected.ControlRoot || (!containsProduct(expected.Agents, "cursor") && (actual.ClaudeConfig != expected.ClaudeConfig || actual.CodexHome != expected.CodexHome)) || actual.CursorConfig != expected.CursorConfig || (containsProduct(expected.Agents, "cursor") && actual.ScopeRoot != expected.ScopeRoot) || actual.GlobalConfig != expected.GlobalConfig {
+	if containsProduct(expected.Agents, "copilot-vscode") && !sameLocalWizardSelection(actual, expected) {
+		return false
+	}
+	if strings.Join(actual.Agents, ",") != strings.Join(expected.Agents, ",") || actual.ControlRoot != expected.ControlRoot || (!containsProduct(expected.Agents, "cursor") && !containsProduct(expected.Agents, "copilot-vscode") && (actual.ClaudeConfig != expected.ClaudeConfig || actual.CodexHome != expected.CodexHome)) || containsProduct(expected.Agents, "cursor") && actual.CursorConfig != expected.CursorConfig || (containsProduct(expected.Agents, "cursor") && actual.ScopeRoot != expected.ScopeRoot) || actual.GlobalConfig != expected.GlobalConfig {
 		return false
 	}
 	// A fresh legacy phase chooses its existing managed runtime during hooks

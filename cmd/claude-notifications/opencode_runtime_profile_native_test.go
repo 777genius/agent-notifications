@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/opencodehost"
 	"io"
@@ -15,6 +16,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -173,8 +175,7 @@ func portLaunch(t *testing.T, host, in runtimeProfileInput, raw, mode string) {
 }
 func portOutput(t *testing.T, in runtimeProfileInput) []byte {
 	t.Helper()
-	portAwait(t, portPrefix(in)+".done", portPrefix(in))
-	status, e := os.ReadFile(portPrefix(in) + ".done")
+	status, e := portReadDone(portPrefix(in) + ".done")
 	if e != nil || string(status) != "ok" {
 		t.Fatalf("helper not waited successfully: %v; first status=%q; %s", e, status, portFailureDiagnostics(portPrefix(in)))
 	}
@@ -185,6 +186,20 @@ func portOutput(t *testing.T, in runtimeProfileInput) []byte {
 	}
 	return data
 }
+
+// Wait for readable publication within the existing receipt budget.
+func portReadDone(path string) (status []byte, e error) {
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		status, e = os.ReadFile(path)
+		if e == nil || (!errors.Is(e, os.ErrNotExist) && !(runtime.GOOS == "windows" && errors.Is(e, syscall.Errno(32)))) {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	return status, e
+}
+
 func portBoundedDiagnostic(name string) ([]byte, error) {
 	f, e := os.Open(name)
 	if e != nil {

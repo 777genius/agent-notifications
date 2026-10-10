@@ -123,6 +123,7 @@ func TestNotificationBootstrapOffline(t *testing.T) {
 			}
 			script := prefix + `
 print_header() { :; }
+bootstrap_default_codex_app() { return 1; }
 abort_if_wsl_environment() { :; }
 check_prerequisites() { :; }
 detect_platform() { :; }
