@@ -50,8 +50,25 @@ export function validatePreflight(read: Read, options: Options, head?: string): 
   requireValue(versionFor('linux/amd64') === versionFor('windows/amd64'), 'Linux/Windows display versions differ');
   const linux = versionFor('linux/amd64'), mac = versionFor('darwin/amd64');
   const readme = read('README.md');
-  for (const [label, version] of [['Linux amd64 / arm64', linux], ['Windows amd64', linux], ['macOS amd64 / arm64', mac]])
-    requireValue(readme.includes(`| ${label} | ${version} |`), `README channel version stale: ${label}`);
+  const readmeRows = [['Linux amd64 / arm64', linux], ['Windows amd64', linux], ['macOS amd64 / arm64', mac]];
+  const table = (text: string) => text.split('\n').filter(line => line.trimStart().startsWith('|'))
+    .map(line => line.split('|').map(column => column.trim()));
+  const checkRows = (text: string, expected: string[][], document: string) => {
+    const rows = table(text);
+    for (const [label, version] of expected) {
+      const matches = rows.filter(row => row[1] === label);
+      requireValue(matches.length === 1 && matches[0]![2] === version, `${document} channel version stale: ${label}`);
+    }
+  };
+  if (table(readme).some(row => readmeRows.some(([label]) => row[1] === label) ||
+      /^(?:Linux|Windows|macOS)\b/.test(row[1] ?? '') && semver.test(row[2] ?? ''))) {
+    checkRows(readme, readmeRows, 'README');
+  } else {
+    requireValue(/\[[^\]\n]+\]\(docs\/PLATFORM_RELEASE_CHANNELS\.md\)/.test(readme), 'README requires the canonical platform channel guide link');
+    checkRows(read('docs/PLATFORM_RELEASE_CHANNELS.md'), [
+      ['Linux amd64 / arm64, Windows amd64', linux], ['macOS amd64 / arm64', mac],
+    ], 'Platform guide');
+  }
   for (const locale of locales) {
     const install = object(object(json(read, `landing/locales/${locale}.json`).install).gemini);
     requireValue(typeof install.version === 'string' && install.version.startsWith(`Linux / Windows: ${linux} (`) &&

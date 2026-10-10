@@ -74,3 +74,42 @@ test('validly shaped but stale promotion version or release source fails', () =>
     assert.throws(() => validate(files, { ...options, mode: 'prepared-promotion' }));
   }
 });
+
+// Exact replacement paragraph from the user-maintained README; host compatibility
+// versions elsewhere are unrelated to the product release channel contract.
+const canonicalReadme = "The installer selects a release from the [platform channels](docs/PLATFORM_RELEASE_CHANNELS.md) for your OS and architecture. See that page for current versions and the [release notes](https://github.com/777genius/agent-notifications/releases) for validation details and known limitations.";
+function canonicalFixture(): Record<string, string> {
+  return { ...fixture(), 'README.md': canonicalReadme + '\nOpenCode stable V1 >= 1.18.29 and V2 >= 2.0.0. Codex CLI version 0.162.0; OpenCode release v2.0.0.',
+    'docs/PLATFORM_RELEASE_CHANNELS.md': '| Linux amd64 / arm64, Windows amd64 | 1.48.5 | `release/platform-linux-windows` |\n| macOS amd64 / arm64 | 1.48.5 | `release/platform-macos` |' };
+}
+test('version-free user README delegates current versions to the matching canonical guide', () => validate(canonicalFixture()));
+test('version-free README requires the exact canonical guide link', () => {
+  for (const readme of ['See platform channels for current versions.', canonicalReadme.replace('docs/PLATFORM_RELEASE_CHANNELS.md', 'docs/INSTALLATION.md')]) {
+    const files = canonicalFixture(); files['README.md'] = readme;
+    assert.throws(() => validate(files), /canonical platform channel guide link/);
+  }
+});
+test('canonical guide rejects stale Linux or macOS versions, missing rows and duplicates', () => {
+  const path = 'docs/PLATFORM_RELEASE_CHANNELS.md';
+  for (const mutate of [
+    (text: string) => text.replace('Windows amd64 | 1.48.5', 'Windows amd64 | 1.48.4'),
+    (text: string) => text.replace('macOS amd64 / arm64 | 1.48.5', 'macOS amd64 / arm64 | 1.48.4'),
+    (text: string) => text.split('\n')[0]!,
+    (text: string) => text.split('\n')[1]!,
+    (text: string) => text + '\n' + text.split('\n')[0],
+  ]) {
+    const files = canonicalFixture(); files[path] = mutate(files[path]!);
+    assert.throws(() => validate(files), /Platform guide channel version stale/);
+  }
+});
+test('canonical link cannot bypass stale, partial or duplicate explicit README platform rows', () => {
+  for (const rows of [
+    fixture()['README.md']!.replace('Linux amd64 / arm64 | 1.48.5', 'Linux amd64 / arm64 | 1.48.4'),
+    '| Linux amd64 / arm64 | 1.48.5 | supported |',
+    '| Linux x64 | 1.48.4 | supported |',
+    fixture()['README.md']! + '\n| Windows amd64 | 1.48.4 | supported |',
+  ]) {
+    const files = canonicalFixture(); files['README.md'] += '\n' + rows;
+    assert.throws(() => validate(files), /README channel version stale/);
+  }
+});

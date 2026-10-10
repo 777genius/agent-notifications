@@ -8,8 +8,9 @@ an eleven-cell, physical Intel, live-provider, visible-desktop or cold-start cla
 ## Prepare once, run independent work together
 
 Before freezing candidate C, prepare the entire version/changelog change and the
-promotion diff P: channel rows, source snapshot S, README, manual translations and
-browser expectations. P must reference the actual C/S, never its own head as C.
+promotion diff P: channel rows, source snapshot S, the platform channel guide,
+README links or explicit versions, manual translations and browser expectations.
+P must reference the actual C/S, never its own head as C.
 The operator O is the workflow revision executed by Actions, not necessarily C.
 
 Run the cheap candidate/promotion preflight before long CI. Once C is frozen,
