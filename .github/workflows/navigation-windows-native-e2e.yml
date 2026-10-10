@@ -21,6 +21,7 @@ on:
           - oobe_preflight
           - oobe_setup
           - native_callback
+          - oobe_then_native_callback
 permissions:
   contents: read
 # Supersede only older checks for this PR; dispatch runs remain independent.
@@ -37,7 +38,7 @@ jobs:
       AGENT_NOTIFY_NAVIGATION_WINDOWS_E2E: '1'
       NAVIGATION_WINDOWS_RUNNER: windows-11-vs2026-arm
       NAVIGATION_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-      NAVIGATION_WINDOWS_PREFLIGHT_ONLY: ${{ inputs.mode == 'native_callback' && '0' || '1' }}
+      NAVIGATION_WINDOWS_PREFLIGHT_ONLY: ${{ (inputs.mode == 'native_callback' || inputs.mode == 'oobe_then_native_callback') && '0' || '1' }}
       NAVIGATION_WINDOWS_CENTER_SURFACE: ${{ inputs.mode == 'center_surface' && '1' || '0' }}
       NAVIGATION_WINDOWS_TASKBAR_UIA: ${{ inputs.mode == 'taskbar_uia' && '1' || '0' }}
       NAVIGATION_WINDOWS_DESKTOP_CAPTURE_TEST: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'desktop_capture' && '1' || '0' }}
@@ -76,8 +77,48 @@ jobs:
           $cmd = '"' + $vs + '\Common7\Tools\VsDevCmd.bat" -arch=arm64 -host_arch=arm64 && cl /nologo /std:c++20 /EHsc /W4 /DUNICODE /D_UNICODE "' + $source + '" /Fe:"' + $out + '" /Fo:"' + $env:RUNNER_TEMP + '\navigation-native-probe.obj" /link windowsapp.lib ole32.lib oleaut32.lib shell32.lib propsys.lib advapi32.lib user32.lib uuid.lib uiautomationcore.lib'
           cmd.exe /d /s /c $cmd
           if ($LASTEXITCODE -ne 0) { throw 'native probe compile failed' }
+      - name: One finite OOBE setup before unpackaged native callback
+        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'oobe_then_native_callback'
+        id: bootstrap
+        shell: pwsh
+        env:
+          NAVIGATION_WINDOWS_PREFLIGHT_ONLY: '1'
+          NAVIGATION_WINDOWS_OOBE_SETUP_TEST: '1'
+          NAVIGATION_WINDOWS_CENTER_SURFACE: '0'
+          NAVIGATION_WINDOWS_TASKBAR_UIA: '0'
+          NAVIGATION_WINDOWS_DESKTOP_CAPTURE_TEST: '0'
+          NAVIGATION_WINDOWS_OOBE_PREFLIGHT_TEST: '0'
+        run: |
+          if ($env:GITHUB_RUN_ATTEMPT -ne '1' -or $env:GITHUB_REPOSITORY -cne '777genius/agent-notifications') { throw 'first manual owned TEST attempt required' }
+          $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+          $session = [Diagnostics.Process]::GetCurrentProcess().SessionId
+          $observer = Join-Path $env:RUNNER_TEMP 'navigation-native-probe.exe'
+          $before = (Get-FileHash -LiteralPath $observer -Algorithm SHA256).Hash.ToLowerInvariant()
+          node --experimental-strip-types tests/integration/navigation_windows_native_e2e.ts $observer
+          if ($LASTEXITCODE -ne 0) { throw 'bootstrap failed/unknown; no package effects or repeat' }
+          if ((Get-Item -LiteralPath $env:GITHUB_OUTPUT).Length -gt 4096) { throw 'bootstrap output exceeds bound' }
+          $lines = [IO.File]::ReadAllLines($env:GITHUB_OUTPUT)
+          if ($lines.Count -ne 1 -or !$lines[0].StartsWith('evidence_root=')) { throw 'single bootstrap output absent' }
+          $root = $lines[0].Substring('evidence_root='.Length)
+          $evidencePath = Join-Path $root 'evidence.json'
+          if ((Get-Item -LiteralPath $evidencePath).Length -gt 131072) { throw 'bootstrap evidence exceeds bound' }
+          $e = [IO.File]::ReadAllText($evidencePath) | ConvertFrom-Json
+          if ($e.status -cne 'guest_setup_complete' -or !$e.oobeSetupQualified -or !$e.captureQualified -or
+              $e.binarySHA256 -cne $before -or $e.sourceSHA -cne $env:NAVIGATION_SOURCE_SHA -or
+              $e.'capture-after-preflight.json'.session -ne $session -or
+              [Security.Principal.WindowsIdentity]::GetCurrent().User.Value -cne $sid -or
+              (Get-FileHash -LiteralPath $observer -Algorithm SHA256).Hash.ToLowerInvariant() -cne $before) { throw 'bootstrap identity changed' }
+          $handoff = @{ root=$root; nonce=$e.nonce; sourceSHA=$env:NAVIGATION_SOURCE_SHA;
+            runID=$env:GITHUB_RUN_ID; job=$env:GITHUB_JOB; attempt=$env:GITHUB_RUN_ATTEMPT;
+            userSid=$sid; session=$session; observerSHA256=$before;
+            evidenceSHA256=(Get-FileHash -LiteralPath $evidencePath -Algorithm SHA256).Hash.ToLowerInvariant();
+            recordsSHA256=(Get-FileHash -LiteralPath (Join-Path $root 'oobe-setup-records.json') -Algorithm SHA256).Hash.ToLowerInvariant() }
+          $bytes = [Text.UTF8Encoding]::new($false).GetBytes(($handoff | ConvertTo-Json -Depth 4))
+          if ($bytes.Length -gt 65536) { throw 'handoff exceeds bound' }
+          $file = [IO.File]::Open((Join-Path $root 'same-job-bootstrap.json'), [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+          try { $file.Write($bytes, 0, $bytes.Length); $file.Flush($true) } finally { $file.Dispose() }
       - name: Selected TEST preflight or single native callback attempt
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' && (inputs.mode != 'oobe_then_native_callback' || steps.bootstrap.outcome == 'success')
         id: probe
         shell: pwsh
         run: |
@@ -89,6 +130,26 @@ jobs:
         with:
           name: navigation-windows-native-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ steps.probe.outputs.evidence_root }}
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 14
+      - name: Preserve same-job unpackaged bootstrap evidence
+        if: always() && steps.bootstrap.outputs.evidence_root != '' && github.event_name == 'workflow_dispatch' && inputs.mode == 'oobe_then_native_callback'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: navigation-windows-unpackaged-bootstrap-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ steps.bootstrap.outputs.evidence_root }}/.owned-test-root
+            ${{ steps.bootstrap.outputs.evidence_root }}/evidence.json
+            ${{ steps.bootstrap.outputs.evidence_root }}/same-job-bootstrap.json
+            ${{ steps.bootstrap.outputs.evidence_root }}/oobe-setup-records.json
+            ${{ steps.bootstrap.outputs.evidence_root }}/center-policy.json
+            ${{ steps.bootstrap.outputs.evidence_root }}/preflight.json
+            ${{ steps.bootstrap.outputs.evidence_root }}/capture-preflight.json
+            ${{ steps.bootstrap.outputs.evidence_root }}/capture-after-preflight.json
+            ${{ steps.bootstrap.outputs.evidence_root }}/desktop-capture-intent.json
+            ${{ steps.bootstrap.outputs.evidence_root }}/desktop-capture.json
+            ${{ steps.bootstrap.outputs.evidence_root }}/desktop-capture.png
           if-no-files-found: error
           include-hidden-files: true
           retention-days: 14
