@@ -44,7 +44,7 @@ func NewLocalGateFromSnapshot(ctx context.Context, b portable.Binding, cfg uapin
 		return deny()
 	}
 	g := Gate{Binding: b, Proof: p, localInitial: proof, localObserver: p}
-	if _, _, err := g.qualify(ctx, s, consumerBinding(s, b)); err != nil {
+	if _, _, err := g.qualifyCheckedProof(ctx, s, consumerBinding(s, b), proof); err != nil {
 		return deny()
 	}
 	effective, identity, err := readLocalConfig(b)

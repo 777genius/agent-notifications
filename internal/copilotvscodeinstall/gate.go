@@ -80,13 +80,6 @@ func (g Gate) qualify(ctx context.Context, s installruntime.PolicySnapshot, expe
 	if ctx == nil || ctx.Err() != nil || g.Proof == nil || s.Installation.Ledger.WriterFloor < installruntime.LocalPolicyWriterFloor || g.Binding.CheckSnapshot(s.Installation) != nil || !recorded(s, g.Binding) || consumerBinding(s, g.Binding) != expected {
 		return Consent{}, PhysicalProof{}, ErrDenied
 	}
-	consent, err := ReadConsent(s, g.Binding)
-	if g.Binding.Integration == portable.Cursor {
-		consent, err = ReadCursorConsent(s, g.Binding)
-	}
-	if err != nil {
-		return Consent{}, PhysicalProof{}, err
-	}
 	port := g.Proof
 	if g.Binding.Integration == portable.CopilotVSCode {
 		// Retain the constructor's private observer. A copied affirmative value or
@@ -97,7 +90,27 @@ func (g Gate) qualify(ctx context.Context, s installruntime.PolicySnapshot, expe
 		port = g.localObserver
 	}
 	proof, err := checkProofPort(ctx, port, g.Binding, s.Installation)
-	if err != nil || !proof.matches(g.Binding, s) {
+	if err != nil {
+		return Consent{}, PhysicalProof{}, ErrDenied
+	}
+	return g.qualifyCheckedProof(ctx, s, expected, proof)
+}
+
+// qualifyCheckedProof applies the same predicates to one complete observation.
+// Only the constructor supplies its just-checked proof; later qualify calls
+// always obtain a fresh observation from the retained private observer above.
+func (g Gate) qualifyCheckedProof(ctx context.Context, s installruntime.PolicySnapshot, expected copilotvscodeevent.Binding, proof PhysicalProof) (Consent, PhysicalProof, error) {
+	if ctx == nil || ctx.Err() != nil || g.Proof == nil || s.Installation.Ledger.WriterFloor < installruntime.LocalPolicyWriterFloor || g.Binding.CheckSnapshot(s.Installation) != nil || !recorded(s, g.Binding) || consumerBinding(s, g.Binding) != expected || g.Binding.Integration == portable.CopilotVSCode && g.localObserver == nil {
+		return Consent{}, PhysicalProof{}, ErrDenied
+	}
+	consent, err := ReadConsent(s, g.Binding)
+	if g.Binding.Integration == portable.Cursor {
+		consent, err = ReadCursorConsent(s, g.Binding)
+	}
+	if err != nil {
+		return Consent{}, PhysicalProof{}, err
+	}
+	if !proof.matches(g.Binding, s) {
 		return Consent{}, PhysicalProof{}, ErrDenied
 	}
 	if g.Binding.Integration == portable.CopilotVSCode {
