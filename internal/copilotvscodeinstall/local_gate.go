@@ -16,8 +16,8 @@ import (
 
 // NewLocalGate returns the existing effect owner and its frozen, qualified
 // observations. It creates no profile authority, registration, assets or lease.
-// The current public Local adapter has no PhysicalProfileAuthority capability:
-// the dynamic assertion intentionally denies until the reviewed public pin.
+// Physical profile authority is limited to the qualified Darwin arm64 tuple.
+// Positive proof requires the optional capability and persisted bound token.
 func NewLocalGate(ctx context.Context, b portable.Binding, cfg uapinstaller.Config) (Gate, PhysicalProof, *config.Config, error) {
 	deny := func() (Gate, PhysicalProof, *config.Config, error) { return Gate{}, PhysicalProof{}, nil, ErrDenied }
 	if ctx == nil || ctx.Err() != nil || b.Integration != portable.CopilotVSCode {
