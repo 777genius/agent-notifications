@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "navigation_windows_token_queries.h"
+using namespace NavigationTokenTEST;
 
 int wmain(int argc, wchar_t** argv) {
     if (argc != 3 || wcscmp(argv[1], L"--read-only-TEST-token-preflight") || !validNonce(argv[2]))
