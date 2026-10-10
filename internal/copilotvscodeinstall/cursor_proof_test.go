@@ -985,7 +985,7 @@ func localPublicFixture(t *testing.T, manualRoute ...bool) (cursorFixture, *vsco
 	defer func() { _ = prepared.Close() }()
 	profileBefore := cursorRead(t, localConfig.ProfileSettingsPath)
 	result, err := engine.Apply(cursorContext(t), prepared, uapinstaller.Decision{Confirmed: true})
-	if len(manualRoute) != 0 && manualRoute[0] && runtime.GOOS != "linux" && !(runtime.GOOS == "darwin" && runtime.GOARCH == "arm64") {
+	if len(manualRoute) != 0 && manualRoute[0] && runtime.GOOS != "linux" && (runtime.GOOS != "darwin" || runtime.GOARCH != "arm64") {
 		const refusal = "local profile metadata mutation unqualified on this OS; native Windows ACL/profile CI required"
 		if err == nil || err.Error() != refusal || result.Reason != refusal || result.Outcome != "incomplete" || !result.Mutated || result.Client.Activation != string(domain.ActivationPrepared) || result.Binding.BindingID != f.b.BindingID || result.Binding.DataRoot != f.b.DataRoot {
 			t.Fatalf("unsupported Local metadata Apply boundary: %+v %v", result, err)
@@ -1213,7 +1213,7 @@ func TestLocalMCPConsentReconstructsSelectedRecordWithoutNativeGate(t *testing.T
 		t.Fatal(err)
 	}
 	before := cursorRead(t, f.cfg.StateFile)
-	if runtime.GOOS != "linux" && !(runtime.GOOS == "darwin" && runtime.GOARCH == "arm64") {
+	if runtime.GOOS != "linux" && (runtime.GOOS != "darwin" || runtime.GOARCH != "arm64") {
 		consent, err := ReadConsent(snapshot, f.b)
 		if err != nil || consent.desktop || consent.webhook || consent.manual {
 			t.Fatal("unsupported metadata host gained consent", err)
