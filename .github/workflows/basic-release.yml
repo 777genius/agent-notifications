@@ -546,9 +546,12 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       RELEASE_ASSET_RUN: ${{ inputs.resume_run || github.run_id }}
       RELEASE_ASSET_ATTEMPT: ${{ inputs.resume_attempt || github.run_attempt }}
-      RELEASE_ORIGIN_RECEIPT: ${{ runner.temp }}/basic-origin.json
-      RELEASE_ANCESTRY_RECEIPT: ${{ runner.temp }}/basic-ancestry.json
     steps:
+      - name: Bind receipt paths after runner allocation
+        shell: bash
+        run: |
+          echo "RELEASE_ORIGIN_RECEIPT=$RUNNER_TEMP/basic-origin.json" >> "$GITHUB_ENV"
+          echo "RELEASE_ANCESTRY_RECEIPT=$RUNNER_TEMP/basic-ancestry.json" >> "$GITHUB_ENV"
       - uses: actions/checkout@v7
         with: {ref: '${{ github.sha }}', path: operator, persist-credentials: false}
       - uses: actions/setup-node@v7

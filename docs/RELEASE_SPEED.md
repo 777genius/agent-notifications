@@ -92,7 +92,9 @@ minute stretch target depends on real runner queues and source CI duration.
 
 ## Local commands
 
-Node 24+ runs the typed operator files directly. Install the reviewed locked
+Node 24+ runs the typed operator files directly. Go is also needed for the pinned
+workflow expression validator (`actionlint`); YAML parsing alone does not check
+which GitHub expression contexts are available at each workflow key. Install the reviewed locked
 compiler/types once, then run all side-effect-free tooling contracts:
 
 ```sh

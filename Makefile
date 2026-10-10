@@ -2,7 +2,7 @@
 	dev-local-install dev-local-update dev-local-bootstrap dev-local-status dev-local-reset \
 	dev-real-local dev-real-remote dev-real-toggle dev-real-status \
 	e2e-status e2e-smoke e2e-smoke-installed e2e-manual e2e-manual-installed \
-	linux-focus-debug preview-installer release-preflight release-tools-check codex-release-smoke
+	linux-focus-debug preview-installer release-preflight release-tools-check release-workflow-check codex-release-smoke
 
 # Binary names
 BINARY=claude-notifications
@@ -81,7 +81,10 @@ install: build ## Install binary to /usr/local/bin
 release-preflight: ## Check published metadata before release preparation (RELEASE_PREFLIGHT_ARGS optional)
 	@node scripts/release-preflight.mts $(if $(strip $(RELEASE_PREFLIGHT_ARGS)),$(RELEASE_PREFLIGHT_ARGS),--mode snapshot)
 
-release-tools-check: ## Typecheck and test release tooling without agents, native registration or GitHub effects
+release-workflow-check: ## Validate release workflow expressions with pinned actionlint
+	@go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -shellcheck= -pyflakes= .github/workflows/basic-release.yml .github/workflows/landing.yml .github/workflows/release-tools.yml
+
+release-tools-check: release-workflow-check ## Typecheck and test release tooling without agents, native registration or GitHub effects
 	@npm --prefix scripts/codex-offline-release-smoke run typecheck
 	@scripts/codex-offline-release-smoke/node_modules/.bin/tsc --noEmit -p scripts/release-tools-tsconfig.json
 	@npm --prefix scripts/codex-offline-release-smoke test
