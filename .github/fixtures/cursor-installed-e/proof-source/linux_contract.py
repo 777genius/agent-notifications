@@ -284,9 +284,8 @@ def run(binary, fixture, scratch, mode='fork', refusal=None, timeout=12):
         for kind,suffix,cap in (('trace','.trace',8*native.LIMIT),('control','.control',8*native.LIMIT),('actor','.actor.stdout',65536+64)):
             path = scratch/(case+suffix)
             raw_files[kind] = (path.open('xb'),{'path':str(path),'bytes':0,'disposition':'CONSUMED_ONLY'},cap)
-        actor_cwd = scratch/(case+'.actor'); actor_cwd.mkdir()
         root, root_record = owner.spawn([str(fixture),mode],stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,start_new_session=True,bufsize=0,cwd=actor_cwd,
+            stdout=subprocess.PIPE,start_new_session=True,bufsize=0,cwd=scratch,
             env={'PATH':'/usr/bin:/bin','LANG':'C','TMPDIR':str(scratch/'tmp')})
         observation['actor'] = owner.qualify(root_record)
         observation['phase'] = 'actor-readiness'
@@ -525,13 +524,16 @@ def main():
             except BaseException as error:
                 if 'firstFailure' not in binding: raise
                 binding['retentionError'] = type(error).__name__
-        cases.append(run('/usr/bin/strace',fixture,scratch,refusal='passive'))
+        case_scratch=scratch/'fork-passive'; case_scratch.mkdir(); (case_scratch/'tmp').mkdir()
+        cases.append(run('/usr/bin/strace',fixture,case_scratch,refusal='passive'))
         for mode in ('fork','vfork','exec','thread'):
-            cases.append(run(binary,fixture,scratch,mode))
+            case_scratch=scratch/(mode+'-None'); case_scratch.mkdir(); (case_scratch/'tmp').mkdir()
+            cases.append(run(binary,fixture,case_scratch,mode))
         for refusal in (*ACK_REFUSALS,'eof','deadline'):
-            cases.append(run(binary,fixture,scratch,refusal=refusal))
+            case_scratch=scratch/('fork-'+refusal); case_scratch.mkdir(); (case_scratch/'tmp').mkdir()
+            cases.append(run(binary,fixture,case_scratch,refusal=refusal))
     except Exception as error:
-        diagnostic_path = scratch/'fork-passive.stderr'
+        diagnostic_path = scratch/'fork-passive'/'fork-passive.stderr'
         diagnostic = diagnostic_path.read_text()[:65536] if diagnostic_path.exists() else ''
         receipt = {'status':'NOT_RUN_RUNTIME_UNSUPPORTED' if 'Operation not permitted' in diagnostic else 'FAIL',
                    'wholeContract':'INCOMPLETE','error':type(error).__name__+':'+str(error),

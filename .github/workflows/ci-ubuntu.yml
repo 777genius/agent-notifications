@@ -707,14 +707,14 @@ jobs:
               ('contract-fixtures-r1364/pure_checks.py', 4610, 'e228bea229023ff62d529742172dd1e3bf72600832c653eb14dc9d046e3b3234'),
               ('exact-old-executor/linux_contract.py', 11950, 'ef77db92d6adc58b6dbf18c52ab3085118981ae15a2824fa46add7e7ef467752'),
               ('exact-old-executor/native_case.py', 277880, '07047821776a91e3095eb5d4baed8467eb019ad31a8649fd58d67ca5ce46b6cc'),
-              ('linux_contract.py', 33530, '4705bee5e914e2fa0b09072fe61f1e0536dcf9a047576c18a84d65a0dc27c89a'),
+              ('linux_contract.py', 33794, '4a988581ec81e813c8f1aa0a2056a202dcf71f2ad66580fa22b1596e23edffe8'),
               ('native_case.py', 286172, '6711958e74161cc2bbc0c71404694dedcddb5cdf8dbe486cfb70ef1a919af240'),
               ('src/defs.h', 70911, '9914057470fbec3428b051c4a307fe48e7c19207192a936b88c5b14b8a624eae'),
               ('src/strace.c', 133140, '656ccbcd614055b777a11d69bc55e35a0256426f421ea4f7c58026e95fa029e5'),
               ('src/syscall.c', 38750, '390ff1bc410226b4c843ee046ba8e576879e0edc2b3b3087c79afb4ceb506803'),
               ('exact-old-executor/src/strace.c', 125181, '7953842ccb83b6419172217943b0f1c40ce4b10f3514a093ea9feb333f1da452'),
           )
-          assert len(tuples) == 21 and sum(row[1] for row in tuples) == 1188380
+          assert len(tuples) == 21 and sum(row[1] for row in tuples) == 1188644
           workspace = pathlib.Path(subprocess.check_output(['/usr/bin/sudo','-n','/usr/bin/python3','-B','-S','-c',"import os,pathlib,tempfile; p=pathlib.Path(tempfile.mkdtemp(prefix='TEST-cursor-proof-',dir='/srv/workers')); p.chmod(0o755); (p/'source').mkdir(mode=0o755); os.chown(p/'source',int(os.environ['SUDO_UID']),int(os.environ['SUDO_GID'])); print(p)"],text=True,timeout=5).strip())
           assert workspace.parent == pathlib.Path('/srv/workers') and workspace.name.startswith('TEST-cursor-proof-') and workspace.resolve(strict=True) == workspace and workspace.stat().st_uid == 0
           with open(os.environ['GITHUB_ENV'],'a') as environment: environment.write('CURSOR_PROOF_WORKSPACE='+str(workspace)+'\n')
@@ -1482,7 +1482,7 @@ jobs:
                                                   cases=['fork-passive',*[mode+'-None' for mode in ('fork','vfork','exec','thread')],*['fork-'+refusal for refusal in ('invalid','wrong-tracer','wrong-sequence','wrong-phase','wrong-pid','wrong-birth','wrong-child','wrong-child-birth','wrong-syscall','wrong-flags','wrong-arg','eof','deadline')]]
                                                   for case in cases:
                                                       for suffix in ('.stderr','.trace','.control','.actor.stdout','.raw-receipt.json'):
-                                                          selected(proof,relative+'/'+case+suffix)
+                                                          selected(proof,relative+'/'+case+'/'+case+suffix)
                                               finally: os.close(child)
                                           except (OSError,AssertionError,ValueError,KeyError) as error:
                                               errors.append({'path':'TEST-cursor-proof/'+relative,'error':type(error).__name__+':'+str(error)[:240]})
