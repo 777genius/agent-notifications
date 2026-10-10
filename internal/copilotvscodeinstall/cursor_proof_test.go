@@ -983,7 +983,23 @@ func localPublicFixture(t *testing.T, manualRoute ...bool) (cursorFixture, *vsco
 		t.Fatal(err)
 	}
 	defer func() { _ = prepared.Close() }()
+	profileBefore := cursorRead(t, localConfig.ProfileSettingsPath)
 	result, err := engine.Apply(cursorContext(t), prepared, uapinstaller.Decision{Confirmed: true})
+	if len(manualRoute) != 0 && manualRoute[0] && runtime.GOOS != "linux" && !(runtime.GOOS == "darwin" && runtime.GOARCH == "arm64") {
+		const refusal = "local profile metadata mutation unqualified on this OS; native Windows ACL/profile CI required"
+		if err == nil || err.Error() != refusal || result.Reason != refusal || result.Outcome != "incomplete" || !result.Mutated || result.Client.Activation != string(domain.ActivationPrepared) || result.Binding.BindingID != f.b.BindingID || result.Binding.DataRoot != f.b.DataRoot {
+			t.Fatalf("unsupported Local metadata Apply boundary: %+v %v", result, err)
+		}
+		state, loadErr := (statev2.Store{Path: f.cfg.StateFile}).Load()
+		if loadErr != nil || len(state.Installations) != 1 {
+			t.Fatal("unsupported Local lost retained partial state", loadErr)
+		}
+		record, exists := state.Installations[0].Clients[f.b.BindingID]
+		if !exists || record.Activation != domain.ActivationPrepared || record.ProfileAuthority != nil || !reflect.DeepEqual(record.SelectedDelivery, result.Binding.SelectedDelivery) || !bytes.Equal(profileBefore, cursorRead(t, localConfig.ProfileSettingsPath)) {
+			t.Fatal("unsupported Local metadata refusal lost selected partial state or changed profile")
+		}
+		return f, adapter, engine, record
+	}
 	if err != nil || result.Binding.BindingID != f.b.BindingID || result.Binding.DataRoot != f.b.DataRoot {
 		t.Fatalf("Local TEST install: %+v %v", result, err)
 	}
@@ -1197,6 +1213,25 @@ func TestLocalMCPConsentReconstructsSelectedRecordWithoutNativeGate(t *testing.T
 		t.Fatal(err)
 	}
 	before := cursorRead(t, f.cfg.StateFile)
+	if runtime.GOOS != "linux" && !(runtime.GOOS == "darwin" && runtime.GOARCH == "arm64") {
+		consent, err := ReadConsent(snapshot, f.b)
+		if err != nil || consent.desktop || consent.webhook || consent.manual {
+			t.Fatal("unsupported metadata host gained consent", err)
+		}
+		if _, err := portable.ReadLocalBinding(f.b.ControlRoot, f.b.BindingID); err == nil {
+			t.Fatal("partial Local Apply published an installed locator")
+		}
+		if err := QualifyLocalConsentFromSnapshot(cursorContext(t), f.b, f.cfg, snapshot, true); err == nil {
+			t.Fatal("unsupported metadata host gained manual consent qualification")
+		}
+		if _, _, _, err := NewLocalGateFromSnapshot(cursorContext(t), f.b, f.cfg, snapshot); err == nil {
+			t.Fatal("partial MCP-only record gained native Gate")
+		}
+		if !bytes.Equal(before, cursorRead(t, f.cfg.StateFile)) {
+			t.Fatal("refused qualification rewrote retained partial state")
+		}
+		return
+	}
 	observed, err := readLocalRecord(f.cfg, f.b)
 	if err != nil || !reflect.DeepEqual(observed.Binding, record) {
 		t.Fatal("installed MCP record refused", err)
