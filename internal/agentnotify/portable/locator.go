@@ -287,6 +287,58 @@ func ExactLocator(b Binding) (bool, error) {
 	return true, nil
 }
 
+// ReadLocalBinding resolves an opaque ID through the live installed consumer
+// registry. The canonical private locator confirms those exact registered bytes;
+// a path, recovery marker or unregistered locator cannot select an authority.
+func ReadLocalBinding(controlRoot, bindingID string) (Binding, error) {
+	if len(bindingID) == 0 || len(bindingID) > 128 || !id.MatchString(bindingID) || bindingID == "." || bindingID == ".." ||
+		len(controlRoot) > 4096 || !filepath.IsAbs(controlRoot) || filepath.Clean(controlRoot) != controlRoot || physicalDirectory(controlRoot) != nil {
+		return Binding{}, ErrInvalid
+	}
+	snapshot, err := installruntime.ReadInstalledSnapshot(controlRoot)
+	if err != nil || snapshot.Recovery || snapshot.Ledger.PendingMutation != nil {
+		return Binding{}, ErrInvalid
+	}
+	var selected *Binding
+	for key, consumer := range snapshot.Ledger.Consumers {
+		if !strings.HasPrefix(key, "portable:") {
+			continue
+		}
+		candidate, err := decode([]byte(consumer.Registration))
+		if err != nil {
+			return Binding{}, ErrInvalid
+		}
+		wantKey, want, canonical, err := candidate.Registration()
+		if err != nil || key != wantKey || consumer.Registration != string(canonical) || !reflect.DeepEqual(consumer, want) {
+			return Binding{}, ErrInvalid
+		}
+		if candidate.Integration != CopilotVSCode || candidate.BindingID != bindingID {
+			continue
+		}
+		if selected != nil || candidate.ControlRoot != controlRoot || candidate.CheckSnapshot(snapshot) != nil {
+			return Binding{}, ErrInvalid
+		}
+		selected = &candidate
+	}
+	if selected == nil {
+		return Binding{}, ErrInvalid
+	}
+	for _, path := range []string{selected.ScopeRoot, selected.DataRoot, selected.RuntimeRoot, filepath.Dir(selected.GlobalConfig)} {
+		if physicalDirectory(path) != nil {
+			return Binding{}, ErrInvalid
+		}
+	}
+	present, err := ExactLocator(*selected)
+	if err != nil || !present {
+		return Binding{}, ErrInvalid
+	}
+	current, err := installruntime.ReadInstalledSnapshot(controlRoot)
+	if err != nil || !reflect.DeepEqual(current, snapshot) {
+		return Binding{}, ErrInvalid
+	}
+	return *selected, nil
+}
+
 // ReadCursorBinding reads only the exact identity from an explicit private
 // locator. It grants no installed authorization or runtime preparation. Callers
 // must still check Binding.CheckSnapshot and the qualified CursorGate later.

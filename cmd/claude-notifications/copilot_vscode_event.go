@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"io"
+	"os"
 	"os/signal"
 	"path/filepath"
 	"strings"
@@ -11,9 +12,16 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/777genius/agent-notifications/internal/agentnotify/portable"
+	"github.com/777genius/agent-notifications/internal/config"
+	"github.com/777genius/agent-notifications/internal/copilotvscodeevent"
+	"github.com/777genius/agent-notifications/internal/copilotvscodeinstall"
 	source "github.com/777genius/agent-notifications/internal/copilotvscodesource"
+	"github.com/777genius/agent-notifications/internal/installruntime"
 	"github.com/777genius/agent-notifications/internal/notification/observation"
 	"github.com/777genius/agent-notifications/internal/notifier"
+	"github.com/777genius/agent-notifications/internal/webhook"
+	uapinstaller "github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/installer"
 )
 
 type localEventArgs struct{ Event, ControlRoot, Binding string }
@@ -40,7 +48,7 @@ func parseLocalEventArgs(argv []string) (a localEventArgs, ok bool) {
 			return a, false
 		}
 	}
-	return a, a.Event == source.Stop && filepath.IsAbs(a.ControlRoot) && len(a.ControlRoot) <= 4096 && len(a.Binding) <= 128 && !strings.HasPrefix(a.Binding, "--")
+	return a, a.Event == source.Stop && filepath.IsAbs(a.ControlRoot) && filepath.Clean(a.ControlRoot) == a.ControlRoot && len(a.ControlRoot) <= 4096 && len(a.Binding) <= 128 && !strings.HasPrefix(a.Binding, "--")
 }
 func localArgText(s string) bool {
 	if s == "" || !utf8.ValidString(s) {
@@ -85,9 +93,8 @@ func readLocalPayload(parent context.Context, input io.ReadCloser) ([]byte, bool
 	}
 }
 
-// Public N1 composition intentionally has no Gate/effect owner or config load.
-// N2a/N2b must supply reviewed installed binding/policy composition. The typed
-// source still executes under genuine pre-stdin admission, without diagnostics.
+// Installed composition preserves the original pre-stdin deadline and typed
+// Stop facts. Unknown physical capability denies without public diagnostics.
 // Public7f3 Local observer encodes {}: this transport alone emits {} plus LF,
 // including invalid input/panic. A failed write returns 1 (never blocking 2),
 // honestly indicating neutral output could not be delivered. SDK IO is private.
@@ -100,7 +107,8 @@ func runCopilotVSCodeEvent(argv []string, input io.ReadCloser, output io.Writer)
 			code = 1
 		}
 	}()
-	ctx, _, cancel, err := observation.Admission(context.Background(), notifier.SystemBootClock{})
+	clock := notifier.SystemBootClock{}
+	ctx, deadline, cancel, err := observation.Admission(context.Background(), clock)
 	if err != nil {
 		return 0
 	}
@@ -118,6 +126,48 @@ func runCopilotVSCodeEvent(argv []string, input io.ReadCloser, output io.Writer)
 	if !ok {
 		return 0
 	}
-	_, _ = source.Decode(ctx, a.Event, payload)
+	facts, err := source.Decode(ctx, a.Event, payload)
+	if err != nil {
+		return 0
+	}
+	b, err := portable.ReadLocalBinding(a.ControlRoot, a.Binding)
+	if err != nil {
+		return 0
+	}
+	snapshot, err := installruntime.ReadInstalledSnapshot(b.ControlRoot)
+	if err != nil || b.CheckSnapshot(snapshot) != nil {
+		return 0
+	}
+	temp, err := os.MkdirTemp("", "agent-notifications-local-snapshot-")
+	if err != nil {
+		return 0
+	}
+	defer func() { _ = os.RemoveAll(temp) }()
+	temp, err = filepath.Abs(temp)
+	if err != nil {
+		return 0
+	}
+	root := filepath.Join(filepath.Dir(b.ControlRoot), "uap")
+	cfg := uapinstaller.Config{StateRoot: filepath.Join(root, "state"), StateFile: filepath.Join(root, "state", "state-v2.json"),
+		LockFile: filepath.Join(root, "state", "mutation.lock"), OperationsDir: filepath.Join(root, "state", "operations"),
+		PluginDataBase: filepath.Join(root, "plugin-data"), ManagedRoot: filepath.Join(root, "managed"), TempRoot: temp}
+	gate, _, effective, err := copilotvscodeinstall.NewLocalGate(ctx, b, cfg)
+	if err != nil {
+		return 0
+	}
+	binding, err := gate.ConsumerBinding(ctx)
+	if err != nil {
+		return 0
+	}
+	consumer := copilotvscodeevent.Consumer{Binding: binding, Gate: gate, Config: effective, Clock: clock,
+		Cache:   &observation.RecentCache{Root: b.DataRoot, Clock: clock},
+		Desktop: copilotvscodeinstall.NewDesktop(gate, binding, filepath.Join(b.ControlRoot, "copilot-vscode-native-spool"), nil),
+		SendWebhook: copilotvscodeinstall.NewWebhookSender(gate, binding, func(ctx context.Context, cfg *config.Config, message webhook.SendContext) error {
+			sender := webhook.NewWithContext(ctx, cfg)
+			defer func() { _ = sender.Shutdown(50 * time.Millisecond) }()
+			return sender.SendWithContext(message)
+		}),
+	}
+	_ = consumer.Consume(ctx, facts, deadline)
 	return 0
 }

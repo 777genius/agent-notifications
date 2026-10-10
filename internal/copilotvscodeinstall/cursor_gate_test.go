@@ -273,3 +273,66 @@ func TestCursorMissingProofHasNoEffects(t *testing.T) {
 		t.Fatal("zero CursorGate granted")
 	}
 }
+
+// Regression: Local uses Cursor's effective agent section, retains a mutated
+// config pointer, or treats missing bound bytes as affirmative defaults.
+func TestLocalEffectiveConfigReadsOnlyBoundLocalBytes(t *testing.T) {
+	f := newCursorFixture(t)
+	f.b.Integration = portable.CopilotVSCode
+	cursorWrite(t, f.b.GlobalConfig, []byte(`{"schemaVersion":2,"agents":{"cursor":{"notifications":{"desktop":{"enabled":true}}},"copilot-vscode":{"statuses":{"agent_stopping":{"desktop":{"enabled":false}}},"notifications":{"webhook":{"enabled":true,"url":"http://127.0.0.1:18181"}}}}}`), 0600)
+	first, identity, err := readLocalConfig(f.b)
+	if err != nil || first.IsStatusDesktopEnabled("agent_stopping") || !first.IsStatusWebhookEnabled("agent_stopping") {
+		t.Fatalf("Local config: %v", err)
+	}
+	first.Notifications.Webhook.URL = "http://127.0.0.1:19999"
+	next, unchanged, err := readLocalConfig(f.b)
+	if err != nil || unchanged != identity || next.Notifications.Webhook.URL != "http://127.0.0.1:18181" {
+		t.Fatal("caller mutated bound configuration")
+	}
+	cursorWrite(t, f.b.GlobalConfig, []byte(`{"schemaVersion":2,"agents":{"copilot-vscode":{"statuses":{"agent_stopping":{"enabled":false}}}}}`), 0600)
+	next, changed, err := readLocalConfig(f.b)
+	if err != nil || changed == identity || next.IsStatusDesktopEnabled("agent_stopping") || next.IsStatusWebhookEnabled("agent_stopping") {
+		t.Fatal("Local opt-out not reloaded")
+	}
+	if err := os.Remove(f.b.GlobalConfig); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := readLocalConfig(f.b); err == nil {
+		t.Fatal("missing bound Local config borrowed defaults")
+	}
+}
+
+// Regression: native Local channel consent shares enabled/manual bits or stale
+// generation revalidation admits an event after a real policy commit.
+func TestLocalConsentAndStaleGenerationStayIndependent(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("current Local TEST filesystem tuple is Linux")
+	}
+	f, _, _, _ := localPublicFixture(t)
+	initial, err := installruntime.ReadPolicySnapshot(cursorContext(t), f.b.ControlRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	consent, err := ReadConsent(initial, f.b)
+	if err != nil || consent.desktop || consent.webhook || consent.manual {
+		t.Fatal("new Local registration was opted in")
+	}
+	old := consumerBinding(initial, f.b)
+	s := cursorPolicy(t, f, `{"copilotVSCodeNotifications":{"desktop":true,"webhook":false,"manual":{"enabled":false}},"cursorNotifications":{"desktop":true,"webhook":true}}`)
+	consent, err = ReadConsent(s, f.b)
+	if err != nil || !consent.desktop || consent.webhook || consent.manual {
+		t.Fatal("Local borrowed independent channel/manual bits")
+	}
+	if consumerBinding(s, f.b).Generation == old.Generation {
+		t.Fatal("TEST policy commit did not advance generation")
+	}
+	g := Gate{Binding: f.b}
+	if g.Recheck(cursorContext(t), old, copilotvscodeevent.DesktopChannel) {
+		t.Fatal("stale generation authorized")
+	}
+	s = cursorPolicy(t, f, `{"copilotVSCodeNotifications":{"desktop":false,"webhook":true,"manual":{"enabled":false}}}`)
+	consent, err = ReadConsent(s, f.b)
+	if err != nil || consent.desktop || !consent.webhook || consent.manual {
+		t.Fatal("Local desktop revoke changed webhook consent")
+	}
+}

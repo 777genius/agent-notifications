@@ -510,3 +510,114 @@ func TestReadCursorBindingRefusals(t *testing.T) {
 		})
 	}
 }
+
+// Regression: Local borrows Cursor's absolute selector or a path-only locator,
+// or loses the historical installed primary. Only the registered opaque ID wins.
+func TestReadLocalBindingUsesRegisteredCanonicalLocator(t *testing.T) {
+	b, _, request := fixture(t)
+	b.Integration = CopilotVSCode
+	key, consumer, _, err := b.Registration()
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.ConsumerID, request.Consumer, request.ExpectedGeneration = key, consumer, nil
+	if _, err := installruntime.Commit(testContext(t), request); err != nil {
+		t.Fatal(err)
+	}
+	name, err := Publish(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := ReadLocalBinding(b.ControlRoot, b.BindingID)
+	if err != nil || got != b {
+		t.Fatalf("registered Local: %+v %v", got, err)
+	}
+	for _, value := range []string{filepath.Join(b.DataRoot, name), "../binding", "..", "binding/child", strings.Repeat("x", 129), "missing"} {
+		if _, err := ReadLocalBinding(b.ControlRoot, value); err == nil {
+			t.Fatalf("unsafe/unregistered ID %q admitted", value)
+		}
+	}
+	// Even a fully canonical private locator cannot survive consumer revocation.
+	request.RemoveConsumer = true
+	if _, err := installruntime.Commit(testContext(t), request); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadLocalBinding(b.ControlRoot, b.BindingID); err == nil {
+		t.Fatal("unregistered private locator admitted")
+	}
+}
+
+// Regression: map iteration arbitrarily chooses one of two registrations with
+// the same Local binding ID, including registrations of different installations.
+func TestReadLocalBindingRejectsDuplicateRegistrations(t *testing.T) {
+	b, _, request := fixture(t)
+	b.Integration = CopilotVSCode
+	for index := 0; index < 2; index++ {
+		candidate := b
+		if index == 1 {
+			candidate.InstallationID = "other-installation"
+		}
+		key, c, _, err := candidate.Registration()
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.ConsumerID, request.Consumer, request.ExpectedGeneration = key, c, nil
+		if _, err := installruntime.Commit(testContext(t), request); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Publish(candidate); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := ReadLocalBinding(b.ControlRoot, b.BindingID); err == nil {
+		t.Fatal("ambiguous Local binding admitted")
+	}
+}
+
+// Regression: canonical registered identity is weakened to parseable bytes or
+// pathname existence, or a changed primary is accepted against stale ledger data.
+func TestReadLocalBindingRejectsLocatorAndInstalledIdentityDrift(t *testing.T) {
+	for _, change := range []string{"locator", "primary", "symlink"} {
+		t.Run(change, func(t *testing.T) {
+			b, _, request := fixture(t)
+			b.Integration = CopilotVSCode
+			key, c, raw, err := b.Registration()
+			if err != nil {
+				t.Fatal(err)
+			}
+			request.ConsumerID, request.Consumer, request.ExpectedGeneration = key, c, nil
+			if _, err := installruntime.Commit(testContext(t), request); err != nil {
+				t.Fatal(err)
+			}
+			name, err := Publish(b)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := ReadLocalBinding(b.ControlRoot, b.BindingID); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(b.DataRoot, name)
+			switch change {
+			case "locator":
+				if err := os.WriteFile(path, append(raw, '\n'), 0600); err != nil {
+					t.Fatal(err)
+				}
+			case "primary":
+				if err := os.WriteFile(filepath.Join(b.RuntimeRoot, b.Primary), []byte("foreign replacement"), 0700); err != nil {
+					t.Fatal(err)
+				}
+			case "symlink":
+				original := path + "-original"
+				if err := os.Rename(path, original); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(original, path); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := ReadLocalBinding(b.ControlRoot, b.BindingID); err == nil {
+				t.Fatal("changed identity admitted")
+			}
+		})
+	}
+}
