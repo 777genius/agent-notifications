@@ -223,11 +223,14 @@ def main():
                 persist_streams('TIMEOUT_PARTIAL')
                 # Keep the NEW cleanup owner alive past its 12+4 work/join
                 # clocks. OLD's intentional pre-try hang needs outer containment.
-                if args.expected == 'OLD_RED': child.kill()
-                try: out,err = child.communicate(timeout=2 if args.expected == 'OLD_RED' else None)
-                except subprocess.TimeoutExpired as partial:
-                    out,err = partial.output or out,partial.stderr or err
-                    raise
+                if args.expected == 'OLD_RED':
+                    child.kill()
+                    # Adopted OLD actors can hold the worker pipes open.
+                    # Join the worker here; retain TIMEOUT_PARTIAL bytes until
+                    # the existing finally contains and joins those actors.
+                    child.wait(timeout=2)
+                else:
+                    out,err = child.communicate()
         except BaseException as error:
             outer_error = type(error).__name__
             if communicate_failure is None: communicate_failure = type(error).__name__+':'+str(error)[:240]
