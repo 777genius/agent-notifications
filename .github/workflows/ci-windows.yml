@@ -55,7 +55,7 @@ jobs:
 
   test:
     needs: scope
-    if: needs.scope.outputs.mode != 'release-tools'
+    if: ${{ !cancelled() && needs.scope.outputs.mode != 'release-tools' }}
     name: Test on Windows
     runs-on: windows-latest
     timeout-minutes: 30

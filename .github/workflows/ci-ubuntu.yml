@@ -1129,7 +1129,7 @@ jobs:
           retention-days: 7
   opencode-plugin:
     needs: scope
-    if: github.event_name != 'workflow_dispatch' && needs.scope.outputs.mode != 'release-tools'
+    if: ${{ !cancelled() && github.event_name != 'workflow_dispatch' && needs.scope.outputs.mode != 'release-tools' }}
     name: OpenCode plugin bundle
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || vars.CI_LINUX_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 10
@@ -1153,7 +1153,7 @@ jobs:
 
   test:
     needs: scope
-    if: github.event_name != 'workflow_dispatch' && needs.scope.outputs.mode != 'release-tools'
+    if: ${{ !cancelled() && github.event_name != 'workflow_dispatch' && needs.scope.outputs.mode != 'release-tools' }}
     name: Test on Ubuntu
     # Go 1.26 runs the frozen Cursor physical Ubuntu/kernel qualification.
     runs-on: ${{ matrix.go == '1.26' && 'ubuntu-24.04' || github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || vars.CI_LINUX_RUNNER || 'ubuntu-24.04' }}
@@ -1355,7 +1355,7 @@ jobs:
 
   lint:
     needs: scope
-    if: github.event_name != 'workflow_dispatch' && needs.scope.outputs.mode != 'release-tools'
+    if: ${{ !cancelled() && github.event_name != 'workflow_dispatch' && needs.scope.outputs.mode != 'release-tools' }}
     name: Lint
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || vars.CI_LINUX_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 15
