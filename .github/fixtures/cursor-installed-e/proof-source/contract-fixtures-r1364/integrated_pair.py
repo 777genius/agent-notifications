@@ -1560,7 +1560,7 @@ def run_outer(args):
         parent = args.scratch_parent.resolve(strict=True); workspace = args.workspace.resolve(strict=True)
         assert workspace.is_relative_to('/srv/workers') and parent.is_relative_to(workspace)
         assert parent.stat().st_uid == os.geteuid() and not parent.stat().st_mode & 0o022
-        root = Path(tempfile.mkdtemp(prefix='TEST-r1366-'+args.case+'-',dir=parent))
+        root = Path(tempfile.mkdtemp(prefix='TEST-r1366-',dir=parent))
         # Every subsequent allocation and fallible layout qualification is
         # covered by this outer finally. The source worktree is untouched.
         os.chown(root,1000,1000); os.chmod(root,0o700)
