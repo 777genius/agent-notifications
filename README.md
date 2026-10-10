@@ -33,7 +33,7 @@ Desktop notifications for **Claude, Codex CLI and OpenCode**, plus **Gemini CLI 
 **[Guided installer](https://agent-notifications.com/#install)** or run:
 
 ```bash
-curl -fsSL https://agent-notifications.com/install.sh | bash
+(set -o pipefail; curl -fsSL https://agent-notifications.com/install.sh | bash)
 ```
 
 Choose **Claude**, **Codex CLI**, **OpenCode**, **Gemini CLI** (Linux/Windows), or a combination. Install the selected agent CLIs first. Run the same command to update.
@@ -47,17 +47,9 @@ After setup:
 - **OpenCode:** restart OpenCode; on macOS, [grant notification permission](docs/opencode-notifications.md#macos-notification-permission).
 - **Gemini CLI (Linux/Windows):** restart Gemini to reload its hooks.
 
-The installer selects a verified complete release for your platform:
-
-| Platform | Version | Agents |
-| --- | --- | --- |
-| Linux amd64 / arm64 | 1.48.5 | Claude, Codex, OpenCode, Gemini |
-| Windows amd64 | 1.48.5 | Claude, Codex, OpenCode, Gemini |
-| macOS amd64 / arm64 | 1.48.5 | Claude, Codex, OpenCode |
+The installer selects a release from the [platform channels](docs/PLATFORM_RELEASE_CHANNELS.md) for your OS and architecture. See that page for current versions and the [release notes](https://github.com/777genius/agent-notifications/releases) for validation details and known limitations.
 
 Run the command once to migrate a normal Claude marketplace installation to its platform channel. Claude's plugin updater then follows that channel; rerun setup to update a standalone Codex bundle. Explicitly pinned/custom marketplace sources are retained.
-
-Version 1.48.5 is GitHub's Latest and includes native binaries and portable packages for all five targets, plus the signed, notarized ClaudeNotifier.app helper for macOS. This release uses basic five-platform artifact checks and separate macOS E2E; the eleven-cell OpenCode installed-business suite was not run. These checks do not establish full native, clock/source-epoch, visible desktop or cold-start qualification. The installer selects this release from [platform channels](docs/PLATFORM_RELEASE_CHANNELS.md). Gemini CLI remains supported on Linux/Windows only.
 
 <details>
 <summary>Non-interactive installation and optional notification tools</summary>
@@ -74,9 +66,9 @@ Use `--product claude` or `--product both` for Claude or Claude + Codex. For Cla
 (set -o pipefail; curl -fsSL https://agent-notifications.com/install.sh | bash -s -- --products claude,codex,opencode --desktop)
 ```
 
-On Linux/Windows, add `,gemini` to `--products` for all four agents, or use `--product gemini` for Gemini only. For OpenCode/Gemini, choose `--desktop`, `--webhook`, or both; webhook destinations need separate configuration. These flags do not change Claude/Codex channels.
+On Linux/Windows, add `,gemini` to `--products` for all four agents, or use `--product gemini` for Gemini only. Fresh OpenCode/Gemini setup defaults to desktop notifications with webhooks off; updates preserve saved channel choices when no channel flags are supplied. Use `--desktop`, `--webhook`, or both to choose channels explicitly; webhook destinations need separate configuration. These flags do not change Claude/Codex channels.
 
-Claude/Codex setup also installs the `agent-notify` MCP server and `agent-notifications` skill so an agent can notify you during a task. Open a new session after setup. Use `--skip-agent-notify` for hooks only. [Setup and recovery details](docs/INSTALLATION.md).
+Claude/Codex setup also installs the `agent-notify` MCP server and `agent-notifications` skill so an agent can notify you during a task. Open a new session after setup. Updates preserve an existing opt-out; use `--agent-notify` to enable the optional tools explicitly. Use `--skip-agent-notify` to skip their setup; it does not remove an existing MCP installation. [Setup and recovery details](docs/INSTALLATION.md).
 
 </details>
 
@@ -86,7 +78,7 @@ Claude/Codex setup also installs the `agent-notify` MCP server and `agent-notifi
 
 - **Task and attention alerts:** completions, questions, tool approvals and more, depending on the agent. See the table below.
 - **Click-to-focus and sounds (Claude/Codex):** return to the originating terminal or editor; choose built-in or custom sounds, volume and audio output. [Supported terminals](docs/CLICK_TO_FOCUS.md) · [Sound settings](docs/CONFIGURATION.md#sound-options)
-- **Useful context:** Claude/Codex show project, git branch and native session names, with generated labels as fallback. OpenCode desktop alerts show native session names when available. Question alerts show the current question when supplied by the host. OpenCode webhooks retain generic text. [Session context](docs/CONFIGURATION.md#session-context) · [OpenCode context](docs/opencode-notifications.md)
+- **Useful context:** Claude/Codex desktop alerts show project, git branch and native session names, with generated labels as fallback. OpenCode desktop alerts show native session names when available. Question alerts show the current question when supplied by the host. OpenCode webhooks retain generic text. [Session context](docs/CONFIGURATION.md#session-context) · [OpenCode context](docs/opencode-notifications.md)
 - **Less noise:** focus-aware delivery, delays, filters and optional subagent alerts. [Configuration](docs/CONFIGURATION.md#focus-aware--delayed-notifications) · [Do Not Disturb](docs/DO_NOT_DISTURB.md)
 - **Webhooks:** Slack, Discord, Telegram, Lark/Feishu and custom endpoints. [Integration guides](docs/webhooks/README.md)
 - **Cross-platform:** macOS (Intel/Apple Silicon), Linux (x64/ARM64) and Windows 10+ (x64). Agent and delivery limits are listed below. [Platform details](docs/PLATFORMS.md)
@@ -100,24 +92,33 @@ Claude/Codex setup also installs the `agent-notify` MCP server and `agent-notifi
 | **OpenCode** | Root-session completion, questions, permissions and errors | No | [Setup and limits](docs/opencode-notifications.md) |
 | **Gemini CLI** | Turn completion and tool permissions | No | [Linux/Windows setup and qualification](docs/gemini-notifications.md) |
 
-Agent Notifications **1.48.1 on Linux/Windows and 1.48.3 on macOS** supports OpenCode V1 and V2 with one installed plugin. Linux/Windows release qualification covers **V1 1.18.33 and V2 2.0.21**, plus **V1 1.18.34 on Linux amd64**. macOS has four installed basic-business/lifecycle checks across V1 1.18.33 and V2 2.0.21: Apple Silicon ran natively, while Intel binaries ran under Rosetta. These checks do not prove physical Intel execution, full native E2E or visible OpenCode banners for this release.
+OpenCode V1 and V2 use one installed plugin. The installer accepts stable V1 **>= 1.18.29** and V2 **>= 2.0.0**; prereleases and unknown API generations are rejected. This compatibility range does not mean every version has been tested. See [OpenCode setup, release reports and delivery limits](docs/opencode-notifications.md) for qualification of specific versions and platforms.
 
-The self-contained bundle incorporates SDK **0.3.0** from its reviewed vendored tarball; separate SDK publication is not required. [Setup, release reports and delivery limits](docs/opencode-notifications.md). Gemini is tested with **0.62.0**; a completed turn does not necessarily mean task success or a final answer. OpenCode/Gemini alerts require explicit desktop/webhook consent. Gemini alerts and OpenCode webhooks use generic text. OpenCode desktop alerts may include bounded native session titles and current question text.
+Gemini's qualified host version and platform evidence are listed in [the Gemini guide](docs/gemini-notifications.md). A completed Gemini turn does not necessarily mean task success or a final answer. Gemini alerts and OpenCode webhooks use generic text; OpenCode desktop alerts may include native session titles and current question text. Gemini's built-in notifications can cause duplicate desktop alerts; choose one desktop source or use Agent Notifications for webhooks only.
 
 For OpenCode on stock Windows V1, the original event age is not always independently verifiable. A delayed completion may notify once and recur after the 24-hour claim lifetime; filters, provenance, deduplication and limits still apply. One-shot `opencode run` delivery at host shutdown is best effort; use a persistent host for sustained delivery.
 
 ## Settings
 
-In Claude, run `/claude-notifications-go:settings` for the settings wizard or `/claude-notifications-go:sounds` to preview sounds.
+In Claude, run `/claude-notifications-go:settings` for the settings wizard. You can request sound previews during the wizard.
 
-Use the installed launcher to find or safely inspect settings. The commands below assume `agent-notifications` is on your `PATH`; otherwise, use its full path.
+For Claude/Codex, use the installed launcher to find or safely inspect settings. The commands below assume `agent-notifications` is on your `PATH`; otherwise, use its full path.
 
 ```bash
 agent-notifications config path
 agent-notifications config inspect --json
 ```
 
-Settings are shared, with optional per-agent overrides. The `claude-notifications` alias and Claude's existing slash-command names remain supported.
+Claude/Codex share settings, with optional per-agent overrides after an explicit upgrade to configuration schema 2. The `claude-notifications` alias and Claude's existing slash-command names remain supported.
+
+Managed OpenCode uses a separate settings target:
+
+```bash
+agent-notifications config path --target opencode --json
+agent-notifications config inspect --target opencode --json
+```
+
+Use the executable and control root reported by its installer. See [OpenCode settings](docs/opencode-notifications.md#edit-installed-opencode-settings) and [Gemini settings](docs/gemini-notifications.md#settings-duplicates-and-lifecycle) for agent-specific configuration and channel consent.
 
 [Configuration reference](docs/CONFIGURATION.md) · [Per-agent overrides](docs/AGENT_CONFIGURATION.md) · [Sound previews](docs/interactive-sound-preview.md)
 
