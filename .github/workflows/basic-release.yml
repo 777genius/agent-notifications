@@ -71,20 +71,6 @@ jobs:
             ([$latest[]|select(.conclusion=="failure" or .conclusion=="cancelled" or .conclusion=="timed_out")]|length)==0 and
             (["Test on Ubuntu (1.25)","Test on Ubuntu (1.26)","Test on Windows (1.25)","Test on Windows (1.26)","Test on macOS (1.25)","Test on macOS (1.26)","Swift notifier tests","Full macOS CI required","Lint","OpenCode plugin bundle"] |
              all(. as $name | any($latest[]; .name==$name and .status=="completed" and .conclusion=="success")))' "$RUNNER_TEMP/checks.json"
-      - name: Require unused immutable tag and no existing release
-        if: inputs.resume_run == ''
-        env: {GH_TOKEN: '${{ github.token }}'}
-        shell: bash
-        run: |
-          set -euo pipefail
-          for endpoint in "git/ref/tags/$RELEASE_TAG" "releases/tags/$RELEASE_TAG"; do
-            response="$RUNNER_TEMP/basic-absence-${endpoint%%/*}.txt"
-            if gh api --include "repos/$GITHUB_REPOSITORY/$endpoint" > "$response" 2> "$response.stderr"; then
-              echo 'Existing tag or release requires explicit reconciliation; no overwrite.' >&2
-              exit 1
-            fi
-            grep -Eq '^HTTP/[0-9.]+ 404( |$)' "$response"
-          done
       - uses: actions/checkout@v7
         with: {ref: '${{ inputs.candidate_sha }}', persist-credentials: false}
       - name: Verify all five version values and changelog
@@ -106,6 +92,12 @@ jobs:
       - name: Require operator tag exclusion
         shell: bash
         run: grep -Fx "      - '!$RELEASE_TAG'" operator/.github/workflows/release.yml
+      - uses: actions/setup-node@v7
+        with: {node-version: '24'}
+      - name: Require unused immutable tag and no existing release including drafts
+        if: inputs.resume_run == ''
+        env: {GH_TOKEN: '${{ github.token }}'}
+        run: node operator/scripts/basic-release-assets.mts unused
   build-matrix:
     if: inputs.resume_run == ''
     name: Build ${{ matrix.platform }} ${{ matrix.arch }}

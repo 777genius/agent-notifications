@@ -164,19 +164,45 @@ export class GitHub {
   }
 }
 function number(value: unknown, reason: string): number { need(Number.isSafeInteger(value) && Number(value) > 0, reason); return Number(value); }
-function tagState(gh: GitHub, m: Manifest): boolean {
+type ReleaseIdentity = Pick<Manifest, 'releaseTag' | 'candidateSHA'>;
+function tagState(gh: GitHub, m: ReleaseIdentity): boolean {
   const tag = gh.read(`git/ref/tags/${m.releaseTag}`); if (tag === null) return false;
   const ref = object(tag); const target = object(ref.object);
   need(ref.ref === `refs/tags/${m.releaseTag}` && target.type === 'commit' && target.sha === m.candidateSHA, 'remote immutable tag mismatch');
   return true;
 }
-function releaseState(gh: GitHub, m: Manifest): ObjectValue | null {
-  const value = gh.read(`releases/tags/${m.releaseTag}`); if (value === null) return null;
+function draftIdentity(value: unknown, m: ReleaseIdentity): ObjectValue {
   const release = object(value);
   need(release.tag_name === m.releaseTag && release.draft === true && release.prerelease === false &&
     release.target_commitish === m.candidateSHA, 'remote draft identity/state mismatch');
   number(release.id, 'release id required');
   return release;
+}
+function releaseState(gh: GitHub, m: ReleaseIdentity): ObjectValue | null {
+  // The tag endpoint only returns published releases. Authenticated listing includes drafts.
+  // Exhaust the bounded listing before accepting absence or uniqueness, even after a match.
+  const ids = new Set<number>(); let match: ObjectValue | null = null;
+  for (let page = 1; page <= 20; page++) {
+    const values = gh.read(`releases?per_page=100&page=${page}`);
+    need(Array.isArray(values) && values.length <= 100, 'release list incomplete');
+    for (const value of values) {
+      const release = object(value); const id = number(release.id, 'release id required');
+      need(typeof release.tag_name === 'string' && !ids.has(id), 'invalid or repeated release listing');
+      ids.add(id);
+      if (release.tag_name === m.releaseTag) {
+        need(match === null, 'duplicate remote release tag');
+        match = draftIdentity(release, m);
+      }
+    }
+    if (values.length < 100) {
+      if (!match) return null;
+      const id = number(match.id, 'release id required');
+      const release = draftIdentity(gh.read(`releases/${id}`), m);
+      need(release.id === id, 'remote release id mismatch');
+      return release;
+    }
+  }
+  throw new Error('release list exceeds bounded pagination');
 }
 function checkRemote(gh: GitHub, m: Manifest, release: ObjectValue): Set<string> {
   const seen = new Set<string>(); const expected = new Map(m.assets.map(a => [a.name, a]));
@@ -214,7 +240,11 @@ export function reconcile(root: string, stage: 'tag' | 'draft' | 'upload', gh: G
     });
     return;
   }
-  for (const asset of m.assets) {
+  const initialRelease = releaseState(gh, m); need(initialRelease, 'draft required');
+  const present = checkRemote(gh, m, initialRelease);
+  // Verified existing assets need no writes. Every missing asset still gets fresh full checks,
+  // and the final scan detects conflicts even when this stage has no mutations to perform.
+  for (const asset of m.assets.filter(asset => !present.has(asset.name))) {
     boundedWrite(() => {
       need(tagState(gh, m), 'tag changed during upload');
       const release = releaseState(gh, m); need(release, 'draft required');
@@ -241,6 +271,17 @@ export function validateOrigin(m: Manifest, origin: ObjectValue, comparison: Obj
 }
 export function main(argv: string[]): void {
   const [stage, directory] = argv;
+  if (stage === 'unused') {
+    need(argv.length === 1, 'usage: basic-release-assets.mts unused');
+    const repo = env('GITHUB_REPOSITORY');
+    need(repo === '777genius/agent-notifications', 'unsupported repository');
+    const identity: ReleaseIdentity = { releaseTag: env('RELEASE_TAG'), candidateSHA: env('RELEASE_CANDIDATE_SHA') };
+    need(semver.test(identity.releaseTag) && commit.test(identity.candidateSHA), 'stable semver tag and exact candidate SHA required');
+    const gh = new GitHub(repo);
+    need(!tagState(gh, identity), 'release tag already exists');
+    need(releaseState(gh, identity) === null, 'release already exists');
+    return;
+  }
   need(directory && argv.length === 2, 'usage: basic-release-assets.mts seal|verify|tag|draft|upload SEALED_DIR');
   const root = resolve(directory);
   if (stage === 'seal') { seal(root); return; }
