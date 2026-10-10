@@ -1883,12 +1883,12 @@ class OwnedNotificationsSession:
         self.stream = DBusBinaryStream(self.message)
         self.monitor_pump = threading.Thread(target=self.monitor_read,daemon=True)
         self.monitor_pump.start()
-        self.dunst = self.start('dunst',['-config','/dev/null'])
         self.wait(lambda:self.xsocket.exists() and self.xlock.exists(),5)
         xs = self.xsocket.lstat(); xl = self.xlock.lstat()
         assert stat.S_ISSOCK(xs.st_mode) and xs.st_uid == xs.st_gid == 1000 and xl.st_uid == xl.st_gid == 1000
         self.display_identity = {'socket':{'inode':xs.st_ino,'device':xs.st_dev,'mode':xs.st_mode},
                                  'lock':{'inode':xl.st_ino,'device':xl.st_dev,'mode':xl.st_mode}}
+        self.dunst = self.start('dunst',['-config','/dev/null'])
         # Dunst owner first.
         self.wait(lambda:any(m['type'] == 4 and m['header'].get(3) == 'NameOwnerChanged' and
             m['body'][:1] == ['org.freedesktop.Notifications'] and len(m['body']) == 3 and m['body'][2]

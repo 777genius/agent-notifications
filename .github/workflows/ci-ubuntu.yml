@@ -692,12 +692,12 @@ jobs:
           assert bounded_git(['rev-parse','HEAD'],41) == b'9f014e72af510783d58d00ad3d2db455a2f8117b\n'
           assert bounded_git(['cat-file','-t',transport_sha],7) == b'commit\n'
           tuples = (
-              ('contract-fixtures-r1364/MATRIX_README.md', 26982, '32ea9115ac59af7b39e7aa8bd01f1812ee5223432f2f8e12f6fb5e3756d35d11'),
+              ('contract-fixtures-r1364/MATRIX_README.md', 26982, 'f40cc69a021f0252ed47f6682f1d089e433eb418cc0e0e6d347e01178c694743'),
               ('contract-fixtures-r1364/REMAINING_SOURCE_REVIEW.md', 13054, 'a29f64098ec2d7617a650a8929859bc5166b663bb84f41a336efcf98bfc656c3'),
-              ('contract-fixtures-r1364/build_fixtures.py', 9654, '4bd5e7cfeb888456a043a739d92ca98a49fba216251647d7ee13a3f3407eeee8'),
+              ('contract-fixtures-r1364/build_fixtures.py', 9654, '9749eee30c4a57a1f4c1f12dd2be20af51201eafcffc257c3ab96b9348b6bd35'),
               ('contract-fixtures-r1364/held_child.c', 2333, '0d7d8df99fe89445ad5be0f3ef88b753d30d32d86ee415af9f4ee800d2e2bd33'),
-              ('contract-fixtures-r1364/integrated_pair.py', 109358, 'c95b5c47301e0c3bf68ab6664f3242bd199518f713c175c5fe76371a4598d49e'),
-              ('contract-fixtures-r1364/lifecycle.py', 20374, '2bc4424c0523941a7c6e6d12bb4c35ebed64b3335fa65ba2367e76f14308f363'),
+              ('contract-fixtures-r1364/integrated_pair.py', 109358, 'ff190c541471293282a89a66aaff2fab2d4209fbef9791ae44ba9b6f8bd79eb7'),
+              ('contract-fixtures-r1364/lifecycle.py', 20374, 'b86910dbc5be63e35e6f99159fd5e0ae2f9f6e554ecbaa65465152a9064a44d5'),
               ('contract-fixtures-r1364/matrix-go.mod', 149, '1baa91c9635240cb9433575d68989fff5213f03298abbbf50ea8006fa3120f52'),
               ('contract-fixtures-r1364/matrix-go.sum', 322, '7556b81d5e8726d4d82ddf008b6c89eab585731afaf27c4a6b27ee6a8ae3e8be'),
               ('contract-fixtures-r1364/matrix_actor.c', 3889, '0541d4e8e3d61269aaaa5dcdf6f5f8a5cd09a3fe5651fda077e689a08f5eb390'),
@@ -708,7 +708,7 @@ jobs:
               ('exact-old-executor/linux_contract.py', 11950, 'ef77db92d6adc58b6dbf18c52ab3085118981ae15a2824fa46add7e7ef467752'),
               ('exact-old-executor/native_case.py', 277880, '07047821776a91e3095eb5d4baed8467eb019ad31a8649fd58d67ca5ce46b6cc'),
               ('linux_contract.py', 33794, '4a988581ec81e813c8f1aa0a2056a202dcf71f2ad66580fa22b1596e23edffe8'),
-              ('native_case.py', 286788, 'acf854926851a96407aafa893ac1b3f0c0a2101495baa34c66ab098e825e6ca0'),
+              ('native_case.py', 286788, '29bded614d80a1a1ffe6d075d1f847e45f7d6eee6c63241bf8f4634188787e6e'),
               ('src/defs.h', 70911, '9914057470fbec3428b051c4a307fe48e7c19207192a936b88c5b14b8a624eae'),
               ('src/strace.c', 133140, '656ccbcd614055b777a11d69bc55e35a0256426f421ea4f7c58026e95fa029e5'),
               ('src/syscall.c', 38750, '390ff1bc410226b4c843ee046ba8e576879e0edc2b3b3087c79afb4ceb506803'),
