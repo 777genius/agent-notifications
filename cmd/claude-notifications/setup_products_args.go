@@ -7,9 +7,9 @@ import (
 	"strings"
 )
 
-var productOrder = []string{"claude", "codex", "opencode", "gemini", "cursor"}
-var productLabels = map[string]string{"claude": "Claude", "codex": "Codex", "opencode": "OpenCode", "gemini": "Gemini CLI", "cursor": "Cursor CLI (explicit profile)"}
-var scopeKeys = []string{"claude-config", "codex-home", "opencode-config-dir", "gemini-home", "gemini-config-root", "claude-executable", "codex-executable", "opencode-executable", "gemini-executable", "control-root", "scope-root", "client-executable"}
+var productOrder = []string{"claude", "codex", "opencode", "gemini", "cursor", "copilot-vscode"}
+var productLabels = map[string]string{"claude": "Claude", "codex": "Codex", "opencode": "OpenCode", "gemini": "Gemini CLI", "cursor": "Cursor CLI (explicit profile)", "copilot-vscode": "VS Code Local (explicit profile)"}
+var scopeKeys = []string{"claude-config", "codex-home", "opencode-config-dir", "gemini-home", "gemini-config-root", "claude-executable", "codex-executable", "opencode-executable", "gemini-executable", "control-root", "scope-root", "client-executable", "local-settings"}
 
 type setupProductsArgs struct {
 	Operation, Mode, IntentFile                    string
@@ -17,6 +17,7 @@ type setupProductsArgs struct {
 	Scopes                                         map[string]string
 	AgentNotify, SkipAgentNotify, Desktop, Webhook bool
 	DesktopSet, WebhookSet                         bool
+	LocalNativeStop, LocalMCP, LocalSkills, Manual *bool
 	Configure                                      notificationConfigureRequest
 	ConfigureArgs                                  []string
 }
@@ -83,6 +84,21 @@ func parseSetupProducts(args []string) (r setupProductsArgs, err error) {
 		}
 		seen[key] = true
 		switch key {
+		case "local-native-stop", "local-mcp", "local-skills", "manual":
+			on, e := parseBoolFlag(value)
+			if e != nil {
+				return invalid()
+			}
+			switch key {
+			case "local-native-stop":
+				r.LocalNativeStop = &on
+			case "local-mcp":
+				r.LocalMCP = &on
+			case "local-skills":
+				r.LocalSkills = &on
+			case "manual":
+				r.Manual = &on
+			}
 		case "products":
 			r.Products, err = parseProductCSV(value)
 			if err != nil {
@@ -130,6 +146,23 @@ func parseSetupProducts(args []string) (r setupProductsArgs, err error) {
 		return r, nil
 	}
 	if len(r.Products) == 0 {
+		return invalid()
+	}
+	if containsProduct(r.Products, "copilot-vscode") {
+		if len(r.Products) != 1 || routePresent || r.Operation == "channels" && len(seen) != 1 {
+			return invalid()
+		}
+		if r.Operation == "confirm" || r.Operation == "prepare" {
+			if r.Scopes["scope-root"] == "" || r.Scopes["client-executable"] == "" || r.Scopes["local-settings"] != filepath.Join(r.Scopes["scope-root"], "settings.json") || r.LocalNativeStop == nil || r.LocalMCP == nil || r.LocalSkills == nil {
+				return invalid()
+			}
+		}
+		if r.Operation == "preflight" && (r.IntentFile == "" || len(r.Scopes) > 0 || modeSeen) {
+			return invalid()
+		}
+		return r, nil
+	}
+	if r.LocalNativeStop != nil || r.LocalMCP != nil || r.LocalSkills != nil || r.Manual != nil || r.Scopes["local-settings"] != "" {
 		return invalid()
 	}
 	if containsProduct(r.Products, "cursor") {

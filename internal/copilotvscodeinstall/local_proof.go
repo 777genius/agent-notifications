@@ -77,7 +77,7 @@ func readLocalRecord(cfg uapinstaller.Config, b portable.Binding) (cursorRecord,
 		return cursorRecord{}, ErrDenied
 	}
 	f, local := c.SelectedDelivery.LocalFacts()
-	if !local || !f.NativeStop || f.ProfileRoot != b.ScopeRoot || f.ProfileIdentity != b.ScopeRoot ||
+	if !local || f.ProfileRoot != b.ScopeRoot || f.ProfileIdentity != b.ScopeRoot ||
 		f.SettingsPath != filepath.Join(b.ScopeRoot, "settings.json") || f.SettingsIdentity != f.SettingsPath ||
 		f.Registration.Selector != c.TargetLocator || f.Registration.DesiredValue == nil || !*f.Registration.DesiredValue ||
 		!reflect.DeepEqual(c.LocalEntryObservation.Facts().RevisionBasis, c.SelectedDelivery) ||
@@ -124,6 +124,12 @@ func (p *localProof) record(ctx context.Context, b portable.Binding) (cursorReco
 	return readLocalRecord(p.cfg, b)
 }
 
+// LocalHookSpecs is the canonical installed Local Stop handoff used by setup
+// and recorded proof. Rendering remains owned by the public projection renderer.
+func LocalHookSpecs(b portable.Binding, executable string) []vscodelocalhooks.Spec {
+	return localSpecs(b, executable)
+}
+
 func localSpecs(b portable.Binding, executable string) []vscodelocalhooks.Spec {
 	return []vscodelocalhooks.Spec{{Event: vscodelocalhooks.Stop, Executable: executable,
 		Args: []string{"copilot-vscode-event", "--event", "Stop", "--control-root", b.ControlRoot, "--binding", b.BindingID}, TimeoutSeconds: vscodelocalhooks.TimeoutSeconds}}
@@ -151,6 +157,9 @@ func (p *localProof) verify(ctx context.Context, b portable.Binding, r cursorRec
 	if err := (providers.PluginDataManager{Base: p.cfg.PluginDataBase}).ValidateData(ctx, r.Data); err != nil {
 		return err
 	}
+	if !f.NativeStop {
+		return nil
+	}
 	hook, err := nativeconfig.New().ReadExactFile(filepath.Join(r.Binding.TargetLocator, filepath.FromSlash(vscodelocalhooks.PluginPath)))
 	if err != nil || !hook.Exists {
 		return ErrDenied
@@ -159,6 +168,28 @@ func (p *localProof) verify(ctx context.Context, b portable.Binding, r cursorRec
 }
 
 func (p *localProof) CheckLocal(ctx context.Context, b portable.Binding, s installruntime.InstalledSnapshot) (PhysicalProof, error) {
+	return p.checkSelectedLocal(ctx, b, s, true, false)
+}
+
+// QualifyLocalConsentFromSnapshot qualifies only a setup policy decision. It
+// returns no native Gate or receipt. Manual enablement requires installed MCP;
+// native enablement continues through the strict native Gate constructor.
+func QualifyLocalConsentFromSnapshot(ctx context.Context, b portable.Binding, cfg uapinstaller.Config, s installruntime.PolicySnapshot, manual bool) error {
+	if s.Installation.Ledger.WriterFloor < installruntime.LocalPolicyWriterFloor || !recorded(s, b) {
+		return ErrDenied
+	}
+	p, err := newLocalProofFromSnapshot(ctx, b, cfg, s)
+	if err != nil {
+		return err
+	}
+	proof, err := p.checkSelectedLocal(ctx, b, s.Installation, false, manual)
+	if err != nil || !proof.matches(b, s) {
+		return ErrDenied
+	}
+	return nil
+}
+
+func (p *localProof) checkSelectedLocal(ctx context.Context, b portable.Binding, s installruntime.InstalledSnapshot, native, manual bool) (PhysicalProof, error) {
 	if p == nil || p.authority == nil || p.engine == nil || ctx == nil || ctx.Err() != nil || b.Integration != portable.CopilotVSCode ||
 		runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" || b.CheckSnapshot(s) != nil || s.Recovery || s.Ledger.PendingMutation != nil {
 		return PhysicalProof{}, ErrDenied
@@ -188,10 +219,13 @@ func (p *localProof) CheckLocal(ctx context.Context, b portable.Binding, s insta
 		return PhysicalProof{}, ErrDenied
 	}
 	f, _ := r.Binding.SelectedDelivery.LocalFacts()
+	if native && !f.NativeStop || manual && len(f.MCPServers) == 0 {
+		return PhysicalProof{}, ErrDenied
+	}
 	// The adapter admits the reviewed version/qualification tuple. AN also fences
-	// the sole Local production architecture. The current pin has no physical
-	// capability; a source-qualified path cannot substitute for that opt-in.
-	if f.Tuple.TargetOS != runtime.GOOS || f.Tuple.TargetShell != string(vscodelocalhooks.MacOSSH) || f.Tuple.VSCodeVersion != "1.140.0" || f.Tuple.CopilotVersion != "source-07f806f999227108933c2e30515b26eecc1fda74" || f.Tuple.QualificationID == "" {
+	// the sole Local production architecture. The public pin provides Darwin arm64
+	// physical authority; source qualification cannot substitute for its recorded token.
+	if f.Tuple != vscode.QualifiedDarwinTESTTuple() {
 		return PhysicalProof{}, ErrDenied
 	}
 	observation, err := immutableObservation(struct {

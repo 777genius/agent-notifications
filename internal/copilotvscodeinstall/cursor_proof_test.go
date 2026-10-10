@@ -916,7 +916,7 @@ func TestCursorSelectedRevisionDriftUnderRetainedLease(t *testing.T) {
 
 // Real public Local TEST install: receipt/profile/projection are independent of
 // physical authority. No native app, helper, hook or delivery process is run.
-func localPublicFixture(t *testing.T) (cursorFixture, *vscode.LocalAdapter, *uapinstaller.Engine, domain.ClientBinding) {
+func localPublicFixture(t *testing.T, manualRoute ...bool) (cursorFixture, *vscode.LocalAdapter, *uapinstaller.Engine, domain.ClientBinding) {
 	t.Helper()
 	f := newCursorFixture(t)
 	f.b.Integration = portable.CopilotVSCode
@@ -950,8 +950,20 @@ func localPublicFixture(t *testing.T) (cursorFixture, *vscode.LocalAdapter, *uap
 	}
 	cursorWrite(t, filepath.Join(f.pkg, "plugin.json"), []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent-notify","version":"1.0.0"}`), 0600)
 	cursorWrite(t, filepath.Join(f.pkg, filepath.FromSlash(vscodelocalhooks.PluginPath)), hook, 0600)
-	adapter, err := vscode.NewLocal(vscode.LocalConfig{ProfileSettingsPath: filepath.Join(f.b.ScopeRoot, "settings.json"), QualifiedTuple: vscode.SourceQualifiedTESTTuple("linux"),
-		TargetShell: shell, NativeStop: true, HookSpecs: specs, DeclaredHookDigest: "sha256:" + rawDigest(hook)})
+	localConfig := vscode.LocalConfig{ProfileSettingsPath: filepath.Join(f.b.ScopeRoot, "settings.json"), QualifiedTuple: vscode.SourceQualifiedTESTTuple("linux"), TargetShell: shell, NativeStop: true, HookSpecs: specs, DeclaredHookDigest: "sha256:" + rawDigest(hook)}
+	if len(manualRoute) != 0 && manualRoute[0] {
+		cursorPackage(t, f)
+		if err := os.Remove(filepath.Join(f.pkg, filepath.FromSlash(vscodelocalhooks.PluginPath))); err != nil {
+			t.Fatal(err)
+		}
+		localConfig.NativeStop, localConfig.HookSpecs, localConfig.DeclaredHookDigest = false, nil, ""
+		localConfig.MCPServers = []string{"agent-notify"}
+		if runtime.GOOS == "darwin" {
+			localConfig.QualifiedTuple = vscode.QualifiedDarwinTESTTuple()
+			localConfig.TargetShell = vscodelocalhooks.Target{Shell: vscodelocalhooks.MacOSSH}
+		}
+	}
+	adapter, err := vscode.NewLocal(localConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -966,13 +978,13 @@ func localPublicFixture(t *testing.T) (cursorFixture, *vscode.LocalAdapter, *uap
 	if err != nil {
 		t.Fatal(err)
 	}
-	prepared, err := engine.Prepare(t.Context(), uapinstaller.Request{Operation: uapinstaller.OpInstall, PackageRoot: f.pkg, ClientID: "vscode", ClientExecutable: f.fixed.Executable,
+	prepared, err := engine.Prepare(cursorContext(t), uapinstaller.Request{Operation: uapinstaller.OpInstall, PackageRoot: f.pkg, ClientID: "vscode", ClientExecutable: f.fixed.Executable,
 		ClientConfigRoot: f.b.ScopeRoot, InstallationID: f.b.InstallationID})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = prepared.Close() }()
-	result, err := engine.Apply(t.Context(), prepared, uapinstaller.Decision{Confirmed: true})
+	result, err := engine.Apply(cursorContext(t), prepared, uapinstaller.Decision{Confirmed: true})
 	if err != nil || result.Binding.BindingID != f.b.BindingID || result.Binding.DataRoot != f.b.DataRoot {
 		t.Fatalf("Local TEST install: %+v %v", result, err)
 	}
@@ -1115,5 +1127,101 @@ func TestLocalRecordedProfileAndProjectionDriftDeny(t *testing.T) {
 				t.Fatal("event repaired drift")
 			}
 		})
+	}
+}
+
+// The same Gate qualification seam must complete while its policy locks are
+// retained. This uses public installed authority, never a fabricated proof.
+func TestGateConsumerBindingPinnedSnapshotUnderLease(t *testing.T) {
+	f, b, ready := installedCursorFilesystem(t)
+	if !ready {
+		return
+	}
+	s, err := installruntime.ReadPolicySnapshot(cursorContext(t), f.b.ControlRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pinned, release, err := installruntime.AcquirePolicyLease(cursorContext(t), f.b.ControlRoot, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := f.g.gate.ConsumerBindingFromSnapshot(cursorContext(t), pinned)
+	if err != nil || got != localCursorBinding(b) {
+		release()
+		t.Fatal("under-lease qualification", got, err)
+	}
+	// A stale expected binding still fails against the pinned generation.
+	stale := got
+	stale.Generation--
+	if _, _, err := f.g.gate.qualify(cursorContext(t), pinned, stale); err == nil {
+		release()
+		t.Fatal("stale binding admitted")
+	}
+	// Public projection drift must still deny before releasing the same lease.
+	record, err := f.g.gate.Proof.(*cursorProof).record(cursorContext(t), f.b)
+	if err != nil {
+		release()
+		t.Fatal(err)
+	}
+	path := filepath.Join(record.Binding.TargetLocator, "plugin.json")
+	before := cursorRead(t, path)
+	cursorWrite(t, path, append(before, '\n'), 0600)
+	if _, err := f.g.gate.ConsumerBindingFromSnapshot(cursorContext(t), pinned); err == nil {
+		release()
+		t.Fatal("projection drift admitted under lease")
+	}
+	cursorWrite(t, path, before, 0600)
+	release()
+	revoked := cursorPolicy(t, f, `{"cursorNotifications":{"desktop":false,"webhook":false}}`)
+	current, release, err := installruntime.AcquirePolicyLease(cursorContext(t), f.b.ControlRoot, revoked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	consent, _, err := f.g.gate.qualify(cursorContext(t), current, consumerBinding(current, f.b))
+	if err != nil || consent.desktop || consent.webhook {
+		t.Fatal("revoked channel under lease", err)
+	}
+}
+
+// Regression: the real installed MCP-only receipt was rejected before selected
+// delivery qualification. This exercises public Apply/Store and reconstruction,
+// while leaving signed-helper/retained-lease acceptance to installed TEST E2E.
+func TestLocalMCPConsentReconstructsSelectedRecordWithoutNativeGate(t *testing.T) {
+	f, _, _, record := localPublicFixture(t, true)
+	facts, ok := record.SelectedDelivery.LocalFacts()
+	if !ok || facts.NativeStop || len(facts.MCPServers) != 1 {
+		t.Fatal("fixture is not independent MCP-only delivery")
+	}
+	snapshot, err := installruntime.ReadPolicySnapshot(cursorContext(t), f.b.ControlRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := cursorRead(t, f.cfg.StateFile)
+	observed, err := readLocalRecord(f.cfg, f.b)
+	if err != nil || !reflect.DeepEqual(observed.Binding, record) {
+		t.Fatal("installed MCP record refused", err)
+	}
+	if runtime.GOOS == "darwin" && runtime.GOARCH == "arm64" {
+		if record.ProfileAuthority == nil || record.ProfileAuthority.IsZero() {
+			t.Fatal("original physical authority missing")
+		}
+		p, err := newLocalProofFromSnapshot(cursorContext(t), f.b, f.cfg, snapshot)
+		if err != nil || p == nil {
+			t.Fatal("selected MCP consent constructor refused", err)
+		}
+		if err := p.verify(cursorContext(t), f.b, observed, f.fixed.Executable); err != nil {
+			t.Fatal("physical selector/projection acknowledgement refused", err)
+		}
+		if _, _, _, err := NewLocalGateFromSnapshot(cursorContext(t), f.b, f.cfg, snapshot); err == nil {
+			t.Fatal("MCP-only record gained native Gate")
+		}
+	} else {
+		if err := QualifyLocalConsentFromSnapshot(cursorContext(t), f.b, f.cfg, snapshot, true); err == nil {
+			t.Fatal("unsupported physical host gained consent qualification")
+		}
+	}
+	if !bytes.Equal(before, cursorRead(t, f.cfg.StateFile)) {
+		t.Fatal("qualification recaptured or rewrote recorded authority")
 	}
 }

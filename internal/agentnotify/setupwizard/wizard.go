@@ -17,8 +17,10 @@ import (
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/adapters/nativeconfig"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients/shared"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients/vscode"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/domain"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/ports"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/vscodelocalhooks"
 
 	"github.com/777genius/agent-notifications/install/uapinstaller"
 	"github.com/777genius/agent-notifications/internal/agentnotify/clientsetup"
@@ -66,6 +68,7 @@ type Request struct {
 	// Cursor selection is explicit, never filled from discovery or environment.
 	// Fixed authority is provided by the qualified composition owner; it does
 	// not replace physical capture, installed receipts, or channel consent.
+	LocalConfig                         *vscode.LocalConfig
 	CursorConfig                        string
 	CursorAuthority                     *cursorinstall.Authority
 	CursorAgentNotify                   *bool
@@ -202,6 +205,7 @@ func (r Result) ExitCode() int {
 }
 
 func Run(ctx context.Context, req Request) (Result, error) {
+	req.LocalConfig = copyLocalConfig(req.LocalConfig)
 	out, err := run(ctx, &req)
 	// Hooks can return the kernel conflict directly; portable boundaries wrap
 	// it as ErrConcurrentChange. Keep completed targets, but require new consent.
@@ -213,7 +217,7 @@ func Run(ctx context.Context, req Request) (Result, error) {
 		out.Command, out.NextActions = nil, nil
 		return out, err
 	}
-	return attachCommand(req, out), err
+	return attachWizardCommand(req, out), err
 }
 
 // SetupPlan is the read-only preflight shown before TTY confirmation.
@@ -231,9 +235,10 @@ type SetupPlan struct {
 
 // Plan preflights without publishing intent or applying hooks/MCP.
 func Plan(ctx context.Context, req Request) (SetupPlan, error) {
+	req.LocalConfig = copyLocalConfig(req.LocalConfig)
 	ev := evaluate(ctx, &req, false)
 	text := confirmPlan(req)
-	plan := SetupPlan{Text: text, Request: req, Result: attachCommand(req, ev.out)}
+	plan := SetupPlan{Text: text, Request: req, Result: attachWizardCommand(req, ev.out)}
 	if ev.stop {
 		return plan, ev.err
 	}
@@ -247,12 +252,12 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 		for _, agent := range ev.notifyAgents {
 			if !explicitAbs(clientConfig(req, agent)) {
 				ev.out.Outcome, ev.out.Reason = "incomplete", "client_config_required"
-				plan.Result = attachCommand(req, ev.out)
+				plan.Result = attachWizardCommand(req, ev.out)
 				return plan, ErrRefused
 			}
 			if !explicitAbs(clientExecutable(req, agent)) {
 				ev.out.Outcome, ev.out.Reason = "incomplete", "client_executable_required"
-				plan.Result = attachCommand(req, ev.out)
+				plan.Result = attachWizardCommand(req, ev.out)
 				return plan, ErrRefused
 			}
 		}
@@ -268,14 +273,14 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 					reason = "recorded_package_unavailable"
 				}
 				ev.out.Outcome, ev.out.Reason = "incomplete", reason
-				plan.Result = attachCommand(req, ev.out)
+				plan.Result = attachWizardCommand(req, ev.out)
 				return plan, err
 			}
 			releasePackage = release
 			mat, err := materializer(acquired, ev.snap, ev.runtimeRoot)
 			if err != nil {
 				ev.out.Outcome, ev.out.Reason = "incomplete", err.Error()
-				plan.Result = attachCommand(req, ev.out)
+				plan.Result = attachWizardCommand(req, ev.out)
 				return plan, err
 			}
 			plan.annotations = append(plan.annotations, "helper destination="+mat.Roots.HelperExecutable)
@@ -283,11 +288,11 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 			id, err := identity(acquired, ev.snap, ev.runtimeRoot, mat, req.Action == ActionInstall)
 			if err != nil {
 				if mapped, handled := mapAmbiguous(err, ev.out); handled {
-					plan.Result = attachCommand(req, mapped)
+					plan.Result = attachWizardCommand(req, mapped)
 					return plan, err
 				}
 				ev.out.Outcome, ev.out.Reason = "incomplete", err.Error()
-				plan.Result = attachCommand(req, ev.out)
+				plan.Result = attachWizardCommand(req, ev.out)
 				return plan, err
 			}
 			req.InstallationID = id.InstallationID
@@ -295,7 +300,7 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 			acquired.InstallationID = id.InstallationID
 			if req.Action == ActionUpdate || req.Action == ActionRepair {
 				if mapped, bindErr := requireLiveNotifyBindings(req, mat, id, ev.notifyAgents, ev.out); bindErr != nil {
-					plan.Result = attachCommand(req, mapped)
+					plan.Result = attachWizardCommand(req, mapped)
 					return plan, bindErr
 				}
 			}
@@ -306,11 +311,11 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 			if !retainedMetadataUpdate(mat, id, req.Action) {
 				if err := reserveClientBindings(&req, mat, ev.notifyAgents); err != nil {
 					if mapped, handled := mapAmbiguous(err, ev.out); handled {
-						plan.Result = attachCommand(req, mapped)
+						plan.Result = attachWizardCommand(req, mapped)
 						return plan, err
 					}
 					ev.out.Outcome, ev.out.Reason = "incomplete", err.Error()
-					plan.Result = attachCommand(req, ev.out)
+					plan.Result = attachWizardCommand(req, ev.out)
 					return plan, err
 				}
 			}
@@ -325,19 +330,19 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 			if retainedMetadataUpdate(mat, id, req.Action) {
 				if conflict := retainedPackageIdentityConflict(req.ControlRoot, id.InstallationID, acquired.PackageRoot); conflict {
 					ev.out.Outcome, ev.out.Reason = "conflict", "package_identity"
-					plan.Result = attachCommand(req, ev.out)
+					plan.Result = attachWizardCommand(req, ev.out)
 					plan.Text = text + " package-identity-conflict"
 					return plan, ErrRefused
 				}
 				digest, err := retainedUpdateTreeDigest(ctx, mat, acquired.PackageRoot)
 				if err != nil {
 					ev.out.Outcome, ev.out.Reason = "incomplete", err.Error()
-					plan.Result = attachCommand(req, ev.out)
+					plan.Result = attachWizardCommand(req, ev.out)
 					return plan, err
 				}
 				if err := bindIdentityField(&req.TreeDigest, digest); err != nil {
 					ev.out.Outcome, ev.out.Reason = "incomplete", "source_identity_drift"
-					plan.Result = attachCommand(req, ev.out)
+					plan.Result = attachWizardCommand(req, ev.out)
 					return plan, err
 				}
 				text = annotateRetainedMetadataUpdate(text, ev.notifyAgents)
@@ -353,18 +358,18 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 						if retained, emptyErr := mat.RetainedEmpty(id.InstallationID); emptyErr == nil && retained {
 							plan.Text += " data_retained=true data-compatibility-warning"
 						}
-						plan.Result = attachCommand(req, mapped)
+						plan.Result = attachWizardCommand(req, mapped)
 						return plan, mappedErr
 					}
 					ev.out.Outcome, ev.out.Reason = "incomplete", reason
-					plan.Result = attachCommand(req, ev.out)
+					plan.Result = attachWizardCommand(req, ev.out)
 					return plan, err
 				}
 			}
 			if (req.Action == ActionUpdate || req.Action == ActionRepair) && !retainedMetadataUpdate(mat, id, req.Action) {
 				if err := prepareLegacyMigrations(&req, ev.snap, mat, id, ev.notifyAgents, explicitGlobal, explicitPrimary); err != nil {
 					ev.out.Outcome, ev.out.Reason = "incomplete", "migration_preflight_failed"
-					plan.Result = attachCommand(req, ev.out)
+					plan.Result = attachWizardCommand(req, ev.out)
 					return plan, err
 				}
 				if len(req.MigrationBindings) > 0 {
@@ -387,7 +392,7 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 				}
 				if err != nil {
 					ev.out.Outcome, ev.out.Reason = "incomplete", "global_config_parent_invalid"
-					plan.Result = attachCommand(req, ev.out)
+					plan.Result = attachWizardCommand(req, ev.out)
 					return plan, err
 				}
 			}
@@ -591,7 +596,7 @@ func evaluate(ctx context.Context, req *Request, requireYes bool) evaluated {
 	if req.Action != ActionInspect && req.BootstrapMCP != nil {
 		observation := *req
 		observation.Agents = nil
-		for _, id := range []string{"claude", "codex", "cursor"} {
+		for _, id := range []string{"claude", "codex", "cursor", "copilot-vscode"} {
 			if _, ok := req.BootstrapMCP.Projection.Profiles[id]; ok {
 				observation.Agents = append(observation.Agents, id)
 			}
@@ -646,7 +651,7 @@ func evaluate(ctx context.Context, req *Request, requireYes bool) evaluated {
 		installReq := *req
 		installReq.Action = ActionInstall
 		out.NextActions = []NextAction{{
-			Kind: "install", Agents: []string{string(agent)}, Command: RetryCommand(installReq), Reason: "repair_does_not_add_units",
+			Kind: "install", Agents: []string{string(agent)}, Command: localRetryCommand(installReq), Reason: "repair_does_not_add_units",
 		}}
 		return evaluated{agents: agents, snap: snap, runtimeRoot: runtimeRoot, out: out, err: ErrRefused, stop: true}
 	}
@@ -657,6 +662,7 @@ func evaluate(ctx context.Context, req *Request, requireYes bool) evaluated {
 }
 
 func liveBindingTreeDigest(mat portablesetup.Materializer, installationID, clientID string) string {
+	clientID = portablesetup.ClientID(portablesetup.Integration(clientID))
 	if installationID == "" || clientID == "" {
 		return ""
 	}
@@ -715,6 +721,7 @@ func exactRepairRevision(err error) bool {
 }
 
 func liveNotifyClient(mat portablesetup.Materializer, installationID, clientID string) bool {
+	clientID = portablesetup.ClientID(portablesetup.Integration(clientID))
 	if installationID == "" || clientID == "" {
 		return false
 	}
@@ -753,7 +760,7 @@ func liveManagedTargetsPresent(mat portablesetup.Materializer, installationID st
 				continue
 			}
 			for _, binding := range installation.Clients {
-				if binding.ClientID != string(agent) {
+				if binding.ClientID != portablesetup.ClientID(agent) {
 					continue
 				}
 				if binding.TargetLocator == "" {
@@ -794,7 +801,8 @@ func holdCodexUninstall(ctx context.Context, req *Request, mat portablesetup.Mat
 			return out, nil
 		}
 		err = mat.Remove(ctx, portablesetup.MaterializeRequest{
-			Identity: target, Integration: agent, ExpectedGeneration: generation,
+			LocalConfig: req.LocalConfig,
+			Identity:    target, Integration: agent, ExpectedGeneration: generation,
 			ClientConfigRoot: clientConfig(*req, agent), ClientExecutable: clientExecutable(*req, agent),
 			OperationID: wizardMutationID(ActionUninstall, agent, generation), ExternalUninstalled: req.ExternalUninstalled,
 			HoldOnly: true, KeepReservation: true,
@@ -823,10 +831,10 @@ func externalUninstallRequired(req Request, agent portable.Integration, out Resu
 	retry.ExternalUninstalled = true
 	out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "incomplete", Reason: "external_uninstall_required"})
 	out.Outcome, out.Reason = "incomplete", "external_uninstall_required"
-	out.Command = RetryCommand(retry)
+	out.Command = localRetryCommand(retry)
 	out.NextActions = []NextAction{{
 		Kind: "external-uninstall", Agents: []string{string(agent)},
-		Command: RetryCommand(retry), Reason: "attest_codex_plugin_removed",
+		Command: localRetryCommand(retry), Reason: "attest_codex_plugin_removed",
 	}}
 	return out
 }
@@ -880,7 +888,8 @@ func previewNotifyPlan(ctx context.Context, req Request, snap installruntime.Ins
 		return uapinstaller.Plan{}, err
 	}
 	return mat.PreviewPlan(ctx, portablesetup.MaterializeRequest{
-		Identity: id, Integration: agent, PackageRoot: clientPackageRoot(req, agent),
+		LocalConfig: req.LocalConfig,
+		Identity:    id, Integration: agent, PackageRoot: clientPackageRoot(req, agent),
 		ClientConfigRoot: clientConfig(req, agent), ClientExecutable: clientExecutable(req, agent),
 		OperationID: wizardMutationID("plan-"+req.Action, agent, 0), Operation: wizardPackageOp(req.Action),
 	})
@@ -973,6 +982,7 @@ func recoverWizardJournals(ctx context.Context, mat portablesetup.Materializer, 
 	}
 	agent := agents[0]
 	return mat.RecoverJournals(ctx, portablesetup.MaterializeRequest{
+		LocalConfig:      req.LocalConfig,
 		Identity:         id,
 		Integration:      agent,
 		PackageRoot:      req.PackageRoot,
@@ -1074,6 +1084,8 @@ func resumeFromPendingIntent(req Request, agents []portable.Integration, snap in
 }
 
 func restoreOmittedFromIntent(req Request, agents []portable.Integration, intent portablesetup.Intent) (Request, []portable.Integration, error) {
+	localSelectionOmitted := req.LocalConfig == nil
+
 	intentAgents := intentClients(intent)
 	if len(agents) == 0 {
 		if len(intentAgents) == 0 {
@@ -1223,6 +1235,13 @@ func restoreOmittedFromIntent(req Request, agents []portable.Integration, intent
 			continue
 		}
 		switch target.Client {
+		case "copilot-vscode":
+			settings := filepath.Join(target.Profile, "settings.json")
+			if req.LocalConfig == nil {
+				req.LocalConfig = &vscode.LocalConfig{ProfileSettingsPath: settings, QualifiedTuple: vscode.QualifiedDarwinTESTTuple()}
+			} else if req.LocalConfig.ProfileSettingsPath != settings {
+				return req, agents, portablesetup.ErrIntentConflict
+			}
 		case "codex":
 			if req.CodexHome == "" {
 				req.CodexHome = target.Profile
@@ -1241,6 +1260,14 @@ func restoreOmittedFromIntent(req Request, agents []portable.Integration, intent
 			} else if req.ClaudeConfig != target.Profile {
 				return req, agents, portablesetup.ErrIntentConflict
 			}
+		}
+	}
+	if req.LocalConfig != nil && req.LocalConfig.TargetShell.Shell == "" {
+		req.LocalConfig.TargetShell.Shell = vscodelocalhooks.Shell(req.LocalConfig.QualifiedTuple.TargetShell)
+	}
+	if localSelectionOmitted && req.LocalConfig != nil {
+		if units, specified := intentClientUnits(intent); specified {
+			req = applyIntentUnits(req, units)
 		}
 	}
 	req, err := restoreUnitsFromIntent(req, agents, intent)
@@ -1266,7 +1293,8 @@ func restoreUnitsFromIntent(req Request, agents []portable.Integration, intent p
 }
 
 type unitSelection struct {
-	hooks, notify bool
+	hooks, notify                  bool
+	local, nativeStop, mcp, skills bool
 }
 
 func intentClientUnits(intent portablesetup.Intent) (map[string]unitSelection, bool) {
@@ -1280,8 +1308,15 @@ func intentClientUnits(intent portablesetup.Intent) (map[string]unitSelection, b
 			specified = true
 		}
 		sel := out[target.Client]
+		sel.local = target.Client == string(portable.CopilotVSCode)
 		for _, unit := range target.Units {
 			switch unit {
+			case "native-stop":
+				sel.nativeStop = true
+			case "local-mcp":
+				sel.mcp = true
+			case "local-skills":
+				sel.skills = true
 			case "hooks":
 				sel.hooks = true
 			case "direct-mcp", "agent-notify", "mcp", "skills":
@@ -1296,7 +1331,14 @@ func intentClientUnits(intent portablesetup.Intent) (map[string]unitSelection, b
 func requestClientUnits(req Request, agents []portable.Integration) map[string]unitSelection {
 	out := map[string]unitSelection{}
 	for _, agent := range agents {
-		out[string(agent)] = unitSelection{}
+		sel := unitSelection{}
+		if agent == portable.CopilotVSCode && req.LocalConfig != nil {
+			sel.local = true
+			sel.nativeStop = req.LocalConfig.NativeStop
+			sel.mcp = len(req.LocalConfig.MCPServers) > 0
+			sel.skills = len(req.LocalConfig.Skills) > 0
+		}
+		out[string(agent)] = sel
 	}
 	hooks, notify := selectedUnits(req, agents)
 	for _, agent := range hooks {
@@ -1342,7 +1384,11 @@ func unitsUniform(want map[string]unitSelection) (unitSelection, bool) {
 }
 
 func applyIntentUnits(req Request, want map[string]unitSelection) Request {
-	if uniform, ok := unitsUniform(want); ok {
+	if req.LocalConfig != nil {
+		cp := *req.LocalConfig
+		req.LocalConfig = &cp
+	}
+	if uniform, ok := unitsUniform(want); ok && !uniform.local {
 		req.Hooks = boolPtr(uniform.hooks)
 		req.AgentNotify = boolPtr(uniform.notify)
 		req.ClaudeHooks, req.CodexHooks = nil, nil
@@ -1359,6 +1405,19 @@ func applyIntentUnits(req Request, want map[string]unitSelection) Request {
 			req.ClaudeHooks, req.ClaudeAgentNotify = hooks, notify
 		case "codex":
 			req.CodexHooks, req.CodexAgentNotify = hooks, notify
+		case "copilot-vscode":
+			if req.LocalConfig == nil {
+				req.LocalConfig = &vscode.LocalConfig{QualifiedTuple: vscode.QualifiedDarwinTESTTuple()}
+			}
+			req.LocalConfig.TargetShell.Shell = vscodelocalhooks.Shell(req.LocalConfig.QualifiedTuple.TargetShell)
+			req.LocalConfig.NativeStop = sel.nativeStop
+			req.LocalConfig.MCPServers, req.LocalConfig.Skills = nil, nil
+			if sel.mcp {
+				req.LocalConfig.MCPServers = []string{"agent-notify"}
+			}
+			if sel.skills {
+				req.LocalConfig.Skills = []string{"agent-notifications"}
+			}
 		case "cursor":
 			req.CursorAgentNotify = notify
 		}
@@ -1380,7 +1439,7 @@ func intentClients(intent portablesetup.Intent) []string {
 }
 
 func unitFlagsOmitted(req Request) bool {
-	return req.Hooks == nil && req.AgentNotify == nil && req.ClaudeHooks == nil && req.CodexHooks == nil && req.ClaudeAgentNotify == nil && req.CodexAgentNotify == nil && req.CursorAgentNotify == nil
+	return req.Hooks == nil && req.AgentNotify == nil && req.ClaudeHooks == nil && req.CodexHooks == nil && req.ClaudeAgentNotify == nil && req.CodexAgentNotify == nil && req.CursorAgentNotify == nil && req.LocalConfig == nil
 }
 
 func sameStringSet(a, b []string) bool {
@@ -1420,7 +1479,7 @@ func inspect(ctx context.Context, req Request, agents []portable.Integration, sn
 		found := false
 		for _, installation := range state.Installations {
 			for _, binding := range installation.Clients {
-				if binding.ClientID != string(agent) {
+				if binding.ClientID != portablesetup.ClientID(agent) {
 					continue
 				}
 				found = true
@@ -1573,14 +1632,14 @@ func reportPendingWizardIntent(req Request, snap installruntime.InstalledSnapsho
 				retry.ExternalUninstalled = true
 				out.NextActions = append(out.NextActions, NextAction{
 					Kind: "external-uninstall", Agents: clients,
-					Command: RetryCommand(retry), Reason: "attest_codex_plugin_removed",
+					Command: localRetryCommand(retry), Reason: "attest_codex_plugin_removed",
 				})
 				return out
 			}
 		}
 	}
 	out.NextActions = append(out.NextActions, NextAction{
-		Kind: "resume", Agents: clients, Command: RetryCommand(retry),
+		Kind: "resume", Agents: clients, Command: localRetryCommand(retry),
 		Reason: "pending_" + intent.Action,
 	})
 	return out
@@ -1674,7 +1733,8 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 					return out, err
 				}
 				materialize := portablesetup.MaterializeRequest{
-					Identity: id, Integration: agent, ExpectedGeneration: snap.Ledger.Generation,
+					LocalConfig: req.LocalConfig,
+					Identity:    id, Integration: agent, ExpectedGeneration: snap.Ledger.Generation,
 					PackageRoot: clientPackageRoot(req, agent), ClientConfigRoot: clientConfig(req, agent), ClientExecutable: clientExecutable(req, agent),
 					SourceRevision: req.ReleaseVersion, SourceDigest: req.PackageSHA256,
 					TreeDigest: req.TreeDigest, HelperDigest: req.HelperDigest, HelperVersion: req.HelperVersion,
@@ -1801,7 +1861,8 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 	}
 	if retainedMetadataUpdate(mat, id, req.Action) {
 		materialize := portablesetup.MaterializeRequest{
-			Identity: id, Integration: notifyAgents[0], ExpectedGeneration: snap.Ledger.Generation,
+			LocalConfig: req.LocalConfig,
+			Identity:    id, Integration: notifyAgents[0], ExpectedGeneration: snap.Ledger.Generation,
 			PackageRoot: req.PackageRoot, ClientConfigRoot: clientConfig(req, notifyAgents[0]), ClientExecutable: clientExecutable(req, notifyAgents[0]),
 			OperationID: wizardMutationID(req.Action, notifyAgents[0], snap.Ledger.Generation),
 		}
@@ -1841,7 +1902,8 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 		var reqs []portablesetup.MaterializeRequest
 		for _, agent := range notifyAgents {
 			reqs = append(reqs, portablesetup.MaterializeRequest{
-				Identity: notifyIdentities[agent], Integration: agent, ExpectedGeneration: generation,
+				LocalConfig: req.LocalConfig,
+				Identity:    notifyIdentities[agent], Integration: agent, ExpectedGeneration: generation,
 				PackageRoot: clientPackageRoot(req, agent), ClientConfigRoot: clientConfig(req, agent), ClientExecutable: clientExecutable(req, agent),
 				SourceRevision: req.ReleaseVersion, SourceDigest: req.PackageSHA256,
 				TreeDigest: req.TreeDigest, HelperDigest: req.HelperDigest, HelperVersion: req.HelperVersion,
@@ -1896,7 +1958,8 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 			return portableInstallFailed(agent, req, out, targetErr), targetErr
 		}
 		materialize := portablesetup.MaterializeRequest{
-			Identity: target, Integration: agent, ExpectedGeneration: generation,
+			LocalConfig: req.LocalConfig,
+			Identity:    target, Integration: agent, ExpectedGeneration: generation,
 			PackageRoot: clientPackageRoot(req, agent), ClientConfigRoot: clientConfig(req, agent), ClientExecutable: clientExecutable(req, agent),
 			SourceRevision: req.ReleaseVersion, SourceDigest: req.PackageSHA256,
 			TreeDigest: req.TreeDigest, HelperDigest: req.HelperDigest, HelperVersion: req.HelperVersion,
@@ -1973,8 +2036,8 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 					updateRetry.Agents = []string{string(agent)}
 					out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "incomplete", Reason: "exact_revision_required", TreeDigest: live})
 					out.NextActions = append(out.NextActions,
-						NextAction{Kind: "repair", Agents: []string{string(agent)}, Reason: "exact_revision_required", Command: RetryCommand(repairRetry)},
-						NextAction{Kind: "update", Agents: []string{string(agent)}, Reason: "exact_revision_required", Command: RetryCommand(updateRetry)},
+						NextAction{Kind: "repair", Agents: []string{string(agent)}, Reason: "exact_revision_required", Command: localRetryCommand(repairRetry)},
+						NextAction{Kind: "update", Agents: []string{string(agent)}, Reason: "exact_revision_required", Command: localRetryCommand(updateRetry)},
 					)
 					continue
 				}
@@ -1994,7 +2057,7 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 				failed := portableInstallFailed(agent, req, out, err)
 				if failed.Reason == "activation_incomplete" {
 					failed.Reason = "migration_activation_pending"
-					failed.NextActions = []NextAction{{Kind: "activate", Agents: []string{string(agent)}, Reason: "migration_activation_pending", Command: RetryCommand(req)}}
+					failed.NextActions = []NextAction{{Kind: "activate", Agents: []string{string(agent)}, Reason: "migration_activation_pending", Command: localRetryCommand(req)}}
 				}
 				return failed, err
 			}
@@ -2251,7 +2314,8 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 		for i, agent := range notifyAgents {
 			dataRoots[i] = liveDataRoot(mat, id.InstallationID, string(agent))
 			reqs = append(reqs, portablesetup.MaterializeRequest{
-				Identity: notifyIdentities[agent], Integration: agent, ExpectedGeneration: generation,
+				LocalConfig: req.LocalConfig,
+				Identity:    notifyIdentities[agent], Integration: agent, ExpectedGeneration: generation,
 				ClientConfigRoot: clientConfig(req, agent), ClientExecutable: clientExecutable(req, agent),
 				OperationID:         wizardMutationID(req.Action, "group", generation),
 				ExternalUninstalled: req.ExternalUninstalled,
@@ -2324,7 +2388,8 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 			return out, targetErr
 		}
 		remove := portablesetup.MaterializeRequest{
-			Identity: target, Integration: agent, ExpectedGeneration: generation,
+			LocalConfig: req.LocalConfig,
+			Identity:    target, Integration: agent, ExpectedGeneration: generation,
 			ClientConfigRoot: clientConfig(req, agent), ClientExecutable: clientExecutable(req, agent),
 			// User uninstall does not restore a retired direct MCP.
 			OperationID: wizardMutationID(ActionUninstall, agent, generation), ExternalUninstalled: req.ExternalUninstalled,
@@ -2430,7 +2495,7 @@ func portableInstallFailed(agent portable.Integration, req Request, out Result, 
 		out.Reason = "activation_incomplete"
 		out.NextActions = append(out.NextActions, NextAction{
 			Kind: "activate", Agents: []string{string(agent)}, Reason: persisted.Result.Reason,
-			Command: RetryCommand(retry),
+			Command: localRetryCommand(retry),
 		})
 	}
 	return out
@@ -2446,7 +2511,7 @@ func siblingCompatibilityUnavailable(agent portable.Integration, req Request, ou
 	retry.Yes = true
 	retry.Agents = []string{"claude", "codex"}
 	out.NextActions = []NextAction{{
-		Kind: "update", Agents: retry.Agents, Reason: out.Reason, Command: RetryCommand(retry),
+		Kind: "update", Agents: retry.Agents, Reason: out.Reason, Command: localRetryCommand(retry),
 	}}
 	return out
 }
@@ -2499,12 +2564,13 @@ func groupNotifyFailed(agents []portable.Integration, req Request, out Result, e
 	out.Reason = "activation_incomplete"
 	out.NextActions = append(out.NextActions, NextAction{
 		Kind: "activate", Agents: names, Reason: persisted.Result.Reason,
-		Command: RetryCommand(retry),
+		Command: localRetryCommand(retry),
 	})
 	return out
 }
 
 func groupClientResult(result uapinstaller.Result, clientID string) uapinstaller.ClientResult {
+	clientID = portablesetup.ClientID(portablesetup.Integration(clientID))
 	for _, item := range result.Targets {
 		if item.ClientID == clientID {
 			return item
@@ -2541,7 +2607,7 @@ func groupRemoveFailed(agents []portable.Integration, req Request, out Result, e
 	}
 	out.NextActions = append(out.NextActions, NextAction{
 		Kind: "uninstall", Agents: names, Reason: out.Reason,
-		Command: RetryCommand(retry),
+		Command: localRetryCommand(retry),
 	})
 	return out
 }
@@ -2555,11 +2621,15 @@ func pendingIntentConflict(req Request, err error, out Result) (Result, bool) {
 	if readErr != nil {
 		return out, true
 	}
-	out.Command = RetryCommand(retryRequestFromIntent(req, intent))
+	out.Command = localRetryCommand(retryRequestFromIntent(req, intent))
 	return out, true
 }
 
 func retryRequestFromIntent(req Request, intent portablesetup.Intent) Request {
+	if req.LocalConfig != nil {
+		cp := *req.LocalConfig
+		req.LocalConfig = &cp
+	}
 	retry := req
 	retry.Action = Action(intent.Action)
 	if clients := intentClients(intent); len(clients) > 0 {
@@ -2606,6 +2676,12 @@ func retryRequestFromIntent(req Request, intent portablesetup.Intent) Request {
 			retry.DataReceiptIDs[target.Client] = target.DataReceiptID
 		}
 		switch target.Client {
+		case "copilot-vscode":
+			if retry.LocalConfig == nil {
+				retry.LocalConfig = &vscode.LocalConfig{QualifiedTuple: vscode.QualifiedDarwinTESTTuple()}
+			}
+			retry.LocalConfig.ProfileSettingsPath = filepath.Join(target.Profile, "settings.json")
+			retry.ScopeRoot = target.Profile
 		case "codex":
 			if target.Profile != "" {
 				retry.CodexHome = target.Profile
@@ -2683,13 +2759,13 @@ func updateRequired(req Request, adding portable.Integration, others []string, l
 			reason = "update_existing_before_add"
 		}
 		out.NextActions = []NextAction{
-			{Kind: "update", Agents: updateReq.Agents, Command: RetryCommand(updateReq), Reason: reason},
+			{Kind: "update", Agents: updateReq.Agents, Command: localRetryCommand(updateReq), Reason: reason},
 		}
 		if len(unbound) > 0 {
 			addReq := req
 			addReq.Agents = append([]string(nil), unbound...)
 			out.NextActions = append(out.NextActions, NextAction{
-				Kind: "install", Agents: addReq.Agents, Command: RetryCommand(addReq), Reason: "add_after_update",
+				Kind: "install", Agents: addReq.Agents, Command: localRetryCommand(addReq), Reason: "add_after_update",
 			})
 		}
 		return out, err
@@ -2702,8 +2778,8 @@ func updateRequired(req Request, adding portable.Integration, others []string, l
 	addReq := req
 	addReq.Agents = []string{string(adding)}
 	out.NextActions = []NextAction{
-		{Kind: "update", Agents: updateAgents, Command: RetryCommand(updateReq), Reason: "update_existing_before_add"},
-		{Kind: "install", Agents: []string{string(adding)}, Command: RetryCommand(addReq), Reason: "add_after_update"},
+		{Kind: "update", Agents: updateAgents, Command: localRetryCommand(updateReq), Reason: "update_existing_before_add"},
+		{Kind: "install", Agents: []string{string(adding)}, Command: localRetryCommand(addReq), Reason: "add_after_update"},
 	}
 	return out, err
 }
@@ -2838,6 +2914,27 @@ func materializer(req Request, snap installruntime.InstalledSnapshot, runtimeRoo
 	}
 	_, notify := selectedUnits(req, agents)
 	for _, agent := range notify {
+		if agent == portable.CopilotVSCode {
+			if req.LocalConfig == nil || req.LocalConfig.QualifiedTuple != vscode.QualifiedDarwinTESTTuple() || !explicitAbs(req.LocalConfig.ProfileSettingsPath) {
+				return mat, portablesetup.ErrPreflight
+			}
+			adapter, err := vscode.NewLocal(*req.LocalConfig)
+			if err != nil {
+				return mat, err
+			}
+			registry := mat.Registry
+			if registry == nil {
+				registry, err = portablesetup.NewRegistry()
+				if err != nil {
+					return mat, err
+				}
+			}
+			mat.Registry, err = clients.NewRegistry(append(registry.All(), adapter)...)
+			if err != nil {
+				return mat, err
+			}
+			continue
+		}
 		if agent != portable.Cursor {
 			continue
 		}
@@ -2851,7 +2948,10 @@ func materializer(req Request, snap installruntime.InstalledSnapshot, runtimeRoo
 		if _, err := adapter.ResolveProfileRoot(req.CursorConfig); err != nil {
 			return mat, err
 		}
-		registry, err := portablesetup.NewRegistry()
+		registry := mat.Registry
+		if registry == nil {
+			registry, err = portablesetup.NewRegistry()
+		}
 		if err != nil {
 			return mat, err
 		}
@@ -2872,8 +2972,8 @@ func identity(req Request, snap installruntime.InstalledSnapshot, runtimeRoot st
 	configRoot := ""
 	if len(req.Agents) == 1 {
 		switch req.Agents[0] {
-		case string(portable.Codex), string(portable.Claude), string(portable.Cursor):
-			clientID = req.Agents[0]
+		case string(portable.Codex), string(portable.Claude), string(portable.Cursor), string(portable.CopilotVSCode):
+			clientID = portablesetup.ClientID(portable.Integration(req.Agents[0]))
 			configRoot = clientConfig(req, portable.Integration(req.Agents[0]))
 		}
 	}
@@ -2910,7 +3010,7 @@ func identity(req Request, snap installruntime.InstalledSnapshot, runtimeRoot st
 		var candidates []portablesetup.Identity
 		for _, name := range req.Agents {
 			agent := portable.Integration(name)
-			if agent != portable.Claude && agent != portable.Codex && agent != portable.Cursor {
+			if agent != portable.Claude && agent != portable.Codex && agent != portable.Cursor && agent != portable.CopilotVSCode {
 				continue
 			}
 			if migration, ok := req.MigrationBindings[name]; ok {
@@ -3102,7 +3202,7 @@ func reserveClientBindings(req *Request, mat portablesetup.Materializer, agents 
 			continue
 		}
 		reserved, err := eng.ReserveIdentity(uapinstaller.IdentityRequest{
-			ClientID:         client,
+			ClientID:         portablesetup.ClientID(agent),
 			InstallationID:   req.InstallationID,
 			DeclaredName:     packageDeclaredName(req.PackageRoot),
 			ClientConfigRoot: clientConfig(*req, agent),
@@ -3311,8 +3411,8 @@ func requireLiveNotifyBindings(req Request, mat portablesetup.Materializer, id p
 		subset := req
 		subset.Agents = append([]string(nil), live...)
 		out.NextActions = []NextAction{
-			{Kind: "install", Agents: missing, Command: RetryCommand(installReq), Reason: "install_missing"},
-			{Kind: string(req.Action), Agents: live, Command: RetryCommand(subset), Reason: "continue_installed_only"},
+			{Kind: "install", Agents: missing, Command: localRetryCommand(installReq), Reason: "install_missing"},
+			{Kind: string(req.Action), Agents: live, Command: localRetryCommand(subset), Reason: "continue_installed_only"},
 		}
 	}
 	return out, uapinstaller.ErrNotInstalled
@@ -3339,6 +3439,7 @@ func mapAmbiguous(err error, out Result) (Result, bool) {
 }
 
 func liveClientBindings(mat portablesetup.Materializer, installationID, clientID string) ([]domain.ClientBinding, error) {
+	clientID = portablesetup.ClientID(portablesetup.Integration(clientID))
 	if installationID == "" || clientID == "" {
 		return nil, nil
 	}
@@ -3546,6 +3647,11 @@ func clientConfig(req Request, agent portable.Integration) string {
 		return req.CodexHome
 	case portable.Claude:
 		return req.ClaudeConfig
+	case portable.CopilotVSCode:
+		if req.LocalConfig != nil {
+			return filepath.Dir(req.LocalConfig.ProfileSettingsPath)
+		}
+		return ""
 	case portable.Cursor:
 		return req.CursorConfig
 	default:
@@ -3646,6 +3752,17 @@ func wizardIntentTargets(req Request, hookAgents, notifyAgents []portable.Integr
 	}
 	for _, agent := range notifyAgents {
 		add(agent, "agent-notify")
+		if agent == portable.CopilotVSCode && req.LocalConfig != nil {
+			if req.LocalConfig.NativeStop {
+				add(agent, "native-stop")
+			}
+			if len(req.LocalConfig.MCPServers) != 0 {
+				add(agent, "local-mcp")
+			}
+			if len(req.LocalConfig.Skills) != 0 {
+				add(agent, "local-skills")
+			}
+		}
 	}
 	out := make([]portablesetup.IntentTarget, 0, len(order))
 	for _, id := range order {
@@ -3693,6 +3810,7 @@ func persistKnownReceipt(ctx context.Context, req Request, runtimeRoot string, m
 }
 
 func knownReceiptID(mat portablesetup.Materializer, installationID, clientID string) string {
+	clientID = portablesetup.ClientID(portablesetup.Integration(clientID))
 	if installationID == "" || clientID == "" {
 		return ""
 	}
@@ -3813,6 +3931,8 @@ func normalizeAgents(agents []string) ([]portable.Integration, error) {
 			id = portable.Claude
 		case "codex":
 			id = portable.Codex
+		case "copilot-vscode":
+			id = portable.CopilotVSCode
 		case "cursor":
 			id = portable.Cursor
 		default:
@@ -3830,7 +3950,13 @@ func normalizeAgents(agents []string) ([]portable.Integration, error) {
 func selectedUnits(req Request, agents []portable.Integration) (hooks, notify []portable.Integration) {
 	defaultOn := req.Action != ActionInspect
 	for _, agent := range agents {
-		if agent != portable.Cursor && agentUnit(req.Hooks, perClientHooks(req, agent), defaultOn) {
+		if agent == portable.CopilotVSCode {
+			if req.LocalConfig != nil && (req.LocalConfig.NativeStop || len(req.LocalConfig.MCPServers) > 0 || len(req.LocalConfig.Skills) > 0 || (req.Action == ActionUpdate || req.Action == ActionRepair || req.Action == ActionUninstall) && req.InstallationID != "" && req.BindingIDs[string(agent)] != "") {
+				notify = append(notify, agent)
+			}
+			continue
+		}
+		if agent != portable.Cursor && agent != portable.CopilotVSCode && agentUnit(req.Hooks, perClientHooks(req, agent), defaultOn) {
 			hooks = append(hooks, agent)
 		}
 		if agentUnit(req.AgentNotify, perClientNotify(req, agent), defaultOn) {
@@ -3875,7 +4001,7 @@ func preserveLiveUnits(ctx context.Context, req Request, agents []portable.Integ
 		}
 	}
 	for _, agent := range agents {
-		hooks, notify := boolPtr(hooksManaged(req, agent)), boolPtr(notifyLive[string(agent)])
+		hooks, notify := boolPtr(hooksManaged(req, agent)), boolPtr(notifyLive[portablesetup.ClientID(agent)])
 		switch agent {
 		case portable.Claude:
 			req.ClaudeHooks, req.ClaudeAgentNotify = hooks, notify
@@ -4056,4 +4182,61 @@ func applyHostSnapshots(req *Request) {
 
 func explicitAbs(p string) bool {
 	return p != "" && filepath.IsAbs(p) && filepath.Clean(p) == p
+}
+
+// Keep Local's exact selection on all Plan/Run fallback commands as well as
+// target-specific next actions. Legacy retry construction remains unchanged.
+func attachWizardCommand(req Request, out Result) Result {
+	authoritative := len(out.Command) != 0
+	out = attachCommand(req, out)
+	if !authoritative && req.LocalConfig != nil && len(out.Command) != 0 {
+		if req.InstallationID == "" {
+			req.InstallationID = out.InstallationID
+		}
+		out.Command = localRetryCommand(req)
+	}
+	return out
+}
+
+// localRetryCommand extends the existing retry argv only for the explicit Local recipe.
+func localRetryCommand(req Request) []string {
+	if req.LocalConfig == nil {
+		return RetryCommand(req)
+	}
+	retry := req
+	retry.ClientExecutable = clientExecutable(req, portable.CopilotVSCode)
+	retry.ScopeRoot = filepath.Dir(req.LocalConfig.ProfileSettingsPath)
+	command := RetryCommand(retry)
+	return append(command, "--local-settings", req.LocalConfig.ProfileSettingsPath,
+		"--local-native-stop", boolFlag(req.LocalConfig.NativeStop),
+		"--local-mcp", boolFlag(len(req.LocalConfig.MCPServers) > 0),
+		"--local-skills", boolFlag(len(req.LocalConfig.Skills) > 0))
+}
+
+// RestoreLocalIntentScope restores the existing immutable handoff before the
+// composition root touches the recorded profile or helper. It grants nothing.
+func RestoreLocalIntentScope(req Request, intent portablesetup.Intent) (Request, error) {
+	if len(intent.Targets) != 1 || intent.Targets[0].Client != string(portable.CopilotVSCode) || intent.Action != string(req.Action) {
+		return req, portablesetup.ErrIntentConflict
+	}
+	agents, err := normalizeAgents(req.Agents)
+	if err != nil {
+		return req, err
+	}
+	req, _, err = restoreOmittedFromIntent(req, agents, intent)
+	return req, err
+}
+
+func copyLocalConfig(source *vscode.LocalConfig) *vscode.LocalConfig {
+	if source == nil {
+		return nil
+	}
+	copy := *source
+	copy.MCPServers = append([]string(nil), source.MCPServers...)
+	copy.Skills = append([]string(nil), source.Skills...)
+	copy.HookSpecs = append([]vscodelocalhooks.Spec(nil), source.HookSpecs...)
+	for i := range copy.HookSpecs {
+		copy.HookSpecs[i].Args = append([]string(nil), source.HookSpecs[i].Args...)
+	}
+	return &copy
 }

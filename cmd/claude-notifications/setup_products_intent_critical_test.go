@@ -5,6 +5,8 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -461,5 +463,330 @@ func TestCursorFalseRegistrationLocatorFailureUsesKnownCAS(t *testing.T) {
 	}
 	if setupCommandRead(t, path) != string(foreign) {
 		t.Fatal("foreign locator overwritten")
+	}
+}
+
+func localConsentCommandFixture(t *testing.T) (setupCommandFixture, portable.Binding) {
+	t.Helper()
+	f, _, _ := configureFixture(t)
+	ledger, _, err := installruntime.ReadOwnership(f.control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := portable.Binding{Version: 1, Integration: portable.CopilotVSCode, InstallationID: "TEST-local-install", BindingID: "TEST-local-binding", ScopeID: "user", ComponentID: ledger.ID, Owner: ledger.Owner, ScopeRoot: filepath.Join(f.root, "TEST-local-profile"), DataRoot: filepath.Join(f.root, "TEST-local-data"), ControlRoot: f.control, RuntimeRoot: f.runtime, GlobalConfig: f.global, Primary: "bin/claude-notifications"}
+	for _, root := range []string{b.ScopeRoot, b.DataRoot} {
+		if err := os.Mkdir(root, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := (portablesetup.Service{}).CommitBinding(setupCommandContext(t), portablesetup.Request{Binding: b, ExpectedGeneration: ledger.Generation}); err != nil {
+		t.Fatal(err)
+	}
+	return f, b
+}
+
+func setLocalTestConsent(t *testing.T, b portable.Binding, desktop, webhook, manual bool) installruntime.PolicySnapshot {
+	t.Helper()
+	ctx := setupCommandContext(t)
+	s, err := installruntime.ReadPolicySnapshot(ctx, b.ControlRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields, err := copilotvscodeinstall.PolicyPatch(b, copilotvscodeinstall.Choices{Desktop: &desktop, Webhook: &webhook, Manual: &manual}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, consumer, _, _ := b.Registration()
+	if _, err := installruntime.Commit(ctx, installruntime.Request{ControlRoot: b.ControlRoot, Owner: b.Owner, RuntimeRoot: b.RuntimeRoot, ConsumerID: key, Consumer: consumer, PolicyOnly: true, RefreshOnly: true, ExpectedGeneration: &s.Installation.Ledger.Generation, ExpectedPolicy: &s.Preimage, PolicyFields: fields}); err != nil {
+		t.Fatal(err)
+	}
+	return assertLocalConsent(t, b.ControlRoot, desktop, webhook, manual)
+}
+
+func assertLocalConsent(t *testing.T, root string, desktop, webhook, manual bool) installruntime.PolicySnapshot {
+	t.Helper()
+	s, err := installruntime.ReadPolicySnapshot(setupCommandContext(t), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var route struct {
+		Local struct {
+			Desktop, Webhook *bool
+			Manual           struct{ Enabled *bool }
+		} `json:"copilotVSCodeNotifications"`
+	}
+	if err := json.Unmarshal(s.Fields["route"], &route); err != nil || route.Local.Desktop == nil || route.Local.Webhook == nil || route.Local.Manual.Enabled == nil || *route.Local.Desktop != desktop || *route.Local.Webhook != webhook || *route.Local.Manual.Enabled != manual {
+		t.Fatalf("three actual Local leaves: %s %v", s.Fields["route"], err)
+	}
+	return s
+}
+
+func TestLocalRegistrationFalseExactBindingAndLocatorCAS(t *testing.T) {
+	f, b := localConsentCommandFixture(t)
+	ctx := setupCommandContext(t)
+	assertLocalConsent(t, f.control, false, false, false)
+	s := setLocalTestConsent(t, b, true, false, true)
+	before := setupCommandRead(t, filepath.Join(f.control, "agent-notifications.json"))
+	if _, err := (portablesetup.Service{ExpectedPolicy: &s.Preimage}).CommitBinding(ctx, portablesetup.Request{Binding: b, ExpectedGeneration: s.Installation.Ledger.Generation}); err != nil {
+		t.Fatal(err)
+	}
+	if after := setupCommandRead(t, filepath.Join(f.control, "agent-notifications.json")); after != before {
+		t.Fatal("exact binding changed explicit consent")
+	}
+	// A rebind may not borrow any affirmative leaf, even when its locator fails.
+	b.GlobalConfig = filepath.Join(f.root, "TEST-new-local-global.json")
+	filename, err := b.Filename()
+	if err != nil {
+		t.Fatal(err)
+	}
+	locator := filepath.Join(b.DataRoot, filename)
+	if err := os.WriteFile(locator, []byte("TEST-foreign-locator"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	expected := s.Preimage
+	if _, err := (portablesetup.Service{ExpectedPolicy: &expected}).CommitBinding(ctx, portablesetup.Request{Binding: b, ExpectedGeneration: s.Installation.Ledger.Generation}); err == nil {
+		t.Fatal("foreign locator overwritten")
+	}
+	after := assertLocalConsent(t, f.control, false, false, false)
+	key, _, _, _ := b.Registration()
+	if _, ok := after.Installation.Ledger.Consumers[key]; ok {
+		t.Fatal("failed locator left rebound registration")
+	}
+	if expected != after.Preimage || after.Installation.Ledger.Generation != s.Installation.Ledger.Generation+2 || !reflect.DeepEqual(after.Installation.Ledger.Consumers, s.Installation.Ledger.Consumers) || setupCommandRead(t, locator) != "TEST-foreign-locator" {
+		t.Fatal("known CAS rollback lost foreign state")
+	}
+}
+
+func TestLocalFrozenRevocationIndependentAndPolicyDrift(t *testing.T) {
+	for _, selection := range []copilotvscodeinstall.RevokeSelection{copilotvscodeinstall.RevokeNative, copilotvscodeinstall.RevokeManual, copilotvscodeinstall.RevokeAll} {
+		t.Run(fmt.Sprint(selection), func(t *testing.T) {
+			f, b := localConsentCommandFixture(t)
+			s := setLocalTestConsent(t, b, true, true, true)
+			policyPath := filepath.Join(f.control, "agent-notifications.json")
+			raw := setupCommandRead(t, policyPath)
+			// Same-generation byte drift is rejected rather than adopted as a new decision.
+			setupCommandWrite(t, policyPath, raw+"\n", 0600)
+			if _, _, err := revokeRecordedLocal(setupCommandContext(t), b, selection, &s.Installation.Ledger.Generation, &s.Preimage); !errors.Is(err, portablesetup.ErrConcurrentChange) {
+				t.Fatal("frozen revoke adopted byte drift", err)
+			}
+			assertLocalConsent(t, f.control, true, true, true)
+			setupCommandWrite(t, policyPath, raw, 0600)
+			// No physical lookup: revocation survives damaged profile and helper assets.
+			if err := os.RemoveAll(b.ScopeRoot); err != nil {
+				t.Fatal(err)
+			}
+			setupCommandWrite(t, b.ScopeRoot, "TEST-damaged-profile", 0600)
+			if err := os.Remove(filepath.Join(b.RuntimeRoot, filepath.FromSlash(b.Primary))); err != nil {
+				t.Fatal(err)
+			}
+			ledger, after, err := revokeRecordedLocal(setupCommandContext(t), b, selection, &s.Installation.Ledger.Generation, &s.Preimage)
+			if err != nil {
+				t.Fatal(err)
+			}
+			native, manual := selection == copilotvscodeinstall.RevokeManual, selection == copilotvscodeinstall.RevokeNative
+			verified, e := installruntime.ReadRevocationSnapshot(setupCommandContext(t), f.control)
+			if e != nil {
+				t.Fatal(e)
+			}
+			var doc struct {
+				Route struct {
+					Local struct {
+						Desktop, Webhook *bool
+						Manual           struct{ Enabled *bool }
+					} `json:"copilotVSCodeNotifications"`
+				}
+			}
+			if e := json.Unmarshal([]byte(setupCommandRead(t, policyPath)), &doc); e != nil || doc.Route.Local.Desktop == nil || doc.Route.Local.Webhook == nil || doc.Route.Local.Manual.Enabled == nil || *doc.Route.Local.Desktop != native || *doc.Route.Local.Webhook != native || *doc.Route.Local.Manual.Enabled != manual {
+				t.Fatal("actual false-only policy readback", e)
+			}
+			if verified.Preimage != after || verified.Generation != ledger.Generation || !reflect.DeepEqual(s.Installation.Ledger.Consumers, ledger.Consumers) || !reflect.DeepEqual(s.Installation.Ledger.Files, ledger.Files) {
+				t.Fatal("false decision disturbed owned records")
+			}
+		})
+	}
+}
+
+func TestLocalConfirmedConsentRefusesPreparedOnlyAndDrift(t *testing.T) {
+	f, b := localConsentCommandFixture(t)
+	s := assertLocalConsent(t, f.control, false, false, false)
+	r := setupwizard.Request{ControlRoot: f.control, ScopeRoot: b.ScopeRoot, InstallationID: b.InstallationID}
+	result := setupwizard.Result{Action: "install", Outcome: "completed", InstallationID: b.InstallationID, Generation: s.Installation.Ledger.Generation, Targets: []setupwizard.TargetResult{{Client: "copilot-vscode", Unit: "agent-notify", Outcome: "completed", Reason: b.BindingID}}}
+	on := true
+	i := confirmedBootstrapIntent{Initial: bootstrapInitialObservation{LedgerID: s.Installation.Ledger.ID, Owner: s.Installation.Ledger.Owner, Generation: s.Installation.Ledger.Generation, Policy: s.Preimage}, Request: setupProductsArgs{Desktop: true, DesktopSet: true, Manual: &on}}
+	before := setupCommandRead(t, filepath.Join(f.control, "agent-notifications.json"))
+	if _, err := commitConfirmedLocalConsent(setupCommandContext(t), r, result, i); err == nil {
+		t.Fatal("generic target completion manufactured installed Local acknowledgement")
+	}
+	setupCommandWrite(t, filepath.Join(f.control, "agent-notifications.json"), before+"\n", 0600)
+	if _, err := commitConfirmedLocalConsent(setupCommandContext(t), r, result, i); !errors.Is(err, portablesetup.ErrConcurrentChange) {
+		t.Fatal("same-generation byte drift borrowed", err)
+	}
+	assertLocalConsent(t, f.control, false, false, false)
+}
+
+func TestLocalWizardEarlyRevocationAndAmbiguity(t *testing.T) {
+	for _, action := range []string{"disable-manual", "update-empty-manual-off", "update-mcp-manual-off", "remove", "remove-manual-off", "ambiguous"} {
+		t.Run(action, func(t *testing.T) {
+			f, b := localConsentCommandFixture(t)
+			s := setLocalTestConsent(t, b, true, true, true)
+			if action == "ambiguous" {
+				other := b
+				other.BindingID = "TEST-other-local-binding"
+				key, consumer, _, _ := other.Registration()
+				if _, err := installruntime.Commit(setupCommandContext(t), installruntime.Request{ControlRoot: b.ControlRoot, Owner: b.Owner, RuntimeRoot: b.RuntimeRoot, ConsumerID: key, Consumer: consumer, ExpectedGeneration: &s.Installation.Ledger.Generation, ExpectedPolicy: &s.Preimage}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.RemoveAll(b.ScopeRoot); err != nil {
+				t.Fatal(err)
+			}
+			setupCommandWrite(t, b.ScopeRoot, "TEST-damaged", 0600)
+			args := []string{"--action", "install", "--agents", "copilot-vscode", "--agent-notify", "false", "--scope-root", b.ScopeRoot, "--client-executable", f.command, "--control-root", f.control, "--yes", "--json"}
+			if action == "remove" || action == "remove-manual-off" {
+				args[1] = "uninstall"
+				if action == "remove" {
+					args = append(args[:4], args[6:]...)
+				}
+			}
+			if strings.HasPrefix(action, "update-") {
+				args[1] = "update"
+				mcp := "false"
+				if action == "update-mcp-manual-off" {
+					mcp = "true"
+				}
+				args = append(args, "--local-settings", filepath.Join(b.ScopeRoot, "settings.json"), "--local-native-stop", "false", "--local-mcp", mcp, "--local-skills", "false")
+			}
+			var out bytes.Buffer
+			code := executeSetupWizardWith(setupCommandContext(t), args, &out, io.Discard, strings.NewReader(""), false)
+			switch action {
+			case "disable-manual":
+				if code != 0 {
+					t.Fatal("early manual revoke", out.String())
+				}
+				assertLocalConsent(t, f.control, true, true, false)
+			case "remove", "remove-manual-off", "update-empty-manual-off", "update-mcp-manual-off":
+				if code == 0 {
+					t.Fatal("damaged cleanup falsely completed", out.String())
+				}
+				assertLocalConsent(t, f.control, false, false, false)
+			default:
+				if code == 0 {
+					t.Fatal("ambiguous selection succeeded")
+				}
+				assertLocalConsent(t, f.control, true, true, true)
+			}
+		})
+	}
+}
+
+func TestLocalRegistrationByteCASAndForeignPolicy(t *testing.T) {
+	f, b := localConsentCommandFixture(t)
+	ctx := setupCommandContext(t)
+	s := setLocalTestConsent(t, b, true, true, true)
+	policyPath := filepath.Join(f.control, "agent-notifications.json")
+	var doc map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(setupCommandRead(t, policyPath)), &doc); err != nil {
+		t.Fatal(err)
+	}
+	var route map[string]json.RawMessage
+	if err := json.Unmarshal(doc["route"], &route); err != nil {
+		t.Fatal(err)
+	}
+	var local map[string]json.RawMessage
+	if err := json.Unmarshal(route["copilotVSCodeNotifications"], &local); err != nil {
+		t.Fatal(err)
+	}
+	local["foreign"] = json.RawMessage(`{"retained":true}`)
+	local["manual"] = json.RawMessage(`{"enabled":true,"foreign":"TEST-manual"}`)
+	route["copilotVSCodeNotifications"], _ = json.Marshal(local)
+	route["foreign"] = json.RawMessage(`{"TEST":42}`)
+	doc["route"], _ = json.Marshal(route)
+	body, _ := json.MarshalIndent(doc, "", "  ")
+	setupCommandWrite(t, policyPath, string(body)+"\n", 0600)
+	oldGeneration := s.Installation.Ledger.Generation
+	if _, err := (portablesetup.Service{ExpectedPolicy: &s.Preimage}).CommitBinding(ctx, portablesetup.Request{Binding: b, ExpectedGeneration: oldGeneration}); !errors.Is(err, portablesetup.ErrConcurrentChange) {
+		t.Fatal("exact-binding registration adopted same-generation bytes", err)
+	}
+	s, err := installruntime.ReadPolicySnapshot(ctx, f.control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Installation.Ledger.Generation != oldGeneration {
+		t.Fatal("fixture changed generation")
+	}
+	b.GlobalConfig = filepath.Join(f.root, "TEST-rebind-config.json")
+	expected := s.Preimage
+	if _, err := (portablesetup.Service{ExpectedPolicy: &expected}).CommitBinding(ctx, portablesetup.Request{Binding: b, ExpectedGeneration: oldGeneration}); err != nil {
+		t.Fatal(err)
+	}
+	after := assertLocalConsent(t, f.control, false, false, false)
+	if err := json.Unmarshal(after.Fields["route"], &route); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(route["copilotVSCodeNotifications"], &local); err != nil {
+		t.Fatal(err)
+	}
+	var manual map[string]json.RawMessage
+	if err := json.Unmarshal(local["manual"], &manual); err != nil {
+		t.Fatal(err)
+	}
+	var sibling struct{ TEST int }
+	var nested struct{ Retained bool }
+	var manualForeign string
+	if json.Unmarshal(route["foreign"], &sibling) != nil || sibling.TEST != 42 || json.Unmarshal(local["foreign"], &nested) != nil || !nested.Retained || json.Unmarshal(manual["foreign"], &manualForeign) != nil || manualForeign != "TEST-manual" {
+		t.Fatal("Local false registration lost foreign policy", string(after.Fields["route"]))
+	}
+}
+
+func TestLocalPlanRunFallbackParserCompositionRoundTrip(t *testing.T) {
+	f, _, _ := configureFixture(t)
+	ledger, _, err := installruntime.ReadOwnership(f.control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := []byte(setupCommandRead(t, f.command))
+	if _, err := installruntime.Commit(setupCommandContext(t), installruntime.Request{ControlRoot: f.control, RuntimeRoot: f.runtime, Owner: ledger.Owner, ConsumerID: "hooks", RefreshOnly: true, ExpectedGeneration: &ledger.Generation, Files: []installruntime.File{{Path: filepath.Join(f.runtime, filepath.FromSlash(portable.PlatformPrimary())), Data: body, Mode: 0700}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	settings := filepath.Join(f.root, "TEST-fresh-local", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settings), 0700); err != nil {
+		t.Fatal(err)
+	}
+	setupCommandWrite(t, settings, `{"foreign":true}`, 0600)
+	for bits := 1; bits < 8; bits++ {
+		args := []string{"--action", "install", "--agents", "copilot-vscode", "--scope-root", filepath.Dir(settings), "--client-executable", f.command, "--local-settings", settings, "--local-native-stop", fmt.Sprint(bits&1 != 0), "--local-mcp", fmt.Sprint(bits&2 != 0), "--local-skills", fmt.Sprint(bits&4 != 0), "--control-root", f.control, "--package", filepath.Join(f.root, "TEST-missing-package"), "--yes", "--json"}
+		original, _, err := parseSetupWizard(args)
+		if err != nil {
+			t.Fatal(err)
+		}
+		original.ClientExecutable = "" // exercise the real per-client executable carrier
+		prepared, early, err := prepareLocalWizard(setupCommandContext(t), original, nil)
+		if err != nil && (runtime.GOOS != "linux" || early == nil || early.Reason != "local_adapter_unavailable") {
+			t.Fatal("initial composition", err, early)
+		}
+		for _, route := range []string{"Plan", "Run"} {
+			var result setupwizard.Result
+			if route == "Plan" {
+				plan, _ := setupwizard.Plan(setupCommandContext(t), prepared)
+				result = plan.Result
+			} else {
+				result, _ = setupwizard.Run(setupCommandContext(t), prepared)
+			}
+			if len(result.Command) < 3 {
+				t.Fatalf("%s has no retry: %+v", route, result)
+			}
+			replay, _, err := parseSetupWizard(result.Command[2:])
+			if err != nil {
+				t.Fatalf("%s retry parser: %v %v", route, result.Command, err)
+			}
+			if !sameLocalWizardSelection(prepared, replay) || replay.Helper != prepared.Helper || replay.ClientExecutables["copilot-vscode"] != f.command {
+				t.Fatalf("%s lost retry selection: %+v", route, replay)
+			}
+			restored, early, err := prepareLocalWizard(setupCommandContext(t), replay, nil)
+			if (err != nil && (runtime.GOOS != "linux" || early == nil || early.Reason != "local_adapter_unavailable")) || !sameLocalWizardSelection(prepared, restored) || restored.BindingIDs["copilot-vscode"] != prepared.BindingIDs["copilot-vscode"] {
+				t.Fatal("retry composition drift", route, err, early)
+			}
+		}
 	}
 }

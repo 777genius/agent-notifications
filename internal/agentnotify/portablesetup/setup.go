@@ -251,9 +251,9 @@ func (s Service) CommitBinding(ctx context.Context, req Request) (portable.Bindi
 	var fields map[string]json.RawMessage
 	policy := s.ExpectedPolicy
 	var after installruntime.Identity
-	if req.Binding.Integration == portable.Cursor {
+	if req.Binding.Integration == portable.Cursor || req.Binding.Integration == portable.CopilotVSCode {
 		// A new identity cannot inherit native leaves from a removed registration.
-		// This false pair shares the registration transaction, before publication.
+		// These false leaves share the registration transaction, before publication.
 		if policy == nil {
 			observed, e := installruntime.ReadRevocationSnapshot(ctx, req.Binding.ControlRoot)
 			if e != nil {
@@ -263,7 +263,11 @@ func (s Service) CommitBinding(ctx context.Context, req Request) (portable.Bindi
 		}
 		off := false
 		var e error
-		fields, e = copilotvscodeinstall.CursorPolicyPatch(req.Binding, copilotvscodeinstall.CursorChoices{Desktop: &off, Webhook: &off}, nil)
+		if req.Binding.Integration == portable.CopilotVSCode {
+			fields, e = copilotvscodeinstall.PolicyPatch(req.Binding, copilotvscodeinstall.Choices{Desktop: &off, Webhook: &off, Manual: &off}, nil)
+		} else {
+			fields, e = copilotvscodeinstall.CursorPolicyPatch(req.Binding, copilotvscodeinstall.CursorChoices{Desktop: &off, Webhook: &off}, nil)
+		}
 		if e != nil {
 			return portable.Binding{}, e
 		}
@@ -279,7 +283,7 @@ func (s Service) CommitBinding(ctx context.Context, req Request) (portable.Bindi
 	if err != nil {
 		return portable.Binding{}, policyConflict(err)
 	}
-	if req.Binding.Integration == portable.Cursor {
+	if req.Binding.Integration == portable.Cursor || req.Binding.Integration == portable.CopilotVSCode {
 		// Advance only the request-local atom through this successful, frozen
 		// false patch. Later observations may verify it, never replace it.
 		policy = &after

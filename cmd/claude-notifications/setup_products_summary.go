@@ -67,7 +67,7 @@ func bootstrapScopeLabel(key string) string {
 		"gemini-config-root": "Gemini settings", "control-root": "Shared installation state", "runtime-root": "Notification runtime",
 		"global-config": "Shared notification settings", "claude-executable": "Claude Code executable", "codex-executable": "Codex executable",
 		"opencode-executable": "OpenCode executable", "gemini-executable": "Gemini executable",
-		"scope-root": "Cursor workspace", "client-executable": "Cursor agent executable",
+		"scope-root": "Cursor workspace", "client-executable": "Cursor agent executable", "local-settings": "VS Code Local settings",
 	}
 	if label, ok := labels[key]; ok {
 		return label
@@ -100,4 +100,17 @@ func bootstrapPreservedPolicyRows(policy map[string]json.RawMessage) ([]string, 
 		rows = append(rows, "  "+labels[key]+": "+value+" (kept)")
 	}
 	return rows, nil
+}
+
+func localChoice(specified, value bool) *bool {
+	if !specified {
+		return nil
+	}
+	return &value
+}
+func bootstrapLocalChoice(choice *bool) string {
+	if choice == nil {
+		return "keep this binding's choice"
+	}
+	return bootstrapOnOff(*choice)
 }

@@ -336,3 +336,33 @@ func TestLocalConsentAndStaleGenerationStayIndependent(t *testing.T) {
 		t.Fatal("Local desktop revoke changed webhook consent")
 	}
 }
+
+func TestLocalPinnedSnapshotDenialDoesNotReacquirePolicyLocks(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux capability-absence control")
+	}
+	f, _, _, _ := localPublicFixture(t)
+	s, err := installruntime.ReadPolicySnapshot(cursorContext(t), f.b.ControlRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pinned, release, err := installruntime.AcquirePolicyLease(cursorContext(t), f.b.ControlRoot, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+	defer cancel()
+	if _, _, _, err := NewLocalGateFromSnapshot(ctx, f.b, f.cfg, pinned); err == nil {
+		t.Fatal("unsupported Local granted")
+	}
+	if ctx.Err() != nil {
+		t.Fatal("Local constructor reacquired held policy locks")
+	}
+	if _, err := (Gate{Binding: f.b}).ConsumerBindingFromSnapshot(ctx, pinned); err == nil {
+		t.Fatal("missing proof granted")
+	}
+	if ctx.Err() != nil {
+		t.Fatal("binding seam reacquired held policy locks")
+	}
+}

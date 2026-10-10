@@ -204,10 +204,10 @@ func validateBootstrapIntent(i confirmedBootstrapIntent) error {
 		if id == "codex" {
 			key = "codex-home"
 		}
-		if id == "cursor" {
+		if id == "cursor" || id == "copilot-vscode" {
 			key = "scope-root"
 		}
-		if id != "claude" && id != "codex" && id != "cursor" || !containsProduct(products, id) || !bytes.Equal(profile, i.Scopes[key]) {
+		if id != "claude" && id != "codex" && id != "cursor" && id != "copilot-vscode" || !containsProduct(products, id) || !bytes.Equal(profile, i.Scopes[key]) {
 			return invalid()
 		}
 	}
@@ -232,7 +232,7 @@ func validateBootstrapIntent(i confirmedBootstrapIntent) error {
 	}
 	for _, ids := range [][]string{i.MCP.Selected, i.MCP.Skipped} {
 		for _, id := range ids {
-			if id != "claude" && id != "codex" && id != "cursor" || !containsProduct(products, id) || seen[id] {
+			if id != "claude" && id != "codex" && id != "cursor" && id != "copilot-vscode" || !containsProduct(products, id) || seen[id] {
 				return invalid()
 			}
 			seen[id] = true
@@ -247,17 +247,34 @@ func validateBootstrapIntent(i confirmedBootstrapIntent) error {
 			key = "codex-home"
 		case "gemini":
 			key = "gemini-config-root"
-		case "cursor":
+		case "cursor", "copilot-vscode":
 			key = "scope-root"
 		}
 		executable := id + "-executable"
-		if id == "cursor" {
+		if id == "cursor" || id == "copilot-vscode" {
 			executable = "client-executable"
 		}
 		if len(i.Scopes[key]) == 0 || len(i.Scopes[executable]) == 0 {
 			return invalid()
 		}
 		u := i.Units[n]
+		if id == "copilot-vscode" {
+			c := i.LocalConfig
+			expected := localWizardConfig(string(i.Scopes["local-settings"]))
+			if c == nil || c.ProfileSettingsPath != filepath.Join(string(i.Scopes["scope-root"]), "settings.json") || c.QualifiedTuple != expected.QualifiedTuple || c.TargetShell != expected.TargetShell || len(c.HookSpecs) != 0 || c.DeclaredHookDigest != "" || i.Request.LocalNativeStop == nil || i.Request.LocalMCP == nil || i.Request.LocalSkills == nil {
+				return invalid()
+			}
+			if c.NativeStop != *i.Request.LocalNativeStop || len(c.MCPServers) != boolCount(*i.Request.LocalMCP) || len(c.Skills) != boolCount(*i.Request.LocalSkills) || len(c.MCPServers) > 0 && c.MCPServers[0] != "agent-notify" || len(c.Skills) > 0 && c.Skills[0] != "agent-notifications" {
+				return invalid()
+			}
+			if u.Product != id || u.Hooks || u.Native != c.NativeStop || u.MCP != *i.Request.LocalMCP || u.Skill != *i.Request.LocalSkills || u.PreservedOff || u.Desktop != i.Request.Desktop || u.Webhook != i.Request.Webhook {
+				return invalid()
+			}
+			continue
+		}
+		if i.LocalConfig != nil {
+			return invalid()
+		}
 		portable := id == "claude" || id == "codex" || id == "cursor"
 
 		desktop, webhook := false, false
@@ -266,7 +283,7 @@ func validateBootstrapIntent(i confirmedBootstrapIntent) error {
 			if err != nil {
 				return invalid()
 			}
-		} else if id == "cursor" {
+		} else if id == "cursor" || id == "copilot-vscode" {
 			desktop, webhook = i.Request.Desktop, i.Request.Webhook
 		}
 		if u.Product != id || u.Hooks != (portable && id != "cursor") || u.Native == portable || u.MCP != containsProduct(i.MCP.Selected, id) || u.Skill != u.MCP || u.PreservedOff != containsProduct(i.MCP.Skipped, id) || u.Desktop != desktop || u.Webhook != webhook {
@@ -325,7 +342,7 @@ func writeIntentScalars(out io.Writer, i confirmedBootstrapIntent) error {
 func validateBootstrapEffectRequest(r setupProductsArgs) error {
 	args := []string{"confirm", "--products", strings.Join(r.Products, ",")}
 	// Frozen scope bytes are validated separately; reparse only effect grammar.
-	if containsProduct(r.Products, "cursor") {
+	if containsProduct(r.Products, "cursor") || containsProduct(r.Products, "copilot-vscode") {
 		args[0] = "preflight"
 		args = append(args, "--intent-file", filepath.Join(os.TempDir(), "TEST-intent"))
 	}
@@ -347,6 +364,11 @@ func validateBootstrapEffectRequest(r setupProductsArgs) error {
 			args = append(args, "--webhook")
 		} else {
 			args = append(args, "--webhook="+fmt.Sprint(r.Webhook))
+		}
+	}
+	for key, value := range map[string]*bool{"local-native-stop": r.LocalNativeStop, "local-mcp": r.LocalMCP, "local-skills": r.LocalSkills, "manual": r.Manual} {
+		if value != nil {
+			args = append(args, "--"+key, fmt.Sprint(*value))
 		}
 	}
 	c := r.Configure
@@ -376,4 +398,11 @@ func validateBootstrapEffectRequest(r setupProductsArgs) error {
 		return errors.New("invalid frozen normalized configure request")
 	}
 	return nil
+}
+
+func boolCount(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
 }

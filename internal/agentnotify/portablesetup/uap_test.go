@@ -16,24 +16,33 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/777genius/agent-notifications/internal/copilotvscodeinstall"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/adapters/directoryidentity"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/adapters/dirswap"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/adapters/pathpolicy"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/adapters/loader"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/adapters/nativeconfig"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/adapters/packagedigest"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/adapters/profileauthority"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/adapters/specregistry"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/adapters/statev2"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients/codex"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients/cursor"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients/vscode"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/cursorhooks"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/domain"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/managedstdio"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/providers"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/vscodelocalhooks"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/packagesnapshot"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/ports"
 
 	"github.com/777genius/agent-notifications/install/uapinstaller"
 	"github.com/777genius/agent-notifications/internal/agentnotify/portable"
+	"github.com/777genius/agent-notifications/internal/agentnotify/portableasset"
 	"github.com/777genius/agent-notifications/internal/cursorinstall"
 	"github.com/777genius/agent-notifications/internal/installruntime"
 )
@@ -88,7 +97,7 @@ func main() {
 		t.Fatal(err)
 	}
 	out := filepath.Join(dir, "probe")
-	cmd := exec.Command("go", "build", "-o", out, src)
+	cmd := exec.Command(filepath.Join(runtime.GOROOT(), "bin", "go"), "build", "-o", out, src)
 	cmd.Env = append(os.Environ(), "GOTOOLCHAIN=local")
 	if body, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("build probe: %s %v", body, err)
@@ -2261,4 +2270,633 @@ func registryFixtureFiles(t *testing.T, root string) map[string]string {
 		t.Fatal(err)
 	}
 	return out
+}
+
+// Historical vscode.New and default registries cannot impersonate the selected Local owner.
+func TestMaterializerLocalInvalidRegistryHasNoMutations(t *testing.T) {
+	for _, kind := range []string{"nil", "empty", "historical-vscode", "codex-only"} {
+		t.Run(kind, func(t *testing.T) {
+			mat, req, root := registryMaterializerFixture(t)
+			req.Integration = portable.CopilotVSCode
+			req.LocalConfig = &vscode.LocalConfig{ProfileSettingsPath: filepath.Join(req.ClientConfigRoot, "settings.json")}
+			var err error
+			switch kind {
+			case "empty":
+				mat.Registry, err = clients.NewRegistry()
+			case "historical-vscode":
+				mat.Registry, err = clients.NewRegistry(vscode.New())
+			case "codex-only":
+				mat.Registry, err = clients.NewRegistry(codex.New())
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			before := registryFixtureFiles(t, root)
+			if _, err := mat.Install(testCtx(t), req); !errors.Is(err, ErrPreflight) {
+				t.Fatal("Local install registry", err)
+			}
+			if _, err := mat.PreviewPlan(testCtx(t), req); !errors.Is(err, ErrPreflight) {
+				t.Fatal("Local preview registry", err)
+			}
+			if err := mat.Remove(testCtx(t), req); !errors.Is(err, ErrPreflight) {
+				t.Fatal("Local remove registry", err)
+			}
+			if err := mat.RecoverJournals(testCtx(t), req); !errors.Is(err, ErrPreflight) {
+				t.Fatal("Local recovery registry", err)
+			}
+			if after := registryFixtureFiles(t, root); !reflect.DeepEqual(before, after) {
+				t.Fatal("invalid Local registry mutated TEST state")
+			}
+		})
+	}
+}
+
+// Exercise the actual public selected projection in read-only Prepare. Linux
+// source preparation is not Darwin installed authority or native activation.
+func TestMaterializerLocalIndependentPublicPrepare(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("source-only Linux projection check")
+	}
+	for bits := 1; bits < 8; bits++ {
+		t.Run(fmt.Sprint(bits), func(t *testing.T) {
+			mat, req, _ := registryMaterializerFixture(t)
+			req.Integration = portable.CopilotVSCode
+			req.Identity.ScopeRoot = req.ClientConfigRoot
+			settings := filepath.Join(req.ClientConfigRoot, "settings.json")
+			foreign := []byte("{ // retained TEST JSONC\n \"foreign\": true\n}\n")
+			if err := os.WriteFile(settings, foreign, 0600); err != nil {
+				t.Fatal(err)
+			}
+			tuple := vscode.SourceQualifiedTESTTuple("linux")
+			cfg := &vscode.LocalConfig{ProfileSettingsPath: settings, QualifiedTuple: tuple, TargetShell: vscodelocalhooks.Target{Shell: vscodelocalhooks.LinuxSH}, NativeStop: bits&1 != 0}
+			if bits&2 != 0 {
+				cfg.MCPServers = []string{"agent-notify"}
+			}
+			if bits&4 != 0 {
+				cfg.Skills = []string{"agent-notifications"}
+			}
+			if cfg.NativeStop {
+				cfg.HookSpecs = copilotvscodeinstall.LocalHookSpecs(portable.Binding{ControlRoot: req.Identity.ControlRoot, BindingID: "TEST-local-binding"}, mat.Roots.HelperExecutable)
+				body, err := vscodelocalhooks.Render(cfg.TargetShell, cfg.HookSpecs)
+				if err != nil {
+					t.Fatal(err)
+				}
+				cfg.DeclaredHookDigest = fmt.Sprintf("sha256:%x", sha256.Sum256(body))
+			}
+			adapter, err := vscode.NewLocal(*cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mat.Registry, err = clients.NewRegistry(adapter)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.LocalConfig = cfg
+			// Unselected components need not exist in the canonical package.
+			if bits&2 == 0 {
+				if err := os.Remove(filepath.Join(req.PackageRoot, "mcp.json")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if bits&4 == 0 {
+				if err := os.RemoveAll(filepath.Join(req.PackageRoot, "skills")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			before := map[string]map[string]string{}
+			for _, root := range []string{req.PackageRoot, req.ClientConfigRoot, req.Identity.ControlRoot} {
+				before[root] = registryFixtureFiles(t, root)
+			}
+			plan, err := mat.PreviewPlan(testCtx(t), req)
+			if err != nil {
+				t.Fatal("actual public Local Prepare", err)
+			}
+			facts, ok := plan.SelectedDelivery.LocalFacts()
+			if !ok || plan.ClientID != "vscode" || facts.NativeStop != cfg.NativeStop || !reflect.DeepEqual(facts.MCPServers, cfg.MCPServers) || !reflect.DeepEqual(facts.Skills, cfg.Skills) {
+				t.Fatalf("selection lost: %+v", plan)
+			}
+			if plan.BindingID != domain.ComputeClientBindingID(req.Identity.InstallationID, "vscode", "user", plan.TargetPath) {
+				t.Fatal("BindingID uses portable registration ID")
+			}
+			binding, err := Complete(req.Identity, portable.CopilotVSCode, plan.ClientID, "user", plan.TargetPath, req.Identity.ControlRoot)
+			if err != nil || binding.Integration != portable.CopilotVSCode || binding.BindingID != plan.BindingID {
+				t.Fatal("public to portable binding", err)
+			}
+			for root, files := range before {
+				if after := registryFixtureFiles(t, root); !reflect.DeepEqual(files, after) {
+					t.Fatal("read-only Prepare mutated source, profile or kernel")
+				}
+			}
+			for _, path := range []string{mat.Roots.StateFile, mat.Roots.ManagedRoot, mat.Roots.PluginDataBase} {
+				if _, err := os.Stat(path); !os.IsNotExist(err) {
+					t.Fatal("Prepare wrote installed state", path, err)
+				}
+			}
+			// Stage the actual selected public projection, without activation/profile effects.
+			ctx := testCtx(t)
+			projectionMat, projectionReq, closePackage, err := mat.composeLocalPackage(ctx, req, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer closePackage()
+			mat, req = projectionMat, projectionReq
+			source, err := (packagedigest.Builder{TempRoot: t.TempDir()}).SnapshotWithExecutables(ctx, req.PackageRoot, domain.SourceIdentity{CanonicalSource: req.PackageRoot}, []string{"bin/probe"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = packagedigest.Remove(source) }()
+			schema, err := specregistry.New()
+			if err != nil {
+				t.Fatal(err)
+			}
+			envelope, err := (loader.Loader{Registry: schema}).LoadSnapshot(ctx, source)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if envelope.TreeDigest != plan.TreeDigest {
+				t.Fatal("projection input differs from real public Prepare")
+			}
+			deliveryPlan := domain.DeliveryPlan{ClientID: domain.ClientVSCode, Scope: domain.ScopeUser, Status: domain.PlanStatus(plan.Delivery.Status), PackageMode: domain.PackageMode(plan.Delivery.PackageMode), ActivePath: plan.TargetPath, TargetAnchor: mat.Roots.ManagedRoot, TargetRoot: filepath.Dir(plan.TargetPath), SelectedDelivery: plan.SelectedDelivery}
+			for _, component := range plan.Delivery.Components {
+				deliveryPlan.Components = append(deliveryPlan.Components, domain.ComponentDecision{Kind: domain.ComponentKind(component.Kind), Name: component.Name, Support: domain.SupportLevel(component.Support), Reason: component.Reason})
+			}
+			launcher, err := managedstdio.NewSource(mat.Roots.HelperExecutable, "TEST")
+			if err != nil {
+				t.Fatal(err)
+			}
+			stager := providers.Stager{Registry: mat.Registry, Paths: pathpolicy.Policy{}, SnapshotBuilder: packagesnapshot.Builder{TempRoot: t.TempDir()}, LauncherSource: launcher}
+			staged, err := stager.StageWithPluginData(ctx, envelope, deliveryPlan, "TEST-local-projection", domain.CompatibilityHints{}, filepath.Join(req.Identity.ControlRoot, "TEST-data"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				if err := stager.Discard(ctx, staged); err != nil {
+					t.Error(err)
+				}
+			}()
+			if err := stager.Verify(ctx, staged.StagingPath, staged.ArtifactDigest); err != nil {
+				t.Fatal("projected bytes digest", err)
+			}
+			hookPath := filepath.Join(staged.StagingPath, filepath.FromSlash(vscodelocalhooks.PluginPath))
+			if cfg.NativeStop {
+				body, err := os.ReadFile(hookPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				expected := []vscodelocalhooks.Spec{{Event: vscodelocalhooks.Stop, Executable: mat.Roots.HelperExecutable, Args: []string{"copilot-vscode-event", "--event", "Stop", "--control-root", req.Identity.ControlRoot, "--binding", plan.BindingID}, TimeoutSeconds: 5}}
+				if err := vscodelocalhooks.VerifyOwned(body, cfg.TargetShell, expected); err != nil {
+					t.Fatal("canonical Stop argv/timeout", err)
+				}
+			} else if _, err := os.Stat(hookPath); !os.IsNotExist(err) {
+				t.Fatal("unselected native hook exists", err)
+			}
+			if bits&2 != 0 {
+				if _, err := os.Stat(filepath.Join(staged.StagingPath, "mcp.json")); err != nil {
+					t.Fatal(err)
+				}
+			} else if _, err := os.Stat(filepath.Join(staged.StagingPath, "mcp.json")); !os.IsNotExist(err) {
+				t.Fatal("unselected MCP projected", err)
+			}
+			if bits&4 != 0 {
+				if _, err := os.Stat(filepath.Join(staged.StagingPath, "skills", "agent-notifications", "SKILL.md")); err != nil {
+					t.Fatal(err)
+				}
+			} else if _, err := os.Stat(filepath.Join(staged.StagingPath, "skills", "agent-notifications", "SKILL.md")); !os.IsNotExist(err) {
+				t.Fatal("unselected skill projected", err)
+			}
+			if after, err := os.ReadFile(settings); err != nil || !bytes.Equal(after, foreign) {
+				t.Fatal("staging changed foreign profile", err)
+			}
+			t.Log("PASS public Prepare and real public staged projection/digest; installed selector/data/locator and Darwin authority NOT_RUN")
+		})
+	}
+}
+
+// Hold the actual public mutation lock so Apply fails only after the host
+// reservation and both revocations; retry must recover the same frozen owners.
+func TestLocalRemoveGroupFailedApplyExactOwnerRetry(t *testing.T) {
+	mat, local, root := registryMaterializerFixture(t)
+	local.Integration = portable.CopilotVSCode
+	local.Identity.ScopeRoot = local.ClientConfigRoot
+	settings := filepath.Join(local.ClientConfigRoot, "settings.json")
+	if err := os.WriteFile(settings, []byte(`{"foreign":true}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &vscode.LocalConfig{ProfileSettingsPath: settings, QualifiedTuple: vscode.SourceQualifiedTESTTuple("linux"), TargetShell: vscodelocalhooks.Target{Shell: vscodelocalhooks.LinuxSH}, MCPServers: []string{"agent-notify"}, Skills: []string{"agent-notifications"}}
+	adapter, err := vscode.NewLocal(*cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mat.Registry, err = clients.NewRegistry(adapter, codex.New())
+	if err != nil {
+		t.Fatal(err)
+	}
+	local.LocalConfig = cfg
+	b, err := mat.Install(testCtx(t), local)
+	if err != nil {
+		t.Fatal("Local public install", err)
+	}
+	sibling := local
+	sibling.Integration, sibling.LocalConfig = portable.Codex, nil
+	sibling.ClientConfigRoot = filepath.Join(root, "TEST-codex")
+	if err := os.MkdirAll(sibling.ClientConfigRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(b.ControlRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sibling.ExpectedGeneration = snap.Ledger.Generation
+	sibling.OperationID = "TEST-sibling-install"
+	sibling.ExternalUninstalled = true
+	peer, err := mat.Install(testCtx(t), sibling)
+	if err != nil {
+		t.Fatal("sibling public install", err)
+	}
+	snap, err = installruntime.ReadInstalledSnapshot(b.ControlRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	local.ExpectedGeneration, sibling.ExpectedGeneration = snap.Ledger.Generation, snap.Ledger.Generation
+	local.OperationID, sibling.OperationID = "TEST-group-remove", "TEST-group-remove"
+	release, err := installruntime.LockExisting(testCtx(t), mat.Roots.LockFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
+	_, err = mat.RemoveGroup(ctx, []MaterializeRequest{local, sibling})
+	cancel()
+	release()
+	if err == nil {
+		t.Fatal("Apply ignored held public lock")
+	}
+	snap, err = installruntime.ReadInstalledSnapshot(b.ControlRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, exact := range []portable.Binding{b, peer} {
+		key, _, _, _ := exact.Registration()
+		if _, present := snap.Ledger.Consumers[key]; present {
+			t.Fatal("failure preceded revocation")
+		}
+		present, e := portable.ExactLocator(exact)
+		if e != nil || present {
+			t.Fatal("revoked locator remains", e)
+		}
+	}
+	intent, err := ReadIntent(b.ControlRoot)
+	if err != nil || snap.Ledger.PendingMutation == nil {
+		t.Fatal("failed Apply lost intent", err)
+	}
+	found := false
+	for _, target := range intent.Targets {
+		if target.BindingID == b.BindingID {
+			found = true
+			if target.Client != "copilot-vscode" || target.OldBinding == nil || *target.OldBinding != b {
+				t.Fatalf("Local durable owner: %+v", target)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("Local frozen target absent")
+	}
+	local.ExpectedGeneration, sibling.ExpectedGeneration = snap.Ledger.Generation, snap.Ledger.Generation
+	if _, err := mat.RemoveGroup(testCtx(t), []MaterializeRequest{local, sibling}); err != nil {
+		t.Fatal("exact-owner retry", err)
+	}
+	state, err := mat.Store.Load()
+	if err != nil || len(state.Installations) != 1 || len(state.Installations[0].Clients) != 0 || !state.Installations[0].DataRetained {
+		t.Fatal("retry did not clean same public owners", err)
+	}
+	body, err := os.ReadFile(settings)
+	if err != nil || !bytes.Contains(body, []byte(`"foreign":true`)) {
+		t.Fatal("foreign settings lost", err)
+	}
+}
+
+func TestLocalOwnedEmptyPublicUpdateAndUninstall(t *testing.T) {
+	for _, action := range []string{"update", "uninstall"} {
+		t.Run(action, func(t *testing.T) {
+			mat, req, _ := registryMaterializerFixture(t)
+			req.Integration = portable.CopilotVSCode
+			req.Identity.ScopeRoot = req.ClientConfigRoot
+			settings := filepath.Join(req.ClientConfigRoot, "settings.json")
+			if err := os.WriteFile(settings, []byte(`{"foreign":true}`), 0600); err != nil {
+				t.Fatal(err)
+			}
+			cfg := vscode.LocalConfig{ProfileSettingsPath: settings, QualifiedTuple: vscode.SourceQualifiedTESTTuple("linux"), TargetShell: vscodelocalhooks.Target{Shell: vscodelocalhooks.LinuxSH}, NativeStop: true, HookSpecs: copilotvscodeinstall.LocalHookSpecs(portable.Binding{ControlRoot: req.Identity.ControlRoot, BindingID: "reserved"}, mat.Roots.HelperExecutable)}
+			hook, err := vscodelocalhooks.Render(cfg.TargetShell, cfg.HookSpecs)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg.DeclaredHookDigest = fmt.Sprintf("sha256:%x", sha256.Sum256(hook))
+			adapter, err := vscode.NewLocal(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mat.Registry, err = clients.NewRegistry(adapter)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.LocalConfig = &cfg
+			b, err := mat.Install(testCtx(t), req)
+			if err != nil {
+				t.Fatal("public initial Local", err)
+			}
+			state, err := mat.Store.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			recorded := state.Installations[0].Clients[b.BindingID]
+			facts, _ := recorded.SelectedDelivery.LocalFacts()
+			if !facts.NativeStop {
+				t.Fatal("initial Stop absent")
+			}
+			cfg.NativeStop, cfg.HookSpecs, cfg.DeclaredHookDigest = false, nil, ""
+			adapter, err = vscode.NewLocal(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mat.Registry, err = clients.NewRegistry(adapter)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.LocalConfig = &cfg
+			snap, err := installruntime.ReadInstalledSnapshot(b.ControlRoot)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.ExpectedGeneration = snap.Ledger.Generation
+			req.OperationID = "TEST-empty-" + action
+			if action == "update" {
+				req.Operation = uapinstaller.OpUpdate
+				if _, err := mat.Install(testCtx(t), req); err != nil {
+					t.Fatal("owned empty update", err)
+				}
+				state, err = mat.Store.Load()
+				if err != nil {
+					t.Fatal(err)
+				}
+				current := state.Installations[0].Clients[b.BindingID]
+				empty, _ := current.SelectedDelivery.LocalFacts()
+				if empty.NativeStop || len(empty.MCPServers) != 0 || len(empty.Skills) != 0 {
+					t.Fatal("empty transition retained components")
+				}
+				if _, err := os.Stat(filepath.Join(current.TargetLocator, filepath.FromSlash(vscodelocalhooks.PluginPath))); !os.IsNotExist(err) {
+					t.Fatal("old Stop file remains", err)
+				}
+
+				snap, err := installruntime.ReadInstalledSnapshot(b.ControlRoot)
+				if err != nil {
+					t.Fatal(err)
+				}
+				req.ExpectedGeneration = snap.Ledger.Generation
+				req.OperationID += "-repeat"
+				if _, err := mat.Install(testCtx(t), req); err != nil {
+					t.Fatal("repeated owned empty update", err)
+				}
+			} else {
+				if err := mat.Remove(testCtx(t), req); err != nil {
+					t.Fatal("empty selected uninstall", err)
+				}
+				state, err = mat.Store.Load()
+				if err != nil || len(state.Installations[0].Clients) != 0 {
+					t.Fatal("uninstall kept binding", err)
+				}
+			}
+			body, err := os.ReadFile(settings)
+			if err != nil || !bytes.Contains(body, []byte(`"foreign":true`)) {
+				t.Fatal("empty cleanup lost foreign JSON", err)
+			}
+		})
+	}
+}
+
+func TestLocalStandardPortablePackagePublicPrepareAndFrozenRetry(t *testing.T) {
+	mat, req, root := registryMaterializerFixture(t)
+	built, err := portableasset.Build(portableasset.BuildRequest{Version: "1.0.0", GOOS: "linux", GOARCH: "amd64", Executable: mat.Roots.HelperExecutable, OutputRoot: filepath.Join(root, "TEST-standard-portable")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.PackageRoot = built.Root
+	req.Integration = portable.CopilotVSCode
+	req.Identity.ScopeRoot = req.ClientConfigRoot
+	cfg := vscode.LocalConfig{ProfileSettingsPath: filepath.Join(req.ClientConfigRoot, "settings.json"), QualifiedTuple: vscode.SourceQualifiedTESTTuple("linux"), TargetShell: vscodelocalhooks.Target{Shell: vscodelocalhooks.LinuxSH}, NativeStop: true, HookSpecs: copilotvscodeinstall.LocalHookSpecs(portable.Binding{ControlRoot: req.Identity.ControlRoot, BindingID: "reserved"}, mat.Roots.HelperExecutable)}
+	if err := os.WriteFile(cfg.ProfileSettingsPath, []byte(`{"foreign":true}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	hook, err := vscodelocalhooks.Render(cfg.TargetShell, cfg.HookSpecs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.DeclaredHookDigest = fmt.Sprintf("sha256:%x", sha256.Sum256(hook))
+	adapter, err := vscode.NewLocal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mat.Registry, err = clients.NewRegistry(adapter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.LocalConfig = &cfg
+	before := registryFixtureFiles(t, built.Root)
+	plan, err := mat.PreviewPlan(testCtx(t), req)
+	if err != nil {
+		t.Fatal("standard portable public Prepare", err)
+	}
+	retry, err := mat.PreviewPlan(testCtx(t), req)
+	if err != nil || retry.TreeDigest != plan.TreeDigest || retry.BindingID != plan.BindingID {
+		t.Fatal("recomposed retry changed identity", err)
+	}
+	if after := registryFixtureFiles(t, built.Root); !reflect.DeepEqual(before, after) {
+		t.Fatal("composition changed shared standard package")
+	}
+	if _, err := os.Stat(filepath.Join(built.Root, filepath.FromSlash(vscodelocalhooks.PluginPath))); !os.IsNotExist(err) {
+		t.Fatal("test supplied canonical hook", err)
+	}
+	req.TreeDigest = plan.TreeDigest
+	manifest := filepath.Join(built.Root, "plugin.json")
+	body, err := os.ReadFile(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifest, append(body, '\n'), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mat.Install(testCtx(t), req); !errors.Is(err, ErrSourceIdentityDrift) {
+		t.Fatal("frozen retry adopted changed source", err)
+	}
+}
+
+// Regression: the standard shared package has no Local Stop hook. ApplyGroup
+// must compose it from the reserved Local binding before public Prepare.
+func TestLocalNativeGroupComposesSharedCanonicalPackage(t *testing.T) {
+	for _, localFirst := range []bool{true, false} {
+		t.Run(fmt.Sprint(localFirst), func(t *testing.T) {
+			mat, local, root := registryMaterializerFixture(t)
+			local.Integration = portable.CopilotVSCode
+			local.Identity.ScopeRoot = local.ClientConfigRoot
+			settings := filepath.Join(local.ClientConfigRoot, "settings.json")
+			if err := os.WriteFile(settings, []byte(`{"foreign":true}`), 0600); err != nil {
+				t.Fatal(err)
+			}
+			tuple := vscode.SourceQualifiedTESTTuple(runtime.GOOS)
+			if runtime.GOOS == "darwin" {
+				tuple = vscode.QualifiedDarwinTESTTuple()
+			}
+			cfg := &vscode.LocalConfig{ProfileSettingsPath: settings, QualifiedTuple: tuple, TargetShell: vscodelocalhooks.Target{Shell: vscodelocalhooks.Shell(tuple.TargetShell)}, NativeStop: true, MCPServers: []string{"agent-notify"}, Skills: []string{"agent-notifications"}}
+			cfg.HookSpecs = copilotvscodeinstall.LocalHookSpecs(portable.Binding{ControlRoot: local.Identity.ControlRoot, BindingID: "TEST-placeholder"}, mat.Roots.HelperExecutable)
+			hook, err := vscodelocalhooks.Render(cfg.TargetShell, cfg.HookSpecs)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg.DeclaredHookDigest = fmt.Sprintf("sha256:%x", sha256.Sum256(hook))
+			adapter, err := vscode.NewLocal(*cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mat.Registry, err = clients.NewRegistry(adapter, codex.New())
+			if err != nil {
+				t.Fatal(err)
+			}
+			local.LocalConfig = cfg
+			sibling := local
+			sibling.Integration, sibling.LocalConfig = portable.Codex, nil
+			sibling.ClientConfigRoot = filepath.Join(root, "TEST-codex-group")
+			sibling.ClientExecutable = buildProbe(t)
+			if err := os.MkdirAll(sibling.ClientConfigRoot, 0700); err != nil {
+				t.Fatal(err)
+			}
+			before := registryFixtureFiles(t, local.PackageRoot)
+			reqs := []MaterializeRequest{local, sibling}
+			if !localFirst {
+				reqs[0], reqs[1] = reqs[1], reqs[0]
+			}
+			bindings, err := mat.ApplyGroup(testCtx(t), reqs)
+			if err != nil {
+				t.Fatal("actual public group apply", err)
+			}
+			if len(bindings) != 2 {
+				t.Fatalf("bindings: %+v", bindings)
+			}
+			state, err := mat.Store.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			installation, ok := findInstallation(state, local.Identity.InstallationID)
+			if !ok || len(installation.Clients) != 2 {
+				t.Fatal("missing shared installation")
+			}
+			var tree string
+			for _, b := range bindings {
+				record := installation.Clients[b.BindingID]
+				if record.PackageRevision == nil {
+					t.Fatal("missing selected package revision")
+				}
+				if tree == "" {
+					tree = record.PackageRevision.TreeDigest
+				} else if record.PackageRevision.TreeDigest != tree {
+					t.Fatal("group selected different canonical trees")
+				}
+				if b.Integration == portable.CopilotVSCode {
+					facts, ok := record.SelectedDelivery.LocalFacts()
+					if !ok || !facts.NativeStop || facts.CanonicalDigest != tree {
+						t.Fatal("missing selected Local identity")
+					}
+					body, err := os.ReadFile(filepath.Join(record.TargetLocator, filepath.FromSlash(vscodelocalhooks.PluginPath)))
+					if err != nil {
+						t.Fatal(err)
+					}
+					expected := []vscodelocalhooks.Spec{{Event: vscodelocalhooks.Stop, Executable: mat.Roots.HelperExecutable, Args: []string{"copilot-vscode-event", "--event", "Stop", "--control-root", b.ControlRoot, "--binding", b.BindingID}, TimeoutSeconds: 5}}
+					if err := vscodelocalhooks.VerifyOwned(body, cfg.TargetShell, expected); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			if !reflect.DeepEqual(before, registryFixtureFiles(t, local.PackageRoot)) {
+				t.Fatal("composition changed shared release bytes")
+			}
+
+			// Advance only Codex, then repair each client from its retained
+			// canonical revision. Local composition must not replace Codex's root.
+			retainedLocal := installation.Source.CanonicalSource
+			for _, b := range bindings {
+				if b.Integration == portable.CopilotVSCode {
+					cfg.HookSpecs = copilotvscodeinstall.LocalHookSpecs(b, mat.Roots.HelperExecutable)
+				}
+			}
+			reservedHook, err := vscodelocalhooks.Render(cfg.TargetShell, cfg.HookSpecs)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg.DeclaredHookDigest = fmt.Sprintf("sha256:%x", sha256.Sum256(reservedHook))
+			selectedAdapter, err := vscode.NewLocal(*cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mat.Registry, err = clients.NewRegistry(selectedAdapter, codex.New())
+			if err != nil {
+				t.Fatal(err)
+			}
+			newPackage := filepath.Join(root, "TEST-codex-revision-two")
+			copyPackage(t, retainedLocal, newPackage)
+			if err := os.Chmod(newPackage, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(filepath.Join(newPackage, "plugin.json"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(newPackage, "plugin.json"), []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent-notify","version":"1.0.1"}`), 0600); err != nil {
+				t.Fatal(err)
+			}
+			sibling.PackageRoot, sibling.ExpectedGeneration = newPackage, 0
+			sibling.OperationID = "TEST-codex-revision-update"
+			if _, err := mat.Update(testCtx(t), sibling); err != nil {
+				t.Fatal("independent sibling update", err)
+			}
+			mixed, err := mat.Store.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			mixedInstall, ok := findInstallation(mixed, local.Identity.InstallationID)
+			if !ok {
+				t.Fatal("missing mixed installation")
+			}
+			if mixedInstall.Clients[bindings[0].BindingID].PackageRevision.TreeDigest == mixedInstall.Clients[bindings[1].BindingID].PackageRevision.TreeDigest {
+				t.Fatal("fixture did not retain distinct revisions")
+			}
+			local.PackageRoot, local.Operation = retainedLocal, uapinstaller.OpRepair
+			currentSnapshot, err := installruntime.ReadInstalledSnapshot(local.Identity.ControlRoot)
+			if err != nil {
+				t.Fatal(err)
+			}
+			local.ExpectedGeneration, sibling.ExpectedGeneration = currentSnapshot.Ledger.Generation, currentSnapshot.Ledger.Generation
+			sibling.Operation = uapinstaller.OpRepair
+			local.OperationID, sibling.OperationID = "TEST-local-mixed-repair", "TEST-local-mixed-repair"
+			// Public repair uses the current desired revision as its first source.
+			repairs := []MaterializeRequest{sibling, local}
+			// Current public Local activation remains Prepared. Repair must pass
+			// revision preflight and preserve that truthful incomplete outcome,
+			// rather than attempt to rewrite Codex to Local's older tree.
+			_, repairErr := mat.ApplyGroup(testCtx(t), repairs)
+			var incomplete ResultError
+			if !errors.As(repairErr, &incomplete) || incomplete.Result.Outcome != uapinstaller.OutcomeIncomplete || incomplete.Result.Reason != "committed binding is not activated" {
+				t.Fatal("mixed retained repair must reach public activation boundary", repairErr)
+			}
+			afterRepair, err := mat.Store.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			repaired, ok := findInstallation(afterRepair, local.Identity.InstallationID)
+			if !ok {
+				t.Fatal("repair lost installation")
+			}
+			for id, previous := range mixedInstall.Clients {
+				current, ok := repaired.Clients[id]
+				if !ok || !reflect.DeepEqual(current.PackageRevision, previous.PackageRevision) || !reflect.DeepEqual(current.SelectedDelivery, previous.SelectedDelivery) || current.TargetLocator != previous.TargetLocator {
+					t.Fatal("repair rewrote retained client revision", id)
+				}
+			}
+		})
+	}
 }

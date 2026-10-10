@@ -19,7 +19,45 @@ import (
 // Physical profile authority is limited to the qualified Darwin arm64 tuple.
 // Positive proof requires the optional capability and persisted bound token.
 func NewLocalGate(ctx context.Context, b portable.Binding, cfg uapinstaller.Config) (Gate, PhysicalProof, *config.Config, error) {
+	if ctx == nil || ctx.Err() != nil || b.Integration != portable.CopilotVSCode {
+		return Gate{}, PhysicalProof{}, nil, ErrDenied
+	}
+	s, err := installruntime.ReadPolicySnapshot(ctx, b.ControlRoot)
+	if err != nil {
+		return Gate{}, PhysicalProof{}, nil, ErrDenied
+	}
+	return NewLocalGateFromSnapshot(ctx, b, cfg, s)
+}
+
+// NewLocalGateFromSnapshot qualifies against the caller's immutable policy
+// snapshot. Setup must retain the same AcquirePolicyLease through this call
+// and ConsumerBindingFromSnapshot, then release it before Commit.
+func NewLocalGateFromSnapshot(ctx context.Context, b portable.Binding, cfg uapinstaller.Config, s installruntime.PolicySnapshot) (Gate, PhysicalProof, *config.Config, error) {
 	deny := func() (Gate, PhysicalProof, *config.Config, error) { return Gate{}, PhysicalProof{}, nil, ErrDenied }
+	p, err := newLocalProofFromSnapshot(ctx, b, cfg, s)
+	if err != nil {
+		return deny()
+	}
+	snapshot := s.Installation
+	proof, err := p.CheckLocal(ctx, b, snapshot)
+	if err != nil {
+		return deny()
+	}
+	g := Gate{Binding: b, Proof: p, localInitial: proof, localObserver: p}
+	if _, _, err := g.qualify(ctx, s, consumerBinding(s, b)); err != nil {
+		return deny()
+	}
+	effective, identity, err := readLocalConfig(b)
+	if err != nil || identity != proof.configObservation {
+		return deny()
+	}
+	return g, proof, effective, nil
+}
+
+// newLocalProofFromSnapshot reconstructs the recorded selected adapter without
+// capturing authority. Native Gate and setup consent share these observations.
+func newLocalProofFromSnapshot(ctx context.Context, b portable.Binding, cfg uapinstaller.Config, s installruntime.PolicySnapshot) (*localProof, error) {
+	deny := func() (*localProof, error) { return nil, ErrDenied }
 	if ctx == nil || ctx.Err() != nil || b.Integration != portable.CopilotVSCode {
 		return deny()
 	}
@@ -31,8 +69,8 @@ func NewLocalGate(ctx context.Context, b portable.Binding, cfg uapinstaller.Conf
 			return deny()
 		}
 	}
-	snapshot, err := installruntime.ReadInstalledSnapshot(b.ControlRoot)
-	if err != nil || b.CheckSnapshot(snapshot) != nil {
+	snapshot := s.Installation
+	if b.CheckSnapshot(snapshot) != nil {
 		return deny()
 	}
 	r, err := readLocalRecord(cfg, b)
@@ -45,13 +83,18 @@ func NewLocalGate(ctx context.Context, b portable.Binding, cfg uapinstaller.Conf
 	}
 	f, _ := r.Binding.SelectedDelivery.LocalFacts()
 	target := vscodelocalhooks.Target{Shell: vscodelocalhooks.Shell(f.Tuple.TargetShell)}
-	specs := localSpecs(b, primary)
-	rendered, err := vscodelocalhooks.Render(target, specs)
-	if err != nil {
-		return deny()
+	var specs []vscodelocalhooks.Spec
+	var declaredDigest string
+	if f.NativeStop {
+		specs = localSpecs(b, primary)
+		rendered, err := vscodelocalhooks.Render(target, specs)
+		if err != nil {
+			return deny()
+		}
+		declaredDigest = "sha256:" + rawDigest(rendered)
 	}
-	adapter, err := vscode.NewLocal(vscode.LocalConfig{ProfileSettingsPath: f.SettingsPath, QualifiedTuple: f.Tuple, TargetShell: target, NativeStop: true,
-		HookSpecs: specs, DeclaredHookDigest: "sha256:" + rawDigest(rendered), MCPServers: f.MCPServers, Skills: f.Skills})
+	adapter, err := vscode.NewLocal(vscode.LocalConfig{ProfileSettingsPath: f.SettingsPath, QualifiedTuple: f.Tuple, TargetShell: target, NativeStop: f.NativeStop,
+		HookSpecs: specs, DeclaredHookDigest: declaredDigest, MCPServers: f.MCPServers, Skills: f.Skills})
 	if err != nil {
 		return deny()
 	}
@@ -69,24 +112,7 @@ func NewLocalGate(ctx context.Context, b portable.Binding, cfg uapinstaller.Conf
 	if err != nil {
 		return deny()
 	}
-	p := &localProof{cfg: owned, adapter: adapter, authority: authority, engine: engine}
-	proof, err := p.CheckLocal(ctx, b, snapshot)
-	if err != nil {
-		return deny()
-	}
-	g := Gate{Binding: b, Proof: p, localInitial: proof, localObserver: p}
-	s, err := installruntime.ReadPolicySnapshot(ctx, b.ControlRoot)
-	if err != nil {
-		return deny()
-	}
-	if _, _, err := g.qualify(ctx, s, consumerBinding(s, b)); err != nil {
-		return deny()
-	}
-	effective, identity, err := readLocalConfig(b)
-	if err != nil || identity != proof.configObservation {
-		return deny()
-	}
-	return g, proof, effective, nil
+	return &localProof{cfg: owned, adapter: adapter, authority: authority, engine: engine}, nil
 }
 
 // Explicit bound config readback; defaults and ambient discovery cannot opt in.

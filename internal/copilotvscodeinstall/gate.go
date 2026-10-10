@@ -128,6 +128,13 @@ func (g Gate) ConsumerBinding(ctx context.Context) (copilotvscodeevent.Binding, 
 	if err != nil {
 		return copilotvscodeevent.Binding{}, err
 	}
+	return g.ConsumerBindingFromSnapshot(ctx, s)
+}
+
+// ConsumerBindingFromSnapshot uses the snapshot already pinned by the caller's
+// policy lease. It does not acquire either lock again or authorize an effect;
+// the existing per-effect Gate lease still performs its own revalidation.
+func (g Gate) ConsumerBindingFromSnapshot(ctx context.Context, s installruntime.PolicySnapshot) (copilotvscodeevent.Binding, error) {
 	b := consumerBinding(s, g.Binding)
 	if _, _, err := g.qualify(ctx, s, b); err != nil {
 		return copilotvscodeevent.Binding{}, err
