@@ -64,7 +64,11 @@ func main() { json.NewEncoder(os.Stdout).Encode(map[string]any{"ok": true}) }
 		t.Fatal(err)
 	}
 	out := filepath.Join(dir, "probe")
-	cmd := exec.Command(filepath.Join(runtime.GOROOT(), "bin", "go"), "build", "-o", out, src)
+	compiler, err := exec.LookPath("go")
+	if err != nil {
+		t.Fatalf("locate TEST Go compiler: %v", err)
+	}
+	cmd := exec.Command(compiler, "build", "-o", out, src)
 	cmd.Env = append(os.Environ(), "GOTOOLCHAIN=local")
 	if body, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("build probe: %s %v", body, err)
@@ -7818,7 +7822,11 @@ func writeCodexListStub(t *testing.T, dir, listJSON string) string {
 		t.Fatal(err)
 	}
 	path := filepath.Join(dir, "codex-stub")
-	cmd := exec.Command(filepath.Join(runtime.GOROOT(), "bin", "go"), "build", "-o", path, src)
+	compiler, err := exec.LookPath("go")
+	if err != nil {
+		t.Fatalf("locate TEST Go compiler: %v", err)
+	}
+	cmd := exec.Command(compiler, "build", "-o", path, src)
 	cmd.Env = append(os.Environ(), "GOTOOLCHAIN=local")
 	if body, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("build codex stub: %s %v", body, err)
