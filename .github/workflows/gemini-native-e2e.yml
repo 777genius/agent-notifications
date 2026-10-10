@@ -1,54 +1,44 @@
-name: Gemini native G0 and production G5
+name: Gemini ARM64 private syscall diagnostic
 
+# Diagnostic only: tracing changes scheduling. This run never qualifies a release.
 on:
   workflow_dispatch:
-    inputs:
-      driver:
-        type: choice
-        default: full
-        options: [full, g5-only]
-        description: Full G0/G5 or one fresh Linux amd64 G5 diagnostic
-  pull_request:
-    paths:
-      - '.github/workflows/gemini-native-e2e.yml'
-      - 'scripts/gemini-native-ci.py'
-      - 'tests/integration/gemini_native_e2e.py'
-      - 'tests/integration/gemini_native_pty.cjs'
-      - 'tests/integration/gemini_notifications_e2e.py'
-      - 'tests/integration/gemini_frame_capture.py'
-      - 'tests/integration/gemini_frame_capture_test.py'
-      - 'tests/integration/gemini_frame_classifier/**'
-      - 'tests/integration/gemini-ui-contract.json'
-      - 'cmd/claude-notifications/**'
-      - 'internal/**'
-      - 'go.mod'
-      - 'go.sum'
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
 
+concurrency:
+  group: gemini-arm64-diagnostic-${{ github.run_id }}
+  cancel-in-progress: false
+
 jobs:
-  native-webhook:
-    name: Gemini ${{ matrix.platform }} ${{ matrix.arch }}
-    runs-on: ${{ matrix.runner }}
+  diagnostic:
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        include: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.driver == 'g5-only' && '[{"runner":"ubuntu-24.04","platform":"linux","arch":"amd64"}]' || '[{"runner":"ubuntu-24.04","platform":"linux","arch":"amd64"},{"runner":"ubuntu-24.04-arm","platform":"linux","arch":"arm64"},{"runner":"windows-2025","platform":"windows","arch":"amd64"},{"runner":"macos-15","platform":"darwin","arch":"arm64"},{"runner":"macos-15-intel","platform":"darwin","arch":"amd64"}]') }}
+    env:
+      TEST_CANDIDATE: 19d71b0624e9ed3ad5c4b6d1eca60e51a1fe71c0
     steps:
-      - name: Checkout exact candidate
+      - name: Admit one fresh manual diagnostic
+        shell: bash
+        run: |
+          test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          test "$GITHUB_RUN_ATTEMPT" = 1
+          test "$GITHUB_SHA" != "$TEST_CANDIDATE"
+      - name: Checkout diagnostic workflow identity D
         uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.sha }}
+          path: diagnostic
+          persist-credentials: false
+      - name: Checkout frozen promotion P
+        uses: actions/checkout@v7
+        with:
+          ref: 19d71b0624e9ed3ad5c4b6d1eca60e51a1fe71c0
+          path: candidate
           persist-credentials: false
       - uses: actions/setup-go@v7
         with:
-          go-version-file: go.mod
+          go-version-file: candidate/go.mod
           cache: false
       - uses: actions/setup-node@v6
         with:
@@ -56,38 +46,362 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
-      - name: Install Linux build dependency
-        if: matrix.platform == 'linux'
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
-      - name: Pure runner checks
-        run: python -B scripts/gemini-native-ci.py --self-test
-      - name: Pure native-driver evidence guards
-        run: python -B tests/integration/gemini_notifications_e2e.py --self-test
-      - name: Pure private capture custody checks
-        if: matrix.platform == 'linux'
-        run: python -B tests/integration/gemini_frame_capture_test.py -v
-      - name: Build actual artifacts and qualify native webhook events
-        # pwsh is also an explicit physical hook-shell input on Windows.
-        # Native child environments are constructed by G0, never inherited here.
-        shell: pwsh
-        env:
-          CANDIDATE_DRIVER: ${{ github.event_name == 'workflow_dispatch' && inputs.driver || 'full' }}
-          CANDIDATE_PLATFORM: ${{ matrix.platform }}
-          CANDIDATE_ARCH: ${{ matrix.arch }}
-          CANDIDATE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Install unchanged build dependency and external tracer
+        shell: bash
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev strace
+      - name: Prepare private tracing and closed projection
+        shell: bash
         run: |
-          $hookShell = if ($IsWindows) { (Get-Command pwsh -CommandType Application | Select-Object -First 1).Source } else { (Get-Command bash -CommandType Application | Select-Object -First 1).Source }
-          $argsForCI = @('--trusted-github-runner', '--platform', $env:CANDIDATE_PLATFORM, '--arch', $env:CANDIDATE_ARCH, '--commit', $env:CANDIDATE_COMMIT, '--hook-shell', $hookShell)
-          if ($env:CANDIDATE_DRIVER -eq 'g5-only') { $argsForCI += '--g5-only' }
-          if ($IsWindows) { $argsForCI += @('--system-root', $env:SystemRoot) }
-          python -B scripts/gemini-native-ci.py @argsForCI
-          exit $LASTEXITCODE
-      - name: Attach bounded evidence on pass or failure
+          umask 077
+          cat > "$RUNNER_TEMP/TEST-gemini-arm64-diagnostic.py" <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import shutil
+          import stat
+          import subprocess
+          import sys
+          import tempfile
+
+          P = '19d71b0624e9ed3ad5c4b6d1eca60e51a1fe71c0'
+          CALLS = ('clone', 'clone3', 'execve', 'execveat', 'exit', 'exit_group', 'wait4', 'waitid',
+                   'openat', 'openat2', 'newfstatat', 'statx', 'fstat', 'close', 'fcntl', 'flock',
+                   'fsync', 'fdatasync', 'renameat', 'renameat2', 'unlinkat', 'connect')
+          ERRNOS = set('EACCES EAGAIN EBADF EBUSY ECHILD ECONNREFUSED ECONNRESET EEXIST EFAULT EINPROGRESS EINTR EINVAL EIO EISDIR ELOOP EMFILE ENAMETOOLONG ENETUNREACH ENFILE ENOENT ENOMEM ENOSPC ENOSYS ENOTCONN ENOTDIR ENOTEMPTY ENOTSOCK EOPNOTSUPP EPERM EPIPE EROFS ESRCH ETIMEDOUT EXDEV ERESTARTSYS ERESTARTNOHAND ERESTART_RESTARTBLOCK'.split())
+          ROLES = {'component_lock', 'policy_lock', 'policy', 'ownership', 'receipt', 'native_settings',
+                   'config', 'observation_lock', 'observation_document', 'observation_stage', 'runtime', 'network', 'process'}
+          ROLES |= {'hint_' + name for name in ROLES - {'network', 'process'}}
+          CASES = ('plain', 'equal', 'approve', 'approve', 'deny', 'cancel', 'recovery')
+          HOOKS = ('AfterAgent', 'AfterAgent', 'Notification', 'AfterAgent', 'Notification', 'Notification', 'AfterAgent')
+          MAX_BYTES, MAX_LINES, MAX_EVENTS = 64 * 1024 * 1024, 500000, 4096
+
+
+          def require(ok):
+              if not ok:
+                  raise ValueError('diagnostic_contract')
+
+
+          def sha(path):
+              with Path(path).open('rb') as stream:
+                  return hashlib.file_digest(stream, 'sha256').hexdigest()
+
+
+          def git(root, *args):
+              return subprocess.check_output(['git', '-C', str(root), *args], text=True).strip()
+
+
+          def snapshot(root):
+              return {'commit': git(root, 'rev-parse', 'HEAD'), 'tree': git(root, 'rev-parse', 'HEAD^{tree}'),
+                      'clean': git(root, 'status', '--porcelain', '--untracked-files=all') == ''}
+
+
+          def write(path, value):
+              raw = json.dumps(value, sort_keys=True, separators=(',', ':')) + '\n'
+              require(len(raw) <= 65536)
+              Path(path).write_text(raw)
+
+
+          def role(args):
+              # Private path text is inspected only here; it is never returned or copied.
+              for suffix, label in (('/.component-install.lock', 'component_lock'),
+                                    ('/agent-notifications.json.lock', 'policy_lock'),
+                                    ('/agent-notifications.json', 'policy'), ('/ownership.json', 'ownership'),
+                                    ('/gemini-receipt.json', 'receipt'), ('/.gemini/settings.json', 'native_settings'),
+                                    ('/claude-notifications-go/config.json', 'config'),
+                                    ('/gemini-observations/.observations.lock', 'observation_lock'),
+                                    ('/gemini-observations/observations.json', 'observation_document'),
+                                    ('/claude-notifications-linux-arm64', 'runtime')):
+                  if suffix + '"' in args:
+                      return label
+              if '/gemini-observations/' in args and '"' in args:
+                  return 'observation_stage'
+              # Confined readers use numeric dirfds and leaf names. These labels are
+              # hints only: this bounded trace does not reconstruct directory custody.
+              for leaf, label in (('.component-install.lock', 'component_lock'),
+                                  ('agent-notifications.json.lock', 'policy_lock'),
+                                  ('agent-notifications.json', 'policy'), ('ownership.json', 'ownership'),
+                                  ('gemini-receipt.json', 'receipt'), ('settings.json', 'native_settings'),
+                                  ('config.json', 'config'), ('.observations.lock', 'observation_lock'),
+                                  ('observations.json', 'observation_document'),
+                                  ('claude-notifications-linux-arm64', 'runtime')):
+                  if '"' + leaf + '"' in args:
+                      return 'hint_' + label
+              if re.search(r'"\.observations-[0-9a-f]{32}"', args):
+                  return 'hint_observation_stage'
+              return None
+
+
+          def sanitize(raw, outcomes):
+              require(len(raw) <= MAX_BYTES and b'\x00' not in raw)
+              lines = raw.decode('ascii', errors='strict').splitlines()
+              require(len(lines) <= MAX_LINES)
+              pending, parents, fdsets, roots, events = {}, {}, {}, [], []
+              # Parse the entire private trace before returning any timeline. Unknown shapes fail closed.
+              for line in lines:
+                  require(len(line) <= 8192)
+                  match = re.fullmatch(r'(\d+)\s+(\d+\.\d+)\s+(.+)', line)
+                  require(match is not None)
+                  pid, at, body = int(match[1]), float(match[2]), match[3]
+                  require(0 < pid < 2**31 and 0 <= at <= 10**11)
+                  if re.fullmatch(r'--- SIG[A-Z0-9]+ \{.*\} ---|\+\+\+ (?:exited with \d+|killed by SIG[A-Z0-9]+(?: \(core dumped\))?) \+\+\+', body):
+                      continue
+                  if body.endswith(' <unfinished ...>'):
+                      require(pid not in pending and len(pending) < 4096)
+                      pending[pid] = (at, body[:-17])
+                      continue
+                  resumed = re.fullmatch(r'<\.\.\. ([a-z0-9_]+) resumed>(.*)', body)
+                  if resumed:
+                      require(pid in pending)
+                      at, prefix = pending.pop(pid)
+                      require(prefix.startswith(resumed[1] + '('))
+                      body = prefix + resumed[2]
+                  call = re.fullmatch(r'([a-z0-9_]+)\((.*)\)\s+=\s+(.*?)(?:\s+<(\d+\.\d+)>)?', body)
+                  require(call is not None and call[1] in CALLS)
+                  name, args, result = call[1], call[2], call[3]
+                  duration = float(call[4] or '0')
+                  require(0 <= duration <= 1000)
+                  result_match = re.fullmatch(r'(-?(?:0x[0-9a-f]+|\d+))(?: (E[A-Z0-9_]+) \(.*\)| \([^\n]*\))?|\?(?: (E[A-Z0-9_]+) \(.*\))?', result)
+                  require(result_match is not None)
+                  value = int(result_match[1], 16 if '0x' in result_match[1] else 10) if result_match[1] else None
+                  errno = result_match[2] or result_match[3] or 'none'
+                  require(errno == 'none' or errno in ERRNOS)
+                  require(value is None or -(2**63) <= value < 2**64)
+                  if name in ('clone', 'clone3') and value is not None and value > 0:
+                      require(value not in parents and len(parents) < 16384)
+                      parents[value] = pid
+                      if 'CLONE_FILES' in args:
+                          fdsets.setdefault(pid, {}).update(fdsets.get(value, {}))
+                          fdsets[value] = fdsets[pid]
+                      else:
+                          fdsets[value] = {**fdsets.get(pid, {}), **fdsets.get(value, {})}
+                  if name == 'execve' and value == 0:
+                      hook = re.search(r'"[^"\n]*/claude-notifications-linux-arm64", \["[^"\n]*", "gemini-event", .*"--event", "(AfterAgent|Notification)"\]', args)
+                      if hook:
+                          require(len(roots) < 64)
+                          roots.append((pid, at, hook[1]))
+                  label = role(args)
+                  first_fd = re.match(r'(\d+)(?:,|$)', args)
+                  descriptors = fdsets.setdefault(pid, {})
+                  if not label and first_fd and name in ('flock', 'fcntl', 'fsync', 'fdatasync', 'close', 'fstat'):
+                      label = descriptors.get(int(first_fd[1]))
+                  if name in ('openat', 'openat2') and value is not None and value >= 0:
+                      if label:
+                          descriptors[value] = label
+                      else:
+                          descriptors.pop(value, None)
+                  if name == 'close' and value == 0 and first_fd:
+                      descriptors.pop(int(first_fd[1]), None)
+                  if name == 'connect':
+                      label = 'network'
+                  if name in ('execve', 'exit', 'exit_group'):
+                      label = 'process'
+                  if label:
+                      # Retain scalar facts only, even transiently in the projected event list.
+                      require(len(events) < 100000)
+                      events.append((pid, at, name, label, errno, value, round(duration * 1000000)))
+              # A killed trace may leave unfinished calls. These are explicitly unavailable, never inferred.
+              require(not pending)
+              require(len(roots) >= 7)
+              require(tuple(item[2] for item in roots[:7]) == HOOKS)
+              rows = outcomes.get('outcomes', [])
+              require(outcomes.get('identity_checked') is True and outcomes.get('parse_complete') is True)
+              require(len(rows) >= 7 and tuple(row.get('case') for row in rows[:7]) == CASES)
+              require(tuple(row.get('role') for row in rows[:7]) == HOOKS)
+              initial = {pid: (index, at) for index, (pid, at, _) in enumerate(roots[:7])}
+              timeline = []
+              for pid, at, name, label, errno, value, elapsed in events:
+                  ancestor, seen = pid, set()
+                  while ancestor not in initial and ancestor in parents:
+                      require(ancestor not in seen and len(seen) < 256)
+                      seen.add(ancestor)
+                      ancestor = parents[ancestor]
+                  if ancestor not in initial:
+                      continue
+                  index, origin = initial[ancestor]
+                  # Exclude setup activity in a process before it execs the production hook.
+                  if at < origin:
+                      continue
+                  require(len(timeline) < MAX_EVENTS)
+                  timeline.append({'hook': index + 1, 'pid': pid, 'offset_us': round((at - origin) * 1000000),
+                                   'syscall': name, 'role': label, 'errno': errno, 'result': value, 'elapsed_us': elapsed})
+              summary = {'schema': 1, 'classification': 'parsed', 'qualification': 'nonqualifying_trace_overhead',
+                         'coverage': 'relative_names_are_hints_dirfd_identity_and_Go_decisions_unproved',
+                         'join': 'first_seven_exec_order_and_SDK_roles', 'hooks': [
+                             {'hook': i + 1, 'case': CASES[i], 'role': HOOKS[i], 'pid': roots[i][0]} for i in range(7)],
+                         'timeline': timeline}
+              # Closed output schema: paths, argv, input buffers, environment and raw lines cannot escape.
+              require(set(summary) == {'schema', 'classification', 'qualification', 'coverage', 'join', 'hooks', 'timeline'})
+              for row in timeline:
+                  require(set(row) == {'hook', 'pid', 'offset_us', 'syscall', 'role', 'errno', 'result', 'elapsed_us'})
+                  require(row['syscall'] in CALLS and row['role'] in ROLES and row['errno'] in ERRNOS | {'none'})
+                  require(all(type(row[k]) is int and 0 <= row[k] <= 10**12 for k in ('hook', 'pid', 'offset_us', 'elapsed_us')))
+              require(len(json.dumps(summary)) <= 65536)
+              return summary
+
+
+          def self_test():
+              # These fixtures catch a leak, a lost split syscall/Go thread, or a false case join.
+              outcomes = {'identity_checked': True, 'parse_complete': True, 'outcomes': [
+                  {'case': case, 'role': hook} for case, hook in zip(CASES, HOOKS)]}
+              lines = []
+              for i, hook in enumerate(HOOKS):
+                  pid = 100 + 10 * i
+                  lines += [f'{pid} 1000.000000 execve("/TEST-secret/claude-notifications-linux-arm64", ["private", "gemini-event", "--control-root", "/TEST-secret", "--event", "{hook}"], 0x1 /* 2 vars */) = 0 <0.001000>',
+                            f'{pid} 1000.001000 clone3({{flags=CLONE_FILES|CLONE_THREAD}}, 88) = {pid+1} <0.000100>',
+                            f'{pid+1} 1000.002000 openat(AT_FDCWD, "/TEST-secret/gemini-observations/.observations.lock", O_RDONLY) = 5 <0.000200>',
+                            f'{pid+1} 1000.003000 flock(5, LOCK_EX|LOCK_NB <unfinished ...>',
+                            f'{pid+1} 1000.004000 <... flock resumed>) = -1 EAGAIN (Resource temporarily unavailable) <0.001000>',
+                            f'{pid+1} 1000.005000 openat(6, "ownership.json", O_RDONLY|O_NOFOLLOW) = 7 <0.000100>',
+                            f'{pid+1} 1000.006000 fstat(7, {{st_mode=S_IFREG|0600}}) = 0 <0.000100>',
+                            f'{pid+1} 1000.007000 close(7) = 0 <0.000100>',
+                            f'{pid+1} 1000.008000 openat(6, "settings.json", O_RDONLY|O_NOFOLLOW) = 8 <0.000100>',
+                            f'{pid+1} 1000.009000 fstat(8, {{st_mode=S_IFREG|0600}}) = 0 <0.000100>',
+                            f'{pid+1} 1000.010000 close(8) = 0 <0.000100>',
+                            f'{pid+1} 1000.011000 openat(6, "TEST-secret.json", O_RDONLY) = 9 <0.000100>',
+                            f'{pid+1} 1000.012000 exit_group(0) = ?']
+              raw = ('\n'.join(lines) + '\n').encode()
+              result = sanitize(raw, outcomes)
+              require(len(result['hooks']) == 7 and any(row['hook'] == 2 and row['role'] == 'observation_lock' and row['errno'] == 'EAGAIN' for row in result['timeline']))
+              require('secret' not in json.dumps(result) and 'private' not in json.dumps(result))
+              require(result['classification'] == 'parsed' and 'dirfd_identity' in result['coverage'])
+              for hint in ('hint_ownership', 'hint_native_settings'):
+                  require({row['syscall'] for row in result['timeline'] if row['role'] == hint} == {'openat', 'fstat', 'close'})
+              for bad, facts in ((raw + b'PRIVATE-UNKNOWN-LINE\n', outcomes), (raw.replace(b'EAGAIN', b'ESECRET'), outcomes),
+                                 (raw.replace(b'flock resumed', b'fcntl resumed'), outcomes), (raw, {'outcomes': []}),
+                                 (b'x' * (MAX_BYTES + 1), outcomes), (raw + b'\x00', outcomes)):
+                  try:
+                      sanitize(bad, facts)
+                  except (ValueError, UnicodeError):
+                      continue
+                  raise ValueError('negative_fixture_accepted')
+              print('sanitizer: split syscall, thread ownership, seven-case join, relative leaf hints, privacy and six fail-closed fixtures passed')
+
+
+          def prepare():
+              require(os.environ['GITHUB_RUN_ATTEMPT'] == '1' and os.environ['GITHUB_EVENT_NAME'] == 'workflow_dispatch')
+              candidate, diagnostic = Path('candidate').resolve(), Path('diagnostic').resolve()
+              before = {'candidate': snapshot(candidate), 'diagnostic': snapshot(diagnostic)}
+              require(before['candidate']['commit'] == P and before['candidate']['clean'])
+              require(before['diagnostic']['commit'] == os.environ['GITHUB_SHA'] == os.environ['GITHUB_WORKFLOW_SHA'] != P
+                      and before['diagnostic']['clean'])
+              private = Path(tempfile.mkdtemp(prefix='TEST-gemini-arm64-trace-', dir='/tmp'))
+              private.chmod(0o700)
+              raw = private / 'trace'
+              raw.touch(mode=0o600)
+              with open(os.environ['GITHUB_ENV'], 'a') as stream:
+                  stream.write(f'TEST_TRACE_PRIVATE={private}\n')
+              python = Path(sys.executable).resolve()
+              tracer = Path(shutil.which('strace')).resolve()
+              original = candidate / 'tests/integration/gemini_notifications_e2e.py'
+              wrapper = private / 'g5-wrapper.py'
+              argv = [str(tracer), '-f', '-qq', '-ttt', '-T', '-s', '512', '-e', 'trace=' + ','.join(CALLS),
+                      '-o', str(raw), '--', str(python), '-B', str(original)]
+              wrapper.write_text('import os, sys\nos.execv(' + repr(str(tracer)) + ', ' + repr(argv) + ' + sys.argv[1:])\n')
+              wrapper.chmod(0o600)
+              custody = {'schema': 1, 'before': before, 'workflow_sha': os.environ['GITHUB_WORKFLOW_SHA'],
+                         'original_G5_sha256': sha(original),
+                         'wrapper_sha256': sha(wrapper), 'diagnostic_script_sha256': sha(__file__),
+                         'python_sha256': sha(python), 'strace_sha256': sha(tracer),
+                         'qualification': 'nonqualifying_trace_overhead'}
+              write(Path(os.environ['RUNNER_TEMP']) / 'TEST-gemini-arm64-custody.json', custody)
+              with open(os.environ['GITHUB_ENV'], 'a') as stream:
+                  stream.write(f'TEST_G5_WRAPPER={wrapper}\n')
+
+
+          def finish():
+              private = Path(os.environ['TEST_TRACE_PRIVATE'])
+              raw = private / 'trace'
+              evidence = Path(os.environ['RUNNER_TEMP']) / 'gemini-native-ci-evidence'
+              evidence.mkdir(mode=0o700, exist_ok=True)
+              custody = json.loads((Path(os.environ['RUNNER_TEMP']) / 'TEST-gemini-arm64-custody.json').read_text())
+              summary = {'schema': 1, 'classification': 'unavailable', 'reason': 'trace_or_projection_contract',
+                         'qualification': 'nonqualifying_trace_overhead'}
+              valid = False
+              try:
+                  identity = raw.lstat()
+                  require(stat.S_ISREG(identity.st_mode) and identity.st_nlink == 1 and identity.st_uid == os.getuid()
+                          and stat.S_IMODE(identity.st_mode) == 0o600 and identity.st_size <= MAX_BYTES)
+                  fd = os.open(raw, os.O_RDONLY | os.O_NOFOLLOW)
+                  with os.fdopen(fd, 'rb') as stream:
+                      held = os.fstat(stream.fileno())
+                      require((held.st_dev, held.st_ino, held.st_size) == (identity.st_dev, identity.st_ino, identity.st_size))
+                      payload = stream.read(MAX_BYTES + 1)
+                  custody['private_trace_sha256'] = hashlib.sha256(payload).hexdigest()
+                  facts = json.loads((evidence / 'G5-SDK-hook-outcomes.json').read_bytes())
+                  summary = sanitize(payload, facts)
+                  valid = True
+              except Exception:
+                  # Never expose an exception message: parsers can include private trace text.
+                  pass
+              finally:
+                  raw.unlink(missing_ok=True)
+              custody['after'] = {'candidate': snapshot(Path('candidate')), 'diagnostic': snapshot(Path('diagnostic'))}
+              custody['driver_exit_code'] = int(os.environ['TEST_DRIVER_EXIT_CODE'])
+              custody['private_trace_removed'] = not raw.exists()
+              custody['trees_unchanged'] = custody['before'] == custody['after']
+              custody['original_G5_unchanged'] = custody['original_G5_sha256'] == sha(Path('candidate/tests/integration/gemini_notifications_e2e.py'))
+              custody['wrapper_unchanged'] = custody['wrapper_sha256'] == sha(Path(os.environ['TEST_G5_WRAPPER']))
+              write(evidence / 'diagnostic-summary.json', summary)
+              write(evidence / 'diagnostic-custody.json', custody)
+              require(valid and custody['trees_unchanged'] and custody['original_G5_unchanged'] and custody['wrapper_unchanged'])
+
+
+          if __name__ == '__main__':
+              try:
+                  {'prepare': prepare, 'finish': finish, 'self-test': self_test}[sys.argv[1]]()
+              except Exception:
+                  print('ARM64 diagnostic contract failed; no private trace details emitted', file=sys.stderr)
+                  sys.exit(1)
+          PY
+          python -B "$RUNNER_TEMP/TEST-gemini-arm64-diagnostic.py" self-test
+          python -B "$RUNNER_TEMP/TEST-gemini-arm64-diagnostic.py" prepare
+      - name: Run original G0 and G5 exactly once with original budgets
+        id: driver
+        shell: bash
+        run: |
+          status=0
+          python -B candidate/scripts/gemini-native-ci.py \
+            --trusted-github-runner --platform linux --arch arm64 \
+            --commit "$TEST_CANDIDATE" --hook-shell /usr/bin/bash \
+            --g5-driver "$TEST_G5_WRAPPER" || status=$?
+          echo "TEST_DRIVER_EXIT_CODE=$status" >> "$GITHUB_ENV"
+          exit "$status"
+      - name: Project trace and verify source custody, even on failure
+        if: ${{ always() && env.TEST_TRACE_PRIVATE != '' }}
+        shell: bash
+        run: python -B "$RUNNER_TEMP/TEST-gemini-arm64-diagnostic.py" finish
+      - name: Remove private trace and wrapper, even if projection fails
+        if: ${{ always() && env.TEST_TRACE_PRIVATE != '' }}
+        shell: bash
+        run: |
+          python -B - <<'PY'
+          import os, shutil, stat
+          from pathlib import Path
+          private = Path(os.environ['TEST_TRACE_PRIVATE'])
+          identity = private.lstat()
+          assert private.parent == Path('/tmp') and private.name.startswith('TEST-gemini-arm64-trace-')
+          assert stat.S_ISDIR(identity.st_mode) and not private.is_symlink()
+          assert identity.st_uid == os.getuid() and stat.S_IMODE(identity.st_mode) == 0o700
+          shutil.rmtree(private)
+          PY
+      - name: Retain only closed manifests, custody, and sanitized summary
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: gemini-native-${{ matrix.platform }}-${{ matrix.arch }}
-          # Only the explicit evidence directory is uploaded, never the TEST lab.
-          path: ${{ runner.temp }}/gemini-native-ci-evidence/*
-          if-no-files-found: warn
-          retention-days: 14
+          name: gemini-arm64-diagnostic-nonqualifying
+          path: |
+            ${{ runner.temp }}/gemini-native-ci-evidence/ci-evidence.json
+            ${{ runner.temp }}/gemini-native-ci-evidence/G0-evidence.json
+            ${{ runner.temp }}/gemini-native-ci-evidence/G5-evidence.json
+            ${{ runner.temp }}/gemini-native-ci-evidence/G0-SDK-hook-outcomes.json
+            ${{ runner.temp }}/gemini-native-ci-evidence/G5-SDK-hook-outcomes.json
+            ${{ runner.temp }}/gemini-native-ci-evidence/go-modules.json
+            ${{ runner.temp }}/gemini-native-ci-evidence/go-version-m.txt
+            ${{ runner.temp }}/gemini-native-ci-evidence/go-version-m-update.txt
+            ${{ runner.temp }}/gemini-native-ci-evidence/npm-package-lock.json
+            ${{ runner.temp }}/gemini-native-ci-evidence/diagnostic-custody.json
+            ${{ runner.temp }}/gemini-native-ci-evidence/diagnostic-summary.json
+          if-no-files-found: error
+          retention-days: 7
