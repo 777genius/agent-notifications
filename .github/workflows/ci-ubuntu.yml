@@ -702,7 +702,7 @@ jobs:
               ('contract-fixtures-r1364/matrix-go.sum', 322, '7556b81d5e8726d4d82ddf008b6c89eab585731afaf27c4a6b27ee6a8ae3e8be'),
               ('contract-fixtures-r1364/matrix_actor.c', 3889, '0541d4e8e3d61269aaaa5dcdf6f5f8a5cd09a3fe5651fda077e689a08f5eb390'),
               ('contract-fixtures-r1364/matrix_controller.py', 7832, '735964e05acd4056633f1cd98f1264b765743c5e730ebf28bad309f1f1cbc493'),
-              ('contract-fixtures-r1364/matrix_helper.go', 9374, '63d21b9d2db208b3398d021900886dd49cafb893447a534466b7a691345f6065'),
+              ('contract-fixtures-r1364/matrix_helper.go', 9413, '30117bcd232e43d2eaeb8908f6a0ddb5f038931ccb2583f17648c1fc22a44cba'),
               ('contract-fixtures-r1364/original_reader_boundary.py', 3958, 'df314e86e0a5edec6fbf78042f40fe7b0fdd98f7431a45280ef8416f8084112a'),
               ('contract-fixtures-r1364/pure_checks.py', 4610, 'e228bea229023ff62d529742172dd1e3bf72600832c653eb14dc9d046e3b3234'),
               ('exact-old-executor/linux_contract.py', 11950, 'ef77db92d6adc58b6dbf18c52ab3085118981ae15a2824fa46add7e7ef467752'),
@@ -714,7 +714,7 @@ jobs:
               ('src/syscall.c', 38750, '390ff1bc410226b4c843ee046ba8e576879e0edc2b3b3087c79afb4ceb506803'),
               ('exact-old-executor/src/strace.c', 125181, '7953842ccb83b6419172217943b0f1c40ce4b10f3514a093ea9feb333f1da452'),
           )
-          assert len(tuples) == 21 and sum(row[1] for row in tuples) == 1190283
+          assert len(tuples) == 21 and sum(row[1] for row in tuples) == 1190322
           workspace = pathlib.Path(subprocess.check_output(['/usr/bin/sudo','-n','/usr/bin/python3','-B','-S','-c',"import os,pathlib,tempfile; p=pathlib.Path(tempfile.mkdtemp(prefix='TEST-cursor-proof-',dir='/srv/workers')); p.chmod(0o755); (p/'source').mkdir(mode=0o755); os.chown(p/'source',int(os.environ['SUDO_UID']),int(os.environ['SUDO_GID'])); print(p)"],text=True,timeout=5).strip())
           assert workspace.parent == pathlib.Path('/srv/workers') and workspace.name.startswith('TEST-cursor-proof-') and workspace.resolve(strict=True) == workspace and workspace.stat().st_uid == 0
           with open(os.environ['GITHUB_ENV'],'a') as environment: environment.write('CURSOR_PROOF_WORKSPACE='+str(workspace)+'\n')

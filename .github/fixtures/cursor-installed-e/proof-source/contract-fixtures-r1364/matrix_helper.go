@@ -3,6 +3,7 @@ package main
 
 import (
     "fmt"
+    "errors"
     "encoding/json"
     "os"
     "runtime"
@@ -148,13 +149,13 @@ func main() {
             case "close-range-unshare":
                 _, _, e := syscall.RawSyscall(436, uintptr(fd), uintptr(fd), 2)
                 if e != 0 { return e }; return nil
-            case "close": return conn.Close()
+            case "close": return syscall.Close(fd)
             default: panic("TEST unknown shared operation")
             }
         })
-        // The UNSHARE worker closed only its copied table. Main still owns
-        // the original descriptor and closes it through the real godbus path.
-        check(conn.Close())
+        // UNSHARE preserves main's descriptor; shared close already closed it.
+        err = conn.Close()
+        if err != nil && !(operation == "close" && errors.Is(err, syscall.EBADF)) { panic(err) }
         return
     }
     switch mode {
