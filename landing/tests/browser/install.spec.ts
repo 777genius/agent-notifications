@@ -341,6 +341,9 @@ test("language menu is searchable, keyboard accessible and closes outside", asyn
   page,
 }) => {
   await page.goto("");
+  // Desktop OS detection runs onMounted. Wait for its visible result before
+  // sending a key to the server-rendered trigger, whose handler may not exist yet.
+  await expect(page.locator(".os-summary small")).toHaveText("Detected automatically");
   const trigger = page.getByRole("button", { name: /Current language/ });
   await trigger.press("ArrowDown");
   const search = page.getByRole("searchbox", { name: "Search languages" });
