@@ -367,6 +367,7 @@ class Observations:
                         # checkpoint/text is invented or fed by the fixture.
                         release.wait(self.trace.clock.wait(2))
                     else:
+                        self.owner.fd(os.dup(wanted.fileno()))
                         wanted.close()
                         self.reader_fault['actualOwnStreamClosed'] = wanted.closed
             if event == 'call' and tag == 'complete' and self.blocked_hold is not None and local['context'] is self.blocked_hold['context']:
