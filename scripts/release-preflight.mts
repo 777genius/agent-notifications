@@ -70,9 +70,21 @@ export function validatePreflight(read: Read, options: Options, head?: string): 
     ], 'Platform guide');
   }
   for (const locale of locales) {
-    const install = object(object(json(read, `landing/locales/${locale}.json`).install).gemini);
-    requireValue(typeof install.version === 'string' && install.version.startsWith(`Linux / Windows: ${linux} (`) &&
-      install.version.includes(`macOS: ${mac} (`), `${locale} manual channel version stale`);
+    const install = object(json(read, `landing/locales/${locale}.json`).install);
+    // The shared rendered release heading receives the published channel value.
+    // Gemini's manual support prose describes its host CLI version separately.
+    const heading = install.platformRelease;
+    const tokens: string[] = typeof heading === 'string' ? heading.match(/\{[^{}]*\}/g) ?? [] : [];
+    requireValue(typeof heading === 'string' && tokens.length === 2 &&
+      tokens.includes('{version}') && tokens.includes('{os}') &&
+      !/[{}]/.test(heading.replace(/\{[^{}]*\}/g, '')) && !/\b[0-9]+\.[0-9]+\.[0-9]+\b/.test(heading),
+    `${locale} platform release version stale or invalid interpolation`);
+    const manual = object(install.gemini).version;
+    requireValue(typeof manual === 'string', `${locale} Gemini support text is required`);
+    if (/Linux \/ Windows:|macOS:/.test(manual)) {
+      requireValue(manual.startsWith(`Linux / Windows: ${linux} (`) && manual.includes(`macOS: ${mac} (`),
+        `${locale} manual channel version stale`);
+    }
   }
   const marketplace = json(read, '.claude-plugin/marketplace.json');
   requireValue(Array.isArray(marketplace.plugins), 'Marketplace plugins must be an array');

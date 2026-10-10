@@ -2,6 +2,7 @@ import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 import { validatePreflight, type Options } from './release-preflight.mts';
 const C = 'a'.repeat(40), S = 'b'.repeat(40);
+const locales = ['ar', 'de', 'en', 'es', 'fr', 'hi', 'it', 'ja', 'ko', 'pt', 'ru', 'zh'];
 const options: Options = { mode: 'candidate', version: '1.49.0', sourceSHA: C };
 // Deliberately different candidate and published versions: freezing source must
 // not prematurely activate channels or rewrite public instructions.
@@ -21,8 +22,11 @@ function fixture(promotion = false): Record<string, string> {
         return [os, arch, `v${published}`, promotion ? C : 'c'.repeat(40), S, os === 'darwin' ? 'release/platform-macos' : 'release/platform-linux-windows'].join('\t');
       }).join('\n') + '\n',
   };
-  for (const locale of ['ar', 'de', 'en', 'es', 'fr', 'hi', 'it', 'ja', 'ko', 'pt', 'ru', 'zh'])
-    files[`landing/locales/${locale}.json`] = JSON.stringify({ install: { gemini: { version: `Linux / Windows: ${published} (Gemini CLI 0.62.0). macOS: ${published} (Claude, Codex CLI, OpenCode)` } } });
+  for (const locale of locales)
+    files[`landing/locales/${locale}.json`] = JSON.stringify({ install: {
+      platformRelease: 'Qualified release for {os}: {version}.',
+      gemini: { version: 'Gemini CLI requires exactly version 0.62.0. Available on Linux / Windows only; other CLI versions are rejected.' },
+    } });
   return files;
 }
 const validate = (files: Record<string, string>, opts = options, head = C) => validatePreflight(path => {
@@ -49,10 +53,48 @@ test('stale source versions, missing changelog/tag exclusion and wrong candidate
   }
   assert.throws(() => validate(fixture(), options, 'd'.repeat(40)), /Candidate HEAD/);
 });
-test('every stale public manual or README platform version fails', () => {
-  for (const path of ['README.md', ...['ar', 'de', 'en', 'es', 'fr', 'hi', 'it', 'ja', 'ko', 'pt', 'ru', 'zh'].map(locale => `landing/locales/${locale}.json`)]) {
-    const files = fixture(true); files[path] = files[path]!.replaceAll('1.49.0', '1.48.5');
+test('every stale public release heading or README platform version fails', () => {
+  for (const path of ['README.md', ...locales.map(locale => `landing/locales/${locale}.json`)]) {
+    const files = fixture(true);
+    files[path] = path === 'README.md' ? files[path]!.replaceAll('1.49.0', '1.48.5') :
+      files[path]!.replace('{version}', '1.48.5');
     assert.throws(() => validate(files, { ...options, mode: 'prepared-promotion' }), /version stale/);
+  }
+});
+test('all twelve shared release headings require exactly the OS and channel-version placeholders', () => {
+  for (const locale of locales) {
+    for (const heading of [
+      'Qualified release for {os}.', 'Qualified release: {version}.',
+      '{os}: {version} {version}', '{os}: {version} {other}',
+      '{os}: {{version}}', '{os}: {version} (1.48.4)',
+    ]) {
+      const files = fixture(), path = `landing/locales/${locale}.json`;
+      const data = JSON.parse(files[path]!); data.install.platformRelease = heading;
+      files[path] = JSON.stringify(data);
+      assert.throws(() => validate(files), /platform release version stale or invalid interpolation/, `${locale}: ${heading}`);
+    }
+  }
+});
+test('recognized legacy manual release claims must still match both published platform versions', () => {
+  const files = fixture();
+  for (const locale of locales) {
+    const path = `landing/locales/${locale}.json`, data = JSON.parse(files[path]!);
+    data.install.gemini.version = 'Linux / Windows: 1.48.5 (Gemini CLI 0.62.0). macOS: 1.48.5 (Claude, Codex CLI, OpenCode)';
+    files[path] = JSON.stringify(data);
+  }
+  validate(files);
+  for (const locale of locales) {
+    for (const manual of [
+      'Linux / Windows: 1.48.4 (Gemini CLI 0.62.0). macOS: 1.48.5 (Claude, Codex CLI, OpenCode)',
+      'Linux / Windows: 1.48.5 (Gemini CLI 0.62.0). macOS: 1.48.4 (Claude, Codex CLI, OpenCode)',
+      'Linux / Windows: 1.48.5 (Gemini CLI 0.62.0).',
+      'macOS: 1.48.5 (Claude, Codex CLI, OpenCode)',
+    ]) {
+      const changed = { ...files }, path = `landing/locales/${locale}.json`;
+      const data = JSON.parse(changed[path]!); data.install.gemini.version = manual;
+      changed[path] = JSON.stringify(data);
+      assert.throws(() => validate(changed), /manual channel version stale/, `${locale}: ${manual}`);
+    }
   }
 });
 test('malformed/duplicate/missing platform rows and invalid immutable source fail', () => {
