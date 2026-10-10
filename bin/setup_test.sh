@@ -21,7 +21,7 @@ import tempfile
 root = Path(sys.argv[1])
 loader = (root / 'bin/setup.sh').read_text(encoding='utf-8')
 public_command = next(line for line in (root / 'README.md').read_text(encoding='utf-8').splitlines()
-                      if line.startswith('curl -fsSL '))
+                      if line.startswith(('curl -fsSL ', '(set -o pipefail; curl -fsSL ')))
 PUBLIC_SETUP_URL = 'https://agent-notifications.com/install.sh'
 # The public pin and main commit 9039815 reference the same setup.sh Git blob.
 pinned_loader = (root / 'bin/testdata/setup-9039815833ed8d16a11ee4a45de62bb0119c874f.sh').read_text(
@@ -435,7 +435,7 @@ run_case('complete legacy JSON remains explicit',
 run_case('pinned release and exact argv', expected=0)
 run_case('piped one-line entry point', expected=0, piped=True)
 run_case('documented one-line command', expected=0, documented=True)
-run_case('initial loader download failure', fail='setup', expected=0, documented=True, expect_run=False)
+run_case('initial loader download failure', fail='setup', expected=22, documented=True, expect_run=False)
 run_case('bootstrap exit status', status=17, expected=17)
 # v1.46.1 accepts the interactive entry point and old single-product selectors,
 # but has neither --capabilities nor --products. Exercise its argv boundary.

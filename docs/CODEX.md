@@ -12,30 +12,24 @@ runtime copy. Then start Codex and approve the entries in `/hooks`.
 
 ### Manual Codex registration
 
-Skip this section if you used the one-command installer. For manual setup, download and extract the source bundle for the release selected by your [platform channel](PLATFORM_RELEASE_CHANNELS.md). Use matching source and native binaries, not source from `main` with an older release binary. The Go registration command needs no `jq` and is not automatically added to your `PATH`.
+Skip this section if you used the one-command installer. For manual setup, download and extract the source bundle for the release selected by your [platform channel](PLATFORM_RELEASE_CHANNELS.md). Download that same release's native executable for your OS/architecture, verify it against `checksums.txt`, and place it in the bundle's `bin/` directory under its published asset name. Use matching source and binaries, not source from `main` with an older release binary.
 
-From the extracted bundle directory, first acquire the matching runtime and create the platform launchers. This script verifies release checksums and prepares the macOS helper where needed. See [prerequisites](INSTALLATION.md#prerequisites).
-
-```bash
-bash bin/install.sh
-```
-
-On Windows, run that preparation command in Git Bash. Do not rely on the symlinks shipped in the source archive: they can point to a different platform, and Windows `.bat` launchers do not exist until preparation succeeds.
-
-Then register Codex on macOS/Linux:
+Invoke that executable directly. The source archive's launcher symlinks can point to a different platform, and Windows `.bat` launchers are created during setup. For example, from the extracted bundle directory on Linux amd64:
 
 ```bash
-./bin/agent-notifications setup-codex --plugin-root .
+chmod +x bin/claude-notifications-linux-amd64
+./bin/claude-notifications-linux-amd64 setup-codex --plugin-root .
 ```
 
-For manual registration on Windows, run the prepared launcher in PowerShell:
+For Linux arm64 or macOS, substitute the matching published filename (`claude-notifications-linux-arm64`, `claude-notifications-darwin-amd64` or `claude-notifications-darwin-arm64`). For macOS desktop delivery, also verify and extract the same release's `ClaudeNotifier.app.zip` into `bin/`, retaining both `ClaudeNotifier.app` and its `ClaudeNotifier.app.managed-runtime.json` sidecar. The [public installer](INSTALLATION.md#quick-install-recommended) handles this acquisition automatically.
+
+On Windows, run the matching downloaded executable from the bundle directory in PowerShell:
 
 ```powershell
-.\bin\agent-notifications.bat setup-codex --plugin-root .
+.\bin\claude-notifications-windows-amd64.exe setup-codex --plugin-root .
 ```
 
-Run these commands in the bundle directory. If you have explicitly added the binary to
-`PATH`, `agent-notifications setup-codex --plugin-root <bundle-directory>` also works.
+The Go registration command needs no `jq`. It creates platform launchers in the installed runtime but does not add them to `PATH`.
 
 It installs a self-contained copy of the plugin at `~/.codex/claude-notifications-go` and writes
 the hook entries into `~/.codex/hooks.json`. Agent-initiated notify (MCP) is enabled by default
