@@ -1,27 +1,35 @@
-name: Basic v1.48.5 five-platform draft
+name: Basic five-platform sealed draft
 
 on:
   workflow_dispatch:
     inputs:
       candidate_sha:
-        description: Exact independently reviewed release source SHA (five versions must be 1.48.5)
+        description: Exact independently reviewed release source SHA (all five versions must match release_tag)
         type: string
         required: true
       release_tag:
-        description: Basic five-platform candidate; this bounded operator accepts v1.48.5 only
+        description: Stable semver tag explicitly excluded from the full release workflow
         type: string
         required: true
-        default: v1.48.5
       signing_run:
         description: Completed owner macos-qualification run for this exact source SHA
         type: string
         required: true
 
+      resume_run:
+        description: Existing basic run ID to resume from sealed assets (empty starts one build)
+        type: string
+        required: false
+      resume_attempt:
+        description: Exact sealed attempt of resume_run (required together, never rebuilds)
+        type: string
+        required: false
+
 permissions:
   contents: read
   actions: read
 concurrency:
-  group: basic-v1485-${{ inputs.candidate_sha }}
+  group: basic-draft-${{ inputs.release_tag }}
   cancel-in-progress: false
 
 env:
@@ -36,7 +44,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Require owner manual dispatch before candidate execution
-        env: {GH_TOKEN: '${{ github.token }}', OWNER: '${{ github.repository_owner }}', TRIGGER: '${{ github.triggering_actor }}'}
+        env: {GH_TOKEN: '${{ github.token }}', OWNER: '${{ github.repository_owner }}', TRIGGER: '${{ github.triggering_actor }}', RESUME_RUN: '${{ inputs.resume_run }}', RESUME_ATTEMPT: '${{ inputs.resume_attempt }}'}
         shell: bash
         run: |
           set -euo pipefail
@@ -47,7 +55,11 @@ jobs:
           test "$GITHUB_REPOSITORY" = 777genius/agent-notifications
           [[ "$RELEASE_CANDIDATE_SHA" =~ ^[a-f0-9]{40}$ ]]
           [[ "$RELEASE_SIGNING_RUN" =~ ^[1-9][0-9]*$ ]]
-          test "$RELEASE_TAG" = v1.48.5
+          [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          if [ -n "$RESUME_RUN$RESUME_ATTEMPT" ]; then
+            [[ "$RESUME_RUN" =~ ^[1-9][0-9]*$ ]]
+            [[ "$RESUME_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
+          fi
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RELEASE_SIGNING_RUN" > "$RUNNER_TEMP/signing-run.json"
           jq -e --arg source "$RELEASE_CANDIDATE_SHA" --arg owner "$OWNER" '
             .head_sha==$source and .conclusion=="success" and .event=="workflow_dispatch" and
@@ -60,6 +72,7 @@ jobs:
             (["Test on Ubuntu (1.25)","Test on Ubuntu (1.26)","Test on Windows (1.25)","Test on Windows (1.26)","Test on macOS (1.25)","Test on macOS (1.26)","Swift notifier tests","Full macOS CI required","Lint","OpenCode plugin bundle"] |
              all(. as $name | any($latest[]; .name==$name and .status=="completed" and .conclusion=="success")))' "$RUNNER_TEMP/checks.json"
       - name: Require unused immutable tag and no existing release
+        if: inputs.resume_run == ''
         env: {GH_TOKEN: '${{ github.token }}'}
         shell: bash
         run: |
@@ -79,14 +92,22 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$RELEASE_CANDIDATE_SHA"
-          test "$(sed -n 's/^var ConsumerVersion = "\([^" ]*\)"$/\1/p' internal/config/runtime.go)" = 1.48.5
-          test "$(jq -er '.version' .claude-plugin/plugin.json)" = 1.48.5
-          test "$(jq -er '.version' .codex-plugin/plugin.json)" = 1.48.5
-          test "$(jq -er '.metadata.version' .claude-plugin/marketplace.json)" = 1.48.5
-          test "$(jq -er '.plugins[] | select(.name=="claude-notifications-go") | .version' .claude-plugin/marketplace.json)" = 1.48.5
-          grep -E '^## \[1\.48\.5\]' CHANGELOG.md
-          grep -Fx "      - '!v1.48.5'" .github/workflows/release.yml
+          version="${RELEASE_TAG#v}"
+          test "$(sed -n 's/^var ConsumerVersion = "\([^" ]*\)"$/\1/p' internal/config/runtime.go)" = "$version"
+          test "$(jq -er '.version' .claude-plugin/plugin.json)" = "$version"
+          test "$(jq -er '.version' .codex-plugin/plugin.json)" = "$version"
+          test "$(jq -er '.metadata.version' .claude-plugin/marketplace.json)" = "$version"
+          test "$(jq -er '.plugins[] | select(.name=="claude-notifications-go") | .version' .claude-plugin/marketplace.json)" = "$version"
+          awk -v version="$version" 'index($0, "## [" version "]") == 1 {found=1} END {exit !found}' CHANGELOG.md
+          grep -Fx "      - '!$RELEASE_TAG'" .github/workflows/release.yml
+      - name: Check executed operator also excludes the tag from the full release workflow
+        uses: actions/checkout@v7
+        with: {ref: '${{ github.sha }}', path: operator, persist-credentials: false}
+      - name: Require operator tag exclusion
+        shell: bash
+        run: grep -Fx "      - '!$RELEASE_TAG'" operator/.github/workflows/release.yml
   build-matrix:
+    if: inputs.resume_run == ''
     name: Build ${{ matrix.platform }} ${{ matrix.arch }}
     needs: verify-version
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && matrix.os || matrix.os == 'ubuntu-22.04' && (vars.CI_LINUX_2204_RUNNER || 'ubuntu-22.04') || matrix.os == 'ubuntu-22.04-arm' && (vars.CI_LINUX_ARM_2204_RUNNER || 'ubuntu-22.04-arm') || matrix.os == 'macos-15' && (vars.CI_MACOS_15_RUNNER || 'macos-15') || matrix.os }}
@@ -212,6 +233,7 @@ jobs:
 
 
   import-darwin:
+    if: inputs.resume_run == ''
     name: Import same-source signed Darwin custody
     needs: verify-version
     runs-on: ubuntu-latest
@@ -242,6 +264,7 @@ jobs:
         with: {name: 'binaries-darwin-${{ matrix.arch }}', path: 'dist/*', if-no-files-found: error, retention-days: 14}
 
   test-binaries:
+    if: inputs.resume_run == ''
     name: Test ${{ matrix.platform }} ${{ matrix.arch }} binary
     needs: [build-matrix, import-darwin]
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && matrix.os || matrix.os == 'ubuntu-latest' && (vars.CI_LINUX_RUNNER || 'ubuntu-latest') || matrix.os == 'ubuntu-24.04-arm' && (vars.CI_LINUX_ARM_RUNNER || 'ubuntu-24.04-arm') || matrix.os == 'macos-26' && (vars.CI_MACOS_26_RUNNER || 'macos-26') || matrix.os }}
@@ -359,14 +382,19 @@ jobs:
         shell: bash
 
   create-release:
-    name: Prepare basic five-platform draft; macOS E2E remains separate
+    if: inputs.resume_run == ''
+    name: Seal basic five-platform assets before any tag or draft effect
     needs: [test-binaries, build-matrix, import-darwin]
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    permissions: {contents: write, actions: read}
+    permissions: {contents: read, actions: read}
     steps:
       - uses: actions/checkout@v7
         with: {ref: '${{ inputs.candidate_sha }}', path: source, persist-credentials: false}
+      - uses: actions/checkout@v7
+        with: {ref: '${{ github.sha }}', path: operator, persist-credentials: false}
+      - uses: actions/setup-node@v7
+        with: {node-version: '24'}
       - uses: actions/setup-python@v7
         with: {python-version: '3.12'}
       - uses: actions/download-artifact@v8
@@ -396,7 +424,8 @@ jobs:
           def digest(path):
               need(path.is_file() and not path.is_symlink() and path.stat().st_size > 0, 'regular_nonempty_asset_required')
               return hashlib.sha256(path.read_bytes()).hexdigest()
-          need(tag == 'v1.48.5', 'exact_basic_candidate_tag_required')
+          import re
+          need(re.fullmatch(r'v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)', tag), 'stable_semver_tag_required')
           run = json.loads((P(os.environ['RUNNER_TEMP']) / 'basic-signing-run.json').read_text())
           need(run['id'] == int(signing) and run['head_sha'] == candidate and run['conclusion'] == 'success'
                and run['event'] == 'workflow_dispatch' and run['head_branch'] == 'release/macos-signing'
@@ -450,7 +479,7 @@ jobs:
                        'exact_portable_layout_required')
                   plugin = json.loads(packed.read('plugin.json'))
                   need(plugin == {'$schema': 'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json',
-                                  'name': 'agent-notify', 'version': '1.48.5'}, 'portable_version_identity_required')
+                                  'name': 'agent-notify', 'version': tag[1:]}, 'portable_version_identity_required')
                   mcp = json.loads(packed.read('mcp.json'))
                   need(mcp == {'$schema': 'https://agent-plugins.org/schemas/1.0.0/mcp.schema.json',
                                'mcpServers': {'agent-notify': {'type': 'stdio', 'command': './bin/' + binary_name,
@@ -469,7 +498,8 @@ jobs:
           with (dist / 'checksums.txt').open('x') as output: output.write(checksums)
           need(len(list(dist.iterdir())) == 29, 'twenty_nine_assets_required')
           report = {'status': 'basic_five_platform_artifact_checks_complete', 'releaseTag': tag, 'candidateSHA': candidate,
-                    'operatorSHA': os.environ['GITHUB_SHA'], 'signingRun': signing, 'signingAttempt': str(run['run_attempt']),
+                    'operatorSHA': os.environ['GITHUB_SHA'], 'runID': os.environ['GITHUB_RUN_ID'],
+                    'runAttempt': os.environ['GITHUB_RUN_ATTEMPT'], 'signingRun': signing, 'signingAttempt': str(run['run_attempt']),
                     'assetCount': 29, 'platformCount': 5, 'installedBusinessQualified': False, 'fullNativeQualified': False,
                     'visibleDesktopQualified': False, 'macosE2EQualified': False, 'publicationAuthorized': False}
           (P(os.environ['RUNNER_TEMP']) / 'basic-release-report.json').write_text(json.dumps(report, sort_keys=True) + '\n')
@@ -486,19 +516,96 @@ jobs:
             dist/checksums.txt
           if-no-files-found: error
           retention-days: 14
-      - name: Create unused immutable tag and complete draft, never publish or promote Latest
-        env: {GH_TOKEN: '${{ github.token }}'}
+      - name: Seal source, operator, exact run attempt and signing receipts with all assets
         shell: bash
         run: |
           set -euo pipefail
-          for endpoint in "git/ref/tags/$RELEASE_TAG" "releases/tags/$RELEASE_TAG"; do
-            response="$RUNNER_TEMP/basic-final-absence-${endpoint%%/*}.txt"
-            if gh api --include "repos/$GITHUB_REPOSITORY/$endpoint" > "$response" 2> "$response.stderr"; then
-              echo 'Existing tag or release requires explicit reconciliation; no overwrite.' >&2
-              exit 1
-            fi
-            grep -Eq '^HTTP/[0-9.]+ 404( |$)' "$response"
-          done
-          gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" -f "ref=refs/tags/$RELEASE_TAG" -f "sha=$RELEASE_CANDIDATE_SHA" > "$RUNNER_TEMP/basic-tag.json"
-          jq -e --arg sha "$RELEASE_CANDIDATE_SHA" '.object.type=="commit" and .object.sha==$sha' "$RUNNER_TEMP/basic-tag.json"
-          gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --draft --prerelease=false --latest=false --title "$RELEASE_TAG" --notes 'Owner-approved basic five-platform artifact qualification: native version, CLI/config/local webhook checks and same-source signed/notarized macOS custody. OpenCode eleven-cell installed business qualification was not run. This draft grants no full native, clock/source-epoch, visible desktop or cold-start qualification. Publication requires separate draft-asset canaries and macOS E2E evidence.' dist/*
+          mkdir -p sealed/assets
+          cp dist/* sealed/assets/
+          cp "$RUNNER_TEMP/basic-release-report.json" sealed/qualification.json
+          cp "$RUNNER_TEMP/basic-signing-run.json" sealed/signing.json
+          cp signed-helper/ClaudeNotifier-smoke.custody.json sealed/helper-custody.json
+          node operator/scripts/basic-release-assets.mts seal sealed
+      - name: Preserve immutable sealed bytes before creating any tag
+        uses: actions/upload-artifact@v7
+        with:
+          name: basic-release-sealed-${{ github.run_id }}-${{ github.run_attempt }}
+          path: sealed/
+          if-no-files-found: error
+          retention-days: 14
+          overwrite: false
+
+  prepare-draft:
+    name: Reconcile immutable tag, draft and missing assets without rebuilding
+    needs: [verify-version, create-release]
+    if: always() && needs.verify-version.result == 'success' && (needs.create-release.result == 'success' || inputs.resume_run != '')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions: {contents: write, actions: read}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_ASSET_RUN: ${{ inputs.resume_run || github.run_id }}
+      RELEASE_ASSET_ATTEMPT: ${{ inputs.resume_attempt || github.run_attempt }}
+    steps:
+      - name: Bind receipt paths after runner allocation
+        shell: bash
+        run: |
+          echo "RELEASE_ORIGIN_RECEIPT=$RUNNER_TEMP/basic-origin.json" >> "$GITHUB_ENV"
+          echo "RELEASE_ANCESTRY_RECEIPT=$RUNNER_TEMP/basic-ancestry.json" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v7
+        with: {ref: '${{ github.sha }}', path: operator, persist-credentials: false}
+      - uses: actions/setup-node@v7
+        with: {node-version: '24'}
+      - name: Require exact owner producer run, attempt and ancestry before downloading sealed bytes
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RELEASE_ASSET_RUN/attempts/$RELEASE_ASSET_ATTEMPT" > "$RUNNER_TEMP/basic-origin.json"
+          jq -e --arg run "$RELEASE_ASSET_RUN" --arg attempt "$RELEASE_ASSET_ATTEMPT" '
+            (.id|tostring)==$run and (.run_attempt|tostring)==$attempt and (.head_sha|test("^[a-f0-9]{40}$")) and
+            .event=="workflow_dispatch" and .head_branch=="main" and .path==".github/workflows/basic-release.yml" and
+            .actor.login=="777genius" and .triggering_actor.login=="777genius"' "$RUNNER_TEMP/basic-origin.json"
+          producer="$(jq -er '.head_sha' "$RUNNER_TEMP/basic-origin.json")"
+          gh api "repos/$GITHUB_REPOSITORY/compare/$producer...$GITHUB_SHA" > "$RUNNER_TEMP/basic-ancestry.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RELEASE_ASSET_RUN/artifacts?per_page=100" > "$RUNNER_TEMP/basic-artifacts.json"
+          jq -e --arg name "basic-release-sealed-$RELEASE_ASSET_RUN-$RELEASE_ASSET_ATTEMPT" --arg operator "$producer" '
+            .total_count==(.artifacts|length) and
+            ([.artifacts[] | select(.name==$name and .expired==false and .workflow_run.head_sha==$operator)]|length)==1' "$RUNNER_TEMP/basic-artifacts.json"
+      - name: Download exact immutable seal (resume never enters a build job)
+        uses: actions/download-artifact@v8
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ env.RELEASE_ASSET_RUN }}
+          name: basic-release-sealed-${{ env.RELEASE_ASSET_RUN }}-${{ env.RELEASE_ASSET_ATTEMPT }}
+          path: sealed
+      - name: Verify sealed asset bytes and all provenance before any write
+        shell: bash
+        run: |
+          set -euo pipefail
+          node operator/scripts/basic-release-assets.mts verify sealed | tee "$RUNNER_TEMP/basic-operation.jsonl"
+      - name: Create or reconcile exact immutable tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          node operator/scripts/basic-release-assets.mts tag sealed | tee -a "$RUNNER_TEMP/basic-operation.jsonl"
+      - name: Create or reconcile draft, never publish or promote Latest
+        shell: bash
+        run: |
+          set -euo pipefail
+          node operator/scripts/basic-release-assets.mts draft sealed | tee -a "$RUNNER_TEMP/basic-operation.jsonl"
+      - name: Upload only missing assets; identical skip, mismatch fails, no clobber
+        shell: bash
+        run: |
+          set -euo pipefail
+          node operator/scripts/basic-release-assets.mts upload sealed | tee -a "$RUNNER_TEMP/basic-operation.jsonl"
+      - name: Preserve producer/controller join and operation receipt
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: basic-draft-operation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/basic-origin.json
+            ${{ runner.temp }}/basic-ancestry.json
+            ${{ runner.temp }}/basic-operation.jsonl
+          if-no-files-found: error
+          retention-days: 14

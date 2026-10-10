@@ -1,0 +1,13 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "target": "ES2023",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    "types": ["node"],
+    "typeRoots": ["./codex-offline-release-smoke/node_modules/@types"]
+  },
+  "include": ["release-progress*.mts", "release-preflight*.mts", "basic-release-assets*.mts", "basic-release-assets/*.mts"]
+}

@@ -1,4 +1,12 @@
 import { test, expect, type Page } from "@playwright/test";
+import { readFileSync } from "node:fs";
+import { parseChannels } from "../../../scripts/release-preflight.mts";
+
+// Expected versions come from the release contract, independently of UI parsing
+// and locale text. A stale locale or platform display must still fail the browser.
+const releaseChannels = parseChannels(readFileSync(new URL("../../../release-channels.tsv", import.meta.url), "utf8"));
+const channelVersion = (platform: string) => releaseChannels.find(row => row.key === platform)!.tag.slice(1);
+
 async function chooseOS(page: Page, value: string) {
   const labels: Record<string, string> = {
     unknown: "Choose target OS",
@@ -333,6 +341,9 @@ test("language menu is searchable, keyboard accessible and closes outside", asyn
   page,
 }) => {
   await page.goto("");
+  // Desktop OS detection runs onMounted. Wait for its visible result before
+  // sending a key to the server-rendered trigger, whose handler may not exist yet.
+  await expect(page.locator(".os-summary small")).toHaveText("Detected automatically");
   const trigger = page.getByRole("button", { name: /Current language/ });
   await trigger.press("ArrowDown");
   const search = page.getByRole("searchbox", { name: "Search languages" });
@@ -688,7 +699,7 @@ test("platform channels enable Gemini and reset unsupported selections", async (
   await page.goto("");
   for (const os of ["linux", "windows"] as const) {
     await chooseOS(page, os);
-    await expect(page.locator(".install-release-version")).toContainText("1.48.5");
+    await expect(page.locator(".install-release-version")).toContainText(channelVersion(`${os === "windows" ? "windows" : "linux"}/amd64`));
     await expect(page.getByRole("button", { name: "Gemini CLI", exact: true })).toBeEnabled();
     await chooseAgents(page, ["gemini"]);
     await expect(page.getByLabel("Install command", { exact: true })).toHaveValue(/--product gemini --desktop\)$/);
@@ -701,7 +712,7 @@ test("platform channels enable Gemini and reset unsupported selections", async (
     await expect(page.getByRole("button", { name: "Copy command" })).toHaveCount(0);
   }
   await chooseOS(page, "macos");
-  await expect(page.locator(".install-release-version")).toContainText("1.48.5");
+  await expect(page.locator(".install-release-version")).toContainText(channelVersion("darwin/amd64"));
   await expect(page.getByRole("button", { name: "Gemini CLI", exact: true })).toBeDisabled();
   await expect(page.getByRole("button", { name: "Gemini CLI", exact: true })).toHaveAttribute("aria-pressed", "false");
   await expect(page.getByLabel("Install command", { exact: true })).toHaveValue(/--product claude\)$/);
