@@ -29,7 +29,7 @@ Existing installations must run update and restart OpenCode to load the new bund
 See the [platform channels](PLATFORM_RELEASE_CHANNELS.md) for current versions on
 macOS arm64/amd64, Linux arm64/amd64 and Windows amd64, and the
 [release notes](https://github.com/777genius/agent-notifications/releases) for exact
-validation scope and retained failures. The current 1.48.5 release uses basic
+validation scope and retained failures. The current 1.48.6 release uses basic
 five-platform artifact checks and separate macOS E2E; the eleven-cell OpenCode
 installed-business suite was not run. Full native E2E, source-epoch/time-policy,
 cold-start and visible OpenCode desktop qualification are not established by

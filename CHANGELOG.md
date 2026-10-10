@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.48.6] - 2026-10-10
+
+### Fixed
+- Safely recover an abandoned managed installer consumer when its owned files are wholly absent, while rejecting partial, replaced or foreign assets and retaining interrupted recovery evidence ([#441](https://github.com/777genius/agent-notifications/pull/441), [#439](https://github.com/777genius/agent-notifications/issues/439), [#440](https://github.com/777genius/agent-notifications/issues/440)).
+- Observe held Windows installer locks without introducing a file-sharing conflict during recovery checks.
+
+### Changed
+- Release preparation validates version and platform-channel metadata early, runs independent qualification stages in parallel and resumes missing draft uploads from the original sealed artifacts without rebuilding them.
+
+### Platform notes
+- This release uses the basic five-platform artifact profile with separate macOS and offline Codex checks. It does not establish eleven-cell OpenCode, full native, visible desktop, cold-start, physical Intel or live-provider qualification. OpenCode remains silent and informational, without sound or click-to-focus support.
+
 ## [1.48.5] - 2026-10-10
 
 ### Added
