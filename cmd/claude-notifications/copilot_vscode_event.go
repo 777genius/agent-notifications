@@ -17,7 +17,6 @@ import (
 	"github.com/777genius/agent-notifications/internal/copilotvscodeevent"
 	"github.com/777genius/agent-notifications/internal/copilotvscodeinstall"
 	source "github.com/777genius/agent-notifications/internal/copilotvscodesource"
-	"github.com/777genius/agent-notifications/internal/installruntime"
 	"github.com/777genius/agent-notifications/internal/notification/observation"
 	"github.com/777genius/agent-notifications/internal/notifier"
 	"github.com/777genius/agent-notifications/internal/webhook"
@@ -132,10 +131,6 @@ func runCopilotVSCodeEvent(argv []string, input io.ReadCloser, output io.Writer)
 	}
 	b, err := portable.ReadLocalBinding(a.ControlRoot, a.Binding)
 	if err != nil {
-		return 0
-	}
-	snapshot, err := installruntime.ReadInstalledSnapshot(b.ControlRoot)
-	if err != nil || b.CheckSnapshot(snapshot) != nil {
 		return 0
 	}
 	temp, err := os.MkdirTemp("", "agent-notifications-local-snapshot-")
