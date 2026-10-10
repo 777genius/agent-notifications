@@ -942,26 +942,25 @@ func localPublicFixture(t *testing.T, manualRoute ...bool) (cursorFixture, *vsco
 		t.Fatal(err)
 	}
 	cursorWrite(t, f.b.GlobalConfig, []byte(`{"schemaVersion":2,"agents":{"copilot-vscode":{"notifications":{"desktop":{"enabled":true},"webhook":{"enabled":true,"url":"http://127.0.0.1:18181"}}}}}`), 0600)
-	shell := vscodelocalhooks.Target{Shell: vscodelocalhooks.LinuxSH}
-	specs := localSpecs(f.b, f.fixed.Executable)
-	hook, err := vscodelocalhooks.Render(shell, specs)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cursorWrite(t, filepath.Join(f.pkg, "plugin.json"), []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent-notify","version":"1.0.0"}`), 0600)
-	cursorWrite(t, filepath.Join(f.pkg, filepath.FromSlash(vscodelocalhooks.PluginPath)), hook, 0600)
-	localConfig := vscode.LocalConfig{ProfileSettingsPath: filepath.Join(f.b.ScopeRoot, "settings.json"), QualifiedTuple: vscode.SourceQualifiedTESTTuple("linux"), TargetShell: shell, NativeStop: true, HookSpecs: specs, DeclaredHookDigest: "sha256:" + rawDigest(hook)}
+	localConfig := vscode.LocalConfig{ProfileSettingsPath: filepath.Join(f.b.ScopeRoot, "settings.json"), QualifiedTuple: vscode.SourceQualifiedTESTTuple("linux"), TargetShell: vscodelocalhooks.Target{Shell: vscodelocalhooks.LinuxSH}}
 	if len(manualRoute) != 0 && manualRoute[0] {
 		cursorPackage(t, f)
-		if err := os.Remove(filepath.Join(f.pkg, filepath.FromSlash(vscodelocalhooks.PluginPath))); err != nil {
-			t.Fatal(err)
-		}
-		localConfig.NativeStop, localConfig.HookSpecs, localConfig.DeclaredHookDigest = false, nil, ""
 		localConfig.MCPServers = []string{"agent-notify"}
+		localConfig.QualifiedTuple = vscode.SourceQualifiedTESTTuple(runtime.GOOS)
 		if runtime.GOOS == "darwin" {
 			localConfig.QualifiedTuple = vscode.QualifiedDarwinTESTTuple()
-			localConfig.TargetShell = vscodelocalhooks.Target{Shell: vscodelocalhooks.MacOSSH}
 		}
+		localConfig.TargetShell = vscodelocalhooks.Target{Shell: vscodelocalhooks.Shell(localConfig.QualifiedTuple.TargetShell)}
+	} else {
+		localConfig.NativeStop = true
+		localConfig.HookSpecs = localSpecs(f.b, f.fixed.Executable)
+		hook, err := vscodelocalhooks.Render(localConfig.TargetShell, localConfig.HookSpecs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		localConfig.DeclaredHookDigest = "sha256:" + rawDigest(hook)
+		cursorWrite(t, filepath.Join(f.pkg, "plugin.json"), []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent-notify","version":"1.0.0"}`), 0600)
+		cursorWrite(t, filepath.Join(f.pkg, filepath.FromSlash(vscodelocalhooks.PluginPath)), hook, 0600)
 	}
 	adapter, err := vscode.NewLocal(localConfig)
 	if err != nil {

@@ -2486,7 +2486,11 @@ func TestLocalRemoveGroupFailedApplyExactOwnerRetry(t *testing.T) {
 	if err := os.WriteFile(settings, []byte(`{"foreign":true}`), 0600); err != nil {
 		t.Fatal(err)
 	}
-	cfg := &vscode.LocalConfig{ProfileSettingsPath: settings, QualifiedTuple: vscode.SourceQualifiedTESTTuple("linux"), TargetShell: vscodelocalhooks.Target{Shell: vscodelocalhooks.LinuxSH}, MCPServers: []string{"agent-notify"}, Skills: []string{"agent-notifications"}}
+	tuple := vscode.SourceQualifiedTESTTuple(runtime.GOOS)
+	if runtime.GOOS == "darwin" {
+		tuple = vscode.QualifiedDarwinTESTTuple()
+	}
+	cfg := &vscode.LocalConfig{ProfileSettingsPath: settings, QualifiedTuple: tuple, TargetShell: vscodelocalhooks.Target{Shell: vscodelocalhooks.Shell(tuple.TargetShell)}, MCPServers: []string{"agent-notify"}, Skills: []string{"agent-notifications"}}
 	adapter, err := vscode.NewLocal(*cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -2588,7 +2592,11 @@ func TestLocalOwnedEmptyPublicUpdateAndUninstall(t *testing.T) {
 			if err := os.WriteFile(settings, []byte(`{"foreign":true}`), 0600); err != nil {
 				t.Fatal(err)
 			}
-			cfg := vscode.LocalConfig{ProfileSettingsPath: settings, QualifiedTuple: vscode.SourceQualifiedTESTTuple("linux"), TargetShell: vscodelocalhooks.Target{Shell: vscodelocalhooks.LinuxSH}, NativeStop: true, HookSpecs: copilotvscodeinstall.LocalHookSpecs(portable.Binding{ControlRoot: req.Identity.ControlRoot, BindingID: "reserved"}, mat.Roots.HelperExecutable)}
+			tuple := vscode.SourceQualifiedTESTTuple(runtime.GOOS)
+			if runtime.GOOS == "darwin" {
+				tuple = vscode.QualifiedDarwinTESTTuple()
+			}
+			cfg := vscode.LocalConfig{ProfileSettingsPath: settings, QualifiedTuple: tuple, TargetShell: vscodelocalhooks.Target{Shell: vscodelocalhooks.Shell(tuple.TargetShell)}, NativeStop: true, HookSpecs: copilotvscodeinstall.LocalHookSpecs(portable.Binding{ControlRoot: req.Identity.ControlRoot, BindingID: "reserved"}, mat.Roots.HelperExecutable)}
 			hook, err := vscodelocalhooks.Render(cfg.TargetShell, cfg.HookSpecs)
 			if err != nil {
 				t.Fatal(err)
@@ -2678,14 +2686,18 @@ func TestLocalOwnedEmptyPublicUpdateAndUninstall(t *testing.T) {
 
 func TestLocalStandardPortablePackagePublicPrepareAndFrozenRetry(t *testing.T) {
 	mat, req, root := registryMaterializerFixture(t)
-	built, err := portableasset.Build(portableasset.BuildRequest{Version: "1.0.0", GOOS: "linux", GOARCH: "amd64", Executable: mat.Roots.HelperExecutable, OutputRoot: filepath.Join(root, "TEST-standard-portable")})
+	built, err := portableasset.Build(portableasset.BuildRequest{Version: "1.0.0", GOOS: runtime.GOOS, GOARCH: runtime.GOARCH, Executable: mat.Roots.HelperExecutable, OutputRoot: filepath.Join(root, "TEST-standard-portable")})
 	if err != nil {
 		t.Fatal(err)
 	}
 	req.PackageRoot = built.Root
 	req.Integration = portable.CopilotVSCode
 	req.Identity.ScopeRoot = req.ClientConfigRoot
-	cfg := vscode.LocalConfig{ProfileSettingsPath: filepath.Join(req.ClientConfigRoot, "settings.json"), QualifiedTuple: vscode.SourceQualifiedTESTTuple("linux"), TargetShell: vscodelocalhooks.Target{Shell: vscodelocalhooks.LinuxSH}, NativeStop: true, HookSpecs: copilotvscodeinstall.LocalHookSpecs(portable.Binding{ControlRoot: req.Identity.ControlRoot, BindingID: "reserved"}, mat.Roots.HelperExecutable)}
+	tuple := vscode.SourceQualifiedTESTTuple(runtime.GOOS)
+	if runtime.GOOS == "darwin" {
+		tuple = vscode.QualifiedDarwinTESTTuple()
+	}
+	cfg := vscode.LocalConfig{ProfileSettingsPath: filepath.Join(req.ClientConfigRoot, "settings.json"), QualifiedTuple: tuple, TargetShell: vscodelocalhooks.Target{Shell: vscodelocalhooks.Shell(tuple.TargetShell)}, NativeStop: true, HookSpecs: copilotvscodeinstall.LocalHookSpecs(portable.Binding{ControlRoot: req.Identity.ControlRoot, BindingID: "reserved"}, mat.Roots.HelperExecutable)}
 	if err := os.WriteFile(cfg.ProfileSettingsPath, []byte(`{"foreign":true}`), 0600); err != nil {
 		t.Fatal(err)
 	}
