@@ -13,7 +13,7 @@ mkdir -p "$HOME"
 source "$ROOT/bin/release-channel.sh"
 for platform in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64; do
     selected=$(release_channel_select "$ROOT/release-channels.tsv" "${platform%/*}" "${platform#*/}")
-    expected=v1.48.4
+    expected=v1.48.5
     [ "${selected%%$'\t'*}" = "$expected" ]
 done
 for fault in duplicate missing invalid_sha invalid_tag ref schema unknown; do

@@ -343,7 +343,7 @@ func copyTree(src, dst string) error {
 func TestSchema4PublicRecoveryIntegrity(t *testing.T) {
 	for _, kind := range []string{
 		"valid", "valid-policy-only", "valid-empty-changes", "legacy-v1", "legacy-v2", "legacy-v3",
-		"unsupported-schema-before-blob", "unsupported-floor-before-blob",
+		"unsupported-schema-before-blob", "schema5-v4-carrier-before-blob", "unsupported-floor-before-blob",
 		"duplicate-changes-before-blob", "casefold-changes-before-blob",
 		"unknown-changes-before-blob", "extra-carrier-before-blob",
 		"missing-changes-before-blob", "null-changes-before-blob", "null-files-before-blob", "object-changes-before-blob",
@@ -352,7 +352,10 @@ func TestSchema4PublicRecoveryIntegrity(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			base := t.TempDir()
+			base, err := filepath.EvalSymlinks(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
 			root, run := filepath.Join(base, "TEST-control"), filepath.Join(base, "TEST-runtime")
 			if err := os.Mkdir(run, 0700); err != nil {
 				t.Fatal(err)
@@ -427,6 +430,9 @@ func TestSchema4PublicRecoveryIntegrity(t *testing.T) {
 				case "legacy-v1", "legacy-v2", "legacy-v3":
 					tx["Schema"] = json.RawMessage(strings.TrimPrefix(kind, "legacy-v"))
 				case "unsupported-schema-before-blob":
+					tx["Schema"] = json.RawMessage("6")
+				case "schema5-v4-carrier-before-blob":
+					// Schema5 supports orphan metadata decisions only.
 					tx["Schema"] = json.RawMessage("5")
 				case "unsupported-floor-before-blob":
 					var after map[string]json.RawMessage
@@ -519,6 +525,9 @@ func TestSchema4PublicRecoveryIntegrity(t *testing.T) {
 			}
 			if kind == "unsupported-schema-before-blob" && !strings.Contains(err.Error(), "unsupported transaction schema") {
 				t.Fatalf("unknown schema reached unavailable blobs: %v", err)
+			}
+			if kind == "schema5-v4-carrier-before-blob" && !strings.Contains(err.Error(), "schema5 requires an orphan metadata decision") {
+				t.Fatalf("schema5 accepted an ordinary publication carrier: %v", err)
 			}
 			if kind == "unsupported-floor-before-blob" && !strings.Contains(err.Error(), "unsupported transaction writer floor") {
 				t.Fatalf("unknown floor reached unavailable blobs: %v", err)

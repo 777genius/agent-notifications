@@ -7,8 +7,10 @@ For a release that skips a platform, promote only its qualified
 rows and global Latest on the previously qualified version. Publish source
 branches before activating the immutable source SHAs in the channel index.
 
-The current all-platform channels and GitHub Latest select v1.48.4. Before
-the unified promotion, Linux amd64/arm64 and Windows amd64 selected
+The current all-platform channels and GitHub Latest select v1.48.5, using the
+owner-approved basic profile and separate macOS E2E described below. This does
+not establish eleven-cell OpenCode or full native qualification. Before
+the v1.48.4 unified promotion, Linux amd64/arm64 and Windows amd64 selected
 v1.48.1, macOS amd64/arm64 selected v1.48.3, and global Latest remained v1.46.1.
 The historical v1.48.1 release contains no Darwin binaries, portable packages
 or ClaudeNotifier.app assets.
@@ -16,6 +18,38 @@ or ClaudeNotifier.app assets.
 The earlier v1.48.0 draft and tag are retained unpublished: a repeated Windows
 clock tick exposed a floating-point admission-budget bug. v1.48.1 fixes it
 without extending the four-second limit; qualification must use the new binary.
+
+### Owner-approved basic v1.48.5 release
+
+For v1.48.5, the owner selected basic Linux/Windows artifact checks and separate
+macOS E2E/signing instead of the long eleven-cell OpenCode qualification. Use
+`basic-release.yml`; the full `unified-release.yml` operator and its historical
+v1.48.4 reports remain unchanged. The legacy tag workflow excludes both tags.
+This reduced profile does not grant installed OpenCode business, full native,
+clock/source-epoch, visible desktop or cold-start qualification.
+
+1. Merge the reviewed basic operator on `main` before promoting any version bump.
+   Prepare the release branch with all five version values at 1.48.5 and require
+   successful current-head Ubuntu, Windows and full macOS CI on its exact SHA.
+2. Fast-forward `release/macos-signing` to the independently reviewed candidate,
+   preserving the signing checkpoint in ancestry. Run `macos-qualification.yml`
+   with `candidate_version=v1.48.5` and retain the successful same-source signed
+   and notarized helper/Darwin artifact run.
+3. Dispatch `basic-release.yml` from `main` with that exact `candidate_sha`,
+   `release_tag=v1.48.5` and `signing_run`. It checks owner/source/CI/signing custody,
+   builds three Linux/Windows artifact sets, imports two Darwin sets, and runs
+   native version, companion help, configuration and local webhook checks on all
+   five platforms. It does not run or manufacture eleven-cell OpenCode reports.
+4. The successful gate seals exactly 29 public assets, including 28 checksummed
+   leaves, and creates a new immutable tag and complete draft. Existing tags or
+   releases fail closed; reconcile partial or uncertain state explicitly.
+5. Before publication, complete the downloaded draft-asset canaries, disposable
+   Codex checks and separate macOS E2E requested by the owner. Retain signature,
+   permission, installed lifecycle and visible-delivery observations with their
+   actual scope; the basic Actions result does not prove those observations.
+6. Only after those checks, publish under the owner's release authorization,
+   verify public checksums, promote Latest and all five platform channels, then
+   land the version bump on `main`. The workflow never publishes automatically.
 
 ### Unified v1.48.4 operator
 
