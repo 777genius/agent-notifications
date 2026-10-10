@@ -146,11 +146,7 @@ func runCopilotVSCodeEvent(argv []string, input io.ReadCloser, output io.Writer)
 	cfg := uapinstaller.Config{StateRoot: filepath.Join(root, "state"), StateFile: filepath.Join(root, "state", "state-v2.json"),
 		LockFile: filepath.Join(root, "state", "mutation.lock"), OperationsDir: filepath.Join(root, "state", "operations"),
 		PluginDataBase: filepath.Join(root, "plugin-data"), ManagedRoot: filepath.Join(root, "managed"), TempRoot: temp}
-	gate, _, effective, err := copilotvscodeinstall.NewLocalGate(ctx, b, cfg)
-	if err != nil {
-		return 0
-	}
-	binding, err := gate.ConsumerBinding(ctx)
+	gate, _, effective, binding, err := copilotvscodeinstall.NewLocalGate(ctx, b, cfg)
 	if err != nil {
 		return 0
 	}

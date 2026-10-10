@@ -182,11 +182,12 @@ func (g Gate) acquire(ctx context.Context, b copilotvscodeevent.Binding, channel
 		return nil, err
 	}
 	initial := PhysicalProof{}
-	if g.Binding.Integration == portable.CopilotVSCode {
+	switch g.Binding.Integration {
+	case portable.CopilotVSCode:
 		// Local qualification requires full equality with the constructor proof;
 		// the fresh lease check below validates that same baseline under the lease.
 		initial = g.localInitial
-	} else if g.Binding.Integration == portable.Cursor {
+	case portable.Cursor:
 		_, initial, err = g.qualify(ctx, current, b)
 		if err != nil {
 			release()

@@ -1047,7 +1047,7 @@ func TestLocalPublicReceiptCannotManufacturePhysicalProof(t *testing.T) {
 	if _, ok := any(adapter).(clients.PhysicalProfileAuthority); ok {
 		t.Fatal("current public pin unexpectedly advertises Local authority; requalify future pin")
 	}
-	if g, p, c, err := NewLocalGate(t.Context(), f.b, f.cfg); err == nil || g.Proof != nil || p != (PhysicalProof{}) || c != nil {
+	if g, p, c, dto, err := NewLocalGate(t.Context(), f.b, f.cfg); err == nil || g.Proof != nil || p != (PhysicalProof{}) || c != nil || dto != (copilotvscodeevent.Binding{}) {
 		t.Fatal("path/receipt-only Local proof granted")
 	}
 	if !bytes.Equal(before, cursorRead(t, f.cfg.StateFile)) {
@@ -1135,7 +1135,7 @@ func TestLocalRecordedProfileAndProjectionDriftDeny(t *testing.T) {
 				}
 			}
 			before := cursorRead(t, path)
-			if _, _, _, err := NewLocalGate(t.Context(), f.b, f.cfg); err == nil {
+			if _, _, _, _, err := NewLocalGate(t.Context(), f.b, f.cfg); err == nil {
 				t.Fatal("drift admitted")
 			}
 			if !bytes.Equal(before, cursorRead(t, path)) {

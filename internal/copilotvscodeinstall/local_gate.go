@@ -6,6 +6,7 @@ import (
 
 	"github.com/777genius/agent-notifications/internal/agentnotify/portable"
 	"github.com/777genius/agent-notifications/internal/config"
+	"github.com/777genius/agent-notifications/internal/copilotvscodeevent"
 	"github.com/777genius/agent-notifications/internal/installruntime"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/adapters/nativeconfig"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients"
@@ -18,15 +19,20 @@ import (
 // observations. It creates no profile authority, registration, assets or lease.
 // Physical profile authority is limited to the qualified Darwin arm64 tuple.
 // Positive proof requires the optional capability and persisted bound token.
-func NewLocalGate(ctx context.Context, b portable.Binding, cfg uapinstaller.Config) (Gate, PhysicalProof, *config.Config, error) {
+func NewLocalGate(ctx context.Context, b portable.Binding, cfg uapinstaller.Config) (Gate, PhysicalProof, *config.Config, copilotvscodeevent.Binding, error) {
 	if ctx == nil || ctx.Err() != nil || b.Integration != portable.CopilotVSCode {
-		return Gate{}, PhysicalProof{}, nil, ErrDenied
+		return Gate{}, PhysicalProof{}, nil, copilotvscodeevent.Binding{}, ErrDenied
 	}
 	s, err := installruntime.ReadPolicySnapshot(ctx, b.ControlRoot)
 	if err != nil {
-		return Gate{}, PhysicalProof{}, nil, ErrDenied
+		return Gate{}, PhysicalProof{}, nil, copilotvscodeevent.Binding{}, ErrDenied
 	}
-	return NewLocalGateFromSnapshot(ctx, b, cfg, s)
+	gate, proof, effective, err := NewLocalGateFromSnapshot(ctx, b, cfg, s)
+	if err != nil {
+		return Gate{}, PhysicalProof{}, nil, copilotvscodeevent.Binding{}, err
+	}
+	// This DTO names the qualified snapshot; Channels and each effect still recheck.
+	return gate, proof, effective, consumerBinding(s, b), nil
 }
 
 // NewLocalGateFromSnapshot qualifies against the caller's immutable policy
