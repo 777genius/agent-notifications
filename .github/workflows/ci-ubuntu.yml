@@ -758,13 +758,14 @@ jobs:
         run: |
           set -euo pipefail
           trap 'echo "HOLD: proof-only failure; native --execute is forbidden"' EXIT
+          product_started="$(python3 -B -S -c 'import time; print(time.monotonic())')"
           product_archive="$CURSOR_PROOF_WORKSPACE/source/TEST-product.tar"
-          git archive --format=tar 9f014e72af510783d58d00ad3d2db455a2f8117b > "$product_archive"
+          timeout 30s git archive --format=tar 9f014e72af510783d58d00ad3d2db455a2f8117b > "$product_archive"
           test "$(git get-tar-commit-id < "$product_archive")" = 9f014e72af510783d58d00ad3d2db455a2f8117b
           product_sha="$(sha256sum "$product_archive")"
-          sudo -n env CURSOR_PROOF_PRODUCT_ARCHIVE_SHA="${product_sha%% *}" GITHUB_ENV="$GITHUB_ENV" CURSOR_PROOF_JOB_START="$CURSOR_PROOF_JOB_START" CURSOR_PROOF_PRODUCT_ROOT="$PWD" CURSOR_PROOF_WORKSPACE="$CURSOR_PROOF_WORKSPACE" CURSOR_PROOF_GO="$(command -v go)" /usr/bin/python3 -B -S - <<'PY_PROOF'
+          sudo -n env CURSOR_PROOF_PREP_START="$product_started" CURSOR_PROOF_PRODUCT_ARCHIVE_SHA="${product_sha%% *}" GITHUB_ENV="$GITHUB_ENV" CURSOR_PROOF_JOB_START="$CURSOR_PROOF_JOB_START" CURSOR_PROOF_PRODUCT_ROOT="$PWD" CURSOR_PROOF_WORKSPACE="$CURSOR_PROOF_WORKSPACE" CURSOR_PROOF_GO="$(command -v go)" /usr/bin/python3 -B -S - <<'PY_PROOF'
           import hashlib,json,os,pathlib,shutil,subprocess,urllib.request,time,stat,platform,signal,tarfile
-          started=time.monotonic(); end=min(started+190*60,float(os.environ['CURSOR_PROOF_JOB_START'])+204*60)
+          started=float(os.environ['CURSOR_PROOF_PREP_START']); end=min(started+190*60,float(os.environ['CURSOR_PROOF_JOB_START'])+204*60)
           prep_end=started+492; pairs_left=87; machine_id=None
           w=pathlib.Path(os.environ['CURSOR_PROOF_WORKSPACE']); source=w/'source'; fixtures=source/'contract-fixtures-r1364'; old=source/'exact-old-executor'
           def sha(path): return hashlib.sha256(path.read_bytes()).hexdigest()
