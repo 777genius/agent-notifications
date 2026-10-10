@@ -378,7 +378,7 @@ def runtime_path(case, python=False, node=False, bash_executable=None):
     bin_dir.mkdir()
     names = ['bash', 'sh', 'mktemp', 'rm', 'cat', 'chmod', 'mkdir', 'ln', 'uname',
              'tr', 'wc', 'cmp', 'grep', 'head', 'cp', 'mv', 'env', 'true', 'false', 'dirname', 'basename',
-             'printf', 'pwd', 'cygpath', 'awk']
+             'printf', 'pwd', 'cygpath', 'awk', 'sleep']
     if python:
         names.append('python3')
     if node:
@@ -635,6 +635,62 @@ if host_cmd('node'):
 else:
     print('SKIP stub python3 falls back to node: node not available')
 run_runtime_case('stub python3 without node', python=False, node=False, stub_python=True, expected=0)
+# Real loader lifecycle with slow fake curl: animation belongs to stderr, stops
+# before diagnostics, and never survives download failure or cancellation.
+if os.name != 'nt':
+    import errno, pty, select, signal, time
+    for name, failed, cancelled in [('delayed', False, False), ('failure', True, False), ('cancel', False, True)]:
+        with tempfile.TemporaryDirectory(prefix='loader-progress-TEST-', dir=os.environ['TMPDIR']) as tmp:
+            case = Path(tmp)
+            (case/'bin').mkdir(); (case/'tmp space').mkdir()
+            slow_curl = curl_stub.replace('# Return a failure AFTER emitting valid bytes, to catch accidental execution.', '''
+if [ "$kind" = bootstrap ]; then
+    sleep "${TEST_LOADER_DELAY:-0.35}"
+    echo 'warning: TEST delayed download diagnostic' >&2
+fi
+# Return failure after emitting bytes.''')
+            (case/'bin/curl').write_text(slow_curl); (case/'bin/curl').chmod(0o755)
+            channel_fixture(case, 'v1.46.0')
+            (case/'commit').write_text(sha)
+            (case/'bootstrap').write_text("#!/bin/bash\nprintf 'BOOTSTRAP_RAN\\n'\n")
+            env = dict(os.environ, PATH=runtime_path(case), CASE_DIR=bash_path(case),
+                       TMPDIR=bash_path(case/'tmp space'), TERM='xterm-256color',
+                       FAIL_DOWNLOAD='bootstrap' if failed else '',
+                       TEST_LOADER_DELAY='5' if cancelled else '0.35')
+            env.pop('NO_COLOR', None)
+            master, slave = pty.openpty()
+            proc = subprocess.Popen([HOST_BASH, str(root/'bin/setup.sh'), '--product', 'codex'],
+                                    env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                    stderr=slave, start_new_session=True)
+            os.close(slave)
+            data = bytearray(); deadline = time.monotonic() + 8; sent_cancel = False
+            def read_progress():
+                if select.select([master], [], [], 0.02)[0]:
+                    try: data.extend(os.read(master, 65536))
+                    except OSError as exc:
+                        if exc.errno != errno.EIO: raise
+            while proc.poll() is None:
+                read_progress()
+                if cancelled and not sent_cancel and b'Downloading pinned bootstrap' in data:
+                    os.killpg(proc.pid, signal.SIGTERM); sent_cancel = True
+                assert time.monotonic() < deadline, (name, 'loader or renderer failed to stop', data)
+                time.sleep(0.01)
+            output = proc.communicate(timeout=1)[0]
+            read_progress(); os.close(master)
+            assert b'\x1b' not in output, (name, 'loader animation leaked to stdout', output)
+            assert b'\x1b[2K' in data, (name, 'loader had no live activity', data)
+            assert not list((case/'tmp space').iterdir()), (name, 'loader leaked staged data')
+            if cancelled:
+                assert sent_cancel and proc.returncode in (143, -signal.SIGTERM), (name, proc.returncode, data)
+                assert b'BOOTSTRAP_RAN' not in output
+            else:
+                assert proc.returncode == (22 if failed else 0), (name, proc.returncode, data)
+                assert (b'BOOTSTRAP_RAN' in output) == (not failed), (name, output)
+                assert b'bytes received' in data, (name, 'download byte measurement missing', data)
+                assert b'warning: TEST delayed download diagnostic' in data, (name, data)
+                assert data.rfind(b'\x1b[2K') < data.find(b'warning: TEST delayed download diagnostic'), (name, data)
+            print('PASS public loader progress ' + name)
+
 print('All setup loader fixtures passed (no public network or real agent CLIs).')
 PY
 

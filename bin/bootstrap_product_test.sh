@@ -866,6 +866,144 @@ PY_CURSOR
 )
 
 printf 'bootstrap product unit fixtures passed\n'
+# Detect lost shell state, leaked observers and animation interleaved with advice.
+python3 -I - "$SANDBOX" "$TEST_BOOTSTRAP_BASH" <<'PY_PROGRESS'
+import errno, os, select, signal, subprocess, sys, time
+from pathlib import Path
+if os.name == 'nt':
+    print('SKIP shell progress PTY fixtures on native Windows')
+    sys.exit(0)
+import pty
+sandbox, bash = Path(sys.argv[1]), sys.argv[2]
+helper = sandbox / 'progress-observer'
+helper.write_text('''#!/bin/bash
+set -eu
+[ "$1" = installer-progress ] || exit 2
+shift
+if [ "$1" = --capabilities ]; then
+    [ "${TEST_PROGRESS_OLD:-0}" != 1 ] || exit 1
+    printf 'installer-progress-v1\\n'; exit 0
+fi
+[ "$1" = --events ] || exit 2
+[ "${TEST_PROGRESS_BROKEN:-0}" != 1 ] || { echo 'TEST renderer unavailable' >&2; exit 7; }
+file=$2
+printf '%s\\n' "$$" > "$TEST_PROGRESS_PID"
+printf 'OBSERVER_START\\n' >&2
+trap 'echo OBSERVER_INTERRUPTED >&2; exit 0' TERM INT HUP
+while ! grep -q '^stop' "$file"; do sleep 0.02; done
+cp "$file" "$TEST_PROGRESS_COPY"
+printf 'OBSERVER_STOP\\n' >&2
+''')
+helper.chmod(0o700)
+script = sandbox / 'progress-lifecycle.sh'
+script.write_text('''#!/bin/bash
+source "$TEST_PROGRESS_SOURCE"
+install_cleanup_traps
+_UI_MODE=${TEST_PROGRESS_MODE:-auto}
+_CONFIG_HELPER=${TEST_PROGRESS_HELPER:-}
+if [ "${TEST_PROGRESS_STOP_FAIL:-0}" = 1 ]; then
+    printf() {
+        case "$1" in stop*) return 1 ;; esac
+        builtin printf "$@"
+    }
+fi
+_PROGRESS_IDS=(claude codex gemini)
+_PROGRESS_PHASES=(registration pending pending)
+_PROGRESS_OUTCOMES=(state_requires_inspection not_started not_started)
+emit_stage() {
+    PLUGIN_ROOT=fixture-survived
+    progress_phase claude config registration_committed
+    if [ -z "$_CONFIG_HELPER" ]; then
+        printf abc > "$TMPDIR/download"
+        progress_download_activity "$TMPDIR/download"
+    fi
+    sleep "${TEST_PROGRESS_DELAY:-0.3}"
+    printf 'warning: visible fixture warning\\n' >&2
+    printf 'hidden technical stdout\\n'
+    return "${TEST_PROGRESS_FAILURE:-0}"
+}
+status=0
+run_setup_stage 'Installing Claude notifications' emit_stage || status=$?
+[ "$PLUGIN_ROOT" = fixture-survived ] || exit 91
+[ "${_PROGRESS_OUTCOMES[0]}" = registration_committed ] || exit 92
+[ -z "$_PROGRESS_PID" ] && [ -z "$_PROGRESS_EVENTS" ] || exit 93
+printf 'STATE_SURVIVED\\n'
+report_progress "$status"
+exit "$status"
+''')
+def run(name, mode='auto', old=False, color=False, terminal=True, helper_path=helper, failure=0, cancel=False, broken=False, stop_failure=False):
+    tmp = sandbox / ('progress-' + name); tmp.mkdir()
+    env = os.environ.copy()
+    env.update(TERM='xterm-256color', TMPDIR=str(tmp), TEST_PROGRESS_SOURCE=str(sandbox/'functions.sh'),
+               TEST_PROGRESS_MODE=mode, TEST_PROGRESS_HELPER=str(helper_path or ''),
+               TEST_PROGRESS_OLD=str(int(old)), TEST_PROGRESS_STOP_FAIL=str(int(stop_failure)), TEST_PROGRESS_BROKEN=str(int(broken)), TEST_PROGRESS_FAILURE=str(failure),
+               TEST_PROGRESS_PID=str(tmp/'pid'), TEST_PROGRESS_COPY=str(tmp/'events'))
+    env.pop('NO_COLOR', None)
+    if color: env['NO_COLOR'] = '1'
+    if cancel: env['TEST_PROGRESS_DELAY'] = '5'
+    master, slave = pty.openpty() if terminal else (None, None)
+    proc = subprocess.Popen([bash, str(script)], env=env, stdin=subprocess.DEVNULL,
+                            stdout=subprocess.PIPE, stderr=slave if terminal else subprocess.PIPE,
+                            start_new_session=True)
+    if slave is not None: os.close(slave)
+    data, deadline, cancelled = bytearray(), time.monotonic() + 8, False
+    def drain():
+        if master is not None and select.select([master], [], [], 0.02)[0]:
+            try: data.extend(os.read(master, 65536))
+            except OSError as err:
+                if err.errno != errno.EIO: raise
+    while proc.poll() is None:
+        drain()
+        if cancel and not cancelled and b'OBSERVER_START' in data:
+            os.killpg(proc.pid, signal.SIGTERM); cancelled = True
+        assert time.monotonic() < deadline, (name, 'observer failed to join', data)
+        time.sleep(0.01)
+    out, err = proc.communicate(timeout=1)
+    if master is not None:
+        drain(); os.close(master); err = bytes(data)
+    assert b'\x1b' not in out, (name, 'animation leaked to stdout', out)
+    assert not list(tmp.glob('bootstrap-progress-*')), (name, 'event file leaked')
+    assert not list(tmp.glob('bootstrap-output-*')), (name, 'captured output leaked')
+    if (tmp/'pid').exists():
+        observer_pid = int((tmp/'pid').read_text())
+        try: os.kill(observer_pid, 0)
+        except ProcessLookupError: pass
+        else: raise AssertionError((name, 'observer still running', observer_pid))
+    if cancel:
+        assert cancelled and proc.returncode == 143, (name, proc.returncode, err)
+        assert b'STATE_SURVIVED' not in out
+        return
+    assert proc.returncode == failure, (name, proc.returncode, out, err)
+    assert b'STATE_SURVIVED' in out and b'warning: visible fixture warning' in err
+    assert b'hidden technical stdout' not in out
+    rich = terminal and mode != 'plain' and not old and not color
+    if stop_failure:
+        assert err.count(b'OBSERVER_START') == 1, (name, 'incomplete final file launched observer', err)
+        assert err.index(b'OBSERVER_INTERRUPTED') < err.index(b'warning: visible fixture warning'), (name, err)
+        assert not (tmp/'events').exists(), (name, 'observer consumed incomplete final file')
+    elif helper_path and rich and not broken:
+        assert b'OBSERVER_START' in err, (name, err)
+        assert err.index(b'OBSERVER_STOP') < err.index(b'warning: visible fixture warning'), (name, err)
+        rows = (tmp/'events').read_text()
+        assert 'claude\tconfig\tregistration_committed\n' in rows, (name, rows)
+        assert 'codex\tpending\tnot_started\n' in rows, (name, rows)
+        assert 'gemini\tpending\tnot_started\n' in rows, (name, rows)
+    else: assert b'OBSERVER_START' not in err, (name, err)
+    if not rich: assert b'\x1b' not in err and b'\r' not in err.replace(b'\r\n', b'\n'), (name, err)
+    if not helper_path: assert b'3 bytes received' in err and b'\x1b[2K' in err, (name, err)
+run('rich-delayed')
+run('rich-failed', failure=3)
+run('plain', mode='plain')
+run('no-color', color=True)
+run('redirected', terminal=False)
+run('old-helper', old=True)
+run('spinner', helper_path=None)
+run('broken-renderer', broken=True)
+run('unwritable-stop', stop_failure=True)
+run('cancel', cancel=True)
+print('PASS shell progress state, stderr, lifecycle, fallback and cancellation fixtures')
+PY_PROGRESS
+
 [ "$_PRODUCT_TEST_UNIT_ONLY" != true ] || exit 0
 # Local HTTP and controlling-PTY integration. Installer/registration are explicit
 # fake adapters here; the fetched bootstrap, archive extraction and curl are real.
