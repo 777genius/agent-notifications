@@ -9,5 +9,5 @@
     "types": ["node"],
     "typeRoots": ["./codex-offline-release-smoke/node_modules/@types"]
   },
-  "include": ["release-progress*.mts", "release-preflight*.mts", "basic-release-assets*.mts", "basic-release-assets/*.mts"]
+  "include": ["release-progress*.mts", "release-wait*.mts", "release-public-verify*.mts", "release-preflight*.mts", "basic-release-assets*.mts", "basic-release-assets/*.mts", "testdata/release-public-verify/*.mts"]
 }

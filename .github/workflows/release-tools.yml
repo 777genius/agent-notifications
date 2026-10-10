@@ -1,10 +1,10 @@
 name: Release tooling contracts
 on:
   pull_request:
-    paths: ['scripts/release-*', 'scripts/basic-release-assets*', 'scripts/basic-release-assets/**', 'scripts/codex-offline-release-smoke/**', 'scripts/codex-release-gate*', 'scripts/stage-released-loader*', '.github/workflows/basic-release.yml', '.github/workflows/release-tools.yml', 'Makefile']
+    paths: ['scripts/release-*', 'scripts/basic-release-assets*', 'scripts/basic-release-assets/**', 'scripts/testdata/release-public-verify/**', 'tools/ci_release_scope*', 'docs/RELEASE.md', 'docs/RELEASE_SPEED.md', 'scripts/codex-offline-release-smoke/**', 'scripts/codex-release-gate*', 'scripts/stage-released-loader*', '.github/workflows/basic-release.yml', '.github/workflows/release-tools.yml', 'Makefile']
   push:
     branches: [main]
-    paths: ['scripts/release-*', 'scripts/basic-release-assets*', 'scripts/basic-release-assets/**', 'scripts/codex-offline-release-smoke/**', 'scripts/codex-release-gate*', 'scripts/stage-released-loader*', '.github/workflows/basic-release.yml', '.github/workflows/release-tools.yml', 'Makefile']
+    paths: ['scripts/release-*', 'scripts/basic-release-assets*', 'scripts/basic-release-assets/**', 'scripts/testdata/release-public-verify/**', 'tools/ci_release_scope*', 'docs/RELEASE.md', 'docs/RELEASE_SPEED.md', 'scripts/codex-offline-release-smoke/**', 'scripts/codex-release-gate*', 'scripts/stage-released-loader*', '.github/workflows/basic-release.yml', '.github/workflows/release-tools.yml', 'Makefile']
 permissions:
   contents: read
 jobs:

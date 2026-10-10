@@ -27,9 +27,24 @@ that omits commits (including the API's default 250-commit limit) fails closed.
 Rerunning the original workflow without the explicit resume inputs is a fresh
 attempt, not a supported substitute for resume.
 
+Before building, `basic-release-assets.mts unused` requires the exact repository,
+stable release tag and candidate SHA through `GITHUB_REPOSITORY`, `RELEASE_TAG`
+and `RELEASE_CANDIDATE_SHA`. It reads the immutable tag and draft-aware release
+listing and rejects any existing matching tag or release, including a draft with
+no Git tag. It needs no seal or producer receipts and performs no mutations.
+
 Tag, draft and uploads are separate stages. Each requires tag == C and a draft
-with the exact tag/target and no prerelease. Existing asset names must be unique,
-expected, `uploaded`, and identical in size and SHA256. Matching assets are
+with the exact tag/target and no prerelease. Draft discovery uses the authenticated
+releases listing because GitHub's release-by-tag endpoint excludes drafts. It
+reads every page (100 releases each, at most 20 pages), requires a unique exact
+tag match, then verifies its current state through the release ID. Incomplete,
+malformed, repeated or over-limit pages and failed direct reads stop the stage;
+only a complete listing can establish absence. A repository at the bound must
+be reviewed before increasing it. Discovery and the full remote asset inventory
+are rechecked around every upload to catch concurrent conflicts. Already verified
+assets are omitted from the write loop; a final full scan also checks a no-op resume.
+
+Existing asset names must be unique, expected, `uploaded`, and identical in size and SHA256. Matching assets are
 skipped; missing assets are uploaded; any mismatch, unexpected name, published
 release or ambiguous remote read stops the job. SHA256 uses GitHub's asset digest
 when available, otherwise downloads the bytes once per immutable asset ID in
@@ -50,8 +65,10 @@ node --test scripts/basic-release-assets/assets.test.mts
 These behavioral tests use a TEST-only fake `gh` executable from a private temp
 directory outside the checkout. They use no GitHub token or network and perform
 no real release, agent, VM, native registration or provider action. They cover
-interruption after server-side upload acceptance and explicit resume without
-duplicates, lost responses, bounded absence retry, digest fallback, corrupted
+a draft hidden from the published-only tag endpoint, pagination and later duplicate
+matches, incomplete discovery and changed direct-ID state, conflicts introduced
+during upload, interruption after server-side upload acceptance and explicit resume
+without duplicates, lost responses, bounded absence retry, digest fallback, corrupted
 bytes/receipts, remote conflicts, and producer/controller provenance rejection.
 
 A meaningful strict typecheck requires existing Node declarations, for example:
