@@ -205,7 +205,9 @@ HOST_VERSION
     OPENCODE_ARGS=(--webhook)
     for version in '1.18.29' '1.18.33' 'v1.18.33' 'OpenCode version: v1.18.33' '1.19.0' '2.0.0' 'v2.0.21'; do
         printf '%s\n' "$version" > "$SANDBOX/version-cli/version"
-        check_prerequisites
+        [ -z "$(check_prerequisites 2>&1)" ]
+        diagnostic=$(BOOTSTRAP_VERBOSE=1 check_prerequisites 2>&1)
+        [[ "$diagnostic" == *"detected $version."* ]]
     done
     for version in '1.18.4' '1.18.28' '1.17.99' '3.0.0' '2.0.0-beta.1' '2.0.0+build' '02.0.0' '2.00.0' '2.0.000' '2.9999999.0' 'OpenCode v2.0.0 (compatibility 1.18.33)' 'unknown' $'2.0.0\n1.18.33' $'unknown\e[31m\rterminal-control'; do
         printf '%s\n' "$version" > "$SANDBOX/version-cli/version"
@@ -261,9 +263,11 @@ GEMINI_VERSION
     sed 's/0\.62\.0/0.63.0/' "$SANDBOX/gemini-version-cli/gemini" > "$SANDBOX/gemini-version-cli/next"
     mv "$SANDBOX/gemini-version-cli/next" "$SANDBOX/gemini-version-cli/gemini"
     chmod +x "$SANDBOX/gemini-version-cli/gemini"
-    if (check_prerequisites); then
+    if diagnostic=$(check_prerequisites 2>&1); then
         echo "accepted unqualified Gemini version" >&2; exit 1
     fi
+    [[ "$diagnostic" == *"Unsupported Gemini CLI version; detected 0.63.0. Requires 0.62.0."* ]]
+    [[ "$diagnostic" == *"npm install -g @google/gemini-cli@0.62.0"* ]]
 )
 quoted=$(quote_shell_command "$SANDBOX/bin space/cli" --package "$SANDBOX/pkg space" --codex-home "$CODEX_HOME")
 eval "set -- $quoted"
@@ -554,6 +558,10 @@ echo "marketplace self-heal fixtures passed"
     expected=$(printf '%s\n' setup-gemini install --binary capture_gemini --webhook --runtime-root "$gemini_control/runtime")
     [ "$(cat "$SANDBOX/gemini-argv")" = "$expected" ] || { echo "Gemini bootstrap lost its actual API or consent" >&2; exit 1; }
     [ -f "$SANDBOX/gemini-init" ]
+    grep -F 'Enable/trust the user hooks' "$SANDBOX/gemini-output"
+    grep -F 'configure and enable its destination' "$SANDBOX/gemini-output"
+    if grep -E 'Shared settings:|Inspect registration|Remove:' "$SANDBOX/gemini-output"; then exit 1; fi
+    BOOTSTRAP_VERBOSE=1 install_gemini > "$SANDBOX/gemini-output"
     # Execute the public lifecycle strings against an inert argv recorder with
     # a different default environment. No candidate/helper/native host runs.
     mkdir -p "$SANDBOX/gemini runtime" "$SANDBOX/other default"
@@ -582,7 +590,7 @@ LIFECYCLE_ARGV
     mkdir -p "$_CONFIG_STAGE/ClaudeNotifier.app"
     touch "$_CONFIG_STAGE/ClaudeNotifier.app.managed-runtime.json"
     cp "$SANDBOX/gemini runtime/claude-notifications-linux-amd64" "$SANDBOX/gemini runtime/claude-notifications-darwin-amd64"
-    install_gemini > "$SANDBOX/gemini-output"
+    BOOTSTRAP_VERBOSE=1 install_gemini > "$SANDBOX/gemini-output"
     for label_action in 'Check permission:|permission-status' 'Grant if needed:|request-permission'; do
         label=${label_action%|*}; action=${label_action#*|}
         printed=$(sed -n "s/^[[:space:]]*$label //p" "$SANDBOX/gemini-output")
@@ -615,7 +623,7 @@ printf '%s\n' "$@" > "$GEMINI_LIFECYCLE_TRACE"
 exit "${GEMINI_REMOVE_EXIT:-0}"
 WINDOWS_REMOVER_ARGV
     chmod +x "$SANDBOX/gemini runtime/claude-notifications-windows-amd64.exe"
-    install_gemini > "$SANDBOX/gemini-output"
+    BOOTSTRAP_VERBOSE=1 install_gemini > "$SANDBOX/gemini-output"
     printed=$(sed -n 's/^[[:space:]]*Remove: //p' "$SANDBOX/gemini-output")
     XDG_CONFIG_HOME="$SANDBOX/other default" bash -c "$printed"
     expected=$(printf '%s\n' setup-gemini remove --control-root "$native_control")
@@ -1475,6 +1483,8 @@ PY
     run_setup_stage 'Installing fixture' emit_stage > "$SANDBOX/stage-ok.out" 2> "$SANDBOX/stage-ok.err"
     [ "$PLUGIN_ROOT" = fixture-installed ]
     grep -F 'Installing fixture...' "$SANDBOX/stage-ok.out"
+    run_setup_stage 'Preparing fixture settings' emit_stage > "$SANDBOX/stage-prepare.out" 2>/dev/null
+    if grep -F 'Preparing fixture settings...' "$SANDBOX/stage-prepare.out"; then exit 1; fi
     if grep -E 'Ready to use|generation' "$SANDBOX/stage-ok.out"; then exit 1; fi
     grep -F 'Log out and log back in' "$SANDBOX/stage-ok.out"
     grep -F 'gnome-extensions enable fixture@example.test' "$SANDBOX/stage-ok.out"
@@ -1507,7 +1517,15 @@ PY
     BOOTSTRAP_SUMMARY_FILE="$SANDBOX/aggregate.txt"
     print_success > "$SANDBOX/collected.out"
     [ ! -s "$SANDBOX/collected.out" ]
-    grep -F 'Delivery has not been verified.' "$BOOTSTRAP_SUMMARY_FILE"
+    print_success > "$SANDBOX/collected.out"
+    [ "$(grep -c 'Delivery has not been verified.' "$BOOTSTRAP_SUMMARY_FILE")" -eq 1 ]
+    [ "$(sed -n '$p' "$BOOTSTRAP_SUMMARY_FILE")" = "$(print_delivery_note)" ]
+    _PROGRESS_IDS=(opencode gemini); _PROGRESS_OUTCOMES=(completed state_requires_inspection); _PROGRESS_PHASES=(complete registration)
+    report_progress 1 2> "$SANDBOX/partial-progress.out"
+    grep -F 'opencode: completed' "$SANDBOX/partial-progress.out"
+    grep -F 'gemini: state_requires_inspection' "$SANDBOX/partial-progress.out"
+    report_progress 0 2> "$SANDBOX/success-progress.out"
+    if grep -F 'opencode: completed' "$SANDBOX/success-progress.out"; then exit 1; fi
 )
 
 # Structured results distinguish a successful opt-out from an installed sibling.

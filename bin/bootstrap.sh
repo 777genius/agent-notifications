@@ -236,7 +236,9 @@ check_prerequisites() {
             fi
         fi
         if [ "$host_supported" = true ]; then
-            echo "OpenCode notifications were tested with 1.18.33, 2.0.0 and 2.0.21; detected $host_version."
+            if [ "${BOOTSTRAP_VERBOSE:-0}" = 1 ]; then
+                echo "OpenCode notifications were tested with 1.18.33, 2.0.0 and 2.0.21; detected $host_version."
+            fi
         else
             printf 'Unsupported OpenCode version; detected %s. CLI: %s\n' "$(bootstrap_diagnostic_quote "$host_version")" "$(bootstrap_diagnostic_quote "$opencode_cli")" >&2
             echo "Requires stable V1 >= 1.18.29 or V2 >= 2.0.0; tested: 1.18.33, 2.0.0 and 2.0.21." >&2
@@ -265,7 +267,9 @@ check_prerequisites() {
             GEMINI_CLI_TRUSTED_FOLDERS_PATH="$probe/trust.json" "$gemini_cli" --version </dev/null) || probe_status=$?
         rm -rf "$probe"
         [ "$probe_status" -eq 0 ] && [ "$host_version" = 0.62.0 ] || {
-            echo "Gemini CLI notifications target 0.62.0; detected ${host_version:-unavailable}." >&2; return 1;
+            printf 'Unsupported Gemini CLI version; detected %s. Requires 0.62.0.\n' "$(bootstrap_diagnostic_quote "${host_version:-unavailable}")" >&2
+            echo "Update Gemini CLI: npm install -g @google/gemini-cli@0.62.0" >&2
+            return 1;
         }
         [ "$(bootstrap_release_os_arch)" != "windows arm64" ] || { echo "Windows arm64 is not supported." >&2; return 1; }
     fi
@@ -1268,7 +1272,9 @@ setup_iterm2_venv() {
 run_setup_stage() {
     local label="$1" log status=0
     shift
-    printf '%s...\n' "$label"
+    if [ "${BOOTSTRAP_VERBOSE:-0}" = 1 ] || [[ "$label" = Installing* ]]; then
+        printf '%s...\n' "$label"
+    fi
     if [ "${BOOTSTRAP_VERBOSE:-0}" = 1 ]; then
         "$@"
         return $?
@@ -1315,11 +1321,14 @@ print_success() {
                 printf '    Agent notification tool: %s.\n' "$CODEX_AGENT_NOTIFY_STATUS"
                 printf '    Run /hooks in Codex, review the entries and trust them.\n' ;;
         esac
-        printf '  Delivery has not been verified.\n'
-        printf '  Restart the installed agents, then trigger a notification to check delivery.\n'
-        printf '  If no alert arrives, check OS notification permission and your settings.\n'
+        print_delivery_note
+        if [ "${BOOTSTRAP_VERBOSE:-0}" = 1 ]; then
+            printf '  If no alert arrives, check OS notification permission and your settings.\n'
+        fi
         if [ "$PRODUCT" != codex ]; then
-            printf '  Claude settings: /claude-notifications-go:settings\n'
+            if [ "${BOOTSTRAP_VERBOSE:-0}" = 1 ]; then
+                printf '  Claude settings: /claude-notifications-go:settings\n'
+            fi
             print_iterm2_python_api_notice
         fi
     } > "$report"
@@ -1329,11 +1338,26 @@ print_success() {
     return "$status"
 }
 
+print_delivery_note() {
+    printf '  Delivery has not been verified. After restart/activation, complete a task to check notifications.\n'
+}
+
 # The public loader can collect summaries across separate pinned bootstrap runs.
 # This file contains display text, never executable shell or a readiness claim.
 publish_setup_summary() {
     if [ -n "${BOOTSTRAP_SUMMARY_FILE:-}" ]; then
-        cat "$1" >> "$BOOTSTRAP_SUMMARY_FILE"
+        # Separate product runs share one delivery footer in the public loader.
+        local combined status=0
+        combined=$(mktemp "${TMPDIR:-/tmp}/bootstrap-summary-XXXXXX") || return 1
+        touch "$BOOTSTRAP_SUMMARY_FILE" || { rm -f "$combined"; return 1; }
+        if awk -v note="$(print_delivery_note)" '$0 != note' "$BOOTSTRAP_SUMMARY_FILE" "$1" > "$combined" &&
+            print_delivery_note >> "$combined"; then
+            cat "$combined" > "$BOOTSTRAP_SUMMARY_FILE" || status=$?
+        else
+            status=$?
+        fi
+        rm -f "$combined"
+        return "$status"
     else
         printf '\nInstallation complete\n\n'
         cat "$1"
@@ -2135,19 +2159,22 @@ run_setup_stage "Installing OpenCode notifications" "$_CONFIG_HELPER" "$@" </dev
     report=$(mktemp "${TMPDIR:-/tmp}/bootstrap-summary-XXXXXX") || return 1
     {
         echo "  OpenCode - installed; restart required to load the global plugin."
-        echo "  Delivery has not been verified."
-        echo "  Silent completion, question, permission and error alerts; no click-to-focus."
-        printf '  Shared settings: %s\n' "$config_path"
-        if [ "$os" = darwin ] && { [[ " ${channels[*]-} " = *" --desktop "* ]] || [[ " ${channels[*]-} " = *" --desktop=true "* ]]; }; then
-            echo "  Check OS notification permission; grant it only if needed."
-            printf '    Check: %s\n' "$(quote_shell_command "$installed" setup-opencode permission-status)"
-            printf '    Grant if needed: %s\n' "$(quote_shell_command "$installed" setup-opencode request-permission)"
+        print_delivery_note
+        if [ "${BOOTSTRAP_VERBOSE:-0}" = 1 ]; then
+            echo "  Silent completion, question, permission and error alerts; no click-to-focus."
+            printf '  Shared settings: %s\n' "$config_path"
+            if [ "$os" = darwin ] && { [[ " ${channels[*]-} " = *" --desktop "* ]] || [[ " ${channels[*]-} " = *" --desktop=true "* ]]; }; then
+                echo "  Check OS notification permission; grant it only if needed."
+                printf '    Check: %s\n' "$(quote_shell_command "$installed" setup-opencode permission-status)"
+                printf '    Grant if needed: %s\n' "$(quote_shell_command "$installed" setup-opencode request-permission)"
+            fi
         fi
         if { [[ " ${channels[*]-} " = *" --webhook "* ]] || [[ " ${channels[*]-} " = *" --webhook=true "* ]]; }; then
             echo "  Webhook consent recorded; configure and enable its destination and status channel in shared settings."
         fi
-        echo "  Restart OpenCode, then complete a task to check notification delivery."
-        printf '  Remove: %s\n' "$(opencode_remove_command "$installed")"
+        if [ "${BOOTSTRAP_VERBOSE:-0}" = 1 ]; then
+            printf '  Remove: %s\n' "$(opencode_remove_command "$installed")"
+        fi
     } > "$report"
     publish_setup_summary "$report"
     local status=$?
@@ -2203,20 +2230,26 @@ run_setup_stage "Installing Gemini CLI notifications" "$_CONFIG_HELPER" "$@" </d
     report=$(mktemp "${TMPDIR:-/tmp}/bootstrap-gemini-summary-XXXXXX") || return 1
     {
         echo "  Gemini CLI - installed; restart required."
-        echo "  Delivery has not been verified."
-        printf '  Shared settings: %s\n' "$config_path"
-        echo "  Restart Gemini CLI and enable/trust the user hooks, then complete a task to check delivery."
-        echo "  Silent turn completion and tool permission alerts; existing hook/security settings were preserved."
+        print_delivery_note
+        echo "  Enable/trust the user hooks in Gemini CLI after restart."
+        if [ "${BOOTSTRAP_VERBOSE:-0}" = 1 ]; then
+            printf '  Shared settings: %s\n' "$config_path"
+            echo "  Silent turn completion and tool permission alerts; existing hook/security settings were preserved."
+        fi
         echo "  Gemini's built-in desktop notifications may duplicate alerts; choose one desktop source or explicitly use --webhook."
-        printf '  Inspect registration and consent: %s\n' "$(quote_shell_command "$installed" setup-gemini inspect --control-root "$native_root")"
-        if [ "$os" = darwin ] && { [[ " ${channels[*]-} " = *" --desktop "* ]] || [[ " ${channels[*]-} " = *" --desktop=true "* ]]; }; then
-            printf '  Check permission: %s\n' "$(quote_shell_command "$installed" setup-gemini permission-status --control-root "$native_root")"
-            printf '  Grant if needed: %s\n' "$(quote_shell_command "$installed" setup-gemini request-permission --control-root "$native_root")"
+        if [ "${BOOTSTRAP_VERBOSE:-0}" = 1 ]; then
+            printf '  Inspect registration and consent: %s\n' "$(quote_shell_command "$installed" setup-gemini inspect --control-root "$native_root")"
+            if [ "$os" = darwin ] && { [[ " ${channels[*]-} " = *" --desktop "* ]] || [[ " ${channels[*]-} " = *" --desktop=true "* ]]; }; then
+                printf '  Check permission: %s\n' "$(quote_shell_command "$installed" setup-gemini permission-status --control-root "$native_root")"
+                printf '  Grant if needed: %s\n' "$(quote_shell_command "$installed" setup-gemini request-permission --control-root "$native_root")"
+            fi
         fi
         if { [[ " ${channels[*]-} " = *" --webhook "* ]] || [[ " ${channels[*]-} " = *" --webhook=true "* ]]; }; then
             echo "  Webhook consent recorded; configure and enable its destination and status channel in shared settings."
         fi
-        printf '  Remove: %s\n' "$(gemini_remove_command "$installed" "$native_root")"
+        if [ "${BOOTSTRAP_VERBOSE:-0}" = 1 ]; then
+            printf '  Remove: %s\n' "$(gemini_remove_command "$installed" "$native_root")"
+        fi
     } > "$report"
     publish_setup_summary "$report"
     status=$?
@@ -2243,6 +2276,9 @@ report_progress() {
     local i=0 outcome
     while [ "$i" -lt "${#_PROGRESS_IDS[@]}" ]; do
         outcome=${_PROGRESS_OUTCOMES[$i]}
+        if [ "$outcome" = completed ] && [ "${1:-0}" -eq 0 ] && [ "${BOOTSTRAP_VERBOSE:-0}" != 1 ]; then
+            i=$((i + 1)); continue
+        fi
         if [ "$outcome" = registration_committed ]; then
             outcome="registration_committed; follow_up_failed:${_PROGRESS_PHASES[$i]}"
         fi
@@ -2604,7 +2640,7 @@ main() {
             progress_phase "$selected" complete completed
         done
     fi
-    report_progress
+    report_progress "$status"
     if [ "$status" -ne 0 ]; then
         report_partial_recovery
         _KEEP_CONFIG_STAGE=true
