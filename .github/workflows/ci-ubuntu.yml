@@ -532,8 +532,8 @@ jobs:
           set -euo pipefail
           printf 'Cursor runner identity: uid=%s gid=%s\n' "$(id -u)" "$(id -g)"
           trap 'printf "Cursor qualification failed at shell line %s\n" "$LINENO" >&2' ERR
-          test "$(id -u)" = 1000
-          printf 'Cursor UID guard passed; checking the unchanged physical tuple\n'
+          test "$(id -u)" = 1001
+          printf 'Cursor coordinator UID guard passed; checking the unchanged root/actor tuple\n'
           sudo -n /usr/bin/python3 -B -S - <<'PY_SAME'
           import os,pathlib,platform,stat,sys
           assert platform.machine() == 'x86_64' and platform.release() == '6.17.0-1022-azure'
