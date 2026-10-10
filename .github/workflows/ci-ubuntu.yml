@@ -758,8 +758,12 @@ jobs:
         run: |
           set -euo pipefail
           trap 'echo "HOLD: proof-only failure; native --execute is forbidden"' EXIT
-          sudo -n env GITHUB_ENV="$GITHUB_ENV" CURSOR_PROOF_JOB_START="$CURSOR_PROOF_JOB_START" CURSOR_PROOF_PRODUCT_ROOT="$PWD" CURSOR_PROOF_WORKSPACE="$CURSOR_PROOF_WORKSPACE" CURSOR_PROOF_GO="$(command -v go)" /usr/bin/python3 -B -S - <<'PY_PROOF'
-          import hashlib,json,os,pathlib,shutil,subprocess,urllib.request,time,stat,platform,signal
+          product_archive="$CURSOR_PROOF_WORKSPACE/source/TEST-product.tar"
+          git archive --format=tar 9f014e72af510783d58d00ad3d2db455a2f8117b > "$product_archive"
+          test "$(git get-tar-commit-id < "$product_archive")" = 9f014e72af510783d58d00ad3d2db455a2f8117b
+          product_sha="$(sha256sum "$product_archive")"
+          sudo -n env CURSOR_PROOF_PRODUCT_ARCHIVE_SHA="${product_sha%% *}" GITHUB_ENV="$GITHUB_ENV" CURSOR_PROOF_JOB_START="$CURSOR_PROOF_JOB_START" CURSOR_PROOF_PRODUCT_ROOT="$PWD" CURSOR_PROOF_WORKSPACE="$CURSOR_PROOF_WORKSPACE" CURSOR_PROOF_GO="$(command -v go)" /usr/bin/python3 -B -S - <<'PY_PROOF'
+          import hashlib,json,os,pathlib,shutil,subprocess,urllib.request,time,stat,platform,signal,tarfile
           started=time.monotonic(); end=min(started+190*60,float(os.environ['CURSOR_PROOF_JOB_START'])+204*60)
           prep_end=started+492; pairs_left=87; machine_id=None
           w=pathlib.Path(os.environ['CURSOR_PROOF_WORKSPACE']); source=w/'source'; fixtures=source/'contract-fixtures-r1364'; old=source/'exact-old-executor'
@@ -866,7 +870,17 @@ jobs:
               for name in ('tmp','cache','module-cache','gopath','home'):
                   path=physical/name; path.mkdir(mode=0o700); os.chown(path,1000,1000)
               penv=dict(os.environ,TMPDIR=str(physical/'tmp'),GOTMPDIR=str(physical/'tmp'),GOCACHE=str(physical/'cache'),GOMODCACHE=str(physical/'module-cache'),GOPATH=str(physical/'gopath'),HOME=str(physical/'home'),GOENV='off')
-              go=os.environ['CURSOR_PROOF_GO']; product=pathlib.Path(os.environ['CURSOR_PROOF_PRODUCT_ROOT'])
+              go=os.environ['CURSOR_PROOF_GO']; original_product=pathlib.Path(os.environ['CURSOR_PROOF_PRODUCT_ROOT'])
+              # Retain actual UID1000 checkout accessibility, then use the same frozen tree in TEST scratch.
+              with (w/'logs/P1-original-module-access.log').open('xb') as diagnostic:
+                  subprocess.run(['/usr/bin/setpriv','--reuid=1000','--regid=1000','--clear-groups','/usr/bin/python3','-B','-S','-c',"import pathlib,sys; p=pathlib.Path(sys.argv[1]); print(p.stat()); print(p.read_bytes()[:160])",str(original_product/'go.mod')],stdout=diagnostic,stderr=subprocess.STDOUT,timeout=5)
+              product=w/'product'; product.mkdir(mode=0o755)
+              with os.fdopen(os.open(source/'TEST-product.tar',os.O_RDONLY|os.O_NOFOLLOW),'rb') as archive:
+                  assert hashlib.file_digest(archive,'sha256').hexdigest()==os.environ['CURSOR_PROOF_PRODUCT_ARCHIVE_SHA'], 'frozen product archive changed'
+                  archive.seek(0)
+                  with tarfile.open(fileobj=archive,mode='r:') as tree: tree.extractall(product,filter='data')
+              assert (product/'go.mod').read_bytes()==(original_product/'go.mod').read_bytes(), 'frozen module changed'
+              budget(); check_host()
               commands=(
                   ('native',['github.com/777genius/plugin-kit-ai/install/integrationctl/adapters/directoryidentity','github.com/777genius/plugin-kit-ai/install/integrationctl/adapters/dirswap'],['ACTUAL_IOCTL=SUCCESS; fd_tuple=SUPPORTED;','QUALIFICATION=SUPPORTED; same-byte replacement denied','QUALIFICATION=SUPPORTED; substituted ancestor denied with unchanged child','FRESH_PROCESS_REVALIDATED']),
                   ('cursor',['./internal/copilotvscodeinstall','-run','^TestCursor'],['ACTUAL_TEST_PHYSICAL_HOST: tuple=linux/amd64','P1_ORIGINAL_TOKEN_REVALIDATED=true; PUBLIC_SELECTED_ACK_PROJECTION_DATA_ADMISSION=true','SIBLING_R2_SELECTED_R1_POSITIVE=true']),
