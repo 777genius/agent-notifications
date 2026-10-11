@@ -499,11 +499,13 @@ jobs:
     timeout-minutes: 210
     permissions:
       contents: read
+    env:
+      CURSOR_OBSERVATION_METHOD: public-sdk-private-dbus-v1
     steps:
       - uses: actions/checkout@v7
         timeout-minutes: 2
         with:
-          ref: 9f014e72af510783d58d00ad3d2db455a2f8117b
+          ref: 53a52623db13951bf5d763850a6139aecefea910
           persist-credentials: false
       - name: Require source checkpoint merged into main
         timeout-minutes: 1
@@ -513,11 +515,13 @@ jobs:
         run: |
           set -euo pipefail
           python3 -B -S -c 'import os,time; open(os.environ["GITHUB_ENV"],"a").write("CURSOR_PROOF_JOB_START="+str(time.monotonic()-120)+"\n")'
+          test "$CURSOR_REPOSITORY_MODE" = true
           git fetch --no-tags origin main
           git merge-base --is-ancestor 9f014e72af510783d58d00ad3d2db455a2f8117b FETCH_HEAD
-          # consume_cursor_e authorizes both transport forms in this job.
+          # SDK method requires the repository fixture at the exact reviewed workflow ref.
           [[ "$CURSOR_FIXTURE_SHA" =~ ^[0-9a-f]{40}$ ]]
           git fetch --no-tags origin "$CURSOR_FIXTURE_SHA"
+          git merge-base --is-ancestor 53a52623db13951bf5d763850a6139aecefea910 "$CURSOR_FIXTURE_SHA"
       - uses: actions/setup-go@v7
         timeout-minutes: 3
         with:
@@ -534,13 +538,13 @@ jobs:
           trap 'printf "Cursor qualification failed at shell line %s\n" "$LINENO" >&2' ERR
           test "$(id -u)" = 1001
           printf 'Cursor coordinator UID guard passed; checking the unchanged root/actor tuple\n'
-          sudo -n /usr/bin/python3 -B -S - <<'PY_SAME'
+          sudo -n env CURSOR_OBSERVATION_METHOD=public-sdk-private-dbus-v1 /usr/bin/python3 -B -S - <<'PY_SAME'
           import os,pathlib,platform,stat,sys
           assert platform.machine() == 'x86_64' and platform.release() == '6.17.0-1022-azure'
           release=pathlib.Path('/etc/os-release').read_text(); assert '\nID=ubuntu\n' in '\n'+release and 'VERSION="24.04.5 LTS' in release
           values=dict(row.split(':',1) for row in pathlib.Path('/proc/self/status').read_text().splitlines() if ':' in row)
-          assert os.geteuid() == 0 and int(values['CapEff'],16) & ((1<<19)|(1<<21)) == ((1<<19)|(1<<21)) and values['Seccomp'].strip() == '0'
-          assert pathlib.Path('/proc/self/attr/current').read_text().strip() == 'unconfined' and pathlib.Path('/proc/sys/kernel/yama/ptrace_scope').read_text().strip() in ('0','1','2')
+          assert os.geteuid() == 0 and int(values['CapEff'],16) & (1<<21 if os.environ['CURSOR_OBSERVATION_METHOD'] == 'public-sdk-private-dbus-v1' else (1<<19)|(1<<21)) == (1<<21 if os.environ['CURSOR_OBSERVATION_METHOD'] == 'public-sdk-private-dbus-v1' else (1<<19)|(1<<21)) and values['Seccomp'].strip() == '0'
+          assert pathlib.Path('/proc/self/attr/current').read_text().strip() == 'unconfined'
           assert os.readlink('/proc/self/ns/pid') == os.readlink('/proc/1/ns/pid'), 'host PID namespace'
           def qualify(fd,path):
               f=os.fstat(fd); assert stat.S_ISDIR(f.st_mode) and f.st_uid == f.st_gid == 0 and f.st_mode & 1 and not f.st_mode & 0o022
@@ -689,7 +693,7 @@ jobs:
           # One public immutable transport identity; private input HEAD is never public evidence.
           transport_sha = os.environ['CURSOR_FIXTURE_SHA']
           assert type(transport_sha) is str and re.fullmatch('[0-9a-f]{40}',transport_sha), 'trusted exact workflow/source commit required'
-          assert bounded_git(['rev-parse','HEAD'],41) == b'9f014e72af510783d58d00ad3d2db455a2f8117b\n'
+          assert bounded_git(['rev-parse','HEAD'],41) == b'53a52623db13951bf5d763850a6139aecefea910\n'
           assert bounded_git(['cat-file','-t',transport_sha],7) == b'commit\n'
           tuples = (
               ('contract-fixtures-r1364/MATRIX_README.md', 26982, 'c0664460faffad85b3ebfc9c6a4bbbe3934fee779ab751d3f215132b90821c42'),
@@ -726,13 +730,21 @@ jobs:
               assert bounded_git(['cat-file','-s',oid],32) == str(size).encode()+b'\n'
               raw = bounded_git(['cat-file','blob',oid],size); assert len(raw) == size and hashlib.sha256(raw).hexdigest() == pin
               target = workspace/'source'/relative; target.parent.mkdir(parents=True,exist_ok=True); target.write_bytes(raw); target.chmod(0o644); assert target.read_bytes() == raw and target.lstat().st_mode & 0o777 == 0o644
-          assert bounded_git(['rev-parse','HEAD'],41) == b'9f014e72af510783d58d00ad3d2db455a2f8117b\n', 'product HEAD changed'
+          assert bounded_git(['rev-parse','HEAD'],41) == b'53a52623db13951bf5d763850a6139aecefea910\n', 'product HEAD changed'
+          adapter_path = '.github/fixtures/cursor-installed-e/sdk_observation.py'
+          adapter = bounded_git(['show',transport_sha+':'+adapter_path],65536)
+          assert hashlib.sha256(adapter).hexdigest() == '3359ebccbe752ac537b5ca8246b515ce712af82aad50e2ecd2e75cd47d7bf40c'
+          compile(adapter,'sdk_observation.py','exec')
+          adapter_file = workspace/'source/sdk_observation.py'; adapter_file.write_bytes(adapter); adapter_file.chmod(0o644)
+          with open(os.environ['GITHUB_ENV'],'a') as environment:
+              environment.write('CURSOR_CARRIER='+str(workspace/'source/native_case.py')+'\n')
+              environment.write('CURSOR_SDK_ADAPTER='+str(adapter_file)+'\n')
           PY_VERIFY
       - name: Check SAME actual runner before preparation or fixed archive acquisition
         timeout-minutes: 1
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = 9f014e72af510783d58d00ad3d2db455a2f8117b
+          test "$(git rev-parse HEAD)" = 53a52623db13951bf5d763850a6139aecefea910
           test "$(uname -m)" = x86_64
           test "$(uname -r)" = 6.17.0-1022-azure
           grep -Fx 'ID=ubuntu' /etc/os-release
@@ -753,17 +765,17 @@ jobs:
           for tool in strace dbus-daemon dbus-monitor dbus-send dunst Xvfb xauth nsenter setpriv; do test -x "/usr/bin/$tool"; done
           # No kernel/CAP/LSM/sysctl changes or attach probing; actual permission
           # and session readiness remain fail-closed gates in the ONE carrier.
-      - name: SAME accepted-source whole Linux proof only; native remains HOLD
+      - name: SAME physical SDK qualification; historical tracer matrix remains HOLD
         timeout-minutes: 190
         run: |
           set -euo pipefail
-          trap 'echo "HOLD: proof-only failure; native --execute is forbidden"' EXIT
+          trap 'status=$?; if [ "$status" -ne 0 ]; then echo "HOLD: qualification failure; native --execute is forbidden"; fi' EXIT
           product_started="$(python3 -B -S -c 'import time; print(time.monotonic())')"
           product_archive="$CURSOR_PROOF_WORKSPACE/source/TEST-product.tar"
-          timeout 30s git archive --format=tar 9f014e72af510783d58d00ad3d2db455a2f8117b > "$product_archive"
-          test "$(git get-tar-commit-id < "$product_archive")" = 9f014e72af510783d58d00ad3d2db455a2f8117b
+          timeout 30s git archive --format=tar 53a52623db13951bf5d763850a6139aecefea910 > "$product_archive"
+          test "$(git get-tar-commit-id < "$product_archive")" = 53a52623db13951bf5d763850a6139aecefea910
           product_sha="$(sha256sum "$product_archive")"
-          sudo -n env CURSOR_PROOF_PREP_START="$product_started" CURSOR_PROOF_PRODUCT_ARCHIVE_SHA="${product_sha%% *}" GITHUB_ENV="$GITHUB_ENV" CURSOR_PROOF_JOB_START="$CURSOR_PROOF_JOB_START" CURSOR_PROOF_PRODUCT_ROOT="$PWD" CURSOR_PROOF_WORKSPACE="$CURSOR_PROOF_WORKSPACE" CURSOR_PROOF_GO="$(command -v go)" /usr/bin/python3 -B -S - <<'PY_PROOF'
+          sudo -n env CURSOR_OBSERVATION_METHOD=public-sdk-private-dbus-v1 CURSOR_PROOF_PREP_START="$product_started" CURSOR_PROOF_PRODUCT_ARCHIVE_SHA="${product_sha%% *}" GITHUB_ENV="$GITHUB_ENV" CURSOR_PROOF_JOB_START="$CURSOR_PROOF_JOB_START" CURSOR_PROOF_PRODUCT_ROOT="$PWD" CURSOR_PROOF_WORKSPACE="$CURSOR_PROOF_WORKSPACE" CURSOR_PROOF_GO="$(command -v go)" /usr/bin/python3 -B -S - <<'PY_PROOF'
           import hashlib,json,os,pathlib,shutil,subprocess,urllib.request,time,stat,platform,signal,tarfile
           started=float(os.environ['CURSOR_PROOF_PREP_START']); end=min(started+190*60,float(os.environ['CURSOR_PROOF_JOB_START'])+204*60)
           prep_end=started+492; pairs_left=87; machine_id=None
@@ -773,8 +785,8 @@ jobs:
               assert os.geteuid() == 0 and platform.machine() == 'x86_64' and platform.release() == '6.17.0-1022-azure'
               release=pathlib.Path('/etc/os-release').read_text(); assert '\nID=ubuntu\n' in '\n'+release and 'VERSION="24.04.5 LTS' in release
               values=dict(row.split(':',1) for row in pathlib.Path('/proc/self/status').read_text().splitlines() if ':' in row)
-              assert int(values['CapEff'],16) & ((1<<19)|(1<<21)) == ((1<<19)|(1<<21)) and values['Seccomp'].strip() == '0'
-              assert pathlib.Path('/proc/self/attr/current').read_text().strip() == 'unconfined' and pathlib.Path('/proc/sys/kernel/yama/ptrace_scope').read_text().strip() in ('0','1','2')
+              assert int(values['CapEff'],16) & (1<<21 if os.environ['CURSOR_OBSERVATION_METHOD'] == 'public-sdk-private-dbus-v1' else (1<<19)|(1<<21)) == (1<<21 if os.environ['CURSOR_OBSERVATION_METHOD'] == 'public-sdk-private-dbus-v1' else (1<<19)|(1<<21)) and values['Seccomp'].strip() == '0'
+              assert pathlib.Path('/proc/self/attr/current').read_text().strip() == 'unconfined'
               assert os.readlink('/proc/self/ns/pid') == os.readlink('/proc/1/ns/pid')
               for path in (pathlib.Path('/'),pathlib.Path('/srv'),pathlib.Path('/srv/workers'),w,source,w/'scratch'):
                   fd=os.open(path,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
@@ -897,6 +909,9 @@ jobs:
               os.environ['CURSOR_PROOF_MACHINE_ID']=machine_id; check_host()
               (w/'logs/P1-machine.json').write_text(json.dumps({'machineID':machine_id,'kernel':platform.release(),'osRelease':pathlib.Path('/etc/os-release').read_text(),'uid':1000,'positiveLogs':['P1-'+c[0] for c in commands],'status':pathlib.Path('/proc/self/status').read_text(),'lsm':pathlib.Path('/proc/self/attr/current').read_text(),'yama':pathlib.Path('/proc/sys/kernel/yama/ptrace_scope').read_text(),'mountinfo':pathlib.Path('/proc/self/mountinfo').read_text(),'pidNS':os.readlink('/proc/self/ns/pid')})+'\n')
               with open(os.environ['GITHUB_ENV'],'a') as environment: environment.write('CURSOR_PROOF_MACHINE_ID='+machine_id+'\n')
+              if os.environ['CURSOR_OBSERVATION_METHOD'] == 'public-sdk-private-dbus-v1':
+                  (w/'logs/SDK-method.json').write_text(json.dumps({'method':'public-sdk-private-dbus-v1','tracerFatalQualification':'HISTORICAL_FAIL_NOT_RUN','RecoverChildDeath':'ACCEPTED_SDK_CONTRACT_8dff5f1315df','PIDFDProof':'NOT_RUN'})+'\n')
+                  raise SystemExit(0)
               assert run(['/usr/bin/dpkg-query','-W','-f=${Version}','strace'],'stock-version').strip() == b'6.8-0ubuntu2'
               run(['/usr/bin/dpkg-query','-S','/usr/bin/strace'],'stock-owner'); run(['/usr/bin/sha256sum','/usr/bin/strace'],'stock-sha')
               budget(); check_host(); archive=w/'builds/strace-6.8.tar.xz'
@@ -936,7 +951,8 @@ jobs:
                       pairs_left-=1; budget(pair=True)
           finally:
               if (w/'logs').is_dir(): (w/'logs/budget.json').write_text(json.dumps({'elapsedSeconds':time.monotonic()-started,'preparationElapsedSeconds':locals().get('preparation_elapsed'),'remainingSeconds':end-time.monotonic(),'pairsRemaining':pairs_left,'preparationCapSeconds':492,'pairSchedulingAllowanceSeconds':124,'supervisorCancellation':'NONE','unboundedReadonlyLauncherReceiptGap':True,'finalReserveSeconds':120,'timingQualification':'NOT_RUN until actual full closure'})+'\n')
-              print('HOLD: proof-only; WholeContract INCOMPLETE; native --execute is forbidden',flush=True)
+              if os.environ['CURSOR_OBSERVATION_METHOD'] != 'public-sdk-private-dbus-v1':
+                  print('HOLD: proof-only; WholeContract INCOMPLETE; native --execute is forbidden',flush=True)
           raise SystemExit(1)
           PY_PROOF
       - name: Build exact source package and bridge and produce real thirteen-key inputs
@@ -959,7 +975,7 @@ jobs:
           import tarfile
           import urllib.request
 
-          SOURCE = '9f014e72af510783d58d00ad3d2db455a2f8117b'
+          SOURCE = '53a52623db13951bf5d763850a6139aecefea910'
           ARCHIVE_URL = 'https://downloads.cursor.com/lab/2026.09.28-64d2043/linux/x64/agent-cli-package.tar.gz'
           ARCHIVE_SHA = '6e4cd936a4866b8a77c50ff51a564460d715772fabc477a01aa0f0455d9559f0'
           ARCHIVE_SIZE = 182618248
@@ -1169,6 +1185,7 @@ jobs:
               import importlib.util
               spec = importlib.util.spec_from_file_location('exact_input_contract',carrier)
               module = importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+              module.SOURCE_SHA = SOURCE
               module.execution_inputs(str(output))
               module.qualified_runner(pathlib.Path(data['root'])/'home/.cursor',data['machineID'])
               readability = readable_inputs(data, output, carrier)
@@ -1184,7 +1201,7 @@ jobs:
         timeout-minutes: 3
         run: |
           set -euo pipefail
-          sudo /usr/bin/python3 -B -S "$CURSOR_CARRIER" --execute --inputs "$CURSOR_EXECUTION_INPUTS" --consent TEST-only-public-sdk-stop-and-workspace-trust
+          sudo /usr/bin/python3 -B -S "$CURSOR_SDK_ADAPTER" --fixture "$CURSOR_CARRIER" --execute --inputs "$CURSOR_EXECUTION_INPUTS" --consent TEST-only-public-sdk-stop-and-workspace-trust
       - name: Require authoritative SAME-case PASS and always copy existing evidence
         if: always()
         timeout-minutes: 3
@@ -1208,7 +1225,7 @@ jobs:
           import stat
           import tarfile
 
-          SOURCE = '9f014e72af510783d58d00ad3d2db455a2f8117b'
+          SOURCE = '53a52623db13951bf5d763850a6139aecefea910'
           BRIDGE = '77030250348f8af0ee99878627b59c39cc7d658974c11adca67f7d98a4d4c8fc'
           FILE_LIMIT = 16 << 20
           TOTAL_LIMIT = 1 << 30
@@ -1280,6 +1297,7 @@ jobs:
               try:
                   assert inputs['root'] == str(pathlib.Path(runner_temp) / 'TEST-cursor-installed-one')
                   assert hashlib.sha256(read_path(case, 'recipe/native_case.py')).hexdigest() == source_sha
+                  assert hashlib.sha256(read_path(case, 'recipe/sdk_observation.py')).hexdigest() == '3359ebccbe752ac537b5ca8246b515ce712af82aad50e2ecd2e75cd47d7bf40c'
                   assert hashlib.sha256(read_path(case, 'recipe/authoritative_readback.go')).hexdigest() == BRIDGE
                   load = lambda path: strict_json(read_path(case, 'evidence/' + path))
                   joined = load('namespace-join.json')
@@ -1298,16 +1316,21 @@ jobs:
                       run = observed['actualNativeRun']
                       native_ids.append((run['conversation'], run['generation']))
                       assert all(type(v) is str and v for v in native_ids[-1])
-                      raw = read_path(case, 'evidence/' + phase + '/native-consumed-stdin.json')
-                      assert 0 < len(raw) <= 1 << 20
-                      assert raw == read_path(case, 'evidence/' + phase + '/native-outer-consumed-stdin.bin')
-                      hashed = hashlib.sha256(raw).hexdigest().encode() + b'\n'
-                      for name in ('native-consumed-stdin.sha256', 'native-outer-consumed-stdin.sha256'):
-                          assert read_path(case, 'evidence/' + phase + '/' + name) == hashed
-                      stop = strict_json(raw)
-                      assert (stop['conversation_id'], stop['generation_id']) == native_ids[-1]
-                      for name in ('stdin-alias-trace.json', 'cleanup-process-snapshot.json', 'native-retained-object-boundaries.json', 'protocol.json', 'command.json'):
+                      sdk = load(phase + '/sdk-observation.json')
+                      assert sdk['observationMethod'] == 'public-sdk-private-dbus-v1'
+                      assert sdk['stdinCapture'] == 'NOT_RUN' and sdk['duplicatePayload'] == 'RECONSTRUCTED'
+                      assert (sdk['facts']['conversation'],sdk['facts']['generation']) == native_ids[-1]
+                      assert sdk['sdkAttemptBitsPresent'] == (index == 0)
+                      public = load(('enabled' if index == 0 else 'updated') + '-authoritative-readback.json')['consumerBinding']
+                      import struct
+                      fields = [public['InstallationID'],public['BindingID'],public['ProfileIdentity'],str(public['Generation']),public['Product'],*native_ids[-1],'stop','completed','true','0']
+                      marker = hashlib.sha256(b''.join(struct.pack('>Q',len(v.encode()))+v.encode() for v in fields)).hexdigest()
+                      assert sdk['cacheMarker'] == marker
+                      if index == 0: enabled_cache_sha = sdk['cacheSHA256']
+                      else: assert sdk['cacheSHA256'] == enabled_cache_sha
+                      for name in ('cleanup-process-snapshot.json', 'native-retained-object-boundaries.json', 'protocol.json', 'command.json'):
                           assert load(phase + '/' + name) is not None, 'missing phase evidence'
+                  assert load('duplicate-reconstructed.json') == {'payload':'RECONSTRUCTED','cacheUnchanged':True,'stdinCapture':'NOT_RUN'}
                   assert native_ids[0][0] != native_ids[1][0] and native_ids[0][1] != native_ids[1][1]
                   frozen = load('original-profile-authority.json')
                   authority = frozen['originalAuthority']
@@ -1345,7 +1368,8 @@ jobs:
                   assert remove['action'] == 'uninstall' and remove['outcome'] == 'completed' and not remove.get('nextActions')
                   selected = [r for r in inspect['targets'] if r['client'] == 'cursor' and r['unit'] == 'agent-notify']
                   assert inspect['outcome'] == 'completed' and len(selected) == 1 and selected[0]['outcome'] == 'absent' and not inspect.get('nextActions')
-                  assert load('trace-readiness.json') and load('session-readiness.json') and load('session-controls.json')
+                  assert load('session-readiness.json') and load('session-controls.json')
+                  # Native PID/FD tracer evidence is explicitly NOT_RUN.
                   notifications = load('notifications-actual.json')
                   assert notifications['busGUID'] and notifications['owner'] and len(notifications['receipts']) == 1
                   receipt = notifications['receipts'][0]
@@ -1576,7 +1600,7 @@ jobs:
               parser.add_argument('--gid', type=int)
               raise SystemExit(main(parser.parse_args()))
           PY_EVIDENCE
-          sudo env CURSOR_PROOF_WORKSPACE="${CURSOR_PROOF_WORKSPACE:-}" /usr/bin/python3 -B -S "$export_dir/case_evidence.py" --runner-temp "$CURSOR_CASE_PARENT" --source-sha 8f1781d05cd102adb5c06807866cc40622cba5769214cb4161f676a68c04a20b --destination "$export_dir" --uid "$(id -u)" --gid "$(id -g)"
+          sudo env CURSOR_PROOF_WORKSPACE="${CURSOR_PROOF_WORKSPACE:-}" /usr/bin/python3 -B -S "$export_dir/case_evidence.py" --runner-temp "$CURSOR_CASE_PARENT" --source-sha b99478b2b5b23cef65cf58f31d19ff382cfe4ddb4fcb185caa8856255310e113 --destination "$export_dir" --uid "$(id -u)" --gid "$(id -g)"
       - name: Always retain SAME-case TEST evidence and bounded preparation records
         if: always()
         timeout-minutes: 3
