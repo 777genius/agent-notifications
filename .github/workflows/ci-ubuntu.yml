@@ -776,7 +776,7 @@ jobs:
           assert bounded_git(['rev-parse','HEAD'],41) == b'a7a5ccdcf0b302b5ca668bd08e7bd3a542fd8adb\n', 'product HEAD changed'
           adapter_path = '.github/fixtures/cursor-installed-e/sdk_observation.py'
           adapter = bounded_git(['show',transport_sha+':'+adapter_path],65536)
-          assert hashlib.sha256(adapter).hexdigest() == '29afeba6ce8d1752826dd5c5ed1093af0e07c2d5c0b24523e2b1fd7691b40b52'
+          assert hashlib.sha256(adapter).hexdigest() == '7bc520313c66a9795a46f1f0321bc8e8f534cbb6e2200d9f16435ccffbf30fe4'
           compile(adapter,'sdk_observation.py','exec')
           adapter_file = workspace/'source/sdk_observation.py'; adapter_file.write_bytes(adapter); adapter_file.chmod(0o644)
           with open(os.environ['GITHUB_ENV'],'a') as environment:
@@ -1351,7 +1351,7 @@ jobs:
               try:
                   assert inputs['root'] == str(pathlib.Path(runner_temp) / 'TEST-cursor-installed-one')
                   assert hashlib.sha256(read_path(case, 'recipe/native_case.py')).hexdigest() == source_sha
-                  assert hashlib.sha256(read_path(case, 'recipe/sdk_observation.py')).hexdigest() == '29afeba6ce8d1752826dd5c5ed1093af0e07c2d5c0b24523e2b1fd7691b40b52'
+                  assert hashlib.sha256(read_path(case, 'recipe/sdk_observation.py')).hexdigest() == '7bc520313c66a9795a46f1f0321bc8e8f534cbb6e2200d9f16435ccffbf30fe4'
                   assert hashlib.sha256(read_path(case, 'recipe/authoritative_readback.go')).hexdigest() == BRIDGE
                   load = lambda path: strict_json(read_path(case, 'evidence/' + path))
                   joined = load('namespace-join.json')

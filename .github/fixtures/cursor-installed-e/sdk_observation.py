@@ -342,11 +342,41 @@ def adapt(m):
         (root/'evidence'/phase/'sdk-observation.json').write_text(json.dumps(record, indent=2)+'\n')
         return dict(record, nativeBytes=payload, facts=facts)
 
+    def track_events(data):
+        assert len(data) <= 65536, 'TEST telemetry body bound'
+        body = m.strict_json(data); assert set(body) == {'events'} and type(body['events']) is list and 1 <= len(body['events']) <= 200
+        for event in body['events']:
+            assert type(event) is dict and set(event) == {'eventName','eventData','timestamp'}
+            assert type(event['eventName']) is str and 0 < len(event['eventName'].encode()) <= 256
+            assert type(event['timestamp']) is str and m.re.fullmatch(r'-?(0|[1-9][0-9]{0,18})',event['timestamp']) and -(1<<63) <= int(event['timestamp']) < 1<<63
+            assert type(event['eventData']) is dict and len(event['eventData']) <= 128
+            for key,value in event['eventData'].items():
+                assert len(key.encode()) <= 256 and type(value) is dict and len(value) == 1
+                kind,item = next(iter(value.items()))
+                assert kind in ('stringValue','doubleValue','boolValue','intValue')
+                assert (kind == 'stringValue' and type(item) is str or kind == 'boolValue' and type(item) is bool or kind == 'doubleValue' and type(item) in (int,float) and item == item and abs(item) != float('inf') or kind == 'intValue' and type(item) is str and m.re.fullmatch(r'-?(0|[1-9][0-9]{0,18})',item) and -(1<<63) <= int(item) < 1<<63)
+        return len(body['events'])
+    m.sdk_track_events = track_events
+
     # Restart inventories retain the same exact vendor socket policy as after.
     native = inspect.getsource(m.native_run)
     before = "    native_before = {'home':bounded_tree(root/'home'),'profile':bounded_tree(root/'home/.cursor'),'cache':bounded_tree(root/'cache')}"
     assert native.count(before) == 1
     native = native.replace(before, "    native_before = {'home':bounded_tree(root/'home',vendor_root=root),'profile':bounded_tree(root/'home/.cursor',vendor_root=root),'cache':bounded_tree(root/'cache')}")
+    old_refusal = "                capture({'unsupportedRPC':self.path})\n                self.answer(501,b'{\"code\":\"unimplemented\",\"message\":\"TEST finite allowlist\"}','application/json')\n                assert self.path in REFUSALS, 'unknown server effects'"
+    new_refusal = """                telemetry = self.path == '/aiserver.v1.AnalyticsService/TrackEvents'
+                assert telemetry or self.path in REFUSALS, 'unknown server effects'
+                if telemetry:
+                    assert self.headers.get('Content-Type','').split(';',1)[0] == 'application/json'
+                    capture({'TESTTelemetryCollected':self.path,'eventCount':sdk_track_events(data),'bodySHA256':hashlib.sha256(data).hexdigest()})
+                else: capture({'unsupportedRPC':self.path})
+                try:
+                    if telemetry: self.answer(200,b'{}','application/json')
+                    else: self.answer(501,b'{"code":"unimplemented","message":"TEST finite allowlist"}','application/json')
+                except BrokenPipeError:
+                    capture({'advisoryResponseAborted':self.path,'bodySHA256':hashlib.sha256(data).hexdigest(),'bodyBytes':len(data),'responseWriteCompleted':False,'status':200 if telemetry else 501,'syntheticAuthMatches':True})"""
+    assert native.count(old_refusal) == 1
+    native = native.replace(old_refusal,new_refusal)
     exec(compile(native,'<SDK-native-before-inventory>','exec'),m.__dict__)
 
     original_snapshot = m.process_snapshot
