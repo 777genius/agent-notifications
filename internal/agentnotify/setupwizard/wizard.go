@@ -2002,7 +2002,11 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 				failed := portableInstallFailed(agent, req, out, err)
 				if failed.Reason == "activation_incomplete" {
 					failed.Reason = "migration_activation_pending"
-					failed.NextActions = []NextAction{{Kind: "activate", Agents: []string{string(agent)}, Reason: "migration_activation_pending", Command: RetryCommand(req)}}
+					for i := range failed.NextActions {
+						if failed.NextActions[i].Kind == "activate" && len(failed.NextActions[i].Command) > 0 {
+							failed.NextActions[i].Reason = "migration_activation_pending"
+						}
+					}
 				}
 				return failed, err
 			}
@@ -2546,7 +2550,11 @@ func activationRecovery(req Request, names []string, reason string) NextAction {
 	if req.BootstrapExpectedPolicy != nil && *req.BootstrapExpectedPolicy != policy.Preimage {
 		return next
 	}
-	agents, err := normalizeAgents(names)
+	selected := req.Agents
+	if len(selected) == 0 {
+		selected = names
+	}
+	agents, err := normalizeAgents(selected)
 	if err != nil {
 		return next
 	}

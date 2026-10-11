@@ -188,8 +188,8 @@ except KeyboardInterrupt:
                                "sys.stderr.write('private diagnostic\\n')\n"
                                "sys.exit(7 if 'install' in sys.argv else 0)\n")
             fixture.chmod(0o700)
-            diagnostics = lab
-            preview.cli_proxies(commands,lab,{'claude':str(fixture)},env,'a'*40)
+            diagnostics = preview.private_directory(Path(directory)/'diagnostics')
+            preview.cli_proxies(commands,lab,{'claude':str(fixture)},env,'a'*40,diagnostics=diagnostics)
             for args, status in ((['--version'],0),(['plugin','list','--json'],0),
                                  (['plugin','install','claude-notifications-go@claude-notifications-go'],7)):
                 result = subprocess.run([str(commands/'claude'),*args],capture_output=True,timeout=5,env=env)
@@ -197,6 +197,8 @@ except KeyboardInterrupt:
             rejected = subprocess.run([str(commands/'claude'),'--print','provider prompt'],capture_output=True,timeout=5,env=env)
             self.assertEqual(rejected.returncode,99)
             receipts = [json.loads(line) for line in (diagnostics/'cli-commands.jsonl').read_text().splitlines()]
+            self.assertEqual(receipts[-1],{'cli':'claude','args':['--print','provider prompt'],'rejected':True,'exit_code':99})
+            self.assertFalse((lab/'cli-commands.jsonl').exists())
             endings = [value for value in receipts if value.get('event') == 'finish']
             self.assertEqual([value['phase'] for value in endings],['version','list','registration'])
             self.assertEqual([value['exit_code'] for value in endings],[0,0,7])
@@ -211,6 +213,47 @@ except KeyboardInterrupt:
             self.assertLess(len(captured),1048700)
             self.assertIn(b'output truncated',captured)
             self.assertEqual((diagnostics/'cli-commands.jsonl').stat().st_mode & 0o777,0o600)
+
+    def test_rejected_proxy_command_uses_private_diagnostics_before_invocation(self):
+        # Rejections must be durable even when diagnostics is outside the TEST
+        # profile, and unsafe receipt leaves must never invoke the real command.
+        for leaf in ('missing','symlink','public'):
+            with self.subTest(leaf=leaf), tempfile.TemporaryDirectory() as directory:
+                lab, commands, env = self.proxy_lab(Path(directory))
+                diagnostics = preview.private_directory(Path(directory)/'diagnostics')
+                marker = lab/'invoked'
+                fixture = lab/'installed-claude'
+                fixture.write_text('#!'+sys.executable+' -I\nimport pathlib\n'
+                                   'pathlib.Path('+repr(str(marker))+').touch()\n')
+                fixture.chmod(0o700)
+                preview.cli_proxies(commands,lab,{'claude':str(fixture)},env,'a'*40,diagnostics=diagnostics)
+                receipt = diagnostics/'cli-commands.jsonl'
+                original = b'private original\n'
+                if leaf == 'symlink':
+                    victim = Path(directory)/'victim'
+                    victim.write_bytes(original)
+                    victim.chmod(0o600)
+                    receipt.symlink_to(victim)
+                elif leaf == 'public':
+                    receipt.write_bytes(original)
+                    receipt.chmod(0o644)
+                result = subprocess.run([str(commands/'claude'),'--print','provider prompt'],
+                                        capture_output=True,timeout=5,env=env)
+                if leaf == 'missing':
+                    self.assertEqual(result.returncode,99,result.stderr)
+                    self.assertEqual(receipt.stat().st_mode & 0o777,0o600)
+                    self.assertEqual(json.loads(receipt.read_text()),
+                                     {'cli':'claude','args':['--print','provider prompt'],'rejected':True,'exit_code':99})
+                else:
+                    self.assertNotEqual(result.returncode,99,'unsafe diagnostic leaf accepted')
+                    self.assertNotEqual(result.returncode,0)
+                    self.assertEqual(receipt.read_bytes(),original)
+                    self.assertEqual(receipt.is_symlink(),leaf == 'symlink')
+                    if leaf == 'public':
+                        self.assertEqual(receipt.stat().st_mode & 0o777,0o644)
+                self.assertFalse(marker.exists(),'rejected command was invoked')
+                self.assertFalse((lab/'cli-commands.jsonl').exists())
+                self.assertEqual(list(diagnostics.glob('*.log')),[])
 
     @unittest.skipUnless(sys.platform == 'darwin', 'real sandbox boundary requires macOS')
     def test_proxy_cancellation_records_receipt_and_joins_private_children(self):

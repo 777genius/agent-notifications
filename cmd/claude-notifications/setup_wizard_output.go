@@ -58,7 +58,7 @@ func writeSetupWizardSummary(out io.Writer, result setupwizard.Result) {
 		}
 		_, _ = fmt.Fprintln(out)
 		if target.ConfigPath != "" {
-			_, _ = fmt.Fprintln(out, "    MCP config: "+safeSetupText(target.ConfigPath))
+			_, _ = fmt.Fprintln(out, "    MCP config: "+setupDisplayPath(target.ConfigPath))
 		}
 		for _, warning := range target.Warnings {
 			_, _ = fmt.Fprintln(out, "    Warning: "+safeSetupText(warning))
@@ -144,7 +144,12 @@ func writeSetupWizardIncomplete(out io.Writer, result setupwizard.Result) {
 		case "activation_failed":
 			state = "activation failed"
 		}
-		if target.Unit == "hooks" {
+		if result.Action == "uninstall" && target.Outcome == "completed" {
+			state = "removed"
+			if target.Unit == "hooks" {
+				state = "hooks removed"
+			}
+		} else if target.Unit == "hooks" {
 			if target.Outcome == "completed" || target.Outcome == "installed" {
 				state = "hooks installed"
 			}
@@ -190,12 +195,16 @@ func setupFailureDescription(result setupwizard.Result) string {
 }
 
 func safeSetupText(value string) string {
-	return strings.Join(strings.Fields(strings.Map(func(r rune) rune {
+	return strings.Join(strings.Fields(setupDisplayPath(value)), " ")
+}
+
+func setupDisplayPath(value string) string {
+	return strings.Map(func(r rune) rune {
 		if r < 32 || r >= 127 && r <= 159 {
 			return ' '
 		}
 		return r
-	}, value)), " ")
+	}, value)
 }
 
 func setupPrintableCommand(command []string) string {
@@ -212,6 +221,8 @@ func setupClientName(client string) string {
 		return "OpenCode"
 	case "gemini":
 		return "Gemini CLI"
+	case "cursor":
+		return "Cursor"
 	}
 	return "Selected client"
 }

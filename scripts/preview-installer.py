@@ -582,6 +582,18 @@ def write_private_cache_proof(path, proof):
 
 
 lab = pathlib.Path(D['lab'])
+diagnostics = pathlib.Path(D['diagnostics'])
+def private_file(path, flags):
+    descriptor = os.open(path, flags | os.O_NOFOLLOW, 0o600)
+    identity = os.fstat(descriptor)
+    if (not stat.S_ISREG(identity.st_mode) or identity.st_uid != os.getuid() or
+            stat.S_IMODE(identity.st_mode) != 0o600):
+        os.close(descriptor)
+        raise ValueError('Unsafe TEST diagnostic file: '+str(path))
+    return os.fdopen(descriptor, 'ab', buffering=0)
+def receipt(value):
+    with private_file(diagnostics/'cli-commands.jsonl', os.O_WRONLY | os.O_CREAT | os.O_APPEND) as log:
+        log.write((json.dumps(value)+'\n').encode())
 name = pathlib.Path(sys.argv[0]).name
 args = sys.argv[1:]
 def local(value):
@@ -619,8 +631,7 @@ if name == 'codex':
     allowed |= args in [['plugin','marketplace',verb,key,'--json'] for verb in ('update','remove') for key in known]
     allowed |= args in [['plugin',verb,'agent-notify@'+key,'--json'] for verb in ('add','remove') for key in known]
 if not allowed or name not in D['installed']:
-    with (lab/'cli-commands.jsonl').open('a') as log:
-        log.write(json.dumps({'cli':name,'args':args,'rejected':True,'exit_code':99})+'\n')
+    receipt({'cli':name,'args':args,'rejected':True,'exit_code':99})
     print('Rejected TEST CLI command: '+name+' '+repr(args),file=sys.stderr)
     sys.exit(99)
 # SDK native adapters intentionally filter ambient environment. Restore only
@@ -630,18 +641,6 @@ for key in ('HOME','CODEX_HOME','CLAUDE_CONFIG_DIR','GEMINI_CLI_HOME','TMPDIR'):
     if key in os.environ:
         if not local(os.environ[key]): sys.exit('Rejected non-TEST CLI profile')
         env[key] = os.environ[key]
-diagnostics = pathlib.Path(D['diagnostics'])
-def private_file(path, flags):
-    descriptor = os.open(path, flags | os.O_NOFOLLOW, 0o600)
-    identity = os.fstat(descriptor)
-    if (not stat.S_ISREG(identity.st_mode) or identity.st_uid != os.getuid() or
-            stat.S_IMODE(identity.st_mode) != 0o600):
-        os.close(descriptor)
-        raise ValueError('Unsafe TEST diagnostic file: '+str(path))
-    return os.fdopen(descriptor, 'ab', buffering=0)
-def receipt(value):
-    with private_file(diagnostics/'cli-commands.jsonl', os.O_WRONLY | os.O_CREAT | os.O_APPEND) as log:
-        log.write((json.dumps(value)+'\n').encode())
 started = time.monotonic_ns()
 command_id = str(started)+'-'+str(os.getpid())
 phase = 'version' if args == ['--version'] else ('list' if 'list' in args else 'registration')

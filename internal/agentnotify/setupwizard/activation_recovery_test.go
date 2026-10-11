@@ -17,6 +17,7 @@ import (
 	"github.com/777genius/agent-notifications/internal/agentnotify/portable"
 	"github.com/777genius/agent-notifications/internal/agentnotify/portableasset"
 	"github.com/777genius/agent-notifications/internal/agentnotify/portablesetup"
+	"github.com/777genius/agent-notifications/internal/config"
 	"github.com/777genius/agent-notifications/internal/installruntime"
 	processadapter "github.com/777genius/plugin-kit-ai/install/integrationctl/adapters/process"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/domain"
@@ -25,8 +26,10 @@ import (
 
 type committedTimeoutRunner struct {
 	listingRunner
-	fail  bool
-	calls int
+	fail         bool
+	calls        int
+	onFailure    func()
+	failureReady func() bool
 }
 
 func (r *committedTimeoutRunner) Run(ctx context.Context, command ports.Command) (ports.CommandResult, error) {
@@ -37,7 +40,10 @@ func (r *committedTimeoutRunner) Run(ctx context.Context, command ports.Command)
 		}
 	}
 	listed, err := r.listingRunner.Run(ctx, command)
-	if r.fail && err == nil && !bytes.Equal(listed.Stdout, []byte("[]")) {
+	if r.fail && err == nil && !bytes.Equal(listed.Stdout, []byte("[]")) && (r.failureReady == nil || r.failureReady()) {
+		if r.onFailure != nil {
+			r.onFailure()
+		}
 		return ports.CommandResult{}, context.DeadlineExceeded
 	}
 	return listed, err
@@ -47,8 +53,13 @@ func (r *committedTimeoutRunner) Run(ctx context.Context, command ports.Command)
 // verification. Before the fix Codex becomes "failed", recovery duplicates the
 // staging ZIP, and a completed sibling loses its completed attempt fact.
 func TestActivationPartialRecoveryUsesAcquiredSource(t *testing.T) {
-	for _, order := range [][]string{{"claude", "codex"}, {"codex", "claude"}} {
-		t.Run(order[0]+"-first", func(t *testing.T) {
+	for _, row := range []struct {
+		name       string
+		order      []string
+		sequential bool
+	}{{"claude-first", []string{"claude", "codex"}, false}, {"codex-first", []string{"codex", "claude"}, false}, {"sequential-codex-first", []string{"codex", "claude"}, true}} {
+		t.Run(row.name, func(t *testing.T) {
+			order := row.order
 			control, runtimeRoot, global, _, _ := managedRuntime(t)
 			root := filepath.Dir(control)
 			probe := buildProbe(t)
@@ -66,6 +77,15 @@ func TestActivationPartialRecoveryUsesAcquiredSource(t *testing.T) {
 			}
 			runner := &committedTimeoutRunner{listingRunner: listingRunner{configRoot: claudeRoot}, fail: true}
 			req := Request{Action: ActionInstall, Agents: order, Yes: true, Hooks: boolPtr(false), AgentNotify: boolPtr(true), PackageRoot: archive, PackageSHA256: built.ArchiveSHA256, ReleaseVersion: "1.43.0", ControlRoot: control, RuntimeRoot: runtimeRoot, GlobalConfig: global, ClaudeConfig: claudeRoot, CodexHome: codexRoot, ClientExecutable: nativeCLI, Helper: probe, ScopeRoot: filepath.Join(root, "scope"), ClaudeRunner: runner}
+			if row.sequential {
+				// A live Codex plus an unbound Claude takes the actual per-client
+				// dispatcher, whose failure display selects only Claude.
+				initial := req
+				initial.Agents = []string{"codex"}
+				if installed, err := Run(testCtx(t), initial); err != nil || installed.Outcome != "completed" {
+					t.Fatalf("initial Codex: %+v %v", installed, err)
+				}
+			}
 			got, err := Run(testCtx(t), req)
 			if !errors.Is(err, context.DeadlineExceeded) || got.Reason != "activation_incomplete" {
 				t.Fatalf("partial result: %+v %v", got, err)
@@ -74,17 +94,23 @@ func TestActivationPartialRecoveryUsesAcquiredSource(t *testing.T) {
 			for _, target := range got.Targets {
 				byClient[target.Client] = target
 			}
-			if byClient["claude"].Outcome != "activation_timeout" || byClient["claude"].Materialization != "materialized" {
+			wantClaude := "activation_timeout"
+			if row.sequential {
+				// The SDK's single-client path retains lifecycle facts without a
+				// typed current group attempt; do not infer timeout from its error.
+				wantClaude = "incomplete"
+			}
+			if byClient["claude"].Outcome != wantClaude || byClient["claude"].Materialization != "materialized" {
 				t.Fatalf("Claude attempt lost: %+v", byClient)
 			}
 			wantCodex := "activation_not_attempted"
 			if order[0] == "codex" {
 				wantCodex = "completed"
 			}
-			if byClient["codex"].Outcome != wantCodex || byClient["codex"].Materialization != "materialized" {
+			if byClient["codex"].Outcome != wantCodex || (!row.sequential && byClient["codex"].Materialization != "materialized") {
 				t.Fatalf("Codex attempt: %+v", byClient)
 			}
-			if order[0] == "codex" {
+			if order[0] == "codex" && !row.sequential {
 				var saved portablesetup.ResultError
 				if !errors.As(err, &saved) {
 					t.Fatal("typed result missing")
@@ -101,6 +127,9 @@ func TestActivationPartialRecoveryUsesAcquiredSource(t *testing.T) {
 			}
 			if len(got.Command) != 0 || len(got.NextActions) != 1 || len(got.NextActions[0].Command) == 0 {
 				t.Fatalf("single validated recovery missing: %+v", got)
+			}
+			if row.sequential && strings.Join(got.NextActions[0].Agents, ",") != "claude" {
+				t.Fatalf("sequential failure display selection: %+v", got.NextActions)
 			}
 			statePath := filepath.Join(root, "uap", "state", "state-v2.json")
 			body, err := os.ReadFile(statePath)
@@ -208,6 +237,94 @@ func TestActivationPartialRecoveryUsesAcquiredSource(t *testing.T) {
 			}
 			if _, e := portablesetup.ReadIntent(control); !os.IsNotExist(e) {
 				t.Fatalf("completed intent retained: %v", e)
+			}
+		})
+	}
+}
+
+func TestMigrationActivationRecoveryPreservesSourceValidation(t *testing.T) {
+	for _, missing := range []bool{false, true} {
+		name := "acquired-source"
+		if missing {
+			name = "missing-source"
+		}
+		t.Run(name, func(t *testing.T) {
+			control, runtimeRoot, _, _, _ := managedRuntime(t)
+			root := filepath.Dir(control)
+			probe := buildProbe(t)
+			pkg := filepath.Join(root, "package")
+			writePackage(t, pkg, probe)
+			legacy := filepath.Join(runtimeRoot, "global", "config.json")
+			canonical := filepath.Join(root, "canonical", "config.json")
+			profile, scope := filepath.Join(root, "claude"), filepath.Join(root, "scope")
+			for _, path := range []string{profile, scope} {
+				if err := os.MkdirAll(path, 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			runner := &committedTimeoutRunner{listingRunner: listingRunner{configRoot: profile}}
+			req := Request{Action: ActionInstall, Agents: []string{"claude"}, Yes: true, Hooks: boolPtr(false), AgentNotify: boolPtr(true),
+				PackageRoot: pkg, ReleaseVersion: "1.0.0", ControlRoot: control, RuntimeRoot: runtimeRoot, GlobalConfig: legacy, ClaudeConfig: profile,
+				ClientExecutable: probe, Helper: probe, ScopeRoot: scope, ClaudeRunner: runner}
+			installed, err := Run(testCtx(t), req)
+			if err != nil || installed.Outcome != "completed" {
+				t.Fatalf("legacy install: %+v %v", installed, err)
+			}
+			t.Setenv(config.OverrideEnv, canonical)
+			req.Action, req.GlobalConfig, req.InstallationID = ActionRepair, "", installed.InstallationID
+			req.TreeDigest = inspectedWizardBinding(t, testCtx(t), control, "claude").TreeDigest
+			plan, err := Plan(testCtx(t), req)
+			if err != nil || !plan.Ready || len(plan.Request.MigrationBindings) != 1 {
+				t.Fatalf("migration plan: %+v %v", plan, err)
+			}
+			runner.fail = true
+			runner.failureReady = func() bool {
+				snap, err := installruntime.ReadInstalledSnapshot(control)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return portable.ExactCommittedBinding(snap.Ledger, plan.Request.MigrationBindings["claude"].New)
+			}
+			if missing {
+				// Lose the source only after external verification reaches the
+				// committed new registration. Presentation must refuse recovery.
+				runner.onFailure = func() {
+					if err := os.Rename(pkg, pkg+"-removed"); err != nil {
+						t.Fatal(err)
+					}
+					runner.onFailure = nil
+				}
+			}
+			failed, err := Run(testCtx(t), plan.Request)
+			if !errors.Is(err, context.DeadlineExceeded) || failed.Reason != "migration_activation_pending" || len(failed.NextActions) != 1 {
+				t.Fatalf("migration failure: %+v %v", failed, err)
+			}
+			if len(failed.Targets) != 1 || failed.Targets[0].Materialization != "materialized" || failed.Targets[0].Activation != "failed" {
+				t.Fatalf("committed migration facts lost: %+v", failed.Targets)
+			}
+			next := failed.NextActions[0]
+			if missing {
+				if len(next.Command) != 0 || next.Reason != "recovery_unavailable" {
+					t.Fatalf("unsafe migration recovery advertised: %+v", next)
+				}
+			} else {
+				if len(next.Command) == 0 || next.Reason != "migration_activation_pending" {
+					t.Fatalf("validated migration recovery lost: %+v", next)
+				}
+				found := false
+				for i := 0; i+1 < len(next.Command); i++ {
+					if next.Command[i] == "--package" && next.Command[i+1] == pkg {
+						found = true
+					}
+				}
+				if !found {
+					t.Fatalf("migration recovery lost acquired source: %v", next.Command)
+				}
+			}
+			intent, err := portablesetup.ReadIntent(control)
+			snap, snapErr := installruntime.ReadInstalledSnapshot(control)
+			if err != nil || snapErr != nil || snap.Ledger.PendingMutation == nil || snap.Ledger.PendingMutation.ID != intent.SetupIntentID || snap.Ledger.PendingMutation.Owner != "existing-installer" {
+				t.Fatalf("migration recovery lost owned intent: %+v %v %v", snap, err, snapErr)
 			}
 		})
 	}

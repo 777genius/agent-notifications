@@ -124,7 +124,9 @@ Desktop notification permission and a visible test send must be checked separate
 
 The installer distinguishes saved registration, failed activation and activation
 that was not started. If setup fails, keep the selected profile and the private
-log named by `Diagnostics`. Follow its single next action after resolving the
+log if `Diagnostics` reports a path. Native Windows persistence is currently
+unavailable; logging failures are reported separately.
+Follow its single next action after resolving the
 cause; a saved activation command uses the acquired package. `--skip-agent-notify`
 is an explicit hooks-only choice and does not remove an existing MCP installation.
 Automatic setup keeps absent MCP clients off when an existing managed portable installation or MCP binding is detected. Skipping setup alone does not record a permanent per-client opt-out.
