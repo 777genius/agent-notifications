@@ -119,11 +119,12 @@ def adapt(m):
             if thread: assert facts['tgid'] == self.controller['pid']
             return facts
 
-        def root_facts(self, local):
+        def root_facts(self, local, held_nets=None):
             assert m.proc_identity(self.controller['pid'],self.controller)['ns'] == self.controller['ns']
             matches = []
-            for path in pathlib.Path('/proc').iterdir():
-                if not path.name.isdecimal(): continue
+            # Newest candidates first; kernel PID namespace/NSpid uniqueness remains checked.
+            paths = sorted((p for p in pathlib.Path('/proc').iterdir() if p.name.isdecimal()), key=lambda p:int(p.name), reverse=True)
+            for path in paths:
                 try:
                     if m.os.readlink(path/'ns/pid') != self.controller['ns']['pid']: continue
                     status = dict(line.split(':',1) for line in (path/'status').read_text().splitlines() if ':' in line)
@@ -132,7 +133,14 @@ def adapt(m):
                     birth = int(fields[19])
                     if fields[0] == 'Z': continue
                     assert birth == local['stat'][5], 'sandbox PID reused'
-                    matches.append(m.proc_identity(int(path.name)))
+                    if held_nets is not None:
+                        fd = m.os.open(path/'ns/net',m.os.O_RDONLY|m.os.O_CLOEXEC)
+                        self.session.owned_fds.add(fd); held_nets[int(path.name)] = fd
+                        assert m.os.readlink('/proc/self/fd/'+str(fd)) == local['netNamespace'], 'early namespace changed'
+                    facts = m.proc_identity(int(path.name))
+                    if held_nets is not None:
+                        assert m.os.readlink('/proc/self/fd/'+str(fd)) == facts['ns']['net'], 'early namespace identity changed'
+                    matches.append(facts)
                 except FileNotFoundError: continue
             assert m.proc_identity(self.controller['pid'],self.controller)['ns'] == self.controller['ns']
             assert len(matches) <= 1, 'sandbox mapping ambiguity'
@@ -155,13 +163,19 @@ def adapt(m):
             assert snapshot['namespace'] == self.controller['ns']['pid'] and snapshot['netNamespace'] == self.controller['ns']['net']
             assert self.active_phase and not self.closed and self.clock.work is not None
             rows = {row['stat'][0]:row for row in snapshot['rows']}; output = {}
+            # Persist actual request before qualification, including refusals/unknown exits.
+            received = pathlib.Path(self.inputs['root'])/'evidence'/self.active_phase/'sandbox-root-candidates.jsonl'
+            raw = (json.dumps(snapshot)+'\n').encode()
+            assert len(raw)+(received.stat().st_size if received.exists() else 0) <= 16*m.LIMIT
+            with received.open('ab') as stream: stream.write(raw)
             for local in rows.values():
                 argv = local.get('argv',[])
                 sandbox = argv and argv[0] == str(pathlib.Path(self.inputs['artifact'])/'cursorsandbox')
                 mapper = argv and argv[0] == '/usr/bin/newgidmap'
                 if not (sandbox and local.get('netNamespace') != snapshot['netNamespace'] or mapper): continue
+                held_nets = {}
                 try:
-                    facts = self.root_facts(local)
+                    facts = self.root_facts(local,held_nets)
                     if facts is None:
                         assert local.get('netNamespace',snapshot['netNamespace']) == snapshot['netNamespace'], 'observed foreign namespace exited without containment proof'
                         output[str(local['stat'][0])] = {'exited':True,'tuple':[local['stat'][0],local['stat'][5]]}; continue
@@ -194,7 +208,7 @@ def adapt(m):
                         assert len(argv) == 5 and argv[2:] == ['0','1000','1'] and facts['argv'] == argv
                         assert facts['uids'] in ([1000]*4,[1000,0,0,0]) and facts['gids'] == [1000]*4 and facts['groups'] == []
                         assert facts['ns']['net'] == self.controller['ns']['net']
-                        target_row = rows[int(argv[1])]; target = self.root_facts(target_row)
+                        target_row = rows[int(argv[1])]; target = self.root_facts(target_row,held_nets)
                         assert target is not None and any(a['pid'] == target['pid'] and a['birth'] == target['birth'] for a in ancestors)
                     for ancestor in ancestors[1 if mapper else 0:]: self.sandbox_role(ancestor)
                     policy = self.sandbox_role(target)
@@ -205,8 +219,7 @@ def adapt(m):
                         time.sleep(min(.005,max(0,map_deadline-time.monotonic())))
                         target = m.proc_identity(target['pid'],target)
                     assert target['gidMap'].split() == ['0','1000','1'], 'incomplete or foreign preflight GID map'
-                    fd = m.os.open('/proc/'+str(target['pid'])+'/ns/net',m.os.O_RDONLY|m.os.O_CLOEXEC)
-                    self.session.owned_fds.add(fd)
+                    fd = held_nets[target['pid']]  # retained before complete identity/ancestry/map reads
                     try:
                         held = m.os.fstat(fd); assert m.os.readlink('/proc/self/fd/'+str(fd)) == target['ns']['net']
                         records = []
@@ -245,11 +258,15 @@ def adapt(m):
                                  'localIdentity':[actual_parent,self.native_leader['nspid'][-1],self.native_leader['nspid'][-1],facts['birth']],
                                  'netNamespace':facts['ns']['net'],'target':target,'identity':facts,'policy':policy,'records':records,'fdClosed':True}
                         output[str(local['stat'][0])] = proof
-                    finally: m.os.close(fd); self.session.owned_fds.remove(fd)
+                    finally:
+                        m.os.close(fd); self.session.owned_fds.remove(fd); held_nets.pop(target['pid'])
                 except FileNotFoundError:
                     assert local.get('netNamespace',snapshot['netNamespace']) == snapshot['netNamespace'], 'observed foreign namespace lost before containment proof'
                     assert self.root_facts(local) is None, 'live candidate metadata failure'
                     output[str(local['stat'][0])] = {'exited':True,'tuple':[local['stat'][0],local['stat'][5]]}
+                finally:
+                    for early_fd in held_nets.values():
+                        m.os.close(early_fd); self.session.owned_fds.remove(early_fd)
             evidence = pathlib.Path(self.inputs['root'])/'evidence'/self.active_phase/'sandbox-root-readbacks.jsonl'
             raw = (json.dumps(output)+'\n').encode(); assert len(raw)+(evidence.stat().st_size if evidence.exists() else 0) <= 16*m.LIMIT
             with evidence.open('ab') as stream: stream.write(raw)
