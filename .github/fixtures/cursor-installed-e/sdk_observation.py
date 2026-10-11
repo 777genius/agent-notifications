@@ -493,6 +493,10 @@ def adapt(m):
     assert lifecycle.count(anchor) == 1
     lifecycle = lifecycle.replace(anchor, "    globals()['SDK_REMOVAL_METADATA'] = {'before':sdk_mutation_metadata(root)}\n"+anchor)
     anchor = '    classification = classify_removal('
+    diagnostic = "    delta = {area:{'added':sorted(set(after_trees[area])-set(before_trees[area])), 'removed':sorted(set(before_trees[area])-set(after_trees[area])), 'changed':sorted(p for p in set(before_trees[area]) & set(after_trees[area]) if before_trees[area][p] != after_trees[area][p])} for area in before_trees}\n    raw = (json.dumps({'before':before_trees,'after':after_trees,'membershipDiff':delta},indent=2)+'\\n').encode()\n    assert len(raw) <= 16*LIMIT, 'full removal diagnostic evidence file bound'\n    (root/'evidence/removal-inventories-before-classification.json').write_bytes(raw)\n"
+    assert lifecycle.count(anchor) == 1
+    lifecycle = lifecycle.replace(anchor, diagnostic+anchor)
+    anchor = '    classification = classify_removal('
     assert lifecycle.count(anchor) == 1
     lifecycle = lifecycle.replace(anchor, "    SDK_REMOVAL_METADATA['after'] = sdk_mutation_metadata(root)\n    (root/'evidence/sdk-retention-metadata.json').write_text(json.dumps({side:{k:v for k,v in row.items() if k != 'stamp'} for side,row in SDK_REMOVAL_METADATA.items()},indent=2)+'\\n')\n"+anchor)
     exec(compile(lifecycle, '<SDK-lifecycle>', 'exec'), m.__dict__)
