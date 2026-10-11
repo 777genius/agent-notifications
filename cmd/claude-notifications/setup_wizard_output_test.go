@@ -74,7 +74,7 @@ func TestSetupWizardHumanIncompleteAndRemoval(t *testing.T) {
 			if code != r.ExitCode() {
 				t.Fatalf("exit %d", code)
 			}
-			if strings.Contains(out.String(), "Installation complete") || !strings.Contains(out.String(), "fixture_reason") || !strings.Contains(out.String(), "retry:") {
+			if strings.Contains(out.String(), "Installation complete") || (outcome != "cancelled" && (!strings.Contains(out.String(), "Setup incomplete:") || strings.Contains(out.String(), "fixture_reason") || strings.Contains(out.String(), "retry:"))) {
 				t.Fatalf("lost failure: %s", out.String())
 			}
 		})

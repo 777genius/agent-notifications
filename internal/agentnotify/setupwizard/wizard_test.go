@@ -7959,8 +7959,8 @@ func TestGroupNotifyFailedReportsBothCommittedTargets(t *testing.T) {
 	if len(got.NextActions[0].Agents) != 2 || got.NextActions[0].Agents[0] != "codex" || got.NextActions[0].Agents[1] != "claude" {
 		t.Fatalf("group activate agents: %+v", got.NextActions[0].Agents)
 	}
-	if len(got.NextActions[0].Command) < 2 || got.NextActions[0].Command[0] != "setup-notifications" || got.NextActions[0].Command[1] != "wizard" {
-		t.Fatalf("group activate retry command: %v", got.NextActions[0].Command)
+	if len(got.NextActions[0].Command) != 0 || got.NextActions[0].Reason != "recovery_unavailable" {
+		t.Fatalf("unowned fixture offered activation command: %+v", got.NextActions[0])
 	}
 	plain := groupNotifyFailed(
 		[]portable.Integration{portable.Codex, portable.Claude},

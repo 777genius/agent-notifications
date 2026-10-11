@@ -480,17 +480,28 @@ def local_git_snapshot(root, lab, sha, env):
                SSH_ASKPASS='/usr/bin/false')
 
 
-def cli_proxies(commands, lab, installed, env, sha, snapshots=None):
-    if not Path('/usr/bin/sandbox-exec').is_file():
-        raise ValueError('Real CLI preview requires macOS sandbox-exec')
-    home = Path.home()
+def host_credential_paths(home=None):
+    home = Path.home() if home is None else home
     blocked = [home/leaf for leaf in ('.claude','.claude.json','.codex','.gemini','.config',
                                     '.gitconfig','.git-credentials','.ssh','.aws','.npmrc','.local/share/opencode',
                                     'Library/Keychains','Library/Application Support/Claude',
                                     'Library/Application Support/Codex')]
     blocked.append(Path('/Library/Keychains'))
     # Cover the spelling a CLI may open and the actual target of host symlinks.
-    blocked = sorted({str(path) for entry in blocked for path in (entry, entry.resolve())})
+    return sorted({str(path) for entry in blocked for path in (entry, entry.resolve())})
+
+
+def validate_test_state(path):
+    resolved = path.resolve()
+    if any(resolved.is_relative_to(Path(blocked)) for blocked in host_credential_paths()):
+        raise ValueError('TEST state must be outside credential-denied host directories: '+str(path))
+    return path
+
+
+def cli_proxies(commands, lab, installed, env, sha, snapshots=None, diagnostics=None, helper_identity=None):
+    if not Path('/usr/bin/sandbox-exec').is_file():
+        raise ValueError('Real CLI preview requires macOS sandbox-exec')
+    blocked = host_credential_paths()
     profile = lab/'cli.sb'
     quoted = lambda value: json.dumps(str(value))
     profile.write_text('(version 1)\n(allow default)\n(deny network*)\n'
@@ -517,12 +528,15 @@ def cli_proxies(commands, lab, installed, env, sha, snapshots=None):
     snapshots = snapshots or {}
     execution = {name:snapshots[name]['execution'] if name in snapshots else path
                  for name,path in installed.items()}
-    data = {'lab':str(lab),'installed':installed,'execution':execution,'snapshots':snapshots,
+    diagnostics = private_directory(diagnostics or lab)
+    identities = {name: {'original_sha256': digest(Path(installed[name])),
+                         'execution_sha256': digest(Path(execution[name]))} for name in installed}
+    data = {'lab':str(lab),'diagnostics':str(diagnostics),'installed':installed,'execution':execution,'snapshots':snapshots,'identities':identities,
             'env':env,'profile':str(profile),
-            'sha':sha,'repo':REPO}
+            'sha':sha,'repo':REPO,'helper_identity':helper_identity or {}}
     settings = lab/'cli-proxy.json'
     settings.write_text(json.dumps(data))
-    code = r'''import hashlib, json, os, pathlib, re, stat, subprocess, sys, tempfile
+    code = r'''import hashlib, json, os, pathlib, re, select, signal, stat, subprocess, sys, tempfile, time
 D = json.loads(pathlib.Path(SETTINGS).read_text())
 def private_cache_leaf(path, executable=False):
     try:
@@ -616,33 +630,126 @@ for key in ('HOME','CODEX_HOME','CLAUDE_CONFIG_DIR','GEMINI_CLI_HOME','TMPDIR'):
     if key in os.environ:
         if not local(os.environ[key]): sys.exit('Rejected non-TEST CLI profile')
         env[key] = os.environ[key]
-with (lab/'cli-commands.jsonl').open('a') as log:
-    log.write(json.dumps({'cli':name,'executable':D['installed'][name],
-                          'execution':D['execution'][name],'args':args})+'\n')
+diagnostics = pathlib.Path(D['diagnostics'])
+def private_file(path, flags):
+    descriptor = os.open(path, flags | os.O_NOFOLLOW, 0o600)
+    identity = os.fstat(descriptor)
+    if (not stat.S_ISREG(identity.st_mode) or identity.st_uid != os.getuid() or
+            stat.S_IMODE(identity.st_mode) != 0o600):
+        os.close(descriptor)
+        raise ValueError('Unsafe TEST diagnostic file: '+str(path))
+    return os.fdopen(descriptor, 'ab', buffering=0)
+def receipt(value):
+    with private_file(diagnostics/'cli-commands.jsonl', os.O_WRONLY | os.O_CREAT | os.O_APPEND) as log:
+        log.write((json.dumps(value)+'\n').encode())
+started = time.monotonic_ns()
+command_id = str(started)+'-'+str(os.getpid())
+phase = 'version' if args == ['--version'] else ('list' if 'list' in args else 'registration')
+base = {'command_id':command_id,'cli':name,'executable':D['installed'][name],
+        'execution':D['execution'][name],'args':args,'phase':phase,
+        'source_commit':D['sha'],'identity':D['identities'][name],'helper_identity':D['helper_identity'],
+        'monotonic_start_ns':started}
+receipt(dict(base,event='start',proxy_pid=os.getpid()))
+interrupted = 0
+def interrupt(signum, frame):
+    global interrupted
+    interrupted = signum
+for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+    signal.signal(signum, interrupt)
+process = None
+captures = []
+output_paths = {}
+timed_out = False
+cleanup_forced = False
+exit_code = None
+version = bytearray()
+version_error = bytearray()
+failure = None
 try:
     if name in D['snapshots']:
         snapshot = D['snapshots'][name]
         private_cache_leaf(pathlib.Path(snapshot['execution']),executable=True)
         private_cache_leaf(pathlib.Path(snapshot['proof_path']))
-    version_probe = args == ['--version']
-    result = subprocess.run(['/usr/bin/sandbox-exec','-f',D['profile'],D['execution'][name]]+args,
-                            cwd=lab,env=env,timeout=60,
-                            capture_output=version_probe)
-    if version_probe:
-        if not result.returncode and name in D['snapshots']:
-            snapshot = D['snapshots'][name]
-            proof = {key:value for key,value in snapshot.items() if key != 'proof_path'}
-            proof['actual_version'] = result.stdout.decode(errors='replace').strip()
-            write_private_cache_proof(pathlib.Path(snapshot['proof_path']),proof)
-        with (lab/'cli-commands.jsonl').open('a') as log:
-            log.write(json.dumps({'cli':name,'args':args,'exit_code':result.returncode,
-                                  'stdout':result.stdout.decode(errors='replace'),
-                                  'stderr':result.stderr.decode(errors='replace')})+'\n')
-        sys.stdout.buffer.write(result.stdout)
-        if result.returncode: sys.stderr.buffer.write(result.stderr)
-    sys.exit(result.returncode)
-except subprocess.TimeoutExpired:
-    sys.exit('TEST CLI command exceeded 60 seconds')
+    for label in ('stdout','stderr'):
+        path = diagnostics/(command_id+'-'+label+'.log')
+        captures.append(private_file(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL))
+        output_paths[label] = str(path)
+    # A private group inside the inherited SDK session keeps its containment
+    # contract while allowing the proxy to join its own children on cancellation.
+    process = subprocess.Popen(['/usr/bin/sandbox-exec','-f',D['profile'],D['execution'][name]]+args,
+                               cwd=lab,env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,
+                               preexec_fn=os.setpgrp)
+    receipt(dict(base,event='spawn',child_pid=process.pid,output_paths=output_paths))
+    pipes = {process.stdout:0, process.stderr:1}
+    sizes = [0,0]
+    truncated = [False,False]
+    deadline = time.monotonic()+60
+    cleanup_deadline = None
+    while pipes or process.poll() is None:
+        now = time.monotonic()
+        if cleanup_deadline is None and (interrupted or now >= deadline):
+            timed_out = not bool(interrupted)
+            try: os.killpg(process.pid,signal.SIGTERM)
+            except ProcessLookupError: pass
+            cleanup_deadline = now+2
+        if cleanup_deadline is not None and now >= cleanup_deadline:
+            try:
+                os.killpg(process.pid,signal.SIGKILL)
+                cleanup_forced = True
+            except ProcessLookupError: pass
+            # A child escaping its private group remains the SDK session's
+            # responsibility; never wait forever on its inherited pipe.
+            for pipe in pipes: pipe.close()
+            pipes.clear()
+            break
+        readable, _, _ = select.select(list(pipes),[],[],.05)
+        for pipe in readable:
+            data = os.read(pipe.fileno(),65536)
+            index = pipes[pipe]
+            if not data:
+                pipe.close()
+                del pipes[pipe]
+                continue
+            retained = data[:max(0,1048576-sizes[index])]
+            captures[index].write(retained)
+            sizes[index] += len(retained)
+            if len(retained) < len(data) and not truncated[index]:
+                captures[index].write(b'\n[TEST diagnostic output truncated at 1048576 bytes]\n')
+                truncated[index] = True
+            if args == ['--version']:
+                retained_version = version if index == 0 else version_error
+                retained_version.extend(data[:max(0,8192-len(retained_version))])
+            if args != ['--version'] or index == 0:
+                try: os.write(1+index,data)
+                except BrokenPipeError:
+                    interrupted = signal.SIGTERM
+    exit_code = process.wait(timeout=2)
+    if args == ['--version'] and exit_code and version_error:
+        sys.stderr.buffer.write(version_error)
+    if args == ['--version'] and not exit_code and not interrupted and not timed_out and name in D['snapshots']:
+        snapshot = D['snapshots'][name]
+        proof = {key:value for key,value in snapshot.items() if key != 'proof_path'}
+        proof['actual_version'] = version.decode(errors='replace').strip()
+        write_private_cache_proof(pathlib.Path(snapshot['proof_path']),proof)
+except BaseException as error:
+    failure = type(error).__name__
+    raise
+finally:
+    if process is not None and (interrupted or timed_out or failure):
+        if not cleanup_forced:
+            try: os.killpg(process.pid,signal.SIGKILL)
+            except ProcessLookupError: pass
+        if process.poll() is None:
+            process.wait(timeout=2)
+        exit_code = process.returncode
+    for capture in captures: capture.close()
+    ended = time.monotonic_ns()
+    receipt(dict(base,event='finish',monotonic_end_ns=ended,duration_ms=(ended-started)/1000000,
+                 exit_code=exit_code,timeout=timed_out,cancelled=bool(interrupted),signal=interrupted,
+                 cleanup_forced=cleanup_forced,output_paths=output_paths,error=failure))
+if interrupted: sys.exit(128+interrupted)
+if timed_out: sys.exit('TEST CLI command exceeded 60 seconds')
+sys.exit(exit_code)
 '''.replace('SETTINGS',repr(str(settings)))
     for name in installed:
         path = commands/name
@@ -702,12 +809,14 @@ def preview(args):
     if sys.platform != 'darwin' or not os.isatty(0) or not os.isatty(1):
         raise ValueError('This macOS preview requires an interactive terminal')
     root = Path(__file__).resolve().parent.parent
-    state = private_directory(args.state_dir or Path(tempfile.gettempdir())/('agent-notifications-preview-TEST-'+str(os.getuid())))
+    state = private_directory(validate_test_state(args.state_dir or Path(tempfile.gettempdir())/('agent-notifications-preview-TEST-'+str(os.getuid()))))
     if state.is_relative_to(root):
         raise ValueError('Keep TEST state outside the source checkout')
     lab = Path(tempfile.mkdtemp(prefix='AllAgents-TEST-',dir=state))
     log_path = lab/'preparation.log'
+    diagnostics = None
     try:
+        diagnostics = private_directory(private_directory(Path.home()/'.agent-notifications-preview-TEST')/lab.name)
         with Preparation(log_path, plain=args.plain) as preparation:
             sha = source_identity(root)
             detail('Retained TEST profile: '+str(lab))
@@ -764,7 +873,9 @@ def preview(args):
             offline_transport(commands,assets,root,sha,version,name,lab/'acquisitions.log')
             local_git_snapshot(root, lab, sha, env)
             snapshots = stage_claude_cli(installed)
-            cli_proxies(commands, lab, installed, env, sha, snapshots)
+            env['BOOTSTRAP_DIAGNOSTIC_ROOT'] = str(diagnostics)
+            cli_proxies(commands, lab, installed, env, sha, snapshots, diagnostics,
+                        {'SourceCommit':sha,'SHA256':digest(staged)})
             env['BOOTSTRAP_RELEASES_BASE_URL'] = 'https://preview-installer.invalid/releases'
             # Supported read-only intent verifies the executable, not its filename/cache key.
             preparation.stage('Verifying preview provenance')
@@ -801,6 +912,8 @@ def preview(args):
     finally:
         print('\nTEST profile retained: '+str(lab), flush=True)
         print('Preparation log: '+str(log_path), flush=True)
+        if diagnostics is not None:
+            print('Installer diagnostics: '+str(diagnostics), flush=True)
         print('Keep the profile while its native app registration may exist; no automatic deletion.', flush=True)
 
 

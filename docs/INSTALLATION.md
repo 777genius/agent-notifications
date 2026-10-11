@@ -122,9 +122,10 @@ route. Never silently downgrade a request that requires a return to the chat.
 that a banner was visible or the chat opened.
 Desktop notification permission and a visible test send must be checked separately.
 
-The installer reports incomplete setup separately from successful hooks. Keep its retry
-command and selected profile if MCP or skill setup fails; rerun the installer or its
-`setup-notifications wizard` repair action after the cause is resolved. `--skip-agent-notify`
+The installer distinguishes saved registration, failed activation and activation
+that was not started. If setup fails, keep the selected profile and the private
+log named by `Diagnostics`. Follow its single next action after resolving the
+cause; a saved activation command uses the acquired package. `--skip-agent-notify`
 is an explicit hooks-only choice and does not remove an existing MCP installation.
 Automatic setup keeps absent MCP clients off when an existing managed portable installation or MCP binding is detected. Skipping setup alone does not record a permanent per-client opt-out.
 Use an explicit `--agent-notify` request to add that client later.
@@ -207,8 +208,19 @@ registration succeeded; it does not confirm notification delivery. Restart the
 agents, review and trust Codex entries with `/hooks`, and send a test notification.
 If a notification does not arrive, check OS permissions and notification settings.
 Skipped agent-notify setup is reported separately from installed automatic hooks.
-For detailed download and setup diagnostics, prefix the final installer command
-with `BOOTSTRAP_VERBOSE=1`. Failed stages always print their diagnostics.
+Failed stages show a compact cause and retain earlier stage output in a private
+durable log outside `TMPDIR` on POSIX systems. The default
+`agent-notifications-installer-diagnostics` directory sits beside the managed
+control root, allowing fresh installation to provision its own transaction state.
+Its parent directory has mode 0700
+and the log has mode 0600. Native Windows diagnostic persistence is currently
+unavailable because this adapter does not verify private Windows ACLs; it reports
+that limitation without saving raw output or advertising a log path. Each retained
+stream holds at most 64 KiB, with an explicit truncation marker;
+the session log is bounded to 2 MiB. Read the existing log for details without
+running installation again. `BOOTSTRAP_VERBOSE=1` displays printable diagnostic
+details at the end of a requested install. If logging fails, the installer reports
+that limitation and keeps raw command output out of the default display.
 
 ### Recover an entirely absent installer consumer
 

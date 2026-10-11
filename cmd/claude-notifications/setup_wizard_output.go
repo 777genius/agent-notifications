@@ -12,6 +12,10 @@ import (
 // Installation and observed delivery are separate facts. A completed mutation
 // must never imply that the client restarted, trusted hooks, or displayed an alert.
 func writeSetupWizardSummary(out io.Writer, result setupwizard.Result) {
+	if result.Action != "inspect" && result.Outcome != "completed" && result.Outcome != "unchanged" && result.Outcome != "cancelled" {
+		writeSetupWizardIncomplete(out, result)
+		return
+	}
 	title := "Setup " + readableSetupState(result.Outcome)
 	if result.Action == "inspect" {
 		title = "Notification setup status"
@@ -29,7 +33,7 @@ func writeSetupWizardSummary(out io.Writer, result setupwizard.Result) {
 	}
 	_, _ = fmt.Fprintln(out, title)
 	if result.Reason != "" {
-		_, _ = fmt.Fprintln(out, "Details: "+result.Reason)
+		_, _ = fmt.Fprintln(out, "Details: "+safeSetupText(result.Reason))
 	}
 	if result.DataRetained {
 		_, _ = fmt.Fprintln(out, "Settings and notification data were retained.")
@@ -54,10 +58,10 @@ func writeSetupWizardSummary(out io.Writer, result setupwizard.Result) {
 		}
 		_, _ = fmt.Fprintln(out)
 		if target.ConfigPath != "" {
-			_, _ = fmt.Fprintln(out, "    MCP config: "+target.ConfigPath)
+			_, _ = fmt.Fprintln(out, "    MCP config: "+safeSetupText(target.ConfigPath))
 		}
 		for _, warning := range target.Warnings {
-			_, _ = fmt.Fprintln(out, "    Warning: "+warning)
+			_, _ = fmt.Fprintln(out, "    Warning: "+safeSetupText(warning))
 		}
 	}
 	for _, fact := range result.Readiness {
@@ -117,6 +121,83 @@ func writeSetupWizardSummary(out io.Writer, result setupwizard.Result) {
 	}
 }
 
+// Failure defaults contain only finite presentation categories. Raw CLI errors,
+// paths and full recovery argv remain in the machine result and private log.
+func writeSetupWizardIncomplete(out io.Writer, result setupwizard.Result) {
+	_, _ = fmt.Fprintln(out, "Setup incomplete: "+setupFailureDescription(result))
+	for _, target := range result.Targets {
+		if target.Client != "claude" && target.Client != "codex" && target.Client != "opencode" && target.Client != "gemini" && target.Client != "cursor" {
+			continue
+		}
+		state := "needs inspection"
+		switch target.Outcome {
+		case "completed", "installed":
+			state = "activation verified"
+		case "activation_timeout":
+			state = "activation timed out"
+		case "activation_not_attempted":
+			state = "activation not started"
+		case "activation_canceled":
+			state = "activation canceled"
+		case "activation_deadline":
+			state = "activation deadline reached"
+		case "activation_failed":
+			state = "activation failed"
+		}
+		if target.Unit == "hooks" {
+			if target.Outcome == "completed" || target.Outcome == "installed" {
+				state = "hooks installed"
+			}
+		} else if target.Materialization == "materialized" || target.Materialization == "degraded" {
+			state = "registration saved; " + state
+		}
+		_, _ = fmt.Fprintf(out, "  %s  %s\n", setupClientName(target.Client), state)
+	}
+	_, _ = fmt.Fprintln(out, "  Delivery  not verified")
+	for _, next := range result.NextActions {
+		if usableInstallerRecovery(next) {
+			_, _ = fmt.Fprintln(out, "Next: Resume saved activation; use --json to view its command.")
+			return
+		}
+	}
+	_, _ = fmt.Fprintln(out, "Next: Inspect setup status before retrying.")
+}
+
+func setupFailureDescription(result setupwizard.Result) string {
+	for _, target := range result.Targets {
+		switch target.Outcome {
+		case "activation_timeout":
+			return setupClientName(target.Client) + " plugin verification timed out."
+		case "activation_canceled":
+			return "activation was canceled."
+		case "activation_deadline":
+			return "the setup deadline was reached."
+		case "activation_failed":
+			return setupClientName(target.Client) + " activation failed."
+		}
+	}
+	switch result.Reason {
+	case "concurrent_change", "pending_intent_conflict":
+		return "saved setup state changed; review the selection."
+	case "managed_runtime_required":
+		return "a managed runtime is required."
+	case "package_acquisition_failed", "recorded_package_unavailable", "package_required":
+		return "the installation package is unavailable."
+	case "invalid_arguments", "invalid_action":
+		return "setup arguments are invalid."
+	}
+	return "installation needs inspection."
+}
+
+func safeSetupText(value string) string {
+	return strings.Join(strings.Fields(strings.Map(func(r rune) rune {
+		if r < 32 || r >= 127 && r <= 159 {
+			return ' '
+		}
+		return r
+	}, value)), " ")
+}
+
 func setupPrintableCommand(command []string) string {
 	return strings.Join(quoteWizardArgs(wizardPrintableCommand(command)), " ")
 }
@@ -129,8 +210,10 @@ func setupClientName(client string) string {
 		return "Codex"
 	case "opencode":
 		return "OpenCode"
+	case "gemini":
+		return "Gemini CLI"
 	}
-	return client
+	return "Selected client"
 }
 
 func setupClientNames(clients []string) string {
