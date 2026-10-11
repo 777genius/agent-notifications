@@ -1568,7 +1568,7 @@ jobs:
                               finally: os.close(source_fd)
                           except (OSError,AssertionError,ValueError,KeyError) as error:
                               errors.append({'path':'TEST-cursor-proof/source/scratch','error':type(error).__name__+':'+str(error)[:240]})
-                          for comparison in ('NEW','OLD'):
+                          for comparison in (() if os.environ.get('CURSOR_OBSERVATION_METHOD') == 'public-sdk-private-dbus-v1' else ('NEW','OLD')):
                               relative='builds/'+comparison
                               for leaf in ('current.patch','build-provenance.json','config.log','config.status','Makefile','src/Makefile','src/strace'):
                                   selected(proof,relative+'/'+leaf)
@@ -1654,7 +1654,7 @@ jobs:
               parser.add_argument('--gid', type=int)
               raise SystemExit(main(parser.parse_args()))
           PY_EVIDENCE
-          sudo env CURSOR_PROOF_WORKSPACE="${CURSOR_PROOF_WORKSPACE:-}" /usr/bin/python3 -B -S "$export_dir/case_evidence.py" --runner-temp "$CURSOR_CASE_PARENT" --source-sha b99478b2b5b23cef65cf58f31d19ff382cfe4ddb4fcb185caa8856255310e113 --destination "$export_dir" --uid "$(id -u)" --gid "$(id -g)"
+          sudo env CURSOR_OBSERVATION_METHOD="$CURSOR_OBSERVATION_METHOD" CURSOR_PROOF_WORKSPACE="${CURSOR_PROOF_WORKSPACE:-}" /usr/bin/python3 -B -S "$export_dir/case_evidence.py" --runner-temp "$CURSOR_CASE_PARENT" --source-sha b99478b2b5b23cef65cf58f31d19ff382cfe4ddb4fcb185caa8856255310e113 --destination "$export_dir" --uid "$(id -u)" --gid "$(id -g)"
       - name: Always retain SAME-case TEST evidence and bounded preparation records
         if: always()
         timeout-minutes: 3
