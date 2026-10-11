@@ -10,7 +10,7 @@ import struct
 import sys
 import time
 
-SOURCE = '53a52623db13951bf5d763850a6139aecefea910'
+SOURCE = 'a7a5ccdcf0b302b5ca668bd08e7bd3a542fd8adb'
 FIXTURE_SHA = 'b99478b2b5b23cef65cf58f31d19ff382cfe4ddb4fcb185caa8856255310e113'
 METHOD = 'public-sdk-private-dbus-v1'
 
@@ -34,7 +34,7 @@ def adapt(m):
     old_revision = b'const productRevision = "9f014e72af510783d58d00ad3d2db455a2f8117b"'
     assert m.READBACK_SOURCE_BYTES.count(old_revision) == 1
     m.READBACK_SOURCE_BYTES = m.READBACK_SOURCE_BYTES.replace(old_revision, ('const productRevision = "'+SOURCE+'"').encode())
-    m.READBACK_SOURCE_SHA256 = '023a120c75a5482d9d86b4c76a45990f7fe5dcec38b430304cf8aeab86e525ef'
+    m.READBACK_SOURCE_SHA256 = '364fc0ee014fc21106c16eddd6bf4eb4ad9acf66adc11449a5b6288bfbf159a7'
     assert hashlib.sha256(m.READBACK_SOURCE_BYTES).hexdigest() == m.READBACK_SOURCE_SHA256
     # Bounded SDK runtime copies grew beyond the old 25,264,137-byte fixture.
     # The same per-file limit governs RLIMIT_FSIZE and full object readbacks;
@@ -44,7 +44,7 @@ def adapt(m):
     inputs = inspect.getsource(m.execution_inputs)
     anchor = "    assert b'=>\\t' not in build_info, 'local module replacement forbidden'"
     assert inputs.count(anchor) == 1
-    pins = "    assert b'github.com/777genius/plugin-kit-ai/install/integrationctl\\tv0.1.1-0.20261011083057-8dff5f1315df' in build_info\n    assert b'github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins\\tv0.0.0-20261011083057-8dff5f1315df' in build_info\n"
+    pins = "    assert b'github.com/777genius/plugin-kit-ai/install/integrationctl\\tv0.1.1-0.20261011092622-35e444fdf875' in build_info\n    assert b'github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins\\tv0.0.0-20261011092622-35e444fdf875' in build_info\n"
     exec(compile(inputs.replace(anchor, pins+anchor), '<SDK-current-input-pins>', 'exec'), m.__dict__)
     original_contract = inspect.getsource(m.require_native_observation_contract)
     original_contract = original_contract.replace("'nsenter','setpriv'}", "'nsenter','setpriv','newgidmap','ip'}")

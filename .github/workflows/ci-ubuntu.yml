@@ -548,7 +548,7 @@ jobs:
       - uses: actions/checkout@v7
         timeout-minutes: 2
         with:
-          ref: 53a52623db13951bf5d763850a6139aecefea910
+          ref: a7a5ccdcf0b302b5ca668bd08e7bd3a542fd8adb
           persist-credentials: false
       - name: Require source checkpoint merged into main
         timeout-minutes: 1
@@ -564,7 +564,7 @@ jobs:
           # SDK method requires the repository fixture at the exact reviewed workflow ref.
           [[ "$CURSOR_FIXTURE_SHA" =~ ^[0-9a-f]{40}$ ]]
           git fetch --no-tags origin "$CURSOR_FIXTURE_SHA"
-          git merge-base --is-ancestor 53a52623db13951bf5d763850a6139aecefea910 "$CURSOR_FIXTURE_SHA"
+          git merge-base --is-ancestor a7a5ccdcf0b302b5ca668bd08e7bd3a542fd8adb "$CURSOR_FIXTURE_SHA"
       - uses: actions/setup-go@v7
         timeout-minutes: 3
         with:
@@ -736,7 +736,7 @@ jobs:
           # One public immutable transport identity; private input HEAD is never public evidence.
           transport_sha = os.environ['CURSOR_FIXTURE_SHA']
           assert type(transport_sha) is str and re.fullmatch('[0-9a-f]{40}',transport_sha), 'trusted exact workflow/source commit required'
-          assert bounded_git(['rev-parse','HEAD'],41) == b'53a52623db13951bf5d763850a6139aecefea910\n'
+          assert bounded_git(['rev-parse','HEAD'],41) == b'a7a5ccdcf0b302b5ca668bd08e7bd3a542fd8adb\n'
           assert bounded_git(['cat-file','-t',transport_sha],7) == b'commit\n'
           tuples = (
               ('contract-fixtures-r1364/MATRIX_README.md', 26982, 'c0664460faffad85b3ebfc9c6a4bbbe3934fee779ab751d3f215132b90821c42'),
@@ -773,10 +773,10 @@ jobs:
               assert bounded_git(['cat-file','-s',oid],32) == str(size).encode()+b'\n'
               raw = bounded_git(['cat-file','blob',oid],size); assert len(raw) == size and hashlib.sha256(raw).hexdigest() == pin
               target = workspace/'source'/relative; target.parent.mkdir(parents=True,exist_ok=True); target.write_bytes(raw); target.chmod(0o644); assert target.read_bytes() == raw and target.lstat().st_mode & 0o777 == 0o644
-          assert bounded_git(['rev-parse','HEAD'],41) == b'53a52623db13951bf5d763850a6139aecefea910\n', 'product HEAD changed'
+          assert bounded_git(['rev-parse','HEAD'],41) == b'a7a5ccdcf0b302b5ca668bd08e7bd3a542fd8adb\n', 'product HEAD changed'
           adapter_path = '.github/fixtures/cursor-installed-e/sdk_observation.py'
           adapter = bounded_git(['show',transport_sha+':'+adapter_path],65536)
-          assert hashlib.sha256(adapter).hexdigest() == 'e2b15df2d34d7cf31370a051d40407dc63a3fae43189e10386c92575f1978480'
+          assert hashlib.sha256(adapter).hexdigest() == '88c4dff4996c06e55e8365bdc2ab792945f6786a3859eceb517f3ce9a5bcf73d'
           compile(adapter,'sdk_observation.py','exec')
           adapter_file = workspace/'source/sdk_observation.py'; adapter_file.write_bytes(adapter); adapter_file.chmod(0o644)
           with open(os.environ['GITHUB_ENV'],'a') as environment:
@@ -787,7 +787,7 @@ jobs:
         timeout-minutes: 1
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = 53a52623db13951bf5d763850a6139aecefea910
+          test "$(git rev-parse HEAD)" = a7a5ccdcf0b302b5ca668bd08e7bd3a542fd8adb
           test "$(uname -m)" = x86_64
           test "$(uname -r)" = 6.17.0-1022-azure
           grep -Fx 'ID=ubuntu' /etc/os-release
@@ -815,8 +815,8 @@ jobs:
           trap 'status=$?; if [ "$status" -ne 0 ]; then echo "HOLD: qualification failure; native --execute is forbidden"; fi' EXIT
           product_started="$(python3 -B -S -c 'import time; print(time.monotonic())')"
           product_archive="$CURSOR_PROOF_WORKSPACE/source/TEST-product.tar"
-          timeout 30s git archive --format=tar 53a52623db13951bf5d763850a6139aecefea910 > "$product_archive"
-          test "$(git get-tar-commit-id < "$product_archive")" = 53a52623db13951bf5d763850a6139aecefea910
+          timeout 30s git archive --format=tar a7a5ccdcf0b302b5ca668bd08e7bd3a542fd8adb > "$product_archive"
+          test "$(git get-tar-commit-id < "$product_archive")" = a7a5ccdcf0b302b5ca668bd08e7bd3a542fd8adb
           product_sha="$(sha256sum "$product_archive")"
           sudo -n env CURSOR_OBSERVATION_METHOD=public-sdk-private-dbus-v1 CURSOR_PROOF_PREP_START="$product_started" CURSOR_PROOF_PRODUCT_ARCHIVE_SHA="${product_sha%% *}" GITHUB_ENV="$GITHUB_ENV" CURSOR_PROOF_JOB_START="$CURSOR_PROOF_JOB_START" CURSOR_PROOF_PRODUCT_ROOT="$PWD" CURSOR_PROOF_WORKSPACE="$CURSOR_PROOF_WORKSPACE" CURSOR_PROOF_GO="$(command -v go)" /usr/bin/python3 -B -S - <<'PY_PROOF'
           import hashlib,json,os,pathlib,shutil,subprocess,urllib.request,time,stat,platform,signal,tarfile
@@ -1018,7 +1018,7 @@ jobs:
           import tarfile
           import urllib.request
 
-          SOURCE = '53a52623db13951bf5d763850a6139aecefea910'
+          SOURCE = 'a7a5ccdcf0b302b5ca668bd08e7bd3a542fd8adb'
           ARCHIVE_URL = 'https://downloads.cursor.com/lab/2026.09.28-64d2043/linux/x64/agent-cli-package.tar.gz'
           ARCHIVE_SHA = '6e4cd936a4866b8a77c50ff51a564460d715772fabc477a01aa0f0455d9559f0'
           ARCHIVE_SIZE = 182618248
@@ -1247,7 +1247,7 @@ jobs:
               return output
 
 
-          output = prepare(os.environ['CURSOR_CARRIER'],'023a120c75a5482d9d86b4c76a45990f7fe5dcec38b430304cf8aeab86e525ef')
+          output = prepare(os.environ['CURSOR_CARRIER'],'364fc0ee014fc21106c16eddd6bf4eb4ad9acf66adc11449a5b6288bfbf159a7')
           with open(os.environ['GITHUB_ENV'],'a') as environment:
               environment.write('CURSOR_EXECUTION_INPUTS='+str(output)+'\n')
           PY_PREPARE
@@ -1279,8 +1279,8 @@ jobs:
           import stat
           import tarfile
 
-          SOURCE = '53a52623db13951bf5d763850a6139aecefea910'
-          BRIDGE = '023a120c75a5482d9d86b4c76a45990f7fe5dcec38b430304cf8aeab86e525ef'
+          SOURCE = 'a7a5ccdcf0b302b5ca668bd08e7bd3a542fd8adb'
+          BRIDGE = '364fc0ee014fc21106c16eddd6bf4eb4ad9acf66adc11449a5b6288bfbf159a7'
           FILE_LIMIT = 16 << 20
           TOTAL_LIMIT = 1 << 30
           ENTRY_LIMIT = 16384
@@ -1351,7 +1351,7 @@ jobs:
               try:
                   assert inputs['root'] == str(pathlib.Path(runner_temp) / 'TEST-cursor-installed-one')
                   assert hashlib.sha256(read_path(case, 'recipe/native_case.py')).hexdigest() == source_sha
-                  assert hashlib.sha256(read_path(case, 'recipe/sdk_observation.py')).hexdigest() == 'e2b15df2d34d7cf31370a051d40407dc63a3fae43189e10386c92575f1978480'
+                  assert hashlib.sha256(read_path(case, 'recipe/sdk_observation.py')).hexdigest() == '88c4dff4996c06e55e8365bdc2ab792945f6786a3859eceb517f3ce9a5bcf73d'
                   assert hashlib.sha256(read_path(case, 'recipe/authoritative_readback.go')).hexdigest() == BRIDGE
                   load = lambda path: strict_json(read_path(case, 'evidence/' + path))
                   joined = load('namespace-join.json')
