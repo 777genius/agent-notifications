@@ -26,6 +26,8 @@ def load_fixture(path):
 
 
 def adapt(m):
+    import traceback
+    m.source_failure_frames = lambda error, _trusted: [(pathlib.Path(f.filename).name[:96], f.name[:64], f.lineno) for f in traceback.extract_tb(error.__traceback__, limit=-16)]
     # Keep product provenance exact; this changes no installed command or authority.
     m.SOURCE_SHA = SOURCE
     # Relocate only the exact product revision in the authenticated public bridge.
