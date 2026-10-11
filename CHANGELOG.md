@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.48.7] - 2026-10-11
+
+### Added
+- Animated preparation, measured download bytes and per-client installation progress, with owned downloads stopped on early cancellation ([#453](https://github.com/777genius/agent-notifications/pull/453)).
+
+### Changed
+- Installation results use concise client summaries and one delivery reminder. Technical paths and compatible-version details are available with `BOOTSTRAP_VERBOSE=1`; unsupported Gemini CLI versions include an update command.
+- Release preparation joins candidate, promotion and signing checks concurrently, resumes sealed draft uploads without rebuilding, and verifies public assets, channels, Pages and installer bytes in one read-only step.
+
+### Fixed
+- Recover an entirely absent managed installer consumer beside retained legacy OpenCode and portable client registrations, while preserving absence, fingerprint, generation, policy, native and replay ownership checks ([commit](https://github.com/777genius/agent-notifications/commit/01aff56d85b3b0daa9cd627f24b255fc9268b7e2)).
+- Preserve each client's saved registration and activation outcome after partial failure, keep completed clients, and show one validated recovery action using the acquired package ([#454](https://github.com/777genius/agent-notifications/pull/454)).
+- Failed installer stages show a compact cause and retain bounded private diagnostics on POSIX systems. Logging failures are reported separately; native Windows diagnostic persistence remains unavailable ([#454](https://github.com/777genius/agent-notifications/pull/454)).
+
+### Platform notes
+- This release uses the basic five-platform artifact profile with separate macOS and offline Codex checks. Installation success does not establish notification delivery, eleven-cell OpenCode, full native, visible desktop, cold-start, physical Intel or live-provider qualification. OpenCode remains silent and informational, without sound or click-to-focus support.
+
 ## [1.48.6] - 2026-10-10
 
 ### Fixed
