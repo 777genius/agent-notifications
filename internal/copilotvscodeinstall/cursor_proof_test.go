@@ -404,6 +404,21 @@ func TestCursorInstalledProofRejectsDrift(t *testing.T) {
 // recursively acquires it on completion. Expect competing actual CAS mutation
 // to time out while the original lease's completion remains prompt. Generic
 // policy lock tests cannot prove the Cursor owner retains exactly this lease.
+type cursorCountingProof struct {
+	ProofPort
+	calls int
+	after func()
+}
+
+func (p *cursorCountingProof) CheckLocal(ctx context.Context, b portable.Binding, s installruntime.InstalledSnapshot) (PhysicalProof, error) {
+	p.calls++
+	proof, err := p.ProofPort.CheckLocal(ctx, b, s)
+	if err == nil && p.after != nil {
+		p.after()
+	}
+	return proof, err
+}
+
 func TestCursorRetainedLeaseFencesPolicyMutation(t *testing.T) {
 	f, b, ready := installedCursorFilesystem(t)
 	if !ready {
@@ -413,11 +428,16 @@ func TestCursorRetainedLeaseFencesPolicyMutation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	proof := &cursorCountingProof{ProofPort: f.g.gate.Proof}
+	f.g.gate.Proof = proof
 	lease, err := f.g.gate.acquire(cursorContext(t), localCursorBinding(b), copilotvscodeevent.DesktopChannel)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer lease.Release()
+	if proof.calls != 1 {
+		t.Fatalf("acquisition fresh proof calls = %d, want 1", proof.calls)
+	}
 	key, c, _, err := f.b.Registration()
 	if err != nil {
 		t.Fatal(err)
@@ -441,6 +461,52 @@ func TestCursorRetainedLeaseFencesPolicyMutation(t *testing.T) {
 	}
 	if err := lease.Complete(checkCtx); err != nil {
 		t.Fatal(err)
+	}
+	if proof.calls != 3 {
+		t.Fatalf("acquire/handoff/completion fresh proof calls = %d, want 3", proof.calls)
+	}
+}
+
+func TestCursorCombinedBindingConfigFreshObservation(t *testing.T) {
+	f, expected, ready := installedCursorFilesystem(t)
+	if !ready {
+		return
+	}
+	proof := &cursorCountingProof{ProofPort: f.g.gate.Proof}
+	f.g.gate.Proof = proof
+	b, c, err := f.g.ConsumerBindingAndConfig(cursorContext(t))
+	if err != nil || b != expected || c == nil || proof.calls != 1 {
+		t.Fatalf("combined observation: %+v %v calls=%d", b, err, proof.calls)
+	}
+	c.Notifications.Desktop.Enabled = false
+	c.Notifications.Webhook.URL = "http://TEST-foreign.invalid"
+	b, fresh, err := f.g.ConsumerBindingAndConfig(cursorContext(t))
+	if err != nil || b != expected || fresh == nil || !fresh.Notifications.Desktop.Enabled || fresh.Notifications.Webhook.URL == c.Notifications.Webhook.URL || proof.calls != 2 {
+		t.Fatalf("combined observation retained caller config: %+v %v calls=%d", b, err, proof.calls)
+	}
+}
+
+func TestCursorCombinedObservationRejectsLateDrift(t *testing.T) {
+	for _, change := range []string{"config", "generation"} {
+		t.Run(change, func(t *testing.T) {
+			f, _, ready := installedCursorFilesystem(t)
+			if !ready {
+				return
+			}
+			proof := &cursorCountingProof{ProofPort: f.g.gate.Proof}
+			proof.after = func() {
+				if change == "config" {
+					cursorWrite(t, f.b.GlobalConfig, []byte(`{"schemaVersion":1,"notifications":{"desktop":{"enabled":false}}}`), 0600)
+				} else {
+					cursorPolicy(t, f, `{"cursorNotifications":{"desktop":false,"webhook":true}}`)
+				}
+			}
+			f.g.gate.Proof = proof
+			b, c, err := f.g.ConsumerBindingAndConfig(cursorContext(t))
+			if !errors.Is(err, ErrDenied) || b != (cursorevent.Binding{}) || c != nil || proof.calls != 1 {
+				t.Fatalf("late %s drift admitted: %+v %v calls=%d", change, b, err, proof.calls)
+			}
+		})
 	}
 }
 

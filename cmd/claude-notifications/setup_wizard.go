@@ -1056,6 +1056,11 @@ func commitConfirmedCursorConsent(ctx context.Context, r setupwizard.Request, re
 	if err != nil {
 		return deny(err)
 	}
+	if runtime.GOOS == "darwin" && i.Request.Desktop {
+		if _, err := copilotvscodeinstall.PrepareCursorNativeSpool(ctx, b.ControlRoot); err != nil {
+			return deny(err)
+		}
+	}
 	patch, err := copilotvscodeinstall.CursorPolicyPatch(b, copilotvscodeinstall.CursorChoices{Desktop: &i.Request.Desktop, Webhook: &i.Request.Webhook}, &previous)
 	if err != nil {
 		return deny(err)
@@ -1130,6 +1135,19 @@ func stripWizardUIMode(args []string) ([]string, string, error) {
 const cursorP1Qualification = "uap406:run37381034498:job112002773007:public098:commit0983418ab0c2724b5cf648512e0a26baafaad546:sha256:7d305d6cabe775e12083c5c4f49fe9246eb1cb8244d596d03c50aa1e7de670b5"
 const selectedCursorVersion = "2026.09.28-64d2043"
 
+// Mac evidence qualifies only the fixed native shell tuple; installed receipt,
+// physical profile authority and explicit consent remain mandatory.
+func cursorHostQualification() string {
+	if runtime.GOOS == "darwin" && runtime.GOARCH == "arm64" {
+		return "cursor-darwin-arm64-20260918:stop-773b7499ccd8afdd5a087be4fe764168455cb80c24caa6b2888cc4608fc472b5:uap-eec70fb9bd5f"
+	}
+	version, _ := cursorinstall.CurrentTuple()
+	if version == selectedCursorVersion {
+		return cursorP1Qualification
+	}
+	return ""
+}
+
 func composeCursorWizard(ctx context.Context, req setupwizard.Request) (_ setupwizard.Request, err error) {
 	if !containsProduct(req.Agents, "cursor") {
 		return req, nil
@@ -1187,10 +1205,20 @@ func composeCursorWizard(ctx context.Context, req setupwizard.Request) (_ setupw
 		if err != nil {
 			return req, err
 		}
-		probe, cancel := context.WithTimeout(ctx, 2*time.Second)
-		version, e := clientdetect.NewOS(filepath.Dir(req.CursorConfig)).ProbeVersionWithEnvironment(probe, agent, []string{"HOME=" + filepath.Dir(req.CursorConfig), "PATH=" + os.Getenv("PATH")})
+		versionTimeout := 2 * time.Second
+		if runtime.GOOS == "darwin" {
+			versionTimeout = 5 * time.Second
+		}
+		probe, cancel := context.WithTimeout(ctx, versionTimeout)
+		environment := []string{"HOME=" + filepath.Dir(req.CursorConfig), "PATH=" + os.Getenv("PATH")}
+		if runtime.GOOS == "darwin" {
+			// Use noninteractive mode for the bounded version inspection.
+			environment = append(environment, "AGENT_CLI_CREDENTIAL_STORE=file", "CI=1")
+		}
+		version, e := clientdetect.NewOS(filepath.Dir(req.CursorConfig)).ProbeVersionWithEnvironment(probe, agent, environment)
 		cancel()
-		if e != nil || strings.TrimSpace(version) != selectedCursorVersion {
+		expectedVersion, _ := cursorinstall.CurrentTuple()
+		if e != nil || expectedVersion == "" || strings.TrimSpace(version) != expectedVersion {
 			return req, fmt.Errorf("cursor agent version is outside the fixed tuple: %w", e)
 		}
 		req.ClientExecutables = map[string]string{"cursor": agent}
@@ -1379,7 +1407,8 @@ func reserveCursorCaller(ctx context.Context, req setupwizard.Request, snapshot 
 		if err != nil || reserved.BindingID == "" || reserved.TargetPath == "" {
 			return deny(portable.ErrInvalid)
 		}
-		req.CursorAuthority = &cursorinstall.Authority{ObjectID: "cursor-user-stop-v1", CursorVersion: selectedCursorVersion, QualificationID: cursorP1Qualification}
+		version, _ := cursorinstall.CurrentTuple()
+		req.CursorAuthority = &cursorinstall.Authority{ObjectID: "cursor-user-stop-v1", CursorVersion: version, QualificationID: cursorHostQualification()}
 		req.CursorAuthority.Selector = filepath.Join(cfg.PluginDataBase, domain.ComputePhysicalArtifactID(name, reserved.InstallationID)) // completed below
 	}
 	if reserved.InstallationID == "" || reserved.Scope != string(domain.ScopeUser) || reserved.BindingID != domain.ComputeClientBindingID(reserved.InstallationID, "cursor", reserved.Scope, reserved.TargetPath) {
@@ -1433,7 +1462,7 @@ func reserveCursorCaller(ctx context.Context, req setupwizard.Request, snapshot 
 		} else {
 			fixed, e = cursorPendingHandoff(binding, snapshot, cfg, installed, client, pendingIntent)
 		}
-		if e != nil || fixed.QualificationID != cursorP1Qualification {
+		if e != nil || fixed.QualificationID != cursorHostQualification() {
 			return deny(portable.ErrInvalid)
 		}
 		req.CursorAuthority = &fixed
@@ -1487,6 +1516,11 @@ func cursorPendingHandoff(b portable.Binding, snap installruntime.InstalledSnaps
 // observation. Mount metadata only limits evidence scope; UUID/inode authority
 // comes exclusively from public complete-ancestry Capture/Revalidate.
 func cursorQualifiedNamespace(profile string) error {
+	// The existing public Darwin complete-ancestry owner subsequently captures
+	// and revalidates the physical token. No Linux mount evidence is substituted.
+	if runtime.GOOS == "darwin" && runtime.GOARCH == "arm64" {
+		return nil
+	}
 	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
 		return setupwizard.ErrRefused
 	}

@@ -10,6 +10,7 @@ import (
 
 	"github.com/777genius/agent-notifications/internal/agentnotify/portable"
 	"github.com/777genius/agent-notifications/internal/copilotvscodeevent"
+	"github.com/777genius/agent-notifications/internal/cursorinstall"
 	"github.com/777genius/agent-notifications/internal/installruntime"
 	"github.com/777genius/agent-notifications/internal/notifier"
 )
@@ -41,7 +42,8 @@ func digest(s string) bool {
 func (p PhysicalProof) matches(b portable.Binding, s installruntime.PolicySnapshot) bool {
 	class := b.Integration == portable.CopilotVSCode && p.selectedLocalClass && !p.selectedCursorClass && p.localObservation != "" && p.configObservation != "" && runtime.GOOS == "darwin" && runtime.GOARCH == "arm64"
 	if b.Integration == portable.Cursor {
-		class = p.selectedCursorClass && !p.selectedLocalClass && p.cursorObservation != "" && p.configObservation != "" && runtime.GOOS == "linux" && runtime.GOARCH == "amd64"
+		version, _ := cursorinstall.CurrentTuple()
+		class = p.selectedCursorClass && !p.selectedLocalClass && p.cursorObservation != "" && p.configObservation != "" && version != ""
 	}
 	if !p.physical || !class || !p.qualifiedTuple || p.binding != b ||
 		p.goos != runtime.GOOS || p.goarch != runtime.GOARCH || !digest(p.receiptDigest) ||
@@ -187,15 +189,9 @@ func (g Gate) acquire(ctx context.Context, b copilotvscodeevent.Binding, channel
 		// Local qualification requires full equality with the constructor proof;
 		// the fresh lease check below validates that same baseline under the lease.
 		initial = g.localInitial
-	case portable.Cursor:
-		_, initial, err = g.qualify(ctx, current, b)
-		if err != nil {
-			release()
-			return nil, err
-		}
 	}
 	lease := &authorityLease{gate: g, binding: b, channel: channel, expected: current, release: release, initial: initial}
-	if err := lease.check(ctx); err != nil {
+	if err := lease.check(ctx, g.Binding.Integration == portable.Cursor); err != nil {
 		release()
 		return nil, err
 	}
@@ -224,12 +220,14 @@ func (l *authorityLease) ExecutablePath() string {
 	return filepath.Join(l.BundlePath(), "Contents", "MacOS", "terminal-notifier-modern")
 }
 func (l *authorityLease) Release()                                { l.once.Do(l.release) }
-func (l *authorityLease) BeforeHandoff(ctx context.Context) error { return l.check(ctx) }
-func (l *authorityLease) Complete(ctx context.Context) error      { return l.check(ctx) }
+func (l *authorityLease) BeforeHandoff(ctx context.Context) error { return l.check(ctx, false) }
+func (l *authorityLease) Complete(ctx context.Context) error      { return l.check(ctx, false) }
 
 // Re-read WITHOUT reacquiring the held locks. Cooperative AN writes are fenced;
 // external profile/policy writers can still race between a check and handoff.
-func (l *authorityLease) check(ctx context.Context) error {
+// Only Cursor acquisition establishes its baseline from this fresh check.
+// Handoff/completion always compare; an absent baseline never resets itself.
+func (l *authorityLease) check(ctx context.Context, initial bool) error {
 	preimage, err := installruntime.Fingerprint(filepath.Join(l.gate.Binding.ControlRoot, "agent-notifications.json"))
 	if err != nil || preimage != l.expected.Preimage {
 		return ErrDenied
@@ -242,10 +240,13 @@ func (l *authorityLease) check(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if proof != l.initial {
+	if initial && l.gate.Binding.Integration != portable.Cursor || !initial && proof != l.initial {
 		return ErrDenied
 	}
 	if l.channel == copilotvscodeevent.DesktopChannel && consent.desktop || l.channel == copilotvscodeevent.WebhookChannel && consent.webhook {
+		if initial {
+			l.initial = proof
+		}
 		return nil
 	}
 	return ErrDenied

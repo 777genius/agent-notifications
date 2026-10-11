@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/777genius/agent-notifications/internal/config"
+	"github.com/777genius/agent-notifications/internal/cursorinstall"
 	"github.com/777genius/agent-notifications/internal/geminiinstall"
 	"github.com/777genius/agent-notifications/internal/installruntime"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/adapters/clientdetect"
@@ -256,8 +257,9 @@ func discoverProductsWithDetector(ctx context.Context, a setupProductsArgs, e pr
 		}
 		if id == "cursor" {
 			// Editor detection/version cannot describe the separate agent CLI.
-			const cursorPlatformReason = "Cursor agent notifications are currently qualified only on Linux amd64"
-			f := productFact{ID: id, Label: productLabels[id], Profile: scopes["scope-root"], Selectable: runtime.GOOS == "linux" && runtime.GOARCH == "amd64"}
+			const cursorPlatformReason = "Cursor agent notifications require a qualified Linux amd64 or macOS arm64 CLI"
+			version, _ := cursorinstall.CurrentTuple()
+			f := productFact{ID: id, Label: productLabels[id], Profile: scopes["scope-root"], Selectable: version != ""}
 			if !f.Selectable {
 				f.Reason = cursorPlatformReason
 			}

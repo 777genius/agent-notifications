@@ -259,6 +259,9 @@ func TestCursorMissingProofHasNoEffects(t *testing.T) {
 	if c, err := f.g.EffectiveConfig(cursorContext(t)); err == nil || c != nil {
 		t.Fatal("unproved config granted")
 	}
+	if b, c, err := f.g.ConsumerBindingAndConfig(cursorContext(t)); err == nil || b != (cursorevent.Binding{}) || c != nil {
+		t.Fatal("unproved combined observation granted")
+	}
 	sink := &cursorSink{}
 	p := NewCursorDesktop(f.g, cursorevent.Binding{}, sink)
 	p.Deliver(cursorContext(t), notification.Request{Navigation: notification.None, Silent: true, Policy: notification.PolicySnapshot{Valid: true, ExplicitEnabled: true, DesktopEnabled: true}})

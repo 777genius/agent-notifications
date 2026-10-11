@@ -121,7 +121,7 @@ func (a *Adapter) applyRegistration(ctx context.Context, kernel nativeconfig.Ker
 	if err != nil {
 		return nil, effect, err
 	}
-	file, err := kernel.BeginExactFile(f.HooksPath)
+	file, err := beginCursorProfile(kernel, f.HooksPath)
 	if err != nil {
 		return nil, effect, err
 	}
@@ -203,7 +203,7 @@ func (a *Adapter) remove(ctx context.Context, kernel nativeconfig.Kernel, path s
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	file, err := kernel.BeginExactFile(path)
+	file, err := beginCursorProfile(kernel, path)
 	if err != nil {
 		return err
 	}

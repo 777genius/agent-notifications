@@ -207,9 +207,9 @@ func TestCursorDiscoveryPlatformReasonPreservesPresence(t *testing.T) {
 			if !tc.present {
 				wantReason = "Cursor agent not found in selected PATH"
 			}
-			supported := runtime.GOOS == "linux" && runtime.GOARCH == "amd64"
+			supported := runtime.GOOS == "linux" && runtime.GOARCH == "amd64" || runtime.GOOS == "darwin" && runtime.GOARCH == "arm64"
 			if !supported {
-				wantReason = "Cursor agent notifications are currently qualified only on Linux amd64"
+				wantReason = "Cursor agent notifications require a qualified Linux amd64 or macOS arm64 CLI"
 			}
 			found := false
 			for _, f := range facts {

@@ -428,8 +428,9 @@ func TestCursorCallerAcknowledgedTokenAndMatchingPendingRetry(t *testing.T) {
 	if _, err := installruntime.Commit(ctx, installruntime.Request{ControlRoot: control, RuntimeRoot: runtimeRoot, Owner: "existing-installer", ConsumerID: "TEST-owner", Files: []installruntime.File{{Path: observer, Data: []byte("TEST-inert" + installruntime.WriterProtocolMarker), Mode: 0700}}}); err != nil {
 		t.Fatal(err)
 	}
+	version, _ := cursorinstall.CurrentTuple()
 	agent := filepath.Join(root, "TEST-version-agent")
-	if err := os.WriteFile(agent, []byte("#!/bin/sh\nprintf '%s\\n' '"+selectedCursorVersion+"'\n"), 0700); err != nil {
+	if err := os.WriteFile(agent, []byte("#!/bin/sh\nprintf '%s\\n' '"+version+"'\n"), 0700); err != nil {
 		t.Fatal(err)
 	}
 	pkg := filepath.Join(root, "TEST-package")
@@ -695,7 +696,21 @@ func TestCursorCallerAcknowledgedTokenAndMatchingPendingRetry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if ctx.Err() != nil {
+		t.Fatalf("context expired before binding check: %v", ctx.Err())
+	}
 	beforeConsent, err := gate.ConsumerBinding(ctx)
+	if runtime.GOOS == "darwin" {
+		// This inert file-mechanics fixture deliberately has no native helper.
+		// A real Mac acknowledgment must refuse rather than grant delivery.
+		if runtime.GOARCH != "arm64" || installed.Ledger.Native != nil || ctx.Err() != nil || !errors.Is(err, copilotvscodeinstall.ErrDenied) || !reflect.ValueOf(beforeConsent).IsZero() {
+			t.Fatalf("expected exact Mac missing-helper refusal, binding=%+v err=%v context=%v native=%+v", beforeConsent, err, ctx.Err(), installed.Ledger.Native)
+		}
+		if _, e := os.Lstat(filepath.Join(control, "cursor-native-spool")); !os.IsNotExist(e) {
+			t.Fatalf("unconfirmed fixture created spool: %v", e)
+		}
+		return
+	}
 	if err != nil || beforeConsent.Generation != installed.Ledger.Generation {
 		t.Fatalf("actual public installed acknowledgment: %+v %v", beforeConsent, err)
 	}
