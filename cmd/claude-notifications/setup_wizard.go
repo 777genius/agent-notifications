@@ -1247,7 +1247,7 @@ func composeCursorWizard(ctx context.Context, req setupwizard.Request) (_ setupw
 		}
 		versionTimeout := 2 * time.Second
 		if runtime.GOOS == "darwin" {
-			versionTimeout = 5 * time.Second
+			versionTimeout = 15 * time.Second
 		}
 		probe, cancel := context.WithTimeout(ctx, versionTimeout)
 		environment := []string{"HOME=" + filepath.Dir(req.CursorConfig), "PATH=" + os.Getenv("PATH")}
