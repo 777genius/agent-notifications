@@ -226,7 +226,14 @@ except KeyboardInterrupt:
                 fixture.write_text('#!'+sys.executable+' -I\nimport pathlib\n'
                                    'pathlib.Path('+repr(str(marker))+').touch()\n')
                 fixture.chmod(0o700)
-                preview.cli_proxies(commands,lab,{'claude':str(fixture)},env,'a'*40,diagnostics=diagnostics)
+                # This case tests rejection before any sandbox/CLI execution.
+                # Mock only the generator's fixed executable availability check
+                # so Linux exercises the actual receipt and refusal boundary.
+                is_file = preview.Path.is_file
+                def generator_file(path):
+                    return path == Path('/usr/bin/sandbox-exec') or is_file(path)
+                with patch.object(preview.Path, 'is_file', generator_file):
+                    preview.cli_proxies(commands,lab,{'claude':str(fixture)},env,'a'*40,diagnostics=diagnostics)
                 receipt = diagnostics/'cli-commands.jsonl'
                 original = b'private original\n'
                 if leaf == 'symlink':
