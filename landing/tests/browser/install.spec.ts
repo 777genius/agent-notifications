@@ -668,6 +668,7 @@ test("manual instructions preserve legacy links and offer Gemini guidance", asyn
 
 // A regression here would clip feature comparisons or restore channel setup friction.
 test("agent comparison stays readable on mobile and keeps all agents visible", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
   for (const width of [320, 390, 1088]) {
     await page.setViewportSize({ width, height: 900 });
     await page.goto("");
