@@ -504,6 +504,19 @@ def adapt(m):
     anchor = "    memberships = removal_memberships(original_state,state,binding,foreign['uapState'])"
     extra = "\n    proof = state['transaction_receipts'][-1]['physical_directory_proof']; projected = before['projection']['.']\n    assert proof['old_object']['object_id'] == str(projected['inode']) and proof['backup_identity'] == str(projected['device'])+':'+str(projected['inode']), 'remove receipt differs from observed projection inode'"
     assert removal.count(anchor) == 1; removal = removal.replace(anchor,anchor+extra)
+    anchor = '    result = []\n    for area in ('
+    extra = r"""    initialized = phases[0]['nativeObjectsBefore']['home']
+    owned_initial = {}
+    for path,facts in initialized.items():
+        if not re.fullmatch(r'\.cache/cursor-compile-cache/v24\.5\.0-x64-ef5a0af0-1000/[0-9a-f]{8}',path) or path in foreign['home']: continue
+        if not all(phase[side]['home'].get(path) == facts for phase in phases for side in ('nativeObjectsBefore','nativeObjectsAfter')): continue
+        assert facts['mode'] == stat.S_IFREG|0o600 and facts['uid'] == facts['gid'] == 1000 and facts['nlink'] == 1 and facts['device'] == before['home']['.']['device']
+        assert before['home'].get(path) == after['home'].get(path) == facts, 'initialized vendor cache changed or purged after native boundary'
+        owned_initial[path] = facts; native['home'][path] = facts
+    assert len(json.dumps(owned_initial).encode()) <= LIMIT
+    (root/'evidence/owned-vendor-initialization-cache.json').write_text(json.dumps({'provenance':'pinned wrapper NODE_COMPILE_CACHE; mandatory public --version probe before genuine native boundary','objects':owned_initial},indent=2)+'\n')
+"""
+    assert removal.count(anchor) == 1; removal = removal.replace(anchor,extra+anchor)
     exec(compile(removal,'<SDK-removal-retention>','exec'),m.__dict__)
     home = inspect.getsource(m.classify_home_removal)
     anchor = '    result = []\n    for path in sorted(set(before)|set(after)):'
