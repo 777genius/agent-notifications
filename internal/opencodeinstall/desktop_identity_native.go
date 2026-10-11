@@ -2,7 +2,10 @@
 
 package opencodeinstall
 
-import "errors"
+import (
+	"errors"
+	"runtime"
+)
 
 const shortcutName = "OpenCode Notifications.lnk"
 
@@ -19,6 +22,11 @@ func identityFor(product DesktopProduct) (desktopIdentity, error) {
 	case CopilotVSCodeDesktop:
 		// Consumer is supplied only by verified portable-key Windows wrappers.
 		return desktopIdentity{"", "Copilot in VS Code", CopilotVSCodeToastAppID, "Copilot in VS Code Notifications.lnk", "copilot-vscode-native-spool"}, nil
+	case CursorDesktop:
+		if runtime.GOOS == "darwin" && runtime.GOARCH == "arm64" {
+			return desktopIdentity{"", "Cursor", "", "", "cursor-native-spool"}, nil
+		}
+		return desktopIdentity{}, errors.New("unqualified Cursor desktop product")
 	default:
 		return desktopIdentity{}, errors.New("unknown notification desktop product")
 	}

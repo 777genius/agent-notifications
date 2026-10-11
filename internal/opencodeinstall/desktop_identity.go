@@ -8,6 +8,7 @@ const (
 	OpenCodeDesktop DesktopProduct = iota + 1
 	GeminiDesktop
 	CopilotVSCodeDesktop
+	CursorDesktop
 	OpenCodeToastAppID      = "Genius.AgentNotifications.OpenCode"
 	GeminiToastAppID        = "Genius.AgentNotifications.Gemini"
 	CopilotVSCodeToastAppID = "Genius.AgentNotifications.CopilotVSCode"

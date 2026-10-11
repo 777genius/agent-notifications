@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/777genius/agent-notifications/internal/config"
+	"github.com/777genius/agent-notifications/internal/cursorinstall"
 	"github.com/777genius/agent-notifications/internal/geminiinstall"
 	"github.com/777genius/agent-notifications/internal/installruntime"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/adapters/clientdetect"
@@ -116,7 +117,17 @@ func productScopes(a setupProductsArgs, e productEnvironment) (map[string]string
 		return nil, err
 	}
 	if profile := a.Scopes["scope-root"]; profile != "" {
-		scopes["scope-root"], err = cursor.New().ResolveProfileRoot(profile)
+		if containsProduct(a.Products, "copilot-vscode") {
+			scopes["scope-root"], err = installruntime.CanonicalPath(profile)
+		} else {
+			scopes["scope-root"], err = cursor.New().ResolveProfileRoot(profile)
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	if settings := a.Scopes["local-settings"]; settings != "" {
+		scopes["local-settings"], err = installruntime.CanonicalPath(settings)
 		if err != nil {
 			return nil, err
 		}
@@ -229,10 +240,26 @@ func discoverProductsWithDetector(ctx context.Context, a setupProductsArgs, e pr
 		if err := ctx.Err(); err != nil {
 			return nil, nil, err
 		}
+		if id == "copilot-vscode" {
+			f := productFact{ID: id, Label: productLabels[id], Profile: scopes["scope-root"], Executable: scopes["client-executable"]}
+			if f.Profile == "" || f.Executable == "" || scopes["local-settings"] != filepath.Join(f.Profile, "settings.json") {
+				f.Reason = "explicit Local profile, settings and executable required"
+			} else {
+				_, e := normalizeProductExecutable(f.Executable)
+				f.Present = e == nil
+				f.Selectable = f.Present && runtime.GOOS == "darwin" && runtime.GOARCH == "arm64"
+				if !f.Selectable {
+					f.Reason = "Local installed authority requires the qualified Darwin arm64 profile"
+				}
+			}
+			facts = append(facts, f)
+			continue
+		}
 		if id == "cursor" {
 			// Editor detection/version cannot describe the separate agent CLI.
-			const cursorPlatformReason = "Cursor agent notifications are currently qualified only on Linux amd64"
-			f := productFact{ID: id, Label: productLabels[id], Profile: scopes["scope-root"], Selectable: runtime.GOOS == "linux" && runtime.GOARCH == "amd64"}
+			const cursorPlatformReason = "Cursor agent notifications require a qualified Linux amd64 or macOS arm64 CLI"
+			version, _ := cursorinstall.CurrentTuple()
+			f := productFact{ID: id, Label: productLabels[id], Profile: scopes["scope-root"], Selectable: version != ""}
 			if !f.Selectable {
 				f.Reason = cursorPlatformReason
 			}

@@ -45,7 +45,7 @@ installation is offered inspect, add/reinstall, uninstall, update, or repair.
   --action install|uninstall|inspect|update|repair
   --install-or-update       Bootstrap-only: install selected clients or update owned bindings first
   --preserve-existing-units Bootstrap auto mode: leave absent MCP units off when another binding already exists
-  --agents claude,codex|cursor   Cursor requires explicit --scope-root and --client-executable; select separately
+  --agents claude,codex|cursor|copilot-vscode   Cursor requires explicit --scope-root and --client-executable; select separately
   Omit on inspect to report both clients
   --hooks true|false          Omit on install of new targets to include hooks; omit on update/repair to keep live units; omit on uninstall to select all units
   --agent-notify true|false   Omit on install of new targets to include portable MCP+skill; omit on update/repair to keep live units
@@ -68,6 +68,10 @@ installation is offered inspect, add/reinstall, uninstall, update, or repair.
   --codex-executable PATH     Codex executable when installing both clients
   --helper PATH               Managed stdio helper (default: runtime primary)
   --scope-root PATH
+  --local-settings PATH       Explicit Local settings.json in the selected profile
+  --local-native-stop true|false  Independent Local Stop selection
+  --local-mcp true|false       Independent Local MCP selection
+  --local-skills true|false    Independent Local skill selection
   --installation-id ID
   --mcp-config PATH           Owned Codex MCP config to hand off; omit to use an existing config.toml in the selected Codex profile
   --claude-mcp-config PATH    Owned Claude MCP config to hand off; omit to use an existing .claude.json in the selected Claude profile
@@ -260,11 +264,21 @@ func executeSetupWizardWith(ctx context.Context, args []string, out, errOut io.W
 			return writeSetupWizardResult(out, jsonOut, setupwizard.Result{Action: string(req.Action), Outcome: "incomplete", Reason: "cursor_identity_unavailable"}, setupwizard.ErrRefused)
 		}
 	}
+	if containsProduct(req.Agents, "copilot-vscode") {
+		var early *setupwizard.Result
+		req, early, err = prepareLocalWizard(ctx, req, confirmed)
+		if early != nil {
+			return writeSetupWizardResult(out, jsonOut, *early, err)
+		}
+		if err != nil {
+			return writeSetupWizardResult(out, jsonOut, setupwizard.Result{Action: string(req.Action), Outcome: "incomplete", Reason: "local_composition_required"}, err)
+		}
+	}
 	req, err = composeCursorWizard(ctx, req)
 	if err != nil {
 		return writeSetupWizardResult(out, jsonOut, setupwizard.Result{Action: string(req.Action), Outcome: "incomplete", Reason: "cursor_composition_required"}, err)
 	}
-	if confirmed != nil && containsProduct(confirmed.Request.Products, "cursor") {
+	if confirmed != nil && (containsProduct(confirmed.Request.Products, "cursor") || containsProduct(confirmed.Request.Products, "copilot-vscode")) {
 		// The command already fenced and consumed the one immutable selection.
 		// Legacy BootstrapMCP evaluation captures a new policy observation; retain
 		// our original CAS instead of allowing that path to adopt an opt-out.
@@ -302,8 +316,12 @@ func executeSetupWizardWith(ctx context.Context, args []string, out, errOut io.W
 	} else {
 		result, err = setupwizard.Run(ctx, req)
 	}
-	if err == nil && result.ExitCode() == 0 && confirmed != nil && containsProduct(confirmed.MCP.Selected, "cursor") {
-		result, err = commitConfirmedCursorConsent(ctx, req, result, *confirmed)
+	if err == nil && result.ExitCode() == 0 && confirmed != nil && (containsProduct(confirmed.MCP.Selected, "cursor") || containsProduct(confirmed.MCP.Selected, "copilot-vscode")) {
+		if containsProduct(req.Agents, "copilot-vscode") {
+			result, err = commitConfirmedLocalConsent(ctx, req, result, *confirmed)
+		} else {
+			result, err = commitConfirmedCursorConsent(ctx, req, result, *confirmed)
+		}
 	}
 	return writeSetupWizardResult(out, jsonOut, result, err)
 }
@@ -343,7 +361,7 @@ func validInstallOrUpdateRequest(req setupwizard.Request) bool {
 	}
 	seen := map[string]bool{}
 	for _, agent := range req.Agents {
-		if (agent != "claude" && agent != "codex" && (agent != "cursor" || len(req.Agents) != 1)) || seen[agent] {
+		if (agent != "claude" && agent != "codex" && ((agent != "cursor" && agent != "copilot-vscode") || len(req.Agents) != 1)) || seen[agent] {
 			return false
 		}
 		seen[agent] = true
@@ -563,7 +581,7 @@ func wizardPrintableCommand(command []string) []string {
 
 func parseSetupWizard(args []string) (setupwizard.Request, bool, error) {
 	var req setupwizard.Request
-	if len(args) > 48 {
+	if len(args) > 64 {
 		return req, false, errors.New("invalid_arguments")
 	}
 	total := 0
@@ -580,6 +598,7 @@ func parseSetupWizard(args []string) (setupwizard.Request, bool, error) {
 	jsonOut := false
 	allowed := map[string]bool{
 		"action": true, "agents": true, "hooks": true, "agent-notify": true,
+		"local-settings": true, "local-native-stop": true, "local-mcp": true, "local-skills": true,
 		"claude-hooks": true, "codex-hooks": true, "claude-agent-notify": true, "codex-agent-notify": true,
 		"package": true, "plugin-root": true, "control-root": true, "runtime-root": true, "global-config": true,
 		"codex-home": true, "claude-config": true, "client-executable": true, "helper": true,
@@ -631,7 +650,7 @@ func parseSetupWizard(args []string) (setupwizard.Request, bool, error) {
 		}
 		values[key] = value
 	}
-	for _, key := range []string{"package", "plugin-root", "control-root", "runtime-root", "global-config", "codex-home", "claude-config", "client-executable", "helper", "scope-root", "mcp-config", "claude-mcp-config", "claude-executable", "codex-executable"} {
+	for _, key := range []string{"package", "plugin-root", "control-root", "runtime-root", "global-config", "codex-home", "claude-config", "client-executable", "helper", "scope-root", "mcp-config", "claude-mcp-config", "claude-executable", "codex-executable", "local-settings"} {
 		if values[key] == "" {
 			continue
 		}
@@ -741,6 +760,44 @@ func parseSetupWizard(args []string) (setupwizard.Request, bool, error) {
 		req.ClientExecutables = map[string]string{"cursor": req.ClientExecutable}
 	}
 	req.InstallationID = values["installation-id"]
+	if containsProduct(req.Agents, "copilot-vscode") {
+		if len(req.Agents) != 1 || req.ScopeRoot == "" || req.ClientExecutable == "" {
+			return req, jsonOut, errors.New("invalid_arguments")
+		}
+		req.ClientExecutables = map[string]string{"copilot-vscode": req.ClientExecutable}
+		if values["local-settings"] != "" || values["local-native-stop"] != "" || values["local-mcp"] != "" || values["local-skills"] != "" {
+			if values["local-settings"] != filepath.Join(req.ScopeRoot, "settings.json") {
+				return req, jsonOut, errors.New("invalid_arguments")
+			}
+			req.LocalConfig = localWizardConfig(values["local-settings"])
+			for key, dest := range map[string]*bool{"local-native-stop": &req.LocalConfig.NativeStop} {
+				if value := values[key]; value != "" {
+					on, e := parseBoolFlag(value)
+					if e != nil {
+						return req, jsonOut, e
+					}
+					*dest = on
+				}
+			}
+			for key, dest := range map[string]*[]string{"local-mcp": &req.LocalConfig.MCPServers, "local-skills": &req.LocalConfig.Skills} {
+				if value := values[key]; value != "" {
+					on, e := parseBoolFlag(value)
+					if e != nil {
+						return req, jsonOut, e
+					}
+					if on {
+						name := "agent-notify"
+						if key == "local-skills" {
+							name = "agent-notifications"
+						}
+						*dest = []string{name}
+					}
+				}
+			}
+		}
+	} else if values["local-settings"] != "" || values["local-native-stop"] != "" || values["local-mcp"] != "" || values["local-skills"] != "" {
+		return req, jsonOut, errors.New("invalid_arguments")
+	}
 	if values["mcp-config"] != "" || values["claude-mcp-config"] != "" {
 		req.MCPConfig = map[string]string{}
 		if values["mcp-config"] != "" {
@@ -855,7 +912,7 @@ func admitBootstrapWizardIntent(path string, r setupwizard.Request) (setupwizard
 		return r, nil, errors.New("bootstrap request differs from confirmed intent")
 	}
 	r.BootstrapMCP = &intent.MCP
-	if containsProduct(intent.Request.Products, "cursor") {
+	if containsProduct(intent.Request.Products, "cursor") || containsProduct(intent.Request.Products, "copilot-vscode") {
 		generation, policy := intent.Initial.Generation, intent.Initial.Policy
 		r.BootstrapExpectedGeneration, r.BootstrapExpectedPolicy = &generation, &policy
 	}
@@ -999,6 +1056,11 @@ func commitConfirmedCursorConsent(ctx context.Context, r setupwizard.Request, re
 	if err != nil {
 		return deny(err)
 	}
+	if runtime.GOOS == "darwin" && i.Request.Desktop {
+		if _, err := copilotvscodeinstall.PrepareCursorNativeSpool(ctx, b.ControlRoot); err != nil {
+			return deny(err)
+		}
+	}
 	patch, err := copilotvscodeinstall.CursorPolicyPatch(b, copilotvscodeinstall.CursorChoices{Desktop: &i.Request.Desktop, Webhook: &i.Request.Webhook}, &previous)
 	if err != nil {
 		return deny(err)
@@ -1020,7 +1082,10 @@ func commitConfirmedCursorConsent(ctx context.Context, r setupwizard.Request, re
 	return result, nil
 }
 func sameWizardBootstrapScope(actual, expected setupwizard.Request) bool {
-	if strings.Join(actual.Agents, ",") != strings.Join(expected.Agents, ",") || actual.ControlRoot != expected.ControlRoot || (!containsProduct(expected.Agents, "cursor") && (actual.ClaudeConfig != expected.ClaudeConfig || actual.CodexHome != expected.CodexHome)) || actual.CursorConfig != expected.CursorConfig || (containsProduct(expected.Agents, "cursor") && actual.ScopeRoot != expected.ScopeRoot) || actual.GlobalConfig != expected.GlobalConfig {
+	if containsProduct(expected.Agents, "copilot-vscode") && !sameLocalWizardSelection(actual, expected) {
+		return false
+	}
+	if strings.Join(actual.Agents, ",") != strings.Join(expected.Agents, ",") || actual.ControlRoot != expected.ControlRoot || (!containsProduct(expected.Agents, "cursor") && !containsProduct(expected.Agents, "copilot-vscode") && (actual.ClaudeConfig != expected.ClaudeConfig || actual.CodexHome != expected.CodexHome)) || containsProduct(expected.Agents, "cursor") && actual.CursorConfig != expected.CursorConfig || (containsProduct(expected.Agents, "cursor") && actual.ScopeRoot != expected.ScopeRoot) || actual.GlobalConfig != expected.GlobalConfig {
 		return false
 	}
 	// A fresh legacy phase chooses its existing managed runtime during hooks
@@ -1070,6 +1135,19 @@ func stripWizardUIMode(args []string) ([]string, string, error) {
 const cursorP1Qualification = "uap406:run37381034498:job112002773007:public098:commit0983418ab0c2724b5cf648512e0a26baafaad546:sha256:7d305d6cabe775e12083c5c4f49fe9246eb1cb8244d596d03c50aa1e7de670b5"
 const selectedCursorVersion = "2026.09.28-64d2043"
 
+// Mac evidence qualifies only the fixed native shell tuple; installed receipt,
+// physical profile authority and explicit consent remain mandatory.
+func cursorHostQualification() string {
+	if runtime.GOOS == "darwin" && runtime.GOARCH == "arm64" {
+		return "cursor-darwin-arm64-20260918:stop-773b7499ccd8afdd5a087be4fe764168455cb80c24caa6b2888cc4608fc472b5:uap-eec70fb9bd5f"
+	}
+	version, _ := cursorinstall.CurrentTuple()
+	if version == selectedCursorVersion {
+		return cursorP1Qualification
+	}
+	return ""
+}
+
 func composeCursorWizard(ctx context.Context, req setupwizard.Request) (_ setupwizard.Request, err error) {
 	if !containsProduct(req.Agents, "cursor") {
 		return req, nil
@@ -1099,6 +1177,46 @@ func composeCursorWizard(ctx context.Context, req setupwizard.Request) (_ setupw
 	if snapshot.Recovery || snapshot.Ledger.ID == "" || snapshot.Ledger.Owner != "existing-installer" {
 		return req, setupwizard.ErrRefused
 	}
+	if req.Action == setupwizard.ActionInspect && snapshot.Ledger.PendingMutation == nil {
+		observation, cfg, _, _, absentErr := reserveCursorCaller(ctx, req, snapshot)
+		if absentErr != nil {
+			if !errors.Is(absentErr, uapinstaller.ErrNotInstalled) || req.BindingIDs["cursor"] != "" {
+				return req, absentErr
+			}
+			eng, e := uapinstaller.New(cfg)
+			if e != nil {
+				return req, e
+			}
+			view, e := eng.Inspect(ctx)
+			if e != nil || view.Recovery.Required {
+				return req, setupwizard.ErrRefused
+			}
+			for _, installation := range view.Installations {
+				if req.InstallationID != "" && installation.InstallationID != req.InstallationID {
+					return req, absentErr
+				}
+				for _, binding := range installation.Bindings {
+					if binding.ClientID == "cursor" {
+						return req, absentErr
+					}
+				}
+			}
+			for key, consumer := range snapshot.Ledger.Consumers {
+				if !strings.HasPrefix(key, "portable:") {
+					continue
+				}
+				var binding portable.Binding
+				if json.Unmarshal([]byte(consumer.Registration), &binding) != nil || binding.Integration == portable.Cursor {
+					return req, portable.ErrInvalid
+				}
+			}
+			// The owner reports absence without constructing installed authority.
+			// Keep the retained identity and let the wizard report retained data.
+			off := false
+			observation.CursorAgentNotify = &off
+			return observation, nil
+		}
+	}
 	if req.AgentNotify == nil && (req.Action == setupwizard.ActionUpdate || req.Action == setupwizard.ActionRepair) {
 		state, e := (statev2.Store{Path: filepath.Join(filepath.Dir(req.ControlRoot), "uap", "state", "state-v2.json")}).Load()
 		if e != nil {
@@ -1127,10 +1245,20 @@ func composeCursorWizard(ctx context.Context, req setupwizard.Request) (_ setupw
 		if err != nil {
 			return req, err
 		}
-		probe, cancel := context.WithTimeout(ctx, 2*time.Second)
-		version, e := clientdetect.NewOS(filepath.Dir(req.CursorConfig)).ProbeVersionWithEnvironment(probe, agent, []string{"HOME=" + filepath.Dir(req.CursorConfig), "PATH=" + os.Getenv("PATH")})
+		versionTimeout := 2 * time.Second
+		if runtime.GOOS == "darwin" {
+			versionTimeout = 15 * time.Second
+		}
+		probe, cancel := context.WithTimeout(ctx, versionTimeout)
+		environment := []string{"HOME=" + filepath.Dir(req.CursorConfig), "PATH=" + os.Getenv("PATH")}
+		if runtime.GOOS == "darwin" {
+			// Use noninteractive mode for the bounded version inspection.
+			environment = append(environment, "AGENT_CLI_CREDENTIAL_STORE=file", "CI=1")
+		}
+		version, e := clientdetect.NewOS(filepath.Dir(req.CursorConfig)).ProbeVersionWithEnvironment(probe, agent, environment)
 		cancel()
-		if e != nil || strings.TrimSpace(version) != selectedCursorVersion {
+		expectedVersion, _ := cursorinstall.CurrentTuple()
+		if e != nil || expectedVersion == "" || strings.TrimSpace(version) != expectedVersion {
 			return req, fmt.Errorf("cursor agent version is outside the fixed tuple: %w", e)
 		}
 		req.ClientExecutables = map[string]string{"cursor": agent}
@@ -1319,7 +1447,8 @@ func reserveCursorCaller(ctx context.Context, req setupwizard.Request, snapshot 
 		if err != nil || reserved.BindingID == "" || reserved.TargetPath == "" {
 			return deny(portable.ErrInvalid)
 		}
-		req.CursorAuthority = &cursorinstall.Authority{ObjectID: "cursor-user-stop-v1", CursorVersion: selectedCursorVersion, QualificationID: cursorP1Qualification}
+		version, _ := cursorinstall.CurrentTuple()
+		req.CursorAuthority = &cursorinstall.Authority{ObjectID: "cursor-user-stop-v1", CursorVersion: version, QualificationID: cursorHostQualification()}
 		req.CursorAuthority.Selector = filepath.Join(cfg.PluginDataBase, domain.ComputePhysicalArtifactID(name, reserved.InstallationID)) // completed below
 	}
 	if reserved.InstallationID == "" || reserved.Scope != string(domain.ScopeUser) || reserved.BindingID != domain.ComputeClientBindingID(reserved.InstallationID, "cursor", reserved.Scope, reserved.TargetPath) {
@@ -1373,7 +1502,7 @@ func reserveCursorCaller(ctx context.Context, req setupwizard.Request, snapshot 
 		} else {
 			fixed, e = cursorPendingHandoff(binding, snapshot, cfg, installed, client, pendingIntent)
 		}
-		if e != nil || fixed.QualificationID != cursorP1Qualification {
+		if e != nil || fixed.QualificationID != cursorHostQualification() {
 			return deny(portable.ErrInvalid)
 		}
 		req.CursorAuthority = &fixed
@@ -1427,6 +1556,11 @@ func cursorPendingHandoff(b portable.Binding, snap installruntime.InstalledSnaps
 // observation. Mount metadata only limits evidence scope; UUID/inode authority
 // comes exclusively from public complete-ancestry Capture/Revalidate.
 func cursorQualifiedNamespace(profile string) error {
+	// The existing public Darwin complete-ancestry owner subsequently captures
+	// and revalidates the physical token. No Linux mount evidence is substituted.
+	if runtime.GOOS == "darwin" && runtime.GOARCH == "arm64" {
+		return nil
+	}
 	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
 		return setupwizard.ErrRefused
 	}

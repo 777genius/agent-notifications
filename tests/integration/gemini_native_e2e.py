@@ -533,7 +533,7 @@ def record_hook(args):
             result["subtype"] = "ToolPermission"
         shell = re.fullmatch(r"(bash|powershell):([0-9][0-9A-Za-z.()_-]*)", args.native_shell or "")
         require(shell is not None, "actual_hook_shell_missing")
-        result.update(valid=True, session_sha256=digest(value["session_id"].encode()),
+        result.update(valid=True, payload_sha256=digest(raw), session_sha256=digest(value["session_id"].encode()),
                       timestamp_sha256=digest(value["timestamp"].encode()), shell=shell[1], shell_version=shell[2])
         commands = json.loads((lab / "probe.json").read_text())
         if args.event in commands:
@@ -565,6 +565,7 @@ def capture_sdk_hook_outcomes(lab):
     facts = dict(capture="unavailable", identity_checked=False, snapshot_stable=False,
                  parse_complete=False, SDK_flush_complete=False, absence_means="unknown",
                  records=0, owned_calls=0, unjoined_owned_calls=0, outcomes=[])
+    owned_inputs = []  # Private memory only; never part of the closed projection.
     try:
         path = lab / "sdk-private/telemetry.json"
         before = path.lstat()
@@ -582,14 +583,29 @@ def capture_sdk_hook_outcomes(lab):
                      snapshot_stable=(before.st_size, before.st_mtime_ns) == (after.st_size, after.st_mtime_ns),
                      bytes=len(raw))
         # Retain the actual prefix privately even if later SDK writes/teardown append.
-        snapshot = path.parent / ("pre-teardown-" + str(time.monotonic_ns()) + ".json")
-        with snapshot.open("xb") as stream:
-            os.chmod(snapshot, 0o600); stream.write(raw)
+        stamp = str(time.monotonic_ns())
+        # Windows Python 3.12's monotonic clock can repeat within one tick.
+        # Exclusive creation disambiguates owned names without overwriting any
+        # retained prefix, sleeping, or extending teardown deadlines.
+        for slot in range(7):
+            suffix = "" if slot == 0 else "-" + str(slot)
+            snapshot = path.parent / ("pre-teardown-" + stamp + suffix + ".json")
+            try:
+                stream = snapshot.open("xb")
+            except FileExistsError:
+                continue
+            with stream:
+                os.chmod(snapshot, 0o600); stream.write(raw)
+            break
+        else:
+            raise Red("SDK_prefix_snapshot_slot_bound")
         rows = observations(lab)
         joined = {}
+        bodies = {}
         for row in rows:
             key = (row.get("event"), row.get("session_sha256"), row.get("timestamp_sha256"))
             joined.setdefault(key, []).append(row.get("case"))
+            bodies.setdefault(key, []).append(row.get("payload_sha256"))
         roles = {"agent-notifications-gemini-after-agent": "AfterAgent",
                  "agent-notifications-gemini-notification": "Notification"}
         decoder, text, offset = json.JSONDecoder(), raw.decode("utf-8"), 0
@@ -621,6 +637,12 @@ def capture_sdk_hook_outcomes(lab):
                 continue
             require(len(facts["outcomes"]) < 64, "SDK_hook_outcome_bound")
             outcome = dict(role=role, case=cases[0], claim_failures=[])
+            body = attr["hook_input"].encode("utf-8")
+            require(0 < len(body) <= LIMIT, "SDK_owned_input_bound")
+            owned_inputs.append(dict(role=role, case=cases[0], raw=body,
+                payload_sha256=digest(body), session_sha256=digest(ids[0].encode()),
+                timestamp_sha256=digest(ids[1].encode()),
+                foreign_payload_match=bodies.get((role, *(digest(v.encode()) for v in ids))) == [digest(body)]))
             code, duration = attr.get("exit_code"), attr.get("duration_ms")
             if type(code) is int and -256 <= code <= 65535: outcome["SDK_exit_code"] = code
             if type(duration) in (int, float) and math.isfinite(duration) and 0 <= duration <= 86400000:
@@ -644,12 +666,16 @@ def capture_sdk_hook_outcomes(lab):
         facts["capture"] = "bounded_capture_or_parse_failed"
     # Only this closed projection is copied to CI; the SDK outfile remains private.
     encoded = json.dumps(facts, sort_keys=True) + "\n"
-    if len(encoded.encode()) > 65536:
+    projection_bounded = len(encoded.encode()) <= 65536
+    if not projection_bounded:
         encoded = json.dumps(dict(capture="projection_bound_exceeded", identity_checked=False,
             snapshot_stable=False, parse_complete=False, SDK_flush_complete=False,
             absence_means="unknown", records=0, owned_calls=0, unjoined_owned_calls=0,
             outcomes=[]), sort_keys=True) + "\n"
     (lab / "sdk-hook-outcomes.json").write_text(encoded)
+    # A closed parsed prefix is qualified observation, never an SDK flush receipt.
+    qualified = projection_bounded and facts["capture"] == "bounded_prefix" and facts["snapshot_stable"] and facts["parse_complete"]
+    return {"qualified": qualified, "frames": owned_inputs if qualified else []}
 
 
 def install_test_hooks(lab, commands, shell, node, system_root=None, capture_frames=False):
@@ -729,6 +755,7 @@ class Terminal:
     def __init__(self, node, executable, install_root, lab, env, ui, timeout):
         env = dict(env, AGENT_NOTIFICATIONS_OBSERVATION_DIAGNOSTICS="1")
         self.telemetry_lab, self.telemetry_captured = lab, False
+        self.owned_input_capture = {"qualified": False, "frames": []}
         self.events, self.seen, self.exit = queue.Queue(), set(), None
         self.child_started = None
         self.stage, self.case, self.completed_cases = "starting", "plain", 0
@@ -836,7 +863,7 @@ class Terminal:
         if not self.telemetry_captured:
             self.telemetry_captured = True
             try:
-                capture_sdk_hook_outcomes(self.telemetry_lab)
+                self.owned_input_capture = capture_sdk_hook_outcomes(self.telemetry_lab)
             except Exception:
                 pass  # Diagnostic publication must never prevent SDK teardown.
         failure = None

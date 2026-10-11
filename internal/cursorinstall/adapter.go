@@ -23,10 +23,8 @@ import (
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/usecase"
 )
 
-const cursorVersion = "2026.09.28-64d2043"
-
 // Authority is supplied by the composition owner after qualifying the current
-// Linux amd64 Cursor tuple. QualificationID refers to that evidence, not a
+// host Cursor tuple. QualificationID refers to that evidence, not a
 // discovery hint. ExecutableDigest binds the owned observer bytes; Selector is
 // the fixed portable binding path. No consent or physical token is fabricated.
 type Authority struct {
@@ -71,7 +69,8 @@ func New(native nativeconfig.Kernel, paths ports.PathPolicy, fixed *Authority) (
 }
 
 func (a *Adapter) qualified() error {
-	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" || a.fixed.CursorVersion != cursorVersion || a.fixed.QualificationID == "" {
+	version, shell := CurrentTuple()
+	if version == "" || a.fixed.CursorVersion != version || a.fixed.QualificationID == "" {
 		return fmt.Errorf("cursor selected tuple is unqualified")
 	}
 	for _, value := range []string{a.fixed.QualificationID, a.fixed.ObjectID, a.fixed.ProfileRoot, a.fixed.Selector} {
@@ -82,7 +81,7 @@ func (a *Adapter) qualified() error {
 	if !filepath.IsAbs(a.fixed.Selector) || filepath.Clean(a.fixed.Selector) != a.fixed.Selector {
 		return fmt.Errorf("cursor requires a fixed absolute portable selector")
 	}
-	_, err := cursorhooks.RenderArgv(cursorhooks.LinuxUserShell32212,
+	_, err := cursorhooks.RenderArgv(shell,
 		[]string{a.fixed.Executable, "cursor-event", "stop", "--binding", a.fixed.Selector})
 	return err
 }
@@ -92,10 +91,11 @@ func (a *Adapter) spec() cursorhooks.HookSpec {
 }
 
 func (a *Adapter) facts(canonical string) domain.CursorDeliveryFacts {
+	_, shell := CurrentTuple()
 	return domain.CursorDeliveryFacts{ProfileRoot: a.fixed.ProfileRoot,
 		HooksPath: filepath.Join(a.fixed.ProfileRoot, "hooks.json"), ProfileIdentity: a.fixed.ProfileRoot,
-		CursorVersion: a.fixed.CursorVersion, TargetOS: "linux", TargetArch: "amd64", QualificationID: a.fixed.QualificationID,
-		Executable: a.fixed.Executable, Selector: a.fixed.Selector, Shell: string(cursorhooks.LinuxUserShell32212),
+		CursorVersion: a.fixed.CursorVersion, TargetOS: runtime.GOOS, TargetArch: runtime.GOARCH, QualificationID: a.fixed.QualificationID,
+		Executable: a.fixed.Executable, Selector: a.fixed.Selector, Shell: string(shell),
 		ObjectID: a.fixed.ObjectID, CanonicalDigest: canonical}
 }
 

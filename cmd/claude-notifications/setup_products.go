@@ -105,7 +105,7 @@ func runSetupProductsContext(ctx context.Context, args []string, input io.Reader
 				label := f.Label
 				if f.Present {
 					label += " (CLI present)"
-					if f.ID != "cursor" {
+					if f.ID != "cursor" && f.ID != "copilot-vscode" {
 						defaults = append(defaults, f.ID)
 					}
 				} else {
@@ -220,7 +220,7 @@ func runSetupProductsContext(ctx context.Context, args []string, input io.Reader
 	if a.Operation == "channels" {
 		products := []string{}
 		for _, id := range a.Products {
-			if id == "opencode" || id == "gemini" || id == "cursor" {
+			if id == "opencode" || id == "gemini" || id == "cursor" || id == "copilot-vscode" {
 				products = append(products, productLabels[id])
 			}
 		}

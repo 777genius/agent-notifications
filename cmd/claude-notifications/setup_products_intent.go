@@ -12,14 +12,16 @@ import (
 	"github.com/777genius/agent-notifications/internal/agentnotify/setupwizard"
 	"github.com/777genius/agent-notifications/internal/config"
 	"github.com/777genius/agent-notifications/internal/installruntime"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients/vscode"
 )
 
 // One immutable host handoff, not a phase journal or an authorization token.
 // Existing verified-helper acquisition and writers retain their authority.
 type confirmedBootstrapIntent struct {
-	Schema     int                `json:"schema"`
-	Provenance selectorProvenance `json:"provenance"`
-	Request    setupProductsArgs  `json:"request"`
+	LocalConfig *vscode.LocalConfig `json:"localConfig,omitempty"`
+	Schema      int                 `json:"schema"`
+	Provenance  selectorProvenance  `json:"provenance"`
+	Request     setupProductsArgs   `json:"request"`
 	// Byte values preserve Unix path bytes through JSON without lossy UTF8 repair.
 	Scopes  map[string][]byte                 `json:"scopes"`
 	Units   []bootstrapProductUnits           `json:"units"`
@@ -37,24 +39,30 @@ type bootstrapInitialObservation struct {
 	ChannelPolicy   []byte
 }
 
-var intentScalarKeys = []string{"home", "claude-config", "claude-mcp-config", "codex-home", "codex-mcp-config", "opencode-config-dir", "gemini-config-root", "control-root", "runtime-root", "global-config", "claude-executable", "codex-executable", "opencode-executable", "gemini-executable", "scope-root", "client-executable"}
+var intentScalarKeys = []string{"home", "claude-config", "claude-mcp-config", "codex-home", "codex-mcp-config", "opencode-config-dir", "gemini-config-root", "control-root", "runtime-root", "global-config", "claude-executable", "codex-executable", "opencode-executable", "gemini-executable", "scope-root", "client-executable", "local-settings"}
 
 func intentWizardRequest(i confirmedBootstrapIntent) setupwizard.Request {
 	scopes := i.Scopes
 	ids := []string{}
 	for _, id := range i.Request.Products {
-		if id == "claude" || id == "codex" || id == "cursor" {
+		if id == "claude" || id == "codex" || id == "cursor" || id == "copilot-vscode" {
 			ids = append(ids, id)
 		}
 	}
 	on, off := true, false
-	return setupwizard.Request{Action: setupwizard.ActionInstall, Agents: ids, Hooks: &off, AgentNotify: &on, Yes: true,
+	r := setupwizard.Request{Action: setupwizard.ActionInstall, Agents: ids, Hooks: &off, AgentNotify: &on, Yes: true,
 		ControlRoot: string(scopes["control-root"]), RuntimeRoot: string(scopes["runtime-root"]), GlobalConfig: string(scopes["global-config"]),
 		ClaudeConfig: string(scopes["claude-config"]), CodexHome: string(scopes["codex-home"]),
 		CursorConfig: string(scopes["scope-root"]), ScopeRoot: string(scopes["scope-root"]),
 		MCPConfig:         map[string]string{"claude": string(scopes["claude-mcp-config"]), "codex": string(scopes["codex-mcp-config"])},
-		ClientExecutables: map[string]string{"claude": string(scopes["claude-executable"]), "codex": string(scopes["codex-executable"]), "cursor": string(scopes["client-executable"])},
+		ClientExecutables: map[string]string{"claude": string(scopes["claude-executable"]), "codex": string(scopes["codex-executable"]), "cursor": string(scopes["client-executable"]), "copilot-vscode": string(scopes["client-executable"])},
 	}
+	if i.LocalConfig != nil {
+		r.CursorConfig = ""
+		copy := *i.LocalConfig
+		r.LocalConfig = &copy
+	}
+	return r
 }
 
 func buildConfirmedBootstrapIntent(ctx context.Context, a setupProductsArgs, e productEnvironment, provenance selectorProvenance) (confirmedBootstrapIntent, []string, error) {
@@ -105,6 +113,16 @@ func buildConfirmedBootstrapIntent(ctx context.Context, a setupProductsArgs, e p
 	i.Request.IntentFile = ""
 	i.Request.Mode = ""
 	i.Request.ConfigureArgs = nil
+	if containsProduct(a.Products, "copilot-vscode") {
+		i.LocalConfig = localWizardConfig(string(i.Scopes["local-settings"]))
+		i.LocalConfig.NativeStop = *a.LocalNativeStop
+		if *a.LocalMCP {
+			i.LocalConfig.MCPServers = []string{"agent-notify"}
+		}
+		if *a.LocalSkills {
+			i.LocalConfig.Skills = []string{"agent-notifications"}
+		}
+	}
 	r := intentWizardRequest(i)
 	// Confirmation observes stored units without granting the selected route.
 	// The direct caller constructs fresh authority before Plan/Run, after the
@@ -113,7 +131,10 @@ func buildConfirmedBootstrapIntent(ctx context.Context, a setupProductsArgs, e p
 		r.CursorAgentNotify = r.Hooks
 	}
 
-	if len(r.Agents) > 0 && !a.SkipAgentNotify {
+	if containsProduct(a.Products, "copilot-vscode") {
+		i.MCP.Selected = []string{"copilot-vscode"}
+		i.MCP.Projection.Profiles = map[string][]byte{"copilot-vscode": i.Scopes["scope-root"]}
+	} else if len(r.Agents) > 0 && !a.SkipAgentNotify {
 		projection, generation, err := setupwizard.ObserveBootstrapMCP(ctx, r)
 		if err != nil {
 			return i, nil, err
@@ -155,9 +176,12 @@ func buildConfirmedBootstrapIntent(ctx context.Context, a setupProductsArgs, e p
 		}
 	}
 	for _, id := range a.Products {
-		portable := id == "claude" || id == "codex" || id == "cursor"
+		portable := id == "claude" || id == "codex" || id == "cursor" || id == "copilot-vscode"
 		u := bootstrapProductUnits{Product: id, Hooks: portable && id != "cursor", Native: !portable, MCP: containsProduct(i.MCP.Selected, id), Skill: containsProduct(i.MCP.Selected, id), PreservedOff: containsProduct(i.MCP.Skipped, id)}
-		if !portable {
+		if id == "copilot-vscode" {
+			u.Hooks, u.Native, u.MCP, u.Skill = false, i.LocalConfig.NativeStop, len(i.LocalConfig.MCPServers) > 0, len(i.LocalConfig.Skills) > 0
+			u.Desktop, u.Webhook = a.Desktop, a.Webhook
+		} else if !portable {
 			u.Desktop, u.Webhook, err = resolveBootstrapChannels(a, id, i.Initial.ChannelPolicy)
 			if err != nil {
 				return i, nil, err
@@ -201,7 +225,7 @@ func preflightBootstrapIntent(ctx context.Context, i confirmedBootstrapIntent, a
 	}
 	for _, id := range i.Request.Products {
 		key := id + "-executable"
-		if id == "cursor" {
+		if id == "cursor" || id == "copilot-vscode" {
 			key = "client-executable"
 		}
 		path := string(i.Scopes[key])
@@ -221,7 +245,7 @@ func preflightBootstrapIntent(ctx context.Context, i confirmedBootstrapIntent, a
 			}
 		}
 	}
-	if len(i.MCP.Selected)+len(i.MCP.Skipped) > 0 {
+	if !containsProduct(i.Request.Products, "copilot-vscode") && len(i.MCP.Selected)+len(i.MCP.Skipped) > 0 {
 		r := intentWizardRequest(i)
 		if containsProduct(r.Agents, "cursor") {
 			r.CursorAgentNotify = r.Hooks
@@ -241,6 +265,11 @@ func bootstrapIntentSummary(i confirmedBootstrapIntent, policy map[string]json.R
 	raw := []string{"Installation summary", "", "Components to install"}
 	for _, u := range i.Units {
 		parts := []string{}
+		if u.Product == "copilot-vscode" {
+			raw = append(raw, "  "+productLabels[u.Product]+": Native Stop "+bootstrapOnOff(u.Native)+", MCP "+bootstrapOnOff(u.MCP)+", Skills "+bootstrapOnOff(u.Skill),
+				"    Channels: Desktop "+bootstrapLocalChoice(localChoice(i.Request.DesktopSet, i.Request.Desktop))+", Webhook "+bootstrapLocalChoice(localChoice(i.Request.WebhookSet, i.Request.Webhook))+", Manual "+bootstrapLocalChoice(i.Request.Manual))
+			continue
+		}
 		for _, part := range []struct {
 			on    bool
 			label string
@@ -250,7 +279,7 @@ func bootstrapIntentSummary(i confirmedBootstrapIntent, policy map[string]json.R
 			}
 		}
 		raw = append(raw, "  "+productLabels[u.Product]+": "+strings.Join(parts, ", "))
-		if u.Native || u.Product == "cursor" {
+		if u.Native || u.Product == "cursor" || u.Product == "copilot-vscode" {
 			raw = append(raw, "    Channels: Desktop "+bootstrapOnOff(u.Desktop)+", Webhook "+bootstrapOnOff(u.Webhook))
 		}
 	}
@@ -285,6 +314,11 @@ func bootstrapIntentSummary(i confirmedBootstrapIntent, policy map[string]json.R
 			raw = append(raw, "  Navigation setup only writes preferences.")
 		}
 		raw = append(raw, "  Notification permission request: "+bootstrapOnOff(c.RequestPermission))
+	} else if containsProduct(i.Request.Products, "copilot-vscode") {
+		raw = append(raw, "  Apply only explicit Local Desktop/Webhook/Manual choices; omitted choices retain exact-binding consent.")
+		if i.Request.Manual != nil {
+			raw = append(raw, "  Local manual notification consent: "+bootstrapOnOff(*i.Request.Manual))
+		}
 	} else if containsProduct(i.Request.Products, "cursor") {
 		raw = append(raw, "  Update shared Cursor Desktop/Webhook preferences to the channels shown above.", "  Keep other shared notification preferences.")
 	} else {
@@ -296,7 +330,16 @@ func bootstrapIntentSummary(i confirmedBootstrapIntent, policy map[string]json.R
 	raw = append(raw, "", "Before you finish", "  Restart/trust may be required. Gemini hook-enable/security settings remain user controlled.", "  Webhook is optional and works alongside Desktop. Delivery requires an enabled destination.", "  Products install separately. A later failure can leave a partial installation.", "  Installation does not verify activation, authentication, or notification delivery.", "", "Technical details - installation locations")
 	for _, key := range intentScalarKeys {
 		if p, ok := i.Scopes[key]; ok {
-			raw = append(raw, "  "+bootstrapScopeLabel(key)+": "+bootstrapAuthority(string(p)))
+			label := bootstrapScopeLabel(key)
+			if containsProduct(i.Request.Products, "copilot-vscode") {
+				if key == "scope-root" {
+					label = "VS Code Local profile"
+				}
+				if key == "client-executable" {
+					label = "VS Code executable"
+				}
+			}
+			raw = append(raw, "  "+label+": "+bootstrapAuthority(string(p)))
 		}
 	}
 	if c.Route != nil {

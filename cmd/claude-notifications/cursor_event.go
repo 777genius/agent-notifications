@@ -96,11 +96,7 @@ func runCursorEvent(argv []string, input io.ReadCloser, output io.Writer) (code 
 	if err != nil {
 		return 0
 	}
-	binding, err := gate.ConsumerBinding(ctx)
-	if err != nil {
-		return 0
-	}
-	effective, err := gate.EffectiveConfig(ctx)
+	binding, effective, err := gate.ConsumerBindingAndConfig(ctx)
 	if err != nil {
 		return 0
 	}

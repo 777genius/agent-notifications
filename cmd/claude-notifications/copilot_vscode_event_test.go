@@ -5,6 +5,9 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/json"
+	"github.com/777genius/agent-notifications/internal/agentnotify/portable"
+	"github.com/777genius/agent-notifications/internal/installruntime"
 	"io"
 	"os"
 	"os/exec"
@@ -275,4 +278,72 @@ func setClosedLocalOutput(t *testing.T, cmd *exec.Cmd) {
 	_ = r.Close()
 	t.Cleanup(func() { _ = w.Close() })
 	cmd.Stdout = w
+}
+
+// Regression: the installed composer promotes private registered paths and
+// true configuration to authority, writes claims on denial, or leaks diagnostics.
+func TestCopilotVSCodeRegisteredBindingWithoutAuthorityIsNeutral(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	control, runtimeRoot := filepath.Join(root, "control"), filepath.Join(root, "runtime")
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	ledger, err := installruntime.Commit(ctx, installruntime.Request{ControlRoot: control, RuntimeRoot: runtimeRoot, Owner: "existing-installer", ConsumerID: "TEST-peer",
+		Files: []installruntime.File{{Path: filepath.Join(runtimeRoot, "primary"), Data: []byte("TEST inert installed primary"), Mode: 0700}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := portable.Binding{Version: 1, Integration: portable.CopilotVSCode, InstallationID: "TEST-installation", BindingID: "TEST-local-binding", ScopeID: "user",
+		ComponentID: ledger.ID, Owner: ledger.Owner, ScopeRoot: filepath.Join(root, "TEST-profile"), DataRoot: filepath.Join(root, "TEST-data"), ControlRoot: control,
+		GlobalConfig: filepath.Join(root, "TEST-config", "config.json"), RuntimeRoot: runtimeRoot, Primary: "primary"}
+	for _, path := range []string{b.ScopeRoot, b.DataRoot, filepath.Dir(b.GlobalConfig)} {
+		if err := os.MkdirAll(path, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(b.GlobalConfig, []byte(`{"schemaVersion":2,"agents":{"copilot-vscode":{"notifications":{"desktop":{"enabled":true},"webhook":{"enabled":true,"url":"http://127.0.0.1:1"}}}}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	key, c, _, err := b.Registration()
+	if err != nil {
+		t.Fatal(err)
+	}
+	policySnapshot, err := installruntime.ReadPolicySnapshot(ctx, control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = installruntime.Commit(ctx, installruntime.Request{ControlRoot: control, RuntimeRoot: runtimeRoot, Owner: ledger.Owner, ConsumerID: key, Consumer: c, ExpectedGeneration: &ledger.Generation, ExpectedPolicy: &policySnapshot.Preimage, PolicyFields: map[string]json.RawMessage{"route": json.RawMessage(`{"copilotVSCodeNotifications":{"desktop":true,"webhook":true,"manual":{"enabled":false}}}`)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := portable.Publish(b); err != nil {
+		t.Fatal(err)
+	}
+	policy, err := os.ReadFile(filepath.Join(control, "agent-notifications.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadDir(b.DataRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := io.NopCloser(strings.NewReader(`{"hook_event_name":"Stop","timestamp":"2026-10-10T05:00:00Z","stop_hook_active":false,"session_id":"TEST-private-session"}`))
+	var output bytes.Buffer
+	code := runCopilotVSCodeEvent([]string{"--event", "Stop", "--control-root", control, "--binding", b.BindingID}, input, &output)
+	if code != 0 || output.String() != "{}\n" {
+		t.Fatalf("registered denial leaked output: %d %q", code, output.String())
+	}
+	after, err := os.ReadDir(b.DataRoot)
+	if err != nil || len(after) != len(before) {
+		t.Fatal("denied Local wrote a claim/effect")
+	}
+	current, err := os.ReadFile(filepath.Join(control, "agent-notifications.json"))
+	if err != nil || !bytes.Equal(policy, current) {
+		t.Fatal("event repaired or enabled policy")
+	}
+	if _, err := os.Lstat(filepath.Join(root, "uap")); !os.IsNotExist(err) {
+		t.Fatal("event created UAP state")
+	}
 }
