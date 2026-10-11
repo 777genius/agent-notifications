@@ -112,7 +112,7 @@ def adapt(m):
                     status = dict(row.split(':', 1) for row in (path/'status').read_text().splitlines() if ':' in row)
                     if int(status['NSpid'].split()[-1]) != local['tid' if thread else 'pid']: continue
                     facts = m.trace_task_identity(int(path.name)) if thread else m.proc_identity(int(path.name))
-                except FileNotFoundError: continue
+                except (FileNotFoundError, ProcessLookupError): continue
                 if facts['birth'] == local['birth'] and facts['nspid'][-1] == local['tid' if thread else 'pid'] and facts['ns'] == self.controller['ns']:
                     matches.append(facts)
             assert len(matches) == 1, 'one fresh local PID/birth/namespace identity'
@@ -143,7 +143,7 @@ def adapt(m):
                     if held_nets is not None:
                         assert m.os.readlink('/proc/self/fd/'+str(fd)) == facts['ns']['net'], 'early namespace identity changed'
                     matches.append(facts)
-                except FileNotFoundError: continue
+                except (FileNotFoundError, ProcessLookupError): continue
             assert m.proc_identity(self.controller['pid'],self.controller)['ns'] == self.controller['ns']
             assert len(matches) <= 1, 'sandbox mapping ambiguity'
             return matches[0] if matches else None
