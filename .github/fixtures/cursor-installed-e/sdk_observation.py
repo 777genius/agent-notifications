@@ -416,6 +416,44 @@ def adapt(m):
     m.OwnedNotificationsSession = SDKSession
     m.OuterObservation = SDKOuter
     m.validate_installed_effects = sdk_effects
+    def owned_empty_lock(old,new):
+        assert old == new and new and new['mode'] == m.stat.S_IFREG|0o600
+        assert new['uid'] == new['gid'] == 1000 and new['nlink'] == 1 and new['byteLength'] == 0 and new['sha256'] == hashlib.sha256(b'').hexdigest()
+    m.sdk_owned_empty_lock = owned_empty_lock
+    def mutation_metadata(root):
+        path = root/'home/.config/uap/state/mutation.lock'; m.physical(path)
+        fd = m.os.open(path,m.os.O_RDONLY|m.os.O_NOFOLLOW|m.os.O_CLOEXEC)
+        try:
+            st = m.os.fstat(fd); raw = m.os.read(fd,4097)
+            assert m.stat.S_ISREG(st.st_mode) and st.st_uid == st.st_gid == 1000 and st.st_nlink == 1 and st.st_size == len(raw) <= 4096
+            final = m.os.fstat(fd)
+            assert all(getattr(st,k) == getattr(final,k) for k in ('st_mode','st_uid','st_gid','st_dev','st_ino','st_nlink','st_size','st_mtime_ns','st_ctime_ns'))
+        finally: m.os.close(fd)
+        obj = m.strict_json(raw)
+        assert set(obj) == {'pid','acquired_at'} and type(obj['pid']) is int and obj['pid'] > 1
+        assert type(obj['acquired_at']) is str and m.re.fullmatch(r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?Z',obj['acquired_at'])
+        import datetime
+        stamp = datetime.datetime.fromisoformat(obj['acquired_at'].replace('Z','+00:00'))
+        fraction = obj['acquired_at'].removesuffix('Z').split('.',1)[1] if '.' in obj['acquired_at'] else ''
+        return {'sha256':hashlib.sha256(raw).hexdigest(),'byteLength':len(raw),'metadata':obj,'stamp':(stamp.replace(microsecond=0),int(fraction.ljust(9,'0') or '0'))}
+    m.sdk_mutation_metadata = mutation_metadata
+    removal = inspect.getsource(m.classify_removal)
+    anchor = "            if disposition is None and area == 'profile' and path == 'hooks.json':"
+    extra = "            if disposition is None and area == 'profile' and path == 'hooks.json.agentplugins.lock' and path not in foreign['profile']:\n                sdk_owned_empty_lock(old,new)\n                assert new['device'] == before['profile']['.']['device']\n                disposition = 'owned retained SDK35e nativeconfig exact hooks writer lock'\n"
+    assert removal.count(anchor) == 1; removal = removal.replace(anchor,extra+anchor)
+    anchor = '    home_result = classify_home_removal('
+    extra = "    policy_path = pathlib.Path(binding['controlRoot'])/'policy-generation.json'\n    policy = strict_json(policy_path.read_bytes())\n    assert policy == {'Generation':after_ledger['PolicyGeneration'],'Enabled':after_ledger['Enabled']}\n    assert digest(policy_path) == after['home'][str(policy_path.relative_to(root/'home'))]['sha256']\n"
+    assert removal.count(anchor) == 1; removal = removal.replace(anchor,extra+anchor)
+    exec(compile(removal,'<SDK-removal-retention>','exec'),m.__dict__)
+    home = inspect.getsource(m.classify_home_removal)
+    anchor = '    result = []\n    for path in sorted(set(before)|set(after)):'
+    extra = "    semantic[str((control/'policy-generation.json').relative_to(home))] = 'owned policy generation exactly matches public ledger'\n    source = pathlib.Path(memberships['selectedCommittedAfter']['source']['canonical_source'])\n    cache = home/'.config/uap/acquired-source'\n    assert source.parent.parent == cache and source.name == 'root' and re.fullmatch(r'[0-9a-f]{64}',source.parent.name)\n    cache_prefix = str(source.parent.relative_to(home))\n"
+    assert home.count(anchor) == 1; home = home.replace(anchor,extra+anchor)
+    anchor = "        if disposition is None and old and new and stat.S_ISDIR(new['mode']):"
+    extra = "        if disposition is None and path in (str((control/'.setup-coordinator.lock').relative_to(home)),str((control/'agent-notifications.json.lock').relative_to(home))):\n            sdk_owned_empty_lock(old,new); disposition = 'owned retained exact coordinator/policy lock'\n        if disposition is None and (path in ('.config/uap/acquired-source','.config/uap/state/tmp','.config/uap/state/client-facts.json') or path == cache_prefix or path.startswith(cache_prefix+'/')):\n            assert old and new and old['uid'] == old['gid'] == new['uid'] == new['gid'] == 1000 and same_preserved_object(old,new,True), 'owned recorded source/cache identity or bytes changed'\n            disposition = 'owned retained recorded SDK source/target cache or staging parent'\n        if disposition is None and path == '.config/uap/state/mutation.lock':\n            assert old and new and all(old[k] == new[k] for k in ('mode','uid','gid','device','inode','nlink')) and new['mode'] == stat.S_IFREG|0o600 and new['uid'] == new['gid'] == 1000 and new['nlink'] == 1\n            for side,facts in (('before',old),('after',new)):\n                receipt = SDK_REMOVAL_METADATA[side]; assert all(facts[k] == receipt[k] for k in ('sha256','byteLength'))\n            assert SDK_REMOVAL_METADATA['after']['stamp'] >= SDK_REMOVAL_METADATA['before']['stamp']\n            disposition = 'owned retained SDK processlock inode; bounded acquisition metadata renewed'\n"
+    assert home.count(anchor) == 1; home = home.replace(anchor,extra+anchor)
+    exec(compile(home,'<SDK-home-retention>','exec'),m.__dict__)
+
     # Foreign preimage must retain the same exact socket object during removal.
     preimage = inspect.getsource(m.foreign_preimage)
     assert preimage.count("bounded_tree(root/'home')") == preimage.count('bounded_tree(profile)') == 1
@@ -434,6 +472,12 @@ def adapt(m):
     lifecycle = lifecycle.replace("        assert records == baseline, 'duplicate/disabled webhook delivery'", "        assert records == baseline, 'duplicate/disabled webhook delivery'\n        assert cache.read_bytes() == cache_preimage, 'duplicate/disabled/update/restart cache unchanged'")
     assert lifecycle.count("bounded_tree(root/'home')") == lifecycle.count("bounded_tree(root/'home/.cursor')") == 1
     lifecycle = lifecycle.replace("bounded_tree(root/'home')", "bounded_tree(root/'home',vendor_root=root)").replace("bounded_tree(root/'home/.cursor')", "bounded_tree(root/'home/.cursor',vendor_root=root)")
+    anchor = "    before_ledger = strict_json((pathlib.Path(binding['controlRoot'])/'ownership.json').read_bytes())"
+    assert lifecycle.count(anchor) == 1
+    lifecycle = lifecycle.replace(anchor, "    globals()['SDK_REMOVAL_METADATA'] = {'before':sdk_mutation_metadata(root)}\n"+anchor)
+    anchor = '    classification = classify_removal('
+    assert lifecycle.count(anchor) == 1
+    lifecycle = lifecycle.replace(anchor, "    SDK_REMOVAL_METADATA['after'] = sdk_mutation_metadata(root)\n    (root/'evidence/sdk-retention-metadata.json').write_text(json.dumps({side:{k:v for k,v in row.items() if k != 'stamp'} for side,row in SDK_REMOVAL_METADATA.items()},indent=2)+'\\n')\n"+anchor)
     exec(compile(lifecycle, '<SDK-lifecycle>', 'exec'), m.__dict__)
     main = inspect.getsource(m.main)
     main = main.replace('    observation = ControllerObservation(socket.socket(fileno=args.control_fd),CASE_CLOCK)', '    observation = ControllerObservation(socket.socket(fileno=args.control_fd),CASE_CLOCK)\n    globals()["SDK_CONTROLLER"] = observation')
