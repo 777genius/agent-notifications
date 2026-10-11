@@ -733,7 +733,7 @@ jobs:
           assert bounded_git(['rev-parse','HEAD'],41) == b'53a52623db13951bf5d763850a6139aecefea910\n', 'product HEAD changed'
           adapter_path = '.github/fixtures/cursor-installed-e/sdk_observation.py'
           adapter = bounded_git(['show',transport_sha+':'+adapter_path],65536)
-          assert hashlib.sha256(adapter).hexdigest() == '21e4fbaeb147694efd1ad62dd90eb46ae34cb3b2a80172b3ffd53708934a90be'
+          assert hashlib.sha256(adapter).hexdigest() == 'e06ab217b8ba1e5d5cd53f3e315dd4cacc6d859e7146d6712a0694eec11f512c'
           compile(adapter,'sdk_observation.py','exec')
           adapter_file = workspace/'source/sdk_observation.py'; adapter_file.write_bytes(adapter); adapter_file.chmod(0o644)
           with open(os.environ['GITHUB_ENV'],'a') as environment:
@@ -761,8 +761,8 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install --no-install-recommends --no-upgrade -y strace=6.8-0ubuntu2 dbus-daemon dbus-bin dunst xvfb xauth libasound2-dev
-          for tool in strace dbus-daemon dbus-monitor dbus-send dunst Xvfb xauth nsenter setpriv; do test -x "/usr/bin/$tool"; done
+          sudo apt-get install --no-install-recommends --no-upgrade -y strace=6.8-0ubuntu2 dbus-daemon dbus-bin dunst xvfb xauth libasound2-dev uidmap iproute2
+          for tool in strace dbus-daemon dbus-monitor dbus-send dunst Xvfb xauth nsenter setpriv newgidmap ip; do test -x "/usr/bin/$tool"; done
           # No kernel/CAP/LSM/sysctl changes or attach probing; actual permission
           # and session readiness remain fail-closed gates in the ONE carrier.
       - name: SAME physical SDK qualification; historical tracer matrix remains HOLD
@@ -1160,7 +1160,7 @@ jobs:
                       target.write_bytes(body);target.chmod(m.mode & 0o777)
               tools = {}
               packages = {'strace':'strace','dbus-daemon':'dbus-daemon','dbus-monitor':'dbus-bin','dbus-send':'dbus-bin',
-                          'dunst':'dunst','Xvfb':'xvfb','xauth':'xauth','nsenter':'util-linux','setpriv':'util-linux'}
+                          'dunst':'dunst','Xvfb':'xvfb','xauth':'xauth','nsenter':'util-linux','setpriv':'util-linux','newgidmap':'uidmap','ip':'iproute2'}
               for name,package_name in packages.items():
                   path = pathlib.Path('/usr/bin')/name
                   assert path.resolve(strict=True) == path and stat.S_ISREG(path.stat().st_mode) and os.access(path,os.X_OK)
@@ -1294,7 +1294,7 @@ jobs:
               try:
                   assert inputs['root'] == str(pathlib.Path(runner_temp) / 'TEST-cursor-installed-one')
                   assert hashlib.sha256(read_path(case, 'recipe/native_case.py')).hexdigest() == source_sha
-                  assert hashlib.sha256(read_path(case, 'recipe/sdk_observation.py')).hexdigest() == '21e4fbaeb147694efd1ad62dd90eb46ae34cb3b2a80172b3ffd53708934a90be'
+                  assert hashlib.sha256(read_path(case, 'recipe/sdk_observation.py')).hexdigest() == 'e06ab217b8ba1e5d5cd53f3e315dd4cacc6d859e7146d6712a0694eec11f512c'
                   assert hashlib.sha256(read_path(case, 'recipe/authoritative_readback.go')).hexdigest() == BRIDGE
                   load = lambda path: strict_json(read_path(case, 'evidence/' + path))
                   joined = load('namespace-join.json')
