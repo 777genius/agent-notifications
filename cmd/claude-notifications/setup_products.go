@@ -63,7 +63,9 @@ func runSetupProductsContext(ctx context.Context, args []string, input io.Reader
 		} else {
 			checkpoint, cancel := context.WithTimeout(ctx, bootstrapInspectionTimeout)
 			defer cancel()
-			err = preflightBootstrapIntent(checkpoint, intent, a)
+			err = runSetupProductsBusy(checkpoint, prompts, setupProductsBusyRich(input, prompts, a.Mode), "Rechecking installation…", func() error {
+				return preflightBootstrapIntent(checkpoint, intent, a)
+			})
 		}
 		if err != nil {
 			return fail(1, err)
@@ -79,7 +81,12 @@ func runSetupProductsContext(ctx context.Context, args []string, input io.Reader
 				return fail(2, err)
 			}
 			observation, cancel := context.WithTimeout(ctx, 2*time.Second)
-			facts, _, err := discoverProducts(observation, a, e)
+			var facts []productFact
+			err = runSetupProductsBusy(observation, prompts, setupProductsBusyRich(input, prompts, a.Mode), "Checking installed clients…", func() error {
+				var discoverErr error
+				facts, _, discoverErr = discoverProducts(observation, a, e)
+				return discoverErr
+			})
 			cancel()
 			if err != nil {
 				return fail(setupProductErrorCode(err), err)
@@ -142,7 +149,13 @@ func runSetupProductsContext(ctx context.Context, args []string, input io.Reader
 			return fail(2, err)
 		}
 		observe, cancel := context.WithTimeout(ctx, bootstrapInspectionTimeout)
-		intent, rows, err := buildConfirmedBootstrapIntent(observe, a, env, provenance)
+		var intent confirmedBootstrapIntent
+		var rows []string
+		err = runSetupProductsBusy(observe, prompts, setupProductsBusyRich(input, prompts, a.Mode), "Preparing installation plan…", func() error {
+			var buildErr error
+			intent, rows, buildErr = buildConfirmedBootstrapIntent(observe, a, env, provenance)
+			return buildErr
+		})
 		cancel()
 		if err != nil {
 			return fail(setupProductErrorCode(err), err)

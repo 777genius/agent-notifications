@@ -16,9 +16,9 @@ The Claude triggers are listed below. Codex uses a different event mapping, desc
 
 ## Gemini CLI
 
-Released in **[v1.47.1](https://github.com/777genius/agent-notifications/releases/tag/v1.47.1)**
-for Linux amd64/arm64 and Windows amd64. macOS remains on **v1.46.1**, which excludes Gemini.
-Tested with **Gemini CLI 0.62.0**. [Setup, qualification and limits](gemini-notifications.md).
+Available for Linux amd64/arm64 and Windows amd64 through the
+[platform channels](PLATFORM_RELEASE_CHANNELS.md). The public macOS channel excludes Gemini.
+The installer requires exactly **Gemini CLI 0.62.0**. [Setup, qualification and limits](gemini-notifications.md).
 
 | Event | Meaning | Fixed body |
 | --- | --- | --- |

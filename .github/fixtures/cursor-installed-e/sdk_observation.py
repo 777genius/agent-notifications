@@ -342,6 +342,13 @@ def adapt(m):
         (root/'evidence'/phase/'sdk-observation.json').write_text(json.dumps(record, indent=2)+'\n')
         return dict(record, nativeBytes=payload, facts=facts)
 
+    # Restart inventories retain the same exact vendor socket policy as after.
+    native = inspect.getsource(m.native_run)
+    before = "    native_before = {'home':bounded_tree(root/'home'),'profile':bounded_tree(root/'home/.cursor'),'cache':bounded_tree(root/'cache')}"
+    assert native.count(before) == 1
+    native = native.replace(before, "    native_before = {'home':bounded_tree(root/'home',vendor_root=root),'profile':bounded_tree(root/'home/.cursor',vendor_root=root),'cache':bounded_tree(root/'cache')}")
+    exec(compile(native,'<SDK-native-before-inventory>','exec'),m.__dict__)
+
     original_snapshot = m.process_snapshot
     def root_snapshot(procs, namespace):
         snapshot = original_snapshot(procs, namespace)

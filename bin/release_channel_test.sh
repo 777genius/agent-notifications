@@ -11,13 +11,33 @@ test_env_setup "$TEST_ROOT"
 export CLAUDE_CONFIG_DIR="$HOME/.claude"
 mkdir -p "$HOME"
 source "$ROOT/bin/release-channel.sh"
+# Public metadata is checked independently by release-preflight. Exercise the
+# selector against fixed, distinct platform versions so future promotions do not
+# rewrite this oracle and a wrong-platform or swapped-SHA selection still fails.
+cat > "$TEST_ROOT/valid-index" <<'INDEX'
+# agent-notifications-platform-channels-v1
+darwin	amd64	v1.47.1	aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa	bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb	release/platform-macos
+darwin	arm64	v1.47.2	aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa	bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb	release/platform-macos
+linux	amd64	v1.47.3	aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa	bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb	release/platform-linux-windows
+linux	arm64	v1.47.4	aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa	bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb	release/platform-linux-windows
+windows	amd64	v1.47.5	aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa	bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb	release/platform-linux-windows
+INDEX
 for platform in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64; do
-    selected=$(release_channel_select "$ROOT/release-channels.tsv" "${platform%/*}" "${platform#*/}")
-    expected=v1.48.5
-    [ "${selected%%$'\t'*}" = "$expected" ]
+    release_channel_select "$ROOT/release-channels.tsv" "${platform%/*}" "${platform#*/}" >/dev/null
+    selected=$(release_channel_select "$TEST_ROOT/valid-index" "${platform%/*}" "${platform#*/}")
+    case "$platform" in
+        darwin/amd64) expected=v1.47.1 ;;
+        darwin/arm64) expected=v1.47.2 ;;
+        linux/amd64) expected=v1.47.3 ;;
+        linux/arm64) expected=v1.47.4 ;;
+        windows/amd64) expected=v1.47.5 ;;
+    esac
+    ref=release/platform-linux-windows
+    [[ "$platform" != darwin/* ]] || ref=release/platform-macos
+    [ "$selected" = "$expected"$'\t'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa$'\t'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb$'\t'"$ref" ]
 done
 for fault in duplicate missing invalid_sha invalid_tag ref schema unknown; do
-    cp "$ROOT/release-channels.tsv" "$TEST_ROOT/index"
+    cp "$TEST_ROOT/valid-index" "$TEST_ROOT/index"
     case "$fault" in
         duplicate) tail -1 "$TEST_ROOT/index" >> "$TEST_ROOT/index" ;;
         missing) sed '$d' "$TEST_ROOT/index" > "$TEST_ROOT/new"; mv "$TEST_ROOT/new" "$TEST_ROOT/index" ;;

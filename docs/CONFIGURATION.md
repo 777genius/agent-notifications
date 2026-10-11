@@ -8,10 +8,9 @@ Run `/claude-notifications-go:settings` to configure sounds, volume, webhooks, a
 
 ## OpenCode channels and settings
 
-OpenCode uses the shared resolver below and supports `agents.opencode` overrides.
-It sends silent generic messages for `task_complete`, `question`,
-`permission_request` and `opencode_error`; sound, click-to-focus and contentful
-Claude status templates do not apply. Channel settings can restrict delivery,
+Managed OpenCode uses its own control-root policy, selected with `config path --target opencode --json` and `config inspect --target opencode --json`. It does not use the default shared config target below. See [installed OpenCode settings](opencode-notifications.md#edit-installed-opencode-settings) for custom control roots and revision-checked edits.
+It sends silent alerts for `task_complete`, `question`,
+`permission_request` and `opencode_error`. Desktop alerts can include native session titles and current question text; webhooks use generic text. Sound, click-to-focus and Claude status templates do not apply. Channel settings can restrict delivery,
 but they do not grant consent: use `setup-opencode install|update` with explicit
 `--desktop`, `--webhook` or both. This changes only OpenCode channel consent and
 does not enable portable MCP notifications. Webhooks also need a configured,

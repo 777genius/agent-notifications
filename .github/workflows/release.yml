@@ -6,6 +6,7 @@ on:
       - 'v*'
       - '!v1.48.4'
       - '!v1.48.5'
+      - '!v1.48.6'
 
 permissions:
   contents: read

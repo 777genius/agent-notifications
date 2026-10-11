@@ -4,10 +4,7 @@
 
 ## Gemini availability
 
-The public installer selects **1.48.5 for Linux amd64/arm64, Windows amd64 and
-macOS amd64/arm64**. Gemini CLI is available on Linux/Windows; macOS includes
-Claude, Codex and OpenCode. GitHub Latest is 1.48.5. Rerun setup once to adopt a normal Claude marketplace's platform
-channel. [Channel selection and promotion](PLATFORM_RELEASE_CHANNELS.md).
+The public installer selects a release from the [platform channels](PLATFORM_RELEASE_CHANNELS.md). Gemini CLI is available on Linux amd64/arm64 and Windows amd64; macOS amd64/arm64 includes Claude, Codex and OpenCode. Rerun setup once to adopt a normal Claude marketplace's platform channel.
 
 ## Local installer preview (macOS)
 
@@ -17,6 +14,8 @@ From a clean checkout, open a terminal and run:
 make preview-installer
 # Optional line prompts and a custom reusable cache:
 make preview-installer PREVIEW_ARGS='--plain --state-dir /path/to/private-TEST-cache'
+# Show technical preparation and bootstrap diagnostics:
+BOOTSTRAP_VERBOSE=1 make preview-installer
 # Use an explicitly installed Gemini CLI in the TEST profile:
 make preview-installer PREVIEW_ARGS='--gemini-cli /absolute/path/to/gemini'
 ```
@@ -31,6 +30,14 @@ Native Claude installations use a private local copy of the installed executable
 to avoid launch delays on external disks. SHA256 and the macOS signature are
 verified; logs retain both the installed path and the TEST execution path.
 Select the clients, then review and confirm the plan. Use `--plain` for line prompts.
+
+Preparation shows a spinner with the current stage in a capable terminal.
+`--plain`, `NO_COLOR` and `TERM=dumb` use concise stage lines. Build output,
+source identities, executable paths and snapshot details stay in the retained
+TEST profile's `preparation.log`; the final output prints its location even if
+preparation fails or is cancelled. Set exactly `BOOTSTRAP_VERBOSE=1` to show
+those details and the bootstrap diagnostics. The spinner stops before client
+selection begins.
 
 Python 3.9+, Go and macOS signing/sandbox tools are required. `gh` downloads the
 latest signed public helper and verifies its published checksum; alternatively
@@ -57,19 +64,20 @@ Use `--state-dir /path/to/private-TEST-cache` to reuse your own mode-700 cache.
 
 ## Prerequisites
 
-- Claude, Codex CLI and/or OpenCode for stable setup (published OpenCode support is tested with 1.18.33; published V2 support is not declared). The dual-API candidate targets 1.18.33, 2.0.0 and 2.0.21; final platform qualification and publication remain pending. See [OpenCode candidate setup and limits](opencode-notifications.md), including the stock Windows V1 original-event-age limitation. Gemini CLI 0.62.0 is the tested host on Linux/Windows.
-- `curl` and Bash
+- Install the selected agent CLIs first. OpenCode accepts stable V1 >= 1.18.29 and V2 >= 2.0.0; this does not qualify every version in that range. See [OpenCode setup and limits](opencode-notifications.md), including the stock Windows V1 original-event-age limitation. Gemini requires exactly CLI 0.62.0 on Linux/Windows; other versions are rejected.
+- `curl`, Bash, and a working `python3` or `node` on `PATH` for installer metadata and checksum validation. A Windows Store Python stub is not sufficient.
+- Git for Claude marketplace setup, `tar` for Codex bundles, and `unzip` for the macOS desktop helper.
 - **Windows users:** Git Bash (included with [Git for Windows](https://git-scm.com/download/win)). Do not use WSL for a native Windows installation.
-- Python remains optional only for iTerm2 exact tab/pane targeting.
+- Python is additionally needed for optional iTerm2 exact tab/pane targeting; Node.js can satisfy the installer requirement but cannot replace the iTerm2 Python API.
 
 ### Quick Install (Recommended)
 
 Prefer a guided setup? [Open the installation guide](https://777genius.github.io/agent-notifications/#install) to choose your agents, OS and task.
 
-The short setup loader handles release lookup and validation internally, then downloads the installer from its qualified immutable source snapshot. Run it and choose Claude, Codex, Claude + Codex, or OpenCode:
+The short setup loader handles release lookup and validation internally, then downloads the installer from its qualified immutable source snapshot. Run it and choose Claude, Codex, OpenCode, Gemini CLI (Linux/Windows), or a combination:
 
 ```bash
-curl -fsSL https://agent-notifications.com/install.sh | bash
+(set -o pipefail; curl -fsSL https://agent-notifications.com/install.sh | bash)
 ```
 
 > Windows users: open Git Bash from the Start menu and run this command there. Do not run the `curl ... | bash` command from PowerShell or Windows Terminal if `bash` opens WSL, because that targets Linux paths and binaries instead of Windows.
@@ -80,9 +88,9 @@ For automation or terminals without a controlling TTY, choose explicitly and pre
 (set -o pipefail; curl -fsSL https://agent-notifications.com/install.sh | bash -s -- --product codex)
 ```
 
-Use `claude`, `codex`, or `both` for Claude/Codex. For OpenCode, use `--product opencode --desktop`, `--webhook`, or both channel flags (explicit consent required). The selected host CLI must already be on `PATH`; this installs notifications only.
+Use `claude`, `codex`, or `both` for Claude/Codex. For OpenCode, use `--product opencode --desktop`, `--webhook`, or both channel flags to choose channels explicitly. The selected host CLI must already be on `PATH`; this installs notifications only.
 
-You can select any combination of the three agents in the guided setup. Mixed selections containing OpenCode use one loader command:
+You can select any combination of the supported agents in the guided setup. For Claude, Codex and OpenCode, use one loader command:
 
 ```bash
 (set -o pipefail; curl -fsSL https://agent-notifications.com/install.sh | bash -s -- --products claude,codex,opencode --desktop)
@@ -90,17 +98,18 @@ You can select any combination of the three agents in the guided setup. Mixed se
 
 Use `claude,opencode` or `codex,opencode` for two agents. The loader downloads and validates one installer, then runs Claude/Codex setup followed by OpenCode setup. It stops at the first failure; an earlier successful installation remains installed. Fix the reported error and rerun the same command to complete setup.
 
-`--desktop` and `--webhook` grant consent only for OpenCode; choose at least one, and configure webhook URLs separately. `--skip-agent-notify` applies only to the Claude/Codex notification tool. These flags do not change Claude/Codex notification channels. Single-agent commands and `--product both` remain supported.
+Add `,gemini` to `--products` on Linux/Windows to include Gemini. `--desktop` and `--webhook` apply to each selected OpenCode/Gemini integration independently; configure webhook URLs separately. The public installer defaults fresh OpenCode/Gemini installations to desktop on and webhooks off, and preserve saved channels on update when flags are omitted. `--skip-agent-notify` applies only to the Claude/Codex notification tool. These flags do not change Claude/Codex notification channels. Single-agent commands and `--product both` remain supported.
 
 After installation:
 
 - **Claude:** restart Claude. Optionally run `/claude-notifications-go:settings` to configure sounds.
 - **Codex:** start Codex, run `/hooks`, then review and trust the installed hooks. The installer registers them automatically; no JSON editing or manual registration command is needed. Trust approval remains yours.
 - **Both:** complete both steps above.
+- **Gemini CLI (Linux/Windows):** restart Gemini to reload its hooks. [Setup and limits](gemini-notifications.md).
 - **OpenCode:** restart OpenCode to load its global plugin. On Mac, explicitly grant notification permission. OpenCode bootstrap requires release v1.46.0 or newer; see [OpenCode setup, channels and limits](opencode-notifications.md).
 
 When the selected release supports the portable wizard, the installer also registers the
-`agent-notify` MCP server and `agent-notifications` skill for the selected clients. Restart each selected client
+`agent-notify` MCP server and `agent-notifications` skill for the selected Claude/Codex clients. Restart each selected client
 and open a new session before checking its MCP tools. The agent can call `notify` during a
 task, not only after a Stop hook. Check the read-only `notification_status` first:
 when `navigation.capability` is `eligible`, prefer `navigation: "required"` to keep
@@ -113,11 +122,14 @@ route. Never silently downgrade a request that requires a return to the chat.
 that a banner was visible or the chat opened.
 Desktop notification permission and a visible test send must be checked separately.
 
-The installer reports incomplete setup separately from successful hooks. Keep its retry
-command and selected profile if MCP or skill setup fails; rerun the installer or its
-`setup-notifications wizard` repair action after the cause is resolved. `--skip-agent-notify`
+The installer distinguishes saved registration, failed activation and activation
+that was not started. If setup fails, keep the selected profile and the private
+log if `Diagnostics` reports a path. Native Windows persistence is currently
+unavailable; logging failures are reported separately.
+Follow its single next action after resolving the
+cause; a saved activation command uses the acquired package. `--skip-agent-notify`
 is an explicit hooks-only choice and does not remove an existing MCP installation.
-Automatic updates preserve an absent MCP client when another selected client already has a binding.
+Automatic setup keeps absent MCP clients off when an existing managed portable installation or MCP binding is detected. Skipping setup alone does not record a permanent per-client opt-out.
 Use an explicit `--agent-notify` request to add that client later.
 An interrupted installation made by an older UAP release may have a schema 3 directory
 journal without ownership proof. A newer installer stops with `recovery_required` and
@@ -198,8 +210,19 @@ registration succeeded; it does not confirm notification delivery. Restart the
 agents, review and trust Codex entries with `/hooks`, and send a test notification.
 If a notification does not arrive, check OS permissions and notification settings.
 Skipped agent-notify setup is reported separately from installed automatic hooks.
-For detailed download and setup diagnostics, prefix the final installer command
-with `BOOTSTRAP_VERBOSE=1`. Failed stages always print their diagnostics.
+Failed stages show a compact cause and retain earlier stage output in a private
+durable log outside `TMPDIR` on POSIX systems. The default
+`agent-notifications-installer-diagnostics` directory sits beside the managed
+control root, allowing fresh installation to provision its own transaction state.
+Its parent directory has mode 0700
+and the log has mode 0600. Native Windows diagnostic persistence is currently
+unavailable because this adapter does not verify private Windows ACLs; it reports
+that limitation without saving raw output or advertising a log path. Each retained
+stream holds at most 64 KiB, with an explicit truncation marker;
+the session log is bounded to 2 MiB. Read the existing log for details without
+running installation again. `BOOTSTRAP_VERBOSE=1` displays printable diagnostic
+details at the end of a requested install. If logging fails, the installer reports
+that limitation and keeps raw command output out of the default display.
 
 ### Recover an entirely absent installer consumer
 

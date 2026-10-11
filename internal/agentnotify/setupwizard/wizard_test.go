@@ -7875,17 +7875,19 @@ func TestPortableInstallFailedKeepsActivationIncomplete(t *testing.T) {
 		},
 		Err: errors.New("host seam refused after managed commit"),
 	}
-	got := portableInstallFailed(portable.Codex, Request{Action: ActionInstall, Agents: []string{"codex"}, ControlRoot: "/tmp/control"}, Result{Action: "install"}, err)
+	got := portableInstallFailed(portable.Codex, Request{Action: ActionInstall, Agents: []string{"codex"}, ControlRoot: filepath.Join(t.TempDir(), "TEST-unowned-control")}, Result{Action: "install"}, err)
 	if got.Outcome != "incomplete" || got.Reason != "activation_incomplete" {
 		t.Fatalf("incomplete mapping: %+v", got)
 	}
 	if len(got.NextActions) != 1 || got.NextActions[0].Kind != "activate" || got.NextActions[0].Agents[0] != "codex" {
 		t.Fatalf("activate action: %+v", got.NextActions)
 	}
-	if len(got.NextActions[0].Command) < 2 || got.NextActions[0].Command[0] != "setup-notifications" || got.NextActions[0].Command[1] != "wizard" {
-		t.Fatalf("activate retry command: %v", got.NextActions[0].Command)
+	// This projection fixture has no owned pending intent or acquired source.
+	// Saved registration facts do not establish a safe executable recovery.
+	if len(got.NextActions[0].Command) != 0 || got.NextActions[0].Reason != "recovery_unavailable" {
+		t.Fatalf("unowned recovery advertised: %+v", got.NextActions[0])
 	}
-	if got.Targets[0].Outcome != "incomplete" {
+	if got.Targets[0].Outcome != "incomplete" || got.Targets[0].Materialization != string(domain.MaterializationMaterialized) || got.Targets[0].Activation != string(domain.ActivationFailed) {
 		t.Fatalf("target: %+v", got.Targets)
 	}
 	plain := portableInstallFailed(portable.Codex, Request{Action: ActionInstall}, Result{Action: "install"}, errors.New("missing helper"))
@@ -7969,8 +7971,8 @@ func TestGroupNotifyFailedReportsBothCommittedTargets(t *testing.T) {
 	if len(got.NextActions[0].Agents) != 2 || got.NextActions[0].Agents[0] != "codex" || got.NextActions[0].Agents[1] != "claude" {
 		t.Fatalf("group activate agents: %+v", got.NextActions[0].Agents)
 	}
-	if len(got.NextActions[0].Command) < 2 || got.NextActions[0].Command[0] != "setup-notifications" || got.NextActions[0].Command[1] != "wizard" {
-		t.Fatalf("group activate retry command: %v", got.NextActions[0].Command)
+	if len(got.NextActions[0].Command) != 0 || got.NextActions[0].Reason != "recovery_unavailable" {
+		t.Fatalf("unowned fixture offered activation command: %+v", got.NextActions[0])
 	}
 	plain := groupNotifyFailed(
 		[]portable.Integration{portable.Codex, portable.Claude},

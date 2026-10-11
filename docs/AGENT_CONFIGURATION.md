@@ -75,8 +75,8 @@ itself substitutes that name. The new name is for config resource paths.
 
 ## Gemini profile
 
-`agents.gemini` is available in public release **1.47.1** for Linux amd64/arm64
-and Windows amd64. macOS remains on **1.46.1**, which excludes Gemini. Tested with
+`agents.gemini` is available for Linux amd64/arm64 and Windows amd64 through the
+[platform channels](PLATFORM_RELEASE_CHANNELS.md). The public macOS channel excludes Gemini. Tested with
 exact **Gemini CLI 0.62.0**; see the [Gemini guide](gemini-notifications.md) for
 setup, qualification and limits.
 

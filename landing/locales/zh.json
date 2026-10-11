@@ -56,7 +56,7 @@
       "3": {
         "label": "WEBHOOK 集成",
         "title": "连接你的工作流",
-        "text": "将进展发送到 Slack、Discord、Telegram、Teams 等平台，按你的工作方式配置 Webhook。"
+        "text": "将进展发送到 Slack、Discord、Telegram、Lark/飞书和自定义 Webhook。按你的工作环境配置接收地址。"
       }
     },
     "preview": {
@@ -87,7 +87,7 @@
       "none": "不支持"
     },
     "legend": "「精确定位标签页/分屏」会准确切换到目标分屏或标签页。「仅定位窗口」会将整个应用窗口置于前台。「尽力而为」表示插件会按通用规则匹配窗口，可能选中错误的窗口。",
-    "windowsNote": "在 Windows 上，聚焦始终停留在窗口级别——没有公开 API 可以指定 Windows Terminal 内的具体标签页。",
+    "windowsNote": "Windows Terminal 支持窗口级聚焦。Warp 在 Windows 上可定位到具体标签页或窗格；支持程度因终端而异。",
     "fallbackNote": "未列出的其他终端仍可通过通用窗口名称匹配工作。在 macOS 上，可以用自定义 bundle ID 覆盖自动检测到的应用。",
     "detailsLink": "查看完整的权限与合成器细节",
     "notes": {
@@ -137,7 +137,7 @@
     "items": {
       "1": {
         "question": "必须安装所有智能体吗？",
-        "answer": "可任意组合选择 Claude、Codex CLI 和 OpenCode。请先安装所选智能体；以下命令用于安装通知。"
+        "answer": "可自由组合选择 Claude、Codex CLI、OpenCode 和 Gemini CLI（仅 Linux / Windows）。请先安装所选智能体；以下命令用于安装通知。"
       },
       "2": {
         "question": "Codex hooks 会自动安装吗？",
@@ -153,7 +153,7 @@
       },
       "5": {
         "question": "点击通知返回终端在所有环境都可用吗？",
-        "answer": "支持情况取决于操作系统和终端。iTerm2 需要启用 Python API 才能精确定位标签页。Windows 只能聚焦窗口，无法定位具体标签页。 OpenCode：为根会话的完成、问题、权限请求和错误发送静默提醒。不支持声音或点击聚焦。",
+        "answer": "支持情况取决于操作系统和终端。iTerm2 需要启用 Python API 才能精确定位标签页。Windows Terminal 只能聚焦窗口；Warp 可定位到具体标签页或窗格。 OpenCode：为根会话的完成、问题、权限请求和错误发送静默提醒。不支持声音或点击聚焦。",
         "link": "查看支持的环境。"
       },
       "6": {
@@ -310,7 +310,7 @@
     "configureSettings": "⚙ 配置设置",
     "agentNotify": {
       "label": "允许智能体在需要你关注时发送通知",
-      "hint": "为 Claude 和 Codex CLI 添加通知工具，可在任务进行中提醒你，而不只是结束时。"
+      "hint": "控制 Claude 和 Codex CLI 任务中通知工具的设置。选中时遵循已保存的设置偏好；取消选中仅跳过本次设置，并保留已有工具。"
     },
     "capabilities": {
       "title": "所选代理的功能",
@@ -321,8 +321,9 @@
       "gemini": "Gemini CLI (Linux / Windows)：静默提示回合结束和工具权限请求。回合结束不代表成功或最终答复。不支持声音、点击聚焦、问题、错误、计划、审查通知或嵌套代理功能对等。"
     },
     "gemini": {
-      "version": "Linux / Windows: 1.48.5 (Gemini CLI 0.62.0). macOS: 1.48.5 (Claude, Codex CLI, OpenCode; Gemini 不可用。)",
+      "version": "Gemini CLI 必须恰好为 0.62.0 版。仅支持 Linux / Windows；安装程序会拒绝其他 CLI 版本。",
       "guide": "Gemini 设置与限制",
+      "restart": "重启 Gemini CLI 以加载通知观察器。",
       "configure": "渠道授权和共享设置请参阅 Gemini 指南；不安装 MCP 工具或技能。内置通知可能重复。请选择一个桌面通知来源或仅使用 webhook；不会修改内置设置。"
     },
     "observer": {
@@ -333,13 +334,13 @@
       "channelsTitle": "OpenCode 通知渠道",
       "channelsHint": "这些选项仅适用于 OpenCode。请允许至少一个渠道；Webhook URL 需单独配置。",
       "scope": "OpenCode：为根会话的完成、问题、权限请求和错误发送静默提醒。不支持声音或点击聚焦。",
-      "version": "已使用 OpenCode 1.18.33 验证。需要插件 1.46.0 或更新版本。不支持 OpenCode V2。",
+      "version": "接受稳定版 OpenCode V1 ≥1.18.29 和 V2 ≥2.0.0。验证范围因版本和平台而异，请参阅设置指南。",
       "desktop": "允许桌面通知",
       "webhook": "允许 Webhook 通知",
       "chooseChannel": "请至少选择一个通知渠道。",
       "guide": "OpenCode 设置与限制",
       "restart": "重启 OpenCode 以加载全局插件。在 macOS 上，请按指南授予通知权限。",
-      "configure": "使用 config path 查找共享设置。通过 setup-opencode 授予 desktop/webhook 权限；Webhook 地址需另行配置。"
+      "configure": "使用 config path --target opencode 查找 OpenCode 设置。通过 setup-opencode 授予 desktop/webhook 权限；Webhook 地址需另行配置。"
     }
   },
   "agentSupport": {
@@ -351,7 +352,7 @@
     "conditional": "支持，但有限制",
     "legend": "✓ 支持 · ✕ 不支持 · ✓* 有限制",
     "conditions": "* Codex 的提问取决于当前模式；错误和限额通过最终消息识别。点击聚焦取决于操作系统和终端。",
-    "qualification": "Codex：Windows 钩子通知和提问工具钩子尚未在实际会话中验证。",
+    "qualification": "Claude 权限请求显示为提问通知。Codex 提问钩子仍属实验功能；错误和限制通过最终消息的文本启发式规则识别。验证详情请参阅链接中的指南。",
     "v2Link": "什么是 OpenCode V2？",
     "rows": {
       "completion": "已完成",
