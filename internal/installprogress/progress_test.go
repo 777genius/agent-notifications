@@ -280,3 +280,30 @@ func TestCardRemainsWithinNarrowAndWideTerminalWidths(t *testing.T) {
 		}
 	}
 }
+
+// A shared "registration saved; activation" prefix used to hide the current
+// attempt at narrow widths. Exercise the real renderer and its cursor bounds.
+func TestActivationRowsRemainDistinctAtNarrowWidths(t *testing.T) {
+	path := eventFile(t, "claude\tMCP\tactivation_timeout\ncodex\tMCP\tactivation_not_attempted\nstop\t\t\n")
+	controls := regexp.MustCompile(`\x1b\[[0-?]*[ -/]*[@-~]`)
+	for _, width := range []int{32, 50, 60, 80} {
+		var out bytes.Buffer
+		if err := Run(context.Background(), path, Options{Output: &out, Rich: true, Width: width}); err != nil {
+			t.Fatal(err)
+		}
+		plain := strings.ReplaceAll(controls.ReplaceAllString(out.String(), ""), "\r", "")
+		for _, want := range []string{"Claude Code: Timed out", "Codex CLI: Not started", "Registration saved"} {
+			if !strings.Contains(plain, want) {
+				t.Fatalf("width %d hid %q: %q", width, want, plain)
+			}
+		}
+		for _, line := range strings.Split(plain, "\n") {
+			if len([]rune(line)) > width-1 {
+				t.Fatalf("width %d wrapped %q", width, line)
+			}
+		}
+		if strings.Contains(plain, "✓") || !strings.HasSuffix(out.String(), "\x1b[0m\x1b[?25h") {
+			t.Fatalf("width %d lost partial/cursor truth: %q", width, out.String())
+		}
+	}
+}

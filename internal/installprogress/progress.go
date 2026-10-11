@@ -41,6 +41,11 @@ var phases = map[string]string{
 var outcomes = map[string]string{
 	"running": "running", "queued": "queued", "done": "done", "completed": "done",
 	"failed": "failed", "partial": "partial", "not_started": "not started",
+	"activation_failed":                            "registration saved; activation failed",
+	"activation_not_attempted":                     "registration saved; activation not started",
+	"activation_timeout":                           "registration saved; activation timed out",
+	"activation_canceled":                          "registration saved; activation canceled",
+	"activation_deadline":                          "registration saved; activation deadline reached",
 	"state_requires_inspection":                    "needs inspection",
 	"registration_committed":                       "registration committed (partial)",
 	"registration_committed_follow_up_not_started": "registration committed; follow-up not started",
@@ -181,12 +186,34 @@ func (b *board) paint() error {
 		if row.client != "global" && row.phase == "complete" && (row.outcome == "completed" || row.outcome == "done") {
 			line = fmt.Sprintf("  %s %-12s  Installed · restart required", mark, clients[row.client])
 		}
-		if card {
-			text := clip(" "+strings.TrimPrefix(line, "  "), innerWidth+1)
-			padding := strings.Repeat(" ", innerWidth-utf8.RuneCountInString(text))
-			lines = append(lines, "\x1b[36m  │"+color+text+padding+"\x1b[36m│\x1b[0m")
-		} else {
-			lines = append(lines, color+clip(line, b.options.Width)+"\x1b[0m")
+		rowLines := []string{line}
+		// Put the distinct attempt state first, then the saved registration
+		// fact on its own bounded line. A narrow terminal must not clip both
+		// timed-out and unstarted clients to the same shared prefix.
+		attempt := ""
+		switch row.outcome {
+		case "activation_timeout":
+			attempt, mark, color = "Timed out", "!", "\x1b[33m"
+		case "activation_not_attempted":
+			attempt, mark, color = "Not started", "-", "\x1b[2m"
+		case "activation_canceled":
+			attempt, mark, color = "Canceled", "!", "\x1b[33m"
+		case "activation_deadline":
+			attempt, mark, color = "Deadline reached", "!", "\x1b[33m"
+		case "activation_failed":
+			attempt, mark, color = "Failed", "!", "\x1b[33m"
+		}
+		if attempt != "" {
+			rowLines = []string{fmt.Sprintf("  %s %s: %s", mark, clients[row.client], attempt), "    Registration saved"}
+		}
+		for _, line := range rowLines {
+			if card {
+				text := clip(" "+strings.TrimPrefix(line, "  "), innerWidth+1)
+				padding := strings.Repeat(" ", innerWidth-utf8.RuneCountInString(text))
+				lines = append(lines, "\x1b[36m  │"+color+text+padding+"\x1b[36m│\x1b[0m")
+			} else {
+				lines = append(lines, color+clip(line, b.options.Width)+"\x1b[0m")
+			}
 		}
 	}
 	if card {

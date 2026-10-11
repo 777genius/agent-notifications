@@ -1,8 +1,9 @@
-"""Preparation output and lifecycle checks; no installed CLI or native app runs."""
+"""Preparation and proxy lifecycle checks; private fixtures only."""
 import argparse
 import contextlib
 import importlib.util
 import io
+import json
 import os
 from pathlib import Path
 import pty
@@ -79,13 +80,24 @@ class PreparationTests(unittest.TestCase):
             state = Path(directory)/'TEST-state'
             stdout, stderr = io.StringIO(), io.StringIO()
             args = argparse.Namespace(state_dir=state, plain=True)
-            with patch.object(preview.sys, 'platform', 'darwin'), patch.object(preview.os, 'isatty', return_value=True), patch.object(preview, 'source_identity', side_effect=ValueError('source changed')), contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            with patch.object(preview.Path, 'home', return_value=Path(directory)), patch.object(preview.sys, 'platform', 'darwin'), patch.object(preview.os, 'isatty', return_value=True), patch.object(preview, 'source_identity', side_effect=ValueError('source changed')), contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
                 self.assertEqual(preview.preview(args), 1)
             lab, = state.glob('AllAgents-TEST-*')
             self.assertIn('Preparation failed: source changed', (lab/'preparation.log').read_text())
             self.assertIn(str(lab/'preparation.log'), stdout.getvalue())
             self.assertIn('native app registration may exist', stdout.getvalue())
             self.assertIn('Preview failed: source changed', stderr.getvalue())
+
+    def test_credential_denied_state_is_rejected_before_creating_profile(self):
+        # A TEST cwd beneath real ~/.codex was denied by the CLI sandbox and
+        # misreported every supported CLI as broken. Fail before preparation.
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory)/'.codex'/'TEST-state'
+            args = argparse.Namespace(state_dir=state,plain=True)
+            with patch.object(preview.Path,'home',return_value=Path(directory)), patch.object(preview.sys,'platform','darwin'), patch.object(preview.os,'isatty',return_value=True), patch.object(preview,'source_identity',side_effect=ValueError('source unavailable')):
+                with self.assertRaisesRegex(ValueError,'credential-denied'):
+                    preview.preview(args)
+            self.assertFalse(state.exists())
 
     @unittest.skipUnless(os.name == 'posix', 'PTY lifecycle requires POSIX')
     def test_pty_first_frame_and_prompt_handoff(self):
@@ -163,6 +175,145 @@ except KeyboardInterrupt:
                     except ProcessLookupError:
                         pass
                 self.close_process(process, master)
+
+    @unittest.skipUnless(sys.platform == 'darwin', 'real sandbox boundary requires macOS')
+    def test_allowed_proxy_commands_have_private_bounded_final_receipts(self):
+        # The old proxy drops completion/output for install/list, losing the
+        # evidence needed to distinguish a failed CLI from a lifecycle timeout.
+        with tempfile.TemporaryDirectory() as directory:
+            lab, commands, env = self.proxy_lab(Path(directory))
+            fixture = lab/'installed-claude'
+            fixture.write_text('#!'+sys.executable+' -I\nimport sys\n'
+                               "sys.stdout.buffer.write(b'x'*1100000 if 'list' in sys.argv else b'fixture-version\\n')\n"
+                               "sys.stderr.write('private diagnostic\\n')\n"
+                               "sys.exit(7 if 'install' in sys.argv else 0)\n")
+            fixture.chmod(0o700)
+            diagnostics = preview.private_directory(Path(directory)/'diagnostics')
+            preview.cli_proxies(commands,lab,{'claude':str(fixture)},env,'a'*40,diagnostics=diagnostics)
+            for args, status in ((['--version'],0),(['plugin','list','--json'],0),
+                                 (['plugin','install','claude-notifications-go@claude-notifications-go'],7)):
+                result = subprocess.run([str(commands/'claude'),*args],capture_output=True,timeout=5,env=env)
+                self.assertEqual(result.returncode,status,result.stderr)
+            rejected = subprocess.run([str(commands/'claude'),'--print','provider prompt'],capture_output=True,timeout=5,env=env)
+            self.assertEqual(rejected.returncode,99)
+            receipts = [json.loads(line) for line in (diagnostics/'cli-commands.jsonl').read_text().splitlines()]
+            self.assertEqual(receipts[-1],{'cli':'claude','args':['--print','provider prompt'],'rejected':True,'exit_code':99})
+            self.assertFalse((lab/'cli-commands.jsonl').exists())
+            endings = [value for value in receipts if value.get('event') == 'finish']
+            self.assertEqual([value['phase'] for value in endings],['version','list','registration'])
+            self.assertEqual([value['exit_code'] for value in endings],[0,0,7])
+            for value in endings:
+                self.assertGreaterEqual(value['monotonic_end_ns'],value['monotonic_start_ns'])
+                self.assertGreaterEqual(value['duration_ms'],0)
+                self.assertFalse(value['timeout'])
+                self.assertFalse(value['cancelled'])
+                for path in value['output_paths'].values():
+                    self.assertEqual(Path(path).stat().st_mode & 0o777,0o600)
+            captured = Path(endings[1]['output_paths']['stdout']).read_bytes()
+            self.assertLess(len(captured),1048700)
+            self.assertIn(b'output truncated',captured)
+            self.assertEqual((diagnostics/'cli-commands.jsonl').stat().st_mode & 0o777,0o600)
+
+    def test_rejected_proxy_command_uses_private_diagnostics_before_invocation(self):
+        # Rejections must be durable even when diagnostics is outside the TEST
+        # profile, and unsafe receipt leaves must never invoke the real command.
+        for leaf in ('missing','symlink','public'):
+            with self.subTest(leaf=leaf), tempfile.TemporaryDirectory() as directory:
+                lab, commands, env = self.proxy_lab(Path(directory))
+                diagnostics = preview.private_directory(Path(directory)/'diagnostics')
+                marker = lab/'invoked'
+                fixture = lab/'installed-claude'
+                fixture.write_text('#!'+sys.executable+' -I\nimport pathlib\n'
+                                   'pathlib.Path('+repr(str(marker))+').touch()\n')
+                fixture.chmod(0o700)
+                # This case tests rejection before any sandbox/CLI execution.
+                # Mock only the generator's fixed executable availability check
+                # so Linux exercises the actual receipt and refusal boundary.
+                is_file = preview.Path.is_file
+                def generator_file(path):
+                    return path == Path('/usr/bin/sandbox-exec') or is_file(path)
+                with patch.object(preview.Path, 'is_file', generator_file):
+                    preview.cli_proxies(commands,lab,{'claude':str(fixture)},env,'a'*40,diagnostics=diagnostics)
+                receipt = diagnostics/'cli-commands.jsonl'
+                original = b'private original\n'
+                if leaf == 'symlink':
+                    victim = Path(directory)/'victim'
+                    victim.write_bytes(original)
+                    victim.chmod(0o600)
+                    receipt.symlink_to(victim)
+                elif leaf == 'public':
+                    receipt.write_bytes(original)
+                    receipt.chmod(0o644)
+                result = subprocess.run([str(commands/'claude'),'--print','provider prompt'],
+                                        capture_output=True,timeout=5,env=env)
+                if leaf == 'missing':
+                    self.assertEqual(result.returncode,99,result.stderr)
+                    self.assertEqual(receipt.stat().st_mode & 0o777,0o600)
+                    self.assertEqual(json.loads(receipt.read_text()),
+                                     {'cli':'claude','args':['--print','provider prompt'],'rejected':True,'exit_code':99})
+                else:
+                    self.assertNotEqual(result.returncode,99,'unsafe diagnostic leaf accepted')
+                    self.assertNotEqual(result.returncode,0)
+                    self.assertEqual(receipt.read_bytes(),original)
+                    self.assertEqual(receipt.is_symlink(),leaf == 'symlink')
+                    if leaf == 'public':
+                        self.assertEqual(receipt.stat().st_mode & 0o777,0o644)
+                self.assertFalse(marker.exists(),'rejected command was invoked')
+                self.assertFalse((lab/'cli-commands.jsonl').exists())
+                self.assertEqual(list(diagnostics.glob('*.log')),[])
+
+    @unittest.skipUnless(sys.platform == 'darwin', 'real sandbox boundary requires macOS')
+    def test_proxy_cancellation_records_receipt_and_joins_private_children(self):
+        # A terminated proxy must retain the interruption receipt and stop a
+        # TERM-resistant child even after its leader exits.
+        with tempfile.TemporaryDirectory() as directory:
+            lab, commands, env = self.proxy_lab(Path(directory))
+            pid_file = lab/'fixture-pid'
+            fixture = lab/'installed-claude'
+            fixture.write_text('#!'+sys.executable+' -I\nimport os,pathlib,signal,time\n'
+                               'child=os.fork()\n'
+                               'if child == 0: signal.signal(signal.SIGTERM,signal.SIG_IGN)\n'
+                               'pathlib.Path('+repr(str(pid_file))+"+('.child' if child == 0 else '')).write_text(str(os.getpid()))\n"
+                               'time.sleep(30)\n')
+            fixture.chmod(0o700)
+            diagnostics = lab
+            preview.cli_proxies(commands,lab,{'claude':str(fixture)},env,'a'*40)
+            process = subprocess.Popen([str(commands/'claude'),'plugin','list','--json'],stdout=subprocess.PIPE,stderr=subprocess.PIPE,start_new_session=True,env=env)
+            try:
+                child_file = Path(str(pid_file)+'.child')
+                deadline = time.monotonic()+5
+                while not child_file.exists() and time.monotonic() < deadline: time.sleep(.02)
+                self.assertTrue(child_file.exists(),'fixture did not start')
+                started = time.monotonic()
+                process.terminate()
+                stdout, stderr = process.communicate(timeout=5)
+                self.assertEqual(process.returncode,143,stderr)
+                self.assertLess(time.monotonic()-started,5)
+                ending = json.loads((diagnostics/'cli-commands.jsonl').read_text().splitlines()[-1])
+                self.assertEqual(ending['event'],'finish')
+                self.assertTrue(ending['cancelled'])
+                self.assertFalse(ending['timeout'])
+                self.assertEqual(ending['signal'],signal.SIGTERM)
+                for path in (pid_file,child_file):
+                    pid = int(path.read_text())
+                    state = subprocess.run(['ps','-o','stat=','-p',str(pid)],capture_output=True,text=True).stdout.strip()
+                    self.assertTrue(not state or state.startswith('Z'),'proxy child survived')
+            finally:
+                for path in (pid_file,Path(str(pid_file)+'.child')):
+                    if path.exists():
+                        try: os.kill(int(path.read_text()),signal.SIGKILL)
+                        except ProcessLookupError: pass
+                try: os.killpg(process.pid,signal.SIGKILL)
+                except ProcessLookupError: pass
+                process.wait(timeout=3)
+
+    def proxy_lab(self, directory):
+        lab = preview.private_directory(directory/'TEST-lab')
+        commands = preview.private_directory(lab/'commands')
+        env = {'PATH':'/usr/bin:/bin'}
+        for key in preview.PRIVATE_KEYS:
+            env[key] = str(preview.private_directory(lab/key))
+        return lab, commands, env
 
     def import_script(self):
         return f"import importlib.util,pathlib,sys,time\ns=importlib.util.spec_from_file_location('preview', {str(MODULE)!r})\nm=importlib.util.module_from_spec(s)\ns.loader.exec_module(m)\n"

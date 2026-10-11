@@ -1338,8 +1338,8 @@ func TestSetupWizardSecondClientDifferentDigestE2E(t *testing.T) {
 	if !strings.Contains(out.String(), "required-update=claude") || !strings.Contains(out.String(), "phases=1-update:claude;2-add:codex") {
 		t.Fatalf("tty mismatch hid two phases: %s", out.String())
 	}
-	if !strings.Contains(out.String(), "next update:") || !strings.Contains(out.String(), "next install:") {
-		t.Fatalf("tty mismatch hid phase commands: %s", out.String())
+	if !strings.Contains(out.String(), "Setup incomplete:") || !strings.Contains(out.String(), "Inspect setup status before retrying") {
+		t.Fatalf("tty mismatch hid inspection guidance: %s", out.String())
 	}
 	out.Reset()
 	mismatch := append([]string{"--action", "install", "--agents", "codex", "--package", other, "--yes", "--json"}, shared...)

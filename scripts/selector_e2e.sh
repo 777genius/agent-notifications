@@ -11,7 +11,11 @@ evidence=$1
 mkdir -p -- "$evidence"
 binary="$evidence/claude-notifications"
 cd -- "$repo"
-python3 -I scripts/preview-installer_test.py > "$evidence/preview-preparation.log" 2>&1
+python3 -I scripts/preview-installer_test.py > "$evidence/preview-preparation.log" 2>&1 || {
+    status=$?
+    printf 'Preview qualification failed; details: %s\n' "$evidence/preview-preparation.log" >&2
+    exit "$status"
+}
 go build -trimpath -ldflags='-s -w' -o "$binary" ./cmd/claude-notifications
 python3 - "$binary" "$evidence/binary.json" <<'PY'
 import hashlib, json, pathlib, sys

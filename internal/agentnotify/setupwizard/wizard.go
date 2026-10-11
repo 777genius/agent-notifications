@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/adapters/pathpolicy"
 	processadapter "github.com/777genius/plugin-kit-ai/install/integrationctl/adapters/process"
@@ -133,12 +134,17 @@ type Request struct {
 }
 
 type TargetResult struct {
-	Client     string `json:"client"`
-	Unit       string `json:"unit"`
-	Outcome    string `json:"outcome"`
-	Reason     string `json:"reason,omitempty"`
-	Profile    string `json:"profile,omitempty"`
-	TreeDigest string `json:"treeDigest,omitempty"`
+	// Lifecycle facts and the current external attempt are independent.
+	Materialization string `json:"materialization,omitempty"`
+	Activation      string `json:"activation,omitempty"`
+	GroupPhase      string `json:"groupPhase,omitempty"`
+	FailureStage    string `json:"failureStage,omitempty"`
+	Client          string `json:"client"`
+	Unit            string `json:"unit"`
+	Outcome         string `json:"outcome"`
+	Reason          string `json:"reason,omitempty"`
+	Profile         string `json:"profile,omitempty"`
+	TreeDigest      string `json:"treeDigest,omitempty"`
 	// ConfigPath is the owned MCP file inspect used for a direct-mcp
 	// target. Empty on hooks/notify rows so JSON omits it.
 	ConfigPath string `json:"configPath,omitempty"`
@@ -882,6 +888,8 @@ func previewNotifyPlan(ctx context.Context, req Request, snap installruntime.Ins
 	return mat.PreviewPlan(ctx, portablesetup.MaterializeRequest{
 		Identity: id, Integration: agent, PackageRoot: clientPackageRoot(req, agent),
 		ClientConfigRoot: clientConfig(req, agent), ClientExecutable: clientExecutable(req, agent),
+		SourceRevision: req.ReleaseVersion, SourceDigest: req.PackageSHA256,
+		TreeDigest: req.TreeDigest, HelperDigest: req.HelperDigest, HelperVersion: req.HelperVersion,
 		OperationID: wizardMutationID("plan-"+req.Action, agent, 0), Operation: wizardPackageOp(req.Action),
 	})
 }
@@ -1994,7 +2002,11 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 				failed := portableInstallFailed(agent, req, out, err)
 				if failed.Reason == "activation_incomplete" {
 					failed.Reason = "migration_activation_pending"
-					failed.NextActions = []NextAction{{Kind: "activate", Agents: []string{string(agent)}, Reason: "migration_activation_pending", Command: RetryCommand(req)}}
+					for i := range failed.NextActions {
+						if failed.NextActions[i].Kind == "activate" && len(failed.NextActions[i].Command) > 0 {
+							failed.NextActions[i].Reason = "migration_activation_pending"
+						}
+					}
 				}
 				return failed, err
 			}
@@ -2415,23 +2427,16 @@ func portableInstallFailed(agent portable.Integration, req Request, out Result, 
 	if errors.Is(err, uapinstaller.ErrCompatibilityUnavailable) || errors.Is(err, uapinstaller.ErrTargetFactsUnavailable) {
 		return siblingCompatibilityUnavailable(agent, req, out)
 	}
-	out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "incomplete", Reason: err.Error()})
 	out.Outcome, out.Reason = "incomplete", "portable_install_failed"
 	var persisted portablesetup.ResultError
-	if errors.As(err, &persisted) && persisted.Result.Client.Materialization != "" && persisted.Result.Client.Materialization != string(domain.MaterializationAbsent) {
-		retry := req
-		retry.Action = ActionInstall
-		retry.Yes = true
-		if explicitAbs(req.ControlRoot) {
-			if intent, readErr := portablesetup.ReadIntent(req.ControlRoot); readErr == nil {
-				retry = retryRequestFromIntent(retry, intent)
-			}
-		}
+	if errors.As(err, &persisted) {
+		out.Targets = append(out.Targets, notifyFailureTarget(string(agent), groupClientResult(persisted.Result, string(agent)), err))
+	} else {
+		out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "incomplete", Reason: err.Error()})
+	}
+	if errors.As(err, &persisted) && (persisted.Result.Client.Materialization == string(domain.MaterializationMaterialized) || persisted.Result.Client.Materialization == string(domain.MaterializationDegraded)) {
 		out.Reason = "activation_incomplete"
-		out.NextActions = append(out.NextActions, NextAction{
-			Kind: "activate", Agents: []string{string(agent)}, Reason: persisted.Result.Reason,
-			Command: RetryCommand(retry),
-		})
+		out.NextActions = append(out.NextActions, activationRecovery(req, []string{string(agent)}, persisted.Result.Reason))
 	}
 	return out
 }
@@ -2477,31 +2482,108 @@ func groupNotifyFailed(agents []portable.Integration, req Request, out Result, e
 	for _, agent := range agents {
 		names = append(names, string(agent))
 		item := groupClientResult(persisted.Result, string(agent))
-		target := TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "incomplete", Reason: err.Error()}
-		if item.Materialization != "" && item.Materialization != string(domain.MaterializationAbsent) {
+		target := notifyFailureTarget(string(agent), item, err)
+		if item.Materialization == string(domain.MaterializationMaterialized) || item.Materialization == string(domain.MaterializationDegraded) {
 			committed = true
-			target.Reason = "activation_incomplete"
 		}
 		out.Targets = append(out.Targets, target)
 	}
 	out.Outcome, out.Reason = "incomplete", "portable_install_failed"
-	if !committed {
-		return out
+	if committed {
+		out.Reason = "activation_incomplete"
+		out.NextActions = append(out.NextActions, activationRecovery(req, names, persisted.Result.Reason))
 	}
-	retry := req
-	retry.Action = ActionInstall
-	retry.Yes = true
-	if explicitAbs(req.ControlRoot) {
-		if intent, readErr := portablesetup.ReadIntent(req.ControlRoot); readErr == nil {
-			retry = retryRequestFromIntent(retry, intent)
+	return out
+}
+
+// Keep saved registration separate from the current external operation. An
+// active state from an earlier invocation cannot turn a failed attempt green.
+func notifyFailureTarget(client string, item uapinstaller.ClientResult, err error) TargetResult {
+	target := TargetResult{Client: client, Unit: "agent-notify", Outcome: "incomplete", Reason: err.Error(),
+		Materialization: item.Materialization, Activation: item.Activation, GroupPhase: item.GroupPhase}
+	if item.Failure != nil {
+		target.FailureStage = item.Failure.Stage
+		target.Reason = item.Failure.Message
+	}
+	switch item.GroupPhase {
+	case "external_completed":
+		if item.Materialization == string(domain.MaterializationMaterialized) || item.Materialization == string(domain.MaterializationDegraded) {
+			target.Outcome, target.Reason = "completed", ""
+		} else {
+			// The external attempt succeeded, but a missing saved-state read
+			// cannot prove the independently committed registration.
+			target.Reason = "state_requires_inspection"
+		}
+	case "external_not_attempted":
+		target.Outcome = "activation_not_attempted"
+	case "external_failed":
+		target.Outcome = "activation_failed"
+		switch target.FailureStage {
+		case "timeout":
+			target.Outcome = "activation_timeout"
+		case "canceled":
+			target.Outcome = "activation_canceled"
+		case "deadline":
+			target.Outcome = "activation_deadline"
+		}
+	default:
+		if item.Materialization == string(domain.MaterializationMaterialized) || item.Materialization == string(domain.MaterializationDegraded) {
+			target.Reason = "activation_incomplete"
 		}
 	}
-	out.Reason = "activation_incomplete"
-	out.NextActions = append(out.NextActions, NextAction{
-		Kind: "activate", Agents: names, Reason: persisted.Result.Reason,
-		Command: RetryCommand(retry),
-	})
-	return out
+	return target
+}
+
+func activationRecovery(req Request, names []string, reason string) NextAction {
+	next := NextAction{Kind: "activate", Agents: names, Reason: "recovery_unavailable"}
+	if !explicitAbs(req.ControlRoot) {
+		return next
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	intent, err := portablesetup.ReadIntent(req.ControlRoot)
+	policy, snapshotErr := installruntime.ReadPolicySnapshot(ctx, req.ControlRoot)
+	snap := policy.Installation
+	if err != nil || snapshotErr != nil || snap.Recovery || snap.Ledger.PendingMutation == nil || snap.Ledger.PendingMutation.Owner != "existing-installer" || snap.Ledger.PendingMutation.ID != intent.SetupIntentID {
+		return next
+	}
+	if req.BootstrapExpectedPolicy != nil && *req.BootstrapExpectedPolicy != policy.Preimage {
+		return next
+	}
+	selected := req.Agents
+	if len(selected) == 0 {
+		selected = names
+	}
+	agents, err := normalizeAgents(selected)
+	if err != nil {
+		return next
+	}
+	retry, _, err := restoreOmittedFromIntent(req, agents, intent)
+	if err != nil {
+		return next
+	}
+	retry.Yes = true
+	if retry.RuntimeRoot == "" {
+		retry.RuntimeRoot = snap.Ledger.RuntimeRoot
+	}
+	if retry.Helper == "" {
+		retry.Helper = filepath.Join(retry.RuntimeRoot, intent.Primary)
+	}
+	// Presentation validates the normalized acquired directory read-only. It
+	// cannot fetch or extract another archive, even on cancellation.
+	info, err := os.Lstat(retry.PackageRoot)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || validatePendingPackage(ctx, retry) != nil {
+		return next
+	}
+	for _, agent := range agents {
+		executable := clientExecutable(retry, agent)
+		info, err := os.Stat(executable)
+		if !explicitAbs(executable) || err != nil || !info.Mode().IsRegular() {
+			return next
+		}
+	}
+	next.Reason, next.Command = reason, RetryCommand(retry)
+	return next
 }
 
 func groupClientResult(result uapinstaller.Result, clientID string) uapinstaller.ClientResult {

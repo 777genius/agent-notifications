@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/777genius/agent-notifications/internal/config"
@@ -32,15 +33,71 @@ func notificationRepoRoot(t *testing.T) string {
 // limit while retaining bash -c's $0, positional arguments and untouched stdin.
 func bootstrapFixtureCommand(t *testing.T, script string, argv ...string) *exec.Cmd {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "TEST-bootstrap.sh")
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage := filepath.Join(base, "tmp")
+	if err := os.Mkdir(stage, 0700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(base, "TEST-bootstrap.sh")
 	if err := os.WriteFile(path, []byte(script), 0600); err != nil {
 		t.Fatal(err)
 	}
 	quoted := "'" + strings.ReplaceAll(path, "'", "'\"'\"'") + "'"
-	return exec.Command("bash", append([]string{"-c", `eval -- "$(< ` + quoted + `)"`}, argv...)...)
+	command := exec.Command("bash", append([]string{"-c", `eval -- "$(< ` + quoted + `)"`}, argv...)...)
+	// Go's fixture HOME lies under ambient TMPDIR, and Darwin may spell it
+	// through /var. Keep durable capture private, physical and beside staging.
+	command.Env = append(os.Environ(), "TMPDIR="+stage, "BOOTSTRAP_DIAGNOSTIC_ROOT="+filepath.Join(base, "diagnostics"))
+	return command
 }
 
 var ansiEscape = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
+func bootstrapDiagnostic(t *testing.T, output []byte) string {
+	t.Helper()
+	var paths []string
+	for _, line := range strings.Split(ansiEscape.ReplaceAllString(string(output), ""), "\n") {
+		if strings.HasPrefix(line, "Diagnostics: ") {
+			paths = append(paths, strings.TrimPrefix(line, "Diagnostics: "))
+		}
+	}
+	if len(paths) != 1 || strings.Contains(string(output), "Diagnostics could not be fully saved") {
+		t.Fatalf("expected one complete diagnostic receipt: %s", output)
+	}
+	argv := retryArgv(t, "Retry: "+paths[0], "Retry: ")
+	if len(argv) != 1 {
+		t.Fatalf("diagnostic path: %#v", argv)
+	}
+	info, err := os.Lstat(argv[0])
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0600 {
+		t.Fatalf("diagnostic file is not private and regular: %v %v", info, err)
+	}
+	if owner, ok := info.Sys().(*syscall.Stat_t); !ok || owner.Uid != uint32(os.Getuid()) {
+		t.Fatal("diagnostic file has foreign owner")
+	}
+	if err := installruntime.CheckPrivateControlRoot(filepath.Dir(argv[0])); err != nil {
+		t.Fatal("diagnostic parent is not private", err)
+	}
+	body, err := os.ReadFile(argv[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(body)
+}
+
+func requireCompactBootstrapFailure(t *testing.T, output []byte) {
+	t.Helper()
+	for _, prefix := range []string{"Setup incomplete:", "Next:", "Diagnostics:"} {
+		if strings.Count(string(output), prefix) != 1 {
+			t.Fatalf("expected one %s: %s", prefix, output)
+		}
+	}
+	if strings.Contains(string(output), "Retry: ") || strings.Contains(string(output), "setup-notifications configure") {
+		t.Fatalf("detailed retry leaked to default output: %s", output)
+	}
+}
 
 func retryArgv(t *testing.T, output, needle string) []string {
 	t.Helper()
@@ -122,6 +179,7 @@ func TestNotificationBootstrapOffline(t *testing.T) {
 				t.Fatal(err)
 			}
 			script := prefix + `
+bootstrap_macos_command() { return 1; }
 print_header() { :; }
 abort_if_wsl_environment() { :; }
 check_prerequisites() { :; }
@@ -166,8 +224,9 @@ install_codex() { echo codex >> "$HOME/installs"; CONFIGURE_BINARY="$HOME/fake-b
 				t.Fatal("unexpected configure", string(calls))
 			}
 			if test.name == "configure_failed" {
-				if !strings.Contains(string(output), "Agent-notify setup failed") {
-					t.Fatal("missing configure warning", string(output))
+				requireCompactBootstrapFailure(t, output)
+				if !strings.Contains(bootstrapDiagnostic(t, output), "Agent-notify setup failed") {
+					t.Fatal("missing private configure warning", string(output))
 				}
 				installs, err := os.ReadFile(filepath.Join(home, "installs"))
 				if err != nil || !strings.Contains(string(installs), "claude") || !strings.Contains(string(installs), "codex") {
@@ -329,8 +388,14 @@ main --product both
 		command = bootstrapFixtureCommand(t, oldScript)
 		command.Dir = home
 		output, err = command.CombinedOutput()
-		if (name == "explicit") != (err != nil) || !strings.Contains(string(output), "Update to a matching release") {
+		if (name == "explicit") != (err != nil) {
 			t.Fatalf("old CLI %s: %v: %s", name, err, output)
+		}
+		if !strings.Contains(bootstrapDiagnostic(t, output), "Update to a matching release") || strings.Contains(string(output), "Update to a matching release") {
+			t.Fatalf("old CLI %s compatibility details must remain private: %s", name, output)
+		}
+		if name == "explicit" {
+			requireCompactBootstrapFailure(t, output)
 		}
 		calls, _ = os.ReadFile(filepath.Join(home, "calls"))
 		if len(calls) != 0 {
@@ -378,6 +443,7 @@ func TestNotificationBootstrapWizardFailureDoesNotInventRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 	script := prefix + `
+bootstrap_macos_command() { return 1; }
 print_header() { :; }
 abort_if_wsl_environment() { :; }
 check_prerequisites() { :; }
@@ -398,10 +464,12 @@ main --product both --agent-notify --navigation none --allow-unknown-caller true
 	if err == nil {
 		t.Fatalf("expected wizard failure: %s", output)
 	}
-	if !strings.Contains(string(output), "Agent-notify setup failed") {
-		t.Fatal("missing configure warning", string(output))
+	requireCompactBootstrapFailure(t, output)
+	diagnostic := bootstrapDiagnostic(t, output)
+	if !strings.Contains(diagnostic, "Stage: Configuring agent notification tools\nExit status: 1") {
+		t.Fatal("missing actual failed wizard stage", diagnostic)
 	}
-	if strings.Contains(string(output), "Retry: ") || !strings.Contains(string(output), "Use the wizard's retry or next resume command above") {
+	if strings.Contains(diagnostic, "Retry: ") || strings.Contains(string(output), "command in Diagnostics") || !strings.Contains(string(output), "Next: inspect owned registration before retrying; keep completed clients.") {
 		t.Fatalf("wrapper fabricated a retry for an unknown wizard failure: %s", output)
 	}
 }
@@ -430,6 +498,7 @@ func TestNotificationBootstrapConfigureRetryQuotesCustomRoots(t *testing.T) {
 		t.Fatal(err)
 	}
 	script := prefix + `
+bootstrap_macos_command() { return 1; }
 print_header() { :; }
 abort_if_wsl_environment() { :; }
 check_prerequisites() { :; }
@@ -450,7 +519,8 @@ main --product both --codex-home "$HOME/codex home"
 	if err == nil {
 		t.Fatalf("expected configure failure: %s", output)
 	}
-	argv := retryArgv(t, string(output), "setup-notifications configure")
+	requireCompactBootstrapFailure(t, output)
+	argv := retryArgv(t, bootstrapDiagnostic(t, output), "setup-notifications configure")
 	if argv[0] != binary {
 		t.Fatalf("binary: %#v", argv)
 	}
@@ -575,6 +645,7 @@ func TestNotificationBootstrapWizardMissingPortable(t *testing.T) {
 				t.Fatal(err)
 			}
 			script := prefix + `
+bootstrap_macos_command() { return 1; }
 print_header() { :; }
 abort_if_wsl_environment() { :; }
 check_prerequisites() { :; }
@@ -596,8 +667,11 @@ main ` + test.args + `
 			if test.wantErr != (err != nil) {
 				t.Fatalf("%v: %s", err, output)
 			}
-			if !strings.Contains(string(output), "portable package is missing") {
-				t.Fatal(string(output))
+			if !strings.Contains(bootstrapDiagnostic(t, output), "portable package is missing") || strings.Contains(string(output), "portable package is missing") {
+				t.Fatal("missing-package details must remain private", string(output))
+			}
+			if test.wantErr {
+				requireCompactBootstrapFailure(t, output)
 			}
 			calls, _ := os.ReadFile(filepath.Join(home, "calls"))
 			if len(calls) != 0 {

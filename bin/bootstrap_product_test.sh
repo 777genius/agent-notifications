@@ -12,6 +12,7 @@ esac
 readonly _PRODUCT_TEST_UNIT_ONLY
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 SANDBOX=$(mktemp -d "${TMPDIR:-/tmp}/bootstrap-products-TEST-XXXXXX")
+SANDBOX=$(cd -P "$SANDBOX" && pwd -P)
 trap 'rm -rf "$SANDBOX"' EXIT
 test_env_setup "$SANDBOX"
 # test-env.sh inherits PATH: retain only named tools, never host agent binaries.
@@ -469,12 +470,12 @@ chmod +x "$SANDBOX/fail-wizard"
     install_cleanup_traps
     setup_agent_notify_wizard > "$SANDBOX/retry.log" 2>&1
     [ "$?" -ne 0 ]
+    printf '%s\n' "$WIZARD_PACKAGE_ROOT" > "$SANDBOX/retry-package-path"
 )
-_retry_package=$(sed -n 's/^  Verified package retained: //p' "$SANDBOX/retry.log")
+_retry_package=$(cat "$SANDBOX/retry-package-path")
 [ -f "$_retry_package" ] || { echo "retry package removed: $_retry_package"; exit 1; }
 [ ! -e "$SANDBOX/config-stage" ] || { echo 'preflight state retained with portable asset'; exit 1; }
-grep -F -- "Verified package retained: $_retry_package" "$SANDBOX/retry.log" >/dev/null
-grep -F -- "Use the wizard's retry or next resume command above" "$SANDBOX/retry.log" >/dev/null
+[ ! -s "$SANDBOX/retry.log" ]
 BOOTSTRAP_TAG=""
 WIZARD_PACKAGE_ROOT=""
 # setup_marketplace self-heals a marketplace declared under a retired repo
@@ -745,6 +746,7 @@ case "$1 ${2:-}" in
     'setup-products preflight') exit "${TEST_PREFLIGHT_EXIT:-0}" ;;
     'setup-notifications --help') printf '%s\n' '--policy-only --preserve-enabled' ;;
     'setup-notifications wizard')
+        if [ "${TEST_WIZARD_WARNING:-0}" = 1 ]; then printf '{"warning":"foreign-callback-fixture"}\n' >&2; fi
         if [ "$4" = inspect ]; then printf '{"targets":[]}\n'; else exit "${TEST_WIZARD_EXIT:-0}"; fi ;;
     *) exit 97 ;;
 esac
@@ -829,6 +831,16 @@ for selection in (['--product', 'cursor'], ['--products', 'cursor'], []):
         # Only the approved notify unit grammar may enter the caller; no legacy hooks.
         assert value(install, '--hooks') == b'false' and value(install, '--agent-notify') == b'true'
         assert '--install-or-update'.encode() in install and not (trace/'mutation').exists()
+# Logging refusal must remain visible after otherwise successful stdout-only
+# stages, without inventing a saved log or exposing the machine inspection JSON.
+blocked_log = sandbox/'TEST blocked diagnostic root'
+blocked_log.write_text('not a directory')
+for warning in ('0', '1'):
+    code, calls, output = run(['--product', 'cursor']+requested+['--agent-notify', '--desktop'],
+                             {'BOOTSTRAP_DIAGNOSTIC_ROOT': str(blocked_log), 'TEST_WIZARD_WARNING': warning})
+    assert code == 0 and 'Diagnostics could not be fully saved' in output, output
+    assert ('Maintenance: installer reported additional details.' in output) == (warning == '1'), output
+    assert not any(value in output for value in ('Diagnostics:', 'saved in Diagnostics', '"targets"', 'foreign-callback-fixture')), output
 # Cancellation at either question must finish without writing or granting consent.
 for cancel in ('channels', 'confirm'):
     code, calls, output = run(['--product', 'cursor']+requested, {'TEST_CANCEL': cancel})
@@ -852,7 +864,7 @@ for raw in (valid+b'scope-root\0'+profile.encode()+b'\0', valid+b'invented-key\0
 # A changed checkpoint or denied materializer must retain failure, never report success.
 for changes in ({'TEST_PREFLIGHT_EXIT':'73'}, {'TEST_WIZARD_EXIT':'77'}):
     code, calls, output = run(['--product', 'cursor']+requested+['--webhook'], changes)
-    assert code in (73,1) and not any(c[:4] == [b'setup-notifications',b'wizard',b'--action',b'inspect'] for c in calls), output
+    assert code in (73,77) and not any(c[:4] == [b'setup-notifications',b'wizard',b'--action',b'inspect'] for c in calls), output
     # Checkpoint/caller refusal must not enter unrelated installers/config writes.
     assert not (trace/'mutation').exists(), output
 # Missing/duplicate selected scope, mixed products and navigation must fail before acquisition.
@@ -918,10 +930,12 @@ emit_stage() {
         progress_download_activity "$TMPDIR/download"
     fi
     sleep "${TEST_PROGRESS_DELAY:-0.3}"
-    printf 'warning: visible fixture warning\\n' >&2
+    printf 'warning: visible fixture warning\\n\\033]0;FOREIGN_CALLBACK_PATH\\007{"unsafe":true}\\n' >&2
     printf 'hidden technical stdout\\n'
     return "${TEST_PROGRESS_FAILURE:-0}"
 }
+emit_preparation() { printf 'preceding source proof\\n'; }
+_UI_MODE=plain run_setup_stage 'Preparing fixture source' emit_preparation
 status=0
 run_setup_stage 'Installing Claude notifications' emit_stage || status=$?
 [ "$PLUGIN_ROOT" = fixture-survived ] || exit 91
@@ -948,13 +962,14 @@ if [ "${TEST_PROGRESS_SUMMARY:-0}" = 1 ]; then
     if [ "${TEST_PROGRESS_SUMMARY_TRANSFORM_FAIL:-0}" = 1 ]; then awk() { return 7; }; fi
     if [ "${TEST_PROGRESS_SUMMARY_REPLACE_FAIL:-0}" = 1 ]; then mv() { return 7; }; fi
 fi
-report_progress "$status"
+if [ "$status" -eq 0 ]; then report_progress 0; report_diagnostics; else report_setup_failure "$status"; fi
+if [ "${BOOTSTRAP_VERBOSE:-0}" = 1 ]; then bootstrap_diagnostics view "$_DIAGNOSTIC_LOG" >&2; fi
 exit "$status"
 ''')
-def run(name, mode='auto', old=False, color=False, terminal=True, helper_path=helper, failure=0, cancel=False, broken=False, stop_failure=False, summary=False, summary_transform_failure=False, summary_replace_failure=False, verbose=False):
+def run(name, mode='auto', old=False, color=False, terminal=True, helper_path=helper, failure=0, cancel=False, broken=False, stop_failure=False, summary=False, summary_transform_failure=False, summary_replace_failure=False, verbose=False, dumb=False, narrow=False):
     tmp = sandbox / ('progress-' + name); tmp.mkdir()
     env = os.environ.copy()
-    env.update(TERM='xterm-256color', TMPDIR=str(tmp), TEST_PROGRESS_SOURCE=str(sandbox/'functions.sh'),
+    env.update(TERM='dumb' if dumb else 'xterm-256color', TMPDIR=str(tmp), BOOTSTRAP_DIAGNOSTIC_ROOT=str(sandbox/('durable-'+name)), TEST_PROGRESS_SOURCE=str(sandbox/'functions.sh'),
                TEST_PROGRESS_MODE=mode, TEST_PROGRESS_HELPER=str(helper_path or ''),
                TEST_PROGRESS_SUMMARY=str(int(summary)), TEST_PROGRESS_SUMMARY_TRANSFORM_FAIL=str(int(summary_transform_failure)),
                TEST_PROGRESS_SUMMARY_REPLACE_FAIL=str(int(summary_replace_failure)), BOOTSTRAP_VERBOSE=str(int(verbose)),
@@ -964,6 +979,9 @@ def run(name, mode='auto', old=False, color=False, terminal=True, helper_path=he
     if color: env['NO_COLOR'] = '1'
     if cancel: env['TEST_PROGRESS_DELAY'] = '5'
     master, slave = pty.openpty() if terminal else (None, None)
+    if narrow:
+        import fcntl, struct, termios
+        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 24, 32, 0, 0))
     proc = subprocess.Popen([bash, str(script)], env=env, stdin=subprocess.DEVNULL,
                             stdout=subprocess.PIPE, stderr=slave if terminal else subprocess.PIPE,
                             start_new_session=True)
@@ -991,14 +1009,27 @@ def run(name, mode='auto', old=False, color=False, terminal=True, helper_path=he
         try: os.kill(observer_pid, 0)
         except ProcessLookupError: pass
         else: raise AssertionError((name, 'observer still running', observer_pid))
+    logs = list((sandbox/('durable-'+name)).glob('installer-*.log'))
+    assert len(logs) == 1, (name, logs, err)
+    log = logs[0]
+    assert log.parent.stat().st_mode & 0o777 == 0o700 and log.stat().st_mode & 0o777 == 0o600
+    captured = log.read_bytes()
+    assert b'preceding source proof' in captured, (name, captured)
     if cancel:
+        assert b'Exit status: interrupted' in captured and b'Diagnostics:' in err, (name, captured, err)
         assert cancelled and proc.returncode == 143, (name, proc.returncode, err)
         assert b'STATE_SURVIVED' not in out
         return
     assert proc.returncode == failure, (name, proc.returncode, out, err)
-    assert b'STATE_SURVIVED' in out and b'warning: visible fixture warning' in err
-    assert (b'hidden technical stdout' in out) == verbose, (name, out)
-    rich = terminal and mode != 'plain' and not old and not color and not verbose
+    assert b'STATE_SURVIVED' in out and b'warning: visible fixture warning' in captured
+    assert b'hidden technical stdout' in captured
+    if not verbose:
+        assert not any(value in out+err for value in (b'visible fixture warning', b'hidden technical stdout', b'FOREIGN_CALLBACK_PATH', b'{"unsafe"')), (name, out, err)
+    else:
+        assert b'hidden technical stdout' in err and b'\\x1b]0;FOREIGN_CALLBACK_PATH\\x07' in err, (name, err)
+    if failure:
+        assert err.count(b'Setup incomplete:') == 1 and err.count(b'Next:') == 1 and err.count(b'Diagnostics:') == 1, (name, err)
+    rich = terminal and mode != 'plain' and not old and not color and not verbose and not dumb
     if summary:
         result = (tmp/'summary').read_text()
         compact = rich and not broken and failure == 0 and not summary_transform_failure and not summary_replace_failure
@@ -1024,11 +1055,11 @@ def run(name, mode='auto', old=False, color=False, terminal=True, helper_path=he
         assert not list(tmp.glob('summary.rich-*')), (name, 'summary transform leaked temp')
     if stop_failure:
         assert err.count(b'OBSERVER_START') == 1, (name, 'incomplete final file launched observer', err)
-        assert err.index(b'OBSERVER_INTERRUPTED') < err.index(b'warning: visible fixture warning'), (name, err)
+        assert b'OBSERVER_INTERRUPTED' in err, (name, err)
         assert not (tmp/'events').exists(), (name, 'observer consumed incomplete final file')
     elif helper_path and rich and not broken and not summary:
         assert b'OBSERVER_START' in err, (name, err)
-        assert err.index(b'OBSERVER_STOP') < err.index(b'warning: visible fixture warning'), (name, err)
+        assert err.index(b'OBSERVER_STOP') < err.index(b'Diagnostics:'), (name, err)
         rows = (tmp/'events').read_text()
         assert 'claude\tconfig\tregistration_committed\n' in rows, (name, rows)
         assert 'codex\tpending\tnot_started\n' in rows, (name, rows)
@@ -1038,6 +1069,11 @@ def run(name, mode='auto', old=False, color=False, terminal=True, helper_path=he
     if not helper_path: assert b'3 bytes received' in err and b'\x1b[2K' in err, (name, err)
 run('rich-delayed')
 run('rich-failed', failure=3)
+run('plain-failed', mode='plain', failure=3)
+run('no-color-failed', color=True, failure=3)
+run('redirected-failed', terminal=False, failure=3)
+run('dumb-failed', dumb=True, failure=3)
+run('narrow-failed', narrow=True, failure=3)
 run('plain', mode='plain')
 run('no-color', color=True)
 run('redirected', terminal=False)
@@ -1056,6 +1092,66 @@ run('summary-replace-failed', summary=True, summary_replace_failure=True)
 run('summary-verbose', summary=True, verbose=True)
 print('PASS shell progress state, stderr, lifecycle, fallback and cancellation fixtures')
 PY_PROGRESS
+
+# A leaked callback path/control byte, a disposable failure log, or unsafe
+# diagnostic storage makes this adapter regression red. Both supported runtimes
+# must preserve the same private storage boundary and the original stage exit.
+python3 -I - "$SANDBOX" "$TEST_BOOTSTRAP_BASH" <<'PY_DIAGNOSTIC_STORAGE'
+import os, pathlib, shutil, subprocess, sys
+sandbox, bash = pathlib.Path(sys.argv[1]), sys.argv[2]
+script = sandbox/'diagnostic-storage.sh'
+script.write_text('''#!/bin/bash
+source "$TEST_PROGRESS_SOURCE"
+[ "$TEST_DIAGNOSTIC_ENGINE" != node ] || usable_python3() { return 1; }
+bootstrap_control_root() { printf '%s\\n' "$TEST_DIAGNOSTIC_CONTROL"; }
+_UI_MODE=plain
+emit_first() { printf 'earlier-stage-context\\n'; }
+emit_failure() { head -c 90000 /dev/zero; printf '\\033]0;foreign-path\\007' >&2; return 37; }
+run_setup_stage 'Preparing fixture' emit_first
+status=0
+run_setup_stage 'Installing fixture' emit_failure || status=$?
+[ "$status" -eq 37 ] || exit 99
+report_setup_failure "$status"
+''')
+for engine in ('python3', 'node'):
+    if engine == 'node' and not shutil.which('node'): continue
+    cases = ('default', 'private', 'public', 'temporary', 'write-failed') if os.name == 'nt' else ('default', 'private', 'symlink', 'public', 'temporary', 'write-failed')
+    for case in cases:
+        base = sandbox/(engine+'-'+case); base.mkdir(mode=0o700)
+        temporary = base/'tmp'; temporary.mkdir(mode=0o700)
+        root = base/'diagnostics'
+        control = base/'agent-notifications'
+        if case == 'default': root = base/'agent-notifications-installer-diagnostics'
+        elif case == 'symlink': root.symlink_to(temporary, target_is_directory=True)
+        elif case == 'public': root.mkdir(mode=0o755)
+        elif case == 'temporary': root = temporary/'diagnostics'
+        elif case == 'write-failed': root.write_text('blocked')
+        env = dict(os.environ, TEST_PROGRESS_SOURCE=str(sandbox/'functions.sh'),
+                   TEST_DIAGNOSTIC_ENGINE=engine, TEST_DIAGNOSTIC_CONTROL=str(control), BOOTSTRAP_DIAGNOSTIC_ROOT=str(root), TMPDIR=str(temporary))
+        if case == 'default': env.pop('BOOTSTRAP_DIAGNOSTIC_ROOT')
+        result = subprocess.run([bash, str(script)], env=env, capture_output=True, timeout=10)
+        assert result.returncode == 0, (engine, case, result.stdout, result.stderr)
+        assert b'foreign-path' not in result.stdout+result.stderr and b'\x1b' not in result.stdout+result.stderr
+        if os.name == 'nt':
+            # Native Windows modes cannot prove the directory DACL. Refuse all
+            # persistence until ACL verification exists, including broad roots.
+            assert b'Diagnostics could not be fully saved' in result.stderr and b'Diagnostics:' not in result.stderr
+            assert not list(base.rglob('installer-*.log'))
+        elif case in ('default', 'private'):
+            logs = list(root.glob('installer-*.log')); assert len(logs) == 1
+            log = logs[0]
+            shutil.rmtree(temporary)
+            data = log.read_bytes()
+            assert b'earlier-stage-context' in data and b'foreign-path' in data
+            assert b'[diagnostic stream truncated after 65536 bytes]' in data and len(data) < 70000
+            assert root.stat().st_mode & 0o777 == 0o700 and log.stat().st_mode & 0o777 == 0o600
+            assert b'Diagnostics:' in result.stderr and b'could not be fully saved' not in result.stderr
+        else:
+            assert b'Diagnostics could not be fully saved' in result.stderr and b'Diagnostics:' not in result.stderr
+            assert not list(base.rglob('installer-*.log'))
+        assert not control.exists(), 'diagnostic capture created transaction control state'
+print('PASS private durable diagnostic storage or native Windows refusal, truncation, symlink denial and honest write failure')
+PY_DIAGNOSTIC_STORAGE
 
 [ "$_PRODUCT_TEST_UNIT_ONLY" != true ] || exit 0
 # Local HTTP and controlling-PTY integration. Installer/registration are explicit
@@ -1525,7 +1621,13 @@ import json
 for value in [b'{"personalized":true}',b'{}']:
     reset_case(); active=historical(value)
     output=run(['--product','claude'],1)
-    assert 'import-required' in output and not any(e[:1]==['claude'] for e in events())
+    if os.name == 'nt':
+        assert 'Diagnostics could not be fully saved' in output and 'Diagnostics:' not in output
+        assert 'import-required' not in output and not any(e[:1]==['claude'] for e in events())
+    else:
+        diagnostic_path=shlex.split(next(line for line in output.splitlines() if line.startswith('Diagnostics:')).split(': ',1)[1])[0]
+        diagnostic=pathlib.Path(native_shell_path(diagnostic_path)).read_text()
+        assert 'import-required' in diagnostic and 'import-required' not in output and not any(e[:1]==['claude'] for e in events())
     assert (active/'bin/runtime').read_bytes()==b'working-runtime'
     assert path_ids(json.loads(request.read_text())['activeBundleRoots'])==path_ids([active])
 # A verified exact-version template permits initialization. Personalized bytes
@@ -1574,17 +1676,31 @@ run(['--product','codex'],1)
 assert not any(e[:1]==['setup-codex'] for e in events())
 run(['--product','codex'],1,{'AGENT_NOTIFICATIONS_CONFIG':str(dest/'explicit.json')})
 assert not any(e[:1]==['setup-codex'] for e in events())
+def config_retry(output):
+    assert 'Config-only retry' not in output
+    if os.name == 'nt':
+        assert 'Diagnostics could not be fully saved' in output and 'Diagnostics:' not in output
+        assert 'command in Diagnostics' not in output
+        # Persistence is unavailable, but the retained fixture helper still
+        # permits the same explicit config-only contract check without effects.
+        stage=max(pathlib.Path(native_shell_path(env['TMPDIR'])).glob('bootstrap-config-*'), key=lambda p: p.stat().st_mtime_ns)
+        command=[(stage/asset_name).as_posix(), 'config', 'init', '--json']
+        return shlex.join(command), command
+    diagnostic_path=shlex.split(next(line for line in output.splitlines() if line.startswith('Diagnostics:')).split(': ',1)[1])[0]
+    diagnostic=pathlib.Path(native_shell_path(diagnostic_path)).read_text()
+    assert 'config-only retry command in Diagnostics' in output
+    line=next(line for line in diagnostic.splitlines() if line.startswith('Config-only retry'))
+    shell_command=line.split(': ',1)[1]
+    return shell_command, shlex.split(shell_command)
 # Reserved exit 3 means committed registration; retain checksum-verified helper.
 for product in ['codex','both']:
     reset_case()
     output=run(['--product',product],1,{'FAIL_SETUP_INIT':'1'})
-    assert 'Partial setup' in output and 'registration failed' not in output
+    assert 'Setup incomplete:' in output and 'registration failed' not in output
     assert (pathlib.Path(env['CODEX_HOME'])/'fixture-registration').read_text()=='registered'
     # Claude's completed phase remains committed if the later Codex phase fails.
     assert len(init_events()) == (1 if product == 'both' else 0)
-    line=next(line for line in output.splitlines() if line.startswith('Config-only retry'))
-    shell_command=line.split(': ',1)[1]
-    command=shlex.split(shell_command)
+    shell_command, command=config_retry(output)
     assert pathlib.Path(native_shell_path(command[0])).read_bytes()==payload_file.read_bytes()
     assert command[1:]==['config','init','--json']
     trace.write_text(''); requests_before=list(request_paths)
@@ -1598,9 +1714,8 @@ for product,fail in [('claude',{'FAIL_CLAUDE':'1'}),('codex',{'FAIL_REGISTER':'1
 # Init failure retains a verified executable for a config-only retry.
 reset_case()
 output=run(['--product','both'],1,{'FAIL_INIT':'1'})
-assert 'Partial setup' in output and 'Config-only retry' in output
-line=next(line for line in output.splitlines() if line.startswith('Config-only retry'))
-shell_command=line.split(': ',1)[1]; command=shlex.split(shell_command); trace.write_text('')
+assert 'Setup incomplete:' in output and 'Config-only retry' not in output
+shell_command, command=config_retry(output); trace.write_text('')
 assert pathlib.Path(native_shell_path(command[0])).read_bytes()==payload_file.read_bytes()
 assert command[1:]==['config','init','--json']
 r=subprocess.run([bash,'-c',shell_command],env=env,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=20)
@@ -1668,8 +1783,12 @@ print('local HTTP / curl-pipe PTY adapter fixtures passed (fake installer and bi
 PY
 
 # Stage output is a public contract: success hides machine/binary banners but
-# preserves warnings and shell state; failure replays diagnostics and its code.
+# retains warnings privately and shell state; failure retains diagnostics and its code.
 (
+    # HTTP reset_case recreates HOME; start a new capture session after that
+    # fixture instead of reusing its deleted parent-shell diagnostic file.
+    _DIAGNOSTIC_LOG=""; _DIAGNOSTIC_ROOT=""; _DIAGNOSTIC_FAILED=false
+    _DIAGNOSTIC_LABEL=""; _DIAGNOSTIC_NOTED=false
     emit_stage() { PLUGIN_ROOT=fixture-installed; printf 'Ready to use!\n{"generation":12}\n\033[33mwarning: extension needs activation\033[0m\n\033[33m  Log out and log back in, then run:\033[0m\n  gnome-extensions enable fixture@example.test\n'; printf 'phase prepare\nSetting up notifications: agent notify...\n' >&2; echo 'warning: fixture optional setup' >&2; }
     run_setup_stage 'Installing fixture' emit_stage > "$SANDBOX/stage-ok.out" 2> "$SANDBOX/stage-ok.err"
     [ "$PLUGIN_ROOT" = fixture-installed ]
@@ -1677,25 +1796,38 @@ PY
     run_setup_stage 'Preparing fixture settings' emit_stage > "$SANDBOX/stage-prepare.out" 2>/dev/null
     if grep -F 'Preparing fixture settings...' "$SANDBOX/stage-prepare.out"; then exit 1; fi
     if grep -E 'Ready to use|generation' "$SANDBOX/stage-ok.out"; then exit 1; fi
-    grep -F 'Log out and log back in' "$SANDBOX/stage-ok.out"
-    grep -F 'gnome-extensions enable fixture@example.test' "$SANDBOX/stage-ok.out"
-    grep -F 'warning: fixture optional setup' "$SANDBOX/stage-ok.err"
+    case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*)
+            [ -z "$_DIAGNOSTIC_LOG" ] && [ "$_DIAGNOSTIC_FAILED" = true ]
+            report_diagnostics > "$SANDBOX/native-diagnostic.out" 2>&1
+            grep -F 'Diagnostics could not be fully saved' "$SANDBOX/native-diagnostic.out"
+            if grep -F 'Diagnostics:' "$SANDBOX/native-diagnostic.out"; then exit 1; fi
+            [ ! -s "$SANDBOX/stage-ok.err" ] ;;
+        *)
+    grep -F 'Log out and log back in' "$_DIAGNOSTIC_LOG"
+    grep -F 'gnome-extensions enable fixture@example.test' "$_DIAGNOSTIC_LOG"
+    grep -F 'warning: fixture optional setup' "$_DIAGNOSTIC_LOG"
+    [ ! -s "$SANDBOX/stage-ok.err" ]
     if grep -E 'phase prepare|Setting up notifications:' "$SANDBOX/stage-ok.err"; then exit 1; fi
-    # A real stage failure must return so captured recovery advice is replayed.
+    # A real stage failure must return and preserve recovery advice privately.
     INSTALLED_JSON="$SANDBOX/missing-installed-plugins.json"
     status=0
     run_setup_stage 'Locating fixture plugin' find_plugin_root > "$SANDBOX/root-fail.out" 2> "$SANDBOX/root-fail.err" || status=$?
     [ "$status" -eq 1 ]
-    grep -F 'installed_plugins.json not found' "$SANDBOX/root-fail.err"
-    grep -F 'Try restarting Claude' "$SANDBOX/root-fail.err"
+    grep -F 'installed_plugins.json not found' "$_DIAGNOSTIC_LOG"
+    grep -F 'Try restarting Claude' "$_DIAGNOSTIC_LOG"
     emit_failure() { echo 'diagnostic stdout'; echo 'diagnostic stderr' >&2; return 3; }
     status=0
     run_setup_stage 'Failing fixture' emit_failure > "$SANDBOX/stage-fail.out" 2> "$SANDBOX/stage-fail.err" || status=$?
     [ "$status" -eq 3 ]
-    grep -F 'diagnostic stdout' "$SANDBOX/stage-fail.err"
-    grep -F 'diagnostic stderr' "$SANDBOX/stage-fail.err"
+    grep -F 'diagnostic stdout' "$_DIAGNOSTIC_LOG"
+    grep -F 'diagnostic stderr' "$_DIAGNOSTIC_LOG"
+    [ ! -s "$SANDBOX/stage-fail.err" ]
     BOOTSTRAP_VERBOSE=1 run_setup_stage 'Verbose fixture' emit_stage > "$SANDBOX/stage-verbose.out" 2>/dev/null
-    grep -F 'generation' "$SANDBOX/stage-verbose.out"
+    bootstrap_diagnostics view "$_DIAGNOSTIC_LOG" > "$SANDBOX/stage-verbose-details.out"
+    grep -F 'generation' "$SANDBOX/stage-verbose-details.out"
+            ;;
+    esac
     PRODUCT=both CLAUDE_AGENT_NOTIFY_STATUS='not configured by this run' CODEX_AGENT_NOTIFY_STATUS='not configured by this run'
     print_iterm2_python_api_notice() { :; }
     print_success > "$SANDBOX/summary.out"
@@ -1713,10 +1845,10 @@ PY
     [ "$(sed -n '$p' "$BOOTSTRAP_SUMMARY_FILE")" = "$(print_delivery_note)" ]
     _PROGRESS_IDS=(opencode gemini); _PROGRESS_OUTCOMES=(completed state_requires_inspection); _PROGRESS_PHASES=(complete registration)
     report_progress 1 2> "$SANDBOX/partial-progress.out"
-    grep -F 'opencode: completed' "$SANDBOX/partial-progress.out"
-    grep -F 'gemini: state_requires_inspection' "$SANDBOX/partial-progress.out"
+    grep -F 'OpenCode     completed' "$SANDBOX/partial-progress.out"
+    grep -F 'Gemini CLI   state requires inspection' "$SANDBOX/partial-progress.out"
     report_progress 0 2> "$SANDBOX/success-progress.out"
-    if grep -F 'opencode: completed' "$SANDBOX/success-progress.out"; then exit 1; fi
+    if grep -F 'OpenCode     completed' "$SANDBOX/success-progress.out"; then exit 1; fi
 )
 
 # Structured results distinguish a successful opt-out from an installed sibling.
