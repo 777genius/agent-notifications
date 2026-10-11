@@ -1826,7 +1826,11 @@ PY
     [ "$PLUGIN_ROOT" = fixture-installed ]
     grep -F 'Installing fixture...' "$SANDBOX/stage-ok.out"
     run_setup_stage 'Preparing fixture settings' emit_stage > "$SANDBOX/stage-prepare.out" 2>/dev/null
-    if grep -F 'Preparing fixture settings...' "$SANDBOX/stage-prepare.out"; then exit 1; fi
+    if [ "$_PROGRESS_JOURNAL_DISABLED" = true ]; then
+        grep -F 'Preparing fixture settings...' "$SANDBOX/stage-prepare.out"
+    elif grep -F 'Preparing fixture settings...' "$SANDBOX/stage-prepare.out"; then
+        exit 1
+    fi
     if grep -E 'Ready to use|generation' "$SANDBOX/stage-ok.out"; then exit 1; fi
     case "$(uname -s)" in
         MINGW*|MSYS*|CYGWIN*)
