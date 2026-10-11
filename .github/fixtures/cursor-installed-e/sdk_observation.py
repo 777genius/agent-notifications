@@ -454,6 +454,32 @@ def adapt(m):
         fraction = obj['acquired_at'].removesuffix('Z').split('.',1)[1] if '.' in obj['acquired_at'] else ''
         return {'sha256':hashlib.sha256(raw).hexdigest(),'byteLength':len(raw),'metadata':obj,'stamp':(stamp.replace(microsecond=0),int(fraction.ljust(9,'0') or '0'))}
     m.sdk_mutation_metadata = mutation_metadata
+    membership = inspect.getsource(m.removal_memberships)
+    anchor = "    assert top_before == top_after, 'unknown state top-level/transaction receipt mutation'"
+    extra = r"""    prior = before.get('transaction_receipts') or []
+    receipts = after.get('transaction_receipts')
+    assert type(prior) is list and type(receipts) is list and len(receipts) == len(prior)+1 and receipts[:-1] == prior, 'foreign transaction receipt prefix changed'
+    receipt = receipts[-1]; previous = client['receipts'][-1]
+    assert set(receipt) == {'physical_directory_proof','profile_owners','operation_id','operation_group_id','sequence','mutation_type','client_binding_id','active_path','backup_path','before_digest','phase'}, 'unknown remove receipt fields'
+    group = new[selected_id]['operation_group_id']; proof = receipt['physical_directory_proof']; old_proof = previous['physical_directory_proof']
+    assert re.fullmatch(r'wizard-uninstall-cursor-[1-9][0-9]*',group)
+    assert receipt['operation_id'] == receipt['operation_group_id'] == group and receipt['client_binding_id'] == client['client_binding_id']
+    assert type(receipt['sequence']) is int and receipt['sequence'] == previous['sequence']+1 and receipt['mutation_type'] == 'directory_remove' and receipt['phase'] == 'committed'
+    assert receipt['active_path'] == client['target_locator'] == previous['active_path'] and receipt['before_digest'] == previous['after_digest']
+    assert receipt['profile_owners'] == proof['profile_owners'] == previous['profile_owners']
+    assert len(receipt['profile_owners']) == 1 and receipt['profile_owners'][0] == {'namespace':client['profile_namespace'],'installation_id':selected_id,'client_id':'cursor','client_binding_id':client['client_binding_id'],'authority':client['profile_authority']}
+    base = pathlib.Path(client['target_locator']).parent; backup = pathlib.Path(receipt['backup_path'])
+    assert backup.parent == base and re.fullmatch(r'\.agentplugins-backup-[0-9a-f]{16}',backup.name)
+    expected = copy.deepcopy(old_proof)
+    for field in ('staging_parent_authority','published_object','staging_parent_identity','staging_path','published_identity','published_digest'): expected.pop(field)
+    old_object = copy.deepcopy(old_proof['published_object']); old_object['canonical_path'] = client['target_locator']
+    expected.update(old_object=old_object,operation='remove',operation_id=group,sequence=receipt['sequence'],backup_path=str(backup),had_active=True,backup_identity=old_proof['published_identity'],backup_digest=old_proof['published_digest'],quarantine_path=str(base/backup.name.replace('.agentplugins-backup-','.agentplugins-quarantine-')))
+    assert proof == expected, 'selected remove physical authority/proof changed'
+    if 'transaction_receipts' in top_before: top_after['transaction_receipts'] = top_before['transaction_receipts']
+    else: top_after.pop('transaction_receipts')
+"""
+    assert membership.count(anchor) == 1; membership = membership.replace(anchor,extra+anchor)
+    exec(compile(membership,'<SDK-selected-remove-receipt>','exec'),m.__dict__)
     removal = inspect.getsource(m.classify_removal)
     old_selection = "selected_keys = [key for key,value in before_ledger['Consumers'].items() if strict_json(value['Registration']) == binding]"
     assert removal.count(old_selection) == 1
@@ -475,6 +501,9 @@ def adapt(m):
     anchor = '    home_result = classify_home_removal('
     extra = "    policy_path = pathlib.Path(binding['controlRoot'])/'policy-generation.json'\n    policy = strict_json(policy_path.read_bytes())\n    assert policy == {'Generation':after_ledger['PolicyGeneration'],'Enabled':after_ledger['Enabled']}\n    assert digest(policy_path) == after['home'][str(policy_path.relative_to(root/'home'))]['sha256']\n"
     assert removal.count(anchor) == 1; removal = removal.replace(anchor,extra+anchor)
+    anchor = "    memberships = removal_memberships(original_state,state,binding,foreign['uapState'])"
+    extra = "\n    proof = state['transaction_receipts'][-1]['physical_directory_proof']; projected = before['projection']['.']\n    assert proof['old_object']['object_id'] == str(projected['inode']) and proof['backup_identity'] == str(projected['device'])+':'+str(projected['inode']), 'remove receipt differs from observed projection inode'"
+    assert removal.count(anchor) == 1; removal = removal.replace(anchor,anchor+extra)
     exec(compile(removal,'<SDK-removal-retention>','exec'),m.__dict__)
     home = inspect.getsource(m.classify_home_removal)
     anchor = '    result = []\n    for path in sorted(set(before)|set(after)):'
