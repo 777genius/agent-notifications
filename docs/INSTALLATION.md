@@ -100,6 +100,22 @@ Use `claude,opencode` or `codex,opencode` for two agents. The loader downloads a
 
 Add `,gemini` to `--products` on Linux/Windows to include Gemini. `--desktop` and `--webhook` apply to each selected OpenCode/Gemini integration independently; configure webhook URLs separately. The public installer defaults fresh OpenCode/Gemini installations to desktop on and webhooks off, and preserve saved channels on update when flags are omitted. `--skip-agent-notify` applies only to the Claude/Codex notification tool. These flags do not change Claude/Codex notification channels. Single-agent commands and `--product both` remain supported.
 
+The installer shows recent safe checkpoints for each selected client above its live
+status. Saved registration remains distinct from completed setup; a timeout or
+failed activation keeps that distinction visible. The bottom status shows the
+current stage and observed client counts. Resizing reduces history first; very
+small terminals switch to plain output.
+
+Use `--activity compact` (the default), `--activity expanded` to also print the
+bounded session history at completion, or `--activity off` to hide history.
+`--activity-limit 1` through `16` controls visible checkpoints per client when
+space permits. These options require an installer with presentation support;
+an older pinned release reports a compatibility error before installation.
+`--ui plain`, `NO_COLOR`, `TERM=dumb`, redirected output and `BOOTSTRAP_VERBOSE=1`
+use append-only text. Activity contains fixed checkpoint labels; detailed stage
+output stays in the private diagnostic log. Observers stop before a prompt reads
+input, and setup success does not verify notification delivery.
+
 After installation:
 
 - **Claude:** restart Claude. Optionally run `/claude-notifications-go:settings` to configure sounds.

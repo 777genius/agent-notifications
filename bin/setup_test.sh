@@ -90,6 +90,10 @@ if [ "${FAIL_DOWNLOAD:-}" = "$kind" ]; then exit 22; fi
 # execs it, so sys.argv cannot prove setup.sh forwarded the literal argument.
 bootstrap_stub = '''#!/usr/bin/env bash
 set -eu
+if [ "${1:-}" = --presentation-capabilities ]; then
+    [ "${PRESENTATION_BOOTSTRAP:-0}" = 1 ] || exit 1
+    printf 'bootstrap-presentation-v1\n'; exit 0
+fi
 if [ "${1:-}" = --selector-capabilities ]; then
     [ "${LEGACY_BOOTSTRAP:-}" != 1 ] || exit 1
     printf 'terminal-selector-v1\n'
@@ -132,6 +136,9 @@ if [ "$status" -eq 0 ] && [ -n "${BOOTSTRAP_SUMMARY_FILE:-}" ]; then
         echo "  $label - installed; restart required." >> "$BOOTSTRAP_SUMMARY_FILE"
     done
     echo "  Delivery has not been verified." >> "$BOOTSTRAP_SUMMARY_FILE"
+fi
+if [ "$status" -eq 0 ] && [ "${PRESENTATION_BOOTSTRAP:-0}" = 1 ]; then
+    printf 'TEST trusted banner: Boost your productivity\n' > "$BOOTSTRAP_PROMOTION_FILE"
 fi
 exit "$status"
 '''
@@ -191,7 +198,7 @@ def channel_requests():
 def run_case(name, tag=None, commit=None, fail='', status=0, expected=None, piped=False,
              documented=False, expect_run=True, args=None, calls=None, no_network=False,
              legacy_status=None, opencode_status=None, message=None, help_only=False,
-             release=None, release_only=False, bash_executable=None, legacy_bootstrap=False):
+             release=None, release_only=False, bash_executable=None, legacy_bootstrap=False, presentation=False):
     if args is None:
         args = ['--product', 'both', 'argument with spaces', '*']
     if release is None:
@@ -229,6 +236,7 @@ def run_case(name, tag=None, commit=None, fail='', status=0, expected=None, pipe
         env = dict(os.environ, PATH=runtime_path(case, python=True, node=True, bash_executable=bash_executable),
                    CASE_DIR=bash_path(case), RECORD_DIR=str(case), TMPDIR=bash_path(case / 'tmp space'),
                    FAIL_DOWNLOAD=fail, BOOTSTRAP_STATUS=str(status),
+                   PRESENTATION_BOOTSTRAP='1' if presentation else '0',
                    NO_PRODUCT_CAPABILITY='1' if legacy_bootstrap else '0',
                    LEGACY_BOOTSTRAP='1' if legacy_bootstrap else '0',
                    BOOTSTRAP_RELEASE_TAG='untrusted', BOOTSTRAP_RELEASE_COMMIT='untrusted',
@@ -296,6 +304,12 @@ def run_case(name, tag=None, commit=None, fail='', status=0, expected=None, pipe
                 'https://api.github.com/repos/777genius/agent-notifications/commits/' + release,
                 raw + '/bootstrap.sh',
             ], name
+        if presentation:
+            banner='TEST trusted banner: Boost your productivity'
+            assert result.stdout.count(banner) == int(result.returncode == 0), (name, result.stdout)
+            if result.returncode == 0:
+                assert result.stdout.rstrip().endswith(banner), (name, result.stdout)
+                assert result.stdout.index('Delivery has not been verified.') < result.stdout.index(banner), name
         if message:
             assert message in result.stderr, (name, result.stderr)
         assert not list((case / 'tmp space').iterdir()), name + ': leaked staging directory'
@@ -432,6 +446,13 @@ for args in [['--plain'], ['--ui=plain'], ['--product', 'gemini', '--plain']]:
 run_case('complete legacy JSON remains explicit',
          args=['--product', 'claude', '--json'], expected=0)
 
+for invalid in [['--activity', 'logs'], ['--activity-limit', '0'], ['--activity-limit=17'], ['--activity=off', '--activity=expanded']]:
+    run_case('activity rejects before downloads '+repr(invalid), args=['--product','codex']+invalid, no_network=True)
+run_case('old bootstrap rejects explicit activity', args=['--product','codex','--activity=expanded'], message='presentation', expected=None)
+for activity in [['--activity', 'expanded'], ['--activity=off','--activity-limit=16'], ['--activity-limit','1']]:
+    run_case('presentation forwarding '+repr(activity), args=['--product','codex']+activity, expected=0, presentation=True)
+run_case('presentation failure omits banner', args=['--product','codex'], status=17, expected=17, presentation=True)
+run_case('presentation one aggregate banner', args=['--products','claude,codex,opencode','--desktop'], calls=[['--products','claude,codex,opencode','--desktop']], expected=0, presentation=True)
 run_case('pinned release and exact argv', expected=0)
 run_case('piped one-line entry point', expected=0, piped=True)
 run_case('documented one-line command', expected=0, documented=True)

@@ -112,6 +112,13 @@ _SETUP_FAILURE_REASON=setup_failed
 _SETUP_RECOVERY=unavailable
 _PROGRESS_CAP_HELPER=""
 _PROGRESS_CAP_SUPPORTED=false
+_PROGRESS_SESSION_SUPPORTED=false
+_PROGRESS_JOURNAL=""
+_PROGRESS_JOURNAL_DISABLED=false
+_PROGRESS_STOP_FILE=""
+_ACTIVITY_MODE=compact
+_ACTIVITY_LIMIT=0
+_ACTIVITY_EXPLICIT=false
 
 # Isolated JSON/checksum runtime. Prefer python3 -I; Node is the supported
 # fallback because Claude Code already ships it. iTerm2 venv still needs a
@@ -1294,21 +1301,73 @@ progress_helper_available() {
     if [ "$_PROGRESS_CAP_HELPER" != "$_CONFIG_HELPER" ]; then
         _PROGRESS_CAP_HELPER=$_CONFIG_HELPER
         _PROGRESS_CAP_SUPPORTED=false
+        _PROGRESS_SESSION_SUPPORTED=false
         local capability
         capability=$("$_CONFIG_HELPER" installer-progress --capabilities </dev/null 2>/dev/null) || return 1
         [ "$capability" != installer-progress-v1 ] || _PROGRESS_CAP_SUPPORTED=true
+        capability=$("$_CONFIG_HELPER" installer-progress --session-capabilities </dev/null 2>/dev/null) || capability=""
+        [ "$capability" != installer-progress-session-v1 ] || _PROGRESS_SESSION_SUPPORTED=true
     fi
     [ "$_PROGRESS_CAP_SUPPORTED" = true ]
 }
 
+# Session facts are independent of presentation availability and private logs.
+progress_journal_init() {
+    [ -z "$_PROGRESS_JOURNAL" ] && [ "$_PROGRESS_JOURNAL_DISABLED" != true ] || return 0
+    _PROGRESS_JOURNAL=$(mktemp "${TMPDIR:-/tmp}/bootstrap-session-XXXXXX") || _PROGRESS_JOURNAL_DISABLED=true
+}
+
+progress_record() {
+    [ "$_PROGRESS_JOURNAL_DISABLED" != true ] && [ -n "$_PROGRESS_JOURNAL" ] || return 0
+    local bytes
+    if [ ! -f "$_PROGRESS_JOURNAL" ] || [ -L "$_PROGRESS_JOURNAL" ]; then
+        _PROGRESS_JOURNAL_DISABLED=true; return 0
+    fi
+    bytes=$(wc -c < "$_PROGRESS_JOURNAL") || bytes=262144
+    if [ "$bytes" -gt 261888 ] || ! printf '%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" >> "$_PROGRESS_JOURNAL"; then
+        _PROGRESS_JOURNAL_DISABLED=true
+    fi
+    return 0
+}
+
+progress_snapshots() {
+    local i=0
+    while [ "$i" -lt "${#_PROGRESS_IDS[@]}" ]; do
+        progress_record snapshot "${_PROGRESS_IDS[$i]}" "${_PROGRESS_PHASES[$i]}" "${_PROGRESS_OUTCOMES[$i]}"
+        i=$((i + 1))
+    done
+}
+
+progress_child_running() {
+    local running
+    for running in $(jobs -pr) $(jobs -ps); do [ "$running" != "$1" ] || return 0; done
+    return 1
+}
+
+# Join only this job. No watchdog process, reused PID or indefinite graceful wait.
+progress_reap() {
+    local pid="$1" i=0 status=0 forced=false escalated=false
+    while progress_child_running "$pid" && [ "$i" -lt 20 ]; do sleep 0.05; i=$((i + 1)); done
+    if progress_child_running "$pid"; then
+        escalated=true
+        kill -TERM "$pid" 2>/dev/null || true
+        i=0
+        while progress_child_running "$pid" && [ "$i" -lt 10 ]; do sleep 0.05; i=$((i + 1)); done
+        if progress_child_running "$pid"; then kill -KILL "$pid" 2>/dev/null || true; forced=true; fi
+    fi
+    wait "$pid" 2>/dev/null || status=$?
+    if [ "$forced" = true ] && progress_rich_available; then printf '\033[0m\033[?25h' >&2; fi
+    if [ "$escalated" = true ] && [ "$status" -eq 0 ]; then status=1; fi
+    return "$status"
+}
+
 progress_event() {
+    progress_record transition "$1" "$2" "$3"
     [ -n "$_PROGRESS_EVENTS" ] && [ "$_PROGRESS_KIND" = helper ] || return 0
     printf '%s\t%s\t%s\n' "$1" "$2" "$3" >> "$_PROGRESS_EVENTS" || true
 }
 
-progress_start() {
-    progress_rich_available || return 0
-    [ -z "$_PROGRESS_PID" ] || return 0
+progress_stage_phase() {
     _PROGRESS_GLOBAL_PHASE=preparation
     case "$1" in
         "Preparing verified installer") _PROGRESS_GLOBAL_PHASE=verified-installer ;;
@@ -1321,6 +1380,22 @@ progress_start() {
         "Installing OpenCode notifications") _PROGRESS_GLOBAL_PHASE=installing-opencode ;;
         "Installing Gemini CLI notifications") _PROGRESS_GLOBAL_PHASE=installing-gemini ;;
     esac
+}
+
+progress_start() {
+    [ -z "$_PROGRESS_PID" ] || return 0
+    if progress_helper_available && [ "$_PROGRESS_SESSION_SUPPORTED" = true ] && [ "$_PROGRESS_JOURNAL_DISABLED" != true ]; then
+        _PROGRESS_STOP_FILE=$(mktemp "${TMPDIR:-/tmp}/bootstrap-observer-stop-XXXXXX") || return 0
+        _PROGRESS_KIND=session
+        local activity_args=(--activity "$_ACTIVITY_MODE")
+        [ "$_ACTIVITY_LIMIT" -eq 0 ] || activity_args+=(--activity-limit "$_ACTIVITY_LIMIT")
+        "$_CONFIG_HELPER" installer-progress --session --events "$_PROGRESS_JOURNAL" --stop-file "$_PROGRESS_STOP_FILE" --ui "${_UI_MODE:-auto}" "${activity_args[@]}" --transient --owner-pid "$$" </dev/null >/dev/null &
+        _PROGRESS_PID=$!
+        return 0
+    fi
+    # A failed session stays in the truthful plain owner presentation.
+    [ "$_PROGRESS_SESSION_SUPPORTED" != true ] || return 0
+    progress_rich_available || return 0
     # Older verified helpers retain the existing plain stage output.
     if [ -n "$_CONFIG_HELPER" ]; then
         progress_helper_available || return 0
@@ -1328,10 +1403,10 @@ progress_start() {
         _PROGRESS_KIND=helper
         local i=0
         while [ "$i" -lt "${#_PROGRESS_IDS[@]}" ]; do
-            progress_event "${_PROGRESS_IDS[$i]}" "${_PROGRESS_PHASES[$i]}" "${_PROGRESS_OUTCOMES[$i]}"
+            printf '%s\t%s\t%s\n' "${_PROGRESS_IDS[$i]}" "${_PROGRESS_PHASES[$i]}" "${_PROGRESS_OUTCOMES[$i]}" >> "$_PROGRESS_EVENTS"
             i=$((i + 1))
         done
-        progress_event global "$_PROGRESS_GLOBAL_PHASE" running
+        printf 'global\t%s\trunning\n' "$_PROGRESS_GLOBAL_PHASE" >> "$_PROGRESS_EVENTS"
         "$_CONFIG_HELPER" installer-progress --events "$_PROGRESS_EVENTS" --ui "${_UI_MODE:-auto}" --transient --owner-pid "$$" </dev/null >/dev/null &
         _PROGRESS_PID=$!
     else
@@ -1377,9 +1452,11 @@ progress_download_activity() {
 progress_stop() {
     local status=${1:-0} pid=$_PROGRESS_PID
     if [ -n "$pid" ]; then
-        if [ "$_PROGRESS_KIND" = helper ]; then
-            if [ "$status" -eq 0 ]; then progress_event global "$_PROGRESS_GLOBAL_PHASE" done
-            else progress_event global "$_PROGRESS_GLOBAL_PHASE" failed; fi
+        if [ "$_PROGRESS_KIND" = session ]; then
+            printf 'stop\n' > "$_PROGRESS_STOP_FILE" || kill -TERM "$pid" 2>/dev/null || true
+        elif [ "$_PROGRESS_KIND" = helper ]; then
+            if [ "$status" -eq 0 ]; then printf 'global\t%s\tdone\n' "$_PROGRESS_GLOBAL_PHASE" >> "$_PROGRESS_EVENTS"
+            else printf 'global\t%s\tfailed\n' "$_PROGRESS_GLOBAL_PHASE" >> "$_PROGRESS_EVENTS"; fi
             # A full disk or inaccessible event file must not strand the observer.
             if ! printf 'stop\t\t\n' >> "$_PROGRESS_EVENTS"; then
                 kill "$pid" 2>/dev/null || true
@@ -1387,10 +1464,14 @@ progress_stop() {
         else
             kill "$pid" 2>/dev/null || true
         fi
-        wait "$pid" 2>/dev/null || true
+        if ! progress_reap "$pid"; then
+            [ "$_PROGRESS_KIND" != session ] || _PROGRESS_JOURNAL_DISABLED=true
+        fi
         [ "$_PROGRESS_KIND" != spinner ] || printf '\r\033[2K' >&2
     fi
     [ -z "$_PROGRESS_EVENTS" ] || rm -f "$_PROGRESS_EVENTS"
+    [ -z "$_PROGRESS_STOP_FILE" ] || rm -f "$_PROGRESS_STOP_FILE"
+    _PROGRESS_STOP_FILE=""
     _PROGRESS_PID=""; _PROGRESS_EVENTS=""; _PROGRESS_KIND=""
 }
 
@@ -1566,8 +1647,14 @@ run_setup_stage() {
     _PROGRESS_LOG=$(mktemp "${TMPDIR:-/tmp}/bootstrap-output-XXXXXX") || return 1
     _PROGRESS_STDERR=$(mktemp "${TMPDIR:-/tmp}/bootstrap-output-XXXXXX") || { rm -f "$_PROGRESS_LOG"; _PROGRESS_LOG=""; return 1; }
     _DIAGNOSTIC_LABEL=$label
+    progress_journal_init
+    progress_snapshots
+    progress_stage_phase "$label"
+    progress_record transition global "$_PROGRESS_GLOBAL_PHASE" running
     progress_start "$label"
     "$@" > "$_PROGRESS_LOG" 2> "$_PROGRESS_STDERR" || status=$?
+    if [ "$status" -eq 0 ]; then progress_record transition global "$_PROGRESS_GLOBAL_PHASE" done
+    else progress_record transition global "$_PROGRESS_GLOBAL_PHASE" failed; fi
     progress_stop "$status"
     diagnostic_capture_stage "$status"
     if [ "$status" -eq 0 ] && [ -s "$_PROGRESS_STDERR" ]; then _DIAGNOSTIC_NOTED=true; fi
@@ -1748,6 +1835,18 @@ select_product() {
                 seen_flags=${seen_flags:+$seen_flags,}$key ;;
         esac
         case "$1" in
+            --activity|--activity=*|--activity-limit|--activity-limit=*)
+                local activity_key=${1%%=*} activity_value
+                case "$1" in *=*) activity_value=${1#*=}; shift ;; *) [ "$#" -ge 2 ] || { echo "$1 requires a value." >&2; return 1; }; activity_value=$2; shift 2 ;; esac
+                if [ "$activity_key" = --activity ]; then
+                    case "$activity_value" in compact|expanded|off) ;; *) echo "Invalid activity mode." >&2; return 1 ;; esac
+                    [ "$_ACTIVITY_EXPLICIT" != true ] || [ "$_ACTIVITY_MODE" = "$activity_value" ] || { echo "Conflicting activity modes." >&2; return 1; }
+                    _ACTIVITY_MODE=$activity_value; _ACTIVITY_EXPLICIT=true
+                else
+                    case "$activity_value" in [1-9]|1[0-6]) ;; *) echo "Activity limit must be 1..16." >&2; return 1 ;; esac
+                    [ "$_ACTIVITY_LIMIT" -eq 0 ] || [ "$_ACTIVITY_LIMIT" -eq "$activity_value" ] || { echo "Conflicting activity limits." >&2; return 1; }
+                    _ACTIVITY_LIMIT=$activity_value
+                fi ;;
             --ui|--ui=*|--plain)
                 case "$1" in
                     --plain) value=plain; shift ;;
@@ -1917,12 +2016,19 @@ select_product() {
 }
 
 bootstrap_cleanup() {
+    local interrupted_status=$?
     progress_stop 1
     if [ -n "$_DIAGNOSTIC_LABEL" ]; then
+        # The interrupted shared stage does not prove which client's activation
+        # began. Preserve authoritative client facts and report owner interruption.
+        progress_record transition global "$_PROGRESS_GLOBAL_PHASE" failed
         diagnostic_capture_stage interrupted
         printf 'Setup incomplete: installation was interrupted.\n' >&2
+        report_progress "${interrupted_status:-1}"
         report_diagnostics
     fi
+    [ -z "$_PROGRESS_JOURNAL" ] || rm -f "$_PROGRESS_JOURNAL"
+    _PROGRESS_JOURNAL=""
     [ -z "$_PROGRESS_LOG" ] || rm -f "$_PROGRESS_LOG"
     [ -z "$_PROGRESS_STDERR" ] || rm -f "$_PROGRESS_STDERR"
     close_prompt
@@ -1951,7 +2057,7 @@ install_runtime() {
     local product="$1" script="$2" target="$3"
     local disposable=false
     [ "$product" = "codex" ] && disposable=true
-    CN_PRODUCT="$product" INSTALL_STAGED_ASSETS="$_CONFIG_STAGE" \
+    INSTALL_DEFER_PROMOTION=1 CN_PRODUCT="$product" INSTALL_STAGED_ASSETS="$_CONFIG_STAGE" \
     INSTALL_DISPOSABLE_ACQUISITION="$disposable" \
     RELEASE_URL="${BOOTSTRAP_RELEASES_BASE_URL:-https://github.com/${REPO}/releases}/download/$BOOTSTRAP_TAG" \
     CHECKSUMS_URL="${BOOTSTRAP_RELEASES_BASE_URL:-https://github.com/${REPO}/releases}/download/$BOOTSTRAP_TAG/checksums.txt" \
@@ -2608,7 +2714,21 @@ progress_write_final_snapshot() {
 report_progress() {
     progress_stop "${1:-0}"
     local rendered=false
-    if progress_rich_available && progress_helper_available; then
+    if progress_helper_available && [ "$_PROGRESS_SESSION_SUPPORTED" = true ] && [ "$_PROGRESS_JOURNAL_DISABLED" != true ] && [ -n "$_PROGRESS_JOURNAL" ]; then
+        progress_snapshots
+        progress_record stop "" "" ""
+        local activity_args=(--activity "$_ACTIVITY_MODE")
+        [ "$_ACTIVITY_LIMIT" -eq 0 ] || activity_args+=(--activity-limit "$_ACTIVITY_LIMIT")
+        if [ "$_PROGRESS_JOURNAL_DISABLED" != true ]; then
+            "$_CONFIG_HELPER" installer-progress --session --events "$_PROGRESS_JOURNAL" --ui "${_UI_MODE:-auto}" "${activity_args[@]}" --owner-pid "$$" </dev/null >/dev/null &
+            _PROGRESS_PID=$!
+            if progress_reap "$_PROGRESS_PID"; then
+                rendered=true
+                if [ "${1:-0}" -eq 0 ] && progress_rich_available; then compact_rich_setup_summary; fi
+            else _PROGRESS_JOURNAL_DISABLED=true; fi
+            _PROGRESS_PID=""
+        fi
+    elif progress_rich_available && progress_helper_available && [ "$_PROGRESS_SESSION_SUPPORTED" != true ]; then
         local events
         events=$(mktemp "${TMPDIR:-/tmp}/bootstrap-progress-final-XXXXXX") || events=""
         if [ -n "$events" ]; then
@@ -2617,7 +2737,7 @@ report_progress() {
             if progress_write_final_snapshot > "$events"; then
                 "$_CONFIG_HELPER" installer-progress --events "$events" --ui "${_UI_MODE:-auto}" --owner-pid "$$" </dev/null >/dev/null &
                 _PROGRESS_PID=$!
-                if wait "$_PROGRESS_PID" 2>/dev/null; then
+                if progress_reap "$_PROGRESS_PID"; then
                     rendered=true
                     [ "${1:-0}" -ne 0 ] || compact_rich_setup_summary
                 fi
@@ -2631,7 +2751,7 @@ report_progress() {
     local i=0 outcome label
     while [ "$i" -lt "${#_PROGRESS_IDS[@]}" ]; do
         outcome=${_PROGRESS_OUTCOMES[$i]}
-        if [ "$outcome" = completed ] && [ "${1:-0}" -eq 0 ] && [ "${BOOTSTRAP_VERBOSE:-0}" != 1 ]; then
+        if [ "$outcome" = completed ] && [ "${1:-0}" -eq 0 ] && [ "${BOOTSTRAP_VERBOSE:-0}" != 1 ] && [ "$_PROGRESS_JOURNAL_DISABLED" != true ]; then
             i=$((i + 1)); continue
         fi
         case "${_PROGRESS_IDS[$i]}" in claude) label='Claude Code' ;; codex) label='Codex CLI' ;; opencode) label=OpenCode ;; gemini) label='Gemini CLI' ;; cursor) label=Cursor ;; *) label=Client ;; esac
@@ -2888,6 +3008,7 @@ main() {
     if [ "$#" -eq 1 ]; then
         case "$1" in
             --capabilities) printf '%s\n' bootstrap-products-v1; return 0 ;;
+            --presentation-capabilities) printf '%s\n' bootstrap-presentation-v1; return 0 ;;
             --selector-capabilities) printf '%s\n' terminal-selector-v1; return 0 ;;
         esac
     fi
@@ -2973,8 +3094,10 @@ main() {
     if [ -z "${BOOTSTRAP_SUMMARY_FILE:-}" ]; then
         if ! progress_rich_available || ! progress_helper_available; then print_header; fi
     fi
+    # Keep a sourced invocation from leaking its owned summary into a retry.
+    local BOOTSTRAP_SUMMARY_FILE=${BOOTSTRAP_SUMMARY_FILE:-}
     local own_summary=false
-    if [ "${#SELECTED_PRODUCTS[@]}" -gt 1 ] && [ -z "${BOOTSTRAP_SUMMARY_FILE:-}" ]; then
+    if [ -z "${BOOTSTRAP_SUMMARY_FILE:-}" ]; then
         BOOTSTRAP_SUMMARY_FILE="$_CONFIG_STAGE/summary.txt"
         export BOOTSTRAP_SUMMARY_FILE
         own_summary=true
@@ -3031,12 +3154,69 @@ main() {
     if [ "$own_summary" = true ]; then
         if [ "$status" -eq 0 ]; then
             printf '\nInstallation complete\n\n'
-            cat "$BOOTSTRAP_SUMMARY_FILE"
+            [ ! -s "$BOOTSTRAP_SUMMARY_FILE" ] || cat "$BOOTSTRAP_SUMMARY_FILE"
             [ -z "$_DIAGNOSTIC_LOG" ] || printf '\nDetailed installer output is saved in the private diagnostic log.\n'
         fi
         unset BOOTSTRAP_SUMMARY_FILE
     fi
+    if [ "$status" -eq 0 ]; then bootstrap_promotion; fi
     return "$status"
+}
+
+promotion_text() {
+    local staged=""
+    if progress_helper_available && [ "$_PROGRESS_SESSION_SUPPORTED" = true ]; then
+        staged=$(mktemp "${TMPDIR:-/tmp}/bootstrap-promotion-XXXXXX") || staged=""
+        if [ -n "$staged" ]; then
+            if "$_CONFIG_HELPER" installer-progress --promotion </dev/null > "$staged" 2>/dev/null; then
+                cat "$staged"
+                rm -f "$staged"
+                return 0
+            fi
+            rm -f "$staged"
+        fi
+    fi
+    printf '\n----------------------------------------\nBoost your productivity\n  Check out Agent Teams AI, a desktop app for AI agent teams\n  with Claude, Codex and more, from the creator of this plugin:\n  https://github.com/777genius/agent-teams-ai\n----------------------------------------\n'
+}
+
+# The loader owns a private staging directory and mode-600 handoff leaf.
+bootstrap_promotion_file_safe() {
+    [ -f "$1" ] && [ ! -L "$1" ] && [ ! -s "$1" ] && [ -O "$1" ] || return 1
+    local engine
+    engine=$(installer_runtime) || return 1
+    if [ "$engine" = python3 ]; then
+        python3 -I - "$1" <<'PY_PROMOTION_PRIVATE'
+import os, stat, sys
+try:
+    path=sys.argv[1]
+    leaf=os.lstat(path); parent=os.lstat(os.path.dirname(path))
+    assert stat.S_ISREG(leaf.st_mode) and stat.S_ISDIR(parent.st_mode)
+    assert leaf.st_size==0 and leaf.st_nlink==1
+    if os.name!='nt':
+        assert leaf.st_uid==parent.st_uid==os.getuid()
+        assert stat.S_IMODE(leaf.st_mode)==0o600 and stat.S_IMODE(parent.st_mode)==0o700
+except Exception: sys.exit(1)
+PY_PROMOTION_PRIVATE
+    else
+        run_isolated_node - "$1" <<'JS_PROMOTION_PRIVATE'
+const fs=require('fs'),path=require('path');
+try {
+ const leaf=fs.lstatSync(process.argv[2]),parent=fs.lstatSync(path.dirname(process.argv[2]));
+ if(!leaf.isFile() || !parent.isDirectory() || leaf.size!==0 || leaf.nlink!==1) process.exit(1);
+ if(process.platform!=='win32' && (leaf.uid!==process.getuid() || parent.uid!==process.getuid() || (leaf.mode&0o777)!==0o600 || (parent.mode&0o777)!==0o700)) process.exit(1);
+} catch {process.exit(1);}
+JS_PROMOTION_PRIVATE
+    fi
+}
+
+bootstrap_promotion() {
+    if [ -n "${BOOTSTRAP_PROMOTION_FILE:-}" ]; then
+        if bootstrap_promotion_file_safe "$BOOTSTRAP_PROMOTION_FILE"; then
+            promotion_text > "$BOOTSTRAP_PROMOTION_FILE" || true
+        fi
+        return 0
+    fi
+    promotion_text || true
 }
 
 # Quote argv so a user can paste the retry command into bash. Custom roots with

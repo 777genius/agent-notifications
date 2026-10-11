@@ -68,3 +68,53 @@ func TestInstallerProgressNonTerminalFallbackKeepsStdoutClean(t *testing.T) {
 		t.Fatalf("fallback stdout=%q stderr=%q", stdout.String(), out)
 	}
 }
+
+func TestInstallerSessionCapabilityAndPromotionAreSeparateCleanContracts(t *testing.T) {
+	for _, tc := range []struct{ flag, expected string }{
+		{"--session-capabilities", "installer-progress-session-v1\n"},
+		{"--promotion", "Boost your productivity"},
+	} {
+		errout, err := os.CreateTemp(t.TempDir(), "stderr")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer errout.Close()
+		var out bytes.Buffer
+		if code := installerProgressMain([]string{tc.flag}, &out, errout); code != 0 {
+			t.Fatalf("%s: exit %d", tc.flag, code)
+		}
+		if !strings.Contains(out.String(), tc.expected) || strings.Contains(out.String(), "\x1b") {
+			t.Fatalf("%s: %q", tc.flag, out.String())
+		}
+		if tc.flag == "--session-capabilities" && out.String() != tc.expected {
+			t.Fatal("nonexact capability")
+		}
+		info, _ := errout.Stat()
+		if info.Size() != 0 {
+			t.Fatal("machine/promotion contract touched terminal")
+		}
+		for _, short := range []bool{false, true} {
+			if code := installerProgressMain([]string{tc.flag}, capabilityFailedOutput{short: short}, errout); code == 0 {
+				t.Fatal("output failure accepted")
+			}
+		}
+	}
+}
+
+func TestInstallerSessionRejectsInvalidPresentationBeforeObserving(t *testing.T) {
+	for _, args := range [][]string{
+		{"--session", "--events", "missing", "--activity", "logs"},
+		{"--session", "--events", "missing", "--activity-limit", "0"},
+		{"--session", "--events", "missing", "--activity-limit", "17"},
+	} {
+		errout, err := os.CreateTemp(t.TempDir(), "stderr")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer errout.Close()
+		var out bytes.Buffer
+		if code := installerProgressMain(args, &out, errout); code != 2 || out.Len() != 0 {
+			t.Fatalf("invalid presentation: %d %q", code, out.String())
+		}
+	}
+}
