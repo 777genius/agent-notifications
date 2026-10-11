@@ -28,6 +28,11 @@ def load_fixture(path):
 def adapt(m):
     # Keep product provenance exact; this changes no installed command or authority.
     m.SOURCE_SHA = SOURCE
+    # Bounded SDK runtime copies grew beyond the old 25,264,137-byte fixture.
+    # The same per-file limit governs RLIMIT_FSIZE and full object readbacks;
+    # the original aggregate writable-case limit remains 1 GiB.
+    assert m.TEST_RUNTIME_FILE_LIMIT == 25264137
+    m.TEST_RUNTIME_FILE_LIMIT = 64 << 20
     inputs = inspect.getsource(m.execution_inputs)
     anchor = "    assert b'=>\\t' not in build_info, 'local module replacement forbidden'"
     assert inputs.count(anchor) == 1
@@ -211,6 +216,9 @@ def adapt(m):
     old = "str(root/'recipe/native_case.py'),'--execute','--inside'"
     assert main.count(old) == 1
     main = main.replace(old, "str(root/'recipe/sdk_observation.py'),'--fixture',str(root/'recipe/native_case.py'),'--execute','--inside'")
+    old = "    assert (pathlib.Path(inputs['stage'])/'claude-notifications-linux-amd64').stat().st_size <= TEST_RUNTIME_FILE_LIMIT, 'runtime copy exceeds fixed per-file cap'"
+    assert main.count(old) == 1
+    main = main.replace(old, "    runtime = pathlib.Path(inputs['stage'])/'claude-notifications-linux-amd64'\n    (root/'evidence/runtime-copy-budget.json').write_text(json.dumps({'sourceSHA':SOURCE_SHA,'primarySHA256':digest(runtime),'primaryBytes':runtime.stat().st_size,'perFileBytes':TEST_RUNTIME_FILE_LIMIT,'aggregateBytes':1024**3},indent=2)+'\\n')\n"+old)
     m.SDK_ADAPTER_PATH = pathlib.Path(__file__).resolve(strict=True)
     exec(compile(main, '<SDK-original-main>', 'exec'), m.__dict__)
     return m
