@@ -179,6 +179,7 @@ func TestNotificationBootstrapOffline(t *testing.T) {
 				t.Fatal(err)
 			}
 			script := prefix + `
+bootstrap_macos_command() { return 1; }
 print_header() { :; }
 abort_if_wsl_environment() { :; }
 check_prerequisites() { :; }
@@ -442,6 +443,7 @@ func TestNotificationBootstrapWizardFailureDoesNotInventRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 	script := prefix + `
+bootstrap_macos_command() { return 1; }
 print_header() { :; }
 abort_if_wsl_environment() { :; }
 check_prerequisites() { :; }
@@ -496,6 +498,7 @@ func TestNotificationBootstrapConfigureRetryQuotesCustomRoots(t *testing.T) {
 		t.Fatal(err)
 	}
 	script := prefix + `
+bootstrap_macos_command() { return 1; }
 print_header() { :; }
 abort_if_wsl_environment() { :; }
 check_prerequisites() { :; }
@@ -642,6 +645,7 @@ func TestNotificationBootstrapWizardMissingPortable(t *testing.T) {
 				t.Fatal(err)
 			}
 			script := prefix + `
+bootstrap_macos_command() { return 1; }
 print_header() { :; }
 abort_if_wsl_environment() { :; }
 check_prerequisites() { :; }
