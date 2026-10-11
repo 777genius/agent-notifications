@@ -24,7 +24,7 @@ func readInstallerResult(path string) (setupwizard.Result, error) {
 	if err != nil {
 		return setupwizard.Result{}, err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	opened, err := file.Stat()
 	if err != nil || !os.SameFile(info, opened) {
 		return setupwizard.Result{}, errors.New("installer result changed")

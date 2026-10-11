@@ -21,7 +21,7 @@ func openInstallerResult(path string) (*os.File, error) {
 		}
 	}
 	if err != nil {
-		file.Close()
+		_ = file.Close()
 		return nil, err
 	}
 	return file, nil
