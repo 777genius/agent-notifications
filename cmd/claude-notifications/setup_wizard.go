@@ -1177,6 +1177,46 @@ func composeCursorWizard(ctx context.Context, req setupwizard.Request) (_ setupw
 	if snapshot.Recovery || snapshot.Ledger.ID == "" || snapshot.Ledger.Owner != "existing-installer" {
 		return req, setupwizard.ErrRefused
 	}
+	if req.Action == setupwizard.ActionInspect && snapshot.Ledger.PendingMutation == nil {
+		observation, cfg, _, _, absentErr := reserveCursorCaller(ctx, req, snapshot)
+		if absentErr != nil {
+			if !errors.Is(absentErr, uapinstaller.ErrNotInstalled) || req.BindingIDs["cursor"] != "" {
+				return req, absentErr
+			}
+			eng, e := uapinstaller.New(cfg)
+			if e != nil {
+				return req, e
+			}
+			view, e := eng.Inspect(ctx)
+			if e != nil || view.Recovery.Required {
+				return req, setupwizard.ErrRefused
+			}
+			for _, installation := range view.Installations {
+				if req.InstallationID != "" && installation.InstallationID != req.InstallationID {
+					return req, absentErr
+				}
+				for _, binding := range installation.Bindings {
+					if binding.ClientID == "cursor" {
+						return req, absentErr
+					}
+				}
+			}
+			for key, consumer := range snapshot.Ledger.Consumers {
+				if !strings.HasPrefix(key, "portable:") {
+					continue
+				}
+				var binding portable.Binding
+				if json.Unmarshal([]byte(consumer.Registration), &binding) != nil || binding.Integration == portable.Cursor {
+					return req, portable.ErrInvalid
+				}
+			}
+			// The owner reports absence without constructing installed authority.
+			// Keep the retained identity and let the wizard report retained data.
+			off := false
+			observation.CursorAgentNotify = &off
+			return observation, nil
+		}
+	}
 	if req.AgentNotify == nil && (req.Action == setupwizard.ActionUpdate || req.Action == setupwizard.ActionRepair) {
 		state, e := (statev2.Store{Path: filepath.Join(filepath.Dir(req.ControlRoot), "uap", "state", "state-v2.json")}).Load()
 		if e != nil {
