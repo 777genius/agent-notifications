@@ -63,6 +63,19 @@ func TestSessionStartupFoldsOneFrameAndPlainReplayStaysQuiet(t *testing.T) {
 	}
 }
 
+func TestSessionStoppedSmallTerminalEmitsOnePlainFinalSnapshot(t *testing.T) {
+	journal := "snapshot\tcodex\tcomplete\tcompleted\nstop\t\t\t\n"
+	for _, geometry := range [][2]int{{23, 24}, {80, 2}} {
+		var out bytes.Buffer
+		if err := RunSession(context.Background(), eventFile(t, journal), Options{Output: &out, Rich: true, Width: geometry[0], Height: geometry[1]}); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Count(out.String(), "Codex CLI: complete - done\n") != 1 {
+			t.Fatalf("small-terminal final snapshot repeated: %q", out.String())
+		}
+	}
+}
+
 func TestSessionStopControlAndJournalFailuresKeepPrivateInputOut(t *testing.T) {
 	for _, content := range []string{"transition\tclaude\t\x1b[2JSECRET\trunning\n", strings.Repeat("s", 257), strings.Repeat("s", journalLimit+1)} {
 		var out bytes.Buffer
@@ -158,6 +171,37 @@ func TestSessionBoundedHistoryDisclosesLossInCompactAndExpanded(t *testing.T) {
 	}
 	if strings.Count(out.String(), "configuration:") != 16 || !strings.Contains(out.String(), "earlier checkpoints omitted") {
 		t.Fatalf("expanded history unbounded/undisclosed: %q", out.String())
+	}
+}
+
+func TestSessionInstallerHistoryLossDoesNotImplyClientHistoryLoss(t *testing.T) {
+	s := &session{history: map[string][]event{}, last: map[string]event{}, lost: map[string]bool{}}
+	s.apply("transition", event{"codex", "complete", "completed"})
+	for i := 0; i < 40; i++ {
+		outcome := "running"
+		if i%2 == 0 {
+			outcome = "failed"
+		}
+		s.apply("transition", event{"global", "preparation", outcome})
+	}
+	if len(s.history["global"]) != 16 || !s.lost["global"] || s.lost["codex"] {
+		t.Fatal("installer history bound or loss scope incorrect")
+	}
+	var out bytes.Buffer
+	v := sessionView{s: s, options: Options{Output: &out, Rich: true, Width: 80, Height: 24, Activity: "compact"}}
+	if err := v.paint(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "Recent activity") || !strings.Contains(out.String(), "Earlier installer checkpoints omitted") || strings.Contains(out.String(), "* Codex CLI") || strings.Contains(out.String(), "Earlier checkpoints omitted") {
+		t.Fatalf("installer loss attributed to client history: %q", out.String())
+	}
+	out.Reset()
+	v.options.Activity = "expanded"
+	if err := v.fullHistory(); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(out.String(), "Installer: ") != 16 || !strings.Contains(out.String(), "Earlier installer checkpoints omitted") || strings.Contains(out.String(), "Codex CLI: earlier") {
+		t.Fatalf("expanded installer history lost or misattributed: %q", out.String())
 	}
 }
 

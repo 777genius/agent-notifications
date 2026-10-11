@@ -1639,11 +1639,6 @@ report_diagnostics() {
 run_setup_stage() {
     local label="$1" status=0
     shift
-    if progress_rich_available && progress_helper_available; then
-        : # The transient board owns rich stage labels.
-    elif [ "${BOOTSTRAP_VERBOSE:-0}" = 1 ] || [[ "$label" = Installing* ]] || progress_rich_available; then
-        printf '%s...\n' "$label"
-    fi
     _PROGRESS_LOG=$(mktemp "${TMPDIR:-/tmp}/bootstrap-output-XXXXXX") || return 1
     _PROGRESS_STDERR=$(mktemp "${TMPDIR:-/tmp}/bootstrap-output-XXXXXX") || { rm -f "$_PROGRESS_LOG"; _PROGRESS_LOG=""; return 1; }
     _DIAGNOSTIC_LABEL=$label
@@ -1652,6 +1647,11 @@ run_setup_stage() {
     progress_stage_phase "$label"
     progress_record transition global "$_PROGRESS_GLOBAL_PHASE" running
     progress_start "$label"
+    if progress_rich_available && [ -n "$_PROGRESS_PID" ]; then
+        : # A started transient display owns rich stage labels.
+    elif [ "${BOOTSTRAP_VERBOSE:-0}" = 1 ] || [[ "$label" = Installing* ]] || progress_rich_available || [ "$_PROGRESS_JOURNAL_DISABLED" = true ]; then
+        printf '%s...\n' "$label"
+    fi
     "$@" > "$_PROGRESS_LOG" 2> "$_PROGRESS_STDERR" || status=$?
     if [ "$status" -eq 0 ]; then progress_record transition global "$_PROGRESS_GLOBAL_PHASE" done
     else progress_record transition global "$_PROGRESS_GLOBAL_PHASE" failed; fi
@@ -1829,7 +1829,7 @@ select_product() {
     while [ "$#" -gt 0 ]; do
         key=${1%%=*}
         case "$key" in
-            --ui|--plain|--product|--products|--help|-h) ;;
+            --ui|--plain|--activity|--activity-limit|--product|--products|--help|-h) ;;
             *)
                 case ",$seen_flags," in *",$key,"*) echo "Use $key once." >&2; return 1 ;; esac
                 seen_flags=${seen_flags:+$seen_flags,}$key ;;

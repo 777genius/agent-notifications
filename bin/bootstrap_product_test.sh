@@ -716,6 +716,35 @@ EARLY_CANARY
     [ "${CONFIGURE_ARGS[*]}" = '--preserve-policy --navigation none --allow-unknown-caller true --allow-caller-asserted false' ]
 )
 
+# Loader-normalized repeated presentation flags must retain the same contract
+# at the bootstrap boundary; contradictory values still fail before effects.
+(
+    PRODUCT=""; _ACTIVITY_MODE=compact; _ACTIVITY_EXPLICIT=false; _ACTIVITY_LIMIT=0
+    select_product --product claude --activity expanded --activity=expanded --activity-limit 4 --activity-limit=4
+    [ "$_ACTIVITY_MODE" = expanded ] && [ "$_ACTIVITY_LIMIT" -eq 4 ]
+    PRODUCT=""; _ACTIVITY_MODE=compact; _ACTIVITY_EXPLICIT=false; _ACTIVITY_LIMIT=0
+    if select_product --product claude --activity off --activity=compact 2>/dev/null; then exit 1; fi
+    PRODUCT=""; _ACTIVITY_MODE=compact; _ACTIVITY_EXPLICIT=false; _ACTIVITY_LIMIT=0
+    if select_product --product claude --activity-limit=4 --activity-limit 5 2>/dev/null; then exit 1; fi
+)
+
+# A session display failure must leave a safe live label for later stages.
+# The actual stage begins only after that label is visible; its stdout remains
+# private and no legacy rich helper is restarted.
+(
+    progress_rich_available() { return 0; }
+    progress_helper_available() { return 0; }
+    _PROGRESS_SESSION_SUPPORTED=true; _PROGRESS_JOURNAL_DISABLED=true; _PROGRESS_PID=""
+    emit_after_display_failure() {
+        [ -z "$_PROGRESS_PID" ]
+        grep -F 'Preparing notification settings...' "$SANDBOX/disabled-session-stage.out" >/dev/null
+        printf 'PRIVATE_STAGE_OUTPUT\n'
+    }
+    run_setup_stage 'Preparing notification settings' emit_after_display_failure > "$SANDBOX/disabled-session-stage.out" 2> "$SANDBOX/disabled-session-stage.err"
+    [ "$(cat "$SANDBOX/disabled-session-stage.out")" = 'Preparing notification settings...' ]
+    [ ! -s "$SANDBOX/disabled-session-stage.err" ]
+)
+
 # Cursor used to fail product parsing or lose its two frozen scalar arguments.
 # Drive the real main/selector/wizard composition through disposable argv peers;
 # no installer, vendor, provider, delivery or materializer executes here.

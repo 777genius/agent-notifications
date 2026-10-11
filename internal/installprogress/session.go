@@ -285,8 +285,8 @@ func (v *sessionView) paint() error {
 	history := []string{}
 	if v.options.Activity != "off" && room >= 2 {
 		title := "Recent activity"
-		for _, lost := range v.s.lost {
-			if lost {
+		for client, lost := range v.s.lost {
+			if client != "global" && lost {
 				title = "Earlier checkpoints omitted"
 				break
 			}
@@ -328,11 +328,14 @@ func (v *sessionView) paint() error {
 		history = nil
 	}
 	if v.options.Activity != "off" && room > len(history) {
-		for _, lost := range v.s.lost {
-			if lost {
+		for client, lost := range v.s.lost {
+			if client != "global" && lost {
 				history = append(history, clip("* Earlier checkpoints omitted", v.width))
 				break
 			}
+		}
+		if v.s.lost["global"] && room > len(history) {
+			history = append(history, clip("* Earlier installer checkpoints omitted", v.width))
 		}
 	}
 	lines := append(history, prefix...)
@@ -395,7 +398,11 @@ func (v *sessionView) fullHistory() error {
 			continue
 		}
 		if v.s.lost[row.client] {
-			if err := writeText(v.options.Output, clients[row.client]+": earlier checkpoints omitted\n"); err != nil {
+			label := clients[row.client] + ": earlier checkpoints omitted\n"
+			if row.client == "global" {
+				label = "Earlier installer checkpoints omitted\n"
+			}
+			if err := writeText(v.options.Output, label); err != nil {
 				return err
 			}
 		}
@@ -555,7 +562,7 @@ func RunSession(ctx context.Context, path string, options Options) error {
 		if options.Transient {
 			return nil
 		}
-		if v.plain {
+		if v.plain && !options.Rich { // A rich-to-plain initial paint already emitted it.
 			if err := v.plainCurrent(); err != nil {
 				return err
 			}
