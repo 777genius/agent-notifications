@@ -386,6 +386,11 @@ def adapt(m):
     m.OwnedNotificationsSession = SDKSession
     m.OuterObservation = SDKOuter
     m.validate_installed_effects = sdk_effects
+    # Foreign preimage must retain the same exact socket object during removal.
+    preimage = inspect.getsource(m.foreign_preimage)
+    assert preimage.count("bounded_tree(root/'home')") == preimage.count('bounded_tree(profile)') == 1
+    preimage = preimage.replace("bounded_tree(root/'home')", "bounded_tree(root/'home',vendor_root=root)").replace('bounded_tree(profile)', 'bounded_tree(profile,vendor_root=root)')
+    exec(compile(preimage,'<SDK-foreign-preimage-inventory>','exec'),m.__dict__)
     lifecycle = inspect.getsource(m.finish_lifecycle)
     old = "    assert type(native_bytes) is bytes and 0 < len(native_bytes) <= LIMIT, 'actual native bytes required'"
     assert lifecycle.count(old) == 1
@@ -397,6 +402,8 @@ def adapt(m):
     assert lifecycle.count(old) == 1
     lifecycle = lifecycle.replace(old, "    assert strict_json(cache_preimage)['boot'] == hashlib.sha256(pathlib.Path('/proc/sys/kernel/random/boot_id').read_text().strip().encode()).hexdigest(), 'duplicate cache boot changed'\n    assert all(e['until'] > time.clock_gettime(time.CLOCK_BOOTTIME) for e in strict_json(cache_preimage)['entries']), 'duplicate claim expired; enabled replay forbidden'\n"+old)
     lifecycle = lifecycle.replace("        assert records == baseline, 'duplicate/disabled webhook delivery'", "        assert records == baseline, 'duplicate/disabled webhook delivery'\n        assert cache.read_bytes() == cache_preimage, 'duplicate/disabled/update/restart cache unchanged'")
+    assert lifecycle.count("bounded_tree(root/'home')") == lifecycle.count("bounded_tree(root/'home/.cursor')") == 1
+    lifecycle = lifecycle.replace("bounded_tree(root/'home')", "bounded_tree(root/'home',vendor_root=root)").replace("bounded_tree(root/'home/.cursor')", "bounded_tree(root/'home/.cursor',vendor_root=root)")
     exec(compile(lifecycle, '<SDK-lifecycle>', 'exec'), m.__dict__)
     main = inspect.getsource(m.main)
     main = main.replace('    observation = ControllerObservation(socket.socket(fileno=args.control_fd),CASE_CLOCK)', '    observation = ControllerObservation(socket.socket(fileno=args.control_fd),CASE_CLOCK)\n    globals()["SDK_CONTROLLER"] = observation')
