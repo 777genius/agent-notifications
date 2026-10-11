@@ -1164,11 +1164,25 @@ jobs:
               for name,package_name in packages.items():
                   path = pathlib.Path('/usr/bin')/name
                   assert path.resolve(strict=True) == path and stat.S_ISREG(path.stat().st_mode) and os.access(path,os.X_OK)
-                  owner = run(['/usr/bin/dpkg-query','--search',str(path)]).decode().splitlines()
-                  assert owner == [package_name+': '+str(path)], 'official standard package ownership'
+                  registered = pathlib.Path('/bin/ip') if name == 'ip' else path
+                  if name == 'ip':
+                      assert package_name == 'iproute2' and registered.resolve(strict=True) == path
+                      def ip_identity(p):
+                          s = p.stat()
+                          assert stat.S_ISREG(s.st_mode) and s.st_uid == s.st_gid == 0
+                          return (s.st_dev,s.st_ino,s.st_mode,s.st_uid,s.st_gid,s.st_size,s.st_mtime_ns,s.st_ctime_ns)
+                      ip_before = ip_identity(path)
+                      assert ip_identity(registered) == ip_before, 'ip package alias is another object'
+                      ip_sha = digest(path)
+                      assert digest(registered) == ip_sha, 'ip package alias bytes differ'
+                  owner = run(['/usr/bin/dpkg-query','--search',str(registered)]).decode().splitlines()
+                  assert owner == [package_name+': '+str(registered)], 'official standard package ownership'
                   metadata = run(['/usr/bin/dpkg-query','--show','--showformat=${binary:Package}\t${Version}\t${db:Status-Status}\n',package_name])
                   fields = metadata.decode().strip().split('\t')
                   assert len(fields) == 3 and fields[0] == package_name and fields[2] == 'installed'
+                  if name == 'ip':
+                      assert registered.resolve(strict=True) == path and ip_identity(path) == ip_identity(registered) == ip_before
+                      assert digest(path) == digest(registered) == ip_sha, 'ip object changed during package qualification'
                   tools[name] = {'path':str(path),'sha256':digest(path),'package':package_name,'version':fields[1],
                                  'installedMetadataSHA256':hashlib.sha256(metadata).hexdigest()}
               assert tools['strace']['version'] == '6.8-0ubuntu2'
