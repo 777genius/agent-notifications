@@ -64,15 +64,39 @@ func TestSessionStartupFoldsOneFrameAndPlainReplayStaysQuiet(t *testing.T) {
 }
 
 func TestSessionStoppedSmallTerminalEmitsOnePlainFinalSnapshot(t *testing.T) {
-	journal := "snapshot\tcodex\tcomplete\tcompleted\nstop\t\t\t\n"
+	journal := "snapshot\tcodex\tcomplete\tcompleted\ntransition\tglobal\tnotification-tools\trunning\nstop\t\t\t\n"
 	for _, geometry := range [][2]int{{23, 24}, {80, 2}} {
 		var out bytes.Buffer
 		if err := RunSession(context.Background(), eventFile(t, journal), Options{Output: &out, Rich: true, Width: geometry[0], Height: geometry[1]}); err != nil {
 			t.Fatal(err)
 		}
-		if strings.Count(out.String(), "Codex CLI: complete - done\n") != 1 {
-			t.Fatalf("small-terminal final snapshot repeated: %q", out.String())
+		if strings.Count(out.String(), "Codex CLI: complete - done\n") != 1 || strings.Contains(out.String(), "Installer:") {
+			t.Fatalf("small-terminal final snapshot repeated or showed a stopped stage: %q", out.String())
 		}
+	}
+}
+
+func TestSessionLiveSmallTerminalShowsCurrentStageAndPlainReplayStaysQuiet(t *testing.T) {
+	journal := "transition\tglobal\tpreparation\trunning\ntransition\tglobal\tpreparation\tdone\ntransition\tglobal\tnotification-tools\trunning\n"
+	for _, fixture := range []struct {
+		name          string
+		width, height int
+		rich          bool
+	}{{"narrow", 23, 24, true}, {"short", 80, 2, true}, {"plain", 23, 24, false}} {
+		t.Run(fixture.name, func(t *testing.T) {
+			var out bytes.Buffer
+			options := Options{Output: &out, Rich: fixture.rich, Width: fixture.width, Height: fixture.height, Transient: true, StopFile: eventFile(t, "stop\n")}
+			if err := RunSession(context.Background(), eventFile(t, journal), options); err != nil {
+				t.Fatal(err)
+			}
+			if fixture.rich {
+				if strings.Count(out.String(), "Installer: Configuring agent notification tools - running\n") != 1 || strings.Contains(out.String(), "preparation") {
+					t.Fatalf("current stage missing, duplicated, or historical stage replayed: %q", out.String())
+				}
+			} else if out.Len() != 0 {
+				t.Fatalf("plain transient replay was not quiet: %q", out.String())
+			}
+		})
 	}
 }
 

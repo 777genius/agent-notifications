@@ -211,7 +211,7 @@ func (v *sessionView) geometry() bool {
 
 func (v *sessionView) plainCurrent() error {
 	for _, e := range v.s.rows.rows {
-		if e.client == "global" {
+		if e.client == "global" && (v.s.stopped || e.outcome != "running") {
 			continue
 		}
 		if err := writeText(v.options.Output, fmt.Sprintf("%s: %s - %s\n", clients[e.client], phases[e.phase], outcomes[e.outcome])); err != nil {

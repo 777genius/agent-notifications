@@ -97,7 +97,7 @@ def assert_dead(pid):
 
 def run_case(args, name, size=(80, 24), ui='auto', activity='compact', limit=0,
              no_color=False, dumb=False, verbose=False, fail=False, cancel=False,
-             resize=False, helper=None, terminal=True, owner_death=False, fault="", cancel_second=False, static=False, absent=False, activation="activation_timeout", shared_pending=False):
+             resize=False, helper=None, terminal=True, owner_death=False, fault="", cancel_second=False, static=False, absent=False, activation="activation_timeout", shared_pending=False, live_stage=False):
     lab = Path(tempfile.mkdtemp(prefix=name+'-TEST-', dir=args.evidence))
     home = lab/'TEST home'
     project = lab/'new TEST project'
@@ -192,6 +192,8 @@ def run_case(args, name, size=(80, 24), ui='auto', activity='compact', limit=0,
             records.append({'checkpoint': 'first-live'})
         first_pid = int((lab/'FIRST_PID').read_text())
         assert b'PRIVATE_SECRET' not in data
+        if live_stage:
+            assert data.count(b'Installer: Installing Claude notifications - running\r\n') == 1, (name, 'first live stage missing or duplicated', bytes(data))
         if cancel or owner_death:
             if owner_death:
                 os.kill(process.pid, signal.SIGKILL)
@@ -221,6 +223,8 @@ def run_case(args, name, size=(80, 24), ui='auto', activity='compact', limit=0,
             second_pid = int(second_value) if second_value else None
             if terminal:
                 records.append({'checkpoint': 'second-live'})
+            if live_stage:
+                assert data.count(b'Installer: Configuring agent notification tools - running\r\n') == 1, (name, 'second live stage missing or duplicated', bytes(data))
             if resize:
                 for cols, rows in ((50, 12), (108, 30), (32, 10)):
                     geometry(cols, rows)
@@ -350,7 +354,7 @@ os.execv(os.environ['TEST_REAL_HELPER'],[os.environ['TEST_REAL_HELPER']]+sys.arg
     old.chmod(0o700)
     receipts=[]
     for name,options in (
-        ('normal',{}),('narrow50',{'size':(50,12)}),('narrow32',{'size':(32,10)}),
+        ('normal',{}),('narrow23-live',{'size':(23,24),'live_stage':True}),('narrow50',{'size':(50,12)}),('narrow32',{'size':(32,10)}),
         ('wide',{'size':(108,30)}),('resize',{'resize':True}),('resize-static',{'resize':True,'static':True}),
         ('expanded',{'activity':'expanded'}),('off',{'activity':'off'}),
         ('count1',{'limit':1}),('count16',{'limit':16}),
