@@ -733,7 +733,7 @@ jobs:
           assert bounded_git(['rev-parse','HEAD'],41) == b'53a52623db13951bf5d763850a6139aecefea910\n', 'product HEAD changed'
           adapter_path = '.github/fixtures/cursor-installed-e/sdk_observation.py'
           adapter = bounded_git(['show',transport_sha+':'+adapter_path],65536)
-          assert hashlib.sha256(adapter).hexdigest() == '6c73f14ea87a0a35eb764da7ada783da2a309aae1c763c6944aa889e63017532'
+          assert hashlib.sha256(adapter).hexdigest() == '21e4fbaeb147694efd1ad62dd90eb46ae34cb3b2a80172b3ffd53708934a90be'
           compile(adapter,'sdk_observation.py','exec')
           adapter_file = workspace/'source/sdk_observation.py'; adapter_file.write_bytes(adapter); adapter_file.chmod(0o644)
           with open(os.environ['GITHUB_ENV'],'a') as environment:
@@ -1064,10 +1064,11 @@ jobs:
               assert run(['git','status','--porcelain=v1']) == b''
               before = tracked()
               carrier = pathlib.Path(carrier).resolve(strict=True)
-              tree = ast.parse(carrier.read_bytes())
-              literal = next(n.value.args[0].value for n in tree.body if isinstance(n,ast.Assign) and isinstance(n.targets[0],ast.Name) and n.targets[0].id == 'READBACK_SOURCE_BYTES')
-              import base64
-              bridge = base64.b64decode(literal,validate=True)
+              import importlib.util
+              sdk_spec = importlib.util.spec_from_file_location('exact_sdk_adapter',os.environ['CURSOR_SDK_ADAPTER'])
+              sdk = importlib.util.module_from_spec(sdk_spec); sdk_spec.loader.exec_module(sdk)
+              module = sdk.adapt(sdk.load_fixture(carrier))
+              bridge = module.READBACK_SOURCE_BYTES
               assert hashlib.sha256(bridge).hexdigest() == bridge_sha
               relative = '.research/tmp/TEST-cursor-readback-build'
               source_dir = pathlib.Path(relative)
@@ -1182,10 +1183,6 @@ jobs:
               (base/'tracked-protection.json').write_text(json.dumps(before,indent=2)+'\n')
               # Import only authenticated inert definitions. This calls input/source/FS
               # checks; it never calls main, native_run, CLI, a provider, or a session.
-              import importlib.util
-              spec = importlib.util.spec_from_file_location('exact_input_contract',carrier)
-              module = importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
-              module.SOURCE_SHA = SOURCE
               module.execution_inputs(str(output))
               module.qualified_runner(pathlib.Path(data['root'])/'home/.cursor',data['machineID'])
               readability = readable_inputs(data, output, carrier)
@@ -1193,7 +1190,7 @@ jobs:
               return output
 
 
-          output = prepare(os.environ['CURSOR_CARRIER'],'77030250348f8af0ee99878627b59c39cc7d658974c11adca67f7d98a4d4c8fc')
+          output = prepare(os.environ['CURSOR_CARRIER'],'023a120c75a5482d9d86b4c76a45990f7fe5dcec38b430304cf8aeab86e525ef')
           with open(os.environ['GITHUB_ENV'],'a') as environment:
               environment.write('CURSOR_EXECUTION_INPUTS='+str(output)+'\n')
           PY_PREPARE
@@ -1226,7 +1223,7 @@ jobs:
           import tarfile
 
           SOURCE = '53a52623db13951bf5d763850a6139aecefea910'
-          BRIDGE = '77030250348f8af0ee99878627b59c39cc7d658974c11adca67f7d98a4d4c8fc'
+          BRIDGE = '023a120c75a5482d9d86b4c76a45990f7fe5dcec38b430304cf8aeab86e525ef'
           FILE_LIMIT = 16 << 20
           TOTAL_LIMIT = 1 << 30
           ENTRY_LIMIT = 16384
@@ -1297,7 +1294,7 @@ jobs:
               try:
                   assert inputs['root'] == str(pathlib.Path(runner_temp) / 'TEST-cursor-installed-one')
                   assert hashlib.sha256(read_path(case, 'recipe/native_case.py')).hexdigest() == source_sha
-                  assert hashlib.sha256(read_path(case, 'recipe/sdk_observation.py')).hexdigest() == '6c73f14ea87a0a35eb764da7ada783da2a309aae1c763c6944aa889e63017532'
+                  assert hashlib.sha256(read_path(case, 'recipe/sdk_observation.py')).hexdigest() == '21e4fbaeb147694efd1ad62dd90eb46ae34cb3b2a80172b3ffd53708934a90be'
                   assert hashlib.sha256(read_path(case, 'recipe/authoritative_readback.go')).hexdigest() == BRIDGE
                   load = lambda path: strict_json(read_path(case, 'evidence/' + path))
                   joined = load('namespace-join.json')

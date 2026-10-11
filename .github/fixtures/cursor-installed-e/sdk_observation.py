@@ -28,6 +28,14 @@ def load_fixture(path):
 def adapt(m):
     # Keep product provenance exact; this changes no installed command or authority.
     m.SOURCE_SHA = SOURCE
+    # Relocate only the exact product revision in the authenticated public bridge.
+    assert m.READBACK_SOURCE_SHA256 == '77030250348f8af0ee99878627b59c39cc7d658974c11adca67f7d98a4d4c8fc'
+    assert hashlib.sha256(m.READBACK_SOURCE_BYTES).hexdigest() == m.READBACK_SOURCE_SHA256
+    old_revision = b'const productRevision = "9f014e72af510783d58d00ad3d2db455a2f8117b"'
+    assert m.READBACK_SOURCE_BYTES.count(old_revision) == 1
+    m.READBACK_SOURCE_BYTES = m.READBACK_SOURCE_BYTES.replace(old_revision, ('const productRevision = "'+SOURCE+'"').encode())
+    m.READBACK_SOURCE_SHA256 = '023a120c75a5482d9d86b4c76a45990f7fe5dcec38b430304cf8aeab86e525ef'
+    assert hashlib.sha256(m.READBACK_SOURCE_BYTES).hexdigest() == m.READBACK_SOURCE_SHA256
     # Bounded SDK runtime copies grew beyond the old 25,264,137-byte fixture.
     # The same per-file limit governs RLIMIT_FSIZE and full object readbacks;
     # the original aggregate writable-case limit remains 1 GiB.
