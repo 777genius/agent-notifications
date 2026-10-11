@@ -455,6 +455,16 @@ def adapt(m):
         return {'sha256':hashlib.sha256(raw).hexdigest(),'byteLength':len(raw),'metadata':obj,'stamp':(stamp.replace(microsecond=0),int(fraction.ljust(9,'0') or '0'))}
     m.sdk_mutation_metadata = mutation_metadata
     removal = inspect.getsource(m.classify_removal)
+    current = "pathlib.Path(AUTHORITY_BASELINE[str(root)]['fixed']['Selector'])"
+    assert removal.count(current) == 1
+    removal = removal.replace(current,"pathlib.Path(selected['selected_delivery']['cursor']['selector'])")
+    anchor = '    result = []\n    for area in ('
+    extra = "    cursor = selected['selected_delivery']['cursor']\n    managed_selector = pathlib.Path(cursor['selector'])\n    assert managed_selector.parent == pathlib.Path(binding['dataRoot']) and cursor['planned_receipt']['selector'] == str(managed_selector)\n    keys = [k for k,v in before_ledger['Consumers'].items() if strict_json(v['Registration']) == binding]\n    assert len(keys) == 1 and keys[0] == 'portable:'+before['data'][managed_selector.name]['sha256']\n    registration = before_ledger['Consumers'][keys[0]]['Registration'].encode()\n    assert managed_selector.name == 'agent-notify-'+hashlib.sha256(registration).hexdigest()+'.json' and before['data'][managed_selector.name]['byteLength'] == len(registration)\n    live = json.dumps({'cursor':binding['scopeRoot']},separators=(',',':')).encode()\n    assert selected['native_profile_root'] == selected['profile_authority']['canonical_root'] == binding['scopeRoot']\n    for name,raw in ((managed_selector.name,registration),('live-profiles.json',live)):\n        facts = before['data'][name]\n        assert name not in foreign.get('data',{}) and str((pathlib.Path(binding['dataRoot'])/name).relative_to(root/'home')) not in foreign['home']\n        assert facts['mode'] == stat.S_IFREG|0o600 and facts['uid'] == facts['gid'] == 1000 and facts['nlink'] == 1 and facts['device'] == before['data']['.']['device']\n        assert facts['sha256'] == hashlib.sha256(raw).hexdigest() and facts['byteLength'] == len(raw)\n"
+    assert removal.count(anchor) == 1; removal = removal.replace(anchor,extra+anchor)
+    anchor = "            if disposition is None and area == 'data':\n                assert old is not None"
+    extra = "            if disposition is None and area == 'data' and path == 'live-profiles.json':\n                assert old is not None and new is None, 'selected managed live profile remainder'\n                disposition = 'owned selected managed live-profile projection removed'\n"
+    assert removal.count(anchor) == 1; removal = removal.replace(anchor,extra+anchor)
+
     anchor = "            if disposition is None and area == 'profile' and path == 'hooks.json':"
     extra = "            if disposition is None and area == 'profile' and path == 'hooks.json.agentplugins.lock' and path not in foreign['profile']:\n                sdk_owned_empty_lock(old,new)\n                assert new['device'] == before['profile']['.']['device']\n                disposition = 'owned retained SDK35e nativeconfig exact hooks writer lock'\n"
     assert removal.count(anchor) == 1; removal = removal.replace(anchor,extra+anchor)
