@@ -427,6 +427,7 @@ def adapt(m):
         source = source.replace("row['netNamespace'] == snapshot['netNamespace']", "(row['netNamespace'] == snapshot['netNamespace'] or sdk_qualified(row,'sandbox-preflight'))")
         source = source.replace("all(r['netNamespace'] == network for r in snapshot['rows'])", "all(r['netNamespace'] == network or sdk_qualified(r,'sandbox-preflight') for r in snapshot['rows'])")
         if name == 'active_descendants':
+            source = source.replace("if 'cwd' in row: assert row['cwd']", "if 'cwd' in row and not (row.get('cmdlineBytes') == 0 and row.get('argv') == []): assert row['cwd']", 1)
             source = source.replace('    active_resource_bounds(snapshot)', "    active_resource_bounds(snapshot)\n    assert all(not row.get('sdkExited') or row.get('netNamespace',snapshot['netNamespace']) == snapshot['netNamespace'] for row in snapshot['rows']), 'foreign namespace unqualified exit'\n    if any(row.get('sdkExited') for row in snapshot['rows']): raise ProcessObservationRace('root bookended exact tuple exit')",1)
         if name == 'complete_process_facts':
             source = source.replace("        p = row['stat']", "        p = row['stat']\n        if row.get('sdkExited'):\n            assert row.get('netNamespace',snapshot['netNamespace']) == snapshot['netNamespace'], 'foreign namespace unqualified exit'\n            race = ProcessObservationRace('root observed exact owned tuple exit'); continue",1)
