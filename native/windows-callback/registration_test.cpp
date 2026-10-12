@@ -156,11 +156,16 @@ static void aliasContracts(const Generation& g,uint64_t end,bool chain){
   UserView view(users.h);
   std::vector<uint8_t> admittedRoute;
   const std::string foreignSID=g.sid=="S-1-5-18"?"S-1-5-19":"S-1-5-18";
+  auto trySetRoute=[&](const std::vector<uint8_t>& bytes){
+    installedBudget(end);
+    const auto status=registryStatus("RegSetValueExW",
+      RegSetValueExW(source.h,L"SymbolicLinkValue",0,REG_LINK,bytes.data(),DWORD(bytes.size())));
+    if(status==ERROR_SUCCESS)admittedRoute=bytes;
+    installedBudget(end);
+    return status;
+  };
   auto setRoute=[&](const std::vector<uint8_t>& bytes){
-    installedBudget(end);
-    require(registryStatus("RegSetValueExW",RegSetValueExW(source.h,L"SymbolicLinkValue",0,REG_LINK,bytes.data(),DWORD(bytes.size())))==ERROR_SUCCESS);
-    admittedRoute=bytes;
-    installedBudget(end);
+    require(trySetRoute(bytes)==ERROR_SUCCESS);
   };
   auto encoded=[](const std::wstring& text){
     const auto p=reinterpret_cast<const uint8_t*>(text.data());
@@ -175,6 +180,20 @@ static void aliasContracts(const Generation& g,uint64_t end,bool chain){
     missing(hive.h,L"AppUserModelId");
     require(value(foreign.h,L"sentinel")==L"unchanged");
     require(security(source.h)==sourceSecurity&&security(hive.h)==hiveSecurity&&security(foreign.h)==foreignSecurity);
+  };
+  auto refusedRouteParser=[&]{
+    installedBudget(end);
+    OperatorDiagnostic diagnostic;
+    bool rejected=false;
+    try{
+      ClassesAnchor anchor;
+      anchor.open(g.sid,end,KEY_READ,&diagnostic);
+    }catch(const std::runtime_error&){
+      require(!strcmp(diagnostic.phase,"registry_classes_link_value"));
+      rejected=true;
+    }
+    installedBudget(end);
+    require(rejected);
   };
   if(chain){
     // Breakage: the fixed target itself is a link and a chained target is followed.
@@ -207,14 +226,34 @@ static void aliasContracts(const Generation& g,uint64_t end,bool chain){
       {"alias_suffix_target",encoded(route+L"\\Foreign")},
       {"alias_embedded_nul",encoded(embedded)},
       {"alias_multiple_nul",encoded(route+std::wstring(2,L'\0'))},
-      {"alias_odd_bytes",odd},
       {"alias_surrogate",surrogate}
     };
     for(const auto& item : malformed){
       stage(item.first);
       setRoute(item.second);
-      refused([&]{ClassesAnchor anchor;anchor.open(g.sid,end,KEY_READ);},end);
+      refusedRouteParser();
       unchanged();
+      std::cout<<"TEST alias_malformed_fixture_constructed stage="<<item.first
+        <<" parser_contract=run parser_rejection=observed\n";
+    }
+    // REG_LINK is UTF-16 data. Windows refuses this odd-byte fixture at the
+    // registry boundary, so it never reaches ClassesAnchor and must not be
+    // reported as parser rejection. If a Windows version constructs it, the
+    // production parser still has to reject it exactly like other malformed
+    // values.
+    stage("alias_odd_bytes");
+    const auto oddStatus=trySetRoute(odd);
+    if(oddStatus==ERROR_ACCESS_DENIED){
+      unchanged();
+      std::cout<<"TEST alias_malformed_fixture_unconstructable stage=alias_odd_bytes"
+        <<" api=RegSetValueExW result="<<oddStatus
+        <<" parser_contract=not_run parser_rejection=not_evaluated\n";
+    }else{
+      require(oddStatus==ERROR_SUCCESS);
+      refusedRouteParser();
+      unchanged();
+      std::cout<<"TEST alias_malformed_fixture_constructed stage=alias_odd_bytes"
+        <<" parser_contract=run parser_rejection=observed\n";
     }
     stage("alias_foreign_owner_refused");
     setRoute(encoded(route));
