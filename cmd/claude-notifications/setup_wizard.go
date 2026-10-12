@@ -1097,7 +1097,13 @@ func commitConfirmedCursorConsent(ctx context.Context, r setupwizard.Request, re
 			result.Generation = staged.Generation
 		}
 	}
-	ledger, err := installruntime.Commit(ctx, installruntime.Request{ControlRoot: b.ControlRoot, Owner: b.Owner, RuntimeRoot: b.RuntimeRoot, ConsumerID: key, Consumer: consumer, PolicyOnly: true, RefreshOnly: true, ExpectedGeneration: &result.Generation, ExpectedPolicy: &policy, PolicyFields: patch})
+	var seedEnabled *bool
+	if i.MCP.AllowPolicySeed && !i.Initial.Policy.Exists {
+		// Apply the absent-policy seed shown in the immutable confirmation, after
+		// physical qualification. Existing policy and intervening edits stay fenced.
+		seedEnabled = &i.MCP.SeedEnabled
+	}
+	ledger, err := installruntime.Commit(ctx, installruntime.Request{ControlRoot: b.ControlRoot, Owner: b.Owner, RuntimeRoot: b.RuntimeRoot, ConsumerID: key, Consumer: consumer, PolicyOnly: true, RefreshOnly: true, ExpectedGeneration: &result.Generation, ExpectedPolicy: &policy, PolicyEnabled: seedEnabled, PolicyFields: patch})
 	if err != nil {
 		return deny(err)
 	}
