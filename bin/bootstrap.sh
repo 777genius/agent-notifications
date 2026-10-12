@@ -3152,7 +3152,9 @@ prepare_cursor_runtime() {
     fi
     fetch_bootstrap_file "${BOOTSTRAP_RAW_BASE_URL:-$BOOTSTRAP_RAW_CONTENT_URL}/$BOOTSTRAP_BUNDLE_COMMIT/bin/bootstrap.sh" \
         "$_CONFIG_STAGE/cursor-bootstrap-resume.sh" || return 1
-    install_runtime cursor "$_CONFIG_STAGE/install.sh" "$_FROZEN_RUNTIME" --force || return 1
+    # The runtime lives below the private control root; the shell writer creates
+    # its parents before the Go writer validates their permissions.
+    (umask 077; install_runtime cursor "$_CONFIG_STAGE/install.sh" "$_FROZEN_RUNTIME" --force) || return 1
     runtime=$("$_CONFIG_HELPER" config installer runtime-root "$_FROZEN_CONTROL") || return 1
     [ "$runtime" = "$_FROZEN_RUNTIME" ] && cmp -s "$_CONFIG_HELPER" "$runtime/$primary" || return 1
     _CURSOR_RUNTIME_PREPARED=true
