@@ -1590,7 +1590,7 @@ print_success() {
             codex|both)
                 printf '  Codex - installed; restart required.\n'
                 printf '    Agent notification tool: %s.\n' "$CODEX_AGENT_NOTIFY_STATUS"
-                printf '    Run /hooks in Codex, review the entries and trust them.\n' ;;
+                printf '  Run /hooks in Codex, review the entries and trust them.\n' ;;
         esac
         print_delivery_note
         if [ "${BOOTSTRAP_VERBOSE:-0}" = 1 ]; then
