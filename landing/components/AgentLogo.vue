@@ -7,7 +7,7 @@ const base = useRuntimeConfig().app.baseURL;
     class="agent-logo"
     :src="`${base}agents/${agent}.${agent === 'claude' ? 'png' : 'svg'}`"
     :alt="agent === 'claude' ? 'Claude' : agent === 'codex' ? 'Codex CLI' : agent === 'opencode' ? 'OpenCode' : agent === 'cursor' ? 'Cursor CLI' : 'Gemini CLI'"
-    :title="agent === 'gemini' ? 'Gemini CLI (Linux / Windows)' : undefined"
+    :title="agent === 'gemini' ? 'Gemini CLI (macOS / Linux / Windows)' : undefined"
     width="28"
     height="28"
   />

@@ -70,7 +70,7 @@ Use `--product claude` or `--product both` for Claude or Claude + Codex. For Cla
 (set -o pipefail; curl -fsSL https://agent-notifications.com/install.sh | bash -s -- --products claude,codex,opencode --desktop)
 ```
 
-On Linux/Windows, add `,gemini` to `--products` for all four agents, or use `--product gemini` for Gemini only. Fresh OpenCode/Gemini setup defaults to desktop notifications with webhooks off; updates preserve saved channel choices when no channel flags are supplied. Explicit flags replace the channel pair: `--desktop` enables desktop only, `--webhook` enables webhooks only, and both enable both. Webhook destinations need separate configuration. These flags do not change Claude/Codex channels.
+On macOS/Linux/Windows, add `,gemini` to `--products` for all four agents, or use `--product gemini` for Gemini only. Fresh OpenCode/Gemini setup defaults to desktop notifications with webhooks off; updates preserve saved channel choices when no channel flags are supplied. Explicit flags replace the channel pair: `--desktop` enables desktop only, `--webhook` enables webhooks only, and both enable both. Webhook destinations need separate configuration. These flags do not change Claude/Codex channels.
 
 Claude/Codex setup also installs the `agent-notify` MCP server and `agent-notifications` skill so an agent can notify you during a task. Open a new session after setup. When an existing managed MCP installation or binding is detected, automatic setup keeps absent clients off; use `--agent-notify` to add them explicitly. Use `--skip-agent-notify` to skip their setup for that run; it neither removes an existing MCP installation nor records a permanent opt-out. [Setup and recovery details](docs/INSTALLATION.md).
 

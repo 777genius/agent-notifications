@@ -1,7 +1,7 @@
 # Gemini CLI notifications
 
 Gemini support is available on macOS amd64/arm64, Linux amd64/arm64 and Windows amd64 through the
-[platform channels](PLATFORM_RELEASE_CHANNELS.md), currently selecting v1.49.1.
+[platform channels](PLATFORM_RELEASE_CHANNELS.md).
 
 The integration was tested with exact **Gemini CLI 0.62.0** on macOS arm64/Intel, Linux amd64/arm64 and Windows amd64. Tests use the real CLI and its permission UI with a deterministic local
 provider; they do not call the live Google model service. See qualification by OS below.
