@@ -85,7 +85,7 @@ class PreparationTests(unittest.TestCase):
             lab, = state.glob('AllAgents-TEST-*')
             self.assertIn('Preparation failed: source changed', (lab/'preparation.log').read_text())
             self.assertIn(str(lab/'preparation.log'), stdout.getvalue())
-            self.assertIn('native app registration may exist', stdout.getvalue())
+            self.assertIn('keep while native app is registered', stdout.getvalue())
             self.assertIn('Preview failed: source changed', stderr.getvalue())
 
     def test_credential_denied_state_is_rejected_before_creating_profile(self):
