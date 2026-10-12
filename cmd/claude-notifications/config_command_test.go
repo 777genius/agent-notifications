@@ -111,3 +111,29 @@ func TestConfigInspectAndEditPreserveUnexpandedSecrets(t *testing.T) {
 		t.Fatal("conflict changed config")
 	}
 }
+
+func TestConfigInitJSONFailureDoesNotDiscloseImportContents(t *testing.T) {
+	testenv.Set(t, t.TempDir())
+	dir := t.TempDir()
+	target := filepath.Join(dir, "config.json")
+	source := filepath.Join(dir, "source.json")
+	t.Setenv("AGENT_NOTIFICATIONS_CONFIG", target)
+	const canary = "CANARY_import_URL_header_payload"
+	if err := os.WriteFile(source, []byte(`{"`+canary+`":"unfinished`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var out, stderr bytes.Buffer
+	if code := configCommand([]string{"init", "--json", "--from", source}, strings.NewReader(""), &out, &stderr); code == 0 {
+		t.Fatal("accepted malformed import")
+	}
+	if strings.Contains(out.String()+stderr.String(), canary) || stderr.String() != "ConfigInvalid\n" {
+		t.Fatalf("unsafe failure output: %q %q", out.String(), stderr.String())
+	}
+	var failure map[string]json.RawMessage
+	if err := json.Unmarshal(out.Bytes(), &failure); err != nil || len(failure) != 1 || string(failure["errorCode"]) != `"ConfigInvalid"` {
+		t.Fatalf("wrong failure envelope: %s (%v)", out.String(), err)
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatal("failed import created target")
+	}
+}
