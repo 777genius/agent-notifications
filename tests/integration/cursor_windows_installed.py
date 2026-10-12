@@ -3,17 +3,22 @@ import atexit, ast, base64, hashlib, http.server, json, os, pathlib
 import subprocess, threading, time, uuid
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
+_diagnostic = None
 
-def prepare(root, agent):
+def private_root(root):
+    global _diagnostic
     # Reuse the release E2E's exact TEST-root ACL preparation.
     source = REPO/'scripts/release-artifact-e2e.py'
     namespace = {'os': os, 'subprocess': subprocess, 'Path': pathlib.Path}
     for node in ast.parse(source.read_text()).body:
-        if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == '_WINDOWS_PRIVATE_ROOT_SCRIPT' for t in node.targets):
+        if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id in ('_WINDOWS_PRIVATE_ROOT_SCRIPT','_WINDOWS_ACL_DIAGNOSTIC_SCRIPT') for t in node.targets):
             exec(compile(ast.Module(body=[node], type_ignores=[]), str(source), 'exec'), namespace)
-        if isinstance(node, ast.FunctionDef) and node.name == '_windows_private_scratch_root':
+        if isinstance(node, ast.FunctionDef) and node.name in ('_windows_private_scratch_root','_windows_acl_diagnostic'):
             exec(compile(ast.Module(body=[node], type_ignores=[]), str(source), 'exec'), namespace)
     namespace['_windows_private_scratch_root'](root)
+    _diagnostic = namespace['_windows_acl_diagnostic']
+
+def prepare(root, agent):
     binary = root/'stage/claude-notifications-windows-amd64.exe'
     package = root/'agent-notify-portable-windows-amd64.zip'
     assert binary.is_file() and package.is_file()
@@ -32,6 +37,8 @@ def prepare(root, agent):
         (root/(name+'.stdout')).write_bytes(p.stdout)
         (root/(name+'.stderr')).write_bytes(p.stderr)
         results.append({'name': name, 'exit': p.returncode})
+        if p.returncode and b'ConfigPermissionDenied' in p.stderr:
+            _diagnostic(cfg, 'Cursor TEST config ancestor ACL')
         assert p.returncode == 0, (name, p.returncode, p.stdout[-2000:], p.stderr[-2000:])
         return p.stdout
     cli('runtime-install', ['internal-install-runtime','--stage',str(binary.parent),'--entry',binary.name,'--target',str(target),'--control-root',str(control)])

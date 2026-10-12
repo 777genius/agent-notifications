@@ -5,6 +5,9 @@ from ctypes import wintypes
 
 ROOT = pathlib.Path(os.environ['CURSOR_TEST_ROOT']).resolve()
 ROOT.mkdir(parents=True, exist_ok=True)
+if os.environ.get('CURSOR_TEST_INSTALLED') == '1':
+    import cursor_windows_installed as installed
+    installed.private_root(ROOT)
 (ROOT/'home').mkdir()
 (ROOT/'workspace').mkdir()
 assert os.name == 'nt' and ROOT.name.startswith('TEST-')
@@ -35,7 +38,6 @@ document = {'version': 1, 'hooks': {'stop': [{'command': command}]}}
 (profile/'hooks.json').write_text(json.dumps(document))
 installed_test = None
 if os.environ.get('CURSOR_TEST_INSTALLED') == '1':
-    import cursor_windows_installed as installed
     installed_test = installed.prepare(ROOT, pathlib.Path(os.environ['CURSOR_TEST_AGENT']).resolve())
 condition = threading.Condition()
 state = {'run': None, 'stop': False, 'close': False, 'sent': False, 'terminal': False, 'error': None}

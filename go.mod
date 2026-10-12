@@ -5,7 +5,7 @@ go 1.25.8
 require (
 	github.com/777genius/plugin-kit-ai/cli v0.0.0-20261009180127-66c4943e0c83
 	github.com/777genius/plugin-kit-ai/install/integrationctl v0.1.1-0.20261011092622-35e444fdf875
-	github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins v0.0.0-20261012083848-61c4a8d9a1d3
+	github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins v0.0.0-20261012090029-ed2537a09fd0
 	github.com/777genius/plugin-kit-ai/sdk v1.2.1-0.20261002230153-01f7fced8098
 	github.com/creack/pty v1.1.24
 	github.com/esiqveland/notify v0.14.0
