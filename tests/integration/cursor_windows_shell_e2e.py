@@ -160,9 +160,11 @@ argv=[str(agent),'--endpoint','http://127.0.0.1:'+str(server.server_port),
  '--output-format','json','TEST deterministic stop mechanics']
 assert all(not any(c in v for c in '%!&|<>^\r\n') for v in argv)
 gate=ROOT/'TEST-gate.cmd'
-gate.write_text('@echo off\r\nset /p TEST_GATE=\r\ncall '+subprocess.list2cmdline(argv)+'\r\nexit /b %ERRORLEVEL%\r\n')
+gate.write_text('@echo off\r\necho TEST_GATE_READY\r\nset /p TEST_GATE=\r\necho TEST_NATIVE_BEGIN\r\ncall '+subprocess.list2cmdline(argv)+'\r\necho TEST_NATIVE_END\r\nexit /b %ERRORLEVEL%\r\n')
 # The fresh Windows home/profile/appdata contains no user credentials.
 env={k:os.environ[k] for k in ('SystemRoot','WINDIR','COMSPEC','PATH','PATHEXT') if k in os.environ}
+(ROOT/'localappdata').mkdir()
+(ROOT/'appdata').mkdir()
 env.update(HOME=str(ROOT/'home'),USERPROFILE=str(ROOT/'home'),LOCALAPPDATA=str(ROOT/'localappdata'),
  APPDATA=str(ROOT/'appdata'),TEMP=str(ROOT),TMP=str(ROOT),CI='1',
  AGENT_CLI_CREDENTIAL_STORE='file',CURSOR_AUTH_TOKEN='TEST-loopback-not-a-secret')

@@ -26,6 +26,7 @@ jobs:
           Invoke-WebRequest -Uri 'https://downloads.cursor.com/lab/2026.10.01-e373342/windows/x64/agent-cli-package.zip' -OutFile $archive -TimeoutSec 60
           if ((Get-Item $archive).Length -ne 77156248) { throw 'Unexpected Cursor archive length' }
           (Get-FileHash $archive -Algorithm SHA256).Hash | Set-Content (Join-Path $root 'archive-sha256.txt')
+          if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLower() -ne '31896ce9a43f63c8ae7ff3c4bee868213d6d02d60fb49908bef6dc91d582f6ee') { throw 'Unexpected official Windows archive hash' }
           Expand-Archive -Path $archive -DestinationPath $root
           $agent = Join-Path $root 'dist-package/cursor-agent.cmd'
           $index = Join-Path $root 'dist-package/index.js'
