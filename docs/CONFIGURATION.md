@@ -55,6 +55,29 @@ Existing L with v1-shaped JSON remains readable by the old Go reader, which igno
 
 For support, share only `config inspect --json`, never `cat` of config; keep saved diagnostics private and review paths before posting. The response includes selection (path/source/exists/diagnostics), revision, schemaVersion, valid, optional errorCode, and safe settings: desktopEnabled, desktopSound, volume and known-status enabled/desktopEnabled/webhookEnabled. It omits free-form sounds, webhook secrets/payloads and unknown fields.
 
+On Windows, `ConfigPublicReadable` is a warning about read grants on the selected
+configuration file, not a check of `%APPDATA%` or the entire profile. It does not
+by itself reject a hook read. `ConfigPermissionDenied` can instead come from an
+OS access denial, the config/lock ACL, or a writable ancestor. Managed reads and
+writes inspect each directory component below the volume root, reject reparse
+points and unrelated write/delete/ACL-change grants, and pin directories against
+replacement. Initialization also checks `%USERPROFILE%` to coordinate the
+`.agent-notifications-config.lock` selection guard. An unrelated read/execute
+grant on an ancestor (including `CodexSandboxUsers:(RX)`) is allowed. `OWNER
+RIGHTS` grants apply to the actual object owner; they are allowed when that owner
+is trusted. New config and lock files grant access only to the current user and
+SYSTEM; existing ACLs are never repaired automatically.
+
+Inspect permissions with PowerShell `Get-Acl -LiteralPath <path>` or
+`icacls <path>` for the selected file, its `.lock` sibling, containing directories,
+and the profile guard. Repair only the object carrying the unexpected grant;
+do not remove read access from all of `%APPDATA%` or the profile. Keep the current
+user and SYSTEM access, and preserve existing config contents. After repair,
+run `config init` and `config inspect --json`. To inspect managed setup after
+`installation needs inspection`, run `setup-notifications status --json`
+(optionally `--control-root <absolute managed control directory>`).
+`--provider claude` belongs to configure/register operations, not status.
+
 The following JSON illustrates the schema. Do not replace your existing document with it; apply only explicitly requested leaf edits:
 
 ```json
