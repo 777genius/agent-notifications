@@ -67,6 +67,12 @@ func privateSecurity(directory bool) (*windows.SecurityAttributes, error) {
 	}
 	return &windows.SecurityAttributes{Length: uint32(unsafe.Sizeof(windows.SecurityAttributes{})), SecurityDescriptor: sd}, nil
 }
+func windowsPermissionDenied(path, reason, trustee, owner string, mask uint32, cause error) *Error {
+	e := sanitizedError(ConfigPermissionDenied, path, 0, "windows_acl", cause)
+	e.permissionFailure = &PermissionFailure{ObjectPath: path, Reason: reason, TrusteeSID: trustee, OwnerSID: owner, AccessMask: mask}
+	return e
+}
+
 func winOpen(path string, access, creation, flags uint32, private bool) (*os.File, error) {
 	name, err := windowsStorePath(path)
 	if err != nil {
@@ -81,6 +87,9 @@ func winOpen(path string, access, creation, flags uint32, private bool) (*os.Fil
 	}
 	h, err := windows.CreateFile(name, access, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE, sa, creation, flags|windows.FILE_FLAG_OPEN_REPARSE_POINT, 0)
 	if err != nil {
+		if errors.Is(err, windows.ERROR_ACCESS_DENIED) {
+			return nil, windowsPermissionDenied(path, "os_access_denied", "", "", 0, err)
+		}
 		return nil, err
 	}
 	f := os.NewFile(uintptr(h), path)
@@ -102,6 +111,9 @@ func winOpen(path string, access, creation, flags uint32, private bool) (*os.Fil
 func checkWindowsACL(f *os.File, private bool) error {
 	sd, err := windows.GetSecurityInfo(windows.Handle(f.Fd()), windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION)
 	if err != nil {
+		if errors.Is(err, windows.ERROR_ACCESS_DENIED) {
+			return windowsPermissionDenied(f.Name(), "os_access_denied", "", "", 0, err)
+		}
 		return err
 	}
 	user, err := windows.GetCurrentProcessToken().GetTokenUser()
@@ -114,14 +126,14 @@ func checkWindowsACL(f *os.File, private bool) error {
 	}
 	trustedOwner := owner.Equals(user.User.Sid) || owner.String() == "S-1-5-18" || owner.String() == "S-1-5-32-544"
 	if private && !trustedOwner {
-		return &Error{Code: ConfigPermissionDenied}
+		return windowsPermissionDenied(f.Name(), "untrusted_owner", "", owner.String(), 0, nil)
 	}
 	acl, _, err := sd.DACL()
 	if err != nil {
 		return err
 	}
 	if acl == nil {
-		return &Error{Code: ConfigPermissionDenied}
+		return windowsPermissionDenied(f.Name(), "null_dacl", "", "", 0, nil)
 	}
 	for i := uint32(0); i < uint32(acl.AceCount); i++ {
 		var ace *windows.ACCESS_ALLOWED_ACE
@@ -135,7 +147,7 @@ func checkWindowsACL(f *os.File, private bool) error {
 			continue
 		}
 		if ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE {
-			return &Error{Code: ConfigPermissionDenied}
+			return windowsPermissionDenied(f.Name(), "unsupported_ace", "", "", 0, nil)
 		}
 		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
 		// OWNER RIGHTS applies to the object's actual owner, not to a public
@@ -155,8 +167,12 @@ func checkWindowsACL(f *os.File, private bool) error {
 		if !private && (sid.String() == "S-1-5-32-544" || strings.HasPrefix(sid.String(), "S-1-5-80-")) {
 			continue
 		}
-		if uint32(ace.Mask)&mask != 0 {
-			return &Error{Code: ConfigPermissionDenied}
+		if rejected := uint32(ace.Mask) & mask; rejected != 0 {
+			reason := "unrelated_write_grant"
+			if rejected&(windows.FILE_WRITE_DATA|windows.FILE_APPEND_DATA|0x40|windows.DELETE|windows.WRITE_DAC|windows.WRITE_OWNER|windows.GENERIC_WRITE|windows.GENERIC_ALL) == 0 {
+				reason = "private_read_grant"
+			}
+			return windowsPermissionDenied(f.Name(), reason, sid.String(), "", rejected, nil)
 		}
 	}
 	return nil
@@ -244,7 +260,7 @@ func openStoreParent(path string, create bool) (*storeParent, error) {
 		return fail(e)
 	}
 	if !owner.Equals(user.User.Sid) && owner.String() != "S-1-5-18" && owner.String() != "S-1-5-32-544" {
-		return fail(&Error{Code: ConfigPermissionDenied, Path: path})
+		return fail(windowsPermissionDenied(path, "untrusted_owner", "", owner.String(), 0, nil))
 	}
 	return p, nil
 }

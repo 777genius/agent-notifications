@@ -58,7 +58,17 @@ For support, share only `config inspect --json`, never `cat` of config; keep sav
 On Windows, `ConfigPublicReadable` is a warning about read grants on the selected
 configuration file, not a check of `%APPDATA%` or the entire profile. It does not
 by itself reject a hook read. `ConfigPermissionDenied` can instead come from an
-OS access denial, the config/lock ACL, or a writable ancestor. Managed reads and
+OS access denial, the config/lock ACL, or a writable ancestor. `config init`
+and failed `config inspect` now print an ACL rejection's actual object path,
+reason, and trustee SID (or owner SID for an owner rejection). `config init
+--json` and failed `config inspect --json` include optional `permissionFailure`
+with `objectPath`, `reason`, and available `trusteeSid`, `ownerSid`, `accessMask`.
+The mask contains the rejected rights, not the whole grant. OS denial cannot
+identify an account and omits SID/mask. Account names are not resolved; match the
+SID against `Get-Acl`/`icacls` locally, including unresolved SIDs. Parser/flag
+errors remain content-free, and hooks retain their existing output behavior.
+A genuinely absent config still inspects as defaults; inspect does not test
+whether initialization could write it. Managed reads and
 writes inspect each directory component below the volume root, reject reparse
 points and unrelated write/delete/ACL-change grants, and pin directories against
 replacement. Initialization also checks `%USERPROFILE%` to coordinate the

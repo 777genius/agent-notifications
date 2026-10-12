@@ -185,12 +185,30 @@ def main():
                     _windows_writable_profile(home)
                     # Repairing APPDATA alone cannot fix the writable home.
                     _windows_private_scratch_root(Path(env['APPDATA']))
-                    denied = run('config', 'init', success=False)
-                    assert 'ConfigPermissionDenied' in denied.stderr, denied
+                    denied = run('config', 'init', '--json', success=False)
+                    failure = json.loads(denied.stdout)
+                    detail = failure['permissionFailure']
+                    assert failure['errorCode'] == 'ConfigPermissionDenied', failure
+                    assert Path(detail['objectPath']) == home, detail
+                    assert detail['trusteeSid'] == 'S-1-1-0', detail
+                    assert detail['reason'] == 'unrelated_write_grant', detail
+                    assert detail['accessMask'] & 0x40, detail
+                    assert 'objectPath=' + json.dumps(str(home)) in denied.stderr, denied.stderr
+                    assert 'S-1-1-0' in denied.stderr, denied.stderr
                     assert not (home / '.agent-notifications-config.lock').exists()
                     env['AGENT_NOTIFICATIONS_CONFIG'] = str(Path(env['APPDATA']) / 'agent-notifications' / 'config.json')
-                    denied = run('config', 'init', success=False)
-                    assert 'ConfigPermissionDenied' in denied.stderr, denied
+                    denied = run('config', 'init', '--json', success=False)
+                    assert json.loads(denied.stdout)['permissionFailure'] == detail, denied.stdout
+                    # An existing managed config encounters the same ancestor
+                    # on reads. Its safe inspection must not disclose contents.
+                    blocked = Path(env['AGENT_NOTIFICATIONS_CONFIG'])
+                    blocked.parent.mkdir()
+                    blocked.write_text('{"future":"ACL_DIAGNOSTIC_SECRET_CANARY"}')
+                    Path(str(blocked) + '.lock').write_text('')
+                    inspected = run('config', 'inspect', '--json', success=False)
+                    assert json.loads(inspected.stdout)['permissionFailure'] == detail, inspected.stdout
+                    assert 'ACL_DIAGNOSTIC_SECRET_CANARY' not in inspected.stdout + inspected.stderr
+                    assert blocked.read_text() == '{"future":"ACL_DIAGNOSTIC_SECRET_CANARY"}'
                     # Explicit selection outside that ancestry can skip the
                     # unavailable profile guard and retain its private target lock.
                     safe = root / 'sandbox-private-config'
