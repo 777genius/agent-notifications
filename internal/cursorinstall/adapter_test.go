@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"testing"
 
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/adapters/pathpolicy"
@@ -67,7 +68,11 @@ func refusalFixture(t *testing.T) (Authority, func()) {
 	if err := os.Mkdir(profile, 0700); err != nil {
 		t.Fatal(err)
 	}
-	executable := filepath.Join(root, "TEST-observer")
+	name := "TEST-observer"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	executable := filepath.Join(root, name)
 	body := []byte("TEST fixed executable bytes; never executed\n")
 	for path, content := range map[string][]byte{executable: body, filepath.Join(profile, "hooks.json"): []byte(`{"version":1,"hooks":{}}`), filepath.Join(root, "TEST-binding.json"): []byte("TEST binding preserved\n")} {
 		if err := os.WriteFile(path, content, 0700); err != nil {
