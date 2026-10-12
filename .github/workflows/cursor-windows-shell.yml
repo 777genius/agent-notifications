@@ -24,7 +24,9 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $root = Join-Path $env:RUNNER_TEMP ('TEST-cursor-windows-' + [Guid]::NewGuid())
+          # RUNNER_TEMP on D: grants unprivileged DeleteChild on ancestors.
+          # Use the native Temp hierarchy already qualified by release E2E.
+          $root = Join-Path ([System.IO.Path]::GetTempPath()) ('TEST-cursor-windows-' + [Guid]::NewGuid())
           New-Item -ItemType Directory -Path $root | Out-Null
           $archive = Join-Path $root 'agent-cli-package.zip'
           Invoke-WebRequest -Uri 'https://downloads.cursor.com/lab/2026.10.01-e373342/windows/x64/agent-cli-package.zip' -OutFile $archive -TimeoutSec 60
