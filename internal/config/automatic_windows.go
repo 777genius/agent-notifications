@@ -6,6 +6,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
+	"syscall"
 
 	"golang.org/x/sys/windows"
 )
@@ -25,7 +27,7 @@ func nativeWindowsAutomaticAnchor() (windowsAutomaticAnchor, error) {
 }
 
 func windowsAutomaticAnchorForRoot(root string, provided bool) (windowsAutomaticAnchor, error) {
-	native, err := windows.KnownFolderPath(windows.FOLDERID_ProgramData, 0)
+	native, err := nativeWindowsProgramDataPath()
 	if err != nil {
 		return windowsAutomaticAnchor{}, err
 	}
@@ -41,6 +43,20 @@ func windowsAutomaticAnchorForRoot(root string, provided bool) (windowsAutomatic
 	}
 	root = filepath.Clean(root)
 	return windowsAutomaticAnchor{root: root, dir: filepath.Join(root, "agent-notifications-"+user.User.Sid.String()), native: sameStorePath(root, filepath.Clean(native), "windows")}, nil
+}
+
+func nativeWindowsProgramDataPath() (string, error) {
+	// KnownFolder requires COM on the calling thread. Preserve an existing
+	// apartment and balance only the initialization reference acquired here.
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	err := windows.CoInitializeEx(0, windows.COINIT_MULTITHREADED)
+	if err == nil || errors.Is(err, syscall.Errno(1)) { // S_OK or S_FALSE.
+		defer windows.CoUninitialize()
+	} else if !errors.Is(err, syscall.Errno(0x80010106)) { // RPC_E_CHANGED_MODE: already initialized.
+		return "", err
+	}
+	return windows.KnownFolderPath(windows.FOLDERID_ProgramData, 0)
 }
 
 func snapshotWindowsAutomatic(e *EnvSnapshot) {

@@ -6,6 +6,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
+	"syscall"
 	"testing"
 
 	"golang.org/x/sys/windows"
@@ -70,7 +72,7 @@ func TestWindowsAutomaticPinSkipsBusyChild(t *testing.T) {
 // Read-only native coverage catches locked system entries and the real volume
 // root spelling before the binary delivery qualification creates any state.
 func TestWindowsAutomaticNativeAnchorReadOnly(t *testing.T) {
-	root, err := windows.KnownFolderPath(windows.FOLDERID_ProgramData, 0)
+	root, err := nativeWindowsProgramDataPath()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,6 +88,25 @@ func TestWindowsAutomaticNativeAnchorReadOnly(t *testing.T) {
 	if err := anchor.checkSelection(filepath.Join(anchor.dir, "config.json"), false); err != nil {
 		t.Fatalf("native selection: %T %v (%#v)", err, err, err)
 	}
+}
+
+func TestWindowsAutomaticExistingCOMApartment(t *testing.T) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	err := windows.CoInitializeEx(0, windows.COINIT_APARTMENTTHREADED)
+	if err != nil && !errors.Is(err, syscall.Errno(1)) {
+		t.Fatal(err)
+	}
+	defer windows.CoUninitialize()
+	if _, err := nativeWindowsProgramDataPath(); err != nil {
+		t.Fatal(err)
+	}
+	// The helper must leave its caller's apartment initialized.
+	err = windows.CoInitializeEx(0, windows.COINIT_APARTMENTTHREADED)
+	if !errors.Is(err, syscall.Errno(1)) {
+		t.Fatalf("caller apartment lost: %v", err)
+	}
+	windows.CoUninitialize()
 }
 
 // Each assertion catches an actual security boundary: ordinary attribute-write
