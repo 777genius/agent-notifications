@@ -249,9 +249,11 @@ func retainedPortablePrimaryFiles(l Ledger, oldRoot, newRoot, movingID string, s
 	}
 	retained := make(map[string]File)
 	for id, consumer := range l.Consumers {
-		if id == movingID || consumer.RuntimeRoot != oldRoot {
+		retainedSender := strings.HasPrefix(id, "portable:") || id == "opencode-notifications"
+		if id == movingID || (consumer.RuntimeRoot != oldRoot && (!retainedSender || !versionedClaudeCachePeers(consumer.RuntimeRoot, newRoot))) {
 			continue
 		}
+		retainedRoot := consumer.RuntimeRoot
 		var command string
 		switch {
 		case strings.HasPrefix(id, "portable:") && len(consumer.Commands) == 1:
@@ -262,10 +264,10 @@ func retainedPortablePrimaryFiles(l Ledger, oldRoot, newRoot, movingID string, s
 		default:
 			return nil, fmt.Errorf("shared cache consumer requires explicit migration: %s", id)
 		}
-		if !pathWithinRoot(oldRoot, command) {
+		if !pathWithinRoot(retainedRoot, command) {
 			return nil, fmt.Errorf("portable primary is outside the previous runtime")
 		}
-		relative, err := filepath.Rel(oldRoot, command)
+		relative, err := filepath.Rel(retainedRoot, command)
 		if err != nil {
 			return nil, fmt.Errorf("shared primary is not a managed sender")
 		}
@@ -273,7 +275,7 @@ func retainedPortablePrimaryFiles(l Ledger, oldRoot, newRoot, movingID string, s
 		if id == "opencode-notifications" {
 			// OpenCode owns a root-level sender; Claude stages its verified
 			// replacement in bin. Keep the registered path and argv unchanged.
-			if filepath.Dir(relative) != "." || command != filepath.Join(oldRoot, relative) ||
+			if filepath.Dir(relative) != "." || command != filepath.Join(retainedRoot, relative) ||
 				filepath.Base(consumer.Registration) != "agent-notifications.js" {
 				return nil, fmt.Errorf("OpenCode primary or registration is not managed")
 			}
@@ -604,7 +606,7 @@ func Commit(ctx context.Context, r Request) (result Ledger, resultErr error) {
 		}
 	}
 	var retainedPrimaries []File
-	if relocating && !retireOldCache {
+	if relocating {
 		retainedPrimaries, err = retainedPortablePrimaryFiles(l, previous.RuntimeRoot, r.RuntimeRoot, r.ConsumerID, r.Files)
 		if err != nil {
 			return l, err

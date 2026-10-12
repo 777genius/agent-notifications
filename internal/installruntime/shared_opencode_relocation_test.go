@@ -14,7 +14,7 @@ import (
 )
 
 func TestVersionedClaudeCacheRelocationSharedOpenCode(t *testing.T) {
-	for _, scenario := range []string{"success", "recovery", "foreign-primary", "invalid-command"} {
+	for _, scenario := range []string{"success", "recovery", "foreign-primary", "invalid-command", "foreign-after-upgrade"} {
 		t.Run(scenario, func(t *testing.T) {
 			root, err := filepath.EvalSymlinks(t.TempDir())
 			if err != nil {
@@ -126,6 +126,52 @@ func TestVersionedClaudeCacheRelocationSharedOpenCode(t *testing.T) {
 			policyAfter, err := os.ReadFile(policyPath)
 			if err != nil || !bytes.Equal(policyBefore, policyAfter) {
 				t.Fatal("channel/admission policy changed")
+			}
+			// A later Claude upgrade must refresh bindings retained at the first root.
+			nextRoot := filepath.Join(cache, "1.50.0")
+			nextPrimary := filepath.Join(nextRoot, "bin", entry)
+			nextBytes := []byte("next" + WriterProtocolMarker)
+			move.RuntimeRoot = nextRoot
+			move.Files = []File{{Path: nextPrimary, Data: nextBytes, Mode: 0700}}
+			firstUpgrade := after
+			if scenario == "foreign-after-upgrade" {
+				if err := os.WriteFile(openCodePrimary, []byte("foreign edit after upgrade"), 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			after, err = Commit(ctx, move)
+			if scenario == "foreign-after-upgrade" {
+				if err == nil || !strings.Contains(err.Error(), "fingerprint") {
+					t.Fatalf("second upgrade did not reject foreign edit: %v", err)
+				}
+				unchanged, pending, readErr := ReadOwnership(control)
+				if readErr != nil || pending || !reflect.DeepEqual(firstUpgrade, unchanged) {
+					t.Fatalf("second rejection changed ownership: %v", readErr)
+				}
+				if _, err := os.Stat(nextPrimary); !os.IsNotExist(err) {
+					t.Fatal("second rejection published new primary")
+				}
+				return
+			}
+			if scenario == "recovery" {
+				if err == nil || !strings.Contains(err.Error(), "interrupted shared upgrade") {
+					t.Fatalf("second upgrade never reached its journal: %v", err)
+				}
+				after, err = Commit(ctx, Request{ControlRoot: control, RecoverOnly: true})
+			}
+			if err != nil {
+				t.Fatalf("second shared cache relocation failed: %v", err)
+			}
+			for _, path := range []string{portablePrimary, openCodePrimary, nextPrimary} {
+				data, err := os.ReadFile(path)
+				if err != nil || !bytes.Equal(data, nextBytes) || !after.Files[path].Exists {
+					t.Fatalf("second upgrade left a stale primary: %s: %v", path, err)
+				}
+			}
+			for _, id := range []string{"opencode-notifications", "portable:claude", "portable:codex"} {
+				if !reflect.DeepEqual(before.Consumers[id], after.Consumers[id]) {
+					t.Fatalf("second upgrade changed consumer: %s", id)
+				}
 			}
 		})
 	}

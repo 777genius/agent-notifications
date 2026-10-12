@@ -1632,7 +1632,6 @@ publish_setup_summary() {
     else
         printf '\nInstallation complete\n\n'
         cat "$1"
-        [ "${BOOTSTRAP_VERBOSE:-0}" != 1 ] || printf '\nDetailed installer output: rerun with BOOTSTRAP_VERBOSE=1.\n'
     fi
 }
 
