@@ -44,8 +44,9 @@ jobs:
           $stage = Join-Path $env:CURSOR_TEST_ROOT 'stage'
           New-Item -ItemType Directory -Path $stage | Out-Null
           $binary = Join-Path $stage 'claude-notifications-windows-amd64.exe'
-          go build -o $binary ./cmd/claude-notifications
+          go build -ldflags='-s -w' -o $binary ./cmd/claude-notifications
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ((Get-Item $binary).Length -gt 33554432) { throw 'Release binary exceeds managed file limit' }
           go run ./cmd/build-portable-package -os windows -arch amd64 -executable $binary -output (Join-Path $env:CURSOR_TEST_ROOT 'agent-notify-portable-windows-amd64.zip') -workdir (Join-Path $env:CURSOR_TEST_ROOT 'package')
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Genuine Cursor Stop through installed UAP adapter and OS submission
