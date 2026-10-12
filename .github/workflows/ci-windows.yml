@@ -93,6 +93,8 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          go test ./internal/config -run '^TestWindowsAutomatic(NativeAnchorReadOnly|PinSkipsBusyChild)$' -count=1 -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           go build -o bin/claude-notifications.exe ./cmd/claude-notifications
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           go build -o bin/windows-standard-user-e2e.exe ./scripts/windows-standard-user-e2e

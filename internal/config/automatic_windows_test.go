@@ -33,6 +33,58 @@ func TestWindowsAutomaticCustomRootValidation(t *testing.T) {
 	}
 }
 
+func TestWindowsAutomaticPinSkipsBusyChild(t *testing.T) {
+	root := t.TempDir()
+	busy := filepath.Join(root, "a-busy")
+	if err := os.WriteFile(busy, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	name, err := windowsStorePath(busy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := windows.CreateFile(name, windows.GENERIC_READ, 0, nil, windows.OPEN_EXISTING, windows.FILE_ATTRIBUTE_NORMAL, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer windows.CloseHandle(h)
+	parent, err := winOpen(root, windows.GENERIC_READ, windows.OPEN_EXISTING, windows.FILE_FLAG_BACKUP_SEMANTICS, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer parent.Close()
+	if child, err := pinWindowsAnchorChild(root, parent); err == nil {
+		child.Close()
+		t.Fatal("accepted a root with no pinnable child")
+	}
+	if err := os.WriteFile(filepath.Join(root, "z-sentinel"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	child, err := pinWindowsAnchorChild(root, parent)
+	if err != nil {
+		t.Fatalf("busy system entries must not mask a safe child: %v", err)
+	}
+	child.Close()
+}
+
+// Read-only native coverage catches locked system entries and the real volume
+// root spelling before the binary delivery qualification creates any state.
+func TestWindowsAutomaticNativeAnchorReadOnly(t *testing.T) {
+	root, err := windows.KnownFolderPath(windows.FOLDERID_ProgramData, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	anchor, err := windowsAutomaticAnchorForRoot(root, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := openWindowsStoreParent(anchor.root, false, &anchor)
+	if err != nil {
+		t.Fatalf("native anchor: %T %v (%#v)", err, err, err)
+	}
+	p.close()
+}
+
 // Each assertion catches an actual security boundary: ordinary attribute-write
 // grants must remain rejected, native additive rights need a pinned child, and
 // DELETE_CHILD or public terminal-directory access must never be adopted.

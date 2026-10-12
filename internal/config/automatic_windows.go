@@ -201,7 +201,7 @@ func pinWindowsAnchorChild(root string, parent *os.File) (*os.File, error) {
 			return f, nil
 		}
 		var ce *Error
-		if os.IsNotExist(err) || (errors.As(err, &ce) && (ce.Code == ConfigPermissionDenied || ce.Code == ConfigLinkedPath)) {
+		if os.IsNotExist(err) || errors.Is(err, windows.ERROR_SHARING_VIOLATION) || (errors.As(err, &ce) && (ce.Code == ConfigPermissionDenied || ce.Code == ConfigLinkedPath)) {
 			continue
 		}
 		return nil, err
