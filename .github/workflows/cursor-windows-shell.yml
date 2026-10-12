@@ -56,6 +56,11 @@ jobs:
         env:
           CURSOR_TEST_INSTALLED: '1'
         run: python -B tests/integration/cursor_windows_shell_e2e.py
+      - name: Diagnose failed TEST installed state without sending events
+        if: failure()
+        shell: pwsh
+        run: |
+          go test ./cmd/claude-notifications -run '^TestWindowsCursorInstalledDiagnosis$' -count=1 -v 2>&1 | Tee-Object (Join-Path $env:CURSOR_TEST_ROOT 'installed-diagnosis.stdout')
       - name: Retain native qualification evidence
         if: always()
         uses: actions/upload-artifact@v7

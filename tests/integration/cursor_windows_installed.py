@@ -96,6 +96,7 @@ def prepare(root, agent):
     marker = " '--binding' '"; assert marker in command
     selector = command.split(marker,1)[1][:-1].replace("''", "'")
     assert pathlib.Path(selector).is_file()
+    (root/'diag-selector.txt').write_text(selector)
     watcher_env = {**env, 'CURSOR_TEST_ROOT':str(root)}
     watcher = subprocess.Popen([str(pathlib.Path(os.environ['SystemRoot'])/'System32/WindowsPowerShell/v1.0/powershell.exe'),
         '-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',str(pathlib.Path(__file__).with_name('cursor_windows_toast_watch.ps1'))],
