@@ -1,7 +1,7 @@
 {
   "seo": {
     "title": "Agent Notifications - Stay in flow",
-    "description": "Desktop notifications and webhooks for Claude, Codex CLI and OpenCode. Gemini CLI: Linux / Windows."
+    "description": "Desktop notifications and webhooks for Claude, Codex CLI and OpenCode. Gemini CLI: Linux / Windows. Cursor CLI: Linux amd64 / macOS arm64 / Windows amd64."
   },
   "language": {
     "label": "Language",
@@ -27,7 +27,7 @@
     "title": "Stay in flow",
     "emphasis": "We'll get your attention",
     "leadFirst": "Let your agent work. Know when it's done.",
-    "leadSecond": "Desktop notifications and webhooks for Claude, Codex CLI and OpenCode. Gemini CLI: Linux / Windows.",
+    "leadSecond": "Desktop notifications and webhooks for Claude, Codex CLI and OpenCode. Gemini CLI: Linux / Windows. Cursor CLI: Linux amd64 / macOS arm64 / Windows amd64.",
     "primary": "Set up notifications",
     "secondary": "Explore on GitHub",
     "note": "Open source · Runs locally"
@@ -209,6 +209,7 @@
     "scrollDown": "Scroll options down"
   },
   "install": {
+    "cursor": {"guide": "Cursor CLI installation", "scope": "Stop notifications and optional webhooks. Separate setup with explicit CLI/profile paths; qualified Linux amd64, macOS arm64 and Windows amd64 versions only."},
     "platformRelease": "Qualified release for {os}: {version}.",
     "title": "Set up notifications",
     "intro": "Follow the steps below to add notifications to {agent}.",
@@ -227,7 +228,8 @@
       "codex": "Codex CLI",
       "both": "Claude + Codex CLI",
       "opencode": "OpenCode",
-      "gemini": "Gemini CLI"
+      "gemini": "Gemini CLI",
+      "cursor": "Cursor CLI"
     },
     "targets": {
       "unknown": "Choose target OS",
