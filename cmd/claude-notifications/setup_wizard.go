@@ -406,8 +406,12 @@ func runInstallOrUpdate(ctx context.Context, req setupwizard.Request, preserveEx
 		if len(req.Agents) == 0 {
 			return setupwizard.Result{Action: string(req.Action), Outcome: "unchanged", Reason: "existing_opt_out", Targets: preservedUnitTargets(preserved)}, nil
 		}
-		req.BootstrapExpectedGeneration = &generation
-		req.BootstrapExpectedPolicy = &policy
+		if req.BootstrapExpectedGeneration == nil {
+			req.BootstrapExpectedGeneration = &generation
+		}
+		if req.BootstrapExpectedPolicy == nil {
+			req.BootstrapExpectedPolicy = &policy
+		}
 	} else if preserveExistingUnits {
 		selected, skipped, err := setupwizard.BootstrapAutoTargets(ctx, req, before)
 		if err != nil {
@@ -1040,6 +1044,15 @@ func commitConfirmedCursorConsent(ctx context.Context, r setupwizard.Request, re
 	if s.Installation.Recovery || s.Installation.Ledger.PendingMutation != nil || s.Installation.Ledger.ID != i.Initial.LedgerID || s.Installation.Ledger.Owner != i.Initial.Owner || s.Installation.Ledger.Generation != result.Generation || s.Preimage != policy {
 		return deny(portablesetup.ErrConcurrentChange)
 	}
+	// The fresh Cursor path has no legacy configure phase. Initialize only the
+	// bound canonical document before physical qualification; the shared writer
+	// preserves an existing document and grants no channel consent.
+	env := config.SnapshotEnv()
+	env.Vars = map[string]string{config.OverrideEnv: b.GlobalConfig}
+	initialized, err := config.EnsureInitialized(ctx, config.InitRequest{Env: env, Assets: config.AssetContext{Agent: config.AgentCursor, PluginRoot: b.RuntimeRoot}})
+	if err != nil || initialized.Selection.Path != b.GlobalConfig {
+		return deny(setupwizard.ErrRefused)
+	}
 	cfg, fixed, err := cursorInstalledInputs(ctx, b, s.Installation, filepath.Join(filepath.Dir(b.ControlRoot), "uap", "state"))
 	if err != nil {
 		return deny(err)
@@ -1086,7 +1099,13 @@ func commitConfirmedCursorConsent(ctx context.Context, r setupwizard.Request, re
 			result.Generation = staged.Generation
 		}
 	}
-	ledger, err := installruntime.Commit(ctx, installruntime.Request{ControlRoot: b.ControlRoot, Owner: b.Owner, RuntimeRoot: b.RuntimeRoot, ConsumerID: key, Consumer: consumer, PolicyOnly: true, RefreshOnly: true, ExpectedGeneration: &result.Generation, ExpectedPolicy: &policy, PolicyFields: patch})
+	var seedEnabled *bool
+	if i.MCP.AllowPolicySeed && !i.Initial.Policy.Exists {
+		// Apply the absent-policy seed shown in the immutable confirmation, after
+		// physical qualification. Existing policy and intervening edits stay fenced.
+		seedEnabled = &i.MCP.SeedEnabled
+	}
+	ledger, err := installruntime.Commit(ctx, installruntime.Request{ControlRoot: b.ControlRoot, Owner: b.Owner, RuntimeRoot: b.RuntimeRoot, ConsumerID: key, Consumer: consumer, PolicyOnly: true, RefreshOnly: true, ExpectedGeneration: &result.Generation, ExpectedPolicy: &policy, PolicyEnabled: seedEnabled, PolicyFields: patch})
 	if err != nil {
 		return deny(err)
 	}

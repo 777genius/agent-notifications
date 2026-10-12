@@ -12,9 +12,51 @@ import (
 	"testing"
 
 	"github.com/777genius/agent-notifications/internal/agentnotify/clientsetup"
+	"github.com/777genius/agent-notifications/internal/agentnotify/portable"
+	"github.com/777genius/agent-notifications/internal/agentnotify/portablesetup"
 	"github.com/777genius/agent-notifications/internal/agentnotify/registration"
 	"github.com/777genius/agent-notifications/internal/installruntime"
 )
+
+// The final public consent phase retains the caller's atom. A successful false
+// registration must advance that atom, rather than only a local request copy.
+func TestBootstrapCallerPolicyAdvancesThroughFalseRegistration(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtimeRoot, global, _, gen := managedRuntime(t)
+	root := filepath.Dir(control)
+	r := Request{Action: ActionInstall, Yes: true, Agents: []string{"claude"}, Hooks: boolPtr(false), AgentNotify: boolPtr(true), ControlRoot: control, RuntimeRoot: runtimeRoot, ClaudeConfig: filepath.Join(root, "claude")}
+	projection, _, err := ObserveBootstrapMCP(ctx, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := installruntime.ReadPolicySnapshot(ctx, control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := s.Preimage
+	r.BootstrapMCP = &BootstrapMCPSelection{Selected: r.Agents, Projection: projection}
+	r.BootstrapExpectedGeneration, r.BootstrapExpectedPolicy = &gen, &policy
+	ev := evaluate(ctx, &r, true)
+	if ev.stop || ev.err != nil {
+		t.Fatalf("admission: %+v %v", ev.out, ev.err)
+	}
+	b := portable.Binding{Version: 1, Integration: portable.Cursor, InstallationID: "TEST-install", BindingID: "TEST-cursor", ScopeID: "user", ComponentID: s.Installation.Ledger.ID, Owner: s.Installation.Ledger.Owner, ScopeRoot: filepath.Join(root, ".cursor"), DataRoot: filepath.Join(root, "TEST-data"), ControlRoot: control, RuntimeRoot: runtimeRoot, GlobalConfig: global, Primary: "bin/claude-notifications"}
+	for _, path := range []string{b.ScopeRoot, b.DataRoot} {
+		if err := os.Mkdir(path, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := (portablesetup.Service{ExpectedPolicy: r.BootstrapExpectedPolicy}).CommitBinding(ctx, portablesetup.Request{Binding: b, ExpectedGeneration: gen}); err != nil {
+		t.Fatal(err)
+	}
+	actual, err := installruntime.Fingerprint(filepath.Join(control, "agent-notifications.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !actual.Exists || policy != actual || policy == s.Preimage {
+		t.Fatal("successful false registration did not advance caller's policy atom")
+	}
+}
 
 // Old code counts the surviving ledger receipt after an owned entry is deleted,
 // so the confirmed projection still passes. Real config removal must revoke it
