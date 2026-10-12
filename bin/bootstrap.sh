@@ -2947,6 +2947,10 @@ main() {
     selector_effect_args
     if [ "$_INTERACTIVE_INTENT" = true ]; then
         _SELECTOR_INTENT="$_CONFIG_STAGE/selector-intent.json"
+        if [ "$_PRODUCT_CSV" = cursor ] && [ "$AGENT_NOTIFY_REQUEST" != skip ]; then
+            echo "If the shared runtime needs installation, this approval prepares it first."
+            echo "Cursor integration then requires a new confirmation; canceling retains the prepared runtime."
+        fi
         selector_scope_args
         selector_collect confirm "${_EFFECT_ARGS[@]}" ${_SCOPE_ARGS[@]+"${_SCOPE_ARGS[@]}"} --intent-file "$_SELECTOR_INTENT" ${UI_ARGS[@]+"${UI_ARGS[@]}"} || return $?
         [ -s "$_SELECTOR_RESULT" ] || { close_prompt; return 0; }
@@ -2998,9 +3002,8 @@ main() {
             run_setup_stage "Preparing Cursor notification runtime" prepare_cursor_runtime || { report_setup_failure 1; return 1; }
             if [ "$_CURSOR_RUNTIME_PREPARED" = true ]; then
                 echo "Shared notification runtime installed. Review the new plan before installing Cursor integration."
-                local cursor_resume_status=0
-                bash "$_CONFIG_STAGE/cursor-bootstrap-resume.sh" "$@" || cursor_resume_status=$?
-                return "$cursor_resume_status"
+                reconfirm_cursor_integration || { echo "Prepared runtime retained; Cursor integration is incomplete." >&2; return 1; }
+                [ "$_CURSOR_CONFIRM_CANCELLED" != true ] || { echo "Cursor integration canceled; prepared runtime retained."; return 0; }
             fi
             PRODUCT=cursor; CONFIGURE_BINARY=$_CONFIG_HELPER; PLUGIN_ROOT=""
             progress_phase cursor portable state_requires_inspection
@@ -3133,31 +3136,63 @@ report_wizard_portable_missing() {
     return 0
 }
 
-# Cursor composition requires a committed observer. Preparing it changes the
-# ownership generation, so the previous intent cannot authorize the integration.
-# Restart the immutable source script with a new, explicit confirmation instead.
+# The original checkpoint validates ownership and policy before this phase.
+# Runtime acquisition advances the generation; integration needs a fresh public
+# confirmation in a distinct immutable intent, using the same verified helper.
 prepare_cursor_runtime() {
     _CURSOR_RUNTIME_PREPARED=false
-    local runtime os arch primary
+    local runtime os arch primary native base target="$_FROZEN_RUNTIME/bin"
     [ -n "$_SELECTOR_INTENT" ] && [ -n "$_FROZEN_CONTROL" ] && [ -n "$_FROZEN_RUNTIME" ] || return 1
     read -r os arch < <(bootstrap_release_os_arch) || return 1
     primary="claude-notifications-$os-$arch"
     [ "$os" != windows ] || primary="$primary.exe"
     if runtime=$("$_CONFIG_HELPER" config installer runtime-root "$_FROZEN_CONTROL"); then
         [ "$runtime" = "$_FROZEN_RUNTIME" ] || return 1
-        if cmp -s "$_CONFIG_HELPER" "$runtime/bin/$primary"; then return 0; fi
-    elif [ -e "$_FROZEN_CONTROL/ownership.json" ] || [ -L "$_FROZEN_CONTROL/ownership.json" ]; then
-        echo "Existing runtime requires inspection; retained ownership was not replaced." >&2
-        return 1
+        if cmp -s "$_CONFIG_HELPER" "$target/$primary"; then return 0; fi
+    else
+        if [ -e "$_FROZEN_CONTROL/ownership.json" ] || [ -L "$_FROZEN_CONTROL/ownership.json" ] ||
+           [ -e "$_FROZEN_RUNTIME" ] || [ -L "$_FROZEN_RUNTIME" ]; then
+            echo "Existing runtime requires inspection; retained files were not replaced." >&2
+            return 1
+        fi
     fi
-    fetch_bootstrap_file "${BOOTSTRAP_RAW_BASE_URL:-$BOOTSTRAP_RAW_CONTENT_URL}/$BOOTSTRAP_BUNDLE_COMMIT/bin/bootstrap.sh" \
-        "$_CONFIG_STAGE/cursor-bootstrap-resume.sh" || return 1
-    # The runtime lives below the private control root; the shell writer creates
-    # its parents before the Go writer validates their permissions.
-    (umask 077; install_runtime cursor "$_CONFIG_STAGE/install.sh" "$_FROZEN_RUNTIME/bin" --force) || return 1
+    base="${BOOTSTRAP_RELEASES_BASE_URL:-https://github.com/${REPO}/releases}/download/$BOOTSTRAP_TAG"
+    case "$os" in
+        darwin)
+            fetch_bootstrap_file "$base/ClaudeNotifier.app.zip" "$_CONFIG_STAGE/ClaudeNotifier.app.zip" || return 1
+            verify_bootstrap_checksum "$_CONFIG_STAGE" ClaudeNotifier.app.zip || return 1
+            unzip -q "$_CONFIG_STAGE/ClaudeNotifier.app.zip" -d "$_CONFIG_STAGE" || return 1 ;;
+        windows)
+            native="claude-notifications-windows-$arch-focus.exe"
+            fetch_bootstrap_file "$base/$native" "$_CONFIG_STAGE/$native" || return 1
+            verify_bootstrap_checksum "$_CONFIG_STAGE" "$native" || return 1 ;;
+    esac
+    # Use the existing verified Go writer with the exact frozen control root.
+    # It owns private directory creation, native custody and saved-policy CAS.
+    "$_CONFIG_HELPER" internal-install-runtime --stage "$_CONFIG_STAGE" --target "$target" \
+        --entry "$primary" --control-root "$_FROZEN_CONTROL" || return 1
     runtime=$("$_CONFIG_HELPER" config installer runtime-root "$_FROZEN_CONTROL") || return 1
-    [ "$runtime" = "$_FROZEN_RUNTIME" ] && cmp -s "$_CONFIG_HELPER" "$runtime/bin/$primary" || return 1
+    [ "$runtime" = "$_FROZEN_RUNTIME" ] && cmp -s "$_CONFIG_HELPER" "$target/$primary" || return 1
     _CURSOR_RUNTIME_PREPARED=true
+}
+
+reconfirm_cursor_integration() {
+    local control=$_FROZEN_CONTROL runtime=$_FROZEN_RUNTIME scope=$_FROZEN_SCOPE_ROOT client=$_FROZEN_CLIENT_EXEC config=$AGENT_NOTIFICATIONS_CONFIG
+    _CURSOR_CONFIRM_CANCELLED=false
+    [ "$_INTERACTIVE_INTENT" = true ] || return 1
+    exec 3<>/dev/tty || return 1
+    _PROMPT_OPEN=true
+    _SELECTOR_INTENT="$_CONFIG_STAGE/selector-cursor-runtime-intent.json"
+    selector_scope_args
+    selector_collect confirm "${_EFFECT_ARGS[@]}" ${_SCOPE_ARGS[@]+"${_SCOPE_ARGS[@]}"} --intent-file "$_SELECTOR_INTENT" ${UI_ARGS[@]+"${UI_ARGS[@]}"} || { close_prompt; return 1; }
+    if [ ! -s "$_SELECTOR_RESULT" ]; then close_prompt; _CURSOR_CONFIRM_CANCELLED=true; return 0; fi
+    selector_exact approved confirm || { close_prompt; return 1; }
+    close_prompt
+    load_frozen_dispatch || return 1
+    [ "$_FROZEN_CONTROL" = "$control" ] && [ "$_FROZEN_RUNTIME" = "$runtime" ] &&
+        [ "$_FROZEN_SCOPE_ROOT" = "$scope" ] && [ "$_FROZEN_CLIENT_EXEC" = "$client" ] &&
+        [ "$AGENT_NOTIFICATIONS_CONFIG" = "$config" ] || return 1
+    "$_CONFIG_HELPER" setup-products preflight --intent-file "$_SELECTOR_INTENT" "${_EFFECT_ARGS[@]}" </dev/null
 }
 
 bootstrap_abs_command() {
