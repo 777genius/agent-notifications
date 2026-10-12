@@ -3145,7 +3145,7 @@ prepare_cursor_runtime() {
     [ "$os" != windows ] || primary="$primary.exe"
     if runtime=$("$_CONFIG_HELPER" config installer runtime-root "$_FROZEN_CONTROL"); then
         [ "$runtime" = "$_FROZEN_RUNTIME" ] || return 1
-        if cmp -s "$_CONFIG_HELPER" "$runtime/$primary"; then return 0; fi
+        if cmp -s "$_CONFIG_HELPER" "$runtime/bin/$primary"; then return 0; fi
     elif [ -e "$_FROZEN_CONTROL/ownership.json" ] || [ -L "$_FROZEN_CONTROL/ownership.json" ]; then
         echo "Existing runtime requires inspection; retained ownership was not replaced." >&2
         return 1
@@ -3154,9 +3154,9 @@ prepare_cursor_runtime() {
         "$_CONFIG_STAGE/cursor-bootstrap-resume.sh" || return 1
     # The runtime lives below the private control root; the shell writer creates
     # its parents before the Go writer validates their permissions.
-    (umask 077; install_runtime cursor "$_CONFIG_STAGE/install.sh" "$_FROZEN_RUNTIME" --force) || return 1
+    (umask 077; install_runtime cursor "$_CONFIG_STAGE/install.sh" "$_FROZEN_RUNTIME/bin" --force) || return 1
     runtime=$("$_CONFIG_HELPER" config installer runtime-root "$_FROZEN_CONTROL") || return 1
-    [ "$runtime" = "$_FROZEN_RUNTIME" ] && cmp -s "$_CONFIG_HELPER" "$runtime/$primary" || return 1
+    [ "$runtime" = "$_FROZEN_RUNTIME" ] && cmp -s "$_CONFIG_HELPER" "$runtime/bin/$primary" || return 1
     _CURSOR_RUNTIME_PREPARED=true
 }
 
