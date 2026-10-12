@@ -1049,7 +1049,7 @@ def run(name, mode='auto', old=False, color=False, terminal=True, helper_path=he
             assert (row in result.splitlines()) != compact, (name, result)
         if compact:
             assert '  Claude notification tool: not installed (existing opt-out kept).' in result, (name, result)
-            assert '  Codex notification tool: installed.' in result, (name, result)
+            assert '  Codex notification tool: installed.' not in result, (name, result)
         else:
             assert (tmp/'summary').read_bytes() == (tmp/'summary-before').read_bytes(), (name, 'fallback summary changed')
             assert result.count('    Agent notification tool: ') == 2, (name, result)

@@ -58,6 +58,7 @@ _CONFIG_STAGE=""
 _CONFIG_HELPER=""
 _PORTABLE_STAGE=""
 _KEEP_CONFIG_STAGE=false
+_FINAL_BOARD_RENDERED=false
 _KEEP_PORTABLE_STAGE=false
 PRODUCT=""
 BOOTSTRAP_TAG=""
@@ -1609,7 +1610,7 @@ print_success() {
 }
 
 print_delivery_note() {
-    printf '  Delivery has not been verified. After restart/activation, complete a task to check notifications.\n'
+    printf '  Delivery has not been verified. Complete a task after restart to test.\n'
 }
 
 # The public loader can collect summaries across separate pinned bootstrap runs.
@@ -1631,7 +1632,7 @@ publish_setup_summary() {
     else
         printf '\nInstallation complete\n\n'
         cat "$1"
-        printf '\nDetailed installer output: rerun with BOOTSTRAP_VERBOSE=1.\n'
+        [ "${BOOTSTRAP_VERBOSE:-0}" != 1 ] || printf '\nDetailed installer output: rerun with BOOTSTRAP_VERBOSE=1.\n'
     fi
 }
 
@@ -1698,7 +1699,7 @@ complete_configure_route() {
         if { [ "${LEGACY_PRODUCT:-$PRODUCT}" = codex ] || [ "${LEGACY_PRODUCT:-$PRODUCT}" = both ]; } && [ "$(uname -s)" = Darwin ]; then
             if app=$(bootstrap_default_codex_app); then
                 CONFIGURE_ARGS+=(--app "$app" --team-id 2DC432GLL2)
-                echo "Codex Desktop found and verified: $app. Your current click-navigation preferences will be kept." >&2
+                [ "${BOOTSTRAP_VERBOSE:-0}" != 1 ] || echo "Codex Desktop found and verified: $app. Your current click-navigation preferences will be kept." >&2
             else
                 CONFIGURE_ARGS+=(--navigation none)
                 echo "No registered, verified official Codex Desktop app found; defaulting to navigation none. Existing navigation policy is preserved." >&2
@@ -2522,7 +2523,7 @@ run_setup_stage "Installing Gemini CLI notifications" "$_CONFIG_HELPER" "$@" </d
             printf '  Shared settings: %s\n' "$config_path"
             echo "  Silent turn completion and tool permission alerts; existing hook/security settings were preserved."
         fi
-        echo "  Gemini's built-in desktop notifications may duplicate alerts; choose one desktop source or explicitly use --webhook."
+        echo "  Gemini: use one desktop notification source to avoid duplicate alerts."
         if [ "${BOOTSTRAP_VERBOSE:-0}" = 1 ]; then
             printf '  Inspect registration and consent: %s\n' "$(quote_shell_command "$installed" setup-gemini inspect --control-root "$native_root")"
             if [ "$os" = darwin ] && { [[ " ${channels[*]-} " = *" --desktop "* ]] || [[ " ${channels[*]-} " = *" --desktop=true "* ]]; }; then
@@ -2582,6 +2583,7 @@ compact_rich_setup_summary() {
             }
             if ((current == "claude" || current == "codex") && chosen(current) &&
                 index($0, tool_prefix) == 1) {
+                if ($0 == tool_prefix "installed.") next
                 label = current == "claude" ? "Claude" : "Codex"
                 print "  " label " notification tool: " substr($0, length(tool_prefix) + 1)
                 next
@@ -2606,6 +2608,7 @@ progress_write_final_snapshot() {
 }
 
 report_progress() {
+    _FINAL_BOARD_RENDERED=false
     progress_stop "${1:-0}"
     local rendered=false
     if progress_rich_available && progress_helper_available; then
@@ -2619,6 +2622,7 @@ report_progress() {
                 _PROGRESS_PID=$!
                 if wait "$_PROGRESS_PID" 2>/dev/null; then
                     rendered=true
+                    _FINAL_BOARD_RENDERED=true
                     [ "${1:-0}" -ne 0 ] || compact_rich_setup_summary
                 fi
                 _PROGRESS_PID=""
@@ -3026,12 +3030,12 @@ main() {
         report_progress 0
         if [ "$_DIAGNOSTIC_NOTED" = true ]; then
             if [ -n "$_DIAGNOSTIC_LOG" ] && [ "$_DIAGNOSTIC_FAILED" != true ] && [ -f "$_DIAGNOSTIC_LOG" ] && [ ! -L "$_DIAGNOSTIC_LOG" ]; then
-                printf 'Maintenance: additional installer details saved in Diagnostics.\n' >&2
+                [ "${BOOTSTRAP_VERBOSE:-0}" != 1 ] || printf 'Maintenance: additional installer details saved in Diagnostics.\n' >&2
             else
                 printf 'Maintenance: installer reported additional details.\n' >&2
             fi
         fi
-        if [ "$_DIAGNOSTIC_NOTED" = true ] || [ "$_DIAGNOSTIC_FAILED" = true ]; then
+        if [ "$own_summary" != true ] && { [ "$_DIAGNOSTIC_NOTED" = true ] || [ "$_DIAGNOSTIC_FAILED" = true ]; }; then
             report_diagnostics
         fi
     fi
@@ -3040,9 +3044,9 @@ main() {
     fi
     if [ "$own_summary" = true ]; then
         if [ "$status" -eq 0 ]; then
-            printf '\nInstallation complete\n\n'
+            if [ "$_FINAL_BOARD_RENDERED" != true ]; then printf '\nInstallation complete\n\n'; else printf '\n'; fi
             cat "$BOOTSTRAP_SUMMARY_FILE"
-            [ -z "$_DIAGNOSTIC_LOG" ] || printf '\nDetailed installer output is saved in the private diagnostic log.\n'
+            if [ "$_DIAGNOSTIC_NOTED" = true ] || [ "$_DIAGNOSTIC_FAILED" = true ]; then report_diagnostics; fi
         fi
         unset BOOTSTRAP_SUMMARY_FILE
     fi

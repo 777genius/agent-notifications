@@ -814,6 +814,7 @@ def preview(args):
     lab = Path(tempfile.mkdtemp(prefix='AllAgents-TEST-',dir=state))
     log_path = lab/'preparation.log'
     diagnostics = None
+    status = 1
     try:
         diagnostics = private_directory(private_directory(Path.home()/'.agent-notifications-preview-TEST')/lab.name)
         with Preparation(log_path, plain=args.plain) as preparation:
@@ -893,9 +894,9 @@ def preview(args):
                 detail(name+' TEST execution snapshot: '+snapshot['execution']+' (SHA256 '+snapshot['snapshot_sha256']+')')
             detail('CLI registration uses a local source snapshot; CLI network and host credentials are denied.')
             detail('This previews installation only; it does not run agents or verify notification delivery.')
-        print('Preview ready. Select clients; Desktop on / Webhook off.', flush=True)
         command = [str(trusted/'bash'),str(assets/'setup.sh')]+(['--plain'] if args.plain else ['--ui','auto'])
-        return subprocess.run(command,cwd=lab,env=env).returncode
+        status = subprocess.run(command,cwd=lab,env=env).returncode
+        return status
     except KeyboardInterrupt:
         print('\nPreview cancelled.', file=sys.stderr, flush=True)
         return 130
@@ -909,11 +910,11 @@ def preview(args):
         print('Preview failed: '+message, file=sys.stderr, flush=True)
         return 1
     finally:
-        print('\nTEST profile retained: '+str(lab), flush=True)
-        print('Preparation log: '+str(log_path), flush=True)
-        if diagnostics is not None:
-            print('Installer diagnostics: '+str(diagnostics), flush=True)
-        print('Keep the profile while its native app registration may exist; no automatic deletion.', flush=True)
+        print('\nTEST profile retained (keep while native app is registered): '+str(lab), flush=True)
+        if status != 0 or os.environ.get('BOOTSTRAP_VERBOSE') == '1':
+            print('Preparation log: '+str(log_path), flush=True)
+            if diagnostics is not None:
+                print('Installer diagnostics: '+str(diagnostics), flush=True)
 
 
 def main():

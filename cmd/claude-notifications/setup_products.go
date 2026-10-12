@@ -93,6 +93,9 @@ func runSetupProductsContext(ctx context.Context, args []string, input io.Reader
 			}
 			for _, f := range facts {
 				if !f.Selectable {
+					if os.Getenv("BOOTSTRAP_VERBOSE") != "1" {
+						continue
+					}
 					rows, e := setupProductsNotice(f.ID + ": " + f.Reason)
 					if e != nil {
 						return fail(1, e)
