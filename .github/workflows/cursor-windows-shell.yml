@@ -1,0 +1,50 @@
+name: Cursor Windows native shell qualification
+on:
+  push:
+    branches: [feat/cursor-windows-cli]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-shell:
+    runs-on: windows-2025
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Acquire official pinned Windows CLI into TEST-only profile
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = Join-Path $env:RUNNER_TEMP ('TEST-cursor-windows-' + [Guid]::NewGuid())
+          New-Item -ItemType Directory -Path $root | Out-Null
+          $archive = Join-Path $root 'agent-cli-package.zip'
+          Invoke-WebRequest -Uri 'https://downloads.cursor.com/lab/2026.10.01-e373342/windows/x64/agent-cli-package.zip' -OutFile $archive -TimeoutSec 60
+          if ((Get-Item $archive).Length -ne 77156248) { throw 'Unexpected Cursor archive length' }
+          (Get-FileHash $archive -Algorithm SHA256).Hash | Set-Content (Join-Path $root 'archive-sha256.txt')
+          Expand-Archive -Path $archive -DestinationPath $root
+          $agent = Join-Path $root 'dist-package/cursor-agent.cmd'
+          $index = Join-Path $root 'dist-package/index.js'
+          if ((Get-FileHash $index -Algorithm SHA256).Hash.ToLower() -ne '0e7e28c34e050c6b83fe574e1fefa8d95d7c80bea6c4a4d3ae2726e5191243ef') { throw 'Unexpected official Cursor source' }
+          "CURSOR_TEST_ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "CURSOR_TEST_AGENT=$agent" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Genuine Cursor Stop and exact Windows argv (no installed AN claim)
+        shell: pwsh
+        run: python -B tests/integration/cursor_windows_shell_e2e.py
+      - name: Retain native qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: cursor-windows-native-shell
+          path: |
+            ${{ env.CURSOR_TEST_ROOT }}/native-shell-result.json
+            ${{ env.CURSOR_TEST_ROOT }}/native-stop.json
+            ${{ env.CURSOR_TEST_ROOT }}/native-argv.json
+            ${{ env.CURSOR_TEST_ROOT }}/cli-stdout.txt
+            ${{ env.CURSOR_TEST_ROOT }}/cli-stderr.txt
+            ${{ env.CURSOR_TEST_ROOT }}/archive-sha256.txt
+          if-no-files-found: warn
