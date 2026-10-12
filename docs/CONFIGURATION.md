@@ -118,9 +118,13 @@ $env:AGENT_NOTIFICATIONS_CONFIG = Join-Path $dir 'config.json'
 
 Using the recorded installed executable, run `config path --json`, then
 `config init` and `config inspect --json`. If preserving an existing personalized
-config, stop its writers and use `config init --from <verified existing file>`
-instead of initializing defaults; retain the original file. Initialization is
-create-only. Stop if initialization reports another permission error and inspect
+config, stop its writers and use `config init --from <verified source file>`
+instead of initializing defaults; retain the original file. If the source has a
+managed `.lock` under the writable profile, importing directly still checks that
+unsafe ancestry. In that case, explicitly make a byte-preserving copy into the
+new private directory under a different filename, verify its SHA-256 against the
+original, and import that copy (without a source `.lock`). Do not use inspect
+output as the source document. Initialization is create-only. Stop if initialization reports another permission error and inspect
 that target's complete ACL chain; do not weaken its checks.
 
 Every agent and hook must inherit the same override. To persist it for this
