@@ -165,7 +165,7 @@ case "$url" in
 esac
 ''')
 (commands/'opencode').write_text('#!/bin/bash\n[ "$#" -eq 1 ] && [ "$1" = --version ] || exit 99\nprintf "1.18.33\\n"\n')
-(commands/'gemini').write_text('#!/bin/bash\nset -eu\n[ "$#" -eq 1 ] && [ "$1" = --version ] || exit 99\ncase "$PWD" in */bootstrap-gemini-TEST-*/profile) ;; *) echo "Gemini queried outside TEST project" >&2; exit 99 ;; esac\n[ "$HOME" = "$GEMINI_CLI_HOME" ] && [ -f "$GEMINI_CLI_SYSTEM_SETTINGS_PATH" ] || exit 99\nprintf "0.62.0\\n"\n')
+(commands/'gemini').write_text('#!/bin/bash\nset -eu\n[ "$#" -eq 1 ] && [ "$1" = --version ] || exit 99\ncase "$PWD" in */bootstrap-gemini-TEST-*/profile) ;; *) echo "Gemini queried outside TEST project" >&2; exit 99 ;; esac\n[ "$HOME" = "$GEMINI_CLI_HOME" ] && [ ! -e "$GEMINI_CLI_SYSTEM_SETTINGS_PATH" ] && [ ! -L "$GEMINI_CLI_SYSTEM_SETTINGS_PATH" ] || exit 99\nprintf "0.62.0\\n"\n')
 for host in ('claude','codex'):
     (commands/host).write_text('#!/bin/bash\necho "TEST adapter rejects agent execution" >&2\nexit 99\n')
 for command in commands.iterdir(): command.chmod(0o755)

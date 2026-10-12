@@ -272,8 +272,8 @@ check_prerequisites() {
         # caller's environment is empty. Keep cwd and home in the same TEST root.
         : > "$probe/profile/.gemini/.env"
         : > "$probe/profile/.env"
-        printf '{}\n' > "$probe/settings.json"
-        printf '{}\n' > "$probe/defaults.json"
+        # Redirect system files into this probe without creating user-owned
+        # files that Gemini correctly refuses to trust as root-owned settings.
         printf '{}\n' > "$probe/trust.json"
         probe_status=0
         host_version=$(cd "$probe/profile" && env -i PATH="$PATH" HOME="$probe/profile" USERPROFILE="$probe/profile" \

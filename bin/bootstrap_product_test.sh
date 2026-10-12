@@ -251,9 +251,13 @@ HOST_VERSION
 for file in "$HOME/.gemini/.env" "$HOME/.env"; do
     [ -f "$file" ] && [ ! -s "$file" ] || exit 5
 done
-for file in "$GEMINI_CLI_SYSTEM_SETTINGS_PATH" "$GEMINI_CLI_SYSTEM_DEFAULTS_PATH" "$GEMINI_CLI_TRUSTED_FOLDERS_PATH"; do
-    [ -f "$file" ] || exit 6
+probe=$(dirname "$HOME")
+[ "$GEMINI_CLI_SYSTEM_SETTINGS_PATH" = "$probe/settings.json" ] || exit 6
+[ "$GEMINI_CLI_SYSTEM_DEFAULTS_PATH" = "$probe/defaults.json" ] || exit 6
+for file in "$GEMINI_CLI_SYSTEM_SETTINGS_PATH" "$GEMINI_CLI_SYSTEM_DEFAULTS_PATH"; do
+    [ ! -e "$file" ] && [ ! -L "$file" ] || exit 6
 done
+[ "$GEMINI_CLI_TRUSTED_FOLDERS_PATH" = "$probe/trust.json" ] && [ -f "$GEMINI_CLI_TRUSTED_FOLDERS_PATH" ] || exit 6
 printf '0.62.0\n'
 GEMINI_VERSION
     chmod +x "$SANDBOX/gemini-version-cli/gemini"
