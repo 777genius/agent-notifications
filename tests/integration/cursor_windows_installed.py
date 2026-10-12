@@ -101,7 +101,7 @@ def prepare(root, agent):
     selector = command.split(marker,1)[1][:-1].replace("''", "'")
     assert pathlib.Path(selector).is_file()
     (root/'diag-selector.txt').write_text(selector)
-    watcher_env = {**env, 'CURSOR_TEST_ROOT':str(root)}
+    watcher_env = {**env, 'CURSOR_TEST_ROOT':str(root), 'GITHUB_ACTIONS':os.environ['GITHUB_ACTIONS']}
     watcher = subprocess.Popen([str(pathlib.Path(os.environ['SystemRoot'])/'System32/WindowsPowerShell/v1.0/powershell.exe'),
         '-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',str(pathlib.Path(__file__).with_name('cursor_windows_toast_watch.ps1'))],
         env=watcher_env, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -152,6 +152,7 @@ def finish(test, native):
     assert not test['shortcut'].exists(), 'owned Cursor shortcut remains'
     assert not pathlib.Path(test['selector']).exists(), 'locator remains active'
     test['close_watcher'](); atexit.unregister(test['close_watcher'])
+    assert (root/'TEST-audit-restored').read_text().strip()=='restored'
     toast = json.loads((root/'toast-processes.json').read_text(encoding='utf-8-sig'))
     starts = [r for r in toast if r['kind']=='start']; stops = [r for r in toast if r['kind']=='stop']
     assert len(starts)==len(stops)==1 and starts[0]['pid']==stops[0]['pid'] and stops[0]['exit']==0, toast

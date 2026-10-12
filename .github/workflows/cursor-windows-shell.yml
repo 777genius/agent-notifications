@@ -65,6 +65,12 @@ jobs:
         shell: pwsh
         run: |
           go test ./cmd/claude-notifications -run '^TestWindowsCursorInstalledDiagnosis$' -count=1 -v 2>&1 | Tee-Object (Join-Path $env:CURSOR_TEST_ROOT 'installed-diagnosis.stdout')
+      - name: Restore disposable CI audit settings even after TEST failure
+        if: always() && env.CURSOR_TEST_ROOT != ''
+        shell: pwsh
+        run: |
+          & "$env:SystemRoot/System32/WindowsPowerShell/v1.0/powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File tests/integration/cursor_windows_toast_watch.ps1 -RestoreOnly
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Retain native qualification evidence
         if: always()
         uses: actions/upload-artifact@v7
@@ -80,6 +86,7 @@ jobs:
             ${{ env.CURSOR_TEST_ROOT }}/installed-result.json
             ${{ env.CURSOR_TEST_ROOT }}/toast-processes.json
             ${{ env.CURSOR_TEST_ROOT }}/toast-watch-startup
+            ${{ env.CURSOR_TEST_ROOT }}/TEST-audit-restored
             ${{ env.CURSOR_TEST_ROOT }}/*.stdout
             ${{ env.CURSOR_TEST_ROOT }}/*.stderr
           if-no-files-found: warn
