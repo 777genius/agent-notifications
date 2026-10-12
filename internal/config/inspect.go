@@ -4,12 +4,13 @@ package config
 // includes raw values, URLs, headers, payload fields or unknown property names.
 // A failed parse is represented by its stable code, never its underlying text.
 type Inspection struct {
-	Selection     Selection     `json:"selection"`
-	Revision      string        `json:"revision,omitempty"`
-	SchemaVersion int           `json:"schemaVersion,omitempty"`
-	Valid         bool          `json:"valid"`
-	ErrorCode     Code          `json:"errorCode,omitempty"`
-	Settings      *SafeSettings `json:"settings,omitempty"`
+	Selection         Selection          `json:"selection"`
+	Revision          string             `json:"revision,omitempty"`
+	SchemaVersion     int                `json:"schemaVersion,omitempty"`
+	Valid             bool               `json:"valid"`
+	ErrorCode         Code               `json:"errorCode,omitempty"`
+	PermissionFailure *PermissionFailure `json:"permissionFailure,omitempty"`
+	Settings          *SafeSettings      `json:"settings,omitempty"`
 }
 
 // InspectDocument validates a supplied snapshot without reading or writing files.

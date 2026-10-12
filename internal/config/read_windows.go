@@ -184,5 +184,7 @@ func readSnapshotContext(ctx context.Context, path string, limit int) (Snapshot,
 	return readWindowsSnapshotContext(ctx, path, limit, readFileSnapshotUnmanaged)
 }
 func portableGuardUnavailable(err error) bool {
-	return os.IsPermission(err) || errors.Is(err, windows.ERROR_WRITE_PROTECT)
+	var ce *Error
+	return os.IsPermission(err) || errors.Is(err, windows.ERROR_WRITE_PROTECT) ||
+		(errors.As(err, &ce) && ce.Code == ConfigPermissionDenied && ce.causeErrno == uintptr(windows.ERROR_ACCESS_DENIED))
 }

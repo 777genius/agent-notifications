@@ -58,7 +58,17 @@ For support, share only `config inspect --json`, never `cat` of config; keep sav
 On Windows, `ConfigPublicReadable` is a warning about read grants on the selected
 configuration file, not a check of `%APPDATA%` or the entire profile. It does not
 by itself reject a hook read. `ConfigPermissionDenied` can instead come from an
-OS access denial, the config/lock ACL, or a writable ancestor. Managed reads and
+OS access denial, the config/lock ACL, or a writable ancestor. `config init`
+and failed `config inspect` now print an ACL rejection's actual object path,
+reason, and trustee SID (or owner SID for an owner rejection). `config init
+--json` and failed `config inspect --json` include optional `permissionFailure`
+with `objectPath`, `reason`, and available `trusteeSid`, `ownerSid`, `accessMask`.
+The mask contains the rejected rights, not the whole grant. OS denial cannot
+identify an account and omits SID/mask. Account names are not resolved; match the
+SID against `Get-Acl`/`icacls` locally, including unresolved SIDs. Parser/flag
+errors remain content-free, and hooks retain their existing output behavior.
+A genuinely absent config still inspects as defaults; inspect does not test
+whether initialization could write it. Managed reads and
 writes inspect each directory component below the volume root, reject reparse
 points and unrelated write/delete/ACL-change grants, and pin directories against
 replacement. Initialization also checks `%USERPROFILE%` to coordinate the
@@ -77,6 +87,67 @@ run `config init` and `config inspect --json`. To inspect managed setup after
 `installation needs inspection`, run `setup-notifications status --json`
 (optionally `--control-root <absolute managed control directory>`).
 `--provider claude` belongs to configure/register operations, not status.
+
+### Windows sandbox profile with write/delete grants
+
+If `%USERPROFILE%` grants an unrelated principal `(M,DC)` (Modify and
+DeleteChild), automatic initialization and managed reads can return
+`ConfigPermissionDenied` even after the config directory is private. A parent
+DeleteChild grant permits replacing its immediate children; disabling inheritance
+only on the config directory does not secure the whole path. Do not exempt
+`CodexSandboxUsers` or remove sandbox-required grants from the entire profile.
+
+Use an explicit configuration outside that ancestry. An explicit path still
+checks its own directories and private target lock; it can skip an unavailable
+profile selection guard. Another path under `%USERPROFILE%`, including
+`%LOCALAPPDATA%`, does not solve this case.
+
+For example, an administrator can create a **new**, user-specific directory at
+the system drive root. Run this PowerShell provision step as the affected user
+with elevation (not as a different administrator account). It refuses an
+existing directory and changes no profile or ancestor ACL:
+
+```powershell
+$ErrorActionPreference = 'Stop'
+$sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+$dir = Join-Path ($env:SystemDrive + '\') ("agent-notifications-" + $sid)
+if (Test-Path -LiteralPath $dir) { throw "Directory already exists: $dir" }
+New-Item -ItemType Directory -Path $dir | Out-Null
+$acl = New-Object System.Security.AccessControl.DirectorySecurity
+$acl.SetSecurityDescriptorSddlForm("O:${sid}D:P(A;OICI;FA;;;${sid})(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)")
+Set-Acl -LiteralPath $dir -AclObject $acl
+```
+
+Back in the affected user's ordinary shell, set the explicit **file** path:
+
+```powershell
+$sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+$dir = Join-Path ($env:SystemDrive + '\') ("agent-notifications-" + $sid)
+$env:AGENT_NOTIFICATIONS_CONFIG = Join-Path $dir 'config.json'
+```
+
+Using the recorded installed executable, run `config path --json`, then
+`config init` and `config inspect --json`. If preserving an existing personalized
+config, stop its writers and use `config init --from <verified source file>`
+instead of initializing defaults; retain the original file. If the source has a
+managed `.lock` under the writable profile, importing directly still checks that
+unsafe ancestry. In that case, explicitly make a byte-preserving copy into the
+new private directory under a different filename, verify its SHA-256 against the
+original, and import that copy (without a source `.lock`). Do not use inspect
+output as the source document. Initialization is create-only. Stop if initialization reports another permission error and inspect
+that target's complete ACL chain; do not weaken its checks.
+
+Every agent and hook must inherit the same override. To persist it for this
+Windows user, after successful initialization:
+
+```powershell
+[Environment]::SetEnvironmentVariable('AGENT_NOTIFICATIONS_CONFIG', $env:AGENT_NOTIFICATIONS_CONFIG, 'User')
+```
+
+Restart Windows Terminal and agent applications so they inherit the variable,
+then confirm the same selected path in their hook context. Leave `%USERPROFILE%`
+and `%APPDATA%` pointing to their real locations. This storage workaround is
+supported by v1.49.1 and does not depend on the separate OWNER RIGHTS fix.
 
 The following JSON illustrates the schema. Do not replace your existing document with it; apply only explicitly requested leaf edits:
 

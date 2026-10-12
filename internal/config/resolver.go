@@ -194,6 +194,7 @@ func pathErrorAt(p, stage string, err error) error {
 		}
 		copy := sanitizedError(ce.Code, p, ce.Offset, stage, nil)
 		copy.causeErrno = ce.causeErrno
+		copy.permissionFailure = ce.PermissionFailure()
 		return copy
 	}
 	code := ConfigInvalid
