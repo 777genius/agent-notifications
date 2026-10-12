@@ -23,6 +23,9 @@ func identityFor(product DesktopProduct) (desktopIdentity, error) {
 		// Consumer is supplied only by verified portable-key Windows wrappers.
 		return desktopIdentity{"", "Copilot in VS Code", CopilotVSCodeToastAppID, "Copilot in VS Code Notifications.lnk", "copilot-vscode-native-spool"}, nil
 	case CursorDesktop:
+		if runtime.GOOS == "windows" && runtime.GOARCH == "amd64" {
+			return desktopIdentity{"", "Cursor", CursorToastAppID, "Cursor Notifications.lnk", ""}, nil
+		}
 		if runtime.GOOS == "darwin" && runtime.GOARCH == "arm64" {
 			return desktopIdentity{"", "Cursor", "", "", "cursor-native-spool"}, nil
 		}

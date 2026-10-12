@@ -10,12 +10,14 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 
 	"github.com/777genius/agent-notifications/internal/agentnotify/clientsetup"
 	"github.com/777genius/agent-notifications/internal/agentnotify/portable"
 	"github.com/777genius/agent-notifications/internal/agentnotify/registration"
 	"github.com/777genius/agent-notifications/internal/copilotvscodeinstall"
 	"github.com/777genius/agent-notifications/internal/installruntime"
+	"github.com/777genius/agent-notifications/internal/opencodeinstall"
 )
 
 var (
@@ -445,6 +447,40 @@ func revokeExactBinding(ctx context.Context, req Request, present bool) error {
 	}
 	if present {
 		gen := req.ExpectedGeneration
+		var files []installruntime.File
+		if runtime.GOOS == "windows" && req.Binding.Integration == portable.Cursor {
+			snap, err := installruntime.ReadInstalledSnapshot(req.Binding.ControlRoot)
+			if err != nil {
+				return err
+			}
+			executable, err := portable.ResolvePrimaryExecutable(snap.Ledger, req.Binding.Primary)
+			if err != nil {
+				return err
+			}
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return err
+			}
+			file, err := opencodeinstall.StageCursorWindowsShortcut(key, home, executable, false, snap.Ledger)
+			if err != nil {
+				return err
+			}
+			if file != nil {
+				files = append(files, *file)
+			}
+		}
+		if len(files) != 0 {
+			// Remove the owned shortcut through the existing file CAS transaction.
+			// Consumer removal forbids file requests for portable consumers.
+			removed, err := installruntime.Commit(ctx, installruntime.Request{
+				ControlRoot: req.Binding.ControlRoot, Owner: req.Binding.Owner, RuntimeRoot: req.Binding.RuntimeRoot,
+				ConsumerID: key, RefreshOnly: true, ExpectedGeneration: &gen, Reservation: req.Reservation, Files: files,
+			})
+			if err != nil {
+				return err
+			}
+			gen = removed.Generation
+		}
 		if _, err = installruntime.Commit(ctx, installruntime.Request{
 			ControlRoot: req.Binding.ControlRoot, Owner: req.Binding.Owner, RuntimeRoot: req.Binding.RuntimeRoot,
 			ConsumerID: key, RemoveConsumer: true, ExpectedGeneration: &gen, Reservation: req.Reservation,

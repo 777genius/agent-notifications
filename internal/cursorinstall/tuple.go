@@ -16,5 +16,8 @@ func CurrentTuple() (string, cursorhooks.ShellContract) {
 	if runtime.GOOS == "darwin" && runtime.GOARCH == "arm64" {
 		return "2026.09.18-9a7762b", cursorhooks.DarwinUserShell20260918
 	}
+	if runtime.GOOS == "windows" && runtime.GOARCH == "amd64" {
+		return "2026.10.01-e373342", cursorhooks.WindowsUserPowerShell20261001
+	}
 	return "", ""
 }

@@ -163,7 +163,11 @@ func (a *Adapter) requireToken(c domain.DetectedClient) error {
 
 func (a *Adapter) verifyInvocation() error {
 	for _, path := range []string{a.fixed.Executable, a.fixed.Selector} {
-		if err := a.paths.RequireContainedChild(string(filepath.Separator), path); err != nil {
+		root := string(filepath.Separator)
+		if runtime.GOOS == "windows" {
+			root = filepath.VolumeName(path) + root
+		}
+		if err := a.paths.RequireContainedChild(root, path); err != nil {
 			return err
 		}
 	}
@@ -171,7 +175,7 @@ func (a *Adapter) verifyInvocation() error {
 	if err != nil {
 		return err
 	}
-	if !exe.Exists || exe.Mode&0111 == 0 || digest(exe.Body) != a.fixed.ExecutableDigest {
+	if !exe.Exists || runtime.GOOS != "windows" && exe.Mode&0111 == 0 || runtime.GOOS == "windows" && !strings.EqualFold(filepath.Ext(a.fixed.Executable), ".exe") || digest(exe.Body) != a.fixed.ExecutableDigest {
 		return fmt.Errorf("cursor owned observer executable differs or is unavailable")
 	}
 	return nil

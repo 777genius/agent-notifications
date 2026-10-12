@@ -257,7 +257,7 @@ func discoverProductsWithDetector(ctx context.Context, a setupProductsArgs, e pr
 		}
 		if id == "cursor" {
 			// Editor detection/version cannot describe the separate agent CLI.
-			const cursorPlatformReason = "Cursor agent notifications require a qualified Linux amd64 or macOS arm64 CLI"
+			const cursorPlatformReason = "Cursor agent notifications require a qualified Linux amd64, macOS arm64 or Windows amd64 CLI"
 			version, _ := cursorinstall.CurrentTuple()
 			f := productFact{ID: id, Label: productLabels[id], Profile: scopes["scope-root"], Selectable: version != ""}
 			if !f.Selectable {

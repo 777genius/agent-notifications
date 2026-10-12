@@ -23,9 +23,9 @@ import (
 	"github.com/777genius/agent-notifications/internal/copilotvscodeinstall"
 	"github.com/777genius/agent-notifications/internal/cursorinstall"
 	"github.com/777genius/agent-notifications/internal/installruntime"
+	"github.com/777genius/agent-notifications/internal/opencodeinstall"
 	"github.com/777genius/plugin-kit-ai/cli/installerui"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/adapters/pathpolicy"
-	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/adapters/clientdetect"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/adapters/nativeconfig"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/adapters/statev2"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients"
@@ -1069,6 +1069,23 @@ func commitConfirmedCursorConsent(ctx context.Context, r setupwizard.Request, re
 	if err != nil {
 		return deny(err)
 	}
+	if runtime.GOOS == "windows" && i.Request.Desktop {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return deny(err)
+		}
+		file, err := opencodeinstall.StageCursorWindowsShortcut(key, home, fixed.Executable, true, s.Installation.Ledger)
+		if err != nil {
+			return deny(err)
+		}
+		if file != nil {
+			staged, err := installruntime.Commit(ctx, installruntime.Request{ControlRoot: b.ControlRoot, Owner: b.Owner, RuntimeRoot: b.RuntimeRoot, ConsumerID: key, Consumer: consumer, RefreshOnly: true, ExpectedGeneration: &result.Generation, ExpectedPolicy: &policy, Files: []installruntime.File{*file}})
+			if err != nil {
+				return deny(err)
+			}
+			result.Generation = staged.Generation
+		}
+	}
 	ledger, err := installruntime.Commit(ctx, installruntime.Request{ControlRoot: b.ControlRoot, Owner: b.Owner, RuntimeRoot: b.RuntimeRoot, ConsumerID: key, Consumer: consumer, PolicyOnly: true, RefreshOnly: true, ExpectedGeneration: &result.Generation, ExpectedPolicy: &policy, PolicyFields: patch})
 	if err != nil {
 		return deny(err)
@@ -1138,6 +1155,9 @@ const selectedCursorVersion = "2026.09.28-64d2043"
 // Mac evidence qualifies only the fixed native shell tuple; installed receipt,
 // physical profile authority and explicit consent remain mandatory.
 func cursorHostQualification() string {
+	if runtime.GOOS == "windows" && runtime.GOARCH == "amd64" {
+		return "cursor-windows-amd64-20261001:run38220319890:sha84eda2404918:archive31896ce9a43f63c8ae7ff3c4bee868213d6d02d60fb49908bef6dc91d582f6ee"
+	}
 	if runtime.GOOS == "darwin" && runtime.GOARCH == "arm64" {
 		return "cursor-darwin-arm64-20260918:stop-773b7499ccd8afdd5a087be4fe764168455cb80c24caa6b2888cc4608fc472b5:uap-eec70fb9bd5f"
 	}
@@ -1246,7 +1266,7 @@ func composeCursorWizard(ctx context.Context, req setupwizard.Request) (_ setupw
 			return req, err
 		}
 		versionTimeout := 2 * time.Second
-		if runtime.GOOS == "darwin" {
+		if runtime.GOOS == "darwin" || runtime.GOOS == "windows" {
 			versionTimeout = 15 * time.Second
 		}
 		probe, cancel := context.WithTimeout(ctx, versionTimeout)
@@ -1255,7 +1275,7 @@ func composeCursorWizard(ctx context.Context, req setupwizard.Request) (_ setupw
 			// Use noninteractive mode for the bounded version inspection.
 			environment = append(environment, "AGENT_CLI_CREDENTIAL_STORE=file", "CI=1")
 		}
-		version, e := clientdetect.NewOS(filepath.Dir(req.CursorConfig)).ProbeVersionWithEnvironment(probe, agent, environment)
+		version, e := probeCursorVersion(probe, agent, environment)
 		cancel()
 		expectedVersion, _ := cursorinstall.CurrentTuple()
 		if e != nil || expectedVersion == "" || strings.TrimSpace(version) != expectedVersion {
@@ -1556,6 +1576,11 @@ func cursorPendingHandoff(b portable.Binding, snap installruntime.InstalledSnaps
 // observation. Mount metadata only limits evidence scope; UUID/inode authority
 // comes exclusively from public complete-ancestry Capture/Revalidate.
 func cursorQualifiedNamespace(profile string) error {
+	// Public Prepare captures the NTFS volume/file-ID complete ancestry; this
+	// host check neither captures a second token nor substitutes Linux evidence.
+	if runtime.GOOS == "windows" && runtime.GOARCH == "amd64" {
+		return nil
+	}
 	// The existing public Darwin complete-ancestry owner subsequently captures
 	// and revalidates the physical token. No Linux mount evidence is substituted.
 	if runtime.GOOS == "darwin" && runtime.GOARCH == "arm64" {
