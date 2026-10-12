@@ -83,7 +83,11 @@ def prepare(root, agent):
         cli(name,args)
         policy = json.loads((control/'agent-notifications.json').read_bytes())
         assert policy['route']['cursorNotifications'] == {'desktop':enabled,'webhook':enabled}
+    foreign_stop = json.loads((root/'home/.cursor/hooks.json').read_bytes())['hooks']['stop']
     install('cursor-enable',True)
+    ownership = json.loads((control/'ownership.json').read_bytes())
+    shortcuts = [pathlib.Path(p) for p in ownership['Files'] if pathlib.Path(p).name == 'Cursor Notifications.lnk']
+    assert len(shortcuts)==1 and shortcuts[0].is_file(), 'owned Cursor shortcut absent'
     hooks = root/'home/.cursor/hooks.json'
     installed = hooks.read_bytes()
     entries = json.loads(installed)['hooks']['stop']
@@ -120,7 +124,7 @@ def prepare(root, agent):
     assert (root/'toast-watch-ready').exists(), 'OS process watcher not ready'
     return {'root':root,'primary':primary,'env':env,'cli':cli,'install':install,'common':common,
             'records':records,'results':results,'hooks':hooks,'installed':installed,'selector':selector,
-            'close':close_sink,'close_watcher':close_watcher}
+            'close':close_sink,'close_watcher':close_watcher,'foreign_stop':foreign_stop,'shortcut':shortcuts[0]}
 
 def finish(test, native):
     root = test['root']; cli = test['cli']
@@ -144,7 +148,8 @@ def finish(test, native):
     assert len(records)==1, 'update changed disabled consent'
     cli('cursor-uninstall',['setup-notifications','wizard','--action','uninstall','--agents','cursor','--hooks','false','--agent-notify','true',*test['common'],'--yes','--json'])
     remaining = json.loads(test['hooks'].read_bytes())['hooks']['stop']
-    assert len(remaining)==1 and str(test['primary']) not in remaining[0]['command'], 'foreign Stop changed'
+    assert remaining == test['foreign_stop'], 'foreign Stop changed'
+    assert not test['shortcut'].exists(), 'owned Cursor shortcut remains'
     assert not pathlib.Path(test['selector']).exists(), 'locator remains active'
     test['close_watcher'](); atexit.unregister(test['close_watcher'])
     toast = json.loads((root/'toast-processes.json').read_text(encoding='utf-8-sig'))
