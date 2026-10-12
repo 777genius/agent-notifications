@@ -30,12 +30,18 @@ type EnvSnapshot struct {
 	nativeRoot    bool
 	// Native metadata adapter; nil for synthetic resolver environments.
 	permissionDiagnostics func(string) []Diagnostic
+	// Optional Windows-only read-only adapters. Synthetic environments do not
+	// consult native metadata unless they explicitly inject these dependencies.
+	windowsFallback      string
+	windowsFallbackErr   error
+	windowsPreflight     func(home, target string) error
+	windowsFallbackCheck func(path string, exists bool) error
 }
 
 // SnapshotEnv captures path-policy environment once per invocation.
 func SnapshotEnv() EnvSnapshot {
 	e := EnvSnapshot{GOOS: runtime.GOOS, Vars: map[string]string{}, Lstat: os.Lstat, ReadDir: os.ReadDir, Canonicalize: canonicalParent}
-	for _, k := range []string{OverrideEnv, "HOME", "USERPROFILE", "APPDATA", "XDG_CONFIG_HOME"} {
+	for _, k := range []string{OverrideEnv, "HOME", "USERPROFILE", "APPDATA", "PROGRAMDATA", "XDG_CONFIG_HOME"} {
 		if v, ok := os.LookupEnv(k); ok {
 			e.Vars[k] = v
 		}
@@ -49,6 +55,7 @@ func SnapshotEnv() EnvSnapshot {
 	} else {
 		e.configRoot, e.configRootErr = os.UserConfigDir()
 	}
+	snapshotWindowsAutomatic(&e)
 	return e
 }
 
@@ -85,6 +92,10 @@ func Resolve(e EnvSnapshot) (Selection, error) {
 	}
 	neutral, warnings, baseErr := neutralPath(e, home)
 	if legacy.Exists {
+		legacy, err = windowsFallbackConflict(e, legacy)
+		if err != nil {
+			return legacy, err
+		}
 		legacy.Diagnostics = append(legacy.Diagnostics, warnings...)
 		if baseErr != nil {
 			legacy.Diagnostics = append(legacy.Diagnostics, Diagnostic{Code: ConfigBaseUnavailable})
@@ -107,10 +118,76 @@ func Resolve(e EnvSnapshot) (Selection, error) {
 	}
 	n, err := candidate(e, neutral, "universal")
 	n.Diagnostics = append(n.Diagnostics, warnings...)
+	if err == nil && n.Exists {
+		n, err = windowsFallbackConflict(e, n)
+	}
+	if err == nil && !n.Exists && FreshNeutral && e.GOOS == "windows" && e.windowsPreflight != nil {
+		return resolveWindowsAutomatic(e, home, n)
+	}
 	if err == nil && !n.Exists && !FreshNeutral {
 		return legacy, nil
 	}
 	return n, err
+}
+
+// An established private store must never be shadowed by a newly planted
+// profile candidate. Keep both untouched and require an explicit selection.
+func windowsFallbackConflict(e EnvSnapshot, selected Selection) (Selection, error) {
+	if e.GOOS != "windows" || e.windowsFallbackErr != nil || !validAbsolute(e.GOOS, e.windowsFallback) {
+		return selected, nil
+	}
+	other, err := candidate(e, e.windowsFallback, "windows-private")
+	if err != nil {
+		return selected, err
+	}
+	if other.Exists {
+		selected.Diagnostics = append(selected.Diagnostics, Diagnostic{Code: ConfigMultipleCandidates, Path: other.Path})
+		return selected, &Error{Code: ConfigConflict, Path: selected.Path}
+	}
+	return selected, nil
+}
+
+// A previously created fallback remains authoritative when profile ACLs are
+// repaired. Existing legacy/universal entries and their recovery failures have
+// already been classified before this policy runs.
+func resolveWindowsAutomatic(e EnvSnapshot, home string, neutral Selection) (Selection, error) {
+	var fallback Selection
+	if e.windowsFallbackErr == nil && validAbsolute(e.GOOS, e.windowsFallback) {
+		var err error
+		fallback, err = candidate(e, e.windowsFallback, "windows-private")
+		if err != nil {
+			return fallback, err
+		}
+		if fallback.Exists && e.windowsFallbackCheck != nil {
+			if err = e.windowsFallbackCheck(fallback.Path, fallback.Exists); err != nil {
+				return fallback, pathErrorAt(fallback.Path, "windows-fallback-check", err)
+			}
+		}
+		if fallback.Exists {
+			return fallback, nil
+		}
+	}
+	err := e.windowsPreflight(home, neutral.Path)
+	if err == nil {
+		return neutral, nil
+	}
+	var ce *Error
+	// An unexpected I/O failure must never become a new configuration.
+	if !errors.As(err, &ce) || ce.Code != ConfigPermissionDenied {
+		return neutral, pathErrorAt(neutral.Path, "windows-automatic-preflight", err)
+	}
+	if e.windowsFallbackErr != nil {
+		return neutral, pathErrorAt(neutral.Path, "windows-fallback-base", e.windowsFallbackErr)
+	}
+	if fallback.Path == "" {
+		return neutral, &Error{Code: ConfigBaseUnavailable}
+	}
+	if e.windowsFallbackCheck != nil {
+		if err = e.windowsFallbackCheck(fallback.Path, false); err != nil {
+			return fallback, pathErrorAt(fallback.Path, "windows-fallback-check", err)
+		}
+	}
+	return fallback, nil
 }
 func candidate(e EnvSnapshot, p, source string) (Selection, error) {
 	s := Selection{Path: p, Source: source}

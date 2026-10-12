@@ -92,10 +92,19 @@ jobs:
       - name: Qualify Windows configuration and delivery
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
+          go test ./internal/config -run '^TestWindowsAutomatic(NativeAnchorReadOnly|PinSkipsBusyChild)$' -count=1 -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           go build -o bin/claude-notifications.exe ./cmd/claude-notifications
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          go build -o bin/windows-standard-user-e2e.exe ./scripts/windows-standard-user-e2e
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          go test -c ./internal/config -o bin/config-native.test.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          bin/windows-standard-user-e2e.exe bin/config-native.test.exe '-test.run=^TestWindowsAutomaticNativeAnchorReadOnly$' '-test.v=true'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $version = (Get-Content .claude-plugin/plugin.json | ConvertFrom-Json).version
-          python scripts/release-artifact-e2e.py --binary bin/claude-notifications.exe --version "v$version"
+          python scripts/release-artifact-e2e.py --binary bin/claude-notifications.exe --version "v$version" --windows-standard-user-runner bin/windows-standard-user-e2e.exe
 
       - name: Prepare qualified configuration test build
         if: matrix.go == '1.26' && github.event_name == 'pull_request'
