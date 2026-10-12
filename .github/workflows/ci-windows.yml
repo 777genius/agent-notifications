@@ -97,6 +97,28 @@ jobs:
           $version = (Get-Content .claude-plugin/plugin.json | ConvertFrom-Json).version
           python scripts/release-artifact-e2e.py --binary bin/claude-notifications.exe --version "v$version"
 
+      - name: Prepare qualified configuration test build
+        if: matrix.go == '1.26' && github.event_name == 'pull_request'
+        shell: pwsh
+        env:
+          TEST_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          New-Item -ItemType Directory -Force qualified-config-build | Out-Null
+          Copy-Item bin/claude-notifications.exe qualified-config-build/claude-notifications-windows-amd64.exe
+          $hash = (Get-FileHash qualified-config-build/claude-notifications-windows-amd64.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          [IO.File]::WriteAllText("$PWD/qualified-config-build/SHA256SUMS", "$hash  claude-notifications-windows-amd64.exe`n", [Text.UTF8Encoding]::new($false))
+          $info = "Unreleased Windows amd64 test build; not a plugin installer.`nSource: $env:TEST_SOURCE_SHA`n$(go version)`nQualified by release-artifact-e2e.py in this Actions run.`nUse config init --json / config inspect --json to diagnose ACL rejection.`nThe normal version string is retained for packaged-template compatibility.`n"
+          [IO.File]::WriteAllText("$PWD/qualified-config-build/BUILD-INFO.txt", $info, [Text.UTF8Encoding]::new($false))
+
+      - name: Upload qualified configuration test build
+        if: matrix.go == '1.26' && github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-config-test-pr-${{ github.event.pull_request.number }}-go-${{ matrix.go }}
+          path: qualified-config-build/
+          retention-days: 7
+          if-no-files-found: error
+
       - name: Run go vet
         run: go vet ./...
 
