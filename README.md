@@ -11,6 +11,8 @@
   <a href="docs/opencode-notifications.md"><img src="brand/opencode-logo.svg" width="64" height="64" alt="OpenCode" title="OpenCode" /></a>
   &nbsp;&nbsp;
   <a href="docs/gemini-notifications.md"><img src="landing/public/agents/gemini.svg" width="64" height="64" alt="Gemini CLI" title="Gemini CLI" /></a>
+  &nbsp;&nbsp;
+  <a href="docs/cursor-notifications.md"><img src="landing/public/agents/cursor.svg" width="64" height="64" alt="Cursor CLI" title="Cursor CLI" /></a>
 </p>
 
 [![Ubuntu CI](https://github.com/777genius/agent-notifications/actions/workflows/ci-ubuntu.yml/badge.svg?branch=main&event=push)](https://github.com/777genius/agent-notifications/actions/workflows/ci-ubuntu.yml?query=branch%3Amain+event%3Apush)
@@ -19,7 +21,7 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/777genius/agent-notifications.svg)](https://pkg.go.dev/github.com/777genius/agent-notifications)
 [![codecov](https://codecov.io/gh/777genius/agent-notifications/graph/badge.svg?branch=main)](https://codecov.io/gh/777genius/agent-notifications)
 
-Desktop notifications for **Claude, Codex CLI and OpenCode**, plus **Gemini CLI on Linux/Windows**. Know when a task finishes, an agent needs input, or a tool needs approval. Claude and Codex also support sounds and click-to-focus.
+Desktop notifications for **Claude, Codex CLI and OpenCode**, plus **Gemini CLI on Linux/Windows** and **Cursor CLI on qualified Linux amd64, macOS arm64 and Windows amd64 hosts**. Available events depend on the agent; see the support table below. Claude and Codex also support sounds and click-to-focus.
 
 <p align="center">
   <img width="100%" alt="macOS, Windows, Linux (left to right)" src="docs/images/notification-platform-labels.svg" />
@@ -35,6 +37,8 @@ Desktop notifications for **Claude, Codex CLI and OpenCode**, plus **Gemini CLI 
 ```bash
 (set -o pipefail; curl -fsSL https://agent-notifications.com/install.sh | bash)
 ```
+
+**Cursor CLI:** [install separately with an explicit CLI executable and profile](docs/cursor-notifications.md). The managed UAP integration sends informational Stop notifications and optional webhooks; it does not provide Cursor IDE, question or permission alerts.
 
 Choose **Claude**, **Codex CLI**, **OpenCode**, **Gemini CLI** (Linux/Windows), or a combination. Install the selected agent CLIs first and make them available on `PATH`. The installer also requires curl, Bash, and a working `python3` or `node` on `PATH`; see [agent/platform prerequisites](docs/INSTALLATION.md#prerequisites). Run the same command to update.
 
@@ -91,6 +95,7 @@ Claude/Codex setup also installs the `agent-notify` MCP server and `agent-notifi
 | **Codex CLI** | Turn completion and tool permissions; experimental question hooks and final-message question/error detection | Yes | [Setup and limits](docs/CODEX.md) |
 | **OpenCode** | Root-session completion, questions, permissions and errors | No | [Setup and limits](docs/opencode-notifications.md) |
 | **Gemini CLI** | Turn completion and tool permissions | No | [Linux/Windows setup and qualification](docs/gemini-notifications.md) |
+| **Cursor CLI** | Agent loop stopping; fixed informational text | No | [Qualified versions, platforms and explicit setup](docs/cursor-notifications.md) |
 
 OpenCode V1 and V2 use one installed plugin. The installer accepts stable V1 **>= 1.18.29** and V2 **>= 2.0.0**; prereleases and unknown API generations are rejected. This compatibility range does not mean every version has been tested. See [OpenCode setup, release reports and delivery limits](docs/opencode-notifications.md) for qualification of specific versions and platforms.
 
