@@ -112,7 +112,8 @@ func checkWindowsACL(f *os.File, private bool) error {
 	if err != nil {
 		return err
 	}
-	if private && !owner.Equals(user.User.Sid) && owner.String() != "S-1-5-18" && owner.String() != "S-1-5-32-544" {
+	trustedOwner := owner.Equals(user.User.Sid) || owner.String() == "S-1-5-18" || owner.String() == "S-1-5-32-544"
+	if private && !trustedOwner {
 		return &Error{Code: ConfigPermissionDenied}
 	}
 	acl, _, err := sd.DACL()
@@ -137,6 +138,11 @@ func checkWindowsACL(f *os.File, private bool) error {
 			return &Error{Code: ConfigPermissionDenied}
 		}
 		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
+		// OWNER RIGHTS applies to the object's actual owner, not to a public
+		// group. Python's Windows mkdir(0700), among others, uses this SID.
+		if sid.String() == "S-1-3-4" && trustedOwner {
+			continue
+		}
 		if sid.Equals(user.User.Sid) || sid.String() == "S-1-5-18" || sid.String() == "S-1-5-32-544" {
 			continue
 		}

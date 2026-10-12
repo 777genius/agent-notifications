@@ -109,11 +109,15 @@ func openSnapshotFile(path string) (*os.File, error) { return os.Open(path) }
 // to expand group memberships or reinterpret deny-ACE precedence.
 func nativePermissionDiagnostics(path string) []Diagnostic {
 	warning := func(code Code) []Diagnostic { return []Diagnostic{{Code: code, Path: path}} }
-	sd, err := windows.GetNamedSecurityInfo(extendedWindowsPath(path), windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
+	sd, err := windows.GetNamedSecurityInfo(extendedWindowsPath(path), windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION)
 	if err != nil {
 		return warning(ConfigPermissionDenied)
 	}
 	user, err := windows.GetCurrentProcessToken().GetTokenUser()
+	if err != nil {
+		return warning(ConfigPermissionDenied)
+	}
+	owner, _, err := sd.Owner()
 	if err != nil {
 		return warning(ConfigPermissionDenied)
 	}
@@ -136,6 +140,9 @@ func nativePermissionDiagnostics(path string) []Diagnostic {
 			return warning(ConfigPublicReadable)
 		}
 		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
+		if sid.String() == "S-1-3-4" && (owner.Equals(user.User.Sid) || owner.String() == "S-1-5-18") {
+			continue
+		}
 		if sid.Equals(user.User.Sid) || sid.String() == "S-1-5-18" {
 			continue
 		}
