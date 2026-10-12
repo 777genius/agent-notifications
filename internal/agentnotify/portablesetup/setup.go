@@ -469,9 +469,21 @@ func revokeExactBinding(ctx context.Context, req Request, present bool) error {
 				files = append(files, *file)
 			}
 		}
+		if len(files) != 0 {
+			// Remove the owned shortcut through the existing file CAS transaction.
+			// Consumer removal forbids file requests for portable consumers.
+			removed, err := installruntime.Commit(ctx, installruntime.Request{
+				ControlRoot: req.Binding.ControlRoot, Owner: req.Binding.Owner, RuntimeRoot: req.Binding.RuntimeRoot,
+				ConsumerID: key, RefreshOnly: true, ExpectedGeneration: &gen, Reservation: req.Reservation, Files: files,
+			})
+			if err != nil {
+				return err
+			}
+			gen = removed.Generation
+		}
 		if _, err = installruntime.Commit(ctx, installruntime.Request{
 			ControlRoot: req.Binding.ControlRoot, Owner: req.Binding.Owner, RuntimeRoot: req.Binding.RuntimeRoot,
-			ConsumerID: key, RemoveConsumer: true, ExpectedGeneration: &gen, Reservation: req.Reservation, Files: files,
+			ConsumerID: key, RemoveConsumer: true, ExpectedGeneration: &gen, Reservation: req.Reservation,
 		}); err != nil {
 			return err
 		}
