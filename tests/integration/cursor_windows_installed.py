@@ -133,13 +133,15 @@ def finish(test, native):
     payload = (root/'native-stop.json').read_bytes()
     cli('cursor-replay',['cursor-event','stop','--binding',test['selector']],payload)
     assert len(records)==1, 'duplicate webhook'
-    test['install']('cursor-update',True)
-    cli('cursor-replay-after-update',['cursor-event','stop','--binding',test['selector']],payload)
-    assert len(records)==1, 'update lost duplicate guard'
     test['install']('cursor-disable',False)
     disabled = json.loads(payload); disabled['generation_id']=str(uuid.uuid4())
     cli('cursor-disabled-event',['cursor-event','stop','--binding',test['selector']],json.dumps(disabled).encode())
     assert len(records)==1, 'disabled webhook'
+    # Trusted installation generation is deliberately part of the duplicate key.
+    # Match the established Linux lifecycle: update must preserve disabled consent.
+    test['install']('cursor-update',False)
+    cli('cursor-replay-after-update',['cursor-event','stop','--binding',test['selector']],payload)
+    assert len(records)==1, 'update changed disabled consent'
     cli('cursor-uninstall',['setup-notifications','wizard','--action','uninstall','--agents','cursor','--hooks','false','--agent-notify','true',*test['common'],'--yes','--json'])
     remaining = json.loads(test['hooks'].read_bytes())['hooks']['stop']
     assert len(remaining)==1 and str(test['primary']) not in remaining[0]['command'], 'foreign Stop changed'

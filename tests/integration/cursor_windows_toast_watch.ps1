@@ -4,6 +4,15 @@ $primary = [IO.Path]::GetFullPath((Join-Path $root 'home/.local/bin/claude-notif
 $rows = @()
 $owned = @{}
 $registrations = @()
+function Read-Process([string]$processID) {
+    try {
+        $process = New-Object System.Management.ManagementObject("\\.\root\cimv2:Win32_Process.Handle='$processID'")
+        $process.Get()
+        return $process
+    } catch { return $null }
+}
+# Warm up local WMI before any short-lived owned child is started.
+if (!(Read-Process ([string]$PID))) { throw 'Local process observation unavailable' }
 'starting' | Set-Content (Join-Path $root 'toast-watch-startup')
 try {
     $registrations += Register-CimIndicationEvent -Query "SELECT * FROM Win32_ProcessStartTrace WHERE ProcessName='powershell.exe'" -SourceIdentifier 'TEST-Cursor-Start'
@@ -17,8 +26,8 @@ try {
             $id = [string]$value.ProcessID
             if ($event.SourceIdentifier -eq 'TEST-Cursor-Start') {
                 # Query command first: the child can exit while querying its parent.
-                $child = Get-CimInstance Win32_Process -Filter "ProcessId=$id" -ErrorAction SilentlyContinue
-                $parent = Get-CimInstance Win32_Process -Filter "ProcessId=$($value.ParentProcessID)" -ErrorAction SilentlyContinue
+                $child = Read-Process $id
+                $parent = Read-Process ([string]$value.ParentProcessID)
                 if ($parent.ExecutablePath -eq $primary) {
                     if (!$child) { throw 'Owned PowerShell command unavailable' }
                     # Shortcut readiness also uses owned PowerShell children.
