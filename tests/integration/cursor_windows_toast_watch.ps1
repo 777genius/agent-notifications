@@ -4,8 +4,10 @@ $primary = Join-Path $root 'home/.local/bin/claude-notifications-windows-amd64.e
 $rows = @()
 $owned = @{}
 $registrations = @()
+'starting' | Set-Content (Join-Path $root 'toast-watch-startup')
 try {
     $registrations += Register-CimIndicationEvent -Query "SELECT * FROM Win32_ProcessStartTrace WHERE ProcessName='powershell.exe'" -SourceIdentifier 'TEST-Cursor-Start'
+    'start subscription registered' | Add-Content (Join-Path $root 'toast-watch-startup')
     $registrations += Register-CimIndicationEvent -Query "SELECT * FROM Win32_ProcessStopTrace WHERE ProcessName='powershell.exe'" -SourceIdentifier 'TEST-Cursor-Stop'
     'ready' | Set-Content (Join-Path $root 'toast-watch-ready')
     $deadline = [DateTime]::UtcNow.AddSeconds(180)

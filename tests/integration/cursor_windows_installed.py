@@ -113,7 +113,7 @@ def prepare(root, agent):
             (root/'toast-watch.stderr').write_bytes(err)
         assert watcher.returncode==0, err
     atexit.register(close_watcher)
-    limit = time.monotonic()+15
+    limit = time.monotonic()+60
     while not (root/'toast-watch-ready').exists() and time.monotonic()<limit and watcher.poll() is None:
         time.sleep(.05)
     assert (root/'toast-watch-ready').exists(), 'OS process watcher not ready'

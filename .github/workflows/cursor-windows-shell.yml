@@ -70,6 +70,7 @@ jobs:
             ${{ env.CURSOR_TEST_ROOT }}/archive-sha256.txt
             ${{ env.CURSOR_TEST_ROOT }}/installed-result.json
             ${{ env.CURSOR_TEST_ROOT }}/toast-processes.json
+            ${{ env.CURSOR_TEST_ROOT }}/toast-watch-startup
             ${{ env.CURSOR_TEST_ROOT }}/*.stdout
             ${{ env.CURSOR_TEST_ROOT }}/*.stderr
           if-no-files-found: warn
