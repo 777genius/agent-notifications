@@ -1042,6 +1042,15 @@ func commitConfirmedCursorConsent(ctx context.Context, r setupwizard.Request, re
 	if s.Installation.Recovery || s.Installation.Ledger.PendingMutation != nil || s.Installation.Ledger.ID != i.Initial.LedgerID || s.Installation.Ledger.Owner != i.Initial.Owner || s.Installation.Ledger.Generation != result.Generation || s.Preimage != policy {
 		return deny(portablesetup.ErrConcurrentChange)
 	}
+	// The fresh Cursor path has no legacy configure phase. Initialize only the
+	// bound canonical document before physical qualification; the shared writer
+	// preserves an existing document and grants no channel consent.
+	env := config.SnapshotEnv()
+	env.Vars = map[string]string{config.OverrideEnv: b.GlobalConfig}
+	initialized, err := config.EnsureInitialized(ctx, config.InitRequest{Env: env, Assets: config.AssetContext{Agent: config.AgentCursor, PluginRoot: b.RuntimeRoot}})
+	if err != nil || initialized.Selection.Path != b.GlobalConfig {
+		return deny(setupwizard.ErrRefused)
+	}
 	cfg, fixed, err := cursorInstalledInputs(ctx, b, s.Installation, filepath.Join(filepath.Dir(b.ControlRoot), "uap", "state"))
 	if err != nil {
 		return deny(err)
