@@ -58,14 +58,14 @@ Use the installed executable and control root reported by setup. Keep the same e
   --client-executable "$CURSOR_CLI" --yes --json
 ```
 
-If setup reported a custom control root, pass that exact `--control-root` too. To disable notifications while retaining registration, rerun the installation command with explicit false values and confirm its plan:
+Pass the exact `--control-root`, `--runtime-root` and `--global-config` paths reported by setup when they differ from your defaults. To disable notifications while retaining registration, use the installed wizard:
 
 ```bash
-(set -o pipefail; curl -fsSL https://agent-notifications.com/install.sh | bash -s -- \
-  --product cursor --scope-root "$CURSOR_PROFILE" \
-  --client-executable "$CURSOR_CLI" --desktop=false --webhook=false)
+"$AN" setup-notifications wizard --action install --agents cursor \
+  --hooks false --agent-notify false --scope-root "$CURSOR_PROFILE" \
+  --client-executable "$CURSOR_CLI" --yes --json
 ```
 
-An empty interactive channel selection cancels setup; it does not disable notifications. An update without channel flags preserves disabled consent. Uninstall removes only owned integration entries and runtime references, preserving foreign hook entries and other clients.
+An empty interactive channel selection cancels setup; it does not disable notifications. Cursor bootstrap does not accept explicit false channel flags; use the wizard command above. An update without channel flags preserves disabled consent. Uninstall removes only owned integration entries and runtime references, preserving foreign hook entries and other clients.
 
 [General installation and prerequisites](INSTALLATION.md) · [Configuration](CONFIGURATION.md) · [Platform release channels](PLATFORM_RELEASE_CHANNELS.md)
