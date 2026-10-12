@@ -174,6 +174,9 @@ env={k:os.environ[k] for k in ('SystemRoot','WINDIR','COMSPEC','PATH','PATHEXT')
 env.update(HOME=str(ROOT/'home'),USERPROFILE=str(ROOT/'home'),LOCALAPPDATA=str(ROOT/'localappdata'),
  APPDATA=str(ROOT/'appdata'),TEMP=str(ROOT),TMP=str(ROOT),CI='1',
  AGENT_CLI_CREDENTIAL_STORE='file',CURSOR_AUTH_TOKEN='TEST-loopback-not-a-secret')
+if installed_test is not None:
+    # Native child must inherit the same opted-in TEST configuration as setup.
+    env['AGENT_NOTIFICATIONS_CONFIG'] = installed_test['env']['AGENT_NOTIFICATIONS_CONFIG']
 try:
     proc=subprocess.Popen([os.environ['COMSPEC'],'/d','/s','/c',str(gate)],env=env,cwd=ROOT/'workspace',
      stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
