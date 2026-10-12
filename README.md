@@ -21,7 +21,7 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/777genius/agent-notifications.svg)](https://pkg.go.dev/github.com/777genius/agent-notifications)
 [![codecov](https://codecov.io/gh/777genius/agent-notifications/graph/badge.svg?branch=main)](https://codecov.io/gh/777genius/agent-notifications)
 
-Desktop notifications for **Claude, Codex CLI and OpenCode**, plus **Gemini CLI on Linux/Windows** and **Cursor CLI on qualified Linux amd64, macOS arm64 and Windows amd64 hosts**. Available events depend on the agent; see the support table below. Claude and Codex also support sounds and click-to-focus.
+Desktop notifications for **Claude, Codex CLI, OpenCode, Gemini CLI and Cursor CLI** on **macOS, Linux and Windows**. Supported architectures and events vary by agent; see the support table and linked setup guides. Claude and Codex also support sounds and click-to-focus.
 
 <p align="center">
   <img width="100%" alt="macOS, Windows, Linux (left to right)" src="docs/images/notification-platform-labels.svg" />
@@ -40,7 +40,7 @@ Desktop notifications for **Claude, Codex CLI and OpenCode**, plus **Gemini CLI 
 
 **Cursor CLI:** [install separately with an explicit CLI executable and profile](docs/cursor-notifications.md). The managed UAP integration sends informational Stop notifications and optional webhooks; it does not provide Cursor IDE, question or permission alerts.
 
-Choose **Claude**, **Codex CLI**, **OpenCode**, **Gemini CLI** (Linux/Windows), or a combination. Install the selected agent CLIs first and make them available on `PATH`. The installer also requires curl, Bash, and a working `python3` or `node` on `PATH`; see [agent/platform prerequisites](docs/INSTALLATION.md#prerequisites). Run the same command to update.
+Choose **Claude**, **Codex CLI**, **OpenCode**, **Gemini CLI**, or a combination. Install the selected agent CLIs first and make them available on `PATH`. The installer also requires curl, Bash, and a working `python3` or `node` on `PATH`; see [agent/platform prerequisites](docs/INSTALLATION.md#prerequisites). Run the same command to update.
 
 **Windows:** use **Git Bash**, not WSL, for a native Windows installation.
 
@@ -49,7 +49,7 @@ After setup:
 - **Claude:** restart Claude.
 - **Codex:** restart Codex, then review and trust the installed hooks in `/hooks`.
 - **OpenCode:** restart OpenCode; on macOS, [grant notification permission](docs/opencode-notifications.md#macos-notification-permission).
-- **Gemini CLI (Linux/Windows):** restart Gemini to reload its hooks.
+- **Gemini CLI:** restart Gemini to reload its hooks.
 
 The installer selects a release from the [platform channels](docs/PLATFORM_RELEASE_CHANNELS.md) for your OS and architecture. See that page for current versions and the [release notes](https://github.com/777genius/agent-notifications/releases) for validation details and known limitations.
 
@@ -70,7 +70,7 @@ Use `--product claude` or `--product both` for Claude or Claude + Codex. For Cla
 (set -o pipefail; curl -fsSL https://agent-notifications.com/install.sh | bash -s -- --products claude,codex,opencode --desktop)
 ```
 
-On Linux/Windows, add `,gemini` to `--products` for all four agents, or use `--product gemini` for Gemini only. Fresh OpenCode/Gemini setup defaults to desktop notifications with webhooks off; updates preserve saved channel choices when no channel flags are supplied. Explicit flags replace the channel pair: `--desktop` enables desktop only, `--webhook` enables webhooks only, and both enable both. Webhook destinations need separate configuration. These flags do not change Claude/Codex channels.
+On macOS/Linux/Windows, add `,gemini` to `--products` for all four agents, or use `--product gemini` for Gemini only. Fresh OpenCode/Gemini setup defaults to desktop notifications with webhooks off; updates preserve saved channel choices when no channel flags are supplied. Explicit flags replace the channel pair: `--desktop` enables desktop only, `--webhook` enables webhooks only, and both enable both. Webhook destinations need separate configuration. These flags do not change Claude/Codex channels.
 
 Claude/Codex setup also installs the `agent-notify` MCP server and `agent-notifications` skill so an agent can notify you during a task. Open a new session after setup. When an existing managed MCP installation or binding is detected, automatic setup keeps absent clients off; use `--agent-notify` to add them explicitly. Use `--skip-agent-notify` to skip their setup for that run; it neither removes an existing MCP installation nor records a permanent opt-out. [Setup and recovery details](docs/INSTALLATION.md).
 
@@ -94,7 +94,7 @@ Claude/Codex setup also installs the `agent-notify` MCP server and `agent-notifi
 | **Claude** | Completions, reviews, questions, plans, session limits and API errors | Yes | [Notification types](docs/NOTIFICATION_TYPES.md) |
 | **Codex CLI** | Turn completion and tool permissions; experimental question hooks and final-message question/error detection | Yes | [Setup and limits](docs/CODEX.md) |
 | **OpenCode** | Root-session completion, questions, permissions and errors | No | [Setup and limits](docs/opencode-notifications.md) |
-| **Gemini CLI** | Turn completion and tool permissions | No | [Linux/Windows setup and qualification](docs/gemini-notifications.md) |
+| **Gemini CLI** | Turn completion and tool permissions | No | [Cross-platform setup and qualification](docs/gemini-notifications.md) |
 | **Cursor CLI** | Agent loop stopping; fixed informational text | No | [Qualified versions, platforms and explicit setup](docs/cursor-notifications.md) |
 
 OpenCode V1 and V2 use one installed plugin. The installer accepts stable V1 **>= 1.18.29** and V2 **>= 2.0.0**; prereleases and unknown API generations are rejected. This compatibility range does not mean every version has been tested. See [OpenCode setup, release reports and delivery limits](docs/opencode-notifications.md) for qualification of specific versions and platforms.
