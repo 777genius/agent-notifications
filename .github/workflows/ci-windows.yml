@@ -99,6 +99,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           go build -o bin/windows-standard-user-e2e.exe ./scripts/windows-standard-user-e2e
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          go test -c ./internal/config -o bin/config-native.test.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          bin/windows-standard-user-e2e.exe bin/config-native.test.exe -test.run '^TestWindowsAutomaticNativeAnchorReadOnly$' -test.v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $version = (Get-Content .claude-plugin/plugin.json | ConvertFrom-Json).version
           python scripts/release-artifact-e2e.py --binary bin/claude-notifications.exe --version "v$version" --windows-standard-user-runner bin/windows-standard-user-e2e.exe
 

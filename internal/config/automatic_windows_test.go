@@ -43,7 +43,7 @@ func TestWindowsAutomaticPinSkipsBusyChild(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h, err := windows.CreateFile(name, windows.GENERIC_READ, 0, nil, windows.OPEN_EXISTING, windows.FILE_ATTRIBUTE_NORMAL, 0)
+	h, err := windows.CreateFile(name, windows.GENERIC_READ|windows.DELETE, 0, nil, windows.OPEN_EXISTING, windows.FILE_ATTRIBUTE_NORMAL, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,6 +83,9 @@ func TestWindowsAutomaticNativeAnchorReadOnly(t *testing.T) {
 		t.Fatalf("native anchor: %T %v (%#v)", err, err, err)
 	}
 	p.close()
+	if err := anchor.checkSelection(filepath.Join(anchor.dir, "config.json"), false); err != nil {
+		t.Fatalf("native selection: %T %v (%#v)", err, err, err)
+	}
 }
 
 // Each assertion catches an actual security boundary: ordinary attribute-write
