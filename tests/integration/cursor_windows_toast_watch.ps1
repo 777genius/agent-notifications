@@ -30,11 +30,7 @@ try {
                 $parent = Read-Process ([string]$value.ParentProcessID)
                 if ($parent.ExecutablePath -eq $primary) {
                     if (!$child) { throw 'Owned PowerShell command unavailable' }
-                    # Shortcut readiness also uses owned PowerShell children.
-                    if (!$child.CommandLine.Contains('ToastNotificationManager') -or !$child.CommandLine.Contains('.Show($toast)')) {
-                        Remove-Event -EventIdentifier $event.EventIdentifier
-                        continue
-                    }
+                    if (!$child.CommandLine.Contains('ToastNotificationManager') -or !$child.CommandLine.Contains('.Show($toast)')) { throw 'Owned toast command unavailable or changed' }
                     $owned[$id] = $true
                     $rows += @{ kind='start'; pid=$value.ProcessID; parent=$value.ParentProcessID; command=$child.CommandLine }
                 }

@@ -3,9 +3,11 @@ package cursorsource_test
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"runtime"
 	"strings"
 	"testing"
+	"unicode/utf16"
 
 	source "github.com/777genius/agent-notifications/internal/cursorsource"
 	pluginkitai "github.com/777genius/plugin-kit-ai/sdk"
@@ -128,6 +130,27 @@ func TestDecodeRejectsInvalidPublicFramesAndCancellation(t *testing.T) {
 
 // Native Windows hook transport emits UTF-8 BOM; do not accept repeated BOM or UTF-16.
 func TestQualifiedWindowsPowerShellBOM(t *testing.T) {
+	for _, encoding := range []struct {
+		name  string
+		order binary.ByteOrder
+		bom   []byte
+	}{
+		{"UTF16LE", binary.LittleEndian, []byte{0xff, 0xfe}},
+		{"UTF16BE", binary.BigEndian, []byte{0xfe, 0xff}},
+	} {
+		t.Run(encoding.name, func(t *testing.T) {
+			input := append([]byte(nil), encoding.bom...)
+			for _, unit := range utf16.Encode([]rune(frame)) {
+				var pair [2]byte
+				encoding.order.PutUint16(pair[:], unit)
+				input = append(input, pair[:]...)
+			}
+			if _, err := source.Decode(context.Background(), source.Selector, input); err == nil {
+				t.Fatal("UTF16 frame accepted")
+			}
+		})
+	}
+
 	for _, tc := range []struct {
 		name     string
 		prefix   []byte
