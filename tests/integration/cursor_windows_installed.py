@@ -55,7 +55,9 @@ def prepare(root, agent):
             records.append(json.loads(self.rfile.read(size)))
             self.send_response(200); self.send_header('Content-Length','0'); self.end_headers()
     sink = http.server.HTTPServer(('127.0.0.1',0),Sink)
-    thread = threading.Thread(target=sink.serve_forever); thread.start()
+    # Interpreter shutdown runs atexit only after non-daemon threads finish.
+    # The explicit close still joins this owned thread on success and failure.
+    thread = threading.Thread(target=sink.serve_forever, daemon=True); thread.start()
     def close_sink():
         sink.shutdown(); sink.server_close(); thread.join(timeout=5)
         assert not thread.is_alive()

@@ -1576,6 +1576,11 @@ func cursorPendingHandoff(b portable.Binding, snap installruntime.InstalledSnaps
 // observation. Mount metadata only limits evidence scope; UUID/inode authority
 // comes exclusively from public complete-ancestry Capture/Revalidate.
 func cursorQualifiedNamespace(profile string) error {
+	// Public Prepare captures the NTFS volume/file-ID complete ancestry; this
+	// host check neither captures a second token nor substitutes Linux evidence.
+	if runtime.GOOS == "windows" && runtime.GOARCH == "amd64" {
+		return nil
+	}
 	// The existing public Darwin complete-ancestry owner subsequently captures
 	// and revalidates the physical token. No Linux mount evidence is substituted.
 	if runtime.GOOS == "darwin" && runtime.GOARCH == "arm64" {
