@@ -1,7 +1,7 @@
 {
   "seo": {
     "title": "Agent Notifications - 专注工作，及时获知进展",
-    "description": "适用于 Claude、Codex CLI 和 OpenCode 的桌面通知与 Webhook。 Gemini CLI: Linux / Windows."
+    "description": "适用于 Claude、Codex CLI 和 OpenCode 的桌面通知与 Webhook。 Gemini CLI: Linux / Windows. Cursor CLI: Linux amd64 / macOS arm64 / Windows amd64."
   },
   "language": {
     "label": "语言",
@@ -29,7 +29,7 @@
     "title": "保持专注",
     "emphasis": "需要你时，我们会提醒",
     "leadFirst": "让智能体安心工作，完成时你自然会知道。",
-    "leadSecond": "适用于 Claude、Codex CLI 和 OpenCode 的桌面通知与 Webhook。 Gemini CLI: Linux / Windows.",
+    "leadSecond": "适用于 Claude、Codex CLI 和 OpenCode 的桌面通知与 Webhook。 Gemini CLI: Linux / Windows. Cursor CLI: Linux amd64 / macOS arm64 / Windows amd64.",
     "primary": "设置通知",
     "secondary": "在 GitHub 上查看",
     "note": "开源 · 本地运行"
@@ -234,6 +234,7 @@
     "scrollDown": "向下滚动选项"
   },
   "install": {
+    "cursor": {"guide": "安装 Cursor CLI", "scope": "Stop 通知和可选 Webhook。使用明确的 CLI 和配置目录路径单独安装；仅支持经过验证的 Linux amd64、macOS arm64 和 Windows amd64 版本。"},
     "platformRelease": "{os} 的已验证版本：{version}。",
     "title": "设置通知",
     "intro": "按照以下步骤为 {agent} 添加通知。",
@@ -252,7 +253,8 @@
       "codex": "Codex CLI",
       "both": "Claude + Codex CLI",
       "opencode": "OpenCode",
-      "gemini": "Gemini CLI"
+      "gemini": "Gemini CLI",
+      "cursor": "Cursor CLI"
     },
     "targets": {
       "unknown": "选择目标操作系统",
