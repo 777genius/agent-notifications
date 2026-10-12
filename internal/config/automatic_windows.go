@@ -178,7 +178,9 @@ func pinWindowsAnchorChild(root string, parent *os.File) (*os.File, error) {
 		if entry.Type()&os.ModeSymlink != 0 {
 			continue
 		}
-		f, err := winOpen(filepath.Join(root, entry.Name()), windows.FILE_READ_ATTRIBUTES, windows.OPEN_EXISTING, windows.FILE_FLAG_BACKUP_SEMANTICS, false)
+		// Attribute-only opens bypass Windows sharing checks. Request data
+		// read access so omitting FILE_SHARE_DELETE actually pins this entry.
+		f, err := winOpen(filepath.Join(root, entry.Name()), windows.GENERIC_READ, windows.OPEN_EXISTING, windows.FILE_FLAG_BACKUP_SEMANTICS, false)
 		if err == nil {
 			// A concurrent empty-directory junction conversion could make
 			// pathname enumeration/opening reach a different parent. Bind
