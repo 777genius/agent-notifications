@@ -174,7 +174,10 @@ def main():
                 if case == 'windows-owner-rights':
                     _windows_owner_rights_profile(home)
                 env = {key: os.environ[key] for key in
-                       ('PATH', 'SystemRoot', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'PATHEXT')
+                       # KnownFolder expands these machine-level variables.
+                       # Preserve them while keeping all user paths isolated.
+                       ('PATH', 'SystemRoot', 'SYSTEMROOT', 'SystemDrive', 'SYSTEMDRIVE',
+                        'ALLUSERSPROFILE', 'WINDIR', 'COMSPEC', 'PATHEXT')
                        if key in os.environ}
                 env.update(HOME=str(home), USERPROFILE=str(home), GIT_CONFIG_NOSYSTEM='1')
                 for key in ('CODEX_HOME', 'CLAUDE_HOME', 'CLAUDE_CONFIG_DIR',
