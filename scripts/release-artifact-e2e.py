@@ -103,6 +103,25 @@ def _windows_owner_rights_profile(path):
                    timeout=30, check=True)
 
 
+def _windows_writable_profile(path):
+    # Reproduce #466's profile-root Modify/DeleteChild grants with an actual
+    # unrelated trustee. Only this disposable profile is changed.
+    script = (
+        '$ErrorActionPreference = "Stop"\n'
+        '$p = $env:DIAG_PATH\n'
+        '$acl = Get-Acl -LiteralPath $p\n'
+        '$everyone = New-Object System.Security.Principal.SecurityIdentifier("S-1-1-0")\n'
+        '$inherit = [System.Security.AccessControl.InheritanceFlags]"ContainerInherit, ObjectInherit"\n'
+        '$none = [System.Security.AccessControl.PropagationFlags]::None\n'
+        '$allow = [System.Security.AccessControl.AccessControlType]::Allow\n'
+        '$acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($everyone, "Modify, DeleteSubdirectoriesAndFiles", $inherit, $none, $allow)))\n'
+        'Set-Acl -LiteralPath $p -AclObject $acl\n'
+    )
+    subprocess.run(['pwsh', '-NoProfile', '-NonInteractive', '-Command', script],
+                   env=dict(os.environ, DIAG_PATH=str(path)), text=True,
+                   timeout=30, check=True)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--binary', type=Path, required=True)
@@ -133,7 +152,7 @@ def main():
             _windows_acl_diagnostic(root, 'after private-root normalization')
             cases = ['fresh', 'legacy', 'explicit']
             if os.name == 'nt':
-                cases.append('windows-owner-rights')
+                cases.extend(('windows-owner-rights', 'windows-sandbox-profile'))
             for case in cases:
                 home = root / case
                 home.mkdir()
@@ -162,7 +181,22 @@ def main():
 
                 assert run('version').stdout.strip() == 'claude-notifications ' + args.version
                 legacy = home / '.claude' / 'claude-notifications-go' / 'config.json'
-                if case == 'explicit':
+                if case == 'windows-sandbox-profile':
+                    _windows_writable_profile(home)
+                    # Repairing APPDATA alone cannot fix the writable home.
+                    _windows_private_scratch_root(Path(env['APPDATA']))
+                    denied = run('config', 'init', success=False)
+                    assert 'ConfigPermissionDenied' in denied.stderr, denied
+                    assert not (home / '.agent-notifications-config.lock').exists()
+                    env['AGENT_NOTIFICATIONS_CONFIG'] = str(Path(env['APPDATA']) / 'agent-notifications' / 'config.json')
+                    denied = run('config', 'init', success=False)
+                    assert 'ConfigPermissionDenied' in denied.stderr, denied
+                    # Explicit selection outside that ancestry can skip the
+                    # unavailable profile guard and retain its private target lock.
+                    safe = root / 'sandbox-private-config'
+                    safe.mkdir()
+                    env['AGENT_NOTIFICATIONS_CONFIG'] = str(safe / 'config.json')
+                elif case == 'explicit':
                     env['AGENT_NOTIFICATIONS_CONFIG'] = str(home / 'custom' / 'config.json')
                 if case == 'legacy':
                     legacy.parent.mkdir(parents=True, mode=0o777 if os.name == 'nt' else 0o700)
@@ -171,7 +205,7 @@ def main():
                 selected = Path(run('config', 'path').stdout.strip())
                 if case == 'legacy':
                     assert selected == legacy
-                elif case == 'explicit':
+                elif case in ('explicit', 'windows-sandbox-profile'):
                     assert selected == Path(env['AGENT_NOTIFICATIONS_CONFIG'])
                 else:
                     assert selected != legacy
@@ -181,6 +215,9 @@ def main():
                     _windows_acl_diagnostic(selected.parent, 'on config init failure')
                     raise
                 assert selected.exists()
+                if case == 'windows-sandbox-profile':
+                    assert (selected.parent / (selected.name + '.lock')).exists()
+                    assert not (home / '.agent-notifications-config.lock').exists()
                 if case != 'legacy':
                     assert not legacy.exists()
                 document = {
