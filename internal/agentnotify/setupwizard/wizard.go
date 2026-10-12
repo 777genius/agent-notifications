@@ -618,7 +618,13 @@ func evaluate(ctx context.Context, req *Request, requireYes bool) evaluated {
 			out.Outcome, out.Reason = "conflict", "concurrent_change"
 			return evaluated{out: out, err: observeErr, stop: true}
 		}
-		req.BootstrapExpectedPolicy = &policy
+		if req.BootstrapExpectedPolicy != nil && *req.BootstrapExpectedPolicy != policy {
+			out.Outcome, out.Reason = "conflict", "concurrent_change"
+			return evaluated{out: out, err: ErrRefused, stop: true}
+		}
+		if req.BootstrapExpectedPolicy == nil {
+			req.BootstrapExpectedPolicy = &policy
+		}
 	}
 	runtimeRoot := req.RuntimeRoot
 	if runtimeRoot == "" {
