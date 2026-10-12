@@ -406,7 +406,9 @@ func runInstallOrUpdate(ctx context.Context, req setupwizard.Request, preserveEx
 		if len(req.Agents) == 0 {
 			return setupwizard.Result{Action: string(req.Action), Outcome: "unchanged", Reason: "existing_opt_out", Targets: preservedUnitTargets(preserved)}, nil
 		}
-		req.BootstrapExpectedGeneration = &generation
+		if req.BootstrapExpectedGeneration == nil {
+			req.BootstrapExpectedGeneration = &generation
+		}
 		if req.BootstrapExpectedPolicy == nil {
 			req.BootstrapExpectedPolicy = &policy
 		}
