@@ -119,16 +119,16 @@ func stagePortableWindowsShortcut(id desktopIdentity, err error, key, home, targ
 		return nil, err
 	}
 	if !desktop {
-		shared, err := portableWindowsShortcutShared(id, key, target, ledger)
-		if err != nil || shared {
-			return nil, err
-		}
 		path, err := ownedWindowsShortcutPathFor(ledger, id)
 		if err != nil {
 			return nil, err
 		}
 		if path == "" {
 			return nil, nil
+		}
+		shared, err := portableWindowsShortcutShared(id, key, target, ledger)
+		if err != nil || shared {
+			return nil, err
 		}
 		owned, ok := installruntime.OwnedFile(ledger, path)
 		actual, err := installruntime.Fingerprint(path)
@@ -185,8 +185,11 @@ func portableWindowsShortcutShared(id desktopIdentity, key, target string, ledge
 			continue
 		}
 		if !portable.ExactCommittedBinding(ledger, peer) || id.appID == "" || !sameWindowsPath(peer.ControlRoot, binding.ControlRoot) ||
-			len(consumer.Commands) != 1 || !sameWindowsFile(consumer.Commands[0], target) {
+			len(consumer.Commands) != 1 {
 			return false, errors.New("unverified Local toast shortcut peer")
+		}
+		if !sameWindowsFile(consumer.Commands[0], target) {
+			continue
 		}
 		shared = true
 	}
