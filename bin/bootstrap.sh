@@ -2995,6 +2995,13 @@ main() {
     fi
     if [ "$status" -eq 0 ]; then
         if [ "$_PRODUCT_CSV" = cursor ] && [ "$AGENT_NOTIFY_REQUEST" != skip ]; then
+            run_setup_stage "Preparing Cursor notification runtime" prepare_cursor_runtime || { report_setup_failure 1; return 1; }
+            if [ "$_CURSOR_RUNTIME_PREPARED" = true ]; then
+                echo "Shared notification runtime installed. Review the new plan before installing Cursor integration."
+                local cursor_resume_status=0
+                bash "$_CONFIG_STAGE/cursor-bootstrap-resume.sh" "$@" || cursor_resume_status=$?
+                return "$cursor_resume_status"
+            fi
             PRODUCT=cursor; CONFIGURE_BINARY=$_CONFIG_HELPER; PLUGIN_ROOT=""
             progress_phase cursor portable state_requires_inspection
             run_setup_stage "Configuring agent notification tools" setup_agent_notify_wizard || status=$?
@@ -3124,6 +3131,31 @@ report_wizard_portable_missing() {
         return 1
     fi
     return 0
+}
+
+# Cursor composition requires a committed observer. Preparing it changes the
+# ownership generation, so the previous intent cannot authorize the integration.
+# Restart the immutable source script with a new, explicit confirmation instead.
+prepare_cursor_runtime() {
+    _CURSOR_RUNTIME_PREPARED=false
+    local runtime os arch primary
+    [ -n "$_SELECTOR_INTENT" ] && [ -n "$_FROZEN_CONTROL" ] && [ -n "$_FROZEN_RUNTIME" ] || return 1
+    read -r os arch < <(bootstrap_release_os_arch) || return 1
+    primary="claude-notifications-$os-$arch"
+    [ "$os" != windows ] || primary="$primary.exe"
+    if runtime=$("$_CONFIG_HELPER" config installer runtime-root "$_FROZEN_CONTROL"); then
+        [ "$runtime" = "$_FROZEN_RUNTIME" ] || return 1
+        if cmp -s "$_CONFIG_HELPER" "$runtime/$primary"; then return 0; fi
+    elif [ -e "$_FROZEN_CONTROL/ownership.json" ] || [ -L "$_FROZEN_CONTROL/ownership.json" ]; then
+        echo "Existing runtime requires inspection; retained ownership was not replaced." >&2
+        return 1
+    fi
+    fetch_bootstrap_file "${BOOTSTRAP_RAW_BASE_URL:-$BOOTSTRAP_RAW_CONTENT_URL}/$BOOTSTRAP_BUNDLE_COMMIT/bin/bootstrap.sh" \
+        "$_CONFIG_STAGE/cursor-bootstrap-resume.sh" || return 1
+    install_runtime cursor "$_CONFIG_STAGE/install.sh" "$_FROZEN_RUNTIME" --force || return 1
+    runtime=$("$_CONFIG_HELPER" config installer runtime-root "$_FROZEN_CONTROL") || return 1
+    [ "$runtime" = "$_FROZEN_RUNTIME" ] && cmp -s "$_CONFIG_HELPER" "$runtime/$primary" || return 1
+    _CURSOR_RUNTIME_PREPARED=true
 }
 
 bootstrap_abs_command() {

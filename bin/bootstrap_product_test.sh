@@ -759,6 +759,9 @@ check_prerequisites() { :; }
 resolve_bootstrap_release() { BOOTSTRAP_TAG=v2.0.0; }
 stage_config_helper() { _CONFIG_STAGE=$(mktemp -d); _CONFIG_HELPER=$TEST_CORE; }
 acquire_wizard_portable_asset() { WIZARD_PACKAGE_ROOT="$TEST_TRACE/TEST package with spaces.zip"; }
+# This dispatch fixture already supplies its committed observer; actual fresh
+# runtime preparation is exercised by the downloaded Cursor bootstrap canary.
+prepare_cursor_runtime() { _CURSOR_RUNTIME_PREPARED=false; }
 bootstrap_abs_command() { printf unexpected-discovery >> "$TEST_TRACE/mutation"; return 1; }
 install_legacy_products() { printf legacy >> "$TEST_TRACE/mutation"; return 99; }
 install_opencode() { printf opencode >> "$TEST_TRACE/mutation"; return 99; }
