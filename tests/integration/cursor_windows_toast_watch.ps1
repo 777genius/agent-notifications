@@ -16,9 +16,10 @@ try {
             $value = $event.SourceEventArgs.NewEvent
             $id = [string]$value.ProcessID
             if ($event.SourceIdentifier -eq 'TEST-Cursor-Start') {
+                # Query command first: the child can exit while querying its parent.
+                $child = Get-CimInstance Win32_Process -Filter "ProcessId=$id" -ErrorAction SilentlyContinue
                 $parent = Get-CimInstance Win32_Process -Filter "ProcessId=$($value.ParentProcessID)" -ErrorAction SilentlyContinue
                 if ($parent.ExecutablePath -eq $primary) {
-                    $child = Get-CimInstance Win32_Process -Filter "ProcessId=$id" -ErrorAction SilentlyContinue
                     if (!$child) { throw 'Owned PowerShell command unavailable' }
                     # Shortcut readiness also uses owned PowerShell children.
                     if (!$child.CommandLine.Contains('ToastNotificationManager') -or !$child.CommandLine.Contains('.Show($toast)')) {

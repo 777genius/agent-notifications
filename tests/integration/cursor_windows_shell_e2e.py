@@ -100,6 +100,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         elif q['kind']=='stop-result':
                             assert state['sent'] and q['hasStop'] and not q['followup']
                             state['stop']=True
+                        elif q['kind']=='exec-heartbeat':
+                            assert state['sent'] and q['id']==1 and not state['close'], q
                         elif q['kind']=='exec-close':
                             assert state['stop']; state['close']=True
                         else: assert q['kind']=='heartbeat',q

@@ -132,6 +132,10 @@ def classify_client_message(data):
     if control is not None:
         if first(control, 2) is not None:
             return {'kind': 'exec-throw'}
+        # Official pinned ExecClientControlMessage field3 is ExecClientHeartbeat.
+        heartbeat = first(control, 3)
+        if heartbeat is not None:
+            return {'kind': 'exec-heartbeat', 'id': first(heartbeat, 1, 0)}
         close = first(control, 1)
         return {'kind': 'exec-close', 'id': first(close, 1, 0)} if close is not None else {'kind': 'exec-control'}
     if first(data, 7) is not None:
