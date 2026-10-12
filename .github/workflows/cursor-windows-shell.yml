@@ -46,6 +46,8 @@ jobs:
           $stage = Join-Path $env:CURSOR_TEST_ROOT 'stage'
           New-Item -ItemType Directory -Path $stage | Out-Null
           $binary = Join-Path $stage 'claude-notifications-windows-amd64.exe'
+          go test ./internal/cursorsource -run '^TestQualifiedWindowsPowerShellBOM$' -count=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           go build -ldflags='-s -w' -o $binary ./cmd/claude-notifications
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           if ((Get-Item $binary).Length -gt 33554432) { throw 'Release binary exceeds managed file limit' }

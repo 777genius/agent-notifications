@@ -1,6 +1,6 @@
 $ErrorActionPreference = 'Stop'
 $root = $env:CURSOR_TEST_ROOT
-$primary = Join-Path $root 'home/.local/bin/claude-notifications-windows-amd64.exe'
+$primary = [IO.Path]::GetFullPath((Join-Path $root 'home/.local/bin/claude-notifications-windows-amd64.exe'))
 $rows = @()
 $owned = @{}
 $registrations = @()
@@ -19,7 +19,12 @@ try {
                 $parent = Get-CimInstance Win32_Process -Filter "ProcessId=$($value.ParentProcessID)" -ErrorAction SilentlyContinue
                 if ($parent.ExecutablePath -eq $primary) {
                     $child = Get-CimInstance Win32_Process -Filter "ProcessId=$id" -ErrorAction SilentlyContinue
-                    if (!$child -or !$child.CommandLine.Contains('ToastNotificationManager') -or !$child.CommandLine.Contains('.Show($toast)')) { throw 'Owned toast command unavailable or changed' }
+                    if (!$child) { throw 'Owned PowerShell command unavailable' }
+                    # Shortcut readiness also uses owned PowerShell children.
+                    if (!$child.CommandLine.Contains('ToastNotificationManager') -or !$child.CommandLine.Contains('.Show($toast)')) {
+                        Remove-Event -EventIdentifier $event.EventIdentifier
+                        continue
+                    }
                     $owned[$id] = $true
                     $rows += @{ kind='start'; pid=$value.ProcessID; parent=$value.ParentProcessID; command=$child.CommandLine }
                 }

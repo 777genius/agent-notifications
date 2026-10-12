@@ -3,6 +3,7 @@ package cursorsource_test
 import (
 	"bytes"
 	"context"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -122,5 +123,30 @@ func TestDecodeRejectsInvalidPublicFramesAndCancellation(t *testing.T) {
 	input := strings.Replace(frame, "TEST-conversation-秘密", strings.Repeat("é", 128), 1)
 	if f, err := source.Decode(context.Background(), source.Selector, []byte(input)); err != nil || len(f.ConversationID) != 256 {
 		t.Fatalf("exact ID bound rejected: %v", err)
+	}
+}
+
+// Native Windows hook transport emits UTF-8 BOM; do not accept repeated BOM or UTF-16.
+func TestQualifiedWindowsPowerShellBOM(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		prefix   []byte
+		accepted bool
+	}{
+		{"plain", nil, true},
+		{"one UTF8 BOM", []byte{0xef, 0xbb, 0xbf}, runtime.GOOS == "windows"},
+		{"two UTF8 BOM", []byte{0xef, 0xbb, 0xbf, 0xef, 0xbb, 0xbf}, false},
+		{"UTF16 BOM", []byte{0xff, 0xfe}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			input := append(append([]byte(nil), tc.prefix...), []byte(frame)...)
+			facts, err := source.Decode(context.Background(), source.Selector, input)
+			if (err == nil) != tc.accepted {
+				t.Fatalf("accepted=%v want=%v error=%v", err == nil, tc.accepted, err)
+			}
+			if tc.accepted && (facts.ConversationID != "TEST-conversation-秘密" || facts.GenerationID != "TEST-generation") {
+				t.Fatal("native IDs changed")
+			}
+		})
 	}
 }
