@@ -33,6 +33,10 @@ def ps_literal(value):
 command = '& '+ ' '.join(ps_literal(v) for v in [sys.executable, str(observer), *expected])
 document = {'version': 1, 'hooks': {'stop': [{'command': command}]}}
 (profile/'hooks.json').write_text(json.dumps(document))
+installed_test = None
+if os.environ.get('CURSOR_TEST_INSTALLED') == '1':
+    import cursor_windows_installed as installed
+    installed_test = installed.prepare(ROOT, pathlib.Path(os.environ['CURSOR_TEST_AGENT']).resolve())
 condition = threading.Condition()
 state = {'run': None, 'stop': False, 'close': False, 'sent': False, 'terminal': False, 'error': None}
 rows, pending = [], {}
@@ -163,8 +167,8 @@ gate=ROOT/'TEST-gate.cmd'
 gate.write_text('@echo off\r\necho TEST_GATE_READY\r\nset /p TEST_GATE=\r\necho TEST_NATIVE_BEGIN\r\ncall '+subprocess.list2cmdline(argv)+'\r\nset TEST_EXIT=%ERRORLEVEL%\r\necho TEST_NATIVE_END\r\nexit /b %TEST_EXIT%\r\n')
 # The fresh Windows home/profile/appdata contains no user credentials.
 env={k:os.environ[k] for k in ('SystemRoot','WINDIR','COMSPEC','PATH','PATHEXT') if k in os.environ}
-(ROOT/'localappdata').mkdir()
-(ROOT/'appdata').mkdir()
+(ROOT/'localappdata').mkdir(exist_ok=True)
+(ROOT/'appdata').mkdir(exist_ok=True)
 env.update(HOME=str(ROOT/'home'),USERPROFILE=str(ROOT/'home'),LOCALAPPDATA=str(ROOT/'localappdata'),
  APPDATA=str(ROOT/'appdata'),TEMP=str(ROOT),TMP=str(ROOT),CI='1',
  AGENT_CLI_CREDENTIAL_STORE='file',CURSOR_AUTH_TOKEN='TEST-loopback-not-a-secret')
@@ -216,6 +220,9 @@ if capture.exists():
     result['stopMatches']=event.get('hook_event_name')=='stop' and event.get('status')=='completed' and event.get('conversation_id')==state['run']['conversation'] and event.get('generation_id')==state['run']['generation']
 result['pass']=owned_active==0 and proc.returncode==0 and not forced and state['terminal'] and not state['error'] and result['argvMatches'] and result.get('stopMatches') and result['threadsJoined']
 (ROOT/'native-shell-result.json').write_text(json.dumps(result,indent=2))
+if installed_test:
+    assert result['pass'], 'native Stop failed before installed lifecycle'
+    installed.finish(installed_test, result)
 print(json.dumps(result,indent=2))
 raise SystemExit(0 if result['pass'] else 1)
 

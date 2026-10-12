@@ -102,7 +102,7 @@ func runCursorEvent(argv []string, input io.ReadCloser, output io.Writer) (code 
 	}
 	consumer := cursorevent.Consumer{Binding: binding, Gate: gate, Config: effective, Clock: clock,
 		Cache:   &observation.RecentCache{Root: b.DataRoot, Clock: clock},
-		Desktop: copilotvscodeinstall.NewCursorDesktop(gate, binding, newCursorDesktopPort()),
+		Desktop: copilotvscodeinstall.NewCursorDesktop(gate, binding, newCursorDesktopPort(b, fixed.Executable)),
 		SendWebhook: copilotvscodeinstall.NewCursorWebhookSender(gate, binding, func(ctx context.Context, cfg *config.Config, message webhook.SendContext) error {
 			sender := webhook.NewWithContext(ctx, cfg)
 			defer func() { _ = sender.Shutdown(50 * time.Millisecond) }()

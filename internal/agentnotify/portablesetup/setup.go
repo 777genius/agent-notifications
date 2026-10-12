@@ -10,12 +10,14 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 
 	"github.com/777genius/agent-notifications/internal/agentnotify/clientsetup"
 	"github.com/777genius/agent-notifications/internal/agentnotify/portable"
 	"github.com/777genius/agent-notifications/internal/agentnotify/registration"
 	"github.com/777genius/agent-notifications/internal/copilotvscodeinstall"
 	"github.com/777genius/agent-notifications/internal/installruntime"
+	"github.com/777genius/agent-notifications/internal/opencodeinstall"
 )
 
 var (
@@ -445,9 +447,31 @@ func revokeExactBinding(ctx context.Context, req Request, present bool) error {
 	}
 	if present {
 		gen := req.ExpectedGeneration
+		var files []installruntime.File
+		if runtime.GOOS == "windows" && req.Binding.Integration == portable.Cursor {
+			snap, err := installruntime.ReadInstalledSnapshot(req.Binding.ControlRoot)
+			if err != nil {
+				return err
+			}
+			executable, err := portable.ResolvePrimaryExecutable(snap.Ledger, req.Binding.Primary)
+			if err != nil {
+				return err
+			}
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return err
+			}
+			file, err := opencodeinstall.StageCursorWindowsShortcut(key, home, executable, false, snap.Ledger)
+			if err != nil {
+				return err
+			}
+			if file != nil {
+				files = append(files, *file)
+			}
+		}
 		if _, err = installruntime.Commit(ctx, installruntime.Request{
 			ControlRoot: req.Binding.ControlRoot, Owner: req.Binding.Owner, RuntimeRoot: req.Binding.RuntimeRoot,
-			ConsumerID: key, RemoveConsumer: true, ExpectedGeneration: &gen, Reservation: req.Reservation,
+			ConsumerID: key, RemoveConsumer: true, ExpectedGeneration: &gen, Reservation: req.Reservation, Files: files,
 		}); err != nil {
 			return err
 		}

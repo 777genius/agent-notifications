@@ -30,3 +30,7 @@ func StageWindowsShortcut(DesktopProduct, string, string, bool, installruntime.L
 func WindowsShortcutReadyFor(DesktopProduct, string, string) error {
 	return errors.New("windows shortcut requires Windows")
 }
+
+func StageCursorWindowsShortcut(string, string, string, bool, installruntime.Ledger) (*installruntime.File, error) {
+	return nil, errors.New("windows shortcut setup requires Windows")
+}

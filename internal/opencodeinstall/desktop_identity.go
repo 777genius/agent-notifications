@@ -12,5 +12,6 @@ const (
 	OpenCodeToastAppID      = "Genius.AgentNotifications.OpenCode"
 	GeminiToastAppID        = "Genius.AgentNotifications.Gemini"
 	CopilotVSCodeToastAppID = "Genius.AgentNotifications.CopilotVSCode"
+	CursorToastAppID        = "Genius.AgentNotifications.Cursor"
 	GeminiConsumerID        = "gemini-notifications"
 )
