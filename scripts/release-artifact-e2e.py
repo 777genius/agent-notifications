@@ -80,6 +80,29 @@ def _windows_private_scratch_root(path):
         env=root_env, text=True, timeout=30, check=True)
 
 
+def _windows_owner_rights_profile(path):
+    # OWNER RIGHTS represents the current owner. The unrelated read grant is
+    # non-inheritable, like an already repaired config directory below a
+    # profile still readable by CodexSandboxUsers. Only this disposable home
+    # changes; the runner profile and APPDATA are never modified.
+    script = (
+        '$ErrorActionPreference = "Stop"\n'
+        '$p = $env:DIAG_PATH\n'
+        '$acl = Get-Acl -LiteralPath $p\n'
+        '$ownerRights = New-Object System.Security.Principal.SecurityIdentifier("S-1-3-4")\n'
+        '$everyone = New-Object System.Security.Principal.SecurityIdentifier("S-1-1-0")\n'
+        '$inherit = [System.Security.AccessControl.InheritanceFlags]"ContainerInherit, ObjectInherit"\n'
+        '$none = [System.Security.AccessControl.PropagationFlags]::None\n'
+        '$allow = [System.Security.AccessControl.AccessControlType]::Allow\n'
+        '$acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($ownerRights, "FullControl", $inherit, $none, $allow)))\n'
+        '$acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($everyone, "ReadAndExecute", $allow)))\n'
+        'Set-Acl -LiteralPath $p -AclObject $acl\n'
+    )
+    subprocess.run(['pwsh', '-NoProfile', '-NonInteractive', '-Command', script],
+                   env=dict(os.environ, DIAG_PATH=str(path)), text=True,
+                   timeout=30, check=True)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--binary', type=Path, required=True)
@@ -108,9 +131,14 @@ def main():
             _windows_acl_diagnostic(root, 'before private-root normalization')
             _windows_private_scratch_root(root)
             _windows_acl_diagnostic(root, 'after private-root normalization')
-            for case in ('fresh', 'legacy', 'explicit'):
+            cases = ['fresh', 'legacy', 'explicit']
+            if os.name == 'nt':
+                cases.append('windows-owner-rights')
+            for case in cases:
                 home = root / case
                 home.mkdir()
+                if case == 'windows-owner-rights':
+                    _windows_owner_rights_profile(home)
                 env = {key: os.environ[key] for key in
                        ('PATH', 'SystemRoot', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'PATHEXT')
                        if key in os.environ}
