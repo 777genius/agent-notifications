@@ -1,8 +1,7 @@
 # Gemini CLI notifications
 
-Gemini support is available for Linux amd64/arm64 and Windows amd64 through the
-[platform channels](PLATFORM_RELEASE_CHANNELS.md). Gemini installation is not available
-in the public macOS channel, which includes Claude, Codex and OpenCode.
+Gemini support is available on macOS amd64/arm64, Linux amd64/arm64 and Windows amd64 through the
+[platform channels](PLATFORM_RELEASE_CHANNELS.md), currently selecting v1.49.1.
 
 The integration was tested with exact **Gemini CLI 0.62.0** on macOS arm64/Intel, Linux amd64/arm64 and Windows amd64. Tests use the real CLI and its permission UI with a deterministic local
 provider; they do not call the live Google model service. See qualification by OS below.
@@ -26,13 +25,13 @@ Gemini capabilities. Claude/Codex capabilities and OpenCode limits remain separa
 
 ## Installation
 
-Install exactly Gemini CLI **0.62.0** first and make `gemini` available on `PATH`; the installer rejects other versions. On Linux or Windows, use the public platform installer
+Install exactly Gemini CLI **0.62.0** first and make `gemini` available on `PATH`; the installer rejects other versions. On macOS, Linux or Windows, use the public platform installer
 shown below. Its source bundle and binaries come from the same qualified release.
-Do not install Linux/Windows assets on macOS.
+The installer selects the matching native assets automatically.
 
 ### Platform installer selectors
 
-On Linux or Windows, use:
+On macOS, Linux or Windows, use:
 
 ```bash
 (set -o pipefail; curl -fsSL https://agent-notifications.com/install.sh | bash -s -- --product gemini --desktop)
@@ -88,7 +87,7 @@ than overwrite another writer's edits.
 
 ## Qualification status
 
-The native CLI and desktop observations below are historical evidence from the Gemini integration qualification. They do not qualify newer Agent Notifications release bytes. See the [release notes](https://github.com/777genius/agent-notifications/releases) for each release's validation scope.
+The native CLI and production lifecycle checks passed on all five targets for the exact v1.49.1 source in [run 38269416372](https://github.com/777genius/agent-notifications/actions/runs/38269416372). These checks use a local provider and webhooks; they do not establish desktop visibility. The desktop observations below are historical evidence from the integration qualification.
 
 | Evidence layer | Status |
 | --- | --- |
@@ -97,7 +96,7 @@ The native CLI and desktop observations below are historical evidence from the G
 | Windows amd64 native shell / notification API / visual desktop | Native CLI, production lifecycle and webhook passed; notification API and visual desktop unverified |
 | Linux amd64/arm64 native shell and webhook / desktop | Native CLI and production install/update/remove/webhook passed; desktop API and visual desktop unverified |
 | macOS Intel native CLI | Native CLI, production lifecycle and webhook passed; visual desktop unverified |
-| Public Agent Notifications availability | Linux amd64/arm64 and Windows amd64; see [current platform versions](PLATFORM_RELEASE_CHANNELS.md). The public macOS channel excludes Gemini |
+| Public Agent Notifications availability | macOS amd64/arm64, Linux amd64/arm64 and Windows amd64; see [current platform versions](PLATFORM_RELEASE_CHANNELS.md) |
 
 A macOS observation will not imply Windows/Linux GUI verification. Injected
 contracts, actual CLI with a local provider fixture (`native_cli/provider_substitute`)

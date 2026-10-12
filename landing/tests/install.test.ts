@@ -157,13 +157,11 @@ test("Gemini released commands preserve canonical selectors and shared observer 
     { products: ["gemini", "codex", "opencode", "claude", "gemini"], expected: "(set -o pipefail; " + prefix + "--products claude,codex,opencode,gemini --skip-agent-notify --webhook)" },
   ] as const;
   for (const { products, expected } of cases)
-    for (const target of ["linux", "windows"] as const) {
+    for (const target of ["macos", "linux", "windows"] as const) {
       assert.equal(command(products, target, "install", false, { desktop: false, webhook: true }), expected);
       assert.equal(command(products, target, "update", false, { desktop: false, webhook: true }), expected);
       assert.equal(command(products, target, "install", true, { desktop: false, webhook: false }), null);
       assert.equal(command(products, target, "configure"), null);
-      assert.equal(command(products, "macos", "install"), null);
-      assert.equal(command(products, "macos", "update"), null);
       assert.equal(command(products, "unknown", "install"), null);
       assert.equal(command(products, "manual", "install"), null);
     }
@@ -223,7 +221,7 @@ test("default observer update pipelines omit channel overrides in installer argv
   }
 });
 
-// A regression would advertise a global version or offer a Gemini command on macOS.
+// Keep per-platform versions while exposing Gemini commands on each supported OS.
 test("platform availability follows the published channel snapshot", () => {
   const row = (os: string, arch: string, version: string) => [os, arch, version, "a".repeat(40), "b".repeat(40), "release/platform-" + os].join("\t");
   const snapshot = [row("darwin", "amd64", "v1.46.1"), row("darwin", "arm64", "v1.46.1"), row("linux", "amd64", "v1.47.1"), row("windows", "amd64", "v1.47.1")].join("\n");
@@ -232,6 +230,6 @@ test("platform availability follows the published channel snapshot", () => {
   assert.equal(platformReleaseVersion(snapshot, "windows"), "1.47.1");
   assert.equal(platformReleaseVersion(snapshot, "unknown"), null);
   assert.equal(platformReleaseVersion(snapshot, "manual"), null);
-  assert.equal(command("gemini", "macos", "install"), null);
-  assert.equal(command(["claude", "gemini"], "macos", "update"), null);
+  assert.match(command("gemini", "macos", "install")!, /--product gemini --desktop\)$/);
+  assert.match(command(["claude", "gemini"], "macos", "update")!, /--products claude,gemini\)$/);
 });
