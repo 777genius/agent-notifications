@@ -35,7 +35,8 @@ One file is selected per environment context: explicit **E**, otherwise existing
 | L: existing legacy file, Windows | `%USERPROFILE%\.claude\claude-notifications-go\config.json` |
 | N: fresh macOS | `$HOME/Library/Application Support/agent-notifications/config.json` |
 | N: fresh Linux | Absolute nonempty `$XDG_CONFIG_HOME/agent-notifications/config.json`, otherwise `$HOME/.config/agent-notifications/config.json` |
-| N: fresh Windows | `%APPDATA%\agent-notifications\config.json` |
+| N: fresh Windows, safe profile | `%APPDATA%\agent-notifications\config.json` |
+| N: Windows sandbox profile, no existing config | Absolute `%PROGRAMDATA%` (native KnownFolder if unset) + `agent-notifications-<Windows user SID>\config.json` |
 
 Relative XDG_CONFIG_HOME is ignored with a diagnostic. Windows uses USERPROFILE for L, not Git Bash HOME; missing/relative APPDATA without L is an error. macOS ignores XDG_CONFIG_HOME. Missing home in automatic mode is an error; a valid explicit E supports portable contexts without HOME/APPDATA.
 
@@ -71,8 +72,9 @@ A genuinely absent config still inspects as defaults; inspect does not test
 whether initialization could write it. Managed reads and
 writes inspect each directory component below the volume root, reject reparse
 points and unrelated write/delete/ACL-change grants, and pin directories against
-replacement. Initialization also checks `%USERPROFILE%` to coordinate the
-`.agent-notifications-config.lock` selection guard. An unrelated read/execute
+replacement. Initialization of a profile target also checks `%USERPROFILE%` to coordinate the
+`.agent-notifications-config.lock` selection guard. The automatic ProgramData
+target uses a private selection guard beside its config instead. An unrelated read/execute
 grant on an ancestor (including `CodexSandboxUsers:(RX)`) is allowed. `OWNER
 RIGHTS` grants apply to the actual object owner; they are allowed when that owner
 is trusted. New config and lock files grant access only to the current user and
@@ -97,7 +99,28 @@ DeleteChild grant permits replacing its immediate children; disabling inheritanc
 only on the config directory does not secure the whole path. Do not exempt
 `CodexSandboxUsers` or remove sandbox-required grants from the entire profile.
 
-Use an explicit configuration outside that ancestry. An explicit path still
+For a new installation with no legacy or APPDATA config, the current Windows
+runtime automatically selects a private SID-specific directory in the native
+ProgramData folder when the profile/creation ancestry fails ACL checks. A supplied
+`PROGRAMDATA` must be an absolute path; custom roots retain strict ancestor
+checks. The special handling of system add-only rights applies only to the
+actual native KnownFolder and its volume root. Run
+`config init` normally; no elevation, override or manual move is needed on a
+standard Windows installation. CLI and hooks running as that Windows user select
+the same file. Once created, it remains selected if the profile ACL is later
+repaired. Its directory, config and lock must remain private; hostile precreated
+entries, reparse points or unsafe ProgramData permissions cause a clear error,
+without permission rewriting or a random alternative directory.
+
+Existing legacy/APPDATA config, including malformed or inaccessible entries and
+recovery artifacts, retains priority before a private ProgramData store is
+established. If a profile config appears alongside that established store,
+automatic selection fails with `ConfigConflict`; choose the intended file with
+`AGENT_NOTIFICATIONS_CONFIG`. This prevents an untrusted profile writer from
+redirecting hooks to newly planted settings. Both files remain untouched. The runtime never hides it by creating a
+fresh default or automatically imports potentially unsafe settings. If such an
+existing config is below writable ancestry, or when using an older runtime,
+use an explicit configuration outside that ancestry. An explicit path still
 checks its own directories and private target lock; it can skip an unavailable
 profile selection guard. Another path under `%USERPROFILE%`, including
 `%LOCALAPPDATA%`, does not solve this case.

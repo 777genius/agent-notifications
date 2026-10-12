@@ -109,6 +109,10 @@ func winOpen(path string, access, creation, flags uint32, private bool) (*os.Fil
 // credential-bearing files. Local administrators are trusted OS principals;
 // newly created objects still grant access only to the user and SYSTEM.
 func checkWindowsACL(f *os.File, private bool) error {
+	return checkWindowsACLPolicy(f, private, false)
+}
+
+func checkWindowsACLPolicy(f *os.File, private, additive bool) error {
 	sd, err := windows.GetSecurityInfo(windows.Handle(f.Fd()), windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION)
 	if err != nil {
 		if errors.Is(err, windows.ERROR_ACCESS_DENIED) {
@@ -124,8 +128,8 @@ func checkWindowsACL(f *os.File, private bool) error {
 	if err != nil {
 		return err
 	}
-	trustedOwner := owner.Equals(user.User.Sid) || owner.String() == "S-1-5-18" || owner.String() == "S-1-5-32-544"
-	if private && !trustedOwner {
+	trustedOwner := trustedWindowsOwner(owner, user.User.Sid) || (!private && owner.String() == "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464")
+	if (private || additive) && !trustedOwner {
 		return windowsPermissionDenied(f.Name(), "untrusted_owner", "", owner.String(), 0, nil)
 	}
 	acl, _, err := sd.DACL()
@@ -158,7 +162,12 @@ func checkWindowsACL(f *os.File, private bool) error {
 		if sid.Equals(user.User.Sid) || sid.String() == "S-1-5-18" || sid.String() == "S-1-5-32-544" {
 			continue
 		}
-		mask := uint32(windows.FILE_WRITE_DATA | windows.FILE_APPEND_DATA | 0x40 | windows.DELETE | windows.WRITE_DAC | windows.WRITE_OWNER | windows.GENERIC_WRITE | windows.GENERIC_ALL)
+		mask := uint32(windows.FILE_WRITE_DATA | windows.FILE_APPEND_DATA | windows.FILE_WRITE_ATTRIBUTES | windows.FILE_WRITE_EA | 0x40 | windows.DELETE | windows.WRITE_DAC | windows.WRITE_OWNER | windows.GENERIC_WRITE | windows.GENERIC_ALL)
+		if additive {
+			// Native system roots may allow creating new children. Their
+			// existing children still enforce independent protected ACLs.
+			mask &^= windows.FILE_WRITE_DATA | windows.FILE_APPEND_DATA | windows.FILE_WRITE_ATTRIBUTES | windows.FILE_WRITE_EA | windows.GENERIC_WRITE
+		}
 		if private {
 			mask |= windows.FILE_READ_DATA | windows.GENERIC_READ
 		}
@@ -169,7 +178,7 @@ func checkWindowsACL(f *os.File, private bool) error {
 		}
 		if rejected := uint32(ace.Mask) & mask; rejected != 0 {
 			reason := "unrelated_write_grant"
-			if rejected&(windows.FILE_WRITE_DATA|windows.FILE_APPEND_DATA|0x40|windows.DELETE|windows.WRITE_DAC|windows.WRITE_OWNER|windows.GENERIC_WRITE|windows.GENERIC_ALL) == 0 {
+			if rejected&(windows.FILE_WRITE_DATA|windows.FILE_APPEND_DATA|windows.FILE_WRITE_ATTRIBUTES|windows.FILE_WRITE_EA|0x40|windows.DELETE|windows.WRITE_DAC|windows.WRITE_OWNER|windows.GENERIC_WRITE|windows.GENERIC_ALL) == 0 {
 				reason = "private_read_grant"
 			}
 			return windowsPermissionDenied(f.Name(), reason, sid.String(), "", rejected, nil)
@@ -178,6 +187,10 @@ func checkWindowsACL(f *os.File, private bool) error {
 	return nil
 }
 func openStoreParent(path string, create bool) (*storeParent, error) {
+	return openWindowsStoreParent(path, create, windowsAutomaticAnchorForParent(path))
+}
+
+func openWindowsStoreParent(path string, create bool, anchor *windowsAutomaticAnchor) (*storeParent, error) {
 	if !filepath.IsAbs(path) {
 		return nil, &Error{Code: ConfigInvalid}
 	}
@@ -185,6 +198,24 @@ func openStoreParent(path string, create bool) (*storeParent, error) {
 	current := volume + string(filepath.Separator)
 	p := &storeParent{path: path, dirty: map[string]bool{}}
 	fail := func(e error) (*storeParent, error) { p.close(); return nil, e }
+	if anchor != nil && anchor.native {
+		// The ordinary historical walker skipped the volume root. A new
+		// machine anchor must validate and pin this boundary as well.
+		f, e := winOpen(current, windows.GENERIC_READ, windows.OPEN_EXISTING, windows.FILE_FLAG_BACKUP_SEMANTICS, false)
+		if e != nil {
+			return fail(e)
+		}
+		p.ancestors = append(p.ancestors, f)
+		p.file = f
+		if e = checkWindowsACLPolicy(f, false, true); e != nil {
+			return fail(e)
+		}
+		child, e := pinWindowsAnchorChild(current, f)
+		if e != nil {
+			return fail(e)
+		}
+		p.ancestors = append(p.ancestors, child)
+	}
 	for _, part := range strings.Split(strings.TrimPrefix(filepath.Clean(path), current), string(filepath.Separator)) {
 		if part == "" {
 			continue
@@ -232,6 +263,7 @@ func openStoreParent(path string, create bool) (*storeParent, error) {
 			return fail(e)
 		}
 		p.ancestors = append(p.ancestors, f)
+		p.file = f
 		info, e := f.Stat()
 		if e != nil {
 			return fail(e)
@@ -239,14 +271,29 @@ func openStoreParent(path string, create bool) (*storeParent, error) {
 		if !info.IsDir() {
 			return fail(&Error{Code: ConfigInvalid})
 		}
-		if e = checkWindowsACL(f, false); e != nil {
+		if anchor != nil {
+			if e = checkWindowsAnchorOwner(f, !sameStorePath(current, anchor.dir, "windows")); e != nil {
+				return fail(e)
+			}
+		}
+		additive := anchor != nil && anchor.native && sameStorePath(current, anchor.root, "windows")
+		private := anchor != nil && sameStorePath(current, anchor.dir, "windows")
+		if e = checkWindowsACLPolicy(f, private, additive); e != nil {
 			return fail(e)
+		}
+		if additive {
+			// Hold an existing direct child until the private SID child is
+			// opened. This prevents in-place empty-directory reparse changes.
+			child, e := pinWindowsAnchorChild(current, f)
+			if e != nil {
+				return fail(e)
+			}
+			p.ancestors = append(p.ancestors, child)
 		}
 	}
 	if len(p.ancestors) == 0 {
 		return fail(&Error{Code: ConfigPermissionDenied})
 	}
-	p.file = p.ancestors[len(p.ancestors)-1]
 	sd, e := windows.GetSecurityInfo(windows.Handle(p.file.Fd()), windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION)
 	if e != nil {
 		return fail(e)
@@ -259,7 +306,7 @@ func openStoreParent(path string, create bool) (*storeParent, error) {
 	if e != nil {
 		return fail(e)
 	}
-	if !owner.Equals(user.User.Sid) && owner.String() != "S-1-5-18" && owner.String() != "S-1-5-32-544" {
+	if !trustedWindowsOwner(owner, user.User.Sid) && !(anchor != nil && anchor.native && sameStorePath(path, anchor.root, "windows") && owner.String() == "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464") {
 		return fail(windowsPermissionDenied(path, "untrusted_owner", "", owner.String(), 0, nil))
 	}
 	return p, nil

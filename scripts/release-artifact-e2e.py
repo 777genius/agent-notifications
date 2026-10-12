@@ -10,6 +10,7 @@ import http.server
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -126,8 +127,15 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--binary', type=Path, required=True)
     parser.add_argument('--version', required=True)
+    parser.add_argument('--windows-standard-user-runner', type=Path)
     args = parser.parse_args()
     binary = args.binary.resolve()
+    standard_runner = args.windows_standard_user_runner.resolve() if args.windows_standard_user_runner else None
+    if standard_runner:
+        assert os.name == 'nt'
+        token = json.loads(subprocess.check_output([str(standard_runner), '--check'], text=True))
+        assert token['administrator'] is False and token['disabledPrivileges'] is True, token
+        print(json.dumps({'standard_user_token': token}), flush=True)
     deliveries = []
 
     class Sink(http.server.BaseHTTPRequestHandler):
@@ -152,7 +160,14 @@ def main():
             _windows_acl_diagnostic(root, 'after private-root normalization')
             cases = ['fresh', 'legacy', 'explicit']
             if os.name == 'nt':
-                cases.extend(('windows-owner-rights', 'windows-sandbox-profile'))
+                expected = subprocess.check_output(
+                    ['pwsh', '-NoProfile', '-NonInteractive', '-Command',
+                     "$sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value; "
+                     "Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) ('agent-notifications-' + $sid)"],
+                    text=True).strip()
+                automatic_root = Path(expected)
+                assert not automatic_root.exists(), ('preexisting automatic config root', automatic_root)
+                cases.extend(('windows-owner-rights', 'windows-sandbox-profile', 'windows-sandbox-automatic'))
             for case in cases:
                 home = root / case
                 home.mkdir()
@@ -174,7 +189,8 @@ def main():
                 env['CLAUDE_PLUGIN_ROOT'] = str(bundle)
 
                 def run(*command, data=None, success=True):
-                    result = subprocess.run([str(binary), *command], cwd=home, env=env,
+                    prefix = [str(standard_runner)] if standard_runner else []
+                    result = subprocess.run([*prefix, str(binary), *command], cwd=home, env=env,
                                             input=data, text=True, capture_output=True, timeout=30)
                     assert (result.returncode == 0) == success, (case, command, result.returncode, result.stderr)
                     return result
@@ -185,6 +201,7 @@ def main():
                     _windows_writable_profile(home)
                     # Repairing APPDATA alone cannot fix the writable home.
                     _windows_private_scratch_root(Path(env['APPDATA']))
+                    env['AGENT_NOTIFICATIONS_CONFIG'] = str(Path(env['APPDATA']) / 'agent-notifications' / 'config.json')
                     denied = run('config', 'init', '--json', success=False)
                     failure = json.loads(denied.stdout)
                     detail = failure['permissionFailure']
@@ -196,7 +213,6 @@ def main():
                     assert 'objectPath=' + json.dumps(str(home)) in denied.stderr, denied.stderr
                     assert 'S-1-1-0' in denied.stderr, denied.stderr
                     assert not (home / '.agent-notifications-config.lock').exists()
-                    env['AGENT_NOTIFICATIONS_CONFIG'] = str(Path(env['APPDATA']) / 'agent-notifications' / 'config.json')
                     denied = run('config', 'init', '--json', success=False)
                     assert json.loads(denied.stdout)['permissionFailure'] == detail, denied.stdout
                     # An existing managed config encounters the same ancestor
@@ -214,6 +230,28 @@ def main():
                     safe = root / 'sandbox-private-config'
                     safe.mkdir()
                     env['AGENT_NOTIFICATIONS_CONFIG'] = str(safe / 'config.json')
+                elif case == 'windows-sandbox-automatic':
+                    # Exercise the real native ProgramData directory, not a
+                    # private scratch substitute. Refuse any preexisting state.
+                    assert not automatic_root.exists(), ('preexisting automatic config root', automatic_root)
+                    _windows_writable_profile(home)
+                    _windows_private_scratch_root(Path(env['APPDATA']))
+                    chosen = json.loads(run('config', 'path', '--json').stdout)
+                    assert Path(chosen['path']) == automatic_root / 'config.json', chosen
+                    assert 'AGENT_NOTIFICATIONS_CONFIG' not in env
+                    # An unrelated broad-read grant on a precreated SID root
+                    # must not be adopted, repaired or hidden by a new default.
+                    automatic_root.mkdir(mode=0o777)
+                    _windows_writable_profile(automatic_root)
+                    acl_command = ['pwsh', '-NoProfile', '-NonInteractive', '-Command',
+                                   '(Get-Acl -LiteralPath $env:DIAG_PATH).Sddl']
+                    acl_env = dict(os.environ, DIAG_PATH=str(automatic_root))
+                    original_acl = subprocess.check_output(acl_command, env=acl_env, text=True)
+                    denied = run('config', 'init', '--json', success=False)
+                    assert json.loads(denied.stdout)['errorCode'] == 'ConfigPermissionDenied', denied.stdout
+                    assert list(automatic_root.iterdir()) == [], 'denial created entries'
+                    assert subprocess.check_output(acl_command, env=acl_env, text=True) == original_acl
+                    automatic_root.rmdir()
                 elif case == 'explicit':
                     env['AGENT_NOTIFICATIONS_CONFIG'] = str(home / 'custom' / 'config.json')
                 if case == 'legacy':
@@ -236,6 +274,14 @@ def main():
                 if case == 'windows-sandbox-profile':
                     assert (selected.parent / (selected.name + '.lock')).exists()
                     assert not (home / '.agent-notifications-config.lock').exists()
+                if case == 'windows-sandbox-automatic':
+                    assert selected == automatic_root / 'config.json'
+                    assert not (home / '.agent-notifications-config.lock').exists()
+                    # Tightening the profile later must not silently select a
+                    # different absent config and discard established settings.
+                    _windows_private_scratch_root(home)
+                    assert Path(run('config', 'path').stdout.strip()) == selected
+                    _windows_writable_profile(home)
                 if case != 'legacy':
                     assert not legacy.exists()
                 document = {
@@ -283,6 +329,35 @@ def main():
                 # The important regression is delivery, not CLI help interception.
                 assert json.loads(deliveries[-1][1])['attachments'][0]['text'].endswith('-help'), deliveries[-1]
                 assert selected.read_bytes() == before
+                if case == 'windows-sandbox-automatic':
+                    # Mutation uses the same automatic identity as both hooks.
+                    inspected = json.loads(run('config', 'inspect', '--json').stdout)
+                    assert inspected['selection']['path'] == str(selected), inspected
+                    edited = run('config', 'edit', '--stdin', '--expect-revision', inspected['revision'],
+                                 data=json.dumps({'set': {'/notifications/desktop/volume': 0.5}}))
+                    assert json.loads(edited.stdout)['changed'] is True, edited.stdout
+                    updated = json.loads(selected.read_text())
+                    assert updated['future'] == document['future']
+                    assert updated['agents'] == document['agents']
+                    assert updated['notifications']['webhook'] == document['notifications']['webhook']
+                    assert updated['notifications']['desktop']['volume'] == 0.5
+                    private_bytes = selected.read_bytes()
+                    legacy.parent.mkdir(parents=True, mode=0o777)
+                    planted = '{"future":"PLANTED_PROFILE_CONFIG_CANARY"}'
+                    legacy.write_text(planted)
+                    conflict = run('config', 'inspect', '--json', success=False)
+                    assert 'ConfigConflict' in conflict.stderr
+                    assert 'PLANTED_PROFILE_CONFIG_CANARY' not in conflict.stdout + conflict.stderr
+                    count = len(deliveries)
+                    for product in ('claude', 'codex'):
+                        prefix = [str(standard_runner)] if standard_runner else []
+                        rejected = subprocess.run([*prefix, str(binary), 'handle-hook', 'Stop', '--product', product],
+                                                  cwd=home, env=env, input=json.dumps(payload), text=True,
+                                                  capture_output=True, timeout=30)
+                        assert 'PLANTED_PROFILE_CONFIG_CANARY' not in rejected.stdout + rejected.stderr
+                    assert len(deliveries) == count
+                    assert selected.read_bytes() == private_bytes and legacy.read_text() == planted
+                    legacy.unlink()
                 selected.write_text('{invalid-config')
                 count = len(deliveries)
                 run('config', 'inspect', '--json', success=False)
@@ -291,6 +366,10 @@ def main():
                 assert len(deliveries) == count
                 assert selected.read_text() == '{invalid-config'
                 results.append(case)
+                if case == 'windows-sandbox-automatic':
+                    # Created by this invocation after the absent-state check;
+                    # never remove an existing application/user directory.
+                    shutil.rmtree(automatic_root)
         print(json.dumps({'result': 'PASS', 'version': args.version,
                           'binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(),
                           'profiles': results, 'webhook_deliveries': len(deliveries)}))
