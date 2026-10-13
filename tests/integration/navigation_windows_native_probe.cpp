@@ -1524,7 +1524,7 @@ static void packageMetadata() {
 static constexpr auto vendorName = L"OpenAI.Codex";
 static constexpr auto vendorPublisher = L"CN=50BDFD77-8903-4850-9FFE-6E8522F64D5B";
 static constexpr auto vendorFamily = L"OpenAI.Codex_2p2nqsd0c76g0";
-static constexpr auto vendorFull = L"OpenAI.Codex_26.930.7945.0_arm64__2p2nqsd0c76g0";
+static constexpr auto vendorFull = L"OpenAI.Codex_26.1007.2314.0_arm64__2p2nqsd0c76g0";
 static bool vendorAPIEntered = false;
 static ULONGLONG vendorDeadline = 0;
 static void vendorRemaining() { if (GetTickCount64() >= vendorDeadline) throw std::runtime_error("vendor overall deadline"); }
@@ -1665,10 +1665,11 @@ static void loadComposed(const std::wstring& pinned) {
         && !composedSpec.GetNamedBoolean(L"readinessQualified") && composedSpec.GetNamedValue(L"notificationSetting").ValueType() == winrt::Windows::Data::Json::JsonValueType::Null
         && compositionText(composedSpec, L"name") == NavigationVendorTEST::vendorName
         && compositionText(composedSpec, L"publisher") == NavigationVendorTEST::vendorPublisher
-        && compositionText(composedSpec, L"version") == L"26.930.7945.0" && composedSpec.GetNamedNumber(L"architecture") == 12
+        && compositionText(composedSpec, L"version") == L"26.1007.2314.0" && composedSpec.GetNamedNumber(L"architecture") == 12
         && compositionText(composedSpec, L"familyName") == NavigationVendorTEST::vendorFamily
         && compositionText(composedSpec, L"fullName") == NavigationVendorTEST::vendorFull
-        && compositionText(composedSpec, L"archiveSHA256") == L"a208d373c7c84aa3e0452cd3dd8406a6794d8139ec1260c64a770c2a00fbeeb8"
+        && composedSpec.GetNamedNumber(L"packageBytes") == NavigationVendorTEST::vendorArchiveBytes
+        && compositionText(composedSpec, L"archiveSHA256") == NavigationVendorTEST::vendorArchiveSHA256
         && compositionText(composedSpec, L"sourceSHA").size() == 40
         && compositionText(composedSpec, L"sourceSHA").find_first_not_of(L"0123456789abcdef") == std::wstring::npos, "fixed composed authority invalid");
     compositionIdentity(GetCurrentProcess(), GetCurrentProcessId(), GetTickCount64() + 2000); composed = true;
@@ -2511,7 +2512,10 @@ static int vendorNative(const std::wstring& mode) {
     // The future controller writes this only after actual signtool /pa /all success
     // and full streaming hashes. No arbitrary package/PFN/URI arguments are accepted.
     vendorPhase = "custody";
-    VendorHashFile archive(root / L"client.msix", 1073741824ULL);
+    VendorHashFile archive(root / L"client.msix", NavigationVendorTEST::vendorArchiveBytes);
+    if (fs::file_size(root / L"client.msix") != NavigationVendorTEST::vendorArchiveBytes
+        || archive.digest != narrow(NavigationVendorTEST::vendorArchiveSHA256))
+        throw std::runtime_error("current raw vendor archive pin mismatch");
     VendorHashFile executable(root / L"navigation-native-probe.exe", 67108864ULL);
     const std::string custody = "TEST vendor custody " + narrow(uuid) + "\nsigntool-pa-all-success\n"
         + archive.digest + "\n" + executable.digest + "\n";

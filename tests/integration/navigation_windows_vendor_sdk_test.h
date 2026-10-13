@@ -13,7 +13,9 @@ namespace NavigationVendorTEST {
 inline constexpr auto vendorName = L"OpenAI.Codex";
 inline constexpr auto vendorPublisher = L"CN=50BDFD77-8903-4850-9FFE-6E8522F64D5B";
 inline constexpr auto vendorFamily = L"OpenAI.Codex_2p2nqsd0c76g0";
-inline constexpr auto vendorFull = L"OpenAI.Codex_26.930.7945.0_arm64__2p2nqsd0c76g0";
+inline constexpr auto vendorFull = L"OpenAI.Codex_26.1007.2314.0_arm64__2p2nqsd0c76g0";
+inline constexpr ULONGLONG vendorArchiveBytes = 1017348969ULL;
+inline constexpr auto vendorArchiveSHA256 = L"4d0097243a8683a7810415479f306c230d2c4c50c869990298296eb683a44aef";
 inline std::vector<winrt::Windows::ApplicationModel::Package> installed() {
     winrt::Windows::Management::Deployment::PackageManager manager;
     std::vector<winrt::Windows::ApplicationModel::Package> packages;
@@ -31,8 +33,8 @@ inline void exactInstalled() {
     auto packages = installed();
     if (packages.size() != 1 || packages[0].Id().FullName() != vendorFull
         || packages[0].Id().Architecture() != winrt::Windows::System::ProcessorArchitecture::Arm64
-        || packages[0].Id().Version().Major != 26 || packages[0].Id().Version().Minor != 930
-        || packages[0].Id().Version().Build != 7945 || packages[0].Id().Version().Revision != 0)
+        || packages[0].Id().Version().Major != 26 || packages[0].Id().Version().Minor != 1007
+        || packages[0].Id().Version().Build != 2314 || packages[0].Id().Version().Revision != 0)
         throw std::runtime_error("exact selected vendor changed");
 }
 template<typename Operation> inline auto await(const Operation& operation, DWORD milliseconds, ULONGLONG absolute) {

@@ -30,9 +30,10 @@ let nonce: string | undefined;
 let installed = false;
 let composed = false, vendorKnown = false, vendorEffectsKnown = true;
 const vendorPin = { name: 'OpenAI.Codex', publisher: 'CN=50BDFD77-8903-4850-9FFE-6E8522F64D5B',
-  familyName: 'OpenAI.Codex_2p2nqsd0c76g0', fullName: 'OpenAI.Codex_26.930.7945.0_arm64__2p2nqsd0c76g0',
-  version: '26.930.7945.0', architecture: 12 };
-const vendorArchiveHash = 'a208d373c7c84aa3e0452cd3dd8406a6794d8139ec1260c64a770c2a00fbeeb8';
+  familyName: 'OpenAI.Codex_2p2nqsd0c76g0', fullName: 'OpenAI.Codex_26.1007.2314.0_arm64__2p2nqsd0c76g0',
+  version: '26.1007.2314.0', architecture: 12 };
+const vendorArchiveBytes = 1017348969;
+const vendorArchiveHash = '4d0097243a8683a7810415479f306c230d2c4c50c869990298296eb683a44aef';
 const hashFile = (path: string) => createHash('sha256').update(readFileSync(path)).digest('hex');
 let exitCode = 1;
 let setupActor: Step | undefined;
@@ -343,7 +344,7 @@ async function prepareComposed(desktop: Json): Promise<void> {
   const acquisition: Json = {}, archive = join(root!, 'client.msix');
   evidence.vendorAcquisition = acquisition;
   const digest = await download(archive, acquisition);
-  if (digest !== vendorArchiveHash) throw new Error('official selected vendor bytes changed');
+  if (acquisition.packageBytes !== vendorArchiveBytes || digest !== vendorArchiveHash) throw new Error('official selected vendor bytes changed');
   const signature = spawnSync(tool, ['verify', '/pa', '/all', '/v', archive], { encoding: 'utf8', timeout: 60000, maxBuffer: 65536 });
   const signatureStep: Step = { mode: 'vendor-signature', pid: signature.pid, status: signature.status, signal: signature.signal,
     stdout: signature.stdout ?? '', stderr: signature.stderr ?? '', exitedAt: Date.now(), ...(signature.error ? { error: signature.error.message } : {}) };
@@ -381,7 +382,7 @@ async function prepareComposed(desktop: Json): Promise<void> {
       || process.env.GITHUB_RUN_ATTEMPT !== '1') throw new Error('same-job composed authority missing');
   const spec = { schema: 1, root, nonce, aumid: `AgentNotify.Navigation.TEST.${nonce}`, sourceSHA: evidence.sourceSHA,
     binarySHA256: evidence.binarySHA256, runID: process.env.GITHUB_RUN_ID, job: process.env.GITHUB_JOB, runAttempt: 1, userSid: sid, session: desktop.session, profile: 'public_sample_one_show',
-    notificationSetting: null, readinessQualified: false, ...vendorPin, archiveSHA256: digest,
+    notificationSetting: null, readinessQualified: false, ...vendorPin, packageBytes: vendorArchiveBytes, archiveSHA256: digest,
     addProofSHA256: hashFile(join(root!, 'vendor-install-completed.proof')) };
   const bytes = JSON.stringify(spec);
   if (Buffer.byteLength(bytes) > 16384) throw new Error('composed spec bound exceeded');
