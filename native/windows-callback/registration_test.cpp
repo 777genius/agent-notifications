@@ -306,6 +306,18 @@ static void diagnoseLongShortcutTarget(const std::vector<uint8_t>& bytes,
   std::cerr<<"TEST long serialized target expected="<<narrow(expected)
     <<" filesystem="<<narrow(actual)<<" parsing="<<narrow(parsing.value)<<"\n";
 }
+static void shortcutNamespaceContract(){
+  stage("child_shortcut_namespace_spelling");
+  require(shortcutDOSParsingName(L"\\\\?\\C:\\TEST\\helper.exe")==L"C:\\TEST\\helper.exe");
+  require(shortcutDOSParsingName(L"C:\\TEST\\helper.exe")==L"C:\\TEST\\helper.exe");
+  for(const auto* unsupported:{L"\\\\?\\UNC\\server\\share\\helper.exe",
+    L"\\\\?\\GLOBALROOT\\Device\\helper.exe",L"\\\\?\\C:\\TEST\\helper.exe:stream"}){
+    bool refused=false;
+    try{(void)shortcutDOSParsingName(unsupported);}
+    catch(const std::runtime_error&){refused=true;}
+    require(refused);
+  }
+}
 static void shortcutContracts(const Generation& g,uint64_t end);
 static bool registryContracts(){
   stage("child_generation_custody");
@@ -854,6 +866,7 @@ static std::vector<uint8_t> legacySetPathShortcutBytes(
 static void shortcutContracts(const Generation& g,uint64_t end){
   stage("child_shortcut_com");
   Apartment apartment;
+  shortcutNamespaceContract();
   installedBudget(end);
   shortcutApiFailureContract();
   installedBudget(end);

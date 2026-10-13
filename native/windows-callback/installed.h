@@ -541,6 +541,17 @@ namespace wcb {
     shortcutBudget(end);
     return out;
   }
+  // Shell returns extended drive syntax for a real long filesystem item.
+  // Remove only that namespace spelling: do not fold case, resolve aliases,
+  // admit UNC/device paths, or change the held file identity requirement.
+  inline std::wstring shortcutDOSParsingName(std::wstring target){
+    if(!target.starts_with(L"\\\\?\\"))return target;
+    require(target.size()>7&&(target[4]>=L'A'&&target[4]<=L'Z'
+      ||target[4]>=L'a'&&target[4]<=L'z')&&target[5]==L':'
+      &&target[6]==L'\\'&&target.back()!=L'\\'
+      &&target.find(L':',6)==std::wstring::npos);
+    return target.substr(4);
+  }
   inline std::wstring exactShortcutTarget(IShellLinkW* link,uint64_t end=0){
     ScopedPidl idlist;
     shortcutBudget(end);
@@ -553,7 +564,7 @@ namespace wcb {
     shortcutBudget(end);
     std::wstring target(name.value);
     shortcutBudget(end);
-    return target;
+    return shortcutDOSParsingName(std::move(target));
   }
   inline void parseShortcutTarget(const ShortcutFixture& fixture,ScopedPidl& target,uint64_t end=0){
     shortcutBudget(end);
