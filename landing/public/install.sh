@@ -5,6 +5,11 @@
 # that process so its caller observes exit only after owned children are joined.
 main() {
     set -euo pipefail
+    # A terminal can retain an unlinked cwd. Recover before downloads or child
+    # shells inherit it; keep valid caller-relative paths unchanged.
+    if ! builtin pwd -P >/dev/null 2>&1; then
+        cd -P / 2>/dev/null || { echo 'Cannot recover the installer working directory.' >&2; exit 1; }
+    fi
     # Only opt into loader parsing when the new selector is present. Every
     # existing invocation is forwarded verbatim to the released bootstrap.
     original_args=("$@")

@@ -2,26 +2,33 @@ package copilotvscodeinstall
 
 import (
 	"context"
+	"path/filepath"
 	"runtime"
 
 	"github.com/777genius/agent-notifications/internal/agentnotify/portable"
 	"github.com/777genius/agent-notifications/internal/config"
 	"github.com/777genius/agent-notifications/internal/copilotvscodeevent"
 	"github.com/777genius/agent-notifications/internal/cursorevent"
+	"github.com/777genius/agent-notifications/internal/cursorinstall"
 	"github.com/777genius/agent-notifications/internal/notification"
 	"github.com/777genius/agent-notifications/internal/opencodeinstall"
 	"github.com/777genius/agent-notifications/internal/webhook"
 )
 
-// NewCursorDesktop enters the existing single-lease Linux desktop owner.
+// NewCursorDesktop enters the existing single-lease desktop owner.
 func NewCursorDesktop(g CursorGate, b cursorevent.Binding, backend notification.DeliveryPort) notification.DeliveryPort {
-	if g.gate.Binding.Integration != portable.Cursor || g.gate.Proof == nil || runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+	version, _ := cursorinstall.CurrentTuple()
+	if g.gate.Binding.Integration != portable.Cursor || g.gate.Proof == nil || version == "" {
 		return localDesktop{}
 	}
 	if _, leased := backend.(localDesktop); leased {
 		return localDesktop{}
 	}
-	return NewDesktop(g.gate, localCursorBinding(b), "", backend)
+	spool := ""
+	if runtime.GOOS == "darwin" {
+		spool = filepath.Join(g.gate.Binding.ControlRoot, "cursor-native-spool")
+	}
+	return NewDesktop(g.gate, localCursorBinding(b), spool, backend)
 }
 
 // NewCursorWebhookSender converts only the consumer's typed handoff. The
@@ -31,6 +38,11 @@ func NewCursorWebhookSender(g CursorGate, b cursorevent.Binding, send cursoreven
 		send = nil
 	}
 	return cursorevent.WebhookSender(NewWebhookSender(g.gate, localCursorBinding(b), copilotvscodeevent.WebhookSender(send)))
+}
+
+// PrepareCursorNativeSpool uses the existing private directory and lock owner.
+func PrepareCursorNativeSpool(ctx context.Context, root string) (string, error) {
+	return opencodeinstall.PrepareNativeSpoolFor(ctx, root, opencodeinstall.CursorDesktop)
 }
 
 const CopilotVSCodeToastAppID = opencodeinstall.CopilotVSCodeToastAppID

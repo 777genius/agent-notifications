@@ -10,13 +10,14 @@ import (
 
 	"github.com/777genius/agent-notifications/internal/agentnotify/portable"
 	"github.com/777genius/agent-notifications/internal/copilotvscodeevent"
+	"github.com/777genius/agent-notifications/internal/cursorinstall"
 	"github.com/777genius/agent-notifications/internal/installruntime"
 	"github.com/777genius/agent-notifications/internal/notifier"
 )
 
 // PhysicalProof is an immutable normalized observation. All fields are private.
-// Only the private Cursor producer derives affirmative Cursor facts from the
-// public installed observations. Local still has no producer. Zero values deny.
+// Private Local/Cursor producers derive facts from public installed observations.
+// Zero values deny.
 type PhysicalProof struct {
 	binding                                                      portable.Binding
 	physical, selectedLocalClass, qualifiedTuple                 bool
@@ -24,6 +25,7 @@ type PhysicalProof struct {
 	primaryDigest, helperDigest                                  string
 	selectedCursorClass                                          bool
 	cursorObservation, configObservation                         string
+	localObservation                                             string
 }
 
 // ProofPort reloads actual physical profile/receipt/package/projection authority.
@@ -38,9 +40,10 @@ func digest(s string) bool {
 	return err == nil && len(data) == 32 && s != "0000000000000000000000000000000000000000000000000000000000000000"
 }
 func (p PhysicalProof) matches(b portable.Binding, s installruntime.PolicySnapshot) bool {
-	class := b.Integration == portable.CopilotVSCode && p.selectedLocalClass && !p.selectedCursorClass
+	class := b.Integration == portable.CopilotVSCode && p.selectedLocalClass && !p.selectedCursorClass && p.localObservation != "" && p.configObservation != "" && runtime.GOOS == "darwin" && runtime.GOARCH == "arm64"
 	if b.Integration == portable.Cursor {
-		class = p.selectedCursorClass && !p.selectedLocalClass && p.cursorObservation != "" && p.configObservation != "" && runtime.GOOS == "linux" && runtime.GOARCH == "amd64"
+		version, _ := cursorinstall.CurrentTuple()
+		class = p.selectedCursorClass && !p.selectedLocalClass && p.cursorObservation != "" && p.configObservation != "" && version != ""
 	}
 	if !p.physical || !class || !p.qualifiedTuple || p.binding != b ||
 		p.goos != runtime.GOOS || p.goarch != runtime.GOARCH || !digest(p.receiptDigest) ||
@@ -67,14 +70,39 @@ func (p PhysicalProof) matches(b portable.Binding, s installruntime.PolicySnapsh
 // Gate implements the ACTUAL N1 consumer interface. It binds one immutable
 // portable registration; every request supplies the observed generation.
 type Gate struct {
-	Binding portable.Binding
-	Proof   ProofPort
+	Binding       portable.Binding
+	Proof         ProofPort
+	localInitial  PhysicalProof
+	localObserver ProofPort
 }
 
 var _ copilotvscodeevent.Gate = Gate{}
 
 func (g Gate) qualify(ctx context.Context, s installruntime.PolicySnapshot, expected copilotvscodeevent.Binding) (Consent, PhysicalProof, error) {
 	if ctx == nil || ctx.Err() != nil || g.Proof == nil || s.Installation.Ledger.WriterFloor < installruntime.LocalPolicyWriterFloor || g.Binding.CheckSnapshot(s.Installation) != nil || !recorded(s, g.Binding) || consumerBinding(s, g.Binding) != expected {
+		return Consent{}, PhysicalProof{}, ErrDenied
+	}
+	port := g.Proof
+	if g.Binding.Integration == portable.CopilotVSCode {
+		// Retain the constructor's private observer. A copied affirmative value or
+		// replacement of the public test/composition port cannot replay Local proof.
+		if g.localObserver == nil {
+			return Consent{}, PhysicalProof{}, ErrDenied
+		}
+		port = g.localObserver
+	}
+	proof, err := checkProofPort(ctx, port, g.Binding, s.Installation)
+	if err != nil {
+		return Consent{}, PhysicalProof{}, ErrDenied
+	}
+	return g.qualifyCheckedProof(ctx, s, expected, proof)
+}
+
+// qualifyCheckedProof applies the same predicates to one complete observation.
+// Only the constructor supplies its just-checked proof; later qualify calls
+// always obtain a fresh observation from the retained private observer above.
+func (g Gate) qualifyCheckedProof(ctx context.Context, s installruntime.PolicySnapshot, expected copilotvscodeevent.Binding, proof PhysicalProof) (Consent, PhysicalProof, error) {
+	if ctx == nil || ctx.Err() != nil || g.Proof == nil || s.Installation.Ledger.WriterFloor < installruntime.LocalPolicyWriterFloor || g.Binding.CheckSnapshot(s.Installation) != nil || !recorded(s, g.Binding) || consumerBinding(s, g.Binding) != expected || g.Binding.Integration == portable.CopilotVSCode && g.localObserver == nil {
 		return Consent{}, PhysicalProof{}, ErrDenied
 	}
 	consent, err := ReadConsent(s, g.Binding)
@@ -84,9 +112,16 @@ func (g Gate) qualify(ctx context.Context, s installruntime.PolicySnapshot, expe
 	if err != nil {
 		return Consent{}, PhysicalProof{}, err
 	}
-	proof, err := checkProofPort(ctx, g.Proof, g.Binding, s.Installation)
-	if err != nil || !proof.matches(g.Binding, s) {
+	if !proof.matches(g.Binding, s) {
 		return Consent{}, PhysicalProof{}, ErrDenied
+	}
+	if g.Binding.Integration == portable.CopilotVSCode {
+		cfg, identity, err := readLocalConfig(g.Binding)
+		if err != nil || identity != proof.configObservation || proof != g.localInitial {
+			return Consent{}, PhysicalProof{}, ErrDenied
+		}
+		consent.desktop = consent.desktop && cfg.IsStatusDesktopEnabled("agent_stopping")
+		consent.webhook = consent.webhook && cfg.IsStatusWebhookEnabled("agent_stopping") && cfg.Notifications.Webhook.Preset == "custom" && cfg.Notifications.Webhook.Format == "json" && len(cfg.Notifications.Webhook.Headers) == 0
 	}
 	if g.Binding.Integration == portable.Cursor {
 		cfg, identity, err := readCursorConfig(g.Binding)
@@ -108,6 +143,13 @@ func (g Gate) ConsumerBinding(ctx context.Context) (copilotvscodeevent.Binding, 
 	if err != nil {
 		return copilotvscodeevent.Binding{}, err
 	}
+	return g.ConsumerBindingFromSnapshot(ctx, s)
+}
+
+// ConsumerBindingFromSnapshot uses the snapshot already pinned by the caller's
+// policy lease. It does not acquire either lock again or authorize an effect;
+// the existing per-effect Gate lease still performs its own revalidation.
+func (g Gate) ConsumerBindingFromSnapshot(ctx context.Context, s installruntime.PolicySnapshot) (copilotvscodeevent.Binding, error) {
 	b := consumerBinding(s, g.Binding)
 	if _, _, err := g.qualify(ctx, s, b); err != nil {
 		return copilotvscodeevent.Binding{}, err
@@ -142,15 +184,14 @@ func (g Gate) acquire(ctx context.Context, b copilotvscodeevent.Binding, channel
 		return nil, err
 	}
 	initial := PhysicalProof{}
-	if g.Binding.Integration == portable.Cursor {
-		_, initial, err = g.qualify(ctx, current, b)
-		if err != nil {
-			release()
-			return nil, err
-		}
+	switch g.Binding.Integration {
+	case portable.CopilotVSCode:
+		// Local qualification requires full equality with the constructor proof;
+		// the fresh lease check below validates that same baseline under the lease.
+		initial = g.localInitial
 	}
 	lease := &authorityLease{gate: g, binding: b, channel: channel, expected: current, release: release, initial: initial}
-	if err := lease.check(ctx); err != nil {
+	if err := lease.check(ctx, g.Binding.Integration == portable.Cursor); err != nil {
 		release()
 		return nil, err
 	}
@@ -179,12 +220,14 @@ func (l *authorityLease) ExecutablePath() string {
 	return filepath.Join(l.BundlePath(), "Contents", "MacOS", "terminal-notifier-modern")
 }
 func (l *authorityLease) Release()                                { l.once.Do(l.release) }
-func (l *authorityLease) BeforeHandoff(ctx context.Context) error { return l.check(ctx) }
-func (l *authorityLease) Complete(ctx context.Context) error      { return l.check(ctx) }
+func (l *authorityLease) BeforeHandoff(ctx context.Context) error { return l.check(ctx, false) }
+func (l *authorityLease) Complete(ctx context.Context) error      { return l.check(ctx, false) }
 
 // Re-read WITHOUT reacquiring the held locks. Cooperative AN writes are fenced;
 // external profile/policy writers can still race between a check and handoff.
-func (l *authorityLease) check(ctx context.Context) error {
+// Only Cursor acquisition establishes its baseline from this fresh check.
+// Handoff/completion always compare; an absent baseline never resets itself.
+func (l *authorityLease) check(ctx context.Context, initial bool) error {
 	preimage, err := installruntime.Fingerprint(filepath.Join(l.gate.Binding.ControlRoot, "agent-notifications.json"))
 	if err != nil || preimage != l.expected.Preimage {
 		return ErrDenied
@@ -197,10 +240,13 @@ func (l *authorityLease) check(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if l.gate.Binding.Integration == portable.Cursor && proof != l.initial {
+	if initial && l.gate.Binding.Integration != portable.Cursor || !initial && proof != l.initial {
 		return ErrDenied
 	}
 	if l.channel == copilotvscodeevent.DesktopChannel && consent.desktop || l.channel == copilotvscodeevent.WebhookChannel && consent.webhook {
+		if initial {
+			l.initial = proof
+		}
 		return nil
 	}
 	return ErrDenied

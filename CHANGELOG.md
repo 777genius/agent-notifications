@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.49.2] - 2026-10-13
+
+### Fixed
+- Initialize a fresh Windows configuration automatically in a private user-specific ProgramData directory when Codex sandbox write/delete grants make the profile unsafe, without changing sandbox ACLs or requiring administrator access ([#466](https://github.com/777genius/agent-notifications/issues/466), [#471](https://github.com/777genius/agent-notifications/pull/471)).
+- Explain Windows configuration permission failures with the rejected folder, trustee SID and access mask; recognize trusted OWNER RIGHTS grants ([#469](https://github.com/777genius/agent-notifications/pull/469), [#470](https://github.com/777genius/agent-notifications/pull/470)).
+- Preserve the shared OpenCode managed runtime during cache upgrades ([#468](https://github.com/777genius/agent-notifications/pull/468)).
+
+### Platform notes
+- Existing configurations and explicit paths retain precedence. An existing configuration under unsafe profile ancestry still needs explicit recovery; the plugin does not silently migrate or reset it. A profile configuration appearing beside an established private fallback is rejected as a conflict.
+- Windows qualification covers fresh initialization, editing, ACL repair, hostile precreation and real Claude/Codex hook webhooks with administrator access and privileges disabled. It does not establish interactive desktop banner visibility or resolve a separate caller/routing policy failure.
+- This release uses the basic five-platform artifact profile with separate downloaded macOS and Codex checks; it does not claim eleven-cell OpenCode, full native, cold-start, physical Intel or live-provider qualification.
+
+## [1.49.1] - 2026-10-12
+
+### Added
+- Cursor CLI notifications through the public UAP hook SDK and managed installer, including disable, update and uninstall with existing hooks preserved ([#400](https://github.com/777genius/agent-notifications/pull/400), [#459](https://github.com/777genius/agent-notifications/pull/459)).
+- Cursor Stop desktop delivery and opt-in webhooks on qualified Linux amd64, macOS arm64 and native Windows amd64 configurations.
+
+### Fixed
+- Complete fresh Cursor CLI bootstrap through a managed runtime preparation and a separate integration confirmation; initialize the bound global configuration and apply the confirmed consent without losing policy or generation fences.
+- Use the stable executable version for the managed macOS notifier bundle ([commit](https://github.com/777genius/agent-notifications/commit/329fc6235f050cfd3e025746e5d1e0ac4979cde0)).
+
+### Platform notes
+- The v1.49.0 tag and draft remain unpublished after the fresh-bootstrap check failed; this candidate includes the corrective changes.
+- Cursor support is for CLI, not Cursor IDE. Qualified CLI versions are Linux 2026.09.28-64d2043, macOS arm64 2026.09.18-9a7762b and Windows amd64 2026.10.01-e373342. Installation rejects unsupported versions and platform tuples.
+- Stop indicates that the agent loop ended; it does not prove task success. Cursor alerts use fixed informational text, without sounds, click-to-focus, question detection or permission-request notifications.
+- Linux requires the qualified filesystem identity contract; successful delivery on the CI kernel/filesystem does not establish compatibility with every Linux host. Windows CI proves submission to the Toast API, not interactive banner visibility.
+- The release uses the basic five-platform artifact profile with separate downloaded macOS and Codex checks; it does not claim the full native or eleven-cell OpenCode qualification.
+
 ## [1.48.7] - 2026-10-11
 
 ### Added

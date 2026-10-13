@@ -90,6 +90,9 @@ if [ "${FAIL_DOWNLOAD:-}" = "$kind" ]; then exit 22; fi
 # execs it, so sys.argv cannot prove setup.sh forwarded the literal argument.
 bootstrap_stub = '''#!/usr/bin/env bash
 set -eu
+if [ -n "${EXPECT_CWD:-}" ]; then
+    [ "$(pwd -P)" = "$EXPECT_CWD" ] || exit 98
+fi
 if [ "${1:-}" = --presentation-capabilities ]; then
     [ "${PRESENTATION_BOOTSTRAP:-0}" = 1 ] || exit 1
     printf 'bootstrap-presentation-v1\n'; exit 0
@@ -159,7 +162,7 @@ def with_noglob(env):
     return env
 
 
-def run_loader(args, env, piped=False, documented=False, bash_executable=None):
+def run_loader(args, env, piped=False, documented=False, bash_executable=None, cwd_case=None):
     env = with_noglob(env)
     runner = bash_executable or HOST_BASH
     setup_sh = bash_path(root / 'bin/setup.sh')
@@ -177,6 +180,15 @@ def run_loader(args, env, piped=False, documented=False, bash_executable=None):
         invocation = ([bash_path(runner)] if bash_executable else []) + [setup_sh] + args
         command = [runner, '-c', 'exec ' + ' '.join(map(shlex.quote, invocation))]
         stdin = None
+    if cwd_case:
+        prefix = 'cd -P "$CASE_DIR/caller cwd" || exit; '
+        if cwd_case.startswith('deleted'):
+            prefix += 'rmdir "$CASE_DIR/caller cwd" || exit; '
+        if cwd_case == 'deleted-source':
+            command = [runner, '-c', prefix + 'source ' + shlex.quote(setup_sh) +
+                       ' ' + ' '.join(map(shlex.quote, args))]
+        else:
+            command[2] = prefix + 'set -o pipefail; ' + command[2]
     return subprocess.run(command, input=stdin, text=True, capture_output=True, env=env, timeout=20)
 
 
@@ -198,7 +210,7 @@ def channel_requests():
 def run_case(name, tag=None, commit=None, fail='', status=0, expected=None, piped=False,
              documented=False, expect_run=True, args=None, calls=None, no_network=False,
              legacy_status=None, opencode_status=None, message=None, help_only=False,
-             release=None, release_only=False, bash_executable=None, legacy_bootstrap=False, presentation=False):
+             release=None, release_only=False, bash_executable=None, legacy_bootstrap=False, presentation=False, cwd_case=None):
     if args is None:
         args = ['--product', 'both', 'argument with spaces', '*']
     if release is None:
@@ -241,11 +253,18 @@ def run_case(name, tag=None, commit=None, fail='', status=0, expected=None, pipe
                    LEGACY_BOOTSTRAP='1' if legacy_bootstrap else '0',
                    BOOTSTRAP_RELEASE_TAG='untrusted', BOOTSTRAP_RELEASE_COMMIT='untrusted',
                    INSTALL_SCRIPT_URL='https://example.invalid/not-used')
+        if cwd_case:
+            (case / 'caller cwd').mkdir()
+            env['EXPECT_CWD'] = '/' if cwd_case.startswith('deleted') else str((case / 'caller cwd').resolve())
         if legacy_status is not None:
             env['LEGACY_STATUS'] = str(legacy_status)
         if opencode_status is not None:
             env['OPENCODE_STATUS'] = str(opencode_status)
-        result = run_loader(args, env, piped=piped, documented=documented, bash_executable=bash_executable)
+        result = run_loader(args, env, piped=piped, documented=documented, bash_executable=bash_executable, cwd_case=cwd_case)
+        if cwd_case:
+            assert "chdir: error retrieving current directory" not in result.stderr, (name, result.stderr)
+            if cwd_case == "deleted-source":
+                assert "shell-init:" not in result.stderr, (name, result.stderr)
         if no_network or help_only:
             assert result.returncode == (0 if help_only else 1), (name, result.returncode, result.stderr)
             assert not (case / 'requests').exists(), name + ': parser performed a network request'
@@ -392,7 +411,7 @@ def runtime_path(case, python=False, node=False, bash_executable=None):
     bin_dir.mkdir()
     names = ['bash', 'sh', 'mktemp', 'rm', 'cat', 'chmod', 'mkdir', 'ln', 'uname',
              'tr', 'wc', 'cmp', 'grep', 'head', 'cp', 'mv', 'env', 'true', 'false', 'dirname', 'basename',
-             'printf', 'pwd', 'cygpath', 'awk', 'sleep']
+             'printf', 'pwd', 'cygpath', 'awk', 'sleep', 'rmdir']
     if python:
         names.append('python3')
     if node:
@@ -434,6 +453,18 @@ def run_runtime_case(name, python=False, node=False, expected=0, stub_python=Fal
         assert not list((case / 'tmp space').iterdir()), name + ': leaked staging directory'
         print('PASS ' + name)
 
+
+# Unix permits unlinking a process's cwd; Windows prevents this fixture.
+# Exercise the public pipe and verified child handoff, never real user installs.
+if os.name != 'nt':
+    for cwd_case in ['deleted-source', 'deleted-pipe', 'healthy']:
+        run_case('installer cwd ' + cwd_case, expected=0,
+                 args=['--product', 'codex', 'relative path/with spaces', '*'],
+                 documented=cwd_case == 'deleted-pipe', cwd_case=cwd_case)
+    if sys.platform == 'darwin':
+        run_case('native Bash deleted cwd', expected=0,
+                 args=['--product', 'codex'], documented=True, cwd_case='deleted-pipe',
+                 bash_executable='/bin/bash')
 
 # Regression: pending JSON previously acquired a helper and entered UI; malformed
 # Invalid flags and pending product UI stop before acquisition.

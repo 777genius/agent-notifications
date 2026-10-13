@@ -2,19 +2,20 @@
 import { repo, type AgentProduct } from "~/data/install";
 
 const { t } = useI18n();
-const agents: AgentProduct[] = ["claude", "codex", "opencode", "gemini"];
+type SupportedAgent = AgentProduct | "cursor";
+const agents: SupportedAgent[] = ["claude", "codex", "opencode", "gemini", "cursor"];
 type Support = "yes" | "no" | "conditional";
-const rows: { key: string; support: Record<AgentProduct, Support> }[] = [
-  { key: "completion", support: { claude: "yes", codex: "yes", opencode: "yes", gemini: "yes" } },
-  { key: "question", support: { claude: "yes", codex: "conditional", opencode: "yes", gemini: "no" } },
-  { key: "permission", support: { claude: "yes", codex: "yes", opencode: "yes", gemini: "yes" } },
-  { key: "review", support: { claude: "yes", codex: "no", opencode: "no", gemini: "no" } },
-  { key: "plan", support: { claude: "yes", codex: "no", opencode: "no", gemini: "no" } },
-  { key: "limit", support: { claude: "yes", codex: "conditional", opencode: "no", gemini: "no" } },
-  { key: "error", support: { claude: "yes", codex: "conditional", opencode: "yes", gemini: "no" } },
-  { key: "sound", support: { claude: "yes", codex: "yes", opencode: "no", gemini: "no" } },
-  { key: "focus", support: { claude: "conditional", codex: "conditional", opencode: "no", gemini: "no" } },
-  { key: "webhook", support: { claude: "yes", codex: "yes", opencode: "yes", gemini: "yes" } },
+const rows: { key: string; support: Record<SupportedAgent, Support> }[] = [
+  { key: "completion", support: { claude: "yes", codex: "yes", opencode: "yes", gemini: "yes", cursor: "conditional" } },
+  { key: "question", support: { claude: "yes", codex: "conditional", opencode: "yes", gemini: "no", cursor: "no" } },
+  { key: "permission", support: { claude: "yes", codex: "yes", opencode: "yes", gemini: "yes", cursor: "no" } },
+  { key: "review", support: { claude: "yes", codex: "no", opencode: "no", gemini: "no", cursor: "no" } },
+  { key: "plan", support: { claude: "yes", codex: "no", opencode: "no", gemini: "no", cursor: "no" } },
+  { key: "limit", support: { claude: "yes", codex: "conditional", opencode: "no", gemini: "no", cursor: "no" } },
+  { key: "error", support: { claude: "yes", codex: "conditional", opencode: "yes", gemini: "no", cursor: "no" } },
+  { key: "sound", support: { claude: "yes", codex: "yes", opencode: "no", gemini: "no", cursor: "no" } },
+  { key: "focus", support: { claude: "conditional", codex: "conditional", opencode: "no", gemini: "no", cursor: "no" } },
+  { key: "webhook", support: { claude: "yes", codex: "yes", opencode: "yes", gemini: "yes", cursor: "yes" } },
 ];
 const icons = { yes: "✓", no: "✕", conditional: "✓*" };
 </script>
@@ -51,6 +52,7 @@ const icons = { yes: "✓", no: "✕", conditional: "✓*" };
     </div>
     <div id="agent-support-notes" class="agent-support-notes">
       <p>{{ t("agentSupport.legend") }}</p>
+      <p>{{ t("install.cursor.scope") }} <a :href="repo + '/blob/main/docs/cursor-notifications.md'">{{ t("install.cursor.guide") }} ↗</a></p>
       <p>{{ t("install.gemini.version") }} <a :href="repo + '/blob/main/docs/gemini-notifications.md'">{{ t("install.gemini.guide") }} ↗</a></p>
       <details>
         <summary>{{ t("install.capabilities.details") }}</summary>

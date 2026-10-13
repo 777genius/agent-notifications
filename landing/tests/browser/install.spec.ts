@@ -545,12 +545,12 @@ test("released agents toggle independently, copied commands and configuration co
   await page.getByRole("button", { name: "Copy command" }).click();
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("(set -o pipefail; " + prefix.replace("--product ", "--products ") + "claude,codex,opencode --desktop)");
   const table = page.getByRole("table", { name: "Compare agent features" });
-  await expect(table.getByRole("columnheader")).toHaveText(["Feature", "Claude", "Codex CLI", "OpenCode", /Gemini CLI\s*Linux \/ Windows/]);
-  await expect(table.getByRole("row", { name: /^Completed/ }).getByRole("cell")).toHaveText(["✓Supported", "✓Supported", "✓Supported", "✓Supported"]);
-  await expect(table.getByRole("row", { name: /^Review/ }).getByRole("cell")).toHaveText(["✓Supported", "✕Not supported", "✕Not supported", "✕Not supported"]);
-  await expect(table.getByRole("row", { name: /^Sounds/ }).getByRole("cell")).toHaveText(["✓Supported", "✓Supported", "✕Not supported", "✕Not supported"]);
-  await expect(table.getByRole("row", { name: /^Question/ }).getByRole("cell")).toHaveText(["✓Supported", "✓*Supported with limitations", "✓Supported", "✕Not supported"]);
-  await expect(table.getByRole("row", { name: /^Errors/ }).getByRole("cell")).toHaveText(["✓Supported", "✓*Supported with limitations", "✓Supported", "✕Not supported"]);
+  await expect(table.getByRole("columnheader")).toHaveText(["Feature", "Claude", "Codex CLI", "OpenCode", /Gemini CLI\s*macOS \/ Linux \/ Windows/, "Cursor CLI"]);
+  await expect(table.getByRole("row", { name: /^Completed/ }).getByRole("cell")).toHaveText(["✓Supported", "✓Supported", "✓Supported", "✓Supported", "✓*Supported with limitations"]);
+  await expect(table.getByRole("row", { name: /^Review/ }).getByRole("cell")).toHaveText(["✓Supported", "✕Not supported", "✕Not supported", "✕Not supported", "✕Not supported"]);
+  await expect(table.getByRole("row", { name: /^Sounds/ }).getByRole("cell")).toHaveText(["✓Supported", "✓Supported", "✕Not supported", "✕Not supported", "✕Not supported"]);
+  await expect(table.getByRole("row", { name: /^Question/ }).getByRole("cell")).toHaveText(["✓Supported", "✓*Supported with limitations", "✓Supported", "✕Not supported", "✕Not supported"]);
+  await expect(table.getByRole("row", { name: /^Errors/ }).getByRole("cell")).toHaveText(["✓Supported", "✓*Supported with limitations", "✓Supported", "✕Not supported", "✕Not supported"]);
   const compatibility = page.locator(".agent-support details");
   const qualification = compatibility.getByText("Claude permission prompts appear as Question alerts. Codex question hooks are experimental; error and limit detection uses final-message heuristics. See the linked guides for qualification details.", { exact: true });
   await expect(qualification).not.toBeVisible();
@@ -590,12 +590,14 @@ test("first feature explains supported click-to-focus and its agent scope", asyn
 });
 
 // Revealed sections must still be reachable through a direct URL and navigation.
-test("installation deep link and navigation expose the comparison and four agent logos", async ({ page }) => {
+test("installation deep link and navigation expose the comparison and five agent logos", async ({ page }) => {
   await page.goto("#install");
   await expect(page).toHaveURL(/#install$/);
   await expect(page.locator("#install")).toBeInViewport();
   await expect(page.getByRole("table", { name: "Compare agent features" })).toBeVisible();
-  await expect(page.locator(".supported-agents").getByRole("img")).toHaveCount(4);
+  await expect(page.locator(".supported-agents").getByRole("img")).toHaveCount(5);
+  await expect(page.getByRole("img", { name: "Cursor CLI", exact: true }).first()).toBeVisible();
+  await expect(page.getByRole("link", { name: "Cursor CLI installation ↗" })).toHaveAttribute("href", "https://github.com/777genius/agent-notifications/blob/main/docs/cursor-notifications.md");
   const nav = page.getByRole("navigation");
   await nav.getByRole("link", { name: "Features", exact: true }).click();
   await expect(page).toHaveURL(/#features$/);
@@ -605,17 +607,17 @@ test("installation deep link and navigation expose the comparison and four agent
 });
 
 // Unsupported platform selection must keep the active installation valid.
-test("Gemini selection stays disabled on macOS while capabilities remain visible", async ({ page }) => {
+test("Gemini selection works on macOS while feature limits remain visible", async ({ page }) => {
   await page.goto("");
   await chooseOS(page, "macos");
   const table = page.getByRole("table", { name: "Compare agent features" });
-  await expect(table.getByRole("columnheader").last()).toContainText("Linux / Windows");
+  await expect(table.getByRole("columnheader").nth(4)).toContainText("macOS / Linux / Windows");
   for (const [feature, supported] of [
     [/^Completed/, true], [/^Permission Request/, true], [/^Webhooks/, true],
     [/^Question/, false], [/^Errors/, false], [/^Sounds/, false],
     [/^Click-to-focus/, false], [/^Plan/, false], [/^Review/, false], [/^Session Limit/, false],
   ] as const) {
-    await expect(table.getByRole("row", { name: feature }).getByRole("cell").last())
+    await expect(table.getByRole("row", { name: feature }).getByRole("cell").nth(3))
       .toHaveText(supported ? "✓Supported" : "✕Not supported");
   }
   const details = page.locator(".agent-support details");
@@ -625,24 +627,14 @@ test("Gemini selection stays disabled on macOS while capabilities remain visible
   await expect(details).toContainText("silent turn-completed and tool-permission alerts");
   const gemini = page.getByRole("button", { name: "Gemini CLI", exact: true });
   await expect(gemini).toBeVisible();
-  await expect(gemini).toBeDisabled();
-  await expect(gemini).toHaveAttribute("aria-pressed", "false");
-  // Native activation is ignored, and keyboard traversal skips disabled controls.
-  await gemini.evaluate((button) => (button as HTMLButtonElement).click());
-  const openCode = page.getByRole("button", { name: "OpenCode", exact: true });
-  await openCode.focus();
-  await page.keyboard.press("Tab");
-  await expect(page.getByRole("button", { name: "Change", exact: true })).toBeFocused();
-  await expect(gemini).toHaveAttribute("aria-pressed", "false");
-  await expect(page.getByLabel("Install command", { exact: true })).toHaveValue(/--product claude\)$/);
-  await chooseAgents(page, ["claude", "codex", "opencode"]);
-  await expect(page.getByLabel("Install command", { exact: true })).toHaveValue(/--products claude,codex,opencode --desktop/);
+  await expect(gemini).toBeEnabled();
+  await chooseAgents(page, ["gemini"]);
+  await expect(gemini).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByLabel("Install command", { exact: true })).toHaveValue(/--product gemini --desktop\)$/);
   await page.getByRole("button", { name: "Configure", exact: true }).click();
-  await expect(page.locator(".configuration")).toContainText("/claude-notifications-go:settings");
-  await expect(page.locator(".configuration")).toContainText("config path");
-  await expect(gemini).toBeDisabled();
+  await expect(page.locator(".configuration")).toContainText("Gemini");
   await page.getByRole("button", { name: "Install", exact: true }).click();
-  await expect(page.getByLabel("Install command", { exact: true })).toHaveValue(/--products claude,codex,opencode --desktop/);
+  await expect(page.getByLabel("Install command", { exact: true })).toHaveValue(/--product gemini --desktop\)$/);
 });
 
 // Manual instructions must remain available for the released agents in both intents.
@@ -675,7 +667,7 @@ test("agent comparison stays readable on mobile and keeps all agents visible", a
     await chooseOS(page, "linux");
     await chooseAgents(page, ["opencode"]);
     const table = page.getByRole("table", { name: "Compare agent features" });
-    await expect(table.getByRole("columnheader")).toHaveCount(5);
+    await expect(table.getByRole("columnheader")).toHaveCount(6);
     await expect(table.getByRole("row")).toHaveCount(11);
     // The comparison belongs below the command and both next-step cards at every width.
     const comparison = await table.boundingBox();
@@ -698,9 +690,9 @@ test("agent comparison stays readable on mobile and keeps all agents visible", a
 // The site must expose a usable Gemini command only for qualified platforms.
 test("platform channels enable Gemini and reset unsupported selections", async ({ page }) => {
   await page.goto("");
-  for (const os of ["linux", "windows"] as const) {
+  for (const os of ["macos", "linux", "windows"] as const) {
     await chooseOS(page, os);
-    await expect(page.locator(".install-release-version")).toContainText(channelVersion(`${os === "windows" ? "windows" : "linux"}/amd64`));
+    await expect(page.locator(".install-release-version")).toContainText(channelVersion(`${os === "macos" ? "darwin" : os}/amd64`));
     await expect(page.getByRole("button", { name: "Gemini CLI", exact: true })).toBeEnabled();
     await chooseAgents(page, ["gemini"]);
     await expect(page.getByLabel("Install command", { exact: true })).toHaveValue(/--product gemini --desktop\)$/);
@@ -712,11 +704,6 @@ test("platform channels enable Gemini and reset unsupported selections", async (
     await expect(page.locator(".setup-panel.instructions").getByRole("link", { name: "Gemini setup and limits", exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Copy command" })).toHaveCount(0);
   }
-  await chooseOS(page, "macos");
-  await expect(page.locator(".install-release-version")).toContainText(channelVersion("darwin/amd64"));
-  await expect(page.getByRole("button", { name: "Gemini CLI", exact: true })).toBeDisabled();
-  await expect(page.getByRole("button", { name: "Gemini CLI", exact: true })).toHaveAttribute("aria-pressed", "false");
-  await expect(page.getByLabel("Install command", { exact: true })).toHaveValue(/--product claude\)$/);
   await chooseOS(page, "linux");
   await chooseAgents(page, ["gemini"]);
   await chooseOS(page, "unknown");

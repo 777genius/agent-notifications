@@ -92,10 +92,44 @@ jobs:
       - name: Qualify Windows configuration and delivery
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
+          go test ./internal/config -run '^TestWindowsAutomatic(NativeAnchorReadOnly|PinSkipsBusyChild)$' -count=1 -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           go build -o bin/claude-notifications.exe ./cmd/claude-notifications
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          go build -o bin/windows-standard-user-e2e.exe ./scripts/windows-standard-user-e2e
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          go test -c ./internal/config -o bin/config-native.test.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          bin/windows-standard-user-e2e.exe bin/config-native.test.exe '-test.run=^TestWindowsAutomaticNativeAnchorReadOnly$' '-test.v=true'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $version = (Get-Content .claude-plugin/plugin.json | ConvertFrom-Json).version
-          python scripts/release-artifact-e2e.py --binary bin/claude-notifications.exe --version "v$version"
+          python scripts/release-artifact-e2e.py --binary bin/claude-notifications.exe --version "v$version" --windows-standard-user-runner bin/windows-standard-user-e2e.exe
+
+      - name: Prepare qualified configuration test build
+        if: matrix.go == '1.26' && github.event_name == 'pull_request'
+        shell: pwsh
+        env:
+          TEST_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $actualSource = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          New-Item -ItemType Directory -Force qualified-config-build | Out-Null
+          Copy-Item bin/claude-notifications.exe qualified-config-build/claude-notifications-windows-amd64.exe
+          $hash = (Get-FileHash qualified-config-build/claude-notifications-windows-amd64.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          [IO.File]::WriteAllText("$PWD/qualified-config-build/SHA256SUMS", "$hash  claude-notifications-windows-amd64.exe`n", [Text.UTF8Encoding]::new($false))
+          $info = "Unreleased Windows amd64 test build; not a plugin installer.`nSource: $actualSource`nPR head: $env:TEST_SOURCE_SHA`nActions run: $env:GITHUB_RUN_ID`n$(go version)`nQualified by release-artifact-e2e.py in this Actions run.`nUse config init --json / config inspect --json to diagnose ACL rejection.`nThe normal version string is retained for packaged-template compatibility.`n"
+          [IO.File]::WriteAllText("$PWD/qualified-config-build/BUILD-INFO.txt", $info, [Text.UTF8Encoding]::new($false))
+
+      - name: Upload qualified configuration test build
+        if: matrix.go == '1.26' && github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-config-test-pr-${{ github.event.pull_request.number }}-go-${{ matrix.go }}
+          path: qualified-config-build/
+          retention-days: 7
+          if-no-files-found: error
 
       - name: Run go vet
         run: go vet ./...

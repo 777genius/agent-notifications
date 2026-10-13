@@ -56,7 +56,7 @@ Unknown valid agent IDs and additive top-level settings are preserved for future
 runtimes. Unknown fields inside `agents.<id>` are rejected by strict agent
 validation rather than preserved. Claude/Codex hooks select their own profiles; OpenCode has a separate observer
 profile and consent. Gemini also has a separate observer profile and consent
-on its supported Linux/Windows releases, described below.
+on its supported macOS/Linux/Windows releases, described below.
 
 `config edit` and the settings wizard edit global fields only and preserve agent
 sections. `/agents/...` edits are rejected; use a text editor for these sections.
@@ -75,8 +75,8 @@ itself substitutes that name. The new name is for config resource paths.
 
 ## Gemini profile
 
-`agents.gemini` is available for Linux amd64/arm64 and Windows amd64 through the
-[platform channels](PLATFORM_RELEASE_CHANNELS.md). The public macOS channel excludes Gemini. Tested with
+`agents.gemini` is available for macOS amd64/arm64, Linux amd64/arm64 and Windows amd64 through the
+[platform channels](PLATFORM_RELEASE_CHANNELS.md). Tested with
 exact **Gemini CLI 0.62.0**; see the [Gemini guide](gemini-notifications.md) for
 setup, qualification and limits.
 

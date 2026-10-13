@@ -251,9 +251,13 @@ HOST_VERSION
 for file in "$HOME/.gemini/.env" "$HOME/.env"; do
     [ -f "$file" ] && [ ! -s "$file" ] || exit 5
 done
-for file in "$GEMINI_CLI_SYSTEM_SETTINGS_PATH" "$GEMINI_CLI_SYSTEM_DEFAULTS_PATH" "$GEMINI_CLI_TRUSTED_FOLDERS_PATH"; do
-    [ -f "$file" ] || exit 6
+probe=$(dirname "$HOME")
+[ "$GEMINI_CLI_SYSTEM_SETTINGS_PATH" = "$probe/settings.json" ] || exit 6
+[ "$GEMINI_CLI_SYSTEM_DEFAULTS_PATH" = "$probe/defaults.json" ] || exit 6
+for file in "$GEMINI_CLI_SYSTEM_SETTINGS_PATH" "$GEMINI_CLI_SYSTEM_DEFAULTS_PATH"; do
+    [ ! -e "$file" ] && [ ! -L "$file" ] || exit 6
 done
+[ "$GEMINI_CLI_TRUSTED_FOLDERS_PATH" = "$probe/trust.json" ] && [ -f "$GEMINI_CLI_TRUSTED_FOLDERS_PATH" ] || exit 6
 printf '0.62.0\n'
 GEMINI_VERSION
     chmod +x "$SANDBOX/gemini-version-cli/gemini"
@@ -788,6 +792,9 @@ check_prerequisites() { :; }
 resolve_bootstrap_release() { BOOTSTRAP_TAG=v2.0.0; }
 stage_config_helper() { _CONFIG_STAGE=$(mktemp -d); _CONFIG_HELPER=$TEST_CORE; }
 acquire_wizard_portable_asset() { WIZARD_PACKAGE_ROOT="$TEST_TRACE/TEST package with spaces.zip"; }
+# This dispatch fixture already supplies its committed observer; actual fresh
+# runtime preparation is exercised by the downloaded Cursor bootstrap canary.
+prepare_cursor_runtime() { _CURSOR_RUNTIME_PREPARED=false; }
 bootstrap_abs_command() { printf unexpected-discovery >> "$TEST_TRACE/mutation"; return 1; }
 install_legacy_products() { printf legacy >> "$TEST_TRACE/mutation"; return 99; }
 install_opencode() { printf opencode >> "$TEST_TRACE/mutation"; return 99; }
@@ -1071,7 +1078,7 @@ def run(name, mode='auto', old=False, color=False, terminal=True, helper_path=he
             assert (row in result.splitlines()) != compact, (name, result)
         if compact:
             assert '  Claude notification tool: not installed (existing opt-out kept).' in result, (name, result)
-            assert '  Codex notification tool: installed.' in result, (name, result)
+            assert '  Codex notification tool: installed.' not in result, (name, result)
         else:
             assert (tmp/'summary').read_bytes() == (tmp/'summary-before').read_bytes(), (name, 'fallback summary changed')
             assert result.count('    Agent notification tool: ') == 2, (name, result)

@@ -16,7 +16,8 @@ python3 -I scripts/preview-installer_test.py > "$evidence/preview-preparation.lo
     printf 'Preview qualification failed; details: %s\n' "$evidence/preview-preparation.log" >&2
     exit "$status"
 }
-go build -trimpath -ldflags='-s -w' -o "$binary" ./cmd/claude-notifications
+source_commit=$(git rev-parse HEAD)
+go build -trimpath -ldflags="-s -w -X main.selectorSourceCommit=$source_commit" -o "$binary" ./cmd/claude-notifications
 python3 - "$binary" "$evidence/binary.json" <<'PY'
 import hashlib, json, pathlib, sys
 binary = pathlib.Path(sys.argv[1])
@@ -29,5 +30,17 @@ pathlib.Path(sys.argv[2]).write_text(json.dumps({
 }, indent=2) + '\n')
 PY
 SELECTOR_TEST_BINARY="$binary" go test -json -count=1 -timeout=10m \
-    -run '^(TestBootstrap|TestSetupProductsScopedPresence)' ./cmd/claude-notifications > "$evidence/tests.jsonl"
+    -run '^(TestBootstrap|TestSetupProductsScopedPresence)' ./cmd/claude-notifications > "$evidence/tests.jsonl" || {
+    status=$?
+    printf 'Bootstrap tests failed; details: %s\n' "$evidence/tests.jsonl" >&2
+    python3 - "$evidence/tests.jsonl" <<'PY' >&2 || true
+import json, pathlib, sys
+events = [json.loads(line) for line in pathlib.Path(sys.argv[1]).read_text().splitlines()]
+failed = {event.get('Test', '') for event in events if event.get('Action') == 'fail'}
+for event in events:
+    if event.get('Action') == 'output' and event.get('Test', '') in failed:
+        sys.stdout.write(event.get('Output', ''))
+PY
+    exit "$status"
+}
 python3 scripts/selector_e2e_check.py "$evidence/tests.jsonl"

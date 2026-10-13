@@ -4,7 +4,7 @@
 
 ## Gemini availability
 
-The public installer selects a release from the [platform channels](PLATFORM_RELEASE_CHANNELS.md). Gemini CLI is available on Linux amd64/arm64 and Windows amd64; macOS amd64/arm64 includes Claude, Codex and OpenCode. Rerun setup once to adopt a normal Claude marketplace's platform channel.
+The public installer selects a release from the [platform channels](PLATFORM_RELEASE_CHANNELS.md). Gemini CLI is available on macOS amd64/arm64, Linux amd64/arm64 and Windows amd64. Rerun setup once to adopt a normal Claude marketplace's platform channel.
 
 ## Local installer preview (macOS)
 
@@ -64,7 +64,7 @@ Use `--state-dir /path/to/private-TEST-cache` to reuse your own mode-700 cache.
 
 ## Prerequisites
 
-- Install the selected agent CLIs first. OpenCode accepts stable V1 >= 1.18.29 and V2 >= 2.0.0; this does not qualify every version in that range. See [OpenCode setup and limits](opencode-notifications.md), including the stock Windows V1 original-event-age limitation. Gemini requires exactly CLI 0.62.0 on Linux/Windows; other versions are rejected.
+- Install the selected agent CLIs first. OpenCode accepts stable V1 >= 1.18.29 and V2 >= 2.0.0; this does not qualify every version in that range. See [OpenCode setup and limits](opencode-notifications.md), including the stock Windows V1 original-event-age limitation. Gemini requires exactly CLI 0.62.0 on macOS/Linux/Windows; other versions are rejected.
 - `curl`, Bash, and a working `python3` or `node` on `PATH` for installer metadata and checksum validation. A Windows Store Python stub is not sufficient.
 - Git for Claude marketplace setup, `tar` for Codex bundles, and `unzip` for the macOS desktop helper.
 - **Windows users:** Git Bash (included with [Git for Windows](https://git-scm.com/download/win)). Do not use WSL for a native Windows installation.
@@ -74,7 +74,7 @@ Use `--state-dir /path/to/private-TEST-cache` to reuse your own mode-700 cache.
 
 Prefer a guided setup? [Open the installation guide](https://777genius.github.io/agent-notifications/#install) to choose your agents, OS and task.
 
-The short setup loader handles release lookup and validation internally, then downloads the installer from its qualified immutable source snapshot. Run it and choose Claude, Codex, OpenCode, Gemini CLI (Linux/Windows), or a combination:
+The short setup loader handles release lookup and validation internally, then downloads the installer from its qualified immutable source snapshot. Run it and choose Claude, Codex, OpenCode, Gemini CLI, or a combination:
 
 ```bash
 (set -o pipefail; curl -fsSL https://agent-notifications.com/install.sh | bash)
@@ -98,7 +98,7 @@ You can select any combination of the supported agents in the guided setup. For 
 
 Use `claude,opencode` or `codex,opencode` for two agents. The loader downloads and validates one installer, then runs Claude/Codex setup followed by OpenCode setup. It stops at the first failure; an earlier successful installation remains installed. Fix the reported error and rerun the same command to complete setup.
 
-Add `,gemini` to `--products` on Linux/Windows to include Gemini. `--desktop` and `--webhook` apply to each selected OpenCode/Gemini integration independently; configure webhook URLs separately. The public installer defaults fresh OpenCode/Gemini installations to desktop on and webhooks off, and preserve saved channels on update when flags are omitted. `--skip-agent-notify` applies only to the Claude/Codex notification tool. These flags do not change Claude/Codex notification channels. Single-agent commands and `--product both` remain supported.
+Add `,gemini` to `--products` to include Gemini. `--desktop` and `--webhook` apply to each selected OpenCode/Gemini integration independently; configure webhook URLs separately. The public installer defaults fresh OpenCode/Gemini installations to desktop on and webhooks off, and preserve saved channels on update when flags are omitted. `--skip-agent-notify` applies only to the Claude/Codex notification tool. These flags do not change Claude/Codex notification channels. Single-agent commands and `--product both` remain supported.
 
 The installer shows recent safe checkpoints for each selected client above its live
 status. Saved registration remains distinct from completed setup; a timeout or
@@ -121,7 +121,7 @@ After installation:
 - **Claude:** restart Claude. Optionally run `/claude-notifications-go:settings` to configure sounds.
 - **Codex:** start Codex, run `/hooks`, then review and trust the installed hooks. The installer registers them automatically; no JSON editing or manual registration command is needed. Trust approval remains yours.
 - **Both:** complete both steps above.
-- **Gemini CLI (Linux/Windows):** restart Gemini to reload its hooks. [Setup and limits](gemini-notifications.md).
+- **Gemini CLI:** restart Gemini to reload its hooks. [Setup and limits](gemini-notifications.md).
 - **OpenCode:** restart OpenCode to load its global plugin. On Mac, explicitly grant notification permission. OpenCode bootstrap requires release v1.46.0 or newer; see [OpenCode setup, channels and limits](opencode-notifications.md).
 
 When the selected release supports the portable wizard, the installer also registers the

@@ -236,10 +236,12 @@ func pathWithinRoot(root, path string) bool {
 	return err == nil && relative != "." && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
 }
 
-// A portable binding keeps executing its recorded primary under the previous
-// cache root until a separate binding migration changes that locator. Publish
-// the same verified sender there in the relocation transaction, or refuse the
-// move when a shared consumer cannot be identified precisely.
+// A shared binding keeps executing its recorded primary under the previous
+// cache root until its own binding migration changes that locator. Publish the
+// same verified sender there in the relocation transaction, or refuse the move
+// when a shared consumer cannot be identified precisely. Consumer metadata,
+// including OpenCode's command arguments and policy/consent records, is never
+// rewritten here.
 func retainedPortablePrimaryFiles(l Ledger, oldRoot, newRoot, movingID string, staged []File) ([]File, error) {
 	byPath := make(map[string]File, len(staged))
 	for _, file := range staged {
@@ -247,22 +249,52 @@ func retainedPortablePrimaryFiles(l Ledger, oldRoot, newRoot, movingID string, s
 	}
 	retained := make(map[string]File)
 	for id, consumer := range l.Consumers {
-		if id == movingID || consumer.RuntimeRoot != oldRoot {
+		retainedSender := strings.HasPrefix(id, "portable:") || id == "opencode-notifications"
+		if id == movingID || (consumer.RuntimeRoot != oldRoot && (!retainedSender || !versionedClaudeCachePeers(consumer.RuntimeRoot, newRoot))) {
 			continue
 		}
-		if !strings.HasPrefix(id, "portable:") || len(consumer.Commands) != 1 {
+		retainedRoot := consumer.RuntimeRoot
+		var command string
+		switch {
+		case strings.HasPrefix(id, "portable:") && len(consumer.Commands) == 1:
+			command = consumer.Commands[0]
+		case id == "opencode-notifications" && len(consumer.Commands) == 4 &&
+			consumer.Commands[1] == "opencode-event" && consumer.Commands[2] == "--protocol" && consumer.Commands[3] == "1":
+			command = consumer.Commands[0]
+		default:
 			return nil, fmt.Errorf("shared cache consumer requires explicit migration: %s", id)
 		}
-		command := consumer.Commands[0]
-		if !pathWithinRoot(oldRoot, command) {
+		if !pathWithinRoot(retainedRoot, command) {
 			return nil, fmt.Errorf("portable primary is outside the previous runtime")
 		}
-		relative, err := filepath.Rel(oldRoot, command)
-		if err != nil || filepath.Dir(relative) != "bin" || !strings.HasPrefix(filepath.Base(relative), "claude-notifications-") {
+		relative, err := filepath.Rel(retainedRoot, command)
+		if err != nil {
+			return nil, fmt.Errorf("shared primary is not a managed sender")
+		}
+		sourceRelative := relative
+		if id == "opencode-notifications" {
+			// OpenCode owns a root-level sender; Claude stages its verified
+			// replacement in bin. Keep the registered path and argv unchanged.
+			if filepath.Dir(relative) != "." || command != filepath.Join(retainedRoot, relative) ||
+				filepath.Base(consumer.Registration) != "agent-notifications.js" {
+				return nil, fmt.Errorf("OpenCode primary or registration is not managed")
+			}
+			switch relative {
+			case "claude-notifications-darwin-arm64", "claude-notifications-darwin-amd64",
+				"claude-notifications-linux-arm64", "claude-notifications-linux-amd64", "claude-notifications-windows-amd64.exe":
+			default:
+				return nil, fmt.Errorf("OpenCode primary is not a supported managed sender")
+			}
+			registration, owned := l.Files[consumer.Registration]
+			if !owned || !registration.Exists || registration.Link != "" {
+				return nil, fmt.Errorf("OpenCode registration is not owned")
+			}
+			sourceRelative = filepath.Join("bin", relative)
+		} else if filepath.Dir(relative) != "bin" || !strings.HasPrefix(filepath.Base(relative), "claude-notifications-") {
 			return nil, fmt.Errorf("portable primary is not a managed sender")
 		}
 		before, owned := l.Files[command]
-		after, staged := byPath[filepath.Join(newRoot, relative)]
+		after, staged := byPath[filepath.Join(newRoot, sourceRelative)]
 		// Windows executable files do not carry POSIX execute bits.
 		executable := after.Mode&0111 != 0 || filepath.Ext(relative) == ".exe"
 		if !owned || !before.Exists || before.Link != "" || !staged || after.Remove || after.Link != "" || len(after.Data) == 0 || !executable {
@@ -574,7 +606,7 @@ func Commit(ctx context.Context, r Request) (result Ledger, resultErr error) {
 		}
 	}
 	var retainedPrimaries []File
-	if relocating && !retireOldCache {
+	if relocating {
 		retainedPrimaries, err = retainedPortablePrimaryFiles(l, previous.RuntimeRoot, r.RuntimeRoot, r.ConsumerID, r.Files)
 		if err != nil {
 			return l, err

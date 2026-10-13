@@ -58,6 +58,7 @@ _CONFIG_STAGE=""
 _CONFIG_HELPER=""
 _PORTABLE_STAGE=""
 _KEEP_CONFIG_STAGE=false
+_FINAL_BOARD_RENDERED=false
 _KEEP_PORTABLE_STAGE=false
 PRODUCT=""
 BOOTSTRAP_TAG=""
@@ -279,8 +280,8 @@ check_prerequisites() {
         # caller's environment is empty. Keep cwd and home in the same TEST root.
         : > "$probe/profile/.gemini/.env"
         : > "$probe/profile/.env"
-        printf '{}\n' > "$probe/settings.json"
-        printf '{}\n' > "$probe/defaults.json"
+        # Redirect system files into this probe without creating user-owned
+        # files that Gemini correctly refuses to trust as root-owned settings.
         printf '{}\n' > "$probe/trust.json"
         probe_status=0
         host_version=$(cd "$probe/profile" && env -i PATH="$PATH" HOME="$probe/profile" USERPROFILE="$probe/profile" \
@@ -1676,7 +1677,7 @@ print_success() {
             codex|both)
                 printf '  Codex - installed; restart required.\n'
                 printf '    Agent notification tool: %s.\n' "$CODEX_AGENT_NOTIFY_STATUS"
-                printf '    Run /hooks in Codex, review the entries and trust them.\n' ;;
+                printf '  Run /hooks in Codex, review the entries and trust them.\n' ;;
         esac
         print_delivery_note
         if [ "${BOOTSTRAP_VERBOSE:-0}" = 1 ]; then
@@ -1696,7 +1697,7 @@ print_success() {
 }
 
 print_delivery_note() {
-    printf '  Delivery has not been verified. After restart/activation, complete a task to check notifications.\n'
+    printf '  Delivery has not been verified. Complete a task after restart to test.\n'
 }
 
 # The public loader can collect summaries across separate pinned bootstrap runs.
@@ -1718,7 +1719,6 @@ publish_setup_summary() {
     else
         printf '\nInstallation complete\n\n'
         cat "$1"
-        printf '\nDetailed installer output: rerun with BOOTSTRAP_VERBOSE=1.\n'
     fi
 }
 
@@ -1785,7 +1785,7 @@ complete_configure_route() {
         if { [ "${LEGACY_PRODUCT:-$PRODUCT}" = codex ] || [ "${LEGACY_PRODUCT:-$PRODUCT}" = both ]; } && [ "$(uname -s)" = Darwin ]; then
             if app=$(bootstrap_default_codex_app); then
                 CONFIGURE_ARGS+=(--app "$app" --team-id 2DC432GLL2)
-                echo "Codex Desktop found and verified: $app. Your current click-navigation preferences will be kept." >&2
+                [ "${BOOTSTRAP_VERBOSE:-0}" != 1 ] || echo "Codex Desktop found and verified: $app. Your current click-navigation preferences will be kept." >&2
             else
                 CONFIGURE_ARGS+=(--navigation none)
                 echo "No registered, verified official Codex Desktop app found; defaulting to navigation none. Existing navigation policy is preserved." >&2
@@ -2628,7 +2628,7 @@ run_setup_stage "Installing Gemini CLI notifications" "$_CONFIG_HELPER" "$@" </d
             printf '  Shared settings: %s\n' "$config_path"
             echo "  Silent turn completion and tool permission alerts; existing hook/security settings were preserved."
         fi
-        echo "  Gemini's built-in desktop notifications may duplicate alerts; choose one desktop source or explicitly use --webhook."
+        echo "  Gemini: use one desktop notification source to avoid duplicate alerts."
         if [ "${BOOTSTRAP_VERBOSE:-0}" = 1 ]; then
             printf '  Inspect registration and consent: %s\n' "$(quote_shell_command "$installed" setup-gemini inspect --control-root "$native_root")"
             if [ "$os" = darwin ] && { [[ " ${channels[*]-} " = *" --desktop "* ]] || [[ " ${channels[*]-} " = *" --desktop=true "* ]]; }; then
@@ -2688,6 +2688,7 @@ compact_rich_setup_summary() {
             }
             if ((current == "claude" || current == "codex") && chosen(current) &&
                 index($0, tool_prefix) == 1) {
+                if ($0 == tool_prefix "installed.") next
                 label = current == "claude" ? "Claude" : "Codex"
                 print "  " label " notification tool: " substr($0, length(tool_prefix) + 1)
                 next
@@ -2712,6 +2713,7 @@ progress_write_final_snapshot() {
 }
 
 report_progress() {
+    _FINAL_BOARD_RENDERED=false
     progress_stop "${1:-0}"
     local rendered=false
     if progress_helper_available && [ "$_PROGRESS_SESSION_SUPPORTED" = true ] && [ "$_PROGRESS_JOURNAL_DISABLED" != true ] && [ -n "$_PROGRESS_JOURNAL" ]; then
@@ -2739,6 +2741,7 @@ report_progress() {
                 _PROGRESS_PID=$!
                 if progress_reap "$_PROGRESS_PID"; then
                     rendered=true
+                    _FINAL_BOARD_RENDERED=true
                     [ "${1:-0}" -ne 0 ] || compact_rich_setup_summary
                 fi
                 _PROGRESS_PID=""
@@ -3068,6 +3071,10 @@ main() {
     selector_effect_args
     if [ "$_INTERACTIVE_INTENT" = true ]; then
         _SELECTOR_INTENT="$_CONFIG_STAGE/selector-intent.json"
+        if [ "$_PRODUCT_CSV" = cursor ] && [ "$AGENT_NOTIFY_REQUEST" != skip ]; then
+            echo "If the shared runtime needs installation, this approval prepares it first."
+            echo "Cursor integration then requires a new confirmation; canceling retains the prepared runtime."
+        fi
         selector_scope_args
         selector_collect confirm "${_EFFECT_ARGS[@]}" ${_SCOPE_ARGS[@]+"${_SCOPE_ARGS[@]}"} --intent-file "$_SELECTOR_INTENT" ${UI_ARGS[@]+"${UI_ARGS[@]}"} || return $?
         [ -s "$_SELECTOR_RESULT" ] || { close_prompt; return 0; }
@@ -3118,6 +3125,12 @@ main() {
     fi
     if [ "$status" -eq 0 ]; then
         if [ "$_PRODUCT_CSV" = cursor ] && [ "$AGENT_NOTIFY_REQUEST" != skip ]; then
+            run_setup_stage "Preparing Cursor notification runtime" prepare_cursor_runtime || { report_setup_failure 1; return 1; }
+            if [ "$_CURSOR_RUNTIME_PREPARED" = true ]; then
+                echo "Shared notification runtime installed. Review the new plan before installing Cursor integration."
+                reconfirm_cursor_integration || { echo "Prepared runtime retained; Cursor integration is incomplete." >&2; return 1; }
+                [ "$_CURSOR_CONFIRM_CANCELLED" != true ] || { echo "Cursor integration canceled; prepared runtime retained."; return 0; }
+            fi
             PRODUCT=cursor; CONFIGURE_BINARY=$_CONFIG_HELPER; PLUGIN_ROOT=""
             progress_phase cursor portable state_requires_inspection
             run_setup_stage "Configuring agent notification tools" setup_agent_notify_wizard || status=$?
@@ -3139,12 +3152,12 @@ main() {
         report_progress 0
         if [ "$_DIAGNOSTIC_NOTED" = true ]; then
             if [ -n "$_DIAGNOSTIC_LOG" ] && [ "$_DIAGNOSTIC_FAILED" != true ] && [ -f "$_DIAGNOSTIC_LOG" ] && [ ! -L "$_DIAGNOSTIC_LOG" ]; then
-                printf 'Maintenance: additional installer details saved in Diagnostics.\n' >&2
+                [ "${BOOTSTRAP_VERBOSE:-0}" != 1 ] || printf 'Maintenance: additional installer details saved in Diagnostics.\n' >&2
             else
                 printf 'Maintenance: installer reported additional details.\n' >&2
             fi
         fi
-        if [ "$_DIAGNOSTIC_NOTED" = true ] || [ "$_DIAGNOSTIC_FAILED" = true ]; then
+        if [ "$own_summary" != true ] && { [ "$_DIAGNOSTIC_NOTED" = true ] || [ "$_DIAGNOSTIC_FAILED" = true ]; }; then
             report_diagnostics
         fi
     fi
@@ -3153,9 +3166,9 @@ main() {
     fi
     if [ "$own_summary" = true ]; then
         if [ "$status" -eq 0 ]; then
-            printf '\nInstallation complete\n\n'
+            if [ "$_FINAL_BOARD_RENDERED" != true ]; then printf '\nInstallation complete\n\n'; else printf '\n'; fi
             [ ! -s "$BOOTSTRAP_SUMMARY_FILE" ] || cat "$BOOTSTRAP_SUMMARY_FILE"
-            [ -z "$_DIAGNOSTIC_LOG" ] || printf '\nDetailed installer output is saved in the private diagnostic log.\n'
+            if [ "$_DIAGNOSTIC_NOTED" = true ] || [ "$_DIAGNOSTIC_FAILED" = true ]; then report_diagnostics; fi
         fi
         unset BOOTSTRAP_SUMMARY_FILE
     fi
@@ -3304,6 +3317,65 @@ report_wizard_portable_missing() {
         return 1
     fi
     return 0
+}
+
+# The original checkpoint validates ownership and policy before this phase.
+# Runtime acquisition advances the generation; integration needs a fresh public
+# confirmation in a distinct immutable intent, using the same verified helper.
+prepare_cursor_runtime() {
+    _CURSOR_RUNTIME_PREPARED=false
+    local runtime os arch primary native base target="$_FROZEN_RUNTIME/bin"
+    [ -n "$_SELECTOR_INTENT" ] && [ -n "$_FROZEN_CONTROL" ] && [ -n "$_FROZEN_RUNTIME" ] || return 1
+    read -r os arch < <(bootstrap_release_os_arch) || return 1
+    primary="claude-notifications-$os-$arch"
+    [ "$os" != windows ] || primary="$primary.exe"
+    if runtime=$("$_CONFIG_HELPER" config installer runtime-root "$_FROZEN_CONTROL"); then
+        [ "$runtime" = "$_FROZEN_RUNTIME" ] || return 1
+        if cmp -s "$_CONFIG_HELPER" "$target/$primary"; then return 0; fi
+    else
+        if [ -e "$_FROZEN_CONTROL/ownership.json" ] || [ -L "$_FROZEN_CONTROL/ownership.json" ] ||
+           [ -e "$_FROZEN_RUNTIME" ] || [ -L "$_FROZEN_RUNTIME" ]; then
+            echo "Existing runtime requires inspection; retained files were not replaced." >&2
+            return 1
+        fi
+    fi
+    base="${BOOTSTRAP_RELEASES_BASE_URL:-https://github.com/${REPO}/releases}/download/$BOOTSTRAP_TAG"
+    case "$os" in
+        darwin)
+            fetch_bootstrap_file "$base/ClaudeNotifier.app.zip" "$_CONFIG_STAGE/ClaudeNotifier.app.zip" || return 1
+            verify_bootstrap_checksum "$_CONFIG_STAGE" ClaudeNotifier.app.zip || return 1
+            unzip -q "$_CONFIG_STAGE/ClaudeNotifier.app.zip" -d "$_CONFIG_STAGE" || return 1 ;;
+        windows)
+            native="claude-notifications-windows-$arch-focus.exe"
+            fetch_bootstrap_file "$base/$native" "$_CONFIG_STAGE/$native" || return 1
+            verify_bootstrap_checksum "$_CONFIG_STAGE" "$native" || return 1 ;;
+    esac
+    # Use the existing verified Go writer with the exact frozen control root.
+    # It owns private directory creation, native custody and saved-policy CAS.
+    "$_CONFIG_HELPER" internal-install-runtime --stage "$_CONFIG_STAGE" --target "$target" \
+        --entry "$primary" --control-root "$_FROZEN_CONTROL" || return 1
+    runtime=$("$_CONFIG_HELPER" config installer runtime-root "$_FROZEN_CONTROL") || return 1
+    [ "$runtime" = "$_FROZEN_RUNTIME" ] && cmp -s "$_CONFIG_HELPER" "$target/$primary" || return 1
+    _CURSOR_RUNTIME_PREPARED=true
+}
+
+reconfirm_cursor_integration() {
+    local control=$_FROZEN_CONTROL runtime=$_FROZEN_RUNTIME scope=$_FROZEN_SCOPE_ROOT client=$_FROZEN_CLIENT_EXEC config=$AGENT_NOTIFICATIONS_CONFIG
+    _CURSOR_CONFIRM_CANCELLED=false
+    [ "$_INTERACTIVE_INTENT" = true ] || return 1
+    exec 3<>/dev/tty || return 1
+    _PROMPT_OPEN=true
+    _SELECTOR_INTENT="$_CONFIG_STAGE/selector-cursor-runtime-intent.json"
+    selector_scope_args
+    selector_collect confirm "${_EFFECT_ARGS[@]}" ${_SCOPE_ARGS[@]+"${_SCOPE_ARGS[@]}"} --intent-file "$_SELECTOR_INTENT" ${UI_ARGS[@]+"${UI_ARGS[@]}"} || { close_prompt; return 1; }
+    if [ ! -s "$_SELECTOR_RESULT" ]; then close_prompt; _CURSOR_CONFIRM_CANCELLED=true; return 0; fi
+    selector_exact approved confirm || { close_prompt; return 1; }
+    close_prompt
+    load_frozen_dispatch || return 1
+    [ "$_FROZEN_CONTROL" = "$control" ] && [ "$_FROZEN_RUNTIME" = "$runtime" ] &&
+        [ "$_FROZEN_SCOPE_ROOT" = "$scope" ] && [ "$_FROZEN_CLIENT_EXEC" = "$client" ] &&
+        [ "$AGENT_NOTIFICATIONS_CONFIG" = "$config" ] || return 1
+    "$_CONFIG_HELPER" setup-products preflight --intent-file "$_SELECTOR_INTENT" "${_EFFECT_ARGS[@]}" </dev/null
 }
 
 bootstrap_abs_command() {

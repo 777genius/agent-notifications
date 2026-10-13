@@ -66,7 +66,7 @@ export function command(
         ? ["claude", "codex"]
         : [product]
       : product;
-  if (!selected.length || (target === "macos" && selected.includes("gemini"))) return null;
+  if (!selected.length) return null;
   const hasObserver = selected.includes("opencode") || selected.includes("gemini");
   const channelChoices = openCodeChannels ?? (intent === "install" ? { desktop: true, webhook: false } : undefined);
   if (hasObserver && channelChoices && !channelChoices.desktop && !channelChoices.webhook)

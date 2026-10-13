@@ -31,7 +31,7 @@ func TestSetupProductsSelect(t *testing.T) {
 		{"empty", "\n", "", 0},
 		{"closed", "", "", 1},
 		{"duplicate", "1,claude\n", "", 1},
-		{"unknown", "6\n", "", 1},
+		{"unknown", "999\n", "", 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var selected, prompts bytes.Buffer
@@ -104,14 +104,25 @@ func TestSetupProductsDiscoveryIsReadOnly(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	facts, _, err := discoverProducts(context.Background(), a, e)
+	facts, scopes, err := discoverProducts(context.Background(), a, e)
 	if err != nil {
 		t.Fatal(err)
 	}
+	localFound := false
 	for _, f := range facts {
+		if f.ID == "copilot-vscode" {
+			localFound = true
+			if f.Present || f.Selectable || f.Profile != "" || f.Executable != "" || scopes["local-settings"] != "" || f.Reason != "explicit Local profile, settings and executable required" {
+				t.Fatalf("ambient TEST CLI gained explicit Local authority: %+v", f)
+			}
+			continue
+		}
 		if !f.Present || f.ID != "cursor" && !f.Selectable {
 			t.Fatalf("usable TEST CLI excluded: %+v", f)
 		}
+	}
+	if !localFound {
+		t.Fatal("explicit Local unavailable fact omitted")
 	}
 	if _, err := os.Stat(filepath.Join(e.Home, "EXECUTED")); !os.IsNotExist(err) {
 		t.Fatalf("agent stub executed: %v", err)
@@ -196,9 +207,9 @@ func TestCursorDiscoveryPlatformReasonPreservesPresence(t *testing.T) {
 			if !tc.present {
 				wantReason = "Cursor agent not found in selected PATH"
 			}
-			supported := runtime.GOOS == "linux" && runtime.GOARCH == "amd64"
+			supported := runtime.GOOS == "linux" && runtime.GOARCH == "amd64" || runtime.GOOS == "darwin" && runtime.GOARCH == "arm64" || runtime.GOOS == "windows" && runtime.GOARCH == "amd64"
 			if !supported {
-				wantReason = "Cursor agent notifications are currently qualified only on Linux amd64"
+				wantReason = "Cursor agent notifications require a qualified Linux amd64, macOS arm64 or Windows amd64 CLI"
 			}
 			found := false
 			for _, f := range facts {

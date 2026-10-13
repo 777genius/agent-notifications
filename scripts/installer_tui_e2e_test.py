@@ -48,7 +48,7 @@ first() {
     elif [ "${TEST_FAULT:-}" = malformed ]; then
         printf 'transition\tclaude\t\033[2JREJECTED_PRIVATE\trunning\n' >> "$_PROGRESS_JOURNAL"
     fi
-    printf 'PRIVATE_SECRET --argv /private/path\n' 
+    printf 'PRIVATE_SECRET --argv /private/path\n'
     printf '%s\n' "$_PROGRESS_PID" > "$TEST_FIRST_PID"
     touch "$TEST_READY1"
     while [ ! -f "$TEST_RELEASE1" ]; do sleep 0.02; done

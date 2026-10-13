@@ -60,7 +60,7 @@ const snippet = computed(() =>
 );
 const qualifiedVersion = computed(() => platformReleaseVersion(channelSnapshot, target.value));
 watch(target, (value) => {
-  if ((value === "macos" || value === "unknown") && selectedProducts.gemini) {
+  if (value === "unknown" && selectedProducts.gemini) {
     selectedProducts.gemini = false;
     if (!selection.value.length) selectedProducts.claude = true;
   }
@@ -114,7 +114,7 @@ async function copy() {
         :key="item.value"
         class="agent-card"
         :aria-label="item.label"
-        :disabled="item.value === 'gemini' && (target === 'macos' || target === 'unknown')"
+        :disabled="item.value === 'gemini' && target === 'unknown'"
         :aria-pressed="selectedProducts[item.value as AgentProduct]"
         @click="toggleProduct(item.value as AgentProduct)"
       >
@@ -202,7 +202,7 @@ async function copy() {
       <p v-if="selectedProducts.gemini"><a :href="repo + '/blob/main/docs/gemini-notifications.md'">{{ t("install.gemini.guide") }}</a>. {{ t("install.gemini.configure") }}</p>
       <p v-if="hasLegacy">{{ t("install.configure.shared") }}</p>
     </div>
-    <div v-else-if="selectedProducts.gemini && target !== 'linux' && target !== 'windows' && target !== 'manual'" class="setup-panel instructions" role="status">
+    <div v-else-if="selectedProducts.gemini && target === 'unknown'" class="setup-panel instructions" role="status">
       <p>{{ t("install.gemini.version") }}</p>
       <a :href="repo + '/blob/main/docs/gemini-notifications.md'">{{ t("install.gemini.guide") }}</a>
     </div>

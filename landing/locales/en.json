@@ -1,7 +1,7 @@
 {
   "seo": {
     "title": "Agent Notifications - Stay in flow",
-    "description": "Desktop notifications and webhooks for Claude, Codex CLI and OpenCode. Gemini CLI: Linux / Windows."
+    "description": "Desktop notifications and webhooks for Claude, Codex CLI and OpenCode. Gemini CLI: macOS / Linux / Windows. Cursor CLI: Linux amd64 / macOS arm64 / Windows amd64."
   },
   "language": {
     "label": "Language",
@@ -27,7 +27,7 @@
     "title": "Stay in flow",
     "emphasis": "We'll get your attention",
     "leadFirst": "Let your agent work. Know when it's done.",
-    "leadSecond": "Desktop notifications and webhooks for Claude, Codex CLI and OpenCode. Gemini CLI: Linux / Windows.",
+    "leadSecond": "Desktop notifications and webhooks for Claude, Codex CLI and OpenCode. Gemini CLI: macOS / Linux / Windows. Cursor CLI: Linux amd64 / macOS arm64 / Windows amd64.",
     "primary": "Set up notifications",
     "secondary": "Explore on GitHub",
     "note": "Open source · Runs locally"
@@ -134,7 +134,7 @@
     "items": {
       "1": {
         "question": "Do I need every agent installed?",
-        "answer": "Select any combination of Claude, Codex CLI, OpenCode and Gemini CLI (Linux / Windows only). Install the selected agents first; the commands below install notifications."
+        "answer": "Select any combination of Claude, Codex CLI, OpenCode and Gemini CLI (macOS / Linux / Windows only). Install the selected agents first; the commands below install notifications."
       },
       "2": {
         "question": "Are Codex hooks installed automatically?",
@@ -209,6 +209,7 @@
     "scrollDown": "Scroll options down"
   },
   "install": {
+    "cursor": {"guide": "Cursor CLI installation", "scope": "Stop notifications and optional webhooks. Separate setup with explicit CLI/profile paths; qualified Linux amd64, macOS arm64 and Windows amd64 versions only."},
     "platformRelease": "Qualified release for {os}: {version}.",
     "title": "Set up notifications",
     "intro": "Follow the steps below to add notifications to {agent}.",
@@ -227,7 +228,8 @@
       "codex": "Codex CLI",
       "both": "Claude + Codex CLI",
       "opencode": "OpenCode",
-      "gemini": "Gemini CLI"
+      "gemini": "Gemini CLI",
+      "cursor": "Cursor CLI"
     },
     "targets": {
       "unknown": "Choose target OS",
@@ -289,10 +291,10 @@
       "claude": "Completion, review, question, plan, session limit and API error alerts, with sounds and click-to-focus where supported.",
       "codex": "Completion and permission alerts, with sounds and click-to-focus where supported. Review and trust installed hooks in /hooks.",
       "opencode": "Silent completion, question, permission and error alerts for root sessions. No sound or click-to-focus.",
-      "gemini": "Gemini CLI (Linux / Windows): silent turn-completed and tool-permission alerts. A completed turn does not imply success or a final answer. No sound, click-to-focus, question, error, plan, review or nested-agent parity."
+      "gemini": "Gemini CLI (macOS / Linux / Windows): silent turn-completed and tool-permission alerts. A completed turn does not imply success or a final answer. No sound, click-to-focus, question, error, plan, review or nested-agent parity."
     },
     "gemini": {
-      "version": "Gemini CLI requires exactly version 0.62.0. Available on Linux / Windows only; other CLI versions are rejected.",
+      "version": "Gemini CLI requires exactly version 0.62.0. Available on macOS / Linux / Windows only; other CLI versions are rejected.",
       "guide": "Gemini setup and limits",
       "restart": "Restart Gemini CLI to load the notification observer.",
       "configure": "Use the Gemini guide for channel consent and shared settings; no MCP tool or skill is installed. Built-in Gemini notifications can duplicate desktop alerts. Choose one desktop source or webhook-only; built-in settings are not changed."
@@ -315,7 +317,7 @@
     }
   },
   "agentSupport": {
-    "platforms": "Linux / Windows",
+    "platforms": "macOS / Linux / Windows",
     "title": "Compare agent features",
     "feature": "Feature",
     "yes": "Supported",
