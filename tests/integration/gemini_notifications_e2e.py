@@ -99,6 +99,123 @@ def write_json(path, value):
     path.chmod(0o600)
 
 
+def attempt_cache_snapshot(lab, baseline=None, private_join=None):
+    """Return public aggregates and private (boot, clock, zero) context separately."""
+    if sys.platform != "linux":
+        return {"class": "unsupported_platform"}, None
+    started, fds, directories = time.monotonic(), [], []
+    def boot_sample():
+        raw = bounded_read(Path("/proc/sys/kernel/random/boot_id"), 258)
+        require(0 < len(raw) <= 257, "cache_observer_boot")
+        raw = raw[:-1] if raw.endswith(b"\n") else raw
+        require(UUID.fullmatch(raw.decode("ascii")), "cache_observer_boot")
+        clock = time.clock_gettime(time.CLOCK_BOOTTIME)
+        require(math.isfinite(clock) and clock >= 0, "cache_observer_clock")
+        return sha(raw), clock
+    def directory_stamp(s):
+        return s.st_dev, s.st_ino, s.st_mode, s.st_uid, s.st_gid
+    def file_stamp(s):
+        return (*directory_stamp(s), s.st_nlink, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
+    try:
+        initial_boot, initial_clock = boot_sample()
+        flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK
+        parent = None
+        for name in (str(physical(str(lab))), "an-control", "gemini-observations"):
+            root = os.open(name, flags | os.O_DIRECTORY, dir_fd=parent)
+            fds.append(root)
+            info = os.fstat(root)
+            require(info.st_uid == os.geteuid() and stat.S_IMODE(info.st_mode) == 0o700,
+                    "cache_observer_private_directory")
+            directories.append((parent, name, root, directory_stamp(info)))
+            parent = root
+        before = None
+        try:
+            fd = os.open("observations.json", flags, dir_fd=root)
+        except FileNotFoundError:
+            state = None
+        else:
+            fds.append(fd)
+            before = os.fstat(fd)
+            require(stat.S_ISREG(before.st_mode) and stat.S_IMODE(before.st_mode) == 0o600
+                    and before.st_uid == os.geteuid() and before.st_nlink == 1
+                    and 0 <= before.st_size <= 48 * 1024, "cache_observer_private_document")
+            data = bytearray()
+            while len(data) <= 48 * 1024:
+                block = os.read(fd, min(4096, 48 * 1024 + 1 - len(data)))
+                if not block:
+                    break
+                data.extend(block)
+            require(file_stamp(before) == file_stamp(os.fstat(fd)) and len(data) == before.st_size,
+                    "cache_observer_unstable_document")
+            def unique(pairs):
+                result = {}
+                for key, value in pairs:
+                    require(key not in result, "cache_observer_duplicate_field")
+                    result[key] = value
+                return result
+            state = json.loads(data, object_pairs_hook=unique)
+            require(type(state) is dict and set(state) == {"boot", "entries"}
+                    and type(state["boot"]) is str and HEX.fullmatch(state["boot"])
+                    and (state["entries"] is None or type(state["entries"]) is list)
+                    and len(state["entries"] or []) <= 256, "cache_observer_schema")
+        physical(str(lab))
+        for parent, name, directory, identity in directories:
+            require(directory_stamp(os.fstat(directory)) == identity
+                    and directory_stamp(os.stat(name, dir_fd=parent, follow_symlinks=False)) == identity,
+                    "cache_observer_replaced_directory")
+        try:
+            named = os.stat("observations.json", dir_fd=root, follow_symlinks=False)
+        except FileNotFoundError:
+            require(before is None, "cache_observer_removed_document")
+        else:
+            require(before is not None and file_stamp(named) == file_stamp(before),
+                    "cache_observer_replaced_document")
+        boot, now = boot_sample()
+        require(boot == initial_boot and now >= initial_clock, "cache_observer_clock_changed")
+        elapsed = time.monotonic() - started
+        require(math.isfinite(elapsed) and 0 <= elapsed <= 86400, "cache_observer_time")
+        if state is None:
+            return {"class": "absent", "snapshot_elapsed_seconds": elapsed}, (boot, now, True)
+        seen = set()
+        histograms = {group: {"desktop_only": 0, "webhook_only": 0, "both": 0}
+                      for group in ("total", "live", "expired", "outside_window")}
+        for entry in state["entries"] or []:
+            require(type(entry) is dict and set(entry) == {"key", "until", "bits"}
+                    and type(entry["key"]) is str and HEX.fullmatch(entry["key"])
+                    and entry["key"] not in seen and type(entry["bits"]) is int
+                    and entry["bits"] in (1, 2, 3) and type(entry["until"]) in (int, float)
+                    and math.isfinite(entry["until"]) and entry["until"] >= 0,
+                    "cache_observer_entry")
+            seen.add(entry["key"])
+            channel = {1: "desktop_only", 2: "webhook_only", 3: "both"}[entry["bits"]]
+            histograms["total"][channel] += 1
+            if entry["until"] <= now:
+                histograms["expired"][channel] += 1
+            elif entry["until"] > now + 60:
+                histograms["outside_window"][channel] += 1
+            elif state["boot"] == boot:
+                histograms["live"][channel] += 1
+        live = sum(histograms["live"].values())
+        complete = (baseline is not None and baseline[2] and baseline[0] == boot
+                    and 0 <= now - baseline[1] < 60 and state["boot"] == boot
+                    and live == len(seen) and len(seen) < 256)
+        if private_join is not None and complete:
+            private_join.update(entries=[{"key": entry["key"], "bits": entry["bits"]} for entry in state["entries"] or []])
+        return {"class": "observed_complete_window" if complete else "observed_unqualified",
+                "keys": len(seen), "attempted_bits": histograms, "boot_matches": state["boot"] == boot,
+                "live_keys": live, "expired_keys": sum(histograms["expired"].values()),
+                "outside_window_keys": sum(histograms["outside_window"].values()),
+                "snapshot_elapsed_seconds": elapsed}, (boot, now, not seen)
+    except Exception:
+        return {"class": "unavailable"}, None
+    finally:
+        for fd in reversed(fds):
+            try:
+                os.close(fd)
+            except OSError:
+                pass  # Diagnostics must never replace the original qualification failure.
+
+
 def capture(body):
     """Exact existing generic JSON formatter contract; return fixed classes only."""
     require(isinstance(body, dict) and set(body) == {
@@ -151,19 +268,27 @@ def changed_update(before, after):
 def native_rows(g0, lab):
     rows = g0.observations(lab)
     for row in rows:
-        fields = {"event", "valid", "neutral", "session_sha256", "timestamp_sha256",
-                  "shell", "shell_version", "case", "stop_hook_active", "subtype"}
+        fields = {"event", "valid", "neutral", "session_sha256", "timestamp_sha256", "payload_sha256",
+                  "shell", "shell_version", "case", "stop_hook_active", "subtype", "frame_capture", "frame_capture_ms"}
         require(set(row) <= fields and row["event"] in OWN and row["case"] in g0.CASES,
                 "observer_field_whitelist")
         require(row["valid"] is True and row["neutral"] is True, "foreign_observer_invalid")
         require(all(isinstance(row.get(k), str) and HEX.fullmatch(row[k]) for k in
                     ("session_sha256", "timestamp_sha256")), "observer_hash_contract")
+        if "payload_sha256" in row:
+            require(type(row["payload_sha256"]) is str and HEX.fullmatch(row["payload_sha256"]),
+                    "observer_payload_hash_contract")
         require(row.get("shell") in ("bash", "powershell") and isinstance(row.get("shell_version"), str)
                 and re.fullmatch(r"[0-9][0-9A-Za-z.()_-]*", row["shell_version"]), "observer_shell_contract")
         if row["event"] == "AfterAgent":
             require(type(row.get("stop_hook_active")) is bool and "subtype" not in row, "observer_stop_flag")
         else:
             require(row.get("subtype") == "ToolPermission" and "stop_hook_active" not in row, "observer_subtype")
+        if "frame_capture" in row:
+            require(row["frame_capture"] in ("recorded", "unavailable", "full", "sealed")
+                    and type(row.get("frame_capture_ms")) in (int, float)
+                    and math.isfinite(row["frame_capture_ms"]) and 0 <= row["frame_capture_ms"] <= 86400000,
+                    "TEST_frame_capture_projection")
     # neutral refers exclusively to the foreign recorder's stdout.
     return rows
 
@@ -225,7 +350,60 @@ def delivery_counts(rows):
                         and not row.get("stop_hook_active", False) for row in rows) for status in COPY}
 
 
-def settle(g0, lab, fixture, terminal, expected, seconds=6, phase="exercise_settle"):
+def own_hook_snapshot(lab):
+    """Deficit-only Linux TEST reads; claims are attempts, never delivery receipts."""
+    if sys.platform != "linux":
+        return {"classification": "unqualified_platform"}
+    facts = {}
+    for label, relative, limit in (
+        ("attempt_cache", "gemini-observations/observations.json", 48 * 1024),
+        ("ownership", "ownership.json", 65536),
+        ("receipt", "gemini-receipt.json", 16384),
+        ("consent", "agent-notifications.json", 65536)):
+        try:
+            value = read_json(lab / "an-control" / relative, limit)
+            require(type(value) is dict, "diagnostic_shape")
+            if label == "attempt_cache":
+                entries = value.get("entries")
+                require(set(value) == {"boot", "entries"} and isinstance(value["boot"], str)
+                        and HEX.fullmatch(value["boot"]) and type(entries) is list
+                        and len(entries) <= 256, "diagnostic_shape")
+                require(all(type(x) is dict and set(x) == {"key", "until", "bits"}
+                            and isinstance(x["key"], str) and HEX.fullmatch(x["key"])
+                            and type(x["bits"]) is int and 1 <= x["bits"] <= 3
+                            and type(x["until"]) in (int, float) and math.isfinite(x["until"])
+                            and 0 <= x["until"] <= 2 ** 53 for x in entries), "diagnostic_shape")
+                require(len({x["key"] for x in entries}) == len(entries), "diagnostic_shape")
+                selected = {"entry_count": len(entries),
+                            "webhook_claimed_entries": sum(bool(x["bits"] & 2) for x in entries),
+                            "desktop_claimed_entries": sum(bool(x["bits"] & 1) for x in entries)}
+            elif label == "ownership":
+                generation, consumers = value.get("Generation"), value.get("Consumers")
+                require(type(generation) is int and 0 < generation <= 65535
+                        and type(consumers) is dict, "diagnostic_shape")
+                selected = {"generation": generation, "gemini_consumer_present": CONSUMER in consumers}
+            elif label == "receipt":
+                binding = value.get("binding")
+                require(type(value.get("version")) is int and value["version"] == 1
+                        and isinstance(binding, str)
+                        and re.fullmatch(r"[0-9a-f]{32}", binding), "diagnostic_shape")
+                selected = {"binding_sha256": sha(binding.encode())}
+            else:
+                channels = value.get("route", {}).get("geminiNotifications", {})
+                require(type(channels) is dict and set(channels) == {"desktop", "webhook"}
+                        and all(type(x) is bool for x in channels.values()), "diagnostic_shape")
+                selected = {"desktop": channels["desktop"], "webhook": channels["webhook"]}
+            facts[label] = {"classification": "observed", **selected}
+        except FileNotFoundError:
+            facts[label] = {"classification": "missing"}
+        except (Red, ValueError, UnicodeError):
+            facts[label] = {"classification": "invalid"}
+        except Exception:
+            facts[label] = {"classification": "unavailable"}
+    return facts
+
+
+def settle(g0, lab, fixture, terminal, expected, seconds=6, phase="exercise_settle", cache_baseline=None):
     started = time.monotonic()
     try:
         end = started + seconds
@@ -267,13 +445,16 @@ def settle(g0, lab, fixture, terminal, expected, seconds=6, phase="exercise_sett
                 validated = native_rows(g0, lab)
                 total = min(len(validated), 65535)
                 fields = {"event", "valid", "neutral", "session_sha256", "timestamp_sha256",
-                          "case", "stop_hook_active", "subtype"}
+                          "case", "stop_hook_active", "subtype", "frame_capture", "frame_capture_ms"}
                 rows = [{k: v for k, v in row.items() if k in fields} for row in validated[:64]]
             except Exception:
                 pass
             exc.settle_failure = {"phase": phase, "class": kind, "expected": dict(expected),
                                   "actual": actual, "elapsed_seconds": elapsed, "limit_seconds": seconds,
-                                  "native_rows": rows, "native_rows_total": total}
+                                  "native_rows": rows, "native_rows_total": total,
+                                  "attempt_cache": attempt_cache_snapshot(lab, cache_baseline)[0]}
+            if kind == "deficit":
+                exc.settle_failure["own_hook_state"] = own_hook_snapshot(lab)
         except Exception:
             pass
         raise
@@ -503,6 +684,127 @@ def configure(lab, url, desktop):
     return path
 
 
+def classify_captured_frame(g0, args, lab, env, event, raw, cache_join=None):
+    # Pure helper only; captured frames never reach an installed consumer.
+    unavailable = {"classification": "analyzer_unavailable", "event": event}
+    code, out, _ = g0.bounded_process([args.frame_classifier, event], raw, lab / "profile", env, 3)
+    join_entered, join_collected = False, False
+    try:
+        require(code == 0 and len(out) <= 2048, "TEST_classifier_result")
+        value = json.loads(out)
+        fields = {"version", "classification", "eligible", "timestamp_present", "session_sha256", "timestamp_sha256"}
+        require(type(value) is dict and set(value) <= fields and type(value.get("version")) is int and value["version"] == 1
+                and value.get("classification") in ("decoded", "invalid")
+                and type(value.get("eligible")) is bool and type(value.get("timestamp_present")) is bool,
+                "TEST_classifier_protocol")
+        if value["classification"] == "decoded":
+            require(all(type(value.get(k)) is str and HEX.fullmatch(value[k]) for k in ("session_sha256", "timestamp_sha256")),
+                    "TEST_classifier_digest")
+        else:
+            require(not value["eligible"] and not value["timestamp_present"] and not (set(value) & {"session_sha256", "timestamp_sha256"}),
+                    "TEST_classifier_invalid_projection")
+        joined = {"class": "outside_initial_slice"}
+        identity = (event, value.get("session_sha256"), value.get("timestamp_sha256"))
+        if cache_join and identity in cache_join.get("frames", {}):
+            joined = {"class": "unavailable", "case": cache_join["frames"][identity]}
+            if "entries" in cache_join:
+                try:
+                    import base64
+                    require(sha(bounded_read(Path(args.cache_join_reader), 32 * 1024 * 1024)) == args.cache_join_sha256,
+                            "TEST_cache_join_reader_changed")
+                    request = dict(cache_join["binding"], event=event, payload=base64.b64encode(raw).decode(), entries=cache_join["entries"])
+                    join_entered = True
+                    code, response, _ = g0.bounded_process([args.cache_join_reader, "--AN-TEST-captured-cache-join"],
+                        json.dumps(request).encode(), lab / "profile", env, 3)
+                    join_collected = True
+                    require(code == 0 and len(response) <= 256, "TEST_cache_join_result")
+                    result = json.loads(response)
+                    require(type(result) is dict and set(result) == {"class", "matched", "webhook_attempted"}
+                            and result["class"] in ("joined", "unavailable")
+                            and type(result["matched"]) is bool and type(result["webhook_attempted"]) is bool
+                            and (result["class"] == "joined" or not result["matched"] and not result["webhook_attempted"])
+                            and (not result["webhook_attempted"] or result["matched"]), "TEST_cache_join_protocol")
+                    joined = dict(result, case=cache_join["frames"][identity])
+                except Exception:
+                    if join_entered and not join_collected:
+                        raise Red("TEST_cache_join_collection_unknown")
+                    pass  # Optional join cannot erase independently decoded facts.
+        return dict(value, event=event, payload_sha256=sha(raw), bytes=len(raw), cache_join=joined)
+    except Exception:
+        if join_entered and not join_collected:
+            raise Red("TEST_cache_join_collection_unknown")  # Preserve sealed private recovery frames.
+        return unavailable  # Never publish helper stderr, arbitrary fields or errors.
+
+
+def owned_input_cleanup_qualified(evidence, collection_known, spool):
+    return (collection_known and evidence.get("final_cleanup") == "verified_revoked"
+            and "provider_cleanup_classification" not in evidence and not spool["error"])
+
+
+def classify_owned_inputs(capture, classify, deadline=None):
+    """Pure decoder observation after teardown; no admission or delivery receipt."""
+    result = {"class": "unqualified_prefix", "SDK_flush_complete": False,
+              "absence_means": "unknown", "rows": []}
+    frames = capture.get("frames", []) if type(capture) is dict else []
+    if type(capture) is not dict or capture.get("qualified") is not True:
+        return result
+    # First deficit has seven known invocations. Fail closed on extra input;
+    # this diagnostic does not extend the native/settle/cleanup budgets.
+    if type(frames) is not list or len(frames) > 7:
+        result["class"] = "input_bound_exceeded"
+        return result
+    if type(deadline) not in (int, float) or not math.isfinite(deadline):
+        result["class"] = "diagnostic_budget_gap"
+        return result
+    result["class"] = "classified_prefix"
+    for frame in frames:
+        try:
+            require(type(frame) is dict and frame.get("role") in OWN and frame.get("case") in
+                    ("plain", "equal", "approve", "deny", "cancel", "recovery")
+                    and type(frame.get("raw")) is bytes and 0 < len(frame["raw"]) <= 1024 * 1024
+                    and all(type(frame.get(k)) is str and HEX.fullmatch(frame[k]) for k in
+                            ("payload_sha256", "session_sha256", "timestamp_sha256"))
+                    and sha(frame["raw"]) == frame["payload_sha256"]
+                    and type(frame.get("foreign_payload_match")) is bool, "owned_input_shape")
+            # bounded_process has <=3s process wait plus <=8s drain/cleanup.
+            # Reserve 12s before each call inside the ORIGINAL native deadline.
+            # No new analysis window, timeout reset or extension is permitted.
+            if deadline - time.monotonic() < 12:
+                result["class"] = "diagnostic_budget_gap"
+                break
+            value = classify(frame["role"], frame["raw"])
+            fields = {"version", "classification", "eligible", "timestamp_present", "session_sha256",
+                      "timestamp_sha256", "event", "payload_sha256", "bytes"}
+            # The no-join classifier call returns this one closed local field.
+            # Validate it before excluding it from the original public allowlist.
+            if type(value) is dict and "cache_join" in value:
+                require(type(value["cache_join"]) is dict
+                        and value["cache_join"] == {"class": "outside_initial_slice"},
+                        "owned_input_classifier_cache_join")
+                value = dict(value)
+                del value["cache_join"]
+            require(type(value) is dict and set(value) <= fields and value.get("event") == frame["role"]
+                    and value.get("payload_sha256") == frame["payload_sha256"]
+                    and value.get("classification") in ("decoded", "invalid")
+                    and type(value.get("eligible")) is bool and type(value.get("timestamp_present")) is bool,
+                    "owned_input_classifier_projection")
+            row = {"role": frame["role"], "case": frame["case"],
+                   "payload_sha256": frame["payload_sha256"], "session_sha256": frame["session_sha256"],
+                   "timestamp_sha256": frame["timestamp_sha256"],
+                   "foreign_payload_match": frame["foreign_payload_match"],
+                   "classification": value["classification"], "eligible": value["eligible"],
+                   "timestamp_present": value["timestamp_present"]}
+            if value["classification"] == "decoded":
+                row["source_identity_match"] = all(value.get(k) == frame[k] for k in
+                                                    ("session_sha256", "timestamp_sha256"))
+            result["rows"].append(row)  # Preserve each invocation, including duplicates.
+        except Exception:
+            result["class"] = "analysis_unavailable"
+            break  # Never emit raw fields, paths, stderr or arbitrary exceptions.
+    require(len(json.dumps(result).encode()) <= 65536, "owned_input_projection_bound")
+    return result
+
+
 def run(args):
     require(args.trusted_orchestrator, "native_execution_requires_trusted_orchestrator")
     require(60 <= args.timeout <= 240, "native_watchdog_bounds")
@@ -530,6 +832,15 @@ def run(args):
     update_hash = sha(bounded_read(Path(args.update_binary), 32 * 1024 * 1024)) if args.update_binary else None
     require(not update_hash or update_hash != artifact_hash, "changed_update_requires_distinct_actual_artifact")
     active_hash = artifact_hash
+    capture_frames = sys.platform == "linux" and bool(getattr(args, "frame_classifier", None))
+    if getattr(args, "frame_classifier", None):
+        args.frame_classifier = str(test_artifact(args.frame_classifier))
+        classifier_hash = sha(bounded_read(Path(args.frame_classifier), 32 * 1024 * 1024))
+    if getattr(args, "cache_join_reader", None):
+        require(capture_frames, "TEST_cache_join_requires_private_capture")
+        args.cache_join_reader = str(test_artifact(args.cache_join_reader))
+        join_hash = sha(bounded_read(Path(args.cache_join_reader), 32 * 1024 * 1024))
+        args.cache_join_sha256 = join_hash
     lab = g0.new_lab(args.lab_root)
     levels = {osname: {"build/contracts": "unverified_external_evidence_required", "native_cli/provider_substitute": "unverified",
                        "OS_API": "unverified", "visual": "unverified"} for osname in ("darwin", "linux", "windows")}
@@ -552,9 +863,28 @@ def run(args):
     evidence["update_candidate_sha256"] = update_hash
     stop, spool = threading.Event(), {"receipts": [], "error": None}
     watcher, terminal, env, damaged_preimage = None, None, None, None
+    capture_collection_known = True
+    owned_input_capture = None
+    owned_input_deadline = None
+    cache_join, initial_join_active, cache_baseline = {}, False, None
+    def seal_initial_join():
+        if getattr(args, "cache_join_reader", None) and capture_frames and cache_baseline is not None:
+            rows = native_rows(g0, lab)
+            require(len(rows) <= 64 and all(row.get("case") in g0.CASES for row in rows), "TEST_join_case_bound")
+            attempt_cache_snapshot(lab, cache_baseline, cache_join)
+            cache_join["frames"] = {(row["event"], row["session_sha256"], row["timestamp_sha256"]): row["case"] for row in rows}
+            require(len(cache_join["frames"]) == len(rows), "TEST_join_ambiguous_native_identity")
+            cache_join["binding"] = {"installation_id": first["ledger"]["ID"], "generation": first["ledger"]["Generation"]}
+    if capture_frames:
+        from gemini_frame_capture import prepare
+        prepare(lab)
+        evidence["frame_classifier_sha256"] = classifier_hash
+        if getattr(args, "cache_join_reader", None):
+            evidence["cache_join_reader_sha256"] = join_hash
+    evidence["sdk_frame_analysis"] = {"class": "pending" if capture_frames else "unsupported", "cleanup": "unverified" if capture_frames else "not_applicable"}
     try:
         env = g0.minimal_env(lab, node, shell, args.system_root)
-        settings_path = g0.install_test_hooks(lab, {}, shell, node, args.system_root)
+        settings_path = g0.install_test_hooks(lab, {}, shell, node, args.system_root, capture_frames=capture_frames)
         foreign = read_json(settings_path, 1024 * 1024)
         for event in OWN:
             foreign["hooks"][event][0]["hooks"][0]["name"] = "foreign-an-TEST-" + event
@@ -611,9 +941,17 @@ def run(args):
                 watcher = threading.Thread(target=watch_spool, args=(lab, stop, spool), daemon=True)
                 watcher.start()
             fixture.arm("plain")
+            evidence["attempt_cache_baseline"], cache_baseline = attempt_cache_snapshot(lab)
+            capture_collection_known = False
+            # Conservative lower bound on the first bridge's existing watchdog:
+            # its actual timer starts later, after Terminal starts the child.
+            owned_input_deadline = time.monotonic() + args.timeout
             terminal = g0.Terminal(node, executable, install, lab, env, ui, args.timeout)
+            initial_join_active = True
             cases, rows = g0.exercise(lab, fixture, terminal, ui, observer=lambda p: native_rows(g0, p))
-            before_remove_counts = settle(g0, lab, fixture, terminal, delivery_counts(rows))
+            before_remove_counts = settle(g0, lab, fixture, terminal, delivery_counts(rows), cache_baseline=cache_baseline)
+            seal_initial_join()
+            initial_join_active = False
             require(snapshot(lab, active_hash)[0] == first, "live_session_installation_mutation")
             if args.update_binary:
                 # Keep this same native CLI and its loaded command binding alive
@@ -660,6 +998,7 @@ def run(args):
             while time.monotonic() < end:
                 settle(g0, lab, fixture, terminal, before_remove_counts, 1, phase="remove_settle")
             terminal.close()
+            capture_collection_known = True
             evidence.update(cases=cases, native_observations=rows, delivery_counts=before_remove_counts,
                             PTY=terminal.identity, own_child_exit=terminal.exit,
                             provider_endpoints=fixture.counts, foreign_recorder_neutral_stdout="observed",
@@ -672,6 +1011,7 @@ def run(args):
             require(second["receipt"]["binding"] != first["receipt"]["binding"], "reinstall_nonce_reused")
             fixture.arm("plain")
             previous = native_rows(g0, lab)
+            capture_collection_known = False
             terminal = g0.Terminal(node, executable, install, lab, env, ui, args.timeout)
             end = time.monotonic() + 25
             while time.monotonic() < end:
@@ -706,6 +1046,7 @@ def run(args):
             while time.monotonic() < end:
                 settle(g0, lab, fixture, terminal, expected, 1, phase="damaged_settle")
             terminal.close()
+            capture_collection_known = True
             evidence["damaged_receipt"] = "cleanup_conflict_channels_revoked_native_turn_suppressed"
             evidence["old_loaded_command_gate"] = "native_turn_with_retained_installed_groups_and_binary_no_new_webhook_5s"
             evidence["damaged_native_observations"] = native_rows(g0, lab)[len(previous):]
@@ -725,9 +1066,16 @@ def run(args):
         evidence["driver"] = "passed_implemented_scenarios_with_external_gates_pending"
         levels[platform]["native_cli/provider_substitute"] = "passed_implemented_scenarios"
     except Exception as exc:
+        if initial_join_active:
+            try:
+                seal_initial_join()
+            except Exception:
+                cache_join.clear()  # Optional read-only join never replaces original failure.
         evidence["classification"] = str(exc) if isinstance(exc, (Red, g0.Red)) else "production_harness_error"
         if hasattr(exc, "settle_failure"):
             evidence["settle_failure"] = exc.settle_failure
+            if "attempt_cache_baseline" in evidence:
+                evidence["settle_failure"]["attempt_cache_baseline"] = evidence["attempt_cache_baseline"]
         if hasattr(exc, "setup_diagnostic"):
             evidence["setup_failure"] = exc.setup_diagnostic
         if hasattr(exc, "bridge_diagnostic"):
@@ -743,11 +1091,16 @@ def run(args):
         if terminal is not None:
             try:
                 terminal.close(graceful=False)
+                capture_collection_known = True
             except Exception as cleanup:
                 evidence["shutdown"] = "unconfirmed"
                 evidence["driver"] = "failed"
                 evidence["cleanup_classification"] = str(cleanup) if isinstance(cleanup, g0.Red) else "bridge_cleanup_error"
             evidence["bridge_failure"] = terminal.failure_facts()
+            owned_input_capture = getattr(terminal, "owned_input_capture", None)
+        if capture_frames:
+            from gemini_frame_capture import finish
+            evidence["sdk_frame_analysis"] = finish(lab, lambda event, raw: classify_captured_frame(g0, args, lab, env, event, raw, cache_join), capture_collection_known)
         if env is not None:
             try:
                 if damaged_preimage:
@@ -781,6 +1134,17 @@ def run(args):
                 evidence["driver"] = "failed"
         if evidence["driver"] == "failed":
             levels[platform]["native_cli/provider_substitute"] = "failed"
+        # All original bounded teardown and closed projections have completed.
+        # Only the first actual settle deficit needs this owned-input diagnostic.
+        if (evidence.get("settle_failure", {}).get("phase") == "exercise_settle"
+                and getattr(args, "frame_classifier", None)):
+            if owned_input_cleanup_qualified(evidence, capture_collection_known, spool):
+                evidence["owned_sdk_input_analysis"] = classify_owned_inputs(owned_input_capture,
+                    lambda event, raw: classify_captured_frame(g0, args, lab, env, event, raw), owned_input_deadline)
+            else:
+                evidence["owned_sdk_input_analysis"] = {"class": "cleanup_unqualified", "rows": [],
+                    "SDK_flush_complete": False, "absence_means": "unknown"}
+            evidence["frame_classifier_sha256"] = classifier_hash
         write_json(lab / "production-evidence.json", evidence)
     require(evidence["driver"] != "failed", "production_driver_failed")
     return {"driver": evidence["driver"], "evidence": str(lab / "production-evidence.json"), "inspect": evidence["inspect"],
@@ -792,6 +1156,241 @@ def snapshot_settings_equal(path, state):
 
 
 class PureChecks(unittest.TestCase):
+    def test_native_observer_payload_digest_through_actual_row_parser(self):
+        # RED before the fix: a valid recorder row fails observer_field_whitelist.
+        # Invalid digest/private fields and nonneutral rows must still fail.
+        g0, _ = load_g0()
+        with tempfile.TemporaryDirectory(prefix="TEST-observer-digest-") as root:
+            lab = Path(root).resolve()
+            path = lab / "events.jsonl"
+            for event in OWN:
+                row = dict(event=event, valid=True, neutral=True, case="plain",
+                    session_sha256="a" * 64, timestamp_sha256="b" * 64, payload_sha256="c" * 64,
+                    shell="bash", shell_version="5.2.37")
+                row.update({"stop_hook_active": False} if event == "AfterAgent" else {"subtype": "ToolPermission"})
+                path.write_text(json.dumps(row) + "\n")
+                self.assertEqual(native_rows(g0, lab), [row])
+                for digest in (None, True, 64, "", "c" * 63, "C" * 64, "PRIVATE-payload"):
+                    with self.subTest(event=event, digest=digest):
+                        path.write_text(json.dumps(dict(row, payload_sha256=digest)) + "\n")
+                        with self.assertRaisesRegex(Red, "^observer_payload_hash_contract$"):
+                            native_rows(g0, lab)
+                for changed in (dict(row, prompt="PRIVATE-prompt"), dict(row, neutral=False), dict(row, valid=False)):
+                    path.write_text(json.dumps(changed) + "\n")
+                    with self.assertRaises((Red, g0.Red)):
+                        native_rows(g0, lab)
+
+    def test_owned_input_refuses_provider_cleanup_failure(self):
+        # RED if consent revocation alone admits analysis despite provider
+        # teardown failure; any retained provider classification refuses it.
+        evidence, spool = {"final_cleanup": "verified_revoked"}, {"error": None}
+        self.assertTrue(owned_input_cleanup_qualified(evidence, True, spool))
+        for classification in ("provider_shutdown_unconfirmed", "", None):
+            self.assertFalse(owned_input_cleanup_qualified(
+                dict(evidence, provider_cleanup_classification=classification), True, spool))
+
+    def test_owned_input_prefix_join_multiplicity_and_closed_projection(self):
+        # RED if actual owned bytes are replaced by foreign bytes, duplicate
+        # invocations collapse, ambiguous cases classify, or private text leaks.
+        g0, _ = load_g0()
+        with tempfile.TemporaryDirectory(prefix="TEST-owned-input-") as root:
+            lab = Path(root).resolve()
+            private = lab / "sdk-private"
+            private.mkdir(mode=0o700)
+            body = json.dumps({"hook_event_name": "AfterAgent", "session_id": "PRIVATE-session",
+                "timestamp": "2026-10-08T00:00:00Z", "cwd": str(lab / "profile"),
+                "stop_hook_active": False, "response": "PRIVATE-response"}).encode()
+            session, timestamp = sha(b"PRIVATE-session"), sha(b"2026-10-08T00:00:00Z")
+            foreign = dict(event="AfterAgent", case="plain", valid=True, neutral=True,
+                session_sha256=session, timestamp_sha256=timestamp, payload_sha256=sha(body))
+            (lab / "events.jsonl").write_text(json.dumps(foreign) + "\n")
+            record = {"attributes": {"event.name": "gemini_cli.hook_call", "hook_type": "command",
+                "hook_name": OWN["AfterAgent"], "hook_event_name": "AfterAgent",
+                "hook_input": body.decode(), "exit_code": 0, "success": True}}
+            path = private / "telemetry.json"
+            path.write_text((json.dumps(record) + "\n") * 2)
+            path.chmod(0o600)
+            # Real filesystem collision, deterministic on every platform:
+            # old code refuses before parsing and leaves unjoined count zero.
+            collision = private / "pre-teardown-123.json"
+            collision.write_bytes(b"PRIVATE-existing-snapshot")
+            collision.chmod(0o600)
+            collision_identity = (collision.stat().st_dev, collision.stat().st_ino)
+            with patch.object(g0.time, "monotonic_ns", return_value=123):
+                captured = g0.capture_sdk_hook_outcomes(lab)
+            self.assertTrue(captured["qualified"])
+            self.assertEqual([frame["raw"] for frame in captured["frames"]], [body, body])
+            # This oracle exercises the collector/projection boundary only;
+            # exact-source decoding requires the already built TEST classifier.
+            def observed_decode(event, raw):
+                self.assertEqual((event, raw), ("AfterAgent", body))
+                return dict(version=1, classification="decoded", eligible=True, timestamp_present=True,
+                    event=event, payload_sha256=sha(raw), bytes=len(raw),
+                    session_sha256=session, timestamp_sha256=timestamp,
+                    cache_join={"class": "outside_initial_slice"})
+            deadline = time.monotonic() + 60  # Synthetic existing owner deadline.
+            public = classify_owned_inputs(captured, observed_decode, deadline)
+            self.assertEqual(public["class"], "classified_prefix")
+            self.assertEqual(len(public["rows"]), 2)
+            self.assertTrue(all(row["case"] == "plain" and row["eligible"] and row["timestamp_present"]
+                and row["foreign_payload_match"] and row["source_identity_match"] for row in public["rows"]))
+            serialized = json.dumps(public) + (lab / "sdk-hook-outcomes.json").read_text()
+            for secret in ("PRIVATE-session", "PRIVATE-response", str(lab), "hook_input", "raw"):
+                self.assertNotIn(secret, serialized)
+            self.assertFalse(public["SDK_flush_complete"])
+            self.assertEqual(public["absence_means"], "unknown")
+            # Real duplicate foreign identities cannot select a known case.
+            (lab / "events.jsonl").write_text((json.dumps(foreign) + "\n") * 2)
+            with patch.object(g0.time, "monotonic_ns", return_value=123):
+                ambiguous = g0.capture_sdk_hook_outcomes(lab)
+            self.assertEqual(ambiguous["frames"], [])
+            self.assertEqual(read_json(lab / "sdk-hook-outcomes.json")["unjoined_owned_calls"], 2)
+            self.assertEqual(collision.read_bytes(), b"PRIVATE-existing-snapshot")
+            self.assertEqual((collision.stat().st_dev, collision.stat().st_ino), collision_identity)
+            snapshots = sorted(private.glob("pre-teardown-123-*.json"))
+            self.assertEqual(len(snapshots), 2)
+            self.assertTrue(all(snapshot.read_bytes() == path.read_bytes() for snapshot in snapshots))
+            rejected = classify_owned_inputs(captured, lambda event, raw: dict(observed_decode(event, raw),
+                                                                             prompt="PRIVATE-prompt"), deadline)
+            self.assertEqual(rejected["class"], "analysis_unavailable")
+            self.assertEqual(rejected["rows"], [])
+            # The known producer field leaves the original public rows intact.
+            self.assertEqual(classify_owned_inputs(captured, lambda event, raw:
+                {key: value for key, value in observed_decode(event, raw).items() if key != "cache_join"},
+                deadline), public)
+            self.assertNotIn("cache_join", serialized)
+            for join in (None, False, [], {}, "outside_initial_slice",
+                         {"class": "joined", "matched": True, "webhook_attempted": True},
+                         {"class": "unavailable"}, {"class": "outside_initial_slice", "case": "plain"},
+                         {"class": "outside_initial_slice", "prompt": "PRIVATE-prompt"}):
+                with self.subTest(cache_join=join):
+                    rejected = classify_owned_inputs(captured, lambda event, raw:
+                        dict(observed_decode(event, raw), cache_join=join), deadline)
+                    self.assertEqual(rejected["class"], "analysis_unavailable")
+                    self.assertEqual(rejected["rows"], [])
+                    self.assertNotIn("PRIVATE-prompt", json.dumps(rejected))
+            for unavailable_deadline in (None, time.monotonic()):
+                gap = classify_owned_inputs(captured, lambda event, raw: self.fail("deadline must prevent call"),
+                                            unavailable_deadline)
+                self.assertEqual(gap["class"], "diagnostic_budget_gap")
+                self.assertEqual(gap["rows"], [])
+
+    def cache_view(self, lab, baseline=None):
+        return attempt_cache_snapshot(lab, baseline)[0]
+
+    @unittest.skipUnless(sys.platform == "linux", "Linux cache window observation")
+    def test_attempt_cache_complete_window_requires_private_fresh_baseline(self):
+        with tempfile.TemporaryDirectory(prefix="TEST-gemini-cache-") as tmp:
+            lab = Path(tmp)
+            (lab / "an-control").mkdir(mode=0o700)
+            root = lab / "an-control/gemini-observations"
+            root.mkdir(mode=0o700)
+            public, baseline = attempt_cache_snapshot(lab)
+            self.assertEqual(public["class"], "absent")
+            boot = sha(Path("/proc/sys/kernel/random/boot_id").read_bytes().removesuffix(b"\n"))
+            now = time.clock_gettime(time.CLOCK_BOOTTIME)
+            write_json(root / "observations.json", {"boot": boot, "entries": [
+                {"key": "1" * 64, "until": now + 30, "bits": 2}]})
+            complete = self.cache_view(lab, baseline)
+            self.assertEqual(complete["class"], "observed_complete_window")
+            self.assertEqual(complete["attempted_bits"]["live"]["webhook_only"], 1)
+            self.assertNotIn(boot, json.dumps(complete))
+            _, nonzero = attempt_cache_snapshot(lab)
+            for unqualified in (None, nonzero, (boot, now - 61, True), ("0" * 64, now, True)):
+                self.assertEqual(self.cache_view(lab, unqualified)["class"], "observed_unqualified")
+
+    @unittest.skipUnless(sys.platform == "linux", "Linux atomic cache replacement")
+    def test_attempt_cache_detects_replacement_after_held_file_stat(self):
+        for replacement in ("file", "directory"):
+            with self.subTest(replacement=replacement), tempfile.TemporaryDirectory(prefix="TEST-gemini-cache-") as tmp:
+                lab = Path(tmp)
+                (lab / "an-control").mkdir(mode=0o700)
+                root = lab / "an-control/gemini-observations"
+                root.mkdir(mode=0o700)
+                path = root / "observations.json"
+                write_json(path, {"boot": "0" * 64, "entries": []})
+                original, real_fstat, calls = path.stat(), os.fstat, []
+                def replace_after_stat(fd):
+                    observed = real_fstat(fd)
+                    if (observed.st_dev, observed.st_ino) == (original.st_dev, original.st_ino):
+                        calls.append(fd)
+                        if len(calls) == 2:
+                            # Real filesystem mutation after the final held-file sample.
+                            if replacement == "file":
+                                other = root / "replacement"
+                                write_json(other, {"boot": "1" * 64, "entries": []})
+                                other.replace(path)
+                            else:
+                                root.rename(lab / "an-control/old-cache")
+                                root.mkdir(mode=0o700)
+                    return observed
+                with patch(__name__ + ".os.fstat", side_effect=replace_after_stat):
+                    self.assertEqual(self.cache_view(lab), {"class": "unavailable"})
+                self.assertEqual(len(calls), 2)
+
+    @unittest.skipUnless(sys.platform == "linux", "Linux persisted-cache observation")
+    def test_attempt_cache_projection_and_privacy(self):
+        with tempfile.TemporaryDirectory(prefix="TEST-gemini-cache-") as tmp:
+            lab = Path(tmp)
+            (lab / "an-control").mkdir(mode=0o700)
+            self.assertEqual(self.cache_view(lab), {"class": "unavailable"})
+            root = lab / "an-control/gemini-observations"
+            root.mkdir(mode=0o700)
+            boot = sha(Path("/proc/sys/kernel/random/boot_id").read_bytes().strip())
+            now = time.clock_gettime(time.CLOCK_BOOTTIME)
+            keys = [str(i) * 64 for i in (1, 2, 3)]
+            state = {"boot": boot, "entries": [
+                {"key": keys[0], "until": now + 30, "bits": 2},
+                {"key": keys[1], "until": now - 1, "bits": 1},
+                {"key": keys[2], "until": now + 120, "bits": 3}]}
+            write_json(root / "observations.json", state)
+            observed = self.cache_view(lab)
+            self.assertEqual(observed["class"], "observed_unqualified")
+            self.assertEqual(observed["keys"], 3)
+            self.assertEqual(observed["attempted_bits"]["total"], {"desktop_only": 1, "webhook_only": 1, "both": 1})
+            self.assertEqual((observed["boot_matches"], observed["live_keys"],
+                              observed["expired_keys"], observed["outside_window_keys"]), (True, 1, 1, 1))
+            serialized = json.dumps(observed)
+            for secret in (boot, *keys, str(lab)):
+                self.assertNotIn(secret, serialized)
+            state["boot"] = "0" * 64
+            write_json(root / "observations.json", state)
+            stale = self.cache_view(lab)
+            self.assertFalse(stale["boot_matches"])
+            self.assertEqual(stale["live_keys"], 0)
+
+    @unittest.skipUnless(sys.platform == "linux", "Linux private-file observation")
+    def test_attempt_cache_rejects_unsafe_files_and_documents(self):
+        with tempfile.TemporaryDirectory(prefix="TEST-gemini-cache-") as tmp:
+            lab = Path(tmp)
+            (lab / "an-control").mkdir(mode=0o700)
+            root = lab / "an-control/gemini-observations"
+            root.mkdir(mode=0o700)
+            path = root / "observations.json"
+            state = {"boot": "0" * 64, "entries": []}
+            write_json(path, state)
+            path.chmod(0o644)
+            self.assertEqual(self.cache_view(lab), {"class": "unavailable"})
+            path.chmod(0o600)
+            os.link(path, root / "hardlink")
+            self.assertEqual(self.cache_view(lab), {"class": "unavailable"})
+            (root / "hardlink").unlink()
+            path.rename(root / "original")
+            path.symlink_to(root / "original")
+            self.assertEqual(self.cache_view(lab), {"class": "unavailable"})
+            path.unlink()
+            for document in (b"x" * (48 * 1024 + 1),
+                             b'{"boot":"private-TEST-data","entries":[]}',
+                             b'{"boot":"' + b"0" * 64 + b'","entries":[],"entries":[]}'):
+                path.write_bytes(document)
+                path.chmod(0o600)
+                self.assertEqual(self.cache_view(lab), {"class": "unavailable"})
+            entry = {"key": "1" * 64, "until": 1, "bits": 2}
+            for entries in ([entry] * 2, [entry] * 257,
+                            [{**entry, "until": float("inf")}], [{**entry, "bits": True}]):
+                write_json(path, {"boot": "0" * 64, "entries": entries})
+                self.assertEqual(self.cache_view(lab), {"class": "unavailable"})
+
     # Regression: settle failures lose safe counts/rows despite run's finally writer.
     def settle_ports(self, deliveries=(), error=None, exit_code=None, rows=None):
         row = {"event": "AfterAgent", "valid": True, "neutral": True,
@@ -873,6 +1472,7 @@ class PureChecks(unittest.TestCase):
         timer, _ = self.settle_clock()
         with tempfile.TemporaryDirectory(prefix="TEST-g5-retention-") as root:
             lab = Path(root).resolve()
+            root = str(lab)
             artifact = lab / "artifact"
             artifact.write_bytes(b"TEST")
             (lab / "go.mod").write_bytes(b"TEST")
@@ -926,6 +1526,34 @@ class PureChecks(unittest.TestCase):
                                  "stage": "native_spawn", "native_child_started": False})
         unknown = g0.bridge_event_facts({"error": "private", "stage": "private", "node_error_code": "PRIVATE"})
         self.assertEqual(unknown, {"error": "bridge_protocol_error"})
+
+    def test_case_failure_distinguishes_hook_from_rendered_ui(self):
+        # A cancel timeout before key submission must retain which prerequisite
+        # was missing, rather than looking like failure after cancellation.
+        for hook, rendered in ((True, False), (False, True)):
+            with self.subTest(hook=hook, rendered=rendered):
+                g0, _ = load_g0()
+                clock = Mock()
+                clock.elapsed = 0.0
+                clock.monotonic.side_effect = lambda: clock.elapsed
+                clock.sleep.side_effect = lambda seconds: setattr(clock, "elapsed", clock.elapsed + seconds)
+                fixture = Mock(lock=threading.Lock(), counts={}, error=None)
+                fixture.arm.side_effect = lambda _: fixture.counts.update(streamGenerateContent=1)
+                terminal = Mock(exit=None, seen={"cancel"} if rendered else set())
+                terminal.case_observation = None
+                rows = [{"case": "cancel", "event": "Notification", "private": "not for diagnostics"}] if hook else []
+                with patch.object(g0, "time", clock), patch.object(g0, "CASES", ("cancel",)):
+                    with self.assertRaisesRegex(g0.Red, "AfterAgent_missing_or_timeout"):
+                        g0.exercise(Path("/TEST-unused"), fixture, terminal, {"cancel": "\x1b"}, lambda _: rows)
+                terminal.menu_choice.assert_not_called()
+                facts = terminal.case_observation.facts()
+                self.assertEqual(facts["permission_hook_seen"], hook)
+                self.assertEqual(facts["permission_UI_seen"], rendered)
+                self.assertFalse(facts["acted"])
+                self.assertFalse(facts["AfterAgent_seen"])
+                self.assertEqual(facts["provider_calls_since_case_entry"]["streamGenerateContent"], 1)
+                self.assertNotIn("menu_write_requested", [x["event"] for x in facts["milestones"]])
+                self.assertNotIn("not for diagnostics", json.dumps(facts))
 
     def test_bounded_read_preserves_binary_bytes(self):
         with tempfile.TemporaryDirectory(prefix="TEST-gemini-binary-read-") as root:
@@ -1051,7 +1679,7 @@ def main():
     parser.add_argument("--desktop", action="store_true")
     parser.add_argument("--timeout", type=int, default=240)
     for flag in ("binary", "update-binary", "native-app", "gemini-executable", "node-executable", "cli-install-root", "lab-root", "hook-shell", "system-root",
-                 "ui-contract", "g0-driver", "sdk-module-root", "installer-module-root"):
+                 "ui-contract", "g0-driver", "sdk-module-root", "installer-module-root", "frame-classifier", "cache-join-reader"):
         parser.add_argument("--" + flag)
     args = parser.parse_args()
     if args.self_test:

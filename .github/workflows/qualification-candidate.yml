@@ -100,6 +100,32 @@ jobs:
             *) echo "unexpected minimum macOS version: ${minos:-missing}" >&2; exit 1 ;;
           esac
 
+      - name: Bind Linux shipping guest inputs without native execution
+        if: matrix.platform == 'linux' && matrix.arch == 'amd64'
+        env:
+          CANDIDATE_BINARY: ${{ matrix.binary }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp "candidate/$CANDIDATE_BINARY" candidate/shipping-client
+          go version -m candidate/shipping-client > candidate/shipping-build-info.txt
+          cp internal/linuxcallback/vendor-chatgpt-26.930.51102-amd64.json candidate/shipping-vendor-manifest.json
+          python - <<'PY'
+          import hashlib, json, pathlib, re, subprocess
+          root = pathlib.Path('candidate')
+          source = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+          catalog = json.loads((root / 'shipping-vendor-manifest.json').read_text())
+          info = (root / 'shipping-build-info.txt').read_text()
+          package = '637c3c94bc50f8ee33a15e2e28ec7f92a787f0943e700efe111bc0bf0d4813b4'
+          def sha(name): return hashlib.sha256((root / name).read_bytes()).hexdigest()
+          available = bool(catalog.get('entries')) and catalog.get('packageSHA256') == package
+          available = available and all(len(re.findall(r'(?m)^\s+build\s+' + re.escape(setting) + r'\s*$', info)) == 1 for setting in ('vcs.revision=' + source, 'vcs.modified=false', 'GOOS=linux', 'GOARCH=amd64'))
+          metadata = dict(version=1, sourceSHA=source, packageSHA256=package,
+              binarySHA256=sha('shipping-client'), catalogSHA256=sha('shipping-vendor-manifest.json'),
+              buildInfoSHA256=sha('shipping-build-info.txt'), catalogAvailable=available)
+          (root / 'shipping-inputs.json').write_text(json.dumps(metadata, sort_keys=True) + '\n')
+          PY
+
       - name: Qualify built artifact in disposable profiles
         env:
           CANDIDATE_BINARY: ${{ matrix.binary }}

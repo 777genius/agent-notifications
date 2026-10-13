@@ -25,8 +25,16 @@ for tool in curl wget; do
 done
 export PATH="$root/tools:$PATH"
 cd "$repo"
-go build -ldflags '-X github.com/777genius/agent-notifications/internal/config.ConsumerVersion=1.41.0' -o "$root/old-sender" ./cmd/claude-notifications
-go build -ldflags '-X github.com/777genius/agent-notifications/internal/config.ConsumerVersion=1.42.0' -o "$root/new-sender" ./cmd/claude-notifications
+go build -trimpath -ldflags '-s -w -X github.com/777genius/agent-notifications/internal/config.ConsumerVersion=1.41.0' -o "$root/old-sender" ./cmd/claude-notifications
+go build -trimpath -ldflags '-s -w -X github.com/777genius/agent-notifications/internal/config.ConsumerVersion=1.42.0' -o "$root/new-sender" ./cmd/claude-notifications
+# Both owned release fixtures must satisfy the external 32 MiB staging contract.
+for binary in "$root/old-sender" "$root/new-sender"; do
+    [ -f "$binary" ] && [ ! -L "$binary" ] || { echo 'non-regular release fixture' >&2; exit 1; }
+    bytes=$(wc -c < "$binary" | tr -d '[:space:]')
+    limit=$((32*1024*1024))
+    printf 'owned release fixture %s: bytes=%s limit=%s\n' "$binary" "$bytes" "$limit"
+    [ "$bytes" -gt 0 ] && [ "$bytes" -le "$limit" ] || { echo 'release fixture exceeds managed-release size contract' >&2; exit 1; }
+done
 
 # Assert the fixture independently: main.version is initialized from the
 # exported config variable, so setting main.version alone is overwritten.

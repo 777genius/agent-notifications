@@ -43,7 +43,8 @@
     "respectJudgeMode": null,
     "notifyOnlyWhenUnfocused": null,
     "notifyDelaySeconds": null,
-    "respectDisplaySleep": null
+    "respectDisplaySleep": null,
+    "replaceNotificationsPerSession": null
   },
   "statuses": {
     "agent_stopping": {

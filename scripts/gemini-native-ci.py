@@ -14,6 +14,7 @@ from pathlib import Path
 import platform
 import re
 import shutil
+import stat
 import sys
 import tempfile
 import unittest
@@ -148,6 +149,9 @@ def source(value, default):
 def run(args):
     require(args.trusted_github_runner and os.environ.get("GITHUB_ACTIONS") == "true" and
             os.environ.get("RUNNER_ENVIRONMENT") == "github-hosted", "trusted_GitHub_runner_required")
+    if args.g5_only:
+        require(args.platform == "linux" and args.arch == "amd64" and os.environ.get("GITHUB_RUN_ATTEMPT") == "1",
+                "fresh_G5_only_admission")
     temp = Path(os.environ["RUNNER_TEMP"]).resolve(strict=True)
     forbidden = (REPO, Path.cwd().resolve(), Path.home().resolve())
     # Hosted Linux/Mac RUNNER_TEMP can be underneath the runner's HOME. It is
@@ -289,6 +293,26 @@ def run(args):
         require(sha(binary) != sha(updated_binary), "actual_update_artifacts_identical")
         shutil.copyfile(updated_binary, evidence_dir / ("claude-notifications-update-" + args.platform + "-" + args.arch + extension))
         (evidence_dir / "go-version-m-update.txt").write_bytes(update_metadata)
+        frame_classifier = root / ("gemini-frame-classifier" + extension)
+        command("build_frame_classifier", [go, "build", "-trimpath", "-buildvcs=true", "-ldflags=-s -w", "-o", frame_classifier,
+                                         "./tests/integration/gemini_frame_classifier"], timeout=180)
+        evidence["frame_classifier"] = {"sha256": sha(frame_classifier), "SDK_version": modules[SDK]["Version"],
+                                        "source_package": "tests/integration/gemini_frame_classifier"}
+        join_args = []
+        if args.platform == "linux":
+            join_reader = root / "gemini-cache-join.test"
+            command("build_cache_join_reader", [go, "test", "-c", "-trimpath", "-ldflags=-s -w", "-o", join_reader, "./internal/geminievent"], timeout=180)
+            reader_hash = sha(join_reader)
+            contract_out = command("fixed_cache_join_contract", [join_reader, "-test.run=^TestCapturedCacheJoinFixedKeyAndPrivacy$", "-test.count=1", "-test.timeout=10s", "-test.v"], cwd=root, timeout=15)
+            require(re.fullmatch(rb"=== RUN   TestCapturedCacheJoinFixedKeyAndPrivacy\n--- PASS: TestCapturedCacheJoinFixedKeyAndPrivacy \([0-9]+\.[0-9]+s\)\nPASS\n", contract_out) is not None,
+                    "TEST_fixed_cache_join_contract_not_executed")
+            require(sha(join_reader) == reader_hash, "TEST_cache_join_reader_changed_during_contract")
+            evidence["cache_join_reader"] = {"sha256": reader_hash, "source_package": "internal/geminievent", "pure_read_decode_marker": True,
+                                             "fixed_key_privacy_contract": "passed_collected"}
+            join_args = ["--cache-join-reader", join_reader]
+        if args.g5_only:
+            evidence["G0"] = "not_run_fresh_G5_only"
+            evidence["qualification_scope"] = "G5_only"
         install = root / "cli"
         install.mkdir(mode=0o700)
         (install / MARKER).write_text("fresh exact TEST CLI installation\n", encoding="utf-8")
@@ -313,18 +337,61 @@ def run(args):
         for label, driver, extra, manifest, limit in (
             ("G0", g0path, [], "evidence.json", 280),
             ("G5", g5path, ["--trusted-orchestrator", "--binary", binary, "--update-binary", updated_binary, "--g0-driver", g0path,
-                           "--sdk-module-root", staged["sdk"], "--installer-module-root", staged["agentplugins"]],
+                           "--sdk-module-root", staged["sdk"], "--installer-module-root", staged["agentplugins"], "--frame-classifier", frame_classifier, *join_args],
              "production-evidence.json", 650)):
+            if args.g5_only and label == "G0":
+                continue
             lab = root / ("TEST-" + label)
             try:
                 command(label, [python, "-B", driver, *common, "--lab-root", lab, *extra], child_env=env, timeout=limit)
                 facts = json.loads((lab / manifest).read_bytes())
                 require(facts.get("native_execution") == "passed_scenarios" if label == "G0" else
                         facts.get("driver", "").startswith("passed_"), "driver_success_manifest_missing")
+                if args.g5_only:
+                    joined = [row.get("cache_join", {}) for row in facts.get("sdk_frame_analysis", {}).get("rows", [])
+                              if row.get("cache_join", {}).get("class") != "outside_initial_slice"]
+                    require(len(joined) == 7 and all(row.get("class") == "joined" and row.get("matched") is True
+                            and row.get("webhook_attempted") is True for row in joined), "fresh_G5_cache_join_unproved")
                 evidence[label] = "passed_implemented_scenarios"
             except Exception:
                 evidence[label] = "failed"
             finally:
+                # Closed pre-teardown projection only; never upload sdk-private or raw telemetry.
+                diagnostic = lab / "sdk-hook-outcomes.json"
+                try:
+                    identity = diagnostic.lstat()
+                    require(stat.S_ISREG(identity.st_mode) and identity.st_nlink == 1 and identity.st_size <= 65536,
+                            "SDK_hook_projection_identity")
+                    fd = os.open(diagnostic, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+                    with os.fdopen(fd, "rb") as stream:
+                        held = os.fstat(stream.fileno())
+                        require(stat.S_ISREG(held.st_mode) and (held.st_dev, held.st_ino, held.st_size) ==
+                                (identity.st_dev, identity.st_ino, identity.st_size), "SDK_hook_projection_changed")
+                        raw = stream.read(65537)
+                    require(len(raw) <= 65536, "SDK_hook_projection_bound")
+                    facts = json.loads(raw)
+                    keys = {"capture", "identity_checked", "snapshot_stable", "parse_complete", "SDK_flush_complete",
+                            "absence_means", "records", "owned_calls", "unjoined_owned_calls", "outcomes", "bytes",
+                            "role", "case", "claim_failures", "SDK_exit_code", "SDK_duration_ms", "SDK_success",
+                            "phase", "classification", "code", "elapsed_ns", "stage_ns", "budget_ns", "budget_state", "publication_possible"}
+                    words = {"unavailable", "bounded_prefix", "incomplete_or_invalid_JSON_prefix", "bounded_capture_or_parse_failed",
+                             "projection_bound_exceeded",
+                             "unknown", "AfterAgent", "Notification", *g0.CASES, "validate", "path", "root", "prepare", "lock", "clock",
+                             "read", "decode", "record", "encode", "publish", "published", "invalid_request", "invalid_path", "validation",
+                             "invalid_clock", "none", "invalid_document", "deadline", "canceled", "os_error", "sharing_violation",
+                             "lock_violation", "permission", "not_found", "not_started", "active"}
+                    def closed(value):
+                        if isinstance(value, dict): return set(value) <= keys and all(closed(v) for v in value.values())
+                        if isinstance(value, list): return len(value) <= 64 and all(closed(v) for v in value)
+                        return type(value) is bool or type(value) in (int, float) and -256 <= value <= 10**18 or type(value) is str and value in words
+                    require(isinstance(facts, dict) and closed(facts), "SDK_hook_projection_not_closed")
+                except Exception:
+                    facts = {"capture": "public_projection_unavailable", "absence_means": "unknown"}
+                try:
+                    write_json(evidence_dir / (label + "-SDK-hook-outcomes.json"), facts)
+                    print(json.dumps({"native_driver": label, "SDK_hook_outcomes": facts}), flush=True)
+                except Exception:
+                    pass  # Optional diagnostics must not replace the original driver failure/manifests.
                 # These two trusted driver manifests contain fixed facts/hashes,
                 # never native payloads, provider bodies or terminal transcripts.
                 if (lab / manifest).is_file():
@@ -333,10 +400,10 @@ def run(args):
                     driver_facts = json.loads((lab / manifest).read_bytes())
                     # Fixed classifications and version metadata only, never provider or terminal text.
                     print(json.dumps({"native_driver": label, **{key: driver_facts[key] for key in
-                        ("classification", "exception_type", "native_version_probe", "setup_failure", "setup_cleanup_failure",
-                         "bridge_failure", "provider_endpoints", "provider_cleanup_classification", "cleanup_classification", "native_execution", "driver")
+                        ("classification", "exception_type", "native_version_probe", "setup_failure", "setup_cleanup_failure", "settle_failure",
+                         "bridge_failure", "sdk_frame_analysis", "provider_endpoints", "provider_cleanup_classification", "cleanup_classification", "native_execution", "driver")
                         if key in driver_facts}}), flush=True)
-        require(all(evidence.get(label) == "passed_implemented_scenarios" for label in ("G0", "G5")), "native_qualification_failed")
+        require(all(evidence.get(label) == "passed_implemented_scenarios" for label in (("G5",) if args.g5_only else ("G0", "G5"))), "native_qualification_failed")
         evidence["status"] = "passed_implemented_scenarios_with_external_gates_pending"
     except Exception as exc:
         known = isinstance(exc, Red) or ("g0" in locals() and isinstance(exc, g0.Red))
@@ -391,6 +458,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--trusted-github-runner", action="store_true")
+    parser.add_argument("--g5-only", action="store_true")
     for name in ("platform", "arch", "commit", "hook-shell", "system-root", "g0-driver", "g5-driver", "ui-contract"):
         parser.add_argument("--" + name)
     args = parser.parse_args()

@@ -2,18 +2,112 @@
 
 Step-by-step guide for publishing a new version.
 
+For early preflight, parallel preparation, resumable drafts and evidence timing,
+follow [the basic release fast path](RELEASE_SPEED.md), including `make release-prepare`,
+`make release-wait` and `make release-verify`. Preview installation before freezing
+source with the existing `make preview-installer` command.
+
 For a release that skips a platform, promote only its qualified
 [platform release channels](PLATFORM_RELEASE_CHANNELS.md). Keep skipped-platform
 rows and global Latest on the previously qualified version. Publish source
 branches before activating the immutable source SHAs in the channel index.
 
-v1.48.1 is a Linux amd64/arm64 and Windows amd64 partial release. macOS stays
-on v1.46.1, and GitHub global Latest stays v1.46.1. There are no Darwin binaries,
-portable packages or ClaudeNotifier.app assets in v1.48.1.
+The current all-platform channels and GitHub Latest select v1.49.2, using the
+owner-approved basic profile and separate macOS E2E described below. This does
+not establish eleven-cell OpenCode or full native qualification. Before
+the v1.48.4 unified promotion, Linux amd64/arm64 and Windows amd64 selected
+v1.48.1, macOS amd64/arm64 selected v1.48.3, and global Latest remained v1.46.1.
+The historical v1.48.1 release contains no Darwin binaries, portable packages
+or ClaudeNotifier.app assets.
 
 The earlier v1.48.0 draft and tag are retained unpublished: a repeated Windows
 clock tick exposed a floating-point admission-budget bug. v1.48.1 fixes it
 without extending the four-second limit; qualification must use the new binary.
+
+### Owner-approved basic v1.48.5 release
+
+For v1.48.5, the owner selected basic Linux/Windows artifact checks and separate
+macOS E2E/signing instead of the long eleven-cell OpenCode qualification. Use
+`basic-release.yml`; the full `unified-release.yml` operator and its historical
+v1.48.4 reports remain unchanged. The legacy tag workflow excludes both tags.
+This reduced profile does not grant installed OpenCode business, full native,
+clock/source-epoch, visible desktop or cold-start qualification.
+
+1. Merge the reviewed basic operator on `main` before promoting any version bump.
+   Prepare the release branch with all five version values at 1.48.5 and require
+   successful current-head Ubuntu, Windows and full macOS CI on its exact SHA.
+2. Fast-forward `release/macos-signing` to the independently reviewed candidate,
+   preserving the signing checkpoint in ancestry. Run `macos-qualification.yml`
+   with `candidate_version=v1.48.5` and retain the successful same-source signed
+   and notarized helper/Darwin artifact run.
+3. Dispatch `basic-release.yml` from `main` with that exact `candidate_sha`,
+   `release_tag=v1.48.5` and `signing_run`. It checks owner/source/CI/signing custody,
+   builds three Linux/Windows artifact sets, imports two Darwin sets, and runs
+   native version, companion help, configuration and local webhook checks on all
+   five platforms. It does not run or manufacture eleven-cell OpenCode reports.
+4. The successful gate seals exactly 29 public assets, including 28 checksummed
+   leaves, and creates a new immutable tag and complete draft. Existing tags or
+   releases fail closed; reconcile partial or uncertain state explicitly.
+5. Before publication, complete the downloaded draft-asset canaries, disposable
+   Codex checks and separate macOS E2E requested by the owner. Retain signature,
+   permission, installed lifecycle and visible-delivery observations with their
+   actual scope; the basic Actions result does not prove those observations.
+6. Only after those checks, publish under the owner's release authorization,
+   verify public checksums, promote Latest and all five platform channels, then
+   land the version bump on `main`. The workflow never publishes automatically.
+
+### Subsequent basic releases and explicit resume
+
+The basic operator now accepts stable semver tags. Before dispatch, run the
+[candidate and prepared-promotion preflight](RELEASE_SPEED.md), retain current-C
+CI/signing and explicitly exclude the new tag from the legacy full release
+workflow in both candidate C and executed operator main O. The historical
+v1.48.5 basic scope above remains the minimum, not an installed-business claim.
+
+The workflow stores an immutable complete seal before tag creation. If draft
+creation or upload fails, use the same `candidate_sha`, `release_tag` and
+`signing_run`, plus `resume_run` and `resume_attempt` for the original sealed
+attempt. Do not rerun the build or reconstruct a seal. Resume reconciles remote
+identity/content and uploads only missing matching assets. See
+[seal, provenance and recovery contracts](../scripts/basic-release-assets/README.md).
+The workflow still stops at an unpublished draft; publication requires the
+separate downloaded-asset canaries, macOS/Codex E2E and final verified fan-in.
+
+### Unified v1.48.4 operator
+
+For v1.48.4, use the manual `unified-release.yml` workflow instead of the legacy
+tag-triggered Linux/Windows workflow. The latter explicitly excludes this tag;
+its non-business native fixture has an unobservable production admission gate.
+The manual operator preserves that denial and qualifies the bounded installed
+business/lifecycle scope with fresh clock and packaged-reader prerequisites.
+It does not grant full native, source-epoch, time-policy, desktop visibility or
+cold-start qualification.
+
+1. Review and merge the operator without changing the five legacy versions on
+   `main`. Compose the release branch from reviewed current source, bump all five
+   values to 1.48.4, and complete Ubuntu, Windows and full macOS CI on its exact SHA.
+2. Preserve the old signing checkpoint in ancestry and fast-forward
+   `release/macos-signing` to that exact reviewed candidate. Dispatch
+   `macos-qualification.yml` with `candidate_version=v1.48.4` and obtain the
+   completed same-source signed/notarized helper and Darwin artifact run.
+3. Dispatch `unified-release.yml` with `candidate_sha`, `release_tag=v1.48.4`
+   and that `signing_run`. It builds Linux/Windows artifacts, imports the two
+   Darwin sets, checks all five downloaded native executables and qualifies
+   eleven OpenCode cells. Each cell needs fresh source/artifact-bound clock,
+   reader and business reports. Previous release results cannot qualify new bytes.
+4. A successful complete gate creates the immutable tag and a complete draft,
+   with checksums, portable packages and ClaudeNotifier.app. It never publishes
+   or marks Latest automatically. A failed or uncertain upload requires explicit
+   state reconciliation; do not overwrite an existing release blindly.
+5. Complete the draft-asset canaries and disposable Codex checks below. Record
+   banner and cold-click observations separately. If a native runner cannot
+   obtain OS permission, retain that failure and qualify the missing cell in a
+   separately reviewed, authorized TEST environment with the same sealed inputs.
+   Never manufacture a successful Actions result or relax a semantic oracle.
+6. With the owner's release authorization, publish the complete draft, verify
+   the public checksums, mark it GitHub Latest, and only then promote the five
+   platform channels and the main version bump. Update README and the public
+   installer to the verified complete release.
 
 ## 0. Pre-release risk checklist
 
@@ -265,31 +359,77 @@ The assets-before-main bump instructions above apply to a full-platform release.
 v1.48.1 does not build or publish ClaudeNotifier.app. macOS consumers retain the
 signed and notarized helper from their qualified v1.46.1 channel.
 
-A future macOS release must restore and qualify its signing/notarization job;
-the prior full-release workflow:
+Future macOS candidates use the manual `macos-qualification.yml` workflow.
+Signing runs only when both the original actor and the current triggering actor
+(the rerun initiator) are the repository owner, dispatching from
+`release/macos-signing`, inside the `macos-signing` GitHub environment. PR and
+`smoke-notary-*` tag events do not sign. The qualification caller fails before
+building artifacts when the actor or ref is untrusted.
 
-1. Imports the Apple Developer certificate from GitHub Secrets
-2. Builds a universal binary (arm64 + x86_64)
-3. Signs with **Developer ID Application** + hardened runtime
-4. Notarizes via `xcrun notarytool` and staples the ticket
-5. Uploads `ClaudeNotifier.app.zip` as a release asset
+After review and merge, the owner fast-forwards the trusted signing branch to
+the exact reviewed `main` SHA. Never force-push this branch or dispatch signing
+from an implementation branch. All five candidate version values must match the
+input. For example, replace `REVIEWED_MAIN_SHA` and `vX.Y.Z` with verified values:
 
-### Required GitHub Secrets
+```bash
+git fetch origin main
+git merge-base --is-ancestor REVIEWED_MAIN_SHA origin/main
+git push origin REVIEWED_MAIN_SHA:refs/heads/release/macos-signing
+test "$(git ls-remote origin refs/heads/release/macos-signing | cut -f1)" = "$(git rev-parse REVIEWED_MAIN_SHA^{commit})"
+gh workflow run macos-qualification.yml --ref release/macos-signing -f candidate_version=vX.Y.Z
+# Notifier-only verification uses the same trusted branch and environment:
+gh workflow run notifier-signing-smoke.yml --ref release/macos-signing -f skip_notarize=false
+```
+
+For artifact-only pre-merge qualification, the owner may instead fast-forward
+the signing branch to an independently reviewed candidate SHA and verify that
+remote SHA before dispatch. Full current-head CI must pass before merging.
+Use a merge commit to preserve the qualified candidate in ancestry, then compare
+its complete Git tree with the merged tree. Reuse artifact evidence only when
+the tree hashes match; receipts retain the actual candidate SHA. This path does
+not authorize release publication.
+
+`use_github_runner=true` may be supplied to either workflow when the configured
+runner is unavailable. These commands qualify artifacts only; they do not
+publish a release or promote platform channels.
+
+The workflow builds the four native Go executables and portable package on each
+Darwin architecture, then runs the existing CLI/config/local-webhook artifact
+checks in disposable profiles. It also calls the canonical notifier signing
+workflow with notarization required: universal Swift build, Developer ID team
+`86399583GS`, hardened runtime, API-key notarization and stapled-ticket validation.
+Each Mach-O slice must belong to that team. The notifier archive includes its
+managed-runtime sidecar and same-run custody report. Uploaded Go artifacts include
+source/version records and SHA-256 checksums. These are Actions artifacts only;
+this workflow does not create or publish a release or promote any channel.
+
+A green run proves those scoped artifact/signature checks. It does not prove
+visible notifications, cold callbacks or the complete macOS OpenCode installed
+lifecycle. Complete those candidate-specific checks on disposable test identities
+before declaring macOS ready. Then, with publication authorization, download the
+same-run artifacts, verify their checksums/custody, upload the Darwin binaries,
+portable archives and notifier archive (as `ClaudeNotifier.app.zip`) to the
+candidate draft, and publish with `--latest=false` for a macOS-only release.
+Promote both macOS source/index rows using the platform-channel procedure only
+after public assets are verified. Linux/Windows rows, legacy `main` versions and
+global Latest remain unchanged unless a separately qualified release includes them.
+
+### Required macos-signing environment secrets
 
 | Secret | Description |
 |--------|-------------|
-| `APPLE_CERTIFICATE` | Base64-encoded .p12 export of Developer ID Application cert |
+| `APPLE_CERTIFICATE` | Base64-encoded .p12 export of the new Developer ID Application certificate |
 | `APPLE_CERTIFICATE_PASSWORD` | Password for the .p12 file |
-| `APPLE_ID` | Apple ID email for notarization |
-| `APPLE_PASSWORD` | App-specific password for notarization |
-| `APPLE_TEAM_ID` | Apple Developer Team ID |
+| `APPLE_TEAM_ID` | Must equal `86399583GS` |
+| `APPLE_API_KEY_BASE64` | Base64-encoded team App Store Connect API .p8 key |
+| `APPLE_API_KEY_ID` | API key ID |
+| `APPLE_API_ISSUER` | Team API issuer UUID |
 
-### Local build (optional)
-
-```bash
-make build-notifier                                      # ad-hoc or local cert signing
-cd swift-notifier && bash scripts/build-app.sh --ci      # Developer ID + notarization (needs env vars)
-```
+Apple ID/password credentials are not used. CI decodes the API key to a private
+mode-600 file under `RUNNER_TEMP`, exports only its path, and requires the API key
+ID and issuer. Local `build-app.sh --ci --no-register` uses an absolute
+`APPLE_API_KEY` path plus `APPLE_API_KEY_ID`, `APPLE_API_ISSUER` and the pinned team.
+`APPLE_SIGNING_KEYCHAIN` optionally selects a dedicated certificate keychain.
 
 ## 6. Update release description
 

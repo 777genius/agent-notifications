@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/777genius/agent-notifications/internal/linuxcallback"
 	"github.com/777genius/agent-notifications/internal/notification"
 	"github.com/godbus/dbus/v5"
 )
@@ -65,10 +66,8 @@ func (d *FreedesktopDelivery) checkAndDeliver(ctx context.Context, r notificatio
 		if nav == notification.Required {
 			return finish("rejected", "navigation_disabled")
 		}
-	} else if r.Target.ThreadID != "" {
-		if nav == notification.Required {
-			return finish("rejected", "navigation_unavailable")
-		}
+	} else if r.Target.ThreadID != "" && r.Target.Provider == "codex" && r.Target.Linux.SnapshotPath != "" {
+		out.Navigation = notification.NavigationResult{Capability: "available", Precision: "chat_id", Scope: "selected_linux_installation", Reason: "configured_codex_desktop"}
 	} else if nav == notification.Required {
 		return finish("rejected", "navigation_unavailable")
 	}
@@ -102,8 +101,14 @@ func (d *FreedesktopDelivery) checkAndDeliver(ctx context.Context, r notificatio
 		}
 	}()
 	defer func() { cancel(); <-stopped }()
-	session, err := open(operation)
+	var session sessionNotifications
+	if out.Navigation.Capability == "available" {
+		session, err = linuxcallback.Open(operation, r.Target.Linux)
+	} else {
+		session, err = open(operation)
+	}
 	if err != nil || session == nil {
+		out.Navigation = notification.NavigationResult{Capability: "unavailable", Precision: "none", Reason: "navigation_unavailable"}
 		if operation.Err() != nil {
 			return finish("rejected", "expired")
 		}
@@ -111,6 +116,7 @@ func (d *FreedesktopDelivery) checkAndDeliver(ctx context.Context, r notificatio
 	}
 	defer func() { _ = session.Close() }()
 	if err = session.Ready(operation); err != nil {
+		out.Navigation = notification.NavigationResult{Capability: "unavailable", Precision: "none", Reason: "navigation_unavailable"}
 		if operation.Err() != nil {
 			return finish("rejected", "expired")
 		}

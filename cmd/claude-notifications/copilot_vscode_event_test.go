@@ -1,9 +1,13 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/json"
+	"github.com/777genius/agent-notifications/internal/agentnotify/portable"
+	"github.com/777genius/agent-notifications/internal/installruntime"
 	"io"
 	"os"
 	"os/exec"
@@ -189,32 +193,79 @@ func startLocalProcess(t *testing.T, cmd *exec.Cmd, ctx context.Context, cancel 
 	}
 }
 
-type panicLocalInput struct{}
+type panicLocalInput struct{ read, closed bool }
 
-func (panicLocalInput) Read([]byte) (int, error) { panic("TEST-private-read") }
-func (panicLocalInput) Close() error             { return nil }
+func (p *panicLocalInput) Read([]byte) (int, error) {
+	p.read = true
+	panic("TEST-private-read")
+}
+func (p *panicLocalInput) Close() error { p.closed = true; return nil }
 
 // Panic injection is test-only at the owned reader boundary; the production
 // executable has no environment hook or injected allow mechanism.
 func TestCopilotVSCodeTransportPanicAndJoinedReader(t *testing.T) {
 	if os.Getenv("TEST_LOCAL_PANIC_CHILD") == "1" {
-		os.Exit(runCopilotVSCodeEvent([]string{"--event", "Stop", "--control-root", os.Getenv("TEST_LOCAL_PANIC_ROOT"), "--binding", "TEST"}, panicLocalInput{}, os.Stdout))
+		_, _ = io.WriteString(os.Stderr, "TEST-panic-reader-ready\n")
+		input := &panicLocalInput{}
+		code := runCopilotVSCodeEvent([]string{"--event", "Stop", "--control-root", os.Getenv("TEST_LOCAL_PANIC_ROOT"), "--binding", "TEST"}, input, os.Stdout)
+		if !input.read || !input.closed {
+			code = 1
+		}
+		os.Exit(code)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestCopilotVSCodeTransportPanicAndJoinedReader$")
-	cmd.Env = append(os.Environ(), "TEST_LOCAL_PANIC_CHILD=1", "TEST_LOCAL_PANIC_ROOT="+t.TempDir())
-	var stdout, stderr bytes.Buffer
+	cmd.Env = append(os.Environ(), "TEST_LOCAL_PANIC_CHILD=1", "TEST_LOCAL_PANIC_ROOT="+t.TempDir(),
+		"GORACE="+os.Getenv("GORACE")+" atexit_sleep_ms=0")
+	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	_, stopBudget := startLocalProcess(t, cmd, ctx, cancel, 2*time.Second)
-	defer stopBudget()
-	if err := cmd.Wait(); err != nil {
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
 		t.Fatal(err)
 	}
-	stopBudget()
-	if ctx.Err() != nil || stdout.String() != "{}\n" || stderr.Len() != 0 {
-		t.Fatal("panic leaked")
+	defer func() { _ = stderr.Close() }()
+	admission := time.AfterFunc(15*time.Second, cancel)
+	if err := cmd.Start(); err != nil {
+		admission.Stop()
+		t.Fatal(err)
+	}
+	// Keep stderr collection owned until EOF, including every handshake failure.
+	type captured struct {
+		marker, rest string
+		err          error
+	}
+	capture := make(chan captured, 1)
+	ready := make(chan string, 1)
+	go func() {
+		reader := bufio.NewReader(stderr)
+		marker, err := reader.ReadString('\n')
+		ready <- marker
+		rest, readErr := io.ReadAll(reader)
+		if err == nil {
+			err = readErr
+		}
+		capture <- captured{marker, string(rest), err}
+	}()
+	marker := <-ready
+	admitted := admission.Stop() && ctx.Err() == nil && marker == "TEST-panic-reader-ready\n"
+	if !admitted {
+		cancel()
+	}
+	var execution *time.Timer
+	if admitted {
+		execution = time.AfterFunc(2*time.Second, cancel)
+	}
+	// Collect stderr before Wait closes its pipe; cancellation terminates child.
+	observed := <-capture
+	waitErr := cmd.Wait()
+	if execution != nil && !execution.Stop() {
+		cancel()
+	}
+	if !admitted || waitErr != nil || observed.err != nil || ctx.Err() != nil ||
+		stdout.String() != "{}\n" || observed.rest != "" {
+		t.Fatalf("panic transport readiness/collection failed: admitted=%v wait=%v read=%v marker=%q stderr=%q",
+			admitted, waitErr, observed.err, observed.marker, observed.rest)
 	}
 }
 
@@ -227,4 +278,72 @@ func setClosedLocalOutput(t *testing.T, cmd *exec.Cmd) {
 	_ = r.Close()
 	t.Cleanup(func() { _ = w.Close() })
 	cmd.Stdout = w
+}
+
+// Regression: the installed composer promotes private registered paths and
+// true configuration to authority, writes claims on denial, or leaks diagnostics.
+func TestCopilotVSCodeRegisteredBindingWithoutAuthorityIsNeutral(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	control, runtimeRoot := filepath.Join(root, "control"), filepath.Join(root, "runtime")
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	ledger, err := installruntime.Commit(ctx, installruntime.Request{ControlRoot: control, RuntimeRoot: runtimeRoot, Owner: "existing-installer", ConsumerID: "TEST-peer",
+		Files: []installruntime.File{{Path: filepath.Join(runtimeRoot, "primary"), Data: []byte("TEST inert installed primary"), Mode: 0700}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := portable.Binding{Version: 1, Integration: portable.CopilotVSCode, InstallationID: "TEST-installation", BindingID: "TEST-local-binding", ScopeID: "user",
+		ComponentID: ledger.ID, Owner: ledger.Owner, ScopeRoot: filepath.Join(root, "TEST-profile"), DataRoot: filepath.Join(root, "TEST-data"), ControlRoot: control,
+		GlobalConfig: filepath.Join(root, "TEST-config", "config.json"), RuntimeRoot: runtimeRoot, Primary: "primary"}
+	for _, path := range []string{b.ScopeRoot, b.DataRoot, filepath.Dir(b.GlobalConfig)} {
+		if err := os.MkdirAll(path, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(b.GlobalConfig, []byte(`{"schemaVersion":2,"agents":{"copilot-vscode":{"notifications":{"desktop":{"enabled":true},"webhook":{"enabled":true,"url":"http://127.0.0.1:1"}}}}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	key, c, _, err := b.Registration()
+	if err != nil {
+		t.Fatal(err)
+	}
+	policySnapshot, err := installruntime.ReadPolicySnapshot(ctx, control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = installruntime.Commit(ctx, installruntime.Request{ControlRoot: control, RuntimeRoot: runtimeRoot, Owner: ledger.Owner, ConsumerID: key, Consumer: c, ExpectedGeneration: &ledger.Generation, ExpectedPolicy: &policySnapshot.Preimage, PolicyFields: map[string]json.RawMessage{"route": json.RawMessage(`{"copilotVSCodeNotifications":{"desktop":true,"webhook":true,"manual":{"enabled":false}}}`)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := portable.Publish(b); err != nil {
+		t.Fatal(err)
+	}
+	policy, err := os.ReadFile(filepath.Join(control, "agent-notifications.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadDir(b.DataRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := io.NopCloser(strings.NewReader(`{"hook_event_name":"Stop","timestamp":"2026-10-10T05:00:00Z","stop_hook_active":false,"session_id":"TEST-private-session"}`))
+	var output bytes.Buffer
+	code := runCopilotVSCodeEvent([]string{"--event", "Stop", "--control-root", control, "--binding", b.BindingID}, input, &output)
+	if code != 0 || output.String() != "{}\n" {
+		t.Fatalf("registered denial leaked output: %d %q", code, output.String())
+	}
+	after, err := os.ReadDir(b.DataRoot)
+	if err != nil || len(after) != len(before) {
+		t.Fatal("denied Local wrote a claim/effect")
+	}
+	current, err := os.ReadFile(filepath.Join(control, "agent-notifications.json"))
+	if err != nil || !bytes.Equal(policy, current) {
+		t.Fatal("event repaired or enabled policy")
+	}
+	if _, err := os.Lstat(filepath.Join(root, "uap")); !os.IsNotExist(err) {
+		t.Fatal("event created UAP state")
+	}
 }

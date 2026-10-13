@@ -1,0 +1,342 @@
+name: Navigation Windows SDK cold click TEST canary
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/navigation-windows-sdk-coldclick.yml'
+      - 'tests/integration/navigation_windows_native_probe.cpp'
+      - 'tests/integration/navigation_windows_vendor_sdk_test.h'
+      - 'tests/integration/navigation_windows_vendor_metadata.ts'
+      - 'tests/integration/navigation_windows_vendor_acquisition.ts'
+      - 'tests/integration/windows_appsdk_build/**'
+      - 'tests/integration/navigation_windows_lua_launcher.cpp'
+      - 'tests/integration/navigation_windows_token_queries.h'
+      - 'opencode-plugin/package.json'
+      - 'opencode-plugin/package-lock.json'
+  workflow_dispatch:
+    inputs:
+      foreground_scenario:
+        description: 'Explicit TEST input foreground authority'
+        required: true
+        default: shell_foreground
+        type: choice
+        options:
+          - shell_foreground
+          - owned_test_foreground
+          - disposable_global_shortcut
+      history_diagnostic:
+        description: 'Observe SDK history before UI within the SAME 30s budget'
+        required: true
+        default: false
+        type: boolean
+      captureAfterFailure:
+        description: 'ONE public TEST desktop snapshot after collected matched-history UI failure'
+        required: true
+        default: false
+        type: boolean
+      prepareDesktop:
+        description: 'Run existing finite TEST OOBE setup before SDK effects (unknown stops chain)'
+        required: true
+        default: false
+        type: boolean
+permissions:
+  contents: read
+concurrency:
+  group: sdk-coldclick-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  sdk-coldclick:
+    if: github.repository == '777genius/agent-notifications' && github.run_attempt == 1
+    runs-on: windows-11-vs2026-arm
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: '24.21.0'
+      - name: Locked tooling and strict source typecheck
+        shell: pwsh
+        run: |
+          npm ci --prefix opencode-plugin --ignore-scripts --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { throw 'locked tooling unavailable' }
+          & ./opencode-plugin/node_modules/.bin/tsc.cmd --ignoreConfig --noEmit --allowImportingTsExtensions --strict --target ES2023 --module ESNext --moduleResolution bundler --types node --typeRoots ./opencode-plugin/node_modules/@types tests/integration/windows_appsdk_build/runtime-prerequisite.ts tests/integration/windows_appsdk_build/verify-runtime-package.ts tests/integration/navigation_windows_lua_preflight.ts tests/integration/windows_appsdk_build/sdk-coldclick.ts tests/integration/windows_appsdk_build/sdk-coldclick-vendor.ts tests/integration/navigation_windows_vendor_metadata.ts tests/integration/navigation_windows_native_e2e.ts
+          if ($LASTEXITCODE -ne 0) { throw 'focused typecheck failed' }
+      - name: Restore, verify bytes and compile (no SDK execution)
+        id: build
+        shell: pwsh
+        env:
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          if ((git rev-parse HEAD) -cne $env:SOURCE_SHA) { throw 'source mismatch' }
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products '*' -property installationPath
+          if (!$vs) { throw 'Visual Studio missing' }
+          $msbuild = Join-Path $vs 'MSBuild\Current\Bin\MSBuild.exe'
+          $project = 'tests\integration\windows_appsdk_build\SDKRuntimePrerequisite.vcxproj'
+          $out = Join-Path $env:RUNNER_TEMP 'TEST-windows-appsdk-build'
+          $packages = Join-Path $env:RUNNER_TEMP 'TEST-windows-appsdk-packages'
+          New-Item -ItemType Directory -Path $out,$packages -ErrorAction Stop | Out-Null
+          $env:NUGET_PACKAGES = $packages
+          & $msbuild $project /t:Restore /p:Configuration=Release /p:Platform=ARM64 "/p:RestorePackagesPath=$packages" "/p:OutDir=$out\" "/p:IntDir=$out\runtime-obj\" /verbosity:minimal
+          if ($LASTEXITCODE -ne 0) { throw 'locked restore failed' }
+          & $msbuild 'tests\integration\windows_appsdk_build\SDKColdClick.vcxproj' /t:Restore /p:Configuration=Release /p:Platform=ARM64 "/p:RestorePackagesPath=$packages" "/p:OutDir=$out\" "/p:IntDir=$out\cold-obj\" /verbosity:minimal
+          if ($LASTEXITCODE -ne 0) { throw 'cold project locked restore failed' }
+          $lock = 'tests\integration\windows_appsdk_build\packages.lock.json'
+          $dotnet = (Get-Command dotnet -CommandType Application -ErrorAction Stop).Source
+          node tests/integration/windows_appsdk_build/verify-runtime-package.ts $out $packages $lock $dotnet
+          if ($LASTEXITCODE -ne 0) { throw 'same restored runtime verification failed' }
+          & $msbuild $project /t:Build /p:Configuration=Release /p:Platform=ARM64 "/p:RestorePackagesPath=$packages" "/p:OutDir=$out\" "/p:IntDir=$out\runtime-obj\" /verbosity:minimal
+          if ($LASTEXITCODE -ne 0) { throw 'SDK prerequisite compile failed' }
+          & $msbuild 'tests\integration\windows_appsdk_build\SDKColdClick.vcxproj' /t:Build /p:Configuration=Release /p:Platform=ARM64 "/p:RestorePackagesPath=$packages" "/p:OutDir=$out\" "/p:IntDir=$out\cold-obj\" /verbosity:minimal
+          if ($LASTEXITCODE -ne 0) { throw 'SDK cold click compile failed' }
+          $cold = Join-Path $out 'SDKColdClick.exe'
+          "cold_exe=$cold" >> $env:GITHUB_OUTPUT
+          "cold_exe_sha256=$((Get-FileHash -LiteralPath $cold -Algorithm SHA256).Hash.ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+          $observer = Join-Path $out 'navigation-native-probe.exe'
+          $observerSource = Join-Path $env:GITHUB_WORKSPACE 'tests\integration\navigation_windows_native_probe.cpp'
+          $observerCmd = '"' + $vs + '\Common7\Tools\VsDevCmd.bat" -arch=arm64 -host_arch=arm64 && cl /nologo /std:c++20 /EHsc /W4 /DUNICODE /D_UNICODE "' + $observerSource + '" /Fe:"' + $observer + '" /Fo:"' + $out + '\navigation-native-probe.obj" /link windowsapp.lib ole32.lib oleaut32.lib shell32.lib propsys.lib advapi32.lib user32.lib uuid.lib uiautomationcore.lib'
+          & cmd /d /s /c $observerCmd
+          if ($LASTEXITCODE -ne 0) { throw 'fixed vendor metadata/install observer compile failed' }
+          "observer=$observer" >> $env:GITHUB_OUTPUT
+          "observer_sha256=$((Get-FileHash -Algorithm SHA256 $observer).Hash.ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+          $launcher = Join-Path $out 'TEST-sdk-launcher.exe'
+          $source = Join-Path $env:GITHUB_WORKSPACE 'tests\integration\navigation_windows_lua_launcher.cpp'
+          $cmd = '"' + $vs + '\Common7\Tools\VsDevCmd.bat" -arch=arm64 -host_arch=arm64 && cl /nologo /EHsc /W4 /std:c++20 /DUNICODE /D_UNICODE "' + $source + '" /Fe:"' + $launcher + '" /Fo:"' + $out + '\TEST-sdk-launcher.obj" /link advapi32.lib bcrypt.lib user32.lib wtsapi32.lib'
+          & cmd /d /s /c $cmd
+          if ($LASTEXITCODE -ne 0) { throw 'guarded launcher compile failed' }
+          $exe = Join-Path $out 'SDKRuntimePrerequisite.exe'
+          "exe=$exe" >> $env:GITHUB_OUTPUT
+          "exe_sha256=$((Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+          "launcher=$launcher" >> $env:GITHUB_OUTPUT
+          "launcher_sha256=$((Get-FileHash -LiteralPath $launcher -Algorithm SHA256).Hash.ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+      - name: Derive closed payload catalog from the SAME verified restored archives
+        id: inputs
+        shell: pwsh
+        run: |
+          $out = Join-Path $env:RUNNER_TEMP 'TEST-windows-appsdk-build'
+          $packages = Join-Path $env:RUNNER_TEMP 'TEST-windows-appsdk-packages'
+          $verified = Get-Content -LiteralPath (Join-Path $out 'runtime-verification.json') -Raw | ConvertFrom-Json
+          if (!$verified.packageVerified) { throw 'runtime verification evidence absent' }
+          $foundationVerified = Get-Content -LiteralPath (Join-Path $out 'foundation-verification.json') -Raw | ConvertFrom-Json
+          if (!$foundationVerified.packageVerified) { throw 'Foundation crypto verification evidence absent' }
+          $archive = Join-Path $packages 'microsoft.windowsappsdk.runtime\2.5.1\microsoft.windowsappsdk.runtime.2.5.1.nupkg'
+          $outerHash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($outerHash -cne '2fbd27012291be50cafed6942306964281d37167af6a6af3887e1163ec5cf063' -or $verified.archiveSHA256After -cne $outerHash) { throw 'frozen runtime archive mismatch' }
+          $dir = Join-Path $env:RUNNER_TEMP ('TEST-sdk-inputs-' + [guid]::NewGuid().ToString())
+          New-Item -ItemType Directory -Path $dir -ErrorAction Stop | Out-Null
+          function Copy-ClosedEntry($zip, [string]$name, [string]$target, [long]$cap) {
+            $entries = @($zip.Entries | Where-Object { $_.FullName -ceq $name })
+            if ($entries.Count -ne 1 -or $entries[0].Length -le 0 -or $entries[0].Length -gt $cap) { throw 'missing/duplicate/oversized payload entry' }
+            $input = $entries[0].Open()
+            $output = [IO.File]::Open($target, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+            try { $input.CopyTo($output); if ($output.Length -ne $entries[0].Length) { throw 'payload length changed' }; $output.Flush($true) } finally { $output.Dispose(); $input.Dispose() }
+          }
+          $runtime = [IO.Compression.ZipFile]::OpenRead($archive)
+          $files = @('Microsoft.WindowsAppRuntime.2.msix','Microsoft.WindowsAppRuntime.DDLM.2.msix','Microsoft.WindowsAppRuntime.Main.2.msix','Microsoft.WindowsAppRuntime.Singleton.2.msix')
+          try { foreach ($leaf in $files) { Copy-ClosedEntry $runtime ('tools/MSIX/win10-arm64/' + $leaf) (Join-Path $dir $leaf) 67108864 } } finally { $runtime.Dispose() }
+          foreach ($leaf in $files) {
+            $msix = [IO.Compression.ZipFile]::OpenRead((Join-Path $dir $leaf))
+            try {
+              Copy-ClosedEntry $msix 'AppxManifest.xml' (Join-Path $dir ($leaf + '.manifest.xml')) 262144
+              if ($leaf -ceq $files[0]) { Copy-ClosedEntry $msix 'Microsoft.WindowsAppRuntime.dll' (Join-Path $dir 'Microsoft.WindowsAppRuntime.dll') 67108864 }
+            } finally { $msix.Dispose() }
+          }
+          if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant() -cne $outerHash) { throw 'archive custody changed' }
+          $foundationRoot = Join-Path $packages 'microsoft.windowsappsdk.foundation\2.3.12'
+          $foundationArchive = Join-Path $foundationRoot 'microsoft.windowsappsdk.foundation.2.3.12.nupkg'
+          $foundationHash = (Get-FileHash -LiteralPath $foundationArchive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($foundationVerified.archiveSHA256After -cne $foundationHash) { throw 'verified Foundation custody mismatch' }
+          $foundation = [IO.Compression.ZipFile]::OpenRead($foundationArchive)
+          $bootstrap = Join-Path $dir 'Microsoft.WindowsAppRuntime.Bootstrap.dll'
+          try { Copy-ClosedEntry $foundation 'runtimes/win-arm64/native/Microsoft.WindowsAppRuntime.Bootstrap.dll' $bootstrap 16777216 } finally { $foundation.Dispose() }
+          if ((Get-FileHash -LiteralPath $foundationArchive -Algorithm SHA256).Hash.ToLowerInvariant() -cne $foundationHash) { throw 'Foundation archive changed' }
+          $bootstrapHash = (Get-FileHash -LiteralPath $bootstrap -Algorithm SHA256).Hash.ToLowerInvariant()
+          $builtBootstrap = Join-Path $out 'Microsoft.WindowsAppRuntime.Bootstrap.dll'
+          if ((Get-FileHash -LiteralPath $builtBootstrap -Algorithm SHA256).Hash.ToLowerInvariant() -cne $bootstrapHash) { throw 'import DLL differs from exact restored Foundation source' }
+          $provenance = @{runtimeVerified=$true; outerSHA256=$outerHash; foundationVersion='2.3.12'; foundationVerified=$true;
+            foundationArchiveSHA256=$foundationHash; foundationContentHash=$foundationVerified.actualContentHash;
+            bootstrapSourceEntry='runtimes/win-arm64/native/Microsoft.WindowsAppRuntime.Bootstrap.dll'; bootstrapSHA256=$bootstrapHash;
+            runtimeModuleSourceMSIXSHA256=(Get-FileHash -LiteralPath (Join-Path $dir $files[0]) -Algorithm SHA256).Hash.ToLowerInvariant();
+            runtimeModuleSourceEntry='Microsoft.WindowsAppRuntime.dll'; runtimeModuleSHA256=(Get-FileHash -LiteralPath (Join-Path $dir 'Microsoft.WindowsAppRuntime.dll') -Algorithm SHA256).Hash.ToLowerInvariant()}
+          $provenance | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $dir 'provenance.json') -Encoding utf8NoBOM
+          "root=$dir" >> $env:GITHUB_OUTPUT
+          "bootstrap=$bootstrap" >> $env:GITHUB_OUTPUT
+      - name: Explicit existing finite TEST desktop preparation before SDK effects
+        if: github.event_name == 'workflow_dispatch' && inputs.prepareDesktop
+        id: desktop
+        shell: pwsh
+        env:
+          CI: 'true'
+          AGENT_NOTIFY_NAVIGATION_WINDOWS_E2E: '1'
+          NAVIGATION_SOURCE_SHA: ${{ github.sha }}
+          NAVIGATION_WINDOWS_RUNNER: windows-11-vs2026-arm
+          NAVIGATION_WINDOWS_PREFLIGHT_ONLY: '1'
+          NAVIGATION_WINDOWS_OOBE_SETUP_TEST: '1'
+          NAVIGATION_WINDOWS_CENTER_SURFACE: '0'
+          NAVIGATION_WINDOWS_TASKBAR_UIA: '0'
+          NAVIGATION_WINDOWS_DESKTOP_CAPTURE_TEST: '0'
+          NAVIGATION_WINDOWS_OOBE_PREFLIGHT_TEST: '0'
+          SDK_OBSERVER: ${{ steps.build.outputs.observer }}
+          SDK_OBSERVER_SHA256: ${{ steps.build.outputs.observer_sha256 }}
+        run: |
+          if ($env:GITHUB_RUN_ATTEMPT -ne '1' -or $env:GITHUB_EVENT_NAME -cne 'workflow_dispatch' -or $env:GITHUB_REPOSITORY -cne '777genius/agent-notifications' -or (git rev-parse HEAD) -cne $env:NAVIGATION_SOURCE_SHA) { throw 'first exact-source manual TEST attempt required' }
+          $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User
+          $sidBytes = [byte[]]::new($sid.BinaryLength); $sid.GetBinaryForm($sidBytes, 0)
+          $sidHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($sidBytes)).ToLowerInvariant()
+          $session = [Diagnostics.Process]::GetCurrentProcess().SessionId
+          $before = (Get-FileHash -LiteralPath $env:SDK_OBSERVER -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($before -cne $env:SDK_OBSERVER_SHA256) { throw 'compiled observer pin mismatch' }
+          node tests/integration/navigation_windows_native_e2e.ts $env:SDK_OBSERVER
+          $actorExit = $LASTEXITCODE
+          if ((Get-Item -LiteralPath $env:GITHUB_OUTPUT).Length -gt 4096) { throw 'bounded preparation output required' }
+          $lines = [IO.File]::ReadAllLines($env:GITHUB_OUTPUT)
+          if ($lines.Count -ne 1 -or !$lines[0].StartsWith('evidence_root=')) { throw 'single preparation handoff required' }
+          $root = $lines[0].Substring('evidence_root='.Length)
+          $evidencePath = Join-Path $root 'evidence.json'; $records = Join-Path $root 'oobe-setup-records.json'
+          if ((Get-Item -LiteralPath $evidencePath).Length -gt 131072 -or (Get-Item -LiteralPath $records).Length -gt 6291456) { throw 'preparation evidence exceeds fixed bounds' }
+          $e = [IO.File]::ReadAllText($evidencePath) | ConvertFrom-Json
+          if ($actorExit -ne 0 -or $e.status -cne 'guest_setup_complete' -or $e.oobeSetupQualified -ne $true -or $e.captureQualified -ne $true -or $e.oobeSetupActorCollected -ne $true -or $e.captureActorCollected -ne $true -or $e.invokeEffectUncertain -ne $false -or $e.sourceSHA -cne $env:NAVIGATION_SOURCE_SHA -or $e.binarySHA256 -cne $before) { throw 'existing verifySetup/capture contract failed; no SDK effects or replay' }
+          if (@($e.steps).Count -ne 4 -or (@($e.steps.mode) -join ',') -cne 'center-policy,preflight,oobe-setup,desktop-capture' -or @($e.steps | Where-Object { $_.status -ne 0 -or $_.signal -or $_.error -or $_.pid -le 0 }).Count -ne 0 -or (Get-FileHash -LiteralPath $records -Algorithm SHA256).Hash.ToLowerInvariant() -cne $e.setupRecordsSHA256) { throw 'actual collected preparation actors/packet required' }
+          $capture = $e.'desktop-capture.json'
+          foreach ($t in @($capture.tokenBefore, $capture.tokenAfter)) {
+            if (!$t -or @($t.PSObject.Properties).Count -ne 6 -or $t.sidSHA256 -cnotmatch '^[a-f0-9]{64}$' -or $t.authLUIDSHA256 -cnotmatch '^[a-f0-9]{64}$' -or $t.elevated -isnot [bool] -or $t.elevationType -notin @(1, 2, 3)) { throw 'actual AUX token shape required' }
+            foreach ($key in @('session', 'integrityRID')) { if (($t.$key -isnot [long] -and $t.$key -isnot [int]) -or $t.$key -lt 0 -or $t.$key -gt 4294967295) { throw 'bounded actual token integer required' } }
+            if (($t.elevationType -eq 2 -and !$t.elevated) -or ($t.elevationType -eq 3 -and $t.elevated)) { throw 'inconsistent actual token type' }
+          }
+          foreach ($key in @('sidSHA256', 'authLUIDSHA256', 'session', 'elevated', 'elevationType', 'integrityRID')) { if ($capture.tokenBefore.$key -cne $capture.tokenAfter.$key) { throw 'actual AUX capture role changed' } }
+          if ($capture.tokenBefore.sidSHA256 -cne $sidHash -or $capture.tokenBefore.session -ne $session -or $capture.session -ne $session -or $capture.binarySHA256 -cne $before -or $e.'capture-after-preflight.json'.session -ne $session -or [Security.Principal.WindowsIdentity]::GetCurrent().User.Value -cne $sid.Value -or [Diagnostics.Process]::GetCurrentProcess().SessionId -ne $session -or (Get-FileHash -LiteralPath $env:SDK_OBSERVER -Algorithm SHA256).Hash.ToLowerInvariant() -cne $before -or (git rev-parse HEAD) -cne $env:NAVIGATION_SOURCE_SHA) { throw 'same-job observer/SID/session custody changed' }
+          # Capture AUX role is observed, possibly High. Pre-OOBE authLUID/full-token continuity is not qualified.
+      - name: Explicit ONE disposable-CI deployment/bootstrap experiment
+        if: github.event_name == 'workflow_dispatch' && (!inputs.prepareDesktop || steps.desktop.outcome == 'success')
+        id: execute
+        shell: pwsh
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+          SDK_INPUTS: ${{ steps.inputs.outputs.root }}
+          BOOTSTRAP_DLL: ${{ steps.inputs.outputs.bootstrap }}
+          SDK_EXE: ${{ steps.build.outputs.exe }}
+          SDK_EXE_SHA256: ${{ steps.build.outputs.exe_sha256 }}
+          LUA_LAUNCHER_EXE: ${{ steps.build.outputs.launcher }}
+          LUA_LAUNCHER_SHA256: ${{ steps.build.outputs.launcher_sha256 }}
+        run: |
+          if ((git rev-parse HEAD) -cne $env:SOURCE_SHA) { throw 'source mismatch' }
+          node tests/integration/windows_appsdk_build/runtime-prerequisite.ts
+          if ($LASTEXITCODE -ne 0) { throw 'runtime prerequisite unknown; preserve intent; no retry/cleanup' }
+      - name: Reuse fixed official vendor metadata and signature fixture (no registration/launch)
+        if: github.event_name == 'workflow_dispatch' && (!inputs.prepareDesktop || steps.desktop.outcome == 'success')
+        id: vendor_metadata
+        shell: pwsh
+        env:
+          NAVIGATION_SOURCE_SHA: ${{ github.sha }}
+          NAVIGATION_WINDOWS_VENDOR_METADATA_E2E: '1'
+        run: |
+          $sdk = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\bin'
+          $versions = @(Get-ChildItem -LiteralPath $sdk -Directory | Where-Object { $_.Name -match '^10\.0\.\d+\.0$' } | Sort-Object { [version]$_.Name } -Descending)
+          $signtool = $null
+          foreach ($version in $versions) {
+            $candidate = Join-Path $version.FullName 'arm64\signtool.exe'
+            if (Test-Path -LiteralPath $candidate -PathType Leaf) { $signtool = $candidate; break }
+          }
+          if (!$signtool) { throw 'image signature tool unavailable' }
+          $env:NAVIGATION_DIAGNOSTIC_PWSH = (Get-Command pwsh -CommandType Application -ErrorAction Stop).Source
+          node tests/integration/navigation_windows_vendor_metadata.ts '${{ steps.build.outputs.observer }}' $signtool
+          if ($LASTEXITCODE -ne 0) { throw 'fixed vendor signature/metadata unknown' }
+      - name: Install only absent exact TEST vendor through existing fixed actor
+        if: github.event_name == 'workflow_dispatch' && (!inputs.prepareDesktop || steps.desktop.outcome == 'success')
+        id: vendor
+        shell: pwsh
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+          SDK_VENDOR_METADATA_ROOT: ${{ steps.vendor_metadata.outputs.evidence_root }}
+        run: |
+          node tests/integration/windows_appsdk_build/sdk-coldclick-vendor.ts
+          if ($LASTEXITCODE -ne 0) { throw 'vendor deployment unknown; no retry/remove' }
+      - name: ONE SDK sender death then genuine Shell cold click
+        if: github.event_name == 'workflow_dispatch' && (!inputs.prepareDesktop || steps.desktop.outcome == 'success')
+        id: coldclick
+        shell: pwsh
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+          SDK_PREREQUISITE_EVIDENCE: ${{ steps.execute.outputs.evidence_root }}
+          SDK_VENDOR_EVIDENCE: ${{ steps.vendor.outputs.evidence_file }}
+          SDK_COLDCLICK_DISPOSABLE_CLIENT: windows-11-vs2026-arm
+          SDK_COLDCLICK_HISTORY: ${{ inputs.history_diagnostic }}
+          SDK_COLDCLICK_CAPTURE: ${{ inputs.captureAfterFailure }}
+          SDK_CAPTURE_EXE: ${{ steps.build.outputs.observer }}
+          SDK_CAPTURE_EXE_SHA256: ${{ steps.build.outputs.observer_sha256 }}
+          SDK_COLDCLICK_SCENARIO: ${{ inputs.foreground_scenario }}
+          SDK_COLD_EXE: ${{ steps.build.outputs.cold_exe }}
+          SDK_COLD_EXE_SHA256: ${{ steps.build.outputs.cold_exe_sha256 }}
+          BOOTSTRAP_DLL: ${{ steps.inputs.outputs.bootstrap }}
+          LUA_LAUNCHER_EXE: ${{ steps.build.outputs.launcher }}
+          LUA_LAUNCHER_SHA256: ${{ steps.build.outputs.launcher_sha256 }}
+        run: |
+          if ((git rev-parse HEAD) -cne $env:SOURCE_SHA) { throw 'source mismatch' }
+          node tests/integration/windows_appsdk_build/sdk-coldclick.ts
+          if ($LASTEXITCODE -ne 0) { throw 'cold callback unsupported/unknown; no replay or guessed registration cleanup' }
+      - name: Preserve bounded public NuGet verification diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: TEST-sdk-package-verification-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/TEST-windows-appsdk-build/runtime-verification.json
+            ${{ runner.temp }}/TEST-windows-appsdk-build/foundation-verification.json
+            ${{ runner.temp }}/TEST-windows-appsdk-build/runtime-version.stdout
+            ${{ runner.temp }}/TEST-windows-appsdk-build/runtime-version.stderr
+            ${{ runner.temp }}/TEST-windows-appsdk-build/runtime-verify.stdout
+            ${{ runner.temp }}/TEST-windows-appsdk-build/runtime-verify.stderr
+            ${{ runner.temp }}/TEST-windows-appsdk-build/foundation-version.stdout
+            ${{ runner.temp }}/TEST-windows-appsdk-build/foundation-version.stderr
+            ${{ runner.temp }}/TEST-windows-appsdk-build/foundation-verify.stdout
+            ${{ runner.temp }}/TEST-windows-appsdk-build/foundation-verify.stderr
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Preserve bounded own TEST evidence
+        if: always() && github.event_name == 'workflow_dispatch' && steps.execute.outputs.evidence_root != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: TEST-sdk-runtime-prerequisite-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.execute.outputs.evidence_root }}/*.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Preserve only closed bounded TEST canary records
+        if: always() && github.event_name == 'workflow_dispatch' && steps.coldclick.outputs.evidence_root != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: TEST-sdk-coldclick-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.coldclick.outputs.evidence_root }}/sdk-coldclick-evidence.json
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Preserve only bounded TEST vendor preparation records
+        if: always() && github.event_name == 'workflow_dispatch' && steps.vendor_metadata.outputs.evidence_root != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: TEST-sdk-coldclick-vendor-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ steps.vendor_metadata.outputs.evidence_root }}/vendor-evidence.json
+            ${{ steps.vendor_metadata.outputs.evidence_root }}/package-metadata.json
+            ${{ steps.vendor_metadata.outputs.evidence_root }}/sdk-coldclick-vendor.json
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Preserve validated public TEST post-failure desktop snapshot
+        if: always() && github.event_name == 'workflow_dispatch' && steps.coldclick.outputs.capture_root != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: TEST-sdk-post-failure-capture-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ steps.coldclick.outputs.capture_root }}/desktop-capture.json
+            ${{ steps.coldclick.outputs.capture_root }}/desktop-capture.png
+          if-no-files-found: error
+          retention-days: 14
+      - name: Preserve bounded TEST preparation records even on failure (no raw pixels)
+        if: always() && steps.desktop.outputs.evidence_root != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: TEST-sdk-desktop-preparation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ steps.desktop.outputs.evidence_root }}/evidence.json
+            ${{ steps.desktop.outputs.evidence_root }}/oobe-setup-records.json
+          if-no-files-found: warn
+          retention-days: 14

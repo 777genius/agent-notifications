@@ -99,6 +99,8 @@ func (o Context) Scope() (source, session string) {
 }
 
 type RoutePolicy struct {
+	Platform            string
+	Linux               notification.LinuxBinding
 	LocalRouting        bool
 	AllowUnknownCaller  bool
 	AllowCallerAsserted bool
@@ -139,6 +141,12 @@ func ResolveCodex(o Context, p RoutePolicy) Target {
 	}
 	if o.Provenance == CallerAsserted && !p.AllowCallerAsserted {
 		return no("caller_asserted_disabled")
+	}
+	if p.Platform == "linux" {
+		if !Text(p.Linux.SnapshotPath, 1024, true) || !Text(p.Linux.SHA256, 64, true) {
+			return no("application_unavailable")
+		}
+		return Target{Desktop: notification.DesktopTarget{Provider: "codex", ThreadID: o.SessionID, Linux: p.Linux}, Navigation: notification.NavigationResult{Capability: "available", Precision: "chat_id", Scope: "selected_linux_installation", Reason: "configured_codex_desktop"}}
 	}
 	if !Text(p.ApplicationPath, 1024, true) || !Text(p.TeamID, 256, true) {
 		return no("application_unavailable")

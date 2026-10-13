@@ -8,10 +8,9 @@ Run `/claude-notifications-go:settings` to configure sounds, volume, webhooks, a
 
 ## OpenCode channels and settings
 
-OpenCode uses the shared resolver below and supports `agents.opencode` overrides.
-It sends silent generic messages for `task_complete`, `question`,
-`permission_request` and `opencode_error`; sound, click-to-focus and contentful
-Claude status templates do not apply. Channel settings can restrict delivery,
+Managed OpenCode uses its own control-root policy, selected with `config path --target opencode --json` and `config inspect --target opencode --json`. It does not use the default shared config target below. See [installed OpenCode settings](opencode-notifications.md#edit-installed-opencode-settings) for custom control roots and revision-checked edits.
+It sends silent alerts for `task_complete`, `question`,
+`permission_request` and `opencode_error`. Desktop alerts can include native session titles and current question text; webhooks use generic text. Sound, click-to-focus and Claude status templates do not apply. Channel settings can restrict delivery,
 but they do not grant consent: use `setup-opencode install|update` with explicit
 `--desktop`, `--webhook` or both. This changes only OpenCode channel consent and
 does not enable portable MCP notifications. Webhooks also need a configured,
@@ -36,7 +35,8 @@ One file is selected per environment context: explicit **E**, otherwise existing
 | L: existing legacy file, Windows | `%USERPROFILE%\.claude\claude-notifications-go\config.json` |
 | N: fresh macOS | `$HOME/Library/Application Support/agent-notifications/config.json` |
 | N: fresh Linux | Absolute nonempty `$XDG_CONFIG_HOME/agent-notifications/config.json`, otherwise `$HOME/.config/agent-notifications/config.json` |
-| N: fresh Windows | `%APPDATA%\agent-notifications\config.json` |
+| N: fresh Windows, safe profile | `%APPDATA%\agent-notifications\config.json` |
+| N: Windows sandbox profile, no existing config | Absolute `%PROGRAMDATA%` (native KnownFolder if unset) + `agent-notifications-<Windows user SID>\config.json` |
 
 Relative XDG_CONFIG_HOME is ignored with a diagnostic. Windows uses USERPROFILE for L, not Git Bash HOME; missing/relative APPDATA without L is an error. macOS ignores XDG_CONFIG_HOME. Missing home in automatic mode is an error; a valid explicit E supports portable contexts without HOME/APPDATA.
 
@@ -55,6 +55,122 @@ Before any updater deletes/refreshes cache, personalized or unknown historical c
 Existing L with v1-shaped JSON remains readable by the old Go reader, which ignores additive unknown fields. The old wizard loses unknown fields and must not run concurrently with the current settings editor. Update all installed runtimes before selecting N/E paths; keep one canonical configuration file shared by those runtimes.
 
 For support, share only `config inspect --json`, never `cat` of config; keep saved diagnostics private and review paths before posting. The response includes selection (path/source/exists/diagnostics), revision, schemaVersion, valid, optional errorCode, and safe settings: desktopEnabled, desktopSound, volume and known-status enabled/desktopEnabled/webhookEnabled. It omits free-form sounds, webhook secrets/payloads and unknown fields.
+
+On Windows, `ConfigPublicReadable` is a warning about read grants on the selected
+configuration file, not a check of `%APPDATA%` or the entire profile. It does not
+by itself reject a hook read. `ConfigPermissionDenied` can instead come from an
+OS access denial, the config/lock ACL, or a writable ancestor. `config init`
+and failed `config inspect` now print an ACL rejection's actual object path,
+reason, and trustee SID (or owner SID for an owner rejection). `config init
+--json` and failed `config inspect --json` include optional `permissionFailure`
+with `objectPath`, `reason`, and available `trusteeSid`, `ownerSid`, `accessMask`.
+The mask contains the rejected rights, not the whole grant. OS denial cannot
+identify an account and omits SID/mask. Account names are not resolved; match the
+SID against `Get-Acl`/`icacls` locally, including unresolved SIDs. Parser/flag
+errors remain content-free, and hooks retain their existing output behavior.
+A genuinely absent config still inspects as defaults; inspect does not test
+whether initialization could write it. Managed reads and
+writes inspect each directory component below the volume root, reject reparse
+points and unrelated write/delete/ACL-change grants, and pin directories against
+replacement. Initialization of a profile target also checks `%USERPROFILE%` to coordinate the
+`.agent-notifications-config.lock` selection guard. The automatic ProgramData
+target uses a private selection guard beside its config instead. An unrelated read/execute
+grant on an ancestor (including `CodexSandboxUsers:(RX)`) is allowed. `OWNER
+RIGHTS` grants apply to the actual object owner; they are allowed when that owner
+is trusted. New config and lock files grant access only to the current user and
+SYSTEM; existing ACLs are never repaired automatically.
+
+Inspect permissions with PowerShell `Get-Acl -LiteralPath <path>` or
+`icacls <path>` for the selected file, its `.lock` sibling, containing directories,
+and the profile guard. Repair only the object carrying the unexpected grant;
+do not remove read access from all of `%APPDATA%` or the profile. Keep the current
+user and SYSTEM access, and preserve existing config contents. After repair,
+run `config init` and `config inspect --json`. To inspect managed setup after
+`installation needs inspection`, run `setup-notifications status --json`
+(optionally `--control-root <absolute managed control directory>`).
+`--provider claude` belongs to configure/register operations, not status.
+
+### Windows sandbox profile with write/delete grants
+
+If `%USERPROFILE%` grants an unrelated principal `(M,DC)` (Modify and
+DeleteChild), automatic initialization and managed reads can return
+`ConfigPermissionDenied` even after the config directory is private. A parent
+DeleteChild grant permits replacing its immediate children; disabling inheritance
+only on the config directory does not secure the whole path. Do not exempt
+`CodexSandboxUsers` or remove sandbox-required grants from the entire profile.
+
+For a new installation with no legacy or APPDATA config, the current Windows
+runtime automatically selects a private SID-specific directory in the native
+ProgramData folder when the profile/creation ancestry fails ACL checks. A supplied
+`PROGRAMDATA` must be an absolute path; custom roots retain strict ancestor
+checks. The special handling of system add-only rights applies only to the
+actual native KnownFolder and its volume root. Run
+`config init` normally; no elevation, override or manual move is needed on a
+standard Windows installation. CLI and hooks running as that Windows user select
+the same file. Once created, it remains selected if the profile ACL is later
+repaired. Its directory, config and lock must remain private; hostile precreated
+entries, reparse points or unsafe ProgramData permissions cause a clear error,
+without permission rewriting or a random alternative directory.
+
+Existing legacy/APPDATA config, including malformed or inaccessible entries and
+recovery artifacts, retains priority before a private ProgramData store is
+established. If a profile config appears alongside that established store,
+automatic selection fails with `ConfigConflict`; choose the intended file with
+`AGENT_NOTIFICATIONS_CONFIG`. This prevents an untrusted profile writer from
+redirecting hooks to newly planted settings. Both files remain untouched. The runtime never hides it by creating a
+fresh default or automatically imports potentially unsafe settings. If such an
+existing config is below writable ancestry, or when using an older runtime,
+use an explicit configuration outside that ancestry. An explicit path still
+checks its own directories and private target lock; it can skip an unavailable
+profile selection guard. Another path under `%USERPROFILE%`, including
+`%LOCALAPPDATA%`, does not solve this case.
+
+For example, an administrator can create a **new**, user-specific directory at
+the system drive root. Run this PowerShell provision step as the affected user
+with elevation (not as a different administrator account). It refuses an
+existing directory and changes no profile or ancestor ACL:
+
+```powershell
+$ErrorActionPreference = 'Stop'
+$sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+$dir = Join-Path ($env:SystemDrive + '\') ("agent-notifications-" + $sid)
+if (Test-Path -LiteralPath $dir) { throw "Directory already exists: $dir" }
+New-Item -ItemType Directory -Path $dir | Out-Null
+$acl = New-Object System.Security.AccessControl.DirectorySecurity
+$acl.SetSecurityDescriptorSddlForm("O:${sid}D:P(A;OICI;FA;;;${sid})(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)")
+Set-Acl -LiteralPath $dir -AclObject $acl
+```
+
+Back in the affected user's ordinary shell, set the explicit **file** path:
+
+```powershell
+$sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+$dir = Join-Path ($env:SystemDrive + '\') ("agent-notifications-" + $sid)
+$env:AGENT_NOTIFICATIONS_CONFIG = Join-Path $dir 'config.json'
+```
+
+Using the recorded installed executable, run `config path --json`, then
+`config init` and `config inspect --json`. If preserving an existing personalized
+config, stop its writers and use `config init --from <verified source file>`
+instead of initializing defaults; retain the original file. If the source has a
+managed `.lock` under the writable profile, importing directly still checks that
+unsafe ancestry. In that case, explicitly make a byte-preserving copy into the
+new private directory under a different filename, verify its SHA-256 against the
+original, and import that copy (without a source `.lock`). Do not use inspect
+output as the source document. Initialization is create-only. Stop if initialization reports another permission error and inspect
+that target's complete ACL chain; do not weaken its checks.
+
+Every agent and hook must inherit the same override. To persist it for this
+Windows user, after successful initialization:
+
+```powershell
+[Environment]::SetEnvironmentVariable('AGENT_NOTIFICATIONS_CONFIG', $env:AGENT_NOTIFICATIONS_CONFIG, 'User')
+```
+
+Restart Windows Terminal and agent applications so they inherit the variable,
+then confirm the same selected path in their hook context. Leave `%USERPROFILE%`
+and `%APPDATA%` pointing to their real locations. This storage workaround is
+supported by v1.49.1 and does not depend on the separate OWNER RIGHTS fix.
 
 The following JSON illustrates the schema. Do not replace your existing document with it; apply only explicitly requested leaf edits:
 
@@ -89,6 +205,7 @@ The following JSON illustrates the schema. Do not replace your existing document
     "notifyOnlyWhenUnfocused": false,
     "notifyDelaySeconds": 0,
     "respectDoNotDisturb": "off",
+    "replaceNotificationsPerSession": false,
     "suppressFilters": [
       {
         "name": "Suppress ClaudeProbe completions (remote-control)",
@@ -160,6 +277,7 @@ hides native and generated names without hiding the question or project.
 | `notifyDelaySeconds` | `0` | Wait N seconds before delivering a desktop notification (capped at 25s by the hook timeout). With `notifyOnlyWhenUnfocused`, focus is re-checked after the wait. Webhooks are unaffected. |
 | `respectDoNotDisturb` | `"off"` | Honour the desktop's Do Not Disturb state. `"silent"` still delivers the banner (so it reaches the notification centre) but skips the plugin's sound; `"suppress"` skips the notification entirely. Linux only for now (KDE Plasma, GNOME, XFCE, dunst); other platforms always report "not in DND". Webhooks are unaffected. See [Do Not Disturb](DO_NOT_DISTURB.md). |
 | `respectDisplaySleep` | `false` | Skip the plugin's own sound while every display is asleep; the banner is still delivered. macOS only for now; other platforms always report "not asleep". Independent of `respectDoNotDisturb`. Webhooks are unaffected. |
+| `replaceNotificationsPerSession` | `false` | macOS only. Let a session's newest desktop notification **replace** its previous banner in place instead of stacking a new one. Different sessions never collide. Default `false` keeps every banner so unread alerts are never silently dropped. |
 | `suppressQuestionAfterTaskCompleteSeconds` | `12` | Suppress question notifications for N seconds after task complete |
 | `suppressQuestionAfterAnyNotificationSeconds` | `7` | Suppress question notifications for N seconds after any notification |
 | `suppressFilters` | `[]` | Array of rules to suppress notifications by status, git branch, and/or folder. Each rule is an AND of its fields; omitted fields match any value. Set `gitBranch` to `""` to match sessions outside git repos. |
@@ -273,6 +391,24 @@ asleep" and the notification keeps its sound.
 This is a different signal from Do Not Disturb - a display can go to sleep
 without Focus/DND being on, and DND can be on with the display wide awake - so
 the two options are independent and compose freely.
+
+### Replace Per-Session Banners (macOS)
+
+By default every desktop notification carries a unique identifier, so banners stack and nothing is ever lost - a session that finishes several tasks (or, for Codex, crosses the sandbox boundary repeatedly in "Approve for me" mode) produces one banner per event.
+
+On macOS `terminal-notifier -group` is the `UNNotificationRequest.identifier`: delivering a request that reuses a value replaces the previous banner in place. Setting `replaceNotificationsPerSession: true` keys that identifier on the Claude/Codex session id, so a session's newest banner replaces its own previous banner while other sessions stay untouched.
+
+```json
+{
+  "notifications": {
+    "replaceNotificationsPerSession": true
+  }
+}
+```
+
+- Conversation grouping in Notification Center is unchanged - it stays on the session thread (`-threadID`).
+- Notifications with no session id (or `unknown`) always stay unique, so unrelated alerts are never collapsed.
+- Trade-off: a replaced banner disappears from Notification Center, so earlier alerts from that session are no longer visible. Leave it off (the default) if you step away and need to catch up on every alert.
 
 ### Sound Options
 

@@ -77,10 +77,20 @@ func renumberSandbox(t *testing.T) *renumberEnv {
 	t.Cleanup(cancel)
 	sender := filepath.Join(root, "sender")
 	_, file, _, _ := runtime.Caller(0)
-	cmd := exec.CommandContext(ctx, "go", "build", "-o", sender, "./cmd/claude-notifications")
+	cmd := exec.CommandContext(ctx, "go", "build", "-trimpath", "-ldflags", "-s -w", "-o", sender, "./cmd/claude-notifications")
 	cmd.Dir = filepath.Clean(filepath.Join(filepath.Dir(file), "../.."))
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("build sender: %v %s", err, out)
+	}
+	// Stage the release CLI, with the external managed-release 32 MiB contract.
+	info, err := os.Lstat(sender)
+	if err != nil || !info.Mode().IsRegular() {
+		t.Fatalf("owned release fixture is not a regular file: %v", err)
+	}
+	const releaseLimit = 32 << 20
+	t.Logf("owned release fixture %s: bytes=%d limit=%d", sender, info.Size(), releaseLimit)
+	if info.Size() <= 0 || info.Size() > releaseLimit {
+		t.Fatal("release fixture exceeds managed-release size contract")
 	}
 	control := filepath.Join(root, "control")
 	if err := os.Mkdir(control, 0700); err != nil {

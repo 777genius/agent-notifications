@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup><TargetName>SDKColdClick</TargetName></PropertyGroup>
+  <Import Project="SDKContract.vcxproj" />
+  <PropertyGroup><ProjectGuid>{A92B240A-FBA0-4A65-B4C7-99EE1825D054}</ProjectGuid><TargetName>SDKColdClick</TargetName></PropertyGroup>
+  <ItemGroup><ClCompile Remove="SDKContract.cpp" /><ClCompile Include="SDKColdClick.cpp" /></ItemGroup>
+  <ItemDefinitionGroup>
+    <ClCompile><RuntimeLibrary>MultiThreaded</RuntimeLibrary><PreprocessorDefinitions>NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions></ClCompile>
+    <Link><AdditionalDependencies>advapi32.lib;bcrypt.lib;version.lib;psapi.lib;ole32.lib;oleaut32.lib;uiautomationcore.lib;wtsapi32.lib;%(AdditionalDependencies)</AdditionalDependencies></Link>
+  </ItemDefinitionGroup>
+</Project>

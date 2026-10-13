@@ -17,6 +17,7 @@ import (
 	"github.com/777genius/agent-notifications/internal/agentnotify/origin"
 	policyruntime "github.com/777genius/agent-notifications/internal/agentnotify/runtime"
 	"github.com/777genius/agent-notifications/internal/installruntime"
+	"github.com/777genius/agent-notifications/internal/notification"
 )
 
 // Application is an operator-selected local identity, never a payload route.
@@ -51,6 +52,9 @@ type Options struct {
 	Platform                                                  string
 	JournalClock                                              journal.Clock
 	VerifyApplication                                         func(context.Context, Application) error
+	// VerifyLinuxBinding checks an already installed immutable callback and its
+	// selected vendor resources offline. It never registers or activates native.
+	VerifyLinuxBinding func(context.Context, notification.LinuxBinding) error
 	// Fault is an inert test seam at durable provisioning boundaries.
 	Fault func(string) error
 }
@@ -337,10 +341,17 @@ func (o Options) validatePrepared(ctx context.Context, s installruntime.PolicySn
 	if e != nil {
 		return fail("configuration_invalid", e)
 	}
-	if (o.Platform == "linux" || o.Platform == "windows") && p.Route.LocalRouting {
-		return fail("unsupported_platform", fmt.Errorf("%s explicit setup supports navigation none", o.Platform))
-	}
-	if p.Route.LocalRouting {
+	if p.Route.LocalRouting && o.Platform != "darwin" {
+		if o.Platform != "linux" || p.Route.ApplicationPath != "" || p.Route.TeamID != "" {
+			return fail("unsupported_platform", fmt.Errorf("%s does not support the selected application route", o.Platform))
+		}
+		if p.Route.Linux == (notification.LinuxBinding{}) || o.VerifyLinuxBinding == nil {
+			return fail("linux_callback_unavailable", fmt.Errorf("install a supported Linux callback before enabling local routing"))
+		}
+		if e = o.VerifyLinuxBinding(ctx, p.Route.Linux); e != nil {
+			return fail("linux_callback_unavailable", e)
+		}
+	} else if p.Route.LocalRouting {
 		a := Application{p.Route.ApplicationPath, p.Route.TeamID}
 		if !origin.Text(a.Path, 1024, true) || !filepath.IsAbs(a.Path) || filepath.Clean(a.Path) != a.Path || filepath.Ext(a.Path) != ".app" || len(a.Path) > 1024 || len(a.TeamID) != 10 {
 			return fail("invalid_route", fmt.Errorf("select an absolute local .app and its verified ten-character team ID"))

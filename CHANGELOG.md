@@ -7,6 +7,99 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.49.2] - 2026-10-13
+
+### Fixed
+- Initialize a fresh Windows configuration automatically in a private user-specific ProgramData directory when Codex sandbox write/delete grants make the profile unsafe, without changing sandbox ACLs or requiring administrator access ([#466](https://github.com/777genius/agent-notifications/issues/466), [#471](https://github.com/777genius/agent-notifications/pull/471)).
+- Explain Windows configuration permission failures with the rejected folder, trustee SID and access mask; recognize trusted OWNER RIGHTS grants ([#469](https://github.com/777genius/agent-notifications/pull/469), [#470](https://github.com/777genius/agent-notifications/pull/470)).
+- Preserve the shared OpenCode managed runtime during cache upgrades ([#468](https://github.com/777genius/agent-notifications/pull/468)).
+
+### Platform notes
+- Existing configurations and explicit paths retain precedence. An existing configuration under unsafe profile ancestry still needs explicit recovery; the plugin does not silently migrate or reset it. A profile configuration appearing beside an established private fallback is rejected as a conflict.
+- Windows qualification covers fresh initialization, editing, ACL repair, hostile precreation and real Claude/Codex hook webhooks with administrator access and privileges disabled. It does not establish interactive desktop banner visibility or resolve a separate caller/routing policy failure.
+- This release uses the basic five-platform artifact profile with separate downloaded macOS and Codex checks; it does not claim eleven-cell OpenCode, full native, cold-start, physical Intel or live-provider qualification.
+
+## [1.49.1] - 2026-10-12
+
+### Added
+- Cursor CLI notifications through the public UAP hook SDK and managed installer, including disable, update and uninstall with existing hooks preserved ([#400](https://github.com/777genius/agent-notifications/pull/400), [#459](https://github.com/777genius/agent-notifications/pull/459)).
+- Cursor Stop desktop delivery and opt-in webhooks on qualified Linux amd64, macOS arm64 and native Windows amd64 configurations.
+
+### Fixed
+- Complete fresh Cursor CLI bootstrap through a managed runtime preparation and a separate integration confirmation; initialize the bound global configuration and apply the confirmed consent without losing policy or generation fences.
+- Use the stable executable version for the managed macOS notifier bundle ([commit](https://github.com/777genius/agent-notifications/commit/329fc6235f050cfd3e025746e5d1e0ac4979cde0)).
+
+### Platform notes
+- The v1.49.0 tag and draft remain unpublished after the fresh-bootstrap check failed; this candidate includes the corrective changes.
+- Cursor support is for CLI, not Cursor IDE. Qualified CLI versions are Linux 2026.09.28-64d2043, macOS arm64 2026.09.18-9a7762b and Windows amd64 2026.10.01-e373342. Installation rejects unsupported versions and platform tuples.
+- Stop indicates that the agent loop ended; it does not prove task success. Cursor alerts use fixed informational text, without sounds, click-to-focus, question detection or permission-request notifications.
+- Linux requires the qualified filesystem identity contract; successful delivery on the CI kernel/filesystem does not establish compatibility with every Linux host. Windows CI proves submission to the Toast API, not interactive banner visibility.
+- The release uses the basic five-platform artifact profile with separate downloaded macOS and Codex checks; it does not claim the full native or eleven-cell OpenCode qualification.
+
+## [1.48.7] - 2026-10-11
+
+### Added
+- Animated preparation, measured download bytes and per-client installation progress, with owned downloads stopped on early cancellation ([#453](https://github.com/777genius/agent-notifications/pull/453)).
+
+### Changed
+- Installation results use concise client summaries and one delivery reminder. Technical paths and compatible-version details are available with `BOOTSTRAP_VERBOSE=1`; unsupported Gemini CLI versions include an update command.
+- Release preparation joins candidate, promotion and signing checks concurrently, resumes sealed draft uploads without rebuilding, and verifies public assets, channels, Pages and installer bytes in one read-only step.
+
+### Fixed
+- Recover an entirely absent managed installer consumer beside retained legacy OpenCode and portable client registrations, while preserving absence, fingerprint, generation, policy, native and replay ownership checks ([commit](https://github.com/777genius/agent-notifications/commit/01aff56d85b3b0daa9cd627f24b255fc9268b7e2)).
+- Preserve each client's saved registration and activation outcome after partial failure, keep completed clients, and show one validated recovery action using the acquired package ([#454](https://github.com/777genius/agent-notifications/pull/454)).
+- Failed installer stages show a compact cause and retain bounded private diagnostics on POSIX systems. Logging failures are reported separately; native Windows diagnostic persistence remains unavailable ([#454](https://github.com/777genius/agent-notifications/pull/454)).
+
+### Platform notes
+- This release uses the basic five-platform artifact profile with separate macOS and offline Codex checks. Installation success does not establish notification delivery, eleven-cell OpenCode, full native, visible desktop, cold-start, physical Intel or live-provider qualification. OpenCode remains silent and informational, without sound or click-to-focus support.
+
+## [1.48.6] - 2026-10-10
+
+### Fixed
+- Safely recover an abandoned managed installer consumer when its owned files are wholly absent, while rejecting partial, replaced or foreign assets and retaining interrupted recovery evidence ([#441](https://github.com/777genius/agent-notifications/pull/441), [#439](https://github.com/777genius/agent-notifications/issues/439), [#440](https://github.com/777genius/agent-notifications/issues/440)).
+- Observe held Windows installer locks without introducing a file-sharing conflict during recovery checks.
+
+### Changed
+- Release preparation validates version and platform-channel metadata early, runs independent qualification stages in parallel and resumes missing draft uploads from the original sealed artifacts without rebuilding them.
+
+### Platform notes
+- This release uses the basic five-platform artifact profile with separate macOS and offline Codex checks. It does not establish eleven-cell OpenCode, full native, visible desktop, cold-start, physical Intel or live-provider qualification. OpenCode remains silent and informational, without sound or click-to-focus support.
+
+## [1.48.5] - 2026-10-10
+
+### Added
+- Reusable macOS TEST installer preview with isolated client profiles, exact-source binaries, optional utilities and a retained installation summary. The preview exercises installation without running agents or proving notification delivery.
+
+### Changed
+- The guided installer resolves notification channels without a separate selection step. Fresh OpenCode and Gemini installations default to Desktop on and Webhook off; saved per-product preferences and explicit choices remain preserved.
+- Installation summaries show selected clients, installed components, notification channels and actionable recovery details. Final confirmation defaults to Yes.
+
+### Fixed
+- Partial Claude and Codex CLI registration can recover after interrupted or incomplete marketplace operations while retaining completed installation work.
+- Read-only managed installation status explains invalid or missing assets with a diagnostic code, affected path and repair guidance instead of only reporting `installation_invalid`.
+
+### Platform notes
+- Scoped artifact, installation and protocol checks do not establish full native qualification, visible desktop delivery or cold click-to-focus behavior. OpenCode remains informational, without sound or click-to-focus support.
+
+## [1.48.4] - 2026-10-08
+
+### Added
+- **Replace per-session desktop banners (macOS, opt-in)** — `notifications.replaceNotificationsPerSession` (default `false`) keys `terminal-notifier -group` on the Claude/Codex session id so a session's newest notification replaces its previous banner in place instead of stacking, while other sessions stay separate. Sessions with no id (or `unknown`) stay unique. Conversation grouping in Notification Center is unchanged and still uses the session thread. Useful for hosts that emit many attention events per session, such as Codex "Approve for me" auto-review.
+
+- Inactive Windows SDK callback and release-embedding foundation, with source-bound custody and cold-click contract fixtures ([#421](https://github.com/777genius/agent-notifications/pull/421)).
+
+### Changed
+- Unified release source includes the current Linux/Windows fixes and macOS runtime-profile fixes. Platform artifacts must pass checks against this candidate before release promotion.
+
+### Fixed
+- OpenCode V2 Intel macOS profiling accepts the stock Mach-O LIB64 subtype while preserving the closed architecture allowlist and live image continuity ([#301](https://github.com/777genius/agent-notifications/issues/301), [#302](https://github.com/777genius/agent-notifications/issues/302)).
+- OpenCode version probes use private HOME, XDG, configuration and temporary directories. Bounded cold startup gets a 30-second probe budget, with 35 seconds for the Go operation and 38 seconds for the profile handoff; earlier caller deadlines still shorten execution and child closure remains required ([#301](https://github.com/777genius/agent-notifications/issues/301), [#302](https://github.com/777genius/agent-notifications/issues/302)).
+- Windows callback census excludes positively identified foreign images before checking owned files ([#422](https://github.com/777genius/agent-notifications/pull/422)).
+
+### Platform notes
+- The Windows callback foundation remains inactive. Its contract and embedding checks do not qualify installed setup, runtime readiness, notification delivery or real click execution.
+- Historical platform checks do not qualify these new release bytes. OpenCode remains silent and informational, with no sound or click-to-focus support; the Windows V1 delayed-event limitation remains unchanged.
+
 ## [1.48.1] - 2026-10-06
 
 ### Added

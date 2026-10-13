@@ -15,12 +15,17 @@ import (
 	"github.com/777genius/agent-notifications/internal/installruntime"
 	"github.com/777genius/agent-notifications/internal/notification"
 	"github.com/777genius/agent-notifications/internal/opencodeinstall"
+	"github.com/777genius/agent-notifications/internal/windowscallback"
 )
 
 type windowsPowerShellToastSession struct {
 	appID, controlRoot, executable string
-	requireOpenCodeShortcut        bool
-	trustedReady                   func(context.Context) error
+
+	// Inert retained callback composition. Checkpoint B owns installed readiness;
+	// capture release bytes only, without inspecting helper/snapshot/native state.
+	callback                windowscallback.Port
+	requireOpenCodeShortcut bool
+	trustedReady            func(context.Context) error
 }
 
 const windowsToastPowerShell = `$ErrorActionPreference='Stop'; [Windows.UI.Notifications.ToastNotificationManager,Windows.UI.Notifications,ContentType=WindowsRuntime] | Out-Null; $xmlBytes=[Convert]::FromBase64String($env:AGENT_NOTIFICATIONS_TOAST_XML); $xmlText=[Text.Encoding]::UTF8.GetString($xmlBytes); $doc=[Windows.Data.Xml.Dom.XmlDocument,Windows.Data.Xml.Dom.XmlDocument,ContentType=WindowsRuntime]::New(); $doc.LoadXml($xmlText); $toast=[Windows.UI.Notifications.ToastNotification,Windows.UI.Notifications,ContentType=WindowsRuntime]::New($doc); [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($env:AGENT_NOTIFICATIONS_TOAST_APP_ID).Show($toast)`
@@ -78,7 +83,7 @@ func openWindowsToast(ctx context.Context) (windowsToastSession, error) {
 	if _, err := resolveWindowsPowerShell(); err != nil {
 		return nil, err
 	}
-	return windowsPowerShellToastSession{}, nil
+	return windowsPowerShellToastSession{callback: windowscallback.NewPort()}, nil
 }
 
 func NewOpenCodeWindowsToastDelivery(clock BootClock) *WindowsToastDelivery {
@@ -99,7 +104,7 @@ func NewTrustedWindowsToastDelivery(clock BootClock, appID string, ready func(co
 		if _, err := resolveWindowsPowerShell(); err != nil {
 			return nil, err
 		}
-		return windowsPowerShellToastSession{appID: appID, trustedReady: ready}, nil
+		return windowsPowerShellToastSession{appID: appID, trustedReady: ready, callback: windowscallback.NewPort()}, nil
 	}}
 }
 
@@ -123,7 +128,7 @@ func openOpenCodeWindowsToast(ctx context.Context) (windowsToastSession, error) 
 		return nil, err
 	}
 	return windowsPowerShellToastSession{appID: opencodeinstall.OpenCodeToastAppID, controlRoot: root,
-		executable: executable, requireOpenCodeShortcut: true}, nil
+		executable: executable, requireOpenCodeShortcut: true, callback: windowscallback.NewPort()}, nil
 }
 
 func (s windowsPowerShellToastSession) Ready(ctx context.Context) error {

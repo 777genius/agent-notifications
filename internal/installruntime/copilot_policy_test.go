@@ -502,8 +502,8 @@ func TestCopilotRecordedConsentCannotMintPhysicalProof(t *testing.T) {
 			t.Fatal("missing/unqualified physical proof authorized N1 binding")
 		}
 	}
-	if calls == 0 {
-		t.Fatal("zero physical proof never reached the authority boundary")
+	if calls != 0 {
+		t.Fatal("unconstructed Local gate invoked an untrusted public proof port")
 	}
 }
 

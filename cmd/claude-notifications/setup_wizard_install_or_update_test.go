@@ -23,6 +23,8 @@ import (
 	"github.com/777genius/agent-notifications/internal/agentnotify/portableasset"
 	"github.com/777genius/agent-notifications/internal/agentnotify/portablesetup"
 	"github.com/777genius/agent-notifications/internal/agentnotify/setupwizard"
+	"github.com/777genius/agent-notifications/internal/config"
+	"github.com/777genius/agent-notifications/internal/copilotvscodeinstall"
 	"github.com/777genius/agent-notifications/internal/cursorinstall"
 	"github.com/777genius/agent-notifications/internal/installruntime"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/adapters/pathpolicy"
@@ -390,6 +392,47 @@ func TestWizardInstallOrUpdateRetainedDataE2E(t *testing.T) {
 	}
 }
 
+// Regression: retained-only inspection must not require installed Cursor
+// authority or execute a vendor version probe after the last binding is removed.
+func TestCursorCallerInspectRetainedAbsence(t *testing.T) {
+	ctx := setupCommandContext(t)
+	env := newWizardCLIEnv(t, ctx, false)
+	shared := []string{"--agents", "codex", "--hooks", "false", "--agent-notify", "true", "--yes", "--json", "--control-root", env.control, "--runtime-root", env.runtime, "--global-config", env.global, "--codex-home", env.codexHome, "--client-executable", env.probe, "--helper", env.probe, "--scope-root", env.scope, "--package", env.pkg}
+	var out bytes.Buffer
+	if code := executeSetupWizardWith(ctx, append([]string{"--action", "install"}, shared...), &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("install fixture: %d %s", code, out.String())
+	}
+	dataRoot := wizardCLIBinding(t, ctx, env.root, "codex").DataRoot
+	sentinel := filepath.Join(dataRoot, "TEST-retained.txt")
+	if err := os.WriteFile(sentinel, []byte("keep"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if code := executeSetupWizardWith(ctx, append([]string{"--action", "uninstall", "--external-uninstalled"}, shared...), &out, io.Discard, strings.NewReader(""), false); code != 0 || !decodeWizardJSON(t, out).DataRetained {
+		t.Fatalf("retained fixture: %d %s", code, out.String())
+	}
+	profile := filepath.Join(env.root, "home", ".cursor")
+	if err := os.Mkdir(profile, 0700); err != nil {
+		t.Fatal(err)
+	}
+	marker, agent := filepath.Join(env.root, "TEST-version-probed"), filepath.Join(env.root, "TEST-cursor-agent")
+	if err := os.WriteFile(agent, []byte("#!/bin/sh\ntouch '"+marker+"'\nexit 1\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	args := []string{"--action", "inspect", "--agents", "cursor", "--hooks", "false", "--agent-notify", "true", "--scope-root", profile, "--client-executable", agent, "--control-root", env.control, "--yes", "--json"}
+	assertCursorPackageRefusal(t, env.control, []string{profile, dataRoot}, func() {
+		out.Reset()
+		code := executeSetupWizardWith(ctx, args, &out, io.Discard, strings.NewReader(""), false)
+		got := decodeWizardJSON(t, out)
+		if code != 0 || got.Outcome != "completed" || !got.DataRetained || got.InstallationID == "" || len(got.Targets) == 0 || got.Targets[0].Client != "cursor" || got.Targets[0].Unit != "agent-notify" || got.Targets[0].Outcome != "absent" {
+			t.Fatalf("absent inspect: %d %+v", code, got)
+		}
+	})
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("absent inspect launched vendor executable: %v", err)
+	}
+}
+
 func TestWizardInstallOrUpdateRequiresBootstrapContract(t *testing.T) {
 	for _, args := range [][]string{
 		{"--action", "update", "--agents", "claude", "--hooks", "false", "--agent-notify", "true", "--yes", "--install-or-update"},
@@ -426,14 +469,26 @@ func TestCursorCallerAcknowledgedTokenAndMatchingPendingRetry(t *testing.T) {
 	if _, err := installruntime.Commit(ctx, installruntime.Request{ControlRoot: control, RuntimeRoot: runtimeRoot, Owner: "existing-installer", ConsumerID: "TEST-owner", Files: []installruntime.File{{Path: observer, Data: []byte("TEST-inert" + installruntime.WriterProtocolMarker), Mode: 0700}}}); err != nil {
 		t.Fatal(err)
 	}
+	version, _ := cursorinstall.CurrentTuple()
 	agent := filepath.Join(root, "TEST-version-agent")
-	if err := os.WriteFile(agent, []byte("#!/bin/sh\nprintf '%s\\n' '"+selectedCursorVersion+"'\n"), 0700); err != nil {
+	if err := os.WriteFile(agent, []byte("#!/bin/sh\nprintf '%s\\n' '"+version+"'\n"), 0700); err != nil {
 		t.Fatal(err)
 	}
 	pkg := filepath.Join(root, "TEST-package")
 	writeWizardPackage(t, pkg, agent)
 	on, off := true, false
 	r := setupwizard.Request{Action: setupwizard.ActionInstall, Agents: []string{"cursor"}, Hooks: &off, AgentNotify: &on, Yes: true, CursorConfig: profile, ScopeRoot: profile, ControlRoot: control, GlobalConfig: filepath.Join(root, "TEST-global.json"), ClientExecutable: agent, PackageRoot: pkg}
+	notificationConfig := config.DefaultConfig()
+	notificationConfig.Notifications.Desktop.Enabled = true
+	notificationConfig.Notifications.Webhook.Enabled = true
+	notificationConfig.Notifications.Webhook.URL = "https://example.invalid/TEST-consent-only"
+	configBody, err := json.Marshal(notificationConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(r.GlobalConfig, configBody, 0600); err != nil {
+		t.Fatal(err)
+	}
 	snap, err := installruntime.ReadInstalledSnapshot(control)
 	if err != nil {
 		t.Fatal(err)
@@ -448,6 +503,20 @@ func TestCursorCallerAcknowledgedTokenAndMatchingPendingRetry(t *testing.T) {
 	}
 	_, _, _, err = b.Registration()
 	if err != nil {
+		t.Fatal(err)
+	}
+	// Selected native-only staging preserves the canonical portable selector.
+	nativeSelectorName, err := b.Filename()
+	if err != nil {
+		t.Fatal(err)
+	}
+	portableMCP, err := json.Marshal(map[string]any{"$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json", "mcpServers": map[string]any{
+		"agent-notify": map[string]any{"type": "stdio", "command": "./bin/probe", "args": []string{"portable-launch", "--locator", nativeSelectorName}, "env": map[string]string{}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pkg, "mcp.json"), portableMCP, 0600); err != nil {
 		t.Fatal(err)
 	}
 	r.CursorAuthority.ObjectID = "TEST-retained-stop"
@@ -624,18 +693,132 @@ func TestCursorCallerAcknowledgedTokenAndMatchingPendingRetry(t *testing.T) {
 	if err != nil || acknowledgedRetry.PackageRoot != pkg || acknowledgedRetry.CursorAuthority.ObjectID != facts.ObjectID {
 		t.Fatalf("same-source acknowledged handoff retry: %+v %v", acknowledgedRetry, err)
 	}
-	if _, _, err := (portablesetup.Service{}).FinishConfirmedIntent(ctx, intentBody, reservation); err != nil {
+	// Repair the missing native registration through the public installed lifecycle.
+	resumeCfg := cfg
+	resumeCfg.OnCommittedBinding = func(ctx context.Context, f uapinstaller.BindingFacts) error {
+		if f.BindingID != b.BindingID || f.ProfileAuthority == nil || !reflect.DeepEqual(*f.ProfileAuthority, token) {
+			return errors.New("resumed public install lost original authority")
+		}
+		_, err := (portablesetup.Service{}).CommitBinding(ctx, portablesetup.Request{Binding: b, ExpectedGeneration: published.Generation, Reservation: reservation})
+		return err
+	}
+	resumeEngine, err := uapinstaller.New(resumeCfg)
+	if err != nil {
 		t.Fatal(err)
 	}
-	firstState.Installations[0].Clients[b.BindingID] = client
-	if err := store.Save(firstState); err != nil {
-		t.Fatal(err)
+	func() {
+		p, err := resumeEngine.Prepare(ctx, uapinstaller.Request{Operation: uapinstaller.OpRepair, ClientID: "cursor", InstallationID: b.InstallationID, ClientConfigRoot: profile, ClientExecutable: agent, PackageRoot: pkg})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = p.Close() }()
+		if _, err := resumeEngine.Apply(ctx, p, uapinstaller.Decision{Confirmed: true}); err != nil {
+			t.Fatalf("real public resumed Apply: %v", err)
+		}
+	}()
+	if _, finished, err := (portablesetup.Service{}).FinishConfirmedIntent(ctx, intentBody, reservation); err != nil || !finished {
+		t.Fatalf("finish actual public install: finished=%t err=%v", finished, err)
 	}
-	// Acknowledged fixture remains a read-only caller boundary, not native proof.
+	// This proves the installed acknowledgment, not a genuine vendor Stop event.
 	r.BootstrapExpectedGeneration = nil
 	got, err := composeCursorWizard(ctx, r)
 	if err != nil || got.CursorAuthority.ObjectID != "TEST-retained-stop" || got.CursorAuthority.Selector != facts.Selector {
 		t.Fatalf("existing token caller: %+v %v", got, err)
+	}
+	installed, err := installruntime.ReadInstalledSnapshot(control)
+	if err != nil || installed.Recovery || installed.Ledger.PendingMutation != nil {
+		t.Fatalf("installed snapshot: %+v %v", installed, err)
+	}
+	gateCfg, fixed, err := cursorInstalledInputs(ctx, b, installed, cfg.StateRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gate, err := copilotvscodeinstall.NewCursorGate(b, gateCfg, fixed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ctx.Err() != nil {
+		t.Fatalf("context expired before binding check: %v", ctx.Err())
+	}
+	beforeConsent, err := gate.ConsumerBinding(ctx)
+	if runtime.GOOS == "darwin" {
+		// This inert file-mechanics fixture deliberately has no native helper.
+		// A real Mac acknowledgment must refuse rather than grant delivery.
+		if runtime.GOARCH != "arm64" || installed.Ledger.Native != nil || ctx.Err() != nil || !errors.Is(err, copilotvscodeinstall.ErrDenied) || !reflect.ValueOf(beforeConsent).IsZero() {
+			t.Fatalf("expected exact Mac missing-helper refusal, binding=%+v err=%v context=%v native=%+v", beforeConsent, err, ctx.Err(), installed.Ledger.Native)
+		}
+		if _, e := os.Lstat(filepath.Join(control, "cursor-native-spool")); !os.IsNotExist(e) {
+			t.Fatalf("unconfirmed fixture created spool: %v", e)
+		}
+		return
+	}
+	if err != nil || beforeConsent.Generation != installed.Ledger.Generation {
+		t.Fatalf("actual public installed acknowledgment: %+v %v", beforeConsent, err)
+	}
+	if channels := gate.Channels(ctx, beforeConsent); channels.Desktop || channels.Webhook {
+		t.Fatalf("install granted unconfirmed consent: %+v", channels)
+	}
+	selection, err := parseSetupProducts([]string{"confirm", "--products", "cursor", "--agent-notify", "--desktop", "--webhook", "--scope-root", profile, "--client-executable", agent, "--control-root", control})
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldSourceCommit := selectorSourceCommit
+	t.Cleanup(func() { selectorSourceCommit = oldSourceCommit })
+	selectorSourceCommit = "51ceb8f1ef4af56823bb12f21818a74e7d5abf47"
+	provenance, err := currentSelectorProvenance()
+	if err != nil {
+		t.Fatal(err)
+	}
+	provenance.Stage = []byte(root)
+	configEnv := config.SnapshotEnv()
+	configEnv.Vars[config.OverrideEnv] = r.GlobalConfig
+	confirmed, _, err := buildConfirmedBootstrapIntent(ctx, selection, productEnvironment{Home: root, PATH: "", DefaultControlRoot: control, Values: map[string]string{}, Config: configEnv}, provenance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := preflightBootstrapIntent(ctx, confirmed, selection); err != nil {
+		t.Fatal(err)
+	}
+	intentPath := filepath.Join(root, "TEST-consent-intent.json")
+	if err := writeBootstrapIntent(intentPath, confirmed); err != nil {
+		t.Fatal(err)
+	}
+	commandArgs := []string{"--action", "install", "--install-or-update", "--agents", "cursor", "--hooks", "false", "--agent-notify", "true", "--package", pkg, "--scope-root", profile, "--client-executable", agent, "--control-root", control, "--runtime-root", string(confirmed.Scopes["runtime-root"]), "--global-config", string(confirmed.Scopes["global-config"]), "--bootstrap-intent-file", intentPath, "--yes", "--json"}
+	var consentOutput bytes.Buffer
+	code := executeSetupWizardWith(ctx, commandArgs, &consentOutput, io.Discard, strings.NewReader(""), false)
+	consentResult := decodeWizardJSON(t, consentOutput)
+	if code != 0 || consentResult.Outcome != "completed" {
+		t.Fatalf("public confirmed consent: code=%d result=%+v", code, consentResult)
+	}
+	afterConsent, err := gate.ConsumerBinding(ctx)
+	if err != nil || afterConsent.Generation != consentResult.Generation || afterConsent.Generation <= confirmed.Initial.Generation || afterConsent.InstallationID != beforeConsent.InstallationID || afterConsent.BindingID != beforeConsent.BindingID {
+		t.Fatalf("post-consent public binding: %+v %v", afterConsent, err)
+	}
+	if channels := gate.Channels(ctx, afterConsent); !channels.Desktop || !channels.Webhook {
+		t.Fatalf("confirmed channels unavailable: %+v", channels)
+	}
+	hintKinds := map[string]bool{}
+	for _, next := range consentResult.NextActions {
+		hintKinds[next.Kind] = true
+		if next.Kind == "request-permission" && !reflect.DeepEqual(next.Command, []string{"setup-notifications", "request-permission", "--control-root", control, "--expected-generation", fmt.Sprintf("%d", consentResult.Generation)}) {
+			t.Fatalf("permission hint has stale generation: %v", next.Command)
+		}
+	}
+	if !hintKinds["restart-client"] || !hintKinds["request-permission"] || !hintKinds["test-notification"] {
+		t.Fatalf("readiness hints lost: %+v", consentResult.NextActions)
+	}
+	actualState, err := store.Load()
+	if err != nil || len(actualState.Installations) != 1 {
+		t.Fatalf("actual installed state: %+v %v", actualState, err)
+	}
+	actualClient := actualState.Installations[0].Clients[b.BindingID]
+	actualFacts, ok := actualClient.SelectedDelivery.CursorFacts()
+	if actualClient.ProfileAuthority == nil || !reflect.DeepEqual(*actualClient.ProfileAuthority, token) || actualClient.ProfileNamespace != cfg.StateRoot || !ok || actualFacts.ObjectID != facts.ObjectID || actualFacts.Selector != facts.Selector {
+		t.Fatal("consent changed original physical authority or selected binding")
+	}
+	current, err := installruntime.ReadInstalledSnapshot(control)
+	if err != nil || current.Recovery || current.Ledger.PendingMutation != nil || current.Ledger.ID != confirmed.Initial.LedgerID || current.Ledger.Owner != confirmed.Initial.Owner || current.Ledger.Generation != consentResult.Generation || !portable.ExactCommittedBinding(current.Ledger, b) {
+		t.Fatalf("consent changed installation authority: %+v %v", current, err)
 	}
 	// A is acknowledged. Acquire candidate B, then interrupt immediately
 	// after the same confirmed publisher used by the wizard, before UAP B commit.

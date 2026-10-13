@@ -1,0 +1,119 @@
+{
+  "schemaVersion": 1,
+  "scope": "owned_TEST_owner_fence_and_B_cold_recovery",
+  "passed": true,
+  "sourceCommit": "3816fa0821c264bc17d6b650324ebbfbf1a04721",
+  "run": {
+    "conclusion": "success",
+    "event": "pull_request",
+    "head_sha": "3816fa0821c264bc17d6b650324ebbfbf1a04721",
+    "id": 37521564586,
+    "run_attempt": 1,
+    "status": "completed"
+  },
+  "artifact": {
+    "id": 11440132535,
+    "name": "navigation-linux-owner-fence-37521564586-1",
+    "size_in_bytes": 1352821,
+    "digest": "sha256:71ac77a6cf11704901e469e46e58fa4b41adcc568f45b4c27fb636876abc44db"
+  },
+  "sourceSHA256": {
+    "scripts/navigation-linux-portal-callback-probe.py": "5ffa5c803d9ba3e7a9f43578a7bd2e325ff683ff43ea1118c9e7e8c130db3c61",
+    "tests/integration/navigation_linux_portal_test_app.py": "151eae504113c645eb0b35486fc88c5c4365fcacdb756d1fd99a10468f3df7b2",
+    "tests/integration/navigation-linux-portal.Dockerfile": "a9d21ad6544a4e457d71ee39a8f408dae54f055acd1bc5252846624aef46a685",
+    "tests/integration/navigation_linux_portal_owner_fence_ci.ts": "8a91aea785cd29d82474372d8cf99febfecf16c499ff4dc65a0e467ba0bdd312",
+    ".github/workflows/navigation-linux-portal-owner-fence.yml": "6dfd4b0fef08e34b1564ad789198d23a343ccb8d2d24c61d03fc98daa2773a3b"
+  },
+  "rawEvidenceSHA256": {
+    "ci-evidence.json": "49749bf3f9a8d73ced81577056ba5b58ae8791aea5d7e6c8678e39d9709a57ce",
+    "outer-evidence.json": "6b30fd4dadcc4318a04bf6f39f994d33fab90364cda52b1095d58940a1bc1de7",
+    "native-evidence.json": "28d7642a1c9ea1cf1dea7abaa140c0588512130a219f5319462e9cb40215744b"
+  },
+  "runtime": {
+    "portal": "xdg-desktop-portal 1.22.1",
+    "aptCandidates": [
+      "GTK=1.15.1-1build2",
+      "DUNST=1.9.2-1build2",
+      "XRES=2:1.2.1-1build1"
+    ]
+  },
+  "nssIdentity": {
+    "uid": 1001,
+    "gid": 1001,
+    "passed": true,
+    "passwdUID": 1001,
+    "passwdPrimaryGID": 1001,
+    "groupGID": 1001
+  },
+  "observedCounts": {
+    "nativeNotify": 2,
+    "officialRemove": 0,
+    "nativeClose": 0,
+    "nativeClick": 1,
+    "nativeActionInvoked": 1
+  },
+  "staleAControl": {
+    "genuineClick": false,
+    "action": "direct TEST ActivateAction after owned daemon replacement",
+    "targetMatches": true,
+    "providerMatches": false,
+    "callbackExited": true,
+    "kernelBirthAfterSenderExit": true,
+    "effectCount": 0,
+    "removeAttempted": false,
+    "callbackActionCount": 1
+  },
+  "genuineBRecovery": {
+    "genuineNativeClickCount": 1,
+    "windowOwnerMethod": "XRes_LOCAL_CLIENT_PID",
+    "clickAfterSenderExit": true,
+    "senderCollected": true,
+    "senderExitCode": 0,
+    "senderExitedBoot": 101.462183895,
+    "callbackBirthLowerBoundBoot": 101.81,
+    "kernelBirthAfterCollectedSenderExit": true,
+    "targetMatches": true,
+    "providerMatches": true,
+    "effectCount": 1,
+    "callbackExited": true,
+    "callbackActionCount": 1
+  },
+  "collection": {
+    "outerActorCollected": true,
+    "actorOutcomeUnknown": false,
+    "trackedNativeProcesses": 10,
+    "trackedNativeProcessesCollected": true,
+    "callbacksDisappeared": true,
+    "containerCleanupVerified": true,
+    "containerCleanupStatus": "owned_id_removed_and_exact_name_absent",
+    "freshExactContainerIDAndNameAbsence": true,
+    "snapshotUnchanged": true,
+    "helperUnchanged": true,
+    "immutableFixturesUnchanged": true
+  },
+  "qualification": {
+    "ownedTestOwnerFence": true,
+    "atomicProviderBinding": false,
+    "genericRestartOwnerBinding": false,
+    "wayland": false,
+    "productionClientActivated": false,
+    "navigation": false,
+    "humanRendering": false
+  },
+  "retryAllowed": false,
+  "independentRawVerification": {
+    "collectedArtifactHashesVerified": 42,
+    "retainedInnerArtifactHashesVerified": 24,
+    "outerCommandStreamsVerified": 14,
+    "innerCatalogDigestOnlyEntries": 131
+  },
+  "limitations": [
+    "Owned Xvfb/XTest dunst restart TEST policy only; GTK/frontend restart, Wayland and actual client/chat routes remain unqualified.",
+    "A rejection is a direct TEST action control; only B has the genuine native click.",
+    "Provider comparisons before/after requests are conservative observations and do not prove atomic binding.",
+    "Counts and absence apply to the captured private fixture interval, not global or future effects.",
+    "Tracked Popen children have collected exit statuses; activated A/B callbacks have observed process disappearance, not separately collected callback exit codes.",
+    "131 inner catalog entries retain digests without transferred original bytes; those bytes were not independently rehashed.",
+    "No human rendering, selected-client activation, focus, authenticated chat or production navigation qualification."
+  ]
+}

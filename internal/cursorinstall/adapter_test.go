@@ -37,7 +37,7 @@ func TestNewRefusesMissingAuthorityOrPathPolicyWithoutEffects(t *testing.T) {
 // Unsupported runtime tuples must refuse even valid fixed TEST facts; Linux also rejects bad qualification facts.
 func TestNewRefusesUnqualifiedTupleWithoutProfileOrFileEffects(t *testing.T) {
 	cases := []string{"qualified-facts-on-unsupported-runtime"}
-	if runtime.GOOS == "linux" && runtime.GOARCH == "amd64" {
+	if version, _ := CurrentTuple(); version != "" {
 		cases = []string{"wrong-fixed-version", "empty-qualification"}
 	}
 	for _, invalid := range cases {
@@ -68,7 +68,11 @@ func refusalFixture(t *testing.T) (Authority, func()) {
 	if err := os.Mkdir(profile, 0700); err != nil {
 		t.Fatal(err)
 	}
-	executable := filepath.Join(root, "TEST-observer")
+	name := "TEST-observer"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	executable := filepath.Join(root, name)
 	body := []byte("TEST fixed executable bytes; never executed\n")
 	for path, content := range map[string][]byte{executable: body, filepath.Join(profile, "hooks.json"): []byte(`{"version":1,"hooks":{}}`), filepath.Join(root, "TEST-binding.json"): []byte("TEST binding preserved\n")} {
 		if err := os.WriteFile(path, content, 0700); err != nil {
@@ -102,11 +106,29 @@ func refusalFixture(t *testing.T) (Authority, func()) {
 		return files
 	}
 	before := snapshot()
-	fixed := Authority{ProfileRoot: profile, CursorVersion: cursorVersion, QualificationID: "TEST-vendor-mechanics-only", Executable: executable, ExecutableDigest: digest(body), Selector: filepath.Join(root, "TEST-binding.json"), ObjectID: "TEST-owned-Cursor-Stop"}
+	version, _ := CurrentTuple()
+	if version == "" {
+		version = cursorVersion
+	}
+	fixed := Authority{ProfileRoot: profile, CursorVersion: version, QualificationID: "TEST-vendor-mechanics-only", Executable: executable, ExecutableDigest: digest(body), Selector: filepath.Join(root, "TEST-binding.json"), ObjectID: "TEST-owned-Cursor-Stop"}
 	return fixed, func() {
 		t.Helper()
 		if after := snapshot(); !reflect.DeepEqual(before, after) {
 			t.Fatalf("constructor refusal changed TEST bytes, modes or files: before=%v after=%v", before, after)
 		}
 	}
+}
+
+// The supported host constructor must accept a real owned invocation while
+// preserving its TEST files. The refusal cases above exercise invalid facts.
+func TestNewCurrentTupleUsesOwnedInvocationWithoutEffects(t *testing.T) {
+	if version, _ := CurrentTuple(); version == "" {
+		t.Skip("no qualified current tuple")
+	}
+	fixed, unchanged := refusalFixture(t)
+	adapter, err := New(nativeconfig.New(), pathpolicy.Policy{}, &fixed)
+	if err != nil || adapter == nil {
+		t.Fatalf("current owned tuple refused: %v", err)
+	}
+	unchanged()
 }

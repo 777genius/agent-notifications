@@ -29,15 +29,19 @@ import (
 	"github.com/777genius/agent-notifications/internal/webhook"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/adapters/directoryidentity"
 	processadapter "github.com/777genius/plugin-kit-ai/install/integrationctl/adapters/process"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/adapters/nativeconfig"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/adapters/profileauthority"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/adapters/statev2"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients/codex"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients/cursor"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients/shared"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients/vscode"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/domain"
 	uapinstaller "github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/installer"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/providers"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/vscodelocalhooks"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/vscodeprofile"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/packagesnapshot"
 )
 
@@ -400,6 +404,21 @@ func TestCursorInstalledProofRejectsDrift(t *testing.T) {
 // recursively acquires it on completion. Expect competing actual CAS mutation
 // to time out while the original lease's completion remains prompt. Generic
 // policy lock tests cannot prove the Cursor owner retains exactly this lease.
+type cursorCountingProof struct {
+	ProofPort
+	calls int
+	after func()
+}
+
+func (p *cursorCountingProof) CheckLocal(ctx context.Context, b portable.Binding, s installruntime.InstalledSnapshot) (PhysicalProof, error) {
+	p.calls++
+	proof, err := p.ProofPort.CheckLocal(ctx, b, s)
+	if err == nil && p.after != nil {
+		p.after()
+	}
+	return proof, err
+}
+
 func TestCursorRetainedLeaseFencesPolicyMutation(t *testing.T) {
 	f, b, ready := installedCursorFilesystem(t)
 	if !ready {
@@ -409,11 +428,16 @@ func TestCursorRetainedLeaseFencesPolicyMutation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	proof := &cursorCountingProof{ProofPort: f.g.gate.Proof}
+	f.g.gate.Proof = proof
 	lease, err := f.g.gate.acquire(cursorContext(t), localCursorBinding(b), copilotvscodeevent.DesktopChannel)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer lease.Release()
+	if proof.calls != 1 {
+		t.Fatalf("acquisition fresh proof calls = %d, want 1", proof.calls)
+	}
 	key, c, _, err := f.b.Registration()
 	if err != nil {
 		t.Fatal(err)
@@ -437,6 +461,52 @@ func TestCursorRetainedLeaseFencesPolicyMutation(t *testing.T) {
 	}
 	if err := lease.Complete(checkCtx); err != nil {
 		t.Fatal(err)
+	}
+	if proof.calls != 3 {
+		t.Fatalf("acquire/handoff/completion fresh proof calls = %d, want 3", proof.calls)
+	}
+}
+
+func TestCursorCombinedBindingConfigFreshObservation(t *testing.T) {
+	f, expected, ready := installedCursorFilesystem(t)
+	if !ready {
+		return
+	}
+	proof := &cursorCountingProof{ProofPort: f.g.gate.Proof}
+	f.g.gate.Proof = proof
+	b, c, err := f.g.ConsumerBindingAndConfig(cursorContext(t))
+	if err != nil || b != expected || c == nil || proof.calls != 1 {
+		t.Fatalf("combined observation: %+v %v calls=%d", b, err, proof.calls)
+	}
+	c.Notifications.Desktop.Enabled = false
+	c.Notifications.Webhook.URL = "http://TEST-foreign.invalid"
+	b, fresh, err := f.g.ConsumerBindingAndConfig(cursorContext(t))
+	if err != nil || b != expected || fresh == nil || !fresh.Notifications.Desktop.Enabled || fresh.Notifications.Webhook.URL == c.Notifications.Webhook.URL || proof.calls != 2 {
+		t.Fatalf("combined observation retained caller config: %+v %v calls=%d", b, err, proof.calls)
+	}
+}
+
+func TestCursorCombinedObservationRejectsLateDrift(t *testing.T) {
+	for _, change := range []string{"config", "generation"} {
+		t.Run(change, func(t *testing.T) {
+			f, _, ready := installedCursorFilesystem(t)
+			if !ready {
+				return
+			}
+			proof := &cursorCountingProof{ProofPort: f.g.gate.Proof}
+			proof.after = func() {
+				if change == "config" {
+					cursorWrite(t, f.b.GlobalConfig, []byte(`{"schemaVersion":1,"notifications":{"desktop":{"enabled":false}}}`), 0600)
+				} else {
+					cursorPolicy(t, f, `{"cursorNotifications":{"desktop":false,"webhook":true}}`)
+				}
+			}
+			f.g.gate.Proof = proof
+			b, c, err := f.g.ConsumerBindingAndConfig(cursorContext(t))
+			if !errors.Is(err, ErrDenied) || b != (cursorevent.Binding{}) || c != nil || proof.calls != 1 {
+				t.Fatalf("late %s drift admitted: %+v %v calls=%d", change, b, err, proof.calls)
+			}
+		})
 	}
 }
 
@@ -907,5 +977,351 @@ func TestCursorSelectedRevisionDriftUnderRetainedLease(t *testing.T) {
 				t.Fatal("selected revision observation repaired persisted corruption")
 			}
 		})
+	}
+}
+
+// Real public Local TEST install: receipt/profile/projection are independent of
+// physical authority. No native app, helper, hook or delivery process is run.
+func localPublicFixture(t *testing.T, manualRoute ...bool) (cursorFixture, *vscode.LocalAdapter, *uapinstaller.Engine, domain.ClientBinding) {
+	t.Helper()
+	f := newCursorFixture(t)
+	f.b.Integration = portable.CopilotVSCode
+	artifact := domain.ComputePhysicalArtifactID("agent-notify", f.b.InstallationID)
+	target := filepath.Join(f.cfg.ManagedRoot, "vscode-local", artifact)
+	f.b.BindingID = domain.ComputeClientBindingID(f.b.InstallationID, "vscode", "user", target)
+	cursorWrite(t, filepath.Join(f.b.ScopeRoot, "settings.json"), []byte(`{"foreign":"preserved","chat.pluginLocations":{"/TEST-disabled-sibling":false}}`), 0600)
+	key, c, _, err := f.b.Registration()
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, err := installruntime.ReadPolicySnapshot(cursorContext(t), f.b.ControlRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	patch, err := PolicyPatch(f.b, Choices{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = installruntime.Commit(cursorContext(t), installruntime.Request{ControlRoot: f.b.ControlRoot, RuntimeRoot: f.b.RuntimeRoot, Owner: f.b.Owner,
+		ConsumerID: key, Consumer: c, ExpectedGeneration: &policy.Installation.Ledger.Generation, ExpectedPolicy: &policy.Preimage, PolicyFields: patch})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cursorWrite(t, f.b.GlobalConfig, []byte(`{"schemaVersion":2,"agents":{"copilot-vscode":{"notifications":{"desktop":{"enabled":true},"webhook":{"enabled":true,"url":"http://127.0.0.1:18181"}}}}}`), 0600)
+	localConfig := vscode.LocalConfig{ProfileSettingsPath: filepath.Join(f.b.ScopeRoot, "settings.json"), QualifiedTuple: vscode.SourceQualifiedTESTTuple("linux"), TargetShell: vscodelocalhooks.Target{Shell: vscodelocalhooks.LinuxSH}}
+	if len(manualRoute) != 0 && manualRoute[0] {
+		cursorPackage(t, f)
+		localConfig.MCPServers = []string{"agent-notify"}
+		localConfig.QualifiedTuple = vscode.SourceQualifiedTESTTuple(runtime.GOOS)
+		if runtime.GOOS == "darwin" {
+			localConfig.QualifiedTuple = vscode.QualifiedDarwinTESTTuple()
+		}
+		localConfig.TargetShell = vscodelocalhooks.Target{Shell: vscodelocalhooks.Shell(localConfig.QualifiedTuple.TargetShell)}
+	} else {
+		localConfig.NativeStop = true
+		localConfig.HookSpecs = localSpecs(f.b, f.fixed.Executable)
+		hook, err := vscodelocalhooks.Render(localConfig.TargetShell, localConfig.HookSpecs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		localConfig.DeclaredHookDigest = "sha256:" + rawDigest(hook)
+		cursorWrite(t, filepath.Join(f.pkg, "plugin.json"), []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent-notify","version":"1.0.0"}`), 0600)
+		cursorWrite(t, filepath.Join(f.pkg, filepath.FromSlash(vscodelocalhooks.PluginPath)), hook, 0600)
+	}
+	adapter, err := vscode.NewLocal(localConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry, err := clients.NewRegistry(adapter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := f.cfg
+	cfg.Registry = registry
+	cfg.HelperExecutable = f.fixed.Executable
+	engine, err := uapinstaller.New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := engine.Prepare(cursorContext(t), uapinstaller.Request{Operation: uapinstaller.OpInstall, PackageRoot: f.pkg, ClientID: "vscode", ClientExecutable: f.fixed.Executable,
+		ClientConfigRoot: f.b.ScopeRoot, InstallationID: f.b.InstallationID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = prepared.Close() }()
+	profileBefore := cursorRead(t, localConfig.ProfileSettingsPath)
+	result, err := engine.Apply(cursorContext(t), prepared, uapinstaller.Decision{Confirmed: true})
+	if len(manualRoute) != 0 && manualRoute[0] && runtime.GOOS != "linux" && (runtime.GOOS != "darwin" || runtime.GOARCH != "arm64") {
+		const refusal = "local profile metadata mutation unqualified on this OS; native Windows ACL/profile CI required"
+		if err == nil || err.Error() != refusal || result.Reason != refusal || result.Outcome != "incomplete" || !result.Mutated || result.Client.Activation != string(domain.ActivationPrepared) || result.Binding.BindingID != f.b.BindingID || result.Binding.DataRoot != f.b.DataRoot {
+			t.Fatalf("unsupported Local metadata Apply boundary: %+v %v", result, err)
+		}
+		state, loadErr := (statev2.Store{Path: f.cfg.StateFile}).Load()
+		if loadErr != nil || len(state.Installations) != 1 {
+			t.Fatal("unsupported Local lost retained partial state", loadErr)
+		}
+		record, exists := state.Installations[0].Clients[f.b.BindingID]
+		if !exists || record.Activation != domain.ActivationPrepared || record.ProfileAuthority != nil || !reflect.DeepEqual(record.SelectedDelivery, result.Binding.SelectedDelivery) || !bytes.Equal(profileBefore, cursorRead(t, localConfig.ProfileSettingsPath)) {
+			t.Fatal("unsupported Local metadata refusal lost selected partial state or changed profile")
+		}
+		return f, adapter, engine, record
+	}
+	if err != nil || result.Binding.BindingID != f.b.BindingID || result.Binding.DataRoot != f.b.DataRoot {
+		t.Fatalf("Local TEST install: %+v %v", result, err)
+	}
+	if _, err := portable.Publish(f.b); err != nil {
+		t.Fatal(err)
+	}
+	state, err := (statev2.Store{Path: f.cfg.StateFile}).Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return f, adapter, engine, state.Installations[0].Clients[f.b.BindingID]
+}
+
+// Regression: a genuine registered Local receipt, enabled native entry and
+// exact installed hook are promoted to authority without the public capability.
+func TestLocalPublicReceiptCannotManufacturePhysicalProof(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("current public Local TEST filesystem tuple is Linux")
+	}
+	f, adapter, engine, record := localPublicFixture(t)
+	observed, recordErr := readLocalRecord(f.cfg, f.b)
+	if recordErr != nil || !reflect.DeepEqual(observed.Binding, record) {
+		t.Fatalf("actual Local record identity: %v", recordErr)
+	}
+	if err := adapter.ValidateBindingProfile(f.b.ScopeRoot, record); err != nil {
+		t.Fatal(err)
+	}
+	status, err := adapter.InspectRegistration(t.Context(), nativeconfig.New(), record.SelectedDelivery, record.NativeObjects)
+	if err != nil || status != vscode.RegistrationActive {
+		t.Fatalf("real recorded entry: %s %v", status, err)
+	}
+	if _, err := portable.ReadLocalBinding(f.b.ControlRoot, f.b.BindingID); err != nil {
+		t.Fatal(err)
+	}
+	view, err := engine.Inspect(t.Context())
+	if err != nil || view.Recovery.Required || len(view.Installations) != 1 {
+		t.Fatalf("public Inspect: %+v %v", view, err)
+	}
+	canonical, err := engine.LocalPackageTreeDigest(t.Context(), f.pkg)
+	facts, _ := record.SelectedDelivery.LocalFacts()
+	if err != nil || canonical != facts.CanonicalDigest || canonical == facts.ProjectionDigest {
+		t.Fatalf("canonical/projected identity: %s %v", canonical, err)
+	}
+	before := cursorRead(t, f.cfg.StateFile)
+	if _, ok := any(adapter).(clients.PhysicalProfileAuthority); ok {
+		t.Fatal("current public pin unexpectedly advertises Local authority; requalify future pin")
+	}
+	if g, p, c, dto, err := NewLocalGate(t.Context(), f.b, f.cfg); err == nil || g.Proof != nil || p != (PhysicalProof{}) || c != nil || dto != (copilotvscodeevent.Binding{}) {
+		t.Fatal("path/receipt-only Local proof granted")
+	}
+	if !bytes.Equal(before, cursorRead(t, f.cfg.StateFile)) {
+		t.Fatal("event verification wrote or recaptured authority")
+	}
+	sink := &cursorSink{}
+	NewDesktop(Gate{Binding: f.b}, copilotvscodeevent.Binding{}, "", sink).Deliver(t.Context(), notification.Request{Silent: true, Navigation: notification.None, Policy: notification.PolicySnapshot{Valid: true, ExplicitEnabled: true, DesktopEnabled: true}})
+	if sink.calls != 0 {
+		t.Fatal("missing physical capability delivered")
+	}
+}
+
+// Regression: Local verification ignores recorded enabled value/revision or
+// package/primary drift, or repairs drift while observing an event.
+func TestLocalRecordedProfileAndProjectionDriftDeny(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("current public Local TEST filesystem tuple is Linux")
+	}
+	for _, change := range []string{"profile", "receipt", "revision", "projection", "primary"} {
+		t.Run(change, func(t *testing.T) {
+			f, adapter, _, record := localPublicFixture(t)
+			if err := adapter.ValidateBindingProfile(f.b.ScopeRoot, record); err != nil {
+				t.Fatal(err)
+			}
+			facts, _ := record.SelectedDelivery.LocalFacts()
+			path := facts.SettingsPath
+			switch change {
+			case "profile":
+				body := bytes.Replace(cursorRead(t, path), []byte(facts.Registration.Selector+`":true`), []byte(facts.Registration.Selector+`":false`), 1)
+				if bytes.Equal(body, cursorRead(t, path)) {
+					t.Fatal("TEST profile did not disable entry")
+				}
+				cursorWrite(t, path, body, 0600)
+				status, err := adapter.InspectRegistration(t.Context(), nativeconfig.New(), record.SelectedDelivery, record.NativeObjects)
+				if err != nil || status != vscode.RegistrationDisabled {
+					t.Fatalf("native opt-out not observed: %s %v", status, err)
+				}
+			case "receipt":
+				basis := record.LocalEntryObservation.Facts()
+				basis.Enabled = false
+				// Build a legitimate older false receipt, then verify it against true bytes.
+				identity := vscodeprofile.Identity{SettingsPath: facts.SettingsPath, ProfileID: facts.ProfileIdentity, PluginRoot: facts.Registration.Selector, PackageID: facts.Registration.ObjectID, PackageDigest: facts.CanonicalDigest, ProjectionDigest: facts.ProjectionDigest}
+				observed, err := vscodeprofile.VerifyRecordedEntry([]byte(`{"chat.pluginLocations":{`+fmt.Sprintf("%q", facts.Registration.Selector)+`:false}}`), identity, false)
+				if err != nil {
+					t.Fatal(err)
+				}
+				basis.ReceiptDigest = observed.Receipt.Digest
+				record.LocalEntryObservation, err = domain.NewLocalEntryObservation(basis)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if adapter.ValidateBindingProfile(f.b.ScopeRoot, record) == nil {
+					t.Fatal("stale receipt accepted")
+				}
+			case "revision":
+				path = f.cfg.StateFile
+				state, err := (statev2.Store{Path: path}).Load()
+				if err != nil {
+					t.Fatal(err)
+				}
+				changed := state.Installations[0].Clients[f.b.BindingID]
+				changed.PackageRevision.TreeDigest = "sha256:" + strings.Repeat("b", 64)
+				state.Installations[0].Clients[f.b.BindingID] = changed
+				// TEST malicious receipt bytes bypass the writer's validation deliberately.
+				raw, err := json.Marshal(state)
+				if err != nil {
+					t.Fatal(err)
+				}
+				cursorWrite(t, path, raw, 0600)
+				if _, err := readLocalRecord(f.cfg, f.b); err == nil {
+					t.Fatal("package revision lost canonical linkage")
+				}
+			case "projection":
+				path = filepath.Join(record.TargetLocator, filepath.FromSlash(vscodelocalhooks.PluginPath))
+				cursorWrite(t, path, []byte(`{"hooks":{}}`), 0600)
+				stager := providers.Stager{SnapshotBuilder: packagesnapshot.Builder{TempRoot: f.cfg.TempRoot}}
+				if stager.Verify(t.Context(), record.TargetLocator, facts.ProjectionDigest) == nil {
+					t.Fatal("changed package projection accepted")
+				}
+			case "primary":
+				path = f.fixed.Executable
+				cursorWrite(t, path, []byte("foreign executable"), 0700)
+				if _, err := installruntime.ReadInstalledSnapshot(f.b.ControlRoot); err == nil {
+					t.Fatal("stale primary identity accepted")
+				}
+			}
+			before := cursorRead(t, path)
+			if _, _, _, _, err := NewLocalGate(t.Context(), f.b, f.cfg); err == nil {
+				t.Fatal("drift admitted")
+			}
+			if !bytes.Equal(before, cursorRead(t, path)) {
+				t.Fatal("event repaired drift")
+			}
+		})
+	}
+}
+
+// The same Gate qualification seam must complete while its policy locks are
+// retained. This uses public installed authority, never a fabricated proof.
+func TestGateConsumerBindingPinnedSnapshotUnderLease(t *testing.T) {
+	f, b, ready := installedCursorFilesystem(t)
+	if !ready {
+		return
+	}
+	s, err := installruntime.ReadPolicySnapshot(cursorContext(t), f.b.ControlRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pinned, release, err := installruntime.AcquirePolicyLease(cursorContext(t), f.b.ControlRoot, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := f.g.gate.ConsumerBindingFromSnapshot(cursorContext(t), pinned)
+	if err != nil || got != localCursorBinding(b) {
+		release()
+		t.Fatal("under-lease qualification", got, err)
+	}
+	// A stale expected binding still fails against the pinned generation.
+	stale := got
+	stale.Generation--
+	if _, _, err := f.g.gate.qualify(cursorContext(t), pinned, stale); err == nil {
+		release()
+		t.Fatal("stale binding admitted")
+	}
+	// Public projection drift must still deny before releasing the same lease.
+	record, err := f.g.gate.Proof.(*cursorProof).record(cursorContext(t), f.b)
+	if err != nil {
+		release()
+		t.Fatal(err)
+	}
+	path := filepath.Join(record.Binding.TargetLocator, "plugin.json")
+	before := cursorRead(t, path)
+	cursorWrite(t, path, append(before, '\n'), 0600)
+	if _, err := f.g.gate.ConsumerBindingFromSnapshot(cursorContext(t), pinned); err == nil {
+		release()
+		t.Fatal("projection drift admitted under lease")
+	}
+	cursorWrite(t, path, before, 0600)
+	release()
+	revoked := cursorPolicy(t, f, `{"cursorNotifications":{"desktop":false,"webhook":false}}`)
+	current, release, err := installruntime.AcquirePolicyLease(cursorContext(t), f.b.ControlRoot, revoked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	consent, _, err := f.g.gate.qualify(cursorContext(t), current, consumerBinding(current, f.b))
+	if err != nil || consent.desktop || consent.webhook {
+		t.Fatal("revoked channel under lease", err)
+	}
+}
+
+// Regression: the real installed MCP-only receipt was rejected before selected
+// delivery qualification. This exercises public Apply/Store and reconstruction,
+// while leaving signed-helper/retained-lease acceptance to installed TEST E2E.
+func TestLocalMCPConsentReconstructsSelectedRecordWithoutNativeGate(t *testing.T) {
+	f, _, _, record := localPublicFixture(t, true)
+	facts, ok := record.SelectedDelivery.LocalFacts()
+	if !ok || facts.NativeStop || len(facts.MCPServers) != 1 {
+		t.Fatal("fixture is not independent MCP-only delivery")
+	}
+	snapshot, err := installruntime.ReadPolicySnapshot(cursorContext(t), f.b.ControlRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := cursorRead(t, f.cfg.StateFile)
+	if runtime.GOOS != "linux" && (runtime.GOOS != "darwin" || runtime.GOARCH != "arm64") {
+		consent, err := ReadConsent(snapshot, f.b)
+		if err != nil || consent.desktop || consent.webhook || consent.manual {
+			t.Fatal("unsupported metadata host gained consent", err)
+		}
+		if _, err := portable.ReadLocalBinding(f.b.ControlRoot, f.b.BindingID); err == nil {
+			t.Fatal("partial Local Apply published an installed locator")
+		}
+		if err := QualifyLocalConsentFromSnapshot(cursorContext(t), f.b, f.cfg, snapshot, true); err == nil {
+			t.Fatal("unsupported metadata host gained manual consent qualification")
+		}
+		if _, _, _, err := NewLocalGateFromSnapshot(cursorContext(t), f.b, f.cfg, snapshot); err == nil {
+			t.Fatal("partial MCP-only record gained native Gate")
+		}
+		if !bytes.Equal(before, cursorRead(t, f.cfg.StateFile)) {
+			t.Fatal("refused qualification rewrote retained partial state")
+		}
+		return
+	}
+	observed, err := readLocalRecord(f.cfg, f.b)
+	if err != nil || !reflect.DeepEqual(observed.Binding, record) {
+		t.Fatal("installed MCP record refused", err)
+	}
+	if runtime.GOOS == "darwin" && runtime.GOARCH == "arm64" {
+		if record.ProfileAuthority == nil || record.ProfileAuthority.IsZero() {
+			t.Fatal("original physical authority missing")
+		}
+		p, err := newLocalProofFromSnapshot(cursorContext(t), f.b, f.cfg, snapshot)
+		if err != nil || p == nil {
+			t.Fatal("selected MCP consent constructor refused", err)
+		}
+		if err := p.verify(cursorContext(t), f.b, observed, f.fixed.Executable); err != nil {
+			t.Fatal("physical selector/projection acknowledgement refused", err)
+		}
+		if _, _, _, err := NewLocalGateFromSnapshot(cursorContext(t), f.b, f.cfg, snapshot); err == nil {
+			t.Fatal("MCP-only record gained native Gate")
+		}
+	} else {
+		if err := QualifyLocalConsentFromSnapshot(cursorContext(t), f.b, f.cfg, snapshot, true); err == nil {
+			t.Fatal("unsupported physical host gained consent qualification")
+		}
+	}
+	if !bytes.Equal(before, cursorRead(t, f.cfg.StateFile)) {
+		t.Fatal("qualification recaptured or rewrote recorded authority")
 	}
 }

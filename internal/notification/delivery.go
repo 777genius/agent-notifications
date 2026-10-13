@@ -19,10 +19,18 @@ const (
 	None       Navigation = "none"
 )
 
+// LinuxBinding selects one immutable installed callback snapshot. Empty means unavailable.
+type LinuxBinding struct {
+	SnapshotPath string `json:"snapshotPath"`
+	SHA256       string `json:"sha256"`
+}
+
 // DesktopTarget is supplied by a trusted integration and setup adapter, never
 // decoded from model arguments. App identity is operator-pinned, not inferred
 // from cwd, metadata text, or whichever app happens to be foreground.
 type DesktopTarget struct {
+	Provider        string
+	Linux           LinuxBinding
 	ThreadID        string
 	ApplicationPath string
 	TeamID          string

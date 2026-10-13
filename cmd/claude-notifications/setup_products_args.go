@@ -7,15 +7,17 @@ import (
 	"strings"
 )
 
-var productOrder = []string{"claude", "codex", "opencode", "gemini", "cursor"}
-var productLabels = map[string]string{"claude": "Claude", "codex": "Codex", "opencode": "OpenCode", "gemini": "Gemini CLI", "cursor": "Cursor CLI (explicit profile)"}
-var scopeKeys = []string{"claude-config", "codex-home", "opencode-config-dir", "gemini-home", "gemini-config-root", "claude-executable", "codex-executable", "opencode-executable", "gemini-executable", "control-root", "scope-root", "client-executable"}
+var productOrder = []string{"claude", "codex", "opencode", "gemini", "cursor", "copilot-vscode"}
+var productLabels = map[string]string{"claude": "Claude", "codex": "Codex", "opencode": "OpenCode", "gemini": "Gemini CLI", "cursor": "Cursor CLI (explicit profile)", "copilot-vscode": "VS Code Local (explicit profile)"}
+var scopeKeys = []string{"claude-config", "codex-home", "opencode-config-dir", "gemini-home", "gemini-config-root", "claude-executable", "codex-executable", "opencode-executable", "gemini-executable", "control-root", "scope-root", "client-executable", "local-settings"}
 
 type setupProductsArgs struct {
 	Operation, Mode, IntentFile                    string
 	Products                                       []string
 	Scopes                                         map[string]string
 	AgentNotify, SkipAgentNotify, Desktop, Webhook bool
+	DesktopSet, WebhookSet                         bool
+	LocalNativeStop, LocalMCP, LocalSkills, Manual *bool
 	Configure                                      notificationConfigureRequest
 	ConfigureArgs                                  []string
 }
@@ -34,7 +36,7 @@ func parseSetupProducts(args []string) (r setupProductsArgs, err error) {
 			return invalid()
 		}
 		return r, nil
-	case "select", "channels", "confirm", "intent-args", "preflight":
+	case "select", "channels", "confirm", "prepare", "intent-args", "preflight":
 	default:
 		return invalid()
 	}
@@ -53,7 +55,7 @@ func parseSetupProducts(args []string) (r setupProductsArgs, err error) {
 		}
 		boolean := key == "plain" || key == "desktop" || key == "webhook" || key == "agent-notify" || key == "skip-agent-notify" || key == "preserve-policy" || key == "request-permission"
 		if boolean {
-			if inline {
+			if inline && (key != "desktop" && key != "webhook" || value != "true" && value != "false") {
 				return invalid()
 			}
 		} else if !inline {
@@ -82,6 +84,21 @@ func parseSetupProducts(args []string) (r setupProductsArgs, err error) {
 		}
 		seen[key] = true
 		switch key {
+		case "local-native-stop", "local-mcp", "local-skills", "manual":
+			on, e := parseBoolFlag(value)
+			if e != nil {
+				return invalid()
+			}
+			switch key {
+			case "local-native-stop":
+				r.LocalNativeStop = &on
+			case "local-mcp":
+				r.LocalMCP = &on
+			case "local-skills":
+				r.LocalSkills = &on
+			case "manual":
+				r.Manual = &on
+			}
 		case "products":
 			r.Products, err = parseProductCSV(value)
 			if err != nil {
@@ -97,9 +114,9 @@ func parseSetupProducts(args []string) (r setupProductsArgs, err error) {
 		case "skip-agent-notify":
 			r.SkipAgentNotify = true
 		case "desktop":
-			r.Desktop = true
+			r.Desktop, r.DesktopSet = !inline || value == "true", true
 		case "webhook":
-			r.Webhook = true
+			r.Webhook, r.WebhookSet = !inline || value == "true", true
 		case "navigation", "app", "team-id", "allow-unknown-caller", "allow-caller-asserted", "preserve-policy", "request-permission":
 			routePresent = true
 			routeArgs = append(routeArgs, "--"+key)
@@ -117,7 +134,7 @@ func parseSetupProducts(args []string) (r setupProductsArgs, err error) {
 		return invalid()
 	}
 	if r.Operation == "select" {
-		if len(r.Products) > 0 || r.IntentFile != "" || r.AgentNotify || r.SkipAgentNotify || r.Desktop || r.Webhook || routePresent {
+		if len(r.Products) > 0 || r.IntentFile != "" || r.AgentNotify || r.SkipAgentNotify || r.DesktopSet || r.WebhookSet || routePresent {
 			return invalid()
 		}
 		return r, nil
@@ -131,11 +148,33 @@ func parseSetupProducts(args []string) (r setupProductsArgs, err error) {
 	if len(r.Products) == 0 {
 		return invalid()
 	}
+	if containsProduct(r.Products, "copilot-vscode") {
+		if len(r.Products) != 1 || routePresent || r.Operation == "channels" && len(seen) != 1 {
+			return invalid()
+		}
+		if r.Operation == "confirm" || r.Operation == "prepare" {
+			if r.Scopes["scope-root"] == "" || r.Scopes["client-executable"] == "" || r.Scopes["local-settings"] != filepath.Join(r.Scopes["scope-root"], "settings.json") || r.LocalNativeStop == nil || r.LocalMCP == nil || r.LocalSkills == nil {
+				return invalid()
+			}
+		}
+		if r.Operation == "preflight" && (r.IntentFile == "" || len(r.Scopes) > 0 || modeSeen) {
+			return invalid()
+		}
+		return r, nil
+	}
+	if r.LocalNativeStop != nil || r.LocalMCP != nil || r.LocalSkills != nil || r.Manual != nil || r.Scopes["local-settings"] != "" {
+		return invalid()
+	}
 	if containsProduct(r.Products, "cursor") {
+		for _, raw := range args {
+			if strings.HasPrefix(raw, "--desktop=") || strings.HasPrefix(raw, "--webhook=") {
+				return invalid()
+			}
+		}
 		// Cursor is one existing selected wizard operation; the two-client
 		// Claude/Codex group and their policy configuration keep their meaning.
 		if len(r.Products) != 1 || routePresent || (r.Operation == "channels" && (len(seen) != 1 || r.IntentFile != "")) ||
-			(r.Operation == "confirm" && (r.Scopes["scope-root"] == "" || r.Scopes["client-executable"] == "")) {
+			((r.Operation == "confirm" || r.Operation == "prepare") && (r.Scopes["scope-root"] == "" || r.Scopes["client-executable"] == "")) {
 			return invalid()
 		}
 		if r.Operation == "preflight" && (r.IntentFile == "" || len(r.Scopes) > 0 || modeSeen) {
@@ -165,7 +204,7 @@ func parseSetupProducts(args []string) (r setupProductsArgs, err error) {
 			return invalid()
 		}
 	}
-	if (!portable && (routePresent || r.AgentNotify || r.SkipAgentNotify)) || (!observer && (r.Desktop || r.Webhook)) || (observer && !r.Desktop && !r.Webhook) || (r.SkipAgentNotify && routePresent) {
+	if (!portable && (routePresent || r.AgentNotify || r.SkipAgentNotify)) || (!observer && (r.DesktopSet || r.WebhookSet)) || (r.SkipAgentNotify && routePresent) {
 		return invalid()
 	}
 	if portable && !r.SkipAgentNotify {

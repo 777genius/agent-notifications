@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"reflect"
 	goruntime "runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -41,7 +42,11 @@ func (f fakeDelivery) CheckReadiness(_ context.Context, r notification.Request) 
 }
 func nav(r notification.Request) notification.NavigationResult {
 	if r.Target.ThreadID != "" {
-		return notification.NavigationResult{Capability: "available", Precision: "chat_id", Scope: "local_current_profile"}
+		scope := "local_current_profile"
+		if r.Target.Linux.SnapshotPath != "" {
+			scope = "selected_linux_installation"
+		}
+		return notification.NavigationResult{Capability: "available", Precision: "chat_id", Scope: scope}
 	}
 	return notification.NavigationResult{Capability: "disabled", Precision: "none"}
 }
@@ -53,7 +58,17 @@ func (f fakeDelivery) Deliver(_ context.Context, r notification.Request) notific
 	return notification.Receipt{CorrelationID: r.CorrelationID, Status: s, Reason: "test_outcome", Navigation: nav(r)}
 }
 func snapshot(route string) installruntime.PolicySnapshot {
-	return installruntime.PolicySnapshot{Installation: installruntime.InstalledSnapshot{Enabled: true, Ledger: installruntime.Ledger{ID: route}}, Fields: map[string]json.RawMessage{"schemaVersion": json.RawMessage(`1`), "enabled": json.RawMessage(`true`), "route": json.RawMessage(fmt.Sprintf(`{"localRouting":true,"applicationPath":%q,"teamID":"TEAM"}`, route))}}
+	routing := map[string]any{"localRouting": true, "applicationPath": route, "teamID": "TEAM"}
+	if goruntime.GOOS == "linux" {
+		delete(routing, "applicationPath")
+		delete(routing, "teamID")
+		routing["linuxCallbackSnapshot"] = notification.LinuxBinding{SnapshotPath: route, SHA256: strings.Repeat("a", 64)}
+	}
+	raw, err := json.Marshal(routing)
+	if err != nil {
+		panic(err)
+	}
+	return installruntime.PolicySnapshot{Installation: installruntime.InstalledSnapshot{Enabled: true, Ledger: installruntime.Ledger{ID: route}}, Fields: map[string]json.RawMessage{"schemaVersion": json.RawMessage(`1`), "enabled": json.RawMessage(`true`), "route": raw}}
 }
 
 const global = `{"foreign":{"keep":true},"notifications":{"desktop":{"enabled":true,"sound":true,"clickToFocus":true}}}`
@@ -100,13 +115,20 @@ func TestRequestSnapshotsSharedLimiterReplayAndClose(t *testing.T) {
 	}
 	entered := make(chan string, 2)
 	release := make(chan struct{})
+	var releaseOnce sync.Once
+	closeRelease := func() { releaseOnce.Do(func() { close(release) }) }
+	defer closeRelease()
 	var mu sync.Mutex
 	seen := map[string]string{}
 	o.DeliveryFactory = func(m notifier.ManagedInstallation, _ string, _ notifier.BootClock) Delivery {
 		return fakeDelivery{ready: func(r notification.Request) { entered <- m.Expected.Ledger.ID; <-release }, send: func(r notification.Request) string {
 			mu.Lock()
 			defer mu.Unlock()
-			seen[m.Expected.Ledger.ID] = r.Target.ApplicationPath
+			target := r.Target.ApplicationPath
+			if goruntime.GOOS == "linux" {
+				target = r.Target.Linux.SnapshotPath
+			}
+			seen[m.Expected.Ledger.ID] = target
 			return "submitted"
 		}}
 	}
@@ -114,15 +136,29 @@ func TestRequestSnapshotsSharedLimiterReplayAndClose(t *testing.T) {
 	results := make(chan agentnotify.Receipt, 2)
 	go func() { results <- notify(b, "A") }()
 	go func() { results <- notify(b, "B") }()
-	<-entered
-	<-entered
+	entryTimer := time.NewTimer(10 * time.Second)
+	defer entryTimer.Stop()
+	for range 2 {
+		select {
+		case <-entered:
+		case early := <-results:
+			t.Fatalf("Notify returned before readiness: %+v", early)
+		case <-entryTimer.C:
+			t.Fatal("Notify did not reach readiness within fixture budget")
+		}
+	}
 	if r := notify(b, "C"); r.Reason != "busy" {
 		t.Fatalf("third: %+v", r)
 	}
-	close(release)
+	closeRelease()
 	for range 2 {
-		if r := <-results; r.Status != "submitted" {
-			t.Fatalf("send: %+v", r)
+		select {
+		case r := <-results:
+			if r.Status != "submitted" {
+				t.Fatalf("send: %+v", r)
+			}
+		case <-entryTimer.C:
+			t.Fatal("Notify did not complete within fixture budget")
 		}
 	}
 	if loads.Load() != 2 || len(seen) != 2 {
@@ -207,6 +243,9 @@ func TestConfigurationAndRates(t *testing.T) {
 	if p.Route.AllowCallerAsserted || p.Route.AllowUnknownCaller {
 		t.Fatal("implicit opt-in")
 	}
+	if !p.Route.LocalRouting || p.Route.Platform != goruntime.GOOS {
+		t.Fatal("enabled route lost platform binding", p.Route)
+	}
 	s.Fields["rates"] = json.RawMessage(`{"burst":0}`)
 	if _, e = b.policy(s); e == nil {
 		t.Fatal("zero rate accepted")
@@ -214,7 +253,7 @@ func TestConfigurationAndRates(t *testing.T) {
 	s.Fields = map[string]json.RawMessage{}
 	b.opts.ReadGlobal = func(string) ([]byte, error) { t.Fatal("disabled global read"); return nil, nil }
 	p, e = b.policy(s)
-	if e != nil || p.Delivery.ExplicitEnabled {
+	if e != nil || p.Delivery.ExplicitEnabled || p.Route != (origin.RoutePolicy{}) {
 		t.Fatal(p, e)
 	}
 }

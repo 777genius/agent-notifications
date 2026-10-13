@@ -1,7 +1,10 @@
-//go:build !linux
+//go:build !linux && !windows
 
 package main
 
-import "github.com/777genius/agent-notifications/internal/notification"
+import (
+	"github.com/777genius/agent-notifications/internal/agentnotify/portable"
+	"github.com/777genius/agent-notifications/internal/notification"
+)
 
-func newCursorDesktopPort() notification.DeliveryPort { return nil }
+func newCursorDesktopPort(portable.Binding, string) notification.DeliveryPort { return nil }

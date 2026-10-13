@@ -123,7 +123,10 @@ func observeBootstrapMCP(ctx context.Context, r Request, preimage *installruntim
 		}
 		for _, target := range report.Targets {
 			if (target.Unit == "agent-notify" || target.Unit == "direct-mcp") && (target.Outcome != "installed" && target.Outcome != "absent") {
-				return p, 0, ErrRefused
+				if err := ctx.Err(); err != nil {
+					return p, 0, fmt.Errorf("MCP inspection interrupted: %w", err)
+				}
+				return p, 0, bootstrapMCPInspectionError(target)
 			}
 		}
 	}

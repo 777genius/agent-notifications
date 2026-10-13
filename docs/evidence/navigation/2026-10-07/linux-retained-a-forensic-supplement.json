@@ -1,0 +1,143 @@
+{
+  "schemaVersion": 1,
+  "scope": "readonly_retained_A_forensic_supplement",
+  "originalNativeOutcome": "FAILED",
+  "forensicReadCompleted": true,
+  "shippingBinarySource": "9b2e5ca9bb21d61bf1f345905c1abcf2c27b0187",
+  "harnessBase": "df677a96ee13052a2788307b132ff5b757854076",
+  "overlaySHA256": {
+    "guest_probe": "2420433672e5576102c6b4ff7e13e32b31e5f30c2fa9e8a754cb2a49f283995c",
+    "client_controller": "9f8e5bd0637a155890239711ec6595ff90e3083b80cfada4b436b7e56fbbd622",
+    "callback_fixture": "d96b75cdfd38ca41cff49f9f9d684f15cb5b13f9f5b9ece597b99083b09fb1b1",
+    "pointer_entry": "cd1abb49e4534209b8de48dd757f281782e671b87528028d9a2835f31502f515"
+  },
+  "custodySHA256": {
+    "coreFreeze": "93d773de1ec4755b1aca8583e976f444d35488c5157d9ec6b3a58671c81a3bb3",
+    "gateFreeze": "be7d9c76484b363739f71b2f1c187a4b173ec759bbf6823fd4ac84d4d997d145",
+    "finalBinding": "06a2238fa44e67ec27ce0bf834633183fc1303f2af10c671da87a53f20304d8e",
+    "actualForensicReport": "1f3970ba0b867f7c7a3623b6549ba4644bee62f4721bf378f0dbc92be00648ad",
+    "chainDiagnosis": "4a88859e2ba87b9b2f77999c0d12c86f9dbc6a066d88a5fd3303069fad78a7de",
+    "captureInventory": "b1020bd0fd59500d9f32bc86155d2c08c24473d725184b2e25832ddcab2986c1"
+  },
+  "exports": {
+    "count": 13,
+    "totalBytes": 1928593,
+    "entries": [
+      {
+        "label": "notification_protocol",
+        "bytes": 8689,
+        "sha256": "f2543794ff1d61ef4f9e4558713dab417cdf45f3ee64d8d83c45675b43d8711f"
+      },
+      {
+        "label": "pointer_stderr",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "label": "private_bus_stderr",
+        "bytes": 1367,
+        "sha256": "6e15391d037c817ad2fc4e0fe72a08a268967e465eb0c7f6c785893da74f963e"
+      },
+      {
+        "label": "private_bus_monitor",
+        "bytes": 1848814,
+        "sha256": "16c683526f8ec4d67741b256d0e6bd1c5ed3f33490009747e81119fa0d44e2e3"
+      },
+      {
+        "label": "server_resource_observer",
+        "bytes": 1549,
+        "sha256": "c2b35ccf6376af197c8ddcb8df2b1dc666642f08e5ad9c881060ee2f2de54925"
+      },
+      {
+        "label": "native_progress",
+        "bytes": 31148,
+        "sha256": "89757ad2766b46bcf4520ab6090720c42952bb8656369ce9e11153bccf5255c2"
+      },
+      {
+        "label": "native_final",
+        "bytes": 33612,
+        "sha256": "8903d2e9587264166fd2004dc737fb4095bf080aecb30a2d3b7f03b8cecd7fc4"
+      },
+      {
+        "label": "pointer_spec",
+        "bytes": 240,
+        "sha256": "6020241979cc7b1cffe932594d148502c18e6a53add4737122111ed8ce49cb37"
+      },
+      {
+        "label": "callback_spec",
+        "bytes": 529,
+        "sha256": "5cbbd9b3d80d8e8b39e43f75b08f7852cff3c0c87e9099a14524893a1653f4b6"
+      },
+      {
+        "label": "immutable_notification_record",
+        "bytes": 415,
+        "sha256": "407e7bacba9db1529610c9cdaf96575402d44cc6809c30825c2c1cf03d7a71bc"
+      },
+      {
+        "label": "retained_snapshot",
+        "bytes": 1129,
+        "sha256": "5786db01778e79251615fae2c058001469a4b18b0613da95a92befaf7ba60be7"
+      },
+      {
+        "label": "desktop_registration",
+        "bytes": 539,
+        "sha256": "f846f6ca286c2c018ec77f4e3646159f602fc5fd6f5f25a6dac381c6857b0216"
+      },
+      {
+        "label": "dbus_registration",
+        "bytes": 562,
+        "sha256": "7ff484980aaa3e2ab50e3883c55f808723b7f1ad7448fda1a0cb5eceaf4011d9"
+      }
+    ]
+  },
+  "observations": {
+    "nativePressCount": 1,
+    "nativeReleaseCount": 1,
+    "actionInvokedCount": 1,
+    "retainedACallbackCaller": "captured_GTK_backend_owner",
+    "backendCallbackDelayAfterActionInvokedMilliseconds": 0.513,
+    "callbackAction": "open",
+    "callbackRecordBinding": "original_retained_A_record",
+    "bothCallbackTokenKeysMatchNativeToken": true,
+    "selectedResourceMatchingTokenActivationCount": 1,
+    "selectedResourceAdditionalDifferentTokenActivationCount": 3,
+    "additionalActivationCause": "unknown",
+    "senderExitCollectedBeforeClick": true,
+    "actualURIObserved": false,
+    "actualSelectedArgvObserved": false
+  },
+  "failureDiagnosis": {
+    "originalFailure": "expired_observation_cannot_admit_effect",
+    "predicate": "shipping_started",
+    "predicateBudgetSeconds": 12,
+    "required": "live exact retained Go reader plus sole selected executable with exact expected URI argv",
+    "capturedConjunctFailure": "unknown",
+    "sourceCaptureContract": "reader and selected argv remain local; report fields publish only after complete match; cleanup publishes PID birth and exit only; post-click failures do not capture per-poll argv",
+    "hashCostCauseProved": false,
+    "absenceOfLaunchProved": false
+  },
+  "forensicCleanup": {
+    "terminalExitCode": 0,
+    "OOMKilled": false,
+    "containerRemoved": true,
+    "inputsUnchanged": true,
+    "guestBooted": false,
+    "nativeEffects": false
+  },
+  "qualification": {
+    "nativeReplay": false,
+    "publicationCommitExecuted": false,
+    "fullPairAccepted": false,
+    "actualURI": false,
+    "navigation": false,
+    "humanRender": false,
+    "globalPlatform": false,
+    "retryAllowed": false
+  },
+  "limitations": [
+    "Matching compositor activation does not prove URI or authenticated chat.",
+    "Different-token activations are observations with unknown origin.",
+    "Forensic read success does not reclassify the original native failure.",
+    "This supplement does not establish the exact predicate conjunct or hash-cost cause."
+  ]
+}
