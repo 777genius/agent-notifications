@@ -6,6 +6,23 @@ on:
       - '.github/workflows/windows-callback-installed-canary.yml'
       - 'native/windows-callback/**'
       - 'internal/windowscallback/**'
+  workflow_call:
+    inputs:
+      admission:
+        required: true
+        type: string
+      phase:
+        required: true
+        type: string
+      expectedArchiveSHA:
+        type: string
+        default: ''
+      expectedFullName:
+        type: string
+        default: ''
+      scenario:
+        type: string
+        default: basic
   workflow_dispatch:
     inputs:
       admission:

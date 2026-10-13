@@ -7,6 +7,28 @@ on:
       - '.github/workflows/windows-callback-contracts.yml'
       - '.github/workflows/release.yml'
   workflow_dispatch:
+    inputs:
+      admission:
+        description: 'Empty keeps contracts inert; explicit fresh TEST admission enables the installed workflow'
+        type: string
+        default: ''
+      phase:
+        description: 'Read-only signed x64 archive intake first; installed requires independently accepted pins'
+        type: choice
+        default: archive_intake
+        options: [archive_intake, installed]
+      expectedArchiveSHA:
+        description: 'Raw SHA256 accepted from a separate Windows signed archive intake'
+        type: string
+        default: ''
+      expectedFullName:
+        description: 'Exact x64 package FullName accepted from the same intake'
+        type: string
+        default: ''
+      scenario:
+        type: choice
+        default: basic
+        options: [basic, retained]
 permissions:
   contents: read
 jobs:
@@ -112,3 +134,13 @@ jobs:
           path: ${{ runner.temp }}/windows-callback-contracts
           if-no-files-found: error
           retention-days: 14
+
+  admitted-installed-proof:
+    if: github.event_name == 'workflow_dispatch' && github.repository == '777genius/agent-notifications' && github.run_attempt == 1 && inputs.admission == 'one-fresh-disposable-installed-callback'
+    uses: ./.github/workflows/windows-callback-installed-canary.yml
+    with:
+      admission: ${{ inputs.admission }}
+      phase: ${{ inputs.phase }}
+      expectedArchiveSHA: ${{ inputs.expectedArchiveSHA }}
+      expectedFullName: ${{ inputs.expectedFullName }}
+      scenario: ${{ inputs.scenario }}
