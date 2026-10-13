@@ -59,3 +59,31 @@ authority before any Show. The harness never repairs roots or registers dummy
 SDK identities. This source must be composed with the separately reviewed core
 parent-preparation implementation before dispatch; old core 950222e does not
 close this prerequisite and current native qualification remains pending.
+
+The separate `package_noshow` phase admits only the literal
+`one-fresh-disposable-package-noshow`, `package_noshow` scenario and first run
+attempt. It reacquires the same fixed official x64 archive, checks the separately
+accepted raw SHA256 and OS-derived FullName through the existing strict
+system-signature/APPX observer, and makes exactly one AddPackageAsync deployment.
+A fresh observer process then selects exactly one current-user official x64
+package. The package and profile remain until whole VM/profile teardown. This
+phase never invokes normal setup, Show, Shell action or launch paths and makes
+no global-drain, package-removal or callback claim after foreign effects.
+
+`coreRef` is accepted only for `package_noshow`. Empty resolves to the current
+harness head; otherwise it must be a 40-lowercase-hex same-repo ancestor of the
+harness source. The actual production `internal/installruntime` race test binary,
+the embedded helper and the shipping Go bytes are compiled from that core
+checkout. The observer and controller hashes remain bound to the separate
+harness SHA. Installed archive intake/basic/retained runs reject every alternate
+`coreRef` and retain their existing source binding.
+
+The package phase runs exactly
+`^(TestWindowsNativeRecoverFixedMutationBoundaries|TestWindowsNativeForeignDecisionRecoveryRefuses)$`
+once against the AMD64 test executable under the ARM64 Windows 11 runner. The
+bounded six-minute child keeps terminal code/signal/error and every selected
+case byte; SKIP, missing cases and unknown collection refuse. Its record remains
+package-only: `nativeAmd64Qualified=false`, `installedCallbackQualified=false`,
+`notificationQualified=false`, `callbackQualified=false`,
+`rebootQualified=false`, and `noShowScope=true`. No Windows qualification is
+claimed from Linux source checks or inert evidence joins.

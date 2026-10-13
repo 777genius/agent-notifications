@@ -28,12 +28,17 @@ on:
       scenario:
         type: choice
         default: basic
-        options: [basic, retained]
+        options: [basic, retained, package_noshow]
+      coreRef:
+        description: 'package_noshow only; 40-lowerhex same-repo ancestor, empty resolves to current head'
+        type: string
+        default: ''
 permissions:
   contents: read
 jobs:
   compile-and-inert-contracts:
     name: SDK compile, inert wire and private registry TEST contracts
+    if: github.event_name == 'pull_request' || inputs.phase != 'package_noshow'
     runs-on: windows-latest
     timeout-minutes: 15
     steps:
@@ -136,7 +141,7 @@ jobs:
           retention-days: 14
 
   admitted-installed-proof:
-    if: github.event_name == 'workflow_dispatch' && github.repository == '777genius/agent-notifications' && github.run_attempt == 1 && inputs.admission == 'one-fresh-disposable-installed-callback'
+    if: github.event_name == 'workflow_dispatch' && github.repository == '777genius/agent-notifications' && github.run_attempt == 1 && inputs.admission == 'one-fresh-disposable-installed-callback' && (inputs.phase == 'archive_intake' || inputs.phase == 'installed') && inputs.coreRef == ''
     uses: ./.github/workflows/windows-callback-installed-canary.yml
     with:
       admission: ${{ inputs.admission }}
@@ -144,3 +149,15 @@ jobs:
       expectedArchiveSHA: ${{ inputs.expectedArchiveSHA }}
       expectedFullName: ${{ inputs.expectedFullName }}
       scenario: ${{ inputs.scenario }}
+      coreRef: ''
+
+  admitted-package-noshow-proof:
+    if: github.event_name == 'workflow_dispatch' && github.repository == '777genius/agent-notifications' && github.run_attempt == 1 && inputs.admission == 'one-fresh-disposable-package-noshow' && inputs.phase == 'package_noshow' && inputs.scenario == 'package_noshow'
+    uses: ./.github/workflows/windows-callback-installed-canary.yml
+    with:
+      admission: ${{ inputs.admission }}
+      phase: ${{ inputs.phase }}
+      expectedArchiveSHA: ${{ inputs.expectedArchiveSHA }}
+      expectedFullName: ${{ inputs.expectedFullName }}
+      scenario: ${{ inputs.scenario }}
+      coreRef: ${{ inputs.coreRef }}

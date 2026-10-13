@@ -6,6 +6,7 @@ import { mkdir, open, readFile, readdir, unlink } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { callbackJoin, envelope, sha, prerequisiteAdmission, type Receiver, type Tuple } from './evidence.mts';
+import { acquireOfficialArchive } from './strict_archive.mts';
 type Artifact = {source: string; helperSHA256: string; binarySHA256: string; helperExecuted: boolean; installedQualified: boolean};
 type Ledger = {Generation: number; WindowsRetained?: {SnapshotPath: string; SHA256: string}[]};
 const env = process.env;
@@ -15,6 +16,7 @@ assert.equal(env.GITHUB_REPOSITORY,'777genius/agent-notifications'); assert.equa
 const source = env.GITHUB_SHA!; assert(/^[a-f0-9]{40}$/.test(source));
 const scenario = env.TEST_INSTALLED_SCENARIO; assert(scenario === 'basic' || scenario === 'retained');
 const phase = env.TEST_INSTALLED_PHASE; assert(phase === 'archive_intake' || phase === 'installed');
+assert.equal(env.TEST_CORE_REF || '','');
 const tuple: Tuple = {source,nonce:randomBytes(16).toString('hex')};
 const root = path.join(env.RUNNER_TEMP!,'TEST-installed-'+tuple.nonce);
 const artifact = path.resolve(env.TEST_INSTALLED_ARTIFACT!);
@@ -84,26 +86,7 @@ async function setup(operation: 'enable'|'disable', route=false): Promise<void> 
   await run(route ? 'setup-route' : operation === 'enable' ? 'preserved-route-readiness-and-policy-write' : 'disable',original,args);
 }
 async function acquire(): Promise<void> {
-  const initial = 'https://persistent.oaistatic.com/codex-app-prod/ChatGPT-x64.msix';
-  let url = initial; const deadline = Date.now()+120000; const h = await open(path.join(root,'client.msix'),'wx');
-  let total = 0;
-  try {
-    for (let redirects = 0; redirects <= 5; ++redirects) {
-      assert(Date.now() < deadline);
-      const response = await fetch(url,{redirect:'manual',signal:AbortSignal.timeout(deadline-Date.now())});
-      if ([301,302,303,307,308].includes(response.status)) {
-        assert(redirects < 5); const target = new URL(response.headers.get('location')!,url);
-        assert(target.protocol === 'https:' && (target.hostname === 'persistent.oaistatic.com' || target.hostname.endsWith('.oaistatic.com')));
-        await response.body?.cancel(); url = target.href; continue;
-      }
-      assert(response.ok && response.body); const reader = response.body.getReader();
-      for (;;) { const item = await reader.read(); if (item.done) break;
-        total += item.value.length; assert(total <= 1073741824 && Date.now() < deadline); await h.writeFile(item.value);
-      }
-      assert(total > 0); await h.sync(); break;
-    }
-  } finally { await h.close(); }
-  await persist('acquisition.json',{...tuple,official_url:initial,actual_url:url,bytes:total,sha256:await hashFile(path.join(root,'client.msix'))});
+  await persist('acquisition.json',{...tuple,...await acquireOfficialArchive(root,tuple)});
 }
 async function routeA(): Promise<{binding: {SnapshotPath: string; SHA256: string}; snapshot: string[]; raw: Buffer}> {
   const l = await ledger(); assert.equal(l.WindowsRetained?.length,1); const binding = l.WindowsRetained[0]!;

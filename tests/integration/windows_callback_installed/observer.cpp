@@ -475,6 +475,29 @@ static void packages(const std::wstring& expected, bool absent) {
  }
  require(count == (absent ? 0U : 1U)); budget();
 }
+// A fresh current-user query after deployment is deliberately separate from
+// the held archive and its one-shot deployment operation.
+static void selectedPackage() {
+ auto deployment = read(L"deployment.json"); join(deployment);
+ const auto expected = string(deployment,L"full_name");
+ require(deployment.GetNamedString(L"outcome") == L"installed_exact");
+ PackageManager manager;
+ budget(); unsigned count = 0;
+ for (const auto& package : manager.FindPackagesForUser(L"",L"OpenAI.Codex_2p2nqsd0c76g0")) {
+  budget(); require(++count <= 8);
+  const auto id = package.Id();
+  require(id.Name() == L"OpenAI.Codex" && id.Publisher() == L"CN=50BDFD77-8903-4850-9FFE-6E8522F64D5B"
+   && id.FamilyName() == L"OpenAI.Codex_2p2nqsd0c76g0" && id.FullName() == expected
+   && id.Architecture() == winrt::Windows::System::ProcessorArchitecture::X64 && !package.IsResourcePackage());
+ }
+ require(count == 1); budget();
+ auto report = fact(); put(report,L"selected_full_name",narrow(expected));
+ put(report,L"family","OpenAI.Codex_2p2nqsd0c76g0"); put(report,L"selection_scope","current_user");
+ put(report,L"architecture","x64"); num(report,L"selected_current_user_package_count",count);
+ report.Insert(L"official_identity",JsonValue::CreateBooleanValue(true));
+ report.Insert(L"read_only",JsonValue::CreateBooleanValue(true));
+ publish(L"package-census.json",report);
+}
 // Only decoded ordinary DOS output accepts '/' as a Windows separator.
 // Never use this value to open a file or normalize the canonical held path.
 static std::wstring dosSeparators(std::wstring decoded) {
@@ -575,18 +598,25 @@ static void archive(bool deploy) {
  archiveAt("archive_intake_join_complete"); budget();
  archiveAt("deployment_archive_physical_path");
  const auto target = deploymentUri(physical(held.file.h));
- archiveAt("deployment_package_manager_constructor"); budget();
- PackageManager manager;
- archiveAt("deployment_intent_publication"); budget();
- publish(L"deployment.intent.json",report); budget();
- auto operation = manager.AddPackageAsync(target,nullptr,DeploymentOptions::None);
+  archiveAt("deployment_package_manager_constructor"); budget();
+  PackageManager manager;
+  archiveAt("deployment_intent_publication"); budget();
+  publish(L"deployment.intent.json",report); budget();
+ unsigned addPackageOperations = 0;
+  auto operation = manager.AddPackageAsync(target,nullptr,DeploymentOptions::None);
+ ++addPackageOperations;
  using winrt::Windows::Foundation::AsyncStatus;
  while (operation.Status() == AsyncStatus::Started) { budget(); Sleep(10); }
  require(operation.Status() == AsyncStatus::Completed);
  winrt::check_hresult(operation.ErrorCode());
  auto result = operation.GetResults(); winrt::check_hresult(result.ExtendedErrorCode()); budget();
+ archiveAt("deployment_immutable_archive_custody");
+ require(fileSHA(held.file.h) == held.digest);
  packages(held.full,false);
- put(report,L"outcome","installed_exact"); publish(L"deployment.json",report);
+ require(addPackageOperations == 1);
+ put(report,L"outcome","installed_exact"); num(report,L"add_package_operations",addPackageOperations);
+ report.Insert(L"immutable_archive_custody",JsonValue::CreateBooleanValue(true));
+ publish(L"deployment.json",report);
 }
 struct Route {
  fs::path path;
@@ -958,6 +988,7 @@ int wmain(int argc, wchar_t** argv) {
   else if (mode == L"prerequisites-post-setup") prerequisites(PrerequisiteStage::postSetup);
   else if (mode == L"archive") archive(false);
   else if (mode == L"deploy") archive(true);
+  else if (mode == L"package-census") selectedPackage();
   else if (mode == L"click") click();
   else require(false);
   return 0;
