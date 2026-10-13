@@ -41,8 +41,9 @@ func validateWindowsTransaction(tx transaction) error {
 	if tx.Schema != WindowsGenerationTransactionSchema || tx.Windows == nil || tx.OrphanRecovery != nil {
 		return fmt.Errorf("schema6 requires a Windows participant")
 	}
-	if tx.After.Schema != WindowsGenerationLedgerSchema || tx.After.WriterFloor < WindowsGenerationWriterFloor ||
-		tx.After.DecoderFloor < WindowsGenerationDecoderFloor || tx.Before.DecoderFloor > tx.After.DecoderFloor {
+	readerFloor, declared := windowsLedgerReaderFloor(tx.After.Schema)
+	if !declared || readerFloor != WindowsGenerationLedgerReaderFloor ||
+		tx.After.WriterFloor < WindowsGenerationWriterFloor || tx.Before.DecoderFloor > tx.After.DecoderFloor {
 		return fmt.Errorf("windows participant requires ledger/floor6")
 	}
 	if tx.Before.WriterFloor > tx.After.WriterFloor {

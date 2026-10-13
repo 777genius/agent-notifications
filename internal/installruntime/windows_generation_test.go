@@ -16,7 +16,6 @@ func windowsJournalFixture() transaction {
 	tx.Schema = WindowsGenerationTransactionSchema
 	tx.After.Schema = WindowsGenerationLedgerSchema
 	tx.After.WriterFloor = WindowsGenerationWriterFloor
-	tx.After.DecoderFloor = WindowsGenerationDecoderFloor
 	manifest := windowscallback.Snapshot{Generation: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", CanonicalRoot: `\\?\C:\TEST\windows-callback\aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`, OwnerSID: "S-1-5-21-1", HelperSHA256: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", AUMID: "AgentNotifications.TEST", CLSID: "{11111111-1111-1111-1111-111111111111}", VendorName: windowscallback.VendorName, Publisher: windowscallback.VendorPublisher, Family: windowscallback.VendorFamily, FullName: "OpenAI.Codex_26.930.7945.0_x64__2p2nqsd0c76g0"}
 	encoded, _ := windowscallback.EncodeSnapshot(manifest)
 	binding := windowscallback.Binding{SnapshotPath: `\\?\C:\TEST\windows-callback\aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\generation.wne`, SHA256: windowscallback.Digest(encoded)}
@@ -81,14 +80,48 @@ func TestWindowsWriterFloorPreservesOrdinaryProtocol(t *testing.T) {
 	if next.Schema != WindowsGenerationLedgerSchema || next.WriterFloor != WindowsGenerationWriterFloor || transactionSchemaFor(next, Request{}) != transactionSchemaV4 {
 		t.Fatal(next)
 	}
-	if next.DecoderFloor != WindowsGenerationDecoderFloor {
-		t.Fatal(next.DecoderFloor)
+	readerFloor, declared := windowsLedgerReaderFloor(next.Schema)
+	if next.DecoderFloor != 0 || !declared || readerFloor != WindowsGenerationLedgerReaderFloor {
+		t.Fatalf("Windows ledger reader borrowed native decoder floor: native=%d schema=%d", next.DecoderFloor, next.Schema)
 	}
 	current = windowsJournalFixture().After
 	next = current
 	applyReservationProtocol(&next, Request{}, current)
 	if next.Schema != WindowsGenerationLedgerSchema || next.WriterFloor != WindowsGenerationWriterFloor || !reflect.DeepEqual(next.WindowsRetained, current.WindowsRetained) {
 		t.Fatal(next)
+	}
+}
+
+// Breakage: charging a Windows generation incorrectly promotes the existing
+// NativeRecord decoder floor and therefore blocks or mislabels later native
+// updates and schema5 orphan recovery.
+func TestWindowsGenerationKeepsNativeDecoderFloorOne(t *testing.T) {
+	current := windowsJournalFixture().After
+	current.Schema = WindowsGenerationLedgerSchema
+	current.WriterFloor = WindowsGenerationWriterFloor
+	current.DecoderFloor = 1
+	current.Native = &NativeRecord{DecoderFloor: 1}
+	next := current
+	applyReservationProtocol(&next, Request{}, current)
+	if err := validateWindowsRetained(next); err != nil {
+		t.Fatal(err)
+	}
+	if next.DecoderFloor != 1 || next.Native.DecoderFloor != 1 {
+		t.Fatalf("post-Windows native floor changed: %+v", next)
+	}
+	after := *next.Native
+	after.DecoderFloor = 1
+	if err := validateNativeDecoderFloor(next.DecoderFloor, after.DecoderFloor); err != nil {
+		t.Fatalf("post-Windows native update refused: %v", err)
+	}
+	if err := validateNativeDecoderFloor(1, 0); err == nil {
+		t.Fatal("native decoder downgrade admitted")
+	}
+	if floor, ok := windowsLedgerReaderFloor(WindowsGenerationLedgerSchema); !ok || floor != 6 {
+		t.Fatal("Windows ledger reader floor is not separately named")
+	}
+	if _, ok := windowsLedgerReaderFloor(transactionSchemaV4); ok {
+		t.Fatal("ordinary schema4 acquired a Windows ledger reader declaration")
 	}
 }
 
