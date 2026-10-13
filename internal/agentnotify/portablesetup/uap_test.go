@@ -2531,9 +2531,52 @@ func TestLocalRemoveGroupFailedApplyExactOwnerRetry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
-	_, err = mat.RemoveGroup(ctx, []MaterializeRequest{local, sibling})
+	// Cancel only after observing both exact-owner revocations. The public lock
+	// then forces the failure at Apply, without racing the cleanup against a
+	// wall-clock deadline on slower filesystems.
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	removeDone := make(chan error, 1)
+	go func() {
+		_, removeErr := mat.RemoveGroup(ctx, []MaterializeRequest{local, sibling})
+		removeDone <- removeErr
+	}()
+	for {
+		snap, snapErr := installruntime.ReadInstalledSnapshot(b.ControlRoot)
+		revoked := snapErr == nil
+		if revoked {
+			for _, exact := range []portable.Binding{b, peer} {
+				key, _, _, keyErr := exact.Registration()
+				if keyErr != nil {
+					revoked = false
+					break
+				}
+				if _, present := snap.Ledger.Consumers[key]; present {
+					revoked = false
+					break
+				}
+				present, locatorErr := portable.ExactLocator(exact)
+				if locatorErr != nil || present {
+					revoked = false
+					break
+				}
+			}
+		}
+		if revoked {
+			break
+		}
+		select {
+		case removeErr := <-removeDone:
+			release()
+			t.Fatalf("RemoveGroup ended before exact-owner cleanup: %v", removeErr)
+		case <-ctx.Done():
+			release()
+			t.Fatal("exact-owner cleanup did not reach both revocations")
+		case <-time.After(2 * time.Millisecond):
+		}
+	}
 	cancel()
+	err = <-removeDone
 	release()
 	if err == nil {
 		t.Fatal("Apply ignored held public lock")
