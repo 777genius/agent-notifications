@@ -682,7 +682,9 @@ class ScopedShortcutTargetTree {
     require(win32Result("CreateFileW",owner->h!=INVALID_HANDLE_VALUE));
     stage("child_shortcut_long_file_custody");
     owned(owner->h,ownerSID());
+    stage("child_shortcut_long_file_physical_name");
     const auto held=physical(owner->h);
+    stage("child_shortcut_long_file_exact_path");
     require(held==path.wstring()||held==L"\\\\?\\"+path.wstring());
     return path.wstring();
   }
