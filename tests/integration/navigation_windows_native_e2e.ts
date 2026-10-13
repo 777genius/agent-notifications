@@ -4,9 +4,15 @@ import { randomUUID, createHash } from 'node:crypto';
 import { mkdirSync, writeFileSync, readFileSync, existsSync, realpathSync, copyFileSync, statSync, lstatSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
+import {
+  bindSameJobBootstrap,
+  revalidateSameJobBootstrap,
+  requireSameJobBootstrapMode,
+  type BoundSameJobBootstrap,
+  type Json,
+} from './navigation_windows_bootstrap_contract.ts';
 import { setTimeout as delay } from 'node:timers/promises';
 
-type Json = Record<string, unknown>;
 type Step = { mode: string; pid: number; status: number | null; signal: string | null;
   stdout: string; stderr: string; error?: string; exitedAt: number };
 const evidence: Json = { status: 'failed', nativeCallbackQualified: false, navigationQualified: false,
@@ -23,6 +29,7 @@ let nonce: string | undefined;
 let installed = false;
 let exitCode = 1;
 let setupActor: Step | undefined;
+let bootstrap: BoundSameJobBootstrap | undefined;
 const setupRecords: Record<string, Json> = {};
 const setupNames = ['oobe-setup-intent.json', 'oobe-setup-result.json', 'oobe-setup-after-preflight.json',
   ...Array.from({ length: 5 }, (_, index) => [
@@ -62,6 +69,23 @@ function run(mode: string, timeout: number): Step {
 }
 function requireSuccess(step: Step): void {
   if (step.error || step.signal || step.status !== 0) throw new Error(`${step.mode} failed (${step.status}): ${step.error ?? step.stderr}`);
+}
+function currentUserSid(): string {
+  const result = spawnSync('whoami.exe', ['/user', '/fo', 'csv', '/nh'], { encoding: 'utf8',
+    windowsHide: true, timeout: 5_000, maxBuffer: 4_096 });
+  const match = /"(S-1-5-[0-9-]{1,160})"\s*$/.exec(result.stdout ?? '');
+  if (result.error || result.status !== 0 || result.signal || !match) throw new Error('fresh Windows user identity unavailable');
+  return match[1];
+}
+function revalidateBootstrapAt(session: unknown): void {
+  if (!bootstrap || !binary) return;
+  if (!Number.isInteger(session) || Number(session) <= 0) throw new Error('fresh bootstrap session unavailable');
+  revalidateSameJobBootstrap(bootstrap, {
+    sourceSHA: String(process.env.NAVIGATION_SOURCE_SHA),
+    observerSHA256: createHash('sha256').update(readFileSync(binary)).digest('hex'),
+    userSid: currentUserSid(),
+    session: Number(session),
+  }, binary);
 }
 function observeShow(sender: Step): void {
   if (!root || !nonce) throw new Error('owned fixture absent');
@@ -293,6 +317,11 @@ async function main(): Promise<void> {
     throw new Error('qualification requires explicit supported Windows 11 client label');
   }
   if (Number(process.versions.node.split('.')[0]) !== 24) throw new Error('requires Node 24');
+  const mode = process.env.NAVIGATION_WINDOWS_NATIVE_MODE
+    ?? (process.env.NAVIGATION_WINDOWS_PREFLIGHT_ONLY === '0' ? 'native_callback' : 'policy_preflight');
+  const suppliedBootstrapRoot = process.env.NAVIGATION_WINDOWS_OOBE_BOOTSTRAP_ROOT;
+  const bootstrapRequired = requireSameJobBootstrapMode(mode, ['oobe_then_native_callback'], suppliedBootstrapRoot);
+  evidence.mode = mode;
   nonce = randomUUID();
   root = join(realpathSync(process.env.RUNNER_TEMP ?? tmpdir()), `navigation-windows-test-${nonce}`);
   mkdirSync(root, { recursive: false });
@@ -302,6 +331,23 @@ async function main(): Promise<void> {
   binary = join(root, 'navigation-native-probe.exe'); copyFileSync(built, binary);
   evidence.root = root; evidence.nonce = nonce;
   evidence.binarySHA256 = createHash('sha256').update(readFileSync(binary)).digest('hex');
+  if (bootstrapRequired) {
+    bootstrap = bindSameJobBootstrap({
+      suppliedRoot: suppliedBootstrapRoot!,
+      runnerTemp: realpathSync(process.env.RUNNER_TEMP ?? tmpdir()),
+      currentRoot: root!,
+      currentNonce: nonce!,
+      observerPath: binary!,
+      expected: {
+        sourceSHA: String(process.env.NAVIGATION_SOURCE_SHA),
+        observerSHA256: evidence.binarySHA256 as string,
+        imageVersion: String(process.env.ImageVersion),
+        runnerLabel: String(process.env.NAVIGATION_WINDOWS_RUNNER),
+      },
+    });
+    evidence.bootstrap = bootstrap.summary;
+    evidence.sameJobBootstrapQualified = true;
+  }
   const diagnosticFlag = process.env.NAVIGATION_WINDOWS_PREFLIGHT_ONLY;
   if (diagnosticFlag !== undefined && diagnosticFlag !== '0' && diagnosticFlag !== '1') {
     throw new Error('invalid preflight-only flag');
@@ -591,6 +637,17 @@ async function main(): Promise<void> {
     evidence.status = 'unavailable'; evidence.noShowProved = true;
     throw new Error('Center disable policy configured; no settings changed or submission attempted');
   }
+  if (bootstrap) {
+    const boundary = run('submission-preflight', 15_000);
+    const freshDesktop = existsSync(join(root, 'submission-preflight.json')) ? read('submission-preflight.json') : undefined;
+    if (!freshDesktop || freshDesktop.pid !== boundary.pid || freshDesktop.nonce !== nonce) {
+      throw new Error('fresh pre-submission desktop binding unavailable');
+    }
+    requireSuccess(boundary);
+    revalidateBootstrapAt(freshDesktop.session);
+    evidence['submission-preflight.json'] = freshDesktop;
+    evidence.preSubmissionBootstrapRevalidated = true;
+  }
   // This records submission intent only. Native terminal records establish the Show count.
   installed = true; evidence.submissionIntent = true; evidence.showAttempts = null;
   evidence.showCallOutcome = 'unknown'; evidence.nativeEffectUncertain = true;
@@ -676,7 +733,15 @@ try {
     }
     writeFileSync(join(root, 'evidence.json'), `${JSON.stringify(evidence, null, 2)}\n`, { flag: 'wx' });
     // A single known path is the workflow artifact handoff, including failed/unavailable reports.
-    if (process.env.GITHUB_OUTPUT) writeFileSync(process.env.GITHUB_OUTPUT, `evidence_root=${root}\n`, { flag: 'a' });
+    if (process.env.GITHUB_OUTPUT) {
+      let output = `evidence_root=${root}\n`;
+      if (bootstrap) {
+        for (const key of ['handoffSHA256', 'evidenceSHA256', 'recordsSHA256', 'observerSHA256']) {
+          output += `bootstrap_${key}=${bootstrap.summary[key as keyof typeof bootstrap.summary]}\n`;
+        }
+      }
+      writeFileSync(process.env.GITHUB_OUTPUT, output, { flag: 'a' });
+    }
   }
   console.log(JSON.stringify(evidence, null, 2)); process.exitCode = exitCode;
 }
