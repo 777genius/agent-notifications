@@ -238,7 +238,10 @@ jobs:
           packages=$(go list ./...)
           remaining_packages=$(printf '%s\n' "$packages" | grep -Fvx -e 'github.com/777genius/agent-notifications/internal/geminievent' -e 'github.com/777genius/agent-notifications/internal/cursorevent' -e 'github.com/777genius/agent-notifications/internal/notification/observation' -e 'github.com/777genius/agent-notifications/internal/copilotvscodeevent' -e 'github.com/777genius/agent-notifications/cmd/claude-notifications')
           mapfile -t remaining <<< "$remaining_packages"
-          go test -v -race -coverprofile=coverage-rest.txt -covermode=atomic "${remaining[@]}"
+          # Go 1.25 measured 539s here; Go 1.26 exceeded the default 10m
+          # package deadline across aggregate filesystem-sync tests. Keep every
+          # test and race gate while allowing that measured native I/O cost.
+          go test -v -race -timeout=15m -coverprofile=coverage-rest.txt -covermode=atomic "${remaining[@]}"
           { head -n 1 coverage-rest.txt; tail -n +2 coverage-rest.txt; tail -n +2 coverage-gemini.txt; } > coverage.txt
         shell: bash
 
