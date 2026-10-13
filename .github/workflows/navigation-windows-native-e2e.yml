@@ -100,7 +100,6 @@ jobs:
           }
       - name: Parse composed operators without native effects
         shell: pwsh
-        env:
         run: |
           $text = Get-Content -LiteralPath .github/workflows/navigation-windows-native-e2e.yml -Raw
           foreach ($label in @('One finite OOBE setup on this same disposable desktop', 'Selected TEST preflight or single native callback attempt')) {
