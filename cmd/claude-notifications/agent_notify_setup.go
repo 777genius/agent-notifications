@@ -24,8 +24,8 @@ import (
 	notifysetup "github.com/777genius/agent-notifications/internal/agentnotify/setup"
 	"github.com/777genius/agent-notifications/internal/config"
 	"github.com/777genius/agent-notifications/internal/installruntime"
-	"github.com/777genius/agent-notifications/internal/strictjson"
 	"github.com/777genius/agent-notifications/internal/notifier"
+	"github.com/777genius/agent-notifications/internal/strictjson"
 )
 
 const agentNotifySetupHelp = `Usage: claude-notifications setup-notifications OPERATION [OPTIONS]

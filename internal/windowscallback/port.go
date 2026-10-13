@@ -56,6 +56,7 @@ func (b *Binding) UnmarshalJSON(data []byte) error {
 	*b = Binding{SnapshotPath: value.SnapshotPath, SHA256: value.SHA256}
 	return nil
 }
+
 type NativePort interface {
 	CheckReadiness(context.Context, Binding, uint64) error
 }
