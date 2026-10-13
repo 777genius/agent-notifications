@@ -101,8 +101,6 @@ jobs:
       - name: Parse composed operators without native effects
         shell: pwsh
         env:
-          NAVIGATION_WINDOWS_NATIVE_MODE: ${{ inputs.mode }}
-          NAVIGATION_WINDOWS_OOBE_BOOTSTRAP_ROOT: ${{ inputs.mode == 'oobe_then_native_callback' && steps.bootstrap.outputs.evidence_root || '' }}
         run: |
           $text = Get-Content -LiteralPath .github/workflows/navigation-windows-native-e2e.yml -Raw
           foreach ($label in @('One finite OOBE setup on this same disposable desktop', 'Selected TEST preflight or single native callback attempt')) {
@@ -177,6 +175,8 @@ jobs:
         shell: pwsh
         env:
           NAVIGATION_WINDOWS_TEST_BOOTSTRAP_ROOT: ${{ steps.bootstrap.outputs.evidence_root }}
+          NAVIGATION_WINDOWS_NATIVE_MODE: ${{ inputs.mode }}
+          NAVIGATION_WINDOWS_OOBE_BOOTSTRAP_ROOT: ${{ (inputs.mode == 'oobe_then_native_callback' || inputs.mode == 'oobe_then_public_sample_callback' || inputs.mode == 'oobe_then_public_sample_vendor_callback') && steps.bootstrap.outputs.evidence_root || '' }}
         run: |
           if ('${{ inputs.mode }}' -in @('oobe_then_native_callback', 'oobe_then_public_sample_callback', 'oobe_then_public_sample_vendor_callback')) {
             if ($env:GITHUB_RUN_ATTEMPT -ne '1') { throw 'no native replay' }
