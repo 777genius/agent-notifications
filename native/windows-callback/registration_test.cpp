@@ -684,8 +684,10 @@ class ScopedShortcutTargetTree {
 public:
   std::wstring expectedTarget,substituteTarget;
   explicit ScopedShortcutTargetTree(const Generation& g,SECURITY_ATTRIBUTES& attributes)
-    :savedAttributes(&attributes),base(g.root/L"shortcut-targets"){
+    :savedAttributes(&attributes),base(fs::path(g.root.wstring().substr(4))/L"shortcut-targets"){
     stage("child_shortcut_long_target_fixture");
+    require(g.root.wstring().starts_with(L"\\\\?\\"));
+    (void)extendedTestPath(base);
     createDirectory(base);
     auto path=base;
     for(size_t part=0;part<3;part++){
@@ -730,13 +732,15 @@ public:
   std::wstring target;
   explicit ScopedShortcutFile(const fs::path& parent,const wchar_t* name,SECURITY_ATTRIBUTES& attributes)
     :path(parent/name){
+    require(path.wstring().starts_with(L"\\\\?\\"));
+    target=path.wstring().substr(4);
+    (void)extendedTestPath(target);
     file.h=CreateFileW(path.c_str(),GENERIC_READ|READ_CONTROL|DELETE,FILE_SHARE_READ,
       &attributes,CREATE_NEW,FILE_ATTRIBUTE_NORMAL|FILE_FLAG_OPEN_REPARSE_POINT,nullptr);
     require(file.h!=INVALID_HANDLE_VALUE);
     owned(file.h,ownerSID());
     const auto held=physical(file.h);
     require(held==path.wstring()||held==L"\\\\?\\"+path.wstring());
-    target=path.wstring();
   }
   HANDLE custody()const{return file.h;}
   void cleanup(){
