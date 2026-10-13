@@ -26,6 +26,13 @@ func (w capabilityFailedOutput) Write(p []byte) (int, error) {
 	return 0, io.ErrClosedPipe
 }
 
+func closeFixture(t *testing.T, file *os.File) {
+	t.Helper()
+	if err := file.Close(); err != nil {
+		t.Errorf("close fixture: %v", err)
+	}
+}
+
 func TestInstallerProgressCapabilityHasNoTerminalEffects(t *testing.T) {
 	errout, err := os.Create(filepath.Join(t.TempDir(), "stderr"))
 	if err != nil {
@@ -78,7 +85,7 @@ func TestInstallerSessionCapabilityAndPromotionAreSeparateCleanContracts(t *test
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer errout.Close()
+		defer closeFixture(t, errout)
 		var out bytes.Buffer
 		if code := installerProgressMain([]string{tc.flag}, &out, errout); code != 0 {
 			t.Fatalf("%s: exit %d", tc.flag, code)
@@ -89,7 +96,10 @@ func TestInstallerSessionCapabilityAndPromotionAreSeparateCleanContracts(t *test
 		if tc.flag == "--session-capabilities" && out.String() != tc.expected {
 			t.Fatal("nonexact capability")
 		}
-		info, _ := errout.Stat()
+		info, err := errout.Stat()
+		if err != nil {
+			t.Fatal(err)
+		}
 		if info.Size() != 0 {
 			t.Fatal("machine/promotion contract touched terminal")
 		}
@@ -111,7 +121,7 @@ func TestInstallerSessionRejectsInvalidPresentationBeforeObserving(t *testing.T)
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer errout.Close()
+		defer closeFixture(t, errout)
 		var out bytes.Buffer
 		if code := installerProgressMain(args, &out, errout); code != 2 || out.Len() != 0 {
 			t.Fatalf("invalid presentation: %d %q", code, out.String())

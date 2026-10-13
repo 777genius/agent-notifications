@@ -149,11 +149,15 @@ func TestSessionResizeAbandonsOldGeometryAndShorterFramesEraseTail(t *testing.T)
 	// Without geometry change, a shorter final board must remove its old tail.
 	width, height = 80, 24
 	s.apply("snapshot", event{"claude", "MCP", "activation_timeout"})
-	v.paint()
+	if err := v.paint(); err != nil {
+		t.Fatal(err)
+	}
 	old := v.painted
 	s.apply("snapshot", event{"claude", "complete", "completed"})
 	out.Reset()
-	v.paint()
+	if err := v.paint(); err != nil {
+		t.Fatal(err)
+	}
 	if v.painted >= old || !strings.Contains(out.String(), "\r\x1b[2K\n") {
 		t.Fatalf("shortened frame retained old footer: %q", out.String())
 	}
@@ -259,7 +263,10 @@ func TestSessionCanonicalOrderAndDistinctActivationFailures(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := out.String()
-	if !(strings.Index(got, "Claude Code") < strings.Index(got, "Codex CLI") && strings.Index(got, "Codex CLI") < strings.Index(got, "OpenCode") && strings.Index(got, "OpenCode") < strings.Index(got, "Gemini CLI")) || !strings.Contains(got, "activation canceled") || !strings.Contains(got, "deadline reached") || !strings.Contains(got, "not started") {
+	ordered := strings.Index(got, "Claude Code") < strings.Index(got, "Codex CLI") &&
+		strings.Index(got, "Codex CLI") < strings.Index(got, "OpenCode") &&
+		strings.Index(got, "OpenCode") < strings.Index(got, "Gemini CLI")
+	if !ordered || !strings.Contains(got, "activation canceled") || !strings.Contains(got, "deadline reached") || !strings.Contains(got, "not started") {
 		t.Fatal(got)
 	}
 }
@@ -281,7 +288,9 @@ func TestSessionFragmentThenTruncationStopsWithoutInventingRow(t *testing.T) {
 	if _, err = f.WriteString("snapshot\tcodex\tconfig\trun"); err != nil {
 		t.Fatal(err)
 	}
-	f.Close()
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
 	waitFrame(t, out, "Claude Code")
 	if strings.Contains(out.String(), "Codex CLI") {
 		t.Fatal("fragment rendered before newline")

@@ -434,7 +434,7 @@ func openRegular(path string) (*os.File, error) {
 
 // RunSession folds the captured startup prefix before painting one current
 // frame. A separate stop control ends this observer, never the install session.
-func RunSession(ctx context.Context, path string, options Options) error {
+func RunSession(ctx context.Context, path string, options Options) (err error) {
 	if options.Output == nil {
 		return errors.New("progress output is required")
 	}
@@ -451,7 +451,11 @@ func RunSession(ctx context.Context, path string, options Options) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() {
+		if closeErr := f.Close(); err == nil && closeErr != nil {
+			err = closeErr
+		}
+	}()
 	info, err := f.Stat()
 	if err != nil || info.Size() > journalLimit {
 		return errors.New("progress journal exceeds budget")
@@ -463,7 +467,11 @@ func RunSession(ctx context.Context, path string, options Options) error {
 		if err != nil {
 			return err
 		}
-		defer control.Close()
+		defer func() {
+			if closeErr := control.Close(); err == nil && closeErr != nil {
+				err = closeErr
+			}
+		}()
 	}
 	s := &session{history: map[string][]event{}, last: map[string]event{}, lost: map[string]bool{}}
 	v := &sessionView{s: s, options: options, plain: !options.Rich}
