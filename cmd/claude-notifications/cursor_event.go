@@ -96,17 +96,13 @@ func runCursorEvent(argv []string, input io.ReadCloser, output io.Writer) (code 
 	if err != nil {
 		return 0
 	}
-	binding, err := gate.ConsumerBinding(ctx)
-	if err != nil {
-		return 0
-	}
-	effective, err := gate.EffectiveConfig(ctx)
+	binding, effective, err := gate.ConsumerBindingAndConfig(ctx)
 	if err != nil {
 		return 0
 	}
 	consumer := cursorevent.Consumer{Binding: binding, Gate: gate, Config: effective, Clock: clock,
 		Cache:   &observation.RecentCache{Root: b.DataRoot, Clock: clock},
-		Desktop: copilotvscodeinstall.NewCursorDesktop(gate, binding, newCursorDesktopPort()),
+		Desktop: copilotvscodeinstall.NewCursorDesktop(gate, binding, newCursorDesktopPort(b, fixed.Executable)),
 		SendWebhook: copilotvscodeinstall.NewCursorWebhookSender(gate, binding, func(ctx context.Context, cfg *config.Config, message webhook.SendContext) error {
 			sender := webhook.NewWithContext(ctx, cfg)
 			defer func() { _ = sender.Shutdown(50 * time.Millisecond) }()

@@ -10,12 +10,14 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 
 	"github.com/777genius/agent-notifications/internal/agentnotify/clientsetup"
 	"github.com/777genius/agent-notifications/internal/agentnotify/portable"
 	"github.com/777genius/agent-notifications/internal/agentnotify/registration"
 	"github.com/777genius/agent-notifications/internal/copilotvscodeinstall"
 	"github.com/777genius/agent-notifications/internal/installruntime"
+	"github.com/777genius/agent-notifications/internal/opencodeinstall"
 )
 
 var (
@@ -251,9 +253,9 @@ func (s Service) CommitBinding(ctx context.Context, req Request) (portable.Bindi
 	var fields map[string]json.RawMessage
 	policy := s.ExpectedPolicy
 	var after installruntime.Identity
-	if req.Binding.Integration == portable.Cursor {
+	if req.Binding.Integration == portable.Cursor || req.Binding.Integration == portable.CopilotVSCode {
 		// A new identity cannot inherit native leaves from a removed registration.
-		// This false pair shares the registration transaction, before publication.
+		// These false leaves share the registration transaction, before publication.
 		if policy == nil {
 			observed, e := installruntime.ReadRevocationSnapshot(ctx, req.Binding.ControlRoot)
 			if e != nil {
@@ -263,7 +265,11 @@ func (s Service) CommitBinding(ctx context.Context, req Request) (portable.Bindi
 		}
 		off := false
 		var e error
-		fields, e = copilotvscodeinstall.CursorPolicyPatch(req.Binding, copilotvscodeinstall.CursorChoices{Desktop: &off, Webhook: &off}, nil)
+		if req.Binding.Integration == portable.CopilotVSCode {
+			fields, e = copilotvscodeinstall.PolicyPatch(req.Binding, copilotvscodeinstall.Choices{Desktop: &off, Webhook: &off, Manual: &off}, nil)
+		} else {
+			fields, e = copilotvscodeinstall.CursorPolicyPatch(req.Binding, copilotvscodeinstall.CursorChoices{Desktop: &off, Webhook: &off}, nil)
+		}
 		if e != nil {
 			return portable.Binding{}, e
 		}
@@ -279,7 +285,7 @@ func (s Service) CommitBinding(ctx context.Context, req Request) (portable.Bindi
 	if err != nil {
 		return portable.Binding{}, policyConflict(err)
 	}
-	if req.Binding.Integration == portable.Cursor {
+	if req.Binding.Integration == portable.Cursor || req.Binding.Integration == portable.CopilotVSCode {
 		// Advance only the request-local atom through this successful, frozen
 		// false patch. Later observations may verify it, never replace it.
 		policy = &after
@@ -441,6 +447,40 @@ func revokeExactBinding(ctx context.Context, req Request, present bool) error {
 	}
 	if present {
 		gen := req.ExpectedGeneration
+		var files []installruntime.File
+		if runtime.GOOS == "windows" && req.Binding.Integration == portable.Cursor {
+			snap, err := installruntime.ReadInstalledSnapshot(req.Binding.ControlRoot)
+			if err != nil {
+				return err
+			}
+			executable, err := portable.ResolvePrimaryExecutable(snap.Ledger, req.Binding.Primary)
+			if err != nil {
+				return err
+			}
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return err
+			}
+			file, err := opencodeinstall.StageCursorWindowsShortcut(key, home, executable, false, snap.Ledger)
+			if err != nil {
+				return err
+			}
+			if file != nil {
+				files = append(files, *file)
+			}
+		}
+		if len(files) != 0 {
+			// Remove the owned shortcut through the existing file CAS transaction.
+			// Consumer removal forbids file requests for portable consumers.
+			removed, err := installruntime.Commit(ctx, installruntime.Request{
+				ControlRoot: req.Binding.ControlRoot, Owner: req.Binding.Owner, RuntimeRoot: req.Binding.RuntimeRoot,
+				ConsumerID: key, RefreshOnly: true, ExpectedGeneration: &gen, Reservation: req.Reservation, Files: files,
+			})
+			if err != nil {
+				return err
+			}
+			gen = removed.Generation
+		}
 		if _, err = installruntime.Commit(ctx, installruntime.Request{
 			ControlRoot: req.Binding.ControlRoot, Owner: req.Binding.Owner, RuntimeRoot: req.Binding.RuntimeRoot,
 			ConsumerID: key, RemoveConsumer: true, ExpectedGeneration: &gen, Reservation: req.Reservation,

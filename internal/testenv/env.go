@@ -12,7 +12,7 @@ import (
 // credentials or host configuration. Callers add only required executable paths.
 func Values(root string) map[string]string {
 	m := map[string]string{"HOME": root, "USERPROFILE": root}
-	for _, key := range []string{"APPDATA", "LOCALAPPDATA", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_RUNTIME_DIR", "CODEX_HOME", "CLAUDE_HOME", "CLAUDE_CONFIG_DIR", "TMP", "TEMP", "TMPDIR"} {
+	for _, key := range []string{"APPDATA", "LOCALAPPDATA", "PROGRAMDATA", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_RUNTIME_DIR", "CODEX_HOME", "CLAUDE_HOME", "CLAUDE_CONFIG_DIR", "TMP", "TEMP", "TMPDIR"} {
 		m[key] = filepath.Join(root, key)
 	}
 	m["CLAUDE_CONFIG_DIR"] = m["CLAUDE_HOME"]

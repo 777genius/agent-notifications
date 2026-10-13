@@ -32,6 +32,7 @@ type Request struct {
 	Action                                               Action
 	ControlRoot, RuntimeRoot, BinarySource, NativeSource string
 	HomeDir, GeminiHome, ConfigRoot                      string
+	ChannelPreimage                                      string
 	Desktop, Webhook                                     bool
 	GOOS, GOARCH                                         string
 	// Fault forwards the existing kernel test seam; the CLI never supplies it.
@@ -128,9 +129,6 @@ func Apply(ctx context.Context, r Request) error {
 	if registered && c.RuntimeRoot != r.RuntimeRoot {
 		return errors.New("gemini runtime relocation refused")
 	}
-	if !r.Desktop && !r.Webhook {
-		return errors.New("choose --desktop or --webhook explicitly")
-	}
 	if r.NativeSource != "" && (r.GOOS != "darwin" || !r.Desktop || !filepath.IsAbs(r.NativeSource)) {
 		return errors.New("absolute --native-app source requires macOS desktop consent")
 	}
@@ -157,6 +155,26 @@ func Apply(ctx context.Context, r Request) error {
 	policyDesktop, policyWebhook, policyBefore, err := readChannels(root)
 	if err != nil {
 		return err
+	}
+	if r.ChannelPreimage != "" {
+		data, before, err := readBounded(filepath.Join(root, "agent-notifications.json"), 64<<10)
+		if err != nil {
+			return err
+		}
+		var fields map[string]json.RawMessage
+		if before.Exists && json.Unmarshal(data, &fields) != nil {
+			return errors.New("invalid Gemini channel policy")
+		}
+		if err := installruntime.CheckObserverChannelPreimage(fields["route"], "geminiNotifications", r.ChannelPreimage); err != nil {
+			return err
+		}
+		policyBefore = before
+		if before.Exists {
+			policyDesktop, policyWebhook, err = channels(data)
+			if err != nil {
+				return err
+			}
+		}
 	}
 	if !registered && (policyDesktop || policyWebhook) {
 		return errors.New("stale Gemini consent must be revoked before installation")
@@ -283,7 +301,7 @@ func Apply(ctx context.Context, r Request) error {
 	if errors.Is(err, noChange) {
 		return nil
 	}
-	return setChannels(ctx, root, r.RuntimeRoot, r.Desktop, r.Webhook)
+	return setChannels(ctx, root, r.RuntimeRoot, r.Desktop, r.Webhook, r.ChannelPreimage)
 }
 
 func readSettings(path string) ([]byte, installruntime.Identity, error) {
@@ -360,10 +378,15 @@ func channels(data []byte) (bool, bool, error) {
 	return *policy.Route.Gemini.Desktop, *policy.Route.Gemini.Webhook, nil
 }
 
-func setChannels(ctx context.Context, root, runtimeRoot string, desktop, webhook bool) error {
+func setChannels(ctx context.Context, root, runtimeRoot string, desktop, webhook bool, expected ...string) error {
 	s, err := installruntime.ReadPolicySnapshot(ctx, root)
 	if err != nil {
 		return err
+	}
+	if len(expected) > 0 {
+		if err := installruntime.CheckObserverChannelPreimage(s.Fields["route"], "geminiNotifications", expected[0]); err != nil {
+			return err
+		}
 	}
 	if s.Installation.Recovery {
 		return errors.New("installation recovery required")

@@ -74,7 +74,7 @@ func TestSetupWizardHumanIncompleteAndRemoval(t *testing.T) {
 			if code != r.ExitCode() {
 				t.Fatalf("exit %d", code)
 			}
-			if strings.Contains(out.String(), "Installation complete") || !strings.Contains(out.String(), "fixture_reason") || !strings.Contains(out.String(), "retry:") {
+			if strings.Contains(out.String(), "Installation complete") || (outcome != "cancelled" && (!strings.Contains(out.String(), "Setup incomplete:") || strings.Contains(out.String(), "fixture_reason") || strings.Contains(out.String(), "retry:"))) {
 				t.Fatalf("lost failure: %s", out.String())
 			}
 		})
@@ -84,6 +84,39 @@ func TestSetupWizardHumanIncompleteAndRemoval(t *testing.T) {
 	writeSetupWizardResult(&out, false, r, nil)
 	if !strings.Contains(out.String(), "Removal complete") || !strings.Contains(out.String(), "hooks: removed") || strings.Contains(out.String(), "/hooks") || strings.Contains(out.String(), "hooks: installed") {
 		t.Fatal(out.String())
+	}
+	for _, row := range []struct {
+		name, action, outcome, unit, targetOutcome string
+		want                                       []string
+	}{
+		{"cursor install path", "install", "completed", "agent-notify", "completed", []string{"Cursor", "MCP config: /TEST/My  Project/ config .json", "Restart Cursor (exit and reopen)"}},
+		{"cursor inspect path", "inspect", "completed", "agent-notify", "installed", []string{"Cursor", "MCP config: /TEST/My  Project/ config .json"}},
+		{"cursor activation failure", "install", "incomplete", "agent-notify", "activation_failed", []string{"Cursor activation failed.", "Cursor  registration saved; activation failed"}},
+		{"partial hooks removal", "uninstall", "incomplete", "hooks", "completed", []string{"Cursor  hooks removed", "Codex  needs inspection"}},
+		{"partial tool removal", "uninstall", "incomplete", "agent-notify", "completed", []string{"Cursor  removed", "Codex  needs inspection"}},
+	} {
+		t.Run(row.name, func(t *testing.T) {
+			var out bytes.Buffer
+			result := setupwizard.Result{Action: row.action, Outcome: row.outcome, Targets: []setupwizard.TargetResult{
+				{Client: "cursor", Unit: row.unit, Outcome: row.targetOutcome, Materialization: "materialized", ConfigPath: "/TEST/My  Project/\nconfig\u009b.json"},
+				{Client: "codex", Unit: "agent-notify", Outcome: "failed"},
+			}}
+			if row.outcome == "completed" && row.action == "install" {
+				result.NextActions = []setupwizard.NextAction{{Kind: "restart-client", Agents: []string{"cursor"}}}
+			}
+			writeSetupWizardResult(&out, false, result, nil)
+			for _, want := range row.want {
+				if !strings.Contains(out.String(), want) {
+					t.Fatalf("missing %q: %s", want, out.String())
+				}
+			}
+			if strings.Contains(out.String(), "Selected client") || strings.ContainsRune(out.String(), '\u009b') || strings.ContainsRune(out.String(), '\x1b') {
+				t.Fatalf("ambiguous client or terminal control: %q", out.String())
+			}
+			if row.action == "uninstall" && (strings.Contains(out.String(), "hooks installed") || strings.Contains(out.String(), "activation verified") || strings.Contains(out.String(), "registration saved")) {
+				t.Fatalf("removal described installation: %s", out.String())
+			}
+		})
 	}
 }
 

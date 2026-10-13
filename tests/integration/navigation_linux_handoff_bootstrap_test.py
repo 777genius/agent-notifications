@@ -23,33 +23,42 @@ def sha(path):
 def shipping_inputs(root, manifest):
     """Readonly CI asset contract, also called before host/container launch.
 
-    The operator pins the four files from ONE exact candidate artifact, never
+    Each role pins four files from its own exact candidate artifact, never
     handwritten build metadata. The vendor catalog must be that source's embed.
     """
     shipping = manifest.get('shipping')
     if shipping is None: return None
-    limits = {'shipping-client': 32 << 20, 'shipping-build-info.txt': 64 << 10,
-              'shipping-vendor-manifest.json': 8 << 20, 'shipping-inputs.json': 64 << 10}
-    if set(shipping) != {'scenario', 'sourceSHA', 'files'} or shipping['scenario'] not in ('restart_b', 'retained_a') or not re.fullmatch('[0-9a-f]{40}', shipping['sourceSHA']) or set(shipping['files']) != set(limits):
+    update = shipping.get('update')
+    transition = shipping.get('scenario') == 'retained_a_update_rollback'
+    if set(shipping) != {'scenario', 'sourceSHA', 'files'} | ({'update'} if transition else set()) or shipping['scenario'] not in ('restart_b', 'retained_a', 'retained_a_update_rollback'):
         raise RuntimeError('explicit_shipping_asset_contract_required')
-    for name, limit in limits.items():
-        path = root / name; info = path.lstat()
-        if not stat.S_ISREG(info.st_mode) or not 0 < info.st_size <= limit or not re.fullmatch('[0-9a-f]{64}', shipping['files'][name]) or sha(path) != shipping['files'][name]:
-            raise RuntimeError('bounded_digest_bound_shipping_asset_required')
-    metadata = json.loads((root / 'shipping-inputs.json').read_text())
-    expected = dict(version=1, sourceSHA=shipping['sourceSHA'], packageSHA256='637c3c94bc50f8ee33a15e2e28ec7f92a787f0943e700efe111bc0bf0d4813b4',
-        binarySHA256=shipping['files']['shipping-client'], catalogSHA256=shipping['files']['shipping-vendor-manifest.json'],
-        buildInfoSHA256=shipping['files']['shipping-build-info.txt'], catalogAvailable=True)
-    if metadata != expected: raise RuntimeError('shipping_source_catalog_identity_mismatch')
-    info = (root / 'shipping-build-info.txt').read_text()
-    for setting in ('vcs.revision=' + shipping['sourceSHA'], 'vcs.modified=false', 'GOOS=linux', 'GOARCH=amd64'):
-        if len(re.findall(r'(?m)^\s+build\s+' + re.escape(setting) + r'\s*$', info)) != 1:
-            raise RuntimeError('exact_unmodified_linux_go_build_required')
-    with (root / 'shipping-client').open('rb') as stream:
-        if stream.read(4) != b'\x7fELF': raise RuntimeError('selected_shipping_ELF_required')
-    catalog = json.loads((root / 'shipping-vendor-manifest.json').read_text())
-    if catalog.get('version') != 1 or catalog.get('packageSHA256') != expected['packageSHA256'] or catalog.get('root') != '/usr/lib/chatgpt' or catalog.get('launcher') != '/usr/lib/chatgpt/codex-launcher' or catalog.get('executable') != '/usr/lib/chatgpt/ChatGPT' or not isinstance(catalog.get('entries'), list) or not 0 < len(catalog['entries']) <= 20000:
-        raise RuntimeError('authentic_nonempty_vendor_catalog_required')
+    if transition and (not isinstance(update, dict) or set(update) != {'sourceSHA', 'files'} or shipping['sourceSHA'] != 'a0ee25796a5312b829a55e24303e5578d848cd46' or update['sourceSHA'] != '3005338942c791ce9d8ec40c542c2fcc2e17da28'):
+        raise RuntimeError('explicit_old_and_update_source_roles_required')
+    for prefix, item in [('', shipping)] + ([('update-', update)] if transition else []):
+        limits = {'shipping-client': 32 << 20, 'shipping-build-info.txt': 64 << 10,
+                  'shipping-vendor-manifest.json': 8 << 20, 'shipping-inputs.json': 64 << 10}
+        if not re.fullmatch('[0-9a-f]{40}', item['sourceSHA']) or set(item['files']) != {prefix + name for name in limits}:
+            raise RuntimeError('explicit_shipping_asset_contract_required')
+        for name, limit in limits.items():
+            path = root / (prefix + name); info = path.lstat()
+            if not stat.S_ISREG(info.st_mode) or not 0 < info.st_size <= limit or not re.fullmatch('[0-9a-f]{64}', item['files'][prefix + name]) or sha(path) != item['files'][prefix + name]:
+                raise RuntimeError('bounded_digest_bound_shipping_asset_required')
+        metadata = json.loads((root / (prefix + 'shipping-inputs.json')).read_text())
+        expected = dict(version=1, sourceSHA=item['sourceSHA'], packageSHA256='637c3c94bc50f8ee33a15e2e28ec7f92a787f0943e700efe111bc0bf0d4813b4',
+            binarySHA256=item['files'][prefix + 'shipping-client'], catalogSHA256=item['files'][prefix + 'shipping-vendor-manifest.json'],
+            buildInfoSHA256=item['files'][prefix + 'shipping-build-info.txt'], catalogAvailable=True)
+        if metadata != expected: raise RuntimeError('shipping_source_catalog_identity_mismatch')
+        info = (root / (prefix + 'shipping-build-info.txt')).read_text()
+        for setting in ('vcs.revision=' + item['sourceSHA'], 'vcs.modified=false', 'GOOS=linux', 'GOARCH=amd64'):
+            if len(re.findall(r'(?m)^\s+build\s+' + re.escape(setting) + r'\s*$', info)) != 1:
+                raise RuntimeError('exact_unmodified_linux_go_build_required')
+        with (root / (prefix + 'shipping-client')).open('rb') as stream:
+            if stream.read(4) != b'\x7fELF': raise RuntimeError('selected_shipping_ELF_required')
+        catalog = json.loads((root / (prefix + 'shipping-vendor-manifest.json')).read_text())
+        if catalog.get('version') != 1 or catalog.get('packageSHA256') != expected['packageSHA256'] or catalog.get('root') != '/usr/lib/chatgpt' or catalog.get('launcher') != '/usr/lib/chatgpt/codex-launcher' or catalog.get('executable') != '/usr/lib/chatgpt/ChatGPT' or not isinstance(catalog.get('entries'), list) or not 0 < len(catalog['entries']) <= 20000:
+            raise RuntimeError('authentic_nonempty_vendor_catalog_required')
+    if transition and (shipping['files']['shipping-client'] == update['files']['update-shipping-client'] or shipping['files']['shipping-vendor-manifest.json'] != update['files']['update-shipping-vendor-manifest.json']):
+        raise RuntimeError('distinct_compatible_update_artifact_required')
     return shipping
 
 
@@ -172,6 +181,32 @@ def test_shipping_inputs_contract():
         try: shipping_inputs(root, manifest)
         except RuntimeError: pass
         else: raise AssertionError('changed ELF asset admitted')
+
+        # Red when a pair can reuse one ELF or consistently swap old/update
+        # source roles. The real managed-transition assertions remain native.
+        def pair(old_source='a0ee25796a5312b829a55e24303e5578d848cd46', new_source='3005338942c791ce9d8ec40c542c2fcc2e17da28', same_binary=False):
+            specs = []
+            for prefix, revision in (('', old_source), ('update-', new_source)):
+                binary = b'\x7fELF OLD TEST never execute' if not prefix or same_binary else b'\x7fELF UPDATE TEST never execute'
+                (root / (prefix + 'shipping-client')).write_bytes(binary)
+                (root / (prefix + 'shipping-build-info.txt')).write_text('\n'.join('\tbuild\t' + value for value in ('vcs.revision=' + revision, 'vcs.modified=false', 'GOOS=linux', 'GOARCH=amd64')) + '\n')
+                (root / (prefix + 'shipping-vendor-manifest.json')).write_text(json.dumps(catalog))
+                hashes = {prefix + name: sha(root / (prefix + name)) for name in ('shipping-client', 'shipping-build-info.txt', 'shipping-vendor-manifest.json')}
+                metadata = dict(version=1, sourceSHA=revision, packageSHA256=catalog['packageSHA256'], catalogAvailable=True,
+                    binarySHA256=hashes[prefix + 'shipping-client'], catalogSHA256=hashes[prefix + 'shipping-vendor-manifest.json'], buildInfoSHA256=hashes[prefix + 'shipping-build-info.txt'])
+                (root / (prefix + 'shipping-inputs.json')).write_text(json.dumps(metadata)); hashes[prefix + 'shipping-inputs.json'] = sha(root / (prefix + 'shipping-inputs.json'))
+                specs.append(dict(sourceSHA=revision, files=hashes))
+            return dict(shipping=dict(scenario='retained_a_update_rollback', **specs[0], update=specs[1]))
+        assert shipping_inputs(root, pair())['update']['sourceSHA'] == '3005338942c791ce9d8ec40c542c2fcc2e17da28'
+        for make in (lambda: pair(same_binary=True), lambda: pair(old_source='3005338942c791ce9d8ec40c542c2fcc2e17da28', new_source='a0ee25796a5312b829a55e24303e5578d848cd46')):
+            invalid = make()
+            try: shipping_inputs(root, invalid)
+            except RuntimeError: pass
+            else: raise AssertionError('non-distinct or wrong-role update admitted')
+        invalid = pair(); del invalid['shipping']['update']
+        try: shipping_inputs(root, invalid)
+        except RuntimeError: pass
+        else: raise AssertionError('update without bound candidate admitted')
 
 
 if __name__ == '__main__': raise SystemExit(main())

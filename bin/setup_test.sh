@@ -21,7 +21,7 @@ import tempfile
 root = Path(sys.argv[1])
 loader = (root / 'bin/setup.sh').read_text(encoding='utf-8')
 public_command = next(line for line in (root / 'README.md').read_text(encoding='utf-8').splitlines()
-                      if line.startswith('curl -fsSL '))
+                      if line.startswith(('curl -fsSL ', '(set -o pipefail; curl -fsSL ')))
 PUBLIC_SETUP_URL = 'https://agent-notifications.com/install.sh'
 # The public pin and main commit 9039815 reference the same setup.sh Git blob.
 pinned_loader = (root / 'bin/testdata/setup-9039815833ed8d16a11ee4a45de62bb0119c874f.sh').read_text(
@@ -90,6 +90,9 @@ if [ "${FAIL_DOWNLOAD:-}" = "$kind" ]; then exit 22; fi
 # execs it, so sys.argv cannot prove setup.sh forwarded the literal argument.
 bootstrap_stub = '''#!/usr/bin/env bash
 set -eu
+if [ -n "${EXPECT_CWD:-}" ]; then
+    [ "$(pwd -P)" = "$EXPECT_CWD" ] || exit 98
+fi
 if [ "${1:-}" = --selector-capabilities ]; then
     [ "${LEGACY_BOOTSTRAP:-}" != 1 ] || exit 1
     printf 'terminal-selector-v1\n'
@@ -152,7 +155,7 @@ def with_noglob(env):
     return env
 
 
-def run_loader(args, env, piped=False, documented=False, bash_executable=None):
+def run_loader(args, env, piped=False, documented=False, bash_executable=None, cwd_case=None):
     env = with_noglob(env)
     runner = bash_executable or HOST_BASH
     setup_sh = bash_path(root / 'bin/setup.sh')
@@ -170,6 +173,15 @@ def run_loader(args, env, piped=False, documented=False, bash_executable=None):
         invocation = ([bash_path(runner)] if bash_executable else []) + [setup_sh] + args
         command = [runner, '-c', 'exec ' + ' '.join(map(shlex.quote, invocation))]
         stdin = None
+    if cwd_case:
+        prefix = 'cd -P "$CASE_DIR/caller cwd" || exit; '
+        if cwd_case.startswith('deleted'):
+            prefix += 'rmdir "$CASE_DIR/caller cwd" || exit; '
+        if cwd_case == 'deleted-source':
+            command = [runner, '-c', prefix + 'source ' + shlex.quote(setup_sh) +
+                       ' ' + ' '.join(map(shlex.quote, args))]
+        else:
+            command[2] = prefix + 'set -o pipefail; ' + command[2]
     return subprocess.run(command, input=stdin, text=True, capture_output=True, env=env, timeout=20)
 
 
@@ -191,7 +203,7 @@ def channel_requests():
 def run_case(name, tag=None, commit=None, fail='', status=0, expected=None, piped=False,
              documented=False, expect_run=True, args=None, calls=None, no_network=False,
              legacy_status=None, opencode_status=None, message=None, help_only=False,
-             release=None, release_only=False, bash_executable=None, legacy_bootstrap=False):
+             release=None, release_only=False, bash_executable=None, legacy_bootstrap=False, cwd_case=None):
     if args is None:
         args = ['--product', 'both', 'argument with spaces', '*']
     if release is None:
@@ -233,11 +245,18 @@ def run_case(name, tag=None, commit=None, fail='', status=0, expected=None, pipe
                    LEGACY_BOOTSTRAP='1' if legacy_bootstrap else '0',
                    BOOTSTRAP_RELEASE_TAG='untrusted', BOOTSTRAP_RELEASE_COMMIT='untrusted',
                    INSTALL_SCRIPT_URL='https://example.invalid/not-used')
+        if cwd_case:
+            (case / 'caller cwd').mkdir()
+            env['EXPECT_CWD'] = '/' if cwd_case.startswith('deleted') else str((case / 'caller cwd').resolve())
         if legacy_status is not None:
             env['LEGACY_STATUS'] = str(legacy_status)
         if opencode_status is not None:
             env['OPENCODE_STATUS'] = str(opencode_status)
-        result = run_loader(args, env, piped=piped, documented=documented, bash_executable=bash_executable)
+        result = run_loader(args, env, piped=piped, documented=documented, bash_executable=bash_executable, cwd_case=cwd_case)
+        if cwd_case:
+            assert "chdir: error retrieving current directory" not in result.stderr, (name, result.stderr)
+            if cwd_case == "deleted-source":
+                assert "shell-init:" not in result.stderr, (name, result.stderr)
         if no_network or help_only:
             assert result.returncode == (0 if help_only else 1), (name, result.returncode, result.stderr)
             assert not (case / 'requests').exists(), name + ': parser performed a network request'
@@ -378,7 +397,7 @@ def runtime_path(case, python=False, node=False, bash_executable=None):
     bin_dir.mkdir()
     names = ['bash', 'sh', 'mktemp', 'rm', 'cat', 'chmod', 'mkdir', 'ln', 'uname',
              'tr', 'wc', 'cmp', 'grep', 'head', 'cp', 'mv', 'env', 'true', 'false', 'dirname', 'basename',
-             'printf', 'pwd', 'cygpath', 'awk']
+             'printf', 'pwd', 'cygpath', 'awk', 'sleep', 'rmdir']
     if python:
         names.append('python3')
     if node:
@@ -421,10 +440,22 @@ def run_runtime_case(name, python=False, node=False, expected=0, stub_python=Fal
         print('PASS ' + name)
 
 
+# Unix permits unlinking a process's cwd; Windows prevents this fixture.
+# Exercise the public pipe and verified child handoff, never real user installs.
+if os.name != 'nt':
+    for cwd_case in ['deleted-source', 'deleted-pipe', 'healthy']:
+        run_case('installer cwd ' + cwd_case, expected=0,
+                 args=['--product', 'codex', 'relative path/with spaces', '*'],
+                 documented=cwd_case == 'deleted-pipe', cwd_case=cwd_case)
+    if sys.platform == 'darwin':
+        run_case('native Bash deleted cwd', expected=0,
+                 args=['--product', 'codex'], documented=True, cwd_case='deleted-pipe',
+                 bash_executable='/bin/bash')
+
 # Regression: pending JSON previously acquired a helper and entered UI; malformed
-# UI flags and incomplete multi observers must also stop before acquisition.
+# Invalid flags and pending product UI stop before acquisition.
 for args in [['--json'], ['--product', 'gemini', '--json'],
-             ['--products', 'opencode'], ['--ui=wat'],
+             ['--products', 'opencode,opencode'], ['--ui=wat'],
              ['--plain', '--ui=rich'], ['--yes'], ['--unknown']]:
     run_case('pure parse refuses ' + repr(args), args=args, no_network=True)
 for args in [['--plain'], ['--ui=plain'], ['--product', 'gemini', '--plain']]:
@@ -435,7 +466,7 @@ run_case('complete legacy JSON remains explicit',
 run_case('pinned release and exact argv', expected=0)
 run_case('piped one-line entry point', expected=0, piped=True)
 run_case('documented one-line command', expected=0, documented=True)
-run_case('initial loader download failure', fail='setup', expected=0, documented=True, expect_run=False)
+run_case('initial loader download failure', fail='setup', expected=22, documented=True, expect_run=False)
 run_case('bootstrap exit status', status=17, expected=17)
 # v1.46.1 accepts the interactive entry point and old single-product selectors,
 # but has neither --capabilities nor --products. Exercise its argv boundary.
@@ -497,7 +528,7 @@ for selection in ['claude','codex','opencode','gemini','codex,claude',
     product_sets.append((selection, routed))
     run_case('product set ' + selection, args=args, calls=routed, expected=0)
 # Focused native Bash 3.2 coverage protects optional-channel parsing under
-# nounset. Check every advertised set and the intended consent error with
+# nounset. Check every advertised set and omitted-channel forwarding with
 # /bin/bash both as the loader interpreter and as fixture PATH's bash.
 if sys.platform == 'darwin':
     native_bash = '/bin/bash'
@@ -511,12 +542,17 @@ if sys.platform == 'darwin':
             run_case('native Bash 3.2 product set ' + selection,
                      args=args, calls=routed, expected=0, bash_executable=native_bash)
         for selection in ['opencode', 'claude,opencode']:
-            run_case('native Bash 3.2 missing consent ' + selection,
-                     args=['--products', selection], no_network=True,
-                     message='Selected observers require explicit --desktop and/or --webhook consent.',
+            run_case('native Bash 3.2 default channels ' + selection,
+                     args=['--products', selection], calls=[['--products',selection]], expected=0,
                      bash_executable=native_bash)
     else:
         print('SKIP native Bash 3.2 fixtures: /bin/bash is ' + native_version)
+for selection in ['opencode','gemini','claude,codex,opencode,gemini']:
+    run_case('omitted observer defaults '+selection,
+             args=['--products',selection],calls=[['--products',selection]],expected=0,piped=True)
+run_case('explicit disabled observer flags survive the loader',
+         args=['--products','opencode,gemini','--desktop=false','--webhook=false'],
+         calls=[['--products','opencode,gemini','--desktop=false','--webhook=false']],expected=0)
 run_case('scoped flags and equals selector',
          args=['--webhook', '--products=opencode,claude,codex,gemini', '--skip-agent-notify', '--desktop'],
          calls=[['--products','opencode,claude,codex,gemini','--skip-agent-notify','--webhook','--desktop']], expected=0, piped=True)
@@ -532,7 +568,7 @@ for args in [
     ['--products', 'claude,claude'], ['--products', 'codex,codex'],
     ['--products', 'opencode,opencode', '--desktop'],
     ['--products','gemini,gemini','--webhook'],
-    ['--products','gemini'],
+    ['--products','gemini,unknown'],
     ['--products','gemini','--desktop','--skip-agent-notify'],
     ['--products', 'both'], ['--products', 'Claude'], ['--products', 'claude, codex'],
     ['--products', '*'], ['--products', 'claude,$(touch marker)'],
@@ -541,7 +577,7 @@ for args in [
     ['--product', 'claude', '--products', 'codex'],
     ['--products', 'claude', '--product', 'codex'],
     ['--products', 'claude', '--product=codex'],
-    ['--products', 'opencode'],
+    ['--products', 'opencode,'],
     ['--products', 'claude', '--desktop'], ['--products', 'codex', '--webhook'],
     ['--products', 'opencode', '--desktop', '--skip-agent-notify'],
     ['--products', 'opencode', '--desktop', '--agent-notify'],
@@ -630,6 +666,71 @@ if host_cmd('node'):
 else:
     print('SKIP stub python3 falls back to node: node not available')
 run_runtime_case('stub python3 without node', python=False, node=False, stub_python=True, expected=0)
+# Real loader lifecycle with slow fake curl: animation belongs to stderr, stops
+# before diagnostics, and never survives download failure or cancellation.
+if os.name != 'nt':
+    import errno, pty, select, signal, time
+    for name, failed, cancelled in [('delayed', False, False), ('failure', True, False), ('cancel', False, True)]:
+        with tempfile.TemporaryDirectory(prefix='loader-progress-TEST-', dir=os.environ['TMPDIR']) as tmp:
+            case = Path(tmp)
+            (case/'bin').mkdir(); (case/'tmp space').mkdir()
+            slow_curl = curl_stub.replace('# Return a failure AFTER emitting valid bytes, to catch accidental execution.', '''
+if [ "$kind" = bootstrap ]; then
+    # This fake transport owns a sleep child; real curl blocks within its own
+    # process. Clean up the fake child when the loader cancels the transport.
+    delay_pid=""
+    trap '[ -z "$delay_pid" ] || { kill "$delay_pid" 2>/dev/null || true; wait "$delay_pid" 2>/dev/null || true; }' EXIT
+    trap 'exit 143' TERM
+    sleep "${TEST_LOADER_DELAY:-0.35}" &
+    delay_pid=$!
+    wait "$delay_pid"
+    delay_pid=""
+    trap - EXIT TERM
+    echo 'warning: TEST delayed download diagnostic' >&2
+fi
+# Return failure after emitting bytes.''')
+            (case/'bin/curl').write_text(slow_curl); (case/'bin/curl').chmod(0o755)
+            channel_fixture(case, 'v1.46.0')
+            (case/'commit').write_text(sha)
+            (case/'bootstrap').write_text("#!/bin/bash\nprintf 'BOOTSTRAP_RAN\\n'\n")
+            env = dict(os.environ, PATH=runtime_path(case), CASE_DIR=bash_path(case),
+                       TMPDIR=bash_path(case/'tmp space'), TERM='xterm-256color',
+                       FAIL_DOWNLOAD='bootstrap' if failed else '',
+                       TEST_LOADER_DELAY='5' if cancelled else '0.35')
+            env.pop('NO_COLOR', None)
+            master, slave = pty.openpty()
+            proc = subprocess.Popen([HOST_BASH, str(root/'bin/setup.sh'), '--product', 'codex'],
+                                    env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                    stderr=slave, start_new_session=True)
+            os.close(slave)
+            data = bytearray(); deadline = time.monotonic() + 8; sent_cancel = False
+            def read_progress():
+                if select.select([master], [], [], 0.02)[0]:
+                    try: data.extend(os.read(master, 65536))
+                    except OSError as exc:
+                        if exc.errno != errno.EIO: raise
+            while proc.poll() is None:
+                read_progress()
+                if cancelled and not sent_cancel and b'Downloading pinned bootstrap' in data:
+                    os.killpg(proc.pid, signal.SIGTERM); sent_cancel = True
+                assert time.monotonic() < deadline, (name, 'loader or renderer failed to stop', data)
+                time.sleep(0.01)
+            output = proc.communicate(timeout=1)[0]
+            read_progress(); os.close(master)
+            assert b'\x1b' not in output, (name, 'loader animation leaked to stdout', output)
+            assert b'\x1b[2K' in data, (name, 'loader had no live activity', data)
+            assert not list((case/'tmp space').iterdir()), (name, 'loader leaked staged data')
+            if cancelled:
+                assert sent_cancel and proc.returncode in (143, -signal.SIGTERM), (name, proc.returncode, data)
+                assert b'BOOTSTRAP_RAN' not in output
+            else:
+                assert proc.returncode == (22 if failed else 0), (name, proc.returncode, data)
+                assert (b'BOOTSTRAP_RAN' in output) == (not failed), (name, output)
+                assert b'bytes received' in data, (name, 'download byte measurement missing', data)
+                assert b'warning: TEST delayed download diagnostic' in data, (name, data)
+                assert data.rfind(b'\x1b[2K') < data.find(b'warning: TEST delayed download diagnostic'), (name, data)
+            print('PASS public loader progress ' + name)
+
 print('All setup loader fixtures passed (no public network or real agent CLIs).')
 PY
 

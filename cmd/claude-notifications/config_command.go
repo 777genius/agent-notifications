@@ -26,6 +26,21 @@ func configCommand(args []string, in io.Reader, out, stderr io.Writer) int {
 			code = ce.Code
 		}
 		_, _ = fmt.Fprintln(stderr, code)
+		if ce != nil {
+			if detail := ce.PermissionFailure(); detail != nil {
+				_, _ = fmt.Fprintf(stderr, "ACL rejection: objectPath=%q reason=%s", detail.ObjectPath, detail.Reason)
+				if detail.TrusteeSID != "" {
+					_, _ = fmt.Fprintf(stderr, " trusteeSid=%q", detail.TrusteeSID)
+				}
+				if detail.OwnerSID != "" {
+					_, _ = fmt.Fprintf(stderr, " ownerSid=%q", detail.OwnerSID)
+				}
+				if detail.AccessMask != 0 {
+					_, _ = fmt.Fprintf(stderr, " accessMask=0x%08x", detail.AccessMask)
+				}
+				_, _ = fmt.Fprintln(stderr)
+			}
+		}
 		return 1
 	}
 	invalid := func() int { return fail(&config.Error{Code: config.ConfigInvalid}) }
@@ -158,7 +173,11 @@ func configCommand(args []string, in io.Reader, out, stderr io.Writer) int {
 			if errors.As(err, &ce) {
 				code = ce.Code
 			}
-			emit(config.Inspection{Selection: s, ErrorCode: code})
+			var detail *config.PermissionFailure
+			if ce != nil {
+				detail = ce.PermissionFailure()
+			}
+			emit(config.Inspection{Selection: s, ErrorCode: code, PermissionFailure: detail})
 			return fail(err)
 		}
 		inspection := config.InspectDocument(s, s.Path, d.Bytes())
@@ -173,6 +192,20 @@ func configCommand(args []string, in io.Reader, out, stderr io.Writer) int {
 	case "init":
 		result, err := config.EnsureInitialized(context.Background(), config.InitRequest{Env: env, Assets: assets, Legacy: legacy, From: flags["--from"]})
 		if err != nil {
+			if flags["--json"] != "" {
+				code := config.ConfigInvalid
+				var ce *config.Error
+				var detail *config.PermissionFailure
+				if errors.As(err, &ce) {
+					code, detail = ce.Code, ce.PermissionFailure()
+				}
+				if emit(struct {
+					ErrorCode         config.Code               `json:"errorCode"`
+					PermissionFailure *config.PermissionFailure `json:"permissionFailure,omitempty"`
+				}{code, detail}) != 0 {
+					return 1
+				}
+			}
 			return fail(err)
 		}
 		if flags["--json"] != "" {

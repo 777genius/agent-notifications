@@ -67,14 +67,15 @@ type Ledger struct {
 	PendingMutation  *PendingMutation `json:",omitempty"`
 }
 type transaction struct {
-	OpenCodeInit  *File      `json:",omitempty"`
-	OpenCodePurge *PurgeTree `json:",omitempty"`
-	ConfigPaths   []string
-	Native        *NativeChange
-	Schema        int
-	Before        Ledger
-	After         Ledger
-	Files         []File
+	OrphanRecovery *orphanDecision `json:",omitempty"`
+	OpenCodeInit   *File           `json:",omitempty"`
+	OpenCodePurge  *PurgeTree      `json:",omitempty"`
+	ConfigPaths    []string
+	Native         *NativeChange
+	Schema         int
+	Before         Ledger
+	After          Ledger
+	Files          []File
 	// Rollback marks a durable reverse decision. Retry must resume it instead
 	// of reversing the reverse and republishing the interrupted upgrade.
 	Rollback bool `json:",omitempty"`
@@ -83,6 +84,9 @@ type transaction struct {
 // Request stages ordinary file bytes before Commit. Prepare runs under the
 // component and config locks, and may only compute adapter-owned JSON changes.
 type Request struct {
+	// OrphanRecovery is an exclusive absence-only metadata transaction.
+	// ExpectedPolicy may additionally fence preview's raw policy observation.
+	OrphanRecovery *OrphanRecoveryRequest
 	// RevokeOpenCode permits only the exact desktop/webhook false policy patch
 	// when delivery assets are damaged. It still requires a registered consumer,
 	// generation and policy CAS; no asset, native or other policy mutation is allowed.
@@ -232,10 +236,12 @@ func pathWithinRoot(root, path string) bool {
 	return err == nil && relative != "." && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
 }
 
-// A portable binding keeps executing its recorded primary under the previous
-// cache root until a separate binding migration changes that locator. Publish
-// the same verified sender there in the relocation transaction, or refuse the
-// move when a shared consumer cannot be identified precisely.
+// A shared binding keeps executing its recorded primary under the previous
+// cache root until its own binding migration changes that locator. Publish the
+// same verified sender there in the relocation transaction, or refuse the move
+// when a shared consumer cannot be identified precisely. Consumer metadata,
+// including OpenCode's command arguments and policy/consent records, is never
+// rewritten here.
 func retainedPortablePrimaryFiles(l Ledger, oldRoot, newRoot, movingID string, staged []File) ([]File, error) {
 	byPath := make(map[string]File, len(staged))
 	for _, file := range staged {
@@ -243,22 +249,52 @@ func retainedPortablePrimaryFiles(l Ledger, oldRoot, newRoot, movingID string, s
 	}
 	retained := make(map[string]File)
 	for id, consumer := range l.Consumers {
-		if id == movingID || consumer.RuntimeRoot != oldRoot {
+		retainedSender := strings.HasPrefix(id, "portable:") || id == "opencode-notifications"
+		if id == movingID || (consumer.RuntimeRoot != oldRoot && (!retainedSender || !versionedClaudeCachePeers(consumer.RuntimeRoot, newRoot))) {
 			continue
 		}
-		if !strings.HasPrefix(id, "portable:") || len(consumer.Commands) != 1 {
+		retainedRoot := consumer.RuntimeRoot
+		var command string
+		switch {
+		case strings.HasPrefix(id, "portable:") && len(consumer.Commands) == 1:
+			command = consumer.Commands[0]
+		case id == "opencode-notifications" && len(consumer.Commands) == 4 &&
+			consumer.Commands[1] == "opencode-event" && consumer.Commands[2] == "--protocol" && consumer.Commands[3] == "1":
+			command = consumer.Commands[0]
+		default:
 			return nil, fmt.Errorf("shared cache consumer requires explicit migration: %s", id)
 		}
-		command := consumer.Commands[0]
-		if !pathWithinRoot(oldRoot, command) {
+		if !pathWithinRoot(retainedRoot, command) {
 			return nil, fmt.Errorf("portable primary is outside the previous runtime")
 		}
-		relative, err := filepath.Rel(oldRoot, command)
-		if err != nil || filepath.Dir(relative) != "bin" || !strings.HasPrefix(filepath.Base(relative), "claude-notifications-") {
+		relative, err := filepath.Rel(retainedRoot, command)
+		if err != nil {
+			return nil, fmt.Errorf("shared primary is not a managed sender")
+		}
+		sourceRelative := relative
+		if id == "opencode-notifications" {
+			// OpenCode owns a root-level sender; Claude stages its verified
+			// replacement in bin. Keep the registered path and argv unchanged.
+			if filepath.Dir(relative) != "." || command != filepath.Join(retainedRoot, relative) ||
+				filepath.Base(consumer.Registration) != "agent-notifications.js" {
+				return nil, fmt.Errorf("OpenCode primary or registration is not managed")
+			}
+			switch relative {
+			case "claude-notifications-darwin-arm64", "claude-notifications-darwin-amd64",
+				"claude-notifications-linux-arm64", "claude-notifications-linux-amd64", "claude-notifications-windows-amd64.exe":
+			default:
+				return nil, fmt.Errorf("OpenCode primary is not a supported managed sender")
+			}
+			registration, owned := l.Files[consumer.Registration]
+			if !owned || !registration.Exists || registration.Link != "" {
+				return nil, fmt.Errorf("OpenCode registration is not owned")
+			}
+			sourceRelative = filepath.Join("bin", relative)
+		} else if filepath.Dir(relative) != "bin" || !strings.HasPrefix(filepath.Base(relative), "claude-notifications-") {
 			return nil, fmt.Errorf("portable primary is not a managed sender")
 		}
 		before, owned := l.Files[command]
-		after, staged := byPath[filepath.Join(newRoot, relative)]
+		after, staged := byPath[filepath.Join(newRoot, sourceRelative)]
 		// Windows executable files do not carry POSIX execute bits.
 		executable := after.Mode&0111 != 0 || filepath.Ext(relative) == ".exe"
 		if !owned || !before.Exists || before.Link != "" || !staged || after.Remove || after.Link != "" || len(after.Data) == 0 || !executable {
@@ -282,6 +318,9 @@ func retainedPortablePrimaryFiles(l Ledger, oldRoot, newRoot, movingID string, s
 // order. The durable redo record precedes every live mutation. Recovery checks
 // every identity before changing anything and refuses ambiguous foreign edits.
 func Commit(ctx context.Context, r Request) (result Ledger, resultErr error) {
+	if r.OrphanRecovery != nil {
+		return commitOrphan(ctx, r)
+	}
 	journalAttempted := false
 	if r.PolicyDocument != nil {
 		defer func() {
@@ -341,8 +380,22 @@ func Commit(ctx context.Context, r Request) (result Ledger, resultErr error) {
 			return recoverOnlyNoJournal(root)
 		}
 	}
+	// A schema5 marker never authorizes creation of a replacement permanent
+	// lock. This preliminary read selects stricter locking only; the complete
+	// decision is decoded and fenced again under those locks below.
+	orphanPending := false
+	if data, e := readRegularFile(filepath.Join(root, "transaction.json")); e == nil {
+		var envelope transactionEnvelope
+		var header struct{ Schema int }
+		orphanPending = json.Unmarshal(data, &envelope) == nil && json.Unmarshal(envelope.Transaction, &header) == nil && header.Schema == transactionSchemaV5
+	}
+	if orphanPending {
+		if err := orphanControl(root); err != nil {
+			return Ledger{}, err
+		}
+	}
 	lockComponent := Lock
-	if r.PolicyOnly {
+	if r.PolicyOnly || orphanPending {
 		lockComponent = LockExisting
 	}
 	unlock, err := lockComponent(ctx, filepath.Join(root, ".component-install.lock"))
@@ -400,7 +453,7 @@ func Commit(ctx context.Context, r Request) (result Ledger, resultErr error) {
 			continue
 		}
 		lockConfig := Lock
-		if r.PolicyOnly && p == policyPath {
+		if (r.PolicyOnly || orphanPending) && p == policyPath {
 			lockConfig = LockExisting
 		}
 		release, e := lockConfig(ctx, p+".lock")
@@ -553,7 +606,7 @@ func Commit(ctx context.Context, r Request) (result Ledger, resultErr error) {
 		}
 	}
 	var retainedPrimaries []File
-	if relocating && !retireOldCache {
+	if relocating {
 		retainedPrimaries, err = retainedPortablePrimaryFiles(l, previous.RuntimeRoot, r.RuntimeRoot, r.ConsumerID, r.Files)
 		if err != nil {
 			return l, err
@@ -961,6 +1014,11 @@ func validateRetainedNative(native *NativeRecord) error {
 }
 
 func recoverTransaction(ctx context.Context, root string, current Ledger, tx transaction, fault func(string) error) error {
+	if tx.OrphanRecovery != nil || tx.Schema == transactionSchemaV5 {
+		if err := validateOrphanLive(root, tx); err != nil {
+			return err
+		}
+	}
 	if current.WriterFloor > SupportedWriterFloor || tx.Before.WriterFloor > SupportedWriterFloor || tx.After.WriterFloor > SupportedWriterFloor {
 		return fmt.Errorf("installed writer floor requires a newer compatible kernel")
 	}
@@ -1074,6 +1132,11 @@ func recoverTransaction(ctx context.Context, root string, current Ledger, tx tra
 		}
 	}
 	after := tx.After
+	if tx.OrphanRecovery != nil {
+		if err := validateOrphanLive(root, tx); err != nil {
+			return err
+		}
+	}
 	if !preserveNative {
 		var err error
 		after, err = refreshLedgerIdentities(after)
@@ -1096,6 +1159,11 @@ func recoverTransaction(ctx context.Context, root string, current Ledger, tx tra
 		return err
 	}
 	// Publish the final policy only after all assets and the ledger are durable.
+	if tx.OrphanRecovery != nil {
+		if err := validateOrphanLive(root, tx); err != nil {
+			return err
+		}
+	}
 	if err := writeJSON(filepath.Join(root, "policy-generation.json"), runtimePolicy{tx.After.PolicyGeneration, tx.After.Enabled}); err != nil {
 		return err
 	}

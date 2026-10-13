@@ -38,7 +38,7 @@ func acceptedLedgerSchema(schema int) bool {
 }
 
 func acceptedTransactionSchema(schema int) bool {
-	return schema == transactionSchemaV1 || schema == transactionSchemaV2 || schema == transactionSchemaV3 || schema == transactionSchemaV4
+	return schema == transactionSchemaV1 || schema == transactionSchemaV2 || schema == transactionSchemaV3 || schema == transactionSchemaV4 || schema == transactionSchemaV5
 }
 
 // legacyAcceptedLedgerSchema is the frozen v1 writer contract: schema 3 is

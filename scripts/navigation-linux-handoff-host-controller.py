@@ -164,7 +164,7 @@ try:
         spec = importlib.util.spec_from_file_location('TEST_shipping_assets', ROOT / 'guest-bootstrap.py')
         assets = importlib.util.module_from_spec(spec); spec.loader.exec_module(assets)
         assets.shipping_inputs(ROOT, manifest)
-        for filename in manifest['shipping']['files']:
+        for filename in (manifest['shipping']['files'] | manifest['shipping'].get('update', {}).get('files', {})):
             info = (ROOT / filename).lstat()
             assert info.st_uid == 1000 and stat.S_IMODE(info.st_mode) == 0o444
         report['shipping'] = manifest['shipping']
@@ -230,7 +230,7 @@ finally:
     checks += [(name, digest, name) for name, digest in context['expectedSources'].items()]
     checks += [(name, digest, name) for name, digest in ARCHIVE_HASHES.items()]
     checks += [(str(ARCHIVES / name), digest, 'original_' + name) for name, digest in ARCHIVE_HASHES.items()]
-    checks += [(name, digest, name) for name, digest in context['manifest'].get('shipping', {}).get('files', {}).items()]
+    checks += [(name, digest, name) for name, digest in (context['manifest'].get('shipping', {}).get('files', {}) | context['manifest'].get('shipping', {}).get('update', {}).get('files', {})).items()]
     integrity_errors = []
     for filename, expected, label in checks:
         try:

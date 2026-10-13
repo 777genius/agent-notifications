@@ -95,8 +95,9 @@ func (a *Adapter) purePlan(original nativeconfig.FileSnapshot, previous *cursorh
 			op = cursorhooks.Repair
 		}
 	}
+	_, shell := CurrentTuple()
 	return cursorhooks.Plan(cursorhooks.Request{Document: original.Body, Operation: op,
-		Specs: []cursorhooks.HookSpec{a.spec()}, Previous: previous, Shell: cursorhooks.LinuxUserShell32212, ExecutableVerified: true})
+		Specs: []cursorhooks.HookSpec{a.spec()}, Previous: previous, Shell: shell, ExecutableVerified: true})
 }
 
 func compareBasis(original nativeconfig.FileSnapshot, f domain.CursorDeliveryFacts) error {
