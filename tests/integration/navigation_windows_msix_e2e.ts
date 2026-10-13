@@ -22,6 +22,7 @@ const evidence: Json = { status: 'failed', scope: 'packaged TEST cold toast COM 
   vendorCompositionQualified: false, processQuiescenceQualified: false,
   packagedClassicReceiverTokenMeasured: false, packagedClassicReceiverTokenClassification: 'unknown',
   packagedClassicMediumTokenObserved: false,
+  boundaryActorPIDs: [],
   showAttempts: null, showCallOutcome: 'not_started', nativeEffectUncertain: false,
   prepareBudgetMS: PREPARE_BUDGET_MS,
   sourceSHA: process.env.NAVIGATION_SOURCE_SHA, runnerLabel: process.env.NAVIGATION_WINDOWS_RUNNER,
@@ -338,6 +339,22 @@ function revalidateBootstrapAt(session: unknown): void {
     userSid: currentUserSid(),
     session: Number(session),
   }, observer);
+}
+function revalidateBootstrapBoundary(mode: string, recordName: string): Json {
+  if (!bootstrap || !root || !nonce) throw new Error('same-job bootstrap boundary fixture absent');
+  const actor = native(mode, 15_000, true);
+  const desktop = existsSync(join(root, recordName)) ? read(recordName) : undefined;
+  if (!desktop || desktop.ready !== true || desktop.pid !== actor.pid || desktop.nonce !== nonce
+      || !Number.isInteger(desktop.session) || Number(desktop.session) <= 0) {
+    throw new Error('fresh bootstrap boundary desktop binding unavailable');
+  }
+  const boundaryPIDs = evidence.boundaryActorPIDs as number[];
+  if (boundaryPIDs.includes(actor.pid)) throw new Error('boundary actor PID was not fresh and distinct');
+  boundaryPIDs.push(actor.pid);
+  success(actor);
+  revalidateBootstrapAt(desktop.session);
+  evidence[recordName] = desktop;
+  return desktop;
 }
 function read(name: string): Json {
   if (!root) throw new Error('owned root absent');
@@ -664,12 +681,7 @@ async function main(): Promise<void> {
     userSid: state.userSid, session: state.session, executableSHA256: state.executableSHA256,
     ...(composed ? { vendorComposition: true, vendorSpecSHA256: evidence.vendorSpecSHA256 } : {}) }), { flag: 'wx' });
   if (bootstrap) {
-    const boundary = native('preflight', 15_000, true); success(boundary);
-    const freshDesktop = read('preflight.json');
-    if (freshDesktop.ready !== true || freshDesktop.pid !== boundary.pid || freshDesktop.nonce !== nonce) {
-      throw new Error('fresh pre-submission desktop binding unavailable');
-    }
-    revalidateBootstrapAt(freshDesktop.session);
+    revalidateBootstrapBoundary('submission-preflight', 'submission-preflight.json');
     evidence.preSubmissionBootstrapRevalidated = true;
   }
   if (composed) vendorEffectsKnown = false; // Show can already create a callback; missing terminal is unknown.
@@ -680,6 +692,10 @@ async function main(): Promise<void> {
   // Read-only diagnostics do not establish visible UI or a native callback.
   native('history', 15_000);
   evidence.uiActivationOutcome = 'unknown';
+  if (bootstrap) {
+    revalidateBootstrapBoundary('invoke-boundary-preflight', 'invoke-boundary-preflight.json');
+    evidence.preInvokeBootstrapRevalidated = true;
+  }
   const invoke = composed ? await composedInvoke() : native('invoke', 30_000, true);
   if (existsSync(join(root, 'ui-invoke-intent.json'))) {
     evidence.uiActivationBoundaryArmed = true; // Missing terminal is unknown, never an action retry.
