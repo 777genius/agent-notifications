@@ -141,7 +141,7 @@ struct SDKOperations {
    diagnostic.enter("operator_dispatch");
    if(mode==L"observe"){
     require(absentRegistration(generation,L"CLSID",wide(generation.snapshot.clsid),end)&&absentRegistration(generation,L"AppUserModelId",wide(generation.snapshot.aumid),end));
-    auto p=shortcutPath(generation);
+    auto p=shortcutPath(generation,end);
     require(GetFileAttributesW(p.c_str())==INVALID_FILE_ATTRIBUTES&&GetLastError()==ERROR_FILE_NOT_FOUND);
    }
    else if(mode==L"verify-clsid")classReadback(generation,end);
@@ -155,7 +155,7 @@ struct SDKOperations {
    else if(mode==L"restore-shortcut")restoreShortcut(generation,end);
    else if(mode==L"readback"||mode==L"ready"||mode==L"show"){
     registryReadback(generation,end);
-    shortcutReadback(generation);
+    shortcutReadback(generation,end);
     installedBudget(end);
     if(mode==L"readback"){
      std::cout<<"WCB1 ready not_checked 0\n";
