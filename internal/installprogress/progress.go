@@ -80,6 +80,11 @@ type Options struct {
 	OwnerPID      int
 	Transient     bool
 	TerminalWidth func() int
+	Height        int
+	TerminalSize  func() (int, int)
+	Activity      string
+	ActivityLimit int
+	StopFile      string
 }
 
 type board struct {

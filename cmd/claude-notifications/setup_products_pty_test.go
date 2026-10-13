@@ -900,7 +900,7 @@ func TestBootstrapPartialProgress(t *testing.T) {
 `
 		f.script = strings.Replace(f.script, "main \"$@\"", patch+"\nmain \"$@\"", 1)
 		r := f.noTTY("--products", "opencode,gemini", "--webhook")
-		if r.code == 0 || !strings.Contains(r.screen, "OpenCode     registration saved; follow-up incomplete") || !strings.Contains(r.screen, "Gemini CLI   queued; not started") {
+		if r.code == 0 || !strings.Contains(r.screen, "OpenCode: configuration - registration committed (partial)") || !strings.Contains(r.screen, "Gemini CLI: queued - not started") {
 			t.Fatalf("untruthful partial result: %+v", r)
 		}
 		f.assertConsumer("opencode-notifications", true)
@@ -1327,7 +1327,7 @@ func testBootstrapLegacyPartial(t *testing.T) {
 	// Explicit global config is existing legacy grammar, not a selector override.
 	f.env = append(f.env, "AGENT_NOTIFICATIONS_CONFIG="+filepath.Join(f.home, "config", "TEST-global.json"))
 	r := f.noTTY("--products", "claude,codex,gemini", "--skip-agent-notify", "--webhook")
-	if r.code == 0 || !strings.Contains(r.screen, "Claude Code  completed; restart required") || !strings.Contains(r.screen, "Codex CLI    registration saved; follow-up incomplete") || !strings.Contains(r.screen, "Gemini CLI   queued; not started") {
+	if r.code == 0 || !strings.Contains(r.screen, "Claude Code: complete - done") || !strings.Contains(r.screen, "Codex CLI: configuration - registration committed (partial)") || !strings.Contains(r.screen, "Gemini CLI: queued - not started") {
 		t.Fatalf("untruthful singleton partial: %+v", r)
 	}
 	f.assertConsumer("claude-hooks", true)

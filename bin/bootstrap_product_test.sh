@@ -720,6 +720,35 @@ EARLY_CANARY
     [ "${CONFIGURE_ARGS[*]}" = '--preserve-policy --navigation none --allow-unknown-caller true --allow-caller-asserted false' ]
 )
 
+# Loader-normalized repeated presentation flags must retain the same contract
+# at the bootstrap boundary; contradictory values still fail before effects.
+(
+    PRODUCT=""; _ACTIVITY_MODE=compact; _ACTIVITY_EXPLICIT=false; _ACTIVITY_LIMIT=0
+    select_product --product claude --activity expanded --activity=expanded --activity-limit 4 --activity-limit=4
+    [ "$_ACTIVITY_MODE" = expanded ] && [ "$_ACTIVITY_LIMIT" -eq 4 ]
+    PRODUCT=""; _ACTIVITY_MODE=compact; _ACTIVITY_EXPLICIT=false; _ACTIVITY_LIMIT=0
+    if select_product --product claude --activity off --activity=compact 2>/dev/null; then exit 1; fi
+    PRODUCT=""; _ACTIVITY_MODE=compact; _ACTIVITY_EXPLICIT=false; _ACTIVITY_LIMIT=0
+    if select_product --product claude --activity-limit=4 --activity-limit 5 2>/dev/null; then exit 1; fi
+)
+
+# A session display failure must leave a safe live label for later stages.
+# The actual stage begins only after that label is visible; its stdout remains
+# private and no legacy rich helper is restarted.
+(
+    progress_rich_available() { return 0; }
+    progress_helper_available() { return 0; }
+    _PROGRESS_SESSION_SUPPORTED=true; _PROGRESS_JOURNAL_DISABLED=true; _PROGRESS_PID=""
+    emit_after_display_failure() {
+        [ -z "$_PROGRESS_PID" ]
+        grep -F 'Preparing notification settings...' "$SANDBOX/disabled-session-stage.out" >/dev/null
+        printf 'PRIVATE_STAGE_OUTPUT\n'
+    }
+    run_setup_stage 'Preparing notification settings' emit_after_display_failure > "$SANDBOX/disabled-session-stage.out" 2> "$SANDBOX/disabled-session-stage.err"
+    [ "$(cat "$SANDBOX/disabled-session-stage.out")" = 'Preparing notification settings...' ]
+    [ ! -s "$SANDBOX/disabled-session-stage.err" ]
+)
+
 # Cursor used to fail product parsing or lose its two frozen scalar arguments.
 # Drive the real main/selector/wizard composition through disposable argv peers;
 # no installer, vendor, provider, delivery or materializer executes here.
@@ -853,7 +882,7 @@ for cancel in ('channels', 'confirm'):
     code, calls, output = run(['--product', 'cursor']+requested, {'TEST_CANCEL': cancel})
     assert code == 0 and not any(c[:1] == [b'setup-notifications'] for c in calls), output
     # Cancellation must also stop legacy/observer/config writes and discovery.
-    assert not (trace/'mutation').exists(), output
+    assert not (trace/'mutation').exists() and 'Boost your productivity' not in output, output
 # A skipped MCP request must not be converted to native consent or a wizard write.
 code, calls, output = run(['--product', 'cursor']+requested+['--skip-agent-notify', '--desktop'])
 assert code == 0 and not any(c[:1] == [b'setup-notifications'] for c in calls), output
@@ -1186,6 +1215,7 @@ asset_name='claude-notifications-'+asset_os+'-'+asset_arch+('.exe' if asset_os==
 installer = '''#!/bin/bash
 set -eu
 [ "$1" = --force ]
+[ "${INSTALL_DEFER_PROMOTION:-0}" = 1 ] || { echo "nested installer did not defer promotion" >&2; exit 90; }
 case "$(uname -s)" in
     MINGW*|MSYS*|CYGWIN*) cp "$INSTALL_STAGED_ASSETS"/claude-notifications-*.exe "$INSTALL_TARGET_DIR/" ;;
     *) cp "$INSTALL_STAGED_ASSETS"/claude-notifications-* "$INSTALL_TARGET_DIR/claude-notifications" ;;
@@ -1403,8 +1433,10 @@ def run(args, expected=0, extra=None):
         output, _ = process.communicate(timeout=5)
         raise AssertionError('bootstrap timed out: ' + repr(args) + '\n' + output.decode())
     assert (process.returncode == 0) == (expected == 0), output.decode()
+    assert output.count(b'Boost your productivity') == int(expected == 0), output.decode()
+    if expected == 0: assert output.rstrip().endswith(b'----------------------------------------'), output.decode()
     return output.decode()
-assert 'No controlling TTY' in run([], 1)
+assert 'No controlling TTY'  in run([], 1)
 assert 'claude CLI not found' in run(['--product', 'both'], 1)
 (cli / 'codex').rename(cli / 'absent')
 assert 'codex CLI not found' in run(['--product', 'codex'], 1)
@@ -1774,7 +1806,7 @@ if fixture_tool('node'):
     node_only.mkdir()
     for name in ['bash', 'sh', 'mktemp', 'rm', 'cat', 'chmod', 'mkdir', 'ln', 'uname',
                  'tr', 'wc', 'head', 'cp', 'mv', 'env', 'true', 'false', 'grep', 'sed', 'awk',
-                 'tar', 'gzip', 'curl', 'node', 'sha256sum', 'shasum', 'dirname', 'realpath']:
+                 'tar', 'gzip', 'curl', 'node', 'sha256sum', 'shasum', 'dirname', 'realpath', 'touch']:
         place_runtime_cmd(node_only / name, fixture_tool(name))
     assert not (node_only / 'python3').exists()
     reset_case()
@@ -1801,7 +1833,11 @@ PY
     [ "$PLUGIN_ROOT" = fixture-installed ]
     grep -F 'Installing fixture...' "$SANDBOX/stage-ok.out"
     run_setup_stage 'Preparing fixture settings' emit_stage > "$SANDBOX/stage-prepare.out" 2>/dev/null
-    if grep -F 'Preparing fixture settings...' "$SANDBOX/stage-prepare.out"; then exit 1; fi
+    if [ "$_PROGRESS_JOURNAL_DISABLED" = true ]; then
+        grep -F 'Preparing fixture settings...' "$SANDBOX/stage-prepare.out"
+    elif grep -F 'Preparing fixture settings...' "$SANDBOX/stage-prepare.out"; then
+        exit 1
+    fi
     if grep -E 'Ready to use|generation' "$SANDBOX/stage-ok.out"; then exit 1; fi
     case "$(uname -s)" in
         MINGW*|MSYS*|CYGWIN*)
@@ -1854,8 +1890,13 @@ PY
     report_progress 1 2> "$SANDBOX/partial-progress.out"
     grep -F 'OpenCode     completed' "$SANDBOX/partial-progress.out"
     grep -F 'Gemini CLI   state requires inspection' "$SANDBOX/partial-progress.out"
+    _PROGRESS_JOURNAL_DISABLED=false
     report_progress 0 2> "$SANDBOX/success-progress.out"
     if grep -F 'OpenCode     completed' "$SANDBOX/success-progress.out"; then exit 1; fi
+    _PROGRESS_JOURNAL_DISABLED=true
+    report_progress 0 2> "$SANDBOX/disabled-progress.out"
+    grep -F 'OpenCode     completed; restart required' "$SANDBOX/disabled-progress.out"
+    grep -F 'Gemini CLI   state requires inspection' "$SANDBOX/disabled-progress.out"
 )
 
 # Structured results distinguish a successful opt-out from an installed sibling.
