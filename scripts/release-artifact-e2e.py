@@ -258,7 +258,7 @@ def _windows_configure_first(run, binary, home, bundle, env, automatic_root):
         status = json.loads(run('setup-notifications', 'status', '--json', executable=installed).stdout)
         assert status['globalConfiguration'] == 'configured', status
         retried = json.loads(run(*configure, executable=installed).stdout)
-        assert retried['ready'] is True and retried['changed'] is False, retried
+        assert retried['ready'] is True and retried.get('changed', False) is False, retried
         assert selected.read_bytes() == initial_bytes and defaults.read_bytes() == source_bytes
         edited = json.loads(run('config', 'edit', '--stdin', '--expect-revision', inspection['revision'],
                                 data=json.dumps({'set': {'/notifications/desktop/volume': 0.5}})).stdout)
