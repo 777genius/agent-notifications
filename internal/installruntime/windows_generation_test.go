@@ -1,7 +1,9 @@
 package installruntime
 
 import (
+	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -11,9 +13,10 @@ import (
 
 func windowsJournalFixture() transaction {
 	tx := recoveryTransaction()
-	tx.Schema = 5
-	tx.After.Schema = 5
-	tx.After.WriterFloor = 5
+	tx.Schema = WindowsGenerationTransactionSchema
+	tx.After.Schema = WindowsGenerationLedgerSchema
+	tx.After.WriterFloor = WindowsGenerationWriterFloor
+	tx.After.DecoderFloor = WindowsGenerationDecoderFloor
 	manifest := windowscallback.Snapshot{Generation: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", CanonicalRoot: `\\?\C:\TEST\windows-callback\aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`, OwnerSID: "S-1-5-21-1", HelperSHA256: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", AUMID: "AgentNotifications.TEST", CLSID: "{11111111-1111-1111-1111-111111111111}", VendorName: windowscallback.VendorName, Publisher: windowscallback.VendorPublisher, Family: windowscallback.VendorFamily, FullName: "OpenAI.Codex_26.930.7945.0_x64__2p2nqsd0c76g0"}
 	encoded, _ := windowscallback.EncodeSnapshot(manifest)
 	binding := windowscallback.Binding{SnapshotPath: `\\?\C:\TEST\windows-callback\aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\generation.wne`, SHA256: windowscallback.Digest(encoded)}
@@ -32,7 +35,7 @@ func TestWindowsJournalDecisionAndRetention(t *testing.T) {
 		t.Fatal(e)
 	}
 	got, e := readTransactionFile(marker)
-	if e != nil || got.Schema != 5 || got.Windows == nil || got.Windows.Phase != "preparing" {
+	if e != nil || got.Schema != WindowsGenerationTransactionSchema || got.Windows == nil || got.Windows.Phase != "preparing" {
 		t.Fatal(got, e)
 	}
 	reversed, e := reverseTransaction(tx.Before, got)
@@ -75,13 +78,88 @@ func TestWindowsWriterFloorPreservesOrdinaryProtocol(t *testing.T) {
 	}
 	next = current
 	applyReservationProtocol(&next, Request{Windows: &WindowsChange{}}, current)
-	if next.Schema != 5 || next.WriterFloor != 5 || transactionSchemaFor(next, Request{}) != 5 {
+	if next.Schema != WindowsGenerationLedgerSchema || next.WriterFloor != WindowsGenerationWriterFloor || transactionSchemaFor(next, Request{}) != transactionSchemaV4 {
 		t.Fatal(next)
+	}
+	if next.DecoderFloor != WindowsGenerationDecoderFloor {
+		t.Fatal(next.DecoderFloor)
 	}
 	current = windowsJournalFixture().After
 	next = current
 	applyReservationProtocol(&next, Request{}, current)
-	if next.Schema != 5 || next.WriterFloor != 5 || !reflect.DeepEqual(next.WindowsRetained, current.WindowsRetained) {
+	if next.Schema != WindowsGenerationLedgerSchema || next.WriterFloor != WindowsGenerationWriterFloor || !reflect.DeepEqual(next.WindowsRetained, current.WindowsRetained) {
 		t.Fatal(next)
+	}
+}
+
+// Breakage: a v4 writer can be admitted to the Windows6 destructive floor, or
+// the new declaration loses any of the public historical marker contracts.
+func TestFormerWritersRefuseWindowsGenerationFloor6(t *testing.T) {
+	v1 := []byte(WriterProtocolMarker)
+	v3 := append(append([]byte(nil), v1...), []byte(LocalWriterProtocolMarker)...)
+	v4 := append(append([]byte(nil), v3...), []byte(OpenCodeWriterProtocolMarker)...)
+	v6 := append(append([]byte(nil), v4...), []byte(WindowsWriterProtocolMarker)...)
+	for _, old := range [][]byte{v1, v3, v4} {
+		if WriterCompatibleAtFloor(old, WindowsGenerationWriterFloor) {
+			t.Fatalf("former writer admitted at floor6: %q", old)
+		}
+	}
+	for floor, compatible := range map[int][][]byte{
+		1: {v1, v3, v4, v6}, 2: {v1, v3, v4, v6}, 3: {v3, v4, v6},
+		4: {v4, v6}, 5: {v4, v6}, 6: {v6},
+	} {
+		for _, data := range compatible {
+			if !WriterCompatibleAtFloor(data, floor) {
+				t.Fatalf("published marker contract refused at floor%d: %q", floor, data)
+			}
+		}
+	}
+	if WriterCompatibleAtFloor(v6, 7) {
+		t.Fatal("unknown writer floor7 admitted")
+	}
+}
+
+// Breakage: an ordinary participant-free update after a Windows generation is
+// promoted to schema6, loses the retained generation, or lets a reverse journal
+// forget that permanent capacity charge.
+func TestOrdinaryJournalRemainsSchema4AfterWindowsGeneration(t *testing.T) {
+	windows := windowsJournalFixture()
+	ordinary := windows
+	ordinary.Windows = nil
+	ordinary.Schema = transactionSchemaV4
+	if transactionSchemaFor(ordinary.After, Request{}) != transactionSchemaV4 {
+		t.Fatal("ordinary journal acquired Windows6 schema")
+	}
+	marker := filepath.Join(t.TempDir(), "transaction.json")
+	if err := writeTransaction(marker, ordinary); err != nil {
+		t.Fatal(err)
+	}
+	got, err := readTransactionFile(marker)
+	if err != nil || got.Schema != transactionSchemaV4 || got.Windows != nil ||
+		!reflect.DeepEqual(got.After.WindowsRetained, windows.After.WindowsRetained) {
+		t.Fatalf("ordinary schema4 round trip lost floor6 ledger: %+v %v", got, err)
+	}
+	reversed, err := reverseTransaction(got.Before, got)
+	if err != nil || reversed.Schema != transactionSchemaV4 || reversed.Windows != nil ||
+		!reflect.DeepEqual(reversed.After.WindowsRetained, windows.After.WindowsRetained) {
+		t.Fatalf("ordinary reverse dropped permanent generation: %+v %v", reversed, err)
+	}
+	if err := writeTransaction(marker, reversed); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(marker)
+	var envelope struct {
+		Transaction map[string]json.RawMessage
+	}
+	var carrier map[string]json.RawMessage
+	var changes []json.RawMessage
+	if err != nil || json.Unmarshal(raw, &envelope) != nil ||
+		json.Unmarshal(envelope.Transaction["Files"], &carrier) != nil || len(carrier) != 1 ||
+		json.Unmarshal(carrier["Changes"], &changes) != nil || changes == nil || len(changes) != 0 {
+		t.Fatalf("ordinary journal lost public schema4 carrier: %s %v", raw, err)
+	}
+	if got, err = readTransactionFile(marker); err != nil || !got.Rollback ||
+		!reflect.DeepEqual(got.After.WindowsRetained, windows.After.WindowsRetained) {
+		t.Fatalf("durable ordinary reverse lost retained generation: %+v %v", got, err)
 	}
 }

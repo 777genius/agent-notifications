@@ -138,3 +138,47 @@ func TestWindowsLocalShortcutRetainedUntilLastBinding(t *testing.T) {
 		t.Fatal("last removal retained the selected binding or changed the legacy sibling")
 	}
 }
+
+// Valid consumers may register distinct primaries; they do not share a shortcut.
+func TestWindowsPortableShortcutNonSharingPrimary(t *testing.T) {
+	base := t.TempDir()
+	run, root := filepath.Join(base, "runtime"), filepath.Join(base, "control")
+	ledger := installruntime.Ledger{ID: "TEST-component", Owner: "existing-installer", RuntimeRoot: run, Consumers: map[string]installruntime.Consumer{}}
+	b := portable.Binding{Version: 1, Integration: portable.Cursor, InstallationID: "TEST-install", BindingID: "TEST-A", ScopeID: "TEST-A", ComponentID: ledger.ID, Owner: ledger.Owner, ScopeRoot: base, DataRoot: base, ControlRoot: root, GlobalConfig: filepath.Join(root, "config.json"), RuntimeRoot: run, Primary: "primary-A.exe"}
+	key, c, _, err := b.Registration()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ledger.Consumers[key] = c
+	peer := b
+	peer.BindingID, peer.ScopeID, peer.Primary = "TEST-B", "TEST-B", "primary-B.exe"
+	peerKey, peerConsumer, _, err := peer.Registration()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ledger.Consumers[peerKey] = peerConsumer
+	target := filepath.Join(run, b.Primary)
+	file, err := StageCursorWindowsShortcut(key, base, target, false, ledger)
+	if err != nil || file != nil {
+		t.Fatalf("no owned shortcut: file=%+v err=%v", file, err)
+	}
+	id, err := portableWindowsIdentity(CursorDesktop, portable.Cursor, key, ledger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shared, err := portableWindowsShortcutShared(id, key, target, ledger)
+	if err != nil || shared {
+		t.Fatalf("different valid primary shares shortcut: %v %v", shared, err)
+	}
+	delete(ledger.Consumers, peerKey)
+	peer.Primary = b.Primary
+	peerKey, peerConsumer, _, err = peer.Registration()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ledger.Consumers[peerKey] = peerConsumer
+	shared, err = portableWindowsShortcutShared(id, key, target, ledger)
+	if err != nil || !shared {
+		t.Fatalf("same valid primary not shared: %v %v", shared, err)
+	}
+}

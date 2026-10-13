@@ -179,6 +179,13 @@ esac
 		t.Fatal(err)
 	}
 	f.script = string(script)
+	// The existing discovery boundary uses absolute macOS paths, so a finite
+	// PATH alone cannot keep this fixture away from real LaunchServices.
+	macOSBoundary := "bootstrap_macos_command() {\n    \"$@\"\n}"
+	if strings.Count(f.script, macOSBoundary) != 1 {
+		t.Fatal("TEST macOS discovery boundary changed")
+	}
+	f.script = strings.Replace(f.script, macOSBoundary, "bootstrap_macos_command() { return 1; }", 1)
 	t.Cleanup(func() {
 		if data, err := os.ReadFile(filepath.Join(f.project, "unexpected-acquisition")); err == nil {
 			t.Errorf("unexpected acquisition URL: %s", data)
@@ -366,6 +373,25 @@ func (f *bootstrapFixture) snapshot() map[string]string {
 		if err != nil {
 			return err
 		}
+		// Private diagnostic captures are intentional even when an admission or
+		// transport check refuses the request. They do not authorize product
+		// effects; exclude only the finite owned log shape after checking privacy.
+		if filepath.Dir(path) == f.control()+"-installer-diagnostics" && strings.HasPrefix(entry.Name(), "installer-") && strings.HasSuffix(entry.Name(), ".log") {
+			info, err := entry.Info()
+			if err != nil {
+				return err
+			}
+			parent, err := os.Lstat(filepath.Dir(path))
+			if err != nil {
+				return err
+			}
+			fileOwner, fileOK := info.Sys().(*syscall.Stat_t)
+			parentOwner, parentOK := parent.Sys().(*syscall.Stat_t)
+			if !info.Mode().IsRegular() || info.Mode().Perm() != 0600 || !parent.IsDir() || parent.Mode().Perm() != 0700 || !fileOK || !parentOK || fileOwner.Uid != uint32(os.Getuid()) || parentOwner.Uid != uint32(os.Getuid()) {
+				return fmt.Errorf("unsafe TEST diagnostic capture: %s", path)
+			}
+			return nil
+		}
 		if entry.Type().IsRegular() {
 			data, err := os.ReadFile(path)
 			if err != nil {
@@ -388,6 +414,32 @@ func (f *bootstrapFixture) samePersistentState(before map[string]string) {
 	if !bytes.Equal(a, b) {
 		f.t.Fatalf("pre-consent product writes: before=%s after=%s", a, b)
 	}
+}
+func (f *bootstrapFixture) diagnosticText() string {
+	f.t.Helper()
+	root := f.control() + "-installer-diagnostics"
+	parent, err := os.Lstat(root)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	owner, owned := parent.Sys().(*syscall.Stat_t)
+	if !parent.IsDir() || parent.Mode().Perm() != 0700 || !owned || owner.Uid != uint32(os.Getuid()) {
+		f.t.Fatal("unsafe TEST diagnostic root")
+	}
+	_ = f.snapshot() // Validate exact owned regular logs and their private parent.
+	paths, err := filepath.Glob(filepath.Join(root, "installer-*.log"))
+	if err != nil || len(paths) == 0 {
+		f.t.Fatalf("missing private TEST diagnostic capture: %v", err)
+	}
+	var result strings.Builder
+	for _, path := range paths {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			f.t.Fatal(err)
+		}
+		result.Write(data)
+	}
+	return result.String()
 }
 func (f *bootstrapFixture) unchanged(before map[string]string) {
 	f.t.Helper()
@@ -473,8 +525,41 @@ func (f *bootstrapFixture) noAcquisition() {
 	}
 }
 
+// A fresh Enter on default Yes installs. Choosing No visibly cancels without
+// effects in either renderer; the fixture owns every profile and agent.
+func TestBootstrapConfirmationDefaults(t *testing.T) {
+	for _, tc := range []struct {
+		name, mode, answer string
+		install            bool
+	}{{"rich Enter installs", "rich", "\r", true}, {"rich Right then Enter cancels", "rich", "\x1b[C\r", false},
+		{"plain Enter installs", "plain", "\n", true}, {"plain No cancels", "plain", "n\n", false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newBootstrapFixture(t)
+			before := f.snapshot()
+			// Explicitly choose Webhook only so this keyboard test never asks for
+			// desktop permissions or launches a notification helper.
+			selection := promptStep{"enter", " \x1b[B \x1b[B\x1b[B \r", nil}
+			if tc.mode == "plain" {
+				selection = promptStep{"comma-separated", "opencode\n", nil}
+			}
+			r := f.terminal([]string{"--webhook", "--ui=" + tc.mode}, selection,
+				promptStep{setupProductsConfirmationTitle, tc.answer, nil})
+			requireBootstrapSuccess(t, r)
+			if tc.install {
+				f.assertConsumer("opencode-notifications", true)
+			} else {
+				f.unchanged(before)
+				if !strings.Contains(r.screen, "Installation cancelled. No changes were applied.") {
+					t.Fatalf("Enter cancelled silently: %s", r.screen)
+				}
+			}
+		})
+	}
+}
+
 // Regression: an Enter/y queued behind selecting a product granted Yes at the
-// next process's consent question. The fresh default-No must still be needed.
+// next process's consent question. A fresh confirmation must still be needed
+// even when its default is Yes.
 func TestBootstrapSelectionDoesNotApproveConsent(t *testing.T) {
 	for _, queued := range []string{"\n", "y\n"} {
 		t.Run(fmt.Sprintf("queued %q", queued), func(t *testing.T) {
@@ -498,14 +583,14 @@ func TestBootstrapSelectionDoesNotApproveConsent(t *testing.T) {
 	})
 }
 
-// Regression: singleton channels used a shell read and skipped final consent;
-// incomplete --products asked questions instead of failing before acquisition.
+// Product selection must still require final confirmation; malformed explicit
+// products must fail before acquisition even though channel omission is valid.
 func TestBootstrapInteractiveChannelConsent(t *testing.T) {
 	for _, answer := range []string{"n\n", "cancel\n", "\x04"} {
 		t.Run(fmt.Sprintf("final %q", answer), func(t *testing.T) {
 			f := newBootstrapFixture(t)
 			before := f.snapshot()
-			r := f.terminal([]string{"--product", "opencode", "--plain"}, promptStep{"comma-separated", "webhook\n", nil}, promptStep{"[y/n]", answer, nil})
+			r := f.terminal([]string{"--webhook", "--plain"}, promptStep{"comma-separated", "opencode\n", nil}, promptStep{"[y/n]", answer, nil})
 			if answer == "\x04" {
 				if r.code != 1 {
 					t.Fatalf("EOF: %+v", r)
@@ -516,11 +601,11 @@ func TestBootstrapInteractiveChannelConsent(t *testing.T) {
 			f.unchanged(before)
 		})
 	}
-	t.Run("incomplete multi", func(t *testing.T) {
+	t.Run("duplicate multi", func(t *testing.T) {
 		f := newBootstrapFixture(t)
-		r := f.noTTY("--products", "opencode,gemini")
+		r := f.noTTY("--products", "opencode,opencode")
 		if r.code != 1 {
-			t.Fatalf("incomplete multi: %+v", r)
+			t.Fatalf("duplicate multi: %+v", r)
 		}
 		f.noAcquisition()
 	})
@@ -567,7 +652,7 @@ func TestBootstrapStrictResultBytes(t *testing.T) {
 			f := newBootstrapFixture(t)
 			before := f.snapshot()
 			f.corruptResult(row.operation, []byte(row.data), row.status)
-			r := f.terminal([]string{"--product", "opencode", "--plain"}, promptStep{"comma-separated", "webhook\n", nil}, promptStep{"[y/n]", "y\n", nil})
+			r := f.terminal([]string{"--webhook", "--plain"}, promptStep{"comma-separated", "opencode\n", nil}, promptStep{"[y/n]", "y\n", nil})
 			if r.code == 0 || (row.status != 0 && r.code != row.status) {
 				t.Fatalf("unsafe approval/checkpoint: %+v", r)
 			}
@@ -582,7 +667,7 @@ func TestBootstrapStrictResultBytes(t *testing.T) {
 		f := newBootstrapFixture(t)
 		before := f.snapshot()
 		f.corruptProjection([]byte("home\x00/TEST\x00"), 143)
-		r := f.terminal([]string{"--product", "opencode", "--plain"}, promptStep{"comma-separated", "webhook\n", nil}, promptStep{"[y/n]", "y\n", nil})
+		r := f.terminal([]string{"--webhook", "--plain"}, promptStep{"comma-separated", "opencode\n", nil}, promptStep{"[y/n]", "y\n", nil})
 		if r.code != 143 {
 			t.Fatalf("getter child status/prefix accepted: %+v", r)
 		}
@@ -593,7 +678,7 @@ func TestBootstrapStrictResultBytes(t *testing.T) {
 			f := newBootstrapFixture(t)
 			before := f.snapshot()
 			f.corruptProjection([]byte(data), 0)
-			r := f.terminal([]string{"--product", "opencode", "--plain"}, promptStep{"comma-separated", "webhook\n", nil}, promptStep{"[y/n]", "y\n", nil})
+			r := f.terminal([]string{"--webhook", "--plain"}, promptStep{"comma-separated", "opencode\n", nil}, promptStep{"[y/n]", "y\n", nil})
 			if r.code == 0 {
 				t.Fatalf("invalid frozen projection accepted: %+v", r)
 			}
@@ -634,7 +719,7 @@ func TestBootstrapStaleSelectedFacts(t *testing.T) {
 	t.Run("selected executable disappears", func(t *testing.T) {
 		f := newBootstrapFixture(t)
 		before := f.snapshot()
-		r := f.terminal([]string{"--product", "opencode", "--plain"}, promptStep{"comma-separated", "webhook\n", nil}, promptStep{"[y/n]", "y\n", func() {
+		r := f.terminal([]string{"--webhook", "--plain"}, promptStep{"comma-separated", "opencode\n", nil}, promptStep{"[y/n]", "y\n", func() {
 			if err := os.Remove(filepath.Join(f.tools, "opencode")); err != nil {
 				t.Fatal(err)
 			}
@@ -667,7 +752,7 @@ func TestBootstrapStaleSelectedFacts(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		r := f.terminal([]string{"--product", "gemini", "--plain"}, promptStep{"comma-separated", "webhook\n", nil}, promptStep{"[y/n]", "y\n", func() {
+		r := f.terminal([]string{"--webhook", "--plain"}, promptStep{"comma-separated", "gemini\n", nil}, promptStep{"[y/n]", "y\n", func() {
 			if err := os.Remove(alias); err != nil {
 				t.Fatal(err)
 			}
@@ -732,10 +817,10 @@ func TestBootstrapStaleSelectedFacts(t *testing.T) {
 				release()
 			}})
 			if changed {
-				if r.code == 0 || !strings.Contains(r.screen+r.out, "concurrent_change") {
+				if r.code == 0 || !strings.Contains(r.screen, "Setup incomplete:") || !strings.Contains(f.diagnosticText(), "concurrent_change") {
 					t.Fatalf("outside opt-out absorbed: %+v", r)
 				}
-				if strings.Contains(r.screen, "claude: completed") {
+				if strings.Contains(r.screen, "Claude Code  completed") {
 					t.Fatalf("failed portable phase reported complete: %+v", r)
 				}
 				// Regression: partial recovery guidance must not promise delivery or
@@ -815,7 +900,7 @@ func TestBootstrapPartialProgress(t *testing.T) {
 `
 		f.script = strings.Replace(f.script, "main \"$@\"", patch+"\nmain \"$@\"", 1)
 		r := f.noTTY("--products", "opencode,gemini", "--webhook")
-		if r.code == 0 || !strings.Contains(r.screen, "opencode: registration_committed; follow_up_failed:config") || !strings.Contains(r.screen, "gemini: not_started") {
+		if r.code == 0 || !strings.Contains(r.screen, "OpenCode: configuration - registration committed (partial)") || !strings.Contains(r.screen, "Gemini CLI: queued - not started") {
 			t.Fatalf("untruthful partial result: %+v", r)
 		}
 		f.assertConsumer("opencode-notifications", true)
@@ -830,7 +915,7 @@ func TestBootstrapPartialProgress(t *testing.T) {
 	t.Run("mixed actual completion", func(t *testing.T) {
 		f := newBootstrapFixture(t)
 		r := f.noTTY("--products", "opencode,gemini", "--webhook")
-		if r.code != 0 || !strings.Contains(r.screen, "opencode: completed") || !strings.Contains(r.screen, "gemini: completed") {
+		if r.code != 0 || !strings.Contains(r.out, "OpenCode - installed;") || !strings.Contains(r.out, "Gemini CLI - installed;") || strings.Count(r.out, "Delivery has not been verified.") != 1 {
 			t.Fatalf("mixed completion: %+v", r)
 		}
 		f.assertConsumer("opencode-notifications", true)
@@ -877,7 +962,7 @@ func TestBootstrapNormalizedRouteConsent(t *testing.T) {
 			t.Fatalf("supported normalized route refused: %+v", r)
 		}
 		f.unchanged(before)
-		if !strings.Contains(r.screen, "allow-unknown-caller=false allow-caller-asserted=false") {
+		if !strings.Contains(r.screen, "Allow unrecognized callers: off") || !strings.Contains(r.screen, "Allow caller-asserted identity: off") {
 			t.Fatalf("caller decision missing from visible consent: %s", r.screen)
 		}
 	})
@@ -1079,14 +1164,13 @@ else:
 // it; there is no production hook, helper substitution or timing-based race.
 func (f *bootstrapFixture) barrier(function string) (string, func()) {
 	f.t.Helper()
-	// Stream the boundary before releasing it; normal stages buffer diagnostics.
-	f.env = append(f.env, "BOOTSTRAP_VERBOSE=1")
+	// Use the shell's saved display descriptor; stage diagnostics remain buffered.
 	release := filepath.Join(f.project, "release-"+function)
 	visible := "TEST boundary " + function
 	f.script = strings.Replace(f.script, function+"() {", "fixture_"+function+"() {", 1)
 	wrapper := function + `() {
  fixture_` + function + ` "$@" || return $?
- printf '%s\n' ` + shellQuote(visible) + ` >&2
+ printf '%s\n' ` + shellQuote(visible) + ` >&4
  while [ ! -f ` + shellQuote(release) + ` ]; do sleep 0.01; done
 }
 `
@@ -1243,7 +1327,7 @@ func testBootstrapLegacyPartial(t *testing.T) {
 	// Explicit global config is existing legacy grammar, not a selector override.
 	f.env = append(f.env, "AGENT_NOTIFICATIONS_CONFIG="+filepath.Join(f.home, "config", "TEST-global.json"))
 	r := f.noTTY("--products", "claude,codex,gemini", "--skip-agent-notify", "--webhook")
-	if r.code == 0 || !strings.Contains(r.screen, "claude: completed") || !strings.Contains(r.screen, "codex: registration_committed; follow_up_failed:config") || !strings.Contains(r.screen, "gemini: not_started") {
+	if r.code == 0 || !strings.Contains(r.screen, "Claude Code: complete - done") || !strings.Contains(r.screen, "Codex CLI: configuration - registration committed (partial)") || !strings.Contains(r.screen, "Gemini CLI: queued - not started") {
 		t.Fatalf("untruthful singleton partial: %+v", r)
 	}
 	f.assertConsumer("claude-hooks", true)

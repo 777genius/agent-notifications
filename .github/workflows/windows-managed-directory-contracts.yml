@@ -9,6 +9,16 @@ on:
       - 'go.mod'
       - 'go.sum'
       - '.github/workflows/windows-managed-directory-contracts.yml'
+  workflow_dispatch:
+    inputs:
+      admission:
+        description: 'Inert filesystem checks, or explicit disposable owned account No Show recovery'
+        required: true
+        type: choice
+        default: inert
+        options:
+          - inert
+          - fresh-owned-account-no-show
 permissions:
   contents: read
 jobs:
@@ -329,3 +339,91 @@ jobs:
             ${{ runner.temp }}/TEST-managed-directory-${{ github.run_id }}-${{ github.run_attempt }}/*.stderr.txt
           if-no-files-found: error
           retention-days: 14
+  retained-generation-recovery:
+    if: github.event_name == 'workflow_dispatch' && github.repository == '777genius/agent-notifications' && github.run_attempt == '1' && inputs.admission == 'fresh-owned-account-no-show'
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      TEST_WINDOWS_INSTALLED_RECOVERY: fresh-owned-account-no-show
+      CGO_ENABLED: '1'
+      CC: 'C:\mingw64\bin\gcc.exe'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7 repository pin
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.26.x'
+      - name: Build exact native asset and selected owner recovery test binary
+        shell: pwsh
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ((git rev-parse HEAD) -cne $env:SOURCE_SHA -or $env:GITHUB_RUN_ATTEMPT -cne '1') { throw 'exact first owned attempt required' }
+          $root = Join-Path $env:RUNNER_TEMP "TEST-windows-generation-proof-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          New-Item -ItemType Directory -Path $root | Out-Null
+          "WINDOWS_RECOVERY_PROOF_ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          ./native/windows-callback/build.ps1 -OutputDirectory "$root/native" -EmbedAsset
+          go test -c -race -tags windows_callback_asset -o "$root/recovery.test.exe" ./internal/installruntime
+          if ($LASTEXITCODE -ne 0) { throw 'selected recovery test compile failed' }
+          @{ sourceSHA=$env:SOURCE_SHA; helperSHA256=(Get-FileHash "$root/native/helper.exe" -Algorithm SHA256).Hash.ToLowerInvariant();
+            testSHA256=(Get-FileHash "$root/recovery.test.exe" -Algorithm SHA256).Hash.ToLowerInvariant();
+            architecture=$env:RUNNER_ARCH; noShowScope=$true; installedCallbackQualified=$false; qualified=$false } |
+            ConvertTo-Json | Set-Content "$root/evidence.json" -Encoding utf8
+      - name: One bounded No Show owner commit and recovery proof
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = $env:WINDOWS_RECOVERY_PROOF_ROOT
+          $evidence = [IO.File]::ReadAllText("$root/evidence.json") | ConvertFrom-Json
+          $fact = @{ collected=$false; streamsCollected=$false; timedOut=$false; unknown=$true; exitCode=$null; bounded=$false }
+          $p = $null
+          try {
+            $p = Start-Process -FilePath "$root/recovery.test.exe" -ArgumentList @('-test.v', '-test.run', '^TestWindowsNative(RecoverFixedMutationBoundaries|ForeignDecisionRecoveryRefuses)$', '-test.timeout', '6m') -PassThru -NoNewWindow -RedirectStandardOutput "$root/proof.stdout.private" -RedirectStandardError "$root/proof.stderr.private"
+            if (!$p.WaitForExit(370000)) {
+              $fact.timedOut=$true
+              try { $p.Kill($true) } catch { }
+              if (!$p.WaitForExit(5000)) { throw 'No Show actor remains unknown; no retry' }
+            }
+            $fact.collected=$true
+            $p.Refresh()
+            $fact.exitCode=$p.ExitCode
+            if ($null -eq $p.ExitCode) { throw 'actor exit unavailable' }
+            $handles=@()
+            try {
+              foreach ($suffix in @('stdout', 'stderr')) { $handles += [IO.File]::Open("$root/proof.$suffix.private", [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::None) }
+              $fact.streamsCollected=$true
+              $fact.bounded=($handles[0].Length + $handles[1].Length -le 65536)
+              if (!$fact.bounded) { throw 'No Show output exceeds retained bound' }
+              for ($i=0; $i -lt 2; $i++) {
+                $suffix=@('stdout','stderr')[$i]
+                $destination=[IO.File]::Open("$root/proof.$suffix.txt", [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+                try { $handles[$i].CopyTo($destination) } finally { $destination.Dispose() }
+                $fact["${suffix}SHA256"]=(Get-FileHash "$root/proof.$suffix.txt" -Algorithm SHA256).Hash.ToLowerInvariant()
+              }
+            } finally { foreach ($h in $handles) { $h.Dispose() } }
+            $fact.unknown=$false
+            $stdout=[IO.File]::ReadAllText("$root/proof.stdout.txt")
+            if ($fact.timedOut -or $p.ExitCode -ne 0 -or $stdout.Contains('--- SKIP:') -or
+                !$stdout.Contains('--- PASS: TestWindowsNativeRecoverFixedMutationBoundaries') -or
+                !$stdout.Contains('--- PASS: TestWindowsNativeForeignDecisionRecoveryRefuses')) { throw 'selected No Show recovery cases did not qualify' }
+            $evidence.qualified=$true
+          } finally {
+            if ($null -ne $p) { $p.Dispose() }
+            $evidence | Add-Member -NotePropertyName actor -NotePropertyValue $fact
+            $evidence | ConvertTo-Json -Depth 6 | Set-Content "$root/evidence.json" -Encoding utf8
+          }
+      - name: Retain bounded No Show recovery evidence only
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7 repository pin
+        with:
+          name: windows-generation-recovery-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/TEST-windows-generation-proof-*/evidence.json
+            ${{ runner.temp }}/TEST-windows-generation-proof-*/proof.stdout.txt
+            ${{ runner.temp }}/TEST-windows-generation-proof-*/proof.stderr.txt
+            ${{ runner.temp }}/TEST-windows-generation-proof-*/native/build-evidence.json
+          if-no-files-found: error
+          retention-days: 3

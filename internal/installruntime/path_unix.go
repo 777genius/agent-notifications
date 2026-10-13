@@ -4,6 +4,7 @@ package installruntime
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -94,11 +95,11 @@ func anchoredFingerprint(parent *os.File, name string) (Identity, error) {
 	if !info.Mode().IsRegular() {
 		return Identity{}, fmt.Errorf("non-regular managed file: %s", name)
 	}
-	data, err := io.ReadAll(f)
-	if err != nil {
+	hash := sha256.New()
+	if _, err := io.Copy(hash, f); err != nil {
 		return Identity{}, err
 	}
-	return identity(data, uint32(info.Mode().Perm())), nil
+	return Identity{Exists: true, SHA256: hex.EncodeToString(hash.Sum(nil)), Mode: identityMode(uint32(info.Mode().Perm()))}, nil
 }
 func safeFingerprint(path string) (Identity, error) {
 	parent, _, err := anchoredParent(path, false)

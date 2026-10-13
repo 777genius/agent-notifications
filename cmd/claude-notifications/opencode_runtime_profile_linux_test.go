@@ -296,9 +296,10 @@ func assertProbeGoneAndPrivateLaunch(t *testing.T, in runtimeProfileInput) {
 	if json.Unmarshal(data, &proof) != nil {
 		t.Fatal("invalid TEST evidence")
 	}
-	if strings.Join(proof.Argv, ",") != "--version" || strings.Join(proof.Env, ",") != "PATH=" || proof.Cwd == filepath.Dir(in.HostExecutable) || !strings.Contains(filepath.Base(proof.Cwd), "agentplugins-version-probe-") {
+	if strings.Join(proof.Argv, ",") != "--version" || proof.Cwd == filepath.Dir(in.HostExecutable) || !strings.Contains(filepath.Base(proof.Cwd), "agentplugins-opencode-probe-") {
 		t.Fatal("probe inherited ambient environment/cwd/argv", proof)
 	}
+	assertRuntimeProbePrivateEnvironment(t, proof.Cwd, proof.Env)
 	if _, err = os.Stat("/proc/" + strconv.Itoa(proof.PID)); !os.IsNotExist(err) {
 		t.Fatal("typed closure emitted before actual probe Wait", err)
 	}

@@ -3,8 +3,10 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -167,6 +169,62 @@ func TestSetupProductsIntentRejectsUntrustedRecord(t *testing.T) {
 			}
 			if _, err := loadBootstrapIntent(path, expected); err == nil {
 				t.Fatalf("accepted %s", name)
+			}
+		})
+	}
+}
+
+func TestSetupProductsLocalIntentRoundTrip(t *testing.T) {
+	for bits := 1; bits < 8; bits++ {
+		t.Run(fmt.Sprint(bits), func(t *testing.T) {
+			i, path := bootstrapCodecFixture(t)
+			root := string(i.Provenance.Stage)
+			r, err := parseSetupProducts([]string{"confirm", "--products", "copilot-vscode", "--scope-root", root, "--local-settings", filepath.Join(root, "settings.json"), "--client-executable", filepath.Join(root, "TEST-code"), "--local-native-stop", fmt.Sprint(bits&1 != 0), "--local-mcp", fmt.Sprint(bits&2 != 0), "--local-skills", fmt.Sprint(bits&4 != 0), "--desktop=false", "--manual=true"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			r.Mode, r.Scopes, r.ConfigureArgs = "", nil, nil
+			i.Request = r
+			delete(i.Scopes, "gemini-config-root")
+			delete(i.Scopes, "gemini-executable")
+			i.Scopes["scope-root"] = []byte(root)
+			i.Scopes["local-settings"] = []byte(filepath.Join(root, "settings.json"))
+			i.Scopes["client-executable"] = []byte(filepath.Join(root, "TEST-code"))
+			i.LocalConfig = localWizardConfig(string(i.Scopes["local-settings"]))
+			i.LocalConfig.NativeStop = bits&1 != 0
+			if bits&2 != 0 {
+				i.LocalConfig.MCPServers = []string{"agent-notify"}
+			}
+			if bits&4 != 0 {
+				i.LocalConfig.Skills = []string{"agent-notifications"}
+			}
+			i.MCP.Selected = []string{"copilot-vscode"}
+			i.MCP.Projection.Profiles = map[string][]byte{"copilot-vscode": []byte(root)}
+			i.Units = []bootstrapProductUnits{{Product: "copilot-vscode", Native: bits&1 != 0, MCP: bits&2 != 0, Skill: bits&4 != 0}}
+			if err := writeBootstrapIntent(path, i); err != nil {
+				t.Fatal(err)
+			}
+			loaded, err := loadBootstrapIntent(path, i.Provenance)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := intentWizardRequest(loaded)
+			if !reflect.DeepEqual(want.LocalConfig, i.LocalConfig) || loaded.Request.Manual == nil || !*loaded.Request.Manual || !loaded.Request.DesktopSet || loaded.Request.Desktop || loaded.Request.WebhookSet {
+				t.Fatal("Local immutable tuple, selections or omitted consent changed")
+			}
+			actual := want
+			cp := *want.LocalConfig
+			actual.LocalConfig = &cp
+			actual.LocalConfig.QualifiedTuple.QualificationID = "TEST-replacement"
+			if sameWizardBootstrapScope(actual, want) {
+				t.Fatal("tuple substitution admitted")
+			}
+			bad := loaded
+			cp = *loaded.LocalConfig
+			bad.LocalConfig = &cp
+			bad.LocalConfig.NativeStop = !cp.NativeStop
+			if validateBootstrapIntent(bad) == nil {
+				t.Fatal("independent selection tamper admitted")
 			}
 		})
 	}

@@ -3,6 +3,7 @@ package windowscallback
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"strings"
 	"testing"
@@ -94,6 +95,29 @@ func TestStrictFieldValidation(t *testing.T) {
 		s.CanonicalRoot = root
 		if s.Validate() == nil {
 			t.Fatalf("invalid root %q", root)
+		}
+	}
+}
+
+// Breakage: typed JSON case-folds or ignores fields in a retained immutable
+// binding, allowing an unknown durable generation to masquerade as the exact
+// path/digest pair that the Windows participant journal appended.
+func TestRetainedBindingRejectsUnknownAndCaseFoldedFields(t *testing.T) {
+	valid := `{"SnapshotPath":"\\\\?\\C:\\TEST\\aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\\generation.wne","SHA256":"` + strings.Repeat("a", 64) + `"}`
+	var got Binding
+	if err := json.Unmarshal([]byte(valid), &got); err != nil || !ValidBinding(got) {
+		t.Fatalf("exact retained binding refused: %+v %v", got, err)
+	}
+	for _, malformed := range []string{
+		`{"SnapshotPath":"x","SHA256":"` + strings.Repeat("a", 64) + `","Unknown":true}`,
+		`{"snapshotPath":"x","SHA256":"` + strings.Repeat("a", 64) + `"}`,
+		`{"SnapshotPath":"x","sha256":"` + strings.Repeat("a", 64) + `"}`,
+		`{"SnapshotPath":"x","SHA256":"` + strings.Repeat("a", 64) + `","SHA256":"` + strings.Repeat("b", 64) + `"}`,
+		`{}`,
+	} {
+		var value Binding
+		if err := json.Unmarshal([]byte(malformed), &value); err == nil {
+			t.Fatalf("ambiguous retained binding admitted: %s -> %+v", malformed, value)
 		}
 	}
 }

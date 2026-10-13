@@ -10,6 +10,7 @@ import http.server
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -80,12 +81,61 @@ def _windows_private_scratch_root(path):
         env=root_env, text=True, timeout=30, check=True)
 
 
+def _windows_owner_rights_profile(path):
+    # OWNER RIGHTS represents the current owner. The unrelated read grant is
+    # non-inheritable, like an already repaired config directory below a
+    # profile still readable by CodexSandboxUsers. Only this disposable home
+    # changes; the runner profile and APPDATA are never modified.
+    script = (
+        '$ErrorActionPreference = "Stop"\n'
+        '$p = $env:DIAG_PATH\n'
+        '$acl = Get-Acl -LiteralPath $p\n'
+        '$ownerRights = New-Object System.Security.Principal.SecurityIdentifier("S-1-3-4")\n'
+        '$everyone = New-Object System.Security.Principal.SecurityIdentifier("S-1-1-0")\n'
+        '$inherit = [System.Security.AccessControl.InheritanceFlags]"ContainerInherit, ObjectInherit"\n'
+        '$none = [System.Security.AccessControl.PropagationFlags]::None\n'
+        '$allow = [System.Security.AccessControl.AccessControlType]::Allow\n'
+        '$acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($ownerRights, "FullControl", $inherit, $none, $allow)))\n'
+        '$acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($everyone, "ReadAndExecute", $allow)))\n'
+        'Set-Acl -LiteralPath $p -AclObject $acl\n'
+    )
+    subprocess.run(['pwsh', '-NoProfile', '-NonInteractive', '-Command', script],
+                   env=dict(os.environ, DIAG_PATH=str(path)), text=True,
+                   timeout=30, check=True)
+
+
+def _windows_writable_profile(path):
+    # Reproduce #466's profile-root Modify/DeleteChild grants with an actual
+    # unrelated trustee. Only this disposable profile is changed.
+    script = (
+        '$ErrorActionPreference = "Stop"\n'
+        '$p = $env:DIAG_PATH\n'
+        '$acl = Get-Acl -LiteralPath $p\n'
+        '$everyone = New-Object System.Security.Principal.SecurityIdentifier("S-1-1-0")\n'
+        '$inherit = [System.Security.AccessControl.InheritanceFlags]"ContainerInherit, ObjectInherit"\n'
+        '$none = [System.Security.AccessControl.PropagationFlags]::None\n'
+        '$allow = [System.Security.AccessControl.AccessControlType]::Allow\n'
+        '$acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($everyone, "Modify, DeleteSubdirectoriesAndFiles", $inherit, $none, $allow)))\n'
+        'Set-Acl -LiteralPath $p -AclObject $acl\n'
+    )
+    subprocess.run(['pwsh', '-NoProfile', '-NonInteractive', '-Command', script],
+                   env=dict(os.environ, DIAG_PATH=str(path)), text=True,
+                   timeout=30, check=True)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--binary', type=Path, required=True)
     parser.add_argument('--version', required=True)
+    parser.add_argument('--windows-standard-user-runner', type=Path)
     args = parser.parse_args()
     binary = args.binary.resolve()
+    standard_runner = args.windows_standard_user_runner.resolve() if args.windows_standard_user_runner else None
+    if standard_runner:
+        assert os.name == 'nt'
+        token = json.loads(subprocess.check_output([str(standard_runner), '--check'], text=True))
+        assert token['administrator'] is False and token['disabledPrivileges'] is True, token
+        print(json.dumps({'standard_user_token': token}), flush=True)
     deliveries = []
 
     class Sink(http.server.BaseHTTPRequestHandler):
@@ -108,11 +158,29 @@ def main():
             _windows_acl_diagnostic(root, 'before private-root normalization')
             _windows_private_scratch_root(root)
             _windows_acl_diagnostic(root, 'after private-root normalization')
-            for case in ('fresh', 'legacy', 'explicit'):
+            cases = ['fresh', 'legacy', 'explicit']
+            if os.name == 'nt':
+                expected = subprocess.check_output(
+                    ['pwsh', '-NoProfile', '-NonInteractive', '-Command',
+                     "$sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value; "
+                     "Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) ('agent-notifications-' + $sid)"],
+                    text=True).strip()
+                automatic_root = Path(expected)
+                assert not automatic_root.exists(), ('preexisting automatic config root', automatic_root)
+                cases.extend(('windows-owner-rights', 'windows-sandbox-profile', 'windows-sandbox-automatic'))
+            for case in cases:
                 home = root / case
-                home.mkdir()
+                # A Linux umask of 0002 would otherwise make this ancestry
+                # group-writable, which the config store correctly rejects.
+                # Windows must retain the protected DACL inherited from root.
+                home.mkdir(mode=0o777 if os.name == 'nt' else 0o700)
+                if case == 'windows-owner-rights':
+                    _windows_owner_rights_profile(home)
                 env = {key: os.environ[key] for key in
-                       ('PATH', 'SystemRoot', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'PATHEXT')
+                       # KnownFolder expands these machine-level variables.
+                       # Preserve them while keeping all user paths isolated.
+                       ('PATH', 'SystemRoot', 'SYSTEMROOT', 'SystemDrive', 'SYSTEMDRIVE',
+                        'ALLUSERSPROFILE', 'WINDIR', 'COMSPEC', 'PATHEXT')
                        if key in os.environ}
                 env.update(HOME=str(home), USERPROFILE=str(home), GIT_CONFIG_NOSYSTEM='1')
                 for key in ('CODEX_HOME', 'CLAUDE_HOME', 'CLAUDE_CONFIG_DIR',
@@ -127,23 +195,81 @@ def main():
                 env['CLAUDE_PLUGIN_ROOT'] = str(bundle)
 
                 def run(*command, data=None, success=True):
-                    result = subprocess.run([str(binary), *command], cwd=home, env=env,
+                    prefix = [str(standard_runner)] if standard_runner else []
+                    result = subprocess.run([*prefix, str(binary), *command], cwd=home, env=env,
                                             input=data, text=True, capture_output=True, timeout=30)
                     assert (result.returncode == 0) == success, (case, command, result.returncode, result.stderr)
                     return result
 
                 assert run('version').stdout.strip() == 'claude-notifications ' + args.version
                 legacy = home / '.claude' / 'claude-notifications-go' / 'config.json'
-                if case == 'explicit':
+                if case == 'windows-sandbox-profile':
+                    _windows_writable_profile(home)
+                    # Repairing APPDATA alone cannot fix the writable home.
+                    _windows_private_scratch_root(Path(env['APPDATA']))
+                    env['AGENT_NOTIFICATIONS_CONFIG'] = str(Path(env['APPDATA']) / 'agent-notifications' / 'config.json')
+                    denied = run('config', 'init', '--json', success=False)
+                    failure = json.loads(denied.stdout)
+                    detail = failure['permissionFailure']
+                    assert failure['errorCode'] == 'ConfigPermissionDenied', failure
+                    assert Path(detail['objectPath']) == home, detail
+                    assert detail['trusteeSid'] == 'S-1-1-0', detail
+                    assert detail['reason'] == 'unrelated_write_grant', detail
+                    assert detail['accessMask'] & 0x40, detail
+                    assert 'objectPath=' + json.dumps(str(home)) in denied.stderr, denied.stderr
+                    assert 'S-1-1-0' in denied.stderr, denied.stderr
+                    assert not (home / '.agent-notifications-config.lock').exists()
+                    denied = run('config', 'init', '--json', success=False)
+                    assert json.loads(denied.stdout)['permissionFailure'] == detail, denied.stdout
+                    # An existing managed config encounters the same ancestor
+                    # on reads. Its safe inspection must not disclose contents.
+                    blocked = Path(env['AGENT_NOTIFICATIONS_CONFIG'])
+                    blocked.parent.mkdir()
+                    blocked.write_text('{"future":"ACL_DIAGNOSTIC_SECRET_CANARY"}')
+                    Path(str(blocked) + '.lock').write_text('')
+                    inspected = run('config', 'inspect', '--json', success=False)
+                    assert json.loads(inspected.stdout)['permissionFailure'] == detail, inspected.stdout
+                    assert 'ACL_DIAGNOSTIC_SECRET_CANARY' not in inspected.stdout + inspected.stderr
+                    assert blocked.read_text() == '{"future":"ACL_DIAGNOSTIC_SECRET_CANARY"}'
+                    # Explicit selection outside that ancestry can skip the
+                    # unavailable profile guard and retain its private target lock.
+                    safe = root / 'sandbox-private-config'
+                    safe.mkdir()
+                    env['AGENT_NOTIFICATIONS_CONFIG'] = str(safe / 'config.json')
+                elif case == 'windows-sandbox-automatic':
+                    # Exercise the real native ProgramData directory, not a
+                    # private scratch substitute. Refuse any preexisting state.
+                    assert not automatic_root.exists(), ('preexisting automatic config root', automatic_root)
+                    _windows_writable_profile(home)
+                    _windows_private_scratch_root(Path(env['APPDATA']))
+                    chosen = json.loads(run('config', 'path', '--json').stdout)
+                    assert Path(chosen['path']) == automatic_root / 'config.json', chosen
+                    assert 'AGENT_NOTIFICATIONS_CONFIG' not in env
+                    # An unrelated broad-read grant on a precreated SID root
+                    # must not be adopted, repaired or hidden by a new default.
+                    automatic_root.mkdir(mode=0o777)
+                    _windows_writable_profile(automatic_root)
+                    acl_command = ['pwsh', '-NoProfile', '-NonInteractive', '-Command',
+                                   '(Get-Acl -LiteralPath $env:DIAG_PATH).Sddl']
+                    acl_env = dict(os.environ, DIAG_PATH=str(automatic_root))
+                    original_acl = subprocess.check_output(acl_command, env=acl_env, text=True)
+                    denied = run('config', 'init', '--json', success=False)
+                    assert json.loads(denied.stdout)['errorCode'] == 'ConfigPermissionDenied', denied.stdout
+                    assert list(automatic_root.iterdir()) == [], 'denial created entries'
+                    assert subprocess.check_output(acl_command, env=acl_env, text=True) == original_acl
+                    automatic_root.rmdir()
+                elif case == 'explicit':
                     env['AGENT_NOTIFICATIONS_CONFIG'] = str(home / 'custom' / 'config.json')
                 if case == 'legacy':
-                    legacy.parent.mkdir(parents=True, mode=0o777 if os.name == 'nt' else 0o700)
+                    private_mode = 0o777 if os.name == 'nt' else 0o700
+                    legacy.parent.parent.mkdir(mode=private_mode)
+                    legacy.parent.mkdir(mode=private_mode)
                     legacy.write_text('{}')
                     legacy.chmod(0o600)
                 selected = Path(run('config', 'path').stdout.strip())
                 if case == 'legacy':
                     assert selected == legacy
-                elif case == 'explicit':
+                elif case in ('explicit', 'windows-sandbox-profile'):
                     assert selected == Path(env['AGENT_NOTIFICATIONS_CONFIG'])
                 else:
                     assert selected != legacy
@@ -153,6 +279,17 @@ def main():
                     _windows_acl_diagnostic(selected.parent, 'on config init failure')
                     raise
                 assert selected.exists()
+                if case == 'windows-sandbox-profile':
+                    assert (selected.parent / (selected.name + '.lock')).exists()
+                    assert not (home / '.agent-notifications-config.lock').exists()
+                if case == 'windows-sandbox-automatic':
+                    assert selected == automatic_root / 'config.json'
+                    assert not (home / '.agent-notifications-config.lock').exists()
+                    # Tightening the profile later must not silently select a
+                    # different absent config and discard established settings.
+                    _windows_private_scratch_root(home)
+                    assert Path(run('config', 'path').stdout.strip()) == selected
+                    _windows_writable_profile(home)
                 if case != 'legacy':
                     assert not legacy.exists()
                 document = {
@@ -200,6 +337,35 @@ def main():
                 # The important regression is delivery, not CLI help interception.
                 assert json.loads(deliveries[-1][1])['attachments'][0]['text'].endswith('-help'), deliveries[-1]
                 assert selected.read_bytes() == before
+                if case == 'windows-sandbox-automatic':
+                    # Mutation uses the same automatic identity as both hooks.
+                    inspected = json.loads(run('config', 'inspect', '--json').stdout)
+                    assert inspected['selection']['path'] == str(selected), inspected
+                    edited = run('config', 'edit', '--stdin', '--expect-revision', inspected['revision'],
+                                 data=json.dumps({'set': {'/notifications/desktop/volume': 0.5}}))
+                    assert json.loads(edited.stdout)['changed'] is True, edited.stdout
+                    updated = json.loads(selected.read_text())
+                    assert updated['future'] == document['future']
+                    assert updated['agents'] == document['agents']
+                    assert updated['notifications']['webhook'] == document['notifications']['webhook']
+                    assert updated['notifications']['desktop']['volume'] == 0.5
+                    private_bytes = selected.read_bytes()
+                    legacy.parent.mkdir(parents=True, mode=0o777)
+                    planted = '{"future":"PLANTED_PROFILE_CONFIG_CANARY"}'
+                    legacy.write_text(planted)
+                    conflict = run('config', 'inspect', '--json', success=False)
+                    assert 'ConfigConflict' in conflict.stderr
+                    assert 'PLANTED_PROFILE_CONFIG_CANARY' not in conflict.stdout + conflict.stderr
+                    count = len(deliveries)
+                    for product in ('claude', 'codex'):
+                        prefix = [str(standard_runner)] if standard_runner else []
+                        rejected = subprocess.run([*prefix, str(binary), 'handle-hook', 'Stop', '--product', product],
+                                                  cwd=home, env=env, input=json.dumps(payload), text=True,
+                                                  capture_output=True, timeout=30)
+                        assert 'PLANTED_PROFILE_CONFIG_CANARY' not in rejected.stdout + rejected.stderr
+                    assert len(deliveries) == count
+                    assert selected.read_bytes() == private_bytes and legacy.read_text() == planted
+                    legacy.unlink()
                 selected.write_text('{invalid-config')
                 count = len(deliveries)
                 run('config', 'inspect', '--json', success=False)
@@ -208,6 +374,10 @@ def main():
                 assert len(deliveries) == count
                 assert selected.read_text() == '{invalid-config'
                 results.append(case)
+                if case == 'windows-sandbox-automatic':
+                    # Created by this invocation after the absent-state check;
+                    # never remove an existing application/user directory.
+                    shutil.rmtree(automatic_root)
         print(json.dumps({'result': 'PASS', 'version': args.version,
                           'binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(),
                           'profiles': results, 'webhook_deliveries': len(deliveries)}))

@@ -9,10 +9,10 @@ falls back to generic OpenCode copy. Alerts remain silent and do not navigate to
 a terminal or session when clicked. Plan/review events and sound controls are
 outside this integration.
 
-Agent Notifications **1.48.1 on Linux/Windows and 1.48.3 on macOS** uses
+Agent Notifications uses
 **one installed plugin** for OpenCode V1 and
-[V2](https://opencode.ai/v2/docs): V1 calls `server`, V2 calls `setup`. Release
-qualification targets are **V1 1.18.33, V1 1.18.34 and V2 2.0.21**. The installer
+[V2](https://opencode.ai/v2/docs): V1 calls `server`, V2 calls `setup`. Historical release
+qualification targets include **V1 1.18.33, V1 1.18.34 and V2 2.0.21**. The installer
 accepts stable V1 >= 1.18.29 and V2 >= 2.0.0; this range does not qualify every
 release. Prereleases and unknown future API generations are rejected.
 Setup installs notifications, never OpenCode itself, and does not start an agent session.
@@ -26,10 +26,14 @@ Existing installations must run update and restart OpenCode to load the new bund
 
 ## Platforms and observed delivery
 
-The [platform channels](PLATFORM_RELEASE_CHANNELS.md) select macOS arm64/amd64
-**1.48.3** and Linux arm64/amd64 / Windows amd64 **1.48.1**. GitHub global
-Latest remains **1.46.1** for legacy installers. macOS 1.48.3 includes a signed,
-notarized helper and native/portable packages.
+See the [platform channels](PLATFORM_RELEASE_CHANNELS.md) for current versions on
+macOS arm64/amd64, Linux arm64/amd64 and Windows amd64, and the
+[release notes](https://github.com/777genius/agent-notifications/releases) for exact
+validation scope and retained failures. The current 1.48.6 release uses basic
+five-platform artifact checks and separate macOS E2E; the eleven-cell OpenCode
+installed-business suite was not run. Full native E2E, source-epoch/time-policy,
+cold-start and visible OpenCode desktop qualification are not established by
+those checks. Older observations below do not qualify new release bytes.
 For native Windows shell installation use **Git Bash**, not WSL or PowerShell.
 Desktop delivery uses the signed macOS helper, the Linux desktop notification
 service or Windows toasts. Linux needs an available desktop session/D-Bus service.
@@ -40,13 +44,13 @@ service or Windows toasts. Linux needs an available desktop session/D-Bus servic
 - Historical V1 lifecycle/webhook checks covered all five targets; retained V2
   native completion observations provide corroboration. They do not qualify new
   release bytes by themselves.
-- The 1.48.1 release gate covers seven native Linux/Windows cells and three
+- The historical 1.48.1 release gate covered seven native Linux/Windows cells and three
   artifact canaries, as detailed below. Exact release reports establish which checks
   passed; configured workflow lanes alone are not evidence.
-- macOS 1.48.3 has four installed basic-business/lifecycle checks: V1 1.18.33
+- Historical macOS 1.48.3 evidence has four installed basic-business/lifecycle checks: V1 1.18.33
   and V2 2.0.21 with Apple Silicon binaries run natively and Intel binaries run
   under Rosetta. Physical Intel execution, full native E2E and visible OpenCode
-  banners are not proved for this release. Historical desktop observations do
+  banners were not proved for that release. Historical desktop observations do
   not extend that scope.
 
 **Windows V1 limitation:** stock OpenCode V1 events do not always allow the
@@ -62,11 +66,11 @@ This accepted limitation does not qualify every Windows V1 version.
 
 The installed fixture in `scripts/opencode-native-e2e.py` retains eleven custody
 cells: V1 1.18.33 and V2 2.0.21 on all five platform pairs, plus Linux amd64 V1
-1.18.34. Linux/Windows 1.48.1 release checks cover seven native cells: both API
+1.18.34. Historical Linux/Windows 1.48.1 release checks covered seven native cells: both API
 versions on Linux amd64/arm64 and Windows amd64, plus Linux amd64 V1 1.18.34.
 Artifact canaries cover the three Linux/Windows native targets.
 
-macOS 1.48.3 separately checks four installed basic-business/lifecycle cells,
+Historical macOS 1.48.3 separately checked four installed basic-business/lifecycle cells,
 using V1 1.18.33 and V2 2.0.21 on native Apple Silicon and Intel binaries under
 Rosetta. That scope does not prove execution on physical Intel hardware, full
 native E2E or visible OpenCode banners. Custody of eleven cells is not evidence
@@ -109,8 +113,7 @@ restrict authorized delivery; setup does not enable portable MCP notifications.
 The OpenCode installer does not register Claude marketplace plugins or Codex hooks.
 
 Run the same command to update. It uses the idempotent `setup-opencode install`
-action and reuses the runtime recorded in an existing ownership ledger. Each run
-sets the OpenCode channels to the flags you explicitly select. **Restart OpenCode
+action and reuses the runtime recorded in an existing ownership ledger. Explicit channel flags replace the OpenCode channel choices; `--webhook` alone turns desktop consent off. With no channel flags, fresh public setup enables desktop only and updates preserve saved choices. **Restart OpenCode
 after installation or update** to load the current global plugin bytes.
 
 ## Installed locations and manual setup

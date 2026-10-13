@@ -104,20 +104,31 @@ func StageWindowsShortcut(product DesktopProduct, home, target string, desktop b
 // second fixed registration. Legacy product wrappers keep their fixed identities.
 func StageLocalWindowsShortcut(key, home, target string, desktop bool, ledger installruntime.Ledger) (*installruntime.File, error) {
 	id, err := localWindowsIdentity(key, ledger)
+	return stagePortableWindowsShortcut(id, err, key, home, target, desktop, ledger)
+}
+
+// StageCursorWindowsShortcut uses the exact committed portable registration.
+// Shortcut bytes share the installer's owned-file CAS transaction.
+func StageCursorWindowsShortcut(key, home, target string, desktop bool, ledger installruntime.Ledger) (*installruntime.File, error) {
+	id, err := portableWindowsIdentity(CursorDesktop, portable.Cursor, key, ledger)
+	return stagePortableWindowsShortcut(id, err, key, home, target, desktop, ledger)
+}
+
+func stagePortableWindowsShortcut(id desktopIdentity, err error, key, home, target string, desktop bool, ledger installruntime.Ledger) (*installruntime.File, error) {
 	if err != nil {
 		return nil, err
 	}
 	if !desktop {
-		shared, err := localWindowsShortcutShared(key, target, ledger)
-		if err != nil || shared {
-			return nil, err
-		}
 		path, err := ownedWindowsShortcutPathFor(ledger, id)
 		if err != nil {
 			return nil, err
 		}
 		if path == "" {
 			return nil, nil
+		}
+		shared, err := portableWindowsShortcutShared(id, key, target, ledger)
+		if err != nil || shared {
+			return nil, err
 		}
 		owned, ok := installruntime.OwnedFile(ledger, path)
 		actual, err := installruntime.Fingerprint(path)
@@ -139,6 +150,14 @@ func StageLocalWindowsShortcut(key, home, target string, desktop bool, ledger in
 // A malformed portable record makes last-binding ownership ambiguous: refuse
 // removal, including when a different valid peer was already found.
 func localWindowsShortcutShared(key, target string, ledger installruntime.Ledger) (bool, error) {
+	id, err := localWindowsIdentity(key, ledger)
+	if err != nil {
+		return false, err
+	}
+	return portableWindowsShortcutShared(id, key, target, ledger)
+}
+
+func portableWindowsShortcutShared(id desktopIdentity, key, target string, ledger installruntime.Ledger) (bool, error) {
 	selected := ledger.Consumers[key]
 	var binding portable.Binding
 	if json.Unmarshal([]byte(selected.Registration), &binding) != nil || len(selected.Commands) != 1 || !sameWindowsFile(selected.Commands[0], target) {
@@ -162,13 +181,15 @@ func localWindowsShortcutShared(key, target string, ledger installruntime.Ledger
 				return false, errors.New("ambiguous portable toast shortcut peer")
 			}
 		}
-		if peer.Integration != portable.CopilotVSCode {
+		if peer.Integration != binding.Integration {
 			continue
 		}
-		peerID, err := localWindowsIdentity(peerKey, ledger)
-		if err != nil || peerID.appID != CopilotVSCodeToastAppID || !sameWindowsPath(peer.ControlRoot, binding.ControlRoot) ||
-			len(consumer.Commands) != 1 || !sameWindowsFile(consumer.Commands[0], target) {
+		if !portable.ExactCommittedBinding(ledger, peer) || id.appID == "" || !sameWindowsPath(peer.ControlRoot, binding.ControlRoot) ||
+			len(consumer.Commands) != 1 {
 			return false, errors.New("unverified Local toast shortcut peer")
+		}
+		if !sameWindowsFile(consumer.Commands[0], target) {
+			continue
 		}
 		shared = true
 	}
@@ -407,10 +428,17 @@ func WindowsLocalShortcutReady(key, controlRoot, executable string) error {
 }
 
 func localWindowsIdentity(key string, ledger installruntime.Ledger) (desktopIdentity, error) {
-	id, _ := identityFor(CopilotVSCodeDesktop)
+	return portableWindowsIdentity(CopilotVSCodeDesktop, portable.CopilotVSCode, key, ledger)
+}
+
+func portableWindowsIdentity(product DesktopProduct, integration portable.Integration, key string, ledger installruntime.Ledger) (desktopIdentity, error) {
+	id, err := identityFor(product)
+	if err != nil {
+		return id, err
+	}
 	consumer, ok := ledger.Consumers[key]
 	var binding portable.Binding
-	if !ok || json.Unmarshal([]byte(consumer.Registration), &binding) != nil || binding.Integration != portable.CopilotVSCode ||
+	if !ok || json.Unmarshal([]byte(consumer.Registration), &binding) != nil || binding.Integration != integration ||
 		binding.ComponentID != ledger.ID || binding.Owner != ledger.Owner || !portable.ExactCommittedBinding(ledger, binding) {
 		return id, errors.New("verified portable Local consumer required")
 	}
@@ -420,6 +448,25 @@ func localWindowsIdentity(key string, ledger installruntime.Ledger) (desktopIden
 	}
 	id.consumer = key
 	return id, nil
+}
+
+func WindowsCursorShortcutReady(key, controlRoot, executable string) error {
+	ledger, recovery, err := installruntime.ReadOwnership(controlRoot)
+	if err != nil {
+		return err
+	}
+	if recovery {
+		return errors.New("installation recovery required")
+	}
+	id, err := portableWindowsIdentity(CursorDesktop, portable.Cursor, key, ledger)
+	if err != nil {
+		return err
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+	return windowsShortcutReadyIdentity(id, controlRoot, executable, home)
 }
 
 func windowsShortcutReadyIdentity(id desktopIdentity, controlRoot, executable, home string) error {
@@ -432,6 +479,11 @@ func windowsShortcutReadyIdentity(id desktopIdentity, controlRoot, executable, h
 	}
 	if id.appID == CopilotVSCodeToastAppID {
 		if _, err := localWindowsIdentity(id.consumer, ledger); err != nil {
+			return err
+		}
+	}
+	if id.appID == CursorToastAppID {
+		if _, err := portableWindowsIdentity(CursorDesktop, portable.Cursor, id.consumer, ledger); err != nil {
 			return err
 		}
 	}
