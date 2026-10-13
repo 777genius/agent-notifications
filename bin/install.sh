@@ -2404,6 +2404,12 @@ stage_and_promote_runtime() (
 )
 
 # Main installation flow
+print_install_promotion() {
+    if [ "${INSTALL_DEFER_PROMOTION:-0}" != 1 ]; then
+        printf '\n----------------------------------------\nBoost your productivity\n  Check out Agent Teams AI, a desktop app for AI agent teams\n  with Claude, Codex and more, from the creator of this plugin:\n  https://github.com/777genius/agent-teams-ai\n----------------------------------------\n'
+    fi
+}
+
 main() {
     echo ""
     echo -e "${BOLD}========================================${NC}"
@@ -2441,7 +2447,7 @@ main() {
         if ! check_github_availability || [ "$OFFLINE_MODE" = true ]; then
             echo ""
             echo -e "${YELLOW}⚠ Keeping existing installation (GitHub unreachable)${NC}"
-            [ -f "$BINARY_PATH" ] && return 0
+            if [ -f "$BINARY_PATH" ]; then print_install_promotion; return 0; fi
             return 1
         fi
     fi
@@ -2475,6 +2481,7 @@ main() {
         echo -e "${GREEN}✓ Setup complete${NC}"
         echo ""
         release_lock
+        print_install_promotion
         return 0
     fi
 
@@ -2515,6 +2522,7 @@ main() {
         echo -e "${YELLOW}Restore network access for full installation.${NC}"
         echo ""
         release_lock
+        print_install_promotion
         return 0
     fi
 
@@ -2575,14 +2583,8 @@ main() {
     fi
     echo -e "${GREEN}✓${NC} Binary installed. Restart your agent and verify notification delivery."
     echo ""
-    echo -e "${YELLOW}────────────────────────────────────────${NC}"
-    echo -e "${YELLOW}★${NC} ${BOLD}Boost your productivity${NC}"
-    echo -e "  Check out Agent Teams AI, a desktop app for AI agent teams"
-    echo -e "  with Claude, Codex and more, from the creator of this plugin:"
-    echo -e "  ${GREEN}https://github.com/777genius/agent-teams-ai${NC}"
-    echo -e "${YELLOW}────────────────────────────────────────${NC}"
-    echo ""
     release_lock
+    print_install_promotion
 }
 
 # Run main function

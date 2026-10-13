@@ -17,6 +17,9 @@ main() {
     new_setup=0
     ui_mode=""
     ui_args=()
+    activity_args=()
+    activity_mode=""
+    activity_limit=""
     selector=""
     singleton=""
     channels=0
@@ -47,6 +50,17 @@ main() {
                 case "$mode" in auto|rich|plain) ;; *) echo "Invalid UI mode." >&2; exit 1 ;; esac
                 [ -z "$ui_mode" ] || [ "$ui_mode" = "$mode" ] || { echo "Conflicting UI modes." >&2; exit 1; }
                 ui_mode=$mode; ui_args=(--ui "$mode") ;;
+            --activity|--activity=*|--activity-limit|--activity-limit=*)
+                case "$1" in *=*) value=${1#*=}; shift ;; *) [ "$#" -ge 2 ] || { echo "$1 requires a value." >&2; exit 1; }; value=$2; shift 2 ;; esac
+                if [ "$key" = --activity ]; then
+                    case "$value" in compact|expanded|off) ;; *) echo "Invalid activity mode." >&2; exit 1 ;; esac
+                    [ -z "$activity_mode" ] || [ "$activity_mode" = "$value" ] || { echo "Conflicting activity modes." >&2; exit 1; }
+                    activity_mode=$value
+                else
+                    case "$value" in [1-9]|1[0-6]) ;; *) echo "Activity limit must be 1..16." >&2; exit 1 ;; esac
+                    [ -z "$activity_limit" ] || [ "$activity_limit" = "$value" ] || { echo "Conflicting activity limits." >&2; exit 1; }
+                    activity_limit=$value
+                fi ;;
             --product|--products|--product=*|--products=*)
                 [ -z "$selector" ] || { echo "Use one product selector once." >&2; exit 1; }
                 selector=$key
@@ -103,6 +117,8 @@ main() {
     if [ "$selector" = --product ] && { [ "$singleton" = gemini ] || [ "$singleton" = opencode ]; }; then
         [ -z "$route_seen" ] && [ "$json" -eq 0 ] || { echo "Observers use channel flags only." >&2; exit 1; }
     fi
+    [ -z "$activity_mode" ] || activity_args+=(--activity "$activity_mode")
+    [ -z "$activity_limit" ] || activity_args+=(--activity-limit "$activity_limit")
     set -- ${original_args[@]+"${original_args[@]}"}
     if [ -z "$selector" ]; then
         pending=1
@@ -172,6 +188,8 @@ main() {
                     done
                     opencode_args+=("$1")
                     opencode_channels=$((opencode_channels + 1)) ;;
+                --activity|--activity-limit) shift ;;
+                --activity=*|--activity-limit=*) ;;
                 --ui|--ui=*)
                     if [ "$1" = --ui ]; then shift; fi ;;
                 --plain) ;;
@@ -313,6 +331,21 @@ main() {
             BOOTSTRAP_SOURCE_REF="$source_ref" INSTALL_SCRIPT_URL="$raw/install.sh" \
             bash "$stage/bootstrap.sh" "$@"
     }
+    presentation=0
+    if run_bootstrap --presentation-capabilities > "$stage/presentation-capabilities" 2>/dev/null &&
+        printf 'bootstrap-presentation-v1\n' | cmp -s - "$stage/presentation-capabilities"; then
+        presentation=1
+        BOOTSTRAP_PROMOTION_FILE="$stage/promotion.txt"
+        : > "$BOOTSTRAP_PROMOTION_FILE"
+        chmod 600 "$BOOTSTRAP_PROMOTION_FILE"
+        export BOOTSTRAP_PROMOTION_FILE
+        summary="$stage/summary.txt"
+        BOOTSTRAP_SUMMARY_FILE="$summary"
+        export BOOTSTRAP_SUMMARY_FILE
+    elif [ "${#activity_args[@]}" -gt 0 ]; then
+        echo "This published release lacks installer activity presentation support. No products were installed. Use an updated release." >&2
+        exit 1
+    fi
     if [ "$pending" -eq 1 ]; then
         feature_status=0
         run_bootstrap --selector-capabilities >"$stage/selector-capabilities" 2>/dev/null || feature_status=$?
@@ -342,15 +375,27 @@ main() {
     fi
     if [ "$multi" -eq 0 ]; then
         run_bootstrap "$@"
+        if [ "$presentation" -eq 1 ] && [ -s "$summary" ]; then
+            printf '\nInstallation complete\n\n'
+            cat "$summary"
+            printf '\nDetailed installer output: rerun with BOOTSTRAP_VERBOSE=1.\n'
+        fi
     else
         summary="$stage/summary.txt"
         export BOOTSTRAP_SUMMARY_FILE="$summary"
         # Check every selected prerequisite before the first mutation.
-        run_bootstrap --products "$selection" ${legacy_args[@]+"${legacy_args[@]}"} ${opencode_args[@]+"${opencode_args[@]}"} ${ui_args[@]+"${ui_args[@]}"}
+        run_bootstrap --products "$selection" ${legacy_args[@]+"${legacy_args[@]}"} ${opencode_args[@]+"${opencode_args[@]}"} ${ui_args[@]+"${ui_args[@]}"} ${activity_args[@]+"${activity_args[@]}"}
         if [ -s "$summary" ]; then
             printf '\nInstallation complete\n\n'
             cat "$summary"
             printf '\nDetailed installer output: rerun with BOOTSTRAP_VERBOSE=1.\n'
+        fi
+    fi
+    if [ "$presentation" -eq 1 ]; then
+        if [ -s "$BOOTSTRAP_PROMOTION_FILE" ] && [ -f "$BOOTSTRAP_PROMOTION_FILE" ] && [ ! -L "$BOOTSTRAP_PROMOTION_FILE" ]; then
+            cat "$BOOTSTRAP_PROMOTION_FILE"
+        elif [ -s "${summary:-}" ]; then
+            printf '\n----------------------------------------\nBoost your productivity\n  Check out Agent Teams AI, a desktop app for AI agent teams\n  with Claude, Codex and more, from the creator of this plugin:\n  https://github.com/777genius/agent-teams-ai\n----------------------------------------\n'
         fi
     fi
 }
