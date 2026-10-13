@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"strings"
 
 	"github.com/777genius/agent-notifications/internal/strictjson"
 )
@@ -94,6 +93,6 @@ func trustedAsset(asset helperAsset) ([]byte, string, error) {
 // ValidBinding validates the Windows lexical wire grammar on every host. Actual
 // filesystem custody remains an independent Win32 observation.
 func ValidBinding(b Binding) bool {
-	suffix := `\generation.wne`
-	return hexValue(b.SHA256, 64) && strings.HasSuffix(b.SnapshotPath, suffix) && rootGrammar(strings.TrimSuffix(b.SnapshotPath, suffix))
+	_, validPath := bindingPath(b.SnapshotPath)
+	return hexValue(b.SHA256, 64) && validPath
 }

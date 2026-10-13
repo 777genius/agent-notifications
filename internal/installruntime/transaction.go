@@ -815,8 +815,8 @@ func Commit(ctx context.Context, r Request) (result Ledger, resultErr error) {
 		if err := checkNativeParents(native); err != nil {
 			return l, err
 		}
-		if native.After.DecoderFloor < l.DecoderFloor {
-			return l, fmt.Errorf("native decoder downgrade refused")
+		if err := validateNativeDecoderFloor(l.DecoderFloor, native.After.DecoderFloor); err != nil {
+			return l, err
 		}
 		if l.Native == nil && native.Before.SHA256 != "" {
 			return l, fmt.Errorf("unmanaged callback path cannot be adopted")
@@ -1038,6 +1038,13 @@ func Commit(ctx context.Context, r Request) (result Ledger, resultErr error) {
 		return l, err
 	}
 	return readLedger(root)
+}
+
+func validateNativeDecoderFloor(before, after int) error {
+	if before < 0 || after < 0 || after < before {
+		return fmt.Errorf("native decoder downgrade refused")
+	}
+	return nil
 }
 
 func validateRetainedNative(native *NativeRecord) error {

@@ -9,6 +9,9 @@
 #include <winrt/Windows.Data.Xml.Dom.h>
 #include <winrt/Windows.UI.Notifications.h>
 #include <iostream>
+#include <array>
+#include <cstring>
+#include <exception>
 #pragma comment(lib,"Shell32.lib")
 #pragma comment(lib,"Propsys.lib")
 namespace wcb {
@@ -33,11 +36,186 @@ namespace wcb {
   inline std::wstring command(const Generation& g){
     return L"\""+(g.root/L"helper.exe").wstring()+L"\" --callback";
   }
-  inline fs::path shortcutPath(const Generation& g){
-    PWSTR path=nullptr;
-    winrt::check_hresult(SHGetKnownFolderPath(FOLDERID_Programs,0,nullptr,&path));
-    fs::path result=fs::path(path)/(L"AgentNotifications-"+wide(g.snapshot.generation)+L".lnk");
-    CoTaskMemFree(path);
+  // C++/WinRT's hresult_error is deliberately independent of std::exception.
+  // Keep both public exception contracts: production's WinRT catch preserves
+  // the HRESULT, while TEST and older std::exception paths retain what().
+  struct ShortcutApiFailure : winrt::hresult_error, std::exception {
+    const char* api;
+    HRESULT status;
+    bool statusKnown=true;
+    static constexpr bool apiFailure=true;
+    std::string detail;
+    ShortcutApiFailure(const char* name,HRESULT status)
+      :winrt::hresult_error(status,winrt::to_hstring(std::string("shortcut API ")+name+" failed")),
+       api(name),status(status),detail(std::string("shortcut API ")+name+" failed"){}
+    const char* what()const noexcept override{return detail.c_str();}
+  };
+  struct ShortcutContractViolation : std::runtime_error {
+    const char* api;
+    HRESULT status;
+    bool statusKnown=true;
+    static constexpr bool apiFailure=false;
+    std::string detail;
+    ShortcutContractViolation(const char* name,HRESULT value,bool known=true)
+      :std::runtime_error("shortcut result contract violation"),
+       api(name),status(value),statusKnown(known),
+       detail(std::string("shortcut result contract violation api=")+name+
+         " status="+std::to_string(static_cast<long long>(value))+
+         " statusKnown="+(known?"true":"false")){}
+    const char* what()const noexcept override{return detail.c_str();}
+  };
+#ifdef WCB_TEST_SHORTCUT_DEADLINE_PROBES
+  struct ShortcutDeadlineExceeded : std::runtime_error {
+    std::string api,boundary,detail;
+    uint64_t end,observed;
+    ShortcutDeadlineExceeded(const char* api,const char* boundary,uint64_t end,uint64_t observed)
+      :std::runtime_error("shortcut deadline exceeded"),api(api),boundary(boundary),
+       detail(std::string("shortcut deadline exceeded api=")+api+
+         " boundary="+boundary+" end="+std::to_string(end)+
+         " observed="+std::to_string(observed)),end(end),observed(observed){}
+    const char* what()const noexcept override{return detail.c_str();}
+  };
+  inline void shortcutBudgetSample(uint64_t end,uint64_t observed,const char* api,const char* boundary){
+    if(end&&observed>=end)throw ShortcutDeadlineExceeded(api,boundary,end,observed);
+  }
+#endif
+  // Zero retains the existing read-only helper entry points. Production apply
+  // and TEST paths carry the operator deadline through every new overload.
+  inline void shortcutBudget(uint64_t end){
+    if(end)installedBudget(end);
+  }
+#ifdef WCB_TEST_SHORTCUT_DEADLINE_PROBES
+  // TEST uses this explicit monotonic-sample seam to make one post-API budget
+  // boundary deterministic without sleeping or racing GetTickCount64. The seam
+  // applies the same strict observed>=end expiry predicate at that exact check;
+  // production shortcutBudget remains the unchanged installedBudget path.
+  struct ShortcutDeadlineProbe {
+    const char* api,*boundary;
+    bool observed=false;
+    ShortcutDeadlineProbe(const char* api,const char* boundary)noexcept:api(api),boundary(boundary){}
+  };
+  inline void shortcutDeadlineAfterApi(uint64_t end,const char* api,const char* boundary,ShortcutDeadlineProbe* probe){
+    if(!probe){
+      shortcutBudget(end);
+      return;
+    }
+    require(end&&!probe->observed&&std::strcmp(probe->api,api)==0&&std::strcmp(probe->boundary,boundary)==0);
+    probe->observed=true;
+    shortcutBudgetSample(end,end,api,boundary);
+  }
+#define WCB_SHORTCUT_DEADLINE_TEST_PARAM ,ShortcutDeadlineProbe* deadlineProbe=nullptr
+#define WCB_SHORTCUT_DEADLINE_TEST_ARG ,deadlineProbe
+#define WCB_SHORTCUT_AFTER_API(end,api,boundary,probe) shortcutDeadlineAfterApi(end,api,boundary,probe)
+#else
+#define WCB_SHORTCUT_DEADLINE_TEST_PARAM
+#define WCB_SHORTCUT_DEADLINE_TEST_ARG
+#define WCB_SHORTCUT_AFTER_API(end,api,boundary,probe) shortcutBudget(end)
+#endif
+  inline void shortcutHresult(const char* api,HRESULT status){
+    if(FAILED(status))throw ShortcutApiFailure(api,status);
+    if(status!=S_OK)throw ShortcutContractViolation(api,status);
+  }
+  // A successful HRESULT is not an API failure. S_FALSE and successful calls
+  // with absent output are result-contract violations with their exact status.
+  inline void shortcutContractResult(const char* api,HRESULT status,bool outputPresent){
+    shortcutHresult(api,status);
+    if(!outputPresent)throw ShortcutContractViolation(api,status);
+  }
+  inline bool shortcutPidlPresent(PIDLIST_ABSOLUTE value)noexcept{
+    return value&&!ILIsEmpty(value);
+  }
+  inline bool shortcutNamePresent(const wchar_t* value)noexcept{
+    return value&&*value;
+  }
+  // API-owned outputs are adopted before any status classification, budget
+  // check or allocation can throw. Cleanup destructors are finite and do not
+  // participate in the result/error contract.
+  struct ScopedCoTaskMem {
+    PWSTR value=nullptr;
+    ScopedCoTaskMem()=default;
+    explicit ScopedCoTaskMem(PWSTR owned)noexcept:value(owned){}
+    ScopedCoTaskMem(const ScopedCoTaskMem&)=delete;
+    ScopedCoTaskMem& operator=(const ScopedCoTaskMem&)=delete;
+    ~ScopedCoTaskMem()noexcept{if(value)CoTaskMemFree(value);}
+  };
+  struct ScopedPidl {
+    PIDLIST_ABSOLUTE value=nullptr;
+    ScopedPidl()=default;
+    explicit ScopedPidl(PIDLIST_ABSOLUTE owned)noexcept:value(owned){}
+    ScopedPidl(const ScopedPidl&)=delete;
+    ScopedPidl& operator=(const ScopedPidl&)=delete;
+    ~ScopedPidl()noexcept{if(value)ILFree(value);}
+  };
+  struct ScopedGlobalLock {
+    HGLOBAL memory=nullptr;
+    void* value=nullptr;
+    explicit ScopedGlobalLock(HGLOBAL owned)noexcept:memory(owned),value(GlobalLock(owned)){}
+    ScopedGlobalLock(const ScopedGlobalLock&)=delete;
+    ScopedGlobalLock& operator=(const ScopedGlobalLock&)=delete;
+    ~ScopedGlobalLock()noexcept{if(value)GlobalUnlock(memory);}
+  };
+  struct ShortcutTargetMismatch : std::runtime_error {
+    ShortcutTargetMismatch():std::runtime_error("shortcut target mismatch"){}
+  };
+  inline void verifyShortcutTarget(const std::wstring& expected,const std::wstring& actual){
+    if(actual!=expected)throw ShortcutTargetMismatch();
+  }
+  inline std::wstring shellTargetPath(const Generation& g){
+    const auto custody=(g.root/L"helper.exe").wstring();
+    require(custody.size()>4&&custody.starts_with(L"\\\\?\\"));
+    auto target=custody.substr(4);
+    require(target.size()>3&&target[1]==L':'&&target[2]==L'\\'&&target.back()!=L'\\');
+    return target;
+  }
+  inline fs::path extendedShortcutTarget(const std::wstring& target){
+    require(target.size()>3&&target[1]==L':'&&target[2]==L'\\'&&target.back()!=L'\\'
+      &&!target.starts_with(L"\\\\?\\")&&target.find(L':',2)==std::wstring::npos);
+    return fs::path(L"\\\\?\\"+target);
+  }
+  struct ShortcutFixture {
+    std::wstring target,args,aumid,clsid;
+    HANDLE custody=INVALID_HANDLE_VALUE;
+  };
+  inline ShortcutFixture shortcutFixture(const Generation& g){
+    return {shellTargetPath(g),L"--callback",wide(g.snapshot.aumid),wide(g.snapshot.clsid),g.helperFile.h};
+  }
+  // The expected parsing name is checked against the same no-reparse file that
+  // Generation or TEST holds. File identity prevents a same-name replacement
+  // from being adopted as the authorized target. The fixture target is always
+  // a real filesystem item; nonexistent display names remain an explicit
+  // unsupported-target case rather than being fabricated into a PIDL.
+  inline void verifyShortcutTargetCustody(const ShortcutFixture& fixture,uint64_t end=0){
+    shortcutBudget(end);
+    require(fixture.custody!=INVALID_HANDLE_VALUE);
+    const auto heldPath=physical(fixture.custody);
+    require(heldPath==fixture.target||heldPath==L"\\\\?\\"+fixture.target);
+    shortcutBudget(end);
+    BY_HANDLE_FILE_INFORMATION heldInfo{
+    };
+    require(GetFileInformationByHandle(fixture.custody,&heldInfo));
+    shortcutBudget(end);
+    auto candidate=open(extendedShortcutTarget(fixture.target),false);
+    shortcutBudget(end);
+    BY_HANDLE_FILE_INFORMATION candidateInfo{
+    };
+    require(GetFileInformationByHandle(candidate.h,&candidateInfo));
+    require(!(heldInfo.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY)
+      &&!(candidateInfo.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY)
+      &&heldInfo.dwVolumeSerialNumber==candidateInfo.dwVolumeSerialNumber
+      &&heldInfo.nFileIndexHigh==candidateInfo.nFileIndexHigh
+      &&heldInfo.nFileIndexLow==candidateInfo.nFileIndexLow);
+    shortcutBudget(end);
+  }
+  inline fs::path shortcutPath(const Generation& g,uint64_t end=0){
+    shortcutBudget(end);
+    ScopedCoTaskMem path;
+    const auto status=SHGetKnownFolderPath(FOLDERID_Programs,0,nullptr,&path.value);
+    // The guard owns even an unexpected failure output. Classify the returned
+    // status before checking the deadline so API/result semantics are retained.
+    shortcutContractResult("SHGetKnownFolderPath",status,shortcutNamePresent(path.value));
+    shortcutBudget(end);
+    fs::path result=fs::path(path.value)/(L"AgentNotifications-"+wide(g.snapshot.generation)+L".lnk");
+    shortcutBudget(end);
     return result;
   }
   inline std::wstring value(HKEY key,const wchar_t* name){
@@ -308,80 +486,189 @@ namespace wcb {
     classReadback(g,end);
     appReadback(g,end);
   }
-  inline std::vector<uint8_t> linkBytes(IShellLinkW* link){
+  struct ScopedPropVariant {
+    PROPVARIANT value{
+    };
+    ScopedPropVariant()=default;
+    ScopedPropVariant(const ScopedPropVariant&)=delete;
+    ScopedPropVariant& operator=(const ScopedPropVariant&)=delete;
+    void clear(uint64_t end=0){
+      shortcutBudget(end);
+      shortcutHresult("PropVariantClear",PropVariantClear(&value));
+      shortcutBudget(end);
+    }
+    ~ScopedPropVariant()noexcept{
+      PropVariantClear(&value);
+    }
+  };
+  inline std::vector<uint8_t> linkBytes(IShellLinkW* link,uint64_t end=0 WCB_SHORTCUT_DEADLINE_TEST_PARAM){
     Microsoft::WRL::ComPtr<IPersistStream> persist;
-    winrt::check_hresult(link->QueryInterface(IID_PPV_ARGS(&persist)));
+    shortcutBudget(end);
+    shortcutHresult("IShellLinkW::QueryInterface",link->QueryInterface(IID_PPV_ARGS(&persist)));
+    shortcutBudget(end);
     ULARGE_INTEGER max{
     };
-    winrt::check_hresult(persist->GetSizeMax(&max));
+    shortcutBudget(end);
+    shortcutHresult("IPersistStream::GetSizeMax",persist->GetSizeMax(&max));
+    shortcutBudget(end);
     require(max.QuadPart>0&&max.QuadPart<=65536);
     Microsoft::WRL::ComPtr<IStream> stream;
-    winrt::check_hresult(CreateStreamOnHGlobal(nullptr,TRUE,&stream));
-    winrt::check_hresult(persist->Save(stream.Get(),TRUE));
+    shortcutBudget(end);
+    shortcutHresult("CreateStreamOnHGlobal",CreateStreamOnHGlobal(nullptr,TRUE,&stream));
+    shortcutBudget(end);
+    shortcutHresult("IPersistStream::Save",persist->Save(stream.Get(),TRUE));
+    WCB_SHORTCUT_AFTER_API(end,"IPersistStream::Save","serialization_after_IPersistStream_Save",deadlineProbe);
     STATSTG stat{
     };
-    winrt::check_hresult(stream->Stat(&stat,STATFLAG_NONAME));
+    shortcutBudget(end);
+    shortcutHresult("IStream::Stat",stream->Stat(&stat,STATFLAG_NONAME));
+    shortcutBudget(end);
     require(stat.cbSize.QuadPart>0&&stat.cbSize.QuadPart<=65536);
     HGLOBAL memory=nullptr;
-    winrt::check_hresult(GetHGlobalFromStream(stream.Get(),&memory));
-    const auto p=static_cast<const uint8_t*>(GlobalLock(memory));
-    require(p);
-    std::vector<uint8_t> out(p,p+size_t(stat.cbSize.QuadPart));
-    GlobalUnlock(memory);
+    shortcutBudget(end);
+    const auto memoryStatus=GetHGlobalFromStream(stream.Get(),&memory);
+    shortcutContractResult("GetHGlobalFromStream",memoryStatus,memory!=nullptr);
+    // The HGLOBAL remains owned by the delete-on-release stream. Allocate
+    // before locking that borrowed memory; the lock owner is active before the
+    // first post-lock budget check and unwinds on failure.
+    shortcutBudget(end);
+    std::vector<uint8_t> out(size_t(stat.cbSize.QuadPart));
+    shortcutBudget(end);
+    ScopedGlobalLock locked(memory);
+    shortcutBudget(end);
+    require(locked.value);
+    memcpy(out.data(),locked.value,out.size());
+    shortcutBudget(end);
     return out;
   }
-  inline void shortcutReadbackBytes(const Generation& g,const std::vector<uint8_t>& b){
+  // Shell returns extended drive syntax for a real long filesystem item.
+  // Remove only that namespace spelling: do not fold case, resolve aliases,
+  // admit UNC/device paths, or change the held file identity requirement.
+  inline std::wstring shortcutDOSParsingName(std::wstring target){
+    if(!target.starts_with(L"\\\\?\\"))return target;
+    require(target.size()>7&&(target[4]>=L'A'&&target[4]<=L'Z'
+      ||target[4]>=L'a'&&target[4]<=L'z')&&target[5]==L':'
+      &&target[6]==L'\\'&&target.back()!=L'\\'
+      &&target.find(L':',6)==std::wstring::npos);
+    return target.substr(4);
+  }
+  inline std::wstring exactShortcutTarget(IShellLinkW* link,uint64_t end=0){
+    ScopedPidl idlist;
+    shortcutBudget(end);
+    const auto idStatus=link->GetIDList(&idlist.value);
+    shortcutContractResult("IShellLinkW::GetIDList",idStatus,shortcutPidlPresent(idlist.value));
+    shortcutBudget(end);
+    ScopedCoTaskMem name;
+    const auto nameStatus=SHGetNameFromIDList(idlist.value,SIGDN_FILESYSPATH,&name.value);
+    shortcutContractResult("SHGetNameFromIDList",nameStatus,shortcutNamePresent(name.value));
+    shortcutBudget(end);
+    std::wstring target(name.value);
+    shortcutBudget(end);
+    return shortcutDOSParsingName(std::move(target));
+  }
+  inline void parseShortcutTarget(const ShortcutFixture& fixture,ScopedPidl& target,uint64_t end=0){
+    shortcutBudget(end);
+    // Microsoft documents SHParseDisplayName as the preferred string-to-PIDL
+    // conversion and IShellLinkW::SetIDList as the fully qualified target
+    // contract. This is used only after the real target's no-reparse file
+    // identity is held; a nonexistent synthetic display name is not a PIDL.
+    SFGAOF attributes=0;
+    const auto status=SHParseDisplayName(fixture.target.c_str(),nullptr,&target.value,
+      SFGAO_FILESYSTEM|SFGAO_FOLDER,&attributes);
+    shortcutContractResult("SHParseDisplayName",status,shortcutPidlPresent(target.value));
+    shortcutBudget(end);
+    require((attributes&SFGAO_FILESYSTEM)!=0&&(attributes&SFGAO_FOLDER)==0);
+    shortcutBudget(end);
+  }
+  inline void shortcutReadbackBytes(const ShortcutFixture& fixture,const std::vector<uint8_t>& b,uint64_t end=0 WCB_SHORTCUT_DEADLINE_TEST_PARAM){
+    shortcutBudget(end);
+    verifyShortcutTargetCustody(fixture,end);
+    shortcutBudget(end);
     Microsoft::WRL::ComPtr<IShellLinkW> link;
-    winrt::check_hresult(CoCreateInstance(CLSID_ShellLink,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&link)));
+    shortcutHresult("CoCreateInstance(CLSID_ShellLink)",CoCreateInstance(CLSID_ShellLink,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&link)));
+    shortcutBudget(end);
     Microsoft::WRL::ComPtr<IPersistStream> persist;
-    winrt::check_hresult(link.As(&persist));
+    shortcutHresult("IShellLinkW::QueryInterface(IPersistStream)",link.As(&persist));
+    shortcutBudget(end);
     Microsoft::WRL::ComPtr<IStream> stream;
-    winrt::check_hresult(CreateStreamOnHGlobal(nullptr,TRUE,&stream));
+    shortcutHresult("CreateStreamOnHGlobal",CreateStreamOnHGlobal(nullptr,TRUE,&stream));
+    shortcutBudget(end);
     ULONG n=0;
-    winrt::check_hresult(stream->Write(b.data(),ULONG(b.size()),&n));
+    shortcutHresult("IStream::Write",stream->Write(b.data(),ULONG(b.size()),&n));
+    shortcutBudget(end);
     require(n==b.size());
     LARGE_INTEGER zero{
     };
-    winrt::check_hresult(stream->Seek(zero,STREAM_SEEK_SET,nullptr));
-    winrt::check_hresult(persist->Load(stream.Get()));
-    wchar_t target[32768]{
-    },args[128]{
+    shortcutHresult("IStream::Seek",stream->Seek(zero,STREAM_SEEK_SET,nullptr));
+    shortcutBudget(end);
+    shortcutHresult("IPersistStream::Load",persist->Load(stream.Get()));
+    WCB_SHORTCUT_AFTER_API(end,"IPersistStream::Load","readback_after_IPersistStream_Load",deadlineProbe);
+    // IShellLinkW::GetPath is documented to return at most MAX_PATH. It is a
+      // short-path cross-check only. SHGetNameFromIDList returns the Shell
+      // item's exact filesystem parsing name without that output-buffer contract,
+      // so it also covers the supported long-path range. PIDL binary bytes are
+      // intentionally not compared: they are namespace encodings, not a stable
+      // identity contract. Exact parsing-name equality plus the held no-reparse
+      // file identity excludes an alternate target without extra resolution.
+    if(fixture.target.size()<MAX_PATH){
+      std::array<wchar_t,MAX_PATH> shortTarget{
+      };
+      shortcutHresult("IShellLinkW::GetPath",link->GetPath(shortTarget.data(),int(shortTarget.size()),nullptr,SLGP_RAWPATH));
+      shortcutBudget(end);
+      verifyShortcutTarget(fixture.target,std::wstring(shortTarget.data()));
+    }
+    verifyShortcutTarget(fixture.target,exactShortcutTarget(link.Get(),end));
+    verifyShortcutTargetCustody(fixture,end);
+    shortcutBudget(end);
+    std::array<wchar_t,128> args{
     };
-    winrt::check_hresult(link->GetPath(target,32768,nullptr,SLGP_RAWPATH));
-    winrt::check_hresult(link->GetArguments(args,128));
-    require(std::wstring(target)==(g.root/L"helper.exe").wstring()&&std::wstring(args)==L"--callback");
+    shortcutHresult("IShellLinkW::GetArguments",link->GetArguments(args.data(),int(args.size())));
+    shortcutBudget(end);
+    require(std::wstring(args.data())==fixture.args);
     Microsoft::WRL::ComPtr<IPropertyStore> properties;
-    winrt::check_hresult(link.As(&properties));
-    PROPVARIANT v{
-    };
-    winrt::check_hresult(properties->GetValue(PKEY_AppUserModel_ID,&v));
-    require(v.vt==VT_LPWSTR&&v.pwszVal&&v.pwszVal==wide(g.snapshot.aumid));
-    PropVariantClear(&v);
+    shortcutHresult("IShellLinkW::QueryInterface(IPropertyStore)",link.As(&properties));
+    shortcutBudget(end);
+    ScopedPropVariant v;
+    shortcutHresult("IPropertyStore::GetValue(PKEY_AppUserModel_ID)",properties->GetValue(PKEY_AppUserModel_ID,&v.value));
+    shortcutBudget(end);
+    require(v.value.vt==VT_LPWSTR&&v.value.pwszVal&&std::wstring(v.value.pwszVal)==fixture.aumid);
+    v.clear(end);
     GUID clsid{
     };
-    winrt::check_hresult(CLSIDFromString(wide(g.snapshot.clsid).c_str(),&clsid));
-    winrt::check_hresult(properties->GetValue(PKEY_AppUserModel_ToastActivatorCLSID,&v));
-    require(v.vt==VT_CLSID&&v.puuid&&IsEqualGUID(*v.puuid,clsid));
-    PropVariantClear(&v);
+    shortcutHresult("CLSIDFromString",CLSIDFromString(fixture.clsid.c_str(),&clsid));
+    shortcutBudget(end);
+    shortcutHresult("IPropertyStore::GetValue(PKEY_AppUserModel_ToastActivatorCLSID)",properties->GetValue(PKEY_AppUserModel_ToastActivatorCLSID,&v.value));
+    shortcutBudget(end);
+    require(v.value.vt==VT_CLSID&&v.value.puuid&&IsEqualGUID(*v.value.puuid,clsid));
   }
-  inline void shortcutReadbackAt(const Generation& g,const fs::path& p){
+  inline void shortcutReadbackBytes(const Generation& g,const std::vector<uint8_t>& b,uint64_t end=0 WCB_SHORTCUT_DEADLINE_TEST_PARAM){
+    shortcutReadbackBytes(shortcutFixture(g),b,end WCB_SHORTCUT_DEADLINE_TEST_ARG);
+  }
+  inline void shortcutReadbackAt(const Generation& g,const fs::path& p,uint64_t end=0){
+    shortcutBudget(end);
     auto file=open(p,false);
+    shortcutBudget(end);
     owned(file.h,g.sid);
     require(physical(file.h)==p.wstring()||physical(file.h)==L"\\\\?\\"+p.wstring());
-    shortcutReadbackBytes(g,bytes(file.h,65536));
+    shortcutReadbackBytes(g,bytes(file.h,65536),end);
+    shortcutBudget(end);
   }
-  inline void shortcutReadback(const Generation& g){
-    shortcutReadbackAt(g,shortcutPath(g));
+  inline void shortcutReadback(const Generation& g,uint64_t end=0){
+    shortcutReadbackAt(g,shortcutPath(g,end),end);
   }
-  inline std::vector<Handle> shortcutParents(const fs::path& p){
+  inline std::vector<Handle> shortcutParents(const fs::path& p,uint64_t end=0){
     std::vector<Handle> held;
     fs::path path=p.root_path();
+    shortcutBudget(end);
     held.push_back(open(path,true));
+    shortcutBudget(end);
     for(const auto& part:p.parent_path().relative_path()){
       path/=part;
       held.push_back(open(path,true));
+      shortcutBudget(end);
     }
     require(physical(held.back().h)==L"\\\\?\\"+p.parent_path().wstring()||physical(held.back().h)==p.parent_path().wstring());
+    shortcutBudget(end);
     return held;
   }
   inline void leafKey(HKEY key){
@@ -481,38 +768,61 @@ namespace wcb {
     require(SetFileInformationByHandle(file,FileRenameInfo,info,DWORD(storage.size())));
     installedBudget(end);
   }
+  inline std::vector<uint8_t> configuredShortcutBytes(const ShortcutFixture& fixture,uint64_t end=0 WCB_SHORTCUT_DEADLINE_TEST_PARAM){
+    shortcutBudget(end);
+    verifyShortcutTargetCustody(fixture,end);
+    shortcutBudget(end);
+    ScopedPidl target;
+    parseShortcutTarget(fixture,target,end);
+    Microsoft::WRL::ComPtr<IShellLinkW> link;
+    shortcutHresult("CoCreateInstance(CLSID_ShellLink)",CoCreateInstance(CLSID_ShellLink,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&link)));
+    shortcutBudget(end);
+    shortcutHresult("IShellLinkW::SetIDList",link->SetIDList(target.value));
+    shortcutBudget(end);
+    shortcutHresult("IShellLinkW::SetArguments",link->SetArguments(fixture.args.c_str()));
+    shortcutBudget(end);
+    Microsoft::WRL::ComPtr<IPropertyStore> properties;
+    shortcutHresult("IShellLinkW::QueryInterface(IPropertyStore)",link.As(&properties));
+    shortcutBudget(end);
+    ScopedPropVariant v;
+    shortcutHresult("InitPropVariantFromString",InitPropVariantFromString(fixture.aumid.c_str(),&v.value));
+    shortcutBudget(end);
+    shortcutHresult("IPropertyStore::SetValue(PKEY_AppUserModel_ID)",properties->SetValue(PKEY_AppUserModel_ID,v.value));
+    shortcutBudget(end);
+    v.clear(end);
+    GUID clsid{
+    };
+    shortcutHresult("CLSIDFromString",CLSIDFromString(fixture.clsid.c_str(),&clsid));
+    shortcutBudget(end);
+    shortcutHresult("InitPropVariantFromCLSID",InitPropVariantFromCLSID(clsid,&v.value));
+    shortcutBudget(end);
+    shortcutHresult("IPropertyStore::SetValue(PKEY_AppUserModel_ToastActivatorCLSID)",properties->SetValue(PKEY_AppUserModel_ToastActivatorCLSID,v.value));
+    shortcutBudget(end);
+    v.clear(end);
+    shortcutHresult("IPropertyStore::Commit",properties->Commit());
+    shortcutBudget(end);
+    return linkBytes(link.Get(),end WCB_SHORTCUT_DEADLINE_TEST_ARG);
+  }
+  inline std::vector<uint8_t> configuredShortcutBytes(const Generation& g,uint64_t end=0 WCB_SHORTCUT_DEADLINE_TEST_PARAM){
+    return configuredShortcutBytes(shortcutFixture(g),end WCB_SHORTCUT_DEADLINE_TEST_ARG);
+  }
   inline void applyShortcut(const Generation& g,uint64_t end){
-    auto p=shortcutPath(g);
-    auto parents=shortcutParents(p);
+    auto p=shortcutPath(g,end);
+    auto parents=shortcutParents(p,end);
+    installedBudget(end);
     if(GetFileAttributesW(p.c_str())!=INVALID_FILE_ATTRIBUTES){
-      shortcutReadback(g);
+      shortcutReadback(g,end);
       installedBudget(end);
       return;
     }
     require(GetLastError()==ERROR_FILE_NOT_FOUND);
-    Microsoft::WRL::ComPtr<IShellLinkW> link;
-    winrt::check_hresult(CoCreateInstance(CLSID_ShellLink,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&link)));
-    winrt::check_hresult(link->SetPath((g.root/L"helper.exe").c_str()));
-    winrt::check_hresult(link->SetArguments(L"--callback"));
-    Microsoft::WRL::ComPtr<IPropertyStore> properties;
-    winrt::check_hresult(link.As(&properties));
-    PROPVARIANT v{
-    };
-    winrt::check_hresult(InitPropVariantFromString(wide(g.snapshot.aumid).c_str(),&v));
-    winrt::check_hresult(properties->SetValue(PKEY_AppUserModel_ID,v));
-    PropVariantClear(&v);
-    GUID clsid{
-    };
-    winrt::check_hresult(CLSIDFromString(wide(g.snapshot.clsid).c_str(),&clsid));
-    winrt::check_hresult(InitPropVariantFromCLSID(clsid,&v));
-    winrt::check_hresult(properties->SetValue(PKEY_AppUserModel_ToastActivatorCLSID,v));
-    PropVariantClear(&v);
-    winrt::check_hresult(properties->Commit());
-    auto data=linkBytes(link.Get());
-    shortcutReadbackBytes(g,data);
+    installedBudget(end);
+    auto data=configuredShortcutBytes(g,end);
+    shortcutReadbackBytes(g,data,end);
     installedBudget(end);
     auto stage=p;
     stage+=L".stage";
+    installedBudget(end);
     if(GetFileAttributesW(stage.c_str())==INVALID_FILE_ATTRIBUTES){
       require(GetLastError()==ERROR_FILE_NOT_FOUND);
       installedBudget(end);
@@ -522,11 +832,13 @@ namespace wcb {
     auto file=writableLeaf(stage,g);
     auto held=bytes(file.h,65536);
     require(held==data);
-    shortcutReadbackBytes(g,held);
+    installedBudget(end);
+    shortcutReadbackBytes(g,held,end);
     installedBudget(end);
     renameLeaf(file.h,parents.back().h,p.filename().wstring(),end);
     file.closeChecked();
-    shortcutReadback(g);
+    installedBudget(end);
+    shortcutReadback(g,end);
     installedBudget(end);
   }
   inline void restoreClass(const Generation& g,uint64_t end){
@@ -603,14 +915,16 @@ namespace wcb {
     parent.close();
   }
   inline void restoreShortcut(const Generation& g,uint64_t end){
-    auto p=shortcutPath(g);
-    auto parents=shortcutParents(p);
+    auto p=shortcutPath(g,end);
+    auto parents=shortcutParents(p,end);
+    installedBudget(end);
     if(GetFileAttributesW(p.c_str())==INVALID_FILE_ATTRIBUTES){
       require(GetLastError()==ERROR_FILE_NOT_FOUND);
       return;
     }
     auto file=writableLeaf(p,g);
-    shortcutReadbackBytes(g,bytes(file.h,65536));
+    installedBudget(end);
+    shortcutReadbackBytes(g,bytes(file.h,65536),end);
     installedBudget(end);
     FILE_DISPOSITION_INFO disposition{
       TRUE
@@ -648,4 +962,7 @@ namespace wcb {
     }
     return out;
   }
+#undef WCB_SHORTCUT_AFTER_API
+#undef WCB_SHORTCUT_DEADLINE_TEST_ARG
+#undef WCB_SHORTCUT_DEADLINE_TEST_PARAM
 }

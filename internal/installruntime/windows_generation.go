@@ -11,16 +11,27 @@ import (
 	"github.com/777genius/agent-notifications/internal/windowscallback"
 )
 
-// Windows generations have a compatibility floor independent of the
-// orphan-only transaction schema5. Transaction, ledger, journal decoder and
-// managed writer declarations all refuse older readers.
+// Windows generations have compatibility declarations independent of both the
+// orphan-only transaction schema5 and NativeRecord's DecoderFloor. The latter
+// remains the macOS/native journal floor and is never promoted by Windows.
 const (
 	WindowsGenerationTransactionSchema = 6
 	WindowsGenerationLedgerSchema      = 6
-	WindowsGenerationDecoderFloor      = 6
+	WindowsGenerationLedgerReaderFloor = 6
 	WindowsGenerationWriterFloor       = 6
 	WindowsWriterProtocolMarker        = "agent-notifications-managed-writer-protocol-v6"
 )
+
+// windowsLedgerReaderFloor derives the required Windows journal reader from
+// the named ledger schema. It is separate from Ledger.DecoderFloor, which
+// describes only NativeRecord, and from windowscallback.ReaderVersion (the WNE
+// object reader version).
+func windowsLedgerReaderFloor(schema int) (int, bool) {
+	if schema != WindowsGenerationLedgerSchema {
+		return 0, false
+	}
+	return WindowsGenerationLedgerReaderFloor, true
+}
 
 // WindowsChange is the concrete participant carried by the existing owner
 // transaction journal. Fresh unique registry/shortcut objects have absent
@@ -39,7 +50,7 @@ func validateWindowsPayload(w *WindowsChange) error {
 		return nil
 	}
 	data, e := windowscallback.EncodeSnapshot(w.Snapshot)
-	if e != nil || windowscallback.Digest(data) != w.Binding.SHA256 || w.Binding.SnapshotPath != w.Snapshot.CanonicalRoot+`\generation.wne` {
+	if e != nil || windowscallback.Digest(data) != w.Binding.SHA256 || !windowscallback.ValidBinding(w.Binding) || w.Binding.SnapshotPath != w.Snapshot.CanonicalRoot+`\generation.wne` {
 		return fmt.Errorf("invalid Windows generation participant")
 	}
 	switch w.Phase {
@@ -173,7 +184,9 @@ func validateWindowsRetained(l Ledger) error {
 	if len(l.WindowsRetained) > windowscallback.MaxGenerations {
 		return windowscallback.ErrCapacity
 	}
-	if len(l.WindowsRetained) > 0 && (l.Schema != WindowsGenerationLedgerSchema || l.WriterFloor < WindowsGenerationWriterFloor || l.DecoderFloor < WindowsGenerationDecoderFloor) {
+	readerFloor, declared := windowsLedgerReaderFloor(l.Schema)
+	if len(l.WindowsRetained) > 0 &&
+		(!declared || readerFloor != WindowsGenerationLedgerReaderFloor || l.WriterFloor < WindowsGenerationWriterFloor) {
 		return windowscallback.ErrUnavailable
 	}
 	seen := map[string]bool{}

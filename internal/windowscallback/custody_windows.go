@@ -128,7 +128,11 @@ func physical(h windows.Handle) (string, error) {
 	if e != nil || n == 0 || n >= uint32(len(buf)) {
 		return "", ErrUnavailable
 	}
-	return windows.UTF16ToString(buf[:n]), nil
+	path := windows.UTF16ToString(buf[:n])
+	if len(path) >= 5 && path[4] >= 'a' && path[4] <= 'z' {
+		path = strings.ToUpper(path[:4]) + path[4:]
+	}
+	return path, nil
 }
 func at(parent windows.Handle, name string, access, disposition, options uint32, sd *windows.SECURITY_DESCRIPTOR) (windows.Handle, error) {
 	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, `\/:`) {
@@ -392,7 +396,7 @@ func Bootstrap(ctx context.Context, s Snapshot, end uint64) error {
 	return budget(ctx, end)
 }
 func Open(ctx context.Context, b Binding, end uint64) (*Custody, error) {
-	if !hexValue(b.SHA256, 64) || filepath.Base(b.SnapshotPath) != "generation.wne" || budget(ctx, end) != nil {
+	if !ValidBinding(b) || budget(ctx, end) != nil {
 		return nil, ErrUnavailable
 	}
 	g, e := hold(filepath.Dir(b.SnapshotPath))
@@ -421,7 +425,7 @@ func Open(ctx context.Context, b Binding, end uint64) (*Custody, error) {
 		return fail(ErrUnavailable)
 	}
 	g.Snapshot, e = DecodeSnapshot(data)
-	if e != nil || g.Snapshot.CanonicalRoot != g.Root || g.Snapshot.OwnerSID != g.SID {
+	if e != nil || g.Snapshot.CanonicalRoot != g.Root || g.Snapshot.OwnerSID != g.SID || !generationPath(g.Root, g.Snapshot.Generation) {
 		return fail(ErrUnavailable)
 	}
 	h, e := at(root, "helper.exe", windows.FILE_GENERIC_READ|windows.READ_CONTROL, windows.FILE_OPEN, windows.FILE_NON_DIRECTORY_FILE, nil)

@@ -105,7 +105,6 @@ func applyReservationProtocol(next *Ledger, r Request, current Ledger) {
 	if r.Windows != nil || current.WriterFloor >= WindowsGenerationWriterFloor || len(current.WindowsRetained) != 0 {
 		next.Schema = WindowsGenerationLedgerSchema
 		next.WriterFloor = WindowsGenerationWriterFloor
-		next.DecoderFloor = WindowsGenerationDecoderFloor
 		return
 	}
 	if current.Schema == 4 || current.WriterFloor >= OpenCodeWriterFloor || r.Consumer.OpenCode != nil {

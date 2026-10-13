@@ -49,6 +49,39 @@ func inertGeneration(t *testing.T) (*Custody, Binding) {
 	return g, binding
 }
 
+// Breakage: Open accepts an alternate root spelling or a path whose generation
+// directory does not match the decoded snapshot. Refusal occurs before helper,
+// record or operator work.
+func TestOpenRejectsNoncanonicalGenerationBindings(t *testing.T) {
+	g, valid := inertGeneration(t)
+	if e := g.Close(); e != nil {
+		t.Fatal(e)
+	}
+	root := strings.TrimSuffix(valid.SnapshotPath, `\generation.wne`)
+	generation := filepath.Base(root)
+	wrong := strings.TrimSuffix(root, generation) + strings.Repeat("b", 32)
+	for name, path := range map[string]string{
+		"wrong-directory-generation": wrong + `\generation.wne`,
+		"lower-drive-alias":          `\\?\` + strings.ToLower(string(root[4])) + root[5:] + `\generation.wne`,
+		"dot-segment-alias":          root + `\..\` + generation + `\generation.wne`,
+		"separator-alias":            root + `/generation.wne`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			b := Binding{SnapshotPath: path, SHA256: valid.SHA256}
+			opened, e := Open(context.Background(), b, BootMilliseconds()+10000)
+			if opened != nil {
+				_ = opened.Close()
+			}
+			if e == nil {
+				t.Fatal("noncanonical Open binding admitted", e)
+			}
+		})
+	}
+	if _, e := os.Lstat(filepath.Join(g.Root, "operator.pending")); !os.IsNotExist(e) {
+		t.Fatal("noncanonical Open binding wrote intent", e)
+	}
+}
+
 // Failure-only metadata from eight fixed TEST objects. No payload reads,
 // filesystem mutation, ACL repair, helper or SDK entry is permitted here.
 func bootstrapFixtureMetadata(t *testing.T, control string, s Snapshot, end uint64) {
