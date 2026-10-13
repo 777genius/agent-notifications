@@ -58,6 +58,7 @@ _CONFIG_STAGE=""
 _CONFIG_HELPER=""
 _PORTABLE_STAGE=""
 _KEEP_CONFIG_STAGE=false
+_FINAL_BOARD_RENDERED=false
 _KEEP_PORTABLE_STAGE=false
 PRODUCT=""
 BOOTSTRAP_TAG=""
@@ -69,6 +70,8 @@ AGENT_NOTIFY_REQUEST=auto
 CONFIGURE_BINARY=""
 CONFIGURE_ARGS=()
 OPENCODE_ARGS=()
+_FROZEN_OPENCODE_CHANNELS=()
+_FROZEN_GEMINI_CHANNELS=()
 CLAUDE_AGENT_NOTIFY_STATUS="not configured by this run"
 CODEX_AGENT_NOTIFY_STATUS="not configured by this run"
 SELECTED_PRODUCTS=()
@@ -95,6 +98,28 @@ _GEMINI_EXEC=gemini
 _PROGRESS_IDS=()
 _PROGRESS_PHASES=()
 _PROGRESS_OUTCOMES=()
+_PROGRESS_PID=""
+_PROGRESS_EVENTS=""
+_PROGRESS_KIND=""
+_PROGRESS_GLOBAL_PHASE=preparation
+_PROGRESS_LOG=""
+_PROGRESS_STDERR=""
+_DIAGNOSTIC_LOG=""
+_DIAGNOSTIC_ROOT=""
+_DIAGNOSTIC_FAILED=false
+_DIAGNOSTIC_LABEL=""
+_DIAGNOSTIC_NOTED=false
+_SETUP_FAILURE_REASON=setup_failed
+_SETUP_RECOVERY=unavailable
+_PROGRESS_CAP_HELPER=""
+_PROGRESS_CAP_SUPPORTED=false
+_PROGRESS_SESSION_SUPPORTED=false
+_PROGRESS_JOURNAL=""
+_PROGRESS_JOURNAL_DISABLED=false
+_PROGRESS_STOP_FILE=""
+_ACTIVITY_MODE=compact
+_ACTIVITY_LIMIT=0
+_ACTIVITY_EXPLICIT=false
 
 # Isolated JSON/checksum runtime. Prefer python3 -I; Node is the supported
 # fallback because Claude Code already ships it. iTerm2 venv still needs a
@@ -182,6 +207,15 @@ abort_if_wsl_environment() {
 
 # ──────────────────────────────────────────────
 
+# Keep untrusted CLI output and paths printable and bounded in diagnostics.
+bootstrap_diagnostic_quote() {
+    local LC_ALL=C
+    local value=${1:0:512} quoted
+    printf -v quoted '%q' "$value"
+    printf '%s' "${quoted:0:512}"
+    if [ "${#1}" -gt 512 ] || [ "${#quoted}" -gt 512 ]; then printf '...'; fi
+}
+
 check_prerequisites() {
     if { [ "${PRODUCT:-claude}" = claude ] || [ "$PRODUCT" = both ]; } && ! command -v "$_CLAUDE_EXEC" &>/dev/null; then
         echo -e "${RED}✗ claude CLI not found in PATH${NC}" >&2
@@ -214,7 +248,7 @@ check_prerequisites() {
             TMPDIR="$probe/tmp" XDG_CONFIG_HOME="$probe/profile/.config" OPENCODE_CONFIG_DIR="$probe/profile/opencode" \
             "$opencode_cli" --version </dev/null) || probe_status=$?
         rm -rf "$probe"
-        [ "$probe_status" -eq 0 ] || { echo "Cannot determine OpenCode version." >&2; return 1; }
+        [ "$probe_status" -eq 0 ] || { printf 'Cannot determine OpenCode version. CLI: %s\n' "$(bootstrap_diagnostic_quote "$opencode_cli")" >&2; return 1; }
         # Accept one complete stable version, never an embedded compatibility
         # number, prerelease or an unknown future API generation.
         local host_supported=false
@@ -225,9 +259,14 @@ check_prerequisites() {
             fi
         fi
         if [ "$host_supported" = true ]; then
-            echo "OpenCode notifications were tested with 1.18.33, 2.0.0 and 2.0.21; detected $host_version."
+            if [ "${BOOTSTRAP_VERBOSE:-0}" = 1 ]; then
+                echo "OpenCode notifications were tested with 1.18.33, 2.0.0 and 2.0.21; detected $host_version."
+            fi
         else
-            echo "Unsupported OpenCode version. Requires stable V1 >= 1.18.29 or V2 >= 2.0.0; tested: 1.18.33, 2.0.0 and 2.0.21." >&2
+            printf 'Unsupported OpenCode version; detected %s. CLI: %s\n' "$(bootstrap_diagnostic_quote "$host_version")" "$(bootstrap_diagnostic_quote "$opencode_cli")" >&2
+            echo "Requires stable V1 >= 1.18.29 or V2 >= 2.0.0; tested: 1.18.33, 2.0.0 and 2.0.21." >&2
+            echo "Older OpenCode V1 releases have not been verified with this installed notification plugin." >&2
+            echo "Update the selected OpenCode CLI shown above; the desktop app and CLI can have different versions." >&2
             exit 1
         fi
         [ "$(bootstrap_release_os_arch)" != "windows arm64" ] || { echo "Windows arm64 is not supported." >&2; exit 1; }
@@ -241,8 +280,8 @@ check_prerequisites() {
         # caller's environment is empty. Keep cwd and home in the same TEST root.
         : > "$probe/profile/.gemini/.env"
         : > "$probe/profile/.env"
-        printf '{}\n' > "$probe/settings.json"
-        printf '{}\n' > "$probe/defaults.json"
+        # Redirect system files into this probe without creating user-owned
+        # files that Gemini correctly refuses to trust as root-owned settings.
         printf '{}\n' > "$probe/trust.json"
         probe_status=0
         host_version=$(cd "$probe/profile" && env -i PATH="$PATH" HOME="$probe/profile" USERPROFILE="$probe/profile" \
@@ -251,12 +290,14 @@ check_prerequisites() {
             GEMINI_CLI_TRUSTED_FOLDERS_PATH="$probe/trust.json" "$gemini_cli" --version </dev/null) || probe_status=$?
         rm -rf "$probe"
         [ "$probe_status" -eq 0 ] && [ "$host_version" = 0.62.0 ] || {
-            echo "Gemini CLI notifications target 0.62.0; detected ${host_version:-unavailable}." >&2; return 1;
+            printf 'Unsupported Gemini CLI version; detected %s. Requires 0.62.0.\n' "$(bootstrap_diagnostic_quote "${host_version:-unavailable}")" >&2
+            echo "Update Gemini CLI: npm install -g @google/gemini-cli@0.62.0" >&2
+            return 1;
         }
         [ "$(bootstrap_release_os_arch)" != "windows arm64" ] || { echo "Windows arm64 is not supported." >&2; return 1; }
     fi
     if { [ "$PRODUCT" = opencode ] || [ "$PRODUCT" = gemini ]; } && [ "$(uname -s)" = Darwin ] &&
-        [[ " ${OPENCODE_ARGS[*]-} " = *" --desktop "* ]] && ! command -v unzip >/dev/null 2>&1; then
+        { [[ " ${OPENCODE_ARGS[*]-} " = *" --desktop "* ]] || [[ " ${OPENCODE_ARGS[*]-} " = *" --desktop=true "* ]] || [[ " ${_FROZEN_OPENCODE_CHANNELS[*]-} ${_FROZEN_GEMINI_CHANNELS[*]-} " = *" --desktop=true "* ]]; } && ! command -v unzip >/dev/null 2>&1; then
         echo "unzip is required for the signed macOS notification helper." >&2
         exit 1
     fi
@@ -1249,41 +1290,378 @@ setup_iterm2_venv() {
 
 # ──────────────────────────────────────────────
 
-# Keep low-level installer diagnostics available without printing nested success
-# banners or machine JSON. Functions run in this shell so their state survives.
-run_setup_stage() {
-    local label="$1" log status=0
-    shift
-    printf '%s...\n' "$label"
-    if [ "${BOOTSTRAP_VERBOSE:-0}" = 1 ]; then
-        "$@"
-        return $?
+# Progress observes shell-owned state. Never background an installation function:
+# its arrays, staged paths and recovery decisions must survive in this shell.
+progress_rich_available() {
+    [ "${BOOTSTRAP_VERBOSE:-0}" != 1 ] && [ "${_UI_MODE:-auto}" != plain ] &&
+        [ -z "${NO_COLOR:-}" ] && [ "${TERM:-dumb}" != dumb ] && [ -t 2 ]
+}
+
+progress_helper_available() {
+    [ -n "$_CONFIG_HELPER" ] && [ -x "$_CONFIG_HELPER" ] || return 1
+    if [ "$_PROGRESS_CAP_HELPER" != "$_CONFIG_HELPER" ]; then
+        _PROGRESS_CAP_HELPER=$_CONFIG_HELPER
+        _PROGRESS_CAP_SUPPORTED=false
+        _PROGRESS_SESSION_SUPPORTED=false
+        local capability
+        capability=$("$_CONFIG_HELPER" installer-progress --capabilities </dev/null 2>/dev/null) || return 1
+        [ "$capability" != installer-progress-v1 ] || _PROGRESS_CAP_SUPPORTED=true
+        capability=$("$_CONFIG_HELPER" installer-progress --session-capabilities </dev/null 2>/dev/null) || capability=""
+        [ "$capability" != installer-progress-session-v1 ] || _PROGRESS_SESSION_SUPPORTED=true
     fi
-    log=$(mktemp "${TMPDIR:-/tmp}/bootstrap-output-XXXXXX") || return 1
-    if "$@" > "$log" 2> "$log.stderr"; then
-        # Preserve all stderr, including skipped/partial setup recovery advice.
-        grep -vE '^(phase (prepare|preflight|hooks|agent-notify|complete)|Setting up notifications: (prepare|preflight|hooks|agent notify|complete)\.\.\.)$' "$log.stderr" >&2 || true
-        # Keep indented recovery advice with its warning, including colorized lines.
-        awk '{
-            plain = $0
-            gsub(/\033\[[0-9;]*m/, "", plain)
-            if (tolower(plain) ~ /⚠|warning|skipped|not installed|manual setup|could not|keeping existing/) {
-                print; warning = 1
-            } else if (warning && plain ~ /^[[:space:]]+[^[:space:]]/) {
-                print
-            } else {
-                warning = 0
-            }
-        }' "$log"
+    [ "$_PROGRESS_CAP_SUPPORTED" = true ]
+}
+
+# Session facts are independent of presentation availability and private logs.
+progress_journal_init() {
+    [ -z "$_PROGRESS_JOURNAL" ] && [ "$_PROGRESS_JOURNAL_DISABLED" != true ] || return 0
+    _PROGRESS_JOURNAL=$(mktemp "${TMPDIR:-/tmp}/bootstrap-session-XXXXXX") || _PROGRESS_JOURNAL_DISABLED=true
+}
+
+progress_record() {
+    [ "$_PROGRESS_JOURNAL_DISABLED" != true ] && [ -n "$_PROGRESS_JOURNAL" ] || return 0
+    local bytes
+    if [ ! -f "$_PROGRESS_JOURNAL" ] || [ -L "$_PROGRESS_JOURNAL" ]; then
+        _PROGRESS_JOURNAL_DISABLED=true; return 0
+    fi
+    bytes=$(wc -c < "$_PROGRESS_JOURNAL") || bytes=262144
+    if [ "$bytes" -gt 261888 ] || ! printf '%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" >> "$_PROGRESS_JOURNAL"; then
+        _PROGRESS_JOURNAL_DISABLED=true
+    fi
+    return 0
+}
+
+progress_snapshots() {
+    local i=0
+    while [ "$i" -lt "${#_PROGRESS_IDS[@]}" ]; do
+        progress_record snapshot "${_PROGRESS_IDS[$i]}" "${_PROGRESS_PHASES[$i]}" "${_PROGRESS_OUTCOMES[$i]}"
+        i=$((i + 1))
+    done
+}
+
+progress_child_running() {
+    local running
+    for running in $(jobs -pr) $(jobs -ps); do [ "$running" != "$1" ] || return 0; done
+    return 1
+}
+
+# Join only this job. No watchdog process, reused PID or indefinite graceful wait.
+progress_reap() {
+    local pid="$1" i=0 status=0 forced=false escalated=false
+    while progress_child_running "$pid" && [ "$i" -lt 20 ]; do sleep 0.05; i=$((i + 1)); done
+    if progress_child_running "$pid"; then
+        escalated=true
+        kill -TERM "$pid" 2>/dev/null || true
+        i=0
+        while progress_child_running "$pid" && [ "$i" -lt 10 ]; do sleep 0.05; i=$((i + 1)); done
+        if progress_child_running "$pid"; then kill -KILL "$pid" 2>/dev/null || true; forced=true; fi
+    fi
+    wait "$pid" 2>/dev/null || status=$?
+    if [ "$forced" = true ] && progress_rich_available; then printf '\033[0m\033[?25h' >&2; fi
+    if [ "$escalated" = true ] && [ "$status" -eq 0 ]; then status=1; fi
+    return "$status"
+}
+
+progress_event() {
+    progress_record transition "$1" "$2" "$3"
+    [ -n "$_PROGRESS_EVENTS" ] && [ "$_PROGRESS_KIND" = helper ] || return 0
+    printf '%s\t%s\t%s\n' "$1" "$2" "$3" >> "$_PROGRESS_EVENTS" || true
+}
+
+progress_stage_phase() {
+    _PROGRESS_GLOBAL_PHASE=preparation
+    case "$1" in
+        "Preparing verified installer") _PROGRESS_GLOBAL_PHASE=verified-installer ;;
+        "Checking existing installation") _PROGRESS_GLOBAL_PHASE=existing-installation ;;
+        "Checking shared settings") _PROGRESS_GLOBAL_PHASE=shared-settings ;;
+        "Preparing notification settings") _PROGRESS_GLOBAL_PHASE=notification-settings ;;
+        "Configuring agent notification tools") _PROGRESS_GLOBAL_PHASE=notification-tools ;;
+        "Installing Claude notifications") _PROGRESS_GLOBAL_PHASE=installing-claude ;;
+        "Installing Codex notifications") _PROGRESS_GLOBAL_PHASE=installing-codex ;;
+        "Installing OpenCode notifications") _PROGRESS_GLOBAL_PHASE=installing-opencode ;;
+        "Installing Gemini CLI notifications") _PROGRESS_GLOBAL_PHASE=installing-gemini ;;
+    esac
+}
+
+progress_start() {
+    [ -z "$_PROGRESS_PID" ] || return 0
+    if progress_helper_available && [ "$_PROGRESS_SESSION_SUPPORTED" = true ] && [ "$_PROGRESS_JOURNAL_DISABLED" != true ]; then
+        _PROGRESS_STOP_FILE=$(mktemp "${TMPDIR:-/tmp}/bootstrap-observer-stop-XXXXXX") || return 0
+        _PROGRESS_KIND=session
+        local activity_args=(--activity "$_ACTIVITY_MODE")
+        [ "$_ACTIVITY_LIMIT" -eq 0 ] || activity_args+=(--activity-limit "$_ACTIVITY_LIMIT")
+        "$_CONFIG_HELPER" installer-progress --session --events "$_PROGRESS_JOURNAL" --stop-file "$_PROGRESS_STOP_FILE" --ui "${_UI_MODE:-auto}" "${activity_args[@]}" --transient --owner-pid "$$" </dev/null >/dev/null &
+        _PROGRESS_PID=$!
+        return 0
+    fi
+    # A failed session stays in the truthful plain owner presentation.
+    [ "$_PROGRESS_SESSION_SUPPORTED" != true ] || return 0
+    progress_rich_available || return 0
+    # Older verified helpers retain the existing plain stage output.
+    if [ -n "$_CONFIG_HELPER" ]; then
+        progress_helper_available || return 0
+        _PROGRESS_EVENTS=$(mktemp "${TMPDIR:-/tmp}/bootstrap-progress-XXXXXX") || return 0
+        _PROGRESS_KIND=helper
+        local i=0
+        while [ "$i" -lt "${#_PROGRESS_IDS[@]}" ]; do
+            printf '%s\t%s\t%s\n' "${_PROGRESS_IDS[$i]}" "${_PROGRESS_PHASES[$i]}" "${_PROGRESS_OUTCOMES[$i]}" >> "$_PROGRESS_EVENTS"
+            i=$((i + 1))
+        done
+        printf 'global\t%s\trunning\n' "$_PROGRESS_GLOBAL_PHASE" >> "$_PROGRESS_EVENTS"
+        "$_CONFIG_HELPER" installer-progress --events "$_PROGRESS_EVENTS" --ui "${_UI_MODE:-auto}" --transient --owner-pid "$$" </dev/null >/dev/null &
+        _PROGRESS_PID=$!
     else
-        status=$?
-        cat "$log" "$log.stderr" >&2
+        _PROGRESS_KIND=spinner
+        _PROGRESS_EVENTS=$(mktemp "${TMPDIR:-/tmp}/bootstrap-progress-XXXXXX") || return 0
+        # Only this display loop is asynchronous. The owner remains synchronous.
+        (
+            trap 'exit 0' INT TERM HUP
+            local frame=0 frames='|/-\' label="$1" file="" bytes="" next_label=""
+            while :; do
+                if [ -s "$_PROGRESS_EVENTS" ]; then
+                    { IFS= read -r next_label; IFS= read -r file; } < "$_PROGRESS_EVENTS" || true
+                    [ -z "$next_label" ] || label=$next_label
+                fi
+                bytes=""
+                if [ -n "$file" ] && [ -f "$file" ]; then
+                    bytes=$(wc -c < "$file" 2>/dev/null | tr -d '[:space:]') || bytes=""
+                    [ -z "$bytes" ] || bytes=" ($bytes bytes received)"
+                fi
+                printf '\r\033[2K  %s %s%s' "${frames:frame:1}" "$label" "$bytes" >&2
+                frame=$(((frame + 1) % 4))
+                sleep 0.1
+            done
+        ) </dev/null >/dev/null &
+        _PROGRESS_PID=$!
     fi
-    rm -f "$log" "$log.stderr"
-    if [ "$status" -ne 0 ]; then
-        printf 'Setup stopped while %s. Review the details above.\n' "$label" >&2
-        return "$status"
+}
+
+# A file's current byte count is measured, never a guessed percentage.
+progress_download_activity() {
+    [ "$_PROGRESS_KIND" = spinner ] && [ -n "$_PROGRESS_EVENTS" ] || return 0
+    local label="Downloading installer files"
+    case "${1##*/}" in
+        checksums.txt) label="Downloading release checksums" ;;
+        claude-notifications-*) label="Downloading verified installer helper" ;;
+        install.sh) label="Downloading runtime installer" ;;
+        source.tar.gz) label="Downloading source bundle" ;;
+        ClaudeNotifier.app.zip) label="Downloading macOS notifier" ;;
+    esac
+    printf '%s\n%s\n' "$label" "$1" > "$_PROGRESS_EVENTS" || true
+}
+
+progress_stop() {
+    local status=${1:-0} pid=$_PROGRESS_PID
+    if [ -n "$pid" ]; then
+        if [ "$_PROGRESS_KIND" = session ]; then
+            printf 'stop\n' > "$_PROGRESS_STOP_FILE" || kill -TERM "$pid" 2>/dev/null || true
+        elif [ "$_PROGRESS_KIND" = helper ]; then
+            if [ "$status" -eq 0 ]; then printf 'global\t%s\tdone\n' "$_PROGRESS_GLOBAL_PHASE" >> "$_PROGRESS_EVENTS"
+            else printf 'global\t%s\tfailed\n' "$_PROGRESS_GLOBAL_PHASE" >> "$_PROGRESS_EVENTS"; fi
+            # A full disk or inaccessible event file must not strand the observer.
+            if ! printf 'stop\t\t\n' >> "$_PROGRESS_EVENTS"; then
+                kill "$pid" 2>/dev/null || true
+            fi
+        else
+            kill "$pid" 2>/dev/null || true
+        fi
+        if ! progress_reap "$pid"; then
+            [ "$_PROGRESS_KIND" != session ] || _PROGRESS_JOURNAL_DISABLED=true
+        fi
+        [ "$_PROGRESS_KIND" != spinner ] || printf '\r\033[2K' >&2
     fi
+    [ -z "$_PROGRESS_EVENTS" ] || rm -f "$_PROGRESS_EVENTS"
+    [ -z "$_PROGRESS_STOP_FILE" ] || rm -f "$_PROGRESS_STOP_FILE"
+    _PROGRESS_STOP_FILE=""
+    _PROGRESS_PID=""; _PROGRESS_EVENTS=""; _PROGRESS_KIND=""
+}
+
+# This storage adapter never interprets command output. Private durable captures
+# preserve the session's preceding stages as well as the failed stage. The
+# installer functions still run synchronously in this shell, preserving state.
+bootstrap_diagnostics() {
+    local engine root
+    engine=$(installer_runtime) || return 1
+    root=${_DIAGNOSTIC_ROOT:-${BOOTSTRAP_DIAGNOSTIC_ROOT:-}}
+    if [ -z "$root" ]; then
+        root=$(bootstrap_control_root) || return 1
+        # The transaction control root must remain absent on a fresh install
+        # until its writer provisions the existing installation locks.
+        root="${root}-installer-diagnostics"
+    fi
+    if [ "$engine" = python3 ]; then
+        python3 -I - "$root" "${TMPDIR:-/tmp}" "$@" <<'PY_DIAGNOSTICS'
+import os, stat, sys, tempfile
+root, temporary, operation = sys.argv[1:4]
+def private_root():
+    if not os.path.isabs(root): raise ValueError('absolute diagnostic root required')
+    path = os.path.abspath(root)
+    tmp = os.path.realpath(temporary)
+    if os.path.commonpath([os.path.realpath(path), tmp]) == tmp:
+        raise ValueError('diagnostic root is temporary')
+    current = os.path.splitdrive(path)[0] + os.sep
+    for part in path[len(current):].split(os.sep):
+        if not part: continue
+        current = os.path.join(current, part)
+        try: os.mkdir(current, 0o700)
+        except FileExistsError: pass
+        info = os.lstat(current)
+        if not stat.S_ISDIR(info.st_mode): raise ValueError('unsafe diagnostic parent')
+        if os.name != 'nt' and (info.st_uid not in (0, os.getuid()) or
+            (info.st_mode & 0o022 and not info.st_mode & stat.S_ISVTX)):
+            raise ValueError('untrusted diagnostic parent')
+    info = os.lstat(path)
+    if hasattr(os, 'getuid') and info.st_uid != os.getuid(): raise ValueError('foreign diagnostic root')
+    if os.name != 'nt' and stat.S_IMODE(info.st_mode) != 0o700: raise ValueError('nonprivate diagnostic root')
+    return path
+try:
+    # POSIX modes do not establish a private Windows DACL. Until this adapter
+    # verifies native ACLs, refuse persistence rather than claim privacy.
+    if os.name == 'nt': raise ValueError('private native Windows diagnostics unavailable')
+    path = private_root()
+    if operation == 'create':
+        fd, name = tempfile.mkstemp(prefix='installer-', suffix='.log', dir=path)
+        os.fchmod(fd, 0o600); os.close(fd); print(name)
+    elif operation == 'append':
+        name, label, code, stdout, stderr = sys.argv[4:9]
+        if os.path.dirname(name) != path: raise ValueError('foreign logfile')
+        fd = os.open(name, os.O_WRONLY | os.O_APPEND | getattr(os, 'O_NOFOLLOW', 0))
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or (hasattr(os, 'getuid') and info.st_uid != os.getuid()):
+            os.close(fd); raise ValueError('unsafe logfile')
+        if os.name != 'nt' and stat.S_IMODE(info.st_mode) != 0o600:
+            os.close(fd); raise ValueError('nonprivate logfile')
+        remaining = max(0, 2 * 1024 * 1024 - info.st_size)
+        with os.fdopen(fd, 'ab') as log:
+            record = ('\nStage: ' + label + '\nExit status: ' + code + '\n').encode()
+            for heading, capture in [('stdout', stdout), ('stderr', stderr)]:
+                with open(capture, 'rb') as source: data = source.read(65537)
+                record += ('\n' + heading + ':\n').encode() + data[:65536]
+                if len(data) > 65536: record += b'\n[diagnostic stream truncated after 65536 bytes]\n'
+            marker = b'\n[session diagnostics truncated after 2097152 bytes]\n'
+            if remaining:
+                log.write(record if len(record) <= remaining else record[:max(0, remaining-len(marker))] + marker[:remaining])
+            else: raise ValueError('diagnostic session limit reached')
+    elif operation == 'view':
+        name = sys.argv[4]
+        if os.path.dirname(name) != path or os.path.islink(name): raise ValueError('unsafe logfile')
+        # Explicit details remain printable even if a vendor writes terminal controls.
+        fd = os.open(name, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or (hasattr(os, 'getuid') and info.st_uid != os.getuid()) or (os.name != 'nt' and stat.S_IMODE(info.st_mode) != 0o600):
+            os.close(fd); raise ValueError('nonprivate logfile')
+        with os.fdopen(fd, 'rb') as log: data = log.read(2 * 1024 * 1024)
+        text = data.decode('utf-8', errors='replace')
+        print(''.join(c if c in '\n\t' or (ord(c) >= 32 and ord(c) != 127) else '\\x%02x' % ord(c) for c in text), end='')
+except (OSError, ValueError):
+    sys.exit(1)
+PY_DIAGNOSTICS
+    else
+        run_isolated_node - "$root" "${TMPDIR:-/tmp}" "$@" <<'JS_DIAGNOSTICS'
+const fs = require('fs'), path = require('path'), crypto = require('crypto');
+const [root, temporary, operation, ...args] = process.argv.slice(2);
+try {
+    if (process.platform === 'win32') throw Error('private native Windows diagnostics unavailable');
+    if (!path.isAbsolute(root)) throw Error('absolute diagnostic root required');
+    const target = path.resolve(root), tmp = fs.realpathSync(temporary);
+    if (target === tmp || target.startsWith(tmp + path.sep)) throw Error('temporary diagnostics');
+    let current = path.parse(target).root;
+    for (const part of target.slice(current.length).split(path.sep).filter(Boolean)) {
+        current = path.join(current, part);
+        try { fs.mkdirSync(current, {mode: 0o700}); } catch (e) { if (e.code !== 'EEXIST') throw e; }
+        const parent = fs.lstatSync(current);
+        if (!parent.isDirectory() || (process.platform !== 'win32' &&
+            ((!([0, process.getuid()].includes(parent.uid))) || ((parent.mode & 0o022) && !(parent.mode & 0o1000))))) throw Error('unsafe diagnostic parent');
+    }
+    const owner = fs.lstatSync(target), unix = process.platform !== 'win32';
+    if ((process.getuid && owner.uid !== process.getuid()) || (unix && (owner.mode & 0o777) !== 0o700)) throw Error('nonprivate diagnostics');
+    if (operation === 'create') {
+        const name = path.join(target, 'installer-' + crypto.randomBytes(12).toString('hex') + '.log');
+        const fd = fs.openSync(name, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW || 0), 0o600);
+        fs.closeSync(fd); console.log(name);
+    } else {
+        const [name, label, code, stdout, stderr] = args;
+        if (path.dirname(name) !== target || fs.lstatSync(name).isSymbolicLink()) throw Error('foreign logfile');
+        const fd = fs.openSync(name, (operation === 'view' ? fs.constants.O_RDONLY : fs.constants.O_WRONLY | fs.constants.O_APPEND) | (fs.constants.O_NOFOLLOW || 0));
+        try {
+            const info = fs.fstatSync(fd);
+            if (!info.isFile() || info.nlink !== 1 || (process.getuid && info.uid !== process.getuid()) || (unix && (info.mode & 0o777) !== 0o600)) throw Error('nonprivate logfile');
+            if (operation === 'view') {
+                const data = Buffer.alloc(Math.min(info.size, 2097152)); fs.readSync(fd, data, 0, data.length, 0);
+                process.stdout.write(data.toString('utf8').replace(/[\x00-\x08\x0b-\x1f\x7f]/g, c => '\\x' + c.charCodeAt(0).toString(16).padStart(2, '0')));
+            } else {
+                let chunks = [Buffer.from('\nStage: ' + label + '\nExit status: ' + code + '\n')];
+                for (const [heading, capture] of [['stdout', stdout], ['stderr', stderr]]) {
+                    const input = fs.openSync(capture, 'r'), data = Buffer.alloc(65537);
+                    let count; try { count = fs.readSync(input, data, 0, data.length, 0); } finally { fs.closeSync(input); }
+                    chunks.push(Buffer.from('\n' + heading + ':\n'), data.subarray(0, Math.min(count, 65536)));
+                    if (count > 65536) chunks.push(Buffer.from('\n[diagnostic stream truncated after 65536 bytes]\n'));
+                }
+                let record = Buffer.concat(chunks), remaining = Math.max(0, 2097152 - info.size);
+                if (!remaining) throw Error('diagnostic session limit reached');
+                const marker = Buffer.from('\n[session diagnostics truncated after 2097152 bytes]\n');
+                if (record.length > remaining) record = Buffer.concat([record.subarray(0, Math.max(0, remaining-marker.length)), marker.subarray(0, remaining)]);
+                fs.writeFileSync(fd, record);
+            }
+        } finally { fs.closeSync(fd); }
+    }
+} catch (_) { process.exit(1); }
+JS_DIAGNOSTICS
+    fi
+}
+
+diagnostic_capture_stage() {
+    [ -n "$_PROGRESS_LOG" ] && [ -n "$_PROGRESS_STDERR" ] || return 0
+    if [ -z "$_DIAGNOSTIC_LOG" ] && [ "$_DIAGNOSTIC_FAILED" != true ]; then
+        _DIAGNOSTIC_ROOT=${BOOTSTRAP_DIAGNOSTIC_ROOT:-}
+        if [ -z "$_DIAGNOSTIC_ROOT" ]; then
+            if ! _DIAGNOSTIC_ROOT=$(bootstrap_control_root); then
+                _DIAGNOSTIC_FAILED=true
+                return 0
+            fi
+            _DIAGNOSTIC_ROOT="${_DIAGNOSTIC_ROOT}-installer-diagnostics"
+        fi
+        _DIAGNOSTIC_LOG=$(bootstrap_diagnostics create) || _DIAGNOSTIC_FAILED=true
+    fi
+    if [ -n "$_DIAGNOSTIC_LOG" ]; then
+        bootstrap_diagnostics append "$_DIAGNOSTIC_LOG" "$_DIAGNOSTIC_LABEL" "$1" "$_PROGRESS_LOG" "$_PROGRESS_STDERR" || _DIAGNOSTIC_FAILED=true
+    fi
+}
+
+report_diagnostics() {
+    if [ -n "$_DIAGNOSTIC_LOG" ] && [ -f "$_DIAGNOSTIC_LOG" ] && [ ! -L "$_DIAGNOSTIC_LOG" ]; then
+        printf 'Diagnostics: %q\n' "$_DIAGNOSTIC_LOG" >&2
+    fi
+    if [ "$_DIAGNOSTIC_FAILED" = true ]; then
+        printf 'Diagnostics could not be fully saved; command output was kept private.\n' >&2
+    fi
+}
+
+run_setup_stage() {
+    local label="$1" status=0
+    shift
+    _PROGRESS_LOG=$(mktemp "${TMPDIR:-/tmp}/bootstrap-output-XXXXXX") || return 1
+    _PROGRESS_STDERR=$(mktemp "${TMPDIR:-/tmp}/bootstrap-output-XXXXXX") || { rm -f "$_PROGRESS_LOG"; _PROGRESS_LOG=""; return 1; }
+    _DIAGNOSTIC_LABEL=$label
+    progress_journal_init
+    progress_snapshots
+    progress_stage_phase "$label"
+    progress_record transition global "$_PROGRESS_GLOBAL_PHASE" running
+    progress_start "$label"
+    if progress_rich_available && [ -n "$_PROGRESS_PID" ]; then
+        : # A started transient display owns rich stage labels.
+    elif [ "${BOOTSTRAP_VERBOSE:-0}" = 1 ] || [[ "$label" = Installing* ]] || progress_rich_available || [ "$_PROGRESS_JOURNAL_DISABLED" = true ]; then
+        printf '%s...\n' "$label"
+    fi
+    "$@" > "$_PROGRESS_LOG" 2> "$_PROGRESS_STDERR" || status=$?
+    if [ "$status" -eq 0 ]; then progress_record transition global "$_PROGRESS_GLOBAL_PHASE" done
+    else progress_record transition global "$_PROGRESS_GLOBAL_PHASE" failed; fi
+    progress_stop "$status"
+    diagnostic_capture_stage "$status"
+    if [ "$status" -eq 0 ] && [ -s "$_PROGRESS_STDERR" ]; then _DIAGNOSTIC_NOTED=true; fi
+    rm -f "$_PROGRESS_LOG" "$_PROGRESS_STDERR"
+    _PROGRESS_LOG=""; _PROGRESS_STDERR=""; _DIAGNOSTIC_LABEL=""
+    return "$status"
 }
 
 print_success() {
@@ -1299,13 +1677,16 @@ print_success() {
             codex|both)
                 printf '  Codex - installed; restart required.\n'
                 printf '    Agent notification tool: %s.\n' "$CODEX_AGENT_NOTIFY_STATUS"
-                printf '    Run /hooks in Codex, review the entries and trust them.\n' ;;
+                printf '  Run /hooks in Codex, review the entries and trust them.\n' ;;
         esac
-        printf '  Delivery has not been verified.\n'
-        printf '  Restart the installed agents, then trigger a notification to check delivery.\n'
-        printf '  If no alert arrives, check OS notification permission and your settings.\n'
+        print_delivery_note
+        if [ "${BOOTSTRAP_VERBOSE:-0}" = 1 ]; then
+            printf '  If no alert arrives, check OS notification permission and your settings.\n'
+        fi
         if [ "$PRODUCT" != codex ]; then
-            printf '  Claude settings: /claude-notifications-go:settings\n'
+            if [ "${BOOTSTRAP_VERBOSE:-0}" = 1 ]; then
+                printf '  Claude settings: /claude-notifications-go:settings\n'
+            fi
             print_iterm2_python_api_notice
         fi
     } > "$report"
@@ -1315,15 +1696,29 @@ print_success() {
     return "$status"
 }
 
+print_delivery_note() {
+    printf '  Delivery has not been verified. Complete a task after restart to test.\n'
+}
+
 # The public loader can collect summaries across separate pinned bootstrap runs.
 # This file contains display text, never executable shell or a readiness claim.
 publish_setup_summary() {
     if [ -n "${BOOTSTRAP_SUMMARY_FILE:-}" ]; then
-        cat "$1" >> "$BOOTSTRAP_SUMMARY_FILE"
+        # Separate product runs share one delivery footer in the public loader.
+        local combined status=0
+        combined=$(mktemp "${TMPDIR:-/tmp}/bootstrap-summary-XXXXXX") || return 1
+        touch "$BOOTSTRAP_SUMMARY_FILE" || { rm -f "$combined"; return 1; }
+        if awk -v note="$(print_delivery_note)" '$0 != note' "$BOOTSTRAP_SUMMARY_FILE" "$1" > "$combined" &&
+            print_delivery_note >> "$combined"; then
+            cat "$combined" > "$BOOTSTRAP_SUMMARY_FILE" || status=$?
+        else
+            status=$?
+        fi
+        rm -f "$combined"
+        return "$status"
     else
         printf '\nInstallation complete\n\n'
         cat "$1"
-        printf '\nDetailed installer output: rerun with BOOTSTRAP_VERBOSE=1.\n'
     fi
 }
 
@@ -1390,7 +1785,7 @@ complete_configure_route() {
         if { [ "${LEGACY_PRODUCT:-$PRODUCT}" = codex ] || [ "${LEGACY_PRODUCT:-$PRODUCT}" = both ]; } && [ "$(uname -s)" = Darwin ]; then
             if app=$(bootstrap_default_codex_app); then
                 CONFIGURE_ARGS+=(--app "$app" --team-id 2DC432GLL2)
-                echo "Verified Codex Desktop default: $app. Existing navigation policy is preserved." >&2
+                [ "${BOOTSTRAP_VERBOSE:-0}" != 1 ] || echo "Codex Desktop found and verified: $app. Your current click-navigation preferences will be kept." >&2
             else
                 CONFIGURE_ARGS+=(--navigation none)
                 echo "No registered, verified official Codex Desktop app found; defaulting to navigation none. Existing navigation policy is preserved." >&2
@@ -1434,12 +1829,24 @@ select_product() {
     while [ "$#" -gt 0 ]; do
         key=${1%%=*}
         case "$key" in
-            --ui|--plain|--product|--products|--help|-h) ;;
+            --ui|--plain|--activity|--activity-limit|--product|--products|--help|-h) ;;
             *)
                 case ",$seen_flags," in *",$key,"*) echo "Use $key once." >&2; return 1 ;; esac
                 seen_flags=${seen_flags:+$seen_flags,}$key ;;
         esac
         case "$1" in
+            --activity|--activity=*|--activity-limit|--activity-limit=*)
+                local activity_key=${1%%=*} activity_value
+                case "$1" in *=*) activity_value=${1#*=}; shift ;; *) [ "$#" -ge 2 ] || { echo "$1 requires a value." >&2; return 1; }; activity_value=$2; shift 2 ;; esac
+                if [ "$activity_key" = --activity ]; then
+                    case "$activity_value" in compact|expanded|off) ;; *) echo "Invalid activity mode." >&2; return 1 ;; esac
+                    [ "$_ACTIVITY_EXPLICIT" != true ] || [ "$_ACTIVITY_MODE" = "$activity_value" ] || { echo "Conflicting activity modes." >&2; return 1; }
+                    _ACTIVITY_MODE=$activity_value; _ACTIVITY_EXPLICIT=true
+                else
+                    case "$activity_value" in [1-9]|1[0-6]) ;; *) echo "Activity limit must be 1..16." >&2; return 1 ;; esac
+                    [ "$_ACTIVITY_LIMIT" -eq 0 ] || [ "$_ACTIVITY_LIMIT" -eq "$activity_value" ] || { echo "Conflicting activity limits." >&2; return 1; }
+                    _ACTIVITY_LIMIT=$activity_value
+                fi ;;
             --ui|--ui=*|--plain)
                 case "$1" in
                     --plain) value=plain; shift ;;
@@ -1463,7 +1870,7 @@ select_product() {
                     *) PRODUCT=${1#--products=}; shift ;;
                 esac
                 PRODUCT="bundle:$PRODUCT" ;;
-            --desktop|--webhook)
+            --desktop|--webhook|--desktop=true|--desktop=false|--webhook=true|--webhook=false)
                 local existing
                 for existing in ${OPENCODE_ARGS[@]+"${OPENCODE_ARGS[@]}"}; do
                     [ "$existing" != "$1" ] || { echo "Use each observer channel once." >&2; return 1; }
@@ -1541,7 +1948,7 @@ select_product() {
         PRODUCT=select
         _SELECTION_PENDING=true
         _INTERACTIVE_INTENT=true
-        case " ${CONFIGURE_ARGS[*]-} " in *" --json "*) echo "Pending questions require complete explicit product/route/channel input with --json." >&2; return 1 ;; esac
+        case " ${CONFIGURE_ARGS[*]-} " in *" --json "*) echo "Pending questions require complete explicit product/route input with --json." >&2; return 1 ;; esac
         # Pure syntax only; applicability is checked after product selection.
         local selected_scope_count=0
         [ -z "$scope_root" ] || selected_scope_count=4
@@ -1589,14 +1996,6 @@ select_product() {
         esac
         case "$remaining" in *,*) remaining=${remaining#*,} ;; *) break ;; esac
     done
-    if [ "$observers" -gt 0 ] && [ "${#OPENCODE_ARGS[@]}" -eq 0 ]; then
-        if [[ "$PRODUCT" = bundle:* ]] && [ "$_INTERACTIVE_INTENT" != true ]; then
-            echo "Selected observers require explicit --desktop and/or --webhook consent." >&2; return 1
-        fi
-        _CHANNEL_PENDING=true
-        _INTERACTIVE_INTENT=true
-        case " ${CONFIGURE_ARGS[*]-} " in *" --json "*) echo "Pending questions require complete explicit product/route/channel input with --json." >&2; return 1 ;; esac
-    fi
     if [ "$observers" -eq 0 ] && [ "${#OPENCODE_ARGS[@]}" -gt 0 ]; then
         echo "--desktop/--webhook require OpenCode or Gemini." >&2; return 1
     fi
@@ -1617,6 +2016,21 @@ select_product() {
 }
 
 bootstrap_cleanup() {
+    local interrupted_status=$?
+    progress_stop 1
+    if [ -n "$_DIAGNOSTIC_LABEL" ]; then
+        # The interrupted shared stage does not prove which client's activation
+        # began. Preserve authoritative client facts and report owner interruption.
+        progress_record transition global "$_PROGRESS_GLOBAL_PHASE" failed
+        diagnostic_capture_stage interrupted
+        printf 'Setup incomplete: installation was interrupted.\n' >&2
+        report_progress "${interrupted_status:-1}"
+        report_diagnostics
+    fi
+    [ -z "$_PROGRESS_JOURNAL" ] || rm -f "$_PROGRESS_JOURNAL"
+    _PROGRESS_JOURNAL=""
+    [ -z "$_PROGRESS_LOG" ] || rm -f "$_PROGRESS_LOG"
+    [ -z "$_PROGRESS_STDERR" ] || rm -f "$_PROGRESS_STDERR"
     close_prompt
     [ -z "$_BOOTSTRAP_TMP" ] || rm -f "$_BOOTSTRAP_TMP"
     [ -z "$_BOOTSTRAP_STAGE" ] || rm -rf "$_BOOTSTRAP_STAGE"
@@ -1630,7 +2044,10 @@ bootstrap_cleanup() {
 }
 
 install_cleanup_traps() {
-    trap bootstrap_cleanup EXIT
+    # An interrupt may run EXIT while a stage function's stderr is redirected.
+    # Retain the display destination so the private log receipt remains visible.
+    exec 4>&2
+    trap 'bootstrap_cleanup >&4 2>&4' EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM
     trap 'exit 129' HUP
@@ -1640,15 +2057,16 @@ install_runtime() {
     local product="$1" script="$2" target="$3"
     local disposable=false
     [ "$product" = "codex" ] && disposable=true
-    CN_PRODUCT="$product" INSTALL_STAGED_ASSETS="$_CONFIG_STAGE" \
+    INSTALL_DEFER_PROMOTION=1 CN_PRODUCT="$product" INSTALL_STAGED_ASSETS="$_CONFIG_STAGE" \
     INSTALL_DISPOSABLE_ACQUISITION="$disposable" \
     RELEASE_URL="${BOOTSTRAP_RELEASES_BASE_URL:-https://github.com/${REPO}/releases}/download/$BOOTSTRAP_TAG" \
     CHECKSUMS_URL="${BOOTSTRAP_RELEASES_BASE_URL:-https://github.com/${REPO}/releases}/download/$BOOTSTRAP_TAG/checksums.txt" \
     MODERN_NOTIFIER_URL="${BOOTSTRAP_RELEASES_BASE_URL:-https://github.com/${REPO}/releases}/download/$BOOTSTRAP_TAG/ClaudeNotifier.app.zip" \
-    INSTALL_TARGET_DIR="$target" bash "$script" "${@:4}" </dev/null
+    INSTALL_TARGET_DIR="$target" bash "$script" "${@:4}" </dev/null 4>&-
 }
 
 fetch_bootstrap_file() {
+    progress_download_activity "$2"
     if command -v curl >/dev/null 2>&1; then
         curl -fsSL --connect-timeout 15 --max-time 120 "$1" -o "$2"
     else
@@ -1931,6 +2349,10 @@ initialize_config() {
 
 report_config_init_failure() {
     _KEEP_CONFIG_STAGE=true
+    _SETUP_FAILURE_REASON=config_failed
+    if [ -n "$_CONFIG_HELPER" ] && [ -x "$_CONFIG_HELPER" ] && [ ! -L "$_CONFIG_HELPER" ]; then
+        _SETUP_RECOVERY=config_available
+    fi
     echo "Partial setup: registration succeeded, config initialization failed." >&2
     "$_CONFIG_HELPER" config path --json >&2 || true
     local -a retry=("$_CONFIG_HELPER" config init --json)
@@ -2083,6 +2505,8 @@ opencode_remove_command() { observer_remove_command "$1" setup-opencode; }
 # the managed installation. It never launches or installs the OpenCode host.
 install_opencode() {
     local root binary runtime os arch base native native_root config_path installed
+    local channels=(${OPENCODE_ARGS[@]+"${OPENCODE_ARGS[@]}"})
+    if [ -n "$_SELECTOR_INTENT" ]; then channels=("${_FROZEN_OPENCODE_CHANNELS[@]}"); fi
     root=$(bootstrap_control_root) || return 1
     read -r os arch < <(bootstrap_release_os_arch) || return 1
     [ "$os-$arch" != windows-arm64 ] || { echo "Windows arm64 is not a supported release target." >&2; return 1; }
@@ -2093,14 +2517,14 @@ install_opencode() {
         binary=$(cygpath -m "$binary") || return 1
         runtime=$(cygpath -m "$runtime") || return 1
     fi
-    set -- setup-opencode install --binary "$binary" "${OPENCODE_ARGS[@]}"
+    set -- setup-opencode install --binary "$binary" "${channels[@]}"
     if [ -n "$_SELECTOR_INTENT" ]; then
         set -- "$@" --control-root "$root" --home "$INSTALLER_HOME"
         set -- "$@" --opencode-config-dir "$_FROZEN_OPENCODE"
     fi
     # Existing shared components supply their authoritative runtime directory.
     [ -e "$root/ownership.json" ] || set -- "$@" --runtime-root "$runtime"
-    if [ "$os" = darwin ] && [[ " ${OPENCODE_ARGS[*]-} " = *" --desktop "* ]]; then
+    if [ "$os" = darwin ] && { [[ " ${channels[*]-} " = *" --desktop "* ]] || [[ " ${channels[*]-} " = *" --desktop=true "* ]]; }; then
         base="${BOOTSTRAP_RELEASES_BASE_URL:-https://github.com/${REPO}/releases}/download/$BOOTSTRAP_TAG"
         native="$_CONFIG_STAGE/ClaudeNotifier.app"
         if [ ! -d "$native" ]; then
@@ -2127,19 +2551,22 @@ run_setup_stage "Installing OpenCode notifications" "$_CONFIG_HELPER" "$@" </dev
     report=$(mktemp "${TMPDIR:-/tmp}/bootstrap-summary-XXXXXX") || return 1
     {
         echo "  OpenCode - installed; restart required to load the global plugin."
-        echo "  Delivery has not been verified."
-        echo "  Silent completion, question, permission and error alerts; no click-to-focus."
-        printf '  Shared settings: %s\n' "$config_path"
-        if [ "$os" = darwin ] && [[ " ${OPENCODE_ARGS[*]-} " = *" --desktop "* ]]; then
-            echo "  Check OS notification permission; grant it only if needed."
-            printf '    Check: %s\n' "$(quote_shell_command "$installed" setup-opencode permission-status)"
-            printf '    Grant if needed: %s\n' "$(quote_shell_command "$installed" setup-opencode request-permission)"
+        print_delivery_note
+        if [ "${BOOTSTRAP_VERBOSE:-0}" = 1 ]; then
+            echo "  Silent completion, question, permission and error alerts; no click-to-focus."
+            printf '  Shared settings: %s\n' "$config_path"
+            if [ "$os" = darwin ] && { [[ " ${channels[*]-} " = *" --desktop "* ]] || [[ " ${channels[*]-} " = *" --desktop=true "* ]]; }; then
+                echo "  Check OS notification permission; grant it only if needed."
+                printf '    Check: %s\n' "$(quote_shell_command "$installed" setup-opencode permission-status)"
+                printf '    Grant if needed: %s\n' "$(quote_shell_command "$installed" setup-opencode request-permission)"
+            fi
         fi
-        if [[ " ${OPENCODE_ARGS[*]-} " = *" --webhook "* ]]; then
+        if { [[ " ${channels[*]-} " = *" --webhook "* ]] || [[ " ${channels[*]-} " = *" --webhook=true "* ]]; }; then
             echo "  Webhook consent recorded; configure and enable its destination and status channel in shared settings."
         fi
-        echo "  Restart OpenCode, then complete a task to check notification delivery."
-        printf '  Remove: %s\n' "$(opencode_remove_command "$installed")"
+        if [ "${BOOTSTRAP_VERBOSE:-0}" = 1 ]; then
+            printf '  Remove: %s\n' "$(opencode_remove_command "$installed")"
+        fi
     } > "$report"
     publish_setup_summary "$report"
     local status=$?
@@ -2149,6 +2576,8 @@ run_setup_stage "Installing OpenCode notifications" "$_CONFIG_HELPER" "$@" </dev
 
 install_gemini() {
     local root binary runtime os arch base native native_root config_path installed
+    local channels=(${OPENCODE_ARGS[@]+"${OPENCODE_ARGS[@]}"})
+    if [ -n "$_SELECTOR_INTENT" ]; then channels=("${_FROZEN_GEMINI_CHANNELS[@]}"); fi
     root=$(bootstrap_control_root) || return 1
     read -r os arch < <(bootstrap_release_os_arch) || return 1
     [ "$os-$arch" != windows-arm64 ] || { echo "Windows arm64 is not a supported release target." >&2; return 1; }
@@ -2159,14 +2588,14 @@ install_gemini() {
         binary=$(cygpath -w "$binary") || return 1
         runtime=$(cygpath -m "$runtime") || return 1
     fi
-    set -- setup-gemini install --binary "$binary" "${OPENCODE_ARGS[@]}"
+    set -- setup-gemini install --binary "$binary" "${channels[@]}"
     if [ -n "$_SELECTOR_INTENT" ]; then
         set -- "$@" --control-root "$root" --home "$INSTALLER_HOME"
         set -- "$@" --config-root "$_FROZEN_GEMINI"
     fi
     # Existing shared components supply their authoritative runtime directory.
     [ -e "$root/ownership.json" ] || set -- "$@" --runtime-root "$runtime"
-    if [ "$os" = darwin ] && [[ " ${OPENCODE_ARGS[*]-} " = *" --desktop "* ]]; then
+    if [ "$os" = darwin ] && { [[ " ${channels[*]-} " = *" --desktop "* ]] || [[ " ${channels[*]-} " = *" --desktop=true "* ]]; }; then
         base="${BOOTSTRAP_RELEASES_BASE_URL:-https://github.com/${REPO}/releases}/download/$BOOTSTRAP_TAG"
         native="$_CONFIG_STAGE/ClaudeNotifier.app"
         if [ ! -d "$native" ]; then
@@ -2193,20 +2622,26 @@ run_setup_stage "Installing Gemini CLI notifications" "$_CONFIG_HELPER" "$@" </d
     report=$(mktemp "${TMPDIR:-/tmp}/bootstrap-gemini-summary-XXXXXX") || return 1
     {
         echo "  Gemini CLI - installed; restart required."
-        echo "  Delivery has not been verified."
-        printf '  Shared settings: %s\n' "$config_path"
-        echo "  Restart Gemini CLI and enable/trust the user hooks, then complete a task to check delivery."
-        echo "  Silent turn completion and tool permission alerts; existing hook/security settings were preserved."
-        echo "  Gemini's built-in desktop notifications may duplicate alerts; choose one desktop source or use --webhook only."
-        printf '  Inspect registration and consent: %s\n' "$(quote_shell_command "$installed" setup-gemini inspect --control-root "$native_root")"
-        if [ "$os" = darwin ] && [[ " ${OPENCODE_ARGS[*]-} " = *" --desktop "* ]]; then
-            printf '  Check permission: %s\n' "$(quote_shell_command "$installed" setup-gemini permission-status --control-root "$native_root")"
-            printf '  Grant if needed: %s\n' "$(quote_shell_command "$installed" setup-gemini request-permission --control-root "$native_root")"
+        print_delivery_note
+        echo "  Enable/trust the user hooks in Gemini CLI after restart."
+        if [ "${BOOTSTRAP_VERBOSE:-0}" = 1 ]; then
+            printf '  Shared settings: %s\n' "$config_path"
+            echo "  Silent turn completion and tool permission alerts; existing hook/security settings were preserved."
         fi
-        if [[ " ${OPENCODE_ARGS[*]-} " = *" --webhook "* ]]; then
+        echo "  Gemini: use one desktop notification source to avoid duplicate alerts."
+        if [ "${BOOTSTRAP_VERBOSE:-0}" = 1 ]; then
+            printf '  Inspect registration and consent: %s\n' "$(quote_shell_command "$installed" setup-gemini inspect --control-root "$native_root")"
+            if [ "$os" = darwin ] && { [[ " ${channels[*]-} " = *" --desktop "* ]] || [[ " ${channels[*]-} " = *" --desktop=true "* ]]; }; then
+                printf '  Check permission: %s\n' "$(quote_shell_command "$installed" setup-gemini permission-status --control-root "$native_root")"
+                printf '  Grant if needed: %s\n' "$(quote_shell_command "$installed" setup-gemini request-permission --control-root "$native_root")"
+            fi
+        fi
+        if { [[ " ${channels[*]-} " = *" --webhook "* ]] || [[ " ${channels[*]-} " = *" --webhook=true "* ]]; }; then
             echo "  Webhook consent recorded; configure and enable its destination and status channel in shared settings."
         fi
-        printf '  Remove: %s\n' "$(gemini_remove_command "$installed" "$native_root")"
+        if [ "${BOOTSTRAP_VERBOSE:-0}" = 1 ]; then
+            printf '  Remove: %s\n' "$(gemini_remove_command "$installed" "$native_root")"
+        fi
     } > "$report"
     publish_setup_summary "$report"
     status=$?
@@ -2223,20 +2658,118 @@ progress_phase() {
     local i=0
     while [ "$i" -lt "${#_PROGRESS_IDS[@]}" ]; do
         if [ "${_PROGRESS_IDS[$i]}" = "$1" ]; then
-            _PROGRESS_PHASES[$i]=$2; _PROGRESS_OUTCOMES[$i]=$3; return 0
+            _PROGRESS_PHASES[$i]=$2; _PROGRESS_OUTCOMES[$i]=$3
+            progress_event "$1" "$2" "$3"
+            return 0
         fi
         i=$((i + 1))
     done
 }
 
+# The final board already presents registration and restart status. Compact only
+# our generated display summary after that board successfully renders; this does
+# not change installation state or any recovery, trust or delivery instruction.
+compact_rich_setup_summary() {
+    local summary=${BOOTSTRAP_SUMMARY_FILE:-} combined
+    [ -n "$summary" ] && [ -f "$summary" ] && [ ! -L "$summary" ] || return 0
+    combined=$(mktemp "${summary}.rich-XXXXXX") || return 0
+    if awk -v selected=" ${_PROGRESS_IDS[*]} " '
+        function chosen(client) { return index(selected, " " client " ") != 0 }
+        BEGIN { tool_prefix = "    Agent notification tool: " }
+        {
+            client = ""
+            if ($0 == "  Claude - installed; restart required.") client = "claude"
+            if ($0 == "  Codex - installed; restart required.") client = "codex"
+            if ($0 == "  OpenCode - installed; restart required to load the global plugin.") client = "opencode"
+            if ($0 == "  Gemini CLI - installed; restart required.") client = "gemini"
+            if (client != "") {
+                current = client
+                if (chosen(client)) next
+            }
+            if ((current == "claude" || current == "codex") && chosen(current) &&
+                index($0, tool_prefix) == 1) {
+                if ($0 == tool_prefix "installed.") next
+                label = current == "claude" ? "Claude" : "Codex"
+                print "  " label " notification tool: " substr($0, length(tool_prefix) + 1)
+                next
+            }
+            print
+        }
+    ' "$summary" > "$combined"; then
+        mv -f -- "$combined" "$summary" || rm -f "$combined"
+    else
+        rm -f "$combined"
+    fi
+    return 0
+}
+
+progress_write_final_snapshot() {
+    local i=0
+    while [ "$i" -lt "${#_PROGRESS_IDS[@]}" ]; do
+        printf '%s\t%s\t%s\n' "${_PROGRESS_IDS[$i]}" "${_PROGRESS_PHASES[$i]}" "${_PROGRESS_OUTCOMES[$i]}" || return 1
+        i=$((i + 1))
+    done
+    printf 'stop\t\t\n'
+}
+
 report_progress() {
-    local i=0 outcome
+    _FINAL_BOARD_RENDERED=false
+    progress_stop "${1:-0}"
+    local rendered=false
+    if progress_helper_available && [ "$_PROGRESS_SESSION_SUPPORTED" = true ] && [ "$_PROGRESS_JOURNAL_DISABLED" != true ] && [ -n "$_PROGRESS_JOURNAL" ]; then
+        progress_snapshots
+        progress_record stop "" "" ""
+        local activity_args=(--activity "$_ACTIVITY_MODE")
+        [ "$_ACTIVITY_LIMIT" -eq 0 ] || activity_args+=(--activity-limit "$_ACTIVITY_LIMIT")
+        if [ "$_PROGRESS_JOURNAL_DISABLED" != true ]; then
+            "$_CONFIG_HELPER" installer-progress --session --events "$_PROGRESS_JOURNAL" --ui "${_UI_MODE:-auto}" "${activity_args[@]}" --owner-pid "$$" </dev/null >/dev/null &
+            _PROGRESS_PID=$!
+            if progress_reap "$_PROGRESS_PID"; then
+                rendered=true
+                if [ "${1:-0}" -eq 0 ] && progress_rich_available; then compact_rich_setup_summary; fi
+            else _PROGRESS_JOURNAL_DISABLED=true; fi
+            _PROGRESS_PID=""
+        fi
+    elif progress_rich_available && progress_helper_available && [ "$_PROGRESS_SESSION_SUPPORTED" != true ]; then
+        local events
+        events=$(mktemp "${TMPDIR:-/tmp}/bootstrap-progress-final-XXXXXX") || events=""
+        if [ -n "$events" ]; then
+            _PROGRESS_EVENTS=$events; _PROGRESS_KIND=final
+            # Spawn only after every row and the stop sentinel are safely written.
+            if progress_write_final_snapshot > "$events"; then
+                "$_CONFIG_HELPER" installer-progress --events "$events" --ui "${_UI_MODE:-auto}" --owner-pid "$$" </dev/null >/dev/null &
+                _PROGRESS_PID=$!
+                if progress_reap "$_PROGRESS_PID"; then
+                    rendered=true
+                    _FINAL_BOARD_RENDERED=true
+                    [ "${1:-0}" -ne 0 ] || compact_rich_setup_summary
+                fi
+                _PROGRESS_PID=""
+            fi
+            rm -f "$events"
+            _PROGRESS_EVENTS=""; _PROGRESS_KIND=""
+        fi
+    fi
+    [ "$rendered" != true ] || return 0
+    local i=0 outcome label
     while [ "$i" -lt "${#_PROGRESS_IDS[@]}" ]; do
         outcome=${_PROGRESS_OUTCOMES[$i]}
-        if [ "$outcome" = registration_committed ]; then
-            outcome="registration_committed; follow_up_failed:${_PROGRESS_PHASES[$i]}"
+        if [ "$outcome" = completed ] && [ "${1:-0}" -eq 0 ] && [ "${BOOTSTRAP_VERBOSE:-0}" != 1 ] && [ "$_PROGRESS_JOURNAL_DISABLED" != true ]; then
+            i=$((i + 1)); continue
         fi
-        printf '%s: %s (phase: %s)\n' "${_PROGRESS_IDS[$i]}" "$outcome" "${_PROGRESS_PHASES[$i]}" >&2
+        case "${_PROGRESS_IDS[$i]}" in claude) label='Claude Code' ;; codex) label='Codex CLI' ;; opencode) label=OpenCode ;; gemini) label='Gemini CLI' ;; cursor) label=Cursor ;; *) label=Client ;; esac
+        case "$outcome" in
+            not_started) outcome='queued; not started' ;;
+            completed) outcome='completed; restart required' ;;
+            activation_timeout) outcome='registration saved; activation timed out' ;;
+            activation_failed) outcome='registration saved; activation failed' ;;
+            activation_canceled) outcome='registration saved; activation canceled' ;;
+            activation_deadline) outcome='registration saved; setup deadline reached' ;;
+            activation_not_attempted|registration_committed_follow_up_not_started) outcome='registration saved; activation not started' ;;
+            registration_committed) outcome='registration saved; follow-up incomplete' ;;
+            *) outcome='state requires inspection' ;;
+        esac
+        printf '%-12s %s\n' "$label" "$outcome" >&2
         i=$((i + 1))
     done
 }
@@ -2252,7 +2785,7 @@ install_legacy_products() {
             run_setup_stage "Installing Codex notifications" install_codex || status=$?
             if [ "$status" -eq 3 ]; then
                 progress_phase codex config registration_committed
-                report_config_init_failure || true
+                run_setup_stage "Recording configuration recovery" report_config_init_failure || true
                 return 1
             fi
             [ "$status" -eq 0 ] || return "$status"
@@ -2279,29 +2812,32 @@ install_legacy_products() {
 }
 
 report_partial_recovery() {
-    local i=0 id outcome root
-    root=$(bootstrap_control_root) || return 0
-    while [ "$i" -lt "${#_PROGRESS_IDS[@]}" ]; do
-        id=${_PROGRESS_IDS[$i]}; outcome=${_PROGRESS_OUTCOMES[$i]}
-        case "$outcome" in
-            not_started|completed) i=$((i + 1)); continue ;;
-        esac
-        case "$id" in
-            gemini)
-                local -a inspect=("$_CONFIG_HELPER" setup-gemini inspect --control-root "$root" --home "$INSTALLER_HOME")
-                if [ -n "$_FROZEN_GEMINI" ]; then inspect+=(--config-root "$_FROZEN_GEMINI")
-                elif [ -n "${GEMINI_CLI_HOME:-}" ]; then inspect+=(--gemini-home "$GEMINI_CLI_HOME"); fi
-                printf 'Inspect Gemini state: %s\n' "$(quote_shell_command "${inspect[@]}")" >&2 ;;
-            *)
-                printf 'Inspect %s owned registration at %q/ownership.json before recovery of %s.\n' "$id" "$root" "${_PROGRESS_PHASES[$i]}" >&2 ;;
-        esac
-        if [ "$outcome" = registration_committed ] && [ "${_PROGRESS_PHASES[$i]}" = config ]; then
-            local -a retry=("$_CONFIG_HELPER" config init --json)
-            [ -z "${AGENT_NOTIFICATIONS_CONFIG:-}" ] || retry=(env "AGENT_NOTIFICATIONS_CONFIG=$AGENT_NOTIFICATIONS_CONFIG" "${retry[@]}")
-            printf 'Config-only retry: %s\n' "$(quote_shell_command "${retry[@]}")" >&2
+    if [ -n "$_DIAGNOSTIC_LOG" ] && [ "$_DIAGNOSTIC_FAILED" != true ] && { [ "$_SETUP_RECOVERY" = activation_available ] || [ "$_SETUP_RECOVERY" = config_available ]; }; then
+        if [ "$_SETUP_RECOVERY" = config_available ]; then
+            printf 'Next: run the config-only retry command in Diagnostics.\n' >&2
+        else
+            printf 'Next: resume saved activation with the command in Diagnostics.\n' >&2
         fi
-        i=$((i + 1))
-    done
+    else
+        printf 'Next: inspect owned registration before retrying; keep completed clients.\n' >&2
+    fi
+}
+
+report_setup_failure() {
+    local reason
+    case "$_SETUP_FAILURE_REASON" in
+        probe_timeout) reason='plugin verification timed out.' ;;
+        canceled) reason='activation was canceled.' ;;
+        deadline) reason='the setup deadline was reached.' ;;
+        activation_failed) reason='client activation failed.' ;;
+        config_failed) reason='notification settings could not be saved.' ;;
+        *) reason='an installer stage failed.' ;;
+    esac
+    printf 'Setup incomplete: %s\n' "$reason" >&2
+    report_progress "${1:-1}"
+    printf 'Delivery     not verified; notification permission not checked\n' >&2
+    report_partial_recovery
+    report_diagnostics
 }
 
 close_prompt() {
@@ -2360,6 +2896,29 @@ load_frozen_dispatch() {
         case ",$seen," in *",$key,"*) return 1 ;; esac
         seen=${seen:+$seen,}$key
         [ "${#value}" -le 4096 ] || return 1
+        case "$key" in
+            opencode-channel-preimage|gemini-channel-preimage)
+                if [ "$value" != absent ]; then
+                    [ "${#value}" -eq 64 ] || return 1
+                    case "$value" in *[!0-9a-f]*) return 1 ;; esac
+                fi
+                case ",$_PRODUCT_CSV," in *",${key%%-*},"*) ;; *) return 1 ;; esac
+                case "$key" in
+                    opencode-*) _FROZEN_OPENCODE_CHANNELS+=("--channel-preimage=$value") ;;
+                    gemini-*) _FROZEN_GEMINI_CHANNELS+=("--channel-preimage=$value") ;;
+                esac
+                continue ;;
+        esac
+        case "$key" in
+            opencode-desktop|opencode-webhook|gemini-desktop|gemini-webhook)
+                case "$value" in true|false) ;; *) return 1 ;; esac
+                case ",$_PRODUCT_CSV," in *",${key%-*},"*) ;; *) return 1 ;; esac
+                case "$key" in
+                    opencode-*) _FROZEN_OPENCODE_CHANNELS+=("--${key#opencode-}=$value") ;;
+                    gemini-*) _FROZEN_GEMINI_CHANNELS+=("--${key#gemini-}=$value") ;;
+                esac
+                continue ;;
+        esac
         case "$value" in /*|[A-Za-z]:/*|[A-Za-z]:\\*) ;; *) return 1 ;; esac
         case "$key" in
             home) INSTALLER_HOME=$value ;;
@@ -2389,8 +2948,8 @@ load_frozen_dispatch() {
         case "$selected" in
             claude) required="$required claude-config claude-mcp-config claude-executable" ;;
             codex) required="$required codex-home codex-mcp-config codex-executable" ;;
-            opencode) required="$required opencode-config-dir opencode-executable" ;;
-            gemini) required="$required gemini-config-root gemini-executable" ;;
+            opencode) required="$required opencode-config-dir opencode-executable opencode-desktop opencode-webhook opencode-channel-preimage" ;;
+            gemini) required="$required gemini-config-root gemini-executable gemini-desktop gemini-webhook gemini-channel-preimage" ;;
             cursor) required="$required scope-root client-executable runtime-root" ;;
         esac
     done
@@ -2452,6 +3011,7 @@ main() {
     if [ "$#" -eq 1 ]; then
         case "$1" in
             --capabilities) printf '%s\n' bootstrap-products-v1; return 0 ;;
+            --presentation-capabilities) printf '%s\n' bootstrap-presentation-v1; return 0 ;;
             --selector-capabilities) printf '%s\n' terminal-selector-v1; return 0 ;;
         esac
     fi
@@ -2466,7 +3026,7 @@ main() {
     install_cleanup_traps
     if [ "$_INTERACTIVE_INTENT" = true ]; then
         if ! { exec 3<>/dev/tty; } 2>/dev/null; then
-            echo "No controlling TTY. Specify complete explicit product/route/channel input." >&2; return 1
+            echo "No controlling TTY. Specify complete explicit product/route input." >&2; return 1
         fi
         _PROMPT_OPEN=true
     fi
@@ -2474,7 +3034,7 @@ main() {
     detect_platform 3>&-
     require_installer_runtime 3>&- || return 1
     resolve_bootstrap_release 3>&- || return 1
-    run_setup_stage "Preparing verified installer" stage_config_helper 3>&- >&2 || { echo "Cannot stage verified config helper; existing runtime retained." >&2; return 1; }
+    run_setup_stage "Preparing verified installer" stage_config_helper 3>&- >&2 || { report_setup_failure 1; return 1; }
     export BOOTSTRAP_RELEASE_TAG="$BOOTSTRAP_TAG" BOOTSTRAP_RELEASE_COMMIT="$BOOTSTRAP_COMMIT"
     export BOOTSTRAP_SOURCE_COMMIT="$BOOTSTRAP_BUNDLE_COMMIT" BOOTSTRAP_SOURCE_REF="${BOOTSTRAP_SOURCE_REF:-}"
     export BOOTSTRAP_RELEASE_CHANNEL="${BOOTSTRAP_RELEASE_CHANNEL:-}"
@@ -2511,11 +3071,24 @@ main() {
     selector_effect_args
     if [ "$_INTERACTIVE_INTENT" = true ]; then
         _SELECTOR_INTENT="$_CONFIG_STAGE/selector-intent.json"
+        if [ "$_PRODUCT_CSV" = cursor ] && [ "$AGENT_NOTIFY_REQUEST" != skip ]; then
+            echo "If the shared runtime needs installation, this approval prepares it first."
+            echo "Cursor integration then requires a new confirmation; canceling retains the prepared runtime."
+        fi
         selector_scope_args
         selector_collect confirm "${_EFFECT_ARGS[@]}" ${_SCOPE_ARGS[@]+"${_SCOPE_ARGS[@]}"} --intent-file "$_SELECTOR_INTENT" ${UI_ARGS[@]+"${UI_ARGS[@]}"} || return $?
         [ -s "$_SELECTOR_RESULT" ] || { close_prompt; return 0; }
         selector_exact approved confirm || return 1
         [ -f "$_SELECTOR_INTENT" ] && [ ! -L "$_SELECTOR_INTENT" ] || { echo "Missing confirmed intent." >&2; return 1; }
+    fi
+    if [ "$_INTERACTIVE_INTENT" != true ]; then
+        case ",$_PRODUCT_CSV," in
+            *,opencode,*|*,gemini,*)
+                _SELECTOR_INTENT="$_CONFIG_STAGE/selector-intent.json"
+                selector_scope_args
+                selector_collect prepare "${_EFFECT_ARGS[@]}" ${_SCOPE_ARGS[@]+"${_SCOPE_ARGS[@]}"} --intent-file "$_SELECTOR_INTENT" || return $?
+                selector_exact prepared prepare || return 1 ;;
+        esac
     fi
     close_prompt
     if [ -n "$_SELECTOR_INTENT" ]; then load_frozen_dispatch || return $?; fi
@@ -2525,17 +3098,21 @@ main() {
         _PROGRESS_IDS+=("$selected"); _PROGRESS_PHASES+=(pending); _PROGRESS_OUTCOMES+=(not_started)
     done
     PRODUCT=$original_product
-    [ -n "${BOOTSTRAP_SUMMARY_FILE:-}" ] || print_header
+    if [ -z "${BOOTSTRAP_SUMMARY_FILE:-}" ]; then
+        if ! progress_rich_available || ! progress_helper_available; then print_header; fi
+    fi
+    # Keep a sourced invocation from leaking its owned summary into a retry.
+    local BOOTSTRAP_SUMMARY_FILE=${BOOTSTRAP_SUMMARY_FILE:-}
     local own_summary=false
-    if [ "${#SELECTED_PRODUCTS[@]}" -gt 1 ] && [ -z "${BOOTSTRAP_SUMMARY_FILE:-}" ]; then
+    if [ -z "${BOOTSTRAP_SUMMARY_FILE:-}" ]; then
         BOOTSTRAP_SUMMARY_FILE="$_CONFIG_STAGE/summary.txt"
         export BOOTSTRAP_SUMMARY_FILE
         own_summary=true
     fi
     if [ -n "$LEGACY_PRODUCT" ]; then
         PRODUCT=$LEGACY_PRODUCT
-        run_setup_stage "Checking existing installation" stage_historical_baselines || return 1
-        run_setup_stage "Checking shared settings" config_preflight || return 1
+        run_setup_stage "Checking existing installation" stage_historical_baselines || { report_setup_failure 1; return 1; }
+        run_setup_stage "Checking shared settings" config_preflight || { report_setup_failure 1; return 1; }
     fi
     if [ -n "$_SELECTOR_INTENT" ]; then
         selector_collect preflight --intent-file "$_SELECTOR_INTENT" "${_EFFECT_ARGS[@]}" || return $?
@@ -2548,9 +3125,15 @@ main() {
     fi
     if [ "$status" -eq 0 ]; then
         if [ "$_PRODUCT_CSV" = cursor ] && [ "$AGENT_NOTIFY_REQUEST" != skip ]; then
+            run_setup_stage "Preparing Cursor notification runtime" prepare_cursor_runtime || { report_setup_failure 1; return 1; }
+            if [ "$_CURSOR_RUNTIME_PREPARED" = true ]; then
+                echo "Shared notification runtime installed. Review the new plan before installing Cursor integration."
+                reconfirm_cursor_integration || { echo "Prepared runtime retained; Cursor integration is incomplete." >&2; return 1; }
+                [ "$_CURSOR_CONFIRM_CANCELLED" != true ] || { echo "Cursor integration canceled; prepared runtime retained."; return 0; }
+            fi
             PRODUCT=cursor; CONFIGURE_BINARY=$_CONFIG_HELPER; PLUGIN_ROOT=""
             progress_phase cursor portable state_requires_inspection
-            setup_agent_notify_wizard || status=$?
+            run_setup_stage "Configuring agent notification tools" setup_agent_notify_wizard || status=$?
             [ "$status" -ne 0 ] || progress_phase cursor complete completed
         fi
         for selected in opencode gemini; do
@@ -2562,21 +3145,91 @@ main() {
             progress_phase "$selected" complete completed
         done
     fi
-    report_progress
     if [ "$status" -ne 0 ]; then
-        report_partial_recovery
+        report_setup_failure "$status"
         _KEEP_CONFIG_STAGE=true
-        printf 'Partial setup or uncertain state. Inspect the failed product/phase before recovery; completed siblings must not be reinstalled.\nVerified helper retained: %q\n' "$_CONFIG_HELPER" >&2
+    else
+        report_progress 0
+        if [ "$_DIAGNOSTIC_NOTED" = true ]; then
+            if [ -n "$_DIAGNOSTIC_LOG" ] && [ "$_DIAGNOSTIC_FAILED" != true ] && [ -f "$_DIAGNOSTIC_LOG" ] && [ ! -L "$_DIAGNOSTIC_LOG" ]; then
+                [ "${BOOTSTRAP_VERBOSE:-0}" != 1 ] || printf 'Maintenance: additional installer details saved in Diagnostics.\n' >&2
+            else
+                printf 'Maintenance: installer reported additional details.\n' >&2
+            fi
+        fi
+        if [ "$own_summary" != true ] && { [ "$_DIAGNOSTIC_NOTED" = true ] || [ "$_DIAGNOSTIC_FAILED" = true ]; }; then
+            report_diagnostics
+        fi
+    fi
+    if [ "${BOOTSTRAP_VERBOSE:-0}" = 1 ] && [ -n "$_DIAGNOSTIC_LOG" ]; then
+        bootstrap_diagnostics view "$_DIAGNOSTIC_LOG" >&2 || true
     fi
     if [ "$own_summary" = true ]; then
         if [ "$status" -eq 0 ]; then
-            printf '\nInstallation complete\n\n'
-            cat "$BOOTSTRAP_SUMMARY_FILE"
-            printf '\nDetailed installer output: rerun with BOOTSTRAP_VERBOSE=1.\n'
+            if [ "$_FINAL_BOARD_RENDERED" != true ]; then printf '\nInstallation complete\n\n'; else printf '\n'; fi
+            [ ! -s "$BOOTSTRAP_SUMMARY_FILE" ] || cat "$BOOTSTRAP_SUMMARY_FILE"
+            if [ "$_DIAGNOSTIC_NOTED" = true ] || [ "$_DIAGNOSTIC_FAILED" = true ]; then report_diagnostics; fi
         fi
         unset BOOTSTRAP_SUMMARY_FILE
     fi
+    if [ "$status" -eq 0 ]; then bootstrap_promotion; fi
     return "$status"
+}
+
+promotion_text() {
+    local staged=""
+    if progress_helper_available && [ "$_PROGRESS_SESSION_SUPPORTED" = true ]; then
+        staged=$(mktemp "${TMPDIR:-/tmp}/bootstrap-promotion-XXXXXX") || staged=""
+        if [ -n "$staged" ]; then
+            if "$_CONFIG_HELPER" installer-progress --promotion </dev/null > "$staged" 2>/dev/null; then
+                cat "$staged"
+                rm -f "$staged"
+                return 0
+            fi
+            rm -f "$staged"
+        fi
+    fi
+    printf '\n----------------------------------------\nBoost your productivity\n  Check out Agent Teams AI, a desktop app for AI agent teams\n  with Claude, Codex and more, from the creator of this plugin:\n  https://github.com/777genius/agent-teams-ai\n----------------------------------------\n'
+}
+
+# The loader owns a private staging directory and mode-600 handoff leaf.
+bootstrap_promotion_file_safe() {
+    [ -f "$1" ] && [ ! -L "$1" ] && [ ! -s "$1" ] && [ -O "$1" ] || return 1
+    local engine
+    engine=$(installer_runtime) || return 1
+    if [ "$engine" = python3 ]; then
+        python3 -I - "$1" <<'PY_PROMOTION_PRIVATE'
+import os, stat, sys
+try:
+    path=sys.argv[1]
+    leaf=os.lstat(path); parent=os.lstat(os.path.dirname(path))
+    assert stat.S_ISREG(leaf.st_mode) and stat.S_ISDIR(parent.st_mode)
+    assert leaf.st_size==0 and leaf.st_nlink==1
+    if os.name!='nt':
+        assert leaf.st_uid==parent.st_uid==os.getuid()
+        assert stat.S_IMODE(leaf.st_mode)==0o600 and stat.S_IMODE(parent.st_mode)==0o700
+except Exception: sys.exit(1)
+PY_PROMOTION_PRIVATE
+    else
+        run_isolated_node - "$1" <<'JS_PROMOTION_PRIVATE'
+const fs=require('fs'),path=require('path');
+try {
+ const leaf=fs.lstatSync(process.argv[2]),parent=fs.lstatSync(path.dirname(process.argv[2]));
+ if(!leaf.isFile() || !parent.isDirectory() || leaf.size!==0 || leaf.nlink!==1) process.exit(1);
+ if(process.platform!=='win32' && (leaf.uid!==process.getuid() || parent.uid!==process.getuid() || (leaf.mode&0o777)!==0o600 || (parent.mode&0o777)!==0o700)) process.exit(1);
+} catch {process.exit(1);}
+JS_PROMOTION_PRIVATE
+    fi
+}
+
+bootstrap_promotion() {
+    if [ -n "${BOOTSTRAP_PROMOTION_FILE:-}" ]; then
+        if bootstrap_promotion_file_safe "$BOOTSTRAP_PROMOTION_FILE"; then
+            promotion_text > "$BOOTSTRAP_PROMOTION_FILE" || true
+        fi
+        return 0
+    fi
+    promotion_text || true
 }
 
 # Quote argv so a user can paste the retry command into bash. Custom roots with
@@ -2664,6 +3317,65 @@ report_wizard_portable_missing() {
         return 1
     fi
     return 0
+}
+
+# The original checkpoint validates ownership and policy before this phase.
+# Runtime acquisition advances the generation; integration needs a fresh public
+# confirmation in a distinct immutable intent, using the same verified helper.
+prepare_cursor_runtime() {
+    _CURSOR_RUNTIME_PREPARED=false
+    local runtime os arch primary native base target="$_FROZEN_RUNTIME/bin"
+    [ -n "$_SELECTOR_INTENT" ] && [ -n "$_FROZEN_CONTROL" ] && [ -n "$_FROZEN_RUNTIME" ] || return 1
+    read -r os arch < <(bootstrap_release_os_arch) || return 1
+    primary="claude-notifications-$os-$arch"
+    [ "$os" != windows ] || primary="$primary.exe"
+    if runtime=$("$_CONFIG_HELPER" config installer runtime-root "$_FROZEN_CONTROL"); then
+        [ "$runtime" = "$_FROZEN_RUNTIME" ] || return 1
+        if cmp -s "$_CONFIG_HELPER" "$target/$primary"; then return 0; fi
+    else
+        if [ -e "$_FROZEN_CONTROL/ownership.json" ] || [ -L "$_FROZEN_CONTROL/ownership.json" ] ||
+           [ -e "$_FROZEN_RUNTIME" ] || [ -L "$_FROZEN_RUNTIME" ]; then
+            echo "Existing runtime requires inspection; retained files were not replaced." >&2
+            return 1
+        fi
+    fi
+    base="${BOOTSTRAP_RELEASES_BASE_URL:-https://github.com/${REPO}/releases}/download/$BOOTSTRAP_TAG"
+    case "$os" in
+        darwin)
+            fetch_bootstrap_file "$base/ClaudeNotifier.app.zip" "$_CONFIG_STAGE/ClaudeNotifier.app.zip" || return 1
+            verify_bootstrap_checksum "$_CONFIG_STAGE" ClaudeNotifier.app.zip || return 1
+            unzip -q "$_CONFIG_STAGE/ClaudeNotifier.app.zip" -d "$_CONFIG_STAGE" || return 1 ;;
+        windows)
+            native="claude-notifications-windows-$arch-focus.exe"
+            fetch_bootstrap_file "$base/$native" "$_CONFIG_STAGE/$native" || return 1
+            verify_bootstrap_checksum "$_CONFIG_STAGE" "$native" || return 1 ;;
+    esac
+    # Use the existing verified Go writer with the exact frozen control root.
+    # It owns private directory creation, native custody and saved-policy CAS.
+    "$_CONFIG_HELPER" internal-install-runtime --stage "$_CONFIG_STAGE" --target "$target" \
+        --entry "$primary" --control-root "$_FROZEN_CONTROL" || return 1
+    runtime=$("$_CONFIG_HELPER" config installer runtime-root "$_FROZEN_CONTROL") || return 1
+    [ "$runtime" = "$_FROZEN_RUNTIME" ] && cmp -s "$_CONFIG_HELPER" "$target/$primary" || return 1
+    _CURSOR_RUNTIME_PREPARED=true
+}
+
+reconfirm_cursor_integration() {
+    local control=$_FROZEN_CONTROL runtime=$_FROZEN_RUNTIME scope=$_FROZEN_SCOPE_ROOT client=$_FROZEN_CLIENT_EXEC config=$AGENT_NOTIFICATIONS_CONFIG
+    _CURSOR_CONFIRM_CANCELLED=false
+    [ "$_INTERACTIVE_INTENT" = true ] || return 1
+    exec 3<>/dev/tty || return 1
+    _PROMPT_OPEN=true
+    _SELECTOR_INTENT="$_CONFIG_STAGE/selector-cursor-runtime-intent.json"
+    selector_scope_args
+    selector_collect confirm "${_EFFECT_ARGS[@]}" ${_SCOPE_ARGS[@]+"${_SCOPE_ARGS[@]}"} --intent-file "$_SELECTOR_INTENT" ${UI_ARGS[@]+"${UI_ARGS[@]}"} || { close_prompt; return 1; }
+    if [ ! -s "$_SELECTOR_RESULT" ]; then close_prompt; _CURSOR_CONFIRM_CANCELLED=true; return 0; fi
+    selector_exact approved confirm || { close_prompt; return 1; }
+    close_prompt
+    load_frozen_dispatch || return 1
+    [ "$_FROZEN_CONTROL" = "$control" ] && [ "$_FROZEN_RUNTIME" = "$runtime" ] &&
+        [ "$_FROZEN_SCOPE_ROOT" = "$scope" ] && [ "$_FROZEN_CLIENT_EXEC" = "$client" ] &&
+        [ "$AGENT_NOTIFICATIONS_CONFIG" = "$config" ] || return 1
+    "$_CONFIG_HELPER" setup-products preflight --intent-file "$_SELECTOR_INTENT" "${_EFFECT_ARGS[@]}" </dev/null
 }
 
 bootstrap_abs_command() {
@@ -2807,32 +3519,41 @@ setup_agent_notify_wizard() {
     else
         set -- "$@" --scope-root "$_FROZEN_SCOPE_ROOT" --client-executable "$_FROZEN_CLIENT_EXEC"
     fi
-    local wizard_result wizard_status=0
+    local wizard_result wizard_status=0 structured_result=false result_capability
+    result_capability=$("$CONFIGURE_BINARY" installer-progress --result-capabilities </dev/null 2>/dev/null) || result_capability=""
+    if [ "$result_capability" = installer-progress-result-v1 ]; then
+        structured_result=true
+        set -- "$@" --json
+    fi
     wizard_result=$(mktemp "${TMPDIR:-/tmp}/bootstrap-wizard-XXXXXX") || return 1
     "$CONFIGURE_BINARY" "$@" > "$wizard_result" || wizard_status=$?
+    # JSON remains diagnostic input. Only the verified helper's finite typed
+    # projection may update observer rows; arbitrary error bytes are never facts.
+    if [ "$structured_result" = true ]; then
+        apply_wizard_progress "$wizard_result" || true
+    fi
     if [ "$wizard_status" -ne 0 ]; then
+        if [ "$structured_result" = true ] && [ "$_SETUP_RECOVERY" = activation_available ]; then
+            local recovery_text
+            recovery_text=$("$CONFIGURE_BINARY" installer-progress --result "$wizard_result" --recovery) || recovery_text=""
+            if [ -n "$recovery_text" ] && [ "${#recovery_text}" -le 32768 ]; then
+                # Keep the validated command ahead of potentially large JSON so
+                # bounded diagnostic capture cannot discard the only next step.
+                printf '%s\n' "$recovery_text"
+            else
+                _SETUP_RECOVERY=unavailable
+            fi
+        fi
         cat "$wizard_result"
         rm -f "$wizard_result"
-        # The retry command refers to the verified same-release ZIP. Retain its
-        # staging directory so EXIT cleanup cannot invalidate that command.
-        if [ -n "$_PORTABLE_STAGE" ] && [[ "$package_root" = "$_PORTABLE_STAGE/"* ]]; then
+        # Legacy helpers may still refer to the original ZIP. Current helpers
+        # validate recovery from their acquired package before advertising it.
+        if [ "$structured_result" != true ] && [ -n "$_PORTABLE_STAGE" ] && [[ "$package_root" = "$_PORTABLE_STAGE/"* ]]; then
             _KEEP_PORTABLE_STAGE=true
         fi
-        if [ "$PRODUCT" = cursor ]; then
-            echo "Cursor setup is incomplete; the selected caller refused or failed." >&2
-        else
-            echo -e "${YELLOW}⚠ Agent-notify setup failed; plugin/hooks install succeeded.${NC}" >&2
-        fi
-        echo -e "${YELLOW}  Inspect the selected clients and owned registration before resuming the failed MCP phase; notification delivery is unverified.${NC}" >&2
-        [ "$_KEEP_PORTABLE_STAGE" != true ] || printf '  Verified package retained: %s\n' "$package_root" >&2
-        echo "  Use the wizard's retry or next resume command above; it retains the selected clients and owned identity." >&2
-        case "$(uname -s 2>/dev/null)" in MINGW*|MSYS*|CYGWIN*) echo "  On Windows, run that command in PowerShell (the printed quoting is PowerShell syntax)." >&2 ;; esac
-        echo "  If no safe resume command is shown, inspect the owned state and obtain fresh consent for the failed phase; preserve completed siblings." >&2
-        return 1
+        return "$wizard_status"
     fi
-    if [ "${BOOTSTRAP_VERBOSE:-0}" = 1 ]; then
-        cat "$wizard_result"
-    fi
+    cat "$wizard_result"
     # Keep failure output human and runnable; only the post-commit read uses JSON.
     set -- setup-notifications wizard --action inspect --agents "$agents" --json
     if [ "$PRODUCT" = cursor ]; then
@@ -2856,6 +3577,45 @@ setup_agent_notify_wizard() {
     CODEX_AGENT_NOTIFY_STATUS=$(wizard_tool_status "$wizard_result" codex "$AGENT_NOTIFY_REQUEST")
     rm -f "$wizard_result"
     return 0
+}
+
+apply_wizard_progress() {
+    local projection status=0 size kind phase outcome extra i j seen=' '
+    local reason=setup_failed recovery=unavailable
+    local -a ids=() phases=() outcomes=()
+    projection=$(mktemp "${TMPDIR:-/tmp}/bootstrap-result-XXXXXX") || return 1
+    "$CONFIGURE_BINARY" installer-progress --result "$1" > "$projection" || status=$?
+    size=$(LC_ALL=C wc -c < "$projection") || status=1
+    if [ "$status" -ne 0 ] || [ "$size" -gt 4096 ]; then rm -f "$projection"; return 1; fi
+    while IFS=$'\t' read -r kind phase outcome extra; do
+        if [ -n "$extra" ] || [ -z "$kind" ] || [ -z "$outcome" ]; then status=1; break; fi
+        case "$kind" in
+            reason)
+                [ "$phase" = category ] || { status=1; break; }
+                case "$outcome" in probe_timeout|canceled|deadline|activation_failed|setup_failed) reason=$outcome ;; *) status=1; break ;; esac ;;
+            next)
+                [ "$phase" = category ] || { status=1; break; }
+                case "$outcome" in activation_available|unavailable) recovery=$outcome ;; *) status=1; break ;; esac ;;
+            claude|codex|opencode|gemini|cursor)
+                [ "$phase" = MCP ] || { status=1; break; }
+                case "$outcome" in activation_failed|activation_not_attempted|activation_timeout|activation_canceled|activation_deadline|completed|registration_committed|state_requires_inspection) ;; *) status=1; break ;; esac
+                case "$seen" in *" $kind "*) status=1; break ;; esac
+                seen="$seen$kind "
+                j=0
+                while [ "$j" -lt "${#_PROGRESS_IDS[@]}" ] && [ "${_PROGRESS_IDS[$j]}" != "$kind" ]; do j=$((j + 1)); done
+                [ "$j" -lt "${#_PROGRESS_IDS[@]}" ] || { status=1; break; }
+                ids+=("$kind"); phases+=("$phase"); outcomes+=("$outcome") ;;
+            *) status=1; break ;;
+        esac
+    done < "$projection"
+    rm -f "$projection"
+    [ "$status" -eq 0 ] && [ "${#ids[@]}" -ne 0 ] || return 1
+    i=0
+    while [ "$i" -lt "${#ids[@]}" ]; do
+        progress_phase "${ids[$i]}" "${phases[$i]}" "${outcomes[$i]}"
+        i=$((i + 1))
+    done
+    _SETUP_FAILURE_REASON=$reason; _SETUP_RECOVERY=$recovery
 }
 
 # --json is the stable operator contract. A successful preserved opt-out is

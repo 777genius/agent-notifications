@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"runtime"
 	"unicode"
 	"unicode/utf8"
 
@@ -69,6 +70,11 @@ func Decode(ctx context.Context, selector string, payload []byte) (facts Facts, 
 	}()
 	if selector != Selector || ctx.Err() != nil || len(payload) == 0 || len(payload) > MaxPayloadBytes || !utf8.Valid(payload) {
 		return facts, err
+	}
+	// Qualified native Windows PowerShell prepends one UTF-8 BOM.
+	// Count the original bytes against the limit; every other frame stays strict.
+	if runtime.GOOS == "windows" {
+		payload = bytes.TrimPrefix(payload, []byte{0xef, 0xbb, 0xbf})
 	}
 	input := &bufferedIO{payload: payload}
 	app := pluginkitai.New(pluginkitai.Config{Name: "agent-notifications", Args: []string{"agent-notifications", Selector}, IO: input, Env: emptyEnv{}})

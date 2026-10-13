@@ -11,8 +11,16 @@ import (
 	"github.com/777genius/agent-notifications/internal/windowscallback"
 )
 
-const WindowsGenerationWriterFloor = 5
-const WindowsWriterProtocolMarker = "agent-notifications-managed-writer-protocol-v5"
+// Windows generations have a compatibility floor independent of the
+// orphan-only transaction schema5. Transaction, ledger, journal decoder and
+// managed writer declarations all refuse older readers.
+const (
+	WindowsGenerationTransactionSchema = 6
+	WindowsGenerationLedgerSchema      = 6
+	WindowsGenerationDecoderFloor      = 6
+	WindowsGenerationWriterFloor       = 6
+	WindowsWriterProtocolMarker        = "agent-notifications-managed-writer-protocol-v6"
+)
 
 // WindowsChange is the concrete participant carried by the existing owner
 // transaction journal. Fresh unique registry/shortcut objects have absent
@@ -165,7 +173,7 @@ func validateWindowsRetained(l Ledger) error {
 	if len(l.WindowsRetained) > windowscallback.MaxGenerations {
 		return windowscallback.ErrCapacity
 	}
-	if len(l.WindowsRetained) > 0 && (l.Schema != 5 || l.WriterFloor < WindowsGenerationWriterFloor) {
+	if len(l.WindowsRetained) > 0 && (l.Schema != WindowsGenerationLedgerSchema || l.WriterFloor < WindowsGenerationWriterFloor || l.DecoderFloor < WindowsGenerationDecoderFloor) {
 		return windowscallback.ErrUnavailable
 	}
 	seen := map[string]bool{}

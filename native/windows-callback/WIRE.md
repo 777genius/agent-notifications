@@ -75,8 +75,10 @@ Checkpoint B draft operator/capacity extension (not installed qualification):
   2,048/64 MiB attempts, with 64 KiB/32 KiB charges before respective effects.
 * The existing owner transaction journals preparing, participants_applied,
   commit_decided, binding_published, committed or pre-decision rollback_decided.
-  Windows participants require schema/floor 5 because floor 4 readers ignore
-  unknown fields. Ordinary schema 4 writes stay schema 4. A decided commit only
+  Windows participants require transaction/ledger/decoder/writer floor 6
+  because floor 4/5 readers reject before blob attachment or any effect. The
+  Windows6 carrier is distinct from orphan schema5, which remains a strict
+  absence-only metadata codec. Ordinary schema 4 writes stay schema 4. A decided commit only
   verifies installed participants and finishes policy/binding publication;
   changed values or objects are never silently repaired. Private generations
   from interrupted/rolled-back setup remain charged toward the maximum of four.

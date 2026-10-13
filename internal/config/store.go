@@ -150,6 +150,22 @@ func beginMutation(ctx context.Context, env EnvSnapshot) (*mutation, error) {
 		home = env.Vars["USERPROFILE"]
 	}
 	acquireGuard := func(initial Selection) error {
+		if initial.Source == "windows-private" {
+			// The fallback is outside the profile's unsafe ancestry. Its private
+			// selection guard and target lock share the same protected directory.
+			parent, e := openStoreParent(filepath.Dir(initial.Path), true)
+			if e != nil {
+				return pathError(initial.Path, e)
+			}
+			release, e := parent.lock(ctx, ".agent-notifications-config.lock", false, true)
+			if e != nil {
+				parent.close()
+				return pathError(initial.Path, e)
+			}
+			guard = func() { release(); parent.close() }
+			guardHeld = true
+			return nil
+		}
 		if !validAbsolute(env.GOOS, home) {
 			return nil
 		}

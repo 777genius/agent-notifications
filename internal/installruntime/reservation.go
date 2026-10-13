@@ -34,11 +34,12 @@ type PendingMutation struct {
 }
 
 func acceptedLedgerSchema(schema int) bool {
-	return schema == ledgerSchemaV1 || schema == ledgerSchemaV2 || schema == ledgerSchemaV3 || schema == 4 || schema == 5
+	return schema == ledgerSchemaV1 || schema == ledgerSchemaV2 || schema == ledgerSchemaV3 || schema == transactionSchemaV4 || schema == WindowsGenerationLedgerSchema
 }
 
 func acceptedTransactionSchema(schema int) bool {
-	return schema == transactionSchemaV1 || schema == transactionSchemaV2 || schema == transactionSchemaV3 || schema == transactionSchemaV4 || schema == 5
+	return schema == transactionSchemaV1 || schema == transactionSchemaV2 || schema == transactionSchemaV3 ||
+		schema == transactionSchemaV4 || schema == transactionSchemaV5 || schema == WindowsGenerationTransactionSchema
 }
 
 // legacyAcceptedLedgerSchema is the frozen v1 writer contract: schema 3 is
@@ -101,9 +102,10 @@ func reservationMutation(r Request) bool {
 }
 
 func applyReservationProtocol(next *Ledger, r Request, current Ledger) {
-	if r.Windows != nil || current.WriterFloor >= WindowsGenerationWriterFloor {
-		next.Schema = 5
+	if r.Windows != nil || current.WriterFloor >= WindowsGenerationWriterFloor || len(current.WindowsRetained) != 0 {
+		next.Schema = WindowsGenerationLedgerSchema
 		next.WriterFloor = WindowsGenerationWriterFloor
+		next.DecoderFloor = WindowsGenerationDecoderFloor
 		return
 	}
 	if current.Schema == 4 || current.WriterFloor >= OpenCodeWriterFloor || r.Consumer.OpenCode != nil {
@@ -136,8 +138,15 @@ func applyReservationProtocol(next *Ledger, r Request, current Ledger) {
 }
 
 func transactionSchemaFor(next Ledger, r Request) int {
-	if next.Schema == 5 || r.Windows != nil {
-		return 5
+	// Only a concrete Windows participant uses the strict schema6 carrier.
+	// Ordinary updates after a Windows generation retain the existing floor
+	// but remain schema4-compatible, so a non-Windows operation never acquires
+	// an absent participant requirement.
+	if r.Windows != nil {
+		return WindowsGenerationTransactionSchema
+	}
+	if next.Schema == WindowsGenerationLedgerSchema {
+		return transactionSchemaV4
 	}
 	if next.Schema == 4 || localPolicyMutation(r) || next.WriterFloor >= LocalPolicyWriterFloor {
 		return transactionSchemaV4

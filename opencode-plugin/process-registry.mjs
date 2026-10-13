@@ -124,7 +124,7 @@ export function createProcessRegistry(configuration) {
       let child, afterSpawn, forcedKill = false, proofOutput = true, closed = false, failure, output = Buffer.alloc(0), stderrBytes = 0;
       let deadlineTimer, escalationTimer, proofTimer;
       const spawnedAt = performance.now();
-      const stopAt = Math.min(spawnedAt + (kind === 'clock' ? 2000 : kind === 'profile' ? 10000 : 22000), deadline ?? Infinity);
+      const stopAt = Math.min(spawnedAt + (kind === 'clock' ? 2000 : kind === 'profile' ? 38000 : 22000), deadline ?? Infinity);
       const closeBy = stopAt + 3000;
       const delay = (at) => Math.max(0, at - performance.now());
       const kill = (signalName) => { try { child.kill(signalName); } catch { /* close alone is proof */ } };

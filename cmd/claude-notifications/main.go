@@ -142,6 +142,9 @@ func main() {
 
 // dispatchEarlyCommand preserves the observation routes before global logging.
 func dispatchEarlyCommand() bool {
+	if len(os.Args) > 1 && os.Args[1] == "installer-progress" {
+		os.Exit(installerProgressMain(os.Args[2:], os.Stdout, os.Stderr))
+	}
 	if len(os.Args) > 1 && os.Args[1] == "cursor-event" {
 		os.Exit(runCursorEvent(os.Args[2:], os.Stdin, os.Stdout))
 	}

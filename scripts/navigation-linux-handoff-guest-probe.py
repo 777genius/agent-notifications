@@ -66,6 +66,8 @@ def qualified_guest_result(guest, sources, shipping=None):
             return False
     if shipping and (guest.get('shipping') != shipping or any(guest.get(key) is not True for key in ('normalSetupObserved', 'producerRemoved', 'mutableProducerStateRemoved', 'lateClickObserved', 'coldGoReaderObserved', 'exactURIObserved'))):
         return False
+    if shipping and shipping['scenario'] == 'retained_a_update_rollback' and guest.get('updateRollbackObserved') is not True:
+        return False
     if guest.get('sourceSHA256') != sources:
         return False
     required = ('passed', 'notificationAttempted', 'clickAttempted', 'handoffQualified',
@@ -145,7 +147,7 @@ def main():
         # Hard links stay inside the single owned fixture; no shared filesystem in guest.
         for filename in FILES | {'guest-bootstrap.py', 'manifest.json'}:
             os.link(ROOT / filename, seed_dir / filename)
-        for filename in manifest.get('shipping', {}).get('files', {}):
+        for filename in (manifest.get('shipping', {}).get('files', {}) | manifest.get('shipping', {}).get('update', {}).get('files', {})):
             os.link(ROOT / filename, seed_dir / filename)
         catalog = stage.stage_runtime_archives(ROOT, seed_dir / 'runtime')
         (seed_dir / 'runtime-hashes.json').write_text(json.dumps(catalog, sort_keys=True) + '\n')
@@ -355,7 +357,7 @@ def main():
                   ('gtk.tar', stage.QUALIFIED['gtk'][0], 'gtkArchive'),
                   ('native-seed.iso', report.get('seedSHA256'), 'seed')]
         checks += [(name, digest, name) for name, digest in manifest['files'].items()]
-        checks += [(name, digest, name) for name, digest in manifest.get('shipping', {}).get('files', {}).items()]
+        checks += [(name, digest, name) for name, digest in (manifest.get('shipping', {}).get('files', {}) | manifest.get('shipping', {}).get('update', {}).get('files', {})).items()]
         for name, expected, label in checks:
             try:
                 actual = sha(ROOT / name)

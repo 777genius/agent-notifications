@@ -3,11 +3,58 @@
 package installruntime
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
+
+func TestFingerprintLargeFileFreshBytesWithBoundedAllocation(t *testing.T) {
+	// Repeated admission checks must hash every byte without retaining a second
+	// whole-file body. The limit leaves ample room for descriptors and paths.
+	body := make([]byte, 4*1024*1024+17)
+	for i := range body {
+		body[i] = byte(i)
+	}
+	path := filepath.Join(t.TempDir(), "primary")
+	if err := os.WriteFile(path, body, 0600); err != nil {
+		t.Fatal(err)
+	}
+	check := func(mode uint32) uint64 {
+		t.Helper()
+		want := Identity{Exists: true, SHA256: fmt.Sprintf("%x", sha256.Sum256(body)), Mode: mode}
+		var before, after runtime.MemStats
+		runtime.ReadMemStats(&before)
+		got, err := Fingerprint(path)
+		runtime.ReadMemStats(&after)
+		if err != nil || got != want {
+			t.Fatalf("fresh fingerprint = %+v, %v; want %+v", got, err, want)
+		}
+		return after.TotalAlloc - before.TotalAlloc
+	}
+	first := check(0600)
+	body[0], body[len(body)-1] = 255, 254
+	file, err := os.OpenFile(path, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = file.WriteAt(body[:1], 0); err == nil {
+		_, err = file.WriteAt(body[len(body)-1:], int64(len(body)-1))
+	}
+	closeErr := file.Close()
+	if err != nil || closeErr != nil {
+		t.Fatalf("replace bytes: %v; close: %v", err, closeErr)
+	}
+	if err := os.Chmod(path, 0700); err != nil {
+		t.Fatal(err)
+	}
+	second := check(0700)
+	if first+second >= uint64(len(body)) {
+		t.Fatalf("two fresh fingerprints allocated %d bytes for a %d-byte file", first+second, len(body))
+	}
+}
 
 func TestDestinationParentsConfined(t *testing.T) {
 	for _, phase := range []string{"stage", "commit", "recovery"} {

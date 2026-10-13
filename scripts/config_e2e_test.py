@@ -376,6 +376,8 @@ shutil.copytree(os.environ['SOURCE'],root,dirs_exist_ok=True)
         import fcntl
         for standalone in (True, False):
             env = self.fixture()
+            diagnostics = Path(env['HOME']).parent / 'diagnostics'
+            env['BOOTSTRAP_DIAGNOSTIC_ROOT'] = str(diagnostics)
             lock = Path(env['HOME']) / '.agent-notifications-config.lock'
             with lock.open('w') as held:
                 lock.chmod(0o600)
@@ -391,7 +393,21 @@ shutil.copytree(os.environ['SOURCE'],root,dirs_exist_ok=True)
                 command = [self.binary, 'config', 'init', '--json']
             else:
                 output = (r.stdout + r.stderr).decode()
-                line = next(line for line in output.splitlines() if line.startswith('Config-only retry'))
+                assert 'Next: run the config-only retry command in Diagnostics.' in output
+                assert 'Config-only retry' not in output, 'private argv leaked to default output'
+                references = [shlex.split(line.split(': ', 1)[1]) for line in output.splitlines()
+                              if line.startswith('Diagnostics: ')]
+                assert len(references) == 1 and len(references[0]) == 1, 'missing diagnostic reference'
+                log = Path(references[0][0])
+                assert log.parent == diagnostics and log.name.startswith('installer-') and log.suffix == '.log'
+                parent, info = diagnostics.lstat(), log.lstat()
+                assert stat.S_ISDIR(parent.st_mode) and stat.S_IMODE(parent.st_mode) == 0o700
+                assert stat.S_ISREG(info.st_mode) and stat.S_IMODE(info.st_mode) == 0o600
+                assert parent.st_uid == info.st_uid == os.getuid() and info.st_nlink == 1
+                assert 0 < info.st_size <= 2 << 20, 'unbounded diagnostic capture'
+                lines = [line for line in log.read_text().splitlines() if line.startswith('Config-only retry')]
+                assert len(lines) == 1, 'missing config-only recovery command'
+                line = lines[0]
                 command = shlex.split(line.split(': ', 1)[1])
                 assert Path(command[0]).read_bytes() == self.binary.read_bytes()
                 assert command[1:] == ['config', 'init', '--json']

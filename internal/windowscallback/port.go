@@ -4,8 +4,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"strings"
+
+	"github.com/777genius/agent-notifications/internal/strictjson"
 )
 
 var ErrUnavailable = errors.New("windows callback installed qualification unavailable")
@@ -26,6 +29,33 @@ type Result struct {
 	TargetConfirmed bool
 }
 type Binding struct{ SnapshotPath, SHA256 string }
+
+// Binding is an immutable transport value. Exact names reject case-folded or
+// invented aliases that typed JSON would otherwise silently map or ignore.
+func (b *Binding) UnmarshalJSON(data []byte) error {
+	if strictjson.Validate(data, strictjson.Budget{Bytes: 64 * 1024, Depth: 4, Entries: 16}) != nil {
+		return ErrEnvelope
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil || len(fields) != 2 {
+		return ErrEnvelope
+	}
+	if _, ok := fields["SnapshotPath"]; !ok {
+		return ErrEnvelope
+	}
+	if _, ok := fields["SHA256"]; !ok {
+		return ErrEnvelope
+	}
+	var value struct {
+		SnapshotPath string
+		SHA256       string
+	}
+	if err := json.Unmarshal(data, &value); err != nil {
+		return ErrEnvelope
+	}
+	*b = Binding{SnapshotPath: value.SnapshotPath, SHA256: value.SHA256}
+	return nil
+}
 type NativePort interface {
 	CheckReadiness(context.Context, Binding, uint64) error
 }

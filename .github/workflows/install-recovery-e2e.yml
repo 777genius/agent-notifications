@@ -28,7 +28,7 @@ jobs:
     permissions:
       contents: read
     outputs:
-      mode: ${{ steps.classify.outputs.mode }}
+      mode: ${{ steps.release-scope.outputs.mode || steps.classify.outputs.mode }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -37,14 +37,19 @@ jobs:
       - name: Test conservative classification and installer mode contracts
         run: |
           python3 scripts/ci_macos_scope_test.py
+          python3 -B tools/ci_release_scope_test.py
           bash bin/install_e2e_mode_test.sh
       - name: Classify exact PR revision (errors retain full CI)
         id: classify
         run: python3 scripts/ci_macos_scope.py classify
+      - name: Classify release tooling only when native scope is full
+        id: release-scope
+        if: steps.classify.outputs.mode == 'full'
+        run: python3 -B tools/ci_release_scope.py classify
 
   recovery:
     needs: scope
-    if: ${{ !cancelled() && !(github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null)) }}
+    if: ${{ !cancelled() && needs.scope.outputs.mode != 'release-tools' && !(github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null)) }}
     name: ${{ github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null) && format('Metadata edit ignored (recovery {0})', matrix.os) || format('Offline recovery ({0}, native Go 1.26)', matrix.os) }}
     runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.use_github_runner && matrix.os == 'macos-15' && matrix.os || github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && matrix.os || matrix.os == 'ubuntu-latest' && (vars.CI_LINUX_RUNNER || 'ubuntu-latest') || matrix.os == 'macos-15' && (vars.CI_MACOS_15_RUNNER || 'macos-15') || matrix.os }}
     timeout-minutes: 25
@@ -169,7 +174,7 @@ jobs:
   full-ci:
     name: ${{ github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null) && 'Metadata edit ignored (full recovery gate)' || 'Full install recovery required' }}
     needs: [scope, recovery]
-    if: ${{ always() && !(github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null)) }}
+    if: ${{ always() && needs.scope.outputs.mode != 'release-tools' && !(github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null)) }}
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || vars.CI_LINUX_RUNNER || 'ubuntu-latest' }}
     permissions:
       contents: read

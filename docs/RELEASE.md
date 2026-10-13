@@ -2,18 +2,112 @@
 
 Step-by-step guide for publishing a new version.
 
+For early preflight, parallel preparation, resumable drafts and evidence timing,
+follow [the basic release fast path](RELEASE_SPEED.md), including `make release-prepare`,
+`make release-wait` and `make release-verify`. Preview installation before freezing
+source with the existing `make preview-installer` command.
+
 For a release that skips a platform, promote only its qualified
 [platform release channels](PLATFORM_RELEASE_CHANNELS.md). Keep skipped-platform
 rows and global Latest on the previously qualified version. Publish source
 branches before activating the immutable source SHAs in the channel index.
 
-v1.48.1 is a Linux amd64/arm64 and Windows amd64 partial release. macOS stays
-on v1.46.1, and GitHub global Latest stays v1.46.1. There are no Darwin binaries,
-portable packages or ClaudeNotifier.app assets in v1.48.1.
+The current all-platform channels and GitHub Latest select v1.49.2, using the
+owner-approved basic profile and separate macOS E2E described below. This does
+not establish eleven-cell OpenCode or full native qualification. Before
+the v1.48.4 unified promotion, Linux amd64/arm64 and Windows amd64 selected
+v1.48.1, macOS amd64/arm64 selected v1.48.3, and global Latest remained v1.46.1.
+The historical v1.48.1 release contains no Darwin binaries, portable packages
+or ClaudeNotifier.app assets.
 
 The earlier v1.48.0 draft and tag are retained unpublished: a repeated Windows
 clock tick exposed a floating-point admission-budget bug. v1.48.1 fixes it
 without extending the four-second limit; qualification must use the new binary.
+
+### Owner-approved basic v1.48.5 release
+
+For v1.48.5, the owner selected basic Linux/Windows artifact checks and separate
+macOS E2E/signing instead of the long eleven-cell OpenCode qualification. Use
+`basic-release.yml`; the full `unified-release.yml` operator and its historical
+v1.48.4 reports remain unchanged. The legacy tag workflow excludes both tags.
+This reduced profile does not grant installed OpenCode business, full native,
+clock/source-epoch, visible desktop or cold-start qualification.
+
+1. Merge the reviewed basic operator on `main` before promoting any version bump.
+   Prepare the release branch with all five version values at 1.48.5 and require
+   successful current-head Ubuntu, Windows and full macOS CI on its exact SHA.
+2. Fast-forward `release/macos-signing` to the independently reviewed candidate,
+   preserving the signing checkpoint in ancestry. Run `macos-qualification.yml`
+   with `candidate_version=v1.48.5` and retain the successful same-source signed
+   and notarized helper/Darwin artifact run.
+3. Dispatch `basic-release.yml` from `main` with that exact `candidate_sha`,
+   `release_tag=v1.48.5` and `signing_run`. It checks owner/source/CI/signing custody,
+   builds three Linux/Windows artifact sets, imports two Darwin sets, and runs
+   native version, companion help, configuration and local webhook checks on all
+   five platforms. It does not run or manufacture eleven-cell OpenCode reports.
+4. The successful gate seals exactly 29 public assets, including 28 checksummed
+   leaves, and creates a new immutable tag and complete draft. Existing tags or
+   releases fail closed; reconcile partial or uncertain state explicitly.
+5. Before publication, complete the downloaded draft-asset canaries, disposable
+   Codex checks and separate macOS E2E requested by the owner. Retain signature,
+   permission, installed lifecycle and visible-delivery observations with their
+   actual scope; the basic Actions result does not prove those observations.
+6. Only after those checks, publish under the owner's release authorization,
+   verify public checksums, promote Latest and all five platform channels, then
+   land the version bump on `main`. The workflow never publishes automatically.
+
+### Subsequent basic releases and explicit resume
+
+The basic operator now accepts stable semver tags. Before dispatch, run the
+[candidate and prepared-promotion preflight](RELEASE_SPEED.md), retain current-C
+CI/signing and explicitly exclude the new tag from the legacy full release
+workflow in both candidate C and executed operator main O. The historical
+v1.48.5 basic scope above remains the minimum, not an installed-business claim.
+
+The workflow stores an immutable complete seal before tag creation. If draft
+creation or upload fails, use the same `candidate_sha`, `release_tag` and
+`signing_run`, plus `resume_run` and `resume_attempt` for the original sealed
+attempt. Do not rerun the build or reconstruct a seal. Resume reconciles remote
+identity/content and uploads only missing matching assets. See
+[seal, provenance and recovery contracts](../scripts/basic-release-assets/README.md).
+The workflow still stops at an unpublished draft; publication requires the
+separate downloaded-asset canaries, macOS/Codex E2E and final verified fan-in.
+
+### Unified v1.48.4 operator
+
+For v1.48.4, use the manual `unified-release.yml` workflow instead of the legacy
+tag-triggered Linux/Windows workflow. The latter explicitly excludes this tag;
+its non-business native fixture has an unobservable production admission gate.
+The manual operator preserves that denial and qualifies the bounded installed
+business/lifecycle scope with fresh clock and packaged-reader prerequisites.
+It does not grant full native, source-epoch, time-policy, desktop visibility or
+cold-start qualification.
+
+1. Review and merge the operator without changing the five legacy versions on
+   `main`. Compose the release branch from reviewed current source, bump all five
+   values to 1.48.4, and complete Ubuntu, Windows and full macOS CI on its exact SHA.
+2. Preserve the old signing checkpoint in ancestry and fast-forward
+   `release/macos-signing` to that exact reviewed candidate. Dispatch
+   `macos-qualification.yml` with `candidate_version=v1.48.4` and obtain the
+   completed same-source signed/notarized helper and Darwin artifact run.
+3. Dispatch `unified-release.yml` with `candidate_sha`, `release_tag=v1.48.4`
+   and that `signing_run`. It builds Linux/Windows artifacts, imports the two
+   Darwin sets, checks all five downloaded native executables and qualifies
+   eleven OpenCode cells. Each cell needs fresh source/artifact-bound clock,
+   reader and business reports. Previous release results cannot qualify new bytes.
+4. A successful complete gate creates the immutable tag and a complete draft,
+   with checksums, portable packages and ClaudeNotifier.app. It never publishes
+   or marks Latest automatically. A failed or uncertain upload requires explicit
+   state reconciliation; do not overwrite an existing release blindly.
+5. Complete the draft-asset canaries and disposable Codex checks below. Record
+   banner and cold-click observations separately. If a native runner cannot
+   obtain OS permission, retain that failure and qualify the missing cell in a
+   separately reviewed, authorized TEST environment with the same sealed inputs.
+   Never manufacture a successful Actions result or relax a semantic oracle.
+6. With the owner's release authorization, publish the complete draft, verify
+   the public checksums, mark it GitHub Latest, and only then promote the five
+   platform channels and the main version bump. Update README and the public
+   installer to the verified complete release.
 
 ## 0. Pre-release risk checklist
 
