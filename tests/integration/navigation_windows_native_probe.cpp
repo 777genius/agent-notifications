@@ -20,6 +20,7 @@
 #include <winrt/Windows.System.h>
 #include "navigation_windows_vendor_sdk_test.h"
 #include "navigation_windows_token_queries.h"
+using namespace NavigationTokenTEST;
 #include <bcrypt.h>
 #pragma comment(lib, "Bcrypt.lib")
 #include <wincodec.h>
