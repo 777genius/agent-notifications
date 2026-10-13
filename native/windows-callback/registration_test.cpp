@@ -280,6 +280,32 @@ static void aliasContracts(const Generation& g,uint64_t end,bool chain){
   stage("alias_profile_close");
   profile.close(g);
 }
+static void diagnoseLongShortcutTarget(const std::vector<uint8_t>& bytes,
+ const std::wstring& expected,uint64_t end){
+  Microsoft::WRL::ComPtr<IShellLinkW> link;
+  shortcutHresult("CoCreateInstance(CLSID_ShellLink)",
+    CoCreateInstance(CLSID_ShellLink,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&link)));
+  Microsoft::WRL::ComPtr<IPersistStream> persist;
+  shortcutHresult("IShellLinkW::QueryInterface(IPersistStream)",link.As(&persist));
+  Microsoft::WRL::ComPtr<IStream> stream;
+  shortcutHresult("CreateStreamOnHGlobal",CreateStreamOnHGlobal(nullptr,TRUE,&stream));
+  ULONG written=0;
+  shortcutHresult("IStream::Write",stream->Write(bytes.data(),ULONG(bytes.size()),&written));
+  require(written==bytes.size());
+  LARGE_INTEGER zero{};
+  shortcutHresult("IStream::Seek",stream->Seek(zero,STREAM_SEEK_SET,nullptr));
+  shortcutHresult("IPersistStream::Load",persist->Load(stream.Get()));
+  const auto actual=exactShortcutTarget(link.Get(),end);
+  ScopedPidl pidl;
+  shortcutHresult("IShellLinkW::GetIDList",link->GetIDList(&pidl.value));
+  ScopedCoTaskMem parsing;
+  shortcutHresult("SHGetNameFromIDList(parsing)",
+    SHGetNameFromIDList(pidl.value,SIGDN_DESKTOPABSOLUTEPARSING,&parsing.value));
+  require(expected.size()<2048&&actual.size()<2048&&parsing.value
+    &&wcslen(parsing.value)<2048);
+  std::cerr<<"TEST long serialized target expected="<<narrow(expected)
+    <<" filesystem="<<narrow(actual)<<" parsing="<<narrow(parsing.value)<<"\n";
+}
 static void shortcutContracts(const Generation& g,uint64_t end);
 static bool registryContracts(){
   stage("child_generation_custody");
@@ -893,6 +919,7 @@ static void shortcutContracts(const Generation& g,uint64_t end){
     try{shortcutReadbackBytes(longFixture,longBytes,end);}
     catch(const ShortcutTargetMismatch&){
       std::cerr<<"TEST long readback typed_target_mismatch=true\n";
+      diagnoseLongShortcutTarget(longBytes,longFixture.target,end);
       throw;
     }
     installedBudget(end);
