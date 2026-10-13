@@ -685,6 +685,11 @@ class ScopedShortcutTargetTree {
     stage("child_shortcut_long_file_physical_name");
     const auto held=physical(owner->h);
     stage("child_shortcut_long_file_exact_path");
+    if(held!=path.wstring()&&held!=L"\\\\?\\"+path.wstring()){
+      require(held.size()<2048&&path.wstring().size()<2048);
+      std::cerr<<"TEST long fixture exact path expected="<<narrow(path.wstring())
+        <<" held="<<narrow(held)<<"\n";
+    }
     require(held==path.wstring()||held==L"\\\\?\\"+path.wstring());
     return path.wstring();
   }
