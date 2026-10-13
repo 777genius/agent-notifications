@@ -25,6 +25,7 @@ import (
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/adapters/loader"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/adapters/nativeconfig"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/adapters/packagedigest"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/adapters/processlock"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/adapters/profileauthority"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/adapters/specregistry"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/adapters/statev2"
@@ -2531,55 +2532,52 @@ func TestLocalRemoveGroupFailedApplyExactOwnerRetry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Cancel only after observing both exact-owner revocations. The public lock
-	// then forces the failure at Apply, without racing the cleanup against a
-	// wall-clock deadline on slower filesystems.
-	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
-	defer cancel()
-	removeDone := make(chan error, 1)
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	removeDone := make(chan struct{})
+	var removeErr error
 	go func() {
-		_, removeErr := mat.RemoveGroup(ctx, []MaterializeRequest{local, sibling})
-		removeDone <- removeErr
+		defer close(removeDone)
+		_, removeErr = mat.RemoveGroup(ctx, []MaterializeRequest{local, sibling})
 	}()
-	for {
-		snap, snapErr := installruntime.ReadInstalledSnapshot(b.ControlRoot)
-		revoked := snapErr == nil
-		if revoked {
-			for _, exact := range []portable.Binding{b, peer} {
-				key, _, _, keyErr := exact.Registration()
-				if keyErr != nil {
-					revoked = false
-					break
-				}
-				if _, present := snap.Ledger.Consumers[key]; present {
-					revoked = false
-					break
-				}
-				present, locatorErr := portable.ExactLocator(exact)
-				if locatorErr != nil || present {
-					revoked = false
-					break
-				}
+	removeStopped := false
+	publicReleased := false
+	releaseAfterJoin := func() {
+		cancel()
+		if !removeStopped {
+			select {
+			case <-removeDone:
+				removeStopped = true
+			case <-time.After(5 * time.Second):
+				t.Error("RemoveGroup cleanup exceeded 5s; retaining public lock")
+				return
 			}
 		}
-		if revoked {
-			break
-		}
-		select {
-		case removeErr := <-removeDone:
+		if !publicReleased {
 			release()
-			t.Fatalf("RemoveGroup ended before exact-owner cleanup: %v", removeErr)
-		case <-ctx.Done():
-			release()
-			t.Fatal("exact-owner cleanup did not reach both revocations")
-		case <-time.After(2 * time.Millisecond):
+			publicReleased = true
 		}
 	}
-	cancel()
-	err = <-removeDone
-	release()
-	if err == nil {
-		t.Fatal("Apply ignored held public lock")
+	defer releaseAfterJoin()
+	select {
+	case <-removeDone:
+		removeStopped = true
+	case <-time.After(10 * time.Second):
+		t.Log("RemoveGroup did not reach its public-lock refusal within 10s; canceling bounded actor")
+	}
+	if !removeStopped {
+		releaseAfterJoin()
+		if !removeStopped {
+			t.Fatal("RemoveGroup did not stop after bounded cancel")
+		}
+	} else {
+		cancel()
+	}
+	if !errors.Is(removeErr, processlock.ErrActive) {
+		t.Fatalf("Apply did not return the public held-lock contract: %v", removeErr)
+	}
+	releaseAfterJoin()
+	if !publicReleased {
+		t.Fatal("public lock was not released after RemoveGroup stopped")
 	}
 	snap, err = installruntime.ReadInstalledSnapshot(b.ControlRoot)
 	if err != nil {
@@ -2599,17 +2597,40 @@ func TestLocalRemoveGroupFailedApplyExactOwnerRetry(t *testing.T) {
 	if err != nil || snap.Ledger.PendingMutation == nil {
 		t.Fatal("failed Apply lost intent", err)
 	}
-	found := false
-	for _, target := range intent.Targets {
-		if target.BindingID == b.BindingID {
-			found = true
-			if target.Client != "copilot-vscode" || target.OldBinding == nil || *target.OldBinding != b {
-				t.Fatalf("Local durable owner: %+v", target)
-			}
-		}
+	if pending := snap.Ledger.PendingMutation; pending.ID != intent.SetupIntentID ||
+		pending.Owner != "existing-installer" || pending.IntentRef != IntentPath(b.ControlRoot) {
+		t.Fatalf("pending reservation differs from frozen intent: %+v intent=%+v", pending, intent)
 	}
-	if !found {
-		t.Fatal("Local frozen target absent")
+	localKey, _, _, err := b.Registration()
+	if err != nil {
+		t.Fatal(err)
+	}
+	peerKey, _, _, err := peer.Registration()
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedOwners := map[string]struct {
+		client  string
+		key     string
+		binding portable.Binding
+	}{
+		b.BindingID:    {client: string(local.Integration), key: localKey, binding: b},
+		peer.BindingID: {client: string(sibling.Integration), key: peerKey, binding: peer},
+	}
+	found := map[string]bool{}
+	for _, target := range intent.Targets {
+		expected, ok := expectedOwners[target.BindingID]
+		if !ok {
+			t.Fatalf("unexpected durable target: %+v", target)
+		}
+		if target.Client != expected.client || target.OldConsumerKey != expected.key ||
+			target.OldBinding == nil || *target.OldBinding != expected.binding {
+			t.Fatalf("durable owner differs from exact frozen binding: %+v want %+v", target, expected)
+		}
+		found[target.BindingID] = true
+	}
+	if len(intent.Targets) != len(expectedOwners) || !found[b.BindingID] || !found[peer.BindingID] {
+		t.Fatalf("both exact frozen targets absent: %+v", intent.Targets)
 	}
 	local.ExpectedGeneration, sibling.ExpectedGeneration = snap.Ledger.Generation, snap.Ledger.Generation
 	if _, err := mat.RemoveGroup(testCtx(t), []MaterializeRequest{local, sibling}); err != nil {
