@@ -179,7 +179,8 @@ def _windows_configure_first(run, binary, home, bundle, env, automatic_root):
     installed = bundle / 'bin' / 'configure-driver.exe'
     shutil.copyfile(binary, installed)
     configure = ('setup-notifications', 'configure', '--provider', 'claude',
-                 '--navigation', 'none', '--policy-only', '--json')
+                 '--navigation', 'none', '--allow-unknown-caller', 'false',
+                 '--allow-caller-asserted', 'false', '--policy-only', '--json')
     _windows_writable_profile(home)
     _windows_private_scratch_root(Path(env['APPDATA']))
     selected = automatic_root / 'config.json'
@@ -203,7 +204,10 @@ def _windows_configure_first(run, binary, home, bundle, env, automatic_root):
         assert any(rule['mask'] & 6 == 6 for rule in users), inherited
         selected.write_text(json.dumps(source))
         before = snapshot()
-        run(*configure, executable=installed, success=False)
+        refusal = run(*configure, executable=installed, success=False)
+        refused = json.loads(refusal.stdout)
+        assert refusal.returncode == 1 and refused['reason'] == 'mutation_failed', refused
+        assert refused['stages'][-1] == {'name': 'preflight', 'outcome': 'failed'}, refused
         denied = json.loads(run('config', 'inspect', '--json', success=False).stdout)
         assert denied['errorCode'] == 'ConfigPermissionDenied', denied
         assert any(item['code'] == 'ConfigPublicReadable'
@@ -225,7 +229,10 @@ def _windows_configure_first(run, binary, home, bundle, env, automatic_root):
         subprocess.run(['pwsh', '-NoProfile', '-NonInteractive', '-Command', script],
                        env=dict(os.environ, DIAG_PATH=str(selected)), text=True, timeout=30, check=True)
         before = snapshot()
-        run(*configure, executable=installed, success=False)
+        refusal = run(*configure, executable=installed, success=False)
+        refused = json.loads(refusal.stdout)
+        assert refusal.returncode == 1 and refused['reason'] == 'mutation_failed', refused
+        assert refused['stages'][-1] == {'name': 'preflight', 'outcome': 'failed'}, refused
         denied = json.loads(run('config', 'inspect', '--json', success=False).stdout)
         assert denied['errorCode'] == 'ConfigPermissionDenied', denied
         assert any(item['code'] == 'ConfigPublicReadable'
@@ -345,8 +352,19 @@ def main():
 
                 def run(*command, data=None, success=True, executable=binary):
                     prefix = [str(standard_runner)] if standard_runner else []
-                    result = subprocess.run([*prefix, str(executable), *command], cwd=home, env=env,
-                                            input=data, text=True, capture_output=True, timeout=30)
+                    if os.name == 'nt' and command[0] == 'setup-notifications':
+                        # A regular-file stdout captures the public JSON response
+                        # without requiring synchronous pipe cancellation rights
+                        # from the deliberately restricted standard-user token.
+                        with tempfile.TemporaryFile(mode='w+t', encoding='utf-8', dir=home) as output:
+                            result = subprocess.run([*prefix, str(executable), *command], cwd=home, env=env,
+                                                    input=data, text=True, stdout=output,
+                                                    stderr=subprocess.PIPE, timeout=30)
+                            output.seek(0)
+                            result.stdout = output.read()
+                    else:
+                        result = subprocess.run([*prefix, str(executable), *command], cwd=home, env=env,
+                                                input=data, text=True, capture_output=True, timeout=30)
                     assert (result.returncode == 0) == success, (case, command, result.returncode, result.stdout, result.stderr)
                     return result
 
