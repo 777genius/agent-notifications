@@ -157,20 +157,39 @@ namespace wcb {
   struct ShortcutTargetMismatch : std::runtime_error {
     ShortcutTargetMismatch():std::runtime_error("shortcut target mismatch"){}
   };
+  // Filesystem APIs receive an extended local-drive path; Shell APIs receive
+  // the corresponding ordinary DOS parsing name. These two representations
+  // describe one item and are converted only at that boundary.
+  inline std::wstring shortcutLocalDriveName(const std::wstring& value){
+    auto path=value;
+    if(path.starts_with(L"\\\\?\\"))path.erase(0,4);
+    require(path.size()>3&&path[1]==L':'&&path[2]==L'\\'&&path.back()!=L'\\'
+      &&!path.starts_with(L"\\\\?\\")&&path.find(L':',2)==std::wstring::npos);
+    return path;
+  }
+  inline std::wstring shortcutParsingTarget(const std::wstring& target){
+    const auto path=shortcutLocalDriveName(target);
+    require(path==target);
+    return path;
+  }
+  inline fs::path shortcutStoragePath(const std::wstring& value){
+    return fs::path(L"\\\\?\\"+shortcutLocalDriveName(value));
+  }
+  inline fs::path shortcutStoragePath(const fs::path& value){
+    return shortcutStoragePath(value.wstring());
+  }
   inline void verifyShortcutTarget(const std::wstring& expected,const std::wstring& actual){
-    if(actual!=expected)throw ShortcutTargetMismatch();
+    // API results may represent the same local item with the Win32 extended
+    // prefix. Normalize only that transport representation while requiring
+    // the fixture to remain an ordinary Shell parsing name.
+    const auto expectedName=shortcutParsingTarget(expected);
+    const auto actualName=shortcutLocalDriveName(actual);
+    if(actualName!=expectedName)throw ShortcutTargetMismatch();
   }
   inline std::wstring shellTargetPath(const Generation& g){
     const auto custody=(g.root/L"helper.exe").wstring();
     require(custody.size()>4&&custody.starts_with(L"\\\\?\\"));
-    auto target=custody.substr(4);
-    require(target.size()>3&&target[1]==L':'&&target[2]==L'\\'&&target.back()!=L'\\');
-    return target;
-  }
-  inline fs::path extendedShortcutTarget(const std::wstring& target){
-    require(target.size()>3&&target[1]==L':'&&target[2]==L'\\'&&target.back()!=L'\\'
-      &&!target.starts_with(L"\\\\?\\")&&target.find(L':',2)==std::wstring::npos);
-    return fs::path(L"\\\\?\\"+target);
+    return shortcutParsingTarget(shortcutLocalDriveName(custody));
   }
   struct ShortcutFixture {
     std::wstring target,args,aumid,clsid;
@@ -187,14 +206,15 @@ namespace wcb {
   inline void verifyShortcutTargetCustody(const ShortcutFixture& fixture,uint64_t end=0){
     shortcutBudget(end);
     require(fixture.custody!=INVALID_HANDLE_VALUE);
+    const auto target=shortcutParsingTarget(fixture.target);
     const auto heldPath=physical(fixture.custody);
-    require(heldPath==fixture.target||heldPath==L"\\\\?\\"+fixture.target);
+    require(shortcutLocalDriveName(heldPath)==target);
     shortcutBudget(end);
     BY_HANDLE_FILE_INFORMATION heldInfo{
     };
     require(GetFileInformationByHandle(fixture.custody,&heldInfo));
     shortcutBudget(end);
-    auto candidate=open(extendedShortcutTarget(fixture.target),false);
+    auto candidate=open(shortcutStoragePath(target),false);
     shortcutBudget(end);
     BY_HANDLE_FILE_INFORMATION candidateInfo{
     };

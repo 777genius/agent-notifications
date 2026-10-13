@@ -7,7 +7,9 @@
 #include "installed.h"
 #include <thread>
 #include <cstring>
+#include <new>
 #include <type_traits>
+#include <utility>
 using namespace wcb;
 // Fixed TEST stages and last TEST API observation are independent facts.
 // A caught exception has no inferred native status: a production helper or
@@ -640,115 +642,675 @@ static ShortcutFixture substituted(
   return {std::move(target),fixture.args,fixture.aumid,fixture.clsid,custody};
 }
 static std::wstring syntheticLongShortcutTarget(const ShortcutFixture& fixture){
+  const auto prototype=shortcutParsingTarget(fixture.target);
   const auto separator=fixture.target.find_last_of(L'\\');
   require(separator!=std::wstring::npos&&separator>2);
-  std::wstring target=fixture.target.substr(0,separator);
+  std::wstring target=prototype.substr(0,separator);
   for(size_t part=0;target.size()<=MAX_PATH;part++){
     target+=L'\\';
     target.append(96,wchar_t(L'a'+part%26));
   }
   target+=L"\\helper.exe";
-  require(target.size()>MAX_PATH&&target.size()<20000&&target.starts_with(fixture.target.substr(0,3)));
+  require(target.size()>MAX_PATH&&target.size()<20000&&target.starts_with(prototype.substr(0,3)));
   return target;
 }
-static fs::path extendedTestPath(const fs::path& path){
-  const auto value=path.wstring();
-  require(value.size()>3&&value[1]==L':'&&value[2]==L'\\'&&!value.starts_with(L"\\\\?\\"));
-  return fs::path(L"\\\\?\\"+value);
-}
-class ScopedShortcutTargetTree {
-  fs::path base;
-  std::vector<fs::path> directories;
-  std::vector<Handle> heldDirectories;
-  Handle expectedFile,substituteFile;
-  SECURITY_ATTRIBUTES* savedAttributes=nullptr;
-  void createDirectory(const fs::path& path){
-    require(win32Result("CreateDirectoryW",
-      CreateDirectoryW(extendedTestPath(path).c_str(),savedAttributes)));
-    heldDirectories.push_back(open(extendedTestPath(path),true));
-    owned(heldDirectories.back().h,ownerSID());
-    directories.push_back(path);
+enum class ShortcutFixtureFailure {
+  none,
+  directory_after_create,
+  directory_after_open,
+  directory_after_owned,
+  directory_after_identity,
+  second_directory_after_create,
+  second_directory_after_open,
+  second_directory_after_owned,
+  second_directory_after_identity,
+  expected_file_after_create,
+  expected_file_after_owned,
+  expected_file_after_identity,
+  substitute_file_after_create,
+  substitute_file_after_owned,
+  substitute_file_after_identity,
+  target_tree_after_validation,
+  expected_target_allocation,
+  substitute_target_allocation,
+  shortcut_file_after_create,
+  shortcut_file_after_owned,
+  shortcut_file_after_identity,
+  shortcut_file_target_allocation,
+  shortcut_file_after_validation
+};
+static const char* shortcutFixtureFailureName(ShortcutFixtureFailure point){
+  switch(point){
+  case ShortcutFixtureFailure::none:return "none";
+  case ShortcutFixtureFailure::directory_after_create:return "directory_after_create";
+  case ShortcutFixtureFailure::directory_after_open:return "directory_after_open";
+  case ShortcutFixtureFailure::directory_after_owned:return "directory_after_owned";
+  case ShortcutFixtureFailure::directory_after_identity:return "directory_after_identity";
+  case ShortcutFixtureFailure::second_directory_after_create:return "second_directory_after_create";
+  case ShortcutFixtureFailure::second_directory_after_open:return "second_directory_after_open";
+  case ShortcutFixtureFailure::second_directory_after_owned:return "second_directory_after_owned";
+  case ShortcutFixtureFailure::second_directory_after_identity:return "second_directory_after_identity";
+  case ShortcutFixtureFailure::expected_file_after_create:return "expected_file_after_create";
+  case ShortcutFixtureFailure::expected_file_after_owned:return "expected_file_after_owned";
+  case ShortcutFixtureFailure::expected_file_after_identity:return "expected_file_after_identity";
+  case ShortcutFixtureFailure::substitute_file_after_create:return "substitute_file_after_create";
+  case ShortcutFixtureFailure::substitute_file_after_owned:return "substitute_file_after_owned";
+  case ShortcutFixtureFailure::substitute_file_after_identity:return "substitute_file_after_identity";
+  case ShortcutFixtureFailure::target_tree_after_validation:return "target_tree_after_validation";
+  case ShortcutFixtureFailure::expected_target_allocation:return "expected_target_allocation";
+  case ShortcutFixtureFailure::substitute_target_allocation:return "substitute_target_allocation";
+  case ShortcutFixtureFailure::shortcut_file_after_create:return "shortcut_file_after_create";
+  case ShortcutFixtureFailure::shortcut_file_after_owned:return "shortcut_file_after_owned";
+  case ShortcutFixtureFailure::shortcut_file_after_identity:return "shortcut_file_after_identity";
+  case ShortcutFixtureFailure::shortcut_file_target_allocation:return "shortcut_file_target_allocation";
+  case ShortcutFixtureFailure::shortcut_file_after_validation:return "shortcut_file_after_validation";
   }
-  std::wstring createTarget(const wchar_t* name){
-    const auto path=directories.back()/name;
-    Handle* owner=wcscmp(name,L"expected-long.exe")==0?&expectedFile:&substituteFile;
-    owner->h=CreateFileW(extendedTestPath(path).c_str(),
-      GENERIC_READ|READ_CONTROL|DELETE,FILE_SHARE_READ,savedAttributes,
+  require(false);
+  return "unknown";
+}
+struct ShortcutFixtureInjectedFailure : std::runtime_error {
+  ShortcutFixtureFailure point;
+  explicit ShortcutFixtureInjectedFailure(ShortcutFixtureFailure point)
+    :std::runtime_error(std::string("TEST shortcut fixture failure ")+shortcutFixtureFailureName(point)),
+     point(point){}
+};
+static void injectShortcutFixtureFailure(ShortcutFixtureFailure actual,ShortcutFixtureFailure expected){
+  if(actual==expected)throw ShortcutFixtureInjectedFailure(actual);
+}
+struct ShortcutFixtureInjectedAllocationFailure : std::bad_alloc {
+  ShortcutFixtureFailure point;
+  explicit ShortcutFixtureInjectedAllocationFailure(ShortcutFixtureFailure point):point(point){}
+  const char* what()const noexcept override{
+    return "TEST shortcut fixture allocation failure";
+  }
+};
+static void injectShortcutFixtureAllocationFailure(
+  ShortcutFixtureFailure actual,ShortcutFixtureFailure expected){
+  if(actual==expected)throw ShortcutFixtureInjectedAllocationFailure(actual);
+}
+struct ShortcutFixtureCollisionFailure : std::runtime_error {
+  DWORD status;
+  explicit ShortcutFixtureCollisionFailure(DWORD status)
+    :std::runtime_error("TEST shortcut fixture collision"),status(status){}
+};
+// TEST-only rollback observability. Native and injected outcomes are separate:
+// api* always retains the real Win32 result, while reported* is the cleanup
+// result consumed by the contract. A test override turns only a successful API
+// result into a refusal and never invents a Windows error code.
+enum class ShortcutCleanupAction { none,close_handle,delete_file,remove_directory };
+enum class ShortcutCleanupSubject { file,directory };
+enum class ShortcutCleanupSource { win32,test_override };
+struct ShortcutCleanupCall {
+  ShortcutCleanupAction action=ShortcutCleanupAction::none;
+  ShortcutCleanupSubject subject=ShortcutCleanupSubject::file;
+  size_t index=0;
+  bool apiCalled=false,apiSucceeded=false,apiResultKnown=false;
+  DWORD apiStatus=ERROR_SUCCESS;
+  bool reportedSucceeded=false,reportedResultKnown=false;
+  DWORD reportedStatus=ERROR_SUCCESS;
+  ShortcutCleanupSource source=ShortcutCleanupSource::win32;
+};
+struct ShortcutCleanupResult {
+  static constexpr size_t maxCalls=16;
+  std::array<ShortcutCleanupCall,maxCalls> calls{};
+  size_t count=0;
+  bool overflow=false;
+  void reset()noexcept{
+    calls={};
+    count=0;
+    overflow=false;
+  }
+  void record(const ShortcutCleanupCall& call)noexcept{
+    if(count==calls.size()){
+      overflow=true;
+      return;
+    }
+    calls[count++]=call;
+  }
+};
+struct ShortcutCleanupOverride {
+  ShortcutCleanupAction action=ShortcutCleanupAction::none;
+  ShortcutCleanupSubject subject=ShortcutCleanupSubject::file;
+  size_t index=0;
+  bool consumed=false;
+};
+struct ShortcutCleanupProbe {
+  static constexpr size_t maxOverrides=4;
+  ShortcutCleanupResult result;
+  std::array<ShortcutCleanupOverride,maxOverrides> overrides{};
+  size_t overrideCount=0;
+  bool invalidOverride=false;
+  void reset()noexcept{
+    result.reset();
+    overrides={};
+    overrideCount=0;
+    invalidOverride=false;
+  }
+  void refuse(ShortcutCleanupAction action,ShortcutCleanupSubject subject,size_t index){
+    require(action!=ShortcutCleanupAction::none&&overrideCount<overrides.size());
+    overrides[overrideCount++]={action,subject,index,false};
+  }
+  bool reportedFailures(size_t first)const noexcept{
+    for(size_t index=first;index<result.count;++index)
+      if(!result.calls[index].reportedSucceeded)return true;
+    return false;
+  }
+};
+static bool shortcutCleanupApi(ShortcutCleanupProbe* probe,ShortcutCleanupAction action,
+  ShortcutCleanupSubject subject,size_t index,BOOL apiResult)noexcept{
+  ShortcutCleanupCall call;
+  call.action=action;
+  call.subject=subject;
+  call.index=index;
+  call.apiCalled=true;
+  call.apiSucceeded=apiResult!=FALSE;
+  call.apiResultKnown=true;
+  call.apiStatus=apiResult?ERROR_SUCCESS:GetLastError();
+  call.reportedSucceeded=call.apiSucceeded;
+  call.reportedResultKnown=true;
+  call.reportedStatus=call.apiStatus;
+  if(probe)
+    for(auto& overrideEntry:probe->overrides)
+      if(!overrideEntry.consumed&&overrideEntry.action==action
+        &&overrideEntry.subject==subject&&overrideEntry.index==index){
+        overrideEntry.consumed=true;
+        if(!call.apiSucceeded)probe->invalidOverride=true;
+        call.reportedSucceeded=false;
+        call.reportedResultKnown=false;
+        call.reportedStatus=ERROR_SUCCESS;
+        call.source=ShortcutCleanupSource::test_override;
+        break;
+      }
+  if(probe)probe->result.record(call);
+  return call.apiSucceeded;
+}
+static void shortcutRollbackClose(ShortcutCleanupProbe* probe,
+  ShortcutCleanupAction action,ShortcutCleanupSubject subject,size_t index,HANDLE handle)noexcept{
+  shortcutCleanupApi(probe,action,subject,index,CloseHandle(handle));
+}
+static bool shortcutRollbackDelete(ShortcutCleanupProbe* probe,
+  ShortcutCleanupSubject subject,size_t index,const fs::path& storagePath)noexcept{
+  return shortcutCleanupApi(probe,ShortcutCleanupAction::delete_file,
+    subject,index,DeleteFileW(storagePath.c_str()));
+}
+static bool shortcutRollbackRemove(ShortcutCleanupProbe* probe,
+  ShortcutCleanupSubject subject,size_t index,const fs::path& storagePath)noexcept{
+  return shortcutCleanupApi(probe,ShortcutCleanupAction::remove_directory,
+    subject,index,RemoveDirectoryW(storagePath.c_str()));
+}
+struct ShortcutCreatedDirectory {
+  fs::path parsingPath,storagePath;
+  Handle held;
+  bool created=false;
+};
+struct ShortcutCreatedFile {
+  fs::path parsingPath,storagePath;
+  Handle held;
+  bool created=false;
+};
+class ScopedShortcutTargetTree {
+  static constexpr size_t maxDirectories=4,maxFiles=2;
+  fs::path base;
+  std::array<ShortcutCreatedDirectory,maxDirectories> directories{};
+  std::array<ShortcutCreatedFile,maxFiles> files{};
+  size_t directoryCount=0,fileCount=0;
+  SECURITY_ATTRIBUTES* savedAttributes=nullptr;
+  ShortcutCleanupProbe localCleanupProbe;
+  ShortcutCleanupProbe* cleanupProbe;
+  void rollbackNoexcept()noexcept{
+    for(size_t index=0;index<files.size();++index){
+      auto& file=files[index];
+      if(file.held.h!=INVALID_HANDLE_VALUE){
+        shortcutRollbackClose(cleanupProbe,ShortcutCleanupAction::close_handle,
+          ShortcutCleanupSubject::file,index,file.held.h);
+        file.held.h=INVALID_HANDLE_VALUE;
+      }
+    }
+    for(size_t index=0;index<directories.size();++index){
+      auto& directory=directories[index];
+      if(directory.held.h!=INVALID_HANDLE_VALUE){
+        shortcutRollbackClose(cleanupProbe,ShortcutCleanupAction::close_handle,
+          ShortcutCleanupSubject::directory,index,directory.held.h);
+        directory.held.h=INVALID_HANDLE_VALUE;
+      }
+    }
+    for(size_t index=fileCount;index>0;--index){
+      auto& file=files[index-1];
+      if(file.created&&shortcutRollbackDelete(cleanupProbe,
+        ShortcutCleanupSubject::file,index-1,file.storagePath))file.created=false;
+    }
+    for(size_t index=directoryCount;index>0;--index){
+      auto& directory=directories[index-1];
+      if(directory.created&&shortcutRollbackRemove(cleanupProbe,
+        ShortcutCleanupSubject::directory,index-1,directory.storagePath))
+        directory.created=false;
+    }
+  }
+  void createDirectory(size_t index,const fs::path& path,
+    ShortcutFixtureFailure afterCreate,ShortcutFixtureFailure afterOpen,
+    ShortcutFixtureFailure afterOwned,ShortcutFixtureFailure afterIdentity){
+    require(index<maxDirectories&&index==directoryCount);
+    auto& directory=directories[index];
+    // Reserve both transport representations before the native effect. The
+    // noexcept rollback consumes only the preplanned extended storage path.
+    directory.parsingPath=path;
+    directory.storagePath=shortcutStoragePath(path);
+    ++directoryCount;
+    const BOOL created=CreateDirectoryW(directory.storagePath.c_str(),savedAttributes);
+    if(created)directory.created=true;
+    injectShortcutFixtureFailure(afterCreate,afterCreate);
+    require(win32Result("CreateDirectoryW",created));
+    directory.held=open(directory.storagePath,true);
+    injectShortcutFixtureFailure(afterOpen,afterOpen);
+    owned(directory.held.h,ownerSID());
+    injectShortcutFixtureFailure(afterOwned,afterOwned);
+    require(physical(directory.held.h)==directory.storagePath.wstring());
+    injectShortcutFixtureFailure(afterIdentity,afterIdentity);
+  }
+  void createTarget(size_t index,const wchar_t* name,
+    ShortcutFixtureFailure afterCreate,ShortcutFixtureFailure afterOwned,
+    ShortcutFixtureFailure afterIdentity){
+    require(index<maxFiles&&index==fileCount);
+    auto& file=files[index];
+    const auto parsingPath=directories[3].parsingPath/name;
+    file.parsingPath=parsingPath;
+    file.storagePath=shortcutStoragePath(parsingPath);
+    ++fileCount;
+    // Match open()'s read-only custody handle. DELETE is requested only after
+    // the close result is observed, so cleanup remains explicit and the live
+    // identity check can open the same target without a DELETE sharing conflict.
+    const HANDLE created=CreateFileW(file.storagePath.c_str(),
+      GENERIC_READ|READ_CONTROL,FILE_SHARE_READ,savedAttributes,
       CREATE_NEW,FILE_ATTRIBUTE_NORMAL|FILE_FLAG_OPEN_REPARSE_POINT,nullptr);
-    require(owner->h!=INVALID_HANDLE_VALUE);
-    owned(owner->h,ownerSID());
-    const auto held=physical(owner->h);
-    require(held==path.wstring()||held==L"\\\\?\\"+path.wstring());
-    return path.wstring();
+    if(created!=INVALID_HANDLE_VALUE){
+      file.held.h=created;
+      file.created=true;
+    }
+    injectShortcutFixtureFailure(afterCreate,afterCreate);
+    require(win32Result("CreateFileW",created!=INVALID_HANDLE_VALUE));
+    owned(file.held.h,ownerSID());
+    injectShortcutFixtureFailure(afterOwned,afterOwned);
+    const auto held=physical(file.held.h);
+    require(shortcutStoragePath(held)==file.storagePath);
+    injectShortcutFixtureFailure(afterIdentity,afterIdentity);
   }
 public:
   std::wstring expectedTarget,substituteTarget;
-  explicit ScopedShortcutTargetTree(const Generation& g,SECURITY_ATTRIBUTES& attributes)
-    :savedAttributes(&attributes),base(g.root/L"shortcut-targets"){
-    stage("child_shortcut_long_target_fixture");
-    createDirectory(base);
-    auto path=base;
-    for(size_t part=0;part<3;part++){
-      path/=(std::wstring(96,wchar_t(L'a'+part%26)));
-      createDirectory(path);
+  explicit ScopedShortcutTargetTree(const Generation& g,SECURITY_ATTRIBUTES& attributes,
+    ShortcutFixtureFailure failure=ShortcutFixtureFailure::none,
+    ShortcutCleanupProbe* externalCleanupProbe=nullptr)
+    :savedAttributes(&attributes),
+     base(shortcutLocalDriveName((g.root/L"shortcut-targets").wstring())),
+     cleanupProbe(externalCleanupProbe?externalCleanupProbe:&localCleanupProbe){
+    try{
+      stage("child_shortcut_long_target_fixture");
+      createDirectory(0,base,
+        failure==ShortcutFixtureFailure::directory_after_create?failure:ShortcutFixtureFailure::none,
+        failure==ShortcutFixtureFailure::directory_after_open?failure:ShortcutFixtureFailure::none,
+        failure==ShortcutFixtureFailure::directory_after_owned?failure:ShortcutFixtureFailure::none,
+        failure==ShortcutFixtureFailure::directory_after_identity?failure:ShortcutFixtureFailure::none);
+      auto path=base;
+      for(size_t part=0;part<2;part++){
+        path/=(std::wstring(96,wchar_t(L'a'+part%26)));
+        createDirectory(part+1,path,ShortcutFixtureFailure::none,
+          ShortcutFixtureFailure::none,ShortcutFixtureFailure::none,
+          ShortcutFixtureFailure::none);
+      }
+      path/=(std::wstring(96,wchar_t(L'a'+2%26)));
+      createDirectory(3,path,
+        failure==ShortcutFixtureFailure::second_directory_after_create?failure:ShortcutFixtureFailure::none,
+        failure==ShortcutFixtureFailure::second_directory_after_open?failure:ShortcutFixtureFailure::none,
+        failure==ShortcutFixtureFailure::second_directory_after_owned?failure:ShortcutFixtureFailure::none,
+        failure==ShortcutFixtureFailure::second_directory_after_identity?failure:ShortcutFixtureFailure::none);
+      createTarget(0,L"expected-long.exe",
+        failure==ShortcutFixtureFailure::expected_file_after_create?failure:ShortcutFixtureFailure::none,
+        failure==ShortcutFixtureFailure::expected_file_after_owned?failure:ShortcutFixtureFailure::none,
+        failure==ShortcutFixtureFailure::expected_file_after_identity?failure:ShortcutFixtureFailure::none);
+      injectShortcutFixtureAllocationFailure(failure,
+        ShortcutFixtureFailure::expected_target_allocation);
+      expectedTarget=shortcutParsingTarget(files[0].parsingPath.wstring());
+      createTarget(1,L"substituted-long.exe",
+        failure==ShortcutFixtureFailure::substitute_file_after_create?failure:ShortcutFixtureFailure::none,
+        failure==ShortcutFixtureFailure::substitute_file_after_owned?failure:ShortcutFixtureFailure::none,
+        failure==ShortcutFixtureFailure::substitute_file_after_identity?failure:ShortcutFixtureFailure::none);
+      injectShortcutFixtureAllocationFailure(failure,
+        ShortcutFixtureFailure::substitute_target_allocation);
+      substituteTarget=shortcutParsingTarget(files[1].parsingPath.wstring());
+      require(expectedTarget.size()>MAX_PATH&&substituteTarget.size()>MAX_PATH);
+      injectShortcutFixtureFailure(failure,ShortcutFixtureFailure::target_tree_after_validation);
+    }catch(...){
+      rollbackNoexcept();
+      throw;
     }
-    expectedTarget=createTarget(L"expected-long.exe");
-    substituteTarget=createTarget(L"substituted-long.exe");
-    require(expectedTarget.size()>MAX_PATH&&substituteTarget.size()>MAX_PATH);
   }
-  HANDLE expectedCustody()const{return expectedFile.h;}
-  HANDLE substituteCustody()const{return substituteFile.h;}
+  HANDLE expectedCustody()const{return files[0].held.h;}
+  HANDLE substituteCustody()const{return files[1].held.h;}
+  const fs::path& longFileParent()const{return directories[3].parsingPath;}
   void cleanup(){
     stage("child_shortcut_long_target_cleanup");
-    if(expectedFile.h!=INVALID_HANDLE_VALUE)expectedFile.closeChecked();
-    if(substituteFile.h!=INVALID_HANDLE_VALUE)substituteFile.closeChecked();
-    require(win32Result("DeleteFileW",DeleteFileW(extendedTestPath(expectedTarget).c_str()))
-      &&win32Result("DeleteFileW",DeleteFileW(extendedTestPath(substituteTarget).c_str())));
-    for(auto& held:heldDirectories)held.closeChecked();
-    heldDirectories.clear();
-    for(auto item=directories.rbegin();item!=directories.rend();++item)
-      require(win32Result("RemoveDirectoryW",RemoveDirectoryW(extendedTestPath(*item).c_str())));
-    directories.clear();
+    const auto first=cleanupProbe->result.count;
+    rollbackNoexcept();
+    require(!cleanupProbe->result.overflow&&!cleanupProbe->invalidOverride
+      &&!cleanupProbe->reportedFailures(first));
     expectedTarget.clear();
     substituteTarget.clear();
   }
-  ~ScopedShortcutTargetTree()noexcept{
-    for(auto* file:{&expectedFile,&substituteFile})
-      if(file->h!=INVALID_HANDLE_VALUE){CloseHandle(file->h);file->h=INVALID_HANDLE_VALUE;}
-    if(!expectedTarget.empty())DeleteFileW((L"\\\\?\\"+expectedTarget).c_str());
-    if(!substituteTarget.empty())DeleteFileW((L"\\\\?\\"+substituteTarget).c_str());
-    for(auto& held:heldDirectories)
-      if(held.h!=INVALID_HANDLE_VALUE){CloseHandle(held.h);held.h=INVALID_HANDLE_VALUE;}
-    for(auto item=directories.rbegin();item!=directories.rend();++item)
-      RemoveDirectoryW((L"\\\\?\\"+item->wstring()).c_str());
-  }
+  ~ScopedShortcutTargetTree()noexcept{rollbackNoexcept();}
 };
 class ScopedShortcutFile {
-  fs::path path;
+  fs::path parsingPath,storagePath;
   Handle file;
+  bool created=false;
+  ShortcutCleanupProbe localCleanupProbe;
+  ShortcutCleanupProbe* cleanupProbe;
+  void rollbackNoexcept()noexcept{
+    if(file.h!=INVALID_HANDLE_VALUE){
+      shortcutRollbackClose(cleanupProbe,ShortcutCleanupAction::close_handle,
+        ShortcutCleanupSubject::file,0,file.h);
+      file.h=INVALID_HANDLE_VALUE;
+    }
+    if(created&&shortcutRollbackDelete(cleanupProbe,
+      ShortcutCleanupSubject::file,0,storagePath))created=false;
+  }
 public:
   std::wstring target;
-  explicit ScopedShortcutFile(const fs::path& parent,const wchar_t* name,SECURITY_ATTRIBUTES& attributes)
-    :path(parent/name){
-    file.h=CreateFileW(path.c_str(),GENERIC_READ|READ_CONTROL|DELETE,FILE_SHARE_READ,
-      &attributes,CREATE_NEW,FILE_ATTRIBUTE_NORMAL|FILE_FLAG_OPEN_REPARSE_POINT,nullptr);
-    require(file.h!=INVALID_HANDLE_VALUE);
-    owned(file.h,ownerSID());
-    const auto held=physical(file.h);
-    require(held==path.wstring()||held==L"\\\\?\\"+path.wstring());
-    target=path.wstring();
+  explicit ScopedShortcutFile(const fs::path& parent,const wchar_t* name,SECURITY_ATTRIBUTES& attributes,
+    ShortcutFixtureFailure failure=ShortcutFixtureFailure::none,
+    ShortcutCleanupProbe* externalCleanupProbe=nullptr)
+    :parsingPath(shortcutLocalDriveName((parent/name).wstring())),
+     storagePath(shortcutStoragePath(parsingPath)),
+     cleanupProbe(externalCleanupProbe?externalCleanupProbe:&localCleanupProbe){
+    try{
+      // Keep the held handle compatible with installed.h's read-only open()
+      // custody check. Cleanup closes before requesting DELETE by name.
+      const HANDLE createdHandle=CreateFileW(storagePath.c_str(),
+        GENERIC_READ|READ_CONTROL,FILE_SHARE_READ,&attributes,CREATE_NEW,
+        FILE_ATTRIBUTE_NORMAL|FILE_FLAG_OPEN_REPARSE_POINT,nullptr);
+      if(createdHandle!=INVALID_HANDLE_VALUE){
+        file.h=createdHandle;
+        created=true;
+      }
+      injectShortcutFixtureFailure(failure,ShortcutFixtureFailure::shortcut_file_after_create);
+      const bool createSucceeded=win32Result("CreateFileW",createdHandle!=INVALID_HANDLE_VALUE)!=FALSE;
+      if(!createSucceeded&&lastTestResultKnown&&lastTestResult==ERROR_FILE_EXISTS)
+        throw ShortcutFixtureCollisionFailure(lastTestResult);
+      require(createSucceeded);
+      owned(file.h,ownerSID());
+      injectShortcutFixtureFailure(failure,ShortcutFixtureFailure::shortcut_file_after_owned);
+      const auto held=physical(file.h);
+      require(shortcutStoragePath(held)==storagePath);
+      injectShortcutFixtureFailure(failure,ShortcutFixtureFailure::shortcut_file_after_identity);
+      injectShortcutFixtureAllocationFailure(failure,
+        ShortcutFixtureFailure::shortcut_file_target_allocation);
+      target=shortcutParsingTarget(parsingPath.wstring());
+      injectShortcutFixtureFailure(failure,ShortcutFixtureFailure::shortcut_file_after_validation);
+    }catch(...){
+      rollbackNoexcept();
+      throw;
+    }
   }
   HANDLE custody()const{return file.h;}
   void cleanup(){
-    file.closeChecked();
-    require(win32Result("DeleteFileW",DeleteFileW(path.c_str())));
-    path.clear();
+    const auto first=cleanupProbe->result.count;
+    rollbackNoexcept();
+    require(!cleanupProbe->result.overflow&&!cleanupProbe->invalidOverride
+      &&!cleanupProbe->reportedFailures(first));
+    parsingPath.clear();
+    storagePath.clear();
   }
-  ~ScopedShortcutFile()noexcept{
-    if(file.h!=INVALID_HANDLE_VALUE){CloseHandle(file.h);file.h=INVALID_HANDLE_VALUE;}
-    if(!path.empty())DeleteFileW(path.c_str());
-  }
+  ~ScopedShortcutFile()noexcept{rollbackNoexcept();}
 };
+struct ShortcutTargetTreePaths {
+  std::array<fs::path,4> directories;
+  std::array<fs::path,2> files;
+};
+static ShortcutTargetTreePaths shortcutTargetTreePaths(const Generation& g){
+  ShortcutTargetTreePaths result{};
+  auto path=shortcutLocalDriveName((g.root/L"shortcut-targets").wstring());
+  result.directories[0]=path;
+  for(size_t part=0;part<3;part++){
+    path/=(std::wstring(96,wchar_t(L'a'+part%26)));
+    result.directories[part+1]=path;
+  }
+  result.files[0]=path/L"expected-long.exe";
+  result.files[1]=path/L"substituted-long.exe";
+  return result;
+}
+static void requireShortcutFixturePathAbsent(const fs::path& path){
+  SetLastError(ERROR_SUCCESS);
+  const auto attributes=GetFileAttributesW(shortcutStoragePath(path).c_str());
+  const auto error=GetLastError();
+  require(attributes==INVALID_FILE_ATTRIBUTES
+    &&(error==ERROR_FILE_NOT_FOUND||error==ERROR_PATH_NOT_FOUND));
+}
+static const ShortcutCleanupCall& shortcutCleanupCall(const ShortcutCleanupResult& result,
+  ShortcutCleanupAction action,ShortcutCleanupSubject subject,size_t index){
+  for(size_t position=0;position<result.count;++position){
+    const auto& call=result.calls[position];
+    if(call.action==action&&call.subject==subject&&call.index==index)return call;
+  }
+  require(false);
+  return result.calls[0];
+}
+static void requireShortcutCleanupRefusal(const ShortcutCleanupProbe& probe,
+  ShortcutCleanupAction action,ShortcutCleanupSubject subject,size_t index){
+  const auto& call=shortcutCleanupCall(probe.result,action,subject,index);
+  require(!probe.invalidOverride&&call.apiCalled&&call.apiResultKnown
+    &&call.apiSucceeded&&call.apiStatus==ERROR_SUCCESS
+    &&call.source==ShortcutCleanupSource::test_override
+    &&!call.reportedSucceeded&&!call.reportedResultKnown
+    &&call.reportedStatus==ERROR_SUCCESS);
+}
+static void requireShortcutCleanupWin32Success(const ShortcutCleanupProbe& probe,
+  ShortcutCleanupAction action,ShortcutCleanupSubject subject,size_t index){
+  const auto& call=shortcutCleanupCall(probe.result,action,subject,index);
+  require(call.apiCalled&&call.apiResultKnown&&call.apiSucceeded
+    &&call.apiStatus==ERROR_SUCCESS&&call.source==ShortcutCleanupSource::win32
+    &&call.reportedResultKnown&&call.reportedSucceeded
+    &&call.reportedStatus==ERROR_SUCCESS);
+}
+static void requireTargetTreeConstructorRollback(const Generation& g,
+  SECURITY_ATTRIBUTES& attributes,ShortcutFixtureFailure failure,uint64_t end,
+  ShortcutCleanupProbe* cleanupProbe=nullptr){
+  installedBudget(end);
+  bool exactFailure=false;
+  try{
+    ScopedShortcutTargetTree fixture(g,attributes,failure,cleanupProbe);
+  }catch(const ShortcutFixtureInjectedFailure& error){
+    exactFailure=error.point==failure;
+  }catch(const ShortcutFixtureInjectedAllocationFailure& error){
+    exactFailure=error.point==failure;
+  }
+  installedBudget(end);
+  require(exactFailure);
+  const auto paths=shortcutTargetTreePaths(g);
+  for(const auto& file:paths.files)requireShortcutFixturePathAbsent(file);
+  for(size_t index=paths.directories.size();index>0;--index)
+    requireShortcutFixturePathAbsent(paths.directories[index-1]);
+}
+static void requireShortcutFileConstructorRollback(
+  const fs::path& parent,SECURITY_ATTRIBUTES& attributes,
+  ShortcutFixtureFailure failure,uint64_t end,
+  ShortcutCleanupProbe* cleanupProbe=nullptr){
+  installedBudget(end);
+  const auto path=shortcutLocalDriveName((parent/L"helper.constructor.exe").wstring());
+  require(path.size()>MAX_PATH&&shortcutStoragePath(path).wstring().size()>MAX_PATH);
+  bool exactFailure=false;
+  try{
+    ScopedShortcutFile fixture(parent,L"helper.constructor.exe",attributes,failure,cleanupProbe);
+  }catch(const ShortcutFixtureInjectedFailure& error){
+    exactFailure=error.point==failure;
+  }catch(const ShortcutFixtureInjectedAllocationFailure& error){
+    exactFailure=error.point==failure;
+  }
+  installedBudget(end);
+  require(exactFailure);
+  requireShortcutFixturePathAbsent(path);
+}
+static void shortcutCleanupResultContracts(const Generation& g,
+  SECURITY_ATTRIBUTES& attributes,uint64_t end){
+  stage("child_shortcut_cleanup_close_delete_results");
+  {
+    ScopedShortcutTargetTree parentTree(g,attributes);
+    const auto parent=parentTree.longFileParent();
+    for(const auto refusal:{
+      std::pair<ShortcutCleanupAction,const wchar_t*>(
+        ShortcutCleanupAction::close_handle,L"helper.cleanup-close.exe"),
+      std::pair<ShortcutCleanupAction,const wchar_t*>(
+        ShortcutCleanupAction::delete_file,L"helper.cleanup-delete.exe")}){
+      installedBudget(end);
+      ShortcutCleanupProbe probe;
+      probe.refuse(refusal.first,ShortcutCleanupSubject::file,0);
+      const auto path=shortcutLocalDriveName((parent/refusal.second).wstring());
+      require(path.size()>MAX_PATH&&shortcutStoragePath(path).wstring().size()>MAX_PATH);
+      {
+        ScopedShortcutFile fixture(parent,refusal.second,attributes,
+          ShortcutFixtureFailure::none,&probe);
+      }
+      requireShortcutCleanupRefusal(probe,refusal.first,ShortcutCleanupSubject::file,0);
+      const auto other=refusal.first==ShortcutCleanupAction::close_handle
+        ?ShortcutCleanupAction::delete_file:ShortcutCleanupAction::close_handle;
+      requireShortcutCleanupWin32Success(probe,other,ShortcutCleanupSubject::file,0);
+      requireShortcutFixturePathAbsent(path);
+      installedBudget(end);
+    }
+    parentTree.cleanup();
+  }
+  stage("child_shortcut_cleanup_remove_and_order");
+  ShortcutCleanupProbe treeProbe;
+  treeProbe.refuse(ShortcutCleanupAction::remove_directory,ShortcutCleanupSubject::directory,3);
+  {
+    ScopedShortcutTargetTree fixture(g,attributes,ShortcutFixtureFailure::none,&treeProbe);
+  }
+  require(treeProbe.result.count==12&&!treeProbe.result.overflow);
+  for(size_t index=0;index<2;++index){
+    const auto& close=treeProbe.result.calls[index];
+    require(close.action==ShortcutCleanupAction::close_handle
+      &&close.subject==ShortcutCleanupSubject::file&&close.index==index);
+  }
+  for(size_t index=0;index<4;++index){
+    const auto& close=treeProbe.result.calls[2+index];
+    require(close.action==ShortcutCleanupAction::close_handle
+      &&close.subject==ShortcutCleanupSubject::directory&&close.index==index);
+  }
+  for(size_t index=0;index<2;++index){
+    const auto& remove=treeProbe.result.calls[6+index];
+    require(remove.action==ShortcutCleanupAction::delete_file
+      &&remove.subject==ShortcutCleanupSubject::file&&remove.index==1-index);
+  }
+  for(size_t index=0;index<4;++index){
+    const auto& remove=treeProbe.result.calls[8+index];
+    require(remove.action==ShortcutCleanupAction::remove_directory
+      &&remove.subject==ShortcutCleanupSubject::directory&&remove.index==3-index);
+  }
+  for(size_t index=0;index<2;++index)
+    requireShortcutCleanupWin32Success(treeProbe,ShortcutCleanupAction::close_handle,
+      ShortcutCleanupSubject::file,index);
+  for(size_t index=0;index<2;++index)
+    requireShortcutCleanupWin32Success(treeProbe,ShortcutCleanupAction::delete_file,
+      ShortcutCleanupSubject::file,1-index);
+  for(size_t index=0;index<4;++index)
+    requireShortcutCleanupWin32Success(treeProbe,ShortcutCleanupAction::close_handle,
+      ShortcutCleanupSubject::directory,index);
+  requireShortcutCleanupRefusal(treeProbe,ShortcutCleanupAction::remove_directory,
+    ShortcutCleanupSubject::directory,3);
+  for(size_t index=0;index<3;++index)
+    requireShortcutCleanupWin32Success(treeProbe,ShortcutCleanupAction::remove_directory,
+      ShortcutCleanupSubject::directory,2-index);
+  require(treeProbe.reportedFailures(0));
+  const auto paths=shortcutTargetTreePaths(g);
+  for(const auto& file:paths.files)requireShortcutFixturePathAbsent(file);
+  for(size_t index=paths.directories.size();index>0;--index)
+    requireShortcutFixturePathAbsent(paths.directories[index-1]);
+  installedBudget(end);
+  stage("child_shortcut_cleanup_primary_error_preserved");
+  ShortcutCleanupProbe primaryProbe;
+  primaryProbe.refuse(ShortcutCleanupAction::close_handle,ShortcutCleanupSubject::file,1);
+  primaryProbe.refuse(ShortcutCleanupAction::delete_file,ShortcutCleanupSubject::file,1);
+  primaryProbe.refuse(ShortcutCleanupAction::remove_directory,ShortcutCleanupSubject::directory,3);
+  bool exactAllocationFailure=false;
+  try{
+    ScopedShortcutTargetTree fixture(g,attributes,
+      ShortcutFixtureFailure::substitute_target_allocation,&primaryProbe);
+  }catch(const ShortcutFixtureInjectedAllocationFailure& error){
+    exactAllocationFailure=error.point==ShortcutFixtureFailure::substitute_target_allocation;
+  }
+  installedBudget(end);
+  require(exactAllocationFailure&&!primaryProbe.invalidOverride
+    &&primaryProbe.reportedFailures(0));
+  requireShortcutCleanupRefusal(primaryProbe,ShortcutCleanupAction::close_handle,
+    ShortcutCleanupSubject::file,1);
+  requireShortcutCleanupRefusal(primaryProbe,ShortcutCleanupAction::delete_file,
+    ShortcutCleanupSubject::file,1);
+  requireShortcutCleanupRefusal(primaryProbe,ShortcutCleanupAction::remove_directory,
+    ShortcutCleanupSubject::directory,3);
+  for(const auto& file:paths.files)requireShortcutFixturePathAbsent(file);
+  for(size_t index=paths.directories.size();index>0;--index)
+    requireShortcutFixturePathAbsent(paths.directories[index-1]);
+}
+static void shortcutConstructorCleanupContracts(const Generation& g,uint64_t end){
+  Descriptor descriptor(ownACL(L"FA"));
+  auto attributes=descriptor.attributes();
+  shortcutCleanupResultContracts(g,attributes,end);
+  stage("child_shortcut_target_tree_constructor_rollback");
+  for(const auto failure:{
+    ShortcutFixtureFailure::directory_after_create,
+    ShortcutFixtureFailure::directory_after_open,
+    ShortcutFixtureFailure::directory_after_owned,
+    ShortcutFixtureFailure::directory_after_identity,
+    ShortcutFixtureFailure::second_directory_after_create,
+    ShortcutFixtureFailure::second_directory_after_open,
+    ShortcutFixtureFailure::second_directory_after_owned,
+    ShortcutFixtureFailure::second_directory_after_identity,
+    ShortcutFixtureFailure::expected_file_after_create,
+    ShortcutFixtureFailure::expected_file_after_owned,
+    ShortcutFixtureFailure::expected_file_after_identity,
+    ShortcutFixtureFailure::substitute_file_after_create,
+    ShortcutFixtureFailure::substitute_file_after_owned,
+    ShortcutFixtureFailure::substitute_file_after_identity,
+    ShortcutFixtureFailure::target_tree_after_validation,
+    ShortcutFixtureFailure::expected_target_allocation,
+    ShortcutFixtureFailure::substitute_target_allocation})
+    requireTargetTreeConstructorRollback(g,attributes,failure,end);
+  stage("child_shortcut_file_constructor_rollback");
+  {
+    ScopedShortcutTargetTree parentTree(g,attributes);
+    for(const auto failure:{
+      ShortcutFixtureFailure::shortcut_file_after_create,
+      ShortcutFixtureFailure::shortcut_file_after_owned,
+      ShortcutFixtureFailure::shortcut_file_after_identity,
+      ShortcutFixtureFailure::shortcut_file_target_allocation,
+      ShortcutFixtureFailure::shortcut_file_after_validation})
+      requireShortcutFileConstructorRollback(parentTree.longFileParent(),attributes,failure,end);
+    parentTree.cleanup();
+  }
+  stage("child_shortcut_constructor_foreign_collision");
+  {
+    ScopedShortcutFile foreign(g.root,L"helper.foreign.exe",attributes);
+    bool collisionRefused=false;
+    try{
+      ScopedShortcutFile collision(g.root,L"helper.foreign.exe",attributes);
+    }catch(const ShortcutFixtureCollisionFailure& error){
+      collisionRefused=error.status==ERROR_FILE_EXISTS&&!strcmp(lastTestAPI,"CreateFileW")
+        &&lastTestResultKnown&&lastTestResult==ERROR_FILE_EXISTS;
+    }
+    installedBudget(end);
+    require(collisionRefused&&lastTestResultKnown
+      &&lastTestResult==ERROR_FILE_EXISTS&&GetFileAttributesW(
+      shortcutStoragePath(foreign.target).c_str())!=INVALID_FILE_ATTRIBUTES);
+    foreign.cleanup();
+    requireShortcutFixturePathAbsent(shortcutLocalDriveName(
+      (g.root/L"helper.foreign.exe").wstring()));
+  }
+  std::cout<<"TEST shortcut constructor cleanup ownership passed"
+    <<" transactional=true original_failure_preserved=true"
+    <<" allocation_failure_preserved=true created_only=true"
+    <<" foreign_collision_preserved=true"
+    <<" rollback_storage=extended cleanup_results=close+delete+remove"
+    <<" cleanup_primary_error_preserved=true order=handles_before_delete_deepest_first"
+    <<" failures=multi_directory+second_file+post_create+open_owned_identity"
+    <<" +member_allocation+later_validation exactAPI=unknown\n";
+}
 static void requireTargetSubstitutionRefused(const ShortcutFixture& expected,ShortcutFixture substitute,uint64_t end){
   installedBudget(end);
   const auto substitutedBytes=configuredShortcutBytes(substitute,end);
@@ -776,7 +1338,8 @@ static void requireSyntheticTargetUnavailable(const ShortcutFixture& prototype,u
     unavailable=std::string(error.api)=="SHParseDisplayName"
       &&error.statusKnown&&FAILED(error.status)&&!parsed.value;
   }
-  require(unavailable&&GetFileAttributesW(extendedTestPath(target).c_str())==INVALID_FILE_ATTRIBUTES);
+  require(unavailable&&GetFileAttributesW(shortcutStoragePath(target).c_str())==INVALID_FILE_ATTRIBUTES
+    &&GetLastError()==ERROR_FILE_NOT_FOUND);
   std::cout<<"TEST synthetic shortcut target classified unavailable"
     <<" exists=false api=SHParseDisplayName typed_api_failure=true"
     <<" status_known=true result="<<DWORD(syntheticStatus)
@@ -785,10 +1348,11 @@ static void requireSyntheticTargetUnavailable(const ShortcutFixture& prototype,u
 static std::vector<uint8_t> legacySetPathShortcutBytes(
  const ShortcutFixture& fixture,uint64_t end){
   shortcutBudget(end);
+  const auto target=shortcutParsingTarget(fixture.target);
   Microsoft::WRL::ComPtr<IShellLinkW> link;
   shortcutHresult("CoCreateInstance(CLSID_ShellLink)",
     CoCreateInstance(CLSID_ShellLink,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&link)));
-  shortcutHresult("IShellLinkW::SetPath",link->SetPath(fixture.target.c_str()));
+  shortcutHresult("IShellLinkW::SetPath",link->SetPath(target.c_str()));
   shortcutHresult("IShellLinkW::SetArguments",link->SetArguments(fixture.args.c_str()));
   Microsoft::WRL::ComPtr<IPropertyStore> properties;
   shortcutHresult("IShellLinkW::QueryInterface(IPropertyStore)",link.As(&properties));
@@ -817,6 +1381,8 @@ static void shortcutContracts(const Generation& g,uint64_t end){
   shortcutResultClassification();
   installedBudget(end);
   shortcutOwnershipContracts();
+  installedBudget(end);
+  shortcutConstructorCleanupContracts(g,end);
   installedBudget(end);
   stage("child_shortcut_path_contract");
   const auto expected=g.root.wstring().substr(4)+L"\\helper.exe";
@@ -855,7 +1421,8 @@ static void shortcutContracts(const Generation& g,uint64_t end){
     requireTargetSubstitutionRefused(shortFixture,
       substituted(shortFixture,std::wstring(shortSubstitute.target),shortSubstitute.custody()),end);
     shortSubstitute.cleanup();
-    require(GetFileAttributesW((g.root/L"helper.substituted.exe").c_str())==INVALID_FILE_ATTRIBUTES);
+    require(GetFileAttributesW(shortcutStoragePath(g.root/L"helper.substituted.exe").c_str())==INVALID_FILE_ATTRIBUTES
+      &&GetLastError()==ERROR_FILE_NOT_FOUND);
   }
   stage("child_shortcut_synthetic_target_classification");
   requireSyntheticTargetUnavailable(shortFixture,end);
@@ -876,8 +1443,10 @@ static void shortcutContracts(const Generation& g,uint64_t end){
     stage("child_shortcut_long_substitution_refused");
     requireTargetSubstitutionRefused(longFixture,longSubstitute,end);
     longTargets.cleanup();
-    require(GetFileAttributesW(extendedTestPath(longFixture.target).c_str())==INVALID_FILE_ATTRIBUTES
-      &&GetFileAttributesW(extendedTestPath(longSubstitute.target).c_str())==INVALID_FILE_ATTRIBUTES);
+    require(GetFileAttributesW(shortcutStoragePath(longFixture.target).c_str())==INVALID_FILE_ATTRIBUTES
+      &&GetLastError()==ERROR_FILE_NOT_FOUND);
+    require(GetFileAttributesW(shortcutStoragePath(longSubstitute.target).c_str())==INVALID_FILE_ATTRIBUTES
+      &&GetLastError()==ERROR_FILE_NOT_FOUND);
   }
   // The former expired-on-entry assertion accepted any std::runtime_error and
   // could therefore turn an unrelated contract failure into a false PASS.
@@ -888,9 +1457,11 @@ static void shortcutContracts(const Generation& g,uint64_t end){
     <<" path=dos+exact-parsing-name+held-custody short_round_trip=true"
     <<" actual_long_round_trip=true synthetic_target_unavailable=true"
     <<" target_substitution_refused=true properties=vt_lpwstring+vt_clsid"
-    <<" persistence=ipersiststream legacy_setpath_reader_compatible=true"
-    <<" cleanup=co_task_mem+pidl+global_lock"
-    <<" test_target_cleanup=true"
+      <<" persistence=ipersiststream legacy_setpath_reader_compatible=true"
+      <<" cleanup=co_task_mem+pidl+global_lock"
+      <<" constructor_cleanup=transactional+created_only+foreign_preserved"
+      <<" rollback_storage=extended+cleanup_results_observable"
+      <<" test_target_cleanup=true"
     <<" deadline_inside_serialization_after_api=true"
     <<" deadline_inside_readback_after_api=true"
     <<" deadline_boundaries=post_API_Save+post_API_Load exactAPI=unknown\n";
