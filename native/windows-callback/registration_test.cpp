@@ -663,19 +663,24 @@ class ScopedShortcutTargetTree {
   Handle expectedFile,substituteFile;
   SECURITY_ATTRIBUTES* savedAttributes=nullptr;
   void createDirectory(const fs::path& path){
+    stage("child_shortcut_long_directory_create");
     require(win32Result("CreateDirectoryW",
       CreateDirectoryW(extendedTestPath(path).c_str(),savedAttributes)));
+    stage("child_shortcut_long_directory_open");
     heldDirectories.push_back(open(extendedTestPath(path),true));
+    stage("child_shortcut_long_directory_custody");
     owned(heldDirectories.back().h,ownerSID());
     directories.push_back(path);
   }
   std::wstring createTarget(const wchar_t* name){
     const auto path=directories.back()/name;
     Handle* owner=wcscmp(name,L"expected-long.exe")==0?&expectedFile:&substituteFile;
+    stage("child_shortcut_long_file_create");
     owner->h=CreateFileW(extendedTestPath(path).c_str(),
       GENERIC_READ|READ_CONTROL,FILE_SHARE_READ,savedAttributes,
       CREATE_NEW,FILE_ATTRIBUTE_NORMAL|FILE_FLAG_OPEN_REPARSE_POINT,nullptr);
-    require(owner->h!=INVALID_HANDLE_VALUE);
+    require(win32Result("CreateFileW",owner->h!=INVALID_HANDLE_VALUE));
+    stage("child_shortcut_long_file_custody");
     owned(owner->h,ownerSID());
     const auto held=physical(owner->h);
     require(held==path.wstring()||held==L"\\\\?\\"+path.wstring());
