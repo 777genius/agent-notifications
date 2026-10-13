@@ -708,6 +708,7 @@ public:
     }
     expectedTarget=createTarget(L"expected-long.exe");
     substituteTarget=createTarget(L"substituted-long.exe");
+    stage("child_shortcut_long_target_lengths");
     require(expectedTarget.size()>MAX_PATH&&substituteTarget.size()>MAX_PATH);
   }
   HANDLE expectedCustody()const{return expectedFile.h;}
@@ -886,7 +887,9 @@ static void shortcutContracts(const Generation& g,uint64_t end){
     const auto longSubstitute=substituted(shortFixture,
       std::wstring(longTargets.substituteTarget),longTargets.substituteCustody());
     require(longFixture.target.size()>MAX_PATH);
+    stage("child_shortcut_long_target_serialization");
     const auto longBytes=configuredShortcutBytes(longFixture,end);
+    stage("child_shortcut_long_target_readback");
     shortcutReadbackBytes(longFixture,longBytes,end);
     installedBudget(end);
     stage("child_shortcut_long_substitution_refused");
