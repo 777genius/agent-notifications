@@ -7,6 +7,7 @@
 #include <wincrypt.h>
 #include <notificationactivationcallback.h>
 #include "navigation_windows_vendor_sdk_test.h"
+#include "navigation_windows_token_queries.h"
 #include <wrl/client.h>
 #include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.Data.Json.h>
@@ -164,6 +165,32 @@ static JsonObject identity(HANDLE process, DWORD pid, bool current) {
     put(record, L"executableSHA256", executableHash); return record;
 }
 static JsonObject ownIdentity() { return identity(GetCurrentProcess(), GetCurrentProcessId(), true); }
+// Process primary token only; no thread impersonation, mutation or launch authority.
+static JsonObject processToken(HANDLE process, DWORD pid) {
+    try {
+        NavigationTokenTEST::Token token;
+        NavigationTokenTEST::require(OpenProcessToken(process, TOKEN_QUERY | TOKEN_DUPLICATE, &token.handle)
+                                     != FALSE, "ReceiverProcessToken");
+        const auto facts = NavigationTokenTEST::facts(token.handle);
+        require(facts.session == session(pid), "receiver token/process session mismatch");
+        auto record = JsonObject::Parse(winrt::to_hstring(NavigationTokenTEST::factsJson(facts)));
+        put(record, L"enabledAdmins", NavigationTokenTEST::enabledAdmins(token.handle));
+        return record;
+    } catch (const NavigationTokenTEST::Failure& failure) {
+        throw std::runtime_error(std::string("receiver token query failed: ") + failure.query
+                                 + " error=" + std::to_string(failure.error));
+    }
+}
+static void sameToken(const JsonObject& callback, const JsonObject& retained) {
+    const auto a = callback.GetNamedObject(L"receiverToken"), b = retained.GetNamedObject(L"receiverToken");
+    for (const wchar_t* key : {L"sidSHA256", L"authLUIDSHA256"})
+        require(text(a, key) == text(b, key), "callback/held token identity mismatch");
+    for (const wchar_t* key : {L"session", L"elevationType", L"integrityRID"})
+        require(a.GetNamedNumber(key) == b.GetNamedNumber(key), "callback/held token facts mismatch");
+    for (const wchar_t* key : {L"elevated", L"enabledAdmins"})
+        require(a.GetNamedBoolean(key) == b.GetNamedBoolean(key), "callback/held token authority mismatch");
+}
+
 struct OwnedProcessScope {
     HANDLE process;
     const char* evidenceName;
@@ -383,7 +410,9 @@ public:
         try {
             require(app && args && wcsnlen_s(app, 1024) < 1024 && wcsnlen_s(args, 37) == 36
                     && app == aumid && args == nonce && count == 0, "native callback target mismatch");
+            const auto token = processToken(GetCurrentProcess(), GetCurrentProcessId());
             auto record = ownIdentity(); put(record, L"targetMatches", true);
+            record.SetNamedValue(L"receiverToken", token);
             if (composed) {
                 VendorInput binding; // Validation remains pre-effect and held through inline SDK calls.
                 publish("callback.json", record); composedAction(record, entry, binding);
@@ -459,6 +488,8 @@ static int collectCallback() {
             && ticks(retained, L"creationTicks") > ticks(sender, L"exitTicks")
             && started.GetNamedNumber(L"observedBootMs") >= sender.GetNamedNumber(L"collectedBootMs"),
             "callback incarnation is not cold after collected sender exit");
+    require(WaitForSingleObject(process.value, 0) == WAIT_TIMEOUT, "callback exited before token measurement");
+    retained.SetNamedValue(L"receiverToken", processToken(process.value, pid));
     publish("callback-retained.json", retained);
     auto callback = load("callback.json"), effect = load("effect.json");
     require(callback.GetNamedBoolean(L"targetMatches") && effect.GetNamedBoolean(L"targetMatches")
@@ -468,6 +499,8 @@ static int collectCallback() {
         require(text(callback, key) == text(retained, key) && text(effect, key) == text(retained, key),
                 "callback effect disagrees with retained process");
     }
+    sameToken(callback, retained); sameToken(effect, retained);
+    put(retained, L"receiverTokenMatched", true);
     DWORD waitMs = 5000;
     if (composed) {
         auto terminal = load("vendor-callback-published.json"), lease = load("callback-lease.json");
