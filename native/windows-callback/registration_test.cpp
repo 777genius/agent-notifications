@@ -673,7 +673,7 @@ class ScopedShortcutTargetTree {
     const auto path=directories.back()/name;
     Handle* owner=wcscmp(name,L"expected-long.exe")==0?&expectedFile:&substituteFile;
     owner->h=CreateFileW(extendedTestPath(path).c_str(),
-      GENERIC_READ|READ_CONTROL|DELETE,FILE_SHARE_READ,savedAttributes,
+      GENERIC_READ|READ_CONTROL,FILE_SHARE_READ,savedAttributes,
       CREATE_NEW,FILE_ATTRIBUTE_NORMAL|FILE_FLAG_OPEN_REPARSE_POINT,nullptr);
     require(owner->h!=INVALID_HANDLE_VALUE);
     owned(owner->h,ownerSID());
@@ -735,7 +735,7 @@ public:
     require(path.wstring().starts_with(L"\\\\?\\"));
     target=path.wstring().substr(4);
     (void)extendedTestPath(target);
-    file.h=CreateFileW(path.c_str(),GENERIC_READ|READ_CONTROL|DELETE,FILE_SHARE_READ,
+    file.h=CreateFileW(path.c_str(),GENERIC_READ|READ_CONTROL,FILE_SHARE_READ,
       &attributes,CREATE_NEW,FILE_ATTRIBUTE_NORMAL|FILE_FLAG_OPEN_REPARSE_POINT,nullptr);
     require(file.h!=INVALID_HANDLE_VALUE);
     owned(file.h,ownerSID());
