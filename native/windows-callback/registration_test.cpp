@@ -890,7 +890,11 @@ static void shortcutContracts(const Generation& g,uint64_t end){
     stage("child_shortcut_long_target_serialization");
     const auto longBytes=configuredShortcutBytes(longFixture,end);
     stage("child_shortcut_long_target_readback");
-    shortcutReadbackBytes(longFixture,longBytes,end);
+    try{shortcutReadbackBytes(longFixture,longBytes,end);}
+    catch(const ShortcutTargetMismatch&){
+      std::cerr<<"TEST long readback typed_target_mismatch=true\n";
+      throw;
+    }
     installedBudget(end);
     stage("child_shortcut_long_substitution_refused");
     requireTargetSubstitutionRefused(longFixture,longSubstitute,end);
