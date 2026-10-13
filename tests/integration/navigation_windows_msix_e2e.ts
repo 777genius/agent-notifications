@@ -36,9 +36,10 @@ let packageIntent = false;
 let activationIntent = false;
 let prepareOnly = false, composed = false, vendorKnown = false, vendorEffectsKnown = true;
 const vendorPin = { name: 'OpenAI.Codex', publisher: 'CN=50BDFD77-8903-4850-9FFE-6E8522F64D5B',
-  familyName: 'OpenAI.Codex_2p2nqsd0c76g0', fullName: 'OpenAI.Codex_26.930.7945.0_arm64__2p2nqsd0c76g0',
-  version: '26.930.7945.0', architecture: 12 };
-const vendorArchiveHash = 'a208d373c7c84aa3e0452cd3dd8406a6794d8139ec1260c64a770c2a00fbeeb8';
+  familyName: 'OpenAI.Codex_2p2nqsd0c76g0', fullName: 'OpenAI.Codex_26.1007.2314.0_arm64__2p2nqsd0c76g0',
+  version: '26.1007.2314.0', architecture: 12 };
+const vendorArchiveBytes = 1017348969;
+const vendorArchiveHash = '4d0097243a8683a7810415479f306c230d2c4c50c869990298296eb683a44aef';
 let vendorIntent = '';
 
 let bootstrap: BoundSameJobBootstrap | undefined;
@@ -466,7 +467,9 @@ async function installVendor(prepared: Json): Promise<void> {
   const archive = join(root!, 'client.msix');
   const acquired: Json = {}; const digest = await download(archive, acquired);
   evidence.vendorAcquisition = acquired;
-  if (digest !== vendorArchiveHash) throw new Error('official vendor bytes changed before Add');
+  if (acquired.packageBytes !== vendorArchiveBytes || digest !== vendorArchiveHash) {
+    throw new Error('current raw vendor bytes changed before Add');
+  }
   evidence.vendorPackageSHA256 = digest;
   if (prepared.nonce !== nonce || typeof prepared.userSid !== 'string' || !Number.isInteger(prepared.session)) throw new Error('vendor owner context missing');
   if (typeof prepared.signtool !== 'string' || hash(prepared.signtool) !== prepared.signtoolSHA256) throw new Error('captured signer tool changed');
@@ -500,7 +503,8 @@ async function installVendor(prepared: Json): Promise<void> {
     const source = resolve('tests/integration', name); const captured = join(root!, name);
     copyFileSync(source, captured); return [name, hash(captured)];
   }));
-  const binding = { schema: 1, nonce, threadID: nonce, ...vendorPin, archiveSHA256: digest,
+  const binding = { schema: 1, nonce, threadID: nonce, ...vendorPin,
+    packageBytes: vendorArchiveBytes, archiveSHA256: digest,
     callbackBinarySHA256: evidence.binarySHA256, observerSHA256: evidence.observerSHA256,
     addProofSHA256: hash(join(root!, 'vendor-install-completed.proof')), userSid: prepared.userSid, session: prepared.session };
   writeFileSync(join(root!, 'vendor-callback-spec.json'), JSON.stringify(binding), { flag: 'wx', flush: true });
