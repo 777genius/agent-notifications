@@ -11,7 +11,6 @@ import {
   actualBuildProvenance,
   compileManifestJoin,
   dispatchAdmissionJoin,
-  gitBlob,
   packageEvidenceJoin,
   packageTestPattern,
   processSupervisionJoin,
@@ -124,12 +123,14 @@ async function hashFile(file: string): Promise<string> {
   return h.digest('hex');
 }
 
-async function fileIdentity(file: string): Promise<FileIdentity> {
+async function fileIdentity(file: string, repository: string): Promise<FileIdentity> {
   const info = await stat(file);
   assert(info.isFile() && info.nlink === 1 && info.size > 0 && info.size <= 67108864);
   const bytes = await readFile(file);
   assert.equal(bytes.length,info.size);
-  return {bytes:info.size,sha256:sha(bytes),gitBlob:gitBlob(bytes)};
+  // Git applies the checked-in text/EOL attributes (PowerShell is CRLF).
+  // SHA256 and size retain the exact bytes actually compiled/executed.
+  return {bytes:info.size,sha256:sha(bytes),gitBlob:await git(repository,['hash-object','--',file])};
 }
 
 function machine(bytes: Buffer): number {
@@ -144,7 +145,7 @@ async function readJson<T>(file: string): Promise<T> {
 }
 
 async function git(rootPath: string, args: readonly string[]): Promise<string> {
-  const result = await execFileAsync('git',args,{cwd:rootPath,windowsHide:true,maxBuffer:65536});
+  const result = await execFileAsync('git',args,{cwd:rootPath,windowsHide:true,maxBuffer:65536,timeout:30000});
   return result.stdout.trim();
 }
 
@@ -169,12 +170,12 @@ async function verifyGitIdentity(
     'tests/integration/windows_callback_installed/bounded_job.ps1':source.harnessFiles.supervisor,
   } as const;
   for (const [relative,expected] of Object.entries(identities)) {
-    const actual = await fileIdentity(path.join(harnessSource,relative));
+    const actual = await fileIdentity(path.join(harnessSource,relative),harnessSource);
     assert.deepEqual(actual,expected);
     assert.equal(await git(harnessSource,['rev-parse',`${harnessSHA}:${relative}`]),actual.gitBlob);
   }
   const coreRelative = 'internal/installruntime/windows_generation_native_test.go';
-  const coreActual = await fileIdentity(path.join(coreSource,coreRelative));
+  const coreActual = await fileIdentity(path.join(coreSource,coreRelative),coreSource);
   assert.deepEqual(coreActual,source.coreFiles.testSource);
   assert.equal(await git(coreSource,['rev-parse',`${coreSHA}:${coreRelative}`]),coreActual.gitBlob);
   assert.equal(await hashFile(path.resolve(process.argv[1]!)),source.harnessFiles.controller.sha256);
