@@ -1,6 +1,7 @@
-// TEST-only real Win32 registry and in-memory Shell link contracts. All
-// registration is redirected into one exclusive private HKCU subtree; no
-// SDK/package/notification or Shell filesystem target operation.
+// TEST-only real Win32 registry and Shell link contracts. Registration is
+// redirected into one exclusive private HKCU subtree. Shortcut target fixtures
+// are bounded, exclusive TEST-owned files; no SDK/package/notification effect
+// and no shipping/user shortcut or target is created.
 #define NOMINMAX
 #define WCB_TEST_SHORTCUT_DEADLINE_PROBES 1
 #include "installed.h"
@@ -634,10 +635,11 @@ template<class Work> static void requireShortcutDeadlineAfterApi(
   // runtime errors intentionally escape instead of becoming a false PASS.
   require(deadlineFailure);
 }
-static ShortcutFixture substituted(const ShortcutFixture& fixture,std::wstring&& target){
-  return {std::move(target),fixture.args,fixture.aumid,fixture.clsid};
+static ShortcutFixture substituted(
+ const ShortcutFixture& fixture,std::wstring&& target,HANDLE custody){
+  return {std::move(target),fixture.args,fixture.aumid,fixture.clsid,custody};
 }
-static std::wstring longShortcutTarget(const ShortcutFixture& fixture){
+static std::wstring syntheticLongShortcutTarget(const ShortcutFixture& fixture){
   const auto separator=fixture.target.find_last_of(L'\\');
   require(separator!=std::wstring::npos&&separator>2);
   std::wstring target=fixture.target.substr(0,separator);
@@ -649,6 +651,104 @@ static std::wstring longShortcutTarget(const ShortcutFixture& fixture){
   require(target.size()>MAX_PATH&&target.size()<20000&&target.starts_with(fixture.target.substr(0,3)));
   return target;
 }
+static fs::path extendedTestPath(const fs::path& path){
+  const auto value=path.wstring();
+  require(value.size()>3&&value[1]==L':'&&value[2]==L'\\'&&!value.starts_with(L"\\\\?\\"));
+  return fs::path(L"\\\\?\\"+value);
+}
+class ScopedShortcutTargetTree {
+  fs::path base;
+  std::vector<fs::path> directories;
+  std::vector<Handle> heldDirectories;
+  Handle expectedFile,substituteFile;
+  SECURITY_ATTRIBUTES* savedAttributes=nullptr;
+  void createDirectory(const fs::path& path){
+    require(win32Result("CreateDirectoryW",
+      CreateDirectoryW(extendedTestPath(path).c_str(),savedAttributes)));
+    heldDirectories.push_back(open(extendedTestPath(path),true));
+    owned(heldDirectories.back().h,ownerSID());
+    directories.push_back(path);
+  }
+  std::wstring createTarget(const wchar_t* name){
+    const auto path=directories.back()/name;
+    Handle* owner=wcscmp(name,L"expected-long.exe")==0?&expectedFile:&substituteFile;
+    owner->h=CreateFileW(extendedTestPath(path).c_str(),
+      GENERIC_READ|READ_CONTROL|DELETE,FILE_SHARE_READ,savedAttributes,
+      CREATE_NEW,FILE_ATTRIBUTE_NORMAL|FILE_FLAG_OPEN_REPARSE_POINT,nullptr);
+    require(owner->h!=INVALID_HANDLE_VALUE);
+    owned(owner->h,ownerSID());
+    const auto held=physical(owner->h);
+    require(held==path.wstring()||held==L"\\\\?\\"+path.wstring());
+    return path.wstring();
+  }
+public:
+  std::wstring expectedTarget,substituteTarget;
+  explicit ScopedShortcutTargetTree(const Generation& g,SECURITY_ATTRIBUTES& attributes)
+    :savedAttributes(&attributes),base(g.root/L"shortcut-targets"){
+    stage("child_shortcut_long_target_fixture");
+    createDirectory(base);
+    auto path=base;
+    for(size_t part=0;part<3;part++){
+      path/=(std::wstring(96,wchar_t(L'a'+part%26)));
+      createDirectory(path);
+    }
+    expectedTarget=createTarget(L"expected-long.exe");
+    substituteTarget=createTarget(L"substituted-long.exe");
+    require(expectedTarget.size()>MAX_PATH&&substituteTarget.size()>MAX_PATH);
+  }
+  HANDLE expectedCustody()const{return expectedFile.h;}
+  HANDLE substituteCustody()const{return substituteFile.h;}
+  void cleanup(){
+    stage("child_shortcut_long_target_cleanup");
+    if(expectedFile.h!=INVALID_HANDLE_VALUE)expectedFile.closeChecked();
+    if(substituteFile.h!=INVALID_HANDLE_VALUE)substituteFile.closeChecked();
+    require(win32Result("DeleteFileW",DeleteFileW(extendedTestPath(expectedTarget).c_str()))
+      &&win32Result("DeleteFileW",DeleteFileW(extendedTestPath(substituteTarget).c_str())));
+    for(auto& held:heldDirectories)held.closeChecked();
+    heldDirectories.clear();
+    for(auto item=directories.rbegin();item!=directories.rend();++item)
+      require(win32Result("RemoveDirectoryW",RemoveDirectoryW(extendedTestPath(*item).c_str())));
+    directories.clear();
+    expectedTarget.clear();
+    substituteTarget.clear();
+  }
+  ~ScopedShortcutTargetTree()noexcept{
+    for(auto* file:{&expectedFile,&substituteFile})
+      if(file->h!=INVALID_HANDLE_VALUE){CloseHandle(file->h);file->h=INVALID_HANDLE_VALUE;}
+    if(!expectedTarget.empty())DeleteFileW((L"\\\\?\\"+expectedTarget).c_str());
+    if(!substituteTarget.empty())DeleteFileW((L"\\\\?\\"+substituteTarget).c_str());
+    for(auto& held:heldDirectories)
+      if(held.h!=INVALID_HANDLE_VALUE){CloseHandle(held.h);held.h=INVALID_HANDLE_VALUE;}
+    for(auto item=directories.rbegin();item!=directories.rend();++item)
+      RemoveDirectoryW((L"\\\\?\\"+item->wstring()).c_str());
+  }
+};
+class ScopedShortcutFile {
+  fs::path path;
+  Handle file;
+public:
+  std::wstring target;
+  explicit ScopedShortcutFile(const fs::path& parent,const wchar_t* name,SECURITY_ATTRIBUTES& attributes)
+    :path(parent/name){
+    file.h=CreateFileW(path.c_str(),GENERIC_READ|READ_CONTROL|DELETE,FILE_SHARE_READ,
+      &attributes,CREATE_NEW,FILE_ATTRIBUTE_NORMAL|FILE_FLAG_OPEN_REPARSE_POINT,nullptr);
+    require(file.h!=INVALID_HANDLE_VALUE);
+    owned(file.h,ownerSID());
+    const auto held=physical(file.h);
+    require(held==path.wstring()||held==L"\\\\?\\"+path.wstring());
+    target=path.wstring();
+  }
+  HANDLE custody()const{return file.h;}
+  void cleanup(){
+    file.closeChecked();
+    require(win32Result("DeleteFileW",DeleteFileW(path.c_str())));
+    path.clear();
+  }
+  ~ScopedShortcutFile()noexcept{
+    if(file.h!=INVALID_HANDLE_VALUE){CloseHandle(file.h);file.h=INVALID_HANDLE_VALUE;}
+    if(!path.empty())DeleteFileW(path.c_str());
+  }
+};
 static void requireTargetSubstitutionRefused(const ShortcutFixture& expected,ShortcutFixture substitute,uint64_t end){
   installedBudget(end);
   const auto substitutedBytes=configuredShortcutBytes(substitute,end);
@@ -662,6 +762,51 @@ static void requireTargetSubstitutionRefused(const ShortcutFixture& expected,Sho
   }
   installedBudget(end);
   require(refused);
+}
+static void requireSyntheticTargetUnavailable(const ShortcutFixture& prototype,uint64_t end){
+  const auto target=syntheticLongShortcutTarget(prototype);
+  ScopedPidl parsed;
+  bool unavailable=false;
+  HRESULT syntheticStatus=E_FAIL;
+  try{
+    parseShortcutTarget({target,prototype.args,prototype.aumid,prototype.clsid,
+      INVALID_HANDLE_VALUE},parsed,end);
+  }catch(const ShortcutApiFailure& error){
+    syntheticStatus=error.status;
+    unavailable=std::string(error.api)=="SHParseDisplayName"
+      &&error.statusKnown&&FAILED(error.status)&&!parsed.value;
+  }
+  require(unavailable&&GetFileAttributesW(extendedTestPath(target).c_str())==INVALID_FILE_ATTRIBUTES);
+  std::cout<<"TEST synthetic shortcut target classified unavailable"
+    <<" exists=false api=SHParseDisplayName typed_api_failure=true"
+    <<" status_known=true result="<<DWORD(syntheticStatus)
+    <<" pidl_fabricated=false exactAPI=SHParseDisplayName\n";
+}
+static std::vector<uint8_t> legacySetPathShortcutBytes(
+ const ShortcutFixture& fixture,uint64_t end){
+  shortcutBudget(end);
+  Microsoft::WRL::ComPtr<IShellLinkW> link;
+  shortcutHresult("CoCreateInstance(CLSID_ShellLink)",
+    CoCreateInstance(CLSID_ShellLink,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&link)));
+  shortcutHresult("IShellLinkW::SetPath",link->SetPath(fixture.target.c_str()));
+  shortcutHresult("IShellLinkW::SetArguments",link->SetArguments(fixture.args.c_str()));
+  Microsoft::WRL::ComPtr<IPropertyStore> properties;
+  shortcutHresult("IShellLinkW::QueryInterface(IPropertyStore)",link.As(&properties));
+  ScopedPropVariant value;
+  shortcutHresult("InitPropVariantFromString",
+    InitPropVariantFromString(fixture.aumid.c_str(),&value.value));
+  shortcutHresult("IPropertyStore::SetValue(PKEY_AppUserModel_ID)",
+    properties->SetValue(PKEY_AppUserModel_ID,value.value));
+  value.clear(end);
+  GUID clsid{};
+  shortcutHresult("CLSIDFromString",CLSIDFromString(fixture.clsid.c_str(),&clsid));
+  shortcutHresult("InitPropVariantFromCLSID",InitPropVariantFromCLSID(clsid,&value.value));
+  shortcutHresult("IPropertyStore::SetValue(PKEY_AppUserModel_ToastActivatorCLSID)",
+    properties->SetValue(PKEY_AppUserModel_ToastActivatorCLSID,value.value));
+  value.clear(end);
+  shortcutHresult("IPropertyStore::Commit",properties->Commit());
+  shortcutBudget(end);
+  return linkBytes(link.Get(),end);
 }
 static void shortcutContracts(const Generation& g,uint64_t end){
   stage("child_shortcut_com");
@@ -686,6 +831,10 @@ static void shortcutContracts(const Generation& g,uint64_t end){
   const auto shortBytes=configuredShortcutBytes(shortFixture,end);
   shortcutReadbackBytes(shortFixture,shortBytes,end);
   installedBudget(end);
+  stage("child_shortcut_legacy_reader_compatibility");
+  const auto legacyBytes=legacySetPathShortcutBytes(shortFixture,end);
+  shortcutReadbackBytes(shortFixture,legacyBytes,end);
+  installedBudget(end);
   stage("child_shortcut_deadline_inside_serialization");
   requireShortcutDeadlineAfterApi(end,"IPersistStream::Save",
     "serialization_after_IPersistStream_Save",[&](ShortcutDeadlineProbe& probe){
@@ -699,27 +848,49 @@ static void shortcutContracts(const Generation& g,uint64_t end){
   });
   installedBudget(end);
   stage("child_shortcut_short_substitution_refused");
-  requireTargetSubstitutionRefused(shortFixture,
-    substituted(shortFixture,expected+L".substituted"),end);
+  {
+    Descriptor descriptor(ownACL(L"FA"));
+    auto attributes=descriptor.attributes();
+    ScopedShortcutFile shortSubstitute(g.root,L"helper.substituted.exe",attributes);
+    requireTargetSubstitutionRefused(shortFixture,
+      substituted(shortFixture,std::wstring(shortSubstitute.target),shortSubstitute.custody()),end);
+    shortSubstitute.cleanup();
+    require(GetFileAttributesW((g.root/L"helper.substituted.exe").c_str())==INVALID_FILE_ATTRIBUTES);
+  }
+  stage("child_shortcut_synthetic_target_classification");
+  requireSyntheticTargetUnavailable(shortFixture,end);
   stage("child_shortcut_long_target_round_trip");
-  const auto longFixture=substituted(shortFixture,longShortcutTarget(shortFixture));
-  require(longFixture.target.size()>MAX_PATH);
   installedBudget(end);
-  const auto longBytes=configuredShortcutBytes(longFixture,end);
-  shortcutReadbackBytes(longFixture,longBytes,end);
-  installedBudget(end);
-  stage("child_shortcut_long_substitution_refused");
-  requireTargetSubstitutionRefused(longFixture,
-    substituted(longFixture,longFixture.target+L".substituted"),end);
+  {
+    Descriptor descriptor(ownACL(L"FA"));
+    auto attributes=descriptor.attributes();
+    ScopedShortcutTargetTree longTargets(g,attributes);
+    const auto longFixture=substituted(shortFixture,
+      std::wstring(longTargets.expectedTarget),longTargets.expectedCustody());
+    const auto longSubstitute=substituted(shortFixture,
+      std::wstring(longTargets.substituteTarget),longTargets.substituteCustody());
+    require(longFixture.target.size()>MAX_PATH);
+    const auto longBytes=configuredShortcutBytes(longFixture,end);
+    shortcutReadbackBytes(longFixture,longBytes,end);
+    installedBudget(end);
+    stage("child_shortcut_long_substitution_refused");
+    requireTargetSubstitutionRefused(longFixture,longSubstitute,end);
+    longTargets.cleanup();
+    require(GetFileAttributesW(extendedTestPath(longFixture.target).c_str())==INVALID_FILE_ATTRIBUTES
+      &&GetFileAttributesW(extendedTestPath(longSubstitute.target).c_str())==INVALID_FILE_ATTRIBUTES);
+  }
   // The former expired-on-entry assertion accepted any std::runtime_error and
   // could therefore turn an unrelated contract failure into a false PASS.
   // The exact post-API tests above retain deterministic deadline coverage and
   // deliberately let every unrelated failure escape.
   installedBudget(end);
-  std::cout<<"TEST in-memory shortcut contract passed"
-    <<" path=dos+exact-parsing-name+held-custody short_round_trip=true long_round_trip=true"
+  std::cout<<"TEST shortcut contract passed"
+    <<" path=dos+exact-parsing-name+held-custody short_round_trip=true"
+    <<" actual_long_round_trip=true synthetic_target_unavailable=true"
     <<" target_substitution_refused=true properties=vt_lpwstring+vt_clsid"
-    <<" persistence=ipersiststream cleanup=co_task_mem+pidl+global_lock"
+    <<" persistence=ipersiststream legacy_setpath_reader_compatible=true"
+    <<" cleanup=co_task_mem+pidl+global_lock"
+    <<" test_target_cleanup=true"
     <<" deadline_inside_serialization_after_api=true"
     <<" deadline_inside_readback_after_api=true"
     <<" deadline_boundaries=post_API_Save+post_API_Load exactAPI=unknown\n";

@@ -146,7 +146,7 @@ struct SDKOperations {
    }
    else if(mode==L"verify-clsid")classReadback(generation,end);
    else if(mode==L"verify-aumid")appReadback(generation,end);
-   else if(mode==L"verify-shortcut")shortcutReadback(generation);
+   else if(mode==L"verify-shortcut")shortcutReadback(generation,end);
    else if(mode==L"apply-clsid")applyClass(generation,end,&diagnostic);
    else if(mode==L"apply-aumid")applyApp(generation,end);
    else if(mode==L"apply-shortcut")applyShortcut(generation,end);

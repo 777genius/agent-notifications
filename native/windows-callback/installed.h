@@ -167,11 +167,44 @@ namespace wcb {
     require(target.size()>3&&target[1]==L':'&&target[2]==L'\\'&&target.back()!=L'\\');
     return target;
   }
+  inline fs::path extendedShortcutTarget(const std::wstring& target){
+    require(target.size()>3&&target[1]==L':'&&target[2]==L'\\'&&target.back()!=L'\\'
+      &&!target.starts_with(L"\\\\?\\")&&target.find(L':',2)==std::wstring::npos);
+    return fs::path(L"\\\\?\\"+target);
+  }
   struct ShortcutFixture {
     std::wstring target,args,aumid,clsid;
+    HANDLE custody=INVALID_HANDLE_VALUE;
   };
   inline ShortcutFixture shortcutFixture(const Generation& g){
-    return {shellTargetPath(g),L"--callback",wide(g.snapshot.aumid),wide(g.snapshot.clsid)};
+    return {shellTargetPath(g),L"--callback",wide(g.snapshot.aumid),wide(g.snapshot.clsid),g.helperFile.h};
+  }
+  // The expected parsing name is checked against the same no-reparse file that
+  // Generation or TEST holds. File identity prevents a same-name replacement
+  // from being adopted as the authorized target. The fixture target is always
+  // a real filesystem item; nonexistent display names remain an explicit
+  // unsupported-target case rather than being fabricated into a PIDL.
+  inline void verifyShortcutTargetCustody(const ShortcutFixture& fixture,uint64_t end=0){
+    shortcutBudget(end);
+    require(fixture.custody!=INVALID_HANDLE_VALUE);
+    const auto heldPath=physical(fixture.custody);
+    require(heldPath==fixture.target||heldPath==L"\\\\?\\"+fixture.target);
+    shortcutBudget(end);
+    BY_HANDLE_FILE_INFORMATION heldInfo{
+    };
+    require(GetFileInformationByHandle(fixture.custody,&heldInfo));
+    shortcutBudget(end);
+    auto candidate=open(extendedShortcutTarget(fixture.target),false);
+    shortcutBudget(end);
+    BY_HANDLE_FILE_INFORMATION candidateInfo{
+    };
+    require(GetFileInformationByHandle(candidate.h,&candidateInfo));
+    require(!(heldInfo.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY)
+      &&!(candidateInfo.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY)
+      &&heldInfo.dwVolumeSerialNumber==candidateInfo.dwVolumeSerialNumber
+      &&heldInfo.nFileIndexHigh==candidateInfo.nFileIndexHigh
+      &&heldInfo.nFileIndexLow==candidateInfo.nFileIndexLow);
+    shortcutBudget(end);
   }
   inline fs::path shortcutPath(const Generation& g,uint64_t end=0){
     shortcutBudget(end);
@@ -522,7 +555,23 @@ namespace wcb {
     shortcutBudget(end);
     return target;
   }
+  inline void parseShortcutTarget(const ShortcutFixture& fixture,ScopedPidl& target,uint64_t end=0){
+    shortcutBudget(end);
+    // Microsoft documents SHParseDisplayName as the preferred string-to-PIDL
+    // conversion and IShellLinkW::SetIDList as the fully qualified target
+    // contract. This is used only after the real target's no-reparse file
+    // identity is held; a nonexistent synthetic display name is not a PIDL.
+    SFGAOF attributes=0;
+    const auto status=SHParseDisplayName(fixture.target.c_str(),nullptr,&target.value,
+      SFGAO_FILESYSTEM|SFGAO_FOLDER,&attributes);
+    shortcutContractResult("SHParseDisplayName",status,shortcutPidlPresent(target.value));
+    shortcutBudget(end);
+    require((attributes&SFGAO_FILESYSTEM)!=0&&(attributes&SFGAO_FOLDER)==0);
+    shortcutBudget(end);
+  }
   inline void shortcutReadbackBytes(const ShortcutFixture& fixture,const std::vector<uint8_t>& b,uint64_t end=0 WCB_SHORTCUT_DEADLINE_TEST_PARAM){
+    shortcutBudget(end);
+    verifyShortcutTargetCustody(fixture,end);
     shortcutBudget(end);
     Microsoft::WRL::ComPtr<IShellLinkW> link;
     shortcutHresult("CoCreateInstance(CLSID_ShellLink)",CoCreateInstance(CLSID_ShellLink,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&link)));
@@ -548,9 +597,8 @@ namespace wcb {
       // item's exact filesystem parsing name without that output-buffer contract,
       // so it also covers the supported long-path range. PIDL binary bytes are
       // intentionally not compared: they are namespace encodings, not a stable
-      // identity contract. With the held no-reparse helper/ancestor custody and
-      // digest in Generation, exact parsing-name equality proves the authorized
-      // helper target and excludes an alternate path without extra resolution.
+      // identity contract. Exact parsing-name equality plus the held no-reparse
+      // file identity excludes an alternate target without extra resolution.
     if(fixture.target.size()<MAX_PATH){
       std::array<wchar_t,MAX_PATH> shortTarget{
       };
@@ -559,6 +607,8 @@ namespace wcb {
       verifyShortcutTarget(fixture.target,std::wstring(shortTarget.data()));
     }
     verifyShortcutTarget(fixture.target,exactShortcutTarget(link.Get(),end));
+    verifyShortcutTargetCustody(fixture,end);
+    shortcutBudget(end);
     std::array<wchar_t,128> args{
     };
     shortcutHresult("IShellLinkW::GetArguments",link->GetArguments(args.data(),int(args.size())));
@@ -709,10 +759,14 @@ namespace wcb {
   }
   inline std::vector<uint8_t> configuredShortcutBytes(const ShortcutFixture& fixture,uint64_t end=0 WCB_SHORTCUT_DEADLINE_TEST_PARAM){
     shortcutBudget(end);
+    verifyShortcutTargetCustody(fixture,end);
+    shortcutBudget(end);
+    ScopedPidl target;
+    parseShortcutTarget(fixture,target,end);
     Microsoft::WRL::ComPtr<IShellLinkW> link;
     shortcutHresult("CoCreateInstance(CLSID_ShellLink)",CoCreateInstance(CLSID_ShellLink,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&link)));
     shortcutBudget(end);
-    shortcutHresult("IShellLinkW::SetPath",link->SetPath(fixture.target.c_str()));
+    shortcutHresult("IShellLinkW::SetIDList",link->SetIDList(target.value));
     shortcutBudget(end);
     shortcutHresult("IShellLinkW::SetArguments",link->SetArguments(fixture.args.c_str()));
     shortcutBudget(end);
