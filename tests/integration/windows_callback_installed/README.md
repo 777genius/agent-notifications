@@ -70,20 +70,28 @@ package. The package and profile remain until whole VM/profile teardown. This
 phase never invokes normal setup, Show, Shell action or launch paths and makes
 no global-drain, package-removal or callback claim after foreign effects.
 
-`coreRef` is accepted only for `package_noshow`. Empty resolves to the current
-harness head; otherwise it must be a 40-lowercase-hex same-repo ancestor of the
-harness source. The actual production `internal/installruntime` race test binary,
-the embedded helper and the shipping Go bytes are compiled from that core
-checkout. The observer and controller hashes remain bound to the separate
-harness SHA. Installed archive intake/basic/retained runs reject every alternate
-`coreRef` and retain their existing source binding.
+`coreRef` is required and explicit only for `package_noshow`: it must be the
+reviewed 40-lowercase-hex same-repo ancestor, and no head fallback exists. The
+effect job fetches complete history, proves the commit/tree objects and ancestry
+before effects, and joins exact Git blobs for the core selected test and every
+harness controller/observer source used here. The actual production
+`internal/installruntime` race test binary, embedded helper and shipping Go bytes
+are compiled from that exact core checkout. Installed archive intake/basic/
+retained runs reject every alternate `coreRef` and retain their existing source
+binding.
 
 The package phase runs exactly
 `^(TestWindowsNativeRecoverFixedMutationBoundaries|TestWindowsNativeForeignDecisionRecoveryRefuses)$`
-once against the AMD64 test executable under the ARM64 Windows 11 runner. The
-bounded six-minute child keeps terminal code/signal/error and every selected
-case byte; SKIP, missing cases and unknown collection refuse. Its record remains
-package-only: `nativeAmd64Qualified=false`, `installedCallbackQualified=false`,
-`notificationQualified=false`, `callbackQualified=false`,
-`rebootQualified=false`, and `noShowScope=true`. No Windows qualification is
-claimed from Linux source checks or inert evidence joins.
+once against the AMD64 test executable under the ARM64 Windows 11 runner. A
+CreateProcess-suspended Windows Job Object contains the test and every helper
+descendant through process-tree exit, timeout termination and both stream EOFs.
+The exact five fixed-mutation subcases and both top-level terminals are required;
+SKIP, missing/fabricated cases, output overcap, unknown collection and timeout
+refuse and remain non-replayable. Actual `go version -m`, `go tool nm`, PE
+machine, embedded offsets/bytes, and every signature/certificate/intake/APPX
+manifest fact are independently joined rather than accepted as literal flags.
+Its record remains package-only: `nativeAmd64Qualified=false`,
+`installedCallbackQualified=false`, `notificationQualified=false`,
+`callbackQualified=false`, `rebootQualified=false`, and `noShowScope=true`.
+No Windows qualification is claimed from Linux source checks or inert evidence
+joins.

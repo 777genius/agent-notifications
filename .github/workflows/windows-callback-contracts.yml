@@ -16,7 +16,7 @@ on:
         description: 'Read-only signed x64 archive intake first; installed requires independently accepted pins'
         type: choice
         default: archive_intake
-        options: [archive_intake, installed]
+        options: [archive_intake, installed, package_noshow]
       expectedArchiveSHA:
         description: 'Raw SHA256 accepted from a separate Windows signed archive intake'
         type: string
@@ -30,7 +30,7 @@ on:
         default: basic
         options: [basic, retained, package_noshow]
       coreRef:
-        description: 'package_noshow only; 40-lowerhex same-repo ancestor, empty resolves to current head'
+        description: 'package_noshow only; mandatory explicit reviewed 40-lowerhex same-repo ancestor; empty is valid only for inherited installed phases'
         type: string
         default: ''
 permissions:
@@ -141,7 +141,7 @@ jobs:
           retention-days: 14
 
   admitted-installed-proof:
-    if: github.event_name == 'workflow_dispatch' && github.repository == '777genius/agent-notifications' && github.run_attempt == 1 && inputs.admission == 'one-fresh-disposable-installed-callback' && (inputs.phase == 'archive_intake' || inputs.phase == 'installed') && inputs.coreRef == ''
+    if: github.event_name == 'workflow_dispatch' && github.repository == '777genius/agent-notifications' && github.run_attempt == 1 && inputs.admission == 'one-fresh-disposable-installed-callback' && (inputs.phase == 'archive_intake' || inputs.phase == 'installed') && inputs.coreRef == '' && (inputs.scenario == 'basic' || inputs.scenario == 'retained')
     uses: ./.github/workflows/windows-callback-installed-canary.yml
     with:
       admission: ${{ inputs.admission }}
@@ -152,7 +152,7 @@ jobs:
       coreRef: ''
 
   admitted-package-noshow-proof:
-    if: github.event_name == 'workflow_dispatch' && github.repository == '777genius/agent-notifications' && github.run_attempt == 1 && inputs.admission == 'one-fresh-disposable-package-noshow' && inputs.phase == 'package_noshow' && inputs.scenario == 'package_noshow'
+    if: github.event_name == 'workflow_dispatch' && github.repository == '777genius/agent-notifications' && github.run_attempt == 1 && inputs.admission == 'one-fresh-disposable-package-noshow' && inputs.phase == 'package_noshow' && inputs.scenario == 'package_noshow' && inputs.coreRef != ''
     uses: ./.github/workflows/windows-callback-installed-canary.yml
     with:
       admission: ${{ inputs.admission }}

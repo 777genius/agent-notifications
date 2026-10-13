@@ -24,9 +24,9 @@ on:
         type: string
         default: basic
       coreRef:
-        description: 'package_noshow only; empty resolves to current head'
+        description: 'package_noshow only; mandatory explicit reviewed 40-lowerhex same-repo ancestor'
+        required: true
         type: string
-        default: ''
   workflow_dispatch:
     inputs:
       admission:
@@ -52,7 +52,7 @@ on:
         type: choice
         options: [basic, retained, package_noshow]
       coreRef:
-        description: 'package_noshow only; 40-lowerhex same-repo ancestor, empty resolves to current head'
+        description: 'package_noshow only; mandatory explicit reviewed 40-lowerhex same-repo ancestor; empty is valid only for installed phases'
         type: string
         default: ''
 permissions:
@@ -90,7 +90,7 @@ jobs:
             if ($admission -cne 'one-fresh-disposable-package-noshow' -or $scenario -cne 'package_noshow') {
               throw 'package_noshow requires its exact admission and scenario'
             }
-            if ($coreRef -and $coreRef -notmatch '^[a-f0-9]{40}$') { throw 'coreRef must be 40 lowercase hex' }
+            if ($coreRef -notmatch '^[a-f0-9]{40}$') { throw 'package_noshow requires an explicit 40-lowercase-hex coreRef' }
           } elseif ($phase -in @('archive_intake','installed')) {
             if ($admission -cne 'one-fresh-disposable-installed-callback' -or $scenario -notin @('basic','retained')) {
               throw 'installed/archive intake retains its existing admission and scenario'
@@ -99,8 +99,8 @@ jobs:
           } else {
             throw 'unknown or absent admitted phase'
           }
-          $resolved = if ($coreRef) { $coreRef } else { $env:SOURCE_SHA }
-          if ($resolved -notmatch '^[a-f0-9]{40}$') { throw 'resolved core source SHA is invalid' }
+          $resolved = if ($phase -eq 'package_noshow') { $coreRef } else { '' }
+          if ($phase -eq 'package_noshow' -and $resolved -notmatch '^[a-f0-9]{40}$') { throw 'explicit core source SHA is invalid' }
           "TEST_CORE_RESOLVED=$resolved" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -124,6 +124,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'inert evidence joins failed' }
           node tests/integration/windows_callback_installed/package_evidence.test.mts
           if ($LASTEXITCODE -ne 0) { throw 'inert package evidence joins failed' }
+      - name: Check bounded Job Object collection in fresh TEST scratch (no SDK effects)
+        shell: pwsh
+        run: |
+          ./tests/integration/windows_callback_installed/bounded_job.test.ps1 -Supervisor "$env:GITHUB_WORKSPACE/tests/integration/windows_callback_installed/bounded_job.ps1"
+          if ($LASTEXITCODE -ne 0) { throw 'bounded process collection failed' }
       - name: Compile shipping bytes; read-image proof and inert XML/URI contracts
         shell: pwsh
         run: |
@@ -148,7 +153,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         if: inputs.phase == 'package_noshow'
         with:
-          ref: ${{ inputs.coreRef || env.SOURCE_SHA }}
+          ref: ${{ inputs.coreRef }}
           path: TEST-core-source
           persist-credentials: false
       - name: Compile exact core package_noshow production race test and embedded assets
@@ -185,6 +190,42 @@ jobs:
           $shippingEmbedded = ./native/windows-callback/verify-embedded.ps1 -Executable $shipping -Helper $helper | ConvertFrom-Json
           $nativeEvidence = Get-Content -LiteralPath (Join-Path $native 'build-evidence.json') -Raw | ConvertFrom-Json
           if ($nativeEvidence.sourceSHA -cne $resolved) { throw 'native build source manifest is not exact core SHA' }
+          $testBuildInfoPath = Join-Path $out 'core-test-buildinfo.txt'
+          $shippingBuildInfoPath = Join-Path $out 'core-shipping-buildinfo.txt'
+          $raceSymbolsPath = Join-Path $out 'core-test-race-symbols.txt'
+          go version -m $test | Set-Content -LiteralPath $testBuildInfoPath -Encoding utf8NoBOM
+          if ($LASTEXITCODE -ne 0) { throw 'test binary Go buildinfo inspection failed' }
+          go version -m $shipping | Set-Content -LiteralPath $shippingBuildInfoPath -Encoding utf8NoBOM
+          if ($LASTEXITCODE -ne 0) { throw 'shipping binary Go buildinfo inspection failed' }
+          $nmPath = Join-Path $out 'core-test-nm.tmp'
+          go tool nm $test > $nmPath
+          if ($LASTEXITCODE -ne 0) { throw 'race symbol inspection failed' }
+          $raceSymbols = @(Select-String -LiteralPath $nmPath -SimpleMatch 'internal/race.' | Select-Object -First 8)
+          if ($raceSymbols.Count -eq 0) { throw 'compiled test binary lacks internal/race provenance' }
+          $raceSymbols.Line | Set-Content -LiteralPath $raceSymbolsPath -Encoding utf8NoBOM
+          Remove-Item -LiteralPath $nmPath -Force
+          function Get-FileIdentity([string]$file,[string]$repository,[string]$revspec) {
+            $blob = (git -C $repository hash-object -- $file).Trim()
+            if ($LASTEXITCODE -ne 0) { throw 'Git blob hash failed' }
+            $committed = (git -C $repository rev-parse $revspec).Trim()
+            if ($LASTEXITCODE -ne 0 -or $committed -cne $blob) { throw "file is not exact committed blob: $file" }
+            $item = Get-Item -LiteralPath $file
+            @{
+              bytes=[uint64]$item.Length
+              sha256=(Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant()
+              gitBlob=$blob
+            }
+          }
+          function Get-Hash([string]$file) { (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant() }
+          $coreTreeOuter = (git rev-parse "$resolved^{tree}").Trim()
+          if ($LASTEXITCODE -ne 0) { throw 'outer core tree unavailable' }
+          $coreTreeCheckout = (git -C $core rev-parse "$resolved^{tree}").Trim()
+          if ($LASTEXITCODE -ne 0 -or $coreTreeCheckout -cne $coreTreeOuter) { throw 'core tree object mismatch' }
+          $harnessTree = (git rev-parse "$($env:SOURCE_SHA)^{tree}").Trim()
+          if ($LASTEXITCODE -ne 0) { throw 'harness tree unavailable' }
+          git merge-base --is-ancestor $resolved $env:SOURCE_SHA
+          $coreAncestor = $LASTEXITCODE -eq 0
+          if (!$coreAncestor) { throw 'coreRef is not an existing harness-source ancestor' }
           $testSource = Join-Path $core 'internal\installruntime\windows_generation_native_test.go'
           function Get-PEMachine([string]$file) {
             $bytes = [IO.File]::ReadAllBytes($file)
@@ -197,22 +238,29 @@ jobs:
             source=$env:SOURCE_SHA
             sources=@{
               harnessSHA=$env:SOURCE_SHA
-              harnessTreeSHA=(git rev-parse "$($env:SOURCE_SHA)^{tree}").Trim()
+              harnessTreeSHA=$harnessTree
               coreRefInput=[string]$env:TEST_CORE_REF_INPUT
-              coreRefExplicit=[bool]$env:TEST_CORE_REF_INPUT
+              coreRefExplicit=($env:TEST_CORE_REF_INPUT -cne '')
               coreResolvedSHA=$resolved
               coreSHA=$resolved
-              coreTreeSHA=(git -C $core rev-parse "$resolved^{tree}").Trim()
-              coreIsHarnessAncestor=$true
+              coreTreeSHA=$coreTreeOuter
+              coreIsHarnessAncestor=$coreAncestor
               checkoutHeadSHA=(git -C $core rev-parse HEAD).Trim()
               compileSourceSHA=$resolved
               nativeBuildSourceSHA=$nativeEvidence.sourceSHA
               testSourceCoreSHA=$resolved
-              testSourceSHA256=(Get-FileHash -LiteralPath $testSource -Algorithm SHA256).Hash.ToLowerInvariant()
-              observerSHA256=(Get-FileHash -LiteralPath 'tests/integration/windows_callback_installed/observer.cpp' -Algorithm SHA256).Hash.ToLowerInvariant()
-              observerHarnessSHA=$env:SOURCE_SHA
-              controllerSHA256=(Get-FileHash -LiteralPath 'tests/integration/windows_callback_installed/package_noshow.mts' -Algorithm SHA256).Hash.ToLowerInvariant()
-              controllerHarnessSHA=$env:SOURCE_SHA
+              coreFiles=@{
+                testSource=(Get-FileIdentity $testSource $core "$resolved`:internal/installruntime/windows_generation_native_test.go")
+              }
+              harnessFiles=@{
+                observer=(Get-FileIdentity 'tests/integration/windows_callback_installed/observer.cpp' $env:GITHUB_WORKSPACE "$($env:SOURCE_SHA)`:tests/integration/windows_callback_installed/observer.cpp")
+                observerProject=(Get-FileIdentity 'tests/integration/windows_callback_installed/Observer.vcxproj' $env:GITHUB_WORKSPACE "$($env:SOURCE_SHA)`:tests/integration/windows_callback_installed/Observer.vcxproj")
+                controller=(Get-FileIdentity 'tests/integration/windows_callback_installed/package_noshow.mts' $env:GITHUB_WORKSPACE "$($env:SOURCE_SHA)`:tests/integration/windows_callback_installed/package_noshow.mts")
+                packageEvidence=(Get-FileIdentity 'tests/integration/windows_callback_installed/package_evidence.mts' $env:GITHUB_WORKSPACE "$($env:SOURCE_SHA)`:tests/integration/windows_callback_installed/package_evidence.mts")
+                evidence=(Get-FileIdentity 'tests/integration/windows_callback_installed/evidence.mts' $env:GITHUB_WORKSPACE "$($env:SOURCE_SHA)`:tests/integration/windows_callback_installed/evidence.mts")
+                strictArchive=(Get-FileIdentity 'tests/integration/windows_callback_installed/strict_archive.mts' $env:GITHUB_WORKSPACE "$($env:SOURCE_SHA)`:tests/integration/windows_callback_installed/strict_archive.mts")
+                supervisor=(Get-FileIdentity 'tests/integration/windows_callback_installed/bounded_job.ps1' $env:GITHUB_WORKSPACE "$($env:SOURCE_SHA)`:tests/integration/windows_callback_installed/bounded_job.ps1")
+              }
             }
             binaries=@{
               helperSHA256=$testEmbedded.helperSHA256
@@ -221,13 +269,19 @@ jobs:
               helperMachine=(Get-PEMachine $helper)
               shippingMachine=(Get-PEMachine $shipping)
               testMachine=(Get-PEMachine $test)
-              helperEmbeddedInShipping=$true
-              helperEmbeddedInTest=$true
+            }
+            buildProvenance=@{
+              testCommand=@('test','-c','-race','-trimpath','-tags=windows_callback_asset','./internal/installruntime')
+              testExitCode=0
+              testBuildInfoSHA256=(Get-Hash $testBuildInfoPath)
+              shippingCommand=@('build','-tags=windows_callback_asset','-trimpath','-ldflags=-s -w','./cmd/claude-notifications')
+              shippingExitCode=0
+              shippingBuildInfoSHA256=(Get-Hash $shippingBuildInfoPath)
+              raceSymbolsSHA256=(Get-Hash $raceSymbolsPath)
             }
             nativeBuildEvidence=$nativeEvidence
             shippingEmbeddedProof=$shippingEmbedded
             testEmbeddedProof=$testEmbedded
-            coreTestCommand='go test -c -race -trimpath -tags windows_callback_asset ./internal/installruntime'
             selectedTestPattern='^TestWindowsNative(RecoverFixedMutationBoundaries|ForeignDecisionRecoveryRefuses)$'
             noShowScope=$true
             nativeAmd64Qualified=$false
@@ -259,6 +313,9 @@ jobs:
             ${{ runner.temp }}/TEST-installed-build/installruntime.test.exe
             ${{ runner.temp }}/TEST-installed-build/compile-manifest.json
             ${{ runner.temp }}/TEST-installed-build/core-native/build-evidence.json
+            ${{ runner.temp }}/TEST-installed-build/core-test-buildinfo.txt
+            ${{ runner.temp }}/TEST-installed-build/core-shipping-buildinfo.txt
+            ${{ runner.temp }}/TEST-installed-build/core-test-race-symbols.txt
           if-no-files-found: error
           retention-days: 14
   installed:
@@ -329,7 +386,7 @@ jobs:
 
   package-noshow:
     needs: compile
-    if: github.event_name == 'workflow_dispatch' && github.repository == '777genius/agent-notifications' && github.run_attempt == 1 && inputs.admission == 'one-fresh-disposable-package-noshow' && inputs.phase == 'package_noshow' && inputs.scenario == 'package_noshow'
+    if: github.event_name == 'workflow_dispatch' && github.repository == '777genius/agent-notifications' && github.run_attempt == 1 && inputs.admission == 'one-fresh-disposable-package-noshow' && inputs.phase == 'package_noshow' && inputs.scenario == 'package_noshow' && inputs.coreRef != ''
     # The strict archive/deploy controller is native ARM64. The production
     # helper, shipping Go bytes and selected race test are AMD64 under emulation.
     runs-on: windows-11-vs2026-arm
@@ -341,7 +398,7 @@ jobs:
       TEST_EXPECTED_ARCHIVE_SHA: ${{ inputs.expectedArchiveSHA }}
       TEST_EXPECTED_FULL_NAME: ${{ inputs.expectedFullName }}
       TEST_CORE_REF: ${{ inputs.coreRef }}
-      TEST_CORE_SHA: ${{ inputs.coreRef || github.sha }}
+      TEST_CORE_SHA: ${{ inputs.coreRef }}
     steps:
       - name: Bind fresh package_noshow source and artifact paths
         shell: pwsh
@@ -352,10 +409,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.sha }}
+          fetch-depth: 0
           persist-credentials: false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: ${{ inputs.coreRef || github.sha }}
+          ref: ${{ inputs.coreRef }}
           path: TEST-core-source
           persist-credentials: false
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
@@ -372,11 +430,24 @@ jobs:
           $ErrorActionPreference = 'Stop'
           if ($env:RUNNER_ARCH -cne 'ARM64') { throw 'native observer requires the admitted Win11 ARM64 runner' }
           if ((git rev-parse HEAD) -cne $env:GITHUB_SHA) { throw 'harness checkout SHA mismatch' }
+          if ($env:TEST_CORE_REF -notmatch '^[a-f0-9]{40}$' -or $env:TEST_CORE_REF -cne $env:TEST_CORE_SHA) {
+            throw 'package effect requires the exact explicit reviewed coreRef'
+          }
           if ((git -C $env:TEST_CORE_SOURCE rev-parse HEAD) -cne $env:TEST_CORE_SHA) { throw 'core checkout SHA mismatch' }
           git cat-file -e "$($env:TEST_CORE_SHA)^{commit}"
           if ($LASTEXITCODE -ne 0) { throw 'core commit unavailable' }
           git merge-base --is-ancestor $env:TEST_CORE_SHA $env:GITHUB_SHA
           if ($LASTEXITCODE -ne 0) { throw 'coreRef is not a harness-source ancestor' }
+          $manifest = Get-Content -LiteralPath (Join-Path $env:TEST_INSTALLED_ARTIFACT 'compile-manifest.json') -Raw | ConvertFrom-Json
+          $harnessTree = (git rev-parse "$($env:GITHUB_SHA)^{tree}").Trim()
+          $coreTreeOuter = (git rev-parse "$($env:TEST_CORE_SHA)^{tree}").Trim()
+          $coreTreeCheckout = (git -C $env:TEST_CORE_SOURCE rev-parse "$($env:TEST_CORE_SHA)^{tree}").Trim()
+          if ($manifest.sources.harnessTreeSHA -cne $harnessTree -or $manifest.sources.coreTreeSHA -cne $coreTreeOuter -or $coreTreeCheckout -cne $coreTreeOuter) {
+            throw 'effect source tree objects do not join the compile manifest'
+          }
+          if (!$manifest.sources.coreIsHarnessAncestor -or $manifest.sources.coreRefExplicit -cne $true) {
+            throw 'effect source ancestry/explicit coreRef proof is absent'
+          }
           $out = Split-Path $env:TEST_INSTALLED_OBSERVER
           New-Item -ItemType Directory -Path $out -ErrorAction Stop | Out-Null
           $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products '*' -property installationPath
