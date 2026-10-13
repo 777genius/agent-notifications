@@ -158,7 +158,11 @@ def _windows_configure_first(run, binary, home, bundle, env, automatic_root):
     stage = home / 'stage'
     stage.mkdir()
     entry = 'claude-notifications-windows-amd64.exe'
-    shutil.copyfile(binary, stage / entry)
+    # The managed fixture is deliberately inert and below the install kernel's
+    # size limit. Its compatibility declarations come from the actual CLI; the
+    # policy-only configure path never executes the registered sender.
+    protocols = run('internal-writer-protocol', '--all').stdout
+    (stage / entry).write_text('INERT TEST sender, never execute\n' + protocols)
     (bundle / 'bin').mkdir()
     (bundle / 'config').mkdir()
     source = {'notifications': {'desktop': {'enabled': True, 'sound': False, 'clickToFocus': False}},
@@ -169,7 +173,11 @@ def _windows_configure_first(run, binary, home, bundle, env, automatic_root):
     control = Path(env['APPDATA']) / 'agent-notifications'
     run('internal-install-runtime', '--stage', str(stage), '--target', str(bundle / 'bin'),
         '--entry', entry, '--control-root', str(control))
-    installed = bundle / 'bin' / entry
+    # Invoke the real CLI in this bundle so configure derives the same runtime
+    # root as the managed consumer. The driver is not a managed payload and
+    # does not change the bounded install/promotion contract.
+    installed = bundle / 'bin' / 'configure-driver.exe'
+    shutil.copyfile(binary, installed)
     configure = ('setup-notifications', 'configure', '--provider', 'claude',
                  '--navigation', 'none', '--policy-only', '--json')
     _windows_writable_profile(home)
