@@ -5,6 +5,8 @@ on:
       - '.github/workflows/navigation-windows-native-e2e.yml'
       - 'tests/integration/navigation_windows_native_probe.cpp'
       - 'tests/integration/navigation_windows_native_e2e.ts'
+      - 'tests/integration/navigation_windows_bootstrap_contract.ts'
+      - 'tests/integration/navigation_windows_bootstrap_contract_test.ts'
       - 'opencode-plugin/package.json'
       - 'opencode-plugin/package-lock.json'
   workflow_dispatch:
@@ -65,8 +67,10 @@ jobs:
         run: |
           npm ci --prefix opencode-plugin --ignore-scripts --no-audit --no-fund
           if ($LASTEXITCODE -ne 0) { throw 'locked tooling install failed' }
-          & ./opencode-plugin/node_modules/.bin/tsc.cmd --ignoreConfig --noEmit --strict --target ES2023 --module ESNext --moduleResolution bundler --types node --typeRoots ./opencode-plugin/node_modules/@types tests/integration/navigation_windows_native_e2e.ts
+          & ./opencode-plugin/node_modules/.bin/tsc.cmd --ignoreConfig --noEmit --allowImportingTsExtensions --strict --target ES2023 --module ESNext --moduleResolution bundler --types node --typeRoots ./opencode-plugin/node_modules/@types tests/integration/navigation_windows_native_e2e.ts tests/integration/navigation_windows_bootstrap_contract_test.ts
           if ($LASTEXITCODE -ne 0) { throw 'native harness typecheck failed' }
+          node --experimental-strip-types --test tests/integration/navigation_windows_bootstrap_contract_test.ts
+          if ($LASTEXITCODE -ne 0) { throw 'bootstrap handoff contract tests failed' }
       - name: Compile native TEST probe with image SDK
         shell: pwsh
         run: |
@@ -121,6 +125,9 @@ jobs:
         if: github.event_name == 'workflow_dispatch' && (inputs.mode != 'oobe_then_native_callback' || steps.bootstrap.outcome == 'success')
         id: probe
         shell: pwsh
+        env:
+          NAVIGATION_WINDOWS_NATIVE_MODE: ${{ inputs.mode }}
+          NAVIGATION_WINDOWS_OOBE_BOOTSTRAP_ROOT: ${{ inputs.mode == 'oobe_then_native_callback' && steps.bootstrap.outputs.evidence_root || '' }}
         run: |
           node --experimental-strip-types tests/integration/navigation_windows_native_e2e.ts (Join-Path $env:RUNNER_TEMP 'navigation-native-probe.exe')
           if ($LASTEXITCODE -ne 0) { throw 'native callback unavailable or failed; inspect evidence' }
