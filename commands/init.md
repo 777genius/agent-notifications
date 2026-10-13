@@ -35,15 +35,15 @@ If assets/registration succeeded but init failed, report partial success and the
 Then run `/claude-notifications-go:settings` for [private revision-checked edits](settings.md). Save diagnostics privately; never print raw configuration or expanded secrets.
 
 After a successful plugin install, agent-notify setup runs by default.
-When the installed CLI advertises `setup-notifications wizard`, that is
-the main path (`--hooks false --agent-notify true`); Linux first configures
-the supported `navigation=none` policy. Older CLIs keep
-`setup-notifications configure` (`--navigation none --allow-unknown-caller true
---allow-caller-asserted false` unless a route is supplied). Pass
+When the installed CLI supports portable `setup-notifications wizard`, that is
+the setup path (`--hooks false --agent-notify true`). The wizard downloads
+the verified portable ZIP for the installed binary's release; Linux first configures
+the supported `navigation=none` policy. Pass
 `--skip-agent-notify` to keep hooks-only setup. If the advertised setup
 command runs and fails, this slash command returns incomplete/nonzero with
-a retry; committed plugin/hooks files stay in place. A missing binary or a
-CLI that does not advertise the command still skips with a warning.
+a retry; committed plugin/hooks files stay in place. A missing binary, a CLI
+without the wizard, or a released CLI older than this portable setup path
+skips MCP setup with a warning. An explicit `--agent-notify` reports incomplete.
 
 ```bash
 SKIP_AGENT_NOTIFY=false
@@ -102,7 +102,7 @@ if [ "$SKIP_AGENT_NOTIFY" != true ]; then
     i=$((i + 1))
   done
   if [ -z "$nav" ] && [ -z "$app" ] && [ -z "$team" ] && [ -z "$unknown" ] && [ -z "$asserted" ]; then
-    CONFIGURE_ARGS+=(--navigation none --allow-unknown-caller true --allow-caller-asserted false)
+    CONFIGURE_ARGS+=(--navigation none --allow-unknown-caller true --allow-caller-asserted false --preserve-policy)
   elif [ "$nav" = none ]; then
     if [ -n "$app" ] || [ -n "$team" ]; then
       echo "navigation none cannot combine with --app/--team-id." >&2; exit 1
@@ -119,12 +119,17 @@ if [ "$SKIP_AGENT_NOTIFY" != true ]; then
   fi
 fi
 INSTALLER="${CLAUDE_PLUGIN_ROOT}/bin/install.sh"
-curl -fsSL https://raw.githubusercontent.com/777genius/agent-notifications/main/bin/install.sh -o "$INSTALLER"
-chmod +x "$INSTALLER"
-"$INSTALLER"
+if ! curl -fsSL https://raw.githubusercontent.com/777genius/agent-notifications/main/bin/install.sh -o "$INSTALLER"; then
+  echo "Installer download failed; resources were not installed." >&2
+  exit 1
+fi
+if ! chmod +x "$INSTALLER" || ! "$INSTALLER"; then
+  echo "Installer failed; agent-notify setup was not attempted." >&2
+  exit 1
+fi
 if [ "$SKIP_AGENT_NOTIFY" != true ]; then
   case "$(uname -s 2>/dev/null)" in
-    MINGW*|MSYS*|CYGWIN*) NOTIFY_BIN="${CLAUDE_PLUGIN_ROOT}/bin/claude-notifications.bat"; NOTIFY_READY=(-f "$NOTIFY_BIN"); USE_WIZARD=false ;;
+    MINGW*|MSYS*|CYGWIN*) NOTIFY_BIN="${CLAUDE_PLUGIN_ROOT}/bin/claude-notifications.bat"; NOTIFY_READY=(-f "$NOTIFY_BIN"); USE_WIZARD=true ;;
     Darwin|Linux) NOTIFY_BIN="${CLAUDE_PLUGIN_ROOT}/bin/claude-notifications"; NOTIFY_READY=(-x "$NOTIFY_BIN"); USE_WIZARD=true ;;
     *) NOTIFY_BIN="${CLAUDE_PLUGIN_ROOT}/bin/claude-notifications"; NOTIFY_READY=(-x "$NOTIFY_BIN"); USE_WIZARD=false ;;
   esac
@@ -132,23 +137,26 @@ if [ "$SKIP_AGENT_NOTIFY" != true ]; then
     echo "agent-notify setup skipped; installer binary not found. Plugin install succeeded." >&2
     [ "$SEEN_AGENT_NOTIFY" != true ] || exit 1
   elif [ "$USE_WIZARD" = true ] && "$NOTIFY_BIN" --help </dev/null 2>/dev/null | grep -Fq -- 'setup-notifications wizard'; then
-    package=""
-    if [ -f "${CLAUDE_PLUGIN_ROOT}/portable-package/plugin.json" ]; then
-      package="${CLAUDE_PLUGIN_ROOT}/portable-package"
-    fi
-    if [ -z "$package" ]; then
-      printf 'agent-notify wizard skipped; portable-package is missing. Retry: %s\n' "$(quote_shell_command "$NOTIFY_BIN" setup-notifications wizard --action install --agents claude --hooks false --agent-notify true --yes)" >&2
-      exit 1
+    POLICY_HELP=$("$NOTIFY_BIN" setup-notifications --help </dev/null 2>/dev/null) || POLICY_HELP=""
+    if [[ "$POLICY_HELP" != *--policy-only* || "$POLICY_HELP" != *--preserve-enabled* ]]; then
+      echo "agent-notify setup skipped; installed binary predates portable setup. Plugin/hooks install succeeded. Update to a matching release before enabling MCP." >&2
+      [ "$SEEN_AGENT_NOTIFY" != true ] || exit 1
+      exit 0
     fi
     case "$(uname -s 2>/dev/null)" in
-      Darwin|Linux)
-        if ! "$NOTIFY_BIN" setup-notifications configure --provider claude "${CONFIGURE_ARGS[@]}"; then
-          printf 'agent-notify configure failed; plugin install files remain. Retry: %s\n' "$(quote_shell_command "$NOTIFY_BIN" setup-notifications configure --provider claude "${CONFIGURE_ARGS[@]}")" >&2
+      Darwin|Linux|MINGW*|MSYS*|CYGWIN*)
+        if ! "$NOTIFY_BIN" setup-notifications configure --provider claude "${CONFIGURE_ARGS[@]}" --policy-only --preserve-enabled; then
+          printf 'agent-notify configure failed; plugin install files remain. Retry: %s\n' "$(quote_shell_command "$NOTIFY_BIN" setup-notifications configure --provider claude "${CONFIGURE_ARGS[@]}" --policy-only --preserve-enabled)" >&2
           exit 1
         fi
         ;;
     esac
-    wizard=(setup-notifications wizard --action install --agents claude --hooks false --agent-notify true --yes --package "$package" --plugin-root "${CLAUDE_PLUGIN_ROOT}" --helper "$NOTIFY_BIN")
+    wizard=(setup-notifications wizard --action install --install-or-update --agents claude --hooks false --agent-notify true --yes --plugin-root "${CLAUDE_PLUGIN_ROOT}")
+    [ "$SEEN_AGENT_NOTIFY" = true ] || wizard+=(--preserve-existing-units)
+    case "$(uname -s 2>/dev/null)" in
+      MINGW*|MSYS*|CYGWIN*) ;; # The native helper is the installed primary, not this BAT shell launcher.
+      *) wizard+=(--helper "$NOTIFY_BIN") ;;
+    esac
     if [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then
       wizard+=(--claude-config "$CLAUDE_CONFIG_DIR")
       claude_home="$CLAUDE_CONFIG_DIR"
@@ -166,12 +174,13 @@ if [ "$SKIP_AGENT_NOTIFY" != true ]; then
       /*|[A-Za-z]:/*|[A-Za-z]:\\*) wizard+=(--claude-executable "$claude_exec" --client-executable "$claude_exec") ;;
     esac
     if ! "$NOTIFY_BIN" "${wizard[@]}"; then
-      printf 'agent-notify setup failed; plugin install files remain. Retry: %s\n' "$(quote_shell_command "$NOTIFY_BIN" "${wizard[@]}")" >&2
+      echo "agent-notify setup failed; plugin install files remain. Use the wizard's retry or next resume command above; if absent, rerun /init with the same installed release." >&2
+      case "$(uname -s 2>/dev/null)" in MINGW*|MSYS*|CYGWIN*) echo "On Windows, run that command in PowerShell (the printed quoting is PowerShell syntax)." >&2 ;; esac
       exit 1
     fi
-  elif ! "$NOTIFY_BIN" setup-notifications configure --provider claude "${CONFIGURE_ARGS[@]}"; then
-    printf 'agent-notify setup failed; plugin install files remain. Retry: %s\n' "$(quote_shell_command "$NOTIFY_BIN" setup-notifications configure --provider claude "${CONFIGURE_ARGS[@]}")" >&2
-    exit 1
+  else
+    echo "agent-notify setup skipped; installed binary lacks portable wizard. Plugin/hooks install succeeded. Update to a matching release before enabling MCP." >&2
+    [ "$SEEN_AGENT_NOTIFY" != true ] || exit 1
   fi
 fi
 ```

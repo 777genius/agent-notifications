@@ -2,22 +2,23 @@ name: Landing
 
 on:
   pull_request:
-    paths: ['landing/**', '.github/workflows/landing.yml']
+    paths: ['landing/**', '.github/workflows/landing.yml', 'scripts/stage-released-loader*', 'scripts/release-preflight*', 'README.md', 'docs/PLATFORM_RELEASE_CHANNELS.md', 'release-channels.tsv', 'bin/setup.sh', 'bin/release-channel.sh']
   push:
     branches: [main]
-    paths: ['landing/**', '.github/workflows/landing.yml']
+    paths: ['landing/**', '.github/workflows/landing.yml', 'scripts/stage-released-loader*', 'scripts/release-preflight*', 'README.md', 'docs/PLATFORM_RELEASE_CHANNELS.md', 'release-channels.tsv', 'bin/setup.sh', 'bin/release-channel.sh']
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: landing-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   verify:
-    runs-on: ubuntu-latest
+    if: github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main'
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || vars.CI_LINUX_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 20
     defaults:
       run:
@@ -27,14 +28,27 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: '22'
+      - name: Verify published channel documentation before dependency installation
+        run: node --experimental-strip-types ../scripts/release-preflight.mts --mode snapshot --root ..
+      - name: Test release preflight contracts
+        run: node --experimental-strip-types --test ../scripts/release-preflight.test.mts
       - run: npm ci
+      - name: Typecheck release preflight tooling
+        run: npx tsc --ignoreConfig --noEmit --strict --target es2023 --module nodenext --moduleResolution nodenext --allowImportingTsExtensions --types node --typeRoots node_modules/@types ../scripts/release-preflight.mts ../scripts/release-preflight.test.mts
       - run: npm run typecheck
       - run: npm run test
+      - name: Verify release loader staging contract
+        run: python3 ../scripts/stage-released-loader-test.py
       - run: npm run generate
         env:
-          NUXT_APP_BASE_URL: /agent-notifications/
+          NUXT_APP_BASE_URL: /
       - run: npx playwright install --with-deps chromium
       - run: npm run test:browser
+      - name: Keep public installer compatible with the published release
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 ../scripts/stage-released-loader.py .output/public/install.sh
       - uses: actions/upload-artifact@v7
         with:
           name: notification-landing
@@ -49,7 +63,8 @@ jobs:
   deploy:
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     needs: verify
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || vars.CI_LINUX_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 20
     permissions:
       contents: read
       pages: write

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"unsafe"
 
+	"github.com/777genius/agent-notifications/internal/windowsacl"
 	"golang.org/x/sys/windows"
 )
 
@@ -312,9 +313,6 @@ func setupRequirePrivate(h windows.Handle) error {
 		if err := windows.GetAce(acl, i, &ace); err != nil {
 			return err
 		}
-		if ace.Header.AceFlags&windows.INHERIT_ONLY_ACE != 0 {
-			continue
-		}
 		if ace.Header.AceType == windows.ACCESS_DENIED_ACE_TYPE {
 			continue
 		}
@@ -322,7 +320,7 @@ func setupRequirePrivate(h windows.Handle) error {
 			return fmt.Errorf("unsupported managed inode ACL")
 		}
 		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
-		if ace.Mask != 0 && !sid.Equals(user.User.Sid) && !sid.IsWellKnown(windows.WinLocalSystemSid) && !sid.IsWellKnown(windows.WinBuiltinAdministratorsSid) {
+		if !sid.Equals(user.User.Sid) && !sid.IsWellKnown(windows.WinLocalSystemSid) && !sid.IsWellKnown(windows.WinBuiltinAdministratorsSid) && !windowsacl.AllowsForeignReadOnly(ace.Mask) {
 			return fmt.Errorf("managed inode DACL grants foreign access")
 		}
 	}

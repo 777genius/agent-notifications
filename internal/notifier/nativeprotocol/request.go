@@ -54,18 +54,24 @@ func ValidText(s string, limit int, multiline bool) bool {
 	return true
 }
 
-func (a DesktopThreadAction) valid(correlation string) bool {
-	if a.Type != "desktop_thread_v1" || a.SchemaVersion != 1 || a.RouteKind != "codex_thread" || a.BundleID != "com.openai.codex" || a.CorrelationID != correlation || !validUUID(correlation) ||
-		a.ThreadID == "" || a.ThreadID == "." || a.ThreadID == ".." || !ValidText(a.ThreadID, 256, false) || len(a.TeamID) != 10 ||
-		!ValidText(a.ApplicationPath, 4096, false) || !strings.HasPrefix(a.ApplicationPath, "/") || path.Clean(a.ApplicationPath) != a.ApplicationPath || !strings.HasSuffix(a.ApplicationPath, ".app") {
+// ValidDesktopThreadTarget checks target syntax only, without probing an app or
+// chat. Policy eligibility and action/envelope identity are separate checks.
+func ValidDesktopThreadTarget(threadID, applicationPath, teamID string) bool {
+	if threadID == "" || threadID == "." || threadID == ".." || !ValidText(threadID, 256, false) || len(teamID) != 10 ||
+		!ValidText(applicationPath, 4096, false) || !strings.HasPrefix(applicationPath, "/") || path.Clean(applicationPath) != applicationPath || !strings.HasSuffix(applicationPath, ".app") {
 		return false
 	}
-	for _, r := range a.TeamID {
+	for _, r := range teamID {
 		if (r < 'A' || r > 'Z') && (r < '0' || r > '9') {
 			return false
 		}
 	}
 	return true
+}
+
+func (a DesktopThreadAction) valid(correlation string) bool {
+	return a.Type == "desktop_thread_v1" && a.SchemaVersion == 1 && a.RouteKind == "codex_thread" && a.BundleID == "com.openai.codex" && a.CorrelationID == correlation && validUUID(correlation) &&
+		ValidDesktopThreadTarget(a.ThreadID, a.ApplicationPath, a.TeamID)
 }
 
 // EncodeRequest validates decoded byte limits before JSON serialization. UTF-8

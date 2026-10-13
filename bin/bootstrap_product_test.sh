@@ -3,15 +3,43 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-env.sh"
 test_env_enter "$0" "$@"
 # Isolated unit/adapter fixtures: no public network, real host CLIs or Go builds.
 set -euo pipefail
+trap 'printf "TEST bootstrap product fixture failed: %s (status %s)\n" "$BASH_COMMAND" "$?" >&2' ERR
+case "${1:-}" in
+    '') [ "$#" -eq 0 ] || exit 2; _PRODUCT_TEST_UNIT_ONLY=false ;;
+    --unit-only) [ "$#" -eq 1 ] || exit 2; _PRODUCT_TEST_UNIT_ONLY=true ;;
+    *) echo "Usage: bash bootstrap_product_test.sh [--unit-only]" >&2; exit 2 ;;
+esac
+readonly _PRODUCT_TEST_UNIT_ONLY
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-SANDBOX=$(mktemp -d /tmp/bootstrap-products-XXXXXX)
+SANDBOX=$(mktemp -d "${TMPDIR:-/tmp}/bootstrap-products-TEST-XXXXXX")
+SANDBOX=$(cd -P "$SANDBOX" && pwd -P)
 trap 'rm -rf "$SANDBOX"' EXIT
 test_env_setup "$SANDBOX"
+# test-env.sh inherits PATH: retain only named tools, never host agent binaries.
+mkdir -p "$SANDBOX/trusted-tools"
+# Native Python cannot CreateProcess a Bash wrapper on Windows. Keep the one
+# controller executable explicit while child PATH remains the finite allowlist.
+TEST_BOOTSTRAP_BASH=$(type -P bash)
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+        [ ! -f "$TEST_BOOTSTRAP_BASH.exe" ] || TEST_BOOTSTRAP_BASH="$TEST_BOOTSTRAP_BASH.exe"
+        TEST_BOOTSTRAP_BASH=$(cygpath -w "$TEST_BOOTSTRAP_BASH")
+        ;;
+esac
+export TEST_BOOTSTRAP_BASH
+for tool in bash sh env cygpath python3 node curl wget tar gzip unzip zip mktemp rm cat cp mv chmod mkdir ln uname tr wc head cmp grep sed awk dirname basename find sort sha256sum shasum cut xargs sleep date stat diff touch readlink dd od go gcc cc pkg-config; do
+    tool_path=$(type -P "$tool" 2>/dev/null || true)
+    [ -z "$tool_path" ] || test_env_place_tool "$tool_path" "$SANDBOX/trusted-tools/$tool"
+done
+export PATH="$SANDBOX/trusted-tools"
+
 # Keep space-containing paths in the bootstrap characterization.
 export HOME="$SANDBOX/home space" USERPROFILE="$SANDBOX/home space" CODEX_HOME="$SANDBOX/codex space"
 export CLAUDE_CONFIG_DIR="$SANDBOX/claude config" CLAUDE_HOME="$SANDBOX/claude home"
 mkdir -p "$HOME" "$CODEX_HOME" "$CLAUDE_CONFIG_DIR" "$CLAUDE_HOME"
 sed '/^main "\$@"$/d' "$ROOT/bin/bootstrap.sh" > "$SANDBOX/functions.sh"
+# This source is also loaded by subprocess fixtures later in the suite.
+printf '\nbootstrap_macos_command() { return 1; }\n' >> "$SANDBOX/functions.sh"
 
 # Startup path resolution must be nounset-safe on Git Bash and must not require
 # a home fallback when an explicit Claude path is available.
@@ -33,6 +61,219 @@ env -u HOME USERPROFILE="$SANDBOX/windows profile" CLAUDE_HOME="$SANDBOX/legacy 
     bash -c 'source "$1"; [ "$CLAUDE_HOME" = "$2" ]' \
     _ "$SANDBOX/functions.sh" "$SANDBOX/explicit config"
 source "$SANDBOX/functions.sh"
+# All macOS application queries in this suite must be explicitly mocked.
+bootstrap_macos_command() { echo "Unexpected macOS application query in fixture" >&2; return 1; }
+
+# Regression: an omitted route on macOS must reach configure with the registered
+# official app (including spaces) and preserve-policy; explicit decisions must
+# bypass discovery, and an unverified identity must never become a local route.
+(
+    trace="$SANDBOX/default-codex-discovery"
+    configure_trace="$SANDBOX/default-codex-configure"
+    mkdir -p "$SANDBOX/apps with spaces/ChatGPT.app" "$SANDBOX/apps with spaces/Codex.app"
+    uname() { printf '%s\n' "${TEST_OS:-Darwin}"; }
+    bootstrap_macos_command() {
+        printf '%s\n' "$1" >> "$trace"
+        case "$1" in
+            /usr/bin/osascript)
+                [ "$#" -eq 5 ] && [ "$2" = -l ] && [ "$3" = JavaScript ] && [ "$4" = -e ] || return 2
+                [ "${TEST_LS_AVAILABLE:-true}" = true ] || return 1
+                printf '%s\n' "$TEST_LS_APP" ;;
+            /usr/bin/codesign)
+                [ "$#" -eq 7 ] && [ "$2" = --verify ] && [ "$3" = --strict ] &&
+                    [ "$4" = --all-architectures ] && [ "$5" = -R ] || return 2
+                [ "$6" = '=anchor apple generic and identifier "com.openai.codex" and certificate leaf[subject.OU] = "2DC432GLL2" and certificate leaf[field.1.2.840.113635.100.6.1.13] exists' ] || return 2
+                [ "$7" = "$(cd -P "$TEST_LS_APP" && pwd -P)" ] || return 2
+                [ "${TEST_SIGNATURE_VALID:-true}" = true ] ;;
+            *) return 2 ;;
+        esac
+    }
+    cat > "$SANDBOX/default-route-configure" <<'CONFIGURE_ROUTE'
+#!/bin/bash
+printf '%s\n' "$@" > "$TEST_CONFIGURE_TRACE"
+CONFIGURE_ROUTE
+    chmod +x "$SANDBOX/default-route-configure"
+    CONFIGURE_BINARY="$SANDBOX/default-route-configure"
+    export TEST_CONFIGURE_TRACE="$configure_trace"
+    for registered_name in ChatGPT Codex; do
+        TEST_LS_APP="$SANDBOX/apps with spaces/$registered_name.app"
+        physical_app=$(cd -P "$TEST_LS_APP" && pwd -P)
+        for product in codex both; do
+            : > "$trace"
+            PRODUCT=""; CONFIGURE_ARGS=(); CONFIGURE_NOTIFICATIONS=true
+            select_product --product "$product"
+            [ "${#CONFIGURE_ARGS[@]}" -eq 9 ]
+            [ "${CONFIGURE_ARGS[*]}" = "--app $physical_app --team-id 2DC432GLL2 --allow-unknown-caller true --allow-caller-asserted false --preserve-policy" ]
+            [ "$(cat "$trace")" = $'/usr/bin/osascript\n/usr/bin/codesign' ]
+            configure_agent_policy portable
+            printf '%s\n' setup-notifications configure --provider "$product" \
+                --app "$physical_app" --team-id 2DC432GLL2 \
+                --allow-unknown-caller true --allow-caller-asserted false --preserve-policy \
+                --policy-only --preserve-enabled > "$SANDBOX/default-route-expected"
+            cmp "$configure_trace" "$SANDBOX/default-route-expected"
+        done
+    done
+    : > "$trace"
+    PRODUCT=""; CONFIGURE_ARGS=(); OPENCODE_ARGS=()
+    select_product --products codex,gemini --webhook
+    [ "${CONFIGURE_ARGS[*]}" = "--app $physical_app --team-id 2DC432GLL2 --allow-unknown-caller true --allow-caller-asserted false --preserve-policy" ]
+    [ "$(cat "$trace")" = $'/usr/bin/osascript\n/usr/bin/codesign' ]
+    OPENCODE_ARGS=()
+    for explicit_route in none app; do
+        : > "$trace"
+        PRODUCT=""; CONFIGURE_ARGS=()
+        if [ "$explicit_route" = none ]; then
+            select_product --product codex --navigation none --allow-unknown-caller false --allow-caller-asserted false
+            [ "${CONFIGURE_ARGS[*]}" = "--navigation none --allow-unknown-caller false --allow-caller-asserted false" ]
+        else
+            select_product --product both --app "$physical_app" --team-id ABCDE12345 --allow-unknown-caller false --allow-caller-asserted true
+            [ "${CONFIGURE_ARGS[*]}" = "--app $physical_app --team-id ABCDE12345 --allow-unknown-caller false --allow-caller-asserted true" ]
+        fi
+        [ ! -s "$trace" ]
+    done
+    for failure in signature missing unsafe; do
+        : > "$trace"
+        TEST_SIGNATURE_VALID=true; TEST_LS_AVAILABLE=true
+        TEST_LS_APP="$SANDBOX/apps with spaces/ChatGPT.app"
+        case "$failure" in
+            signature) TEST_SIGNATURE_VALID=false ;;
+            missing) TEST_LS_AVAILABLE=false ;;
+            unsafe) TEST_LS_APP+=$'\nspoof.app' ;;
+        esac
+        PRODUCT=""; CONFIGURE_ARGS=()
+        select_product --product codex 2> "$SANDBOX/default-route-fallback"
+        [ "${CONFIGURE_ARGS[*]}" = "--navigation none --allow-unknown-caller true --allow-caller-asserted false --preserve-policy" ]
+        grep -q 'defaulting to navigation none' "$SANDBOX/default-route-fallback"
+        if [ "$failure" != signature ]; then
+            [ "$(cat "$trace")" = /usr/bin/osascript ]
+        fi
+    done
+    for fallback in claude Linux MINGW64_NT; do
+        : > "$trace"
+        TEST_OS=Darwin; product=codex
+        if [ "$fallback" = claude ]; then product=claude; else TEST_OS="$fallback"; fi
+        PRODUCT=""; CONFIGURE_ARGS=()
+        select_product --product "$product"
+        [ "${CONFIGURE_ARGS[*]}" = "--navigation none --allow-unknown-caller true --allow-caller-asserted false --preserve-policy" ]
+        [ ! -s "$trace" ]
+    done
+)
+
+# Consent failures must stop at argument parsing, before acquiring artifacts.
+(
+    PRODUCT=""; CONFIGURE_ARGS=(); OPENCODE_ARGS=()
+    select_product --product opencode --desktop --webhook
+    [ "$PRODUCT" = opencode ] && [ "$CONFIGURE_NOTIFICATIONS" = false ]
+    [ "${OPENCODE_ARGS[*]}" = "--desktop --webhook" ]
+    if BOOTSTRAP_RELEASE_TAG=v1.45.0 resolve_bootstrap_release; then exit 1; fi
+    BOOTSTRAP_RELEASE_TAG=v1.46.0 BOOTSTRAP_RELEASE_COMMIT=0123456789abcdef0123456789abcdef01234567 resolve_bootstrap_release
+)
+# A Gemini-containing selection must share observer flags while retaining the
+# legacy group and rejecting duplicate/empty selectors before any acquisition.
+(
+    PRODUCT=""; CONFIGURE_ARGS=(); OPENCODE_ARGS=()
+    select_product --products claude,codex,opencode,gemini --webhook --skip-agent-notify
+    [ "$LEGACY_PRODUCT" = both ]
+    [ "${SELECTED_PRODUCTS[*]}" = "claude codex opencode gemini" ]
+    [ "${OPENCODE_ARGS[*]}" = --webhook ]
+)
+for args in "--products gemini,gemini --webhook" "--products claude,,gemini --webhook" "--product gemini --webhook --agent-notify"; do
+    if ( PRODUCT=""; CONFIGURE_ARGS=(); OPENCODE_ARGS=(); select_product $args ); then
+        echo "accepted invalid Gemini bundle: $args" >&2; exit 1
+    fi
+done
+for args in "--product claude --desktop" "--product codex --webhook" "--product opencode --desktop --agent-notify" "--product opencode --desktop --skip-agent-notify" "--product opencode --desktop --navigation none"; do
+    if ( PRODUCT=""; CONFIGURE_ARGS=(); OPENCODE_ARGS=(); select_product $args ); then
+        echo "accepted incompatible OpenCode consent flags: $args" >&2
+        exit 1
+    fi
+done
+# A real disposable PATH executable covers common --version output formats.
+# No installed user host is queried by these prerequisite checks.
+(
+    mkdir -p "$SANDBOX/version-cli"
+    cat > "$SANDBOX/version-cli/opencode" <<'HOST_VERSION'
+#!/bin/bash
+[ "$#" -eq 1 ] && [ "$1" = --version ] || exit 2
+[ "$PWD" -ef "$HOME" ] && [ "$HOME" -ef "$USERPROFILE" ] || exit 3
+case "$PWD" in */bootstrap-opencode-TEST-*/profile) ;; *) exit 4 ;; esac
+[ -f "${BASH_SOURCE[0]%/*}/version" ] || exit 7
+cat "${BASH_SOURCE[0]%/*}/version"
+HOST_VERSION
+    chmod +x "$SANDBOX/version-cli/opencode"
+    export PATH="$SANDBOX/version-cli:$PATH"
+    PRODUCT=opencode
+    OPENCODE_ARGS=(--webhook)
+    for version in '1.18.29' '1.18.33' 'v1.18.33' 'OpenCode version: v1.18.33' '1.19.0' '2.0.0' 'v2.0.21'; do
+        printf '%s\n' "$version" > "$SANDBOX/version-cli/version"
+        [ -z "$(check_prerequisites 2>&1)" ]
+        diagnostic=$(BOOTSTRAP_VERBOSE=1 check_prerequisites 2>&1)
+        [[ "$diagnostic" == *"detected $version."* ]]
+    done
+    for version in '1.18.4' '1.18.28' '1.17.99' '3.0.0' '2.0.0-beta.1' '2.0.0+build' '02.0.0' '2.00.0' '2.0.000' '2.9999999.0' 'OpenCode v2.0.0 (compatibility 1.18.33)' 'unknown' $'2.0.0\n1.18.33' $'unknown\e[31m\rterminal-control'; do
+        printf '%s\n' "$version" > "$SANDBOX/version-cli/version"
+        if diagnostic=$(check_prerequisites 2>&1); then
+            echo "accepted unsupported host output: $version" >&2
+            exit 1
+        fi
+        quoted_version=$(LC_ALL=C printf '%q' "$version")
+        quoted_cli=$(LC_ALL=C printf '%q' "$SANDBOX/version-cli/opencode")
+        [[ "$diagnostic" == *"detected $quoted_version"* ]]
+        [[ "$diagnostic" == *"CLI: $quoted_cli"* ]]
+        [[ "$diagnostic" == *"Older OpenCode V1 releases have not been verified with this installed notification plugin."* ]]
+        [[ "$diagnostic" == *"Update the selected OpenCode CLI shown above; the desktop app and CLI can have different versions."* ]]
+        [[ "$diagnostic" != *$'\e'* && "$diagnostic" != *$'\r'* ]]
+    done
+    # Untrusted output is bounded before quoting, while the guard still rejects it.
+    printf '%700s\n' '' | tr ' ' x > "$SANDBOX/version-cli/version"
+    if diagnostic=$(check_prerequisites 2>&1); then exit 1; fi
+    [[ "$diagnostic" == *"detected $(printf '%512s' '' | tr ' ' x)..."* ]]
+    [ "${#diagnostic}" -lt 1600 ]
+    # Escaping control bytes must not expand the diagnostic beyond its cap.
+    printf '%512s' '' | tr ' ' '\001' > "$SANDBOX/version-cli/version"
+    if diagnostic=$(check_prerequisites 2>&1); then exit 1; fi
+    [ "${#diagnostic}" -lt 1600 ]
+    [[ "$diagnostic" != *$'\e'* && "$diagnostic" != *$'\r'* && "$diagnostic" != *$'\001'* ]]
+    rm "$SANDBOX/version-cli/version"
+    if diagnostic=$(check_prerequisites 2>&1); then exit 1; fi
+    [[ "$diagnostic" == *"Cannot determine OpenCode version. CLI: $quoted_cli"* ]]
+)
+# Gemini's prerequisite may execute only the disposable version fixture here.
+# Assert actual isolated cwd/home, dotenv sentinels and system redirects rather
+# than matching shell source. A changed version must stop before installation.
+(
+    mkdir -p "$SANDBOX/gemini-version-cli"
+    cat > "$SANDBOX/gemini-version-cli/gemini" <<'GEMINI_VERSION'
+#!/bin/bash
+[ "$#" -eq 1 ] && [ "$1" = --version ] || exit 2
+[ "$PWD" -ef "$HOME" ] && [ "$USERPROFILE" -ef "$HOME" ] && [ "$GEMINI_CLI_HOME" -ef "$HOME" ] || exit 3
+[ -z "${GEMINI_SETUP_ENV_CANARY:-}" ] || exit 4
+for file in "$HOME/.gemini/.env" "$HOME/.env"; do
+    [ -f "$file" ] && [ ! -s "$file" ] || exit 5
+done
+probe=$(dirname "$HOME")
+[ "$GEMINI_CLI_SYSTEM_SETTINGS_PATH" = "$probe/settings.json" ] || exit 6
+[ "$GEMINI_CLI_SYSTEM_DEFAULTS_PATH" = "$probe/defaults.json" ] || exit 6
+for file in "$GEMINI_CLI_SYSTEM_SETTINGS_PATH" "$GEMINI_CLI_SYSTEM_DEFAULTS_PATH"; do
+    [ ! -e "$file" ] && [ ! -L "$file" ] || exit 6
+done
+[ "$GEMINI_CLI_TRUSTED_FOLDERS_PATH" = "$probe/trust.json" ] && [ -f "$GEMINI_CLI_TRUSTED_FOLDERS_PATH" ] || exit 6
+printf '0.62.0\n'
+GEMINI_VERSION
+    chmod +x "$SANDBOX/gemini-version-cli/gemini"
+    export PATH="$SANDBOX/gemini-version-cli:$PATH" GEMINI_SETUP_ENV_CANARY=synthetic-not-a-secret
+    PRODUCT=gemini
+    OPENCODE_ARGS=(--webhook)
+    check_prerequisites
+    sed 's/0\.62\.0/0.63.0/' "$SANDBOX/gemini-version-cli/gemini" > "$SANDBOX/gemini-version-cli/next"
+    mv "$SANDBOX/gemini-version-cli/next" "$SANDBOX/gemini-version-cli/gemini"
+    chmod +x "$SANDBOX/gemini-version-cli/gemini"
+    if diagnostic=$(check_prerequisites 2>&1); then
+        echo "accepted unqualified Gemini version" >&2; exit 1
+    fi
+    [[ "$diagnostic" == *"Unsupported Gemini CLI version; detected 0.63.0. Requires 0.62.0."* ]]
+    [[ "$diagnostic" == *"npm install -g @google/gemini-cli@0.62.0"* ]]
+)
 quoted=$(quote_shell_command "$SANDBOX/bin space/cli" --package "$SANDBOX/pkg space" --codex-home "$CODEX_HOME")
 eval "set -- $quoted"
 [ "$#" -eq 5 ] || { echo "quoted argc $#"; exit 1; }
@@ -55,6 +296,28 @@ select_product --product codex --navigation none --allow-unknown-caller true --a
 PRODUCT=""; CONFIGURE_ARGS=(); CONFIGURE_NOTIFICATIONS=true
 select_product --product claude
 [ "${CONFIGURE_ARGS[*]}" = "--navigation none --allow-unknown-caller true --allow-caller-asserted false --preserve-policy" ]
+cat > "$SANDBOX/configure-parser" <<'EOF'
+#!/bin/bash
+preserve=0
+policy=0
+enabled=0
+for arg in "$@"; do
+    [ "$arg" != --preserve-policy ] || preserve=$((preserve + 1))
+    [ "$arg" != --policy-only ] || policy=$((policy + 1))
+    [ "$arg" != --preserve-enabled ] || enabled=$((enabled + 1))
+done
+[ "$preserve" -eq "$EXPECTED_PRESERVE" ] && [ "$policy" -eq 1 ] && [ "$enabled" -eq 1 ]
+EOF
+chmod +x "$SANDBOX/configure-parser"
+(
+    CONFIGURE_BINARY="$SANDBOX/configure-parser"
+    PRODUCT=claude
+    export EXPECTED_PRESERVE=1
+    configure_agent_policy portable
+    export EXPECTED_PRESERVE=0
+    CONFIGURE_ARGS=(--navigation none --allow-unknown-caller true --allow-caller-asserted false)
+    configure_agent_policy portable
+)
 for tag in v1.42.0 v1.43.2 v2.0.0; do
     BOOTSTRAP_RELEASE_TAG="$tag"
     BOOTSTRAP_RELEASE_COMMIT="$TEST_RELEASE_COMMIT"
@@ -179,8 +442,7 @@ cli_has_setup_wizard "$wizard" || { echo "wizard-cli missing wizard"; exit 1; }
 read -r _os _arch < <(bootstrap_release_os_arch)
 case "$_os" in linux|darwin|windows) ;; *) echo "unexpected os $_os"; exit 1 ;; esac
 case "$_arch" in amd64|arm64) ;; *) echo "unexpected arch $_arch"; exit 1 ;; esac
-_portable_stage="$SANDBOX/portable-stage"
-mkdir -p "$_portable_stage" "$SANDBOX/portable-src"
+mkdir -p "$SANDBOX/portable-src"
 _asset="agent-notify-portable-${_os}-${_arch}.zip"
 printf 'portable-zip-fixture' > "$SANDBOX/portable-src/$_asset"
 python3 -I - "$SANDBOX/portable-src" "$_asset" <<'PY'
@@ -190,12 +452,35 @@ digest = hashlib.sha256((root/name).read_bytes()).hexdigest()
 (root/'checksums.txt').write_text(digest+'  '+name+'\n')
 PY
 BOOTSTRAP_TAG=v1.43.0
-_CONFIG_STAGE="$_portable_stage"
 fetch_bootstrap_file() { cp "$SANDBOX/portable-src/$(basename "$1")" "$2"; }
 acquire_wizard_portable_asset
-[ "$WIZARD_PACKAGE_ROOT" = "$_portable_stage/$_asset" ] || { echo "portable asset path $WIZARD_PACKAGE_ROOT"; exit 1; }
+[ "$WIZARD_PACKAGE_ROOT" = "$_PORTABLE_STAGE/$_asset" ] || { echo "portable asset path $WIZARD_PACKAGE_ROOT"; exit 1; }
+rm -rf "$_PORTABLE_STAGE"
+_PORTABLE_STAGE=""
+mkdir -p "$SANDBOX/temp" "$SANDBOX/config-stage"
+printf 'preflight-state' > "$SANDBOX/config-stage/baseline"
+printf '%s\n' '#!/bin/sh' 'if [ "$1 $2" = "setup-notifications --help" ]; then echo "--policy-only --preserve-enabled"; exit 0; fi' 'exit 1' > "$SANDBOX/fail-wizard"
+chmod +x "$SANDBOX/fail-wizard"
+(
+    set +e
+    export TMPDIR="$SANDBOX/temp"
+    _CONFIG_STAGE="$SANDBOX/config-stage"
+    CONFIGURE_BINARY="$SANDBOX/fail-wizard"
+    PLUGIN_ROOT="$SANDBOX/runtime"
+    PRODUCT=claude
+    CONFIGURE_ARGS=()
+    configure_agent_policy() { return 0; }
+    bootstrap_abs_command() { return 1; }
+    install_cleanup_traps
+    setup_agent_notify_wizard > "$SANDBOX/retry.log" 2>&1
+    [ "$?" -ne 0 ]
+    printf '%s\n' "$WIZARD_PACKAGE_ROOT" > "$SANDBOX/retry-package-path"
+)
+_retry_package=$(cat "$SANDBOX/retry-package-path")
+[ -f "$_retry_package" ] || { echo "retry package removed: $_retry_package"; exit 1; }
+[ ! -e "$SANDBOX/config-stage" ] || { echo 'preflight state retained with portable asset'; exit 1; }
+[ ! -s "$SANDBOX/retry.log" ]
 BOOTSTRAP_TAG=""
-_CONFIG_STAGE=""
 WIZARD_PACKAGE_ROOT=""
 # setup_marketplace self-heals a marketplace declared under a retired repo
 # name, but leaves an unrelated source conflict alone.
@@ -253,12 +538,121 @@ echo "marketplace self-heal fixtures passed"
     config_preflight
 )
 # Dispatch tests preserve shared bundle state and isolate CN_PRODUCT.
+# Exercise Gemini's actual bootstrap route before replacing dispatcher effects.
+# A captured protocol function is the artifact seam; no host CLI is launched.
+(
+    uname() { printf 'Linux\n'; }
+    bootstrap_release_os_arch() { printf 'linux amd64\n'; }
+    gemini_control="$SANDBOX/gemini control ' \$literal"
+    bootstrap_control_root() { printf '%s\n' "$gemini_control"; }
+    PRODUCT=gemini
+    OPENCODE_ARGS=(--webhook)
+    _CONFIG_HELPER=capture_gemini
+    capture_gemini() {
+        case "$1 $2" in
+            'setup-gemini install')
+                printf '%s\n' "$@" > "$SANDBOX/gemini-argv"
+                [ "${GEMINI_INSTALL_FAIL:-0}" = 0 ] ;;
+            'config installer') printf '%s\n' "$SANDBOX/gemini runtime" ;;
+            'config path') printf '%s\n' "$SANDBOX/shared config.json" ;;
+            *) return 1 ;;
+        esac
+    }
+    initialize_config() { printf initialized > "$SANDBOX/gemini-init"; }
+    install_gemini > "$SANDBOX/gemini-output"
+    expected=$(printf '%s\n' setup-gemini install --binary capture_gemini --webhook --runtime-root "$gemini_control/runtime")
+    [ "$(cat "$SANDBOX/gemini-argv")" = "$expected" ] || { echo "Gemini bootstrap lost its actual API or consent" >&2; exit 1; }
+    [ -f "$SANDBOX/gemini-init" ]
+    grep -F 'Enable/trust the user hooks' "$SANDBOX/gemini-output"
+    grep -F 'configure and enable its destination' "$SANDBOX/gemini-output"
+    if grep -E 'Shared settings:|Inspect registration|Remove:' "$SANDBOX/gemini-output"; then exit 1; fi
+    BOOTSTRAP_VERBOSE=1 install_gemini > "$SANDBOX/gemini-output"
+    # Execute the public lifecycle strings against an inert argv recorder with
+    # a different default environment. No candidate/helper/native host runs.
+    mkdir -p "$SANDBOX/gemini runtime" "$SANDBOX/other default"
+    printf 'untouched default\n' > "$SANDBOX/other default/canary"
+    export GEMINI_LIFECYCLE_TRACE="$SANDBOX/gemini-lifecycle-argv"
+    cat > "$SANDBOX/gemini runtime/claude-notifications-linux-amd64" <<'LIFECYCLE_ARGV'
+#!/bin/bash
+set -eu
+printf '%s\n' "$@" > "$GEMINI_LIFECYCLE_TRACE"
+LIFECYCLE_ARGV
+    chmod +x "$SANDBOX/gemini runtime/claude-notifications-linux-amd64"
+    for label_action in 'Inspect registration and consent:|inspect' 'Remove:|remove'; do
+        label=${label_action%|*}; action=${label_action#*|}
+        printed=$(sed -n "s/^[[:space:]]*$label //p" "$SANDBOX/gemini-output")
+        [ -n "$printed" ]
+        XDG_CONFIG_HOME="$SANDBOX/other default" bash -c "$printed"
+        expected=$(printf '%s\n' setup-gemini "$action" --control-root "$gemini_control")
+        [ "$(cat "$GEMINI_LIFECYCLE_TRACE")" = "$expected" ] || { echo "Gemini printed $action lost the actual control root" >&2; exit 1; }
+    done
+    # The permission branch must address the same installation. The artifact
+    # seam accepts an inert attestation; no helper or permission API is run.
+    uname() { printf 'Darwin\n'; }
+    bootstrap_release_os_arch() { printf 'darwin amd64\n'; }
+    OPENCODE_ARGS=(--desktop)
+    _CONFIG_STAGE="$SANDBOX/inert native staging"
+    mkdir -p "$_CONFIG_STAGE/ClaudeNotifier.app"
+    touch "$_CONFIG_STAGE/ClaudeNotifier.app.managed-runtime.json"
+    cp "$SANDBOX/gemini runtime/claude-notifications-linux-amd64" "$SANDBOX/gemini runtime/claude-notifications-darwin-amd64"
+    BOOTSTRAP_VERBOSE=1 install_gemini > "$SANDBOX/gemini-output"
+    for label_action in 'Check permission:|permission-status' 'Grant if needed:|request-permission'; do
+        label=${label_action%|*}; action=${label_action#*|}
+        printed=$(sed -n "s/^[[:space:]]*$label //p" "$SANDBOX/gemini-output")
+        [ -n "$printed" ]
+        XDG_CONFIG_HOME="$SANDBOX/other default" bash -c "$printed"
+        expected=$(printf '%s\n' setup-gemini "$action" --control-root "$gemini_control")
+        [ "$(cat "$GEMINI_LIFECYCLE_TRACE")" = "$expected" ] || { echo "Gemini printed $action lost the actual control root" >&2; exit 1; }
+    done
+    # Exercise the actual Windows copy-and-execute branch on this host with an
+    # inert executable fixture. The query/render boundary supplies native paths.
+    uname() { printf 'MINGW64_NT\n'; }
+    bootstrap_release_os_arch() { printf 'windows amd64\n'; }
+    native_control="C:/Gemini TEST control ' \$literal"
+    cygpath() {
+        # The binary needs native backslashes; rendered control paths use -m.
+        # Both cross this inert argv boundary without executing a native host.
+        [ "$1" = -m ] || [ "$1" = -w ] || return 1
+        case "$2" in
+            "$gemini_control") printf '%s\n' "$native_control" ;;
+            "$gemini_control/runtime") printf '%s/runtime\n' "$native_control" ;;
+            *) printf '%s\n' "$2" ;;
+        esac
+    }
+    OPENCODE_ARGS=(--webhook)
+    cat > "$SANDBOX/gemini runtime/claude-notifications-windows-amd64.exe" <<'WINDOWS_REMOVER_ARGV'
+#!/bin/bash
+set -eu
+[ "${0##*/}" = remover.exe ] || exit 91
+printf '%s\n' "$@" > "$GEMINI_LIFECYCLE_TRACE"
+exit "${GEMINI_REMOVE_EXIT:-0}"
+WINDOWS_REMOVER_ARGV
+    chmod +x "$SANDBOX/gemini runtime/claude-notifications-windows-amd64.exe"
+    BOOTSTRAP_VERBOSE=1 install_gemini > "$SANDBOX/gemini-output"
+    printed=$(sed -n 's/^[[:space:]]*Remove: //p' "$SANDBOX/gemini-output")
+    XDG_CONFIG_HOME="$SANDBOX/other default" bash -c "$printed"
+    expected=$(printf '%s\n' setup-gemini remove --control-root "$native_control")
+    [ "$(cat "$GEMINI_LIFECYCLE_TRACE")" = "$expected" ] || { echo "Windows remover lost native control-root argv" >&2; exit 1; }
+    status=0
+    GEMINI_REMOVE_EXIT=37 bash -c "$printed" || status=$?
+    [ "$status" = 37 ] || { echo "Windows remover lost failure status" >&2; exit 1; }
+    [ -f "$SANDBOX/gemini runtime/claude-notifications-windows-amd64.exe" ]
+    [ -z "$(find "$TMPDIR" -maxdepth 1 -name 'agent-notifications-remove.*' -print)" ]
+    [ "$(cat "$SANDBOX/other default/canary")" = 'untouched default' ]
+    [ "$(find "$SANDBOX/other default" -type f | wc -l)" -eq 1 ]
+    rm "$SANDBOX/gemini-init"
+    GEMINI_INSTALL_FAIL=1
+    if install_gemini > "$SANDBOX/gemini-output"; then
+        echo "Gemini bootstrap hid installer failure" >&2; exit 1
+    fi
+    [ ! -e "$SANDBOX/gemini-init" ] || { echo "Config initialized after Gemini installation failed" >&2; exit 1; }
+)
 print_header() { :; }; abort_if_wsl_environment() { :; }
 check_prerequisites() { :; }; detect_platform() { :; }
 resolve_bootstrap_release() { BOOTSTRAP_TAG=v1.43.2; }
 install_claude() { [ "$CN_PRODUCT" = claude ]; PLUGIN_ROOT='bundle space'; echo claude >> "$SANDBOX/calls"; }
 install_codex() { [ "${CN_PRODUCT:-}" = sentinel ]; echo codex >> "$SANDBOX/calls"; }
-stage_historical_baselines() { :; }; stage_config_helper() { :; }; config_preflight() { :; }; initialize_config() { :; }
+stage_historical_baselines() { :; }; stage_config_helper() { _CONFIG_STAGE=$(mktemp -d); }; config_preflight() { :; }; initialize_config() { :; }
 export CN_PRODUCT=sentinel
 for product in claude codex both; do
     : > "$SANDBOX/calls"
@@ -281,7 +675,7 @@ mkdir -p "$PLUGIN_ROOT/portable-package"
 printf '{}' > "$PLUGIN_ROOT/portable-package/plugin.json"
 CONFIGURE_BINARY="$SANDBOX/capture-wizard"
 export WIZARD_CAPTURE="$SANDBOX/wizard-args"
-printf '%s\n' '#!/bin/bash' 'printf "%s\n" "$@" > "$WIZARD_CAPTURE"' > "$CONFIGURE_BINARY"
+printf '%s\n' '#!/bin/bash' 'if [ "$1 $2" = "setup-notifications --help" ]; then echo "--policy-only --preserve-enabled"; exit 0; fi' 'if [ "${4:-}" = inspect ]; then printf '"'"'{"targets":[]}\n'"'"'; exit 0; fi' 'printf "%s\n" "$@" > "$WIZARD_CAPTURE"' > "$CONFIGURE_BINARY"
 chmod +x "$CONFIGURE_BINARY"
 configure_agent_policy() { return 0; }
 bootstrap_abs_command() { return 1; }
@@ -293,7 +687,480 @@ export CLAUDE_CONFIG_DIR="$SANDBOX/custom claude"
 setup_agent_notify_wizard
 grep -Fx -- "$CLAUDE_CONFIG_DIR/.claude.json" "$WIZARD_CAPTURE"
 
+# Regression: invalid/incomplete multi selections and pending JSON used to
+# acquire a helper or execute host --version before rejecting the request.
+# Exercise the actual script entry point with external acquisition/exec canaries.
+(
+    mkdir -p "$SANDBOX/early-canaries"
+    for tool in curl wget claude codex opencode gemini; do
+        cat > "$SANDBOX/early-canaries/$tool" <<'EARLY_CANARY'
+#!/bin/bash
+printf '%s\n' "$0 $*" >> "$EARLY_CANARY_LOG"
+exit 99
+EARLY_CANARY
+        chmod +x "$SANDBOX/early-canaries/$tool"
+    done
+    export PATH="$SANDBOX/early-canaries:$PATH" EARLY_CANARY_LOG="$SANDBOX/early-effects"
+    for args in '--products opencode,opencode' '--products claude,unknown' '--json' '--product gemini --json' '--ui=bad' '--plain --ui=rich' '--navigation none' '--agent-notify --agent-notify'; do
+        status=0
+        bash "$ROOT/bin/bootstrap.sh" $args >"$SANDBOX/early-output" 2>&1 || status=$?
+        [ "$status" -eq 1 ] || { echo "Wrong early refusal status $status for $args" >&2; exit 1; }
+        [ ! -e "$EARLY_CANARY_LOG" ] || { cat "$EARLY_CANARY_LOG" >&2; exit 1; }
+    done
+)
+# Regression: normalization overwrote explicit caller false/false, or appended
+# a second preserve-policy when the caller supplied it with an omitted route.
+(
+    PRODUCT=""; CONFIGURE_ARGS=(); OPENCODE_ARGS=(); _UI_MODE=""; UI_ARGS=()
+    CONFIGURE_NOTIFICATIONS=true
+    select_product --product claude --ui=plain --plain --navigation=none --allow-unknown-caller=false --allow-caller-asserted=false
+    [ "${CONFIGURE_ARGS[*]}" = '--navigation none --allow-unknown-caller false --allow-caller-asserted false' ]
+    PRODUCT=""; CONFIGURE_ARGS=(); _UI_MODE=""; UI_ARGS=()
+    select_product --product claude --preserve-policy
+    [ "${CONFIGURE_ARGS[*]}" = '--preserve-policy --navigation none --allow-unknown-caller true --allow-caller-asserted false' ]
+)
+
+# Cursor used to fail product parsing or lose its two frozen scalar arguments.
+# Drive the real main/selector/wizard composition through disposable argv peers;
+# no installer, vendor, provider, delivery or materializer executes here.
+(
+    export TEST_CORE="$SANDBOX/TEST core caller" TEST_FUNCTIONS="$SANDBOX/functions.sh"
+    export TEST_RUNNER="$SANDBOX/TEST cursor main" TEST_ATOMS="$SANDBOX/TEST frozen atoms"
+    export TEST_TRACE="$SANDBOX/TEST cursor trace"
+    mkdir -p "$TEST_TRACE"
+    cat > "$TEST_CORE" <<'CURSOR_PEER'
+#!/bin/bash
+set -euo pipefail
+trace_name="${1#--}-${2:-none}"
+[ "${2:-}" != wizard ] || trace_name="$trace_name-$4"
+printf '%s\0' "$@" > "$TEST_TRACE/$trace_name"
+case "$1 ${2:-}" in
+    'setup-products capabilities') printf 'setup-products-v1 claude codex opencode gemini\n' ;;
+    'setup-products features') printf 'terminal-selector-v1\n' ;;
+    'setup-products select') printf '%s\n' "${TEST_SELECTION:-cursor}" ;;
+    'setup-products channels') [ "${TEST_CANCEL:-}" = channels ] || printf '%s\n' "$TEST_CHANNELS" ;;
+    'setup-products confirm')
+        [ "${TEST_CANCEL:-}" != confirm ] || exit 0
+        while [ "$#" -gt 0 ]; do
+            if [ "$1" = --intent-file ]; then printf 'TEST immutable checkpoint' > "$2"; break; fi
+            shift
+        done
+        printf 'approved\n' ;;
+    'setup-products intent-args') cat "$TEST_ATOMS" ;;
+    'setup-products preflight') exit "${TEST_PREFLIGHT_EXIT:-0}" ;;
+    'setup-notifications --help') printf '%s\n' '--policy-only --preserve-enabled' ;;
+    'setup-notifications wizard')
+        if [ "${TEST_WIZARD_WARNING:-0}" = 1 ]; then printf '{"warning":"foreign-callback-fixture"}\n' >&2; fi
+        if [ "$4" = inspect ]; then printf '{"targets":[]}\n'; else exit "${TEST_WIZARD_EXIT:-0}"; fi ;;
+    *) exit 97 ;;
+esac
+CURSOR_PEER
+    cat > "$TEST_RUNNER" <<'CURSOR_MAIN'
+#!/bin/bash
+source "$TEST_FUNCTIONS"
+abort_if_wsl_environment() { :; }; detect_platform() { :; }; print_header() { :; }
+check_prerequisites() { :; }
+resolve_bootstrap_release() { BOOTSTRAP_TAG=v2.0.0; }
+stage_config_helper() { _CONFIG_STAGE=$(mktemp -d); _CONFIG_HELPER=$TEST_CORE; }
+acquire_wizard_portable_asset() { WIZARD_PACKAGE_ROOT="$TEST_TRACE/TEST package with spaces.zip"; }
+# This dispatch fixture already supplies its committed observer; actual fresh
+# runtime preparation is exercised by the downloaded Cursor bootstrap canary.
+prepare_cursor_runtime() { _CURSOR_RUNTIME_PREPARED=false; }
+bootstrap_abs_command() { printf unexpected-discovery >> "$TEST_TRACE/mutation"; return 1; }
+install_legacy_products() { printf legacy >> "$TEST_TRACE/mutation"; return 99; }
+install_opencode() { printf opencode >> "$TEST_TRACE/mutation"; return 99; }
+install_gemini() { printf gemini >> "$TEST_TRACE/mutation"; return 99; }
+initialize_config() { printf config >> "$TEST_TRACE/mutation"; return 99; }
+main "$@"
+CURSOR_MAIN
+    chmod +x "$TEST_CORE"
+    python3 - "$SANDBOX" <<'PY_CURSOR'
+import os, pathlib, subprocess, sys
+if os.name == 'nt':
+    print('Cursor controlling-TTY fixtures require POSIX PTY; other unit fixtures still run')
+    sys.exit(0)
+import fcntl, termios
+sandbox = pathlib.Path(sys.argv[1]); trace = pathlib.Path(os.environ['TEST_TRACE'])
+# Quotes, dollar signs and spaces must remain scalar bytes, never shell code.
+profile = str(sandbox / "TEST frozen cursor ' $literal")
+vendor = str(sandbox / 'TEST frozen vendor with spaces')
+control = str(sandbox / 'TEST control space' / 'agent-notifications')
+runtime = str(sandbox / 'TEST installed core space')
+global_config = str(sandbox / 'TEST policy space.json')
+atoms = [('home', str(sandbox / 'TEST frozen home')), ('control-root', control),
+         ('runtime-root', runtime), ('global-config', global_config),
+         ('scope-root', profile), ('client-executable', vendor)]
+requested = ['--scope-root', str(sandbox / 'TEST requested cursor'),
+             '--client-executable', str(sandbox / 'TEST requested vendor')]
+def run(args, changes=None, raw=None):
+    for file in trace.iterdir(): file.unlink()
+    pathlib.Path(os.environ['TEST_ATOMS']).write_bytes(raw if raw is not None else
+        b''.join(k.encode()+b'\0'+v.encode()+b'\0' for k,v in atoms))
+    master, slave = os.openpty()
+    def terminal():
+        os.setsid(); fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
+    env = dict(os.environ, TEST_CHANNELS='desktop,webhook', **(changes or {}))
+    process = subprocess.Popen([os.environ['TEST_BOOTSTRAP_BASH'], os.environ['TEST_RUNNER']]+args,
+        env=env, stdin=slave, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, preexec_fn=terminal)
+    os.close(slave)
+    try: output, _ = process.communicate(timeout=20)
+    finally:
+        if process.poll() is None: process.kill(); process.communicate()
+        os.close(master)
+    calls = [p.read_bytes().split(b'\0')[:-1] for p in trace.iterdir() if p.name != 'mutation']
+    return process.returncode, calls, output.decode(errors='replace')
+def call(calls, prefix):
+    return next(c for c in calls if c[:len(prefix)] == [s.encode() for s in prefix])
+def value(args, key): return args[args.index(key.encode())+1]
+for selection in (['--product', 'cursor'], ['--products', 'cursor'], []):
+    for channels in (['--desktop'], ['--webhook'], ['--desktop', '--webhook'], []):
+        code, calls, output = run(selection+requested+['--agent-notify']+channels)
+        # Old parsing rejected Cursor; dropped CSV/selector IDs prevented dispatch.
+        assert code == 0, output
+        confirm = call(calls, ['setup-products', 'confirm'])
+        # Original explicit scope must reach confirmation before frozen argv replaces it.
+        assert value(confirm, '--scope-root') == requested[1].encode()
+        assert value(confirm, '--client-executable') == requested[3].encode()
+        # Desktop-only/webhook-only must not broaden to the absent sibling channel.
+        for flag in ('--desktop', '--webhook'):
+            assert (flag.encode() in confirm) == (not channels or flag in channels)
+        preflight = call(calls, ['setup-products', 'preflight'])
+        install = call(calls, ['setup-notifications', 'wizard', '--action', 'install'])
+        inspect = call(calls, ['setup-notifications', 'wizard', '--action', 'inspect'])
+        # Writers must use the original immutable checkpoint and selected authorities.
+        assert value(install, '--bootstrap-intent-file') == value(confirm, '--intent-file') == value(preflight, '--intent-file')
+        for args in (install, inspect):
+            for key, expected in (('--scope-root', profile), ('--client-executable', vendor),
+                    ('--control-root', control), ('--runtime-root', runtime), ('--global-config', global_config), ('--agents', 'cursor')):
+                assert value(args, key) == expected.encode(), (key, args)
+            # Vendor must never become observer; the caller derives installed primary.
+            assert not any(key.encode() in args for key in ('--helper', '--claude-config', '--codex-home', '--claude-mcp-config', '--mcp-config', '--plugin-root'))
+        # Only the approved notify unit grammar may enter the caller; no legacy hooks.
+        assert value(install, '--hooks') == b'false' and value(install, '--agent-notify') == b'true'
+        assert '--install-or-update'.encode() in install and not (trace/'mutation').exists()
+# Logging refusal must remain visible after otherwise successful stdout-only
+# stages, without inventing a saved log or exposing the machine inspection JSON.
+blocked_log = sandbox/'TEST blocked diagnostic root'
+blocked_log.write_text('not a directory')
+for warning in ('0', '1'):
+    code, calls, output = run(['--product', 'cursor']+requested+['--agent-notify', '--desktop'],
+                             {'BOOTSTRAP_DIAGNOSTIC_ROOT': str(blocked_log), 'TEST_WIZARD_WARNING': warning})
+    assert code == 0 and 'Diagnostics could not be fully saved' in output, output
+    assert ('Maintenance: installer reported additional details.' in output) == (warning == '1'), output
+    assert not any(value in output for value in ('Diagnostics:', 'saved in Diagnostics', '"targets"', 'foreign-callback-fixture')), output
+# Cancellation at either question must finish without writing or granting consent.
+for cancel in ('channels', 'confirm'):
+    code, calls, output = run(['--product', 'cursor']+requested, {'TEST_CANCEL': cancel})
+    assert code == 0 and not any(c[:1] == [b'setup-notifications'] for c in calls), output
+    # Cancellation must also stop legacy/observer/config writes and discovery.
+    assert not (trace/'mutation').exists(), output
+# A skipped MCP request must not be converted to native consent or a wizard write.
+code, calls, output = run(['--product', 'cursor']+requested+['--skip-agent-notify', '--desktop'])
+assert code == 0 and not any(c[:1] == [b'setup-notifications'] for c in calls), output
+# A skipped unit must not run another installer/config writer before returning.
+assert not (trace/'mutation').exists(), output
+valid = b''.join(k.encode()+b'\0'+v.encode()+b'\0' for k,v in atoms)
+# Duplicate, unknown, relative, missing or truncated frozen scalars must stop before writers.
+for raw in (valid+b'scope-root\0'+profile.encode()+b'\0', valid+b'invented-key\0/TEST\0',
+        valid.replace(vendor.encode(), b'relative vendor'), valid.rsplit(b'client-executable\0',1)[0],
+        valid.replace(b'scope-root\0'+profile.encode()+b'\0', b''), valid[:-1]):
+    code, calls, output = run(['--product', 'cursor']+requested+['--desktop'], raw=raw)
+    assert code != 0 and not any(c[:1] == [b'setup-notifications'] for c in calls), output
+    # A writer followed by failure could otherwise pass the malformed refusal.
+    assert not (trace/'mutation').exists(), output
+# A changed checkpoint or denied materializer must retain failure, never report success.
+for changes in ({'TEST_PREFLIGHT_EXIT':'73'}, {'TEST_WIZARD_EXIT':'77'}):
+    code, calls, output = run(['--product', 'cursor']+requested+['--webhook'], changes)
+    assert code in (73,77) and not any(c[:4] == [b'setup-notifications',b'wizard',b'--action',b'inspect'] for c in calls), output
+    # Checkpoint/caller refusal must not enter unrelated installers/config writes.
+    assert not (trace/'mutation').exists(), output
+# Missing/duplicate selected scope, mixed products and navigation must fail before acquisition.
+for args in (['--product','cursor'], ['--product','cursor']+requested[:2],
+        ['--product','cursor']+requested+requested[:2], ['--products','claude,cursor']+requested,
+        ['--product','claude']+requested, ['--product','cursor']+requested+['--navigation','none']):
+    code, calls, output = run(args)
+    assert code != 0 and not calls and not (trace/'mutation').exists(), output
+print('Cursor frozen bootstrap argv and refusal fixtures passed (composition only)')
+PY_CURSOR
+)
+
 printf 'bootstrap product unit fixtures passed\n'
+# Detect lost shell state, leaked observers and animation interleaved with advice.
+python3 -I - "$SANDBOX" "$TEST_BOOTSTRAP_BASH" <<'PY_PROGRESS'
+import errno, os, select, signal, subprocess, sys, time
+from pathlib import Path
+if os.name == 'nt':
+    print('SKIP shell progress PTY fixtures on native Windows')
+    sys.exit(0)
+import pty
+sandbox, bash = Path(sys.argv[1]), sys.argv[2]
+helper = sandbox / 'progress-observer'
+helper.write_text('''#!/bin/bash
+set -eu
+[ "$1" = installer-progress ] || exit 2
+shift
+if [ "$1" = --capabilities ]; then
+    [ "${TEST_PROGRESS_OLD:-0}" != 1 ] || exit 1
+    printf 'installer-progress-v1\\n'; exit 0
+fi
+[ "$1" = --events ] || exit 2
+[ "${TEST_PROGRESS_BROKEN:-0}" != 1 ] || { echo 'TEST renderer unavailable' >&2; exit 7; }
+file=$2
+printf '%s\\n' "$$" > "$TEST_PROGRESS_PID"
+printf 'OBSERVER_START\\n' >&2
+trap 'echo OBSERVER_INTERRUPTED >&2; exit 0' TERM INT HUP
+while ! grep -q '^stop' "$file"; do sleep 0.02; done
+cp "$file" "$TEST_PROGRESS_COPY"
+printf 'OBSERVER_STOP\\n' >&2
+''')
+helper.chmod(0o700)
+script = sandbox / 'progress-lifecycle.sh'
+script.write_text('''#!/bin/bash
+source "$TEST_PROGRESS_SOURCE"
+install_cleanup_traps
+_UI_MODE=${TEST_PROGRESS_MODE:-auto}
+_CONFIG_HELPER=${TEST_PROGRESS_HELPER:-}
+if [ "${TEST_PROGRESS_STOP_FAIL:-0}" = 1 ]; then
+    printf() {
+        case "$1" in stop*) return 1 ;; esac
+        builtin printf "$@"
+    }
+fi
+_PROGRESS_IDS=(claude codex gemini)
+_PROGRESS_PHASES=(registration pending pending)
+_PROGRESS_OUTCOMES=(state_requires_inspection not_started not_started)
+emit_stage() {
+    PLUGIN_ROOT=fixture-survived
+    progress_phase claude config registration_committed
+    if [ -z "$_CONFIG_HELPER" ]; then
+        printf abc > "$TMPDIR/download"
+        progress_download_activity "$TMPDIR/download"
+    fi
+    sleep "${TEST_PROGRESS_DELAY:-0.3}"
+    printf 'warning: visible fixture warning\\n\\033]0;FOREIGN_CALLBACK_PATH\\007{"unsafe":true}\\n' >&2
+    printf 'hidden technical stdout\\n'
+    return "${TEST_PROGRESS_FAILURE:-0}"
+}
+emit_preparation() { printf 'preceding source proof\\n'; }
+_UI_MODE=plain run_setup_stage 'Preparing fixture source' emit_preparation
+status=0
+run_setup_stage 'Installing Claude notifications' emit_stage || status=$?
+[ "$PLUGIN_ROOT" = fixture-survived ] || exit 91
+[ "${_PROGRESS_OUTCOMES[0]}" = registration_committed ] || exit 92
+[ -z "$_PROGRESS_PID" ] && [ -z "$_PROGRESS_EVENTS" ] || exit 93
+printf 'STATE_SURVIVED\\n'
+if [ "${TEST_PROGRESS_SUMMARY:-0}" = 1 ]; then
+    BOOTSTRAP_SUMMARY_FILE="$TMPDIR/summary"
+    PRODUCT=both
+    CLAUDE_AGENT_NOTIFY_STATUS='not installed (existing opt-out kept)'
+    CODEX_AGENT_NOTIFY_STATUS=installed
+    print_iterm2_python_api_notice() { :; }
+    print_success
+    printf '%s\\n' '  OpenCode - installed; restart required to load the global plugin.' \
+        '  Gemini CLI - installed; restart required.' \
+        '  Enable/trust the user hooks in Gemini CLI after restart.' \
+        "  Gemini desktop sources may duplicate alerts; choose one source." \
+        '  Webhook consent recorded; configure and enable its destination.' \
+        '  warning: preserved summary advice' >> "$BOOTSTRAP_SUMMARY_FILE"
+    cp "$BOOTSTRAP_SUMMARY_FILE" "$TMPDIR/summary-before"
+    _PROGRESS_IDS=(claude codex opencode gemini)
+    _PROGRESS_PHASES=(complete complete complete complete)
+    _PROGRESS_OUTCOMES=(completed completed completed completed)
+    if [ "${TEST_PROGRESS_SUMMARY_TRANSFORM_FAIL:-0}" = 1 ]; then awk() { return 7; }; fi
+    if [ "${TEST_PROGRESS_SUMMARY_REPLACE_FAIL:-0}" = 1 ]; then mv() { return 7; }; fi
+fi
+if [ "$status" -eq 0 ]; then report_progress 0; report_diagnostics; else report_setup_failure "$status"; fi
+if [ "${BOOTSTRAP_VERBOSE:-0}" = 1 ]; then bootstrap_diagnostics view "$_DIAGNOSTIC_LOG" >&2; fi
+exit "$status"
+''')
+def run(name, mode='auto', old=False, color=False, terminal=True, helper_path=helper, failure=0, cancel=False, broken=False, stop_failure=False, summary=False, summary_transform_failure=False, summary_replace_failure=False, verbose=False, dumb=False, narrow=False):
+    tmp = sandbox / ('progress-' + name); tmp.mkdir()
+    env = os.environ.copy()
+    env.update(TERM='dumb' if dumb else 'xterm-256color', TMPDIR=str(tmp), BOOTSTRAP_DIAGNOSTIC_ROOT=str(sandbox/('durable-'+name)), TEST_PROGRESS_SOURCE=str(sandbox/'functions.sh'),
+               TEST_PROGRESS_MODE=mode, TEST_PROGRESS_HELPER=str(helper_path or ''),
+               TEST_PROGRESS_SUMMARY=str(int(summary)), TEST_PROGRESS_SUMMARY_TRANSFORM_FAIL=str(int(summary_transform_failure)),
+               TEST_PROGRESS_SUMMARY_REPLACE_FAIL=str(int(summary_replace_failure)), BOOTSTRAP_VERBOSE=str(int(verbose)),
+               TEST_PROGRESS_OLD=str(int(old)), TEST_PROGRESS_STOP_FAIL=str(int(stop_failure)), TEST_PROGRESS_BROKEN=str(int(broken)), TEST_PROGRESS_FAILURE=str(failure),
+               TEST_PROGRESS_PID=str(tmp/'pid'), TEST_PROGRESS_COPY=str(tmp/'events'))
+    env.pop('NO_COLOR', None)
+    if color: env['NO_COLOR'] = '1'
+    if cancel: env['TEST_PROGRESS_DELAY'] = '5'
+    master, slave = pty.openpty() if terminal else (None, None)
+    if narrow:
+        import fcntl, struct, termios
+        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 24, 32, 0, 0))
+    proc = subprocess.Popen([bash, str(script)], env=env, stdin=subprocess.DEVNULL,
+                            stdout=subprocess.PIPE, stderr=slave if terminal else subprocess.PIPE,
+                            start_new_session=True)
+    if slave is not None: os.close(slave)
+    data, deadline, cancelled = bytearray(), time.monotonic() + 8, False
+    def drain():
+        if master is not None and select.select([master], [], [], 0.02)[0]:
+            try: data.extend(os.read(master, 65536))
+            except OSError as err:
+                if err.errno != errno.EIO: raise
+    while proc.poll() is None:
+        drain()
+        if cancel and not cancelled and b'OBSERVER_START' in data:
+            os.killpg(proc.pid, signal.SIGTERM); cancelled = True
+        assert time.monotonic() < deadline, (name, 'observer failed to join', data)
+        time.sleep(0.01)
+    out, err = proc.communicate(timeout=1)
+    if master is not None:
+        drain(); os.close(master); err = bytes(data)
+    assert b'\x1b' not in out, (name, 'animation leaked to stdout', out)
+    assert not list(tmp.glob('bootstrap-progress-*')), (name, 'event file leaked')
+    assert not list(tmp.glob('bootstrap-output-*')), (name, 'captured output leaked')
+    if (tmp/'pid').exists():
+        observer_pid = int((tmp/'pid').read_text())
+        try: os.kill(observer_pid, 0)
+        except ProcessLookupError: pass
+        else: raise AssertionError((name, 'observer still running', observer_pid))
+    logs = list((sandbox/('durable-'+name)).glob('installer-*.log'))
+    assert len(logs) == 1, (name, logs, err)
+    log = logs[0]
+    assert log.parent.stat().st_mode & 0o777 == 0o700 and log.stat().st_mode & 0o777 == 0o600
+    captured = log.read_bytes()
+    assert b'preceding source proof' in captured, (name, captured)
+    if cancel:
+        assert b'Exit status: interrupted' in captured and b'Diagnostics:' in err, (name, captured, err)
+        assert cancelled and proc.returncode == 143, (name, proc.returncode, err)
+        assert b'STATE_SURVIVED' not in out
+        return
+    assert proc.returncode == failure, (name, proc.returncode, out, err)
+    assert b'STATE_SURVIVED' in out and b'warning: visible fixture warning' in captured
+    assert b'hidden technical stdout' in captured
+    if not verbose:
+        assert not any(value in out+err for value in (b'visible fixture warning', b'hidden technical stdout', b'FOREIGN_CALLBACK_PATH', b'{"unsafe"')), (name, out, err)
+    else:
+        assert b'hidden technical stdout' in err and b'\\x1b]0;FOREIGN_CALLBACK_PATH\\x07' in err, (name, err)
+    if failure:
+        assert err.count(b'Setup incomplete:') == 1 and err.count(b'Next:') == 1 and err.count(b'Diagnostics:') == 1, (name, err)
+    rich = terminal and mode != 'plain' and not old and not color and not verbose and not dumb
+    if summary:
+        result = (tmp/'summary').read_text()
+        compact = rich and not broken and failure == 0 and not summary_transform_failure and not summary_replace_failure
+        duplicate_rows = [
+            '  Claude - installed; restart required.', '  Codex - installed; restart required.',
+            '  OpenCode - installed; restart required to load the global plugin.',
+            '  Gemini CLI - installed; restart required.',
+        ]
+        for row in duplicate_rows:
+            assert (row in result.splitlines()) != compact, (name, result)
+        if compact:
+            assert '  Claude notification tool: not installed (existing opt-out kept).' in result, (name, result)
+            assert '  Codex notification tool: installed.' not in result, (name, result)
+        else:
+            assert (tmp/'summary').read_bytes() == (tmp/'summary-before').read_bytes(), (name, 'fallback summary changed')
+            assert result.count('    Agent notification tool: ') == 2, (name, result)
+        assert 'Run /hooks in Codex, review the entries and trust them.' in result
+        assert 'Enable/trust the user hooks in Gemini CLI after restart.' in result
+        assert 'duplicate alerts; choose one source.' in result
+        assert 'Webhook consent recorded; configure and enable its destination.' in result
+        assert 'Delivery has not been verified.' in result
+        assert 'warning: preserved summary advice' in result
+        assert not list(tmp.glob('summary.rich-*')), (name, 'summary transform leaked temp')
+    if stop_failure:
+        assert err.count(b'OBSERVER_START') == 1, (name, 'incomplete final file launched observer', err)
+        assert b'OBSERVER_INTERRUPTED' in err, (name, err)
+        assert not (tmp/'events').exists(), (name, 'observer consumed incomplete final file')
+    elif helper_path and rich and not broken and not summary:
+        assert b'OBSERVER_START' in err, (name, err)
+        assert err.index(b'OBSERVER_STOP') < err.index(b'Diagnostics:'), (name, err)
+        rows = (tmp/'events').read_text()
+        assert 'claude\tconfig\tregistration_committed\n' in rows, (name, rows)
+        assert 'codex\tpending\tnot_started\n' in rows, (name, rows)
+        assert 'gemini\tpending\tnot_started\n' in rows, (name, rows)
+    elif not summary: assert b'OBSERVER_START' not in err, (name, err)
+    if not rich: assert b'\x1b' not in err and b'\r' not in err.replace(b'\r\n', b'\n'), (name, err)
+    if not helper_path: assert b'3 bytes received' in err and b'\x1b[2K' in err, (name, err)
+run('rich-delayed')
+run('rich-failed', failure=3)
+run('plain-failed', mode='plain', failure=3)
+run('no-color-failed', color=True, failure=3)
+run('redirected-failed', terminal=False, failure=3)
+run('dumb-failed', dumb=True, failure=3)
+run('narrow-failed', narrow=True, failure=3)
+run('plain', mode='plain')
+run('no-color', color=True)
+run('redirected', terminal=False)
+run('old-helper', old=True)
+run('spinner', helper_path=None)
+run('broken-renderer', broken=True)
+run('unwritable-stop', stop_failure=True)
+run('cancel', cancel=True)
+run('summary-rich', summary=True)
+run('summary-plain', mode='plain', summary=True)
+run('summary-old', old=True, summary=True)
+run('summary-renderer-failed', broken=True, summary=True)
+run('summary-install-failed', failure=3, summary=True)
+run('summary-transform-failed', summary=True, summary_transform_failure=True)
+run('summary-replace-failed', summary=True, summary_replace_failure=True)
+run('summary-verbose', summary=True, verbose=True)
+print('PASS shell progress state, stderr, lifecycle, fallback and cancellation fixtures')
+PY_PROGRESS
+
+# A leaked callback path/control byte, a disposable failure log, or unsafe
+# diagnostic storage makes this adapter regression red. Both supported runtimes
+# must preserve the same private storage boundary and the original stage exit.
+python3 -I - "$SANDBOX" "$TEST_BOOTSTRAP_BASH" <<'PY_DIAGNOSTIC_STORAGE'
+import os, pathlib, shutil, subprocess, sys
+sandbox, bash = pathlib.Path(sys.argv[1]), sys.argv[2]
+script = sandbox/'diagnostic-storage.sh'
+script.write_text('''#!/bin/bash
+source "$TEST_PROGRESS_SOURCE"
+[ "$TEST_DIAGNOSTIC_ENGINE" != node ] || usable_python3() { return 1; }
+bootstrap_control_root() { printf '%s\\n' "$TEST_DIAGNOSTIC_CONTROL"; }
+_UI_MODE=plain
+emit_first() { printf 'earlier-stage-context\\n'; }
+emit_failure() { head -c 90000 /dev/zero; printf '\\033]0;foreign-path\\007' >&2; return 37; }
+run_setup_stage 'Preparing fixture' emit_first
+status=0
+run_setup_stage 'Installing fixture' emit_failure || status=$?
+[ "$status" -eq 37 ] || exit 99
+report_setup_failure "$status"
+''')
+for engine in ('python3', 'node'):
+    if engine == 'node' and not shutil.which('node'): continue
+    cases = ('default', 'private', 'public', 'temporary', 'write-failed') if os.name == 'nt' else ('default', 'private', 'symlink', 'public', 'temporary', 'write-failed')
+    for case in cases:
+        base = sandbox/(engine+'-'+case); base.mkdir(mode=0o700)
+        temporary = base/'tmp'; temporary.mkdir(mode=0o700)
+        root = base/'diagnostics'
+        control = base/'agent-notifications'
+        if case == 'default': root = base/'agent-notifications-installer-diagnostics'
+        elif case == 'symlink': root.symlink_to(temporary, target_is_directory=True)
+        elif case == 'public': root.mkdir(mode=0o755)
+        elif case == 'temporary': root = temporary/'diagnostics'
+        elif case == 'write-failed': root.write_text('blocked')
+        env = dict(os.environ, TEST_PROGRESS_SOURCE=str(sandbox/'functions.sh'),
+                   TEST_DIAGNOSTIC_ENGINE=engine, TEST_DIAGNOSTIC_CONTROL=str(control), BOOTSTRAP_DIAGNOSTIC_ROOT=str(root), TMPDIR=str(temporary))
+        if case == 'default': env.pop('BOOTSTRAP_DIAGNOSTIC_ROOT')
+        result = subprocess.run([bash, str(script)], env=env, capture_output=True, timeout=10)
+        assert result.returncode == 0, (engine, case, result.stdout, result.stderr)
+        assert b'foreign-path' not in result.stdout+result.stderr and b'\x1b' not in result.stdout+result.stderr
+        if os.name == 'nt':
+            # Native Windows modes cannot prove the directory DACL. Refuse all
+            # persistence until ACL verification exists, including broad roots.
+            assert b'Diagnostics could not be fully saved' in result.stderr and b'Diagnostics:' not in result.stderr
+            assert not list(base.rglob('installer-*.log'))
+        elif case in ('default', 'private'):
+            logs = list(root.glob('installer-*.log')); assert len(logs) == 1
+            log = logs[0]
+            shutil.rmtree(temporary)
+            data = log.read_bytes()
+            assert b'earlier-stage-context' in data and b'foreign-path' in data
+            assert b'[diagnostic stream truncated after 65536 bytes]' in data and len(data) < 70000
+            assert root.stat().st_mode & 0o777 == 0o700 and log.stat().st_mode & 0o777 == 0o600
+            assert b'Diagnostics:' in result.stderr and b'could not be fully saved' not in result.stderr
+        else:
+            assert b'Diagnostics could not be fully saved' in result.stderr and b'Diagnostics:' not in result.stderr
+            assert not list(base.rglob('installer-*.log'))
+        assert not control.exists(), 'diagnostic capture created transaction control state'
+print('PASS private durable diagnostic storage or native Windows refusal, truncation, symlink denial and honest write failure')
+PY_DIAGNOSTIC_STORAGE
+
+[ "$_PRODUCT_TEST_UNIT_ONLY" != true ] || exit 0
 # Local HTTP and controlling-PTY integration. Installer/registration are explicit
 # fake adapters here; the fetched bootstrap, archive extraction and curl are real.
 python3 - "$ROOT" "$SANDBOX" <<'PY'
@@ -302,14 +1169,17 @@ if os.name != "nt":
     import pty
 root, sandbox = map(pathlib.Path, sys.argv[1:])
 web = sandbox / 'http'; web.mkdir()
-(web / 'bootstrap.sh').write_bytes((root / 'bin/bootstrap.sh').read_bytes())
+fixture_bootstrap = (root / 'bin/bootstrap.sh').read_text(encoding='utf-8').replace(
+    '\nmain "$@"', '\nbootstrap_macos_command() { return 1; }\nmain "$@"')
+(web / 'bootstrap.sh').write_text(fixture_bootstrap, encoding='utf-8')
 (web / 'latest').write_text('{"tag_name":"v1.42.0"}')
 release_commits = {'v1.42.0': 'a' * 40, 'v1.43.0': 'b' * 40, 'v2.0.0': 'c' * 40}
 (web / 'commits').mkdir()
 for tag, commit in release_commits.items():
     (web / 'commits' / tag).write_text(commit)
-uname_os=subprocess.check_output(['uname','-s'],text=True).strip().lower()
-uname_arch=subprocess.check_output(['uname','-m'],text=True).strip().lower()
+bash = os.environ['TEST_BOOTSTRAP_BASH']
+uname_os=subprocess.check_output([bash,'-c','uname -s'],text=True).strip().lower()
+uname_arch=subprocess.check_output([bash,'-c','uname -m'],text=True).strip().lower()
 asset_os='windows' if uname_os.startswith(('mingw','msys','cygwin')) else uname_os
 asset_arch='arm64' if uname_arch in ('arm64','aarch64') else 'amd64'
 asset_name='claude-notifications-'+asset_os+'-'+asset_arch+('.exe' if asset_os=='windows' else '')
@@ -512,12 +1382,12 @@ env_keys = (
     'CLAUDE_CONFIG_DIR', 'TMP', 'TEMP', 'TMPDIR',
 )
 env = {key: os.environ[key] for key in env_keys if key in os.environ}
-env.update(BOOTSTRAP_LATEST_RELEASE_API_URL=base+'/latest', BOOTSTRAP_COMMIT_API_BASE_URL=base+'/commits', BOOTSTRAP_RAW_BASE_URL=base+'/raw', BOOTSTRAP_RAW_CONTENT_URL=base+'/raw', BOOTSTRAP_SOURCE_BASE_URL=base, BOOTSTRAP_RELEASES_BASE_URL=base)
+env.update(BOOTSTRAP_RELEASE_TAG='v1.42.0', BOOTSTRAP_LATEST_RELEASE_API_URL=base+'/latest', BOOTSTRAP_COMMIT_API_BASE_URL=base+'/commits', BOOTSTRAP_RAW_BASE_URL=base+'/raw', BOOTSTRAP_RAW_CONTENT_URL=base+'/raw', BOOTSTRAP_SOURCE_BASE_URL=base, BOOTSTRAP_RELEASES_BASE_URL=base)
 cli = sandbox / 'clis'; cli.mkdir()
 (cli / 'codex').write_bytes(b'#!/bin/sh\nexit 99\n'); (cli / 'codex').chmod(0o755)
-bash = shutil.which('bash'); assert bash
+assert pathlib.Path(bash).is_file(), 'fixture controller Bash must exist'
 env['PATH'] = str(cli) + os.pathsep + (os.environ['PATH'] if os.name == 'nt' else '/usr/bin:/bin')
-script = str(root / 'bin/bootstrap.sh')
+script = str(web / 'bootstrap.sh')
 def run(args, expected=0, extra=None):
     process = subprocess.Popen([bash, script]+args, env=dict(env, **(extra or {})), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
     try:
@@ -526,7 +1396,7 @@ def run(args, expected=0, extra=None):
         # Killing only Bash leaves curl/helper children holding the output pipe,
         # so subprocess.run's timeout cleanup can itself wait indefinitely.
         if os.name == 'nt':
-            subprocess.run(['taskkill', '/F', '/T', '/PID', str(process.pid)],
+            subprocess.run([str(pathlib.Path(os.environ['SystemRoot'])/'System32/taskkill.exe'), '/F', '/T', '/PID', str(process.pid)],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
         else:
             os.killpg(process.pid, signal.SIGKILL)
@@ -596,30 +1466,22 @@ assert r.returncode == 0, r.stdout.decode()
 assert (live/'bin/claude-notifications').read_text() == 'stale'
 # Menu routing for Claude/both uses explicit adapters; Codex below exercises
 # the complete bootstrap HTTP/staging path with fake runtime assets.
-dispatch = (root / 'bin/bootstrap.sh').read_text(encoding='utf-8').replace('main "$@"', '')
-dispatch += '\ncheck_prerequisites() { :; }\nresolve_bootstrap_release() { :; }\nstage_historical_baselines() { :; }\nstage_config_helper() { :; }\nconfig_preflight() { :; }\ninitialize_config() { :; }\ninstall_claude() { echo CLAUDE_ADAPTER; }\ninstall_codex() { echo CODEX_ADAPTER; }\nmain "$@"\n'
+dispatch = fixture_bootstrap.replace('main "$@"', '')
+dispatch += '\ncheck_prerequisites() { :; }\nresolve_bootstrap_release() { :; }\nstage_historical_baselines() { :; }\nstage_config_helper() { _CONFIG_STAGE=$(mktemp -d); }\nconfig_preflight() { :; }\ninitialize_config() { :; }\ninstall_claude() { echo CLAUDE_ADAPTER; }\ninstall_codex() { echo CODEX_ADAPTER; }\nmain "$@"\n'
 (web / 'dispatch.sh').write_bytes(dispatch.encode('utf-8'))
-for choice, success in ([('1',True), ('2',True), ('3',True), ('invalid',False)] if os.name != 'nt' else []):
-    entry = '/dispatch.sh' if choice in ['1', '3'] else '/bootstrap.sh'
-    pid, fd = pty.fork()
-    if pid == 0:
-        os.execve(bash,[bash,'-c', 'curl -fsSL '+base+entry+' | bash'],env)
-    output = b''; sent = False; deadline = time.monotonic()+20
-    while time.monotonic() < deadline:
-        if select.select([fd],[],[],0.1)[0]:
-            try: chunk = os.read(fd,65536)
-            except OSError: break
-            if not chunk: break
-            output += chunk
-            if b'Choice:' in output and not sent:
-                os.write(fd,(choice+'\n').encode()); sent=True
-    else:
-        os.kill(pid,9); raise AssertionError('PTY timeout')
-    _, status = os.waitpid(pid,0); os.close(fd)
-    assert sent and (os.waitstatus_to_exitcode(status)==0)==success, output.decode()
-    if choice in ['1','3']: assert b'CLAUDE_ADAPTER' in output
-    if choice == '1': assert b'CODEX_ADAPTER' not in output
-    if choice == '3': assert b'CODEX_ADAPTER' in output
+# The native SelectMany UI is independently exercised against the actual
+# candidate by bootstrap_opencode_test.sh. This fixture checks shell routing.
+for product, success in [('claude',True), ('codex',True), ('both',True), ('invalid',False)]:
+    entry = '/dispatch.sh' if product in ['claude', 'both', 'invalid'] else '/bootstrap.sh'
+    command = 'curl -fsSL '+base+entry+' | bash -s -- --product '+shlex.quote(product)
+    result = subprocess.run([bash,'-c',command],env=env,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=20)
+    output = result.stdout
+    assert (result.returncode==0)==success, output.decode()
+    if product in ['claude','both']: assert b'Claude - installed' in output
+    if product == 'claude': assert b'Codex - installed' not in output
+    if product == 'both': assert b'Codex - installed' in output
+    if product == 'invalid': assert b'CLAUDE_ADAPTER' not in output and b'CODEX_ADAPTER' not in output
+
 assert not list(pathlib.Path(env['TMPDIR']).glob('bootstrap-codex-*'))
 assert not list(pathlib.Path(env['TMPDIR']).glob('bootstrap-release-*'))
 # Protected flow E2E. Real shell orchestration and local downloads; explicit
@@ -651,9 +1513,7 @@ def path_ids(values):
 def native_shell_path(value):
     if os.name != 'nt':
         return value
-    cygpath=shutil.which('cygpath')
-    assert cygpath, 'native Windows fixture requires cygpath'
-    return subprocess.check_output([cygpath,'-w',value],text=True).strip()
+    return subprocess.check_output([bash,'-c','cygpath -w "$1"','_',value],text=True).strip()
 def reset_case():
     # Every directory is an explicit child of this fixture, never host state.
     for key in ['HOME','XDG_CONFIG_HOME','CODEX_HOME','CLAUDE_CONFIG_DIR']:
@@ -666,18 +1526,58 @@ def reset_case():
         d.mkdir(parents=True, exist_ok=True)
     trace.write_text('')
 def init_events(): return [e for e in events() if e[:2]==['config','init']]
+# Real HTTP/checksum acquisition and public shell orchestration must emit clean,
+# physical staging paths. A symlinked TMPDIR ending in / used to produce // in
+# --package, rejected by the real Go wizard before any installation action.
+if os.name != 'nt':
+    reset_case(); request_paths.clear()
+    temp_root=sandbox/'physical temp'; temp_root.mkdir()
+    temp_alias=sandbox/'temp alias'; temp_alias.symlink_to(temp_root, target_is_directory=True)
+    release=web/'download/v2.0.0'
+    original_payload=(release/asset_name).read_bytes()
+    original_checksums=(release/'checksums.txt').read_bytes()
+    wizard_payload=capable.replace('setup-notifications', 'setup-notifications wizard', 1).replace("if args[0]=='setup-notifications':", "if args[:2]==['setup-notifications','--help']:\n    print('--policy-only --preserve-enabled'); sys.exit()\nif args[0]=='setup-notifications':", 1).replace('v1.42.0', 'v2.0.0').encode('utf-8')
+    portable_name='agent-notify-portable-'+asset_os+'-'+asset_arch+'.zip'
+    portable_payload=b'verified portable argv fixture'
+    (release/asset_name).write_bytes(wizard_payload)
+    (release/portable_name).write_bytes(portable_payload)
+    (release/'checksums.txt').write_text(
+        hashlib.sha256(wizard_payload).hexdigest()+'  '+asset_name+'\n'+
+        hashlib.sha256(portable_payload).hexdigest()+'  '+portable_name+'\n')
+    try:
+        run(['--product','codex'], extra={'BOOTSTRAP_RELEASE_TAG':'v2.0.0', 'TMPDIR':str(temp_alias)+'/'})
+        es=events()
+        wizard_args=next(e for e in es if e[:2]==['setup-notifications','wizard'])
+        package=wizard_args[wizard_args.index('--package')+1]
+        assert package == os.path.normpath(package) == os.path.realpath(package), package
+        assert pathlib.Path(package).parent.parent == temp_root.resolve(), package
+        assert pathlib.Path(package).name == portable_name
+        for e in es:
+            if e[:1]==['setup-codex']:
+                bundle=e[e.index('--plugin-root')+1]
+                assert bundle == os.path.realpath(bundle), bundle
+            if e[:3]==['config','installer','bootstrap']:
+                for staging_path in (e[3], e[10]):
+                    assert staging_path == os.path.realpath(staging_path), staging_path
+        assert '/download/v2.0.0/'+portable_name in request_paths
+        assert not list(temp_root.iterdir()), 'canonical staging cleanup failed'
+    finally:
+        (release/asset_name).write_bytes(original_payload)
+        (release/'checksums.txt').write_bytes(original_checksums)
+        (release/portable_name).unlink()
 for product in ['claude','codex','both']:
     reset_case(); request_paths.clear()
-    run(['--product',product])
+    output=run(['--product',product])
     assert sum(path.endswith('/'+asset_name) for path in request_paths)==1
     neutral=pathlib.Path(env['XDG_CONFIG_HOME'])/'agent-notifications/config.json'
-    assert neutral.exists() and len(init_events())==1
+    expected_inits = 2 if product == 'both' else 1
+    assert neutral.exists() and len(init_events())==expected_inits, (product, str(neutral), events(), output)
     es=events(); init_index=next(i for i,e in enumerate(es) if e[:2]==['config','init'])
     assert any(e[:2]==['claude','plugin'] or e[:1]==['setup-codex'] for e in es[:init_index])
     # Idempotent repair preserves the exact document.
     neutral.write_bytes(b'{ "future": [1, 2], "secret": "canary" }\n')
     before=neutral.read_bytes(); trace.write_text('')
-    run(['--product',product]); assert neutral.read_bytes()==before and len(init_events())==1
+    run(['--product',product]); assert neutral.read_bytes()==before and len(init_events())==expected_inits
 
 # All files changed by Claude registration are protected before the mocked
 # CLI can mutate any one, whether the explicit target exists or is absent.
@@ -728,7 +1628,13 @@ import json
 for value in [b'{"personalized":true}',b'{}']:
     reset_case(); active=historical(value)
     output=run(['--product','claude'],1)
-    assert 'import-required' in output and not any(e[:1]==['claude'] for e in events())
+    if os.name == 'nt':
+        assert 'Diagnostics could not be fully saved' in output and 'Diagnostics:' not in output
+        assert 'import-required' not in output and not any(e[:1]==['claude'] for e in events())
+    else:
+        diagnostic_path=shlex.split(next(line for line in output.splitlines() if line.startswith('Diagnostics:')).split(': ',1)[1])[0]
+        diagnostic=pathlib.Path(native_shell_path(diagnostic_path)).read_text()
+        assert 'import-required' in diagnostic and 'import-required' not in output and not any(e[:1]==['claude'] for e in events())
     assert (active/'bin/runtime').read_bytes()==b'working-runtime'
     assert path_ids(json.loads(request.read_text())['activeBundleRoots'])==path_ids([active])
 # A verified exact-version template permits initialization. Personalized bytes
@@ -777,31 +1683,46 @@ run(['--product','codex'],1)
 assert not any(e[:1]==['setup-codex'] for e in events())
 run(['--product','codex'],1,{'AGENT_NOTIFICATIONS_CONFIG':str(dest/'explicit.json')})
 assert not any(e[:1]==['setup-codex'] for e in events())
+def config_retry(output):
+    assert 'Config-only retry' not in output
+    if os.name == 'nt':
+        assert 'Diagnostics could not be fully saved' in output and 'Diagnostics:' not in output
+        assert 'command in Diagnostics' not in output
+        # Persistence is unavailable, but the retained fixture helper still
+        # permits the same explicit config-only contract check without effects.
+        stage=max(pathlib.Path(native_shell_path(env['TMPDIR'])).glob('bootstrap-config-*'), key=lambda p: p.stat().st_mtime_ns)
+        command=[(stage/asset_name).as_posix(), 'config', 'init', '--json']
+        return shlex.join(command), command
+    diagnostic_path=shlex.split(next(line for line in output.splitlines() if line.startswith('Diagnostics:')).split(': ',1)[1])[0]
+    diagnostic=pathlib.Path(native_shell_path(diagnostic_path)).read_text()
+    assert 'config-only retry command in Diagnostics' in output
+    line=next(line for line in diagnostic.splitlines() if line.startswith('Config-only retry'))
+    shell_command=line.split(': ',1)[1]
+    return shell_command, shlex.split(shell_command)
 # Reserved exit 3 means committed registration; retain checksum-verified helper.
 for product in ['codex','both']:
     reset_case()
     output=run(['--product',product],1,{'FAIL_SETUP_INIT':'1'})
-    assert 'Partial setup' in output and 'registration failed' not in output
+    assert 'Setup incomplete:' in output and 'registration failed' not in output
     assert (pathlib.Path(env['CODEX_HOME'])/'fixture-registration').read_text()=='registered'
-    assert not init_events()
-    line=next(line for line in output.splitlines() if line.startswith('Config-only retry'))
-    shell_command=line.split(': ',1)[1]
-    command=shlex.split(shell_command)
+    # Claude's completed phase remains committed if the later Codex phase fails.
+    assert len(init_events()) == (1 if product == 'both' else 0)
+    shell_command, command=config_retry(output)
     assert pathlib.Path(native_shell_path(command[0])).read_bytes()==payload_file.read_bytes()
     assert command[1:]==['config','init','--json']
     trace.write_text(''); requests_before=list(request_paths)
     r=subprocess.run([bash,'-c',shell_command],env=env,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=20)
     assert r.returncode==0, r.stdout.decode()
     assert events()==[['config','init','--json']] and request_paths==requests_before
-# Fresh registration failure never reaches init.
+# A failed phase never initializes config; a completed sibling keeps its init.
 for product,fail in [('claude',{'FAIL_CLAUDE':'1'}),('codex',{'FAIL_REGISTER':'1'}),('both',{'FAIL_REGISTER':'1'})]:
-    reset_case(); run(['--product',product],1,fail); assert not init_events()
+    reset_case(); run(['--product',product],1,fail)
+    assert len(init_events()) == (1 if product == 'both' else 0)
 # Init failure retains a verified executable for a config-only retry.
 reset_case()
 output=run(['--product','both'],1,{'FAIL_INIT':'1'})
-assert 'Partial setup' in output and 'Config-only retry' in output
-line=next(line for line in output.splitlines() if line.startswith('Config-only retry'))
-shell_command=line.split(': ',1)[1]; command=shlex.split(shell_command); trace.write_text('')
+assert 'Setup incomplete:' in output and 'Config-only retry' not in output
+shell_command, command=config_retry(output); trace.write_text('')
 assert pathlib.Path(native_shell_path(command[0])).read_bytes()==payload_file.read_bytes()
 assert command[1:]==['config','init','--json']
 r=subprocess.run([bash,'-c',shell_command],env=env,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=20)
@@ -837,13 +1758,24 @@ def place_runtime_cmd(dest, src):
         return
     dest.write_text('#!/bin/sh\nexec {} "$@"\n'.format(shlex.quote(src.replace('\\', '/'))))
     dest.chmod(0o755)
-if shutil.which('node'):
+def fixture_tool(name):
+    found = shutil.which(name)
+    if found:
+        return found
+    # Native Windows lookup applies PATHEXT, while our Bash wrappers have no
+    # extension. These paths are used only as shell commands in child scripts.
+    for directory in os.environ['PATH'].split(os.pathsep):
+        candidate = pathlib.Path(directory) / name
+        if candidate.is_file():
+            return str(candidate)
+    return None
+if fixture_tool('node'):
     node_only = sandbox / 'http-node-only-bin'
     node_only.mkdir()
     for name in ['bash', 'sh', 'mktemp', 'rm', 'cat', 'chmod', 'mkdir', 'ln', 'uname',
                  'tr', 'wc', 'head', 'cp', 'mv', 'env', 'true', 'false', 'grep', 'sed', 'awk',
                  'tar', 'gzip', 'curl', 'node', 'sha256sum', 'shasum', 'dirname', 'realpath']:
-        place_runtime_cmd(node_only / name, shutil.which(name))
+        place_runtime_cmd(node_only / name, fixture_tool(name))
     assert not (node_only / 'python3').exists()
     reset_case()
     env['PATH'] = str(cli) + os.pathsep + str(node_only)
@@ -856,3 +1788,82 @@ print('protected flow fixtures passed (fake config CLI; real Go integration pend
 server.shutdown(); server.server_close()
 print('local HTTP / curl-pipe PTY adapter fixtures passed (fake installer and binary)')
 PY
+
+# Stage output is a public contract: success hides machine/binary banners but
+# retains warnings privately and shell state; failure retains diagnostics and its code.
+(
+    # HTTP reset_case recreates HOME; start a new capture session after that
+    # fixture instead of reusing its deleted parent-shell diagnostic file.
+    _DIAGNOSTIC_LOG=""; _DIAGNOSTIC_ROOT=""; _DIAGNOSTIC_FAILED=false
+    _DIAGNOSTIC_LABEL=""; _DIAGNOSTIC_NOTED=false
+    emit_stage() { PLUGIN_ROOT=fixture-installed; printf 'Ready to use!\n{"generation":12}\n\033[33mwarning: extension needs activation\033[0m\n\033[33m  Log out and log back in, then run:\033[0m\n  gnome-extensions enable fixture@example.test\n'; printf 'phase prepare\nSetting up notifications: agent notify...\n' >&2; echo 'warning: fixture optional setup' >&2; }
+    run_setup_stage 'Installing fixture' emit_stage > "$SANDBOX/stage-ok.out" 2> "$SANDBOX/stage-ok.err"
+    [ "$PLUGIN_ROOT" = fixture-installed ]
+    grep -F 'Installing fixture...' "$SANDBOX/stage-ok.out"
+    run_setup_stage 'Preparing fixture settings' emit_stage > "$SANDBOX/stage-prepare.out" 2>/dev/null
+    if grep -F 'Preparing fixture settings...' "$SANDBOX/stage-prepare.out"; then exit 1; fi
+    if grep -E 'Ready to use|generation' "$SANDBOX/stage-ok.out"; then exit 1; fi
+    case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*)
+            [ -z "$_DIAGNOSTIC_LOG" ] && [ "$_DIAGNOSTIC_FAILED" = true ]
+            report_diagnostics > "$SANDBOX/native-diagnostic.out" 2>&1
+            grep -F 'Diagnostics could not be fully saved' "$SANDBOX/native-diagnostic.out"
+            if grep -F 'Diagnostics:' "$SANDBOX/native-diagnostic.out"; then exit 1; fi
+            [ ! -s "$SANDBOX/stage-ok.err" ] ;;
+        *)
+    grep -F 'Log out and log back in' "$_DIAGNOSTIC_LOG"
+    grep -F 'gnome-extensions enable fixture@example.test' "$_DIAGNOSTIC_LOG"
+    grep -F 'warning: fixture optional setup' "$_DIAGNOSTIC_LOG"
+    [ ! -s "$SANDBOX/stage-ok.err" ]
+    if grep -E 'phase prepare|Setting up notifications:' "$SANDBOX/stage-ok.err"; then exit 1; fi
+    # A real stage failure must return and preserve recovery advice privately.
+    INSTALLED_JSON="$SANDBOX/missing-installed-plugins.json"
+    status=0
+    run_setup_stage 'Locating fixture plugin' find_plugin_root > "$SANDBOX/root-fail.out" 2> "$SANDBOX/root-fail.err" || status=$?
+    [ "$status" -eq 1 ]
+    grep -F 'installed_plugins.json not found' "$_DIAGNOSTIC_LOG"
+    grep -F 'Try restarting Claude' "$_DIAGNOSTIC_LOG"
+    emit_failure() { echo 'diagnostic stdout'; echo 'diagnostic stderr' >&2; return 3; }
+    status=0
+    run_setup_stage 'Failing fixture' emit_failure > "$SANDBOX/stage-fail.out" 2> "$SANDBOX/stage-fail.err" || status=$?
+    [ "$status" -eq 3 ]
+    grep -F 'diagnostic stdout' "$_DIAGNOSTIC_LOG"
+    grep -F 'diagnostic stderr' "$_DIAGNOSTIC_LOG"
+    [ ! -s "$SANDBOX/stage-fail.err" ]
+    BOOTSTRAP_VERBOSE=1 run_setup_stage 'Verbose fixture' emit_stage > "$SANDBOX/stage-verbose.out" 2>/dev/null
+    bootstrap_diagnostics view "$_DIAGNOSTIC_LOG" > "$SANDBOX/stage-verbose-details.out"
+    grep -F 'generation' "$SANDBOX/stage-verbose-details.out"
+            ;;
+    esac
+    PRODUCT=both CLAUDE_AGENT_NOTIFY_STATUS='not configured by this run' CODEX_AGENT_NOTIFY_STATUS='not configured by this run'
+    print_iterm2_python_api_notice() { :; }
+    print_success > "$SANDBOX/summary.out"
+    grep -F 'Claude - installed; restart required.' "$SANDBOX/summary.out"
+    grep -F 'Codex - installed; restart required.' "$SANDBOX/summary.out"
+    grep -F 'Run /hooks in Codex' "$SANDBOX/summary.out"
+    grep -F 'not configured by this run' "$SANDBOX/summary.out"
+    grep -F 'Delivery has not been verified.' "$SANDBOX/summary.out"
+    [ "$(grep -c '^Installation complete$' "$SANDBOX/summary.out")" -eq 1 ]
+    BOOTSTRAP_SUMMARY_FILE="$SANDBOX/aggregate.txt"
+    print_success > "$SANDBOX/collected.out"
+    [ ! -s "$SANDBOX/collected.out" ]
+    print_success > "$SANDBOX/collected.out"
+    [ "$(grep -c 'Delivery has not been verified.' "$BOOTSTRAP_SUMMARY_FILE")" -eq 1 ]
+    [ "$(sed -n '$p' "$BOOTSTRAP_SUMMARY_FILE")" = "$(print_delivery_note)" ]
+    _PROGRESS_IDS=(opencode gemini); _PROGRESS_OUTCOMES=(completed state_requires_inspection); _PROGRESS_PHASES=(complete registration)
+    report_progress 1 2> "$SANDBOX/partial-progress.out"
+    grep -F 'OpenCode     completed' "$SANDBOX/partial-progress.out"
+    grep -F 'Gemini CLI   state requires inspection' "$SANDBOX/partial-progress.out"
+    report_progress 0 2> "$SANDBOX/success-progress.out"
+    if grep -F 'OpenCode     completed' "$SANDBOX/success-progress.out"; then exit 1; fi
+)
+
+# Structured results distinguish a successful opt-out from an installed sibling.
+cat > "$SANDBOX/wizard-summary.json" <<'JSON_STATUS'
+{"outcome":"completed","targets":[{"client":"claude","unit":"agent-notify","outcome":"absent"},{"client":"codex","unit":"agent-notify","outcome":"installed"}]}
+JSON_STATUS
+[ "$(wizard_tool_status "$SANDBOX/wizard-summary.json" claude auto)" = 'not installed (existing opt-out kept)' ]
+[ "$(wizard_tool_status "$SANDBOX/wizard-summary.json" codex)" = installed ]
+[ "$(wizard_tool_status "$SANDBOX/wizard-summary.json" other)" = 'setup completed; status not checked' ]
+
+[ "$(wizard_tool_status "$SANDBOX/wizard-summary.json" claude true)" = 'not installed' ]

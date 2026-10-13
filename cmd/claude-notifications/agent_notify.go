@@ -11,6 +11,7 @@ import (
 
 	notifycli "github.com/777genius/agent-notifications/internal/agentnotify/cli"
 	notifymcp "github.com/777genius/agent-notifications/internal/agentnotify/mcp"
+	"github.com/777genius/agent-notifications/internal/agentnotify/origin"
 	notifyruntime "github.com/777genius/agent-notifications/internal/agentnotify/runtime"
 )
 
@@ -60,11 +61,11 @@ func agentNotifyFlags(command string, args []string) (integration string, help, 
 
 type agentNotifyStatus struct{ backend *notifyruntime.Backend }
 
-func (s agentNotifyStatus) Status(ctx context.Context) (notifymcp.Status, error) {
-	return agentNotifyStatusValue(s.backend.Status(ctx)), nil
+func (s agentNotifyStatus) Status(ctx context.Context, o origin.Context) (notifymcp.Status, error) {
+	return agentNotifyStatusValue(s.backend.StatusForOrigin(ctx, o)), nil
 }
 func agentNotifyStatusValue(s notifyruntime.Status) notifymcp.Status {
-	return notifymcp.Status{Enabled: s.ExplicitIntent && s.DesktopEnabled, Configuration: s.Configuration, Capability: s.OfflineCapability}
+	return notifymcp.Status{Enabled: s.ExplicitIntent && s.DesktopEnabled, Configuration: s.Configuration, Capability: s.OfflineCapability, Navigation: s.Navigation}
 }
 
 // Only main supplies production defaults. Tests inject native effects into the

@@ -16,6 +16,19 @@ test_env_setup() {
     chmod 700 "$XDG_RUNTIME_DIR"
 }
 
+# Keep a finite fixture PATH without moving MSYS executables away from DLLs.
+# MSYS symlinks may be copies; wrappers preserve each original tool location.
+test_env_place_tool() {
+    local source="$1" destination="$2"
+    case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*)
+            printf '#!/bin/bash\nexec %q "$@"\n' "$source" > "$destination"
+            chmod +x "$destination"
+            ;;
+        *) ln -s "$source" "$destination" ;;
+    esac
+}
+
 # Re-enter through env -i before executing fixture code. The readiness flag is
 # shell-local so nested suites also get a fresh environment and sandbox.
 test_env_enter() {

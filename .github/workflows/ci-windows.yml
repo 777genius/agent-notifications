@@ -4,12 +4,62 @@ on:
   push:
     branches: [ main, develop ]
   pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled, ready_for_review]
+
+# Only a newer run for the same PR supersedes its checks.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  scope:
+    name: Classify release tooling scope
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      mode: ${{ steps.classify.outputs.mode }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Test conservative release scope with disposable Git fixtures
+        run: python3 -B tools/ci_release_scope_test.py
+      - name: Classify exact PR revision (errors retain full CI)
+        id: classify
+        run: python3 -B tools/ci_release_scope.py classify
+
+  release-tools:
+    name: Release tools scoped contract (Windows)
+    needs: scope
+    if: needs.scope.outputs.mode == 'release-tools'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.27.2'
+          cache: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - run: npm --prefix scripts/codex-offline-release-smoke ci
+      - run: make release-tools-check
+      - run: make release-preflight
+
   test:
+    needs: scope
+    if: ${{ !cancelled() && needs.scope.outputs.mode != 'release-tools' }}
     name: Test on Windows
     runs-on: windows-latest
-    timeout-minutes: 30
+    # Measured preceding stages take ~30m; preserve the 10m offline E2E budget plus cleanup margin.
+    timeout-minutes: 45
 
     strategy:
       fail-fast: false
@@ -42,10 +92,44 @@ jobs:
       - name: Qualify Windows configuration and delivery
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
+          go test ./internal/config -run '^TestWindowsAutomatic(NativeAnchorReadOnly|PinSkipsBusyChild)$' -count=1 -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           go build -o bin/claude-notifications.exe ./cmd/claude-notifications
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          go build -o bin/windows-standard-user-e2e.exe ./scripts/windows-standard-user-e2e
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          go test -c ./internal/config -o bin/config-native.test.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          bin/windows-standard-user-e2e.exe bin/config-native.test.exe '-test.run=^TestWindowsAutomaticNativeAnchorReadOnly$' '-test.v=true'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $version = (Get-Content .claude-plugin/plugin.json | ConvertFrom-Json).version
-          python scripts/release-artifact-e2e.py --binary bin/claude-notifications.exe --version "v$version"
+          python scripts/release-artifact-e2e.py --binary bin/claude-notifications.exe --version "v$version" --windows-standard-user-runner bin/windows-standard-user-e2e.exe
+
+      - name: Prepare qualified configuration test build
+        if: matrix.go == '1.26' && github.event_name == 'pull_request'
+        shell: pwsh
+        env:
+          TEST_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $actualSource = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          New-Item -ItemType Directory -Force qualified-config-build | Out-Null
+          Copy-Item bin/claude-notifications.exe qualified-config-build/claude-notifications-windows-amd64.exe
+          $hash = (Get-FileHash qualified-config-build/claude-notifications-windows-amd64.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          [IO.File]::WriteAllText("$PWD/qualified-config-build/SHA256SUMS", "$hash  claude-notifications-windows-amd64.exe`n", [Text.UTF8Encoding]::new($false))
+          $info = "Unreleased Windows amd64 test build; not a plugin installer.`nSource: $actualSource`nPR head: $env:TEST_SOURCE_SHA`nActions run: $env:GITHUB_RUN_ID`n$(go version)`nQualified by release-artifact-e2e.py in this Actions run.`nUse config init --json / config inspect --json to diagnose ACL rejection.`nThe normal version string is retained for packaged-template compatibility.`n"
+          [IO.File]::WriteAllText("$PWD/qualified-config-build/BUILD-INFO.txt", $info, [Text.UTF8Encoding]::new($false))
+
+      - name: Upload qualified configuration test build
+        if: matrix.go == '1.26' && github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-config-test-pr-${{ github.event.pull_request.number }}-go-${{ matrix.go }}
+          path: qualified-config-build/
+          retention-days: 7
+          if-no-files-found: error
 
       - name: Run go vet
         run: go vet ./...
@@ -60,8 +144,102 @@ jobs:
           }
         shell: pwsh
 
-      - name: Run tests
-        run: go test -v -race -coverprofile=coverage.txt -covermode=atomic ./...
+      - name: Compare cold and warm Windows lock preparation
+        if: matrix.go == '1.26'
+        shell: pwsh
+        env:
+          LOCK_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          $baseline = Join-Path $env:RUNNER_TEMP 'TEST-windows-lock-baseline'
+          git fetch --no-tags --depth=1 origin $env:LOCK_BASE_SHA
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git worktree add --detach $baseline $env:LOCK_BASE_SHA
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item internal/installruntime/lock_bench_windows_test.go "$baseline/internal/installruntime/lock_bench_windows_test.go"
+          Write-Host "Baseline lock preparation at $env:LOCK_BASE_SHA"
+          Push-Location $baseline
+          try {
+            go test -run '^$' -bench '^BenchmarkWindowsPrivateLock$' -benchtime=100x -count=5 -benchmem ./internal/installruntime
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          } finally {
+            Pop-Location
+          }
+          Write-Host 'Current lock preparation'
+          go test -run '^$' -bench '^BenchmarkWindowsPrivateLock$' -benchtime=100x -count=5 -benchmem ./internal/installruntime
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Compare Windows cache root traversal
+        if: matrix.go == '1.26'
+        run: go test -run '^$' -bench '^BenchmarkWindowsPrivateCacheRoot$' -benchtime=100x -count=3 -benchmem ./internal/installruntime
+        shell: bash
+
+      - name: Qualify observation caches without cross-package contention
+        id: observation
+        # Preserve the first strict failure and its trace. There is no automatic
+        # retry: publication may have committed before a deadline/close error.
+        env:
+          AGENT_NOTIFICATIONS_OBSERVATION_DIAGNOSTICS: '1'
+        shell: bash
+        run: |
+          mkdir -p observation-evidence
+          git rev-parse HEAD > observation-evidence/source.txt
+          go version > observation-evidence/go.txt
+          source scripts/windows-observation-profile.sh
+          trap observation_profile_stop EXIT
+          qualification_status=0
+          command_status=0
+          observation_profile_start geminievent
+          go test -p 1 -v -race -coverprofile=coverage-gemini-event.txt -covermode=atomic -trace=observation-evidence/geminievent.trace ./internal/geminievent || command_status=$?
+          if (( qualification_status == 0 )); then qualification_status=$command_status; fi
+          printf '%s\n' "$command_status" > observation-evidence/geminievent.exit || { if (( qualification_status == 0 )); then qualification_status=1; fi; }
+          # Stop immediately after this package so unrelated tests cannot evict
+          # the failing syscall from the bounded OS recording.
+          observation_profile_stop
+          command_status=0
+          set -o pipefail
+          pipeline_status=(0 0)
+          observation_profile_start cursorevent
+          go test -p 1 -v -race -coverprofile=coverage-cursor-event.txt -covermode=atomic -trace=observation-evidence/cursorevent.trace ./internal/cursorevent 2>&1 | tee observation-evidence/cursorevent.log || pipeline_status=("${PIPESTATUS[@]}")
+          command_status=${pipeline_status[0]}
+          observation_profile_stop
+          if (( command_status == 0 )); then command_status=${pipeline_status[1]}; fi
+          if (( qualification_status == 0 )); then qualification_status=$command_status; fi
+          printf '%s\n' "${pipeline_status[0]}" > observation-evidence/cursorevent.exit || { if (( qualification_status == 0 )); then qualification_status=1; fi; }
+          command_status=0
+          go test -p 1 -v -race -coverprofile=coverage-observation.txt -covermode=atomic ./internal/notification/observation ./internal/copilotvscodeevent ./cmd/claude-notifications || command_status=$?
+          if (( qualification_status == 0 )); then qualification_status=$command_status; fi
+          printf '%s\n' "$command_status" > observation-evidence/observation.exit || { if (( qualification_status == 0 )); then qualification_status=1; fi; }
+          { head -n 1 coverage-gemini-event.txt && tail -n +2 coverage-gemini-event.txt && tail -n +2 coverage-cursor-event.txt && tail -n +2 coverage-observation.txt; } > coverage-gemini.txt || { if (( qualification_status == 0 )); then qualification_status=1; fi; }
+          exit "$qualification_status"
+
+      - name: Repeat Gemini channel consent and failed-marker suppression
+        id: observation_repeat
+        env:
+          AGENT_NOTIFICATIONS_OBSERVATION_DIAGNOSTICS: '1'
+        run: |
+          source scripts/windows-observation-profile.sh
+          trap observation_profile_stop EXIT
+          observation_profile_start geminievent-repeat
+          go test -race -count=20 -run '^TestChannelConsentIndependentAndNoRetry$' -trace=observation-evidence/geminievent-repeat.trace ./internal/geminievent
+        shell: bash
+
+      - name: Preserve failed observation attempt
+        if: ${{ failure() && (steps.observation.outcome == 'failure' || steps.observation_repeat.outcome == 'failure') }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-observation-failure-go-${{ matrix.go }}
+          path: observation-evidence/
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Run remaining tests
+        run: |
+          set -euo pipefail
+          packages=$(go list ./...)
+          remaining_packages=$(printf '%s\n' "$packages" | grep -Fvx -e 'github.com/777genius/agent-notifications/internal/geminievent' -e 'github.com/777genius/agent-notifications/internal/cursorevent' -e 'github.com/777genius/agent-notifications/internal/notification/observation' -e 'github.com/777genius/agent-notifications/internal/copilotvscodeevent' -e 'github.com/777genius/agent-notifications/cmd/claude-notifications')
+          mapfile -t remaining <<< "$remaining_packages"
+          go test -v -race -coverprofile=coverage-rest.txt -covermode=atomic "${remaining[@]}"
+          { head -n 1 coverage-rest.txt; tail -n +2 coverage-rest.txt; tail -n +2 coverage-gemini.txt; } > coverage.txt
         shell: bash
 
       - name: Repeat config crash recovery
@@ -69,7 +247,7 @@ jobs:
         shell: bash
 
       - name: Build binary
-        run: go build -o bin/claude-notifications.exe ./cmd/claude-notifications
+        run: go build -ldflags="-s -w" -trimpath -o bin/claude-notifications.exe ./cmd/claude-notifications
 
       - name: Test binary execution (help)
         run: ./bin/claude-notifications.exe help
@@ -78,6 +256,10 @@ jobs:
       - name: Test one-line setup loader (isolated, offline)
         run: bash bin/setup_test.sh
         shell: bash
+
+      - name: Test platform channels and cache recovery (isolated)
+        shell: bash
+        run: bash bin/release_channel_test.sh
 
       - name: Test python/node installer runtime fallback (isolated, offline)
         run: bash bin/installer_runtime_fallback_e2e_test.sh

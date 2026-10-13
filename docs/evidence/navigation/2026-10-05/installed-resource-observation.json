@@ -1,0 +1,311 @@
+{
+  "distributionVersion": "26.930.51102",
+  "build": "13100",
+  "asarHeaderSHA256": "8141a629ce6ef3a72fe2b5c602104946fe9de2393d3b5b464940d16523571b7f",
+  "sealedInfoAsarIntegrity": {
+    "Resources/app.asar": {
+      "algorithm": "SHA256",
+      "hash": "8141a629ce6ef3a72fe2b5c602104946fe9de2393d3b5b464940d16523571b7f"
+    }
+  },
+  "fuseWire": {
+    "version": 1,
+    "length": 9,
+    "values": "010011001"
+  },
+  "unpackedFileCount": 401,
+  "unpackedJavaScriptCount": 72,
+  "unpackedJavaScriptBytes": 236969,
+  "unpackedJavaScriptFiles": [
+    {
+      "path": "node_modules/@worklouder/device-kit-oai/node_modules/@worklouder/wl-device-kit/node_modules/node-hid/node_modules/node-addon-api/index.js",
+      "bytes": 435
+    },
+    {
+      "path": "node_modules/@worklouder/device-kit-oai/node_modules/@worklouder/wl-device-kit/node_modules/node-hid/node_modules/node-addon-api/tools/check-napi.js",
+      "bytes": 3176
+    },
+    {
+      "path": "node_modules/@worklouder/device-kit-oai/node_modules/@worklouder/wl-device-kit/node_modules/node-hid/node_modules/node-addon-api/tools/clang-format.js",
+      "bytes": 2002
+    },
+    {
+      "path": "node_modules/@worklouder/device-kit-oai/node_modules/@worklouder/wl-device-kit/node_modules/node-hid/node_modules/node-addon-api/tools/conversion.js",
+      "bytes": 15001
+    },
+    {
+      "path": "node_modules/@worklouder/device-kit-oai/node_modules/@worklouder/wl-device-kit/node_modules/node-hid/node_modules/pkg-prebuilds/bin/copy.mjs",
+      "bytes": 4159
+    },
+    {
+      "path": "node_modules/@worklouder/device-kit-oai/node_modules/@worklouder/wl-device-kit/node_modules/node-hid/node_modules/pkg-prebuilds/bin/verify.mjs",
+      "bytes": 1132
+    },
+    {
+      "path": "node_modules/@worklouder/device-kit-oai/node_modules/@worklouder/wl-device-kit/node_modules/node-hid/node_modules/pkg-prebuilds/bindings.js",
+      "bytes": 3483
+    },
+    {
+      "path": "node_modules/@worklouder/device-kit-oai/node_modules/@worklouder/wl-device-kit/node_modules/node-hid/node_modules/pkg-prebuilds/lib/prebuild.js",
+      "bytes": 1119
+    },
+    {
+      "path": "node_modules/@worklouder/device-kit-oai/node_modules/@worklouder/wl-device-kit/node_modules/node-hid/src/show-devices.js",
+      "bytes": 288
+    },
+    {
+      "path": "node_modules/@worklouder/device-kit-oai/node_modules/@worklouder/wl-device-kit/node_modules/serialport/node_modules/@serialport/bindings-cpp/dist/darwin.js",
+      "bytes": 5235
+    },
+    {
+      "path": "node_modules/@worklouder/device-kit-oai/node_modules/@worklouder/wl-device-kit/node_modules/serialport/node_modules/@serialport/bindings-cpp/dist/errors.js",
+      "bytes": 304
+    },
+    {
+      "path": "node_modules/@worklouder/device-kit-oai/node_modules/@worklouder/wl-device-kit/node_modules/serialport/node_modules/@serialport/bindings-cpp/dist/index.js",
+      "bytes": 1933
+    },
+    {
+      "path": "node_modules/@worklouder/device-kit-oai/node_modules/@worklouder/wl-device-kit/node_modules/serialport/node_modules/@serialport/bindings-cpp/dist/linux-list.js",
+      "bytes": 3594
+    },
+    {
+      "path": "node_modules/@worklouder/device-kit-oai/node_modules/@worklouder/wl-device-kit/node_modules/serialport/node_modules/@serialport/bindings-cpp/dist/linux.js",
+      "bytes": 5277
+    },
+    {
+      "path": "node_modules/@worklouder/device-kit-oai/node_modules/@worklouder/wl-device-kit/node_modules/serialport/node_modules/@serialport/bindings-cpp/dist/load-bindings.js",
+      "bytes": 2406
+    },
+    {
+      "path": "node_modules/@worklouder/device-kit-oai/node_modules/@worklouder/wl-device-kit/node_modules/serialport/node_modules/@serialport/bindings-cpp/dist/poller.js",
+      "bytes": 3467
+    },
+    {
+      "path": "node_modules/@worklouder/device-kit-oai/node_modules/@worklouder/wl-device-kit/node_modules/serialport/node_modules/@serialport/bindings-cpp/dist/unix-read.js",
+      "bytes": 2301
+    },
+    {
+      "path": "node_modules/@worklouder/device-kit-oai/node_modules/@worklouder/wl-device-kit/node_modules/serialport/node_modules/@serialport/bindings-cpp/dist/unix-write.js",
+      "bytes": 2430
+    },
+    {
+      "path": "node_modules/@worklouder/device-kit-oai/node_modules/@worklouder/wl-device-kit/node_modules/serialport/node_modules/@serialport/bindings-cpp/dist/win32-sn-parser.js",
+      "bytes": 463
+    },
+    {
+      "path": "node_modules/@worklouder/device-kit-oai/node_modules/@worklouder/wl-device-kit/node_modules/serialport/node_modules/@serialport/bindings-cpp/dist/win32.js",
+      "bytes": 5745
+    },
+    {
+      "path": "node_modules/@worklouder/device-kit-oai/node_modules/@worklouder/wl-device-kit/node_modules/serialport/node_modules/@serialport/bindings-cpp/node_modules/@serialport/bindings-interface/dist/index-esm.mjs",
+      "bytes": 1
+    },
+    {
+      "path": "node_modules/@worklouder/device-kit-oai/node_modules/@worklouder/wl-device-kit/node_modules/serialport/node_modules/@serialport/bindings-cpp/node_modules/@serialport/bindings-interface/dist/index.js",
+      "bytes": 15
+    },
+    {
+      "path": "node_modules/@worklouder/device-kit-oai/node_modules/@worklouder/wl-device-kit/node_modules/serialport/node_modules/@serialport/bindings-cpp/node_modules/@serialport/parser-readline/dist/index.js",
+      "bytes": 866
+    },
+    {
+      "path": "node_modules/@worklouder/device-kit-oai/node_modules/@worklouder/wl-device-kit/node_modules/serialport/node_modules/@serialport/bindings-cpp/node_modules/@serialport/parser-readline/node_modules/@serialport/parser-delimiter/dist/index.js",
+      "bytes": 1469
+    },
+    {
+      "path": "node_modules/@worklouder/device-kit-oai/node_modules/@worklouder/wl-device-kit/node_modules/serialport/node_modules/@serialport/bindings-cpp/node_modules/debug/node_modules/ms/index.js",
+      "bytes": 3023
+    },
+    {
+      "path": "node_modules/@worklouder/device-kit-oai/node_modules/@worklouder/wl-device-kit/node_modules/serialport/node_modules/@serialport/bindings-cpp/node_modules/debug/src/browser.js",
+      "bytes": 6010
+    },
+    {
+      "path": "node_modules/@worklouder/device-kit-oai/node_modules/@worklouder/wl-device-kit/node_modules/serialport/node_modules/@serialport/bindings-cpp/node_modules/debug/src/common.js",
+      "bytes": 6289
+    },
+    {
+      "path": "node_modules/@worklouder/device-kit-oai/node_modules/@worklouder/wl-device-kit/node_modules/serialport/node_modules/@serialport/bindings-cpp/node_modules/debug/src/index.js",
+      "bytes": 314
+    },
+    {
+      "path": "node_modules/@worklouder/device-kit-oai/node_modules/@worklouder/wl-device-kit/node_modules/serialport/node_modules/@serialport/bindings-cpp/node_modules/debug/src/node.js",
+      "bytes": 4685
+    },
+    {
+      "path": "node_modules/@worklouder/device-kit-oai/node_modules/@worklouder/wl-device-kit/node_modules/serialport/node_modules/@serialport/bindings-cpp/node_modules/node-addon-api/index.js",
+      "bytes": 306
+    },
+    {
+      "path": "node_modules/@worklouder/device-kit-oai/node_modules/@worklouder/wl-device-kit/node_modules/serialport/node_modules/@serialport/bindings-cpp/node_modules/node-addon-api/tools/check-napi.js",
+      "bytes": 3176
+    },
+    {
+      "path": "node_modules/@worklouder/device-kit-oai/node_modules/@worklouder/wl-device-kit/node_modules/serialport/node_modules/@serialport/bindings-cpp/node_modules/node-addon-api/tools/clang-format.js",
+      "bytes": 2002
+    },
+    {
+      "path": "node_modules/@worklouder/device-kit-oai/node_modules/@worklouder/wl-device-kit/node_modules/serialport/node_modules/@serialport/bindings-cpp/node_modules/node-addon-api/tools/conversion.js",
+      "bytes": 15013
+    },
+    {
+      "path": "node_modules/@worklouder/device-kit-oai/node_modules/@worklouder/wl-device-kit/node_modules/serialport/node_modules/@serialport/bindings-cpp/node_modules/node-addon-api/tools/eslint-format.js",
+      "bytes": 2071
+    },
+    {
+      "path": "node_modules/@worklouder/device-kit-oai/node_modules/@worklouder/wl-device-kit/node_modules/serialport/node_modules/@serialport/bindings-cpp/node_modules/node-gyp-build/bin.js",
+      "bytes": 2094
+    },
+    {
+      "path": "node_modules/@worklouder/device-kit-oai/node_modules/@worklouder/wl-device-kit/node_modules/serialport/node_modules/@serialport/bindings-cpp/node_modules/node-gyp-build/build-test.js",
+      "bytes": 398
+    },
+    {
+      "path": "node_modules/@worklouder/device-kit-oai/node_modules/@worklouder/wl-device-kit/node_modules/serialport/node_modules/@serialport/bindings-cpp/node_modules/node-gyp-build/index.js",
+      "bytes": 390
+    },
+    {
+      "path": "node_modules/@worklouder/device-kit-oai/node_modules/@worklouder/wl-device-kit/node_modules/serialport/node_modules/@serialport/bindings-cpp/node_modules/node-gyp-build/node-gyp-build.js",
+      "bytes": 6078
+    },
+    {
+      "path": "node_modules/@worklouder/device-kit-oai/node_modules/@worklouder/wl-device-kit/node_modules/serialport/node_modules/@serialport/bindings-cpp/node_modules/node-gyp-build/optional.js",
+      "bytes": 143
+    },
+    {
+      "path": "node_modules/better-sqlite3/lib/database.js",
+      "bytes": 4149
+    },
+    {
+      "path": "node_modules/better-sqlite3/lib/index.js",
+      "bytes": 110
+    },
+    {
+      "path": "node_modules/better-sqlite3/lib/methods/aggregate.js",
+      "bytes": 1932
+    },
+    {
+      "path": "node_modules/better-sqlite3/lib/methods/backup.js",
+      "bytes": 2380
+    },
+    {
+      "path": "node_modules/better-sqlite3/lib/methods/function.js",
+      "bytes": 1396
+    },
+    {
+      "path": "node_modules/better-sqlite3/lib/methods/inspect.js",
+      "bytes": 174
+    },
+    {
+      "path": "node_modules/better-sqlite3/lib/methods/pragma.js",
+      "bytes": 536
+    },
+    {
+      "path": "node_modules/better-sqlite3/lib/methods/serialize.js",
+      "bytes": 625
+    },
+    {
+      "path": "node_modules/better-sqlite3/lib/methods/table.js",
+      "bytes": 7144
+    },
+    {
+      "path": "node_modules/better-sqlite3/lib/methods/transaction.js",
+      "bytes": 2792
+    },
+    {
+      "path": "node_modules/better-sqlite3/lib/methods/wrappers.js",
+      "bytes": 1145
+    },
+    {
+      "path": "node_modules/better-sqlite3/lib/sqlite-error.js",
+      "bytes": 717
+    },
+    {
+      "path": "node_modules/better-sqlite3/lib/util.js",
+      "bytes": 331
+    },
+    {
+      "path": "node_modules/node-pty/lib/conpty_console_list_agent.js",
+      "bytes": 721
+    },
+    {
+      "path": "node_modules/node-pty/lib/eventEmitter2.js",
+      "bytes": 1600
+    },
+    {
+      "path": "node_modules/node-pty/lib/index.js",
+      "bytes": 2008
+    },
+    {
+      "path": "node_modules/node-pty/lib/interfaces.js",
+      "bytes": 233
+    },
+    {
+      "path": "node_modules/node-pty/lib/shared/conout.js",
+      "bytes": 348
+    },
+    {
+      "path": "node_modules/node-pty/lib/terminal.js",
+      "bytes": 7454
+    },
+    {
+      "path": "node_modules/node-pty/lib/types.js",
+      "bytes": 228
+    },
+    {
+      "path": "node_modules/node-pty/lib/unixTerminal.js",
+      "bytes": 13372
+    },
+    {
+      "path": "node_modules/node-pty/lib/utils.js",
+      "bytes": 1548
+    },
+    {
+      "path": "node_modules/node-pty/lib/windowsConoutConnection.js",
+      "bytes": 6119
+    },
+    {
+      "path": "node_modules/node-pty/lib/windowsPtyAgent.js",
+      "bytes": 13275
+    },
+    {
+      "path": "node_modules/node-pty/lib/windowsTerminal.js",
+      "bytes": 7947
+    },
+    {
+      "path": "node_modules/node-pty/lib/worker/conoutSocketWorker.js",
+      "bytes": 848
+    },
+    {
+      "path": "node_modules/objc-js/dist/index.js",
+      "bytes": 29782
+    },
+    {
+      "path": "node_modules/objc-js/dist/native.js",
+      "bytes": 659
+    },
+    {
+      "path": "node_modules/objc-js/node_modules/node-gyp-build/bin.js",
+      "bytes": 2094
+    },
+    {
+      "path": "node_modules/objc-js/node_modules/node-gyp-build/build-test.js",
+      "bytes": 398
+    },
+    {
+      "path": "node_modules/objc-js/node_modules/node-gyp-build/index.js",
+      "bytes": 390
+    },
+    {
+      "path": "node_modules/objc-js/node_modules/node-gyp-build/node-gyp-build.js",
+      "bytes": 6078
+    },
+    {
+      "path": "node_modules/objc-js/node_modules/node-gyp-build/optional.js",
+      "bytes": 143
+    }
+  ],
+  "dynamicOnlyQualified": false,
+  "limitation": "unpacked runtime scripts bypass ASAR integrity; no tampered actual-client execution was performed"
+}

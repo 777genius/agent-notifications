@@ -37,8 +37,8 @@ entry="claude-notifications-linux-$arch"
 
 mkdir -p \
     "$box/path" "$box/stage" "$box/runtime/bin" "$box/control" \
-    "$box/package-r1/bin" "$box/package-r1/skills/agent-notify" \
-    "$box/package-r2/bin" "$box/package-r2/skills/agent-notify" \
+    "$box/package-r1/bin" "$box/package-r1/skills/agent-notifications" \
+    "$box/package-r2/bin" "$box/package-r2/skills/agent-notifications" \
     "$box/codex/foreign-plugin" "$box/claude/skills/foreign-plugin" \
     "$box/scope" "$box/global" "$box/home" "$box/xdg"
 
@@ -55,7 +55,7 @@ for version in 1.0.0 1.0.1; do
         "  \"version\": \"$version\"" \
         '}' > "$package/plugin.json"
     cp "$root/portable-package/mcp.json" "$package/mcp.json"
-    cp "$root/portable-package/skills/agent-notify/SKILL.md" "$package/skills/agent-notify/SKILL.md"
+    cp "$root/portable-package/skills/agent-notifications/SKILL.md" "$package/skills/agent-notifications/SKILL.md"
     cp "$native_helper" "$package/bin/claude-notifications"
     chmod 700 "$package/bin/claude-notifications"
     python3 -I - "$package" "$box/package-$version.zip" <<'PY'

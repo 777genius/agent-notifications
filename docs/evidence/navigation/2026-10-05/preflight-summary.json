@@ -1,0 +1,41 @@
+{
+  "sampleCount": 50,
+  "applicationActivated": false,
+  "handoff": "spy only, not native",
+  "nativeNotificationCallback": false,
+  "quantileMethod": "nearest rank",
+  "outcomes": {
+    "open_requested": 50
+  },
+  "stages": {
+    "queue": {
+      "n": 50,
+      "p50Ms": 0.01966673880815506,
+      "p95Ms": 0.0431666849181056,
+      "minMs": 0.008333474397659302,
+      "maxMs": 0.07487495895475149
+    },
+    "discovery": {
+      "n": 50,
+      "p50Ms": 0.03987492527812719,
+      "p95Ms": 0.0837499974295497,
+      "minMs": 0.026875059120357037,
+      "maxMs": 0.09350001346319914
+    },
+    "verification": {
+      "n": 50,
+      "p50Ms": 339.0128333121538,
+      "p95Ms": 478.53970841970295,
+      "minMs": 320.2498332830146,
+      "maxMs": 2871.3554999558255
+    },
+    "total_preflight": {
+      "n": 50,
+      "p50Ms": 339.2562916269526,
+      "p95Ms": 478.7851250730455,
+      "minMs": 320.47262496780604,
+      "maxMs": 2871.837666607462
+    }
+  },
+  "rawSamplesSHA256": "83fe565260eaea953194f9813bfdd7db4ef72c348225aa42bf7d64d1f81833df"
+}

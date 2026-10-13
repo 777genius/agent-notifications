@@ -1,0 +1,33 @@
+Terminal & IDE logos - sources and licenses
+
+Collected for the Click-to-Focus support table (README.md, docs/CLICK_TO_FOCUS.md,
+and the landing page). Brand marks belong to their respective owners; listing an
+application here indicates interoperability with click-to-focus, not endorsement
+by or affiliation with the trademark owner.
+
+alacritty.svg       Simple Icons (latest), CC0-1.0 redraw. https://simpleicons.org/
+conemu.png          ConEmu official repo, BSD-3-Clause. https://github.com/ConEmu/ConEmu/blob/master/logo/logo-256.png
+cursor.svg          Cursor official website. https://cursor.com/marketing-static/favicon.svg (Cursor/Anysphere trademark)
+generic-terminal.svg  Original artwork made for this project, not a brand mark. Used for Apple Terminal, whose app icon is Apple's proprietary asset and is not reproduced here.
+ghostty.svg         Simple Icons (latest), CC0-1.0 redraw. https://simpleicons.org/
+gnome-terminal.svg  Simple Icons (latest), CC0-1.0 redraw. https://simpleicons.org/
+hyper.svg           Simple Icons (latest), CC0-1.0 redraw. https://simpleicons.org/
+iterm2.svg          Simple Icons (latest), CC0-1.0 redraw. https://simpleicons.org/
+jetbrains.svg       Simple Icons (latest), CC0-1.0 redraw. https://simpleicons.org/ (JetBrains trademark)
+kitty.svg           kitty official repo, GPL-3.0. https://github.com/kovidgoyal/kitty/blob/master/logo/kitty.svg
+konsole.svg         KDE Breeze Icons, shared "utilities-terminal" icon also used by Konsole, LGPL-2.1. https://invent.kde.org/frameworks/breeze-icons
+mate-terminal.png   MATE icon theme, shared "utilities-terminal" icon (MATE Terminal has no distinct brand mark), LGPL-3.0/CC-BY-SA-3.0 dual-licensed. https://github.com/mate-desktop/mate-icon-theme
+powershell.svg      Simple Icons (latest), CC0-1.0 redraw. https://simpleicons.org/ (Microsoft trademark)
+terminator.svg      Terminator official repo, GPL-2.0. https://github.com/gnome-terminator/terminator
+tilix.svg           Tilix official repo, LGPL-3.0/CC-BY-SA-3.0. https://github.com/gnunn1/tilix
+tmux.svg            Simple Icons (latest), CC0-1.0 redraw. https://simpleicons.org/
+vscode.svg          Simple Icons (latest), CC0-1.0 redraw. https://simpleicons.org/ (Microsoft trademark)
+warp.svg            Simple Icons (latest), CC0-1.0 redraw. https://simpleicons.org/ (Warp trademark)
+wezterm.svg         Simple Icons (latest), CC0-1.0 redraw. https://simpleicons.org/
+windows-terminal.png  Windows Terminal official repo icon (res/terminal.ico), MIT. https://github.com/microsoft/terminal - this is the repo's monochrome icon, not the gradient Microsoft Store listing artwork.
+xfce4-terminal.svg  Xfce4 Terminal official repo, GPL-2.0. https://gitlab.xfce.org/apps/xfce4-terminal
+zellij.svg          Zellij official repo, MIT. https://github.com/zellij-org/zellij
+
+Simple Icons redraws are released by the Simple Icons project under CC0-1.0;
+the underlying brand marks remain trademarks of their respective owners, used
+here solely to identify supported applications.

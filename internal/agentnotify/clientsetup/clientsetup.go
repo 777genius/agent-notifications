@@ -36,6 +36,7 @@ type Request struct {
 	Provider                                      registration.Provider
 	Mode                                          string
 	ExpectedGeneration                            uint64
+	ExpectedPolicy                                *installruntime.Identity
 	Reservation                                   *installruntime.PendingMutation
 	ClearReservation                              bool
 	Remove                                        bool
@@ -77,7 +78,7 @@ func validate(r Request) error {
 	}
 	return installruntime.CheckPrivateControlRoot(r.ControlRoot)
 }
-func checkRuntime(r Request, s installruntime.InstalledSnapshot) error {
+func checkRuntime(r Request, s installruntime.InstalledSnapshot, inspection bool) error {
 	l := s.Ledger
 	if s.Recovery {
 		return ErrRecovery
@@ -92,7 +93,14 @@ func checkRuntime(r Request, s installruntime.InstalledSnapshot) error {
 		}
 	}
 	if !registered {
-		return ErrConflict
+		// A versioned Claude hook cache may move while the ledger retains its
+		// original runtime root. Read-only discovery inspection must still be
+		// able to establish that no direct registration needs handoff. Mutations
+		// remain fenced to a consumer at the requested runtime root.
+		hooks, ok := l.Consumers["claude-hooks"]
+		if !inspection || len(l.Consumers) != 1 || !ok || !filepath.IsAbs(hooks.RuntimeRoot) || hooks.RuntimeRoot == r.RuntimeRoot {
+			return ErrConflict
+		}
 	}
 	// Stable aliases are accepted only when every link and final executable are
 	// ledger-owned, remain inside this runtime, and match kernel fingerprints.
@@ -146,8 +154,10 @@ func Apply(ctx context.Context, r Request) (Result, error) { return apply(ctx, r
 
 // Inspection reports validated ownership without creating locks or files.
 type Inspection struct {
-	Registered     bool
-	SkillProjected bool
+	Registered bool
+	// RegistrationPresent is actual owned transport presence, independent of its receipt.
+	RegistrationPresent bool
+	SkillProjected      bool
 }
 
 func Inspect(ctx context.Context, r Request) (Inspection, error) {
@@ -177,7 +187,7 @@ func calculate(ctx context.Context, r Request, fault func(string) error, inspect
 	if e != nil {
 		return result, e
 	}
-	if e = checkRuntime(r, s); e != nil {
+	if e = checkRuntime(r, s, inspection != nil); e != nil {
 		return result, e
 	}
 	if r.SkillProjection != nil {
@@ -194,7 +204,7 @@ func calculate(ctx context.Context, r Request, fault func(string) error, inspect
 		if e != nil {
 			return nil, e
 		}
-		if e = checkRuntime(r, current); e != nil {
+		if e = checkRuntime(r, current, inspection != nil); e != nil {
 			return nil, e
 		}
 		l := current.Ledger
@@ -267,6 +277,13 @@ func calculate(ctx context.Context, r Request, fault func(string) error, inspect
 		if e != nil {
 			return nil, e
 		}
+		if inspection != nil {
+			actual, err := registration.Apply(registration.Request{Provider: r.Provider, Input: input, Previous: prev, Remove: true})
+			if err != nil {
+				return nil, err
+			}
+			inspection.RegistrationPresent = actual.Changed
+		}
 		files := skillFiles
 		if edited.Changed {
 			mode := uint32(0600)
@@ -317,7 +334,7 @@ func calculate(ctx context.Context, r Request, fault func(string) error, inspect
 	}
 	prepared := false
 	lockedPrepare := func() ([]installruntime.File, error) { prepared = true; locked = true; return prepare() }
-	l, e := installruntime.Commit(ctx, installruntime.Request{ControlRoot: r.ControlRoot, Owner: Managed, RuntimeRoot: r.RuntimeRoot, ConsumerID: id, Consumer: installruntime.Consumer{Registration: r.ConfigPath, Commands: []string{r.Command}}, RemoveConsumer: r.Remove, ExpectedGeneration: &r.ExpectedGeneration, ConfigPaths: configPaths, Prepare: lockedPrepare, Fault: fault, Reservation: r.Reservation, ClearReservation: r.ClearReservation})
+	l, e := installruntime.Commit(ctx, installruntime.Request{ControlRoot: r.ControlRoot, Owner: Managed, RuntimeRoot: r.RuntimeRoot, ConsumerID: id, Consumer: installruntime.Consumer{Registration: r.ConfigPath, Commands: []string{r.Command}}, RemoveConsumer: r.Remove, ExpectedGeneration: &r.ExpectedGeneration, ExpectedPolicy: r.ExpectedPolicy, ConfigPaths: configPaths, Prepare: lockedPrepare, Fault: fault, Reservation: r.Reservation, ClearReservation: r.ClearReservation})
 	result.Ledger = l
 	if errors.Is(e, errUnchanged) {
 		return result, nil

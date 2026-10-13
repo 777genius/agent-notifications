@@ -658,7 +658,7 @@ func CleanMarkdown(text string) string {
 func GetDefaultMessage(status analyzer.Status, cfg *config.Config) string {
 	statusInfo, exists := cfg.GetStatusInfo(string(status))
 	if !exists {
-		return "Claude Code notification"
+		return "Claude notification"
 	}
 
 	// Remove emoji from title for message

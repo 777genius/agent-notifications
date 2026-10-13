@@ -1,0 +1,66 @@
+{
+  "scope": "disposable_guest_provisioning_only",
+  "passed": true,
+  "guestBootAttempted": true,
+  "clientLaunchAttempted": false,
+  "notificationAttempted": false,
+  "clientSandboxQualified": false,
+  "navigationQualified": false,
+  "installedPackage": "chatgpt 26.930.51102 amd64",
+  "packageSHA256": "637c3c94bc50f8ee33a15e2e28ec7f92a787f0943e700efe111bc0bf0d4813b4",
+  "installedExecutableSHA256": "207c4fbff7e2fcc1b0789448351ac6eed206206d94c5a0835e5f07c7cd73d6e3",
+  "installedLauncherSHA256": "8f983245c6c07070e2cdc480be50ec239e0f18ee36069126649d0692595c86ad",
+  "vendorProfileSHA256": "05be1a8336a80236f4b56798ea7a75accb55f51438afa1e7cb5e94bfa326b1b7",
+  "selectedVendorProfileLoaded": true,
+  "guestSyncSucceeded": true,
+  "qmpPeerMatchedOwnedChild": true,
+  "actualKVM": {
+    "enabled": true,
+    "present": true
+  },
+  "guestPoweroffObserved": true,
+  "shutdown": {
+    "guest": true,
+    "reason": "guest-shutdown"
+  },
+  "childCollected": true,
+  "childExitCode": 0,
+  "unchangedInputs": {
+    "baseUnchanged": true,
+    "sourceUnchanged": true,
+    "guestSourceUnchanged": true,
+    "packageUnchanged": true,
+    "seedUnchanged": true
+  },
+  "ownedContainerRemoved": true,
+  "freshContainerIDAndNameAbsence": true,
+  "network": "bridge_for_provisioning_only",
+  "hostPackagesOrGroupsChanged": false,
+  "hostProfilesOrProjectsMounted": false,
+  "sourceSHA256": {
+    "operator": "7cf5ab16b4c653f12585f49ec3bd122f18eb4432897fb2ad1ad63498d545cb67",
+    "probe": "9a2cd5f8414b8edad8e4e2c7e6916e324b657f14299a6c18196666ed615a32ca",
+    "guest": "0f0b04ae6b76c1f8710ad928a1ac44ba36e4be5a1359bc8a75d69374bdc9d517"
+  },
+  "retainedRawSHA256": {
+    "operator-result.json": "de35f8054e76b577c4859bb0663878696dbf9a9b4a8a863732e81743a7185a9f",
+    "provision-evidence.json": "32cef4ef99e72ff44b93593b862b770d2794bdcfc80d640755918f0b17dce9e5",
+    "guest-result.json": "6de628dbf520e2945204deef71954cd63ce4d1bc275763acafae9f1462507744",
+    "qmp-wire.jsonl": "ce6784ae88dcf69b334efcbddf8d2ccebb8f85aa095b7d3d44fdd029c12e6ce0",
+    "serial.log": "a6928cbef6001032029698bf58c376362a2bac2065d136d5cbf7565fa13ab40c",
+    "frozen-overlay.json": "8fc374f1ce05bce6a18a965b928bff0c60794320ded7a3f17d09148575b4e422"
+  },
+  "frozenOverlay": {
+    "overlaySHA256": "839d348d47bb6f370012da63479e6d9b7493e9ce5a5fa717d4f713b449327a4e",
+    "bytes": 3137798144,
+    "mode": "0o444",
+    "collectedChildAndRemovedContainerBeforeFreeze": true
+  },
+  "limitations": [
+    "Guest log artifacts are hash-bound in the completion record; their original guest bytes have not been independently collected",
+    "Loaded vendor AppArmor policy does not qualify an actual client renderer sandbox",
+    "Distribution portal backend is not the GTK 1.15.3 token qualification",
+    "No client surface, token consumption, focus, notification callback or chat route was exercised",
+    "Frozen overlay SHA256, size, mode and freeze ordering are retained operator measurements; overlay bytes were not independently collected or rehashed during this review"
+  ]
+}

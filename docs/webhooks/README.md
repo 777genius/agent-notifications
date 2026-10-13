@@ -5,7 +5,7 @@ Use the installed config-capable executable as `$NOTIFICATIONS_BIN`. Locate sett
 
 **Professional webhook system with enterprise-grade reliability patterns.**
 
-Send Claude Code notifications to Slack, Discord, Telegram, Lark/Feishu, or custom endpoints with built-in retry, circuit breaker, and rate limiting.
+Send Claude notifications to Slack, Discord, Telegram, Lark/Feishu, or custom endpoints with built-in retry, circuit breaker, and rate limiting.
 
 ## Quick Start
 

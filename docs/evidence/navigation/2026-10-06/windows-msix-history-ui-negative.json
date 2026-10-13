@@ -1,0 +1,52 @@
+{
+  "scope": "packaged TEST cold toast COM callback only",
+  "status": "failed",
+  "sourceSHA": "920212665e7130bafa592e110038b5e802b3e214",
+  "runURL": "https://github.com/777genius/agent-notifications/actions/runs/37400224978",
+  "artifactID": 11385093637,
+  "runnerLabel": "windows-11-vs2026-arm",
+  "imageVersion": "20260924.168.1",
+  "powershellVersion": "5.1.26100.9457",
+  "sdkVersion": "10.0.26100.0",
+  "packageDeployed": true,
+  "readinessEnabled": true,
+  "showAttempts": 1,
+  "showCallOutcome": "returned",
+  "senderCollected": true,
+  "senderExitCode": 0,
+  "uiActionFound": false,
+  "nativeCallbackQualified": false,
+  "navigationQualified": false,
+  "clientRouteTested": false,
+  "nativeProcessCleanupQualified": false,
+  "nativeProcessCleanupUnknown": true,
+  "cleanupPassed": false,
+  "packageCleanupPassed": true,
+  "packageAbsent": true,
+  "signerKeyAbsent": true,
+  "rawArtifactHashes": {
+    "evidence.json": "f78519e811c9076000870492edf6b686abe97fe8ece1216a1ee1c2d76023e071",
+    "package-operator-state.json": "a0ea80943a2ed7dc24b3e3e8964caffabc20385d92acae105cdda1906853acca",
+    "readiness.json": "f60d0bfece28ba6344337f9fbdbc8d653f40169d9a7a29b6279199775b91e409",
+    "sender-exit.json": "eb3436bfa56600243d6c4d8e42eef1456309b54031d8cf14d8fe16eb9c54ecea",
+    "ui-invoke.json": "05f183f00474b2b887109f59e19b6ee95f448c70de6919c49cbcdfb43c161f29",
+    "callback-cleanup.json": "421d8a95b59ede3a9f1b89f409c547f89c89017e9bf275bd0a6f8b591c6f6e2c",
+    "sender-cleanup.json": "25d8371b98585ded2b1b04854864ab5003a911ae1a26e01d3b26ad648ad98b8c",
+    "notification-cleanup.json": "77dbfab5d9855648a82982fad9be607125a0cfc47556df6059975d8e593d4d84",
+    "center-open.json": "eb81dc1600c3294896d063d7f13405faca466855c8d21c32855df4daed6cd991",
+    "notification-history.json": "eafbed24ab95b7e6f3d4fd61a54719ab601716f4de2011d369bc3daa0b4ae176"
+  },
+  "limitations": [
+    "Owned tag/group match in ToastNotificationHistory proves presence in the queried TEST application history, not toast visibility, successful UI activation or callback delivery.",
+    "Win+N keystroke submission does not prove Notification Center opened.",
+    "Missing callback process record leaves aggregate process cleanup unknown despite successful exact package/certificate/key cleanup.",
+    "No real client navigation and no unchanged-source retry."
+  ],
+  "artifactArchiveSHA256": "2e32fe598ff45915f691d8810716284b65b1d613562f11f1d344c3a68cabc28b",
+  "historyObservation": {
+    "diagnosticOnly": true,
+    "entryCount": 1,
+    "ownedTagGroupMatches": 1,
+    "HRESULT": 0
+  }
+}

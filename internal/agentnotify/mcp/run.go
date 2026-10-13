@@ -29,13 +29,14 @@ type Status struct {
 	ContextReason string `json:"context_reason"`
 	// DedupScope and RateScope describe identity buckets, not caller trust.
 	// The runtime-wide rate cap also applies to every bucket.
-	DedupScope string `json:"dedup_scope"`
-	RateScope  string `json:"rate_scope"`
+	DedupScope string                       `json:"dedup_scope"`
+	RateScope  string                       `json:"rate_scope"`
+	Navigation agentnotify.NavigationStatus `json:"navigation"`
 }
 
 // StatusPort must only read configuration; no migration, probes or maintenance.
 type StatusPort interface {
-	Status(context.Context) (Status, error)
+	Status(context.Context, origin.Context) (Status, error)
 }
 type Options struct {
 	Backend Backend
@@ -103,7 +104,15 @@ func Run(ctx context.Context, owned io.ReadWriteCloser, o Options) error {
 			return next(callCtx, method, req)
 		}
 	})
-	s.AddTool(&sdk.Tool{Name: "notify", Description: "Submit an explicit notification. Unknown outcomes are not safe to retry automatically.", InputSchema: notifySchema(), Annotations: &sdk.ToolAnnotations{ReadOnlyHint: false, IdempotentHint: false}}, func(ctx context.Context, req *sdk.CallToolRequest) (*sdk.CallToolResult, error) {
+	s.AddTool(&sdk.Tool{Name: "notify", Description: "Send requested alerts or actionable in-progress notifications, including unresolved blockers while waiting. " +
+		"Leave routine task/turn completion to lifecycle hooks, including ordinary 'notify me when done' requests; do not relabel completion as progress/attention. " +
+		"Send completion only if hooks are known disabled/unavailable or the user explicitly requests an additional separate alert. " +
+		"Unknown hook state is not absence; notification_status does not report hook state. Do not duplicate a question/approval event covered by a known hook. " +
+		"In Codex Desktop, do not notify before, while waiting on, or after the same native question (request_user_input/request_user_input_async) or approval/permission prompt, including permission to call notify. " +
+		"Do not relabel that prompt as a blocker, milestone, progress or info; only an explicit request for an additional separate alert permits a duplicate. " +
+		"Unknown native settings/delivery do not justify a fallback; notification_status does not report them. Separate in-progress milestones and blockers without native prompts may still notify. " +
+		"Check notification_status before choosing navigation. " +
+		"Unknown outcomes are not safe to retry automatically.", InputSchema: notifySchema(), Annotations: &sdk.ToolAnnotations{ReadOnlyHint: false, IdempotentHint: false}}, func(ctx context.Context, req *sdk.CallToolRequest) (*sdk.CallToolResult, error) {
 		p, ok := decodePayload(req.Params.Arguments)
 		if !ok {
 			return toolResult(rejected("invalid_arguments")), nil
@@ -122,19 +131,19 @@ func Run(ctx context.Context, owned io.ReadWriteCloser, o Options) error {
 		}
 		return toolResult(r), nil
 	})
-	s.AddTool(&sdk.Tool{Name: "notification_status", Description: "Read notification configuration and capability without sending.", InputSchema: map[string]any{"type": "object", "properties": map[string]any{}, "additionalProperties": false}, Annotations: &sdk.ToolAnnotations{ReadOnlyHint: true}}, func(ctx context.Context, req *sdk.CallToolRequest) (*sdk.CallToolResult, error) {
+	s.AddTool(&sdk.Tool{Name: "notification_status", Description: "Read configuration and navigation eligibility for this call without sending. Eligible navigation is based on policy and caller context, not proof that the app or chat can open.", InputSchema: map[string]any{"type": "object", "properties": map[string]any{}, "additionalProperties": false}, Annotations: &sdk.ToolAnnotations{ReadOnlyHint: true}}, func(ctx context.Context, req *sdk.CallToolRequest) (*sdk.CallToolResult, error) {
 		var args map[string]json.RawMessage
 		if len(req.Params.Arguments) != 0 && (json.Unmarshal(req.Params.Arguments, &args) != nil || args == nil || len(args) != 0) {
 			return toolResult(rejected("invalid_arguments")), nil
 		}
-		status, e := o.Status.Status(ctx)
+		orig, reason := requestOrigin(o.AdapterKind, req.Params.Meta)
+		status, e := o.Status.Status(ctx, orig)
 		if e != nil {
 			return toolResult(rejected("configuration_unavailable")), nil
 		}
-		if !origin.Text(status.Configuration, 128, true) || !origin.Text(status.Capability, 128, true) {
+		if !origin.Text(status.Configuration, 128, true) || !origin.Text(status.Capability, 128, true) || !validStatusNavigation(status.Navigation) {
 			return toolResult(rejected("invalid_status")), nil
 		}
-		orig, reason := requestOrigin(o.AdapterKind, req.Params.Meta)
 		status.ContextReason = reason
 		status.DedupScope = requestScope(orig)
 		status.RateScope = status.DedupScope
@@ -157,6 +166,20 @@ func Run(ctx context.Context, owned io.ReadWriteCloser, o Options) error {
 		return errors.New("connection_closed")
 	}
 	return ctx.Err()
+}
+
+func validStatusNavigation(n agentnotify.NavigationStatus) bool {
+	if !origin.Text(n.Reason, 128, true) {
+		return false
+	}
+	switch n.Capability {
+	case "eligible":
+		return n.Precision == "chat_id" && n.Scope == "local_current_profile"
+	case "disabled", "unavailable":
+		return n.Precision == "none" && n.Scope == ""
+	default:
+		return false
+	}
 }
 func (c *connection) state(extra *sdk.RequestExtra) *frameState {
 	if extra == nil {
@@ -273,5 +296,5 @@ func decodePayload(raw []byte) (agentnotify.Payload, bool) {
 	return p, true
 }
 func notifySchema() map[string]any {
-	return map[string]any{"type": "object", "additionalProperties": false, "required": []string{"title", "body", "category"}, "properties": map[string]any{"title": map[string]any{"type": "string"}, "body": map[string]any{"type": "string"}, "category": map[string]any{"type": "string", "enum": []string{"info", "attention", "progress"}}, "request_id": map[string]any{"type": "string"}, "navigation": map[string]any{"type": "string", "enum": []string{"required", "best_effort", "none"}, "default": "required"}}}
+	return map[string]any{"type": "object", "additionalProperties": false, "required": []string{"title", "body", "category"}, "properties": map[string]any{"title": map[string]any{"type": "string"}, "body": map[string]any{"type": "string"}, "category": map[string]any{"type": "string", "enum": []string{"info", "attention", "progress"}}, "request_id": map[string]any{"type": "string"}, "navigation": map[string]any{"type": "string", "enum": []string{"required", "best_effort", "none"}, "default": "required", "description": "Prefer required for task-related alerts when notification_status.navigation.capability is eligible, including info alerts. Use none (no click target) or best_effort only when returning to the chat is optional; never silently downgrade required."}}}
 }

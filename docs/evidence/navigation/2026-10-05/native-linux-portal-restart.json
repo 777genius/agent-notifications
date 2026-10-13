@@ -1,0 +1,302 @@
+{
+  "schemaVersion": 1,
+  "passed": true,
+  "passedScope": "sanitized_projection_of_retained_restart_counterexample_and_separate_recovery_control",
+  "navigationQualified": false,
+  "restartOwnerBindingQualified": false,
+  "productionClientActivated": false,
+  "selectedClientQualified": false,
+  "waylandQualified": false,
+  "humanRenderQualified": false,
+  "environment": {
+    "scope": "Disposable owned nonroot Docker/private D-Bus/Xvfb TEST only",
+    "containerUser": "1000:1000",
+    "network": "none during native run",
+    "portalVersion": "1.22.1",
+    "gtkPackage": "1.15.1-1build2",
+    "dunstPackage": "1.9.2-1build2",
+    "XResVersion": [
+      1,
+      2
+    ]
+  },
+  "sources": {
+    "successfulRunnerSHA256": "c5cec5d7ef15439c04402ba462aa1ef0083cea1cbe8a5377b59865ac43eec1b7",
+    "helperSHA256": "d12f1b4f70e5a6f2832d755e72efbf546966f5a8b537c36409260ab6ec9147b0",
+    "DockerfileSHA256": "06a5f0456d83f87a3e6e4b9553eec707c9de590dc1e4f87714eada0fc0dd1e9a",
+    "portalReleaseTag": "1.22.1",
+    "portalCommit": "1d20fadc304f6601452b5db65ed91197dba77041",
+    "portalArchiveSHA256": "d4879ddb3d65ff1a8f19187497e6f13dc5d267bcac404a5d501218be355753d3",
+    "portalSourceProvenance": {
+      "matchedFiles": 198,
+      "missing": [],
+      "different": [],
+      "gitTreeTruncated": false,
+      "downloadCommand": "gh release download 1.22.1 --repo flatpak/xdg-desktop-portal --pattern xdg-desktop-portal-1.22.1.tar.xz*"
+    }
+  },
+  "artifactReferenceScope": "Relative paths identify retained raw run artifacts; hashes bind their contents. Private host paths and command argv are omitted. Source hashes are captured by the actual runner.",
+  "runs": [
+    {
+      "run": "failed-run",
+      "passed": false,
+      "passedScope": "failed_diagnostic_only",
+      "runnerSHA256": "1f9ed2481a7d890db8f2b51c4377969576f13cc775d9cf3ee62978cb8e63e779",
+      "rawEvidenceSHA256": "bda868d7b1244a06dcd682fcef1aed3484c21b67d98902674e9c3506f8712cd1",
+      "rawNativeEvidenceSHA256": "ee4ef09d393bf21bdff878c48bc436c5582fe73691215ec8781fe7312c750128",
+      "failure": "bounded_wait_failed",
+      "retryAllowed": false,
+      "countsQualified": false,
+      "diagnosis": "Earlier runner incorrectly awaited a CloseNotification reply; failed evidence retained and not relabeled as success",
+      "containerCleanup": {
+        "verified": true,
+        "ownedContainerID": "fa8349e31ac0a0babf79bf3fcaa7721aedea487906cb794ce0031aef8a82b27e",
+        "status": "owned_id_removed_and_exact_name_absent"
+      },
+      "snapshotUnchanged": true
+    },
+    {
+      "run": "counterexample-run",
+      "passed": true,
+      "passedScope": "owned_restart_counterexample",
+      "runnerSHA256": "c5cec5d7ef15439c04402ba462aa1ef0083cea1cbe8a5377b59865ac43eec1b7",
+      "rawEvidenceSHA256": "7eec3be8b81a88833819cb914a21197cb39aa322ef469de4108cc8da478f6702",
+      "rawNativeEvidenceSHA256": "8de768e1ff6afcbd4cbb77381e8868757ad0e70f6b331b3b373e4fba82929561",
+      "scenario": "daemon_restart_owner_invalidation",
+      "senderAExit": {
+        "pid": 117,
+        "exitCode": 0,
+        "collected": true,
+        "exitedBoot": 1318657.85814526
+      },
+      "senderBExit": {
+        "pid": 154,
+        "exitCode": 0,
+        "collected": true,
+        "exitedBoot": 1318658.182551427
+      },
+      "daemonACrash": {
+        "pid": 16,
+        "collected": true,
+        "exitCode": -9,
+        "exitedBoot": 1318657.943118766
+      },
+      "daemonOwners": {
+        "before": ":1.2",
+        "after": ":1.29",
+        "beforePID": 16,
+        "afterPID": 137
+      },
+      "numericIDReused": true,
+      "nativeIDs": {
+        "A": 2,
+        "B": 2
+      },
+      "retainedProcesses": {
+        "gtk": {
+          "pid": 29,
+          "startTicks": 131865735
+        },
+        "frontend": {
+          "pid": 47,
+          "startTicks": 131865747
+        }
+      },
+      "noACallbackArtifacts": true,
+      "noBCallbackArtifacts": true,
+      "containerCleanup": {
+        "verified": true,
+        "ownedContainerID": "65b80ca699d87b9697426d2a0464e8f4dc4731cde6a4eb2bac256c61174352d3",
+        "status": "owned_id_removed_and_exact_name_absent"
+      },
+      "snapshotUnchanged": true,
+      "artifactReferencesSHA256": {
+        "runtime/monitor.stdout": "01222adbf97775297b6b5fb4a651c86a756de723bef7a42f72e20542c5904e5a"
+      },
+      "commandEvidence": [
+        {
+          "label": "run",
+          "exitCode": 0,
+          "stdoutSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "stderrSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "label": "own_container_remove",
+          "exitCode": 0
+        },
+        {
+          "label": "container_absent_by_id",
+          "exitCode": 1
+        },
+        {
+          "label": "container_absent_by_name",
+          "exitCode": 1
+        }
+      ],
+      "counts": {
+        "nativeNotify": 2,
+        "officialRemove": 1,
+        "nativeClick": 0
+      },
+      "outcome": "incorrect_close_B_counterexample",
+      "restartOwnerBindingQualified": false,
+      "nativeCloseA": {
+        "observed": true,
+        "newOwner": ":1.29",
+        "numericID": 2,
+        "closeRequestSerial": 49,
+        "requestSHA256": "db27e8f3fb33d5184d53d37b7dec643591dc4ddd548c40f43b0cb5bda58d80f3",
+        "observationStartedBoot": 1318658.440221556,
+        "observationEndedBoot": 1318658.44361293,
+        "replyExpectedFromSource": false,
+        "replyPolicyEvidence": "GTK1.15.1 call_close callback=NULL; GLib2.80 public call uses NO_REPLY_EXPECTED",
+        "absenceScope": "bounded_monitor_observation_only; future_effects_unqualified",
+        "optionalReplyCount": 0,
+        "optionalReplySHA256": null
+      },
+      "removeObservation": {
+        "startedBoot": 1318658.44361723,
+        "endedBoot": 1318658.455132881,
+        "closedSignals": 1,
+        "closedSignalSHA256": "2da1a82603c292a32644651764c84e01a395be54e06a7987b7ef333cbcd1f663",
+        "closedSignalDestination": ":1.7",
+        "visibleWindows": [],
+        "closedReason": 3,
+        "closedSignalSender": ":1.29"
+      },
+      "observationScope": "Bounded recorded monitor/window/artifact observation; future callbacks not qualified",
+      "sourceAndFixtureUnchanged": true
+    },
+    {
+      "run": "recovery-run",
+      "passed": true,
+      "passedScope": "owned_restart_recovery_control",
+      "runnerSHA256": "c5cec5d7ef15439c04402ba462aa1ef0083cea1cbe8a5377b59865ac43eec1b7",
+      "rawEvidenceSHA256": "175bf3f319a1888220233acaf623474271d0866038823fb6d3f4d7ce5ee49d3f",
+      "rawNativeEvidenceSHA256": "d6c51fbfe023e0e354136f1477f9a2df6d72ffb45f6852927ec81fef8cf22185",
+      "scenario": "daemon_restart_recovery_control",
+      "senderAExit": {
+        "pid": 113,
+        "exitCode": 0,
+        "collected": true,
+        "exitedBoot": 1318758.063982256
+      },
+      "senderBExit": {
+        "pid": 150,
+        "exitCode": 0,
+        "collected": true,
+        "exitedBoot": 1318758.302175915
+      },
+      "daemonACrash": {
+        "pid": 16,
+        "collected": true,
+        "exitCode": -9,
+        "exitedBoot": 1318758.119836968
+      },
+      "daemonOwners": {
+        "before": ":1.2",
+        "after": ":1.28",
+        "beforePID": 16,
+        "afterPID": 133
+      },
+      "numericIDReused": true,
+      "nativeIDs": {
+        "A": 2,
+        "B": 2
+      },
+      "retainedProcesses": {
+        "gtk": {
+          "pid": 29,
+          "startTicks": 131875770
+        },
+        "frontend": {
+          "pid": 47,
+          "startTicks": 131875781
+        }
+      },
+      "noACallbackArtifacts": true,
+      "noBCallbackArtifacts": false,
+      "containerCleanup": {
+        "verified": true,
+        "ownedContainerID": "b6055cc2a1f5afa7d6b70cbfce33377ef88f217330771943a5b79a5e9f730685",
+        "status": "owned_id_removed_and_exact_name_absent"
+      },
+      "snapshotUnchanged": true,
+      "artifactReferencesSHA256": {
+        "runtime/monitor.stdout": "dc78edacdb6610efb6460422ac3c5a4c1caf2ccdd4e8f555303543b053450ba0",
+        "runtime/fixtures/B/receipt.json": "70f395547561c0d7fb0360bd5361770100819c348116ee221bc68b1caae358c5",
+        "runtime/fixtures/B/action-events.jsonl": "937c406b26e4254b9142ae2cc7eda1f27b0e6714826743c959cf42c0539a2bb4"
+      },
+      "commandEvidence": [
+        {
+          "label": "run",
+          "exitCode": 0,
+          "stdoutSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "stderrSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "label": "own_container_remove",
+          "exitCode": 0
+        },
+        {
+          "label": "container_absent_by_id",
+          "exitCode": 1
+        },
+        {
+          "label": "container_absent_by_name",
+          "exitCode": 1
+        }
+      ],
+      "counts": {
+        "nativeNotify": 2,
+        "officialRemove": 0,
+        "nativeClick": 1
+      },
+      "outcome": "restart_recovery_one_B_callback",
+      "restartRecoveryControlPassed": true,
+      "restartOwnerBindingQualified": false,
+      "nativeClick": {
+        "windowID": "4194306",
+        "ownerPID": 133,
+        "afterSenderExit": true,
+        "screenshotSHA256": "bd07918d155d0bf21283687a974240965b7d02338da3d2d14dc96b7319781b08"
+      },
+      "kernelBirthProof": {
+        "startTicks": 131875838,
+        "clockTicksPerSecond": 100,
+        "lowerBoundBoot": 1318758.38,
+        "upperBoundBoot": 1318758.39,
+        "senderExitedBoot": 1318758.302175915,
+        "afterCollectedSenderExit": true,
+        "clockScope": "kernel_proc_starttime_and_CLOCK_BOOTTIME; code_entry_is_not_birth"
+      },
+      "callback": {
+        "pid": 177,
+        "startTicks": 131875838,
+        "entryBoot": 1318758.455813862,
+        "helperSHA256": "d12f1b4f70e5a6f2832d755e72efbf546966f5a8b537c36409260ab6ec9147b0",
+        "enteredBoot": 1318758.455868764,
+        "targetMatches": true,
+        "effectCount": 1
+      },
+      "callbackExited": true,
+      "BActionEventCount": 1,
+      "nativeClickCommand": {
+        "label": "one_native_click",
+        "exitCode": 0,
+        "stdoutSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderrSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "sourceAndFixtureUnchanged": true
+    }
+  ],
+  "conclusion": "Retained GTK/backend/frontend reused numeric notification ID across dunst owner change. Remove A closed B on the new daemon: a real restart owner-binding counterexample. A separate fresh TEST recovery run produced exactly one B callback after sender exit; it does not qualify owner-safe removal.",
+  "limitations": [
+    "Initial reply-wait failure remains failed; successful runs used a different captured runner hash and fresh TEST identities",
+    "Only owned dunst restart was exercised; GTK/frontend were retained, not restarted",
+    "Callback/window absence is bounded to recorded observation, not a universal future guarantee",
+    "Owned Xvfb/XTest click and XRes PID proof do not qualify human rendering or Wayland activation",
+    "No production projects, installed OpenAI client, selected client route or real Codex URI was activated",
+    "No production adapter fix or general Linux navigation qualification is claimed"
+  ]
+}

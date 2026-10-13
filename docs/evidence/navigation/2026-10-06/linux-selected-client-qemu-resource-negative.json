@@ -1,0 +1,29 @@
+{
+  "scope": "offline_selected_client_renderer_preflight",
+  "status": "failed",
+  "sourceCommit": "68df856fcdc33d900b39c602e9366131b5aa82a9",
+  "nativeSourceSHA256": "75e4497a5cb86bc29f3f3ee9b4069298748990f6e3e4f149bd46d15f0b15361b",
+  "guestSourceSHA256": "dd5c4b86cebe8acf56028381acac2fe823b1f1fe7b4870ab26dcf1a7378fedc4",
+  "operatorSourceSHA256": "a735337fcd99af55ffffa15e19f124b5fdc917357f60e19037e8529a1ee284ac",
+  "failure": "RuntimeError: QEMU_collected_exit_failed",
+  "qemuCollected": true,
+  "qemuExitCode": -6,
+  "qemuDiagnostic": "qemu_thread_create: Resource temporarily unavailable",
+  "guestCompletionCaptured": false,
+  "operatorReportedContainerRemoved": true,
+  "operatorReportedIntegrityErrors": [],
+  "navigationQualified": false,
+  "notificationAttempted": false,
+  "rawArtifactHashes": {
+    "qmp-wire.jsonl": "6af7c57612b68d924941a665333dd277e1b7f748c74055b3c3f56085ecb1d04d",
+    "operator-result.json": "ef3ef37c499c05f01828cb674ddd9dd82ccf02934d8c3728f5446e90e86e5e97",
+    "native-evidence.json": "a752a3a77f9a8b01f6a2d4a192415227b93ce0f37a061168fdbffc176eeb48db",
+    "serial.log": "df67bcf9be56426cbb5355445326c2822b1e7b064fb008a9fa8fe0c51292416d",
+    "qemu.stderr": "78fa59a8cede5d81cb76ee8477e144afaaebc0d4cd71d18a6f3ff7fad3910874"
+  },
+  "limitations": [
+    "Guest effect outcome remains unknown without completion frame.",
+    "No proof that the 64-process container cap caused the resource failure.",
+    "No unchanged-source native rerun performed."
+  ]
+}

@@ -1,0 +1,287 @@
+{
+  "schema": "wayland-token-forwarding-public-v1",
+  "sourceCommit": "f85388d1f4e0b50dce9708af7e7c3890bac839ab",
+  "scope": "owned_process_protocol_trace",
+  "cases": [
+    {
+      "case": "oldGtkNegative",
+      "backendVersion": "1.15.1",
+      "frontendVersion": "1.22.1",
+      "compositorPackage": "sway 1.9-1build2",
+      "notificationPackage": "mako-notifier 1.8.0-2build2",
+      "passed": true,
+      "tokenForwardingQualified": false,
+      "tokenEqualityObserved": false,
+      "effectCount": 1,
+      "addressedActionMethodCount": 1,
+      "nativeClickCount": 1,
+      "senderDeathCollectedBeforeClick": true,
+      "callbackKernelBirthAfterCollectedSenderDeath": true,
+      "callbackServiceOwnerVerified": true,
+      "showAttempted": true,
+      "addReturned": true,
+      "immutableInputsUnchanged": true,
+      "sourceSnapshotUnchanged": true,
+      "ownedContainerCleanupVerified": true,
+      "outcome": "old_GTK_drops_native_click_token",
+      "archiveSHA256": "3fc22ddf7b4a531ce813a1053c0acd2eba4c1379e33a2ff8540e1c4a20e9b747",
+      "rawEvidenceSHA256": "1ca45396ed14c53e10aa14e96a6706660d794a393c2f73de02d27a7e64cf7504",
+      "rawNativeEvidenceSHA256": "65c000b53901fd16486603eea2d8a19f6e83ce3a942daa406d012cbba78a5658",
+      "rawRuntimeFileSHA256": [
+        "0095db5f62ab72ca414bdeb21f9208db2b2277e2c2e336f4ca834ebb201b5796",
+        "011ee05f68886df9f20d9008de3584daf82b48f673c1e6471c1852e1dc3ff3fc",
+        "0786e46a06bacb02098104788eaf55923a17157349b185f8ab470547ab2d3e69",
+        "07dc4c7a4a6a0201ca0718a08c28d4882bb221a85275805e6b24aef10f17347e",
+        "0d5ecf3568ca341152ee58486958230edda58b199dfe597835b2d5fbbe893eed",
+        "11245ecae2ab63c0c56957d5b1b7ce4cd38e2c5c88ae3e1b83c12b8650f9e73d",
+        "1333cdce87a3611903f212e467b80ff8c63182c9ac6cba865b17d1ca7d7446af",
+        "23de5ba8494ac21c15c62960b43d8a7b10f8b2169e17a5abee84601eb1e29449",
+        "34b2cbdb376c4d3ba06841329f9684780d15286c1118677cbe7c1a8b62b591b8",
+        "394a369220c2287d13fb49ebc6a552689972b428c8020efc8f79afa56296803d",
+        "39d6542e18f567723086dc6bcd7b764954785ca2166ba3cfcfef5389707d6a9b",
+        "445cc39231fc877b09d0ae2cfe2bed837d1606e5d43fd8e59c890ec39ec2dac1",
+        "5058397790d47dde16abaab8a73fe64942452acc222f11f25d8a504ce13cf468",
+        "51a253f038401fbf9a7a59dd5e37fbee2e19f5cbdedb05e95375691a8881e728",
+        "55e1e6d089069832e3626c8abb2d6dc12b9a546a7e5d2d3449b8bdd64fd41a16",
+        "5d1eba28357a68d3f652cbbb7fc7fb0a4951a14cd06da098855e12e48b5afbdb",
+        "5e4e08ed825059eaae8f1c2d8d666bffb8c76b2a5cf60e170dce7826227ed550",
+        "60ce1200fd6c74235aa6c83ceb1beeadd3a42501b1b1410cb1ec2530187c1788",
+        "63df2f3780c60d26a86ae6ba8ff86daa3c072523d6f2aeb8e2fbfc82320d0b5f",
+        "640fbf91e187538d0cb85ffe9467add81498a2bde9f26548ea5c0ec528605fe0",
+        "7414b5e0ca0f3ebaef9103c1c45a7758bd5cd6c4f56e094a0986aaf76ca38a23",
+        "7bbd133c9cb14c50a0cefa7bb3a20bdfbbaa95696ed91eca5d7017a5a2b946c4",
+        "7beb8ff2ac8b732e742e7c461593d6d59909403e39cdc8c2479074dd030a0b2b",
+        "96a296d224f285c67bee93c30f8a309157f0daa35dc5b87e410b78630a09cfc7",
+        "9813d9c47e56da3b4821592ee6a25a43216f752d1eb11b2f4e812c8a93652083",
+        "98dbcc3eef078c1448ea18edbb8c522e5235b8296ec6077735dac1bd0bffa3c4",
+        "a593062a303894ad617b57a7c444c4049c69a8d1e51a46c0555097dd7f5425c3",
+        "ac2de3f646454a9eec4c0f63437764f668244c5403398afd029a7f13228d1455",
+        "c255f0d509f6e60c98d571bd2ce6e772dbc3cda14531c44931d494ccf26ea40a",
+        "c4a75b97b05d3d311975206afe8b843d8b0e1dc954042c867ddb76a353f9c805",
+        "cb360a4317ca0c07cbafcc89d3d30a32b75ea7faac0bd840f3b4daea8d36a4a2",
+        "cb57637c30ee4d805fb96b5ece60208322f279b5107896c022088e54110f5428",
+        "cd72a2942e4fa44ed0e2a74d38787b184eeee6350902d81d34fba5c395f2d400",
+        "d3492e1d7ac632d82ed9d212c2f19f562e484e9cb7a2780d9f5d0b428d849f1b",
+        "dc8fb9844d9f8e41033dbade86c71514c91a14fbc9a6346a64ca689c84b50d84",
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "e44cf2852bcf42e493cca1d4ed7eaf2b63a5921a2dba871e7842cf774990758a",
+        "e4deea1191322aabca9de1a7bf677526d52d49ace889cbeebd97cc9890e208f0",
+        "f12df3f3a9a7968e873b120560c1799d70a82d5ca339228ec4c7a399d54ab2d8",
+        "f61b9351aa366216cb36f7d333274b3eb65d39e7a5ef18376e6ef908ecab6058",
+        "f9f5af06d6d192705442799c9bf6bc41423c1ae7a7f4a336c0f16c54600f5ec1"
+      ],
+      "sourceSHA256": {
+        "helper": "f9f5af06d6d192705442799c9bf6bc41423c1ae7a7f4a336c0f16c54600f5ec1",
+        "portalImageDefinition": "06a5f0456d83f87a3e6e4b9553eec707c9de590dc1e4f87714eada0fc0dd1e9a",
+        "runner": "33814b9186a35f040ffd7978e1ded622e19f5e1f858ca44fdb7421a0f3df6a94",
+        "pointerSource": "3f4af3bded3f1a7b64e035a97c505c964bd2820cea138287cf6b9432d6263bff",
+        "waylandImageDefinition": "1685afe773fda5233544bde196cdf58b787ee09ad130f90c82c8c218df4e322c",
+        "gtkSourceArchive": "47a3743d2419a8601e691db37e85bb5fac5ae4b26842177065cd5f22ada23b37",
+        "pointerProtocol": "3ff6d540be0bc5228195bf072bde42117ea17945a5c2061add5d3cf97d6bb524",
+        "primarySourceProvenance": "3ef298b77b9051c9c7de92628bb3ac35c5cb77d773e4cb62725a69a59ba264c2",
+        "outerWrapper": "1cbe4e98e21a16c42a75a9a34957a2eeda535326363a08d90758463f8c49ab58"
+      },
+      "phases": [
+        {
+          "phase": "build",
+          "exitCode": 0
+        },
+        {
+          "phase": "wayland_build",
+          "exitCode": 0
+        },
+        {
+          "phase": "image_identity",
+          "exitCode": 0
+        },
+        {
+          "phase": "run",
+          "exitCode": 0
+        },
+        {
+          "phase": "container_owner",
+          "exitCode": 0
+        },
+        {
+          "phase": "own_container_remove",
+          "exitCode": 0
+        },
+        {
+          "phase": "container_absent_by_id",
+          "exitCode": 1
+        },
+        {
+          "phase": "container_absent_by_name",
+          "exitCode": 1
+        }
+      ]
+    },
+    {
+      "case": "newGtkPositive",
+      "backendVersion": "1.15.3",
+      "frontendVersion": "1.22.1",
+      "compositorPackage": "sway 1.9-1build2",
+      "notificationPackage": "mako-notifier 1.8.0-2build2",
+      "passed": true,
+      "tokenForwardingQualified": true,
+      "tokenEqualityObserved": true,
+      "effectCount": 1,
+      "addressedActionMethodCount": 1,
+      "nativeClickCount": 1,
+      "senderDeathCollectedBeforeClick": true,
+      "callbackKernelBirthAfterCollectedSenderDeath": true,
+      "callbackServiceOwnerVerified": true,
+      "showAttempted": true,
+      "addReturned": true,
+      "immutableInputsUnchanged": true,
+      "sourceSnapshotUnchanged": true,
+      "ownedContainerCleanupVerified": true,
+      "outcome": "native_click_token_reaches_cold_TEST_callback",
+      "archiveSHA256": "0a580d5a417dd8ae4bdb2400c1313caaced25e0b80f83efc4c8678af44aeafaf",
+      "rawEvidenceSHA256": "fbd33c8cf022ec3042eff58a281fddabc21ded97ac77e1af3ede30281d1f0b22",
+      "rawNativeEvidenceSHA256": "b15831b1faf244bbab1eb771cf79eba9b65dcb2347d13f5e734e173938124536",
+      "rawRuntimeFileSHA256": [
+        "07dc4c7a4a6a0201ca0718a08c28d4882bb221a85275805e6b24aef10f17347e",
+        "0b36252d863f5a5af13545838097bde4255f9331d2ad5bb1e29603353f0cb6f4",
+        "11245ecae2ab63c0c56957d5b1b7ce4cd38e2c5c88ae3e1b83c12b8650f9e73d",
+        "163165d363642b809d6e15955f11f913e93e72c1897681d30ed851d886ddc102",
+        "16a995d56b6885f9da3bde048e2a23eccc8fb9ecb4284c7b2bdcea5641a7614d",
+        "22cd5e45ab179d13bca9f1062f1c241ae2b926c7fd1ff82af5bd253f2f013210",
+        "23a343f4ed2d188b3d41b0753a8c5a919202c88b18daedc595323c66165c5306",
+        "23de5ba8494ac21c15c62960b43d8a7b10f8b2169e17a5abee84601eb1e29449",
+        "394a369220c2287d13fb49ebc6a552689972b428c8020efc8f79afa56296803d",
+        "3ba9f40b99d2429fb6ad204f930ceaf6162e0cf9b01041808c503ab347798944",
+        "445cc39231fc877b09d0ae2cfe2bed837d1606e5d43fd8e59c890ec39ec2dac1",
+        "52fa7e3af013073303163eb624be5ec60b3fbb27b501cf1ad24d54b94c591f07",
+        "5ba71730138f9533fe3c6ad552f12e5954e61d92d5d6a467e13bf3414ebc1ec2",
+        "5d1eba28357a68d3f652cbbb7fc7fb0a4951a14cd06da098855e12e48b5afbdb",
+        "5e4e08ed825059eaae8f1c2d8d666bffb8c76b2a5cf60e170dce7826227ed550",
+        "640fbf91e187538d0cb85ffe9467add81498a2bde9f26548ea5c0ec528605fe0",
+        "6af04697042ce8de817e012abd6f7e34d9cdb0e46e7aa221c377eb1a4cd0507d",
+        "72ee87a6d859ab5b7cfac1d326f438616da318b1acaf152f91bc7dab052f5b2a",
+        "79a86c4bc855b939bc1989212fae6bfe5f02785b83f347faa68777c86961830c",
+        "7beb8ff2ac8b732e742e7c461593d6d59909403e39cdc8c2479074dd030a0b2b",
+        "7f8696d173ba6923b83a7ca03a5aa838a42f3c8beaee7c5636bc7ee22a64d2fc",
+        "8c8dc7792be692ff00e258728284e8c06c601675856a2e82bb724e177939797e",
+        "8f470f6b87933566d26f37f802fffb9377aa46917dcf987b32a3f72c377844a0",
+        "93bce413f5393ce7e243cadea18c318aed4596dab456cc5f1ffab6e82ceddb79",
+        "96a296d224f285c67bee93c30f8a309157f0daa35dc5b87e410b78630a09cfc7",
+        "a74962c21957c80719f5b4bc88ed5056793a6fbf7f3564319a83fb6d5e2a7994",
+        "ac2de3f646454a9eec4c0f63437764f668244c5403398afd029a7f13228d1455",
+        "b8e482da8856ef9c0370e28c66d5d0c62c49fc0ac7d3b7b688b0b27f8b3ab6ca",
+        "c3cb0fc2fac994df9e2cf9be86643af04535d9af77f0b030937b38bb37a4be3f",
+        "cbdd52644852f03d597d1dd7633188f19fded666fb5fc16f44fdeb65641c77a9",
+        "cd72a2942e4fa44ed0e2a74d38787b184eeee6350902d81d34fba5c395f2d400",
+        "d3492e1d7ac632d82ed9d212c2f19f562e484e9cb7a2780d9f5d0b428d849f1b",
+        "d65525d6300bc9a458c9e8eb166004aa2996b3844457d6d2ab4c2f94e623d505",
+        "d710f9b49f2d6593a3a0c6f4f0dcedc57212527e416dd5840a086f642835bf17",
+        "db3bb0376ee2b5821ff7f64af7644faf83193f368ddae7afe8f6f3b12b223f62",
+        "e2704347c4d91b511565350ed955dcf87d5876f93c79541a73b1ada762780c0a",
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "e44cf2852bcf42e493cca1d4ed7eaf2b63a5921a2dba871e7842cf774990758a",
+        "f12df3f3a9a7968e873b120560c1799d70a82d5ca339228ec4c7a399d54ab2d8",
+        "f61b9351aa366216cb36f7d333274b3eb65d39e7a5ef18376e6ef908ecab6058",
+        "f9f5af06d6d192705442799c9bf6bc41423c1ae7a7f4a336c0f16c54600f5ec1"
+      ],
+      "sourceSHA256": {
+        "helper": "f9f5af06d6d192705442799c9bf6bc41423c1ae7a7f4a336c0f16c54600f5ec1",
+        "portalImageDefinition": "06a5f0456d83f87a3e6e4b9553eec707c9de590dc1e4f87714eada0fc0dd1e9a",
+        "runner": "33814b9186a35f040ffd7978e1ded622e19f5e1f858ca44fdb7421a0f3df6a94",
+        "pointerSource": "3f4af3bded3f1a7b64e035a97c505c964bd2820cea138287cf6b9432d6263bff",
+        "waylandImageDefinition": "1685afe773fda5233544bde196cdf58b787ee09ad130f90c82c8c218df4e322c",
+        "gtkSourceArchive": "47a3743d2419a8601e691db37e85bb5fac5ae4b26842177065cd5f22ada23b37",
+        "pointerProtocol": "3ff6d540be0bc5228195bf072bde42117ea17945a5c2061add5d3cf97d6bb524",
+        "primarySourceProvenance": "3ef298b77b9051c9c7de92628bb3ac35c5cb77d773e4cb62725a69a59ba264c2",
+        "outerWrapper": "1cbe4e98e21a16c42a75a9a34957a2eeda535326363a08d90758463f8c49ab58"
+      },
+      "phases": [
+        {
+          "phase": "build",
+          "exitCode": 0
+        },
+        {
+          "phase": "wayland_build",
+          "exitCode": 0
+        },
+        {
+          "phase": "image_identity",
+          "exitCode": 0
+        },
+        {
+          "phase": "run",
+          "exitCode": 0
+        },
+        {
+          "phase": "container_owner",
+          "exitCode": 0
+        },
+        {
+          "phase": "own_container_remove",
+          "exitCode": 0
+        },
+        {
+          "phase": "container_absent_by_id",
+          "exitCode": 1
+        },
+        {
+          "phase": "container_absent_by_name",
+          "exitCode": 1
+        }
+      ]
+    }
+  ],
+  "excludedClaims": [
+    "serverDerivedSurfacePID",
+    "tokenAcceptance",
+    "focus",
+    "installedClient",
+    "visibleChat",
+    "navigation"
+  ],
+  "priorGeometryRun": {
+    "sourceCommitPrefix": "0b965",
+    "status": "failed_before_click",
+    "supersededByFreshRuns": true
+  },
+  "verificationCounts": {
+    "archivesVerified": 2,
+    "runtimeArtifactHashesVerified": 114,
+    "contextSourceHashesVerified": 18,
+    "typedActionMethodsVerified": 2,
+    "singleEffectRecordsVerified": 2,
+    "ownedContainerCleanupRecordsVerified": 2,
+    "committedSourceHashesVerified": 6
+  }
+}

@@ -7,7 +7,7 @@ import (
 )
 
 func TestCanonicalEmbed(t *testing.T) {
-	canonical, err := os.ReadFile("agent-notify/SKILL.md")
+	canonical, err := os.ReadFile("agent-notifications/SKILL.md")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -31,8 +31,18 @@ final class SpawnedCommand: OwnedCommand {
             var attributes: posix_spawnattr_t?
             guard posix_spawnattr_init(&attributes) == 0 else { return nil }
             defer { posix_spawnattr_destroy(&attributes) }
-            guard posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETPGROUP)) == 0,
+            guard posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_CLOEXEC_DEFAULT)) == 0,
                   posix_spawnattr_setpgroup(&attributes, 0) == 0 else { return nil }
+            var fileActions: posix_spawn_file_actions_t?
+            guard posix_spawn_file_actions_init(&fileActions) == 0 else { return nil }
+            defer { posix_spawn_file_actions_destroy(&fileActions) }
+            // Callback commands cannot consume the caller's protocol input or
+            // write to its JSON output / delivery-error channel. Every other
+            // caller descriptor is closed by CLOEXEC_DEFAULT; only these three
+            // explicit file actions grant descriptors to the owned shell.
+            guard posix_spawn_file_actions_addopen(&fileActions, STDIN_FILENO, "/dev/null", O_RDONLY, 0) == 0,
+                  posix_spawn_file_actions_addopen(&fileActions, STDOUT_FILENO, "/dev/null", O_WRONLY, 0) == 0,
+                  posix_spawn_file_actions_addopen(&fileActions, STDERR_FILENO, "/dev/null", O_WRONLY, 0) == 0 else { return nil }
             let arguments = ["/bin/sh", "-c", command].map { value in value.withCString { strdup($0) } }
             defer { arguments.forEach { free($0) } }
             guard arguments.allSatisfy({ $0 != nil }) else { return nil }
@@ -46,7 +56,7 @@ final class SpawnedCommand: OwnedCommand {
             var pid: pid_t = 0
             let result = argv.withUnsafeMutableBufferPointer { buffer in
                 envp.withUnsafeMutableBufferPointer { environmentBuffer in
-                    posix_spawn(&pid, "/bin/sh", nil, &attributes, buffer.baseAddress!, environmentBuffer.baseAddress!)
+                    posix_spawn(&pid, "/bin/sh", &fileActions, &attributes, buffer.baseAddress!, environmentBuffer.baseAddress!)
                 }
             }
             return result == 0 ? pid : nil

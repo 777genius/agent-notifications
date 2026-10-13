@@ -72,8 +72,8 @@ func TestWindowsSkillInspectAfterApply(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	t.Cleanup(cancel)
 	command := filepath.Join(runtimeRoot, "bin", "claude-notifications.bat")
-	source := filepath.Join(runtimeRoot, "skills", "agent-notify", "SKILL.md")
-	destination := filepath.Join(client, "skills", "agent-notify", "SKILL.md")
+	source := filepath.Join(runtimeRoot, "skills", "agent-notifications", "SKILL.md")
+	destination := filepath.Join(client, "skills", "agent-notifications", "SKILL.md")
 	l, err := installruntime.Commit(ctx, installruntime.Request{
 		ControlRoot: control, Owner: Managed, RuntimeRoot: runtimeRoot, ConsumerID: "legacy-hooks",
 		Consumer: installruntime.Consumer{Registration: filepath.Join(client, "hooks.json"), Commands: []string{"legacy hook"}},

@@ -1,0 +1,108 @@
+name: OpenCode native clock API prequalification
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/opencode-clock-native-qualification.yml'
+      - 'scripts/opencode-clock-native-qualification.py'
+      - 'scripts/opencode-clock-native-qualification.mjs'
+      - 'scripts/testdata/opencode-clock-qualification/closed-inputs.json'
+      - 'scripts/testdata/opencode-clock-qualification/test_fixture.py'
+      - 'CLOCK-MATRIX-PORTS.md'
+  workflow_dispatch:
+    inputs:
+      source_manifest_json:
+        description: Optional identical closed primary inputs JSON (defaults to checked-in manifest)
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+# Supersede only older checks for this PR; dispatch runs remain independent.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  clock-api:
+    name: Clock API ${{ matrix.platform }} ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-22.04, platform: linux, arch: amd64 }
+          - { runner: ubuntu-22.04-arm, platform: linux, arch: arm64 }
+          - { runner: macos-15-intel, platform: darwin, arch: amd64 }
+          - { runner: macos-15, platform: darwin, arch: arm64 }
+          - { runner: windows-latest, platform: windows, arch: amd64 }
+    steps:
+      - name: Checkout exact workflow candidate
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: '1.26'
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Check fixture helper deadline boundaries
+        if: matrix.platform == 'linux' && matrix.arch == 'amd64'
+        run: python scripts/testdata/opencode-clock-qualification/test_fixture.py
+      - name: Install Linux build dependency
+        if: matrix.platform == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      - name: Stage reviewed source manifest
+        shell: bash
+        env:
+          CLOCK_SOURCE_MANIFEST: ${{ inputs.source_manifest_json }}
+        run: |
+          python - <<'PY'
+          import json, os, pathlib
+          supplied = os.environ.get('CLOCK_SOURCE_MANIFEST', '')
+          value = json.loads(supplied) if supplied else json.loads(pathlib.Path(
+              'scripts/testdata/opencode-clock-qualification/closed-inputs.json').read_bytes())
+          path = pathlib.Path(os.environ['RUNNER_TEMP']) / 'clock-source-manifest.json'
+          path.write_text(json.dumps(value), encoding='utf-8')
+          PY
+      - name: Qualify both fixed official images in fresh private TEST roots
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CLOCK_SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+          CLOCK_PLATFORM: ${{ matrix.platform }}
+          CLOCK_ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          launcher=("$(command -v python)" scripts/opencode-clock-native-qualification.py \
+            --os "$CLOCK_PLATFORM" --arch "$CLOCK_ARCH" \
+            --temp-base "$RUNNER_TEMP" \
+            --source-manifest "$RUNNER_TEMP/clock-source-manifest.json" \
+            --report "$RUNNER_TEMP/clock-safe-evidence.json")
+          if [[ "$CLOCK_PLATFORM" == linux ]]; then
+            sudo --preserve-env=PATH,GH_TOKEN,CLOCK_SOURCE_COMMIT "${launcher[@]}"
+          else
+            "${launcher[@]}"
+          fi
+      - name: Make only the sanitized Linux report readable for upload
+        if: always() && matrix.platform == 'linux'
+        shell: bash
+        run: |
+          if sudo test -f "$RUNNER_TEMP/clock-safe-evidence.json"; then
+            sudo chown "$(id -u):$(id -g)" "$RUNNER_TEMP/clock-safe-evidence.json"
+          fi
+      - name: Upload sanitized API evidence only
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: clock-api-${{ matrix.platform }}-${{ matrix.arch }}
+          path: ${{ runner.temp }}/clock-safe-evidence.json
+          if-no-files-found: warn
+          retention-days: 14

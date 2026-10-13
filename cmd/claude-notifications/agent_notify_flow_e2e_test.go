@@ -6,6 +6,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -59,10 +61,7 @@ func TestAgentNotifyIsolatedInstallFlowE2E(t *testing.T) {
 		t.Fatal("global restrictions changed")
 	}
 
-	exe, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
-	}
+	exe := managedFixtureExecutable(t)
 	binary, err := os.ReadFile(exe)
 	if err != nil {
 		t.Fatal(err)
@@ -70,10 +69,10 @@ func TestAgentNotifyIsolatedInstallFlowE2E(t *testing.T) {
 	pkg := filepath.Join(f.root, "package source with spaces")
 	probe := filepath.Join(pkg, "bin", "probe")
 	files := map[string][]byte{
-		"plugin.json":                  []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent-notify","version":"1.0.0"}`),
-		"mcp.json":                     []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/mcp.schema.json","mcpServers":{"agent-notify":{"type":"stdio","command":"./bin/probe","args":[],"env":{}}}}`),
-		"skills/agent-notify/SKILL.md": []byte("---\nname: agent-notify\ndescription: Isolated flow fixture\n---\n"),
-		"bin/probe":                    binary,
+		"plugin.json":                         []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent-notify","version":"1.0.0"}`),
+		"mcp.json":                            []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/mcp.schema.json","mcpServers":{"agent-notify":{"type":"stdio","command":"./bin/probe","args":[],"env":{}}}}`),
+		"skills/agent-notifications/SKILL.md": []byte("---\nname: agent-notifications\ndescription: Isolated flow fixture\n---\n"),
+		"bin/probe":                           binary,
 	}
 	for rel, data := range files {
 		path := filepath.Join(pkg, rel)
@@ -115,7 +114,7 @@ func TestAgentNotifyIsolatedInstallFlowE2E(t *testing.T) {
 		t.Fatal(err)
 	}
 	codexConfig := filepath.Join(request.CodexHome, "config.toml")
-	skillDest := filepath.Join(request.CodexHome, "skills", "agent-notify", "SKILL.md")
+	skillDest := filepath.Join(request.CodexHome, "skills", "agent-notifications", "SKILL.md")
 	identity := portablesetup.Identity{
 		InstallationID: "00000000-0000-4000-8000-000000000009", ComponentID: snap.Ledger.ID, Owner: "existing-installer",
 		ScopeRoot: filepath.Join(f.root, "scope"), ControlRoot: f.control, GlobalConfig: globalPath,
@@ -124,7 +123,7 @@ func TestAgentNotifyIsolatedInstallFlowE2E(t *testing.T) {
 	discovery := portablesetup.Discovery{
 		ConfigPath: codexConfig, Command: f.command,
 		Skill: &clientsetup.SkillProjection{
-			SourcePath: filepath.Join(f.runtime, "skills", "agent-notify", "SKILL.md"), DestinationPath: skillDest,
+			SourcePath: filepath.Join(f.runtime, "skills", "agent-notifications", "SKILL.md"), DestinationPath: skillDest,
 		},
 	}
 	got, err := mat.Install(ctx, portablesetup.MaterializeRequest{
@@ -294,7 +293,7 @@ func TestAgentNotifyIsolatedInstallFlowE2E(t *testing.T) {
 		if err != nil {
 			t.Fatalf("generation A dead after update: %s %v", capOut, err)
 		}
-		launchGenerationAfterColdStart(t, ctx, pathA)
+		launchFlowGenerationAfterColdStart(t, ctx, pathA)
 		rollback, err := installruntime.StageNative(ctx, f.control, sourceA)
 		if err != nil {
 			t.Fatal(err)
@@ -317,7 +316,7 @@ func TestAgentNotifyIsolatedInstallFlowE2E(t *testing.T) {
 		if len(rolled.Ledger.Native.Published) != publishedBefore {
 			t.Fatalf("rollback mutated published inventory %d -> %d", publishedBefore, len(rolled.Ledger.Native.Published))
 		}
-		launchGenerationAfterColdStart(t, ctx, pathA)
+		launchFlowGenerationAfterColdStart(t, ctx, pathA)
 		gen := rolled.Ledger.Generation
 		if _, err := installruntime.Commit(ctx, installruntime.Request{ControlRoot: f.control, RuntimeRoot: f.runtime, Owner: "existing-installer", ConsumerID: "hooks", ExpectedGeneration: &gen, RetireNative: true}); err != nil {
 			t.Fatal(err)
@@ -427,8 +426,8 @@ func (p *flowNotifySpy) Deliver(_ context.Context, r notification.Request) notif
 
 type flowStatus struct{}
 
-func (flowStatus) Status(context.Context) (notifymcp.Status, error) {
-	return notifymcp.Status{Enabled: true, Configuration: "enabled", Capability: "available"}, nil
+func (flowStatus) Status(context.Context, origin.Context) (notifymcp.Status, error) {
+	return notifymcp.Status{Enabled: true, Configuration: "enabled", Capability: "available", Navigation: agentnotify.NavigationStatus{Capability: "eligible", Precision: "chat_id", Scope: "local_current_profile", Reason: "configured_codex_desktop"}}, nil
 }
 
 func proveNotifyTargetsAfterCwdGone(t *testing.T, cwd string) {
@@ -693,9 +692,100 @@ func exactHeadNativeFlowApp(t *testing.T) string {
 	return root
 }
 
+// A nonce-bound child completion proves the inert fixture's real LaunchServices
+// launch and exit without racing open -W's attachment to an immediately exiting
+// process. Exact-head helpers retain the existing physical -W contract.
+func launchFlowGenerationAfterColdStart(t *testing.T, ctx context.Context, bundle string) {
+	t.Helper()
+	if _, err := os.Stat(filepath.Join(bundle, "Contents", "Resources", "inert-flow.fixture")); os.IsNotExist(err) {
+		launchGenerationAfterColdStart(t, ctx, bundle)
+		return
+	} else if err != nil {
+		t.Fatal(err)
+	}
+	if os.Getenv("AGENT_NOTIFY_DARWIN_E2E") == "1" {
+		t.Fatal("operator-visible Darwin qualification requires an exact-head helper, not the inert fixture")
+	}
+	physical, err := filepath.EvalSymlinks(bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var before syscall.Stat_t
+	if err := syscall.Stat(physical, &before); err != nil {
+		t.Fatal(err)
+	}
+	proofRoot := t.TempDir()
+	if err := os.Chmod(proofRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	receiptPath := filepath.Join(proofRoot, "receipt.json")
+	var token [16]byte
+	if _, err := rand.Read(token[:]); err != nil {
+		t.Fatal(err)
+	}
+	nonce := fmt.Sprintf("%x", token[:])
+	launchCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	open := exec.CommandContext(launchCtx, "/usr/bin/open", "-n", "-a", physical, "--args", "--flow-launch-proof", receiptPath, nonce)
+	open.Dir = "/"
+	if out, err := open.CombinedOutput(); err != nil {
+		t.Fatalf("inert LaunchServices launch failed: %s %v", out, err)
+	}
+	var receipt struct {
+		Nonce         string          `json:"nonce"`
+		PID           int             `json:"pid"`
+		ExecutableHex string          `json:"executableHex"`
+		Capabilities  json.RawMessage `json:"capabilities"`
+	}
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		body, err := os.ReadFile(receiptPath)
+		if err == nil {
+			if err := json.Unmarshal(body, &receipt); err != nil {
+				t.Fatalf("invalid inert launch receipt: %s %v", body, err)
+			}
+			break
+		}
+		if !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+		select {
+		case <-launchCtx.Done():
+			t.Fatal("inert LaunchServices child did not publish completion", launchCtx.Err())
+		case <-ticker.C:
+		}
+	}
+	exe := filepath.Join(physical, "Contents", "MacOS", "terminal-notifier-modern")
+	receiptExecutable, err := hex.DecodeString(receipt.ExecutableHex)
+	if err != nil || receipt.Nonce != nonce || receipt.PID <= 1 || string(receiptExecutable) != exe || string(receipt.Capabilities) != inertNativeFlowCapabilities {
+		t.Fatalf("inert LaunchServices launched wrong child: %+v", receipt)
+	}
+	// Observe exit only. Never signal a PID, which could have been reused.
+	for {
+		err := syscall.Kill(receipt.PID, 0)
+		if err == syscall.ESRCH {
+			break
+		}
+		if err != nil {
+			t.Fatal("inspect inert child exit", err)
+		}
+		select {
+		case <-launchCtx.Done():
+			t.Fatal("inert LaunchServices child did not exit", launchCtx.Err())
+		case <-ticker.C:
+		}
+	}
+	var after syscall.Stat_t
+	if err := syscall.Stat(physical, &after); err != nil || after.Dev != before.Dev || after.Ino != before.Ino {
+		t.Fatal("inert cold-start moved generation identity")
+	}
+}
+
+const inertNativeFlowCapabilities = `{"schemaVersion":1,"protocolVersions":[1],"actionKinds":["none"],"receiptSupport":true,"backend":"macos.usernotifications","explicitFeatureEnabledByDefault":false}`
+
 func inertNativeFlowApp(t *testing.T) string {
 	t.Helper()
-	const capabilities = `{"schemaVersion":1,"protocolVersions":[1],"actionKinds":["none"],"receiptSupport":true,"backend":"macos.usernotifications","explicitFeatureEnabledByDefault":false}`
 	root := filepath.Join(t.TempDir(), "ClaudeNotifier.app")
 	executable := filepath.Join(root, "Contents", "MacOS", "terminal-notifier-modern")
 	if err := os.MkdirAll(filepath.Dir(executable), 0755); err != nil {
@@ -713,16 +803,45 @@ func inertNativeFlowApp(t *testing.T) string {
 	if err := os.WriteFile(filepath.Join(root, "Contents", "Info.plist"), []byte(plist), 0644); err != nil {
 		t.Fatal(err)
 	}
-	source := "#include <stdio.h>\n#include <string.h>\nint main(int argc, char **argv) {\n" +
-		"if (argc != 2 || strcmp(argv[1], \"--capabilities-json\") != 0) return 9;\n" +
-		"return puts(" + strconv.Quote(capabilities) + ") < 0 ? 1 : 0;\n}\n"
+	if err := os.MkdirAll(filepath.Join(root, "Contents", "Resources"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "Contents", "Resources", "inert-flow.fixture"), []byte("nonce-bound LaunchServices completion fixture\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	source := `#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
+#include <libproc.h>
+#include <fcntl.h>
+#include <limits.h>
+int main(int argc, char **argv) {
+    const char *capabilities = ` + strconv.Quote(inertNativeFlowCapabilities) + `;
+    if (argc == 2 && strcmp(argv[1], "--capabilities-json") == 0)
+        return puts(capabilities) < 0 ? 1 : 0;
+    if (argc != 4 || strcmp(argv[1], "--flow-launch-proof") != 0) return 9;
+    char executable[PROC_PIDPATHINFO_MAXSIZE], temporary[PATH_MAX];
+    if (proc_pidpath(getpid(), executable, sizeof(executable)) <= 0) return 10;
+    if (snprintf(temporary, sizeof(temporary), "%s.tmp", argv[2]) >= sizeof(temporary)) return 11;
+    int fd = open(temporary, O_CREAT | O_EXCL | O_WRONLY, 0600);
+    if (fd < 0) return 13;
+    FILE *receipt = fdopen(fd, "w");
+    if (!receipt) return 14;
+    if (fprintf(receipt, "{\"nonce\":\"%s\",\"pid\":%d,\"executableHex\":\"", argv[3], getpid()) < 0) return 15;
+    for (const unsigned char *p = (const unsigned char *)executable; *p; ++p)
+        if (fprintf(receipt, "%02x", *p) < 0) return 15;
+    if (fprintf(receipt, "\",\"capabilities\":%s}\n", capabilities) < 0) return 15;
+    if (fclose(receipt) != 0 || rename(temporary, argv[2]) != 0) return 16;
+    return 0;
+}
+`
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	arch := "x86_64"
 	if runtime.GOARCH == "arm64" {
 		arch = "arm64"
 	}
-	cmd := exec.CommandContext(ctx, "/usr/bin/clang", "-arch", arch, "-x", "c", "-", "-o", executable)
+	cmd := exec.CommandContext(ctx, "/usr/bin/clang", "-arch", arch, "-x", "c", "-", "-lproc", "-o", executable)
 	cmd.Stdin = strings.NewReader(source)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("inert native fixture clang: %s %v", out, err)

@@ -94,13 +94,25 @@ func getBundleIDFromTmuxEnv() string {
 
 // GetTerminalNotifierPath returns the path to terminal-notifier binary.
 // Priority:
-// 1. terminal-notifier-modern (embedded in plugin): uses UNUserNotificationCenter, works on macOS 10.14+
-// 2. terminal-notifier (embedded in plugin): legacy NSUserNotificationCenter
+// 1. Product-owned AgentNotifications.app alias
+// 2. Conventional embedded modern/legacy helpers
 // 3. System-installed (via brew): $(which terminal-notifier)
 func GetTerminalNotifierPath() (string, error) {
 	pluginRoot := os.Getenv("CLAUDE_PLUGIN_ROOT")
 
 	if pluginRoot != "" {
+		managed := filepath.Join(pluginRoot, "bin", "AgentNotifications.app")
+		if _, err := os.Lstat(managed); err == nil {
+			for _, name := range []string{"terminal-notifier-modern", "terminal-notifier"} {
+				path := filepath.Join(managed, "Contents", "MacOS", name)
+				if platform.FileExists(path) {
+					return path, nil
+				}
+			}
+			return "", fmt.Errorf("managed native alias has no notification helper: %s", managed)
+		} else if !os.IsNotExist(err) {
+			return "", err
+		}
 		// Conventional hook names may alias the same managed generation, which
 		// can contain either the modern or the legacy helper.
 		for _, parts := range [][]string{

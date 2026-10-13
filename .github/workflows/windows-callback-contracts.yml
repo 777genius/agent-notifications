@@ -1,0 +1,58 @@
+name: Windows callback source contracts (inert)
+on:
+  pull_request:
+    paths:
+      - 'native/windows-callback/**'
+      - 'internal/windowscallback/**'
+      - '.github/workflows/windows-callback-contracts.yml'
+      - '.github/workflows/release.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  compile-and-inert-contracts:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7 repository pin
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.27.1'
+      - name: Compile SDK helper and independent contracts only
+        shell: pwsh
+        env:
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          if ((git rev-parse HEAD) -cne $env:SOURCE_SHA) { throw 'source SHA mismatch' }
+          ./native/windows-callback/build.ps1 -OutputDirectory "$env:RUNNER_TEMP\windows-callback-contracts" -EmbedAsset
+      - name: Run inert wire and callback state-machine contracts
+        shell: pwsh
+        run: |
+          & "$env:RUNNER_TEMP\windows-callback-contracts\contracts.exe" 'internal/windowscallback/testdata'
+          if ($LASTEXITCODE -ne 0) { throw 'native inert contracts failed' }
+          go test -tags windows_callback_asset ./internal/windowscallback
+          if ($LASTEXITCODE -ne 0) { throw 'Go independent wire/asset contracts failed' }
+          # Default untagged build must remain safely unavailable.
+          go test ./internal/windowscallback
+          if ($LASTEXITCODE -ne 0) { throw 'unavailable build contract failed' }
+      - name: Prove exact native asset in linked Windows executable
+        shell: pwsh
+        env:
+          CGO_ENABLED: '1'
+        run: |
+          $binary = "$env:RUNNER_TEMP\windows-callback-contracts\claude-notifications.exe"
+          go build -tags windows_callback_asset -trimpath -o $binary ./cmd/claude-notifications
+          if ($LASTEXITCODE -ne 0) { throw 'linked Windows binary build failed' }
+          ./native/windows-callback/verify-embedded.ps1 -Executable $binary -Helper "$env:RUNNER_TEMP\windows-callback-contracts\helper.exe" |
+            Set-Content -LiteralPath "$env:RUNNER_TEMP\windows-callback-contracts\embedded-evidence.json" -Encoding utf8
+      - name: Retain source-bound native compile evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7 repository pin
+        with:
+          name: windows-callback-contracts-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/windows-callback-contracts
+          if-no-files-found: error
+          retention-days: 14

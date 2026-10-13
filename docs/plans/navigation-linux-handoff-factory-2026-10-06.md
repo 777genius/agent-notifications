@@ -1,0 +1,185 @@
+# Offline TEST handoff factory checkpoint
+
+## Readonly follow-up: client trace format
+
+After PR #361 merged, the retained third guest image was inspected offline without
+a guest boot, notification or client launch. A separate derived image passed
+partition-before/after hashing; unprivileged read-only debugfs recovered four fixed
+TEST logs. Original backing-chain hashes remained unchanged. The first conversion
+stopped at its 4GiB allocation threshold and was contained; a retained full-chain
+block map justified a distinct conversion with a 5GiB threshold and 512MiB reserve.
+
+The client log contains exactly one activation request with the owned click token,
+using `xdg_activation_v1#22` and `wl_surface#36`. The observer expected only `@`, so
+its wait missed that request. The independent server log records the same selected
+PID/birth, token and surface; a pure replay identifies its live unique toplevel.
+The replay explicitly leaves kernel binding and focus unqualified. The original
+FAILED frame is unchanged; these recovered facts do not establish the live focus
+join, final native collection gates or authenticated chat navigation.
+
+The observer now accepts either consistent object-ID delimiter through one shared
+parser. Three pure tests cover both formats, exact token matching, malformed or
+unrelated records and duplicate retention. The raw recovery archive remains private;
+[the bounded projection](../evidence/navigation/2026-10-06/linux-handoff-client-trace-forensic.json)
+contains hashes and observed metadata, without raw tokens. Any new native experiment
+still requires its own reviewed frozen capsule and complete prior containment.
+
+The guest controller preparation remains in PR #360. This dependent scope owns
+the host assembly, explicit single attempt, completion frame and host cleanup.
+It must not remove the guest's early refusal until the complete assembly passes
+review. Native completion and selected-chat navigation remain unqualified.
+
+## Runtime staging
+
+`navigation-linux-handoff-runtime-stage.py` authenticates both retained runtime
+TAR bytes against the prior positive evidence, validates every member before
+filesystem writes, and writes regular files manually into a fresh TEST tree.
+It rejects links, special files, absolute/traversal/noncanonical paths, normalized
+duplicates, file ancestors and bounded-size violations. Executable byte hashes
+must match; permissions are normalized to read-only files and directories.
+
+Five pure tests cover observable archive failures and rejection before destination
+creation. A separate file-only replay staged both retained archives into a new
+temporary TEST directory and verified 148 file hashes, read-only modes and rejection
+of destination reuse. No runtime was loaded or executed and no VM was booted.
+
+The caller must own a private parent, preserve failed staging as a failed attempt
+and never treat a partial tree as ready. Same-UID adversarial immutability is not
+claimed. Host QEMU wiring, the nine-source manifest, ISO/cloud-init installation,
+new-marker completion reader and complete assembly review were outstanding at
+the staging-only checkpoint.
+
+## Complete assembly source
+
+The host controller now freezes the source capsule and nine-file guest manifest,
+copies the two qualified runtime archives, uses an owned offline QEMU container,
+and retains actual terminal state and exact cleanup diagnostics. The probe creates
+one new COW overlay/readonly ISO, observes paused KVM through its owned QMP peer,
+and sends one bounded `cont`. The guest bootstrap verifies the full runtime catalog
+before installation, then invokes the controller from the readonly seed.
+
+The new-marker frame reader preserves negative payloads and requires native
+callback/token/focus plus collected cleanup. It cannot qualify renderer-only
+preflight or authenticated chat selection. Three pure frame tests pass. The old
+renderer fixture sources remain unchanged so historical evidence retains its
+exact binding; this assembly requires its own observed native evidence.
+
+R1 fixed publication/shutdown, exact cleanup absence, actual container terminal
+state and QMP pre-send deadlines/paused-state observation. After these repairs were
+accepted, the controller's temporary refusal was removed for renewed R2/R3 review.
+R2 and R3 accepted the repaired complete source. A final archive listing confirmed
+that `gtk.portal` is present in the GTK tree, so its pinned share directory now
+precedes the distro share directory in discovery; the final R3 accepted this delta.
+The first execution followed acceptance of the full frozen capsule; its negative
+result is retained below. Every new execution requires its own reviewed capsule. A failure/unknown outcome never authorizes
+an automatic second notification, click or client launch.
+
+
+## First actual assembly: FAILED, retained
+
+Source `0d194f48cbf2618e0792ed8e464f45e45f3c9223` ran once in a fresh,
+offline TEST VM. The sender exited 1 before click. Its mandatory `sender.sha256`
+file was absent from the actual readonly ISO; this guard precedes callback and SDK
+imports. The private archive and its ISO-listing audit retain the source/seed/frame
+bindings. `notificationAttempted=true` records producer intent, not proof that
+AddNotification ran. No click, selected-client handoff or navigation was qualified.
+
+The guest cleanup observation also failed with a combined incarnation/UID error.
+That message does not establish which condition failed. Nine retained kernel exits,
+empty owned cgroup, guest poweroff, collected QEMU and terminal/removed host
+container were observed. Those containment facts do not repair the FAILED result.
+The readonly ISO-audit container's original absence parser rejected the CLI text;
+its failed receipt is preserved alongside a separate exact ID/name reconciliation.
+
+The sender now authenticates itself with the existing bounded canonical manifest,
+avoiding an independently maintained sidecar. Two pure tests reject changed source,
+missing/ambiguous authority and oversized manifests. Final cleanup may retain any
+UID in the exact root-owned cgroup while preserving birth/pidfd/membership guards;
+selected-peer admission stays UID1000. Per-PID observation failures continue the
+sweep and still fail the cleanup verdict. Independent focused reviews accepted
+both corrections. The negative evidence must be bound and a fresh final capsule
+reviewed before a distinct planned attempt; no automatic retry is authorized.
+
+Independent raw review passed 412 assertions, including all 78 archive members
+and direct readonly ISO parsing of the manifest and nine guest payloads. The
+zero-SDK-call conclusion uses actual ISO and frozen source control flow, without
+a captured sender traceback. This accepts the negative checkpoint, not native
+qualification.
+
+
+## Corrected actual assembly: FAILED, contained
+
+Exact source `1511cb4adb6b5293cf32f7569c70219c5831db5d` used a new frozen
+capsule and fresh offline VM/root. The sender exited 0, the native Notify/reply
+assigned ID1 and the controller reached callback launch publication after its sole
+CLICK command. The next owned-group enumeration failed `selected_peer_uid_not_1000`.
+This precedes selected callback/client admission; the recorded error identifies no
+PID and cannot distinguish an unrelated descendant from the selected peer.
+Typed receiver identity, final pointer/token checks, activation and navigation were
+not qualified. The semantic handoff outcome remains unknown and is not replayable.
+
+Independent raw review passed 413 assertions, including 61 retained files, actual
+ISO and source/command/frame bindings. Cleanup passed: all 13 retained incarnations
+exited, the owned cgroup was empty, guest shutdown and collected QEMU exit0 were
+observed, and the exact terminal host container was removed. These facts contain
+the experiment without turning the negative semantic outcome positive.
+
+The next source correction separates UID-independent owned-group retention from
+unconditional current UID1000 admission for selected callback and client, even if
+the group sweep already populated their handles. Selected failures record phase,
+PID, birth, UID fields and cgroup without argv. Incarnation/pidfd/membership guards
+remain mandatory. Any further experiment requires a newly reviewed source/capsule
+and fresh owned VM/root/nonce; it must not replay this unknown semantic attempt.
+
+
+## Selected-admission assembly: activation request unproved
+
+Exact source `59bb25b8efdceb6a438bdb0de7329c31882ab014` ran once with a new
+reviewed capsule, VM/root and nonce. Sender exit0, cold callback owner, selected
+client incarnation/UID1000/executable/vendor profile, pointer CLICKED acknowledgement
+and native token equality were observed. The first 12-second observation of the
+selected client's matching `xdg_activation_v1.activate` expired. Server focus,
+activation/token consumption and selected chat remain unqualified. The raw main
+profile is `chatgpt (unconfined)`, Seccomp0/NoNewPrivs0; no full-client sandbox
+qualification is inferred from the selected vendor profile name.
+
+Independent raw review passed 412 assertions over all 61 retained files, actual
+ISO, source/capsule, command outputs and native completion frame. All 24 retained
+incarnations exited, the cgroup was empty, guest shutdown/QEMU exit0 and owned host
+removal were observed. The semantic activation outcome remains unknown. The
+bounded observation failure does not prove permanent platform unsupportedness.
+
+The useful next step is offline readonly forensic acquisition of the fixed TEST
+`client.stderr` from the retained immutable QCOW2 chain. Never boot the original
+guest or replay its native action. Any derived image belongs to a fresh owned TEST
+scratch, with bounded resources, source/range hashes and read-only log extraction.
+No additional native experiment is justified merely by this timeout.
+
+
+## Trace-corrected actual assembly: selected-client activation and focus passed
+
+Exact source `d125933bd2d5899d70d35308e394db896bef36fd` ran once after
+three independent source reviews and a fresh frozen-capsule review. The only guest
+behavior change accepts both consistent libwayland object-ID delimiters; identity,
+unique surface, compositor focus, deadline and cleanup gates remain mandatory.
+This distinct planned experiment used a new owned offline TEST VM/root/nonce.
+None of the three earlier FAILED attempts was replayed or reclassified.
+
+Sender exit0 and collection precede the sole native click. The cold callback
+forwards the matching token to the selected UID1000 vendor-client incarnation.
+Its native activation request joins a unique kernel-bound live server toplevel
+and a separate peer-verified compositor focus observation. All 25 retained
+incarnations exited, the owned cgroup was empty, guest poweroff and collected QEMU
+exit0 were observed, and the exact terminal host container was removed.
+
+Independent raw audit passed 1368 assertions plus three earlier-negative
+preservation checks, including all 224 regular archive members and 164 actual ISO
+seed files. The public projection is
+[`linux-handoff-selected-client-positive.json`](../evidence/navigation/2026-10-06/linux-handoff-selected-client-positive.json).
+The archive includes frozen sources, seed and actual completion frame, but no
+detailed guest callback/client/server session logs. Live qualification therefore
+uses source-bound executed fixture observations, not independently replayable
+kernel captures. The decoder's local `serverSurface.focusQualified=false` is
+separate from the successful live focus join. Token causation/consumption,
+authenticated chat selection, human render and full-client sandbox remain
+unqualified. This evidence does not enable a production Linux navigation adapter.

@@ -411,3 +411,36 @@ func TestIsTerminalNotifierAvailable_Consistency(t *testing.T) {
 		t.Errorf("IsTerminalNotifierAvailable returned false but GetTerminalNotifierPath returned path: %s", path)
 	}
 }
+
+func TestGetTerminalNotifierPathPrefersManagedAliasOverConcreteModernHelper(t *testing.T) {
+	root := t.TempDir()
+	for _, bundle := range []string{"AgentNotifications.app", "ClaudeNotifier.app"} {
+		path := filepath.Join(root, "bin", bundle, "Contents", "MacOS", "terminal-notifier-modern")
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(bundle), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("CLAUDE_PLUGIN_ROOT", root)
+	path, err := GetTerminalNotifierPath()
+	want := filepath.Join(root, "bin", "AgentNotifications.app", "Contents", "MacOS", "terminal-notifier-modern")
+	if err != nil || path != want {
+		t.Fatalf("obsolete concrete helper selected: %s %v", path, err)
+	}
+}
+
+func TestGetTerminalNotifierPathDoesNotFallbackFromBrokenManagedAlias(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "bin"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(root, "missing-generation.app"), filepath.Join(root, "bin", "AgentNotifications.app")); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CLAUDE_PLUGIN_ROOT", root)
+	if path, err := GetTerminalNotifierPath(); err == nil || path != "" {
+		t.Fatalf("broken managed alias silently fell back: %s %v", path, err)
+	}
+}

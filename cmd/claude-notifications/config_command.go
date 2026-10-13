@@ -26,6 +26,21 @@ func configCommand(args []string, in io.Reader, out, stderr io.Writer) int {
 			code = ce.Code
 		}
 		_, _ = fmt.Fprintln(stderr, code)
+		if ce != nil {
+			if detail := ce.PermissionFailure(); detail != nil {
+				_, _ = fmt.Fprintf(stderr, "ACL rejection: objectPath=%q reason=%s", detail.ObjectPath, detail.Reason)
+				if detail.TrusteeSID != "" {
+					_, _ = fmt.Fprintf(stderr, " trusteeSid=%q", detail.TrusteeSID)
+				}
+				if detail.OwnerSID != "" {
+					_, _ = fmt.Fprintf(stderr, " ownerSid=%q", detail.OwnerSID)
+				}
+				if detail.AccessMask != 0 {
+					_, _ = fmt.Fprintf(stderr, " accessMask=0x%08x", detail.AccessMask)
+				}
+				_, _ = fmt.Fprintln(stderr)
+			}
+		}
 		return 1
 	}
 	invalid := func() int { return fail(&config.Error{Code: config.ConfigInvalid}) }
@@ -42,7 +57,7 @@ func configCommand(args []string, in io.Reader, out, stderr io.Writer) int {
 		switch flag {
 		case "--json", "--stdin":
 			flags[flag] = "true"
-		case "--from", "--expect-revision":
+		case "--from", "--expect-revision", "--target", "--control-root":
 			i++
 			if i == len(args) {
 				return invalid()
@@ -63,6 +78,9 @@ func configCommand(args []string, in io.Reader, out, stderr io.Writer) int {
 		return invalid()
 	}
 	for k := range flags {
+		if k == "--target" || (k == "--control-root" && flags["--target"] == "opencode") {
+			continue
+		}
 		if !set[k] {
 			return invalid()
 		}
@@ -79,18 +97,55 @@ func configCommand(args []string, in io.Reader, out, stderr io.Writer) int {
 	if from, ok := flags["--from"]; ok && !filepath.IsAbs(from) {
 		return invalid()
 	}
-	env := config.SnapshotEnv()
-	root := os.Getenv("PLUGIN_ROOT")
-	if root == "" {
-		root = getPluginRoot()
+	managed := flags["--target"] == "opencode"
+	if target, present := flags["--target"]; present && target != "shared" && !managed {
+		return invalid()
 	}
-	_, legacy := config.ConsumerContext(root)
-	assets := config.ValidationAssets(root)
+	if managed && op != "path" && op != "inspect" && op != "edit" {
+		return invalid()
+	}
+	if control, present := flags["--control-root"]; present && (!managed || !filepath.IsAbs(control) || control == "") {
+		return invalid()
+	}
+	var env config.EnvSnapshot
+	var legacy config.LegacyContext
+	assets := config.ValidationAssets("")
+	if !managed {
+		env = config.SnapshotEnv()
+		root := os.Getenv("PLUGIN_ROOT")
+		if root == "" {
+			root = getPluginRoot()
+		}
+		_, legacy = config.ConsumerContext(root)
+		assets = config.ValidationAssets(root)
+	}
 	emit := func(v any) int {
 		if err := json.NewEncoder(out).Encode(v); err != nil {
 			return fail(err)
 		}
 		return 0
+	}
+	var policy config.ManagedOpenCodeDocument
+	if managed {
+		var err error
+		policy, err = config.ReadManagedOpenCode(context.Background(), flags["--control-root"], assets)
+		if err != nil {
+			return fail(err)
+		}
+		if op == "path" {
+			if flags["--json"] != "" {
+				return emit(policy.Selection)
+			}
+			if _, err := fmt.Fprintln(out, policy.Selection.Path); err != nil {
+				return fail(err)
+			}
+			return 0
+		}
+		if op == "inspect" {
+			inspection := config.InspectDocument(policy.Selection, policy.Selection.Path, policy.Document.Bytes())
+			inspection.Revision = policy.Revision
+			return emit(inspection)
+		}
 	}
 	switch op {
 	case "path":
@@ -118,7 +173,11 @@ func configCommand(args []string, in io.Reader, out, stderr io.Writer) int {
 			if errors.As(err, &ce) {
 				code = ce.Code
 			}
-			emit(config.Inspection{Selection: s, ErrorCode: code})
+			var detail *config.PermissionFailure
+			if ce != nil {
+				detail = ce.PermissionFailure()
+			}
+			emit(config.Inspection{Selection: s, ErrorCode: code, PermissionFailure: detail})
 			return fail(err)
 		}
 		inspection := config.InspectDocument(s, s.Path, d.Bytes())
@@ -133,6 +192,20 @@ func configCommand(args []string, in io.Reader, out, stderr io.Writer) int {
 	case "init":
 		result, err := config.EnsureInitialized(context.Background(), config.InitRequest{Env: env, Assets: assets, Legacy: legacy, From: flags["--from"]})
 		if err != nil {
+			if flags["--json"] != "" {
+				code := config.ConfigInvalid
+				var ce *config.Error
+				var detail *config.PermissionFailure
+				if errors.As(err, &ce) {
+					code, detail = ce.Code, ce.PermissionFailure()
+				}
+				if emit(struct {
+					ErrorCode         config.Code               `json:"errorCode"`
+					PermissionFailure *config.PermissionFailure `json:"permissionFailure,omitempty"`
+				}{code, detail}) != 0 {
+					return 1
+				}
+			}
 			return fail(err)
 		}
 		if flags["--json"] != "" {
@@ -175,6 +248,13 @@ func configCommand(args []string, in io.Reader, out, stderr io.Writer) int {
 			var edits config.Edits
 			if dec.Decode(&edits) != nil {
 				return invalid()
+			}
+			if managed {
+				result, err := config.ApplyManagedOpenCodeEdits(context.Background(), flags["--control-root"], assets, flags["--expect-revision"], edits)
+				if err != nil {
+					return fail(err)
+				}
+				return emit(result)
 			}
 			// Pure validation precedes Store lock/directory creation.
 			current, _, err := config.ReadDocument(config.ReadRequest{Env: env, Assets: assets, Legacy: legacy, ReadSnapshot: config.ReadFileSnapshot})
@@ -222,6 +302,31 @@ func configCommand(args []string, in io.Reader, out, stderr io.Writer) int {
 		}
 		request.Env = env
 		request.Assets = assets
+		// A failed first install can leave a same-release Claude cache before
+		// config init writes the shared file. Only its exact-version packaged
+		// template is safe to ignore on retry; edited or older caches still
+		// require explicit import. The verified helper supplies the template.
+		for _, bundleRoot := range request.ActiveBundleRoots {
+			_, bundleLegacy := config.ConsumerContext(bundleRoot)
+			if len(bundleLegacy.Candidates) == 0 || len(bundleLegacy.Candidates[0].TrustedBaseline) == 0 {
+				continue
+			}
+			trusted := bundleLegacy.Candidates[0]
+			found := false
+			for i := range request.HistoricalCandidates {
+				candidate := &request.HistoricalCandidates[i]
+				if filepath.Clean(candidate.Path) != filepath.Clean(trusted.Path) {
+					continue
+				}
+				found = true
+				if candidate.BaselinePath == "" && candidate.BaselineSHA256 == "" {
+					candidate.TrustedBaseline = trusted.TrustedBaseline
+				}
+			}
+			if !found {
+				request.HistoricalCandidates = append(request.HistoricalCandidates, trusted)
+			}
+		}
 		for _, historical := range legacy.Candidates {
 			supplied := false
 			for _, candidate := range request.HistoricalCandidates {

@@ -1,0 +1,66 @@
+name: Navigation Linux official client tree manifest TEST
+on:
+  pull_request:
+    paths:
+      - 'scripts/navigation-linux-vendor-manifest.py'
+      - '.github/workflows/navigation-linux-vendor-manifest.yml'
+  workflow_dispatch:
+    inputs:
+      mode:
+        type: choice
+        default: syntax_only
+        description: 'Explicit public package download and inert manifest generation; no install or execution'
+        options: [syntax_only, generate_manifest]
+permissions:
+  contents: read
+jobs:
+  manifest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 18
+    env:
+      NAVIGATION_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Exact source and inert preflight
+        run: |
+          test "$(git rev-parse HEAD)" = "$NAVIGATION_SOURCE_SHA"
+          python3 -I -c "import ast,pathlib; ast.parse(pathlib.Path('scripts/navigation-linux-vendor-manifest.py').read_text())"
+          python3 -I scripts/navigation-linux-vendor-manifest.py --preflight
+          python3 -I scripts/navigation-linux-vendor-manifest.py --self-test
+      - name: One explicit acquisition and manifest generation
+        id: generate
+        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'generate_manifest'
+        env:
+          NAVIGATION_LINUX_VENDOR_MANIFEST_TEST: '1'
+        run: |
+          test "$GITHUB_RUN_ATTEMPT" = 1
+          test "$(df -PB1 "$RUNNER_TEMP" | awk 'NR==2 {print $4}')" -ge 2147483648
+          test "$(awk '/MemAvailable:/ {print $2}' /proc/meminfo)" -ge 2097152
+          umask 077
+          root=$(mktemp -d "$RUNNER_TEMP/navigation-linux-vendor-manifest-TEST-XXXXXXXX")
+          output="$root/navigation-linux-vendor-manifest-TEST-output"
+          mkdir -m 700 "$output"
+          echo "evidence_root=$output" >> "$GITHUB_OUTPUT"
+          set +e
+          curl -q --fail --silent --show-error --proto '=https' --proto-redir '=https' --location --max-time 300 --max-filesize 476322694 --output "$root/client.deb" 'https://persistent.oaistatic.com/codex-app-prod/linux/deb/pool/main/c/chatgpt/chatgpt_26.930.51102_amd64.deb'
+          acquired=$?
+          set -e
+          NAVIGATION_ACQUISITION_EXIT="$acquired" NAVIGATION_ACQUISITION_REPORT="$root/acquisition.json" python3 -I -c 'import json,os,pathlib; p=pathlib.Path(os.environ["NAVIGATION_ACQUISITION_REPORT"]); p.open("x").write(json.dumps({"version":1,"sourceCommit":os.environ["NAVIGATION_SOURCE_SHA"],"run":os.environ["GITHUB_RUN_ID"],"attempt":os.environ["GITHUB_RUN_ATTEMPT"],"downloadExit":int(os.environ["NAVIGATION_ACQUISITION_EXIT"]),"installationPerformed":False,"payloadExecuted":False})+"\n")'
+          echo "acquisition_file=$root/acquisition.json" >> "$GITHUB_OUTPUT"
+          test "$acquired" = 0
+          timeout --signal=TERM --kill-after=5s 610s python3 -I scripts/navigation-linux-vendor-manifest.py --package "$root/client.deb" --output-root "$output"
+      - name: Preserve JSON only, never package payload
+        if: always() && steps.generate.outputs.evidence_root != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: navigation-linux-vendor-manifest-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ steps.generate.outputs.evidence_root }}/client-tree-manifest.json
+            ${{ steps.generate.outputs.evidence_root }}/evidence.json
+            ${{ steps.generate.outputs.evidence_root }}/ownership.json
+            ${{ steps.generate.outputs.acquisition_file }}
+          if-no-files-found: error
+          retention-days: 14

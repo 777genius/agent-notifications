@@ -52,6 +52,7 @@ type IntentTarget struct {
 type ConfirmedIntent struct {
 	ControlRoot, RuntimeRoot, Owner         string
 	ExpectedGeneration                      uint64
+	ExpectedPolicy                          *installruntime.Identity
 	Action, Stage                           string
 	SourceRevision, SourceDigest            string
 	TreeDigest, HelperDigest, HelperVersion string

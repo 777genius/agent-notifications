@@ -1,0 +1,64 @@
+{
+  "scope": "offline_readonly_client_activation_trace_forensics",
+  "nativeSourceCommit": "59bb25b8efdceb6a438bdb0de7329c31882ab014",
+  "nativeGuestSourceSHA256": "0810f589a3cffe499423204dd1595642140cf284f9114fe6f2dae782bd8af4f3",
+  "nativeOverlaySHA256": "f6f23a0224ea457804aed815fbb17f30cd1b8cf65ba4f17b57087fb962e49314",
+  "nativeFrameSHA256": "7d215d835d719761058b8168c5bacc81375417b18f51b5c21d7d5cfac4dd73a8",
+  "originalAttemptVerdict": "FAILED",
+  "originalAttemptFailure": "bounded_observation_expired_no_retry",
+  "newGuestBootAttempted": false,
+  "newNotificationAttempted": false,
+  "newClientLaunchAttempted": false,
+  "forensicArchiveSHA256": "e9be74d9342a50f5950ae2bc74aab40d52935ecbb23e9313967ade87ab63aeee",
+  "forensicArchiveMembers": 112,
+  "forensicArchivePayloadBytes": 784735,
+  "conversionReceiptSHA256": "17d02e32235448b734fb15c59ffab99f79bc094c5fd008e1d64628eb9ec4f9ba",
+  "extractionReceiptSHA256": "1c07a62f698093cd4c3dfe2065e8041f4971fcb3806adda5ec775e15749e71c9",
+  "partitionSHA256": "e47fa20c841cdfc357daddf2a2604b9d882310dca22637de64df1b0cb710c7d8",
+  "sourceIntegrityPassed": true,
+  "logs": {
+    "client-stderr": {
+      "size": 158426,
+      "SHA256": "f9f171bfbef7318e399b9ec6a04f3d1ac14db31bedcf2f6110988ab94f85f57c"
+    },
+    "server-protocol": {
+      "size": 1549,
+      "SHA256": "fb573c0aedc72591b275f7496613865d6a79ed9a43aad9a03a28311a7cac1aa3"
+    },
+    "mako-stderr": {
+      "size": 8689,
+      "SHA256": "d3bbddd11faf32531f04ad8938c3a95ae3684c25810aa12ebf8a2f02975ca0ba"
+    },
+    "monitor-stdout": {
+      "size": 101136,
+      "SHA256": "3307ddb9d924a6b64d1e7cb208e042319f7039797b5380277cab9214b3dfcb77"
+    }
+  },
+  "clientRequestObserved": true,
+  "ownedTokenSHA256": "77ccddac38bc2a3e3ef6d2dff7415ed3a838ce4f1b3ec675e1e567c87efdf8ef",
+  "ownedTokenRequestCount": 1,
+  "clientObjectIDSeparator": "#",
+  "oldObserverObjectIDSeparator": "@",
+  "selectedPID": 1103,
+  "selectedBirth": 13195,
+  "clientSurface": 36,
+  "serverReplay": {
+    "connection": 2,
+    "pid": 1103,
+    "birth": 13195,
+    "observerPidfd": 20,
+    "surface": 36,
+    "xdgSurface": 44,
+    "toplevel": 45,
+    "surfaceGeneration": 9,
+    "toplevelGeneration": 13,
+    "selectedRecordsSHA256": "7b3dabd7e0295502b338162b479364e9f53a98ced52f88465197197794ea5138",
+    "kernelBound": false,
+    "focusQualified": false
+  },
+  "activationQualified": false,
+  "focusQualified": false,
+  "navigationQualified": false,
+  "fullClientSandboxQualified": false,
+  "retryAllowed": false
+}

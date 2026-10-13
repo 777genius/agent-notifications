@@ -333,7 +333,11 @@ func validTarget(t origin.Target) bool {
 	if n.Capability != "available" {
 		return n.Precision == "none"
 	}
-	return n.Scope != "" && n.Precision == "chat_id" && origin.Text(t.Desktop.ThreadID, 256, true) && origin.Text(t.Desktop.ApplicationPath, 1024, true) && origin.Text(t.Desktop.TeamID, 256, true)
+	binding := origin.Text(t.Desktop.ApplicationPath, 1024, true) && origin.Text(t.Desktop.TeamID, 256, true)
+	if t.Desktop.Linux.SnapshotPath != "" {
+		binding = t.Desktop.Provider == "codex" && origin.Text(t.Desktop.Linux.SnapshotPath, 1024, true) && origin.Text(t.Desktop.Linux.SHA256, 64, true)
+	}
+	return n.Scope != "" && n.Precision == "chat_id" && origin.Text(t.Desktop.ThreadID, 256, true) && binding
 }
 func snapshot(p Policy, t origin.Target) journal.Snapshot {
 	// Only booleans describing the admitted policy, never raw config/metadata.
@@ -345,7 +349,11 @@ func snapshot(p Policy, t origin.Target) journal.Snapshot {
 	if t.Navigation.Capability == "available" {
 		kind = "desktop_thread"
 	}
-	return journal.Snapshot{Target: journal.Target{Kind: kind, ID: t.Desktop.ThreadID, Application: t.Desktop.ApplicationPath, Identity: t.Desktop.TeamID}, Policy: string(b), Navigation: journal.Navigation{Capability: t.Navigation.Capability, Precision: t.Navigation.Precision, Scope: t.Navigation.Scope, Reason: t.Navigation.Reason}}
+	application, identity := t.Desktop.ApplicationPath, t.Desktop.TeamID
+	if t.Desktop.Linux.SnapshotPath != "" {
+		application, identity = t.Desktop.Linux.SnapshotPath, t.Desktop.Linux.SHA256
+	}
+	return journal.Snapshot{Target: journal.Target{Kind: kind, ID: t.Desktop.ThreadID, Application: application, Identity: identity}, Policy: string(b), Navigation: journal.Navigation{Capability: t.Navigation.Capability, Precision: t.Navigation.Precision, Scope: t.Navigation.Scope, Reason: t.Navigation.Reason}}
 }
 func trackingID() (string, error) {
 	var b [32]byte

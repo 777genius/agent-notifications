@@ -1,0 +1,12 @@
+{
+  "scope": "retained_official_archive_executable_member_readonly",
+  "executableSHA256": "207c4fbff7e2fcc1b0789448351ac6eed206206d94c5a0835e5f07c7cd73d6e3",
+  "executableBytes": 319425760,
+  "dpkgArchiveReadExitCode": 0,
+  "tarMemberReadExitCode": 0,
+  "matchesProvisionedExecutableHash": true,
+  "freshWholeArchiveVerification": false,
+  "freshRepositorySignatureVerification": false,
+  "clientLaunchAttempted": false,
+  "navigationQualified": false
+}

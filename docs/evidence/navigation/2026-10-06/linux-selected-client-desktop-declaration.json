@@ -1,0 +1,24 @@
+{
+  "scope": "read-only selected TEST package desktop invocation declaration",
+  "packageSHA256": "637c3c94bc50f8ee33a15e2e28ec7f92a787f0943e700efe111bc0bf0d4813b4",
+  "desktopEntryPath": "/usr/share/applications/chatgpt.desktop",
+  "desktopEntrySHA256": "d65745ebbccb71dcdca03b15c7642d0ca1a07eb75f0b049271cd6dda8272cbc2",
+  "execDeclaration": "chatgpt %U",
+  "startupNotify": true,
+  "declaresCodexSchemeHandler": true,
+  "declaresDBusActivation": false,
+  "launcherLinkPath": "/usr/bin/chatgpt",
+  "launcherLinkTarget": "../lib/chatgpt/codex-launcher",
+  "selectedLauncherPath": "/usr/lib/chatgpt/codex-launcher",
+  "launcherSHA256": "8f983245c6c07070e2cdc480be50ec239e0f18ee36069126649d0692595c86ad",
+  "archiveReaderExitCode": 0,
+  "nativeLaunchPerformed": false,
+  "handoffQualified": false,
+  "activationQualified": false,
+  "navigationQualified": false,
+  "limitations": [
+    "Desktop declaration proves an intended URL argument route, not actual URI acceptance, token forwarding, focus or exact chat selection.",
+    "Missing DBusActivatable declaration does not establish absence of a runtime D-Bus interface.",
+    "Next native qualification must use the selected exact vendor launcher in a fresh signed-out TEST guest; do not resolve a default URL handler or copy user auth."
+  ]
+}

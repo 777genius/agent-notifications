@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/777genius/agent-notifications/internal/agentnotify"
 	notifyruntime "github.com/777genius/agent-notifications/internal/agentnotify/runtime"
 	"github.com/777genius/agent-notifications/internal/notifier"
 )
@@ -162,9 +163,12 @@ func TestAgentNotifyFlags(t *testing.T) {
 func TestAgentNotifyStatusMapping(t *testing.T) {
 	for _, intent := range []bool{false, true} {
 		for _, desktop := range []bool{false, true} {
-			s := agentNotifyStatusValue(notifyruntime.Status{ExplicitIntent: intent, DesktopEnabled: desktop, Configuration: "configured", OfflineCapability: "eligible", Permission: "not_checked"})
+			s := agentNotifyStatusValue(notifyruntime.Status{ExplicitIntent: intent, DesktopEnabled: desktop, Configuration: "configured", OfflineCapability: "eligible", Permission: "not_checked", Navigation: agentnotify.NavigationStatus{Capability: "eligible", Precision: "chat_id", Scope: "local_current_profile", Reason: "configured_codex_desktop"}})
 			if s.Enabled != (intent && desktop) || s.Configuration != "configured" || s.Capability != "eligible" || s.ContextReason != "" {
 				t.Fatalf("%+v", s)
+			}
+			if s.Navigation.Capability != "eligible" || s.Navigation.Precision != "chat_id" || s.Navigation.Scope != "local_current_profile" || s.Navigation.Reason != "configured_codex_desktop" {
+				t.Fatalf("navigation mapping: %+v", s.Navigation)
 			}
 		}
 	}

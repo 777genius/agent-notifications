@@ -32,6 +32,7 @@ var (
 type Status string
 
 const (
+	StatusAgentStopping       Status = "agent_stopping"
 	StatusTaskComplete        Status = "task_complete"
 	StatusReviewComplete      Status = "review_complete"
 	StatusQuestion            Status = "question"

@@ -28,7 +28,7 @@ preview Hero
 
 ### For Claude
 
-The setup wizard command (`commands/setup-notifications.md`) contains detailed instructions for Claude to:
+The setup wizard command (`commands/settings.md`) contains detailed instructions for Claude to:
 
 1. **Detect preview requests** - Parse user messages for keywords (play, preview, прослушать, проиграть)
 2. **Extract sound name** - Get the sound name from the user's message
@@ -123,7 +123,7 @@ Try: 'play Glass' or 'preview task-complete'"
 ### Complete Setup Flow
 
 ```
-User: /setup-notifications
+User: /claude-notifications-go:settings
 
 Claude: [detects system, lists available sounds]
 
@@ -236,7 +236,7 @@ Potential improvements:
 
 ## Related Files
 
-- **Setup command:** `commands/setup-notifications.md`
+- **Setup command:** `commands/settings.md`
 - **Sound preview tool:** `cmd/sound-preview/main.go`
 - **Built-in sounds:** `sounds/`
 - **Config file:** the shared file selected by `config path` (create-only initialization; subsequent edits use revision checks)

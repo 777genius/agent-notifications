@@ -1,0 +1,53 @@
+name: Navigation Linux portal owner fence native TEST
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/navigation-linux-portal-owner-fence.yml'
+      - 'tests/integration/navigation_linux_portal_owner_fence_ci.ts'
+      - 'scripts/navigation-linux-portal-callback-probe.py'
+      - 'tests/integration/navigation_linux_portal_test_app.py'
+      - 'tests/integration/navigation-linux-portal.Dockerfile'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  owner-fence:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      NAVIGATION_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: '24.21.0'
+      - name: Exact source and locked strict tooling
+        run: |
+          test "$(git rev-parse HEAD)" = "$NAVIGATION_SOURCE_SHA"
+          npm ci --prefix opencode-plugin --ignore-scripts --no-audit --no-fund
+          ./opencode-plugin/node_modules/.bin/tsc --ignoreConfig --noEmit --strict --target ES2023 --module ESNext --moduleResolution bundler --types node --typeRoots ./opencode-plugin/node_modules/@types tests/integration/navigation_linux_portal_owner_fence_ci.ts
+      - name: One owned native restart fence and genuine B recovery
+        id: probe
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NAVIGATION_LINUX_OWNER_FENCE_CI: '1'
+        run: node --experimental-strip-types tests/integration/navigation_linux_portal_owner_fence_ci.ts --execute-one-owner-fence-test
+      - name: Preserve only bounded owned TEST evidence and public source inputs
+        if: always() && steps.probe.outputs.evidence_root != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: navigation-linux-owner-fence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ steps.probe.outputs.evidence_root }}/.owned-test-root
+            ${{ steps.probe.outputs.evidence_root }}/*.json
+            ${{ steps.probe.outputs.evidence_root }}/*.stdout
+            ${{ steps.probe.outputs.evidence_root }}/*.stderr
+            ${{ steps.probe.outputs.evidence_root }}/portal-source.tar.xz
+            ${{ steps.probe.outputs.evidence_root }}/publisher-checksum.txt
+            ${{ steps.probe.outputs.evidence_root }}/native/**
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 14

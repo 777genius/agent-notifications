@@ -1,0 +1,56 @@
+{
+  "scope": "restricted_TEST_user_namespace_prerequisite",
+  "nativeResult": {
+    "scope": "restricted_TEST_user_namespace_prerequisite",
+    "cloneNewUserReturned": false,
+    "cloneErrno": 1,
+    "childCollected": false,
+    "timedOut": false,
+    "waitErrno": 0,
+    "killErrno": 0,
+    "namespacePrerequisitePassed": false,
+    "clientSandboxQualified": false,
+    "notificationAttempted": false,
+    "applicationLaunchAttempted": false
+  },
+  "nativeExitCode": 1,
+  "sourceSHA256": "0abaac9575d40c0df5edaaa160cb9336ce5131bfb49eba0ee06f0e945ae2f894",
+  "binarySHA256": "669c1924fae0d6e54f14d1b4f04ee8680a67628afb52b17219a4560d18e18f1b",
+  "sourceUnchanged": true,
+  "rawResultSHA256": "2ae5cc2b94848d48a4e32653b3578c0d4cb371dfa966bfc29ff465c11b6462da",
+  "archiveSHA256": "0186f53639a530ca73c4202bcb18dfa1ce5399648f14c3678fdc273c5f67b315",
+  "operatorSHA256": "697e8a3720a4d387859d888997cf99164b0372e469e5b7f4b0f12f3dc3130af8",
+  "runtimeBoundary": {
+    "uid": 1000,
+    "noNewPrivileges": true,
+    "seccompMode": 2,
+    "seccompOverride": false,
+    "capDrop": [
+      "ALL"
+    ],
+    "privileged": false,
+    "network": "none",
+    "init": true,
+    "pidsLimit": 32,
+    "memoryBytes": 268435456,
+    "cpus": 1,
+    "mountCount": 1,
+    "mountScope": "new_owned_TEST_evidence_only"
+  },
+  "compileFlags": [
+    "-std=c11",
+    "-Wall",
+    "-Wextra",
+    "-Werror"
+  ],
+  "compileCompleted": true,
+  "stderrEmpty": true,
+  "ownContainerRemoved": true,
+  "freshAbsenceByIDAndName": true,
+  "notificationAttempted": false,
+  "applicationLaunchAttempted": false,
+  "clientSandboxQualified": false,
+  "navigationQualified": false,
+  "causeAttributedToSeccompAlone": false,
+  "qualifiedTestImageSHA256": "3bdd7af82838b41198d1286cce85ed6ca0fc13721609feef70513404c29fd271"
+}

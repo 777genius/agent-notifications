@@ -13,11 +13,25 @@ import (
 	"strings"
 
 	"github.com/777genius/agent-notifications/internal/config"
+	"github.com/777genius/agent-notifications/internal/installruntime"
 )
 
 // installerConfigCommand keeps shell adapters out of JSON parsing and escaping.
 // Success is an exit-code contract, not a substring search of JSON output.
 func installerConfigCommand(args []string, out, stderr io.Writer) int {
+	if len(args) == 2 && args[0] == "runtime-root" {
+		if !filepath.IsAbs(args[1]) {
+			return 1
+		}
+		ledger, recovery, err := installruntime.ReadOwnership(args[1])
+		if err != nil || recovery || ledger.ID == "" || !filepath.IsAbs(ledger.RuntimeRoot) {
+			return 1
+		}
+		if _, err := fmt.Fprintln(out, ledger.RuntimeRoot); err != nil {
+			return 1
+		}
+		return 0
+	}
 	if len(args) == 3 && args[0] == "marketplace" {
 		data, err := os.ReadFile(args[1])
 		if err != nil {

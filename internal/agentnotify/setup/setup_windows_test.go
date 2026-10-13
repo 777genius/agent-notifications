@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -77,6 +78,27 @@ func windowsNoneFixture(t *testing.T) (Options, Request) {
 	windowsWrite(t, o.GlobalConfig, `{"foreign":{"keep":true},"notifications":{"desktop":{"enabled":false,"sound":false,"clickToFocus":false}}}`)
 	enabled := true
 	return o, Request{ExpectedGeneration: l.Generation, Enabled: &enabled, Route: &Route{}}
+}
+
+func windowsGrantEveryoneReadExecute(t *testing.T, path string) {
+	t.Helper()
+	output, err := exec.Command("icacls", path, "/grant", "*S-1-1-0:(OI)(CI)(RX)").CombinedOutput()
+	if err != nil {
+		t.Fatalf("grant inherited read/execute ACE: %v: %s", err, output)
+	}
+}
+
+func TestWindowsNoneSetupWithInheritedReadOnlyACE(t *testing.T) {
+	o, r := windowsNoneFixture(t)
+	windowsGrantEveryoneReadExecute(t, o.ControlRoot)
+	if _, err := Apply(windowsContext(t), o, r); err != nil {
+		t.Fatalf("setup rejected foreign read-only ACE: %v", err)
+	}
+	journalRoot := filepath.Join(o.ControlRoot, "state", "journal")
+	windowsGrantEveryoneReadExecute(t, journalRoot)
+	if _, err := journal.Open(windowsContext(t), journal.Options{Root: journalRoot, Clock: o.JournalClock}); err != nil {
+		t.Fatalf("journal rejected foreign read-only ACE: %v", err)
+	}
 }
 
 func TestWindowsNoneSetupProvisionsJournalWithoutNative(t *testing.T) {

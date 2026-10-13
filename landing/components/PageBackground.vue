@@ -1,44 +1,61 @@
 <script setup lang="ts">
 const root = ref<HTMLElement>();
-const reduced = ref(false);
 let media: MediaQueryList | undefined;
+let surface: HTMLElement | undefined;
 let frame: number | undefined;
+let pointerX = 0;
+let pointerY = 0;
 
-function reset() {
-  root.value?.style.setProperty("--parallax-x", "0px");
-  root.value?.style.setProperty("--parallax-y", "0px");
+function paint() {
+  frame = undefined;
+  const reduced = media?.matches ?? false;
+  root.value?.style.setProperty("--parallax-x", `${reduced ? 0 : pointerX}px`);
+  root.value?.style.setProperty("--parallax-y", `${reduced ? 0 : pointerY}px`);
+  root.value?.style.setProperty("--scroll-shift", `${reduced ? 0 : window.scrollY * 0.14}px`);
+}
+
+function schedule() {
+  if (frame === undefined) frame = requestAnimationFrame(paint);
 }
 
 function updatePreference() {
-  reduced.value = media?.matches ?? false;
-  if (reduced.value) reset();
+  pointerX = 0;
+  pointerY = 0;
+  schedule();
 }
 
 function move(event: PointerEvent) {
-  const hero = root.value?.parentElement;
-  if (reduced.value || !hero) return;
-  const bounds = hero.getBoundingClientRect();
-  const x = ((event.clientX - bounds.left) / bounds.width - 0.5) * 2;
-  const y = ((event.clientY - bounds.top) / bounds.height - 0.5) * 2;
-  cancelAnimationFrame(frame ?? 0);
-  frame = requestAnimationFrame(() => {
-    root.value?.style.setProperty("--parallax-x", `${Math.round(x * 14)}px`);
-    root.value?.style.setProperty("--parallax-y", `${Math.round(y * 10)}px`);
-  });
+  if (media?.matches || event.pointerType !== "mouse") return;
+  pointerX = Math.round((event.clientX / window.innerWidth - 0.5) * 96);
+  pointerY = Math.round((event.clientY / window.innerHeight - 0.5) * 64);
+  schedule();
+}
+
+function resetPointer() {
+  pointerX = 0;
+  pointerY = 0;
+  schedule();
+}
+
+function scroll() {
+  if (!media?.matches) schedule();
 }
 
 onMounted(() => {
   media = matchMedia("(prefers-reduced-motion: reduce)");
+  surface = root.value?.parentElement ?? undefined;
   updatePreference();
   media.addEventListener("change", updatePreference);
-  root.value?.parentElement?.addEventListener("pointermove", move);
-  root.value?.parentElement?.addEventListener("pointerleave", reset);
+  surface?.addEventListener("pointermove", move, { passive: true });
+  surface?.addEventListener("pointerleave", resetPointer);
+  window.addEventListener("scroll", scroll, { passive: true });
 });
 onUnmounted(() => {
   media?.removeEventListener("change", updatePreference);
-  root.value?.parentElement?.removeEventListener("pointermove", move);
-  root.value?.parentElement?.removeEventListener("pointerleave", reset);
-  cancelAnimationFrame(frame ?? 0);
+  surface?.removeEventListener("pointermove", move);
+  surface?.removeEventListener("pointerleave", resetPointer);
+  window.removeEventListener("scroll", scroll);
+  if (frame !== undefined) cancelAnimationFrame(frame);
 });
 </script>
 
@@ -61,11 +78,11 @@ onUnmounted(() => {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  z-index: 0;
+  z-index: -1;
   overflow: hidden;
   --parallax-x: 0px;
   --parallax-y: 0px;
-  transition: --parallax-x 160ms ease-out, --parallax-y 160ms ease-out;
+  --scroll-shift: 0px;
 }
 
 /* Grid overlay */
@@ -77,7 +94,9 @@ onUnmounted(() => {
     linear-gradient(90deg, rgba(0, 240, 255, 0.03) 1px, transparent 1px);
   background-size: 60px 60px;
   z-index: 1;
-  transform: translate3d(calc(var(--parallax-x) * -0.35), calc(var(--parallax-y) * -0.35), 0);
+  background-position: calc(var(--parallax-x) * -0.55)
+    calc(var(--parallax-y) * -0.55 + var(--scroll-shift) * 0.45);
+  transition: background-position 180ms ease-out;
 }
 
 /* Scanline effect */
@@ -99,6 +118,8 @@ onUnmounted(() => {
   border-radius: 50%;
   filter: blur(140px);
   opacity: 0.08;
+  translate: var(--parallax-x) calc(var(--parallax-y) + var(--scroll-shift) * var(--depth, 1));
+  transition: translate 220ms ease-out;
 }
 
 .page-bg__orb--1 {
@@ -114,6 +135,7 @@ onUnmounted(() => {
   width: 700px;
   height: 700px;
   background: #ff00ff;
+  --depth: 0.65;
   top: 300px;
   left: -200px;
   animation: orbDrift2 25s ease-in-out infinite;
@@ -133,6 +155,7 @@ onUnmounted(() => {
   width: 700px;
   height: 700px;
   background: #00f0ff;
+  --depth: 0.7;
   top: 2100px;
   left: -150px;
   opacity: 0.06;
@@ -153,6 +176,7 @@ onUnmounted(() => {
   width: 700px;
   height: 700px;
   background: #ffd700;
+  --depth: 0.6;
   top: 3600px;
   left: -100px;
   opacity: 0.04;
@@ -172,26 +196,27 @@ onUnmounted(() => {
 @keyframes orbDrift1 {
   0%,
   100% {
-    transform: translate(var(--parallax-x), var(--parallax-y));
+    transform: translate(0, 0);
   }
   50% {
-    transform: translate(calc(var(--parallax-x) - 30px), calc(var(--parallax-y) + 20px));
+    transform: translate(-30px, 20px);
   }
 }
 
 @keyframes orbDrift2 {
   0%,
   100% {
-    transform: translate(var(--parallax-x), var(--parallax-y));
+    transform: translate(0, 0);
   }
   50% {
-    transform: translate(calc(var(--parallax-x) + 25px), calc(var(--parallax-y) - 15px));
+    transform: translate(25px, -15px);
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .page-bg__orb {
     animation: none !important;
+    translate: none;
   }
 }
 </style>

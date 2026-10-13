@@ -1,0 +1,89 @@
+{
+  "scope": "offline_selected_client_renderer_preflight",
+  "status": "passed",
+  "sourceCommit": "f1e5f214ae32d543c25e1ff3220a1292bfc4450d",
+  "nativeSourceSHA256": "75e4497a5cb86bc29f3f3ee9b4069298748990f6e3e4f149bd46d15f0b15361b",
+  "guestSourceSHA256": "dd5c4b86cebe8acf56028381acac2fe823b1f1fe7b4870ab26dcf1a7378fedc4",
+  "operatorSourceSHA256": "f8dfe3a1446a6b468bbf25b8b3527dfe26abe012c830d95f17ac8b33e9f9d276",
+  "observedRendererRestrictionsQualified": true,
+  "rendererCount": 2,
+  "rendererObservations": [
+    {
+      "pid": 1321,
+      "startTicks": "13381",
+      "executable": "/usr/lib/chatgpt/ChatGPT",
+      "executableDevice": 64769,
+      "executableInode": "277352",
+      "status": {
+        "CapEff": "0000000000000000",
+        "Gid": "1000\t1000\t1000\t1000",
+        "NSpid": "1321\t12\t1",
+        "NoNewPrivs": "1",
+        "Seccomp": "2",
+        "Seccomp_filters": "1",
+        "Uid": "1000\t1000\t1000\t1000"
+      },
+      "namespaces": {
+        "mnt": "mnt:[4026531841]",
+        "net": "net:[4026532207]",
+        "pid": "pid:[4026532264]",
+        "user": "user:[4026532203]"
+      },
+      "appArmor": "chatgpt (unconfined)"
+    },
+    {
+      "pid": 1322,
+      "startTicks": "13381",
+      "executable": "/usr/lib/chatgpt/ChatGPT",
+      "executableDevice": 64769,
+      "executableInode": "277352",
+      "status": {
+        "CapEff": "0000000000000000",
+        "Gid": "1000\t1000\t1000\t1000",
+        "NSpid": "1322\t13\t1",
+        "NoNewPrivs": "1",
+        "Seccomp": "2",
+        "Seccomp_filters": "1",
+        "Uid": "1000\t1000\t1000\t1000"
+      },
+      "namespaces": {
+        "mnt": "mnt:[4026531841]",
+        "net": "net:[4026532207]",
+        "pid": "pid:[4026532265]",
+        "user": "user:[4026532203]"
+      },
+      "appArmor": "chatgpt (unconfined)"
+    }
+  ],
+  "repeatedRendererSnapshotsRetained": 2,
+  "trackedProcessCount": 16,
+  "allTrackedKernelExitsObserved": true,
+  "guestCleanupPassed": true,
+  "guestPoweroffObserved": true,
+  "qemuExitCode": 0,
+  "qemuCollected": true,
+  "operatorReportedContainerRemoved": true,
+  "operatorReportedIntegrityErrors": [],
+  "qualification": {
+    "clientSandboxQualified": false,
+    "renderedClientQualified": false,
+    "focusQualified": false,
+    "navigationQualified": false,
+    "notificationAttempted": false
+  },
+  "rawArtifactHashes": {
+    "qmp-wire.jsonl": "33dd4cf353f94ad56bf30d4cd9a72cbef7c47d1edbc6f2079923f915ead854a8",
+    "operator-result.json": "978aec34dc8d5be3d5eb990c19b399a0a055ec70312e2975efba6c99def7afe1",
+    "native-evidence.json": "9815f2c46a5da862e0590812febd1237415c449b4a2c3b4829455886c468eb3b",
+    "serial.log": "4aad0f9ea91ab5e70b2c714fc49d7077b090b4021ea10c31c36a0949c7c25f7b",
+    "guest-result.json": "3142c3d2d83b1cd5881eb1ff121a68b06b3b106ff587e709b6f321f943427aca",
+    "qemu.stderr": "bd6f58aaaa8f619404e54ef5b9ec685c695247cc29df958783055a4aa511b6b6",
+    "before_boot_identity.stdout": "f4c9520af7ee8811e7e19f94e77858703c756ef6e6b7f142bb84ad87f864436d"
+  },
+  "limitations": [
+    "This is one controlled offline TEST launch, not a distribution-wide sandbox guarantee.",
+    "No visible UI, focus, chat navigation or notification behavior qualified.",
+    "Frozen images retained on host, not transferred; input integrity and container cleanup are operator-reported.",
+    "Success with increased thread budget does not alone prove the earlier failure cause."
+  ]
+}

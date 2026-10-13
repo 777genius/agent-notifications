@@ -3,6 +3,7 @@ package daemon
 import (
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/777genius/agent-notifications/internal/warpfocus"
@@ -67,6 +68,11 @@ func GetDesktopEntryID(terminalName string) string {
 func GetNotificationDesktopEntryID(terminalName string) string {
 	if isGnomeWaylandSession() && hasClaudeNotificationsDesktopEntry() {
 		return claudeNotificationsDesktopEntryID
+	}
+	if isJetBrainsTerminalName(terminalName) {
+		if id := jetBrainsDesktopEntryID(terminalName); id != "" {
+			return id
+		}
 	}
 	return GetDesktopEntryID(terminalName)
 }
@@ -233,8 +239,12 @@ func GetSearchTerm(terminalName string) string {
 }
 
 // GetSearchTermWithFolder returns the window title search term, using the project
-// folder name for VS Code when available (more specific than "Visual Studio Code").
+// folder name for VS Code and JetBrains IDEs when available (more specific than
+// the app name).
 func GetSearchTermWithFolder(terminalName, folderName string) string {
+	if folderName != "" && isJetBrainsTerminalName(terminalName) {
+		return folderName
+	}
 	switch strings.ToLower(terminalName) {
 	case "code", "vscode", "visual studio code":
 		if folderName != "" {
@@ -244,8 +254,53 @@ func GetSearchTermWithFolder(terminalName, folderName string) string {
 	return GetSearchTerm(terminalName)
 }
 
+// GetFocusFolderName returns the folder name used to pick this session's window
+// by title. JetBrains IDEs title windows by project, which may enclose cwd or be
+// renamed in .idea/.name; everything else uses the cwd base name.
+func GetFocusFolderName(terminalName, cwd string) string {
+	if cwd == "" {
+		return ""
+	}
+	if isJetBrainsTerminalName(terminalName) {
+		if project, _ := jetBrainsProject(cwd); project != "" {
+			return project
+		}
+	}
+	return filepath.Base(cwd)
+}
+
+// GetFocusIDEPID returns the PID of the JetBrains IDE running this session
+// when it is terminalName, which tells its windows apart from those of another
+// process of the same IDE. It is 0 otherwise.
+func GetFocusIDEPID(terminalName string) int {
+	if !isJetBrainsTerminalName(terminalName) {
+		return 0
+	}
+	if class, pid, ok := DetectJetBrainsIDE(); ok && class == terminalName {
+		return pid
+	}
+	return 0
+}
+
+// GetFocusProjectPath returns the JetBrains project root for cwd, which tells
+// apart open projects with the same name. It is "" for other terminals.
+func GetFocusProjectPath(terminalName, cwd string) string {
+	if cwd == "" || !isJetBrainsTerminalName(terminalName) {
+		return ""
+	}
+	_, root := jetBrainsProject(cwd)
+	return root
+}
+
 // GetTerminalName detects the current terminal from environment variables.
 func GetTerminalName() string {
+	// JetBrains IDE terminals set no TERM_PROGRAM, so a TERM_PROGRAM or KONSOLE_*
+	// value seen in one was inherited from whatever launched the IDE. Detect the
+	// IDE before those checks; the ancestry walk rejects terminals started from it.
+	if class, _, ok := DetectJetBrainsIDE(); ok {
+		return class
+	}
+
 	// Try TERM_PROGRAM first (set by many terminals). Skip an inherited
 	// WarpTerminal value when this process is Cursor/VS Code/etc.
 	if termProg := os.Getenv("TERM_PROGRAM"); termProg != "" {
@@ -291,7 +346,12 @@ func GetTerminalName() string {
 
 // GetX11WindowID returns the current terminal window's X11 window ID when available.
 // It is captured in the hook process and later used by the daemon for exact focus on X11.
-func GetX11WindowID() string {
+// JetBrains terminals have no X11 window of their own: a $WINDOWID there was
+// inherited from whatever launched the IDE, so it is ignored.
+func GetX11WindowID(terminalName string) string {
+	if isJetBrainsTerminalName(terminalName) {
+		return ""
+	}
 	return strings.TrimSpace(os.Getenv("WINDOWID"))
 }
 

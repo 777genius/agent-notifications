@@ -12,42 +12,46 @@ runtime copy. Then start Codex and approve the entries in `/hooks`.
 
 ### Manual Codex registration
 
-Skip this section if you used the one-command installer. For manual setup, download a
-matching release bundle and binary (v1.42.0 or newer). The Go registration command needs
-no `jq` and is not automatically added to your `PATH`.
+Skip this section if you used the one-command installer. For manual setup, download and extract the source bundle for the release selected by your [platform channel](PLATFORM_RELEASE_CHANNELS.md). Download that same release's native executable for your OS/architecture, verify it against `checksums.txt`, and place it in the bundle's `bin/` directory under its published asset name. Use matching source and binaries, not source from `main` with an older release binary.
 
-From the bundle directory:
+Invoke that executable directly. The source archive's launcher symlinks can point to a different platform, and Windows `.bat` launchers are created during setup. For example, from the extracted bundle directory on Linux amd64:
 
 ```bash
-./bin/agent-notifications setup-codex --plugin-root .
+chmod +x bin/claude-notifications-linux-amd64
+./bin/claude-notifications-linux-amd64 setup-codex --plugin-root .
 ```
 
-On Windows, run the installed primary launcher in PowerShell (the downloaded
-`claude-notifications-windows-amd64.exe` remains compatible):
+For Linux arm64 or macOS, substitute the matching published filename (`claude-notifications-linux-arm64`, `claude-notifications-darwin-amd64` or `claude-notifications-darwin-arm64`). For macOS desktop delivery, also verify and extract the same release's `ClaudeNotifier.app.zip` into `bin/`, retaining both `ClaudeNotifier.app` and its `ClaudeNotifier.app.managed-runtime.json` sidecar. The [public installer](INSTALLATION.md#quick-install-recommended) handles this acquisition automatically.
+
+On Windows, run the matching downloaded executable from the bundle directory in PowerShell:
 
 ```powershell
-.\bin\agent-notifications.bat setup-codex --plugin-root .
+.\bin\claude-notifications-windows-amd64.exe setup-codex --plugin-root .
 ```
 
-Run these commands in the bundle directory. If you have explicitly added the binary to
-`PATH`, `agent-notifications setup-codex --plugin-root <bundle-directory>` also works.
+The Go registration command needs no `jq`. It creates platform launchers in the installed runtime but does not add them to `PATH`.
 
 It installs a self-contained copy of the plugin at `~/.codex/claude-notifications-go` and writes
-the hook entries into `~/.codex/hooks.json`. Existing foreign hook definitions and unknown fields are preserved,
+the hook entries into `~/.codex/hooks.json`. Agent-initiated notify (MCP) is enabled by default
+with `--navigation none --allow-unknown-caller true --allow-caller-asserted false`.
+Pass `--skip-agent-notify` for hooks only. Existing foreign hook definitions and unknown fields are preserved,
 and every run saves a uniquely named backup of the previous file next to it.
 
-Then start Codex, run `/hooks`, review the entries and trust them.
+Then start Codex, run `/hooks`, review the entries and trust them. Open a new session so MCP
+can start. The manual compatibility path may list `agent_notifications`; the portable public
+installer uses `agent-notify`.
 
 Useful flags: `--dry-run` shows what would change, `--print` outputs the JSON so you can merge it
-yourself, `--codex-home` and `--plugin-root` override the paths.
+yourself, `--codex-home` and `--plugin-root` override the paths, and `--skip-agent-notify`
+skips MCP registration. If agent-notify setup fails, hook registration remains in place.
 
 For manual updates, run the registration command again to refresh the installed copy.
 Unchanged hook definitions retain trust; changed definitions require review again.
 The one-command installer handles this registration step automatically.
 
-Claude Code installation and updates continue to use the [existing installation steps](INSTALLATION.md).
+Claude installation and updates continue to use the [existing installation steps](INSTALLATION.md).
 Both products share settings at the shared file selected by `config path`; installing
-Codex does not require installing Claude Code. Keep your existing settings file when updating.
+Codex does not require installing Claude. Keep your existing settings file when updating.
 
 <details>
 <summary>How registration works</summary>
@@ -71,9 +75,10 @@ What works today:
   reports map to the API Error / Session Limit statuses, a trailing question mark maps to
   Question, otherwise Task Complete. The Codex rollout transcript is not parsed (it is an
   internal, unstable format).
-- **Question payloads** - when Codex emits `PreToolUse` for `request_user_input`,
+- **Question payloads (experimental)** - if Codex emits `PreToolUse` for `request_user_input`,
   the plugin delivers the question/header text. Options, ids, and secret fields are excluded.
-  Delivery depends on the active Codex mode exposing this tool hook.
+  Live firing of this tool hook is not yet qualified; do not rely on it for every
+  question. Delivery also depends on the active Codex mode exposing the tool.
 - **PermissionRequest** - Codex is waiting for your approval of a tool call; delivered as the
   time-sensitive Permission Request status. Only the tool name is shown, never the tool input.
 - **SubagentStop** (opt-in) - with `notifyOnSubagentStop: true` and `suppressForSubagents: false`,
@@ -86,6 +91,7 @@ Known limitations:
 - The error statuses for Codex come from a text heuristic over the final message (short messages
   with failure phrasing), not from structured error data - false negatives are possible.
 - The `request_user_input` question hook is limited to the modes where Codex exposes that tool.
+- Native Windows hook-chain checks passed for the [v1.47.0 prerelease](https://github.com/777genius/agent-notifications/releases/tag/v1.47.0); those checks do not establish visible desktop banners or sounds.
 - Codex hooks require a trust review (`/hooks` inside Codex); changed definitions require review again.
 
 Both products share one config file (the shared file selected by `config path`).

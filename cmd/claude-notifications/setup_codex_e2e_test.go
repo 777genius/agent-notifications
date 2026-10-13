@@ -400,7 +400,7 @@ func TestSetupCodexE2EConfigureNotifications(t *testing.T) {
 		t.Fatal(err)
 	}
 	e2eWrite(t, filepath.Join(f.bundle, "config", "config.json"), []byte(`{"notifications":{"desktop":{"enabled":false,"sound":false,"clickToFocus":false}}}`))
-	e2eWrite(t, filepath.Join(f.bundle, "skills", "agent-notify", "SKILL.md"), []byte("canonical test skill"))
+	e2eWrite(t, filepath.Join(f.bundle, "skills", "agent-notifications", "SKILL.md"), []byte("canonical test skill"))
 	if runtime.GOOS == "darwin" {
 		installerNativeFixture(t, filepath.Join(f.bundle, "bin"))
 	}
@@ -437,7 +437,7 @@ func TestSetupCodexE2EConfigureNotifications(t *testing.T) {
 	if !strings.Contains(raw, command) || strings.Contains(raw, source) {
 		t.Fatalf("configure command is not the committed runtime: %s", raw)
 	}
-	if string(e2eRead(t, filepath.Join(f.home, ".codex", "skills", "agent-notify", "SKILL.md"))) != "canonical test skill" {
+	if string(e2eRead(t, filepath.Join(f.home, ".codex", "skills", "agent-notifications", "SKILL.md"))) != "canonical test skill" {
 		t.Fatal("skill missing after source bundle removal")
 	}
 }

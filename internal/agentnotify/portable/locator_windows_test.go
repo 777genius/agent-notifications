@@ -93,6 +93,23 @@ func TestWindowsPublishAcquireRevoke(t *testing.T) {
 	}
 }
 
+func TestWindowsReadLocatorForRecoveryDistinguishesAbsent(t *testing.T) {
+	b := windowsPortableFixture(t)
+	name, err := Publish(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, found, err := ReadLocatorForRecovery(b.DataRoot, name); err != nil || !found || got != b {
+		t.Fatalf("published locator rejected: %+v %v %v", got, found, err)
+	}
+	if err := RevokeLocator(b); err != nil {
+		t.Fatal(err)
+	}
+	if _, found, err := ReadLocatorForRecovery(b.DataRoot, name); err != nil || found {
+		t.Fatalf("absent locator not distinguished: %v %v", found, err)
+	}
+}
+
 func TestWindowsPublishConflict(t *testing.T) {
 	b := windowsPortableFixture(t)
 	name, err := Publish(b)

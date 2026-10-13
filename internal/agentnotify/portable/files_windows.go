@@ -36,7 +36,10 @@ func readPrivate(parent, name string) ([]byte, error) {
 		return nil, ErrInvalid
 	}
 	data, id, err := installruntime.ReadConfinedDocument(filepath.Join(resolved, name), MaxBytes)
-	if err != nil || !id.Exists {
+	if os.IsNotExist(err) || (err == nil && !id.Exists) {
+		return nil, os.ErrNotExist
+	}
+	if err != nil {
 		return nil, ErrInvalid
 	}
 	return data, nil

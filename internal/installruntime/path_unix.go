@@ -4,6 +4,7 @@ package installruntime
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -94,11 +95,11 @@ func anchoredFingerprint(parent *os.File, name string) (Identity, error) {
 	if !info.Mode().IsRegular() {
 		return Identity{}, fmt.Errorf("non-regular managed file: %s", name)
 	}
-	data, err := io.ReadAll(f)
-	if err != nil {
+	hash := sha256.New()
+	if _, err := io.Copy(hash, f); err != nil {
 		return Identity{}, err
 	}
-	return identity(data, uint32(info.Mode().Perm())), nil
+	return Identity{Exists: true, SHA256: hex.EncodeToString(hash.Sum(nil)), Mode: identityMode(uint32(info.Mode().Perm()))}, nil
 }
 func safeFingerprint(path string) (Identity, error) {
 	parent, _, err := anchoredParent(path, false)
@@ -206,7 +207,11 @@ func safeRemoveDirectory(path, want string, anchors []PathAnchor) error {
 	if err != nil {
 		return err
 	}
-	if st.Mode&unix.S_IFMT != unix.S_IFDIR || fmt.Sprintf("%d:%d", st.Dev, st.Ino) != want {
+	var parentStat unix.Stat_t
+	if err := unix.Fstat(int(parent.Fd()), &parentStat); err != nil {
+		return err
+	}
+	if st.Mode&unix.S_IFMT != unix.S_IFDIR || !MatchPersistedDirectory(want, fmt.Sprintf("%d:%d", st.Dev, st.Ino), fmt.Sprintf("%d", parentStat.Dev)) {
 		return fmt.Errorf("purge directory replaced: %s", path)
 	}
 	if err = unix.Unlinkat(int(parent.Fd()), filepath.Base(path), unix.AT_REMOVEDIR); err != nil {

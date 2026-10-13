@@ -23,8 +23,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/adapters/directoryidentity"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/adapters/dirswap"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/adapters/profileauthority"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients/codex"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients/vscode"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/domain"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/vscodelocalhooks"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/ports"
 
 	"github.com/777genius/agent-notifications/install/uapinstaller"
@@ -33,7 +39,9 @@ import (
 	"github.com/777genius/agent-notifications/internal/agentnotify/portableasset"
 	"github.com/777genius/agent-notifications/internal/agentnotify/portablesetup"
 	"github.com/777genius/agent-notifications/internal/agentnotify/registration"
+	"github.com/777genius/agent-notifications/internal/codexsetup"
 	"github.com/777genius/agent-notifications/internal/config"
+	"github.com/777genius/agent-notifications/internal/cursorinstall"
 	"github.com/777genius/agent-notifications/internal/installruntime"
 	"github.com/777genius/agent-notifications/internal/testenv"
 )
@@ -56,7 +64,11 @@ func main() { json.NewEncoder(os.Stdout).Encode(map[string]any{"ok": true}) }
 		t.Fatal(err)
 	}
 	out := filepath.Join(dir, "probe")
-	cmd := exec.Command("go", "build", "-o", out, src)
+	compiler, err := exec.LookPath("go")
+	if err != nil {
+		t.Fatalf("locate TEST Go compiler: %v", err)
+	}
+	cmd := exec.Command(compiler, "build", "-o", out, src)
 	cmd.Env = append(os.Environ(), "GOTOOLCHAIN=local")
 	if body, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("build probe: %s %v", body, err)
@@ -71,10 +83,10 @@ func writePackage(t *testing.T, root, probe string) {
 		t.Fatal(err)
 	}
 	files := map[string][]byte{
-		"plugin.json":                  []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent-notify","version":"1.0.0"}`),
-		"mcp.json":                     []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/mcp.schema.json","mcpServers":{"agent-notify":{"type":"stdio","command":"./bin/probe","args":[],"env":{}}}}`),
-		"skills/agent-notify/SKILL.md": []byte("---\nname: agent-notify\ndescription: Wizard fixture\n---\n"),
-		"bin/probe":                    body,
+		"plugin.json":                         []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent-notify","version":"1.0.0"}`),
+		"mcp.json":                            []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/mcp.schema.json","mcpServers":{"agent-notify":{"type":"stdio","command":"./bin/probe","args":[],"env":{}}}}`),
+		"skills/agent-notifications/SKILL.md": []byte("---\nname: agent-notifications\ndescription: Wizard fixture\n---\n"),
+		"bin/probe":                           body,
 	}
 	for rel, data := range files {
 		path := filepath.Join(root, rel)
@@ -466,7 +478,7 @@ func TestWizardDefaultGlobalConfigUsesCanonicalResolverBeforePublishing(t *testi
 
 func TestWizardPendingIntentFreezesGlobalConfigBeforeFirstPortableConsumer(t *testing.T) {
 	ctx := testCtx(t)
-	control, runtimeRoot, _, helper, _ := managedRuntime(t)
+	control, runtimeRoot, _, helper, gen := managedRuntime(t)
 	installationID := "00000000-0000-4000-8000-000000000145"
 	frozen := filepath.Join(filepath.Dir(control), "frozen", "config.json")
 	changed := filepath.Join(filepath.Dir(control), "changed", "config.json")
@@ -476,7 +488,8 @@ func TestWizardPendingIntentFreezesGlobalConfigBeforeFirstPortableConsumer(t *te
 	}
 	_, _, err := (portablesetup.Service{}).PublishConfirmedIntent(ctx, portablesetup.ConfirmedIntent{
 		ControlRoot: control, RuntimeRoot: runtimeRoot, Owner: "existing-installer",
-		Action: "install", GlobalConfig: frozen,
+		ExpectedGeneration: gen,
+		Action:             "install", GlobalConfig: frozen,
 		Targets: []portablesetup.IntentTarget{{Client: "codex", InstallationID: installationID, Units: []string{"agent-notify"}}},
 	})
 	if err != nil {
@@ -659,7 +672,7 @@ func TestReplaceMigratedBindingCleansOldLocatorAfterConsumerRevoke(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	snap, err = publishWizardIntent(ctx, plan.Request, snap, runtimeRoot, nil, []portable.Integration{portable.Codex}, true)
+	snap, _, err = publishWizardIntent(ctx, plan.Request, snap, runtimeRoot, nil, []portable.Integration{portable.Codex}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1501,6 +1514,78 @@ func TestWizardInstallRecoversPendingJournal(t *testing.T) {
 	}
 }
 
+func TestWizardBootstrapSelectionDoesNotReplayPendingKernelJournal(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtimeRoot, global, _, generation := managedRuntime(t)
+	probe := buildProbe(t)
+	packageRoot := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, packageRoot, probe)
+	profile := filepath.Join(filepath.Dir(control), "codex-profile")
+	if err := os.MkdirAll(profile, 0700); err != nil {
+		t.Fatal(err)
+	}
+	hook := plantWizardKernelJournal(t, ctx, control, runtimeRoot)
+	journal := filepath.Join(control, "transaction.json")
+	before, err := os.ReadFile(journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	off := false
+	got, err := Run(ctx, Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true, Hooks: &off,
+		BootstrapExpectedGeneration: &generation,
+		PackageRoot:                 packageRoot, ControlRoot: control, RuntimeRoot: runtimeRoot, GlobalConfig: global,
+		CodexHome: profile, ClientExecutable: probe, Helper: probe,
+		ScopeRoot: filepath.Join(filepath.Dir(control), "scope"),
+	})
+	if err == nil || got.Outcome != "conflict" || got.Reason != "concurrent_change" {
+		t.Fatalf("bootstrap selection adopted kernel replay: %+v %v", got, err)
+	}
+	after, err := os.ReadFile(journal)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("kernel journal changed: %v", err)
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(control)
+	if err != nil || !snap.Recovery || snap.Ledger.Generation != generation {
+		t.Fatalf("kernel state changed: %+v %v", snap, err)
+	}
+	if _, err := os.Lstat(hook); !os.IsNotExist(err) {
+		t.Fatalf("kernel journal replayed hook: %v", err)
+	}
+}
+
+func TestWizardLegacyPendingJournalRequiresManualRecovery(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtimeRoot, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	profile := filepath.Join(filepath.Dir(control), "codex-profile")
+	if err := os.MkdirAll(profile, 0700); err != nil {
+		t.Fatal(err)
+	}
+	plantWizardLegacyJournal(t, control)
+	journal := wizardPendingJournalPath(control)
+	before, err := os.ReadFile(journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	off := false
+	got, err := Run(ctx, Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true, Hooks: &off,
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtimeRoot, GlobalConfig: global,
+		CodexHome: profile, ClientExecutable: probe, Helper: probe,
+		ScopeRoot: filepath.Join(filepath.Dir(control), "scope"),
+	})
+	if err == nil || got.Outcome != "incomplete" || got.Reason != "recovery_required" {
+		t.Fatalf("legacy journal must stop safely: %+v %v", got, err)
+	}
+	after, err := os.ReadFile(journal)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("legacy journal changed: %v", err)
+	}
+}
+
 func TestWizardInstallRecoversBothPendingJournals(t *testing.T) {
 	ctx := testCtx(t)
 	control, runtime, global, _, _ := managedRuntime(t)
@@ -1934,6 +2019,33 @@ func plantWizardJournalNamed(t *testing.T, controlRoot, opID string) {
 	if err := os.MkdirAll(staging, 0700); err != nil {
 		t.Fatal(err)
 	}
+	ops := filepath.Join(filepath.Dir(controlRoot), "uap", "state", "operations")
+	manager := dirswap.Manager{JournalDir: ops, Fault: func(phase string) error {
+		if phase == dirswap.PhaseBackupPending {
+			return errors.New("fixture: leave pending journal")
+		}
+		return nil
+	}}
+	receipt, err := manager.Apply(context.Background(), dirswap.Input{
+		OperationID: opID, ClientBindingID: "client-binding-1", Sequence: 1,
+		OwnedBase: owned, ActivePath: filepath.Join(owned, "plugin"), StagingPath: staging,
+		RequireAbsent: true,
+	})
+	if err == nil || receipt.OperationID != opID {
+		t.Fatalf("create pending journal: %+v %v", receipt, err)
+	}
+}
+
+// Previous UAP releases wrote schema 3 receipts without physical ownership
+// proof. They must remain untouched for explicit recovery after the pin bump.
+func plantWizardLegacyJournal(t *testing.T, controlRoot string) {
+	t.Helper()
+	opID := "wizard-pending-op"
+	owned := filepath.Join(filepath.Dir(controlRoot), "uap", "managed")
+	staging := filepath.Join(owned, ".agentplugins-staging-"+opID)
+	if err := os.MkdirAll(staging, 0700); err != nil {
+		t.Fatal(err)
+	}
 	sum := sha256.Sum256([]byte(opID))
 	receipt := dirswap.Receipt{
 		SchemaVersion: 3, Operation: dirswap.OperationSwap, OperationID: opID,
@@ -1946,11 +2058,11 @@ func plantWizardJournalNamed(t *testing.T, controlRoot, opID string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ops := filepath.Join(filepath.Dir(controlRoot), "uap", "state", "operations")
-	if err := os.MkdirAll(ops, 0700); err != nil {
+	journal := wizardPendingJournalPath(controlRoot)
+	if err := os.MkdirAll(filepath.Dir(journal), 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(ops, opID+".json"), append(body, '\n'), 0600); err != nil {
+	if err := os.WriteFile(journal, append(body, '\n'), 0600); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -2253,7 +2365,7 @@ func TestWizardRetryRemovesLegacyLocatorAfterConsumerCommit(t *testing.T) {
 	if err := prepareUninstallBindings(&req, snapshot, mat, id, []portable.Integration{portable.Codex}); err != nil {
 		t.Fatal(err)
 	}
-	snapshot, err = publishWizardIntent(ctx, req, snapshot, runtimeRoot, nil, []portable.Integration{portable.Codex}, true)
+	snapshot, _, err = publishWizardIntent(ctx, req, snapshot, runtimeRoot, nil, []portable.Integration{portable.Codex}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3149,6 +3261,120 @@ func TestWizardUpdateOmittedUnitsPreservesNotifyOnly(t *testing.T) {
 	}
 }
 
+func TestWizardUpdateOmittedUnitsRespectsHooksRemovedByKernelRecovery(t *testing.T) {
+	ctx := testCtx(t)
+	envHome := t.TempDir()
+	testenv.Set(t, envHome)
+	control, runtimeRoot, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	packageRoot := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, packageRoot, probe)
+	bundle := writePluginBundle(t)
+	canonical := filepath.Join(envHome, "fixture-config.json")
+	if err := os.WriteFile(canonical, []byte(`{}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AGENT_NOTIFICATIONS_CONFIG", canonical)
+	profile := filepath.Join(envHome, "codex-home")
+	if err := os.MkdirAll(profile, 0700); err != nil {
+		t.Fatal(err)
+	}
+	physicalProfile, err := filepath.EvalSymlinks(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile = physicalProfile
+	req := Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true,
+		Hooks: boolPtr(true), AgentNotify: boolPtr(true),
+		PackageRoot: packageRoot, PluginRoot: bundle,
+		ControlRoot: control, RuntimeRoot: runtimeRoot, GlobalConfig: global,
+		CodexHome: profile, ClientExecutable: probe, Helper: probe,
+		ScopeRoot: filepath.Join(filepath.Dir(control), "scope"),
+	}
+	if err := os.MkdirAll(req.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := Run(ctx, req)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("install both units: %+v %v", installed, err)
+	}
+	units := LiveClientUnits(req, []string{"codex"})
+	if len(units) != 1 || !units[0].Hooks || !units[0].Notify {
+		t.Fatalf("fixture needs both live units: %+v", units)
+	}
+	hooksPath := filepath.Join(profile, "hooks.json")
+	before, err := installruntime.Fingerprint(hooksPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	consumerID := "codex:" + hooksPath
+	hookConsumer, ok := snap.Ledger.Consumers[consumerID]
+	if !ok {
+		t.Fatalf("hooks consumer missing before removal: %v", snap.Ledger.Consumers)
+	}
+	generation := snap.Ledger.Generation
+	_, commitErr := installruntime.Commit(ctx, installruntime.Request{
+		ControlRoot: control, Owner: snap.Ledger.Owner,
+		RuntimeRoot: hookConsumer.RuntimeRoot,
+		ConsumerID:  consumerID, RemoveConsumer: true,
+		ExpectedGeneration: &generation,
+		ConfigPaths:        []string{hooksPath},
+		Prepare: func() ([]installruntime.File, error) {
+			return []installruntime.File{{Path: hooksPath, Before: before, Data: []byte("{\"hooks\":{}}\n"), Mode: 0600}}, nil
+		},
+		Fault: func(phase string) error {
+			if phase == "transaction" {
+				return errors.New("fixture: leave pending hooks removal")
+			}
+			return nil
+		},
+	})
+	if commitErr == nil {
+		t.Fatal("kernel fault not reached")
+	}
+	journal := filepath.Join(control, "transaction.json")
+	if _, err := os.Stat(journal); err != nil {
+		t.Fatalf("missing pending hooks removal after %v: %v", commitErr, err)
+	}
+	pending, err := installruntime.ReadInstalledSnapshot(control)
+	if err != nil || !pending.Recovery || pending.Ledger.Generation != generation {
+		t.Fatalf("hooks removal was not left pending: %+v %v", pending, err)
+	}
+	units = LiveClientUnits(req, []string{"codex"})
+	if len(units) != 1 || !units[0].Hooks || !units[0].Notify {
+		t.Fatalf("pending removal changed live units before replay: %+v", units)
+	}
+	if err := os.WriteFile(filepath.Join(packageRoot, "plugin.json"), []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent-notify","version":"1.0.1"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	req.Action = ActionUpdate
+	req.Hooks = nil
+	req.AgentNotify = nil
+	updated, err := Run(ctx, req)
+	if err != nil || updated.Outcome != "completed" {
+		t.Fatalf("update after hooks removal: %+v %v", updated, err)
+	}
+	if _, err := os.Stat(journal); !os.IsNotExist(err) {
+		t.Fatalf("kernel journal was not recovered: %v", err)
+	}
+	units = LiveClientUnits(req, []string{"codex"})
+	if len(units) != 1 || units[0].Hooks || !units[0].Notify {
+		t.Fatalf("omitted update changed recovered hooks opt-out: %+v", units)
+	}
+	current, err := installruntime.ReadInstalledSnapshot(control)
+	if err != nil || current.Recovery {
+		t.Fatalf("kernel remained in recovery: %+v %v", current, err)
+	}
+	if _, kept := current.Ledger.Consumers[consumerID]; kept {
+		t.Fatalf("removed hooks consumer was restored: %s", consumerID)
+	}
+}
+
 func TestWizardUpdateOneClientKeepsSibling(t *testing.T) {
 	ctx := testCtx(t)
 	control, runtime, global, _, _ := managedRuntime(t)
@@ -3569,6 +3795,160 @@ func TestWizardUpdateBothLiveClients(t *testing.T) {
 	}
 }
 
+// A group update must preserve the independently frozen scopes after one
+// sibling was removed and installed again from another project directory.
+func TestWizardUpdateBothLiveClientsPreservesIndependentScopes(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	claudeConfig := filepath.Join(filepath.Dir(control), "claude-profile")
+	projectScope := filepath.Join(filepath.Dir(control), "claude-project")
+	for _, dir := range []string{codexConfig, claudeConfig, projectScope} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	off := false
+	req := Request{
+		Action: ActionInstall, Agents: []string{"claude", "codex"}, Yes: true, Hooks: &off,
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClaudeConfig: claudeConfig, ClientExecutable: probe, Helper: probe,
+		ClaudeRunner: listingRunner{configRoot: claudeConfig},
+	}
+	installed, err := Run(ctx, req)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("install both: %+v %v", installed, err)
+	}
+	claude := req
+	claude.Agents, claude.Action = []string{"claude"}, ActionUninstall
+	removed, err := Run(ctx, claude)
+	if err != nil || removed.Outcome != "completed" {
+		t.Fatalf("remove Claude: %+v %v", removed, err)
+	}
+	claude.Action, claude.ScopeRoot = ActionInstall, projectScope
+	reinstalled, err := Run(ctx, claude)
+	if err != nil || reinstalled.Outcome != "completed" || reinstalled.InstallationID != installed.InstallationID {
+		t.Fatalf("reinstall Claude: %+v %v", reinstalled, err)
+	}
+	assertBindings := func(want map[portable.Integration]portable.Binding) map[portable.Integration]portable.Binding {
+		t.Helper()
+		snap, err := installruntime.ReadInstalledSnapshot(control)
+		if err != nil {
+			t.Fatal(err)
+		}
+		bindings := map[portable.Integration]portable.Binding{}
+		for key, consumer := range snap.Ledger.Consumers {
+			if !strings.HasPrefix(key, "portable:") {
+				continue
+			}
+			var binding portable.Binding
+			if err := json.Unmarshal([]byte(consumer.Registration), &binding); err != nil {
+				t.Fatal(err)
+			}
+			if binding.InstallationID != installed.InstallationID {
+				continue
+			}
+			if _, duplicate := bindings[binding.Integration]; duplicate {
+				t.Fatalf("duplicate portable consumer for %s: %+v", binding.Integration, snap.Ledger.Consumers)
+			}
+			bindings[binding.Integration] = binding
+		}
+		for agent, scope := range map[portable.Integration]string{portable.Codex: control, portable.Claude: projectScope} {
+			binding, ok := bindings[agent]
+			if !ok || !samePortableRoot(binding.ScopeRoot, scope) {
+				t.Fatalf("%s scope changed: %+v, want %s", agent, binding, scope)
+			}
+			if want != nil && binding != want[agent] {
+				t.Fatalf("%s committed identity changed: before=%+v after=%+v", agent, want[agent], binding)
+			}
+			live := inspectedWizardBinding(t, ctx, control, string(agent))
+			if live.BindingID != binding.BindingID {
+				t.Fatalf("%s runtime consumer differs from UAP: %+v %+v", agent, binding, live)
+			}
+			if exact, err := portable.ExactLocator(binding); err != nil || !exact {
+				t.Fatalf("%s locator mismatch: exact=%v err=%v", agent, exact, err)
+			}
+			body, err := os.ReadFile(filepath.Join(live.TargetPath, ".mcp.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			type serverProjection struct {
+				Args []string `json:"args"`
+			}
+			var servers map[string]serverProjection
+			if agent == portable.Codex {
+				var projected struct {
+					MCPServers map[string]serverProjection `json:"mcpServers"`
+				}
+				if err := json.Unmarshal(body, &projected); err != nil {
+					t.Fatal(err)
+				}
+				servers = projected.MCPServers
+			} else if err := json.Unmarshal(body, &servers); err != nil {
+				t.Fatal(err)
+			}
+			server, ok := servers["agent-notify"]
+			if !ok {
+				t.Fatalf("%s MCP projection omitted agent-notify: %s", agent, body)
+			}
+			name, err := binding.Filename()
+			if err != nil {
+				t.Fatal(err)
+			}
+			args := []string{"portable-launch", "--locator", name}
+			if agent == portable.Codex {
+				args = []string{"portable-launch", "--data-root", binding.DataRoot, "--locator", name}
+			}
+			// The native adapter can prepend its runtime wrapper; the product
+			// launch arguments must remain the exact trailing invocation.
+			if len(server.Args) < len(args) || strings.Join(server.Args[len(server.Args)-len(args):], "\x00") != strings.Join(args, "\x00") {
+				t.Fatalf("%s MCP argv differs: got=%q want=%q", agent, server.Args, args)
+			}
+		}
+		if len(bindings) != 2 {
+			t.Fatalf("portable consumers: %+v", bindings)
+		}
+		return bindings
+	}
+	frozen := assertBindings(nil)
+	if err := os.WriteFile(filepath.Join(pkg, "plugin.json"), []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent-notify","version":"1.0.1"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	req.Action = ActionUpdate
+	for i := 0; i < 2; i++ {
+		updated, err := Run(ctx, req)
+		if err != nil || updated.Outcome != "completed" || updated.InstallationID != installed.InstallationID {
+			t.Fatalf("group update %d: %+v %v", i, updated, err)
+		}
+		assertBindings(frozen)
+	}
+	req.Action, req.ExternalUninstalled = ActionUninstall, true
+	removed, err = Run(ctx, req)
+	if err != nil || removed.Outcome != "completed" {
+		t.Fatalf("attested group uninstall: %+v %v", removed, err)
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key := range snap.Ledger.Consumers {
+		if strings.HasPrefix(key, "portable:") {
+			t.Fatalf("group uninstall retained portable consumer %s", key)
+		}
+	}
+	if live := LiveNotifyClients(control, []string{"claude", "codex"}); len(live) != 0 {
+		t.Fatalf("group uninstall retained clients: %v", live)
+	}
+	for _, binding := range frozen {
+		if exact, err := portable.ExactLocator(binding); err != nil || exact {
+			t.Fatalf("group uninstall retained locator: %+v exact=%v err=%v", binding, exact, err)
+		}
+	}
+}
+
 func TestWizardInspectAfterGroupInstallReportsBothWithoutMutating(t *testing.T) {
 	ctx := testCtx(t)
 	control, runtime, global, _, _ := managedRuntime(t)
@@ -3986,7 +4366,7 @@ func TestWizardMixedPerClientOptOuts(t *testing.T) {
 		t.Fatal("inspect omitted readiness")
 	}
 	for _, fact := range view.Readiness {
-		if fact.Permission != "unsupported" || fact.Delivery != "not_verified" {
+		if fact.Permission != "not_checked" || fact.Delivery != "not_verified" {
 			t.Fatalf("readiness mixed download with delivery: %+v", fact)
 		}
 	}
@@ -4067,7 +4447,7 @@ func TestWizardSecondClientAddDoesNotReviseExisting(t *testing.T) {
 	}
 	otherPkg := filepath.Join(filepath.Dir(control), "other-package")
 	writePackage(t, otherPkg, probe)
-	if err := os.WriteFile(filepath.Join(otherPkg, "skills", "agent-notify", "SKILL.md"), []byte("---\nname: agent-notify\ndescription: Revised\n---\n"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(otherPkg, "skills", "agent-notifications", "SKILL.md"), []byte("---\nname: agent-notifications\ndescription: Revised\n---\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	mismatch := base
@@ -4179,7 +4559,7 @@ func TestWizardTwoPhaseUpdateThenAdd(t *testing.T) {
 	}
 	otherPkg := filepath.Join(filepath.Dir(control), "other-package")
 	writePackage(t, otherPkg, probe)
-	if err := os.WriteFile(filepath.Join(otherPkg, "skills", "agent-notify", "SKILL.md"), []byte("---\nname: agent-notify\ndescription: Revised\n---\n"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(otherPkg, "skills", "agent-notifications", "SKILL.md"), []byte("---\nname: agent-notifications\ndescription: Revised\n---\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	mismatch := base
@@ -5110,7 +5490,7 @@ func TestWizardAmbiguousInstallationsConflictWithoutID(t *testing.T) {
 	}
 	otherPkg := filepath.Join(filepath.Dir(control), "other-package")
 	writePackage(t, otherPkg, probe)
-	if err := os.WriteFile(filepath.Join(otherPkg, "skills", "agent-notify", "SKILL.md"), []byte("---\nname: agent-notify\ndescription: Other installation\n---\n"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(otherPkg, "skills", "agent-notifications", "SKILL.md"), []byte("---\nname: agent-notifications\ndescription: Other installation\n---\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	second := base
@@ -6141,7 +6521,7 @@ func TestWizardUninstallExplicitFalsePreservesNotifyWithoutPackage(t *testing.T)
 		t.Fatal("uninstall omitted readiness")
 	}
 	for _, fact := range removed.Readiness {
-		if fact.Permission != "unsupported" || fact.Delivery != "not_verified" {
+		if fact.Permission != "not_checked" || fact.Delivery != "not_verified" {
 			t.Fatalf("uninstall required permission/delivery: %+v", fact)
 		}
 	}
@@ -6882,7 +7262,7 @@ func TestWizardResumeRestoresExternalUninstalledFromIntent(t *testing.T) {
 	if err == nil || held.Outcome != "incomplete" || held.Reason != "external_uninstall_required" {
 		t.Fatalf("hold: %+v %v", held, err)
 	}
-	if err := (portablesetup.Service{}).PatchIntentExternalUninstalled(ctx, control, runtime, ""); err != nil {
+	if err := (portablesetup.Service{}).PatchIntentExternalUninstalled(ctx, control, runtime, "", held.reservation); err != nil {
 		t.Fatal(err)
 	}
 	resume := Request{
@@ -7173,7 +7553,7 @@ func TestFinishWizardIntentClearsExactRevisionRequired(t *testing.T) {
 		ExpectedGeneration: gen,
 		Targets:            []portablesetup.IntentTarget{{Client: "claude", Units: []string{"agent-notify"}}, {Client: "codex", Units: []string{"agent-notify"}}},
 	})
-	got, err := finishWizardIntent(ctx, Request{ControlRoot: control}, runtime, Result{Outcome: "incomplete", Reason: "exact_revision_required"}, ErrRefused)
+	got, err := finishWizardIntent(ctx, Request{ControlRoot: control}, runtime, confirmedWizardResult(t, control, Result{Outcome: "incomplete", Reason: "exact_revision_required"}), ErrRefused)
 	if got.Outcome != "incomplete" || got.Reason != "exact_revision_required" {
 		t.Fatalf("result: %+v %v", got, err)
 	}
@@ -7194,7 +7574,7 @@ func TestFinishWizardIntentClearsActivationIncomplete(t *testing.T) {
 		ExpectedGeneration: gen,
 		Targets:            []portablesetup.IntentTarget{{Client: "codex", Units: []string{"agent-notify"}}},
 	})
-	got, err := finishWizardIntent(ctx, Request{ControlRoot: control}, runtime, Result{Outcome: "incomplete", Reason: "activation_incomplete"}, errors.New("host seam refused"))
+	got, err := finishWizardIntent(ctx, Request{ControlRoot: control}, runtime, confirmedWizardResult(t, control, Result{Outcome: "incomplete", Reason: "activation_incomplete"}), errors.New("host seam refused"))
 	if got.Outcome != "incomplete" || got.Reason != "activation_incomplete" {
 		t.Fatalf("result: %+v %v", got, err)
 	}
@@ -7442,7 +7822,11 @@ func writeCodexListStub(t *testing.T, dir, listJSON string) string {
 		t.Fatal(err)
 	}
 	path := filepath.Join(dir, "codex-stub")
-	cmd := exec.Command("go", "build", "-o", path, src)
+	compiler, err := exec.LookPath("go")
+	if err != nil {
+		t.Fatalf("locate TEST Go compiler: %v", err)
+	}
+	cmd := exec.Command(compiler, "build", "-o", path, src)
 	cmd.Env = append(os.Environ(), "GOTOOLCHAIN=local")
 	if body, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("build codex stub: %s %v", body, err)
@@ -7491,17 +7875,19 @@ func TestPortableInstallFailedKeepsActivationIncomplete(t *testing.T) {
 		},
 		Err: errors.New("host seam refused after managed commit"),
 	}
-	got := portableInstallFailed(portable.Codex, Request{Action: ActionInstall, Agents: []string{"codex"}, ControlRoot: "/tmp/control"}, Result{Action: "install"}, err)
+	got := portableInstallFailed(portable.Codex, Request{Action: ActionInstall, Agents: []string{"codex"}, ControlRoot: filepath.Join(t.TempDir(), "TEST-unowned-control")}, Result{Action: "install"}, err)
 	if got.Outcome != "incomplete" || got.Reason != "activation_incomplete" {
 		t.Fatalf("incomplete mapping: %+v", got)
 	}
 	if len(got.NextActions) != 1 || got.NextActions[0].Kind != "activate" || got.NextActions[0].Agents[0] != "codex" {
 		t.Fatalf("activate action: %+v", got.NextActions)
 	}
-	if len(got.NextActions[0].Command) < 2 || got.NextActions[0].Command[0] != "setup-notifications" || got.NextActions[0].Command[1] != "wizard" {
-		t.Fatalf("activate retry command: %v", got.NextActions[0].Command)
+	// This projection fixture has no owned pending intent or acquired source.
+	// Saved registration facts do not establish a safe executable recovery.
+	if len(got.NextActions[0].Command) != 0 || got.NextActions[0].Reason != "recovery_unavailable" {
+		t.Fatalf("unowned recovery advertised: %+v", got.NextActions[0])
 	}
-	if got.Targets[0].Outcome != "incomplete" {
+	if got.Targets[0].Outcome != "incomplete" || got.Targets[0].Materialization != string(domain.MaterializationMaterialized) || got.Targets[0].Activation != string(domain.ActivationFailed) {
 		t.Fatalf("target: %+v", got.Targets)
 	}
 	plain := portableInstallFailed(portable.Codex, Request{Action: ActionInstall}, Result{Action: "install"}, errors.New("missing helper"))
@@ -7585,8 +7971,8 @@ func TestGroupNotifyFailedReportsBothCommittedTargets(t *testing.T) {
 	if len(got.NextActions[0].Agents) != 2 || got.NextActions[0].Agents[0] != "codex" || got.NextActions[0].Agents[1] != "claude" {
 		t.Fatalf("group activate agents: %+v", got.NextActions[0].Agents)
 	}
-	if len(got.NextActions[0].Command) < 2 || got.NextActions[0].Command[0] != "setup-notifications" || got.NextActions[0].Command[1] != "wizard" {
-		t.Fatalf("group activate retry command: %v", got.NextActions[0].Command)
+	if len(got.NextActions[0].Command) != 0 || got.NextActions[0].Reason != "recovery_unavailable" {
+		t.Fatalf("unowned fixture offered activation command: %+v", got.NextActions[0])
 	}
 	plain := groupNotifyFailed(
 		[]portable.Integration{portable.Codex, portable.Claude},
@@ -7760,5 +8146,529 @@ func TestWizardDefaultClaudeRegistrationHandoffsDirectMCP(t *testing.T) {
 	}
 	if notify != "installed" || direct != "absent" || mcpFile != mcpConfig {
 		t.Fatalf("default-path handoff inspect: notify=%s direct=%s mcp=%s targets=%+v", notify, direct, mcpFile, view.Targets)
+	}
+}
+
+// Capture the initiating reservation independently of cleanup's later read.
+func confirmedWizardResult(t *testing.T, control string, out Result) Result {
+	t.Helper()
+	snap, err := installruntime.ReadInstalledSnapshot(control)
+	if err != nil || snap.Ledger.PendingMutation == nil {
+		t.Fatalf("missing initiating reservation: %+v %v", snap.Ledger.PendingMutation, err)
+	}
+	reservation := *snap.Ledger.PendingMutation
+	out.reservation = &reservation
+	return out
+}
+
+func TestFinishWizardIntentDoesNotClearNewerOperation(t *testing.T) {
+	for _, initiating := range []bool{true, false} {
+		t.Run(fmt.Sprint("initiating=", initiating), func(t *testing.T) {
+			ctx := testCtx(t)
+			control, runtime, _, _, gen := managedRuntime(t)
+			plantPendingIntent(t, ctx, control, runtime, gen, portablesetup.Intent{
+				Version: 1, SetupIntentID: "operation-a", Action: "repair", Stage: "confirmed", ExpectedGeneration: gen,
+				Targets: []portablesetup.IntentTarget{{Client: "codex", Units: []string{"agent-notify"}}},
+			})
+			original := confirmedWizardResult(t, control, Result{Outcome: "completed"})
+			// B resumes and finishes A before A reaches its own cleanup.
+			completed, err := finishWizardIntent(ctx, Request{ControlRoot: control}, runtime, original, nil)
+			if err != nil || completed.Outcome != "completed" {
+				t.Fatalf("resume cleanup: %+v %v", completed, err)
+			}
+			// C starts a new operation while A is still returning.
+			plantPendingIntent(t, ctx, control, runtime, completed.Generation, portablesetup.Intent{
+				Version: 1, SetupIntentID: "operation-c", Action: "uninstall", Stage: "confirmed", ExpectedGeneration: completed.Generation,
+				Targets: []portablesetup.IntentTarget{{Client: "claude", Units: []string{"agent-notify"}}},
+			})
+			before, err := installruntime.ReadInstalledSnapshot(control)
+			if err != nil {
+				t.Fatal(err)
+			}
+			payload, err := os.ReadFile(portablesetup.IntentPath(control))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !initiating {
+				original.reservation = nil
+			}
+			got, err := finishWizardIntent(ctx, Request{ControlRoot: control}, runtime, original, nil)
+			if !errors.Is(err, ErrRefused) || got.Outcome != "conflict" || got.Reason != "concurrent_change" {
+				t.Fatalf("stale cleanup accepted: %+v %v", got, err)
+			}
+			after, err := installruntime.ReadInstalledSnapshot(control)
+			if err != nil || after.Ledger.PendingMutation == nil || *after.Ledger.PendingMutation != *before.Ledger.PendingMutation || after.Ledger.Generation != before.Ledger.Generation {
+				t.Fatalf("new reservation changed: %+v %v", after.Ledger, err)
+			}
+			retained, err := os.ReadFile(portablesetup.IntentPath(control))
+			if err != nil || string(retained) != string(payload) {
+				t.Fatalf("new intent changed: %q %v", retained, err)
+			}
+		})
+	}
+}
+
+// Dropping maintenance diagnostics at the Codex-to-wizard boundary must fail
+// while the committed hooks keep their successful outcome and path.
+func TestCodexHooksTargetPreservesMaintenanceWarning(t *testing.T) {
+	warning := "runtime committed; native registration reconciliation incomplete: registration unavailable"
+	target, err := codexHooksTarget(codexsetup.Result{HooksPath: "/TEST/codex/hooks.json", Warnings: []string{warning}}, nil)
+	if err != nil || target.Outcome != "completed" || target.Reason != "/TEST/codex/hooks.json" || len(target.Warnings) != 1 || target.Warnings[0] != warning {
+		t.Fatalf("committed hooks lost maintenance diagnostics: %+v %v", target, err)
+	}
+}
+
+// Regression: explicit Cursor was rejected, lost its profile on intent retry,
+// and inherited the unsupported standalone hooks unit. Omitted selection must
+// continue to mean the original Claude/Codex pair at the existing picker.
+func TestCursorExplicitSelectionAndIntent(t *testing.T) {
+	defaults, err := normalizeAgents([]string{"claude", "codex"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defaultHooks, defaultNotify := selectedUnits(Request{Action: ActionInstall}, defaults)
+	if fmt.Sprint(defaultHooks) != "[claude codex]" || fmt.Sprint(defaultNotify) != "[claude codex]" {
+		t.Fatal("original default units changed")
+	}
+	if omitted, err := normalizeAgents(nil); err != nil || len(omitted) != 0 {
+		t.Fatal("omitted selection discovered a client")
+	}
+	agents, err := normalizeAgents([]string{"cursor", "codex", "cursor"})
+	if err != nil || fmt.Sprint(agents) != "[cursor codex]" {
+		t.Fatalf("selection: %v %v", agents, err)
+	}
+	if _, err := normalizeAgents([]string{"local"}); err == nil {
+		t.Fatal("Local admitted")
+	}
+	root := t.TempDir()
+	req := Request{Action: ActionInstall, Agents: []string{"cursor", "codex"}, CursorConfig: filepath.Join(root, "TEST-cursor"), CodexHome: filepath.Join(root, "TEST-codex"), InstallationID: "TEST-install", BindingIDs: map[string]string{"cursor": "TEST-binding"}}
+	hooks, notify := selectedUnits(req, agents)
+	if fmt.Sprint(hooks) != "[codex]" || fmt.Sprint(notify) != "[cursor codex]" {
+		t.Fatalf("units: %v %v", hooks, notify)
+	}
+	targets := wizardIntentTargets(req, hooks, notify)
+	if len(targets) != 2 {
+		t.Fatalf("targets: %+v", targets)
+	}
+	var cursorTarget portablesetup.IntentTarget
+	for _, target := range targets {
+		if target.Client == "cursor" {
+			cursorTarget = target
+		}
+	}
+	if cursorTarget.Profile != req.CursorConfig || cursorTarget.BindingID != "TEST-binding" || fmt.Sprint(cursorTarget.Units) != "[agent-notify]" {
+		t.Fatalf("Cursor target: %+v", cursorTarget)
+	}
+	intent := portablesetup.Intent{Action: "install", Targets: targets}
+	restored, restoredAgents, err := restoreOmittedFromIntent(Request{Action: ActionInstall}, nil, intent)
+	if err != nil || restored.CursorConfig != req.CursorConfig || restored.BindingIDs["cursor"] != "TEST-binding" || !sameClientUnits(requestClientUnits(req, agents), requestClientUnits(restored, restoredAgents)) {
+		t.Fatalf("restore: %+v %v %v", restored, restoredAgents, err)
+	}
+	conflicting := Request{Action: ActionInstall, CursorConfig: filepath.Join(root, "TEST-other")}
+	if _, _, err := restoreOmittedFromIntent(conflicting, nil, intent); !errors.Is(err, portablesetup.ErrIntentConflict) {
+		t.Fatalf("changed profile accepted: %v", err)
+	}
+	retry := retryRequestFromIntent(req, intent)
+	if retry.CursorConfig != req.CursorConfig {
+		t.Fatal("retry lost explicit profile")
+	}
+	req.CursorAgentNotify = boolPtr(false)
+	_, notify = selectedUnits(req, agents)
+	if fmt.Sprint(notify) != "[codex]" || unitFlagsOmitted(req) {
+		t.Fatal("Cursor optout lost")
+	}
+	restored = applyIntentUnits(Request{}, map[string]unitSelection{"cursor": {}, "codex": {hooks: true, notify: true}})
+	if restored.CursorAgentNotify == nil || *restored.CursorAgentNotify {
+		t.Fatal("mixed retry broadened Cursor optout")
+	}
+}
+
+func TestCursorRetryArgvRestoresRecordedScope(t *testing.T) {
+	root := t.TempDir()
+	recorded := filepath.Join(root, "TEST recorded profile with spaces")
+	stale := filepath.Join(root, "TEST stale incoming profile")
+	for _, tc := range []struct{ client, profile string }{
+		{"cursor", recorded}, {"cursor", ""}, {"claude", recorded}, {"codex", recorded},
+	} {
+		t.Run(tc.client+"/"+filepath.Base(tc.profile), func(t *testing.T) {
+			req := Request{Action: ActionInstall, CursorConfig: stale, ScopeRoot: stale, ClientExecutable: filepath.Join(root, "TEST executable")}
+			intent := portablesetup.Intent{Action: "update", Targets: []portablesetup.IntentTarget{{Client: tc.client, Profile: tc.profile}}}
+			before := fmt.Sprintf("%#v", intent)
+			retry := retryRequestFromIntent(req, intent)
+			want := stale
+			if tc.client == "cursor" && tc.profile != "" {
+				want = recorded
+			}
+			argv := RetryCommand(retry)
+			t.Logf("retry argv=%q", argv)
+			found := false
+			for i, arg := range argv {
+				if arg == "--scope-root" && i+1 < len(argv) {
+					found = true
+					if argv[i+1] != want {
+						t.Fatalf("retry scope=%q want=%q; argv=%q", argv[i+1], want, argv)
+					}
+				}
+			}
+			if !found || retry.CursorConfig != want || retry.ScopeRoot != want || retry.ClientExecutable != req.ClientExecutable || fmt.Sprintf("%#v", intent) != before {
+				t.Fatalf("retry changed authority or intent: %+v; argv=%q", retry, argv)
+			}
+		})
+	}
+}
+
+// This fixture supplies inert TEST files, not a native installation, physical
+// token or affirmative qualification. No file is executed and no store is seeded.
+func cursorWizardRequest(t *testing.T) (Request, string) {
+	t.Helper()
+	root := t.TempDir()
+	profile := filepath.Join(root, "TEST-cursor")
+	pkg := filepath.Join(root, "TEST-package")
+	for _, dir := range []string{profile, pkg} {
+		if err := os.Mkdir(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	helper := filepath.Join(root, "TEST-observer")
+	body := []byte("inert TEST observer bytes; never execute")
+	if err := os.WriteFile(helper, body, 0700); err != nil {
+		t.Fatal(err)
+	}
+	writePackage(t, pkg, helper)
+	req := Request{Action: ActionInstall, Agents: []string{"cursor"}, CursorConfig: profile, PackageRoot: pkg,
+		Helper: helper, ClientExecutables: map[string]string{"cursor": helper},
+		ControlRoot: filepath.Join(root, "control"), RuntimeRoot: filepath.Join(root, "runtime"),
+		GlobalConfig: filepath.Join(root, "config.json"), InstallationID: "TEST-install", Primary: "primary"}
+	req.CursorAuthority = &cursorinstall.Authority{ProfileRoot: profile, CursorVersion: "2026.09.28-64d2043", QualificationID: "TEST-negative-only-NOT-qualified", Executable: helper, ExecutableDigest: fmt.Sprintf("sha256:%x", sha256.Sum256(body)), Selector: filepath.Join(root, "TEST-unpublished-selector.json"), ObjectID: "TEST-stop"}
+	return req, root
+}
+
+// Regression: raw agent selection required Cursor authority even when its only
+// unit was off, preventing the enabled Codex unit's real public reservation.
+func TestCursorWizardOptOutAllowsCodexReservation(t *testing.T) {
+	req, root := cursorWizardRequest(t)
+	req.Agents = []string{"cursor", "codex"}
+	req.Hooks = boolPtr(false)
+	req.CursorAgentNotify, req.CodexAgentNotify = boolPtr(false), boolPtr(true)
+	req.CursorAuthority = nil
+	req.CodexHome = filepath.Join(root, "TEST-codex")
+	if err := os.Mkdir(req.CodexHome, 0700); err != nil {
+		t.Fatal(err)
+	}
+	agents, err := normalizeAgents(req.Agents)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hooks, notify := selectedUnits(req, agents)
+	if len(hooks) != 0 || fmt.Sprint(notify) != "[codex]" {
+		t.Fatalf("mixed optout units: %v %v", hooks, notify)
+	}
+	mat, err := materializer(req, installruntime.InstalledSnapshot{}, req.RuntimeRoot)
+	if err != nil {
+		t.Fatalf("disabled Cursor blocked Codex composition: %v", err)
+	}
+	eng, err := installerEngine(mat)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if eng.SupportsClient("cursor") || !eng.SupportsClient("codex") || !eng.SupportsClient("claude") || eng.SupportsClient("local") {
+		t.Fatal("disabled Cursor changed default registry")
+	}
+	if err := reserveClientBindings(&req, mat, notify); err != nil {
+		t.Fatal(err)
+	}
+	reserved, err := eng.ReserveIdentity(uapinstaller.IdentityRequest{ClientID: "codex", InstallationID: req.InstallationID, DeclaredName: "agent-notify", ClientConfigRoot: req.CodexHome})
+	if err != nil || reserved.TargetPath == "" || reserved.InstallationID != req.InstallationID || reserved.BindingID == "" || len(req.BindingIDs) != 1 || req.BindingIDs["codex"] != reserved.BindingID || reserved.BindingID != domain.ComputeClientBindingID(req.InstallationID, "codex", reserved.Scope, reserved.TargetPath) {
+		t.Fatalf("Codex reservation lost: %+v bindings=%v %v", reserved, req.BindingIDs, err)
+	}
+	for _, profile := range []string{req.CursorConfig, req.CodexHome} {
+		entries, err := os.ReadDir(profile)
+		if err != nil || len(entries) != 0 {
+			t.Fatalf("reservation mutated TEST profile %s: %v %v", profile, entries, err)
+		}
+	}
+	for _, path := range []string{req.ControlRoot, req.RuntimeRoot, req.GlobalConfig, filepath.Join(root, "uap"), filepath.Join(root, "TEST-unpublished-selector.json")} {
+		if _, err := os.Lstat(path); !os.IsNotExist(err) {
+			t.Fatalf("optout reservation mutated %s: %v", path, err)
+		}
+	}
+}
+
+// Regression: installerEngine discarded Materializer.Registry and silently
+// restored defaults. Real public reservation must use the same selected adapter
+// and target as the materializer, without staging or granting installed authority.
+func TestCursorWizardSharedRegistryAndDeniedInstall(t *testing.T) {
+	req, root := cursorWizardRequest(t)
+	snap := installruntime.InstalledSnapshot{Ledger: installruntime.Ledger{ID: "TEST-component", Owner: "existing-installer"}}
+	mat, err := materializer(req, snap, req.RuntimeRoot)
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		if err == nil || err.Error() != "cursor selected tuple is unqualified" {
+			t.Fatalf("unsupported tuple admitted or wrong refusal: %v", err)
+		}
+		for _, path := range []string{req.ControlRoot, req.RuntimeRoot, req.GlobalConfig, filepath.Join(root, "uap"), filepath.Join(req.CursorConfig, "hooks.json"), filepath.Join(req.CursorConfig, "plugins"), req.CursorAuthority.Selector} {
+			if _, err := os.Lstat(path); !os.IsNotExist(err) {
+				t.Fatalf("unsupported tuple mutated %s: %v", path, err)
+			}
+		}
+		t.Log("unsupported tuple refusal/no effects PASS; Linux reservation/installed/native NOT_RUN")
+		return
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, ok := mat.Registry.Lookup(domain.ClientCursor)
+	if !ok {
+		t.Fatal("selected adapter absent")
+	}
+	if _, ok := adapter.(*cursorinstall.Adapter); !ok {
+		t.Fatalf("historical adapter substituted: %T", adapter)
+	}
+	eng, err := installerEngine(mat)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !eng.SupportsClient("cursor") || !eng.SupportsClient("codex") || !eng.SupportsClient("claude") || eng.SupportsClient("local") {
+		t.Fatal("registry composition changed")
+	}
+	id, err := identity(req, snap, req.RuntimeRoot, mat, false)
+	if err != nil || id.InstallationID != req.InstallationID {
+		t.Fatalf("identity: %+v %v", id, err)
+	}
+	if err := reserveClientBindings(&req, mat, []portable.Integration{portable.Cursor}); err != nil {
+		t.Fatal(err)
+	}
+	reserved, err := eng.ReserveIdentity(uapinstaller.IdentityRequest{ClientID: "cursor", InstallationID: req.InstallationID, DeclaredName: "agent-notify", ClientConfigRoot: req.CursorConfig})
+	wantPath := filepath.Join(req.CursorConfig, "plugins", "local", domain.ComputePhysicalArtifactID("agent-notify", req.InstallationID))
+	if err != nil || reserved.TargetPath != wantPath || reserved.BindingID == "" || req.BindingIDs["cursor"] != reserved.BindingID || reserved.BindingID != domain.ComputeClientBindingID(req.InstallationID, "cursor", reserved.Scope, wantPath) {
+		t.Fatalf("reservation differs: %+v %v", reserved, err)
+	}
+	materializeReq := portablesetup.MaterializeRequest{Integration: portable.Cursor, Identity: id, ClientConfigRoot: req.CursorConfig, ClientExecutable: clientExecutable(req, portable.Cursor), PackageRoot: req.PackageRoot}
+	deniedReq := materializeReq
+	deniedReq.ClientConfigRoot = root
+	if _, err := mat.Install(testCtx(t), deniedReq); err == nil || err.Error() != "cursor profile differs from original canonical root" {
+		t.Fatalf("different selected profile installed: %v", err)
+	}
+	if _, err := mat.PreviewPlan(testCtx(t), deniedReq); err == nil || err.Error() != "cursor profile differs from original canonical root" {
+		t.Fatalf("different selected profile previewed: %v", err)
+	}
+	for _, path := range []string{req.ControlRoot, req.RuntimeRoot, req.GlobalConfig, req.CursorAuthority.Selector, filepath.Join(root, "uap"), filepath.Join(root, "hooks.json"), filepath.Join(root, "plugins"), filepath.Join(req.CursorConfig, "hooks.json"), filepath.Join(req.CursorConfig, "plugins")} {
+		if _, err := os.Lstat(path); !os.IsNotExist(err) {
+			t.Fatalf("denied route mutated %s: %v", path, err)
+		}
+	}
+	token, captureErr := profileauthority.Capture(testCtx(t), req.CursorConfig)
+	if errors.Is(captureErr, directoryidentity.ErrUnsupported) {
+		if !token.IsZero() {
+			t.Fatal("unsupported root granted physical token")
+		}
+		prepared, err := eng.Prepare(testCtx(t), uapinstaller.Request{Operation: uapinstaller.OpInstall, ClientID: "cursor", InstallationID: req.InstallationID, PackageRoot: req.PackageRoot, ClientConfigRoot: req.CursorConfig, ClientExecutable: clientExecutable(req, portable.Cursor)})
+		if prepared != nil {
+			_ = prepared.Close()
+			t.Fatal("unsupported original root prepared")
+		}
+		if !errors.Is(err, directoryidentity.ErrUnsupported) {
+			t.Fatalf("public Prepare lost physical refusal: %v", err)
+		}
+		for _, path := range []string{req.ControlRoot, req.RuntimeRoot, req.GlobalConfig, req.CursorAuthority.Selector, filepath.Join(root, "uap"), filepath.Join(req.CursorConfig, "hooks.json"), filepath.Join(req.CursorConfig, "plugins")} {
+			if _, err := os.Lstat(path); !os.IsNotExist(err) {
+				t.Fatalf("unsupported Prepare mutated %s: %v", path, err)
+			}
+		}
+		t.Log("physical positive/installed/native NOT_RUN: unsupported original TEST ancestry")
+	} else if captureErr != nil {
+		t.Fatal(captureErr)
+	} else {
+		canonicalRoot, err := filepath.EvalSymlinks(req.CursorConfig)
+		if err != nil || token.IsZero() || token.Facts().CanonicalRoot != canonicalRoot {
+			t.Fatalf("original profile capture lost selected root: %v", err)
+		}
+		if err := profileauthority.Revalidate(testCtx(t), token); err != nil {
+			t.Fatalf("original profile authority no longer validates: %v", err)
+		}
+		t.Log("selected profile mismatch refused without effects; physical capture alone grants no installed/native authority: NOT_RUN")
+	}
+}
+
+// Regression: a supplied empty or reduced registry must not fall back to
+// Claude/Codex; only nil retains that original default composition.
+func TestWizardInstallerExplicitRegistry(t *testing.T) {
+	req, _ := cursorWizardRequest(t)
+	req.Agents = []string{"codex"}
+	mat, err := materializer(req, installruntime.InstalledSnapshot{}, req.RuntimeRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range []string{"nil", "empty", "codex"} {
+		mat.Registry = nil
+		if kind == "empty" {
+			mat.Registry, err = clients.NewRegistry()
+		}
+		if kind == "codex" {
+			mat.Registry, err = clients.NewRegistry(codex.New())
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		eng, err := installerEngine(mat)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if eng.SupportsClient("codex") != (kind != "empty") || eng.SupportsClient("claude") != (kind == "nil") || eng.SupportsClient("cursor") || eng.SupportsClient("local") {
+			t.Fatalf("%s registry broadened", kind)
+		}
+	}
+}
+
+func TestCursorWizardMissingOrChangedFactsDenied(t *testing.T) {
+	for _, kind := range []string{"missing", "profile", "observer", "digest", "version"} {
+		t.Run(kind, func(t *testing.T) {
+			req, root := cursorWizardRequest(t)
+			switch kind {
+			case "missing":
+				req.CursorAuthority = nil
+			case "profile":
+				req.CursorConfig = root
+			case "observer":
+				req.CursorAuthority.Executable = filepath.Join(root, "TEST-other")
+			case "digest":
+				req.CursorAuthority.ExecutableDigest = "sha256:wrong"
+			case "version":
+				req.CursorAuthority.CursorVersion = "2026.10.01"
+			}
+			if _, err := materializer(req, installruntime.InstalledSnapshot{}, req.RuntimeRoot); err == nil {
+				t.Fatal("missing or changed fixed facts admitted")
+			}
+			if _, err := os.Lstat(filepath.Join(root, "uap")); !os.IsNotExist(err) {
+				t.Fatalf("denied facts wrote store: %v", err)
+			}
+		})
+	}
+}
+
+func TestLocalExplicitSelectionAndIntentRetry(t *testing.T) {
+	root := t.TempDir()
+	for bits := 1; bits < 8; bits++ {
+		t.Run(strconv.Itoa(bits), func(t *testing.T) {
+			cfg := &vscode.LocalConfig{ProfileSettingsPath: filepath.Join(root, "settings.json"), QualifiedTuple: vscode.QualifiedDarwinTESTTuple(), TargetShell: vscodelocalhooks.Target{Shell: vscodelocalhooks.MacOSSH}, NativeStop: bits&1 != 0}
+			if bits&2 != 0 {
+				cfg.MCPServers = []string{"agent-notify"}
+			}
+			if bits&4 != 0 {
+				cfg.Skills = []string{"agent-notifications"}
+			}
+			req := Request{Action: ActionInstall, Agents: []string{"copilot-vscode"}, LocalConfig: cfg, ScopeRoot: root, Helper: filepath.Join(root, "TEST-helper"), ClientExecutable: filepath.Join(root, "TEST-code"), InstallationID: "TEST-id", BindingIDs: map[string]string{"copilot-vscode": "TEST-binding"}}
+			agents, err := normalizeAgents(req.Agents)
+			if err != nil {
+				t.Fatal(err)
+			}
+			hooks, notify := selectedUnits(req, agents)
+			if len(hooks) != 0 || len(notify) != 1 {
+				t.Fatal("Local native-only selection was dropped or added legacy hooks")
+			}
+			intent := portablesetup.Intent{Targets: wizardIntentTargets(req, hooks, notify), Primary: "bin/claude-notifications"}
+			// Actual JSON carrier round trip, not just a copied in-memory Request.
+			body, err := json.Marshal(intent)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var durable portablesetup.Intent
+			if err := json.Unmarshal(body, &durable); err != nil {
+				t.Fatal(err)
+			}
+			retry := retryRequestFromIntent(Request{Helper: req.Helper, ClientExecutable: req.ClientExecutable}, durable)
+			if retry.LocalConfig == nil || retry.LocalConfig.ProfileSettingsPath != cfg.ProfileSettingsPath || retry.LocalConfig.QualifiedTuple != cfg.QualifiedTuple || retry.LocalConfig.TargetShell != cfg.TargetShell || retry.LocalConfig.NativeStop != cfg.NativeStop || len(retry.LocalConfig.MCPServers) != len(cfg.MCPServers) || len(retry.LocalConfig.Skills) != len(cfg.Skills) {
+				t.Fatalf("Local retry scope lost: %+v", retry.LocalConfig)
+			}
+			cmd := strings.Join(localRetryCommand(retry), " ")
+			for _, expected := range []string{"--local-settings " + cfg.ProfileSettingsPath, "--helper " + req.Helper, "--local-native-stop " + strconv.FormatBool(cfg.NativeStop), "--local-mcp " + strconv.FormatBool(bits&2 != 0), "--local-skills " + strconv.FormatBool(bits&4 != 0)} {
+				if !strings.Contains(cmd, expected) {
+					t.Fatal("retry argv lost", expected, cmd)
+				}
+			}
+			off := false
+			req.AgentNotify = &off
+			_, selected := selectedUnits(req, agents)
+			if len(selected) != 1 {
+				t.Fatal("legacy MCP/manual opt-out changed Local native selection")
+			}
+		})
+	}
+	legacy, err := normalizeAgents([]string{"claude", "codex"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hooks, notify := selectedUnits(Request{Action: ActionInstall}, legacy)
+	if len(hooks) != 2 || len(notify) != 2 {
+		t.Fatal("omitted legacy defaults changed")
+	}
+}
+
+func TestLocalExplicitEmptyLifecycleSelection(t *testing.T) {
+	for _, action := range []Action{ActionInstall, ActionUpdate, ActionUninstall} {
+		req := Request{Action: action, Agents: []string{"copilot-vscode"}, LocalConfig: &vscode.LocalConfig{}, InstallationID: "TEST-existing", BindingIDs: map[string]string{"copilot-vscode": "TEST-binding"}}
+		_, notify := selectedUnits(req, []portable.Integration{portable.CopilotVSCode})
+		want := 1
+		if action == ActionInstall {
+			want = 0
+		}
+		if len(notify) != want {
+			t.Fatalf("%s empty existing target selection: %v", action, notify)
+		}
+	}
+	req := Request{Action: ActionUpdate, LocalConfig: &vscode.LocalConfig{}}
+	_, notify := selectedUnits(req, []portable.Integration{portable.CopilotVSCode})
+	if len(notify) != 0 {
+		t.Fatal("empty new selection gained authority")
+	}
+}
+
+// Regression: the outer Local wrapper must not replace the frozen action or
+// independent delivery units advertised by the pending-intent conflict.
+func TestLocalPendingConflictPreservesAuthoritativeCommand(t *testing.T) {
+	for _, conflict := range []string{"action", "units"} {
+		t.Run(conflict, func(t *testing.T) {
+			ctx := testCtx(t)
+			control, runtimeRoot, global, _, gen := managedRuntime(t)
+			profile := filepath.Join(filepath.Dir(control), "TEST-local-profile")
+			if err := os.MkdirAll(profile, 0700); err != nil {
+				t.Fatal(err)
+			}
+			cfg := &vscode.LocalConfig{ProfileSettingsPath: filepath.Join(profile, "settings.json"), QualifiedTuple: vscode.QualifiedDarwinTESTTuple(), TargetShell: vscodelocalhooks.Target{Shell: vscodelocalhooks.MacOSSH}, NativeStop: true, MCPServers: []string{"agent-notify"}}
+			frozen := Request{Action: ActionInstall, Agents: []string{"copilot-vscode"}, LocalConfig: cfg, ScopeRoot: profile, InstallationID: "TEST-local-pending", Helper: filepath.Join(runtimeRoot, "TEST-helper"), ClientExecutable: filepath.Join(runtimeRoot, "TEST-code")}
+			hooks, notify := selectedUnits(frozen, []portable.Integration{portable.CopilotVSCode})
+			intent := portablesetup.Intent{Version: 1, SetupIntentID: "TEST-local-pending-intent", Action: "install", Stage: "retire-direct", ExpectedGeneration: gen, Targets: wizardIntentTargets(frozen, hooks, notify)}
+			plantPendingIntent(t, ctx, control, runtimeRoot, gen, intent)
+			req := frozen
+			req.ControlRoot, req.RuntimeRoot, req.GlobalConfig = control, runtimeRoot, global
+			req.Yes = true
+			cp := *cfg
+			req.LocalConfig = &cp
+			if conflict == "action" {
+				req.Action = ActionUninstall
+			} else {
+				req.LocalConfig.NativeStop = false
+				req.LocalConfig.Skills = []string{"agent-notifications"}
+			}
+			for _, boundary := range []string{"run", "plan"} {
+				var out Result
+				var err error
+				if boundary == "run" {
+					out, err = Run(ctx, req)
+				} else {
+					var plan SetupPlan
+					plan, err = Plan(ctx, req)
+					out = plan.Result
+				}
+				if err == nil || out.Reason != "pending_intent_conflict" {
+					t.Fatalf("%s: %+v %v", boundary, out, err)
+				}
+				command := strings.Join(out.Command, " ")
+				for _, want := range []string{"--action install", "--local-settings " + cfg.ProfileSettingsPath, "--local-native-stop true", "--local-mcp true", "--local-skills false"} {
+					if !strings.Contains(command, want) {
+						t.Fatalf("%s frozen retry lost %q: %s", boundary, want, command)
+					}
+				}
+			}
+		})
 	}
 }

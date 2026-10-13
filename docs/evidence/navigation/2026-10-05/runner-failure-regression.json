@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "productionClientActivated": false,
+  "fault": "Invalid Swift source in disposable copied fixture project after successful routing",
+  "before": {
+    "fault": "resource-build compiler failure after successful routing",
+    "exitCode": 0,
+    "passed": true,
+    "error": "resource-build_failed",
+    "runnerSHA256": "5a6a63a1344442368bf61a7b81984b281d59fbdc40626520b42a856efffc86d4",
+    "sourceSHA256": {
+      "AppleEventEndpointProbe.swift": "7d3c8b8ac8351e87869653b4df9fa6b795d6031019ae03b7ab830d6617c3733d",
+      "ProcessSerialBridge.c": "f8b2e464465b7d1f3835dfb1aa3040715940f109b3f733e700f7caed9c132ab1",
+      "ProcessSerialBridge.h": "5065d4b90bca9305c9c6709db0b5f0a6d9f1fda3a66948efb032fec0bdc1cec3",
+      "ProcessSerialRoutingProbe.swift": "a68c6ce17ce29854e0f452dbe9559e6a4aaf7464b71fdb794d260598abb1481b",
+      "ResourceValidationProbe.swift": "7e670dbc5aeb7fc2a184d8d55fc94cacab0c9d43b84a3acf31153dd9acb77135"
+    },
+    "resourceBuildPhase": {
+      "label": "resource-build",
+      "exitCode": 1,
+      "stdoutSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrSHA256": "def2d4f30806e595b8e7390f5e3dc68094518baf383e3d5fb8ce94236f756852"
+    },
+    "snapshotUnchanged": true
+  },
+  "after": {
+    "fault": "resource-build compiler failure after successful routing",
+    "exitCode": 1,
+    "passed": false,
+    "error": "resource-build_failed",
+    "failureOutputRetained": true,
+    "runnerSHA256": "454ef7c77b84897395b82067088217a415c19c97e5514b0b80388112aa526200",
+    "sourceSHA256": {
+      "AppleEventEndpointProbe.swift": "7d3c8b8ac8351e87869653b4df9fa6b795d6031019ae03b7ab830d6617c3733d",
+      "ProcessSerialBridge.c": "f8b2e464465b7d1f3835dfb1aa3040715940f109b3f733e700f7caed9c132ab1",
+      "ProcessSerialBridge.h": "5065d4b90bca9305c9c6709db0b5f0a6d9f1fda3a66948efb032fec0bdc1cec3",
+      "ProcessSerialRoutingProbe.swift": "a68c6ce17ce29854e0f452dbe9559e6a4aaf7464b71fdb794d260598abb1481b",
+      "ResourceValidationProbe.swift": "7e670dbc5aeb7fc2a184d8d55fc94cacab0c9d43b84a3acf31153dd9acb77135"
+    },
+    "resourceBuildPhase": {
+      "label": "resource-build",
+      "exitCode": 1,
+      "stdoutSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrSHA256": "a77e237d05b982096bb36b3afb1709fdc520ea4a404420b5dd81d2aa33a1a7ac"
+    },
+    "snapshotUnchanged": true
+  }
+}

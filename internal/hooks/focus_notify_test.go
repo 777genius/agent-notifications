@@ -1,6 +1,7 @@
 package hooks
 
 import (
+	"sync"
 	"testing"
 	"time"
 
@@ -133,12 +134,11 @@ func TestSendDesktopNotification_DelayThenSuppressedOnFocus(t *testing.T) {
 
 func TestHandleHook_FocusSuppressionDoesNotRecordLastNotificationOrCooldownQuestion(t *testing.T) {
 	on := true
-	taskCooldown := 0
 	anyCooldown := 30
 	cfg := focusNotifyConfig(&on, nil)
 	cfg.Notifications.Webhook.Enabled = false
-	cfg.Notifications.SuppressQuestionAfterTaskCompleteSeconds = &taskCooldown
 	cfg.Notifications.SuppressQuestionAfterAnyNotificationSeconds = &anyCooldown
+	assert.Equal(t, 12, cfg.GetSuppressQuestionAfterTaskCompleteSeconds())
 
 	handler, mockNotif, _ := newTestHandler(t, cfg)
 
@@ -159,8 +159,9 @@ func TestHandleHook_FocusSuppressionDoesNotRecordLastNotificationOrCooldownQuest
 
 	sessionState, err := handler.stateMgr.Load(sessionID)
 	assert.NoError(t, err)
-	if assert.NotNil(t, sessionState) {
+	if sessionState != nil {
 		assert.Zero(t, sessionState.LastNotificationTime, "suppressed desktop notification must not start notification cooldowns")
+		assert.Zero(t, sessionState.LastTaskCompleteTime, "suppressed task-complete must not start question cooldown")
 		assert.Empty(t, sessionState.LastNotificationStatus)
 		assert.Empty(t, sessionState.LastNotificationMessage)
 	}
@@ -175,11 +176,15 @@ func TestHandleHook_FocusSuppressionDoesNotRecordLastNotificationOrCooldownQuest
 }
 
 func TestHandleHook_DelayDoesNotHoldContentLock(t *testing.T) {
+	setTestHome(t, t.TempDir())
 	delay := 5
 	cfg := focusNotifyConfig(nil, &delay)
 	cfg.Notifications.Webhook.Enabled = false
 
 	handler, _, _ := newTestHandler(t, cfg)
+
+	sessionID := "test-delay-releases-content-lock"
+	transcriptPath := createTempTranscript(t, buildTranscriptWithTools([]string{"Write"}, 300))
 
 	restoreSleep := sleepFunc
 	slept := make(chan time.Duration, 1)
@@ -188,23 +193,31 @@ func TestHandleHook_DelayDoesNotHoldContentLock(t *testing.T) {
 		slept <- d
 		<-releaseSleep
 	}
-	defer func() { sleepFunc = restoreSleep }()
-
-	sessionID := "test-delay-releases-content-lock"
-	transcriptPath := createTempTranscript(t, buildTranscriptWithTools([]string{"Write"}, 300))
 
 	done := make(chan error, 1)
+	finished := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseSleep) }) }
+	defer func() {
+		release()
+		// Join before restoring the global, including fatal assertion paths.
+		<-finished
+		sleepFunc = restoreSleep
+	}()
 	go func() {
+		defer close(finished)
 		done <- handler.HandleHook("Stop", buildHookDataJSON(HookData{
-			SessionID:      sessionID,
-			TranscriptPath: transcriptPath,
-			CWD:            "/test",
+			SessionID:            sessionID,
+			TranscriptPath:       transcriptPath,
+			LastAssistantMessage: "Done.",
 		}))
 	}()
 
 	select {
 	case d := <-slept:
 		assert.Equal(t, 5*time.Second, d)
+	case err := <-done:
+		t.Fatalf("hook returned before notifyDelaySeconds sleep: %v", err)
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for notifyDelaySeconds sleep")
 	}
@@ -216,7 +229,7 @@ func TestHandleHook_DelayDoesNotHoldContentLock(t *testing.T) {
 		assert.NoError(t, handler.dedupMgr.ReleaseContentLock(sessionID))
 	}
 
-	close(releaseSleep)
+	release()
 
 	select {
 	case err := <-done:

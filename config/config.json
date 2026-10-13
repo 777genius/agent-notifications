@@ -22,6 +22,10 @@
     "suppressFilters": []
   },
   "statuses": {
+    "agent_stopping": {
+      "title": "Copilot in VS Code",
+      "sound": ""
+    },
     "task_complete": {
       "title": "✅ Completed",
       "sound": "${CLAUDE_PLUGIN_ROOT}/sounds/task-complete.mp3"

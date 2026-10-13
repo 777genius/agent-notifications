@@ -1,0 +1,212 @@
+name: macOS v1.48.3 installed lifecycle
+
+on:
+  workflow_dispatch:
+    inputs:
+      seal_only:
+        description: Prepare custody inputs only; skip macOS business qualification
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: macos-v1483-lifecycle-${{ github.sha }}
+  cancel-in-progress: false
+
+env:
+  CANDIDATE_SHA: 016707404d4e47af77937e6d7ad26828e874c110
+  SIGNING_RUN: '37687161334'
+
+jobs:
+  custody-binaries:
+    name: Build additional custody only ${{ matrix.platform }}/${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {runner: ubuntu-22.04, platform: linux, arch: amd64}
+          - {runner: ubuntu-22.04-arm, platform: linux, arch: arm64}
+          - {runner: windows-latest, platform: windows, arch: amd64}
+    steps:
+      - name: Preserve canonical Git bytes
+        if: runner.os == 'Windows'
+        shell: bash
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with: {go-version: '1.26'}
+      - name: Install native Linux build prerequisite
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      - name: Build exact source without launching candidate
+        shell: bash
+        env:
+          CGO_ENABLED: '1'
+          GOTOOLCHAIN: local
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test "$(go env GOOS)/$(go env GOARCH)" = '${{ matrix.platform }}/${{ matrix.arch }}'
+          mkdir dist
+          suffix=''
+          if [ '${{ matrix.platform }}' = windows ]; then suffix='.exe'; fi
+          go build -trimpath -ldflags='-s -w' -o "dist/claude-notifications-${{ matrix.platform }}-${{ matrix.arch }}$suffix" ./cmd/claude-notifications
+      - uses: actions/upload-artifact@v7
+        with:
+          name: macos-custody-${{ matrix.platform }}-${{ matrix.arch }}
+          path: dist/*
+          retention-days: 14
+
+  seal-inputs:
+    needs: custody-binaries
+    runs-on: ${{ vars.CI_LINUX_RUNNER || 'ubuntu-22.04' }}
+    timeout-minutes: 30
+    outputs:
+      parent_sha256: ${{ steps.seal.outputs.parent_sha256 }}
+    steps:
+      - uses: actions/checkout@v7
+        with: {ref: '${{ env.CANDIDATE_SHA }}', path: source, fetch-depth: 0, persist-credentials: false}
+      - uses: actions/checkout@v7
+        with: {ref: '${{ github.sha }}', path: operator, persist-credentials: false}
+      - uses: actions/setup-go@v7
+        with: {go-version: '1.26'}
+      - uses: actions/setup-node@v6
+        with: {node-version: '24.21.0'}
+      - uses: actions/setup-python@v7
+        with: {python-version: '3.12'}
+      - uses: actions/download-artifact@v8
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ github.run_id }}
+          pattern: macos-custody-*
+          merge-multiple: true
+          path: source/dist
+      - uses: actions/download-artifact@v8
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ env.SIGNING_RUN }}
+          name: macos-candidate-amd64-016707404d4e47af77937e6d7ad26828e874c110
+          path: source/.task-tools/artifacts/signed-amd64
+      - uses: actions/download-artifact@v8
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ env.SIGNING_RUN }}
+          name: macos-candidate-arm64-016707404d4e47af77937e6d7ad26828e874c110
+          path: source/.task-tools/artifacts/signed-arm64
+      - uses: actions/download-artifact@v8
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ env.SIGNING_RUN }}
+          name: ClaudeNotifier-smoke
+          path: source/.task-tools/artifacts/signed
+      - name: Record completed owner signing run provenance
+        env: {GH_TOKEN: '${{ github.token }}'}
+        run: gh api repos/777genius/agent-notifications/actions/runs/$SIGNING_RUN > source/.task-tools/artifacts/signing-run.json
+      - name: Record current owner custody run and completed build jobs
+        env: {GH_TOKEN: '${{ github.token }}'}
+        run: |
+          set -euo pipefail
+          gh api repos/777genius/agent-notifications/actions/runs/$GITHUB_RUN_ID > source/.task-tools/artifacts/custody-run.json
+          gh api "repos/777genius/agent-notifications/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs?per_page=100" > source/.task-tools/artifacts/custody-jobs.json
+      - name: Rebuild exact self-contained bundle without replacing embedded bytes
+        working-directory: source/opencode-plugin
+        run: |
+          set -euo pipefail
+          cp ../internal/opencodeplugin/dist/agent-notifications.js ../.task-tools/artifacts/original-observer.js
+          npm ci --ignore-scripts
+          npm run check:candidate
+          npm run build
+          cmp ../.task-tools/artifacts/original-observer.js ../internal/opencodeplugin/dist/agent-notifications.js
+          cp ../internal/opencodeplugin/dist/agent-notifications.js ../.task-tools/artifacts/rebuilt-observer.js
+      - name: Strict operator typecheck using the candidate locked Node typings
+        run: source/opencode-plugin/node_modules/.bin/tsc --noEmit --strict --target ES2023 --module NodeNext --moduleResolution NodeNext --types node --typeRoots source/opencode-plugin/node_modules/@types operator/scripts/macos-release-qualification.mts
+      - name: Seal all eleven custody cells and the signed macOS helper
+        id: seal
+        env:
+          OPERATOR_SHA: ${{ github.sha }}
+          OPERATOR_ROOT: ${{ github.workspace }}/operator
+          CANDIDATE_ROOT: ${{ github.workspace }}/source
+        run: |
+          set -euo pipefail
+          for arch in amd64 arm64; do
+            cp "source/.task-tools/artifacts/signed-$arch/claude-notifications-darwin-$arch" source/dist/
+          done
+          node operator/scripts/macos-release-qualification.mts prepare
+      - uses: actions/upload-artifact@v7
+        with:
+          name: macos-lifecycle-inputs
+          include-hidden-files: true
+          path: |
+            source/dist/*
+            source/.task-tools/artifacts/release-opencode-inputs.tar.gz
+          if-no-files-found: error
+          retention-days: 14
+
+  macos-business:
+    if: ${{ !inputs.seal_only }}
+    needs: seal-inputs
+    name: TEST installed Darwin ${{ matrix.target.arch }} OpenCode ${{ matrix.version }}
+    runs-on: ${{ matrix.target.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ['1.18.33', '2.0.21']
+        target:
+          - {arch: amd64, runner: macos-15-intel}
+          - {arch: arm64, runner: macos-15}
+    steps:
+      - uses: actions/checkout@v7
+        with: {ref: '${{ env.CANDIDATE_SHA }}', path: source, fetch-depth: 0, persist-credentials: false}
+      - uses: actions/checkout@v7
+        with: {ref: '${{ github.sha }}', path: operator, persist-credentials: false}
+      - uses: actions/setup-go@v7
+        with: {go-version: '1.26'}
+      - uses: actions/setup-node@v6
+        with: {node-version: '24.21.0'}
+      - uses: actions/setup-python@v7
+        with: {python-version: '3.12'}
+      - uses: actions/download-artifact@v8
+        with: {name: macos-lifecycle-inputs, path: source/.task-tools/artifacts/download}
+      - name: Prefetch locked tooling and modules before isolated native execution
+        working-directory: source
+        run: |
+          set -euo pipefail
+          npm ci --prefix opencode-plugin
+          go mod download
+          mkdir -p dist .task-tools/artifacts/custody
+          cp .task-tools/artifacts/download/dist/* dist/
+          cp .task-tools/artifacts/download/.task-tools/artifacts/release-opencode-inputs.tar.gz .task-tools/artifacts/custody/
+      - name: Observe fresh primitives, independently seal, execute unchanged business runner
+        env:
+          OPERATOR_SHA: ${{ github.sha }}
+          OPERATOR_ROOT: ${{ github.workspace }}/operator
+          CANDIDATE_ROOT: ${{ github.workspace }}/source
+          AN_ARCH: ${{ matrix.target.arch }}
+          AN_VERSION: ${{ matrix.version }}
+          AN_EVIDENCE_SHA256: ${{ needs.seal-inputs.outputs.parent_sha256 }}
+        run: node operator/scripts/macos-release-qualification.mts execute
+      - name: Retain only safe reports and adapter custody
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: macos-installed-${{ matrix.target.arch }}-${{ matrix.version }}
+          include-hidden-files: true
+          path: |
+            source/.task-tools/artifacts/clock.json
+            source/.task-tools/artifacts/reader.json
+            source/.task-tools/artifacts/native-report.json
+            source/.task-tools/artifacts/business-diagnostic.json
+            source/.task-tools/artifacts/sealed-business/**
+            source/.task-tools/artifacts/macos-tools/configuration.json
+          if-no-files-found: error
+          retention-days: 14

@@ -89,7 +89,7 @@ func provision(ctx context.Context, o Options, s installruntime.PolicySnapshot, 
 		if e != nil {
 			return s, pre, "", fail("unsafe_state", e)
 		}
-		if e = matches(stage, owner.DirectoryID); e != nil {
+		if e = matches(stage, root, owner.DirectoryID); e != nil {
 			_ = stage.Close()
 			return s, pre, "", fail("unsafe_state", e)
 		}
@@ -132,7 +132,7 @@ func provision(ctx context.Context, o Options, s installruntime.PolicySnapshot, 
 		return s, pre, "", fail("initialization_recovery_required", fmt.Errorf("expected owned state is missing or unsafe: %w", e))
 	}
 	defer func() { _ = state.Close() }()
-	if e = matches(state, owner.DirectoryID); e != nil {
+	if e = matches(state, root, owner.DirectoryID); e != nil {
 		return s, pre, "", fail("initialization_recovery_required", e)
 	}
 	if location == "state" {
@@ -176,7 +176,7 @@ func provision(ctx context.Context, o Options, s installruntime.PolicySnapshot, 
 		if e != nil {
 			return s, pre, "", fail("unsafe_state", e)
 		}
-		e = matches(named, owner.DirectoryID)
+		e = matches(named, root, owner.DirectoryID)
 		_ = named.Close()
 		if e != nil {
 			return s, pre, "", fail("unsafe_state", e)
@@ -290,12 +290,16 @@ func directoryID(f *os.File) (string, error) {
 	e := unix.Fstat(int(f.Fd()), &st)
 	return fmt.Sprintf("%d:%d", st.Dev, st.Ino), e
 }
-func matches(f *os.File, want string) error {
+func matches(f, parent *os.File, want string) error {
 	id, e := directoryID(f)
 	if e != nil {
 		return e
 	}
-	if id != want {
+	var parentStat unix.Stat_t
+	if e = unix.Fstat(int(parent.Fd()), &parentStat); e != nil {
+		return e
+	}
+	if !installruntime.MatchPersistedDirectory(want, id, fmt.Sprintf("%d", parentStat.Dev)) {
 		return fmt.Errorf("owned directory identity changed")
 	}
 	return nil
@@ -347,7 +351,7 @@ func checkProvisioned(o Options, s installruntime.PolicySnapshot) error {
 		return fail("initialization_recovery_required", e)
 	}
 	defer func() { _ = state.Close() }()
-	if e = matches(state, owner.DirectoryID); e != nil {
+	if e = matches(state, root, owner.DirectoryID); e != nil {
 		return fail("initialization_recovery_required", e)
 	}
 	j, e := openChild(state, "journal")

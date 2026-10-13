@@ -23,20 +23,27 @@ func (f backendFunc) Notify(c context.Context, p agentnotify.Payload, o origin.C
 
 type statusFake struct{}
 
-func (statusFake) Status(context.Context) (Status, error) {
-	return Status{Configuration: "disabled", Capability: "unavailable"}, nil
+func (statusFake) Status(context.Context, origin.Context) (Status, error) {
+	return Status{Configuration: "disabled", Capability: "unavailable", Navigation: agentnotify.NavigationStatus{Capability: "disabled", Precision: "none", Reason: "notifications_disabled"}}, nil
 }
+
+type statusFunc func(context.Context, origin.Context) (Status, error)
+
+func (f statusFunc) Status(ctx context.Context, o origin.Context) (Status, error) { return f(ctx, o) }
 func sdkFixture(t *testing.T, b Backend) (*sdk.ClientSession, context.Context) {
 	t.Helper()
 	return sdkFixtureKind(t, b, "codex")
 }
 func sdkFixtureKind(t *testing.T, b Backend, kind string) (*sdk.ClientSession, context.Context) {
+	return sdkFixtureStatus(t, b, kind, statusFake{})
+}
+func sdkFixtureStatus(t *testing.T, b Backend, kind string, status StatusPort) (*sdk.ClientSession, context.Context) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	a, peer := net.Pipe()
 	done := make(chan error, 1)
 	go func() {
-		done <- Run(ctx, a, Options{Backend: b, Status: statusFake{}, Clock: agentnotify.ClockFunc(func() notification.Deadline { return notification.Deadline{BootID: "test", NotAfter: 100} }), AdapterKind: kind})
+		done <- Run(ctx, a, Options{Backend: b, Status: status, Clock: agentnotify.ClockFunc(func() notification.Deadline { return notification.Deadline{BootID: "test", NotAfter: 100} }), AdapterKind: kind})
 	}()
 	client := sdk.NewClient(&sdk.Implementation{Name: "fixture", Version: "1"}, nil)
 	session, e := client.Connect(ctx, &sdk.IOTransport{Reader: peer, Writer: peer}, nil)
@@ -56,6 +63,66 @@ func sdkFixtureKind(t *testing.T, b Backend, kind string) (*sdk.ClientSession, c
 		_ = session.Close()
 	})
 	return session, ctx
+}
+
+func TestSDKStatusPerCallOrigin(t *testing.T) {
+	seen := make(chan origin.Context, 4)
+	configured := Status{Enabled: true, Configuration: "configured", Capability: "eligible", Navigation: agentnotify.NavigationStatus{Capability: "eligible", Precision: "chat_id", Scope: "local_current_profile", Reason: "configured_codex_desktop"}}
+	session, ctx := sdkFixtureStatus(t, backendFunc(func(context.Context, agentnotify.Payload, origin.Context, notification.Deadline) agentnotify.Receipt {
+		t.Error("status invoked notification backend")
+		return agentnotify.Receipt{}
+	}), "codex", statusFunc(func(_ context.Context, o origin.Context) (Status, error) {
+		seen <- o
+		return configured, nil
+	}))
+	for _, tc := range []struct {
+		meta              sdk.Meta
+		id, reason, scope string
+	}{
+		{sdk.Meta{"threadId": "private-thread-A", "callId": "private-call"}, "private-thread-A", "available", "session"},
+		{sdk.Meta{"threadId": "private-thread-B"}, "private-thread-B", "available", "session"},
+		{nil, "", "session_required", "shared_anonymous"},
+		{sdk.Meta{"threadId": 42}, "", "invalid_session", "shared_anonymous"},
+	} {
+		r, err := session.CallTool(ctx, &sdk.CallToolParams{Name: "notification_status", Meta: tc.meta, Arguments: map[string]any{}})
+		if err != nil || r.IsError {
+			t.Fatalf("status: %v %v", r, err)
+		}
+		wantOrigin := origin.Context{Provider: "codex", Namespace: "mcp", SessionID: tc.id, AnonymousCaller: "shared_mcp", Provenance: origin.ClientMetadata, Locality: origin.LocalityUnknown, Interface: origin.InterfaceUnknown}
+		if got := <-seen; got != wantOrigin {
+			t.Fatalf("per-call origin: %+v", got)
+		}
+		want := configured
+		want.ContextReason, want.DedupScope, want.RateScope = tc.reason, tc.scope, tc.scope
+		wantJSON, _ := json.Marshal(want)
+		if got := r.Content[0].(*sdk.TextContent).Text; got != string(wantJSON) {
+			t.Fatalf("bounded status: %s", got)
+		}
+	}
+}
+
+func TestSDKStatusRejectsInvalidNavigation(t *testing.T) {
+	for _, n := range []agentnotify.NavigationStatus{
+		{Capability: "available", Precision: "chat_id", Scope: "local_current_profile", Reason: "configured_codex_desktop"},
+		{Capability: "eligible", Precision: "chat_id", Scope: "private-thread", Reason: "configured_codex_desktop"},
+		{Capability: "eligible", Precision: "none", Reason: "configured_codex_desktop"},
+		{Capability: "unavailable", Precision: "none", Reason: strings.Repeat("x", 129)},
+	} {
+		session, ctx := sdkFixtureStatus(t, backendFunc(func(context.Context, agentnotify.Payload, origin.Context, notification.Deadline) agentnotify.Receipt {
+			t.Error("status invoked notification backend")
+			return agentnotify.Receipt{}
+		}), "codex", statusFunc(func(context.Context, origin.Context) (Status, error) {
+			return Status{Configuration: "configured", Capability: "eligible", Navigation: n}, nil
+		}))
+		r, err := session.CallTool(ctx, &sdk.CallToolParams{Name: "notification_status", Arguments: map[string]any{}})
+		if err != nil || !r.IsError {
+			t.Fatalf("invalid status accepted: %v %v", r, err)
+		}
+		var receipt agentnotify.Receipt
+		if err := json.Unmarshal([]byte(r.Content[0].(*sdk.TextContent).Text), &receipt); err != nil || receipt.Reason != "invalid_status" {
+			t.Fatalf("invalid status result: %+v %v", receipt, err)
+		}
+	}
 }
 func TestSDKToolsAndPerCallOrigin(t *testing.T) {
 	var mu sync.Mutex

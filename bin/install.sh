@@ -22,6 +22,8 @@ else
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 fi
 
+INSTALL_BUNDLE_MANIFEST="$SCRIPT_DIR/../.claude-plugin/plugin.json"
+
 # Ensure target directory exists
 mkdir -p "$SCRIPT_DIR" 2>/dev/null || true
 
@@ -91,7 +93,7 @@ prepare_install_config_preflight() {
         INSTALL_PRIVATE_DOWNLOAD=true
         detect_platform
         REQUIRE_CHECKSUM=true
-        pin_release_urls
+        pin_release_urls || exit 1
         download_and_verify_binary && verify_executable
     ) >/dev/null 2>&1; then
         config_preflight_stop
@@ -252,7 +254,7 @@ abort_if_wsl_environment() {
     echo -e "${YELLOW}This installer is running inside WSL, so it would install Linux binaries under /home instead of Windows binaries.${NC}" >&2
     echo -e "${YELLOW}If you started this from PowerShell or Windows Terminal, your bash command is probably WSL bash, not Git Bash.${NC}" >&2
     echo "" >&2
-    echo -e "${YELLOW}For Windows Claude Code, open Git Bash and use the installer at:${NC}" >&2
+    echo -e "${YELLOW}For Windows Claude, open Git Bash and use the installer at:${NC}" >&2
     echo -e "  https://777genius.github.io/agent-notifications/#install" >&2
     echo "" >&2
     echo -e "${YELLOW}For an intentional WSL install, set CLAUDE_NOTIFICATIONS_ALLOW_WSL=1 on the final bash command.${NC}" >&2
@@ -556,7 +558,7 @@ start_lock_heartbeat() {
             # its orphaned child could keep a demonstrably dead owner's lock
             # fresh forever.
             lock_owner_alive "$owner_dir" || exit 0
-            touch "$owner_dir/heartbeat" 2>/dev/null || exit 0
+            touch -c "$owner_dir/heartbeat" 2>/dev/null || exit 0
             sleep "$interval" || exit 0
         done
     ) </dev/null >/dev/null 2>&1 &
@@ -774,13 +776,14 @@ get_latest_release_tag() {
 pin_release_urls() {
     [ "$RELEASE_URL" = "$DEFAULT_RELEASE_URL" ] || return 0
 
-    local tag=""
-    tag=$(get_latest_release_tag || true)
-
-    if [ -z "$tag" ]; then
-        echo -e "${YELLOW}⚠ Could not resolve latest release tag, using /releases/latest fallback${NC}"
-        return 0
+    # The source bundle and native runtime share one ConsumerVersion. A global
+    # Latest lookup can silently downgrade a newer platform-specific bundle.
+    local tag="" manifest="$INSTALL_BUNDLE_MANIFEST" version
+    if [ -f "$manifest" ]; then
+        version=$(grep -Eo '"version"[[:space:]]*:[[:space:]]*"[0-9]+\.[0-9]+\.[0-9]+"' "$manifest" | head -1 | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+')
+        [ -n "$version" ] && tag="v$version"
     fi
+    [ -n "$tag" ] || { echo 'Missing source bundle version; rerun the public platform installer.' >&2; return 1; }
 
     PINNED_RELEASE_TAG="$tag"
     RELEASE_URL="${RELEASES_BASE_URL}/download/${PINNED_RELEASE_TAG}"
@@ -1027,7 +1030,10 @@ download_utility() (
 
     local downloaded=false
     guard_install_paths "$temp_path"
-    if command -v curl &> /dev/null; then
+    if [ -n "${INSTALL_STAGED_ASSETS:-}" ] && [ -f "$INSTALL_STAGED_ASSETS/$util_name" ]; then
+        cp "$INSTALL_STAGED_ASSETS/$util_name" "$temp_path" || return 1
+        downloaded=true
+    elif command -v curl &> /dev/null; then
         if curl -fsSL "${CURL_EXTRA_OPTS[@]}" --connect-timeout "$CONNECT_TIMEOUT" --max-time "$CURL_TIMEOUT" "$url" -o "$temp_path" 2>/dev/null; then
             downloaded=true
         fi
@@ -1640,7 +1646,7 @@ configure_windows_native_hooks() {
     guard_install_paths "$hooks_path" "$tmp_hooks"
     if printf '%s\n' "$hooks_json" > "$tmp_hooks" 2>/dev/null && mv "$tmp_hooks" "$hooks_path" 2>/dev/null; then
         echo -e "${GREEN}✓${NC} Windows exec-form hooks configured"
-        echo -e "${YELLOW}  Restart Claude Code to apply the Windows hook update.${NC}"
+        echo -e "${YELLOW}  Restart Claude to apply the Windows hook update.${NC}"
     else
         guard_install_paths "$tmp_hooks"
         rm -f "$tmp_hooks" 2>/dev/null || true
@@ -1687,7 +1693,11 @@ download_terminal_notifier_modern() {
     local attempt=1
     local downloaded=false
 
-    while [ $attempt -le $MAX_RETRIES ]; do
+    if [ -n "${INSTALL_STAGED_ASSETS:-}" ] && [ -f "$INSTALL_STAGED_ASSETS/$MODERN_ASSET_NAME" ]; then
+        cp "$INSTALL_STAGED_ASSETS/$MODERN_ASSET_NAME" "$TEMP_ZIP" || return 1
+        downloaded=true
+    fi
+    while [ "$downloaded" != true ] && [ $attempt -le $MAX_RETRIES ]; do
         if [ $attempt -gt 1 ]; then
             echo -e "${YELLOW}Retry ${attempt}/${MAX_RETRIES}...${NC}"
             sleep $RETRY_DELAY
@@ -1710,7 +1720,7 @@ download_terminal_notifier_modern() {
     done
 
     if [ "$downloaded" != true ]; then
-        echo -e "${YELLOW}⚠ Could not download ClaudeNotifier, falling back to legacy${NC}"
+        echo -e "${YELLOW}⚠ Could not download ClaudeNotifier; installation cannot continue${NC}"
         guard_install_paths "$TEMP_ZIP"
         rm -f "$TEMP_ZIP" 2>/dev/null
         return 1
@@ -1725,7 +1735,7 @@ download_terminal_notifier_modern() {
 
     # Verify zip
     if ! unzip -t "$TEMP_ZIP" &>/dev/null; then
-        echo -e "${YELLOW}⚠ Downloaded file is not a valid zip, falling back to legacy${NC}"
+        echo -e "${YELLOW}⚠ ClaudeNotifier download is not a valid zip; installation cannot continue${NC}"
         guard_install_paths "$TEMP_ZIP"
         rm -f "$TEMP_ZIP"
         return 1
@@ -1756,12 +1766,12 @@ download_terminal_notifier_modern() {
             rm -rf "$MODERN_APP"
             return 1
         fi
-        # Register with Launch Services
-        /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$MODERN_APP" 2>/dev/null || true
+        # Acquisition has not committed a native generation. LaunchServices
+        # registration belongs to successful durable publication below.
         echo -e "${GREEN}✓${NC} ClaudeNotifier installed (modern notifications + click-to-focus)"
         return 0
     else
-        echo -e "${YELLOW}⚠ ClaudeNotifier extraction incomplete, falling back to legacy${NC}"
+        echo -e "${YELLOW}⚠ ClaudeNotifier extraction incomplete; installation cannot continue${NC}"
         guard_install_paths "$MODERN_APP"
         rm -rf "$MODERN_APP" 2>/dev/null
         return 1
@@ -2306,6 +2316,11 @@ disposable_acquisition() {
     return 0
 }
 
+launch_services_register() {
+    [ -n "$1" ] || return 0
+    /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$1" >/dev/null 2>&1 || true
+}
+
 stage_and_promote_runtime() (
     local live_dir="$SCRIPT_DIR"
     local live_binary="$BINARY_PATH"
@@ -2354,14 +2369,29 @@ stage_and_promote_runtime() (
         # Acquisition into a disposable Codex bundle must not Commit a live
         # consumer. setup-codex registers the durable runtime afterwards.
         copy_verified_stage "$stage" "$live_dir" || exit 1
-    elif [ "${CN_PRODUCT:-claude}" = "codex" ] && [ "$PLATFORM" = "darwin" ]; then
-        "$BINARY_PATH" internal-install-runtime --refresh --stage "$stage" --target "$live_dir" --entry "$BINARY_NAME" --require-native || exit 1
+    elif [ "$PLATFORM" = "darwin" ]; then
+        local -a runtime_args=(internal-install-runtime --stage "$stage" --target "$live_dir" --entry "$BINARY_NAME" --require-native)
+        if [ "${CN_PRODUCT:-claude}" = "codex" ]; then
+            runtime_args+=(--refresh)
+        else
+            runtime_args+=(--relocate-versioned-cache)
+        fi
+        # Released helpers can publish successfully without path-only output.
+        # Probe the verified staged helper, not the installed version or alias.
+        local runtime_help
+        runtime_help=$("$BINARY_PATH" internal-install-runtime --help 2>&1) || true
+        if printf '%s\n' "$runtime_help" | grep -Eq '^[[:space:]]+-{1,2}print-native-path([[:space:]]|$)'; then
+            native_path=$("$BINARY_PATH" "${runtime_args[@]}" --print-native-path) || exit 1
+            launch_services_register "$native_path"
+        else
+            "$BINARY_PATH" "${runtime_args[@]}" || exit 1
+            # Old helpers cannot expose their committed generation. Skip LS
+            # registration rather than register staging or guess from an alias.
+        fi
     elif [ "${CN_PRODUCT:-claude}" = "codex" ]; then
         "$BINARY_PATH" internal-install-runtime --refresh --stage "$stage" --target "$live_dir" --entry "$BINARY_NAME" || exit 1
-    elif [ "$PLATFORM" = "darwin" ]; then
-        "$BINARY_PATH" internal-install-runtime --stage "$stage" --target "$live_dir" --entry "$BINARY_NAME" --require-native || exit 1
     else
-        "$BINARY_PATH" internal-install-runtime --stage "$stage" --target "$live_dir" --entry "$BINARY_NAME" || exit 1
+        "$BINARY_PATH" internal-install-runtime --stage "$stage" --target "$live_dir" --entry "$BINARY_NAME" --relocate-versioned-cache || exit 1
     fi
 
     if [ "$PLATFORM" = "linux" ]; then
@@ -2422,7 +2452,6 @@ main() {
     if check_existing; then
         # Even if binary exists, ensure symlink is created
         create_symlink || return 1
-        configure_windows_native_hooks
 
         # Download utility binaries (sound-preview, list-devices)
         download_utilities
@@ -2476,7 +2505,6 @@ main() {
 
         # Ensure symlink exists
         create_symlink || return 1
-        configure_windows_native_hooks
 
         echo ""
         echo -e "${GREEN}========================================${NC}"
@@ -2490,7 +2518,7 @@ main() {
         return 0
     fi
 
-    pin_release_urls
+    pin_release_urls || return 1
 
     # All destructive verification operates only on the private staging directory.
     # Publish the main version last, after required desktop dependencies are usable.
@@ -2500,7 +2528,6 @@ main() {
     fi
 
     create_symlink || return 1
-    configure_windows_native_hooks
     download_utilities
 
     if [ "$PLATFORM" = "darwin" ]; then
@@ -2523,7 +2550,7 @@ main() {
     # Success message
     echo ""
     echo -e "${GREEN}========================================${NC}"
-    echo -e "${GREEN}✓ Installation Complete!${NC}"
+    echo -e "${GREEN}✓ Binary installation complete${NC}"
     echo -e "${GREEN}========================================${NC}"
     echo ""
     echo -e "${GREEN}✓${NC} Binary downloaded: ${BOLD}${BINARY_NAME}${NC}"
@@ -2546,13 +2573,13 @@ main() {
             echo -e "${YELLOW}⚠${NC} GNOME extension not installed (click-to-focus requires manual setup)"
         fi
     fi
-    echo -e "${GREEN}✓${NC} Ready to use!"
+    echo -e "${GREEN}✓${NC} Binary installed. Restart your agent and verify notification delivery."
     echo ""
     echo -e "${YELLOW}────────────────────────────────────────${NC}"
     echo -e "${YELLOW}★${NC} ${BOLD}Boost your productivity${NC}"
-    echo -e "  Check out the advanced task manager for Claude"
-    echo -e "  with a convenient UI, from the creator of this plugin:"
-    echo -e "  ${GREEN}https://github.com/777genius/claude_agent_teams_ui${NC}"
+    echo -e "  Check out Agent Teams AI, a desktop app for AI agent teams"
+    echo -e "  with Claude, Codex and more, from the creator of this plugin:"
+    echo -e "  ${GREEN}https://github.com/777genius/agent-teams-ai${NC}"
     echo -e "${YELLOW}────────────────────────────────────────${NC}"
     echo ""
     release_lock

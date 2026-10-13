@@ -1,0 +1,108 @@
+{
+  "schemaVersion": 1,
+  "helperSHA256": "9038bc83055751931073608425e1b174668e2693c4f23c9b120ba48b698882a0",
+  "notificationReceipt": {
+    "schemaVersion": 1,
+    "status": "submitted",
+    "reason": "os_accepted",
+    "correlationID": "7b1cacdd-e391-40fb-99f8-8593f6f96cf4",
+    "notificationID": "7b1cacdd-e391-40fb-99f8-8593f6f96cf4",
+    "retrySafe": false,
+    "nonce": "13692b5e-d9dd-45e7-a642-44251585c4eb"
+  },
+  "targetApplication": "/Applications/ChatGPT.app",
+  "targetThreadID": "01a0fdbb-ba00-7303-861a-83640eeec0a7",
+  "userVisualConfirmation": "Opened specified chat with noticeable delay",
+  "verificationSeconds": 4.255460208281875,
+  "handoffSeconds": 0.08621287508867681,
+  "callbackTotalSeconds": 4.342179458355531,
+  "events": [
+    {
+      "timestamp": "2026-10-05 18:46:06.669586+0300",
+      "processID": 56101,
+      "diagnostic": {
+        "event": "callback_received",
+        "correlationID": "7B1CACDD-E391-40FB-99F8-8593F6F96CF4",
+        "elapsedSeconds": 0
+      }
+    },
+    {
+      "timestamp": "2026-10-05 18:46:06.669646+0300",
+      "processID": 56101,
+      "diagnostic": {
+        "correlationID": "7B1CACDD-E391-40FB-99F8-8593F6F96CF4",
+        "event": "preflight_started",
+        "elapsedSeconds": 0.00011912500485777855
+      }
+    },
+    {
+      "timestamp": "2026-10-05 18:46:10.925281+0300",
+      "processID": 56101,
+      "diagnostic": {
+        "durationSeconds": 1.2291595339775085e-05,
+        "correlationID": "7B1CACDD-E391-40FB-99F8-8593F6F96CF4",
+        "event": "preflight_queue"
+      }
+    },
+    {
+      "timestamp": "2026-10-05 18:46:10.925291+0300",
+      "processID": 56101,
+      "diagnostic": {
+        "durationSeconds": 4.2375060729682446e-05,
+        "correlationID": "7B1CACDD-E391-40FB-99F8-8593F6F96CF4",
+        "event": "preflight_discovery"
+      }
+    },
+    {
+      "timestamp": "2026-10-05 18:46:10.925298+0300",
+      "processID": 56101,
+      "diagnostic": {
+        "durationSeconds": 4.255460208281875,
+        "correlationID": "7B1CACDD-E391-40FB-99F8-8593F6F96CF4",
+        "event": "preflight_verification"
+      }
+    },
+    {
+      "timestamp": "2026-10-05 18:46:10.925305+0300",
+      "processID": 56101,
+      "diagnostic": {
+        "elapsedSeconds": 4.255782874999568,
+        "correlationID": "7B1CACDD-E391-40FB-99F8-8593F6F96CF4",
+        "event": "preflight_finished"
+      }
+    },
+    {
+      "timestamp": "2026-10-05 18:46:10.925311+0300",
+      "processID": 56101,
+      "diagnostic": {
+        "elapsedSeconds": 4.255789624992758,
+        "correlationID": "7B1CACDD-E391-40FB-99F8-8593F6F96CF4",
+        "event": "open_submitted"
+      }
+    },
+    {
+      "timestamp": "2026-10-05 18:46:11.011608+0300",
+      "processID": 56101,
+      "diagnostic": {
+        "event": "open_completed",
+        "correlationID": "7B1CACDD-E391-40FB-99F8-8593F6F96CF4",
+        "elapsedSeconds": 4.342002500081435
+      }
+    },
+    {
+      "timestamp": "2026-10-05 18:46:11.011720+0300",
+      "processID": 56101,
+      "diagnostic": {
+        "event": "callback_terminal",
+        "correlationID": "7B1CACDD-E391-40FB-99F8-8593F6F96CF4",
+        "elapsedSeconds": 4.342179458355531,
+        "outcome": "open_requested"
+      }
+    }
+  ],
+  "limitations": [
+    "Single native sample; no measured physical click timestamp or visible-render timestamp",
+    "Sender exit not captured by an independent PID trace",
+    "No optimization enabled; full existing static validation and opener"
+  ]
+}

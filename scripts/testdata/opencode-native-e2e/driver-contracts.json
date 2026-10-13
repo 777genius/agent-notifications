@@ -1,0 +1,141 @@
+{
+  "schemaVersion": 1,
+  "purpose": "TEST reviewed driver source contracts; no runtime authority",
+  "versions": {
+    "1.18.33": "51ef4be1d3c122f18fefb510dca8d778571f4f18",
+    "1.18.34": "aec0b9a6d8898f68f923aaf08b7306d931fd9d76",
+    "2.0.21": "8a8bd622a3d7dc29ccf30ec17f84e363ed95ed72"
+  },
+  "primaryManifestSHA256": "8a48035baf2afd8cf09510ede3b40d1bda58d8b6b9ec2fb33b431d283e3e8afb",
+  "resolutionSHA256": "9cf819cb7fae21d6e36c47a8df787f3931d13016ffaf3994e012d90527a86b05",
+  "v2CompactionTypes": [
+    "session.compaction.started",
+    "session.compaction.ended"
+  ],
+  "v2History": {
+    "path": "/api/session/:sessionID/message",
+    "envelope": [
+      "data",
+      "cursor"
+    ],
+    "assistantDiscriminator": "type",
+    "agentConfig": "agents",
+    "eventPosition": "durable.aggregateID/seq/version"
+  },
+  "sources": [
+    {
+      "commit": "51ef4be1d3c122f18fefb510dca8d778571f4f18",
+      "path": "packages/core/package.json",
+      "bytes": 4288,
+      "sha256": "8250b24fdf60564d5c8809c92275ebf21d1d370dc9b934b29547cd00f5916309"
+    },
+    {
+      "commit": "51ef4be1d3c122f18fefb510dca8d778571f4f18",
+      "path": "packages/core/src/session/compaction.ts",
+      "bytes": 10185,
+      "sha256": "35bc2da1578b6bb80a3c39c1d6c51f234f34ce6586dd4f9d230e2a31b257138d"
+    },
+    {
+      "commit": "aec0b9a6d8898f68f923aaf08b7306d931fd9d76",
+      "path": "packages/core/package.json",
+      "bytes": 4288,
+      "sha256": "63ae9051d0ba1b037fcef41e50422e24aa2cb1124ab5ab101cca80360aee263b"
+    },
+    {
+      "commit": "aec0b9a6d8898f68f923aaf08b7306d931fd9d76",
+      "path": "packages/core/src/session/compaction.ts",
+      "bytes": 10185,
+      "sha256": "35bc2da1578b6bb80a3c39c1d6c51f234f34ce6586dd4f9d230e2a31b257138d"
+    },
+    {
+      "commit": "8a8bd622a3d7dc29ccf30ec17f84e363ed95ed72",
+      "path": "packages/core/src/session/event.ts",
+      "bytes": 110,
+      "sha256": "899d5d14af9236a9968d72d7459fda953d61af996da401e6a2e08a7756995008"
+    },
+    {
+      "commit": "8a8bd622a3d7dc29ccf30ec17f84e363ed95ed72",
+      "path": "packages/schema/src/session-event.ts",
+      "bytes": 19462,
+      "sha256": "1c747fc453dea55c838baf79a572cb675ca8cc60a5a9608160781a343cb898d6"
+    },
+    {
+      "commit": "8a8bd622a3d7dc29ccf30ec17f84e363ed95ed72",
+      "path": "packages/protocol/src/groups/message.ts",
+      "bytes": 3658,
+      "sha256": "abdb0f6c8573eb2b7c606f47056b2b82108e23dde3834140d7709816b8015b38"
+    },
+    {
+      "commit": "8a8bd622a3d7dc29ccf30ec17f84e363ed95ed72",
+      "path": "packages/core/src/session/message.ts",
+      "bytes": 116,
+      "sha256": "67cffbc5963ea2fc7c8f77b64cea661597a4258ecdf6a6185ef4910cb888e8b9"
+    },
+    {
+      "commit": "8a8bd622a3d7dc29ccf30ec17f84e363ed95ed72",
+      "path": "packages/core/src/agent.ts",
+      "bytes": 4757,
+      "sha256": "95f597e95603e9a87dce3800790cc2dcaff36f7b19e459a2da2c3c743b932ab5"
+    },
+    {
+      "commit": "8a8bd622a3d7dc29ccf30ec17f84e363ed95ed72",
+      "path": "packages/core/src/config.ts",
+      "bytes": 15947,
+      "sha256": "1f93b47731ed177dced40d71aaa3c586a10ddf41ad6714ae2fe165c7f09ba253"
+    },
+    {
+      "commit": "8a8bd622a3d7dc29ccf30ec17f84e363ed95ed72",
+      "path": "packages/core/package.json",
+      "bytes": 4790,
+      "sha256": "680f1b8179e8c73742f27e8870ac126ed7f5f74df4f77054ec47ea6b36adfa54"
+    },
+    {
+      "commit": "8a8bd622a3d7dc29ccf30ec17f84e363ed95ed72",
+      "path": "packages/schema/package.json",
+      "bytes": 790,
+      "sha256": "d7e191b2ea9707e35e07202b4bf3770eb4f718f4ce24113eda5797d12fbbae42"
+    },
+    {
+      "commit": "8a8bd622a3d7dc29ccf30ec17f84e363ed95ed72",
+      "path": "packages/protocol/package.json",
+      "bytes": 956,
+      "sha256": "f325c74b0f0d29d6d25494c984c26f403c85594a6000998a44336b39bd6f6dba"
+    },
+    {
+      "commit": "8a8bd622a3d7dc29ccf30ec17f84e363ed95ed72",
+      "path": "packages/schema/src/session-message.ts",
+      "bytes": 11926,
+      "sha256": "9b5cfce6c69bb4987771bdbbb36f6af09c76c5d166ca9da764b052f7c92a4e1a"
+    },
+    {
+      "commit": "8a8bd622a3d7dc29ccf30ec17f84e363ed95ed72",
+      "path": "packages/schema/src/config.ts",
+      "bytes": 5810,
+      "sha256": "45b7c7f329891e8e8425c8eba6c9c5b28d75bbdc8fc9ed0244b2989f25d3b3b8"
+    },
+    {
+      "commit": "8a8bd622a3d7dc29ccf30ec17f84e363ed95ed72",
+      "path": "packages/schema/src/agent.ts",
+      "bytes": 1938,
+      "sha256": "eb227878ba3f002daad5f1012c7f555fa4d4b69c39e3c969225708ace780a1a5"
+    },
+    {
+      "commit": "8a8bd622a3d7dc29ccf30ec17f84e363ed95ed72",
+      "path": "packages/schema/src/config/agent.ts",
+      "bytes": 869,
+      "sha256": "774b72f81adece727836a08eea7920d2b125bac489dac2249f120fe43d400ec4"
+    },
+    {
+      "commit": "8a8bd622a3d7dc29ccf30ec17f84e363ed95ed72",
+      "path": "packages/core/src/config/plugin/agent.ts",
+      "bytes": 9617,
+      "sha256": "e6baab61cd3919b744c3263c6126f5acd38e642ed7d141e838eeefa18c96e985"
+    },
+    {
+      "commit": "8a8bd622a3d7dc29ccf30ec17f84e363ed95ed72",
+      "path": "packages/schema/src/event.ts",
+      "bytes": 6866,
+      "sha256": "cf68654e57726a376c0c57e27740606f276952f14407dc3dedfdad9e8a62ac16"
+    }
+  ]
+}

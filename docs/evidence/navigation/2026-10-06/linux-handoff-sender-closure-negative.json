@@ -1,0 +1,43 @@
+{
+  "scope": "offline_selected_client_handoff_TEST_negative",
+  "sourceCommit": "0d194f48cbf2618e0792ed8e464f45e45f3c9223",
+  "passed": false,
+  "retryAllowed": false,
+  "notificationAttemptedFlagIsProducerIntent": true,
+  "senderSDKEntryQualified": false,
+  "nativeClickAttempted": false,
+  "handoffQualified": false,
+  "activationQualified": false,
+  "navigationQualified": false,
+  "senderExitCode": 1,
+  "senderClosureDefect": "mandatory sender.sha256 absent from readonly ISO before callback import and SDK entry",
+  "guestCleanupPassed": false,
+  "guestCleanupErrors": [
+    "group_observation: owned_incarnation_or_uid_changed"
+  ],
+  "guestCleanupCause": "combined incarnation/UID error does not distinguish the cause",
+  "guestCgroupEmptyObserved": true,
+  "retainedKernelExitsObserved": 9,
+  "guestPoweroffObserved": true,
+  "hostContainerExitObserved": true,
+  "hostContainerRemoved": true,
+  "hostCleanupUnknown": false,
+  "privateArchiveSHA256": "9f2bb8ba8a694ac8df0f0bbe605d5caa094459c4d2af01ce482504b270fc2362",
+  "rawSHA256": {
+    "handoff/execution-manifest.json": "80d77c68cf73eb98985b8c0dd40f3ccc41f337d0987c14105772a33551d4c704",
+    "handoff/operator-result.json": "7701ff3edf0bf9edfe5cb8828e09f0a42db40c40c5b0a64da5152c1df92d8013",
+    "handoff/native-evidence.json": "a7b6d0c5e80fe80639a026c3c98c1f3f735a8549dbeeb7ede829f1063c4bae48",
+    "handoff/guest-result.json": "9fa6f9ec93661b9a746d51ee0b09a04290cab7d4c0a5fa80a7bccb09de4cfd5d",
+    "handoff/native-seed.iso": "511e9602f14e129192c543ee95dfa07f97257ba41ceaccc6b4f8b591382c56fb",
+    "handoff/client-sender.py": "84edde0402ef0632532e03c5e382d81033948d811be1dcd9f89bc28589cf0d9c",
+    "iso-audit/run.stdout": "8029aa47619b55d4ab39d7c5a1be091defaf1067609c3192ba8c8c4e0db5ea6e",
+    "iso-audit/result.json": "d61784b36a086dfaa37da966c0335c5dfea2909ded011dc3095724ff2ee39677",
+    "iso-audit/absence-reconciliation.json": "41aa1a159aae31f8845e8db86e18c647692b4d93a0372a9586733e2077e3b465"
+  },
+  "isoAuditOriginalCleanupPassed": false,
+  "isoAuditAbsenceReconciliation": "separate container inspect by exact ID/name proves removed; original failed receipt preserved",
+  "limitation": "Negative attempt remains FAILED. Source corrections and a new frozen capsule need independent review before any distinct planned attempt.",
+  "senderSDKCallsObservedByControlFlowProof": 0,
+  "independentRawBindingAssertionsPassed": 412,
+  "controlFlowProofLimitation": "Actual ISO and frozen source prove the mandatory pre-SDK read fails; no sender traceback was captured."
+}

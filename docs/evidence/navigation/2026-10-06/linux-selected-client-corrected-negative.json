@@ -1,0 +1,43 @@
+{
+  "scope": "offline_selected_client_renderer_preflight",
+  "status": "failed",
+  "sourceCommit": "157f449",
+  "nativeSourceSHA256": "4509a0dd5d33193f787e5a58c2cac8522c7980ff4ea2a52b3545fc7408cba52c",
+  "guestSourceSHA256": "7fe15e0ba4dcf3133086091f9bc3a9e61c190f1bc75262fe725e5a713afc659b",
+  "operatorSourceSHA256": "5147c7043b76752e09091b0760e30afd032f27d0239bbedfc54649985dd83621",
+  "originalFailure": "RuntimeError: guest_native_contract_failed",
+  "guestFailure": "RuntimeError: actual_renderer_evidence_absent",
+  "frameCapturedDuringNativeRun": true,
+  "guestClientLaunchAttempted": true,
+  "trackedProcessCount": 21,
+  "guestCleanupPassed": true,
+  "allTrackedKernelExitsObserved": true,
+  "guestPoweroffObserved": true,
+  "qemuExitCode": 0,
+  "qemuCollected": true,
+  "kvm": {
+    "enabled": true,
+    "present": true
+  },
+  "operatorReportedContainerRemoved": true,
+  "operatorReportedIntegrityErrors": [],
+  "observedRendererRestrictionsQualified": false,
+  "clientSandboxQualified": false,
+  "renderedClientQualified": false,
+  "focusQualified": false,
+  "navigationQualified": false,
+  "notificationAttempted": false,
+  "rawArtifactHashes": {
+    "qmp-wire.jsonl": "762be38f550edaa1e9ee2ba123918c52508f9264d5ebd9005db8a77684e42729",
+    "operator-result.json": "0adb712b48e59d85e394b2744f589ed05c9725c0a6dc97c62538bc47008df4e2",
+    "native-evidence.json": "f6a6d4682cdce80a9ec2911b29fa0181b4781b628c8590528417aa8971253aaa",
+    "serial.log": "d49a82693dbe5ad54d81dd93f8d1ab40c59c50690bd42ebdbe99b410347422e0",
+    "guest-result.json": "f76757ab70b0e94c1956fde9c56ddd0559ea938c2c27d06d7acbe1d838cfaf59"
+  },
+  "limitations": [
+    "Distinct changed-source attempt, not reinterpretation of the prior failure.",
+    "Guest reports no qualifying renderer evidence; stored report does not identify main/descendant command roles.",
+    "Input and Docker cleanup facts remain operator-reported; raw backing images were not transferred locally.",
+    "No third native attempt performed."
+  ]
+}

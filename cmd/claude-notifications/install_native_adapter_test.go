@@ -155,3 +155,60 @@ func TestInstallAdapterOldHelperSelectsQualifiedSuppliedRelease(t *testing.T) {
 		t.Fatalf("selected newer helper not persistent after source removal: %q %v", got, err)
 	}
 }
+
+func TestInstallAdapterFreshNativeReleaseBeatsInstalledManagedAlias(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("native bundle promotion requires a supported native platform")
+	}
+	root := t.TempDir()
+	stage, target, control := filepath.Join(root, "stage"), filepath.Join(root, "runtime", "bin"), filepath.Join(root, "control")
+	entry := "claude-notifications-darwin-amd64"
+	put := func(path string, data []byte) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, data, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	put(filepath.Join(stage, entry), []byte("inert sender "+installruntime.WriterProtocolMarker))
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var generationA string
+	for _, version := range []string{"A", "B"} {
+		bundle := filepath.Join(stage, "ClaudeNotifier.app")
+		payload := []byte("#!/bin/sh\nexit 97\n# qualified generation " + version + "\n")
+		put(filepath.Join(bundle, "Contents", "MacOS", "terminal-notifier-modern"), payload)
+		put(filepath.Join(bundle, "Contents", "Resources", "managed-runtime.json"), []byte(`{"SchemaVersion":1,"ProtocolVersion":1,"DecoderFloor":1}`))
+		evidence := []byte(fmt.Sprintf(`{"SchemaVersion":1,"ProtocolVersion":1,"DecoderFloor":1,"ExecutableSHA256":"%x"}`, sha256.Sum256(payload)))
+		put(bundle+".managed-runtime.json", evidence)
+		// Prequalify exact fixture bytes without executing a native helper.
+		qualified, err := installruntime.StageRetainedNative(ctx, control, bundle)
+		if err != nil {
+			t.Fatal(err)
+		}
+		qualified.After.DecoderFloor, qualified.After.Attestation = 1, evidence
+		binding := sha256.Sum256(append([]byte(fmt.Sprintf("managed-native-v1:%s:%d:", qualified.After.SHA256, len(evidence))), evidence...))
+		qualified.After.InstalledTreeSHA256 = fmt.Sprintf("%x", binding)
+		if _, err := installruntime.Commit(ctx, installruntime.Request{ControlRoot: control, Owner: "existing-installer", RuntimeRoot: filepath.Dir(target), ConsumerID: "qualified-fixture", Native: qualified}); err != nil {
+			t.Fatal(err)
+		}
+		if err := installRuntime([]string{"--stage", stage, "--target", target, "--entry", entry, "--control-root", control}, io.Discard); err != nil {
+			t.Fatal(err)
+		}
+		selected, err := os.Readlink(filepath.Join(target, "AgentNotifications.app"))
+		if err != nil || selected != qualified.After.Path {
+			t.Fatalf("fresh release %s lost to installed alias: %s want %s %v", version, selected, qualified.After.Path, err)
+		}
+		if version == "A" {
+			generationA = selected
+		}
+		if version == "B" && selected == generationA {
+			t.Fatal("generation B was never installed")
+		}
+	}
+	if _, err := os.Stat(generationA); err != nil {
+		t.Fatalf("published generation A removed: %v", err)
+	}
+}

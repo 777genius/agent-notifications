@@ -29,6 +29,9 @@ import (
 const agentNotifySetupHelp = `Usage: claude-notifications setup-notifications OPERATION [OPTIONS]
 Operations: configure | wizard | prepare | status | register | remove | enable | disable | permission-status | request-permission
 Configure requires --provider codex|claude|both and an explicit fresh route.
+  --policy-only skips legacy MCP/skill registration before portable UAP handoff.
+  --preserve-policy keeps existing enablement, consent and route on repeat setup.
+  --preserve-enabled keeps enablement while applying explicit route/consent choices.
 Wizard is a separate master: setup-notifications wizard --help
   --codex-home ABS and --request-permission are configure-only choices.
   Configure resolves primary runtime, generation and canonical global internally.
@@ -49,6 +52,8 @@ Enable optionally replaces the route using ALL FOUR explicit choices:
   --app /physical/path/Codex.app --team-id ABCDE12345
   --allow-unknown-caller true|false --allow-caller-asserted true|false
   Or use --navigation none without --app/--team-id; both consent flags are required.
+  Linux may use --navigation desktop_thread after setup-linux-callback; both
+  consent flags are required, without --app/--team-id. Other bindings fail closed.
   This clears app identity. The parser does not imply consent.
   Omit all route choices to preserve the selected route and consent. Rates are preserved.
   Unknown-caller consent extends the local route to indistinguishable callers.
@@ -218,7 +223,7 @@ func parseAgentNotifySetup(args []string) (a agentNotifySetupArgs, help bool, er
 		}
 	}
 	if navigation, present := a.values["navigation"]; present {
-		if navigation != "none" || a.values["app"] != "" || a.values["team-id"] != "" || count != 2 {
+		if (navigation != "none" && navigation != "desktop_thread") || a.values["app"] != "" || a.values["team-id"] != "" || count != 2 {
 			return bad()
 		}
 		for _, k := range []string{"allow-unknown-caller", "allow-caller-asserted"} {
@@ -226,7 +231,7 @@ func parseAgentNotifySetup(args []string) (a agentNotifySetupArgs, help bool, er
 				return bad()
 			}
 		}
-		a.route = &notifysetup.Route{AllowUnknownCaller: a.values["allow-unknown-caller"] == "true", AllowCallerAsserted: a.values["allow-caller-asserted"] == "true"}
+		a.route = &notifysetup.Route{LocalRouting: navigation == "desktop_thread", AllowUnknownCaller: a.values["allow-unknown-caller"] == "true", AllowCallerAsserted: a.values["allow-caller-asserted"] == "true"}
 	} else if count != 0 {
 		if count != 4 || filepath.Ext(a.values["app"]) != ".app" || len(a.values["app"]) > 1024 || len(a.values["team-id"]) != 10 {
 			return bad()
@@ -247,19 +252,20 @@ func parseAgentNotifySetup(args []string) (a agentNotifySetupArgs, help bool, er
 }
 
 type agentNotifySetupResult struct {
-	GlobalConfiguration string `json:"globalConfiguration,omitempty"`
-	Source              string `json:"source,omitempty"`
-	Changed             bool   `json:"changed,omitempty"`
-	Ready               bool   `json:"ready,omitempty"`
-	Reason              string `json:"reason"`
-	Generation          uint64 `json:"generation,omitempty"`
-	ExplicitIntent      bool   `json:"explicitIntent"`
-	RuntimeEligible     bool   `json:"runtimeEligible"`
-	Configuration       string `json:"configuration,omitempty"`
-	DesktopEnabled      *bool  `json:"desktopEnabled,omitempty"`
-	OfflineCapability   string `json:"offlineCapability,omitempty"`
-	Permission          string `json:"permission"`
-	Activation          string `json:"activation"`
+	Diagnostic          *installruntime.SnapshotDiagnostic `json:"diagnostic,omitempty"`
+	GlobalConfiguration string                             `json:"globalConfiguration,omitempty"`
+	Source              string                             `json:"source,omitempty"`
+	Changed             bool                               `json:"changed,omitempty"`
+	Ready               bool                               `json:"ready,omitempty"`
+	Reason              string                             `json:"reason"`
+	Generation          uint64                             `json:"generation,omitempty"`
+	ExplicitIntent      bool                               `json:"explicitIntent"`
+	RuntimeEligible     bool                               `json:"runtimeEligible"`
+	Configuration       string                             `json:"configuration,omitempty"`
+	DesktopEnabled      *bool                              `json:"desktopEnabled,omitempty"`
+	OfflineCapability   string                             `json:"offlineCapability,omitempty"`
+	Permission          string                             `json:"permission"`
+	Activation          string                             `json:"activation"`
 }
 
 // Composition overrides are private to hosted tests. Production always uses the
@@ -321,14 +327,17 @@ func agentNotifySetupExecute(ctx context.Context, args []string, out io.Writer, 
 				}{r, r.Changed, r.Ready})
 			} else if code != 0 && (a.operation != "status" || r.Configuration == "") {
 				err = json.NewEncoder(out).Encode(struct {
-					Reason     string `json:"reason"`
-					Generation uint64 `json:"generation,omitempty"`
-				}{r.Reason, r.Generation})
+					Reason     string                             `json:"reason"`
+					Generation uint64                             `json:"generation,omitempty"`
+					Diagnostic *installruntime.SnapshotDiagnostic `json:"diagnostic,omitempty"`
+				}{r.Reason, r.Generation, r.Diagnostic})
 			} else {
 				err = json.NewEncoder(out).Encode(r)
 			}
 		} else if code != 0 && permissionOp {
 			_, err = fmt.Fprintf(out, "%s; generation=%d. Permission: unavailable. Read-only permission-status may clarify; consult setup-notifications --help for prerequisites.\n", r.Reason, r.Generation)
+		} else if code != 0 && r.Diagnostic != nil {
+			_, err = fmt.Fprintf(out, "%s; generation=%d; diagnostic=%s; path=%q. %s\n", r.Reason, r.Generation, r.Diagnostic.Code, r.Diagnostic.Path, r.Diagnostic.Action)
 		} else if code != 0 {
 			_, err = fmt.Fprintf(out, "%s; generation=%d. Read setup-notifications --help; prepare or repair managed installation/settings with the existing installer, then reread status before retrying.\n", r.Reason, r.Generation)
 		} else {
@@ -410,7 +419,13 @@ func agentNotifySetupExecute(ctx context.Context, args []string, out io.Writer, 
 	// Snapshot can return its ledger with an unavailable native artifact; that
 	// must not turn native health into a prerequisite for explicit disable.
 	if e != nil && (a.operation != "disable" || s.Ledger.ID == "") {
-		return emit(agentNotifySetupResult{Reason: "installation_invalid"}, 1)
+		r := agentNotifySetupResult{Reason: "installation_invalid"}
+		if a.operation == "status" {
+			r.Generation = s.Ledger.Generation
+			d := installruntime.SnapshotDiagnosticFor(e)
+			r.Diagnostic = &d
+		}
+		return emit(r, 1)
 	}
 	if s.Ledger.ID == "" {
 		return emit(agentNotifySetupResult{Reason: "managed_runtime_required"}, 1)
@@ -539,7 +554,7 @@ func agentNotifySetupExecute(ctx context.Context, args []string, out io.Writer, 
 	if a.operation == "register" || a.operation == "remove" {
 		var projection *clientsetup.SkillProjection
 		if destination := a.values["skill-destination"]; destination != "" {
-			projection = &clientsetup.SkillProjection{SourcePath: filepath.Join(s.Ledger.RuntimeRoot, "skills", "agent-notify", "SKILL.md"), DestinationPath: destination}
+			projection = &clientsetup.SkillProjection{SourcePath: filepath.Join(s.Ledger.RuntimeRoot, "skills", "agent-notifications", "SKILL.md"), DestinationPath: destination}
 		}
 		result, err := clientsetup.Apply(ctx, clientsetup.Request{SkillProjection: projection, ControlRoot: root, RuntimeRoot: runtimeRoot, Command: a.values["command"], ConfigPath: a.values["config"], Provider: registration.Provider(a.values["provider"]), Mode: clientsetup.Managed, ExpectedGeneration: a.generation, Remove: a.operation == "remove"})
 		if err != nil {
@@ -574,7 +589,7 @@ func agentNotifySetupExecute(ctx context.Context, args []string, out io.Writer, 
 		r.Reason = "registered_runtime_required"
 		return emit(r, 1)
 	}
-	o := notifysetup.Options{ControlRoot: root, RuntimeRoot: runtimeRoot, Owner: clientsetup.Managed, ConsumerID: ids[0], GlobalConfig: a.values["global-config"], VerifyApplication: verifyAgentNotifyApplication}
+	o := notifysetup.Options{ControlRoot: root, RuntimeRoot: runtimeRoot, Owner: clientsetup.Managed, ConsumerID: ids[0], GlobalConfig: a.values["global-config"], VerifyApplication: verifyAgentNotifyApplication, VerifyLinuxBinding: verifyAgentNotifyLinuxBinding}
 	if composition.setup != nil {
 		composition.setup(&o)
 	}
@@ -664,12 +679,9 @@ func agentNotifySetupMain(args []string) (code int) {
 }
 
 func canonicalNotificationGlobalConfig() (string, error) {
-	home, err := os.UserHomeDir()
+	selected, err := config.Resolve(config.SnapshotEnv())
 	if err != nil {
 		return "", err
 	}
-	if !filepath.IsAbs(home) || filepath.Clean(home) != home {
-		return "", errors.New("physical_path_required")
-	}
-	return config.GetStableConfigPath()
+	return selected.Path, nil
 }

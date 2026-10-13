@@ -1,0 +1,97 @@
+{
+  "scope": "authenticated_archive_read_only_launcher_control_inspection",
+  "package": "chatgpt",
+  "version": "26.930.51102",
+  "architecture": "amd64",
+  "archiveURL": "https://persistent.oaistatic.com/codex-app-prod/linux/deb/pool/main/c/chatgpt/chatgpt_26.930.51102_amd64.deb",
+  "archiveSHA256": "637c3c94bc50f8ee33a15e2e28ec7f92a787f0943e700efe111bc0bf0d4813b4",
+  "archiveBytes": 476322694,
+  "downloadExitCode": 0,
+  "sizeAndHashVerifiedBeforeInspection": true,
+  "readOnlyInspectionPassed": true,
+  "packageInstalled": false,
+  "packageExecuted": false,
+  "sourceOperatorSHA256": "7e7b4b5b1cee31ab46abc22db8c14587659896cbd631ce6bae54100b59b935c1",
+  "rawEvidenceSHA256": "fb3ab0941c9f2cb1374ae150c0a09f0c21fb7db99037e9497c761786260a38ad",
+  "selectedEntries": [
+    {
+      "section": "control",
+      "path": "conffiles",
+      "size": 24,
+      "type": "0",
+      "link": "",
+      "mode": "0o644",
+      "sha256": "785ee2f4e90e63bf8bb6106e5815731187ad2ca4dc7c4fd1a83d6d478f7e8acc"
+    },
+    {
+      "section": "control",
+      "path": "control",
+      "size": 1412,
+      "type": "0",
+      "link": "",
+      "mode": "0o644",
+      "sha256": "6caf12d7bf6df2edf3a4630e37afa5e72958cef40439e141a992e8e2f879b0d3"
+    },
+    {
+      "section": "control",
+      "path": "postinst",
+      "size": 4470,
+      "type": "0",
+      "link": "",
+      "mode": "0o755",
+      "sha256": "1b689f7781cb2761fb5f9f5570978b4cb704586830dabc6a846d885ee66ce9cd"
+    },
+    {
+      "section": "control",
+      "path": "postrm",
+      "size": 407,
+      "type": "0",
+      "link": "",
+      "mode": "0o755",
+      "sha256": "b6b61e5a3913e4e77916850a7b7912f49cafbff38974f8ae0d6c31b4bf0123d7"
+    },
+    {
+      "section": "control",
+      "path": "prerm",
+      "size": 435,
+      "type": "0",
+      "link": "",
+      "mode": "0o755",
+      "sha256": "5f483cd80739769031132a8f293685c113f12bd568d6c9da597caf5c620d2093"
+    },
+    {
+      "section": "data",
+      "path": "usr/lib/chatgpt/codex-launcher",
+      "size": 63,
+      "type": "0",
+      "link": "",
+      "mode": "0o755",
+      "sha256": "8f983245c6c07070e2cdc480be50ec239e0f18ee36069126649d0692595c86ad"
+    },
+    {
+      "section": "data",
+      "path": "usr/share/applications/chatgpt.desktop",
+      "size": 575,
+      "type": "0",
+      "link": "",
+      "mode": "0o644",
+      "sha256": "d65745ebbccb71dcdca03b15c7642d0ca1a07eb75f0b049271cd6dda8272cbc2"
+    },
+    {
+      "section": "data",
+      "path": "usr/bin/chatgpt",
+      "size": 0,
+      "type": "2",
+      "link": "../lib/chatgpt/codex-launcher",
+      "mode": "0o777"
+    }
+  ],
+  "launcherContent": "#!/bin/sh\nexec \"$(dirname \"$(readlink -f \"$0\")\")/ChatGPT\" \"$@\"\n",
+  "argumentPreservationObservedInSource": true,
+  "launcherTokenConsumerPresent": false,
+  "clientTokenConsumptionQualified": false,
+  "clientProfileIsolationQualified": false,
+  "selectedClientQualified": false,
+  "exactChatNavigationQualified": false,
+  "focusQualified": false
+}

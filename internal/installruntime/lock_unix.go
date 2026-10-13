@@ -18,7 +18,8 @@ func tryLock(f *os.File) (bool, error) {
 }
 
 // Open the final component without following links, then validate the descriptor
-// before flock. Never chmod an existing inode or unlink a stale lock.
+// before flock. Writable callers may adopt read-only public permissions only
+// after acquiring the lock. Never unlink a stale lock or replace its inode.
 func openLock(path string, create bool) (*os.File, error) {
 	flags := unix.O_RDWR | unix.O_CLOEXEC | unix.O_NOFOLLOW | unix.O_NONBLOCK
 	if create {
@@ -29,16 +30,38 @@ func openLock(path string, create bool) (*os.File, error) {
 		return nil, err
 	}
 	f := os.NewFile(uintptr(fd), path)
-	var st unix.Stat_t
-	if err = unix.Fstat(fd, &st); err != nil {
+	if err = validateLockFile(f, create); err != nil {
 		_ = f.Close()
 		return nil, err
 	}
-	if st.Mode&unix.S_IFMT != unix.S_IFREG || st.Uid != uint32(os.Geteuid()) || st.Mode&07777 != 0600 || st.Nlink != 1 {
-		_ = f.Close()
-		return nil, fmt.Errorf("installation lock requires an owned private regular inode")
-	}
 	return f, nil
+}
+
+func validateLockFile(f *os.File, writable bool) error {
+	var st unix.Stat_t
+	if err := unix.Fstat(int(f.Fd()), &st); err != nil {
+		return err
+	}
+	mode := uint32(st.Mode) & 07777
+	validMode := mode == 0600 || writable && mode&^uint32(0044) == 0600
+	if st.Mode&unix.S_IFMT != unix.S_IFREG || st.Uid != uint32(os.Geteuid()) || st.Nlink != 1 || !validMode {
+		return fmt.Errorf("installation lock requires an owned private regular inode: %s", f.Name())
+	}
+	return nil
+}
+
+// Called with flock held and the named inode verified. Descriptor-based chmod
+// preserves other holders' lock identity and never follows a substituted path.
+func prepareLockedFile(f *os.File, writable bool) error {
+	if err := validateLockFile(f, writable); err != nil {
+		return err
+	}
+	if writable {
+		if err := f.Chmod(0600); err != nil {
+			return fmt.Errorf("restrict installation lock %s: %w", f.Name(), err)
+		}
+	}
+	return validateLockFile(f, false)
 }
 
 func privateDirectory(path string) error {

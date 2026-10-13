@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -113,6 +114,460 @@ func TestConsumerGenerationAndOwner(t *testing.T) {
 	r.Owner = "foreign-manager"
 	if _, err := Commit(ctx, r); err == nil {
 		t.Fatal("silent takeover")
+	}
+}
+
+func TestVersionedClaudeCacheRelocation(t *testing.T) {
+	for _, shared := range []bool{false, true} {
+		t.Run(fmt.Sprint("shared=", shared), func(t *testing.T) {
+			root := t.TempDir()
+			var err error
+			root, err = filepath.EvalSymlinks(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cache := filepath.Join(root, ".claude", "plugins", "cache", "claude-notifications-go", "claude-notifications-go")
+			oldRoot, newRoot := filepath.Join(cache, "1.45.7"), filepath.Join(cache, "1.45.12")
+			oldFile, newFile := filepath.Join(oldRoot, "bin", "claude-notifications-linux-amd64"), filepath.Join(newRoot, "bin", "claude-notifications-linux-amd64")
+			control := filepath.Join(root, "control")
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			old := Request{ControlRoot: control, RuntimeRoot: oldRoot, Owner: "existing-installer", ConsumerID: "claude-hooks",
+				Files: []File{{Path: oldFile, Data: []byte("old" + WriterProtocolMarker), Mode: 0700}}}
+			first, err := Commit(ctx, old)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if shared {
+				if _, err = Commit(ctx, Request{ControlRoot: control, RuntimeRoot: oldRoot, Owner: old.Owner,
+					ConsumerID: "portable:existing", Consumer: Consumer{Registration: "unchanged", Commands: []string{oldFile}}}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			move := Request{ControlRoot: control, RuntimeRoot: newRoot, Owner: old.Owner, ConsumerID: old.ConsumerID,
+				Files: []File{{Path: newFile, Data: []byte("new" + WriterProtocolMarker), Mode: 0700}}}
+			if _, err = Commit(ctx, move); err == nil {
+				t.Fatal("silent cache relocation")
+			}
+			if _, err = os.Stat(newFile); !os.IsNotExist(err) {
+				t.Fatal("rejected relocation published new bytes")
+			}
+			move.RelocateVersionedCache = true
+			moved, err := Commit(ctx, move)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if moved.ID != first.ID || moved.Consumers["claude-hooks"].RuntimeRoot != newRoot || !moved.Files[newFile].Exists {
+				t.Fatalf("wrong relocated ownership: %+v", moved)
+			}
+			if shared {
+				if moved.RuntimeRoot != oldRoot || moved.Consumers["portable:existing"].RuntimeRoot != oldRoot || !moved.Files[oldFile].Exists {
+					t.Fatal("shared old runtime was not retained")
+				}
+				if data, err := os.ReadFile(oldFile); err != nil || string(data) != "new"+WriterProtocolMarker {
+					t.Fatalf("retained portable primary was not refreshed: %q, %v", data, err)
+				}
+			} else {
+				if moved.RuntimeRoot != newRoot || moved.Files[oldFile].Exists {
+					t.Fatal("unreferenced Claude cache was not de-owned")
+				}
+				if data, err := os.ReadFile(oldFile); err != nil || string(data) != "old"+WriterProtocolMarker {
+					t.Fatalf("old cache bytes changed: %q, %v", data, err)
+				}
+				if err := os.Remove(oldFile); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := Commit(ctx, Request{ControlRoot: control, RuntimeRoot: newRoot, Owner: old.Owner,
+					ConsumerID: old.ConsumerID, RefreshOnly: true}); err != nil {
+					t.Fatalf("pruned old cache blocked new runtime: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestVersionedClaudeCacheRelocationRejectsUnrefreshablePortablePrimary(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache := filepath.Join(root, ".claude", "plugins", "cache", "claude-notifications-go", "claude-notifications-go")
+	oldRoot, newRoot := filepath.Join(cache, "1.45.7"), filepath.Join(cache, "1.45.13")
+	oldFile, newFile := filepath.Join(oldRoot, "bin", "claude-notifications-linux-amd64"), filepath.Join(newRoot, "bin", "claude-notifications-linux-amd64")
+	control := filepath.Join(root, "control")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if _, err := Commit(ctx, Request{ControlRoot: control, RuntimeRoot: oldRoot, Owner: "existing-installer", ConsumerID: "claude-hooks",
+		Files: []File{{Path: oldFile, Data: []byte("old" + WriterProtocolMarker), Mode: 0700}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Commit(ctx, Request{ControlRoot: control, RuntimeRoot: oldRoot, Owner: "existing-installer", ConsumerID: "portable:existing",
+		Consumer: Consumer{Commands: []string{oldFile}}}); err != nil {
+		t.Fatal(err)
+	}
+	move := Request{ControlRoot: control, RuntimeRoot: newRoot, Owner: "existing-installer", ConsumerID: "claude-hooks",
+		RelocateVersionedCache: true, Files: []File{{Path: filepath.Join(newRoot, "bin", "different"), Data: []byte("new"), Mode: 0700}}}
+	if _, err := Commit(ctx, move); err == nil {
+		t.Fatal("unrefreshable portable primary accepted")
+	}
+	if _, err := os.Stat(newFile); !os.IsNotExist(err) {
+		t.Fatal("rejected relocation published new primary")
+	}
+}
+
+func TestVersionedClaudeCacheRelocationRejectsOtherRoots(t *testing.T) {
+	root := t.TempDir()
+	var err error
+	root, err = filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache := filepath.Join(root, ".claude", "plugins", "cache", "claude-notifications-go", "claude-notifications-go")
+	oldRoot := filepath.Join(cache, "1.45.7")
+	oldFile := filepath.Join(oldRoot, "bin", "sender")
+	control := filepath.Join(root, "control")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if _, err := Commit(ctx, Request{ControlRoot: control, RuntimeRoot: oldRoot, Owner: "existing-installer", ConsumerID: "claude-hooks",
+		Files: []File{{Path: oldFile, Data: []byte("old"), Mode: 0700}}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, newRoot := range []string{filepath.Join(root, "foreign", "1.45.12"), filepath.Join(cache, "not-a-version")} {
+		newFile := filepath.Join(newRoot, "bin", "sender")
+		if _, err := Commit(ctx, Request{ControlRoot: control, RuntimeRoot: newRoot, Owner: "existing-installer", ConsumerID: "claude-hooks",
+			RelocateVersionedCache: true, Files: []File{{Path: newFile, Data: []byte("new"), Mode: 0700}}}); err == nil {
+			t.Fatalf("unrelated root accepted: %s", newRoot)
+		}
+	}
+}
+
+// Claude may restore a retired versioned cache from the marketplace checkout,
+// which ships the skill at 0644 and the launcher linked to the relative
+// claude-notifications name, and drops the downloaded binary. Retiring that
+// root de-owns it without touching it, so no drift there may block the move.
+// A root still shared with a portable binding keeps the strict check.
+func TestVersionedClaudeCacheRelocationToleratesRestoredOldCache(t *testing.T) {
+	entry := "claude-notifications-linux-amd64"
+	drifts := []struct {
+		name  string
+		posix bool
+		apply func(t *testing.T, oldRoot string)
+	}{
+		{name: "missing", apply: func(t *testing.T, oldRoot string) {
+			if err := os.Remove(filepath.Join(oldRoot, "bin", entry)); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "content", apply: func(t *testing.T, oldRoot string) {
+			if err := os.WriteFile(filepath.Join(oldRoot, "skills", "agent-notify", "SKILL.md"), []byte("checkout"), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "mode", posix: true, apply: func(t *testing.T, oldRoot string) {
+			if err := os.Chmod(filepath.Join(oldRoot, "skills", "agent-notify", "SKILL.md"), 0644); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "link", posix: true, apply: func(t *testing.T, oldRoot string) {
+			launcher := filepath.Join(oldRoot, "bin", "agent-notifications")
+			if err := os.Remove(launcher); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink("claude-notifications", launcher); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "directory", apply: func(t *testing.T, oldRoot string) {
+			skill := filepath.Join(oldRoot, "skills", "agent-notify", "SKILL.md")
+			if err := os.Remove(skill); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(skill, 0700); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	}
+	for _, drift := range drifts {
+		for _, shared := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/shared=%t", drift.name, shared), func(t *testing.T) {
+				if drift.posix && runtime.GOOS == "windows" {
+					t.Skip("Windows fingerprints neither managed links nor POSIX modes")
+				}
+				root, err := filepath.EvalSymlinks(t.TempDir())
+				if err != nil {
+					t.Fatal(err)
+				}
+				cache := filepath.Join(root, ".claude", "plugins", "cache", "claude-notifications-go", "claude-notifications-go")
+				oldRoot, newRoot := filepath.Join(cache, "1.45.18"), filepath.Join(cache, "1.46.0")
+				oldBinary := filepath.Join(oldRoot, "bin", entry)
+				control := filepath.Join(root, "control")
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				files := []File{
+					{Path: oldBinary, Data: []byte("old" + WriterProtocolMarker), Mode: 0700},
+					{Path: filepath.Join(oldRoot, "skills", "agent-notify", "SKILL.md"), Data: []byte("skill"), Mode: 0600},
+				}
+				if runtime.GOOS != "windows" {
+					files = append(files, File{Path: filepath.Join(oldRoot, "bin", "agent-notifications"), Link: entry})
+				}
+				first, err := Commit(ctx, Request{ControlRoot: control, RuntimeRoot: oldRoot, Owner: "existing-installer", ConsumerID: "claude-hooks", Files: files})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if shared {
+					if _, err := Commit(ctx, Request{ControlRoot: control, RuntimeRoot: oldRoot, Owner: "existing-installer", ConsumerID: "portable:existing",
+						Consumer: Consumer{Registration: "unchanged", Commands: []string{oldBinary}}}); err != nil {
+						t.Fatal(err)
+					}
+				}
+				drift.apply(t, oldRoot)
+				restored := map[string]Identity{}
+				unreadable := map[string]bool{}
+				for _, file := range files {
+					id, err := Fingerprint(file.Path)
+					if err != nil {
+						unreadable[file.Path] = true
+						continue
+					}
+					restored[file.Path] = id
+				}
+				newFile := filepath.Join(newRoot, "bin", entry)
+				moved, err := Commit(ctx, Request{ControlRoot: control, RuntimeRoot: newRoot, Owner: "existing-installer", ConsumerID: "claude-hooks",
+					RelocateVersionedCache: true, Files: []File{{Path: newFile, Data: []byte("new" + WriterProtocolMarker), Mode: 0700}}})
+				if shared {
+					if err == nil {
+						t.Fatal("drifted shared cache relocated")
+					}
+					if _, err := os.Stat(newFile); !os.IsNotExist(err) {
+						t.Fatal("rejected relocation published new bytes")
+					}
+					return
+				}
+				if err != nil {
+					t.Fatalf("restored old cache blocked relocation: %v", err)
+				}
+				if moved.ID != first.ID || moved.RuntimeRoot != newRoot || moved.Consumers["claude-hooks"].RuntimeRoot != newRoot || !moved.Files[newFile].Exists {
+					t.Fatalf("wrong relocated ownership: %+v", moved)
+				}
+				for path := range moved.Files {
+					if pathWithinRoot(oldRoot, path) {
+						t.Fatalf("retired cache still owned: %s", path)
+					}
+				}
+				for path, want := range restored {
+					if got, err := Fingerprint(path); err != nil || got != want {
+						t.Fatalf("retired cache changed during relocation: %s: %+v, %v", path, got, err)
+					}
+				}
+				for path := range unreadable {
+					if _, err := Fingerprint(path); err == nil {
+						t.Fatalf("retired cache changed during relocation: %s", path)
+					}
+				}
+			})
+		}
+	}
+}
+
+// The journal of a relocation carries only new-root files, so recovery after
+// an interruption must finish the move without consulting the retired root.
+func TestVersionedClaudeCacheRelocationRecoversPastRestoredOldCache(t *testing.T) {
+	for _, boundary := range []string{"transaction", "promotion", "ledger"} {
+		t.Run(boundary, func(t *testing.T) {
+			root, err := filepath.EvalSymlinks(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			cache := filepath.Join(root, ".claude", "plugins", "cache", "claude-notifications-go", "claude-notifications-go")
+			oldRoot, newRoot := filepath.Join(cache, "1.45.18"), filepath.Join(cache, "1.46.0")
+			oldSkill := filepath.Join(oldRoot, "skills", "agent-notify", "SKILL.md")
+			newFile := filepath.Join(newRoot, "bin", "claude-notifications-linux-amd64")
+			control := filepath.Join(root, "control")
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if _, err := Commit(ctx, Request{ControlRoot: control, RuntimeRoot: oldRoot, Owner: "existing-installer", ConsumerID: "claude-hooks",
+				Files: []File{{Path: oldSkill, Data: []byte("skill"), Mode: 0600}}}); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(oldSkill, []byte("checkout"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			move := Request{ControlRoot: control, RuntimeRoot: newRoot, Owner: "existing-installer", ConsumerID: "claude-hooks",
+				RelocateVersionedCache: true, Files: []File{{Path: newFile, Data: []byte("new" + WriterProtocolMarker), Mode: 0700}},
+				Fault: func(phase string) error {
+					if phase == boundary || boundary == "promotion" && phase == "promotion:"+newFile {
+						return fmt.Errorf("simulated interruption")
+					}
+					return nil
+				},
+			}
+			if _, err := Commit(ctx, move); err == nil {
+				t.Fatal("interruption did not stop relocation")
+			}
+			if _, err := os.Lstat(filepath.Join(control, "transaction.json")); err != nil {
+				t.Fatalf("interrupted relocation left no journal: %v", err)
+			}
+			ledger, err := Commit(ctx, Request{ControlRoot: control, RecoverOnly: true})
+			if err != nil {
+				t.Fatalf("restored old cache blocked recovery: %v", err)
+			}
+			if ledger.RuntimeRoot != newRoot || ledger.Consumers["claude-hooks"].RuntimeRoot != newRoot || !ledger.Files[newFile].Exists {
+				t.Fatalf("relocation recovery did not finish: %+v", ledger)
+			}
+			for path := range ledger.Files {
+				if pathWithinRoot(oldRoot, path) {
+					t.Fatalf("retired cache still owned after recovery: %s", path)
+				}
+			}
+			if data, err := os.ReadFile(oldSkill); err != nil || string(data) != "checkout" {
+				t.Fatalf("retired cache changed during recovery: %q, %v", data, err)
+			}
+		})
+	}
+}
+
+// The retire tolerance is path containment, not a textual prefix: a sibling
+// versioned root whose name extends the retired root's stays strictly checked.
+func TestVersionedClaudeCacheRelocationChecksSiblingRoots(t *testing.T) {
+	for _, drifted := range []bool{false, true} {
+		t.Run(fmt.Sprint("drifted=", drifted), func(t *testing.T) {
+			root, err := filepath.EvalSymlinks(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			cache := filepath.Join(root, ".claude", "plugins", "cache", "claude-notifications-go", "claude-notifications-go")
+			oldRoot, newRoot, siblingRoot := filepath.Join(cache, "1.45.18"), filepath.Join(cache, "1.46.0"), filepath.Join(cache, "1.45.180")
+			oldSkill := filepath.Join(oldRoot, "skills", "agent-notify", "SKILL.md")
+			siblingFile := filepath.Join(siblingRoot, "bin", "sender")
+			newFile := filepath.Join(newRoot, "bin", "claude-notifications-linux-amd64")
+			control := filepath.Join(root, "control")
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if _, err := Commit(ctx, Request{ControlRoot: control, RuntimeRoot: oldRoot, Owner: "existing-installer", ConsumerID: "claude-hooks",
+				Files: []File{{Path: oldSkill, Data: []byte("skill"), Mode: 0600}}}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Commit(ctx, Request{ControlRoot: control, RuntimeRoot: siblingRoot, Owner: "existing-installer", ConsumerID: "codex-hooks",
+				Files: []File{{Path: siblingFile, Data: []byte("sibling"), Mode: 0700}}}); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(oldSkill, []byte("checkout"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if drifted {
+				if err := os.WriteFile(siblingFile, []byte("foreign"), 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			moved, err := Commit(ctx, Request{ControlRoot: control, RuntimeRoot: newRoot, Owner: "existing-installer", ConsumerID: "claude-hooks",
+				RelocateVersionedCache: true, Files: []File{{Path: newFile, Data: []byte("new" + WriterProtocolMarker), Mode: 0700}}})
+			if drifted {
+				if err == nil {
+					t.Fatal("drifted sibling root accepted")
+				}
+				if _, err := os.Stat(newFile); !os.IsNotExist(err) {
+					t.Fatal("rejected relocation published new bytes")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("restored old cache blocked relocation: %v", err)
+			}
+			if !moved.Files[siblingFile].Exists || moved.Consumers["codex-hooks"].RuntimeRoot != siblingRoot {
+				t.Fatalf("sibling root lost ownership: %+v", moved)
+			}
+			for path := range moved.Files {
+				if pathWithinRoot(oldRoot, path) {
+					t.Fatalf("retired cache still owned: %s", path)
+				}
+			}
+		})
+	}
+}
+
+func TestVersionedClaudeCacheRelocationRecovers(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache := filepath.Join(root, ".claude", "plugins", "cache", "claude-notifications-go", "claude-notifications-go")
+	oldRoot, newRoot := filepath.Join(cache, "1.45.7"), filepath.Join(cache, "1.45.12")
+	oldFile, newFile := filepath.Join(oldRoot, "bin", "sender"), filepath.Join(newRoot, "bin", "sender")
+	control := filepath.Join(root, "control")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if _, err := Commit(ctx, Request{ControlRoot: control, RuntimeRoot: oldRoot, Owner: "existing-installer", ConsumerID: "claude-hooks",
+		Files: []File{{Path: oldFile, Data: []byte("old"), Mode: 0700}}}); err != nil {
+		t.Fatal(err)
+	}
+	move := Request{ControlRoot: control, RuntimeRoot: newRoot, Owner: "existing-installer", ConsumerID: "claude-hooks",
+		RelocateVersionedCache: true, Files: []File{{Path: newFile, Data: []byte("new"), Mode: 0700}},
+		Fault: func(phase string) error {
+			if phase == "transaction" {
+				return fmt.Errorf("simulated interruption")
+			}
+			return nil
+		},
+	}
+	if _, err := Commit(ctx, move); err == nil {
+		t.Fatal("interruption did not stop relocation")
+	}
+	ledger, err := Commit(ctx, Request{ControlRoot: control, RecoverOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ledger.Consumers["claude-hooks"].RuntimeRoot != newRoot || ledger.RuntimeRoot != newRoot || ledger.Files[oldFile].Exists || !ledger.Files[newFile].Exists {
+		t.Fatalf("relocation recovery did not finish atomically: %+v", ledger)
+	}
+	if data, err := os.ReadFile(oldFile); err != nil || string(data) != "old" {
+		t.Fatalf("old cache changed during recovery: %q, %v", data, err)
+	}
+}
+
+func TestVersionedClaudeCacheRelocationSharedRecovery(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache := filepath.Join(root, ".claude", "plugins", "cache", "claude-notifications-go", "claude-notifications-go")
+	oldRoot, newRoot := filepath.Join(cache, "1.45.7"), filepath.Join(cache, "1.45.13")
+	entry := "claude-notifications-linux-amd64"
+	oldFile, newFile := filepath.Join(oldRoot, "bin", entry), filepath.Join(newRoot, "bin", entry)
+	control := filepath.Join(root, "control")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if _, err := Commit(ctx, Request{ControlRoot: control, RuntimeRoot: oldRoot, Owner: "existing-installer", ConsumerID: "claude-hooks",
+		Files: []File{{Path: oldFile, Data: []byte("old" + WriterProtocolMarker), Mode: 0700}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Commit(ctx, Request{ControlRoot: control, RuntimeRoot: oldRoot, Owner: "existing-installer", ConsumerID: "portable:existing",
+		Consumer: Consumer{Commands: []string{oldFile}}}); err != nil {
+		t.Fatal(err)
+	}
+	move := Request{ControlRoot: control, RuntimeRoot: newRoot, Owner: "existing-installer", ConsumerID: "claude-hooks",
+		RelocateVersionedCache: true, Files: []File{{Path: newFile, Data: []byte("new" + WriterProtocolMarker), Mode: 0700}},
+		Fault: func(phase string) error {
+			if phase == "transaction" {
+				return fmt.Errorf("simulated interruption")
+			}
+			return nil
+		},
+	}
+	if _, err := Commit(ctx, move); err == nil {
+		t.Fatal("interruption did not stop relocation")
+	}
+	ledger, err := Commit(ctx, Request{ControlRoot: control, RecoverOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ledger.RuntimeRoot != oldRoot || ledger.Consumers["claude-hooks"].RuntimeRoot != newRoot ||
+		ledger.Consumers["portable:existing"].RuntimeRoot != oldRoot || !ledger.Files[oldFile].Exists || !ledger.Files[newFile].Exists {
+		t.Fatalf("shared relocation recovery lost ownership: %+v", ledger)
+	}
+	for _, path := range []string{oldFile, newFile} {
+		if data, err := os.ReadFile(path); err != nil || string(data) != "new"+WriterProtocolMarker {
+			t.Fatalf("shared relocation recovery left stale bytes at %s: %q, %v", path, data, err)
+		}
 	}
 }
 

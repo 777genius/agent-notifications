@@ -37,7 +37,7 @@ notification_plugin_go/
 │       └── jsonl.go               # Streaming JSONL parser
 ├── config/                        # Packaged defaults / explicit historical recovery source
 │   └── config.json                # Template only; never a runtime fallback or write target
-├── hooks/                         # Claude Code hooks
+├── hooks/                         # Claude hooks
 │   └── hooks.json                 # Hook definitions
 ├── .claude-plugin/                # Plugin metadata
 │   ├── plugin.json                # Plugin manifest
@@ -91,7 +91,7 @@ type Config struct {
 
 ### 3. JSONL Parser (`pkg/jsonl`)
 
-**Purpose**: Parse Claude Code transcript files efficiently.
+**Purpose**: Parse Claude transcript files efficiently.
 
 **Design**:
 - Streaming parser (doesn't load entire file into memory)
@@ -147,7 +147,7 @@ type Config struct {
 
 ### 6. Dedup Manager (`internal/dedup`)
 
-**Purpose**: Prevent duplicate notifications (workaround for Claude Code bug #9602).
+**Purpose**: Prevent duplicate notifications (workaround for Claude bug #9602).
 
 **Two-Phase Lock Algorithm**:
 
@@ -201,7 +201,7 @@ ELSE:
 ```json
 {
   "content": "✅ Task Completed: ...",
-  "username": "Claude Code"
+  "username": "Claude"
 }
 ```
 
@@ -286,7 +286,7 @@ ELSE:
 
 ```
 ┌─────────────────┐
-│  Claude Code    │
+│  Claude    │
 │  Hook Event     │
 └────────┬────────┘
          │
@@ -355,7 +355,7 @@ ELSE:
 
 ### 1. Why Two-Phase Deduplication?
 
-**Problem**: Claude Code bug causes hooks to fire 2-4x for single events.
+**Problem**: Claude bug causes hooks to fire 2-4x for single events.
 
 **Solution**:
 - Phase 1: Fast early exit (no lock creation)

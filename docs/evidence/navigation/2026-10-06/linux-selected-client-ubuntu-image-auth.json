@@ -1,0 +1,26 @@
+{
+  "scope": "official_Ubuntu_Noble_image_authentication_only",
+  "authenticated": true,
+  "imageURL": "https://cloud-images.ubuntu.com/releases/noble/release-20260926/ubuntu-24.04-server-cloudimg-amd64.img",
+  "imageSHA256": "6a81c37564db9b1ee84e141922625e1d7c5b389b99bb3c572e0243607d5bb4d2",
+  "imageBytes": 625612288,
+  "signingPrimaryFingerprint": "D2EB44626FDDC30B513D5BB71A5D6C4C7DB87C81",
+  "signatureExitCode": 0,
+  "actualDetachedSignatureVerified": true,
+  "signingFingerprintPinnedToOfficialDocumentation": true,
+  "uniqueExactFilenameChecksumMatched": true,
+  "fullImageHashVerifiedBeforeInspection": true,
+  "operatorSHA256": "dbc8ac25278d7c3252ab2f4c2a551c0dbbf14d9e62cdaf6f259b0d0faf240b28",
+  "rawEvidenceSHA256": "2f61d75c75b47a940213b011589f6e789772cca53c7f9ba998507f9b9163f81c",
+  "retainedPublicMetadataHashes": {
+    "SHA256SUMS": "cd8934d937d1509d047798e6a5acfb839c0a2d29f3e5fc87b8ec7096ffe587ca",
+    "SHA256SUMS.gpg": "1fc4b72f025f2e89f4484a196fffe5a3412e77bf9a8c78f8f13763f8056a0950",
+    "ubuntu-image-key.asc": "927138de292fac4d861105a052cf56e9c5921987da385c844d88f34d19b39ab0",
+    "verify_signature.stdout": "e2652fb55b753714bfb769b57206f2c16f85fcb05d5245641606445511e2b293",
+    "key_fingerprint.stdout": "c5679b9d13814de098d844d6e56bad387f4288abc872d9921f8a48a94c056386"
+  },
+  "imageExecuted": false,
+  "clientQualified": false,
+  "hostPackagesInstalled": false,
+  "userKeyringUsed": false
+}

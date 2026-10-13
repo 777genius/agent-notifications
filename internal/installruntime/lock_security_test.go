@@ -31,7 +31,10 @@ func TestLockRejectsUnsafeInodes(t *testing.T) {
 			case "fifo":
 				err = unix.Mkfifo(path, 0600)
 			case "public":
-				err = os.WriteFile(path, nil, 0644)
+				err = os.WriteFile(path, nil, 0666)
+				if err == nil {
+					err = os.Chmod(path, 0666)
+				}
 			case "foreign-owner":
 				if os.Geteuid() != 0 {
 					t.Skip("requires disposable chown privilege")

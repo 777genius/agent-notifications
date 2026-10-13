@@ -183,13 +183,15 @@ plugin=box/'.claude-plugin'; plugin.mkdir()
 installer=case/'install.sh'
 installer.write_text('#!/bin/bash\n# agent-notifications-managed-writer-protocol-v1\nsource '+q(functions)+'\ndetect_platform\nINSTALL_CONFIG_HELPER='+q(helper)+'\n'+isolation+iterm)
 installer.chmod(0o755)
-env=dict(os.environ,AGENT_NOTIFICATIONS_CONFIG=str(config),TRACE=str(case/'trace'))
+env=dict(os.environ,AGENT_NOTIFICATIONS_CONFIG=str(config),TRACE=str(case/'trace'),XDG_CACHE_HOME=str(case/'cache'))
 before=binary.read_bytes()
 r=subprocess.run(['sh',str(case/'hook-wrapper.sh'),'Stop'],env=env,input=b'{}',stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=30)
-assert r.returncode==0 and r.stdout==b'' and r.stderr==b'',r
+assert r.returncode==0 and r.stdout==b'' and b'Installation of v9.9.9 failed' in r.stderr,r
 assert binary.read_bytes()==before and config.read_text()=='SECRET-CANARY'
 assert (case/'trace').exists()
-print('PASS: actual hook-wrapper lazy rejection is silent and preserves runtime')
+r=subprocess.run(['sh',str(case/'hook-wrapper.sh'),'Stop'],env=env,input=b'{}',stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=30)
+assert r.returncode==0 and r.stdout==b'' and r.stderr==b'',r
+print('PASS: actual hook-wrapper reports once and preserves runtime on lazy rejection')
 # Real transaction must use the new staged protocol and preserve live bytes.
 for overlap in (True,False):
     name='promotion-reject' if overlap else 'promotion-safe'

@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="36" viewBox="0 0 900 36" role="img" aria-label="macOS, Windows, Linux (left to right)">
+  <style>
+    text { fill: #57606a; }
+    @media (prefers-color-scheme: dark) { text { fill: #c9d1d9; } }
+  </style>
+  <g font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="24" font-weight="600" text-anchor="middle">
+    <text x="166" y="27">macOS</text>
+    <text x="450" y="27">Windows</text>
+    <text x="734" y="27">Linux</text>
+  </g>
+</svg>

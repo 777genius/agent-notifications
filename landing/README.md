@@ -14,7 +14,7 @@ npm run test:browser
 npm run preview
 ```
 
-Production preview is http://127.0.0.1:4173/agent-notifications/. Bowser provides OS detection; mobile/unknown requires explicit target selection. It never decides runtime binary architecture. Install/update command generation lives in data/install.ts; configure uses documented product-specific instructions, not bootstrap flags.
+Production preview is http://127.0.0.1:4173/. Bowser provides OS detection; mobile/unknown requires explicit target selection. It never decides runtime binary architecture. Install/update command generation lives in data/install.ts; configure uses documented product-specific instructions, not bootstrap flags.
 
 The site does not install software or grant trust. Browser tests validate generated commands and navigation only. Notification previews are illustrations. Codex is presented as a supported product; keep platform-specific limitations factual and current.
 

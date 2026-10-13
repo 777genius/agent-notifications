@@ -61,6 +61,15 @@ func lock(ctx context.Context, path string, create bool) (func(), error) {
 				_ = f.Close()
 				return nil, fmt.Errorf("installation lock inode changed")
 			}
+			if err := prepareLockedFile(f, create); err != nil {
+				_ = f.Close()
+				return nil, err
+			}
+			named, nameErr = os.Lstat(path)
+			if nameErr != nil || !os.SameFile(info, named) {
+				_ = f.Close()
+				return nil, fmt.Errorf("installation lock inode changed: %s", path)
+			}
 			return func() { _ = f.Close() }, nil
 		}
 		timer := time.NewTimer(10 * time.Millisecond)

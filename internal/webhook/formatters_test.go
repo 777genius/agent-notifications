@@ -139,8 +139,8 @@ func TestDiscordFormatterFormat(t *testing.T) {
 
 	// Check username
 	username, ok := resultMap["username"].(string)
-	if !ok || username != "Claude Code" {
-		t.Errorf("Expected username 'Claude Code', got %v", username)
+	if !ok || username != "Claude" {
+		t.Errorf("Expected username 'Claude', got %v", username)
 	}
 	if got := resultMap["avatar_url"]; got != agentNotificationsLogoURL {
 		t.Errorf("avatar_url = %v, want %q", got, agentNotificationsLogoURL)
@@ -816,13 +816,15 @@ func TestAgentDisplayName(t *testing.T) {
 		source string
 		want   string
 	}{
-		{"empty defaults to claude", "", "Claude Code"},
-		{"claude", "claude", "Claude Code"},
+		{"empty defaults to claude", "", "Claude"},
+		{"claude", "claude", "Claude"},
 		{"codex", "codex", "Codex"},
+		{"gemini", "gemini", "Gemini CLI"},
+		{"opencode", "opencode", "OpenCode"},
 		{
-			name:   "unknown future agent falls back to the raw source, not Claude Code",
-			source: "gemini",
-			want:   "gemini",
+			name:   "unknown future agent falls back to the raw source, not Claude",
+			source: "future-agent",
+			want:   "future-agent",
 		},
 	}
 

@@ -1,0 +1,48 @@
+{
+  "scope": "offline_selected_client_renderer_preflight",
+  "status": "failed",
+  "nativeSourceSHA256": "95502e4482dd5bf226e9f838d60387baea5bc90aa1a00406b24b74e574432d20",
+  "guestSourceSHA256": "e3003f0746b59add941a0e0930ea57acea6879370f68befbaa8701aae4186a31",
+  "operatorSourceSHA256": "3301aa78e5778a29534c8f16ffdaf783df2994090089527fc6dd29007340fc5b",
+  "rawArtifactHashes": {
+    "operator-result.json": "f6ac93161f95be4d41a44c3803867720fe5b1a6cf3a8b9f73975c226a7354fa3",
+    "native-evidence.json": "d7681cd186543e5f20e5e9115cfabfd6d8049275b0ad8221ec8e9b7990fd4f5b",
+    "serial.log": "8c782689ca4fdea2d0cf89e6186879a01480ac8506bb23cfc3a39f6361bba337",
+    "qmp-wire.jsonl": "4e8c2f590a734cc6482e13e6cb6446198a71fd67ca4eddaa85433a868f8beceb",
+    "recovered-guest-result.json": "9fc0b66838fd1b505c8f2fadabf812aaddc718540c304e61816e864ab842fa66"
+  },
+  "originalFailure": "RuntimeError: unique_bounded_guest_completion_required",
+  "recovery": "Closed serial replay only; original run is unchanged and remains failed.",
+  "guestFailure": "RuntimeError: actual_renderer_evidence_absent",
+  "guestClientLaunchAttempted": true,
+  "observedRendererRestrictionsQualified": false,
+  "clientSandboxQualified": false,
+  "renderedClientQualified": false,
+  "focusQualified": false,
+  "navigationQualified": false,
+  "notificationAttempted": false,
+  "vm": {
+    "kvm": {
+      "enabled": true,
+      "present": true
+    },
+    "guestPoweroffObserved": true,
+    "childCollected": true,
+    "childExitCode": 0
+  },
+  "guestCleanup": {
+    "cleanupPassed": true,
+    "cgroupEmptyObserved": true,
+    "trackedProcessCount": 11,
+    "allTrackedKernelExitsObserved": true
+  },
+  "operatorReported": {
+    "containerRemoved": true,
+    "inputIntegrityPassed": true
+  },
+  "limitations": [
+    "Input images and Docker inspect/remove bytes were not transferred for independent local rehash/replay.",
+    "Guest cleanup facts are guest observations bound to the recovered frame.",
+    "No renderer evidence means this run does not qualify client sandbox, rendered UI, focus or navigation."
+  ]
+}

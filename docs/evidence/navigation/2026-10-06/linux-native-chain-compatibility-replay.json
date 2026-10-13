@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "scope": "pure_decoder_replay_of_prior_native_positive",
+  "decoderSHA256": "7a28c10c2da7b0c3f67fa40c06909229bdacc9304c2ac48a456bdb7f570f3022",
+  "priorArchiveSHA256": "0a580d5a417dd8ae4bdb2400c1313caaced25e0b80f83efc4c8678af44aeafaf",
+  "priorNativeEvidenceSHA256": "b15831b1faf244bbab1eb771cf79eba9b65dcb2347d13f5e734e173938124536",
+  "monitorSHA256": "b8e482da8856ef9c0370e28c66d5d0c62c49fc0ac7d3b7b688b0b27f8b3ab6ca",
+  "makoTraceSHA256": "0b36252d863f5a5af13545838097bde4255f9331d2ad5bb1e29603353f0cb6f4",
+  "preClickTraceBytes": 7350,
+  "preClickTraceCharacters": 7350,
+  "strictUTF8PrefixDecoded": true,
+  "parametersDerivedFromRetainedRawCapsule": true,
+  "forwarded": true,
+  "tokenHashMatchesPriorEvidence": true,
+  "protocolOffsetsMatchPriorEvidence": true,
+  "strictTokenActionCallbackOrderAccepted": true,
+  "newNotificationAttempted": false,
+  "newNativeClickAttempted": false,
+  "selectedClientActivationQualified": false,
+  "focusQualified": false,
+  "navigationQualified": false
+}

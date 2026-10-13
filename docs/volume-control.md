@@ -181,7 +181,7 @@ echo '{"session_id":"test","transcript_path":"","tool_name":"ExitPlanMode"}' | \
   bin/claude-notifications handle-hook PreToolUse
 ```
 
-Or just wait for the next real notification from Claude Code.
+Or just wait for the next real notification from Claude.
 
 ## Validation
 

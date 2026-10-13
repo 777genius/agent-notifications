@@ -18,6 +18,8 @@
 *.yaml text eol=lf
 *.yml text eol=lf
 *.md text eol=lf
+*.tsv text eol=lf
+*.js text eol=lf
 
 # Binary files
 *.mp3 binary

@@ -5,13 +5,13 @@ export default defineConfig({
   fullyParallel: true,
   workers: 2,
   use: {
-    baseURL: "http://127.0.0.1:4173/agent-notifications/",
+    baseURL: "http://127.0.0.1:4173/",
     trace: "retain-on-failure",
     launchOptions: executablePath ? { executablePath } : undefined,
   },
   webServer: {
     command: "node scripts/serve.mjs",
-    url: "http://127.0.0.1:4173/agent-notifications/",
+    url: "http://127.0.0.1:4173/",
     reuseExistingServer: !process.env.CI,
   },
 });

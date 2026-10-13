@@ -1,0 +1,39 @@
+{
+  "scope": "offline_selected_client_corrected_handoff_TEST_negative",
+  "sourceCommit": "1511cb4adb6b5293cf32f7569c70219c5831db5d",
+  "passed": false,
+  "retryAllowed": false,
+  "archiveSHA256": "9730224e0a9cc243f21b2ecba2105387f92fe5d2d419fd53fb44852785fe9b98",
+  "executionManifestSHA256": "520bac2701fd6855ad190c92cc0660917f57c4713906b6250bb6630b794634a3",
+  "senderExit": {
+    "collected": true,
+    "exitCode": 0,
+    "exitedBoot": 131.012355534,
+    "pid": 1064
+  },
+  "nativeNotificationID": 1,
+  "clickAttempted": true,
+  "failure": "RuntimeError: selected_peer_uid_not_1000",
+  "failureIdentityCause": "not discriminated: group enumeration precedes callback/client selected admission",
+  "handoffQualified": false,
+  "activationQualified": false,
+  "navigationQualified": false,
+  "guestCleanupPassed": true,
+  "guestCgroupEmptyObserved": true,
+  "retainedKernelExitsObserved": 13,
+  "guestPoweroffObserved": true,
+  "hostContainerRemoved": true,
+  "hostCleanupUnknown": false,
+  "rawSHA256": {
+    "operator-result.json": "369108f8e903cecab5a59e3e13c9cf167c277ecfe444e8748bd295e86da2ac4e",
+    "native-evidence.json": "8fc0abcd6d5d7646698e3348e9230e142187df8949f6fb40ecd77da6770488fd",
+    "guest-result.json": "65edcbd5d4c3089fb349cb065ab5041b8dbd2d334aca6a8561efe4f366722224",
+    "execution-manifest.json": "520bac2701fd6855ad190c92cc0660917f57c4713906b6250bb6630b794634a3",
+    "native-seed.iso": "f70b5fc07263f23412da9763c229cac9e0188bd94e144ec3b7b7fcfcb5900d7b"
+  },
+  "limitation": "Native click intent and sender exit do not establish selected-receiver identity, token consumption, client activation or chat navigation. The negative result is preserved.",
+  "independentRawBindingAssertionsPassed": 413,
+  "callbackLaunchPublicationReachedBySourceBoundProgress": true,
+  "semanticHandoffOutcome": "unknown",
+  "finalNativeClickQualified": false
+}

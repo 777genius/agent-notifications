@@ -3,7 +3,7 @@ package skills
 
 import _ "embed"
 
-//go:embed agent-notify/SKILL.md
+//go:embed agent-notifications/SKILL.md
 var agentNotify string
 
 // AgentNotify returns an independent copy of the canonical authored skill.

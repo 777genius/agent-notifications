@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -471,5 +472,38 @@ func TestPR3LegacyStatusAndSessionLabelMatrix(t *testing.T) {
 				t.Fatalf("legacy status presentation changed: %s %+v", tc.status, got)
 			}
 		}
+	}
+}
+
+// Red if an actual native command would inherit the event-only webhook URL,
+// or filtering removes unrelated provider configuration. No command is started.
+func TestNativeCommandsExcludeWebhookDestination(t *testing.T) {
+	t.Setenv("AGENT_NOTIFICATIONS_WEBHOOK_URL", "https://example.invalid/TEST-private-url")
+	t.Setenv("TEST_PROVIDER_ENV", "TEST-provider-value")
+	commands := []*exec.Cmd{
+		nativeProbeCommand(context.Background(), "/TEST/helper"),
+		nativeLaunchCommand(context.Background(), "/TEST/helper.app", "/TEST/request", "/TEST/receipt"),
+		nativePermissionCommand(context.Background(), "/TEST/helper", pr3Correlation, pr3Nonce),
+	}
+	for _, cmd := range commands {
+		assertNativeEnvironment(t, cmd.Env)
+	}
+}
+
+func assertNativeEnvironment(t *testing.T, env []string) {
+	t.Helper()
+	if env == nil {
+		t.Fatal("nil command environment would inherit the event secret")
+	}
+	provider := false
+	for _, entry := range env {
+		key, _, _ := strings.Cut(entry, "=")
+		if strings.EqualFold(key, "AGENT_NOTIFICATIONS_WEBHOOK_URL") || strings.Contains(entry, "TEST-private-url") {
+			t.Fatal("native child inherited webhook destination")
+		}
+		provider = provider || entry == "TEST_PROVIDER_ENV=TEST-provider-value"
+	}
+	if !provider {
+		t.Fatal("unrelated provider environment was removed")
 	}
 }

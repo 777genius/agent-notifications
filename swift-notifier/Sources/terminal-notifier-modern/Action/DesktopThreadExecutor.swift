@@ -70,54 +70,80 @@ final class DesktopThreadExecutor {
     private let verificationWork: Work
     private let deliverResult: Work
     private let admission: PreflightAdmission
+    private let now: () -> Double
     init(discovery: ApplicationDiscovering = ConfiguredApplicationDiscovery(),
          verifier: ApplicationVerifying = SignedApplicationVerifier(),
          opener: DesktopURLOpening = WorkspaceDesktopOpener(),
          verificationWork: @escaping Work = { work in DispatchQueue.global(qos: .utility).async(execute: work) },
          deliverResult: @escaping Work = { work in DispatchQueue.main.async(execute: work) },
-         admission: PreflightAdmission = .shared) {
+         admission: PreflightAdmission = .shared,
+         now: @escaping () -> Double = ContinuousClock.now) {
         self.discovery = discovery; self.verifier = verifier; self.opener = opener
         self.verificationWork = verificationWork; self.deliverResult = deliverResult
-        self.admission = admission
+        self.admission = admission; self.now = now
     }
     func execute(_ action: DesktopThreadAction, token: CallbackToken = CallbackToken(),
-                 isActive: @escaping () -> Bool = { true }, completion: @escaping (DesktopOpenResult) -> Void) {
+                 isActive: @escaping () -> Bool = { true },
+                 phase: @escaping (CallbackPhase) -> Void = { _ in },
+                 measurement: @escaping (CallbackMeasurement) -> Void = { _ in }, completion: @escaping (DesktopOpenResult) -> Void) {
         guard token.isActive && isActive() else { completion(.open_unknown); return }
         do { try action.validate() }
         catch { completion(.malformed_action); return }
         guard admission.acquire() else { completion(.open_unknown); return }
+        // Includes time queued for the admitted preflight, not just Security work.
+        phase(.preflight_started)
+        let queued = now()
         verificationWork { [self] in
-            let result = preflight(action, token: token)
+            // Capture on the actual worker boundary; publish only on callback queue.
+            var samples = [CallbackMeasurement(stage: .queue, durationSeconds: max(0, now() - queued))]
+            let result = preflight(action, token: token) { samples.append($0) }
             deliverResult { [self] in
                 admission.release()
                 // isActive is a compatibility seam, called only on the callback queue.
                 guard token.isActive && isActive() else { completion(.open_unknown); return }
+                samples.forEach(measurement)
+                phase(.preflight_finished)
                 switch result {
                 case .success(let app):
-                    opener.open(action.url, application: app) { completion($0 ? .open_requested : .open_failed) }
+                    phase(.open_submitted)
+                    var completed = false
+                    opener.open(action.url, application: app) { success in
+                        guard !completed else { return }
+                        completed = true
+                        guard token.isActive && isActive() else { completion(.open_unknown); return }
+                        phase(.open_completed)
+                        completion(success ? .open_requested : .open_failed)
+                    }
                 case .failure(let outcome): completion(outcome)
                 }
             }
         }
     }
     private enum PreflightResult { case success(URL), failure(CallbackOutcome) }
-    private func preflight(_ action: DesktopThreadAction, token: CallbackToken) -> PreflightResult {
+    private func preflight(_ action: DesktopThreadAction, token: CallbackToken,
+                           measurement: (CallbackMeasurement) -> Void) -> PreflightResult {
+        func measured<T>(_ stage: CallbackMeasurement.Stage, _ work: () -> T) -> T {
+            let started = now()
+            let result = work()
+            measurement(CallbackMeasurement(stage: stage, durationSeconds: max(0, now() - started)))
+            return result
+        }
         guard token.isActive else { return .failure(.open_unknown) }
-        let app = discovery.selectedApplication(path: action.applicationPath)
+        let app = measured(.discovery) { discovery.selectedApplication(path: action.applicationPath) }
         guard token.isActive else { return .failure(.open_unknown) }
         if let app = app {
             guard app.path == action.applicationPath else { return .failure(.application_moved) }
-            let valid = verifier.verify(app, bundleID: action.bundleID, teamID: action.teamID)
+            let valid = measured(.verification) { verifier.verify(app, bundleID: action.bundleID, teamID: action.teamID) }
             guard token.isActive else { return .failure(.open_unknown) }
             return valid ? .success(app) : .failure(.identity_mismatch)
         }
-        let registered = discovery.registeredApplications(bundleID: action.bundleID)
+        let registered = measured(.discovery) { discovery.registeredApplications(bundleID: action.bundleID) }
         guard token.isActive else { return .failure(.open_unknown) }
         guard registered.count <= 16 else { return .failure(.application_ambiguous) }
         var paths = Set<String>()
         for url in registered {
             guard token.isActive else { return .failure(.open_unknown) }
-            let valid = verifier.verify(url, bundleID: action.bundleID, teamID: action.teamID)
+            let valid = measured(.verification) { verifier.verify(url, bundleID: action.bundleID, teamID: action.teamID) }
             guard token.isActive else { return .failure(.open_unknown) }
             if valid { paths.insert(url.resolvingSymlinksInPath().standardizedFileURL.path) }
         }

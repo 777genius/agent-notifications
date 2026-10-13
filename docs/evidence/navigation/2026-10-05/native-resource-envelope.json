@@ -1,0 +1,533 @@
+{
+  "schemaVersion": 1,
+  "acceptedRun": "reviewed",
+  "fastPathQualified": false,
+  "productionClientActivated": false,
+  "originalVerdictLabelsSupersededByReview": true,
+  "runs": [
+    {
+      "stage": "before_review_assertions",
+      "rawEvidenceSHA256": "2fccf12bf9f0580c79700130b897a248ba17c67d241c06989de82948a630ffe4",
+      "result": {
+        "schemaVersion": 1,
+        "macOS": "15.6.1",
+        "architecture": "arm64",
+        "sourceSHA256": {
+          "ProcessSerialBridge.c": "f8b2e464465b7d1f3835dfb1aa3040715940f109b3f733e700f7caed9c132ab1",
+          "ProcessSerialBridge.h": "5065d4b90bca9305c9c6709db0b5f0a6d9f1fda3a66948efb032fec0bdc1cec3",
+          "ProcessSerialRoutingProbe.swift": "a68c6ce17ce29854e0f452dbe9559e6a4aaf7464b71fdb794d260598abb1481b",
+          "ResourceEnvelopeValidationProbe.swift": "0cb5a9a74807996eff580a14d9b903788c229a205eb450b465a5b53ad3f139da"
+        },
+        "runnerSHA256": "ae62b3ea4e4e1f5ad70092392a6635b95fb714f38df3fe16fce6d0121904790b",
+        "commands": [
+          {
+            "label": "bridge",
+            "argv": [
+              "cc",
+              "-c",
+              "<OWNED_TEST_ROOT>/source/ProcessSerialBridge.c",
+              "-o",
+              "<OWNED_TEST_ROOT>/bridge.o"
+            ],
+            "exitCode": 0,
+            "stdoutSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "stderrSHA256": "2da9044069577d36ce5f15a5b480245b11a9c84c6d92de1671f360c7d844e7c5"
+          },
+          {
+            "label": "receiver-build",
+            "argv": [
+              "swiftc",
+              "-import-objc-header",
+              "<OWNED_TEST_ROOT>/source/ProcessSerialBridge.h",
+              "<OWNED_TEST_ROOT>/source/ProcessSerialRoutingProbe.swift",
+              "<OWNED_TEST_ROOT>/bridge.o",
+              "-o",
+              "<OWNED_TEST_ROOT>/receiver"
+            ],
+            "exitCode": 0,
+            "stdoutSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "stderrSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "label": "probe-build",
+            "argv": [
+              "swiftc",
+              "<OWNED_TEST_ROOT>/source/ResourceEnvelopeValidationProbe.swift",
+              "-o",
+              "<OWNED_TEST_ROOT>/envelope-probe"
+            ],
+            "exitCode": 0,
+            "stdoutSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "stderrSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "label": "untouched-sign",
+            "argv": [
+              "codesign",
+              "--force",
+              "--sign",
+              "-",
+              "--timestamp=none",
+              "<OWNED_TEST_ROOT>/untouched.app"
+            ],
+            "exitCode": 0,
+            "stdoutSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "stderrSHA256": "7c7fe1681b0729086d77bdd8952abd7744d465169a6d1aa7f9df4ae851919f61"
+          },
+          {
+            "label": "resource-sign",
+            "argv": [
+              "codesign",
+              "--force",
+              "--sign",
+              "-",
+              "--timestamp=none",
+              "<OWNED_TEST_ROOT>/resource.app"
+            ],
+            "exitCode": 0,
+            "stdoutSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "stderrSHA256": "3beca8957e16999dd0a35021435d691172f66f326e6a30d4a891e1abbc107418"
+          },
+          {
+            "label": "envelope-sign",
+            "argv": [
+              "codesign",
+              "--force",
+              "--sign",
+              "-",
+              "--timestamp=none",
+              "<OWNED_TEST_ROOT>/envelope.app"
+            ],
+            "exitCode": 0,
+            "stdoutSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "stderrSHA256": "62d4ca3cfaa1a46fd6ae94255125e08b30a8453cbc075ba94c88278eabe08700"
+          },
+          {
+            "label": "executable-sign",
+            "argv": [
+              "codesign",
+              "--force",
+              "--sign",
+              "-",
+              "--timestamp=none",
+              "<OWNED_TEST_ROOT>/executable.app"
+            ],
+            "exitCode": 0,
+            "stdoutSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "stderrSHA256": "12cab88fa575ccc1c1b7ebb4d242ded43af6d5b54e8dec0af700a9cf1f5913c2"
+          },
+          {
+            "label": "experiment",
+            "argv": [
+              "<OWNED_TEST_ROOT>/envelope-probe",
+              "<OWNED_TEST_ROOT>"
+            ],
+            "exitCode": 0,
+            "stdoutSHA256": "62e51c927f5c23ae3362e1d566f34c75d1679eabc12d26edc04a66298d4cfbcc",
+            "stderrSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        ],
+        "binarySHA256": {
+          "probe": "7e1def728a3c100c1c41ee6d1dfffbedcb1c49c4759344c078ff8dc5551d60a3",
+          "untouched": "59f0d9cd446b7f275e7c27f780e77739174ac8d358d2c47d6295b602854594cb",
+          "resource": "400426f3c19497973d2ec1cb4cdde29f04dcdc92b10694bdd69814a0e4b576e3",
+          "envelope": "353c71cc4d4665f63f5386b3a01424f333eb8f96c4d39a591a613cf53d821b2e",
+          "executable": "f4333ae97dbd4b8f30c7a96f9a42f9b53cacf5ef4a189205f43207812ece73df"
+        },
+        "passed": true,
+        "productionClientActivated": false,
+        "fastPathQualified": false,
+        "limitations": [
+          "Ad-hoc fixture only; no Developer ID/Codex qualification",
+          "One architecture; no universal-binary inactive-slice control",
+          "Executable mutation is observational; kernel can kill its child",
+          "No proof of secure guest-to-filesystem binding or concurrent-update safety"
+        ],
+        "experiment": {
+          "controls": [
+            {
+              "after": {
+                "copyStatic": 0,
+                "dynamic": 0,
+                "full": 0,
+                "fullCreate": 0,
+                "guestLookup": 0,
+                "resourcesOnly": 0
+              },
+              "aliveAfterChecks": true,
+              "aliveBeforeAfterChecks": true,
+              "aliveBeforeMutation": true,
+              "before": {
+                "copyStatic": 0,
+                "dynamic": 0,
+                "full": 0,
+                "fullCreate": 0,
+                "guestLookup": 0,
+                "resourcesOnly": 0
+              },
+              "childStopped": true,
+              "compositeAccepted": true,
+              "control": "untouched",
+              "nonEquivalenceObserved": false,
+              "passed": true
+            },
+            {
+              "after": {
+                "copyStatic": 0,
+                "dynamic": 0,
+                "full": -67054,
+                "fullCreate": 0,
+                "guestLookup": 0,
+                "resourcesOnly": -67054
+              },
+              "aliveAfterChecks": true,
+              "aliveBeforeAfterChecks": true,
+              "aliveBeforeMutation": true,
+              "before": {
+                "copyStatic": 0,
+                "dynamic": 0,
+                "full": 0,
+                "fullCreate": 0,
+                "guestLookup": 0,
+                "resourcesOnly": 0
+              },
+              "childStopped": true,
+              "compositeAccepted": false,
+              "control": "resource",
+              "nonEquivalenceObserved": false,
+              "passed": true
+            },
+            {
+              "after": {
+                "copyStatic": 0,
+                "dynamic": 0,
+                "full": -67023,
+                "fullCreate": 0,
+                "guestLookup": 0,
+                "resourcesOnly": -67023
+              },
+              "aliveAfterChecks": true,
+              "aliveBeforeAfterChecks": true,
+              "aliveBeforeMutation": true,
+              "before": {
+                "copyStatic": 0,
+                "dynamic": 0,
+                "full": 0,
+                "fullCreate": 0,
+                "guestLookup": 0,
+                "resourcesOnly": 0
+              },
+              "childStopped": true,
+              "compositeAccepted": false,
+              "control": "envelope",
+              "nonEquivalenceObserved": false,
+              "passed": true
+            },
+            {
+              "after": {
+                "copyStatic": 0,
+                "dynamic": 0,
+                "full": -67061,
+                "fullCreate": 0,
+                "guestLookup": 0,
+                "resourcesOnly": 0
+              },
+              "aliveAfterChecks": true,
+              "aliveBeforeAfterChecks": true,
+              "aliveBeforeMutation": true,
+              "before": {
+                "copyStatic": 0,
+                "dynamic": 0,
+                "full": 0,
+                "fullCreate": 0,
+                "guestLookup": 0,
+                "resourcesOnly": 0
+              },
+              "childStopped": true,
+              "compositeAccepted": true,
+              "control": "executable",
+              "mutatedExecutableOffset": 65535,
+              "nonEquivalenceObserved": true,
+              "passed": true
+            }
+          ],
+          "fastPathQualified": false,
+          "passed": true,
+          "productionClientActivated": false
+        },
+        "snapshotUnchanged": true
+      }
+    },
+    {
+      "stage": "reviewed",
+      "rawEvidenceSHA256": "41c88ccb7e928a9f70dcc8cf2718467e743d0deed3e59353ebd1d9765b3072ea",
+      "result": {
+        "schemaVersion": 1,
+        "macOS": "15.6.1",
+        "architecture": "arm64",
+        "sourceSHA256": {
+          "ProcessSerialBridge.c": "f8b2e464465b7d1f3835dfb1aa3040715940f109b3f733e700f7caed9c132ab1",
+          "ProcessSerialBridge.h": "5065d4b90bca9305c9c6709db0b5f0a6d9f1fda3a66948efb032fec0bdc1cec3",
+          "ProcessSerialRoutingProbe.swift": "a68c6ce17ce29854e0f452dbe9559e6a4aaf7464b71fdb794d260598abb1481b",
+          "ResourceEnvelopeValidationProbe.swift": "ffc0f3e28975aa4b5fabb6f4d3a5f747023a31133542feb4e5296e28e8628a2b"
+        },
+        "runnerSHA256": "973648151d1a9678e9fea98869e13f94dd2c80963258e3ed0cf18c685ec2a449",
+        "commands": [
+          {
+            "label": "bridge",
+            "argv": [
+              "cc",
+              "-c",
+              "<OWNED_TEST_ROOT>/source/ProcessSerialBridge.c",
+              "-o",
+              "<OWNED_TEST_ROOT>/bridge.o"
+            ],
+            "exitCode": 0,
+            "stdoutSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "stderrSHA256": "ab02922f3752f240a458ddd82f39f87b46c046589e4cfa078330ba7b754e7ff9"
+          },
+          {
+            "label": "receiver-build",
+            "argv": [
+              "swiftc",
+              "-import-objc-header",
+              "<OWNED_TEST_ROOT>/source/ProcessSerialBridge.h",
+              "<OWNED_TEST_ROOT>/source/ProcessSerialRoutingProbe.swift",
+              "<OWNED_TEST_ROOT>/bridge.o",
+              "-o",
+              "<OWNED_TEST_ROOT>/receiver"
+            ],
+            "exitCode": 0,
+            "stdoutSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "stderrSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "label": "probe-build",
+            "argv": [
+              "swiftc",
+              "<OWNED_TEST_ROOT>/source/ResourceEnvelopeValidationProbe.swift",
+              "-o",
+              "<OWNED_TEST_ROOT>/envelope-probe"
+            ],
+            "exitCode": 0,
+            "stdoutSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "stderrSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "label": "untouched-sign",
+            "argv": [
+              "codesign",
+              "--force",
+              "--sign",
+              "-",
+              "--timestamp=none",
+              "<OWNED_TEST_ROOT>/untouched.app"
+            ],
+            "exitCode": 0,
+            "stdoutSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "stderrSHA256": "cac64d02a771aeb3f5ae8b2ca42e4089823b1d7fc29d6546aa4edf13337840ca"
+          },
+          {
+            "label": "resource-sign",
+            "argv": [
+              "codesign",
+              "--force",
+              "--sign",
+              "-",
+              "--timestamp=none",
+              "<OWNED_TEST_ROOT>/resource.app"
+            ],
+            "exitCode": 0,
+            "stdoutSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "stderrSHA256": "ff02d8ae7629c0fcee86a8ced9c911f8632d766d84dfb5964c2b360f10ebb043"
+          },
+          {
+            "label": "envelope-sign",
+            "argv": [
+              "codesign",
+              "--force",
+              "--sign",
+              "-",
+              "--timestamp=none",
+              "<OWNED_TEST_ROOT>/envelope.app"
+            ],
+            "exitCode": 0,
+            "stdoutSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "stderrSHA256": "96a6c4944ceb61ff60f37455db75ba03aaa6d59d47a747cd55d42c98474f3bbd"
+          },
+          {
+            "label": "executable-sign",
+            "argv": [
+              "codesign",
+              "--force",
+              "--sign",
+              "-",
+              "--timestamp=none",
+              "<OWNED_TEST_ROOT>/executable.app"
+            ],
+            "exitCode": 0,
+            "stdoutSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "stderrSHA256": "2487f1c05c7fb86ba258a49c094cee0658cb33d0391d2d098789d5ac9a32c437"
+          },
+          {
+            "label": "experiment",
+            "argv": [
+              "<OWNED_TEST_ROOT>/envelope-probe",
+              "<OWNED_TEST_ROOT>"
+            ],
+            "exitCode": 0,
+            "stdoutSHA256": "9f27ae20448a3ca2afedce0fa7d9cd1a617d3e397a0055bab177e8ad708dcdab",
+            "stderrSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        ],
+        "binarySHA256": {
+          "probe": "75cf96534e327decdb99b61dc8677a970dd4be7bf683ca4b1ce15a21a7c9e7ef",
+          "untouched": "4e011b244aa6e2255749e70024a52162ccdfc6d69729ccbd6640c0c7d2f2d60a",
+          "resource": "c9170828daca408f67f0921e37591e44da9538a6e5d9fb3913a0e03da445bf08",
+          "envelope": "5f6f45c52e020830a49e3b84756db7cdd50742c486336b739a74d372bb180bb3",
+          "executable": "9aab5cc9bf0e069c871725062980435ce941870fd5453893fd078110afc159ec"
+        },
+        "passed": true,
+        "productionClientActivated": false,
+        "fastPathQualified": false,
+        "passedScope": "resource_controls_and_cleanup",
+        "limitations": [
+          "Ad-hoc fixture only; no Developer ID/Codex qualification",
+          "One architecture; no universal-binary inactive-slice control",
+          "Executable mutation is observational; kernel can kill its child",
+          "No proof of secure guest-to-filesystem binding or concurrent-update safety"
+        ],
+        "experiment": {
+          "controls": [
+            {
+              "after": {
+                "copyStatic": 0,
+                "dynamic": 0,
+                "full": 0,
+                "fullCreate": 0,
+                "guestLookup": 0,
+                "resourcesOnly": 0
+              },
+              "aliveAfterChecks": true,
+              "aliveBeforeAfterChecks": true,
+              "aliveBeforeMutation": true,
+              "before": {
+                "copyStatic": 0,
+                "dynamic": 0,
+                "full": 0,
+                "fullCreate": 0,
+                "guestLookup": 0,
+                "resourcesOnly": 0
+              },
+              "childStopped": true,
+              "compositeAccepted": true,
+              "control": "untouched",
+              "fastPathQualified": false,
+              "mandatory": true,
+              "nonEquivalenceObserved": false,
+              "passed": true
+            },
+            {
+              "after": {
+                "copyStatic": 0,
+                "dynamic": 0,
+                "full": -67054,
+                "fullCreate": 0,
+                "guestLookup": 0,
+                "resourcesOnly": -67054
+              },
+              "aliveAfterChecks": true,
+              "aliveBeforeAfterChecks": true,
+              "aliveBeforeMutation": true,
+              "before": {
+                "copyStatic": 0,
+                "dynamic": 0,
+                "full": 0,
+                "fullCreate": 0,
+                "guestLookup": 0,
+                "resourcesOnly": 0
+              },
+              "childStopped": true,
+              "compositeAccepted": false,
+              "control": "resource",
+              "expectedIntegrityError": -67054,
+              "fastPathQualified": false,
+              "mandatory": true,
+              "nonEquivalenceObserved": false,
+              "passed": true
+            },
+            {
+              "after": {
+                "copyStatic": 0,
+                "dynamic": 0,
+                "full": -67023,
+                "fullCreate": 0,
+                "guestLookup": 0,
+                "resourcesOnly": -67023
+              },
+              "aliveAfterChecks": true,
+              "aliveBeforeAfterChecks": true,
+              "aliveBeforeMutation": true,
+              "before": {
+                "copyStatic": 0,
+                "dynamic": 0,
+                "full": 0,
+                "fullCreate": 0,
+                "guestLookup": 0,
+                "resourcesOnly": 0
+              },
+              "childStopped": true,
+              "compositeAccepted": false,
+              "control": "envelope",
+              "expectedIntegrityError": -67023,
+              "fastPathQualified": false,
+              "mandatory": true,
+              "nonEquivalenceObserved": false,
+              "passed": true
+            },
+            {
+              "after": {
+                "copyStatic": 0,
+                "dynamic": 0,
+                "full": -67061,
+                "fullCreate": 0,
+                "guestLookup": 0,
+                "resourcesOnly": 0
+              },
+              "aliveAfterChecks": true,
+              "aliveBeforeAfterChecks": true,
+              "aliveBeforeMutation": true,
+              "before": {
+                "copyStatic": 0,
+                "dynamic": 0,
+                "full": 0,
+                "fullCreate": 0,
+                "guestLookup": 0,
+                "resourcesOnly": 0
+              },
+              "childStopped": true,
+              "compositeAccepted": true,
+              "control": "executable",
+              "fastPathQualified": false,
+              "mandatory": false,
+              "mutatedExecutableOffset": 65535,
+              "nonEquivalenceObserved": true,
+              "observationCompleted": true,
+              "observationOutcome": "full_rejected_composite_accepted"
+            }
+          ],
+          "fastPathQualified": false,
+          "passed": true,
+          "passedScope": "resource_controls_and_cleanup",
+          "productionClientActivated": false
+        },
+        "snapshotUnchanged": true
+      }
+    }
+  ],
+  "limitations": [
+    "Only ad-hoc single-architecture disposable fixtures; no installed Codex or Developer ID qualification",
+    "Executable control observes non-equivalence, not a production route or latency improvement",
+    "No atomic guest-to-receiver binding, update safety or inactive-architecture proof"
+  ]
+}

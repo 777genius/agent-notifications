@@ -6,6 +6,8 @@ import (
 	"golang.org/x/sys/windows"
 	"os"
 	"unsafe"
+
+	"github.com/777genius/agent-notifications/internal/windowsacl"
 )
 
 func tryLock(f *os.File) (bool, error) {
@@ -17,16 +19,37 @@ func tryLock(f *os.File) (bool, error) {
 	return err == nil, err
 }
 
+func prepareLockedFile(f *os.File, writable bool) error {
+	return nil
+}
+
 func openLock(path string, create bool) (*os.File, error) {
 	name, err := windows.UTF16PtrFromString(path)
 	if err != nil {
 		return nil, err
 	}
 	disposition := uint32(windows.OPEN_EXISTING)
+	access := uint32(windows.GENERIC_READ | windows.GENERIC_WRITE)
+	var security *windows.SecurityAttributes
 	if create {
 		disposition = windows.OPEN_ALWAYS
+		access |= windows.WRITE_DAC | windows.WRITE_OWNER
+		user, err := windows.GetCurrentProcessToken().GetTokenUser()
+		if err != nil {
+			return nil, err
+		}
+		// Preserve the kernel's default owner during creation. The handle-bound
+		// snapshot below decides whether owner/DACL normalization is necessary.
+		sd, err := windows.SecurityDescriptorFromString("D:P(A;;FA;;;" + user.User.Sid.String() + ")(A;;FA;;;SY)(A;;FA;;;BA)")
+		if err != nil {
+			return nil, err
+		}
+		security = &windows.SecurityAttributes{
+			Length:             uint32(unsafe.Sizeof(windows.SecurityAttributes{})),
+			SecurityDescriptor: sd,
+		}
 	}
-	h, err := windows.CreateFile(name, windows.GENERIC_READ|windows.GENERIC_WRITE, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE, nil, disposition, windows.FILE_FLAG_OPEN_REPARSE_POINT, 0)
+	h, err := windows.CreateFile(name, access, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE, security, disposition, windows.FILE_FLAG_OPEN_REPARSE_POINT, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -40,9 +63,18 @@ func openLock(path string, create bool) (*os.File, error) {
 		f.Close()
 		return nil, fmt.Errorf("installation lock requires a regular non-reparse inode")
 	}
-	if err := privateWindowsHandle(h); err != nil {
+	canonical, err := inspectPrivateWindowsHandle(h)
+	if err != nil {
 		f.Close()
 		return nil, err
+	}
+	// Repeated observation claims reuse the permanent inode. Do not rewrite
+	// already canonical security metadata, but retain legacy ACL adoption.
+	if create && !canonical {
+		if err := restrictPrivateWindowsHandle(h); err != nil {
+			f.Close()
+			return nil, err
+		}
 	}
 	return f, nil
 }
@@ -68,65 +100,119 @@ func privateDirectory(path string) error {
 }
 
 func privateWindowsHandle(h windows.Handle) error {
+	_, err := inspectPrivateWindowsHandle(h)
+	return err
+}
+
+// Validation and canonicality use the same handle-bound security snapshot.
+func inspectPrivateWindowsHandle(h windows.Handle) (bool, error) {
 	sd, err := windows.GetSecurityInfo(h, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION)
 	if err != nil {
-		return err
+		return false, err
 	}
 	owner, _, err := sd.Owner()
 	if err != nil {
-		return err
+		return false, err
 	}
 	user, err := windows.GetCurrentProcessToken().GetTokenUser()
 	if err != nil {
-		return err
+		return false, err
 	}
 	if owner == nil || (!owner.Equals(user.User.Sid) && owner.String() != "S-1-5-18" && owner.String() != "S-1-5-32-544") {
-		return fmt.Errorf("managed inode owner mismatch")
+		return false, fmt.Errorf("managed inode owner mismatch")
 	}
 	acl, _, err := sd.DACL()
 	if err != nil {
-		return err
+		return false, err
 	}
 	if acl == nil {
-		return fmt.Errorf("managed inode requires a private DACL")
+		return false, fmt.Errorf("managed inode requires a private DACL")
 	}
 	for i := uint32(0); i < uint32(acl.AceCount); i++ {
 		var ace *windows.ACCESS_ALLOWED_ACE
 		if err := windows.GetAce(acl, i, &ace); err != nil {
-			return err
-		}
-		if ace.Header.AceFlags&windows.INHERIT_ONLY_ACE != 0 {
-			continue
+			return false, err
 		}
 		if ace.Header.AceType == windows.ACCESS_DENIED_ACE_TYPE {
 			continue
 		}
 		if ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE {
-			return fmt.Errorf("unsupported managed inode ACL")
+			return false, fmt.Errorf("unsupported managed inode ACL")
 		}
 		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
-		if ace.Mask != 0 && !sid.Equals(user.User.Sid) && !sid.IsWellKnown(windows.WinLocalSystemSid) && !sid.IsWellKnown(windows.WinBuiltinAdministratorsSid) {
-			return fmt.Errorf("managed inode DACL grants foreign access")
+		if !sid.Equals(user.User.Sid) && !sid.IsWellKnown(windows.WinLocalSystemSid) && !sid.IsWellKnown(windows.WinBuiltinAdministratorsSid) && !windowsacl.AllowsForeignReadOnly(ace.Mask) {
+			return false, fmt.Errorf("managed inode DACL grants foreign access")
 		}
 	}
-	return nil
+	return canonicalPrivateWindowsDescriptor(sd, user.User.Sid)
+}
+
+// Canonical locks have exactly the policy installed by
+// privateWindowsSecurityDescriptor(false). Accepted read-only legacy grants,
+// deny/inherited ACEs or a SYSTEM/Admin owner still require normalization.
+func canonicalPrivateWindowsDescriptor(sd *windows.SECURITY_DESCRIPTOR, user *windows.SID) (bool, error) {
+	owner, _, err := sd.Owner()
+	if err != nil {
+		return false, err
+	}
+	if owner == nil || !owner.Equals(user) {
+		return false, nil
+	}
+	control, _, err := sd.Control()
+	if err != nil {
+		return false, err
+	}
+	if control&windows.SE_DACL_PROTECTED == 0 {
+		return false, nil
+	}
+	acl, _, err := sd.DACL()
+	if err != nil {
+		return false, err
+	}
+	if acl == nil || acl.AceCount != 3 {
+		return false, nil
+	}
+	// A multiset also handles a process whose user SID is SYSTEM itself.
+	remaining := map[string]int{user.String(): 1}
+	remaining["S-1-5-18"]++
+	remaining["S-1-5-32-544"]++
+	const fileAllAccess = windows.STANDARD_RIGHTS_REQUIRED | windows.SYNCHRONIZE | 0x1ff
+	for i := uint32(0); i < uint32(acl.AceCount); i++ {
+		var ace *windows.ACCESS_ALLOWED_ACE
+		if err := windows.GetAce(acl, i, &ace); err != nil {
+			return false, err
+		}
+		if ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE || ace.Header.AceFlags != 0 || ace.Mask != fileAllAccess {
+			return false, nil
+		}
+		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart)).String()
+		if remaining[sid] == 0 {
+			return false, nil
+		}
+		remaining[sid]--
+	}
+	return true, nil
+}
+
+func privateWindowsSecurityDescriptor(directory bool) (*windows.SECURITY_DESCRIPTOR, error) {
+	user, err := windows.GetCurrentProcessToken().GetTokenUser()
+	if err != nil {
+		return nil, err
+	}
+	sid := user.User.Sid
+	inherit := ""
+	if directory {
+		inherit = "OICI"
+	}
+	return windows.SecurityDescriptorFromString("O:" + sid.String() + "D:P(A;" + inherit + ";FA;;;" + sid.String() + ")(A;" + inherit + ";FA;;;SY)(A;" + inherit + ";FA;;;BA)")
 }
 
 func restrictPrivateWindowsHandle(h windows.Handle) error {
-	user, err := windows.GetCurrentProcessToken().GetTokenUser()
-	if err != nil {
-		return err
-	}
-	sid := user.User.Sid
 	var info windows.ByHandleFileInformation
-	if err = windows.GetFileInformationByHandle(h, &info); err != nil {
+	if err := windows.GetFileInformationByHandle(h, &info); err != nil {
 		return err
 	}
-	inherit := ""
-	if info.FileAttributes&windows.FILE_ATTRIBUTE_DIRECTORY != 0 {
-		inherit = "OICI"
-	}
-	sd, err := windows.SecurityDescriptorFromString("O:" + sid.String() + "D:P(A;" + inherit + ";FA;;;" + sid.String() + ")(A;" + inherit + ";FA;;;SY)(A;" + inherit + ";FA;;;BA)")
+	sd, err := privateWindowsSecurityDescriptor(info.FileAttributes&windows.FILE_ATTRIBUTE_DIRECTORY != 0)
 	if err != nil {
 		return err
 	}

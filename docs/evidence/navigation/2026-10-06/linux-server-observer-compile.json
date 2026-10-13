@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "scope": "isolated_TEST_compositor_observer_compile_only",
+  "compilerImage": "sha256:aa794f6187eca154b32f6c74a382d394734e0f4cd44bd2bee260597f80c07b29",
+  "containerID": "22a81bcce2a8327b7b2f9c2428952c707f96cf10a386cb9d9ea4ec6865a307a9",
+  "compilerFlags": [
+    "-std=c11",
+    "-Wall",
+    "-Wextra",
+    "-Werror",
+    "-shared",
+    "-fPIC"
+  ],
+  "compilerSourceSHA256": {
+    "navigation_wayland_server_observer_test.c": "4dd002495ad751f0d2e6adc402c13afe77160a445ac6b1052286366bdd8d5b16"
+  },
+  "outputSHA256": {
+    "server-observer.so": "d339b0d7e20954b04bddd75f6c3ba18bbec306df13e30186220dc82491cc297f"
+  },
+  "rawSHA256": {
+    "result.json": "142083cd7b8307decb276c7781b1579f893e59e44bdafc7058095b068d6e303b",
+    "compiler.stdout": "f211cc03ef2cfe03fd1ea6168845e733604b67524be24629c6ac16c8f03ebffd",
+    "compiler.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "source.tar": "8d373b61935c02cbe4de0519528a1a9189371830cdaa7b04e5b71935ac293976",
+    "operator.py": "53f00b3f452c8e9cfad797ecbb4b816f5e669e25945705d9f102e951210cb9ca"
+  },
+  "compilerExitCode": 0,
+  "containerExitCode": 0,
+  "containerCollected": true,
+  "sourceUnchanged": true,
+  "cleanupPassed": true,
+  "cleanupUnknown": false,
+  "createOutcomeUnknown": false,
+  "compositorObserverLoaded": false,
+  "notificationEffectAttempted": false,
+  "selectedClientLaunchAttempted": false,
+  "nativeQualification": false
+}

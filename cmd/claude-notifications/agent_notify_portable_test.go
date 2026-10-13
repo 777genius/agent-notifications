@@ -46,10 +46,7 @@ func TestPortableProductionBridge(t *testing.T) {
 			t.Fatal(e)
 		}
 	}
-	exe, e := os.Executable()
-	if e != nil {
-		t.Fatal(e)
-	}
+	exe := managedFixtureExecutable(t)
 	binary, e := os.ReadFile(exe)
 	if e != nil {
 		t.Fatal(e)

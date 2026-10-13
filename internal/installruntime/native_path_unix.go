@@ -18,15 +18,18 @@ func renameNative(from, to string, expected []PathAnchor, sourceID ...string) er
 		return err
 	}
 	defer func() { _ = parent.Close() }()
-	if err := checkAnchors(expected, anchors); err != nil {
+	if err := checkPersistedAnchors(expected, anchors); err != nil {
 		return err
 	}
 	if len(sourceID) != 0 && sourceID[0] != "" {
-		var st unix.Stat_t
+		var st, parentStat unix.Stat_t
 		if err := unix.Fstatat(int(parent.Fd()), filepath.Base(from), &st, unix.AT_SYMLINK_NOFOLLOW); err != nil {
 			return err
 		}
-		if st.Mode&unix.S_IFMT != unix.S_IFDIR || fmt.Sprintf("%d:%d", st.Dev, st.Ino) != sourceID[0] {
+		if err := unix.Fstat(int(parent.Fd()), &parentStat); err != nil {
+			return err
+		}
+		if st.Mode&unix.S_IFMT != unix.S_IFDIR || !MatchPersistedDirectory(sourceID[0], fmt.Sprintf("%d:%d", st.Dev, st.Ino), fmt.Sprintf("%d", parentStat.Dev)) {
 			return fmt.Errorf("native rename source inode changed")
 		}
 	}

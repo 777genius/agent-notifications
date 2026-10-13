@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 )
 
 // InstalledSnapshot is a read-only observation, not an admission lease. Missing,
@@ -71,48 +72,52 @@ func readInstalledSnapshot(root string, requestPolicy *UserPolicy) (InstalledSna
 		var err error
 		root, err = ControlRoot()
 		if err != nil {
-			return s, err
+			return s, snapshotFailure("control_invalid", root, err)
 		}
 	}
 	if err := privateDirectory(root); err != nil && !os.IsNotExist(err) {
-		return s, err
+		return s, snapshotFailure("control_invalid", root, err)
 	}
 	l, err := readLedger(root)
-	s.Ledger = l
 	if err != nil {
-		return s, err
+		return s, snapshotFailure("ledger_invalid", filepath.Join(root, "ownership.json"), err)
 	}
+	s.Ledger = l
 	if _, err = os.Lstat(filepath.Join(root, "transaction.json")); err == nil {
 		s.Recovery = true
 		return s, nil
 	} else if !os.IsNotExist(err) {
-		return s, err
+		return s, snapshotFailure("control_invalid", filepath.Join(root, "transaction.json"), err)
 	}
 	if err = checkPolicyGeneration(root, l); err != nil {
-		return s, err
+		return s, snapshotFailure("policy_invalid", filepath.Join(root, "policy-generation.json"), err)
 	}
-	for path, want := range l.Files {
+	paths := make([]string, 0, len(l.Files))
+	for path := range l.Files {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	for _, path := range paths {
+		want := l.Files[path]
 		got, e := Fingerprint(path)
 		if e != nil {
-			return s, e
+			return s, snapshotFailure("managed_file_unreadable", path, e)
 		}
 		if got != want {
-			return s, fmt.Errorf("installed file fingerprint mismatch: %s", path)
+			cause := fmt.Errorf("installed file fingerprint mismatch: %s", path)
+			code := "managed_file_changed"
+			if want.Exists && !got.Exists {
+				code = "managed_file_missing"
+				// Fingerprint represents absence as a zero identity, not an error.
+				// Retain the old mismatch text while making absence discoverable.
+				return s, snapshotFailure(code, path, &snapshotMissingFileError{message: cause.Error()})
+			}
+			return s, snapshotFailure(code, path, cause)
 		}
 	}
 	if l.Native != nil {
-		if err := validateNativeRecord(l.Native); err != nil {
+		if err := checkSnapshotNative(l.Native); err != nil {
 			return s, err
-		}
-		if err := checkNativeDirectoryID(l.Native.Path, l.Native.DirectoryID); err != nil {
-			return s, err
-		}
-		got, e := treeFingerprint(l.Native.Path)
-		if e != nil {
-			return s, e
-		}
-		if got != l.Native.SHA256 {
-			return s, fmt.Errorf("installed native fingerprint mismatch")
 		}
 	}
 	// Only an explicit policy transaction can enable admission.
@@ -122,7 +127,7 @@ func readInstalledSnapshot(root string, requestPolicy *UserPolicy) (InstalledSna
 	} else {
 		policy, err = ReadUserPolicy(root)
 		if err != nil {
-			return s, err
+			return s, snapshotFailure("policy_invalid", filepath.Join(root, "agent-notifications.json"), err)
 		}
 	}
 	s.Enabled = l.Enabled && policy.Enabled
@@ -154,6 +159,57 @@ func AcquireInstalledLease(ctx context.Context, root string, expected InstalledS
 // must qualify native protocol support before executing the retained helper.
 func AcquireSetupLease(ctx context.Context, root string, expected InstalledSnapshot) (InstalledSnapshot, func(), error) {
 	return acquireInstalledLease(ctx, root, expected, false)
+}
+
+// AcquirePolicyLease pins the exact observed policy and installation through a
+// consumer's bounded handoff. Unlike AcquireInstalledLease, portable enablement
+// is not an admission condition: the consumer must check its own registration
+// and consent against the returned snapshot before using the retained native
+// bundle. Both existing locks are retained until release.
+func AcquirePolicyLease(ctx context.Context, root string, expected PolicySnapshot) (PolicySnapshot, func(), error) {
+	var zero PolicySnapshot
+	if root == "" {
+		return zero, nil, fmt.Errorf("managed control root required")
+	}
+	if err := privateDirectory(root); err != nil {
+		return zero, nil, err
+	}
+	componentRelease, err := LockExisting(ctx, filepath.Join(root, ".component-install.lock"))
+	if err != nil {
+		return zero, nil, err
+	}
+	success := false
+	var configRelease func()
+	defer func() {
+		if !success {
+			if configRelease != nil {
+				configRelease()
+			}
+			componentRelease()
+		}
+	}()
+	configRelease, err = LockExisting(ctx, filepath.Join(root, "agent-notifications.json.lock"))
+	if err != nil {
+		return zero, nil, err
+	}
+	current := PolicySnapshot{}
+	current.Policy, current.Fields, current.Preimage, err = readPolicyForUpdate(root)
+	if err != nil {
+		return zero, nil, err
+	}
+	current.Installation, err = readInstalledSnapshot(root, &current.Policy)
+	if err != nil {
+		return zero, nil, err
+	}
+	if current.Installation.Recovery || current.Installation.Ledger.ID == "" ||
+		current.Preimage != expected.Preimage || !reflect.DeepEqual(current.Installation, expected.Installation) {
+		return zero, nil, fmt.Errorf("consumer policy or installation snapshot changed")
+	}
+	if err := ctx.Err(); err != nil {
+		return zero, nil, err
+	}
+	success = true
+	return current, func() { configRelease(); componentRelease() }, nil
 }
 
 func acquireInstalledLease(ctx context.Context, root string, expected InstalledSnapshot, requireEnabled bool) (InstalledSnapshot, func(), error) {

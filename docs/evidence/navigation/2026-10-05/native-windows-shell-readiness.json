@@ -1,0 +1,105 @@
+{
+  "status": "failed",
+  "nativeCallbackQualified": false,
+  "navigationQualified": false,
+  "scope": "Windows client native TEST cold toast COM callback only",
+  "clientRouteTested": false,
+  "showAttempts": 0,
+  "showAttemptMeaning": "native Show call entered, not OS acceptance",
+  "submissionIntent": true,
+  "showCallOutcome": "not_called",
+  "nativeEffectUncertain": false,
+  "sourceSHA": "51b6d12286263627c4e66eef6e5d9e88a49a595f",
+  "runnerLabel": "windows-11-vs2026-arm",
+  "imageVersion": "20260924.168.1",
+  "nodeVersion": "v24.21.0",
+  "binarySHA256": "85aa51ca50946252de80906e2e59840ea5c4da8cb6aabf409df26eda07c40313",
+  "preflight": {
+    "client": true,
+    "build": 26200,
+    "productType": 1,
+    "sessionKnown": true,
+    "session": 2,
+    "station": "WinSta0",
+    "stationVisible": true,
+    "inputDesktop": "Default",
+    "threadDesktop": "Default",
+    "shellPID": 7316,
+    "ready": true
+  },
+  "showReturned": false,
+  "noShowProved": true,
+  "cleanup": {
+    "ownRegistrationRemoved": true,
+    "ownShortcutRemoved": true
+  },
+  "schemaVersion": 1,
+  "runID": 37358946457,
+  "runAttempt": 2,
+  "jobID": 111954363491,
+  "rawEvidenceSHA256": "e9ed0900c3a63dffba1bcd2ddf1a94de99aa977b76deac22e28e9e15697a0a43",
+  "senderFailure": {
+    "phase": "notifier_readiness",
+    "hresult": -2147024894,
+    "pid": 8324,
+    "nonce": "f4846140-2c8b-4d8f-abd1-7309c07bcfc8",
+    "showCallEntered": false,
+    "showCallReturned": false
+  },
+  "shellIdentity": {
+    "shellPID": 7316,
+    "ownSession": 2,
+    "shellSession": 2,
+    "sameUser": true
+  },
+  "shellReadiness": {
+    "aumid": "AgentNotify.Navigation.TEST.f4846140-2c8b-4d8f-abd1-7309c07bcfc8",
+    "observedAppID": "",
+    "parseHRESULT": -2147024894,
+    "appIDHRESULT": -2147483638,
+    "recognized": false,
+    "settingHRESULT": -2147023728,
+    "elapsedMS": 31,
+    "setting": -1
+  },
+  "shortcutReadback": {
+    "aumidVariantType": 31,
+    "activatorVariantType": 72,
+    "matches": true
+  },
+  "shellNotify": {
+    "event": "SHCNE_CREATE",
+    "flags": "SHCNF_PATHW|SHCNF_FLUSH",
+    "returned": true
+  },
+  "steps": [
+    {
+      "mode": "preflight",
+      "pid": 10204,
+      "status": 0,
+      "signal": null,
+      "exitedAt": 1791232421466
+    },
+    {
+      "mode": "send",
+      "pid": 8324,
+      "status": 1,
+      "signal": null,
+      "exitedAt": 1791232421809
+    },
+    {
+      "mode": "cleanup",
+      "pid": 9424,
+      "status": 0,
+      "signal": null,
+      "exitedAt": 1791232421868
+    }
+  ],
+  "readinessObservationCount": 1,
+  "limitations": [
+    "Known no-Show prerequisite failure only; native callback and client navigation unqualified",
+    "AppsFolder recognition for a fresh unpackaged AUMID is not an established eventual-readiness contract",
+    "SHCNF_FLUSH means notification delivery, not AppResolver indexing",
+    "The revised parse allowlist has not yet run in native CI"
+  ]
+}

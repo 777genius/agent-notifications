@@ -1,7 +1,7 @@
 # Claude Plugin Identity Compatibility
 
 The public product and repository are named **Agent Notifications** and
-`agent-notifications`. The following Claude Code identifiers intentionally retain the legacy
+`agent-notifications`. The following Claude identifiers intentionally retain the legacy
 name and must not be changed as part of branding or routine cleanup:
 
 - `.claude-plugin/plugin.json` -> `name`
@@ -14,8 +14,8 @@ user-facing branding.
 
 ## Why the identifiers are frozen
 
-Claude Code keys installations and updates by `plugin-name@marketplace-name`. This was also
-verified end to end on Claude Code 2.1.265 on 2026-09-10 using an isolated config and a
+Claude keys installations and updates by `plugin-name@marketplace-name`. This was also
+verified end to end on Claude 2.1.265 on 2026-09-10 using an isolated config and a
 throwaway project:
 
 - Renaming the marketplace, marketplace entry, and plugin manifest left the existing install
@@ -35,11 +35,11 @@ The GitHub repository URL may change independently and does not require changing
 
 Even though the marketplace/plugin *name* stays `claude-notifications-go`, users who declared
 that marketplace before a repository rename (e.g. the `claude-notifications-go` ->
-`agent-notifications` rename) get stuck: Claude Code stores the declared source
+`agent-notifications` rename) get stuck: Claude stores the declared source
 (`extraKnownMarketplaces` in settings) and refuses to silently re-point an existing declaration
 at a different repo, failing `marketplace add` with `its network source differs from the one
 declared for it in settings`. There is no officially documented transparent migration for a
-marketplace *source* change (the `renames` map in `marketplace.json`, added in Claude Code
+marketplace *source* change (the `renames` map in `marketplace.json`, added in Claude
 2.1.193, only covers plugin name changes within a marketplace, not the marketplace's own
 repo). Confirmed against the official docs and reproduced end to end on 2026-09-11.
 

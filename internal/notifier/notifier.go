@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gen2brain/beeep"
@@ -27,6 +28,9 @@ const macOSPermissionDeniedMessage = "Notification permission denied. Enable in 
 var execCommand = exec.Command
 var beeepNotify = beeep.Notify
 var notifierGOOS = runtime.GOOS
+var uniqueNotificationGroupSeq atomic.Uint64
+
+const notificationGroupPrefix = "claude-notif-"
 
 // NotificationPermissionDeniedError indicates macOS rejected the native
 // ClaudeNotifier path because notification permission is denied for the app.
@@ -75,7 +79,12 @@ func isTimeSensitiveStatus(status analyzer.Status) bool {
 // Script Editor attribution and optionally enables click-to-focus.
 // On Linux with clickToFocus enabled, it uses the background daemon.
 // cwd is the working directory of the project; used for window-specific focus. May be empty.
-func (n *Notifier) SendDesktop(status analyzer.Status, message, sessionID, cwd string) error {
+//
+// Passing WithoutSound() delivers the banner without the plugin's own audio cue
+// (used when the desktop is in Do Not Disturb).
+func (n *Notifier) SendDesktop(status analyzer.Status, message, sessionID, cwd string, opts ...SendOption) error {
+	sendOpts := resolveSendOptions(opts)
+
 	// Send terminal bell for terminal tab indicators (e.g. Ghostty, tmux,
 	// Windows Terminal). Platform-specific; see bell_other.go / bell_windows.go.
 	if n.cfg.IsTerminalBellEnabled() {
@@ -93,6 +102,9 @@ func (n *Notifier) SendDesktop(status analyzer.Status, message, sessionID, cwd s
 	}
 
 	presentation := legacyPresentation(status, message, statusInfo.Title, n.cfg.IsSessionLabelEnabled())
+	if sendOpts.hookPresentation != nil {
+		presentation = hookPresentation(status, *sendOpts.hookPresentation, statusInfo.Title, n.cfg.IsSessionLabelEnabled())
+	}
 	title, cleanMessage, subtitle := presentation.Title, presentation.Body, presentation.Subtitle
 	timeSensitive := presentation.TimeSensitive
 
@@ -125,12 +137,19 @@ func (n *Notifier) SendDesktop(status analyzer.Status, message, sessionID, cwd s
 				logging.Warn("ClaudeNotifier failed on macOS, falling back to beeep: %v", err)
 			} else {
 				logging.Debug("Desktop notification sent via ClaudeNotifier/terminal-notifier: title=%s", title)
-				n.playSoundDetached(statusInfo.Sound)
+				n.playSoundUnlessMuted(statusInfo.Sound, sendOpts)
 				return nil
 			}
 		} else {
 			logging.Warn("ClaudeNotifier not available on macOS, falling back to beeep (run /claude-notifications-go:init to install it)")
 		}
+	}
+
+	// The remaining backends only display title and body. Structured hooks
+	// carry question identity in the subtitle, so preserve that literal context
+	// here after the native macOS path has had its clean three-field layout.
+	if sendOpts.hookPresentation != nil && subtitle != "" {
+		cleanMessage = subtitle + "\n" + cleanMessage
 	}
 
 	// Linux: Try daemon for click-to-focus support
@@ -140,7 +159,7 @@ func (n *Notifier) SendDesktop(status analyzer.Status, message, sessionID, cwd s
 			// Fall through to beeep
 		} else {
 			logging.Debug("Desktop notification sent via Linux daemon: title=%s", title)
-			n.playSoundDetached(statusInfo.Sound)
+			n.playSoundUnlessMuted(statusInfo.Sound, sendOpts)
 			return nil
 		}
 	}
@@ -152,13 +171,13 @@ func (n *Notifier) SendDesktop(status analyzer.Status, message, sessionID, cwd s
 			// Fall through to beeep
 		} else {
 			logging.Debug("Desktop notification sent via Windows click-to-focus: title=%s", title)
-			n.playSoundDetached(statusInfo.Sound)
+			n.playSoundUnlessMuted(statusInfo.Sound, sendOpts)
 			return nil
 		}
 	}
 
 	// Standard path: beeep (Windows, Linux fallback)
-	return n.sendWithBeeep(title, cleanMessage, appIcon, statusInfo.Sound)
+	return n.sendWithBeeep(title, cleanMessage, appIcon, statusInfo.Sound, sendOpts)
 }
 
 // sendWithTerminalNotifier sends notification via terminal-notifier on macOS
@@ -186,18 +205,7 @@ func (n *Notifier) sendWithTerminalNotifier(title, message, subtitle, sessionID 
 		args = buildTerminalNotifierArgsWithOptions(title, message, bundleID, cwd, ghosttyTerminalID, clickToFocus)
 	}
 
-	// Append shared options: subtitle, threadID, timeSensitive, nosound
-	if subtitle != "" {
-		args = append(args, "-subtitle", subtitle)
-	}
-	if sessionID != "" {
-		args = append(args, "-threadID", sessionID)
-	}
-	if timeSensitive {
-		args = append(args, "-timeSensitive")
-	}
-	// Always suppress sound in Swift — Go manages sound via audio player
-	args = append(args, "-nosound")
+	args = appendSharedNotifierOptions(args, subtitle, sessionID, timeSensitive, n.cfg.ShouldReplaceNotificationsPerSession())
 
 	if appPath, ok := claudeNotifierAppPath(notifierPath); ok {
 		if err := runClaudeNotifierApp(appPath, args); err != nil {
@@ -277,8 +285,8 @@ func buildNotifierCommand(notifierPath string, args []string) *exec.Cmd {
 	return exec.Command(notifierPath, args...)
 }
 
-// claudeNotifierAppPath extracts ClaudeNotifier.app from the embedded
-// terminal-notifier-modern executable path.
+// claudeNotifierAppPath recognizes modern helpers in conventional bundles, the
+// product-owned alias, and durable managed generation bundles.
 func claudeNotifierAppPath(notifierPath string) (string, bool) {
 	cleanPath := filepath.Clean(notifierPath)
 	suffix := filepath.Join("Contents", "MacOS", "terminal-notifier-modern")
@@ -288,7 +296,9 @@ func claudeNotifierAppPath(notifierPath string) (string, bool) {
 
 	bundlePath := strings.TrimSuffix(cleanPath, suffix)
 	bundlePath = strings.TrimSuffix(bundlePath, string(filepath.Separator))
-	if !strings.HasSuffix(bundlePath, "ClaudeNotifier.app") {
+	name := filepath.Base(bundlePath)
+	if name != "ClaudeNotifier.app" && name != "AgentNotifications.app" &&
+		(!strings.HasPrefix(name, "generation-") || !strings.HasSuffix(name, ".app")) {
 		return "", false
 	}
 
@@ -318,9 +328,98 @@ func buildTerminalNotifierArgsWithOptions(title, message, bundleID, cwd, ghostty
 		}
 	}
 
-	// Add group ID to prevent notification stacking issues
-	args = append(args, "-group", fmt.Sprintf("claude-notif-%d", time.Now().UnixNano()))
+	return args
+}
 
+// notificationGroupID is the terminal-notifier -group value, which is the
+// UNNotificationRequest.identifier: delivering a request that reuses an
+// identifier replaces the previous banner in place.
+//
+// By default the identifier is unique per notification, so nothing is ever
+// replaced: a shared -group would collapse every ClaudeNotifier toast into one
+// slot, letting a Question from chat B hide a Completed from chat A.
+//
+// When replacePerSession is set, the identifier is keyed on the Claude/Codex
+// session instead, so a session's own newer notification replaces its previous
+// banner while other sessions stay untouched. Empty/"unknown" ids always stay
+// unique so unrelated notifications are never collapsed. Conversation grouping
+// in Notification Center is -threadID, independent of this switch.
+func notificationGroupID(sessionID string, replacePerSession bool) string {
+	if replacePerSession {
+		if id := strings.TrimSpace(sessionID); id != "" && !strings.EqualFold(id, "unknown") {
+			return notificationGroupPrefix + id
+		}
+	}
+	return uniqueNotificationGroupID()
+}
+
+// uniqueNotificationGroupID returns a never-reused -group value.
+func uniqueNotificationGroupID() string {
+	seq := uniqueNotificationGroupSeq.Add(1)
+	return fmt.Sprintf("%s%d-%d", notificationGroupPrefix, time.Now().UnixNano(), seq)
+}
+
+// booleanNotifierFlags are notifier flags that consume no value, so the token
+// that follows them is not one of their arguments. Every other token that
+// begins with "-" is treated as a flag whose next token is its value.
+var booleanNotifierFlags = map[string]struct{}{
+	"-timeSensitive": {},
+	"-nosound":       {},
+	"-ignoreDnD":     {},
+}
+
+// setNotifierFlag replaces flag's value when flag appears at a flag position,
+// otherwise appends the flag/value pair. Matching only flag positions keeps an
+// argument value that equals flag (for example a notification title of
+// "-group") from being mistaken for the flag and corrupting the argument that
+// follows it.
+func setNotifierFlag(args []string, flag, value string) []string {
+	rewritten := make([]string, 0, len(args)+2)
+	replaced := false
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if !replaced && arg == flag {
+			rewritten = append(rewritten, flag, value)
+			replaced = true
+			// Drop the stale value that followed the original flag.
+			if i+1 < len(args) {
+				i++
+			}
+			continue
+		}
+		rewritten = append(rewritten, arg)
+		// A non-boolean flag consumes the next token as its value; skip it so a
+		// value that looks like a flag is never matched as one.
+		if strings.HasPrefix(arg, "-") {
+			if _, isBoolean := booleanNotifierFlags[arg]; !isBoolean && i+1 < len(args) {
+				i++
+				rewritten = append(rewritten, args[i])
+			}
+		}
+	}
+	if !replaced {
+		rewritten = append(rewritten, flag, value)
+	}
+	return rewritten
+}
+
+// appendSharedNotifierOptions adds subtitle, session thread, replacement group,
+// and Swift-only flags that every macOS delivery path (plain and multiplexer)
+// shares.
+func appendSharedNotifierOptions(args []string, subtitle, sessionID string, timeSensitive, replacePerSession bool) []string {
+	if subtitle != "" {
+		args = append(args, "-subtitle", subtitle)
+	}
+	if id := strings.TrimSpace(sessionID); id != "" && !strings.EqualFold(id, "unknown") {
+		// Group in Notification Center by Claude/Codex session without replacing banners.
+		args = append(args, "-threadID", id)
+	}
+	args = setNotifierFlag(args, "-group", notificationGroupID(sessionID, replacePerSession))
+	if timeSensitive {
+		args = append(args, "-timeSensitive")
+	}
+	// Always suppress sound in Swift — Go manages sound via audio player
+	args = append(args, "-nosound")
 	return args
 }
 
@@ -471,7 +570,7 @@ func SendQuickNotification(title, message, executeCmd string) error {
 }
 
 // sendWithBeeep sends notification via beeep (cross-platform)
-func (n *Notifier) sendWithBeeep(title, message, appIcon, sound string) error {
+func (n *Notifier) sendWithBeeep(title, message, appIcon, sound string, opts sendOptions) error {
 	// Platform-specific AppName handling:
 	// - Windows: Use fixed AppName to prevent registry pollution. Each unique AppName
 	//   creates a persistent entry in HKEY_CURRENT_USER\SOFTWARE\Microsoft\Windows\
@@ -508,7 +607,7 @@ func (n *Notifier) sendWithBeeep(title, message, appIcon, sound string) error {
 	// returns the (joined) COM error. Gating the sound on that error therefore
 	// drops the audio cue spuriously. See docs/troubleshooting.md, which already
 	// documents the "doc.LoadXml(tmpl)" error as a harmless false positive.
-	n.playSoundDetached(sound)
+	n.playSoundUnlessMuted(sound, opts)
 
 	return err
 }
@@ -540,6 +639,16 @@ func isWindowsToastFallbackSuccess(err error) bool {
 
 	parts := joined.Unwrap()
 	return len(parts) == 1 && strings.Contains(parts[0].Error(), "doc.LoadXml(tmpl)")
+}
+
+// playSoundUnlessMuted routes every sound-playing path through one decision
+// point, so a muted delivery cannot leak audio via a branch that was missed.
+func (n *Notifier) playSoundUnlessMuted(sound string, opts sendOptions) {
+	if opts.muteSound {
+		logging.Debug("Sound suppressed for this notification (muted delivery)")
+		return
+	}
+	n.playSoundDetached(sound)
 }
 
 // playSoundDetached spawns a detached child process to play the sound.

@@ -51,7 +51,7 @@ func TestSetupWizardTTYSelectsAndCancels(t *testing.T) {
 	if code := executeSetupWizardWith(ctx, []string{"--action", "install", "--control-root", root}, &out, io.Discard, strings.NewReader("2\n3\ny\n"), true); code != 1 {
 		t.Fatalf("tty confirm still needs runtime: %d %s", code, out.String())
 	}
-	if !strings.Contains(out.String(), "managed_runtime_required") || !strings.Contains(out.String(), "retry:") {
+	if !strings.Contains(out.String(), "a managed runtime is required") || !strings.Contains(out.String(), "Inspect setup status") {
 		t.Fatalf("tty retry: %s", out.String())
 	}
 }
@@ -67,7 +67,7 @@ func TestSetupWizardTTYOmitsActionDefaultsInstall(t *testing.T) {
 	if strings.Contains(out.String(), "Existing agent-notify") {
 		t.Fatalf("new machine prompted existing action: %s", out.String())
 	}
-	if !strings.Contains(out.String(), "Units:") || !strings.Contains(out.String(), "Plan: action=install") || !strings.Contains(out.String(), "managed_runtime_required") {
+	if !strings.Contains(out.String(), "Units:") || !strings.Contains(out.String(), "Plan: action=install") || !strings.Contains(out.String(), "a managed runtime is required") || !strings.Contains(out.String(), "Inspect setup status") {
 		t.Fatalf("omitted action flow: %s", out.String())
 	}
 }
@@ -153,6 +153,8 @@ func TestSetupWizardInspectReportsDiscoveredMCP(t *testing.T) {
 		t.Fatal(err)
 	}
 	codexHome := filepath.Join(root, "codex")
+	t.Setenv("CODEX_HOME", filepath.Join(root, "env-codex")+string(filepath.Separator))
+	t.Setenv("CLAUDE_CONFIG_DIR", "relative-claude")
 	if err := os.MkdirAll(codexHome, 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -183,7 +185,7 @@ func TestSetupWizardInspectReportsDiscoveredMCP(t *testing.T) {
 	if code := executeSetupWizardWith(ctx, flags, &out, io.Discard, strings.NewReader(""), false); code != 0 {
 		t.Fatalf("inspect text: %d %s", code, out.String())
 	}
-	if !strings.Contains(out.String(), "mcp="+mcp) {
+	if !strings.Contains(out.String(), "MCP config: "+mcp) {
 		t.Fatalf("inspect text omitted mcp: %s", out.String())
 	}
 }
@@ -195,7 +197,7 @@ func TestSetupWizardReportsDataRetained(t *testing.T) {
 		InstallationID: "00000000-0000-4000-8000-000000000099",
 		Targets:        []setupwizard.TargetResult{{Client: "codex", Unit: "agent-notify", Outcome: "absent"}},
 	}
-	if code := writeSetupWizardResult(&out, false, result, nil); code != 0 || !strings.Contains(out.String(), "data_retained=true") || !strings.Contains(out.String(), "installation-id=00000000-0000-4000-8000-000000000099") {
+	if code := writeSetupWizardResult(&out, false, result, nil); code != 0 || !strings.Contains(out.String(), "Settings and notification data were retained.") || strings.Contains(out.String(), "installation-id=") {
 		t.Fatalf("text: %d %s", code, out.String())
 	}
 	out.Reset()
@@ -268,7 +270,7 @@ func TestSetupWizardTTYShowsDiscoverCapabilities(t *testing.T) {
 	if code := executeSetupWizardWith(ctx, []string{"--control-root", root}, &out, io.Discard, strings.NewReader("\n"), true); code != 0 {
 		t.Fatalf("tty discover cancel: %d %s", code, out.String())
 	}
-	if !strings.Contains(out.String(), "Claude Code (executable not found)") || !strings.Contains(out.String(), "Codex (executable present)") {
+	if !strings.Contains(out.String(), "Claude (executable not found)") || !strings.Contains(out.String(), "Codex (executable present)") {
 		t.Fatalf("discover labels: %s", out.String())
 	}
 }
@@ -372,10 +374,46 @@ func TestParseSetupWizardResolvesEnvOnce(t *testing.T) {
 	}
 }
 
-func TestParseSetupWizardRejectsRelativeEnvProfile(t *testing.T) {
+func TestParseSetupWizardIgnoresRelativeEnvProfiles(t *testing.T) {
 	t.Setenv("CODEX_HOME", "relative-codex")
-	if _, _, err := parseSetupWizard([]string{"--action", "inspect"}); err == nil {
-		t.Fatal("relative CODEX_HOME accepted")
+	t.Setenv("CLAUDE_CONFIG_DIR", "relative-claude")
+	t.Setenv("HOME", t.TempDir())
+	explicit := filepath.Join(t.TempDir(), "explicit")
+	for _, args := range [][]string{
+		{"--action", "inspect"},
+		{"--action", "inspect", "--codex-home", explicit, "--claude-config", explicit},
+	} {
+		req, _, err := parseSetupWizard(args)
+		if err != nil {
+			t.Fatalf("relative snapshots blocked %v: %v", args, err)
+		}
+		if req.EnvCodexHome != "" || req.EnvClaudeConfig != "" {
+			t.Fatalf("relative snapshot or HOME fallback retained: %+v", req)
+		}
+		if len(args) > 2 && (req.CodexHome != explicit || req.ClaudeConfig != explicit) {
+			t.Fatalf("explicit profiles lost: %+v", req)
+		}
+	}
+}
+
+func TestParseSetupWizardCleansEnvSnapshotsKeepsExplicitPathsStrict(t *testing.T) {
+	envCodex := filepath.Join(t.TempDir(), "env-codex")
+	envClaude := filepath.Join(t.TempDir(), "env-claude")
+	t.Setenv("CODEX_HOME", envCodex+string(filepath.Separator))
+	t.Setenv("CLAUDE_CONFIG_DIR", envClaude+string(filepath.Separator))
+	req, _, err := parseSetupWizard([]string{"--action", "inspect"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if req.EnvCodexHome != envCodex || req.EnvClaudeConfig != envClaude || req.CodexHome != "" || req.ClaudeConfig != "" {
+		t.Fatalf("trailing separator snapshots: %+v", req)
+	}
+	for _, flag := range []string{"package", "plugin-root", "control-root", "runtime-root", "global-config", "codex-home", "claude-config", "client-executable", "helper", "scope-root", "mcp-config", "claude-mcp-config", "claude-executable", "codex-executable"} {
+		for _, bad := range []string{"relative", envCodex + string(filepath.Separator), envCodex + string(filepath.Separator) + ".." + string(filepath.Separator) + "other"} {
+			if _, _, err := parseSetupWizard([]string{"--action", "inspect", "--" + flag, bad}); err == nil {
+				t.Fatalf("accepted noncanonical explicit --%s %q", flag, bad)
+			}
+		}
 	}
 }
 

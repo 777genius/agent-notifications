@@ -149,10 +149,16 @@ native qualification.
 
 Callback acceptance and completion run on the main queue. A process-wide owner
 counts all in-flight callbacks, invalidates idle watchdog generations on accept,
-and completes each callback once on completion or its separate ten-second
-deadline. An idle-only watchdog expires ten seconds after the last callback
-finishes and all owned children are reaped; stale timers cannot terminate active
-callbacks or abandon owned children. Only default click and
+and completes each callback once on completion or its fresh bounded deadline:
+30 seconds for a selected desktop action, 10 seconds for legacy/ignored/malformed
+routes. The callback/token clock is `mach_continuous_time`, including system sleep;
+submission expiry does not expire a later click or extend its callback deadline.
+Delegate ingress reserves ownership before dispatch to main, so queued incoming
+callbacks also prevent idle exit. After callbacks finish, owned children are
+reaped, and ingress/finite operations drain, a callback-only process arms its
+ten-second idle watchdog. A completed finite send instead exits immediately at
+that same drained boundary with its recorded status. Stale timers cannot
+terminate active callbacks or abandon owned children. Only default click and
 registered `OPEN` navigate; dismiss and unknown buttons complete without action.
 Late completion cannot decrement the counter twice. No unconditional startup or
 half-second callback termination remains. Callback timeout does not prove that

@@ -30,6 +30,8 @@ const (
 	ConfigEnvConflict          Code = "ConfigEnvConflict"
 )
 
+const ConfigOpenCodeWebhookEnvUnsupported Code = "ConfigOpenCodeWebhookEnvUnsupported"
+
 // Error deliberately excludes underlying parser/OS messages and document values.
 // Pointer is a JSON pointer; diagnostics intended for external use should omit it
 // because unknown field names can themselves contain secrets.
@@ -41,8 +43,28 @@ type Error struct {
 	// causeStage and causeErrno are deliberately unexported, diagnostic-only
 	// metadata for package tests. They let native stress tests distinguish an
 	// OS race from a document error without exposing raw OS messages or paths.
-	causeStage string
-	causeErrno uintptr
+	causeStage        string
+	causeErrno        uintptr
+	permissionFailure *PermissionFailure
+}
+
+// PermissionFailure identifies only native filesystem security metadata.
+// It never includes OS messages, document contents, or resolved account names.
+type PermissionFailure struct {
+	ObjectPath string `json:"objectPath"`
+	Reason     string `json:"reason"`
+	TrusteeSID string `json:"trusteeSid,omitempty"`
+	OwnerSID   string `json:"ownerSid,omitempty"`
+	AccessMask uint32 `json:"accessMask,omitempty"`
+}
+
+// PermissionFailure returns a copy so callers cannot mutate error metadata.
+func (e *Error) PermissionFailure() *PermissionFailure {
+	if e.permissionFailure == nil {
+		return nil
+	}
+	copy := *e.permissionFailure
+	return &copy
 }
 
 func (e *Error) Error() string { return fmt.Sprintf("%s: path=%q offset=%d", e.Code, e.Path, e.Offset) }

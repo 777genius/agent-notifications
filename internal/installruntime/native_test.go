@@ -125,7 +125,7 @@ func TestNativeAliasPreservesConcreteLegacyBundle(t *testing.T) {
 		t.Fatal(err)
 	}
 	aliases, err := NativeAlias(change, r.RuntimeRoot)
-	if err != nil || len(aliases) != 1 || filepath.Base(aliases[0].Path) != "ClaudeNotifier.app" || aliases[0].Link != change.After.Path {
+	if err != nil || len(aliases) != 2 || filepath.Base(aliases[0].Path) != "AgentNotifications.app" || aliases[0].Link != change.After.Path || filepath.Base(aliases[1].Path) != "ClaudeNotifier.app" || aliases[1].Link != change.After.Path {
 		t.Fatalf("expected only the free conventional name: %v %+v", err, aliases)
 	}
 	r.Native = change
@@ -161,7 +161,7 @@ func TestNativeAliasPreservesUnmanagedLegacySymlink(t *testing.T) {
 		t.Fatal(err)
 	}
 	aliases, err := NativeAlias(change, r.RuntimeRoot)
-	if err != nil || len(aliases) != 1 || filepath.Base(aliases[0].Path) != "ClaudeNotifier.app" || aliases[0].Link != change.After.Path {
+	if err != nil || len(aliases) != 2 || filepath.Base(aliases[0].Path) != "AgentNotifications.app" || aliases[0].Link != change.After.Path || filepath.Base(aliases[1].Path) != "ClaudeNotifier.app" || aliases[1].Link != change.After.Path {
 		t.Fatalf("expected only the free conventional name: %v %+v", err, aliases)
 	}
 	r.Native = change
@@ -207,7 +207,7 @@ func TestNativeAliasRefusesForeignModernSymlink(t *testing.T) {
 }
 
 func hookAliasNames() []string {
-	return []string{"ClaudeNotifier.app", "terminal-notifier.app"}
+	return []string{"AgentNotifications.app", "ClaudeNotifier.app", "terminal-notifier.app"}
 }
 
 func requireHookAliases(t *testing.T, aliases []File, target string) {
@@ -1012,6 +1012,87 @@ func TestInterruptedRollbackRetainsPublishedNative(t *testing.T) {
 			}
 			if _, err := os.Stat(pathA); err != nil {
 				t.Fatal("generation A lost")
+			}
+		})
+	}
+}
+
+func TestNativeManagedAliasUpdatesWithoutReplacingConcreteModernBundle(t *testing.T) {
+	ctx, r := request(t)
+	old := filepath.Join(r.RuntimeRoot, "ClaudeNotifier.app", "Contents", "MacOS", "terminal-notifier-modern")
+	if err := os.MkdirAll(filepath.Dir(old), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(old, []byte("obsolete concrete helper"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Stat(old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var published []string
+	for i := 0; i < 2; i++ {
+		change, err := StageNative(ctx, r.ControlRoot, nativeFixture(t))
+		if err != nil {
+			t.Fatal(err)
+		}
+		aliases, err := NativeAlias(change, r.RuntimeRoot)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.Native, r.Files = change, aliases
+		if _, err := Commit(ctx, r); err != nil {
+			t.Fatal(err)
+		}
+		published = append(published, change.After.Path)
+		got, err := os.Readlink(filepath.Join(r.RuntimeRoot, "AgentNotifications.app"))
+		if err != nil || got != change.After.Path {
+			t.Fatalf("managed alias did not select generation %d: %s %v", i, got, err)
+		}
+	}
+	after, err := os.Stat(old)
+	if err != nil || !os.SameFile(before, after) {
+		t.Fatalf("concrete helper inode changed: %v", err)
+	}
+	data, err := os.ReadFile(old)
+	if err != nil || string(data) != "obsolete concrete helper" {
+		t.Fatalf("concrete helper bytes changed: %q %v", data, err)
+	}
+	for _, path := range published {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("published callback removed: %v", err)
+		}
+	}
+}
+
+func TestNativeManagedAliasRejectsForeignOccupancy(t *testing.T) {
+	for _, kind := range []string{"directory", "file", "symlink"} {
+		t.Run(kind, func(t *testing.T) {
+			bin := t.TempDir()
+			path := filepath.Join(bin, "AgentNotifications.app")
+			var err error
+			switch kind {
+			case "directory":
+				err = os.Mkdir(path, 0700)
+			case "file":
+				err = os.WriteFile(path, []byte("foreign"), 0600)
+			case "symlink":
+				err = os.Symlink(t.TempDir(), path)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			before, err := os.Lstat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			change := &NativeChange{After: NativeRecord{Path: filepath.Join(t.TempDir(), "generation-owned.app")}}
+			if aliases, err := NativeAlias(change, bin); err == nil || len(aliases) != 0 {
+				t.Fatalf("foreign occupancy admitted: %+v %v", aliases, err)
+			}
+			after, err := os.Lstat(path)
+			if err != nil || !os.SameFile(before, after) {
+				t.Fatalf("foreign occupant changed: %v", err)
 			}
 		})
 	}

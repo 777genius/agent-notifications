@@ -1,0 +1,47 @@
+{
+  "fixtureBundleID": "com.777genius.agent-notifications.navigation-test.eae9ec39-b5fb-4035-997c-3e8fa1c531ac",
+  "helperSHA256": "9038bc83055751931073608425e1b174668e2693c4f23c9b120ba48b698882a0",
+  "action": "none",
+  "permissionSetup": {
+    "nonce": "57d3b23a-17ef-4eb2-9940-3ca0bde085d0",
+    "permission": "allowed",
+    "correlationID": "0f8ecda3-2414-4d36-a34b-61b500fc3765",
+    "schemaVersion": 1,
+    "backend": "macos.usernotifications"
+  },
+  "receipt": {
+    "reason": "os_accepted",
+    "nonce": "095e4f4f-6b37-41a8-8397-aec176cdcb9e",
+    "correlationID": "525ca3cd-82bf-40b2-9651-6777c84f9391",
+    "status": "submitted",
+    "retrySafe": false,
+    "schemaVersion": 1,
+    "notificationID": "525ca3cd-82bf-40b2-9651-6777c84f9391"
+  },
+  "receiptFileModifiedUnix": 1791213641.694995,
+  "userClickReported": true,
+  "events": [
+    {
+      "timestamp": "2026-10-05 18:20:48.008417+0300",
+      "processID": 14306,
+      "diagnostic": {
+        "correlationID": "00B01948-2F37-4749-9687-048C81F40CBE",
+        "event": "callback_received",
+        "elapsedSeconds": 0
+      }
+    },
+    {
+      "timestamp": "2026-10-05 18:20:48.008498+0300",
+      "processID": 14306,
+      "diagnostic": {
+        "elapsedSeconds": 0.0002244166098535061,
+        "event": "callback_terminal",
+        "correlationID": "00B01948-2F37-4749-9687-048C81F40CBE",
+        "outcome": "ignored"
+      }
+    }
+  ],
+  "productionClientActivated": false,
+  "targetedChatQualified": false,
+  "senderExitEvidence": "receipt path completes synchronously via lifecycle finish(0); subsequent callback helper recorded separately; no sender PID trace captured"
+}

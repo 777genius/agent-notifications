@@ -1,0 +1,42 @@
+{
+  "scope": "stopped TEST guest postmortem only",
+  "status": "diagnostic_evidence",
+  "nativeQualification": "failed",
+  "sourceOverlaySHA256": "33695e565b8f936e596c3f38abb4f125c86cab7b4dbb4b28b43fd48321474dbf",
+  "privateLogHashes": {
+    "client.stdout": "665f52727c1aeeb52bef895a440caef37916d97085b34227ffa94fdf1e803713",
+    "client.stderr": "8ed20417e8b5016684cfa7677086f7edafa61c15ba96abad9cafe4bcd5215c91",
+    "sway.stderr": "11010612ddc0dece32d9ff851cd68f597cd50b0c9a5742848047c9157fc61f68"
+  },
+  "logBytes": {
+    "client.stdout": 36537,
+    "client.stderr": 18311,
+    "sway.stderr": 8673
+  },
+  "clientSelfReports": {
+    "windowReadyToShow": true,
+    "reactRootRenderRequested": true,
+    "signedOutError": true,
+    "offlineError": true
+  },
+  "operatorReportedExtraction": {
+    "newVMStarted": false,
+    "newClientLaunchAttempted": false,
+    "notificationAttempted": false,
+    "converterContainerAbsent": true,
+    "temporaryRootFilesystemRemoved": true,
+    "rootPartitionOffsetBytes": 1074790400,
+    "rootPartitionBytes": 20400029184,
+    "ext4MagicObserved": true
+  },
+  "clientSandboxQualified": false,
+  "renderedClientQualified": false,
+  "focusQualified": false,
+  "navigationQualified": false,
+  "limitations": [
+    "Client log self-reports do not prove kernel renderer identity or isolation, actual rendered UI, focus or chat navigation.",
+    "Backing images, full debugfs outputs and a standalone operator source were not transferred; full extraction chain is not independently replayable from this projection.",
+    "The original native qualification remains failed; no new native boot or client launch occurred during postmortem.",
+    "The first offline converter failed from a thread-resource limit; adjusted read-only conversion succeeded."
+  ]
+}

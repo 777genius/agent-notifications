@@ -1,0 +1,36 @@
+//go:build darwin || windows
+
+package opencodeinstall
+
+import (
+	"errors"
+	"runtime"
+)
+
+const shortcutName = "OpenCode Notifications.lnk"
+
+type desktopIdentity struct {
+	consumer, label, appID, shortcut, spool string
+}
+
+func identityFor(product DesktopProduct) (desktopIdentity, error) {
+	switch product {
+	case OpenCodeDesktop:
+		return desktopIdentity{consumerID, "OpenCode", OpenCodeToastAppID, shortcutName, "opencode-native-spool"}, nil
+	case GeminiDesktop:
+		return desktopIdentity{GeminiConsumerID, "Gemini", GeminiToastAppID, "Gemini Notifications.lnk", "gemini-native-spool"}, nil
+	case CopilotVSCodeDesktop:
+		// Consumer is supplied only by verified portable-key Windows wrappers.
+		return desktopIdentity{"", "Copilot in VS Code", CopilotVSCodeToastAppID, "Copilot in VS Code Notifications.lnk", "copilot-vscode-native-spool"}, nil
+	case CursorDesktop:
+		if runtime.GOOS == "windows" && runtime.GOARCH == "amd64" {
+			return desktopIdentity{"", "Cursor", CursorToastAppID, "Cursor Notifications.lnk", ""}, nil
+		}
+		if runtime.GOOS == "darwin" && runtime.GOARCH == "arm64" {
+			return desktopIdentity{"", "Cursor", "", "", "cursor-native-spool"}, nil
+		}
+		return desktopIdentity{}, errors.New("unqualified Cursor desktop product")
+	default:
+		return desktopIdentity{}, errors.New("unknown notification desktop product")
+	}
+}

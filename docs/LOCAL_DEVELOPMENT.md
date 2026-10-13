@@ -113,14 +113,14 @@ What to collect:
 5. Relevant OS notification settings:
    - macOS: `System Settings > Notifications > Agent Notifications`
    - Linux: desktop-environment notification settings and whether the session is local desktop vs headless/remote
-   - Windows: `Settings > System > Notifications > Claude Code Notifications`
+   - Windows: `Settings > System > Notifications > Claude Code Notifications` (legacy registered name)
 6. On macOS / Linux, if click-to-focus is part of the report, whether clicking the notification activates the expected window.
 
 Interpretation:
 
 - If the log says the desktop notification was sent successfully but no banner appears, the problem is likely in the OS notification layer or app notification settings rather than in Claude hook parsing.
 - If the log shows a notifier-specific error such as `beeep.Notify failed`, we likely have a platform integration bug.
-- If the direct command works but notifications from Claude Code are still delayed or missing, the next place to inspect is the hook invocation path rather than notification delivery.
+- If the direct command works but notifications from Claude are still delayed or missing, the next place to inspect is the hook invocation path rather than notification delivery.
 
 ### Smoke test against the currently installed plugin
 
@@ -226,6 +226,23 @@ For click-to-focus changes:
 
 - Plugin runtime log: `<plugin-root>/notification-debug.log`
 - Claude process debug log: printed by `scripts/e2e-real-claude.sh` for each run
+
+Native notification callbacks write bounded `callback_received` and `callback_terminal`
+JSON to macOS unified logging. Send errors remain on stderr; callback diagnostics must
+not enter that channel because the legacy sender treats stderr as a delivery failure.
+
+```sh
+/usr/bin/log show --last 15m --style compact --predicate 'subsystem == "com.777genius.agent-notifications" AND category == "notification-callback"'
+```
+
+Callback records contain a correlation UUID and terminal outcome, without notification
+text or chat IDs. `os_accepted` confirms notification submission; `open_requested`
+confirms an NSWorkspace handoff. Neither proves that the destination chat rendered.
+For a click regression, use a disposable test chat/project and check both a click after
+the sender exits and a click while another send is still running. Direct permission
+setup and capability probes remain parent-owned IPC helpers, not callback owners.
+Lifecycle tests verify accepted callback drain; they do not prove which process macOS
+selects to receive a click.
 
 If a smoke test fails, keep both logs and the command output together when opening an issue or PR.
 

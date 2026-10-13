@@ -70,7 +70,7 @@ No messages appearing in Slack/Discord/Telegram, no errors in logs.
 **If manual curl works but plugin doesn't:**
 - Check log file for errors
 - Verify config path is correct
-- Restart Claude Code
+- Restart Claude
 
 **If manual curl fails:**
 - Webhook URL may be invalid/expired

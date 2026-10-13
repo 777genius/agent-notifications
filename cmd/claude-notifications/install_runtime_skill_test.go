@@ -26,7 +26,7 @@ func embeddedFresh(t *testing.T) embeddedFixture {
 		entry = "claude-notifications-windows-" + runtime.GOARCH + ".exe"
 	}
 	f := embeddedFixture{stage: filepath.Join(root, "stage"), bin: filepath.Join(root, "runtime", "bin"), control: filepath.Join(root, "control"), entry: entry}
-	f.skill = filepath.Join(filepath.Dir(f.bin), "skills", "agent-notify", "SKILL.md")
+	f.skill = filepath.Join(filepath.Dir(f.bin), "skills", "agent-notifications", "SKILL.md")
 	embeddedPut(t, filepath.Join(f.stage, f.entry), []byte("inert "+installruntime.WriterProtocolMarker), 0755)
 	return f
 }
@@ -122,7 +122,7 @@ func TestEmbeddedSkillLifecycleProjection(t *testing.T) {
 		t.Fatal(e)
 	}
 	client := filepath.Join(filepath.Dir(f.control), "client")
-	projection := filepath.Join(client, "skills", "agent-notify", "SKILL.md")
+	projection := filepath.Join(client, "skills", "agent-notifications", "SKILL.md")
 	if e := os.MkdirAll(filepath.Dir(projection), 0700); e != nil {
 		t.Fatal(e)
 	}
@@ -275,9 +275,9 @@ func TestEmbeddedSkillAdoptsMatchingUnmanagedSkill(t *testing.T) {
 
 func TestEmbeddedSkillNoEntryAndStageAllowlist(t *testing.T) {
 	f := embeddedQualified(t)
-	embeddedPut(t, filepath.Join(f.stage, "skills", "agent-notify", "SKILL.md"), []byte("untrusted"), 0600)
+	embeddedPut(t, filepath.Join(f.stage, "skills", "agent-notifications", "SKILL.md"), []byte("untrusted"), 0600)
 	embeddedPut(t, filepath.Join(f.stage, "skills", "other", "SKILL.md"), []byte("untrusted"), 0600)
-	embeddedPut(t, filepath.Join(f.stage, "skills", "agent-notify", "OTHER.md"), []byte("untrusted"), 0600)
+	embeddedPut(t, filepath.Join(f.stage, "skills", "agent-notifications", "OTHER.md"), []byte("untrusted"), 0600)
 	if e := f.run(); e != nil {
 		t.Fatal(e)
 	}
@@ -299,7 +299,7 @@ func TestEmbeddedSkillNoEntryAndStageAllowlist(t *testing.T) {
 	}
 	embeddedAbsent(t, filepath.Join(filepath.Dir(f.bin), "skills", "other", "SKILL.md"))
 	embeddedAbsent(t, filepath.Join(f.bin, "skills"))
-	embeddedAbsent(t, filepath.Join(filepath.Dir(f.bin), "skills", "agent-notify", "OTHER.md"))
+	embeddedAbsent(t, filepath.Join(filepath.Dir(f.bin), "skills", "agent-notifications", "OTHER.md"))
 }
 
 func TestEmbeddedSkillAdmissionBoundaries(t *testing.T) {
@@ -328,7 +328,7 @@ func TestEmbeddedSkillAdmissionBoundaries(t *testing.T) {
 		if e := f.run("--entry", f.entry); e == nil {
 			t.Fatal("accepted symlink parent")
 		}
-		embeddedAbsent(t, filepath.Join(outside, "agent-notify", "SKILL.md"))
+		embeddedAbsent(t, filepath.Join(outside, "agent-notifications", "SKILL.md"))
 		embeddedAbsent(t, filepath.Join(f.bin, f.entry))
 	})
 }

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"reflect"
 	"sort"
 )
 
@@ -130,7 +129,11 @@ func cleanupPurgeTree(tree PurgeTree, fault func(string) error) error {
 		return err
 	}
 	for rel, entry := range current {
-		if want, ok := tree.Entries[rel]; !ok || !reflect.DeepEqual(want, entry) {
+		parentDev, err := purgeParentDevice(filepath.Join(tree.Path, rel), entry.Directory != "")
+		if err != nil {
+			return err
+		}
+		if want, ok := tree.Entries[rel]; !ok || !matchPurgeEntry(want, entry, parentDev) {
 			return fmt.Errorf("purge entry changed; preserving for inspection: %s", filepath.Join(tree.Path, rel))
 		}
 	}
@@ -146,10 +149,14 @@ func cleanupPurgeTree(tree PurgeTree, fault func(string) error) error {
 		if err != nil {
 			return err
 		}
-		for _, anchor := range anchors {
+		for i, anchor := range anchors {
 			sub, e := filepath.Rel(tree.Path, anchor.Path)
 			if e == nil {
-				if want, ok := tree.Entries[sub]; ok && want.Directory != anchor.Identity {
+				parentDev := ""
+				if i > 0 {
+					parentDev = objectDevice(anchors[i-1].Identity)
+				}
+				if want, ok := tree.Entries[sub]; ok && !MatchPersistedDirectory(want.Directory, anchor.Identity, parentDev) {
 					return fmt.Errorf("purge parent replaced: %s", anchor.Path)
 				}
 			}
@@ -170,4 +177,34 @@ func cleanupPurgeTree(tree PurgeTree, fault func(string) error) error {
 		}
 	}
 	return nil
+}
+
+// Directories and regular objects share dev:ino on Unix, but file ownership
+// additionally requires its exact content/mode fingerprint. Windows stays exact.
+func matchPurgeEntry(want, got PurgeEntry, parentDev string) bool {
+	if want.File != got.File {
+		return false
+	}
+	if want.Directory != "" || got.Directory != "" {
+		return want.ObjectID == got.ObjectID && MatchPersistedDirectory(want.Directory, got.Directory, parentDev)
+	}
+	if !persistedDevRelaxed {
+		return want.ObjectID == got.ObjectID
+	}
+	return matchPersistedObject(want.ObjectID, got.ObjectID, parentDev)
+}
+
+func purgeParentDevice(path string, directory bool) (string, error) {
+	if directory {
+		_, dev, err := nativeDirectoryIdentity(path)
+		return dev, err
+	}
+	anchors, err := pathAnchors(path, false)
+	if err != nil {
+		return "", err
+	}
+	if len(anchors) == 0 {
+		return "", fmt.Errorf("missing purge parent")
+	}
+	return objectDevice(anchors[len(anchors)-1].Identity), nil
 }

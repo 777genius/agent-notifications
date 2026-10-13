@@ -36,7 +36,7 @@ Environment:
 Notes:
   - This script modifies the real Claude plugin marketplace entry.
   - The marketplace name stays the same in the UI: ${MARKETPLACE_NAME}
-  - After switching, restart Claude Code to ensure the running app picks up the new plugin path.
+  - After switching, restart Claude to ensure the running app picks up the new plugin path.
 EOF
 }
 
