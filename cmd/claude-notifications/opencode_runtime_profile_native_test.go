@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/opencodehost"
 	"io"
@@ -15,6 +16,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -173,8 +175,7 @@ func portLaunch(t *testing.T, host, in runtimeProfileInput, raw, mode string) {
 }
 func portOutput(t *testing.T, in runtimeProfileInput) []byte {
 	t.Helper()
-	portAwait(t, portPrefix(in)+".done", portPrefix(in))
-	status, e := os.ReadFile(portPrefix(in) + ".done")
+	status, e := portReadDone(portPrefix(in) + ".done")
 	if e != nil || string(status) != "ok" {
 		t.Fatalf("helper not waited successfully: %v; first status=%q; %s", e, status, portFailureDiagnostics(portPrefix(in)))
 	}
@@ -185,6 +186,20 @@ func portOutput(t *testing.T, in runtimeProfileInput) []byte {
 	}
 	return data
 }
+
+// Wait for readable publication within the existing receipt budget.
+func portReadDone(path string) (status []byte, e error) {
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		status, e = os.ReadFile(path)
+		if e == nil || (!errors.Is(e, os.ErrNotExist) && !(runtime.GOOS == "windows" && errors.Is(e, syscall.Errno(32)))) {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	return status, e
+}
+
 func portBoundedDiagnostic(name string) ([]byte, error) {
 	f, e := os.Open(name)
 	if e != nil {
@@ -234,23 +249,10 @@ func portProbeSettled(t *testing.T, in runtimeProfileInput) {
 	if json.Unmarshal(data, &p) != nil {
 		t.Fatal("invalid fixture proof")
 	}
-	if strings.Join(p.Argv, ",") != "--version" || !strings.Contains(filepath.Base(p.Cwd), "agentplugins-version-probe-") || p.Cwd == in.ControlRoot {
+	if strings.Join(p.Argv, ",") != "--version" || !strings.Contains(filepath.Base(p.Cwd), "agentplugins-opencode-probe-") || p.Cwd == in.ControlRoot {
 		t.Fatal("probe argv/cwd changed")
 	}
-	pathSeen := false
-	for _, v := range p.Env {
-		if v == "PATH=" {
-			pathSeen = true
-			continue
-		}
-		if runtime.GOOS == "windows" && strings.HasPrefix(strings.ToUpper(v), "SYSTEMROOT=") {
-			continue
-		}
-		t.Fatal("ambient probe environment")
-	}
-	if !pathSeen {
-		t.Fatal("probe PATH changed")
-	}
+	assertRuntimeProbePrivateEnvironment(t, p.Cwd, p.Env)
 	portAssertProcessSettled(t, p.PID)
 	if _, e = os.Stat(p.Cwd); !os.IsNotExist(e) {
 		t.Fatal("private cwd survived Wait")

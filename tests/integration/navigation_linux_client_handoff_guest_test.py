@@ -71,6 +71,50 @@ def observe_guest_cpu():
     return observation
 
 
+def selected_command_hint(command, executable, uri):
+    """Mutable /proc argv/title discovers a candidate, never proves exec argv."""
+    expected = [executable, b'--ozone-platform=wayland', uri]
+    if command == expected: return 'argv'
+    # Electron may replace NUL-separated argv with one process-title value.
+    if command == [b' '.join(expected)]: return 'process_title'
+    return None
+
+
+def selected_environment_measurement(sample, pid, birth, read_begin, read_end):
+    """Sample digest only; raw-name excess includes malformed/empty records."""
+    if sample is None:
+        return dict(outcome='read_unavailable', pid=pid, startTicks=int(birth),
+            readBeginBoot=read_begin, readEndBoot=read_end, postReadIdentity='unobserved')
+    records = sample.split(b'\0')[:-1] if sample.endswith(b'\0') else sample.split(b'\0')
+    names = [record.split(b'=', 1)[0] for record in records]
+    trailing = 0
+    for record in reversed(records):
+        if record: break
+        trailing += 1
+    fixed = ('XDG_ACTIVATION_TOKEN', 'DESKTOP_STARTUP_ID', 'DISPLAY', 'WAYLAND_DISPLAY',
+             'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS', 'HOME', 'USER', 'LOGNAME', 'PATH')
+    summary = dict(outcome='structure_only', pid=pid, startTicks=int(birth),
+        readBeginBoot=read_begin, readEndBoot=read_end, postReadIdentity='unobserved',
+        sampleBytes=len(sample), sampleSHA256=hashlib.sha256(sample).hexdigest(),
+        digestScope='captured_sample', terminalNul=sample.endswith(b'\0'),
+        sampleBound='overflow_prefix' if len(sample) > 65536 else 'within_bound',
+        emptyRecords=records.count(b''), trailingEmptyRecords=trailing,
+        malformedRecords=sum(b'=' not in record for record in records),
+        duplicateNameExcess=len(names) - len(set(names)),
+        duplicateDefinition='raw_name_excess',
+        fixedOccurrences={name: names.count(name.encode('ascii')) for name in fixed})
+    if len(json.dumps(summary, sort_keys=True).encode()) > 1024:
+        return dict(outcome='summary_exceeds_bound')
+    return summary
+
+
+def parse_selected_environment(environment):
+    if len(environment) > 65536 or not environment.endswith(b'\0'): raise RuntimeError('bounded_selected_environment_required')
+    entries = [value.split(b'=', 1) for value in environment.split(b'\0')[:-1]]
+    if any(len(pair) != 2 for pair in entries) or len({pair[0] for pair in entries}) != len(entries): raise RuntimeError('unambiguous_selected_environment_required')
+    return {key.decode(): value.decode() for key, value in entries}
+
+
 def client_activation_surfaces(trace, token):
     # Client and system libwayland can use different object-ID delimiters.
     pattern = (r'xdg_activation_v1(?P<separator>[@#])\d+\.activate\("' +
@@ -396,15 +440,25 @@ def main():
         defaults = work / 'defaults.json'
         owned_fixture(defaults, b'{"notifications":{"desktop":{"enabled":true,"sound":false,"clickToFocus":true}}}')
         commands = []; report['setupCommands'] = commands
+        update = shipping.get('update'); current_sha = shipping['files']['shipping-client']
+        update_stage = None
+        if update:
+            update_stage = work / 'update-stage'; update_stage.mkdir(mode=0o700); os.chown(update_stage, 1000, 1000)
+            owned_fixture(update_stage / staged.name, (SEED / 'update-shipping-client').read_bytes(), 0o700)
 
-        def command(label, argv, allowed=(0,)):
+        def command(label, argv, allowed=(0,), executor=None, expected=None):
             remaining = deadline - now()
             if remaining <= 0: raise RuntimeError('shipping_setup_budget_expired')
-            result = subprocess.run([str(cli if cli.exists() else staged)] + argv,
+            executable = executor or (cli if cli.exists() else staged)
+            if update and sha(executable) != (expected or current_sha): raise RuntimeError('actual_managed_writer_source_role_required')
+            remaining = deadline - now()
+            if remaining <= 0: raise RuntimeError('shipping_setup_budget_expired')
+            result = subprocess.run([str(executable)] + argv,
                 cwd=work, env=env, preexec_fn=drop, capture_output=True, timeout=min(45, remaining))
             if len(result.stdout) + len(result.stderr) > 65536: raise RuntimeError('shipping_CLI_output_bound')
             commands.append(dict(label=label, argv=argv, exitCode=result.returncode,
                 stdout=result.stdout.decode(), stderr=result.stderr.decode(), collectedBoot=now()))
+            if update: commands[-1].update(writerSHA256=expected or current_sha, sourceRole='old' if (expected or current_sha) == shipping['files']['shipping-client'] else 'update')
             if result.returncode not in allowed: raise RuntimeError('shipping_normal_CLI_failed_' + label)
             return result.stdout.decode()
 
@@ -456,7 +510,7 @@ raise SystemExit(0 if result['passed'] else 1)
                 '--expected-generation', generation(label), '--json'])
             binding = json.loads(read(control / 'agent-notifications.json'))['route']['linuxCallbackSnapshot']
             path = Path(binding['snapshotPath']); snapshot = json.loads(read(path))
-            if sha(path) != binding['sha256'] or snapshot['ReaderSHA256'] != shipping['files']['shipping-client'] or snapshot['ManifestSHA256'] != shipping['files']['shipping-vendor-manifest.json']:
+            if sha(path) != binding['sha256'] or snapshot['ReaderSHA256'] != current_sha or snapshot['ManifestSHA256'] != shipping['files']['shipping-vendor-manifest.json']:
                 raise RuntimeError('actual_immutable_shipping_snapshot_unbound')
             saved = {str(p): sha(p) for p in (path, Path(snapshot['Reader']),
                 Path(snapshot['DataRoot']) / 'applications' / (snapshot['ApplicationID'] + '.desktop'),
@@ -506,8 +560,42 @@ raise SystemExit(0 if result['passed'] else 1)
             if mako_owner == old_owner: raise RuntimeError('notification_owner_restart_unproved')
             report['ownerRestart'] = dict(old=old_owner, current=mako_owner)
             report['providerOwners'] = dict(mako=mako_owner, gtk=gtk_owner, frontend=frontend_owner)
+        def managed_state(expected):
+            ledger = json.loads(read(control / 'ownership.json'))
+            if cli.is_symlink() or sha(cli) != expected or type(ledger.get('Generation')) is not int or ledger['Generation'] <= 0 or type(ledger.get('WriterFloor')) is not int or not 1 <= ledger['WriterFloor'] <= 5:
+                raise RuntimeError('actual_managed_bytes_generation_floor_required')
+            return dict(binarySHA256=expected, generation=ledger['Generation'], writerFloor=ledger['WriterFloor'])
+
+        def transition(label, source_stage, executor, executor_sha, next_sha):
+            before = managed_state(current_sha)
+            for path, digest in a['retained'].items():
+                if sha(Path(path)) != digest: raise RuntimeError('retained_A_mutated_before_transition')
+            markers = {1: b'agent-notifications-managed-writer-protocol-v1', 2: b'agent-notifications-managed-writer-protocol-v1',
+                3: b'agent-notifications-managed-writer-protocol-v3', 4: b'agent-notifications-managed-writer-protocol-v4', 5: b'agent-notifications-managed-writer-protocol-v5'}
+            candidate = (source_stage / staged.name).read_bytes()
+            if hashlib.sha256(candidate).hexdigest() != next_sha or markers[before['writerFloor']] not in candidate or (before['writerFloor'] == 5 and markers[4] not in candidate):
+                raise RuntimeError('compatible_managed_transition_input_required')
+            command(label, ['internal-install-runtime', '--stage', str(source_stage), '--entry', staged.name,
+                '--target', str(managed / 'bin'), '--control-root', str(control), '--consumer', 'claude-hooks', '--refresh'], executor=executor, expected=executor_sha)
+            after = managed_state(next_sha)
+            if after['generation'] <= before['generation'] or after['writerFloor'] != before['writerFloor'] or any(sha(Path(path)) != digest for path, digest in a['retained'].items()):
+                raise RuntimeError('managed_transition_or_retained_A_unproved')
+            report.setdefault('managedTransitions', []).append(dict(label=label, before=before, after=after, retainedAUnchanged=True))
+
+        if update:
+            transition('update', update_stage, update_stage / staged.name, update['files']['update-shipping-client'], update['files']['update-shipping-client'])
+            current_sha = update['files']['update-shipping-client']
         b = bind('B')
         if shipping['scenario'] == 'restart_b': selected = submit('B', b)
+        if update:
+            transition('rollback', stage, cli, current_sha, shipping['files']['shipping-client'])
+            current_sha = shipping['files']['shipping-client']
+            status = json.loads(command('status-rollback', ['setup-notifications', 'status', '--global-config', str(global_config), '--json']))
+            if status.get('configuration') != 'configured' or status.get('globalConfiguration') != 'configured' or status.get('offlineCapability') != 'eligible' or status.get('generation') != managed_state(current_sha)['generation']:
+                raise RuntimeError('compatible_rollback_offline_readiness_unproved')
+            if json.loads(read(control / 'agent-notifications.json'))['route']['linuxCallbackSnapshot'] != b['binding']:
+                raise RuntimeError('compatible_rollback_binding_changed')
+            report['updateRollbackObserved'] = True
         if a['binding'] == b['binding'] or any(sha(Path(path)) != digest for path, digest in a['retained'].items()):
             raise RuntimeError('retained_A_changed_after_setup_B')
         report['retainedA'] = a; report['currentB'] = b; report['normalSetupObserved'] = True
@@ -516,7 +604,7 @@ raise SystemExit(0 if result['passed'] else 1)
         # installation ledger/ownership markers remain intact. No directory rm.
         mutable = [global_config, control / 'agent-notifications.json'] + [control / 'state/journal' / name for name in ('namespace', 'journal.json', 'lock')]
         removed = []; report['removedProducerState'] = removed
-        for path in mutable + [cli, staged]:
+        for path in mutable + [cli, staged] + ([update_stage / staged.name] if update else []):
             before = path.lstat()
             if not path.is_relative_to(work) or path.resolve() != path or not stat.S_ISREG(before.st_mode) or before.st_uid != 1000 or before.st_nlink != 1 or before.st_mode & 0o077:
                 raise RuntimeError('exact_owned_TEST_mutable_file_required')
@@ -637,25 +725,41 @@ raise SystemExit(0 if result['passed'] else 1)
             try:
                 client = kernel.snapshot(int(value))
                 if client['executable'] == str(kernel.EXE):
-                    exact = client['command'] == [bytes(kernel.EXE), b'--ozone-platform=wayland', uri.encode()]
+                    hint = selected_command_hint(client['command'], bytes(kernel.EXE), uri.encode())
+                    exact = hint == 'argv'
                     if len(predicate_capture['candidates']) < 3:
                         predicate_capture['candidates'].append(dict(pid=client['pid'], startTicks=client['startTicks'],
                             observedAtBoot=now(), observedPoll=predicate_capture['polls'],
-                            exactURIArgvMatch=exact, argv=predicate_argv(client['command'], 1024)))
+                            exactURIArgvMatch=exact, discoveryHint=hint, argv=predicate_argv(client['command'], 1024)))
                     else: predicate_capture['omittedCandidates'] += 1
-                    if exact: found.append(client)
+                    if hint is not None: found.append(client)
             except (FileNotFoundError, ProcessLookupError): pass
-        predicate_end('exact_candidate_present' if found else 'exact_candidate_absent')
+        predicate_end('command_hint_candidate_present' if found else 'command_hint_candidate_absent')
         if not found: return None
-        if len(found) != 1: raise RuntimeError('sole_selected_exact_URI_process_unproved')
+        if len(found) != 1: raise RuntimeError('sole_selected_command_hint_process_unproved')
         predicate_begin('selected_peer_and_environment')
-        client_pid = found[0]['pid']; selected_peer(client_pid, 'selected-launch')
-        with Path('/proc', str(client_pid), 'environ').open('rb') as stream: environment = stream.read(65537)
-        if len(environment) > 65536 or not environment.endswith(b'\0'): raise RuntimeError('bounded_selected_environment_required')
-        entries = [value.split(b'=', 1) for value in environment.split(b'\0')[:-1]]
-        if any(len(pair) != 2 for pair in entries) or len({pair[0] for pair in entries}) != len(entries): raise RuntimeError('unambiguous_selected_environment_required')
-        report['selectedEnvironment'] = {key.decode(): value.decode() for key, value in entries}
+        client_pid = found[0]['pid']; peer = selected_peer(client_pid, 'selected-launch')
+        try: read_begin = now()
+        except Exception: read_begin = None  # Timing diagnostics cannot replace parser failures.
+        try:
+            with Path('/proc', str(client_pid), 'environ').open('rb') as stream: environment = stream.read(65537)
+        except Exception:
+            try:
+                predicate_capture['selectedEnvironmentSample'] = selected_environment_measurement(None,
+                    client_pid, peer['startTicks'], read_begin, now())
+            except Exception: pass  # Preserve the original read failure.
+            raise
+        try:
+            predicate_capture['selectedEnvironmentSample'] = selected_environment_measurement(environment,
+                client_pid, peer['startTicks'], read_begin, now())
+        except Exception:
+            predicate_capture['selectedEnvironmentSample'] = dict(outcome='measurement_unavailable')
+        report['selectedEnvironment'] = parse_selected_environment(environment)
         alive(client_pid)
+        hint = selected_command_hint(found[0]['command'], bytes(kernel.EXE), uri.encode())
+        report['selectedCommandObservation'] = dict(discoveryHint=hint, nulSeparatedArgvObserved=hint == 'argv',
+            scope='mutable_process_command_not_exec_boundary', pid=client_pid,
+            startTicks=found[0]['startTicks'], observedAtBoot=now())
         report['coldGoReader'] = kernel.public_snapshot(reader); report['coldGoReaderObserved'] = True
         report['exactURI'] = uri; report['exactURIObserved'] = True
         predicate_end('fully_admitted')

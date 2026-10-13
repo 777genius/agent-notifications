@@ -27,7 +27,7 @@ jobs:
     permissions:
       contents: read
     outputs:
-      mode: ${{ steps.classify.outputs.mode }}
+      mode: ${{ steps.release-scope.outputs.mode || steps.classify.outputs.mode }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -36,14 +36,42 @@ jobs:
       - name: Test conservative classification and installer mode contracts
         run: |
           python3 scripts/ci_macos_scope_test.py
+          python3 -B tools/ci_release_scope_test.py
           bash bin/install_e2e_mode_test.sh
       - name: Classify exact PR revision (errors retain full CI)
         id: classify
         run: python3 scripts/ci_macos_scope.py classify
+      - name: Classify release tooling only when native scope is full
+        id: release-scope
+        if: steps.classify.outputs.mode == 'full'
+        run: python3 -B tools/ci_release_scope.py classify
+
+  release-tools:
+    name: ${{ github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null) && 'Metadata edit ignored (release tools)' || 'Release tools scoped contract (macOS)' }}
+    needs: scope
+    if: needs.scope.outputs.mode == 'release-tools'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.27.2'
+          cache: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - run: npm --prefix scripts/codex-offline-release-smoke ci
+      - run: make release-tools-check
+      - run: make release-preflight
 
   test:
     needs: scope
-    if: ${{ !cancelled() && !(github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null)) && needs.scope.outputs.mode != 'docs' && needs.scope.outputs.mode != 'windows-only' }}
+    if: ${{ !cancelled() && !(github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null)) && needs.scope.outputs.mode != 'docs' && needs.scope.outputs.mode != 'windows-only' && needs.scope.outputs.mode != 'release-tools' }}
     name: ${{ github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null) && format('Metadata edit ignored (macOS {0})', matrix.go) || format('Test on macOS ({0})', matrix.go) }}
     runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.use_github_runner && matrix.os || github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && matrix.os || matrix.os == 'macos-15' && (vars.CI_MACOS_15_RUNNER || 'macos-15') || matrix.os == 'macos-26' && (vars.CI_MACOS_26_RUNNER || 'macos-26') || matrix.os }}
     timeout-minutes: 30
@@ -158,7 +186,7 @@ jobs:
 
   swift-test:
     needs: scope
-    if: ${{ !cancelled() && !(github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null)) && needs.scope.outputs.mode != 'docs' && needs.scope.outputs.mode != 'windows-only' }}
+    if: ${{ !cancelled() && !(github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null)) && needs.scope.outputs.mode != 'docs' && needs.scope.outputs.mode != 'windows-only' && needs.scope.outputs.mode != 'release-tools' }}
     name: ${{ github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null) && 'Metadata edit ignored (Swift)' || 'Swift notifier tests' }}
     runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.use_github_runner && 'macos-15' || github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'macos-15' || vars.CI_MACOS_15_RUNNER || 'macos-15' }}
     timeout-minutes: 30
@@ -173,7 +201,7 @@ jobs:
   full-ci:
     name: ${{ github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null) && 'Metadata edit ignored (full macOS gate)' || 'Full macOS CI required' }}
     needs: [scope, test, swift-test]
-    if: ${{ always() && !(github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null)) }}
+    if: ${{ always() && needs.scope.outputs.mode != 'release-tools' && !(github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null)) }}
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || vars.CI_LINUX_RUNNER || 'ubuntu-latest' }}
     permissions:
       contents: read

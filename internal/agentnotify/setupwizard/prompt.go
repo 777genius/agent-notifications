@@ -487,6 +487,13 @@ func attachCommand(req Request, out Result) Result {
 	case "completed", "cancelled", "unchanged":
 		return out
 	}
+	for _, next := range out.NextActions {
+		if next.Kind == "activate" {
+			// This existing recovery owns the normalized acquired source.
+			// A second retry would resurrect the disposable staging archive.
+			return out
+		}
+	}
 	if req.InstallationID == "" && out.InstallationID != "" {
 		req.InstallationID = out.InstallationID
 	}

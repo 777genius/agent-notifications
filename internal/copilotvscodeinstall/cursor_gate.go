@@ -104,24 +104,33 @@ func (g CursorGate) Recheck(ctx context.Context, b cursorevent.Binding, channel 
 // EffectiveConfig returns a fresh independent config for the same qualified
 // registration and generation. Every effect check separately reloads opt-out.
 func (g CursorGate) EffectiveConfig(ctx context.Context) (*config.Config, error) {
+	_, c, err := g.ConsumerBindingAndConfig(ctx)
+	return c, err
+}
+
+// ConsumerBindingAndConfig observes one qualified snapshot for transport
+// composition. It grants no effect; all later channel/lease checks stay fresh.
+func (g CursorGate) ConsumerBindingAndConfig(ctx context.Context) (cursorevent.Binding, *config.Config, error) {
 	if ctx == nil || g.gate.Binding.Integration != portable.Cursor || g.gate.Proof == nil {
-		return nil, ErrDenied
+		return cursorevent.Binding{}, nil, ErrDenied
 	}
 	s, err := installruntime.ReadPolicySnapshot(ctx, g.gate.Binding.ControlRoot)
 	if err != nil {
-		return nil, err
+		return cursorevent.Binding{}, nil, err
 	}
-	_, proof, err := g.gate.qualify(ctx, s, consumerBinding(s, g.gate.Binding))
+	b := consumerBinding(s, g.gate.Binding)
+	_, proof, err := g.gate.qualify(ctx, s, b)
 	if err != nil {
-		return nil, err
+		return cursorevent.Binding{}, nil, err
 	}
 	c, identity, err := readCursorConfig(g.gate.Binding)
 	if err != nil || identity != proof.configObservation {
-		return nil, ErrDenied
+		return cursorevent.Binding{}, nil, ErrDenied
 	}
 	current, err := installruntime.ReadInstalledSnapshot(g.gate.Binding.ControlRoot)
 	if err != nil || current.Ledger.Generation != s.Installation.Ledger.Generation || g.gate.Binding.CheckSnapshot(current) != nil {
-		return nil, ErrDenied
+		return cursorevent.Binding{}, nil, ErrDenied
 	}
-	return c, nil
+	return cursorevent.Binding{InstallationID: b.InstallationID, BindingID: b.BindingID,
+		ProfileIdentity: b.ProfileIdentity, Product: b.Product, Generation: b.Generation}, c, nil
 }

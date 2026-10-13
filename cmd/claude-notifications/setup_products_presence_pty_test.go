@@ -18,6 +18,8 @@ func TestSetupProductsScopedPresence(t *testing.T) {
 	for _, name := range []string{"regular", "missing", "symlink", "broken-link", "cyclic-link", "directory", "fifo", "not-executable", "relative-PATH", "invalid-override"} {
 		t.Run(name, func(t *testing.T) {
 			f := newBootstrapFixture(t)
+			// Presence diagnostics are intentionally available only in verbose mode.
+			f.env = append(f.env, "BOOTSTRAP_VERBOSE=1")
 			candidate := filepath.Join(f.tools, "codex")
 			original := filepath.Join(filepath.Dir(f.tools), "TEST codex executable")
 			if err := os.Rename(candidate, original); err != nil {

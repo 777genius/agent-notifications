@@ -1,0 +1,93 @@
+name: Cursor Windows installed E2E
+on:
+  push:
+    branches: [feat/cursor-windows-cli]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-shell:
+    runs-on: windows-2025
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.26.9'
+          cache: false
+      - name: Acquire official pinned Windows CLI into TEST-only profile
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # RUNNER_TEMP on D: grants unprivileged DeleteChild on ancestors.
+          # Use the native Temp hierarchy already qualified by release E2E.
+          $root = Join-Path ([System.IO.Path]::GetTempPath()) ('TEST-cursor-windows-' + [Guid]::NewGuid())
+          New-Item -ItemType Directory -Path $root | Out-Null
+          $archive = Join-Path $root 'agent-cli-package.zip'
+          Invoke-WebRequest -Uri 'https://downloads.cursor.com/lab/2026.10.01-e373342/windows/x64/agent-cli-package.zip' -OutFile $archive -TimeoutSec 60
+          if ((Get-Item $archive).Length -ne 77156248) { throw 'Unexpected Cursor archive length' }
+          (Get-FileHash $archive -Algorithm SHA256).Hash | Set-Content (Join-Path $root 'archive-sha256.txt')
+          if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLower() -ne '31896ce9a43f63c8ae7ff3c4bee868213d6d02d60fb49908bef6dc91d582f6ee') { throw 'Unexpected official Windows archive hash' }
+          Expand-Archive -Path $archive -DestinationPath $root
+          $agent = Join-Path $root 'dist-package/cursor-agent.cmd'
+          $index = Join-Path $root 'dist-package/index.js'
+          if ((Get-FileHash $index -Algorithm SHA256).Hash.ToLower() -ne '0e7e28c34e050c6b83fe574e1fefa8d95d7c80bea6c4a4d3ae2726e5191243ef') { throw 'Unexpected official Cursor source' }
+          "CURSOR_TEST_ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "CURSOR_TEST_AGENT=$agent" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Build actual AN and its portable package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $stage = Join-Path $env:CURSOR_TEST_ROOT 'stage'
+          New-Item -ItemType Directory -Path $stage | Out-Null
+          $binary = Join-Path $stage 'claude-notifications-windows-amd64.exe'
+          go test ./internal/cursorinstall -count=1
+          go test ./internal/cursorsource -run '^TestQualifiedWindowsPowerShellBOM$' -count=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          go test ./internal/opencodeinstall -run '^TestWindowsPortableShortcutNonSharingPrimary$' -count=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          go build -ldflags='-s -w' -o $binary ./cmd/claude-notifications
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ((Get-Item $binary).Length -gt 33554432) { throw 'Release binary exceeds managed file limit' }
+          go run ./cmd/build-portable-package -os windows -arch amd64 -executable $binary -output (Join-Path $env:CURSOR_TEST_ROOT 'agent-notify-portable-windows-amd64.zip') -workdir (Join-Path $env:CURSOR_TEST_ROOT 'package')
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Genuine Cursor Stop through installed UAP adapter and OS submission
+        shell: pwsh
+        env:
+          CURSOR_TEST_INSTALLED: '1'
+        run: python -B tests/integration/cursor_windows_shell_e2e.py
+      - name: Diagnose failed TEST installed state without sending events
+        if: failure()
+        shell: pwsh
+        run: |
+          go test ./cmd/claude-notifications -run '^TestWindowsCursorInstalledDiagnosis$' -count=1 -v 2>&1 | Tee-Object (Join-Path $env:CURSOR_TEST_ROOT 'installed-diagnosis.stdout')
+      - name: Restore disposable CI audit settings even after TEST failure
+        if: always() && env.CURSOR_TEST_ROOT != ''
+        shell: pwsh
+        run: |
+          & "$env:SystemRoot/System32/WindowsPowerShell/v1.0/powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File tests/integration/cursor_windows_toast_watch.ps1 -RestoreOnly
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Retain native qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: cursor-windows-native-shell
+          path: |
+            ${{ env.CURSOR_TEST_ROOT }}/native-shell-result.json
+            ${{ env.CURSOR_TEST_ROOT }}/native-stop.json
+            ${{ env.CURSOR_TEST_ROOT }}/native-argv.json
+            ${{ env.CURSOR_TEST_ROOT }}/cli-stdout.txt
+            ${{ env.CURSOR_TEST_ROOT }}/cli-stderr.txt
+            ${{ env.CURSOR_TEST_ROOT }}/archive-sha256.txt
+            ${{ env.CURSOR_TEST_ROOT }}/installed-result.json
+            ${{ env.CURSOR_TEST_ROOT }}/toast-processes.json
+            ${{ env.CURSOR_TEST_ROOT }}/toast-watch-startup
+            ${{ env.CURSOR_TEST_ROOT }}/TEST-audit-restored
+            ${{ env.CURSOR_TEST_ROOT }}/*.stdout
+            ${{ env.CURSOR_TEST_ROOT }}/*.stderr
+          if-no-files-found: warn

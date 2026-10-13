@@ -138,6 +138,7 @@ jobs:
     name: Sign and notarize universal notifier
     uses: ./.github/workflows/notifier-signing-smoke.yml
     with:
+      release_tag: ${{ inputs.candidate_version }}
       skip_notarize: false
       use_github_runner: ${{ inputs.use_github_runner }}
     secrets: inherit

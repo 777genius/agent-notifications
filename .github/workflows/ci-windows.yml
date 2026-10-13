@@ -4,6 +4,7 @@ on:
   push:
     branches: [ main, develop ]
   pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled, ready_for_review]
 
 # Only a newer run for the same PR supersedes its checks.
 concurrency:
@@ -11,10 +12,54 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  scope:
+    name: Classify release tooling scope
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      mode: ${{ steps.classify.outputs.mode }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Test conservative release scope with disposable Git fixtures
+        run: python3 -B tools/ci_release_scope_test.py
+      - name: Classify exact PR revision (errors retain full CI)
+        id: classify
+        run: python3 -B tools/ci_release_scope.py classify
+
+  release-tools:
+    name: Release tools scoped contract (Windows)
+    needs: scope
+    if: needs.scope.outputs.mode == 'release-tools'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.27.2'
+          cache: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - run: npm --prefix scripts/codex-offline-release-smoke ci
+      - run: make release-tools-check
+      - run: make release-preflight
+
   test:
+    needs: scope
+    if: ${{ !cancelled() && needs.scope.outputs.mode != 'release-tools' }}
     name: Test on Windows
     runs-on: windows-latest
-    timeout-minutes: 30
+    # Measured preceding stages take ~30m; preserve the 10m offline E2E budget plus cleanup margin.
+    timeout-minutes: 45
 
     strategy:
       fail-fast: false
@@ -47,10 +92,44 @@ jobs:
       - name: Qualify Windows configuration and delivery
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
+          go test ./internal/config -run '^TestWindowsAutomatic(NativeAnchorReadOnly|PinSkipsBusyChild)$' -count=1 -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           go build -o bin/claude-notifications.exe ./cmd/claude-notifications
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          go build -o bin/windows-standard-user-e2e.exe ./scripts/windows-standard-user-e2e
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          go test -c ./internal/config -o bin/config-native.test.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          bin/windows-standard-user-e2e.exe bin/config-native.test.exe '-test.run=^TestWindowsAutomaticNativeAnchorReadOnly$' '-test.v=true'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $version = (Get-Content .claude-plugin/plugin.json | ConvertFrom-Json).version
-          python scripts/release-artifact-e2e.py --binary bin/claude-notifications.exe --version "v$version"
+          python scripts/release-artifact-e2e.py --binary bin/claude-notifications.exe --version "v$version" --windows-standard-user-runner bin/windows-standard-user-e2e.exe
+
+      - name: Prepare qualified configuration test build
+        if: matrix.go == '1.26' && github.event_name == 'pull_request'
+        shell: pwsh
+        env:
+          TEST_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $actualSource = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          New-Item -ItemType Directory -Force qualified-config-build | Out-Null
+          Copy-Item bin/claude-notifications.exe qualified-config-build/claude-notifications-windows-amd64.exe
+          $hash = (Get-FileHash qualified-config-build/claude-notifications-windows-amd64.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          [IO.File]::WriteAllText("$PWD/qualified-config-build/SHA256SUMS", "$hash  claude-notifications-windows-amd64.exe`n", [Text.UTF8Encoding]::new($false))
+          $info = "Unreleased Windows amd64 test build; not a plugin installer.`nSource: $actualSource`nPR head: $env:TEST_SOURCE_SHA`nActions run: $env:GITHUB_RUN_ID`n$(go version)`nQualified by release-artifact-e2e.py in this Actions run.`nUse config init --json / config inspect --json to diagnose ACL rejection.`nThe normal version string is retained for packaged-template compatibility.`n"
+          [IO.File]::WriteAllText("$PWD/qualified-config-build/BUILD-INFO.txt", $info, [Text.UTF8Encoding]::new($false))
+
+      - name: Upload qualified configuration test build
+        if: matrix.go == '1.26' && github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-config-test-pr-${{ github.event.pull_request.number }}-go-${{ matrix.go }}
+          path: qualified-config-build/
+          retention-days: 7
+          if-no-files-found: error
 
       - name: Run go vet
         run: go vet ./...
