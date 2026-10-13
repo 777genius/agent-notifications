@@ -112,6 +112,15 @@ repaired. Its directory, config and lock must remain private; hostile precreated
 entries, reparse points or unsafe ProgramData permissions cause a clear error,
 without permission rewriting or a random alternative directory.
 
+The v1.49.2 wizard/configure path could create this fallback using inherited
+Windows ACLs instead of the protected store. Such a directory/file remains
+rejected as unsafe; updating does not silently repair or trust its contents.
+Stop writers and retain the existing file as untrusted recovery evidence. Review
+its settings before importing into a newly provisioned private directory using
+the explicit recovery procedure below. Replace webhook credentials if they were
+stored in a file exposed to other local users. Fresh setup must create protected
+explicit ACLs before publishing configuration bytes, just like `config init`.
+
 Existing legacy/APPDATA config, including malformed or inaccessible entries and
 recovery artifacts, retains priority before a private ProgramData store is
 established. If a profile config appears alongside that established store,

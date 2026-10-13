@@ -170,6 +170,10 @@ func physicalParent(path string, create bool) (*os.Root, error) {
 // confined setup path walk. Portable setup needs the parent before publishing
 // a locator; runtime launch remains read-only and the config file is untouched.
 func PrepareGlobalConfigParent(path string) error {
+	return prepareGlobalConfigParent(path)
+}
+
+func prepareGlobalConfigParentPhysical(path string) error {
 	root, err := physicalParent(path, true)
 	if err != nil {
 		return err
@@ -270,6 +274,10 @@ func PrepareGlobalConfig(ctx context.Context, canonicalPath, legacyPath, default
 	if err = ctx.Err(); err != nil {
 		return
 	}
+	return prepareGlobalConfig(ctx, canonicalPath, legacyPath, defaultsPath)
+}
+
+func prepareGlobalConfigPhysical(ctx context.Context, canonicalPath, legacyPath, defaultsPath string) (result PrepareGlobalResult, err error) {
 	root, err := physicalParent(canonicalPath, true)
 	if err != nil {
 		return result, err
@@ -400,6 +408,9 @@ func InspectGlobalConfig(ctx context.Context, paths ...string) ([]byte, error) {
 		if !filepath.IsAbs(p) || filepath.Clean(p) != p || p == string(filepath.Separator) {
 			return nil, errGlobalConfig
 		}
+	}
+	if err := inspectPreparedCanonical(paths[0]); err != nil {
+		return nil, err
 	}
 	for i, p := range paths {
 		if err := ctx.Err(); err != nil {

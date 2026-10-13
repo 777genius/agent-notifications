@@ -123,6 +123,146 @@ def _windows_writable_profile(path):
                    timeout=30, check=True)
 
 
+def _windows_acl_snapshot(path):
+    script = (
+        '$ErrorActionPreference = "Stop"\n'
+        '$acl = Get-Acl -LiteralPath $env:DIAG_PATH\n'
+        '$sid = [System.Security.Principal.SecurityIdentifier]\n'
+        '$rules = @($acl.GetAccessRules($true, $true, $sid) | ForEach-Object {\n'
+        '  @{sid=$_.IdentityReference.Value; mask=[int64]$_.FileSystemRights; '
+        'inherited=$_.IsInherited; type=$_.AccessControlType.ToString()}\n'
+        '})\n'
+        '@{sddl=$acl.Sddl; protected=$acl.AreAccessRulesProtected; '
+        'owner=$acl.GetOwner($sid).Value; user=[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value; '
+        'rules=$rules} | ConvertTo-Json -Depth 5 -Compress\n'
+    )
+    return json.loads(subprocess.check_output(
+        ['pwsh', '-NoProfile', '-NonInteractive', '-Command', script],
+        env=dict(os.environ, DIAG_PATH=str(path)), text=True, timeout=30))
+
+
+def _windows_assert_private(path):
+    acl = _windows_acl_snapshot(path)
+    assert acl['protected'] is True and acl['owner'] == acl['user'], (str(path), acl)
+    rules = acl['rules']
+    assert {rule['sid'] for rule in rules} == {acl['user'], 'S-1-5-18'}, (str(path), acl)
+    assert all(rule['type'] == 'Allow' and rule['inherited'] is False
+               and rule['mask'] == 0x1f01ff for rule in rules), (str(path), acl)
+    return acl
+
+
+def _windows_configure_first(run, binary, home, bundle, env, automatic_root):
+    # Refs #466: configure must be the FIRST canonical writer. Initializing the
+    # config first hides the inherited Users ACL left by the old wizard writer.
+    assert not automatic_root.exists(), ('preexisting automatic config root', automatic_root)
+    stage = home / 'stage'
+    stage.mkdir()
+    entry = 'claude-notifications-windows-amd64.exe'
+    shutil.copyfile(binary, stage / entry)
+    (bundle / 'bin').mkdir()
+    (bundle / 'config').mkdir()
+    source = {'notifications': {'desktop': {'enabled': True, 'sound': False, 'clickToFocus': False}},
+              'future': {'configure_canary': 9007199254740993}}
+    defaults = bundle / 'config' / 'config.json'
+    defaults.write_text(json.dumps(source))
+    source_bytes = defaults.read_bytes()
+    control = Path(env['APPDATA']) / 'agent-notifications'
+    run('internal-install-runtime', '--stage', str(stage), '--target', str(bundle / 'bin'),
+        '--entry', entry, '--control-root', str(control))
+    installed = bundle / 'bin' / entry
+    configure = ('setup-notifications', 'configure', '--provider', 'claude',
+                 '--navigation', 'none', '--policy-only', '--json')
+    _windows_writable_profile(home)
+    _windows_private_scratch_root(Path(env['APPDATA']))
+    selected = automatic_root / 'config.json'
+    assert 'AGENT_NOTIFICATIONS_CONFIG' not in env
+    assert not automatic_root.exists(), 'runtime installation created the canonical directory'
+
+    def snapshot():
+        return {str(path.relative_to(automatic_root)): (
+            _windows_acl_snapshot(path)['sddl'], None if path.is_dir() else path.read_bytes())
+            for path in [automatic_root, *automatic_root.rglob('*')]}
+
+    try:
+        # Windows creates this TEST directory with native ProgramData inheritance.
+        # Verify that the test actually exercises the reported Users RX + WD/AD.
+        automatic_root.mkdir(mode=0o777)
+        inherited = _windows_acl_snapshot(automatic_root)
+        users = [rule for rule in inherited['rules'] if rule['sid'] == 'S-1-5-32-545'
+                 and rule['type'] == 'Allow' and rule['inherited']]
+        assert inherited['protected'] is False, inherited
+        assert any(rule['mask'] & 1 for rule in users), inherited
+        assert any(rule['mask'] & 6 == 6 for rule in users), inherited
+        selected.write_text(json.dumps(source))
+        before = snapshot()
+        run(*configure, executable=installed, success=False)
+        denied = json.loads(run('config', 'inspect', '--json', success=False).stdout)
+        assert denied['errorCode'] == 'ConfigPermissionDenied', denied
+        assert any(item['code'] == 'ConfigPublicReadable'
+                   for item in denied['selection']['diagnostics']), denied
+        assert snapshot() == before, 'configure repaired or wrote into an unsafe existing directory'
+        selected.unlink()
+        automatic_root.rmdir()
+
+        # A private parent must not cause an unsafe existing config to be adopted.
+        automatic_root.mkdir(mode=0o777)
+        _windows_private_scratch_root(automatic_root)
+        selected.write_text(json.dumps(source))
+        script = (
+            '$ErrorActionPreference = "Stop"; $p = $env:DIAG_PATH; $acl = Get-Acl -LiteralPath $p; '
+            '$users = New-Object System.Security.Principal.SecurityIdentifier("S-1-5-32-545"); '
+            '$acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule('
+            '$users, "ReadAndExecute", "Allow"))); Set-Acl -LiteralPath $p -AclObject $acl'
+        )
+        subprocess.run(['pwsh', '-NoProfile', '-NonInteractive', '-Command', script],
+                       env=dict(os.environ, DIAG_PATH=str(selected)), text=True, timeout=30, check=True)
+        before = snapshot()
+        run(*configure, executable=installed, success=False)
+        denied = json.loads(run('config', 'inspect', '--json', success=False).stdout)
+        assert denied['errorCode'] == 'ConfigPermissionDenied', denied
+        assert any(item['code'] == 'ConfigPublicReadable'
+                   for item in denied['selection']['diagnostics']), denied
+        assert snapshot() == before, 'configure repaired or replaced an unsafe existing file'
+        selected.unlink()
+        automatic_root.rmdir()
+
+        configured = json.loads(run(*configure, executable=installed).stdout)
+        assert configured['ready'] is True and configured['changed'] is True, configured
+        assert configured['reason'] == 'configured', configured
+        assert any(stage == {'name': 'prepare', 'outcome': 'saved'}
+                   for stage in configured['stages']), configured
+        directory_acl = _windows_assert_private(automatic_root)
+        _windows_assert_private(selected)
+        assert json.loads(selected.read_text())['future'] == source['future']
+        initial_bytes = selected.read_bytes()
+        chosen = json.loads(run('config', 'path', '--json').stdout)
+        assert Path(chosen['path']) == selected and chosen['source'] == 'windows-private', chosen
+        run('config', 'init', '--json')
+        inspection = json.loads(run('config', 'inspect', '--json').stdout)
+        assert inspection['valid'] is True and Path(inspection['selection']['path']) == selected, inspection
+        status = json.loads(run('setup-notifications', 'status', '--json', executable=installed).stdout)
+        assert status['globalConfiguration'] == 'configured', status
+        retried = json.loads(run(*configure, executable=installed).stdout)
+        assert retried['ready'] is True and retried['changed'] is False, retried
+        assert selected.read_bytes() == initial_bytes and defaults.read_bytes() == source_bytes
+        edited = json.loads(run('config', 'edit', '--stdin', '--expect-revision', inspection['revision'],
+                                data=json.dumps({'set': {'/notifications/desktop/volume': 0.5}})).stdout)
+        assert edited['changed'] is True, edited
+        updated = json.loads(selected.read_text())
+        assert updated['future'] == source['future'] and updated['notifications']['desktop']['volume'] == 0.5
+        assert _windows_assert_private(automatic_root) == directory_acl
+        _windows_assert_private(selected)
+        # Selection persists when the disposable profile later becomes private.
+        _windows_private_scratch_root(home)
+        assert Path(run('config', 'path').stdout.strip()) == selected
+        assert not (home / '.agent-notifications-config.lock').exists()
+    finally:
+        # The initial absent-state check establishes ownership. Never clean an
+        # existing SID directory or modify native ProgramData's DACL.
+        if automatic_root.exists():
+            shutil.rmtree(automatic_root)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--binary', type=Path, required=True)
@@ -167,7 +307,8 @@ def main():
                     text=True).strip()
                 automatic_root = Path(expected)
                 assert not automatic_root.exists(), ('preexisting automatic config root', automatic_root)
-                cases.extend(('windows-owner-rights', 'windows-sandbox-profile', 'windows-sandbox-automatic'))
+                cases.extend(('windows-owner-rights', 'windows-sandbox-profile', 'windows-sandbox-automatic',
+                              'windows-sandbox-configure'))
             for case in cases:
                 home = root / case
                 # A Linux umask of 0002 would otherwise make this ancestry
@@ -194,15 +335,19 @@ def main():
                 env['PLUGIN_ROOT'] = str(bundle)
                 env['CLAUDE_PLUGIN_ROOT'] = str(bundle)
 
-                def run(*command, data=None, success=True):
+                def run(*command, data=None, success=True, executable=binary):
                     prefix = [str(standard_runner)] if standard_runner else []
-                    result = subprocess.run([*prefix, str(binary), *command], cwd=home, env=env,
+                    result = subprocess.run([*prefix, str(executable), *command], cwd=home, env=env,
                                             input=data, text=True, capture_output=True, timeout=30)
-                    assert (result.returncode == 0) == success, (case, command, result.returncode, result.stderr)
+                    assert (result.returncode == 0) == success, (case, command, result.returncode, result.stdout, result.stderr)
                     return result
 
                 assert run('version').stdout.strip() == 'claude-notifications ' + args.version
                 legacy = home / '.claude' / 'claude-notifications-go' / 'config.json'
+                if case == 'windows-sandbox-configure':
+                    _windows_configure_first(run, binary, home, bundle, env, automatic_root)
+                    results.append(case)
+                    continue
                 if case == 'windows-sandbox-profile':
                     _windows_writable_profile(home)
                     # Repairing APPDATA alone cannot fix the writable home.
