@@ -2,6 +2,12 @@ name: Gemini native G0 and production G5
 
 on:
   workflow_dispatch:
+    inputs:
+      driver:
+        type: choice
+        default: full
+        options: [full, g5-only]
+        description: Full G0/G5 or one fresh Linux amd64 G5 diagnostic
   pull_request:
     paths:
       - '.github/workflows/gemini-native-e2e.yml'
@@ -33,22 +39,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - runner: ubuntu-24.04
-            platform: linux
-            arch: amd64
-          - runner: ubuntu-24.04-arm
-            platform: linux
-            arch: arm64
-          - runner: windows-2025
-            platform: windows
-            arch: amd64
-          - runner: macos-15
-            platform: darwin
-            arch: arm64
-          - runner: macos-15-intel
-            platform: darwin
-            arch: amd64
+        include: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.driver == 'g5-only' && '[{"runner":"ubuntu-24.04","platform":"linux","arch":"amd64"}]' || '[{"runner":"ubuntu-24.04","platform":"linux","arch":"amd64"},{"runner":"ubuntu-24.04-arm","platform":"linux","arch":"arm64"},{"runner":"windows-2025","platform":"windows","arch":"amd64"},{"runner":"macos-15","platform":"darwin","arch":"arm64"},{"runner":"macos-15-intel","platform":"darwin","arch":"amd64"}]') }}
     steps:
       - name: Checkout exact candidate
         uses: actions/checkout@v7
@@ -80,12 +71,14 @@ jobs:
         # Native child environments are constructed by G0, never inherited here.
         shell: pwsh
         env:
+          CANDIDATE_DRIVER: ${{ github.event_name == 'workflow_dispatch' && inputs.driver || 'full' }}
           CANDIDATE_PLATFORM: ${{ matrix.platform }}
           CANDIDATE_ARCH: ${{ matrix.arch }}
           CANDIDATE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           $hookShell = if ($IsWindows) { (Get-Command pwsh -CommandType Application | Select-Object -First 1).Source } else { (Get-Command bash -CommandType Application | Select-Object -First 1).Source }
           $argsForCI = @('--trusted-github-runner', '--platform', $env:CANDIDATE_PLATFORM, '--arch', $env:CANDIDATE_ARCH, '--commit', $env:CANDIDATE_COMMIT, '--hook-shell', $hookShell)
+          if ($env:CANDIDATE_DRIVER -eq 'g5-only') { $argsForCI += '--g5-only' }
           if ($IsWindows) { $argsForCI += @('--system-root', $env:SystemRoot) }
           python -B scripts/gemini-native-ci.py @argsForCI
           exit $LASTEXITCODE

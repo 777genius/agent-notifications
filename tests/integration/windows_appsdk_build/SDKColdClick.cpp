@@ -335,11 +335,13 @@ struct ShellOwner {
         process.h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, id); require(process.h != nullptr, "ShellOwnerOpen");
         wchar_t p[32768]{}, windows[32768]{}; DWORD n = 32768;
         require(QueryFullProcessImageNameW(process.h, 0, p, &n) != FALSE, "ShellImage"); require(GetWindowsDirectoryW(windows, 32768) != 0, "WindowsDirectory");
-        path = fs::canonical(p).wstring(); demand(!_wcsicmp(path.c_str(), p), "ShellPhysicalPath");
-        std::wstring normalized = path; std::transform(normalized.begin(), normalized.end(), normalized.begin(), towlower);
+        // Exclude positively identified foreign images before filesystem work.
+        // Unknown image/identity failures still invalidate the complete census.
+        std::wstring normalized(p, n); std::transform(normalized.begin(), normalized.end(), normalized.begin(), towlower);
         std::wstring w(windows); std::transform(w.begin(), w.end(), w.begin(), towlower);
         const std::vector<std::wstring> allowed{w + L"\\explorer.exe", w + L"\\system32\\shellhost.exe", w + L"\\systemapps\\shellexperiencehost_cw5n1h2txyewy\\shellexperiencehost.exe", w + L"\\systemapps\\microsoftwindows.client.cbs_cw5n1h2txyewy\\shellhost.exe"};
         demand(std::find(allowed.begin(), allowed.end(), normalized) != allowed.end(), "ClosedShellProvider");
+        path = fs::canonical(p).wstring(); demand(!_wcsicmp(path.c_str(), p), "ShellPhysicalPath");
         born = birth(process.h); token = ownToken(process.h); sameIdentity(token, ownToken()); live();
     }
     void live() { demand(WaitForSingleObject(process.h, 0) == WAIT_TIMEOUT && birth(process.h) == born, "ShellOwnerChanged"); }

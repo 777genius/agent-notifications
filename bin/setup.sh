@@ -1,8 +1,15 @@
 #!/usr/bin/env bash
 # Usage: curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash
 # Keep this entry point small: installation runs from one exact release commit.
-main() (
+# This entry point runs once in its own Bash process. Keep signal cleanup in
+# that process so its caller observes exit only after owned children are joined.
+main() {
     set -euo pipefail
+    # A terminal can retain an unlinked cwd. Recover before downloads or child
+    # shells inherit it; keep valid caller-relative paths unchanged.
+    if ! builtin pwd -P >/dev/null 2>&1; then
+        cd -P / 2>/dev/null || { echo 'Cannot recover the installer working directory.' >&2; exit 1; }
+    fi
     # Only opt into loader parsing when the new selector is present. Every
     # existing invocation is forwarded verbatim to the released bootstrap.
     original_args=("$@")
@@ -51,7 +58,7 @@ main() (
                 if [ "$selector" = --product ]; then
                     case "$singleton" in claude|codex|both|opencode|gemini) ;; *) echo "Invalid product." >&2; exit 1 ;; esac
                 fi ;;
-            --desktop|--webhook) channels=$((channels + 1)); shift ;;
+            --desktop|--webhook|--desktop=true|--desktop=false|--webhook=true|--webhook=false) channels=$((channels + 1)); shift ;;
             --json) json=1; shift ;;
             --agent-notify|--skip-agent-notify|--request-permission|--preserve-policy|--navigation|--navigation=*|--app|--app=*|--team-id|--team-id=*|--allow-unknown-caller|--allow-unknown-caller=*|--allow-caller-asserted|--allow-caller-asserted=*|--codex-home|--codex-home=*)
                 case ",$route_seen," in *",$key,"*) echo "Use $key once." >&2; exit 1 ;; esac
@@ -97,14 +104,14 @@ main() (
         [ -z "$route_seen" ] && [ "$json" -eq 0 ] || { echo "Observers use channel flags only." >&2; exit 1; }
     fi
     set -- ${original_args[@]+"${original_args[@]}"}
-    if [ -z "$selector" ] || { [ "$selector" = --product ] && [ "$channels" -eq 0 ] && { [ "$singleton" = opencode ] || [ "$singleton" = gemini ]; }; }; then
+    if [ -z "$selector" ]; then
         pending=1
     fi
     if [ "$pending" -eq 1 ] && [ -n "$unknown_arg" ]; then
         echo "Unknown option: $unknown_arg." >&2; exit 1
     fi
     if [ "$pending" -eq 1 ] && [ "$json" -eq 1 ]; then
-        echo "Pending questions require complete explicit product/route/channel input with --json." >&2; exit 1
+        echo "Pending questions require complete explicit product/route input with --json." >&2; exit 1
     fi
     previous=""
     # No arguments delegates interactive selection to the released bootstrap.
@@ -159,7 +166,7 @@ main() (
                     [ -z "$notify" ] || { echo "Use one agent-notify option once." >&2; exit 1; }
                     notify=$1
                     legacy_args+=("$1") ;;
-                --desktop|--webhook)
+                --desktop|--webhook|--desktop=true|--desktop=false|--webhook=true|--webhook=false)
                     for channel in ${opencode_args[@]+"${opencode_args[@]}"}; do
                         [ "$channel" != "$1" ] || { echo "Use each observer channel once." >&2; exit 1; }
                     done
@@ -175,7 +182,7 @@ main() (
         done
         if [ "$help" -eq 1 ]; then
             echo "Usage: bash install.sh --products claude,codex,opencode,gemini [--agent-notify|--skip-agent-notify] [--desktop] [--webhook]"
-            echo "Choose any nonempty subset. Agent-notify options apply to Claude/Codex; Observers require --desktop and/or --webhook."
+            echo "Choose any nonempty subset. Agent-notify options apply to Claude/Codex; Observer channel flags apply to OpenCode/Gemini."
             exit 0
         fi
         if [ "$claude" -eq 1 ] && [ "$codex" -eq 1 ]; then
@@ -188,11 +195,7 @@ main() (
         [ -z "$notify" ] || [ -n "$legacy_product" ] || {
             echo "Agent-notify options require Claude or Codex in --products." >&2; exit 1;
         }
-        if [ "$opencode" -eq 1 ] || [ "$gemini" -eq 1 ]; then
-            [ "$opencode_channels" -gt 0 ] || {
-                echo "Selected observers require explicit --desktop and/or --webhook consent." >&2; exit 1;
-            }
-        elif [ "$opencode_channels" -gt 0 ]; then
+        if [ "$opencode" -eq 0 ] && [ "$gemini" -eq 0 ] && [ "$opencode_channels" -gt 0 ]; then
             echo "--desktop/--webhook require OpenCode or Gemini in --products." >&2; exit 1
         fi
     fi
@@ -206,20 +209,81 @@ main() (
         exit 1
     fi
     stage=$(mktemp -d "${TMPDIR:-/tmp}/agent-notifications-setup.XXXXXX")
-    trap 'rm -rf "$stage"' EXIT
+    loader_progress_pid=""
+    loader_download_pid=""
+    loader_child_stop() {
+        local target="$1" running
+        # A child already reaped by wait is no longer ours to signal, even if
+        # its numeric PID has since been reused by another process.
+        for running in $(jobs -pr); do
+            if [ "$running" = "$target" ]; then
+                kill "$target" 2>/dev/null || true
+                break
+            fi
+        done
+        wait "$target" 2>/dev/null || true
+    }
+    loader_download_stop() {
+        [ -n "$loader_download_pid" ] || return 0
+        loader_child_stop "$loader_download_pid"
+        loader_download_pid=""
+    }
+    loader_progress_stop() {
+        [ -n "$loader_progress_pid" ] || return 0
+        loader_child_stop "$loader_progress_pid"
+        loader_progress_pid=""
+        printf '\r\033[2K' >&2
+    }
+    trap 'loader_download_stop; loader_progress_stop; rm -rf "$stage"' EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM
     trap 'exit 129' HUP
+    # A thin observer works before the verified Go helper is available.
+    # loader_fetch stays synchronous. Own the external curl PID and use wait so
+    # signal traps can cancel it immediately, before joining the display child.
+    loader_fetch() {
+        local label="$1" output="$2" status=0
+        shift 2
+        # Record the transport before any visible activity. No installer function
+        # runs in a subshell, and no verified artifact is used before wait succeeds.
+        curl -fsSL "$@" -o "$output" 2> "$stage/download.stderr" &
+        loader_download_pid=$!
+        if [ "${BOOTSTRAP_VERBOSE:-0}" != 1 ] && [ "$ui_mode" != plain ] &&
+            [ -z "${NO_COLOR:-}" ] && [ "${TERM:-dumb}" != dumb ] && [ -t 2 ]; then
+            (
+                trap 'exit 0' INT TERM HUP
+                frame=0 frames='|/-\'
+                while :; do
+                    bytes=""
+                    if [ -f "$output" ]; then
+                        bytes=$(wc -c < "$output" 2>/dev/null | tr -d '[:space:]') || bytes=""
+                        [ -z "$bytes" ] || bytes=" ($bytes bytes received)"
+                    fi
+                    printf '\r\033[2K  %s %s%s' "${frames:frame:1}" "$label" "$bytes" >&2
+                    frame=$(((frame + 1) % 4))
+                    sleep 0.1
+                done
+            ) </dev/null >/dev/null &
+            loader_progress_pid=$!
+        else
+            printf '%s...\n' "$label" >&2
+        fi
+        wait "$loader_download_pid" || status=$?
+        loader_download_pid=""
+        loader_progress_stop
+        cat "$stage/download.stderr" >&2
+        return "$status"
+    }
     controller="${BOOTSTRAP_CONTROLLER_COMMIT:-}"
     if [ -z "$controller" ]; then
-        curl -fsSL -H 'Accept: application/vnd.github.sha' "https://api.github.com/repos/$repo/commits/main" -o "$stage/controller"
+        loader_fetch "Resolving release channel" "$stage/controller" -H 'Accept: application/vnd.github.sha' "https://api.github.com/repos/$repo/commits/main"
         [ "$(wc -c < "$stage/controller" | tr -d '[:space:]')" = 40 ] || { echo 'Invalid controller response.' >&2; exit 1; }
         controller=$(cat "$stage/controller")
     fi
     [[ "$controller" =~ ^[0-9a-f]{40}$ ]] || { echo 'Invalid channel controller commit.' >&2; exit 1; }
     controller_raw="https://raw.githubusercontent.com/$repo/$controller"
-    curl -fsSL "$controller_raw/bin/release-channel.sh" -o "$stage/release-channel.sh"
-    curl -fsSL "$controller_raw/release-channels.tsv" -o "$stage/channels.tsv"
+    loader_fetch "Downloading release channel resolver" "$stage/release-channel.sh" "$controller_raw/bin/release-channel.sh"
+    loader_fetch "Downloading release channel manifest" "$stage/channels.tsv" "$controller_raw/release-channels.tsv"
     source "$stage/release-channel.sh"
     platform=$(release_channel_platform)
     IFS=$'\t' read -r os arch <<< "$platform"
@@ -237,12 +301,12 @@ main() (
             exit 1
         fi
     fi
-    curl -fsSL -H 'Accept: application/vnd.github.sha' "https://api.github.com/repos/$repo/commits/$tag" -o "$stage/commit"
+    loader_fetch "Verifying release provenance" "$stage/commit" -H 'Accept: application/vnd.github.sha' "https://api.github.com/repos/$repo/commits/$tag"
     [ "$(wc -c < "$stage/commit" | tr -d '[:space:]')" = 40 ] || { echo 'Invalid release commit response.' >&2; exit 1; }
     commit=$(cat "$stage/commit")
     [ "$commit" = "$release_commit" ] || { echo 'Release provenance mismatch.' >&2; exit 1; }
     raw="https://raw.githubusercontent.com/$repo/$source_commit/bin"
-    curl -fsSL "$raw/bootstrap.sh" -o "$stage/bootstrap.sh"
+    loader_fetch "Downloading pinned bootstrap" "$stage/bootstrap.sh" "$raw/bootstrap.sh"
     run_bootstrap() {
         env BOOTSTRAP_RELEASE_TAG="$tag" BOOTSTRAP_RELEASE_COMMIT="$commit" \
             BOOTSTRAP_RELEASE_CHANNEL=1 BOOTSTRAP_SOURCE_COMMIT="$source_commit" \
@@ -289,7 +353,7 @@ main() (
             printf '\nDetailed installer output: rerun with BOOTSTRAP_VERBOSE=1.\n'
         fi
     fi
-)
+}
 
 # All loader code is parsed before the piped entry point performs any work.
 main "$@"

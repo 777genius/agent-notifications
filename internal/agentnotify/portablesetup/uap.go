@@ -3,18 +3,21 @@ package portablesetup
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/adapters/statev2"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients/claude"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients/codex"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients/vscode"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/domain"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/managedstdio"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/ports"
@@ -22,9 +25,11 @@ import (
 
 	"github.com/777genius/agent-notifications/install/uapinstaller"
 	"github.com/777genius/agent-notifications/internal/agentnotify/portable"
+	"github.com/777genius/agent-notifications/internal/copilotvscodeinstall"
 	"github.com/777genius/agent-notifications/internal/cursorinstall"
 	"github.com/777genius/agent-notifications/internal/installruntime"
 	"github.com/777genius/agent-notifications/internal/strictjson"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/vscodelocalhooks"
 )
 
 const portableServerName = "agent-notify"
@@ -34,6 +39,22 @@ const clientFactsFile = "client-facts.json"
 // native clients. The UAP SDK intentionally rejects a nil registry.
 func NewRegistry() (*clients.Registry, error) {
 	return clients.NewRegistry(claude.New(), codex.New())
+}
+
+// ClientID translates the portable registration vocabulary at the public engine boundary.
+func ClientID(integration portable.Integration) string {
+	if integration == portable.CopilotVSCode {
+		return string(domain.ClientVSCode)
+	}
+	return string(integration)
+}
+
+// Integration translates public engine results back to portable registrations.
+func Integration(clientID string) portable.Integration {
+	if clientID == string(domain.ClientVSCode) {
+		return portable.CopilotVSCode
+	}
+	return portable.Integration(clientID)
 }
 
 // Identity is the operator-selected existing-installer surface. BindingID and
@@ -54,6 +75,7 @@ type UAPRoots struct {
 // MaterializeRequest selects one client. Integration is never taken from clientInfo.
 type MaterializeRequest struct {
 	Identity            Identity
+	LocalConfig         *vscode.LocalConfig
 	Integration         portable.Integration
 	ExpectedGeneration  uint64
 	PackageRoot         string
@@ -195,6 +217,10 @@ func (m Materializer) beginMutation(ctx context.Context, req *MaterializeRequest
 		release()
 		return nil, err
 	}
+	if req.Integration == portable.CopilotVSCode && req.ExpectedGeneration != snap.Ledger.Generation {
+		release()
+		return nil, ErrConcurrentChange
+	}
 	req.ExpectedGeneration = snap.Ledger.Generation
 	return release, nil
 }
@@ -208,6 +234,29 @@ func (m Materializer) RecoverJournals(ctx context.Context, req MaterializeReques
 // recoverOwnedJournals restores a pending Notifications kernel journal, then
 // releases the coordinator lease before UAP Recover (§7.4.2).
 func (m Materializer) recoverOwnedJournals(ctx context.Context, req MaterializeRequest) error {
+	if req.Integration == portable.CopilotVSCode {
+		if err := m.validate(req, false); err != nil {
+			return err
+		}
+		eng, err := m.engine(req, new(uint64), nil)
+		if err != nil {
+			return err
+		}
+		state, err := m.Store.Load()
+		if err != nil {
+			return err
+		}
+		for _, installation := range state.Installations {
+			for _, binding := range installation.Clients {
+				if binding.ClientID == ClientID(req.Integration) {
+					if err := eng.VerifyProfileAuthority(ctx, installation.InstallationID, binding.ClientBindingID); err != nil {
+						return err
+					}
+				}
+			}
+		}
+	}
+
 	if req.Integration == portable.Cursor {
 		if err := m.validate(req, false); err != nil {
 			return err
@@ -272,6 +321,9 @@ func physicalRoot(path string) string {
 }
 
 func Complete(id Identity, integration portable.Integration, clientID, scope, activePath, dataRoot string) (portable.Binding, error) {
+	if clientID != ClientID(integration) {
+		return portable.Binding{}, ErrPreflight
+	}
 	if scope == "" {
 		scope = string(domain.ScopeUser)
 	}
@@ -303,7 +355,7 @@ func resolveStoredBinding(id Identity, integration portable.Integration, client 
 }
 
 func expectedStoredBinding(id Identity, integration portable.Integration, client domain.ClientBinding, receipt domain.DataReceipt) (portable.Binding, error) {
-	if client.ClientID != string(integration) || client.DataReceiptID == "" || receipt.DataReceiptID != client.DataReceiptID || receipt.Locator == "" || receipt.Scope != client.Scope {
+	if client.ClientID != ClientID(integration) || client.DataReceiptID == "" || receipt.DataReceiptID != client.DataReceiptID || receipt.Locator == "" || receipt.Scope != client.Scope {
 		return portable.Binding{}, fmt.Errorf("%w: UAP client/data receipt mismatch", ErrPreflight)
 	}
 	expected, err := Complete(id, integration, client.ClientID, client.Scope, client.TargetLocator, receipt.Locator)
@@ -678,7 +730,7 @@ func (m Materializer) validateRefreshHandoff(req MaterializeRequest) error {
 	var client domain.ClientBinding
 	count := 0
 	for _, candidate := range installation.Clients {
-		if candidate.ClientID == string(req.Integration) {
+		if candidate.ClientID == ClientID(req.Integration) {
 			client = candidate
 			count++
 		}
@@ -763,7 +815,7 @@ func (m Materializer) validateRestoreMigrationHandoff(req MaterializeRequest) er
 	var client domain.ClientBinding
 	count := 0
 	for _, candidate := range installation.Clients {
-		if candidate.ClientID == string(req.Integration) {
+		if candidate.ClientID == ClientID(req.Integration) {
 			client = candidate
 			count++
 		}
@@ -851,6 +903,13 @@ func explicitAbs(p string) bool {
 func (m Materializer) validate(req MaterializeRequest, install bool) error {
 	switch req.Integration {
 	case portable.Codex, portable.Claude:
+	case portable.CopilotVSCode:
+		if selected, ok := clients.As[*vscode.LocalAdapter](m.Registry, domain.ClientVSCode); !ok || selected == nil || req.LocalConfig == nil {
+			return fmt.Errorf("%w: selected Local adapter and explicit selections required", ErrPreflight)
+		}
+		if filepath.Dir(req.LocalConfig.ProfileSettingsPath) != req.ClientConfigRoot {
+			return ErrPreflight
+		}
 	case portable.Cursor:
 		// Public UAP098 composes selected ProjectArgs. Only the explicitly
 		// selected vendor adapter may enter; Prepare validates original ancestry.
@@ -982,14 +1041,22 @@ func (m Materializer) engineWithIdentities(req MaterializeRequest, generation *u
 	})
 }
 
-func (m Materializer) apply(ctx context.Context, eng *uapinstaller.Engine, req uapinstaller.Request, expected MaterializeRequest) (uapinstaller.Result, error) {
+func (m Materializer) apply(ctx context.Context, eng *uapinstaller.Engine, req uapinstaller.Request, expected ...MaterializeRequest) (uapinstaller.Result, error) {
 	prepared, err := eng.Prepare(ctx, req)
 	if err != nil {
 		return uapinstaller.Result{}, err
 	}
 	defer func() { _ = prepared.Close() }()
-	if err := confirmPreparedIdentity(expected, prepared.Plan()); err != nil {
-		return uapinstaller.Result{}, err
+	for index, selected := range expected {
+		if index == 0 {
+			if err := confirmPreparedIdentity(selected, prepared.Plan()); err != nil {
+				return uapinstaller.Result{}, err
+			}
+		} else if selected.Integration == portable.CopilotVSCode {
+			if err := confirmLocalSelection(selected, prepared.Plan()); err != nil {
+				return uapinstaller.Result{}, err
+			}
+		}
 	}
 	return eng.Apply(ctx, prepared, uapinstaller.Decision{Confirmed: true})
 }
@@ -1012,6 +1079,24 @@ func (m Materializer) prepareRemove(ctx context.Context, eng *uapinstaller.Engin
 	if err != nil {
 		return nil, err
 	}
+
+	// Removal freezes recorded delivery, including its original Stop/components.
+	// Requested deselection is not replacement removal authority.
+	if expected.Integration == portable.CopilotVSCode {
+		facts, ok := prepared.Plan().SelectedDelivery.LocalFacts()
+		if len(prepared.Plan().Targets) > 0 {
+			for _, target := range prepared.Plan().Targets {
+				if target.ClientID == ClientID(expected.Integration) {
+					facts, ok = target.SelectedDelivery.LocalFacts()
+				}
+			}
+		}
+		if !ok || expected.LocalConfig == nil || facts.SettingsPath != expected.LocalConfig.ProfileSettingsPath || facts.Tuple != expected.LocalConfig.QualifiedTuple {
+			_ = prepared.Close()
+			return nil, ErrPreflight
+		}
+		expected.LocalConfig = nil
+	}
 	if err := confirmPreparedIdentity(expected, prepared.Plan()); err != nil {
 		_ = prepared.Close()
 		return nil, err
@@ -1020,6 +1105,11 @@ func (m Materializer) prepareRemove(ctx context.Context, eng *uapinstaller.Engin
 }
 
 func confirmPreparedIdentity(req MaterializeRequest, plan uapinstaller.Plan) error {
+	if req.LocalConfig != nil {
+		if err := confirmLocalSelection(req, plan); err != nil {
+			return err
+		}
+	}
 	if err := matchOptionalIdentity("tree digest", req.TreeDigest, plan.TreeDigest); err != nil {
 		return err
 	}
@@ -1036,6 +1126,149 @@ func matchOptionalIdentity(name, expected, got string) error {
 	return fmt.Errorf("%w: %s %s desired %s", ErrSourceIdentityDrift, name, expected, got)
 }
 
+// composeLocalPackage supplies binding-specific canonical bytes only in an
+// owned private snapshot. The shared release tree is never modified. Prepare
+// computes the resulting identity; the host freezes it in the existing intent
+// TreeDigest and verifies it again on retry.
+func (m Materializer) composeLocalPackage(ctx context.Context, req MaterializeRequest, retain bool) (Materializer, MaterializeRequest, func(), error) {
+	noop := func() {}
+	if req.Integration != portable.CopilotVSCode || req.LocalConfig == nil {
+		return m, req, noop, nil
+	}
+
+	canonicalStop := req.LocalConfig.NativeStop
+	if !canonicalStop {
+		state, err := m.Store.Load()
+		if err != nil {
+			return m, req, noop, err
+		}
+		if installation, ok := findInstallation(state, req.Identity.InstallationID); ok {
+			for _, binding := range installation.Clients {
+				if binding.ClientID == ClientID(req.Integration) {
+					facts, local := binding.SelectedDelivery.LocalFacts()
+					canonicalStop = local && facts.NativeStop
+					if local && !canonicalStop {
+						_, e := os.Stat(filepath.Join(installation.Source.CanonicalSource, filepath.FromSlash(vscodelocalhooks.PluginPath)))
+						canonicalStop = e == nil
+					}
+				}
+			}
+		}
+	}
+	if !canonicalStop {
+		return m, req, noop, nil
+	}
+	eng, err := m.engine(req, new(uint64), nil)
+	if err != nil {
+		return m, req, noop, err
+	}
+	reserved, err := eng.ReserveIdentity(uapinstaller.IdentityRequest{ClientID: ClientID(req.Integration), InstallationID: req.Identity.InstallationID,
+		ClientConfigRoot: req.ClientConfigRoot, DeclaredName: "agent-notify"})
+	if err != nil {
+		return m, req, noop, err
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(req.Identity.ControlRoot)
+	if err != nil {
+		return m, req, noop, err
+	}
+	primary, err := portable.ResolvePrimaryExecutable(snap.Ledger, req.Identity.Primary)
+	if err != nil {
+		return m, req, noop, err
+	}
+	cfg := *req.LocalConfig
+	cfg.HookSpecs = copilotvscodeinstall.LocalHookSpecs(portable.Binding{ControlRoot: req.Identity.ControlRoot, BindingID: reserved.BindingID}, primary)
+	body, err := vscodelocalhooks.Render(cfg.TargetShell, cfg.HookSpecs)
+	if err != nil {
+		return m, req, noop, err
+	}
+	cfg.DeclaredHookDigest = fmt.Sprintf("sha256:%x", sha256.Sum256(body))
+	if !cfg.NativeStop {
+		cfg.HookSpecs = nil
+	}
+	draft, err := (packagesnapshot.Builder{}).Build(ctx, req.PackageRoot)
+	if err != nil {
+		return m, req, noop, err
+	}
+	defer func() { _ = draft.Close() }()
+	// Builder rejects links and seals the snapshot. Only this owned draft is
+	// opened for composition; the second snapshot seals the completed package.
+	hook := filepath.Join(draft.Root, filepath.FromSlash(vscodelocalhooks.PluginPath))
+	if err = os.Chmod(draft.Root, 0700); err != nil {
+		return m, req, noop, err
+	}
+	dir := draft.Root
+	for _, part := range strings.Split(filepath.ToSlash(filepath.Dir(vscodelocalhooks.PluginPath)), "/") {
+		dir = filepath.Join(dir, part)
+		if err = os.Mkdir(dir, 0700); err != nil && !os.IsExist(err) {
+			return m, req, noop, err
+		}
+		if err = os.Chmod(dir, 0700); err != nil {
+			return m, req, noop, err
+		}
+	}
+
+	if _, e := os.Lstat(hook); e == nil {
+		if err = os.Chmod(hook, 0600); err != nil {
+			return m, req, noop, err
+		}
+	} else if !os.IsNotExist(e) {
+		return m, req, noop, e
+	}
+	if err = os.WriteFile(hook, body, 0600); err != nil {
+		return m, req, noop, err
+	}
+
+	builder := packagesnapshot.Builder{}
+	if retain {
+		builder.TempRoot = filepath.Join(filepath.Dir(filepath.Dir(m.Roots.StateFile)), "acquired")
+		if err := os.MkdirAll(builder.TempRoot, 0700); err != nil {
+			return m, req, noop, err
+		}
+	}
+	frozen, err := builder.Build(ctx, draft.Root)
+	if err != nil {
+		return m, req, noop, err
+	}
+	cleanup := func() { _ = frozen.Close() }
+	adapter, err := vscode.NewLocal(cfg)
+	if err != nil {
+		cleanup()
+		return m, req, noop, err
+	}
+	adapters := m.Registry.All()
+	for i, existing := range adapters {
+		if existing.ID() == domain.ClientVSCode {
+			adapters[i] = adapter
+		}
+	}
+	m.Registry, err = clients.NewRegistry(adapters...)
+	if err != nil {
+		cleanup()
+		return m, req, noop, err
+	}
+
+	if retain {
+		// Retain the digest-frozen canonical source in the existing acquisition
+		// area so installed retries do not depend on transient proof scratch.
+		if err := filepath.WalkDir(frozen.Root, func(path string, entry os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if entry.IsDir() {
+				return os.Chmod(path, 0700)
+			}
+			return nil
+		}); err != nil {
+			cleanup()
+			return m, req, noop, err
+		}
+		cleanup = noop
+	}
+
+	req.LocalConfig, req.PackageRoot = &cfg, frozen.Root
+	return m, req, cleanup, nil
+}
+
 func (m Materializer) Install(ctx context.Context, req MaterializeRequest) (portable.Binding, error) {
 	if ctx == nil {
 		return portable.Binding{}, ErrPreflight
@@ -1043,7 +1276,15 @@ func (m Materializer) Install(ctx context.Context, req MaterializeRequest) (port
 	if err := m.validate(req, true); err != nil {
 		return portable.Binding{}, err
 	}
-	template, err := Complete(req.Identity, req.Integration, string(req.Integration), string(domain.ScopeUser), req.Identity.ScopeRoot, req.Identity.ControlRoot)
+	var closePackage func()
+	var composeErr error
+	m, req, closePackage, composeErr = m.composeLocalPackage(ctx, req, true)
+	if composeErr != nil {
+		return portable.Binding{}, composeErr
+	}
+	defer closePackage()
+
+	template, err := Complete(req.Identity, req.Integration, ClientID(req.Integration), string(domain.ScopeUser), req.Identity.ScopeRoot, req.Identity.ControlRoot)
 	if err != nil {
 		return portable.Binding{}, err
 	}
@@ -1101,15 +1342,15 @@ func (m Materializer) Install(ctx context.Context, req MaterializeRequest) (port
 	if err != nil {
 		return portable.Binding{}, err
 	}
-	known, err := m.knownTargets(req.Identity.InstallationID, string(req.Integration))
+	known, err := m.knownTargets(req.Identity.InstallationID, ClientID(req.Integration))
 	if err != nil {
 		return portable.Binding{}, err
 	}
 	result, err := m.apply(ctx, eng, uapinstaller.Request{
-		Operation: packageOperation(req), PackageRoot: req.PackageRoot, ClientID: string(req.Integration),
+		Operation: publicPackageOperation(req), PackageRoot: req.PackageRoot, ClientID: ClientID(req.Integration),
 		ClientConfigRoot: req.ClientConfigRoot, ClientExecutable: req.ClientExecutable,
 		InstallationID: req.Identity.InstallationID, OperationID: req.OperationID,
-		RequiredComponents: []string{"mcp", "skills"},
+		RequiredComponents: requiredComponents(req),
 		KnownTargets:       known,
 	}, req)
 	if err != nil {
@@ -1119,7 +1360,7 @@ func (m Materializer) Install(ctx context.Context, req MaterializeRequest) (port
 	if err != nil {
 		return portable.Binding{}, err
 	}
-	if err := recordClientFact(filepath.Dir(m.Roots.StateFile), clientFact{BindingID: pb.BindingID, ConfigRoot: req.ClientConfigRoot, Executable: req.ClientExecutable}, string(req.Integration)); err != nil {
+	if err := recordClientFact(filepath.Dir(m.Roots.StateFile), clientFact{BindingID: pb.BindingID, ConfigRoot: req.ClientConfigRoot, Executable: req.ClientExecutable}, ClientID(req.Integration)); err != nil {
 		return portable.Binding{}, err
 	}
 	if !req.KeepReservation {
@@ -1131,14 +1372,41 @@ func (m Materializer) Install(ctx context.Context, req MaterializeRequest) (port
 }
 
 func integrationOf(facts uapinstaller.BindingFacts) portable.Integration {
-	switch facts.ClientID {
-	case string(portable.Claude):
-		return portable.Claude
-	case string(portable.Codex):
-		return portable.Codex
-	default:
-		return portable.Integration(facts.ClientID)
+	return Integration(facts.ClientID)
+}
+
+// Required components follow independent Local selections. Native Stop has no
+// dependency on the canonical MCP or skill components.
+func requiredComponents(req MaterializeRequest) []string {
+	if req.Integration != portable.CopilotVSCode {
+		return []string{"mcp", "skills"}
 	}
+	var out []string
+	if req.LocalConfig != nil {
+		if len(req.LocalConfig.MCPServers) != 0 {
+			out = append(out, "mcp")
+		}
+		if len(req.LocalConfig.Skills) != 0 {
+			out = append(out, "skills")
+		}
+	}
+	return out
+}
+
+func groupRequiredComponents(reqs []MaterializeRequest) []string {
+	var out []string
+	for _, component := range []string{"mcp", "skills"} {
+		for _, req := range reqs {
+			for _, selected := range requiredComponents(req) {
+				if selected == component {
+					out = append(out, component)
+					goto next
+				}
+			}
+		}
+	next:
+	}
+	return out
 }
 
 // validateGroupIdentities allows each client to retain its own scope while
@@ -1147,8 +1415,8 @@ func validateGroupIdentities(reqs []MaterializeRequest) (map[string]Identity, er
 	identities := make(map[string]Identity, len(reqs))
 	base := reqs[0].Identity
 	for _, req := range reqs {
-		client := string(req.Integration)
-		if req.Integration != portable.Claude && req.Integration != portable.Codex {
+		client := ClientID(req.Integration)
+		if req.Integration != portable.Claude && req.Integration != portable.Codex && req.Integration != portable.CopilotVSCode {
 			return nil, fmt.Errorf("%w: unsupported group client %s", ErrPreflight, client)
 		}
 		if _, exists := identities[client]; exists {
@@ -1182,10 +1450,34 @@ func (m Materializer) ApplyGroup(ctx context.Context, reqs []MaterializeRequest)
 	if err != nil {
 		return nil, err
 	}
+	// Local's reserved binding contributes canonical Stop bytes to a shared
+	// release snapshot. Mixed revision repair retains each client's frozen
+	// package source instead of sharing Local's composed tree with siblings.
+	sharedPackage := true
+	for _, req := range reqs[1:] {
+		sharedPackage = sharedPackage && req.PackageRoot == reqs[0].PackageRoot
+	}
+	reqs = append([]MaterializeRequest(nil), reqs...)
+	for i := range reqs {
+		if reqs[i].Integration != portable.CopilotVSCode {
+			continue
+		}
+		composed, local, closePackage, err := m.composeLocalPackage(ctx, reqs[i], true)
+		if err != nil {
+			return nil, err
+		}
+		defer closePackage()
+		m, reqs[i] = composed, local
+		if sharedPackage {
+			for j := range reqs {
+				reqs[j].PackageRoot = local.PackageRoot
+			}
+		}
+	}
 	// Validate all binding templates before recovery or reservation mutation.
 	templates := make([]portable.Binding, len(reqs))
 	for i, req := range reqs {
-		templates[i], err = Complete(req.Identity, req.Integration, string(req.Integration), string(domain.ScopeUser), req.Identity.ScopeRoot, req.Identity.ControlRoot)
+		templates[i], err = Complete(req.Identity, req.Integration, ClientID(req.Integration), string(domain.ScopeUser), req.Identity.ScopeRoot, req.Identity.ControlRoot)
 		if err != nil {
 			return nil, err
 		}
@@ -1230,7 +1522,7 @@ func (m Materializer) ApplyGroup(ctx context.Context, reqs []MaterializeRequest)
 	var targets []uapinstaller.ClientTarget
 	for _, req := range reqs {
 		targets = append(targets, uapinstaller.ClientTarget{
-			ClientID: string(req.Integration), ClientConfigRoot: req.ClientConfigRoot,
+			ClientID: ClientID(req.Integration), ClientConfigRoot: req.ClientConfigRoot,
 			ClientExecutable: req.ClientExecutable, PackageRoot: req.PackageRoot,
 			ExternalUninstalled: req.ExternalUninstalled,
 		})
@@ -1238,9 +1530,9 @@ func (m Materializer) ApplyGroup(ctx context.Context, reqs []MaterializeRequest)
 	result, err := m.apply(ctx, eng, uapinstaller.Request{
 		Operation: packageOperation(reqs[0]), PackageRoot: reqs[0].PackageRoot,
 		InstallationID: reqs[0].Identity.InstallationID, OperationID: reqs[0].OperationID,
-		RequiredComponents: []string{"mcp", "skills"}, ClientExecutable: reqs[0].ClientExecutable,
+		RequiredComponents: groupRequiredComponents(reqs), ClientExecutable: reqs[0].ClientExecutable,
 		Targets: targets,
-	}, reqs[0])
+	}, reqs...)
 	if err != nil {
 		return nil, persistResult(result, wrapUpdateRequired(err))
 	}
@@ -1248,7 +1540,7 @@ func (m Materializer) ApplyGroup(ctx context.Context, reqs []MaterializeRequest)
 	for _, req := range reqs {
 		var facts uapinstaller.BindingFacts
 		for _, item := range result.Targets {
-			if item.ClientID == string(req.Integration) {
+			if item.ClientID == ClientID(req.Integration) {
 				facts.ClientID = item.ClientID
 				facts.BindingID = item.BindingID
 				break
@@ -1260,7 +1552,7 @@ func (m Materializer) ApplyGroup(ctx context.Context, reqs []MaterializeRequest)
 					continue
 				}
 				for _, binding := range installation.Bindings {
-					if binding.ClientID == string(req.Integration) {
+					if binding.ClientID == ClientID(req.Integration) {
 						facts.InstallationID = installation.InstallationID
 						facts.ClientID = binding.ClientID
 						facts.BindingID = binding.BindingID
@@ -1278,7 +1570,7 @@ func (m Materializer) ApplyGroup(ctx context.Context, reqs []MaterializeRequest)
 		if err != nil {
 			return nil, err
 		}
-		if err := recordClientFact(filepath.Dir(m.Roots.StateFile), clientFact{BindingID: pb.BindingID, ConfigRoot: req.ClientConfigRoot, Executable: req.ClientExecutable}, string(req.Integration)); err != nil {
+		if err := recordClientFact(filepath.Dir(m.Roots.StateFile), clientFact{BindingID: pb.BindingID, ConfigRoot: req.ClientConfigRoot, Executable: req.ClientExecutable}, ClientID(req.Integration)); err != nil {
 			return nil, err
 		}
 		if !req.KeepReservation {
@@ -1342,7 +1634,7 @@ func (m Materializer) RemoveGroup(ctx context.Context, reqs []MaterializeRequest
 	var targets []uapinstaller.ClientTarget
 	for _, req := range reqs {
 		targets = append(targets, uapinstaller.ClientTarget{
-			ClientID: string(req.Integration), ClientConfigRoot: req.ClientConfigRoot,
+			ClientID: ClientID(req.Integration), ClientConfigRoot: req.ClientConfigRoot,
 			ClientExecutable: req.ClientExecutable, ExternalUninstalled: req.ExternalUninstalled,
 		})
 	}
@@ -1366,7 +1658,7 @@ func (m Materializer) RemoveGroup(ctx context.Context, reqs []MaterializeRequest
 	for i, req := range reqs {
 		matches := 0
 		for _, client := range installation.Clients {
-			if client.ClientID != string(req.Integration) {
+			if client.ClientID != ClientID(req.Integration) {
 				continue
 			}
 			matches++
@@ -1398,7 +1690,7 @@ func (m Materializer) RemoveGroup(ctx context.Context, reqs []MaterializeRequest
 			}
 			b := bindings[i]
 			intentTargets = append(intentTargets, IntentTarget{
-				Client: client.ClientID, InstallationID: req.Identity.InstallationID,
+				Client: string(Integration(client.ClientID)), InstallationID: req.Identity.InstallationID,
 				BindingID: client.ClientBindingID, DataReceiptID: client.DataReceiptID,
 				Profile: req.ClientConfigRoot, OldConsumerKey: key, OldBinding: &b,
 				Units: []string{"direct-mcp"},
@@ -1432,7 +1724,7 @@ func (m Materializer) RemoveGroup(ctx context.Context, reqs []MaterializeRequest
 		out[i].Integration = req.Integration
 		var found *domain.ClientBinding
 		for _, binding := range installation.Clients {
-			if binding.ClientID != string(req.Integration) {
+			if binding.ClientID != ClientID(req.Integration) {
 				continue
 			}
 			item := binding
@@ -1492,7 +1784,7 @@ func (m Materializer) RemoveGroup(ctx context.Context, reqs []MaterializeRequest
 		byClient[item.ClientID] = item
 	}
 	for i, req := range reqs {
-		item, ok := byClient[string(req.Integration)]
+		item, ok := byClient[ClientID(req.Integration)]
 		if ok && item.Materialization == string(domain.MaterializationAbsent) {
 			out[i].AlreadyAbsent = true
 		}
@@ -1510,6 +1802,17 @@ func packageOperation(req MaterializeRequest) uapinstaller.Operation {
 		return uapinstaller.OpInstall
 	}
 	return req.Operation
+}
+
+// An explicit owned empty transition changes selected components through the
+// public reviewed refresh route. The host intent retains its update/repair
+// action; public Prepare still requires the same profile and installed owner.
+func publicPackageOperation(req MaterializeRequest) uapinstaller.Operation {
+	op := packageOperation(req)
+	if req.Integration == portable.CopilotVSCode && req.LocalConfig != nil && !req.LocalConfig.NativeStop && len(req.LocalConfig.MCPServers) == 0 && len(req.LocalConfig.Skills) == 0 && (op == uapinstaller.OpUpdate || op == uapinstaller.OpRepair) {
+		return uapinstaller.OpRefreshProjection
+	}
+	return op
 }
 
 func (m Materializer) Update(ctx context.Context, req MaterializeRequest) (portable.Binding, error) {
@@ -1548,7 +1851,7 @@ func (m Materializer) SwitchRetained(ctx context.Context, req MaterializeRequest
 	if ctx == nil {
 		return uapinstaller.Result{}, ErrPreflight
 	}
-	if req.Integration == portable.Cursor {
+	if req.Integration == portable.Cursor || req.Integration == portable.CopilotVSCode {
 		if err := m.validate(req, true); err != nil {
 			return uapinstaller.Result{}, err
 		}
@@ -1646,6 +1949,7 @@ func persistResult(result uapinstaller.Result, err error) error {
 }
 
 func (m Materializer) OtherLiveClients(installationID, adding string) ([]string, error) {
+	adding = ClientID(Integration(adding))
 	if installationID == "" {
 		return nil, nil
 	}
@@ -1660,7 +1964,7 @@ func (m Materializer) OtherLiveClients(installationID, adding string) ([]string,
 	var others []string
 	for _, binding := range installation.Clients {
 		if binding.ClientID != adding {
-			others = append(others, binding.ClientID)
+			others = append(others, string(Integration(binding.ClientID)))
 		}
 	}
 	return others, nil
@@ -1683,11 +1987,19 @@ func (m Materializer) previewInstall(ctx context.Context, req MaterializeRequest
 	if err := m.validate(req, true); err != nil {
 		return uapinstaller.Plan{}, err
 	}
+	var closePackage func()
+	var composeErr error
+	m, req, closePackage, composeErr = m.composeLocalPackage(ctx, req, false)
+	if composeErr != nil {
+		return uapinstaller.Plan{}, composeErr
+	}
+	defer closePackage()
+
 	eng, err := m.engine(req, new(uint64), nil)
 	if err != nil {
 		return uapinstaller.Plan{}, err
 	}
-	known, err := m.knownTargets(req.Identity.InstallationID, string(req.Integration))
+	known, err := m.knownTargets(req.Identity.InstallationID, ClientID(req.Integration))
 	if err != nil {
 		return uapinstaller.Plan{}, err
 	}
@@ -1697,21 +2009,24 @@ func (m Materializer) previewInstall(ctx context.Context, req MaterializeRequest
 		}
 	}
 	prepared, err := eng.Prepare(ctx, uapinstaller.Request{
-		Operation: packageOperation(req), PackageRoot: req.PackageRoot, ClientID: string(req.Integration),
+		Operation: publicPackageOperation(req), PackageRoot: req.PackageRoot, ClientID: ClientID(req.Integration),
 		ClientConfigRoot: req.ClientConfigRoot, ClientExecutable: req.ClientExecutable,
 		InstallationID: req.Identity.InstallationID, OperationID: req.OperationID + "-preview",
-		RequiredComponents: []string{"mcp", "skills"},
+		RequiredComponents: requiredComponents(req),
 		KnownTargets:       known,
 	})
 	if err != nil {
 		return uapinstaller.Plan{}, wrapUpdateRequired(err)
 	}
 	defer func() { _ = prepared.Close() }()
+	if err := confirmLocalSelection(req, prepared.Plan()); err != nil {
+		return uapinstaller.Plan{}, err
+	}
 	return prepared.Plan(), nil
 }
 
 func (m Materializer) GuardSecondClient(ctx context.Context, req MaterializeRequest) error {
-	others, err := m.OtherLiveClients(req.Identity.InstallationID, string(req.Integration))
+	others, err := m.OtherLiveClients(req.Identity.InstallationID, ClientID(req.Integration))
 	if err != nil {
 		return err
 	}
@@ -1742,7 +2057,7 @@ func (m Materializer) Remove(ctx context.Context, req MaterializeRequest) error 
 	if ctx == nil {
 		return ErrPreflight
 	}
-	if req.Integration == portable.Cursor {
+	if req.Integration == portable.Cursor || req.Integration == portable.CopilotVSCode {
 		if err := m.validate(req, false); err != nil {
 			return err
 		}
@@ -1772,7 +2087,7 @@ func (m Materializer) Remove(ctx context.Context, req MaterializeRequest) error 
 	var found *domain.ClientBinding
 	var receipt domain.DataReceipt
 	for _, binding := range installation.Clients {
-		if binding.ClientID != string(req.Integration) {
+		if binding.ClientID != ClientID(req.Integration) {
 			continue
 		}
 		if found != nil {
@@ -1785,7 +2100,7 @@ func (m Materializer) Remove(ctx context.Context, req MaterializeRequest) error 
 	if found == nil {
 		return ErrAlreadyAbsent
 	}
-	if req.Integration == portable.Cursor {
+	if req.Integration == portable.Cursor || req.Integration == portable.CopilotVSCode {
 		eng, err := m.engine(req, new(uint64), nil)
 		if err != nil {
 			return err
@@ -1808,7 +2123,7 @@ func (m Materializer) Remove(ctx context.Context, req MaterializeRequest) error 
 		return err
 	}
 	prepared, err := m.prepareRemove(ctx, eng, uapinstaller.Request{
-		Operation: uapinstaller.OpRemove, ClientID: string(req.Integration),
+		Operation: uapinstaller.OpRemove, ClientID: ClientID(req.Integration),
 		ClientConfigRoot: req.ClientConfigRoot, ClientExecutable: req.ClientExecutable,
 		InstallationID: req.Identity.InstallationID, OperationID: req.OperationID,
 		ExternalUninstalled: req.ExternalUninstalled,
@@ -1882,4 +2197,50 @@ func (m Materializer) Remove(ctx context.Context, req MaterializeRequest) error 
 		return err
 	}
 	return m.Kernel.finishHandoff(ctx, reqBody, res)
+}
+
+func confirmLocalSelection(req MaterializeRequest, plan uapinstaller.Plan) error {
+	if req.Integration != portable.CopilotVSCode {
+		return nil
+	}
+	selected := plan.SelectedDelivery
+	bindingID := plan.BindingID
+	if len(plan.Targets) != 0 {
+		found := false
+		for _, target := range plan.Targets {
+			if target.ClientID == ClientID(req.Integration) {
+				if found {
+					return ErrPreflight
+				}
+				selected, found = target.SelectedDelivery, true
+				bindingID = target.BindingID
+			}
+		}
+		if !found {
+			return ErrPreflight
+		}
+	}
+	facts, ok := selected.LocalFacts()
+	config := req.LocalConfig
+	if !ok || config == nil || facts.SettingsPath != config.ProfileSettingsPath || facts.Tuple != config.QualifiedTuple || facts.NativeStop != config.NativeStop || !slices.Equal(facts.MCPServers, config.MCPServers) || !slices.Equal(facts.Skills, config.Skills) {
+		return fmt.Errorf("%w: public Local selection differs from confirmed request", ErrPreflight)
+	}
+	if config.NativeStop {
+		snap, err := installruntime.ReadInstalledSnapshot(req.Identity.ControlRoot)
+		if err != nil {
+			return err
+		}
+		primary, err := portable.ResolvePrimaryExecutable(snap.Ledger, req.Identity.Primary)
+		if err != nil {
+			return err
+		}
+		body, err := vscodelocalhooks.Render(config.TargetShell, config.HookSpecs)
+		if err != nil {
+			return err
+		}
+		if err := vscodelocalhooks.VerifyOwned(body, config.TargetShell, copilotvscodeinstall.LocalHookSpecs(portable.Binding{ControlRoot: req.Identity.ControlRoot, BindingID: bindingID}, primary)); err != nil {
+			return fmt.Errorf("%w: Local Stop does not name the reserved primary/binding", ErrPreflight)
+		}
+	}
+	return nil
 }

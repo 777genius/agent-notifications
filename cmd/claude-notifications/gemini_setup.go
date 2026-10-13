@@ -28,6 +28,7 @@ func runGeminiSetup(args []string, output io.Writer) int {
 	f.StringVar(&r.HomeDir, "home", r.HomeDir, "home used for default Gemini config")
 	f.StringVar(&r.GeminiHome, "gemini-home", r.GeminiHome, "effective Gemini home parent")
 	f.StringVar(&r.ConfigRoot, "config-root", r.ConfigRoot, "explicit Gemini config directory")
+	f.StringVar(&r.ChannelPreimage, "channel-preimage", "", "frozen product channel preimage from bootstrap")
 	f.BoolVar(&r.Desktop, "desktop", false, "opt in to desktop notifications")
 	f.BoolVar(&r.Webhook, "webhook", false, "opt in to webhook notifications")
 	if err := f.Parse(args[1:]); err != nil {
@@ -35,6 +36,16 @@ func runGeminiSetup(args []string, output io.Writer) int {
 	}
 	if f.NArg() != 0 {
 		_, _ = fmt.Fprintln(output, "unexpected positional argument")
+		return 2
+	}
+	channelsSet := false
+	f.Visit(func(flag *flag.Flag) {
+		if flag.Name == "desktop" || flag.Name == "webhook" {
+			channelsSet = true
+		}
+	})
+	if (action == "install" || action == "update") && !channelsSet {
+		_, _ = fmt.Fprintln(output, "choose --desktop or --webhook explicitly")
 		return 2
 	}
 	timeout := 30 * time.Second

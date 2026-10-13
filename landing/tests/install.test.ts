@@ -7,12 +7,12 @@ test("one-line setup contract for each product and supported target", () => {
     for (const target of ["macos", "linux", "windows"] as const) {
       const expected = product === "both"
         ? "(set -o pipefail; curl -fsSL https://agent-notifications.com/install.sh | bash -s -- --products claude,codex)"
-        : "curl -fsSL https://agent-notifications.com/install.sh | bash -s -- --product " + product;
+        : "(set -o pipefail; curl -fsSL https://agent-notifications.com/install.sh | bash -s -- --product " + product + ")";
       assert.equal(command(product, target, "install"), expected);
       assert.equal(command(product, target, "update"), expected);
       assert.equal(
         command(product, target, "install", false),
-        product === "both" ? expected.slice(0, -1) + " --skip-agent-notify)" : expected + " --skip-agent-notify",
+        expected.slice(0, -1) + " --skip-agent-notify)",
       );
       assert.equal(command(product, target, "configure"), null);
     }
@@ -54,12 +54,13 @@ test("Bowser OS suggestions and mobile exclusions", () => {
   assert.equal(detectTarget("unknown"), "unknown");
 });
 
-test("OpenCode command requires explicit selected channels and omits MCP flags", () => {
+test("OpenCode commands default fresh channels, preserve updates and omit MCP flags", () => {
   for (const target of ["macos", "linux", "windows"] as const) {
-    const prefix = "curl -fsSL https://agent-notifications.com/install.sh | bash -s -- --product opencode";
-    assert.equal(command("opencode", target, "install"), prefix + " --desktop");
-    assert.equal(command("opencode", target, "update", false, { desktop: false, webhook: true }), prefix + " --webhook");
-    assert.equal(command("opencode", target, "install", true, { desktop: true, webhook: true }), prefix + " --desktop --webhook");
+    const prefix = "(set -o pipefail; curl -fsSL https://agent-notifications.com/install.sh | bash -s -- --product opencode";
+    assert.equal(command("opencode", target, "install"), prefix + " --desktop)");
+    assert.equal(command("opencode", target, "update"), prefix + ")");
+    assert.equal(command("opencode", target, "update", false, { desktop: false, webhook: true }), prefix + " --webhook)");
+    assert.equal(command("opencode", target, "install", true, { desktop: true, webhook: true }), prefix + " --desktop --webhook)");
     assert.equal(command("opencode", target, "install", true, { desktop: false, webhook: false }), null);
     assert.equal(command("opencode", target, "configure"), null);
   }
@@ -100,7 +101,7 @@ test("all seven selections produce one loader command with host-scoped consent",
               + (legacy && !agentNotify ? " --skip-agent-notify" : "")
               + (openCode && channels.desktop ? " --desktop" : "")
               + (openCode && channels.webhook ? " --webhook" : "");
-            const expected = multiple ? `(set -o pipefail; ${pipeline})` : pipeline;
+            const expected = `(set -o pipefail; ${pipeline})`;
             const actual = command(selected, target, intent, agentNotify, channels);
             assert.equal(actual, expected);
             assert.equal(actual?.split("\n").length, 1);
@@ -122,29 +123,31 @@ test("mixed loader uses a canonical product list", () => {
 });
 
 // The copied shell command must report a failed curl even if Bash accepts its input.
-test("mixed single command propagates empty and partial download failures without changing caller pipefail", () => {
-  const snippet = command(["claude", "opencode"], "linux", "install")!;
-  for (const partial of [false, true]) {
-    const result = spawnSync("bash", [], {
-      input: `set +o pipefail
+test("every copied product command propagates empty and partial download failures without changing caller pipefail", () => {
+  for (const product of ["claude", "codex", "opencode", "gemini", ["claude", "opencode"]] as const)
+    for (const intent of ["install", "update"] as const)
+      for (const partial of [false, true]) {
+        const snippet = command(product, "linux", intent)!;
+        const result = spawnSync("bash", [], {
+          input: `set +o pipefail
 curl() { ${partial ? "printf '%s' 'printf partial-input'" : ":"}; return 22; }
 ${snippet}
 install_status=$?
 if [[ -o pipefail ]]; then printf 'caller pipefail changed'; exit 1; fi
 exit "$install_status"`,
-      encoding: "utf8",
-    });
-    assert.equal(result.status, 22, result.stderr);
-    assert.equal(result.stdout, partial ? "partial-input" : "");
-  }
+          encoding: "utf8",
+        });
+        assert.equal(result.status, 22, result.stderr);
+        assert.equal(result.stdout, partial ? "partial-input" : "");
+      }
 });
 
 // The released selector must include every chosen observer and scope portable flags.
 test("Gemini released commands preserve canonical selectors and shared observer consent", () => {
   const prefix = "curl -fsSL https://agent-notifications.com/install.sh | bash -s -- ";
   const cases = [
-    { products: ["gemini"], expected: prefix + "--product gemini --webhook" },
-    { products: ["gemini", "gemini"], expected: prefix + "--product gemini --webhook" },
+    { products: ["gemini"], expected: "(set -o pipefail; " + prefix + "--product gemini --webhook)" },
+    { products: ["gemini", "gemini"], expected: "(set -o pipefail; " + prefix + "--product gemini --webhook)" },
     { products: ["gemini", "opencode"], expected: "(set -o pipefail; " + prefix + "--products opencode,gemini --webhook)" },
     { products: ["gemini", "claude"], expected: "(set -o pipefail; " + prefix + "--products claude,gemini --skip-agent-notify --webhook)" },
     { products: ["gemini", "codex"], expected: "(set -o pipefail; " + prefix + "--products codex,gemini --skip-agent-notify --webhook)" },
@@ -154,18 +157,16 @@ test("Gemini released commands preserve canonical selectors and shared observer 
     { products: ["gemini", "codex", "opencode", "claude", "gemini"], expected: "(set -o pipefail; " + prefix + "--products claude,codex,opencode,gemini --skip-agent-notify --webhook)" },
   ] as const;
   for (const { products, expected } of cases)
-    for (const target of ["linux", "windows"] as const) {
+    for (const target of ["macos", "linux", "windows"] as const) {
       assert.equal(command(products, target, "install", false, { desktop: false, webhook: true }), expected);
       assert.equal(command(products, target, "update", false, { desktop: false, webhook: true }), expected);
       assert.equal(command(products, target, "install", true, { desktop: false, webhook: false }), null);
       assert.equal(command(products, target, "configure"), null);
-      assert.equal(command(products, "macos", "install"), null);
-      assert.equal(command(products, "macos", "update"), null);
       assert.equal(command(products, "unknown", "install"), null);
       assert.equal(command(products, "manual", "install"), null);
     }
-  assert.equal(command("gemini", "linux", "install"), prefix + "--product gemini --desktop");
-  assert.equal(command("gemini", "linux", "install", false, { desktop: true, webhook: true }), prefix + "--product gemini --desktop --webhook");
+  assert.equal(command("gemini", "linux", "install"), "(set -o pipefail; " + prefix + "--product gemini --desktop)");
+  assert.equal(command("gemini", "linux", "install", false, { desktop: true, webhook: true }), "(set -o pipefail; " + prefix + "--product gemini --desktop --webhook)");
 });
 
 test("Gemini mixed command reports download failure with one pipeline", () => {
@@ -187,7 +188,7 @@ test("Gemini copied pipelines deliver exact installer argv", () => {
     },
     {
       snippet: command(["gemini", "opencode"], "linux", "update", false)!,
-      argv: ["--products", "opencode,gemini", "--desktop"],
+      argv: ["--products", "opencode,gemini"],
     },
     {
       snippet: command(["gemini", "opencode", "codex", "claude", "gemini"], "linux", "install", false, { desktop: true, webhook: true })!,
@@ -204,7 +205,23 @@ test("Gemini copied pipelines deliver exact installer argv", () => {
   }
 });
 
-// A regression would advertise a global version or offer a Gemini command on macOS.
+// Updating must let the installer retain each observer's stored channel pair.
+test("default observer update pipelines omit channel overrides in installer argv", () => {
+  for (const products of ["opencode", "gemini", ["opencode", "gemini"], ["claude", "codex", "opencode", "gemini"]] as const) {
+    const snippet = command(products, "linux", "update", false)!;
+    const selection = typeof products === "string" ? products : products.join(",");
+    const argv = [typeof products === "string" ? "--product" : "--products", selection];
+    if (typeof products !== "string" && products.some((product) => product === "claude")) argv.push("--skip-agent-notify");
+    const result = spawnSync("bash", [], {
+      input: `curl() { cat <<'INSTALLER'\nprintf '%s\\n' "$@"\nINSTALLER\n}\n${snippet}`,
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, argv.join("\n") + "\n");
+  }
+});
+
+// Keep per-platform versions while exposing Gemini commands on each supported OS.
 test("platform availability follows the published channel snapshot", () => {
   const row = (os: string, arch: string, version: string) => [os, arch, version, "a".repeat(40), "b".repeat(40), "release/platform-" + os].join("\t");
   const snapshot = [row("darwin", "amd64", "v1.46.1"), row("darwin", "arm64", "v1.46.1"), row("linux", "amd64", "v1.47.1"), row("windows", "amd64", "v1.47.1")].join("\n");
@@ -213,6 +230,6 @@ test("platform availability follows the published channel snapshot", () => {
   assert.equal(platformReleaseVersion(snapshot, "windows"), "1.47.1");
   assert.equal(platformReleaseVersion(snapshot, "unknown"), null);
   assert.equal(platformReleaseVersion(snapshot, "manual"), null);
-  assert.equal(command("gemini", "macos", "install"), null);
-  assert.equal(command(["claude", "gemini"], "macos", "update"), null);
+  assert.match(command("gemini", "macos", "install")!, /--product gemini --desktop\)$/);
+  assert.match(command(["claude", "gemini"], "macos", "update")!, /--products claude,gemini\)$/);
 });

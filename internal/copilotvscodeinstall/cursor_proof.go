@@ -19,7 +19,6 @@ import (
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/adapters/nativeconfig"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/adapters/statev2"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients"
-	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/cursorhooks"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/domain"
 	uapinstaller "github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/installer"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/providers"
@@ -96,8 +95,9 @@ func (p *cursorProof) record(ctx context.Context, b portable.Binding) (cursorRec
 		return cursorRecord{}, ErrDenied
 	}
 	f, selected := c.SelectedDelivery.CursorFacts()
-	if !selected || f.CursorVersion != "2026.09.28-64d2043" || f.TargetOS != "linux" || f.TargetArch != "amd64" ||
-		f.Shell != string(cursorhooks.LinuxUserShell32212) || f.ProfileRoot != b.ScopeRoot || f.ProfileIdentity != b.ScopeRoot ||
+	version, shell := cursorinstall.CurrentTuple()
+	if !selected || version == "" || f.CursorVersion != version || f.TargetOS != runtime.GOOS || f.TargetArch != runtime.GOARCH ||
+		f.Shell != string(shell) || f.ProfileRoot != b.ScopeRoot || f.ProfileIdentity != b.ScopeRoot ||
 		f.HooksPath != filepath.Join(b.ScopeRoot, "hooks.json") || f.Selector != p.fixed.Selector || f.Executable != p.fixed.Executable ||
 		f.QualificationID != p.fixed.QualificationID || f.ObjectID != p.fixed.ObjectID ||
 		!digest(strings.TrimPrefix(f.CanonicalDigest, "sha256:")) || !digest(strings.TrimPrefix(f.ProjectionDigest, "sha256:")) {
@@ -250,7 +250,8 @@ func verifyCursorProjection(b portable.Binding, r cursorRecord) error {
 }
 
 func (p *cursorProof) CheckLocal(ctx context.Context, b portable.Binding, s installruntime.InstalledSnapshot) (PhysicalProof, error) {
-	if p == nil || ctx == nil || ctx.Err() != nil || b.Integration != portable.Cursor || runtime.GOOS != "linux" || runtime.GOARCH != "amd64" ||
+	version, _ := cursorinstall.CurrentTuple()
+	if p == nil || ctx == nil || ctx.Err() != nil || b.Integration != portable.Cursor || version == "" ||
 		b.CheckSnapshot(s) != nil || s.Recovery || s.Ledger.PendingMutation != nil {
 		return PhysicalProof{}, ErrDenied
 	}
@@ -261,6 +262,14 @@ func (p *cursorProof) CheckLocal(ctx context.Context, b portable.Binding, s inst
 	primary, err := portable.ResolvePrimaryExecutable(s.Ledger, b.Primary)
 	if err != nil || primary != p.fixed.Executable || "sha256:"+s.Ledger.Files[primary].SHA256 != p.fixed.ExecutableDigest {
 		return PhysicalProof{}, ErrDenied
+	}
+	helperDigest := ""
+	if runtime.GOOS == "darwin" {
+		n := s.Ledger.Native
+		if n == nil || n.DecoderFloor != 1 || !digest(n.SHA256) {
+			return PhysicalProof{}, ErrDenied
+		}
+		helperDigest = n.SHA256
 	}
 	r, err := p.record(ctx, b)
 	if err != nil {
@@ -312,5 +321,5 @@ func (p *cursorProof) CheckLocal(ctx context.Context, b portable.Binding, s inst
 	return PhysicalProof{binding: b, physical: true, selectedCursorClass: true, qualifiedTuple: true,
 		goos: runtime.GOOS, goarch: runtime.GOARCH, receiptDigest: rawDigest([]byte(initial)),
 		packageDigest: strings.TrimPrefix(f.CanonicalDigest, "sha256:"), projectionDigest: strings.TrimPrefix(f.ProjectionDigest, "sha256:"),
-		primaryDigest: s.Ledger.Files[primary].SHA256, cursorObservation: initial, configObservation: cfgIdentity}, nil
+		primaryDigest: s.Ledger.Files[primary].SHA256, helperDigest: helperDigest, cursorObservation: initial, configObservation: cfgIdentity}, nil
 }
