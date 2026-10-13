@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.49.2] - 2026-10-13
+
+### Fixed
+- Initialize a fresh Windows configuration automatically in a private user-specific ProgramData directory when Codex sandbox write/delete grants make the profile unsafe, without changing sandbox ACLs or requiring administrator access ([#466](https://github.com/777genius/agent-notifications/issues/466), [#471](https://github.com/777genius/agent-notifications/pull/471)).
+- Explain Windows configuration permission failures with the rejected folder, trustee SID and access mask; recognize trusted OWNER RIGHTS grants ([#469](https://github.com/777genius/agent-notifications/pull/469), [#470](https://github.com/777genius/agent-notifications/pull/470)).
+- Preserve the shared OpenCode managed runtime during cache upgrades ([#468](https://github.com/777genius/agent-notifications/pull/468)).
+
+### Platform notes
+- Existing configurations and explicit paths retain precedence. An existing configuration under unsafe profile ancestry still needs explicit recovery; the plugin does not silently migrate or reset it. A profile configuration appearing beside an established private fallback is rejected as a conflict.
+- Windows qualification covers fresh initialization, editing, ACL repair, hostile precreation and real Claude/Codex hook webhooks with administrator access and privileges disabled. It does not establish interactive desktop banner visibility or resolve a separate caller/routing policy failure.
+- This release uses the basic five-platform artifact profile with separate downloaded macOS and Codex checks; it does not claim eleven-cell OpenCode, full native, cold-start, physical Intel or live-provider qualification.
+
 ## [1.49.1] - 2026-10-12
 
 ### Added
