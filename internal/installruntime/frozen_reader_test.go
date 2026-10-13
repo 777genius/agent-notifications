@@ -11,7 +11,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -112,7 +111,11 @@ func extractFrozenBaseline(t *testing.T, archivePath, destination string, artifa
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer file.Close()
+	defer func() {
+		if err := file.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	reader := tar.NewReader(file)
 	var total int64
 	entries := 0
@@ -219,13 +222,9 @@ func TestFrozenActualMainReaderProvenanceAndExecution(t *testing.T) {
 	if err != nil {
 		t.Fatal("git is required to prove the exact frozen baseline")
 	}
-	goName := "go"
-	if runtime.GOOS == "windows" {
-		goName += ".exe"
-	}
-	goTool := filepath.Join(runtime.GOROOT(), "bin", goName)
-	if _, err := os.Stat(goTool); err != nil {
-		t.Fatalf("Go is required for actual frozen reader execution: %v", err)
+	goTool, err := exec.LookPath("go")
+	if err != nil {
+		t.Fatal("Go is required for actual frozen reader execution", err)
 	}
 	root, err := exec.Command(git, "rev-parse", "--show-toplevel").Output()
 	if err != nil {
