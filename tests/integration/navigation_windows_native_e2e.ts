@@ -87,6 +87,17 @@ function revalidateBootstrapAt(session: unknown): void {
     session: Number(session),
   }, binary);
 }
+function revalidateBootstrapBoundary(mode: string, recordName: string): void {
+  if (!bootstrap || !root) return;
+  const actor = run(mode, 15_000);
+  const desktop = existsSync(join(root, recordName)) ? read(recordName) : undefined;
+  if (!desktop || desktop.pid !== actor.pid || desktop.nonce !== nonce) {
+    throw new Error('fresh bootstrap boundary desktop binding unavailable');
+  }
+  requireSuccess(actor);
+  revalidateBootstrapAt(desktop.session);
+  evidence[recordName] = desktop;
+}
 function observeShow(sender: Step): void {
   if (!root || !nonce) throw new Error('owned fixture absent');
   const stages = readdirSync(root).filter(name => /^sender-stage-\d+\.json$/.test(name));
@@ -320,7 +331,7 @@ async function main(): Promise<void> {
   const mode = process.env.NAVIGATION_WINDOWS_NATIVE_MODE
     ?? (process.env.NAVIGATION_WINDOWS_PREFLIGHT_ONLY === '0' ? 'native_callback' : 'policy_preflight');
   const suppliedBootstrapRoot = process.env.NAVIGATION_WINDOWS_OOBE_BOOTSTRAP_ROOT;
-  const bootstrapRequired = requireSameJobBootstrapMode(mode, ['oobe_then_native_callback'], suppliedBootstrapRoot);
+  const bootstrapRequired = requireSameJobBootstrapMode(mode, ['oobe_then_native_callback', 'oobe_then_public_sample_callback'], suppliedBootstrapRoot);
   evidence.mode = mode;
   nonce = randomUUID();
   root = join(realpathSync(process.env.RUNNER_TEMP ?? tmpdir()), `navigation-windows-test-${nonce}`);
@@ -646,14 +657,7 @@ async function main(): Promise<void> {
     throw new Error('Center disable policy configured; no settings changed or submission attempted');
   }
   if (bootstrap) {
-    const boundary = run('submission-preflight', 15_000);
-    const freshDesktop = existsSync(join(root, 'submission-preflight.json')) ? read('submission-preflight.json') : undefined;
-    if (!freshDesktop || freshDesktop.pid !== boundary.pid || freshDesktop.nonce !== nonce) {
-      throw new Error('fresh pre-submission desktop binding unavailable');
-    }
-    requireSuccess(boundary);
-    revalidateBootstrapAt(freshDesktop.session);
-    evidence['submission-preflight.json'] = freshDesktop;
+    revalidateBootstrapBoundary('submission-preflight', 'submission-preflight.json');
     evidence.preSubmissionBootstrapRevalidated = true;
   }
   // This records submission intent only. Native terminal records establish the Show count.
@@ -713,6 +717,8 @@ async function main(): Promise<void> {
     evidence.invokeEffectUncertain = true;
   }
   // No controller call to callback mode/CoCreateInstance. OS is the only cold-server launcher.
+  revalidateBootstrapBoundary('invoke-boundary-preflight', 'invoke-boundary-preflight.json');
+  if (bootstrap) evidence.preInvokeBootstrapRevalidated = true;
   const invoke = run('invoke', 30_000);
   if (publicSample && existsSync(join(root, 'ui-invoke-intent.json'))) evidence.uiInvokeIntent = read('ui-invoke-intent.json');
   if (existsSync(join(root, 'ui-invoke.json'))) evidence.uiInvoke = read('ui-invoke.json');
