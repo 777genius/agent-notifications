@@ -87,6 +87,17 @@ function revalidateBootstrapAt(session: unknown): void {
     session: Number(session),
   }, binary);
 }
+function revalidateBootstrapBoundary(mode: string, recordName: string): void {
+  if (!bootstrap || !root) return;
+  const actor = run(mode, 15_000);
+  const desktop = existsSync(join(root, recordName)) ? read(recordName) : undefined;
+  if (!desktop || desktop.pid !== actor.pid || desktop.nonce !== nonce) {
+    throw new Error('fresh bootstrap boundary desktop binding unavailable');
+  }
+  requireSuccess(actor);
+  revalidateBootstrapAt(desktop.session);
+  evidence[recordName] = desktop;
+}
 function observeShow(sender: Step): void {
   if (!root || !nonce) throw new Error('owned fixture absent');
   const stages = readdirSync(root).filter(name => /^sender-stage-\d+\.json$/.test(name));
@@ -638,14 +649,7 @@ async function main(): Promise<void> {
     throw new Error('Center disable policy configured; no settings changed or submission attempted');
   }
   if (bootstrap) {
-    const boundary = run('submission-preflight', 15_000);
-    const freshDesktop = existsSync(join(root, 'submission-preflight.json')) ? read('submission-preflight.json') : undefined;
-    if (!freshDesktop || freshDesktop.pid !== boundary.pid || freshDesktop.nonce !== nonce) {
-      throw new Error('fresh pre-submission desktop binding unavailable');
-    }
-    requireSuccess(boundary);
-    revalidateBootstrapAt(freshDesktop.session);
-    evidence['submission-preflight.json'] = freshDesktop;
+    revalidateBootstrapBoundary('submission-preflight', 'submission-preflight.json');
     evidence.preSubmissionBootstrapRevalidated = true;
   }
   // This records submission intent only. Native terminal records establish the Show count.
@@ -676,6 +680,8 @@ async function main(): Promise<void> {
   }
   evidence.senderExitedBeforeInvoke = true; evidence.senderExitedAt = sender.exitedAt;
   // No controller call to callback mode/CoCreateInstance. OS is the only cold-server launcher.
+  revalidateBootstrapBoundary('invoke-boundary-preflight', 'invoke-boundary-preflight.json');
+  if (bootstrap) evidence.preInvokeBootstrapRevalidated = true;
   const invoke = run('invoke', 30_000);
   if (existsSync(join(root, 'ui-invoke.json'))) evidence.uiInvoke = read('ui-invoke.json');
   requireSuccess(invoke);

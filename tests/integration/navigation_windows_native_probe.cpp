@@ -2067,6 +2067,7 @@ int wmain(int argc, wchar_t** argv) {
         if (mode == L"center-policy") return centerPolicy() ? 0 : 3;
         if (mode == L"preflight") return preflight() ? 0 : 3;
         if (mode == L"submission-preflight") return preflight("submission-preflight.json") ? 0 : 3;
+        if (mode == L"invoke-boundary-preflight") return preflight("invoke-boundary-preflight.json") ? 0 : 3;
         if (mode == L"desktop-capture") { if (argc != 4) return 2; return desktopCapture() ? 0 : 3; }
         if (mode == L"oobe-preflight") { if (argc != 4) return 2; return oobePreflight() ? 0 : 3; }
         if (mode == L"oobe-setup") { if (argc != 4) return 2; return oobeSetup() ? 0 : 1; }
