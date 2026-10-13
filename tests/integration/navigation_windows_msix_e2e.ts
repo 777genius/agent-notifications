@@ -20,6 +20,9 @@ const PREPARE_BUDGET_MS = 90_000;
 const evidence: Json = { status: 'failed', scope: 'packaged TEST cold toast COM callback only',
   nativeCallbackQualified: false, navigationQualified: false, clientRouteTested: false,
   vendorCompositionQualified: false, processQuiescenceQualified: false,
+  packagedClassicReceiverTokenMeasured: false, packagedClassicReceiverTokenClassification: 'unknown',
+  packagedClassicMediumTokenObserved: false,
+  boundaryActorPIDs: [],
   showAttempts: null, showCallOutcome: 'not_started', nativeEffectUncertain: false,
   prepareBudgetMS: PREPARE_BUDGET_MS,
   sourceSHA: process.env.NAVIGATION_SOURCE_SHA, runnerLabel: process.env.NAVIGATION_WINDOWS_RUNNER,
@@ -337,6 +340,22 @@ function revalidateBootstrapAt(session: unknown): void {
     session: Number(session),
   }, observer);
 }
+function revalidateBootstrapBoundary(mode: string, recordName: string): Json {
+  if (!bootstrap || !root || !nonce) throw new Error('same-job bootstrap boundary fixture absent');
+  const actor = native(mode, 15_000, true);
+  const desktop = existsSync(join(root, recordName)) ? read(recordName) : undefined;
+  if (!desktop || desktop.ready !== true || desktop.pid !== actor.pid || desktop.nonce !== nonce
+      || !Number.isInteger(desktop.session) || Number(desktop.session) <= 0) {
+    throw new Error('fresh bootstrap boundary desktop binding unavailable');
+  }
+  const boundaryPIDs = evidence.boundaryActorPIDs as number[];
+  if (boundaryPIDs.includes(actor.pid)) throw new Error('boundary actor PID was not fresh and distinct');
+  boundaryPIDs.push(actor.pid);
+  success(actor);
+  revalidateBootstrapAt(desktop.session);
+  evidence[recordName] = desktop;
+  return desktop;
+}
 function read(name: string): Json {
   if (!root) throw new Error('owned root absent');
   const path = join(root, name);
@@ -344,6 +363,45 @@ function read(name: string): Json {
   const result: unknown = JSON.parse(readFileSync(path, 'utf8'));
   if (!result || typeof result !== 'object' || Array.isArray(result)) throw new Error('invalid record: ' + name);
   return result as Json;
+}
+function observeReceiverToken(): void {
+  const callback = read('callback.json'), retained = read('callback-retained.json'), exited = read('callback-exit.json');
+  for (const record of [retained, exited]) {
+    for (const key of ['nonce', 'pid', 'creationTicks', 'packageFullName', 'aumid', 'session', 'executableSHA256']) {
+      if (record[key] !== callback[key]) throw new Error('measured cold receiver identity mismatch');
+    }
+  }
+  if (callback.nonce !== nonce || retained.pid === read('sender-exit.json').pid
+      || exited.receiverTokenMatched !== true || exited.collected !== true || exited.exitCode !== 0) {
+    throw new Error('collected cold receiver token custody absent');
+  }
+  const snapshots = [callback, retained, exited].map(record => {
+    const value = record.receiverToken;
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('actual receiver token absent');
+    const token = value as Json;
+    const fields = ['sidSHA256', 'authLUIDSHA256', 'session', 'elevated', 'elevationType', 'integrityRID', 'enabledAdmins'];
+    if (Object.keys(token).length !== fields.length || fields.some(key => !(key in token))
+        || typeof token.sidSHA256 !== 'string' || typeof token.authLUIDSHA256 !== 'string'
+        || !/^[0-9a-f]{64}$/.test(token.sidSHA256) || !/^[0-9a-f]{64}$/.test(token.authLUIDSHA256)
+        || !Number.isInteger(token.session) || Number(token.session) < 0 || Number(token.session) > 0xffffffff
+        || token.session !== record.session
+        || typeof token.elevated !== 'boolean' || typeof token.enabledAdmins !== 'boolean'
+        || ![1, 2, 3].includes(Number(token.elevationType)) || !Number.isInteger(token.elevationType)
+        || !Number.isInteger(token.integrityRID) || Number(token.integrityRID) < 0 || Number(token.integrityRID) > 0xffffffff) {
+      throw new Error('bounded receiver token facts invalid');
+    }
+    return Object.fromEntries(fields.map(key => [key, token[key]]));
+  });
+  if (snapshots.some(token => JSON.stringify(token) !== JSON.stringify(snapshots[0]))) {
+    throw new Error('callback/held receiver token mismatch');
+  }
+  const token = snapshots[0];
+  const medium = token.integrityRID === 8192 && token.elevated === false && token.enabledAdmins === false;
+  evidence.packagedClassicReceiverToken = token;
+  evidence.packagedClassicReceiverTokenMeasured = true;
+  evidence.packagedClassicMediumTokenObserved = medium;
+  evidence.packagedClassicReceiverTokenClassification = medium ? 'medium_unelevated_no_enabled_admins'
+    : token.integrityRID === 12288 ? 'high' : 'other';
 }
 function execute(mode: string, exe: string, args: string[], timeout: number, env = process.env): Step {
   if (!root) throw new Error('owned root absent');
@@ -436,7 +494,7 @@ async function installVendor(prepared: Json): Promise<void> {
   const after = native('vendor-state-after', 15_000, true); success(after);
   const installed = vendorRecord('vendor-after.json', after);
   if (installed.readOnly !== true || installed.installedCount !== 1 || installed.exactFullName !== true) throw new Error('selected vendor installed readback absent');
-  const sources = ['navigation_windows_vendor_sdk_test.h', 'navigation_windows_vendor_acquisition.ts',
+  const sources = ['navigation_windows_token_queries.h', 'navigation_windows_vendor_sdk_test.h', 'navigation_windows_vendor_acquisition.ts',
     'navigation_windows_msix_probe.cpp', 'navigation_windows_msix_e2e.ts', 'navigation_windows_native_probe.cpp'];
   evidence.compositionSourceSHA256 = Object.fromEntries(sources.map(name => {
     const source = resolve('tests/integration', name); const captured = join(root!, name);
@@ -490,10 +548,10 @@ async function composedInvoke(): Promise<Step> {
     const [invoke, collect] = await Promise.all([invoker.result, collector.result]);
     evidence.composedOwnedActorsCollected = !invoke.error && !invoke.signal && invoke.status !== null
       && !collect.error && !collect.signal && collect.status !== null;
-    success(collect); success(invoke);
+    success(collect); observeReceiverToken(); success(invoke);
     const effect = read('effect.json');
     for (const key of ['nonce', 'pid', 'creationTicks', 'vendorSpecSHA256', 'entryBootMs', 'actionDeadlineBootMs',
-      'leaseDeadlineBootMs', 'outcome', 'hresult', 'queryCallEntered', 'queryCallReturned', 'launchCallEntered', 'launchCallReturned', 'uriSupport']) {
+      'leaseDeadlineBootMs', 'receiverToken', 'outcome', 'hresult', 'queryCallEntered', 'queryCallReturned', 'launchCallEntered', 'launchCallReturned', 'uriSupport']) {
       if (JSON.stringify(effect[key]) !== JSON.stringify(action[key])) throw new Error('published action differs from effect');
     }
     const lease = read('callback-lease.json');
@@ -623,12 +681,7 @@ async function main(): Promise<void> {
     userSid: state.userSid, session: state.session, executableSHA256: state.executableSHA256,
     ...(composed ? { vendorComposition: true, vendorSpecSHA256: evidence.vendorSpecSHA256 } : {}) }), { flag: 'wx' });
   if (bootstrap) {
-    const boundary = native('preflight', 15_000, true); success(boundary);
-    const freshDesktop = read('preflight.json');
-    if (freshDesktop.ready !== true || freshDesktop.pid !== boundary.pid || freshDesktop.nonce !== nonce) {
-      throw new Error('fresh pre-submission desktop binding unavailable');
-    }
-    revalidateBootstrapAt(freshDesktop.session);
+    revalidateBootstrapBoundary('submission-preflight', 'submission-preflight.json');
     evidence.preSubmissionBootstrapRevalidated = true;
   }
   if (composed) vendorEffectsKnown = false; // Show can already create a callback; missing terminal is unknown.
@@ -639,6 +692,10 @@ async function main(): Promise<void> {
   // Read-only diagnostics do not establish visible UI or a native callback.
   native('history', 15_000);
   evidence.uiActivationOutcome = 'unknown';
+  if (bootstrap) {
+    revalidateBootstrapBoundary('invoke-boundary-preflight', 'invoke-boundary-preflight.json');
+    evidence.preInvokeBootstrapRevalidated = true;
+  }
   const invoke = composed ? await composedInvoke() : native('invoke', 30_000, true);
   if (existsSync(join(root, 'ui-invoke-intent.json'))) {
     evidence.uiActivationBoundaryArmed = true; // Missing terminal is unknown, never an action retry.
@@ -678,6 +735,7 @@ async function main(): Promise<void> {
   }
   if (read('callback-exit.json').collected !== true || read('callback-exit.json').exitCode !== 0
       || read('callback-terminal.json').valid !== true) throw new Error('cold callback exit proof absent');
+  if (!composed) observeReceiverToken();
   evidence.coldNativeCallbackObserved = true; evidence.nativeEffectUncertain = false; exitCode = 0;
 }
 try { await main(); }
@@ -727,7 +785,8 @@ finally {
     }
     if (evidence.packageMutationOutcomeUnknown === true || evidence.prepareCollectionUnknown === true) cleaned = false;
     evidence.cleanupPassed = cleaned;
-    evidence.nativeCallbackQualified = !prepareOnly && exitCode === 0 && cleaned;
+    evidence.nativeCallbackQualified = !prepareOnly && exitCode === 0 && cleaned
+      && evidence.packagedClassicReceiverTokenMeasured === true;
     evidence.vendorCompositionQualified = composed && evidence.nativeCallbackQualified === true
       && evidence.vendorHandoffAccepted === true && evidence.vendorCleanupPassed === true;
     const preparationPassed = prepareOnly && evidence.prepareComplete === true && exitCode === 0 && cleaned;
@@ -745,6 +804,9 @@ finally {
     }
   }
   console.log(JSON.stringify({ status: evidence.status, nativeCallbackQualified: evidence.nativeCallbackQualified,
-    navigationQualified: false, showAttempts: evidence.showAttempts, nativeEffectUncertain: evidence.nativeEffectUncertain }));
+    navigationQualified: false, showAttempts: evidence.showAttempts, nativeEffectUncertain: evidence.nativeEffectUncertain,
+    packagedClassicReceiverTokenMeasured: evidence.packagedClassicReceiverTokenMeasured,
+    packagedClassicReceiverTokenClassification: evidence.packagedClassicReceiverTokenClassification,
+    packagedClassicMediumTokenObserved: evidence.packagedClassicMediumTokenObserved }));
 }
 process.exitCode = exitCode;

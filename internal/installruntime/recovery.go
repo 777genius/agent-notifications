@@ -258,6 +258,11 @@ func checkPolicyGeneration(root string, l Ledger) error {
 // snapshots. It never restores an entire directory and never downgrades an
 // already promoted callback reader. A foreign edit makes rollback refuse.
 func reverseTransaction(current Ledger, tx transaction) (transaction, error) {
+	if tx.Windows != nil {
+		if err := validateWindowsTransaction(tx); err != nil {
+			return transaction{}, err
+		}
+	}
 	if tx.OrphanRecovery != nil {
 		return reverseOrphanTransaction(current, tx)
 	}

@@ -1,6 +1,7 @@
 #pragma once
 // Same fixed TEST byte, module and dynamic-graph observations for the two SDK actors.
 #include "../navigation_windows_token_queries.h"
+using namespace NavigationTokenTEST;
 #include <WindowsAppSDK-VersionInfo.h>
 #include <MddBootstrap.h>
 #include <appmodel.h>

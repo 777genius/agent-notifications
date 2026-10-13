@@ -1,5 +1,6 @@
 // Own TEST child only. No SDK, UI, impersonation or explicit privilege changes.
 #include "navigation_windows_token_queries.h"
+using namespace NavigationTokenTEST;
 #include <cstdio>
 #include <cstddef>
 #include <memory>

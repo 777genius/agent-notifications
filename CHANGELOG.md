@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.49.3] - 2026-10-13
+
+### Fixed
+- Create the Windows wizard/configure destination and configuration through the native store with protected private ACLs before `config init`, preventing inherited ProgramData access from exposing the file or making subsequent commands reject it. Fresh setups require no manual path change ([#466](https://github.com/777genius/agent-notifications/issues/466)).
+- Recover the public installer when its starting working directory has been deleted, before downloads and bootstrap children ([#475](https://github.com/777genius/agent-notifications/pull/475)).
+
+### Platform notes
+- Existing unsafe configurations remain rejected and unchanged. Recovery is explicit: preserve the exposed file for review, recreate the private destination, and review settings before importing them; credentials in an exposed file need rotation.
+- Configure-first native Windows E2E checks protected directory/file ACLs, subsequent config/status commands, retry/edit preservation and unchanged unsafe inputs under a standard token on Go 1.25 and 1.26.
+- This release uses the basic five-platform artifact profile. It does not claim visible desktop delivery, full native, eleven-cell OpenCode, cold-start, physical Intel or live-provider qualification.
+
 ## [1.49.2] - 2026-10-13
 
 ### Fixed

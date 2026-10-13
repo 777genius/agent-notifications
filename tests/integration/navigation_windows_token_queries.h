@@ -6,6 +6,8 @@
 #include <string>
 #include <vector>
 
+namespace NavigationTokenTEST {
+
 struct Failure { const char* query; DWORD error; };
 struct Token {
     HANDLE handle = nullptr;
@@ -124,3 +126,5 @@ static bool enabledAdmins(HANDLE token) {
     require(CheckTokenMembership(duplicate.handle, sid, &member) != FALSE, "CheckTokenMembership");
     return member != FALSE;
 }
+
+} // namespace NavigationTokenTEST

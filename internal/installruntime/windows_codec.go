@@ -41,10 +41,24 @@ func validateWindowsTransaction(tx transaction) error {
 	if tx.Schema != WindowsGenerationTransactionSchema || tx.Windows == nil || tx.OrphanRecovery != nil {
 		return fmt.Errorf("schema6 requires a Windows participant")
 	}
+	// Windows generation charging is its own participant. It must not smuggle
+	// a native promotion/removal through schema6, and without NativeChange it
+	// may only preserve the exact retained NativeRecord. The Windows ledger
+	// reader floor is independent from NativeRecord.DecoderFloor and every
+	// published native generation's decoder floor.
+	if tx.Native != nil {
+		return fmt.Errorf("windows participant requires a separate native decision")
+	}
+	if !reflect.DeepEqual(tx.Before.Native, tx.After.Native) {
+		return fmt.Errorf("windows participant changes NativeRecord")
+	}
 	readerFloor, declared := windowsLedgerReaderFloor(tx.After.Schema)
 	if !declared || readerFloor != WindowsGenerationLedgerReaderFloor ||
-		tx.After.WriterFloor < WindowsGenerationWriterFloor || tx.Before.DecoderFloor > tx.After.DecoderFloor {
+		tx.After.WriterFloor < WindowsGenerationWriterFloor {
 		return fmt.Errorf("windows participant requires ledger/floor6")
+	}
+	if tx.Before.DecoderFloor != tx.After.DecoderFloor {
+		return fmt.Errorf("windows participant changes NativeRecord decoder floor")
 	}
 	if tx.Before.WriterFloor > tx.After.WriterFloor {
 		return fmt.Errorf("windows participant lowers writer floor")

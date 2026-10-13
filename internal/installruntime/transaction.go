@@ -1068,6 +1068,14 @@ func validateRetainedNative(native *NativeRecord) error {
 }
 
 func recoverTransaction(ctx context.Context, root string, current Ledger, tx transaction, fault func(string) error) error {
+	// Recovery is also a trust boundary for journals assembled outside the
+	// normal decoder. Revalidate typed participants before observation, native
+	// validation, Windows operations, or any persisted effect.
+	if tx.Windows != nil {
+		if err := validateWindowsTransaction(tx); err != nil {
+			return err
+		}
+	}
 	if tx.OrphanRecovery != nil || tx.Schema == transactionSchemaV5 {
 		if err := validateOrphanLive(root, tx); err != nil {
 			return err

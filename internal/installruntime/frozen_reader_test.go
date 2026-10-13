@@ -105,6 +105,72 @@ func verifyFrozenReaderBytes(t *testing.T, provenance frozenReaderProvenance) ma
 	return artifacts
 }
 
+func frozenGitObject(t *testing.T, root string, input []byte, args ...string) []byte {
+	t.Helper()
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal("git is required to prove frozen object identity")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, git, args...)
+	command.WaitDelay = 5 * time.Second
+	command.Dir = root
+	if input != nil {
+		command.Stdin = bytes.NewReader(input)
+	}
+	var captured frozenReaderOutput
+	captured.cancel = cancel
+	command.Stdout, command.Stderr = &captured, &captured
+	if err := command.Run(); err != nil {
+		t.Fatalf("git %s failed: %v\n%s", strings.Join(args, " "), err, captured.Bytes())
+	}
+	return captured.Bytes()
+}
+
+// Archive equality proves content, while this gate independently binds that
+// content to the declared historical commit tree and Git blob object IDs. A
+// provenance field cannot drift into an unverified literal.
+func verifyFrozenReaderGitObjects(t *testing.T, provenance frozenReaderProvenance, artifacts map[string][]byte) {
+	t.Helper()
+	root := strings.TrimSpace(string(frozenGitObject(t, ".", nil, "rev-parse", "--show-toplevel")))
+	commit := strings.TrimSpace(string(frozenGitObject(t, root, nil, "rev-parse", provenance.SourceCommitFull+"^{commit}")))
+	if commit != provenance.SourceCommitFull {
+		t.Fatalf("frozen source commit resolved to %s", commit)
+	}
+	tree := strings.TrimSpace(string(frozenGitObject(t, root, nil, "rev-parse", provenance.SourceCommitFull+"^{tree}")))
+	if tree != provenance.SourceTree {
+		t.Fatalf("frozen source tree mismatch: %s != %s", tree, provenance.SourceTree)
+	}
+	for _, artifact := range provenance.Files {
+		data := artifacts[artifact.SourcePath]
+		if len(artifact.GitBlob) != 40 {
+			t.Fatalf("invalid frozen Git blob OID for %s: %q", artifact.SourcePath, artifact.GitBlob)
+		}
+		if _, err := hex.DecodeString(artifact.GitBlob); err != nil {
+			t.Fatalf("invalid frozen Git blob OID for %s: %v", artifact.SourcePath, err)
+		}
+		listed := strings.TrimSuffix(string(frozenGitObject(t, root, nil,
+			"ls-tree", provenance.SourceCommitFull, "--", artifact.SourcePath)), "\n")
+		fields := strings.SplitN(listed, "\t", 2)
+		if len(fields) != 2 || fields[1] != artifact.SourcePath {
+			t.Fatalf("unexpected frozen ls-tree entry for %s: %q", artifact.SourcePath, listed)
+		}
+		meta := strings.Fields(fields[0])
+		if len(meta) != 3 || meta[0] != "100644" || meta[1] != "blob" || meta[2] != artifact.GitBlob {
+			t.Fatalf("frozen source Git object mismatch for %s: %q", artifact.SourcePath, listed)
+		}
+		hashed := strings.TrimSpace(string(frozenGitObject(t, root, data, "hash-object", "--stdin")))
+		if hashed != artifact.GitBlob {
+			t.Fatalf("checked-in frozen bytes hash to %s, declared %s", hashed, artifact.GitBlob)
+		}
+		stored := frozenGitObject(t, root, nil, "cat-file", "blob", artifact.GitBlob)
+		if !bytes.Equal(stored, data) {
+			t.Fatalf("historical Git blob differs from checked-in artifact: %s", artifact.SourcePath)
+		}
+	}
+}
+
 func extractFrozenBaseline(t *testing.T, archivePath, destination string, artifacts map[string][]byte) {
 	t.Helper()
 	file, err := os.Open(archivePath)
@@ -218,6 +284,7 @@ func copyFrozenOverlay(t *testing.T, source, destination string) {
 func TestFrozenActualMainReaderProvenanceAndExecution(t *testing.T) {
 	provenance := readFrozenReaderProvenance(t)
 	artifacts := verifyFrozenReaderBytes(t, provenance)
+	verifyFrozenReaderGitObjects(t, provenance, artifacts)
 	git, err := exec.LookPath("git")
 	if err != nil {
 		t.Fatal("git is required to prove the exact frozen baseline")
