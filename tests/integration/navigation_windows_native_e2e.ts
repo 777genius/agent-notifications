@@ -638,13 +638,14 @@ async function main(): Promise<void> {
     throw new Error('Center disable policy configured; no settings changed or submission attempted');
   }
   if (bootstrap) {
-    const boundary = run('preflight', 15_000);
-    const freshDesktop = existsSync(join(root, 'preflight.json')) ? read('preflight.json') : undefined;
+    const boundary = run('submission-preflight', 15_000);
+    const freshDesktop = existsSync(join(root, 'submission-preflight.json')) ? read('submission-preflight.json') : undefined;
     if (!freshDesktop || freshDesktop.pid !== boundary.pid || freshDesktop.nonce !== nonce) {
       throw new Error('fresh pre-submission desktop binding unavailable');
     }
     requireSuccess(boundary);
     revalidateBootstrapAt(freshDesktop.session);
+    evidence['submission-preflight.json'] = freshDesktop;
     evidence.preSubmissionBootstrapRevalidated = true;
   }
   // This records submission intent only. Native terminal records establish the Show count.
