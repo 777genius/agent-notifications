@@ -104,3 +104,20 @@ func TestOperatorFailureReceiptImmutableJoins(t *testing.T) {
 		t.Fatal("invalid diagnostic admitted")
 	}
 }
+
+func TestUnknownCausePreservesBoundedEvidence(t *testing.T) {
+	output := &cappedOutput{}
+	stderr := &cappedOutput{}
+	_, _ = io.Copy(output, strings.NewReader("WCB1 unavailable not_checked 0\n"))
+	_, _ = io.Copy(stderr, strings.NewReader("WCD1 class_postimage other -\n"))
+	got := boundedUnknown("apply-clsid", "helper_exit_or_state", errors.New("exit status 2"), 6672, 2, output, stderr, []string{"class_postimage", "other", "-"})
+	if !errors.Is(got, ErrUnknown) {
+		t.Fatal(got)
+	}
+	var cause *UnknownCause
+	if !errors.As(got, &cause) || cause.Mode != "apply-clsid" || cause.PID != 6672 || cause.ExitCode != 2 ||
+		string(cause.Stdout) != "WCB1 unavailable not_checked 0\n" || string(cause.Stderr) != "WCD1 class_postimage other -\n" ||
+		len(cause.Diagnostic) != 3 {
+		t.Fatalf("bounded evidence lost: %#v", cause)
+	}
+}

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -55,26 +56,65 @@ func nativeWindowsRequest(t *testing.T) (context.Context, Request, Ledger, *Wind
 	return ctx, r, l, w
 }
 
+func retainedWindowsOperatorEvidence(t *testing.T, w *WindowsChange) {
+	t.Helper()
+	if w == nil {
+		return
+	}
+	root := filepath.Dir(w.Binding.SnapshotPath)
+	for _, name := range []string{"operator.pending", "operator.collected", "operator.failure"} {
+		file, e := os.Open(filepath.Join(root, name))
+		if e != nil {
+			t.Logf("retained operator evidence %s: %v", name, e)
+			continue
+		}
+		data, readErr := io.ReadAll(io.LimitReader(file, 4097))
+		closeErr := file.Close()
+		if readErr != nil || closeErr != nil || len(data) > 4096 {
+			t.Logf("bounded operator evidence %s refused: read=%v close=%v bytes=%d", name, readErr, closeErr, len(data))
+			continue
+		}
+		t.Logf("retained operator evidence %s bytes=%d raw=%q", name, len(data), data)
+	}
+}
+
 // Breakage: a crash after real registry/shortcut mutation before journal update
 // cannot finish the original transaction, or binding appears before all typed
 // participants read back and durable commit_decided. No notification is sent.
 func TestWindowsNativeRecoverFixedMutationBoundaries(t *testing.T) {
 	nativeWindowsRecoveryAdmission(t)
+	wantPhase := map[string]string{
+		"windows:mutated:apply-clsid":    "preparing",
+		"windows:mutated:apply-aumid":    "preparing",
+		"windows:mutated:apply-shortcut": "preparing",
+		"windows:commit_decided":         "commit_decided",
+		"windows:binding_published":      "binding_published",
+	}
 	for _, boundary := range []string{"windows:mutated:apply-clsid", "windows:mutated:apply-aumid", "windows:mutated:apply-shortcut", "windows:commit_decided", "windows:binding_published"} {
 		t.Run(boundary, func(t *testing.T) {
 			ctx, r, l, w := nativeWindowsRequest(t)
+			faultReached := false
 			r.Fault = func(phase string) error {
 				if phase == boundary {
+					faultReached = true
 					return fmt.Errorf("owned TEST crash")
 				}
 				return nil
 			}
-			if _, e := Commit(ctx, r); e == nil {
+			_, initialErr := Commit(ctx, r)
+			if initialErr == nil {
 				t.Fatal("fault not reached")
 			}
 			tx, e := readTransactionFile(filepath.Join(r.ControlRoot, "transaction.json"))
 			if e != nil {
 				t.Fatal(e)
+			}
+			retainedWindowsOperatorEvidence(t, tx.Windows)
+			if !faultReached {
+				t.Fatalf("injected fault not reached: initial=%v windows=%+v", initialErr, tx.Windows)
+			}
+			if tx.Windows == nil || tx.Windows.Phase != wantPhase[boundary] {
+				t.Fatalf("unexpected durable phase: want=%q windows=%+v", wantPhase[boundary], tx.Windows)
 			}
 			// Read actual policy bytes after the injected Commit returns. The
 			// public snapshot reader deliberately blocks every pending journal,
@@ -100,7 +140,8 @@ func TestWindowsNativeRecoverFixedMutationBoundaries(t *testing.T) {
 			repair := Request{ControlRoot: r.ControlRoot, RuntimeRoot: r.RuntimeRoot, Owner: r.Owner, ConsumerID: r.ConsumerID, RecoverOnly: true}
 			after, e := Commit(ctx, repair)
 			if e != nil || after.Generation != l.Generation+1 || len(after.WindowsRetained) != 1 {
-				t.Fatal(after, e, tx.Windows.Phase)
+				retainedWindowsOperatorEvidence(t, tx.Windows)
+				t.Fatalf("recovery failed: after=%+v error=%v windows=%+v", after, e, tx.Windows)
 			}
 			if _, e = os.Lstat(filepath.Join(r.ControlRoot, "transaction.json")); !os.IsNotExist(e) {
 				t.Fatal("pending journal remains", e)
@@ -133,14 +174,28 @@ func TestWindowsNativeRecoverFixedMutationBoundaries(t *testing.T) {
 func TestWindowsNativeForeignDecisionRecoveryRefuses(t *testing.T) {
 	nativeWindowsRecoveryAdmission(t)
 	ctx, r, _, w := nativeWindowsRequest(t)
+	faultReached := false
 	r.Fault = func(phase string) error {
 		if phase == "windows:commit_decided" {
+			faultReached = true
 			return fmt.Errorf("owned TEST crash")
 		}
 		return nil
 	}
-	if _, e := Commit(ctx, r); e == nil {
+	_, initialErr := Commit(ctx, r)
+	if initialErr == nil {
 		t.Fatal("fault not reached")
+	}
+	tx, e := readTransactionFile(filepath.Join(r.ControlRoot, "transaction.json"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	retainedWindowsOperatorEvidence(t, tx.Windows)
+	if !faultReached {
+		t.Fatalf("injected fault not reached: initial=%v windows=%+v", initialErr, tx.Windows)
+	}
+	if tx.Windows == nil || tx.Windows.Phase != "commit_decided" {
+		t.Fatalf("unexpected durable foreign-decision phase: windows=%+v", tx.Windows)
 	}
 	key, e := registry.OpenKey(registry.CURRENT_USER, `Software\Classes\AppUserModelId\`+w.Snapshot.AUMID, registry.QUERY_VALUE|registry.SET_VALUE)
 	if e != nil {
