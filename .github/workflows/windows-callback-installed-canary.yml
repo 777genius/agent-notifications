@@ -169,6 +169,10 @@ jobs:
                 $receipt.physical_checked -ne $true -or $context.provider -cne 'codex' -or
                 $context.session -cne "TEST/$nonce/percent%雪" -or $context.locality -cne 'local' -or
                 $context.interface -cne 'desktop') { throw 'private context receipt mismatch' }
+            $env:TEST_CONTEXT_ROOT = $scratch
+            $env:TEST_CONTEXT_NONCE = $nonce
+            node --input-type=module -e 'import assert from "node:assert/strict"; import path from "node:path"; import {readFile,realpath} from "node:fs/promises"; import {callerContextPath,sha} from "./tests/integration/windows_callback_installed/evidence.mts"; const root=process.env.TEST_CONTEXT_ROOT; const row=JSON.parse(await readFile(path.join(root,"private-context.json"),"utf8")); const file=callerContextPath(row.context_path,process.env.TEST_CONTEXT_NONCE); assert.equal(file.toLowerCase(),path.join(await realpath(root),"context.json").toLowerCase()); assert.equal(sha(await readFile(file)),row.sha256);'
+            if ($LASTEXITCODE -ne 0) { throw 'native physical context path join failed' }
           } finally { Remove-Item -LiteralPath $scratch -Recurse -Force -ErrorAction Stop }
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         if: inputs.phase == 'package_noshow'
