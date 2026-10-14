@@ -133,8 +133,11 @@ func TestLocalAuthorityAtRetainedNativeBoundary(t *testing.T) {
 	}
 	for _, phase := range phases {
 		t.Run(phase, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
+			// Filesystem preparation is outside the original delivery admission.
+			fixtureCtx, cancelFixture := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancelFixture()
+			var ctx context.Context
+			var cancel context.CancelFunc
 			base, err := installruntime.CanonicalPath(t.TempDir())
 			if err != nil {
 				t.Fatal(err)
@@ -144,7 +147,7 @@ func TestLocalAuthorityAtRetainedNativeBoundary(t *testing.T) {
 			if err := os.Mkdir(runtime, 0700); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := installruntime.Commit(ctx, installruntime.Request{ControlRoot: root, RuntimeRoot: runtime, Owner: "TEST", ConsumerID: "TEST", Consumer: installruntime.Consumer{Registration: "TEST"}}); err != nil {
+			if _, err := installruntime.Commit(fixtureCtx, installruntime.Request{ControlRoot: root, RuntimeRoot: runtime, Owner: "TEST", ConsumerID: "TEST", Consumer: installruntime.Consumer{Registration: "TEST"}}); err != nil {
 				t.Fatal(err)
 			}
 			snapshot, err := installruntime.ReadInstalledSnapshot(root)
@@ -193,7 +196,7 @@ func TestLocalAuthorityAtRetainedNativeBoundary(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				facts, err := source.Decode(ctx, source.Stop, []byte(`{"hook_event_name":"Stop","timestamp":"2026-10-02T06:45:01Z","stop_hook_active":false,"session_id":"TEST-retained-claim"}`))
+				facts, err := source.Decode(fixtureCtx, source.Stop, []byte(`{"hook_event_name":"Stop","timestamp":"2026-10-02T06:45:01Z","stop_hook_active":false,"session_id":"TEST-retained-claim"}`))
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -202,6 +205,8 @@ func TestLocalAuthorityAtRetainedNativeBoundary(t *testing.T) {
 					t.Fatal(err)
 				}
 				consumer := local.Consumer{Binding: local.Binding{InstallationID: "TEST-install", BindingID: "TEST-binding", ProfileIdentity: "TEST-profile", Product: "copilot-vscode", Generation: 1}, Gate: localBoundaryGate{profile: profile}, Config: cfg, Desktop: delivery, Clock: clock, Cache: &observation.RecentCache{Root: cacheRoot, Clock: clock}}
+				ctx, cancel = context.WithTimeout(fixtureCtx, 5*time.Second)
+				defer cancel()
 				receipt := consumer.Consume(ctx, facts, request.Deadline)
 				if phase == "unsupported-spool" {
 					if receipt.Status != "rejected" || receipt.Reason != "delivery_unavailable" || spool.prepareErr == nil || spool.prepareErr.Error() != "unsupported private filesystem" {
@@ -244,6 +249,8 @@ func TestLocalAuthorityAtRetainedNativeBoundary(t *testing.T) {
 					}
 				}
 			} else {
+				ctx, cancel = context.WithTimeout(fixtureCtx, 5*time.Second)
+				defer cancel()
 				got = delivery.Deliver(ctx, request)
 			}
 			if installation.acquires != 1 || !lease.released || lease.complete != 1 {
@@ -296,7 +303,7 @@ func TestLocalAuthorityAtRetainedNativeBoundary(t *testing.T) {
 				t.Fatal("early return reached handoff")
 			}
 			// A released span must not leave the real component lock pinned.
-			if _, release, err := installruntime.AcquireSetupLease(ctx, root, snapshot); err != nil {
+			if _, release, err := installruntime.AcquireSetupLease(fixtureCtx, root, snapshot); err != nil {
 				t.Fatal(err)
 			} else {
 				release()
