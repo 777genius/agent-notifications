@@ -354,39 +354,45 @@ func contextWindowsSecuritySnapshot(handle windows.Handle) (contextWindowsSecuri
 		if err = windows.GetAce(acl, index, &ace); err != nil {
 			return snapshot, err
 		}
-		// Other ACE layouts place the SID at different offsets. Refuse them
-		// before interpreting any SID bytes as ACCESS_ALLOWED_ACE.
-		if ace == nil || ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE || ace.Header.AceSize < 16 {
-			return snapshot, errContext
+		parsed, parseErr := contextWindowsAllowedACE(ace)
+		if parseErr != nil {
+			return snapshot, parseErr
 		}
-		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
-		count := *(*byte)(unsafe.Pointer(uintptr(unsafe.Pointer(sid)) + 1))
-		if count > 15 || uint32(ace.Header.AceSize) < 8+8+4*uint32(count) || !sid.IsValid() {
-			return snapshot, errContext
-		}
-		snapshot.ACEs = append(snapshot.ACEs, contextWindowsACE{
-			Type:  ace.Header.AceType,
-			Flags: ace.Header.AceFlags,
-			Mask:  uint32(ace.Mask),
-			SID:   sid.String(),
-		})
+		snapshot.ACEs = append(snapshot.ACEs, parsed)
 	}
 	runtime.KeepAlive(sd)
 	return snapshot, nil
 }
 
-func contextWindowsPrivate(state contextWindowsFileState, security contextWindowsSecurity) bool {
-	if state.Attributes&(windows.FILE_ATTRIBUTE_DIRECTORY|windows.FILE_ATTRIBUTE_REPARSE_POINT) != 0 ||
-		state.Links != 1 ||
-		int64(state.SizeHigh)<<32|int64(state.SizeLow) > int64(ContextLimit) {
-		return false
+func contextWindowsAllowedACE(ace *windows.ACCESS_ALLOWED_ACE) (contextWindowsACE, error) {
+	// ACE_HEADER is 4 bytes, Mask is 4 bytes, and SidStart begins at offset 8.
+	// A SID header is 8 bytes, followed by four bytes per subauthority.
+	const sidOffset = uint32(unsafe.Offsetof(windows.ACCESS_ALLOWED_ACE{}.SidStart))
+	if ace == nil || ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE || uint32(ace.Header.AceSize) < sidOffset+8 {
+		return contextWindowsACE{}, errContext
 	}
+	sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
+	count := *(*byte)(unsafe.Pointer(uintptr(unsafe.Pointer(sid)) + 1))
+	if count > 15 || uint32(ace.Header.AceSize) < sidOffset+8+4*uint32(count) || !sid.IsValid() {
+		return contextWindowsACE{}, errContext
+	}
+	return contextWindowsACE{Type: ace.Header.AceType, Flags: ace.Header.AceFlags, Mask: uint32(ace.Mask), SID: sid.String()}, nil
+}
+
+func contextWindowsPrivate(state contextWindowsFileState, security contextWindowsSecurity) bool {
 	token, err := windows.GetCurrentProcessToken().GetTokenUser()
 	if err != nil || token == nil || token.User.Sid == nil {
 		return false
 	}
+	return contextWindowsPrivateForSID(state, security, token.User.Sid)
+}
+
+func contextWindowsPrivateForSID(state contextWindowsFileState, security contextWindowsSecurity, user *windows.SID) bool {
+	if user == nil || state.Attributes&(windows.FILE_ATTRIBUTE_DIRECTORY|windows.FILE_ATTRIBUTE_REPARSE_POINT) != 0 || state.Links != 1 || int64(state.SizeHigh)<<32|int64(state.SizeLow) > int64(ContextLimit) {
+		return false
+	}
 	owner, err := windows.StringToSid(security.Owner)
-	if err != nil || owner == nil || !owner.Equals(token.User.Sid) {
+	if err != nil || owner == nil || !owner.Equals(user) {
 		return false
 	}
 	if security.Control&windows.SE_DACL_PRESENT == 0 || security.Control&windows.SE_DACL_PROTECTED == 0 {
@@ -404,7 +410,7 @@ func contextWindowsPrivate(state contextWindowsFileState, security contextWindow
 			return false
 		}
 		switch {
-		case sid.Equals(token.User.Sid):
+		case sid.Equals(user):
 			userSeen++
 		case sid.IsWellKnown(windows.WinLocalSystemSid):
 			systemSeen++
@@ -412,8 +418,10 @@ func contextWindowsPrivate(state contextWindowsFileState, security contextWindow
 			return false
 		}
 	}
-	if token.User.Sid.IsWellKnown(windows.WinLocalSystemSid) {
-		return userSeen == 1 && systemSeen == 0
+	if user.IsWellKnown(windows.WinLocalSystemSid) {
+		// The fixed native creator writes owner and SYSTEM grants separately.
+		// Under LocalSystem both grants name the same private principal.
+		return (userSeen == 1 || userSeen == 2) && systemSeen == 0
 	}
 	return userSeen == 1 && systemSeen == 1
 }
