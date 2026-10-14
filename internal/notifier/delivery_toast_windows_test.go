@@ -162,3 +162,12 @@ func TestWindowsToastCommandExcludesWebhookDestination(t *testing.T) {
 		t.Fatal("toast-specific environment lost")
 	}
 }
+
+// Red if PowerShell can open a console window once the terminal bell has freed the hook console.
+// Construct only; this test never starts PowerShell or submits a notification.
+func TestWindowsToastCommandHidesConsoleWindow(t *testing.T) {
+	cmd := windowsToastCommand(context.Background(), "TEST-powershell.exe", []byte("TEST-xml"), "TEST-app")
+	if cmd.SysProcAttr == nil || !cmd.SysProcAttr.HideWindow || cmd.SysProcAttr.CreationFlags&windows.CREATE_NO_WINDOW == 0 {
+		t.Fatal("toast PowerShell must start without a console window")
+	}
+}
