@@ -35,6 +35,32 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  fixture-contracts:
+    name: Pure fixture contracts
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout exact source candidate
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Set up existing Python baseline
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Check pure contracts in fresh TEST scratch
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          test_root="$(mktemp -d "$RUNNER_TEMP/TEST-platform-clock-pure-XXXXXX")"
+          cp scripts/opencode-platform-clock-prequalification.{py,mjs} "$test_root/"
+          cp scripts/testdata/opencode-platform-clock-prequalification/test_fixture.py "$test_root/"
+          node_binary="$(command -v node)"
+          "$node_binary" --version
+          python -B "$test_root/test_fixture.py" --node "$node_binary"
+
   module-clock:
     name: Actual module ${{ matrix.platform }} ${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}

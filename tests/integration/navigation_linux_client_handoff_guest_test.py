@@ -562,7 +562,7 @@ raise SystemExit(0 if result['passed'] else 1)
             report['providerOwners'] = dict(mako=mako_owner, gtk=gtk_owner, frontend=frontend_owner)
         def managed_state(expected):
             ledger = json.loads(read(control / 'ownership.json'))
-            if cli.is_symlink() or sha(cli) != expected or type(ledger.get('Generation')) is not int or ledger['Generation'] <= 0 or type(ledger.get('WriterFloor')) is not int or not 1 <= ledger['WriterFloor'] <= 5:
+            if cli.is_symlink() or sha(cli) != expected or type(ledger.get('Generation')) is not int or ledger['Generation'] <= 0 or type(ledger.get('WriterFloor')) is not int or not 1 <= ledger['WriterFloor'] <= 6:
                 raise RuntimeError('actual_managed_bytes_generation_floor_required')
             return dict(binarySHA256=expected, generation=ledger['Generation'], writerFloor=ledger['WriterFloor'])
 
@@ -571,9 +571,9 @@ raise SystemExit(0 if result['passed'] else 1)
             for path, digest in a['retained'].items():
                 if sha(Path(path)) != digest: raise RuntimeError('retained_A_mutated_before_transition')
             markers = {1: b'agent-notifications-managed-writer-protocol-v1', 2: b'agent-notifications-managed-writer-protocol-v1',
-                3: b'agent-notifications-managed-writer-protocol-v3', 4: b'agent-notifications-managed-writer-protocol-v4', 5: b'agent-notifications-managed-writer-protocol-v5'}
+                3: b'agent-notifications-managed-writer-protocol-v3', 4: b'agent-notifications-managed-writer-protocol-v4', 5: b'agent-notifications-managed-writer-protocol-v5', 6: b'agent-notifications-managed-writer-protocol-v6'}
             candidate = (source_stage / staged.name).read_bytes()
-            if hashlib.sha256(candidate).hexdigest() != next_sha or markers[before['writerFloor']] not in candidate or (before['writerFloor'] == 5 and markers[4] not in candidate):
+            if hashlib.sha256(candidate).hexdigest() != next_sha or markers[before['writerFloor']] not in candidate or (before['writerFloor'] in (5, 6) and markers[4] not in candidate):
                 raise RuntimeError('compatible_managed_transition_input_required')
             command(label, ['internal-install-runtime', '--stage', str(source_stage), '--entry', staged.name,
                 '--target', str(managed / 'bin'), '--control-root', str(control), '--consumer', 'claude-hooks', '--refresh'], executor=executor, expected=executor_sha)

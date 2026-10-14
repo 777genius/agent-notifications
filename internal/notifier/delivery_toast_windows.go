@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync/atomic"
 
 	"golang.org/x/sys/windows"
 
@@ -161,3 +162,53 @@ func (s windowsPowerShellToastSession) Submit(ctx context.Context, r notificatio
 }
 
 func (windowsPowerShellToastSession) Close() error { return nil }
+
+// The admitted navigation session retains one physical generation and deadline
+// through Ready, immutable record publication and the sole named-notifier Show.
+type windowsNavigationSession struct {
+	submitted  atomic.Bool
+	permission string
+	generation *windowscallback.Custody
+	end        uint64
+	target     notification.DesktopTarget
+}
+
+func openWindowsNavigation(ctx context.Context, r notification.Request) (windowsToastSession, error) {
+	end := windowscallback.Deadline(ctx)
+	g, e := windowscallback.Open(ctx, windowscallback.Binding{SnapshotPath: r.Target.Windows.SnapshotPath, SHA256: r.Target.Windows.SHA256}, end)
+	if e != nil {
+		return nil, e
+	}
+	return &windowsNavigationSession{generation: g, end: end, target: r.Target}, nil
+}
+func (s *windowsNavigationSession) Ready(ctx context.Context) error {
+	o, e := s.generation.ReadyObservation(ctx, s.end)
+	s.permission = o.Permission
+	return e
+}
+func (s *windowsNavigationSession) Submit(ctx context.Context, r notification.Request) error {
+	if !s.submitted.CompareAndSwap(false, true) {
+		return windowscallback.ErrUnavailable
+	}
+	if r.Target.Provider != s.target.Provider || r.Target.ThreadID != s.target.ThreadID || r.Target.Windows != s.target.Windows {
+		return windowscallback.ErrUnavailable
+	}
+	record, e := s.generation.PublishRecord(ctx, s.target.ThreadID, s.end)
+	if e != nil {
+		return e
+	}
+	silent := "0"
+	if r.Silent || !r.Policy.SoundEnabled {
+		silent = "1"
+	}
+	_, e = s.generation.Operator(ctx, "show", []string{record.Reference, r.Content.Title, desktopBodyWithSubtitle(r.Content), silent}, s.end)
+	return e
+}
+func (s *windowsNavigationSession) Close() error { return s.generation.Close() }
+
+func (s *windowsNavigationSession) ReadinessReason() string {
+	if s.permission == "permission_unknown" {
+		return "permission_unknown"
+	}
+	return "installed_readiness_verified"
+}

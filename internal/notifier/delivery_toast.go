@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/777genius/agent-notifications/internal/notification"
+	"github.com/777genius/agent-notifications/internal/windowscallback"
 )
 
 const windowsToastBackend = "windows_toast"
@@ -17,11 +18,12 @@ type windowsToastSession interface {
 }
 
 // WindowsToastDelivery is the Windows explicit-notify adapter. It shows one
-// informational toast and never starts the click-to-focus handler or falls
-// back to beeep after a possible toast effect.
+// informational or explicitly bound native toast. A possible Show is never
+// followed by alternate delivery or automatic replay.
 type WindowsToastDelivery struct {
-	Clock BootClock
-	Open  func(context.Context) (windowsToastSession, error)
+	Clock          BootClock
+	Open           func(context.Context) (windowsToastSession, error)
+	OpenNavigation func(context.Context, notification.Request) (windowsToastSession, error)
 }
 
 var _ notification.DeliveryPort = (*WindowsToastDelivery)(nil)
@@ -53,6 +55,7 @@ func (d *WindowsToastDelivery) checkAndDeliver(ctx context.Context, r notificati
 		out.Reason = reason
 		return out
 	}
+	native := false
 	nav := r.Navigation
 	if nav == "" {
 		nav = notification.Required
@@ -71,6 +74,9 @@ func (d *WindowsToastDelivery) checkAndDeliver(ctx context.Context, r notificati
 		if nav == notification.Required {
 			return finish("rejected", "navigation_disabled")
 		}
+	} else if r.Target.Provider == "codex" && r.Target.ThreadID != "" && r.Target.Windows.SnapshotPath != "" && r.Target.Windows.SHA256 != "" {
+		native = true
+		out.Navigation = notification.NavigationResult{Capability: "unavailable", Precision: "none", Reason: "navigation_unavailable"}
 	} else if r.Target.ThreadID != "" {
 		out.Navigation = notification.NavigationResult{Capability: "unavailable", Precision: "none", Reason: "navigation_unavailable"}
 		if nav == notification.Required {
@@ -109,30 +115,67 @@ func (d *WindowsToastDelivery) checkAndDeliver(ctx context.Context, r notificati
 		}
 	}()
 	defer func() { cancel(); <-stopped }()
-	session, err := open(operation)
-	if err != nil || session == nil {
+	if native {
+		navOpen := d.OpenNavigation
+		if navOpen == nil {
+			navOpen = openWindowsNavigation
+		}
+		open = func(ctx context.Context) (windowsToastSession, error) { return navOpen(ctx, r) }
+	}
+	openReady := func(candidate func(context.Context) (windowsToastSession, error)) (windowsToastSession, error) {
+		session, e := candidate(operation)
+		if e != nil || session == nil {
+			if e == nil {
+				e = windowscallback.ErrUnavailable
+			}
+			return nil, e
+		}
+		if e = session.Ready(operation); e != nil {
+			_ = session.Close()
+			return nil, e
+		}
+		return session, nil
+	}
+	session, err := openReady(open)
+	if err != nil && native && nav == notification.BestEffort && operation.Err() == nil && !errors.Is(err, windowscallback.ErrUnknown) && !errors.Is(err, windowscallback.ErrDisabled) {
+		native = false
+		out.Navigation = notification.NavigationResult{Capability: "unavailable", Precision: "none", Reason: "navigation_unavailable"}
+		fallback := d.Open
+		if fallback == nil {
+			fallback = openWindowsToast
+		}
+		session, err = openReady(fallback)
+	}
+	if err != nil {
+		if errors.Is(err, windowscallback.ErrDisabled) {
+			return finish("rejected", "permission_disabled")
+		}
 		if operation.Err() != nil {
 			return finish("rejected", "expired")
 		}
 		return finish("rejected", "unsupported_notifier")
 	}
 	defer func() { _ = session.Close() }()
-	if err = session.Ready(operation); err != nil {
-		if operation.Err() != nil {
-			return finish("rejected", "expired")
-		}
-		return finish("rejected", "unsupported_notifier")
-	}
 	if _, err = remainingBudget(d.Clock, r); err != nil || operation.Err() != nil {
 		return finish("rejected", "expired")
 	}
+	if native {
+		out.Navigation = notification.NavigationResult{Capability: "available", Precision: "chat_id", Scope: "selected_windows_generation", Reason: "configured_codex_desktop"}
+	}
 	if readOnly {
-		return finish("ready", "permission_authorized")
+		reason := "permission_authorized"
+		if native {
+			reason = "installed_readiness_verified"
+			if observed, ok := session.(interface{ ReadinessReason() string }); ok {
+				reason = observed.ReadinessReason()
+			}
+		}
+		return finish("ready", reason)
 	}
 	err = session.Submit(operation, r)
 	if err != nil {
 		operationErr := operation.Err()
-		if operationErr != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		if errors.Is(err, windowscallback.ErrUnknown) || operationErr != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			reason := "handoff_unconfirmed"
 			if errors.Is(operationErr, context.DeadlineExceeded) || operationErr == nil && errors.Is(err, context.DeadlineExceeded) {
 				reason = "native_submission_deadline"
