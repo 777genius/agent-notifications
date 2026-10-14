@@ -32,7 +32,7 @@ const control = path.join(profile,'agent-notifications'), global = path.join(roo
 const title = 'Navigation TEST '+tuple.nonce, body = 'Cold callback TEST '+tuple.nonce;
 const thread = 'TEST/'+tuple.nonce+'/percent%雪';
 let count = 0, unknown = false, removed = false;
-const childEnv = {...env,AGENT_NOTIFICATIONS_CONFIG:global};
+const childEnv: NodeJS.ProcessEnv = {...env,AGENT_NOTIFICATIONS_CONFIG:global};
 // Windows environment names are case-insensitive; avoid duplicate spellings.
 for (const name of Object.keys(childEnv)) if (name.toLowerCase() === 'appdata' ||
   name.toLowerCase() === 'agent_notifications_control_root') delete childEnv[name];
