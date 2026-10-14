@@ -120,6 +120,15 @@ struct FixtureRollbackReport {
     records[count]={api,result,statusKnown};
     ++count;
   }
+  bool matches(size_t index,const char* expected,DWORD expectedStatus,
+   bool expectedStatusKnown)const noexcept{
+    if(index>=count||index>=records.size())return false;
+    const auto& record=records[index];
+    if(!record.api||!expected)return false;
+    return !std::strcmp(record.api,expected)
+      &&record.result==expectedStatus
+      &&record.statusKnown==expectedStatusKnown;
+  }
 };
 struct FixtureCleanupObservation {
   bool known=false;
@@ -159,10 +168,7 @@ struct FixtureCleanupFailure : std::exception {
   const char* what()const noexcept override{return detail;}
   bool matches(size_t index,const char* expected,DWORD expectedStatus,
    bool expectedStatusKnown)const noexcept{
-    return index<report.count&&index<report.records.size()
-      &&report.records[index].api&&!strcmp(report.records[index].api,expected)
-      &&report.records[index].result==expectedStatus
-      &&report.records[index].statusKnown==expectedStatusKnown;
+    return report.matches(index,expected,expectedStatus,expectedStatusKnown);
   }
 };
 struct FixtureHandleState {
