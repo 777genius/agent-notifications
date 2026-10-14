@@ -806,40 +806,57 @@ namespace wcb {
   inline std::vector<uint8_t> configuredShortcutBytes(const Generation& g,uint64_t end=0 WCB_SHORTCUT_DEADLINE_TEST_PARAM){
     return configuredShortcutBytes(shortcutFixture(g),end WCB_SHORTCUT_DEADLINE_TEST_ARG);
   }
-  inline void applyShortcut(const Generation& g,uint64_t end){
-    auto p=shortcutPath(g,end);
+  inline void applyShortcutAt(const Generation& g,const fs::path& p,uint64_t end,OperatorDiagnostic* diagnostic=nullptr){
+    if(diagnostic)diagnostic->enter("shortcut_parent_custody");
     auto parents=shortcutParents(p,end);
     installedBudget(end);
     if(GetFileAttributesW(p.c_str())!=INVALID_FILE_ATTRIBUTES){
-      shortcutReadback(g,end);
+      if(diagnostic)diagnostic->enter("shortcut_existing_readback");
+      shortcutReadbackAt(g,p,end);
       installedBudget(end);
       return;
     }
+    if(diagnostic)diagnostic->enter("shortcut_absence_contract");
     require(GetLastError()==ERROR_FILE_NOT_FOUND);
     installedBudget(end);
+    if(diagnostic)diagnostic->enter("shortcut_serialization");
     auto data=configuredShortcutBytes(g,end);
+    if(diagnostic)diagnostic->enter("shortcut_serialized_readback");
     shortcutReadbackBytes(g,data,end);
     installedBudget(end);
     auto stage=p;
     stage+=L".stage";
     installedBudget(end);
+    if(diagnostic)diagnostic->enter("shortcut_stage_lookup");
     if(GetFileAttributesW(stage.c_str())==INVALID_FILE_ATTRIBUTES){
       require(GetLastError()==ERROR_FILE_NOT_FOUND);
       installedBudget(end);
+      if(diagnostic)diagnostic->enter("shortcut_stage_create");
       exclusiveFile(stage,g.sid,data);
       installedBudget(end);
     }
+    if(diagnostic)diagnostic->enter("shortcut_stage_open");
     auto file=writableLeaf(stage,g);
+    if(diagnostic)diagnostic->enter("shortcut_stage_bytes");
     auto held=bytes(file.h,65536);
     require(held==data);
     installedBudget(end);
+    if(diagnostic)diagnostic->enter("shortcut_stage_readback");
     shortcutReadbackBytes(g,held,end);
     installedBudget(end);
+    if(diagnostic)diagnostic->enter("shortcut_stage_rename");
     renameLeaf(file.h,parents.back().h,p.filename().wstring(),end);
+    if(diagnostic)diagnostic->enter("shortcut_stage_close");
     file.closeChecked();
     installedBudget(end);
-    shortcutReadback(g,end);
+    if(diagnostic)diagnostic->enter("shortcut_final_readback");
+    shortcutReadbackAt(g,p,end);
     installedBudget(end);
+  }
+  inline void applyShortcut(const Generation& g,uint64_t end,OperatorDiagnostic* diagnostic=nullptr){
+    if(diagnostic)diagnostic->enter("shortcut_path");
+    const auto p=shortcutPath(g,end);
+    applyShortcutAt(g,p,end,diagnostic);
   }
   inline void restoreClass(const Generation& g,uint64_t end){
     SharedRegistryParent parent;

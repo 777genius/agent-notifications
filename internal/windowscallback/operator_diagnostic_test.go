@@ -33,6 +33,44 @@ func TestOperatorDiagnosticClosedFrame(t *testing.T) {
 	}
 }
 
+// Breakage: shortcut failures collapse to operator_dispatch, or narrow
+// diagnostic phases accidentally become a success/replay classification.
+func TestShortcutOperatorDiagnosticPhases(t *testing.T) {
+	phases := []string{
+		"shortcut_path", "shortcut_parent_custody", "shortcut_existing_readback", "shortcut_absence_contract",
+		"shortcut_serialization", "shortcut_serialized_readback", "shortcut_stage_lookup", "shortcut_stage_create",
+		"shortcut_stage_open", "shortcut_stage_bytes", "shortcut_stage_readback", "shortcut_stage_rename",
+		"shortcut_stage_close", "shortcut_final_readback",
+	}
+	for _, phase := range phases {
+		raw := []byte("WCD1 " + phase + " other -\n")
+		fields, e := decodeOperatorDiagnostic(raw)
+		if e != nil || !reflect.DeepEqual(fields, []string{phase, "other", "-"}) {
+			t.Fatal(phase, fields, e)
+		}
+	}
+	for _, phase := range []string{"shortcut_unbound", "shortcut_stage_rename_win32", "operator_dispatch"} {
+		raw := []byte("WCD1 " + phase + " other -\n")
+		if phase == "operator_dispatch" {
+			if _, e := decodeOperatorDiagnostic(raw); e != nil {
+				t.Fatal(phase, e)
+			}
+			continue
+		}
+		if _, e := decodeOperatorDiagnostic(raw); e == nil {
+			t.Fatal("unbounded shortcut diagnostic accepted", phase)
+		}
+	}
+	output, stderr := &cappedOutput{}, &cappedOutput{}
+	_, _ = io.Copy(output, strings.NewReader("WCB1 unavailable not_checked 0\n"))
+	_, _ = io.Copy(stderr, strings.NewReader("WCD1 shortcut_stage_rename other -\n"))
+	err := boundedUnknown("apply-shortcut", "helper_exit_or_state", errors.New("exit status 2"), 6672, 2, output, stderr,
+		[]string{"shortcut_stage_rename", "other", "-"})
+	if !errors.Is(err, ErrUnknown) {
+		t.Fatal("shortcut diagnostic changed unknown classification", err)
+	}
+}
+
 type failedRead struct{}
 
 func (failedRead) Read([]byte) (int, error) { return 0, io.ErrUnexpectedEOF }

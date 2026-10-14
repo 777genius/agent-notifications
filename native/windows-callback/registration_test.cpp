@@ -677,6 +677,33 @@ static ShortcutFixture substituted(
  const ShortcutFixture& fixture,std::wstring&& target,HANDLE custody){
   return {std::move(target),fixture.args,fixture.aumid,fixture.clsid,custody};
 }
+static void shortcutApplyContracts(const Generation& g,uint64_t end){
+  stage("child_shortcut_private_apply");
+  const auto p=fs::path(g.root.wstring().substr(4))/(L"TEST-apply-"+wide(randomID())+L".lnk");
+  const fs::path stagePath=p.wstring()+L".stage";
+  OperatorDiagnostic diagnostic;
+  try{
+    applyShortcutAt(g,p,end,&diagnostic);
+    require(!strcmp(diagnostic.phase,"shortcut_final_readback"));
+    shortcutReadbackAt(g,p,end);
+    require(GetFileAttributesW(stagePath.c_str())==INVALID_FILE_ATTRIBUTES
+      &&GetLastError()==ERROR_FILE_NOT_FOUND);
+    require(win32Result("DeleteFileW",DeleteFileW(p.c_str())));
+  }catch(...){
+    // Preserve the actual failing production boundary before TEST cleanup.
+    diagnostic.emit();
+    for(const auto& ownedPath:{p,stagePath}){
+      if(!DeleteFileW(ownedPath.c_str())){
+        const auto error=GetLastError();
+        if(error!=ERROR_FILE_NOT_FOUND)
+          registryStatus("TEST private apply cleanup failed",LSTATUS(error));
+      }
+    }
+    throw;
+  }
+  std::cout<<"TEST private applyShortcut passed effects=private-test-root-only"
+    <<" stage_rename=true final_readback=true diagnostic=shortcut_final_readback\n";
+}
 static std::wstring syntheticLongShortcutTarget(const ShortcutFixture& fixture){
   const auto separator=fixture.target.find_last_of(L'\\');
   require(separator!=std::wstring::npos&&separator>2);
@@ -947,6 +974,8 @@ static void shortcutContracts(const Generation& g,uint64_t end){
   // The exact post-API tests above retain deterministic deadline coverage and
   // deliberately let every unrelated failure escape.
   installedBudget(end);
+  shortcutApplyContracts(g,end);
+  installedBudget(end);
   std::cout<<"TEST shortcut contract passed"
     <<" path=dos+exact-parsing-name+held-custody short_round_trip=true"
     <<" actual_long_round_trip=true synthetic_target_unavailable=true"
@@ -954,9 +983,10 @@ static void shortcutContracts(const Generation& g,uint64_t end){
     <<" persistence=ipersiststream legacy_setpath_reader_compatible=true"
     <<" cleanup=co_task_mem+pidl+global_lock"
     <<" test_target_cleanup=true"
-    <<" deadline_inside_serialization_after_api=true"
-    <<" deadline_inside_readback_after_api=true"
-    <<" deadline_boundaries=post_API_Save+post_API_Load exactAPI=unknown\n";
+   <<" deadline_inside_serialization_after_api=true"
+   <<" deadline_inside_readback_after_api=true"
+   <<" applyShortcut_private_path=true"
+   <<" deadline_boundaries=post_API_Save+post_API_Load exactAPI=unknown\n";
 }
 static void writePrivate(const fs::path& path,const std::vector<uint8_t>& data,SECURITY_ATTRIBUTES& sa){
   Handle file(CreateFileW(path.c_str(),GENERIC_WRITE,0,&sa,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,nullptr));
