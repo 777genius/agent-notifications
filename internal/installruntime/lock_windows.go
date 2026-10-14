@@ -147,8 +147,8 @@ func inspectPrivateWindowsHandle(h windows.Handle) (bool, error) {
 	return canonicalPrivateWindowsDescriptor(sd, user.User.Sid)
 }
 
-// Canonical locks have exactly the policy installed by
-// privateWindowsSecurityDescriptor(false). Accepted read-only legacy grants,
+// Canonical locks retain either the installation policy or the tighter
+// user/SYSTEM configuration policy. Accepted read-only legacy grants,
 // deny/inherited ACEs or a SYSTEM/Admin owner still require normalization.
 func canonicalPrivateWindowsDescriptor(sd *windows.SECURITY_DESCRIPTOR, user *windows.SID) (bool, error) {
 	owner, _, err := sd.Owner()
@@ -169,13 +169,15 @@ func canonicalPrivateWindowsDescriptor(sd *windows.SECURITY_DESCRIPTOR, user *wi
 	if err != nil {
 		return false, err
 	}
-	if acl == nil || acl.AceCount != 3 {
+	if acl == nil || (acl.AceCount != 2 && acl.AceCount != 3) {
 		return false, nil
 	}
 	// A multiset also handles a process whose user SID is SYSTEM itself.
 	remaining := map[string]int{user.String(): 1}
 	remaining["S-1-5-18"]++
-	remaining["S-1-5-32-544"]++
+	if acl.AceCount == 3 {
+		remaining["S-1-5-32-544"]++
+	}
 	const fileAllAccess = windows.STANDARD_RIGHTS_REQUIRED | windows.SYNCHRONIZE | 0x1ff
 	for i := uint32(0); i < uint32(acl.AceCount); i++ {
 		var ace *windows.ACCESS_ALLOWED_ACE

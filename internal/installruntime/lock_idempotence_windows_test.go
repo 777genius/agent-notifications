@@ -32,7 +32,9 @@ func TestCanonicalPrivateWindowsDescriptor(t *testing.T) {
 		{"inherit only", "O:" + sid + "D:P(A;OICIIO;FA;;;" + sid + ")(A;;FA;;;SY)(A;;FA;;;BA)", false},
 		{"deny", "O:" + sid + "D:P(D;;GW;;;WD)" + private, false},
 		{"wrong owner", "O:WDD:P" + private, false},
-		{"missing principal", "O:" + sid + "D:P(A;;FA;;;" + sid + ")(A;;FA;;;SY)", false},
+		{"private configuration", "O:" + sid + "D:P(A;;FA;;;" + sid + ")(A;;FA;;;SY)", true},
+		{"missing SYSTEM", "O:" + sid + "D:P(A;;FA;;;" + sid + ")(A;;FA;;;BA)", false},
+		{"missing user", "O:" + sid + "D:P(A;;FA;;;SY)(A;;FA;;;BA)", false},
 		{"duplicate principal", "O:" + sid + "D:P(A;;FA;;;" + sid + ")(A;;FA;;;SY)(A;;FA;;;SY)", false},
 		{"reduced user rights", "O:" + sid + "D:P(A;;GR;;;" + sid + ")(A;;FA;;;SY)(A;;FA;;;BA)", false},
 		{"generic all mask", "O:" + sid + "D:P(A;;GA;;;" + sid + ")(A;;FA;;;SY)(A;;FA;;;BA)", false},
@@ -63,6 +65,7 @@ func TestCanonicalPrivateWindowsDescriptorSystemUser(t *testing.T) {
 		want bool
 	}{
 		{"O:SYD:P(A;;FA;;;SY)(A;;FA;;;SY)(A;;FA;;;BA)", true},
+		{"O:SYD:P(A;;FA;;;SY)(A;;FA;;;SY)", true},
 		{"O:SYD:P(A;;FA;;;SY)(A;;FA;;;SY)(A;;FA;;;SY)", false},
 	} {
 		sd, err := windows.SecurityDescriptorFromString(tc.sddl)
