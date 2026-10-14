@@ -55,6 +55,8 @@ static void inertUriAttributes(const char* label, const winrt::Windows::Foundati
  if (SUCCEEDED(status)) inertUriNote("attribute_roundtrip",roundtrip);
 }
 static void archiveAt(const char* step) { archiveStep = step; }
+static std::atomic<const char*> clickStep{"entry"};
+static void clickAt(const char* step) { clickStep.store(step,std::memory_order_relaxed); }
 static std::vector<Handle> roots;
 static void budget() { require(GetTickCount64() < end); }
 static void put(JsonObject& j, const wchar_t* k, const std::string& v) {
@@ -718,24 +720,24 @@ struct Process {
  DWORD pid, integrity = 0;
  Process(DWORD id, bool shell, const Route* route):
   handle(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION|SYNCHRONIZE,FALSE,id)),pid(id) {
-  require(handle.h != nullptr && handle.h != INVALID_HANDLE_VALUE);
-  path = image(handle.h);
+  clickAt("process_open"); require(handle.h != nullptr && handle.h != INVALID_HANDLE_VALUE);
+  clickAt("process_image"); path = image(handle.h);
   require(GetProcessId(handle.h) == id && WaitForSingleObject(handle.h,0) == WAIT_TIMEOUT);
   // Read only the held process/kernel image before excluding known foreign
   // roots. Never inspect foreign paths, signatures, tokens or other resources.
-  if (shell && !shellImage(path)) throw KnownForeignShell{};
-  born = birth(handle.h);
+  clickAt("shell_image_classification"); if (shell && !shellImage(path)) throw KnownForeignShell{};
+  clickAt("process_birth"); born = birth(handle.h);
   DWORD session = 0;
-  require(ProcessIdToSessionId(pid,&session) && session == ownSession()
+  clickAt("process_user_session"); require(ProcessIdToSessionId(pid,&session) && session == ownSession()
    && processSID(handle.h,integrity) == ownerSID());
   if (shell) {
-   const auto admitted = fs::path(L"\\\\?\\"+path);
+   clickAt("shell_path_grammar"); const auto admitted = fs::path(L"\\\\?\\"+path);
    require(rootGrammar(narrow(admitted.wstring())));
-   auto parent = admitted.root_path(); shellParents.push_back(open(parent,true));
+   clickAt("shell_parent_custody"); auto parent = admitted.root_path(); shellParents.push_back(open(parent,true));
    for (const auto& part : admitted.parent_path().relative_path()) {
     budget(); parent /= part; shellParents.push_back(open(parent,true));
    }
-   shellFile = Handle(CreateFileW(admitted.c_str(),GENERIC_READ|READ_CONTROL,FILE_SHARE_READ,nullptr,
+   clickAt("shell_file_open"); shellFile = Handle(CreateFileW(admitted.c_str(),GENERIC_READ|READ_CONTROL,FILE_SHARE_READ,nullptr,
     OPEN_EXISTING,FILE_FLAG_OPEN_REPARSE_POINT,nullptr));
    require(shellFile.h != INVALID_HANDLE_VALUE);
    BY_HANDLE_FILE_INFORMATION information{};
@@ -743,10 +745,10 @@ struct Process {
    require(GetFileInformationByHandle(shellFile.h,&information)
     && !(information.dwFileAttributes&(FILE_ATTRIBUTE_REPARSE_POINT|FILE_ATTRIBUTE_DIRECTORY))
     && information.nNumberOfLinks > 0);
-   require(_wcsicmp(physical(shellFile.h).c_str(),admitted.c_str()) == 0);
-   shellSignature(shellFile.h,admitted.wstring());
+   clickAt("shell_file_identity"); require(_wcsicmp(physical(shellFile.h).c_str(),admitted.c_str()) == 0);
+   clickAt("shell_signature"); shellSignature(shellFile.h,admitted.wstring());
   } else {
-   require(route != nullptr && L"\\\\?\\"+path == (route->path/L"helper.exe").wstring());
+   clickAt("receiver_image_identity"); require(route != nullptr && L"\\\\?\\"+path == (route->path/L"helper.exe").wstring());
    auto file = open(path,false);
    require(physical(file.h) == (route->path/L"helper.exe").wstring()
     && sha(bytes(file.h,16*1024*1024)) == route->snapshot.digest);
@@ -762,7 +764,7 @@ struct Process {
 static std::vector<DWORD> helpers(const Route& route) {
  std::vector<DWORD> matches;
  Handle census(CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS,0));
- require(census.h != INVALID_HANDLE_VALUE);
+ clickAt("helper_process_snapshot"); require(census.h != INVALID_HANDLE_VALUE);
  PROCESSENTRY32W item{sizeof(item)};
  require(Process32FirstW(census.h,&item)); unsigned count = 0;
  do {
@@ -794,7 +796,7 @@ static Selection census(IUIAutomation* automation, IUIAutomationTreeWalker* walk
   budget(); require(++rootsSeen <= 128);
   int pid = 0; winrt::check_hresult(first->get_CurrentProcessId(&pid));
   std::unique_ptr<Process> owner;
-  require(pid > 0);
+  clickAt("uia_root_pid"); require(pid > 0);
   try { owner = std::make_unique<Process>(DWORD(pid),true,nullptr); }
   catch (const KnownForeignShell&) {
    // A positively classified non-Shell kernel image is the only exclusion.
@@ -806,13 +808,13 @@ static Selection census(IUIAutomation* automation, IUIAutomationTreeWalker* walk
    while (!pending.empty()) {
     auto node = std::move(pending.back()); pending.pop_back();
     budget(); owner->live(); require(++nodes <= 2048 && node.depth <= 24);
-    int provider = 0; winrt::check_hresult(node.element->get_CurrentProcessId(&provider)); require(provider == pid);
-    const auto literal = name(node.element.Get());
+    clickAt("uia_node_provider_identity"); int provider = 0; winrt::check_hresult(node.element->get_CurrentProcessId(&provider)); require(provider == pid);
+    clickAt("uia_node_name"); const auto literal = name(node.element.Get());
     if (literal == body) { require(!found.body); found.body = node.element; }
     if (literal == title) {
      require(++titles == 1); found.title = node.element; found.pid = DWORD(pid);
      auto parent = node.element;
-     for (unsigned depth = 0; depth < 8; ++depth) {
+     clickAt("uia_title_parent_row"); for (unsigned depth = 0; depth < 8; ++depth) {
       ComPtr<IUIAutomationElement> next;
       budget(); winrt::check_hresult(walker->GetParentElement(parent.Get(),&next)); require(next != nullptr);
       winrt::check_hresult(next->get_CurrentProcessId(&provider)); require(provider == pid);
@@ -931,36 +933,37 @@ static void sameSelection(IUIAutomation* automation, const Selection& old, const
  }
 }
 static void click() {
- Route route;
+ clickAt("route_open"); Route route;
  auto sender = read(L"sender.json"); join(sender);
  require(sender.GetNamedBoolean(L"collected") && sender.GetNamedNumber(L"code") == 0);
  const auto request = read(L"route.json");
  const auto title = string(request,L"title"), body = string(request,L"body");
  require(title == L"Navigation TEST "+wide(nonce) && body == L"Cold callback TEST "+wide(nonce));
- require(helpers(route).empty()); interactive();
- ComPtr<IUIAutomation> automation;
+ clickAt("cold_helper_census"); require(helpers(route).empty());
+ clickAt("interactive_desktop"); interactive();
+ clickAt("uia_create"); ComPtr<IUIAutomation> automation;
  budget(); winrt::check_hresult(CoCreateInstance(CLSID_CUIAutomation,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&automation)));
  ComPtr<IUIAutomationTreeWalker> walker;
  winrt::check_hresult(automation->get_RawViewWalker(&walker));
- Selection selected;
+ clickAt("uia_select_notification"); Selection selected;
  while (!selected.row) { budget(); selected = census(automation.Get(),walker.Get(),title,body); if (!selected.row) Sleep(50); }
- Process shell(selected.pid,true,nullptr);
+ clickAt("selected_shell_identity"); Process shell(selected.pid,true,nullptr);
  auto proof = fact(); put(proof,L"snapshot_sha",route.snapshotSHA);
  put(proof,L"reference",route.record.reference); put(proof,L"generation",route.snapshot.generation);
  num(proof,L"shell_pid",shell.pid); put(proof,L"shell_birth",std::to_string(shell.born));
  num(proof,L"shell_integrity_rid",shell.integrity);
  publish(L"click.intent.json",proof);
- ReceiverCollector collector(route); collector.ready();
+ clickAt("receiver_collector_arm"); ReceiverCollector collector(route); collector.ready();
  // Intent I/O and collector startup cannot make the earlier UI observation current.
- auto final = census(automation.Get(),walker.Get(),title,body);
+ clickAt("uia_revalidate_selection"); auto final = census(automation.Get(),walker.Get(),title,body);
  sameSelection(automation.Get(),selected,final);
- ComPtr<IUIAutomationInvokePattern> pattern;
+ clickAt("uia_default_invoke_pattern"); ComPtr<IUIAutomationInvokePattern> pattern;
  budget(); winrt::check_hresult(final.row->GetCurrentPatternAs(UIA_InvokePatternId,IID_PPV_ARGS(&pattern)));
  interactive(); shell.live(); require(helpers(route).empty()); budget();
- collector.admit(); budget(); winrt::check_hresult(pattern->Invoke()); budget();
+ clickAt("invoke_once"); collector.admit(); budget(); winrt::check_hresult(pattern->Invoke()); budget();
  put(proof,L"invoke","returned_once"); num(proof,L"click_boot_ms",collector.clickBoot.load());
  publish(L"click.json",proof);
- collector.collect();
+ clickAt("receiver_collection"); collector.collect();
 }
 
 int wmain(int argc, wchar_t** argv) {
@@ -1022,8 +1025,9 @@ int wmain(int argc, wchar_t** argv) {
   return 0;
  } catch (...) {
   try { auto report = fact(); put(report,L"phase",phase); put(report,L"outcome","refused_or_unknown");
-   if (archiveFacts) {
-    put(report,L"last_archive_step",archiveStep); report.Insert(L"archive_observations",*archiveFacts);
+   if (phase == "click") put(report,L"last_click_step",clickStep.load(std::memory_order_relaxed));
+   if (archiveFacts || phase == "click") {
+    if (archiveFacts) { put(report,L"last_archive_step",archiveStep); report.Insert(L"archive_observations",*archiveFacts); }
     try { throw; }
     catch (const winrt::hresult_error& error) {
      put(report,L"failure_kind","hresult"); num(report,L"hresult",DWORD(error.code().value));
