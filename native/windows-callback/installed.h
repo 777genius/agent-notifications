@@ -765,7 +765,10 @@ namespace wcb {
     info->FileNameLength=DWORD(n);
     memcpy(info->FileName,name.data(),n);
     installedBudget(end);
-    require(SetFileInformationByHandle(file,FileRenameInfo,info,DWORD(storage.size())));
+    if(!SetFileInformationByHandle(file,FileRenameInfo,info,DWORD(storage.size()))){
+      const auto error=GetLastError();
+      throw RegistryFailure("shortcut_stage_rename",error);
+    }
     installedBudget(end);
   }
   inline std::vector<uint8_t> configuredShortcutBytes(const ShortcutFixture& fixture,uint64_t end=0 WCB_SHORTCUT_DEADLINE_TEST_PARAM){
