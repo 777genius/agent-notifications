@@ -56,6 +56,7 @@ static void inertUriAttributes(const char* label, const winrt::Windows::Foundati
 }
 static void archiveAt(const char* step) { archiveStep = step; }
 static std::atomic<const char*> clickStep{"entry"};
+static std::atomic<uint32_t> clickRoots{0}, clickNodes{0}, clickTitles{0}, clickBodies{0}, clickNameLength{0};
 static void clickAt(const char* step) { clickStep.store(step,std::memory_order_relaxed); }
 // MSVC path::root_path treats the device introducer as root (\\?\),
 // not the DOS volume. Decompose only the already validated physical drive
@@ -69,7 +70,7 @@ static fs::path physicalDriveRelative(const fs::path& path) {
  return fs::path(value.substr(7));
 }
 static std::vector<Handle> roots;
-static void budget() { require(GetTickCount64() < end); }
+static void budget() { const auto now=GetTickCount64(); if(phase == "click" && now >= end) clickAt("click_budget_expired"); require(now < end); }
 static void put(JsonObject& j, const wchar_t* k, const std::string& v) {
  j.Insert(k, JsonValue::CreateStringValue(wide(v)));
 }
@@ -802,6 +803,7 @@ static std::vector<DWORD> helpers(const Route& route) {
 }
 static std::wstring name(IUIAutomationElement* element) {
  BSTR value = nullptr; winrt::check_hresult(element->get_CurrentName(&value));
+ clickAt("uia_name_length_limit"); clickNameLength.store(value ? SysStringLen(value) : 0,std::memory_order_relaxed);
  require(!value || SysStringLen(value) <= 4096);
  std::wstring result(value ? value : L""); SysFreeString(value); return result;
 }
@@ -814,7 +816,7 @@ static Selection census(IUIAutomation* automation, IUIAutomationTreeWalker* walk
  budget(); winrt::check_hresult(walker->GetFirstChildElement(desktop.Get(),&first));
  unsigned rootsSeen = 0, nodes = 0, titles = 0;
  while (first) {
-  budget(); require(++rootsSeen <= 128);
+  clickAt("uia_root_count_limit"); budget(); ++rootsSeen; clickRoots.store(rootsSeen,std::memory_order_relaxed); require(rootsSeen <= 128);
   int pid = 0; winrt::check_hresult(first->get_CurrentProcessId(&pid));
   std::unique_ptr<Process> owner;
   clickAt("uia_root_pid"); require(pid > 0);
@@ -828,12 +830,12 @@ static Selection census(IUIAutomation* automation, IUIAutomationTreeWalker* walk
    std::vector<Node> pending{{first,0}};
    while (!pending.empty()) {
     auto node = std::move(pending.back()); pending.pop_back();
-    budget(); owner->live(); require(++nodes <= 2048 && node.depth <= 24);
+    clickAt("uia_node_depth_count_limit"); budget(); owner->live(); ++nodes; clickNodes.store(nodes,std::memory_order_relaxed); require(nodes <= 2048 && node.depth <= 24);
     clickAt("uia_node_provider_identity"); int provider = 0; winrt::check_hresult(node.element->get_CurrentProcessId(&provider)); require(provider == pid);
     clickAt("uia_node_name"); const auto literal = name(node.element.Get());
-    if (literal == body) { require(!found.body); found.body = node.element; }
+    if (literal == body) { clickAt("uia_body_uniqueness"); clickBodies.fetch_add(1,std::memory_order_relaxed); require(!found.body); found.body = node.element; }
     if (literal == title) {
-     require(++titles == 1); found.title = node.element; found.pid = DWORD(pid);
+     clickAt("uia_title_uniqueness"); ++titles; clickTitles.store(titles,std::memory_order_relaxed); require(titles == 1); found.title = node.element; found.pid = DWORD(pid);
      auto parent = node.element;
      clickAt("uia_title_parent_row"); for (unsigned depth = 0; depth < 8; ++depth) {
       ComPtr<IUIAutomationElement> next;
@@ -847,7 +849,7 @@ static Selection census(IUIAutomation* automation, IUIAutomationTreeWalker* walk
     ComPtr<IUIAutomationElement> child;
     budget(); winrt::check_hresult(walker->GetFirstChildElement(node.element.Get(),&child));
     while (child) {
-     budget(); require(nodes+pending.size() < 2048); pending.push_back({child,node.depth+1});
+     clickAt("uia_pending_node_limit"); budget(); require(nodes+pending.size() < 2048); pending.push_back({child,node.depth+1});
      ComPtr<IUIAutomationElement> sibling;
      winrt::check_hresult(walker->GetNextSiblingElement(child.Get(),&sibling)); child = sibling;
     }
@@ -1046,7 +1048,12 @@ int wmain(int argc, wchar_t** argv) {
   return 0;
  } catch (...) {
   try { auto report = fact(); put(report,L"phase",phase); put(report,L"outcome","refused_or_unknown");
-   if (phase == "click") put(report,L"last_click_step",clickStep.load(std::memory_order_relaxed));
+   if (phase == "click") {
+    put(report,L"last_click_step",clickStep.load(std::memory_order_relaxed));
+    num(report,L"uia_roots",clickRoots.load(std::memory_order_relaxed)); num(report,L"uia_nodes",clickNodes.load(std::memory_order_relaxed));
+    num(report,L"uia_title_matches",clickTitles.load(std::memory_order_relaxed)); num(report,L"uia_body_matches",clickBodies.load(std::memory_order_relaxed));
+    num(report,L"uia_last_name_length",clickNameLength.load(std::memory_order_relaxed));
+   }
    if (archiveFacts || phase == "click") {
     if (archiveFacts) { put(report,L"last_archive_step",archiveStep); report.Insert(L"archive_observations",*archiveFacts); }
     try { throw; }
