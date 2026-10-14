@@ -8,7 +8,9 @@ function Invoke-Case([string]$Name,[string]$Executable,[string[]]$ChildArguments
   [IO.File]::WriteAllText($arguments,(ConvertTo-Json -InputObject $ChildArguments -Compress),[Text.UTF8Encoding]::new($false))
   & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $Supervisor -Executable $Executable -ArgumentsJson $arguments -StdoutPath (Join-Path $root ($Name+'.stdout')) -StderrPath (Join-Path $root ($Name+'.stderr')) -ResultPath $result -TimeoutMilliseconds $Deadline
   if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne 2) { throw "$Name supervisor failed" }
-  $facts = ConvertFrom-Json -InputObject (Get-Content -LiteralPath $result -Raw)
+  $rawFacts = Get-Content -LiteralPath $result -Raw
+  Write-Host "$Name owned TEST collection: $rawFacts"
+  $facts = ConvertFrom-Json -InputObject $rawFacts
   if (!$facts.jobObjectAssignedBeforeResume -or !$facts.processTreeContained -or $facts.rootPid -le 0 -or $facts.activeProcessesAfter -ne 0 -or !$facts.streamsCollected -or !$facts.stdoutEOF -or !$facts.stderrEOF -or $facts.retryAdmissible) { throw "$Name did not collect its own tree" }
   return $facts
 }
