@@ -248,6 +248,10 @@ def _windows_configure_first(run, binary, home, bundle, env, automatic_root):
                    for stage in configured['stages']), configured
         directory_acl = _windows_assert_private(automatic_root)
         _windows_assert_private(selected)
+        # enable reacquires this config lock through the installation kernel.
+        # It must preserve the tighter ACL created by prepare, not add admins.
+        lock = Path(str(selected) + '.lock')
+        lock_acl = _windows_assert_private(lock)
         assert json.loads(selected.read_text())['future'] == source['future']
         initial_bytes = selected.read_bytes()
         chosen = json.loads(run('config', 'path', '--json').stdout)
@@ -259,6 +263,7 @@ def _windows_configure_first(run, binary, home, bundle, env, automatic_root):
         assert status['globalConfiguration'] == 'configured', status
         retried = json.loads(run(*configure, executable=installed).stdout)
         assert retried['ready'] is True and retried.get('changed', False) is False, retried
+        assert _windows_assert_private(lock) == lock_acl
         assert selected.read_bytes() == initial_bytes and defaults.read_bytes() == source_bytes
         edited = json.loads(run('config', 'edit', '--stdin', '--expect-revision', inspection['revision'],
                                 data=json.dumps({'set': {'/notifications/desktop/volume': 0.5}})).stdout)
@@ -267,6 +272,7 @@ def _windows_configure_first(run, binary, home, bundle, env, automatic_root):
         assert updated['future'] == source['future'] and updated['notifications']['desktop']['volume'] == 0.5
         assert _windows_assert_private(automatic_root) == directory_acl
         _windows_assert_private(selected)
+        assert _windows_assert_private(lock) == lock_acl
         # Selection persists when the disposable profile later becomes private.
         _windows_private_scratch_root(home)
         assert Path(run('config', 'path').stdout.strip()) == selected
