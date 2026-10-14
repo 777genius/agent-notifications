@@ -7,7 +7,6 @@ import {
   packageEvidenceJoin,
   packageExpectedRuns,
   packageExpectedTerminals,
-  packageSelectedTests,
   packageTestPattern,
   processSupervisionJoin,
   selectedTestEvidenceJoin,
@@ -100,15 +99,27 @@ const processResult: ProcessSupervisionResult = {
   streamsCollected:true,stdoutEOF:true,stderrEOF:true,error:null,
 };
 function terminal(): string {
-  let out = '';
-  for (const row of packageSelectedTests) {
-    out += `=== RUN   ${row.name}\n`;
-    for (const name of row.subtests) out += `=== RUN   ${row.name}/${name}\n`;
-    for (const name of row.subtests) out += `    --- PASS: ${row.name}/${name} (0.1s)\n`;
-    out += `--- PASS: ${row.name} (0.2s)\n`;
-  }
-  return out+'PASS\n';
+  // Captured from the real Windows Go 1.26 production test run 38510063215.
+  // Keep this independent of packageSelectedTests: generated output previously
+  // repeated the parser's incorrect assumption about parent/subtest ordering.
+  return `=== RUN   TestWindowsNativeRecoverFixedMutationBoundaries
+=== RUN   TestWindowsNativeRecoverFixedMutationBoundaries/windows:mutated:apply-clsid
+=== RUN   TestWindowsNativeRecoverFixedMutationBoundaries/windows:mutated:apply-aumid
+=== RUN   TestWindowsNativeRecoverFixedMutationBoundaries/windows:mutated:apply-shortcut
+=== RUN   TestWindowsNativeRecoverFixedMutationBoundaries/windows:commit_decided
+=== RUN   TestWindowsNativeRecoverFixedMutationBoundaries/windows:binding_published
+--- PASS: TestWindowsNativeRecoverFixedMutationBoundaries (7.47s)
+    --- PASS: TestWindowsNativeRecoverFixedMutationBoundaries/windows:mutated:apply-clsid (1.94s)
+    --- PASS: TestWindowsNativeRecoverFixedMutationBoundaries/windows:mutated:apply-aumid (1.43s)
+    --- PASS: TestWindowsNativeRecoverFixedMutationBoundaries/windows:mutated:apply-shortcut (1.46s)
+    --- PASS: TestWindowsNativeRecoverFixedMutationBoundaries/windows:commit_decided (1.31s)
+    --- PASS: TestWindowsNativeRecoverFixedMutationBoundaries/windows:binding_published (1.32s)
+=== RUN   TestWindowsNativeForeignDecisionRecoveryRefuses
+--- PASS: TestWindowsNativeForeignDecisionRecoveryRefuses (0.93s)
+PASS
+`;
 }
+
 const selectedTests: SelectedTestResult = {
   collected:true,streamsCollected:true,timedOut:false,unknown:false,error:null,signal:null,exitCode:0,
   deadlineMs:360000,args:command,stdout:terminal(),stderr:'',process:processResult,
@@ -215,6 +226,17 @@ assert.throws(() => compileManifestJoin({...compile,testEmbeddedProof:{
 }},tuple,actualBuild));
 
 selectedTestEvidenceJoin(selectedTests);
+const parentSummary = '--- PASS: TestWindowsNativeRecoverFixedMutationBoundaries (7.47s)\n';
+const oldChildFirstOrder = terminal().replace(parentSummary,'').replace(
+  '=== RUN   TestWindowsNativeForeignDecisionRecoveryRefuses',
+  parentSummary+'=== RUN   TestWindowsNativeForeignDecisionRecoveryRefuses',
+);
+assert.throws(() => selectedTestEvidenceJoin({...selectedTests,stdout:oldChildFirstOrder}));
+assert.throws(() => selectedTestEvidenceJoin({...selectedTests,stdout:terminal().replace(
+  '    --- PASS: TestWindowsNativeRecoverFixedMutationBoundaries/windows:binding_published (1.32s)\n','',
+)}));
+assert.throws(() => selectedTestEvidenceJoin({...selectedTests,stdout:terminal()+parentSummary}));
+
 assert.throws(() => selectedTestEvidenceJoin({...selectedTests,deadlineMs:360001}));
 assert.throws(() => selectedTestEvidenceJoin({...selectedTests,args:selectedTests.args.slice(0,-2)}));
 assert.throws(() => selectedTestEvidenceJoin({...selectedTests,stdout:terminal().replace('--- PASS: TestWindowsNativeRecoverFixedMutationBoundaries/windows:commit_decided ','--- SKIP: TestWindowsNativeRecoverFixedMutationBoundaries/windows:commit_decided ')}));

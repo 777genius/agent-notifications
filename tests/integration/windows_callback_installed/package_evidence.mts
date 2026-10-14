@@ -19,7 +19,9 @@ export const packageTopLevelTests = packageSelectedTests.map(row => row.name);
 export const packageExpectedRuns = packageSelectedTests.flatMap(row =>
   [row.name,...row.subtests.map(name => `${row.name}/${name}`)]);
 export const packageExpectedTerminals = packageSelectedTests.flatMap(row =>
-  [...row.subtests.map(name => `${row.name}/${name}`),row.name]);
+  // Go's verbose output prints the completed parent's summary before the
+  // indented summaries of its already-completed subtests.
+  [row.name,...row.subtests.map(name => `${row.name}/${name}`)]);
 export const packageTestPattern =
   '^TestWindowsNative(RecoverFixedMutationBoundaries|ForeignDecisionRecoveryRefuses)$';
 
