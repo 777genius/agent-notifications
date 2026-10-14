@@ -205,8 +205,13 @@ func contextWindowsPath(path string) ([]string, string, error) {
 			base[3] >= '1' && base[3] <= '9' {
 			reserved = true
 		}
+		if strings.HasPrefix(base, "COM") || strings.HasPrefix(base, "LPT") {
+			suffix := base[3:]
+			reserved = reserved || suffix == "¹" || suffix == "²" || suffix == "³"
+		}
 		if part == "" || part == "." || part == ".." ||
 			strings.ContainsAny(part, "\x00:\\/<>\"|?*") ||
+			strings.ContainsFunc(part, func(r rune) bool { return r < 32 }) ||
 			strings.TrimRight(part, " .") != part || reserved {
 			return nil, "", errContext
 		}

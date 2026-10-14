@@ -84,6 +84,13 @@ func TestWindowsSecureContextRejectsReparseAndAliases(t *testing.T) {
 		t.Fatal("reparse ancestor accepted")
 	}
 
+}
+
+func TestWindowsSecureContextRejectsPathAliases(t *testing.T) {
+	root := contextWindowsTestRoot(t)
+	file := filepath.Join(root, "context.json")
+	contextWindowsPrivateFile(t, file, []byte(`{"provider":"codex"}`))
+
 	for _, path := range []string{
 		"",
 		`context.json`,
@@ -96,9 +103,15 @@ func TestWindowsSecureContextRejectsReparseAndAliases(t *testing.T) {
 		`C:\context.json `,
 		`C:\NUL`,
 		`C:\COM1.json`,
+		`C:\COM¹.json`,
+		`C:\LPT³`,
+		"C:\\bad\x01name",
 		file + `:stream`,
 		file + `:zone.identifier`,
 	} {
+		if _, _, err := contextWindowsPath(path); err == nil {
+			t.Fatalf("unsafe path admitted before opening: %q", path)
+		}
 		if data, err := ReadSecureContext(context.Background(), path); err == nil || data != nil {
 			t.Fatalf("accepted unsafe path %q", path)
 		}
