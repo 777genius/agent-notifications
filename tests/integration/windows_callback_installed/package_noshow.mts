@@ -94,7 +94,7 @@ const scope: PackageScopeFacts = {
 const childEnv = {...env,TEST_WINDOWS_INSTALLED_RECOVERY:'fresh-owned-account-no-show'};
 let count = 0;
 
-async function boundedRead(file: string, limit=65536): Promise<Buffer> {
+async function boundedRead(file: string, limit=65536, allowEmpty=false): Promise<Buffer> {
   const h = await open(file,'r');
   try {
     const info = await h.stat();
