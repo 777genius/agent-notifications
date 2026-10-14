@@ -35,12 +35,14 @@ function execute(phase: string, executable: string, args: string[], timeout: num
   return step;
 }
 const vendorIdentity = { name: 'OpenAI.Codex', publisher: 'CN=50BDFD77-8903-4850-9FFE-6E8522F64D5B',
-  familyName: 'OpenAI.Codex_2p2nqsd0c76g0', fullName: 'OpenAI.Codex_26.930.7945.0_arm64__2p2nqsd0c76g0',
-  version: '26.930.7945.0', architecture: 12 };
+  familyName: 'OpenAI.Codex_2p2nqsd0c76g0', fullName: 'OpenAI.Codex_26.1007.2314.0_arm64__2p2nqsd0c76g0',
+  version: '26.1007.2314.0', architecture: 12 };
 async function vendorURI(binary: string, metadata: Json): Promise<void> {
   if (!root || process.env.NAVIGATION_WINDOWS_VENDOR_NATIVE_TEST !== '1'
       || process.env.GITHUB_REPOSITORY !== '777genius/agent-notifications'
       || evidence.signatureVerified !== true
+      || evidence.packageBytes !== 1017348969
+      || evidence.packageSHA256 !== '4d0097243a8683a7810415479f306c230d2c4c50c869990298296eb683a44aef'
       || Object.entries(vendorIdentity).some(([key, value]) => metadata[key] !== value)) {
     throw new Error('explicit pinned vendor URI TEST authority required');
   }

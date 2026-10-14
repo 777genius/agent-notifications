@@ -203,8 +203,10 @@ async function main(): Promise<void> {
     const baseline = token(object(previous[1]!.launcher).baseline);
     const provenance = object(prerequisite.provenance); evidence.provenance = provenance;
     const vendor = json(process.env.SDK_VENDOR_EVIDENCE!); evidence.vendor = vendor;
-    check(vendor.outcome === 'exact_current_user_installed' && vendor.fullName === 'OpenAI.Codex_26.930.7945.0_arm64__2p2nqsd0c76g0' &&
-      vendor.archiveSHA256 === 'a208d373c7c84aa3e0452cd3dd8406a6794d8139ec1260c64a770c2a00fbeeb8' && vendor.signatureVerified === true, 'fixed TEST vendor preflight');
+    check(vendor.outcome === 'exact_current_user_installed' && vendor.fullName === 'OpenAI.Codex_26.1007.2314.0_arm64__2p2nqsd0c76g0' &&
+      vendor.packageBytes === 1017348969 &&
+      vendor.archiveSHA256 === '4d0097243a8683a7810415479f306c230d2c4c50c869990298296eb683a44aef' &&
+      vendor.signatureVerified === true, 'fixed TEST vendor preflight');
     const launcherSource = resolve(process.env.LUA_LAUNCHER_EXE!), source = resolve(process.env.SDK_COLD_EXE!);
     check(hash(launcherSource) === process.env.LUA_LAUNCHER_SHA256 && hash(source) === process.env.SDK_COLD_EXE_SHA256, 'compiled same-source binary pins');
     generation = join(resolve(process.env.RUNNER_TEMP!), `TEST-lua-preflight-${nonce}`); evidence.generation = generation;

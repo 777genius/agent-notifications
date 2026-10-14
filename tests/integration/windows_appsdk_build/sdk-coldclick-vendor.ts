@@ -5,10 +5,11 @@ import { closeSync, existsSync, fstatSync, fsyncSync, lstatSync, openSync, readS
 import { join, resolve } from 'node:path';
 import { hash } from '../navigation_windows_vendor_acquisition.ts';
 type Json = Record<string, unknown>;
-const expected = 'OpenAI.Codex_26.930.7945.0_arm64__2p2nqsd0c76g0';
-const rawPin = 'a208d373c7c84aa3e0452cd3dd8406a6794d8139ec1260c64a770c2a00fbeeb8';
+const expected = 'OpenAI.Codex_26.1007.2314.0_arm64__2p2nqsd0c76g0';
+const packageBytes = 1017348969;
+const rawPin = '4d0097243a8683a7810415479f306c230d2c4c50c869990298296eb683a44aef';
 const started = performance.now(), root = resolve(process.env.SDK_VENDOR_METADATA_ROOT!);
-const receipt: Json = { sourceSHA: process.env.SOURCE_SHA, outcome: 'unknown', actors: [], archiveSHA256: rawPin,
+const receipt: Json = { sourceSHA: process.env.SOURCE_SHA, outcome: 'unknown', actors: [], packageBytes, archiveSHA256: rawPin,
   fullName: expected, signatureVerified: false, removeAttempted: false, launchAttempted: false, registrationAttempted: false, retryAllowed: false };
 function check(ok: unknown, why: string): asserts ok { if (!ok) throw new Error(why); }
 function read(leaf: string): string {
@@ -44,7 +45,8 @@ try {
     process.env.GITHUB_RUN_ATTEMPT === '1', 'one own CI experiment');
   const evidence = json('vendor-evidence.json'), metadata = evidence.metadata as Json, nonce = evidence.nonce as string;
   check(evidence.sourceSHA === process.env.SOURCE_SHA && evidence.status === 'metadata_inspected' && evidence.signatureVerified === true &&
-    evidence.packageSHA256 === rawPin && metadata.fullName === expected && metadata.familyName === 'OpenAI.Codex_2p2nqsd0c76g0' && metadata.architecture === 12 &&
+    evidence.packageBytes === packageBytes && evidence.packageSHA256 === rawPin &&
+    metadata.fullName === expected && metadata.familyName === 'OpenAI.Codex_2p2nqsd0c76g0' && metadata.architecture === 12 &&
     /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(nonce), 'same-source fixed signed vendor metadata');
   receipt.signatureVerified = true; receipt.metadata = metadata;
   const binary = join(root, 'navigation-native-probe.exe'), pin = evidence.binarySHA256;

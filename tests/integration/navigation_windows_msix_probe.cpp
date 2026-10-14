@@ -328,8 +328,9 @@ struct VendorInput {
                 && text(value, L"callbackBinarySHA256") == executableHash
                 && text(value, L"name") == vendorName && text(value, L"publisher") == vendorPublisher
                 && text(value, L"familyName") == vendorFamily && text(value, L"fullName") == vendorFull
-                && text(value, L"version") == L"26.930.7945.0" && value.GetNamedNumber(L"architecture") == 12
-                && text(value, L"archiveSHA256") == L"a208d373c7c84aa3e0452cd3dd8406a6794d8139ec1260c64a770c2a00fbeeb8"
+                && text(value, L"version") == L"26.1007.2314.0" && value.GetNamedNumber(L"architecture") == 12
+                && value.GetNamedNumber(L"packageBytes") == vendorArchiveBytes
+                && text(value, L"archiveSHA256") == vendorArchiveSHA256
                 && text(value, L"observerSHA256").size() == 64
                 && text(value, L"addProofSHA256") == hashFile(root / "vendor-install-completed.proof")
                 && text(value, L"observerSHA256") == hashFile(root / "navigation-native-probe.exe"), "fixed vendor binding invalid");
