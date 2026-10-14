@@ -757,13 +757,23 @@ namespace wcb {
     return file;
   }
   inline void renameLeaf(HANDLE file,HANDLE parent,const std::wstring& name,uint64_t end){
-    const size_t n=name.size()*sizeof(wchar_t);
-    std::vector<uint8_t> storage(offsetof(FILE_RENAME_INFO,FileName)+n);
+    require(!name.empty()&&name!=L"."&&name!=L".."
+      &&name.find_first_of(L"\\/:")==std::wstring::npos
+      &&name.find(L'\0')==std::wstring::npos&&name.back()!=L'.'&&name.back()!=L' ');
+    // The real Win32 private-path contract rejects a relative FileName with
+    // RootDirectory (ERROR_INVALID_PARAMETER). Use the supported absolute-name
+    // form once. All ancestors remain held without delete sharing; derive the
+    // directory spelling from that same physical handle, never caller input.
+    installedBudget(end);
+    const auto destination=(fs::path(physical(parent))/name).wstring();
+    require(destination.size()<32768);
+    const size_t n=destination.size()*sizeof(wchar_t);
+    std::vector<uint8_t> storage(offsetof(FILE_RENAME_INFO,FileName)+n+sizeof(wchar_t));
     auto info=reinterpret_cast<FILE_RENAME_INFO*>(storage.data());
     info->ReplaceIfExists=FALSE;
-    info->RootDirectory=parent;
+    info->RootDirectory=nullptr;
     info->FileNameLength=DWORD(n);
-    memcpy(info->FileName,name.data(),n);
+    memcpy(info->FileName,destination.data(),n);
     installedBudget(end);
     if(!SetFileInformationByHandle(file,FileRenameInfo,info,DWORD(storage.size()))){
       const auto error=GetLastError();
