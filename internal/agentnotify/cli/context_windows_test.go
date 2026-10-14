@@ -181,6 +181,26 @@ func TestWindowsContextEnvelopeRemainsCallerAsserted(t *testing.T) {
 func contextWindowsTestRoot(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
+	// Go's temporary directory may use the runner's 8.3 user-directory
+	// spelling. Positive fixtures must use the actual opened directory name;
+	// the product deliberately refuses physical-path aliases.
+	name, err := windows.UTF16PtrFromString(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle, err := windows.CreateFile(name, windows.FILE_READ_ATTRIBUTES,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
+		nil, windows.OPEN_EXISTING,
+		windows.FILE_FLAG_BACKUP_SEMANTICS|windows.FILE_FLAG_OPEN_REPARSE_POINT, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	physical, pathErr := contextWindowsPhysicalPath(handle)
+	closeErr := windows.CloseHandle(handle)
+	if pathErr != nil || closeErr != nil || !strings.HasPrefix(physical, `\\?\`) {
+		t.Fatalf("resolve private TEST directory: %v %v", pathErr, closeErr)
+	}
+	root = strings.TrimPrefix(physical, `\\?\`)
 	if !filepath.IsAbs(root) || filepath.VolumeName(root) == "" {
 		t.Fatalf("TEST root is not a local absolute path: %q", root)
 	}
