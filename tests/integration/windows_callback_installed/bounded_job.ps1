@@ -158,6 +158,18 @@ public static class BoundedJobRunner {
     } finally { Marshal.FreeHGlobal(data); }
   }
 
+  private static bool ObserveEOF(string path) {
+    using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read)) {
+      var bytes = new byte[4096];
+      int total = 0, count;
+      while ((count = stream.Read(bytes, 0, bytes.Length)) != 0) {
+        total += count;
+        if (total > 65536) throw new IOException("bounded stream exceeds cap");
+      }
+      return stream.Position == stream.Length;
+    }
+  }
+
   public static string Run(string executable, string[] arguments, string stdoutPath, string stderrPath,
       int timeoutMilliseconds, out bool infrastructureComplete) {
     infrastructureComplete = false;
@@ -261,7 +273,12 @@ public static class BoundedJobRunner {
       unknown = true; infrastructureComplete = false;
       error = overcap ? "bounded output cap; effects unknown" : "bounded handles did not close";
     }
-    bool streamsCollected = assigned && active == 0 && handlesClosed && !overcap;
+    bool stdoutEOF = false, stderrEOF = false;
+    if (assigned && active == 0 && handlesClosed && !overcap) {
+      try { stdoutEOF = ObserveEOF(stdoutPath); stderrEOF = ObserveEOF(stderrPath); }
+      catch (Exception exception) { unknown = true; infrastructureComplete = false; error = exception.Message; }
+    }
+    bool streamsCollected = stdoutEOF && stderrEOF;
     var result = new StringBuilder("{");
     Property(result,"executable",JsonString(executable));
     Property(result,"command","["+string.Join(",",Array.ConvertAll<string,string>(arguments,JsonString))+"]");
@@ -275,8 +292,8 @@ public static class BoundedJobRunner {
     Property(result,"retryAdmissible","false");
     Property(result,"activeProcessesAfter",active.ToString());
     Property(result,"streamsCollected",(streamsCollected ? "true" : "false"));
-    Property(result,"stdoutEOF",(streamsCollected ? "true" : "false"));
-    Property(result,"stderrEOF",(streamsCollected ? "true" : "false"));
+    Property(result,"stdoutEOF",(stdoutEOF ? "true" : "false"));
+    Property(result,"stderrEOF",(stderrEOF ? "true" : "false"));
     Property(result,"error",error == null ? "null" : JsonString(error));
     result.Append('}');
     return result.ToString();

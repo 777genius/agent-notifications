@@ -260,6 +260,11 @@ jobs:
                 evidence=(Get-FileIdentity 'tests/integration/windows_callback_installed/evidence.mts' $env:GITHUB_WORKSPACE "$($env:SOURCE_SHA)`:tests/integration/windows_callback_installed/evidence.mts")
                 strictArchive=(Get-FileIdentity 'tests/integration/windows_callback_installed/strict_archive.mts' $env:GITHUB_WORKSPACE "$($env:SOURCE_SHA)`:tests/integration/windows_callback_installed/strict_archive.mts")
                 supervisor=(Get-FileIdentity 'tests/integration/windows_callback_installed/bounded_job.ps1' $env:GITHUB_WORKSPACE "$($env:SOURCE_SHA)`:tests/integration/windows_callback_installed/bounded_job.ps1")
+                supervisorTest=(Get-FileIdentity 'tests/integration/windows_callback_installed/bounded_job.test.ps1' $env:GITHUB_WORKSPACE "$($env:SOURCE_SHA)`:tests/integration/windows_callback_installed/bounded_job.test.ps1")
+                packageEvidenceTest=(Get-FileIdentity 'tests/integration/windows_callback_installed/package_evidence.test.mts' $env:GITHUB_WORKSPACE "$($env:SOURCE_SHA)`:tests/integration/windows_callback_installed/package_evidence.test.mts")
+                evidenceTest=(Get-FileIdentity 'tests/integration/windows_callback_installed/evidence.test.mts' $env:GITHUB_WORKSPACE "$($env:SOURCE_SHA)`:tests/integration/windows_callback_installed/evidence.test.mts")
+                installedController=(Get-FileIdentity 'tests/integration/windows_callback_installed/canary.mts' $env:GITHUB_WORKSPACE "$($env:SOURCE_SHA)`:tests/integration/windows_callback_installed/canary.mts")
+                documentation=(Get-FileIdentity 'tests/integration/windows_callback_installed/README.md' $env:GITHUB_WORKSPACE "$($env:SOURCE_SHA)`:tests/integration/windows_callback_installed/README.md")
               }
             }
             binaries=@{

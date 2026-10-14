@@ -63,6 +63,12 @@ export type SourceFacts = {
     evidence: FileIdentity;
     strictArchive: FileIdentity;
     supervisor: FileIdentity;
+    supervisorTest: FileIdentity;
+    packageEvidenceTest: FileIdentity;
+    evidenceTest: FileIdentity;
+    installedController: FileIdentity;
+    documentation: FileIdentity;
+
   };
 };
 
@@ -110,7 +116,8 @@ export type NativeBuildEvidence = {
   installedQualified: boolean;
 };
 
-export type CompileManifest = Tuple & {
+// Build artifacts precede the fresh effect nonce; bind their digest before effects.
+export type CompileManifest = {source: string} & {
   sources: SourceFacts;
   binaries: BinaryFacts;
   buildProvenance: BuildProvenance;
@@ -366,7 +373,7 @@ export function compileManifestJoin(
   tuple: Tuple,
   actualBuild: ActualBuildProvenance,
 ): SourceFacts {
-  joinTuple(value,tuple);
+  assert.equal(value.source,tuple.source);
   const source = value.sources;
   assert.equal(source.harnessSHA,tuple.source);
   assert(source.harnessSHA.match(lower40) && source.coreSHA.match(lower40) && source.coreResolvedSHA.match(lower40));
@@ -390,6 +397,12 @@ export function compileManifestJoin(
     source.harnessFiles.evidence,
     source.harnessFiles.strictArchive,
     source.harnessFiles.supervisor,
+    source.harnessFiles.supervisorTest,
+    source.harnessFiles.packageEvidenceTest,
+    source.harnessFiles.evidenceTest,
+    source.harnessFiles.installedController,
+    source.harnessFiles.documentation,
+
   ];
   for (const identity of identities) {
     assert(Number.isSafeInteger(identity.bytes) && identity.bytes > 0);

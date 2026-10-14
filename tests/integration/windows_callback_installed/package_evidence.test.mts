@@ -61,7 +61,7 @@ const actualBuild: ActualBuildProvenance = actualBuildProvenance(
 );
 const hashText = (value: string): string => createHash('sha256').update(value).digest('hex');
 const compile: CompileManifest = {
-  ...tuple,
+  source:tuple.source,
   sources:{
     harnessSHA:tuple.source,harnessTreeSHA:oid('3'),
     coreRefInput:'4'.repeat(40),coreRefExplicit:true,coreResolvedSHA:'4'.repeat(40),coreSHA:'4'.repeat(40),
@@ -71,6 +71,7 @@ const compile: CompileManifest = {
     harnessFiles:{
       observer:file('7'),observerProject:file('8'),controller:file('9'),
       packageEvidence:file('a'),evidence:file('b'),strictArchive:file('c'),supervisor:file('d'),
+      supervisorTest:file('7'),packageEvidenceTest:file('7'),evidenceTest:file('7'),installedController:file('7'),documentation:file('7'),
     },
   },
   binaries:{
@@ -260,3 +261,7 @@ for (const bad of [testBuildInfo.replace('-race=true','-race=false'), testBuildI
   const fact=actualBuildProvenance(Buffer.from(bad),Buffer.from(shippingBuildInfo),Buffer.from(raceSymbols));
   assert.throws(() => compileManifestJoin({...compile,buildProvenance:{...compile.buildProvenance,testBuildInfoSHA256:hashText(bad)}},tuple,fact));
 }
+
+// A nonce-free compile manifest binds source only; runtime adds a fresh digest receipt.
+assert.deepEqual(compileManifestJoin(compile,tuple,actualBuild),compile.sources);
+assert.throws(() => compileManifestJoin({...compile,source:oid('9')},tuple,actualBuild));

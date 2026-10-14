@@ -168,6 +168,12 @@ async function verifyGitIdentity(
     'tests/integration/windows_callback_installed/evidence.mts':source.harnessFiles.evidence,
     'tests/integration/windows_callback_installed/strict_archive.mts':source.harnessFiles.strictArchive,
     'tests/integration/windows_callback_installed/bounded_job.ps1':source.harnessFiles.supervisor,
+    'tests/integration/windows_callback_installed/bounded_job.test.ps1':source.harnessFiles.supervisorTest,
+    'tests/integration/windows_callback_installed/package_evidence.test.mts':source.harnessFiles.packageEvidenceTest,
+    'tests/integration/windows_callback_installed/evidence.test.mts':source.harnessFiles.evidenceTest,
+    'tests/integration/windows_callback_installed/canary.mts':source.harnessFiles.installedController,
+    'tests/integration/windows_callback_installed/README.md':source.harnessFiles.documentation,
+
   } as const;
   for (const [relative,expected] of Object.entries(identities)) {
     const actual = await fileIdentity(path.join(harnessSource,relative),harnessSource);
@@ -310,12 +316,14 @@ async function actualBuild(): Promise<ActualBuildProvenance> {
 
 async function main(): Promise<void> {
   await mkdir(root,{recursive:false,mode:0o700});
-  const compile = await readJson<CompileManifest>(compilePath);
+  const compileBytes = await boundedRead(compilePath);
+  const compile = JSON.parse(compileBytes.toString('utf8')) as CompileManifest;
   const build = await actualBuild();
   const source = compileManifestJoin(compile,tuple,build);
   assert.equal(source.coreSHA,coreSHA);
   await verifyGitIdentity(source);
   await actualBinaryFacts(compile.binaries,compile.testEmbeddedProof,compile.shippingEmbeddedProof);
+  await persist('compile-bound.json',{...tuple,compileManifestSHA256:sha(compileBytes),coreSourceSHA:source.coreSHA,harnessTreeSHA:source.harnessTreeSHA,coreTreeSHA:source.coreTreeSHA});
 
   await persist('scope.json',{
     ...tuple,
