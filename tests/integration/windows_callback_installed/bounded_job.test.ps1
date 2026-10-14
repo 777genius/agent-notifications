@@ -11,6 +11,7 @@ function Invoke-Case([string]$Name,[string]$Executable,[string[]]$ChildArguments
   $rawFacts = Get-Content -LiteralPath $result -Raw
   Write-Host "$Name owned TEST collection: $rawFacts"
   $facts = ConvertFrom-Json -InputObject $rawFacts
+  if ((ConvertTo-Json -InputObject @($facts.command) -Compress) -cne (ConvertTo-Json -InputObject $ChildArguments -Compress)) { throw "$Name changed its argument vector" }
   if (!$facts.jobObjectAssignedBeforeResume -or !$facts.processTreeContained -or $facts.rootPid -le 0 -or $facts.activeProcessesAfter -ne 0 -or !$facts.streamsCollected -or !$facts.stdoutEOF -or !$facts.stderrEOF -or $facts.retryAdmissible) { throw "$Name did not collect its own tree" }
   return $facts
 }

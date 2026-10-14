@@ -9,7 +9,7 @@ param(
 $ErrorActionPreference = 'Stop'
 if ($TimeoutMilliseconds -lt 1000 -or $TimeoutMilliseconds -gt 360000) { throw 'unsupported bounded timeout' }
 if (!(Test-Path -LiteralPath $Executable -PathType Leaf)) { throw 'bounded executable missing' }
-$arguments = @(ConvertFrom-Json -InputObject (Get-Content -LiteralPath $ArgumentsJson -Raw))
+$arguments = [string[]](ConvertFrom-Json -InputObject (Get-Content -LiteralPath $ArgumentsJson -Raw))
 if ($arguments.Count -gt 32) { throw 'bounded argument count' }
 foreach ($argument in $arguments) { if ([string]$argument -match '[\u0000-\u001f]') { throw 'bounded control character' } }
 Add-Type -TypeDefinition @'
@@ -83,7 +83,7 @@ public static class BoundedJobRunner {
   [DllImport("kernel32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
   private static extern IntPtr CreateFileW(string name, uint access, uint share, ref SECURITY_ATTRIBUTES security,
     int creation, int flags, IntPtr template);
-  [DllImport("kernel32.dll", SetLastError=true)]
+  [DllImport("kernel32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
   private static extern bool CreateProcessW(string application, StringBuilder command, IntPtr processAttributes,
     IntPtr threadAttributes, bool inherit, int flags, IntPtr environment, string directory,
     ref STARTUPINFO startup, out PROCESS_INFORMATION process);

@@ -227,6 +227,8 @@ async function runBounded(
         if (fault) throw fault;
         if (code !== 0 && code !== 2) throw new Error(`bounded supervisor failed code=${code} signal=${signal}`);
         const process = await readJson<ProcessSupervisionResult>(resultPath);
+        assert.deepEqual(process.command,[...args]);
+        assert.equal(process.executable,path.resolve(executable));
         const stdout = (await boundedRead(stdoutPath)).toString('utf8');
         const stderr = (await boundedRead(stderrPath)).toString('utf8');
         const collection: BoundedCollection = {
