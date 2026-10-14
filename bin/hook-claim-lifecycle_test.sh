@@ -10,6 +10,7 @@ python3 - "${1:-$src/hook-wrapper.sh}" "$root" "${2:-all}" <<'PYTHON'
 import concurrent.futures
 import os
 from pathlib import Path
+import select
 import shutil
 import signal
 import subprocess
@@ -38,7 +39,7 @@ printf 'attempt\\n' >> "$FIXTURE/count"
 printf '%s\\n' "$$" > "$FIXTURE/installer-pid"
 if [ "${BLOCK_INSTALL:-}" = 1 ]; then
     : > "$FIXTURE/install-started"
-    while [ ! -e "$FIXTURE/install-release" ]; do sleep 0.01; done
+    while [ -d "$FIXTURE" ] && [ ! -e "$FIXTURE/install-release" ]; do sleep 0.01; done
 fi
 exit 7
 ''')
@@ -171,6 +172,48 @@ def live_owner():
 run('live-owner', live_owner)
 
 # Red means a dead wrapper lets a still-live installer lose ownership.
+class OwnedChildExit:
+    """Hold an OS exit subscription before the parent is killed/reaped."""
+    def __init__(self, pid):
+        self.pid = pid
+        self.fd = None
+        self.queue = None
+        if hasattr(os, 'pidfd_open'):
+            self.fd = os.pidfd_open(pid, 0)
+        elif hasattr(select, 'kqueue'):
+            self.queue = select.kqueue()
+            try:
+                event = select.kevent(pid, filter=select.KQ_FILTER_PROC,
+                                      flags=select.KQ_EV_ADD | select.KQ_EV_ONESHOT,
+                                      fflags=select.KQ_NOTE_EXIT)
+                self.queue.control([event], 0, 0)
+            except BaseException:
+                self.queue.close()
+                raise
+        else:
+            raise RuntimeError('owned orphan exit fixture requires pidfd or kqueue')
+
+    def events(self, timeout):
+        if self.fd is not None:
+            return select.select([self.fd], [], [], timeout)[0]
+        events = self.queue.control(None, 1, timeout)
+        for event in events:
+            assert event.ident == self.pid and event.filter == select.KQ_FILTER_PROC
+            assert not event.flags & select.KQ_EV_ERROR and event.fflags & select.KQ_NOTE_EXIT
+        return events
+
+    def assert_alive(self):
+        assert not self.events(0), 'owned installer exited before release'
+
+    def wait(self):
+        assert self.events(10), 'owned installer did not exit after release'
+
+    def close(self):
+        if self.fd is not None:
+            os.close(self.fd)
+        else:
+            self.queue.close()
+
 def parent_death():
     for fail_birth in ('0', '1'):
         f = fixture('parent-death-'+fail_birth)
@@ -178,19 +221,29 @@ def parent_death():
         wait(f[0] / 'install-started')
         child_pid = int((f[0] / 'installer-pid').read_text())
         assert child_pid != p.pid
-        os.kill(p.pid, signal.SIGKILL)
-        p.communicate(timeout=10)
-        os.kill(child_pid, 0)
+        witness = None
+        parent_killed = False
         try:
+            witness = OwnedChildExit(child_pid)
+            os.kill(p.pid, signal.SIGKILL)
+            parent_killed = True
+            p.communicate(timeout=10)
+            witness.assert_alive()
             expire(f)
             invoke(f, FAIL_BIRTH=fail_birth)
             assert count(f) == 1, ('surviving installer stolen', count(f))
         finally:
             (f[0] / 'install-release').touch()
-            try:
-                os.killpg(p.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
+            # The parent's PGID is no longer an owned process identity after
+            # communicate() reaps it. Release the cooperative TEST installer
+            # and observe the already-held incarnation, never signal that PGID.
+            if witness is not None:
+                try:
+                    witness.wait()
+                finally:
+                    witness.close()
+            if not parent_killed:
+                done(p)
 run('parent-death', parent_death)
 
 
