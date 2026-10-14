@@ -123,6 +123,9 @@ func TestWindowsSecureContextRejectsHardlinkOversizeAndCancel(t *testing.T) {
 	path := filepath.Join(root, "context.json")
 	contextWindowsPrivateFile(t, path, []byte(`{"provider":"codex"}`))
 	hardlink := filepath.Join(root, "hardlink")
+	// Creating the negative hardlink fixture needs owner write attributes on
+	// newer Windows/Go versions. It stays private and owned throughout.
+	contextWindowsSetDACL(t, path, "D:P(A;;FA;;;"+contextWindowsTokenSID(t)+")(A;;FR;;;SY)")
 	if err := os.Link(path, hardlink); err != nil {
 		t.Fatal(err)
 	}
@@ -342,6 +345,7 @@ func TestWindowsSecureContextNativeACELayoutAndMalformedBounds(t *testing.T) {
 	if int(ace.Header.AceSize) != 8+sid.Len() || ace.Header.AceSize != 20 {
 		t.Fatalf("actual SYSTEM ACE size=%d SID length=%d", ace.Header.AceSize, sid.Len())
 	}
+	t.Logf("native ACE_HEADER=%d SidStart=%d SYSTEM ACE=%d SID=%d", unsafe.Sizeof(windows.ACE_HEADER{}), unsafe.Offsetof(windows.ACCESS_ALLOWED_ACE{}.SidStart), ace.Header.AceSize, sid.Len())
 	parsed, err := contextWindowsAllowedACE(ace)
 	if err != nil || parsed.SID != "S-1-5-18" {
 		t.Fatalf("valid native ACE refused: %#v %v", parsed, err)
