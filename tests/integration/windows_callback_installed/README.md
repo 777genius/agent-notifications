@@ -23,7 +23,13 @@ banner/default row fails; there is no alternate input or OOBE path.
 
 The normal managed installer creates a disposable producer. Explicit setup A
 is followed by preserved-route enable, which validates installed readiness and
-also writes managed policy; offline status is not native readiness. ONE notify
+also writes managed policy; offline status is not native readiness. The fixed
+synthetic caller context is created exclusively by the native TEST
+actor with a protected owner-and-SYSTEM-only DACL and checked physical file,
+readback and hash. This establishes private reading, never trusted provenance;
+the production Windows secure context reader remains the admission boundary.
+The harness never repairs an existing caller file or relies on Node chmod to
+establish Windows ACL privacy. ONE notify
 with synthetic context is actually collected before ONE genuine Shell UIA
 Invoke. The observer pins A's physical helper/snapshot/record and holds the fresh
 callback process HANDLE through exit using an independent collector armed before

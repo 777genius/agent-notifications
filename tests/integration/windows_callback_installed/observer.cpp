@@ -26,6 +26,7 @@
 #include <cstddef>
 #include <iostream>
 #include "../../../native/windows-callback/custody.h"
+#include "../../../native/windows-callback/capacity.h"
 using namespace wcb;
 using Microsoft::WRL::ComPtr;
 using namespace winrt::Windows::Data::Json;
@@ -190,6 +191,31 @@ static void prepareGlobalParent() {
    receipt.Insert(key,JsonValue::CreateBooleanValue(true));
   budget(); publish(L"private-global-parent.json",receipt); budget();
  } catch (...) { cleanup(); throw; }
+}
+// Create only this actor's fixed synthetic context, never repair an existing
+// caller file or treat the fixture as trusted origin provenance.
+static void prepareContext() {
+ budget();
+ JsonObject context;
+ put(context,L"provider","codex");
+ put(context,L"session","TEST/"+nonce+"/percent%"+narrow(L"\u96ea"));
+ put(context,L"locality","local"); put(context,L"interface","desktop");
+ const auto value=winrt::to_string(context.Stringify());
+ require(value.size()<=4096);
+ const std::vector<uint8_t> data(value.begin(),value.end());
+ const auto path=root/L"context.json";
+ const auto sid=ownerSID();
+ budget(); exclusiveFile(path,sid,data); budget();
+ auto file=open(path,false);
+ require(physical(file.h)==path.wstring()); owned(file.h,sid);
+ require(bytes(file.h,4096)==data);
+ file.closeChecked(); budget();
+ auto receipt=fact(); put(receipt,L"role","caller_asserted_context");
+ put(receipt,L"sha256",sha(data));
+ receipt.Insert(L"created_exclusive",JsonValue::CreateBooleanValue(true));
+ receipt.Insert(L"private_owner_system_only",JsonValue::CreateBooleanValue(true));
+ receipt.Insert(L"physical_checked",JsonValue::CreateBooleanValue(true));
+ publish(L"private-context.json",receipt); budget();
 }
 static uint64_t birth(HANDLE h) {
  FILETIME created{}, exited{}, kernel{}, user{};
@@ -983,6 +1009,7 @@ int wmain(int argc, wchar_t** argv) {
    prepareGlobalParent();
    closeGlobalParentRoots(); budget();
   }
+  else if (mode == L"prepare-context") prepareContext();
   else if (mode == L"prerequisites") prerequisites(PrerequisiteStage::baseline);
   else if (mode == L"prerequisites-post-deploy") prerequisites(PrerequisiteStage::postDeployment);
   else if (mode == L"prerequisites-post-setup") prerequisites(PrerequisiteStage::postSetup);

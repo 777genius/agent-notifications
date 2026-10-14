@@ -147,7 +147,15 @@ async function main(): Promise<void> {
   await actor('prerequisites-post-setup');
   prerequisiteAdmission(JSON.parse((await boundedRead(path.join(root,'post-setup-prerequisites.json'))).toString()),tuple,'post-setup',prerequisite);
   const a = await routeA(); await setup('enable');
-  await persist('context.json',{provider:'codex',session:thread,locality:'local',interface:'desktop'});
+  await actor('prepare-context');
+  const contextBytes=await boundedRead(path.join(root,'context.json'),4096);
+  const contextReceipt=JSON.parse((await boundedRead(path.join(root,'private-context.json'))).toString());
+  assert.equal(contextReceipt.source,source); assert.equal(contextReceipt.nonce,tuple.nonce);
+  assert.equal(contextReceipt.created_exclusive,true);
+  assert.equal(contextReceipt.private_owner_system_only,true);
+  assert.equal(contextReceipt.physical_checked,true);
+  assert.equal(contextReceipt.sha256,sha(contextBytes));
+  assert.deepEqual(JSON.parse(contextBytes.toString()),{provider:'codex',session:thread,locality:'local',interface:'desktop'});
   const receiptRaw = await run('one-show',original,['notify','--context-file',path.join(root,'context.json')],
     JSON.stringify({title,body,category:'info',request_id:'TEST-'+tuple.nonce,navigation:'required'}));
   const receipt = JSON.parse(receiptRaw) as {status: string; replayed: boolean; request_id: string};

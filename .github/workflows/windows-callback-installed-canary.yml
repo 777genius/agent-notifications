@@ -150,6 +150,21 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'inert byte XML contracts failed' }
           & "$out\TEST-installed-observer.exe" --inert-uri
           if ($LASTEXITCODE -ne 0) { throw 'inert file URI contracts failed' }
+          $nonce = [Guid]::NewGuid().ToString('N')
+          $scratch = Join-Path $env:RUNNER_TEMP "TEST-installed-$nonce"
+          New-Item -ItemType Directory -Path $scratch -ErrorAction Stop | Out-Null
+          try {
+            & "$out\TEST-installed-observer.exe" prepare-context $scratch $nonce $env:SOURCE_SHA
+            if ($LASTEXITCODE -ne 0) { throw 'private context creation failed' }
+            $receipt = Get-Content -Raw -LiteralPath (Join-Path $scratch 'private-context.json') | ConvertFrom-Json
+            $context = Get-Content -Raw -LiteralPath (Join-Path $scratch 'context.json') | ConvertFrom-Json
+            $digest = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $scratch 'context.json')).Hash.ToLowerInvariant()
+            if ($receipt.source -cne $env:SOURCE_SHA -or $receipt.nonce -cne $nonce -or $receipt.sha256 -cne $digest -or
+                $receipt.created_exclusive -ne $true -or $receipt.private_owner_system_only -ne $true -or
+                $receipt.physical_checked -ne $true -or $context.provider -cne 'codex' -or
+                $context.session -cne "TEST/$nonce/percent%雪" -or $context.locality -cne 'local' -or
+                $context.interface -cne 'desktop') { throw 'private context receipt mismatch' }
+          } finally { Remove-Item -LiteralPath $scratch -Recurse -Force -ErrorAction Stop }
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         if: inputs.phase == 'package_noshow'
         with:
