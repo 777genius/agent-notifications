@@ -32,7 +32,11 @@ const control = path.join(profile,'agent-notifications'), global = path.join(roo
 const title = 'Navigation TEST '+tuple.nonce, body = 'Cold callback TEST '+tuple.nonce;
 const thread = 'TEST/'+tuple.nonce+'/percent%雪';
 let count = 0, unknown = false, removed = false;
-const childEnv = {...env,APPDATA:profile,AGENT_NOTIFICATIONS_CONFIG:global};
+const childEnv = {...env,AGENT_NOTIFICATIONS_CONFIG:global};
+// Windows environment names are case-insensitive; avoid duplicate spellings.
+for (const name of Object.keys(childEnv)) if (name.toLowerCase() === 'appdata' ||
+  name.toLowerCase() === 'agent_notifications_control_root') delete childEnv[name];
+childEnv.APPDATA = profile;
 async function boundedRead(file: string, limit=65536): Promise<Buffer> {
   const h = await open(file,'r');
   try { const s = await h.stat(); assert(s.isFile() && s.nlink === 1 && s.size > 0 && s.size <= limit); return await h.readFile(); }
