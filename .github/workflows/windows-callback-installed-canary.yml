@@ -473,5 +473,12 @@ jobs:
             ${{ runner.temp }}/TEST-installed-*/*.json
             ${{ runner.temp }}/TEST-installed-*/selected-tests.stdout.txt
             ${{ runner.temp }}/TEST-installed-*/selected-tests.stderr.txt
+            ${{ runner.temp }}/TEST-windows-recovery-*/control/ownership.json
+            ${{ runner.temp }}/TEST-windows-recovery-*/control/transaction.json
+            ${{ runner.temp }}/TEST-windows-recovery-*/control/policy-generation.json
+            ${{ runner.temp }}/TEST-windows-recovery-*/control/windows-callback/*/generation.wne
+            ${{ runner.temp }}/TEST-windows-recovery-*/control/windows-callback/*/operator.pending
+            ${{ runner.temp }}/TEST-windows-recovery-*/control/windows-callback/*/operator.collected
+            ${{ runner.temp }}/TEST-windows-recovery-*/control/windows-callback/*/operator.failure
           if-no-files-found: error
           retention-days: 14
