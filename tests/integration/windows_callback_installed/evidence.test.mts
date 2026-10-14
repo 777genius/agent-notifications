@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { callbackJoin, derivedURI, prerequisiteAdmission, type Receiver } from './evidence.mts';
+import { callerContextPath, callbackJoin, derivedURI, prerequisiteAdmission, type Receiver } from './evidence.mts';
 // Breakage: a candidate Accepted result is treated as proof despite absent/late
 // actual operation drain, wrong retained generation/reference or foreign source.
 // Fixed independent wire facts are not computed by the production codec.
@@ -48,3 +48,9 @@ for (const key of keys) {
 for (const key of ['source','nonce','sid','session','integrity_rid','native_machine','process_machine','windows_build','windows_product_type','windows11_client'])
   assert.throws(() => prerequisiteAdmission({...ready,[key]: typeof ready[key as keyof typeof ready] === 'number' ? 99 : 'changed'},tuple,'post-setup',baseline));
 console.log('TEST installed evidence joins passed; no native effects executed');
+
+const physicalContext=String.raw`\\?\C:\Users\runneradmin\Temp\TEST-installed-${tuple.nonce}\context.json`;
+assert.equal(callerContextPath(physicalContext,tuple.nonce),String.raw`C:\Users\runneradmin\Temp\TEST-installed-${tuple.nonce}\context.json`);
+for (const bad of [physicalContext.replace('C:', 'UNC'),physicalContext.replace('context.json','foreign.json'),physicalContext.replace(tuple.nonce,'3'.repeat(32)),physicalContext.replace('Users','Users\\..'),physicalContext.replace('context.json','context.json:stream'),physicalContext.replace('C:', '1:')]) {
+ assert.throws(()=>callerContextPath(bad,tuple.nonce));
+}

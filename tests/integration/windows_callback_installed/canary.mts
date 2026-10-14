@@ -2,10 +2,10 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { mkdir, open, readFile, readdir, unlink } from 'node:fs/promises';
+import { mkdir, open, readFile, readdir, realpath, unlink } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
-import { callbackJoin, envelope, sha, prerequisiteAdmission, type Receiver, type Tuple } from './evidence.mts';
+import { callbackJoin, callerContextPath, envelope, sha, prerequisiteAdmission, type Receiver, type Tuple } from './evidence.mts';
 import { acquireOfficialArchive } from './strict_archive.mts';
 type Artifact = {source: string; helperSHA256: string; binarySHA256: string; helperExecuted: boolean; installedQualified: boolean};
 type Ledger = {Generation: number; WindowsRetained?: {SnapshotPath: string; SHA256: string}[]};
@@ -156,7 +156,11 @@ async function main(): Promise<void> {
   assert.equal(contextReceipt.physical_checked,true);
   assert.equal(contextReceipt.sha256,sha(contextBytes));
   assert.deepEqual(JSON.parse(contextBytes.toString()),{provider:'codex',session:thread,locality:'local',interface:'desktop'});
-  const receiptRaw = await run('one-show',original,['notify','--context-file',path.join(root,'context.json')],
+  const contextPath=callerContextPath(contextReceipt.context_path,tuple.nonce);
+  const canonicalRoot=await realpath(root);
+  assert.equal(contextPath.toLowerCase(),path.join(canonicalRoot,'context.json').toLowerCase());
+  assert.equal(sha(await boundedRead(contextPath,4096)),contextReceipt.sha256);
+  const receiptRaw = await run('one-show',original,['notify','--context-file',contextPath],
     JSON.stringify({title,body,category:'info',request_id:'TEST-'+tuple.nonce,navigation:'required'}));
   const receipt = JSON.parse(receiptRaw) as {status: string; replayed: boolean; request_id: string};
   assert.equal(receipt.status,'submitted'); assert.equal(receipt.replayed,false); assert.equal(receipt.request_id,'TEST-'+tuple.nonce);

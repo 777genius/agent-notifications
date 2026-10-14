@@ -211,6 +211,7 @@ static void prepareContext() {
  require(bytes(file.h,4096)==data);
  file.closeChecked(); budget();
  auto receipt=fact(); put(receipt,L"role","caller_asserted_context");
+ put(receipt,L"context_path",narrow(path.wstring()));
  put(receipt,L"sha256",sha(data));
  receipt.Insert(L"created_exclusive",JsonValue::CreateBooleanValue(true));
  receipt.Insert(L"private_owner_system_only",JsonValue::CreateBooleanValue(true));

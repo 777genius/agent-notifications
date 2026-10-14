@@ -1,5 +1,20 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import path from 'node:path';
+// Only a native opened physical DOS path to this nonce's fixed fixture file.
+// This removes the exact extended-drive prefix for the product's local path
+// grammar; it does not accept UNC/device paths or change caller provenance.
+export function callerContextPath(value: unknown, nonce: string): string {
+  assert.equal(typeof value,'string'); assert(/^[a-f0-9]{32}$/.test(nonce));
+  const physical = value as string;
+  assert(/^\\\\\?\\[A-Za-z]:\\/.test(physical));
+  const local = physical.slice(4);
+  assert.equal(path.win32.normalize(local),local);
+  assert(!local.includes('/') && !/[\x00-\x1f]/.test(local) && !local.slice(2).includes(':'));
+  assert.equal(path.win32.basename(local),'context.json');
+  assert.equal(path.win32.basename(path.win32.dirname(local)),'TEST-installed-'+nonce);
+  return local;
+}
 export const sha = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex');
 export type Tuple = {source: string; nonce: string};
 export type Prerequisites = Tuple & {

@@ -101,3 +101,5 @@ Its record remains package-only: `nativeAmd64Qualified=false`,
 `callbackQualified=false`, `rebootQualified=false`, and `noShowScope=true`.
 No Windows qualification is claimed from Linux source checks or inert evidence
 joins.
+
+The private context receipt carries the opened physical local-drive path. The controller validates its fixed nonce directory, joins it with the canonical scratch root and readback hash, and passes that spelling to the ordinary CLI. The product continues to refuse path aliases. LocalSystem may have one owner grant or the native creator's two identical owner/SYSTEM grants; foreign principals remain refused.
