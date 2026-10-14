@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.49.4] - 2026-10-14
+
+### Fixed
+- Start Windows toast PowerShell without opening a console window, preserving notification delivery ([#482](https://github.com/777genius/agent-notifications/pull/482)).
+- Preserve private Windows configuration lock ACLs across lock acquisition and reuse, preventing private configurations from failing subsequent commands ([#483](https://github.com/777genius/agent-notifications/pull/483)).
+
+### Platform notes
+- This release uses the basic five-platform artifact profile with separate downloaded macOS and Codex checks. It does not claim visible desktop, full native, eleven-cell OpenCode, cold-start, physical Intel or live-provider qualification.
+
 ## [1.49.3] - 2026-10-13
 
 ### Fixed
