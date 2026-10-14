@@ -149,7 +149,7 @@ struct SDKOperations {
    else if(mode==L"verify-shortcut")shortcutReadback(generation);
    else if(mode==L"apply-clsid")applyClass(generation,end,&diagnostic);
    else if(mode==L"apply-aumid")applyApp(generation,end);
-   else if(mode==L"apply-shortcut")applyShortcut(generation,end);
+   else if(mode==L"apply-shortcut")applyShortcut(generation,end,&diagnostic);
    else if(mode==L"restore-clsid")restoreClass(generation,end);
    else if(mode==L"restore-aumid")restoreApp(generation,end);
    else if(mode==L"restore-shortcut")restoreShortcut(generation,end);

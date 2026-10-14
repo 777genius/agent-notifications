@@ -93,7 +93,11 @@ func decodeOperatorDiagnostic(raw []byte) ([]string, error) {
 		"registry_classes_query", "registry_classes_link_value", "registry_classes_other_value",
 		"registry_shared_query", "registry_shared_link_value", "registry_shared_other_value",
 		"registry_resolved_query", "registry_resolved_link_value", "registry_resolved_other_value",
-		"registry_owned_query", "registry_owned_link_value", "registry_owned_other_value":
+		"registry_owned_query", "registry_owned_link_value", "registry_owned_other_value",
+		"shortcut_path", "shortcut_parent_custody", "shortcut_existing_readback", "shortcut_absence_contract",
+		"shortcut_serialization", "shortcut_serialized_readback", "shortcut_stage_lookup", "shortcut_stage_create",
+		"shortcut_stage_open", "shortcut_stage_bytes", "shortcut_stage_readback", "shortcut_stage_rename",
+		"shortcut_stage_close", "shortcut_final_readback":
 	default:
 		return nil, ErrUnavailable
 	}
