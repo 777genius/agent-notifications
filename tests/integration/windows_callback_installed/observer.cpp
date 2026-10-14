@@ -654,33 +654,33 @@ struct Route {
  std::string snapshotSHA;
  std::vector<Handle> files;
  Route() {
-  auto request = read(L"route.json"); join(request);
+  clickAt("route_json_join"); auto request = read(L"route.json"); join(request);
   const auto p = fs::path(string(request,L"snapshot_path"));
   path = p.parent_path();
-  require(p.filename() == L"generation.wne" && rootGrammar(narrow(path.wstring())));
-  auto ancestor = path.root_path();
+  clickAt("route_path_grammar"); require(p.filename() == L"generation.wne" && rootGrammar(narrow(path.wstring())));
+  clickAt("route_ancestor_custody"); auto ancestor = path.root_path();
   files.push_back(open(ancestor,true));
   for (const auto& component : path.relative_path()) {
    ancestor /= component; files.push_back(open(ancestor,true));
   }
-  files.push_back(open(p,false));
-  auto data = bytes(files.back().h);
-  snapshotSHA = sha(data); snapshot = Snapshot::read(data);
-  require(snapshotSHA == narrow(string(request,L"snapshot_sha")) && snapshot.root == narrow(physical(files[files.size()-2].h))
+  clickAt("route_snapshot_open"); files.push_back(open(p,false));
+  clickAt("route_snapshot_read"); auto data = bytes(files.back().h);
+  clickAt("route_snapshot_decode"); snapshotSHA = sha(data); snapshot = Snapshot::read(data);
+  clickAt("route_snapshot_identity"); require(snapshotSHA == narrow(string(request,L"snapshot_sha")) && snapshot.root == narrow(physical(files[files.size()-2].h))
    && snapshot.sid == ownerSID());
-  files.push_back(open(path/L"helper.exe",false));
-  require(sha(bytes(files.back().h,16*1024*1024)) == snapshot.digest);
+  clickAt("route_helper_open"); files.push_back(open(path/L"helper.exe",false));
+  clickAt("route_helper_digest"); require(sha(bytes(files.back().h,16*1024*1024)) == snapshot.digest);
   const auto reference = narrow(string(request,L"reference")); require(hex(reference,32));
-  files.push_back(open(path/L"records",true));
-  files.push_back(open(path/L"attempts",true));
-  files.push_back(open(path/L"records"/(wide(reference)+L".wne"),false));
-  record = Record::read(bytes(files.back().h)); record.bind(snapshot,snapshotSHA);
+  clickAt("route_records_directory"); files.push_back(open(path/L"records",true));
+  clickAt("route_attempts_directory"); files.push_back(open(path/L"attempts",true));
+  clickAt("route_record_open"); files.push_back(open(path/L"records"/(wide(reference)+L".wne"),false));
+  clickAt("route_record_bind"); record = Record::read(bytes(files.back().h)); record.bind(snapshot,snapshotSHA);
   require(record.reference == reference && record.thread == narrow(string(request,L"thread")));
-  for (size_t i = path.relative_path().empty() ? 0 : 1; i < files.size(); ++i) {
+  clickAt("route_generation_ownership"); for (size_t i = path.relative_path().empty() ? 0 : 1; i < files.size(); ++i) {
    // Only generation objects, not ordinary ancestors, have this strict DACL.
    if (physical(files[i].h).rfind(path.wstring(),0) == 0) owned(files[i].h,snapshot.sid);
   }
-  packages(wide(snapshot.full),false); budget();
+  clickAt("route_selected_package"); packages(wide(snapshot.full),false); budget();
  }
 };
 // Only this positive, held kernel-image classification can exclude a provider.
