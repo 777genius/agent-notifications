@@ -127,7 +127,7 @@ jobs:
       - name: Run Windows private context reader contracts (no SDK effects)
         shell: pwsh
         run: |
-          go test -race -count=1 -run '^TestWindows(SecureContext|ContextEnvelope)' ./internal/agentnotify/cli
+          go test -v -race -count=1 -run '^TestWindows(SecureContext|ContextEnvelope)' ./internal/agentnotify/cli
           if ($LASTEXITCODE -ne 0) { throw 'private context reader contracts failed' }
       - name: Check bounded Job Object collection in fresh TEST scratch (no SDK effects)
         shell: pwsh
