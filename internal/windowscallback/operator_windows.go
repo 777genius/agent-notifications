@@ -55,7 +55,7 @@ func (g *Custody) Operator(ctx context.Context, mode string, fields []string, en
 		}
 	}()
 	if e := g.operatorObligation(); e != nil {
-		return Observation{}, e
+		return Observation{}, boundedUnknown(mode, "operator_obligation", e, 0, 0, nil, nil, nil)
 	}
 	input := []byte{}
 	if mode == "show" {
@@ -76,7 +76,7 @@ func (g *Custody) Operator(ctx context.Context, mode string, fields []string, en
 	if mutating {
 		fence, e = g.fenceOperator(nonce, mode, end)
 		if e != nil {
-			return Observation{}, e
+			return Observation{}, boundedUnknown(mode, "operator_fence", e, 0, 0, nil, nil, nil)
 		}
 	}
 	child := exec.Command(filepath.Join(g.Root, "helper.exe"), "--operator", mode, strconv.FormatUint(end, 10), nonce)
@@ -132,24 +132,24 @@ func (g *Custody) Operator(ctx context.Context, mode string, fields []string, en
 				g.collectOperator()
 			}()
 			if mode == "show" {
-				return Observation{State: "unknown"}, ErrUnknown
+				return Observation{State: "unknown"}, boundedUnknown(mode, "collection_timeout", err, child.Process.Pid, -1, nil, nil, nil)
 			}
-			return Observation{}, ErrUnknown
+			return Observation{}, boundedUnknown(mode, "collection_timeout", err, child.Process.Pid, -1, nil, nil, nil)
 		}
 		if child.ProcessState == nil {
 			retained = true
-			return Observation{State: "unknown"}, ErrUnknown
+			return Observation{State: "unknown"}, boundedUnknown(mode, "collection_state_missing", err, child.Process.Pid, -1, nil, nil, nil)
 		}
 		if fence != nil {
 			_ = fence.collected(child.Process.Pid, child.ProcessState.ExitCode())
 		}
-		return Observation{State: "unknown"}, ErrUnknown
+		return Observation{State: "unknown"}, boundedUnknown(mode, "collection_timeout", err, child.Process.Pid, child.ProcessState.ExitCode(), &output, &stderr, nil)
 	}
 	if child.ProcessState == nil {
 		// ExitCode's -1 on nil is not collection evidence. Do not publish a
 		// collected fact, release custody, or retry process/SDK operations.
 		retained = true
-		return Observation{State: "unknown"}, ErrUnknown
+		return Observation{State: "unknown"}, boundedUnknown(mode, "wait_state_missing", err, child.Process.Pid, -1, nil, nil, nil)
 	}
 	if fence != nil {
 		defer func() {
@@ -164,20 +164,20 @@ func (g *Custody) Operator(ctx context.Context, mode string, fields []string, en
 	}
 	if output.overflow || budget(ctx, end) != nil {
 		if mode == "show" {
-			return Observation{State: "unknown"}, ErrUnknown
+			return Observation{State: "unknown"}, boundedUnknown(mode, "output_or_budget", err, child.Process.Pid, child.ProcessState.ExitCode(), &output, &stderr, nil)
 		}
 		if mutating {
-			return Observation{}, ErrUnknown
+			return Observation{}, boundedUnknown(mode, "output_or_budget", err, child.Process.Pid, child.ProcessState.ExitCode(), &output, &stderr, nil)
 		}
 		return Observation{}, ErrUnavailable
 	}
 	fieldsOut := strings.Fields(output.String())
 	if len(fieldsOut) != 4 || fieldsOut[0] != "WCB1" || (fieldsOut[3] != "0" && fieldsOut[3] != "1") {
 		if mode == "show" {
-			return Observation{State: "unknown"}, ErrUnknown
+			return Observation{State: "unknown"}, boundedUnknown(mode, "output_contract", err, child.Process.Pid, child.ProcessState.ExitCode(), &output, &stderr, nil)
 		}
 		if mutating {
-			return Observation{}, ErrUnknown
+			return Observation{}, boundedUnknown(mode, "output_contract", err, child.Process.Pid, child.ProcessState.ExitCode(), &output, &stderr, nil)
 		}
 		return Observation{}, ErrUnavailable
 	}
@@ -187,37 +187,38 @@ func (g *Custody) Operator(ctx context.Context, mode string, fields []string, en
 		// process has actually returned/been Waited under the original end.
 		// Clear only this known terminal, never by expiry or PID absence.
 		if child.ProcessState.ExitCode() != 2 {
-			return o, ErrUnknown
+			return o, boundedUnknown(mode, "disabled_exit_contract", err, child.Process.Pid, child.ProcessState.ExitCode(), &output, &stderr, nil)
 		}
 		if fence != nil {
 			if e = fence.clear(child.Process.Pid, child.ProcessState.ExitCode()); e != nil {
-				return o, ErrUnknown
+				return o, boundedUnknown(mode, "fence_clear", e, child.Process.Pid, child.ProcessState.ExitCode(), &output, &stderr, nil)
 			}
 		}
 		return o, ErrDisabled
 	}
 	if mode == "show" && (o.EffectEntered || o.State == "unknown") && (err != nil || o.State != "submitted") {
-		return o, ErrUnknown
+		return o, boundedUnknown(mode, "show_terminal", err, child.Process.Pid, child.ProcessState.ExitCode(), &output, &stderr, nil)
 	}
 	if err != nil || (o.State != "ready" && o.State != "submitted") {
 		if mutating {
-			return o, ErrUnknown
+			return o, boundedUnknown(mode, "helper_exit_or_state", err, child.Process.Pid, child.ProcessState.ExitCode(), &output, &stderr, nil)
 		}
 		return o, ErrUnavailable
 	}
 	if o.Permission != "not_checked" && o.Permission != "enabled" && o.Permission != "permission_unknown" {
 		if mutating {
-			return o, ErrUnknown
+			return o, boundedUnknown(mode, "permission_contract", err, child.Process.Pid, child.ProcessState.ExitCode(), &output, &stderr, nil)
 		}
 		return o, ErrUnavailable
 	}
 	if fence != nil {
 		if e = fence.clear(child.Process.Pid, child.ProcessState.ExitCode()); e != nil {
-			return Observation{State: "unknown", EffectEntered: o.EffectEntered}, ErrUnknown
+			return Observation{State: "unknown", EffectEntered: o.EffectEntered}, boundedUnknown(mode, "fence_clear", e, child.Process.Pid, child.ProcessState.ExitCode(), &output, &stderr, nil)
 		}
 	}
 	return o, nil
 }
+
 func (p Port) CheckReadiness(ctx context.Context, b Binding, end uint64) error {
 	if ctx != nil && ctx.Err() != nil {
 		return ctx.Err()

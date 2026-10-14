@@ -2,11 +2,56 @@ package windowscallback
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"os/exec"
 	"strconv"
 	"strings"
 )
+
+// UnknownCause preserves bounded evidence for a failed helper handoff while
+// keeping the public classification exactly ErrUnknown. It is diagnostic only:
+// it never grants replay, clears a durable fence, or changes qualification.
+type UnknownCause struct {
+	Cause      string
+	Mode       string
+	PID        int
+	ExitCode   int
+	Wait       error
+	Stdout     []byte
+	Stderr     []byte
+	Diagnostic []string
+}
+
+func (e *UnknownCause) Error() string {
+	if e == nil {
+		return ErrUnknown.Error()
+	}
+	return fmt.Sprintf("%s: cause=%s mode=%s pid=%d exit=%d wait=%v stdout=%q stderr=%q diagnostic=%q",
+		ErrUnknown.Error(), e.Cause, e.Mode, e.PID, e.ExitCode, e.Wait, e.Stdout, e.Stderr, e.Diagnostic)
+}
+
+func (e *UnknownCause) Unwrap() error { return ErrUnknown }
+
+func boundedUnknown(mode, cause string, wait error, pid, exit int, output, stderr *cappedOutput, diagnostic []string) error {
+	var stdout, stderrBytes []byte
+	if output != nil {
+		stdout = bytes.Clone(output.Bytes())
+	}
+	if stderr != nil {
+		stderrBytes = bytes.Clone(stderr.Bytes())
+	}
+	return &UnknownCause{
+		Cause:      cause,
+		Mode:       mode,
+		PID:        pid,
+		ExitCode:   exit,
+		Wait:       wait,
+		Stdout:     stdout,
+		Stderr:     stderrBytes,
+		Diagnostic: append([]string(nil), diagnostic...),
+	}
+}
 
 type cappedOutput struct {
 	bytes.Buffer
