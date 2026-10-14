@@ -178,10 +178,10 @@ jobs:
           Copy-Item -LiteralPath $helper -Destination (Join-Path $out 'core-helper.exe')
           $test = Join-Path $out 'installruntime.test.exe'
           Push-Location $core
-          go test -c -race -trimpath -tags windows_callback_asset -o $test ./internal/installruntime
+          go test -c -buildvcs=true -race -trimpath -tags windows_callback_asset -o $test ./internal/installruntime
           $testCode = $LASTEXITCODE
           $shipping = Join-Path $out 'core-claude-notifications-windows-amd64.exe'
-          go build -tags windows_callback_asset -trimpath -ldflags='-s -w' -o $shipping ./cmd/claude-notifications
+          go build -buildvcs=true -tags windows_callback_asset -trimpath -ldflags='-s -w' -o $shipping ./cmd/claude-notifications
           $shippingCode = $LASTEXITCODE
           Pop-Location
           if ($testCode -ne 0) { throw 'actual production installruntime race test compile failed' }
@@ -271,10 +271,10 @@ jobs:
               testMachine=(Get-PEMachine $test)
             }
             buildProvenance=@{
-              testCommand=@('test','-c','-race','-trimpath','-tags=windows_callback_asset','./internal/installruntime')
+              testCommand=@('test','-c','-buildvcs=true','-race','-trimpath','-tags=windows_callback_asset','./internal/installruntime')
               testExitCode=0
               testBuildInfoSHA256=(Get-Hash $testBuildInfoPath)
-              shippingCommand=@('build','-tags=windows_callback_asset','-trimpath','-ldflags=-s -w','./cmd/claude-notifications')
+              shippingCommand=@('build','-buildvcs=true','-tags=windows_callback_asset','-trimpath','-ldflags=-s -w','./cmd/claude-notifications')
               shippingExitCode=0
               shippingBuildInfoSHA256=(Get-Hash $shippingBuildInfoPath)
               raceSymbolsSHA256=(Get-Hash $raceSymbolsPath)

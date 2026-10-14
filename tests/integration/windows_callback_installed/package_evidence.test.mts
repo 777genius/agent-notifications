@@ -25,21 +25,34 @@ const digest = (letter: string): string => letter.repeat(64);
 const oid = (letter: string): string => letter.repeat(40);
 const file = (letter: string): FileIdentity => ({bytes:123,sha256:digest(letter),gitBlob:oid(letter)});
 const testBuildInfo = [
-  'path\tTEST/installruntime.test.exe',
-  'mod\tgithub.com/777genius/agent-notifications',
-  'build\t-buildmode=exe',
-  'build\t-compiler=gc',
-  'build\t-tags=windows_callback_asset',
-  'build\t-trimpath=true',
+  '\tbuild\t-race=true',
+  '\tpath\tTEST/installruntime.test.exe',
+  '\tmod\tgithub.com/777genius/agent-notifications',
+  '\tbuild\t-buildmode=exe',
+  '\tbuild\t-compiler=gc',
+  '\tbuild\t-tags=windows_callback_asset',
+  '\tbuild\t-trimpath=true',
+  '\tbuild\tGOOS=windows',
+  '\tbuild\tGOARCH=amd64',
+  '\tbuild\tCGO_ENABLED=1',
+  '\tbuild\tvcs=git',
+  '\tbuild\tvcs.revision='+oid('4'),
+  '\tbuild\tvcs.modified=false',
   '',
 ].join('\n');
 const shippingBuildInfo = [
-  'path\tTEST/claude-notifications.exe',
-  'mod\tgithub.com/777genius/agent-notifications',
-  'build\t-buildmode=exe',
-  'build\t-compiler=gc',
-  'build\t-tags=windows_callback_asset',
-  'build\t-trimpath=true',
+  '\tpath\tTEST/claude-notifications.exe',
+  '\tmod\tgithub.com/777genius/agent-notifications',
+  '\tbuild\t-buildmode=exe',
+  '\tbuild\t-compiler=gc',
+  '\tbuild\t-tags=windows_callback_asset',
+  '\tbuild\t-trimpath=true',
+  '\tbuild\tGOOS=windows',
+  '\tbuild\tGOARCH=amd64',
+  '\tbuild\tCGO_ENABLED=1',
+  '\tbuild\tvcs=git',
+  '\tbuild\tvcs.revision='+oid('4'),
+  '\tbuild\tvcs.modified=false',
   '',
 ].join('\n');
 const raceSymbols = 'internal/race.runtimeAcquire\nruntime.raceinit\n';
@@ -65,9 +78,9 @@ const compile: CompileManifest = {
     helperMachine:0x8664,shippingMachine:0x8664,testMachine:0x8664,
   },
   buildProvenance:{
-    testCommand:['test','-c','-race','-trimpath','-tags=windows_callback_asset','./internal/installruntime'],
+    testCommand:['test','-c','-buildvcs=true','-race','-trimpath','-tags=windows_callback_asset','./internal/installruntime'],
     testExitCode:0,testBuildInfoSHA256:hashText(testBuildInfo),
-    shippingCommand:['build','-tags=windows_callback_asset','-trimpath','-ldflags=-s -w','./cmd/claude-notifications'],
+    shippingCommand:['build','-buildvcs=true','-tags=windows_callback_asset','-trimpath','-ldflags=-s -w','./cmd/claude-notifications'],
     shippingExitCode:0,shippingBuildInfoSHA256:hashText(shippingBuildInfo),
     raceSymbolsSHA256:hashText(raceSymbols),
   },
@@ -241,3 +254,9 @@ assert.throws(() => packageEvidenceJoin({
 }));
 
 console.log('TEST package NoShow evidence joins passed; no native effects executed');
+
+// Reject missing race and foreign/dirty VCS facts from actual Go buildinfo.
+for (const bad of [testBuildInfo.replace('-race=true','-race=false'), testBuildInfo.replace('vcs.revision='+oid('4'),'vcs.revision='+oid('9')), testBuildInfo.replace('vcs.modified=false','vcs.modified=true')]) {
+  const fact=actualBuildProvenance(Buffer.from(bad),Buffer.from(shippingBuildInfo),Buffer.from(raceSymbols));
+  assert.throws(() => compileManifestJoin({...compile,buildProvenance:{...compile.buildProvenance,testBuildInfoSHA256:hashText(bad)}},tuple,fact));
+}

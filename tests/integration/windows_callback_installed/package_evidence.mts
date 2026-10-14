@@ -246,9 +246,9 @@ function parseBuildSettings(raw: string): Record<string,string> {
   assert(!raw.includes('\0'));
   const settings: Record<string,string> = {};
   for (const line of raw.replace(/\r\n/gu,'\n').split('\n')) {
-    const match = /^build\t-([^=\t]+)=(.*)$/u.exec(line);
+    const match = /^\tbuild\t(-?[A-Za-z0-9_.]+)=(.*)$/u.exec(line);
     if (!match) continue;
-    const key = match[1]!;
+    const key = match[1]!.replace(/^-/u,'');
     assert(!(key in settings),`duplicate build setting ${key}`);
     settings[key] = match[2]!;
   }
@@ -335,10 +335,10 @@ export function buildProvenanceJoin(
 ): void {
   void tuple;
   assert.deepEqual([...value.testCommand],[
-    'test','-c','-race','-trimpath','-tags=windows_callback_asset','./internal/installruntime',
+    'test','-c','-buildvcs=true','-race','-trimpath','-tags=windows_callback_asset','./internal/installruntime',
   ]);
   assert.deepEqual([...value.shippingCommand],[
-    'build','-tags=windows_callback_asset','-trimpath','-ldflags=-s -w','./cmd/claude-notifications',
+    'build','-buildvcs=true','-tags=windows_callback_asset','-trimpath','-ldflags=-s -w','./cmd/claude-notifications',
   ]);
   assert.equal(value.testExitCode,0);
   assert.equal(value.shippingExitCode,0);
@@ -350,9 +350,14 @@ export function buildProvenanceJoin(
   assert.equal(value.raceSymbolsSHA256,createHash('sha256').update(actual.raceSymbols).digest('hex'));
   for (const settings of [actual.testSettings,actual.shippingSettings]) {
     assert.equal(settings['buildmode'],'exe');
+    assert.equal(settings['compiler'],'gc');
+    assert.equal(settings['GOOS'],'windows');
+    assert.equal(settings['GOARCH'],'amd64');
+    assert.equal(settings['CGO_ENABLED'],'1');
     assert.equal(settings['trimpath'],'true');
     assert.equal(settings['tags'],'windows_callback_asset');
   }
+  assert.equal(actual.testSettings['race'],'true');
   assert(actual.raceSymbols.split(/\r?\n/u).some(line => line.includes('internal/race.')));
 }
 
@@ -391,6 +396,11 @@ export function compileManifestJoin(
     assert(identity.sha256.match(lower64) && identity.gitBlob.match(lower40));
   }
   buildProvenanceJoin(value.buildProvenance,tuple,actualBuild);
+  for (const settings of [actualBuild.testSettings,actualBuild.shippingSettings]) {
+    assert.equal(settings['vcs'],'git');
+    assert.equal(settings['vcs.revision'],source.coreSHA);
+    assert.equal(settings['vcs.modified'],'false');
+  }
   const binary = value.binaries;
   for (const key of ['helperSHA256','shippingBinarySHA256','testBinarySHA256'] as const)
     assert(binary[key].match(lower64));
