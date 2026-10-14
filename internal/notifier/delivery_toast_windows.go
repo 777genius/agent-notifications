@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"syscall"
 
 	"golang.org/x/sys/windows"
 
@@ -73,6 +74,9 @@ func windowsToastCommand(ctx context.Context, powershell string, data []byte, ap
 		"AGENT_NOTIFICATIONS_TOAST_XML="+base64.StdEncoding.EncodeToString(data),
 		"AGENT_NOTIFICATIONS_TOAST_APP_ID="+appID,
 	)
+	// The terminal bell frees the hook's hidden console before delivery, so a
+	// console child would otherwise get a new, visible console window.
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: windows.CREATE_NO_WINDOW}
 	return cmd
 }
 
