@@ -57,6 +57,17 @@ static void inertUriAttributes(const char* label, const winrt::Windows::Foundati
 static void archiveAt(const char* step) { archiveStep = step; }
 static std::atomic<const char*> clickStep{"entry"};
 static void clickAt(const char* step) { clickStep.store(step,std::memory_order_relaxed); }
+// MSVC path::root_path treats the device introducer as root (\\?\),
+// not the DOS volume. Decompose only the already validated physical drive
+// grammar, preserving the exact namespace and every ancestor hold.
+static fs::path physicalDriveRoot(const fs::path& path) {
+ const auto value=path.wstring(); require(rootGrammar(narrow(value)));
+ return fs::path(value.substr(0,7));
+}
+static fs::path physicalDriveRelative(const fs::path& path) {
+ const auto value=path.wstring(); require(rootGrammar(narrow(value)));
+ return fs::path(value.substr(7));
+}
 static std::vector<Handle> roots;
 static void budget() { require(GetTickCount64() < end); }
 static void put(JsonObject& j, const wchar_t* k, const std::string& v) {
@@ -559,6 +570,16 @@ static winrt::Windows::Foundation::Uri deploymentUri(const std::wstring& canonic
 // Breakage: the actual URL/WinRT boundary refuses extended DOS paths, or loses
 // literal spaces/#/%/Unicode when mapping the held local path to a file URI.
 static void uriContracts() {
+ const fs::path route=LR"(\\?\C:\TEST-installed\profile\agent-notifications\generation)";
+ require(physicalDriveRoot(route).wstring()==LR"(\\?\C:\)");
+ require(physicalDriveRelative(route).wstring()==LR"(TEST-installed\profile\agent-notifications\generation)");
+ auto rebuilt=physicalDriveRoot(route);
+ for(const auto& part:physicalDriveRelative(route)) rebuilt/=part;
+ require(rebuilt==route);
+ for(const auto input:{LR"(\\?\UNC\server\share)",LR"(\\.\C:\foreign)",LR"(C:\foreign)",LR"(\\?\1:\foreign)",LR"(\\?\C:\a\..\foreign)"}){
+  bool refused=false;try{(void)physicalDriveRoot(fs::path(input));}catch(...){refused=true;}require(refused);
+ }
+
  bool oldRejected = false;
  const char* oldStage = "UrlCreateFromPathW";
  try {
@@ -658,9 +679,9 @@ struct Route {
   const auto p = fs::path(string(request,L"snapshot_path"));
   path = p.parent_path();
   clickAt("route_path_grammar"); require(p.filename() == L"generation.wne" && rootGrammar(narrow(path.wstring())));
-  clickAt("route_ancestor_custody"); auto ancestor = path.root_path();
+  clickAt("route_ancestor_custody"); auto ancestor = physicalDriveRoot(path);
   files.push_back(open(ancestor,true));
-  for (const auto& component : path.relative_path()) {
+  for (const auto& component : physicalDriveRelative(path)) {
    ancestor /= component; files.push_back(open(ancestor,true));
   }
   clickAt("route_snapshot_open"); files.push_back(open(p,false));
@@ -733,8 +754,8 @@ struct Process {
   if (shell) {
    clickAt("shell_path_grammar"); const auto admitted = fs::path(L"\\\\?\\"+path);
    require(rootGrammar(narrow(admitted.wstring())));
-   clickAt("shell_parent_custody"); auto parent = admitted.root_path(); shellParents.push_back(open(parent,true));
-   for (const auto& part : admitted.parent_path().relative_path()) {
+   clickAt("shell_parent_custody"); auto parent = physicalDriveRoot(admitted); shellParents.push_back(open(parent,true));
+   for (const auto& part : physicalDriveRelative(admitted.parent_path())) {
     budget(); parent /= part; shellParents.push_back(open(parent,true));
    }
    clickAt("shell_file_open"); shellFile = Handle(CreateFileW(admitted.c_str(),GENERIC_READ|READ_CONTROL,FILE_SHARE_READ,nullptr,
