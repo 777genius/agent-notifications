@@ -840,12 +840,12 @@ static bool shortcutRollbackRemove(ShortcutCleanupProbe* probe,
 }
 struct ShortcutCreatedDirectory {
   fs::path parsingPath,storagePath;
-  Handle held;
+  Handle held{INVALID_HANDLE_VALUE};
   bool created=false;
 };
 struct ShortcutCreatedFile {
   fs::path parsingPath,storagePath;
-  Handle held;
+  Handle held{INVALID_HANDLE_VALUE};
   bool created=false;
 };
 class ScopedShortcutTargetTree {
@@ -1066,7 +1066,7 @@ struct ShortcutTargetTreePaths {
 };
 static ShortcutTargetTreePaths shortcutTargetTreePaths(const Generation& g){
   ShortcutTargetTreePaths result{};
-  auto path=shortcutLocalDriveName((g.root/L"shortcut-targets").wstring());
+  auto path=fs::path(shortcutLocalDriveName((g.root/L"shortcut-targets").wstring()));
   result.directories[0]=path;
   for(size_t part=0;part<3;part++){
     path/=(std::wstring(96,wchar_t(L'a'+part%26)));
