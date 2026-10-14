@@ -21,8 +21,12 @@ permission Disabled, ambiguous UI and unknown collections refuse. Parents are
 observed before setup and never created to force success. A missing visible
 banner/default row fails; there is no alternate input or OOBE path.
 
-The normal managed installer creates a disposable producer. Explicit setup A
-is followed by preserved-route enable, which validates installed readiness and
+The normal managed installer creates a disposable producer. Setup and ordinary
+notify share a fresh TEST `APPDATA` directory, so the normal
+`os.UserConfigDir()/agent-notifications` control root and journal are identical.
+The harness does not rely on a control-root environment backdoor or repair state
+after a refused notify.
+Explicit setup A is followed by preserved-route enable, which validates installed readiness and
 also writes managed policy; offline status is not native readiness. The fixed
 synthetic caller context is created exclusively by the native TEST
 actor with a protected owner-and-SYSTEM-only DACL and checked physical file,

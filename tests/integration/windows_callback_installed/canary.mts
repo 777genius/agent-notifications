@@ -24,11 +24,15 @@ const observer = path.resolve(env.TEST_INSTALLED_OBSERVER!);
 const entry = 'claude-notifications-windows-amd64.exe';
 const original = path.join(artifact,entry);
 const stage = path.join(root,'stage'), runtime = path.join(root,'runtime'), bin = path.join(runtime,'bin');
-const control = path.join(root,'control'), global = path.join(root,'TEST-global-parent','TEST-global.json');
+// Ordinary notify resolves os.UserConfigDir(), which uses APPDATA on Windows.
+// Keep setup and notify in the same fresh TEST profile through that standard
+// path; no private control-root environment override exists in the product.
+const profile = path.join(root,'profile');
+const control = path.join(profile,'agent-notifications'), global = path.join(root,'TEST-global-parent','TEST-global.json');
 const title = 'Navigation TEST '+tuple.nonce, body = 'Cold callback TEST '+tuple.nonce;
 const thread = 'TEST/'+tuple.nonce+'/percent%雪';
 let count = 0, unknown = false, removed = false;
-const childEnv = {...env,AGENT_NOTIFICATIONS_CONTROL_ROOT:control,AGENT_NOTIFICATIONS_CONFIG:global};
+const childEnv = {...env,APPDATA:profile,AGENT_NOTIFICATIONS_CONFIG:global};
 async function boundedRead(file: string, limit=65536): Promise<Buffer> {
   const h = await open(file,'r');
   try { const s = await h.stat(); assert(s.isFile() && s.nlink === 1 && s.size > 0 && s.size <= limit); return await h.readFile(); }
@@ -107,7 +111,7 @@ async function removeProducer(): Promise<void> {
     generation_deletion:false,vendor_deletion:false,global_sdk_drain_claim:false});
 }
 async function main(): Promise<void> {
-  await mkdir(root); await mkdir(stage); await mkdir(runtime); await mkdir(bin);
+  await mkdir(root); await mkdir(profile); await mkdir(stage); await mkdir(runtime); await mkdir(bin);
   const manifest = JSON.parse((await boundedRead(path.join(artifact,'manifest.json'))).toString()) as Artifact;
   assert.equal(manifest.source,source); assert.equal(manifest.helperExecuted,false); assert.equal(manifest.installedQualified,false);
   const binary = await boundedRead(original,32*1024*1024), helper = await boundedRead(path.join(artifact,'helper.exe'),16*1024*1024);
