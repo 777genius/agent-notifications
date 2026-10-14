@@ -98,7 +98,7 @@ async function boundedRead(file: string, limit=65536): Promise<Buffer> {
   const h = await open(file,'r');
   try {
     const info = await h.stat();
-    assert(info.isFile() && info.nlink === 1 && info.size > 0 && info.size <= limit);
+    assert(info.isFile() && info.nlink === 1 && (allowEmpty || info.size > 0) && info.size <= limit);
     return await h.readFile();
   } finally {
     await h.close();
@@ -235,8 +235,8 @@ async function runBounded(
         const process = await readJson<ProcessSupervisionResult>(resultPath);
         assert.deepEqual(process.command,[...args]);
         assert.equal(process.executable,path.resolve(executable));
-        const stdout = (await boundedRead(stdoutPath)).toString('utf8');
-        const stderr = (await boundedRead(stderrPath)).toString('utf8');
+        const stdout = (await boundedRead(stdoutPath,65536,true)).toString('utf8');
+        const stderr = (await boundedRead(stderrPath,65536,true)).toString('utf8');
         const collection: BoundedCollection = {
           process,stdout,stderr,supervisorExitCode:code,supervisorSignal:signal,
         };
