@@ -318,3 +318,119 @@ func contextWindowsSetDACL(t *testing.T, path, sddl string) {
 		t.Fatal(err)
 	}
 }
+
+func TestWindowsSecureContextNativeACELayoutAndMalformedBounds(t *testing.T) {
+	if unsafe.Sizeof(windows.ACE_HEADER{}) != 4 || unsafe.Offsetof(windows.ACCESS_ALLOWED_ACE{}.SidStart) != 8 {
+		t.Fatal("unexpected Windows ACE layout")
+	}
+	sd, err := windows.SecurityDescriptorFromString("D:P(A;;FR;;;SY)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	acl, _, err := sd.DACL()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ace *windows.ACCESS_ALLOWED_ACE
+	if err = windows.GetAce(acl, 0, &ace); err != nil {
+		t.Fatal(err)
+	}
+	sid, err := windows.StringToSid("S-1-5-18")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if int(ace.Header.AceSize) != 8+sid.Len() || ace.Header.AceSize != 20 {
+		t.Fatalf("actual SYSTEM ACE size=%d SID length=%d", ace.Header.AceSize, sid.Len())
+	}
+	parsed, err := contextWindowsAllowedACE(ace)
+	if err != nil || parsed.SID != "S-1-5-18" {
+		t.Fatalf("valid native ACE refused: %#v %v", parsed, err)
+	}
+	for _, test := range []string{"truncated", "short_header", "wrong_type", "excess_subauthorities"} {
+		t.Run(test, func(t *testing.T) {
+			storage := make([]uint32, (int(ace.Header.AceSize)+3)/4)
+			data := unsafe.Slice((*byte)(unsafe.Pointer(&storage[0])), int(ace.Header.AceSize))
+			copy(data, unsafe.Slice((*byte)(unsafe.Pointer(ace)), len(data)))
+			candidate := (*windows.ACCESS_ALLOWED_ACE)(unsafe.Pointer(&storage[0]))
+			switch test {
+			case "truncated":
+				candidate.Header.AceSize -= 4
+			case "short_header":
+				candidate.Header.AceSize = 12
+			case "wrong_type":
+				candidate.Header.AceType = windows.ACCESS_DENIED_ACE_TYPE
+			case "excess_subauthorities":
+				data[9] = 16
+			}
+			if _, err := contextWindowsAllowedACE(candidate); err == nil {
+				t.Fatal("malformed ACE accepted")
+			}
+		})
+	}
+	if _, err := contextWindowsAllowedACE(nil); err == nil {
+		t.Fatal("nil ACE accepted")
+	}
+}
+
+func TestWindowsSecureContextPrivatePrincipalPolicy(t *testing.T) {
+	user, err := windows.StringToSid("S-1-5-21-42-43-44-1001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	system, err := windows.StringToSid("S-1-5-18")
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := contextWindowsFileState{Links: 1}
+	ownerACE := contextWindowsACE{Type: windows.ACCESS_ALLOWED_ACE_TYPE, Mask: 0x001f01ff, SID: user.String()}
+	systemACE := ownerACE
+	systemACE.SID = system.String()
+	private := func(owner string, aces ...contextWindowsACE) contextWindowsSecurity {
+		return contextWindowsSecurity{Control: windows.SE_DACL_PRESENT | windows.SE_DACL_PROTECTED, Owner: owner, ACEs: aces}
+	}
+	if !contextWindowsPrivateForSID(state, private(user.String(), ownerACE, systemACE), user) {
+		t.Fatal("private owner/SYSTEM policy refused")
+	}
+	for _, test := range []struct {
+		name     string
+		security contextWindowsSecurity
+	}{
+		{"foreign_owner", private(system.String(), ownerACE, systemACE)},
+		{"missing_owner", private(user.String(), systemACE)},
+		{"missing_system", private(user.String(), ownerACE)},
+		{"duplicate_system", private(user.String(), ownerACE, systemACE, systemACE)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if contextWindowsPrivateForSID(state, test.security, user) {
+				t.Fatal("invalid principal policy accepted")
+			}
+		})
+	}
+	for _, test := range []string{"deny", "inherited", "unsupported_mask", "foreign"} {
+		t.Run(test, func(t *testing.T) {
+			bad := ownerACE
+			switch test {
+			case "deny":
+				bad.Type = windows.ACCESS_DENIED_ACE_TYPE
+			case "inherited":
+				bad.Flags = windows.INHERITED_ACE
+			case "unsupported_mask":
+				bad.Mask = 0x01000000
+			case "foreign":
+				bad.SID = "S-1-1-0"
+			}
+			if contextWindowsPrivateForSID(state, private(user.String(), bad, systemACE), user) {
+				t.Fatal("invalid ACE accepted")
+			}
+		})
+	}
+	for _, count := range []int{1, 2, 3} {
+		aces := make([]contextWindowsACE, count)
+		for i := range aces {
+			aces[i] = systemACE
+		}
+		if got := contextWindowsPrivateForSID(state, private(system.String(), aces...), system); got != (count <= 2) {
+			t.Fatalf("LocalSystem grant count=%d admitted=%t", count, got)
+		}
+	}
+}
