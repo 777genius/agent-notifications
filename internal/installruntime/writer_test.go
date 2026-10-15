@@ -1,11 +1,46 @@
 package installruntime
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+// Codex copies the packaged updater into its durable runtime. A prior Local or
+// OpenCode install can already have raised the shared ledger's writer floor.
+func TestPackagedShellInstallerAtSupportedWriterFloor(t *testing.T) {
+	installer, err := os.ReadFile(filepath.Join("..", "..", "bin", "install.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, r := request(t)
+	l, err := Commit(ctx, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Model the persisted barrier from an earlier product installation without
+	// invoking any native runtime or touching an actual user installation.
+	l.Schema = ledgerSchemaV3
+	l.WriterFloor = SupportedWriterFloor
+	if err := writeJSON(filepath.Join(r.ControlRoot, "ownership.json"), l); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(r.RuntimeRoot, "install.sh")
+	r.Files = []File{{Path: path, Data: installer, Mode: 0755}}
+	next, err := Commit(ctx, r)
+	if err != nil {
+		t.Fatalf("packaged updater cannot join an existing floor-%d install: %v", l.WriterFloor, err)
+	}
+	if next.WriterFloor != l.WriterFloor {
+		t.Fatalf("writer floor changed from %d to %d", l.WriterFloor, next.WriterFloor)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(got, installer) {
+		t.Fatalf("packaged updater was not published intact: %v", err)
+	}
+}
 
 func TestManagedOldWriterRefusedWithoutExecutionOrMutation(t *testing.T) {
 	ctx, r := request(t)
