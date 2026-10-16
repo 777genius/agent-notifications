@@ -457,7 +457,19 @@ Or use the skill command: `/claude-notifications-go:sounds`
 
 ### Audio Device Selection
 
-Route notification sounds to a specific audio output device instead of the system default:
+On macOS, notification sounds follow **System Settings > Sound > Play sound
+effects through**. This alert output may differ from the output used by music,
+calls, or sound previews. The plugin does not change either system output or
+system volume. Its configured `volume` scales the sound samples; the system alert
+volume also applies.
+
+The macOS notification backend does not use `audioDevice`: UserNotifications
+has no per-notification output-device parameter. Choosing an alert output in
+System Settings affects other system alerts too. The plugin must not temporarily
+switch that global output to emulate a per-plugin selection.
+
+On Linux and Windows, `audioDevice` routes notification sounds to a specific
+audio output device instead of the system default:
 
 ```bash
 # List available audio devices
@@ -475,7 +487,7 @@ Then add the device name to the shared file selected by `config path`:
 {
   "notifications": {
     "desktop": {
-      "audioDevice": "MacBook Pro-Lautsprecher"
+      "audioDevice": "DEVICE_NAME"
     }
   }
 }
