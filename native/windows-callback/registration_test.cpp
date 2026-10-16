@@ -38,6 +38,9 @@ static BOOL win32Result(const char* name,BOOL result){
   lastTestResultKnown=true;
   return result;
 }
+static std::string statusValueText(bool known,DWORD value){
+  return known?std::to_string(static_cast<unsigned long>(value)):std::string("unknown");
+}
 // TEST-only fixture failures retain the exact boundary without including any
 // private path in process output. Injected failures are contract observations,
 // not Win32 API results.
@@ -75,8 +78,35 @@ struct TestFixtureFaults {
   static inline FixtureCleanupKind cleanup=FixtureCleanupKind::close_handle;
   static inline bool cleanupAllKinds=false;
   static inline size_t cleanupFailures=0;
+  static inline bool fidQueryFailure=false;
+  static inline bool fidQueryFailureOnCleanup=false;
+  static inline DWORD fidQueryStatus=ERROR_SUCCESS;
+  static inline HANDLE fidHandle=INVALID_HANDLE_VALUE;
+  static inline bool identityMismatchOnCleanup=false;
+  static inline bool replaceFile=false,replaceDirectory=false;
+  static inline size_t replaceOnAttempt=0,replaceIndex=0;
+  static inline bool replacementAttempted=false,replacementRenamed=false;
+  static inline bool replacementCreated=false;
+  static inline std::array<BY_HANDLE_FILE_INFORMATION,6> adoptedFids{};
+  static inline unsigned adoptedFidMask=0;
   static void reset()noexcept{
     effect=FixtureEffectFault::none;cleanupAllKinds=false;cleanupFailures=0;
+    fidQueryFailure=fidQueryFailureOnCleanup=false;fidQueryStatus=ERROR_SUCCESS;
+    fidHandle=INVALID_HANDLE_VALUE;
+    identityMismatchOnCleanup=false;
+    replaceFile=replaceDirectory=false;replaceOnAttempt=0;replaceIndex=0;
+    replacementAttempted=replacementRenamed=replacementCreated=false;
+  }
+  static void resetAdoptedFids()noexcept{
+    adoptedFids={};
+    adoptedFidMask=0;
+  }
+  static void captureAdoptedFid(size_t entryIndex,
+   const BY_HANDLE_FILE_INFORMATION& identity)noexcept{
+    if(entryIndex<adoptedFids.size()){
+      adoptedFids[entryIndex]=identity;
+      adoptedFidMask|=1u<<entryIndex;
+    }
   }
   static void afterEffect(FixtureEffectFault point,const char* api){
     if(effect!=point)return;
@@ -101,11 +131,34 @@ struct TestFixtureFaults {
     --cleanupFailures;
     return {ERROR_ACCESS_DENIED,false};
   }
+  static bool replacementPoint(bool file,size_t index,size_t attempt)noexcept{
+    return replaceOnAttempt&&replaceOnAttempt==attempt&&replaceIndex==index
+      &&(file?replaceFile:replaceDirectory);
+  }
 };
+// The seam executes a real GetFileInformationByHandle failure against an
+// invalid probe handle while retaining the owned handle. The native error is
+// read at that boundary and preserved by fixtureWin32 below.
+static BOOL fixtureIdentityQuery(HANDLE value,BY_HANDLE_FILE_INFORMATION* identity,
+ bool cleanupCall=false){
+  const bool inject=cleanupCall?TestFixtureFaults::fidQueryFailureOnCleanup
+    :TestFixtureFaults::fidQueryFailure;
+  const HANDLE query=inject?INVALID_HANDLE_VALUE:value;
+  if(inject){
+    if(cleanupCall)TestFixtureFaults::fidQueryFailureOnCleanup=false;
+    else TestFixtureFaults::fidQueryFailure=false;
+  }
+  const BOOL result=GetFileInformationByHandle(query,identity);
+  if(inject)TestFixtureFaults::fidQueryStatus=result?ERROR_SUCCESS:GetLastError();
+  return win32Result("GetFileInformationByHandle",result);
+}
 struct FixtureCleanupRecord {
   const char* api=nullptr;
   DWORD result=ERROR_SUCCESS;
   bool statusKnown=false;
+  size_t entryIndex=~size_t{0};
+  BY_HANDLE_FILE_INFORMATION identity{};
+  bool identityKnown=false;
 };
 struct FixtureRollbackReport {
   // Six owned effects can each yield one close and one removal failure.
@@ -113,12 +166,30 @@ struct FixtureRollbackReport {
   std::array<FixtureCleanupRecord,Capacity> records{};
   size_t count=0;
   bool overflow=false;
+  unsigned remainingMask=0;
   bool clean()const noexcept{return count==0;}
   bool complete()const noexcept{return !overflow;}
+  bool nativeStatusKnown()const noexcept{
+    for(size_t i=0;i<count&&i<records.size();++i)
+      if(records[i].statusKnown)return true;
+    return false;
+  }
   void add(const char* api,DWORD result,bool statusKnown)noexcept{
     if(count==records.size()){overflow=true;return;}
     records[count]={api,result,statusKnown};
     ++count;
+  }
+  void add(const char* api,DWORD result,bool statusKnown,size_t entryIndex,
+   const BY_HANDLE_FILE_INFORMATION& identity,bool identityKnown)noexcept{
+    if(count==records.size()){overflow=true;return;}
+    records[count]={api,result,statusKnown,entryIndex,identity,identityKnown};
+    ++count;
+  }
+  static bool sameRecordIdentity(const BY_HANDLE_FILE_INFORMATION& left,
+   const BY_HANDLE_FILE_INFORMATION& right)noexcept{
+    return left.dwVolumeSerialNumber==right.dwVolumeSerialNumber
+      &&left.nFileIndexHigh==right.nFileIndexHigh
+      &&left.nFileIndexLow==right.nFileIndexLow;
   }
   bool matches(size_t index,const char* expected,DWORD expectedStatus,
    bool expectedStatusKnown)const noexcept{
@@ -129,23 +200,50 @@ struct FixtureRollbackReport {
       &&record.result==expectedStatus
       &&record.statusKnown==expectedStatusKnown;
   }
+  bool matches(size_t index,const char* expected,DWORD expectedStatus,
+   bool expectedStatusKnown,size_t expectedEntry,
+   const BY_HANDLE_FILE_INFORMATION& expectedIdentity,
+   bool expectedIdentityKnown)const noexcept{
+    if(!matches(index,expected,expectedStatus,expectedStatusKnown))return false;
+    const auto& record=records[index];
+    return record.entryIndex==expectedEntry
+      &&record.identityKnown==expectedIdentityKnown
+      &&(!expectedIdentityKnown||sameRecordIdentity(record.identity,expectedIdentity));
+  }
+  bool entryMatches(size_t index,size_t expectedEntry,bool expectedIdentityKnown)const noexcept{
+    return index<count&&index<records.size()
+      &&records[index].entryIndex==expectedEntry
+      &&records[index].identityKnown==expectedIdentityKnown;
+  }
 };
 struct FixtureCleanupObservation {
   bool known=false;
   const char* api=nullptr;
   DWORD result=ERROR_SUCCESS;
   size_t count=0;
+  size_t attempts=0;
   bool statusKnown=false;
   FixtureRollbackReport report{};
 };
 static FixtureCleanupObservation fixtureCleanupObservation;
 static void clearFixtureCleanupObservation()noexcept{fixtureCleanupObservation={};}
 static void observeFixtureCleanup(const FixtureRollbackReport& report)noexcept{
+  ++fixtureCleanupObservation.attempts;
   if(report.clean())return;
   if(!fixtureCleanupObservation.known){
-    fixtureCleanupObservation={true,report.records[0].api,report.records[0].result,
-      report.count,report.records[0].statusKnown,report};
-  }else fixtureCleanupObservation.count+=report.count;
+    fixtureCleanupObservation.known=true;
+    fixtureCleanupObservation.api=report.records[0].api;
+    fixtureCleanupObservation.result=report.records[0].result;
+    fixtureCleanupObservation.statusKnown=report.records[0].statusKnown;
+    fixtureCleanupObservation.report.remainingMask=report.remainingMask;
+  }
+  fixtureCleanupObservation.count+=report.count;
+  for(size_t index=0;index<report.count&&index<report.records.size();++index)
+    fixtureCleanupObservation.report.add(report.records[index].api,
+      report.records[index].result,report.records[index].statusKnown,
+      report.records[index].entryIndex,report.records[index].identity,
+      report.records[index].identityKnown);
+  if(report.overflow)fixtureCleanupObservation.report.overflow=true;
 }
 struct FixtureCleanupFailure : std::exception {
   FixtureRollbackReport report;
@@ -172,10 +270,14 @@ struct FixtureCleanupFailure : std::exception {
   }
 };
 struct FixtureHandleState {
+  size_t entryIndex=~size_t{0};
   HANDLE value=INVALID_HANDLE_VALUE;
+  bool owned=false;
   bool closeAttempted=false;
   DWORD closeResult=ERROR_SUCCESS;
   bool closeStatusKnown=false;
+  BY_HANDLE_FILE_INFORMATION identity{};
+  bool identityKnown=false;
   bool closed()const noexcept{return closeAttempted&&value==INVALID_HANDLE_VALUE;}
 };
 class FixtureHandle {
@@ -188,31 +290,40 @@ public:
   void adopt(HANDLE value){
     require(state&&state->value==INVALID_HANDLE_VALUE&&value!=INVALID_HANDLE_VALUE);
     state->value=value;
+    TestFixtureFaults::fidHandle=value;
+    // Ownership is recorded before the FID capture boundary. If that query
+    // throws, the rollback entry can still remove this created effect safely.
+    state->owned=true;
+    BY_HANDLE_FILE_INFORMATION identity{};
+    fixtureWin32("GetFileInformationByHandle",fixtureIdentityQuery(value,&identity,false));
+    state->identity=identity;
+    state->identityKnown=true;
+    TestFixtureFaults::captureAdoptedFid(state->entryIndex,identity);
   }
   HANDLE get()const noexcept{return state?state->value:INVALID_HANDLE_VALUE;}
   const FixtureHandleState& custodyState()const{
     require(state);
     return *state;
   }
-  ~FixtureHandle()noexcept{
-    if(!state||state->value==INVALID_HANDLE_VALUE)return;
-    const HANDLE closing=state->value;
-    state->closeAttempted=true;
-    if(CloseHandle(closing)){
-      state->closeResult=ERROR_SUCCESS;
-      state->closeStatusKnown=true;
-      state->value=INVALID_HANDLE_VALUE;
-    }else{
-      state->closeResult=GetLastError();
-      state->closeStatusKnown=true;
-    }
-  }
+  // This borrower never closes rollback-owned custody. FixtureRollback is
+  // declared first and destroyed last, including constructor-failure unwinds.
+  ~FixtureHandle()noexcept=default;
 };
 struct FixtureRollbackEntry {
   FixtureCleanupKind kind=FixtureCleanupKind::close_handle;
+  size_t index=0;
   bool active=false,effectRemoved=false;
-  fs::path storagePath;
+  bool deleteMarked=false;
+  size_t deleteAttempts=0;
+  fs::path storagePath,replacementStorage;
+  std::wstring replacementText;
   FixtureHandleState handle{};
+};
+struct FixtureIdentityCheck {
+  bool match=false;
+  bool queryFailed=false;
+  DWORD result=ERROR_SUCCESS;
+  bool statusKnown=false;
 };
 // Rollback owns its handle state. Scoped handles only borrow a pointer into
 // this earlier-constructed member, so rollback runs after those handles and
@@ -224,67 +335,156 @@ template<size_t Capacity> class FixtureRollback {
   static FixtureCleanupDecision takeCleanup(FixtureCleanupKind kind)noexcept{
     return TestFixtureFaults::cleanupResult(kind);
   }
+  static FixtureIdentityCheck identityCheck(FixtureHandleState& handle)noexcept{
+    if(handle.value==INVALID_HANDLE_VALUE)
+      return {false,false,ERROR_INVALID_HANDLE,true};
+    BY_HANDLE_FILE_INFORMATION current{};
+    if(!fixtureIdentityQuery(handle.value,&current,true))
+      return {false,true,DWORD(GetLastError()),true};
+    if(!handle.identityKnown){
+      // The first FID capture failed while the created handle remained owned.
+      // A later successful query establishes the same held object's identity
+      // before disposition; no mutable path fallback is used.
+      handle.identity=current;
+      handle.identityKnown=true;
+      return {true,false,ERROR_SUCCESS,false};
+    }
+    bool match=current.dwVolumeSerialNumber==handle.identity.dwVolumeSerialNumber
+      &&current.nFileIndexHigh==handle.identity.nFileIndexHigh
+      &&current.nFileIndexLow==handle.identity.nFileIndexLow;
+    if(TestFixtureFaults::identityMismatchOnCleanup){
+      TestFixtureFaults::identityMismatchOnCleanup=false;
+      match=false;
+    }
+    return {match,false,ERROR_SUCCESS,false};
+  }
+  static bool renameForReplacement(FixtureRollbackEntry& entry,bool file,
+   const FixtureIdentityCheck& identity)noexcept{
+    TestFixtureFaults::replacementAttempted=true;
+    if(!identity.match)return false;
+    const auto& path=entry.replacementText;
+    if(path.size()<5||path.size()>32000)return false;
+    struct RenameBuffer {
+      FILE_RENAME_INFO info{};
+      wchar_t name[32000]{};
+    } rename{};
+    rename.info.ReplaceIfExists=FALSE;
+    rename.info.RootDirectory=nullptr;
+    rename.info.FileNameLength=DWORD(path.size()*sizeof(wchar_t));
+    std::memcpy(rename.info.FileName,path.data(),path.size()*sizeof(wchar_t));
+    if(!SetFileInformationByHandle(entry.handle.value,FileRenameInfo,
+      &rename.info,DWORD(sizeof(FILE_RENAME_INFO)+path.size()*sizeof(wchar_t))))
+      return false;
+    TestFixtureFaults::replacementRenamed=true;
+    if(file){
+      const HANDLE foreign=CreateFileW(entry.storagePath.c_str(),
+        GENERIC_WRITE,0,nullptr,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,nullptr);
+      if(foreign==INVALID_HANDLE_VALUE)return false;
+      CloseHandle(foreign);
+    }else if(!CreateDirectoryW(entry.storagePath.c_str(),nullptr))return false;
+    TestFixtureFaults::replacementCreated=true;
+    return true;
+  }
   void finish(FixtureRollbackEntry& entry,FixtureRollbackReport& report)noexcept{
-    if(!entry.active)return;
+    if(!entry.active&&!entry.handle.owned)return;
     const bool handlePresent=entry.handle.value!=INVALID_HANDLE_VALUE;
+    bool closeApproved=true;
     if(handlePresent){
       auto decision=takeCleanup(FixtureCleanupKind::close_handle);
-      auto result=decision.result;
-      if(result==ERROR_SUCCESS){
-        decision.statusKnown=true;
-        entry.handle.closeAttempted=true;
-        if(CloseHandle(entry.handle.value)){
-          entry.handle.closeResult=ERROR_SUCCESS;
-          entry.handle.closeStatusKnown=true;
-          entry.handle.value=INVALID_HANDLE_VALUE;
-        }else{
-          result=GetLastError();
-          entry.handle.closeResult=result;
-          entry.handle.closeStatusKnown=true;
-        }
-      }
-      if(result!=ERROR_SUCCESS)
-        report.add("CloseHandle",result,decision.statusKnown);
+      closeApproved=decision.result==ERROR_SUCCESS;
+      if(!closeApproved)
+        report.add("CloseHandle",decision.result,decision.statusKnown,entry.index,
+          entry.handle.identity,entry.handle.identityKnown);
     }
     const bool file=entry.kind==FixtureCleanupKind::delete_file;
     const auto kind=file?FixtureCleanupKind::delete_file:FixtureCleanupKind::remove_directory;
-    if(!entry.effectRemoved){
+    if(!entry.deleteMarked&&!entry.effectRemoved){
+      ++entry.deleteAttempts;
       auto decision=takeCleanup(kind);
       auto result=decision.result;
+      bool statusKnown=decision.statusKnown;
+      const bool injected=decision.result!=ERROR_SUCCESS;
       if(result==ERROR_SUCCESS){
-        decision.statusKnown=true;
-        const auto removed=file
-          ?DeleteFileW(entry.storagePath.c_str()):RemoveDirectoryW(entry.storagePath.c_str());
-        if(removed)entry.effectRemoved=true;
-        else{
-          result=GetLastError();
-          if(result==ERROR_FILE_NOT_FOUND||result==ERROR_PATH_NOT_FOUND)
+        statusKnown=true;
+        const auto identity=identityCheck(entry.handle);
+        if(TestFixtureFaults::replacementPoint(file,entry.index,entry.deleteAttempts))
+          renameForReplacement(entry,file,identity);
+        if(identity.queryFailed){
+          result=identity.result;
+          statusKnown=identity.statusKnown;
+          report.add("GetFileInformationByHandle",result,statusKnown,entry.index,
+            entry.handle.identity,entry.handle.identityKnown);
+        }else if(!identity.match){
+          // A successfully queried but changed FID is not an API failure. It
+          // is a distinct unknown/fail-closed custody outcome.
+          result=ERROR_ACCESS_DENIED;
+          statusKnown=false;
+          report.add("FixtureIdentityMismatch",result,statusKnown,entry.index,
+            entry.handle.identity,entry.handle.identityKnown);
+        }else{
+          FILE_DISPOSITION_INFO disposition{TRUE};
+          if(SetFileInformationByHandle(entry.handle.value,FileDispositionInfo,
+            &disposition,sizeof(disposition))){
+            entry.deleteMarked=true;
             entry.effectRemoved=true;
+          }else{
+            result=GetLastError();
+            statusKnown=true;
+            report.add("SetFileInformationByHandle",result,statusKnown,entry.index,
+              entry.handle.identity,entry.handle.identityKnown);
+          }
         }
       }
-      if(result!=ERROR_SUCCESS&&!entry.effectRemoved)
-        report.add(file?"DeleteFileW":"RemoveDirectoryW",result,decision.statusKnown);
+      if(injected&&result!=ERROR_SUCCESS&&!entry.effectRemoved)
+        report.add(file?"DeleteFileW":"RemoveDirectoryW",result,statusKnown,
+          entry.index,entry.handle.identity,entry.handle.identityKnown);
+    }
+    if(handlePresent&&closeApproved&&entry.deleteMarked){
+      entry.handle.closeAttempted=true;
+      if(CloseHandle(entry.handle.value)){
+        entry.handle.closeResult=ERROR_SUCCESS;
+        entry.handle.closeStatusKnown=true;
+        entry.handle.value=INVALID_HANDLE_VALUE;
+      }else{
+        entry.handle.closeResult=GetLastError();
+        entry.handle.closeStatusKnown=true;
+        report.add("CloseHandle",entry.handle.closeResult,true,entry.index,
+          entry.handle.identity,entry.handle.identityKnown);
+      }
     }
     const bool handleClean=entry.handle.value==INVALID_HANDLE_VALUE;
     entry.active=!(handleClean&&entry.effectRemoved);
+    if(handleClean)entry.handle.owned=false;
   }
 public:
   FixtureRollbackEntry& reserve(FixtureCleanupKind kind,fs::path storage){
     require(used<Capacity);
     auto& entry=entries[used++];
+    entry.index=used-1;
     entry.kind=kind;
     entry.active=false;
     entry.effectRemoved=false;
-    entry.storagePath=std::move(storage);
+    entry.deleteMarked=false;
+    entry.deleteAttempts=0;
+    entry.storagePath=storage;
+    entry.handle.entryIndex=entry.index;
+    const auto name=storage.filename().wstring()+L".foreign-replacement";
+    entry.replacementStorage=storage.parent_path()/name;
+    entry.replacementText=entry.replacementStorage.wstring();
     return entry;
   }
-  static void activate(FixtureRollbackEntry& entry)noexcept{entry.active=true;}
+  static void activate(FixtureRollbackEntry& entry)noexcept{
+    entry.active=true;
+    entry.handle.owned=true;
+  }
   FixtureRollbackReport cleanup()noexcept{
     FixtureRollbackReport report;
     for(size_t i=Capacity;i>0;--i)
       if(entries[i-1].kind==FixtureCleanupKind::delete_file)finish(entries[i-1],report);
     for(size_t i=Capacity;i>0;--i)
       if(entries[i-1].kind==FixtureCleanupKind::remove_directory)finish(entries[i-1],report);
+    for(size_t i=0;i<used&&i<32;i++)
+      if(entries[i].active)report.remainingMask|=1u<<i;
     return report;
   }
   ~FixtureRollback()noexcept{observeFixtureCleanup(cleanup());}
@@ -796,6 +996,13 @@ static void shortcutApiFailureContract(){
   static_assert(std::is_base_of_v<winrt::hresult_error,ShortcutApiFailure>);
   static_assert(std::is_base_of_v<std::exception,ShortcutApiFailure>);
   stage("child_shortcut_failure_wrapper");
+  require(statusValueText(false,ERROR_ACCESS_DENIED)==std::string("unknown"));
+  require(statusValueText(true,DWORD(E_INVALIDARG))
+    ==std::to_string(static_cast<unsigned long>(DWORD(E_INVALIDARG))));
+  ShortcutContractViolation unknownStatus("TEST unknown status",ERROR_SUCCESS,false);
+  require(!unknownStatus.statusKnown
+    &&statusValueText(unknownStatus.statusKnown,DWORD(unknownStatus.status))
+      ==std::string("unknown"));
   bool classified=false;
   try{
     shortcutHresult("IShellLinkW::SetPath",E_INVALIDARG);
@@ -1024,7 +1231,7 @@ class ScopedShortcutTargetTree {
       "TEST after CreateDirectoryW");
     stage("child_shortcut_long_directory_open");
     const HANDLE opened=CreateFileW(directoryStorage[index].c_str(),
-      GENERIC_READ|READ_CONTROL,FILE_SHARE_READ|FILE_SHARE_WRITE,nullptr,OPEN_EXISTING,
+      GENERIC_READ|READ_CONTROL|DELETE,FILE_SHARE_READ|FILE_SHARE_WRITE,nullptr,OPEN_EXISTING,
       FILE_FLAG_OPEN_REPARSE_POINT|FILE_FLAG_BACKUP_SEMANTICS,nullptr);
     fixtureWin32("CreateFileW",opened!=INVALID_HANDLE_VALUE);
     heldDirectories[index].adopt(opened);
@@ -1034,7 +1241,7 @@ class ScopedShortcutTargetTree {
   void createTarget(size_t index){
     stage("child_shortcut_long_file_create");
     const HANDLE created=CreateFileW(fileStorage[index].c_str(),
-      GENERIC_READ|READ_CONTROL,FILE_SHARE_READ,savedAttributes,
+      GENERIC_READ|READ_CONTROL|DELETE,FILE_SHARE_READ,savedAttributes,
       CREATE_NEW,FILE_ATTRIBUTE_NORMAL|FILE_FLAG_OPEN_REPARSE_POINT,nullptr);
     fixtureWin32("CreateFileW",created!=INVALID_HANDLE_VALUE);
     files[index].adopt(created);
@@ -1135,7 +1342,7 @@ public:
     auto& entry=rollback.reserve(FixtureCleanupKind::delete_file,path);
     file.bind(entry.handle);
     try{
-      const HANDLE created=CreateFileW(path.c_str(),GENERIC_READ|READ_CONTROL,FILE_SHARE_READ,
+      const HANDLE created=CreateFileW(path.c_str(),GENERIC_READ|READ_CONTROL|DELETE,FILE_SHARE_READ,
         &attributes,CREATE_NEW,FILE_ATTRIBUTE_NORMAL|FILE_FLAG_OPEN_REPARSE_POINT,nullptr);
       fixtureWin32("CreateFileW",created!=INVALID_HANDLE_VALUE);
       file.adopt(created);
@@ -1174,8 +1381,12 @@ static bool sameFixtureIdentity(HANDLE left,HANDLE right){
 }
 static bool fixtureOwnedLive(HANDLE held,const FixtureHandleState& state){
   BY_HANDLE_FILE_INFORMATION info{};
-  return held!=INVALID_HANDLE_VALUE&&state.value==held&&!state.closed()
-    &&GetFileInformationByHandle(held,&info)!=FALSE;
+  return held!=INVALID_HANDLE_VALUE&&state.value==held&&state.owned&&!state.closed()
+    &&GetFileInformationByHandle(held,&info)!=FALSE
+    &&state.identityKnown
+    &&info.dwVolumeSerialNumber==state.identity.dwVolumeSerialNumber
+    &&info.nFileIndexHigh==state.identity.nFileIndexHigh
+    &&info.nFileIndexLow==state.identity.nFileIndexLow;
 }
 static bool fixturePathIdentity(const fs::path& path,HANDLE held,bool directory){
   Handle probe(CreateFileW(path.c_str(),GENERIC_READ|READ_CONTROL,
@@ -1185,7 +1396,12 @@ static bool fixturePathIdentity(const fs::path& path,HANDLE held,bool directory)
 }
 static bool fixtureAbsent(const fs::path& path){
   const auto result=GetFileAttributesW(path.c_str());
-  return result==INVALID_FILE_ATTRIBUTES&&GetLastError()==ERROR_FILE_NOT_FOUND;
+  // Recursive owned cleanup may remove the path's parent before the final
+  // absence check. Both missing leaf and missing parent prove no effect remains.
+  // Foreign-object safety is checked by held-file identity before any deletion.
+  const auto error=result==INVALID_FILE_ATTRIBUTES?GetLastError():ERROR_SUCCESS;
+  return result==INVALID_FILE_ATTRIBUTES
+    &&(error==ERROR_FILE_NOT_FOUND||error==ERROR_PATH_NOT_FOUND);
 }
 static std::wstring fixtureName(const wchar_t* stem){
   return std::wstring(stem)+wide(randomID());
@@ -1197,6 +1413,50 @@ static void fixtureRollbackContracts(const Generation& g){
   Descriptor descriptor(ownACL(L"FA"));
   auto attributes=descriptor.attributes();
   const fs::path ordinaryParent(g.root.wstring().substr(4));
+
+  stage("child_fixture_cleanup_aggregation_overflow_observable");
+  FixtureRollbackReport firstAttempt,secondAttempt;
+  std::array<BY_HANDLE_FILE_INFORMATION,14> aggregateFids{};
+  for(size_t index=0;index<aggregateFids.size();index++){
+    aggregateFids[index].dwVolumeSerialNumber=DWORD(0x10203040+index);
+    aggregateFids[index].nFileIndexHigh=DWORD(0x50607080+index);
+    aggregateFids[index].nFileIndexLow=DWORD(0x90a0b0c0+index);
+  }
+  firstAttempt.remainingMask=0x15;
+  for(size_t index=0;index<7;index++)
+    firstAttempt.add("CloseHandle",ERROR_ACCESS_DENIED,false,index,aggregateFids[index],true);
+  for(size_t index=7;index<aggregateFids.size();index++)
+    secondAttempt.add("DeleteFileW",ERROR_ACCESS_DENIED,false,index,aggregateFids[index],true);
+  observeFixtureCleanup(firstAttempt);
+  observeFixtureCleanup(secondAttempt);
+  bool aggregateOverflow=!firstAttempt.overflow&&!secondAttempt.overflow
+    &&fixtureCleanupObservation.known
+    &&fixtureCleanupObservation.api==firstAttempt.records[0].api
+    &&fixtureCleanupObservation.result==firstAttempt.records[0].result
+    &&!fixtureCleanupObservation.statusKnown
+    &&fixtureCleanupObservation.attempts==2
+    &&fixtureCleanupObservation.count==aggregateFids.size()
+    &&fixtureCleanupObservation.report.Capacity==12
+    &&fixtureCleanupObservation.report.records.size()==12
+    &&fixtureCleanupObservation.report.count==12
+    &&fixtureCleanupObservation.report.overflow
+    &&!fixtureCleanupObservation.report.complete()
+    &&fixtureCleanupObservation.report.remainingMask==0x15;
+  for(size_t index=0;aggregateOverflow&&index<12;index++)
+    aggregateOverflow=fixtureCleanupObservation.report.matches(
+      index,index<7?"CloseHandle":"DeleteFileW",ERROR_ACCESS_DENIED,false,
+      index,aggregateFids[index],true);
+  require(aggregateOverflow);
+  clearFixtureCleanupObservation();
+  require(!fixtureCleanupObservation.known
+    &&fixtureCleanupObservation.api==nullptr
+    &&fixtureCleanupObservation.result==ERROR_SUCCESS
+    &&fixtureCleanupObservation.count==0
+    &&fixtureCleanupObservation.attempts==0
+    &&!fixtureCleanupObservation.statusKnown
+    &&fixtureCleanupObservation.report.count==0
+    &&!fixtureCleanupObservation.report.overflow
+    &&fixtureCleanupObservation.report.remainingMask==0);
 
   stage("child_fixture_prefix_refused");
   const auto prefixName=fixtureName(L"TEST-invalid-prefix-");
@@ -1267,6 +1527,81 @@ static void fixtureRollbackContracts(const Generation& g){
   TestFixtureFaults::reset();
   require(unwindObserved&&fixtureAbsent(g.root/unwindName));
 
+  stage("child_fixture_fid_capture_failure_preserved");
+  const auto fidCaptureName=fixtureName(L"TEST-fid-capture-shortcut-");
+  TestFixtureFaults::fidQueryFailure=true;
+  bool fidCaptureObserved=false,fidCaptureRemoved=false;
+  try{
+    ScopedShortcutFile fixture(g.root,fidCaptureName.c_str(),attributes);
+    require(false);
+  }catch(const TestFixtureFailure& error){
+    const DWORD preserved=error.status;
+    fidCaptureObserved=error.apiFailure&&!error.synthetic
+      &&!std::strcmp(error.api,"GetFileInformationByHandle")
+      &&preserved!=ERROR_SUCCESS&&preserved==TestFixtureFaults::fidQueryStatus
+      &&TestFixtureFaults::fidHandle!=INVALID_HANDLE_VALUE
+      &&fixtureCleanupObservation.known==false;
+    fidCaptureRemoved=fixtureAbsent(g.root/fidCaptureName);
+  }
+  TestFixtureFaults::reset();
+  require(fidCaptureObserved&&fidCaptureRemoved);
+  clearFixtureCleanupObservation();
+
+  stage("child_fixture_same_identity_api_failure_preserved");
+  const auto sameIdentityName=fixtureName(L"TEST-same-identity-failure-");
+  TestFixtureFaults::fidQueryFailureOnCleanup=true;
+  bool sameIdentityObserved=false,sameIdentityRetried=false;
+  bool sameIdentityObservationComplete=false;
+  {
+    ScopedShortcutFile fixture(g.root,sameIdentityName.c_str(),attributes);
+    const auto sameIdentityFid=fixture.custodyState().identity;
+    try{
+      fixture.cleanup();
+      require(false);
+    }catch(const FixtureCleanupFailure& error){
+      const DWORD preserved=error.report.records[0].result;
+      sameIdentityObserved=error.statusKnown&&error.report.complete()
+        &&error.report.count==1
+        &&error.report.matches(0,"GetFileInformationByHandle",preserved,true)
+        &&error.report.entryMatches(0,0,true)
+        &&preserved!=ERROR_SUCCESS&&preserved==TestFixtureFaults::fidQueryStatus
+        &&error.report.remainingMask==1;
+    }
+    fixture.cleanup();
+    sameIdentityRetried=fixtureAbsent(g.root/sameIdentityName);
+    sameIdentityObservationComplete=fixtureCleanupObservation.attempts==2
+      &&fixtureCleanupObservation.report.complete()
+      &&fixtureCleanupObservation.report.matches(0,"GetFileInformationByHandle",
+        TestFixtureFaults::fidQueryStatus,true,0,sameIdentityFid,true);
+  }
+  TestFixtureFaults::reset();
+  require(sameIdentityObserved&&sameIdentityRetried&&sameIdentityObservationComplete);
+  clearFixtureCleanupObservation();
+
+  stage("child_fixture_identity_mismatch_unknown_fail_closed");
+  const auto mismatchName=fixtureName(L"TEST-identity-mismatch-");
+  TestFixtureFaults::identityMismatchOnCleanup=true;
+  bool mismatchObserved=false,mismatchRetried=false;
+  {
+    ScopedShortcutFile fixture(g.root,mismatchName.c_str(),attributes);
+    const auto mismatchFid=fixture.custodyState().identity;
+    try{
+      fixture.cleanup();
+      require(false);
+    }catch(const FixtureCleanupFailure& error){
+      mismatchObserved=!error.statusKnown&&error.report.complete()
+        &&error.report.count==1
+        &&error.report.matches(0,"FixtureIdentityMismatch",ERROR_ACCESS_DENIED,false,
+          0,mismatchFid,true)
+        &&error.report.remainingMask==1;
+    }
+    fixture.cleanup();
+    mismatchRetried=fixtureAbsent(g.root/mismatchName);
+  }
+  TestFixtureFaults::reset();
+  require(mismatchObserved&&mismatchRetried);
+  clearFixtureCleanupObservation();
+
   stage("child_fixture_close_handle_cleanup_failure_observed");
   const auto closeName=fixtureName(L"TEST-close-handle-shortcut-");
   const auto closePath=g.root/closeName;
@@ -1283,11 +1618,10 @@ static void fixtureRollbackContracts(const Generation& g){
       fixture.cleanup();
       require(false);
     }catch(const FixtureCleanupFailure& error){
-      closeObserved=!error.statusKnown&&error.report.complete()&&error.count==2
+      closeObserved=!error.statusKnown&&error.report.complete()&&error.count==1
         &&error.matches(0,"CloseHandle",ERROR_ACCESS_DENIED,false)
-        &&error.matches(1,"DeleteFileW",ERROR_SHARING_VIOLATION,true);
-      remainingOwnedHandle=fixtureOwnedLive(ownedHandle,ownedState)
-        &&fixturePathIdentity(closePath,ownedHandle,false);
+        &&error.report.remainingMask==1;
+      remainingOwnedHandle=fixtureOwnedLive(ownedHandle,ownedState);
       remainingOwnedEffect=!fixtureAbsent(closePath);
     }
     fixture.cleanup();
@@ -1339,7 +1673,8 @@ static void fixtureRollbackContracts(const Generation& g){
       &&fixtureCleanupObservation.count==1
       &&!fixtureCleanupObservation.statusKnown
       &&fixtureCleanupObservation.report.complete()
-      &&fixtureCleanupObservation.report.matches(0,"DeleteFileW",ERROR_ACCESS_DENIED,false);
+      &&fixtureCleanupObservation.report.matches(0,"DeleteFileW",ERROR_ACCESS_DENIED,false)
+      &&fixtureCleanupObservation.report.remainingMask==1;
   }
   TestFixtureFaults::reset();
   require(originalObserved&&fixtureAbsent(g.root/originalName));
@@ -1358,13 +1693,95 @@ static void fixtureRollbackContracts(const Generation& g){
     closeConstructorObserved=error.synthetic&&!error.apiFailure
       &&error.status==ERROR_OPERATION_ABORTED
       &&!strcmp(error.api,"TEST after shortcut-file CreateFileW")
-      &&cleanup.known&&cleanup.count==2&&cleanup.report.complete()
+      &&cleanup.known&&cleanup.count==1&&cleanup.report.complete()
       &&cleanup.report.matches(0,"CloseHandle",ERROR_ACCESS_DENIED,false)
-      &&cleanup.report.matches(1,"DeleteFileW",ERROR_SHARING_VIOLATION,true);
+      &&cleanup.report.remainingMask==1;
   }
   TestFixtureFaults::reset();
   require(closeConstructorObserved&&fixtureAbsent(g.root/closeConstructorName));
   clearFixtureCleanupObservation();
+
+  stage("child_fixture_constructor_replacement_refused");
+  const auto constructorReplacementName=fixtureName(L"TEST-constructor-replacement-");
+  const auto constructorReplacementPath=g.root/constructorReplacementName;
+  const auto constructorForeignPath=constructorReplacementPath;
+  const auto constructorQuarantinePath=g.root/(constructorReplacementName+L".foreign-replacement");
+  TestFixtureFaults::effect=FixtureEffectFault::after_shortcut_file_effect;
+  TestFixtureFaults::failCleanup(FixtureCleanupKind::delete_file);
+  TestFixtureFaults::replaceFile=true;
+  TestFixtureFaults::replaceOnAttempt=2;
+  TestFixtureFaults::replaceIndex=0;
+  bool constructorReplacementObserved=false;
+  bool constructorOriginalObserved=false;
+  try{
+    ScopedShortcutFile fixture(g.root,constructorReplacementName.c_str(),attributes);
+    require(false);
+  }catch(const TestFixtureFailure& error){
+    constructorOriginalObserved=error.synthetic&&!error.apiFailure
+      &&error.status==ERROR_OPERATION_ABORTED
+      &&!strcmp(error.api,"TEST after shortcut-file CreateFileW");
+    constructorReplacementObserved=TestFixtureFaults::replacementAttempted
+      &&TestFixtureFaults::replacementRenamed
+      &&TestFixtureFaults::replacementCreated;
+  }
+  TestFixtureFaults::reset();
+  Handle constructorForeign(CreateFileW(constructorForeignPath.c_str(),
+    GENERIC_READ|READ_CONTROL,FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,
+    nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr));
+  const bool constructorForeignPreserved=constructorOriginalObserved
+    &&constructorReplacementObserved&&constructorForeign.h!=INVALID_HANDLE_VALUE
+    &&fixtureAbsent(constructorQuarantinePath);
+  constructorForeign.closeChecked();
+  fixtureWin32("DeleteFileW",DeleteFileW(constructorForeignPath.c_str()));
+  require(constructorForeignPreserved&&fixtureAbsent(constructorForeignPath));
+
+  stage("child_fixture_destructor_replacement_refused");
+  const auto destructorReplacementName=fixtureName(L"TEST-destructor-replacement-");
+  const auto destructorReplacementPath=g.root/destructorReplacementName;
+  const auto destructorForeignPath=destructorReplacementPath;
+  const auto destructorQuarantinePath=g.root/(destructorReplacementName+L".foreign-replacement");
+  TestFixtureFaults::replaceFile=true;
+  TestFixtureFaults::replaceOnAttempt=1;
+  TestFixtureFaults::replaceIndex=0;
+  {
+    ScopedShortcutFile fixture(g.root,destructorReplacementName.c_str(),attributes);
+    require(fixtureOwnedLive(fixture.custody(),fixture.custodyState()));
+  }
+  const bool destructorReplacementObserved=TestFixtureFaults::replacementAttempted
+    &&TestFixtureFaults::replacementRenamed&&TestFixtureFaults::replacementCreated;
+  TestFixtureFaults::reset();
+  Handle destructorForeign(CreateFileW(destructorForeignPath.c_str(),
+    GENERIC_READ|READ_CONTROL,FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,
+    nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr));
+  const bool destructorForeignPreserved=destructorReplacementObserved
+    &&destructorForeign.h!=INVALID_HANDLE_VALUE
+    &&fixtureAbsent(destructorQuarantinePath);
+  destructorForeign.closeChecked();
+  fixtureWin32("DeleteFileW",DeleteFileW(destructorForeignPath.c_str()));
+  require(destructorForeignPreserved&&fixtureAbsent(destructorForeignPath));
+
+  stage("child_fixture_directory_destructor_replacement_refused");
+  const auto directoryReplacementName=fixtureName(L"TEST-directory-replacement-");
+  const auto directoryReplacementPath=g.root/directoryReplacementName;
+  const auto directoryForeignPath=directoryReplacementPath;
+  const auto directoryQuarantinePath=g.root/(directoryReplacementName+L".foreign-replacement");
+  TestFixtureFaults::replaceDirectory=true;
+  TestFixtureFaults::replaceOnAttempt=1;
+  TestFixtureFaults::replaceIndex=0;
+  {
+    ScopedShortcutTargetTree tree(g,attributes,directoryReplacementName.c_str());
+    require(tree.custodyAt(0)!=INVALID_HANDLE_VALUE);
+  }
+  const bool directoryReplacementObserved=TestFixtureFaults::replacementAttempted
+    &&TestFixtureFaults::replacementRenamed&&TestFixtureFaults::replacementCreated;
+  TestFixtureFaults::reset();
+  auto directoryForeign=open(directoryForeignPath,true);
+  const bool directoryForeignPreserved=directoryReplacementObserved
+    &&directoryForeign.h!=INVALID_HANDLE_VALUE
+    &&fixtureAbsent(directoryQuarantinePath);
+  directoryForeign.closeChecked();
+  fixtureWin32("RemoveDirectoryW",RemoveDirectoryW(directoryForeignPath.c_str()));
+  require(directoryForeignPreserved&&fixtureAbsent(directoryForeignPath));
 
   stage("child_fixture_target_tree_post_effect_rollback");
   const auto treeName=fixtureName(L"TEST-tree-post-effect-");
@@ -1379,7 +1796,14 @@ static void fixtureRollbackContracts(const Generation& g){
       &&!strcmp(error.api,"TEST after CreateDirectoryW");
   }
   TestFixtureFaults::reset();
-  require(treePostEffectObserved&&fixtureAbsent(g.root/treeName));
+  require(treePostEffectObserved&&fixtureCleanupObservation.known
+    &&fixtureCleanupObservation.count==2
+    &&fixtureCleanupObservation.report.complete()
+    &&fixtureCleanupObservation.report.matches(0,"FixtureIdentityMismatch",
+      ERROR_ACCESS_DENIED,false)
+    &&(fixtureCleanupObservation.report.remainingMask&1u)
+    &&!fixtureAbsent(g.root/treeName));
+  clearFixtureCleanupObservation();
 
   stage("child_fixture_target_tree_synthetic_unwind_rollback");
   const auto treeUnwindName=fixtureName(L"TEST-tree-synthetic-unwind-");
@@ -1398,6 +1822,7 @@ static void fixtureRollbackContracts(const Generation& g){
 
   stage("child_fixture_target_tree_original_failure_preserved");
   const auto treeOriginalName=fixtureName(L"TEST-tree-original-");
+  TestFixtureFaults::resetAdoptedFids();
   TestFixtureFaults::effect=FixtureEffectFault::after_target_tree_file_effect;
   TestFixtureFaults::failCleanupAll(10);
   bool treeOriginalObserved=false;
@@ -1408,19 +1833,24 @@ static void fixtureRollbackContracts(const Generation& g){
     const auto& cleanup=fixtureCleanupObservation;
     bool classified=cleanup.known&&cleanup.count==10
       &&cleanup.report.Capacity==12&&cleanup.report.count==10
-      &&cleanup.report.complete()&&!cleanup.statusKnown;
-    classified=classified
-      &&cleanup.report.matches(0,"CloseHandle",ERROR_ACCESS_DENIED,false)
-      &&cleanup.report.matches(1,"DeleteFileW",ERROR_ACCESS_DENIED,false);
-    for(size_t index=0;classified&&index<4;index++)
-      classified=cleanup.report.matches(2+index*2,"CloseHandle",ERROR_ACCESS_DENIED,false)
-        &&cleanup.report.matches(3+index*2,"RemoveDirectoryW",ERROR_ACCESS_DENIED,false);
-    treeOriginalObserved=error.synthetic&&!error.apiFailure
+      &&cleanup.report.complete()&&!cleanup.report.overflow
+      &&cleanup.report.remainingMask==0x1f&&!cleanup.statusKnown;
+    for(size_t index=0;classified&&index<5;index++){
+      const size_t entryIndex=4-index;
+      const char* removal=entryIndex==4?"DeleteFileW":"RemoveDirectoryW";
+      classified=cleanup.report.matches(index*2,"CloseHandle",ERROR_ACCESS_DENIED,false,
+          entryIndex,TestFixtureFaults::adoptedFids[entryIndex],true)
+        &&cleanup.report.matches(index*2+1,removal,ERROR_ACCESS_DENIED,false,
+          entryIndex,TestFixtureFaults::adoptedFids[entryIndex],true);
+    }
+    treeOriginalObserved=TestFixtureFaults::adoptedFidMask==0x3f
+      &&error.synthetic&&!error.apiFailure
       &&error.status==ERROR_OPERATION_ABORTED
       &&!strcmp(error.api,"TEST after target-tree CreateFileW")&&classified;
   }
   TestFixtureFaults::reset();
   require(treeOriginalObserved&&fixtureAbsent(g.root/treeOriginalName));
+  TestFixtureFaults::resetAdoptedFids();
   clearFixtureCleanupObservation();
 
   stage("child_fixture_remove_failure_observed");
@@ -1437,9 +1867,9 @@ static void fixtureRollbackContracts(const Generation& g){
         &&!strcmp(error.api,"RemoveDirectoryW")
         &&error.status==ERROR_ACCESS_DENIED&&error.count==4
         &&error.matches(0,"RemoveDirectoryW",ERROR_ACCESS_DENIED,false)
-        &&error.matches(1,"RemoveDirectoryW",ERROR_DIR_NOT_EMPTY,true)
-        &&error.matches(2,"RemoveDirectoryW",ERROR_DIR_NOT_EMPTY,true)
-        &&error.matches(3,"RemoveDirectoryW",ERROR_DIR_NOT_EMPTY,true);
+        &&error.matches(1,"SetFileInformationByHandle",ERROR_DIR_NOT_EMPTY,true)
+        &&error.matches(2,"SetFileInformationByHandle",ERROR_DIR_NOT_EMPTY,true)
+        &&error.matches(3,"SetFileInformationByHandle",ERROR_DIR_NOT_EMPTY,true);
     }
   }
   TestFixtureFaults::reset();
@@ -1449,6 +1879,7 @@ static void fixtureRollbackContracts(const Generation& g){
   stage("child_fixture_max_cleanup_failure_capacity");
   const auto maxName=fixtureName(L"TEST-tree-max-failures-");
   bool maxObserved=false,maxRetryClosed=false,maxEffectsRemoved=false;
+  bool maxObservationComplete=false;
   {
     TestFixtureFaults::failCleanupAll(12);
     ScopedShortcutTargetTree tree(g,attributes,maxName.c_str());
@@ -1463,11 +1894,15 @@ static void fixtureRollbackContracts(const Generation& g){
     }catch(const FixtureCleanupFailure& error){
       bool classified=error.statusKnown==false&&error.count==12
         &&error.report.Capacity==12&&error.report.records.size()==12
-        &&error.report.complete()&&!error.report.overflow;
+        &&error.report.complete()&&!error.report.overflow
+        &&error.report.remainingMask==0x3f;
       for(size_t index=0;classified&&index<6;index++){
-        const char* removal=index<2?"DeleteFileW":"RemoveDirectoryW";
-        classified=error.matches(index*2,"CloseHandle",ERROR_ACCESS_DENIED,false)
-          &&error.matches(index*2+1,removal,ERROR_ACCESS_DENIED,false);
+        const size_t entryIndex=5-index;
+        const char* removal=entryIndex>=4?"DeleteFileW":"RemoveDirectoryW";
+        classified=error.report.matches(index*2,"CloseHandle",ERROR_ACCESS_DENIED,false,
+          entryIndex,identities[entryIndex],true)
+          &&error.report.matches(index*2+1,removal,ERROR_ACCESS_DENIED,false,
+          entryIndex,identities[entryIndex],true);
       }
       bool stillOwned=true;
       for(size_t index=0;stillOwned&&index<6;index++){
@@ -1490,9 +1925,30 @@ static void fixtureRollbackContracts(const Generation& g){
         &&tree.stateAt(index).closeResult==ERROR_SUCCESS;
       maxEffectsRemoved=maxEffectsRemoved&&fixtureAbsent(tree.storageAt(index));
     }
+    maxObservationComplete=fixtureCleanupObservation.report.complete()
+      &&!fixtureCleanupObservation.report.overflow
+      &&fixtureCleanupObservation.report.count==12
+      &&fixtureCleanupObservation.count==12
+      &&fixtureCleanupObservation.attempts==2;
+    for(size_t index=0;maxObservationComplete&&index<6;index++){
+      const size_t entryIndex=5-index;
+      const char* removal=entryIndex>=4?"DeleteFileW":"RemoveDirectoryW";
+      maxObservationComplete=fixtureCleanupObservation.report.matches(
+        index*2,"CloseHandle",ERROR_ACCESS_DENIED,false,
+        entryIndex,identities[entryIndex],true)
+        &&fixtureCleanupObservation.report.matches(
+        index*2+1,removal,ERROR_ACCESS_DENIED,false,
+        entryIndex,identities[entryIndex],true);
+    }
   }
   TestFixtureFaults::reset();
-  require(maxObserved&&maxRetryClosed&&maxEffectsRemoved);
+  stage("child_fixture_max_cleanup_failure_records");
+  require(maxObserved);
+  require(maxObservationComplete);
+  stage("child_fixture_max_cleanup_failure_retry_closure");
+  require(maxRetryClosed);
+  stage("child_fixture_max_cleanup_failure_eventual_absence");
+  require(maxEffectsRemoved);
   clearFixtureCleanupObservation();
 
   stage("child_fixture_foreign_directory_preserved");
@@ -1521,12 +1977,20 @@ static void fixtureRollbackContracts(const Generation& g){
     <<" constructor_failure_cleanup=true post_effect=true"
     <<" synthetic_unwind=true allocator=false"
     <<" rollback_reserved_before_effect=true no_explicit_allocation_after_effect=true"
+    <<" cleanup_capacity_bounded=true cleanup_aggregate_count=true"
+    <<" cleanup_aggregate_overflow_observable=true cleanup_reset=true"
+    <<" fid_capture_failure_preserved=true fid_capture_owned_effect_removed=true"
+    <<" same_identity_api_failure_preserved=true same_identity_retry_removed=true"
+    <<" identity_mismatch_unknown_fail_closed=true"
     <<" foreign_collision_preserved=true cleanup_failure_observed=true"
     <<" close_handle_failure_observed=true per_owned_handle_identity=true"
     <<" per_owned_handle_closure=true retry_effects_removed=true"
+    <<" stored_fid_delete_boundary=true same_name_replacement_refused=true"
+    <<" unknown_identity_fail_closed=true"
     <<" constructor_close_failure_destructor_retry=true"
     <<" tree_original_preserved=true tree_cleanup_records_bounded=true"
     <<" max_cleanup_failure_capacity=12 max_cleanup_failure_complete=true"
+    <<" tree_cleanup_exact_10_records=true"
     <<" foreign_objects_deleted=false"
     <<" original_failure_preserved=true long_paths=true"
     <<" ordinary_target=true extended_storage=true exactAPI=unknown"
@@ -1785,21 +2249,31 @@ int wmain(int argc,wchar_t** argv){
     return 0;
   }catch(const ShortcutContractViolation& error){
     std::cerr<<"TEST registration contract failed stage="<<testStage
-      <<" failure_status_known=false"
+      <<" failure_status_known="<<(error.statusKnown?"true":"false")
+      <<" failure_api="<<error.api
+      <<" failure_status="<<statusValueText(error.statusKnown,DWORD(error.status))
       <<" contract_boundary="<<error.api
-      <<" contract_status_known="<<error.statusKnown
-      <<" native_status_qualified=false"
-      <<" last_observed_test_api="<<lastTestAPI
-      <<" last_observed_test_result_known="<<lastTestResultKnown
-      <<" last_observed_test_result="<<lastTestResult
+      <<" contract_status_known="<<(error.statusKnown?"true":"false")
+      <<" contract_status="<<statusValueText(error.statusKnown,DWORD(error.status))
+      <<" api_failure="<<(error.apiFailure?"true":"false")
+      <<" native_status_qualified="<<(error.statusKnown&&error.apiFailure?"true":"false")
+      <<" lastTestAPI="<<lastTestAPI
+      <<" lastTestResultKnown="<<(lastTestResultKnown?"true":"false")
+      <<" lastTestResult="<<lastTestResult
       <<" exactAPI=unknown"
       <<" reason=shortcut_contract_violation\n";
     return 1;
   }catch(const ShortcutApiFailure& error){
     std::cerr<<"TEST registration contract failed stage="<<testStage
-      <<" failure_status_known=true last_observed_test_api="<<error.api
-      <<" last_observed_test_result_known=true"
-      <<" last_observed_test_result="<<DWORD(error.code().value)
+      <<" failure_status_known="<<(error.statusKnown?"true":"false")
+      <<" failure_api="<<error.api
+      <<" failure_status="<<statusValueText(error.statusKnown,DWORD(error.status))
+      <<" failure_code_value="
+      <<statusValueText(error.statusKnown,DWORD(error.code().value))
+      <<" api_failure="<<(error.apiFailure?"true":"false")
+      <<" lastTestAPI="<<lastTestAPI
+      <<" lastTestResultKnown="<<(lastTestResultKnown?"true":"false")
+      <<" lastTestResult="<<lastTestResult
       <<" exactAPI="<<error.api
       <<" reason=shortcut_api_failure\n";
     return 1;
@@ -1807,9 +2281,9 @@ int wmain(int argc,wchar_t** argv){
     std::cerr<<"TEST registration contract failed stage="<<testStage
       <<" failure_status_known=false boundary_api="<<error.api
       <<" native_status_qualified=false"
-      <<" last_observed_test_api="<<lastTestAPI
-      <<" last_observed_test_result_known=false"
-      <<" last_observed_test_result=0 exactAPI=unknown"
+      <<" lastTestAPI="<<lastTestAPI
+      <<" lastTestResultKnown="<<(lastTestResultKnown?"true":"false")
+      <<" lastTestResult="<<lastTestResult<<" exactAPI=unknown"
       <<" reason=shortcut_deadline_exceeded boundary="<<error.boundary
       <<" deadline_end="<<error.end<<" deadline_observed="<<error.observed<<"\n";
     return 1;
@@ -1822,10 +2296,9 @@ int wmain(int argc,wchar_t** argv){
       <<" fixture_status_synthetic="<<(error.synthetic?"true":"false")
       <<" fixture_status_known="<<(fixtureStatusKnown?"true":"false")
       <<" native_status_qualified="<<(fixtureStatusKnown?"true":"false")
-      <<" last_observed_test_api="<<(fixtureStatusKnown?error.api:lastTestAPI)
-      <<" last_observed_test_result_known="
-      <<(fixtureStatusKnown?"true":"false")
-      <<" last_observed_test_result="<<(fixtureStatusKnown?error.status:0)
+      <<" lastTestAPI="<<lastTestAPI
+      <<" lastTestResultKnown="<<(lastTestResultKnown?"true":"false")
+      <<" lastTestResult="<<lastTestResult
       <<" exactAPI="<<(fixtureStatusKnown?error.api:"unknown")
       <<" api_failure="<<(error.apiFailure?"true":"false")
       <<" reason=test_fixture_failure\n";
@@ -1837,21 +2310,23 @@ int wmain(int argc,wchar_t** argv){
       <<" cleanup_status="<<error.status
       <<" cleanup_status_known="<<(error.statusKnown?"true":"false")
       <<" native_status_qualified="<<(error.statusKnown?"true":"false")
-      <<" last_observed_test_api="<<(error.statusKnown?error.api:lastTestAPI)
-      <<" last_observed_test_result_known="
-      <<(error.statusKnown?"true":(lastTestResultKnown?"true":"false"))
-      <<" last_observed_test_result="<<(error.statusKnown?error.status:lastTestResult)
+      <<" lastTestAPI="<<lastTestAPI
+      <<" lastTestResultKnown="<<(lastTestResultKnown?"true":"false")
+      <<" lastTestResult="<<lastTestResult
       <<" exactAPI="<<(error.statusKnown?error.api:"unknown")
       <<" cleanup_failure_count="<<error.count
       <<" cleanup_records_complete="<<(error.report.complete()?"true":"false")
-      <<" cleanup_injection_synthetic=true cleanup_native_failure_qualification=false"
+      <<" cleanup_injection_synthetic=true"
+      <<" cleanup_native_failure_qualification="
+      <<(error.report.nativeStatusKnown()?"true":"false")
       <<" reason=fixture_cleanup_failure\n";
     return 1;
   }catch(const std::exception&){
     std::cerr<<"TEST registration contract failed stage="<<testStage
-      <<" failure_status_known=false last_observed_test_api="<<lastTestAPI
-      <<" last_observed_test_result_known="<<lastTestResultKnown
-      <<" last_observed_test_result="<<lastTestResult<<" exactAPI=unknown"
+      <<" failure_status_known=false"
+      <<" lastTestAPI="<<lastTestAPI
+      <<" lastTestResultKnown="<<(lastTestResultKnown?"true":"false")
+      <<" lastTestResult="<<lastTestResult<<" exactAPI=unknown"
       <<" cleanup_failure_observed="<<(fixtureCleanupObservation.known?"true":"false")
       <<" cleanup_first_api="<<(fixtureCleanupObservation.known?fixtureCleanupObservation.api:"none")
       <<" cleanup_first_result="<<(fixtureCleanupObservation.known?fixtureCleanupObservation.result:0)
