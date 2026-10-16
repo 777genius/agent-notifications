@@ -2,6 +2,25 @@ import XCTest
 @testable import terminal_notifier_modern
 
 final class ArgumentParserTests: XCTestCase {
+    func testCustomSoundArgumentsAndValidation() throws {
+        let base = ["-title", "Test", "-message", "Body"]
+        let config = try ArgumentParser.parse(base + ["-soundFile", "/tmp/my sound.mp3", "-soundVolume", "0.25"])
+        XCTAssertEqual(config.soundFile, "/tmp/my sound.mp3")
+        XCTAssertEqual(config.soundVolume, 0.25)
+        XCTAssertNil(try ArgumentParser.parse(base).soundFile)
+        XCTAssertEqual(try ArgumentParser.parse(base).soundVolume, 1)
+        for bad in ["nan", "inf", "-inf", "-0.01", "1.01", "bad"] {
+            XCTAssertThrowsError(try ArgumentParser.parse(base + ["-soundVolume", bad]))
+        }
+        for bad in ["relative.mp3", "~/sound.mp3", ""] {
+            XCTAssertThrowsError(try ArgumentParser.parse(base + ["-soundFile", bad]))
+        }
+        for flag in ["-soundFile", "-soundVolume"] {
+            XCTAssertThrowsError(try ArgumentParser.parse(base + [flag]))
+        }
+        XCTAssertFalse(ArgumentParser.isSendMode(["-soundFile", "-title"]))
+        XCTAssertFalse(ArgumentParser.optionPositions(["-soundVolume", "--send-json"]).contains("--send-json"))
+    }
 
     func testParseValidArgs() throws {
         let config = try ArgumentParser.parse([

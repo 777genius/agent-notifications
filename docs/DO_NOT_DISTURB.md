@@ -1,13 +1,13 @@
 # Do Not Disturb
 
-The plugin plays its own audio cue, in its own process, rather than asking the
-notification server to play one. That is what makes per-status sounds and volume
-control possible — and it is also why, before this option existed, the MP3 played
-at full volume while the desktop was in Do Not Disturb: the banner was correctly
-queued and silenced by the desktop, but nothing had any say over a separate
-process's audio.
+On macOS, the notification service plays the configured per-status sound. The
+helper converts it to a short PCM resource with the configured volume already
+applied, then submits an ordinary notification. macOS applies Focus and per-app
+notification settings to the banner and sound together. No Focus-file access or
+Full Disk Access is required.
 
-`respectDoNotDisturb` closes that gap.
+Linux and Windows use the plugin's own audio process. On supported Linux
+desktops, `respectDoNotDisturb` controls that separate audio cue as described below.
 
 ## Configuration
 
@@ -48,9 +48,10 @@ default. Two things argue against flipping it:
   right semantics, but a default-on version could swallow cues during a
   fullscreen video, and a missing cue is a much worse failure than an extra one.
 
-### The terminal bell is not muted
+### Terminal bell
 
-In `"silent"` mode the terminal bell (`terminalBell`, on by default) still fires.
+On macOS the plugin does not send a terminal bell, because an audible BEL can
+bypass Focus. On other platforms, in `"silent"` mode the terminal bell (`terminalBell`, on by default) still fires.
 BEL is a *tab indicator* on Ghostty, tmux and Windows Terminal — visual for most
 users — and whether it is audible at all is already your terminal's own setting.
 In `"suppress"` mode it does not fire, because the notification is dropped before
@@ -86,90 +87,25 @@ private interface and do not implement `Inhibited` — for example swaync
 `internal/notifier/dnd_linux.go` plus a case in `evaluateDND`; the same fail-open
 rule applies, so an unrecognised daemon is never worse than today.
 
-### macOS and Windows — not implemented
+### macOS
 
-Both report "not in DND", so `respectDoNotDisturb` currently has no effect there:
-notifications and their sounds are delivered exactly as before, in every mode.
-The same underlying bug exists on both platforms — the plugin plays its own
-sound, and the macOS Swift notifier is already invoked with `-nosound` — so this
-is worth doing, but not worth guessing at:
+Focus applies automatically to native notifications, including custom sounds,
+regardless of `respectDoNotDisturb`. The plugin does not query Focus state, so
+`"suppress"` cannot remove a notification from Notification Center on macOS.
+Normal notifications do not request time-sensitive interruption.
 
-- **macOS.** `defaults -currentHost read com.apple.notificationcenterui doNotDisturb`
-  stopped being authoritative in Ventura, which replaced Do Not Disturb with
-  Focus modes. The live state lives in `~/Library/DoNotDisturb/DB/Assertions.json`
-  and `~/Library/Preferences/com.apple.ncprefs.plist`. Both are undocumented and
-  version-fragile, and a detector that is wrong in the "in DND" direction
-  silently swallows notifications — the one failure mode this feature must not
-  have. It needs its own testing across OS versions, in its own change.
+Custom sounds are decoded to signed 16-bit PCM CAF files in `~/Library/Sounds`,
+with the configured volume applied to the samples. Resources are cached by
+source content and volume. The source must be a regular file of at most 32 MiB
+and shorter than 30 seconds. Invalid or unsupported sounds do not fall back to a
+default beep or separate Go playback. macOS controls the alert output device and
+system alert volume in addition to the plugin's configured gain.
 
-  Do Not Disturb / Focus is not the same as the display being asleep — a Mac can
-  be in Focus mode with the screen wide awake, or have the screen timed out with
-  Focus off. The latter is a separate, implemented option on macOS:
-  `respectDisplaySleep`, detected through the public Quartz Display Services API
-  rather than the undocumented DND sources above. See
-  [Mute Sound While Display Is Asleep](CONFIGURATION.md#mute-sound-while-display-is-asleep).
-- **Windows.** Focus Assist / quiet hours, via
-  `WNF_SHEL_QUIET_MOMENT_SHELL_MODE_CHANGED` or the registry under
-  `HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Notifications\Settings`.
-  `git.sr.ht/~jackmordaunt/go-toast` is already a dependency but does not expose
-  it.
+`respectDisplaySleep` continues to mute the custom sound when the display sleeps.
+Older native helpers do not understand custom audio arguments and remain silent;
+update both the sender and native helper together.
 
-Both slot into the existing shape: add `internal/notifier/dnd_darwin.go` or
-`dnd_windows.go` with a `desktopIsDoNotDisturb()` and narrow the build tag on
-`dnd_other.go` accordingly. No change to the config, hook, or notifier API is
-needed.
+### Windows
 
-## Latency
-
-The probe runs on the hook path, which is latency-critical, so it is bounded:
-
-- D-Bus property reads are sub-millisecond and always run.
-- One `NameHasOwner` check gates the notification-daemon probes, so an absent
-  daemon costs one fast round trip instead of two full timeouts — and the probe
-  never D-Bus-activates a daemon as a side effect of asking it a question.
-- The `gsettings` subprocess (~50–150ms) runs **only** on GNOME.
-- Hard caps: 400ms per D-Bus call, 1s for the `gsettings` call, 1.5s for the
-  whole probe. On expiry the probe reports "not in DND" and delivery proceeds.
-- Nothing is queried at all while `respectDoNotDisturb` is `"off"`, and nothing
-  is queried when the notification was already suppressed by
-  `notifyOnlyWhenUnfocused`.
-
-The session bus connection is private and closed when the probe returns, and it
-is opened with the no-autostart variant so a session without a bus cannot cause
-`dbus-launch` to spawn a stray daemon.
-
-## Checking it yourself
-
-Read the KDE / freedesktop property directly:
-
-```bash
-gdbus call --session \
-  --dest org.freedesktop.Notifications \
-  --object-path /org/freedesktop/Notifications \
-  --method org.freedesktop.DBus.Properties.Get \
-  org.freedesktop.Notifications Inhibited
-```
-
-Toggle DND from your notification applet and re-run: it should flip
-`<<true>>`/`<<false>>`. Start a fullscreen video and re-run to see the
-application-inhibition case described above.
-
-The equivalents for the other sources:
-
-```bash
-dunstctl is-paused
-xfconf-query -c xfce4-notifyd -p /do-not-disturb
-gsettings get org.gnome.desktop.notifications show-banners   # false means DND
-```
-
-With debug logging enabled, the plugin logs which source fired:
-
-```
-DND: active (org.freedesktop.Notifications.Inhibited)
-DND: active (dunst paused)
-DND: active (xfce4-notifyd do-not-disturb)
-DND: active (GNOME show-banners=false)
-```
-
-If the outcome looks right but the source is not the one you expect, the
-detection is wrong even though the result happens to match.
+DND detection is not implemented. `respectDoNotDisturb` has no effect there;
+Windows still uses the plugin's own audio process.
