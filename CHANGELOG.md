@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.49.5] - 2026-10-17
+
+### Fixed
+- Declare managed writer protocol versions v3 and v4 for the packaged shell installer, so Codex setup succeeds after the shared installation writer floor reached v4 ([#488](https://github.com/777genius/agent-notifications/pull/488)).
+- Route custom notification audio through UserNotifications on macOS so Focus and Do Not Disturb silence it like system notifications; Linux and Windows playback paths are unchanged ([#489](https://github.com/777genius/agent-notifications/pull/489)).
+- Stop the removed legacy `agent-notify` skill from resurfacing next to `agent-notifications` after plugin updates: same-version copy-back no longer restores it, the refreshed plugin root is scrubbed to match the package, and the managed runtime ledger retires an owned legacy entry deleted out of band while still refusing installation over user-edited or unowned files ([#491](https://github.com/777genius/agent-notifications/pull/491), [#490](https://github.com/777genius/agent-notifications/issues/490)).
+
+### Platform notes
+- This release uses the basic five-platform artifact profile with separate downloaded macOS and Codex checks. It does not claim visible desktop, full native, eleven-cell OpenCode, cold-start, physical Intel or live-provider qualification.
+
 ## [1.49.4] - 2026-10-14
 
 ### Fixed
