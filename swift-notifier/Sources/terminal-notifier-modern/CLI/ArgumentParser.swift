@@ -9,12 +9,15 @@ struct NotificationConfig {
     let threadID: String?
     let timeSensitive: Bool
     let silent: Bool
+    var soundFile: String? = nil
+    var soundVolume: Double = 1
 }
 
 enum ArgumentParserError: Error, CustomStringConvertible {
     case missingTitle
     case missingMessage
     case missingValue(String)
+    case invalidValue(String)
 
     var description: String {
         switch self {
@@ -24,6 +27,8 @@ enum ArgumentParserError: Error, CustomStringConvertible {
             return "Missing required argument: -message"
         case .missingValue(let flag):
             return "Missing value for argument: \(flag)"
+        case .invalidValue(let flag):
+            return "Invalid value for argument: \(flag)"
         }
     }
 }
@@ -40,6 +45,8 @@ enum ArgumentParser {
         var threadID: String?
         var timeSensitive = false
         var silent = false
+        var soundFile: String?
+        var soundVolume = 1.0
 
         var i = 0
         while i < arguments.count {
@@ -101,6 +108,20 @@ enum ArgumentParser {
             case "-nosound":
                 silent = true
 
+            case "-soundFile":
+                guard i + 1 < arguments.count else { throw ArgumentParserError.missingValue(arg) }
+                i += 1
+                guard arguments[i].hasPrefix("/") else { throw ArgumentParserError.invalidValue(arg) }
+                soundFile = arguments[i]
+
+            case "-soundVolume":
+                guard i + 1 < arguments.count else { throw ArgumentParserError.missingValue(arg) }
+                i += 1
+                guard let value = Double(arguments[i]), value.isFinite, (0...1).contains(value) else {
+                    throw ArgumentParserError.invalidValue(arg)
+                }
+                soundVolume = value
+
             default:
                 break
             }
@@ -135,7 +156,9 @@ enum ArgumentParser {
             group: group,
             threadID: threadID,
             timeSensitive: timeSensitive,
-            silent: silent
+            silent: silent,
+            soundFile: soundFile,
+            soundVolume: soundVolume
         )
     }
 
@@ -143,7 +166,7 @@ enum ArgumentParser {
     // happens to be another flag (including the LaunchServices marker).
     static func optionPositions(_ arguments: [String]) -> [String] {
         let valued: Set<String> = ["-title", "-message", "-subtitle", "-activate",
-                                   "-execute", "-group", "-threadID",
+                                   "-execute", "-group", "-threadID", "-soundFile", "-soundVolume",
                                    "--request-file", "--receipt-file"]
         var options: [String] = []
         var i = 0

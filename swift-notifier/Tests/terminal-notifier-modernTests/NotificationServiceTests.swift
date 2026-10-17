@@ -1,7 +1,29 @@
 import XCTest
+import UserNotifications
 @testable import terminal_notifier_modern
 
 final class NotificationServiceTests: XCTestCase {
+    func testCustomSoundContentRespectsMuteAndFocusAndRejectsPreparationFailure() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        var config = NotificationConfig(title: "Test", message: "Body", subtitle: nil, action: .none, group: nil, threadID: nil, timeSensitive: true, silent: false, soundFile: "/missing/sound.mp3", soundVolume: 0)
+        let zero = try UNNotificationService.makeContent(config: config, soundDirectory: root)
+        XCTAssertNil(zero.sound)
+        if #available(macOS 12.0, *) { XCTAssertEqual(zero.interruptionLevel, .active) }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.path))
+        config.soundVolume = 0.25
+        XCTAssertThrowsError(try UNNotificationService.makeContent(config: config, soundDirectory: root))
+        let silent = NotificationConfig(title: "Test", message: "Body", subtitle: nil, action: .none, group: nil, threadID: nil, timeSensitive: true, silent: true)
+        XCTAssertNil(try UNNotificationService.makeContent(config: silent, soundDirectory: root).sound)
+        let repository = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        config.soundFile = repository.appendingPathComponent("sounds/task-complete.mp3").path
+        let custom = try UNNotificationService.makeContent(config: config, soundDirectory: root)
+        XCTAssertNotNil(custom.sound)
+        if #available(macOS 12.0, *) { XCTAssertEqual(custom.interruptionLevel, .active) }
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: root.path).count, 1)
+        let compatible = NotificationConfig(title: "Test", message: "Body", subtitle: nil, action: .none, group: nil, threadID: nil, timeSensitive: true, silent: true, soundFile: config.soundFile, soundVolume: 0.25)
+        XCTAssertNotNil(try UNNotificationService.makeContent(config: compatible, soundDirectory: root).sound)
+    }
 
     func testNotificationConfigCreation() {
         let config = NotificationConfig(

@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -87,7 +88,8 @@ func (n *Notifier) SendDesktop(status analyzer.Status, message, sessionID, cwd s
 
 	// Send terminal bell for terminal tab indicators (e.g. Ghostty, tmux,
 	// Windows Terminal). Platform-specific; see bell_other.go / bell_windows.go.
-	if n.cfg.IsTerminalBellEnabled() {
+	// A terminal bell bypasses macOS Focus, even when the notification is quiet.
+	if !platform.IsMacOS() && n.cfg.IsTerminalBellEnabled() {
 		sendTerminalBell()
 	}
 
@@ -106,7 +108,6 @@ func (n *Notifier) SendDesktop(status analyzer.Status, message, sessionID, cwd s
 		presentation = hookPresentation(status, *sendOpts.hookPresentation, statusInfo.Title, n.cfg.IsSessionLabelEnabled())
 	}
 	title, cleanMessage, subtitle := presentation.Title, presentation.Body, presentation.Subtitle
-	timeSensitive := presentation.TimeSensitive
 
 	// Get app icon path if configured
 	appIcon := n.cfg.Notifications.Desktop.AppIcon
@@ -125,9 +126,10 @@ func (n *Notifier) SendDesktop(status analyzer.Status, message, sessionID, cwd s
 				cleanMessage,
 				subtitle,
 				sessionID,
-				timeSensitive,
+				false, // Ordinary delivery must respect Focus for every status.
 				cwd,
 				n.cfg.Notifications.Desktop.ClickToFocus,
+				n.nativeNotificationSound(statusInfo.Sound, sendOpts),
 			); err != nil {
 				var permissionErr *NotificationPermissionDeniedError
 				if errors.As(err, &permissionErr) {
@@ -137,7 +139,6 @@ func (n *Notifier) SendDesktop(status analyzer.Status, message, sessionID, cwd s
 				logging.Warn("ClaudeNotifier failed on macOS, falling back to beeep: %v", err)
 			} else {
 				logging.Debug("Desktop notification sent via ClaudeNotifier/terminal-notifier: title=%s", title)
-				n.playSoundUnlessMuted(statusInfo.Sound, sendOpts)
 				return nil
 			}
 		} else {
@@ -182,7 +183,7 @@ func (n *Notifier) SendDesktop(status analyzer.Status, message, sessionID, cwd s
 
 // sendWithTerminalNotifier sends notification via terminal-notifier on macOS
 // with click-to-focus support (clicking notification activates the terminal)
-func (n *Notifier) sendWithTerminalNotifier(title, message, subtitle, sessionID string, timeSensitive bool, cwd string, clickToFocus bool) error {
+func (n *Notifier) sendWithTerminalNotifier(title, message, subtitle, sessionID string, _ bool, cwd string, clickToFocus bool, soundFile ...string) error {
 	notifierPath, err := GetTerminalNotifierPath()
 	if err != nil {
 		return fmt.Errorf("terminal-notifier not found: %w", err)
@@ -205,7 +206,14 @@ func (n *Notifier) sendWithTerminalNotifier(title, message, subtitle, sessionID 
 		args = buildTerminalNotifierArgsWithOptions(title, message, bundleID, cwd, ghosttyTerminalID, clickToFocus)
 	}
 
-	args = appendSharedNotifierOptions(args, subtitle, sessionID, timeSensitive, n.cfg.ShouldReplaceNotificationsPerSession())
+	// Keep the legacy boolean parameter for existing callers, but never opt
+	// ordinary desktop notifications into an interruption that bypasses Focus.
+	args = appendSharedNotifierOptions(args, subtitle, sessionID, false, n.cfg.ShouldReplaceNotificationsPerSession())
+	if len(soundFile) > 0 && soundFile[0] != "" {
+		// Keep -nosound for older helpers, which ignore these new flags. The
+		// modern helper overrides it only with this explicit custom sound.
+		args = append(args, "-soundFile", soundFile[0], "-soundVolume", strconv.FormatFloat(n.cfg.Notifications.Desktop.Volume, 'f', -1, 64))
+	}
 
 	if appPath, ok := claudeNotifierAppPath(notifierPath); ok {
 		if err := runClaudeNotifierApp(appPath, args); err != nil {
@@ -418,9 +426,28 @@ func appendSharedNotifierOptions(args []string, subtitle, sessionID string, time
 	if timeSensitive {
 		args = append(args, "-timeSensitive")
 	}
-	// Always suppress sound in Swift — Go manages sound via audio player
+	// Silent by default, including older helpers without custom-sound support.
 	args = append(args, "-nosound")
 	return args
+}
+
+// nativeNotificationSound selects the configured cue for system-managed audio.
+// macOS owns its playback so Focus suppresses the banner and sound together.
+func (n *Notifier) nativeNotificationSound(sound string, opts sendOptions) string {
+	if opts.muteSound || !n.cfg.Notifications.Desktop.Sound || n.cfg.Notifications.Desktop.Volume <= 0 || sound == "" {
+		return ""
+	}
+	absolute, err := filepath.Abs(sound)
+	if err != nil {
+		logging.Warn("Cannot resolve notification sound: %v", err)
+		return ""
+	}
+	info, err := os.Stat(absolute)
+	if err != nil || !info.Mode().IsRegular() {
+		logging.Warn("Notification sound file unavailable: %s", absolute)
+		return ""
+	}
+	return absolute
 }
 
 // buildFocusScript returns the shell command for -execute in terminal-notifier.
@@ -644,6 +671,11 @@ func isWindowsToastFallbackSuccess(err error) bool {
 // playSoundUnlessMuted routes every sound-playing path through one decision
 // point, so a muted delivery cannot leak audio via a branch that was missed.
 func (n *Notifier) playSoundUnlessMuted(sound string, opts sendOptions) {
+	// Detached/inline playback bypasses Focus. Even a failed native delivery
+	// must stay quiet on macOS rather than falling back to the Go player.
+	if platform.IsMacOS() {
+		return
+	}
 	if opts.muteSound {
 		logging.Debug("Sound suppressed for this notification (muted delivery)")
 		return
@@ -681,7 +713,7 @@ func (n *Notifier) playSoundDetached(sound string) {
 		args = append(args, "--device", device)
 	}
 
-	cmd := exec.Command(exe, args...)
+	cmd := execCommand(exe, args...)
 	platform.SetDetachedProcAttr(cmd)
 
 	if err := cmd.Start(); err != nil {
