@@ -102,3 +102,50 @@ func TestEmbeddedSkillRenameRefusesLegacySymlink(t *testing.T) {
 	}
 	embeddedAbsent(t, f.skill)
 }
+
+// A stale-plugin-root cleanup can delete the owned legacy skill out of band
+// (issue #490). The next managed install must retire its ledger entry instead
+// of reading the removal as a foreign edit.
+func TestEmbeddedSkillRenameToleratesRemovedLegacy(t *testing.T) {
+	f := embeddedQualified(t)
+	legacy := filepath.Join(filepath.Dir(f.bin), "skills", "agent-notify", "SKILL.md")
+	if err := f.run("--entry", f.entry); err != nil {
+		t.Fatal(err)
+	}
+	canonical, err := installruntime.CanonicalPath(f.skill)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy, err = installruntime.CanonicalPath(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := installruntime.Fingerprint(canonical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtimeRoot, err := installruntime.CanonicalPath(filepath.Dir(f.bin))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if _, err = installruntime.Commit(ctx, installruntime.Request{ControlRoot: f.control, RuntimeRoot: runtimeRoot, Owner: "existing-installer", ConsumerID: "claude-hooks", RefreshOnly: true, Files: []installruntime.File{{Path: canonical, Before: before, Remove: true}, {Path: legacy, Data: []byte("historical owned skill"), Mode: 0600}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(legacy); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.run("--entry", f.entry, "--refresh"); err != nil {
+		t.Fatal(err)
+	}
+	embeddedAbsent(t, legacy)
+	if !bytes.Equal(embeddedRead(t, f.skill), skills.AgentNotify()) {
+		t.Fatal("renamed runtime skill bytes differ")
+	}
+	for path := range f.snapshot(t).Ledger.Files {
+		if path == legacy {
+			t.Fatal("retired legacy asset remains owned")
+		}
+	}
+}

@@ -492,7 +492,7 @@ channel_install_plugin() (
         for existing in "$backup"/bin/claude-notifications* "$backup"/bin/agent-notifications* \
             "$backup"/bin/sound-preview* "$backup"/bin/list-devices* "$backup"/bin/list-sounds* \
             "$backup"/bin/ClaudeNotifier.app "$backup"/bin/AgentNotifications.app "$backup"/bin/terminal-notifier.app \
-            "$backup"/skills/agent-notifications/SKILL.md "$backup"/skills/agent-notify/SKILL.md; do
+            "$backup"/skills/agent-notifications/SKILL.md; do
             [ -e "$existing" ] || [ -L "$existing" ] || continue
             relative=${existing#"$backup"/}
             config_preflight || return 1
@@ -508,6 +508,13 @@ channel_install_plugin() (
     fi
     # Finish native promotion while the old same-version cache is recoverable.
     find_plugin_root || return 1
+    # The refreshed plugin root must match the current package: the legacy
+    # skill was dropped from skills/ in v1.47.0 and Claude Code would load a
+    # leftover copy as a second model-invocable skill (issue #490).
+    if [ -n "$PLUGIN_ROOT" ] && [ -e "$PLUGIN_ROOT/skills/agent-notify" ]; then
+        config_preflight || return 1
+        rm -rf -- "$PLUGIN_ROOT/skills/agent-notify" || return 1
+    fi
     download_binary || return 1
     [ -z "$backup" ] || echo "Previous source cache retained for recovery: $backup"
     backup=""

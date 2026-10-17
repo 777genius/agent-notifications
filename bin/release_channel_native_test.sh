@@ -50,6 +50,12 @@ mkdir -p "$TEST_CACHE/bin" "$TEST_CACHE/.claude-plugin" "$TEST_CACHE/skills/agen
 printf '{"version":"%s"}\n' "$TEST_VERSION" > "$TEST_CACHE/.claude-plugin/plugin.json"
 cp "$TEST_SOURCE/skills/agent-notifications/SKILL.md" "$TEST_CACHE/skills/agent-notifications/SKILL.md"
 chmod 0644 "$TEST_CACHE/skills/agent-notifications/SKILL.md"
+if [ -n "${TEST_LEGACY_SKILL:-}" ]; then
+    # Reproduce a stale cache overlay: the removed legacy skill resurfaces.
+    mkdir -p "$TEST_CACHE/skills/agent-notify"
+    cp "$TEST_LEGACY_SKILL" "$TEST_CACHE/skills/agent-notify/SKILL.md"
+    chmod 0644 "$TEST_CACHE/skills/agent-notify/SKILL.md"
+fi
 printf refreshed > "$TEST_CACHE/source-generation"
 CLI
 chmod +x "$TEST_ROOT/cache-cli"
@@ -67,7 +73,15 @@ download_binary() {
     cat "$TEST_ROOT/promotion.log" >&2
     return 1
 }
+# Issue #490: a stale legacy skill resurfaces via the retained backup and a
+# stale cache overlay; neither may survive the channel refresh.
+printf 'historical legacy skill\n' > "$TEST_ROOT/stale-legacy-skill.md"
+mkdir -p "$ROOT_CACHE/skills/agent-notify"
+cp "$TEST_ROOT/stale-legacy-skill.md" "$ROOT_CACHE/skills/agent-notify/SKILL.md"
+chmod 0600 "$ROOT_CACHE/skills/agent-notify/SKILL.md"
+export TEST_LEGACY_SKILL="$TEST_ROOT/stale-legacy-skill.md"
 channel_install_plugin
+[ ! -e "$ROOT_CACHE/skills/agent-notify" ] || { echo 'FAIL legacy skills/agent-notify survived the channel refresh' >&2; exit 1; }
 [ "$(cat "$ROOT_CACHE/source-generation")" = refreshed ]
 [ "$("$ROOT_CACHE/bin/claude-notifications" --version)" = "claude-notifications $BOOTSTRAP_TAG" ]
 # A second real native refresh verifies the ledger after source replacement.
