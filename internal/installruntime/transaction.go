@@ -658,11 +658,25 @@ func Commit(ctx context.Context, r Request) (result Ledger, resultErr error) {
 	if r.ExpectedGeneration != nil && *r.ExpectedGeneration != l.Generation {
 		return l, fmt.Errorf("stale installation generation")
 	}
+	// Prepare runs under these locks and may retire assets the request does not
+	// stage (the renamed legacy skill), so its paths must count as
+	// transaction-owned before the identity audit below.
+	var prepared []File
+	if r.Prepare != nil {
+		extra, e := r.Prepare()
+		if e != nil {
+			return l, e
+		}
+		if r.PolicyOnly && len(extra) != 0 {
+			return l, fmt.Errorf("policy-only preparation cannot mutate assets")
+		}
+		prepared = extra
+	}
 	// Existing managed identities must match, even when no transaction remains.
 	// A deleted launcher/asset in this request may be republished; an existing
 	// file whose fingerprint changed is a foreign edit and must refuse.
 	replacing := map[string]bool{}
-	for _, file := range r.Files {
+	for _, file := range append(append([]File(nil), r.Files...), prepared...) {
 		replacing[file.Path] = true
 		if canonical, e := CanonicalPath(file.Path); e == nil {
 			replacing[canonical] = true
@@ -858,16 +872,7 @@ func Commit(ctx context.Context, r Request) (result Ledger, resultErr error) {
 		}
 		files = append(files, f)
 	}
-	if r.Prepare != nil {
-		extra, e := r.Prepare()
-		if e != nil {
-			return l, e
-		}
-		if r.PolicyOnly && len(extra) != 0 {
-			return l, fmt.Errorf("policy-only preparation cannot mutate assets")
-		}
-		files = append(files, extra...)
-	}
+	files = append(files, prepared...)
 	if relocating {
 		for _, file := range files {
 			if pathWithinRoot(previous.RuntimeRoot, file.Path) {

@@ -55,7 +55,18 @@ func TestStoreProcessHelper(t *testing.T) {
 	var err error
 	switch mode {
 	case "init":
-		_, err = EnsureInitialized(context.Background(), InitRequest{Env: env})
+		// A bounded lock-wait timeout under the twenty-process storm is an
+		// expected transient (ConfigLockTimeout is retryable by design); the
+		// assertion is that every child converges, not that it wins one window.
+		for attempt := 0; attempt < 100; attempt++ {
+			_, err = EnsureInitialized(context.Background(), InitRequest{Env: env})
+			var ce *Error
+			if errors.As(err, &ce) && (ce.Code == ConfigChanged || ce.Code == ConfigLockTimeout) {
+				time.Sleep(10 * time.Millisecond)
+				continue
+			}
+			break
+		}
 	case "edit", "retry":
 		revision := os.Getenv("STORE_TEST_REVISION")
 		for attempt := 0; attempt < 100; attempt++ {
@@ -73,7 +84,11 @@ func TestStoreProcessHelper(t *testing.T) {
 			}
 			_, err = ApplyEdits(context.Background(), EditRequest{Env: env, ExpectRevision: revision, Edits: Edits{Set: map[string]json.RawMessage{"/statuses/worker" + id + "/title": json.RawMessage(`"saved"`)}}})
 			var ce *Error
-			if errors.As(err, &ce) && (ce.Code == ConfigConflict || (mode == "retry" && ce.Code == ConfigLockTimeout)) {
+			if errors.As(err, &ce) && ce.Code == ConfigLockTimeout {
+				time.Sleep(10 * time.Millisecond)
+				continue
+			}
+			if errors.As(err, &ce) && ce.Code == ConfigConflict {
 				if mode == "edit" {
 					os.Exit(23)
 				}

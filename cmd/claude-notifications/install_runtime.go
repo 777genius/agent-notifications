@@ -390,15 +390,21 @@ func installRuntime(args []string, output io.Writer) error {
 			if err != nil {
 				return nil, err
 			}
-			if legacyBefore.Exists {
-				ledger, recovery, err := installruntime.ReadOwnership(req.ControlRoot)
-				if err != nil {
-					return nil, err
-				}
-				owned, ok := installruntime.OwnedFile(ledger, legacy)
-				if recovery || !ok || legacyBefore.Link != "" || owned != legacyBefore {
+			ledger, recovery, err := installruntime.ReadOwnership(req.ControlRoot)
+			if err != nil {
+				return nil, err
+			}
+			owned, ownsLegacy := installruntime.OwnedFile(ledger, legacy)
+			switch {
+			case legacyBefore.Exists:
+				if recovery || !ownsLegacy || legacyBefore.Link != "" || owned != legacyBefore {
 					return nil, fmt.Errorf("legacy skill is not an unchanged owned regular file: %s", legacy)
 				}
+				extra = append(extra, installruntime.File{Path: legacy, Before: legacyBefore, Remove: true})
+			case ownsLegacy && !recovery:
+				// The owned legacy skill may already be gone from the plugin
+				// root. Retire its ledger entry so refresh validation does not
+				// read that removal as a foreign edit.
 				extra = append(extra, installruntime.File{Path: legacy, Before: legacyBefore, Remove: true})
 			}
 			return append(extra, installruntime.File{Path: path, Before: before, Data: skills.AgentNotify(), Mode: 0600}), nil
