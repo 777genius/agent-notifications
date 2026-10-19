@@ -83,7 +83,11 @@ func TestNativeBundleContract(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer archive.Close()
+			defer func() {
+				if err := archive.Close(); err != nil {
+					t.Error(err)
+				}
+			}()
 			seen := map[string]bool{}
 			for _, file := range archive.File {
 				if !file.FileInfo().IsDir() {

@@ -25,7 +25,7 @@ func AssetName(goos, goarch string) string {
 // paths must be new: rerunning cannot overwrite a user's installed package.
 func Build(req BuildRequest) (Package, error) {
 	if !regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$`).MatchString(req.Version) {
-		return Package{}, fmt.Errorf("Qoder package requires a semver version without v prefix")
+		return Package{}, fmt.Errorf("qoder package requires a semver version without v prefix")
 	}
 	if req.GOOS != "darwin" && req.GOOS != "linux" && req.GOOS != "windows" {
 		return Package{}, fmt.Errorf("unsupported GOOS")
