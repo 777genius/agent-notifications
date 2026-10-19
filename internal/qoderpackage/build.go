@@ -8,8 +8,11 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
+	"strings"
 
 	"github.com/777genius/agent-notifications/internal/agentnotify/portableasset"
+	"github.com/777genius/agent-notifications/internal/installruntime"
 	"github.com/777genius/agent-notifications/internal/thirdpartynotices"
 )
 
@@ -35,6 +38,31 @@ func Build(req BuildRequest) (Package, error) {
 	}
 	if !filepath.IsAbs(req.Executable) || !filepath.IsAbs(req.OutputRoot) || req.Archive != "" && !filepath.IsAbs(req.Archive) {
 		return Package{}, fmt.Errorf("package paths must be absolute")
+	}
+	if req.Archive != "" {
+		root, err := installruntime.CanonicalPath(req.OutputRoot)
+		if err != nil {
+			return Package{}, err
+		}
+		archive, err := installruntime.CanonicalPath(req.Archive)
+		if err != nil {
+			return Package{}, err
+		}
+		// Different filesystem volumes cannot contain one another.
+		if strings.EqualFold(filepath.VolumeName(root), filepath.VolumeName(archive)) {
+			// Darwin commonly uses a case-insensitive filesystem. Refuse
+			// case aliases conservatively, including not-yet-created suffixes.
+			if runtime.GOOS == "darwin" {
+				root, archive = strings.ToLower(root), strings.ToLower(archive)
+			}
+			rel, err := filepath.Rel(root, archive)
+			if err != nil {
+				return Package{}, err
+			}
+			if rel == "." || rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				return Package{}, fmt.Errorf("archive must be outside output root")
+			}
+		}
 	}
 	binary, err := os.ReadFile(req.Executable)
 	if err != nil {

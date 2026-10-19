@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -109,5 +110,38 @@ func TestNativeBundleContract(t *testing.T) {
 				t.Fatal("overwrote existing package")
 			}
 		})
+	}
+}
+
+// Refuse before writing a package: an archive in its own source directory
+// would otherwise be walked and copied back into itself.
+func TestRejectArchiveInsideOutputRoot(t *testing.T) {
+	for _, suffix := range []string{".", "bundle.zip", "nested/bundle.zip"} {
+		t.Run(suffix, func(t *testing.T) {
+			base := t.TempDir()
+			root := filepath.Join(base, "package")
+			_, err := Build(BuildRequest{Version: "1.49.5", GOOS: "linux", GOARCH: "amd64", Executable: filepath.Join(base, "unused"), OutputRoot: root, Archive: filepath.Join(root, filepath.FromSlash(suffix))})
+			if err == nil || !strings.Contains(err.Error(), "archive must be outside output root") {
+				t.Fatalf("inside archive accepted: %v", err)
+			}
+			if _, err := os.Stat(root); !os.IsNotExist(err) {
+				t.Fatalf("package created before refusal: %v", err)
+			}
+		})
+	}
+}
+
+func TestRejectArchiveCaseAlias(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "windows" {
+		t.Skip("case aliases are refused on Darwin and Windows")
+	}
+	base := t.TempDir()
+	root := filepath.Join(base, "package")
+	_, err := Build(BuildRequest{Version: "1.49.5", GOOS: "linux", GOARCH: "amd64", Executable: filepath.Join(base, "unused"), OutputRoot: root, Archive: filepath.Join(base, "PACKAGE", "bundle.zip")})
+	if err == nil || !strings.Contains(err.Error(), "archive must be outside output root") {
+		t.Fatalf("case-alias archive accepted: %v", err)
+	}
+	if _, err := os.Stat(root); !os.IsNotExist(err) {
+		t.Fatalf("package created before refusal: %v", err)
 	}
 }
