@@ -186,6 +186,9 @@ func (h *Handler) turnEnricher() CodexTurnEnricher {
 
 // eventKeys derives the state/dedup identities for the event.
 func (h *Handler) eventKeys(ev Event) eventKeys {
+	if ev.Product == ProductQoder {
+		return qoderKeys(ev)
+	}
 	if ev.Product == ProductCodex {
 		return codexKeys(ev)
 	}
@@ -325,6 +328,14 @@ func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 		logging.Debug("Notification event received → question status")
 		status = analyzer.StatusQuestion
 	case StopPayload:
+		if ev.Product == ProductQoder {
+			if p.Continuation {
+				return nil
+			}
+			status = analyzer.StatusTaskComplete
+			defer h.cleanupOldLocks()
+			break
+		}
 		if ev.Product == ProductCodex {
 			// Codex continuation turns (stop_hook_active) never notify,
 			// preventing recursive/continuation duplicates.
@@ -1004,7 +1015,7 @@ func claudeStopTurnLockKey(sessionID, userTimestamp string) string {
 func (h *Handler) generateMessage(ev Event, status analyzer.Status, messages []jsonl.Message, insight *TurnInsight) (body, actions string) {
 	// Codex bodies come from payload fields, never from the Claude-format
 	// transcript parser: the Codex rollout JSONL is a different schema.
-	if ev.Product == ProductCodex {
+	if ev.Product == ProductCodex || ev.Product == ProductQoder {
 		if insight != nil && insight.Body != "" {
 			return insight.Body, ""
 		}
@@ -1256,7 +1267,7 @@ func (h *Handler) cleanupOldLocks() {
 func (h *Handler) maybeEmitDesktopPermissionGuidance(err error) {
 	// Observation routes (Codex) must never write to stdout; the guidance is
 	// a Claude Code systemMessage feature.
-	if h.product == ProductCodex {
+	if h.product == ProductCodex || h.product == ProductQoder {
 		return
 	}
 
@@ -1308,6 +1319,8 @@ func configAgent(product Product) (config.AgentID, error) {
 		return config.AgentClaude, nil
 	case ProductCodex:
 		return config.AgentCodex, nil
+	case ProductQoder:
+		return config.AgentQoder, nil
 	default:
 		return "", fmt.Errorf("unsupported product: %q", product)
 	}

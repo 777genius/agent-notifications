@@ -820,6 +820,7 @@ func TestAgentDisplayName(t *testing.T) {
 		{"claude", "claude", "Claude"},
 		{"codex", "codex", "Codex"},
 		{"gemini", "gemini", "Gemini CLI"},
+		{"qoder", "qoder", "Qoder"},
 		{"opencode", "opencode", "OpenCode"},
 		{
 			name:   "unknown future agent falls back to the raw source, not Claude",

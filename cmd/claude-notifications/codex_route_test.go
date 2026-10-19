@@ -56,6 +56,7 @@ func TestCodexRouteRequested(t *testing.T) {
 	}{
 		{name: "legacy claude", argv: []string{"bin", "handle-hook", "Stop"}, want: false},
 		{name: "legacy with extra positional", argv: []string{"bin", "handle-hook", "Stop", "junk"}, want: false},
+		{name: "qoder product", argv: []string{"bin", "handle-hook", "Stop", "--product", "qoder"}, want: true},
 		{name: "codex product", argv: []string{"bin", "handle-hook", "Stop", "--product", "codex"}, want: true},
 		{name: "explicit claude product", argv: []string{"bin", "handle-hook", "Stop", "--product", "claude"}, want: false},
 		{name: "unknown product", argv: []string{"bin", "handle-hook", "Stop", "--product", "cursor"}, want: true},

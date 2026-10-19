@@ -13,6 +13,7 @@ type Product string
 const (
 	ProductClaude Product = "claude"
 	ProductCodex  Product = "codex"
+	ProductQoder  Product = "qoder"
 )
 
 // EventKind is the product-level event classification derived from the
@@ -125,7 +126,7 @@ type EventSource interface {
 // after mapping, before policy or side effects run.
 func ValidateEvent(e Event) error {
 	switch e.Product {
-	case ProductClaude, ProductCodex:
+	case ProductClaude, ProductCodex, ProductQoder:
 	default:
 		return fmt.Errorf("unknown event product %q", e.Product)
 	}

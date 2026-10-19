@@ -341,6 +341,8 @@ func runHandleHook(args []string) {
 		handleHook(hookEvent)
 	case "codex":
 		handleCodexHook(hookEvent)
+	case "qoder":
+		handleQoderHook(hookEvent)
 	default:
 		codexFailOpen(fmt.Sprintf("product %q has no route", product))
 	}
@@ -477,7 +479,12 @@ func handleCodexHook(publicEvent string) {
 // natively exports PLUGIN_ROOT for plugin-bundled hooks; CLAUDE_PLUGIN_ROOT
 // remains only a compatibility fallback via the legacy resolver.
 func getPluginRootForProduct(product string) string {
-	if product == "codex" {
+	if product == "qoder" {
+		if root := os.Getenv("QODER_PLUGIN_ROOT"); root != "" {
+			return root
+		}
+	}
+	if product == "codex" || product == "qoder" {
 		if root := os.Getenv("PLUGIN_ROOT"); root != "" {
 			return root
 		}
