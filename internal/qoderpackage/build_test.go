@@ -24,6 +24,25 @@ func TestNativeBundleContract(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			for _, rel := range []string{"plugin.json", ".qoder-plugin/plugin.json"} {
+				raw, err := os.ReadFile(filepath.Join(got.Root, rel))
+				if err != nil {
+					t.Fatal(err)
+				}
+				var manifest map[string]string
+				if err := json.Unmarshal(raw, &manifest); err != nil {
+					t.Fatal(err)
+				}
+				if manifest["name"] != "agent-notify-qoder" || manifest["version"] != req.Version {
+					t.Fatalf("incorrect manifest identity: %v", manifest)
+				}
+				if rel == "plugin.json" && manifest["$schema"] != "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json" {
+					t.Fatalf("standard schema missing: %v", manifest)
+				}
+				if rel != "plugin.json" && manifest["$schema"] != "" {
+					t.Fatal("native manifest must not claim standard schema")
+				}
+			}
 			var hooks struct {
 				Hooks map[string][]struct {
 					Async *bool

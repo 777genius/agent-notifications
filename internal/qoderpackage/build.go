@@ -55,6 +55,7 @@ func Build(req BuildRequest) (Package, error) {
 		name += ".exe"
 	}
 	manifest := map[string]string{"name": "agent-notify-qoder", "version": req.Version, "description": "Completion notifications for Qoder"}
+	standardManifest := map[string]string{"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json", "name": manifest["name"], "version": manifest["version"], "description": manifest["description"]}
 	hook := map[string]any{"hooks": map[string]any{"Stop": []any{map[string]any{"hooks": []any{map[string]any{"type": "command", "command": "${QODER_PLUGIN_ROOT}/bin/" + name, "args": []string{"handle-hook", "Stop", "--product", "qoder"}, "name": "agent-notify-qoder-stop", "timeout": 40}}}}}}
 	if err := os.MkdirAll(filepath.Dir(req.OutputRoot), 0700); err != nil {
 		return Package{}, err
@@ -63,7 +64,7 @@ func Build(req BuildRequest) (Package, error) {
 		return Package{}, err
 	}
 	files := map[string][]byte{thirdpartynotices.Filename: []byte(thirdpartynotices.Text()), "README.md": []byte("# Agent Notify for Qoder\n\nNative Stop-hook completion notifications. No MCP observer is installed.\nSee the source docs/QODER.md for configuration and qualification scope.\n")}
-	for path, value := range map[string]any{".qoder-plugin/plugin.json": manifest, "plugin.json": manifest, "hooks/hooks.json": hook} {
+	for path, value := range map[string]any{".qoder-plugin/plugin.json": manifest, "plugin.json": standardManifest, "hooks/hooks.json": hook} {
 		body, err := json.MarshalIndent(value, "", "  ")
 		if err != nil {
 			return Package{}, err
