@@ -9,7 +9,7 @@ func TestConfigAgentCompositionMapping(t *testing.T) {
 	for _, tc := range []struct {
 		product Product
 		want    config.AgentID
-	}{{ProductClaude, config.AgentClaude}, {ProductCodex, config.AgentCodex}} {
+	}{{ProductClaude, config.AgentClaude}, {ProductCodex, config.AgentCodex}, {ProductQoder, config.AgentQoder}} {
 		got, err := configAgent(tc.product)
 		if err != nil || got != tc.want {
 			t.Fatalf("%q: %q %v", tc.product, got, err)

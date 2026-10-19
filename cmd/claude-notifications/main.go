@@ -329,10 +329,16 @@ func runHandleHook(args []string) {
 		return
 	}
 
-	product, err := codexsource.ValidateProductOverride(rawProduct)
-	if err != nil {
-		codexFailOpen(fmt.Sprintf("invalid product override: %v", err))
-		return
+	// Qoder's public hook API is supported by SDK 1.3, while its host
+	// detector registry does not yet advertise Qoder. Select this explicit
+	// application route without inferring a product from the environment.
+	product := rawProduct
+	if product != "qoder" {
+		product, err = codexsource.ValidateProductOverride(rawProduct)
+		if err != nil {
+			codexFailOpen(fmt.Sprintf("invalid product override: %v", err))
+			return
+		}
 	}
 
 	switch product {
@@ -341,6 +347,8 @@ func runHandleHook(args []string) {
 		handleHook(hookEvent)
 	case "codex":
 		handleCodexHook(hookEvent)
+	case "qoder":
+		handleQoderHook(hookEvent)
 	default:
 		codexFailOpen(fmt.Sprintf("product %q has no route", product))
 	}
@@ -477,7 +485,12 @@ func handleCodexHook(publicEvent string) {
 // natively exports PLUGIN_ROOT for plugin-bundled hooks; CLAUDE_PLUGIN_ROOT
 // remains only a compatibility fallback via the legacy resolver.
 func getPluginRootForProduct(product string) string {
-	if product == "codex" {
+	if product == "qoder" {
+		if root := os.Getenv("QODER_PLUGIN_ROOT"); root != "" {
+			return root
+		}
+	}
+	if product == "codex" || product == "qoder" {
 		if root := os.Getenv("PLUGIN_ROOT"); root != "" {
 			return root
 		}

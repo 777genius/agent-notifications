@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"strings"
 )
 
 // eventKeys are the state/dedup identities used by the delivery pipeline.
@@ -57,4 +58,11 @@ func hashedIdentity(fields ...string) string {
 		h.Write([]byte(f))
 	}
 	return "codex-" + hex.EncodeToString(h.Sum(nil))[:32]
+}
+
+// Qoder has no native turn id. Use session-scoped, filename-safe state and
+// content identity; identical completions retain the conservative dedup window.
+func qoderKeys(ev Event) eventKeys {
+	p, _ := ev.Payload.(StopPayload)
+	return eventKeys{stateKey: strings.Replace(hashedIdentity("qoder", ev.Session.SessionID), "codex-", "qoder-", 1), lockKey: strings.Replace(hashedIdentity("qoder", ev.Session.SessionID, p.AssistantMessage), "codex-", "qoder-", 1)}
 }

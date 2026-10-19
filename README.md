@@ -96,6 +96,7 @@ Claude/Codex setup also installs the `agent-notify` MCP server and `agent-notifi
 | **OpenCode** | Root-session completion, questions, permissions and errors | No | [Setup and limits](docs/opencode-notifications.md) |
 | **Gemini CLI** | Turn completion and tool permissions | No | [Cross-platform setup and qualification](docs/gemini-notifications.md) |
 | **Cursor CLI** | Agent loop stopping; fixed informational text | No | [Qualified versions, platforms and explicit setup](docs/cursor-notifications.md) |
+| **Qoder** (source support) | Native Stop completion hook; separate package | Exact-chat focus unavailable | [Local package setup and release limits](docs/QODER.md) |
 
 OpenCode V1 and V2 use one installed plugin. The installer accepts stable V1 **>= 1.18.29** and V2 **>= 2.0.0**; prereleases and unknown API generations are rejected. This compatibility range does not mean every version has been tested. See [OpenCode setup, release reports and delivery limits](docs/opencode-notifications.md) for qualification of specific versions and platforms.
 
