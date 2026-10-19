@@ -9,10 +9,13 @@ change the existing portable package and managed-runtime ledger.
 
 Installing this separate package opts into the Qoder hook; the existing generic
 portable installer does not select Qoder automatically. Settings use the shared
-file reported by `claude-notifications config path`. Qoder inherits global
+file reported by `claude-notifications config path`. An existing
+`AGENT_NOTIFICATIONS_CONFIG` selection is honored; set it to an absolute config
+file path when using a separate TEST profile. Qoder inherits global
 notification settings; an optional schema version 2 `agents.qoder` profile
 provides overrides. Merge this into the existing document rather than replacing
-other agents' settings:
+other agents' settings. Omitted fields continue to inherit global settings;
+this example deliberately disables sound and click-to-focus for Qoder:
 
 ```json
 {
@@ -20,7 +23,11 @@ other agents' settings:
   "agents": {
     "qoder": {
       "notifications": {
-        "desktop": {"enabled": true},
+        "desktop": {
+          "enabled": true,
+          "sound": false,
+          "clickToFocus": false
+        },
         "webhook": {"enabled": false}
       }
     }
