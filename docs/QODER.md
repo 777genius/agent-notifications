@@ -35,7 +35,9 @@ this example deliberately disables sound and click-to-focus for Qoder:
 }
 ```
 
-The native hook has a 40 second timeout, covering the existing configurable
+The Stop hook runs synchronously so Qoder waits for delivery before exiting.
+Its handler remains observation-only and does not block task completion with a
+policy decision. The hook has a 40 second timeout, covering the existing configurable
 notification delay and bounded webhook shutdown. Desktop notifications still
 require the operating system's normal notification permissions.
 

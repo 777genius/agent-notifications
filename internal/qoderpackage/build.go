@@ -55,7 +55,7 @@ func Build(req BuildRequest) (Package, error) {
 		name += ".exe"
 	}
 	manifest := map[string]string{"name": "agent-notify-qoder", "version": req.Version, "description": "Completion notifications for Qoder"}
-	hook := map[string]any{"hooks": map[string]any{"Stop": []any{map[string]any{"async": true, "hooks": []any{map[string]any{"type": "command", "command": "${QODER_PLUGIN_ROOT}/bin/" + name, "args": []string{"handle-hook", "Stop", "--product", "qoder"}, "name": "agent-notify-qoder-stop", "timeout": 40}}}}}}
+	hook := map[string]any{"hooks": map[string]any{"Stop": []any{map[string]any{"hooks": []any{map[string]any{"type": "command", "command": "${QODER_PLUGIN_ROOT}/bin/" + name, "args": []string{"handle-hook", "Stop", "--product", "qoder"}, "name": "agent-notify-qoder-stop", "timeout": 40}}}}}}
 	if err := os.MkdirAll(filepath.Dir(req.OutputRoot), 0700); err != nil {
 		return Package{}, err
 	}

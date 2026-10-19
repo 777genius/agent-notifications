@@ -26,7 +26,7 @@ func TestNativeBundleContract(t *testing.T) {
 			}
 			var hooks struct {
 				Hooks map[string][]struct {
-					Async bool
+					Async *bool
 					Hooks []struct {
 						Type, Command, Name string
 						Args                []string
@@ -42,7 +42,7 @@ func TestNativeBundleContract(t *testing.T) {
 				t.Fatal(err)
 			}
 			groups := hooks.Hooks["Stop"]
-			if len(hooks.Hooks) != 1 || len(groups) != 1 || !groups[0].Async || len(groups[0].Hooks) != 1 {
+			if len(hooks.Hooks) != 1 || len(groups) != 1 || groups[0].Async != nil || len(groups[0].Hooks) != 1 {
 				t.Fatalf("unexpected native hook: %s", raw)
 			}
 			hook := groups[0].Hooks[0]

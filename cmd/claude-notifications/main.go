@@ -329,10 +329,16 @@ func runHandleHook(args []string) {
 		return
 	}
 
-	product, err := codexsource.ValidateProductOverride(rawProduct)
-	if err != nil {
-		codexFailOpen(fmt.Sprintf("invalid product override: %v", err))
-		return
+	// Qoder's public hook API is supported by SDK 1.3, while its host
+	// detector registry does not yet advertise Qoder. Select this explicit
+	// application route without inferring a product from the environment.
+	product := rawProduct
+	if product != "qoder" {
+		product, err = codexsource.ValidateProductOverride(rawProduct)
+		if err != nil {
+			codexFailOpen(fmt.Sprintf("invalid product override: %v", err))
+			return
+		}
 	}
 
 	switch product {
