@@ -20,6 +20,8 @@ type BuildRequest struct{ Version, GOOS, GOARCH, Executable, OutputRoot, Archive
 type Package struct{ Root, Archive, ArchiveSHA256, BinaryName string }
 
 // AssetName identifies the separate native hook package, not the MCP package.
+// The archive name keeps its frozen pre-rename prefix; the manifest name is the
+// registry-facing identity and must not drift alongside it.
 func AssetName(goos, goarch string) string {
 	return fmt.Sprintf("agent-notify-qoder-%s-%s.zip", goos, goarch)
 }

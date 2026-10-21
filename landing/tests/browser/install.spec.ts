@@ -590,7 +590,7 @@ test("first feature explains supported click-to-focus and its agent scope", asyn
 });
 
 // Revealed sections must still be reachable through a direct URL and navigation.
-test("installation deep link and navigation expose the comparison and five agent logos", async ({ page }) => {
+test("installation deep link and navigation expose the comparison and six agent logos", async ({ page }) => {
   await page.goto("#install");
   await expect(page).toHaveURL(/#install$/);
   await expect(page.locator("#install")).toBeInViewport();

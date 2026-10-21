@@ -187,3 +187,64 @@ func TestQoderTeammateIdleDecodeAndGuard(t *testing.T) {
 		t.Fatal("qoder decode leaked transcript path")
 	}
 }
+
+// A session content lock held by another hook models a Stop/Notification race.
+// Qoder prompts and subagent stops must still deliver, exactly like Codex;
+// completions keep the session lock so a racing Stop cannot double-notify.
+func TestQoderEventsDeliverWhileContentLockHeld(t *testing.T) {
+	for _, kind := range []string{"PermissionRequest", "PreToolUse", "SubagentStop", "Stop"} {
+		t.Run(kind, func(t *testing.T) {
+			root := t.TempDir()
+			t.Setenv("TMPDIR", root)
+			t.Setenv("TMP", root)
+			t.Setenv("TEMP", root)
+			session := fmt.Sprintf("../../qoder-held-%s-%d", strings.ToLower(kind), time.Now().UnixNano())
+			body := ""
+			switch kind {
+			case "PermissionRequest":
+				body = `,"tool_name":"Bash"`
+			case "PreToolUse":
+				body = `,"tool_name":"ExitPlanMode"`
+			case "SubagentStop":
+				body = `,"last_assistant_message":"Sub done"`
+			case "Stop":
+				body = `,"stop_hook_active":false,"last_assistant_message":"Done"`
+			}
+			payload := fmt.Sprintf(`{"session_id":%q,"cwd":"/TEST-qoder","hook_event_name":%q%s}`, session, kind, body)
+			cfg := codexTestConfig()
+			cfg.Notifications.NotifyOnSubagentStop = true
+			noSuppress := false
+			cfg.Notifications.SuppressForSubagents = &noSuppress
+			h, notifier, _ := newTestHandler(t, cfg)
+			h.product = ProductQoder
+			h.source = QoderSource{}
+			ev, err := h.source.Decode(context.Background(), kind, strings.NewReader(payload))
+			if err != nil {
+				t.Fatal(err)
+			}
+			key := qoderKeys(ev).stateKey
+			ok, err := h.dedupMgr.AcquireContentLock(key)
+			if err != nil || !ok {
+				t.Fatalf("hold lock: %v %v", ok, err)
+			}
+			defer func() {
+				if err := h.dedupMgr.ReleaseContentLock(key); err != nil {
+					t.Error(err)
+				}
+			}()
+			if err := h.HandleHook(kind, strings.NewReader(payload)); err != nil {
+				t.Fatal(err)
+			}
+			want := 1
+			if kind == "Stop" {
+				want = 0
+			}
+			if got := notifier.callCount(); got != want {
+				t.Fatalf("deliveries while lock held = %d, want %d", got, want)
+			}
+			if ok, err := h.dedupMgr.AcquireContentLock(key); err != nil || ok {
+				t.Fatalf("handler removed another event's lock: %v %v", ok, err)
+			}
+		})
+	}
+}

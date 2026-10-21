@@ -607,9 +607,10 @@ func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 
 	// Acquire content lock to prevent race between different hooks (Stop vs Notification)
 	// This ensures only one process can check and update duplicate state at a time
-	// Distinct Codex prompts and subagents use event-scoped dedup only.
+	// Distinct Codex and Qoder prompts and subagents use event-scoped dedup
+	// only; a session content lock held by another hook must not drop them.
 	// Claude retains its original session locking, including permissions.
-	skipContentLock := ev.Product == ProductCodex && (status == analyzer.StatusPermissionRequest ||
+	skipContentLock := (ev.Product == ProductCodex || ev.Product == ProductQoder) && (status == analyzer.StatusPermissionRequest ||
 		ev.Kind() == EventPreToolUse || ev.Kind() == EventSubagentStop)
 	contentLockAcquired := false
 	if !skipContentLock {

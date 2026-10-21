@@ -241,6 +241,10 @@ func verifyCursorProjection(b portable.Binding, r cursorRecord) error {
 		return ErrDenied
 	}
 	server, ok := servers["agent-notifications"]
+	_, legacy := servers["agent-notify"]
+	if ok && legacy {
+		return ErrDenied
+	}
 	if !ok {
 		server, ok = servers["agent-notify"]
 	}

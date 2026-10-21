@@ -16,13 +16,15 @@ portable package and managed-runtime ledger.
 | `PermissionRequest` | permission request | on |
 | `PreToolUse` (matcher `ExitPlanMode\|AskUserQuestion`) | plan ready / question | on |
 | `SubagentStop` | subagent task complete | off (opt-in) |
-| `TeammateIdle` | idle teammate | on, but silent without team identity |
+| `TeammateIdle` | idle teammate | on; records idle state, team-completion alert requires a stopped lead |
 
 `Stop` rides the Go SDK's Qoder transport. The other five are decoded directly
 as strict hook JSON: the event name inside the payload must match the handler,
 oversized payloads are rejected, and no transcript path is assumed —
 everything is derived from the event payload itself. Continuation turns never
-notify. `PermissionRequest` notifications name the tool and are labeled
+notify. The Qoder wire carries no turn or subagent identity, so identical
+re-prompts or identical subagent completions within the dedup window collapse
+to a single notification. `PermissionRequest` notifications name the tool and are labeled
 `Qoder requests permission`.
 
 ## Configuration
@@ -35,7 +37,9 @@ file path when using a separate TEST profile. Qoder inherits global
 notification settings; an optional schema version 2 `agents.qoder` profile
 provides overrides. Merge this into the existing document rather than replacing
 other agents' settings. Omitted fields continue to inherit global settings;
-this example deliberately disables sound and click-to-focus for Qoder:
+this example deliberately disables sound for Qoder. `clickToFocus` is shown for
+schema completeness only: click-to-focus capture is currently Claude-only and
+the knob is inert for Qoder.
 
 ```json
 {
@@ -93,7 +97,7 @@ comes from the same `config.ConsumerVersion` as the existing portable builder.
 The expanded package includes both a standard identity `plugin.json` and native
 `.qoder-plugin/plugin.json`, plus `hooks/hooks.json`. The package identity is
 `agent-notifications-qoder`; each hook names itself
-`agent-notifications-qoder-<event>` and runs
+`agent-notifications-qoder-<lowercased event>` and runs
 `${QODER_PLUGIN_ROOT}/bin/claude-notifications` (with `.exe` on Windows).
 Native arguments are separate fields, allowing package roots with spaces.
 

@@ -528,6 +528,10 @@ func verifiedProjectedSelector(ctx context.Context, integration portable.Integra
 		return "", fmt.Errorf("%w: projected MCP servers invalid", ErrPreflight)
 	}
 	raw, found := servers[portableServerName]
+	_, legacy := servers[legacyPortableServerName]
+	if found && legacy {
+		return "", fmt.Errorf("%w: projected MCP server declared under both keys", ErrPreflight)
+	}
 	if !found {
 		raw, found = servers[legacyPortableServerName]
 	}
@@ -1941,7 +1945,7 @@ func IsUpdateRequired(err error) bool {
 	msg := err.Error()
 	return strings.Contains(msg, "run update separately") ||
 		strings.Contains(msg, "use switch to change source") ||
-		strings.Contains(msg, "use an explicit update for controlled removal") ||
+		strings.Contains(msg, "recorded MCP selection is no longer supported; use an explicit update for controlled removal") ||
 		strings.Contains(msg, "is sticky to")
 }
 

@@ -26,4 +26,12 @@ func TestIsUpdateRequiredSignals(t *testing.T) {
 	if IsUpdateRequired(errors.New("managed package was changed or is missing; refusing silent update")) {
 		t.Fatal("unrelated refusal recognized as update-required")
 	}
+	for _, msg := range []string{
+		"use an explicit update for controlled removal: agent-notify",
+		"current support requires controlled removal of this previously managed MCP entry",
+	} {
+		if IsUpdateRequired(errors.New(msg)) {
+			t.Fatalf("boundary phrase recognized as update-required: %s", msg)
+		}
+	}
 }
