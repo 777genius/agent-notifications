@@ -67,6 +67,20 @@ These contracts require new qualification before changing provider:
   concurrency configuration.
 - Windows workflows and all Intel macOS cells retain their original labels.
 
+## Cursor source qualification kernels
+
+The stock Ubuntu 24.04.5 runner moved from `6.17.0-1022-azure` to
+`7.0.0-1017-azure`. The source namespace policy accepts these two exact kernels
+only, with the existing Linux amd64, Ubuntu release, ext4 ancestry and original
+profile token requirements. Unknown kernels continue to refuse.
+
+The historical P1 receipt remains evidence for the original kernel only. The
+kernel 7 qualification has its own `source-ci-pr497` identity. Before merging
+[PR 497](https://github.com/777genius/agent-notifications/pull/497), its Go 1.26
+Ubuntu job must pass the real directory identity/swap, Cursor, materializer,
+caller and recovery contracts on that kernel. `NOT_RUN` remains a CI failure;
+this source qualification grants no installed native E or consent.
+
 ## Concurrency and rollback
 
 Active PR workflows group by workflow, event and PR number, cancelling only
