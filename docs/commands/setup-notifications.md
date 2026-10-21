@@ -190,7 +190,7 @@ and both consent flags, or the complete app/team/consent tuple). Route omission 
 policy; adding Claude does not clear a Codex route. Claude informational calls use
 request-level `navigation: "none"` and an explicit request ID.
 
-Bootstrap, Claude init, and `setup-codex` enable agent-notify by default
+Bootstrap, Claude init, and `setup-codex` enable agent-notifications by default
 (`--agent-notify`). For a fresh macOS Codex or combined bootstrap install, an
 omitted route uses the registered official Codex Desktop application after
 verifying its bundle ID and Developer ID signature. Clicking notifications then

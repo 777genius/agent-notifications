@@ -240,7 +240,10 @@ func verifyCursorProjection(b portable.Binding, r cursorRecord) error {
 	if read(filepath.Join(r.Binding.TargetLocator, "mcp.json"), &document) != nil || json.Unmarshal(document["mcpServers"], &servers) != nil {
 		return ErrDenied
 	}
-	server, ok := servers["agent-notify"]
+	server, ok := servers["agent-notifications"]
+	if !ok {
+		server, ok = servers["agent-notify"]
+	}
 	name, err := b.Filename()
 	if !ok || err != nil || !reflect.DeepEqual(server.Args, []string{"portable-launch", "--locator", name}) ||
 		server.Cwd != r.Binding.TargetLocator || server.Env["PLUGIN_ROOT"] != r.Binding.TargetLocator || server.Env["PLUGIN_DATA"] != b.DataRoot {

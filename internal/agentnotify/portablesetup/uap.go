@@ -32,7 +32,35 @@ import (
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/vscodelocalhooks"
 )
 
-const portableServerName = "agent-notify"
+const (
+	portableServerName = "agent-notifications"
+	// legacyPortableServerName is the pre-rename server key still declared by
+	// packages and projections made by earlier releases.
+	legacyPortableServerName = "agent-notify"
+)
+
+// declaredServerName reports the MCP server key the package actually declares
+// so projection selects the right entry. Packages predating the server rename
+// declare only the legacy key.
+func declaredServerName(packageRoot string) string {
+	data, err := os.ReadFile(filepath.Join(packageRoot, "mcp.json"))
+	if err != nil {
+		return portableServerName
+	}
+	var document struct {
+		Servers map[string]json.RawMessage `json:"mcpServers"`
+	}
+	if json.Unmarshal(data, &document) != nil {
+		return portableServerName
+	}
+	_, legacy := document.Servers[legacyPortableServerName]
+	_, canonical := document.Servers[portableServerName]
+	if legacy && !canonical {
+		return legacyPortableServerName
+	}
+	return portableServerName
+}
+
 const clientFactsFile = "client-facts.json"
 
 // NewRegistry is the explicit Notifications composition of the two supported
@@ -499,8 +527,12 @@ func verifiedProjectedSelector(ctx context.Context, integration portable.Integra
 	} else if json.Unmarshal(document["mcpServers"], &servers) != nil {
 		return "", fmt.Errorf("%w: projected MCP servers invalid", ErrPreflight)
 	}
+	raw, found := servers[portableServerName]
+	if !found {
+		raw, found = servers[legacyPortableServerName]
+	}
 	var server map[string]json.RawMessage
-	if json.Unmarshal(servers[portableServerName], &server) != nil {
+	if !found || json.Unmarshal(raw, &server) != nil {
 		return "", fmt.Errorf("%w: projected MCP server missing", ErrPreflight)
 	}
 	var args []string
@@ -992,7 +1024,7 @@ func (m Materializer) engineWithIdentities(req MaterializeRequest, generation *u
 		Runner:               runner,
 		Registry:             registry,
 		TrustedLocalPackages: true,
-		ServerName:           portableServerName,
+		ServerName:           declaredServerName(req.PackageRoot),
 		ProjectArgs: func(facts uapinstaller.BindingFacts) ([]string, error) {
 			id, err := identityFor(facts.ClientID)
 			if err != nil {
@@ -1909,6 +1941,7 @@ func IsUpdateRequired(err error) bool {
 	msg := err.Error()
 	return strings.Contains(msg, "run update separately") ||
 		strings.Contains(msg, "use switch to change source") ||
+		strings.Contains(msg, "use an explicit update for controlled removal") ||
 		strings.Contains(msg, "is sticky to")
 }
 

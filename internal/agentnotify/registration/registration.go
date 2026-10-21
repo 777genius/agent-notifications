@@ -16,7 +16,26 @@ import (
 )
 
 const MaxBytes = 1 << 20
-const Server = "agent_notifications"
+
+// Server is the managed MCP server key written into client configuration.
+const Server = "agent-notifications"
+
+// legacyServers are managed keys written by earlier releases. Apply moves such
+// an entry to Server on the next update so renamed clients keep updating.
+var legacyServers = []string{"agent_notifications"}
+
+// KnownServerName reports whether name is a managed server key, past or present.
+func KnownServerName(name string) bool {
+	if name == Server {
+		return true
+	}
+	for _, legacy := range legacyServers {
+		if name == legacy {
+			return true
+		}
+	}
+	return false
+}
 
 type Provider string
 
@@ -186,7 +205,7 @@ func Apply(r Request) (Result, error) {
 	if !r.Remove && !validTransport(desired) {
 		return fail(ErrInvalid)
 	}
-	if r.Previous != nil && (r.Previous.Provider != r.Provider || r.Previous.Server != Server || !validTransport(r.Previous.Transport)) {
+	if r.Previous != nil && (r.Previous.Provider != r.Provider || !KnownServerName(r.Previous.Server) || !validTransport(r.Previous.Transport)) {
 		return fail(ErrConflict)
 	}
 	m, e := decode(r.Provider, r.Input)
@@ -233,14 +252,29 @@ func Apply(r Request) (Result, error) {
 				return fail(ErrInvalid)
 			}
 		}
-		if !r.Remove && name != Server && entry["command"] == desired.Command {
+		if !r.Remove && !KnownServerName(name) && entry["command"] == desired.Command {
 			return fail(ErrDuplicate)
 		}
 	}
-	v, exists := servers[Server]
+	// The managed entry may sit under a legacy key after the rename. At most one
+	// managed key may exist, and it must match the recorded ownership exactly.
+	currentKey := ""
+	var currentValue map[string]any
+	for _, name := range append([]string{Server}, legacyServers...) {
+		value, found := servers[name]
+		if !found {
+			continue
+		}
+		if currentKey != "" {
+			return fail(ErrConflict)
+		}
+		currentKey = name
+		currentValue = value.(map[string]any)
+	}
+	exists := currentKey != ""
 	if exists {
-		current, ok := transport(v.(map[string]any))
-		if !ok || r.Previous == nil || !equal(current, r.Previous.Transport) {
+		current, ok := transport(currentValue)
+		if !ok || r.Previous == nil || r.Previous.Server != currentKey || !equal(current, r.Previous.Transport) {
 			return fail(ErrConflict)
 		}
 	}
@@ -249,18 +283,18 @@ func Apply(r Request) (Result, error) {
 		if !exists {
 			return result, nil
 		}
-		delete(servers, Server)
+		delete(servers, currentKey)
 	} else {
 		result.Owned = &Ownership{Provider: r.Provider, Server: Server, Transport: desired}
 		if exists {
-			current, _ := transport(v.(map[string]any))
-			if equal(current, desired) {
+			current, _ := transport(currentValue)
+			if currentKey == Server && equal(current, desired) {
 				return result, nil
 			}
 		}
 		entry := map[string]any{}
 		if exists {
-			entry = v.(map[string]any)
+			entry = currentValue
 		}
 		entry["command"] = desired.Command
 		entry["args"] = desired.Args
@@ -270,6 +304,9 @@ func Apply(r Request) (Result, error) {
 			delete(entry, "type")
 		}
 		servers[Server] = entry
+		if exists && currentKey != Server {
+			delete(servers, currentKey)
+		}
 	}
 	m[key] = servers
 	var out []byte

@@ -228,8 +228,19 @@ func VerifyLayout(root string) error {
 	if err := json.Unmarshal(mcpBody, &mcp); err != nil {
 		return fmt.Errorf("%w: mcp.json: %v", ErrInvalidLayout, err)
 	}
-	server, ok := mcp.Servers[pluginName]
-	if !ok || (server.Command != "./bin/"+binaryName("linux") && server.Command != "./bin/"+binaryName("windows")) {
+	// Exactly one server key: the canonical name or the pre-rename legacy key.
+	// Registering both would run two observers for one install.
+	declared := 0
+	var server struct {
+		Command string `json:"command"`
+	}
+	for _, name := range []string{ServerName, legacyServerName} {
+		if candidate, exists := mcp.Servers[name]; exists {
+			declared++
+			server = candidate
+		}
+	}
+	if declared != 1 || (server.Command != "./bin/"+binaryName("linux") && server.Command != "./bin/"+binaryName("windows")) {
 		return fmt.Errorf("%w: mcp command", ErrInvalidLayout)
 	}
 	// Repair must preserve historical package bytes, while admitting only one

@@ -34,7 +34,7 @@ func TestNativeBundleContract(t *testing.T) {
 				if err := json.Unmarshal(raw, &manifest); err != nil {
 					t.Fatal(err)
 				}
-				if manifest["name"] != "agent-notify-qoder" || manifest["version"] != req.Version {
+				if manifest["name"] != "agent-notifications-qoder" || manifest["version"] != req.Version {
 					t.Fatalf("incorrect manifest identity: %v", manifest)
 				}
 				if rel == "plugin.json" && manifest["$schema"] != "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json" {
@@ -46,8 +46,9 @@ func TestNativeBundleContract(t *testing.T) {
 			}
 			var hooks struct {
 				Hooks map[string][]struct {
-					Async *bool
-					Hooks []struct {
+					Matcher string
+					Async   *bool
+					Hooks   []struct {
 						Type, Command, Name string
 						Args                []string
 						Timeout             int
@@ -61,21 +62,29 @@ func TestNativeBundleContract(t *testing.T) {
 			if err = json.Unmarshal(raw, &hooks); err != nil {
 				t.Fatal(err)
 			}
-			groups := hooks.Hooks["Stop"]
-			if len(hooks.Hooks) != 1 || len(groups) != 1 || groups[0].Async != nil || len(groups[0].Hooks) != 1 {
-				t.Fatalf("unexpected native hook: %s", raw)
-			}
-			hook := groups[0].Hooks[0]
 			binary := "claude-notifications"
 			if goos == "windows" {
 				binary += ".exe"
 			}
-			if hook.Timeout < 35 || hook.Type != "command" || hook.Command != "${QODER_PLUGIN_ROOT}/bin/"+binary || !reflect.DeepEqual(hook.Args, []string{"handle-hook", "Stop", "--product", "qoder"}) {
-				t.Fatalf("unsafe/incorrect command contract: %+v", hook)
+			wantEvents := []struct{ event, matcher string }{
+				{"Stop", ""}, {"Notification", ""}, {"PermissionRequest", ""}, {"SubagentStop", ""}, {"TeammateIdle", ""}, {"PreToolUse", "ExitPlanMode|AskUserQuestion"},
+			}
+			if len(hooks.Hooks) != len(wantEvents) {
+				t.Fatalf("unexpected native hook set: %s", raw)
+			}
+			for _, want := range wantEvents {
+				groups := hooks.Hooks[want.event]
+				if len(groups) != 1 || groups[0].Async != nil || groups[0].Matcher != want.matcher || len(groups[0].Hooks) != 1 {
+					t.Fatalf("unexpected native hook for %s: %s", want.event, raw)
+				}
+				hook := groups[0].Hooks[0]
+				if hook.Timeout < 35 || hook.Type != "command" || hook.Command != "${QODER_PLUGIN_ROOT}/bin/"+binary || hook.Name != "agent-notifications-qoder-"+strings.ToLower(want.event) || !reflect.DeepEqual(hook.Args, []string{"handle-hook", want.event, "--product", "qoder"}) {
+					t.Fatalf("unsafe/incorrect command contract for %s: %+v", want.event, hook)
+				}
 			}
 			// Native Qoder substitutes its root in the executable field. Arguments stay
 			// separate, so a path with spaces must never acquire shell quotes.
-			resolved := strings.ReplaceAll(hook.Command, "${QODER_PLUGIN_ROOT}", got.Root)
+			resolved := strings.ReplaceAll(hooks.Hooks["Stop"][0].Hooks[0].Command, "${QODER_PLUGIN_ROOT}", got.Root)
 			actual, err := os.ReadFile(resolved)
 			if err != nil || string(actual) != string(body) {
 				t.Fatalf("binary substitution: %q %v", actual, err)

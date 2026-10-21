@@ -16,7 +16,7 @@ func handleQoderHook(event string) {
 		return
 	}
 	defer func() { _ = logging.Close() }()
-	if event != "Stop" {
+	if !hooks.IsQoderHookEvent(event) {
 		logging.Error("qoder: unsupported event")
 		return
 	}

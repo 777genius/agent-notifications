@@ -19,7 +19,7 @@ local = 1979-05-27T07:32:00
 clock = 07:32:00
 [mcp_servers.remote]
 url = "https://example.invalid/mcp"
-[mcp_servers.agent_notifications]
+[mcp_servers.agent-notifications]
 command = "old"
 args = []
 enabled = false
@@ -32,7 +32,7 @@ env = { TOKEN = "fixture" }
 approvals = { notify = "ask" }
 unknown = { nested = [true, false] }
 `,
-		Claude: `{"foreign":{"large":123456789012345678901234567890,"array":[null,true,"hi"]},"mcpServers":{"remote":{"type":"http","url":"https://example.invalid"},"agent_notifications":{"command":"old","args":[],"type":"stdio","enabled":false,"disabled_tools":["danger"],"enabled_tools":["notify"],"timeout":123,"cwd":"private workspace","env":{"TOKEN":"fixture"},"approvals":{"notify":"ask"},"unknown":{"nested":[true,false]}}}}`,
+		Claude: `{"foreign":{"large":123456789012345678901234567890,"array":[null,true,"hi"]},"mcpServers":{"remote":{"type":"http","url":"https://example.invalid"},"agent-notifications":{"command":"old","args":[],"type":"stdio","enabled":false,"disabled_tools":["danger"],"enabled_tools":["notify"],"timeout":123,"cwd":"private workspace","env":{"TOKEN":"fixture"},"approvals":{"notify":"ask"},"unknown":{"nested":[true,false]}}}}`,
 	}
 	for p, fixture := range fixtures {
 		t.Run(string(p), func(t *testing.T) {
@@ -91,6 +91,92 @@ unknown = { nested = [true, false] }
 		})
 	}
 }
+func TestApplyMigratesLegacyManagedKey(t *testing.T) {
+	for p, fixture := range map[Provider]string{
+		Codex:  "# keep\n[mcp_servers.agent_notifications]\ncommand = \"old\"\nargs = [\"mcp\"]\nenabled = false\n",
+		Claude: `{"mcpServers":{"agent_notifications":{"command":"old","args":["mcp"],"type":"stdio","enabled":false}}}`,
+	} {
+		t.Run(string(p), func(t *testing.T) {
+			raw := []byte(fixture)
+			before, _ := decode(p, raw)
+			key := "mcp_servers"
+			if p == Claude {
+				key = "mcpServers"
+			}
+			tr, ok := transport(before[key].(map[string]any)["agent_notifications"].(map[string]any))
+			if !ok {
+				t.Fatal("fixture transport")
+			}
+			req := Request{Provider: p, Input: raw, Command: "/new exe", Args: []string{"mcp"},
+				Previous: &Ownership{Provider: p, Server: "agent_notifications", Transport: tr}}
+			got, err := Apply(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !got.Changed || got.Owned == nil || got.Owned.Server != Server {
+				t.Fatalf("not migrated: %+v", got)
+			}
+			after, _ := decode(p, got.Bytes)
+			servers := after[key].(map[string]any)
+			if _, legacy := servers["agent_notifications"]; legacy {
+				t.Fatal("legacy key left behind")
+			}
+			entry, ok := servers[Server].(map[string]any)
+			if !ok || entry["command"] != "/new exe" {
+				t.Fatalf("canonical entry missing: %v", servers)
+			}
+			if entry["enabled"] != false {
+				t.Fatal("foreign field lost")
+			}
+		})
+	}
+}
+
+func TestApplyRemoveDeletesLegacyKey(t *testing.T) {
+	raw := []byte(`{"mcpServers":{"agent_notifications":{"command":"old","args":["mcp"],"type":"stdio"},"foreign":{"command":"keep"}}}`)
+	before, _ := decode(Claude, raw)
+	tr, ok := transport(before["mcpServers"].(map[string]any)["agent_notifications"].(map[string]any))
+	if !ok {
+		t.Fatal("fixture transport")
+	}
+	got, err := Apply(Request{Provider: Claude, Input: raw, Remove: true,
+		Previous: &Ownership{Provider: Claude, Server: "agent_notifications", Transport: tr}})
+	if err != nil || !got.Changed || got.Owned != nil {
+		t.Fatalf("remove: %v %+v", err, got)
+	}
+	after, _ := decode(Claude, got.Bytes)
+	servers := after["mcpServers"].(map[string]any)
+	if _, legacy := servers["agent_notifications"]; legacy {
+		t.Fatal("legacy key left behind")
+	}
+	if _, keep := servers["foreign"]; !keep {
+		t.Fatal("foreign entry lost")
+	}
+}
+
+func TestApplyRejectsAmbiguousManagedKeys(t *testing.T) {
+	raw := []byte(`{"mcpServers":{"agent_notifications":{"command":"old","args":["mcp"],"type":"stdio"},"agent-notifications":{"command":"old","args":["mcp"],"type":"stdio"}}}`)
+	before, _ := decode(Claude, raw)
+	tr, _ := transport(before["mcpServers"].(map[string]any)["agent-notifications"].(map[string]any))
+	_, err := Apply(Request{Provider: Claude, Input: raw, Command: "exe", Args: []string{"mcp"},
+		Previous: &Ownership{Provider: Claude, Server: "agent-notifications", Transport: tr}})
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("ambiguous managed keys accepted: %v", err)
+	}
+}
+
+func TestApplyRejectsUnownedLegacyKey(t *testing.T) {
+	raw := []byte(`{"mcpServers":{"agent_notifications":{"command":"old","args":["mcp"],"type":"stdio"}}}`)
+	_, err := Apply(Request{Provider: Claude, Input: raw, Command: "exe", Args: []string{"mcp"}})
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("unowned legacy entry adopted: %v", err)
+	}
+	_, err = Apply(Request{Provider: Claude, Input: raw, Remove: true})
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("unowned legacy entry removed: %v", err)
+	}
+}
+
 func TestCreateAndConflicts(t *testing.T) {
 	for _, p := range []Provider{Codex, Claude} {
 		t.Run(string(p), func(t *testing.T) {
@@ -165,7 +251,7 @@ func TestFailClosed(t *testing.T) {
 	}
 }
 func TestExactNoopAndPresence(t *testing.T) {
-	raw := []byte("# retain this comment\n[mcp_servers.agent_notifications]\ncommand='exe'\nargs=[]\nenabled=false\n")
+	raw := []byte("# retain this comment\n[mcp_servers.agent-notifications]\ncommand='exe'\nargs=[]\nenabled=false\n")
 	prior := &Ownership{Codex, Server, Transport{Command: "exe", ArgsPresent: true}}
 	got, e := Apply(Request{Provider: Codex, Input: raw, Command: "exe", Previous: prior})
 	if e != nil || got.Changed || !bytes.Equal(raw, got.Bytes) {

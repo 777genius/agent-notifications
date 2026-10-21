@@ -82,16 +82,33 @@ func Build(req BuildRequest) (Package, error) {
 	if req.GOOS == "windows" {
 		name += ".exe"
 	}
-	manifest := map[string]string{"name": "agent-notify-qoder", "version": req.Version, "description": "Completion notifications for Qoder"}
+	manifest := map[string]string{"name": "agent-notifications-qoder", "version": req.Version, "description": "Completion notifications for Qoder"}
 	standardManifest := map[string]string{"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json", "name": manifest["name"], "version": manifest["version"], "description": manifest["description"]}
-	hook := map[string]any{"hooks": map[string]any{"Stop": []any{map[string]any{"hooks": []any{map[string]any{"type": "command", "command": "${QODER_PLUGIN_ROOT}/bin/" + name, "args": []string{"handle-hook", "Stop", "--product", "qoder"}, "name": "agent-notify-qoder-stop", "timeout": 40}}}}}}
+	qoderEvents := []struct{ event, matcher string }{
+		{"Stop", ""},
+		{"Notification", ""},
+		{"PermissionRequest", ""},
+		{"SubagentStop", ""},
+		{"TeammateIdle", ""},
+		{"PreToolUse", "ExitPlanMode|AskUserQuestion"},
+	}
+	hookGroups := map[string]any{}
+	for _, e := range qoderEvents {
+		entry := map[string]any{"type": "command", "command": "${QODER_PLUGIN_ROOT}/bin/" + name, "args": []string{"handle-hook", e.event, "--product", "qoder"}, "name": "agent-notifications-qoder-" + strings.ToLower(e.event), "timeout": 40}
+		group := map[string]any{"hooks": []any{entry}}
+		if e.matcher != "" {
+			group["matcher"] = e.matcher
+		}
+		hookGroups[e.event] = []any{group}
+	}
+	hook := map[string]any{"hooks": hookGroups}
 	if err := os.MkdirAll(filepath.Dir(req.OutputRoot), 0700); err != nil {
 		return Package{}, err
 	}
 	if err := os.Mkdir(req.OutputRoot, 0700); err != nil {
 		return Package{}, err
 	}
-	files := map[string][]byte{thirdpartynotices.Filename: []byte(thirdpartynotices.Text()), "README.md": []byte("# Agent Notify for Qoder\n\nNative Stop-hook completion notifications. No MCP observer is installed.\nSee the source docs/QODER.md for configuration and qualification scope.\n")}
+	files := map[string][]byte{thirdpartynotices.Filename: []byte(thirdpartynotices.Text()), "README.md": []byte("# Agent Notifications for Qoder\n\nNative hook notifications: task completion (Stop), questions (Notification),\npermission requests (PermissionRequest), subagent completion (SubagentStop),\nidle teammates (TeammateIdle) and plan/question tools (PreToolUse).\nNo MCP observer is installed.\nSee the source docs/QODER.md for configuration and qualification scope.\n")}
 	for path, value := range map[string]any{".qoder-plugin/plugin.json": manifest, "plugin.json": standardManifest, "hooks/hooks.json": hook} {
 		body, err := json.MarshalIndent(value, "", "  ")
 		if err != nil {

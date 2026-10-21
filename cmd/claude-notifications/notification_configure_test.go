@@ -327,7 +327,7 @@ func TestNotificationConfigurePreservesClientRestrictions(t *testing.T) {
 	if err := json.Unmarshal([]byte(setupCommandRead(t, claude)), &document); err != nil {
 		t.Fatal(err)
 	}
-	server := document["mcpServers"].(map[string]any)["agent_notifications"].(map[string]any)
+	server := document["mcpServers"].(map[string]any)["agent-notifications"].(map[string]any)
 	server["enabled"] = false
 	server["enabled_tools"] = []string{"notify"}
 	raw, _ := json.Marshal(document)

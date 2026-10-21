@@ -234,7 +234,7 @@ func TestSetupNotificationsLifecycle(t *testing.T) {
 			if r.ExplicitIntent || r.RuntimeEligible || *f.verifies != count {
 				t.Fatalf("disable: %+v", r)
 			}
-			if !strings.Contains(setupCommandRead(t, f.config), "agent_notifications") {
+			if !strings.Contains(setupCommandRead(t, f.config), "agent-notifications") {
 				t.Fatal("disable removed MCP registration")
 			}
 			setupCommandRun(t, ctx, f.args(t, "remove", client...), f.composition, 0)
@@ -369,7 +369,7 @@ func TestSetupNotificationsRestrictionsAndConflict(t *testing.T) {
 			setupCommandRun(t, ctx, f.args(t, "register", client...), f.composition, 0)
 			original := setupCommandRead(t, f.config)
 			if provider == "codex" {
-				original += "enabled = false\ndisabled_tools = ['notify']\nstartup_timeout_sec = 17\ncustom = 'keep'\n[mcp_servers.agent_notifications.env]\nKEY = 'private-value'\n"
+				original += "enabled = false\ndisabled_tools = ['notify']\nstartup_timeout_sec = 17\ncustom = 'keep'\n[mcp_servers.agent-notifications.env]\nKEY = 'private-value'\n"
 			} else {
 				original = strings.Replace(original, `"command":`, `"enabled": false, "disabled_tools": ["notify"], "timeout": 17, "custom": "keep", "env": {"KEY":"private-value"}, "command":`, 1)
 			}
