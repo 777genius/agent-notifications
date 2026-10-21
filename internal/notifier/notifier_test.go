@@ -1,6 +1,7 @@
 package notifier
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -1267,6 +1268,40 @@ func TestBuildTerminalNotifierArgs_ClickToFocusDisabledOmitsAction(t *testing.T)
 }
 
 // === Additional coverage tests ===
+
+func TestRunCommandWithTimeoutStopsBlockedProcess(t *testing.T) {
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatalf("resolve test executable: %v", err)
+	}
+
+	marker := filepath.Join(t.TempDir(), "helper-started")
+	t.Setenv("REPOSTEW_TEST_BLOCK_NOTIFIER_HELPER", marker)
+	started := time.Now()
+	_, err = runCommandWithTimeout(100*time.Millisecond, executable, "-test.run=^TestBlockedNotifierCommandHelper$")
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("blocked helper returned %v, want deadline exceeded", err)
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("blocked helper did not start before cancellation: %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > 5*time.Second {
+		t.Fatalf("blocked helper took %s to stop after timeout", elapsed)
+	}
+}
+
+func TestBlockedNotifierCommandHelper(t *testing.T) {
+	marker := os.Getenv("REPOSTEW_TEST_BLOCK_NOTIFIER_HELPER")
+	if marker == "" {
+		return
+	}
+	if err := os.WriteFile(marker, []byte("started"), 0600); err != nil {
+		t.Fatalf("write helper start marker: %v", err)
+	}
+	for {
+		time.Sleep(time.Hour)
+	}
+}
 
 func TestSendWithTerminalNotifier_PathNotFound(t *testing.T) {
 	if runtime.GOOS != "darwin" {

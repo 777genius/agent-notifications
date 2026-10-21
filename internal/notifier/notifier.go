@@ -1,6 +1,7 @@
 package notifier
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/url"
@@ -25,6 +26,8 @@ import (
 )
 
 const macOSPermissionDeniedMessage = "Notification permission denied. Enable in System Settings > Notifications."
+
+const legacyTerminalNotifierTimeout = 30 * time.Second
 
 var execCommand = exec.Command
 var beeepNotify = beeep.Notify
@@ -223,15 +226,24 @@ func (n *Notifier) sendWithTerminalNotifier(title, message, subtitle, sessionID 
 		return nil
 	}
 
-	cmd := buildNotifierCommand(notifierPath, args)
-
-	output, err := cmd.CombinedOutput()
+	output, err := runCommandWithTimeout(legacyTerminalNotifierTimeout, notifierPath, args...)
 	if err != nil {
 		return fmt.Errorf("terminal-notifier error: %w, output: %s", err, string(output))
 	}
 
 	logging.Debug("terminal-notifier executed: bundleID=%s", bundleID)
 	return nil
+}
+
+func runCommandWithTimeout(timeout time.Duration, notifierPath string, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	output, err := buildNotifierCommandWithContext(ctx, notifierPath, args).CombinedOutput()
+	if ctx.Err() != nil {
+		return output, fmt.Errorf("command timed out after %s: %w", timeout, ctx.Err())
+	}
+	return output, err
 }
 
 func runClaudeNotifierApp(appPath string, args []string) error {
@@ -284,13 +296,17 @@ func runClaudeNotifierApp(appPath string, args []string) error {
 // ClaudeNotifier.app must be launched via LaunchServices so
 // UNUserNotificationCenter gets valid bundle metadata under hardened runtime.
 func buildNotifierCommand(notifierPath string, args []string) *exec.Cmd {
+	return buildNotifierCommandWithContext(context.Background(), notifierPath, args)
+}
+
+func buildNotifierCommandWithContext(ctx context.Context, notifierPath string, args []string) *exec.Cmd {
 	if appPath, ok := claudeNotifierAppPath(notifierPath); ok {
 		openArgs := []string{"-W", "-n", "-g", appPath, "--args", "-launchedViaLaunchServices"}
 		openArgs = append(openArgs, args...)
-		return exec.Command("open", openArgs...)
+		return exec.CommandContext(ctx, "open", openArgs...)
 	}
 
-	return exec.Command(notifierPath, args...)
+	return exec.CommandContext(ctx, notifierPath, args...)
 }
 
 // claudeNotifierAppPath recognizes modern helpers in conventional bundles, the
@@ -581,7 +597,7 @@ func SendQuickNotification(title, message, executeCmd string) error {
 			"-group", fmt.Sprintf("claude-quick-%d", time.Now().UnixNano()),
 			"-nosound",
 		)
-		if output, err := buildNotifierCommand(notifierPath, args).CombinedOutput(); err == nil {
+		if output, err := runCommandWithTimeout(legacyTerminalNotifierTimeout, notifierPath, args...); err == nil {
 			return nil
 		} else {
 			logging.Debug("terminal-notifier failed: %v, output: %s", err, string(output))
