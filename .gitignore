@@ -91,3 +91,8 @@ build/
 # Local Go workspace for cross-repo development; CI resolves go.mod.
 go.work
 go.work.sum
+
+# Local tool caches and workspace lifecycle markers
+/.ruff_cache/
+/.playwright-mcp/
+/.orphaned_at

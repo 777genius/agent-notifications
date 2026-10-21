@@ -85,6 +85,7 @@ See [Architecture](docs/ARCHITECTURE.md) for a detailed overview. Key directorie
 | `pkg/jsonl/` | JSONL streaming parser |
 | `commands/` | Plugin skill definitions (`.md` files) |
 | `sounds/` | Built-in notification sounds (MP3) |
+| `docs/opencode/` | Frozen OpenCode integration and native clock contracts |
 
 ## Make Targets
 
