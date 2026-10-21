@@ -63,6 +63,20 @@ func hashedIdentity(fields ...string) string {
 // Qoder has no native turn id. Use session-scoped, filename-safe state and
 // content identity; identical completions retain the conservative dedup window.
 func qoderKeys(ev Event) eventKeys {
-	p, _ := ev.Payload.(StopPayload)
-	return eventKeys{stateKey: strings.Replace(hashedIdentity("qoder", ev.Session.SessionID), "codex-", "qoder-", 1), lockKey: strings.Replace(hashedIdentity("qoder", ev.Session.SessionID, p.AssistantMessage), "codex-", "qoder-", 1)}
+	keys := eventKeys{stateKey: strings.Replace(hashedIdentity("qoder", ev.Session.SessionID), "codex-", "qoder-", 1)}
+	lockFields := []string{"qoder", ev.Session.SessionID}
+	switch p := ev.Payload.(type) {
+	case StopPayload:
+		lockFields = append(lockFields, p.AssistantMessage)
+	case SubagentStopPayload:
+		lockFields = append(lockFields, "subagent", p.Stop.AssistantMessage)
+	case PermissionRequestPayload:
+		lockFields = append(lockFields, "tool", p.ToolName)
+	case PreToolUsePayload:
+		lockFields = append(lockFields, "tool", p.ToolName)
+	case TeammateIdlePayload:
+		lockFields = append(lockFields, p.TeamName, p.TeammateName)
+	}
+	keys.lockKey = strings.Replace(hashedIdentity(lockFields...), "codex-", "qoder-", 1)
+	return keys
 }

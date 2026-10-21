@@ -227,7 +227,7 @@ func calculate(ctx context.Context, r Request, fault func(string) error, inspect
 			}
 			d := json.NewDecoder(bytes.NewReader(state))
 			d.DisallowUnknownFields()
-			if d.Decode(&o) != nil || (o.Schema != 1 && o.Schema != 2) || (o.Schema == 1 && o.Skill != nil) || (o.Schema == 2 && o.Skill == nil) || o.Mode != Managed || o.InstallationID != l.ID || o.RuntimeRoot != r.RuntimeRoot || o.ConfigPath != r.ConfigPath || o.ConsumerID != id || o.Previous.Provider != r.Provider || o.Previous.Server != registration.Server {
+			if d.Decode(&o) != nil || (o.Schema != 1 && o.Schema != 2) || (o.Schema == 1 && o.Skill != nil) || (o.Schema == 2 && o.Skill == nil) || o.Mode != Managed || o.InstallationID != l.ID || o.RuntimeRoot != r.RuntimeRoot || o.ConfigPath != r.ConfigPath || o.ConsumerID != id || o.Previous.Provider != r.Provider || !registration.KnownServerName(o.Previous.Server) {
 				return nil, ErrConflict
 			}
 			// encoding/json alone accepts case aliases and omitted zero-valued fields.

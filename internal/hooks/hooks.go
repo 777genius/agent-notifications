@@ -432,6 +432,26 @@ func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 			break
 		}
 
+		if ev.Product == ProductQoder {
+			// Qoder subagent completion is payload-driven; no Qoder
+			// transcript schema is assumed. Mirror the opt-in semantics.
+			if h.cfg.ShouldSuppressForSubagents() {
+				logging.Debug("Qoder SubagentStop: suppressing (config: suppressForSubagents)")
+				return nil
+			}
+			if !h.cfg.Notifications.NotifyOnSubagentStop {
+				logging.Debug("Qoder SubagentStop: notifications disabled (config: notifyOnSubagentStop), skipping")
+				return nil
+			}
+			if p.Stop.Continuation {
+				logging.Debug("Qoder SubagentStop: continuation turn, suppressing")
+				return nil
+			}
+			status = analyzer.StatusTaskComplete
+			defer h.cleanupOldLocks()
+			break
+		}
+
 		// A SubagentStop event always denotes a subagent (Task tool) finishing,
 		// so the event type itself — not the transcript path — is the reliable
 		// subagent signal. Claude Code passes the PARENT session transcript_path
@@ -462,7 +482,7 @@ func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 		status, insight = h.enrichClaudeStop(status, p.Stop.AssistantMessage, parsedMessages)
 		defer h.cleanupOldLocks()
 	case PermissionRequestPayload:
-		// Codex-only in this milestone: the host is waiting on user approval.
+		// The host (Codex or Qoder) is waiting on user approval.
 		logging.Debug("PermissionRequest: tool=%s", p.ToolName)
 		status = analyzer.StatusPermissionRequest
 	case TeammateIdlePayload:
@@ -587,9 +607,10 @@ func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 
 	// Acquire content lock to prevent race between different hooks (Stop vs Notification)
 	// This ensures only one process can check and update duplicate state at a time
-	// Distinct Codex prompts and subagents use event-scoped dedup only.
+	// Distinct Codex and Qoder prompts and subagents use event-scoped dedup
+	// only; a session content lock held by another hook must not drop them.
 	// Claude retains its original session locking, including permissions.
-	skipContentLock := ev.Product == ProductCodex && (status == analyzer.StatusPermissionRequest ||
+	skipContentLock := (ev.Product == ProductCodex || ev.Product == ProductQoder) && (status == analyzer.StatusPermissionRequest ||
 		ev.Kind() == EventPreToolUse || ev.Kind() == EventSubagentStop)
 	contentLockAcquired := false
 	if !skipContentLock {
@@ -1066,7 +1087,11 @@ func (h *Handler) generateCodexMessage(ev Event, status analyzer.Status) string 
 		}
 	case PermissionRequestPayload:
 		if p.ToolName != "" {
-			return fmt.Sprintf("Codex requests permission: %s", p.ToolName)
+			product := "Codex"
+			if ev.Product == ProductQoder {
+				product = "Qoder"
+			}
+			return fmt.Sprintf("%s requests permission: %s", product, p.ToolName)
 		}
 	}
 	return summary.GenerateSimple(status, h.cfg)

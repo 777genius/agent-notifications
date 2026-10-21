@@ -432,7 +432,7 @@ func TestWindowsPackageUsesExeCommand(t *testing.T) {
 	if err := json.Unmarshal(body, &mcp); err != nil {
 		t.Fatal(err)
 	}
-	if mcp.Servers["agent-notify"].Command != "./bin/claude-notifications.exe" {
+	if mcp.Servers[ServerName].Command != "./bin/claude-notifications.exe" {
 		t.Fatalf("%s", body)
 	}
 }
@@ -497,4 +497,39 @@ func repoRoot(t *testing.T) string {
 		t.Fatal("missing caller")
 	}
 	return filepath.Clean(filepath.Join(filepath.Dir(file), "../../.."))
+}
+
+// Historical packages declared the pre-rename server key and must keep
+// verifying; a package declaring both keys would run two observers for one
+// install and is rejected.
+func TestVerifyLayoutServerKeyRename(t *testing.T) {
+	probe := buildProbe(t)
+	build := func(t *testing.T, mcpBody string) string {
+		t.Helper()
+		root := filepath.Join(t.TempDir(), "pkg")
+		got, err := Build(BuildRequest{Version: "1.43.0", GOOS: "linux", GOARCH: "amd64", Executable: probe, OutputRoot: root})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(got.Root, "mcp.json"), []byte(mcpBody), 0600); err != nil {
+			t.Fatal(err)
+		}
+		return got.Root
+	}
+	server := func(key string) string {
+		return `{"mcpServers":{"` + key + `":{"type":"stdio","command":"./bin/claude-notifications","args":[],"env":{}}}}`
+	}
+	if err := VerifyLayout(build(t, server("agent-notifications"))); err != nil {
+		t.Fatalf("canonical key rejected: %v", err)
+	}
+	if err := VerifyLayout(build(t, server("agent-notify"))); err != nil {
+		t.Fatalf("legacy key rejected: %v", err)
+	}
+	both := `{"mcpServers":{"agent-notifications":{"type":"stdio","command":"./bin/claude-notifications"},"agent-notify":{"type":"stdio","command":"./bin/claude-notifications"}}}`
+	if err := VerifyLayout(build(t, both)); err == nil {
+		t.Fatal("both server keys accepted")
+	}
+	if err := VerifyLayout(build(t, server("other"))); err == nil {
+		t.Fatal("unknown server key accepted")
+	}
 }

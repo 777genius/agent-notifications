@@ -20,9 +20,13 @@ import (
 )
 
 const (
-	pluginName     = "agent-notify"
-	maxArchiveFile = 80 << 20
-	maxArchiveSize = 96 << 20
+	pluginName = "agent-notify"
+	// ServerName is the MCP server key the package declares in mcp.json.
+	ServerName = "agent-notifications"
+	// legacyServerName is the pre-rename server key; older packages declare it.
+	legacyServerName = "agent-notify"
+	maxArchiveFile   = 80 << 20
+	maxArchiveSize   = 96 << 20
 )
 
 // AssetName is the stable release filename. It is not a source identity.
@@ -92,7 +96,7 @@ func Build(req BuildRequest) (Package, error) {
 	mcp := map[string]any{
 		"$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
 		"mcpServers": map[string]any{
-			pluginName: map[string]any{
+			ServerName: map[string]any{
 				"type":    "stdio",
 				"command": mcpCommand(req.GOOS),
 				"args":    []string{},

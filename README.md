@@ -72,7 +72,7 @@ Use `--product claude` or `--product both` for Claude or Claude + Codex. For Cla
 
 On macOS/Linux/Windows, add `,gemini` to `--products` for all four agents, or use `--product gemini` for Gemini only. Fresh OpenCode/Gemini setup defaults to desktop notifications with webhooks off; updates preserve saved channel choices when no channel flags are supplied. Explicit flags replace the channel pair: `--desktop` enables desktop only, `--webhook` enables webhooks only, and both enable both. Webhook destinations need separate configuration. These flags do not change Claude/Codex channels.
 
-Claude/Codex setup also installs the `agent-notify` MCP server and `agent-notifications` skill so an agent can notify you during a task. Open a new session after setup. When an existing managed MCP installation or binding is detected, automatic setup keeps absent clients off; use `--agent-notify` to add them explicitly. Use `--skip-agent-notify` to skip their setup for that run; it neither removes an existing MCP installation nor records a permanent opt-out. [Setup and recovery details](docs/INSTALLATION.md).
+Claude/Codex setup also installs the `agent-notifications` MCP server and `agent-notifications` skill so an agent can notify you during a task. Open a new session after setup. When an existing managed MCP installation or binding is detected, automatic setup keeps absent clients off; use `--agent-notify` to add them explicitly. Use `--skip-agent-notify` to skip their setup for that run; it neither removes an existing MCP installation nor records a permanent opt-out. [Setup and recovery details](docs/INSTALLATION.md).
 
 </details>
 
@@ -96,7 +96,7 @@ Claude/Codex setup also installs the `agent-notify` MCP server and `agent-notifi
 | **OpenCode** | Root-session completion, questions, permissions and errors | No | [Setup and limits](docs/opencode-notifications.md) |
 | **Gemini CLI** | Turn completion and tool permissions | No | [Cross-platform setup and qualification](docs/gemini-notifications.md) |
 | **Cursor CLI** | Agent loop stopping; fixed informational text | No | [Qualified versions, platforms and explicit setup](docs/cursor-notifications.md) |
-| **Qoder** (source support) | Native Stop completion hook; separate package | Exact-chat focus unavailable | [Local package setup and release limits](docs/QODER.md) |
+| **Qoder** (source support) | Completion, question, permission, plan and subagent/idle-teammate hooks; separate package | Exact-chat focus unavailable | [Local package setup and release limits](docs/QODER.md) |
 
 OpenCode V1 and V2 use one installed plugin. The installer accepts stable V1 **>= 1.18.29** and V2 **>= 2.0.0**; prereleases and unknown API generations are rejected. This compatibility range does not mean every version has been tested. See [OpenCode setup, release reports and delivery limits](docs/opencode-notifications.md) for qualification of specific versions and platforms.
 

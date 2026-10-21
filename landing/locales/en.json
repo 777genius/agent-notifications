@@ -210,6 +210,7 @@
   },
   "install": {
     "cursor": {"guide": "Cursor CLI installation", "scope": "Stop notifications and optional webhooks. Separate setup with explicit CLI/profile paths; qualified Linux amd64, macOS arm64 and Windows amd64 versions only."},
+    "qoder": {"guide": "Qoder setup and hooks", "scope": "Completion, question, permission, plan and teammate alerts with optional webhooks. Separate native package installed through the Qoder plugin installer; a notification click cannot open the exact existing chat."},
     "platformRelease": "Qualified release for {os}: {version}.",
     "title": "Set up notifications",
     "intro": "Follow the steps below to add notifications to {agent}.",
@@ -229,7 +230,7 @@
       "both": "Claude + Codex CLI",
       "opencode": "OpenCode",
       "gemini": "Gemini CLI",
-      "cursor": "Cursor CLI"
+      "cursor": "Cursor CLI", "qoder": "Qoder"
     },
     "targets": {
       "unknown": "Choose target OS",

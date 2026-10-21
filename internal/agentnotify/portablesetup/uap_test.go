@@ -118,7 +118,7 @@ func writePackage(t *testing.T, root, probe string) {
 	}
 	files := map[string][]byte{
 		"plugin.json":                         []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent-notify","version":"1.0.0"}`),
-		"mcp.json":                            []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/mcp.schema.json","mcpServers":{"agent-notify":{"type":"stdio","command":"./bin/probe","args":[],"env":{}}}}`),
+		"mcp.json":                            []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/mcp.schema.json","mcpServers":{"agent-notifications":{"type":"stdio","command":"./bin/probe","args":[],"env":{}}}}`),
 		"skills/agent-notifications/SKILL.md": []byte("---\nname: agent-notifications\ndescription: Isolated portable setup fixture\n---\nFixture only.\n"),
 		"bin/probe":                           body,
 	}
@@ -267,9 +267,9 @@ func TestUAPMaterializerTwoClientsShareDataIndependentLocators(t *testing.T) {
 		if err := json.Unmarshal(body, &projected); err != nil {
 			t.Fatal(err)
 		}
-		server, ok := projected.MCPServers["agent-notify"]
+		server, ok := projected.MCPServers["agent-notifications"]
 		if !ok {
-			t.Fatalf("agent-notify missing from projection %s: %s", mcp, body)
+			t.Fatalf("agent-notifications missing from projection %s: %s", mcp, body)
 		}
 		want := []string{"portable-launch", "--data-root", codexB.DataRoot, "--locator", codexName}
 		if !reflect.DeepEqual(server.Args, want) {
@@ -2335,7 +2335,7 @@ func TestMaterializerLocalIndependentPublicPrepare(t *testing.T) {
 			tuple := vscode.SourceQualifiedTESTTuple("linux")
 			cfg := &vscode.LocalConfig{ProfileSettingsPath: settings, QualifiedTuple: tuple, TargetShell: vscodelocalhooks.Target{Shell: vscodelocalhooks.LinuxSH}, NativeStop: bits&1 != 0}
 			if bits&2 != 0 {
-				cfg.MCPServers = []string{"agent-notify"}
+				cfg.MCPServers = []string{"agent-notifications"}
 			}
 			if bits&4 != 0 {
 				cfg.Skills = []string{"agent-notifications"}
@@ -2491,7 +2491,7 @@ func TestLocalRemoveGroupFailedApplyExactOwnerRetry(t *testing.T) {
 	if runtime.GOOS == "darwin" {
 		tuple = vscode.QualifiedDarwinTESTTuple()
 	}
-	cfg := &vscode.LocalConfig{ProfileSettingsPath: settings, QualifiedTuple: tuple, TargetShell: vscodelocalhooks.Target{Shell: vscodelocalhooks.Shell(tuple.TargetShell)}, MCPServers: []string{"agent-notify"}, Skills: []string{"agent-notifications"}}
+	cfg := &vscode.LocalConfig{ProfileSettingsPath: settings, QualifiedTuple: tuple, TargetShell: vscodelocalhooks.Target{Shell: vscodelocalhooks.Shell(tuple.TargetShell)}, MCPServers: []string{"agent-notifications"}, Skills: []string{"agent-notifications"}}
 	adapter, err := vscode.NewLocal(*cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -2824,7 +2824,7 @@ func TestLocalNativeGroupComposesSharedCanonicalPackage(t *testing.T) {
 			if runtime.GOOS == "darwin" {
 				tuple = vscode.QualifiedDarwinTESTTuple()
 			}
-			cfg := &vscode.LocalConfig{ProfileSettingsPath: settings, QualifiedTuple: tuple, TargetShell: vscodelocalhooks.Target{Shell: vscodelocalhooks.Shell(tuple.TargetShell)}, NativeStop: true, MCPServers: []string{"agent-notify"}, Skills: []string{"agent-notifications"}}
+			cfg := &vscode.LocalConfig{ProfileSettingsPath: settings, QualifiedTuple: tuple, TargetShell: vscodelocalhooks.Target{Shell: vscodelocalhooks.Shell(tuple.TargetShell)}, NativeStop: true, MCPServers: []string{"agent-notifications"}, Skills: []string{"agent-notifications"}}
 			cfg.HookSpecs = copilotvscodeinstall.LocalHookSpecs(portable.Binding{ControlRoot: local.Identity.ControlRoot, BindingID: "TEST-placeholder"}, mat.Roots.HelperExecutable)
 			hook, err := vscodelocalhooks.Render(cfg.TargetShell, cfg.HookSpecs)
 			if err != nil {
@@ -2978,5 +2978,32 @@ func TestLocalNativeGroupComposesSharedCanonicalPackage(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestDeclaredServerNameDualAccept(t *testing.T) {
+	cases := map[string]string{
+		`{"mcpServers":{"agent-notifications":{"command":"./bin/probe"}}}`:                      "agent-notifications",
+		`{"mcpServers":{"agent-notify":{"command":"./bin/probe"}}}`:                             "agent-notify",
+		`{"mcpServers":{"agent-notify":{"command":"a"},"agent-notifications":{"command":"b"}}}`: "agent-notifications",
+	}
+	for body, want := range cases {
+		root := t.TempDir()
+		if err := os.WriteFile(filepath.Join(root, "mcp.json"), []byte(body), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if got := declaredServerName(root); got != want {
+			t.Fatalf("declaredServerName(%s) = %q, want %q", body, got, want)
+		}
+	}
+	missing := t.TempDir()
+	if got := declaredServerName(missing); got != "agent-notifications" {
+		t.Fatalf("declaredServerName without mcp.json = %q", got)
+	}
+	if err := os.WriteFile(filepath.Join(missing, "mcp.json"), []byte("{"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if got := declaredServerName(missing); got != "agent-notifications" {
+		t.Fatalf("declaredServerName with invalid mcp.json = %q", got)
 	}
 }

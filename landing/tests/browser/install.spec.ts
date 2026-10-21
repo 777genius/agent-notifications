@@ -545,12 +545,12 @@ test("released agents toggle independently, copied commands and configuration co
   await page.getByRole("button", { name: "Copy command" }).click();
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("(set -o pipefail; " + prefix.replace("--product ", "--products ") + "claude,codex,opencode --desktop)");
   const table = page.getByRole("table", { name: "Compare agent features" });
-  await expect(table.getByRole("columnheader")).toHaveText(["Feature", "Claude", "Codex CLI", "OpenCode", /Gemini CLI\s*macOS \/ Linux \/ Windows/, "Cursor CLI"]);
-  await expect(table.getByRole("row", { name: /^Completed/ }).getByRole("cell")).toHaveText(["✓Supported", "✓Supported", "✓Supported", "✓Supported", "✓*Supported with limitations"]);
-  await expect(table.getByRole("row", { name: /^Review/ }).getByRole("cell")).toHaveText(["✓Supported", "✕Not supported", "✕Not supported", "✕Not supported", "✕Not supported"]);
-  await expect(table.getByRole("row", { name: /^Sounds/ }).getByRole("cell")).toHaveText(["✓Supported", "✓Supported", "✕Not supported", "✕Not supported", "✕Not supported"]);
-  await expect(table.getByRole("row", { name: /^Question/ }).getByRole("cell")).toHaveText(["✓Supported", "✓*Supported with limitations", "✓Supported", "✕Not supported", "✕Not supported"]);
-  await expect(table.getByRole("row", { name: /^Errors/ }).getByRole("cell")).toHaveText(["✓Supported", "✓*Supported with limitations", "✓Supported", "✕Not supported", "✕Not supported"]);
+  await expect(table.getByRole("columnheader")).toHaveText(["Feature", "Claude", "Codex CLI", "OpenCode", /Gemini CLI\s*macOS \/ Linux \/ Windows/, "Cursor CLI", "Qoder"]);
+  await expect(table.getByRole("row", { name: /^Completed/ }).getByRole("cell")).toHaveText(["✓Supported", "✓Supported", "✓Supported", "✓Supported", "✓*Supported with limitations", "✓Supported"]);
+  await expect(table.getByRole("row", { name: /^Review/ }).getByRole("cell")).toHaveText(["✓Supported", "✕Not supported", "✕Not supported", "✕Not supported", "✕Not supported", "✕Not supported"]);
+  await expect(table.getByRole("row", { name: /^Sounds/ }).getByRole("cell")).toHaveText(["✓Supported", "✓Supported", "✕Not supported", "✕Not supported", "✕Not supported", "✓Supported"]);
+  await expect(table.getByRole("row", { name: /^Question/ }).getByRole("cell")).toHaveText(["✓Supported", "✓*Supported with limitations", "✓Supported", "✕Not supported", "✕Not supported", "✓Supported"]);
+  await expect(table.getByRole("row", { name: /^Errors/ }).getByRole("cell")).toHaveText(["✓Supported", "✓*Supported with limitations", "✓Supported", "✕Not supported", "✕Not supported", "✕Not supported"]);
   const compatibility = page.locator(".agent-support details");
   const qualification = compatibility.getByText("Claude permission prompts appear as Question alerts. Codex question hooks are experimental; error and limit detection uses final-message heuristics. See the linked guides for qualification details.", { exact: true });
   await expect(qualification).not.toBeVisible();
@@ -590,14 +590,16 @@ test("first feature explains supported click-to-focus and its agent scope", asyn
 });
 
 // Revealed sections must still be reachable through a direct URL and navigation.
-test("installation deep link and navigation expose the comparison and five agent logos", async ({ page }) => {
+test("installation deep link and navigation expose the comparison and six agent logos", async ({ page }) => {
   await page.goto("#install");
   await expect(page).toHaveURL(/#install$/);
   await expect(page.locator("#install")).toBeInViewport();
   await expect(page.getByRole("table", { name: "Compare agent features" })).toBeVisible();
-  await expect(page.locator(".supported-agents").getByRole("img")).toHaveCount(5);
+  await expect(page.locator(".supported-agents").getByRole("img")).toHaveCount(6);
   await expect(page.getByRole("img", { name: "Cursor CLI", exact: true }).first()).toBeVisible();
   await expect(page.getByRole("link", { name: "Cursor CLI installation ↗" })).toHaveAttribute("href", "https://github.com/777genius/agent-notifications/blob/main/docs/cursor-notifications.md");
+  await expect(page.getByRole("link", { name: "Qoder setup and hooks ↗" })).toHaveAttribute("href", "https://github.com/777genius/agent-notifications/blob/main/docs/QODER.md");
+  await expect(page.locator(".agent-support-notes")).toContainText("a notification click cannot open the exact existing chat");
   const nav = page.getByRole("navigation");
   await nav.getByRole("link", { name: "Features", exact: true }).click();
   await expect(page).toHaveURL(/#features$/);
@@ -667,7 +669,7 @@ test("agent comparison stays readable on mobile and keeps all agents visible", a
     await chooseOS(page, "linux");
     await chooseAgents(page, ["opencode"]);
     const table = page.getByRole("table", { name: "Compare agent features" });
-    await expect(table.getByRole("columnheader")).toHaveCount(6);
+    await expect(table.getByRole("columnheader")).toHaveCount(7);
     await expect(table.getByRole("row")).toHaveCount(11);
     // The comparison belongs below the command and both next-step cards at every width.
     const comparison = await table.boundingBox();

@@ -1427,7 +1427,7 @@ func applyIntentUnits(req Request, want map[string]unitSelection) Request {
 			req.LocalConfig.NativeStop = sel.nativeStop
 			req.LocalConfig.MCPServers, req.LocalConfig.Skills = nil, nil
 			if sel.mcp {
-				req.LocalConfig.MCPServers = []string{"agent-notify"}
+				req.LocalConfig.MCPServers = []string{"agent-notifications"}
 			}
 			if sel.skills {
 				req.LocalConfig.Skills = []string{"agent-notifications"}

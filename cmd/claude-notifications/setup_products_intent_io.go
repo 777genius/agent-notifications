@@ -264,7 +264,7 @@ func validateBootstrapIntent(i confirmedBootstrapIntent) error {
 			if c == nil || c.ProfileSettingsPath != filepath.Join(string(i.Scopes["scope-root"]), "settings.json") || c.QualifiedTuple != expected.QualifiedTuple || c.TargetShell != expected.TargetShell || len(c.HookSpecs) != 0 || c.DeclaredHookDigest != "" || i.Request.LocalNativeStop == nil || i.Request.LocalMCP == nil || i.Request.LocalSkills == nil {
 				return invalid()
 			}
-			if c.NativeStop != *i.Request.LocalNativeStop || len(c.MCPServers) != boolCount(*i.Request.LocalMCP) || len(c.Skills) != boolCount(*i.Request.LocalSkills) || len(c.MCPServers) > 0 && c.MCPServers[0] != "agent-notify" || len(c.Skills) > 0 && c.Skills[0] != "agent-notifications" {
+			if c.NativeStop != *i.Request.LocalNativeStop || len(c.MCPServers) != boolCount(*i.Request.LocalMCP) || len(c.Skills) != boolCount(*i.Request.LocalSkills) || len(c.MCPServers) > 0 && c.MCPServers[0] != "agent-notifications" && c.MCPServers[0] != "agent-notify" || len(c.Skills) > 0 && c.Skills[0] != "agent-notifications" {
 				return invalid()
 			}
 			if u.Product != id || u.Hooks || u.Native != c.NativeStop || u.MCP != *i.Request.LocalMCP || u.Skill != *i.Request.LocalSkills || u.PreservedOff || u.Desktop != i.Request.Desktop || u.Webhook != i.Request.Webhook {

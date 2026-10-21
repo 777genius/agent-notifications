@@ -94,7 +94,7 @@ func TestLifecycle(t *testing.T) {
 				t.Fatal("no-op changed bytes/generation")
 			}
 			if p == registration.Codex {
-				put(t, f.r.ConfigPath, append(original, []byte("enabled = false\ndisabled_tools = ['agent_notify']\nstartup_timeout_sec = 17\ncustom = 'keep'\n[mcp_servers.agent_notifications.env]\nKEY = 'value'\n")...))
+				put(t, f.r.ConfigPath, append(original, []byte("enabled = false\ndisabled_tools = ['agent_notify']\nstartup_timeout_sec = 17\ncustom = 'keep'\n[mcp_servers.agent-notifications.env]\nKEY = 'value'\n")...))
 			} else {
 				b := bytes.Replace(original, []byte(`"command":`), []byte(`"enabled": false, "disabled_tools": ["agent_notify"], "timeout": 17, "custom": "keep", "env": {"KEY":"value"}, "command":`), 1)
 				put(t, f.r.ConfigPath, b)

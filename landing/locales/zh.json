@@ -235,6 +235,7 @@
   },
   "install": {
     "cursor": {"guide": "安装 Cursor CLI", "scope": "Stop 通知和可选 Webhook。使用明确的 CLI 和配置目录路径单独安装；仅支持经过验证的 Linux amd64、macOS arm64 和 Windows amd64 版本。"},
+    "qoder": {"guide": "Qoder 设置与钩子", "scope": "支持完成、提问、权限、计划与队友通知，可选 Webhook。独立的原生包，通过 Qoder 插件安装器安装；点击通知无法打开确切的现有会话。"},
     "platformRelease": "{os} 的已验证版本：{version}。",
     "title": "设置通知",
     "intro": "按照以下步骤为 {agent} 添加通知。",
@@ -254,7 +255,7 @@
       "both": "Claude + Codex CLI",
       "opencode": "OpenCode",
       "gemini": "Gemini CLI",
-      "cursor": "Cursor CLI"
+      "cursor": "Cursor CLI", "qoder": "Qoder"
     },
     "targets": {
       "unknown": "选择目标操作系统",

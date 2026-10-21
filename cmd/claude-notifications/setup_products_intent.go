@@ -117,7 +117,7 @@ func buildConfirmedBootstrapIntent(ctx context.Context, a setupProductsArgs, e p
 		i.LocalConfig = localWizardConfig(string(i.Scopes["local-settings"]))
 		i.LocalConfig.NativeStop = *a.LocalNativeStop
 		if *a.LocalMCP {
-			i.LocalConfig.MCPServers = []string{"agent-notify"}
+			i.LocalConfig.MCPServers = []string{"agent-notifications"}
 		}
 		if *a.LocalSkills {
 			i.LocalConfig.Skills = []string{"agent-notifications"}
