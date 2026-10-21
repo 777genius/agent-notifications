@@ -107,10 +107,14 @@ printf 'PASS platform selection, source pin and interrupted cache recovery\n'
 verify_installed_plugin_version() { return 0; }
 find_plugin_root() { PLUGIN_ROOT="$ROOT_CACHE"; }
 download_binary() { return 0; }
+# Windows same-version refresh retains its installed hook registration.
+mkdir -p "$ROOT_CACHE/hooks"
+printf '{"hooks":{}}\n' > "$ROOT_CACHE/hooks/hooks.json"
 cat > "$TEST_ROOT/refresh-cli" <<'CLI'
 #!/usr/bin/env bash
 set -eu
-mkdir -p "$TEST_CACHE/.claude-plugin"
+mkdir -p "$TEST_CACHE/.claude-plugin" "$TEST_CACHE/hooks"
+printf '{"hooks":{}}\n' > "$TEST_CACHE/hooks/hooks.json"
 printf '{"version":"1.47.1"}\n' > "$TEST_CACHE/.claude-plugin/plugin.json"
 for contract in E1-PORTS.md E2-PORTS.md E2A-PORTS.md E2-JS-PORTS.md CLOCK-MATRIX-PORTS.md; do
     cp "$TEST_SOURCE/docs/opencode/$contract" "$TEST_CACHE/$contract"
