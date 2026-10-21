@@ -56,6 +56,16 @@ if [ -n "${TEST_LEGACY_SKILL:-}" ]; then
     cp "$TEST_LEGACY_SKILL" "$TEST_CACHE/skills/agent-notify/SKILL.md"
     chmod 0644 "$TEST_CACHE/skills/agent-notify/SKILL.md"
 fi
+if [ "${TEST_HISTORICAL_LAYOUT:-}" != 1 ]; then
+    mkdir -p "$TEST_CACHE/docs/opencode"
+fi
+for contract in E1-PORTS.md E2-PORTS.md E2A-PORTS.md E2-JS-PORTS.md CLOCK-MATRIX-PORTS.md; do
+    if [ "${TEST_HISTORICAL_LAYOUT:-}" != 1 ]; then
+        cp "$TEST_SOURCE/docs/opencode/$contract" "$TEST_CACHE/docs/opencode/$contract"
+    fi
+    cp "$TEST_SOURCE/docs/opencode/$contract" "$TEST_CACHE/$contract"
+done
+printf 1766603417062 > "$TEST_CACHE/.orphaned_at"
 printf refreshed > "$TEST_CACHE/source-generation"
 CLI
 chmod +x "$TEST_ROOT/cache-cli"
@@ -80,10 +90,26 @@ mkdir -p "$ROOT_CACHE/skills/agent-notify"
 cp "$TEST_ROOT/stale-legacy-skill.md" "$ROOT_CACHE/skills/agent-notify/SKILL.md"
 chmod 0600 "$ROOT_CACHE/skills/agent-notify/SKILL.md"
 export TEST_LEGACY_SKILL="$TEST_ROOT/stale-legacy-skill.md"
+# Seed the same-version backup too; removed source documents must not copy back.
+for contract in E1-PORTS.md E2-PORTS.md E2A-PORTS.md E2-JS-PORTS.md CLOCK-MATRIX-PORTS.md; do
+    cp "$ROOT/docs/opencode/$contract" "$ROOT_CACHE/$contract"
+done
 channel_install_plugin
+for contract in E1-PORTS.md E2-PORTS.md E2A-PORTS.md E2-JS-PORTS.md CLOCK-MATRIX-PORTS.md .orphaned_at; do
+    [ ! -e "$ROOT_CACHE/$contract" ] || { echo "FAIL retired source file survived: $contract" >&2; exit 1; }
+done
 [ ! -e "$ROOT_CACHE/skills/agent-notify" ] || { echo 'FAIL legacy skills/agent-notify survived the channel refresh' >&2; exit 1; }
 [ "$(cat "$ROOT_CACHE/source-generation")" = refreshed ]
 [ "$("$ROOT_CACHE/bin/claude-notifications" --version)" = "claude-notifications $BOOTSTRAP_TAG" ]
 # A second real native refresh verifies the ledger after source replacement.
 "$_CONFIG_HELPER" internal-install-runtime --refresh --stage "$_CONFIG_STAGE" --target "$ROOT_CACHE/bin" --entry "$asset" >/dev/null
 printf 'PASS existing managed same-version cache with real native SDK\n'
+
+# A currently selected older release can legitimately retain the root layout.
+export TEST_HISTORICAL_LAYOUT=1
+channel_install_plugin
+for contract in E1-PORTS.md E2-PORTS.md E2A-PORTS.md E2-JS-PORTS.md CLOCK-MATRIX-PORTS.md; do
+    cmp "$ROOT/docs/opencode/$contract" "$ROOT_CACHE/$contract"
+done
+[ -f "$ROOT_CACHE/.orphaned_at" ]
+printf 'PASS historical source layout remains installable\n'

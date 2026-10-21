@@ -102,3 +102,50 @@ if channel_install_plugin; then echo 'Accepted failed refresh' >&2; exit 1; fi
     if pin_release_urls >/dev/null 2>&1; then exit 1; fi
 )
 printf 'PASS platform selection, source pin and interrupted cache recovery\n' 
+
+# Exercise source-overlay retirement without a native runtime dependency.
+verify_installed_plugin_version() { return 0; }
+find_plugin_root() { PLUGIN_ROOT="$ROOT_CACHE"; }
+download_binary() { return 0; }
+# Windows same-version refresh retains its installed hook registration.
+mkdir -p "$ROOT_CACHE/hooks"
+printf '{"hooks":{}}\n' > "$ROOT_CACHE/hooks/hooks.json"
+cat > "$TEST_ROOT/refresh-cli" <<'CLI'
+#!/usr/bin/env bash
+set -eu
+mkdir -p "$TEST_CACHE/.claude-plugin" "$TEST_CACHE/hooks"
+printf '{"hooks":{}}\n' > "$TEST_CACHE/hooks/hooks.json"
+printf '{"version":"1.47.1"}\n' > "$TEST_CACHE/.claude-plugin/plugin.json"
+for contract in E1-PORTS.md E2-PORTS.md E2A-PORTS.md E2-JS-PORTS.md CLOCK-MATRIX-PORTS.md; do
+    cp "$TEST_SOURCE/docs/opencode/$contract" "$TEST_CACHE/$contract"
+    if [ "$TEST_LAYOUT" != historical ]; then
+        mkdir -p "$TEST_CACHE/docs/opencode"
+        cp "$TEST_SOURCE/docs/opencode/$contract" "$TEST_CACHE/docs/opencode/$contract"
+    fi
+done
+printf 1766603417062 > "$TEST_CACHE/.orphaned_at"
+if [ "$TEST_LAYOUT" = edited ]; then
+    printf 'user edit\n' >> "$TEST_CACHE/E1-PORTS.md"
+fi
+CLI
+chmod +x "$TEST_ROOT/refresh-cli"
+_CLAUDE_EXEC="$TEST_ROOT/refresh-cli"
+export TEST_SOURCE="$ROOT"
+for TEST_LAYOUT in moved historical edited; do
+    export TEST_LAYOUT
+    if [ "$TEST_LAYOUT" = edited ]; then
+        if channel_install_plugin; then echo 'Accepted edited legacy contract' >&2; exit 1; fi
+        # Failed promotion restores the previous historical source unchanged.
+        cmp "$ROOT/docs/opencode/E1-PORTS.md" "$ROOT_CACHE/E1-PORTS.md"
+        continue
+    fi
+    channel_install_plugin
+    for contract in E1-PORTS.md E2-PORTS.md E2A-PORTS.md E2-JS-PORTS.md CLOCK-MATRIX-PORTS.md .orphaned_at; do
+        if [ "$TEST_LAYOUT" = moved ]; then
+            [ ! -e "$ROOT_CACHE/$contract" ]
+        else
+            [ -f "$ROOT_CACHE/$contract" ]
+        fi
+    done
+done
+printf 'PASS moved and historical overlays, edited contract refusal and rollback\n'

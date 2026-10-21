@@ -1182,6 +1182,12 @@ func cursorHostQualification() string {
 	}
 	version, _ := cursorinstall.CurrentTuple()
 	if version == selectedCursorVersion {
+		kernel, err := os.ReadFile("/proc/sys/kernel/osrelease")
+		if err == nil && strings.TrimSpace(string(kernel)) == "7.0.0-1017-azure" {
+			// Supplemental source qualification; the historical P1 receipt above
+			// does not qualify this kernel. See docs/CI_RUNNERS.md.
+			return "cursor-linux-amd64-ubuntu24.04.5-kernel7.0.0-1017-azure-ext4:source-ci-pr497"
+		}
 		return cursorP1Qualification
 	}
 	return ""
@@ -1591,8 +1597,9 @@ func cursorPendingHandoff(b portable.Binding, snap installruntime.InstalledSnaps
 	return cursorinstall.Authority{ProfileRoot: facts.ProfileRoot, CursorVersion: facts.CursorVersion, QualificationID: facts.QualificationID, Executable: observer, ExecutableDigest: "sha256:" + snap.Ledger.Files[observer].SHA256, Selector: facts.Selector, ObjectID: facts.ObjectID}, nil
 }
 
-// A narrow filter for the supplied Ubuntu24.04.5/6.17.0-1022-azure/ext4 P1
-// observation. Mount metadata only limits evidence scope; UUID/inode authority
+// A narrow filter for the Ubuntu24.04.5/ext4 source qualification kernels.
+// Each kernel requires the physical Cursor/materializer/caller CI contract.
+// Mount metadata only limits evidence scope; UUID/inode authority
 // comes exclusively from public complete-ancestry Capture/Revalidate.
 func cursorQualifiedNamespace(profile string) error {
 	// Public Prepare captures the NTFS volume/file-ID complete ancestry; this
@@ -1609,7 +1616,7 @@ func cursorQualifiedNamespace(profile string) error {
 		return setupwizard.ErrRefused
 	}
 	kernel, err := os.ReadFile("/proc/sys/kernel/osrelease")
-	if err != nil || strings.TrimSpace(string(kernel)) != "6.17.0-1022-azure" {
+	if err != nil || !cursorinstall.SupportsLinuxSourceKernel(strings.TrimSpace(string(kernel))) {
 		return setupwizard.ErrRefused
 	}
 	osRelease, err := os.ReadFile("/etc/os-release")

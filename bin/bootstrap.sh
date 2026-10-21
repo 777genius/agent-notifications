@@ -515,6 +515,29 @@ channel_install_plugin() (
         config_preflight || return 1
         rm -rf -- "$PLUGIN_ROOT/skills/agent-notify" || return 1
     fi
+    # Retire repository-only metadata left by an overlay source refresh.
+    # These files were never SDK-managed; preserve edited contracts by refusing.
+    local retired
+    for retired in E1-PORTS.md E2-PORTS.md E2A-PORTS.md E2-JS-PORTS.md CLOCK-MATRIX-PORTS.md; do
+        # The selected release may still use the historical root layout.
+        [ -f "$PLUGIN_ROOT/docs/opencode/$retired" ] || continue
+        if [ -e "$PLUGIN_ROOT/$retired" ] || [ -L "$PLUGIN_ROOT/$retired" ]; then
+            if [ -L "$PLUGIN_ROOT/$retired" ] || ! cmp -s "$PLUGIN_ROOT/$retired" "$PLUGIN_ROOT/docs/opencode/$retired"; then
+                echo "Retaining modified legacy contract: $PLUGIN_ROOT/$retired" >&2
+                return 1
+            fi
+            config_preflight || return 1
+            rm -- "$PLUGIN_ROOT/$retired" || return 1
+        fi
+    done
+    if [ -f "$PLUGIN_ROOT/docs/opencode/E1-PORTS.md" ] && { [ -e "$PLUGIN_ROOT/.orphaned_at" ] || [ -L "$PLUGIN_ROOT/.orphaned_at" ]; }; then
+        if [ -L "$PLUGIN_ROOT/.orphaned_at" ] || [ "$(cat "$PLUGIN_ROOT/.orphaned_at")" != 1766603417062 ]; then
+            echo "Retaining modified legacy workspace marker." >&2
+            return 1
+        fi
+        config_preflight || return 1
+        rm -- "$PLUGIN_ROOT/.orphaned_at" || return 1
+    fi
     download_binary || return 1
     [ -z "$backup" ] || echo "Previous source cache retained for recovery: $backup"
     backup=""

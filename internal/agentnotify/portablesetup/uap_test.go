@@ -2073,7 +2073,7 @@ func TestMaterializerSelectedCursorPublicProjectionAndAcknowledgement(t *testing
 		t.Fatal(err)
 	}
 	if !strings.Contains("\n"+string(osRelease), "\nID=ubuntu\n") ||
-		!strings.Contains(string(osRelease), `VERSION="24.04.5 LTS`) || strings.TrimSpace(string(kernel)) != "6.17.0-1022-azure" {
+		!strings.Contains(string(osRelease), `VERSION="24.04.5 LTS`) || !cursorinstall.SupportsLinuxSourceKernel(strings.TrimSpace(string(kernel))) {
 		t.Log("NOT_RUN positive materializer: accepted Ubuntu24.04/kernel tuple required; installed/native E NOT_RUN")
 		return
 	}

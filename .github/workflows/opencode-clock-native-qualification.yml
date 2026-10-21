@@ -8,7 +8,7 @@ on:
       - 'scripts/opencode-clock-native-qualification.mjs'
       - 'scripts/testdata/opencode-clock-qualification/closed-inputs.json'
       - 'scripts/testdata/opencode-clock-qualification/test_fixture.py'
-      - 'CLOCK-MATRIX-PORTS.md'
+      - 'docs/opencode/CLOCK-MATRIX-PORTS.md'
   workflow_dispatch:
     inputs:
       source_manifest_json:
