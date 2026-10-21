@@ -2983,8 +2983,8 @@ func TestLocalNativeGroupComposesSharedCanonicalPackage(t *testing.T) {
 
 func TestDeclaredServerNameDualAccept(t *testing.T) {
 	cases := map[string]string{
-		`{"mcpServers":{"agent-notifications":{"command":"./bin/probe"}}}`: "agent-notifications",
-		`{"mcpServers":{"agent-notify":{"command":"./bin/probe"}}}`:         "agent-notify",
+		`{"mcpServers":{"agent-notifications":{"command":"./bin/probe"}}}`:                      "agent-notifications",
+		`{"mcpServers":{"agent-notify":{"command":"./bin/probe"}}}`:                             "agent-notify",
 		`{"mcpServers":{"agent-notify":{"command":"a"},"agent-notifications":{"command":"b"}}}`: "agent-notifications",
 	}
 	for body, want := range cases {
