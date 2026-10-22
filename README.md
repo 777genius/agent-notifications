@@ -13,6 +13,8 @@
   <a href="docs/gemini-notifications.md"><img src="landing/public/agents/gemini.svg" width="64" height="64" alt="Gemini CLI" title="Gemini CLI" /></a>
   &nbsp;&nbsp;
   <a href="docs/cursor-notifications.md"><img src="landing/public/agents/cursor.svg" width="64" height="64" alt="Cursor CLI" title="Cursor CLI" /></a>
+  &nbsp;&nbsp;
+  <a href="docs/QODER.md"><img src="landing/public/agents/qoder.svg" width="64" height="64" alt="Qoder" title="Qoder" /></a>
 </p>
 
 [![Ubuntu CI](https://github.com/777genius/agent-notifications/actions/workflows/ci-ubuntu.yml/badge.svg?branch=main&event=push)](https://github.com/777genius/agent-notifications/actions/workflows/ci-ubuntu.yml?query=branch%3Amain+event%3Apush)
@@ -21,7 +23,7 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/777genius/agent-notifications.svg)](https://pkg.go.dev/github.com/777genius/agent-notifications)
 [![codecov](https://codecov.io/gh/777genius/agent-notifications/graph/badge.svg?branch=main)](https://codecov.io/gh/777genius/agent-notifications)
 
-Desktop notifications for **Claude, Codex CLI, OpenCode, Gemini CLI and Cursor CLI** on **macOS, Linux and Windows**. Supported architectures and events vary by agent; see the support table and linked setup guides. Claude and Codex also support sounds and click-to-focus.
+Desktop notifications for **Claude, Codex CLI, OpenCode, Gemini CLI, Cursor CLI and Qoder** on **macOS, Linux and Windows**. Supported architectures and events vary by agent; see the support table and linked setup guides. Claude and Codex also support sounds and click-to-focus.
 
 <p align="center">
   <img width="100%" alt="macOS, Windows, Linux (left to right)" src="docs/images/notification-platform-labels.svg" />
