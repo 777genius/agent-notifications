@@ -1,11 +1,11 @@
 {
-  "seo": { "title": "Agent Notifications - एकाग्र होकर काम करें", "description": "Claude, Codex CLI और OpenCode के लिए डेस्कटॉप सूचनाएं और वेबहुक। Gemini CLI: macOS / Linux / Windows. Cursor CLI: Linux amd64 / macOS arm64 / Windows amd64." },
+  "seo": { "title": "Agent Notifications - एकाग्र होकर काम करें", "description": "Claude, Codex CLI और OpenCode के लिए डेस्कटॉप सूचनाएं और वेबहुक। Gemini CLI: macOS / Linux / Windows. Cursor CLI: Linux amd64 / macOS arm64 / Windows amd64. Qoder: अलग पैकेज." },
   "language": { "label": "भाषा", "current": "वर्तमान भाषा: {language}", "search": "भाषाएँ खोजें", "noResults": "कोई भाषा नहीं मिली", "switchError": "भाषा नहीं बदली जा सकी। कृपया फिर से कोशिश करें।" },
   "accessibility": { "skip": "सीधे सामग्री पर जाएँ", "platforms": "समर्थित ऑपरेटिंग सिस्टम",
     "agents": "समर्थित एजेंट एकीकरण" },
   "brand": { "tagline": "आपके कोडिंग एजेंटों के लिए" },
   "nav": { "ariaLabel": "मुख्य", "features": "सुविधाएँ", "install": "इंस्टॉल करें", "faq": "अक्सर पूछे जाने वाले सवाल" },
-  "hero": { "eyebrow": "कम निगरानी। ज़्यादा निर्माण।", "title": "एकाग्र होकर काम करें", "emphasis": "ज़रूरत पर हम आपको बताएँगे", "leadFirst": "अपने एजेंट को काम करने दें। पूरा होने पर जानें।", "leadSecond": "Claude, Codex CLI और OpenCode के लिए डेस्कटॉप सूचनाएं और वेबहुक। Gemini CLI: macOS / Linux / Windows. Cursor CLI: Linux amd64 / macOS arm64 / Windows amd64.", "primary": "सूचनाएँ सेट करें", "secondary": "GitHub पर देखें", "note": "खुला स्रोत · स्थानीय रूप से चलता है" },
+  "hero": { "eyebrow": "कम निगरानी। ज़्यादा निर्माण।", "title": "एकाग्र होकर काम करें", "emphasis": "ज़रूरत पर हम आपको बताएँगे", "leadFirst": "अपने एजेंट को काम करने दें। पूरा होने पर जानें।", "leadSecond": "Claude, Codex CLI और OpenCode के लिए डेस्कटॉप सूचनाएं और वेबहुक। Gemini CLI: macOS / Linux / Windows. Cursor CLI: Linux amd64 / macOS arm64 / Windows amd64. Qoder: अलग पैकेज.", "primary": "सूचनाएँ सेट करें", "secondary": "GitHub पर देखें", "note": "खुला स्रोत · स्थानीय रूप से चलता है" },
   "common": { "now": "अभी", "beta": "बीटा" },
   "features": {
     "eyebrow": "सही संकेत। सही समय पर।", "titleFirst": "अपना ध्यान बनाए रखें", "titleSecond": "बार-बार जाँचना छोड़ें",
