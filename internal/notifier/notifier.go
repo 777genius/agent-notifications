@@ -28,8 +28,10 @@ import (
 const macOSPermissionDeniedMessage = "Notification permission denied. Enable in System Settings > Notifications."
 
 const legacyTerminalNotifierTimeout = 30 * time.Second
+const legacyTerminalNotifierWaitDelay = time.Second
 
 var execCommand = exec.Command
+var runLegacyNotifierCommand = runCommandWithTimeout
 var beeepNotify = beeep.Notify
 var notifierGOOS = runtime.GOOS
 var uniqueNotificationGroupSeq atomic.Uint64
@@ -139,6 +141,11 @@ func (n *Notifier) SendDesktop(status analyzer.Status, message, sessionID, cwd s
 					logging.Warn("ClaudeNotifier permission denied on macOS: %v", err)
 					return err
 				}
+				if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, exec.ErrWaitDelay) {
+					// The helper may already have delivered before its completion
+					// became uncertain. Retrying could display a duplicate banner.
+					return err
+				}
 				logging.Warn("ClaudeNotifier failed on macOS, falling back to beeep: %v", err)
 			} else {
 				logging.Debug("Desktop notification sent via ClaudeNotifier/terminal-notifier: title=%s", title)
@@ -226,7 +233,7 @@ func (n *Notifier) sendWithTerminalNotifier(title, message, subtitle, sessionID 
 		return nil
 	}
 
-	output, err := runCommandWithTimeout(legacyTerminalNotifierTimeout, notifierPath, args...)
+	output, err := runLegacyNotifierCommand(legacyTerminalNotifierTimeout, notifierPath, args...)
 	if err != nil {
 		return fmt.Errorf("terminal-notifier error: %w, output: %s", err, string(output))
 	}
@@ -239,7 +246,11 @@ func runCommandWithTimeout(timeout time.Duration, notifierPath string, args ...s
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	output, err := buildNotifierCommandWithContext(ctx, notifierPath, args).CombinedOutput()
+	cmd := buildNotifierCommandWithContext(ctx, notifierPath, args)
+	// A child can retain the output pipes after the direct process exits or is
+	// killed. Bound the drain as well; this does not terminate descendants.
+	cmd.WaitDelay = legacyTerminalNotifierWaitDelay
+	output, err := cmd.CombinedOutput()
 	if ctx.Err() != nil {
 		return output, fmt.Errorf("command timed out after %s: %w", timeout, ctx.Err())
 	}
@@ -597,9 +608,13 @@ func SendQuickNotification(title, message, executeCmd string) error {
 			"-group", fmt.Sprintf("claude-quick-%d", time.Now().UnixNano()),
 			"-nosound",
 		)
-		if output, err := runCommandWithTimeout(legacyTerminalNotifierTimeout, notifierPath, args...); err == nil {
+		if output, err := runLegacyNotifierCommand(legacyTerminalNotifierTimeout, notifierPath, args...); err == nil {
 			return nil
 		} else {
+			if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, exec.ErrWaitDelay) {
+				// Delivery may have completed before the helper stopped answering.
+				return fmt.Errorf("terminal-notifier error: %w, output: %s", err, string(output))
+			}
 			logging.Debug("terminal-notifier failed: %v, output: %s", err, string(output))
 		}
 	}
