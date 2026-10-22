@@ -75,6 +75,32 @@ else
     echo "PASS: merged CA bundle is removed on exit"
 fi
 
+staged="$sandbox/staged"
+mkdir -p "$staged"
+# The staged preflight download runs detect_platform in its own subshell.
+SANDBOX="$sandbox" INSTALL_TARGET_DIR="$sandbox/target" TMPDIR="$staged" \
+    CURL_CA_BUNDLE="$sandbox/corp-ca.pem" AGENT_NOTIFICATIONS_CONFIG="$sandbox/config.json" \
+    "$BASH" -c '
+    unset SSL_CERT_FILE
+    source "$SANDBOX/functions.sh"
+    curl() { printf " --ssl-no-revoke --http1.1\n"; }
+    find_windows_default_ca_bundle() { printf "%s" "$SANDBOX/public-ca.crt"; }
+    install_config_preflight() { return 2; }
+    detect_platform() { PLATFORM=windows; configure_curl_options; }
+    pin_release_urls() { [ -f "$CURL_CA_MERGED_BUNDLE" ] && printf created > "$SANDBOX/staged-created"; return 1; }
+    OFFLINE_MODE=false
+    prepare_install_config_preflight "$SANDBOX/target"
+' >/dev/null 2>&1 || true
+if [ ! -f "$sandbox/staged-created" ]; then
+    echo "FAIL: staged preflight should build a merged CA bundle" >&2
+    failures=$((failures + 1))
+elif ls "$staged"/agent-notifications-ca.* >/dev/null 2>&1; then
+    echo "FAIL: staged preflight should remove its merged CA bundle" >&2
+    failures=$((failures + 1))
+else
+    echo "PASS: staged preflight removes its merged CA bundle"
+fi
+
 same=$(
     export INSTALL_TARGET_DIR="$sandbox/target"
     export CURL_CA_BUNDLE="$sandbox/public-ca.crt"

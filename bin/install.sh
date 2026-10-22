@@ -99,6 +99,10 @@ prepare_install_config_preflight() {
     INSTALL_CONFIG_STAGE_OWNER="${BASHPID:-$BASH_SUBSHELL}"
     # Existing download/verification logic is confined to this new directory.
     if ! (
+        # Subshells do not inherit the EXIT trap; remove this shell's CA bundle.
+        trap 'cleanup_install_config' EXIT
+        trap 'exit 130' INT
+        trap 'exit 143' TERM
         SCRIPT_DIR="$INSTALL_CONFIG_STAGE"
         INSTALL_PRIVATE_DOWNLOAD=true
         detect_platform
