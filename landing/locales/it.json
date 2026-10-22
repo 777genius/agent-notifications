@@ -1,11 +1,11 @@
 {
-  "seo": { "title": "Agent Notifications - Mantieni la concentrazione", "description": "Notifiche desktop e webhook per Claude, Codex CLI e OpenCode. Gemini CLI: macOS / Linux / Windows. Cursor CLI: Linux amd64 / macOS arm64 / Windows amd64." },
+  "seo": { "title": "Agent Notifications - Mantieni la concentrazione", "description": "Notifiche desktop e webhook per Claude, Codex CLI e OpenCode. Gemini CLI: macOS / Linux / Windows. Cursor CLI: Linux amd64 / macOS arm64 / Windows amd64. Qoder: pacchetto separato." },
   "language": { "label": "Lingua", "current": "Lingua attuale: {language}", "search": "Cerca lingue", "noResults": "Nessuna lingua trovata", "switchError": "Impossibile cambiare lingua. Riprova." },
   "accessibility": { "skip": "Vai al contenuto", "platforms": "Sistemi operativi supportati",
     "agents": "Integrazioni degli agenti supportate" },
   "brand": { "tagline": "PER I TUOI AGENTI DI PROGRAMMAZIONE" },
   "nav": { "ariaLabel": "Principale", "features": "Funzionalità", "install": "Installa", "faq": "Domande frequenti" },
-  "hero": { "eyebrow": "MENO CONTROLLI. PIÙ SVILUPPO.", "title": "Mantieni la concentrazione", "emphasis": "Ti avvisiamo noi", "leadFirst": "Lascia lavorare il tuo agente. Scopri quando ha finito.", "leadSecond": "Notifiche desktop e webhook per Claude, Codex CLI e OpenCode. Gemini CLI: macOS / Linux / Windows. Cursor CLI: Linux amd64 / macOS arm64 / Windows amd64.", "primary": "Configura le notifiche", "secondary": "Esplora su GitHub", "note": "Open source · Esecuzione locale" },
+  "hero": { "eyebrow": "MENO CONTROLLI. PIÙ SVILUPPO.", "title": "Mantieni la concentrazione", "emphasis": "Ti avvisiamo noi", "leadFirst": "Lascia lavorare il tuo agente. Scopri quando ha finito.", "leadSecond": "Notifiche desktop e webhook per Claude, Codex CLI e OpenCode. Gemini CLI: macOS / Linux / Windows. Cursor CLI: Linux amd64 / macOS arm64 / Windows amd64. Qoder: pacchetto separato.", "primary": "Configura le notifiche", "secondary": "Esplora su GitHub", "note": "Open source · Esecuzione locale" },
   "common": { "now": "ora", "beta": "beta" },
   "features": {
     "eyebrow": "IL SEGNALE GIUSTO. AL MOMENTO GIUSTO.", "titleFirst": "Resta concentrato", "titleSecond": "Smetti di controllare di continuo",

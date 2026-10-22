@@ -1,11 +1,11 @@
 {
-  "seo": { "title": "Agent Notifications - حافظ على تركيزك", "description": "إشعارات سطح المكتب وWebhooks لـ Claude وCodex CLI وOpenCode. Gemini CLI: macOS / Linux / Windows. Cursor CLI: Linux amd64 / macOS arm64 / Windows amd64." },
+  "seo": { "title": "Agent Notifications - حافظ على تركيزك", "description": "إشعارات سطح المكتب وWebhooks لـ Claude وCodex CLI وOpenCode. Gemini CLI: macOS / Linux / Windows. Cursor CLI: Linux amd64 / macOS arm64 / Windows amd64. Qoder: حزمة منفصلة." },
   "language": { "label": "اللغة", "current": "اللغة الحالية: {language}", "search": "ابحث عن لغة", "noResults": "لم يتم العثور على لغات", "switchError": "تعذر تغيير اللغة. يرجى المحاولة مجددًا." },
   "accessibility": { "skip": "انتقل إلى المحتوى", "platforms": "أنظمة التشغيل المدعومة",
     "agents": "تكاملات الوكلاء المدعومة" },
   "brand": { "tagline": "لوكلاء البرمجة لديك" },
   "nav": { "ariaLabel": "الرئيسية", "features": "المزايا", "install": "التثبيت", "faq": "الأسئلة الشائعة" },
-  "hero": { "eyebrow": "مراقبة أقل. إنجاز أكثر.", "title": "حافظ على تركيزك", "emphasis": "سننبهك عند الحاجة", "leadFirst": "دع وكيلك يعمل. واعرف متى ينتهي.", "leadSecond": "إشعارات سطح المكتب وWebhooks لـ Claude وCodex CLI وOpenCode. Gemini CLI: macOS / Linux / Windows. Cursor CLI: Linux amd64 / macOS arm64 / Windows amd64.", "primary": "إعداد الإشعارات", "secondary": "استكشف على GitHub", "note": "مفتوح المصدر · يعمل محليًا" },
+  "hero": { "eyebrow": "مراقبة أقل. إنجاز أكثر.", "title": "حافظ على تركيزك", "emphasis": "سننبهك عند الحاجة", "leadFirst": "دع وكيلك يعمل. واعرف متى ينتهي.", "leadSecond": "إشعارات سطح المكتب وWebhooks لـ Claude وCodex CLI وOpenCode. Gemini CLI: macOS / Linux / Windows. Cursor CLI: Linux amd64 / macOS arm64 / Windows amd64. Qoder: حزمة منفصلة.", "primary": "إعداد الإشعارات", "secondary": "استكشف على GitHub", "note": "مفتوح المصدر · يعمل محليًا" },
   "common": { "now": "الآن", "beta": "تجريبي" },
   "features": {
     "eyebrow": "التنبيه المناسب. في الوقت المناسب.", "titleFirst": "حافظ على انتباهك", "titleSecond": "تخلص من التحقق المستمر",

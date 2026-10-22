@@ -1,7 +1,7 @@
 {
   "seo": {
     "title": "Agent Notifications - 专注工作，及时获知进展",
-    "description": "适用于 Claude、Codex CLI 和 OpenCode 的桌面通知与 Webhook。 Gemini CLI: macOS / Linux / Windows. Cursor CLI: Linux amd64 / macOS arm64 / Windows amd64."
+    "description": "适用于 Claude、Codex CLI 和 OpenCode 的桌面通知与 Webhook。 Gemini CLI: macOS / Linux / Windows. Cursor CLI: Linux amd64 / macOS arm64 / Windows amd64. Qoder：独立安装包。"
   },
   "language": {
     "label": "语言",
@@ -29,7 +29,7 @@
     "title": "保持专注",
     "emphasis": "需要你时，我们会提醒",
     "leadFirst": "让智能体安心工作，完成时你自然会知道。",
-    "leadSecond": "适用于 Claude、Codex CLI 和 OpenCode 的桌面通知与 Webhook。 Gemini CLI: macOS / Linux / Windows. Cursor CLI: Linux amd64 / macOS arm64 / Windows amd64.",
+    "leadSecond": "适用于 Claude、Codex CLI 和 OpenCode 的桌面通知与 Webhook。 Gemini CLI: macOS / Linux / Windows. Cursor CLI: Linux amd64 / macOS arm64 / Windows amd64. Qoder：独立安装包。",
     "primary": "设置通知",
     "secondary": "在 GitHub 上查看",
     "note": "开源 · 本地运行"
