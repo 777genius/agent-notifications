@@ -474,7 +474,7 @@ jobs:
                                   'name': 'agent-notify', 'version': tag[1:]}, 'portable_version_identity_required')
                   mcp = json.loads(packed.read('mcp.json'))
                   need(mcp == {'$schema': 'https://agent-plugins.org/schemas/1.0.0/mcp.schema.json',
-                               'mcpServers': {'agent-notify': {'type': 'stdio', 'command': './bin/' + binary_name,
+                               'mcpServers': {'agent-notifications': {'type': 'stdio', 'command': './bin/' + binary_name,
                                                              'args': [], 'env': {}}}}, 'portable_mcp_layout_required')
                   need(hashlib.sha256(packed.read('bin/' + binary_name)).hexdigest() == digest(public_binary),
                        'portable_executable_must_equal_public_binary')
