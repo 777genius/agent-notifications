@@ -47,6 +47,51 @@ check "windows ignores a missing CURL_CA_BUNDLE file" windows \
     "CURL_CA_BUNDLE=$sandbox/missing.pem" "SSL_CERT_FILE=$sandbox/ssl-cert.pem"
 check "non-windows leaves CA env to curl" linux "" "CURL_CA_BUNDLE=$sandbox/corp-ca.pem"
 
+printf 'public\n' > "$sandbox/public-ca.crt"
+# A child shell, so the installer's EXIT trap runs as it does in production.
+merged=$(SANDBOX="$sandbox" INSTALL_TARGET_DIR="$sandbox/target" TMPDIR="$sandbox" \
+    CURL_CA_BUNDLE="$sandbox/corp-ca.pem" "$BASH" -c '
+    unset SSL_CERT_FILE
+    source "$SANDBOX/functions.sh"
+    curl() { printf " --ssl-no-revoke --http1.1\n"; }
+    find_windows_default_ca_bundle() { printf "%s" "$SANDBOX/public-ca.crt"; }
+    PLATFORM=windows
+    configure_curl_options
+    bundle="${CURL_EXTRA_OPTS[2]}"
+    printf "%s|%s|" "${CURL_EXTRA_OPTS[1]}" "$bundle"
+    tr "\n" " " < "$bundle"
+')
+case "$merged" in
+    "--cacert|$sandbox/agent-notifications-ca."*"|public  ca ")
+        echo "PASS: windows keeps public CA trust next to CURL_CA_BUNDLE" ;;
+    *)
+        echo "FAIL: windows should merge CURL_CA_BUNDLE into the public CA bundle (got '$merged')" >&2
+        failures=$((failures + 1)) ;;
+esac
+if ls "$sandbox"/agent-notifications-ca.* >/dev/null 2>&1; then
+    echo "FAIL: merged CA bundle should be removed on exit" >&2
+    failures=$((failures + 1))
+else
+    echo "PASS: merged CA bundle is removed on exit"
+fi
+
+same=$(
+    export INSTALL_TARGET_DIR="$sandbox/target"
+    export CURL_CA_BUNDLE="$sandbox/public-ca.crt"
+    source "$sandbox/functions.sh"
+    curl() { printf ' --ssl-no-revoke --http1.1\n'; }
+    find_windows_default_ca_bundle() { printf '%s' "$sandbox/public-ca.crt"; }
+    PLATFORM=windows
+    configure_curl_options
+    printf '%s' "${CURL_EXTRA_OPTS[*]}"
+)
+if [ "$same" = "--ssl-no-revoke --cacert $sandbox/public-ca.crt" ]; then
+    echo "PASS: windows passes the public bundle as-is when CURL_CA_BUNDLE is it"
+else
+    echo "FAIL: windows should not merge the public bundle with itself (got '$same')" >&2
+    failures=$((failures + 1))
+fi
+
 hint=$(
     export INSTALL_TARGET_DIR="$sandbox/target"
     source "$sandbox/functions.sh"

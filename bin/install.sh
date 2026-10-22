@@ -38,8 +38,14 @@ INSTALL_CONFIG_STAGE=""
 INSTALL_CONFIG_STAGE_OWNER=""
 INSTALL_CONFIG_HELPER=""
 INSTALL_PRIVATE_DOWNLOAD=false
+CURL_CA_MERGED_BUNDLE=""
+CURL_CA_MERGED_BUNDLE_OWNER=""
+WINDOWS_CA_BUNDLE=""
 
 cleanup_install_config() {
+    if [ -n "$CURL_CA_MERGED_BUNDLE" ] && [ "$CURL_CA_MERGED_BUNDLE_OWNER" = "${BASHPID:-$BASH_SUBSHELL}" ]; then
+        rm -f -- "$CURL_CA_MERGED_BUNDLE" 2>/dev/null || true
+    fi
     if [ -n "$INSTALL_CONFIG_STAGE" ] && [ "$INSTALL_CONFIG_STAGE_OWNER" = "${BASHPID:-$BASH_SUBSHELL}" ]; then
         cleanup_install_stage "$INSTALL_CONFIG_STAGE"
     fi
@@ -335,6 +341,46 @@ curl_supports_option() {
     curl --help all 2>/dev/null | grep -q -- "$option"
 }
 
+find_windows_default_ca_bundle() {
+    local candidate
+    for candidate in \
+        /mingw64/etc/ssl/certs/ca-bundle.crt \
+        /clangarm64/etc/ssl/certs/ca-bundle.crt \
+        /mingw32/etc/ssl/certs/ca-bundle.crt \
+        /usr/ssl/certs/ca-bundle.crt; do
+        if [ -f "$candidate" ]; then
+            printf '%s' "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# --cacert replaces Schannel's Windows store, so a corporate-only bundle would
+# reject uninspected downloads. Append it to Git's public CA bundle instead.
+# Sets WINDOWS_CA_BUNDLE; falls back to the user's bundle when merging fails.
+build_windows_ca_bundle() {
+    local user_bundle="$1"
+    local default_bundle merged=""
+
+    WINDOWS_CA_BUNDLE="$user_bundle"
+    if ! default_bundle=$(find_windows_default_ca_bundle) || [ "$default_bundle" = "$user_bundle" ]; then
+        return 0
+    fi
+    if [ -n "$CURL_CA_MERGED_BUNDLE" ] && [ "$CURL_CA_MERGED_BUNDLE_OWNER" = "${BASHPID:-$BASH_SUBSHELL}" ]; then
+        rm -f -- "$CURL_CA_MERGED_BUNDLE" 2>/dev/null || true
+    fi
+    CURL_CA_MERGED_BUNDLE=""
+    if ! merged=$(mktemp "${TMPDIR:-${TEMP:-/tmp}}/agent-notifications-ca.XXXXXX"); then
+        return 0
+    fi
+    CURL_CA_MERGED_BUNDLE="$merged"
+    CURL_CA_MERGED_BUNDLE_OWNER="${BASHPID:-$BASH_SUBSHELL}"
+    if { cat "$default_bundle" && echo && cat "$user_bundle"; } > "$merged" 2>/dev/null; then
+        WINDOWS_CA_BUNDLE="$merged"
+    fi
+}
+
 configure_curl_options() {
     CURL_EXTRA_OPTS=()
     CURL_COMPAT_OPTS=()
@@ -352,10 +398,15 @@ configure_curl_options() {
     if [ "$PLATFORM" = "windows" ]; then
         # Schannel curl ignores CURL_CA_BUNDLE/SSL_CERT_FILE, which corporate
         # TLS-inspection docs tell users to set. Pass the bundle explicitly.
+        local user_ca_bundle=""
         if [ -n "${CURL_CA_BUNDLE:-}" ] && [ -f "$CURL_CA_BUNDLE" ]; then
-            CURL_EXTRA_OPTS+=(--cacert "$CURL_CA_BUNDLE")
+            user_ca_bundle="$CURL_CA_BUNDLE"
         elif [ -n "${SSL_CERT_FILE:-}" ] && [ -f "$SSL_CERT_FILE" ]; then
-            CURL_EXTRA_OPTS+=(--cacert "$SSL_CERT_FILE")
+            user_ca_bundle="$SSL_CERT_FILE"
+        fi
+        if [ -n "$user_ca_bundle" ]; then
+            build_windows_ca_bundle "$user_ca_bundle"
+            CURL_EXTRA_OPTS+=(--cacert "$WINDOWS_CA_BUNDLE")
         fi
     fi
 
