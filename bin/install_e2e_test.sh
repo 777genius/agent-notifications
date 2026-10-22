@@ -718,6 +718,60 @@ UNAME_EOF
     cleanup_test_dir
 }
 
+test_wsl_guard_detects_wsl_markers_without_env() {
+    echo -e "\n${CYAN}▶ test_wsl_guard_detects_wsl_markers_without_env${NC}"
+
+    # PowerShell can resolve `bash` to WSL bash.exe without WSL_* exported and
+    # /proc/version may not mention Microsoft (custom kernel); WSL-only
+    # filesystem markers must still trip the guard.
+    local marker
+    for marker in proc/sys/fs/binfmt_misc/WSLInterop proc/sys/fs/binfmt_misc/WSLInterop-late run/WSL; do
+        setup_test_dir
+
+        local fake_path="$TEST_DIR/fakebin"
+        local probe_root="$TEST_DIR/wsl-root"
+        local sourceable_bootstrap="$TEST_DIR/bootstrap-functions.sh"
+        mkdir -p "$fake_path" "$probe_root/$(dirname "$marker")"
+        case "$marker" in
+            run/WSL) mkdir -p "$probe_root/$marker" ;;
+            *) : > "$probe_root/$marker" ;;
+        esac
+
+        cat > "$fake_path/uname" <<'UNAME_EOF'
+#!/bin/sh
+case "$1" in
+  -s) echo "Linux" ;;
+  -m) echo "x86_64" ;;
+  *) echo "Linux" ;;
+esac
+UNAME_EOF
+        chmod +x "$fake_path/uname"
+
+        local output exit_code
+        output=$(unset WSL_DISTRO_NAME WSL_INTEROP CLAUDE_NOTIFICATIONS_ALLOW_WSL
+            INSTALL_TARGET_DIR="$TEST_DIR" PATH="$fake_path:$PATH" \
+            CLAUDE_NOTIFICATIONS_WSL_PROBE_ROOT="$probe_root" \
+            run_with_timeout 10 bash "$INSTALL_SCRIPT" 2>&1)
+        exit_code=$?
+
+        assert_exit_code 1 $exit_code "install.sh: WSL marker /$marker blocks install"
+        assert_contains "$output" "WSL environment detected" "install.sh: WSL guard message shown for /$marker"
+        assert_not_contains "$output" "Platform:" "install.sh: WSL guard stops before platform output for /$marker"
+
+        # Load the production helpers without executing bootstrap's main function.
+        sed '/^main "\$@"$/d' "$SCRIPT_DIR/bootstrap.sh" > "$sourceable_bootstrap"
+        output=$(unset WSL_DISTRO_NAME WSL_INTEROP CLAUDE_NOTIFICATIONS_ALLOW_WSL
+            PATH="$fake_path:$PATH" CLAUDE_NOTIFICATIONS_WSL_PROBE_ROOT="$probe_root" \
+            bash -c 'source "$1" && abort_if_wsl_environment' _ "$sourceable_bootstrap" 2>&1)
+        exit_code=$?
+
+        assert_exit_code 1 $exit_code "bootstrap.sh: WSL marker /$marker blocks install"
+        assert_contains "$output" "WSL environment detected" "bootstrap.sh: WSL guard message shown for /$marker"
+
+        cleanup_test_dir
+    done
+}
+
 test_bootstrap_version_verification_uses_installed_manifest_for_unknown_registry() {
     echo -e "\n${CYAN}▶ test_bootstrap_version_verification_uses_installed_manifest_for_unknown_registry${NC}"
     setup_test_dir
@@ -3010,6 +3064,7 @@ main() {
         test_platform_detection
         test_binary_name_format
         test_wsl_guard_blocks_linux_install
+        test_wsl_guard_detects_wsl_markers_without_env
         test_bootstrap_version_verification_uses_installed_manifest_for_unknown_registry
         test_bootstrap_empty_registry_version_preserves_installed_manifest
         test_lock_created

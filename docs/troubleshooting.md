@@ -216,6 +216,8 @@ You run the bootstrap command from Windows Terminal or PowerShell, but the outpu
 
 PowerShell and Windows Terminal can resolve `bash` to WSL. In that case the installer is running inside Linux, not Git Bash, so Linux platform detection is technically correct but not useful for Windows Claude.
 
+The installer and bootstrap stop with `WSL environment detected` when they see `WSL_DISTRO_NAME`, `WSL_INTEROP`, a Microsoft/WSL kernel in `/proc/version`, or WSL-only markers (`/proc/sys/fs/binfmt_misc/WSLInterop`, `/run/WSL`). The markers catch WSL bash launched from PowerShell even when the `WSL_*` variables are not exported.
+
 ### Fix
 
 Open Git Bash from the Start menu and run the [secure install command](INSTALLATION.md#quick-install-recommended) there. Do not run it from PowerShell if `bash` opens WSL.
