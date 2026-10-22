@@ -611,11 +611,11 @@ func SendQuickNotification(title, message, executeCmd string) error {
 		if output, err := runLegacyNotifierCommand(legacyTerminalNotifierTimeout, notifierPath, args...); err == nil {
 			return nil
 		} else {
+			logging.Debug("terminal-notifier failed: %v, output: %s", err, string(output))
 			if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, exec.ErrWaitDelay) {
 				// Delivery may have completed before the helper stopped answering.
 				return fmt.Errorf("terminal-notifier error: %w, output: %s", err, string(output))
 			}
-			logging.Debug("terminal-notifier failed: %v, output: %s", err, string(output))
 		}
 	}
 
