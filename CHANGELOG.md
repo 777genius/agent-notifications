@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.49.6] - 2026-10-22
 
 ### Added
-- Full Qoder hook integration in the `agent-notifications-qoder` native package: Stop completion, question and permission-request notifications, opt-in SubagentStop, TeammateIdle and PreToolUse (ExitPlanMode/AskUserQuestion) hooks with 40-second timeouts, hook names `agent-notifications-qoder-<event>` ([#498](https://github.com/777genius/agent-notifications/pull/498)).
+- Full Qoder hook integration in the `agent-notifications-qoder` native package: Stop completion, question and permission-request notifications, default-on TeammateIdle and PreToolUse (ExitPlanMode/AskUserQuestion) hooks, opt-in SubagentStop, all with 40-second timeouts and hook names `agent-notifications-qoder-<lowercased event>` ([#498](https://github.com/777genius/agent-notifications/pull/498)).
 - Qoder Stop notifications and a source-buildable native package compatible with UAP 0.1.86, keeping quiet fail-open hook behavior ([commit](https://github.com/777genius/agent-notifications/commit/735562b2)).
 - Qoder documented in README and docs/QODER.md and listed in the landing agent matrix across all locales, with full landing browser E2E ([#498](https://github.com/777genius/agent-notifications/pull/498)).
 
