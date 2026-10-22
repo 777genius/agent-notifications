@@ -167,7 +167,7 @@ if (phase === 'prepare') {
   const portable=portableEntries(portableZip);
   const portableManifest=JSON.parse(portable.get('plugin.json')!.toString()) as unknown;
   assert.deepEqual(portableManifest,{$schema:'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json',name:'agent-notify',version},'portable_version_identity');
-  assert.deepEqual(JSON.parse(portable.get('mcp.json')!.toString()),{$schema:'https://agent-plugins.org/schemas/1.0.0/mcp.schema.json',mcpServers:{'agent-notify':{type:'stdio',command:'./bin/claude-notifications',args:[],env:{}}}},'portable_exact_MCP_contract');
+  assert.deepEqual(JSON.parse(portable.get('mcp.json')!.toString()),{$schema:'https://agent-plugins.org/schemas/1.0.0/mcp.schema.json',mcpServers:{'agent-notifications':{type:'stdio',command:'./bin/claude-notifications',args:[],env:{}}}},'portable_exact_MCP_contract');
   assert.equal(hash(portable.get('bin/claude-notifications')!),sha256,'portable_matches_raw_draft_binary');
   const nativeZip=await regularFile(nativeZipInput,32<<20);assert.equal(hash(nativeZip),nativeZipSHA256,'native_draft_ZIP_identity');
   const native=nativeEntries(nativeZip);
