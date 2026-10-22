@@ -1,6 +1,7 @@
 package notifier
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/url"
@@ -26,7 +27,11 @@ import (
 
 const macOSPermissionDeniedMessage = "Notification permission denied. Enable in System Settings > Notifications."
 
+const legacyTerminalNotifierTimeout = 30 * time.Second
+const legacyTerminalNotifierWaitDelay = time.Second
+
 var execCommand = exec.Command
+var runLegacyNotifierCommand = runCommandWithTimeout
 var beeepNotify = beeep.Notify
 var notifierGOOS = runtime.GOOS
 var uniqueNotificationGroupSeq atomic.Uint64
@@ -136,6 +141,11 @@ func (n *Notifier) SendDesktop(status analyzer.Status, message, sessionID, cwd s
 					logging.Warn("ClaudeNotifier permission denied on macOS: %v", err)
 					return err
 				}
+				if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, exec.ErrWaitDelay) {
+					// The helper may already have delivered before its completion
+					// became uncertain. Retrying could display a duplicate banner.
+					return err
+				}
 				logging.Warn("ClaudeNotifier failed on macOS, falling back to beeep: %v", err)
 			} else {
 				logging.Debug("Desktop notification sent via ClaudeNotifier/terminal-notifier: title=%s", title)
@@ -223,15 +233,28 @@ func (n *Notifier) sendWithTerminalNotifier(title, message, subtitle, sessionID 
 		return nil
 	}
 
-	cmd := buildNotifierCommand(notifierPath, args)
-
-	output, err := cmd.CombinedOutput()
+	output, err := runLegacyNotifierCommand(legacyTerminalNotifierTimeout, notifierPath, args...)
 	if err != nil {
 		return fmt.Errorf("terminal-notifier error: %w, output: %s", err, string(output))
 	}
 
 	logging.Debug("terminal-notifier executed: bundleID=%s", bundleID)
 	return nil
+}
+
+func runCommandWithTimeout(timeout time.Duration, notifierPath string, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	cmd := buildNotifierCommandWithContext(ctx, notifierPath, args)
+	// A child can retain the output pipes after the direct process exits or is
+	// killed. Bound the drain as well; this does not terminate descendants.
+	cmd.WaitDelay = legacyTerminalNotifierWaitDelay
+	output, err := cmd.CombinedOutput()
+	if ctx.Err() != nil {
+		return output, fmt.Errorf("command timed out after %s: %w", timeout, ctx.Err())
+	}
+	return output, err
 }
 
 func runClaudeNotifierApp(appPath string, args []string) error {
@@ -284,13 +307,17 @@ func runClaudeNotifierApp(appPath string, args []string) error {
 // ClaudeNotifier.app must be launched via LaunchServices so
 // UNUserNotificationCenter gets valid bundle metadata under hardened runtime.
 func buildNotifierCommand(notifierPath string, args []string) *exec.Cmd {
+	return buildNotifierCommandWithContext(context.Background(), notifierPath, args)
+}
+
+func buildNotifierCommandWithContext(ctx context.Context, notifierPath string, args []string) *exec.Cmd {
 	if appPath, ok := claudeNotifierAppPath(notifierPath); ok {
 		openArgs := []string{"-W", "-n", "-g", appPath, "--args", "-launchedViaLaunchServices"}
 		openArgs = append(openArgs, args...)
-		return exec.Command("open", openArgs...)
+		return exec.CommandContext(ctx, "open", openArgs...)
 	}
 
-	return exec.Command(notifierPath, args...)
+	return exec.CommandContext(ctx, notifierPath, args...)
 }
 
 // claudeNotifierAppPath recognizes modern helpers in conventional bundles, the
@@ -581,10 +608,14 @@ func SendQuickNotification(title, message, executeCmd string) error {
 			"-group", fmt.Sprintf("claude-quick-%d", time.Now().UnixNano()),
 			"-nosound",
 		)
-		if output, err := buildNotifierCommand(notifierPath, args).CombinedOutput(); err == nil {
+		if output, err := runLegacyNotifierCommand(legacyTerminalNotifierTimeout, notifierPath, args...); err == nil {
 			return nil
 		} else {
 			logging.Debug("terminal-notifier failed: %v, output: %s", err, string(output))
+			if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, exec.ErrWaitDelay) {
+				// Delivery may have completed before the helper stopped answering.
+				return fmt.Errorf("terminal-notifier error: %w, output: %s", err, string(output))
+			}
 		}
 	}
 
