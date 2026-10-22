@@ -2244,10 +2244,29 @@ install_linux_notification_desktop_entry() {
     local applications_dir="${data_home}/applications"
     local desktop_file="${applications_dir}/claude-notifications.desktop"
     local tmp_file="${desktop_file}.tmp.$$"
+    # GNOME resolves the notification icon from this entry. Copy the bundled
+    # icon to a stable path: the plugin root is versioned and changes on update.
+    local icon_src="$(dirname "$SCRIPT_DIR")/claude_icon.png"
+    local icons_dir="${data_home}/icons"
+    local icon_dest="${icons_dir}/claude-notifications.png"
+    local icon_tmp="${icon_dest}.tmp.$$"
+    local icon="utilities-terminal"
 
     if ! mkdir -p "$applications_dir" 2>/dev/null; then
         echo -e "${YELLOW}⚠ Could not create ${applications_dir} for notification desktop entry${NC}"
         return 1
+    fi
+
+    if [ -f "$icon_src" ]; then
+        guard_install_paths "$icon_dest" "$icon_tmp"
+        if mkdir -p "$icons_dir" 2>/dev/null &&
+            cp "$icon_src" "$icon_tmp" 2>/dev/null &&
+            mv "$icon_tmp" "$icon_dest" 2>/dev/null; then
+            icon="$icon_dest"
+        else
+            rm -f "$icon_tmp" 2>/dev/null || true
+            echo -e "${YELLOW}⚠ Could not install notification icon, using system default${NC}"
+        fi
     fi
 
     guard_install_paths "$desktop_file" "$tmp_file"
@@ -2255,7 +2274,7 @@ install_linux_notification_desktop_entry() {
 [Desktop Entry]
 Name=Agent Notifications
 Type=Application
-Icon=utilities-terminal
+Icon=${icon}
 Exec=/usr/bin/true
 NoDisplay=true
 StartupNotify=false

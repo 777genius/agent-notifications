@@ -288,6 +288,12 @@ else
     TESTS_FAILED=$((TESTS_FAILED + 1))
 fi
 
+if bash "$SCRIPT_DIR/install_linux_desktop_entry_test.sh"; then
+    TESTS_PASSED=$((TESTS_PASSED + 1))
+else
+    TESTS_FAILED=$((TESTS_FAILED + 1))
+fi
+
 # Summary
 echo "========================================="
 echo " Test Summary"
