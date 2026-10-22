@@ -349,6 +349,16 @@ configure_curl_options() {
         CURL_EXTRA_OPTS+=(--ssl-no-revoke)
     fi
 
+    if [ "$PLATFORM" = "windows" ]; then
+        # Schannel curl ignores CURL_CA_BUNDLE/SSL_CERT_FILE, which corporate
+        # TLS-inspection docs tell users to set. Pass the bundle explicitly.
+        if [ -n "${CURL_CA_BUNDLE:-}" ] && [ -f "$CURL_CA_BUNDLE" ]; then
+            CURL_EXTRA_OPTS+=(--cacert "$CURL_CA_BUNDLE")
+        elif [ -n "${SSL_CERT_FILE:-}" ] && [ -f "$SSL_CERT_FILE" ]; then
+            CURL_EXTRA_OPTS+=(--cacert "$SSL_CERT_FILE")
+        fi
+    fi
+
     if curl_supports_option "--http1.1"; then
         CURL_COMPAT_OPTS+=(--http1.1)
     fi
@@ -410,6 +420,7 @@ print_windows_proxy_hint() {
     else
         echo -e "${YELLOW}→ Windows/Git Bash downloads can fail behind corporate proxies or TLS inspection.${NC}" >&2
     fi
+    echo -e "${YELLOW}  Behind TLS inspection, set CURL_CA_BUNDLE to your corporate CA bundle (PEM) and rerun.${NC}" >&2
 }
 
 print_curl_failure_guidance() {
