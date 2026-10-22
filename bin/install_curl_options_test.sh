@@ -1,7 +1,7 @@
 #!/bin/bash
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-env.sh"
 test_env_enter "$0" "$@"
-# configure_curl_options regressions (issue #103). No network: curl is stubbed.
+# CA selection and transfer regressions (issue #103). No network: curl is stubbed.
 set -eo pipefail
 root=$(cd "$(dirname "$0")" && pwd)
 sandbox=$(mktemp -d)
@@ -55,7 +55,7 @@ check() {
         if [ "${TEST_CURL_MISSING:-0}" = 1 ]; then PATH="$sandbox/no-tools"; fi
         PLATFORM="$platform"
         configure_curl_options
-        printf '%s' "${CURL_EXTRA_OPTS[*]}"
+        printf '%s|%s' "${CURL_EXTRA_OPTS[*]}" "$WINDOWS_CA_BUNDLE"
     )
     if [ "$actual" = "$expected" ]; then
         echo "PASS: $message"
@@ -65,39 +65,39 @@ check() {
     fi
 }
 
-check "windows without CA env keeps only --ssl-no-revoke" windows "--ssl-no-revoke"
-check "windows passes CURL_CA_BUNDLE as --cacert" windows \
-    "--ssl-no-revoke --cacert $sandbox/corp-ca.pem" "CURL_CA_BUNDLE=$sandbox/corp-ca.pem"
+check "windows without CA env keeps only --ssl-no-revoke" windows "--ssl-no-revoke|"
+check "windows selects CURL_CA_BUNDLE as a verification fallback" windows \
+    "--ssl-no-revoke|$sandbox/corp-ca.pem" "CURL_CA_BUNDLE=$sandbox/corp-ca.pem"
 check "windows falls back to SSL_CERT_FILE" windows \
-    "--ssl-no-revoke --cacert $sandbox/ssl-cert.pem" "SSL_CERT_FILE=$sandbox/ssl-cert.pem"
+    "--ssl-no-revoke|$sandbox/ssl-cert.pem" "SSL_CERT_FILE=$sandbox/ssl-cert.pem"
 check "windows prefers CURL_CA_BUNDLE over SSL_CERT_FILE" windows \
-    "--ssl-no-revoke --cacert $sandbox/corp-ca.pem" \
+    "--ssl-no-revoke|$sandbox/corp-ca.pem" \
     "CURL_CA_BUNDLE=$sandbox/corp-ca.pem" "SSL_CERT_FILE=$sandbox/ssl-cert.pem"
 check "windows ignores a missing CURL_CA_BUNDLE file" windows \
-    "--ssl-no-revoke --cacert $sandbox/ssl-cert.pem" \
+    "--ssl-no-revoke|$sandbox/ssl-cert.pem" \
     "CURL_CA_BUNDLE=$sandbox/missing.pem" "SSL_CERT_FILE=$sandbox/ssl-cert.pem"
-check "non-windows leaves CA env to curl" linux "" "CURL_CA_BUNDLE=$sandbox/corp-ca.pem"
-check "windows OpenSSL leaves CURL_CA_BUNDLE to curl" windows "--ssl-no-revoke" \
+check "non-windows leaves CA env to curl" linux "|" "CURL_CA_BUNDLE=$sandbox/corp-ca.pem"
+check "windows OpenSSL leaves CURL_CA_BUNDLE to curl" windows "--ssl-no-revoke|" \
     "TEST_CURL_TLS=openssl" "CURL_CA_BUNDLE=$sandbox/corp-ca.pem"
-check "windows OpenSSL leaves SSL_CERT_FILE to curl" windows "--ssl-no-revoke" \
+check "windows OpenSSL leaves SSL_CERT_FILE to curl" windows "--ssl-no-revoke|" \
     "TEST_CURL_TLS=openssl" "SSL_CERT_FILE=$sandbox/ssl-cert.pem"
-check "single-backend OpenSSL ignores a Schannel environment request" windows "--ssl-no-revoke" \
+check "single-backend OpenSSL ignores a Schannel environment request" windows "--ssl-no-revoke|" \
     "TEST_CURL_TLS=openssl" "CURL_SSL_BACKEND=schannel" "CURL_CA_BUNDLE=$sandbox/corp-ca.pem"
-check "MultiSSL ignores inactive Schannel" windows "--ssl-no-revoke" \
+check "MultiSSL ignores inactive Schannel" windows "--ssl-no-revoke|" \
     "TEST_CURL_TLS=multissl-openssl" "CURL_CA_BUNDLE=$sandbox/corp-ca.pem"
-check "MultiSSL uses active Schannel" windows "--ssl-no-revoke --cacert $sandbox/corp-ca.pem" \
+check "MultiSSL uses active Schannel" windows "--ssl-no-revoke|$sandbox/corp-ca.pem" \
     "TEST_CURL_TLS=multissl-schannel" "CURL_CA_BUNDLE=$sandbox/corp-ca.pem"
-check "MultiSSL uses Schannel selected by CURL_SSL_BACKEND" windows "--ssl-no-revoke --cacert $sandbox/corp-ca.pem" \
+check "MultiSSL uses Schannel selected by CURL_SSL_BACKEND" windows "--ssl-no-revoke|$sandbox/corp-ca.pem" \
     "TEST_CURL_TLS=multissl-openssl" "CURL_SSL_BACKEND=schannel" "CURL_CA_BUNDLE=$sandbox/corp-ca.pem"
-check "MultiSSL leaves CA env alone when CURL_SSL_BACKEND selects OpenSSL" windows "--ssl-no-revoke" \
+check "MultiSSL leaves CA env alone when CURL_SSL_BACKEND selects OpenSSL" windows "--ssl-no-revoke|" \
     "TEST_CURL_TLS=multissl-schannel" "CURL_SSL_BACKEND=openssl" "CURL_CA_BUNDLE=$sandbox/corp-ca.pem"
-check "windows recognizes active Schannel at the end of a CRLF line" windows "--ssl-no-revoke --cacert $sandbox/corp-ca.pem" \
+check "windows recognizes active Schannel at the end of a CRLF line" windows "--ssl-no-revoke|$sandbox/corp-ca.pem" \
     "TEST_CURL_TLS=schannel-crlf" "CURL_CA_BUNDLE=$sandbox/corp-ca.pem"
-check "windows does not change CA trust when curl version fails" windows "--ssl-no-revoke" \
+check "windows does not change CA trust when curl version fails" windows "--ssl-no-revoke|" \
     "TEST_CURL_VERSION_STATUS=2" "CURL_CA_BUNDLE=$sandbox/corp-ca.pem"
-check "windows does not change CA trust when curl version is empty" windows "--ssl-no-revoke" \
+check "windows does not change CA trust when curl version is empty" windows "--ssl-no-revoke|" \
     "TEST_CURL_TLS=empty" "CURL_CA_BUNDLE=$sandbox/corp-ca.pem"
-check "missing curl leaves options empty" windows "" \
+check "missing curl leaves options empty" windows "|" \
     "TEST_CURL_MISSING=1" "CURL_CA_BUNDLE=$sandbox/corp-ca.pem"
 
 printf 'public\n' > "$sandbox/public-ca.crt"
@@ -109,12 +109,12 @@ merged=$(SANDBOX="$sandbox" INSTALL_TARGET_DIR="$sandbox/target" TMPDIR="$sandbo
     find_windows_default_ca_bundle() { printf "%s" "$SANDBOX/public-ca.crt"; }
     PLATFORM=windows
     configure_curl_options
-    bundle="${CURL_EXTRA_OPTS[2]}"
-    printf "%s|%s|" "${CURL_EXTRA_OPTS[1]}" "$bundle"
+    bundle="$WINDOWS_CA_BUNDLE"
+    printf "fallback|%s|" "$bundle"
     tr "\n" " " < "$bundle"
 ')
 case "$merged" in
-    "--cacert|$sandbox/agent-notifications-ca."*"|public  ca ")
+    "fallback|$sandbox/agent-notifications-ca."*"|public  ca ")
         echo "PASS: windows keeps public CA trust next to CURL_CA_BUNDLE" ;;
     *)
         echo "FAIL: windows should merge CURL_CA_BUNDLE into the public CA bundle (got '$merged')" >&2
@@ -159,9 +159,9 @@ same=$(
     find_windows_default_ca_bundle() { printf '%s' "$sandbox/public-ca.crt"; }
     PLATFORM=windows
     configure_curl_options
-    printf '%s' "${CURL_EXTRA_OPTS[*]}"
+    printf '%s|%s' "${CURL_EXTRA_OPTS[*]}" "$WINDOWS_CA_BUNDLE"
 )
-if [ "$same" = "--ssl-no-revoke --cacert $sandbox/public-ca.crt" ]; then
+if [ "$same" = "--ssl-no-revoke|$sandbox/public-ca.crt" ]; then
     echo "PASS: windows passes the public bundle as-is when CURL_CA_BUNDLE is it"
 else
     echo "FAIL: windows should not merge the public bundle with itself (got '$same')" >&2
@@ -178,6 +178,144 @@ if printf '%s' "$hint" | grep -q CURL_CA_BUNDLE; then
     echo "PASS: windows proxy hint mentions CURL_CA_BUNDLE"
 else
     echo "FAIL: windows proxy hint should mention CURL_CA_BUNDLE (got '$hint')" >&2
+    failures=$((failures + 1))
+fi
+
+# Exercise real transfer calls through the wrapper, including set -e callers.
+mkdir -p "$sandbox/transfer-bin"
+cat > "$sandbox/transfer-bin/curl" <<'CURL'
+#!/bin/bash
+case "$1" in --version|--help) exec "$TEST_OPTIONS_CURL" "$@" ;; esac
+kind=native output=""
+[ "$1" != --cacert ] || kind=fallback
+printf '%s\n' "$kind" >> "$TEST_CASE/calls"
+printf '%s\n' "$@" > "$TEST_CASE/$kind.args"
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --cacert)
+            [ "$2" = "$TEST_EXPECTED_CA" ] || exit 99
+            shift 2 ;;
+        -o) output="$2"; shift 2 ;;
+        *) shift ;;
+    esac
+done
+case "$TEST_TRANSFER_MODE" in
+    term|int)
+        if [ "$TEST_TRANSFER_MODE" = term ]; then kill -TERM "$PPID"; else kill -INT "$PPID"; fi
+        exit 0 ;;
+    network)
+        printf 'native-output\n\n000'
+        printf 'native-network-error\n' >&2
+        exit 7 ;;
+    bad-ca-file)
+        printf 000
+        printf 'native-ca-file-error\n' >&2
+        exit 77 ;;
+    reject)
+        printf 000
+        printf '%s-certificate-error\n' "$kind" >&2
+        exit 60 ;;
+    corporate)
+        if [ "$kind" = native ]; then
+            [ -z "$output" ] || printf partial-native > "$output"
+            printf 000
+            printf 'native-certificate-error\n' >&2
+            exit 60
+        fi ;;
+esac
+if [ -n "$output" ]; then
+    printf '%s-body\n\n' "$kind" > "$output"
+else
+    printf '%s-body\n\n' "$kind"
+fi
+printf 200
+printf '%s-stderr\n' "$kind" >&2
+CURL
+chmod +x "$sandbox/transfer-bin/curl"
+
+transfer_check() {
+    local name="$1" mode="$2" expected_status="$3" expected_stdout="$4" expected_stderr="$5" expected_calls="$6" file_output="${7:-}"
+    local case_dir="$sandbox/transfer-$name" status=0
+    mkdir -p "$case_dir/tmp"
+    SANDBOX="$sandbox" TEST_CASE="$case_dir" TEST_TRANSFER_MODE="$mode" \
+        TEST_OPTIONS_CURL="$sandbox/curl-bin/curl" INSTALL_TARGET_DIR="$case_dir/target" \
+        TMPDIR="$case_dir/tmp" TEST_NAME="$name" TEST_FILE_OUTPUT="$file_output" \
+        PATH="$sandbox/transfer-bin:$PATH" "$BASH" -c '
+        unset SSL_CERT_FILE CURL_SSL_BACKEND TEST_CURL_TLS
+        source "$SANDBOX/functions.sh"
+        export CURL_CA_BUNDLE="$SANDBOX/corp-ca.pem"
+        find_windows_default_ca_bundle() { printf "%s" "$SANDBOX/public-ca.crt"; }
+        [ "$TEST_NAME" != no-fallback ] || export TEST_CURL_TLS=openssl
+        PLATFORM=windows
+        configure_curl_options
+        export TEST_EXPECTED_CA="$WINDOWS_CA_BUNDLE"
+        if [ "$TEST_NAME" = mktemp-failure ]; then mktemp() { return 1; }; fi
+        set -- --connect-timeout 2 --max-time 3 --location --write-out "%{http_code}" https://release.test/resource
+        [ -z "$TEST_FILE_OUTPUT" ] || set -- "$@" -o "$TEST_CASE/output file"
+        installer_curl "$@"
+    ' >"$case_dir/stdout" 2>"$case_dir/stderr" || status=$?
+    printf '%b' "$expected_stdout" > "$case_dir/expected-stdout"
+    printf '%b' "$expected_stderr" > "$case_dir/expected-stderr"
+    printf '%b\n' "$expected_calls" > "$case_dir/expected-calls"
+    if [ "$status" != "$expected_status" ] ||
+       ! cmp -s "$case_dir/stdout" "$case_dir/expected-stdout" ||
+       ! cmp -s "$case_dir/stderr" "$case_dir/expected-stderr" ||
+       ! cmp -s "$case_dir/calls" "$case_dir/expected-calls"; then
+        echo "FAIL: $name transfer (status $status, expected $expected_status)" >&2
+        failures=$((failures + 1))
+    elif [ -n "$(ls -A "$case_dir/tmp")" ]; then
+        echo "FAIL: $name transfer leaked temporary files" >&2
+        failures=$((failures + 1))
+    else
+        echo "PASS: $name transfer preserves output/status/attempt count and cleans up"
+    fi
+    if [ -f "$case_dir/fallback.args" ]; then
+        tail -n +3 "$case_dir/fallback.args" > "$case_dir/fallback-original.args"
+        if ! cmp -s "$case_dir/native.args" "$case_dir/fallback-original.args"; then
+            echo "FAIL: $name retry changed the original curl arguments" >&2
+            failures=$((failures + 1))
+        fi
+    fi
+    if [ -n "$file_output" ]; then
+        printf 'fallback-body\n\n' > "$case_dir/expected-body"
+        if ! cmp -s "$case_dir/output file" "$case_dir/expected-body"; then
+            echo "FAIL: retry did not overwrite the requested output file" >&2
+            failures=$((failures + 1))
+        fi
+    fi
+}
+
+transfer_check native-store native 0 'native-body\n\n200' 'native-stderr\n' native
+transfer_check corporate corporate 0 'fallback-body\n\n200' 'fallback-stderr\n' 'native\nfallback'
+transfer_check file-output corporate 0 200 'fallback-stderr\n' 'native\nfallback' file
+transfer_check untrusted reject 60 000 'fallback-certificate-error\n' 'native\nfallback'
+transfer_check non-certificate network 7 'native-output\n\n000' 'native-network-error\n' native
+transfer_check bad-ca-file bad-ca-file 77 000 'native-ca-file-error\n' native
+transfer_check mktemp-failure native 0 'native-body\n\n200' 'native-stderr\n' native
+transfer_check no-fallback corporate 60 000 'native-certificate-error\n' native
+transfer_check term term 143 '' '' native
+transfer_check int int 130 '' '' native
+
+reset=$(
+    export INSTALL_TARGET_DIR="$sandbox/target" CURL_CA_BUNDLE="$sandbox/corp-ca.pem"
+    source "$sandbox/functions.sh"
+    find_windows_default_ca_bundle() { return 1; }
+    PLATFORM=windows
+    configure_curl_options
+    [ -n "$WINDOWS_CA_BUNDLE" ] || exit 1
+    export TEST_CURL_TLS=openssl
+    configure_curl_options
+    [ -z "$WINDOWS_CA_BUNDLE" ] || exit 1
+    export TEST_CURL_TLS=schannel
+    configure_curl_options
+    unset CURL_CA_BUNDLE
+    configure_curl_options
+    printf '%s' "$WINDOWS_CA_BUNDLE"
+) || reset=unexpected-failure
+if [ -z "$reset" ]; then
+    echo 'PASS: reconfiguration clears stale CA fallback after backend/env changes'
+else
+    echo 'FAIL: reconfiguration retained a stale CA fallback' >&2
     failures=$((failures + 1))
 fi
 

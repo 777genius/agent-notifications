@@ -397,6 +397,7 @@ build_windows_ca_bundle() {
 configure_curl_options() {
     CURL_EXTRA_OPTS=()
     CURL_COMPAT_OPTS=()
+    WINDOWS_CA_BUNDLE=""
 
     if ! command -v curl &>/dev/null; then
         return 0
@@ -409,8 +410,8 @@ configure_curl_options() {
     fi
 
     if [ "$PLATFORM" = "windows" ] && curl_uses_schannel; then
-        # Schannel curl ignores CURL_CA_BUNDLE/SSL_CERT_FILE, which corporate
-        # TLS-inspection docs tell users to set. Pass the bundle explicitly.
+        # Schannel ignores these CA env vars. Keep native trust first and use
+        # the selected PEM bundle only after a certificate-verification failure.
         local user_ca_bundle=""
         if [ -n "${CURL_CA_BUNDLE:-}" ] && [ -f "$CURL_CA_BUNDLE" ]; then
             user_ca_bundle="$CURL_CA_BUNDLE"
@@ -419,13 +420,46 @@ configure_curl_options() {
         fi
         if [ -n "$user_ca_bundle" ]; then
             build_windows_ca_bundle "$user_ca_bundle"
-            CURL_EXTRA_OPTS+=(--cacert "$WINDOWS_CA_BUNDLE")
         fi
     fi
 
     if curl_supports_option "--http1.1"; then
         CURL_COMPAT_OPTS+=(--http1.1)
     fi
+}
+
+# Preserve native Windows enterprise roots; --cacert replaces Schannel's store.
+# All installer transfers are GET/HEAD with overwrite-only file outputs, so a
+# certificate failure can safely retry once with the configured PEM bundle.
+installer_curl() {
+    if [ -z "$WINDOWS_CA_BUNDLE" ]; then
+        curl "$@"
+        return $?
+    fi
+
+    (
+        # Buffer the first attempt so --write-out reports only the final result and
+        # a successful retry does not retain the native certificate error.
+        if ! curl_capture=$(mktemp -d "${TMPDIR:-${TEMP:-/tmp}}/install-curl.XXXXXX"); then
+            curl "$@"
+            exit $?
+        fi
+        trap 'rm -rf -- "$curl_capture"' EXIT
+        trap 'exit 130' INT
+        trap 'exit 143' TERM
+        if curl "$@" >"$curl_capture/stdout" 2>"$curl_capture/stderr"; then
+            curl_status=0
+        else
+            curl_status=$?
+        fi
+        if [ "$curl_status" = 60 ]; then
+            curl --cacert "$WINDOWS_CA_BUNDLE" "$@"
+            exit $?
+        fi
+        cat "$curl_capture/stdout"
+        cat "$curl_capture/stderr" >&2
+        exit "$curl_status"
+    )
 }
 
 clean_download_error_output() {
@@ -783,7 +817,7 @@ retry_download() {
         guard_download_paths "$temp_file"
 
         if command -v curl &>/dev/null; then
-            if curl -fsSL "${CURL_EXTRA_OPTS[@]}" --connect-timeout "$CONNECT_TIMEOUT" --max-time "$CURL_TIMEOUT" "$url" -o "$temp_file" 2>/dev/null; then
+            if installer_curl -fsSL "${CURL_EXTRA_OPTS[@]}" --connect-timeout "$CONNECT_TIMEOUT" --max-time "$CURL_TIMEOUT" "$url" -o "$temp_file" 2>/dev/null; then
                 success=true
             fi
         elif command -v wget &>/dev/null; then
@@ -829,7 +863,7 @@ fetch_url_to_stdout() {
     local url="$1"
 
     if command -v curl &>/dev/null; then
-        curl -fsSL "${CURL_EXTRA_OPTS[@]}" --connect-timeout "$CONNECT_TIMEOUT" --max-time "$CURL_TIMEOUT" "$url" 2>/dev/null
+        installer_curl -fsSL "${CURL_EXTRA_OPTS[@]}" --connect-timeout "$CONNECT_TIMEOUT" --max-time "$CURL_TIMEOUT" "$url" 2>/dev/null
         return $?
     fi
 
@@ -987,7 +1021,7 @@ check_github_availability() {
     fi
 
     if command -v curl &> /dev/null; then
-        if ! curl -s "${CURL_EXTRA_OPTS[@]}" --connect-timeout "$CONNECT_TIMEOUT" --max-time 10 -I https://github.com &> /dev/null; then
+        if ! installer_curl -s "${CURL_EXTRA_OPTS[@]}" --connect-timeout "$CONNECT_TIMEOUT" --max-time 10 -I https://github.com &> /dev/null; then
             # Network unavailable - check if we can use existing binary
             if [ -f "$BINARY_PATH" ]; then
                 echo -e "${YELLOW}⚠ Cannot reach GitHub, but existing binary found${NC}"
@@ -1113,7 +1147,7 @@ download_utility() (
         cp "$INSTALL_STAGED_ASSETS/$util_name" "$temp_path" || return 1
         downloaded=true
     elif command -v curl &> /dev/null; then
-        if curl -fsSL "${CURL_EXTRA_OPTS[@]}" --connect-timeout "$CONNECT_TIMEOUT" --max-time "$CURL_TIMEOUT" "$url" -o "$temp_path" 2>/dev/null; then
+        if installer_curl -fsSL "${CURL_EXTRA_OPTS[@]}" --connect-timeout "$CONNECT_TIMEOUT" --max-time "$CURL_TIMEOUT" "$url" -o "$temp_path" 2>/dev/null; then
             downloaded=true
         fi
     elif command -v wget &> /dev/null; then
@@ -1214,7 +1248,7 @@ download_checksums() (
 
     local downloaded=false
     if command -v curl &> /dev/null; then
-        if curl -fsSL "${CURL_EXTRA_OPTS[@]}" --connect-timeout "$CONNECT_TIMEOUT" --max-time "$CURL_TIMEOUT" "$CHECKSUMS_URL" -o "$checksum_temp" 2>/dev/null; then
+        if installer_curl -fsSL "${CURL_EXTRA_OPTS[@]}" --connect-timeout "$CONNECT_TIMEOUT" --max-time "$CURL_TIMEOUT" "$CHECKSUMS_URL" -o "$checksum_temp" 2>/dev/null; then
             downloaded=true
         fi
     elif command -v wget &> /dev/null; then
@@ -1256,7 +1290,7 @@ download_binary() (
     if command -v curl &> /dev/null; then
         # Use a progress bar only for the first attempt; retry failures with clean stderr.
         guard_download_paths "$BINARY_PATH"
-        http_code=$(curl -w "%{http_code}" -fL "${CURL_EXTRA_OPTS[@]}" --connect-timeout "$CONNECT_TIMEOUT" --progress-bar --max-time "$CURL_TIMEOUT" \
+        http_code=$(installer_curl -w "%{http_code}" -fL "${CURL_EXTRA_OPTS[@]}" --connect-timeout "$CONNECT_TIMEOUT" --progress-bar --max-time "$CURL_TIMEOUT" \
             "$url" -o "$BINARY_PATH" 2>"$error_log") || curl_exit_code=$?
 
         if [ "$curl_exit_code" -eq 0 ] && [ -f "$BINARY_PATH" ] && [ "$(get_file_size "$BINARY_PATH")" -gt 100000 ]; then
@@ -1289,7 +1323,7 @@ download_binary() (
 
             curl_exit_code=0
             guard_download_paths "$BINARY_PATH"
-            http_code=$(curl -w "%{http_code}" -fL "${CURL_EXTRA_OPTS[@]}" "${CURL_COMPAT_OPTS[@]}" --connect-timeout "$CONNECT_TIMEOUT" -sS --max-time "$CURL_TIMEOUT" \
+            http_code=$(installer_curl -w "%{http_code}" -fL "${CURL_EXTRA_OPTS[@]}" "${CURL_COMPAT_OPTS[@]}" --connect-timeout "$CONNECT_TIMEOUT" -sS --max-time "$CURL_TIMEOUT" \
                 "$url" -o "$BINARY_PATH" 2>"$error_log") || curl_exit_code=$?
 
             if [ "$curl_exit_code" -eq 0 ] && [ -f "$BINARY_PATH" ] && [ "$(get_file_size "$BINARY_PATH")" -gt 100000 ]; then
@@ -1784,7 +1818,7 @@ download_terminal_notifier_modern() {
 
         guard_install_paths "$TEMP_ZIP"
         if command -v curl &>/dev/null; then
-            if curl -fsSL "${CURL_EXTRA_OPTS[@]}" --connect-timeout "$CONNECT_TIMEOUT" --max-time "$CURL_TIMEOUT" "$MODERN_URL" -o "$TEMP_ZIP" 2>/dev/null; then
+            if installer_curl -fsSL "${CURL_EXTRA_OPTS[@]}" --connect-timeout "$CONNECT_TIMEOUT" --max-time "$CURL_TIMEOUT" "$MODERN_URL" -o "$TEMP_ZIP" 2>/dev/null; then
                 downloaded=true
                 break
             fi
@@ -1886,7 +1920,7 @@ download_terminal_notifier() {
 
         guard_install_paths "$TEMP_ZIP"
         if command -v curl &>/dev/null; then
-            if curl -fsSL "${CURL_EXTRA_OPTS[@]}" --connect-timeout "$CONNECT_TIMEOUT" --max-time "$CURL_TIMEOUT" "$NOTIFIER_URL" -o "$TEMP_ZIP" 2>/dev/null; then
+            if installer_curl -fsSL "${CURL_EXTRA_OPTS[@]}" --connect-timeout "$CONNECT_TIMEOUT" --max-time "$CURL_TIMEOUT" "$NOTIFIER_URL" -o "$TEMP_ZIP" 2>/dev/null; then
                 downloaded=true
                 break
             fi
@@ -2218,7 +2252,7 @@ install_gnome_activate_window_extension() {
         fi
 
         if command -v curl &>/dev/null; then
-            ext_info=$(curl -sf "${CURL_EXTRA_OPTS[@]}" --connect-timeout "$CONNECT_TIMEOUT" --max-time "$CURL_TIMEOUT" \
+            ext_info=$(installer_curl -sf "${CURL_EXTRA_OPTS[@]}" --connect-timeout "$CONNECT_TIMEOUT" --max-time "$CURL_TIMEOUT" \
                 "https://extensions.gnome.org/extension-info/?pk=${EXTENSION_ID}&shell_version=${gnome_version}" 2>/dev/null) && break
         elif command -v wget &>/dev/null; then
             ext_info=$(wget -q --timeout=$WGET_TIMEOUT -O - \
@@ -2259,7 +2293,7 @@ install_gnome_activate_window_extension() {
 
         guard_install_paths "$temp_zip"
         if command -v curl &>/dev/null; then
-            if curl -fsSL "${CURL_EXTRA_OPTS[@]}" --connect-timeout "$CONNECT_TIMEOUT" --max-time "$CURL_TIMEOUT" "https://extensions.gnome.org${download_url}" -o "$temp_zip" 2>/dev/null; then
+            if installer_curl -fsSL "${CURL_EXTRA_OPTS[@]}" --connect-timeout "$CONNECT_TIMEOUT" --max-time "$CURL_TIMEOUT" "https://extensions.gnome.org${download_url}" -o "$temp_zip" 2>/dev/null; then
                 downloaded=true
                 break
             fi
