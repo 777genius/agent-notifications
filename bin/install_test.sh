@@ -252,6 +252,12 @@ else
     TESTS_FAILED=$((TESTS_FAILED + 1))
 fi
 
+if bash "$SCRIPT_DIR/install_curl_options_test.sh"; then
+    TESTS_PASSED=$((TESTS_PASSED + 1))
+else
+    TESTS_FAILED=$((TESTS_FAILED + 1))
+fi
+
 if bash "$SCRIPT_DIR/install_config_preflight_test.sh"; then
     TESTS_PASSED=$((TESTS_PASSED + 1))
 else
