@@ -10,6 +10,35 @@ test_env_setup "$sandbox"
 sed '/^main "\$@"$/d' "$root/install.sh" > "$sandbox/functions.sh"
 printf 'ca\n' > "$sandbox/corp-ca.pem"
 printf 'ssl\n' > "$sandbox/ssl-cert.pem"
+mkdir -p "$sandbox/curl-bin"
+cat > "$sandbox/curl-bin/curl" <<'CURL'
+#!/bin/bash
+case "$1" in
+    --version)
+        case "${TEST_CURL_TLS:-schannel}" in
+            schannel) tls=Schannel ;;
+            openssl) tls=OpenSSL/3.0.8 ;;
+            multissl-*)
+                backend="${CURL_SSL_BACKEND:-${TEST_CURL_TLS#multissl-}}"
+                case "$backend" in
+                    schannel) tls='(OpenSSL/3.0.8) Schannel' ;;
+                    *) tls='OpenSSL/3.0.8 (Schannel)' ;;
+                esac ;;
+            schannel-crlf)
+                printf 'curl 8.10.1 (Windows) libcurl/8.10.1 Schannel\r\n'
+                exit 0 ;;
+            empty) exit 0 ;;
+            *) exit 1 ;;
+        esac
+        printf 'curl 8.10.1 (Windows) libcurl/8.10.1 %s zlib/1.3\n' "$tls"
+        printf 'Release-Date: 2024-09-18\nProtocols: http https\nFeatures: SSL MultiSSL\n'
+        exit "${TEST_CURL_VERSION_STATUS:-0}" ;;
+    --help) printf ' --ssl-no-revoke --http1.1\n' ;;
+    *) echo 'unexpected curl request' >&2; exit 99 ;;
+esac
+CURL
+chmod +x "$sandbox/curl-bin/curl"
+export PATH="$sandbox/curl-bin:$PATH"
 
 failures=0
 check() {
@@ -18,12 +47,12 @@ check() {
     local actual
     actual=$(
         export INSTALL_TARGET_DIR="$sandbox/target"
-        unset CURL_CA_BUNDLE SSL_CERT_FILE
+        unset CURL_CA_BUNDLE SSL_CERT_FILE CURL_SSL_BACKEND TEST_CURL_TLS TEST_CURL_VERSION_STATUS TEST_CURL_MISSING
         for assignment in "$@"; do export "$assignment"; done
         source "$sandbox/functions.sh"
-        curl() { printf ' --ssl-no-revoke --http1.1\n'; }
         # Hermetic on real Git Bash, where Git's public CA bundle exists.
         find_windows_default_ca_bundle() { return 1; }
+        if [ "${TEST_CURL_MISSING:-0}" = 1 ]; then PATH="$sandbox/no-tools"; fi
         PLATFORM="$platform"
         configure_curl_options
         printf '%s' "${CURL_EXTRA_OPTS[*]}"
@@ -48,6 +77,28 @@ check "windows ignores a missing CURL_CA_BUNDLE file" windows \
     "--ssl-no-revoke --cacert $sandbox/ssl-cert.pem" \
     "CURL_CA_BUNDLE=$sandbox/missing.pem" "SSL_CERT_FILE=$sandbox/ssl-cert.pem"
 check "non-windows leaves CA env to curl" linux "" "CURL_CA_BUNDLE=$sandbox/corp-ca.pem"
+check "windows OpenSSL leaves CURL_CA_BUNDLE to curl" windows "--ssl-no-revoke" \
+    "TEST_CURL_TLS=openssl" "CURL_CA_BUNDLE=$sandbox/corp-ca.pem"
+check "windows OpenSSL leaves SSL_CERT_FILE to curl" windows "--ssl-no-revoke" \
+    "TEST_CURL_TLS=openssl" "SSL_CERT_FILE=$sandbox/ssl-cert.pem"
+check "single-backend OpenSSL ignores a Schannel environment request" windows "--ssl-no-revoke" \
+    "TEST_CURL_TLS=openssl" "CURL_SSL_BACKEND=schannel" "CURL_CA_BUNDLE=$sandbox/corp-ca.pem"
+check "MultiSSL ignores inactive Schannel" windows "--ssl-no-revoke" \
+    "TEST_CURL_TLS=multissl-openssl" "CURL_CA_BUNDLE=$sandbox/corp-ca.pem"
+check "MultiSSL uses active Schannel" windows "--ssl-no-revoke --cacert $sandbox/corp-ca.pem" \
+    "TEST_CURL_TLS=multissl-schannel" "CURL_CA_BUNDLE=$sandbox/corp-ca.pem"
+check "MultiSSL uses Schannel selected by CURL_SSL_BACKEND" windows "--ssl-no-revoke --cacert $sandbox/corp-ca.pem" \
+    "TEST_CURL_TLS=multissl-openssl" "CURL_SSL_BACKEND=schannel" "CURL_CA_BUNDLE=$sandbox/corp-ca.pem"
+check "MultiSSL leaves CA env alone when CURL_SSL_BACKEND selects OpenSSL" windows "--ssl-no-revoke" \
+    "TEST_CURL_TLS=multissl-schannel" "CURL_SSL_BACKEND=openssl" "CURL_CA_BUNDLE=$sandbox/corp-ca.pem"
+check "windows recognizes active Schannel at the end of a CRLF line" windows "--ssl-no-revoke --cacert $sandbox/corp-ca.pem" \
+    "TEST_CURL_TLS=schannel-crlf" "CURL_CA_BUNDLE=$sandbox/corp-ca.pem"
+check "windows does not change CA trust when curl version fails" windows "--ssl-no-revoke" \
+    "TEST_CURL_VERSION_STATUS=2" "CURL_CA_BUNDLE=$sandbox/corp-ca.pem"
+check "windows does not change CA trust when curl version is empty" windows "--ssl-no-revoke" \
+    "TEST_CURL_TLS=empty" "CURL_CA_BUNDLE=$sandbox/corp-ca.pem"
+check "missing curl leaves options empty" windows "" \
+    "TEST_CURL_MISSING=1" "CURL_CA_BUNDLE=$sandbox/corp-ca.pem"
 
 printf 'public\n' > "$sandbox/public-ca.crt"
 # A child shell, so the installer's EXIT trap runs as it does in production.
@@ -55,7 +106,6 @@ merged=$(SANDBOX="$sandbox" INSTALL_TARGET_DIR="$sandbox/target" TMPDIR="$sandbo
     CURL_CA_BUNDLE="$sandbox/corp-ca.pem" "$BASH" -c '
     unset SSL_CERT_FILE
     source "$SANDBOX/functions.sh"
-    curl() { printf " --ssl-no-revoke --http1.1\n"; }
     find_windows_default_ca_bundle() { printf "%s" "$SANDBOX/public-ca.crt"; }
     PLATFORM=windows
     configure_curl_options
@@ -85,7 +135,6 @@ SANDBOX="$sandbox" INSTALL_TARGET_DIR="$sandbox/target" TMPDIR="$staged" \
     "$BASH" -c '
     unset SSL_CERT_FILE
     source "$SANDBOX/functions.sh"
-    curl() { printf " --ssl-no-revoke --http1.1\n"; }
     find_windows_default_ca_bundle() { printf "%s" "$SANDBOX/public-ca.crt"; }
     install_config_preflight() { return 2; }
     detect_platform() { PLATFORM=windows; configure_curl_options; }
@@ -107,7 +156,6 @@ same=$(
     export INSTALL_TARGET_DIR="$sandbox/target"
     export CURL_CA_BUNDLE="$sandbox/public-ca.crt"
     source "$sandbox/functions.sh"
-    curl() { printf ' --ssl-no-revoke --http1.1\n'; }
     find_windows_default_ca_bundle() { printf '%s' "$sandbox/public-ca.crt"; }
     PLATFORM=windows
     configure_curl_options

@@ -345,6 +345,15 @@ curl_supports_option() {
     curl --help all 2>/dev/null | grep -q -- "$option"
 }
 
+curl_uses_schannel() {
+    local version
+    version=$(curl --version 2>/dev/null) || return 1
+    # curl reports the active TLS backend on its first line, honoring
+    # CURL_SSL_BACKEND. MultiSSL lists inactive backends in parentheses.
+    printf '%s\n' "${version%%$'\n'*}" | sed 's/([^)]*)//g' |
+        grep -qE '(^|[[:space:]])Schannel([[:space:]]|$)'
+}
+
 find_windows_default_ca_bundle() {
     local candidate
     for candidate in \
@@ -399,7 +408,7 @@ configure_curl_options() {
         CURL_EXTRA_OPTS+=(--ssl-no-revoke)
     fi
 
-    if [ "$PLATFORM" = "windows" ]; then
+    if [ "$PLATFORM" = "windows" ] && curl_uses_schannel; then
         # Schannel curl ignores CURL_CA_BUNDLE/SSL_CERT_FILE, which corporate
         # TLS-inspection docs tell users to set. Pass the bundle explicitly.
         local user_ca_bundle=""
