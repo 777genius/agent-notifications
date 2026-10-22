@@ -247,6 +247,16 @@ is_wsl_environment() {
         return 0
     fi
 
+    # PowerShell can resolve bash to WSL bash.exe without WSL_* in the env.
+    # These markers exist only inside WSL; a bare /mnt/c is not enough since
+    # dual-boot Linux often mounts the Windows drive there.
+    local probe_root="${CLAUDE_NOTIFICATIONS_WSL_PROBE_ROOT:-}"
+    if [ -e "$probe_root/proc/sys/fs/binfmt_misc/WSLInterop" ] \
+        || [ -e "$probe_root/proc/sys/fs/binfmt_misc/WSLInterop-late" ] \
+        || [ -d "$probe_root/run/WSL" ]; then
+        return 0
+    fi
+
     return 1
 }
 
