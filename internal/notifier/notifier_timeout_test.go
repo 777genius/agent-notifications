@@ -104,19 +104,27 @@ func TestNotifierTimeoutHelper(t *testing.T) {
 	}
 	switch mode {
 	case "success", "failure":
-		fmt.Fprintln(os.Stdout, "helper stdout")
-		fmt.Fprintln(os.Stderr, "helper stderr")
+		if _, err := fmt.Fprintln(os.Stdout, "helper stdout"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := fmt.Fprintln(os.Stderr, "helper stderr"); err != nil {
+			t.Fatal(err)
+		}
 		if mode == "failure" {
 			os.Exit(7)
 		}
 		os.Exit(0)
 	case "block":
-		fmt.Fprintln(os.Stdout, "helper started")
+		if _, err := fmt.Fprintln(os.Stdout, "helper started"); err != nil {
+			t.Fatal(err)
+		}
 	case "hold-pipes":
 		if err := os.WriteFile(os.Getenv(notifierTimeoutHelperPID), []byte(fmt.Sprint(os.Getpid())), 0600); err != nil {
 			t.Fatal(err)
 		}
-		fmt.Fprintln(os.Stdout, "child started")
+		if _, err := fmt.Fprintln(os.Stdout, "child started"); err != nil {
+			t.Fatal(err)
+		}
 	case "child-and-block", "child-and-exit":
 		child := exec.Command(os.Args[0], "-test.run=^TestNotifierTimeoutHelper$")
 		child.Env = append(os.Environ(), notifierTimeoutHelperMode+"=hold-pipes")
