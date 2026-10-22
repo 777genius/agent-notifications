@@ -715,6 +715,12 @@ func (n *Notifier) playSoundDetached(sound string) {
 
 	cmd := execCommand(exe, args...)
 	platform.SetDetachedProcAttr(cmd)
+	// Hand the child the debug log file as stderr so its playback outcome is
+	// not lost to /dev/null. It must be an *os.File: any other writer makes
+	// exec copy through a pipe that dies with this short-lived parent.
+	if logFile := logging.File(); logFile != nil {
+		cmd.Stderr = logFile
+	}
 
 	if err := cmd.Start(); err != nil {
 		logging.Warn("Failed to spawn detached sound process, falling back to inline: %v", err)

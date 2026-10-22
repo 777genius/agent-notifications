@@ -48,6 +48,14 @@ func NewLogger(path string) (*Logger, error) {
 	}, nil
 }
 
+// NewLoggerFromFile creates a logger that writes to an already open file,
+// such as an inherited stderr that the parent wired into its debug log.
+func NewLoggerFromFile(f *os.File) *Logger {
+	return &Logger{
+		file: f,
+	}
+}
+
 // SetPrefix sets a prefix for all log messages
 func (l *Logger) SetPrefix(prefix string) {
 	l.mu.Lock()
@@ -172,6 +180,15 @@ func Error(format string, args ...interface{}) {
 	if defaultLogger != nil {
 		defaultLogger.Error(format, args...)
 	}
+}
+
+// File returns the open file of the default logger, or nil if the logger
+// has not been initialized. Child processes can inherit it as stderr.
+func File() *os.File {
+	if defaultLogger != nil {
+		return defaultLogger.file
+	}
+	return nil
 }
 
 // SetPrefix sets a prefix for all log messages using the default logger

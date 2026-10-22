@@ -741,10 +741,15 @@ func getPluginRoot() string {
 
 // runPlaySound plays a sound file and exits. Designed to be spawned as a detached
 // child process so the parent hook process does not wait for audio to finish.
+// The parent wires stderr into notification-debug.log, so diagnostics are
+// written to stderr in the debug log format.
 // Usage: play-sound <path> [--volume <0.0-1.0>] [--device <name>]
 func runPlaySound(args []string) {
+	logger := logging.NewLoggerFromFile(os.Stderr)
+	logger.SetPrefix(fmt.Sprintf("play-sound pid=%d", os.Getpid()))
+
 	if len(args) < 1 {
-		fmt.Fprintf(os.Stderr, "play-sound: sound file path required\n")
+		logger.Error("sound file path required")
 		os.Exit(1)
 	}
 
@@ -770,17 +775,20 @@ func runPlaySound(args []string) {
 		}
 	}
 
+	logger.Debug("starting: sound=%s volume=%.2f device=%q", soundPath, volume, deviceName)
+
 	player, err := audio.NewPlayer(deviceName, volume)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "play-sound: failed to init player: %v\n", err)
+		logger.Error("failed to init player: %v", err)
 		os.Exit(1)
 	}
 	defer func() { _ = player.Close() }()
 
 	if err := player.Play(soundPath); err != nil {
-		fmt.Fprintf(os.Stderr, "play-sound: failed to play %s: %v\n", soundPath, err)
+		logger.Error("failed to play %s: %v", soundPath, err)
 		os.Exit(1)
 	}
+	logger.Debug("finished: sound=%s", soundPath)
 }
 
 // runFocusWindows handles a click on a Windows toast notification. Windows
