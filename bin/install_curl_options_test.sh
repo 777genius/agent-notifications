@@ -22,6 +22,8 @@ check() {
         for assignment in "$@"; do export "$assignment"; done
         source "$sandbox/functions.sh"
         curl() { printf ' --ssl-no-revoke --http1.1\n'; }
+        # Hermetic on real Git Bash, where Git's public CA bundle exists.
+        find_windows_default_ca_bundle() { return 1; }
         PLATFORM="$platform"
         configure_curl_options
         printf '%s' "${CURL_EXTRA_OPTS[*]}"
