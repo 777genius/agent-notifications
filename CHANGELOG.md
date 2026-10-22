@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.49.6] - 2026-10-22
+
+### Added
+- Full Qoder hook integration in the `agent-notifications-qoder` native package: Stop completion, question and permission-request notifications, default-on TeammateIdle and PreToolUse (ExitPlanMode/AskUserQuestion) hooks, opt-in SubagentStop, all with 40-second timeouts and hook names `agent-notifications-qoder-<lowercased event>` ([#498](https://github.com/777genius/agent-notifications/pull/498)).
+- Qoder Stop notifications and a source-buildable native package compatible with UAP 0.1.86, keeping quiet fail-open hook behavior ([commit](https://github.com/777genius/agent-notifications/commit/735562b2)).
+- Qoder documented in README and docs/QODER.md and listed in the landing agent matrix across all locales, with full landing browser E2E ([#498](https://github.com/777genius/agent-notifications/pull/498)).
+
+### Changed
+- The managed MCP server key is renamed from `agent-notify` to `agent-notifications`. Managed configurations migrate the legacy `agent_notifications` key on update; portable packages declare the canonical key, dual-accept the legacy `agent-notify` key at read and verification points, and reject a package that declares both ([#498](https://github.com/777genius/agent-notifications/pull/498)).
+- Repository root cleanup: frozen OpenCode contracts organized under docs/opencode and disposable root artifacts removed ([#497](https://github.com/777genius/agent-notifications/pull/497)).
+
+### Fixed
+- Distinct Codex and Qoder prompts, permission requests and subagent completions now deliver while another hook holds the session content lock; Claude session locking is unchanged ([#498](https://github.com/777genius/agent-notifications/pull/498)).
+- Cursor installation qualification covers the additional Ubuntu kernel with physical source-contract evidence ([#497](https://github.com/777genius/agent-notifications/pull/497)).
+
+### Platform notes
+- This release uses the basic five-platform artifact profile with separate downloaded macOS and Codex checks. It does not claim visible desktop, full native, eleven-cell OpenCode, cold-start, physical Intel or live-provider qualification.
+- The Qoder wire carries no turn or subagent identity, so identical re-prompts or identical subagent completions within the dedup window collapse to a single notification. Teammate-idle team-completion alerts require a stopped lead; click-to-focus capture is Claude-only and the knob is inert for Qoder.
+
 ## [1.49.5] - 2026-10-17
 
 ### Fixed
