@@ -56,7 +56,7 @@ class WindowsShards(unittest.TestCase):
         block = run_block(job('test'), 'Require atomic Go coverage')
         path = self.root / 'coverage.txt'
         self.assertNotEqual(self.run_shell(block), 0)
-        for text in ['', 'mode: set\n']:
+        for text in ['', 'mode: set\n', 'mode: atomic\n']:
             path.write_text(text)
             self.assertNotEqual(self.run_shell(block), 0)
         path.write_text('mode: atomic\nfixture.go:1.1,2.1 1 1\n')

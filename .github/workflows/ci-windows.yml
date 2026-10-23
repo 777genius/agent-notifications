@@ -362,6 +362,7 @@ jobs:
           set -euo pipefail
           test -s coverage.txt
           test "$(head -n 1 coverage.txt)" = 'mode: atomic'
+          test "$(awk 'NR > 1 && NF { print 1; exit }' coverage.txt)" = 1
 
   release-equivalent:
     name: Release-equivalent native proof (Windows)
