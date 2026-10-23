@@ -244,7 +244,7 @@ jobs:
     name: Native input evidence (macOS)
     needs: [scope, test, swift-test]
     if: ${{ !cancelled() && needs.scope.outputs.mode == 'full' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || vars.CI_LINUX_RUNNER || 'ubuntu-latest' }}
     permissions:
       contents: read
     steps:

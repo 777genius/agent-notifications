@@ -1732,13 +1732,13 @@ jobs:
     needs: scope
     if: ${{ !cancelled() && github.event_name != 'workflow_dispatch' && needs.scope.outputs.mode != 'release-tools' && needs.scope.outputs.mode != 'release-equivalent' }}
     name: Ubuntu Go tests (${{ matrix.go }}, ${{ matrix.shard }})
-    runs-on: ${{ matrix.go == '1.26' && 'ubuntu-24.04' || github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || vars.CI_LINUX_RUNNER || 'ubuntu-24.04' }}
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || vars.CI_LINUX_RUNNER || 'ubuntu-24.04' }}
     timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
         go: ['1.25', '1.26']
-        shard: [cmd, packages, cursorevent]
+        shard: [cmd-setup, cmd-other, packages, cursorevent]
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
@@ -1807,13 +1807,12 @@ jobs:
     needs: scope
     if: ${{ !cancelled() && github.event_name != 'workflow_dispatch' && needs.scope.outputs.mode != 'release-tools' && needs.scope.outputs.mode != 'release-equivalent' }}
     name: Ubuntu installers and native E2E (${{ matrix.go }})
-    runs-on: ${{ matrix.go == '1.26' && 'ubuntu-24.04' || github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || vars.CI_LINUX_RUNNER || 'ubuntu-24.04' }}
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || vars.CI_LINUX_RUNNER || 'ubuntu-24.04' }}
     timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
         go: ['1.25', '1.26']
-    # Go 1.26 retains the frozen Cursor physical Ubuntu/kernel qualification.
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
@@ -1834,72 +1833,6 @@ jobs:
 
       - name: Verify dependencies
         run: go mod verify
-
-      - name: Require qualified Cursor installed physical contracts
-        if: matrix.go == '1.26'
-        env:
-          GOWORK: 'off'
-          GOTOOLCHAIN: local
-        run: |
-          set -euo pipefail
-          umask 077
-          evidence=$(mktemp -d "$RUNNER_TEMP/TEST-cursor-physical-XXXXXX")
-          printf 'CURSOR_PHYSICAL_EVIDENCE=%s\n' "$evidence" >> "$GITHUB_ENV"
-          mkdir "$evidence/tmp"
-          export TMPDIR="$evidence/tmp"
-          {
-            uname -r
-            cat /etc/os-release
-            stat -f -c '%T' / "$PWD" "$TMPDIR"
-          } | tee "$evidence/host.log"
-          go test -count=1 -timeout=3m -v \
-            github.com/777genius/plugin-kit-ai/install/integrationctl/adapters/directoryidentity \
-            github.com/777genius/plugin-kit-ai/install/integrationctl/adapters/dirswap \
-            2>&1 | tee "$evidence/native.log"
-          for marker in \
-            'ACTUAL_IOCTL=SUCCESS; fd_tuple=SUPPORTED;' \
-            'QUALIFICATION=SUPPORTED; same-byte replacement denied' \
-            'QUALIFICATION=SUPPORTED; substituted ancestor denied with unchanged child' \
-            'FRESH_PROCESS_REVALIDATED'; do
-            grep -F "$marker" "$evidence/native.log"
-          done
-          go test -count=1 -timeout=3m -v ./internal/copilotvscodeinstall \
-            -run '^TestCursor' 2>&1 | tee "$evidence/cursor.log"
-          if grep -F 'NOT_RUN positive' "$evidence/cursor.log"; then
-            exit 1
-          fi
-          grep -F 'ACTUAL_TEST_PHYSICAL_HOST: tuple=linux/amd64' "$evidence/cursor.log"
-          grep -F 'P1_ORIGINAL_TOKEN_REVALIDATED=true; PUBLIC_SELECTED_ACK_PROJECTION_DATA_ADMISSION=true' "$evidence/cursor.log"
-          grep -F 'SIBLING_R2_SELECTED_R1_POSITIVE=true' "$evidence/cursor.log"
-          go test -count=1 -timeout=3m -v ./internal/agentnotify/portablesetup \
-            -run '^TestMaterializerSelectedCursorPublicProjectionAndAcknowledgement$' 2>&1 | tee "$evidence/materializer.log"
-          if grep -F 'NOT_RUN positive materializer' "$evidence/materializer.log"; then
-            exit 1
-          fi
-          grep -F 'QUALIFIED_TEST_MATERIALIZER_SELECTED_PROJECTION_ACK_DATA_ORIGINAL_TOKEN=true' "$evidence/materializer.log"
-          grep -F -- '--- PASS: TestMaterializerSelectedCursorPublicProjectionAndAcknowledgement ' "$evidence/materializer.log"
-          go test -count=1 -timeout=3m -v ./cmd/claude-notifications \
-            -run '^(TestCursorCallerAcknowledgedTokenAndMatchingPendingRetry|TestCursorCallerFirstHandoffMissingToken|TestCursorCallerMissingPackageRefusalAndOwnedCleanup|TestCursorConfirmationReachesWizardAdmissionWithFrozenOptOut)$' 2>&1 | tee "$evidence/caller.log"
-          if grep -F 'NOT_RUN positive caller/P1/resume' "$evidence/caller.log"; then
-            exit 1
-          fi
-          grep -F 'QUALIFIED_TEST_CALLER_ORIGINAL_TOKEN_AND_MATCHING_RESUME=true' "$evidence/caller.log"
-          grep -F 'QUALIFIED_TEST_FIRST_HANDOFF=true' "$evidence/caller.log"
-          grep -F 'QUALIFIED_TEST_PENDING_A_TO_B=true' "$evidence/caller.log"
-          grep -F -- '--- PASS: TestCursorCallerFirstHandoffMissingToken ' "$evidence/caller.log"
-          grep -F -- '--- PASS: TestCursorCallerMissingPackageRefusalAndOwnedCleanup ' "$evidence/caller.log"
-          grep -F -- '--- PASS: TestCursorConfirmationReachesWizardAdmissionWithFrozenOptOut ' "$evidence/caller.log"
-          go test -count=1 -timeout=3m -v ./internal/agentnotify/setupwizard \
-            -run '^TestPackageCompositionCleanupPreservesSharedAndPendingSource$' 2>&1 | tee "$evidence/caller-package.log"
-          grep -F -- '--- PASS: TestPackageCompositionCleanupPreservesSharedAndPendingSource ' "$evidence/caller-package.log"
-
-      - name: Preserve Cursor physical qualification
-        if: always() && matrix.go == '1.26'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: cursor-installed-physical-go-${{ matrix.go }}
-          path: ${{ env.CURSOR_PHYSICAL_EVIDENCE }}/*.log
-          if-no-files-found: warn
 
       - name: Build binary
         run: go build -ldflags="-s -w" -trimpath -o bin/claude-notifications ./cmd/claude-notifications
@@ -1958,8 +1891,96 @@ jobs:
         timeout-minutes: 5
         continue-on-error: true
 
+
+  cursor-physical:
+    needs: scope
+    if: ${{ !cancelled() && github.event_name != 'workflow_dispatch' && needs.scope.outputs.mode != 'release-tools' && needs.scope.outputs.mode != 'release-equivalent' }}
+    name: Cursor physical Ubuntu qualification (1.26)
+    # The frozen positive materializer requires the qualified Ubuntu/kernel tuple.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.26'
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      - name: Download dependencies
+        run: go mod download
+      - name: Verify dependencies
+        run: go mod verify
+
+      - name: Require qualified Cursor installed physical contracts
+        env:
+          GOWORK: 'off'
+          GOTOOLCHAIN: local
+        run: |
+          set -euo pipefail
+          umask 077
+          evidence=$(mktemp -d "$RUNNER_TEMP/TEST-cursor-physical-XXXXXX")
+          printf 'CURSOR_PHYSICAL_EVIDENCE=%s\n' "$evidence" >> "$GITHUB_ENV"
+          mkdir "$evidence/tmp"
+          export TMPDIR="$evidence/tmp"
+          {
+            uname -r
+            cat /etc/os-release
+            stat -f -c '%T' / "$PWD" "$TMPDIR"
+          } | tee "$evidence/host.log"
+          go test -count=1 -timeout=3m -v \
+            github.com/777genius/plugin-kit-ai/install/integrationctl/adapters/directoryidentity \
+            github.com/777genius/plugin-kit-ai/install/integrationctl/adapters/dirswap \
+            2>&1 | tee "$evidence/native.log"
+          for marker in \
+            'ACTUAL_IOCTL=SUCCESS; fd_tuple=SUPPORTED;' \
+            'QUALIFICATION=SUPPORTED; same-byte replacement denied' \
+            'QUALIFICATION=SUPPORTED; substituted ancestor denied with unchanged child' \
+            'FRESH_PROCESS_REVALIDATED'; do
+            grep -F "$marker" "$evidence/native.log"
+          done
+          go test -count=1 -timeout=3m -v ./internal/copilotvscodeinstall \
+            -run '^TestCursor' 2>&1 | tee "$evidence/cursor.log"
+          if grep -F 'NOT_RUN positive' "$evidence/cursor.log"; then
+            exit 1
+          fi
+          grep -F 'ACTUAL_TEST_PHYSICAL_HOST: tuple=linux/amd64' "$evidence/cursor.log"
+          grep -F 'P1_ORIGINAL_TOKEN_REVALIDATED=true; PUBLIC_SELECTED_ACK_PROJECTION_DATA_ADMISSION=true' "$evidence/cursor.log"
+          grep -F 'SIBLING_R2_SELECTED_R1_POSITIVE=true' "$evidence/cursor.log"
+          go test -count=1 -timeout=3m -v ./internal/agentnotify/portablesetup \
+            -run '^TestMaterializerSelectedCursorPublicProjectionAndAcknowledgement$' 2>&1 | tee "$evidence/materializer.log"
+          if grep -F 'NOT_RUN positive materializer' "$evidence/materializer.log"; then
+            exit 1
+          fi
+          grep -F 'QUALIFIED_TEST_MATERIALIZER_SELECTED_PROJECTION_ACK_DATA_ORIGINAL_TOKEN=true' "$evidence/materializer.log"
+          grep -F -- '--- PASS: TestMaterializerSelectedCursorPublicProjectionAndAcknowledgement ' "$evidence/materializer.log"
+          go test -count=1 -timeout=3m -v ./cmd/claude-notifications \
+            -run '^(TestCursorCallerAcknowledgedTokenAndMatchingPendingRetry|TestCursorCallerFirstHandoffMissingToken|TestCursorCallerMissingPackageRefusalAndOwnedCleanup|TestCursorConfirmationReachesWizardAdmissionWithFrozenOptOut)$' 2>&1 | tee "$evidence/caller.log"
+          if grep -F 'NOT_RUN positive caller/P1/resume' "$evidence/caller.log"; then
+            exit 1
+          fi
+          grep -F 'QUALIFIED_TEST_CALLER_ORIGINAL_TOKEN_AND_MATCHING_RESUME=true' "$evidence/caller.log"
+          grep -F 'QUALIFIED_TEST_FIRST_HANDOFF=true' "$evidence/caller.log"
+          grep -F 'QUALIFIED_TEST_PENDING_A_TO_B=true' "$evidence/caller.log"
+          grep -F -- '--- PASS: TestCursorCallerFirstHandoffMissingToken ' "$evidence/caller.log"
+          grep -F -- '--- PASS: TestCursorCallerMissingPackageRefusalAndOwnedCleanup ' "$evidence/caller.log"
+          grep -F -- '--- PASS: TestCursorConfirmationReachesWizardAdmissionWithFrozenOptOut ' "$evidence/caller.log"
+          go test -count=1 -timeout=3m -v ./internal/agentnotify/setupwizard \
+            -run '^TestPackageCompositionCleanupPreservesSharedAndPendingSource$' 2>&1 | tee "$evidence/caller-package.log"
+          grep -F -- '--- PASS: TestPackageCompositionCleanupPreservesSharedAndPendingSource ' "$evidence/caller-package.log"
+
+      - name: Preserve Cursor physical qualification
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cursor-installed-physical-go-1.26
+          path: ${{ env.CURSOR_PHYSICAL_EVIDENCE }}/*.log
+          if-no-files-found: warn
+
+
   test:
-    needs: [scope, go-tests, installer-native]
+    needs: [scope, go-tests, installer-native, cursor-physical]
     if: ${{ always() && github.event_name != 'workflow_dispatch' && needs.scope.outputs.mode != 'release-tools' && needs.scope.outputs.mode != 'release-equivalent' }}
     # Keep the established required-check names while retries target only failed shards.
     name: Test on Ubuntu (${{ matrix.go }})
@@ -1977,11 +1998,13 @@ jobs:
           SCOPE_RESULT: ${{ needs.scope.result }}
           GO_TESTS_RESULT: ${{ needs.go-tests.result }}
           INSTALLER_NATIVE_RESULT: ${{ needs.installer-native.result }}
+          CURSOR_PHYSICAL_RESULT: ${{ needs.cursor-physical.result }}
         run: |
           set -euo pipefail
           test "$SCOPE_RESULT" = success
           test "$GO_TESTS_RESULT" = success
           test "$INSTALLER_NATIVE_RESULT" = success
+          test "$CURSOR_PHYSICAL_RESULT" = success
 
       - name: Checkout coverage source
         uses: actions/checkout@v7
@@ -1995,11 +2018,7 @@ jobs:
       - name: Require and combine complete atomic coverage
         run: |
           set -euo pipefail
-          for shard in cmd packages cursorevent; do
-            test -s "coverage-$shard.txt"
-            test "$(head -n 1 "coverage-$shard.txt")" = 'mode: atomic'
-          done
-          { head -n 1 coverage-cmd.txt; tail -n +2 coverage-cmd.txt; tail -n +2 coverage-packages.txt; tail -n +2 coverage-cursorevent.txt; } > coverage.txt
+          python3 -B tools/ci_ubuntu_coverage.py
 
       - name: Upload coverage to Codecov
         if: matrix.go == '1.26'
@@ -2011,7 +2030,7 @@ jobs:
 
   native-evidence:
     name: Native input evidence (Ubuntu)
-    needs: [scope, go-tests, installer-native, opencode-plugin, lint, test]
+    needs: [scope, go-tests, installer-native, cursor-physical, opencode-plugin, lint, test]
     if: ${{ !cancelled() && github.event_name != 'workflow_dispatch' && needs.scope.outputs.mode == 'full' }}
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || vars.CI_LINUX_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 5
@@ -2026,7 +2045,7 @@ jobs:
         env:
           CI_MODE: ${{ needs.scope.outputs.mode }}
           NEEDS_JSON: ${{ toJSON(needs) }}
-        run: python3 -B tools/ci_native_evidence.py receipt --workflow ci-ubuntu.yml --output native-input-receipt.json --jobs go-tests installer-native opencode-plugin lint test
+        run: python3 -B tools/ci_native_evidence.py receipt --workflow ci-ubuntu.yml --output native-input-receipt.json --jobs go-tests installer-native cursor-physical opencode-plugin lint test
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: native-inputs-ci-ubuntu.yml-${{ github.run_id }}-${{ github.run_attempt }}

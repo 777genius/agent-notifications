@@ -3,11 +3,11 @@
 set -euo pipefail
 
 if [ "$#" -ne 1 ]; then
-  echo 'usage: ci-ubuntu-go-shard.sh cmd|packages|cursorevent' >&2
+  echo 'usage: ci-ubuntu-go-shard.sh cmd-setup|cmd-other|packages|cursorevent' >&2
   exit 2
 fi
 shard=$1
-case "$shard" in cmd|packages|cursorevent) ;; *) echo "unknown Go shard: $shard" >&2; exit 2 ;; esac
+case "$shard" in cmd-setup|cmd-other|packages|cursorevent) ;; *) echo "unknown Go shard: $shard" >&2; exit 2 ;; esac
 
 package_list=$(go list ./...)
 selected=()
@@ -18,7 +18,7 @@ while IFS= read -r package; do
     '') echo 'empty Go package list entry' >&2; exit 1 ;;
     *) owner=packages ;;
   esac
-  if [ "$owner" = "$shard" ]; then
+  if [ "$owner" = "$shard" ] || { [ "$owner" = cmd ] && [[ "$shard" = cmd-* ]]; }; then
     selected+=("$package")
   fi
 done <<< "$package_list"
@@ -27,4 +27,13 @@ if [ "${#selected[@]}" -eq 0 ]; then
   exit 1
 fi
 
-go test -timeout 20m -v -race -coverprofile="coverage-$shard.txt" -covermode=atomic "${selected[@]}"
+# Complementary top-level filters keep future tests, examples and fuzz seeds in
+# cmd-other unless explicitly owned by the setup group. Never filter subtests.
+filters=()
+setup_pattern='^Test(SetupWizard|SetupCodex)'
+case "$shard" in
+  cmd-setup) filters=(-run "$setup_pattern") ;;
+  cmd-other) filters=(-skip "$setup_pattern") ;;
+esac
+
+go test -timeout 20m -v -race -coverprofile="coverage-$shard.txt" -covermode=atomic ${filters[@]+"${filters[@]}"} "${selected[@]}"
