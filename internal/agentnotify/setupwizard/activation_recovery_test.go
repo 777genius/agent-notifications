@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -19,6 +18,7 @@ import (
 	"github.com/777genius/agent-notifications/internal/agentnotify/portablesetup"
 	"github.com/777genius/agent-notifications/internal/config"
 	"github.com/777genius/agent-notifications/internal/installruntime"
+	"github.com/777genius/agent-notifications/internal/testenv"
 	processadapter "github.com/777genius/plugin-kit-ai/install/integrationctl/adapters/process"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/domain"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/ports"
@@ -332,8 +332,6 @@ func TestMigrationActivationRecoveryPreservesSourceValidation(t *testing.T) {
 
 func buildRecoveryCodexCLI(t *testing.T) string {
 	t.Helper()
-	root := t.TempDir()
-	source := filepath.Join(root, "TEST-cli.go")
 	code := `package main
 import ("encoding/json"; "os"; "path/filepath"; "strings")
 func main() {
@@ -347,14 +345,5 @@ func main() {
  }
  json.NewEncoder(os.Stdout).Encode(map[string]any{})
 }`
-	if err := os.WriteFile(source, []byte(code), 0600); err != nil {
-		t.Fatal(err)
-	}
-	binary := filepath.Join(root, "TEST-codex")
-	command := exec.Command("go", "build", "-o", binary, source)
-	command.Env = append(os.Environ(), "GOTOOLCHAIN=local")
-	if body, err := command.CombinedOutput(); err != nil {
-		t.Fatalf("build finite CLI: %s %v", body, err)
-	}
-	return binary
+	return testenv.GoFixture(t, code)
 }

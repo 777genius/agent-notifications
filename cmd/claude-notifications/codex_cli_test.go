@@ -37,7 +37,7 @@ func buildCLIBinary(t *testing.T) string {
 		}
 		cliBinaryPath = filepath.Join(dir, name)
 		cmd := exec.Command("go", "build", "-p", "2", "-buildvcs=false", "-o", cliBinaryPath, ".")
-		cmd.Env = testenv.Build(t, filepath.Join(dir, "build-home"))
+		cmd.Env = testenv.FixtureBuild(t, filepath.Join(dir, "build-home"))
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			cliBinaryErr = err

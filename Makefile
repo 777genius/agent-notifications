@@ -2,7 +2,7 @@
 	dev-local-install dev-local-update dev-local-bootstrap dev-local-status dev-local-reset \
 	dev-real-local dev-real-remote dev-real-toggle dev-real-status \
 	e2e-status e2e-smoke e2e-smoke-installed e2e-manual e2e-manual-installed \
-	linux-focus-debug preview-installer release-preflight release-tools-check release-workflow-check codex-release-smoke release-prepare release-wait release-verify
+	linux-focus-debug preview-installer release-preflight release-tools-check release-workflow-check codex-release-smoke release-prepare release-wait release-verify release-canary
 
 # Binary names
 BINARY=claude-notifications
@@ -92,6 +92,8 @@ release-tools-check: release-workflow-check ## Typecheck and test release toolin
 	@python3 -B tools/ci_release_scope_test.py
 	@python3 -B tools/ci_native_evidence_test.py
 	@python3 -B tools/ci_ubuntu_shards_test.py
+	@python3 -B tools/ci_windows_shards_test.py
+	@node --test scripts/release-canary.test.mts
 	@bash scripts/codex-release-gate_test.sh
 	@python3 scripts/stage-released-loader-test.py
 
@@ -112,6 +114,10 @@ release-wait: ## Join C/P CI and signing concurrently (RELEASE_WAIT_INPUTS JSON;
 release-verify: ## Verify one public release/Latest/channels/Pages/loader (no installation)
 	@test -n "$(SEALED_DIR)" && test -n "$(MAIN_SHA)" && test -n "$(PUBLIC_LOADER_URL)" && test -n "$(PAGES_RUN_ID)" || { echo 'Set SEALED_DIR, MAIN_SHA, PUBLIC_LOADER_URL and PAGES_RUN_ID' >&2; exit 2; }
 	@node scripts/release-public-verify.mts "$(SEALED_DIR)" "$(MAIN_SHA)" "$(PUBLIC_LOADER_URL)" "$(PAGES_RUN_ID)"
+
+release-canary: ## Download, verify and canary the sealed host binary in isolated TEST paths
+	@test -n "$(SEALED_DIR)" && test -n "$(RELEASE_ID)" && test -n "$(CANARY_SCRATCH)" || { echo 'Set SEALED_DIR, RELEASE_ID and CANARY_SCRATCH (see docs/RELEASE_SPEED.md)' >&2; exit 2; }
+	@node scripts/release-canary.mts --seal "$(SEALED_DIR)" --release-id "$(RELEASE_ID)" --scratch "$(CANARY_SCRATCH)" $(if $(CANARY_STATE),--state "$(CANARY_STATE)")
 
 # Local plugin workflows
 preview-installer: ## Preview installer with real CLIs in isolated macOS TEST profiles (PREVIEW_ARGS optional)

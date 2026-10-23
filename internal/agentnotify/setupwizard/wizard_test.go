@@ -55,25 +55,10 @@ func testCtx(t *testing.T) context.Context {
 
 func buildProbe(t *testing.T) string {
 	t.Helper()
-	dir := t.TempDir()
-	src := filepath.Join(dir, "probe.go")
-	if err := os.WriteFile(src, []byte(`package main
+	return testenv.GoFixture(t, `package main
 import ("encoding/json"; "os")
 func main() { json.NewEncoder(os.Stdout).Encode(map[string]any{"ok": true}) }
-`), 0600); err != nil {
-		t.Fatal(err)
-	}
-	out := filepath.Join(dir, "probe")
-	compiler, err := exec.LookPath("go")
-	if err != nil {
-		t.Fatalf("locate TEST Go compiler: %v", err)
-	}
-	cmd := exec.Command(compiler, "build", "-o", out, src)
-	cmd.Env = append(os.Environ(), "GOTOOLCHAIN=local")
-	if body, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("build probe: %s %v", body, err)
-	}
-	return out
+`)
 }
 
 func writePackage(t *testing.T, root, probe string) {

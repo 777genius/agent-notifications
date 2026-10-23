@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import tempfile
 import threading
+import uuid
 
 
 # Diagnostic: prints Sddl/Owner/Access for path and every ancestor to the
@@ -284,13 +285,104 @@ def _windows_configure_first(run, binary, home, bundle, env, automatic_root):
             shutil.rmtree(automatic_root)
 
 
+def synthetic_stop(binary, version, scratch):
+    """The small downloaded-artifact canary; never initializes native profiles."""
+    root = Path(tempfile.mkdtemp(prefix='TEST-release-stop-', dir=scratch)).resolve()
+    _windows_private_scratch_root(root)
+    env = {key: os.environ[key] for key in
+           ('PATH', 'SystemRoot', 'SYSTEMROOT', 'SystemDrive', 'SYSTEMDRIVE',
+            'ALLUSERSPROFILE', 'WINDIR', 'COMSPEC', 'PATHEXT') if key in os.environ}
+    for key in ('HOME', 'USERPROFILE', 'CODEX_HOME', 'CLAUDE_HOME', 'CLAUDE_CONFIG_DIR',
+                'APPDATA', 'LOCALAPPDATA', 'XDG_CONFIG_HOME', 'XDG_CACHE_HOME',
+                'XDG_DATA_HOME', 'XDG_STATE_HOME', 'XDG_RUNTIME_DIR', 'TMPDIR', 'TMP', 'TEMP'):
+        folder = root / key
+        folder.mkdir(mode=0o700)
+        env[key] = str(folder)
+    bundle = root / 'bundle'
+    bundle.mkdir(mode=0o700)
+    env.update(PLUGIN_ROOT=str(bundle), CLAUDE_PLUGIN_ROOT=str(bundle), GIT_CONFIG_NOSYSTEM='1')
+    config = root / 'config.json'
+    env['AGENT_NOTIFICATIONS_CONFIG'] = str(config)
+    deliveries = []
+
+    class Sink(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *_):
+            pass
+
+        def do_POST(self):
+            size = int(self.headers.get('Content-Length', '-1'))
+            if not 0 <= size <= 65536:
+                self.send_error(413)
+                return
+            deliveries.append((self.path, self.rfile.read(size).decode()))
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b'ok')
+
+    def run(*command, data=None):
+        result = subprocess.run([str(binary), *command], cwd=root, env=env,
+                                input=data, text=True, capture_output=True, timeout=30)
+        assert result.returncode == 0, (command, result.returncode, result.stdout, result.stderr)
+        return result
+
+    server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Sink)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        config.write_text(json.dumps({'schemaVersion': 2, 'notifications': {
+            'desktop': {'enabled': False, 'sound': False, 'terminalBell': False},
+            'webhook': {'enabled': True, 'preset': 'slack',
+                        'url': f'http://127.0.0.1:{server.server_port}/sink'}}}))
+        config.chmod(0o600)
+        before = config.read_bytes()
+        assert run('version').stdout.strip() == 'claude-notifications ' + version
+        for product in ('claude', 'codex'):
+            marker = 'TEST-release-' + product + '-' + str(uuid.uuid4())
+            transcript = root / (product + '.jsonl')
+            transcript.write_text(json.dumps({'type': 'assistant', 'message': {
+                'role': 'assistant', 'content': [{'type': 'text', 'text': marker}]}}) + '\n')
+            transcript.chmod(0o600)
+            payload = {'hook_event_name': 'Stop', 'session_id': marker, 'turn_id': marker,
+                       'cwd': str(root), 'transcript_path': str(transcript),
+                       'last_assistant_message': marker, 'stop_hook_active': False}
+            count = len(deliveries)
+            run('handle-hook', 'Stop', '--product', product, data=json.dumps(payload))
+            assert len(deliveries) == count + 1, (product, deliveries)
+            assert deliveries[-1][0] == '/sink' and marker in deliveries[-1][1], deliveries[-1]
+            # Replaying the same exact hook must remain idempotent.
+            run('handle-hook', 'Stop', '--product', product, data=json.dumps(payload))
+            assert len(deliveries) == count + 1, (product, 'duplicate delivery', deliveries)
+        assert config.read_bytes() == before
+        assert len(deliveries) == 2
+        print(json.dumps({'result': 'PASS', 'version': version, 'root': str(root),
+                          'binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(),
+                          'products': ['claude', 'codex'], 'events': ['Stop', 'Stop'],
+                          'webhook_deliveries': len(deliveries), 'duplicate_replays': 2,
+                          'scope': 'synthetic Stop loopback delivery only; desktop disabled; no native registration or real agent turn'}))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--binary', type=Path, required=True)
     parser.add_argument('--version', required=True)
     parser.add_argument('--windows-standard-user-runner', type=Path)
+    parser.add_argument('--synthetic-stop-only', action='store_true')
+    parser.add_argument('--scratch', type=Path)
     args = parser.parse_args()
     binary = args.binary.resolve()
+    if args.synthetic_stop_only:
+        if not args.scratch:
+            parser.error('--scratch is required for --synthetic-stop-only')
+        if args.windows_standard_user_runner:
+            parser.error('--windows-standard-user-runner is not supported in synthetic-only mode')
+        synthetic_stop(binary, args.version, args.scratch.resolve(strict=True))
+        return
+    if args.scratch:
+        parser.error('--scratch requires --synthetic-stop-only')
     standard_runner = args.windows_standard_user_runner.resolve() if args.windows_standard_user_runner else None
     if standard_runner:
         assert os.name == 'nt'

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"github.com/777genius/agent-notifications/internal/testenv"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -34,6 +35,10 @@ func TestMain(m *testing.M) {
 			fmt.Fprintln(os.Stderr, "remove TEST managed executable:", err)
 			code = 1
 		}
+	}
+	if err := testenv.CleanupFixtures(); err != nil {
+		fmt.Fprintln(os.Stderr, "remove TEST fixture compiler cache:", err)
+		code = 1
 	}
 	os.Exit(code)
 }

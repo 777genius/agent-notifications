@@ -60,6 +60,33 @@ P still needs its own loader/parser/docs CI. A new C, including a version-only
 change, needs new bytes and baseline artifact checks. Never copy old success into
 a new source report. Preserve real Rosetta/GUI failures and actual closure.
 
+## Downloaded host canary in one command
+
+After the draft has its complete sealed inventory, choose its numeric GitHub
+release ID and an existing private scratch directory on the filesystem with
+space for the host executable and small TEST profiles:
+
+```sh
+make release-canary SEALED_DIR=/absolute/original-seal RELEASE_ID=NUMERIC_ID \
+  CANARY_SCRATCH=/absolute/private-scratch CANARY_STATE=draft
+```
+
+On macOS or Linux, the command validates the original seal and source tag,
+downloads only the local host executable by immutable asset ID, checks its size/SHA256, and runs the
+canonical isolated version and synthetic Claude/Codex Stop canary. Each product
+must deliver once to a local recording sink; duplicate replay must deliver
+nothing. It rechecks release/asset identity and records a receipt in its new
+`TEST-release-canary-*` child. Use `CANARY_STATE=public` for an already published
+release; the default accepts either state and records the observed state.
+The operator measures available space against the selected download plus an
+explicit profile-space estimate, rather than an arbitrary multi-gigabyte limit.
+Failed inputs retain their report and downloaded bytes; a new invocation creates
+a new child and never overwrites an existing receipt or rebuilds artifacts.
+
+This canary does not run an agent turn, register native helpers, sign artifacts
+or publish. The separately authorized signed-helper and real Codex trust/turn
+checks remain required where selected by the release scope.
+
 ## Recover effects without rebuilding
 
 Build each candidate artifact once. Seal the complete 29-file set and its
@@ -181,6 +208,17 @@ and installer/native checks independently for both Go versions. The existing
 atomic coverage profiles. On failure, rerun only the failed job; after recovery,
 rerun any failed aggregate/evidence job without repeating successful shards.
 Do not extend production deadlines or weaken assertions to obtain green CI.
+
+Windows runs Go/observation tests and installer/native E2E independently for both
+Go versions. The existing `Test on Windows (1.25)` / `(1.26)` aggregate checks
+require both lanes and the complete atomic Go coverage. Native input receipts
+include both lane rosters; an old one-job Windows receipt cannot qualify this
+workflow. Retry only a failed lane and its incomplete aggregate/receipt jobs.
+
+Repeated finite Go TEST programs are compiled once per test process and copied
+into a fresh private executable for each test. Their source/toolchain identity
+and process-owned build cache do not qualify release binaries or share runtime
+profiles. Mutation of one fixture cannot change another test's executable.
 
 On a draft/upload failure, use the existing `resume_run`/`resume_attempt` inputs.
 Authenticated paginated discovery finds drafts that the published-tag endpoint

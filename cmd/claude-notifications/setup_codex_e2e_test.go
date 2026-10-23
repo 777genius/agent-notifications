@@ -205,7 +205,7 @@ c:=exec.Command(os.Getenv("E2E_REAL_BINARY"),os.Args[1:]...);c.Stdin=os.Stdin;c.
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	c := exec.CommandContext(ctx, "go", "build", "-p", "2", "-buildvcs=false", "-o", filepath.Join(f.bundle, "bin", name), src)
-	c.Env = testenv.Build(t, filepath.Join(f.root, "build-home"))
+	c.Env = testenv.FixtureBuild(t, filepath.Join(f.root, "build-home"))
 	if out, err := c.CombinedOutput(); err != nil {
 		t.Fatalf("fixture build: %v %s", err, out)
 	}

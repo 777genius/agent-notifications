@@ -29,7 +29,7 @@ func TestProcessEnvironmentAllowlist(t *testing.T) {
 	t.Setenv("AGENT_NOTIFICATIONS_CONFIG", "/outside-canary")
 	t.Setenv("UNRELATED_SECRET_CANARY", "never-inherit")
 	root := t.TempDir()
-	for _, env := range [][]string{Env(t, root), Build(t, root)} {
+	for _, env := range [][]string{Env(t, root), Build(t, root), FixtureBuild(t, root)} {
 		values := make(map[string]string)
 		for _, entry := range env {
 			key, value, ok := strings.Cut(entry, "=")
