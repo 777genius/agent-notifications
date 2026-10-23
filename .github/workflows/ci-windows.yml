@@ -334,7 +334,7 @@ jobs:
     needs: [scope, go-tests, installer-native]
     if: ${{ always() && needs.scope.outputs.mode != 'release-tools' && needs.scope.outputs.mode != 'release-equivalent' }}
     name: Test on Windows (${{ matrix.go }})
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || vars.CI_LINUX_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 10
     strategy:
       fail-fast: false
@@ -387,7 +387,7 @@ jobs:
     name: Native input evidence (Windows)
     needs: [scope, go-tests, installer-native, test]
     if: ${{ !cancelled() && needs.scope.outputs.mode == 'full' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || vars.CI_LINUX_RUNNER || 'ubuntu-latest' }}
     permissions:
       contents: read
     steps:

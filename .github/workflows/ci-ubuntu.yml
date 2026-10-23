@@ -1963,7 +1963,7 @@ jobs:
     if: ${{ always() && github.event_name != 'workflow_dispatch' && needs.scope.outputs.mode != 'release-tools' && needs.scope.outputs.mode != 'release-equivalent' }}
     # Keep the established required-check names while retries target only failed shards.
     name: Test on Ubuntu (${{ matrix.go }})
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || vars.CI_LINUX_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 10
     strategy:
       fail-fast: false
@@ -2011,7 +2011,7 @@ jobs:
     name: Native input evidence (Ubuntu)
     needs: [scope, go-tests, installer-native, opencode-plugin, lint, test]
     if: ${{ !cancelled() && github.event_name != 'workflow_dispatch' && needs.scope.outputs.mode == 'full' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || vars.CI_LINUX_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 5
     permissions:
       contents: read
