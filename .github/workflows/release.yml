@@ -16,6 +16,7 @@ on:
       - '!v1.49.5'
       - '!v1.49.6'
       - '!v1.49.7'
+      - '!v0.0.0'
 
 permissions:
   contents: read
