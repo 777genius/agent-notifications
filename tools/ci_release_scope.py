@@ -69,7 +69,7 @@ def stable_exclusion_only(before, after):
             # placement structural without interpreting arbitrary workflow YAML.
             prefix = b''.join(new[:index])
             section = prefix.split(b'\non:\n  push:\n    tags:\n')
-            return len(section) == 2 and all(
+            return len(section) == 2 and b"      - 'v*'\n" in section[1].splitlines(keepends=True) and all(
                 re.fullmatch(rb"      - '[^'\n]+'\n", item)
                 for item in section[1].splitlines(keepends=True))
     return False

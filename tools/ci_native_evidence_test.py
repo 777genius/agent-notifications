@@ -155,7 +155,8 @@ class EvidencePolicy(unittest.TestCase):
         self.assertTrue(stable_exclusion_only(RELEASE, valid))
         for invalid in [valid + ADDED, valid.replace(b'contents: read', b'contents: write'),
                         valid.replace(b'!v1.0.1', b'!v*'), RELEASE + ADDED,
-                        valid.replace(b'!v1.0.1', b'!v01.0.1'), RELEASE.replace(b'!v1.0.0', b'!v1.0.1')]:
+                        valid.replace(b'!v1.0.1', b'!v01.0.1'), RELEASE.replace(b'!v1.0.0', b'!v1.0.1'),
+                        RELEASE.replace(b"      - 'v*'\n", ADDED + b"      - 'v*'\n")]:
             self.assertFalse(stable_exclusion_only(RELEASE, invalid))
 
     def test_skipped_duplicate_or_missing_full_jobs_never_prove_success(self):
