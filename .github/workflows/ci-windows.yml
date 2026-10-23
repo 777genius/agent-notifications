@@ -15,8 +15,10 @@ jobs:
   scope:
     name: Classify release tooling scope
     runs-on: ubuntu-latest
+    timeout-minutes: 50
     permissions:
       contents: read
+      actions: read
     outputs:
       mode: ${{ steps.classify.outputs.mode }}
     steps:
@@ -25,9 +27,14 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Test conservative release scope with disposable Git fixtures
-        run: python3 -B tools/ci_release_scope_test.py
+        run: |
+          python3 -B tools/ci_release_scope_test.py
+          python3 -B tools/ci_native_evidence_test.py
       - name: Classify exact PR revision (errors retain full CI)
         id: classify
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_NATIVE_WORKFLOW: ci-windows.yml
         run: python3 -B tools/ci_release_scope.py classify
 
   release-tools:
@@ -55,7 +62,7 @@ jobs:
 
   test:
     needs: scope
-    if: ${{ !cancelled() && needs.scope.outputs.mode != 'release-tools' }}
+    if: ${{ !cancelled() && needs.scope.outputs.mode != 'release-tools' && needs.scope.outputs.mode != 'release-equivalent' }}
     name: Test on Windows
     runs-on: windows-latest
     # Measured preceding stages take ~30m; preserve the 10m offline E2E budget plus cleanup margin.
@@ -287,3 +294,46 @@ jobs:
         run: bash bin/install_e2e_test.sh
         shell: bash
         timeout-minutes: 10
+
+  release-equivalent:
+    name: Release-equivalent native proof (Windows)
+    needs: scope
+    if: needs.scope.outputs.mode == 'release-equivalent'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Reverify immutable full native checkout evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B tools/ci_native_evidence.py verify --workflow ci-windows.yml
+
+  native-input-evidence:
+    name: Native input evidence (Windows)
+    needs: [scope, test]
+    if: ${{ !cancelled() && needs.scope.outputs.mode == 'full' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Record only successful full native inputs
+        env:
+          CI_MODE: ${{ needs.scope.outputs.mode }}
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: python3 -B tools/ci_native_evidence.py receipt --workflow ci-windows.yml --jobs test
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: native-inputs-ci-windows.yml-${{ github.run_id }}-${{ github.run_attempt }}
+          path: native-input-receipt.json
+          if-no-files-found: error
+          retention-days: 30

@@ -157,17 +157,35 @@ merge or publish. A failed receipt is retained; a recovery observation needs a
 new receipt path and only the missing phase should be rerun.
 
 An explicitly enumerated release-tools-only PR may use scoped tooling contracts
-instead of expensive native runtime CI. Unknown paths, runtime/installer/hook/
-native changes, source version changes, Makefile, workflows and classifier
-changes keep full CI. `ci:full` always forces full. Scoped checks have distinct
-names; skipped native and recovery jobs are not native success and cannot qualify a new C.
-Promotion P still has its current-head checks; this optimization does not grant
-an arbitrary P permission to reuse C's native qualification.
+instead of expensive native runtime CI. A same-repository release promotion or
+additive stable-tag exclusion may reuse full native qualification only after
+comparing all tracked product inputs and modes with the actual tested checkout.
+The evidence binds the source, workflow, run and attempt; scoped/reused results
+cannot become source native evidence. Promotion P still runs its current-head
+loader/parser/documentation contracts and keeps its own distinct reuse checks.
+Include those checks in P's `release-wait` roster instead of the skipped native
+checks. A new C, including any source version change, always needs full CI.
+Unknown paths, runtime/installer/hook/native changes, Makefile, CI policy and
+classifier changes retain full CI. `ci:full` always forces full; missing,
+expired or conflicting source evidence also retains full CI. This first change
+therefore needs a full run before subsequent release-only PRs can reuse it.
+Source receipts expire after 30 days. The verifier uses the latest source run;
+a later metadata-only ignored run without a full receipt conservatively falls
+back to full CI. Native receipt checks join successful earlier shards with the
+latest execution of each retried job; a newer failure never inherits old green.
+
+Ubuntu runs command tests, remaining packages, the real-cache cursorevent package
+and installer/native checks independently for both Go versions. The existing
+`Test on Ubuntu (1.25)` / `(1.26)` aggregate checks require every shard and all
+atomic coverage profiles. On failure, rerun only the failed job; after recovery,
+rerun any failed aggregate/evidence job without repeating successful shards.
+Do not extend production deadlines or weaken assertions to obtain green CI.
 
 On a draft/upload failure, use the existing `resume_run`/`resume_attempt` inputs.
 Authenticated paginated discovery finds drafts that the published-tag endpoint
 cannot return, revalidates their release IDs, and rejects duplicate/conflicting
-state. A complete resume checks inventory without traversing 29 already present
+state. Overlapping pagination pages restart a fresh read-only census at most
+three times; partial listings never prove absence, and writes are not retried. A complete resume checks inventory without traversing 29 already present
 uploads; any actual missing upload retains before/after remote conflict checks.
 Builds/signing are never repeated merely because publication transport failed.
 

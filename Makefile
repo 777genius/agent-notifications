@@ -90,6 +90,8 @@ release-tools-check: release-workflow-check ## Typecheck and test release toolin
 	@npm --prefix scripts/codex-offline-release-smoke test
 	@node --test scripts/release-progress.test.mts scripts/release-preflight.test.mts scripts/basic-release-assets/assets.test.mts scripts/release-wait.test.mts scripts/release-public-verify.test.mts
 	@python3 -B tools/ci_release_scope_test.py
+	@python3 -B tools/ci_native_evidence_test.py
+	@python3 -B tools/ci_ubuntu_shards_test.py
 	@bash scripts/codex-release-gate_test.sh
 	@python3 scripts/stage-released-loader-test.py
 

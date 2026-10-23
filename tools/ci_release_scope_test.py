@@ -19,8 +19,8 @@ def event(base, head):
     repo = {'full_name': 'owner/repo'}
     return {'action': 'synchronize', 'number': 1, 'repository': repo,
             'pull_request': {'number': 1, 'draft': False, 'labels': [],
-                             'base': {'sha': base, 'repo': repo},
-                             'head': {'sha': head, 'repo': repo}}}
+                             'base': {'sha': base, 'repo': dict(repo)},
+                             'head': {'sha': head, 'repo': dict(repo)}}}
 
 
 class ScopeFixture(unittest.TestCase):
@@ -117,7 +117,8 @@ class ScopeFixture(unittest.TestCase):
                    lambda p: p['pull_request']['head'].update(sha='0' * 40),
                    lambda p: p['pull_request']['base'].update(sha='a' * 40),
                    lambda p: p['pull_request'].update(labels=None),
-                   lambda p: p['pull_request'].update(number=2)]
+                   lambda p: p['pull_request'].update(number=2),
+                   lambda p: p['pull_request']['head'].update(repo={'full_name': 'fork/repo'})]
         for mutate in changes:
             payload = copy.deepcopy(good)
             mutate(payload)

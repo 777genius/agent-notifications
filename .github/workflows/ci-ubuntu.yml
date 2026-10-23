@@ -33,8 +33,10 @@ jobs:
     if: github.event_name != 'workflow_dispatch'
     name: Classify release tooling scope
     runs-on: ubuntu-latest
+    timeout-minutes: 50
     permissions:
       contents: read
+      actions: read
     outputs:
       mode: ${{ steps.classify.outputs.mode }}
     steps:
@@ -43,10 +45,48 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Test conservative release scope with disposable Git fixtures
-        run: python3 -B tools/ci_release_scope_test.py
+        run: |
+          python3 -B tools/ci_release_scope_test.py
+          python3 -B tools/ci_native_evidence_test.py
       - name: Classify exact PR revision (errors retain full CI)
         id: classify
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_NATIVE_WORKFLOW: ci-ubuntu.yml
         run: python3 -B tools/ci_release_scope.py classify
+
+  release-equivalent:
+    name: Reused native qualification (Ubuntu)
+    needs: scope
+    if: needs.scope.outputs.mode == 'release-equivalent'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Revalidate qualified source inputs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B tools/ci_native_evidence.py verify --workflow ci-ubuntu.yml
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.27.2'
+          cache: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - run: npm --prefix scripts/codex-offline-release-smoke ci
+      - run: make release-tools-check
+      - run: make release-preflight
+      - name: Verify promotion loader and channel parser contracts
+        run: |
+          bash bin/setup_test.sh
+          bash bin/release_channel_test.sh
 
   release-tools:
     name: Release tools scoped contract (Ubuntu)
@@ -1666,7 +1706,7 @@ jobs:
           retention-days: 7
   opencode-plugin:
     needs: scope
-    if: ${{ !cancelled() && github.event_name != 'workflow_dispatch' && needs.scope.outputs.mode != 'release-tools' }}
+    if: ${{ !cancelled() && github.event_name != 'workflow_dispatch' && needs.scope.outputs.mode != 'release-tools' && needs.scope.outputs.mode != 'release-equivalent' }}
     name: OpenCode plugin bundle
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || vars.CI_LINUX_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 10
@@ -1688,19 +1728,17 @@ jobs:
         working-directory: TEST-opencode-plugin-ci/opencode-plugin
       - run: git diff --exit-code -- internal/opencodeplugin/dist/agent-notifications.js
 
-  test:
+  go-tests:
     needs: scope
-    if: ${{ !cancelled() && github.event_name != 'workflow_dispatch' && needs.scope.outputs.mode != 'release-tools' }}
-    name: Test on Ubuntu
-    # Go 1.26 runs the frozen Cursor physical Ubuntu/kernel qualification.
+    if: ${{ !cancelled() && github.event_name != 'workflow_dispatch' && needs.scope.outputs.mode != 'release-tools' && needs.scope.outputs.mode != 'release-equivalent' }}
+    name: Ubuntu Go tests (${{ matrix.go }}, ${{ matrix.shard }})
     runs-on: ${{ matrix.go == '1.26' && 'ubuntu-24.04' || github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || vars.CI_LINUX_RUNNER || 'ubuntu-24.04' }}
     timeout-minutes: 40
-
     strategy:
       fail-fast: false
       matrix:
         go: ['1.25', '1.26']
-
+        shard: [cmd, packages, cursorevent]
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
@@ -1717,7 +1755,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev
 
       - name: Check Linux handoff pure contracts (no native effects)
-        if: matrix.go == '1.26'
+        if: matrix.go == '1.26' && matrix.shard == 'packages'
         run: |
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-navigation-linux-client-callback.py
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-navigation-linux-native-chain.py
@@ -1738,9 +1776,11 @@ jobs:
         run: go mod verify
 
       - name: Run go vet
+        if: matrix.shard == 'packages'
         run: go vet ./...
 
       - name: Run go fmt check
+        if: matrix.shard == 'packages'
         run: |
           fmt_output=$(go fmt ./...)
           if [ -n "$fmt_output" ]; then
@@ -1748,6 +1788,52 @@ jobs:
             echo "$fmt_output"
             exit 1
           fi
+
+      - name: Check Ubuntu shard contracts with isolated fixtures
+        if: matrix.go == '1.26' && matrix.shard == 'packages'
+        run: python3 -B tools/ci_ubuntu_shards_test.py
+
+      - name: Run race tests with atomic coverage
+        run: bash scripts/ci-ubuntu-go-shard.sh '${{ matrix.shard }}'
+
+      - name: Preserve shard coverage
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ubuntu-coverage-go-${{ matrix.go }}-${{ matrix.shard }}
+          path: coverage-${{ matrix.shard }}.txt
+          if-no-files-found: error
+
+  installer-native:
+    needs: scope
+    if: ${{ !cancelled() && github.event_name != 'workflow_dispatch' && needs.scope.outputs.mode != 'release-tools' && needs.scope.outputs.mode != 'release-equivalent' }}
+    name: Ubuntu installers and native E2E (${{ matrix.go }})
+    runs-on: ${{ matrix.go == '1.26' && 'ubuntu-24.04' || github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || vars.CI_LINUX_RUNNER || 'ubuntu-24.04' }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        go: ['1.25', '1.26']
+    # Go 1.26 retains the frozen Cursor physical Ubuntu/kernel qualification.
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: ${{ matrix.go }}
+
+      - name: Display Go version
+        run: go version
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Verify dependencies
+        run: go mod verify
 
       - name: Require qualified Cursor installed physical contracts
         if: matrix.go == '1.26'
@@ -1815,24 +1901,6 @@ jobs:
           path: ${{ env.CURSOR_PHYSICAL_EVIDENCE }}/*.log
           if-no-files-found: warn
 
-      - name: Run tests
-        run: |
-          set -euo pipefail
-          go test -timeout 20m -v -race -coverprofile=coverage-cmd.txt -covermode=atomic ./cmd/claude-notifications
-          packages=$(go list ./...)
-          remaining_packages=$(printf '%s\n' "$packages" | grep -Fvx 'github.com/777genius/agent-notifications/cmd/claude-notifications')
-          mapfile -t remaining <<< "$remaining_packages"
-          go test -timeout 20m -v -race -coverprofile=coverage-ubuntu-rest.txt -covermode=atomic "${remaining[@]}"
-          { head -n 1 coverage-ubuntu-rest.txt; tail -n +2 coverage-ubuntu-rest.txt; tail -n +2 coverage-cmd.txt; } > coverage.txt
-
-      - name: Upload coverage to Codecov
-        if: matrix.go == '1.26'
-        uses: codecov/codecov-action@v7
-        with:
-          files: ./coverage.txt
-          token: ${{ secrets.CODECOV_TOKEN }}
-          fail_ci_if_error: false
-
       - name: Build binary
         run: go build -ldflags="-s -w" -trimpath -o bin/claude-notifications ./cmd/claude-notifications
 
@@ -1890,9 +1958,83 @@ jobs:
         timeout-minutes: 5
         continue-on-error: true
 
+  test:
+    needs: [scope, go-tests, installer-native]
+    if: ${{ always() && github.event_name != 'workflow_dispatch' && needs.scope.outputs.mode != 'release-tools' && needs.scope.outputs.mode != 'release-equivalent' }}
+    # Keep the established required-check names while retries target only failed shards.
+    name: Test on Ubuntu (${{ matrix.go }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        go: ['1.25', '1.26']
+    steps:
+      - name: Require every test shard to succeed
+        env:
+          SCOPE_RESULT: ${{ needs.scope.result }}
+          GO_TESTS_RESULT: ${{ needs.go-tests.result }}
+          INSTALLER_NATIVE_RESULT: ${{ needs.installer-native.result }}
+        run: |
+          set -euo pipefail
+          test "$SCOPE_RESULT" = success
+          test "$GO_TESTS_RESULT" = success
+          test "$INSTALLER_NATIVE_RESULT" = success
+
+      - name: Checkout coverage source
+        uses: actions/checkout@v7
+
+      - name: Restore all atomic coverage shards
+        uses: actions/download-artifact@v8
+        with:
+          pattern: ubuntu-coverage-go-${{ matrix.go }}-*
+          merge-multiple: true
+
+      - name: Require and combine complete atomic coverage
+        run: |
+          set -euo pipefail
+          for shard in cmd packages cursorevent; do
+            test -s "coverage-$shard.txt"
+            test "$(head -n 1 "coverage-$shard.txt")" = 'mode: atomic'
+          done
+          { head -n 1 coverage-cmd.txt; tail -n +2 coverage-cmd.txt; tail -n +2 coverage-packages.txt; tail -n +2 coverage-cursorevent.txt; } > coverage.txt
+
+      - name: Upload coverage to Codecov
+        if: matrix.go == '1.26'
+        uses: codecov/codecov-action@v7
+        with:
+          files: ./coverage.txt
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false
+
+  native-evidence:
+    name: Native input evidence (Ubuntu)
+    needs: [scope, go-tests, installer-native, opencode-plugin, lint, test]
+    if: ${{ !cancelled() && github.event_name != 'workflow_dispatch' && needs.scope.outputs.mode == 'full' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Bind successful full native checks to tested inputs
+        env:
+          CI_MODE: ${{ needs.scope.outputs.mode }}
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: python3 -B tools/ci_native_evidence.py receipt --workflow ci-ubuntu.yml --output native-input-receipt.json --jobs go-tests installer-native opencode-plugin lint test
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: native-inputs-ci-ubuntu.yml-${{ github.run_id }}-${{ github.run_attempt }}
+          path: native-input-receipt.json
+          if-no-files-found: error
+          retention-days: 30
+
   lint:
     needs: scope
-    if: ${{ !cancelled() && github.event_name != 'workflow_dispatch' && needs.scope.outputs.mode != 'release-tools' }}
+    if: ${{ !cancelled() && github.event_name != 'workflow_dispatch' && needs.scope.outputs.mode != 'release-tools' && needs.scope.outputs.mode != 'release-equivalent' }}
     name: Lint
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || vars.CI_LINUX_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 15

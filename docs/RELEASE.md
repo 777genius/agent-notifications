@@ -64,6 +64,11 @@ CI/signing and explicitly exclude the new tag from the legacy full release
 workflow in both candidate C and executed operator main O. The historical
 v1.48.5 basic scope above remains the minimum, not an installed-business claim.
 
+Release-only operator and promotion PRs can reuse native CI only with the
+input-bound evidence and current-head contracts described in the fast path.
+This does not qualify a new candidate or version bump. Ubuntu test shards keep
+the established aggregate gates while allowing failed-job-only recovery.
+
 The workflow stores an immutable complete seal before tag creation. If draft
 creation or upload fails, use the same `candidate_sha`, `release_tag` and
 `signing_run`, plus `resume_run` and `resume_attempt` for the original sealed
