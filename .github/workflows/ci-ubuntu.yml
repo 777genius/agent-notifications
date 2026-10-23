@@ -1732,13 +1732,13 @@ jobs:
     needs: scope
     if: ${{ !cancelled() && github.event_name != 'workflow_dispatch' && needs.scope.outputs.mode != 'release-tools' && needs.scope.outputs.mode != 'release-equivalent' }}
     name: Ubuntu Go tests (${{ matrix.go }}, ${{ matrix.shard }})
-    runs-on: ${{ matrix.go == '1.26' && 'ubuntu-24.04' || github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || vars.CI_LINUX_RUNNER || 'ubuntu-24.04' }}
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || vars.CI_LINUX_RUNNER || 'ubuntu-24.04' }}
     timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
         go: ['1.25', '1.26']
-        shard: [cmd, packages, cursorevent]
+        shard: [cmd-setup, cmd-other, packages, cursorevent]
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
@@ -1807,7 +1807,7 @@ jobs:
     needs: scope
     if: ${{ !cancelled() && github.event_name != 'workflow_dispatch' && needs.scope.outputs.mode != 'release-tools' && needs.scope.outputs.mode != 'release-equivalent' }}
     name: Ubuntu installers and native E2E (${{ matrix.go }})
-    runs-on: ${{ matrix.go == '1.26' && 'ubuntu-24.04' || github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || vars.CI_LINUX_RUNNER || 'ubuntu-24.04' }}
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || vars.CI_LINUX_RUNNER || 'ubuntu-24.04' }}
     timeout-minutes: 40
     strategy:
       fail-fast: false
@@ -1995,11 +1995,7 @@ jobs:
       - name: Require and combine complete atomic coverage
         run: |
           set -euo pipefail
-          for shard in cmd packages cursorevent; do
-            test -s "coverage-$shard.txt"
-            test "$(head -n 1 "coverage-$shard.txt")" = 'mode: atomic'
-          done
-          { head -n 1 coverage-cmd.txt; tail -n +2 coverage-cmd.txt; tail -n +2 coverage-packages.txt; tail -n +2 coverage-cursorevent.txt; } > coverage.txt
+          python3 -B tools/ci_ubuntu_coverage.py
 
       - name: Upload coverage to Codecov
         if: matrix.go == '1.26'

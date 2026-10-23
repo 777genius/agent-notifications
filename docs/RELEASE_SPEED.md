@@ -245,3 +245,25 @@ activation, business delivery, banners or callbacks. Keep those separate actual
 TEST observations and the independent technical review. A failed verification
 requires repairing only the mismatched delivery phase, never rebuilding the
 immutable released tag.
+
+## Runner queues and CLI shards
+
+Trusted Ubuntu Go 1.25 and 1.26 jobs use `CI_LINUX_RUNNER` when configured,
+with the existing GitHub-hosted fallback for external fork PRs. Final macOS and
+recovery input receipts also use that Linux runner; the native qualification
+itself remains on its original operating system. This changes scheduling,
+not the scope or authority of a successful receipt.
+
+Ubuntu command tests run as complementary `cmd-setup` and `cmd-other` groups.
+The setup group selects top-level `TestSetupWizard*` and `TestSetupCodex*` tests;
+the other group skips exactly that pattern and retains future tests, examples
+and fuzz seed execution. Subtests remain attached to their parent. Both groups
+retain race detection, atomic coverage and the existing test deadline.
+The aggregate requires all four profiles (`cmd-setup`, `cmd-other`, `packages`,
+`cursorevent`), merges matching CLI blocks by summing counts, and rejects missing,
+header-only or inconsistent profiles. Both groups are part of native input
+custody, so a missing group cannot qualify a release.
+
+Compare job execution separately from waiting for runners. More parallel jobs
+can reduce execution time while capacity queues still dominate total duration;
+measure an actual current-head run before claiming an end-to-end improvement.
