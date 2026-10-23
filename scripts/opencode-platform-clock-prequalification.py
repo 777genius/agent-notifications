@@ -544,7 +544,20 @@ def github(owned, env, endpoint, raw=False):
     need(fetch_env['GH_TOKEN'], 'ci_gh_token_required')
     argv = ['gh', 'api', endpoint]
     if raw: argv += ['-H', 'Accept: application/vnd.github.raw+json']
-    return owned.command(argv, REPO, fetch_env, 30)
+    # GitHub contents/tag GETs are idempotent. Retry only explicit transient HTTP
+    # failures; every failed child has already been reaped by command().
+    for attempt in range(3):
+        try:
+            return owned.command(argv, REPO, fetch_env, 30)
+        except RuntimeError as error:
+            status = getattr(error, 'command_failure', {}).get('httpStatus')
+            if status not in (429, 500, 502, 503, 504) or attempt == 2:
+                raise
+            delay = 60 * (attempt + 1) if status == 429 else 2 ** (attempt + 1)
+            need(remaining(owned.end) > delay, 'github_retry_deadline')
+            time.sleep(delay)
+            remaining(owned.end)
+
 
 
 def origin_tag(owned, env, version):
