@@ -46,13 +46,15 @@ These contracts require new qualification before changing provider:
 - `ci-ubuntu.yml`: `cursor-mkdir-diagnostic` and `cursor-installed-e` retain
   `ubuntu-24.04`. Their frozen carrier, pinned checkout and qualified physical
   machine/runner evidence are outside ordinary CI routing.
-- `ci-ubuntu.yml`: ordinary `test` matrix Go 1.26 also retains stock
-  `ubuntu-24.04`, because `Require qualified Cursor installed physical contracts`
-  runs only on that cell. The managed run at source `f31f2fa` rejected its
-  positive materializer with `accepted Ubuntu24.04/kernel tuple required`.
-  Matching Ubuntu release/architecture in the provider canary does not qualify
-  the frozen kernel/physical tuple. Go 1.25 continues using managed routing;
-  qualification guards and test commands remain unchanged.
+- `ci-ubuntu.yml`: `cursor-physical` retains stock `ubuntu-24.04` with Go 1.26
+  for `Require qualified Cursor installed physical contracts`. The managed run
+  at source `f31f2fa` rejected its positive materializer with
+  `accepted Ubuntu24.04/kernel tuple required`; the attempted whole-installer
+  routing at `4142a20` independently confirmed that refusal. Matching Ubuntu
+  release/architecture does not qualify the frozen kernel/physical tuple.
+  Both ordinary Go test versions and installer E2E use managed routing; the
+  separate physical job preserves all original commands/positive markers and
+  is required by both Ubuntu aggregates and native-input evidence.
 - `gemini-native-e2e.yml`: all original runners remain. Its trusted wrapper
   (`scripts/gemini-native-ci.py`) explicitly requires
   `RUNNER_ENVIRONMENT == 'github-hosted'` before side effects. Having PowerShell
