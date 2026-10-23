@@ -554,9 +554,14 @@ def github(owned, env, endpoint, raw=False):
             if status not in (429, 500, 502, 503, 504) or attempt == 2:
                 raise
             delay = 60 * (attempt + 1) if status == 429 else 2 ** (attempt + 1)
-            need(remaining(owned.end) > delay, 'github_retry_deadline')
-            time.sleep(delay)
-            remaining(owned.end)
+            try:
+                need(remaining(owned.end) > delay, 'github_retry_deadline')
+                time.sleep(delay)
+                remaining(owned.end)
+            except RuntimeError as deadline_error:
+                if str(deadline_error) in ('github_retry_deadline', 'absolute_deadline'):
+                    deadline_error.command_failure = dict(error.command_failure)
+                raise
 
 
 
@@ -1098,6 +1103,7 @@ def parent_main(args):
                 staged.append((case, case_root, metadata))
             except Exception as error:
                 case['failureReason'] = failure_reason(error)
+                if hasattr(error, 'command_failure'): case['commandFailure'] = error.command_failure
         for case, case_root, metadata in staged:
             try:
                 if args.os == 'linux':
@@ -1113,6 +1119,7 @@ def parent_main(args):
                 case.update(result)
             except Exception as error:
                 case.update(status='unqualified', failureReason=failure_reason(error))
+                if hasattr(error, 'command_failure'): case['commandFailure'] = error.command_failure
         checkout(owned, env, expected)
         need(all(sha(REPO / x['path']) == x['actualSHA256'] for x in leaves), 'final_checkout_source_closure')
         need(len(report['cases']) == len(report['plannedVersions']) and
