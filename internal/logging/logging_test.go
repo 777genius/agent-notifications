@@ -516,3 +516,40 @@ func TestLogger_ConsoleOutput_InfoToStdout(t *testing.T) {
 		t.Error("Log should contain [DEBUG]")
 	}
 }
+
+func TestNewLoggerFromFile(t *testing.T) {
+	f, err := os.Create(filepath.Join(t.TempDir(), "child.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+
+	logger := NewLoggerFromFile(f)
+	logger.SetPrefix("play-sound pid=1")
+	logger.Error("failed to play %s", "x.mp3")
+
+	data, err := os.ReadFile(f.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "[ERROR] play-sound pid=1: failed to play x.mp3") {
+		t.Errorf("unexpected log contents: %q", data)
+	}
+}
+
+func TestFile(t *testing.T) {
+	defaultLogger = nil
+	once = sync.Once{}
+	if File() != nil {
+		t.Fatal("File() should be nil before InitLogger")
+	}
+
+	logger, err := InitLogger(t.TempDir())
+	if err != nil {
+		t.Fatalf("InitLogger() error = %v", err)
+	}
+	defer logger.Close()
+	if File() != logger.file {
+		t.Error("File() should return the default logger's file")
+	}
+}

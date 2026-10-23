@@ -519,3 +519,33 @@ func TestCursorEventOriginalAdmissionDeadline(t *testing.T) {
 		t.Fatalf("original deadline replaced: %+v", receipt)
 	}
 }
+
+// Regression for #131: the detached play-sound child must report its outcome
+// on stderr in the debug log format, since the parent wires stderr into
+// notification-debug.log.
+func TestRunPlaySoundLogsOutcomeToStderr(t *testing.T) {
+	if os.Getenv("TEST_PLAY_SOUND_CHILD") == "1" {
+		runPlaySound([]string{os.Getenv("TEST_PLAY_SOUND_PATH"), "--volume", "0.30"})
+		os.Exit(0)
+	}
+	missing := filepath.Join(t.TempDir(), "missing.mp3")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestRunPlaySoundLogsOutcomeToStderr$")
+	cmd.Env = append(os.Environ(), "TEST_PLAY_SOUND_CHILD=1", "TEST_PLAY_SOUND_PATH="+missing, "GOCOVERDIR="+t.TempDir())
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err == nil {
+		t.Fatalf("play-sound of a missing file must fail; stderr=%q", stderr.String())
+	}
+	got := stderr.String()
+	for _, want := range []string{
+		"[DEBUG] play-sound pid=",
+		"starting: sound=" + missing + " volume=0.30",
+		"[ERROR] play-sound pid=",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("stderr missing %q:\n%s", want, got)
+		}
+	}
+}

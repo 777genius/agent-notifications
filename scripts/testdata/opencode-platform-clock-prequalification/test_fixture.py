@@ -131,6 +131,53 @@ class PureVectors(unittest.TestCase):
                         self.assertFalse(record['immediateNonincrease'])
                     finally: release()
 
+    def test_github_retries_only_transient_reads_with_bounded_attempts(self):
+        for status, calls in ((429, 3), (503, 3), (403, 1)):
+            owned = H.Owned(H.time.monotonic() + 300)
+            error = RuntimeError('actual_natural_close')
+            error.command_failure = {'httpStatus': status}
+            with patch.dict(H.os.environ, {'GH_TOKEN': 'private'}), \
+                 patch.object(owned, 'command', side_effect=error) as command, \
+                 patch.object(H.time, 'sleep') as sleep:
+                with self.assertRaisesRegex(RuntimeError, 'actual_natural_close'):
+                    H.github(owned, {}, 'repos/example/repo')
+                self.assertEqual(command.call_count, calls)
+                self.assertEqual(sleep.call_count, calls - 1)
+        with patch.dict(H.os.environ, {'GH_TOKEN': 'private'}), \
+             patch.object(owned, 'command', side_effect=[error, b'ok']) as command, \
+             patch.object(H.time, 'sleep'):
+            error.command_failure = {'httpStatus': 502}
+            self.assertEqual(H.github(owned, {}, 'repos/example/repo'), b'ok')
+            self.assertEqual(command.call_count, 2)
+
+    def test_github_retry_refuses_expired_budget(self):
+        owned = H.Owned(H.time.monotonic() + 1)
+        error = RuntimeError('actual_natural_close')
+        error.command_failure = {'httpStatus': 429}
+        with patch.dict(H.os.environ, {'GH_TOKEN': 'private'}), \
+             patch.object(owned, 'command', side_effect=error) as command, \
+             patch.object(H.time, 'sleep') as sleep:
+            with self.assertRaisesRegex(RuntimeError, 'github_retry_deadline'):
+                H.github(owned, {}, 'repos/example/repo')
+            self.assertEqual(command.call_count, 1)
+            sleep.assert_not_called()
+
+    def test_failed_preparation_reports_exit_without_exposing_output(self):
+        owned = H.Owned(H.time.monotonic() + 10)
+        error = RuntimeError('actual_natural_close')
+        error.command_failure = {'label': 'preparation', 'returncode': 1,
+                                 'overflow': False, 'pipeError': False}
+        state = {'startedAt': H.time.monotonic(), 'p': types.SimpleNamespace(pid=123),
+                 'buffers': [bytearray(), bytearray(b'SECRET (HTTP 502)')]}
+        with patch.object(owned, 'start', return_value=state), \
+             patch.object(owned, 'close', side_effect=error):
+            with self.assertRaisesRegex(RuntimeError, '^actual_natural_close$') as caught:
+                owned.command(['gh', 'api', 'private'], ROOT, {}, 5)
+        self.assertEqual(caught.exception.command_failure,
+                         {'label': 'preparation', 'returncode': 1, 'overflow': False,
+                          'pipeError': False, 'tool': 'gh', 'httpStatus': 502})
+        self.assertNotIn('SECRET', str(caught.exception.command_failure))
+
     def test_held_helper_admission_refuses_change_without_rehashing_inside_span(self):
         with tempfile.TemporaryDirectory(prefix='TEST-held-helper-', dir=ROOT) as directory:
             helper = Path(directory) / 'helper'; helper.write_bytes(b'abc')

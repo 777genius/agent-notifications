@@ -276,7 +276,11 @@ class Owned:
         self.live.pop(p.pid)
         self.closes += 1
         if s['label'] == 'helper': self.helper_closes += 1
-        if natural: need(p.returncode == 0 and not s['overflow'] and not s['pipeError'], 'actual_natural_close')
+        if natural and (p.returncode != 0 or s['overflow'] or s['pipeError']):
+            error = RuntimeError('actual_natural_close')
+            error.command_failure = {'label': s['label'], 'returncode': p.returncode,
+                                     'overflow': s['overflow'], 'pipeError': s['pipeError']}
+            raise error
 
     def admit_helper(self, helper, expected_sha):
         remaining(self.end)
@@ -337,7 +341,18 @@ class Owned:
         s = self.start(argv, cwd, env, 'preparation', cap)
         end = min(self.end, s['startedAt'] + seconds)
         try:
-            self.close(s, end)
+            try:
+                self.close(s, end)
+            except Exception as error:
+                if hasattr(error, 'command_failure'):
+                    # Closed vocabulary only: never publish argv, paths, API bodies,
+                    # stderr or environment (the fetch command carries GH_TOKEN).
+                    tool = Path(argv[0]).stem.lower()
+                    error.command_failure['tool'] = tool if tool in ('gh', 'git', 'go') else 'other'
+                    if tool == 'gh':
+                        match = re.search(rb'HTTP ([45][0-9]{2})', bytes(s['buffers'][1]))
+                        if match: error.command_failure['httpStatus'] = int(match[1])
+                raise
             return bytes(s['buffers'][0])
         finally:
             if s['p'].pid in self.live:
@@ -529,7 +544,25 @@ def github(owned, env, endpoint, raw=False):
     need(fetch_env['GH_TOKEN'], 'ci_gh_token_required')
     argv = ['gh', 'api', endpoint]
     if raw: argv += ['-H', 'Accept: application/vnd.github.raw+json']
-    return owned.command(argv, REPO, fetch_env, 30)
+    # GitHub contents/tag GETs are idempotent. Retry only explicit transient HTTP
+    # failures; every failed child has already been reaped by command().
+    for attempt in range(3):
+        try:
+            return owned.command(argv, REPO, fetch_env, 30)
+        except RuntimeError as error:
+            status = getattr(error, 'command_failure', {}).get('httpStatus')
+            if status not in (429, 500, 502, 503, 504) or attempt == 2:
+                raise
+            delay = 60 * (attempt + 1) if status == 429 else 2 ** (attempt + 1)
+            try:
+                need(remaining(owned.end) > delay, 'github_retry_deadline')
+                time.sleep(delay)
+                remaining(owned.end)
+            except RuntimeError as deadline_error:
+                if str(deadline_error) in ('github_retry_deadline', 'absolute_deadline'):
+                    deadline_error.command_failure = dict(error.command_failure)
+                raise
+
 
 
 def origin_tag(owned, env, version):
@@ -812,6 +845,13 @@ def run_case(root, metadata, os_name, arch, job_end):
                 own.verify_helper(helper, metadata['helperSha256'])
                 need(not s['buffers'][1], 'helper_stderr_refused')
                 raw = bytes(s['buffers'][0]); frame(raw, os_name)
+                stage = 'helper_deadline_guard'
+                remaining(end)
+                stage = 'helper_response'
+                own.send(host, {'kind': 'helper_response', 'round': round_number,
+                                'raw': base64.b64encode(raw).decode()}, operation_end)
+                # Persist evidence after releasing the causal comparison span.
+                # Any failure still refuses the whole case before qualification.
                 st = helper.stat()
                 helper_lifecycle.append({'pid': s['p'].pid, 'argv': [str(helper), 'opencode-clock', '--protocol', '1'],
                     'helperSHA256': metadata['helperSha256'], 'fileIdentity': {'device': st.st_dev, 'inode': st.st_ino,
@@ -822,11 +862,6 @@ def run_case(root, metadata, os_name, arch, job_end):
                 path = root / ('helper-' + str(round_number) + '.private')
                 path.write_bytes(raw); path.chmod(0o600)
                 helper_receipts.append(digest(raw))
-                stage = 'helper_deadline_guard'
-                remaining(end)
-                stage = 'helper_response'
-                own.send(host, {'kind': 'helper_response', 'round': round_number,
-                                'raw': base64.b64encode(raw).decode()}, operation_end)
             finally:
                 if s['p'].pid in own.live: own.cleanup()
             if os_name == 'windows':
@@ -1068,6 +1103,7 @@ def parent_main(args):
                 staged.append((case, case_root, metadata))
             except Exception as error:
                 case['failureReason'] = failure_reason(error)
+                if hasattr(error, 'command_failure'): case['commandFailure'] = error.command_failure
         for case, case_root, metadata in staged:
             try:
                 if args.os == 'linux':
@@ -1083,6 +1119,7 @@ def parent_main(args):
                 case.update(result)
             except Exception as error:
                 case.update(status='unqualified', failureReason=failure_reason(error))
+                if hasattr(error, 'command_failure'): case['commandFailure'] = error.command_failure
         checkout(owned, env, expected)
         need(all(sha(REPO / x['path']) == x['actualSHA256'] for x in leaves), 'final_checkout_source_closure')
         need(len(report['cases']) == len(report['plannedVersions']) and
@@ -1093,6 +1130,7 @@ def parent_main(args):
         report['failureReason'] = failure_reason(error)
         report['failureObservation'] = {'stage': stage, 'parentElapsedMs': round((time.monotonic() - parent_started) * 1000, 3)}
         if hasattr(error, 'path_failure'): report['pathFailure'] = error.path_failure
+        if hasattr(error, 'command_failure'): report['commandFailure'] = error.command_failure
     except KeyboardInterrupt:
         report.update(status='unqualified', failureReason='absolute_deadline' if time.monotonic() >= job_end else 'parent_interrupted')
     finally:
