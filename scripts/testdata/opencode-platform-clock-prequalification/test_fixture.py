@@ -131,6 +131,22 @@ class PureVectors(unittest.TestCase):
                         self.assertFalse(record['immediateNonincrease'])
                     finally: release()
 
+    def test_failed_preparation_reports_exit_without_exposing_output(self):
+        owned = H.Owned(H.time.monotonic() + 10)
+        error = RuntimeError('actual_natural_close')
+        error.command_failure = {'label': 'preparation', 'returncode': 1,
+                                 'overflow': False, 'pipeError': False}
+        state = {'startedAt': H.time.monotonic(), 'p': types.SimpleNamespace(pid=123),
+                 'buffers': [bytearray(), bytearray(b'SECRET (HTTP 502)')]}
+        with patch.object(owned, 'start', return_value=state), \
+             patch.object(owned, 'close', side_effect=error):
+            with self.assertRaisesRegex(RuntimeError, '^actual_natural_close$') as caught:
+                owned.command(['gh', 'api', 'private'], ROOT, {}, 5)
+        self.assertEqual(caught.exception.command_failure,
+                         {'label': 'preparation', 'returncode': 1, 'overflow': False,
+                          'pipeError': False, 'tool': 'gh', 'httpStatus': 502})
+        self.assertNotIn('SECRET', str(caught.exception.command_failure))
+
     def test_held_helper_admission_refuses_change_without_rehashing_inside_span(self):
         with tempfile.TemporaryDirectory(prefix='TEST-held-helper-', dir=ROOT) as directory:
             helper = Path(directory) / 'helper'; helper.write_bytes(b'abc')

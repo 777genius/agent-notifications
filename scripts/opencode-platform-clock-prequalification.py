@@ -276,7 +276,11 @@ class Owned:
         self.live.pop(p.pid)
         self.closes += 1
         if s['label'] == 'helper': self.helper_closes += 1
-        if natural: need(p.returncode == 0 and not s['overflow'] and not s['pipeError'], 'actual_natural_close')
+        if natural and (p.returncode != 0 or s['overflow'] or s['pipeError']):
+            error = RuntimeError('actual_natural_close')
+            error.command_failure = {'label': s['label'], 'returncode': p.returncode,
+                                     'overflow': s['overflow'], 'pipeError': s['pipeError']}
+            raise error
 
     def admit_helper(self, helper, expected_sha):
         remaining(self.end)
@@ -337,7 +341,18 @@ class Owned:
         s = self.start(argv, cwd, env, 'preparation', cap)
         end = min(self.end, s['startedAt'] + seconds)
         try:
-            self.close(s, end)
+            try:
+                self.close(s, end)
+            except Exception as error:
+                if hasattr(error, 'command_failure'):
+                    # Closed vocabulary only: never publish argv, paths, API bodies,
+                    # stderr or environment (the fetch command carries GH_TOKEN).
+                    tool = Path(argv[0]).stem.lower()
+                    error.command_failure['tool'] = tool if tool in ('gh', 'git', 'go') else 'other'
+                    if tool == 'gh':
+                        match = re.search(rb'HTTP ([45][0-9]{2})', bytes(s['buffers'][1]))
+                        if match: error.command_failure['httpStatus'] = int(match[1])
+                raise
             return bytes(s['buffers'][0])
         finally:
             if s['p'].pid in self.live:
@@ -812,6 +827,13 @@ def run_case(root, metadata, os_name, arch, job_end):
                 own.verify_helper(helper, metadata['helperSha256'])
                 need(not s['buffers'][1], 'helper_stderr_refused')
                 raw = bytes(s['buffers'][0]); frame(raw, os_name)
+                stage = 'helper_deadline_guard'
+                remaining(end)
+                stage = 'helper_response'
+                own.send(host, {'kind': 'helper_response', 'round': round_number,
+                                'raw': base64.b64encode(raw).decode()}, operation_end)
+                # Persist evidence after releasing the causal comparison span.
+                # Any failure still refuses the whole case before qualification.
                 st = helper.stat()
                 helper_lifecycle.append({'pid': s['p'].pid, 'argv': [str(helper), 'opencode-clock', '--protocol', '1'],
                     'helperSHA256': metadata['helperSha256'], 'fileIdentity': {'device': st.st_dev, 'inode': st.st_ino,
@@ -822,11 +844,6 @@ def run_case(root, metadata, os_name, arch, job_end):
                 path = root / ('helper-' + str(round_number) + '.private')
                 path.write_bytes(raw); path.chmod(0o600)
                 helper_receipts.append(digest(raw))
-                stage = 'helper_deadline_guard'
-                remaining(end)
-                stage = 'helper_response'
-                own.send(host, {'kind': 'helper_response', 'round': round_number,
-                                'raw': base64.b64encode(raw).decode()}, operation_end)
             finally:
                 if s['p'].pid in own.live: own.cleanup()
             if os_name == 'windows':
@@ -1093,6 +1110,7 @@ def parent_main(args):
         report['failureReason'] = failure_reason(error)
         report['failureObservation'] = {'stage': stage, 'parentElapsedMs': round((time.monotonic() - parent_started) * 1000, 3)}
         if hasattr(error, 'path_failure'): report['pathFailure'] = error.path_failure
+        if hasattr(error, 'command_failure'): report['commandFailure'] = error.command_failure
     except KeyboardInterrupt:
         report.update(status='unqualified', failureReason='absolute_deadline' if time.monotonic() >= job_end else 'parent_interrupted')
     finally:
