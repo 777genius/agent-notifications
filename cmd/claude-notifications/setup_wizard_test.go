@@ -3369,7 +3369,7 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "go", "build", "-p", "2", "-buildvcs=false", "-o", out, src)
-	cmd.Env = append(testenv.Build(t, filepath.Join(dir, "build-home")), "GOTOOLCHAIN=local")
+	cmd.Env = append(testenv.FixtureBuild(t, filepath.Join(dir, "build-home")), "GOTOOLCHAIN=local")
 	if body, err := cmd.CombinedOutput(); err != nil {
 		return image, fmt.Errorf("build probe: %s: %w", body, err)
 	}

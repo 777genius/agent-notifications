@@ -14,7 +14,7 @@ concurrency:
 jobs:
   scope:
     name: Classify release tooling scope
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || vars.CI_LINUX_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 50
     permissions:
       contents: read
@@ -30,6 +30,7 @@ jobs:
         run: |
           python3 -B tools/ci_release_scope_test.py
           python3 -B tools/ci_native_evidence_test.py
+          python3 -B tools/ci_windows_shards_test.py
       - name: Classify exact PR revision (errors retain full CI)
         id: classify
         env:
@@ -60,19 +61,17 @@ jobs:
       - run: make release-tools-check
       - run: make release-preflight
 
-  test:
+  go-tests:
     needs: scope
     if: ${{ !cancelled() && needs.scope.outputs.mode != 'release-tools' && needs.scope.outputs.mode != 'release-equivalent' }}
-    name: Test on Windows
+    name: Windows Go tests (${{ matrix.go }})
     runs-on: windows-latest
-    # Measured preceding stages take ~30m; preserve the 10m offline E2E budget plus cleanup margin.
+    # Preserve every existing native test and offline E2E budget.
     timeout-minutes: 45
-
     strategy:
       fail-fast: false
       matrix:
         go: ['1.25', '1.26']
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
@@ -91,53 +90,6 @@ jobs:
       - name: Verify dependencies
         run: go mod verify
 
-      - name: Set up Python for binary qualification
-        uses: actions/setup-python@v7
-        with:
-          python-version: '3.12'
-
-      - name: Qualify Windows configuration and delivery
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          go test ./internal/config -run '^TestWindowsAutomatic(NativeAnchorReadOnly|PinSkipsBusyChild)$' -count=1 -v
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          go build -o bin/claude-notifications.exe ./cmd/claude-notifications
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          go build -o bin/windows-standard-user-e2e.exe ./scripts/windows-standard-user-e2e
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          go test -c ./internal/config -o bin/config-native.test.exe
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          bin/windows-standard-user-e2e.exe bin/config-native.test.exe '-test.run=^TestWindowsAutomaticNativeAnchorReadOnly$' '-test.v=true'
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $version = (Get-Content .claude-plugin/plugin.json | ConvertFrom-Json).version
-          python scripts/release-artifact-e2e.py --binary bin/claude-notifications.exe --version "v$version" --windows-standard-user-runner bin/windows-standard-user-e2e.exe
-
-      - name: Prepare qualified configuration test build
-        if: matrix.go == '1.26' && github.event_name == 'pull_request'
-        shell: pwsh
-        env:
-          TEST_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $actualSource = git rev-parse HEAD
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          New-Item -ItemType Directory -Force qualified-config-build | Out-Null
-          Copy-Item bin/claude-notifications.exe qualified-config-build/claude-notifications-windows-amd64.exe
-          $hash = (Get-FileHash qualified-config-build/claude-notifications-windows-amd64.exe -Algorithm SHA256).Hash.ToLowerInvariant()
-          [IO.File]::WriteAllText("$PWD/qualified-config-build/SHA256SUMS", "$hash  claude-notifications-windows-amd64.exe`n", [Text.UTF8Encoding]::new($false))
-          $info = "Unreleased Windows amd64 test build; not a plugin installer.`nSource: $actualSource`nPR head: $env:TEST_SOURCE_SHA`nActions run: $env:GITHUB_RUN_ID`n$(go version)`nQualified by release-artifact-e2e.py in this Actions run.`nUse config init --json / config inspect --json to diagnose ACL rejection.`nThe normal version string is retained for packaged-template compatibility.`n"
-          [IO.File]::WriteAllText("$PWD/qualified-config-build/BUILD-INFO.txt", $info, [Text.UTF8Encoding]::new($false))
-
-      - name: Upload qualified configuration test build
-        if: matrix.go == '1.26' && github.event_name == 'pull_request'
-        uses: actions/upload-artifact@v7
-        with:
-          name: windows-config-test-pr-${{ github.event.pull_request.number }}-go-${{ matrix.go }}
-          path: qualified-config-build/
-          retention-days: 7
-          if-no-files-found: error
-
       - name: Run go vet
         run: go vet ./...
 
@@ -150,35 +102,6 @@ jobs:
             exit 1
           }
         shell: pwsh
-
-      - name: Compare cold and warm Windows lock preparation
-        if: matrix.go == '1.26'
-        shell: pwsh
-        env:
-          LOCK_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-        run: |
-          $baseline = Join-Path $env:RUNNER_TEMP 'TEST-windows-lock-baseline'
-          git fetch --no-tags --depth=1 origin $env:LOCK_BASE_SHA
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          git worktree add --detach $baseline $env:LOCK_BASE_SHA
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Copy-Item internal/installruntime/lock_bench_windows_test.go "$baseline/internal/installruntime/lock_bench_windows_test.go"
-          Write-Host "Baseline lock preparation at $env:LOCK_BASE_SHA"
-          Push-Location $baseline
-          try {
-            go test -run '^$' -bench '^BenchmarkWindowsPrivateLock$' -benchtime=100x -count=5 -benchmem ./internal/installruntime
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          } finally {
-            Pop-Location
-          }
-          Write-Host 'Current lock preparation'
-          go test -run '^$' -bench '^BenchmarkWindowsPrivateLock$' -benchtime=100x -count=5 -benchmem ./internal/installruntime
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-      - name: Compare Windows cache root traversal
-        if: matrix.go == '1.26'
-        run: go test -run '^$' -bench '^BenchmarkWindowsPrivateCacheRoot$' -benchtime=100x -count=3 -benchmem ./internal/installruntime
-        shell: bash
 
       - name: Qualify observation caches without cross-package contention
         id: observation
@@ -256,6 +179,118 @@ jobs:
         run: go test -race -count=10 -run '^TestStoreKilledLockOwner$' ./internal/config
         shell: bash
 
+      - name: Preserve complete atomic Go coverage
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-coverage-go-${{ matrix.go }}
+          path: coverage.txt
+          if-no-files-found: error
+
+  installer-native:
+    needs: scope
+    if: ${{ !cancelled() && needs.scope.outputs.mode != 'release-tools' && needs.scope.outputs.mode != 'release-equivalent' }}
+    name: Windows installers and native E2E (${{ matrix.go }})
+    runs-on: windows-latest
+    # Preserve every existing native test and offline E2E budget.
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        go: ['1.25', '1.26']
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: ${{ matrix.go }}
+
+      - name: Display Go version
+        run: go version
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Verify dependencies
+        run: go mod verify
+
+      - name: Set up Python for binary qualification
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Qualify Windows configuration and delivery
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          go test ./internal/config -run '^TestWindowsAutomatic(NativeAnchorReadOnly|PinSkipsBusyChild)$' -count=1 -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          go build -o bin/claude-notifications.exe ./cmd/claude-notifications
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          go build -o bin/windows-standard-user-e2e.exe ./scripts/windows-standard-user-e2e
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          go test -c ./internal/config -o bin/config-native.test.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          bin/windows-standard-user-e2e.exe bin/config-native.test.exe '-test.run=^TestWindowsAutomaticNativeAnchorReadOnly$' '-test.v=true'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $version = (Get-Content .claude-plugin/plugin.json | ConvertFrom-Json).version
+          python scripts/release-artifact-e2e.py --binary bin/claude-notifications.exe --version "v$version" --windows-standard-user-runner bin/windows-standard-user-e2e.exe
+
+      - name: Prepare qualified configuration test build
+        if: matrix.go == '1.26' && github.event_name == 'pull_request'
+        shell: pwsh
+        env:
+          TEST_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $actualSource = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          New-Item -ItemType Directory -Force qualified-config-build | Out-Null
+          Copy-Item bin/claude-notifications.exe qualified-config-build/claude-notifications-windows-amd64.exe
+          $hash = (Get-FileHash qualified-config-build/claude-notifications-windows-amd64.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          [IO.File]::WriteAllText("$PWD/qualified-config-build/SHA256SUMS", "$hash  claude-notifications-windows-amd64.exe`n", [Text.UTF8Encoding]::new($false))
+          $info = "Unreleased Windows amd64 test build; not a plugin installer.`nSource: $actualSource`nPR head: $env:TEST_SOURCE_SHA`nActions run: $env:GITHUB_RUN_ID`n$(go version)`nQualified by release-artifact-e2e.py in this Actions run.`nUse config init --json / config inspect --json to diagnose ACL rejection.`nThe normal version string is retained for packaged-template compatibility.`n"
+          [IO.File]::WriteAllText("$PWD/qualified-config-build/BUILD-INFO.txt", $info, [Text.UTF8Encoding]::new($false))
+
+      - name: Upload qualified configuration test build
+        if: matrix.go == '1.26' && github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-config-test-pr-${{ github.event.pull_request.number }}-go-${{ matrix.go }}
+          path: qualified-config-build/
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: Compare cold and warm Windows lock preparation
+        if: matrix.go == '1.26'
+        shell: pwsh
+        env:
+          LOCK_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          $baseline = Join-Path $env:RUNNER_TEMP 'TEST-windows-lock-baseline'
+          git fetch --no-tags --depth=1 origin $env:LOCK_BASE_SHA
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git worktree add --detach $baseline $env:LOCK_BASE_SHA
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item internal/installruntime/lock_bench_windows_test.go "$baseline/internal/installruntime/lock_bench_windows_test.go"
+          Write-Host "Baseline lock preparation at $env:LOCK_BASE_SHA"
+          Push-Location $baseline
+          try {
+            go test -run '^$' -bench '^BenchmarkWindowsPrivateLock$' -benchtime=100x -count=5 -benchmem ./internal/installruntime
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          } finally {
+            Pop-Location
+          }
+          Write-Host 'Current lock preparation'
+          go test -run '^$' -bench '^BenchmarkWindowsPrivateLock$' -benchtime=100x -count=5 -benchmem ./internal/installruntime
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Compare Windows cache root traversal
+        if: matrix.go == '1.26'
+        run: go test -run '^$' -bench '^BenchmarkWindowsPrivateCacheRoot$' -benchtime=100x -count=3 -benchmem ./internal/installruntime
+        shell: bash
+
       - name: Build binary
         run: go build -ldflags="-s -w" -trimpath -o bin/claude-notifications.exe ./cmd/claude-notifications
 
@@ -295,6 +330,41 @@ jobs:
         shell: bash
         timeout-minutes: 10
 
+  test:
+    needs: [scope, go-tests, installer-native]
+    if: ${{ always() && needs.scope.outputs.mode != 'release-tools' && needs.scope.outputs.mode != 'release-equivalent' }}
+    name: Test on Windows (${{ matrix.go }})
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || vars.CI_LINUX_RUNNER || 'ubuntu-latest' }}
+    permissions: {}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        go: ['1.25', '1.26']
+    steps:
+      - name: Require every Windows shard to succeed
+        env:
+          SCOPE_RESULT: ${{ needs.scope.result }}
+          GO_TESTS_RESULT: ${{ needs.go-tests.result }}
+          INSTALLER_NATIVE_RESULT: ${{ needs.installer-native.result }}
+        run: |
+          set -euo pipefail
+          test "$SCOPE_RESULT" = success
+          test "$GO_TESTS_RESULT" = success
+          test "$INSTALLER_NATIVE_RESULT" = success
+
+      - name: Restore complete atomic coverage
+        uses: actions/download-artifact@v8
+        with:
+          name: windows-coverage-go-${{ matrix.go }}
+
+      - name: Require atomic Go coverage
+        run: |
+          set -euo pipefail
+          test -s coverage.txt
+          test "$(head -n 1 coverage.txt)" = 'mode: atomic'
+          test "$(awk 'NR > 1 && NF { print 1; exit }' coverage.txt)" = 1
+
   release-equivalent:
     name: Release-equivalent native proof (Windows)
     needs: scope
@@ -316,9 +386,9 @@ jobs:
 
   native-input-evidence:
     name: Native input evidence (Windows)
-    needs: [scope, test]
+    needs: [scope, go-tests, installer-native, test]
     if: ${{ !cancelled() && needs.scope.outputs.mode == 'full' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || vars.CI_LINUX_RUNNER || 'ubuntu-latest' }}
     permissions:
       contents: read
     steps:
@@ -330,7 +400,7 @@ jobs:
         env:
           CI_MODE: ${{ needs.scope.outputs.mode }}
           NEEDS_JSON: ${{ toJSON(needs) }}
-        run: python3 -B tools/ci_native_evidence.py receipt --workflow ci-windows.yml --jobs test
+        run: python3 -B tools/ci_native_evidence.py receipt --workflow ci-windows.yml --jobs go-tests installer-native test
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: native-inputs-ci-windows.yml-${{ github.run_id }}-${{ github.run_attempt }}

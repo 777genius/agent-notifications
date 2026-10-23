@@ -16,8 +16,9 @@ from ci_release_scope import SHA, equivalent_source, equivalent_tree, git
 CONTRACTS = {
     'ci-macos.yml': (('test', 'swift-test'), 'Native input evidence (macOS)',
                      ('Test on macOS (1.25)', 'Test on macOS (1.26)', 'Swift notifier tests')),
-    'ci-windows.yml': (('test',), 'Native input evidence (Windows)',
-                       ('Test on Windows (1.25)', 'Test on Windows (1.26)')),
+    'ci-windows.yml': (('go-tests', 'installer-native', 'test'), 'Native input evidence (Windows)',
+                       tuple(name + ' (' + version + ')' for version in ('1.25', '1.26')
+                             for name in ('Windows Go tests', 'Windows installers and native E2E', 'Test on Windows'))),
     'install-recovery-e2e.yml': (('recovery',), 'Native input evidence (recovery)',
                                ('Offline recovery (ubuntu-latest, native Go 1.26)',
                                 'Offline recovery (macos-15, native Go 1.26)')),
