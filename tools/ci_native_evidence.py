@@ -135,6 +135,25 @@ def verify_run(workflow, source, event, run):
     return proof
 
 
+def latest_source_run(repository, workflow, runs):
+    """Ignore only the workflows' proven all-skipped metadata edit no-ops."""
+    for run in sorted(runs, key=lambda item: item['id'], reverse=True):
+        if (workflow in ('ci-macos.yml', 'install-recovery-e2e.yml')
+                and run.get('event') == 'pull_request' and run.get('status') == 'completed'
+                and run.get('conclusion') == 'skipped'):
+            jobs = pages('repos/' + repository + '/actions/runs/' + str(run['id']) + '/jobs?filter=all', 'jobs')
+            label = 'macOS' if workflow == 'ci-macos.yml' else 'recovery'
+            inert_names = {'Release-equivalent native proof (' + label + ')', CONTRACTS[workflow][1]}
+            if (jobs and any("'Metadata edit ignored (scope)'" in job.get('name', '') for job in jobs)
+                    and all(job.get('status') == 'completed' and job.get('conclusion') == 'skipped'
+                            and isinstance(job.get('name'), str)
+                            and ('Metadata edit ignored (' in job['name'] or job['name'] in inert_names)
+                            for job in jobs)):
+                continue
+        return run
+    return None
+
+
 def verify(workflow, source, event, wait_seconds=2700):
     require(workflow in CONTRACTS and os.environ['GITHUB_REPOSITORY'] == event['repository']['full_name'], 'unknown evidence contract')
     repository = event['repository']['full_name']
@@ -154,7 +173,8 @@ def verify(workflow, source, event, wait_seconds=2700):
         failures = []
         for candidate in sources:
             runs = pages('repos/' + repository + '/actions/workflows/' + workflow + '/runs?head_sha=' + candidate, 'workflow_runs')
-            for run in sorted(runs, key=lambda item: item['id'], reverse=True)[:1]:
+            latest_run = latest_source_run(repository, workflow, runs)
+            for run in [latest_run] if latest_run else []:
                 if run.get('status') != 'completed':
                     pending = True
                     continue
@@ -163,13 +183,13 @@ def verify(workflow, source, event, wait_seconds=2700):
                 try:
                     proof = verify_run(workflow, candidate, event, run)
                     current = pages('repos/' + repository + '/actions/workflows/' + workflow + '/runs?head_sha=' + candidate, 'workflow_runs')
-                    latest = max(current, key=lambda item: item['id']) if current else {}
+                    latest = latest_source_run(repository, workflow, current) or {}
                     require(latest.get('id') == run['id'] and latest.get('run_attempt') == proof['run_attempt']
                             and latest.get('status') == 'completed' and latest.get('conclusion') == 'success',
                             'latest source run changed during verification')
                     if candidate != source:
                         primary = pages('repos/' + repository + '/actions/workflows/' + workflow + '/runs?head_sha=' + source, 'workflow_runs')
-                        latest_primary = max(primary, key=lambda item: item['id']) if primary else None
+                        latest_primary = latest_source_run(repository, workflow, primary)
                         require(not latest_primary or latest_primary.get('status') == 'completed'
                                 and latest_primary.get('conclusion') == 'success', 'primary source qualification changed')
                     return proof

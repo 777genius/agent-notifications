@@ -111,12 +111,15 @@ def equivalent_source(event_name, event):
     base, head = pr['base']['sha'], pr['head']['sha']
     merge_base = git('merge-base', base, head).decode().strip()
     changes = raw_changes(git('diff', '--raw', '-z', '--no-abbrev', '--find-renames', merge_base, head, '--'))
-    if not changes or any(status != 'M' for status, _ in changes):
+    if not changes:
         return None
     paths = {paths[0] for _, paths in changes}
-    if paths == {RELEASE_WORKFLOW} and stable_exclusion_only(blob(merge_base, RELEASE_WORKFLOW), blob(head, RELEASE_WORKFLOW)):
+    if (paths == {RELEASE_WORKFLOW} and all(status == 'M' for status, _ in changes)
+            and stable_exclusion_only(blob(merge_base, RELEASE_WORKFLOW), blob(head, RELEASE_WORKFLOW))):
         source = base
-    elif 'release-channels.tsv' in paths and paths <= METADATA:
+    elif 'release-channels.tsv' in paths:
+        # A stacked promotion includes C's version/product changes against
+        # main. Compare against frozen C below, not against the older PR base.
         source = channel_source(head)
     else:
         return None

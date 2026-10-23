@@ -51,6 +51,20 @@ class EvidenceFixture(fixture.ScopeFixture):
             self.assertEqual(equivalent_source('pull_request', fixture.event(self.base, head)), self.base)
             self.assertTrue(equivalent_tree(self.base, head))
 
+    def test_stacked_promotion_reuses_frozen_candidate_with_inherited_product_changes(self):
+        old_base = self.base
+        self.write('internal/runtime.go', 'new candidate product and version\n')
+        self.write('internal/new-feature.go', 'new qualified candidate file\n')
+        candidate = self.commit()
+        self.write('release-channels.tsv', channels(candidate))
+        head = self.commit()
+        with patch('ci_release_scope.git', side_effect=lambda *args: self.git(*args)):
+            self.assertEqual(equivalent_source('pull_request', fixture.event(old_base, head)), candidate)
+        self.write('internal/runtime.go', 'unqualified promotion product change\n')
+        head = self.commit()
+        with patch('ci_release_scope.git', side_effect=lambda *args: self.git(*args)):
+            self.assertIsNone(equivalent_source('pull_request', fixture.event(old_base, head)))
+
     def test_exact_operator_exclusion_qualifies(self):
         self.write('.github/workflows/release.yml', RELEASE.replace(b'\npermissions:', ADDED + b'\npermissions:').decode())
         head = self.commit()
@@ -222,6 +236,42 @@ class EvidencePolicy(unittest.TestCase):
              patch('ci_native_evidence.verify_run', return_value={'run_attempt': 1}), \
              self.assertRaisesRegex(ValueError, 'primary source qualification changed'):
             evidence.verify(WORKFLOW, source, fixture.event(source, 'c' * 40), wait_seconds=0)
+
+    def metadata_jobs(self, workflow=WORKFLOW):
+        label = 'macOS' if workflow == WORKFLOW else 'recovery'
+        names = ["github.event.action == 'edited' && 'Metadata edit ignored (scope)' || 'Classify macOS CI scope'",
+                 "github.event.action == 'edited' && format('Metadata edit ignored (native {0})', matrix.os)",
+                 'Release-equivalent native proof (' + label + ')', evidence.CONTRACTS[workflow][1]]
+        return [{'name': name, 'status': 'completed', 'conclusion': 'skipped'} for name in names]
+
+    def test_proven_skipped_metadata_run_ignored_in_initial_and_final_census(self):
+        source = 'a' * 40
+        good = {'id': 1, 'run_attempt': 1, 'status': 'completed', 'conclusion': 'success'}
+        ignored = {'id': 2, 'event': 'pull_request', 'status': 'completed', 'conclusion': 'skipped'}
+        for workflow in [WORKFLOW, 'install-recovery-e2e.yml']:
+            with patch.dict(os.environ, {'GITHUB_REPOSITORY': 'owner/repo'}), patch('ci_native_evidence.gh', return_value=[]), \
+                 patch('ci_native_evidence.pages', side_effect=[[good, ignored], self.metadata_jobs(workflow),
+                                                               [good, ignored], self.metadata_jobs(workflow)]), \
+                 patch('ci_native_evidence.verify_run', return_value={'run_attempt': 1}) as verify_run:
+                self.assertEqual(evidence.verify(workflow, source, fixture.event(source, 'b' * 40), wait_seconds=0),
+                                 {'run_attempt': 1})
+                self.assertEqual(verify_run.call_args.args[-1], good)
+
+    def test_metadata_exemption_never_ignores_native_failure_pending_or_uncertain_jobs(self):
+        good = {'id': 1, 'status': 'completed', 'conclusion': 'success'}
+        metadata = {'id': 2, 'event': 'pull_request', 'status': 'completed', 'conclusion': 'skipped'}
+        for changes in [{'conclusion': 'failure'}, {'conclusion': 'cancelled'}, {'conclusion': 'success'},
+                        {'status': 'in_progress'}, {'event': 'push'}]:
+            actual = {**metadata, **changes}
+            with patch('ci_native_evidence.pages') as pages:
+                self.assertEqual(evidence.latest_source_run('owner/repo', WORKFLOW, [good, actual]), actual)
+            pages.assert_not_called()
+        jobs = self.metadata_jobs()
+        for uncertain in [[], jobs[1:], [*jobs, {'name': 'Test on macOS (1.26)', 'status': 'completed', 'conclusion': 'skipped'}],
+                          [dict(jobs[0], conclusion='failure'), *jobs[1:]],
+                          [dict(jobs[0], status='queued'), *jobs[1:]]]:
+            with patch('ci_native_evidence.pages', return_value=uncertain):
+                self.assertEqual(evidence.latest_source_run('owner/repo', WORKFLOW, [good, metadata]), metadata)
 
     def test_artifact_digest_and_exact_members_required(self):
         buffer = io.BytesIO()

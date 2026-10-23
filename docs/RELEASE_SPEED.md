@@ -169,9 +169,10 @@ Unknown paths, runtime/installer/hook/native changes, Makefile, CI policy and
 classifier changes retain full CI. `ci:full` always forces full; missing,
 expired or conflicting source evidence also retains full CI. This first change
 therefore needs a full run before subsequent release-only PRs can reuse it.
-Source receipts expire after 30 days. The verifier uses the latest source run;
-a later metadata-only ignored run without a full receipt conservatively falls
-back to full CI. Native receipt checks join successful earlier shards with the
+Source receipts expire after 30 days. The verifier uses the latest source run,
+ignoring only proven all-skipped macOS/recovery metadata-edit no-ops. Pending,
+failed or cancelled native runs cannot inherit an older success. Native receipt
+checks join successful earlier shards with the
 latest execution of each retried job; a newer failure never inherits old green.
 
 Ubuntu runs command tests, remaining packages, the real-cache cursorevent package
