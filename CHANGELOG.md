@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.49.7] - 2026-10-23
+
+### Fixed
+- Bound legacy macOS notifier execution and pipe draining, preserve diagnostics when completion is uncertain, and avoid duplicate fallback notifications ([#507](https://github.com/777genius/agent-notifications/pull/507), [#496](https://github.com/777genius/agent-notifications/pull/496)).
+- Preserve native Windows Schannel trust before using a corporate CA fallback; apply explicit CA overrides only to the active Schannel backend and remove temporary CA bundles from staged downloads ([#506](https://github.com/777genius/agent-notifications/pull/506), [#503](https://github.com/777genius/agent-notifications/pull/503)).
+- Detect WSL through interop markers when WSL environment variables are missing ([#509](https://github.com/777genius/agent-notifications/pull/509)).
+- Use the bundled notification icon in the Linux desktop entry ([#508](https://github.com/777genius/agent-notifications/pull/508)).
+- Record detached sound playback outcomes in the debug log and report playback timeouts as errors ([#510](https://github.com/777genius/agent-notifications/pull/510), [#131](https://github.com/777genius/agent-notifications/issues/131)).
+- Keep native qualification receipt writes outside the clock comparison span and retry transient GitHub reads within the existing deadline, retaining command failure details.
+
+### Changed
+- Include Qoder in the README brand row and landing-page introduction and search descriptions ([#504](https://github.com/777genius/agent-notifications/pull/504), [#505](https://github.com/777genius/agent-notifications/pull/505)).
+
+### Platform notes
+- This release uses the basic five-platform artifact profile with separate downloaded macOS and Codex checks. It does not claim visible desktop, full native, eleven-cell OpenCode, cold-start, physical Intel or live-provider qualification.
+
 ## [1.49.6] - 2026-10-22
 
 ### Added
