@@ -161,9 +161,24 @@ def verify(workflow, source, event, wait_seconds=2700):
                 if run.get('conclusion') != 'success':
                     raise ValueError('Latest source native run did not succeed')
                 try:
-                    return verify_run(workflow, candidate, event, run)
+                    proof = verify_run(workflow, candidate, event, run)
+                    current = pages('repos/' + repository + '/actions/workflows/' + workflow + '/runs?head_sha=' + candidate, 'workflow_runs')
+                    latest = max(current, key=lambda item: item['id']) if current else {}
+                    require(latest.get('id') == run['id'] and latest.get('run_attempt') == proof['run_attempt']
+                            and latest.get('status') == 'completed' and latest.get('conclusion') == 'success',
+                            'latest source run changed during verification')
+                    if candidate != source:
+                        primary = pages('repos/' + repository + '/actions/workflows/' + workflow + '/runs?head_sha=' + source, 'workflow_runs')
+                        latest_primary = max(primary, key=lambda item: item['id']) if primary else None
+                        require(not latest_primary or latest_primary.get('status') == 'completed'
+                                and latest_primary.get('conclusion') == 'success', 'primary source qualification changed')
+                    return proof
                 except (ValueError, KeyError, TypeError, OSError, subprocess.SubprocessError, zipfile.BadZipFile) as error:
                     failures.append(str(error))
+            # A newer primary qualification must finish before an associated
+            # PR's older proof can be considered, including failed-only retries.
+            if pending:
+                break
         if not pending or time.monotonic() >= deadline:
             raise ValueError('No qualified native input receipt: ' + (failures[0] if failures else 'source run absent, failed, or wait budget expired'))
         time.sleep(min(20, max(0, deadline - time.monotonic())))

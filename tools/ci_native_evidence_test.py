@@ -187,6 +187,42 @@ class EvidencePolicy(unittest.TestCase):
             evidence.verify(WORKFLOW, source, payload, wait_seconds=0)
         verify_run.assert_not_called()
 
+    def test_pending_primary_never_accepts_associated_old_green(self):
+        source, associated = 'a' * 40, 'b' * 40
+        prs = [{'merged_at': '2026-10-23T00:00:00Z', 'merge_commit_sha': source,
+                'head': {'sha': associated, 'repo': {'full_name': 'owner/repo'}}}]
+        for status in ['queued', 'in_progress']:
+            with patch.dict(os.environ, {'GITHUB_REPOSITORY': 'owner/repo'}), patch('ci_native_evidence.gh', return_value=prs), \
+                 patch('ci_native_evidence.pages', return_value=[{'id': 2, 'status': status}]) as pages, \
+                 patch('ci_native_evidence.verify_run') as verify_run, self.assertRaises(ValueError):
+                evidence.verify(WORKFLOW, source, fixture.event(source, 'c' * 40), wait_seconds=0)
+            self.assertEqual(pages.call_count, 1)
+            verify_run.assert_not_called()
+
+    def test_latest_run_and_attempt_are_rechecked_after_proof(self):
+        source = 'a' * 40
+        run = {'id': 1, 'run_attempt': 1, 'status': 'completed', 'conclusion': 'success'}
+        for changed in [run, dict(run, id=2), dict(run, run_attempt=2), dict(run, status='in_progress')]:
+            with patch.dict(os.environ, {'GITHUB_REPOSITORY': 'owner/repo'}), patch('ci_native_evidence.gh', return_value=[]), \
+                 patch('ci_native_evidence.pages', side_effect=[[run], [changed]]), \
+                 patch('ci_native_evidence.verify_run', return_value={'run_attempt': 1}):
+                if changed == run:
+                    self.assertEqual(evidence.verify(WORKFLOW, source, fixture.event(source, 'b' * 40), wait_seconds=0), {'run_attempt': 1})
+                else:
+                    with self.assertRaisesRegex(ValueError, 'latest source run changed'):
+                        evidence.verify(WORKFLOW, source, fixture.event(source, 'b' * 40), wait_seconds=0)
+
+    def test_primary_started_during_associated_proof_blocks_acceptance(self):
+        source, associated = 'a' * 40, 'b' * 40
+        prs = [{'merged_at': '2026-10-23T00:00:00Z', 'merge_commit_sha': source,
+                'head': {'sha': associated, 'repo': {'full_name': 'owner/repo'}}}]
+        run = {'id': 1, 'run_attempt': 1, 'status': 'completed', 'conclusion': 'success'}
+        with patch.dict(os.environ, {'GITHUB_REPOSITORY': 'owner/repo'}), patch('ci_native_evidence.gh', return_value=prs), \
+             patch('ci_native_evidence.pages', side_effect=[[], [run], [run], [{'id': 2, 'status': 'in_progress'}]]), \
+             patch('ci_native_evidence.verify_run', return_value={'run_attempt': 1}), \
+             self.assertRaisesRegex(ValueError, 'primary source qualification changed'):
+            evidence.verify(WORKFLOW, source, fixture.event(source, 'c' * 40), wait_seconds=0)
+
     def test_artifact_digest_and_exact_members_required(self):
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, 'w') as archive:
