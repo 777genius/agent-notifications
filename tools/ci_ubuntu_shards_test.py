@@ -90,13 +90,13 @@ sys.exit(int(os.environ.get('TEST_TEST_EXIT', '0')))
 
     def test_required_aggregate_rejects_each_missing_failed_or_cancelled_shard(self):
         aggregate = job('test')
-        self.assertIn('needs: [scope, go-tests, installer-native]', aggregate)
+        self.assertIn('needs: [scope, go-tests, installer-native, cursor-physical]', aggregate)
         self.assertIn('always()', aggregate)
         self.assertNotIn('!cancelled()', aggregate)
         self.assertIn('name: Test on Ubuntu (${{ matrix.go }})', aggregate)
         block = run_block(aggregate, 'Require every test shard to succeed')
         env = {'SCOPE_RESULT': 'success', 'GO_TESTS_RESULT': 'success',
-               'INSTALLER_NATIVE_RESULT': 'success'}
+               'INSTALLER_NATIVE_RESULT': 'success', 'CURSOR_PHYSICAL_RESULT': 'success'}
         def run(values):
             return subprocess.run(['bash', '-c', block], cwd=self.root,
                                   env={**os.environ, **values}, capture_output=True, timeout=10).returncode

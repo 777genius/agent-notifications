@@ -22,12 +22,12 @@ CONTRACTS = {
     'install-recovery-e2e.yml': (('recovery',), 'Native input evidence (recovery)',
                                ('Offline recovery (ubuntu-latest, native Go 1.26)',
                                 'Offline recovery (macos-15, native Go 1.26)')),
-    'ci-ubuntu.yml': (('go-tests', 'installer-native', 'opencode-plugin', 'lint', 'test'),
+    'ci-ubuntu.yml': (('go-tests', 'installer-native', 'cursor-physical', 'opencode-plugin', 'lint', 'test'),
                       'Native input evidence (Ubuntu)',
                       tuple('Ubuntu Go tests (' + version + ', ' + shard + ')'
                             for version in ('1.25', '1.26') for shard in ('cmd-setup', 'cmd-other', 'packages', 'cursorevent')) +
                       tuple('Ubuntu installers and native E2E (' + version + ')' for version in ('1.25', '1.26')) +
-                      ('Test on Ubuntu (1.25)', 'Test on Ubuntu (1.26)', 'OpenCode plugin bundle', 'Lint')),
+                      ('Cursor physical Ubuntu qualification (1.26)', 'Test on Ubuntu (1.25)', 'Test on Ubuntu (1.26)', 'OpenCode plugin bundle', 'Lint')),
 }
 
 

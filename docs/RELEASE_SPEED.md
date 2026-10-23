@@ -251,7 +251,9 @@ immutable released tag.
 Trusted Ubuntu Go 1.25 and 1.26 jobs use `CI_LINUX_RUNNER` when configured,
 with the existing GitHub-hosted fallback for external fork PRs. Final macOS and
 recovery input receipts also use that Linux runner; the native qualification
-itself remains on its original operating system. This changes scheduling,
+itself remains on its original operating system. The frozen Cursor physical
+Ubuntu/kernel qualification runs as a separate required `cursor-physical` job on
+`ubuntu-24.04`; its exact positive markers and retained evidence remain required. This changes scheduling,
 not the scope or authority of a successful receipt.
 
 Ubuntu command tests run as complementary `cmd-setup` and `cmd-other` groups.
