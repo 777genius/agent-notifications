@@ -198,7 +198,7 @@ func (p *Player) Play(soundPath string) error {
 		return fmt.Errorf("failed to start audio device: %w", err)
 	}
 
-	defer device.Stop()
+	defer func() { _ = device.Stop() }()
 	if err := waitForPlayback(done, 30*time.Second); err != nil {
 		return fmt.Errorf("%w: %s", err, soundPath)
 	}
