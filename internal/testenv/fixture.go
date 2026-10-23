@@ -22,6 +22,7 @@ var goFixtures = struct {
 
 // Capture the process temp root before tests install private TMPDIR values.
 var fixtureTempRoot = os.TempDir()
+var fixtureCompiler, fixtureCompilerErr = exec.LookPath("go")
 
 var fixtureBuildCache struct {
 	once sync.Once
@@ -71,7 +72,10 @@ func GoFixture(t *testing.T, program string) string {
 			toolchain[key] = value
 		}
 	}
-	compiler := filepath.Join(runtime.GOROOT(), "bin", "go")
+	if fixtureCompilerErr != nil {
+		t.Fatalf("locate TEST Go compiler: %v", fixtureCompilerErr)
+	}
+	compiler := fixtureCompiler
 	settings, err := json.Marshal(struct {
 		Source, Compiler, Version, OS, Arch string
 		Environment                         map[string]string
