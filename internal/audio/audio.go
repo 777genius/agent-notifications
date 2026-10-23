@@ -198,18 +198,25 @@ func (p *Player) Play(soundPath string) error {
 		return fmt.Errorf("failed to start audio device: %w", err)
 	}
 
-	// Wait for playback to complete or timeout
+	defer device.Stop()
+	if err := waitForPlayback(done, 30*time.Second); err != nil {
+		return fmt.Errorf("%w: %s", err, soundPath)
+	}
+	// Delay to let buffer drain completely.
+	time.Sleep(200 * time.Millisecond)
+	logging.Debug("Audio playback completed: %s", soundPath)
+	return nil
+}
+
+func waitForPlayback(done <-chan struct{}, timeout time.Duration) error {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
 	select {
 	case <-done:
-		// Delay to let buffer drain completely
-		time.Sleep(200 * time.Millisecond)
-		logging.Debug("Audio playback completed: %s", soundPath)
-	case <-time.After(30 * time.Second):
-		logging.Warn("Audio playback timeout: %s", soundPath)
+		return nil
+	case <-timer.C:
+		return fmt.Errorf("audio playback timed out after %s", timeout)
 	}
-
-	_ = device.Stop()
-	return nil
 }
 
 // Close releases resources
