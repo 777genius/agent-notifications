@@ -37,9 +37,12 @@ Tag, draft and uploads are separate stages. Each requires tag == C and a draft
 with the exact tag/target and no prerelease. Draft discovery uses the authenticated
 releases listing because GitHub's release-by-tag endpoint excludes drafts. It
 reads every page (100 releases each, at most 20 pages), requires a unique exact
-tag match, then verifies its current state through the release ID. Incomplete,
-malformed, repeated or over-limit pages and failed direct reads stop the stage;
-only a complete listing can establish absence. A repository at the bound must
+tag match, then verifies its current state through the release ID. A repeated
+release ID discards the partial census and restarts from page one, with at most
+three read-only census attempts per discovery. This also applies after a draft
+write is accepted, without repeating that write. Persistent repetition, incomplete,
+malformed or over-limit pages and failed reads stop the stage; only a complete
+listing can establish absence. A repository at the bound must
 be reviewed before increasing it. Discovery and the full remote asset inventory
 are rechecked around every upload to catch concurrent conflicts. Already verified
 assets are omitted from the write loop; a final full scan also checks a no-op resume.
@@ -66,7 +69,8 @@ These behavioral tests use a TEST-only fake `gh` executable from a private temp
 directory outside the checkout. They use no GitHub token or network and perform
 no real release, agent, VM, native registration or provider action. They cover
 a draft hidden from the published-only tag endpoint, pagination and later duplicate
-matches, incomplete discovery and changed direct-ID state, conflicts introduced
+matches, transient and persistent repeated pages before and after draft acceptance,
+incomplete discovery and changed direct-ID state, conflicts introduced
 during upload, interruption after server-side upload acceptance and explicit resume
 without duplicates, lost responses, bounded absence retry, digest fallback, corrupted
 bytes/receipts, remote conflicts, and producer/controller provenance rejection.

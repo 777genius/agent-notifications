@@ -10,6 +10,8 @@ interface State {
   reads?: string[]; otherReleases?: Record<string, unknown>[]; releasePages?: unknown[];
   directRelease?: Record<string, unknown> | null; failListPage?: number;
   addConflictAfterUpload?: boolean;
+  releasePageScans?: unknown[][]; activeReleasePages?: unknown[];
+  releasePageScansAfterDraft?: unknown[][]; draftAttempts?: number;
 }
 const path = process.env.TEST_GH_STATE!;
 const state = JSON.parse(readFileSync(path, 'utf8')) as State;
@@ -39,8 +41,10 @@ if (args[0] === 'api') {
     }
     else if (endpoint!.startsWith('releases?per_page=100&page=')) {
       const page = Number(endpoint!.split('=').at(-1));
+      if (page === 1) { state.activeReleasePages = state.releasePageScans?.shift(); save(); }
+      const pages = state.activeReleasePages ?? state.releasePages;
       if (state.failListPage === page) { body({}, 503); }
-      else if (state.releasePages) body(page <= state.releasePages.length ? state.releasePages[page - 1] : []);
+      else if (pages) body(page <= pages.length ? pages[page - 1] : []);
       else {
         const releases = [...(state.otherReleases ?? []), ...(state.release ? [state.release] : [])];
         body(releases.slice((page - 1) * 100, page * 100));
@@ -61,9 +65,15 @@ if (args[0] === 'api') {
 } else if (args[0] === 'release') {
   if (!args.includes('--repo') || field('--repo') !== '777genius/agent-notifications' || args.includes('--clobber')) fail('explicit repo/no clobber required');
   if (args[1] === 'create') {
+    state.draftAttempts = (state.draftAttempts ?? 0) + 1; save();
     if (!state.tag || state.release || !args.includes('--draft') || !args.includes('--latest=false') || !args.includes('--verify-tag')) fail('unsafe draft mutation');
     state.release = { id: 17, tag_name: args[2], target_commitish: field('--target'), draft: true, prerelease: false };
-    state.mutations.push('draft'); save(); body(state.release);
+    if (state.releasePageScansAfterDraft) {
+      state.releasePageScans = state.releasePageScansAfterDraft; delete state.releasePageScansAfterDraft;
+    }
+    state.mutations.push('draft'); save();
+    if (state.loseWriteResponse) { state.loseWriteResponse = false; save(); fail('TEST lost draft response'); }
+    body(state.release);
   } else if (args[1] === 'upload') {
     state.uploadAttempts = (state.uploadAttempts ?? 0) + 1; save();
     if (!state.release || state.failUploads) fail('TEST upload unavailable');

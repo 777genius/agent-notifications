@@ -178,7 +178,8 @@ function draftIdentity(value: unknown, m: ReleaseIdentity): ObjectValue {
   number(release.id, 'release id required');
   return release;
 }
-function releaseState(gh: GitHub, m: ReleaseIdentity): ObjectValue | null {
+class RepeatedReleaseListing extends Error {}
+function releaseListing(gh: GitHub, m: ReleaseIdentity): ObjectValue | null {
   // The tag endpoint only returns published releases. Authenticated listing includes drafts.
   // Exhaust the bounded listing before accepting absence or uniqueness, even after a match.
   const ids = new Set<number>(); let match: ObjectValue | null = null;
@@ -187,22 +188,33 @@ function releaseState(gh: GitHub, m: ReleaseIdentity): ObjectValue | null {
     need(Array.isArray(values) && values.length <= 100, 'release list incomplete');
     for (const value of values) {
       const release = object(value); const id = number(release.id, 'release id required');
-      need(typeof release.tag_name === 'string' && !ids.has(id), 'invalid or repeated release listing');
+      need(typeof release.tag_name === 'string', 'invalid release listing');
+      if (ids.has(id)) throw new RepeatedReleaseListing('invalid or repeated release listing');
       ids.add(id);
       if (release.tag_name === m.releaseTag) {
         need(match === null, 'duplicate remote release tag');
         match = draftIdentity(release, m);
       }
     }
-    if (values.length < 100) {
-      if (!match) return null;
-      const id = number(match.id, 'release id required');
-      const release = draftIdentity(gh.read(`releases/${id}`), m);
-      need(release.id === id, 'remote release id mismatch');
-      return release;
-    }
+    if (values.length < 100) return match;
   }
   throw new Error('release list exceeds bounded pagination');
+}
+function releaseState(gh: GitHub, m: ReleaseIdentity): ObjectValue | null {
+  let match: ObjectValue | null = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try { match = releaseListing(gh, m); break; }
+    catch (error) {
+      // Offset pages can overlap when the remote listing changes. Discard the
+      // entire census and retry reads only; partial results never prove absence.
+      if (!(error instanceof RepeatedReleaseListing) || attempt === 2) throw error;
+    }
+  }
+  if (!match) return null;
+  const id = number(match.id, 'release id required');
+  const release = draftIdentity(gh.read(`releases/${id}`), m);
+  need(release.id === id, 'remote release id mismatch');
+  return release;
 }
 function checkRemote(gh: GitHub, m: Manifest, release: ObjectValue): Set<string> {
   const seen = new Set<string>(); const expected = new Map(m.assets.map(a => [a.name, a]));

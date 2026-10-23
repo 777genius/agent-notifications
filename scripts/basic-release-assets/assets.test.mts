@@ -174,6 +174,61 @@ test('authenticated draft listing paginates past 100 unrelated releases and dete
   } finally { f.clean(); }
 });
 
+// Offset pagination can overlap while releases change. Recovery must discard the
+// entire partial census, and can repeat reads only, including after draft acceptance.
+test('transient repeated pages restart discovery before absence and after draft acceptance', () => {
+  for (const afterDraft of [false, true]) {
+    const f = fixture();
+    try {
+      f.ok('seal'); f.ok('tag');
+      const page: Array<Record<string, unknown>> = Array.from({ length: 100 }, (_, i) => ({ id: i + 100, tag_name: `v0.0.${i}` }));
+      page[0] = { id: 17, tag_name: tag, target_commitish: C, draft: true, prerelease: false };
+      f.update({ reads: [], loseWriteResponse: afterDraft,
+        [afterDraft ? 'releasePageScansAfterDraft' : 'releasePageScans']: [[page, page], [page, page]] });
+      f.ok('draft');
+      assert.deepEqual(f.read().mutations, ['tag', 'draft']);
+      assert.equal(f.read().draftAttempts, 1);
+      assert.equal((f.read().reads as string[]).filter(x => x === 'releases?per_page=100&page=1').length, 4);
+      assert.ok((f.read().reads as string[]).includes('releases/17'));
+    } finally { f.clean(); }
+  }
+});
+
+test('persistent repeated pages exhaust bounded reads without another draft write', () => {
+  for (const afterDraft of [false, true]) {
+    const f = fixture();
+    try {
+      f.ok('seal'); f.ok('tag');
+      const page = Array.from({ length: 100 }, (_, i) => ({ id: i + 100, tag_name: `v0.0.${i}` }));
+      if (afterDraft) f.update({ reads: [], releasePageScansAfterDraft: Array.from({ length: 3 }, () => [page, page]) });
+      else f.update({ reads: [], releasePages: [page, page] });
+      const result = f.run('draft');
+      assert.notEqual(result.status, 0); assert.match(result.stderr, /repeated release listing/);
+      assert.equal((f.read().reads as string[]).filter(x => x === 'releases?per_page=100&page=2').length, 3);
+      assert.equal(f.read().draftAttempts ?? 0, afterDraft ? 1 : 0);
+      assert.deepEqual(f.read().mutations, afterDraft ? ['tag', 'draft'] : ['tag']);
+      if (afterDraft) {
+        f.ok('draft'); assert.equal(f.read().draftAttempts, 1);
+        assert.deepEqual(f.read().mutations, ['tag', 'draft']);
+      }
+    } finally { f.clean(); }
+  }
+});
+
+test('restarted census still rejects duplicate tag matches before a write', () => {
+  const f = fixture();
+  try {
+    f.ok('seal'); f.ok('tag');
+    const release = { id: 17, tag_name: tag, target_commitish: C, draft: true, prerelease: false };
+    const page = Array.from({ length: 100 }, (_, i) => ({ id: i + 100, tag_name: `v0.0.${i}` }));
+    f.update({ releasePageScans: [[page, page]], otherReleases: [release, { ...release, id: 18 }] });
+    const result = f.run('draft');
+    assert.notEqual(result.status, 0); assert.match(result.stderr, /duplicate remote release tag/);
+    assert.equal(f.read().draftAttempts ?? 0, 0);
+    assert.deepEqual(f.read().mutations, ['tag']);
+  } finally { f.clean(); }
+});
+
 // Unknown or incomplete discovery must never be interpreted as absence and create a draft.
 // A listing match must also be rechecked directly so stale list state cannot authorize uploads.
 test('incomplete listing and changed direct-ID state fail closed before mutation', () => {
