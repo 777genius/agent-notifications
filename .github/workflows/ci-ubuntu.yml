@@ -1964,6 +1964,8 @@ jobs:
     # Keep the established required-check names while retries target only failed shards.
     name: Test on Ubuntu (${{ matrix.go }})
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || vars.CI_LINUX_RUNNER || 'ubuntu-latest' }}
+    permissions:
+      contents: read
     timeout-minutes: 10
     strategy:
       fail-fast: false
