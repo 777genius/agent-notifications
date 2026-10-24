@@ -35,6 +35,10 @@ import (
 // delay can never push the hook past the timeout configured in hooks.json.
 const maxNotifyDelaySeconds = 25
 
+// Claude Stop is skipped when the transcript has not been written for this
+// long; a finished session resumed with no new turn must not re-notify.
+const staleTranscriptSeconds = 10 * 60
+
 const (
 	transcriptSettleWait     = 500 * time.Millisecond
 	transcriptSettleInterval = 25 * time.Millisecond
@@ -393,6 +397,13 @@ func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 			}
 		}
 		// teamMode "always" or not a team lead: fall through to normal processing
+
+		// A real turn writes the transcript just before Stop. A headless resume
+		// of a finished session fires Stop without appending anything (#119).
+		if age := platform.FileAge(ev.Session.TranscriptPath); age > staleTranscriptSeconds {
+			logging.Debug("Stop: transcript unchanged for %ds, skipping stale completion", age)
+			return nil
+		}
 
 		// Analyze the transcript to determine status
 		bench.Start("stop.analyze")

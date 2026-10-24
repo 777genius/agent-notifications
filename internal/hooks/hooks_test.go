@@ -881,6 +881,39 @@ func TestHandler_Stop_TaskComplete(t *testing.T) {
 	}
 }
 
+// A headless resume of a finished session fires Stop without appending to the
+// transcript; it must not repeat the original completion (#119).
+func TestHandler_Stop_StaleTranscriptSkipped(t *testing.T) {
+	cfg := &config.Config{
+		Notifications: config.NotificationsConfig{
+			Desktop: config.DesktopConfig{Enabled: true},
+		},
+	}
+
+	handler, mockNotif, _ := newTestHandler(t, cfg)
+
+	transcriptPath := createTempTranscript(t,
+		buildTranscriptWithTools([]string{"Read", "Edit", "Write"}, 300))
+	old := time.Now().Add(-45 * time.Minute)
+	if err := os.Chtimes(transcriptPath, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	hookData := buildHookDataJSON(HookData{
+		SessionID:            "test-session-stale",
+		TranscriptPath:       transcriptPath,
+		LastAssistantMessage: "Done.",
+		CWD:                  "/test",
+	})
+
+	if err := handler.HandleHook("Stop", hookData); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if mockNotif.wasCalled() {
+		t.Errorf("unexpected notification for stale transcript: %+v", mockNotif.lastCall())
+	}
+}
+
 func TestHandler_Notification_SuppressedAfterExitPlanMode(t *testing.T) {
 	cfg := &config.Config{
 		Notifications: config.NotificationsConfig{
