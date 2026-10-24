@@ -54,6 +54,7 @@ const icons = { yes: "✓", no: "✕", conditional: "✓*" };
       <p>{{ t("agentSupport.legend") }}</p>
       <p>{{ t("install.cursor.scope") }} <a :href="repo + '/blob/main/docs/cursor-notifications.md'">{{ t("install.cursor.guide") }} ↗</a></p>
       <p>{{ t("install.gemini.version") }} <a :href="repo + '/blob/main/docs/gemini-notifications.md'">{{ t("install.gemini.guide") }} ↗</a></p>
+      <p>{{ t("install.qoder.source") }}</p>
       <p>{{ t("install.qoder.scope") }} <a :href="repo + '/blob/main/docs/QODER.md'">{{ t("install.qoder.guide") }} ↗</a></p>
       <details>
         <summary>{{ t("install.capabilities.details") }}</summary>
@@ -71,7 +72,7 @@ const icons = { yes: "✓", no: "✕", conditional: "✓*" };
 
 <style scoped>
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
-.agent-support { margin: 0 40px 22px; border: 1px solid #293648; border-radius: 10px; overflow: hidden; }
+.agent-support { margin: 32px 40px 22px; border: 1px solid #293648; border-radius: 10px; overflow: hidden; }
 .agent-support-scroll { overflow-x: auto; }
 .agent-support-scroll:focus-visible { outline: 2px solid #a78bfa; outline-offset: -2px; }
 .agent-support-table { width: 100%; border-collapse: collapse; font-size: 13px; }

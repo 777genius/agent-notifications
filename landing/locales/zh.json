@@ -191,12 +191,12 @@
         "body": "计划：在 /tmp/ 中创建测试文件"
       },
       "completed": {
-        "title": "✅ 已完成",
+        "title": "✅ 安装通知",
         "body": "完成。安装引导现在紧跟在首屏之后。",
         "detail": "✏️ 已编辑 3 处  ⏱ 35 秒"
       },
       "review": {
-        "title": "🔍 审查",
+        "title": "🔍 审查安装程序",
         "body": "审查完成，更新后的安装程序未发现问题。"
       },
       "permission": {
@@ -212,19 +212,19 @@
         "body": "身份验证已过期，请重新登录。"
       },
       "opencodeComplete": {
-        "title": "OpenCode",
+        "title": "✅ 更新仪表盘",
         "body": "任务已完成"
       },
       "opencodeQuestion": {
-        "title": "OpenCode",
-        "body": "OpenCode 提出了问题"
+        "title": "❓ 测试文件叫什么名字？",
+        "body": "你想把 /tmp/ 中的测试文件命名为什么？"
       },
       "opencodePermission": {
-        "title": "OpenCode",
+        "title": "🔐 权限请求",
         "body": "OpenCode 请求了权限"
       },
       "opencodeError": {
-        "title": "OpenCode",
+        "title": "🔴 OpenCode · 错误",
         "body": "有错误需要您关注"
       }
     }
@@ -235,8 +235,7 @@
   },
   "install": {
     "cursor": {"guide": "安装 Cursor CLI", "scope": "Stop 通知和可选 Webhook。使用明确的 CLI 和配置目录路径单独安装；仅支持经过验证的 Linux amd64、macOS arm64 和 Windows amd64 版本。"},
-    "qoder": {"guide": "Qoder 设置与钩子", "scope": "支持完成、提问、权限、计划与队友通知，可选 Webhook。独立的原生包，通过 Qoder 插件安装器安装；点击通知无法打开确切的现有会话。"},
-    "platformRelease": "{os} 的已验证版本：{version}。",
+    "qoder": {"guide": "Qoder 设置与钩子", "scope": "支持完成、提问、权限、计划与队友通知，可选 Webhook。独立的原生包，通过 Qoder 插件安装器安装；点击通知无法打开确切的现有会话。", "source": "目前仅支持从源码构建。当前版本尚未发布预构建的 Qoder ZIP。", "build": "构建原生软件包", "install": "使用 Qoder CLI 安装解压后的软件包（替换路径）：", "restart": "重启 Qoder 以启用钩子。"},
     "title": "设置通知",
     "intro": "按照以下步骤为 {agent} 添加通知。",
     "chooseAgent": "选择智能体",

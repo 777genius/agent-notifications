@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import {
   command,
-  platformReleaseVersion,
   detectTarget,
   products,
   targets,
@@ -10,7 +9,6 @@ import {
   type Target,
   type Intent,
 } from "~/data/install";
-import channelSnapshot from "../../release-channels.tsv?raw";
 const { t } = useI18n();
 const installTitle = ref<HTMLHeadingElement>();
 async function changeIntent(value: Intent) {
@@ -18,12 +16,18 @@ async function changeIntent(value: Intent) {
   await nextTick();
   installTitle.value?.focus({ preventScroll: true });
 }
+const qoderSelected = ref(false);
 const selectedProducts = reactive({ claude: true, codex: false, opencode: false, gemini: false });
 const selection = computed<AgentProduct[]>(() =>
   (["claude", "codex", "opencode", "gemini"] as const).filter((value) => selectedProducts[value]),
 );
 const hasLegacy = computed(() => selectedProducts.claude || selectedProducts.codex);
 function toggleProduct(value: AgentProduct) {
+  if (qoderSelected.value) {
+    qoderSelected.value = false;
+    selectedProducts[value] = true;
+    return;
+  }
   if (selectedProducts[value] && selection.value.length === 1) return;
   selectedProducts[value] = !selectedProducts[value];
 }
@@ -45,7 +49,7 @@ const localizedTargets = computed(() =>
   })),
 );
 const agentName = computed(() =>
-  selection.value.map((value) => t(`install.products.${value}`)).join(" + "),
+  qoderSelected.value ? "Qoder" : selection.value.map((value) => t(`install.products.${value}`)).join(" + "),
 );
 const osLabel = computed(
   () =>
@@ -58,7 +62,6 @@ const agentNotify = ref(true);
 const snippet = computed(() =>
   command(selection.value, target.value, intent.value, agentNotify.value),
 );
-const qualifiedVersion = computed(() => platformReleaseVersion(channelSnapshot, target.value));
 watch(target, (value) => {
   if (value === "unknown" && selectedProducts.gemini) {
     selectedProducts.gemini = false;
@@ -101,7 +104,6 @@ async function copy() {
       <p>{{ t("install.intro", { agent: agentName }) }}</p>
     </header>
 
-    <p v-if="qualifiedVersion" class="install-release-version">{{ t("install.platformRelease", { version: qualifiedVersion, os: osLabel }) }}</p>
     <div
       class="agent-cards"
       role="group"
@@ -115,7 +117,7 @@ async function copy() {
         class="agent-card"
         :aria-label="item.label"
         :disabled="item.value === 'gemini' && target === 'unknown'"
-        :aria-pressed="selectedProducts[item.value as AgentProduct]"
+        :aria-pressed="!qoderSelected && selectedProducts[item.value as AgentProduct]"
         @click="toggleProduct(item.value as AgentProduct)"
       >
         <AgentLogo :agent="item.value as AgentProduct" />
@@ -130,10 +132,25 @@ async function copy() {
           }}</span></span
         >
         <span class="agent-check" aria-hidden="true">{{
-          selectedProducts[item.value as AgentProduct] ? "✓" : ""
+          !qoderSelected && selectedProducts[item.value as AgentProduct] ? "✓" : ""
         }}</span>
       </button>
+      <button class="agent-card" aria-label="Qoder" :aria-pressed="qoderSelected" @click="qoderSelected = true">
+        <AgentLogo agent="qoder" />
+        <span class="agent-card-copy"><strong>Qoder</strong><span>{{ t("install.requires", { agent: "Qoder" }) }}</span></span>
+        <span class="agent-check" aria-hidden="true">{{ qoderSelected ? "✓" : "" }}</span>
+      </button>
     </div>
+    <div v-if="qoderSelected" class="setup-panel instructions qoder-install">
+      <h3>{{ t("install.qoder.guide") }}</h3>
+      <p>{{ t("install.qoder.source") }}</p>
+      <p><a :href="repo + '/blob/main/docs/QODER.md#build-a-local-native-package'">{{ t("install.qoder.build") }} ↗</a></p>
+      <p>{{ t("install.qoder.install") }}</p>
+      <pre dir="ltr"><code>qoder plugins install /absolute/path/to/package --scope user
+qoder plugins list --json</code></pre>
+      <p>{{ t("install.qoder.restart") }}</p>
+    </div>
+    <template v-else>
     <div class="environment-row">
       <div class="os-summary">
         <span>{{
@@ -341,8 +358,9 @@ async function copy() {
         </article>
       </div>
     </template>
+    </template>
     <AgentSupportTable />
-    <footer class="install-footer">
+    <footer v-if="!qoderSelected" class="install-footer">
       <a v-if="selectedProducts.gemini" :href="repo + '/blob/main/docs/gemini-notifications.md'">{{ t("install.gemini.guide") }} ↗</a>
       <a
         v-if="hasLegacy"
@@ -380,3 +398,12 @@ async function copy() {
     </footer>
   </section>
 </template>
+
+<style scoped>
+.qoder-install { margin: 24px 40px 0; }
+.qoder-install pre { max-width: 100%; overflow-x: auto; padding: 12px; }
+.qoder-install a { text-decoration: underline; }
+@media (max-width: 700px) {
+  .qoder-install { margin-inline: 0; }
+}
+</style>

@@ -97,25 +97,25 @@
     "items": {
       "question": { "title": "❓ Domanda", "body": "Come vuoi chiamare il file di test in /tmp/?" },
       "plan": { "title": "📋 Piano", "body": "Piano: creare un file di test in /tmp/" },
-      "completed": { "title": "✅ Completato", "body": "Fatto. L'installazione ora si trova subito dopo la sezione iniziale.", "detail": "✏️ 3 modificati  ⏱ 35 s" },
-      "review": { "title": "🔍 Revisione", "body": "Revisione completata. Nessun problema trovato nel programma di installazione aggiornato." },
+      "completed": { "title": "✅ Installare le notifiche", "body": "Fatto. L'installazione ora si trova subito dopo la sezione iniziale.", "detail": "✏️ 3 modificati  ⏱ 35 s" },
+      "review": { "title": "🔍 Revisione dell’installer", "body": "Revisione completata. Nessun problema trovato nel programma di installazione aggiornato." },
       "permission": { "title": "🔐 Richiesta di autorizzazione", "body": "Approvazione necessaria: shell" },
       "limit": { "title": "⏱️ Limite di sessione raggiunto", "body": "Limite di sessione raggiunto. Attendi prima di continuare." },
       "error": { "title": "🔴 Errore API: 401", "body": "Autenticazione scaduta. Accedi di nuovo." },
       "opencodeComplete": {
-        "title": "OpenCode",
+        "title": "✅ Aggiornare la dashboard",
         "body": "Attività completata"
       },
       "opencodeQuestion": {
-        "title": "OpenCode",
-        "body": "OpenCode ha posto una domanda"
+        "title": "❓ Come chiamare il file di test?",
+        "body": "Come vuoi chiamare il file di test in /tmp/?"
       },
       "opencodePermission": {
-        "title": "OpenCode",
+        "title": "🔐 Richiesta di autorizzazione",
         "body": "OpenCode ha richiesto un permesso"
       },
       "opencodeError": {
-        "title": "OpenCode",
+        "title": "🔴 OpenCode · Errori",
         "body": "Un errore richiede la tua attenzione"
       }
     }
@@ -123,8 +123,7 @@
   "select": { "scrollUp": "Scorri le opzioni verso l'alto", "scrollDown": "Scorri le opzioni verso il basso" },
   "install": {
     "cursor": {"guide": "Installare Cursor CLI", "scope": "Notifiche Stop e webhook opzionali. Installazione separata con percorsi CLI e profilo espliciti; solo versioni verificate Linux amd64, macOS arm64 e Windows amd64."},
-    "qoder": {"guide": "Configurazione e hook di Qoder", "scope": "Notifiche di completamento, domande, permessi, piani e compagni di squadra con webhook opzionali. Pacchetto nativo separato installato tramite l'installer dei plugin di Qoder; un clic sulla notifica non può aprire la chat esatta esistente."},
-    "platformRelease": "Versione verificata per {os}: {version}.",
+    "qoder": {"guide": "Configurazione e hook di Qoder", "scope": "Notifiche di completamento, domande, permessi, piani e compagni di squadra con webhook opzionali. Pacchetto nativo separato installato tramite l'installer dei plugin di Qoder; un clic sulla notifica non può aprire la chat esatta esistente.", "source": "Disponibile solo dai sorgenti. La versione attuale non include uno ZIP Qoder precompilato.", "build": "Compila il pacchetto nativo", "install": "Installa il pacchetto estratto con Qoder CLI (sostituisci il percorso):", "restart": "Riavvia Qoder per attivare gli hook."},
     "agentNotify": {"label": "Consenti agli agenti di inviarti notifiche quando serve la tua attenzione", "hint": "Controlla la configurazione di uno strumento di notifica per Claude e Codex CLI durante un’attività. Se selezionato segue le preferenze salvate; se deselezionato salta la configurazione per questa esecuzione e conserva lo strumento esistente."},
     "title": "Configura le notifiche", "intro": "Segui i passaggi per aggiungere notifiche a {agent}.", "chooseAgent": "Scegli i tuoi agenti", "requires": "Richiede {agent}", "bothAgents": "Entrambi gli agenti", "bothSelected": "✓ Entrambi gli agenti selezionati", "installBoth": "Installa per entrambi gli agenti", "chooseComputer": "Scegli il computer su cui è in esecuzione il tuo agente", "selected": "Selezionato", "detected": "Rilevato automaticamente", "change": "Cambia", "targetOs": "Sistema operativo di destinazione",
     "products": { "claude": "Claude", "codex": "Codex CLI", "both": "Claude + Codex CLI",

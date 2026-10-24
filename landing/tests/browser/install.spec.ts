@@ -1,11 +1,4 @@
 import { test, expect, type Page } from "@playwright/test";
-import { readFileSync } from "node:fs";
-import { parseChannels } from "../../../scripts/release-preflight.mts";
-
-// Expected versions come from the release contract, independently of UI parsing
-// and locale text. A stale locale or platform display must still fail the browser.
-const releaseChannels = parseChannels(readFileSync(new URL("../../../release-channels.tsv", import.meta.url), "utf8"));
-const channelVersion = (platform: string) => releaseChannels.find(row => row.key === platform)!.tag.slice(1);
 
 async function chooseOS(page: Page, value: string) {
   const labels: Record<string, string> = {
@@ -383,11 +376,13 @@ test("notification sequence covers statuses and agents, pause and reduced motion
   }
   expect([...seen].sort()).toEqual(
     [
-      "OpenCode",
+      "✅ Update the dashboard",
+      "❓ Which test file name?",
+      "🔴 OpenCode · Errors",
       "❓ Question",
       "📋 Plan",
-      "✅ Completed",
-      "🔍 Review",
+      "✅ Install notifications",
+      "🔍 Review the installer",
       "🔐 Permission Request",
       "⏱️ Session Limit Reached",
       "🔴 API Error: 401",
@@ -678,7 +673,7 @@ test("agent comparison stays readable on mobile and keeps all agents visible", a
     for (const preceding of [page.locator(".installation-command"), ...await page.locator(".next-step").all()]) {
       const bounds = await preceding.boundingBox();
       expect(bounds).not.toBeNull();
-      expect(comparison!.y).toBeGreaterThanOrEqual(bounds!.y + bounds!.height);
+      expect(comparison!.y - (bounds!.y + bounds!.height)).toBeGreaterThanOrEqual(24);
     }
     await expect(page.getByRole("checkbox")).toHaveCount(0);
     await expect(page.getByLabel("Install command", { exact: true })).toHaveValue(/--product opencode --desktop\)$/);
@@ -694,7 +689,7 @@ test("platform channels enable Gemini and reset unsupported selections", async (
   await page.goto("");
   for (const os of ["macos", "linux", "windows"] as const) {
     await chooseOS(page, os);
-    await expect(page.locator(".install-release-version")).toContainText(channelVersion(`${os === "macos" ? "darwin" : os}/amd64`));
+    await expect(page.locator(".install-release-version")).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Gemini CLI", exact: true })).toBeEnabled();
     await chooseAgents(page, ["gemini"]);
     await expect(page.getByLabel("Install command", { exact: true })).toHaveValue(/--product gemini --desktop\)$/);
@@ -712,4 +707,22 @@ test("platform channels enable Gemini and reset unsupported selections", async (
   await expect(page.getByRole("button", { name: "Gemini CLI", exact: true })).toBeDisabled();
   await expect(page.getByRole("button", { name: "Gemini CLI", exact: true })).toHaveAttribute("aria-pressed", "false");
   await expect(page.getByRole("button", { name: "Copy command" })).toHaveCount(0);
+});
+
+test("Qoder offers native source-package installation and restores the guided installer", async ({ page }) => {
+  await page.goto("");
+  await chooseOS(page, "macos");
+  await page.getByRole("button", { name: "Qoder", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Qoder", exact: true })).toHaveAttribute("aria-pressed", "true");
+  const panel = page.locator(".qoder-install");
+  await expect(panel).toContainText("No prebuilt Qoder ZIP is published");
+  await expect(panel).toContainText("qoder plugins install /absolute/path/to/package --scope user");
+  await expect(panel.getByRole("link")).toHaveAttribute("href", "https://github.com/777genius/agent-notifications/blob/main/docs/QODER.md#build-a-local-native-package");
+  await expect(page.getByLabel("Install command", { exact: true })).toHaveCount(0);
+  await page.setViewportSize({ width: 390, height: 900 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await panel.screenshot({ path: "test-results/qoder-install.png" });
+  await page.getByRole("button", { name: "Claude", exact: true }).click();
+  await expect(panel).toHaveCount(0);
+  await expect(page.getByLabel("Install command", { exact: true })).toHaveValue(/--product claude/);
 });
