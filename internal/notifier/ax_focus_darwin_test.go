@@ -283,7 +283,7 @@ func TestTryGhosttyExactFocus_PrefersTerminalID(t *testing.T) {
 	}
 }
 
-func TestTryGhosttyExactFocus_FallsBackToCWDWhenTerminalIDFails(t *testing.T) {
+func TestFocusGhosttyWindow_StaleTerminalIDFailsClosed(t *testing.T) {
 	originalIDRunner := ghosttyAppleScriptIDRunner
 	originalRunner := ghosttyAppleScriptRunner
 	t.Cleanup(func() {
@@ -291,24 +291,45 @@ func TestTryGhosttyExactFocus_FallsBackToCWDWhenTerminalIDFails(t *testing.T) {
 		ghosttyAppleScriptRunner = originalRunner
 	})
 
+	wantErr := errors.New("ghostty terminal id not found")
 	ghosttyAppleScriptIDRunner = func(terminalID string) error {
-		return errors.New("not found")
+		return wantErr
 	}
-
-	var gotCandidates []string
 	ghosttyAppleScriptRunner = func(candidates []string) error {
-		gotCandidates = append([]string(nil), candidates...)
+		t.Fatalf("cwd match must not run for a stale terminal ID, got %#v", candidates)
 		return nil
 	}
 
-	err := tryGhosttyExactFocus("/tmp/project", FocusWindowOptions{GhosttyTerminalID: "term-7"})
-	if err != nil {
-		t.Fatalf("tryGhosttyExactFocus returned error: %v", err)
+	err := focusGhosttyWindowWithOptions(
+		123,
+		"com.mitchellh.ghostty",
+		"/tmp/project",
+		FocusWindowOptions{GhosttyTerminalID: "term-7"},
+		tryGhosttyExactFocus,
+		func(int, string, string) error {
+			t.Fatalf("AXDocument fallback must not run for a stale terminal ID")
+			return nil
+		},
+	)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("focusGhosttyWindowWithOptions error = %v, want %v", err, wantErr)
 	}
+}
 
-	wantCandidates := []string{"/tmp/project"}
-	if !reflect.DeepEqual(gotCandidates, wantCandidates) {
-		t.Fatalf("runner candidates = %#v, want %#v", gotCandidates, wantCandidates)
+func TestGhosttyAppleScripts_IterateWindowsTabsTerminals(t *testing.T) {
+	for name, script := range map[string]string{
+		"cwd": ghosttyFocusAppleScript,
+		"id":  ghosttyFocusByIDAppleScript,
+	} {
+		if !strings.Contains(script, "repeat with tb in tabs of w") || !strings.Contains(script, "terminals of tb") {
+			t.Fatalf("Ghostty %s focus script must iterate windows/tabs/terminals:\n%s", name, script)
+		}
+		if strings.Contains(script, "repeat with t in terminals\n") || strings.Contains(script, "to terminals\n") {
+			t.Fatalf("Ghostty %s focus script must not use app-level terminals:\n%s", name, script)
+		}
+		if !strings.Contains(script, "\tactivate\n") {
+			t.Fatalf("Ghostty %s focus script must activate after focus:\n%s", name, script)
+		}
 	}
 }
 
