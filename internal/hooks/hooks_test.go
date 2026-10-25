@@ -2776,6 +2776,48 @@ func TestHandler_Stop_TeamMode_Smart_NotifiesWhenAllIdle(t *testing.T) {
 	}
 }
 
+func TestHandler_Stop_TeamMode_StaleTranscriptKeepsTeamState(t *testing.T) {
+	sessionID := "test-team-stale-session"
+	teamName := "test-stale-team"
+	claudeDir := setupTeamConfig(t, teamName, sessionID, []string{"alice"})
+	setTestHome(t, claudeDir)
+
+	transcriptPath := createTempTranscript(t, buildTranscriptWithTools([]string{"Write"}, 50))
+	old := time.Now().Add(-45 * time.Minute)
+	if err := os.Chtimes(transcriptPath, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &config.Config{
+		Notifications: config.NotificationsConfig{
+			Desktop:  config.DesktopConfig{Enabled: true},
+			TeamMode: "wait-all",
+		},
+	}
+	handler, mockNotif, _ := newTestHandler(t, cfg)
+	teamMgr := setupTeamStateManager(t, claudeDir)
+	teamMgr.RecordTeammateIdle(teamName, "alice") //nolint:errcheck
+
+	hookData := buildHookDataJSON(HookData{
+		SessionID:      sessionID,
+		TranscriptPath: transcriptPath,
+		CWD:            "/test",
+	})
+	if err := handler.HandleHook("Stop", hookData); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if mockNotif.wasCalled() {
+		t.Error("unexpected notification for stale transcript")
+	}
+	st, err := teamMgr.LoadState(teamName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.LeadStopped {
+		t.Error("stale Stop must not record the lead as stopped")
+	}
+}
+
 func TestHandler_TeammateIdle_SendsWhenAllReady(t *testing.T) {
 	sessionID := "test-ti-session"
 	teamName := "test-ti-team"

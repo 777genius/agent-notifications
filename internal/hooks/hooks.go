@@ -364,6 +364,14 @@ func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 			return nil
 		}
 
+		// A real turn writes the transcript just before Stop. A headless resume
+		// of a finished session fires Stop without appending anything (#119).
+		if age := platform.FileAge(ev.Session.TranscriptPath); age > staleTranscriptSeconds {
+			logging.Debug("Stop: transcript unchanged for %ds, skipping stale completion", age)
+			h.cleanupOldLocks()
+			return nil
+		}
+
 		// Team mode: check if this session is a team lead and suppress if needed
 		if h.cfg.GetTeamMode() == "wait-all" {
 			if teamInfo := h.teamStateMgr.DetectTeamLead(ev.Session.SessionID); teamInfo != nil {
@@ -397,13 +405,6 @@ func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 			}
 		}
 		// teamMode "always" or not a team lead: fall through to normal processing
-
-		// A real turn writes the transcript just before Stop. A headless resume
-		// of a finished session fires Stop without appending anything (#119).
-		if age := platform.FileAge(ev.Session.TranscriptPath); age > staleTranscriptSeconds {
-			logging.Debug("Stop: transcript unchanged for %ds, skipping stale completion", age)
-			return nil
-		}
 
 		// Analyze the transcript to determine status
 		bench.Start("stop.analyze")
