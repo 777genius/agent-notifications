@@ -2813,8 +2813,8 @@ func TestHandler_Stop_TeamMode_StaleTranscriptKeepsTeamState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if st.LeadStopped {
-		t.Error("stale Stop must not record the lead as stopped")
+	if st.LeadStopped || st.NotifiedAt != 0 {
+		t.Errorf("stale Stop must not touch team state: %+v", st)
 	}
 }
 
