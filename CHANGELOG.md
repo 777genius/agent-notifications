@@ -7,8 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.49.8] - 2026-10-26
+
 ### Fixed
 - Recover exact managed files lost when Claude prunes a versioned plugin cache still used by other integrations. Retain verified recovery copies outside the cache, preserve foreign edits and settings, and keep existing upgrade and transaction recovery paths.
+- Fail closed when a Ghostty terminal ID no longer identifies the intended terminal ([#520](https://github.com/777genius/agent-notifications/pull/520)).
+
+### Platform notes
+- This release uses the basic five-platform artifact profile with separate downloaded macOS and Codex checks. It does not claim visible desktop, full native, eleven-cell OpenCode, cold-start, physical Intel or live-provider qualification.
 
 ## [1.49.7] - 2026-10-23
 
