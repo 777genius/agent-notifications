@@ -65,6 +65,7 @@ _PARALLEL_DISPATCHING=false
 _PARALLEL_INTERRUPT_STATUS=0
 _PARALLEL_WORKER=""
 _PARALLEL_GATE_HELD=false
+_PARALLEL_GATE_ABSENT_FAILURES=0
 _PARALLEL_PIDS=()
 _PARALLEL_AUX_PIDS=()
 _PARALLEL_AUX_DONE=()
@@ -2940,10 +2941,26 @@ bootstrap_writer_gate() {
     parallel_phase waiting
     while ! mkdir "$_PARALLEL_ROOT/writer.lock" 2>/dev/null; do
         [ ! -e "$_PARALLEL_ROOT/cancel" ] || return 130
+        # A legitimate owner can remove or reacquire the directory after mkdir
+        # fails. Reject only observed non-directory kinds; absence must retry.
+        if [ -L "$_PARALLEL_ROOT/writer.lock" ] || [ -f "$_PARALLEL_ROOT/writer.lock" ] ||
+            [ -p "$_PARALLEL_ROOT/writer.lock" ] || [ -S "$_PARALLEL_ROOT/writer.lock" ] ||
+            [ -b "$_PARALLEL_ROOT/writer.lock" ] || [ -c "$_PARALLEL_ROOT/writer.lock" ]; then return 1; fi
+        # Keep this count across --try calls; a real held directory is never
+        # time-limited and resets consecutive absent-path failures.
+        if [ -d "$_PARALLEL_ROOT/writer.lock" ]; then
+            _PARALLEL_GATE_ABSENT_FAILURES=0
+        else
+            _PARALLEL_GATE_ABSENT_FAILURES=$((_PARALLEL_GATE_ABSENT_FAILURES + 1))
+            if [ "$_PARALLEL_GATE_ABSENT_FAILURES" -ge 32 ]; then
+                : > "$_PARALLEL_ROOT/cancel"
+                return 1
+            fi
+        fi
         if [ "$nonblocking" = true ]; then _PARALLEL_GATE_BUSY=true; return 75; fi
-        [ -d "$_PARALLEL_ROOT/writer.lock" ] && [ ! -L "$_PARALLEL_ROOT/writer.lock" ] || return 1
         sleep 0.05
     done
+    _PARALLEL_GATE_ABSENT_FAILURES=0
     local status=0
     printf '%s\n' "${_PARALLEL_WORKER:-parent}" > "$_PARALLEL_ROOT/writer.lock/owner"
     _PARALLEL_GATE_HELD=true
@@ -3242,7 +3259,7 @@ install_products_parallel() {
     _PARALLEL_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/bootstrap-parallel-XXXXXX") || return 1
     _PARALLEL_ROOT=$(cd -P "$_PARALLEL_ROOT" && pwd -P) || return 1
     chmod 700 "$_PARALLEL_ROOT" || return 1
-    _PARALLEL_ACTIVE=true; _PARALLEL_POLICY_READY=false; _PARALLEL_READY_CLIENTS=""
+    _PARALLEL_ACTIVE=true; _PARALLEL_POLICY_READY=false; _PARALLEL_READY_CLIENTS=""; _PARALLEL_GATE_ABSENT_FAILURES=0
     _PARALLEL_PIDS=(); _PARALLEL_CLIENTS=(); _PARALLEL_DONE=(); _PARALLEL_LINES=()
     _PARALLEL_AUX_PIDS=(); _PARALLEL_AUX_DONE=(); _PARALLEL_FORCED_STOP=false; _PARALLEL_FOLLOW_UP_STARTED=false
     # The synchronous portable caller can append finite activation facts to this
