@@ -898,6 +898,10 @@ def preview(args):
             if proof['SourceCommit'] != sha or proof['SHA256'] != digest(staged):
                 raise ValueError('Binary SourceCommit/SHA256 does not match clean repository HEAD')
             source_identity(root,sha)
+            if getattr(args, 'existing_config', False):
+                preparation.stage('Preparing existing TEST notification settings')
+                run_command([str(staged),'config','init','--json'],cwd=lab,env=env,
+                            text=True,capture_output=True,check=True)
             detail('Actual installed CLIs (missing CLIs remain absent): '+json.dumps(installed))
             for name, snapshot in snapshots.items():
                 detail(name+' TEST execution snapshot: '+snapshot['execution']+' (SHA256 '+snapshot['snapshot_sha256']+')')
@@ -934,6 +938,7 @@ def main():
     parser.add_argument('--go',default='go',help='Go executable for source build (default: go from PATH)')
     parser.add_argument('--gemini-cli',type=Path,help='explicit real Gemini CLI executable for TEST only (for example an isolated 0.62.0 install)')
     parser.add_argument('--qoder-cli',type=Path,help='explicit real Qoder CLI executable for isolated registration preview')
+    parser.add_argument('--existing-config',action='store_true',help='initialize private TEST settings before installation to exercise config-only control roots')
     parser.add_argument('--plain',action='store_true',help='explicit accessible line prompts instead of automatic terminal UI')
     args = parser.parse_args()
     try:

@@ -105,6 +105,7 @@ UI_ARGS=()
 _UI_MODE=""
 _SELECTOR_INTENT=""
 _FROZEN_CONTROL=""
+_FROZEN_GLOBAL_CONFIG=""
 _FROZEN_RUNTIME=""
 _FROZEN_CLAUDE_MCP=""
 _FROZEN_CODEX_MCP=""
@@ -3528,9 +3529,12 @@ selector_record() {
     done
 }
 
-# Fixed scalar projection. No JSON, eval, fresh discovery, or default selection.
+# Fixed scalar projection. No JSON, eval or fresh discovery; config resolution
+# only verifies the frozen authority without replacing the caller's selection.
 load_frozen_dispatch() {
-    local LC_ALL=C
+    local LC_ALL=C config_explicit=false resolved_config
+    [ -z "${AGENT_NOTIFICATIONS_CONFIG:-}" ] || config_explicit=true
+    _FROZEN_GLOBAL_CONFIG=""
     local result="$_CONFIG_STAGE/intent-args.result" status=0 size key value seen=""
     "$_CONFIG_HELPER" setup-products intent-args --intent-file "$_SELECTOR_INTENT" >"$result" </dev/null || status=$?
     [ "$status" -eq 0 ] || return "$status"
@@ -3580,7 +3584,11 @@ load_frozen_dispatch() {
             qoder-config-root) _FROZEN_QODER=$value ;;
             control-root) _FROZEN_CONTROL=$value ;;
             runtime-root) _FROZEN_RUNTIME=$value ;;
-            global-config) export AGENT_NOTIFICATIONS_CONFIG="$value" ;;
+            global-config)
+                _FROZEN_GLOBAL_CONFIG=$value
+                # Freezing an implicit default must not turn it into an
+                # explicit override that bypasses historical config guards.
+                if [ "$config_explicit" = true ]; then export AGENT_NOTIFICATIONS_CONFIG="$value"; fi ;;
             claude-executable) _CLAUDE_EXEC=$value ;;
             codex-executable) _CODEX_EXEC=$value ;;
             opencode-executable) _OPENCODE_EXEC=$value ;;
@@ -3618,6 +3626,8 @@ load_frozen_dispatch() {
                 *) echo "Frozen legacy control authority cannot be mapped." >&2; return 1 ;;
             esac ;;
     esac
+    resolved_config=$("$_CONFIG_HELPER" config path) || return 1
+    [ "$resolved_config" = "$_FROZEN_GLOBAL_CONFIG" ] || { echo "Frozen notification config authority changed." >&2; return 1; }
     local i=0
     while [ "$i" -lt "${#CONFIGURE_ARGS[@]}" ]; do
         if [ "${CONFIGURE_ARGS[$i]}" = --codex-home ]; then CONFIGURE_ARGS[$((i + 1))]=$DEFAULT_CODEX_HOME; fi
@@ -4040,7 +4050,7 @@ prepare_cursor_runtime() {
 }
 
 reconfirm_cursor_integration() {
-    local control=$_FROZEN_CONTROL runtime=$_FROZEN_RUNTIME scope=$_FROZEN_SCOPE_ROOT client=$_FROZEN_CLIENT_EXEC config=$AGENT_NOTIFICATIONS_CONFIG
+    local control=$_FROZEN_CONTROL runtime=$_FROZEN_RUNTIME scope=$_FROZEN_SCOPE_ROOT client=$_FROZEN_CLIENT_EXEC config=$_FROZEN_GLOBAL_CONFIG
     _CURSOR_CONFIRM_CANCELLED=false
     [ "$_INTERACTIVE_INTENT" = true ] || return 1
     exec 3<>/dev/tty || return 1
@@ -4054,7 +4064,7 @@ reconfirm_cursor_integration() {
     load_frozen_dispatch || return 1
     [ "$_FROZEN_CONTROL" = "$control" ] && [ "$_FROZEN_RUNTIME" = "$runtime" ] &&
         [ "$_FROZEN_SCOPE_ROOT" = "$scope" ] && [ "$_FROZEN_CLIENT_EXEC" = "$client" ] &&
-        [ "$AGENT_NOTIFICATIONS_CONFIG" = "$config" ] || return 1
+        [ "$_FROZEN_GLOBAL_CONFIG" = "$config" ] || return 1
     "$_CONFIG_HELPER" setup-products preflight --intent-file "$_SELECTOR_INTENT" "${_EFFECT_ARGS[@]}" </dev/null
 }
 
@@ -4173,7 +4183,7 @@ setup_agent_notify_wizard() {
         if [ -n "$_PARALLEL_READY_CLIENTS" ]; then
             set -- "$@" --bootstrap-ready-clients "$_PARALLEL_READY_CLIENTS" --bootstrap-progress-file "$_PROGRESS_JOURNAL"
         fi
-        set -- "$@" --bootstrap-intent-file "$_SELECTOR_INTENT" --control-root "$_FROZEN_CONTROL" --global-config "$AGENT_NOTIFICATIONS_CONFIG"
+        set -- "$@" --bootstrap-intent-file "$_SELECTOR_INTENT" --control-root "$_FROZEN_CONTROL" --global-config "$_FROZEN_GLOBAL_CONFIG"
         [ -z "$_FROZEN_RUNTIME" ] || set -- "$@" --runtime-root "$_FROZEN_RUNTIME"
         if [ "$PRODUCT" != cursor ]; then
             [ -z "$_FROZEN_CODEX_MCP" ] || set -- "$@" --mcp-config "$_FROZEN_CODEX_MCP"
@@ -4252,7 +4262,7 @@ setup_agent_notify_wizard() {
         [ "$PRODUCT" = codex ] || set -- "$@" --claude-mcp-config "${_FROZEN_CLAUDE_MCP:-${CLAUDE_CONFIG_DIR:-$INSTALLER_HOME}/.claude.json}"
     fi
     if [ -n "$_SELECTOR_INTENT" ]; then
-        set -- "$@" --control-root "$_FROZEN_CONTROL" --global-config "$AGENT_NOTIFICATIONS_CONFIG"
+        set -- "$@" --control-root "$_FROZEN_CONTROL" --global-config "$_FROZEN_GLOBAL_CONFIG"
         [ -z "$_FROZEN_RUNTIME" ] || set -- "$@" --runtime-root "$_FROZEN_RUNTIME"
         if [ "$PRODUCT" != cursor ]; then
             [ -z "$_FROZEN_CODEX_MCP" ] || set -- "$@" --mcp-config "$_FROZEN_CODEX_MCP"
