@@ -28,6 +28,11 @@ func repairBootstrapCache(ctx context.Context, a setupProductsArgs, input io.Rea
 	if !validProductPath(root) {
 		return fmt.Errorf("invalid control-root authority")
 	}
+	canonical, err := installruntime.CanonicalPath(root)
+	if err != nil {
+		return err
+	}
+	root = canonical
 	observe, cancel := context.WithTimeout(ctx, bootstrapInspectionTimeout)
 	defer cancel()
 	plan, err := installruntime.PreviewCacheRepair(observe, root)

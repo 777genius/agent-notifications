@@ -46,12 +46,16 @@ func TestSetupProductsRepairPrunedCache(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			alias := filepath.Join(base, "TEST-control-alias")
+			if err := os.Symlink(control, alias); err != nil {
+				t.Fatal(err)
+			}
 			answer := "n\n"
 			if accept {
 				answer = "y\n"
 			}
 			var output, prompts bytes.Buffer
-			code := runSetupProducts([]string{"repair-cache", "--control-root", control, "--plain", "--bootstrap"}, strings.NewReader(answer), &output, &prompts)
+			code := runSetupProducts([]string{"repair-cache", "--control-root", alias, "--plain", "--bootstrap"}, strings.NewReader(answer), &output, &prompts)
 			if code != 0 || !strings.Contains(prompts.String(), "Restore missing notification files?") {
 				t.Fatalf("repair code=%d out=%q prompts=%q", code, output.String(), prompts.String())
 			}
