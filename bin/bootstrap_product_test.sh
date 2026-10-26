@@ -713,6 +713,46 @@ EARLY_CANARY
     [ ! -s "$SANDBOX/disabled-session-stage.err" ]
 )
 
+# Frozen delivery-config paths retain the caller's implicit/explicit source.
+# Repeated dispatch cannot suppress migration guards by inventing an override;
+# a changed default after frozen environment mapping must refuse before writers.
+(
+    export TEST_FROZEN_GLOBAL="$SANDBOX/frozen delivery config.json"
+    export TEST_IMPLICIT_CONFIG="$TEST_FROZEN_GLOBAL"
+    export TEST_CONFIG_ATOMS="$SANDBOX/config source atoms"
+    _CONFIG_STAGE=$(mktemp -d)
+    _CONFIG_HELPER="$_CONFIG_STAGE/helper"
+    _SELECTOR_INTENT="$_CONFIG_STAGE/selector-intent.json"
+    _PRODUCT_CSV=claude,codex; SELECTED_PRODUCTS=(claude codex)
+    printf '%s\0' home "$INSTALLER_HOME" control-root "$SANDBOX/config-source/agent-notifications" \
+        global-config "$TEST_FROZEN_GLOBAL" claude-config "$CLAUDE_HOME" claude-mcp-config "$SANDBOX/.claude.json" \
+        claude-executable "$SANDBOX/mock-claude" codex-home "$DEFAULT_CODEX_HOME" \
+        codex-mcp-config "$SANDBOX/codex.toml" codex-executable "$SANDBOX/mock-codex" > "$TEST_CONFIG_ATOMS"
+    cat > "$_CONFIG_HELPER" <<'CONFIG_SOURCE_PEER'
+#!/bin/bash
+case "$1 ${2:-}" in
+    'setup-products intent-args') cat "$TEST_CONFIG_ATOMS" ;;
+    'config path') printf '%s\n' "${AGENT_NOTIFICATIONS_CONFIG:-$TEST_IMPLICIT_CONFIG}" ;;
+    *) exit 97 ;;
+esac
+CONFIG_SOURCE_PEER
+    chmod +x "$_CONFIG_HELPER"
+    for source in implicit explicit; do
+        unset AGENT_NOTIFICATIONS_CONFIG
+        if [ "$source" = explicit ]; then export AGENT_NOTIFICATIONS_CONFIG="$SANDBOX/original explicit config.json"; fi
+        for repeat in 1 2; do
+            load_frozen_dispatch
+            [ "$_FROZEN_GLOBAL_CONFIG" = "$TEST_FROZEN_GLOBAL" ]
+            if [ "$source" = implicit ]; then [ -z "${AGENT_NOTIFICATIONS_CONFIG+x}" ]
+            else [ "$AGENT_NOTIFICATIONS_CONFIG" = "$TEST_FROZEN_GLOBAL" ]; fi
+        done
+    done
+    unset AGENT_NOTIFICATIONS_CONFIG
+    TEST_IMPLICIT_CONFIG="$SANDBOX/drifted config.json"
+    if load_frozen_dispatch; then echo 'Frozen config drift was accepted' >&2; exit 1; fi
+    [ -z "${AGENT_NOTIFICATIONS_CONFIG+x}" ]
+)
+
 # Cursor used to fail product parsing or lose its two frozen scalar arguments.
 # Drive the real main/selector/wizard composition through disposable argv peers;
 # no installer, vendor, provider, delivery or materializer executes here.
@@ -742,6 +782,11 @@ case "$1 ${2:-}" in
         done
         printf 'approved\n' ;;
     'setup-products intent-args') cat "$TEST_ATOMS" ;;
+    'config path')
+        while IFS= read -r -d '' key && IFS= read -r -d '' value; do
+            if [ "$key" = global-config ]; then printf '%s\n' "$value"; exit 0; fi
+        done < "$TEST_ATOMS"
+        exit 97 ;;
     'setup-products preflight') exit "${TEST_PREFLIGHT_EXIT:-0}" ;;
     'setup-notifications --help') printf '%s\n' '--policy-only --preserve-enabled' ;;
     'setup-notifications wizard')
