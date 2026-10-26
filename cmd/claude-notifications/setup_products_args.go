@@ -20,6 +20,9 @@ type setupProductsArgs struct {
 	LocalNativeStop, LocalMCP, LocalSkills, Manual *bool
 	Configure                                      notificationConfigureRequest
 	ConfigureArgs                                  []string
+
+	// Recovery switches never enter a confirmed installation intent.
+	RepairApproved, BootstrapCacheRepair bool `json:"-"`
 }
 
 func parseSetupProducts(args []string) (r setupProductsArgs, err error) {
@@ -31,12 +34,12 @@ func parseSetupProducts(args []string) (r setupProductsArgs, err error) {
 	}
 	r.Operation = args[0]
 	switch r.Operation {
-	case "capabilities", "features":
+	case "capabilities", "features", "repair-capabilities":
 		if len(args) != 1 {
 			return invalid()
 		}
 		return r, nil
-	case "select", "channels", "confirm", "prepare", "intent-args", "preflight":
+	case "select", "channels", "confirm", "prepare", "intent-args", "preflight", "repair-cache":
 	default:
 		return invalid()
 	}
@@ -53,7 +56,7 @@ func parseSetupProducts(args []string) (r setupProductsArgs, err error) {
 		if !strings.HasPrefix(raw, "--") {
 			return invalid()
 		}
-		boolean := key == "plain" || key == "desktop" || key == "webhook" || key == "agent-notify" || key == "skip-agent-notify" || key == "preserve-policy" || key == "request-permission"
+		boolean := key == "plain" || key == "yes" || key == "bootstrap" || key == "desktop" || key == "webhook" || key == "agent-notify" || key == "skip-agent-notify" || key == "preserve-policy" || key == "request-permission"
 		if boolean {
 			if inline && (key != "desktop" && key != "webhook" || value != "true" && value != "false") {
 				return invalid()
@@ -84,6 +87,10 @@ func parseSetupProducts(args []string) (r setupProductsArgs, err error) {
 		}
 		seen[key] = true
 		switch key {
+		case "bootstrap":
+			r.BootstrapCacheRepair = true
+		case "yes":
+			r.RepairApproved = true
 		case "local-native-stop", "local-mcp", "local-skills", "manual":
 			on, e := parseBoolFlag(value)
 			if e != nil {
@@ -129,6 +136,17 @@ func parseSetupProducts(args []string) (r setupProductsArgs, err error) {
 			}
 			r.Scopes[key] = value
 		}
+	}
+	if r.Operation == "repair-cache" {
+		for key := range seen {
+			if key != "yes" && key != "control-root" && key != "bootstrap" {
+				return invalid()
+			}
+		}
+		return r, nil
+	}
+	if r.RepairApproved || r.BootstrapCacheRepair {
+		return invalid()
 	}
 	if r.AgentNotify && r.SkipAgentNotify || (r.Scopes["scope-root"] == "") != (r.Scopes["client-executable"] == "") {
 		return invalid()

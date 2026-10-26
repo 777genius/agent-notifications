@@ -240,6 +240,36 @@ running installation again. `BOOTSTRAP_VERBOSE=1` displays printable diagnostic
 details at the end of a requested install. If logging fails, the installer reports
 that limitation and keeps raw command output out of the default display.
 
+### Restore a pruned Claude cache
+
+The bootstrap installer checks for managed files lost when Claude prunes an old
+versioned plugin cache. If exact recovery is possible, interactive setup offers
+to restore those files before preparing the normal installation plan. Declining
+leaves the installation unchanged. Explicit noninteractive installation performs
+the same repair automatically. Existing files with changed content or permissions
+remain conflicts; repair never overwrites them or resets configuration.
+If the read-only repair preview cannot complete, bootstrap leaves the decision
+to the normal installer's existing validation, reinstall and journal recovery.
+Failures after repair starts stop setup instead of being ignored.
+
+Recovery uses matching owned copies or verified payloads retained outside the
+Claude cache by newer installers. The payloads are optional support, not another
+installation or a policy source. Native application links require the recorded
+native generation to remain intact. An older installation without an exact copy
+or retained payload still requires recovery from a trusted matching package;
+the installer does not bypass its fingerprint check.
+
+To run only this repair, using an installed helper that supports it:
+
+```sh
+claude-notifications setup-products repair-cache
+# Explicit unattended repair, with the same identity checks:
+claude-notifications setup-products repair-cache --yes
+```
+
+This restores the existing integrations. Removing a fully abandoned consumer is
+a separate operation described below.
+
 ### Recover an entirely absent installer consumer
 
 Ordinary install and removal remain strict about every managed asset. For an

@@ -3078,6 +3078,25 @@ main() {
     export BOOTSTRAP_RELEASE_TAG="$BOOTSTRAP_TAG" BOOTSTRAP_RELEASE_COMMIT="$BOOTSTRAP_COMMIT"
     export BOOTSTRAP_SOURCE_COMMIT="$BOOTSTRAP_BUNDLE_COMMIT" BOOTSTRAP_SOURCE_REF="${BOOTSTRAP_SOURCE_REF:-}"
     export BOOTSTRAP_RELEASE_CHANNEL="${BOOTSTRAP_RELEASE_CHANNEL:-}"
+    # A pruned Claude version can still serve other registered integrations.
+    # Repair exact missing managed bytes before the normal read-only plan;
+    # its generation must be captured after the repair, never patched in place.
+    local cache_repair_capability
+    cache_repair_capability=$("$_CONFIG_HELPER" setup-products repair-capabilities </dev/null 2>/dev/null) || cache_repair_capability=""
+    if [ "$cache_repair_capability" = cache-repair-v1 ]; then
+        local -a cache_repair_args=(--bootstrap)
+        if [ "$_INTERACTIVE_INTENT" != true ]; then
+            cache_repair_args+=(--yes)
+        fi
+        selector_collect repair-cache ${cache_repair_args[@]+"${cache_repair_args[@]}"} ${UI_ARGS[@]+"${UI_ARGS[@]}"} || return $?
+        [ -s "$_SELECTOR_RESULT" ] || { close_prompt; return 0; }
+        # Legacy unattended setup does not otherwise require cmp. Validate the
+        # fixed six-byte reply with builtins and the existing size primitive.
+        local cache_repair_reply cache_repair_size
+        IFS= read -r cache_repair_reply <"$_SELECTOR_RESULT" || return 1
+        cache_repair_size=$(LC_ALL=C wc -c <"$_SELECTOR_RESULT") || return 1
+        [ "$cache_repair_reply" = ready ] && [ "$cache_repair_size" -eq 6 ] || { echo "Invalid cache repair result bytes." >&2; return 1; }
+    fi
     if [ "$_INTERACTIVE_INTENT" = true ] || [[ "$original_product" = bundle:* ]] || [ "$original_product" = gemini ]; then
         selector_collect capabilities || return $?
         selector_exact 'setup-products-v1 claude codex opencode gemini' capabilities || return 1

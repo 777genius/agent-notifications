@@ -549,7 +549,7 @@ func TestBootstrapConfirmationDefaults(t *testing.T) {
 				f.assertConsumer("opencode-notifications", true)
 			} else {
 				f.unchanged(before)
-				if !strings.Contains(r.screen, "Installation cancelled. No changes were applied.") {
+				if !strings.Contains(r.screen, "Installation cancelled. No further changes were applied.") {
 					t.Fatalf("Enter cancelled silently: %s", r.screen)
 				}
 			}
