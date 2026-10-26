@@ -214,6 +214,32 @@ except KeyboardInterrupt:
             self.assertIn(b'output truncated',captured)
             self.assertEqual((diagnostics/'cli-commands.jsonl').stat().st_mode & 0o777,0o600)
 
+    def test_qoder_alias_discovery_and_private_profile(self):
+        with tempfile.TemporaryDirectory() as directory:
+            executable = Path(directory)/'qodercli'
+            executable.write_text('#!/bin/sh\nexit 0\n')
+            executable.chmod(0o700)
+            with patch.object(preview.shutil, 'which', side_effect=lambda name: str(executable) if name == 'qodercli' else None):
+                found = preview.discover_clis(argparse.Namespace(gemini_cli=None))
+            self.assertEqual(found, {'qoder': str(executable.resolve())})
+            self.assertIn('QODER_CONFIG_DIR', preview.PRIVATE_KEYS)
+            self.assertIn(str(Path(directory)/'.qoder'), preview.host_credential_paths(Path(directory)))
+
+    @unittest.skipUnless(sys.platform == 'darwin', 'real sandbox boundary requires macOS')
+    def test_qoder_proxy_allows_only_private_registration(self):
+        with tempfile.TemporaryDirectory() as directory:
+            lab, commands, env = self.proxy_lab(Path(directory))
+            fixture = lab/'installed-qoder'
+            fixture.write_text('#!'+sys.executable+' -I\nprint("TEST registration")\n')
+            fixture.chmod(0o700)
+            preview.cli_proxies(commands, lab, {'qoder': str(fixture)}, env, 'a'*40)
+            args = ['--config-dir', env['QODER_CONFIG_DIR'], 'plugins', 'install', str(lab/'source'), '--scope', 'user', '--json']
+            accepted = subprocess.run([str(commands/'qoder'), *args], capture_output=True, timeout=5, env=env)
+            self.assertEqual(accepted.returncode, 0, accepted.stderr)
+            for rejected in (['--print', 'provider prompt'], ['--config-dir', directory, *args[2:]], [*args[:4], directory, *args[5:]]):
+                result = subprocess.run([str(commands/'qoder'), *rejected], capture_output=True, timeout=5, env=env)
+                self.assertEqual(result.returncode, 99, result.stderr)
+
     def test_rejected_proxy_command_uses_private_diagnostics_before_invocation(self):
         # Rejections must be durable even when diagnostics is outside the TEST
         # profile, and unsafe receipt leaves must never invoke the real command.

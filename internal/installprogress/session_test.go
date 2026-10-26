@@ -401,3 +401,42 @@ func TestSessionUncertainSnapshotNeedsAuthoritativeActivity(t *testing.T) {
 		t.Fatalf("legacy stage hid the saved-registration failure: %s / %q", s.counters(), lines)
 	}
 }
+
+// Qoder shares the finite observer phases; its addition must neither reject the
+// journal nor change ordering or imply that a committed registration completed.
+func TestSessionQoderConcurrentProgressAndPartialTruth(t *testing.T) {
+	s := &session{history: map[string][]event{}, last: map[string]event{}, lost: map[string]bool{}}
+	for _, line := range []string{
+		"snapshot\tqoder\tpending\tnot_started",
+		"snapshot\tcursor\tpending\tnot_started",
+		"transition\tgemini\tdownload\trunning",
+		"transition\tglobal\tinstalling-qoder\trunning",
+		"transition\tqoder\truntime\trunning",
+	} {
+		kind, e, _, err := parseSession(line)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s.apply(kind, e)
+	}
+	lines := strings.Join(s.currentLines(100, 0), "\n")
+	if !strings.Contains(lines, "Qoder: Installing runtime") || !strings.Contains(lines, "Gemini CLI: Downloading files") || s.counters() != "Completed 0; active 2; queued 1" {
+		t.Fatalf("Qoder hid concurrent activity: %q / %s", lines, s.counters())
+	}
+	if strings.Index(lines, "Gemini CLI:") > strings.Index(lines, "Qoder:") || strings.Index(lines, "Qoder:") > strings.Index(lines, "Cursor:") {
+		t.Fatalf("Qoder did not retain canonical product order: %q", lines)
+	}
+	s.apply("transition", event{"global", "installing-qoder", "done"})
+	s.apply("transition", event{"qoder", "config", "registration_committed"})
+	lines = strings.Join(s.currentLines(100, 0), "\n")
+	if !strings.Contains(lines, "! Qoder: Registration saved; follow-up pending") || strings.Contains(lines, "Qoder: Installed;") || s.counters() != "Completed 0; active 1; queued 1" {
+		t.Fatalf("Qoder partial result promoted: %q / %s", lines, s.counters())
+	}
+	var out bytes.Buffer
+	if err := Run(context.Background(), eventFile(t, "qoder\tcomplete\tcompleted\nstop\t\t\n"), Options{Output: &out}); err != nil {
+		t.Fatal(err)
+	}
+	if out.String() != "Qoder: complete - done\n" {
+		t.Fatalf("legacy observer omitted Qoder: %q", out.String())
+	}
+}

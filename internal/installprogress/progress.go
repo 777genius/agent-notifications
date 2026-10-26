@@ -20,7 +20,7 @@ const Capability = "installer-progress-v1"
 // Every displayed string comes from these tables, never from untrusted input.
 var clients = map[string]string{
 	"claude": "Claude Code", "codex": "Codex CLI", "opencode": "OpenCode",
-	"gemini": "Gemini CLI", "cursor": "Cursor", "global": "Installer",
+	"gemini": "Gemini CLI", "qoder": "Qoder", "cursor": "Cursor", "global": "Installer",
 }
 
 var phases = map[string]string{
@@ -39,6 +39,7 @@ var phases = map[string]string{
 	"installing-codex":      "Installing Codex notifications",
 	"installing-opencode":   "Installing OpenCode notifications",
 	"installing-gemini":     "Installing Gemini notifications",
+	"installing-qoder":      "Installing Qoder notifications",
 }
 
 var outcomes = map[string]string{

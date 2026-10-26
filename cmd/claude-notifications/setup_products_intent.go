@@ -39,7 +39,7 @@ type bootstrapInitialObservation struct {
 	ChannelPolicy   []byte
 }
 
-var intentScalarKeys = []string{"home", "claude-config", "claude-mcp-config", "codex-home", "codex-mcp-config", "opencode-config-dir", "gemini-config-root", "control-root", "runtime-root", "global-config", "claude-executable", "codex-executable", "opencode-executable", "gemini-executable", "scope-root", "client-executable", "local-settings"}
+var intentScalarKeys = []string{"home", "claude-config", "claude-mcp-config", "codex-home", "codex-mcp-config", "opencode-config-dir", "gemini-config-root", "qoder-config-root", "control-root", "runtime-root", "global-config", "claude-executable", "codex-executable", "opencode-executable", "gemini-executable", "qoder-executable", "scope-root", "client-executable", "local-settings"}
 
 func intentWizardRequest(i confirmedBootstrapIntent) setupwizard.Request {
 	scopes := i.Scopes
@@ -235,7 +235,7 @@ func preflightBootstrapIntent(ctx context.Context, i confirmedBootstrapIntent, a
 		}
 	}
 	for _, key := range intentScalarKeys {
-		if key == "home" || key == "global-config" || key == "claude-mcp-config" || key == "codex-mcp-config" || containsProduct([]string{"claude-executable", "codex-executable", "opencode-executable", "gemini-executable", "client-executable"}, key) {
+		if key == "home" || key == "global-config" || key == "claude-mcp-config" || key == "codex-mcp-config" || containsProduct([]string{"claude-executable", "codex-executable", "opencode-executable", "gemini-executable", "qoder-executable", "client-executable"}, key) {
 			continue
 		}
 		if path := string(i.Scopes[key]); path != "" {
@@ -369,10 +369,7 @@ func resolveBootstrapChannels(a setupProductsArgs, product string, raw json.RawM
 	if len(raw) > 0 && (json.Unmarshal(raw, &route) != nil || route == nil) {
 		return false, false, errors.New("invalid observer channel policy")
 	}
-	key := "openCodeNotifications"
-	if product == "gemini" {
-		key = "geminiNotifications"
-	}
+	key := bootstrapObserverChannelKey(product)
 	value, present := route[key]
 	if !present {
 		return true, false, nil
@@ -388,14 +385,14 @@ func resolveBootstrapChannels(a setupProductsArgs, product string, raw json.RawM
 // than the bounded host handoff, and unrelated preferences never drive defaults.
 func selectedBootstrapChannelPolicy(products []string, raw []byte) ([]byte, error) {
 	selected := map[string]json.RawMessage{}
-	if !containsProduct(products, "opencode") && !containsProduct(products, "gemini") {
+	if !containsProduct(products, "opencode") && !containsProduct(products, "gemini") && !containsProduct(products, "qoder") {
 		return nil, nil
 	}
 	var route map[string]json.RawMessage
 	if len(raw) > 0 && (json.Unmarshal(raw, &route) != nil || route == nil) {
 		return nil, errors.New("invalid observer channel policy")
 	}
-	for _, pair := range [][2]string{{"opencode", "openCodeNotifications"}, {"gemini", "geminiNotifications"}} {
+	for _, pair := range [][2]string{{"opencode", "openCodeNotifications"}, {"gemini", "geminiNotifications"}, {"qoder", "qoderNotifications"}} {
 		if containsProduct(products, pair[0]) {
 			if leaf, ok := route[pair[1]]; ok {
 				selected[pair[1]] = leaf
@@ -403,4 +400,18 @@ func selectedBootstrapChannelPolicy(products []string, raw []byte) ([]byte, erro
 		}
 	}
 	return json.Marshal(selected)
+}
+
+// Native observer channel leaves share one frozen consent contract.
+func bootstrapObserverChannelKey(product string) string {
+	switch product {
+	case "opencode":
+		return "openCodeNotifications"
+	case "gemini":
+		return "geminiNotifications"
+	case "qoder":
+		return "qoderNotifications"
+	default:
+		return ""
+	}
 }

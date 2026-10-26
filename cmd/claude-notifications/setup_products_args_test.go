@@ -23,6 +23,8 @@ func TestSetupProductsNormalizedArguments(t *testing.T) {
 		{"partial-route", []string{"confirm", "--products", "claude", "--navigation", "none"}, false},
 		{"duplicate-route", []string{"confirm", "--products", "claude", "--preserve-policy", "--preserve-policy"}, false},
 		{"skip-route", []string{"confirm", "--products", "claude", "--skip-agent-notify", "--request-permission"}, false},
+		{"qoder-no-mcp", []string{"confirm", "--products", "qoder", "--agent-notify"}, false},
+		{"qoder-channels", []string{"channels", "--products", "qoder"}, true},
 		{"observers-mcp", []string{"confirm", "--products", "gemini", "--webhook", "--agent-notify"}, false},
 		{"portable-channels", []string{"confirm", "--products", "codex", "--desktop"}, false},
 		{"observer-default-channels", []string{"confirm", "--products", "opencode"}, true},

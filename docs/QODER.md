@@ -4,8 +4,9 @@ The Qoder adapter hooks the same attention events as the Claude adapter:
 completion, questions, permission prompts, plan readiness, subagent
 completion, and idle teammates. Events arrive as native Qoder hook payloads;
 the dedicated native bundle registers one handler per event plus a platform
-executable. It does not install an MCP observer or change the existing
-portable package and managed-runtime ledger.
+executable. The unified installer builds this bundle from the verified release
+executable and records its native registration in the shared ownership ledger.
+No MCP observer is installed.
 
 ## Hook events
 
@@ -29,8 +30,21 @@ to a single notification. `PermissionRequest` notifications name the tool and ar
 
 ## Configuration
 
-Installing this separate package opts into the Qoder hooks; the existing
-generic portable installer does not select Qoder automatically. Settings use
+Select **Qoder** in the unified installer, or pass `--product qoder`.
+The Qoder CLI must be available on the selected `PATH`; an IDE installation alone
+does not supply the plugin-management CLI. Both `qoder` and `qodercli` command
+names are supported when available. Installation and update use the same command:
+
+```sh
+(set -o pipefail; curl -fsSL https://agent-notifications.com/install.sh | bash -s -- --product qoder)
+```
+
+The installer asks for desktop/webhook delivery and preserves independent channel
+choices on updates. Granting webhook consent does not configure a destination.
+Managed hooks require both the recorded channel consent and shared notification
+settings. Uninstall removes only the owned plugin registration and bundle; edited
+or unowned files cause a refusal. Existing Qoder plugins and settings are preserved.
+The native profile root is `QODER_CONFIG_DIR`, defaulting to `~/.qoder`. Settings use
 the shared file reported by `claude-notifications config path`. An existing
 `AGENT_NOTIFICATIONS_CONFIG` selection is honored; set it to an absolute config
 file path when using a separate TEST profile. Qoder inherits global
@@ -75,7 +89,21 @@ configurable notification delay and bounded webhook shutdown. Desktop
 notifications still require the operating system's normal notification
 permissions.
 
-## Build a local native package
+## Inspect and remove
+
+The installer prints the retained executable path with `BOOTSTRAP_VERBOSE=1`.
+Use that executable for lifecycle commands (retain `--config-root` and
+`--control-root` from the printed commands if using a custom profile):
+
+```sh
+/absolute/path/to/claude-notifications setup-qoder inspect
+/absolute/path/to/claude-notifications setup-qoder remove --qoder-executable /absolute/path/to/qoder
+```
+
+Reload Qoder after installation, update or removal so existing sessions pick up
+the changed hooks. Click-to-focus to the exact existing Qoder chat is unavailable.
+
+## Build a standalone native package
 
 Build the notifications executable for the machine that will run Qoder, then
 package those exact bytes. For example, on Linux amd64:
@@ -115,11 +143,12 @@ may require a reload/restart before a newly installed hook becomes active.
 
 ## Scope and release status
 
-This package builder is source support. Existing 1.49.5 public assets predate the
-Qoder adapter. The current basic release operator seals an exact asset set; this
-change does not add Qoder ZIPs to that seal or advertise an already published
-Qoder release. Build from the updated source until a separately qualified release
-includes this adapter and its package.
+The unified installation assembles the native bundle locally from the same
+checksum-verified executable as the other agents. It does not require a separate
+Qoder ZIP in the release asset set. Standalone package builds remain available
+for users managing plugins directly. Native lifecycle and real-turn evidence
+are recorded separately from synthetic hook-payload tests; see the
+[Qoder E2E handoff](handoffs/qoder-native-e2e.md).
 
 Opening the exact existing Qoder Desktop chat from a notification is not
 supported here. The [documented Qoder chat deep link](https://docs.qoder.com/user-guide/deeplink) creates a new chat; a
