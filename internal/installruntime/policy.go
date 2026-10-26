@@ -96,13 +96,23 @@ func ReadPolicySnapshot(ctx context.Context, root string) (PolicySnapshot, error
 	if err = privateDirectory(root); os.IsNotExist(err) {
 		// Do not reopen an absent root without the locks: a concurrent setup
 		// could otherwise splice a new installation into a missing-policy read.
-		result.Policy = UserPolicy{SchemaVersion: 1}
-		result.Fields = map[string]json.RawMessage{}
-		return result, nil
+		return absentPolicySnapshot(), nil
 	} else if err != nil {
 		return result, err
 	}
 	release, err := LockExisting(ctx, filepath.Join(root, ".component-install.lock"))
+	if os.IsNotExist(err) {
+		fresh, readErr := configOnlyControlRoot(root)
+		if readErr != nil {
+			return result, readErr
+		}
+		if fresh {
+			if readErr := ctx.Err(); readErr != nil {
+				return result, readErr
+			}
+			return absentPolicySnapshot(), nil
+		}
+	}
 	if err != nil {
 		return result, err
 	}
