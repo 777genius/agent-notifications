@@ -20,6 +20,7 @@
 [![Ubuntu CI](https://github.com/777genius/agent-notifications/actions/workflows/ci-ubuntu.yml/badge.svg?branch=main&event=push)](https://github.com/777genius/agent-notifications/actions/workflows/ci-ubuntu.yml?query=branch%3Amain+event%3Apush)
 [![macOS CI](https://github.com/777genius/agent-notifications/actions/workflows/ci-macos.yml/badge.svg?branch=main&event=push)](https://github.com/777genius/agent-notifications/actions/workflows/ci-macos.yml?query=branch%3Amain+event%3Apush)
 [![Windows CI](https://github.com/777genius/agent-notifications/actions/workflows/ci-windows.yml/badge.svg?branch=main&event=push)](https://github.com/777genius/agent-notifications/actions/workflows/ci-windows.yml?query=branch%3Amain+event%3Apush)
+<a href="https://trendshift.io/repositories/24861?utm_source=repository-badge&amp;utm_medium=badge&amp;utm_campaign=badge-repository-24861" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/repositories/24861" alt="777genius%2Fagent-notifications | Trendshift" width="125" height="27"/></a>
 [![Go Reference](https://pkg.go.dev/badge/github.com/777genius/agent-notifications.svg)](https://pkg.go.dev/github.com/777genius/agent-notifications)
 [![codecov](https://codecov.io/gh/777genius/agent-notifications/graph/badge.svg?branch=main)](https://codecov.io/gh/777genius/agent-notifications)
 
