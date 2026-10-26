@@ -6,10 +6,10 @@ release commit, an immutable source commit, and its platform branch.
 
 | Platform | Qualified version | Source branch |
 | --- | --- | --- |
-| Linux amd64 / arm64, Windows amd64 | 1.49.7 | `release/platform-linux-windows` |
-| macOS amd64 / arm64 | 1.49.7 | `release/platform-macos` |
+| Linux amd64 / arm64, Windows amd64 | 1.49.8 | `release/platform-linux-windows` |
+| macOS amd64 / arm64 | 1.49.8 | `release/platform-macos` |
 
-All five platform rows, GitHub Latest and main manifests select 1.49.7. This
+All five platform rows, GitHub Latest and main manifests select 1.49.8. This
 complete asset set includes Linux, Windows and macOS native/portable packages and
 the signed, notarized macOS helper. Release checks use the owner-approved basic
 five-platform artifact profile and separate macOS E2E. The eleven-cell OpenCode
