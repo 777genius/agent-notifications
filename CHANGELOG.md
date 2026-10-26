@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Validation
 - Native Qoder lifecycle and real-turn qualification are recorded in `docs/handoffs/qoder-native-e2e.md`; synthetic hook tests do not establish native delivery.
+## [1.49.9] - 2026-10-26
 
 ### Fixed
 - Remove host CLI version admission restrictions for Gemini, OpenCode and Cursor, and remove the Codex inventory version allowlist. Preserve capability, schema, ownership and release-provenance checks; exact versions remain only as reproducible test targets.
