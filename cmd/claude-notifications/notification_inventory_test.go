@@ -145,8 +145,11 @@ func TestNotificationCodexQualifiedCacheSeam(t *testing.T) {
 				t.Fatal("disabled/unrelated packages", inv, err)
 			}
 			observed.ClientVersion = "codex-cli 0.153.5"
-			if _, err = inspectCodexNotificationPackages(context.Background(), home, probe); err == nil {
-				t.Fatal("unsupported version accepted")
+			if err := inv.Revalidate(context.Background()); err != nil {
+				t.Fatal("diagnostic version changed a stable inventory", err)
+			}
+			if _, err = inspectCodexNotificationPackages(context.Background(), home, probe); err != nil {
+				t.Fatal("client version must not reject a valid inventory", err)
 			}
 		})
 	}
@@ -242,27 +245,30 @@ func TestNotificationCodexProductionQualificationFlag(t *testing.T) {
 	}
 }
 
-func TestNotificationCodexUnqualifiedVersions(t *testing.T) {
-	for _, version := range []string{"codex-cli 0.151.0", "codex-cli 0.153.5", "", "codex-cli 0.154.0"} {
+func TestNotificationCodexVersionsDoNotGateInventory(t *testing.T) {
+	for _, version := range []string{"codex-cli 0.151.0", "codex-cli 0.162.0", "", "codex-cli 99.0.0-preview", "version-probe-unavailable"} {
 		t.Run(version, func(t *testing.T) {
-			home := t.TempDir()
+			home := setupCommandRoot(t)
+			if err := os.WriteFile(filepath.Join(home, "config.toml"), nil, 0600); err != nil {
+				t.Fatal(err)
+			}
 			t.Setenv("HOME", home)
 			t.Setenv("CODEX_HOME", home)
 			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
 			t.Setenv("PATH", home)
-			script := "#!/bin/sh\ncase \"$*\" in --version) echo '" + version + "';; *) exit 97;; esac\n"
+			script := "#!/bin/sh\ncase \"$*\" in --version) [ '" + version + "' != version-probe-unavailable ] || exit 97; echo '" + version + "';; 'plugin list --json') echo '{\"installed\":[]}';; *) exit 98;; esac\n"
 			if err := os.WriteFile(filepath.Join(home, "codex"), []byte(script), 0700); err != nil {
 				t.Fatal(err)
 			}
 			observed, err := probeNotificationCodex(context.Background(), home)
-			if err == nil || observed.CacheLayoutQualified || observed.Installed != nil {
-				t.Fatal("unqualified probe accepted", observed, err)
+			if err != nil || !observed.CacheLayoutQualified || observed.Installed == nil {
+				t.Fatal("version gated a working inventory probe", observed, err)
 			}
 			inv, err := inspectCodexNotificationPackages(context.Background(), home, func(context.Context, string) (notificationCodexProbeResult, error) {
 				return notificationCodexProbeResult{ClientVersion: version, CacheLayoutQualified: true, Installed: []byte(`{"installed":[]}`)}, nil
 			})
-			if err == nil || inv.State != "unknown" {
-				t.Fatal("unqualified inspector accepted", inv, err)
+			if err != nil || inv.State != "clear" {
+				t.Fatal("version gated a valid inventory", inv, err)
 			}
 		})
 	}

@@ -64,7 +64,7 @@ Use `--state-dir /path/to/private-TEST-cache` to reuse your own mode-700 cache.
 
 ## Prerequisites
 
-- Install the selected agent CLIs first. OpenCode accepts stable V1 >= 1.18.29 and V2 >= 2.0.0; this does not qualify every version in that range. See [OpenCode setup and limits](opencode-notifications.md), including the stock Windows V1 original-event-age limitation. Gemini accepts stable CLI versions >= 0.62.0 and < 0.66.0 on macOS/Linux/Windows; see the [Gemini compatibility and qualification notes](gemini-notifications.md).
+- Install the selected agent CLIs first. The installer does not impose CLI version minimums, maximums or exact-version allowlists. Tested versions and platform limitations are documented separately in the [OpenCode guide](opencode-notifications.md) and [Gemini guide](gemini-notifications.md).
 - `curl`, Bash, and a working `python3` or `node` on `PATH` for installer metadata and checksum validation. A Windows Store Python stub is not sufficient.
 - Git for Claude marketplace setup, `tar` for Codex bundles, and `unzip` for the macOS desktop helper.
 - **Windows users:** Git Bash (included with [Git for Windows](https://git-scm.com/download/win)). Do not use WSL for a native Windows installation.
