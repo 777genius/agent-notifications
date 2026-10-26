@@ -163,6 +163,13 @@ func dispatchEarlyCommand() bool {
 	if len(os.Args) > 1 && os.Args[1] == "gemini-event" {
 		os.Exit(runGeminiEvent(os.Args[2:], os.Stdin, os.Stdout))
 	}
+	if len(os.Args) > 1 && os.Args[1] == "setup-qoder" {
+		os.Exit(qoderSetupMain(os.Args[2:]))
+	}
+	if len(os.Args) > 1 && os.Args[1] == "qoder-event" {
+		runManagedQoderHook(os.Args[2:])
+		return true
+	}
 	if len(os.Args) > 1 && os.Args[1] == "setup-gemini" {
 		os.Exit(geminiSetupMain(os.Args[2:]))
 	}
@@ -886,8 +893,9 @@ func printUsage() {
 	fmt.Println("                          [--print] [--dry-run] [--codex-home <dir>] [--plugin-root <dir>]")
 	fmt.Println("                          [--agent-notify|--skip-agent-notify] [--navigation none]")
 	fmt.Println("                          [--allow-unknown-caller true|false --allow-caller-asserted true|false]")
+	fmt.Println("  setup-qoder             Install/update/remove/inspect/recover Qoder native plugin and channel consent")
 	fmt.Println("  setup-gemini            Install/update/remove/inspect/recover Gemini user hooks and channel consent")
-	fmt.Println("  setup-products          Select Claude/Codex/OpenCode/Gemini through the setup terminal")
+	fmt.Println("  setup-products          Select Claude/Codex/OpenCode/Gemini/Qoder through the setup terminal")
 	fmt.Println("  setup-notifications     Direct MCP configure/status and setup-notifications wizard")
 	fmt.Println("  config                  Shared configuration path/inspect/init/edit/preflight-update")
 	fmt.Println("  version                 Show version information")

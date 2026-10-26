@@ -166,6 +166,13 @@ func newHandlerWithConfig(pluginRoot string, cfg *config.Config, product Product
 	}, nil
 }
 
+// RestrictChannels intersects effective product configuration with installer
+// consent before handling the event. Both delivery services share this config.
+func (h *Handler) RestrictChannels(desktop, webhook bool) {
+	h.cfg.Notifications.Desktop.Enabled = h.cfg.Notifications.Desktop.Enabled && desktop
+	h.cfg.Notifications.Webhook.Enabled = h.cfg.Notifications.Webhook.Enabled && webhook
+}
+
 // eventSource returns the injected source, defaulting to the legacy Claude
 // decoder so zero-value handlers (tests, NewHandler) keep today's behavior.
 func (h *Handler) eventSource() EventSource {

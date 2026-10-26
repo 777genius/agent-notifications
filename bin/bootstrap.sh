@@ -72,6 +72,7 @@ CONFIGURE_ARGS=()
 OPENCODE_ARGS=()
 _FROZEN_OPENCODE_CHANNELS=()
 _FROZEN_GEMINI_CHANNELS=()
+_FROZEN_QODER_CHANNELS=()
 CLAUDE_AGENT_NOTIFY_STATUS="not configured by this run"
 CODEX_AGENT_NOTIFY_STATUS="not configured by this run"
 SELECTED_PRODUCTS=()
@@ -89,12 +90,14 @@ _FROZEN_CLAUDE_MCP=""
 _FROZEN_CODEX_MCP=""
 _FROZEN_OPENCODE=""
 _FROZEN_GEMINI=""
+_FROZEN_QODER=""
 _FROZEN_SCOPE_ROOT=""
 _FROZEN_CLIENT_EXEC=""
 _CLAUDE_EXEC=claude
 _CODEX_EXEC=codex
 _OPENCODE_EXEC=opencode
 _GEMINI_EXEC=gemini
+_QODER_EXEC=qoder
 _PROGRESS_IDS=()
 _PROGRESS_PHASES=()
 _PROGRESS_OUTCOMES=()
@@ -252,16 +255,20 @@ check_prerequisites() {
         echo "gemini CLI not found in PATH; install Gemini CLI first." >&2
         return 1
     fi
+    if [ "$PRODUCT" = qoder ] && ! command -v "$_QODER_EXEC" >/dev/null 2>&1; then
+        echo "Qoder CLI not found in selected PATH; install Qoder CLI first." >&2
+        return 1
+    fi
     # Do not add host CLI min/max ranges, exact pins, or prerelease filters here.
     # New agent releases must not require an installer update just for admission.
     # Test-version pins are reproducibility evidence, not compatibility allowlists.
     # Capability/schema failures are handled by each integration at its boundary.
-    if { [ "$PRODUCT" = opencode ] || [ "$PRODUCT" = gemini ]; } && [ "$(bootstrap_release_os_arch)" = "windows arm64" ]; then
+    if { [ "$PRODUCT" = opencode ] || [ "$PRODUCT" = gemini ] || [ "$PRODUCT" = qoder ]; } && [ "$(bootstrap_release_os_arch)" = "windows arm64" ]; then
         echo "Windows arm64 is not supported." >&2
         return 1
     fi
-    if { [ "$PRODUCT" = opencode ] || [ "$PRODUCT" = gemini ]; } && [ "$(uname -s)" = Darwin ] &&
-        { [[ " ${OPENCODE_ARGS[*]-} " = *" --desktop "* ]] || [[ " ${OPENCODE_ARGS[*]-} " = *" --desktop=true "* ]] || [[ " ${_FROZEN_OPENCODE_CHANNELS[*]-} ${_FROZEN_GEMINI_CHANNELS[*]-} " = *" --desktop=true "* ]]; } && ! command -v unzip >/dev/null 2>&1; then
+    if { [ "$PRODUCT" = opencode ] || [ "$PRODUCT" = gemini ] || [ "$PRODUCT" = qoder ]; } && [ "$(uname -s)" = Darwin ] &&
+        { [[ " ${OPENCODE_ARGS[*]-} " = *" --desktop "* ]] || [[ " ${OPENCODE_ARGS[*]-} " = *" --desktop=true "* ]] || [[ " ${_FROZEN_OPENCODE_CHANNELS[*]-} ${_FROZEN_GEMINI_CHANNELS[*]-} ${_FROZEN_QODER_CHANNELS[*]-} " = *" --desktop=true "* ]]; } && ! command -v unzip >/dev/null 2>&1; then
         echo "unzip is required for the signed macOS notification helper." >&2
         exit 1
     fi
@@ -1374,6 +1381,7 @@ progress_stage_phase() {
         "Installing Codex notifications") _PROGRESS_GLOBAL_PHASE=installing-codex ;;
         "Installing OpenCode notifications") _PROGRESS_GLOBAL_PHASE=installing-opencode ;;
         "Installing Gemini CLI notifications") _PROGRESS_GLOBAL_PHASE=installing-gemini ;;
+        "Installing Qoder notifications") _PROGRESS_GLOBAL_PHASE=installing-qoder ;;
     esac
 }
 
@@ -1924,7 +1932,7 @@ select_product() {
                 CONFIGURE_ARGS+=("$1")
                 shift ;;
             --help|-h)
-                echo "Usage: bash bootstrap.sh [--product claude|codex|both|opencode|gemini|cursor | --products claude,codex,opencode,gemini] [--desktop] [--webhook] [--agent-notify|--skip-agent-notify] [--navigation none] [--scope-root PATH --client-executable PATH (Cursor only)]"
+                echo "Usage: bash bootstrap.sh [--product claude|codex|both|opencode|gemini|qoder|cursor | --products claude,codex,opencode,gemini,qoder] [--desktop] [--webhook] [--agent-notify|--skip-agent-notify] [--navigation none] [--scope-root PATH --client-executable PATH (Cursor only)]"
                 exit 0 ;;
             *) echo "Unknown option: $1" >&2; return 1 ;;
         esac
@@ -1956,8 +1964,8 @@ select_product() {
     case "$PRODUCT" in
         bundle:*) csv=${PRODUCT#bundle:} ;;
         both) csv=claude,codex ;;
-        claude|codex|opencode|gemini|cursor) csv=$PRODUCT ;;
-        *) echo "Invalid product: $PRODUCT; use claude, codex, both, opencode, gemini or cursor." >&2; return 1 ;;
+        claude|codex|opencode|gemini|qoder|cursor) csv=$PRODUCT ;;
+        *) echo "Invalid product: $PRODUCT; use claude, codex, both, opencode, gemini, qoder or cursor." >&2; return 1 ;;
     esac
     case "$csv" in ''|,*|*,|*,,*) echo "Product selection contains an empty product." >&2; return 1 ;; esac
     if [ "$csv" = cursor ]; then
@@ -1977,7 +1985,7 @@ select_product() {
     while :; do
         selected=${remaining%%,*}
         case "$selected" in
-            claude|codex|opencode|gemini) ;;
+            claude|codex|opencode|gemini|qoder) ;;
             *) echo "Unknown product: $selected" >&2; return 1 ;;
         esac
         case ",$seen," in *",$selected,"*) echo "Duplicate product: $selected" >&2; return 1 ;; esac
@@ -1986,12 +1994,12 @@ select_product() {
         case "$selected" in
             claude|codex)
                 if [ -z "$LEGACY_PRODUCT" ]; then LEGACY_PRODUCT=$selected; else LEGACY_PRODUCT=both; fi ;;
-            opencode|gemini) observers=$((observers+1)) ;;
+            opencode|gemini|qoder) observers=$((observers+1)) ;;
         esac
         case "$remaining" in *,*) remaining=${remaining#*,} ;; *) break ;; esac
     done
     if [ "$observers" -eq 0 ] && [ "${#OPENCODE_ARGS[@]}" -gt 0 ]; then
-        echo "--desktop/--webhook require OpenCode or Gemini." >&2; return 1
+        echo "--desktop/--webhook require OpenCode, Gemini or Qoder." >&2; return 1
     fi
     if [ -z "$LEGACY_PRODUCT" ]; then
         if [ "$seen_agent_notify" = true ] || [ "$seen_skip_agent_notify" = true ] || [ "${#CONFIGURE_ARGS[@]}" -ne 0 ]; then
@@ -2647,6 +2655,84 @@ gemini_remove_command() {
     observer_remove_command "$1" setup-gemini --control-root "$2"
 }
 
+install_qoder() {
+    local root binary runtime os arch base native native_root config_path installed
+    local channels=(${OPENCODE_ARGS[@]+"${OPENCODE_ARGS[@]}"})
+    if [ -n "$_SELECTOR_INTENT" ]; then channels=("${_FROZEN_QODER_CHANNELS[@]}"); fi
+    root=$(bootstrap_control_root) || return 1
+    read -r os arch < <(bootstrap_release_os_arch) || return 1
+    [ "$os-$arch" != windows-arm64 ] || { echo "Windows arm64 is not a supported release target." >&2; return 1; }
+    binary="$_CONFIG_HELPER"
+    runtime="${_FROZEN_RUNTIME:-$root/runtime}"
+    if [ "$os" = windows ]; then
+        command -v cygpath >/dev/null 2>&1 || { echo "Git Bash cygpath is required for native Windows paths." >&2; return 1; }
+        binary=$(cygpath -w "$binary") || return 1
+        runtime=$(cygpath -m "$runtime") || return 1
+    fi
+    set -- setup-qoder install --binary "$binary" "${channels[@]}"
+    if [ -n "$_SELECTOR_INTENT" ]; then
+        set -- "$@" --control-root "$root" --home "$INSTALLER_HOME"
+        set -- "$@" --config-root "$_FROZEN_QODER" --qoder-executable "$_QODER_EXEC"
+    fi
+    # Existing shared components supply their authoritative runtime directory.
+    [ -e "$root/ownership.json" ] || set -- "$@" --runtime-root "$runtime"
+    if [ "$os" = darwin ] && { [[ " ${channels[*]-} " = *" --desktop "* ]] || [[ " ${channels[*]-} " = *" --desktop=true "* ]]; }; then
+        base="${BOOTSTRAP_RELEASES_BASE_URL:-https://github.com/${REPO}/releases}/download/$BOOTSTRAP_TAG"
+        native="$_CONFIG_STAGE/ClaudeNotifier.app"
+        if [ ! -d "$native" ]; then
+            fetch_bootstrap_file "$base/ClaudeNotifier.app.zip" "$_CONFIG_STAGE/ClaudeNotifier.app.zip" || return 1
+            verify_bootstrap_checksum "$_CONFIG_STAGE" ClaudeNotifier.app.zip || return 1
+            unzip -q "$_CONFIG_STAGE/ClaudeNotifier.app.zip" -d "$_CONFIG_STAGE" || return 1
+        fi
+        [ -f "$native.managed-runtime.json" ] || { echo "Signed native helper attestation is missing." >&2; return 1; }
+        # StageNative checks sealed decoder floor, attestation and OS signature.
+        set -- "$@" --native-app "$native"
+    fi
+    progress_phase "$PRODUCT" registration state_requires_inspection
+run_setup_stage "Installing Qoder notifications" "$_CONFIG_HELPER" "$@" </dev/null || return 1
+    progress_phase "$PRODUCT" runtime-lookup registration_committed
+    native_root="$root"
+    [ "$os" != windows ] || native_root=$(cygpath -m "$root") || return 1
+    runtime=$("$_CONFIG_HELPER" config installer runtime-root "$native_root") || return 1
+    installed="$runtime/claude-notifications-$os-$arch"
+    [ "$os" != windows ] || installed="$installed.exe"
+    progress_phase "$PRODUCT" config registration_committed
+    run_setup_stage "Preparing notification settings" initialize_config || return 1
+    config_path=$("$_CONFIG_HELPER" config path) || return 1
+    local report status
+    report=$(mktemp "${TMPDIR:-/tmp}/bootstrap-qoder-summary-XXXXXX") || return 1
+    {
+        echo "  Qoder - installed; restart required."
+        print_delivery_note
+        echo "  Reload Qoder to load the installed notification plugin."
+        if [ "${BOOTSTRAP_VERBOSE:-0}" = 1 ]; then
+            printf '  Shared settings: %s\n' "$config_path"
+            echo "  Native completion, question, permission, plan and teammate hooks; existing settings were preserved."
+        fi
+        if [ "${BOOTSTRAP_VERBOSE:-0}" = 1 ]; then
+            printf '  Inspect registration and consent: %s\n' "$(quote_shell_command "$installed" setup-qoder inspect --control-root "$native_root" --config-root "$_FROZEN_QODER")"
+            if [ "$os" = darwin ] && { [[ " ${channels[*]-} " = *" --desktop "* ]] || [[ " ${channels[*]-} " = *" --desktop=true "* ]]; }; then
+                printf '  Check permission: %s\n' "$(quote_shell_command "$installed" setup-qoder permission-status --control-root "$native_root")"
+                printf '  Grant if needed: %s\n' "$(quote_shell_command "$installed" setup-qoder request-permission --control-root "$native_root")"
+            fi
+        fi
+        if { [[ " ${channels[*]-} " = *" --webhook "* ]] || [[ " ${channels[*]-} " = *" --webhook=true "* ]]; }; then
+            echo "  Webhook consent recorded; configure and enable its destination and status channel in shared settings."
+        fi
+        if [ "${BOOTSTRAP_VERBOSE:-0}" = 1 ]; then
+            printf '  Remove: %s\n' "$(qoder_remove_command "$installed" "$native_root" "$_FROZEN_QODER" "$_QODER_EXEC")"
+        fi
+    } > "$report"
+    publish_setup_summary "$report"
+    status=$?
+    rm -f "$report"
+    return "$status"
+}
+
+qoder_remove_command() {
+    observer_remove_command "$1" setup-qoder --control-root "$2" --config-root "$3" --qoder-executable "$4"
+}
+
 # These rows describe observed phases; they never authorize another phase.
 progress_phase() {
     local i=0
@@ -2676,6 +2762,7 @@ compact_rich_setup_summary() {
             if ($0 == "  Codex - installed; restart required.") client = "codex"
             if ($0 == "  OpenCode - installed; restart required to load the global plugin.") client = "opencode"
             if ($0 == "  Gemini CLI - installed; restart required.") client = "gemini"
+            if ($0 == "  Qoder - installed; restart required.") client = "qoder"
             if (client != "") {
                 current = client
                 if (chosen(client)) next
@@ -2751,7 +2838,7 @@ report_progress() {
         if [ "$outcome" = completed ] && [ "${1:-0}" -eq 0 ] && [ "${BOOTSTRAP_VERBOSE:-0}" != 1 ] && [ "$_PROGRESS_JOURNAL_DISABLED" != true ]; then
             i=$((i + 1)); continue
         fi
-        case "${_PROGRESS_IDS[$i]}" in claude) label='Claude Code' ;; codex) label='Codex CLI' ;; opencode) label=OpenCode ;; gemini) label='Gemini CLI' ;; cursor) label=Cursor ;; *) label=Client ;; esac
+        case "${_PROGRESS_IDS[$i]}" in claude) label='Claude Code' ;; codex) label='Codex CLI' ;; opencode) label=OpenCode ;; gemini) label='Gemini CLI' ;; qoder) label=Qoder ;; cursor) label=Cursor ;; *) label=Client ;; esac
         case "$outcome" in
             not_started) outcome='queued; not started' ;;
             completed) outcome='completed; restart required' ;;
@@ -2868,7 +2955,7 @@ selector_record() {
     local item remaining=$_SELECTOR_RECORD seen=""
     while :; do
         item=${remaining%%,*}
-        case "$1:$item" in products:claude|products:codex|products:opencode|products:gemini|products:cursor|channels:desktop|channels:webhook) ;; *) echo "Invalid selector ID." >&2; return 1 ;; esac
+        case "$1:$item" in products:claude|products:codex|products:opencode|products:gemini|products:qoder|products:cursor|channels:desktop|channels:webhook) ;; *) echo "Invalid selector ID." >&2; return 1 ;; esac
         case ",$seen," in *",$item,"*) echo "Duplicate selector ID." >&2; return 1 ;; esac
         seen=${seen:+$seen,}$item
         case "$remaining" in *,*) remaining=${remaining#*,} ;; *) break ;; esac
@@ -2891,7 +2978,7 @@ load_frozen_dispatch() {
         seen=${seen:+$seen,}$key
         [ "${#value}" -le 4096 ] || return 1
         case "$key" in
-            opencode-channel-preimage|gemini-channel-preimage)
+            opencode-channel-preimage|gemini-channel-preimage|qoder-channel-preimage)
                 if [ "$value" != absent ]; then
                     [ "${#value}" -eq 64 ] || return 1
                     case "$value" in *[!0-9a-f]*) return 1 ;; esac
@@ -2900,16 +2987,18 @@ load_frozen_dispatch() {
                 case "$key" in
                     opencode-*) _FROZEN_OPENCODE_CHANNELS+=("--channel-preimage=$value") ;;
                     gemini-*) _FROZEN_GEMINI_CHANNELS+=("--channel-preimage=$value") ;;
+                    qoder-*) _FROZEN_QODER_CHANNELS+=("--channel-preimage=$value") ;;
                 esac
                 continue ;;
         esac
         case "$key" in
-            opencode-desktop|opencode-webhook|gemini-desktop|gemini-webhook)
+            opencode-desktop|opencode-webhook|gemini-desktop|gemini-webhook|qoder-desktop|qoder-webhook)
                 case "$value" in true|false) ;; *) return 1 ;; esac
                 case ",$_PRODUCT_CSV," in *",${key%-*},"*) ;; *) return 1 ;; esac
                 case "$key" in
                     opencode-*) _FROZEN_OPENCODE_CHANNELS+=("--${key#opencode-}=$value") ;;
                     gemini-*) _FROZEN_GEMINI_CHANNELS+=("--${key#gemini-}=$value") ;;
+                    qoder-*) _FROZEN_QODER_CHANNELS+=("--${key#qoder-}=$value") ;;
                 esac
                 continue ;;
         esac
@@ -2922,6 +3011,7 @@ load_frozen_dispatch() {
             codex-mcp-config) _FROZEN_CODEX_MCP=$value ;;
             opencode-config-dir) _FROZEN_OPENCODE=$value; export OPENCODE_CONFIG_DIR="$value" ;;
             gemini-config-root) _FROZEN_GEMINI=$value ;;
+            qoder-config-root) _FROZEN_QODER=$value ;;
             control-root) _FROZEN_CONTROL=$value ;;
             runtime-root) _FROZEN_RUNTIME=$value ;;
             global-config) export AGENT_NOTIFICATIONS_CONFIG="$value" ;;
@@ -2929,6 +3019,7 @@ load_frozen_dispatch() {
             codex-executable) _CODEX_EXEC=$value ;;
             opencode-executable) _OPENCODE_EXEC=$value ;;
             gemini-executable) _GEMINI_EXEC=$value ;;
+            qoder-executable) _QODER_EXEC=$value ;;
             scope-root) _FROZEN_SCOPE_ROOT=$value ;;
             client-executable) _FROZEN_CLIENT_EXEC=$value ;;
             *) return 1 ;;
@@ -2944,6 +3035,7 @@ load_frozen_dispatch() {
             codex) required="$required codex-home codex-mcp-config codex-executable" ;;
             opencode) required="$required opencode-config-dir opencode-executable opencode-desktop opencode-webhook opencode-channel-preimage" ;;
             gemini) required="$required gemini-config-root gemini-executable gemini-desktop gemini-webhook gemini-channel-preimage" ;;
+            qoder) required="$required qoder-config-root qoder-executable qoder-desktop qoder-webhook qoder-channel-preimage" ;;
             cursor) required="$required scope-root client-executable runtime-root" ;;
         esac
     done
@@ -3051,9 +3143,9 @@ main() {
         cache_repair_size=$(LC_ALL=C wc -c <"$_SELECTOR_RESULT") || return 1
         [ "$cache_repair_reply" = ready ] && [ "$cache_repair_size" -eq 6 ] || { echo "Invalid cache repair result bytes." >&2; return 1; }
     fi
-    if [ "$_INTERACTIVE_INTENT" = true ] || [[ "$original_product" = bundle:* ]] || [ "$original_product" = gemini ]; then
+    if [ "$_INTERACTIVE_INTENT" = true ] || [[ "$original_product" = bundle:* ]] || [ "$original_product" = gemini ] || [ "$original_product" = qoder ]; then
         selector_collect capabilities || return $?
-        selector_exact 'setup-products-v1 claude codex opencode gemini' capabilities || return 1
+        selector_exact 'setup-products-v1 claude codex opencode gemini qoder' capabilities || return 1
     fi
     if [ "$_INTERACTIVE_INTENT" = true ]; then
         selector_collect features || return $?
@@ -3071,7 +3163,7 @@ main() {
     fi
     _PRODUCT_CSV=""
     # Canonical product order remains the existing command order.
-    for selected in claude codex opencode gemini cursor; do
+    for selected in claude codex opencode gemini qoder cursor; do
         case " ${SELECTED_PRODUCTS[*]} " in *" $selected "*) _PRODUCT_CSV=${_PRODUCT_CSV:+$_PRODUCT_CSV,}$selected ;; esac
     done
     if [ "$_CHANNEL_PENDING" = true ]; then
@@ -3096,7 +3188,7 @@ main() {
     fi
     if [ "$_INTERACTIVE_INTENT" != true ]; then
         case ",$_PRODUCT_CSV," in
-            *,opencode,*|*,gemini,*)
+            *,opencode,*|*,gemini,*|*,qoder,*)
                 _SELECTOR_INTENT="$_CONFIG_STAGE/selector-intent.json"
                 selector_scope_args
                 selector_collect prepare "${_EFFECT_ARGS[@]}" ${_SCOPE_ARGS[@]+"${_SCOPE_ARGS[@]}"} --intent-file "$_SELECTOR_INTENT" || return $?
@@ -3149,11 +3241,11 @@ main() {
             run_setup_stage "Configuring agent notification tools" setup_agent_notify_wizard || status=$?
             [ "$status" -ne 0 ] || progress_phase cursor complete completed
         fi
-        for selected in opencode gemini; do
+        for selected in opencode gemini qoder; do
             case ",$_PRODUCT_CSV," in *",$selected,"*) ;; *) continue ;; esac
             PRODUCT=$selected
             progress_phase "$selected" preparation state_requires_inspection
-            case "$selected" in opencode) install_opencode || status=$? ;; gemini) install_gemini || status=$? ;; esac
+            case "$selected" in opencode) install_opencode || status=$? ;; gemini) install_gemini || status=$? ;; qoder) install_qoder || status=$? ;; esac
             [ "$status" -eq 0 ] || break
             progress_phase "$selected" complete completed
         done
@@ -3609,7 +3701,7 @@ apply_wizard_progress() {
             next)
                 [ "$phase" = category ] || { status=1; break; }
                 case "$outcome" in activation_available|unavailable) recovery=$outcome ;; *) status=1; break ;; esac ;;
-            claude|codex|opencode|gemini|cursor)
+            claude|codex|opencode|gemini|qoder|cursor)
                 [ "$phase" = MCP ] || { status=1; break; }
                 case "$outcome" in activation_failed|activation_not_attempted|activation_timeout|activation_canceled|activation_deadline|completed|registration_committed|state_requires_inspection) ;; *) status=1; break ;; esac
                 case "$seen" in *" $kind "*) status=1; break ;; esac

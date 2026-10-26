@@ -17,7 +17,7 @@ import (
 // including cancellation without installation/config writes.
 func TestSetupProductsSelect(t *testing.T) {
 	root := t.TempDir()
-	for _, key := range []string{"AGENT_NOTIFICATIONS_CONTROL_ROOT", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "GEMINI_CLI_HOME", "OPENCODE_CONFIG_DIR", "XDG_CONFIG_HOME"} {
+	for _, key := range []string{"AGENT_NOTIFICATIONS_CONTROL_ROOT", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "GEMINI_CLI_HOME", "QODER_CONFIG_DIR", "OPENCODE_CONFIG_DIR", "XDG_CONFIG_HOME"} {
 		t.Setenv(key, filepath.Join(root, key))
 	}
 	for _, tc := range []struct {
@@ -26,6 +26,8 @@ func TestSetupProductsSelect(t *testing.T) {
 	}{
 		{"mixed-numbers", "1,3,4\n", "claude,opencode,gemini\n", 0},
 		{"mixed-ids", "codex,gemini\n", "codex,gemini\n", 0},
+		{"qoder-native", "qoder\n", "qoder\n", 0},
+		{"qoder-mixed", "claude,qoder\n", "claude,qoder\n", 0},
 		{"all", "1,2,3,4\n", "claude,codex,opencode,gemini\n", 0},
 		{"cancel", "cancel\n", "", 0},
 		{"empty", "\n", "", 0},
@@ -39,7 +41,7 @@ func TestSetupProductsSelect(t *testing.T) {
 			if code != tc.code || selected.String() != tc.want {
 				t.Fatalf("selection: code=%d output=%q prompts=%q", code, selected.String(), prompts.String())
 			}
-			for _, label := range []string{"Claude", "Codex", "OpenCode", "Gemini CLI", "comma-separated"} {
+			for _, label := range []string{"Claude", "Codex", "OpenCode", "Gemini CLI", "Qoder", "comma-separated"} {
 				if !strings.Contains(prompts.String(), label) {
 					t.Fatalf("product multiselect omitted %q: %s", label, prompts.String())
 				}
@@ -64,7 +66,7 @@ func TestSetupProductsRejectsUnexpectedArguments(t *testing.T) {
 // Red regression: a capability/feature query reads stdin, polls a profile, or
 // pollutes machine output, preventing safe version-gated shell acquisition.
 func TestSetupProductsFixedFeatures(t *testing.T) {
-	for _, tc := range []struct{ command, want string }{{"capabilities", "setup-products-v1 claude codex opencode gemini\n"}, {"features", "terminal-selector-v1\n"}, {"repair-capabilities", "cache-repair-v1\n"}} {
+	for _, tc := range []struct{ command, want string }{{"capabilities", "setup-products-v1 claude codex opencode gemini qoder\n"}, {"features", "terminal-selector-v1\n"}, {"repair-capabilities", "cache-repair-v1\n"}} {
 		var output, prompts bytes.Buffer
 		if code := runSetupProducts([]string{tc.command}, strings.NewReader(""), &output, &prompts); code != 0 || output.String() != tc.want || prompts.Len() != 0 {
 			t.Fatalf("%s code=%d output=%q prompts=%q", tc.command, code, output.String(), prompts.String())
@@ -261,7 +263,7 @@ func TestSetupProductsPerClientDetectionError(t *testing.T) {
 // a provider converts a relative override into the caller's working directory.
 func TestSetupProductsExplicitAuthorityDoesNotFallback(t *testing.T) {
 	e, a := setupProductsDiscoveryFixture(t)
-	for _, key := range []string{"claude-executable", "codex-executable", "opencode-executable", "gemini-executable"} {
+	for _, key := range []string{"claude-executable", "codex-executable", "opencode-executable", "gemini-executable", "qoder-executable"} {
 		a.Scopes = map[string]string{key: filepath.Join(e.Home, "missing")}
 		if _, _, err := discoverProducts(context.Background(), a, e); err == nil {
 			t.Fatalf("missing %s fell back", key)
