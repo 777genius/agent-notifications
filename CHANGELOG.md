@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.49.10] - 2026-10-26
+
+### Added
+- Install Qoder from the unified installer with independent desktop/webhook consent. Build the native plugin from the verified release executable, preserve other plugins/settings, and support managed inspection, update and removal.
+- Include Qoder in combined installation commands and localized landing guidance.
+
+### Validation
+- Native Qoder lifecycle and real-turn qualification are recorded in `docs/handoffs/qoder-native-e2e.md`; synthetic hook tests do not establish native delivery.
+
 ### Fixed
 - Remove host CLI version admission restrictions for Gemini, OpenCode and Cursor, and remove the Codex inventory version allowlist. Preserve capability, schema, ownership and release-provenance checks; exact versions remain only as reproducible test targets.
 

@@ -177,7 +177,19 @@ CONFIGURE_ROUTE
     [ "${SELECTED_PRODUCTS[*]}" = "claude codex opencode gemini" ]
     [ "${OPENCODE_ARGS[*]}" = --webhook ]
 )
-for args in "--products gemini,gemini --webhook" "--products claude,,gemini --webhook" "--product gemini --webhook --agent-notify"; do
+# Qoder shares observer channels while retaining the selected legacy group.
+(
+    PRODUCT=""; CONFIGURE_ARGS=(); OPENCODE_ARGS=()
+    select_product --products codex,qoder --webhook --skip-agent-notify
+    [ "$LEGACY_PRODUCT" = codex ]
+    [ "${SELECTED_PRODUCTS[*]}" = "codex qoder" ]
+    [ "${OPENCODE_ARGS[*]}" = --webhook ]
+    PRODUCT=""; CONFIGURE_ARGS=(); OPENCODE_ARGS=()
+    select_product --product qoder --desktop
+    [ "$CONFIGURE_NOTIFICATIONS" = false ]
+    [ "${SELECTED_PRODUCTS[*]}" = qoder ]
+)
+for args in "--products gemini,gemini --webhook" "--products claude,,gemini --webhook" "--product gemini --webhook --agent-notify" "--products qoder,qoder --webhook" "--product qoder --agent-notify"; do
     if ( PRODUCT=""; CONFIGURE_ARGS=(); OPENCODE_ARGS=(); select_product $args ); then
         echo "accepted invalid Gemini bundle: $args" >&2; exit 1
     fi
@@ -716,7 +728,7 @@ trace_name="${1#--}-${2:-none}"
 [ "${2:-}" != wizard ] || trace_name="$trace_name-$4"
 printf '%s\0' "$@" > "$TEST_TRACE/$trace_name"
 case "$1 ${2:-}" in
-    'setup-products capabilities') printf 'setup-products-v1 claude codex opencode gemini\n' ;;
+    'setup-products capabilities') printf 'setup-products-v1 claude codex opencode gemini qoder\n' ;;
     'setup-products features') printf 'terminal-selector-v1\n' ;;
     'setup-products repair-capabilities') printf 'cache-repair-v1\n' ;;
     'setup-products repair-cache') printf 'ready\n' ;;
