@@ -54,9 +54,10 @@ function fixture(mode?: 'version' | 'missing' | 'duplicate') {
   writeFileSync(join(bin, 'gh'), `#!/bin/sh\nexec '${process.execPath}' '${fakeGH}' "$@"\n`, { mode: 0o700 });
   const read = () => JSON.parse(readFileSync(remote, 'utf8')) as FakeRemote;
   const update = (patch: Partial<FakeRemote>) => writeFileSync(remote, JSON.stringify({ ...read(), ...patch }));
-  const run = (extra: string[] = []) => new Promise<{ code: number | null; stdout: string; stderr: string }>(accept => {
+  const run = (extra: string[] = [], repository = '777genius/agent-notifications') => new Promise<{ code: number | null; stdout: string; stderr: string }>(accept => {
     const child = spawn(process.execPath, [tool, '--seal', seal, '--release-id', '17', '--scratch', scratch, ...extra],
       { env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, TEST_RELEASE_CANARY_REMOTE: remote,
+        GITHUB_REPOSITORY: repository, TEST_RELEASE_CANARY_REPOSITORY: repository,
         GH_TOKEN: 'TEST-NO-REAL-TOKEN', OPENAI_API_KEY: 'TEST-NO-REAL-KEY', PYTHONOPTIMIZE: '1', NODE_OPTIONS: '' }, cwd: root });
     let stdout = '', stderr = ''; child.stdout.on('data', value => stdout += value); child.stderr.on('data', value => stderr += value);
     child.on('close', code => accept({ code, stdout, stderr }));
@@ -68,8 +69,10 @@ test('immutable ID download runs canonical isolated version/Claude+Codex Stop an
   const f = fixture();
   try {
     const before = readFileSync(join(f.seal, 'manifest.json'));
-    const result = await f.run(['--state', 'draft', '--asset-id', '71']); assert.equal(result.code, 0, result.stderr);
+    const result = await f.run(['--state', 'draft', '--asset-id', '71'], 'universal-agent-plugins/agent-notifications'); assert.equal(result.code, 0, result.stderr);
     const report = JSON.parse(result.stdout);
+    assert.equal(report.repository, '777genius/agent-notifications');
+    assert.equal(report.verifiedRepository, 'universal-agent-plugins/agent-notifications');
     assert.equal(report.status, 'release_canary_passed'); assert.equal(report.before.selected.id, 71);
     assert.equal(report.canary.webhook_deliveries, 2); assert.equal(report.canary.duplicate_replays, 2);
     const commands = readFileSync(join(report.canary.root, 'TEST-commands.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));

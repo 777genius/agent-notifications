@@ -82,7 +82,7 @@ release-preflight: ## Check published metadata before release preparation (RELEA
 	@node scripts/release-preflight.mts $(if $(strip $(RELEASE_PREFLIGHT_ARGS)),$(RELEASE_PREFLIGHT_ARGS),--mode snapshot)
 
 release-workflow-check: ## Validate release workflow expressions with pinned actionlint
-	@go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -shellcheck= -pyflakes= .github/workflows/basic-release.yml .github/workflows/landing.yml .github/workflows/release-tools.yml .github/workflows/ci-ubuntu.yml .github/workflows/ci-windows.yml .github/workflows/install-recovery-e2e.yml
+	@go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -shellcheck= -pyflakes= .github/workflows/basic-release.yml .github/workflows/unified-release.yml .github/workflows/macos-qualification.yml .github/workflows/notifier-signing-smoke.yml .github/workflows/macos-release-lifecycle.yml .github/workflows/navigation-windows-*.yml .github/workflows/landing.yml .github/workflows/release-tools.yml .github/workflows/ci-ubuntu.yml .github/workflows/ci-windows.yml .github/workflows/install-recovery-e2e.yml
 
 release-tools-check: release-workflow-check ## Typecheck and test release tooling without agents, native registration or GitHub effects
 	@npm --prefix scripts/codex-offline-release-smoke run typecheck

@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { watchPR, validateBinding } from './release-progress.mts';
 
 export interface Input {
-  repository: '777genius/agent-notifications'; candidateSHA: string; operatorSHA: string; version: string;
+  repository: '777genius/agent-notifications' | 'universal-agent-plugins/agent-notifications'; candidateSHA: string; operatorSHA: string; version: string;
   candidate: { pr: string; checks: string[] };
   promotion: { pr: string; headSHA: string; checks: string[] };
   signing: { runID: string; attempt: string }; receipt: string;
@@ -19,7 +19,7 @@ function object(value: unknown, keys: string[]): Record<string, unknown> {
 }
 export function validateInput(value: unknown): Input {
   const input = object(value, ['repository', 'candidateSHA', 'operatorSHA', 'version', 'candidate', 'promotion', 'signing', 'receipt']);
-  assert(input.repository === '777genius/agent-notifications', 'fixed_repository_required');
+  assert(input.repository === '777genius/agent-notifications' || input.repository === 'universal-agent-plugins/agent-notifications', 'fixed_repository_required');
   for (const key of ['candidateSHA', 'operatorSHA', 'version']) assert(typeof input[key] === 'string', 'binding_strings_required');
   validateBinding(input as unknown as Input);
   const decimal = (value: unknown) => assert(typeof value === 'string' && /^[1-9]\d*$/.test(value), 'positive_decimal_identity_required');

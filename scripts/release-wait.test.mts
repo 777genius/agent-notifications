@@ -4,7 +4,8 @@ import { mkdtemp, writeFile, readFile, readdir, chmod, stat, rm } from 'node:fs/
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve, delimiter } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawn } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { spawnSync, spawn } from 'node:child_process';
 import { validateInput, type Input } from './release-wait.mts';
 const script = fileURLToPath(new URL('./release-wait.mts', import.meta.url));
 const fixture = `
@@ -62,6 +63,8 @@ async function cli(path: string, root: string, scenario: string): Promise<{ code
 test('strict explicit identities and complete check contracts', () => {
   const valid = input('/private/tmp/TEST-release-receipt.json');
   assert.deepEqual(validateInput(valid), valid);
+  const transferred = { ...valid, repository: 'universal-agent-plugins/agent-notifications' };
+  assert.deepEqual(validateInput(transferred), transferred);
   for (const changed of [
     { repository: 'TEST/repo' }, { operatorSHA: 'main' }, { extra: true },
     { candidate: { pr: '1', checks: [] } }, { candidate: { pr: '1', checks: ['CI', 'CI'] } },
@@ -94,5 +97,38 @@ test('real CLI starts three watchers together, joins all and preserves exclusive
       assert.equal((await cli(config, root, scenario)).code, 1);
       assert.equal(await readFile(receipt, 'utf8'), retained, 'existing failure/success receipt cannot be overwritten');
     } finally { await rm(root, { recursive: true, force: true }); }
+  }
+});
+
+// Execute the shipped preflight blocks, stopping before their first GitHub API
+// call. A widened actor/repository trust or a lost event/ref guard fails here.
+test('release workflow preflights keep the trusted operator separate from repository ownership', () => {
+  const workflows = new URL('../.github/workflows/', import.meta.url);
+  for (const name of ['macos-qualification', 'basic-release', 'unified-release']) {
+    const source = readFileSync(new URL(name + '.yml', workflows), 'utf8');
+    const block = source.split('        run: |\n')[1]!.split(/\n(?= {0,8}\S)/)[0]!;
+    const script = block.split('          gh api ')[0]!.replace(/^          /gm, '');
+    const base = { ...process.env, TRUSTED_OPERATOR: '777genius', OWNER: '777genius', TRIGGER: '777genius',
+      TRIGGERING_ACTOR: '777genius', GITHUB_ACTOR: '777genius', GITHUB_EVENT_NAME: 'workflow_dispatch',
+      GITHUB_REF: name === 'macos-qualification' ? 'refs/heads/release/macos-signing' : 'refs/heads/main',
+      RELEASE_CANDIDATE_SHA: 'a'.repeat(40), RELEASE_SIGNING_RUN: '41', RELEASE_TAG: name === 'unified-release' ? 'v1.48.4' : 'v2.7.19',
+      RESUME_RUN: '', RESUME_ATTEMPT: '' };
+    const run = (patch: Record<string, string>) => spawnSync('bash', ['-c', script], { env: { ...base, ...patch } }).status;
+    for (const repository of ['777genius/agent-notifications', 'universal-agent-plugins/agent-notifications']) {
+      const configuredOperator = name === 'macos-qualification'
+        ? /TRUSTED_OPERATOR: (.+)/.exec(source)![1]!.trim()
+        : /OWNER: '([^']+)'/.exec(source)![1]!;
+      const operator = configuredOperator.replace('${{ github.repository_owner }}', repository.split('/')[0]!);
+      const context = { GITHUB_REPOSITORY: repository, TRUSTED_OPERATOR: operator, OWNER: operator };
+      assert.equal(run(context), 0, name + ': ' + repository);
+      const rejected: Record<string, string>[] = [{ GITHUB_ACTOR: 'universal-agent-plugins' }, { TRIGGER: 'someone', TRIGGERING_ACTOR: 'someone' },
+        { GITHUB_EVENT_NAME: 'pull_request' }, { GITHUB_REF: 'refs/heads/untrusted' }];
+      for (const patch of rejected) {
+        assert.notEqual(run({ ...context, ...patch }), 0, name + ': ' + JSON.stringify(patch));
+      }
+    }
+    for (const repository of ['someone/agent-notifications', 'universal-agent-plugins/fork', '777genius/other']) {
+      assert.notEqual(run({ GITHUB_REPOSITORY: repository }), 0, name + ': ' + repository);
+    }
   }
 });

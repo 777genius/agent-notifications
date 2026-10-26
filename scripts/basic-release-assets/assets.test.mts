@@ -295,3 +295,51 @@ test('unused CLI rejects any existing tag or release and uncertain discovery wit
     }
   } finally { f.clean(); }
 });
+
+// Transport only accepts the configured current slug, so these checks catch an
+// accidental request to a historical manifest's repository after the transfer.
+test('old seals resume under the exact planned new repository without rewriting custody', () => {
+  const f = fixture();
+  const target = 'universal-agent-plugins/agent-notifications';
+  const current = { GITHUB_REPOSITORY: target, TEST_GH_REPOSITORY: target };
+  try {
+    f.ok('seal');
+    const bytes = readFileSync(join(f.root, 'manifest.json'));
+    for (const stage of ['verify', 'tag', 'draft', 'upload']) {
+      const result = f.run(stage, current); assert.equal(result.status, 0, result.stderr);
+    }
+    assert.deepEqual(readFileSync(join(f.root, 'manifest.json')), bytes);
+    assert.equal(f.read().assets.length, 29);
+    const before = f.read().mutations;
+    for (const repository of ['someone/agent-notifications', 'universal-agent-plugins/fork', '777genius/other']) {
+      const result = f.run('upload', { GITHUB_REPOSITORY: repository });
+      assert.notEqual(result.status, 0); assert.match(result.stderr, /unsupported repository/);
+      assert.deepEqual(f.read().mutations, before);
+    }
+  } finally { f.clean(); }
+});
+test('new seals record the current slug and cannot publish back to the old context', () => {
+  const f = fixture();
+  const target = 'universal-agent-plugins/agent-notifications';
+  const current = { GITHUB_REPOSITORY: target, TEST_GH_REPOSITORY: target };
+  try {
+    let result = f.run('seal', current); assert.equal(result.status, 0, result.stderr);
+    const manifest = JSON.parse(readFileSync(join(f.root, 'manifest.json'), 'utf8'));
+    assert.equal(manifest.repository, target);
+    assert.equal(manifest.candidateSHA, C); assert.equal(manifest.runID, '43'); assert.equal(manifest.runAttempt, '2');
+    result = f.run('verify', current); assert.equal(result.status, 0, result.stderr);
+    result = f.run('tag'); assert.notEqual(result.status, 0); assert.match(result.stderr, /sealed repository does not match/);
+    assert.deepEqual(f.read().mutations, []);
+  } finally { f.clean(); }
+});
+test('unrelated sealed repository is rejected before any remote request', () => {
+  const f = fixture();
+  try {
+    f.ok('seal');
+    const path = join(f.root, 'manifest.json'); chmodSync(path, 0o600);
+    const manifest = JSON.parse(readFileSync(path, 'utf8')); manifest.repository = 'someone/agent-notifications';
+    writeFileSync(path, JSON.stringify(manifest));
+    const result = f.run('tag'); assert.notEqual(result.status, 0); assert.match(result.stderr, /unsupported sealed repository/);
+    assert.deepEqual(f.read().mutations, []); assert.deepEqual(f.read().reads ?? [], []);
+  } finally { f.clean(); }
+});

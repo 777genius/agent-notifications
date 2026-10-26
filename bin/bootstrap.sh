@@ -30,7 +30,7 @@ BOOTSTRAP_RAW_CONTENT_URL="${BOOTSTRAP_RAW_CONTENT_URL:-https://raw.githubuserco
 # settings; Claude Code refuses to silently re-point a declared marketplace
 # at a different source, so `marketplace add` fails for them. See
 # setup_marketplace() and docs/CLAUDE_PLUGIN_IDENTITY.md.
-LEGACY_MARKETPLACE_REPOS="777genius/claude-notifications-go"
+LEGACY_MARKETPLACE_REPOS="777genius/claude-notifications-go 777genius/agent-notifications"
 
 # Paths — CLAUDE_CONFIG_DIR is the official Claude Code env var;
 # CLAUDE_HOME is a legacy fallback; default to ~/.claude. Git Bash on Windows

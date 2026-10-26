@@ -12,6 +12,7 @@ export interface Manifest {
   assets: Asset[]; receipts: Asset[];
 }
 type ObjectValue = Record<string, unknown>;
+const repositories = ['777genius/agent-notifications', 'universal-agent-plugins/agent-notifications'];
 const receipts = ['qualification.json', 'signing.json', 'helper-custody.json'];
 const sha = /^[a-f0-9]{64}$/;
 const commit = /^[a-f0-9]{40}$/;
@@ -26,6 +27,15 @@ function object(value: unknown): ObjectValue {
 }
 function json(path: string): ObjectValue { return object(JSON.parse(readFileSync(path, 'utf8'))); }
 function env(name: string): string { const value = process.env[name]; need(value, `missing ${name}`); return value; }
+// Historical seals retain their original slug and bytes. Only the planned forward
+// transfer can map an old seal to the current repository for API requests.
+export function releaseRepository(sealedRepository: string): string {
+  const current = process.env.GITHUB_REPOSITORY ?? sealedRepository;
+  need(repositories.includes(current) && repositories.includes(sealedRepository), 'unsupported repository');
+  need(current === sealedRepository || (current === repositories[1] && sealedRepository === repositories[0]),
+    'sealed repository does not match current repository');
+  return current;
+}
 function hash(bytes: Buffer | string): string { return createHash('sha256').update(bytes).digest('hex'); }
 export function inventory(): string[] {
   const names: string[] = [];
@@ -47,7 +57,7 @@ function exactNames(root: string, names: string[]): void {
   need(JSON.stringify(readdirSync(root).sort()) === JSON.stringify([...names].sort()), `unexpected inventory: ${root}`);
 }
 function validateIdentity(m: ObjectValue): void {
-  need(m.schema === 1 && m.repository === '777genius/agent-notifications', 'unsupported sealed repository/schema');
+  need(m.schema === 1 && typeof m.repository === 'string' && repositories.includes(m.repository), 'unsupported sealed repository/schema');
   need(typeof m.releaseTag === 'string' && semver.test(m.releaseTag), 'stable semver tag required');
   need(typeof m.candidateSHA === 'string' && commit.test(m.candidateSHA), 'exact candidate SHA required');
   need(typeof m.operatorSHA === 'string' && commit.test(m.operatorSHA), 'exact operator SHA required');
@@ -125,7 +135,11 @@ export function seal(root: string): Manifest {
 export class GitHub {
   repo: string;
   private digestCache = new Map<number, string>();
-  constructor(repo: string) { this.repo = repo; }
+  constructor(repo: string) {
+    need(repositories.includes(repo), 'unsupported repository');
+    need(!process.env.GITHUB_REPOSITORY || repo === process.env.GITHUB_REPOSITORY, 'current repository mismatch');
+    this.repo = repo;
+  }
   call(args: string[]): Buffer {
     return execFileSync('gh', args, { maxBuffer: 128 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
   }
@@ -286,7 +300,7 @@ export function main(argv: string[]): void {
   if (stage === 'unused') {
     need(argv.length === 1, 'usage: basic-release-assets.mts unused');
     const repo = env('GITHUB_REPOSITORY');
-    need(repo === '777genius/agent-notifications', 'unsupported repository');
+    need(repositories.includes(repo), 'unsupported repository');
     const identity: ReleaseIdentity = { releaseTag: env('RELEASE_TAG'), candidateSHA: env('RELEASE_CANDIDATE_SHA') };
     need(semver.test(identity.releaseTag) && commit.test(identity.candidateSHA), 'stable semver tag and exact candidate SHA required');
     const gh = new GitHub(repo);
@@ -297,15 +311,17 @@ export function main(argv: string[]): void {
   need(directory && argv.length === 2, 'usage: basic-release-assets.mts seal|verify|tag|draft|upload SEALED_DIR');
   const root = resolve(directory);
   if (stage === 'seal') { seal(root); return; }
-  const m = validate(root, { repository: env('GITHUB_REPOSITORY'), releaseTag: env('RELEASE_TAG'),
+  const repository = env('GITHUB_REPOSITORY');
+  const m = validate(root, { releaseTag: env('RELEASE_TAG'),
     candidateSHA: env('RELEASE_CANDIDATE_SHA'), signingRun: env('RELEASE_SIGNING_RUN'),
     runID: env('RELEASE_ASSET_RUN'), runAttempt: env('RELEASE_ASSET_ATTEMPT') });
+  need(releaseRepository(m.repository) === repository, 'current repository mismatch');
   validateOrigin(m, json(env('RELEASE_ORIGIN_RECEIPT')), json(env('RELEASE_ANCESTRY_RECEIPT')), env('GITHUB_SHA'));
   console.log(JSON.stringify({ stage, producerSHA: m.operatorSHA, controllerSHA: env('GITHUB_SHA'),
     manifestSHA256: hash(readFileSync(join(root, 'manifest.json'))), runID: m.runID, runAttempt: m.runAttempt }));
   if (stage === 'verify') return;
   need(stage === 'tag' || stage === 'draft' || stage === 'upload', 'unknown stage');
-  reconcile(root, stage, new GitHub(m.repository), m);
+  reconcile(root, stage, new GitHub(repository), m);
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   try { main(process.argv.slice(2)); } catch (error) { console.error(error instanceof Error ? error.message : error); process.exitCode = 1; }
