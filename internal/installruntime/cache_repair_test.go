@@ -222,6 +222,12 @@ func TestCacheRepairFreshAndCancelledReadOnly(t *testing.T) {
 	if err != nil || len(p.Paths) != 0 || readErr != nil || len(entries) != 1 || entries[0].Name() != "agent-notifications.json" {
 		t.Fatalf("config-only preview created or required installation locks: %+v %v %v", p, err, entries)
 	}
+	if err = os.WriteFile(filepath.Join(root, "transaction.json"), []byte("TEST interrupted first install"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = PreviewCacheRepair(context.Background(), root); !errors.Is(err, ErrPolicyRecovery) {
+		t.Fatalf("first-install pending journal was ignored: %v", err)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if _, err = PreviewCacheRepair(ctx, root); !errors.Is(err, context.Canceled) {

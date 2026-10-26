@@ -43,6 +43,12 @@ func PreviewCacheRepair(ctx context.Context, root string) (CacheRepairPlan, erro
 	// Config initialization may create the private directory before the first
 	// installation. There is no repair authority (or permanent lock) yet.
 	if _, err := readRegularFile(filepath.Join(root, "ownership.json")); os.IsNotExist(err) {
+		if _, pendingErr := os.Lstat(filepath.Join(root, "transaction.json")); !os.IsNotExist(pendingErr) {
+			if pendingErr != nil {
+				return zero, pendingErr
+			}
+			return zero, ErrPolicyRecovery
+		}
 		return zero, nil
 	} else if err != nil {
 		return zero, err
