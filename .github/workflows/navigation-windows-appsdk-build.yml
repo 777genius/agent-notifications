@@ -9,6 +9,11 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+# Supersede automatic checks; keep each manual operation independent.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.event_name == 'push' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   build-only:
     runs-on: windows-11-vs2026-arm
