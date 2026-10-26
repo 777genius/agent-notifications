@@ -74,7 +74,7 @@ Use `--state-dir /path/to/private-TEST-cache` to reuse your own mode-700 cache.
 
 Prefer a guided setup? [Open the installation guide](https://777genius.github.io/agent-notifications/#install) to choose your agents, OS and task.
 
-The short setup loader handles release lookup and validation internally, then downloads the installer from its qualified immutable source snapshot. Run it and choose Claude, Codex, OpenCode, Gemini CLI, or a combination:
+The short setup loader handles release lookup and validation internally, then downloads the installer from its qualified immutable source snapshot. Run it and choose Claude, Codex, OpenCode, Gemini CLI, Qoder, or a combination:
 
 ```bash
 (set -o pipefail; curl -fsSL https://agent-notifications.com/install.sh | bash)
@@ -96,9 +96,9 @@ You can select any combination of the supported agents in the guided setup. For 
 (set -o pipefail; curl -fsSL https://agent-notifications.com/install.sh | bash -s -- --products claude,codex,opencode --desktop)
 ```
 
-Use `claude,opencode` or `codex,opencode` for two agents. The loader downloads and validates one installer, then starts the selected clients concurrently on macOS and Linux. Shared settings and runtime writes are coordinated. Windows keeps sequential primary installation until native child-process cancellation is qualified. A client failure leaves successful clients installed and allows independent work to finish; the overall command still reports incomplete setup. Follow the saved recovery command for failed activation instead of reinstalling successful clients.
+Use `claude,opencode` or `codex,opencode` for two agents. The loader downloads and validates one installer, then starts selected Claude, Codex, OpenCode, Gemini and Qoder jobs concurrently on macOS and Linux. Shared settings and runtime writes are coordinated. Windows keeps sequential primary installation until native child-process cancellation is qualified. A client failure leaves successful clients installed and allows independent work to finish; the overall command still reports incomplete setup. Follow the saved recovery command for failed activation instead of reinstalling successful clients.
 
-Add `,gemini` to `--products` to include Gemini. `--desktop` and `--webhook` apply to each selected OpenCode/Gemini integration independently; configure webhook URLs separately. The public installer defaults fresh OpenCode/Gemini installations to desktop on and webhooks off, and preserve saved channels on update when flags are omitted. `--skip-agent-notify` applies only to the Claude/Codex notification tool. These flags do not change Claude/Codex notification channels. Single-agent commands and `--product both` remain supported.
+Add `,gemini` or `,qoder` to `--products` to include Gemini or Qoder. `--desktop` and `--webhook` apply to each selected OpenCode/Gemini/Qoder integration independently; configure webhook URLs separately. The public installer defaults fresh OpenCode/Gemini/Qoder installations to desktop on and webhooks off, and preserves saved channels on update when flags are omitted. `--skip-agent-notify` applies only to the Claude/Codex notification tool. These flags do not change Claude/Codex notification channels. Single-agent commands and `--product both` remain supported.
 
 The installer shows recent safe checkpoints for each selected client above its live
 status, including its current operation and elapsed waiting time. Saved registration remains distinct from completed setup; a timeout or
@@ -121,6 +121,7 @@ After installation:
 - **Claude:** restart Claude. Optionally run `/claude-notifications-go:settings` to configure sounds.
 - **Codex:** start Codex, run `/hooks`, then review and trust the installed hooks. The installer registers them automatically; no JSON editing or manual registration command is needed. Trust approval remains yours.
 - **Both:** complete both steps above.
+- **Qoder:** install the Qoder CLI and make `qoder` or `qodercli` available on `PATH`, then restart Qoder after installation. [Native setup and limits](QODER.md).
 - **Gemini CLI:** restart Gemini to reload its hooks. [Setup and limits](gemini-notifications.md).
 - **OpenCode:** restart OpenCode to load its global plugin. On Mac, explicitly grant notification permission. OpenCode bootstrap requires release v1.46.0 or newer; see [OpenCode setup, channels and limits](opencode-notifications.md).
 

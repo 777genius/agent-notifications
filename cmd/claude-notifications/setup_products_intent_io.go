@@ -247,6 +247,8 @@ func validateBootstrapIntent(i confirmedBootstrapIntent) error {
 			key = "codex-home"
 		case "gemini":
 			key = "gemini-config-root"
+		case "qoder":
+			key = "qoder-config-root"
 		case "cursor", "copilot-vscode":
 			key = "scope-root"
 		}
@@ -316,11 +318,7 @@ func writeIntentScalars(out io.Writer, i confirmedBootstrapIntent) error {
 		}
 	}
 	for _, u := range i.Units {
-		if u.Product == "opencode" || u.Product == "gemini" {
-			key := "openCodeNotifications"
-			if u.Product == "gemini" {
-				key = "geminiNotifications"
-			}
+		if key := bootstrapObserverChannelKey(u.Product); key != "" {
 			preimage, err := installruntime.ObserverChannelPreimage(i.Initial.ChannelPolicy, key)
 			if err != nil {
 				return err

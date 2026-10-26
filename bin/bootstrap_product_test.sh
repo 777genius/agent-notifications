@@ -177,7 +177,19 @@ CONFIGURE_ROUTE
     [ "${SELECTED_PRODUCTS[*]}" = "claude codex opencode gemini" ]
     [ "${OPENCODE_ARGS[*]}" = --webhook ]
 )
-for args in "--products gemini,gemini --webhook" "--products claude,,gemini --webhook" "--product gemini --webhook --agent-notify"; do
+# Qoder shares observer channels while retaining the selected legacy group.
+(
+    PRODUCT=""; CONFIGURE_ARGS=(); OPENCODE_ARGS=()
+    select_product --products codex,qoder --webhook --skip-agent-notify
+    [ "$LEGACY_PRODUCT" = codex ]
+    [ "${SELECTED_PRODUCTS[*]}" = "codex qoder" ]
+    [ "${OPENCODE_ARGS[*]}" = --webhook ]
+    PRODUCT=""; CONFIGURE_ARGS=(); OPENCODE_ARGS=()
+    select_product --product qoder --desktop
+    [ "$CONFIGURE_NOTIFICATIONS" = false ]
+    [ "${SELECTED_PRODUCTS[*]}" = qoder ]
+)
+for args in "--products gemini,gemini --webhook" "--products claude,,gemini --webhook" "--product gemini --webhook --agent-notify" "--products qoder,qoder --webhook" "--product qoder --agent-notify"; do
     if ( PRODUCT=""; CONFIGURE_ARGS=(); OPENCODE_ARGS=(); select_product $args ); then
         echo "accepted invalid Gemini bundle: $args" >&2; exit 1
     fi
@@ -716,7 +728,7 @@ trace_name="${1#--}-${2:-none}"
 [ "${2:-}" != wizard ] || trace_name="$trace_name-$4"
 printf '%s\0' "$@" > "$TEST_TRACE/$trace_name"
 case "$1 ${2:-}" in
-    'setup-products capabilities') printf 'setup-products-v1 claude codex opencode gemini\n' ;;
+    'setup-products capabilities') printf 'setup-products-v1 claude codex opencode gemini qoder\n' ;;
     'setup-products features') printf 'terminal-selector-v1\n' ;;
     'setup-products repair-capabilities') printf 'cache-repair-v1\n' ;;
     'setup-products repair-cache') printf 'ready\n' ;;
@@ -1167,12 +1179,12 @@ _CONFIG_STAGE="$TEST_PARALLEL_CASE/stage"
 _CONFIG_HELPER="$_CONFIG_STAGE/helper"
 _SELECTOR_INTENT="$TEST_PARALLEL_CASE/frozen-intent"
 CONFIGURE_NOTIFICATIONS=true
-SELECTED_PRODUCTS=(claude codex opencode gemini)
-_PRODUCT_CSV=claude,codex,opencode,gemini
+SELECTED_PRODUCTS=(claude codex opencode gemini qoder)
+_PRODUCT_CSV=claude,codex,opencode,gemini,qoder
 LEGACY_PRODUCT=both
-_PROGRESS_IDS=(claude codex opencode gemini)
-_PROGRESS_PHASES=(pending pending pending pending)
-_PROGRESS_OUTCOMES=(not_started not_started not_started not_started)
+_PROGRESS_IDS=(claude codex opencode gemini qoder)
+_PROGRESS_PHASES=(pending pending pending pending pending)
+_PROGRESS_OUTCOMES=(not_started not_started not_started not_started not_started)
 BOOTSTRAP_SUMMARY_FILE="$TEST_PARALLEL_CASE/summary"
 export BOOTSTRAP_SUMMARY_FILE
 # Fixture adapters only: no agent/vendor CLI or real profile is used.
@@ -1216,7 +1228,11 @@ fixture_commit() {
     [ "$_PARALLEL_GATE_HELD" = true ] || return 1
     printf '%s\n' "$1" >> "$TEST_PARALLEL_CASE/writers"
     sleep 0.05
-    rmdir "$TEST_PARALLEL_CASE/critical"
+    rmdir "$TEST_PARALLEL_CASE/critical" || return 1
+    if [ "$1" = qoder ] && [ "${TEST_PARALLEL_FAIL:-}" = qoder ]; then
+        echo 'exact Qoder failure receipt' >&2
+        return 1
+    fi
 }
 initialize_config() { printf 'init\n' >> "$TEST_PARALLEL_CASE/init"; }
 configure_agent_policy() {
@@ -1272,11 +1288,13 @@ fixture_observer() {
 }
 install_opencode() { fixture_observer opencode; }
 install_gemini() { fixture_observer gemini; }
+install_qoder() { fixture_observer qoder; }
 configure_agent_notify() {
     [ "$PRODUCT" = both ] && [ "$_PARALLEL_POLICY_READY" = true ] || return 1
     [ "$_SELECTOR_INTENT" = "$TEST_PARALLEL_CASE/frozen-intent" ] || return 1
     printf '%s\n' "$_PARALLEL_READY_CLIENTS" > "$TEST_PARALLEL_CASE/mcp-ready-clients"
     [ -f "$TEST_PARALLEL_CASE/opencode-ready" ] && [ -f "$TEST_PARALLEL_CASE/gemini-ready" ] || return 1
+    [ "${TEST_PARALLEL_FAIL:-}" = qoder ] || [ -f "$TEST_PARALLEL_CASE/qoder-ready" ] || return 1
     local client
     for client in claude codex; do
         case ",$_PARALLEL_READY_CLIENTS," in *",$client,"*) progress_phase "$client" MCP completed ;; esac
@@ -1303,7 +1321,7 @@ def wait_for(path, proc):
             raise AssertionError((str(path), proc.returncode, out, err))
         assert time.monotonic()<limit, str(path)
         time.sleep(.02)
-for failure in ('', 'claude', 'mcp', 'all-legacy', 'trailing', 'crash-holder', 'mcp-partial', 'gate-release'):
+for failure in ('', 'claude', 'mcp', 'all-legacy', 'trailing', 'crash-holder', 'mcp-partial', 'gate-release', 'qoder'):
     case = sandbox/('parallel-'+(failure or 'success')); case.mkdir(mode=0o700)
     (case/'stage').mkdir(); helper=case/'stage'/'helper'; helper.write_text('#!/bin/bash\nexit 0\n'); helper.chmod(0o700)
     (case/'frozen-intent').write_text('immutable fixture intent\n')
@@ -1325,8 +1343,9 @@ exec "$TEST_REAL_RMDIR" "$@"
         env.update(PATH=str(tools)+os.pathsep+env['PATH'], TEST_REAL_RMDIR=real_rmdir)
     proc=subprocess.Popen([bash, str(script)], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     children.append(proc)
-    names=('claude-started','opencode-acquired','gemini-acquired') if failure=='all-legacy' else ('claude-started','codex-ready','opencode-ready','gemini-ready')
-    if failure=='gate-release': names=('claude-started','release-failed','opencode-acquired','gemini-acquired')
+    names=('claude-started','opencode-acquired','gemini-acquired','qoder-acquired') if failure=='all-legacy' else ('claude-started','codex-ready','opencode-ready','gemini-ready','qoder-ready')
+    if failure=='gate-release': names=('claude-started','release-failed','opencode-acquired','gemini-acquired','qoder-acquired')
+    if failure=='qoder': names=('claude-started','codex-ready','opencode-ready','gemini-ready','qoder-acquired')
     if failure=='crash-holder':
         for name in ('holder-ready', 'seed-attempt'): wait_for(case/name, proc)
         (case/'holder-crash').touch()
@@ -1339,7 +1358,7 @@ exec "$TEST_REAL_RMDIR" "$@"
         if os.name!='nt': assert stage.stat().st_mode & 0o777 == 0o700
     (case/'claude-release').touch()
     out, err=proc.communicate(timeout=12)
-    assert proc.returncode == (1 if failure in ('claude','mcp','all-legacy','crash-holder','mcp-partial','gate-release') else 0), (failure, out, err)
+    assert proc.returncode == (1 if failure in ('claude','mcp','all-legacy','crash-holder','mcp-partial','gate-release','qoder') else 0), (failure, out, err)
     assert not (case/'overlap').exists()
     if failure=='gate-release':
         assert not (case/'mcp-ready-clients').exists() and not (case/'init').exists()
@@ -1348,21 +1367,25 @@ exec "$TEST_REAL_RMDIR" "$@"
         continue
     if failure=='all-legacy':
         assert not (case/'policy-seeded').exists() and not (case/'mcp-ready-clients').exists() and not (case/'init').exists()
-        assert not (case/'opencode-ready').exists() and not (case/'gemini-ready').exists()
+        assert not (case/'opencode-ready').exists() and not (case/'gemini-ready').exists() and not (case/'qoder-ready').exists()
         assert 'approved shared policy preparation is unavailable' in (case/'private-errors').read_text()
         continue
     assert (case/'init').read_text()=='init\n'
     assert (case/'mcp-ready-clients').read_text()==('codex\n' if failure in ('claude','crash-holder') else 'claude,codex\n')
     assert (case/'frozen-intent').read_text()=='immutable fixture intent\n'
-    assert ''.join(line+'\n' for line in (case/'summary').read_text().splitlines() if not line.startswith('  Delivery has not been verified.'))==('' if failure in ('claude','crash-holder') else '  claude summary\n')+'  codex summary\n  opencode summary\n  gemini summary\n'
+    assert ''.join(line+'\n' for line in (case/'summary').read_text().splitlines() if not line.startswith('  Delivery has not been verified.'))==('' if failure in ('claude','crash-holder') else '  claude summary\n')+'  codex summary\n  opencode summary\n  gemini summary\n'+('' if failure=='qoder' else '  qoder summary\n')
     final=(case/'final').read_text()
     assert 'opencode\tcomplete\tcompleted' in final and 'gemini\tcomplete\tcompleted' in final
     assert 'codex\tcomplete\tcompleted' in final
+    if failure=='qoder':
+        assert 'qoder\tcomplete\tcompleted' not in final and 'exact Qoder failure receipt' in (case/'private-errors').read_text()
+    else: assert 'qoder\tcomplete\tcompleted' in final
+    assert 'qoder\n' in (case/'writers').read_text()
     if failure=='mcp-partial': assert 'claude\tMCP\tactivation_timeout' in final
     elif failure not in ('claude','crash-holder'): assert 'claude\tcomplete\tcompleted' in final
     if failure=='claude': assert 'exact Claude failure receipt' in (case/'private-errors').read_text()
     diagnostics=(case/'diagnostics').read_text()
-    indexes=[diagnostics.index('Installing '+client+' notifications:') for client in ('claude','codex','opencode','gemini')]
+    indexes=[diagnostics.index('Installing '+client+' notifications:') for client in ('claude','codex','opencode','gemini','qoder')]
     assert indexes==sorted(indexes)
 # Cancellation must terminate every owned group's descendants before cleanup.
 if os.name != 'nt':
@@ -1383,7 +1406,7 @@ if os.name != 'nt':
     else:
         state=pathlib.Path('/proc')/str(pid)/'stat'
         assert state.exists() and state.read_text().split()[2]=='Z', (pid,out,err)
-print('PASS concurrent installer jobs, policy barrier, serialized writers, isolated failure, completion-tail IPC, crashed lock holder, failed gate release and descendant cancellation')
+print('PASS five concurrent installer jobs including independent Qoder, policy barrier, serialized writers, isolated failure, completion-tail IPC, crashed lock holder, failed gate release and descendant cancellation')
 PY_PARALLEL_INSTALL
 
 # The parent must interrupt its synchronous wait while a native helper still

@@ -18,7 +18,7 @@ func TestSetupProductsChannelsDefaults(t *testing.T) {
 	for _, key := range []string{"HOME", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "OPENCODE_CONFIG_DIR", "GEMINI_CLI_HOME", "AGENT_NOTIFICATIONS_CONTROL_ROOT"} {
 		t.Setenv(key, filepath.Join(root, key))
 	}
-	for _, product := range []struct{ ids, title string }{{"claude,codex,opencode,gemini", "Notification channels for OpenCode, Gemini CLI"}, {"cursor", "Notification channels for Cursor CLI (explicit profile)"}} {
+	for _, product := range []struct{ ids, title string }{{"claude,codex,opencode,gemini,qoder", "Notification channels for OpenCode, Gemini CLI, Qoder"}, {"cursor", "Notification channels for Cursor CLI (explicit profile)"}} {
 		for _, tc := range []struct{ name, input, want string }{
 			{"enter", "\n", "desktop\n"},
 			{"both", "desktop,webhook\n", "desktop,webhook\n"},

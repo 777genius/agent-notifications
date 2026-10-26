@@ -70,7 +70,7 @@ main() {
                 esac
                 [ -n "$singleton" ] || { echo "Empty product selector." >&2; exit 1; }
                 if [ "$selector" = --product ]; then
-                    case "$singleton" in claude|codex|both|opencode|gemini) ;; *) echo "Invalid product." >&2; exit 1 ;; esac
+                    case "$singleton" in claude|codex|both|opencode|gemini|qoder) ;; *) echo "Invalid product." >&2; exit 1 ;; esac
                 fi ;;
             --desktop|--webhook|--desktop=true|--desktop=false|--webhook=true|--webhook=false) channels=$((channels + 1)); shift ;;
             --json) json=1; shift ;;
@@ -114,7 +114,7 @@ main() {
     if [ "$notify" = --skip-agent-notify ]; then
         case ",$route_seen," in *,--navigation,*|*,--app,*|*,--team-id,*|*,--allow-unknown-caller,*|*,--allow-caller-asserted,*|*,--preserve-policy,*|*,--request-permission,*) echo "Route flags require agent-notify." >&2; exit 1 ;; esac
     fi
-    if [ "$selector" = --product ] && { [ "$singleton" = gemini ] || [ "$singleton" = opencode ]; }; then
+    if [ "$selector" = --product ] && { [ "$singleton" = gemini ] || [ "$singleton" = opencode ] || [ "$singleton" = qoder ]; }; then
         [ -z "$route_seen" ] && [ "$json" -eq 0 ] || { echo "Observers use channel flags only." >&2; exit 1; }
     fi
     [ -z "$activity_mode" ] || activity_args+=(--activity "$activity_mode")
@@ -134,8 +134,8 @@ main() {
     for arg in "$@"; do
         case "$arg" in
             --products|--products=*) multi=1; new_setup=1 ;;
-            --product=gemini) new_setup=1 ;;
-            gemini) [ "$previous" != --product ] || new_setup=1 ;;
+            --product=gemini|--product=qoder) new_setup=1 ;;
+            gemini|qoder) [ "$previous" != --product ] || new_setup=1 ;;
         esac
         previous=$arg
     done
@@ -145,7 +145,7 @@ main() {
     opencode_channels=0
     if [ "$multi" -eq 1 ]; then
         selector_seen=0
-        claude=0 codex=0 opencode=0 gemini=0
+        claude=0 codex=0 opencode=0 gemini=0 qoder=0
         notify=""
         help=0
         while [ "$#" -gt 0 ]; do
@@ -170,6 +170,7 @@ main() {
                             codex) [ "$codex" -eq 0 ] || { echo "Duplicate product: codex." >&2; exit 1; }; codex=1 ;;
                             opencode) [ "$opencode" -eq 0 ] || { echo "Duplicate product: opencode." >&2; exit 1; }; opencode=1 ;;
                             gemini) [ "$gemini" -eq 0 ] || { echo "Duplicate product: gemini." >&2; exit 1; }; gemini=1 ;;
+                            qoder) [ "$qoder" -eq 0 ] || { echo "Duplicate product: qoder." >&2; exit 1; }; qoder=1 ;;
                             *) echo "Unknown product: $product." >&2; exit 1 ;;
                         esac
                         case "$remaining" in
@@ -199,8 +200,8 @@ main() {
             shift
         done
         if [ "$help" -eq 1 ]; then
-            echo "Usage: bash install.sh --products claude,codex,opencode,gemini [--agent-notify|--skip-agent-notify] [--desktop] [--webhook]"
-            echo "Choose any nonempty subset. Agent-notify options apply to Claude/Codex; Observer channel flags apply to OpenCode/Gemini."
+            echo "Usage: bash install.sh --products claude,codex,opencode,gemini,qoder [--agent-notify|--skip-agent-notify] [--desktop] [--webhook]"
+            echo "Choose any nonempty subset. Agent-notify options apply to Claude/Codex; Observer channel flags apply to OpenCode/Gemini/Qoder."
             exit 0
         fi
         if [ "$claude" -eq 1 ] && [ "$codex" -eq 1 ]; then
@@ -213,8 +214,8 @@ main() {
         [ -z "$notify" ] || [ -n "$legacy_product" ] || {
             echo "Agent-notify options require Claude or Codex in --products." >&2; exit 1;
         }
-        if [ "$opencode" -eq 0 ] && [ "$gemini" -eq 0 ] && [ "$opencode_channels" -gt 0 ]; then
-            echo "--desktop/--webhook require OpenCode or Gemini in --products." >&2; exit 1
+        if [ "$opencode" -eq 0 ] && [ "$gemini" -eq 0 ] && [ "$qoder" -eq 0 ] && [ "$opencode_channels" -gt 0 ]; then
+            echo "--desktop/--webhook require OpenCode, Gemini or Qoder in --products." >&2; exit 1
         fi
     fi
     command -v curl >/dev/null 2>&1 || {
@@ -358,7 +359,7 @@ main() {
         capability_status=0
         run_bootstrap --capabilities >"$stage/capabilities" 2>/dev/null || capability_status=$?
         if [ "$capability_status" -ne 0 ] || ! printf 'bootstrap-products-v1\n' | cmp -s - "$stage/capabilities"; then
-            if [ "$multi" -eq 1 ] && [ "$gemini" -eq 0 ] && [ "$pending" -eq 0 ] && [ -z "$ui_mode" ]; then
+            if [ "$multi" -eq 1 ] && [ "$gemini" -eq 0 ] && [ "$qoder" -eq 0 ] && [ "$pending" -eq 0 ] && [ -z "$ui_mode" ]; then
                 # Older releases accept one legacy product group per invocation.
                 # Stop on either failure; the second group may fail after the first installed.
                 if [ -n "$legacy_product" ]; then
@@ -369,7 +370,7 @@ main() {
                 fi
                 exit 0
             fi
-            echo "This published release lacks four-product setup. No products were installed. Use an updated release when available." >&2
+            echo "This published release lacks multi-product setup. No products were installed. Use an updated release when available." >&2
             exit 1
         fi
     fi

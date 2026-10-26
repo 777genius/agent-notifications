@@ -9,10 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.49.10] - 2026-10-26
 
+### Added
+- Install Qoder from the unified installer with independent desktop/webhook consent. Build the native plugin from the verified release executable, preserve other plugins/settings, and support managed inspection, update and removal.
+- Include Qoder in combined installation commands and localized landing guidance.
+
 ### Fixed
 - Install selected clients concurrently on macOS and Linux, coordinate shared runtime and settings writes, and preserve successful clients when another client fails.
 - Use bounded 30-second Claude verification and isolate cleanup-confirmed local timeouts so an unrelated client can finish activating.
 - Show each client's current operation and elapsed wait, retaining saved registration and partial-completion facts after failure or cancellation.
+
+### Validation
+- Native Qoder lifecycle and real-turn qualification are recorded in `docs/handoffs/qoder-native-e2e.md`; synthetic hook tests do not establish native delivery.
 
 ## [1.49.9] - 2026-10-26
 
