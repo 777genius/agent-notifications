@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/777genius/agent-notifications/internal/installruntime"
@@ -32,23 +30,15 @@ func repairBootstrapCache(ctx context.Context, a setupProductsArgs, input io.Rea
 	}
 	observe, cancel := context.WithTimeout(ctx, bootstrapInspectionTimeout)
 	defer cancel()
-	if a.BootstrapCacheRepair {
-		_, pending, err := installruntime.ReadOwnership(root)
-		if err == nil && pending {
-			// The existing installer owns redo/rollback. Repair neither consumes
-			// its journal nor prevents an explicit install from recovering it.
-			return writeSelectorResult(ctx, output, "ready\n")
-		}
-	}
-	// Explicit Claude installs already own a guarded relocation path that can
-	// retire their sole old cache without inspecting its drift. Do not make
-	// optional repair a new prerequisite for that existing operation.
-	if a.DeferClaudeRelocation && soleClaudeCacheDrift(observe, root) {
-		return writeSelectorResult(ctx, output, "ready\n")
-	}
 	plan, err := installruntime.PreviewCacheRepair(observe, root)
 	cancel()
 	if err != nil {
+		// This optional read-only step must not replace the existing installer
+		// decision: it may repair a non-cache file, retire an old Claude cache,
+		// or replay a journal. Those writers retain their normal locked checks.
+		if a.BootstrapCacheRepair && ctx.Err() == nil {
+			return writeSelectorResult(ctx, output, "ready\n")
+		}
 		return err
 	}
 	if len(plan.Paths) == 0 {
@@ -86,36 +76,4 @@ func repairBootstrapCache(ctx context.Context, a setupProductsArgs, input io.Rea
 		return err
 	}
 	return writeSelectorResult(ctx, output, "ready\n")
-}
-
-func soleClaudeCacheDrift(ctx context.Context, root string) bool {
-	l, _, err := installruntime.ReadOwnership(root)
-	if err != nil {
-		return false
-	}
-	hooks, exists := l.Consumers["claude-hooks"]
-	if !exists || !filepath.IsAbs(hooks.RuntimeRoot) {
-		return false
-	}
-	for id, consumer := range l.Consumers {
-		if id != "claude-hooks" && consumer.RuntimeRoot == hooks.RuntimeRoot {
-			return false
-		}
-	}
-	drift := false
-	for path, want := range l.Files {
-		if ctx.Err() != nil {
-			return false
-		}
-		got, err := installruntime.Fingerprint(path)
-		if err == nil && got == want {
-			continue
-		}
-		relative, relErr := filepath.Rel(hooks.RuntimeRoot, path)
-		if relErr != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-			return false
-		}
-		drift = true
-	}
-	return drift
 }

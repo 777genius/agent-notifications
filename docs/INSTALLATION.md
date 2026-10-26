@@ -248,6 +248,9 @@ to restore those files before preparing the normal installation plan. Declining
 leaves the installation unchanged. Explicit noninteractive installation performs
 the same repair automatically. Existing files with changed content or permissions
 remain conflicts; repair never overwrites them or resets configuration.
+If the read-only repair preview cannot complete, bootstrap leaves the decision
+to the normal installer's existing validation, reinstall and journal recovery.
+Failures after repair starts stop setup instead of being ignored.
 
 Recovery uses matching owned copies or verified payloads retained outside the
 Claude cache by newer installers. The payloads are optional support, not another

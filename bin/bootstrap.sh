@@ -3087,7 +3087,6 @@ main() {
         local -a cache_repair_args=(--bootstrap)
         if [ "$_INTERACTIVE_INTENT" != true ]; then
             cache_repair_args+=(--yes)
-            case " ${SELECTED_PRODUCTS[*]} " in *" claude "*) cache_repair_args+=(--defer-claude-relocation) ;; esac
         fi
         selector_collect repair-cache ${cache_repair_args[@]+"${cache_repair_args[@]}"} ${UI_ARGS[@]+"${UI_ARGS[@]}"} || return $?
         [ -s "$_SELECTOR_RESULT" ] || { close_prompt; return 0; }

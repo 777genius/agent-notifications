@@ -22,7 +22,7 @@ type setupProductsArgs struct {
 	ConfigureArgs                                  []string
 
 	// Recovery switches never enter a confirmed installation intent.
-	RepairApproved, DeferClaudeRelocation, BootstrapCacheRepair bool `json:"-"`
+	RepairApproved, BootstrapCacheRepair bool `json:"-"`
 }
 
 func parseSetupProducts(args []string) (r setupProductsArgs, err error) {
@@ -56,7 +56,7 @@ func parseSetupProducts(args []string) (r setupProductsArgs, err error) {
 		if !strings.HasPrefix(raw, "--") {
 			return invalid()
 		}
-		boolean := key == "plain" || key == "yes" || key == "defer-claude-relocation" || key == "bootstrap" || key == "desktop" || key == "webhook" || key == "agent-notify" || key == "skip-agent-notify" || key == "preserve-policy" || key == "request-permission"
+		boolean := key == "plain" || key == "yes" || key == "bootstrap" || key == "desktop" || key == "webhook" || key == "agent-notify" || key == "skip-agent-notify" || key == "preserve-policy" || key == "request-permission"
 		if boolean {
 			if inline && (key != "desktop" && key != "webhook" || value != "true" && value != "false") {
 				return invalid()
@@ -91,8 +91,6 @@ func parseSetupProducts(args []string) (r setupProductsArgs, err error) {
 			r.BootstrapCacheRepair = true
 		case "yes":
 			r.RepairApproved = true
-		case "defer-claude-relocation":
-			r.DeferClaudeRelocation = true
 		case "local-native-stop", "local-mcp", "local-skills", "manual":
 			on, e := parseBoolFlag(value)
 			if e != nil {
@@ -141,13 +139,13 @@ func parseSetupProducts(args []string) (r setupProductsArgs, err error) {
 	}
 	if r.Operation == "repair-cache" {
 		for key := range seen {
-			if key != "yes" && key != "control-root" && key != "defer-claude-relocation" && key != "bootstrap" {
+			if key != "yes" && key != "control-root" && key != "bootstrap" {
 				return invalid()
 			}
 		}
 		return r, nil
 	}
-	if r.RepairApproved || r.DeferClaudeRelocation || r.BootstrapCacheRepair {
+	if r.RepairApproved || r.BootstrapCacheRepair {
 		return invalid()
 	}
 	if r.AgentNotify && r.SkipAgentNotify || (r.Scopes["scope-root"] == "") != (r.Scopes["client-executable"] == "") {

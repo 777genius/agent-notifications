@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -50,7 +51,7 @@ func TestSetupProductsRepairPrunedCache(t *testing.T) {
 				answer = "y\n"
 			}
 			var output, prompts bytes.Buffer
-			code := runSetupProducts([]string{"repair-cache", "--control-root", control, "--plain", "--defer-claude-relocation"}, strings.NewReader(answer), &output, &prompts)
+			code := runSetupProducts([]string{"repair-cache", "--control-root", control, "--plain", "--bootstrap"}, strings.NewReader(answer), &output, &prompts)
 			if code != 0 || !strings.Contains(prompts.String(), "Restore missing notification files?") {
 				t.Fatalf("repair code=%d out=%q prompts=%q", code, output.String(), prompts.String())
 			}
@@ -108,7 +109,7 @@ func TestSetupProductsRepairPreservesSoleClaudeRelocation(t *testing.T) {
 		t.Fatal(err)
 	}
 	var output, prompts bytes.Buffer
-	if code := runSetupProducts([]string{"repair-cache", "--control-root", control, "--yes", "--defer-claude-relocation"}, strings.NewReader(""), &output, &prompts); code != 0 || output.String() != "ready\n" || prompts.Len() != 0 {
+	if code := runSetupProducts([]string{"repair-cache", "--control-root", control, "--yes", "--bootstrap"}, strings.NewReader(""), &output, &prompts); code != 0 || output.String() != "ready\n" || prompts.Len() != 0 {
 		t.Fatalf("safe existing relocation blocked: %d %q %q", code, output.String(), prompts.String())
 	}
 	after, err := os.ReadFile(filepath.Join(control, "ownership.json"))
@@ -135,5 +136,71 @@ func TestSetupProductsRepairPreservesSoleClaudeRelocation(t *testing.T) {
 	journal, err := os.ReadFile(marker)
 	if err != nil || string(journal) != "TEST existing journal" {
 		t.Fatal("repair consumed existing journal")
+	}
+}
+
+func TestSetupProductsRepairPreservesOrdinaryCodexReinstall(t *testing.T) {
+	for _, damage := range []string{"missing", "foreign"} {
+		t.Run(damage, func(t *testing.T) {
+			base, err := filepath.EvalSymlinks(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			control, runtime := filepath.Join(base, "control"), filepath.Join(base, "codex", "claude-notifications-go")
+			file := filepath.Join(runtime, "bin", "TEST-runtime")
+			ctx := setupCommandContext(t)
+			r := installruntime.Request{ControlRoot: control, RuntimeRoot: runtime, Owner: "existing-installer", ConsumerID: "codex:TEST-hooks",
+				Files: []installruntime.File{{Path: file, Data: []byte("verified runtime"), Mode: 0700}}}
+			before, err := installruntime.Commit(ctx, r)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if damage == "missing" {
+				err = os.Remove(file)
+			} else {
+				err = os.WriteFile(file, []byte("user edit"), 0700)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			var output, prompts bytes.Buffer
+			if code := runSetupProducts([]string{"repair-cache", "--control-root", control, "--bootstrap", "--yes"}, strings.NewReader(""), &output, &prompts); code != 0 || output.String() != "ready\n" || prompts.Len() != 0 {
+				t.Fatalf("optional precheck became installer prerequisite: %d %q %q", code, output.String(), prompts.String())
+			}
+			observed, _, err := installruntime.ReadOwnership(control)
+			if err != nil || !reflect.DeepEqual(observed, before) {
+				t.Fatal("precheck changed installation")
+			}
+			r.Files[0].Before, err = installruntime.Fingerprint(file)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = installruntime.Commit(ctx, r)
+			if damage == "missing" {
+				if err != nil {
+					t.Fatalf("ordinary reinstall no longer restores missing owned file: %v", err)
+				}
+				if _, err := installruntime.ReadInstalledSnapshot(control); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if err == nil {
+					t.Fatal("ordinary reinstall overwrote user edit")
+				}
+				data, readErr := os.ReadFile(file)
+				if readErr != nil || string(data) != "user edit" {
+					t.Fatal("foreign bytes changed")
+				}
+			}
+		})
+	}
+}
+
+func TestSetupProductsRepairBootstrapCancellationIsFatal(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var output, prompts bytes.Buffer
+	if code := runSetupProductsContext(ctx, []string{"repair-cache", "--control-root", filepath.Join(t.TempDir(), "absent"), "--bootstrap", "--yes"}, strings.NewReader(""), &output, &prompts); code == 0 || output.Len() != 0 {
+		t.Fatalf("cancellation allowed bootstrap continuation: %d %q", code, output.String())
 	}
 }
