@@ -71,11 +71,12 @@ export function validatePreflight(read: Read, options: Options, head?: string): 
   }
   for (const locale of locales) {
     const install = object(json(read, `landing/locales/${locale}.json`).install);
-    // The shared rendered release heading receives the published channel value.
+    // Older landing layouts expose this heading; the current wizard omits it.
+    // Validate any retained heading without requiring an unused translation key.
     // Gemini's manual support prose describes its host CLI version separately.
     const heading = install.platformRelease;
     const tokens: string[] = typeof heading === 'string' ? heading.match(/\{[^{}]*\}/g) ?? [] : [];
-    requireValue(typeof heading === 'string' && tokens.length === 2 &&
+    requireValue(heading === undefined || typeof heading === 'string' && tokens.length === 2 &&
       tokens.includes('{version}') && tokens.includes('{os}') &&
       !/[{}]/.test(heading.replace(/\{[^{}]*\}/g, '')) && !/\b[0-9]+\.[0-9]+\.[0-9]+\b/.test(heading),
     `${locale} platform release version stale or invalid interpolation`);
