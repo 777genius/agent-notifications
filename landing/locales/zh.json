@@ -323,7 +323,7 @@
       "gemini": "Gemini CLI (macOS / Linux / Windows)：静默提示回合结束和工具权限请求。回合结束不代表成功或最终答复。不支持声音、点击聚焦、问题、错误、计划、审查通知或嵌套代理功能对等。"
     },
     "gemini": {
-      "version": "Gemini CLI：支持 macOS / Linux / Windows 上 >= 0.62.0 且 < 0.66.0 的稳定版本。已测试版本和平台覆盖范围见 Gemini 指南。",
+      "version": "不限制 Gemini CLI 版本。支持 macOS / Linux / Windows。已测试版本和平台范围见 Gemini 指南。",
       "guide": "Gemini 设置与限制",
       "restart": "重启 Gemini CLI 以加载通知观察器。",
       "configure": "渠道授权和共享设置请参阅 Gemini 指南；不安装 MCP 工具或技能。内置通知可能重复。请选择一个桌面通知来源或仅使用 webhook；不会修改内置设置。"
@@ -336,7 +336,7 @@
       "channelsTitle": "OpenCode 通知渠道",
       "channelsHint": "这些选项仅适用于 OpenCode。请允许至少一个渠道；Webhook URL 需单独配置。",
       "scope": "OpenCode：为根会话的完成、问题、权限请求和错误发送静默提醒。不支持声音或点击聚焦。",
-      "version": "接受稳定版 OpenCode V1 ≥1.18.29 和 V2 ≥2.0.0。验证范围因版本和平台而异，请参阅设置指南。",
+      "version": "不限制 OpenCode CLI 版本。已测试版本和平台范围见设置指南。",
       "desktop": "允许桌面通知",
       "webhook": "允许 Webhook 通知",
       "chooseChannel": "请至少选择一个通知渠道。",

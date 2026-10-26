@@ -188,100 +188,35 @@ for args in "--product claude --desktop" "--product codex --webhook" "--product 
         exit 1
     fi
 done
-# A real disposable PATH executable covers common --version output formats.
-# No installed user host is queried by these prerequisite checks.
+# Presence is required, but host version output (or a failed --version command)
+# must never gate installation. These inert executables must not be launched.
 (
     mkdir -p "$SANDBOX/version-cli"
-    cat > "$SANDBOX/version-cli/opencode" <<'HOST_VERSION'
+    for product in opencode gemini; do
+        cat > "$SANDBOX/version-cli/$product" <<'HOST_VERSION'
 #!/bin/bash
-[ "$#" -eq 1 ] && [ "$1" = --version ] || exit 2
-[ "$PWD" -ef "$HOME" ] && [ "$HOME" -ef "$USERPROFILE" ] || exit 3
-case "$PWD" in */bootstrap-opencode-TEST-*/profile) ;; *) exit 4 ;; esac
-[ -f "${BASH_SOURCE[0]%/*}/version" ] || exit 7
-cat "${BASH_SOURCE[0]%/*}/version"
+printf '0.1.0-future-preview\n'
+: > "${BASH_SOURCE[0]%/*}/unexpected-version-probe"
+exit 97
 HOST_VERSION
-    chmod +x "$SANDBOX/version-cli/opencode"
+        chmod +x "$SANDBOX/version-cli/$product"
+    done
     export PATH="$SANDBOX/version-cli:$PATH"
-    PRODUCT=opencode
-    OPENCODE_ARGS=(--webhook)
-    for version in '1.18.29' '1.18.33' 'v1.18.33' 'OpenCode version: v1.18.33' '1.19.0' '2.0.0' 'v2.0.21'; do
-        printf '%s\n' "$version" > "$SANDBOX/version-cli/version"
-        [ -z "$(check_prerequisites 2>&1)" ]
-        diagnostic=$(BOOTSTRAP_VERBOSE=1 check_prerequisites 2>&1)
-        [[ "$diagnostic" == *"detected $version."* ]]
-    done
-    for version in '1.18.4' '1.18.28' '1.17.99' '3.0.0' '2.0.0-beta.1' '2.0.0+build' '02.0.0' '2.00.0' '2.0.000' '2.9999999.0' 'OpenCode v2.0.0 (compatibility 1.18.33)' 'unknown' $'2.0.0\n1.18.33' $'unknown\e[31m\rterminal-control'; do
-        printf '%s\n' "$version" > "$SANDBOX/version-cli/version"
-        if diagnostic=$(check_prerequisites 2>&1); then
-            echo "accepted unsupported host output: $version" >&2
-            exit 1
-        fi
-        quoted_version=$(LC_ALL=C printf '%q' "$version")
-        quoted_cli=$(LC_ALL=C printf '%q' "$SANDBOX/version-cli/opencode")
-        [[ "$diagnostic" == *"detected $quoted_version"* ]]
-        [[ "$diagnostic" == *"CLI: $quoted_cli"* ]]
-        [[ "$diagnostic" == *"Older OpenCode V1 releases have not been verified with this installed notification plugin."* ]]
-        [[ "$diagnostic" == *"Update the selected OpenCode CLI shown above; the desktop app and CLI can have different versions."* ]]
-        [[ "$diagnostic" != *$'\e'* && "$diagnostic" != *$'\r'* ]]
-    done
-    # Untrusted output is bounded before quoting, while the guard still rejects it.
-    printf '%700s\n' '' | tr ' ' x > "$SANDBOX/version-cli/version"
-    if diagnostic=$(check_prerequisites 2>&1); then exit 1; fi
-    [[ "$diagnostic" == *"detected $(printf '%512s' '' | tr ' ' x)..."* ]]
-    [ "${#diagnostic}" -lt 1600 ]
-    # Escaping control bytes must not expand the diagnostic beyond its cap.
-    printf '%512s' '' | tr ' ' '\001' > "$SANDBOX/version-cli/version"
-    if diagnostic=$(check_prerequisites 2>&1); then exit 1; fi
-    [ "${#diagnostic}" -lt 1600 ]
-    [[ "$diagnostic" != *$'\e'* && "$diagnostic" != *$'\r'* && "$diagnostic" != *$'\001'* ]]
-    rm "$SANDBOX/version-cli/version"
-    if diagnostic=$(check_prerequisites 2>&1); then exit 1; fi
-    [[ "$diagnostic" == *"Cannot determine OpenCode version. CLI: $quoted_cli"* ]]
-)
-# Gemini's prerequisite may execute only the disposable version fixture here.
-# Assert actual isolated cwd/home, dotenv sentinels and system redirects rather
-# than matching shell source. Accept the supported stable range, not one pin.
-(
-    mkdir -p "$SANDBOX/gemini-version-cli"
-    cat > "$SANDBOX/gemini-version-cli/gemini" <<'GEMINI_VERSION'
-#!/bin/bash
-[ "$#" -eq 1 ] && [ "$1" = --version ] || exit 2
-[ "$PWD" -ef "$HOME" ] && [ "$USERPROFILE" -ef "$HOME" ] && [ "$GEMINI_CLI_HOME" -ef "$HOME" ] || exit 3
-[ -z "${GEMINI_SETUP_ENV_CANARY:-}" ] || exit 4
-for file in "$HOME/.gemini/.env" "$HOME/.env"; do
-    [ -f "$file" ] && [ ! -s "$file" ] || exit 5
-done
-probe=$(dirname "$HOME")
-[ "$GEMINI_CLI_SYSTEM_SETTINGS_PATH" = "$probe/settings.json" ] || exit 6
-[ "$GEMINI_CLI_SYSTEM_DEFAULTS_PATH" = "$probe/defaults.json" ] || exit 6
-for file in "$GEMINI_CLI_SYSTEM_SETTINGS_PATH" "$GEMINI_CLI_SYSTEM_DEFAULTS_PATH"; do
-    [ ! -e "$file" ] && [ ! -L "$file" ] || exit 6
-done
-[ "$GEMINI_CLI_TRUSTED_FOLDERS_PATH" = "$probe/trust.json" ] && [ -f "$GEMINI_CLI_TRUSTED_FOLDERS_PATH" ] || exit 6
-cat "$(dirname "$0")/version"
-GEMINI_VERSION
-    chmod +x "$SANDBOX/gemini-version-cli/gemini"
-    export PATH="$SANDBOX/gemini-version-cli:$PATH" GEMINI_SETUP_ENV_CANARY=synthetic-not-a-secret
-    PRODUCT=gemini
-    OPENCODE_ARGS=(--webhook)
-    for version in 0.62.0 0.62.1 0.63.0 0.64.0 0.65.0 0.65.99; do
-        printf '%s\n' "$version" > "$SANDBOX/gemini-version-cli/version"
+    for PRODUCT in opencode gemini; do
+        OPENCODE_ARGS=(--webhook)
         check_prerequisites
     done
-    for version in 0.61.99 0.66.0 1.0.0 0.65.0-preview.1 0.65.0-nightly 00.65.0 0.065.0 0.65.00 'Gemini 0.65.0' '0.65.0 trailing' $'0.65.0\n0.62.0' '999999999999999999999.65.0'; do
-        printf '%s\n' "$version" > "$SANDBOX/gemini-version-cli/version"
-        if diagnostic=$(check_prerequisites 2>&1); then
-            echo "accepted unsupported Gemini version: $version" >&2; exit 1
-        fi
-        [[ "$diagnostic" == *"Requires stable Gemini CLI >= 0.62.0 and < 0.66.0."* ]]
-        [[ "$diagnostic" == *"npm install -g '@google/gemini-cli@>=0.62.0 <0.66.0'"* ]]
-    done
-    rm "$SANDBOX/gemini-version-cli/version"
-    if diagnostic=$(check_prerequisites 2>&1); then
-        echo "accepted failed Gemini version probe" >&2; exit 1
-    fi
-    [[ "$diagnostic" == *"Cannot determine Gemini CLI version."* ]]
+    [ ! -e "$SANDBOX/version-cli/unexpected-version-probe" ]
 )
+# Keep the independent untrusted-diagnostic escaping/size contract.
+(
+    diagnostic=$(bootstrap_diagnostic_quote $'unknown\e[31m\rterminal-control')
+    [[ "$diagnostic" != *$'\e'* && "$diagnostic" != *$'\r'* ]]
+    value=$(printf '%700s' '' | tr ' ' x)
+    diagnostic=$(bootstrap_diagnostic_quote "$value")
+    [ "${#diagnostic}" -le 515 ]
+)
+
 quoted=$(quote_shell_command "$SANDBOX/bin space/cli" --package "$SANDBOX/pkg space" --codex-home "$CODEX_HOME")
 eval "set -- $quoted"
 [ "$#" -eq 5 ] || { echo "quoted argc $#"; exit 1; }

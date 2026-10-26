@@ -248,77 +248,15 @@ check_prerequisites() {
         echo "opencode CLI not found in PATH; install OpenCode first." >&2
         exit 1
     fi
-    if [ "$PRODUCT" = opencode ]; then
-        local host_version opencode_cli probe probe_status=0
-        opencode_cli=$(command -v "$_OPENCODE_EXEC") || return 1
-        case "$opencode_cli" in /*) ;; *) opencode_cli="$PWD/$opencode_cli" ;; esac
-        probe=$(mktemp -d "${TMPDIR:-/tmp}/bootstrap-opencode-TEST-XXXXXX") || return 1
-        mkdir -p "$probe/profile" "$probe/tmp" || { rm -rf "$probe"; return 1; }
-        host_version=$(cd "$probe/profile" && env -i PATH="$PATH" HOME="$probe/profile" USERPROFILE="$probe/profile" \
-            TMPDIR="$probe/tmp" XDG_CONFIG_HOME="$probe/profile/.config" OPENCODE_CONFIG_DIR="$probe/profile/opencode" \
-            "$opencode_cli" --version </dev/null) || probe_status=$?
-        rm -rf "$probe"
-        [ "$probe_status" -eq 0 ] || { printf 'Cannot determine OpenCode version. CLI: %s\n' "$(bootstrap_diagnostic_quote "$opencode_cli")" >&2; return 1; }
-        # Accept one complete stable version, never an embedded compatibility
-        # number, prerelease or an unknown future API generation.
-        local host_supported=false
-        if [[ "$host_version" =~ ^(OpenCode\ version:\ )?v?(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})$ ]]; then
-            if (( BASH_REMATCH[2] == 2 || (BASH_REMATCH[2] == 1 &&
-                (BASH_REMATCH[3] > 18 || (BASH_REMATCH[3] == 18 && BASH_REMATCH[4] >= 29))) )); then
-                host_supported=true
-            fi
-        fi
-        if [ "$host_supported" = true ]; then
-            if [ "${BOOTSTRAP_VERBOSE:-0}" = 1 ]; then
-                echo "OpenCode notifications were tested with 1.18.33, 2.0.0 and 2.0.21; detected $host_version."
-            fi
-        else
-            printf 'Unsupported OpenCode version; detected %s. CLI: %s\n' "$(bootstrap_diagnostic_quote "$host_version")" "$(bootstrap_diagnostic_quote "$opencode_cli")" >&2
-            echo "Requires stable V1 >= 1.18.29 or V2 >= 2.0.0; tested: 1.18.33, 2.0.0 and 2.0.21." >&2
-            echo "Older OpenCode V1 releases have not been verified with this installed notification plugin." >&2
-            echo "Update the selected OpenCode CLI shown above; the desktop app and CLI can have different versions." >&2
-            exit 1
-        fi
-        [ "$(bootstrap_release_os_arch)" != "windows arm64" ] || { echo "Windows arm64 is not supported." >&2; exit 1; }
+    if [ "$PRODUCT" = gemini ] && ! command -v "$_GEMINI_EXEC" >/dev/null 2>&1; then
+        echo "gemini CLI not found in PATH; install Gemini CLI first." >&2
+        return 1
     fi
-    if [ "$PRODUCT" = gemini ]; then
-        local gemini_cli probe host_version probe_status
-        gemini_cli=$(command -v "$_GEMINI_EXEC") || { echo "gemini CLI not found in PATH; install Gemini CLI first." >&2; return 1; }
-        probe=$(mktemp -d "${TMPDIR:-/tmp}/bootstrap-gemini-TEST-XXXXXX") || return 1
-        mkdir -p "$probe/profile/.gemini" "$probe/tmp" || { rm -rf "$probe"; return 1; }
-        # Native env discovery checks Gemini/home sentinels even when the
-        # caller's environment is empty. Keep cwd and home in the same TEST root.
-        : > "$probe/profile/.gemini/.env"
-        : > "$probe/profile/.env"
-        # Redirect system files into this probe without creating user-owned
-        # files that Gemini correctly refuses to trust as root-owned settings.
-        printf '{}\n' > "$probe/trust.json"
-        probe_status=0
-        host_version=$(cd "$probe/profile" && env -i PATH="$PATH" HOME="$probe/profile" USERPROFILE="$probe/profile" \
-            GEMINI_CLI_HOME="$probe/profile" TMPDIR="$probe/tmp" XDG_CONFIG_HOME="$probe/profile/.config" \
-            GEMINI_CLI_SYSTEM_SETTINGS_PATH="$probe/settings.json" GEMINI_CLI_SYSTEM_DEFAULTS_PATH="$probe/defaults.json" \
-            GEMINI_CLI_TRUSTED_FOLDERS_PATH="$probe/trust.json" "$gemini_cli" --version </dev/null) || probe_status=$?
-        rm -rf "$probe"
-        [ "$probe_status" -eq 0 ] || {
-            printf 'Cannot determine Gemini CLI version. CLI: %s\n' "$(bootstrap_diagnostic_quote "$gemini_cli")" >&2
-            return 1
-        }
-        # Compatibility range, separate from the exact native E2E pins. The
-        # hook contract was reviewed across stable 0.62 through 0.65. Unknown
-        # minor generations and prereleases need review before extending it.
-        local host_supported=false
-        if [[ "$host_version" =~ ^(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})$ ]]; then
-            if (( BASH_REMATCH[1] == 0 && BASH_REMATCH[2] >= 62 && BASH_REMATCH[2] < 66 )); then
-                host_supported=true
-            fi
-        fi
-        [ "$host_supported" = true ] || {
-            printf 'Unsupported Gemini CLI version; detected %s.\n' "$(bootstrap_diagnostic_quote "${host_version:-unavailable}")" >&2
-            echo 'Requires stable Gemini CLI >= 0.62.0 and < 0.66.0.' >&2
-            echo "Install a compatible Gemini CLI: npm install -g '@google/gemini-cli@>=0.62.0 <0.66.0'" >&2
-            return 1
-        }
-        [ "$(bootstrap_release_os_arch)" != "windows arm64" ] || { echo "Windows arm64 is not supported." >&2; return 1; }
+    # Host CLI versions are informational, never an installation prerequisite.
+    # Capability/schema failures are handled by each integration at its boundary.
+    if { [ "$PRODUCT" = opencode ] || [ "$PRODUCT" = gemini ]; } && [ "$(bootstrap_release_os_arch)" = "windows arm64" ]; then
+        echo "Windows arm64 is not supported." >&2
+        return 1
     fi
     if { [ "$PRODUCT" = opencode ] || [ "$PRODUCT" = gemini ]; } && [ "$(uname -s)" = Darwin ] &&
         { [[ " ${OPENCODE_ARGS[*]-} " = *" --desktop "* ]] || [[ " ${OPENCODE_ARGS[*]-} " = *" --desktop=true "* ]] || [[ " ${_FROZEN_OPENCODE_CHANNELS[*]-} ${_FROZEN_GEMINI_CHANNELS[*]-} " = *" --desktop=true "* ]]; } && ! command -v unzip >/dev/null 2>&1; then

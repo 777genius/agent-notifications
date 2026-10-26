@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
-- Accept stable Gemini CLI versions >= 0.62.0 and < 0.66.0 instead of requiring one exact version. Keep exact native qualification pins separate from the compatibility range and avoid recommending a downgrade to 0.62.0.
+- Remove host CLI version admission restrictions for Gemini, OpenCode and Cursor, and remove the Codex inventory version allowlist. Preserve capability, schema, ownership and release-provenance checks; exact versions remain only as reproducible test targets.
 
 ## [1.49.8] - 2026-10-26
 

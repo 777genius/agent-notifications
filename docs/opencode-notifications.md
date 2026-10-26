@@ -13,8 +13,8 @@ Agent Notifications uses
 **one installed plugin** for OpenCode V1 and
 [V2](https://opencode.ai/v2/docs): V1 calls `server`, V2 calls `setup`. Historical release
 qualification targets include **V1 1.18.33, V1 1.18.34 and V2 2.0.21**. The installer
-accepts stable V1 >= 1.18.29 and V2 >= 2.0.0; this range does not qualify every
-release. Prereleases and unknown future API generations are rejected.
+does not reject a CLI based on its version. Tested releases are evidence of
+specific observed behavior, not a version allowlist or a guarantee for every release.
 Setup installs notifications, never OpenCode itself, and does not start an agent session.
 
 The self-contained plugin incorporates

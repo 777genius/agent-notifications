@@ -30,7 +30,7 @@
       "gemini": "Gemini CLI (macOS / Linux / Windows): lautlose Meldungen bei abgeschlossenem Dialogschritt und Werkzeugfreigabe. Ein abgeschlossener Schritt bedeutet weder Erfolg noch endgültige Antwort. Kein Ton, Klickfokus, Fragen-, Fehler-, Plan-, Review- oder gleichwertiger Unteragenten-Support."
     },
     "gemini": {
-      "version": "Gemini CLI: stabile Versionen >= 0.62.0 und < 0.66.0 unter macOS / Linux / Windows. Getestete Versionen und Plattformabdeckung stehen im Gemini-Leitfaden.",
+      "version": "Keine Versionsbeschränkung für Gemini CLI. Verfügbar unter macOS / Linux / Windows. Getestete Versionen und Plattformen stehen im Gemini-Leitfaden.",
       "guide": "Gemini: Einrichtung und Grenzen",
       "restart": "Starte Gemini CLI neu, um den Benachrichtigungsbeobachter zu laden.",
       "configure": "Kanalzustimmung und gemeinsame Einstellungen stehen im Gemini-Leitfaden; kein MCP-Werkzeug oder Skill. Integrierte Meldungen können doppelt erscheinen. Eine Desktop-Quelle oder nur Webhooks wählen; integrierte Einstellungen bleiben erhalten."
@@ -43,7 +43,7 @@
       "channelsTitle": "OpenCode-Benachrichtigungskanäle",
       "channelsHint": "Diese Auswahl gilt nur für OpenCode. Erlaube mindestens einen Kanal; Webhook-URLs werden separat konfiguriert.",
       "scope": "OpenCode: stille Meldungen bei Abschluss, Fragen, Berechtigungen und Fehlern der Hauptsitzung. Kein Ton oder Fensterfokus per Klick.",
-      "version": "Stabile OpenCode-Versionen V1 ≥1.18.29 und V2 ≥2.0.0 werden akzeptiert. Die Validierung hängt von Version und Plattform ab; siehe Einrichtungsanleitung.",
+      "version": "Keine Versionsbeschränkung für OpenCode CLI. Getestete Versionen und Plattformen stehen in der Einrichtungsanleitung.",
       "desktop": "Desktop-Benachrichtigungen erlauben",
       "webhook": "Webhook-Benachrichtigungen erlauben",
       "chooseChannel": "Mindestens einen Benachrichtigungskanal auswählen.",

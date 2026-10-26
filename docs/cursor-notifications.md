@@ -4,13 +4,13 @@ Agent Notifications 1.49.1 adds managed Cursor CLI Stop notifications through th
 
 ## Qualified hosts
 
-| Platform | Required Cursor CLI version |
+| Platform | Tested Cursor CLI version |
 | --- | --- |
 | Linux amd64 | `2026.09.28-64d2043` |
 | macOS arm64 | `2026.09.18-9a7762b` |
 | Windows amd64 | `2026.10.01-e373342` |
 
-The installer requires the exact qualified version, an explicit user profile and the actual CLI executable. macOS Intel, Linux arm64, Windows arm64, WSL and other CLI versions are not qualified. Linux also requires the qualified native filesystem identity API; the CI kernel/filesystem evidence does not establish support for every Linux installation. Unsupported hosts stop before activation.
+The installer requires an explicit user profile and the actual CLI executable; it does not restrict the CLI version. The versions above record historical qualification, not an admission allowlist. macOS Intel, Linux arm64, Windows arm64 and WSL are not qualified. Linux also requires the qualified native filesystem identity API; the CI kernel/filesystem evidence does not establish support for every Linux installation. Unsupported hosts stop before activation.
 
 ## Install or update
 

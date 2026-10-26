@@ -147,7 +147,7 @@
       "gemini": "Gemini CLI (macOS / Linux / Windows): avvisi silenziosi di turno concluso e permesso per strumenti. Un turno concluso non implica successo né risposta finale. Nessun suono, focus al clic, domanda, errore, piano, revisione o parità per agenti annidati."
     },
     "gemini": {
-      "version": "Gemini CLI: versioni stabili >= 0.62.0 e < 0.66.0 su macOS / Linux / Windows. Versioni testate e piattaforme verificate sono indicate nella guida Gemini.",
+      "version": "Nessuna restrizione di versione per Gemini CLI. Disponibile su macOS / Linux / Windows. Versioni e piattaforme testate sono nella guida Gemini.",
       "guide": "Configurazione e limiti di Gemini",
       "restart": "Riavvia Gemini CLI per caricare l’osservatore delle notifiche.",
       "configure": "Consulta la guida Gemini per consenso ai canali e impostazioni condivise; nessun MCP o skill installato. Gli avvisi integrati possono duplicarsi. Scegli una fonte desktop o solo webhook; le impostazioni integrate non vengono modificate."
@@ -160,7 +160,7 @@
       "channelsTitle": "Canali di notifica OpenCode",
       "channelsHint": "Queste scelte valgono solo per OpenCode. Autorizza almeno un canale; gli URL dei webhook si configurano separatamente.",
       "scope": "OpenCode: avvisi silenziosi di completamento, domande, permessi ed errori per la sessione principale. Senza suoni né attivazione della finestra al clic.",
-      "version": "Sono accettate le versioni stabili di OpenCode V1 ≥1.18.29 e V2 ≥2.0.0. La validazione varia per versione e piattaforma; consulta la guida alla configurazione.",
+      "version": "Nessuna restrizione di versione per OpenCode CLI. Versioni e piattaforme testate sono nella guida di configurazione.",
       "desktop": "Consenti notifiche desktop",
       "webhook": "Consenti notifiche webhook",
       "chooseChannel": "Scegli almeno un canale di notifica.",
