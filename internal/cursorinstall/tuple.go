@@ -9,6 +9,8 @@ const cursorVersion = "2026.09.28-64d2043"
 
 // CurrentTuple is the closed native user Stop contract for this host. It grants
 // no consent, receipt or physical authority; all existing proof still applies.
+// These versions identify historical qualification evidence, not a host CLI
+// allowlist. Never compare the installed CLI version to this tuple for admission.
 func CurrentTuple() (string, cursorhooks.ShellContract) {
 	if runtime.GOOS == "linux" && runtime.GOARCH == "amd64" {
 		return cursorVersion, cursorhooks.LinuxUserShell32212

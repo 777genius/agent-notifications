@@ -1285,6 +1285,8 @@ func composeCursorWizard(ctx context.Context, req setupwizard.Request) (_ setupw
 		if agent == "" {
 			agent = req.ClientExecutable
 		}
+		// Do not gate the installed Cursor CLI on a test/qualification version.
+		// Admit by executable presence and the profile/capability contract below.
 		agent, err = normalizeProductExecutable(agent)
 		if err != nil {
 			return req, err

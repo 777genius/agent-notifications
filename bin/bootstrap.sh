@@ -252,7 +252,9 @@ check_prerequisites() {
         echo "gemini CLI not found in PATH; install Gemini CLI first." >&2
         return 1
     fi
-    # Host CLI versions are informational, never an installation prerequisite.
+    # Do not add host CLI min/max ranges, exact pins, or prerelease filters here.
+    # New agent releases must not require an installer update just for admission.
+    # Test-version pins are reproducibility evidence, not compatibility allowlists.
     # Capability/schema failures are handled by each integration at its boundary.
     if { [ "$PRODUCT" = opencode ] || [ "$PRODUCT" = gemini ]; } && [ "$(bootstrap_release_os_arch)" = "windows arm64" ]; then
         echo "Windows arm64 is not supported." >&2

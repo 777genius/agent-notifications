@@ -50,6 +50,7 @@ func probeNotificationCodex(ctx context.Context, home string) (notificationCodex
 	}
 	// Version output is diagnostic only. The actual inventory schema and owned
 	// cache identities below determine whether this client can be inspected.
+	// Never turn exact native test versions into a host CLI admission allowlist.
 	if version, err := run("--version"); err == nil {
 		result.ClientVersion = strings.TrimSpace(string(version))
 	}
