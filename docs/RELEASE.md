@@ -12,7 +12,7 @@ For a release that skips a platform, promote only its qualified
 rows and global Latest on the previously qualified version. Publish source
 branches before activating the immutable source SHAs in the channel index.
 
-The current all-platform channels and GitHub Latest select v1.49.8, using the
+The current all-platform channels and GitHub Latest select v1.49.9, using the
 owner-approved basic profile and separate macOS E2E described below. This does
 not establish eleven-cell OpenCode or full native qualification. Before
 the v1.48.4 unified promotion, Linux amd64/arm64 and Windows amd64 selected
