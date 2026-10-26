@@ -902,7 +902,7 @@ func TestHandler_Stop_StaleTranscriptSkipped(t *testing.T) {
 	hookData := buildHookDataJSON(HookData{
 		SessionID:            "test-session-stale",
 		TranscriptPath:       transcriptPath,
-		LastAssistantMessage: "Done.",
+		LastAssistantMessage: strings.Repeat("a", 300),
 		CWD:                  "/test",
 	})
 
@@ -911,6 +911,39 @@ func TestHandler_Stop_StaleTranscriptSkipped(t *testing.T) {
 	}
 	if mockNotif.wasCalled() {
 		t.Errorf("unexpected notification for stale transcript: %+v", mockNotif.lastCall())
+	}
+}
+
+// A final reply that took longer than the stale window may reach Stop before
+// it is flushed; the old transcript mtime must not drop it.
+func TestHandler_Stop_StaleTranscriptUnflushedReplyNotifies(t *testing.T) {
+	cfg := &config.Config{
+		Notifications: config.NotificationsConfig{
+			Desktop: config.DesktopConfig{Enabled: true},
+		},
+	}
+
+	handler, mockNotif, _ := newTestHandler(t, cfg)
+
+	transcriptPath := createTempTranscript(t,
+		buildTranscriptWithTools([]string{"Read", "Edit", "Write"}, 300))
+	old := time.Now().Add(-45 * time.Minute)
+	if err := os.Chtimes(transcriptPath, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	hookData := buildHookDataJSON(HookData{
+		SessionID:            "test-session-stale-unflushed",
+		TranscriptPath:       transcriptPath,
+		LastAssistantMessage: "Done.",
+		CWD:                  "/test",
+	})
+
+	if err := handler.HandleHook("Stop", hookData); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !mockNotif.wasCalled() {
+		t.Error("expected notification for a reply not yet in the transcript")
 	}
 }
 

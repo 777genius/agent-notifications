@@ -366,7 +366,8 @@ func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 
 		// A real turn writes the transcript just before Stop. A headless resume
 		// of a finished session fires Stop without appending anything (#119).
-		if age := platform.FileAge(ev.Session.TranscriptPath); age > staleTranscriptSeconds {
+		if age := platform.FileAge(ev.Session.TranscriptPath); age > staleTranscriptSeconds &&
+			!claudeStopHasUnflushedReply(ev.Session.TranscriptPath, p.AssistantMessage) {
 			logging.Debug("Stop: transcript unchanged for %ds, skipping stale completion", age)
 			h.cleanupOldLocks()
 			return nil
@@ -967,6 +968,21 @@ func claudeStopIsReview(messages []jsonl.Message, final string) bool {
 		return len(recentText) > 200
 	}
 	return len(recentText)+len(final) > 200
+}
+
+// A final reply missing from the transcript is a long generation whose flush
+// has not landed yet, not a resume of an already finished turn.
+func claudeStopHasUnflushedReply(path, final string) bool {
+	final = strings.Join(strings.Fields(final), " ")
+	if final == "" {
+		return false
+	}
+	messages, err := jsonl.ParseFile(path)
+	if err != nil {
+		return false
+	}
+	last := jsonl.ExtractTextFromMessages(jsonl.GetLastAssistantMessages(messages, 1))
+	return strings.Join(strings.Fields(strings.Join(last, " ")), " ") != final
 }
 
 // Older Claude versions may omit last_assistant_message. In that case only,
