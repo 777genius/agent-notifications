@@ -1569,7 +1569,9 @@ class PureChecks(unittest.TestCase):
         g0, _ = load_g0()
         expected = {"0.62.0": "b460678f3db508407554afd604cc9d6635becb2a",
                     "0.65.0": "6006c14a4decfe4b891c6263ad6ad5992e404b5b"}
-        with tempfile.TemporaryDirectory(prefix="TEST-gemini-qualification-") as tmp:
+        # Windows default TEMP is under the owner home. Use the CI scratch
+        # root so the unchanged no-borrowed-installation guard remains real.
+        with tempfile.TemporaryDirectory(prefix="TEST-gemini-qualification-", dir=os.environ.get("RUNNER_TEMP")) as tmp:
             root = Path(tmp).resolve()
             (root / g0.MARKER).write_text("owned TEST metadata")
             package = root / "package.json"
