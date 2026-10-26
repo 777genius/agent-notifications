@@ -649,7 +649,7 @@ test("manual instructions preserve legacy links and offer Gemini guidance", asyn
     await expect(page.getByRole("button", { name: "Gemini CLI", exact: true })).toBeEnabled();
     await chooseAgents(page, ["gemini"]);
     await expect(manual.getByRole("link", { name: "Gemini setup and limits", exact: true })).toBeVisible();
-    await expect(manual).toContainText("Gemini CLI requires exactly version 0.62.0.");
+    await expect(manual).toContainText("Gemini CLI: stable versions >= 0.62.0 and < 0.66.0");
     await expect(page.getByLabel(intent + " command", { exact: true })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Copy command" })).toHaveCount(0);
   }
