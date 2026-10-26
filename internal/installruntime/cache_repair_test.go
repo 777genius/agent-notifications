@@ -211,6 +211,17 @@ func TestCacheRepairFreshAndCancelledReadOnly(t *testing.T) {
 	if _, err = os.Stat(root); !os.IsNotExist(err) {
 		t.Fatal("fresh preview created root")
 	}
+	if err = os.Mkdir(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(root, "agent-notifications.json"), []byte(`{"schemaVersion":1,"enabled":false}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	p, err = PreviewCacheRepair(context.Background(), root)
+	entries, readErr := os.ReadDir(root)
+	if err != nil || len(p.Paths) != 0 || readErr != nil || len(entries) != 1 || entries[0].Name() != "agent-notifications.json" {
+		t.Fatalf("config-only preview created or required installation locks: %+v %v %v", p, err, entries)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if _, err = PreviewCacheRepair(ctx, root); !errors.Is(err, context.Canceled) {

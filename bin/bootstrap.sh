@@ -3091,7 +3091,12 @@ main() {
         fi
         selector_collect repair-cache ${cache_repair_args[@]+"${cache_repair_args[@]}"} ${UI_ARGS[@]+"${UI_ARGS[@]}"} || return $?
         [ -s "$_SELECTOR_RESULT" ] || { close_prompt; return 0; }
-        selector_exact ready repair-cache || return 1
+        # Legacy unattended setup does not otherwise require cmp. Validate the
+        # fixed six-byte reply with builtins and the existing size primitive.
+        local cache_repair_reply cache_repair_size
+        IFS= read -r cache_repair_reply <"$_SELECTOR_RESULT" || return 1
+        cache_repair_size=$(LC_ALL=C wc -c <"$_SELECTOR_RESULT") || return 1
+        [ "$cache_repair_reply" = ready ] && [ "$cache_repair_size" -eq 6 ] || { echo "Invalid cache repair result bytes." >&2; return 1; }
     fi
     if [ "$_INTERACTIVE_INTENT" = true ] || [[ "$original_product" = bundle:* ]] || [ "$original_product" = gemini ]; then
         selector_collect capabilities || return $?
