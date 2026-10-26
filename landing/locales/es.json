@@ -46,7 +46,7 @@
       "gemini": "Gemini CLI (macOS / Linux / Windows): avisos silenciosos de turno terminado y permiso de herramientas. Terminar un turno no implica éxito ni respuesta final. Sin sonido, enfoque al pulsar, preguntas, errores, planes, revisiones ni paridad para agentes anidados."
     },
     "gemini": {
-      "version": "Gemini CLI requiere exactamente la versión 0.62.0. Disponible solo en macOS / Linux / Windows; se rechazan otras versiones de CLI.",
+      "version": "Gemini CLI: versiones estables >= 0.62.0 y < 0.66.0 en macOS / Linux / Windows. Las versiones probadas y la cobertura de plataformas se detallan en la guía de Gemini.",
       "guide": "Configuración y límites de Gemini",
       "restart": "Reinicia Gemini CLI para cargar el observador de notificaciones.",
       "configure": "Consulta la guía Gemini para consentimiento de canales y ajustes compartidos; no se instala MCP ni skill. Los avisos integrados pueden duplicarse. Elige una fuente de escritorio o solo webhooks; los ajustes integrados no se modifican."

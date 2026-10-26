@@ -25,9 +25,32 @@ Gemini capabilities. Claude/Codex capabilities and OpenCode limits remain separa
 
 ## Installation
 
-Install exactly Gemini CLI **0.62.0** first and make `gemini` available on `PATH`; the installer rejects other versions. On macOS, Linux or Windows, use the public platform installer
+Install stable Gemini CLI **>= 0.62.0 and < 0.66.0** and make `gemini` available on `PATH`. The compatibility range is separate from the exact versions used by native tests. Prereleases, older versions and unreviewed minor generations are rejected. On macOS, Linux or Windows, use the public platform installer
 shown below. Its source bundle and binaries come from the same qualified release.
 The installer selects the matching native assets automatically.
+
+### Compatibility range and tested versions
+
+Stable 0.62.x through 0.65.x share the hook contract used by this integration:
+`AfterAgent`, `Notification`/`ToolPermission`, hook settings and the command runner.
+The upstream hook sources are unchanged between
+[0.62.0](https://github.com/google-gemini/gemini-cli/tree/b460678f3db508407554afd604cc9d6635becb2a/packages/core/src/hooks)
+and [0.65.0](https://github.com/google-gemini/gemini-cli/tree/6006c14a4decfe4b891c6263ad6ad5992e404b5b/packages/core/src/hooks).
+This supports the bounded compatibility range, not a claim that every patch was
+individually tested. A newer minor generation needs a contract review and native
+qualification before extending the upper bound.
+
+Native CI keeps exact 0.62.0 baseline coverage on five platforms and adds exact
+0.65.0 endpoint coverage on Linux amd64 and macOS arm64. Each run records the
+actual version, upstream source and installed package hashes; the historical
+results below retain their original scope. A newer compatibility range does not
+turn an older test result into evidence for a new CLI version.
+
+To install a version within this range:
+
+```bash
+npm install -g '@google/gemini-cli@>=0.62.0 <0.66.0'
+```
 
 ### Platform installer selectors
 

@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Accept stable Gemini CLI versions >= 0.62.0 and < 0.66.0 instead of requiring one exact version. Keep exact native qualification pins separate from the compatibility range and avoid recommending a downgrade to 0.62.0.
+
 ## [1.49.8] - 2026-10-26
 
 ### Fixed

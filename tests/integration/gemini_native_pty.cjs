@@ -68,7 +68,7 @@ function start(m) {
   }
   check(cliPackage, 'CLI_package_missing');
   const cli = JSON.parse(fs.readFileSync(cliPackage));
-  check(cli.version === '0.62.0' && cli.optionalDependencies['@lydell/node-pty'] === '1.1.0', 'CLI_PTY_pin_mismatch');
+  check(['0.62.0', '0.65.0'].includes(m.version) && cli.version === m.version && cli.optionalDependencies['@lydell/node-pty'] === '1.1.0', 'CLI_PTY_pin_mismatch');
   const req = createRequire(cliPackage);
   const entry = fs.realpathSync(req.resolve('@lydell/node-pty'));
   check(contains(entry, root), 'PTY_outside_explicit_installation');

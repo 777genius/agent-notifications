@@ -294,7 +294,7 @@
       "gemini": "Gemini CLI (macOS / Linux / Windows): silent turn-completed and tool-permission alerts. A completed turn does not imply success or a final answer. No sound, click-to-focus, question, error, plan, review or nested-agent parity."
     },
     "gemini": {
-      "version": "Gemini CLI requires exactly version 0.62.0. Available on macOS / Linux / Windows only; other CLI versions are rejected.",
+      "version": "Gemini CLI: stable versions >= 0.62.0 and < 0.66.0 on macOS / Linux / Windows. Tested versions and platform coverage are documented in the Gemini guide.",
       "guide": "Gemini setup and limits",
       "restart": "Restart Gemini CLI to load the notification observer.",
       "configure": "Use the Gemini guide for channel consent and shared settings; no MCP tool or skill is installed. Built-in Gemini notifications can duplicate desktop alerts. Choose one desktop source or webhook-only; built-in settings are not changed."

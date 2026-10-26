@@ -299,10 +299,24 @@ check_prerequisites() {
             GEMINI_CLI_SYSTEM_SETTINGS_PATH="$probe/settings.json" GEMINI_CLI_SYSTEM_DEFAULTS_PATH="$probe/defaults.json" \
             GEMINI_CLI_TRUSTED_FOLDERS_PATH="$probe/trust.json" "$gemini_cli" --version </dev/null) || probe_status=$?
         rm -rf "$probe"
-        [ "$probe_status" -eq 0 ] && [ "$host_version" = 0.62.0 ] || {
-            printf 'Unsupported Gemini CLI version; detected %s. Requires 0.62.0.\n' "$(bootstrap_diagnostic_quote "${host_version:-unavailable}")" >&2
-            echo "Update Gemini CLI: npm install -g @google/gemini-cli@0.62.0" >&2
-            return 1;
+        [ "$probe_status" -eq 0 ] || {
+            printf 'Cannot determine Gemini CLI version. CLI: %s\n' "$(bootstrap_diagnostic_quote "$gemini_cli")" >&2
+            return 1
+        }
+        # Compatibility range, separate from the exact native E2E pins. The
+        # hook contract was reviewed across stable 0.62 through 0.65. Unknown
+        # minor generations and prereleases need review before extending it.
+        local host_supported=false
+        if [[ "$host_version" =~ ^(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})$ ]]; then
+            if (( BASH_REMATCH[1] == 0 && BASH_REMATCH[2] >= 62 && BASH_REMATCH[2] < 66 )); then
+                host_supported=true
+            fi
+        fi
+        [ "$host_supported" = true ] || {
+            printf 'Unsupported Gemini CLI version; detected %s.\n' "$(bootstrap_diagnostic_quote "${host_version:-unavailable}")" >&2
+            echo 'Requires stable Gemini CLI >= 0.62.0 and < 0.66.0.' >&2
+            echo "Install a compatible Gemini CLI: npm install -g '@google/gemini-cli@>=0.62.0 <0.66.0'" >&2
+            return 1
         }
         [ "$(bootstrap_release_os_arch)" != "windows arm64" ] || { echo "Windows arm64 is not supported." >&2; return 1; }
     fi

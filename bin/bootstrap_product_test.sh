@@ -240,7 +240,7 @@ HOST_VERSION
 )
 # Gemini's prerequisite may execute only the disposable version fixture here.
 # Assert actual isolated cwd/home, dotenv sentinels and system redirects rather
-# than matching shell source. A changed version must stop before installation.
+# than matching shell source. Accept the supported stable range, not one pin.
 (
     mkdir -p "$SANDBOX/gemini-version-cli"
     cat > "$SANDBOX/gemini-version-cli/gemini" <<'GEMINI_VERSION'
@@ -258,21 +258,29 @@ for file in "$GEMINI_CLI_SYSTEM_SETTINGS_PATH" "$GEMINI_CLI_SYSTEM_DEFAULTS_PATH
     [ ! -e "$file" ] && [ ! -L "$file" ] || exit 6
 done
 [ "$GEMINI_CLI_TRUSTED_FOLDERS_PATH" = "$probe/trust.json" ] && [ -f "$GEMINI_CLI_TRUSTED_FOLDERS_PATH" ] || exit 6
-printf '0.62.0\n'
+cat "$(dirname "$0")/version"
 GEMINI_VERSION
     chmod +x "$SANDBOX/gemini-version-cli/gemini"
     export PATH="$SANDBOX/gemini-version-cli:$PATH" GEMINI_SETUP_ENV_CANARY=synthetic-not-a-secret
     PRODUCT=gemini
     OPENCODE_ARGS=(--webhook)
-    check_prerequisites
-    sed 's/0\.62\.0/0.63.0/' "$SANDBOX/gemini-version-cli/gemini" > "$SANDBOX/gemini-version-cli/next"
-    mv "$SANDBOX/gemini-version-cli/next" "$SANDBOX/gemini-version-cli/gemini"
-    chmod +x "$SANDBOX/gemini-version-cli/gemini"
+    for version in 0.62.0 0.62.1 0.63.0 0.64.0 0.65.0 0.65.99; do
+        printf '%s\n' "$version" > "$SANDBOX/gemini-version-cli/version"
+        check_prerequisites
+    done
+    for version in 0.61.99 0.66.0 1.0.0 0.65.0-preview.1 0.65.0-nightly 00.65.0 0.065.0 0.65.00 'Gemini 0.65.0' '0.65.0 trailing' $'0.65.0\n0.62.0' '999999999999999999999.65.0'; do
+        printf '%s\n' "$version" > "$SANDBOX/gemini-version-cli/version"
+        if diagnostic=$(check_prerequisites 2>&1); then
+            echo "accepted unsupported Gemini version: $version" >&2; exit 1
+        fi
+        [[ "$diagnostic" == *"Requires stable Gemini CLI >= 0.62.0 and < 0.66.0."* ]]
+        [[ "$diagnostic" == *"npm install -g '@google/gemini-cli@>=0.62.0 <0.66.0'"* ]]
+    done
+    rm "$SANDBOX/gemini-version-cli/version"
     if diagnostic=$(check_prerequisites 2>&1); then
-        echo "accepted unqualified Gemini version" >&2; exit 1
+        echo "accepted failed Gemini version probe" >&2; exit 1
     fi
-    [[ "$diagnostic" == *"Unsupported Gemini CLI version; detected 0.63.0. Requires 0.62.0."* ]]
-    [[ "$diagnostic" == *"npm install -g @google/gemini-cli@0.62.0"* ]]
+    [[ "$diagnostic" == *"Cannot determine Gemini CLI version."* ]]
 )
 quoted=$(quote_shell_command "$SANDBOX/bin space/cli" --package "$SANDBOX/pkg space" --codex-home "$CODEX_HOME")
 eval "set -- $quoted"
