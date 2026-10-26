@@ -36,7 +36,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Require owner manual dispatch before candidate execution
-        env: {GH_TOKEN: '${{ github.token }}', OWNER: '${{ github.repository_owner }}', TRIGGER: '${{ github.triggering_actor }}'}
+        env: {GH_TOKEN: '${{ github.token }}', OWNER: '777genius', TRIGGER: '${{ github.triggering_actor }}'}
         shell: bash
         run: |
           set -euo pipefail
@@ -44,7 +44,10 @@ jobs:
           test "$GITHUB_REF" = refs/heads/main
           test "$GITHUB_ACTOR" = "$OWNER"
           test "$TRIGGER" = "$OWNER"
-          test "$GITHUB_REPOSITORY" = 777genius/agent-notifications
+          case "$GITHUB_REPOSITORY" in
+            777genius/agent-notifications|universal-agent-plugins/agent-notifications) ;;
+            *) exit 1 ;;
+          esac
           [[ "$RELEASE_CANDIDATE_SHA" =~ ^[a-f0-9]{40}$ ]]
           [[ "$RELEASE_SIGNING_RUN" =~ ^[1-9][0-9]*$ ]]
           test "$RELEASE_TAG" = v1.48.4

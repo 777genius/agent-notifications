@@ -24,7 +24,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   lua-token-prerequisite:
-    if: github.repository == '777genius/agent-notifications' && github.run_attempt == 1
+    if: (github.repository == '777genius/agent-notifications' || github.repository == 'universal-agent-plugins/agent-notifications') && github.run_attempt == 1
     runs-on: windows-11-vs2026-arm
     timeout-minutes: 10
     steps:

@@ -432,10 +432,8 @@ WIZARD_PACKAGE_ROOT=""
     MARKETPLACE_SOURCE="new/repo"
     # shellcheck disable=SC2034
     MARKETPLACE_NAME="claude-notifications-go"
-    # shellcheck disable=SC2034
-    LEGACY_MARKETPLACE_REPOS="old/retired-repo"
     config_preflight() { :; }
-    calls="$SANDBOX/marketplace-calls"; declared_repo="old/retired-repo"
+    calls="$SANDBOX/marketplace-calls"; declared_repo="777genius/claude-notifications-go"
     marketplace_declared_repo() { printf '%s\n' "$declared_repo"; }
     claude() {
         printf '%s\n' "$*" >> "$calls"
@@ -454,10 +452,12 @@ WIZARD_PACKAGE_ROOT=""
         fi
         return 0
     }
-    : > "$calls"; rm -f "$SANDBOX/marketplace-add-called"
-    setup_marketplace
-    [ "$(grep -c '^plugin marketplace add' "$calls")" = 2 ] || { echo "expected retry add after self-heal"; exit 1; }
-    grep -q '^plugin marketplace remove claude-notifications-go$' "$calls" || { echo "expected self-heal remove"; exit 1; }
+    for declared_repo in 777genius/claude-notifications-go 777genius/agent-notifications; do
+        : > "$calls"; rm -f "$SANDBOX/marketplace-add-called"
+        setup_marketplace
+        [ "$(grep -c '^plugin marketplace add' "$calls")" = 2 ] || { echo "expected retry add after self-heal"; exit 1; }
+        grep -q '^plugin marketplace remove claude-notifications-go$' "$calls" || { echo "expected self-heal remove"; exit 1; }
+    done
 
     declared_repo="someone-else/unrelated-fork"
     : > "$calls"; rm -f "$SANDBOX/marketplace-add-called"

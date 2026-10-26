@@ -85,9 +85,9 @@ async function fixture() {
   const address = server.address(); assert.ok(address && typeof address === 'object');
   const url = `http://127.0.0.1:${address.port}/install.sh`;
   const update = (patch: State) => writeFileSync(statePath, JSON.stringify({ ...state, ...patch }));
-  const run = () => new Promise<{ status: number | null; stdout: string; stderr: string }>((resolve, reject) => {
+  const run = (repository = '777genius/agent-notifications') => new Promise<{ status: number | null; stdout: string; stderr: string }>((resolve, reject) => {
     const child = spawn(process.execPath, [tool, sealed, M, url, '51'], { cwd: temp,
-      env: { ...process.env, PATH: `${join(temp, 'bin')}:${process.env.PATH}`, TEST_PUBLIC_STATE: statePath, TEST_PUBLIC_CALLS: callsPath },
+      env: { ...process.env, PATH: `${join(temp, 'bin')}:${process.env.PATH}`, GITHUB_REPOSITORY: repository, TEST_PUBLIC_REPOSITORY: repository, TEST_PUBLIC_STATE: statePath, TEST_PUBLIC_CALLS: callsPath },
       stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '', stderr = '';
     child.stdout.on('data', bytes => { stdout += bytes; }); child.stderr.on('data', bytes => { stderr += bytes; });
@@ -107,8 +107,10 @@ test('public verifier CLI validates publication and fails closed on incomplete o
   const f = await fixture();
   try {
     await t.test('happy path: all 29 bytes, missing-digest download, exact controller and Pages jobs', async () => {
-      const result = await f.run(); assert.equal(result.status, 0, result.stderr);
+      const result = await f.run('universal-agent-plugins/agent-notifications'); assert.equal(result.status, 0, result.stderr);
       const output = JSON.parse(result.stdout);
+      assert.equal(output.repository, '777genius/agent-notifications');
+      assert.equal(output.verifiedRepository, 'universal-agent-plugins/agent-notifications');
       assert.equal(output.status, 'public_release_verified'); assert.equal(output.publicRelease.assetCount, 29);
       assert.match(output.verifiedAt, /^\d{4}-\d{2}-\d{2}T/); assert.match(output.sealManifestSHA256, /^[a-f0-9]{64}$/);
       assert.equal(output.retainedLegacy.setup.sha256, output.retainedLegacy.setup.expectedSHA256);
