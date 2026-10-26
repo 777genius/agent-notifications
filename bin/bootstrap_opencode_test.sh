@@ -194,6 +194,14 @@ def loader_command(args=()):
     command = 'set -o pipefail; curl -fsSL '+shlex.quote(public_loader)+' | bash'
     return command + (' -s -- '+' '.join(map(shlex.quote,args)) if args else '')
 
+def confirmation_visible(transcript):
+    # Finite UI prompts from the current SDK and the earlier published caller.
+    # Product labels and plan rows never authorize the approval response.
+    return any(prompt in transcript for prompt in (
+        b'Apply this plan?',
+        b'Press Enter or type y to install; type n to cancel.',
+    ))
+
 def run_tty(answer, approve=False):
     before = persistent_state()
     requests_before = len((lab/'loader-requests').read_text().splitlines()) if (lab/'loader-requests').exists() else 0
@@ -218,7 +226,7 @@ def run_tty(answer, approve=False):
                 if b'comma-separated' in transcript and not sent:
                     os.write(terminal,answer)
                     sent = True
-                if approve and b'Apply this plan?' in transcript and not approved:
+                if approve and confirmation_visible(transcript) and not approved:
                     os.write(terminal,b'y\n')
                     approved = True
             finished, code = os.waitpid(pid,os.WNOHANG)
@@ -281,7 +289,7 @@ if native_zip is not None:
                 transcript += chunk
                 if b'comma-separated' in transcript and not selected:
                     os.write(terminal,b'opencode\n'); selected = True
-                if b'Apply this plan?' in transcript and not approved:
+                if confirmation_visible(transcript) and not approved:
                     os.write(terminal,b'y\n'); approved = True
             finished,code = os.waitpid(pid,os.WNOHANG)
             if finished:

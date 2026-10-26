@@ -11,7 +11,9 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/777genius/agent-notifications/internal/agentnotify/portable"
 	"github.com/777genius/agent-notifications/internal/agentnotify/portableasset"
@@ -27,13 +29,13 @@ import (
 type committedTimeoutRunner struct {
 	listingRunner
 	fail         bool
-	calls        int
+	calls        atomic.Int64
 	onFailure    func()
 	failureReady func() bool
 }
 
 func (r *committedTimeoutRunner) Run(ctx context.Context, command ports.Command) (ports.CommandResult, error) {
-	r.calls++
+	r.calls.Add(1)
 	for _, variable := range command.Env {
 		if strings.HasPrefix(variable, "CODEX_HOME=") {
 			return (processadapter.OS{}).Run(ctx, command)
@@ -44,7 +46,16 @@ func (r *committedTimeoutRunner) Run(ctx context.Context, command ports.Command)
 		if r.onFailure != nil {
 			r.onFailure()
 		}
-		return ports.CommandResult{}, context.DeadlineExceeded
+		// This branch performs only the inert filesystem listing above. Model
+		// a private expired probe with positive no-child evidence; an empty result
+		// means unknown process cleanup and must still cancel an in-flight sibling.
+		started := time.Now()
+		probe, cancel := context.WithTimeout(ctx, time.Nanosecond)
+		defer cancel()
+		<-probe.Done()
+		return ports.CommandResult{NoChildStarted: true}, &domain.IsolatedProbeTimeout{
+			Operation: "TEST closed Claude listing", Budget: time.Nanosecond, Elapsed: time.Since(started), Err: probe.Err(),
+		}
 	}
 	return listed, err
 }
@@ -103,11 +114,7 @@ func TestActivationPartialRecoveryUsesAcquiredSource(t *testing.T) {
 			if byClient["claude"].Outcome != wantClaude || byClient["claude"].Materialization != "materialized" {
 				t.Fatalf("Claude attempt lost: %+v", byClient)
 			}
-			wantCodex := "activation_not_attempted"
-			if order[0] == "codex" {
-				wantCodex = "completed"
-			}
-			if byClient["codex"].Outcome != wantCodex || (!row.sequential && byClient["codex"].Materialization != "materialized") {
+			if byClient["codex"].Outcome != "completed" || (!row.sequential && byClient["codex"].Materialization != "materialized") {
 				t.Fatalf("Codex attempt: %+v", byClient)
 			}
 			if order[0] == "codex" && !row.sequential {
@@ -207,7 +214,7 @@ func TestActivationPartialRecoveryUsesAcquiredSource(t *testing.T) {
 			if err != nil || strings.Count(string(traceAfter), "plugin add ") != 1 {
 				t.Fatalf("activation replayed: %s; %v", traceAfter, err)
 			}
-			if order[0] == "codex" && strings.Count(string(traceBefore), "plugin add ") != 1 {
+			if strings.Count(string(traceBefore), "plugin add ") != 1 {
 				t.Fatalf("completed sibling absent from trace: %s", traceBefore)
 			}
 			body, err = os.ReadFile(statePath)

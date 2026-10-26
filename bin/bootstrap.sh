@@ -66,6 +66,11 @@ _PARALLEL_INTERRUPT_STATUS=0
 _PARALLEL_WORKER=""
 _PARALLEL_GATE_HELD=false
 _PARALLEL_PIDS=()
+_PARALLEL_AUX_PIDS=()
+_PARALLEL_AUX_DONE=()
+_PARALLEL_FORCED_STOP=false
+_PARALLEL_HELPER_CAPTURE=""
+_PARALLEL_FOLLOW_UP_STARTED=false
 _PARALLEL_CLIENTS=()
 _PARALLEL_DONE=()
 _PARALLEL_LINES=()
@@ -2039,17 +2044,25 @@ bootstrap_cleanup() {
     if [ "$_PARALLEL_IN_FLIGHT" = true ]; then
         _KEEP_CONFIG_STAGE=true
         local client job
-        for client in "${_PARALLEL_CLIENTS[@]}"; do
+        # Save the interrupted parent helper capture before worker-log merging
+        # changes these shell-owned paths and the current stage label.
+        if [ -n "$_PARALLEL_HELPER_CAPTURE" ] && [ -f "$_PARALLEL_HELPER_CAPTURE" ] && [ ! -L "$_PARALLEL_HELPER_CAPTURE" ] &&
+            [ -n "$_PROGRESS_LOG" ] && [ -f "$_PROGRESS_LOG" ] && [ ! -L "$_PROGRESS_LOG" ]; then
+            head -c 65536 "$_PARALLEL_HELPER_CAPTURE" >> "$_PROGRESS_LOG" || true
+        fi
+        diagnostic_capture_stage interrupted
+        for client in ${_PARALLEL_CLIENTS[@]+"${_PARALLEL_CLIENTS[@]}"}; do
             job="$_PARALLEL_ROOT/$client"
             _PROGRESS_LOG="$job/stdout"; _PROGRESS_STDERR="$job/stderr"; _DIAGNOSTIC_LABEL="Installing $client notifications"
             if parallel_read_result "$job/result"; then
-                progress_phase "$client" "$_JOB_PHASE" "$_JOB_OUTCOME"
+                if [ "$_PARALLEL_FOLLOW_UP_STARTED" != true ]; then progress_phase "$client" "$_JOB_PHASE" "$_JOB_OUTCOME"; fi
                 diagnostic_capture_stage "$_JOB_STATUS"
             else
-                progress_phase "$client" preparation state_requires_inspection
+                if [ "$_PARALLEL_FOLLOW_UP_STARTED" != true ]; then progress_phase "$client" preparation state_requires_inspection; fi
                 diagnostic_capture_stage interrupted
             fi
         done
+        if [ "$_PARALLEL_FOLLOW_UP_STARTED" = true ]; then parallel_replay_progress; fi
         _PROGRESS_LOG=""; _PROGRESS_STDERR=""; _DIAGNOSTIC_LABEL="Installing selected clients"
     fi
     progress_stop 1
@@ -2059,6 +2072,7 @@ bootstrap_cleanup() {
         progress_record transition global "$_PROGRESS_GLOBAL_PHASE" failed
         diagnostic_capture_stage interrupted
         printf 'Setup incomplete: installation was interrupted.\n' >&2
+        if [ "$_PARALLEL_FORCED_STOP" = true ]; then printf 'Installer termination required force; recovery files were retained.\n' >&2; fi
         report_progress "${interrupted_status:-1}"
         report_diagnostics
     fi
@@ -2117,9 +2131,9 @@ install_runtime_transaction() {
 fetch_bootstrap_file() {
     progress_download_activity "$2"
     if command -v curl >/dev/null 2>&1; then
-        curl -fsSL --connect-timeout 15 --max-time 120 "$1" -o "$2"
+        bootstrap_external curl -fsSL --connect-timeout 15 --max-time 120 "$1" -o "$2"
     else
-        wget -q -T 120 "$1" -O "$2"
+        bootstrap_external wget -q -T 120 "$1" -O "$2"
     fi
 }
 
@@ -2392,7 +2406,7 @@ config_preflight() {
 }
 
 initialize_config() {
-    if "$_CONFIG_HELPER" config init --json; then return 0; fi
+    if bootstrap_external "$_CONFIG_HELPER" config init --json; then return 0; fi
     report_config_init_failure
 }
 
@@ -2956,21 +2970,53 @@ parallel_worker() {
     return "$status"
 }
 
+# Run only an external argv command asynchronously. Stateful shell functions
+# remain in their owner; worker commands stay inside the worker's primary group.
+bootstrap_external() {
+    if [ "$_PARALLEL_ACTIVE" != true ] || [ -n "$_PARALLEL_WORKER" ]; then "$@"; return $?; fi
+    local monitor_flags=$- dispatching=$_PARALLEL_DISPATCHING status=0 pid index=${#_PARALLEL_AUX_PIDS[@]}
+    _PARALLEL_DISPATCHING=true
+    set -m
+    command "$@" </dev/null &
+    pid=$!
+    _PARALLEL_AUX_PIDS+=("$pid"); _PARALLEL_AUX_DONE+=(false)
+    case "$monitor_flags" in *m*) ;; *) set +m ;; esac
+    _PARALLEL_DISPATCHING=$dispatching
+    [ "$_PARALLEL_INTERRUPT_STATUS" -eq 0 ] || exit "$_PARALLEL_INTERRUPT_STATUS"
+    # Bash wait is interruptible by the parent's signal trap. Its EXIT cleanup
+    # can now stop the helper while its native runner still owns child cleanup.
+    wait "$pid" || status=$?
+    _PARALLEL_AUX_DONE[$index]=true
+    return "$status"
+}
+
 # Only children launched as monitor-mode jobs belong to these process groups.
-# Cancel and bounded-join every group before deleting files or stopping display.
+# Give native Go owners time to close their separate client-probe groups before
+# escalating. All owned jobs are joined before files or presentation are removed.
 parallel_cancel_jobs() {
     [ -n "$_PARALLEL_ROOT" ] && [ -d "$_PARALLEL_ROOT" ] || return 0
-    local i=0 pid tick=0 alive=false
+    local i=0 pid tick=0 alive=false deadline=$((SECONDS + 5))
     : > "$_PARALLEL_ROOT/cancel"
     while [ "$i" -lt "${#_PARALLEL_PIDS[@]}" ]; do
         pid=${_PARALLEL_PIDS[$i]}
         [ "${_PARALLEL_DONE[$i]}" = true ] || kill -TERM -- "-$pid" 2>/dev/null || true
         i=$((i + 1))
     done
-    while [ "$tick" -lt 20 ]; do
+    i=0
+    while [ "$i" -lt "${#_PARALLEL_AUX_PIDS[@]}" ]; do
+        pid=${_PARALLEL_AUX_PIDS[$i]}
+        [ "${_PARALLEL_AUX_DONE[$i]}" = true ] || kill -TERM -- "-$pid" 2>/dev/null || true
+        i=$((i + 1))
+    done
+    while [ "$tick" -lt 100 ] && [ "$SECONDS" -lt "$deadline" ]; do
         alive=false; i=0
         while [ "$i" -lt "${#_PARALLEL_PIDS[@]}" ]; do
             if [ "${_PARALLEL_DONE[$i]}" != true ] && kill -0 -- "-${_PARALLEL_PIDS[$i]}" 2>/dev/null; then alive=true; fi
+            i=$((i + 1))
+        done
+        i=0
+        while [ "$i" -lt "${#_PARALLEL_AUX_PIDS[@]}" ]; do
+            if [ "${_PARALLEL_AUX_DONE[$i]}" != true ] && kill -0 -- "-${_PARALLEL_AUX_PIDS[$i]}" 2>/dev/null; then alive=true; fi
             i=$((i + 1))
         done
         [ "$alive" = true ] || break
@@ -2980,12 +3026,29 @@ parallel_cancel_jobs() {
     while [ "$i" -lt "${#_PARALLEL_PIDS[@]}" ]; do
         pid=${_PARALLEL_PIDS[$i]}
         if [ "${_PARALLEL_DONE[$i]}" != true ]; then
-            kill -KILL -- "-$pid" 2>/dev/null || true
+            if kill -0 -- "-$pid" 2>/dev/null; then
+                _PARALLEL_FORCED_STOP=true
+                kill -KILL -- "-$pid" 2>/dev/null || true
+            fi
             wait "$pid" 2>/dev/null || true
             _PARALLEL_DONE[$i]=true
         fi
         i=$((i + 1))
     done
+    i=0
+    while [ "$i" -lt "${#_PARALLEL_AUX_PIDS[@]}" ]; do
+        pid=${_PARALLEL_AUX_PIDS[$i]}
+        if [ "${_PARALLEL_AUX_DONE[$i]}" != true ]; then
+            if kill -0 -- "-$pid" 2>/dev/null; then
+                _PARALLEL_FORCED_STOP=true
+                kill -KILL -- "-$pid" 2>/dev/null || true
+            fi
+            wait "$pid" 2>/dev/null || true
+            _PARALLEL_AUX_DONE[$i]=true
+        fi
+        i=$((i + 1))
+    done
+    if [ "$_PARALLEL_FORCED_STOP" = true ]; then _KEEP_CONFIG_STAGE=true; _KEEP_PORTABLE_STAGE=true; fi
 }
 
 parallel_read_result() {
@@ -3020,6 +3083,32 @@ parallel_drain_events() {
         progress_phase "$id" "$phase" "$outcome"
     done < "$file"
     _PARALLEL_LINES[$index]=$line
+}
+
+# After the producer has stopped, recover only finite facts from the parent's
+# private journal. Do not append while replaying or parse provider output.
+parallel_replay_progress() {
+    local file=$_PROGRESS_JOURNAL bytes kind id phase outcome extra index
+    [ -n "$file" ] && [ -f "$file" ] && [ ! -L "$file" ] || return 0
+    bytes=$(LC_ALL=C wc -c < "$file") || return 0
+    [ "$bytes" -le 262144 ] || return 0
+    while IFS=$'\t' read -r kind id phase outcome extra; do
+        case "$kind" in transition|snapshot) ;; *) continue ;; esac
+        [ -z "$extra" ] || continue
+        case "$id" in claude|codex|opencode|gemini) ;; *) continue ;; esac
+        case "$phase" in pending|preparation|marketplace|download|runtime|verification|waiting|registration|runtime-lookup|config|MCP|complete) ;; *) continue ;; esac
+        case "$outcome" in not_started|running|done|state_requires_inspection|registration_committed|registration_committed_follow_up_not_started|completed|activation_failed|activation_timeout|activation_canceled|activation_deadline|activation_not_attempted) ;; *) continue ;; esac
+        index=0
+        while [ "$index" -lt "${#_PROGRESS_IDS[@]}" ]; do
+            if [ "${_PROGRESS_IDS[$index]}" = "$id" ]; then
+                if [ "$phase" = MCP ] && [ "$outcome" = completed ]; then phase=complete; fi
+                _PROGRESS_PHASES[$index]=$phase; _PROGRESS_OUTCOMES[$index]=$outcome
+                break
+            fi
+            index=$((index + 1))
+        done
+    done < "$file"
+    return 0
 }
 
 parallel_seed_policy() {
@@ -3058,6 +3147,7 @@ install_products_parallel() {
     chmod 700 "$_PARALLEL_ROOT" || return 1
     _PARALLEL_ACTIVE=true; _PARALLEL_POLICY_READY=false; _PARALLEL_READY_CLIENTS=""
     _PARALLEL_PIDS=(); _PARALLEL_CLIENTS=(); _PARALLEL_DONE=(); _PARALLEL_LINES=()
+    _PARALLEL_AUX_PIDS=(); _PARALLEL_AUX_DONE=(); _PARALLEL_FORCED_STOP=false; _PARALLEL_FOLLOW_UP_STARTED=false
     # The synchronous portable caller can append finite activation facts to this
     # same private journal after every primary worker has been joined.
     mkdir "$_CONFIG_STAGE/parallel" || return 1
@@ -3172,6 +3262,7 @@ install_products_parallel() {
     PLUGIN_ROOT=$claude_plugin; CONFIGURE_BINARY=${codex_binary:-$claude_binary}; PRODUCT=$LEGACY_PRODUCT
     if [ -n "$_PARALLEL_READY_CLIENTS" ]; then
         if [ "$CONFIGURE_NOTIFICATIONS" = true ] && [ "$_PARALLEL_POLICY_READY" = true ]; then
+            _PARALLEL_FOLLOW_UP_STARTED=true
             for selected in claude codex; do
                 case ",$_PARALLEL_READY_CLIENTS," in *",$selected,"*) progress_phase "$selected" MCP registration_committed ;; esac
             done
@@ -3763,7 +3854,7 @@ configure_agent_policy() {
     if [ "${1:-}" = portable ]; then
         configure_cmd+=(--policy-only --preserve-enabled)
     fi
-    if ! "$CONFIGURE_BINARY" "${configure_cmd[@]}"; then
+    if ! bootstrap_external "$CONFIGURE_BINARY" "${configure_cmd[@]}"; then
         echo -e "${YELLOW}⚠ Agent-notify setup failed; plugin/hooks install succeeded.${NC}" >&2
         echo -e "${YELLOW}  Plugin/hooks registration completed; inspect policy state before this config-only retry:${NC}" >&2
         printf '  %s\n' "$(quote_shell_command "$CONFIGURE_BINARY" "${configure_cmd[@]}")" >&2
@@ -3998,8 +4089,14 @@ setup_agent_notify_wizard() {
         structured_result=true
         set -- "$@" --json
     fi
-    wizard_result=$(mktemp "${TMPDIR:-/tmp}/bootstrap-wizard-XXXXXX") || return 1
-    "$CONFIGURE_BINARY" "$@" > "$wizard_result" || wizard_status=$?
+    if [ "$_PARALLEL_ACTIVE" = true ]; then
+        wizard_result=$(mktemp "$_CONFIG_STAGE/parallel/wizard-result-XXXXXX") || return 1
+        _PARALLEL_HELPER_CAPTURE=$wizard_result
+    else
+        wizard_result=$(mktemp "${TMPDIR:-/tmp}/bootstrap-wizard-XXXXXX") || return 1
+    fi
+    bootstrap_external "$CONFIGURE_BINARY" "$@" > "$wizard_result" || wizard_status=$?
+    _PARALLEL_HELPER_CAPTURE=""
     # JSON remains diagnostic input. Only the verified helper's finite typed
     # projection may update observer rows; arbitrary error bytes are never facts.
     if [ "$structured_result" = true ]; then
@@ -4042,10 +4139,12 @@ setup_agent_notify_wizard() {
             [ -z "$_FROZEN_CODEX_MCP" ] || set -- "$@" --mcp-config "$_FROZEN_CODEX_MCP"
         fi
     fi
-    if ! "$CONFIGURE_BINARY" "$@" > "$wizard_result" 2>/dev/null; then
+    [ "$_PARALLEL_ACTIVE" != true ] || _PARALLEL_HELPER_CAPTURE=$wizard_result
+    if ! bootstrap_external "$CONFIGURE_BINARY" "$@" > "$wizard_result" 2>/dev/null; then
         : > "$wizard_result"
         echo "Warning: installation finished, but agent notification tool status could not be checked." >&2
     fi
+    _PARALLEL_HELPER_CAPTURE=""
     CLAUDE_AGENT_NOTIFY_STATUS=$(wizard_tool_status "$wizard_result" claude "$AGENT_NOTIFY_REQUEST")
     CODEX_AGENT_NOTIFY_STATUS=$(wizard_tool_status "$wizard_result" codex "$AGENT_NOTIFY_REQUEST")
     rm -f "$wizard_result"

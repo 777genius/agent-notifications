@@ -4,8 +4,8 @@ go 1.25.8
 
 require (
 	github.com/777genius/plugin-kit-ai/cli v0.0.0-20261009180127-66c4943e0c83
-	github.com/777genius/plugin-kit-ai/install/integrationctl v0.1.1-0.20261026191219-ae575fb55208
-	github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins v0.0.0-20261026191219-ae575fb55208
+	github.com/777genius/plugin-kit-ai/install/integrationctl v0.1.1-0.20261026193753-3a3864fdb8d2
+	github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins v0.0.0-20261026193753-3a3864fdb8d2
 	github.com/777genius/plugin-kit-ai/sdk v1.3.0
 	github.com/charmbracelet/x/term v0.2.2
 	github.com/creack/pty v1.1.24

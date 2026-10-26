@@ -1365,6 +1365,156 @@ if os.name != 'nt':
 print('PASS concurrent installer jobs, policy barrier, serialized writers, isolated failure, completion-tail IPC, crashed lock holder and descendant cancellation')
 PY_PARALLEL_INSTALL
 
+# The parent must interrupt its synchronous wait while a native helper still
+# owns a client probe in a separate group, and allow that containment to close.
+python3 -I - "$SANDBOX" "$TEST_BOOTSTRAP_BASH" <<'PY_PARENT_HELPER_CANCEL'
+import os, pathlib, signal, subprocess, sys, time
+sandbox, bash = pathlib.Path(sys.argv[1]), sys.argv[2]
+if os.name == 'nt':
+    print('Parent helper process-group fixture requires POSIX; Windows parallel fanout is not advertised')
+    raise SystemExit(0)
+script=sandbox/'parent-helper-cancel-TEST.sh'
+script.write_text(r'''#!/bin/bash
+source "$TEST_PROGRESS_SOURCE"
+_UI_MODE=plain
+_PARALLEL_ROOT="$TEST_AUX_CASE/jobs"
+_PARALLEL_ACTIVE=true
+_PARALLEL_IN_FLIGHT=true
+_CONFIG_STAGE="$TEST_AUX_CASE/stage"
+_CONFIG_HELPER="$TEST_AUX_CASE/helper"
+CONFIGURE_BINARY="$_CONFIG_HELPER"
+PLUGIN_ROOT="$TEST_AUX_CASE/plugin"
+PRODUCT=codex
+DEFAULT_CODEX_HOME="$TEST_AUX_CASE/codex"
+_CODEX_EXEC="$TEST_AUX_CASE/absent-client"
+BOOTSTRAP_TAG=""
+_PARALLEL_POLICY_READY=true
+CONFIGURE_NOTIFICATIONS=true
+_PROGRESS_IDS=(codex)
+_PROGRESS_PHASES=(MCP)
+_PROGRESS_OUTCOMES=(registration_committed)
+case "$TEST_AUX_PHASE" in
+    typed-progress|typed-complete)
+        PRODUCT=both
+        _PARALLEL_FOLLOW_UP_STARTED=true
+        _PARALLEL_CLIENTS=(claude codex)
+        _PROGRESS_IDS=(claude codex)
+        _PROGRESS_PHASES=(MCP MCP)
+        _PROGRESS_OUTCOMES=(registration_committed registration_committed)
+        _PROGRESS_JOURNAL="$_CONFIG_STAGE/parallel/progress.events" ;;
+esac
+progress_start() { :; }
+progress_stop() { :; }
+report_progress() { progress_write_final_snapshot > "$TEST_AUX_CASE/final"; }
+report_diagnostics() { :; }
+diagnostic_capture_stage() {
+    if [ -n "$_PROGRESS_LOG" ] && [ -n "$_PROGRESS_STDERR" ]; then
+        cat "$_PROGRESS_LOG" "$_PROGRESS_STDERR" >> "$TEST_AUX_CASE/diagnostics"
+    fi
+}
+install_cleanup_traps
+case "$TEST_AUX_PHASE" in
+    install|inspect|typed-progress|typed-complete) run_setup_stage 'Configuring agent notification tools' setup_agent_notify_wizard ;;
+    config) run_setup_stage 'Preparing notification settings' initialize_config ;;
+    policy) run_setup_stage 'Preparing approved notification policy' configure_agent_policy portable ;;
+    download) run_setup_stage 'Downloading portable package' fetch_bootstrap_file http://fixture.invalid/package "$TEST_AUX_CASE/package" ;;
+esac
+''')
+helper=r'''#!/bin/bash
+set -eu
+case "$1 ${2:-}" in
+    'setup-notifications --help') echo '--policy-only --preserve-enabled'; exit 0 ;;
+    'installer-progress '*) exit 1 ;;
+    'setup-notifications wizard')
+        if [ "$TEST_AUX_PHASE" != "${4:-}" ]; then
+            case "$TEST_AUX_PHASE:${4:-}" in typed-progress:install|typed-complete:install) ;;
+                *) echo '{"outcome":"completed","targets":[]}'; exit 0 ;; esac
+        fi ;;
+    'config init') [ "$TEST_AUX_PHASE" = config ] || exit 91 ;;
+    'setup-notifications configure') [ "$TEST_AUX_PHASE" = policy ] || exit 92 ;;
+    '-fsSL '*) [ "$TEST_AUX_PHASE" = download ] || exit 93 ;;
+    *) exit 94 ;;
+esac
+set -m
+bash -c 'trap "exit 0" TERM INT HUP; while :; do sleep 0.1; done' &
+probe=$!
+set +m
+printf '%s\n' "$probe" > "$TEST_AUX_CASE/probe-pid"
+printf '%s\n' "$$" > "$TEST_AUX_CASE/helper-pid"
+close_containment() {
+    trap - TERM INT HUP
+    # Longer than the former one-second shell escalation. The helper must stay
+    # alive long enough to close the separately grouped native client probe.
+    sleep 1.2
+    kill -TERM -- "-$probe" 2>/dev/null || true
+    wait "$probe" 2>/dev/null || true
+    printf 'native-containment-closed\n' > "$TEST_AUX_CASE/closed"
+    exit 0
+}
+trap close_containment TERM INT HUP
+case "$TEST_AUX_PHASE" in
+    typed-progress|typed-complete)
+        printf 'transition\tclaude\tMCP\tactivation_timeout\n' >> "$TEST_AUX_CASE/stage/parallel/progress.events"
+        if [ "$TEST_AUX_PHASE" = typed-complete ]; then
+            printf 'transition\tcodex\tMCP\tcompleted\n' >> "$TEST_AUX_CASE/stage/parallel/progress.events"
+        else
+            printf 'transition\tcodex\tverification\trunning\n' >> "$TEST_AUX_CASE/stage/parallel/progress.events"
+        fi ;;
+esac
+printf 'parent-helper-live\n'
+printf 'ready\n' > "$TEST_AUX_CASE/started"
+wait "$probe"
+'''
+def wait_file(path, proc):
+    limit=time.monotonic()+20
+    while not path.exists() or not path.stat().st_size:
+        assert proc.poll() is None, proc.communicate()
+        assert time.monotonic()<limit, str(path)
+        time.sleep(.02)
+def gone(pid):
+    try: os.kill(pid, 0)
+    except ProcessLookupError: return True
+    state=pathlib.Path('/proc')/str(pid)/'stat'
+    return state.exists() and state.read_text().split()[2]=='Z'
+for phase in ('install','inspect','config','policy','download','typed-progress','typed-complete'):
+    case=sandbox/('parent-helper-'+phase); case.mkdir(mode=0o700)
+    for name in ('jobs','stage','stage/parallel','plugin','plugin/portable-package','tools'): (case/name).mkdir(mode=0o700)
+    (case/'plugin'/'portable-package'/'plugin.json').write_text('{}')
+    if phase in ('typed-progress','typed-complete'):
+        for client in ('claude','codex'):
+            job=case/'jobs'/client; job.mkdir(mode=0o700)
+            for leaf in ('stdout','stderr'): (job/leaf).write_text('')
+            (job/'result').write_text('installer-worker-v1\n0\n\n\nMCP\nregistration_committed_follow_up_not_started\n\n')
+    for path in (case/'helper',case/'tools'/'curl'): path.write_text(helper); path.chmod(0o700)
+    env=dict(os.environ, TEST_PROGRESS_SOURCE=str(sandbox/'functions.sh'), TEST_AUX_CASE=str(case), TEST_AUX_PHASE=phase,
+             PATH=str(case/'tools')+os.pathsep+os.environ['PATH'])
+    proc=subprocess.Popen([bash,str(script)],env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+    try:
+        wait_file(case/'helper-pid',proc); wait_file(case/'probe-pid',proc); wait_file(case/'started',proc)
+        owner=int((case/'helper-pid').read_text()); probe=int((case/'probe-pid').read_text())
+        started=time.monotonic(); proc.send_signal(signal.SIGTERM)
+        out,err=proc.communicate(timeout=9)
+        assert proc.returncode==143, (phase,out,err)
+        assert time.monotonic()-started<8, phase
+        assert (case/'closed').read_text()=='native-containment-closed\n', (phase,out,err)
+        assert gone(owner) and gone(probe), (phase,owner,probe,out,err)
+        assert (case/'stage').is_dir() and (case/'jobs').is_dir(), phase
+        assert b'required force' not in err, (phase,err)
+        assert 'parent-helper-live' in (case/'diagnostics').read_text(), phase
+        if phase in ('typed-progress','typed-complete'):
+            final=(case/'final').read_text()
+            assert 'claude\tMCP\tactivation_timeout' in final, final
+            if phase=='typed-progress':
+                assert 'codex\tverification\trunning' in final and 'codex\tcomplete\tcompleted' not in final, final
+            else: assert 'codex\tcomplete\tcompleted' in final, final
+    finally:
+        if proc.poll() is None:
+            proc.terminate()
+            try: proc.communicate(timeout=9)
+            except subprocess.TimeoutExpired: proc.kill(); proc.communicate(timeout=5)
+print('PASS parent cancellation closes helper containment, retains interrupted captures and preserves typed timeout/completion journal facts')
+PY_PARENT_HELPER_CANCEL
+
 [ "$_PRODUCT_TEST_UNIT_ONLY" != true ] || exit 0
 # Local HTTP and controlling-PTY integration. Installer/registration are explicit
 # fake adapters here; the fetched bootstrap, archive extraction and curl are real.
