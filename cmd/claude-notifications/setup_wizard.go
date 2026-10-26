@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -1286,25 +1285,11 @@ func composeCursorWizard(ctx context.Context, req setupwizard.Request) (_ setupw
 		if agent == "" {
 			agent = req.ClientExecutable
 		}
+		// Do not gate the installed Cursor CLI on a test/qualification version.
+		// Admit by executable presence and the profile/capability contract below.
 		agent, err = normalizeProductExecutable(agent)
 		if err != nil {
 			return req, err
-		}
-		versionTimeout := 2 * time.Second
-		if runtime.GOOS == "darwin" || runtime.GOOS == "windows" {
-			versionTimeout = 15 * time.Second
-		}
-		probe, cancel := context.WithTimeout(ctx, versionTimeout)
-		environment := []string{"HOME=" + filepath.Dir(req.CursorConfig), "PATH=" + os.Getenv("PATH")}
-		if runtime.GOOS == "darwin" {
-			// Use noninteractive mode for the bounded version inspection.
-			environment = append(environment, "AGENT_CLI_CREDENTIAL_STORE=file", "CI=1")
-		}
-		version, e := probeCursorVersion(probe, agent, environment)
-		cancel()
-		expectedVersion, _ := cursorinstall.CurrentTuple()
-		if e != nil || expectedVersion == "" || strings.TrimSpace(version) != expectedVersion {
-			return req, fmt.Errorf("cursor agent version is outside the fixed tuple: %w", e)
 		}
 		req.ClientExecutables = map[string]string{"cursor": agent}
 		if filepath.Base(req.CursorConfig) != ".cursor" {

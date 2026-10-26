@@ -18,7 +18,7 @@ on:
       - 'tests/integration/gemini_frame_capture.py'
       - 'tests/integration/gemini_frame_capture_test.py'
       - 'tests/integration/gemini_frame_classifier/**'
-      - 'tests/integration/gemini-ui-contract.json'
+      - 'tests/integration/gemini-ui-contract*.json'
       - 'cmd/claude-notifications/**'
       - 'internal/**'
       - 'go.mod'
@@ -33,13 +33,13 @@ permissions:
 
 jobs:
   native-webhook:
-    name: Gemini ${{ matrix.platform }} ${{ matrix.arch }}
+    name: Gemini ${{ matrix.gemini }} ${{ matrix.platform }} ${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.driver == 'g5-only' && '[{"runner":"ubuntu-24.04","platform":"linux","arch":"amd64"}]' || '[{"runner":"ubuntu-24.04","platform":"linux","arch":"amd64"},{"runner":"ubuntu-24.04-arm","platform":"linux","arch":"arm64"},{"runner":"windows-2025","platform":"windows","arch":"amd64"},{"runner":"macos-15","platform":"darwin","arch":"arm64"},{"runner":"macos-15-intel","platform":"darwin","arch":"amd64"}]') }}
+        include: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.driver == 'g5-only' && '[{"runner":"ubuntu-24.04","platform":"linux","arch":"amd64","gemini":"0.62.0"}]' || '[{"runner":"ubuntu-24.04","platform":"linux","arch":"amd64","gemini":"0.62.0"},{"runner":"ubuntu-24.04-arm","platform":"linux","arch":"arm64","gemini":"0.62.0"},{"runner":"windows-2025","platform":"windows","arch":"amd64","gemini":"0.62.0"},{"runner":"macos-15","platform":"darwin","arch":"arm64","gemini":"0.62.0"},{"runner":"macos-15-intel","platform":"darwin","arch":"amd64","gemini":"0.62.0"},{"runner":"ubuntu-24.04","platform":"linux","arch":"amd64","gemini":"0.65.0"},{"runner":"macos-15","platform":"darwin","arch":"arm64","gemini":"0.65.0"}]') }}
     steps:
       - name: Checkout exact candidate
         uses: actions/checkout@v7
@@ -74,10 +74,11 @@ jobs:
           CANDIDATE_DRIVER: ${{ github.event_name == 'workflow_dispatch' && inputs.driver || 'full' }}
           CANDIDATE_PLATFORM: ${{ matrix.platform }}
           CANDIDATE_ARCH: ${{ matrix.arch }}
+          CANDIDATE_GEMINI: ${{ matrix.gemini }}
           CANDIDATE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           $hookShell = if ($IsWindows) { (Get-Command pwsh -CommandType Application | Select-Object -First 1).Source } else { (Get-Command bash -CommandType Application | Select-Object -First 1).Source }
-          $argsForCI = @('--trusted-github-runner', '--platform', $env:CANDIDATE_PLATFORM, '--arch', $env:CANDIDATE_ARCH, '--commit', $env:CANDIDATE_COMMIT, '--hook-shell', $hookShell)
+          $argsForCI = @('--gemini-version', $env:CANDIDATE_GEMINI, '--trusted-github-runner', '--platform', $env:CANDIDATE_PLATFORM, '--arch', $env:CANDIDATE_ARCH, '--commit', $env:CANDIDATE_COMMIT, '--hook-shell', $hookShell)
           if ($env:CANDIDATE_DRIVER -eq 'g5-only') { $argsForCI += '--g5-only' }
           if ($IsWindows) { $argsForCI += @('--system-root', $env:SystemRoot) }
           python -B scripts/gemini-native-ci.py @argsForCI
@@ -86,7 +87,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: gemini-native-${{ matrix.platform }}-${{ matrix.arch }}
+          name: gemini-native-${{ matrix.gemini }}-${{ matrix.platform }}-${{ matrix.arch }}
           # Only the explicit evidence directory is uploaded, never the TEST lab.
           path: ${{ runner.temp }}/gemini-native-ci-evidence/*
           if-no-files-found: warn

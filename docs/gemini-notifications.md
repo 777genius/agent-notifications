@@ -25,9 +25,21 @@ Gemini capabilities. Claude/Codex capabilities and OpenCode limits remain separa
 
 ## Installation
 
-Install exactly Gemini CLI **0.62.0** first and make `gemini` available on `PATH`; the installer rejects other versions. On macOS, Linux or Windows, use the public platform installer
+Install Gemini CLI and make `gemini` available on `PATH`. The installer does not impose version minimums, maximums or exact-version allowlists. On macOS, Linux or Windows, use the public platform installer
 shown below. Its source bundle and binaries come from the same qualified release.
 The installer selects the matching native assets automatically.
+
+### Versions and test coverage
+
+CLI versions do not gate installation, including prereleases. An installed CLI
+must still provide the hooks and settings capabilities used by the integration;
+actual command or schema failures are reported at that boundary.
+
+Native CI keeps exact 0.62.0 baseline coverage on five platforms and exact
+0.65.0 coverage on Linux amd64 and macOS arm64. These pins make tests
+reproducible; they do not limit the versions users may install. Each run records
+the actual version, upstream source and installed package hashes. The historical
+results below retain their original scope and do not qualify every CLI version.
 
 ### Platform installer selectors
 

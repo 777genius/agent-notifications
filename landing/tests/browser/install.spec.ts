@@ -551,12 +551,12 @@ test("released agents toggle independently, copied commands and configuration co
   await expect(qualification).not.toBeVisible();
   await expect(compatibility.getByText(/^\* Codex questions depend/)).not.toBeVisible();
   await expect(compatibility.getByText(/^OpenCode: silent completion/)).not.toBeVisible();
-  await expect(page.getByText(/Stable OpenCode V1 ≥1.18.29 and V2 ≥2.0.0/)).not.toBeVisible();
+  await expect(page.getByText(/OpenCode CLI versions are not restricted/)).not.toBeVisible();
   await page.locator(".agent-support summary").click();
   await expect(qualification).toBeVisible();
   await expect(compatibility.getByText(/^\* Codex questions depend/)).toBeVisible();
   await expect(compatibility.getByText(/^OpenCode: silent completion/)).toBeVisible();
-  await expect(page.getByText(/Stable OpenCode V1 ≥1.18.29 and V2 ≥2.0.0/)).toBeVisible();
+  await expect(page.getByText(/OpenCode CLI versions are not restricted/)).toBeVisible();
   await expect(page.getByRole("link", { name: "What is OpenCode V2? ↗" })).toHaveAttribute("href", "https://opencode.ai/v2/docs");
   await expect(page.getByRole("group", { name: "OpenCode notification channels" })).toHaveCount(0);
   const agentNotify = page.getByRole("checkbox", { name: /Let agents send/ });
@@ -649,7 +649,7 @@ test("manual instructions preserve legacy links and offer Gemini guidance", asyn
     await expect(page.getByRole("button", { name: "Gemini CLI", exact: true })).toBeEnabled();
     await chooseAgents(page, ["gemini"]);
     await expect(manual.getByRole("link", { name: "Gemini setup and limits", exact: true })).toBeVisible();
-    await expect(manual).toContainText("Gemini CLI requires exactly version 0.62.0.");
+    await expect(manual).toContainText("Gemini CLI versions are not restricted");
     await expect(page.getByLabel(intent + " command", { exact: true })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Copy command" })).toHaveCount(0);
   }

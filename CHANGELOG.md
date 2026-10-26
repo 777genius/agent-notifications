@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Remove host CLI version admission restrictions for Gemini, OpenCode and Cursor, and remove the Codex inventory version allowlist. Preserve capability, schema, ownership and release-provenance checks; exact versions remain only as reproducible test targets.
+
 ## [1.49.8] - 2026-10-26
 
 ### Fixed
