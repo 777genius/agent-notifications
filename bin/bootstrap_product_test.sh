@@ -1157,6 +1157,86 @@ for engine in ('python3', 'node'):
 print('PASS private durable diagnostic storage or native Windows refusal, truncation, symlink denial and honest write failure')
 PY_DIAGNOSTIC_STORAGE
 
+# A lock release between failed mkdir and inspection must retry, while an
+# existing non-directory lock, cancel marker or nonblocking contention must keep
+# its finite refusal/status contract. No installer/vendor command runs here.
+python3 -I - "$SANDBOX" "$TEST_BOOTSTRAP_BASH" <<'PY_WRITER_GATE_RACE'
+import os, pathlib, shutil, subprocess, sys
+sandbox,bash=pathlib.Path(sys.argv[1]),sys.argv[2]
+real_mkdir,real_rmdir=shutil.which('mkdir'),shutil.which('rmdir')
+assert real_mkdir and real_rmdir
+script=sandbox/'writer-gate-race-TEST.sh'
+script.write_text(r'''#!/bin/bash
+source "$TEST_GATE_SOURCE"
+_PARALLEL_ROOT="$TEST_GATE_CASE"
+fixture_callback() {
+    [ "$_PARALLEL_GATE_HELD" = true ] || return 91
+    printf 'acquired\n' >> "$TEST_GATE_CASE/callbacks"
+}
+set -- fixture_callback
+case "$TEST_GATE_MODE" in busy|file-try|symlink-try|always-absent-try) set -- --try fixture_callback ;; esac
+status=0
+if [ "$TEST_GATE_MODE" = always-absent-try ]; then
+    attempts=0
+    while [ "$attempts" -lt 40 ]; do
+        status=0; bootstrap_writer_gate "$@" || status=$?
+        [ "$status" -eq 75 ] || break
+        attempts=$((attempts + 1))
+    done
+else
+    bootstrap_writer_gate "$@" || status=$?
+fi
+printf '%s\n' "$_PARALLEL_GATE_ABSENT_FAILURES" > "$TEST_GATE_CASE/absent-failures"
+printf '%s\n' "$status" > "$TEST_GATE_CASE/status"
+printf '%s\n' "$_PARALLEL_GATE_BUSY" > "$TEST_GATE_CASE/busy"
+''')
+mkdir_stub=r'''#!/bin/bash
+if [ "$1" = "$TEST_GATE_CASE/writer.lock" ]; then
+    printf 'attempt\n' >> "$TEST_GATE_CASE/attempts"
+    case "$TEST_GATE_MODE" in always-absent|always-absent-try) exit 1 ;; esac
+    if [ "$TEST_GATE_MODE" = race ] && [ ! -e "$TEST_GATE_CASE/released" ]; then
+        "$TEST_REAL_MKDIR" "$@" 2>/dev/null
+        status=$?
+        [ "$status" -ne 0 ] || exit 92
+        # The owner releases after mkdir has failed, before the caller sees it.
+        "$TEST_REAL_RMDIR" "$@" || exit 93
+        : > "$TEST_GATE_CASE/released"
+        exit "$status"
+    fi
+fi
+exec "$TEST_REAL_MKDIR" "$@"
+'''
+for mode in ('race','file','file-try','busy','cancel','always-absent','always-absent-try') + (() if os.name=='nt' else ('symlink','symlink-try')):
+    case=sandbox/('writer-gate-'+mode); case.mkdir(mode=0o700)
+    tools=case/'tools';tools.mkdir(mode=0o700)
+    stub=tools/'mkdir';stub.write_text(mkdir_stub);stub.chmod(0o700)
+    lock=case/'writer.lock'
+    if mode in ('race','busy'): lock.mkdir(mode=0o700)
+    elif mode in ('file','file-try'): lock.write_text('must remain untouched\n')
+    elif mode in ('symlink','symlink-try'): lock.symlink_to(case/'missing-target')
+    elif mode=='cancel': (case/'cancel').touch()
+    env=dict(os.environ,PATH=str(tools)+os.pathsep+os.environ['PATH'],TEST_GATE_MODE=mode,TEST_GATE_CASE=str(case),
+             TEST_GATE_SOURCE=str(sandbox/'functions.sh'),TEST_REAL_MKDIR=real_mkdir,TEST_REAL_RMDIR=real_rmdir)
+    proc=subprocess.run([bash,str(script)],env=env,capture_output=True,timeout=8)
+    assert proc.returncode==0,(mode,proc.stdout,proc.stderr)
+    expected={'race':0,'file':1,'file-try':1,'symlink':1,'symlink-try':1,'busy':75,'cancel':130,'always-absent':1,'always-absent-try':1}[mode]
+    assert int((case/'status').read_text())==expected,(mode,proc.stdout,proc.stderr)
+    assert (case/'busy').read_text()==('true\n' if mode=='busy' else 'false\n')
+    if mode=='race':
+        assert (case/'callbacks').read_text()=='acquired\n'
+        assert (case/'attempts').read_text()=='attempt\nattempt\n'
+        assert not lock.exists() and not (case/'cancel').exists()
+    else:
+        assert not (case/'callbacks').exists(),mode
+        if mode in ('file','file-try'): assert lock.read_text()=='must remain untouched\n'
+        if mode in ('symlink','symlink-try'): assert lock.is_symlink()
+        if mode=='busy': assert lock.is_dir() and (case/'absent-failures').read_text()=='0\n'
+        if mode in ('always-absent','always-absent-try'):
+            assert (case/'absent-failures').read_text()=='32\n'
+            assert len((case/'attempts').read_text().splitlines())==32 and (case/'cancel').is_file()
+print('PASS writer gate release race, invalid paths, cancel/nonblocking statuses and bounded absent-path failures')
+PY_WRITER_GATE_RACE
+
 # Latches fail if jobs serialize, failures cancel siblings, policy is seeded
 # after observer consent, or shared transactions overlap.
 python3 -I - "$SANDBOX" "$TEST_BOOTSTRAP_BASH" <<'PY_PARALLEL_INSTALL'
@@ -1321,7 +1401,7 @@ def wait_for(path, proc):
             raise AssertionError((str(path), proc.returncode, out, err))
         assert time.monotonic()<limit, str(path)
         time.sleep(.02)
-for failure in ('', 'claude', 'mcp', 'all-legacy', 'trailing', 'crash-holder', 'mcp-partial', 'gate-release', 'qoder'):
+for failure in ('', 'claude', 'mcp', 'all-legacy', 'trailing', 'crash-holder', 'mcp-partial', 'gate-release', 'qoder', 'gate-mkdir'):
     case = sandbox/('parallel-'+(failure or 'success')); case.mkdir(mode=0o700)
     (case/'stage').mkdir(); helper=case/'stage'/'helper'; helper.write_text('#!/bin/bash\nexit 0\n'); helper.chmod(0o700)
     (case/'frozen-intent').write_text('immutable fixture intent\n')
@@ -1341,9 +1421,23 @@ exec "$TEST_REAL_RMDIR" "$@"
 ''')
         stub.chmod(0o700)
         env.update(PATH=str(tools)+os.pathsep+env['PATH'], TEST_REAL_RMDIR=real_rmdir)
+    if failure=='gate-mkdir':
+        real_mkdir=shutil.which('mkdir'); assert real_mkdir
+        tools=case/'tools'; tools.mkdir(mode=0o700)
+        stub=tools/'mkdir'
+        stub.write_text('''#!/bin/bash
+case "$1" in */writer.lock)
+    : > "$TEST_PARALLEL_CASE/mkdir-failed"
+    exit 1 ;;
+esac
+exec "$TEST_REAL_MKDIR" "$@"
+''')
+        stub.chmod(0o700)
+        env.update(PATH=str(tools)+os.pathsep+env['PATH'], TEST_REAL_MKDIR=real_mkdir)
     proc=subprocess.Popen([bash, str(script)], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     children.append(proc)
     names=('claude-started','opencode-acquired','gemini-acquired','qoder-acquired') if failure=='all-legacy' else ('claude-started','codex-ready','opencode-ready','gemini-ready','qoder-ready')
+    if failure=='gate-mkdir': names=('claude-started','mkdir-failed','opencode-acquired','gemini-acquired','qoder-acquired')
     if failure=='gate-release': names=('claude-started','release-failed','opencode-acquired','gemini-acquired','qoder-acquired')
     if failure=='qoder': names=('claude-started','codex-ready','opencode-ready','gemini-ready','qoder-acquired')
     if failure=='crash-holder':
@@ -1358,9 +1452,9 @@ exec "$TEST_REAL_RMDIR" "$@"
         if os.name!='nt': assert stage.stat().st_mode & 0o777 == 0o700
     (case/'claude-release').touch()
     out, err=proc.communicate(timeout=12)
-    assert proc.returncode == (1 if failure in ('claude','mcp','all-legacy','crash-holder','mcp-partial','gate-release','qoder') else 0), (failure, out, err)
+    assert proc.returncode == (1 if failure in ('claude','mcp','all-legacy','crash-holder','mcp-partial','gate-release','qoder','gate-mkdir') else 0), (failure, out, err)
     assert not (case/'overlap').exists()
-    if failure=='gate-release':
+    if failure in ('gate-release','gate-mkdir'):
         assert not (case/'mcp-ready-clients').exists() and not (case/'init').exists()
         assert '\tcomplete\tcompleted' not in (case/'final').read_text()
         assert not (case/'summary').exists() or not (case/'summary').read_text()

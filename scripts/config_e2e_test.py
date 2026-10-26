@@ -123,13 +123,14 @@ main "$@"
         self.requests = []
         requests = self.requests
         self.asset_gate_enabled = False
+        self.asset_gate_path = '/' + COMMIT + '.tar.gz'
         self.asset_gate_entered = threading.Event()
         self.asset_gate_release = threading.Event()
         suite = self
         class Handler(http.server.SimpleHTTPRequestHandler):
             def do_GET(self):
                 requests.append(self.path)
-                if suite.asset_gate_enabled and self.path.endswith('/' + suite.asset):
+                if suite.asset_gate_enabled and self.path == suite.asset_gate_path:
                     suite.asset_gate_entered.set()
                     assert suite.asset_gate_release.wait(30), 'asset barrier timeout'
                 super().do_GET()
@@ -172,7 +173,7 @@ shutil.copytree(os.environ['SOURCE'],root,dirs_exist_ok=True)
         runtime = base / 'runtime-bin'
         runtime.mkdir()
         names = ['bash', 'sh', 'mktemp', 'rm', 'rmdir', 'cat', 'chmod', 'mkdir', 'ln', 'uname',
-                 'tr', 'head', 'cp', 'mv', 'env', 'true', 'false', 'grep', 'sed', 'awk',
+                 'tr', 'head', 'cp', 'mv', 'env', 'true', 'false', 'cmp', 'grep', 'sed', 'awk',
                  'tar', 'gzip', 'curl', 'cut', 'basename', 'dirname', 'touch', 'sha256sum',
                  'stat', 'wc', 'date', 'sleep']
         if python and not stub_python:
@@ -446,10 +447,10 @@ shutil.copytree(os.environ['SOURCE'],root,dirs_exist_ok=True)
             '/statuses/task_complete/title': 'concurrent edit survived',
         }}
 
-        # The HTTP barrier holds the real installer after it has requested its
-        # verified helper. The persistent target lock independently holds the
-        # real settings writer while the hook reads the last complete config.
-        # No timing sleep decides when any participant may cross a boundary.
+        # Hold source acquisition after the immutable product plan is frozen.
+        # The target lock independently holds the settings writer while the
+        # hook reads the last complete config. No timing sleep decides when
+        # any participant may cross a boundary.
         self.asset_gate_entered.clear()
         self.asset_gate_release.clear()
         self.asset_gate_enabled = True
@@ -483,7 +484,11 @@ shutil.copytree(os.environ['SOURCE'],root,dirs_exist_ok=True)
                 fcntl.flock(held, fcntl.LOCK_EX)
                 install = start(['/bin/bash', ROOT / 'bin/bootstrap.sh', '--product', 'both', '--skip-agent-notify'],
                                 subprocess.DEVNULL)
-                assert self.asset_gate_entered.wait(15), 'installer did not reach asset barrier'
+                assert self.asset_gate_entered.wait(15), 'installer did not reach source acquisition barrier'
+                intents = list(Path(env['TMPDIR']).glob('bootstrap-config-*/selector-intent.json'))
+                assert len(intents) == 1 and intents[0].is_file() and not intents[0].is_symlink(), 'source acquisition preceded frozen plan'
+                assert (intents[0].parent / 'selector-prepare.result').read_bytes() == b'prepared\n', 'product prepare did not finish before edit'
+                frozen_plan = snapshot(intents[0])
                 settings = start(
                     [self.binary, 'config', 'edit', '--stdin', '--expect-revision', inspection['revision']],
                     subprocess.PIPE)
@@ -497,6 +502,7 @@ shutil.copytree(os.environ['SOURCE'],root,dirs_exist_ok=True)
                 assert settings.poll() is None, 'settings writer bypassed config lock'
                 hook_out = hook.communicate(timeout=30)
                 assert hook.returncode == 0, 'hook failed while settings was blocked: %s' % ((hook_out[0] + hook_out[1]).decode(errors='replace'))
+                assert snapshot(intents[0]) == frozen_plan, 'blocked settings writer changed the frozen plan'
                 self.asset_gate_release.set()
                 fcntl.flock(held, fcntl.LOCK_UN)
 
