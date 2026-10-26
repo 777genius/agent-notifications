@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.49.10] - 2026-10-26
+
+### Fixed
+- Install selected clients concurrently on macOS and Linux, coordinate shared runtime and settings writes, and preserve successful clients when another client fails.
+- Use bounded 30-second Claude verification and isolate cleanup-confirmed local timeouts so an unrelated client can finish activating.
+- Show each client's current operation and elapsed wait, retaining saved registration and partial-completion facts after failure or cancellation.
+
 ## [1.49.9] - 2026-10-26
 
 ### Fixed
