@@ -84,6 +84,8 @@ type transaction struct {
 // Request stages ordinary file bytes before Commit. Prepare runs under the
 // component and config locks, and may only compute adapter-owned JSON changes.
 type Request struct {
+	// cacheRepair is set only by the exact missing-cache repair adapter.
+	cacheRepair bool
 	// OrphanRecovery is an exclusive absence-only metadata transaction.
 	// ExpectedPolicy may additionally fence preview's raw policy observation.
 	OrphanRecovery *OrphanRecoveryRequest
@@ -395,7 +397,7 @@ func Commit(ctx context.Context, r Request) (result Ledger, resultErr error) {
 		}
 	}
 	lockComponent := Lock
-	if r.PolicyOnly || orphanPending {
+	if r.PolicyOnly || orphanPending || r.cacheRepair {
 		lockComponent = LockExisting
 	}
 	unlock, err := lockComponent(ctx, filepath.Join(root, ".component-install.lock"))
@@ -430,7 +432,7 @@ func Commit(ctx context.Context, r Request) (result Ledger, resultErr error) {
 		}
 	}
 	if readErr == nil {
-		if r.PolicyOnly {
+		if r.PolicyOnly || r.cacheRepair {
 			return Ledger{}, ErrPolicyRecovery
 		}
 		paths = append(paths, pending.ConfigPaths...)
@@ -453,7 +455,7 @@ func Commit(ctx context.Context, r Request) (result Ledger, resultErr error) {
 			continue
 		}
 		lockConfig := Lock
-		if (r.PolicyOnly || orphanPending) && p == policyPath {
+		if (r.PolicyOnly || orphanPending || r.cacheRepair) && p == policyPath {
 			lockConfig = LockExisting
 		}
 		release, e := lockConfig(ctx, p+".lock")
@@ -984,6 +986,7 @@ func Commit(ctx context.Context, r Request) (result Ledger, resultErr error) {
 		}
 	}
 	journalAttempted = true
+	retainCacheRepairPayloads(root, tx.After, tx.Files)
 	if err := writeTransaction(marker, tx); err != nil {
 		return l, err
 	}
@@ -1178,6 +1181,7 @@ func recoverTransaction(ctx context.Context, root string, current Ledger, tx tra
 	if err := discardTransactionBlobs(filepath.Join(root, "transaction.json")); err != nil {
 		return err
 	}
+	pruneCacheRepairPayloads(root, after)
 	return syncDir(root)
 }
 

@@ -652,7 +652,16 @@ check_prerequisites() { :; }; detect_platform() { :; }
 resolve_bootstrap_release() { BOOTSTRAP_TAG=v1.43.2; }
 install_claude() { [ "$CN_PRODUCT" = claude ]; PLUGIN_ROOT='bundle space'; echo claude >> "$SANDBOX/calls"; }
 install_codex() { [ "${CN_PRODUCT:-}" = sentinel ]; echo codex >> "$SANDBOX/calls"; }
-stage_historical_baselines() { :; }; stage_config_helper() { _CONFIG_STAGE=$(mktemp -d); }; config_preflight() { :; }; initialize_config() { :; }
+cat > "$SANDBOX/repair-helper" <<'REPAIR_PEER'
+#!/bin/bash
+case "$1 ${2:-}" in
+    'setup-products repair-capabilities') printf 'cache-repair-v1\n' ;;
+    'setup-products repair-cache') printf 'ready\n' ;;
+    *) exit 99 ;;
+esac
+REPAIR_PEER
+chmod +x "$SANDBOX/repair-helper"
+stage_historical_baselines() { :; }; stage_config_helper() { _CONFIG_STAGE=$(mktemp -d); _CONFIG_HELPER="$SANDBOX/repair-helper"; }; config_preflight() { :; }; initialize_config() { :; }
 export CN_PRODUCT=sentinel
 for product in claude codex both; do
     : > "$SANDBOX/calls"
@@ -766,6 +775,8 @@ printf '%s\0' "$@" > "$TEST_TRACE/$trace_name"
 case "$1 ${2:-}" in
     'setup-products capabilities') printf 'setup-products-v1 claude codex opencode gemini\n' ;;
     'setup-products features') printf 'terminal-selector-v1\n' ;;
+    'setup-products repair-capabilities') printf 'cache-repair-v1\n' ;;
+    'setup-products repair-cache') printf 'ready\n' ;;
     'setup-products select') printf '%s\n' "${TEST_SELECTION:-cursor}" ;;
     'setup-products channels') [ "${TEST_CANCEL:-}" = channels ] || printf '%s\n' "$TEST_CHANNELS" ;;
     'setup-products confirm')
@@ -839,7 +850,9 @@ def run(args, changes=None, raw=None):
     calls = [p.read_bytes().split(b'\0')[:-1] for p in trace.iterdir() if p.name != 'mutation']
     return process.returncode, calls, output.decode(errors='replace')
 def call(calls, prefix):
-    return next(c for c in calls if c[:len(prefix)] == [s.encode() for s in prefix])
+    matches = [c for c in calls if c[:len(prefix)] == [s.encode() for s in prefix]]
+    assert matches, (prefix, calls)
+    return matches[0]
 def value(args, key): return args[args.index(key.encode())+1]
 for selection in (['--product', 'cursor'], ['--products', 'cursor'], []):
     for channels in (['--desktop'], ['--webhook'], ['--desktop', '--webhook'], []):
@@ -1270,6 +1283,8 @@ if args[0]=='setup-codex':
 if args[0]=='setup-notifications':
     print('Error: unknown command: setup-notifications', file=sys.stderr)
     sys.exit(1)
+if args[:2]==['setup-products','repair-cache']:
+    print('ready'); sys.exit()
 assert args[0]=='config'
 legacy=pathlib.Path(os.environ['HOME'])/'.claude/claude-notifications-go/config.json'
 neutral=pathlib.Path(os.environ['XDG_CONFIG_HOME'])/'agent-notifications/config.json'
@@ -1499,7 +1514,8 @@ assert (live/'bin/claude-notifications').read_text() == 'stale'
 # Menu routing for Claude/both uses explicit adapters; Codex below exercises
 # the complete bootstrap HTTP/staging path with fake runtime assets.
 dispatch = fixture_bootstrap.replace('main "$@"', '')
-dispatch += '\ncheck_prerequisites() { :; }\nresolve_bootstrap_release() { :; }\nstage_historical_baselines() { :; }\nstage_config_helper() { _CONFIG_STAGE=$(mktemp -d); }\nconfig_preflight() { :; }\ninitialize_config() { :; }\ninstall_claude() { echo CLAUDE_ADAPTER; }\ninstall_codex() { echo CODEX_ADAPTER; }\nmain "$@"\n'
+dispatch += '\ncheck_prerequisites() { :; }\nresolve_bootstrap_release() { :; }\nstage_historical_baselines() { :; }\nstage_config_helper() { _CONFIG_STAGE=$(mktemp -d); _CONFIG_HELPER=REPAIR_PEER_PATH; }\nconfig_preflight() { :; }\ninitialize_config() { :; }\ninstall_claude() { echo CLAUDE_ADAPTER; }\ninstall_codex() { echo CODEX_ADAPTER; }\nmain "$@"\n'
+dispatch = dispatch.replace('REPAIR_PEER_PATH', shlex.quote(str(sandbox/'repair-helper')))
 (web / 'dispatch.sh').write_bytes(dispatch.encode('utf-8'))
 # The native SelectMany UI is independently exercised against the actual
 # candidate by bootstrap_opencode_test.sh. This fixture checks shell routing.

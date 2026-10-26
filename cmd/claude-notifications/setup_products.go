@@ -49,6 +49,18 @@ func runSetupProductsContext(ctx context.Context, args []string, input io.Reader
 		}
 		return 0
 	}
+	if a.Operation == "repair-capabilities" {
+		if err := writeSelectorResult(ctx, output, "cache-repair-v1\n"); err != nil {
+			return fail(1, err)
+		}
+		return 0
+	}
+	if a.Operation == "repair-cache" {
+		if err := repairBootstrapCache(ctx, a, input, output, prompts); err != nil {
+			return fail(1, err)
+		}
+		return 0
+	}
 	if a.Operation == "intent-args" || a.Operation == "preflight" {
 		provenance, err := currentSelectorProvenance()
 		if err != nil {
@@ -194,7 +206,7 @@ func runSetupProductsContext(ctx context.Context, args []string, input io.Reader
 			return fail(1, err)
 		}
 		if answer.Cancelled || !answer.Accepted {
-			if err := writeSelectorResult(ctx, prompts, "Installation cancelled. No changes were applied.\n"); err != nil {
+			if err := writeSelectorResult(ctx, prompts, "Installation cancelled. No further changes were applied.\n"); err != nil {
 				return fail(1, err)
 			}
 			return 0
@@ -242,7 +254,7 @@ func runSetupProductsContext(ctx context.Context, args []string, input io.Reader
 		return fail(1, err)
 	}
 	if selection.Cancelled || !selection.Accepted || len(selection.IDs) == 0 {
-		if err := writeSelectorResult(ctx, prompts, "Installation cancelled. No changes were applied.\n"); err != nil {
+		if err := writeSelectorResult(ctx, prompts, "Installation cancelled. No further changes were applied.\n"); err != nil {
 			return fail(1, err)
 		}
 		return 0

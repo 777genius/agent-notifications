@@ -64,7 +64,7 @@ func TestSetupProductsRejectsUnexpectedArguments(t *testing.T) {
 // Red regression: a capability/feature query reads stdin, polls a profile, or
 // pollutes machine output, preventing safe version-gated shell acquisition.
 func TestSetupProductsFixedFeatures(t *testing.T) {
-	for _, tc := range []struct{ command, want string }{{"capabilities", "setup-products-v1 claude codex opencode gemini\n"}, {"features", "terminal-selector-v1\n"}} {
+	for _, tc := range []struct{ command, want string }{{"capabilities", "setup-products-v1 claude codex opencode gemini\n"}, {"features", "terminal-selector-v1\n"}, {"repair-capabilities", "cache-repair-v1\n"}} {
 		var output, prompts bytes.Buffer
 		if code := runSetupProducts([]string{tc.command}, strings.NewReader(""), &output, &prompts); code != 0 || output.String() != tc.want || prompts.Len() != 0 {
 			t.Fatalf("%s code=%d output=%q prompts=%q", tc.command, code, output.String(), prompts.String())

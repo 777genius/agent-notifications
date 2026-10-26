@@ -36,7 +36,7 @@ func TestSetupProductsChannelsDefaults(t *testing.T) {
 						t.Fatalf("missing %q: %s", want, prompt.String())
 					}
 				}
-				if tc.want == "" && !strings.Contains(prompt.String(), "Installation cancelled. No changes were applied.") {
+				if tc.want == "" && !strings.Contains(prompt.String(), "Installation cancelled. No further changes were applied.") {
 					t.Fatal("cancellation was silent")
 				}
 			})

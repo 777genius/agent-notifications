@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Recover exact managed files lost when Claude prunes a versioned plugin cache still used by other integrations. Retain verified recovery copies outside the cache, preserve foreign edits and settings, and keep existing upgrade and transaction recovery paths.
+
 ## [1.49.7] - 2026-10-23
 
 ### Fixed
