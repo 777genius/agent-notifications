@@ -93,6 +93,14 @@ func executeSetupWizardWith(ctx context.Context, args []string, out, errOut io.W
 	}
 	args, uiMode, uiErr := stripWizardUIMode(args)
 	args, bootstrapIntentFile, intentFlagErr := stripBootstrapIntentFile(args)
+	args, bootstrapReadyClients, readyClientsErr := stripBootstrapReadyClients(args)
+	args, bootstrapProgressFile, progressFileErr := stripBootstrapProgressFile(args)
+	if readyClientsErr == nil {
+		readyClientsErr = progressFileErr
+	}
+	if intentFlagErr == nil {
+		intentFlagErr = readyClientsErr
+	}
 	if intentFlagErr == nil {
 		intentFlagErr = uiErr
 	}
@@ -137,6 +145,9 @@ func executeSetupWizardWith(ctx context.Context, args []string, out, errOut io.W
 		return writeSetupWizardResult(out, jsonOut, setupwizard.Result{Action: string(req.Action), Outcome: "invalid", Reason: "invalid_arguments"}, nil)
 	}
 	var confirmed *confirmedBootstrapIntent
+	if (len(bootstrapReadyClients) > 0 || bootstrapProgressFile != "") && bootstrapIntentFile == "" {
+		return writeSetupWizardResult(out, jsonOut, setupwizard.Result{Action: string(req.Action), Outcome: "invalid", Reason: "invalid_arguments"}, nil)
+	}
 	if bootstrapIntentFile != "" {
 		if !installOrUpdate || !req.Yes || jsonOut && needsWizardInteraction(req) {
 			return writeSetupWizardResult(out, jsonOut, setupwizard.Result{Action: string(req.Action), Outcome: "invalid", Reason: "invalid_arguments"}, nil)
@@ -144,6 +155,17 @@ func executeSetupWizardWith(ctx context.Context, args []string, out, errOut io.W
 		req, confirmed, err = admitBootstrapWizardIntent(bootstrapIntentFile, req)
 		if err != nil {
 			return writeSetupWizardResult(out, jsonOut, setupwizard.Result{Action: string(req.Action), Outcome: "conflict", Reason: "concurrent_change"}, err)
+		}
+		if err := admitBootstrapReadyClients(&req, bootstrapReadyClients); err != nil {
+			return writeSetupWizardResult(out, jsonOut, setupwizard.Result{Action: string(req.Action), Outcome: "invalid", Reason: "invalid_arguments"}, err)
+		}
+		if bootstrapProgressFile != "" {
+			progress, closeProgress, progressErr := openBootstrapProgress(bootstrapIntentFile, bootstrapProgressFile)
+			if progressErr != nil {
+				return writeSetupWizardResult(out, jsonOut, setupwizard.Result{Action: string(req.Action), Outcome: "invalid", Reason: "invalid_arguments"}, progressErr)
+			}
+			defer closeProgress()
+			req.ClientProgress = progress
 		}
 	}
 	if errOut != nil {
@@ -400,7 +422,9 @@ func runInstallOrUpdate(ctx context.Context, req setupwizard.Request, preserveEx
 		if e != nil {
 			return setupwizard.Result{Action: string(req.Action), Outcome: "conflict", Reason: "concurrent_change"}, e
 		}
-		req.Agents = append([]string(nil), req.BootstrapMCP.Selected...)
+		// Observe/check the full frozen projection above, including clients whose
+		// primary install failed. Only the ensuing effects may be narrowed.
+		req.Agents = readyBootstrapAgents(req.BootstrapMCP.Selected, req.BootstrapReadyClients)
 		preserved = append([]string(nil), req.BootstrapMCP.Skipped...)
 		if len(req.Agents) == 0 {
 			return setupwizard.Result{Action: string(req.Action), Outcome: "unchanged", Reason: "existing_opt_out", Targets: preservedUnitTargets(preserved)}, nil

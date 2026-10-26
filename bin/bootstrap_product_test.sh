@@ -27,7 +27,7 @@ case "$(uname -s)" in
         ;;
 esac
 export TEST_BOOTSTRAP_BASH
-for tool in bash sh env cygpath python3 node curl wget tar gzip unzip zip mktemp rm cat cp mv chmod mkdir ln uname tr wc head cmp grep sed awk dirname basename find sort sha256sum shasum cut xargs sleep date stat diff touch readlink dd od go gcc cc pkg-config; do
+for tool in bash sh env cygpath python3 node curl wget tar gzip unzip zip mktemp rm cat cp mv chmod mkdir rmdir ln uname tr wc head cmp grep sed awk dirname basename find sort sha256sum shasum cut xargs sleep date stat diff touch readlink dd od go gcc cc pkg-config; do
     tool_path=$(type -P "$tool" 2>/dev/null || true)
     [ -z "$tool_path" ] || test_env_place_tool "$tool_path" "$SANDBOX/trusted-tools/$tool"
 done
@@ -1144,6 +1144,226 @@ for engine in ('python3', 'node'):
         assert not control.exists(), 'diagnostic capture created transaction control state'
 print('PASS private durable diagnostic storage or native Windows refusal, truncation, symlink denial and honest write failure')
 PY_DIAGNOSTIC_STORAGE
+
+# Latches fail if jobs serialize, failures cancel siblings, policy is seeded
+# after observer consent, or shared transactions overlap.
+python3 -I - "$SANDBOX" "$TEST_BOOTSTRAP_BASH" <<'PY_PARALLEL_INSTALL'
+import atexit, os, pathlib, signal, subprocess, sys, time
+children=[]
+def cleanup_children():
+    for proc in children:
+        if proc.poll() is None:
+            proc.terminate()
+            try: proc.communicate(timeout=8)
+            except subprocess.TimeoutExpired:
+                proc.kill(); proc.communicate(timeout=8)
+atexit.register(cleanup_children)
+sandbox, bash = pathlib.Path(sys.argv[1]), sys.argv[2]
+script = sandbox/'parallel-installer-TEST.sh'
+script.write_text(r'''#!/bin/bash
+source "$TEST_PARALLEL_SOURCE"
+_UI_MODE=plain
+_CONFIG_STAGE="$TEST_PARALLEL_CASE/stage"
+_CONFIG_HELPER="$_CONFIG_STAGE/helper"
+_SELECTOR_INTENT="$TEST_PARALLEL_CASE/frozen-intent"
+CONFIGURE_NOTIFICATIONS=true
+SELECTED_PRODUCTS=(claude codex opencode gemini)
+_PRODUCT_CSV=claude,codex,opencode,gemini
+LEGACY_PRODUCT=both
+_PROGRESS_IDS=(claude codex opencode gemini)
+_PROGRESS_PHASES=(pending pending pending pending)
+_PROGRESS_OUTCOMES=(not_started not_started not_started not_started)
+BOOTSTRAP_SUMMARY_FILE="$TEST_PARALLEL_CASE/summary"
+export BOOTSTRAP_SUMMARY_FILE
+# Fixture adapters only: no agent/vendor CLI or real profile is used.
+progress_child_running() {
+    local running
+    if [ "${TEST_PARALLEL_FAIL:-}" = trailing ] && [ ! -f "$TEST_PARALLEL_CASE/trailing-injected" ] &&
+        [ -f "$_PARALLEL_ROOT/opencode/result" ]; then
+        local index=0
+        while [ "$index" -lt "${#_PARALLEL_PIDS[@]}" ]; do
+            if [ "${_PARALLEL_CLIENTS[$index]}" = opencode ] && [ "${_PARALLEL_PIDS[$index]}" = "$1" ]; then
+                # Inject exactly after the parent's ordinary drain, after this
+                # worker exits, and before its authoritative result is merged.
+                wait "$1" || return 0
+                printf 'transition\topencode\truntime\trunning\n' >> "$_PARALLEL_ROOT/opencode/events"
+                : > "$TEST_PARALLEL_CASE/trailing-injected"
+                return 1
+            fi
+            index=$((index + 1))
+        done
+    fi
+    for running in $(jobs -pr) $(jobs -ps); do [ "$running" != "$1" ] || return 0; done
+    return 1
+}
+parallel_phase() {
+    if [ -z "$_PARALLEL_WORKER" ]; then
+        if [ "${TEST_PARALLEL_FAIL:-}" = crash-holder ] && [ "$1" = waiting ] && [ -f "$TEST_PARALLEL_CASE/holder-ready" ]; then
+            : > "$TEST_PARALLEL_CASE/seed-attempt"
+        fi
+        return 0
+    fi
+    progress_phase "$_PARALLEL_WORKER" "$1" running
+}
+progress_start() { printf 'renderer-start\n' >> "$TEST_PARALLEL_CASE/renderer"; }
+progress_stop() { :; }
+diagnostic_capture_stage() {
+    printf '%s:%s\n' "$_DIAGNOSTIC_LABEL" "$1" >> "$TEST_PARALLEL_CASE/diagnostics"
+    [ -z "$_PROGRESS_STDERR" ] || cat "$_PROGRESS_STDERR" >> "$TEST_PARALLEL_CASE/private-errors"
+}
+fixture_commit() {
+    mkdir "$TEST_PARALLEL_CASE/critical" || { echo overlap >> "$TEST_PARALLEL_CASE/overlap"; return 1; }
+    [ "$_PARALLEL_GATE_HELD" = true ] || return 1
+    printf '%s\n' "$1" >> "$TEST_PARALLEL_CASE/writers"
+    sleep 0.05
+    rmdir "$TEST_PARALLEL_CASE/critical"
+}
+initialize_config() { printf 'init\n' >> "$TEST_PARALLEL_CASE/init"; }
+configure_agent_policy() {
+    [ "$PRODUCT" = both ] && [ "$1" = portable ] || return 1
+    [ "$_SELECTOR_INTENT" = "$TEST_PARALLEL_CASE/frozen-intent" ] || return 1
+    [ -f "$TEST_PARALLEL_CASE/codex-ready" ] || [ -f "$TEST_PARALLEL_CASE/claude-ready" ] || return 1
+    fixture_commit policy || return 1
+    : > "$TEST_PARALLEL_CASE/policy-seeded"
+}
+install_claude() {
+    parallel_phase marketplace
+    : > "$TEST_PARALLEL_CASE/claude-started"
+    if [ "${TEST_PARALLEL_FAIL:-}" = crash-holder ]; then
+        while [ ! -f "$TEST_PARALLEL_CASE/codex-ready" ]; do sleep 0.05; done
+        fixture_hold_and_crash() {
+            : > "$TEST_PARALLEL_CASE/holder-ready"
+            while [ ! -f "$TEST_PARALLEL_CASE/holder-crash" ]; do sleep 0.05; done
+            bash -c 'kill -KILL "$PPID"'
+        }
+        bootstrap_writer_gate fixture_hold_and_crash
+        return 1
+    fi
+    if [ "${TEST_PARALLEL_CANCEL:-}" = 1 ]; then
+        bash -c 'printf "%s\n" "$$" > "$TEST_PARALLEL_CASE/grandchild-pid"; while :; do sleep 0.2; done' &
+        wait "$!"
+    fi
+    while [ ! -f "$TEST_PARALLEL_CASE/claude-release" ]; do sleep 0.05; done
+    [ "${TEST_PARALLEL_FAIL:-}" != all-legacy ] || return 1
+    [ "${TEST_PARALLEL_FAIL:-}" != claude ] || { echo 'exact Claude failure receipt' >&2; return 1; }
+    bootstrap_writer_gate fixture_commit claude || return 1
+    PLUGIN_ROOT="$TEST_PARALLEL_CASE/claude-owned"
+    CONFIGURE_BINARY="$_CONFIG_STAGE/helper"
+    : > "$TEST_PARALLEL_CASE/claude-ready"
+}
+install_codex() {
+    parallel_phase download
+    [ "${TEST_PARALLEL_FAIL:-}" != all-legacy ] || return 1
+    bootstrap_writer_gate fixture_commit codex || return 1
+    CONFIGURE_BINARY="$_CONFIG_STAGE/helper"
+    : > "$TEST_PARALLEL_CASE/codex-ready"
+    if [ "${TEST_PARALLEL_FAIL:-}" = crash-holder ]; then
+        while [ ! -f "$TEST_PARALLEL_CASE/holder-ready" ]; do sleep 0.05; done
+    fi
+}
+fixture_observer() {
+    parallel_phase download
+    : > "$TEST_PARALLEL_CASE/$1-acquired"
+    parallel_policy_barrier || return 1
+    [ -f "$TEST_PARALLEL_CASE/policy-seeded" ] || return 1
+    bootstrap_writer_gate fixture_commit "$1" || return 1
+    printf '  %s summary\n' "$1" > "$BOOTSTRAP_SUMMARY_FILE"
+    : > "$TEST_PARALLEL_CASE/$1-ready"
+}
+install_opencode() { fixture_observer opencode; }
+install_gemini() { fixture_observer gemini; }
+configure_agent_notify() {
+    [ "$PRODUCT" = both ] && [ "$_PARALLEL_POLICY_READY" = true ] || return 1
+    [ "$_SELECTOR_INTENT" = "$TEST_PARALLEL_CASE/frozen-intent" ] || return 1
+    printf '%s\n' "$_PARALLEL_READY_CLIENTS" > "$TEST_PARALLEL_CASE/mcp-ready-clients"
+    [ -f "$TEST_PARALLEL_CASE/opencode-ready" ] && [ -f "$TEST_PARALLEL_CASE/gemini-ready" ] || return 1
+    local client
+    for client in claude codex; do
+        case ",$_PARALLEL_READY_CLIENTS," in *",$client,"*) progress_phase "$client" MCP completed ;; esac
+    done
+    if [ "${TEST_PARALLEL_FAIL:-}" = mcp-partial ]; then
+        progress_phase claude MCP activation_timeout
+        return 1
+    fi
+    [ "${TEST_PARALLEL_FAIL:-}" != mcp ]
+}
+print_success() { printf '  %s summary\n' "$PRODUCT" >> "$BOOTSTRAP_SUMMARY_FILE"; }
+install_cleanup_traps
+status=0
+install_products_parallel || status=$?
+progress_write_final_snapshot > "$TEST_PARALLEL_CASE/final"
+printf '%s\n' "$status" > "$TEST_PARALLEL_CASE/status"
+exit "$status"
+''')
+def wait_for(path, proc):
+    limit = time.monotonic()+30
+    while not path.exists():
+        if proc.poll() is not None:
+            out, err = proc.communicate()
+            raise AssertionError((str(path), proc.returncode, out, err))
+        assert time.monotonic()<limit, str(path)
+        time.sleep(.02)
+for failure in ('', 'claude', 'mcp', 'all-legacy', 'trailing', 'crash-holder', 'mcp-partial'):
+    case = sandbox/('parallel-'+(failure or 'success')); case.mkdir(mode=0o700)
+    (case/'stage').mkdir(); helper=case/'stage'/'helper'; helper.write_text('#!/bin/bash\nexit 0\n'); helper.chmod(0o700)
+    (case/'frozen-intent').write_text('immutable fixture intent\n')
+    env=dict(os.environ, TEST_PARALLEL_SOURCE=str(sandbox/'functions.sh'), TEST_PARALLEL_CASE=str(case), TEST_PARALLEL_FAIL=failure)
+    proc=subprocess.Popen([bash, str(script)], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    children.append(proc)
+    names=('claude-started','opencode-acquired','gemini-acquired') if failure=='all-legacy' else ('claude-started','codex-ready','opencode-ready','gemini-ready')
+    if failure=='crash-holder':
+        for name in ('holder-ready', 'seed-attempt'): wait_for(case/name, proc)
+        (case/'holder-crash').touch()
+    for name in names: wait_for(case/name, proc)
+    if failure=='trailing': wait_for(case/'trailing-injected', proc)
+    assert not (case/'claude-release').exists() and proc.poll() is None
+    journal=case/'stage'/'parallel'/'progress.events'
+    if os.name!='nt': assert journal.stat().st_mode & 0o777 == 0o600
+    for stage in case.glob('bootstrap-parallel-*'):
+        if os.name!='nt': assert stage.stat().st_mode & 0o777 == 0o700
+    (case/'claude-release').touch()
+    out, err=proc.communicate(timeout=12)
+    assert proc.returncode == (1 if failure in ('claude','mcp','all-legacy','crash-holder','mcp-partial') else 0), (failure, out, err)
+    assert not (case/'overlap').exists()
+    if failure=='all-legacy':
+        assert not (case/'policy-seeded').exists() and not (case/'mcp-ready-clients').exists() and not (case/'init').exists()
+        assert not (case/'opencode-ready').exists() and not (case/'gemini-ready').exists()
+        assert 'approved shared policy preparation is unavailable' in (case/'private-errors').read_text()
+        continue
+    assert (case/'init').read_text()=='init\n'
+    assert (case/'mcp-ready-clients').read_text()==('codex\n' if failure in ('claude','crash-holder') else 'claude,codex\n')
+    assert (case/'frozen-intent').read_text()=='immutable fixture intent\n'
+    assert ''.join(line+'\n' for line in (case/'summary').read_text().splitlines() if not line.startswith('  Delivery has not been verified.'))==('' if failure in ('claude','crash-holder') else '  claude summary\n')+'  codex summary\n  opencode summary\n  gemini summary\n'
+    final=(case/'final').read_text()
+    assert 'opencode\tcomplete\tcompleted' in final and 'gemini\tcomplete\tcompleted' in final
+    assert 'codex\tcomplete\tcompleted' in final
+    if failure=='mcp-partial': assert 'claude\tMCP\tactivation_timeout' in final
+    elif failure not in ('claude','crash-holder'): assert 'claude\tcomplete\tcompleted' in final
+    if failure=='claude': assert 'exact Claude failure receipt' in (case/'private-errors').read_text()
+    diagnostics=(case/'diagnostics').read_text()
+    indexes=[diagnostics.index('Installing '+client+' notifications:') for client in ('claude','codex','opencode','gemini')]
+    assert indexes==sorted(indexes)
+# Cancellation must terminate every owned group's descendants before cleanup.
+if os.name != 'nt':
+    case=sandbox/'parallel-cancel'; case.mkdir(mode=0o700); (case/'stage').mkdir()
+    helper=case/'stage'/'helper'; helper.write_text('#!/bin/bash\nexit 0\n'); helper.chmod(0o700)
+    (case/'frozen-intent').write_text('fixture\n')
+    env=dict(os.environ, TEST_PARALLEL_SOURCE=str(sandbox/'functions.sh'), TEST_PARALLEL_CASE=str(case), TEST_PARALLEL_CANCEL='1')
+    proc=subprocess.Popen([bash, str(script)], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    children.append(proc)
+    wait_for(case/'grandchild-pid', proc)
+    while not (case/'grandchild-pid').stat().st_size: time.sleep(.01)
+    pid=int((case/'grandchild-pid').read_text())
+    proc.send_signal(signal.SIGTERM)
+    out, err=proc.communicate(timeout=8)
+    assert proc.returncode==143, (out,err)
+    try: os.kill(pid,0)
+    except ProcessLookupError: pass
+    else:
+        state=pathlib.Path('/proc')/str(pid)/'stat'
+        assert state.exists() and state.read_text().split()[2]=='Z', (pid,out,err)
+print('PASS concurrent installer jobs, policy barrier, serialized writers, isolated failure, completion-tail IPC, crashed lock holder and descendant cancellation')
+PY_PARALLEL_INSTALL
 
 [ "$_PRODUCT_TEST_UNIT_ONLY" != true ] || exit 0
 # Local HTTP and controlling-PTY integration. Installer/registration are explicit

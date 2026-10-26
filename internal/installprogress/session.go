@@ -103,14 +103,6 @@ func activityLabel(e event) string {
 
 func (s *session) currentLines(width int, frame int) []string {
 	lines := []string{}
-	global := ""
-	if !s.stopped {
-		for _, row := range s.rows.rows {
-			if row.client == "global" && row.outcome == "running" {
-				global = row.phase
-			}
-		}
-	}
 	for _, row := range s.rows.rows {
 		if row.client == "global" {
 			continue
@@ -119,6 +111,9 @@ func (s *session) currentLines(width int, frame int) []string {
 		switch row.outcome {
 		case "done", "completed":
 			mark = "+"
+			if row.phase == "verification" {
+				label = "Registration verified"
+			}
 		case "queued", "not_started":
 			mark, label = "-", "Not started"
 		case "running":
@@ -139,12 +134,11 @@ func (s *session) currentLines(width int, frame int) []string {
 		if row.phase == "complete" && (row.outcome == "done" || row.outcome == "completed") {
 			label = "Installed; restart required"
 		}
-		active := global == "installing-"+row.client || (row.phase == "config" && (global == "notification-settings" || global == "notification-tools") || row.phase == "MCP" && global == "notification-tools")
-		if active && (row.outcome == "state_requires_inspection" || row.outcome == "registration_committed" || row.outcome == "registration_committed_follow_up_not_started") {
-			mark, label = "~", "Registering notifications"
-			if row.phase == "config" || row.phase == "MCP" {
-				label = "Configuring notifications"
-			}
+		active := !s.stopped && s.rows.active(row)
+		if active {
+			mark, label = "~", s.rows.activeLabel(row)+s.rows.elapsed(row)
+		} else if row.outcome == "running" {
+			mark, label = "!", phases[row.phase]+": last observed running"
 		}
 		if mark == "~" {
 			mark = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}[frame%10]
@@ -166,7 +160,6 @@ func (s *session) currentLines(width int, frame int) []string {
 
 func (s *session) counters() string {
 	complete, active, queued := 0, 0, 0
-	global := s.rows.globalPhase()
 	for _, e := range s.rows.rows {
 		if e.client == "global" {
 			continue
@@ -174,7 +167,7 @@ func (s *session) counters() string {
 		switch {
 		case e.phase == "complete" && (e.outcome == "done" || e.outcome == "completed"):
 			complete++
-		case !s.stopped && (e.outcome == "running" || global == "installing-"+e.client || (e.phase == "config" && (global == "notification-settings" || global == "notification-tools") || e.phase == "MCP" && global == "notification-tools")):
+		case !s.stopped && s.rows.active(e):
 			active++
 		case e.outcome == "queued" || e.outcome == "not_started":
 			queued++
