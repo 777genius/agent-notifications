@@ -124,8 +124,8 @@ func assertQoderStalledInputAllowsRemove(t *testing.T, f *bootstrapFixture, prof
 	syscall.CloseOnExec(fds[1])
 	writer := os.NewFile(uintptr(fds[0]), "TEST-stalled-producer")
 	reader := os.NewFile(uintptr(fds[1]), "TEST-hook-input")
-	defer writer.Close()
-	defer reader.Close()
+	defer func() { _ = writer.Close() }()
+	defer func() { _ = reader.Close() }()
 	if err = syscall.SetsockoptInt(fds[0], syscall.SOL_SOCKET, syscall.SO_SNDBUF, 4096); err != nil {
 		t.Fatal(err)
 	}

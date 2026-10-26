@@ -15,7 +15,7 @@ import (
 
 func runQoderSetup(args []string, output io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(output, "usage: setup-qoder install|update|remove|recover|inspect|status [flags]")
+		_, _ = fmt.Fprintln(output, "usage: setup-qoder install|update|remove|recover|inspect|status [flags]")
 		return 2
 	}
 	action := qoderinstall.Action(args[0])
@@ -37,7 +37,7 @@ func runQoderSetup(args []string, output io.Writer) int {
 		return 2
 	}
 	if f.NArg() != 0 {
-		fmt.Fprintln(output, "unexpected positional argument")
+		_, _ = fmt.Fprintln(output, "unexpected positional argument")
 		return 2
 	}
 	channelsSet := false
@@ -47,15 +47,15 @@ func runQoderSetup(args []string, output io.Writer) int {
 		}
 	})
 	if (action == qoderinstall.Install || action == qoderinstall.Update) && !channelsSet {
-		fmt.Fprintln(output, "choose --desktop or --webhook explicitly")
+		_, _ = fmt.Fprintln(output, "choose --desktop or --webhook explicitly")
 		return 2
 	}
 	if r.QoderExecutable == "" && action != "inspect" && action != "status" && action != qoderinstall.Recover && action != "permission-status" && action != "request-permission" {
-		fmt.Fprintln(output, "absolute --qoder-executable required")
+		_, _ = fmt.Fprintln(output, "absolute --qoder-executable required")
 		return 2
 	}
 	if r.QoderExecutable != "" && !filepath.IsAbs(r.QoderExecutable) {
-		fmt.Fprintln(output, "absolute --qoder-executable required")
+		_, _ = fmt.Fprintln(output, "absolute --qoder-executable required")
 		return 2
 	}
 	timeout := 90 * time.Second
@@ -67,10 +67,10 @@ func runQoderSetup(args []string, output io.Writer) int {
 	if action == "permission-status" || action == "request-permission" {
 		permission, err := qoderinstall.SetupPermission(ctx, r.ControlRoot, action == "request-permission")
 		if err != nil {
-			fmt.Fprintf(output, "setup-qoder: permission unavailable: %v\n", err)
+			_, _ = fmt.Fprintf(output, "setup-qoder: permission unavailable: %v\n", err)
 			return 1
 		}
-		fmt.Fprintf(output, "Qoder notification permission: %s\n", permission)
+		_, _ = fmt.Fprintf(output, "Qoder notification permission: %s\n", permission)
 		return 0
 	}
 	if action == "inspect" || action == "status" {
@@ -81,10 +81,10 @@ func runQoderSetup(args []string, output io.Writer) int {
 		return 0
 	}
 	if err := qoderinstall.Apply(ctx, r); err != nil {
-		fmt.Fprintf(output, "setup-qoder: %v\n", err)
+		_, _ = fmt.Fprintf(output, "setup-qoder: %v\n", err)
 		return 1
 	}
-	fmt.Fprintf(output, "Qoder notifications %s complete\n", action)
+	_, _ = fmt.Fprintf(output, "Qoder notifications %s complete\n", action)
 	return 0
 }
 func qoderSetupMain(args []string) int {

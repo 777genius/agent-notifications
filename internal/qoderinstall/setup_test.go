@@ -90,7 +90,7 @@ func TestQoderNativeProcess(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			defer in.Close()
+			defer func() { _ = in.Close() }()
 			info, _ := d.Info()
 			out, err := os.OpenFile(to, os.O_CREATE|os.O_EXCL|os.O_WRONLY, info.Mode().Perm())
 			if err != nil {

@@ -104,7 +104,7 @@ func checkFiles(l installruntime.Ledger, r receipt) error {
 			return err
 		}
 		if !d.IsDir() && !expected[path] {
-			return errors.New("Qoder package contains an unowned file")
+			return errors.New("qoder package contains an unowned file")
 		}
 		return nil
 	})
@@ -163,7 +163,7 @@ func Apply(ctx context.Context, r Request) error {
 		return nil
 	}
 	if r.Action == Update && !registered {
-		return errors.New("Qoder is not installed")
+		return errors.New("qoder is not installed")
 	}
 	if r.RuntimeRoot == "" {
 		if registered {
@@ -188,7 +188,7 @@ func Apply(ctx context.Context, r Request) error {
 			return e
 		}
 		if old.ConfigRoot != r.ConfigRoot || c.RuntimeRoot != r.RuntimeRoot {
-			return errors.New("Qoder profile or runtime relocation refused")
+			return errors.New("qoder profile or runtime relocation refused")
 		}
 		if e = checkFiles(l, old); e != nil {
 			return e
@@ -212,7 +212,6 @@ func Apply(ctx context.Context, r Request) error {
 	if !supported {
 		return errors.New("unsupported Qoder release platform")
 	}
-	cleanupSource := func() {}
 	if r.Action != Remove {
 		if !filepath.IsAbs(r.BinarySource) {
 			return errors.New("absolute --binary source required")
@@ -225,8 +224,7 @@ func Apply(ctx context.Context, r Request) error {
 		if e != nil {
 			return e
 		}
-		cleanupSource = func() { _ = os.RemoveAll(temp) }
-		defer cleanupSource()
+		defer func() { _ = os.RemoveAll(temp) }()
 		source = filepath.Join(temp, "bundle")
 		_, err = qoderpackage.Build(qoderpackage.BuildRequest{Version: r.Version, GOOS: r.GOOS, GOARCH: r.GOARCH, Executable: r.BinarySource, OutputRoot: source, ManagedControlRoot: r.ControlRoot, Binding: binding})
 		if err != nil {
@@ -250,7 +248,7 @@ func Apply(ctx context.Context, r Request) error {
 			}
 			if !d.IsDir() {
 				if _, owned := installruntime.OwnedFile(l, path); !owned {
-					return errors.New("Qoder destination contains an unowned file")
+					return errors.New("qoder destination contains an unowned file")
 				}
 			}
 			return nil

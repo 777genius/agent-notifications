@@ -40,7 +40,7 @@ func TestSetupProductsQoderPresence(t *testing.T) {
 				continue
 			}
 			found = true
-			supported := (runtime.GOOS == "darwin" || runtime.GOOS == "linux" || runtime.GOOS == "windows") && (runtime.GOARCH == "amd64" || runtime.GOARCH == "arm64") && !(runtime.GOOS == "windows" && runtime.GOARCH == "arm64")
+			supported := (runtime.GOOS == "darwin" || runtime.GOOS == "linux" || runtime.GOOS == "windows") && (runtime.GOARCH == "amd64" || runtime.GOARCH == "arm64") && (runtime.GOOS != "windows" || runtime.GOARCH != "arm64")
 			if f.Label != "Qoder" || f.Present != present || f.Selectable != supported || f.Profile != e.Values["QODER_CONFIG_DIR"] || scopes["qoder-config-root"] != f.Profile || present && f.Executable != filepath.Join(e.PATH, fixtureProductName("qoder")) {
 				t.Fatalf("Qoder presence/default authority: %+v %v", f, scopes)
 			}

@@ -44,7 +44,7 @@ func Inspect(ctx context.Context, r Request) (Status, error) {
 	}
 	result.PackageRoot = previous.PackageRoot
 	if previous.ConfigRoot != r.ConfigRoot {
-		return result, errors.New("Qoder profile differs from managed installation")
+		return result, errors.New("qoder profile differs from managed installation")
 	}
 	if err = checkFiles(l, previous); err != nil {
 		return result, err
@@ -103,7 +103,7 @@ func setChannels(ctx context.Context, root, runtimeRoot string, desktop, webhook
 		return errors.New("installation recovery required")
 	}
 	if _, ok := s.Installation.Ledger.Consumers[ConsumerID]; !ok {
-		return errors.New("Qoder consumer missing")
+		return errors.New("qoder consumer missing")
 	}
 	oldD, oldW, err := channels(s.Fields)
 	if err != nil {
