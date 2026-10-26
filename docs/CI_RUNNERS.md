@@ -85,11 +85,19 @@ this source qualification grants no installed native E or consent.
 
 ## Concurrency and rollback
 
-Active PR workflows group by workflow, event and PR number, cancelling only
-superseded runs of the same PR. Other events use the unique run ID, so dispatches,
-pushes and tags remain independent. Core `main` pushes are deliberately retained:
-they may provide exact-source release evidence, and removing queued PR work does
-not require invalidating it. Disabled ReviewRouter keeps its existing concurrency.
+Ordinary PR workflows group by workflow, event and PR number, cancelling only
+superseded checks of the same PR. Metadata-only edits and manual diagnostics retain
+independent groups. Core `develop` push checks may replace earlier checks of that
+same branch; they never share a group with PR checks.
+
+Core `main` pushes and `release-tools.yml` main pushes remain independent because
+[release qualification](../.github/workflows/basic-release.yml) rejects cancelled
+latest checks for the exact candidate SHA,
+including checks outside its named native receipt requirements. The installed
+Cursor Windows feature-branch qualification also retains every push and manual
+run: its native result, evidence and owned cleanup must finish independently.
+Release/tag workflows and Pages deployments retain their existing independent
+operations. Disabled ReviewRouter keeps its existing concurrency.
 
 Remove the applicable repository variable to restore the original GitHub runner
 without editing semantic matrices. Workflow changes affect future runs only;
