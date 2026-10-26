@@ -21,6 +21,9 @@ on:
           - fresh-owned-account-no-show
 permissions:
   contents: read
+concurrency:
+  group: windows-managed-directory-contracts-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   real-filesystem-regression:
     runs-on: windows-latest
