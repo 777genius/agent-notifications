@@ -124,7 +124,7 @@ test("mixed loader uses a canonical product list", () => {
 
 // The copied shell command must report a failed curl even if Bash accepts its input.
 test("every copied product command propagates empty and partial download failures without changing caller pipefail", () => {
-  for (const product of ["claude", "codex", "opencode", "gemini", ["claude", "opencode"]] as const)
+  for (const product of ["claude", "codex", "opencode", "gemini", "qoder", ["claude", "opencode"]] as const)
     for (const intent of ["install", "update"] as const)
       for (const partial of [false, true]) {
         const snippet = command(product, "linux", intent)!;
@@ -180,7 +180,7 @@ test("Gemini mixed command reports download failure with one pipeline", () => {
 
 // Exercise the copied shell text: the downloaded script must receive literal selectors
 // and consent flags as separate argv tokens. This does not qualify the public loader.
-test("Gemini copied pipelines deliver exact installer argv", () => {
+test("observer copied pipelines deliver exact installer argv", () => {
   const cases = [
     {
       snippet: command("gemini", "linux", "install", false, { desktop: false, webhook: true })!,
@@ -193,6 +193,14 @@ test("Gemini copied pipelines deliver exact installer argv", () => {
     {
       snippet: command(["gemini", "opencode", "codex", "claude", "gemini"], "linux", "install", false, { desktop: true, webhook: true })!,
       argv: ["--products", "claude,codex,opencode,gemini", "--skip-agent-notify", "--desktop", "--webhook"],
+    },
+    {
+      snippet: command("qoder", "linux", "install", false, { desktop: false, webhook: true })!,
+      argv: ["--product", "qoder", "--webhook"],
+    },
+    {
+      snippet: command(["qoder", "gemini", "opencode", "codex", "claude"], "linux", "install", false, { desktop: true, webhook: true })!,
+      argv: ["--products", "claude,codex,opencode,gemini,qoder", "--skip-agent-notify", "--desktop", "--webhook"],
     },
   ];
   for (const { snippet, argv } of cases) {
@@ -207,7 +215,7 @@ test("Gemini copied pipelines deliver exact installer argv", () => {
 
 // Updating must let the installer retain each observer's stored channel pair.
 test("default observer update pipelines omit channel overrides in installer argv", () => {
-  for (const products of ["opencode", "gemini", ["opencode", "gemini"], ["claude", "codex", "opencode", "gemini"]] as const) {
+  for (const products of ["opencode", "gemini", "qoder", ["opencode", "gemini", "qoder"], ["claude", "codex", "opencode", "gemini", "qoder"]] as const) {
     const snippet = command(products, "linux", "update", false)!;
     const selection = typeof products === "string" ? products : products.join(",");
     const argv = [typeof products === "string" ? "--product" : "--products", selection];
@@ -232,4 +240,19 @@ test("platform availability follows the published channel snapshot", () => {
   assert.equal(platformReleaseVersion(snapshot, "manual"), null);
   assert.match(command("gemini", "macos", "install")!, /--product gemini --desktop\)$/);
   assert.match(command(["claude", "gemini"], "macos", "update")!, /--products claude,gemini\)$/);
+});
+
+// Qoder must participate in the same selector and explicit channel consent contract.
+test("Qoder commands support standalone, mixed and preserved update channels", () => {
+  const prefix = "(set -o pipefail; curl -fsSL https://agent-notifications.com/install.sh | bash -s -- ";
+  for (const target of ["macos", "linux", "windows"] as const) {
+    assert.equal(command("qoder", target, "install"), prefix + "--product qoder --desktop)");
+    assert.equal(command("qoder", target, "update"), prefix + "--product qoder)");
+    assert.equal(command("qoder", target, "install", false, { desktop: false, webhook: true }), prefix + "--product qoder --webhook)");
+    assert.equal(command("qoder", target, "install", true, { desktop: false, webhook: false }), null);
+    assert.equal(command(["qoder", "gemini", "codex", "opencode", "claude", "qoder"], target, "install", false, { desktop: true, webhook: true }), prefix + "--products claude,codex,opencode,gemini,qoder --skip-agent-notify --desktop --webhook)");
+  }
+  assert.equal(command("qoder", "manual", "install"), null);
+  assert.equal(command("qoder", "unknown", "install"), null);
+  assert.equal(command("qoder", "linux", "configure"), null);
 });

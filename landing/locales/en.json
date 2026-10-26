@@ -1,7 +1,7 @@
 {
   "seo": {
     "title": "Agent Notifications - Stay in flow",
-    "description": "Desktop notifications and webhooks for Claude, Codex CLI and OpenCode. Gemini CLI: macOS / Linux / Windows. Cursor CLI: Linux amd64 / macOS arm64 / Windows amd64. Qoder: separate package."
+    "description": "Desktop notifications and webhooks for Claude, Codex CLI and OpenCode. Gemini CLI: macOS / Linux / Windows. Cursor CLI: Linux amd64 / macOS arm64 / Windows amd64. Qoder: Unified installer."
   },
   "language": {
     "label": "Language",
@@ -27,7 +27,7 @@
     "title": "Stay in flow",
     "emphasis": "We'll get your attention",
     "leadFirst": "Let your agent work. Know when it's done.",
-    "leadSecond": "Desktop notifications and webhooks for Claude, Codex CLI and OpenCode. Gemini CLI: macOS / Linux / Windows. Cursor CLI: Linux amd64 / macOS arm64 / Windows amd64. Qoder: separate package.",
+    "leadSecond": "Desktop notifications and webhooks for Claude, Codex CLI and OpenCode. Gemini CLI: macOS / Linux / Windows. Cursor CLI: Linux amd64 / macOS arm64 / Windows amd64. Qoder: Unified installer.",
     "primary": "Set up notifications",
     "secondary": "Explore on GitHub",
     "note": "Open source · Runs locally"
@@ -134,7 +134,7 @@
     "items": {
       "1": {
         "question": "Do I need every agent installed?",
-        "answer": "Select any combination of Claude, Codex CLI, OpenCode and Gemini CLI (macOS / Linux / Windows only). Install the selected agents first; the commands below install notifications."
+        "answer": "Select any combination of Claude, Codex CLI, OpenCode, Qoder and Gemini CLI (macOS / Linux / Windows only). Install the selected agents first; the commands below install notifications."
       },
       "2": {
         "question": "Are Codex hooks installed automatically?",
@@ -210,7 +210,7 @@
   },
   "install": {
     "cursor": {"guide": "Cursor CLI installation", "scope": "Stop notifications and optional webhooks. Separate setup with explicit CLI/profile paths; qualified Linux amd64, macOS arm64 and Windows amd64 versions only."},
-    "qoder": {"guide": "Qoder setup and hooks", "scope": "Completion, question, permission, plan and teammate alerts with optional webhooks. Separate native package installed through the Qoder plugin installer; a notification click cannot open the exact existing chat.", "source": "Source package only: build from source before installing. No prebuilt Qoder ZIP is published in the current release.", "build": "Build the native package", "install": "Install the expanded package with Qoder CLI (replace the path):", "restart": "Restart Qoder to activate the hooks."},
+    "qoder": {"guide": "Qoder setup and hooks", "scope": "Completion, question, permission, plan and teammate alerts with optional webhooks. Native package installed through the unified installer; a notification click cannot open the exact existing chat.", "source": "The unified installer assembles the native Qoder package from a verified release binary. No prebuilt ZIP is needed.", "restart": "Restart Qoder to activate the hooks."},
     "title": "Set up notifications",
     "intro": "Follow the steps below to add notifications to {agent}.",
     "chooseAgent": "Choose your agents",
@@ -301,7 +301,7 @@
     },
     "observer": {
       "channelsTitle": "Observer notification channels",
-      "channelsHint": "These choices apply to each selected OpenCode/Gemini agent, with consent saved separately. Choose at least one channel; configure webhook URLs separately."
+      "channelsHint": "These choices apply to each selected OpenCode/Gemini/Qoder agent, with consent saved separately. Choose at least one channel; configure webhook URLs separately."
     },
     "opencode": {
       "channelsTitle": "OpenCode notification channels",

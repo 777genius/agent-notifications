@@ -2,7 +2,7 @@
 import { repo, type AgentProduct } from "~/data/install";
 
 const { t } = useI18n();
-type SupportedAgent = AgentProduct | "cursor" | "qoder";
+type SupportedAgent = AgentProduct | "cursor";
 const agents: SupportedAgent[] = ["claude", "codex", "opencode", "gemini", "cursor", "qoder"];
 type Support = "yes" | "no" | "conditional";
 const rows: { key: string; support: Record<SupportedAgent, Support> }[] = [

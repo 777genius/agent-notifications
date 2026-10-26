@@ -6,16 +6,18 @@ release commit, an immutable source commit, and its platform branch.
 
 | Platform | Qualified version | Source branch |
 | --- | --- | --- |
-| Linux amd64 / arm64, Windows amd64 | 1.49.8 | `release/platform-linux-windows` |
-| macOS amd64 / arm64 | 1.49.8 | `release/platform-macos` |
+| Linux amd64 / arm64, Windows amd64 | 1.49.10 | `release/platform-linux-windows` |
+| macOS amd64 / arm64 | 1.49.10 | `release/platform-macos` |
 
-All five platform rows, GitHub Latest and main manifests select 1.49.8. This
+All five platform rows, GitHub Latest and main manifests select 1.49.10. This
 complete asset set includes Linux, Windows and macOS native/portable packages and
 the signed, notarized macOS helper. Release checks use the owner-approved basic
 five-platform artifact profile and separate macOS E2E. The eleven-cell OpenCode
 installed-business suite was not run; these checks do not establish full native,
 clock/source-epoch, visible desktop or cold-start qualification. A platform channel can also select an explicitly
 qualified partial release even when GitHub labels it Pre-release.
+Qoder additionally has a native CLI 1.1.79 managed-lifecycle and real-turn proof on macOS arm64 with an official custom-model configuration and a deterministic loopback provider. The owner confirmed its visible desktop banner; this does not qualify Qoder cloud capacity or native Qoder execution on other platforms. See [the exact evidence](handoffs/qoder-native-e2e.md).
+
 No scan for the newest tag or fallback to Latest is used. Invalid/missing rows,
 unsupported architectures and failed downloads stop selection before installation.
 
