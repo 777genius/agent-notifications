@@ -17,7 +17,7 @@ import tempfile
 import threading
 
 REPO = '777genius/agent-notifications'
-TOOLS = ('bash sh env python3 node tar gzip unzip zip mktemp rm cat cp mv chmod mkdir ln '
+TOOLS = ('bash sh env python3 node tar gzip unzip zip mktemp rm cat cp mv chmod mkdir rmdir ln '
          'uname tr wc head cmp grep sed awk dirname basename find sort sha256sum shasum '
          'cut xargs sleep date stat diff touch readlink dd od git codesign xattr file sips iconutil').split()
 PRIVATE_KEYS = ('HOME USERPROFILE APPDATA LOCALAPPDATA XDG_CONFIG_HOME XDG_CACHE_HOME '

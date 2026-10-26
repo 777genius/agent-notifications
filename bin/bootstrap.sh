@@ -2850,10 +2850,11 @@ bootstrap_writer_gate() {
     _PARALLEL_GATE_BUSY=false
     if [ "${1:-}" = --try ]; then nonblocking=true; shift; fi
     if [ -z "$_PARALLEL_ROOT" ] || [ "$_PARALLEL_GATE_HELD" = true ]; then "$@"; return $?; fi
+    [ ! -e "$_PARALLEL_ROOT/cancel" ] || return 130
     parallel_phase waiting
     while ! mkdir "$_PARALLEL_ROOT/writer.lock" 2>/dev/null; do
-        if [ "$nonblocking" = true ]; then _PARALLEL_GATE_BUSY=true; return 75; fi
         [ ! -e "$_PARALLEL_ROOT/cancel" ] || return 130
+        if [ "$nonblocking" = true ]; then _PARALLEL_GATE_BUSY=true; return 75; fi
         [ -d "$_PARALLEL_ROOT/writer.lock" ] && [ ! -L "$_PARALLEL_ROOT/writer.lock" ] || return 1
         sleep 0.05
     done
@@ -2863,9 +2864,18 @@ bootstrap_writer_gate() {
     parallel_phase runtime
     "$@" || status=$?
     _PARALLEL_GATE_HELD=false
-    rm -f "$_PARALLEL_ROOT/writer.lock/owner"
-    rmdir "$_PARALLEL_ROOT/writer.lock" || return 1
+    parallel_release_writer_gate || return 1
     return "$status"
+}
+
+parallel_release_writer_gate() {
+    if ! rm -f "$_PARALLEL_ROOT/writer.lock/owner" || ! rmdir "$_PARALLEL_ROOT/writer.lock"; then
+        # An ownerless lock cannot be reclaimed as a completed transaction.
+        # Stop queued writers and policy waiters instead of stranding them.
+        : > "$_PARALLEL_ROOT/cancel"
+        return 1
+    fi
+    return 0
 }
 
 parallel_phase() {
@@ -3205,7 +3215,7 @@ install_products_parallel() {
                 fi
                 _PARALLEL_DONE[$i]=true; remaining=$((remaining - 1))
                 if [ -f "$_PARALLEL_ROOT/writer.lock/owner" ] && [ "$(cat "$_PARALLEL_ROOT/writer.lock/owner")" = "$selected" ]; then
-                    rm -f "$_PARALLEL_ROOT/writer.lock/owner"; rmdir "$_PARALLEL_ROOT/writer.lock" || true
+                    parallel_release_writer_gate || status=1
                 fi
                 if parallel_read_result "$job/result" && [ "$_JOB_STATUS" -eq "$worker_status" ]; then
                     progress_phase "$selected" "$_JOB_PHASE" "$_JOB_OUTCOME"

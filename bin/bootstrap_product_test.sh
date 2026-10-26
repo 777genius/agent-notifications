@@ -1148,7 +1148,7 @@ PY_DIAGNOSTIC_STORAGE
 # Latches fail if jobs serialize, failures cancel siblings, policy is seeded
 # after observer consent, or shared transactions overlap.
 python3 -I - "$SANDBOX" "$TEST_BOOTSTRAP_BASH" <<'PY_PARALLEL_INSTALL'
-import atexit, os, pathlib, signal, subprocess, sys, time
+import atexit, os, pathlib, shutil, signal, subprocess, sys, time
 children=[]
 def cleanup_children():
     for proc in children:
@@ -1303,14 +1303,30 @@ def wait_for(path, proc):
             raise AssertionError((str(path), proc.returncode, out, err))
         assert time.monotonic()<limit, str(path)
         time.sleep(.02)
-for failure in ('', 'claude', 'mcp', 'all-legacy', 'trailing', 'crash-holder', 'mcp-partial'):
+for failure in ('', 'claude', 'mcp', 'all-legacy', 'trailing', 'crash-holder', 'mcp-partial', 'gate-release'):
     case = sandbox/('parallel-'+(failure or 'success')); case.mkdir(mode=0o700)
     (case/'stage').mkdir(); helper=case/'stage'/'helper'; helper.write_text('#!/bin/bash\nexit 0\n'); helper.chmod(0o700)
     (case/'frozen-intent').write_text('immutable fixture intent\n')
     env=dict(os.environ, TEST_PARALLEL_SOURCE=str(sandbox/'functions.sh'), TEST_PARALLEL_CASE=str(case), TEST_PARALLEL_FAIL=failure)
+    if failure=='gate-release':
+        real_rmdir=shutil.which('rmdir'); assert real_rmdir
+        tools=case/'tools'; tools.mkdir(mode=0o700)
+        stub=tools/'rmdir'
+        stub.write_text('''#!/bin/bash
+case "$1" in */writer.lock)
+    if [ ! -e "$TEST_PARALLEL_CASE/release-failed" ]; then
+        : > "$TEST_PARALLEL_CASE/release-failed"
+        exit 1
+    fi ;;
+esac
+exec "$TEST_REAL_RMDIR" "$@"
+''')
+        stub.chmod(0o700)
+        env.update(PATH=str(tools)+os.pathsep+env['PATH'], TEST_REAL_RMDIR=real_rmdir)
     proc=subprocess.Popen([bash, str(script)], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     children.append(proc)
     names=('claude-started','opencode-acquired','gemini-acquired') if failure=='all-legacy' else ('claude-started','codex-ready','opencode-ready','gemini-ready')
+    if failure=='gate-release': names=('claude-started','release-failed','opencode-acquired','gemini-acquired')
     if failure=='crash-holder':
         for name in ('holder-ready', 'seed-attempt'): wait_for(case/name, proc)
         (case/'holder-crash').touch()
@@ -1323,8 +1339,13 @@ for failure in ('', 'claude', 'mcp', 'all-legacy', 'trailing', 'crash-holder', '
         if os.name!='nt': assert stage.stat().st_mode & 0o777 == 0o700
     (case/'claude-release').touch()
     out, err=proc.communicate(timeout=12)
-    assert proc.returncode == (1 if failure in ('claude','mcp','all-legacy','crash-holder','mcp-partial') else 0), (failure, out, err)
+    assert proc.returncode == (1 if failure in ('claude','mcp','all-legacy','crash-holder','mcp-partial','gate-release') else 0), (failure, out, err)
     assert not (case/'overlap').exists()
+    if failure=='gate-release':
+        assert not (case/'mcp-ready-clients').exists() and not (case/'init').exists()
+        assert '\tcomplete\tcompleted' not in (case/'final').read_text()
+        assert not (case/'summary').exists() or not (case/'summary').read_text()
+        continue
     if failure=='all-legacy':
         assert not (case/'policy-seeded').exists() and not (case/'mcp-ready-clients').exists() and not (case/'init').exists()
         assert not (case/'opencode-ready').exists() and not (case/'gemini-ready').exists()
@@ -1362,7 +1383,7 @@ if os.name != 'nt':
     else:
         state=pathlib.Path('/proc')/str(pid)/'stat'
         assert state.exists() and state.read_text().split()[2]=='Z', (pid,out,err)
-print('PASS concurrent installer jobs, policy barrier, serialized writers, isolated failure, completion-tail IPC, crashed lock holder and descendant cancellation')
+print('PASS concurrent installer jobs, policy barrier, serialized writers, isolated failure, completion-tail IPC, crashed lock holder, failed gate release and descendant cancellation')
 PY_PARALLEL_INSTALL
 
 # The parent must interrupt its synchronous wait while a native helper still
