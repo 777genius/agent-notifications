@@ -162,7 +162,7 @@ try {
     if (String(evidence.turnOutput).trim() !== 'TEST_QODER_DONE') throw Error('native model completion marker missing');
     if (deliveries.length !== 1) throw Error('native Stop notification not observed exactly once');
     const delivered = JSON.parse(deliveries[0]) as Record<string, unknown>;
-    if (delivered.agent_source !== 'qoder' || delivered.notification_type !== 'task_complete' || delivered.session_id !== turnSessionID) throw Error('native Stop notification identity mismatch');
+    if (delivered.agent_source !== 'qoder' || delivered.notification_type !== 'task_complete' || delivered.status !== 'task_complete' || delivered.session_id !== turnSessionID) throw Error('native Stop notification identity mismatch');
     evidence.nativeTurn = true;
   }
   await run(binary, setup('update'));

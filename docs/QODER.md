@@ -36,7 +36,7 @@ does not supply the plugin-management CLI. Both `qoder` and `qodercli` command
 names are supported when available. Installation and update use the same command:
 
 ```sh
-curl -fsSL https://agent-notifications.com/install.sh | bash -s -- --product qoder
+(set -o pipefail; curl -fsSL https://agent-notifications.com/install.sh | bash -s -- --product qoder)
 ```
 
 The installer asks for desktop/webhook delivery and preserves independent channel
