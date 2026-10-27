@@ -80,6 +80,12 @@ func openBootstrapProgress(intent, path string) (func(string, string, string), f
 		_ = file.Close()
 		return nil, nil, errors.New("progress journal changed")
 	}
+	// Private Windows validation deliberately denies concurrent writers. Keep
+	// only the validated identity between events; each finite append opens and
+	// closes its writer after security validation, before the next validation.
+	if err := file.Close(); err != nil {
+		return nil, nil, err
+	}
 	var mu sync.Mutex
 	closed := false
 	closeProgress := func() {
@@ -87,7 +93,6 @@ func openBootstrapProgress(intent, path string) (func(string, string, string), f
 		defer mu.Unlock()
 		if !closed {
 			closed = true
-			_ = file.Close()
 			_ = root.Close()
 		}
 	}
@@ -104,6 +109,15 @@ func openBootstrapProgress(intent, path string) (func(string, string, string), f
 		current, err := root.Lstat("progress.events")
 		if err != nil || !os.SameFile(current, opened) || current.Size()+int64(len(line)) > maxBootstrapIntent || validateBootstrapProgressLeaf(filepath.Dir(path), root) != nil {
 			return // Presentation failure cannot authorize or abort setup effects.
+		}
+		file, err := root.OpenFile("progress.events", os.O_WRONLY|os.O_APPEND, 0)
+		if err != nil {
+			return
+		}
+		defer func() { _ = file.Close() }()
+		actual, err := file.Stat()
+		if err != nil || !os.SameFile(actual, opened) || actual.Size()+int64(len(line)) > maxBootstrapIntent {
+			return
 		}
 		_, _ = file.WriteString(line)
 	}
