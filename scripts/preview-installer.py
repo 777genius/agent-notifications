@@ -17,13 +17,13 @@ import tempfile
 import threading
 
 REPO = '777genius/agent-notifications'
-TOOLS = ('bash sh env python3 node tar gzip unzip zip mktemp rm cat cp mv chmod mkdir ln '
+TOOLS = ('bash sh env python3 node tar gzip unzip zip mktemp rm cat cp mv chmod mkdir rmdir ln '
          'uname tr wc head cmp grep sed awk dirname basename find sort sha256sum shasum '
          'cut xargs sleep date stat diff touch readlink dd od git codesign xattr file sips iconutil').split()
 PRIVATE_KEYS = ('HOME USERPROFILE APPDATA LOCALAPPDATA XDG_CONFIG_HOME XDG_CACHE_HOME '
                 'XDG_DATA_HOME XDG_STATE_HOME XDG_RUNTIME_DIR XDG_CONFIG_DIRS XDG_DATA_DIRS '
                 'CODEX_HOME CLAUDE_HOME CLAUDE_CONFIG_DIR TMPDIR TMP TEMP '
-                'OPENCODE_CONFIG_DIR GEMINI_CLI_HOME').split()
+                'OPENCODE_CONFIG_DIR GEMINI_CLI_HOME QODER_CONFIG_DIR').split()
 
 
 _PREPARATION = ContextVar('preview_preparation', default=None)
@@ -356,8 +356,10 @@ def build_optional_utilities(root, state, sha, go, arch):
 
 def discover_clis(args):
     result = {}
-    for name in ('claude','codex','opencode','gemini'):
+    for name in ('claude','codex','opencode','gemini','qoder'):
         found = str(args.gemini_cli) if name == 'gemini' and args.gemini_cli else shutil.which(name)
+        if name == 'qoder':
+            found = str(args.qoder_cli) if getattr(args, 'qoder_cli', None) else found or shutil.which('qodercli')
         if found:
             path = Path(found).resolve(strict=True)
             if not path.is_file() or not os.access(path,os.X_OK):
@@ -482,7 +484,7 @@ def local_git_snapshot(root, lab, sha, env):
 
 def host_credential_paths(home=None):
     home = Path.home() if home is None else home
-    blocked = [home/leaf for leaf in ('.claude','.claude.json','.codex','.gemini','.config',
+    blocked = [home/leaf for leaf in ('.claude','.claude.json','.codex','.gemini','.qoder','.qodercli','.config',
                                     '.gitconfig','.git-credentials','.ssh','.aws','.npmrc','.local/share/opencode',
                                     'Library/Keychains','Library/Application Support/Claude',
                                     'Library/Application Support/Codex')]
@@ -630,6 +632,13 @@ if name == 'codex':
         allowed |= marketplace(args[3])
     allowed |= args in [['plugin','marketplace',verb,key,'--json'] for verb in ('update','remove') for key in known]
     allowed |= args in [['plugin',verb,'agent-notify@'+key,'--json'] for verb in ('add','remove') for key in known]
+if name == 'qoder' and len(args) == 8:
+    allowed |= (args[0] == '--config-dir' and local(args[1]) and
+                args[2:4] == ['plugins','install'] and local(args[4]) and
+                args[5:] == ['--scope','user','--json'])
+if name == 'qoder' and len(args) == 9:
+    allowed |= (args[0] == '--config-dir' and local(args[1]) and
+                args[2:] == ['plugins','uninstall','agent-notifications-qoder@local','--scope','user','--json','--keep-data'])
 if not allowed or name not in D['installed']:
     receipt({'cli':name,'args':args,'rejected':True,'exit_code':99})
     print('Rejected TEST CLI command: '+name+' '+repr(args),file=sys.stderr)
@@ -637,7 +646,7 @@ if not allowed or name not in D['installed']:
 # SDK native adapters intentionally filter ambient environment. Restore only
 # this harness's fixed private environment, preserving their private profile.
 env = dict(D['env'])
-for key in ('HOME','CODEX_HOME','CLAUDE_CONFIG_DIR','GEMINI_CLI_HOME','TMPDIR'):
+for key in ('HOME','CODEX_HOME','CLAUDE_CONFIG_DIR','GEMINI_CLI_HOME','QODER_CONFIG_DIR','TMPDIR'):
     if key in os.environ:
         if not local(os.environ[key]): sys.exit('Rejected non-TEST CLI profile')
         env[key] = os.environ[key]
@@ -889,6 +898,10 @@ def preview(args):
             if proof['SourceCommit'] != sha or proof['SHA256'] != digest(staged):
                 raise ValueError('Binary SourceCommit/SHA256 does not match clean repository HEAD')
             source_identity(root,sha)
+            if getattr(args, 'existing_config', False):
+                preparation.stage('Preparing existing TEST notification settings')
+                run_command([str(staged),'config','init','--json'],cwd=lab,env=env,
+                            text=True,capture_output=True,check=True)
             detail('Actual installed CLIs (missing CLIs remain absent): '+json.dumps(installed))
             for name, snapshot in snapshots.items():
                 detail(name+' TEST execution snapshot: '+snapshot['execution']+' (SHA256 '+snapshot['snapshot_sha256']+')')
@@ -924,6 +937,8 @@ def main():
     parser.add_argument('--state-dir',type=Path,help='private mode-700 TEST directory outside checkout for caches/profiles (default: OS temporary cache by UID)')
     parser.add_argument('--go',default='go',help='Go executable for source build (default: go from PATH)')
     parser.add_argument('--gemini-cli',type=Path,help='explicit real Gemini CLI executable for TEST only (for example an isolated 0.62.0 install)')
+    parser.add_argument('--qoder-cli',type=Path,help='explicit real Qoder CLI executable for isolated registration preview')
+    parser.add_argument('--existing-config',action='store_true',help='initialize private TEST settings before installation to exercise config-only control roots')
     parser.add_argument('--plain',action='store_true',help='explicit accessible line prompts instead of automatic terminal UI')
     args = parser.parse_args()
     try:

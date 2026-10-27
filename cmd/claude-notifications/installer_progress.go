@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"runtime"
 	"syscall"
 	"time"
 
@@ -16,6 +17,20 @@ import (
 )
 
 func installerProgressMain(args []string, stdout io.Writer, stderr *os.File) int {
+	// Bootstrap must negotiate worker isolation before backgrounding product
+	// setup. Older released helpers retain the synchronous owner protocol.
+	if len(args) == 1 && args[0] == "--parallel-capabilities" {
+		// Shell-owned process groups are qualified on POSIX. Native Windows
+		// descendant containment must be qualified before advertising fan-out;
+		// its existing synchronous bootstrap remains available.
+		if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+			return 1
+		}
+		if n, err := fmt.Fprintln(stdout, "installer-parallel-v1"); err != nil || n != len("installer-parallel-v1\n") {
+			return 1
+		}
+		return 0
+	}
 	if len(args) == 1 && args[0] == "--result-capabilities" {
 		if _, err := fmt.Fprintln(stdout, installerResultCapability); err != nil {
 			return 1

@@ -58,6 +58,26 @@ _CONFIG_STAGE=""
 _CONFIG_HELPER=""
 _PORTABLE_STAGE=""
 _KEEP_CONFIG_STAGE=false
+_PARALLEL_ROOT=""
+_PARALLEL_ACTIVE=false
+_PARALLEL_IN_FLIGHT=false
+_PARALLEL_DISPATCHING=false
+_PARALLEL_INTERRUPT_STATUS=0
+_PARALLEL_WORKER=""
+_PARALLEL_GATE_HELD=false
+_PARALLEL_GATE_ABSENT_FAILURES=0
+_PARALLEL_PIDS=()
+_PARALLEL_AUX_PIDS=()
+_PARALLEL_AUX_DONE=()
+_PARALLEL_FORCED_STOP=false
+_PARALLEL_HELPER_CAPTURE=""
+_PARALLEL_FOLLOW_UP_STARTED=false
+_PARALLEL_CLIENTS=()
+_PARALLEL_DONE=()
+_PARALLEL_LINES=()
+_PARALLEL_READY_CLIENTS=""
+_PARALLEL_POLICY_READY=false
+_PARALLEL_MONITOR_WAS_SET=false
 _FINAL_BOARD_RENDERED=false
 _KEEP_PORTABLE_STAGE=false
 PRODUCT=""
@@ -85,6 +105,7 @@ UI_ARGS=()
 _UI_MODE=""
 _SELECTOR_INTENT=""
 _FROZEN_CONTROL=""
+_FROZEN_GLOBAL_CONFIG=""
 _FROZEN_RUNTIME=""
 _FROZEN_CLAUDE_MCP=""
 _FROZEN_CODEX_MCP=""
@@ -416,7 +437,9 @@ channel_marketplace_add() {
     _CHANNEL_ADOPTED=1
 }
 
-channel_install_plugin() (
+channel_install_plugin() { bootstrap_writer_gate channel_install_plugin_transaction "$@"; }
+
+channel_install_plugin_transaction() (
     # A version number alone is not a source generation. Claude reuses an
     # existing same-version cache, so retain it until the native CLI has copied
     # the complete qualified checkout. Never uninstall or remove a marketplace.
@@ -1223,7 +1246,9 @@ find_plugin_root() {
 
 # ──────────────────────────────────────────────
 
-download_binary() {
+download_binary() { bootstrap_writer_gate download_binary_transaction "$@"; }
+
+download_binary_transaction() {
     echo ""
     echo -e "${BLUE}📦 Downloading notification binary...${NC}"
 
@@ -1291,8 +1316,8 @@ setup_iterm2_venv() {
 
 # ──────────────────────────────────────────────
 
-# Progress observes shell-owned state. Never background an installation function:
-# its arrays, staged paths and recovery decisions must survive in this shell.
+# One parent owns presentation. Parallel workers use private finite IPC records;
+# their shell state is never assumed to propagate into the coordinator.
 progress_rich_available() {
     [ "${BOOTSTRAP_VERBOSE:-0}" != 1 ] && [ "${_UI_MODE:-auto}" != plain ] &&
         [ -z "${NO_COLOR:-}" ] && [ "${TERM:-dumb}" != dumb ] && [ -t 2 ]
@@ -1386,6 +1411,7 @@ progress_stage_phase() {
 }
 
 progress_start() {
+    [ -z "$_PARALLEL_WORKER" ] || return 0
     [ -z "$_PROGRESS_PID" ] || return 0
     if progress_helper_available && [ "$_PROGRESS_SESSION_SUPPORTED" = true ] && [ "$_PROGRESS_JOURNAL_DISABLED" != true ]; then
         _PROGRESS_STOP_FILE=$(mktemp "${TMPDIR:-/tmp}/bootstrap-observer-stop-XXXXXX") || return 0
@@ -1642,6 +1668,11 @@ report_diagnostics() {
 run_setup_stage() {
     local label="$1" status=0
     shift
+    if [ -n "$_PARALLEL_WORKER" ]; then
+        # The outer worker capture owns all nested output and diagnostics.
+        "$@" || status=$?
+        return "$status"
+    fi
     _PROGRESS_LOG=$(mktemp "${TMPDIR:-/tmp}/bootstrap-output-XXXXXX") || return 1
     _PROGRESS_STDERR=$(mktemp "${TMPDIR:-/tmp}/bootstrap-output-XXXXXX") || { rm -f "$_PROGRESS_LOG"; _PROGRESS_LOG=""; return 1; }
     _DIAGNOSTIC_LABEL=$label
@@ -1658,7 +1689,7 @@ run_setup_stage() {
     "$@" > "$_PROGRESS_LOG" 2> "$_PROGRESS_STDERR" || status=$?
     if [ "$status" -eq 0 ]; then progress_record transition global "$_PROGRESS_GLOBAL_PHASE" done
     else progress_record transition global "$_PROGRESS_GLOBAL_PHASE" failed; fi
-    progress_stop "$status"
+    [ "$_PARALLEL_ACTIVE" = true ] || progress_stop "$status"
     diagnostic_capture_stage "$status"
     if [ "$status" -eq 0 ] && [ -s "$_PROGRESS_STDERR" ]; then _DIAGNOSTIC_NOTED=true; fi
     rm -f "$_PROGRESS_LOG" "$_PROGRESS_STDERR"
@@ -2019,6 +2050,31 @@ select_product() {
 
 bootstrap_cleanup() {
     local interrupted_status=$?
+    parallel_cancel_jobs
+    if [ "$_PARALLEL_IN_FLIGHT" = true ]; then
+        _KEEP_CONFIG_STAGE=true
+        local client job
+        # Save the interrupted parent helper capture before worker-log merging
+        # changes these shell-owned paths and the current stage label.
+        if [ -n "$_PARALLEL_HELPER_CAPTURE" ] && [ -f "$_PARALLEL_HELPER_CAPTURE" ] && [ ! -L "$_PARALLEL_HELPER_CAPTURE" ] &&
+            [ -n "$_PROGRESS_LOG" ] && [ -f "$_PROGRESS_LOG" ] && [ ! -L "$_PROGRESS_LOG" ]; then
+            head -c 65536 "$_PARALLEL_HELPER_CAPTURE" >> "$_PROGRESS_LOG" || true
+        fi
+        diagnostic_capture_stage interrupted
+        for client in ${_PARALLEL_CLIENTS[@]+"${_PARALLEL_CLIENTS[@]}"}; do
+            job="$_PARALLEL_ROOT/$client"
+            _PROGRESS_LOG="$job/stdout"; _PROGRESS_STDERR="$job/stderr"; _DIAGNOSTIC_LABEL="Installing $client notifications"
+            if parallel_read_result "$job/result"; then
+                if [ "$_PARALLEL_FOLLOW_UP_STARTED" != true ]; then progress_phase "$client" "$_JOB_PHASE" "$_JOB_OUTCOME"; fi
+                diagnostic_capture_stage "$_JOB_STATUS"
+            else
+                if [ "$_PARALLEL_FOLLOW_UP_STARTED" != true ]; then progress_phase "$client" preparation state_requires_inspection; fi
+                diagnostic_capture_stage interrupted
+            fi
+        done
+        if [ "$_PARALLEL_FOLLOW_UP_STARTED" = true ]; then parallel_replay_progress; fi
+        _PROGRESS_LOG=""; _PROGRESS_STDERR=""; _DIAGNOSTIC_LABEL="Installing selected clients"
+    fi
     progress_stop 1
     if [ -n "$_DIAGNOSTIC_LABEL" ]; then
         # The interrupted shared stage does not prove which client's activation
@@ -2026,6 +2082,7 @@ bootstrap_cleanup() {
         progress_record transition global "$_PROGRESS_GLOBAL_PHASE" failed
         diagnostic_capture_stage interrupted
         printf 'Setup incomplete: installation was interrupted.\n' >&2
+        if [ "$_PARALLEL_FORCED_STOP" = true ]; then printf 'Installer termination required force; recovery files were retained.\n' >&2; fi
         report_progress "${interrupted_status:-1}"
         report_diagnostics
     fi
@@ -2036,6 +2093,7 @@ bootstrap_cleanup() {
     close_prompt
     [ -z "$_BOOTSTRAP_TMP" ] || rm -f "$_BOOTSTRAP_TMP"
     [ -z "$_BOOTSTRAP_STAGE" ] || rm -rf "$_BOOTSTRAP_STAGE"
+    if [ -n "$_PARALLEL_ROOT" ] && [ "$_KEEP_CONFIG_STAGE" != true ]; then rm -rf "$_PARALLEL_ROOT"; fi
     if [ "$_KEEP_PORTABLE_STAGE" != true ]; then
         [ -z "$_PORTABLE_STAGE" ] || rm -rf "$_PORTABLE_STAGE"
     fi
@@ -2045,17 +2103,30 @@ bootstrap_cleanup() {
     return 0
 }
 
+bootstrap_interrupt() {
+    # Defer only across spawn + PID registration, so a signal can never strand
+    # a just-created process group outside the parent's owned job roster.
+    if [ "$_PARALLEL_DISPATCHING" = true ]; then _PARALLEL_INTERRUPT_STATUS=$1
+    else exit "$1"; fi
+}
+
 install_cleanup_traps() {
     # An interrupt may run EXIT while a stage function's stderr is redirected.
     # Retain the display destination so the private log receipt remains visible.
     exec 4>&2
     trap 'bootstrap_cleanup >&4 2>&4' EXIT
-    trap 'exit 130' INT
-    trap 'exit 143' TERM
-    trap 'exit 129' HUP
+    trap 'bootstrap_interrupt 130' INT
+    trap 'bootstrap_interrupt 143' TERM
+    trap 'bootstrap_interrupt 129' HUP
 }
 
 install_runtime() {
+    if [ "$1" != codex ]; then bootstrap_writer_gate install_runtime_transaction "$@";
+    else install_runtime_transaction "$@"; fi
+}
+
+install_runtime_transaction() {
+    parallel_phase runtime
     local product="$1" script="$2" target="$3"
     local disposable=false
     [ "$product" = "codex" ] && disposable=true
@@ -2070,9 +2141,9 @@ install_runtime() {
 fetch_bootstrap_file() {
     progress_download_activity "$2"
     if command -v curl >/dev/null 2>&1; then
-        curl -fsSL --connect-timeout 15 --max-time 120 "$1" -o "$2"
+        bootstrap_external curl -fsSL --connect-timeout 15 --max-time 120 "$1" -o "$2"
     else
-        wget -q -T 120 "$1" -O "$2"
+        bootstrap_external wget -q -T 120 "$1" -O "$2"
     fi
 }
 
@@ -2345,7 +2416,7 @@ config_preflight() {
 }
 
 initialize_config() {
-    if "$_CONFIG_HELPER" config init --json; then return 0; fi
+    if bootstrap_external "$_CONFIG_HELPER" config init --json; then return 0; fi
     report_config_init_failure
 }
 
@@ -2364,6 +2435,7 @@ report_config_init_failure() {
 }
 
 install_codex() {
+    parallel_phase download
     stage_channel_companions || return 1
     local tag="$BOOTSTRAP_TAG" version="${BOOTSTRAP_TAG#v}"
     local source_base="${BOOTSTRAP_SOURCE_BASE_URL:-https://github.com/${REPO}/archive}"
@@ -2392,6 +2464,7 @@ install_codex() {
             esac
             binary="$bundle/bin/claude-notifications-windows-$arch.exe" ;;
     esac
+    parallel_phase verification
     local actual
     actual=$(CN_PRODUCT=codex "$binary" --version) || return 1
     [ "$actual" = "claude-notifications v$version" ] || {
@@ -2420,9 +2493,12 @@ install_codex() {
         installed_version=$(get_manifest_version "${setup_codex_home:-$DEFAULT_CODEX_HOME}/claude-notifications-go/.claude-plugin/plugin.json")
         [ -z "$installed_version" ] || channel_refuse_downgrade "$installed_version" "$BOOTSTRAP_TAG" || return 1
     fi
-    run_codex_setup --dry-run || return 1
-    config_preflight || return 1
-    run_codex_setup || return $?
+    run_codex_transaction() {
+        run_codex_setup --dry-run || return 1
+        config_preflight || return 1
+        run_codex_setup
+    }
+    bootstrap_writer_gate run_codex_transaction || return $?
     progress_phase codex runtime-lookup registration_committed
     if [ -n "$setup_codex_home" ]; then
         CONFIGURE_BINARY=$(installed_notification_binary "$setup_codex_home/claude-notifications-go") || return 1
@@ -2458,10 +2534,13 @@ notification_command_available() {
 }
 
 install_claude() {
+    parallel_phase download
     stage_channel_companions || return 1
+    parallel_phase marketplace
     setup_marketplace || return 1
     sync_marketplace_checkout || return 1
     install_plugin || return 1
+    parallel_phase verification
     find_plugin_root || return 1
     # The channel transaction already promoted the runtime while its backup
     # was recoverable. Do not repeat that promotion outside the transaction.
@@ -2506,6 +2585,7 @@ opencode_remove_command() { observer_remove_command "$1" setup-opencode; }
 # consent. Acquisition stays temporary; only the verified Go transaction writes
 # the managed installation. It never launches or installs the OpenCode host.
 install_opencode() {
+    parallel_phase download
     local root binary runtime os arch base native native_root config_path installed
     local channels=(${OPENCODE_ARGS[@]+"${OPENCODE_ARGS[@]}"})
     if [ -n "$_SELECTOR_INTENT" ]; then channels=("${_FROZEN_OPENCODE_CHANNELS[@]}"); fi
@@ -2524,8 +2604,6 @@ install_opencode() {
         set -- "$@" --control-root "$root" --home "$INSTALLER_HOME"
         set -- "$@" --opencode-config-dir "$_FROZEN_OPENCODE"
     fi
-    # Existing shared components supply their authoritative runtime directory.
-    [ -e "$root/ownership.json" ] || set -- "$@" --runtime-root "$runtime"
     if [ "$os" = darwin ] && { [[ " ${channels[*]-} " = *" --desktop "* ]] || [[ " ${channels[*]-} " = *" --desktop=true "* ]]; }; then
         base="${BOOTSTRAP_RELEASES_BASE_URL:-https://github.com/${REPO}/releases}/download/$BOOTSTRAP_TAG"
         native="$_CONFIG_STAGE/ClaudeNotifier.app"
@@ -2539,7 +2617,7 @@ install_opencode() {
         set -- "$@" --native-app "$native"
     fi
     progress_phase "$PRODUCT" registration state_requires_inspection
-run_setup_stage "Installing OpenCode notifications" "$_CONFIG_HELPER" "$@" </dev/null || return 1
+    run_setup_stage "Installing OpenCode notifications" observer_install_transaction "$root" "$runtime" "$@" </dev/null || return 1
     progress_phase "$PRODUCT" runtime-lookup registration_committed
     native_root="$root"
     [ "$os" != windows ] || native_root=$(cygpath -m "$root") || return 1
@@ -2547,7 +2625,7 @@ run_setup_stage "Installing OpenCode notifications" "$_CONFIG_HELPER" "$@" </dev
     installed="$runtime/claude-notifications-$os-$arch"
     [ "$os" != windows ] || installed="$installed.exe"
     progress_phase "$PRODUCT" config registration_committed
-    run_setup_stage "Preparing notification settings" initialize_config || return 1
+    if [ -z "$_PARALLEL_WORKER" ]; then run_setup_stage "Preparing notification settings" initialize_config || return 1; fi
     config_path=$("$_CONFIG_HELPER" config path) || return 1
     local report
     report=$(mktemp "${TMPDIR:-/tmp}/bootstrap-summary-XXXXXX") || return 1
@@ -2577,6 +2655,7 @@ run_setup_stage "Installing OpenCode notifications" "$_CONFIG_HELPER" "$@" </dev
 }
 
 install_gemini() {
+    parallel_phase download
     local root binary runtime os arch base native native_root config_path installed
     local channels=(${OPENCODE_ARGS[@]+"${OPENCODE_ARGS[@]}"})
     if [ -n "$_SELECTOR_INTENT" ]; then channels=("${_FROZEN_GEMINI_CHANNELS[@]}"); fi
@@ -2595,8 +2674,6 @@ install_gemini() {
         set -- "$@" --control-root "$root" --home "$INSTALLER_HOME"
         set -- "$@" --config-root "$_FROZEN_GEMINI"
     fi
-    # Existing shared components supply their authoritative runtime directory.
-    [ -e "$root/ownership.json" ] || set -- "$@" --runtime-root "$runtime"
     if [ "$os" = darwin ] && { [[ " ${channels[*]-} " = *" --desktop "* ]] || [[ " ${channels[*]-} " = *" --desktop=true "* ]]; }; then
         base="${BOOTSTRAP_RELEASES_BASE_URL:-https://github.com/${REPO}/releases}/download/$BOOTSTRAP_TAG"
         native="$_CONFIG_STAGE/ClaudeNotifier.app"
@@ -2610,7 +2687,7 @@ install_gemini() {
         set -- "$@" --native-app "$native"
     fi
     progress_phase "$PRODUCT" registration state_requires_inspection
-run_setup_stage "Installing Gemini CLI notifications" "$_CONFIG_HELPER" "$@" </dev/null || return 1
+    run_setup_stage "Installing Gemini CLI notifications" observer_install_transaction "$root" "$runtime" "$@" </dev/null || return 1
     progress_phase "$PRODUCT" runtime-lookup registration_committed
     native_root="$root"
     [ "$os" != windows ] || native_root=$(cygpath -m "$root") || return 1
@@ -2618,7 +2695,7 @@ run_setup_stage "Installing Gemini CLI notifications" "$_CONFIG_HELPER" "$@" </d
     installed="$runtime/claude-notifications-$os-$arch"
     [ "$os" != windows ] || installed="$installed.exe"
     progress_phase "$PRODUCT" config registration_committed
-    run_setup_stage "Preparing notification settings" initialize_config || return 1
+    if [ -z "$_PARALLEL_WORKER" ]; then run_setup_stage "Preparing notification settings" initialize_config || return 1; fi
     config_path=$("$_CONFIG_HELPER" config path) || return 1
     local report status
     report=$(mktemp "${TMPDIR:-/tmp}/bootstrap-gemini-summary-XXXXXX") || return 1
@@ -2656,6 +2733,7 @@ gemini_remove_command() {
 }
 
 install_qoder() {
+    parallel_phase download
     local root binary runtime os arch base native native_root config_path installed
     local channels=(${OPENCODE_ARGS[@]+"${OPENCODE_ARGS[@]}"})
     if [ -n "$_SELECTOR_INTENT" ]; then channels=("${_FROZEN_QODER_CHANNELS[@]}"); fi
@@ -2674,8 +2752,6 @@ install_qoder() {
         set -- "$@" --control-root "$root" --home "$INSTALLER_HOME"
         set -- "$@" --config-root "$_FROZEN_QODER" --qoder-executable "$_QODER_EXEC"
     fi
-    # Existing shared components supply their authoritative runtime directory.
-    [ -e "$root/ownership.json" ] || set -- "$@" --runtime-root "$runtime"
     if [ "$os" = darwin ] && { [[ " ${channels[*]-} " = *" --desktop "* ]] || [[ " ${channels[*]-} " = *" --desktop=true "* ]]; }; then
         base="${BOOTSTRAP_RELEASES_BASE_URL:-https://github.com/${REPO}/releases}/download/$BOOTSTRAP_TAG"
         native="$_CONFIG_STAGE/ClaudeNotifier.app"
@@ -2689,7 +2765,7 @@ install_qoder() {
         set -- "$@" --native-app "$native"
     fi
     progress_phase "$PRODUCT" registration state_requires_inspection
-run_setup_stage "Installing Qoder notifications" "$_CONFIG_HELPER" "$@" </dev/null || return 1
+    run_setup_stage "Installing Qoder notifications" observer_install_transaction "$root" "$runtime" "$@" </dev/null || return 1
     progress_phase "$PRODUCT" runtime-lookup registration_committed
     native_root="$root"
     [ "$os" != windows ] || native_root=$(cygpath -m "$root") || return 1
@@ -2697,7 +2773,7 @@ run_setup_stage "Installing Qoder notifications" "$_CONFIG_HELPER" "$@" </dev/nu
     installed="$runtime/claude-notifications-$os-$arch"
     [ "$os" != windows ] || installed="$installed.exe"
     progress_phase "$PRODUCT" config registration_committed
-    run_setup_stage "Preparing notification settings" initialize_config || return 1
+    if [ -z "$_PARALLEL_WORKER" ]; then run_setup_stage "Preparing notification settings" initialize_config || return 1; fi
     config_path=$("$_CONFIG_HELPER" config path) || return 1
     local report status
     report=$(mktemp "${TMPDIR:-/tmp}/bootstrap-qoder-summary-XXXXXX") || return 1
@@ -2855,6 +2931,497 @@ report_progress() {
     done
 }
 
+# The session mutex supplements (never replaces) each writer's native CAS and
+# ownership checks. Reentrancy spans Claude cache rollback and runtime promotion.
+bootstrap_writer_gate() {
+    local nonblocking=false
+    _PARALLEL_GATE_BUSY=false
+    if [ "${1:-}" = --try ]; then nonblocking=true; shift; fi
+    if [ -z "$_PARALLEL_ROOT" ] || [ "$_PARALLEL_GATE_HELD" = true ]; then "$@"; return $?; fi
+    [ ! -e "$_PARALLEL_ROOT/cancel" ] || return 130
+    parallel_phase waiting
+    while ! mkdir "$_PARALLEL_ROOT/writer.lock" 2>/dev/null; do
+        [ ! -e "$_PARALLEL_ROOT/cancel" ] || return 130
+        # A legitimate owner can remove or reacquire the directory after mkdir
+        # fails. Reject only observed non-directory kinds; absence must retry.
+        if [ -L "$_PARALLEL_ROOT/writer.lock" ] || [ -f "$_PARALLEL_ROOT/writer.lock" ] ||
+            [ -p "$_PARALLEL_ROOT/writer.lock" ] || [ -S "$_PARALLEL_ROOT/writer.lock" ] ||
+            [ -b "$_PARALLEL_ROOT/writer.lock" ] || [ -c "$_PARALLEL_ROOT/writer.lock" ]; then return 1; fi
+        # Keep this count across --try calls; a real held directory is never
+        # time-limited and resets consecutive absent-path failures.
+        if [ -d "$_PARALLEL_ROOT/writer.lock" ]; then
+            _PARALLEL_GATE_ABSENT_FAILURES=0
+        else
+            _PARALLEL_GATE_ABSENT_FAILURES=$((_PARALLEL_GATE_ABSENT_FAILURES + 1))
+            if [ "$_PARALLEL_GATE_ABSENT_FAILURES" -ge 32 ]; then
+                : > "$_PARALLEL_ROOT/cancel"
+                return 1
+            fi
+        fi
+        if [ "$nonblocking" = true ]; then _PARALLEL_GATE_BUSY=true; return 75; fi
+        sleep 0.05
+    done
+    _PARALLEL_GATE_ABSENT_FAILURES=0
+    local status=0
+    printf '%s\n' "${_PARALLEL_WORKER:-parent}" > "$_PARALLEL_ROOT/writer.lock/owner"
+    _PARALLEL_GATE_HELD=true
+    parallel_phase runtime
+    "$@" || status=$?
+    _PARALLEL_GATE_HELD=false
+    parallel_release_writer_gate || return 1
+    return "$status"
+}
+
+parallel_release_writer_gate() {
+    if ! rm -f "$_PARALLEL_ROOT/writer.lock/owner" || ! rmdir "$_PARALLEL_ROOT/writer.lock"; then
+        # An ownerless lock cannot be reclaimed as a completed transaction.
+        # Stop queued writers and policy waiters instead of stranding them.
+        : > "$_PARALLEL_ROOT/cancel"
+        return 1
+    fi
+    return 0
+}
+
+parallel_phase() {
+    [ -n "$_PARALLEL_WORKER" ] || return 0
+    progress_phase "$_PARALLEL_WORKER" "$1" running
+}
+
+# Mixed fresh installs must seed the approved MCP policy before observer channel
+# consent can create that policy with enabled=false. Acquisition stays concurrent.
+parallel_policy_barrier() {
+    [ -n "$_PARALLEL_WORKER" ] && [ -n "$_PARALLEL_ROOT" ] || return 0
+    parallel_phase waiting
+    while [ ! -f "$_PARALLEL_ROOT/policy.ready" ]; do
+        [ -d "$_PARALLEL_ROOT" ] && [ ! -L "$_PARALLEL_ROOT" ] || return 1
+        if [ -e "$_PARALLEL_ROOT/policy.unavailable" ] || [ -e "$_PARALLEL_ROOT/cancel" ]; then
+            echo 'Observer registration retained for retry: approved shared policy preparation is unavailable.' >&2
+            return 1
+        fi
+        sleep 0.05
+    done
+}
+
+observer_install_transaction() {
+    parallel_policy_barrier || return 1
+    bootstrap_writer_gate observer_install_apply "$@"
+}
+
+observer_install_apply() {
+    local root="$1" runtime="$2"; shift 2
+    # Read the ledger only after acquiring the coordinator, then let the helper
+    # plan, save policy and promote bytes under its existing locks/CAS.
+    [ -e "$root/ownership.json" ] || set -- "$@" --runtime-root "$runtime"
+    "$_CONFIG_HELPER" "$@"
+}
+
+parallel_install_available() {
+    [ "${#SELECTED_PRODUCTS[@]}" -gt 1 ] && [ "$_PRODUCT_CSV" != cursor ] || return 1
+    local capability
+    capability=$("$_CONFIG_HELPER" installer-progress --parallel-capabilities </dev/null 2>/dev/null) || return 1
+    [ "$capability" = installer-parallel-v1 ]
+}
+
+# Fixed line records are data, never shell assignments. Each leaf is created
+# inside the private session directory and atomically renamed when complete.
+parallel_write_result() {
+    local status="$1" i=0 phase=preparation outcome=state_requires_inspection
+    while [ "$i" -lt "${#_PROGRESS_IDS[@]}" ]; do
+        if [ "${_PROGRESS_IDS[$i]}" = "$_PARALLEL_WORKER" ]; then
+            phase=${_PROGRESS_PHASES[$i]}; outcome=${_PROGRESS_OUTCOMES[$i]}; break
+        fi
+        i=$((i + 1))
+    done
+    if [ "$status" -ne 0 ] && [ "$outcome" = running ]; then outcome=state_requires_inspection; fi
+    if [ "$status" -eq 0 ]; then
+        case "$_PARALLEL_WORKER" in
+            claude|codex)
+                phase=MCP; outcome=registration_committed_follow_up_not_started
+                if [ "$CONFIGURE_NOTIFICATIONS" != true ]; then phase=complete; outcome=completed; fi ;;
+            *) phase=complete; outcome=completed ;;
+        esac
+    fi
+    # Paths containing line delimiters cannot cross this fixed record boundary.
+    case "$PLUGIN_ROOT$CONFIGURE_BINARY$_BOOTSTRAP_STAGE" in *$'\n'*|*$'\r'*) return 1 ;; esac
+    printf '%s\n' installer-worker-v1 "$status" "$PLUGIN_ROOT" "$CONFIGURE_BINARY" "$phase" "$outcome" \
+        "$_BOOTSTRAP_STAGE" > "$_PARALLEL_JOB/result.pending" || return 1
+    mv "$_PARALLEL_JOB/result.pending" "$_PARALLEL_JOB/result"
+}
+
+parallel_worker() {
+    trap - EXIT INT TERM HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    trap 'exit 129' HUP
+    umask 077
+    _PARALLEL_WORKER=$1; _PARALLEL_JOB=$2
+    PRODUCT=$1; _CONFIG_STAGE="$_PARALLEL_JOB/stage"
+    _CONFIG_HELPER="$_CONFIG_STAGE/${_CONFIG_HELPER##*/}"
+    _BOOTSTRAP_STAGE=""; _PORTABLE_STAGE=""; PLUGIN_ROOT=""; CONFIGURE_BINARY=""
+    _PROGRESS_PID=""; _PROGRESS_EVENTS=""; _PROGRESS_KIND=""
+    _PROGRESS_JOURNAL="$_PARALLEL_JOB/events"; _PROGRESS_JOURNAL_DISABLED=false
+    _PROGRESS_LOG=""; _PROGRESS_STDERR=""; _DIAGNOSTIC_LABEL=""
+    BOOTSTRAP_SUMMARY_FILE="$_PARALLEL_JOB/summary"
+    export BOOTSTRAP_SUMMARY_FILE
+    local status=0
+    progress_phase "$PRODUCT" preparation running
+    case "$PRODUCT" in
+        claude) CN_PRODUCT=claude install_claude || status=$? ;;
+        codex) install_codex || status=$? ;;
+        opencode) install_opencode || status=$? ;;
+        gemini) install_gemini || status=$? ;;
+        qoder) install_qoder || status=$? ;;
+        *) status=1 ;;
+    esac
+    if [ "$status" -eq 3 ]; then
+        progress_phase "$PRODUCT" config registration_committed
+        report_config_init_failure || true
+    fi
+    if [ "$status" -ne 0 ]; then
+        printf 'Retained installer files: %s\n' "$_PARALLEL_JOB" >&2
+        [ -z "$_BOOTSTRAP_STAGE" ] || printf 'Retained acquisition: %s\n' "$_BOOTSTRAP_STAGE" >&2
+    fi
+    parallel_write_result "$status" || return 1
+    return "$status"
+}
+
+# Run only an external argv command asynchronously. Stateful shell functions
+# remain in their owner; worker commands stay inside the worker's primary group.
+bootstrap_external() {
+    if [ "$_PARALLEL_ACTIVE" != true ] || [ -n "$_PARALLEL_WORKER" ]; then "$@"; return $?; fi
+    local monitor_flags=$- dispatching=$_PARALLEL_DISPATCHING status=0 pid index=${#_PARALLEL_AUX_PIDS[@]}
+    _PARALLEL_DISPATCHING=true
+    set -m
+    command "$@" </dev/null &
+    pid=$!
+    _PARALLEL_AUX_PIDS+=("$pid"); _PARALLEL_AUX_DONE+=(false)
+    case "$monitor_flags" in *m*) ;; *) set +m ;; esac
+    _PARALLEL_DISPATCHING=$dispatching
+    [ "$_PARALLEL_INTERRUPT_STATUS" -eq 0 ] || exit "$_PARALLEL_INTERRUPT_STATUS"
+    # Bash wait is interruptible by the parent's signal trap. Its EXIT cleanup
+    # can now stop the helper while its native runner still owns child cleanup.
+    wait "$pid" || status=$?
+    _PARALLEL_AUX_DONE[$index]=true
+    return "$status"
+}
+
+# Only children launched as monitor-mode jobs belong to these process groups.
+# Give native Go owners time to close their separate client-probe groups before
+# escalating. All owned jobs are joined before files or presentation are removed.
+parallel_cancel_jobs() {
+    [ -n "$_PARALLEL_ROOT" ] && [ -d "$_PARALLEL_ROOT" ] || return 0
+    local i=0 pid tick=0 alive=false deadline=$((SECONDS + 5))
+    : > "$_PARALLEL_ROOT/cancel"
+    while [ "$i" -lt "${#_PARALLEL_PIDS[@]}" ]; do
+        pid=${_PARALLEL_PIDS[$i]}
+        [ "${_PARALLEL_DONE[$i]}" = true ] || kill -TERM -- "-$pid" 2>/dev/null || true
+        i=$((i + 1))
+    done
+    i=0
+    while [ "$i" -lt "${#_PARALLEL_AUX_PIDS[@]}" ]; do
+        pid=${_PARALLEL_AUX_PIDS[$i]}
+        [ "${_PARALLEL_AUX_DONE[$i]}" = true ] || kill -TERM -- "-$pid" 2>/dev/null || true
+        i=$((i + 1))
+    done
+    while [ "$tick" -lt 100 ] && [ "$SECONDS" -lt "$deadline" ]; do
+        alive=false; i=0
+        while [ "$i" -lt "${#_PARALLEL_PIDS[@]}" ]; do
+            if [ "${_PARALLEL_DONE[$i]}" != true ] && kill -0 -- "-${_PARALLEL_PIDS[$i]}" 2>/dev/null; then alive=true; fi
+            i=$((i + 1))
+        done
+        i=0
+        while [ "$i" -lt "${#_PARALLEL_AUX_PIDS[@]}" ]; do
+            if [ "${_PARALLEL_AUX_DONE[$i]}" != true ] && kill -0 -- "-${_PARALLEL_AUX_PIDS[$i]}" 2>/dev/null; then alive=true; fi
+            i=$((i + 1))
+        done
+        [ "$alive" = true ] || break
+        sleep 0.05; tick=$((tick + 1))
+    done
+    i=0
+    while [ "$i" -lt "${#_PARALLEL_PIDS[@]}" ]; do
+        pid=${_PARALLEL_PIDS[$i]}
+        if [ "${_PARALLEL_DONE[$i]}" != true ]; then
+            if kill -0 -- "-$pid" 2>/dev/null; then
+                _PARALLEL_FORCED_STOP=true
+                kill -KILL -- "-$pid" 2>/dev/null || true
+            fi
+            wait "$pid" 2>/dev/null || true
+            _PARALLEL_DONE[$i]=true
+        fi
+        i=$((i + 1))
+    done
+    i=0
+    while [ "$i" -lt "${#_PARALLEL_AUX_PIDS[@]}" ]; do
+        pid=${_PARALLEL_AUX_PIDS[$i]}
+        if [ "${_PARALLEL_AUX_DONE[$i]}" != true ]; then
+            if kill -0 -- "-$pid" 2>/dev/null; then
+                _PARALLEL_FORCED_STOP=true
+                kill -KILL -- "-$pid" 2>/dev/null || true
+            fi
+            wait "$pid" 2>/dev/null || true
+            _PARALLEL_AUX_DONE[$i]=true
+        fi
+        i=$((i + 1))
+    done
+    if [ "$_PARALLEL_FORCED_STOP" = true ]; then _KEEP_CONFIG_STAGE=true; _KEEP_PORTABLE_STAGE=true; fi
+}
+
+parallel_read_result() {
+    local file="$1" bytes version extra
+    [ -f "$file" ] && [ ! -L "$file" ] || return 1
+    bytes=$(LC_ALL=C wc -c < "$file") || return 1
+    [ "$bytes" -le 32768 ] || return 1
+    {
+        IFS= read -r version && IFS= read -r _JOB_STATUS && IFS= read -r _JOB_PLUGIN &&
+        IFS= read -r _JOB_BINARY && IFS= read -r _JOB_PHASE && IFS= read -r _JOB_OUTCOME &&
+        IFS= read -r _JOB_STAGE && ! IFS= read -r extra
+    } < "$file" || return 1
+    [ "$version" = installer-worker-v1 ] || return 1
+    case "$_JOB_STATUS" in ''|*[!0-9]*) return 1 ;; esac
+    [ "${#_JOB_STATUS}" -le 3 ] && [ "$_JOB_STATUS" -le 255 ] || return 1
+    case "$_JOB_PHASE" in preparation|marketplace|download|runtime|verification|waiting|registration|runtime-lookup|config|MCP|complete) ;; *) return 1 ;; esac
+    case "$_JOB_OUTCOME" in running|state_requires_inspection|registration_committed|registration_committed_follow_up_not_started|completed) ;; *) return 1 ;; esac
+}
+
+parallel_drain_events() {
+    local index="$1" client="${_PARALLEL_CLIENTS[$1]}" file="$_PARALLEL_ROOT/${_PARALLEL_CLIENTS[$1]}/events"
+    local line=0 kind id phase outcome extra bytes
+    [ -f "$file" ] && [ ! -L "$file" ] || return 0
+    bytes=$(LC_ALL=C wc -c < "$file") || return 0
+    [ "$bytes" -le 262144 ] || return 0
+    while IFS=$'\t' read -r kind id phase outcome extra; do
+        line=$((line + 1))
+        [ "$line" -gt "${_PARALLEL_LINES[$index]}" ] || continue
+        [ "$kind" = transition ] && [ "$id" = "$client" ] && [ -z "$extra" ] || continue
+        case "$phase" in preparation|marketplace|download|runtime|verification|waiting|registration|runtime-lookup|config|MCP|complete) ;; *) continue ;; esac
+        case "$outcome" in running|state_requires_inspection|registration_committed|registration_committed_follow_up_not_started|completed) ;; *) continue ;; esac
+        progress_phase "$id" "$phase" "$outcome"
+    done < "$file"
+    _PARALLEL_LINES[$index]=$line
+}
+
+# After the producer has stopped, recover only finite facts from the parent's
+# private journal. Do not append while replaying or parse provider output.
+parallel_replay_progress() {
+    local file=$_PROGRESS_JOURNAL bytes kind id phase outcome extra index
+    [ -n "$file" ] && [ -f "$file" ] && [ ! -L "$file" ] || return 0
+    bytes=$(LC_ALL=C wc -c < "$file") || return 0
+    [ "$bytes" -le 262144 ] || return 0
+    while IFS=$'\t' read -r kind id phase outcome extra; do
+        case "$kind" in transition|snapshot) ;; *) continue ;; esac
+        [ -z "$extra" ] || continue
+        case "$id" in claude|codex|opencode|gemini|qoder) ;; *) continue ;; esac
+        case "$phase" in pending|preparation|marketplace|download|runtime|verification|waiting|registration|runtime-lookup|config|MCP|complete) ;; *) continue ;; esac
+        case "$outcome" in not_started|running|done|state_requires_inspection|registration_committed|registration_committed_follow_up_not_started|completed|activation_failed|activation_timeout|activation_canceled|activation_deadline|activation_not_attempted) ;; *) continue ;; esac
+        index=0
+        while [ "$index" -lt "${#_PROGRESS_IDS[@]}" ]; do
+            if [ "${_PROGRESS_IDS[$index]}" = "$id" ]; then
+                if [ "$phase" = MCP ] && [ "$outcome" = completed ]; then phase=complete; fi
+                _PROGRESS_PHASES[$index]=$phase; _PROGRESS_OUTCOMES[$index]=$outcome
+                break
+            fi
+            index=$((index + 1))
+        done
+    done < "$file"
+    return 0
+}
+
+parallel_seed_policy() {
+    local status=0
+    # Never wait here: a dead holder must still be reaped by the parent loop.
+    bootstrap_writer_gate --try parallel_seed_policy_transaction || status=$?
+    [ "$_PARALLEL_GATE_BUSY" != true ] || return 75
+    if [ "$status" -eq 0 ]; then
+        _PARALLEL_POLICY_READY=true
+        : > "$_PARALLEL_ROOT/policy.ready"
+    else
+        : > "$_PARALLEL_ROOT/policy.unavailable"
+    fi
+    return "$status"
+}
+
+parallel_seed_policy_transaction() {
+    # Hold one gate across global config initialization and approved policy seed.
+    local saved_product=$PRODUCT status=0
+    PRODUCT=$LEGACY_PRODUCT
+    run_setup_stage "Preparing notification settings" initialize_config || status=$?
+    if [ "$status" -eq 0 ] && [ "$CONFIGURE_NOTIFICATIONS" = true ]; then
+        run_setup_stage "Preparing approved notification policy" configure_agent_policy portable || status=$?
+    fi
+    PRODUCT=$saved_product
+    return "$status"
+}
+
+install_products_parallel() {
+    local selected job i remaining status=0 worker_status=0 seed_attempted=false seed_pending=false seed_status=0 legacy_remaining=0
+    local seed_plugin="" seed_binary="" notify_status=1 completion_i=0
+    local claude_plugin="" claude_binary="" codex_binary="" parent_summary=${BOOTSTRAP_SUMMARY_FILE:-}
+    local monitor_flags=$-
+    _PARALLEL_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/bootstrap-parallel-XXXXXX") || return 1
+    _PARALLEL_ROOT=$(cd -P "$_PARALLEL_ROOT" && pwd -P) || return 1
+    chmod 700 "$_PARALLEL_ROOT" || return 1
+    _PARALLEL_ACTIVE=true; _PARALLEL_POLICY_READY=false; _PARALLEL_READY_CLIENTS=""; _PARALLEL_GATE_ABSENT_FAILURES=0
+    _PARALLEL_PIDS=(); _PARALLEL_CLIENTS=(); _PARALLEL_DONE=(); _PARALLEL_LINES=()
+    _PARALLEL_AUX_PIDS=(); _PARALLEL_AUX_DONE=(); _PARALLEL_FORCED_STOP=false; _PARALLEL_FOLLOW_UP_STARTED=false
+    # The synchronous portable caller can append finite activation facts to this
+    # same private journal after every primary worker has been joined.
+    mkdir "$_CONFIG_STAGE/parallel" || return 1
+    chmod 700 "$_CONFIG_STAGE/parallel" || return 1
+    if [ -n "$_PROGRESS_JOURNAL" ] && [ -f "$_PROGRESS_JOURNAL" ] && [ ! -L "$_PROGRESS_JOURNAL" ]; then
+        mv "$_PROGRESS_JOURNAL" "$_CONFIG_STAGE/parallel/progress.events" || return 1
+    else
+        (umask 077; : > "$_CONFIG_STAGE/parallel/progress.events") || return 1
+    fi
+    _PROGRESS_JOURNAL="$_CONFIG_STAGE/parallel/progress.events"
+    chmod 600 "$_PROGRESS_JOURNAL" || return 1
+    # Pre-create every IPC leaf and verified stage before any worker starts.
+    for selected in claude codex opencode gemini qoder; do
+        case ",$_PRODUCT_CSV," in *",$selected,"*) ;; *) continue ;; esac
+        job="$_PARALLEL_ROOT/$selected"
+        (umask 077; mkdir "$job" "$job/stage"; : > "$job/events"; : > "$job/summary"; : > "$job/stdout"; : > "$job/stderr") || return 1
+        cp -pPR "$_CONFIG_STAGE/." "$job/stage/" || return 1
+        case "$selected" in claude|codex) legacy_remaining=$((legacy_remaining + 1)) ;; esac
+    done
+    if [ -z "$LEGACY_PRODUCT" ]; then
+        run_setup_stage "Preparing notification settings" initialize_config || return 1
+        _PARALLEL_POLICY_READY=true; : > "$_PARALLEL_ROOT/policy.ready"
+    fi
+    case "$monitor_flags" in *m*) _PARALLEL_MONITOR_WAS_SET=true ;; *) _PARALLEL_MONITOR_WAS_SET=false ;; esac
+    set -m
+    _PARALLEL_IN_FLIGHT=true
+    progress_start "Installing selected clients"
+    _PARALLEL_DISPATCHING=true
+    for selected in claude codex opencode gemini qoder; do
+        case ",$_PRODUCT_CSV," in *",$selected,"*) ;; *) continue ;; esac
+        [ "$_PARALLEL_INTERRUPT_STATUS" -eq 0 ] || break
+        job="$_PARALLEL_ROOT/$selected"
+        parallel_worker "$selected" "$job" </dev/null > "$job/stdout" 2> "$job/stderr" &
+        _PARALLEL_PIDS+=("$!"); _PARALLEL_CLIENTS+=("$selected"); _PARALLEL_DONE+=(false); _PARALLEL_LINES+=(0)
+    done
+    _PARALLEL_DISPATCHING=false
+    [ "$_PARALLEL_INTERRUPT_STATUS" -eq 0 ] || exit "$_PARALLEL_INTERRUPT_STATUS"
+    [ "$_PARALLEL_MONITOR_WAS_SET" = true ] || set +m
+    remaining=${#_PARALLEL_PIDS[@]}
+    while [ "$remaining" -gt 0 ]; do
+        i=0
+        while [ "$i" -lt "${#_PARALLEL_PIDS[@]}" ]; do
+            selected=${_PARALLEL_CLIENTS[$i]}; job="$_PARALLEL_ROOT/$selected"
+            if [ "${_PARALLEL_DONE[$i]}" = true ]; then i=$((i + 1)); continue; fi
+            parallel_drain_events "$i"
+            if ! progress_child_running "${_PARALLEL_PIDS[$i]}"; then
+                worker_status=0; wait "${_PARALLEL_PIDS[$i]}" 2>/dev/null || worker_status=$?
+                # Join closes the journal. Drain its final transitions before
+                # merging the authoritative result, then never drain it again.
+                parallel_drain_events "$i"
+                # Only an interrupted worker can leave active descendants.
+                # Never signal a normally completed, already-joined job group.
+                if [ ! -f "$job/result" ]; then
+                    kill -KILL -- "-${_PARALLEL_PIDS[$i]}" 2>/dev/null || true
+                fi
+                _PARALLEL_DONE[$i]=true; remaining=$((remaining - 1))
+                if [ -f "$_PARALLEL_ROOT/writer.lock/owner" ] && [ "$(cat "$_PARALLEL_ROOT/writer.lock/owner")" = "$selected" ]; then
+                    parallel_release_writer_gate || status=1
+                fi
+                if parallel_read_result "$job/result" && [ "$_JOB_STATUS" -eq "$worker_status" ]; then
+                    progress_phase "$selected" "$_JOB_PHASE" "$_JOB_OUTCOME"
+                    if [ "$worker_status" -eq 0 ]; then
+                        case "$selected" in
+                            claude) claude_plugin=$_JOB_PLUGIN; claude_binary=$_JOB_BINARY ;;
+                            codex) codex_binary=$_JOB_BINARY ;;
+                        esac
+                        case "$selected" in
+                            claude|codex)
+                                _PARALLEL_READY_CLIENTS=${_PARALLEL_READY_CLIENTS:+$_PARALLEL_READY_CLIENTS,}$selected
+                                if [ "$seed_attempted" != true ] && [ "$seed_pending" != true ]; then
+                                    seed_pending=true; seed_plugin=$_JOB_PLUGIN; seed_binary=$_JOB_BINARY
+                                fi ;;
+                        esac
+                    else status=1; fi
+                else
+                    status=1
+                    printf 'Worker result unavailable; inspect retained files: %s\n' "$job" >> "$job/stderr"
+                    progress_phase "$selected" preparation state_requires_inspection
+                fi
+                case "$selected" in claude|codex) legacy_remaining=$((legacy_remaining - 1)) ;; esac
+                if [ "$legacy_remaining" -eq 0 ] && [ -z "$_PARALLEL_READY_CLIENTS" ] && [ -n "$LEGACY_PRODUCT" ]; then
+                    : > "$_PARALLEL_ROOT/policy.unavailable"
+                fi
+            fi
+            i=$((i + 1))
+        done
+        if [ "$seed_pending" = true ]; then
+            PLUGIN_ROOT=$seed_plugin; CONFIGURE_BINARY=$seed_binary; seed_status=0
+            parallel_seed_policy || seed_status=$?
+            if [ "$_PARALLEL_GATE_BUSY" != true ]; then
+                seed_attempted=true; seed_pending=false
+                [ "$seed_status" -eq 0 ] || status=1
+            fi
+        fi
+        [ "$remaining" -eq 0 ] || sleep 0.05
+    done
+    [ "$_PARALLEL_MONITOR_WAS_SET" = true ] || set +m
+    # Deterministic diagnostic and display summary order is independent of finish
+    # order. No child writes into the parent's summary or diagnostic stream.
+    for selected in "${_PARALLEL_CLIENTS[@]}"; do
+        job="$_PARALLEL_ROOT/$selected"
+        _PROGRESS_LOG="$job/stdout"; _PROGRESS_STDERR="$job/stderr"; _DIAGNOSTIC_LABEL="Installing $selected notifications"
+        worker_status=1
+        if parallel_read_result "$job/result"; then worker_status=$_JOB_STATUS; fi
+        diagnostic_capture_stage "$worker_status"
+        [ ! -s "$job/stderr" ] || _DIAGNOSTIC_NOTED=true
+    done
+    _PROGRESS_LOG=""; _PROGRESS_STDERR=""; _DIAGNOSTIC_LABEL=""
+    case ",$_PARALLEL_READY_CLIENTS," in
+        *,claude,*) case ",$_PARALLEL_READY_CLIENTS," in *,codex,*) _PARALLEL_READY_CLIENTS=claude,codex ;; esac ;;
+    esac
+    PLUGIN_ROOT=$claude_plugin; CONFIGURE_BINARY=${codex_binary:-$claude_binary}; PRODUCT=$LEGACY_PRODUCT
+    if [ -n "$_PARALLEL_READY_CLIENTS" ]; then
+        if [ "$CONFIGURE_NOTIFICATIONS" = true ] && [ "$_PARALLEL_POLICY_READY" = true ]; then
+            _PARALLEL_FOLLOW_UP_STARTED=true
+            for selected in claude codex; do
+                case ",$_PARALLEL_READY_CLIENTS," in *",$selected,"*) progress_phase "$selected" MCP registration_committed ;; esac
+            done
+            notify_status=0
+            run_setup_stage "Configuring agent notification tools" configure_agent_notify || notify_status=$?
+            [ "$notify_status" -eq 0 ] || status=1
+        elif [ "$CONFIGURE_NOTIFICATIONS" = true ]; then status=1; fi
+        # Keep typed per-client MCP failures when the wizard reports partial
+        # success. With skipped MCP, primary registration is already complete.
+        if [ "$CONFIGURE_NOTIFICATIONS" != true ]; then
+            CLAUDE_AGENT_NOTIFY_STATUS='skipped (existing setup kept)'; CODEX_AGENT_NOTIFY_STATUS=$CLAUDE_AGENT_NOTIFY_STATUS
+        fi
+        for selected in claude codex; do
+            case ",$_PARALLEL_READY_CLIENTS," in *",$selected,"*) ;; *) continue ;; esac
+            PRODUCT=$selected
+            if [ "$CONFIGURE_NOTIFICATIONS" != true ] || [ "$notify_status" -eq 0 ]; then
+                progress_phase "$selected" complete completed
+            else
+                # A partial portable result can still authoritatively complete
+                # one selected client. Never advance its failed sibling.
+                completion_i=0
+                while [ "$completion_i" -lt "${#_PROGRESS_IDS[@]}" ]; do
+                    if [ "${_PROGRESS_IDS[$completion_i]}" = "$selected" ] &&
+                        [ "${_PROGRESS_PHASES[$completion_i]}" = MCP ] && [ "${_PROGRESS_OUTCOMES[$completion_i]}" = completed ]; then
+                        progress_phase "$selected" complete completed
+                    fi
+                    completion_i=$((completion_i + 1))
+                done
+            fi
+            print_success || status=1
+        done
+    fi
+    for selected in opencode gemini qoder; do
+        job="$_PARALLEL_ROOT/$selected"
+        if [ -f "$job/summary" ] && [ ! -L "$job/summary" ] && [ -s "$job/summary" ] && [ -n "$parent_summary" ]; then
+            publish_setup_summary "$job/summary" || status=1
+        fi
+    done
+    PRODUCT=$LEGACY_PRODUCT
+    _PARALLEL_IN_FLIGHT=false
+    progress_stop "$status"
+    return "$status"
+}
+
 install_legacy_products() {
     local selected status=0
     for selected in claude codex; do
@@ -2962,9 +3529,12 @@ selector_record() {
     done
 }
 
-# Fixed scalar projection. No JSON, eval, fresh discovery, or default selection.
+# Fixed scalar projection. No JSON, eval or fresh discovery; config resolution
+# only verifies the frozen authority without replacing the caller's selection.
 load_frozen_dispatch() {
-    local LC_ALL=C
+    local LC_ALL=C config_explicit=false resolved_config
+    [ -z "${AGENT_NOTIFICATIONS_CONFIG:-}" ] || config_explicit=true
+    _FROZEN_GLOBAL_CONFIG=""
     local result="$_CONFIG_STAGE/intent-args.result" status=0 size key value seen=""
     "$_CONFIG_HELPER" setup-products intent-args --intent-file "$_SELECTOR_INTENT" >"$result" </dev/null || status=$?
     [ "$status" -eq 0 ] || return "$status"
@@ -3014,7 +3584,11 @@ load_frozen_dispatch() {
             qoder-config-root) _FROZEN_QODER=$value ;;
             control-root) _FROZEN_CONTROL=$value ;;
             runtime-root) _FROZEN_RUNTIME=$value ;;
-            global-config) export AGENT_NOTIFICATIONS_CONFIG="$value" ;;
+            global-config)
+                _FROZEN_GLOBAL_CONFIG=$value
+                # Freezing an implicit default must not turn it into an
+                # explicit override that bypasses historical config guards.
+                if [ "$config_explicit" = true ]; then export AGENT_NOTIFICATIONS_CONFIG="$value"; fi ;;
             claude-executable) _CLAUDE_EXEC=$value ;;
             codex-executable) _CODEX_EXEC=$value ;;
             opencode-executable) _OPENCODE_EXEC=$value ;;
@@ -3052,6 +3626,8 @@ load_frozen_dispatch() {
                 *) echo "Frozen legacy control authority cannot be mapped." >&2; return 1 ;;
             esac ;;
     esac
+    resolved_config=$("$_CONFIG_HELPER" config path) || return 1
+    [ "$resolved_config" = "$_FROZEN_GLOBAL_CONFIG" ] || { echo "Frozen notification config authority changed." >&2; return 1; }
     local i=0
     while [ "$i" -lt "${#CONFIGURE_ARGS[@]}" ]; do
         if [ "${CONFIGURE_ARGS[$i]}" = --codex-home ]; then CONFIGURE_ARGS[$((i + 1))]=$DEFAULT_CODEX_HOME; fi
@@ -3195,6 +3771,12 @@ main() {
                 selector_exact prepared prepare || return 1 ;;
         esac
     fi
+    if [ -z "$_SELECTOR_INTENT" ] && parallel_install_available; then
+        _SELECTOR_INTENT="$_CONFIG_STAGE/selector-intent.json"
+        selector_scope_args
+        selector_collect prepare "${_EFFECT_ARGS[@]}" ${_SCOPE_ARGS[@]+"${_SCOPE_ARGS[@]}"} --intent-file "$_SELECTOR_INTENT" || return $?
+        selector_exact prepared prepare || return 1
+    fi
     close_prompt
     if [ -n "$_SELECTOR_INTENT" ]; then load_frozen_dispatch || return $?; fi
     for selected in "${SELECTED_PRODUCTS[@]}"; do
@@ -3223,12 +3805,15 @@ main() {
         selector_collect preflight --intent-file "$_SELECTOR_INTENT" "${_EFFECT_ARGS[@]}" || return $?
         [ ! -s "$_SELECTOR_RESULT" ] || { echo "Invalid preflight stdout." >&2; return 1; }
     fi
-    # One initial checkpoint; writers retain their own existing CAS/locks.
-    if [ -n "$LEGACY_PRODUCT" ]; then
+    # The verified capability guarantees finite worker phases and subset wizard
+    # projection. Older releases retain their original synchronous contract.
+    if parallel_install_available; then
+        install_products_parallel || status=$?
+    elif [ -n "$LEGACY_PRODUCT" ]; then
         PRODUCT=$LEGACY_PRODUCT
         install_legacy_products || status=$?
     fi
-    if [ "$status" -eq 0 ]; then
+    if [ "$status" -eq 0 ] && [ "$_PARALLEL_ACTIVE" != true ]; then
         if [ "$_PRODUCT_CSV" = cursor ] && [ "$AGENT_NOTIFY_REQUEST" != skip ]; then
             run_setup_stage "Preparing Cursor notification runtime" prepare_cursor_runtime || { report_setup_failure 1; return 1; }
             if [ "$_CURSOR_RUNTIME_PREPARED" = true ]; then
@@ -3398,7 +3983,7 @@ configure_agent_policy() {
     if [ "${1:-}" = portable ]; then
         configure_cmd+=(--policy-only --preserve-enabled)
     fi
-    if ! "$CONFIGURE_BINARY" "${configure_cmd[@]}"; then
+    if ! bootstrap_external "$CONFIGURE_BINARY" "${configure_cmd[@]}"; then
         echo -e "${YELLOW}⚠ Agent-notify setup failed; plugin/hooks install succeeded.${NC}" >&2
         echo -e "${YELLOW}  Plugin/hooks registration completed; inspect policy state before this config-only retry:${NC}" >&2
         printf '  %s\n' "$(quote_shell_command "$CONFIGURE_BINARY" "${configure_cmd[@]}")" >&2
@@ -3465,7 +4050,7 @@ prepare_cursor_runtime() {
 }
 
 reconfirm_cursor_integration() {
-    local control=$_FROZEN_CONTROL runtime=$_FROZEN_RUNTIME scope=$_FROZEN_SCOPE_ROOT client=$_FROZEN_CLIENT_EXEC config=$AGENT_NOTIFICATIONS_CONFIG
+    local control=$_FROZEN_CONTROL runtime=$_FROZEN_RUNTIME scope=$_FROZEN_SCOPE_ROOT client=$_FROZEN_CLIENT_EXEC config=$_FROZEN_GLOBAL_CONFIG
     _CURSOR_CONFIRM_CANCELLED=false
     [ "$_INTERACTIVE_INTENT" = true ] || return 1
     exec 3<>/dev/tty || return 1
@@ -3479,7 +4064,7 @@ reconfirm_cursor_integration() {
     load_frozen_dispatch || return 1
     [ "$_FROZEN_CONTROL" = "$control" ] && [ "$_FROZEN_RUNTIME" = "$runtime" ] &&
         [ "$_FROZEN_SCOPE_ROOT" = "$scope" ] && [ "$_FROZEN_CLIENT_EXEC" = "$client" ] &&
-        [ "$AGENT_NOTIFICATIONS_CONFIG" = "$config" ] || return 1
+        [ "$_FROZEN_GLOBAL_CONFIG" = "$config" ] || return 1
     "$_CONFIG_HELPER" setup-products preflight --intent-file "$_SELECTOR_INTENT" "${_EFFECT_ARGS[@]}" </dev/null
 }
 
@@ -3583,11 +4168,11 @@ setup_agent_notify_wizard() {
         # The approved caller derives its observer from the installed primary;
         # the selected vendor executable is only client authority.
     elif [ -n "$_SELECTOR_INTENT" ]; then
-        configure_agent_policy portable || return 1
+        [ "$_PARALLEL_POLICY_READY" = true ] || configure_agent_policy portable || return 1
         [ "$PRODUCT" = codex ] || claude_exec=$_CLAUDE_EXEC
         [ "$PRODUCT" = claude ] || codex_exec=$_CODEX_EXEC
     else
-        configure_agent_policy portable || return 1
+        [ "$_PARALLEL_POLICY_READY" = true ] || configure_agent_policy portable || return 1
         if [ "$PRODUCT" != codex ]; then claude_exec=$(bootstrap_abs_command "$_CLAUDE_EXEC") || true; fi
         if [ "$PRODUCT" != claude ]; then codex_exec=$(bootstrap_abs_command "$_CODEX_EXEC") || true; fi
     fi
@@ -3595,7 +4180,10 @@ setup_agent_notify_wizard() {
         --package "$package_root"
     [ "$PRODUCT" = cursor ] || set -- "$@" --plugin-root "$plugin_root"
     if [ -n "$_SELECTOR_INTENT" ]; then
-        set -- "$@" --bootstrap-intent-file "$_SELECTOR_INTENT" --control-root "$_FROZEN_CONTROL" --global-config "$AGENT_NOTIFICATIONS_CONFIG"
+        if [ -n "$_PARALLEL_READY_CLIENTS" ]; then
+            set -- "$@" --bootstrap-ready-clients "$_PARALLEL_READY_CLIENTS" --bootstrap-progress-file "$_PROGRESS_JOURNAL"
+        fi
+        set -- "$@" --bootstrap-intent-file "$_SELECTOR_INTENT" --control-root "$_FROZEN_CONTROL" --global-config "$_FROZEN_GLOBAL_CONFIG"
         [ -z "$_FROZEN_RUNTIME" ] || set -- "$@" --runtime-root "$_FROZEN_RUNTIME"
         if [ "$PRODUCT" != cursor ]; then
             [ -z "$_FROZEN_CODEX_MCP" ] || set -- "$@" --mcp-config "$_FROZEN_CODEX_MCP"
@@ -3630,8 +4218,14 @@ setup_agent_notify_wizard() {
         structured_result=true
         set -- "$@" --json
     fi
-    wizard_result=$(mktemp "${TMPDIR:-/tmp}/bootstrap-wizard-XXXXXX") || return 1
-    "$CONFIGURE_BINARY" "$@" > "$wizard_result" || wizard_status=$?
+    if [ "$_PARALLEL_ACTIVE" = true ]; then
+        wizard_result=$(mktemp "$_CONFIG_STAGE/parallel/wizard-result-XXXXXX") || return 1
+        _PARALLEL_HELPER_CAPTURE=$wizard_result
+    else
+        wizard_result=$(mktemp "${TMPDIR:-/tmp}/bootstrap-wizard-XXXXXX") || return 1
+    fi
+    bootstrap_external "$CONFIGURE_BINARY" "$@" > "$wizard_result" || wizard_status=$?
+    _PARALLEL_HELPER_CAPTURE=""
     # JSON remains diagnostic input. Only the verified helper's finite typed
     # projection may update observer rows; arbitrary error bytes are never facts.
     if [ "$structured_result" = true ]; then
@@ -3668,16 +4262,18 @@ setup_agent_notify_wizard() {
         [ "$PRODUCT" = codex ] || set -- "$@" --claude-mcp-config "${_FROZEN_CLAUDE_MCP:-${CLAUDE_CONFIG_DIR:-$INSTALLER_HOME}/.claude.json}"
     fi
     if [ -n "$_SELECTOR_INTENT" ]; then
-        set -- "$@" --control-root "$_FROZEN_CONTROL" --global-config "$AGENT_NOTIFICATIONS_CONFIG"
+        set -- "$@" --control-root "$_FROZEN_CONTROL" --global-config "$_FROZEN_GLOBAL_CONFIG"
         [ -z "$_FROZEN_RUNTIME" ] || set -- "$@" --runtime-root "$_FROZEN_RUNTIME"
         if [ "$PRODUCT" != cursor ]; then
             [ -z "$_FROZEN_CODEX_MCP" ] || set -- "$@" --mcp-config "$_FROZEN_CODEX_MCP"
         fi
     fi
-    if ! "$CONFIGURE_BINARY" "$@" > "$wizard_result" 2>/dev/null; then
+    [ "$_PARALLEL_ACTIVE" != true ] || _PARALLEL_HELPER_CAPTURE=$wizard_result
+    if ! bootstrap_external "$CONFIGURE_BINARY" "$@" > "$wizard_result" 2>/dev/null; then
         : > "$wizard_result"
         echo "Warning: installation finished, but agent notification tool status could not be checked." >&2
     fi
+    _PARALLEL_HELPER_CAPTURE=""
     CLAUDE_AGENT_NOTIFY_STATUS=$(wizard_tool_status "$wizard_result" claude "$AGENT_NOTIFY_REQUEST")
     CODEX_AGENT_NOTIFY_STATUS=$(wizard_tool_status "$wizard_result" codex "$AGENT_NOTIFY_REQUEST")
     rm -f "$wizard_result"

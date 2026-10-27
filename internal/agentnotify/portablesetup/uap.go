@@ -142,6 +142,7 @@ type Materializer struct {
 	// Registry is the explicit composition for this materializer and every
 	// engine it constructs. Nil retains the Claude/Codex composition.
 	Registry *clients.Registry
+	Progress func(client, phase, outcome string)
 }
 
 type clientFact struct {
@@ -1016,6 +1017,37 @@ func (m Materializer) engineWithIdentities(req MaterializeRequest, generation *u
 		}
 	}
 	return uapinstaller.New(uapinstaller.Config{
+		IndependentActivations: true,
+		Progress: func(event uapinstaller.ProgressEvent) {
+			if m.Progress == nil || event.Phase != uapinstaller.ProgressActivate || event.Client == nil {
+				return
+			}
+			client := event.Client
+			if client.ClientID != "claude" && client.ClientID != "codex" {
+				return
+			}
+			switch client.GroupPhase {
+			case "external_started":
+				m.Progress(client.ClientID, "verification", "running")
+			case "external_completed":
+				// External verification is finished, not the enclosing materializer
+				// transaction. Only the final command result marks setup complete.
+				m.Progress(client.ClientID, "verification", "done")
+			case "external_failed":
+				outcome := "activation_failed"
+				if client.Failure != nil {
+					switch client.Failure.Stage {
+					case "timeout":
+						outcome = "activation_timeout"
+					case "canceled":
+						outcome = "activation_canceled"
+					case "deadline":
+						outcome = "activation_deadline"
+					}
+				}
+				m.Progress(client.ClientID, "MCP", outcome)
+			}
+		},
 		StateRoot:            filepath.Dir(m.Roots.StateFile),
 		StateFile:            m.Roots.StateFile,
 		LockFile:             m.Roots.LockFile,

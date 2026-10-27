@@ -23,8 +23,8 @@ make preview-installer PREVIEW_ARGS='--gemini-cli /absolute/path/to/gemini'
 This builds the committed source and its real portable package into a private
 reusable TEST cache, then runs the installer with fresh HOME, working directory
 and client profiles. It discovers the actual Claude, Codex, OpenCode and Gemini
-executables before creating the private PATH. Missing CLIs remain absent; an
-unsupported installed version is reported by the real installer. The optional
+executables before creating the private PATH. Missing CLIs remain absent;
+incompatible CLI capabilities are reported by the real installer. The optional
 `--gemini-cli` override selects a real executable for this preview only.
 Native Claude installations use a private local copy of the installed executable
 to avoid launch delays on external disks. SHA256 and the macOS signature are
@@ -96,12 +96,12 @@ You can select any combination of the supported agents in the guided setup. For 
 (set -o pipefail; curl -fsSL https://agent-notifications.com/install.sh | bash -s -- --products claude,codex,opencode --desktop)
 ```
 
-Use `claude,opencode` or `codex,opencode` for two agents. The loader downloads and validates one installer, then runs Claude/Codex setup followed by OpenCode setup. It stops at the first failure; an earlier successful installation remains installed. Fix the reported error and rerun the same command to complete setup.
+Use `claude,opencode` or `codex,opencode` for two agents. The loader downloads and validates one installer, then starts selected Claude, Codex, OpenCode, Gemini and Qoder jobs concurrently on macOS and Linux. Shared settings and runtime writes are coordinated. Windows keeps sequential primary installation until native child-process cancellation is qualified. A client failure leaves successful clients installed and allows independent work to finish; the overall command still reports incomplete setup. Follow the saved recovery command for failed activation instead of reinstalling successful clients.
 
-Add `,gemini` to `--products` to include Gemini. `--desktop` and `--webhook` apply to each selected OpenCode/Gemini integration independently; configure webhook URLs separately. The public installer defaults fresh OpenCode/Gemini installations to desktop on and webhooks off, and preserve saved channels on update when flags are omitted. `--skip-agent-notify` applies only to the Claude/Codex notification tool. These flags do not change Claude/Codex notification channels. Single-agent commands and `--product both` remain supported.
+Add `,gemini` or `,qoder` to `--products` to include Gemini or Qoder. `--desktop` and `--webhook` apply to each selected OpenCode/Gemini/Qoder integration independently; configure webhook URLs separately. The public installer defaults fresh OpenCode/Gemini/Qoder installations to desktop on and webhooks off, and preserves saved channels on update when flags are omitted. `--skip-agent-notify` applies only to the Claude/Codex notification tool. These flags do not change Claude/Codex notification channels. Single-agent commands and `--product both` remain supported.
 
 The installer shows recent safe checkpoints for each selected client above its live
-status. Saved registration remains distinct from completed setup; a timeout or
+status, including its current operation and elapsed waiting time. Saved registration remains distinct from completed setup; a timeout or
 failed activation keeps that distinction visible. The bottom status shows the
 current stage and observed client counts. Resizing reduces history first; very
 small terminals switch to plain output.

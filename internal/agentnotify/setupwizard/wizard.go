@@ -109,6 +109,10 @@ type Request struct {
 	// BootstrapMCP is consumed by the command admission boundary. Plan/Run use
 	// the verified generation, then existing reservation/config CAS protects apply.
 	BootstrapMCP *BootstrapMCPSelection
+	// BootstrapReadyClients only narrows effects after the complete immutable
+	// bootstrap projection has been revalidated. A failed primary registration
+	// must not prevent an independent, already confirmed client from activating.
+	BootstrapReadyClients []string
 	// ClaudeRunner overrides Claude activation probing. Production leaves it
 	// nil so the OS process runner is used. Isolated tests inject a listing
 	// fixture; the field is never parsed from CLI flags.
@@ -127,6 +131,9 @@ type Request struct {
 	// Progress reports large confirmed phases to the host. JSON stdout stays
 	// one result; the CLI writes these lines to stderr. Nil is silent.
 	Progress func(string)
+	// ClientProgress is presentation-only, finite per-client lifecycle activity.
+	// No provider output, paths, or executable recovery commands flow through it.
+	ClientProgress func(client, phase, outcome string)
 	// DiscoverAgents supplies Claude/Codex executable presence for the TTY
 	// picker. Production sets this from Engine.Discover. Nil skips presence
 	// labels. The function must not execute found files.
@@ -2993,6 +3000,7 @@ func materializer(req Request, snap installruntime.InstalledSnapshot, runtimeRoo
 		RequireLiveProfiles: true,
 	})
 	mat.Kernel.ExpectedPolicy = req.BootstrapExpectedPolicy
+	mat.Progress = req.ClientProgress
 	if err != nil {
 		return mat, err
 	}

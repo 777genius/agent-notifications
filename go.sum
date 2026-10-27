@@ -52,6 +52,12 @@ github.com/777genius/plugin-kit-ai/install/integrationctl v0.1.1-0.2026101108451
 github.com/777genius/plugin-kit-ai/install/integrationctl v0.1.1-0.20261011084510-92039bf2e9b6/go.mod h1:wi64N/VhTkhRyuU/jAYwk83SxNODfMhASNG7V8sDYX8=
 github.com/777genius/plugin-kit-ai/install/integrationctl v0.1.1-0.20261011092622-35e444fdf875 h1:uaKav5C68w9UvpIlTYgbt7z39ns0qlsaDJ7KY583o4I=
 github.com/777genius/plugin-kit-ai/install/integrationctl v0.1.1-0.20261011092622-35e444fdf875/go.mod h1:wi64N/VhTkhRyuU/jAYwk83SxNODfMhASNG7V8sDYX8=
+github.com/777genius/plugin-kit-ai/install/integrationctl v0.1.1-0.20261026191219-ae575fb55208 h1:h4uLz2If6wS+Dvt9Ejf+zH1X/qR+Q5kxykIB2DLGzmI=
+github.com/777genius/plugin-kit-ai/install/integrationctl v0.1.1-0.20261026191219-ae575fb55208/go.mod h1:LUDKPzeTNux4BHdujaueM+TysXzm/N4FNAdisncebDc=
+github.com/777genius/plugin-kit-ai/install/integrationctl v0.1.1-0.20261026193753-3a3864fdb8d2 h1:go61+eBFa3ssxbq4DtJ2yQKIhQKTqD1pPypMypl1A78=
+github.com/777genius/plugin-kit-ai/install/integrationctl v0.1.1-0.20261026193753-3a3864fdb8d2/go.mod h1:LUDKPzeTNux4BHdujaueM+TysXzm/N4FNAdisncebDc=
+github.com/777genius/plugin-kit-ai/install/integrationctl v0.1.1-0.20261026195312-0e16bb7bd734 h1:o5dW/iIw9+K7RnaBcmb639KXU7uchESMi2YzYVcA1do=
+github.com/777genius/plugin-kit-ai/install/integrationctl v0.1.1-0.20261026195312-0e16bb7bd734/go.mod h1:LUDKPzeTNux4BHdujaueM+TysXzm/N4FNAdisncebDc=
 github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins v0.0.0-20260930053012-236889b1c082 h1:Cg5ZMqZpWXPNyAMe8yTs578j9C+hl1hXJ893zEztWBs=
 github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins v0.0.0-20260930053012-236889b1c082/go.mod h1:+zvITs+V/r1s6URiDklERjqbJo77vhnPV+8cqenGmAE=
 github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins v0.0.0-20261001062548-965aab576582 h1:fyTkv3otslSBsYEJIZcIFAuqZua9jg+q1CXAslHeYOI=
@@ -96,6 +102,12 @@ github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins v0.0.0-20
 github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins v0.0.0-20261012090029-ed2537a09fd0/go.mod h1:wj7e29hGy8/SpGKddDFVcfeRaegOLOouVcWoUyXw+Yg=
 github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins v0.0.0-20261012092440-dd4bf1847ea1 h1:sYaSdLIqB8O/QoJZ/e25RpPxqIGN0tSElfj69ce4NYE=
 github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins v0.0.0-20261012092440-dd4bf1847ea1/go.mod h1:wj7e29hGy8/SpGKddDFVcfeRaegOLOouVcWoUyXw+Yg=
+github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins v0.0.0-20261026191219-ae575fb55208 h1:LJsso/jNdDtiDl8vHP6HOGpPVqgPC2umzcbs84ZRa70=
+github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins v0.0.0-20261026191219-ae575fb55208/go.mod h1:4rmm9UOLS3/PO57SDcTG+PB9yr2fT3TOvbFlwExt9Po=
+github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins v0.0.0-20261026193753-3a3864fdb8d2 h1:MW4FjE4PPVHgzxwg3aRkM4NS4dxV3TXHodIevsJnYBU=
+github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins v0.0.0-20261026193753-3a3864fdb8d2/go.mod h1:4rmm9UOLS3/PO57SDcTG+PB9yr2fT3TOvbFlwExt9Po=
+github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins v0.0.0-20261026195312-0e16bb7bd734 h1:GzW/BVbhIwS27kEhMrTusxIGaPf8IBKi+zj/qAO0GwY=
+github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins v0.0.0-20261026195312-0e16bb7bd734/go.mod h1:4rmm9UOLS3/PO57SDcTG+PB9yr2fT3TOvbFlwExt9Po=
 github.com/777genius/plugin-kit-ai/plugininstall v0.0.0-20260920081413-a5644312f7af h1:HSQLdGxhHBB0QZtA77y27o+KpixsB7bAi6lDPI02PRw=
 github.com/777genius/plugin-kit-ai/plugininstall v0.0.0-20260920081413-a5644312f7af/go.mod h1:c0CmoYlHZaAYEcO1IfyTFybxHvglm3ucFSnnLaP41jY=
 github.com/777genius/plugin-kit-ai/sdk v1.2.1-0.20261001061845-2d2a26bf372a h1:PzdFFfhms83PaTuByl4UIAEJXHq6imBa1EISdR7xstM=
@@ -152,6 +164,12 @@ github.com/clipperhouse/uax29/v2 v2.7.0 h1:+gs4oBZ2gPfVrKPthwbMzWZDaAFPGYK72F0NJ
 github.com/clipperhouse/uax29/v2 v2.7.0/go.mod h1:EFJ2TJMRUaplDxHKj1qAEhCtQPW2tJSwu5BF98AuoVM=
 github.com/cpuguy83/go-md2man/v2 v2.0.6 h1:XJtiaUW6dEEqVuZiMTn1ldk455QWwEIsMIJlo5vtkx0=
 github.com/cpuguy83/go-md2man/v2 v2.0.6/go.mod h1:oOW0eioCTA6cOiMLiUPZOpcVxMig6NIQQ7OS05n1F4g=
+github.com/creachadair/atomicfile v0.3.8 h1:PyMIBZHZunTF+2+OSJCUg4XWO9nh6NwIacUBtF6tdg8=
+github.com/creachadair/atomicfile v0.3.8/go.mod h1:oZrfNyYdwMjCD+eKNqsnPmdnQ54z4ujOoYvNTZyuJ2A=
+github.com/creachadair/command v0.2.0 h1:qTA9cMMhZePAxFoNdnk6F6nn94s1qPndIg9hJbqI9cA=
+github.com/creachadair/command v0.2.0/go.mod h1:j+Ar+uYnFsHpkMeV9kGj6lJ45y9u2xqtg8FYy6cm+0o=
+github.com/creachadair/tomledit v0.0.29 h1:dB5CbdwJMpn/fmfAPTAAleXF/KJwY0Ggc1eL/zvZRgk=
+github.com/creachadair/tomledit v0.0.29/go.mod h1:4SoTXxzHgvzHRMIJPw+o6zK/yXii4VjLrb6/3gCQnyA=
 github.com/creack/pty v1.1.24 h1:bJrF4RRfyJnbTJqzRLHzcGaZK1NeM5kTC9jGgovnR1s=
 github.com/creack/pty v1.1.24/go.mod h1:08sCNb52WyoAwi2QDyzUCTgcvVFhUzewun7wtTfvcwE=
 github.com/d4l3k/messagediff v1.2.2-0.20190829033028-7e0a312ae40b h1:02XNVBBC2x90C1IKnZ0iyrIxL1pdIRsusn0lqSEIOD0=
@@ -295,6 +313,8 @@ golang.org/x/crypto v0.0.0-20210921155107-089bfa567519 h1:7I4JAnoQBe7ZtJcBaYHi5U
 golang.org/x/crypto v0.0.0-20210921155107-089bfa567519/go.mod h1:GvvjBRRGRdwPK5ydBHafDWAxML/pGHZbMvKqRZ5+Abc=
 golang.org/x/exp v0.0.0-20231006140011-7918f672742d h1:jtJma62tbqLibJ5sFQz8bKtEM8rJBtfilJ2qTU199MI=
 golang.org/x/exp v0.0.0-20231006140011-7918f672742d/go.mod h1:ldy0pHrwJyGW56pPQzzkH36rKxoZW1tw7ZJpeKx+hdo=
+golang.org/x/exp/typeparams v0.0.0-20231108232855-2478ac86f678 h1:1P7xPZEwZMoBoz0Yze5Nx2/4pxj6nw9ZqHWXqP0iRgQ=
+golang.org/x/exp/typeparams v0.0.0-20231108232855-2478ac86f678/go.mod h1:AbB0pIl9nAr9wVwH+Z2ZpaocVmF5I4GyWCDIsVjR0bk=
 golang.org/x/image v0.5.0 h1:5JMiNunQeQw++mMOz48/ISeNu3Iweh/JaZU8ZLqHRrI=
 golang.org/x/image v0.5.0/go.mod h1:FVC7BI/5Ym8R25iw5OLsgshdUBbT1h5jZTpA+mvAdZ4=
 golang.org/x/mod v0.6.0-dev.0.20220419223038-86c51ed26bb4/go.mod h1:jJ57K6gSWd91VN4djpZkiMVwK6gcyfeH4XE8wZrZaV4=
@@ -350,3 +370,5 @@ gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405/go.mod h1:Co6ibVJAznAaIkqp8
 gopkg.in/yaml.v3 v3.0.0-20200313102051-9f266ea9e77c/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
 gopkg.in/yaml.v3 v3.0.1 h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=
 gopkg.in/yaml.v3 v3.0.1/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
+honnef.co/go/tools v0.6.1 h1:R094WgE8K4JirYjBaOpz/AvTyUu/3wbmAoskKN/pxTI=
+honnef.co/go/tools v0.6.1/go.mod h1:3puzxxljPCe8RGJX7BIy1plGbxEOZni5mR2aXe3/uk4=

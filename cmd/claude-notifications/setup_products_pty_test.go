@@ -891,25 +891,28 @@ func TestBootstrapStaleSelectedFacts(t *testing.T) {
 }
 
 // Regression: observers were reported wholly failed after an actual managed
-// registration commit followed by config failure; a successful sibling reran.
+// registration commit followed by a presentation/follow-up failure; a successful
+// sibling must finish independently without rerunning either registration.
 func TestBootstrapPartialProgress(t *testing.T) {
 	t.Run("mixed actual observer registration", func(t *testing.T) {
 		f := newBootstrapFixture(t)
-		f.script = strings.Replace(f.script, "initialize_config() {", "fixture_initialize_config() {", 1)
-		patch := `initialize_config() { if [ "$PRODUCT" = opencode ]; then return 1; fi; fixture_initialize_config; }
+		f.script = strings.Replace(f.script, "publish_setup_summary() {", "fixture_publish_setup_summary() {", 1)
+		// Fail after the real observer registration, runtime lookup and shared
+		// configuration. Parent-owned initialization happens once before workers.
+		patch := `publish_setup_summary() { if [ "$PRODUCT" = opencode ]; then return 1; fi; fixture_publish_setup_summary "$@"; }
 `
 		f.script = strings.Replace(f.script, "main \"$@\"", patch+"\nmain \"$@\"", 1)
 		r := f.noTTY("--products", "opencode,gemini", "--webhook")
-		if r.code == 0 || !strings.Contains(r.screen, "OpenCode: configuration - registration committed (partial)") || !strings.Contains(r.screen, "Gemini CLI: queued - not started") {
+		if r.code == 0 || !strings.Contains(r.screen, "OpenCode: configuration - registration committed (partial)") || !strings.Contains(r.screen, "Gemini CLI: complete - done") {
 			t.Fatalf("untruthful partial result: %+v", r)
 		}
 		f.assertConsumer("opencode-notifications", true)
-		f.assertConsumer("gemini-notifications", false)
+		f.assertConsumer("gemini-notifications", true)
 		if _, err := os.Stat(filepath.Join(f.home, "opencode", "plugins", "agent-notifications.js")); err != nil {
 			t.Fatal("registration missing:", err)
 		}
-		if _, err := os.Stat(filepath.Join(f.home, "gemini", ".gemini", "settings.json")); !os.IsNotExist(err) {
-			t.Fatal("unstarted Gemini wrote settings")
+		if _, err := os.Stat(filepath.Join(f.home, "gemini", ".gemini", "settings.json")); err != nil {
+			t.Fatal("independent Gemini registration missing:", err)
 		}
 	})
 	t.Run("mixed actual completion", func(t *testing.T) {
@@ -1311,28 +1314,25 @@ func mustFixtureJSON(t *testing.T, value any) string {
 func testBootstrapLegacyPartial(t *testing.T) {
 	f := newBootstrapFixture(t)
 	f.releaseAssets()
-	// After real Codex registration returned, an outside config replacement
-	// makes the real config initializer fail. No permissions or actual agent.
-	f.script = strings.Replace(f.script, "initialize_config() {", "fixture_initialize_config() {", 1)
-	wrapper := `initialize_config() {
- if [ "${_FIXTURE_INIT_COUNT:-0}" = 1 ]; then
-  mv "$AGENT_NOTIFICATIONS_CONFIG" "$AGENT_NOTIFICATIONS_CONFIG.TEST-retained"
-  mkdir "$AGENT_NOTIFICATIONS_CONFIG"
- fi
- _FIXTURE_INIT_COUNT=$((${_FIXTURE_INIT_COUNT:-0}+1))
- fixture_initialize_config "$@"
+	// Keep the real primary registration and fail only Codex's subsequent
+	// follow-up boundary. A per-client initialize_config injection is stale:
+	// parallel setup initializes shared config once in the parent coordinator.
+	f.script = strings.Replace(f.script, "install_codex() {", "fixture_install_codex() {", 1)
+	wrapper := `install_codex() {
+ fixture_install_codex "$@" || return $?
+ progress_phase codex config registration_committed
+ return 1
 }
 `
 	f.script = strings.Replace(f.script, "main \"$@\"", wrapper+"\nmain \"$@\"", 1)
-	// Explicit global config is existing legacy grammar, not a selector override.
 	f.env = append(f.env, "AGENT_NOTIFICATIONS_CONFIG="+filepath.Join(f.home, "config", "TEST-global.json"))
 	r := f.noTTY("--products", "claude,codex,gemini", "--skip-agent-notify", "--webhook")
-	if r.code == 0 || !strings.Contains(r.screen, "Claude Code: complete - done") || !strings.Contains(r.screen, "Codex CLI: configuration - registration committed (partial)") || !strings.Contains(r.screen, "Gemini CLI: queued - not started") {
-		t.Fatalf("untruthful singleton partial: %+v", r)
+	if r.code == 0 || !strings.Contains(r.screen, "Claude Code: complete - done") || !strings.Contains(r.screen, "Codex CLI: configuration - registration committed (partial)") || !strings.Contains(r.screen, "Gemini CLI: complete - done") {
+		t.Fatalf("untruthful independent partial: %+v", r)
 	}
 	f.assertConsumer("claude-hooks", true)
 	f.assertConsumer("codex:"+filepath.Join(f.home, "codex", "hooks.json"), true)
-	f.assertConsumer("gemini-notifications", false)
+	f.assertConsumer("gemini-notifications", true)
 	if _, err := os.Stat(filepath.Join(f.home, "codex", "hooks.json")); err != nil {
 		t.Fatal(err)
 	}

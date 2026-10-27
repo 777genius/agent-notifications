@@ -121,6 +121,33 @@ func TestNotificationConfigurePolicyOnlyPreservesMCP(t *testing.T) {
 		t.Fatalf("MCP entry changed: %s", got)
 	}
 }
+
+// The parallel bootstrap may finish Codex's owned runtime before Claude's
+// marketplace operation. The approved shared policy can be seeded from that
+// first bundle without probing or changing either client's MCP registration.
+func TestNotificationConfigureBothPolicyOnlyNeedsOnlyFirstOwnedBundle(t *testing.T) {
+	f, request, deps := configureFixture(t)
+	request.Provider, request.PolicyOnly, request.PreserveEnabled = "both", true, true
+	claude := filepath.Join(f.root, ".claude.json")
+	codex := filepath.Join(request.CodexHome, "config.toml")
+	if err := os.MkdirAll(request.CodexHome, 0700); err != nil {
+		t.Fatal(err)
+	}
+	setupCommandWrite(t, claude, `{"mcpServers":{"other":{"command":"TEST-untouched"}}}`, 0600)
+	setupCommandWrite(t, codex, "# TEST-not-inspected-yet\n", 0600)
+	beforeClaude, beforeCodex := setupCommandRead(t, claude), setupCommandRead(t, codex)
+	result, err := configureNotifications(setupCommandContext(t), request, deps)
+	if err != nil || !result.ExplicitIntent || result.Reason != "configured" {
+		t.Fatalf("first owned bundle cannot seed shared policy: %+v %v", result, err)
+	}
+	if setupCommandRead(t, claude) != beforeClaude || setupCommandRead(t, codex) != beforeCodex {
+		t.Fatal("shared preparation changed client registration")
+	}
+	policy, err := installruntime.ReadPolicySnapshot(setupCommandContext(t), f.control)
+	if err != nil || !policy.Policy.Enabled {
+		t.Fatalf("approved seed unavailable to observer jobs: %+v %v", policy, err)
+	}
+}
 func TestNotificationConfigurePreflightNoWrites(t *testing.T) {
 	for _, kind := range []string{"provider", "relative_home", "fresh_route", "unknown", "collision", "malformed_global", "foreign_registration"} {
 		t.Run(kind, func(t *testing.T) {

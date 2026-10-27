@@ -20,11 +20,14 @@ const Capability = "installer-progress-v1"
 // Every displayed string comes from these tables, never from untrusted input.
 var clients = map[string]string{
 	"claude": "Claude Code", "codex": "Codex CLI", "opencode": "OpenCode",
-	"gemini": "Gemini CLI", "cursor": "Cursor", "global": "Installer",
+	"gemini": "Gemini CLI", "qoder": "Qoder", "cursor": "Cursor", "global": "Installer",
 }
 
 var phases = map[string]string{
 	"pending": "queued", "queued": "queued", "registration": "registration",
+	"marketplace": "Checking marketplace", "download": "Downloading files",
+	"runtime": "Installing runtime", "verification": "Verifying registration",
+	"waiting":        "Waiting for shared settings",
 	"runtime-lookup": "runtime", "config": "configuration", "MCP": "MCP",
 	"preparation": "preparation", "portable": "portable", "complete": "complete",
 	"verified-installer":    "Preparing verified installer",
@@ -36,6 +39,7 @@ var phases = map[string]string{
 	"installing-codex":      "Installing Codex notifications",
 	"installing-opencode":   "Installing OpenCode notifications",
 	"installing-gemini":     "Installing Gemini notifications",
+	"installing-qoder":      "Installing Qoder notifications",
 }
 
 var outcomes = map[string]string{
@@ -93,6 +97,8 @@ type board struct {
 	painted int
 	frame   int
 	stopped bool
+	started map[string]time.Time
+	now     func() time.Time
 }
 
 func (b *board) update(e event) bool {
@@ -101,12 +107,77 @@ func (b *board) update(e event) bool {
 			if row == e {
 				return false
 			}
+			b.recordStart(e)
 			b.rows[i] = e
 			return true
 		}
 	}
+	b.recordStart(e)
 	b.rows = append(b.rows, e)
 	return true
+}
+
+func (b *board) clock() time.Time {
+	if b.now != nil {
+		return b.now()
+	}
+	return time.Now()
+}
+
+func (b *board) recordStart(e event) {
+	if b.started == nil {
+		b.started = map[string]time.Time{}
+	}
+	b.started[e.client] = b.clock()
+}
+
+// Only explicit running events or a matching authoritative legacy installer
+// stage establish activity. A saved or uncertain result alone never does.
+func (b *board) active(e event) bool {
+	if b.stopped {
+		return false
+	}
+	if e.outcome == "running" {
+		return true
+	}
+	if e.outcome != "state_requires_inspection" && e.outcome != "registration_committed" && e.outcome != "registration_committed_follow_up_not_started" {
+		return false
+	}
+	global := b.globalPhase()
+	return global == "installing-"+e.client ||
+		(e.phase == "config" && (global == "notification-settings" || global == "notification-tools")) ||
+		(e.phase == "MCP" && global == "notification-tools")
+}
+
+func (b *board) activeLabel(e event) string {
+	if e.outcome == "running" {
+		switch e.phase {
+		case "registration":
+			return "Registering notifications"
+		case "config", "MCP":
+			return "Configuring notifications"
+		}
+		return phases[e.phase]
+	}
+	if e.phase == "config" || e.phase == "MCP" {
+		return "Configuring notifications"
+	}
+	return "Registering notifications"
+}
+
+func (b *board) elapsed(e event) string {
+	client := e.client
+	if e.outcome != "running" {
+		client = "global"
+	}
+	start, ok := b.started[client]
+	if !ok {
+		return ""
+	}
+	// The journal contains no producer timestamps: this is time observed in
+	// the current operation, never an invented total installation duration.
+	elapsed := max(time.Duration(0), b.clock().Sub(start)).Truncate(time.Second)
+	return fmt.Sprintf(" (%s)", elapsed)
 }
 
 func (b *board) running() bool {
@@ -159,7 +230,9 @@ func (b *board) paint() error {
 		mark, color := "○", "\x1b[2m"
 		switch row.outcome {
 		case "running":
-			mark, color = spinner, "\x1b[36m"
+			if !b.stopped {
+				mark, color = spinner, "\x1b[36m"
+			}
 		case "done", "completed":
 			mark, color = "✓", "\x1b[32m"
 		case "failed":
@@ -170,17 +243,12 @@ func (b *board) paint() error {
 			mark = "-"
 		}
 		line := fmt.Sprintf("  %s %-12s  %s: %s", mark, clients[row.client], phases[row.phase], outcomes[row.outcome])
-		// The shell records uncertainty before its writer starts. During the
-		// matching live operation, present that as work in progress; keep the
-		// exact underlying outcome for the final board and unrelated failures.
-		active := globalPhase == "installing-"+row.client || (row.phase == "config" && (globalPhase == "notification-settings" || globalPhase == "notification-tools"))
-		if row.client != "global" && active && row.outcome == "state_requires_inspection" && (row.phase == "registration" || row.phase == "config") {
-			label := "Registering notifications"
-			if row.phase == "config" {
-				label = "Configuring notifications"
-			}
+		if b.stopped && row.outcome == "running" {
+			line = fmt.Sprintf("  ! %-12s  %s: last observed running", clients[row.client], phases[row.phase])
+		}
+		if row.client != "global" && b.active(row) {
 			color = "\x1b[36m"
-			line = fmt.Sprintf("  %s %-12s  %s", spinner, clients[row.client], label)
+			line = fmt.Sprintf("  %s %-12s  %s%s", spinner, clients[row.client], b.activeLabel(row), b.elapsed(row))
 		} else if row.client != "global" && globalPhase != "" && (row.outcome == "registration_committed" || row.outcome == "registration_committed_follow_up_not_started") {
 			color = "\x1b[2m"
 			line = fmt.Sprintf("  ○ %-12s  Registered · follow-up pending", clients[row.client])
@@ -257,7 +325,7 @@ func (b *board) clear() {
 }
 
 func (b *board) finish() error {
-	if b.globalPhase() == "" {
+	if b.stopped || (b.globalPhase() == "" && !b.running()) {
 		return nil
 	}
 	b.clear()
