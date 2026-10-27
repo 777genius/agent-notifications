@@ -223,7 +223,7 @@ if ! "$root/query" "$id" preferred > "$root/preferred-after-update" || [ ! -s "$
 fi
 printf 'Observed preferred same-ID app after update: '; cat "$root/preferred-after-update"
 if ! grep -Fxq "$second" "$root/preferred-after-update"; then
-    echo 'OBSERVED: LaunchServices preference conflict remains; foreign registration is preserved for explicit reconciliation'
+    echo 'OBSERVED: bundle-ID preference differs from the new generation; retained and foreign TEST registrations are preserved'
 fi
 # Disposable acquisition must not Commit or register its copied app.
 SCRIPT_DIR="$root/disposable"; mkdir "$SCRIPT_DIR"

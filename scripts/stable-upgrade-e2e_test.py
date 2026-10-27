@@ -13,6 +13,43 @@ upgrade = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(upgrade)
 
 
+class AssetRedirects(unittest.TestCase):
+    def test_authorization_only_survives_same_origin(self):
+        original = upgrade.urllib.request.Request(
+            'https://api.github.com/releases/assets/123',
+            headers={'Authorization': 'Bearer TEST-synthetic-token', 'Accept': 'application/octet-stream'})
+        handler = upgrade.AssetRedirectHandler()
+        for target, authorized in (
+                ('https://api.github.com/another-asset', True),
+                ('https://release-assets.githubusercontent.com/asset', False),
+                ('http://api.github.com/asset', False),
+                ('https://api.github.com:8443/asset', False)):
+            with self.subTest(target=target):
+                redirected = handler.redirect_request(original, None, 302, 'Found', {}, target)
+                self.assertEqual(redirected.get_header('Authorization'),
+                                 'Bearer TEST-synthetic-token' if authorized else None)
+                self.assertEqual(redirected.get_header('Accept'), 'application/octet-stream')
+                self.assertEqual(original.get_header('Authorization'), 'Bearer TEST-synthetic-token')
+                self.assertEqual(original.full_url, 'https://api.github.com/releases/assets/123')
+                self.assertEqual(original.get_header('Accept'), 'application/octet-stream')
+
+    def test_fetch_uses_safe_opener(self):
+        with patch.object(upgrade.urllib.request, 'build_opener') as build_opener, \
+                patch.object(upgrade.urllib.request, 'urlopen', side_effect=AssertionError('unsafe opener')), \
+                patch.dict(upgrade.os.environ, {'GH_TOKEN': 'TEST-synthetic-token'}):
+            opener = build_opener.return_value
+            opener.open.return_value.__enter__.return_value.read.return_value = b'TEST asset'
+            self.assertEqual(upgrade.fetch(upgrade.API + '/releases/assets/123', binary=True), b'TEST asset')
+            build_opener.assert_called_once()
+            self.assertIsInstance(build_opener.call_args.args[0], upgrade.AssetRedirectHandler)
+            opener.open.assert_called_once()
+            request = opener.open.call_args.args[0]
+            self.assertEqual(request.full_url, upgrade.API + '/releases/assets/123')
+            self.assertEqual(request.get_header('Authorization'), 'Bearer TEST-synthetic-token')
+            self.assertEqual(request.get_header('Accept'), 'application/octet-stream')
+            self.assertEqual(opener.open.call_args.kwargs, {'timeout': 90})
+
+
 class ReleaseCustody(unittest.TestCase):
     def test_one_latest_lookup_then_only_immutable_assets_and_local_hashes(self):
         with tempfile.TemporaryDirectory(prefix='TEST-upgrade-pin-') as scratch:

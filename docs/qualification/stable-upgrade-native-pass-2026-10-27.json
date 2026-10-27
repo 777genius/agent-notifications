@@ -1,0 +1,121 @@
+{
+  "schema_version": 1,
+  "status": "PASS",
+  "source_commit": "47a40a5df11d0d9ba2f04b82d171bd54a09a5918",
+  "tested_merge_commit": "67f062e2777aae7db491af999e1891c5af8dec13",
+  "source_url": "https://github.com/777genius/agent-notifications/commit/47a40a5df11d0d9ba2f04b82d171bd54a09a5918",
+  "workflow": {
+    "run_id": 40496875353,
+    "job_id": 122164979393,
+    "artifact_id": 12731062326,
+    "job_url": "https://github.com/777genius/agent-notifications/actions/runs/40496875353/job/122164979393",
+    "artifact_url": "https://github.com/777genius/agent-notifications/actions/runs/40496875353/artifacts/12731062326",
+    "evidence_file_count": 162,
+    "reports": [
+      "TEST-upgrades/TEST-latest/report.json",
+      "TEST-upgrades/TEST-schema4/report.json"
+    ]
+  },
+  "candidate": {
+    "version": "1.49.10",
+    "binary_sha256": "bd39a87b70d4bb11ac8062afaa06ca369c0559381b90051fb4be4db45b82b25c",
+    "package_sha256": "445319209d0351b0f569cd9c135c01ee8a8f51a264697b664a124ae475a31cfc"
+  },
+  "native_clients": {
+    "claude": {
+      "version": "2.1.311 (Claude Code)",
+      "sha256": "86dc1fcc69498159eaf15f446613e847010f9036bfbbdffd4c49350be8489ada"
+    },
+    "codex": {
+      "version": "codex-cli 0.162.0",
+      "sha256": "61b0194f3bb6534439c8d26a3ed57d0805f84b884588b761795323eeb92fcf70"
+    }
+  },
+  "stable_inputs": [
+    {
+      "tag": "v1.49.10",
+      "release_id": 425286051,
+      "assets": {
+        "checksums.txt": {
+          "id": 681197274,
+          "url": "https://api.github.com/repos/777genius/agent-notifications/releases/assets/681197274",
+          "sha256": "5219911d72b1cf7e49ab60f9b3abad9b9f6eb78a732ec0ea6863162bc1b3bf89"
+        },
+        "claude-notifications-linux-amd64": {
+          "id": 681198538,
+          "url": "https://api.github.com/repos/777genius/agent-notifications/releases/assets/681198538",
+          "sha256": "8d4f27d9aece1c93e2693d7b7169413736f0cfcab7ca5cf44f61ab7568bcca65"
+        },
+        "agent-notify-portable-linux-amd64.zip": {
+          "id": 681196037,
+          "url": "https://api.github.com/repos/777genius/agent-notifications/releases/assets/681196037",
+          "sha256": "cea301aa8cb322b4c53c313f5581bd33d34994be43d32c0d3b58662f31dc6205"
+        }
+      },
+      "clean": "PASS",
+      "upgrade": "PASS",
+      "repeat": "PASS",
+      "upgrade_schema": [
+        5,
+        5
+      ],
+      "upgrade_migration_backup_count": 0
+    },
+    {
+      "tag": "v1.49.8",
+      "release_id": 424253661,
+      "assets": {
+        "checksums.txt": {
+          "id": 678178380,
+          "url": "https://api.github.com/repos/777genius/agent-notifications/releases/assets/678178380",
+          "sha256": "bf2017b6a0f323bdf79ebb954a62919a04431f4b8b38c6791763c6f06cf0abc7"
+        },
+        "claude-notifications-linux-amd64": {
+          "id": 678179671,
+          "url": "https://api.github.com/repos/777genius/agent-notifications/releases/assets/678179671",
+          "sha256": "4ac70705b564e691d9fde37956574edd98fedd31721ff55572742151e0e17645"
+        },
+        "agent-notify-portable-linux-amd64.zip": {
+          "id": 678176954,
+          "url": "https://api.github.com/repos/777genius/agent-notifications/releases/assets/678176954",
+          "sha256": "4c14caed0fb2db34ccd6be8e1c2ce0824e5b07e6d5649273143d095cab5fc896"
+        }
+      },
+      "clean": "PASS",
+      "upgrade": "PASS",
+      "repeat": "PASS",
+      "upgrade_schema": [
+        4,
+        5
+      ],
+      "upgrade_migration_backup_count": 1,
+      "original_and_backup_state_sha256": "d2950de77e44b78234d178ffd9bab7a87d4994cc66ca350565cee8693f064b13"
+    }
+  ],
+  "preservation": {
+    "settings_user_and_foreign_data_exact": true,
+    "repeat_config_registrations_unchanged": true,
+    "managed_runtime_bytes_modes_symlinks_unchanged": true,
+    "managed_control_owner_runtime_policy_consumers_and_file_identities_consistent": true,
+    "managed_generation_clean": [
+      7,
+      10
+    ],
+    "managed_generation_upgrade": [
+      14,
+      17
+    ],
+    "policy_generation_consistent": true,
+    "repeat_additional_migration_backups": 0,
+    "repeat_snapshot_exclusion": "uap/state/mutation.lock"
+  },
+  "native_plugin_listing": {
+    "product_count": 1,
+    "enabled": true,
+    "historical_stable_version": "1.49.8",
+    "candidate_version": "1.49.10",
+    "foreign_TEST_plugin_version": "1.0.0",
+    "foreign_TEST_plugin_enabled": true
+  },
+  "boundary": "Intermediate head predates the final P2 guard and merged UAP dependency pin. Does not qualify the final head or prove a model turn, MCP tool invocation, client restart, desktop delivery or queued callback click."
+}

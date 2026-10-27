@@ -126,7 +126,7 @@ func buildConfirmedBootstrapIntent(ctx context.Context, a setupProductsArgs, e p
 		}
 	}
 	r := intentWizardRequest(i)
-	if !a.SkipAgentNotify && (containsProduct(r.Agents, "claude") || containsProduct(r.Agents, "codex") || containsProduct(r.Agents, "cursor")) {
+	if !a.SkipAgentNotify && len(r.Agents) > 0 {
 		migration, prepareErr := setupwizard.PrepareStateMigration(ctx, r.ControlRoot)
 		if prepareErr != nil {
 			return i, nil, bootstrapStateMigrationError(prepareErr)

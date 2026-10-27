@@ -516,6 +516,11 @@ func run(ctx context.Context, req *Request) (Result, error) {
 			// Registry migration invalidates all pre-migration UAP plans. Rebuild
 			// them before publishing an intent or touching any client registration.
 			plan, planErr := Plan(ctx, *req)
+			if plan.Request.StateMigration != nil && plan.Request.StateMigration.Required {
+				out := StateMigrationFailure(*req, uapinstaller.ErrPlanChanged)
+				out.StateMigration = migrated
+				return out, uapinstaller.ErrPlanChanged
+			}
 			if planErr != nil || !plan.Ready {
 				plan.Result.StateMigration = migrated
 				return plan.Result, planErr

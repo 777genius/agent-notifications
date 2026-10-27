@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -135,6 +136,52 @@ func TestWizardRegistryChangeRequiresFreshConfirmation(t *testing.T) {
 		t.Fatalf("stale plan: %+v %v", result, err)
 	}
 	assertRegistryPreflightUnchanged(t, req, generation, changed)
+}
+
+func TestWizardRejectsSecondRegistryMigrationAfterReplan(t *testing.T) {
+	original := []byte(`{"schema_version":4,"installations":[]}`)
+	req, generation := legacyRegistryRequest(t, original)
+	plan, err := Plan(testCtx(t), req)
+	if err != nil || !plan.Ready {
+		t.Fatalf("prepare: %+v %v", plan, err)
+	}
+	replacement := []byte("{\"schema_version\":3,\"installations\":[]}\n")
+	reports := 0
+	plan.Request.StateMigrationProgress = func(outcome StateMigrationOutcome) {
+		reports++
+		if reports == 1 {
+			if err := os.WriteFile(uapStateFile(req.ControlRoot), replacement, 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	result, err := Run(testCtx(t), plan.Request)
+	if !errors.Is(err, uapinstaller.ErrPlanChanged) || result.Outcome != "conflict" || result.Reason != "state_migration_changed" || len(result.Command) != 0 || len(result.NextActions) != 0 || reports != 1 {
+		t.Fatalf("reapproved replacement registry: reports=%d result=%+v err=%v", reports, result, err)
+	}
+	if result.StateMigration == nil || result.StateMigration.Outcome != "completed" || result.StateMigration.BackupPath == "" {
+		t.Fatalf("lost successful first migration: %+v", result)
+	}
+	current, err := os.ReadFile(uapStateFile(req.ControlRoot))
+	if err != nil || !bytes.Equal(current, replacement) {
+		t.Fatalf("replacement registry overwritten: %s %v", current, err)
+	}
+	backups := registryBackups(t, req.ControlRoot)
+	if len(backups) != 1 {
+		t.Fatalf("unapproved second migration backup: %v", backups)
+	}
+	backup, err := os.ReadFile(backups[0])
+	if err != nil || !bytes.Equal(backup, original) {
+		t.Fatalf("first exact backup changed: %v", err)
+	}
+	ledger, recovering, err := installruntime.ReadOwnership(req.ControlRoot)
+	if err != nil || recovering || ledger.Generation != generation || ledger.PendingMutation != nil {
+		t.Fatalf("client work preceded refusal: %+v recovering=%t err=%v", ledger, recovering, err)
+	}
+	entries, err := os.ReadDir(req.ClaudeConfig)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("profile changed: %v %v", entries, err)
+	}
 }
 
 func TestWizardRegistryFailureAndCancellationDoNotWriteClients(t *testing.T) {

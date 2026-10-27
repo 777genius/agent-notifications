@@ -17,6 +17,7 @@ import shutil
 import stat
 import subprocess
 import tomllib
+import urllib.parse
 import urllib.request
 import zipfile
 
@@ -34,12 +35,20 @@ def write_json(path, value):
     path.write_text(json.dumps(value, indent=2) + '\n', encoding='utf-8')
 
 
+class AssetRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        redirected = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if redirected is not None and urllib.parse.urlsplit(req.full_url)[:2] != urllib.parse.urlsplit(redirected.full_url)[:2]:
+            redirected.remove_header('Authorization')
+        return redirected
+
+
 def fetch(url, binary=False):
     headers = {'Accept': 'application/octet-stream' if binary else 'application/vnd.github+json',
                'User-Agent': 'agent-notifications-TEST-upgrade'}
     if os.environ.get('GH_TOKEN'):
         headers['Authorization'] = 'Bearer ' + os.environ['GH_TOKEN']
-    with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=90) as response:
+    with urllib.request.build_opener(AssetRedirectHandler()).open(urllib.request.Request(url, headers=headers), timeout=90) as response:
         return response.read()
 
 

@@ -35,8 +35,45 @@ The fixed candidate completed the same real schema-4 to schema-5 migration and
 created one byte-identical backup, preserving the seeded settings and user data.
 Its subsequent native activation was blocked by this execution environment's
 `/proc` containment prerequisite, including when run with normal host permissions.
-`stable-upgrade-fixed-2026-10-27.json` records that result. It is migration evidence;
-the full native activation and repeat gate still requires the hosted Linux run.
+`stable-upgrade-fixed-2026-10-27.json` records that local result. It remains
+migration-only evidence; the separate hosted run below completed native
+activation and the repeat gate successfully.
+
+## Hosted Linux native PASS
+
+[Recovery run 40496875353, Linux job 122164979393](https://github.com/777genius/agent-notifications/actions/runs/40496875353/job/122164979393)
+completed the full gate using source
+[`47a40a5df11d0d9ba2f04b82d171bd54a09a5918`](https://github.com/777genius/agent-notifications/commit/47a40a5df11d0d9ba2f04b82d171bd54a09a5918)
+and tested merge `67f062e2777aae7db491af999e1891c5af8dec13`.
+[Artifact 12731062326](https://github.com/777genius/agent-notifications/actions/runs/40496875353/artifacts/12731062326)
+contains 162 evidence files, including both reports, frozen stable pins, native
+client listings, command output and the original historical state bytes.
+`stable-upgrade-native-pass-2026-10-27.json` records the compact result and
+candidate hashes without copying TEST profile contents.
+
+Both the Latest v1.49.10 and historical v1.49.8 inputs passed clean installation,
+upgrade and unchanged-repeat checks with actual Claude Code `2.1.311` and Codex
+`0.162.0`. Latest upgraded schema 5 to 5 with no migration backup. Historical
+v1.49.8 upgraded schema 4 to 5 with exactly one byte-identical backup of the
+original state (SHA-256
+`d2950de77e44b78234d178ffd9bab7a87d4994cc66ca350565cee8693f064b13`).
+Repeating the candidate created no additional backup. Both native clients
+listed exactly one enabled product at the expected version (historical stable
+`1.49.8`, then candidate `1.49.10`), alongside the enabled foreign TEST plugin
+`1.0.0`.
+
+Settings, user and foreign data, and managed runtime bytes, modes and symlink
+targets passed exact preservation checks. The managed control ledger retained
+its required owner, runtime, policy and consumer semantics; its generation
+advanced from 7 to 10 for clean cases and from 14 to 17 for upgrades, with
+consistent policy generations. These counters are intentionally not described
+as byte-identical bookkeeping.
+
+This is evidence for the identified intermediate source and tested merge. It
+predates the final P2 guard and merged UAP dependency pin, so it does not qualify
+the final head. It proves real installation, migration, preservation and native
+plugin registration/enablement. It does not prove a model turn, MCP tool call,
+client restart, desktop delivery or queued callback click.
 
 ## What the gate checks
 
@@ -81,10 +118,21 @@ register, both published callback generations remain registered after an
 update, and disposable acquisition has no registration side effect. It also
 creates a second owned TEST app with the same ID outside the managed runtime,
 records the actual preferred path before and after the update, and checks that
-the foreign app's bytes and registration survive. A remaining preference
-conflict is reported as an observation requiring explicit reconciliation. The
-test never resets the LaunchServices database or removes registrations outside
-its owned TEST paths.
+the foreign app's bytes and registration survive. A preference that differs
+from the new generation is reported as an observation without assuming which
+retained or foreign path is preferred. The test never resets the LaunchServices
+database or removes registrations outside its owned TEST paths.
+
+The actual macOS
+[run 40495306288, job 122160102323](https://github.com/777genius/agent-notifications/actions/runs/40495306288/job/122160102323)
+passed. The observed bundle-ID preference before and after the update was the
+retained earlier generation A, `generation-16777231:2274629.app`. The new
+generation B registered, both generation registrations remained, and the
+same-ID foreign TEST app's bytes and registration survived. No private stage or
+disposable acquisition path registered, and no deregistration failure was
+reproduced. The unique TEST bundle ID does not exercise the production
+hardcoded-ID reconciler. This run therefore does not establish that the
+original production warning, preference repair or click delivery is fixed.
 
 Native plugin listings prove registration and enablement. These checks do not
 claim a model turn, MCP tool invocation, application restart, visible desktop
