@@ -42,6 +42,7 @@ jobs:
           python3 -B tools/ci_release_scope_test.py
           python3 -B tools/ci_native_evidence_test.py
           bash bin/install_e2e_mode_test.sh
+          python3 -B scripts/stable-upgrade-e2e_test.py
       - name: Classify exact PR revision (errors retain full CI)
         id: classify
         run: python3 scripts/ci_macos_scope.py classify
@@ -157,12 +158,39 @@ jobs:
               check launchservices bash bin/e2e_launchservices_macos_test.sh
               exit "$status"
             '
+      - uses: actions/setup-node@v6
+        if: runner.os == 'Linux'
+        with:
+          node-version: '24'
+      - name: Real clean install, published upgrade, and unchanged repeat
+        if: runner.os == 'Linux'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          export GOMODCACHE="$RECOVERY_SANDBOX/gomod" GOCACHE="$RECOVERY_SANDBOX/gocache"
+          export GOTOOLCHAIN=local GOTELEMETRY=off GOPROXY=off GOSUMDB=off
+          candidate="$RECOVERY_SANDBOX/claude-notifications-linux-amd64"
+          go build -trimpath -ldflags='-s -w' -o "$candidate" ./cmd/claude-notifications
+          version=$(sed -n 's/^var ConsumerVersion = "\([^"]*\)"$/\1/p' internal/config/runtime.go)
+          go run ./cmd/build-portable-package -version "$version" -os linux -arch amd64 \
+            -executable "$candidate" -output "$RECOVERY_SANDBOX/candidate.zip" \
+            -workdir "$RECOVERY_SANDBOX/candidate-package"
+          bash scripts/stable-upgrade-gate.sh "$candidate" "$RECOVERY_SANDBOX/candidate.zip" \
+            "$RECOVERY_SANDBOX/evidence/TEST-upgrades"
       - name: Preserve test evidence
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: install-recovery-${{ matrix.os }}
-          path: ${{ env.RECOVERY_SANDBOX }}/evidence
+          path: |
+            ${{ env.RECOVERY_SANDBOX }}/evidence/**/*.log
+            ${{ env.RECOVERY_SANDBOX }}/evidence/**/stable-pin.json
+            ${{ env.RECOVERY_SANDBOX }}/evidence/**/*.stdout
+            ${{ env.RECOVERY_SANDBOX }}/evidence/**/*.stderr
+            ${{ env.RECOVERY_SANDBOX }}/evidence/**/report.json
+            ${{ env.RECOVERY_SANDBOX }}/evidence/**/state-before-upgrade.json
           if-no-files-found: warn
       - name: Remove owned sandbox
         if: always()

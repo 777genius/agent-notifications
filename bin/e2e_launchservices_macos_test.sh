@@ -98,9 +98,20 @@ package_app
 cat > "$root/query.c" <<'C'
 #include <CoreServices/CoreServices.h>
 #include <stdio.h>
+#include <string.h>
 int main(int argc, char **argv) {
- if (argc != 2) return 2;
+ if (argc != 2 && argc != 3) return 2;
  CFStringRef id = CFStringCreateWithCString(NULL, argv[1], kCFStringEncodingUTF8);
+ if (argc == 3 && strcmp(argv[2], "preferred") == 0) {
+  CFURLRef url = NULL;
+  OSStatus result = LSFindApplicationForInfo(kLSUnknownCreator, id, NULL, NULL, &url);
+  CFRelease(id);
+  if (result != noErr || !url) return 1;
+  char path[4096];
+  if (CFURLGetFileSystemRepresentation(url, true, (UInt8 *)path, sizeof(path))) puts(path);
+  CFRelease(url);
+  return 0;
+ }
  CFArrayRef urls = LSCopyApplicationURLsForBundleIdentifier(id, NULL);
  CFRelease(id);
  if (!urls) return 0;
@@ -178,6 +189,17 @@ assert any(sys.argv[3] in b for b in blocks), 'published path missing from dump'
 assert not any('/.install-stage.' in b or '/.candidate-' in b for b in blocks), 'private path indexed in dump'
 PY
 then failed=$((failed+1)); fi
+# A second app with the same ID is an owned TEST conflict outside the managed
+# runtime. Observe actual preference, and require the installer to leave it
+# registered and byte-identical while publishing the next callback generation.
+mkdir -p "$root/TEST-foreign"
+cp -R "$release/ClaudeNotifier.app" "$root/TEST-foreign/ClaudeNotifier.app"
+foreign="$root/TEST-foreign/ClaudeNotifier.app"
+foreign_manifest() { (cd "$foreign"; find . -type f -exec shasum -a 256 {} \; | LC_ALL=C sort); }
+foreign_manifest > "$root/foreign-before.sha256"
+"$lsregister" -f "$foreign"
+"$root/query" "$id" preferred > "$root/preferred-before-update" || true
+printf 'Observed preferred same-ID app before update: '; cat "$root/preferred-before-update"
 # Upgrade creates a new durable generation; the original callback path stays.
 printf generation-B > "$release/ClaudeNotifier.app/Contents/Resources/generation.marker"
 package_app
@@ -192,6 +214,13 @@ while :; do
     n=$((n+1)); [ "$n" -lt 50 ] || break; sleep 0.1
 done
 if grep -Fxq "$published" "$root/update-urls" && grep -Fxq "$second" "$root/update-urls" && ! grep -Eq '/\.install-stage\.|/\.candidate-' "$root/update-urls"; then echo 'PASS: update retains both registered generation paths'; else echo 'FAIL: registered generation retention'; cat "$root/update-urls"; failed=$((failed+1)); fi
+foreign_manifest > "$root/foreign-after.sha256"
+if cmp -s "$root/foreign-before.sha256" "$root/foreign-after.sha256" && grep -Fxq "$foreign" "$root/update-urls"; then echo 'PASS: same-ID foreign TEST app preserved'; else echo 'FAIL: same-ID foreign TEST app changed or unregistered'; failed=$((failed+1)); fi
+"$root/query" "$id" preferred > "$root/preferred-after-update" || true
+printf 'Observed preferred same-ID app after update: '; cat "$root/preferred-after-update"
+if ! grep -Fxq "$second" "$root/preferred-after-update"; then
+    echo 'OBSERVED: LaunchServices preference conflict remains; foreign registration is preserved for explicit reconciliation'
+fi
 # Disposable acquisition must not Commit or register its copied app.
 SCRIPT_DIR="$root/disposable"; mkdir "$SCRIPT_DIR"
 INSTALL_DISPOSABLE_ACQUISITION=true CN_PRODUCT=codex

@@ -169,6 +169,12 @@ func executeSetupWizardWith(ctx context.Context, args []string, out, errOut io.W
 		}
 	}
 	if errOut != nil {
+		req.StateMigrationProgress = func(m setupwizard.StateMigrationOutcome) {
+			if m.BackupPath != "" {
+				_, _ = fmt.Fprintln(errOut, "UAP registry backup: "+setupDisplayPath(m.BackupPath))
+			}
+			_, _ = fmt.Fprintf(errOut, "UAP registry migration %s: schema %d -> %d.\n", m.Outcome, m.SourceSchema, m.TargetSchema)
+		}
 		req.Progress = func(phase string) {
 			if jsonOut {
 				_, _ = fmt.Fprintln(errOut, "phase", phase)

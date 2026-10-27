@@ -55,13 +55,19 @@ func runSetupProductsContext(ctx context.Context, args []string, input io.Reader
 		}
 		return 0
 	}
+	if a.Operation == "migration-capabilities" {
+		if err := writeSelectorResult(ctx, output, "state-migration-v1\n"); err != nil {
+			return fail(1, err)
+		}
+		return 0
+	}
 	if a.Operation == "repair-cache" {
 		if err := repairBootstrapCache(ctx, a, input, output, prompts); err != nil {
 			return fail(1, err)
 		}
 		return 0
 	}
-	if a.Operation == "intent-args" || a.Operation == "preflight" {
+	if a.Operation == "intent-args" || a.Operation == "preflight" || a.Operation == "migration-apply" {
 		provenance, err := currentSelectorProvenance()
 		if err != nil {
 			return fail(1, err)
@@ -72,6 +78,8 @@ func runSetupProductsContext(ctx context.Context, args []string, input io.Reader
 		}
 		if a.Operation == "intent-args" {
 			err = writeIntentScalars(output, intent)
+		} else if a.Operation == "migration-apply" {
+			err = applyBootstrapStateMigration(ctx, intent, output, prompts)
 		} else {
 			checkpoint, cancel := context.WithTimeout(ctx, bootstrapInspectionTimeout)
 			defer cancel()

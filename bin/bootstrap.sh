@@ -114,6 +114,9 @@ _FROZEN_GEMINI=""
 _FROZEN_QODER=""
 _FROZEN_SCOPE_ROOT=""
 _FROZEN_CLIENT_EXEC=""
+_STATE_MIGRATION_CAPABLE=false
+_FROZEN_STATE_MIGRATION_REQUIRED=""
+_STATE_MIGRATION_COMPLETED=false
 _CLAUDE_EXEC=claude
 _CODEX_EXEC=codex
 _OPENCODE_EXEC=opencode
@@ -1683,7 +1686,7 @@ run_setup_stage() {
     progress_start "$label"
     if progress_rich_available && [ -n "$_PROGRESS_PID" ]; then
         : # A started transient display owns rich stage labels.
-    elif [ "${BOOTSTRAP_VERBOSE:-0}" = 1 ] || [[ "$label" = Installing* ]] || progress_rich_available || [ "$_PROGRESS_JOURNAL_DISABLED" = true ]; then
+    elif [ "${BOOTSTRAP_VERBOSE:-0}" = 1 ] || [[ "$label" = Installing* ]] || [ "$label" = "Upgrading UAP registry" ] || progress_rich_available || [ "$_PROGRESS_JOURNAL_DISABLED" = true ]; then
         printf '%s...\n' "$label"
     fi
     "$@" > "$_PROGRESS_LOG" 2> "$_PROGRESS_STDERR" || status=$?
@@ -3474,6 +3477,14 @@ report_partial_recovery() {
 report_setup_failure() {
     local reason
     case "$_SETUP_FAILURE_REASON" in
+        state_migration_failed)
+            printf 'UAP registry upgrade was not completed. Client registrations have not been changed.\n' >&2
+            if [ -f "$_CONFIG_STAGE/state-migration.stderr" ]; then
+                cat "$_CONFIG_STAGE/state-migration.stderr" >&2
+            fi
+            printf 'Run setup again after resolving the registry issue and review the new installation plan.\n' >&2
+            report_diagnostics
+            return ;;
         probe_timeout) reason='plugin verification timed out.' ;;
         canceled) reason='activation was canceled.' ;;
         deadline) reason='the setup deadline was reached.' ;;
@@ -3535,6 +3546,7 @@ load_frozen_dispatch() {
     local LC_ALL=C config_explicit=false resolved_config
     [ -z "${AGENT_NOTIFICATIONS_CONFIG:-}" ] || config_explicit=true
     _FROZEN_GLOBAL_CONFIG=""
+    _FROZEN_STATE_MIGRATION_REQUIRED=""
     local result="$_CONFIG_STAGE/intent-args.result" status=0 size key value seen=""
     "$_CONFIG_HELPER" setup-products intent-args --intent-file "$_SELECTOR_INTENT" >"$result" </dev/null || status=$?
     [ "$status" -eq 0 ] || return "$status"
@@ -3548,6 +3560,10 @@ load_frozen_dispatch() {
         seen=${seen:+$seen,}$key
         [ "${#value}" -le 4096 ] || return 1
         case "$key" in
+            state-migration-required)
+                case "$value" in true|false) ;; *) return 1 ;; esac
+                _FROZEN_STATE_MIGRATION_REQUIRED=$value
+                continue ;;
             opencode-channel-preimage|gemini-channel-preimage|qoder-channel-preimage)
                 if [ "$value" != absent ]; then
                     [ "${#value}" -eq 64 ] || return 1
@@ -3603,6 +3619,7 @@ load_frozen_dispatch() {
     # preparation succeeds. Keep an observed runtime when present; never invent
     # one or pass an empty override into the later portable admission.
     local required="home control-root global-config" selected
+    if [ "$_STATE_MIGRATION_CAPABLE" = true ]; then required="$required state-migration-required"; fi
     for selected in "${SELECTED_PRODUCTS[@]}"; do
         case "$selected" in
             claude) required="$required claude-config claude-mcp-config claude-executable" ;;
@@ -3637,6 +3654,24 @@ load_frozen_dispatch() {
     CACHE_DIR="$CLAUDE_HOME/plugins/cache/$MARKETPLACE_NAME"
     MARKETPLACE_DIR="$CLAUDE_HOME/plugins/marketplaces/$MARKETPLACE_NAME"
     MARKETPLACE_PLUGIN_JSON="$MARKETPLACE_DIR/.claude-plugin/plugin.json"
+}
+
+# The confirmed registry belongs to the parent, never to parallel client
+# workers. Keep the helper's bounded, sanitized diagnostics available on a
+# refusal; an activation-only retry cannot repair registry preparation.
+apply_confirmed_state_migration() {
+    local status=0
+    _STATE_MIGRATION_COMPLETED=false
+    selector_collect migration-apply --intent-file "$_SELECTOR_INTENT" \
+        2>"$_CONFIG_STAGE/state-migration.stderr" || status=$?
+    cat "$_CONFIG_STAGE/state-migration.stderr" >&2
+    [ "$status" -eq 0 ] || return "$status"
+    if [ "$_FROZEN_STATE_MIGRATION_REQUIRED" = true ]; then
+        selector_exact migrated migration-apply || return 1
+        _STATE_MIGRATION_COMPLETED=true
+    else
+        selector_exact unchanged migration-apply || return 1
+    fi
 }
 
 # Normalize the existing request once, then relay the same argv to summary and
@@ -3697,6 +3732,10 @@ main() {
     require_installer_runtime 3>&- || return 1
     resolve_bootstrap_release 3>&- || return 1
     run_setup_stage "Preparing verified installer" stage_config_helper 3>&- >&2 || { report_setup_failure 1; return 1; }
+    local state_migration_capability
+    state_migration_capability=$("$_CONFIG_HELPER" setup-products migration-capabilities </dev/null 2>/dev/null) || state_migration_capability=""
+    _STATE_MIGRATION_CAPABLE=false
+    if [ "$state_migration_capability" = state-migration-v1 ]; then _STATE_MIGRATION_CAPABLE=true; fi
     export BOOTSTRAP_RELEASE_TAG="$BOOTSTRAP_TAG" BOOTSTRAP_RELEASE_COMMIT="$BOOTSTRAP_COMMIT"
     export BOOTSTRAP_SOURCE_COMMIT="$BOOTSTRAP_BUNDLE_COMMIT" BOOTSTRAP_SOURCE_REF="${BOOTSTRAP_SOURCE_REF:-}"
     export BOOTSTRAP_RELEASE_CHANNEL="${BOOTSTRAP_RELEASE_CHANNEL:-}"
@@ -3771,7 +3810,7 @@ main() {
                 selector_exact prepared prepare || return 1 ;;
         esac
     fi
-    if [ -z "$_SELECTOR_INTENT" ] && parallel_install_available; then
+    if [ -z "$_SELECTOR_INTENT" ] && { [ "$_STATE_MIGRATION_CAPABLE" = true ] || parallel_install_available; }; then
         _SELECTOR_INTENT="$_CONFIG_STAGE/selector-intent.json"
         selector_scope_args
         selector_collect prepare "${_EFFECT_ARGS[@]}" ${_SCOPE_ARGS[@]+"${_SCOPE_ARGS[@]}"} --intent-file "$_SELECTOR_INTENT" || return $?
@@ -3804,6 +3843,17 @@ main() {
     if [ -n "$_SELECTOR_INTENT" ]; then
         selector_collect preflight --intent-file "$_SELECTOR_INTENT" "${_EFFECT_ARGS[@]}" || return $?
         [ ! -s "$_SELECTOR_RESULT" ] || { echo "Invalid preflight stdout." >&2; return 1; }
+    fi
+    if [ "$_STATE_MIGRATION_CAPABLE" = true ]; then
+        local migration_label="Checking UAP registry"
+        [ "$_FROZEN_STATE_MIGRATION_REQUIRED" != true ] || migration_label="Upgrading UAP registry"
+        if ! run_setup_stage "$migration_label" apply_confirmed_state_migration; then
+            _SETUP_FAILURE_REASON=state_migration_failed
+            _KEEP_CONFIG_STAGE=true
+            report_setup_failure 1
+            return 1
+        fi
+        if [ "$_STATE_MIGRATION_COMPLETED" = true ]; then printf 'UAP registry upgraded; backup saved.\n'; fi
     fi
     # The verified capability guarantees finite worker phases and subset wizard
     # projection. Older releases retain their original synchronous contract.

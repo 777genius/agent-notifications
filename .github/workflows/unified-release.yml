@@ -560,3 +560,35 @@ jobs:
           RELEASE_TAG: ${{ inputs.release_tag }}
         run: python scripts/release-artifact-e2e.py --binary "dist/${{ matrix.binary }}" --version "$RELEASE_TAG"
         shell: bash
+
+      - uses: actions/setup-node@v6
+        if: matrix.platform == 'linux' && matrix.arch == 'amd64'
+        with:
+          node-version: '24'
+
+      - name: Qualify real previous-stable upgrade and unchanged repeat
+        if: matrix.platform == 'linux' && matrix.arch == 'amd64'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test_root=$(mktemp -d "$RUNNER_TEMP/TEST-release-upgrade-XXXXXX")
+          printf 'UPGRADE_EVIDENCE=%s\n' "$test_root" >> "$GITHUB_ENV"
+          bash scripts/stable-upgrade-gate.sh "dist/${{ matrix.binary }}" \
+            dist/agent-notify-portable-linux-amd64.zip "$test_root"
+
+      - name: Preserve immutable upgrade evidence
+        if: always() && matrix.platform == 'linux' && matrix.arch == 'amd64' && env.UPGRADE_EVIDENCE != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: stable-upgrade-linux-amd64
+          path: |
+            ${{ env.UPGRADE_EVIDENCE }}/*.log
+            ${{ env.UPGRADE_EVIDENCE }}/**/stable-pin.json
+            ${{ env.UPGRADE_EVIDENCE }}/**/report.json
+            ${{ env.UPGRADE_EVIDENCE }}/**/*.stdout
+            ${{ env.UPGRADE_EVIDENCE }}/**/*.stderr
+            ${{ env.UPGRADE_EVIDENCE }}/**/state-before-upgrade.json
+          if-no-files-found: error
+          retention-days: 14

@@ -34,12 +34,12 @@ func parseSetupProducts(args []string) (r setupProductsArgs, err error) {
 	}
 	r.Operation = args[0]
 	switch r.Operation {
-	case "capabilities", "features", "repair-capabilities":
+	case "capabilities", "features", "repair-capabilities", "migration-capabilities":
 		if len(args) != 1 {
 			return invalid()
 		}
 		return r, nil
-	case "select", "channels", "confirm", "prepare", "intent-args", "preflight", "repair-cache":
+	case "select", "channels", "confirm", "prepare", "intent-args", "preflight", "migration-apply", "repair-cache":
 	default:
 		return invalid()
 	}
@@ -157,7 +157,7 @@ func parseSetupProducts(args []string) (r setupProductsArgs, err error) {
 		}
 		return r, nil
 	}
-	if r.Operation == "intent-args" {
+	if r.Operation == "intent-args" || r.Operation == "migration-apply" {
 		if r.IntentFile == "" || len(seen) != 1 || modeSeen {
 			return invalid()
 		}

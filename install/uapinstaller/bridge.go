@@ -11,34 +11,38 @@ import (
 )
 
 type (
-	Operation             = installer.Operation
-	Request               = installer.Request
-	ClientTarget          = installer.ClientTarget
-	TargetFacts           = installer.TargetFacts
-	Decision              = installer.Decision
-	BindingFacts          = installer.BindingFacts
-	Plan                  = installer.Plan
-	PlanTarget            = installer.PlanTarget
-	Result                = installer.Result
-	RecoveryReport        = installer.RecoveryReport
-	NextAction            = installer.NextAction
-	ClientResult          = installer.ClientResult
-	Assessment            = installer.Assessment
-	AssessmentOutcome     = installer.AssessmentOutcome
-	ProgressPhase         = installer.ProgressPhase
-	ProgressEvent         = installer.ProgressEvent
-	Inspection            = installer.Inspection
-	RecoveryObservation   = installer.RecoveryObservation
-	PendingJournal        = installer.PendingJournal
-	PendingReceipt        = installer.PendingReceipt
-	InspectedInstallation = installer.InspectedInstallation
-	InspectedBinding      = installer.InspectedBinding
-	ClientMetadata        = installer.ClientMetadata
-	Config                = installer.Config
-	Engine                = installer.Engine
-	PreparedOperation     = installer.PreparedOperation
-	IdentityRequest       = installer.IdentityRequest
-	IdentityReservation   = installer.IdentityReservation
+	Operation                   = installer.Operation
+	Request                     = installer.Request
+	ClientTarget                = installer.ClientTarget
+	TargetFacts                 = installer.TargetFacts
+	Decision                    = installer.Decision
+	BindingFacts                = installer.BindingFacts
+	Plan                        = installer.Plan
+	PlanTarget                  = installer.PlanTarget
+	Result                      = installer.Result
+	RecoveryReport              = installer.RecoveryReport
+	NextAction                  = installer.NextAction
+	ClientResult                = installer.ClientResult
+	Assessment                  = installer.Assessment
+	AssessmentOutcome           = installer.AssessmentOutcome
+	ProgressPhase               = installer.ProgressPhase
+	ProgressEvent               = installer.ProgressEvent
+	Inspection                  = installer.Inspection
+	RecoveryObservation         = installer.RecoveryObservation
+	PendingJournal              = installer.PendingJournal
+	PendingReceipt              = installer.PendingReceipt
+	InspectedInstallation       = installer.InspectedInstallation
+	InspectedBinding            = installer.InspectedBinding
+	ClientMetadata              = installer.ClientMetadata
+	Config                      = installer.Config
+	Engine                      = installer.Engine
+	PreparedOperation           = installer.PreparedOperation
+	IdentityRequest             = installer.IdentityRequest
+	IdentityReservation         = installer.IdentityReservation
+	StateMigrationPlan          = installer.StateMigrationPlan
+	StateMigrationResult        = installer.StateMigrationResult
+	MigrationRequiredError      = installer.MigrationRequiredError
+	UnsupportedStateSchemaError = installer.UnsupportedStateSchemaError
 )
 
 const (
@@ -84,6 +88,9 @@ var (
 	ErrAssessmentRejected       = installer.ErrAssessmentRejected
 	ErrCompatibilityUnavailable = installer.ErrCompatibilityUnavailable
 	ErrTargetFactsUnavailable   = installer.ErrTargetFactsUnavailable
+	ErrMigrationRequired        = installer.ErrMigrationRequired
+	ErrStateCorrupt             = installer.ErrStateCorrupt
+	ErrUnsupportedStateSchema   = installer.ErrUnsupportedStateSchema
 )
 
 func New(cfg Config) (*Engine, error) {
