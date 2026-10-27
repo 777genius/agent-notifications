@@ -66,7 +66,7 @@ func managedFixtureExecutable(t *testing.T) string {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
-		build := exec.CommandContext(ctx, compiler, "test", "-c", "-ldflags=-s -w", "-o", managedFixture.executable, ".")
+		build := exec.CommandContext(ctx, compiler, "test", "-c", "-trimpath", "-ldflags=-s -w", "-o", managedFixture.executable, ".")
 		build.Dir = managedFixture.cwd
 		build.Env = append(managedFixture.compilerEnv, "GOFLAGS=-mod=readonly")
 		if out, err := build.CombinedOutput(); err != nil {

@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 
+	"github.com/777genius/agent-notifications/install/uapinstaller"
 	"github.com/777genius/agent-notifications/internal/agentnotify/setupwizard"
 	"github.com/777genius/agent-notifications/internal/config"
 	"github.com/777genius/agent-notifications/internal/installruntime"
@@ -23,10 +24,11 @@ type confirmedBootstrapIntent struct {
 	Provenance  selectorProvenance  `json:"provenance"`
 	Request     setupProductsArgs   `json:"request"`
 	// Byte values preserve Unix path bytes through JSON without lossy UTF8 repair.
-	Scopes  map[string][]byte                 `json:"scopes"`
-	Units   []bootstrapProductUnits           `json:"units"`
-	Initial bootstrapInitialObservation       `json:"initial"`
-	MCP     setupwizard.BootstrapMCPSelection `json:"mcp"`
+	Scopes         map[string][]byte                 `json:"scopes"`
+	Units          []bootstrapProductUnits           `json:"units"`
+	Initial        bootstrapInitialObservation       `json:"initial"`
+	MCP            setupwizard.BootstrapMCPSelection `json:"mcp"`
+	StateMigration *uapinstaller.StateMigrationPlan  `json:"stateMigration,omitempty"`
 }
 type bootstrapProductUnits struct {
 	Product                                                   string
@@ -124,6 +126,13 @@ func buildConfirmedBootstrapIntent(ctx context.Context, a setupProductsArgs, e p
 		}
 	}
 	r := intentWizardRequest(i)
+	if !a.SkipAgentNotify && len(r.Agents) > 0 {
+		migration, prepareErr := setupwizard.PrepareStateMigration(ctx, r.ControlRoot)
+		if prepareErr != nil {
+			return i, nil, bootstrapStateMigrationError(prepareErr)
+		}
+		i.StateMigration = &migration
+	}
 	// Confirmation observes stored units without granting the selected route.
 	// The direct caller constructs fresh authority before Plan/Run, after the
 	// frozen selection has preserved absent siblings and explicit opt-outs.
@@ -214,6 +223,11 @@ func preflightBootstrapIntent(ctx context.Context, i confirmedBootstrapIntent, a
 	if !reflect.DeepEqual(i.Request, comparable) {
 		return errors.New("intent arguments differ from confirmed request")
 	}
+	if i.StateMigration != nil {
+		if err := setupwizard.CheckStateMigration(ctx, string(i.Scopes["control-root"]), *i.StateMigration); err != nil {
+			return bootstrapStateMigrationError(err)
+		}
+	}
 	root := string(i.Scopes["control-root"])
 	policy, err := installruntime.ReadPolicySnapshot(ctx, root)
 	if err != nil {
@@ -263,6 +277,9 @@ func preflightBootstrapIntent(ctx context.Context, i confirmedBootstrapIntent, a
 
 func bootstrapIntentSummary(i confirmedBootstrapIntent, policy map[string]json.RawMessage) ([]string, error) {
 	raw := []string{"Installation summary", "", "Components to install"}
+	if m := i.StateMigration; m != nil && m.Required {
+		raw = append(raw, fmt.Sprintf("  Upgrade UAP registry schema %d -> %d before client registration; save an exact backup (%d installation(s)).", m.SourceSchema, m.TargetSchema, m.Installations))
+	}
 	for _, u := range i.Units {
 		parts := []string{}
 		if u.Product == "copilot-vscode" {

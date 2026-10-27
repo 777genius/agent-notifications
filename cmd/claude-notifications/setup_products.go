@@ -55,13 +55,19 @@ func runSetupProductsContext(ctx context.Context, args []string, input io.Reader
 		}
 		return 0
 	}
+	if a.Operation == "migration-capabilities" {
+		if err := writeSelectorResult(ctx, output, "state-migration-v1\n"); err != nil {
+			return fail(1, err)
+		}
+		return 0
+	}
 	if a.Operation == "repair-cache" {
 		if err := repairBootstrapCache(ctx, a, input, output, prompts); err != nil {
 			return fail(1, err)
 		}
 		return 0
 	}
-	if a.Operation == "intent-args" || a.Operation == "preflight" {
+	if a.Operation == "intent-args" || a.Operation == "preflight" || a.Operation == "migration-apply" {
 		provenance, err := currentSelectorProvenance()
 		if err != nil {
 			return fail(1, err)
@@ -70,9 +76,14 @@ func runSetupProductsContext(ctx context.Context, args []string, input io.Reader
 		if err != nil {
 			return fail(1, err)
 		}
-		if a.Operation == "intent-args" {
+		switch a.Operation {
+		case "intent-args":
 			err = writeIntentScalars(output, intent)
-		} else {
+		case "migration-apply":
+			mutation, cancel := context.WithTimeout(ctx, 3*time.Minute)
+			defer cancel()
+			err = applyBootstrapStateMigration(mutation, intent, output, prompts)
+		case "preflight":
 			checkpoint, cancel := context.WithTimeout(ctx, bootstrapInspectionTimeout)
 			defer cancel()
 			err = runSetupProductsBusy(checkpoint, prompts, setupProductsBusyRich(input, prompts, a.Mode), "Rechecking installation…", func() error {

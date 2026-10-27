@@ -12,6 +12,12 @@ import (
 // Installation and observed delivery are separate facts. A completed mutation
 // must never imply that the client restarted, trusted hooks, or displayed an alert.
 func writeSetupWizardSummary(out io.Writer, result setupwizard.Result) {
+	if m := result.StateMigration; m != nil {
+		_, _ = fmt.Fprintf(out, "UAP registry migration %s: schema %d -> %d.\n", m.Outcome, m.SourceSchema, m.TargetSchema)
+		if m.BackupPath != "" {
+			_, _ = fmt.Fprintln(out, "Backup: "+setupDisplayPath(m.BackupPath))
+		}
+	}
 	if result.Action != "inspect" && result.Outcome != "completed" && result.Outcome != "unchanged" && result.Outcome != "cancelled" {
 		writeSetupWizardIncomplete(out, result)
 		return
@@ -159,6 +165,23 @@ func writeSetupWizardIncomplete(out io.Writer, result setupwizard.Result) {
 		_, _ = fmt.Fprintf(out, "  %s  %s\n", setupClientName(target.Client), state)
 	}
 	_, _ = fmt.Fprintln(out, "  Delivery  not verified")
+	if strings.HasPrefix(result.Reason, "state_migration_") {
+		switch result.Reason {
+		case "state_migration_changed":
+			_, _ = fmt.Fprintln(out, "Next: Run setup again and confirm the changed registry upgrade plan.")
+		case "state_migration_pending":
+			_, _ = fmt.Fprintln(out, "Next: Complete unfinished UAP operations with the previous installer, then run setup again to confirm the registry upgrade.")
+		case "state_migration_future":
+			_, _ = fmt.Fprintln(out, "Next: Use a newer installer that supports this registry schema. This installer cannot downgrade the registry.")
+		case "state_migration_unsupported":
+			_, _ = fmt.Fprintln(out, "Next: Use a compatible installer or restore a supported registry backup, then run setup again.")
+		case "state_migration_corrupt":
+			_, _ = fmt.Fprintln(out, "Next: Restore a valid UAP registry backup, then run setup again.")
+		default:
+			_, _ = fmt.Fprintln(out, "Next: Check access to the UAP state directory and available disk space, then run setup again to review the registry.")
+		}
+		return
+	}
 	for _, next := range result.NextActions {
 		if usableInstallerRecovery(next) {
 			_, _ = fmt.Fprintln(out, "Next: Resume saved activation; use --json to view its command.")
@@ -182,6 +205,20 @@ func setupFailureDescription(result setupwizard.Result) string {
 		}
 	}
 	switch result.Reason {
+	case "state_migration_changed":
+		return "the UAP registry changed after confirmation."
+	case "state_migration_required":
+		return "the UAP registry must be upgraded before client registration."
+	case "state_migration_pending":
+		return "the older UAP registry has unfinished operations."
+	case "state_migration_future":
+		return "the UAP registry schema is newer than this installer supports."
+	case "state_migration_unsupported":
+		return "the UAP registry schema has no supported upgrade path."
+	case "state_migration_corrupt":
+		return "the UAP registry is damaged or invalid."
+	case "state_migration_unavailable":
+		return "the UAP registry could not be upgraded before client registration."
 	case "concurrent_change", "pending_intent_conflict":
 		return "saved setup state changed; review the selection."
 	case "managed_runtime_required":

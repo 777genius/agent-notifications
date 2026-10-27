@@ -16,6 +16,7 @@ import (
 
 	"github.com/777genius/agent-notifications/internal/installruntime"
 	"github.com/777genius/agent-notifications/internal/strictjson"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/domain"
 )
 
 const maxBootstrapIntent = 64 << 10
@@ -181,6 +182,18 @@ func validateBootstrapIntent(i confirmedBootstrapIntent) error {
 	if i.Schema != 1 || !validSelectorProvenance(i.Provenance) || i.Request.Operation != "confirm" || i.Request.Mode != "" || i.Request.IntentFile != "" || len(i.Request.Scopes) != 0 {
 		return invalid()
 	}
+	if m := i.StateMigration; m != nil {
+		root := filepath.Join(filepath.Dir(string(i.Scopes["control-root"])), "uap", "state")
+		if m.StateRoot != root || m.StateFile != filepath.Join(root, "state-v2.json") ||
+			m.LockFile != filepath.Join(root, "mutation.lock") || m.OperationsDir != filepath.Join(root, "operations") ||
+			m.TargetSchema != domain.StateSchemaVersion || m.SourceSchema < 2 || m.SourceSchema > m.TargetSchema ||
+			m.Required != (m.SourceSchema < m.TargetSchema) || m.Installations < 0 || m.NeedsRebind < 0 ||
+			(m.StateDigest != "missing" && (!strings.HasPrefix(m.StateDigest, "sha256:") || !validSelectorHex(strings.TrimPrefix(m.StateDigest, "sha256:"), 64))) ||
+			(m.StateDigest == "missing" && (m.Required || m.Installations != 0 || m.NeedsRebind != 0)) ||
+			i.Request.SkipAgentNotify || len(intentWizardRequest(i).Agents) == 0 {
+			return invalid()
+		}
+	}
 	products, err := parseProductCSV(strings.Join(i.Request.Products, ","))
 	if err != nil || !reflect.DeepEqual(products, i.Request.Products) || len(i.Units) != len(products) {
 		return invalid()
@@ -309,6 +322,7 @@ func removeBootstrapIntent(path string, p selectorProvenance) error {
 }
 func writeIntentScalars(out io.Writer, i confirmedBootstrapIntent) error {
 	var b bytes.Buffer
+	fmt.Fprintf(&b, "state-migration-required%c%t%c", 0, i.StateMigration != nil && i.StateMigration.Required, 0)
 	for _, key := range intentScalarKeys {
 		if value, ok := i.Scopes[key]; ok {
 			b.WriteString(key)

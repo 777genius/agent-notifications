@@ -1,0 +1,134 @@
+{
+  "status": "RED_REPRODUCED",
+  "base_source_commit": "270f3f0b32167dea5124d9891ae1f242c80f6446",
+  "stable": {
+    "schema_version": 1,
+    "repository": "777genius/agent-notifications",
+    "tag": "v1.49.8",
+    "release_id": 424253661,
+    "published_at": "2026-10-26T13:04:11Z",
+    "assets": {
+      "checksums.txt": {
+        "id": 678178380,
+        "url": "https://api.github.com/repos/777genius/agent-notifications/releases/assets/678178380",
+        "sha256": "bf2017b6a0f323bdf79ebb954a62919a04431f4b8b38c6791763c6f06cf0abc7"
+      },
+      "claude-notifications-linux-amd64": {
+        "id": 678179671,
+        "url": "https://api.github.com/repos/777genius/agent-notifications/releases/assets/678179671",
+        "sha256": "4ac70705b564e691d9fde37956574edd98fedd31721ff55572742151e0e17645"
+      },
+      "agent-notify-portable-linux-amd64.zip": {
+        "id": 678176954,
+        "url": "https://api.github.com/repos/777genius/agent-notifications/releases/assets/678176954",
+        "sha256": "4c14caed0fb2db34ccd6be8e1c2ce0824e5b07e6d5649273143d095cab5fc896"
+      }
+    }
+  },
+  "candidate_sha256": "b245e160e5c7b13592ea4d68a5e84cbeb9a2369ef81fb7d4429bdab2cc159858",
+  "candidate_package_sha256": "0632b91342162ea8e9f27efe9d384e5378cda836ad3518b9de227140fd645921",
+  "native_clients": {
+    "claude": {
+      "version": "2.1.311 (Claude Code)",
+      "sha256": "86dc1fcc69498159eaf15f446613e847010f9036bfbbdffd4c49350be8489ada"
+    },
+    "codex": {
+      "version": "codex-cli 0.162.0",
+      "sha256": "61b0194f3bb6534439c8d26a3ed57d0805f84b884588b761795323eeb92fcf70"
+    }
+  },
+  "old_install": {
+    "outcome": "completed",
+    "targets": [
+      {
+        "client": "claude",
+        "unit": "agent-notify",
+        "outcome": "completed",
+        "reason": "client_1afc6bd0565a43fd4c13da63",
+        "treeDigest": "sha256:8535e9d9f74de0fedf357ab88e5d077b75c34b8078aaba5c0e5f13e19fdbcf91"
+      },
+      {
+        "client": "codex",
+        "unit": "agent-notify",
+        "outcome": "completed",
+        "reason": "client_b1f49d88619772b4013ed2b9",
+        "treeDigest": "sha256:8535e9d9f74de0fedf357ab88e5d077b75c34b8078aaba5c0e5f13e19fdbcf91"
+      }
+    ],
+    "native_claude_plugins": [
+      {
+        "id": "test-foreign@test-foreign-marketplace",
+        "version": "1.0.0",
+        "scope": "user",
+        "enabled": true,
+        "installPath": "/tmp/TEST-an-upgrade-base-red3/TEST-upgrade/CLAUDE_CONFIG_DIR/plugins/cache/test-foreign-marketplace/test-foreign/1.0.0",
+        "readFromFolder": "/tmp/TEST-an-upgrade-base-red3/TEST-upgrade/TEST-foreign-plugin",
+        "folderVersion": "1.0.0",
+        "installedAt": "2026-10-27T11:13:06.259Z",
+        "lastUpdated": "2026-10-27T11:13:06.259Z",
+        "projectEnabled": false
+      },
+      {
+        "id": "agent-notify@skills-dir",
+        "version": "1.49.8",
+        "scope": "user",
+        "enabled": true,
+        "installPath": "/tmp/TEST-an-upgrade-base-red3/TEST-upgrade/CLAUDE_CONFIG_DIR/skills/agent-notify-f44c0be29ca8"
+      }
+    ],
+    "native_codex_plugins": {
+      "installed": [
+        {
+          "pluginId": "test-foreign@test-foreign-marketplace",
+          "name": "test-foreign",
+          "marketplaceName": "test-foreign-marketplace",
+          "version": "1.0.0",
+          "installed": true,
+          "enabled": true,
+          "source": {
+            "source": "local",
+            "path": "/tmp/TEST-an-upgrade-base-red3/TEST-upgrade/TEST-foreign-plugin"
+          },
+          "marketplaceSource": {
+            "sourceType": "local",
+            "source": "/tmp/TEST-an-upgrade-base-red3/TEST-upgrade/TEST-foreign-plugin"
+          },
+          "installPolicy": "AVAILABLE",
+          "authPolicy": "ON_INSTALL"
+        },
+        {
+          "pluginId": "agent-notify@agentplugins-79693a1d5114",
+          "name": "agent-notify",
+          "marketplaceName": "agentplugins-79693a1d5114",
+          "version": "1.49.8",
+          "installed": true,
+          "enabled": true,
+          "source": {
+            "source": "local",
+            "path": "/tmp/TEST-an-upgrade-base-red3/TEST-upgrade/uap/managed/clients/codex/agent-notify-f44c0be29ca8"
+          },
+          "marketplaceSource": {
+            "sourceType": "local",
+            "source": "/tmp/TEST-an-upgrade-base-red3/TEST-upgrade/uap/managed/clients/codex/agent-notify-f44c0be29ca8"
+          },
+          "installPolicy": "AVAILABLE",
+          "authPolicy": "ON_INSTALL"
+        }
+      ],
+      "available": []
+    }
+  },
+  "legacy_state": {
+    "schema_version": 4,
+    "sha256": "d36cc1628670e4c5ce0b4a2051247385c819d31a81c469b656f766742372e13e"
+  },
+  "upgrade": {
+    "exit_code": 1,
+    "outcome": "incomplete",
+    "reason": "activation_incomplete",
+    "next_action_reasons": [
+      "state schema 4 requires explicit migration; run agentplugins migrate-state --dry-run, then agentplugins migrate-state"
+    ]
+  },
+  "boundaries": "real installers and native plugin registration/enablement; no provider, model turn, desktop delivery or restart"
+}
