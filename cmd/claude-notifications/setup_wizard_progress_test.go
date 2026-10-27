@@ -73,3 +73,40 @@ func TestBootstrapProgressFlagRequiresOneAbsoluteDestination(t *testing.T) {
 		t.Fatalf("parse: %v %q %v", args, got, err)
 	}
 }
+
+func TestBootstrapProgressRefusesJournalReplacementBetweenAppends(t *testing.T) {
+	for _, kind := range []string{"replacement", "hardlink"} {
+		t.Run(kind, func(t *testing.T) {
+			intent, path := bootstrapProgressFixture(t)
+			write, closeProgress, err := openBootstrapProgress(intent, path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer closeProgress()
+			write("claude", "verification", "running")
+			retained := path + ".retained"
+			if err := os.Rename(path, retained); err != nil {
+				t.Fatal(err)
+			}
+			wantReplacement := "untouched"
+			if kind == "hardlink" {
+				if err := os.Link(retained, path); err != nil {
+					t.Fatal(err)
+				}
+				wantReplacement = "transition\tclaude\tverification\trunning\n"
+			} else {
+				if err := os.WriteFile(path, []byte(wantReplacement), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			privateBootstrapProgressFixture(t, filepath.Dir(intent), filepath.Dir(path), path)
+			write("codex", "verification", "running")
+			for file, want := range map[string]string{path: wantReplacement, retained: "transition\tclaude\tverification\trunning\n"} {
+				got, err := os.ReadFile(file)
+				if err != nil || string(got) != want {
+					t.Fatalf("changed journal identity accepted: %s: %q %v", file, got, err)
+				}
+			}
+		})
+	}
+}

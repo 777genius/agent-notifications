@@ -954,7 +954,7 @@ trap 'echo OBSERVER_INTERRUPTED >&2; exit 0' TERM INT HUP
 while ! grep -q '^stop' "$file"; do sleep 0.02; done
 cp "$file" "$TEST_PROGRESS_COPY"
 printf 'OBSERVER_STOP\\n' >&2
-''')
+''', newline='\n')
 helper.chmod(0o700)
 script = sandbox / 'progress-lifecycle.sh'
 script.write_text('''#!/bin/bash
@@ -1014,7 +1014,7 @@ fi
 if [ "$status" -eq 0 ]; then report_progress 0; report_diagnostics; else report_setup_failure "$status"; fi
 if [ "${BOOTSTRAP_VERBOSE:-0}" = 1 ]; then bootstrap_diagnostics view "$_DIAGNOSTIC_LOG" >&2; fi
 exit "$status"
-''')
+''', newline='\n')
 def run(name, mode='auto', old=False, color=False, terminal=True, helper_path=helper, failure=0, cancel=False, broken=False, stop_failure=False, summary=False, summary_transform_failure=False, summary_replace_failure=False, verbose=False, dumb=False, narrow=False):
     tmp = sandbox / ('progress-' + name); tmp.mkdir()
     env = os.environ.copy()
@@ -1161,7 +1161,7 @@ status=0
 run_setup_stage 'Installing fixture' emit_failure || status=$?
 [ "$status" -eq 37 ] || exit 99
 report_setup_failure "$status"
-''')
+''', newline='\n')
 for engine in ('python3', 'node'):
     if engine == 'node' and not shutil.which('node'): continue
     cases = ('default', 'private', 'public', 'temporary', 'write-failed') if os.name == 'nt' else ('default', 'private', 'symlink', 'public', 'temporary', 'write-failed')
@@ -1208,7 +1208,11 @@ PY_DIAGNOSTIC_STORAGE
 python3 -I - "$SANDBOX" "$TEST_BOOTSTRAP_BASH" <<'PY_WRITER_GATE_RACE'
 import os, pathlib, shutil, subprocess, sys
 sandbox,bash=pathlib.Path(sys.argv[1]),sys.argv[2]
-real_mkdir,real_rmdir=shutil.which('mkdir'),shutil.which('rmdir')
+# Finite PATH entries are extensionless Bash wrappers on native Windows.
+# Resolve in the shell that executes them; Python which() applies PATHEXT and
+# cannot discover those wrappers. This retains the same allowlisted tools.
+real_mkdir,real_rmdir=subprocess.check_output(
+    [bash,'-c','type -P mkdir && type -P rmdir'],text=True).splitlines()
 assert real_mkdir and real_rmdir
 script=sandbox/'writer-gate-race-TEST.sh'
 script.write_text(r'''#!/bin/bash
@@ -1234,7 +1238,7 @@ fi
 printf '%s\n' "$_PARALLEL_GATE_ABSENT_FAILURES" > "$TEST_GATE_CASE/absent-failures"
 printf '%s\n' "$status" > "$TEST_GATE_CASE/status"
 printf '%s\n' "$_PARALLEL_GATE_BUSY" > "$TEST_GATE_CASE/busy"
-''')
+''', newline='\n')
 mkdir_stub=r'''#!/bin/bash
 if [ "$1" = "$TEST_GATE_CASE/writer.lock" ]; then
     printf 'attempt\n' >> "$TEST_GATE_CASE/attempts"
@@ -1254,7 +1258,7 @@ exec "$TEST_REAL_MKDIR" "$@"
 for mode in ('race','file','file-try','busy','cancel','always-absent','always-absent-try') + (() if os.name=='nt' else ('symlink','symlink-try')):
     case=sandbox/('writer-gate-'+mode); case.mkdir(mode=0o700)
     tools=case/'tools';tools.mkdir(mode=0o700)
-    stub=tools/'mkdir';stub.write_text(mkdir_stub);stub.chmod(0o700)
+    stub=tools/'mkdir';stub.write_text(mkdir_stub, newline='\n');stub.chmod(0o700)
     lock=case/'writer.lock'
     if mode in ('race','busy'): lock.mkdir(mode=0o700)
     elif mode in ('file','file-try'): lock.write_text('must remain untouched\n')
@@ -1437,7 +1441,7 @@ install_products_parallel || status=$?
 progress_write_final_snapshot > "$TEST_PARALLEL_CASE/final"
 printf '%s\n' "$status" > "$TEST_PARALLEL_CASE/status"
 exit "$status"
-''')
+''', newline='\n')
 def wait_for(path, proc):
     limit = time.monotonic()+30
     while not path.exists():
@@ -1448,11 +1452,11 @@ def wait_for(path, proc):
         time.sleep(.02)
 for failure in ('', 'claude', 'mcp', 'all-legacy', 'trailing', 'crash-holder', 'mcp-partial', 'gate-release', 'qoder', 'gate-mkdir'):
     case = sandbox/('parallel-'+(failure or 'success')); case.mkdir(mode=0o700)
-    (case/'stage').mkdir(); helper=case/'stage'/'helper'; helper.write_text('#!/bin/bash\nexit 0\n'); helper.chmod(0o700)
+    (case/'stage').mkdir(); helper=case/'stage'/'helper'; helper.write_text('#!/bin/bash\nexit 0\n', newline='\n'); helper.chmod(0o700)
     (case/'frozen-intent').write_text('immutable fixture intent\n')
     env=dict(os.environ, TEST_PARALLEL_SOURCE=str(sandbox/'functions.sh'), TEST_PARALLEL_CASE=str(case), TEST_PARALLEL_FAIL=failure)
     if failure=='gate-release':
-        real_rmdir=shutil.which('rmdir'); assert real_rmdir
+        real_rmdir=subprocess.check_output([bash,'-c','type -P rmdir'],text=True).strip(); assert real_rmdir
         tools=case/'tools'; tools.mkdir(mode=0o700)
         stub=tools/'rmdir'
         stub.write_text('''#!/bin/bash
@@ -1463,11 +1467,11 @@ case "$1" in */writer.lock)
     fi ;;
 esac
 exec "$TEST_REAL_RMDIR" "$@"
-''')
+''', newline='\n')
         stub.chmod(0o700)
         env.update(PATH=str(tools)+os.pathsep+env['PATH'], TEST_REAL_RMDIR=real_rmdir)
     if failure=='gate-mkdir':
-        real_mkdir=shutil.which('mkdir'); assert real_mkdir
+        real_mkdir=subprocess.check_output([bash,'-c','type -P mkdir'],text=True).strip(); assert real_mkdir
         tools=case/'tools'; tools.mkdir(mode=0o700)
         stub=tools/'mkdir'
         stub.write_text('''#!/bin/bash
@@ -1476,7 +1480,7 @@ case "$1" in */writer.lock)
     exit 1 ;;
 esac
 exec "$TEST_REAL_MKDIR" "$@"
-''')
+''', newline='\n')
         stub.chmod(0o700)
         env.update(PATH=str(tools)+os.pathsep+env['PATH'], TEST_REAL_MKDIR=real_mkdir)
     proc=subprocess.Popen([bash, str(script)], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -1529,7 +1533,7 @@ exec "$TEST_REAL_MKDIR" "$@"
 # Cancellation must terminate every owned group's descendants before cleanup.
 if os.name != 'nt':
     case=sandbox/'parallel-cancel'; case.mkdir(mode=0o700); (case/'stage').mkdir()
-    helper=case/'stage'/'helper'; helper.write_text('#!/bin/bash\nexit 0\n'); helper.chmod(0o700)
+    helper=case/'stage'/'helper'; helper.write_text('#!/bin/bash\nexit 0\n', newline='\n'); helper.chmod(0o700)
     (case/'frozen-intent').write_text('fixture\n')
     env=dict(os.environ, TEST_PARALLEL_SOURCE=str(sandbox/'functions.sh'), TEST_PARALLEL_CASE=str(case), TEST_PARALLEL_CANCEL='1')
     proc=subprocess.Popen([bash, str(script)], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -1602,7 +1606,7 @@ case "$TEST_AUX_PHASE" in
     policy) run_setup_stage 'Preparing approved notification policy' configure_agent_policy portable ;;
     download) run_setup_stage 'Downloading portable package' fetch_bootstrap_file http://fixture.invalid/package "$TEST_AUX_CASE/package" ;;
 esac
-''')
+''', newline='\n')
 helper=r'''#!/bin/bash
 set -eu
 case "$1 ${2:-}" in
@@ -1668,7 +1672,7 @@ for phase in ('install','inspect','config','policy','download','typed-progress',
             job=case/'jobs'/client; job.mkdir(mode=0o700)
             for leaf in ('stdout','stderr'): (job/leaf).write_text('')
             (job/'result').write_text('installer-worker-v1\n0\n\n\nMCP\nregistration_committed_follow_up_not_started\n\n')
-    for path in (case/'helper',case/'tools'/'curl'): path.write_text(helper); path.chmod(0o700)
+    for path in (case/'helper',case/'tools'/'curl'): path.write_text(helper, newline='\n'); path.chmod(0o700)
     env=dict(os.environ, TEST_PROGRESS_SOURCE=str(sandbox/'functions.sh'), TEST_AUX_CASE=str(case), TEST_AUX_PHASE=phase,
              PATH=str(case/'tools')+os.pathsep+os.environ['PATH'])
     proc=subprocess.Popen([bash,str(script)],env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
@@ -1709,7 +1713,7 @@ root, sandbox = map(pathlib.Path, sys.argv[1:])
 web = sandbox / 'http'; web.mkdir()
 fixture_bootstrap = (root / 'bin/bootstrap.sh').read_text(encoding='utf-8').replace(
     '\nmain "$@"', '\nbootstrap_macos_command() { return 1; }\nmain "$@"')
-(web / 'bootstrap.sh').write_text(fixture_bootstrap, encoding='utf-8')
+(web / 'bootstrap.sh').write_text(fixture_bootstrap, encoding='utf-8', newline='\n')
 (web / 'latest').write_text('{"tag_name":"v1.42.0"}')
 release_commits = {'v1.42.0': 'a' * 40, 'v1.43.0': 'b' * 40, 'v2.0.0': 'c' * 40}
 (web / 'commits').mkdir()
@@ -1902,7 +1906,7 @@ def write_origin_installer(path, origin):
         'chmod +x "$INSTALL_TARGET_DIR"/claude-notifications*',
         'printf %s\\\\n '+origin+' > "$INSTALL_TARGET_DIR/script-origin"\nchmod +x "$INSTALL_TARGET_DIR"/claude-notifications*',
         1,
-    ))
+    ), newline='\n')
 for tag in ['v1.42.0', 'v1.43.0', 'v2.0.0']:
     write_origin_installer(web / tag / 'bin' / 'install.sh', tag)
 write_origin_installer(web / 'main' / 'bin' / 'install.sh', 'managed')
@@ -2300,7 +2304,7 @@ def place_runtime_cmd(dest, src):
     if base in ('python', 'python.exe', 'python3', 'python3.exe', 'node', 'node.exe') and (
             '/windowsapps/' in n or '/system32/' in n or '/syswow64/' in n):
         return
-    dest.write_text('#!/bin/sh\nexec {} "$@"\n'.format(shlex.quote(src.replace('\\', '/'))))
+    dest.write_text('#!/bin/sh\nexec {} "$@"\n'.format(shlex.quote(src.replace('\\', '/'))), newline='\n')
     dest.chmod(0o755)
 def fixture_tool(name):
     found = shutil.which(name)

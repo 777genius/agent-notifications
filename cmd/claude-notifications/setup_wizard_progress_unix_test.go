@@ -46,3 +46,26 @@ func TestBootstrapProgressRejectsBorrowedOrPublicJournal(t *testing.T) {
 		})
 	}
 }
+
+func TestBootstrapProgressRefusesSymlinkBetweenAppends(t *testing.T) {
+	intent, path := bootstrapProgressFixture(t)
+	write, closeProgress, err := openBootstrapProgress(intent, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeProgress()
+	write("claude", "verification", "running")
+	retained := path + ".retained"
+	if err := os.Rename(path, retained); err != nil {
+		t.Fatal(err)
+	}
+	// Even a symlink to the admitted inode must fail the non-reparse boundary.
+	if err := os.Symlink(retained, path); err != nil {
+		t.Fatal(err)
+	}
+	write("codex", "verification", "running")
+	got, err := os.ReadFile(retained)
+	if err != nil || string(got) != "transition\tclaude\tverification\trunning\n" {
+		t.Fatalf("symlink accepted: %q %v", got, err)
+	}
+}
