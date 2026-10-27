@@ -198,7 +198,9 @@ foreign="$root/TEST-foreign/ClaudeNotifier.app"
 foreign_manifest() { (cd "$foreign"; find . -type f -exec shasum -a 256 {} \; | LC_ALL=C sort); }
 foreign_manifest > "$root/foreign-before.sha256"
 "$lsregister" -f "$foreign"
-"$root/query" "$id" preferred > "$root/preferred-before-update" || true
+if ! "$root/query" "$id" preferred > "$root/preferred-before-update" || [ ! -s "$root/preferred-before-update" ]; then
+    echo 'FAIL: could not observe preferred same-ID app before update'; failed=$((failed+1))
+fi
 printf 'Observed preferred same-ID app before update: '; cat "$root/preferred-before-update"
 # Upgrade creates a new durable generation; the original callback path stays.
 printf generation-B > "$release/ClaudeNotifier.app/Contents/Resources/generation.marker"
@@ -216,7 +218,9 @@ done
 if grep -Fxq "$published" "$root/update-urls" && grep -Fxq "$second" "$root/update-urls" && ! grep -Eq '/\.install-stage\.|/\.candidate-' "$root/update-urls"; then echo 'PASS: update retains both registered generation paths'; else echo 'FAIL: registered generation retention'; cat "$root/update-urls"; failed=$((failed+1)); fi
 foreign_manifest > "$root/foreign-after.sha256"
 if cmp -s "$root/foreign-before.sha256" "$root/foreign-after.sha256" && grep -Fxq "$foreign" "$root/update-urls"; then echo 'PASS: same-ID foreign TEST app preserved'; else echo 'FAIL: same-ID foreign TEST app changed or unregistered'; failed=$((failed+1)); fi
-"$root/query" "$id" preferred > "$root/preferred-after-update" || true
+if ! "$root/query" "$id" preferred > "$root/preferred-after-update" || [ ! -s "$root/preferred-after-update" ]; then
+    echo 'FAIL: could not observe preferred same-ID app after update'; failed=$((failed+1))
+fi
 printf 'Observed preferred same-ID app after update: '; cat "$root/preferred-after-update"
 if ! grep -Fxq "$second" "$root/preferred-after-update"; then
     echo 'OBSERVED: LaunchServices preference conflict remains; foreign registration is preserved for explicit reconciliation'

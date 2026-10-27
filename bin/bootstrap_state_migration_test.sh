@@ -48,7 +48,12 @@ case "$2" in
             printf 'setup-products: UAP registry has an unfinished operation. Recover it with the previous installer.\n' >&2
             exit 73
         fi
-        if [ "$TEST_MIGRATION_CASE" = current ]; then printf 'unchanged\n'; else printf 'migrated\n'; fi ;;
+        if [ "$TEST_MIGRATION_CASE" = current ]; then
+            printf 'unchanged\n'
+        else
+            printf 'UAP registry upgraded: schema 4 -> 5.\nBackup: %s/registry.backup\n' "$TEST_MIGRATION_ROOT" >&2
+            printf 'migrated\n'
+        fi ;;
     *) exit 97 ;;
 esac
 MIGRATION_PEER
@@ -68,6 +73,7 @@ MIGRATION_PEER
     install_products_parallel() { printf 'parallel-writers\n' >> "$TEST_MIGRATION_TRACE"; _PARALLEL_ACTIVE=true; }
     status=0
     main > "$TEST_MIGRATION_ROOT/stdout" 2> "$TEST_MIGRATION_ROOT/stderr" || status=$?
+    printf '%s\n' "$_DIAGNOSTIC_LOG" > "$TEST_MIGRATION_ROOT/diagnostic-path"
     python3 -I - "$TEST_MIGRATION_ROOT" "$migration_case" "$status" <<'PY_MIGRATION_PARENT'
 import pathlib, sys
 root, case, status = pathlib.Path(sys.argv[1]), sys.argv[2], int(sys.argv[3])
@@ -84,6 +90,9 @@ else:
     assert status == 0 and len(writers) == 1 and trace.count('migration-apply') == 1, (status, trace, output)
     assert trace.index('prepare') < trace.index('preflight') < trace.index('migration-apply') < writers[0], trace
     assert ('registry upgraded; backup saved' in output) == (case != 'current'), output
+    if case != 'current' and (root/'diagnostic-path').read_text().strip():
+        diagnostic = pathlib.Path((root/'diagnostic-path').read_text().strip()).read_text()
+        assert 'schema 4 -> 5' in diagnostic and 'Backup: ' + str(root/'registry.backup') in diagnostic, diagnostic
 PY_MIGRATION_PARENT
 ) || exit 1; done
 printf 'PASS confirmed parent registry migration precedes all writers and refuses safely\n'

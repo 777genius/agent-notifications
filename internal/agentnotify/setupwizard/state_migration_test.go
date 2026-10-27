@@ -175,12 +175,19 @@ func TestWizardRegistryFailureAndCancellationDoNotWriteClients(t *testing.T) {
 func TestBootstrapWorkerCannotMigrateRegistry(t *testing.T) {
 	original := []byte(`{"schema_version":4,"installations":[]}`)
 	req, generation := legacyRegistryRequest(t, original)
-	req.BootstrapMCP = &BootstrapMCPSelection{}
-	result, err := applyRequestedStateMigration(testCtx(t), &req)
-	if err != uapinstaller.ErrMigrationRequired || result != nil {
-		t.Fatalf("worker performed migration: %+v %v", result, err)
+	for _, mcpPresent := range []bool{true, false} {
+		req.BootstrapStateMigrationOwned = true
+		if mcpPresent {
+			req.BootstrapMCP = &BootstrapMCPSelection{}
+		} else {
+			req.BootstrapMCP = nil
+		}
+		result, err := applyRequestedStateMigration(testCtx(t), &req)
+		if err != uapinstaller.ErrMigrationRequired || result != nil {
+			t.Fatalf("worker performed migration (MCP marker=%t): %+v %v", mcpPresent, result, err)
+		}
+		assertRegistryPreflightUnchanged(t, req, generation, original)
 	}
-	assertRegistryPreflightUnchanged(t, req, generation, original)
 }
 
 func TestWizardMigratedRegistryActivationRetryKeepsOneBackup(t *testing.T) {

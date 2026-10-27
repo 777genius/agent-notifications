@@ -14,6 +14,7 @@ from pathlib import Path, PurePosixPath
 import platform
 import re
 import shutil
+import stat
 import subprocess
 import tomllib
 import urllib.request
@@ -90,9 +91,31 @@ def verify_pin(path):
     return pin
 
 
-def snapshot(root):
+def snapshot(root, excluded=()):
     """Exact bytes for preservation/no-op checks; paths also detect new files."""
-    return {str(p.relative_to(root)): p.read_bytes() for p in sorted(root.rglob('*')) if p.is_file()}
+    return {str(p.relative_to(root)): p.read_bytes() for p in sorted(root.rglob('*'))
+            if p.is_file() and str(p.relative_to(root)) not in excluded}
+
+
+def runtime_metadata(root):
+    return {str(p.relative_to(root)): (stat.S_IMODE(p.lstat().st_mode),
+                                     os.readlink(p) if p.is_symlink() else None)
+            for p in root.rglob('*')}
+
+
+def managed_control(control, runtime, installation_id):
+    ledger = json.loads((control / 'ownership.json').read_text())
+    policy = json.loads((control / 'policy-generation.json').read_text())
+    assert ledger['Owner'] == 'existing-installer' and ledger['ID']
+    assert ledger['RuntimeRoot'] == str(runtime) and not ledger.get('PendingMutation')
+    assert policy['Generation'] == ledger['PolicyGeneration'] and policy['Enabled'] == ledger['Enabled']
+    registrations = [json.loads(c['Registration']) for key, c in ledger['Consumers'].items()
+                     if key.startswith('portable:')]
+    assert sorted(r['integration'] for r in registrations) == ['claude', 'codex'], 'duplicate or missing managed consumer'
+    for registration in registrations:
+        assert registration['installationID'] == installation_id and registration['componentID'] == ledger['ID']
+        assert registration['runtimeRoot'] == str(runtime) and registration['controlRoot'] == str(control)
+    return ledger, policy
 
 
 def execute(args):
@@ -103,11 +126,13 @@ def execute(args):
     with zipfile.ZipFile(package) as bundle:
         packed_binary = bundle.read('bin/claude-notifications')
         assert hashlib.sha256(packed_binary).hexdigest() == sha(candidate), 'candidate package embeds a different executable'
+        package_version = json.loads(bundle.read('plugin.json'))['version']
     claude, codex = args.claude.resolve(strict=True), args.codex.resolve(strict=True)
     root = args.output.resolve()
     root.mkdir(parents=True, exist_ok=False, mode=0o700)
     report = {'status': 'FAIL', 'stable': pin, 'candidate_sha256': sha(candidate),
               'candidate_package_sha256': sha(package), 'native_clients': {}, 'cases': {},
+              'candidate_version': package_version,
               'scope': 'real installers and native plugin registration/enablement; no provider, model turn, desktop delivery or restart'}
     try:
         for case in args.cases.split(','):
@@ -134,12 +159,14 @@ def execute(args):
                 (home / (label + '.stdout')).write_text(result.stdout)
                 (home / (label + '.stderr')).write_text(result.stderr)
                 records.append({'label': label, 'exit_code': result.returncode, 'argv': [str(executable), *map(str, command)]})
+                write_json(home / 'commands.json', records)
                 assert result.returncode == 0, (label, result.returncode, result.stdout, result.stderr)
                 return result.stdout
 
             for client, executable in (('claude', claude), ('codex', codex)):
                 report['native_clients'][client] = {'version': run(client + '-version', executable, '--version').strip(),
                                                      'sha256': sha(executable)}
+            assert run('candidate-version', candidate, 'version').strip() == 'claude-notifications v' + package_version
             # A real foreign native plugin, separately installed before our
             # product. It carries no executable MCP server and never calls a model.
             foreign = home / 'TEST-foreign-plugin'
@@ -202,19 +229,20 @@ def execute(args):
             state = home / 'uap/state/state-v2.json'
             # The public clients independently observe both the real product and
             # the foreign registration. Installer JSON alone cannot make this green.
-            def native_listings(label):
+            def native_listings(label, expected_version):
                 c = json.loads(run(label + '-claude-list', claude, 'plugin', 'list', '--json'))
                 x = json.loads(run(label + '-codex-list', codex, 'plugin', 'list', '--json'))['installed']
                 for client, rows in (('claude', c), ('codex', x)):
                     for name in ('agent-notify', 'test-foreign'):
                         matches = [r for r in rows if r.get('name', r.get('id', '').split('@')[0]) == name]
                         assert len(matches) == 1 and matches[0]['enabled'] is True, (client, name, rows)
+                        assert matches[0]['version'] == (expected_version if name == 'agent-notify' else '1.0.0'), (client, name, rows)
                 return c, x
             state_before = None
             installation_id = None
             if case == 'upgrade':
                 old = install('old', pin_path.parent / entry, pin_path.parent / 'agent-notify-portable-linux-amd64.zip')
-                native_listings('old')
+                native_listings('old', pin['tag'][1:])
                 installation_id = old['installationID']
                 state_before = state.read_bytes()
                 if pin['tag'] == 'v1.49.8':
@@ -236,20 +264,45 @@ def execute(args):
             if old_schema is not None and old_schema != current['schema_version']:
                 exact = [p for p, data in backup_files.items() if data == state_before]
                 assert len(exact) == 1, ('expected one byte-exact legacy backup', list(backup_files))
-            native_listings('candidate')
-            before_repeat = {p: snapshot(p) for p in (home / 'uap', Path(env['CLAUDE_CONFIG_DIR']), Path(env['CODEX_HOME']))}
+            native_listings('candidate', package_version)
+            # The mutation lock is a PID/acquisition-time lease, observed to
+            # change on a real unchanged repeat. It is not a registry or config.
+            excluded = {home / 'uap': ('state/mutation.lock',)}
+            before_repeat = {p: snapshot(p, excluded.get(p, ()))
+                             for p in (home / 'uap', runtime, Path(env['CLAUDE_CONFIG_DIR']), Path(env['CODEX_HOME']))}
+            runtime_before = runtime_metadata(runtime)
+            ledger_before, policy_before = managed_control(control, runtime, upgraded['installationID'])
+            manifest = {str(root.relative_to(home)): {
+                name: hashlib.sha256(data).hexdigest() for name, data in files.items()}
+                for root, files in before_repeat.items()}
+            manifest['managed-control'] = {'ownership': ledger_before, 'policy': policy_before}
+            write_json(home / 'before-repeat-files.json', manifest)
             repeated = install('repeat', candidate, package, auto=True)
             assert repeated['installationID'] == upgraded['installationID']
             for directory, before in before_repeat.items():
-                assert snapshot(directory) == before, ('repeat changed installation/config/registrations', directory)
+                after = snapshot(directory, excluded.get(directory, ()))
+                changed = [name for name in sorted(before.keys() | after.keys()) if before.get(name) != after.get(name)]
+                assert not changed, ('repeat changed installation/config/registrations', directory, changed)
+            assert runtime_metadata(runtime) == runtime_before, 'repeat changed runtime paths, permissions or symlink targets'
+            ledger_after, policy_after = managed_control(control, runtime, repeated['installationID'])
+            # Managed generations may advance for an otherwise unchanged apply.
+            # Ownership, runtime identity, policy and consumer/file maps may not.
+            counters = ('Generation', 'PolicyGeneration')
+            assert {k: v for k, v in ledger_before.items() if k not in counters} == {
+                k: v for k, v in ledger_after.items() if k not in counters}, 'repeat changed managed ownership or registrations'
+            assert {k: v for k, v in policy_before.items() if k != 'Generation'} == {
+                k: v for k, v in policy_after.items() if k != 'Generation'}, 'repeat changed managed policy'
+            assert all(ledger_after[k] >= ledger_before[k] for k in counters), 'managed generation went backwards'
             assert {p: p.read_bytes() for p in backup_files} == backup_files, 'repeat changed migration backup'
             assert sorted((home / 'uap/state').glob('**/*backup*')) == backups, 'repeat added migration backup'
-            native_listings('repeat')
+            native_listings('repeat', package_version)
             report['cases'][case] = {'status': 'PASS', 'old_schema': old_schema,
                                      'schema': current['schema_version'], 'installation_id': upgraded['installationID'],
                                      'migration_backups': [str(p.relative_to(home)) for p in backup_files],
-                                     'native_registration': 'PASS', 'repeat_unchanged': True}
-            write_json(home / 'commands.json', records)
+                                     'native_registration': 'PASS', 'repeat_config_registrations_unchanged': True,
+                                     'managed_runtime_unchanged': True, 'managed_control_consistent': True,
+                                     'managed_generation_before': ledger_before['Generation'],
+                                     'managed_generation_after': ledger_after['Generation']}
         report['status'] = 'PASS'
     except Exception as error:
         report['error'] = str(error)

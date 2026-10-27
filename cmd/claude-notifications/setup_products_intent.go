@@ -126,7 +126,7 @@ func buildConfirmedBootstrapIntent(ctx context.Context, a setupProductsArgs, e p
 		}
 	}
 	r := intentWizardRequest(i)
-	if !a.SkipAgentNotify && (containsProduct(r.Agents, "claude") || containsProduct(r.Agents, "codex")) {
+	if !a.SkipAgentNotify && (containsProduct(r.Agents, "claude") || containsProduct(r.Agents, "codex") || containsProduct(r.Agents, "cursor")) {
 		migration, prepareErr := setupwizard.PrepareStateMigration(ctx, r.ControlRoot)
 		if prepareErr != nil {
 			return i, nil, bootstrapStateMigrationError(prepareErr)
@@ -224,26 +224,8 @@ func preflightBootstrapIntent(ctx context.Context, i confirmedBootstrapIntent, a
 		return errors.New("intent arguments differ from confirmed request")
 	}
 	if i.StateMigration != nil {
-		// Check the approved bytes before decoding their replacement. A corrupt
-		// or future-schema replacement is still a changed confirmation snapshot.
-		stateFile := filepath.Join(filepath.Dir(string(i.Scopes["control-root"])), "uap", "state", "state-v2.json")
-		identity, err := installruntime.Fingerprint(stateFile)
-		if err != nil {
+		if err := setupwizard.CheckStateMigration(ctx, string(i.Scopes["control-root"]), *i.StateMigration); err != nil {
 			return bootstrapStateMigrationError(err)
-		}
-		digest := "missing"
-		if identity.Exists {
-			digest = "sha256:" + identity.SHA256
-		}
-		if digest != i.StateMigration.StateDigest {
-			return bootstrapStateMigrationError(uapinstaller.ErrPlanChanged)
-		}
-		current, err := setupwizard.PrepareStateMigration(ctx, string(i.Scopes["control-root"]))
-		if err != nil {
-			return bootstrapStateMigrationError(err)
-		}
-		if current != *i.StateMigration {
-			return bootstrapStateMigrationError(uapinstaller.ErrPlanChanged)
 		}
 	}
 	root := string(i.Scopes["control-root"])

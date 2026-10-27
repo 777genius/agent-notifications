@@ -166,17 +166,18 @@ func writeSetupWizardIncomplete(out io.Writer, result setupwizard.Result) {
 	}
 	_, _ = fmt.Fprintln(out, "  Delivery  not verified")
 	if strings.HasPrefix(result.Reason, "state_migration_") {
-		if result.Reason == "state_migration_changed" {
+		switch result.Reason {
+		case "state_migration_changed":
 			_, _ = fmt.Fprintln(out, "Next: Run setup again and confirm the changed registry upgrade plan.")
-		} else if result.Reason == "state_migration_pending" {
+		case "state_migration_pending":
 			_, _ = fmt.Fprintln(out, "Next: Complete unfinished UAP operations with the previous installer, then run setup again to confirm the registry upgrade.")
-		} else if result.Reason == "state_migration_future" {
+		case "state_migration_future":
 			_, _ = fmt.Fprintln(out, "Next: Use a newer installer that supports this registry schema. This installer cannot downgrade the registry.")
-		} else if result.Reason == "state_migration_unsupported" {
+		case "state_migration_unsupported":
 			_, _ = fmt.Fprintln(out, "Next: Use a compatible installer or restore a supported registry backup, then run setup again.")
-		} else if result.Reason == "state_migration_corrupt" {
+		case "state_migration_corrupt":
 			_, _ = fmt.Fprintln(out, "Next: Restore a valid UAP registry backup, then run setup again.")
-		} else {
+		default:
 			_, _ = fmt.Fprintln(out, "Next: Check access to the UAP state directory and available disk space, then run setup again to review the registry.")
 		}
 		return

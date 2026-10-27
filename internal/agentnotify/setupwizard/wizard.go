@@ -114,6 +114,10 @@ type Request struct {
 	// BootstrapMCP is consumed by the command admission boundary. Plan/Run use
 	// the verified generation, then existing reservation/config CAS protects apply.
 	BootstrapMCP *BootstrapMCPSelection
+	// BootstrapStateMigrationOwned is set only by admission of the confirmed
+	// bootstrap handoff. Its parent owns registry migration even when a client
+	// composition clears BootstrapMCP; direct /init generation fences do not.
+	BootstrapStateMigrationOwned bool
 	// BootstrapReadyClients only narrows effects after the complete immutable
 	// bootstrap projection has been revalidated. A failed primary registration
 	// must not prevent an independent, already confirmed client from activating.
@@ -269,13 +273,19 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 		return plan, ev.err
 	}
 	if len(ev.notifyAgents) > 0 {
+		if req.StateMigration != nil {
+			if err := CheckStateMigration(ctx, req.ControlRoot, *req.StateMigration); err != nil {
+				plan.Result = StateMigrationFailure(req, err)
+				return plan, err
+			}
+		}
 		migration, err := PrepareStateMigration(ctx, req.ControlRoot)
 		if err != nil {
-			plan.Result = stateMigrationFailure(req, err)
+			plan.Result = StateMigrationFailure(req, err)
 			return plan, err
 		}
 		if req.StateMigration != nil && *req.StateMigration != migration {
-			plan.Result = stateMigrationFailure(req, uapinstaller.ErrPlanChanged)
+			plan.Result = StateMigrationFailure(req, uapinstaller.ErrPlanChanged)
 			return plan, uapinstaller.ErrPlanChanged
 		}
 		req.StateMigration = &migration
@@ -498,7 +508,7 @@ func run(ctx context.Context, req *Request) (Result, error) {
 	if len(ev.notifyAgents) > 0 {
 		migrated, migrationErr := applyRequestedStateMigration(ctx, req)
 		if migrationErr != nil {
-			out := stateMigrationFailure(*req, migrationErr)
+			out := StateMigrationFailure(*req, migrationErr)
 			out.StateMigration = migrated
 			return out, migrationErr
 		}
@@ -511,7 +521,6 @@ func run(ctx context.Context, req *Request) (Result, error) {
 				return plan.Result, planErr
 			}
 			*req = plan.Request
-			req.StateMigration = nil
 			out, runErr := run(ctx, req)
 			out.StateMigration = migrated
 			return out, runErr

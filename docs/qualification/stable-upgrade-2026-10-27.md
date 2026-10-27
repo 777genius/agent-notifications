@@ -31,6 +31,13 @@ Latest was v1.49.10 at preparation, release ID `425286051`, published
 v1.49.8 history case alongside automatic previous-stable selection, so a newer
 Latest cannot erase schema-4 upgrade coverage.
 
+The fixed candidate completed the same real schema-4 to schema-5 migration and
+created one byte-identical backup, preserving the seeded settings and user data.
+Its subsequent native activation was blocked by this execution environment's
+`/proc` containment prerequisite, including when run with normal host permissions.
+`stable-upgrade-fixed-2026-10-27.json` records that result. It is migration evidence;
+the full native activation and repeat gate still requires the hosted Linux run.
+
 ## What the gate checks
 
 `scripts/stable-upgrade-e2e.py prepare` resolves Latest once, rejects drafts and
@@ -51,6 +58,15 @@ install its own executable into the managed runtime, and appear enabled exactly
 once in each native client's plugin listing. The portable archive must embed
 the exact candidate executable. Repeating the candidate must preserve state,
 registrations and config bytes and create no additional migration backup.
+Only `uap/state/mutation.lock` is excluded from the repeat byte snapshot: a real
+repeat was observed to change its process ID and acquisition time. The
+authoritative state, client facts, settings, registrations, owned package files,
+and user data remain subject to the exact comparison.
+Managed runtime files, permissions and symlink targets are also compared
+exactly. The managed control ledger must retain its owner, runtime, policy,
+consumer registrations and file identities. Its generation counters may advance;
+the report records their before/after values and verifies policy-generation
+consistency instead of claiming byte-identical internal bookkeeping.
 
 The recovery workflow runs this gate in its existing Linux recovery job. The
 three release workflows run it against their downloaded release artifacts before

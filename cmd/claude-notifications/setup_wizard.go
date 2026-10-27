@@ -397,7 +397,11 @@ func validInstallOrUpdateRequest(req setupwizard.Request) bool {
 }
 
 func runInstallOrUpdate(ctx context.Context, req setupwizard.Request, preserveExistingUnits bool) (result setupwizard.Result, err error) {
+	var migration *setupwizard.StateMigrationOutcome
 	defer func() {
+		if migration != nil {
+			result.StateMigration = migration
+		}
 		if result.Reason == "concurrent_change" {
 			// The original auto selection is stale. A direct mutation retry
 			// would turn an opt-out into an implicit Add.
@@ -405,6 +409,22 @@ func runInstallOrUpdate(ctx context.Context, req setupwizard.Request, preserveEx
 			result.NextActions = nil
 		}
 	}()
+	// Auto mode inspects before it chooses Update/Add phases. Validate the UAP
+	// registry first so inspection cannot leak parser errors or recommend native
+	// recovery for an old schema that needs its previous installer.
+	if req.AgentNotify == nil || *req.AgentNotify {
+		if req.StateMigration != nil {
+			if err := setupwizard.CheckStateMigration(ctx, req.ControlRoot, *req.StateMigration); err != nil {
+				return setupwizard.StateMigrationFailure(req, err), err
+			}
+		} else {
+			prepared, err := setupwizard.PrepareStateMigration(ctx, req.ControlRoot)
+			if err != nil {
+				return setupwizard.StateMigrationFailure(req, err), err
+			}
+			req.StateMigration = &prepared
+		}
+	}
 	inspect := req
 	inspect.Action = setupwizard.ActionInspect
 	before, inspectErr := setupwizard.Run(ctx, inspect)
@@ -473,6 +493,9 @@ func runInstallOrUpdate(ctx context.Context, req setupwizard.Request, preserveEx
 		}
 		if plan.Ready {
 			result, runErr := setupwizard.Run(ctx, plan.Request)
+			if migration == nil {
+				migration = result.StateMigration
+			}
 			if runErr != nil || result.ExitCode() != 0 {
 				return result, runErr
 			}
@@ -492,12 +515,26 @@ func runInstallOrUpdate(ctx context.Context, req setupwizard.Request, preserveEx
 				return phasePlan.Result, planErr
 			}
 			result, runErr := setupwizard.Run(ctx, phasePlan.Request)
+			if migration == nil {
+				migration = result.StateMigration
+			}
 			if runErr != nil || result.ExitCode() != 0 {
 				return result, runErr
 			}
 			if req.BootstrapExpectedGeneration != nil {
 				*req.BootstrapExpectedGeneration = result.Generation
 			}
+			// Our completed phase consumed its reviewed registry snapshot. Bind
+			// the next phase to the resulting current schema; never approve a
+			// second old-schema migration that appeared during this invocation.
+			current, prepareErr := setupwizard.PrepareStateMigration(ctx, req.ControlRoot)
+			if prepareErr != nil {
+				return setupwizard.StateMigrationFailure(req, prepareErr), prepareErr
+			}
+			if current.Required {
+				return setupwizard.StateMigrationFailure(req, uapinstaller.ErrPlanChanged), uapinstaller.ErrPlanChanged
+			}
+			req.StateMigration = &current
 		}
 	}
 	return setupwizard.Result{Action: string(req.Action), Outcome: "incomplete", Reason: "update_required_after_retries"}, setupwizard.ErrRefused
@@ -945,6 +982,7 @@ func admitBootstrapWizardIntent(path string, r setupwizard.Request) (setupwizard
 		return r, nil, errors.New("bootstrap request differs from confirmed intent")
 	}
 	r.BootstrapMCP = &intent.MCP
+	r.BootstrapStateMigrationOwned = true
 	if containsProduct(intent.Request.Products, "cursor") || containsProduct(intent.Request.Products, "copilot-vscode") {
 		generation, policy := intent.Initial.Generation, intent.Initial.Policy
 		r.BootstrapExpectedGeneration, r.BootstrapExpectedPolicy = &generation, &policy

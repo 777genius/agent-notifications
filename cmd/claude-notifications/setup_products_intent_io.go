@@ -190,7 +190,7 @@ func validateBootstrapIntent(i confirmedBootstrapIntent) error {
 			m.Required != (m.SourceSchema < m.TargetSchema) || m.Installations < 0 || m.NeedsRebind < 0 ||
 			(m.StateDigest != "missing" && (!strings.HasPrefix(m.StateDigest, "sha256:") || !validSelectorHex(strings.TrimPrefix(m.StateDigest, "sha256:"), 64))) ||
 			(m.StateDigest == "missing" && (m.Required || m.Installations != 0 || m.NeedsRebind != 0)) ||
-			i.Request.SkipAgentNotify || (!containsProduct(i.Request.Products, "claude") && !containsProduct(i.Request.Products, "codex")) {
+			i.Request.SkipAgentNotify || (!containsProduct(i.Request.Products, "claude") && !containsProduct(i.Request.Products, "codex") && !containsProduct(i.Request.Products, "cursor")) {
 			return invalid()
 		}
 	}

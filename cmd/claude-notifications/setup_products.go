@@ -76,11 +76,14 @@ func runSetupProductsContext(ctx context.Context, args []string, input io.Reader
 		if err != nil {
 			return fail(1, err)
 		}
-		if a.Operation == "intent-args" {
+		switch a.Operation {
+		case "intent-args":
 			err = writeIntentScalars(output, intent)
-		} else if a.Operation == "migration-apply" {
-			err = applyBootstrapStateMigration(ctx, intent, output, prompts)
-		} else {
+		case "migration-apply":
+			mutation, cancel := context.WithTimeout(ctx, 3*time.Minute)
+			defer cancel()
+			err = applyBootstrapStateMigration(mutation, intent, output, prompts)
+		case "preflight":
 			checkpoint, cancel := context.WithTimeout(ctx, bootstrapInspectionTimeout)
 			defer cancel()
 			err = runSetupProductsBusy(checkpoint, prompts, setupProductsBusyRich(input, prompts, a.Mode), "Rechecking installation…", func() error {

@@ -191,6 +191,8 @@ jobs:
             ${{ env.RECOVERY_SANDBOX }}/evidence/**/*.stderr
             ${{ env.RECOVERY_SANDBOX }}/evidence/**/report.json
             ${{ env.RECOVERY_SANDBOX }}/evidence/**/state-before-upgrade.json
+            ${{ env.RECOVERY_SANDBOX }}/evidence/**/before-repeat-files.json
+            ${{ env.RECOVERY_SANDBOX }}/evidence/**/commands.json
           if-no-files-found: warn
       - name: Remove owned sandbox
         if: always()

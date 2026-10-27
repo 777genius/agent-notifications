@@ -215,3 +215,136 @@ func TestBootstrapChangedInvalidRegistryStillRequiresReconfirmation(t *testing.T
 		})
 	}
 }
+
+func TestBootstrapCursorRegistryMigrationUsesParent(t *testing.T) {
+	ctx := setupCommandContext(t)
+	env := newWizardCLIEnv(t, ctx, false)
+	stateFile := filepath.Join(filepath.Dir(env.control), "uap", "state", "state-v2.json")
+	if err := os.MkdirAll(filepath.Dir(stateFile), 0700); err != nil {
+		t.Fatal(err)
+	}
+	original := []byte(`{"schema_version":4,"installations":[]}`)
+	if err := os.WriteFile(stateFile, original, 0600); err != nil {
+		t.Fatal(err)
+	}
+	args, err := parseSetupProducts([]string{"confirm", "--products", "cursor", "--agent-notify", "--desktop", "--scope-root", env.scope, "--client-executable", env.probe, "--control-root", env.control})
+	if err != nil {
+		t.Fatal(err)
+	}
+	provenance := selectorProvenance{Version: "TEST", SourceCommit: strings.Repeat("1", 40), SHA256: strings.Repeat("2", 64), Stage: []byte(env.root)}
+	intent, rows, err := buildConfirmedBootstrapIntent(ctx, args, productEnvironment{Home: env.root, PATH: "", DefaultControlRoot: env.control, Values: map[string]string{}, Config: config.SnapshotEnv()}, provenance)
+	if err != nil || intent.StateMigration == nil || !intent.StateMigration.Required {
+		t.Fatalf("Cursor parent migration missing: %+v %v", intent.StateMigration, err)
+	}
+	if !strings.Contains(strings.Join(rows, "\n"), "schema 4 -> 5") {
+		t.Fatalf("Cursor approval omitted registry upgrade: %v", rows)
+	}
+	intentPath := filepath.Join(env.root, "selector-intent.json")
+	if err := writeBootstrapIntent(intentPath, intent); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := loadBootstrapIntent(intentPath, provenance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, _, err := installruntime.ReadOwnership(env.control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output, prompts bytes.Buffer
+	if err := applyBootstrapStateMigration(ctx, loaded, &output, &prompts); err != nil || output.String() != "migrated\n" {
+		t.Fatalf("Cursor parent apply: %v stdout=%s stderr=%s", err, output.String(), prompts.String())
+	}
+	after, _, err := installruntime.ReadOwnership(env.control)
+	if err != nil || after.Generation != before.Generation || after.PendingMutation != nil {
+		t.Fatalf("parent migration wrote registration: %+v %v", after, err)
+	}
+	entries, err := os.ReadDir(env.scope)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("parent migration touched Cursor profile: %v %v", entries, err)
+	}
+	backups, _ := filepath.Glob(stateFile + ".schema4.backup-agentplugins-*")
+	if len(backups) != 1 {
+		t.Fatalf("expected one parent backup: %v", backups)
+	}
+	backup, err := os.ReadFile(backups[0])
+	if err != nil || !bytes.Equal(backup, original) {
+		t.Fatalf("Cursor parent backup changed original bytes: %v", err)
+	}
+}
+
+func TestSetupProductsRegistryMigrationRouteAddsDeadline(t *testing.T) {
+	oldSource := selectorSourceCommit
+	selectorSourceCommit = strings.Repeat("1", 40)
+	t.Cleanup(func() { selectorSourceCommit = oldSource })
+	provenance, err := currentSelectorProvenance()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The real route admits only its executable's private stage. Borrow the test
+	// binary's owned build directory and restore its permissions after the test.
+	stage := string(provenance.Stage)
+	info, err := os.Stat(stage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(stage, 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chmod(stage, info.Mode().Perm()); err != nil {
+			t.Error(err)
+		}
+	})
+	for _, kind := range []string{"missing", "current", "legacy"} {
+		t.Run(kind, func(t *testing.T) {
+			intent, _, _ := bootstrapMigrationFixture(t)
+			switch kind {
+			case "missing":
+				if err := os.Remove(intent.StateMigration.StateFile); err != nil {
+					t.Fatal(err)
+				}
+			case "current":
+				if err := os.WriteFile(intent.StateMigration.StateFile, []byte(`{"schema_version":5,"installations":[]}`), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			prepared, err := setupwizard.PrepareStateMigration(setupCommandContext(t), string(intent.Scopes["control-root"]))
+			if err != nil {
+				t.Fatal(err)
+			}
+			intent.StateMigration = &prepared
+			intent.Provenance = provenance
+			leaf, err := os.CreateTemp(stage, "TEST-migration-route-*.json")
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := leaf.Name()
+			if err := leaf.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+					t.Error(err)
+				}
+			})
+			if err := writeBootstrapIntent(path, intent); err != nil {
+				t.Fatal(err)
+			}
+			var output, prompts bytes.Buffer
+			// runSetupProducts supplies context.Background, exactly like production;
+			// do not inject the bounded contexts used by direct helper tests.
+			code := runSetupProducts([]string{"migration-apply", "--intent-file", path}, strings.NewReader(""), &output, &prompts)
+			expected := "unchanged\n"
+			if kind == "legacy" {
+				expected = "migrated\n"
+			}
+			if code != 0 || output.String() != expected {
+				t.Fatalf("actual migration route lacks a bounded lock context: code=%d stdout=%q stderr=%q", code, output.String(), prompts.String())
+			}
+		})
+	}
+}

@@ -405,6 +405,8 @@ jobs:
             ${{ env.UPGRADE_EVIDENCE }}/**/*.stdout
             ${{ env.UPGRADE_EVIDENCE }}/**/*.stderr
             ${{ env.UPGRADE_EVIDENCE }}/**/state-before-upgrade.json
+            ${{ env.UPGRADE_EVIDENCE }}/**/before-repeat-files.json
+            ${{ env.UPGRADE_EVIDENCE }}/**/commands.json
           if-no-files-found: error
           retention-days: 14
 

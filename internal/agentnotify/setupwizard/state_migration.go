@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	"github.com/777genius/agent-notifications/install/uapinstaller"
+	"github.com/777genius/agent-notifications/internal/installruntime"
 )
 
 // StateMigrationOutcome keeps registry work separate from client activation.
@@ -42,6 +43,39 @@ func PrepareStateMigration(ctx context.Context, controlRoot string) (uapinstalle
 	return engine.PrepareStateMigration(ctx)
 }
 
+// CheckStateMigration revalidates a reviewed snapshot without applying it. The
+// byte check precedes decoding so an invalid replacement still needs new consent.
+func CheckStateMigration(ctx context.Context, controlRoot string, plan uapinstaller.StateMigrationPlan) error {
+	if ctx == nil {
+		return ErrRefused
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !explicitAbs(controlRoot) {
+		return ErrRefused
+	}
+	identity, err := installruntime.Fingerprint(uapStateFile(controlRoot))
+	if err != nil {
+		return err
+	}
+	digest := "missing"
+	if identity.Exists {
+		digest = "sha256:" + identity.SHA256
+	}
+	if digest != plan.StateDigest {
+		return uapinstaller.ErrPlanChanged
+	}
+	current, err := PrepareStateMigration(ctx, controlRoot)
+	if err != nil {
+		return err
+	}
+	if current != plan {
+		return uapinstaller.ErrPlanChanged
+	}
+	return nil
+}
+
 // ApplyStateMigration uses UAP's shared mutation lock, exact byte backup and
 // atomic writer. The supplied plan is bound to the selected control root.
 func ApplyStateMigration(ctx context.Context, controlRoot string, plan uapinstaller.StateMigrationPlan) (uapinstaller.StateMigrationResult, error) {
@@ -72,7 +106,7 @@ func applyRequestedStateMigration(ctx context.Context, req *Request) (*StateMigr
 	}
 	// Bootstrap owns migration once in its parent process, before independent
 	// client workers. A late old registry is a refusal, never worker consent.
-	if req.BootstrapMCP != nil {
+	if req.BootstrapMCP != nil || req.BootstrapStateMigrationOwned {
 		return nil, uapinstaller.ErrMigrationRequired
 	}
 	if req.Progress != nil {
@@ -90,7 +124,9 @@ func applyRequestedStateMigration(ctx context.Context, req *Request) (*StateMigr
 	return outcome, err
 }
 
-func stateMigrationFailure(req Request, err error) Result {
+// StateMigrationFailure gives orchestration callers the same finite diagnostic
+// as Plan and Run without exposing registry contents or activation-only retries.
+func StateMigrationFailure(req Request, err error) Result {
 	out := Result{Action: string(req.Action), Outcome: "incomplete", Reason: "state_migration_unavailable"}
 	if errors.Is(err, uapinstaller.ErrPlanChanged) {
 		out.Outcome, out.Reason = "conflict", "state_migration_changed"
