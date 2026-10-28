@@ -30,12 +30,15 @@ jobs:
       contents: read
       actions: read
     outputs:
-      mode: ${{ steps.release-scope.outputs.mode || steps.classify.outputs.mode }}
+      mode: ${{ github.event_name == 'pull_request' && github.event.action == 'edited' && github.event.changes.base != null && 'full' || steps.release-scope.outputs.mode || steps.classify.outputs.mode }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: 777genius/agent-notifications/.github/actions/checkout-pr-source@9f3300081c4ed28b7f01e8f0e22a10076c9dc6c5 # immutable checkout helper
         with:
           fetch-depth: 0
           persist-credentials: false
+      - name: Test exact changed-base checkout contract
+        if: ${{ !(github.event_name == 'pull_request' && github.event.action == 'edited' && github.event.changes.base != null) }}
+        run: python3 -B tools/ci_pr_checkout_test.py
       - name: Test conservative classification and installer mode contracts
         run: |
           python3 scripts/ci_macos_scope_test.py
@@ -48,7 +51,7 @@ jobs:
         run: python3 scripts/ci_macos_scope.py classify
       - name: Classify release tooling only when native scope is full
         id: release-scope
-        if: steps.classify.outputs.mode == 'full'
+        if: ${{ steps.classify.outputs.mode == 'full' && !(github.event_name == 'pull_request' && github.event.action == 'edited' && github.event.changes.base != null) }}
         env:
           GH_TOKEN: ${{ github.token }}
           CI_NATIVE_WORKFLOW: install-recovery-e2e.yml
@@ -66,7 +69,7 @@ jobs:
         # Keep Linux recovery coverage for cheap intermediate prose/Windows heads.
         os: ${{ fromJSON((needs.scope.outputs.mode == 'docs' || needs.scope.outputs.mode == 'windows-only') && '["ubuntu-latest"]' || '["ubuntu-latest","macos-15"]') }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: 777genius/agent-notifications/.github/actions/checkout-pr-source@9f3300081c4ed28b7f01e8f0e22a10076c9dc6c5 # immutable checkout helper
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -215,7 +218,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: 777genius/agent-notifications/.github/actions/checkout-pr-source@9f3300081c4ed28b7f01e8f0e22a10076c9dc6c5 # immutable checkout helper
         with:
           persist-credentials: false
       - name: Require actual full native success on this revision
@@ -227,14 +230,14 @@ jobs:
   release-equivalent:
     name: Release-equivalent native proof (recovery)
     needs: scope
-    if: needs.scope.outputs.mode == 'release-equivalent'
+    if: ${{ needs.scope.outputs.mode == 'release-equivalent' && !(github.event_name == 'pull_request' && github.event.action == 'edited' && github.event.changes.base != null) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: read
       actions: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: 777genius/agent-notifications/.github/actions/checkout-pr-source@9f3300081c4ed28b7f01e8f0e22a10076c9dc6c5 # immutable checkout helper
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -246,12 +249,12 @@ jobs:
   native-input-evidence:
     name: Native input evidence (recovery)
     needs: [scope, recovery]
-    if: ${{ !cancelled() && needs.scope.outputs.mode == 'full' }}
+    if: ${{ !cancelled() && needs.scope.outputs.mode == 'full' && !(github.event_name == 'pull_request' && github.event.action == 'edited' && github.event.changes.base != null) }}
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || vars.CI_LINUX_RUNNER || 'ubuntu-latest' }}
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: 777genius/agent-notifications/.github/actions/checkout-pr-source@9f3300081c4ed28b7f01e8f0e22a10076c9dc6c5 # immutable checkout helper
         with:
           fetch-depth: 0
           persist-credentials: false
