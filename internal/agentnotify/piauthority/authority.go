@@ -26,7 +26,6 @@ import (
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/domain"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/installer"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/providers"
-	"github.com/777genius/plugin-kit-ai/install/integrationctl/packagesnapshot"
 )
 
 var ErrDenied = errors.New("pi installed authority denied")
@@ -219,8 +218,7 @@ func installedRevision(ctx context.Context, b portable.Binding, path string, sna
 		return deny()
 	}
 	projection := shared.ManagedPackageDigest(*selected)
-	actual, err := (packagesnapshot.Builder{}).Digest(ctx, selected.TargetLocator)
-	if err != nil || projection == "" || actual != projection {
+	if err := (providers.Stager{}).Verify(ctx, selected.TargetLocator, projection); err != nil {
 		return deny()
 	}
 	descriptorFile, err := nativeconfig.New().ReadExactFile(filepath.Join(selected.TargetLocator, pi.DescriptorName))

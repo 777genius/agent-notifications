@@ -92,6 +92,7 @@ func TestPiCommonLifecycleAndAuthority(t *testing.T) {
 	if filepath.Base(client.TargetLocator)[0] == '.' || filepath.Dir(client.TargetLocator) != filepath.Join(profile, "extensions") {
 		t.Fatalf("hidden/wrong active path: %s", client.TargetLocator)
 	}
+	assertPiExcludedOwnershipMarkers(t, root, client.TargetLocator, selector, facts)
 	// A changed canonical source seals a new projection; the live old observer
 	// cannot borrow current receipts by rereading mutable derived metadata.
 	path := filepath.Join(pkg, "com.universal-agent-plugins.pi", "index.ts")
