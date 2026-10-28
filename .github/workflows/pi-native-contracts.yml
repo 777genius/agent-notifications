@@ -29,6 +29,7 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
       - uses: actions/setup-python@v7
+        id: python
         with:
           python-version: '3.12'
       - name: Pin and native oracle guards
@@ -40,22 +41,32 @@ jobs:
         env:
           PI_PLATFORM: ${{ matrix.platform }}
           PI_ARCH: ${{ matrix.arch }}
+          PYTHON_EXECUTABLE: ${{ steps.python.outputs.python-path }}
         run: |
+          $ErrorActionPreference = 'Stop'
+          $python = $env:PYTHON_EXECUTABLE
+          if (!$python -or !(Test-Path -LiteralPath $python -PathType Leaf)) { throw 'Setup Python physical executable unavailable' }
           $root = Join-Path $env:RUNNER_TEMP 'TEST-pi-native-contracts'
           $report = Join-Path $env:RUNNER_TEMP 'pi-native-contracts/acquisition.json'
-          python -B scripts/acquire-pi-native.py --download --platform $env:PI_PLATFORM --arch $env:PI_ARCH --output $root --report $report
-          exit $LASTEXITCODE
+          & $python -B scripts/acquire-pi-native.py --download --platform $env:PI_PLATFORM --arch $env:PI_ARCH --output $root --report $report
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (!(Test-Path -LiteralPath $report -PathType Leaf)) { throw 'Pi acquisition receipt missing' }
       - name: Real Pi loader provider and lifecycle events
         shell: pwsh
+        env:
+          PYTHON_EXECUTABLE: ${{ steps.python.outputs.python-path }}
         run: |
+          $ErrorActionPreference = 'Stop'
           $evidence = Join-Path $env:RUNNER_TEMP 'pi-native-contracts'
           $pin = Get-Content -LiteralPath (Join-Path $evidence 'acquisition.json') -Raw | ConvertFrom-Json
-          python -B scripts/pi-native-contracts.py --pi-executable $pin.executable --report (Join-Path $evidence 'events.json')
-          exit $LASTEXITCODE
+          & $env:PYTHON_EXECUTABLE -B scripts/pi-native-contracts.py --pi-executable $pin.executable --report (Join-Path $evidence 'events.json')
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (!(Test-Path -LiteralPath (Join-Path $evidence 'events.json') -PathType Leaf)) { throw 'Pi event receipt missing' }
       - name: Build narrow native Windows ConPTY fixture
         if: matrix.platform == 'windows'
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
           $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products '*' -property installationPath
           if (!$vs) { throw 'Native Visual Studio compiler unavailable' }
           $source = Join-Path $env:GITHUB_WORKSPACE 'tests\integration\pi_native_pty_windows.cpp'
@@ -66,13 +77,17 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Native ConPTY fixture compile failed' }
       - name: Actual TUI prompt and reply on native PTY or ConPTY
         shell: pwsh
+        env:
+          PYTHON_EXECUTABLE: ${{ steps.python.outputs.python-path }}
         run: |
+          $ErrorActionPreference = 'Stop'
           $evidence = Join-Path $env:RUNNER_TEMP 'pi-native-contracts'
           $pin = Get-Content -LiteralPath (Join-Path $evidence 'acquisition.json') -Raw | ConvertFrom-Json
           $tuiArgs = @('--pi-executable', $pin.executable, '--report', (Join-Path $evidence 'tui.json'))
           if ($IsWindows) { $tuiArgs += @('--pty-bridge', (Join-Path $env:RUNNER_TEMP 'TEST-pi-conpty.exe')) }
-          python -B scripts/pi-native-tui.py @tuiArgs
-          exit $LASTEXITCODE
+          & $env:PYTHON_EXECUTABLE -B scripts/pi-native-tui.py @tuiArgs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (!(Test-Path -LiteralPath (Join-Path $evidence 'tui.json') -PathType Leaf)) { throw 'Pi TUI receipt missing' }
       - name: Preserve bounded contract evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a

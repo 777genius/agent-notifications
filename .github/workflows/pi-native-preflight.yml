@@ -38,6 +38,7 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
       - uses: actions/setup-python@v7
+        id: python
         with:
           python-version: '3.12'
       - name: Reject incomplete prerequisite evidence
@@ -49,6 +50,7 @@ jobs:
         if: matrix.platform == 'windows'
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
           $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products '*' -property installationPath
           if (!$vs) { throw 'Visual Studio prerequisite unavailable' }
           $arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'x64' }
@@ -62,10 +64,16 @@ jobs:
         env:
           PI_PREFLIGHT_PLATFORM: ${{ matrix.platform }}
           PI_PREFLIGHT_SOURCE: ${{ github.event.pull_request.head.sha || github.sha }}
+          PYTHON_EXECUTABLE: ${{ steps.python.outputs.python-path }}
         run: |
+          $ErrorActionPreference = 'Stop'
+          $python = $env:PYTHON_EXECUTABLE
+          if (!$python -or !(Test-Path -LiteralPath $python -PathType Leaf)) { throw 'Setup Python physical executable unavailable' }
           $report = Join-Path $env:RUNNER_TEMP 'pi-native-preflight/evidence.json'
-          python -B scripts/pi-native-preflight.py --execute-test-fixtures --platform $env:PI_PREFLIGHT_PLATFORM --source-sha $env:PI_PREFLIGHT_SOURCE --report $report
-          exit $LASTEXITCODE
+          & $python -B scripts/pi-native-preflight.py --execute-test-fixtures --platform $env:PI_PREFLIGHT_PLATFORM --source-sha $env:PI_PREFLIGHT_SOURCE --report $report
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (!(Test-Path -LiteralPath $report -PathType Leaf)) { throw 'Native preflight did not produce its receipt' }
+          exit 0
       - name: Preserve prerequisite receipt on pass or failure
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
