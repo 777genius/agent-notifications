@@ -13,6 +13,7 @@ import (
 
 	"golang.org/x/sys/windows"
 
+	"github.com/777genius/agent-notifications/internal/commandrun"
 	"github.com/777genius/agent-notifications/internal/installruntime"
 	"github.com/777genius/agent-notifications/internal/notification"
 	"github.com/777genius/agent-notifications/internal/opencodeinstall"
@@ -60,7 +61,7 @@ func runWindowsToast(ctx context.Context, p windowsToastPayload) error {
 		return err
 	}
 	cmd := windowsToastCommand(ctx, powershell, data, p.AppID)
-	err = cmd.Run()
+	err = commandrun.Run(ctx, cmd)
 	if ctx.Err() != nil {
 		return errors.Join(ctx.Err(), err)
 	}

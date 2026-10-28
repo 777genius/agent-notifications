@@ -5,6 +5,7 @@
 package notifier
 
 import (
+	"context"
 	"github.com/777genius/agent-notifications/internal/config"
 	"github.com/777genius/agent-notifications/internal/daemon"
 	"github.com/777genius/agent-notifications/internal/logging"
@@ -32,4 +33,28 @@ func applyZellijFocusHints(cfg *config.Config, hints *daemon.FocusHints) {
 		return
 	}
 	hints.ZellijTabName = tabName
+}
+
+func applyZellijFocusHintsContext(ctx context.Context, cfg *config.Config, hints *daemon.FocusHints) {
+	hints.ZellijSession, hints.ZellijPaneID = daemon.GetZellijFocusHints()
+	if hints.ZellijSession == "" {
+		return
+	}
+	mode := cfg.Notifications.Desktop.ZellijFocus
+	if mode != daemon.ZellijFocusModePane && mode != daemon.ZellijFocusModeTab && mode != daemon.ZellijFocusModeOff {
+		mode = daemon.ZellijFocusModeTab
+		if hints.ZellijPaneID != "" && zellijSupportsPaneFocusContext(ctx) {
+			mode = daemon.ZellijFocusModePane
+		}
+	}
+	hints.ZellijMode = mode
+	if mode != daemon.ZellijFocusModeTab {
+		return
+	}
+	tab, _, err := getZellijTabTargetContext(ctx)
+	if err != nil {
+		hints.ZellijMode = daemon.ZellijFocusModeOff
+		return
+	}
+	hints.ZellijTabName = tab
 }

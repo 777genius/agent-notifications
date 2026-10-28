@@ -1,10 +1,14 @@
 package daemon
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
+
+	"github.com/777genius/agent-notifications/internal/commandrun"
 
 	"github.com/777genius/agent-notifications/internal/warpfocus"
 )
@@ -365,6 +369,21 @@ func GetExactWindowTitle(terminalName string) string {
 	default:
 		return ""
 	}
+}
+
+// GetExactWindowTitleContext bounds the same optional Terminator query by the
+// original event budget. Other terminal hints require no subprocess.
+func GetExactWindowTitleContext(parent context.Context, terminalName string) string {
+	if strings.ToLower(terminalName) != "terminator" || os.Getenv("TERMINATOR_UUID") == "" {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(parent, 2*time.Second)
+	defer cancel()
+	out, err := commandrun.Output(ctx, exec.Command("remotinator", "get_window_title"))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
 
 func getTerminatorWindowTitle() string {
