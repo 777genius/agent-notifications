@@ -69,6 +69,27 @@ def quoted(value):
     return '"' + str(value).replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
+def terminal_launcher(root, argv, env, cwd):
+    """Write the exact Terminal child script, preserving the native input TTY.
+
+    Noninteractive Bash otherwise redirects an asynchronous command's stdin to
+    /dev/null. Preserve the actual inherited terminal before the backgrounded
+    child so PID/wait ownership does not silently turn real Pi into non-TUI.
+    """
+    script = root / "launch.command"
+    entries = [shlex.quote(key + "=" + value) for key, value in env.items()]
+    launch = " ".join(["/usr/bin/env", "-i", *entries,
+                       'TERM_PROGRAM=Apple_Terminal', 'TERM=xterm-256color',
+                       'TERM_SESSION_ID="${TERM_SESSION_ID:-}"', *map(shlex.quote, map(str, argv))])
+    script.write_text("#!/bin/bash\nset -eu\nprintf '%s\\n' \"$$\" > " + shlex.quote(str(root / "shell.pid"))
+                      + "\ncd " + shlex.quote(str(cwd)) + "\nexec 9<&0\nset +e\n" + launch
+                      + " <&9 &\nchild=$!\nexec 9<&-\nprintf '%s\\n' \"$child\" > " + shlex.quote(str(root / "process.pid"))
+                      + "\nwait \"$child\"\ncode=$?\nprintf '%s\\n' \"$code\" > "
+                      + shlex.quote(str(root / "process.exit")) + "\nexit 0\n")
+    script.chmod(0o700)
+    return script
+
+
 class Terminal:
     """An owned real Terminal window and its observed native TTY/Pi PID."""
     def __init__(self, root, argv, env, observer, cwd=None):
@@ -76,18 +97,8 @@ class Terminal:
         root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.pid_path, self.exit_path = root / "process.pid", root / "process.exit"
         self.shell_path = root / "shell.pid"
-        script = root / "launch.command"
-        entries = [shlex.quote(key + "=" + value) for key, value in env.items()]
-        launch = " ".join(["/usr/bin/env", "-i", *entries,
-                           'TERM_PROGRAM=Apple_Terminal', 'TERM=xterm-256color',
-                           'TERM_SESSION_ID="${TERM_SESSION_ID:-}"', *map(shlex.quote, map(str, argv))])
         cwd = cwd or root / "project"
-        script.write_text("#!/bin/bash\nset -eu\nprintf '%s\\n' \"$$\" > " + shlex.quote(str(self.shell_path))
-                          + "\ncd " + shlex.quote(str(cwd)) + "\nset +e\n" + launch
-                          + " &\nchild=$!\nprintf '%s\\n' \"$child\" > " + shlex.quote(str(self.pid_path))
-                          + "\nwait \"$child\"\ncode=$?\nprintf '%s\\n' \"$code\" > "
-                          + shlex.quote(str(self.exit_path)) + "\nexit 0\n")
-        script.chmod(0o700)
+        script = terminal_launcher(root, argv, env, cwd)
         result = applescript('tell application "Terminal"\nset t to do script '
                              + quoted("/bin/bash --noprofile --norc " + shlex.quote(str(script)))
                              + '\nset custom title of t to ' + quoted(cwd.name)
