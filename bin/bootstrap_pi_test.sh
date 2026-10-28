@@ -4,13 +4,15 @@
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-env.sh"
 test_env_enter "$0" "$@"
 set -euo pipefail
+# A parent fixture may expose shell-script PATH adapters. Python on Windows
+# needs the genuine executable of this running Bash, not a rediscovered wrapper.
+TEST_PI_BASH=$BASH
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 SANDBOX=$(mktemp -d "${TMPDIR:-/tmp}/bootstrap-pi-TEST-XXXXXX")
 trap 'rm -rf "$SANDBOX"' EXIT
 test_env_setup "$SANDBOX"
 sed '/^main "\$@"$/d' "$ROOT/bin/bootstrap.sh" > "$SANDBOX/functions.sh"
 export TEST_PI_FUNCTIONS="$SANDBOX/functions.sh" TEST_PI_HELPER="$SANDBOX/helper"
-TEST_PI_BASH=$(type -P bash)
 case "$(uname -s)" in
     MINGW*|MSYS*|CYGWIN*)
         [ ! -f "$TEST_PI_BASH.exe" ] || TEST_PI_BASH="$TEST_PI_BASH.exe"

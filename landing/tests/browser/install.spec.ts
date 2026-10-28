@@ -737,7 +737,7 @@ test("Cursor and Qoder share combined installation, updates and guidance", async
   await expect(page.locator(".next-steps")).toContainText("Restart Qoder");
   const optionalSetup = page.getByRole("checkbox", { name: "Set up optional notification tools" });
   await expect(page.getByText(/Controls notification setup for selected Claude, Codex CLI and Cursor CLI/)).toBeVisible();
-  await expect(page.getByText(/Qoder, OpenCode and Gemini are unaffected/)).toBeVisible();
+  await expect(page.getByText(/Qoder, OpenCode, Gemini and Pi are unaffected/)).toBeVisible();
   await optionalSetup.uncheck();
   await expect(page.getByLabel("Install command", { exact: true })).toHaveValue(expected.replace(" --desktop", " --skip-agent-notify --desktop"));
   await optionalSetup.check();
