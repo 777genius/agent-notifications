@@ -33,6 +33,20 @@ func rectangle(_ element: AXUIElement) -> CGRect? {
     return CGRect(origin: point, size: dimensions)
 }
 
+func onScreenWindows(_ pid: pid_t) -> [CGRect] {
+    let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+    return windows.compactMap { row in
+        guard (row[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == pid,
+              (row[kCGWindowAlpha as String] as? NSNumber)?.doubleValue ?? 0 > 0,
+              let bounds = row[kCGWindowBounds as String] as? [String: Any],
+              let x = bounds["X"] as? NSNumber, let y = bounds["Y"] as? NSNumber,
+              let width = bounds["Width"] as? NSNumber, let height = bounds["Height"] as? NSNumber,
+              width.doubleValue > 1, height.doubleValue > 1 else { return nil }
+        return CGRect(x: CGFloat(x.doubleValue), y: CGFloat(y.doubleValue),
+                      width: CGFloat(width.doubleValue), height: CGFloat(height.doubleValue))
+    }
+}
+
 @MainActor func foreground() -> [String: Any] {
     guard let app = NSWorkspace.shared.frontmostApplication else { return [:] }
     var result: [String: Any] = ["pid": Int(app.processIdentifier), "bundle_id": app.bundleIdentifier ?? ""]
@@ -51,6 +65,7 @@ func rectangle(_ element: AXUIElement) -> CGRect? {
     var result: [[String: Any]] = []
     for app in applications {
         let root = AXUIElementCreateApplication(app.processIdentifier)
+        let visible = onScreenWindows(app.processIdentifier)
         var remaining = 1600
         func visit(_ element: AXUIElement, _ depth: Int) {
             guard remaining > 0, depth < 20 else { return }
@@ -58,9 +73,10 @@ func rectangle(_ element: AXUIElement) -> CGRect? {
             let text = [kAXValueAttribute, kAXTitleAttribute, kAXDescriptionAttribute].compactMap {
                 attribute(element, $0) as? String
             }
-            if text.contains(where: { $0.contains(expected) }), let box = rectangle(element) {
+            if text.contains(where: { $0.contains(expected) }), let box = rectangle(element),
+               visible.contains(where: { $0.contains(CGPoint(x: box.midX, y: box.midY)) }) {
                 result.append(["notification_center_pid": Int(app.processIdentifier), "fixed_body": expected,
-                               "role": attribute(element, kAXRoleAttribute) as? String ?? "",
+                               "role": attribute(element, kAXRoleAttribute) as? String ?? "", "on_screen_owner_verified": true,
                                "bounds": [Double(box.minX), Double(box.minY), Double(box.width), Double(box.height)]])
             }
             for child in attribute(element, kAXChildrenAttribute) as? [AXUIElement] ?? [] { visit(child, depth + 1) }
@@ -81,6 +97,7 @@ func rectangle(_ element: AXUIElement) -> CGRect? {
     var result: [[String: Any]] = []
     for app in NSWorkspace.shared.runningApplications where allowed.contains(app.bundleIdentifier ?? "") {
         let root = AXUIElementCreateApplication(app.processIdentifier)
+        let visible = onScreenWindows(app.processIdentifier)
         let windows = attribute(root, kAXWindowsAttribute) as? [AXUIElement] ?? [root]
         for window in windows {
             var labels = [String]()
@@ -94,7 +111,8 @@ func rectangle(_ element: AXUIElement) -> CGRect? {
                 }
                 labels.append(contentsOf: text)
                 if attribute(element, kAXRoleAttribute) as? String == kAXButtonRole,
-                   text.contains("Allow"), let box = rectangle(element) { allowButtons.append(box) }
+                   text.contains("Allow"), let box = rectangle(element),
+                   visible.contains(where: { $0.contains(CGPoint(x: box.midX, y: box.midY)) }) { allowButtons.append(box) }
                 for child in attribute(element, kAXChildrenAttribute) as? [AXUIElement] ?? [] { visit(child, depth + 1) }
             }
             visit(window, 0)
@@ -106,6 +124,7 @@ func rectangle(_ element: AXUIElement) -> CGRect? {
                 result.append(["observer": "native_accessibility", "os_dialog_bundle": app.bundleIdentifier ?? "",
                                "os_dialog_pid": Int(app.processIdentifier), "candidate_name": "Agent Notifications",
                                "allow_button": "Allow", "denial_button_observed": true,
+                               "on_screen_owner_verified": true,
                                "bounds": [Double(box.minX), Double(box.minY), Double(box.width), Double(box.height)]])
             }
         }
