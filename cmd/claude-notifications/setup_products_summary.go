@@ -64,7 +64,7 @@ func bootstrapScopeLabel(key string) string {
 	labels := map[string]string{
 		"home": "Home directory", "claude-config": "Claude Code settings", "claude-mcp-config": "Claude Code MCP settings",
 		"codex-home": "Codex home", "codex-mcp-config": "Codex MCP settings", "opencode-config-dir": "OpenCode settings",
-		"gemini-config-root": "Gemini settings", "qoder-config-root": "Qoder settings", "control-root": "Shared installation state", "runtime-root": "Notification runtime",
+		"pi-agent-dir": "Pi agent directory", "pi-executable": "Pi executable", "gemini-config-root": "Gemini settings", "qoder-config-root": "Qoder settings", "control-root": "Shared installation state", "runtime-root": "Notification runtime",
 		"global-config": "Shared notification settings", "claude-executable": "Claude Code executable", "codex-executable": "Codex executable",
 		"opencode-executable": "OpenCode executable", "gemini-executable": "Gemini executable", "qoder-executable": "Qoder executable",
 		"scope-root": "Cursor workspace", "client-executable": "Cursor agent executable", "local-settings": "VS Code Local settings",

@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/777genius/agent-notifications/internal/thirdpartynotices"
+	portablepackage "github.com/777genius/agent-notifications/portable-package"
 	"github.com/777genius/agent-notifications/skills"
 )
 
@@ -84,10 +85,11 @@ func Build(req BuildRequest) (Package, error) {
 		return Package{}, err
 	}
 	name := binaryName(req.GOOS)
-	plugin := map[string]string{
-		"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
-		"name":    pluginName,
-		"version": req.Version,
+	plugin := map[string]any{
+		"$schema":                        "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+		"name":                           pluginName,
+		"version":                        req.Version,
+		"extensions": map[string]any{"com.universal-agent-plugins.pi": map[string]any{"version": 1, "source": "com.universal-agent-plugins.pi"}},
 	}
 	pluginJSON, err := json.MarshalIndent(plugin, "", "  ")
 	if err != nil {
@@ -109,10 +111,11 @@ func Build(req BuildRequest) (Package, error) {
 		return Package{}, err
 	}
 	files := map[string][]byte{
-		thirdpartynotices.Filename:            []byte(thirdpartynotices.Text()),
-		"plugin.json":                         append(pluginJSON, '\n'),
-		"mcp.json":                            append(mcpJSON, '\n'),
-		"skills/agent-notifications/SKILL.md": skills.AgentNotify(),
+		thirdpartynotices.Filename:                []byte(thirdpartynotices.Text()),
+		"plugin.json":                             append(pluginJSON, '\n'),
+		"mcp.json":                                append(mcpJSON, '\n'),
+		"skills/agent-notifications/SKILL.md":     skills.AgentNotify(),
+		"com.universal-agent-plugins.pi/index.ts": portablepackage.PiExtension,
 	}
 	for rel, data := range files {
 		path := filepath.Join(req.OutputRoot, filepath.FromSlash(rel))

@@ -214,13 +214,16 @@ func validateBootstrapIntent(i confirmedBootstrapIntent) error {
 	seen := map[string]bool{}
 	for id, profile := range i.MCP.Projection.Profiles {
 		key := "claude-config"
+		if id == "pi" {
+			key = "pi-agent-dir"
+		}
 		if id == "codex" {
 			key = "codex-home"
 		}
 		if id == "cursor" || id == "copilot-vscode" {
 			key = "scope-root"
 		}
-		if id != "claude" && id != "codex" && id != "cursor" && id != "copilot-vscode" || !containsProduct(products, id) || !bytes.Equal(profile, i.Scopes[key]) {
+		if id != "claude" && id != "codex" && id != "cursor" && id != "copilot-vscode" && id != "pi" || !containsProduct(products, id) || !bytes.Equal(profile, i.Scopes[key]) {
 			return invalid()
 		}
 	}
@@ -245,7 +248,7 @@ func validateBootstrapIntent(i confirmedBootstrapIntent) error {
 	}
 	for _, ids := range [][]string{i.MCP.Selected, i.MCP.Skipped} {
 		for _, id := range ids {
-			if id != "claude" && id != "codex" && id != "cursor" && id != "copilot-vscode" || !containsProduct(products, id) || seen[id] {
+			if id != "claude" && id != "codex" && id != "cursor" && id != "copilot-vscode" && id != "pi" || !containsProduct(products, id) || seen[id] {
 				return invalid()
 			}
 			seen[id] = true
@@ -262,6 +265,8 @@ func validateBootstrapIntent(i confirmedBootstrapIntent) error {
 			key = "gemini-config-root"
 		case "qoder":
 			key = "qoder-config-root"
+		case "pi":
+			key = "pi-agent-dir"
 		case "cursor", "copilot-vscode":
 			key = "scope-root"
 		}
@@ -300,6 +305,12 @@ func validateBootstrapIntent(i confirmedBootstrapIntent) error {
 			}
 		} else if id == "cursor" || id == "copilot-vscode" {
 			desktop, webhook = i.Request.Desktop, i.Request.Webhook
+		}
+		if id == "pi" {
+			if u.Product != id || u.Hooks || !u.Native || u.MCP || u.Skill || u.PreservedOff || u.Desktop != desktop || u.Webhook != webhook {
+				return invalid()
+			}
+			continue
 		}
 		if u.Product != id || u.Hooks != (portable && id != "cursor") || u.Native == portable || u.MCP != containsProduct(i.MCP.Selected, id) || u.Skill != u.MCP || u.PreservedOff != containsProduct(i.MCP.Skipped, id) || u.Desktop != desktop || u.Webhook != webhook {
 			return invalid()

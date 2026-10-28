@@ -388,7 +388,7 @@ func validInstallOrUpdateRequest(req setupwizard.Request) bool {
 	}
 	seen := map[string]bool{}
 	for _, agent := range req.Agents {
-		if (agent != "claude" && agent != "codex" && ((agent != "cursor" && agent != "copilot-vscode") || len(req.Agents) != 1)) || seen[agent] {
+		if (agent != "claude" && agent != "codex" && agent != "pi" && ((agent != "cursor" && agent != "copilot-vscode") || len(req.Agents) != 1)) || seen[agent] {
 			return false
 		}
 		seen[agent] = true
@@ -673,7 +673,7 @@ func parseSetupWizard(args []string) (setupwizard.Request, bool, error) {
 		"package": true, "plugin-root": true, "control-root": true, "runtime-root": true, "global-config": true,
 		"codex-home": true, "claude-config": true, "client-executable": true, "helper": true,
 		"scope-root": true, "installation-id": true, "mcp-config": true, "claude-mcp-config": true,
-		"claude-executable": true, "codex-executable": true,
+		"claude-executable": true, "codex-executable": true, "pi-executable": true, "pi-agent-dir": true, "pi-desktop": true, "pi-webhook": true, "pi-channel-preimage": true,
 	}
 	for i := 0; i < len(args); i++ {
 		token := args[i]
@@ -720,7 +720,7 @@ func parseSetupWizard(args []string) (setupwizard.Request, bool, error) {
 		}
 		values[key] = value
 	}
-	for _, key := range []string{"package", "plugin-root", "control-root", "runtime-root", "global-config", "codex-home", "claude-config", "client-executable", "helper", "scope-root", "mcp-config", "claude-mcp-config", "claude-executable", "codex-executable", "local-settings"} {
+	for _, key := range []string{"package", "plugin-root", "control-root", "runtime-root", "global-config", "codex-home", "claude-config", "client-executable", "helper", "scope-root", "mcp-config", "claude-mcp-config", "claude-executable", "codex-executable", "pi-executable", "pi-agent-dir", "local-settings"} {
 		if values[key] == "" {
 			continue
 		}
@@ -797,6 +797,29 @@ func parseSetupWizard(args []string) (setupwizard.Request, bool, error) {
 	req.GlobalConfig = values["global-config"]
 	req.CodexHome = values["codex-home"]
 	req.ClaudeConfig = values["claude-config"]
+	req.PiAgentDir = values["pi-agent-dir"]
+	home, homeErr := os.UserHomeDir()
+	cwd, cwdErr := os.Getwd()
+	if containsProduct(req.Agents, "pi") && req.PiAgentDir == "" {
+		if homeErr != nil || cwdErr != nil {
+			return req, jsonOut, errors.New("invalid_pi_profile")
+		}
+		var err error
+		req.EnvPiAgentDir, err = setupwizard.ResolvePiAgentDir(home, os.Getenv("PI_CODING_AGENT_DIR"), cwd)
+		if err != nil {
+			return req, jsonOut, err
+		}
+	}
+	for key, target := range map[string]**bool{"pi-desktop": &req.PiDesktop, "pi-webhook": &req.PiWebhook} {
+		if value, exists := values[key]; exists {
+			on, err := parseBoolFlag(value)
+			if err != nil {
+				return req, jsonOut, err
+			}
+			*target = &on
+		}
+	}
+	req.PiChannelPreimage = values["pi-channel-preimage"]
 	env := setupwizard.ApplyEnvDefaults(setupwizard.Request{})
 	req.EnvCodexHome = env.CodexHome
 	req.EnvClaudeConfig = env.ClaudeConfig
@@ -811,8 +834,11 @@ func parseSetupWizard(args []string) (setupwizard.Request, bool, error) {
 		*path = filepath.Clean(*path)
 	}
 	req.ClientExecutable = values["client-executable"]
-	if values["claude-executable"] != "" || values["codex-executable"] != "" {
+	if values["claude-executable"] != "" || values["codex-executable"] != "" || values["pi-executable"] != "" {
 		req.ClientExecutables = map[string]string{}
+		if values["pi-executable"] != "" {
+			req.ClientExecutables["pi"] = values["pi-executable"]
+		}
 		if values["claude-executable"] != "" {
 			req.ClientExecutables["claude"] = values["claude-executable"]
 		}
@@ -978,16 +1004,16 @@ func admitBootstrapWizardIntent(path string, r setupwizard.Request) (setupwizard
 		return r, nil, err
 	}
 	expected := intentWizardRequest(intent)
-	if !sameWizardBootstrapScope(r, expected) || intent.Request.SkipAgentNotify {
+	if !sameWizardBootstrapScope(r, expected) || intent.Request.SkipAgentNotify && !containsProduct(r.Agents, "pi") {
 		return r, nil, errors.New("bootstrap request differs from confirmed intent")
 	}
 	r.BootstrapMCP = &intent.MCP
 	r.BootstrapStateMigrationOwned = true
-	if containsProduct(intent.Request.Products, "cursor") || containsProduct(intent.Request.Products, "copilot-vscode") {
+	if containsProduct(intent.Request.Products, "cursor") || containsProduct(intent.Request.Products, "copilot-vscode") || containsProduct(intent.Request.Products, "pi") {
 		generation, policy := intent.Initial.Generation, intent.Initial.Policy
 		r.BootstrapExpectedGeneration, r.BootstrapExpectedPolicy = &generation, &policy
 	}
-	r.EnvClaudeConfig, r.EnvCodexHome = "", ""
+	r.EnvClaudeConfig, r.EnvCodexHome, r.EnvPiAgentDir = "", "", ""
 	return r, &intent, nil
 }
 
@@ -1185,10 +1211,15 @@ func commitConfirmedCursorConsent(ctx context.Context, r setupwizard.Request, re
 	return result, nil
 }
 func sameWizardBootstrapScope(actual, expected setupwizard.Request) bool {
+	if containsProduct(expected.Agents, "pi") {
+		if actual.PiAgentDir != expected.PiAgentDir || !samePiChoice(actual.PiDesktop, expected.PiDesktop) || !samePiChoice(actual.PiWebhook, expected.PiWebhook) || actual.PiChannelPreimage != expected.PiChannelPreimage {
+			return false
+		}
+	}
 	if containsProduct(expected.Agents, "copilot-vscode") && !sameLocalWizardSelection(actual, expected) {
 		return false
 	}
-	if strings.Join(actual.Agents, ",") != strings.Join(expected.Agents, ",") || actual.ControlRoot != expected.ControlRoot || (!containsProduct(expected.Agents, "cursor") && !containsProduct(expected.Agents, "copilot-vscode") && (actual.ClaudeConfig != expected.ClaudeConfig || actual.CodexHome != expected.CodexHome)) || containsProduct(expected.Agents, "cursor") && actual.CursorConfig != expected.CursorConfig || (containsProduct(expected.Agents, "cursor") && actual.ScopeRoot != expected.ScopeRoot) || actual.GlobalConfig != expected.GlobalConfig {
+	if strings.Join(actual.Agents, ",") != strings.Join(expected.Agents, ",") || actual.ControlRoot != expected.ControlRoot || (!containsProduct(expected.Agents, "cursor") && !containsProduct(expected.Agents, "copilot-vscode") && (actual.ClaudeConfig != expected.ClaudeConfig || actual.CodexHome != expected.CodexHome || actual.PiAgentDir != expected.PiAgentDir)) || containsProduct(expected.Agents, "cursor") && actual.CursorConfig != expected.CursorConfig || (containsProduct(expected.Agents, "cursor") && actual.ScopeRoot != expected.ScopeRoot) || actual.GlobalConfig != expected.GlobalConfig {
 		return false
 	}
 	// A fresh legacy phase chooses its existing managed runtime during hooks
@@ -1741,3 +1772,5 @@ func cursorCallerDeclaredName(root string) string {
 	}
 	return manifest.Name
 }
+
+func samePiChoice(a, b *bool) bool { return a == nil && b == nil || a != nil && b != nil && *a == *b }

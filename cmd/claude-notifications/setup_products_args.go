@@ -7,9 +7,9 @@ import (
 	"strings"
 )
 
-var productOrder = []string{"claude", "codex", "opencode", "gemini", "qoder", "cursor", "copilot-vscode"}
-var productLabels = map[string]string{"claude": "Claude", "codex": "Codex", "opencode": "OpenCode", "gemini": "Gemini CLI", "qoder": "Qoder", "cursor": "Cursor CLI (explicit profile)", "copilot-vscode": "VS Code Local (explicit profile)"}
-var scopeKeys = []string{"claude-config", "codex-home", "opencode-config-dir", "gemini-home", "gemini-config-root", "qoder-config-root", "claude-executable", "codex-executable", "opencode-executable", "gemini-executable", "qoder-executable", "control-root", "scope-root", "client-executable", "local-settings"}
+var productOrder = []string{"claude", "codex", "opencode", "gemini", "qoder", "pi", "cursor", "copilot-vscode"}
+var productLabels = map[string]string{"claude": "Claude", "codex": "Codex", "opencode": "OpenCode", "gemini": "Gemini CLI", "qoder": "Qoder", "pi": "Pi", "cursor": "Cursor CLI (explicit profile)", "copilot-vscode": "VS Code Local (explicit profile)"}
+var scopeKeys = []string{"claude-config", "codex-home", "opencode-config-dir", "gemini-home", "gemini-config-root", "qoder-config-root", "pi-agent-dir", "pi-executable", "claude-executable", "codex-executable", "opencode-executable", "gemini-executable", "qoder-executable", "control-root", "scope-root", "client-executable", "local-settings"}
 
 type setupProductsArgs struct {
 	Operation, Mode, IntentFile                    string

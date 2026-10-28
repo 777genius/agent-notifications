@@ -33,6 +33,7 @@ const (
 	Codex         Integration = "codex"
 	Claude        Integration = "claude"
 	CopilotVSCode Integration = "copilot-vscode"
+	Pi            Integration = "pi"
 )
 
 // Binding is immutable consumer identity. Generation is deliberately excluded:
@@ -87,7 +88,7 @@ func primaryPath(root, primary string) string {
 // commit under the component lock/CAS before publishing locator bytes. Calling
 // this pure function does not establish UAP receipt ownership or authorize setup.
 func (b Binding) Registration() (string, installruntime.Consumer, []byte, error) {
-	if b.Version != 1 || (b.Integration != Codex && b.Integration != Claude && b.Integration != CopilotVSCode && b.Integration != Cursor) || b.Owner != "existing-installer" {
+	if b.Version != 1 || (b.Integration != Codex && b.Integration != Claude && b.Integration != CopilotVSCode && b.Integration != Cursor && b.Integration != Pi) || b.Owner != "existing-installer" {
 		return "", installruntime.Consumer{}, nil, ErrInvalid
 	}
 	for _, s := range []string{b.InstallationID, b.BindingID, b.ScopeID, b.ComponentID} {

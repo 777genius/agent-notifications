@@ -542,10 +542,19 @@ func RetryCommand(req Request) []string {
 	appendPath("--global-config", req.GlobalConfig)
 	appendPath("--codex-home", req.CodexHome)
 	appendPath("--claude-config", req.ClaudeConfig)
+	appendPath("--pi-agent-dir", req.PiAgentDir)
+	appendPath("--pi-channel-preimage", req.PiChannelPreimage)
+	if req.PiDesktop != nil {
+		cmd = append(cmd, "--pi-desktop", boolFlag(*req.PiDesktop))
+	}
+	if req.PiWebhook != nil {
+		cmd = append(cmd, "--pi-webhook", boolFlag(*req.PiWebhook))
+	}
 	appendPath("--client-executable", req.ClientExecutable)
 	if req.ClientExecutables != nil {
 		appendPath("--claude-executable", req.ClientExecutables["claude"])
 		appendPath("--codex-executable", req.ClientExecutables["codex"])
+		appendPath("--pi-executable", req.ClientExecutables["pi"])
 	}
 	appendPath("--helper", req.Helper)
 	appendPath("--scope-root", req.ScopeRoot)

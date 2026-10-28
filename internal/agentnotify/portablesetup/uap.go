@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients/claude"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients/codex"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients/pi"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients/vscode"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/domain"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/managedstdio"
@@ -24,6 +26,7 @@ import (
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/packagesnapshot"
 
 	"github.com/777genius/agent-notifications/install/uapinstaller"
+	"github.com/777genius/agent-notifications/internal/agentnotify/piauthority"
 	"github.com/777genius/agent-notifications/internal/agentnotify/portable"
 	"github.com/777genius/agent-notifications/internal/copilotvscodeinstall"
 	"github.com/777genius/agent-notifications/internal/cursorinstall"
@@ -63,10 +66,10 @@ func declaredServerName(packageRoot string) string {
 
 const clientFactsFile = "client-facts.json"
 
-// NewRegistry is the explicit Notifications composition of the two supported
+// NewRegistry is the explicit Notifications composition of the supported
 // native clients. The UAP SDK intentionally rejects a nil registry.
 func NewRegistry() (*clients.Registry, error) {
-	return clients.NewRegistry(claude.New(), codex.New())
+	return clients.NewRegistry(claude.New(), codex.New(), pi.New())
 }
 
 // ClientID translates the portable registration vocabulary at the public engine boundary.
@@ -136,9 +139,10 @@ type MaterializeRequest struct {
 }
 
 type Materializer struct {
-	Kernel Service
-	Store  statev2.Store
-	Roots  UAPRoots
+	PiChoices piauthority.Choices
+	Kernel    Service
+	Store     statev2.Store
+	Roots     UAPRoots
 	// Registry is the explicit composition for this materializer and every
 	// engine it constructs. Nil retains the Claude/Codex composition.
 	Registry *clients.Registry
@@ -939,7 +943,7 @@ func explicitAbs(p string) bool {
 
 func (m Materializer) validate(req MaterializeRequest, install bool) error {
 	switch req.Integration {
-	case portable.Codex, portable.Claude:
+	case portable.Codex, portable.Claude, portable.Pi:
 	case portable.CopilotVSCode:
 		if selected, ok := clients.As[*vscode.LocalAdapter](m.Registry, domain.ClientVSCode); !ok || selected == nil || req.LocalConfig == nil {
 			return fmt.Errorf("%w: selected Local adapter and explicit selections required", ErrPreflight)
@@ -965,8 +969,11 @@ func (m Materializer) validate(req MaterializeRequest, install bool) error {
 			return err
 		}
 	}
-	if req.ClientExecutable == "" || !filepath.IsAbs(req.ClientExecutable) {
+	if (install || req.Integration != portable.Pi) && (req.ClientExecutable == "" || !filepath.IsAbs(req.ClientExecutable)) {
 		return fmt.Errorf("%w: client executable must be explicit", ErrPreflight)
+	}
+	if install && req.Integration == portable.Pi && portable.ValidatePiExecutable(req.ClientExecutable, runtime.GOOS) != nil {
+		return fmt.Errorf("%w: Windows Pi requires the native standalone executable", ErrPreflight)
 	}
 	if install && !explicitAbs(req.PackageRoot) {
 		return fmt.Errorf("%w: package root must be an explicit absolute path", ErrPreflight)
@@ -1096,14 +1103,36 @@ func (m Materializer) engineWithIdentities(req MaterializeRequest, generation *u
 			if err := refuseConflictingLocator(pb); err != nil {
 				return err
 			}
-			if _, err := m.Kernel.CommitBinding(ctx, Request{Binding: pb, ExpectedGeneration: *generation, Reservation: res}); err != nil {
+			selectedReservation := res
+			if pb.Integration == portable.Pi && selectedReservation == nil {
+				action := string(packageOperation(req))
+				if req.HandoffAction != "" {
+					action = req.HandoffAction
+				}
+				selectedReservation, err = m.Kernel.matchingReservation(Request{Binding: pb, SourceDigest: req.SourceDigest, TreeDigest: req.TreeDigest, HelperDigest: req.HelperDigest, HelperVersion: req.HelperVersion}, action)
+				if err != nil {
+					return err
+				}
+			}
+			if _, err := m.Kernel.CommitBinding(ctx, Request{Binding: pb, ExpectedGeneration: *generation, Reservation: selectedReservation}); err != nil {
 				return err
+			}
+			if pb.Integration == portable.Pi {
+				if err := piauthority.RetirePreparation(ctx, pb, selectedReservation, m.Kernel.ExpectedPolicy); err != nil {
+					return err
+				}
+				if err := piauthority.CommitChoices(ctx, pb, m.PiChoices, selectedReservation, m.Kernel.ExpectedPolicy); err != nil {
+					return err
+				}
 			}
 			snap, err := installruntime.ReadInstalledSnapshot(pb.ControlRoot)
 			if err != nil {
 				return err
 			}
 			*generation = snap.Ledger.Generation
+			if pb.Integration == portable.Pi {
+				return piauthority.Publish(ctx, pb, m.Roots.StateFile)
+			}
 			return nil
 		},
 	})
@@ -1446,6 +1475,9 @@ func integrationOf(facts uapinstaller.BindingFacts) portable.Integration {
 // Required components follow independent Local selections. Native Stop has no
 // dependency on the canonical MCP or skill components.
 func requiredComponents(req MaterializeRequest) []string {
+	if req.Integration == portable.Pi {
+		return nil
+	}
 	if req.Integration != portable.CopilotVSCode {
 		return []string{"mcp", "skills"}
 	}
@@ -1484,7 +1516,7 @@ func validateGroupIdentities(reqs []MaterializeRequest) (map[string]Identity, er
 	base := reqs[0].Identity
 	for _, req := range reqs {
 		client := ClientID(req.Integration)
-		if req.Integration != portable.Claude && req.Integration != portable.Codex && req.Integration != portable.CopilotVSCode {
+		if req.Integration != portable.Claude && req.Integration != portable.Codex && req.Integration != portable.CopilotVSCode && req.Integration != portable.Pi {
 			return nil, fmt.Errorf("%w: unsupported group client %s", ErrPreflight, client)
 		}
 		if _, exists := identities[client]; exists {

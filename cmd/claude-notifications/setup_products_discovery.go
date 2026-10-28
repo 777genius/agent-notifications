@@ -10,6 +10,8 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/777genius/agent-notifications/internal/agentnotify/portable"
+	"github.com/777genius/agent-notifications/internal/agentnotify/setupwizard"
 	"github.com/777genius/agent-notifications/internal/config"
 	"github.com/777genius/agent-notifications/internal/cursorinstall"
 	"github.com/777genius/agent-notifications/internal/geminiinstall"
@@ -22,6 +24,7 @@ import (
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients/cursor"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients/gemini"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients/opencode"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients/pi"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/opencodeplugin"
 )
 
@@ -32,6 +35,7 @@ type productFact struct {
 }
 type productEnvironment struct {
 	Home, PATH, DefaultControlRoot string
+	WorkingDir                     string
 	Config                         config.EnvSnapshot
 	Values                         map[string]string
 }
@@ -47,8 +51,12 @@ func captureProductEnvironment() (productEnvironment, error) {
 	if err != nil {
 		return productEnvironment{}, err
 	}
-	e := productEnvironment{Home: home, PATH: os.Getenv("PATH"), DefaultControlRoot: control, Config: config.SnapshotEnv(), Values: map[string]string{}}
-	for _, key := range []string{"CLAUDE_CONFIG_DIR", "CLAUDE_HOME", "CODEX_HOME", "OPENCODE_CONFIG_DIR", "GEMINI_CLI_HOME", "QODER_CONFIG_DIR", "XDG_CONFIG_HOME", "AGENT_NOTIFICATIONS_CONTROL_ROOT", "PATHEXT", "LOCALAPPDATA", "APPDATA", "ProgramFiles", "ProgramW6432", "ProgramFiles(x86)"} {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return productEnvironment{}, err
+	}
+	e := productEnvironment{WorkingDir: cwd, Home: home, PATH: os.Getenv("PATH"), DefaultControlRoot: control, Config: config.SnapshotEnv(), Values: map[string]string{}}
+	for _, key := range []string{"CLAUDE_CONFIG_DIR", "CLAUDE_HOME", "CODEX_HOME", "OPENCODE_CONFIG_DIR", "GEMINI_CLI_HOME", "PI_CODING_AGENT_DIR", "QODER_CONFIG_DIR", "XDG_CONFIG_HOME", "AGENT_NOTIFICATIONS_CONTROL_ROOT", "PATHEXT", "LOCALAPPDATA", "APPDATA", "ProgramFiles", "ProgramW6432", "ProgramFiles(x86)"} {
 		e.Values[key] = os.Getenv(key)
 	}
 	return e, nil
@@ -128,6 +136,20 @@ func productScopes(a setupProductsArgs, e productEnvironment) (map[string]string
 	if err != nil {
 		return nil, err
 	}
+	piRoot := a.Scopes["pi-agent-dir"]
+	if piRoot == "" {
+		piRoot = e.Values["PI_CODING_AGENT_DIR"]
+	}
+	scopes["pi-agent-dir"], err = setupwizard.ResolvePiAgentDir(e.Home, piRoot, e.WorkingDir)
+	if err != nil {
+		if containsProduct(a.Products, "pi") {
+			return nil, err
+		}
+		// Discovery still offers an unavailable Pi row, while unrelated setup
+		// cannot acquire authority from or be blocked by this invalid profile.
+		scopes["pi-profile-error"] = "invalid Pi agent directory"
+		scopes["pi-agent-dir"] = ""
+	}
 	if profile := a.Scopes["scope-root"]; profile != "" {
 		if containsProduct(a.Products, "copilot-vscode") {
 			scopes["scope-root"], err = installruntime.CanonicalPath(profile)
@@ -163,7 +185,7 @@ func productScopes(a setupProductsArgs, e productEnvironment) (map[string]string
 	if a.Scopes["claude-config"] != "" || e.Values["CLAUDE_CONFIG_DIR"] != "" {
 		claudeMCPParent = scopes["claude-config"]
 	}
-	for _, key := range []string{"claude-config", "codex-home", "control-root", "opencode-config-dir", "gemini-config-root", "qoder-config-root"} {
+	for _, key := range []string{"claude-config", "codex-home", "control-root", "opencode-config-dir", "gemini-config-root", "qoder-config-root", "pi-agent-dir"} {
 		info, err := os.Stat(scopes[key])
 		if err != nil && !os.IsNotExist(err) {
 			return nil, err
@@ -215,7 +237,8 @@ func discoverProductsWithDetector(ctx context.Context, a setupProductsArgs, e pr
 	}
 	detector.Environment["CLAUDE_CONFIG_DIR"] = scopes["claude-config"]
 	detector.Environment["CODEX_HOME"] = scopes["codex-home"]
-	registry, err := clients.NewRegistry(claude.New(), codex.New(), opencode.New(), gemini.New())
+	detector.Environment["PI_CODING_AGENT_DIR"] = scopes["pi-agent-dir"]
+	registry, err := clients.NewRegistry(claude.New(), codex.New(), opencode.New(), gemini.New(), pi.New())
 	if err != nil {
 		return nil, nil, err
 	}
@@ -242,6 +265,9 @@ func discoverProductsWithDetector(ctx context.Context, a setupProductsArgs, e pr
 		}
 		if err == nil {
 			p, err = normalizeProductExecutable(p)
+		}
+		if err == nil && name == "pi" {
+			err = portable.ValidatePiExecutable(p, runtime.GOOS)
 		}
 		memo[name] = lookup{p, err}
 		return p, err
@@ -309,8 +335,14 @@ func discoverProductsWithDetector(ctx context.Context, a setupProductsArgs, e pr
 			key = "gemini-config-root"
 		case "qoder":
 			key = "qoder-config-root"
+		case "pi":
+			key = "pi-agent-dir"
 		}
 		f := productFact{ID: id, Label: productLabels[id], Profile: scopes[key], Selectable: true}
+		if id == "pi" && scopes["pi-profile-error"] != "" {
+			f.Selectable = false
+			f.Reason = scopes["pi-profile-error"]
+		}
 		if runtime.GOOS != "linux" && runtime.GOOS != "darwin" && runtime.GOOS != "windows" || runtime.GOARCH != "amd64" && runtime.GOARCH != "arm64" || runtime.GOOS == "windows" && runtime.GOARCH == "arm64" {
 			f.Selectable = false
 			f.Reason = "unsupported release platform"
