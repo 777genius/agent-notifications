@@ -32,7 +32,7 @@ static void pump(DWORD duration) {
         Sleep(5);
     }
 }
-static const char* boolean(bool value) { return value ? "true" : "false"; }
+static const char* jsonBool(bool value) { return value ? "true" : "false"; }
 
 int wmain(int argc, wchar_t** argv) {
     if (argc != 2) return 2;
@@ -163,14 +163,14 @@ int wmain(int argc, wchar_t** argv) {
         }
     }
     if (format) CoTaskMemFree(format);
-    std::cout << "{\"checks\":{\"windows_client\":" << boolean(windowsClient)
-              << ",\"interactive_gui\":" << boolean(interactive) << ",\"shell\":" << boolean(shell)
-              << ",\"uia\":" << boolean(uia) << ",\"two_windows\":" << boolean(twoWindows)
-              << ",\"foreground_observer\":" << boolean(foreground) << ",\"input_observer\":" << boolean(inputObserved)
-              << ",\"audio_endpoint\":" << boolean(audioEndpoint) << ",\"audio_capture\":" << boolean(captureStarted && samples >= 4800)
-              << ",\"known_cue_observed\":" << boolean(played && peak > 0.01)
-              << "},\"measurements\":{\"session\":" << session << ",\"connection_known\":" << boolean(stateKnown)
-              << ",\"input_desktop\":" << boolean(inputDesktop) << ",\"audio_hresult\":" << audioResult
+    std::cout << "{\"checks\":{\"windows_client\":" << jsonBool(windowsClient)
+              << ",\"interactive_gui\":" << jsonBool(interactive) << ",\"shell\":" << jsonBool(shell)
+              << ",\"uia\":" << jsonBool(uia) << ",\"two_windows\":" << jsonBool(twoWindows)
+              << ",\"foreground_observer\":" << jsonBool(foreground) << ",\"input_observer\":" << jsonBool(inputObserved)
+              << ",\"audio_endpoint\":" << jsonBool(audioEndpoint) << ",\"audio_capture\":" << jsonBool(captureStarted && samples >= 4800)
+              << ",\"known_cue_observed\":" << jsonBool(played && peak > 0.01)
+              << "},\"measurements\":{\"session\":" << session << ",\"connection_known\":" << jsonBool(stateKnown)
+              << ",\"input_desktop\":" << jsonBool(inputDesktop) << ",\"audio_hresult\":" << audioResult
               << ",\"audio_samples\":" << samples << ",\"audio_peak\":" << peak << "}}\n";
     return 0;
 }
