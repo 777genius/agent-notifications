@@ -3344,13 +3344,27 @@ func codex() {
 		body, err := json.Marshal(entry)
 		if err != nil || os.WriteFile(state, body, 0600) != nil { os.Exit(98) }
 		json.NewEncoder(os.Stdout).Encode(map[string]any{"ok": true})
+	case len(args) == 4 && args[0] == "plugin" && args[1] == "remove" && args[3] == "--json":
+		body, err := os.ReadFile(state)
+		var entry map[string]any
+		if err != nil || json.Unmarshal(body, &entry) != nil || entry["pluginId"] != args[2] || entry["installed"] != true { os.Exit(98) }
+		entry["installed"], entry["enabled"] = false, false
+		body, err = json.Marshal(entry)
+		if err != nil || os.WriteFile(state, body, 0600) != nil { os.Exit(98) }
+		json.NewEncoder(os.Stdout).Encode(map[string]any{"ok": true})
+	case len(args) == 5 && strings.Join(args[:3], " ") == "plugin marketplace remove" && args[4] == "--json":
+		body, err := os.ReadFile(state)
+		var entry map[string]any
+		if err != nil || json.Unmarshal(body, &entry) != nil || entry["marketplaceName"] != args[3] || entry["installed"] != false { os.Exit(98) }
+		if os.Remove(state) != nil { os.Exit(98) }
+		json.NewEncoder(os.Stdout).Encode(map[string]any{"ok": true})
 	case len(args) == 3 && strings.Join(args, " ") == "plugin list --json":
 		entries := []map[string]any{}
 		body, err := os.ReadFile(state)
 		if err == nil {
 			var entry map[string]any
 			if json.Unmarshal(body, &entry) != nil { os.Exit(98) }
-			entries = append(entries, entry)
+			if entry["installed"] == true { entries = append(entries, entry) }
 		} else if !os.IsNotExist(err) { os.Exit(98) }
 		json.NewEncoder(os.Stdout).Encode(map[string]any{"installed": entries})
 	default:
