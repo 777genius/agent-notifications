@@ -1,6 +1,15 @@
 name: Pi installed macOS desktop
 
 on:
+  pull_request:
+    paths:
+      - '.github/workflows/pi-installed-macos.yml'
+      - 'scripts/pi-installed-desktop-macos.py'
+      - 'scripts/pi-candidate-build.py'
+      - 'tests/integration/pi_installed_desktop_darwin.swift'
+      - 'tests/integration/pi_*fixture.py'
+      - 'go.mod'
+      - 'go.sum'
   workflow_dispatch:
     inputs:
       observer_only:
