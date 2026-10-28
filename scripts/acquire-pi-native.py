@@ -32,21 +32,26 @@ def verified_archive(path, pin):
     require(sha(path) == pin["sha256"], "Pi archive SHA-256 differs from immutable pin")
 
 
-def contained_member(name):
+def contained_member(name, *, flat=False):
     path = PurePosixPath(name)
-    require("\\" not in name and not path.is_absolute() and path.parts and path.parts[0] == "pi", "noncontained Pi archive member")
-    require(all(part not in ("..", ".", "") and ":" not in part for part in path.parts), "unsafe Pi archive member")
-    return path
+    require(name and "\\" not in name and not path.is_absolute(), "noncontained Pi archive member")
+    # Validate the archive's raw relative name before adding a logical root.
+    # PurePosixPath alone would collapse empty and dot components first.
+    require(all(part not in ("..", ".", "") and ":" not in part for part in name.split("/")), "unsafe Pi archive member")
+    require(flat or path.parts[0] == "pi", "noncontained Pi archive member")
+    return PurePosixPath("pi") / path if flat else path
 
 
-def extract(archive, output):
+def extract(archive, output, *, layout="rooted"):
+    require(layout in ("rooted", "windows-flat"), "unknown Pi archive layout")
+    require(layout != "windows-flat" or archive.name.endswith(".zip"), "Windows Pi layout requires ZIP")
     require(not output.exists(), "Pi output must be fresh")
     output.mkdir(parents=True, mode=0o700)
     total, names = 0, set()
 
     def copy(name, size, mode, directory, source):
         nonlocal total
-        relative = contained_member(name)
+        relative = contained_member(name, flat=layout == "windows-flat")
         require(str(relative) not in names and len(names) < 4096, "duplicate or excessive Pi members")
         names.add(str(relative))
         total += size
@@ -112,7 +117,9 @@ def main():
             archive.unlink(missing_ok=True)
             raise
     verified_archive(archive, pin)
-    extract(archive, output)
+    # The official Windows release ZIP is flat; Unix tarballs contain pi/.
+    # Its immutable pin is verified above before this explicit layout adapter.
+    extract(archive, output, layout="windows-flat" if args.platform == "windows" else "rooted")
     executable = output / "pi" / ("pi.exe" if args.platform == "windows" else "pi")
     require(executable.is_file() and not executable.is_symlink(), "Pi physical executable missing")
     report = {"schema_version": 1, "version": pins["version"], "source_commit": pins["source_commit"],
