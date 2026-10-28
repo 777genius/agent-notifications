@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bind helper capture cleanup to its owning shell so watchdog cleanup cannot remove parent diagnostics ([#542](https://github.com/777genius/agent-notifications/pull/542)).
 
 ### Platform notes
+- Cursor CLI and Qoder share the common notification configuration; existing webhook destinations also receive events from these integrations when selected. User-edited or unowned native state is preserved and requires explicit reconciliation.
 - Uses the basic five-platform artifact profile with separate downloaded macOS and Codex checks. This does not claim full native, eleven-cell OpenCode, visible desktop, cold-start, physical Intel or live-provider qualification.
 
 ## [1.49.10] - 2026-10-26
