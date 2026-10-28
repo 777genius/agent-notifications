@@ -7,9 +7,50 @@ import ApplicationServices
 import AVFoundation
 import CoreAudio
 import CoreMedia
+import Darwin
 import ScreenCaptureKit
 
 enum ProbeError: Error { case unavailable(String) }
+
+// NSRunningApplication.launchDate is unavailable for this normal direct child.
+// The kernel birth time binds both observations without depending on LaunchServices.
+func processStartIdentity(_ pid: pid_t) -> String? {
+    guard pid > 0 else { return nil }
+    var info = proc_bsdinfo()
+    let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+    guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size,
+          info.pbi_pid == UInt32(pid), info.pbi_start_tvsec > 0,
+          info.pbi_start_tvusec < 1_000_000 else { return nil }
+    return "\(info.pbi_start_tvsec):\(info.pbi_start_tvusec)"
+}
+
+func matchesProcessStart(_ pid: pid_t, _ expected: String) -> Bool {
+    return !expected.isEmpty && processStartIdentity(pid) == expected
+}
+
+func testDirectChildIdentity() throws -> [String: Any] {
+    let child = Process()
+    child.executableURL = URL(fileURLWithPath: "/bin/sleep")
+    child.arguments = ["20"]
+    try child.run()
+    defer {
+        if child.isRunning { kill(child.processIdentifier, SIGKILL) }
+        child.waitUntilExit()
+    }
+    let pid = child.processIdentifier
+    guard let identity = processStartIdentity(pid), matchesProcessStart(pid, identity),
+          !matchesProcessStart(pid, "1:0") else {
+        throw ProbeError.unavailable("direct_child_kernel_identity_unavailable_or_unstable")
+    }
+    child.terminate()
+    child.waitUntilExit()
+    guard !matchesProcessStart(pid, identity) else {
+        throw ProbeError.unavailable("terminated_child_kernel_identity_still_matched")
+    }
+    return ["scope": "native_direct_child_kernel_identity_only", "stable_identity": true,
+            "mismatched_identity_rejected": true, "reaped_child_identity_rejected": true,
+            "child_collected": !child.isRunning, "desktop_qualified": false]
+}
 
 func publish(_ value: [String: Any]) {
     let data = try! JSONSerialization.data(withJSONObject: value, options: [.sortedKeys])
@@ -196,6 +237,9 @@ final class ProductCapture: NSObject, SCStreamOutput, SCStreamDelegate, @uncheck
             let args = Array(CommandLine.arguments.dropFirst())
             guard let operation = args.first else { throw ProbeError.unavailable("operation_missing") }
             switch operation {
+            case "test-process-identity":
+                guard args.count == 1 else { throw ProbeError.unavailable("fixed_identity_test_only") }
+                publish(try testDirectChildIdentity())
             case "preflight":
                 let session = CGSessionCopyCurrentDictionary() as? [String: Any] ?? [:]
                 var device = AudioDeviceID(0)
@@ -222,21 +266,26 @@ final class ProductCapture: NSObject, SCStreamOutput, SCStreamDelegate, @uncheck
                     $0.bundleIdentifier == "com.777genius.agent-notifications"
                     && $0.bundleURL?.resolvingSymlinksInPath().path == expected
                     && $0.executableURL?.resolvingSymlinksInPath().path == executable
+                    && !$0.isTerminated
                 }
                 func facts(_ app: NSRunningApplication) -> [String: Any] {
                     return ["pid": Int(app.processIdentifier), "active": app.isActive,
                             "finished_launching": app.isFinishedLaunching,
-                            "process_start_identity": app.launchDate.map { String($0.timeIntervalSince1970.bitPattern) } ?? "",
+                            "process_start_identity": processStartIdentity(app.processIdentifier) ?? "",
+                            "process_start_source": "kernel_proc_bsdinfo",
                             "activation_policy": app.activationPolicy.rawValue]
                 }
                 var result: [String: Any] = ["installed_helper_pids": helpers.map { Int($0.processIdentifier) },
                                             "installed_helpers": helpers.map { facts($0) }]
                 if operation == "activate-permission-helper" {
-                    guard let pid = Int32(args[2]), pid > 0, UInt64(args[3]) != nil else {
+                    let start = args[3].split(separator: ":", omittingEmptySubsequences: false)
+                    guard let pid = Int32(args[2]), pid > 0, start.count == 2,
+                          let seconds = UInt64(start[0]), seconds > 0,
+                          let microseconds = UInt64(start[1]), microseconds < 1_000_000 else {
                         throw ProbeError.unavailable("observed_owned_helper_pid_required")
                     }
                     let exact = helpers.filter { $0.processIdentifier == pid
-                        && $0.launchDate.map { String($0.timeIntervalSince1970.bitPattern) } == args[3] }
+                        && !$0.isTerminated && matchesProcessStart(pid, args[3]) }
                     // An early completed request can disappear between the two
                     // observations. Never activate a replacement PID or relaunch.
                     if exact.count == 1 {

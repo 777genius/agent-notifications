@@ -31,6 +31,7 @@ func TestPiRuntimePreparationOwnsCanonicalPresentationAssets(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(stage, entry), []byte("TEST inert writer "+installruntime.WriterProtocolMarker), 0700); err != nil {
 		t.Fatal(err)
 	}
+	installerNativeFixture(t, stage)
 	args := []string{"--stage", stage, "--target", filepath.Join(runtimeRoot, "bin"), "--entry", entry, "--control-root", control, "--consumer", piauthority.PreparationConsumer}
 	if err := installRuntime(args, io.Discard); err != nil {
 		t.Fatal(err)

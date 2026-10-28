@@ -85,7 +85,7 @@ class ConsentObservation(unittest.TestCase):
     def test_activation_is_once_bound_to_observed_start_and_never_proves_grant(self):
         child = self.child(b"", delay=20)
         calls, receipt = [], {}
-        helper = {"pid": 41, "process_start_identity": "987654", "finished_launching": True}
+        helper = {"pid": 41, "process_start_identity": "987654:123", "finished_launching": True}
 
         def observe(*args):
             calls.append(args)
@@ -100,7 +100,7 @@ class ConsentObservation(unittest.TestCase):
         helper.update(pid=42, process_start_identity="different")
         self.assertEqual(observed(), [])
         self.assertEqual([row for row in calls if row[0] == "activate-permission-helper"],
-                         [("activate-permission-helper", "/TEST/owned.app", "41", "987654")])
+                         [("activate-permission-helper", "/TEST/owned.app", "41", "987654:123")])
         with self.assertRaises((RuntimeError, KeyError)):
             M.observed_permission(receipt["helper_activation"])
 
@@ -108,7 +108,7 @@ class ConsentObservation(unittest.TestCase):
         exited = self.child(b"")
         exited.communicate(timeout=3)
         pending = self.child(b"", delay=20)
-        states = ((exited, [{"pid": 41, "process_start_identity": "987654", "finished_launching": True}]),
+        states = ((exited, [{"pid": 41, "process_start_identity": "987654:123", "finished_launching": True}]),
                   (pending, [{"pid": 41, "finished_launching": True}]),
                   (pending, [{"pid": 41}, {"pid": 42}]))
         for child, helpers in states:

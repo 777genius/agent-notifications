@@ -96,6 +96,7 @@ jobs:
             -framework AppKit -framework ApplicationServices -framework AVFoundation \
             -framework CoreAudio -framework CoreMedia -framework ScreenCaptureKit \
             -o "$RUNNER_TEMP/TEST-pi-macos/observer"
+          "$RUNNER_TEMP/TEST-pi-macos/observer" test-process-identity > "$RUNNER_TEMP/TEST-pi-macos/evidence/process-identity.json"
           "$RUNNER_TEMP/TEST-pi-macos/observer" preflight > "$RUNNER_TEMP/TEST-pi-macos/evidence/observer-preflight.json"
       - uses: actions/setup-go@v7
         if: ${{ !inputs.observer_only }}
