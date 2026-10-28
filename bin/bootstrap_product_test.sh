@@ -1354,7 +1354,6 @@ BOOTSTRAP_SUMMARY_FILE="$TEST_PARALLEL_CASE/summary"
 export BOOTSTRAP_SUMMARY_FILE
 # Fixture adapters only: no agent/vendor CLI or real profile is used.
 progress_child_running() {
-    local running
     if [ "${TEST_PARALLEL_FAIL:-}" = trailing ] && [ ! -f "$TEST_PARALLEL_CASE/trailing-injected" ] &&
         [ -f "$_PARALLEL_ROOT/opencode/result" ]; then
         local index=0
@@ -1370,8 +1369,13 @@ progress_child_running() {
             index=$((index + 1))
         done
     fi
-    for running in $(jobs -pr) $(jobs -ps); do [ "$running" != "$1" ] || return 0; done
-    return 1
+    local running result=1 _BOOTSTRAP_JOB_QUERY=true _BOOTSTRAP_JOB_QUERY_INTERRUPT=0
+    for running in $(jobs -pr) $(jobs -ps); do
+        if [ "$running" = "$1" ]; then result=0; break; fi
+    done
+    _BOOTSTRAP_JOB_QUERY=false
+    [ "$_BOOTSTRAP_JOB_QUERY_INTERRUPT" -eq 0 ] || exit "$_BOOTSTRAP_JOB_QUERY_INTERRUPT"
+    return "$result"
 }
 parallel_phase() {
     if [ -z "$_PARALLEL_WORKER" ]; then

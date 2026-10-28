@@ -63,6 +63,7 @@ _PARALLEL_ACTIVE=false
 _PARALLEL_IN_FLIGHT=false
 _PARALLEL_DISPATCHING=false
 _PARALLEL_INTERRUPT_STATUS=0
+_BOOTSTRAP_JOB_QUERY=false
 _PARALLEL_WORKER=""
 _PARALLEL_GATE_HELD=false
 _PARALLEL_GATE_ABSENT_FAILURES=0
@@ -1372,9 +1373,15 @@ progress_snapshots() {
 }
 
 progress_child_running() {
-    local running
-    for running in $(jobs -pr) $(jobs -ps); do [ "$running" != "$1" ] || return 0; done
-    return 1
+    # Keep the parent job roster: a pipeline loses it in Bash. Defer an
+    # interrupt's exit until Bash finishes parsing these command substitutions.
+    local running result=1 _BOOTSTRAP_JOB_QUERY=true _BOOTSTRAP_JOB_QUERY_INTERRUPT=0
+    for running in $(jobs -pr) $(jobs -ps); do
+        if [ "$running" = "$1" ]; then result=0; break; fi
+    done
+    _BOOTSTRAP_JOB_QUERY=false
+    [ "$_BOOTSTRAP_JOB_QUERY_INTERRUPT" -eq 0 ] || exit "$_BOOTSTRAP_JOB_QUERY_INTERRUPT"
+    return "$result"
 }
 
 # Join only this job. No watchdog process, reused PID or indefinite graceful wait.
@@ -2105,9 +2112,10 @@ bootstrap_cleanup() {
 }
 
 bootstrap_interrupt() {
-    # Defer only across spawn + PID registration, so a signal can never strand
-    # a just-created process group outside the parent's owned job roster.
+    # Defer across spawn + PID registration so a signal cannot strand a new
+    # process group. Queries use a separate function-local parser guard.
     if [ "$_PARALLEL_DISPATCHING" = true ]; then _PARALLEL_INTERRUPT_STATUS=$1
+    elif [ "${_BOOTSTRAP_JOB_QUERY:-false}" = true ]; then _BOOTSTRAP_JOB_QUERY_INTERRUPT=$1
     else exit "$1"; fi
 }
 
