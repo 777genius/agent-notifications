@@ -42,10 +42,11 @@ def metadata(platform="linux"):
                            "pending_question_at_click": name == "question"} for name in A.CASES]}
     if platform == "darwin":
         desktop["native_helper_verified"] = True
-        build["stage_inventory"]["ClaudeNotifier.app.managed-runtime.json"] = {"sha256": HASH}
+        build["stage_inventory"]["ClaudeNotifier.app.managed-runtime.json"] = {"sha256": HASH, "bytes": 1}
+        build["native_attestation_sha256"] = HASH
     if platform == "windows":
         build["embedded_callback_verified"] = True
-        build["stage_inventory"]["claude-notifications-windows-amd64-focus.exe"] = {"sha256": HASH}
+        build["stage_inventory"]["claude-notifications-windows-amd64-focus.exe"] = {"sha256": HASH, "bytes": 1}
         desktop.update(windows_client=True, render_route_observed=True, host_architecture="AMD64")
     return build, acquisition, process, desktop
 
@@ -88,6 +89,20 @@ class AggregateGuards(unittest.TestCase):
             A.qualify("windows", SOURCE, *values)
         values[3]["execution_mode"] = "x64_emulation"
         A.qualify("windows", SOURCE, *values)
+
+    def test_missing_pi_hash_and_empty_native_inventory_cannot_agree_as_null(self):
+        values = metadata()
+        values[1]["binary_sha256"] = None
+        values[2].pop("pi_binary_sha256")
+        values[3].pop("pi_binary_sha256")
+        with self.assertRaisesRegex(ValueError, "pi_binary_identity"):
+            A.qualify("linux", SOURCE, *values)
+        for platform, name in (("windows", "claude-notifications-windows-amd64-focus.exe"),
+                               ("darwin", "ClaudeNotifier.app.managed-runtime.json")):
+            values = metadata(platform)
+            values[0]["stage_inventory"][name] = {}
+            with self.assertRaises(ValueError):
+                A.qualify(platform, SOURCE, *values)
 
 
 if __name__ == "__main__":

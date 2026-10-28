@@ -233,6 +233,8 @@ def run(args):
         held.remove((live, live_provider))
         sink.quiet(1)
         report["cases"].append({"case": "live-B-remove-current-revision-denied", "native_settled": True, "webhook": None, "child_collected": True})
+        native("success", expected=None)
+        report["cases"][-1]["case"] = "fresh-after-remove-no-effect"
         P.require((profile / "extensions/TEST-witness.ts").is_file(), "installed_pi_foreign_extension_removed")
         report["status"] = "passed_installed_pi_process"
     except Exception as error:

@@ -20,7 +20,7 @@ CHECKS = {"native_tui", "configured_banner_policy", "configured_audio_policy", "
 PROCESS_CASES = {"normal-quit-drains-admitted-webhook", "hung-quit-original-budget", "webhook-config-disabled",
                  "webhook-consent-disabled", "unchanged-reinstall-restores-derived-metadata",
                  "live-A-update-old-revision-denied", "live-B-remove-current-revision-denied",
-                 "setup-update", "setup-repair", "setup-uninstall"}
+                 "setup-update", "setup-repair", "setup-uninstall", "fresh-after-remove-no-effect"}
 NATIVE_MODES = {("success", "json"), ("success", "print"), ("retry", "json"), ("followup", "json"),
                 ("error", "json"), ("abort", "rpc"), ("ui", "rpc")}
 
@@ -53,9 +53,13 @@ def qualify(platform, source, build, acquisition, process, desktop):
             and acquisition.get("platform") == platform and acquisition.get("architecture") == arch
             and acquisition.get("version") == PINS["version"] and acquisition.get("source_commit") == PINS["source_commit"]
             and acquisition.get("archive_sha256") == PINS["targets"][target]["sha256"], "pi_acquisition_not_immutable_pin")
+    require(isinstance(acquisition.get("binary_sha256"), str)
+            and re.fullmatch(r"[a-f0-9]{64}", acquisition["binary_sha256"]), "pi_binary_identity_missing")
     main_hash, package_hash = build.get("candidate_binary_sha256"), build.get("package_sha256")
     require(isinstance(main_hash, str) and re.fullmatch(r"[a-f0-9]{64}", main_hash)
-            and isinstance(package_hash, str) and re.fullmatch(r"[a-f0-9]{64}", package_hash), "candidate_hash_missing")
+            and isinstance(package_hash, str) and re.fullmatch(r"[a-f0-9]{64}", package_hash)
+            and isinstance(build.get("updated_package_sha256"), str)
+            and re.fullmatch(r"[a-f0-9]{64}", build["updated_package_sha256"]), "candidate_hash_missing")
     suffix = ".exe" if platform == "windows" else ""
     inventory = build.get("stage_inventory", {})
     main_name = "claude-notifications-" + platform + "-" + arch + suffix
@@ -87,17 +91,24 @@ def qualify(platform, source, build, acquisition, process, desktop):
         if row["case"] == "question":
             require(row.get("pending_question_at_click") is True, "native_question_was_not_pending")
     if platform == "darwin":
-        require(desktop.get("native_helper_verified") is True
-                and "ClaudeNotifier.app.managed-runtime.json" in inventory, "macos_candidate_native_helper_unverified")
+        attestation = inventory.get("ClaudeNotifier.app.managed-runtime.json", {})
+        require(desktop.get("native_helper_verified") is True and regular_artifact(attestation)
+                and attestation["sha256"] == build.get("native_attestation_sha256"), "macos_candidate_native_helper_unverified")
     if platform == "windows":
         require(build.get("embedded_callback_verified") is True
-                and "claude-notifications-windows-amd64-focus.exe" in inventory
+                and regular_artifact(inventory.get("claude-notifications-windows-amd64-focus.exe", {}))
                 and desktop.get("windows_client") is True and desktop.get("render_route_observed") is True,
                 "windows_client_audio_callback_or_focus_unobserved")
         if desktop.get("host_architecture") in ("ARM64", "arm64", "aarch64") and arch == "amd64":
             require(desktop.get("execution_mode") == "x64_emulation", "windows_emulation_not_disclosed")
     return {"status": "qualified", "candidate_binary_sha256": main_hash, "package_sha256": package_hash,
             "pi_binary_sha256": acquisition["binary_sha256"], "cases": sorted(CASES)}
+
+
+def regular_artifact(value):
+    return (isinstance(value, dict) and not value.get("link") and isinstance(value.get("sha256"), str)
+            and re.fullmatch(r"[a-f0-9]{64}", value["sha256"]) is not None
+            and type(value.get("bytes")) is int and 0 < value["bytes"] <= 512 * 1024 * 1024)
 
 
 def main():
