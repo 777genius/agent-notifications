@@ -1,5 +1,6 @@
 // TEST observer for the installed Pi product. Never sends a notification,
-// plays a cue, grants permission or performs the product's focus callback.
+// plays a cue or performs the product's focus callback. Ordinary OS consent
+// uses only a physical click on the uniquely observed candidate Allow dialog.
 // ScreenCaptureKit/CGEvent primitives match pi_native_preflight_darwin.swift.
 import AppKit
 import ApplicationServices
@@ -74,6 +75,44 @@ func rectangle(_ element: AXUIElement) -> CGRect? {
     }
 }
 
+@MainActor func notificationConsent() -> [[String: Any]] {
+    let allowed = Set(["com.apple.notificationcenterui", "com.apple.UserNotificationCenter",
+                       "com.apple.usernotificationsd", "com.777genius.agent-notifications"])
+    var result: [[String: Any]] = []
+    for app in NSWorkspace.shared.runningApplications where allowed.contains(app.bundleIdentifier ?? "") {
+        let root = AXUIElementCreateApplication(app.processIdentifier)
+        let windows = attribute(root, kAXWindowsAttribute) as? [AXUIElement] ?? [root]
+        for window in windows {
+            var labels = [String]()
+            var allowButtons = [CGRect]()
+            var remaining = 1200
+            func visit(_ element: AXUIElement, _ depth: Int) {
+                guard remaining > 0, depth < 20 else { return }
+                remaining -= 1
+                let text = [kAXValueAttribute, kAXTitleAttribute, kAXDescriptionAttribute].compactMap {
+                    attribute(element, $0) as? String
+                }
+                labels.append(contentsOf: text)
+                if attribute(element, kAXRoleAttribute) as? String == kAXButtonRole,
+                   text.contains("Allow"), let box = rectangle(element) { allowButtons.append(box) }
+                for child in attribute(element, kAXChildrenAttribute) as? [AXUIElement] ?? [] { visit(child, depth + 1) }
+            }
+            visit(window, 0)
+            let mentionsCandidate = labels.contains { $0.contains("Agent Notifications") }
+            let mentionsNotification = labels.contains { $0.lowercased().contains("notification") }
+            let hasDenial = labels.contains { $0 == "Don't Allow" || $0 == "Don’t Allow" }
+            if mentionsCandidate && mentionsNotification && hasDenial && allowButtons.count == 1 {
+                let box = allowButtons[0]
+                result.append(["observer": "native_accessibility", "os_dialog_bundle": app.bundleIdentifier ?? "",
+                               "os_dialog_pid": Int(app.processIdentifier), "candidate_name": "Agent Notifications",
+                               "allow_button": "Allow", "denial_button_observed": true,
+                               "bounds": [Double(box.minX), Double(box.minY), Double(box.width), Double(box.height)]])
+            }
+        }
+    }
+    return result
+}
+
 final class ProductCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
     private let lock = NSLock()
     private let output: FileHandle
@@ -146,6 +185,17 @@ final class ProductCapture: NSObject, SCStreamOutput, SCStreamDelegate, @uncheck
                 publish(["checks": checks, "foreground": foreground(), "desktop_qualified": false])
                 guard checks.values.allSatisfy({ $0 }) else { throw ProbeError.unavailable("native_observer_prerequisite_unavailable") }
             case "foreground": publish(foreground())
+            case "notification-consent", "allow-notification-consent":
+                guard args.count == 1 else { throw ProbeError.unavailable("fixed_notification_consent_only") }
+                let dialogs = notificationConsent()
+                if operation == "allow-notification-consent" {
+                    guard dialogs.count == 1 else { throw ProbeError.unavailable("unique_candidate_notification_consent_dialog_required") }
+                    let box = dialogs[0]["bounds"] as! [Double]
+                    let point = CGPoint(x: box[0] + box[2] / 2, y: box[1] + box[3] / 2)
+                    CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left)?.post(tap: .cghidEventTap)
+                    CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left)?.post(tap: .cghidEventTap)
+                }
+                publish(["dialogs": dialogs, "physical_allow_click": operation == "allow-notification-consent"])
             case "banner", "click":
                 guard args.count == 2, ["Pi completed a task", "Pi is waiting for input"].contains(args[1]) else {
                     throw ProbeError.unavailable("fixed_product_body_required")

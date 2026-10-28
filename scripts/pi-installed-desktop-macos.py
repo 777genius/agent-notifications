@@ -20,7 +20,6 @@ import signal
 import subprocess
 import tempfile
 import time
-import uuid
 import wave
 
 REPO = Path(__file__).resolve().parents[1]
@@ -199,10 +198,11 @@ def run(args):
     P.require(platform.system() == "Darwin", "actual_macos_host_required")
     root = Path(tempfile.mkdtemp(prefix="TEST-pi-installed-macos-")).resolve()
     root.chmod(0o700)
+    args.report.parent.mkdir(parents=True, exist_ok=True)
     sink, initial_provider = P.Webhooks(), F.Provider("success")
     env = F.prepare(root, initial_provider, "success")
     env["AGENT_NOTIFICATIONS_CONFIG"] = str(root / "global/config.json")
-    profile, terminals = root / "agent", []
+    profile, terminals, helpers = root / "agent", [], []
     report = {"schema_version": 1, "scope": "actual_installed_pi_macos_desktop", "status": "failed",
               "test_root": str(root), "source_sha": command(["git", "-C", REPO, "rev-parse", "HEAD"]).strip(),
               "working_tree_dirty": bool(command(["git", "-C", REPO, "status", "--porcelain"])),
@@ -381,9 +381,25 @@ def run(args):
         report["helper"].update(installed_path=str(app), installed_tree_sha256=native["InstalledTreeSHA256"],
                                 executable_sha256=P.sha(helper), source_stage_attestation_sha256=P.sha(args.runtime_stage / "ClaudeNotifier.app.managed-runtime.json"))
         report["native_helper_verified"] = True
-        token, nonce = str(uuid.uuid4()), str(uuid.uuid4())
-        permission = json.loads(command([helper, "--capabilities-json", "--permission-status", "--correlation-id", token, "--nonce", nonce]))
-        P.require(permission.get("correlationID") == token and permission.get("nonce") == nonce, "candidate_helper_permission_identity_wrong")
+        permission = json.loads(D.command(args.candidate, ["setup-notifications", "permission-status", "--control-root", root / "control", "--json"], root, env))
+        report["notification_consent"] = {"initial_permission": permission.get("permission"), "requested": False}
+        if permission.get("permission") == "undetermined":
+            started = time.monotonic()
+            request = subprocess.Popen([str(args.candidate), "setup-notifications", "request-permission",
+                                        "--control-root", str(root / "control"), "--expected-generation", str(ledger["Generation"]), "--json"],
+                                       cwd=root / "project", env=env, stdin=subprocess.DEVNULL,
+                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+            helpers.append(request)
+            report["notification_consent"]["requested"] = True
+            dialogs = wait_for(lambda: observer("notification-consent")["dialogs"],
+                               "actual_candidate_notification_consent_dialog_unavailable", seconds=15)
+            command(["/usr/sbin/screencapture", "-x", args.report.parent / "actual-notification-consent.png"])
+            click = observer("allow-notification-consent")
+            out, err = request.communicate(timeout=10)
+            P.require(request.returncode == 0 and not err and len(out) < 65536, "normal_notification_consent_request_failed")
+            permission = json.loads(out)
+            report["notification_consent"].update(dialogs=dialogs, physical_allow_click=click["physical_allow_click"],
+                                                   elapsed_seconds=round(time.monotonic() - started, 3), request_collected=True)
         report["candidate_notification_permission"] = permission.get("permission")
         P.require(permission.get("permission") == "allowed", "candidate_signed_helper_notification_permission_unavailable")
         policy = json.loads((root / "control/agent-notifications.json").read_text())
@@ -404,6 +420,12 @@ def run(args):
         report.update(status="passed_native_product_observations", native_product_observations_passed=True)
     except Exception as error:
         report["failure"] = str(error)
+        try:
+            screenshot = args.report.parent / "native-failure.png"
+            command(["/usr/sbin/screencapture", "-x", screenshot])
+            report["native_failure_screenshot_sha256"] = P.sha(screenshot)
+        except Exception as capture_error:
+            report["native_failure_capture"] = str(capture_error)
     finally:
         failures = []
         for terminal in reversed(terminals):
@@ -411,9 +433,17 @@ def run(args):
                 terminal.close()
             except Exception as error:
                 failures.append(str(error))
+        for child in helpers:
+            if child.poll() is None:
+                os.killpg(child.pid, signal.SIGTERM)
+                try:
+                    child.communicate(timeout=3)
+                except subprocess.TimeoutExpired:
+                    os.killpg(child.pid, signal.SIGKILL)
+                    child.communicate(timeout=3)
         initial_provider.close()
         sink.close()
-        report["owned_children_collected"] = not failures and all(t.collected() for t in terminals)
+        report["owned_children_collected"] = not failures and all(t.collected() for t in terminals) and all(p.poll() is not None for p in helpers)
         if failures or not report["owned_children_collected"]:
             report.update(status="failed", native_product_observations_passed=False, cleanup_failures=failures)
         args.report.parent.mkdir(parents=True, exist_ok=True)
