@@ -4,7 +4,7 @@
     "hooks": "./hooks/hooks-codex.json",
     "description": "Desktop notifications for coding agents with sounds and click-to-focus navigation.",
     "repository": "https://github.com/777genius/agent-notifications",
-    "license": "GPL-3.0",
+    "license": "GPL-3.0-or-later",
     "interface": {
         "displayName": "Agent Notifications",
         "shortDescription": "Desktop alerts for agents",
