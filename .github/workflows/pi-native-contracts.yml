@@ -1,0 +1,62 @@
+name: Pi actual native process contracts
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  native:
+    name: Pi 1.4 native events / ${{ matrix.platform }}
+    runs-on: ${{ matrix.platform == 'linux' && (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || vars.CI_LINUX_RUNNER || 'ubuntu-24.04') || matrix.platform == 'darwin' && (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'macos-15' || vars.CI_MACOS_15_RUNNER || 'macos-15') || 'windows-2025' }}
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {platform: linux, arch: amd64}
+          - {platform: darwin, arch: arm64}
+          - {platform: windows, arch: amd64}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Pin and native oracle guards
+        run: |
+          python -B scripts/test_acquire_pi_native.py -v
+          python -B scripts/test_pi_native_fixture.py -v
+      - name: Acquire exact official standalone
+        shell: pwsh
+        env:
+          PI_PLATFORM: ${{ matrix.platform }}
+          PI_ARCH: ${{ matrix.arch }}
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'TEST-pi-native-contracts'
+          $report = Join-Path $env:RUNNER_TEMP 'pi-native-contracts/acquisition.json'
+          python -B scripts/acquire-pi-native.py --download --platform $env:PI_PLATFORM --arch $env:PI_ARCH --output $root --report $report
+          exit $LASTEXITCODE
+      - name: Real Pi loader provider and lifecycle events
+        shell: pwsh
+        run: |
+          $evidence = Join-Path $env:RUNNER_TEMP 'pi-native-contracts'
+          $pin = Get-Content -LiteralPath (Join-Path $evidence 'acquisition.json') -Raw | ConvertFrom-Json
+          python -B scripts/pi-native-contracts.py --pi-executable $pin.executable --report (Join-Path $evidence 'events.json')
+          exit $LASTEXITCODE
+      - name: Preserve bounded contract evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: pi-native-contracts-${{ matrix.platform }}-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/pi-native-contracts/*.json
+          if-no-files-found: error
+          retention-days: 14

@@ -94,3 +94,26 @@ replacement, missing-owned repair and removal while a foreign extension remains
 usable. Its synthetic package is independent of Notifications. The receipt marks
 product notification qualification false; production setup/runtime tests remain
 separate requirements.
+
+## Pinned standalone and native event oracle
+
+`scripts/testdata/pi-native/pins.json` freezes the official v1.4.0 standalone
+archive bytes for each supported target. `scripts/acquire-pi-native.py` checks
+size and SHA-256 before bounded extraction; archive and executable hashes have
+separate names in its receipt. It never resolves a moving release or npm graph.
+
+```bash
+python -B scripts/acquire-pi-native.py --download --platform linux --arch amd64 \
+  --output /absolute/TEST-tools/pi --report /absolute/TEST-evidence/pi-acquisition.json
+python -B scripts/pi-native-contracts.py \
+  --pi-executable /absolute/TEST-tools/pi/pi/pi \
+  --report /absolute/TEST-evidence/pi-events.json
+```
+
+`pi-native-contracts.yml` runs real Pi JSON/RPC/print processes and its ordinary
+auto-discovered foreign witness against a loopback HTTP provider. It verifies
+success, retry, queued followup, error despite exit zero, abort without a boundary,
+idle RPC UI and print completion. It records event counts and outcome metadata,
+never transcripts. Every provider and child is collected. This is native Pi
+contract evidence; product installation, TUI delivery, one-shot product shutdown
+drain and desktop acceptance are separate candidate gates.
