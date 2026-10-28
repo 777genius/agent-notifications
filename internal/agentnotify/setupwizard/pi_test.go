@@ -3,9 +3,11 @@
 package setupwizard
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/777genius/agent-notifications/internal/agentnotify/piauthority"
@@ -13,6 +15,27 @@ import (
 	"github.com/777genius/agent-notifications/internal/agentnotify/portableasset"
 	"github.com/777genius/agent-notifications/internal/installruntime"
 )
+
+func TestPiPublicPickerOffersNativeExtensionWithoutMCPUnitPrompt(t *testing.T) {
+	var out bytes.Buffer
+	prompt, err := NewPublicPrompt(strings.NewReader("pi\n"), &out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	agents, err := prompt.SelectAgents(testCtx(t), nil)
+	if err != nil || len(agents) != 1 || agents[0] != "pi" {
+		t.Fatal("Pi not selectable", agents, err)
+	}
+	out.Reset()
+	prompt, err = NewPublicPrompt(strings.NewReader(""), &out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := FillInteractive(testCtx(t), Request{Action: ActionInstall, Agents: agents}, prompt, nil)
+	if err != nil || req.Hooks == nil || *req.Hooks || req.AgentNotify == nil || !*req.AgentNotify || out.Len() != 0 {
+		t.Fatal("Pi asked for unsupported MCP/hook units", err, out.String())
+	}
+}
 
 func TestPiWizardReservedHandoffAndFreshConsumer(t *testing.T) {
 	control, runtimeRoot, global, primary, generation := managedRuntime(t)
@@ -90,5 +113,18 @@ func TestPiWizardReservedHandoffAndFreshConsumer(t *testing.T) {
 	}
 	if s.Policy.Enabled || s.Installation.Enabled || s.Installation.Ledger.PendingMutation != nil {
 		t.Fatal("opt-out changed unrelated policy or left unfinished setup")
+	}
+	req.Action = ActionUninstall
+	req.ClientExecutable = ""
+	result, err = Run(ctx, req)
+	if err != nil || result.Outcome != "completed" {
+		t.Fatalf("CLI-missing native removal: %+v %v", result, err)
+	}
+	s, err = installruntime.ReadPolicySnapshot(ctx, control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s.Installation.Ledger.Consumers) != 0 || s.Installation.Ledger.PendingMutation != nil || s.Policy.Enabled {
+		t.Fatal("CLI-free removal retained a live/fake consumer or changed unrelated policy")
 	}
 }

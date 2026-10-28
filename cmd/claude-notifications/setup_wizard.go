@@ -34,7 +34,7 @@ import (
 )
 
 const setupWizardHelp = `Usage: claude-notifications setup-notifications wizard [OPTIONS]
-Master for hooks plus portable MCP/skill.
+Master for hooks, portable MCP/skill and the native Pi extension.
 TTY stdin prompts for agents, an existing-install action, and units when those flags are omitted, then shows a preflight plan and asks for confirmation.
 When Claude and Codex already have different units, the TTY shows both and does not collapse omission to one bool.
 --json never prompts. Progress phases go to stderr. No TTY and no --agents/--yes is invalid for mutation, not a hang. Omitted --agents with --yes is still invalid unless a matching pending intent restores them.
@@ -44,7 +44,7 @@ installation is offered inspect, add/reinstall, uninstall, update, or repair.
   --action install|uninstall|inspect|update|repair
   --install-or-update       Bootstrap-only: install selected clients or update owned bindings first
   --preserve-existing-units Bootstrap auto mode: leave absent MCP units off when another binding already exists
-  --agents claude,codex|cursor|copilot-vscode   Cursor requires explicit --scope-root and --client-executable; select separately
+  --agents claude,codex|pi|cursor|copilot-vscode   Cursor requires explicit --scope-root and --client-executable; select separately
   Omit on inspect to report both clients
   --hooks true|false          Omit on install of new targets to include hooks; omit on update/repair to keep live units; omit on uninstall to select all units
   --agent-notify true|false   Omit on install of new targets to include portable MCP+skill; omit on update/repair to keep live units
@@ -62,6 +62,10 @@ installation is offered inspect, add/reinstall, uninstall, update, or repair.
   --global-config PATH
   --codex-home PATH           Explicit Codex UAP client config root; else CODEX_HOME once
   --claude-config PATH        Explicit Claude UAP client config root; else CLAUDE_CONFIG_DIR once
+  --pi-agent-dir PATH         Pi profile; else PI_CODING_AGENT_DIR or ~/.pi/agent once
+  --pi-executable PATH        Native Pi executable; Windows requires standalone .exe
+  --pi-desktop true|false     Pi desktop consent; omission preserves existing choice
+  --pi-webhook true|false     Pi webhook consent; omission preserves existing choice
   --client-executable PATH    Selected client executable; never launched from PATH
   --claude-executable PATH    Claude executable when installing both clients
   --codex-executable PATH     Codex executable when installing both clients
@@ -800,14 +804,17 @@ func parseSetupWizard(args []string) (setupwizard.Request, bool, error) {
 	req.PiAgentDir = values["pi-agent-dir"]
 	home, homeErr := os.UserHomeDir()
 	cwd, cwdErr := os.Getwd()
-	if containsProduct(req.Agents, "pi") && req.PiAgentDir == "" {
+	if (len(req.Agents) == 0 || containsProduct(req.Agents, "pi")) && req.PiAgentDir == "" {
 		if homeErr != nil || cwdErr != nil {
-			return req, jsonOut, errors.New("invalid_pi_profile")
-		}
-		var err error
-		req.EnvPiAgentDir, err = setupwizard.ResolvePiAgentDir(home, os.Getenv("PI_CODING_AGENT_DIR"), cwd)
-		if err != nil {
-			return req, jsonOut, err
+			if containsProduct(req.Agents, "pi") {
+				return req, jsonOut, errors.New("invalid_pi_profile")
+			}
+		} else {
+			var err error
+			req.EnvPiAgentDir, err = setupwizard.ResolvePiAgentDir(home, os.Getenv("PI_CODING_AGENT_DIR"), cwd)
+			if err != nil && containsProduct(req.Agents, "pi") {
+				return req, jsonOut, err
+			}
 		}
 	}
 	for key, target := range map[string]**bool{"pi-desktop": &req.PiDesktop, "pi-webhook": &req.PiWebhook} {

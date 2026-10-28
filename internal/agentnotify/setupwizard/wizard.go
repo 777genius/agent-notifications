@@ -2310,7 +2310,7 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 				out.Outcome, out.Reason = "incomplete", "client_config_required"
 				return out, ErrRefused
 			}
-			if !explicitAbs(clientExecutable(req, agent)) {
+			if agent != portable.Pi && !explicitAbs(clientExecutable(req, agent)) {
 				out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "incomplete", Reason: "client_executable_required"})
 				out.Outcome, out.Reason = "incomplete", "client_executable_required"
 				return out, ErrRefused
@@ -4369,7 +4369,12 @@ func applyHostSnapshots(req *Request) {
 		return
 	}
 	if req.PiAgentDir == "" {
-		req.PiAgentDir = req.EnvPiAgentDir
+		for _, agent := range req.Agents {
+			if agent == "pi" {
+				req.PiAgentDir = req.EnvPiAgentDir
+				break
+			}
+		}
 	}
 	if req.CodexHome == "" {
 		req.CodexHome = req.EnvCodexHome
