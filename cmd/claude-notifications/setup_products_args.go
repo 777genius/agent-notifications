@@ -7,8 +7,8 @@ import (
 	"strings"
 )
 
-var productOrder = []string{"claude", "codex", "opencode", "gemini", "qoder", "pi", "cursor", "copilot-vscode"}
-var productLabels = map[string]string{"claude": "Claude", "codex": "Codex", "opencode": "OpenCode", "gemini": "Gemini CLI", "qoder": "Qoder", "pi": "Pi", "cursor": "Cursor CLI (explicit profile)", "copilot-vscode": "VS Code Local (explicit profile)"}
+var productOrder = []string{"claude", "codex", "opencode", "gemini", "qoder", "cursor", "pi", "copilot-vscode"}
+var productLabels = map[string]string{"claude": "Claude", "codex": "Codex", "opencode": "OpenCode", "gemini": "Gemini CLI", "qoder": "Qoder", "cursor": "Cursor CLI", "pi": "Pi", "copilot-vscode": "VS Code Local (explicit profile)"}
 var scopeKeys = []string{"claude-config", "codex-home", "opencode-config-dir", "gemini-home", "gemini-config-root", "qoder-config-root", "pi-agent-dir", "pi-executable", "claude-executable", "codex-executable", "opencode-executable", "gemini-executable", "qoder-executable", "control-root", "scope-root", "client-executable", "local-settings"}
 
 type setupProductsArgs struct {
@@ -183,24 +183,7 @@ func parseSetupProducts(args []string) (r setupProductsArgs, err error) {
 	if r.LocalNativeStop != nil || r.LocalMCP != nil || r.LocalSkills != nil || r.Manual != nil || r.Scopes["local-settings"] != "" {
 		return invalid()
 	}
-	if containsProduct(r.Products, "cursor") {
-		for _, raw := range args {
-			if strings.HasPrefix(raw, "--desktop=") || strings.HasPrefix(raw, "--webhook=") {
-				return invalid()
-			}
-		}
-		// Cursor is one existing selected wizard operation; the two-client
-		// Claude/Codex group and their policy configuration keep their meaning.
-		if len(r.Products) != 1 || routePresent || (r.Operation == "channels" && (len(seen) != 1 || r.IntentFile != "")) ||
-			((r.Operation == "confirm" || r.Operation == "prepare") && (r.Scopes["scope-root"] == "" || r.Scopes["client-executable"] == "")) {
-			return invalid()
-		}
-		if r.Operation == "preflight" && (r.IntentFile == "" || len(r.Scopes) > 0 || modeSeen) {
-			return invalid()
-		}
-		return r, nil
-	}
-	if r.Scopes["scope-root"] != "" || r.Scopes["client-executable"] != "" {
+	if !containsProduct(r.Products, "cursor") && (r.Scopes["scope-root"] != "" || r.Scopes["client-executable"] != "") {
 		return invalid()
 	}
 	portable, observer := false, false
@@ -222,7 +205,7 @@ func parseSetupProducts(args []string) (r setupProductsArgs, err error) {
 			return invalid()
 		}
 	}
-	if (!portable && (routePresent || r.AgentNotify || r.SkipAgentNotify)) || (!observer && (r.DesktopSet || r.WebhookSet)) || (r.SkipAgentNotify && routePresent) {
+	if (!portable && routePresent || !portable && !containsProduct(r.Products, "cursor") && (r.AgentNotify || r.SkipAgentNotify)) || (!observer && (r.DesktopSet || r.WebhookSet)) || (r.SkipAgentNotify && routePresent) {
 		return invalid()
 	}
 	if portable && !r.SkipAgentNotify {

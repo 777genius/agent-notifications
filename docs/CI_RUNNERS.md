@@ -99,6 +99,18 @@ run: its native result, evidence and owned cleanup must finish independently.
 Release/tag workflows and Pages deployments retain their existing independent
 operations. Disabled ReviewRouter keeps its existing concurrency.
 
+Meaningful PR base edits use a run-local merge of the exact event base and head,
+rather than GitHub's potentially stale synthetic merge commit. Both edited-event
+workflows force full native CI for that pair; title/body-only no-ops retain their
+existing isolation. The checkout helper is pinned independently of the checked-out
+source, so a stale checkout cannot select its implementation.
+
+A run-local base-edit merge is not release qualification. Those runs cannot use
+release-equivalent mode or create immutable native-input receipts. The unchanged
+release verifier still requires remotely fetchable exact-SHA evidence from an
+ordinary qualified run; skipped evidence is never accepted. Normal PR, push and
+manual checkout identities and release pins retain their existing behavior.
+
 Remove the applicable repository variable to restore the original GitHub runner
 without editing semantic matrices. Workflow changes affect future runs only;
 existing frozen tags and the already-created `v1.48.1` release run 37519336110 are

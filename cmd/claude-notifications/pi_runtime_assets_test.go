@@ -42,6 +42,9 @@ func TestPiRuntimePreparationOwnsCanonicalPresentationAssets(t *testing.T) {
 	if len(snapshot.Ledger.Consumers) != 1 || snapshot.Ledger.Consumers[piauthority.PreparationConsumer].RuntimeRoot != runtimeRoot {
 		t.Fatalf("fake/missing preparation consumer: %+v", snapshot.Ledger.Consumers)
 	}
+	if snapshot.Enabled {
+		t.Fatal("Pi byte preparation seeded unrelated portable service enablement")
+	}
 	for _, name := range []string{"claude_icon.png", "sounds/task-complete.mp3", "sounds/review-complete.mp3", "sounds/question.mp3", "sounds/plan-ready.mp3", "sounds/error.mp3"} {
 		path := filepath.Join(runtimeRoot, filepath.FromSlash(name))
 		wanted, err := notificationassets.NotificationAssets.ReadFile(name)

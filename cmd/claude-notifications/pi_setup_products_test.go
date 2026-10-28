@@ -88,6 +88,15 @@ func TestPiProductDiscoveryUsesNativeEnvironmentProfile(t *testing.T) {
 
 func TestPiFrozenIntentRetainsNativeScopeAndConsent(t *testing.T) {
 	i, path := bootstrapCodecFixture(t)
+	previousSource := selectorSourceCommit
+	selectorSourceCommit = strings.Repeat("1", 40)
+	t.Cleanup(func() { selectorSourceCommit = previousSource })
+	provenance, err := currentSelectorProvenance()
+	if err != nil {
+		t.Fatal(err)
+	}
+	provenance.Stage = i.Provenance.Stage
+	i.Provenance = provenance
 	r, err := parseSetupProducts([]string{"confirm", "--products", "pi", "--webhook"})
 	if err != nil {
 		t.Fatal(err)
@@ -114,6 +123,15 @@ func TestPiFrozenIntentRetainsNativeScopeAndConsent(t *testing.T) {
 	}
 	if !sameWizardBootstrapScope(want, want) {
 		t.Fatal("exact Pi scope rejected")
+	}
+	admitted, retained, err := admitBootstrapWizardIntent(path, want)
+	if err != nil || retained == nil || admitted.BootstrapExpectedGeneration == nil || admitted.BootstrapExpectedPolicy == nil || *admitted.BootstrapExpectedGeneration != loaded.Initial.Generation || *admitted.BootstrapExpectedPolicy != loaded.Initial.Policy {
+		t.Fatalf("normal Pi-only child admission lost original CAS: %+v %v", admitted, err)
+	}
+	mixed := loaded
+	mixed.Request.Products = []string{"cursor", "pi"}
+	if _, err := bootstrapWizardChild(mixed, []string{"pi"}); err == nil {
+		t.Fatal("unrefreshed mixed parent granted Pi-only scope")
 	}
 	changed := want
 	off := false

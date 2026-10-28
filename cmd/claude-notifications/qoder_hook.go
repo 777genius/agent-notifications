@@ -84,13 +84,13 @@ func runManagedQoderHook(args []string) {
 	if !desktop && !webhook {
 		return
 	}
-	root := filepath.Dir(filepath.Dir(executable))
+	root := current.Installation.Ledger.Consumers[qoderinstall.ConsumerID].RuntimeRoot
 	if _, err = logging.InitLogger(control); err != nil {
 		return
 	}
 	defer func() { _ = logging.Close() }()
 	// The legacy desktop adapter discovers only the verified transaction-owned
-	// helper aliases in this managed package. This process handles one event.
+	// helper aliases in the shared managed runtime. This process handles one event.
 	if desktop {
 		_ = os.Setenv("CLAUDE_PLUGIN_ROOT", root)
 	}

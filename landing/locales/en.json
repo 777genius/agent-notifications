@@ -1,7 +1,7 @@
 {
   "seo": {
     "title": "Agent Notifications - Stay in flow",
-    "description": "Desktop notifications and webhooks for Claude, Codex CLI and OpenCode. Gemini CLI: macOS / Linux / Windows. Cursor CLI: Linux amd64 / macOS arm64 / Windows amd64. Qoder: separate package. Pi: sounds and terminal focus in the local TUI."
+    "description": "Desktop notifications and webhooks for Claude, Codex CLI, OpenCode, Gemini CLI, Cursor CLI, Qoder and Pi. Agent and platform limits apply. Pi: sounds and terminal focus in the local TUI."
   },
   "language": {
     "label": "Language",
@@ -27,7 +27,7 @@
     "title": "Stay in flow",
     "emphasis": "We'll get your attention",
     "leadFirst": "Let your agent work. Know when it's done.",
-    "leadSecond": "Desktop notifications and webhooks for Claude, Codex CLI and OpenCode. Gemini CLI: macOS / Linux / Windows. Cursor CLI: Linux amd64 / macOS arm64 / Windows amd64. Qoder: separate package. Pi: sounds and terminal focus in the local TUI.",
+    "leadSecond": "Desktop notifications and webhooks for Claude, Codex CLI, OpenCode, Gemini CLI, Cursor CLI, Qoder and Pi. Agent and platform limits apply. Pi: sounds and terminal focus in the local TUI.",
     "primary": "Set up notifications",
     "secondary": "Explore on GitHub",
     "note": "Open source · Runs locally"
@@ -134,7 +134,7 @@
     "items": {
       "1": {
         "question": "Do I need every agent installed?",
-        "answer": "Select any combination of Claude, Codex CLI, OpenCode and Gemini CLI + Pi (macOS / Linux / Windows only). Install the selected agents first; the commands below install notifications."
+        "answer": "Select any combination of Claude, Codex CLI, OpenCode, Gemini CLI, Cursor CLI, Qoder and Pi. Install the selected CLIs first. Cursor supports Linux amd64, macOS arm64 and Windows amd64; see its guide for host requirements."
       },
       "2": {
         "question": "Are Codex hooks installed automatically?",
@@ -209,8 +209,8 @@
     "scrollDown": "Scroll options down"
   },
   "install": {
-    "cursor": {"guide": "Cursor CLI installation", "scope": "Stop notifications and optional webhooks. Separate setup with explicit CLI/profile paths; qualified Linux amd64, macOS arm64 and Windows amd64 versions only."},
-    "qoder": {"guide": "Qoder setup and hooks", "scope": "Completion, question, permission, plan and teammate alerts with optional webhooks. Separate native package installed through the Qoder plugin installer; a notification click cannot open the exact existing chat.", "source": "Source package only: build from source before installing. No prebuilt Qoder ZIP is published in the current release.", "build": "Build the native package", "install": "Install the expanded package with Qoder CLI (replace the path):", "restart": "Restart Qoder to activate the hooks."},
+    "availability": "Cursor CLI, Qoder and Pi use the common installer with separate notification channel choices.", "cursor": {"guide": "Cursor CLI installation", "scope": "Cursor CLI: informational Stop alerts and optional webhooks on Linux amd64, macOS arm64 and Windows amd64. No Cursor IDE, sound or click-to-focus support. The installer validates the selected CLI and user profile.", "restart": "Restart Cursor CLI to load the informational Stop observer."},
+    "qoder": {"guide": "Qoder setup and hooks", "scope": "Qoder: completion, question, permission, plan and teammate alerts with optional webhooks. Choose Qoder alongside other agents in the common installer; a notification click cannot open the exact existing chat.", "restart": "Restart Qoder to activate the hooks."},
     "title": "Set up notifications",
     "intro": "Follow the steps below to add notifications to {agent}.",
     "chooseAgent": "Choose your agents",
@@ -229,7 +229,8 @@
       "both": "Claude + Codex CLI",
       "opencode": "OpenCode",
       "gemini": "Gemini CLI",
-      "cursor": "Cursor CLI", "qoder": "Qoder", "pi": "Pi"
+      "cursor": "Cursor CLI", "qoder": "Qoder",
+      "pi": "Pi"
     },
     "targets": {
       "unknown": "Choose target OS",
@@ -282,8 +283,8 @@
     "installationInstructions": "Installation instructions",
     "configureSettings": "⚙ Configure settings",
     "agentNotify": {
-      "label": "Let agents send you notifications when they need your attention",
-      "hint": "Controls setup of a notification tool for Claude and Codex CLI during a task. Checked follows saved setup preferences; unchecked skips setup for this run and retains any existing tool."
+      "label": "Set up optional notification tools",
+      "hint": "Controls notification setup for selected Claude, Codex CLI and Cursor CLI. Checked follows saved setup preferences; unchecked skips their setup for this run, retaining existing registrations and consent. Qoder, OpenCode, Gemini and Pi are unaffected."
     },
     "capabilities": {
       "title": "Selected agent capabilities",

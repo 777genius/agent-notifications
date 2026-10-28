@@ -213,7 +213,10 @@ func buildConfirmedBootstrapIntent(ctx context.Context, a setupProductsArgs, e p
 				return i, nil, err
 			}
 		} else if id == "cursor" {
-			u.Desktop, u.Webhook = a.Desktop, a.Webhook
+			u.Desktop, u.Webhook, err = resolveBootstrapChannels(a, id, i.Initial.ChannelPolicy)
+			if err != nil {
+				return i, nil, err
+			}
 		}
 		i.Units = append(i.Units, u)
 	}
@@ -419,14 +422,14 @@ func resolveBootstrapChannels(a setupProductsArgs, product string, raw json.RawM
 // than the bounded host handoff, and unrelated preferences never drive defaults.
 func selectedBootstrapChannelPolicy(products []string, raw []byte) ([]byte, error) {
 	selected := map[string]json.RawMessage{}
-	if !containsProduct(products, "opencode") && !containsProduct(products, "gemini") && !containsProduct(products, "qoder") && !containsProduct(products, "pi") {
+	if !containsProduct(products, "opencode") && !containsProduct(products, "gemini") && !containsProduct(products, "qoder") && !containsProduct(products, "cursor") && !containsProduct(products, "pi") {
 		return nil, nil
 	}
 	var route map[string]json.RawMessage
 	if len(raw) > 0 && (json.Unmarshal(raw, &route) != nil || route == nil) {
 		return nil, errors.New("invalid observer channel policy")
 	}
-	for _, pair := range [][2]string{{"opencode", "openCodeNotifications"}, {"gemini", "geminiNotifications"}, {"qoder", "qoderNotifications"}, {"pi", "piNotifications"}} {
+	for _, pair := range [][2]string{{"opencode", "openCodeNotifications"}, {"gemini", "geminiNotifications"}, {"qoder", "qoderNotifications"}, {"cursor", "cursorNotifications"}, {"pi", "piNotifications"}} {
 		if containsProduct(products, pair[0]) {
 			if leaf, ok := route[pair[1]]; ok {
 				selected[pair[1]] = leaf
@@ -445,6 +448,8 @@ func bootstrapObserverChannelKey(product string) string {
 		return "geminiNotifications"
 	case "qoder":
 		return "qoderNotifications"
+	case "cursor":
+		return "cursorNotifications"
 	case "pi":
 		return "piNotifications"
 	default:

@@ -21,6 +21,9 @@ type BuildRequest struct {
 	// ManagedControlRoot and Binding select the consent-gated managed entrypoint.
 	// Empty values retain the standalone native package contract.
 	ManagedControlRoot, Binding string
+	// ManagedExecutable is the fixed host-owned runtime entrypoint. Qoder owns
+	// its native cache copy; that copy never becomes shared-runtime ownership.
+	ManagedExecutable string
 }
 type Package struct{ Root, Archive, ArchiveSHA256, BinaryName string }
 
@@ -107,6 +110,12 @@ func Build(req BuildRequest) (Package, error) {
 				return Package{}, fmt.Errorf("managed package requires absolute control root and binding")
 			}
 			entry["args"] = []string{"qoder-event", e.event, "--control-root", req.ManagedControlRoot, "--binding", req.Binding}
+			if req.ManagedExecutable != "" {
+				if !filepath.IsAbs(req.ManagedExecutable) || filepath.Clean(req.ManagedExecutable) != req.ManagedExecutable {
+					return Package{}, fmt.Errorf("managed executable must be an absolute clean path")
+				}
+				entry["command"] = req.ManagedExecutable
+			}
 		}
 		group := map[string]any{"hooks": []any{entry}}
 		if e.matcher != "" {

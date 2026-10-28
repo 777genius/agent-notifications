@@ -63,6 +63,7 @@ _PARALLEL_ACTIVE=false
 _PARALLEL_IN_FLIGHT=false
 _PARALLEL_DISPATCHING=false
 _PARALLEL_INTERRUPT_STATUS=0
+_BOOTSTRAP_JOB_QUERY=false
 _PARALLEL_WORKER=""
 _PARALLEL_GATE_HELD=false
 _PARALLEL_GATE_ABSENT_FAILURES=0
@@ -94,6 +95,9 @@ _FROZEN_OPENCODE_CHANNELS=()
 _FROZEN_GEMINI_CHANNELS=()
 _FROZEN_QODER_CHANNELS=()
 _FROZEN_PI_CHANNELS=()
+_FROZEN_CURSOR_DESKTOP=false
+_FROZEN_CURSOR_WEBHOOK=false
+_FROZEN_CURSOR_SEED=false
 CLAUDE_AGENT_NOTIFY_STATUS="not configured by this run"
 CODEX_AGENT_NOTIFY_STATUS="not configured by this run"
 SELECTED_PRODUCTS=()
@@ -1377,9 +1381,15 @@ progress_snapshots() {
 }
 
 progress_child_running() {
-    local running
-    for running in $(jobs -pr) $(jobs -ps); do [ "$running" != "$1" ] || return 0; done
-    return 1
+    # Keep the parent job roster: a pipeline loses it in Bash. Defer an
+    # interrupt's exit until Bash finishes parsing these command substitutions.
+    local running result=1 _BOOTSTRAP_JOB_QUERY=true _BOOTSTRAP_JOB_QUERY_INTERRUPT=0
+    for running in $(jobs -pr) $(jobs -ps); do
+        if [ "$running" = "$1" ]; then result=0; break; fi
+    done
+    _BOOTSTRAP_JOB_QUERY=false
+    [ "$_BOOTSTRAP_JOB_QUERY_INTERRUPT" -eq 0 ] || exit "$_BOOTSTRAP_JOB_QUERY_INTERRUPT"
+    return "$result"
 }
 
 # Join only this job. No watchdog process, reused PID or indefinite graceful wait.
@@ -1810,7 +1820,7 @@ complete_configure_route() {
     local nav="" app="" team="" unknown="" asserted="" i=0
     while [ "$i" -lt "${#CONFIGURE_ARGS[@]}" ]; do
         case "${CONFIGURE_ARGS[$i]}" in
-            --navigation|--app|--team-id|--allow-unknown-caller|--allow-caller-asserted|--codex-home|--pi-agent-dir|--pi-executable)
+            --navigation|--app|--team-id|--allow-unknown-caller|--allow-caller-asserted|--codex-home|--pi-agent-dir|--pi-executable|--scope-root|--client-executable)
                 i=$((i + 1))
                 [ "$i" -lt "${#CONFIGURE_ARGS[@]}" ] || { echo "Missing value for ${CONFIGURE_ARGS[$((i - 1))]}" >&2; return 1; }
                 case "${CONFIGURE_ARGS[$((i - 1))]}" in
@@ -1984,7 +1994,7 @@ select_product() {
                 CONFIGURE_ARGS+=("$1")
                 shift ;;
             --help|-h)
-                echo "Usage: bash bootstrap.sh [--product claude|codex|both|opencode|gemini|qoder|pi|cursor | --products claude,codex,opencode,gemini,qoder,pi] [--desktop] [--webhook] [--agent-notify|--skip-agent-notify] [--navigation none] [--pi-agent-dir PATH --pi-executable PATH] [--scope-root PATH --client-executable PATH (Cursor only)]"
+                echo "Usage: bash bootstrap.sh [--product claude|codex|both|opencode|gemini|qoder|cursor|pi | --products claude,codex,opencode,gemini,qoder,cursor,pi] [--desktop] [--webhook] [--agent-notify|--skip-agent-notify] [--navigation none] [--pi-agent-dir PATH --pi-executable PATH] [--scope-root PATH --client-executable PATH (advanced Cursor override)]"
                 exit 0 ;;
             *) echo "Unknown option: $1" >&2; return 1 ;;
         esac
@@ -2024,24 +2034,17 @@ select_product() {
     if [ "$pi_scope" = true ]; then
         case ",$csv," in *,pi,*) ;; *) echo "Pi profile arguments require Pi selection." >&2; return 1 ;; esac
     fi
-    if [ "$csv" = cursor ]; then
-        [ -n "$scope_root" ] && [ -n "$client_exec" ] || { echo "Cursor requires explicit scope-root and client-executable." >&2; return 1; }
-        [ "${#CONFIGURE_ARGS[@]}" -eq 4 ] || { echo "Cursor does not accept navigation or legacy profile flags." >&2; return 1; }
-        SELECTED_PRODUCTS=(cursor); LEGACY_PRODUCT=""; CONFIGURE_NOTIFICATIONS=false
-        # Native channel choices remain separate from MCP units in the frozen
-        # confirmation. Never dispatch Cursor without that confirmed intent.
-        _INTERACTIVE_INTENT=true
-        [ "${#OPENCODE_ARGS[@]}" -gt 0 ] || _CHANNEL_PENDING=true
-        return 0
-    fi
-    [ -z "$scope_root$client_exec" ] || { echo "Selected scope/client arguments require Cursor alone." >&2; return 1; }
+    case ",$csv," in
+        *,cursor,*) ;;
+        *) [ -z "$scope_root$client_exec" ] || { echo "Selected scope/client arguments require Cursor." >&2; return 1; } ;;
+    esac
     SELECTED_PRODUCTS=()
     LEGACY_PRODUCT=""
     remaining=$csv
     while :; do
         selected=${remaining%%,*}
         case "$selected" in
-            claude|codex|opencode|gemini|qoder|pi) ;;
+            claude|codex|opencode|gemini|qoder|cursor|pi) ;;
             *) echo "Unknown product: $selected" >&2; return 1 ;;
         esac
         case ",$seen," in *",$selected,"*) echo "Duplicate product: $selected" >&2; return 1 ;; esac
@@ -2050,15 +2053,17 @@ select_product() {
         case "$selected" in
             claude|codex)
                 if [ -z "$LEGACY_PRODUCT" ]; then LEGACY_PRODUCT=$selected; else LEGACY_PRODUCT=both; fi ;;
-            opencode|gemini|qoder|pi) observers=$((observers+1)) ;;
+            opencode|gemini|qoder|cursor|pi) observers=$((observers+1)) ;;
         esac
         case "$remaining" in *,*) remaining=${remaining#*,} ;; *) break ;; esac
     done
     if [ "$observers" -eq 0 ] && [ "${#OPENCODE_ARGS[@]}" -gt 0 ]; then
-        echo "--desktop/--webhook require OpenCode, Gemini, Qoder or Pi." >&2; return 1
+        echo "--desktop/--webhook require OpenCode, Gemini, Qoder, Cursor or Pi." >&2; return 1
     fi
+    local advanced_count=$pi_scope_args
+    [ -z "$scope_root" ] || advanced_count=$((advanced_count + 4))
     if [ -z "$LEGACY_PRODUCT" ]; then
-        if [ "$seen_agent_notify" = true ] || [ "$seen_skip_agent_notify" = true ] || [ "${#CONFIGURE_ARGS[@]}" -ne "$pi_scope_args" ]; then
+        if { [ "$seen_agent_notify" = true ] || [ "$seen_skip_agent_notify" = true ]; } && [[ ",$csv," != *,cursor,* ]] || [ "${#CONFIGURE_ARGS[@]}" -ne "$advanced_count" ]; then
             echo "Observers use --desktop/--webhook consent, not agent-notify or navigation flags." >&2
             return 1
         fi
@@ -2067,7 +2072,7 @@ select_product() {
     fi
     if [ "$CONFIGURE_NOTIFICATIONS" = true ]; then
         complete_configure_route || return 1
-    elif [ "${#CONFIGURE_ARGS[@]}" -ne "$pi_scope_args" ]; then
+    elif [ "${#CONFIGURE_ARGS[@]}" -ne "$advanced_count" ]; then
         echo "Route flags require --agent-notify." >&2
         return 1
     fi
@@ -2129,9 +2134,10 @@ bootstrap_cleanup() {
 }
 
 bootstrap_interrupt() {
-    # Defer only across spawn + PID registration, so a signal can never strand
-    # a just-created process group outside the parent's owned job roster.
+    # Defer across spawn + PID registration so a signal cannot strand a new
+    # process group. Queries use a separate function-local parser guard.
     if [ "$_PARALLEL_DISPATCHING" = true ]; then _PARALLEL_INTERRUPT_STATUS=$1
+    elif [ "${_BOOTSTRAP_JOB_QUERY:-false}" = true ]; then _BOOTSTRAP_JOB_QUERY_INTERRUPT=$1
     else exit "$1"; fi
 }
 
@@ -2944,6 +2950,7 @@ report_progress() {
         case "$outcome" in
             not_started) outcome='queued; not started' ;;
             completed) outcome='completed; restart required' ;;
+            skipped) outcome='skipped; existing setup kept' ;;
             activation_timeout) outcome='registration saved; activation timed out' ;;
             activation_failed) outcome='registration saved; activation failed' ;;
             activation_canceled) outcome='registration saved; activation canceled' ;;
@@ -3239,9 +3246,9 @@ parallel_replay_progress() {
     while IFS=$'\t' read -r kind id phase outcome extra; do
         case "$kind" in transition|snapshot) ;; *) continue ;; esac
         [ -z "$extra" ] || continue
-        case "$id" in claude|codex|opencode|gemini|qoder) ;; *) continue ;; esac
+        case "$id" in claude|codex|opencode|gemini|qoder|cursor) ;; *) continue ;; esac
         case "$phase" in pending|preparation|marketplace|download|runtime|verification|waiting|registration|runtime-lookup|config|MCP|complete) ;; *) continue ;; esac
-        case "$outcome" in not_started|running|done|state_requires_inspection|registration_committed|registration_committed_follow_up_not_started|completed|activation_failed|activation_timeout|activation_canceled|activation_deadline|activation_not_attempted) ;; *) continue ;; esac
+        case "$outcome" in not_started|running|done|state_requires_inspection|registration_committed|registration_committed_follow_up_not_started|completed|activation_failed|activation_timeout|activation_canceled|activation_deadline|activation_not_attempted|skipped) ;; *) continue ;; esac
         index=0
         while [ "$index" -lt "${#_PROGRESS_IDS[@]}" ]; do
             if [ "${_PROGRESS_IDS[$index]}" = "$id" ]; then
@@ -3587,11 +3594,16 @@ load_frozen_dispatch() {
         seen=${seen:+$seen,}$key
         [ "${#value}" -le 4096 ] || return 1
         case "$key" in
+            cursor-seed-enabled)
+                case "$value" in true|false) ;; *) return 1 ;; esac
+                case ",$_PRODUCT_CSV," in *,cursor,*) ;; *) return 1 ;; esac
+                _FROZEN_CURSOR_SEED=$value
+                continue ;;
             state-migration-required)
                 case "$value" in true|false) ;; *) return 1 ;; esac
                 _FROZEN_STATE_MIGRATION_REQUIRED=$value
                 continue ;;
-            opencode-channel-preimage|gemini-channel-preimage|qoder-channel-preimage|pi-channel-preimage)
+            opencode-channel-preimage|gemini-channel-preimage|qoder-channel-preimage|pi-channel-preimage|cursor-channel-preimage)
                 if [ "$value" != absent ]; then
                     [ "${#value}" -eq 64 ] || return 1
                     case "$value" in *[!0-9a-f]*) return 1 ;; esac
@@ -3606,13 +3618,15 @@ load_frozen_dispatch() {
                 continue ;;
         esac
         case "$key" in
-            opencode-desktop|opencode-webhook|gemini-desktop|gemini-webhook|qoder-desktop|qoder-webhook|pi-desktop|pi-webhook)
+            opencode-desktop|opencode-webhook|gemini-desktop|gemini-webhook|qoder-desktop|qoder-webhook|pi-desktop|pi-webhook|cursor-desktop|cursor-webhook)
                 case "$value" in true|false) ;; *) return 1 ;; esac
                 case ",$_PRODUCT_CSV," in *",${key%-*},"*) ;; *) return 1 ;; esac
                 case "$key" in
                     opencode-*) _FROZEN_OPENCODE_CHANNELS+=("--${key#opencode-}=$value") ;;
                     gemini-*) _FROZEN_GEMINI_CHANNELS+=("--${key#gemini-}=$value") ;;
                     qoder-*) _FROZEN_QODER_CHANNELS+=("--${key#qoder-}=$value") ;;
+                    cursor-desktop) _FROZEN_CURSOR_DESKTOP=$value ;;
+                    cursor-webhook) _FROZEN_CURSOR_WEBHOOK=$value ;;
                     pi-*) _FROZEN_PI_CHANNELS+=("--$key=$value") ;;
                 esac
                 continue ;;
@@ -3659,7 +3673,7 @@ load_frozen_dispatch() {
             gemini) required="$required gemini-config-root gemini-executable gemini-desktop gemini-webhook gemini-channel-preimage" ;;
             qoder) required="$required qoder-config-root qoder-executable qoder-desktop qoder-webhook qoder-channel-preimage" ;;
             pi) required="$required pi-agent-dir pi-executable pi-desktop pi-webhook pi-channel-preimage runtime-root" ;;
-            cursor) required="$required scope-root client-executable runtime-root" ;;
+            cursor) required="$required scope-root client-executable cursor-desktop cursor-webhook cursor-channel-preimage cursor-seed-enabled" ;;
         esac
     done
     for key in $required; do case ",$seen," in *",$key,"*) ;; *) echo "Missing frozen authority: $key" >&2; return 1 ;; esac; done
@@ -3722,7 +3736,7 @@ selector_scope_args() {
 
 selector_effect_args() {
     _EFFECT_ARGS=(--products "$_PRODUCT_CSV")
-    if [ -n "$LEGACY_PRODUCT" ] || [ "$_PRODUCT_CSV" = cursor ]; then
+    if [ -n "$LEGACY_PRODUCT" ] || [[ ",$_PRODUCT_CSV," = *,cursor,* ]]; then
         case "$AGENT_NOTIFY_REQUEST" in explicit) _EFFECT_ARGS+=(--agent-notify) ;; skip) _EFFECT_ARGS+=(--skip-agent-notify) ;; esac
         local i=0
         while [ "$i" -lt "${#CONFIGURE_ARGS[@]}" ]; do
@@ -3792,8 +3806,12 @@ main() {
     fi
     if [ "$_INTERACTIVE_INTENT" = true ] || [[ "$original_product" = bundle:* ]] || [ "$original_product" = gemini ] || [ "$original_product" = qoder ] || [ "$original_product" = pi ]; then
         selector_collect capabilities || return $?
-        if printf '%s\n' 'setup-products-v1 claude codex opencode gemini qoder pi' | cmp -s - "$_SELECTOR_RESULT"; then
+        if printf '%s\n' 'setup-products-v1 claude codex opencode gemini qoder cursor pi' | cmp -s - "$_SELECTOR_RESULT"; then
             _PI_SETUP_CAPABLE=true
+        elif printf '%s\n' 'setup-products-v1 claude codex opencode gemini qoder pi' | cmp -s - "$_SELECTOR_RESULT"; then
+            _PI_SETUP_CAPABLE=true
+        elif printf '%s\n' 'setup-products-v1 claude codex opencode gemini qoder cursor' | cmp -s - "$_SELECTOR_RESULT"; then
+            :
         else
             selector_exact 'setup-products-v1 claude codex opencode gemini qoder' capabilities || return 1
         fi
@@ -3814,7 +3832,7 @@ main() {
     fi
     _PRODUCT_CSV=""
     # Canonical product order remains the existing command order.
-    for selected in claude codex opencode gemini qoder pi cursor; do
+    for selected in claude codex opencode gemini qoder cursor pi; do
         case " ${SELECTED_PRODUCTS[*]} " in *" $selected "*) _PRODUCT_CSV=${_PRODUCT_CSV:+$_PRODUCT_CSV,}$selected ;; esac
     done
     case ",$_PRODUCT_CSV," in *,pi,*) [ "$_PI_SETUP_CAPABLE" = true ] || { echo "The matching setup helper does not support Pi." >&2; return 1; } ;; esac
@@ -3828,10 +3846,6 @@ main() {
     selector_effect_args
     if [ "$_INTERACTIVE_INTENT" = true ]; then
         _SELECTOR_INTENT="$_CONFIG_STAGE/selector-intent.json"
-        if [ "$_PRODUCT_CSV" = cursor ] && [ "$AGENT_NOTIFY_REQUEST" != skip ]; then
-            echo "If the shared runtime needs installation, this approval prepares it first."
-            echo "Cursor integration then requires a new confirmation; canceling retains the prepared runtime."
-        fi
         selector_scope_args
         selector_collect confirm "${_EFFECT_ARGS[@]}" ${_SCOPE_ARGS[@]+"${_SCOPE_ARGS[@]}"} --intent-file "$_SELECTOR_INTENT" ${UI_ARGS[@]+"${UI_ARGS[@]}"} || return $?
         [ -s "$_SELECTOR_RESULT" ] || { close_prompt; return 0; }
@@ -3840,7 +3854,7 @@ main() {
     fi
     if [ "$_INTERACTIVE_INTENT" != true ]; then
         case ",$_PRODUCT_CSV," in
-            *,opencode,*|*,gemini,*|*,qoder,*|*,pi,*)
+            *,opencode,*|*,gemini,*|*,qoder,*|*,cursor,*|*,pi,*)
                 _SELECTOR_INTENT="$_CONFIG_STAGE/selector-intent.json"
                 selector_scope_args
                 selector_collect prepare "${_EFFECT_ARGS[@]}" ${_SCOPE_ARGS[@]+"${_SCOPE_ARGS[@]}"} --intent-file "$_SELECTOR_INTENT" || return $?
@@ -3901,18 +3915,6 @@ main() {
         install_legacy_products || status=$?
     fi
     if [ "$status" -eq 0 ] && [ "$_PARALLEL_ACTIVE" != true ]; then
-        if [ "$_PRODUCT_CSV" = cursor ] && [ "$AGENT_NOTIFY_REQUEST" != skip ]; then
-            run_setup_stage "Preparing Cursor notification runtime" prepare_cursor_runtime || { report_setup_failure 1; return 1; }
-            if [ "$_CURSOR_RUNTIME_PREPARED" = true ]; then
-                echo "Shared notification runtime installed. Review the new plan before installing Cursor integration."
-                reconfirm_cursor_integration || { echo "Prepared runtime retained; Cursor integration is incomplete." >&2; return 1; }
-                [ "$_CURSOR_CONFIRM_CANCELLED" != true ] || { echo "Cursor integration canceled; prepared runtime retained."; return 0; }
-            fi
-            PRODUCT=cursor; CONFIGURE_BINARY=$_CONFIG_HELPER; PLUGIN_ROOT=""
-            progress_phase cursor portable state_requires_inspection
-            run_setup_stage "Configuring agent notification tools" setup_agent_notify_wizard || status=$?
-            [ "$status" -ne 0 ] || progress_phase cursor complete completed
-        fi
         for selected in opencode gemini qoder; do
             case ",$_PRODUCT_CSV," in *",$selected,"*) ;; *) continue ;; esac
             PRODUCT=$selected
@@ -3921,18 +3923,42 @@ main() {
             [ "$status" -eq 0 ] || break
             progress_phase "$selected" complete completed
         done
-        if [ "$status" -eq 0 ]; then
-            case ",$_PRODUCT_CSV," in
-                *,pi,*)
-                    PRODUCT=pi
-                    run_setup_stage "Installing Pi notifications" install_pi || status=$?
-                    if [ "${_PI_CONFIRM_CANCELLED:-false}" = true ]; then
-                        echo "Pi integration canceled; prepared runtime retained."
-                        return 0
-                    fi
-                    [ "$status" -ne 0 ] || progress_phase pi complete completed ;;
-            esac
+
+    fi
+    # Cursor uses its existing qualified single-target caller after every
+    # sibling worker and portable follow-up has completed. Parallel selection
+    # must never silently drop this sequential target.
+    if [ "$status" -eq 0 ] && [[ ",$_PRODUCT_CSV," = *,cursor,* ]]; then
+        if [ "$AGENT_NOTIFY_REQUEST" != skip ]; then
+            run_setup_stage "Preparing Cursor notification runtime" prepare_cursor_runtime || { report_setup_failure 1; return 1; }
+            PRODUCT=cursor; CONFIGURE_BINARY=$_CONFIG_HELPER; PLUGIN_ROOT=""
+            progress_phase cursor portable state_requires_inspection
+            run_setup_stage "Configuring Cursor notifications" setup_agent_notify_wizard || status=$?
+            if [ "$status" -eq 0 ]; then
+                local cursor_outcome=completed cursor_i=0
+                while [ "$cursor_i" -lt "${#_PROGRESS_IDS[@]}" ]; do
+                    if [ "${_PROGRESS_IDS[$cursor_i]}" = cursor ] && [ "${_PROGRESS_OUTCOMES[$cursor_i]}" = skipped ]; then cursor_outcome=skipped; fi
+                    cursor_i=$((cursor_i + 1))
+                done
+                progress_phase cursor complete "$cursor_outcome"
+            fi
+        else
+            progress_phase cursor complete skipped
         fi
+    fi
+    # Pi refreshes its own immutable intent only after every sibling, including
+    # Cursor, has finished using the original confirmed parent.
+    if [ "$status" -eq 0 ]; then
+        case ",$_PRODUCT_CSV," in
+            *,pi,*)
+                PRODUCT=pi
+                run_setup_stage "Installing Pi notifications" install_pi || status=$?
+                if [ "${_PI_CONFIRM_CANCELLED:-false}" = true ]; then
+                    echo "Pi integration canceled; prepared runtime retained."
+                    return 0
+                fi
+                [ "$status" -ne 0 ] || progress_phase pi complete completed ;;
+        esac
     fi
     if [ "$status" -ne 0 ]; then
         report_setup_failure "$status"
@@ -4078,11 +4104,18 @@ configure_agent_policy() {
             return 0 ;;
     esac
     local -a configure_cmd=(setup-notifications configure --provider "$PRODUCT")
+    # Cursor authorities share the parsed request, but not this legacy policy
+    # command. Keep other normalized key/value pairs intact, including values
+    # that happen to look like Cursor option names.
     local i=0
     while [ "$i" -lt "${#CONFIGURE_ARGS[@]}" ]; do
-        case "${CONFIGURE_ARGS[$i]}" in --pi-agent-dir|--pi-executable) i=$((i + 2)); continue ;; esac
-        configure_cmd+=("${CONFIGURE_ARGS[$i]}")
-        i=$((i + 1))
+        case "${CONFIGURE_ARGS[$i]}" in
+            --scope-root|--client-executable|--pi-agent-dir|--pi-executable) i=$((i + 2)); continue ;;
+            --navigation|--app|--team-id|--allow-unknown-caller|--allow-caller-asserted|--codex-home)
+                configure_cmd+=("${CONFIGURE_ARGS[$i]}" "${CONFIGURE_ARGS[$((i + 1))]}")
+                i=$((i + 2)); continue ;;
+        esac
+        configure_cmd+=("${CONFIGURE_ARGS[$i]}"); i=$((i + 1))
     done
     if [ "${1:-}" = portable ]; then
         configure_cmd+=(--policy-only --preserve-enabled)
@@ -4113,12 +4146,20 @@ report_wizard_portable_missing() {
     return 0
 }
 
-# The original checkpoint validates ownership and policy before this phase.
-# Runtime acquisition advances the generation; integration needs a fresh public
-# confirmation in a distinct immutable intent, using the same verified helper.
+# The original checkpoint covers runtime preparation and Cursor integration.
+# Preserve its shown absent-policy seed; the qualified child rechecks relevant
+# original decisions before binding the resulting generation for CAS.
 prepare_cursor_runtime() {
     _CURSOR_RUNTIME_PREPARED=false
-    prepare_managed_runtime || return $?
+    local runtime
+    [ -n "$_SELECTOR_INTENT" ] && [ -n "$_FROZEN_CONTROL" ] || return 1
+    if runtime=$("$_CONFIG_HELPER" config installer runtime-root "$_FROZEN_CONTROL"); then
+        [ -z "$_FROZEN_RUNTIME" ] || [ "$runtime" = "$_FROZEN_RUNTIME" ] || return 1
+        _FROZEN_RUNTIME=$runtime
+    fi
+    local -a seed_args=()
+    [ "$_FROZEN_CURSOR_SEED" != true ] || seed_args=(--seed-enabled-if-absent)
+    prepare_managed_runtime ${seed_args[@]+"${seed_args[@]}"} || return $?
     _CURSOR_RUNTIME_PREPARED=$_MANAGED_RUNTIME_PREPARED
 }
 
@@ -4225,25 +4266,6 @@ refresh_pi_integration_intent() {
         [ "$_FROZEN_PI" = "$profile" ] && [ "$_PI_EXEC" = "$client" ] &&
         [ "$_FROZEN_GLOBAL_CONFIG" = "$config" ] && [ "${_FROZEN_PI_CHANNELS[*]}" = "$expected_channels" ] || return 1
     "$_CONFIG_HELPER" setup-products preflight --intent-file "$_SELECTOR_INTENT" "${effects[@]}" </dev/null
-}
-
-reconfirm_cursor_integration() {
-    local control=$_FROZEN_CONTROL runtime=$_FROZEN_RUNTIME scope=$_FROZEN_SCOPE_ROOT client=$_FROZEN_CLIENT_EXEC config=$_FROZEN_GLOBAL_CONFIG
-    _CURSOR_CONFIRM_CANCELLED=false
-    [ "$_INTERACTIVE_INTENT" = true ] || return 1
-    exec 3<>/dev/tty || return 1
-    _PROMPT_OPEN=true
-    _SELECTOR_INTENT="$_CONFIG_STAGE/selector-cursor-runtime-intent.json"
-    selector_scope_args
-    selector_collect confirm "${_EFFECT_ARGS[@]}" ${_SCOPE_ARGS[@]+"${_SCOPE_ARGS[@]}"} --intent-file "$_SELECTOR_INTENT" ${UI_ARGS[@]+"${UI_ARGS[@]}"} || { close_prompt; return 1; }
-    if [ ! -s "$_SELECTOR_RESULT" ]; then close_prompt; _CURSOR_CONFIRM_CANCELLED=true; return 0; fi
-    selector_exact approved confirm || { close_prompt; return 1; }
-    close_prompt
-    load_frozen_dispatch || return 1
-    [ "$_FROZEN_CONTROL" = "$control" ] && [ "$_FROZEN_RUNTIME" = "$runtime" ] &&
-        [ "$_FROZEN_SCOPE_ROOT" = "$scope" ] && [ "$_FROZEN_CLIENT_EXEC" = "$client" ] &&
-        [ "$_FROZEN_GLOBAL_CONFIG" = "$config" ] || return 1
-    "$_CONFIG_HELPER" setup-products preflight --intent-file "$_SELECTOR_INTENT" "${_EFFECT_ARGS[@]}" </dev/null
 }
 
 bootstrap_abs_command() {
@@ -4361,7 +4383,7 @@ setup_agent_notify_wizard() {
         --package "$package_root"
     case "$PRODUCT" in cursor|pi) ;; *) set -- "$@" --plugin-root "$plugin_root" ;; esac
     if [ -n "$_SELECTOR_INTENT" ]; then
-        if [ -n "$_PARALLEL_READY_CLIENTS" ]; then
+        if [ "$PRODUCT" != cursor ] && [ -n "$_PARALLEL_READY_CLIENTS" ]; then
             set -- "$@" --bootstrap-ready-clients "$_PARALLEL_READY_CLIENTS" --bootstrap-progress-file "$_PROGRESS_JOURNAL"
         fi
         set -- "$@" --bootstrap-intent-file "$_SELECTOR_INTENT" --control-root "$_FROZEN_CONTROL" --global-config "$_FROZEN_GLOBAL_CONFIG"
@@ -4488,7 +4510,7 @@ apply_wizard_progress() {
                 else
                     [ "$phase" = MCP ] || { status=1; break; }
                 fi
-                case "$outcome" in activation_failed|activation_not_attempted|activation_timeout|activation_canceled|activation_deadline|completed|registration_committed|state_requires_inspection) ;; *) status=1; break ;; esac
+                case "$outcome" in activation_failed|activation_not_attempted|activation_timeout|activation_canceled|activation_deadline|completed|skipped|registration_committed|state_requires_inspection) ;; *) status=1; break ;; esac
                 case "$seen" in *" $kind "*) status=1; break ;; esac
                 seen="$seen$kind "
                 j=0

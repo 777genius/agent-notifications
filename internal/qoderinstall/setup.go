@@ -6,16 +6,18 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
-	"sort"
-	"strings"
 	"time"
 
+	"github.com/777genius/agent-notifications/install/uapinstaller"
 	"github.com/777genius/agent-notifications/internal/config"
 	"github.com/777genius/agent-notifications/internal/installruntime"
 	"github.com/777genius/agent-notifications/internal/qoderpackage"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/domain"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/ports"
 )
 
 type Action string
@@ -33,16 +35,26 @@ type Request struct {
 	HomeDir, ConfigRoot, QoderExecutable                 string
 	ChannelPreimage                                      string
 	Desktop, Webhook                                     bool
+	PreserveChannels                                     bool
 	GOOS, GOARCH, Version                                string
+	// Runner is an internal test seam; public setup always uses UAP's OS runner.
+	Runner ports.CommandRunner
+	Fault  func(string) error
 }
+
+// The runtime owns this receipt and its executable, never Qoder's native cache
+// or settings. UAP owns the prepared package and native CLI lifecycle. Native
+// file identities are read-only evidence binding consent to the actual copy.
 type receipt struct {
-	Schema        int             `json:"schema"`
-	ConfigRoot    string          `json:"configRoot"`
-	PackageRoot   string          `json:"packageRoot"`
-	Binding       string          `json:"binding"`
-	NativeEntry   json.RawMessage `json:"nativeEntry"`
-	NativeEnabled json.RawMessage `json:"nativeEnabled"`
-	Files         []string        `json:"files"`
+	Schema                                                                  int `json:"schema"`
+	ConfigRoot, PackageRoot, Binding                                        string
+	InstallationID, UAPBindingID, ManagedRoot, TreeDigest, ProjectionDigest string
+	Executable                                                              string
+	Pending                                                                 bool
+	Removing                                                                bool
+	Version                                                                 string
+	NativeEntry, NativeEnabled                                              json.RawMessage
+	Files                                                                   map[string]installruntime.Identity
 }
 
 func DefaultRequest(action Action) Request {
@@ -58,10 +70,7 @@ func ResolveConfigRoot(r Request) (string, error) {
 		}
 		root = filepath.Join(r.HomeDir, ".qoder")
 	}
-	if !filepath.IsAbs(root) {
-		return "", errors.New("absolute Qoder config root required")
-	}
-	return installruntime.CanonicalPath(root)
+	return qoderProfile(root)
 }
 func normalize(r Request) (Request, error) {
 	if !filepath.IsAbs(r.ControlRoot) {
@@ -76,38 +85,26 @@ func normalize(r Request) (Request, error) {
 	return r, err
 }
 func readReceipt(root string, l installruntime.Ledger) (receipt, error) {
-	var result receipt
+	var out receipt
 	path := filepath.Join(root, receiptName)
 	d, err := readDocument(path)
 	owned, ok := installruntime.OwnedFile(l, path)
 	c, registered := l.Consumers[ConsumerID]
-	if err != nil || !ok || !registered || c.Registration != path || owned != d.before || json.Unmarshal(d.data, &result) != nil || result.Schema != 1 || result.Binding == "" || !filepath.IsAbs(result.ConfigRoot) || !inside(filepath.Join(result.ConfigRoot, "plugins", "cache", "local", "agent-notifications-qoder"), result.PackageRoot) {
-		return result, errors.New("managed Qoder receipt is missing or edited")
+	if err != nil || !ok || !registered || c.Registration != path || owned != d.before || json.Unmarshal(d.data, &out) != nil || out.Schema != 2 || out.Binding == "" || !filepath.IsAbs(out.ConfigRoot) || out.InstallationID == "" || out.UAPBindingID == "" || !filepath.IsAbs(out.ManagedRoot) || !filepath.IsAbs(out.Executable) {
+		return out, errors.New("qoder UAP receipt missing, edited or retired; legacy installation adoption is not supported")
 	}
-	return result, nil
+	return out, nil
 }
 func checkFiles(l installruntime.Ledger, r receipt) error {
-	expected := map[string]bool{}
-	for _, path := range r.Files {
-		if !inside(r.PackageRoot, path) {
-			return errors.New("invalid Qoder owned file path")
-		}
-		expected[path] = true
-		want, ok := installruntime.OwnedFile(l, path)
-		got, err := installruntime.Fingerprint(path)
-		if err != nil || !ok || want != got || !got.Exists {
-			return errors.New("managed Qoder package was edited or removed")
-		}
+	if r.Pending {
+		return errors.New("qoder installation is incomplete; retry the same install or update with explicit channels")
 	}
-	return filepath.WalkDir(r.PackageRoot, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if !d.IsDir() && !expected[path] {
-			return errors.New("qoder package contains an unowned file")
-		}
-		return nil
-	})
+	want, ok := installruntime.OwnedFile(l, r.Executable)
+	got, err := installruntime.Fingerprint(r.Executable)
+	if err != nil || !ok || !got.Exists || want != got {
+		return errors.New("managed Qoder runtime executable was edited or removed")
+	}
+	return checkNativeSnapshot(r)
 }
 
 func Apply(ctx context.Context, r Request) error {
@@ -116,9 +113,13 @@ func Apply(ctx context.Context, r Request) error {
 	if err != nil {
 		return err
 	}
+	unlock, err := installruntime.Lock(ctx, filepath.Join(uapRoot(r.ControlRoot), ".host-install.lock"))
+	if err != nil {
+		return fmt.Errorf("lock Qoder composition: %w", err)
+	}
+	defer unlock()
 	if r.Action == Recover {
-		_, err = installruntime.Recover(ctx, r.ControlRoot)
-		return err
+		return recoverInstallation(ctx, r)
 	}
 	if r.Action != Install && r.Action != Update && r.Action != Remove {
 		return errors.New("invalid Qoder action")
@@ -126,44 +127,74 @@ func Apply(ctx context.Context, r Request) error {
 	if !filepath.IsAbs(r.QoderExecutable) {
 		return errors.New("absolute --qoder-executable required")
 	}
-	st, err := os.Stat(r.QoderExecutable)
-	if err != nil || !st.Mode().IsRegular() {
+	info, err := os.Stat(r.QoderExecutable)
+	if err != nil || !info.Mode().IsRegular() {
 		return errors.New("native Qoder executable unavailable")
 	}
-	l, recovery, err := installruntime.ReadOwnership(r.ControlRoot)
+	snap, err := installruntime.ReadPolicySnapshot(ctx, r.ControlRoot)
 	if err != nil {
-		return err
+		return fmt.Errorf("observe Qoder runtime policy: %w", err)
 	}
-	if recovery {
+	l := snap.Installation.Ledger
+	if snap.Installation.Recovery || l.PendingMutation != nil {
 		return errors.New("installation recovery required; run setup-qoder recover")
 	}
 	if l.ID != "" && l.Owner != "existing-installer" {
 		return errors.New("managed runtime has another owner")
 	}
+	if err = installruntime.CheckObserverChannelPreimage(snap.Fields["route"], "qoderNotifications", r.ChannelPreimage); err != nil {
+		return err
+	}
 	c, registered := l.Consumers[ConsumerID]
-	policyData, err := readDocument(filepath.Join(r.ControlRoot, "agent-notifications.json"))
-	if err != nil {
-		return err
-	}
-	policyFields, err := object(policyData.data)
-	if err != nil {
-		return err
-	}
-	if err = installruntime.CheckObserverChannelPreimage(policyFields["route"], "qoderNotifications", r.ChannelPreimage); err != nil {
-		return err
-	}
-	oldDesktop, oldWebhook, err := channels(policyFields)
-	if err != nil {
-		return err
-	}
-	if !registered && r.Action != Remove && (oldDesktop || oldWebhook) {
-		return errors.New("stale Qoder consent must be revoked before installation")
-	}
-	if r.Action == Remove && !registered {
-		return nil
-	}
-	if r.Action == Update && !registered {
-		return errors.New("qoder is not installed")
+	var previous *receipt
+	if registered {
+		old, e := readReceipt(r.ControlRoot, l)
+		if e != nil {
+			return e
+		}
+		if old.ConfigRoot != r.ConfigRoot {
+			return errors.New("qoder profile relocation refused")
+		}
+		if old.Removing && r.Action != Remove {
+			return errors.New("qoder removal is pending; retry remove before installing")
+		}
+		if old.Pending {
+			if e = verifyPendingNative(r.ControlRoot, old); e != nil {
+				return e
+			}
+		}
+		if !old.Pending {
+			if e = checkFiles(l, old); e != nil {
+				return e
+			}
+			if e = checkUAP(ctx, r, old); e != nil {
+				return e
+			}
+		}
+		if r.PreserveChannels {
+			r.Desktop, r.Webhook, err = channels(snap.Fields)
+			if err != nil {
+				return err
+			}
+		}
+		previous = &old
+	} else {
+		if d, e := readDocument(filepath.Join(r.ControlRoot, receiptName)); e != nil || d.before.Exists {
+			return errors.New("foreign or retired Qoder receipt exists")
+		}
+		if r.Action == Remove {
+			return nil
+		}
+		if r.Action == Update {
+			return errors.New("qoder is not installed")
+		}
+		desktop, webhook, e := channels(snap.Fields)
+		if e != nil {
+			return e
+		}
+		if desktop || webhook {
+			return errors.New("stale Qoder consent must be revoked before installation")
+		}
 	}
 	if r.RuntimeRoot == "" {
 		if registered {
@@ -174,26 +205,33 @@ func Apply(ctx context.Context, r Request) error {
 			r.RuntimeRoot = filepath.Join(r.ControlRoot, "runtime")
 		}
 	}
-	if !filepath.IsAbs(r.RuntimeRoot) {
+	r.RuntimeRoot, err = installruntime.CanonicalPath(r.RuntimeRoot)
+	if err != nil || !filepath.IsAbs(r.RuntimeRoot) {
 		return errors.New("absolute runtime root required")
 	}
-	r.RuntimeRoot, err = installruntime.CanonicalPath(r.RuntimeRoot)
-	if err != nil {
-		return err
+	if registered && c.RuntimeRoot != r.RuntimeRoot {
+		return errors.New("qoder runtime relocation refused")
 	}
-	var previous *receipt
-	if registered {
-		old, e := readReceipt(r.ControlRoot, l)
-		if e != nil {
-			return e
+	if r.Action != Remove {
+		if err = checkCacheDestination(r, previous); err != nil {
+			return err
 		}
-		if old.ConfigRoot != r.ConfigRoot || c.RuntimeRoot != r.RuntimeRoot {
-			return errors.New("qoder profile or runtime relocation refused")
-		}
-		if e = checkFiles(l, old); e != nil {
-			return e
-		}
-		previous = &old
+	}
+	eng, err := newEngine(r)
+	if err != nil {
+		return fmt.Errorf("create Qoder UAP engine: %w", err)
+	}
+	if r.Action == Remove {
+		return removeInstallation(ctx, r, eng, *previous)
+	}
+	name, supported := sharedBinaryName(r.GOOS, r.GOARCH)
+	if !supported {
+		return errors.New("unsupported Qoder release platform")
+	}
+	executable := filepath.Join(r.RuntimeRoot, name)
+	data, mode, err := readBinary(r.BinarySource, r.GOOS, r.GOARCH)
+	if err != nil {
+		return fmt.Errorf("read Qoder runtime source: %w", err)
 	}
 	binding := ""
 	if previous != nil {
@@ -205,60 +243,118 @@ func Apply(ctx context.Context, r Request) error {
 		}
 		binding = hex.EncodeToString(nonce[:])
 	}
-	var source string
-	var sharedData []byte
-	var sharedMode uint32
-	sharedName, supported := sharedBinaryName(r.GOOS, r.GOARCH)
-	if !supported {
-		return errors.New("unsupported Qoder release platform")
-	}
-	if r.Action != Remove {
-		if !filepath.IsAbs(r.BinarySource) {
-			return errors.New("absolute --binary source required")
-		}
-		sharedData, sharedMode, err = readBinary(r.BinarySource, r.GOOS, r.GOARCH)
-		if err != nil {
-			return err
-		}
-		temp, e := os.MkdirTemp("", "TEST-qoder-package-")
-		if e != nil {
-			return e
-		}
-		defer func() { _ = os.RemoveAll(temp) }()
-		source = filepath.Join(temp, "bundle")
-		_, err = qoderpackage.Build(qoderpackage.BuildRequest{Version: r.Version, GOOS: r.GOOS, GOARCH: r.GOARCH, Executable: r.BinarySource, OutputRoot: source, ManagedControlRoot: r.ControlRoot, Binding: binding})
-		if err != nil {
-			return err
-		}
-	}
-	plan, cleanup, err := planNative(ctx, r, source, r.Action == Remove, previous)
+	temp, err := os.MkdirTemp("", "TEST-qoder-uap-package-")
 	if err != nil {
 		return err
 	}
-	defer cleanup()
-	if r.Action != Remove {
-		// A new version directory can already contain user files even when no
-		// desired filename collides. Do not silently adopt that foreign tree.
-		err = filepath.WalkDir(plan.packageRoot, func(path string, d os.DirEntry, walkErr error) error {
-			if os.IsNotExist(walkErr) {
-				return nil
-			}
-			if walkErr != nil {
-				return walkErr
-			}
-			if !d.IsDir() {
-				if _, owned := installruntime.OwnedFile(l, path); !owned {
-					return errors.New("qoder destination contains an unowned file")
-				}
-			}
-			return nil
-		})
+	defer func() { _ = os.RemoveAll(temp) }()
+	source := filepath.Join(temp, "bundle")
+	if _, err = qoderpackage.Build(qoderpackage.BuildRequest{Version: r.Version, GOOS: r.GOOS, GOARCH: r.GOARCH, Executable: r.BinarySource, OutputRoot: source, ManagedControlRoot: r.ControlRoot, Binding: binding, ManagedExecutable: executable}); err != nil {
+		return err
+	}
+	req := uapinstaller.Request{Operation: uapinstaller.OpInstall, PackageRoot: source, SourceRoot: r.ControlRoot, ClientID: "qoder", ClientConfigRoot: r.ConfigRoot, ClientExecutable: r.QoderExecutable, RequiredComponents: []string{"hooks"}}
+	if previous != nil {
+		req.InstallationID = previous.InstallationID
+		if present, e := hasUAPBinding(ctx, eng, previous.UAPBindingID); e != nil {
+			return e
+		} else if present {
+			req.Operation = uapinstaller.OpUpdate
+		}
+	}
+	prepared, err := eng.Prepare(ctx, req)
+	if err != nil {
+		return fmt.Errorf("prepare Qoder UAP installation: %w", err)
+	}
+	defer func() { _ = prepared.Close() }()
+	plan := prepared.Plan()
+	next := receipt{Schema: 2, ConfigRoot: r.ConfigRoot, Binding: binding, InstallationID: plan.InstallationID, UAPBindingID: plan.BindingID, ManagedRoot: plan.TargetPath, TreeDigest: plan.TreeDigest, Executable: executable, Version: r.Version, Pending: true}
+	if previous != nil {
+		next.PackageRoot, next.NativeEntry, next.NativeEnabled, next.Files = previous.PackageRoot, previous.NativeEntry, previous.NativeEnabled, previous.Files
+	}
+
+	channelBasis, err := installruntime.ObserverChannelPreimage(snap.Fields["route"], "qoderNotifications")
+	if err != nil {
+		return err
+	}
+	oldDesktop, oldWebhook, err := channels(snap.Fields)
+	if err != nil {
+		return err
+	}
+	if registered && (oldDesktop || oldWebhook) {
+		channelBasis, err = installruntime.ObserverChannelPreimage(mustJSON(map[string]any{"qoderNotifications": map[string]bool{"desktop": false, "webhook": false}}), "qoderNotifications")
 		if err != nil {
 			return err
 		}
 	}
+	// Revoke before UAP's external effects. Failure leaves a truthful pending
+	// receipt with channels off; retry reuses the exact managed identities.
+	if registered {
+		if err = setChannels(ctx, r.ControlRoot, r.RuntimeRoot, false, false, r.ChannelPreimage); err != nil {
+			return err
+		}
+	}
+	if r.Fault != nil {
+		if err = r.Fault("qoder_consent_revoked"); err != nil {
+			return err
+		}
+	}
+	if err = publishRuntime(ctx, r, next, data, mode, channelBasis); err != nil {
+		return fmt.Errorf("prepare Qoder shared runtime: %w", err)
+	}
+	if r.Fault != nil {
+		if err = r.Fault("qoder_runtime_prepared"); err != nil {
+			return err
+		}
+	}
+	result, err := eng.Apply(ctx, prepared, uapinstaller.Decision{Confirmed: true})
+	if err != nil {
+		return fmt.Errorf("qoder UAP installation incomplete (consent remains off): %w", err)
+	}
+	if result.Client.Activation != string(domain.ActivationActive) || result.Client.Verification != string(domain.VerificationInstalled) {
+		return fmt.Errorf("qoder UAP native activation is unverified (%s/%s, outcome %s, targets %+v); consent remains off", result.Client.Activation, result.Client.Verification, result.Outcome, result.Targets)
+	}
+	if r.Fault != nil {
+		if err = r.Fault("qoder_uap_installed"); err != nil {
+			return err
+		}
+	}
+	next.Pending = false
+	if err = attestNativePackage(ctx, r, eng, &next); err != nil {
+		return err
+	}
+	if err = publishReceipt(ctx, r, next); err != nil {
+		return err
+	}
+	return setChannels(ctx, r.ControlRoot, r.RuntimeRoot, r.Desktop, r.Webhook, channelBasis)
+}
+
+func publishRuntime(ctx context.Context, r Request, next receipt, data []byte, mode uint32, channelBasis string) error {
+	s, err := installruntime.ReadPolicySnapshot(ctx, r.ControlRoot)
+	if err != nil {
+		return err
+	}
+	if err = installruntime.CheckObserverChannelPreimage(s.Fields["route"], "qoderNotifications", channelBasis); err != nil {
+		return err
+	}
+	l := s.Installation.Ledger
+	path := next.Executable
+	before, err := installruntime.Fingerprint(path)
+	if err != nil {
+		return err
+	}
+	if before.Exists {
+		if owned, ok := installruntime.OwnedFile(l, path); !ok || owned != before {
+			return errors.New("shared executable destination is unowned or edited")
+		}
+	}
+	receiptPath := filepath.Join(r.ControlRoot, receiptName)
+	receiptBefore, err := installruntime.Fingerprint(receiptPath)
+	if err != nil {
+		return err
+	}
+	files := []installruntime.File{{Path: path, Before: before, Data: data, Mode: mode}, {Path: receiptPath, Before: receiptBefore, Data: mustJSON(next), Mode: 0600}}
 	var native *installruntime.NativeChange
-	if r.Action != Remove && r.Desktop && r.GOOS == "darwin" {
+	if r.Desktop && r.GOOS == "darwin" {
 		if r.NativeSource != "" {
 			native, err = installruntime.StageNative(ctx, r.ControlRoot, r.NativeSource)
 			if err != nil {
@@ -269,163 +365,47 @@ func Apply(ctx context.Context, r Request) error {
 				defer cancel()
 				_ = installruntime.DiscardNative(clean, r.ControlRoot, native)
 			}()
-			if native.After.DecoderFloor < 1 {
-				return errors.New("macOS desktop requires verified helper decoder protocol 1")
-			}
-		} else if l.Native == nil || l.Native.DecoderFloor < 1 {
-			return errors.New("macOS desktop requires a verified managed helper; pass --native-app")
 		}
+		change := native
+		if change == nil {
+			if l.Native == nil || l.Native.DecoderFloor < 1 {
+				return errors.New("macOS desktop requires a verified managed helper; pass --native-app")
+			}
+			change = &installruntime.NativeChange{After: *l.Native}
+		}
+		if change.After.DecoderFloor < 1 {
+			return errors.New("macOS desktop requires verified helper decoder protocol 1")
+		}
+		aliases, e := installruntime.NativeAlias(change, filepath.Join(r.RuntimeRoot, "bin"))
+		if e != nil {
+			return e
+		}
+		files = append(files, aliases...)
 	}
-	receiptPath := filepath.Join(r.ControlRoot, receiptName)
-	receiptBefore, err := installruntime.Fingerprint(receiptPath)
+	req := installruntime.Request{ControlRoot: r.ControlRoot, RuntimeRoot: r.RuntimeRoot, Owner: "existing-installer", ConsumerID: ConsumerID, Consumer: installruntime.Consumer{Registration: receiptPath, Commands: []string{next.Executable, next.Binding}}, ExpectedGeneration: &l.Generation, ExpectedPolicy: &s.Preimage, Files: files, Native: native}
+	_, configured := s.Fields["enabled"]
+	committed, err := installruntime.Commit(ctx, req)
 	if err != nil {
 		return err
 	}
-	if receiptBefore.Exists && !registered {
-		return errors.New("foreign Qoder receipt exists")
+	if !configured {
+		// Seed only the originally absent decision, after this consumer exists.
+		// A concurrent policy/generation change fails the original CAS.
+		on := true
+		_, err = installruntime.Commit(ctx, installruntime.Request{ControlRoot: r.ControlRoot, RuntimeRoot: r.RuntimeRoot, Owner: "existing-installer", ConsumerID: ConsumerID, RefreshOnly: true, PolicyOnly: true, ExpectedGeneration: &committed.Generation, ExpectedPolicy: &s.Preimage, PolicyEnabled: &on})
 	}
-	next := receipt{Schema: 1, ConfigRoot: r.ConfigRoot, PackageRoot: plan.packageRoot, Binding: binding}
-	if r.Action != Remove {
-		next.NativeEntry, err = nativeEntry(plan.desired[registryName])
-		if err != nil {
-			return err
-		}
-		next.NativeEnabled, err = nativeEnabled(plan.desired["settings.json"])
-		if err != nil {
-			return err
-		}
-	}
-	files := []installruntime.File{}
-	if r.Action != Remove {
-		path := filepath.Join(r.RuntimeRoot, sharedName)
-		before, e := installruntime.Fingerprint(path)
-		if e != nil {
-			return e
-		}
-		if before.Exists {
-			if _, ok := installruntime.OwnedFile(l, path); !ok {
-				return errors.New("shared executable destination is unowned")
-			}
-		}
-		files = append(files, installruntime.File{Path: path, Before: before, Data: sharedData, Mode: sharedMode})
-	}
-	desiredPackageFiles := map[string]bool{}
-	for rel, data := range plan.desired {
-		if !strings.HasPrefix(rel, "package/") {
-			continue
-		}
-		path := filepath.Join(plan.packageRoot, filepath.FromSlash(strings.TrimPrefix(rel, "package/")))
-		before, e := installruntime.Fingerprint(path)
-		if e != nil {
-			return e
-		}
-		if before.Exists {
-			if _, ok := installruntime.OwnedFile(l, path); !ok {
-				return errors.New("native Qoder package has unowned destination")
-			}
-		}
-		mode := uint32(0600)
-		if strings.HasPrefix(rel, "package/bin/") {
-			mode = 0755
-		}
-		files = append(files, installruntime.File{Path: path, Before: before, Data: data, Mode: mode})
-		next.Files = append(next.Files, path)
-		desiredPackageFiles[path] = true
-	}
-	if r.Action != Remove && r.Desktop && r.GOOS == "darwin" {
-		change := native
-		if change == nil {
-			change = &installruntime.NativeChange{After: *l.Native}
-		}
-		aliases, e := installruntime.NativeAlias(change, filepath.Join(plan.packageRoot, "bin"))
-		if e != nil {
-			return e
-		}
-		for _, file := range aliases {
-			files = append(files, file)
-			next.Files = append(next.Files, file.Path)
-			desiredPackageFiles[file.Path] = true
-		}
-	}
-	sort.Strings(next.Files)
-	if previous != nil {
-		for _, path := range previous.Files {
-			if r.Action != Remove && desiredPackageFiles[path] {
-				continue
-			}
-			before, e := installruntime.Fingerprint(path)
-			if e != nil {
-				return e
-			}
-			files = append(files, installruntime.File{Path: path, Before: before, Remove: true})
-		}
-	}
-	// RemoveConsumer disallows ordinary Files; adapter files are returned under
-	// the kernel locks in Prepare, alongside native registry CAS mutations.
-	gen := l.Generation
-	req := installruntime.Request{ControlRoot: r.ControlRoot, RuntimeRoot: r.RuntimeRoot, Owner: "existing-installer", ConsumerID: ConsumerID, Consumer: installruntime.Consumer{Registration: receiptPath, Commands: []string{filepath.Join(plan.packageRoot, "bin", binaryName(r.GOOS)), binding}}, ExpectedGeneration: &gen, Native: native, RemoveConsumer: r.Action == Remove, ConfigPaths: []string{filepath.Join(r.ConfigRoot, filepath.FromSlash(registryName)) + ".agent-notifications-qoder", filepath.Join(r.ConfigRoot, "settings.json") + ".agent-notifications-qoder"}, AdapterConfigPaths: []string{filepath.Join(r.ConfigRoot, filepath.FromSlash(registryName)), filepath.Join(r.ConfigRoot, "settings.json")}}
-	req.ExpectedPolicy = &policyData.before
-	if registered && r.Action != Remove {
-		req.PolicyFields = map[string]json.RawMessage{"route": mustJSON(map[string]any{"qoderNotifications": map[string]bool{"desktop": r.Desktop, "webhook": r.Webhook}})}
-	}
-	req.Prepare = func() ([]installruntime.File, error) {
-		result := append([]installruntime.File(nil), files...)
-		for rel, d := range plan.documents {
-			path := filepath.Join(r.ConfigRoot, filepath.FromSlash(rel))
-			mode := uint32(0600)
-			if d.before.Exists {
-				mode = d.before.Mode
-			}
-			result = append(result, installruntime.File{Path: path, Before: d.before, Data: plan.desired[rel], Mode: mode})
-		}
-		if r.Action == Remove {
-			result = append(result, installruntime.File{Path: receiptPath, Before: receiptBefore, Remove: true})
-		} else {
-			result = append(result, installruntime.File{Path: receiptPath, Before: receiptBefore, Data: mustJSON(next), Mode: 0600})
-		}
-		return result, nil
-	}
-	// With no sibling consumers, the kernel retires all owned files itself.
-	if r.Action == Remove && len(l.Consumers) == 1 {
-		files = nil
-		req.Prepare = func() ([]installruntime.File, error) {
-			var result []installruntime.File
-			for rel, d := range plan.documents {
-				mode := uint32(0600)
-				if d.before.Exists {
-					mode = d.before.Mode
-				}
-				result = append(result, installruntime.File{Path: filepath.Join(r.ConfigRoot, filepath.FromSlash(rel)), Before: d.before, Data: plan.desired[rel], Mode: mode})
-			}
-			return result, nil
-		}
-	}
-	if r.Action == Remove {
-		if err = setChannels(ctx, r.ControlRoot, r.RuntimeRoot, false, false, ""); err != nil {
-			return err
-		}
-		l, _, err = installruntime.ReadOwnership(r.ControlRoot)
-		if err != nil {
-			return err
-		}
-		gen = l.Generation
-		currentPolicy, e := readDocument(filepath.Join(r.ControlRoot, "agent-notifications.json"))
-		if e != nil {
-			return e
-		}
-		req.ExpectedPolicy = &currentPolicy.before
-	}
-	if _, err = installruntime.Commit(ctx, req); err != nil {
+	return err
+}
+func publishReceipt(ctx context.Context, r Request, next receipt) error {
+	s, err := installruntime.ReadPolicySnapshot(ctx, r.ControlRoot)
+	if err != nil {
 		return err
 	}
-	if r.Action != Remove && !registered {
-		return setChannels(ctx, r.ControlRoot, r.RuntimeRoot, r.Desktop, r.Webhook, r.ChannelPreimage)
+	path := filepath.Join(r.ControlRoot, receiptName)
+	before, err := installruntime.Fingerprint(path)
+	if err != nil {
+		return err
 	}
-	return nil
-}
-func binaryName(goos string) string {
-	if goos == "windows" {
-		return "claude-notifications.exe"
-	}
-	return "claude-notifications"
+	_, err = installruntime.Commit(ctx, installruntime.Request{ControlRoot: r.ControlRoot, RuntimeRoot: r.RuntimeRoot, Owner: "existing-installer", ConsumerID: ConsumerID, RefreshOnly: true, ExpectedGeneration: &s.Installation.Ledger.Generation, ExpectedPolicy: &s.Preimage, Files: []installruntime.File{{Path: path, Before: before, Data: mustJSON(next), Mode: 0600}}})
+	return err
 }

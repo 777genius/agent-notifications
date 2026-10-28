@@ -43,9 +43,9 @@ Desktop notifications for **Claude, Codex CLI, OpenCode, Gemini CLI, Cursor CLI,
 (set -o pipefail; curl -fsSL https://agent-notifications.com/install.sh | bash)
 ```
 
-**Cursor CLI:** [install separately with an explicit CLI executable and profile](docs/cursor-notifications.md). The managed UAP integration sends informational Stop notifications and optional webhooks; it does not provide Cursor IDE, question or permission alerts.
+Choose **Claude**, **Codex CLI**, **OpenCode**, **Gemini CLI**, **Qoder**, **Cursor CLI**, **Pi**, or a combination. Install the selected agent CLIs first and make them available on `PATH`. Pi uses its official standalone distribution. The installer also requires curl, Bash, and a working `python3` or `node` on `PATH`; see [agent/platform prerequisites](docs/INSTALLATION.md#prerequisites). Run the same command to update.
 
-Choose **Claude**, **Codex CLI**, **OpenCode**, **Gemini CLI**, **Qoder**, **Pi**, or a combination. Install the selected agent CLIs first and make them available on `PATH`. Pi uses its official standalone distribution. The installer also requires curl, Bash, and a working `python3` or `node` on `PATH`; see [agent/platform prerequisites](docs/INSTALLATION.md#prerequisites). Run the same command to update.
+The common installer uses one product selection and channel confirmation, with UAP managing each integration. Fresh OpenCode/Gemini/Qoder/Cursor/Pi installs default to desktop on and webhooks off; updates without channel flags preserve each agent's saved choice, including disabled channels. Cursor CLI sends informational Stop alerts on qualified Linux amd64, macOS arm64 and Windows amd64 hosts; see [its profile requirements and limits](docs/cursor-notifications.md).
 
 **Windows:** use **Git Bash**, not WSL, for a native Windows installation.
 
@@ -56,6 +56,7 @@ After setup:
 - **OpenCode:** restart OpenCode; on macOS, [grant notification permission](docs/opencode-notifications.md#macos-notification-permission).
 - **Gemini CLI:** restart Gemini to reload its hooks.
 - **Qoder:** install the Qoder CLI first, then reload Qoder to activate its native plugin.
+- **Cursor CLI:** restart Cursor CLI to load its informational Stop observer.
 - **Pi:** restart Pi or run `/reload`. Desktop sounds and click-to-focus use the originating local terminal; [setup, modes and settings](docs/pi-notifications.md).
 
 The installer selects a release from the [platform channels](docs/PLATFORM_RELEASE_CHANNELS.md) for your OS and architecture. See that page for current versions and the [release notes](https://github.com/777genius/agent-notifications/releases) for validation details and known limitations.
@@ -77,11 +78,11 @@ Use `--product claude` or `--product both` for Claude or Claude + Codex. For Cla
 (set -o pipefail; curl -fsSL https://agent-notifications.com/install.sh | bash -s -- --products claude,codex,opencode --desktop)
 ```
 
-On macOS/Linux/Windows, add `,gemini` to `--products` for all four agents, or use `--product gemini` for Gemini only. Fresh OpenCode/Gemini setup defaults to desktop notifications with webhooks off; updates preserve saved channel choices when no channel flags are supplied. Explicit flags replace the channel pair: `--desktop` enables desktop only, `--webhook` enables webhooks only, and both enable both. Webhook destinations need separate configuration. These flags do not change Claude/Codex channels.
+Add `,gemini`, `,qoder`, `,cursor` or `,pi` to `--products`, or select one agent with `--product`. Each integration keeps its own desktop/webhook consent. Fresh installs default to desktop notifications with webhooks off; updates preserve saved channel choices when no channel flags are supplied. Explicit flags replace the channel pair: `--desktop` enables desktop only, `--webhook` enables webhooks only, and both enable both. Use `--desktop=false --webhook=false` to disable these channels while retaining the integration. Webhook destinations need separate configuration. These flags do not change Claude/Codex channels.
 
 For Pi, use `--product pi --desktop` or add `,pi` to a combined `--products` selection. Pi has its own desktop/webhook consent and uses the same common installer. [Pi setup and event meanings](docs/pi-notifications.md).
 
-Claude/Codex setup also installs the `agent-notifications` MCP server and `agent-notifications` skill so an agent can notify you during a task. Open a new session after setup. When an existing managed MCP installation or binding is detected, automatic setup keeps absent clients off; use `--agent-notify` to add them explicitly. Use `--skip-agent-notify` to skip their setup for that run; it neither removes an existing MCP installation nor records a permanent opt-out. [Setup and recovery details](docs/INSTALLATION.md).
+Claude/Codex setup also installs the `agent-notifications` MCP server and `agent-notifications` skill so an agent can notify you during a task. Open a new session after setup. When an existing managed MCP installation or binding is detected, automatic setup keeps absent clients off; use `--agent-notify` to add them explicitly. Use `--skip-agent-notify` to skip their setup and any selected Cursor integration for that run; it neither removes existing registrations nor records a permanent opt-out. Qoder, OpenCode, Gemini and Pi are unaffected. [Setup and recovery details](docs/INSTALLATION.md).
 
 </details>
 
@@ -104,7 +105,7 @@ Claude/Codex setup also installs the `agent-notifications` MCP server and `agent
 | **Codex CLI** | Turn completion and tool permissions; experimental question hooks and final-message question/error detection | Yes | [Setup and limits](docs/CODEX.md) |
 | **OpenCode** | Root-session completion, questions, permissions and errors | No | [Setup and limits](docs/opencode-notifications.md) |
 | **Gemini CLI** | Turn completion and tool permissions | No | [Cross-platform setup and qualification](docs/gemini-notifications.md) |
-| **Cursor CLI** | Agent loop stopping; fixed informational text | No | [Qualified versions, platforms and explicit setup](docs/cursor-notifications.md) |
+| **Cursor CLI** | Agent loop stopping; fixed informational text | No | [Qualified hosts, shared setup and profile authority](docs/cursor-notifications.md) |
 | **Qoder** | Completion, question, permission, plan and subagent/idle-teammate hooks; native plugin | Exact-chat focus unavailable | [Unified installation and native hooks](docs/QODER.md) |
 | **Pi** | Final completed activity, blocking extension UI questions and final API errors | Yes, in a known local terminal UI | [Common installation, modes, sound and terminal focus](docs/pi-notifications.md) |
 

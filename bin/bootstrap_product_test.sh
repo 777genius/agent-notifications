@@ -259,7 +259,12 @@ cat > "$SANDBOX/configure-parser" <<'EOF'
 preserve=0
 policy=0
 enabled=0
+value=false
+[ -z "${CONFIGURE_CAPTURE:-}" ] || printf '%s\0' "$@" > "$CONFIGURE_CAPTURE"
 for arg in "$@"; do
+    if [ "$value" = true ]; then value=false; continue; fi
+    case "$arg" in --scope-root|--client-executable) exit 41 ;; esac
+    case "$arg" in --provider|--navigation|--app|--team-id|--allow-unknown-caller|--allow-caller-asserted|--codex-home) value=true ;; esac
     [ "$arg" != --preserve-policy ] || preserve=$((preserve + 1))
     [ "$arg" != --policy-only ] || policy=$((policy + 1))
     [ "$arg" != --preserve-enabled ] || enabled=$((enabled + 1))
@@ -275,6 +280,22 @@ chmod +x "$SANDBOX/configure-parser"
     export EXPECTED_PRESERVE=0
     CONFIGURE_ARGS=(--navigation none --allow-unknown-caller true --allow-caller-asserted false)
     configure_agent_policy portable
+    CONFIGURE_ARGS=(--scope-root "$SANDBOX/cursor profile" --navigation none --client-executable "$SANDBOX/cursor agent" --allow-unknown-caller true --allow-caller-asserted false)
+    original_args="${CONFIGURE_ARGS[*]}"
+    configure_agent_policy portable
+    [ "${#CONFIGURE_ARGS[@]}" -eq 10 ] && [ "${CONFIGURE_ARGS[*]}" = "$original_args" ]
+    export EXPECTED_PRESERVE=1 CONFIGURE_CAPTURE="$SANDBOX/configure-argv"
+    CONFIGURE_ARGS=(--scope-root "$SANDBOX/cursor profile" --app "$SANDBOX/Terminal App.app" --team-id --client-executable --allow-unknown-caller true --allow-caller-asserted false --client-executable "$SANDBOX/cursor agent" --preserve-policy --json --request-permission)
+    original_args="${CONFIGURE_ARGS[*]}"
+    configure_agent_policy portable
+    [ "${CONFIGURE_ARGS[*]}" = "$original_args" ]
+    printf '%s\0' setup-notifications configure --provider claude --app "$SANDBOX/Terminal App.app" --team-id --client-executable --allow-unknown-caller true --allow-caller-asserted false --preserve-policy --json --request-permission --policy-only --preserve-enabled > "$SANDBOX/configure-expected"
+    python3 -I - "$CONFIGURE_CAPTURE" "$SANDBOX/configure-expected" <<'PY_CONFIGURE_ARGV'
+import pathlib, sys
+actual=pathlib.Path(sys.argv[1]).read_bytes().split(b'\0')[:-1]
+expected=pathlib.Path(sys.argv[2]).read_bytes().split(b'\0')[:-1]
+assert actual==expected,actual
+PY_CONFIGURE_ARGV
 )
 for tag in v1.42.0 v1.43.2 v2.0.0; do
     BOOTSTRAP_RELEASE_TAG="$tag"
@@ -771,19 +792,20 @@ trace_name="${1#--}-${2:-none}"
 [ "${2:-}" != wizard ] || trace_name="$trace_name-$4"
 printf '%s\0' "$@" > "$TEST_TRACE/$trace_name"
 case "$1 ${2:-}" in
-    'setup-products capabilities') printf 'setup-products-v1 claude codex opencode gemini qoder\n' ;;
+    'setup-products capabilities') printf 'setup-products-v1 claude codex opencode gemini qoder cursor\n' ;;
     'setup-products features') printf 'terminal-selector-v1\n' ;;
     'setup-products repair-capabilities') printf 'cache-repair-v1\n' ;;
     'setup-products repair-cache') printf 'ready\n' ;;
     'setup-products select') printf '%s\n' "${TEST_SELECTION:-cursor}" ;;
     'setup-products channels') [ "${TEST_CANCEL:-}" = channels ] || printf '%s\n' "$TEST_CHANNELS" ;;
-    'setup-products confirm')
+    'setup-products confirm'|'setup-products prepare')
+        reply=approved; [ "$2" != prepare ] || reply=prepared
         [ "${TEST_CANCEL:-}" != confirm ] || exit 0
         while [ "$#" -gt 0 ]; do
             if [ "$1" = --intent-file ]; then printf 'TEST immutable checkpoint' > "$2"; break; fi
             shift
         done
-        printf 'approved\n' ;;
+        printf '%s\n' "$reply" ;;
     'setup-products intent-args') cat "$TEST_ATOMS" ;;
     'config path')
         while IFS= read -r -d '' key && IFS= read -r -d '' value; do
@@ -794,7 +816,9 @@ case "$1 ${2:-}" in
     'setup-notifications --help') printf '%s\n' '--policy-only --preserve-enabled' ;;
     'setup-notifications wizard')
         if [ "${TEST_WIZARD_WARNING:-0}" = 1 ]; then printf '{"warning":"foreign-callback-fixture"}\n' >&2; fi
-        if [ "$4" = inspect ]; then printf '{"targets":[]}\n'; else exit "${TEST_WIZARD_EXIT:-0}"; fi ;;
+        if [ "$4" = inspect ]; then printf '{"targets":[]}\n'; else
+            [ -z "${TEST_MIXED_FLOW:-}" ] || printf 'cursor\n' >> "$TEST_TRACE/ORDER"
+            exit "${TEST_WIZARD_EXIT:-0}"; fi ;;
     *) exit 97 ;;
 esac
 CURSOR_PEER
@@ -810,11 +834,23 @@ acquire_wizard_portable_asset() { WIZARD_PACKAGE_ROOT="$TEST_TRACE/TEST package 
 # runtime preparation is exercised by the downloaded Cursor bootstrap canary.
 prepare_cursor_runtime() { _CURSOR_RUNTIME_PREPARED=false; }
 bootstrap_abs_command() { printf unexpected-discovery >> "$TEST_TRACE/mutation"; return 1; }
-install_legacy_products() { printf legacy >> "$TEST_TRACE/mutation"; return 99; }
+stage_historical_baselines() { :; }; config_preflight() { :; }
+parallel_install_available() { [ "${TEST_MIXED_FLOW:-}" = parallel ]; }
+install_products_parallel() {
+    _PARALLEL_ACTIVE=true; _PARALLEL_READY_CLIENTS=codex
+    mkdir -p "$_CONFIG_STAGE/parallel"
+    printf 'codex\nqoder\n' >> "$TEST_TRACE/ORDER"
+}
+install_legacy_products() {
+    if [ "${TEST_MIXED_FLOW:-}" = sequential ]; then printf 'codex\n' >> "$TEST_TRACE/ORDER"; return 0; fi
+    printf legacy >> "$TEST_TRACE/mutation"; return 99
+}
+install_qoder() { printf 'qoder\n' >> "$TEST_TRACE/ORDER"; }
 install_opencode() { printf opencode >> "$TEST_TRACE/mutation"; return 99; }
 install_gemini() { printf gemini >> "$TEST_TRACE/mutation"; return 99; }
 initialize_config() { printf config >> "$TEST_TRACE/mutation"; return 99; }
 main "$@"
+progress_write_final_snapshot > "$TEST_TRACE/STATUS"
 CURSOR_MAIN
     chmod +x "$TEST_CORE"
     python3 - "$SANDBOX" <<'PY_CURSOR'
@@ -832,7 +868,8 @@ runtime = str(sandbox / 'TEST installed core space')
 global_config = str(sandbox / 'TEST policy space.json')
 atoms = [('home', str(sandbox / 'TEST frozen home')), ('control-root', control),
          ('runtime-root', runtime), ('global-config', global_config),
-         ('scope-root', profile), ('client-executable', vendor)]
+         ('scope-root', profile), ('client-executable', vendor),
+         ('cursor-desktop','true'), ('cursor-webhook','false'), ('cursor-channel-preimage','absent'),('cursor-seed-enabled','true')]
 requested = ['--scope-root', str(sandbox / 'TEST requested cursor'),
              '--client-executable', str(sandbox / 'TEST requested vendor')]
 def run(args, changes=None, raw=None):
@@ -850,7 +887,7 @@ def run(args, changes=None, raw=None):
     finally:
         if process.poll() is None: process.kill(); process.communicate()
         os.close(master)
-    calls = [p.read_bytes().split(b'\0')[:-1] for p in trace.iterdir() if p.name != 'mutation']
+    calls = [p.read_bytes().split(b'\0')[:-1] for p in trace.iterdir() if p.name not in ('mutation','ORDER','STATUS')]
     return process.returncode, calls, output.decode(errors='replace')
 def call(calls, prefix):
     matches = [c for c in calls if c[:len(prefix)] == [s.encode() for s in prefix]]
@@ -862,13 +899,13 @@ for selection in (['--product', 'cursor'], ['--products', 'cursor'], []):
         code, calls, output = run(selection+requested+['--agent-notify']+channels)
         # Old parsing rejected Cursor; dropped CSV/selector IDs prevented dispatch.
         assert code == 0, output
-        confirm = call(calls, ['setup-products', 'confirm'])
+        confirm = call(calls, ['setup-products', 'confirm' if not selection else 'prepare'])
         # Original explicit scope must reach confirmation before frozen argv replaces it.
         assert value(confirm, '--scope-root') == requested[1].encode()
         assert value(confirm, '--client-executable') == requested[3].encode()
         # Desktop-only/webhook-only must not broaden to the absent sibling channel.
         for flag in ('--desktop', '--webhook'):
-            assert (flag.encode() in confirm) == (not channels or flag in channels)
+            assert (flag.encode() in confirm) == (flag in channels)
         preflight = call(calls, ['setup-products', 'preflight'])
         install = call(calls, ['setup-notifications', 'wizard', '--action', 'install'])
         inspect = call(calls, ['setup-notifications', 'wizard', '--action', 'inspect'])
@@ -894,8 +931,8 @@ for warning in ('0', '1'):
     assert ('Maintenance: installer reported additional details.' in output) == (warning == '1'), output
     assert not any(value in output for value in ('Diagnostics:', 'saved in Diagnostics', '"targets"', 'foreign-callback-fixture')), output
 # Cancellation at either question must finish without writing or granting consent.
-for cancel in ('channels', 'confirm'):
-    code, calls, output = run(['--product', 'cursor']+requested, {'TEST_CANCEL': cancel})
+for cancel in ('confirm',):
+    code, calls, output = run(requested, {'TEST_CANCEL': cancel})
     assert code == 0 and not any(c[:1] == [b'setup-notifications'] for c in calls), output
     # Cancellation must also stop legacy/observer/config writes and discovery.
     assert not (trace/'mutation').exists() and 'Boost your productivity' not in output, output
@@ -904,6 +941,8 @@ code, calls, output = run(['--product', 'cursor']+requested+['--skip-agent-notif
 assert code == 0 and not any(c[:1] == [b'setup-notifications'] for c in calls), output
 # A skipped unit must not run another installer/config writer before returning.
 assert not (trace/'mutation').exists(), output
+assert b'cursor\tcomplete\tskipped\n' in (trace/'STATUS').read_bytes(), output
+assert 'Cursor' in output and 'skipped; existing setup kept' in output and 'restart required' not in output, output
 valid = b''.join(k.encode()+b'\0'+v.encode()+b'\0' for k,v in atoms)
 # Duplicate, unknown, relative, missing or truncated frozen scalars must stop before writers.
 for raw in (valid+b'scope-root\0'+profile.encode()+b'\0', valid+b'invented-key\0/TEST\0',
@@ -920,11 +959,27 @@ for changes in ({'TEST_PREFLIGHT_EXIT':'73'}, {'TEST_WIZARD_EXIT':'77'}):
     # Checkpoint/caller refusal must not enter unrelated installers/config writes.
     assert not (trace/'mutation').exists(), output
 # Missing/duplicate selected scope, mixed products and navigation must fail before acquisition.
-for args in (['--product','cursor'], ['--product','cursor']+requested[:2],
-        ['--product','cursor']+requested+requested[:2], ['--products','claude,cursor']+requested,
+for args in (['--product','cursor']+requested[:2],
+        ['--product','cursor']+requested+requested[:2],
         ['--product','claude']+requested, ['--product','cursor']+requested+['--navigation','none']):
     code, calls, output = run(args)
     assert code != 0 and not calls and not (trace/'mutation').exists(), output
+# Actual common dispatch keeps Cursor after both sequential and parallel siblings.
+mixed = atoms + [('codex-home', str(sandbox/'TEST-codex')),
+    ('codex-mcp-config',str(sandbox/'TEST-codex'/'config.toml')),
+    ('codex-executable',str(sandbox/'TEST-codex-cli')),
+    ('qoder-config-root',str(sandbox/'TEST-qoder')),
+    ('qoder-executable',str(sandbox/'TEST-qoder-cli')),
+    ('qoder-desktop','true'),('qoder-webhook','false'),('qoder-channel-preimage','absent')]
+for flow in ('sequential','parallel'):
+    code,calls,output = run(['--products','codex,qoder,cursor','--desktop'],
+        {'TEST_MIXED_FLOW':flow}, raw=b''.join(k.encode()+b'\0'+v.encode()+b'\0' for k,v in mixed))
+    assert code == 0, output
+    assert (trace/'ORDER').read_text().splitlines() == ['codex','qoder','cursor'], output
+    install = call(calls,['setup-notifications','wizard','--action','install'])
+    assert value(install,'--agents') == b'cursor' and b'--bootstrap-ready-clients' not in install
+    assert len([c for c in calls if c[:2] == [b'setup-products',b'prepare']]) == 1
+    assert not any(c[:2] == [b'setup-products',b'confirm'] for c in calls)
 print('Cursor frozen bootstrap argv and refusal fixtures passed (composition only)')
 PY_CURSOR
 )
@@ -1321,7 +1376,6 @@ BOOTSTRAP_SUMMARY_FILE="$TEST_PARALLEL_CASE/summary"
 export BOOTSTRAP_SUMMARY_FILE
 # Fixture adapters only: no agent/vendor CLI or real profile is used.
 progress_child_running() {
-    local running
     if [ "${TEST_PARALLEL_FAIL:-}" = trailing ] && [ ! -f "$TEST_PARALLEL_CASE/trailing-injected" ] &&
         [ -f "$_PARALLEL_ROOT/opencode/result" ]; then
         local index=0
@@ -1337,8 +1391,13 @@ progress_child_running() {
             index=$((index + 1))
         done
     fi
-    for running in $(jobs -pr) $(jobs -ps); do [ "$running" != "$1" ] || return 0; done
-    return 1
+    local running result=1 _BOOTSTRAP_JOB_QUERY=true _BOOTSTRAP_JOB_QUERY_INTERRUPT=0
+    for running in $(jobs -pr) $(jobs -ps); do
+        if [ "$running" = "$1" ]; then result=0; break; fi
+    done
+    _BOOTSTRAP_JOB_QUERY=false
+    [ "$_BOOTSTRAP_JOB_QUERY_INTERRUPT" -eq 0 ] || exit "$_BOOTSTRAP_JOB_QUERY_INTERRUPT"
+    return "$result"
 }
 parallel_phase() {
     if [ -z "$_PARALLEL_WORKER" ]; then

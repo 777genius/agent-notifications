@@ -72,6 +72,7 @@ prepare_managed_runtime() {
 }
 install_legacy_products() { printf 'legacy\n' >> "$TEST_PI_CASE/stages"; }
 install_gemini() { printf 'gemini\n' >> "$TEST_PI_CASE/stages"; }
+prepare_cursor_runtime() { printf 'cursor-runtime\n' >> "$TEST_PI_CASE/stages"; _CURSOR_RUNTIME_PREPARED=false; }
 stage_historical_baselines() { :; }; config_preflight() { :; }
 configure_agent_policy() { printf 'unexpected-policy\n' >> "$TEST_PI_CASE/stages"; return 99; }
 bootstrap_abs_command() { printf 'unexpected-discovery\n' >> "$TEST_PI_CASE/stages"; return 99; }
@@ -152,6 +153,18 @@ for product in ('claude','gemini'):
     assert code==0 and stages==[('legacy' if product=='claude' else product),'runtime'], (stages,out)
     install=matching(calls,['setup-notifications','wizard','--action','install'])[0]
     assert value(install,'--agents')==b'pi' and value(install,'--bootstrap-intent-file').endswith(b'selector-pi-runtime-intent.json'), install
+# Cursor finishes against the parent before Pi refreshes its own confirmation.
+cursor_rows=[('scope-root',str(lab/'TEST Cursor profile')),('client-executable',str(lab/'TEST Cursor executable')),
+             ('cursor-desktop','true'),('cursor-webhook','false'),('cursor-channel-preimage','absent'),
+             ('cursor-seed-enabled','true')]
+code,calls,stages,out=run(['--products','cursor,pi','--desktop'],
+                         {'TEST_PI_CAP_SUFFIX':' cursor pi'}, rows=base+cursor_rows, refresh=base)
+assert code==0 and stages==['cursor-runtime','runtime'], (stages,out)
+installs=matching(calls,['setup-notifications','wizard','--action','install'])
+by_agent={value(args,'--agents'):args for args in installs}
+assert len(installs)==2 and set(by_agent)=={b'cursor',b'pi'}, (installs,out)
+assert value(by_agent[b'cursor'],'--bootstrap-intent-file').endswith(b'selector-intent.json'), by_agent[b'cursor']
+assert value(by_agent[b'pi'],'--bootstrap-intent-file').endswith(b'selector-pi-runtime-intent.json'), by_agent[b'pi']
 # Preserve observed Pi channel/preimage authority during refresh, including updates.
 digest='a'*64
 updated=[(k, digest if k=='pi-channel-preimage' else v) for k,v in base]

@@ -38,7 +38,7 @@ func runSetupProductsContext(ctx context.Context, args []string, input io.Reader
 		return fail(2, err)
 	}
 	if a.Operation == "capabilities" {
-		if err := writeSelectorResult(ctx, output, "setup-products-v1 claude codex opencode gemini qoder pi\n"); err != nil {
+		if err := writeSelectorResult(ctx, output, "setup-products-v1 claude codex opencode gemini qoder cursor pi\n"); err != nil {
 			return fail(1, err)
 		}
 		return 0
@@ -131,7 +131,7 @@ func runSetupProductsContext(ctx context.Context, args []string, input io.Reader
 				label := f.Label
 				if f.Present {
 					label += " (CLI present)"
-					if f.ID != "cursor" && f.ID != "copilot-vscode" {
+					if f.ID != "copilot-vscode" {
 						defaults = append(defaults, f.ID)
 					}
 				} else {

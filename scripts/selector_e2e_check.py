@@ -5,6 +5,9 @@ from pathlib import Path
 import sys
 
 REQUIRED = {
+    "TestBootstrapPublicQoderConsentAndDispatch",
+    "TestBootstrapPublicQoderConsentAndDispatch/cancel",
+    "TestBootstrapPublicQoderConsentAndDispatch/approve",
     "TestSetupProductsScopedPresence",
     "TestBootstrapSelectorPTY",
     "TestBootstrapSelectionDoesNotApproveConsent",
