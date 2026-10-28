@@ -234,7 +234,7 @@
     "scrollDown": "向下滚动选项"
   },
   "install": {
-    "availability": "统一的 Cursor/Qoder 安装流程已在 main 实现，需要下一个对应平台版本。", "cursor": {"guide": "安装 Cursor CLI", "scope": "Cursor CLI：在 Linux amd64、macOS arm64 和 Windows amd64 上提供提示性的 Stop 通知和可选 Webhook。不支持 Cursor IDE、声音或点击聚焦。安装程序会验证所选 CLI 和用户配置目录。", "restart": "重启 Cursor CLI 以加载 Stop 通知观察器。"},
+    "availability": "统一的 Cursor/Qoder 安装流程已在平台版本 v1.49.11 中提供。", "cursor": {"guide": "安装 Cursor CLI", "scope": "Cursor CLI：在 Linux amd64、macOS arm64 和 Windows amd64 上提供提示性的 Stop 通知和可选 Webhook。不支持 Cursor IDE、声音或点击聚焦。安装程序会验证所选 CLI 和用户配置目录。", "restart": "重启 Cursor CLI 以加载 Stop 通知观察器。"},
     "qoder": {"guide": "Qoder 设置与钩子", "scope": "Qoder：完成、提问、权限、计划和团队成员通知，以及可选 Webhook。可在统一安装程序中与其他代理一起选择；点击通知无法打开准确的现有聊天。", "restart": "重启 Qoder 以启用钩子。"},
     "title": "设置通知",
     "intro": "按照以下步骤为 {agent} 添加通知。",

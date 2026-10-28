@@ -2,7 +2,7 @@
 
 Agent Notifications supports managed Cursor CLI Stop notifications through the public Universal Agent Plugins (UAP) SDK. Install, update, disable and uninstall preserve unrelated hooks. Cursor IDE is a separate product and is not covered by this integration.
 
-The common product selection described on `main` requires the next matching [platform release](PLATFORM_RELEASE_CHANNELS.md). Earlier platform channels can retain the separate Cursor setup contract from their release notes.
+The common product selection is available in [platform release v1.49.11](PLATFORM_RELEASE_CHANNELS.md). Earlier platform channels can retain the separate Cursor setup contract from their release notes.
 
 ## Qualified hosts
 

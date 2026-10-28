@@ -86,7 +86,7 @@ test("every locale names Cursor and Qoder and explains their common release avai
     const messages = flatten(await loadMessages(locale.file));
     assert.equal(messages.get("install.products.cursor"), "Cursor CLI", locale.code);
     assert.equal(messages.get("install.products.qoder"), "Qoder", locale.code);
-    assert.match(messages.get("install.availability")!, /main/, locale.code);
+    assert.match(messages.get("install.availability")!, /v1\.49\.11/, locale.code);
     assert.match(messages.get("install.cursor.scope")!, /Linux amd64/, locale.code);
     assert.ok(messages.has("install.cursor.restart"), locale.code);
     for (const product of ["Claude", "Codex CLI", "Cursor CLI", "Qoder", "OpenCode", "Gemini"])
