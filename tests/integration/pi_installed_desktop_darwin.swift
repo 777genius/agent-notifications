@@ -185,6 +185,16 @@ final class ProductCapture: NSObject, SCStreamOutput, SCStreamDelegate, @uncheck
                 publish(["checks": checks, "foreground": foreground(), "desktop_qualified": false])
                 guard checks.values.allSatisfy({ $0 }) else { throw ProbeError.unavailable("native_observer_prerequisite_unavailable") }
             case "foreground": publish(foreground())
+            case "helper-processes":
+                guard args.count == 2, args[1].hasPrefix("/"), args[1].hasSuffix(".app") else {
+                    throw ProbeError.unavailable("physical_installed_app_required")
+                }
+                let expected = URL(fileURLWithPath: args[1]).resolvingSymlinksInPath().path
+                let pids = NSWorkspace.shared.runningApplications.filter {
+                    $0.bundleIdentifier == "com.777genius.agent-notifications"
+                    && $0.bundleURL?.resolvingSymlinksInPath().path == expected
+                }.map { Int($0.processIdentifier) }
+                publish(["installed_helper_pids": pids])
             case "notification-consent", "allow-notification-consent":
                 guard args.count == 1 else { throw ProbeError.unavailable("fixed_notification_consent_only") }
                 let dialogs = notificationConsent()

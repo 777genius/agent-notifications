@@ -202,7 +202,7 @@ def run(args):
     sink, initial_provider = P.Webhooks(), F.Provider("success")
     env = F.prepare(root, initial_provider, "success")
     env["AGENT_NOTIFICATIONS_CONFIG"] = str(root / "global/config.json")
-    profile, terminals, helpers = root / "agent", [], []
+    profile, terminals, helpers, app = root / "agent", [], [], None
     report = {"schema_version": 1, "scope": "actual_installed_pi_macos_desktop", "status": "failed",
               "test_root": str(root), "source_sha": command(["git", "-C", REPO, "rev-parse", "HEAD"]).strip(),
               "working_tree_dirty": bool(command(["git", "-C", REPO, "status", "--porcelain"])),
@@ -399,6 +399,7 @@ def run(args):
             P.require(request.returncode == 0 and not err and len(out) < 65536, "normal_notification_consent_request_failed")
             permission = json.loads(out)
             report["notification_consent"].update(dialogs=dialogs, physical_allow_click=click["physical_allow_click"],
+                                                   screenshot_sha256=P.sha(args.report.parent / "actual-notification-consent.png"),
                                                    elapsed_seconds=round(time.monotonic() - started, 3), request_collected=True)
         report["candidate_notification_permission"] = permission.get("permission")
         P.require(permission.get("permission") == "allowed", "candidate_signed_helper_notification_permission_unavailable")
@@ -441,6 +442,14 @@ def run(args):
                 except subprocess.TimeoutExpired:
                     os.killpg(child.pid, signal.SIGKILL)
                     child.communicate(timeout=3)
+        if app is not None:
+            try:
+                wait_for(lambda: not observer("helper-processes", str(app))["installed_helper_pids"],
+                         "owned_native_notification_helper_not_collected", seconds=15)
+                report["native_helper_processes_collected"] = True
+            except Exception as error:
+                failures.append(str(error))
+                report["native_helper_processes_collected"] = False
         initial_provider.close()
         sink.close()
         report["owned_children_collected"] = not failures and all(t.collected() for t in terminals) and all(p.poll() is not None for p in helpers)
