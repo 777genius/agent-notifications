@@ -3329,7 +3329,38 @@ import (
 	"path/filepath"
 	"strings"
 )
+func codex() {
+	root := os.Getenv("CODEX_HOME")
+	if root == "" { os.Exit(97) }
+	state := filepath.Join(root, "TEST-wizard-codex-installed.json")
+	args := os.Args[1:]
+	switch {
+	case len(args) == 5 && strings.Join(args[:3], " ") == "plugin marketplace add" && args[4] == "--json":
+		json.NewEncoder(os.Stdout).Encode(map[string]any{"ok": true})
+	case len(args) == 4 && args[0] == "plugin" && args[1] == "add" && args[3] == "--json":
+		name, marketplace, ok := strings.Cut(args[2], "@")
+		if !ok || name == "" || marketplace == "" { os.Exit(98) }
+		entry := map[string]any{"pluginId": args[2], "name": name, "marketplaceName": marketplace, "installed": true, "enabled": true}
+		body, err := json.Marshal(entry)
+		if err != nil || os.WriteFile(state, body, 0600) != nil { os.Exit(98) }
+		json.NewEncoder(os.Stdout).Encode(map[string]any{"ok": true})
+	case len(args) == 3 && strings.Join(args, " ") == "plugin list --json":
+		entries := []map[string]any{}
+		body, err := os.ReadFile(state)
+		if err == nil {
+			var entry map[string]any
+			if json.Unmarshal(body, &entry) != nil { os.Exit(98) }
+			entries = append(entries, entry)
+		} else if !os.IsNotExist(err) { os.Exit(98) }
+		json.NewEncoder(os.Stdout).Encode(map[string]any{"installed": entries})
+	default:
+		os.Exit(99)
+	}
+}
 func main() {
+	// Only the explicitly named Codex fixture uses its qualified object shape.
+	// The shared Claude probe and its array listing retain their existing path.
+	if filepath.Base(os.Args[0]) == "TEST-wizard-codex" { codex(); return }
 	if strings.Join(os.Args[1:], " ") == "plugin list --json" {
 		root := os.Getenv("CLAUDE_CONFIG_DIR")
 		listed := []map[string]any{}
