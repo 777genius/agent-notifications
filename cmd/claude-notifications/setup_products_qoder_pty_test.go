@@ -5,6 +5,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -37,7 +38,11 @@ func TestBootstrapPublicQoderConsentAndDispatch(t *testing.T) {
 			}))
 			defer endpoint.Close()
 			config := filepath.Join(f.project, "TEST-qoder-config.json")
-			f.write(config, []byte(fmt.Sprintf(`{"schemaVersion":2,"notifications":{"desktop":{"enabled":false},"webhook":{"enabled":false}},"agents":{"qoder":{"notifications":{"webhook":{"enabled":true,"url":%q,"preset":"slack"}}}}`, endpoint.URL)), 0600)
+			configData := []byte(fmt.Sprintf(`{"schemaVersion":2,"notifications":{"desktop":{"enabled":false},"webhook":{"enabled":false}},"agents":{"qoder":{"notifications":{"webhook":{"enabled":true,"url":%q,"preset":"slack"}}}}}`, endpoint.URL))
+			if !json.Valid(configData) {
+				t.Fatal("invalid managed Qoder delivery fixture configuration")
+			}
+			f.write(config, configData, 0600)
 			f.env = append(f.env, "AGENT_NOTIFICATIONS_CONFIG="+config)
 			profile := filepath.Join(f.home, "TEST selected Qoder profile")
 			if err := os.MkdirAll(profile, 0700); err != nil {
