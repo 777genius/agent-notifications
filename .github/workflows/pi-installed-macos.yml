@@ -54,6 +54,19 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/TEST-pi-macos/evidence"
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          python - <<'PY'
+          import hashlib, json, os, platform
+          from pathlib import Path
+          source = Path('tests/integration/pi_installed_desktop_darwin.swift')
+          root = Path(os.environ['RUNNER_TEMP']) / 'TEST-pi-macos/evidence'
+          (root / 'observer-host.json').write_text(json.dumps({
+              'source_sha': os.environ['SOURCE_SHA'], 'host_os': platform.system(),
+              'host_architecture': platform.machine(), 'host_version': platform.mac_ver()[0],
+              'observer_source_sha256': hashlib.sha256(source.read_bytes()).hexdigest(),
+              'desktop_qualified': False,
+          }, indent=2) + '\n')
+          PY
           swiftc -parse-as-library tests/integration/pi_installed_desktop_darwin.swift \
             -framework AppKit -framework ApplicationServices -framework AVFoundation \
             -framework CoreAudio -framework CoreMedia -framework ScreenCaptureKit \
