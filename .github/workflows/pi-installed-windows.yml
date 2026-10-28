@@ -61,6 +61,8 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          python -B scripts/test_pi_installed_desktop_windows.py -v
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
           python -B scripts/pi-candidate-build.py --platform windows --arch amd64 --output "$env:RUNNER_TEMP/TEST-pi-windows-candidate"
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Acquire the immutable standalone and run actual common setup lifecycle

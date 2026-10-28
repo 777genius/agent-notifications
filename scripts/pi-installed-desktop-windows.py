@@ -73,6 +73,27 @@ def wait_for(predicate, code, seconds=15):
     raise RuntimeError(code)
 
 
+def observe_unchanged_focus(native, window, stop_capture, seconds=15):
+    """Observe the whole click budget, even when the decoy is already focused.
+
+    Stop the independent cue recording after its existing drain interval; the
+    remaining focus observation must not extend WASAPI's bounded capture.
+    """
+    started, samples = time.monotonic(), 0
+    while True:
+        observed = native("foreground")
+        P.require(observed["hwnd"] == window["hwnd"] and observed["keyboard_hwnd"] == window["hwnd"],
+                  "disabled_or_stale_click_changed_foreground_or_keyboard")
+        samples += 1
+        elapsed = time.monotonic() - started
+        if elapsed >= 0.5 and not stop_capture.exists():
+            stop_capture.write_text("stop\n")
+        if elapsed >= seconds:
+            return {"elapsed_seconds": round(elapsed, 3), "samples": samples,
+                    "foreground_hwnd": observed["hwnd"], "keyboard_hwnd": observed["keyboard_hwnd"]}
+        time.sleep(0.05)
+
+
 def command(argv, *, timeout=25, allowed=(0,), env=None):
     result = subprocess.run(list(map(str, argv)), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, timeout=timeout, env=env,
@@ -210,6 +231,9 @@ def run(args):
                 desktop, sound, click = name != "desktop-off", name != "sound-off", name != "click-off"
                 P.configure(root / "global/config.json", args.assets_root / "config/config.json", sink, desktop=desktop, sound=sound, click=click)
                 cfg = json.loads((root / "global/config.json").read_text())
+                # Match the actual configured title exactly, without the
+                # default presentation suffix " [Pi]".
+                cfg["notifications"]["desktop"]["showSessionLabel"] = False
                 event = "question" if name == "question" else "task_complete"
                 cfg["statuses"][event]["title"] = toast_title
                 (root / "global/config.json").write_text(json.dumps(cfg) + "\n")
@@ -240,6 +264,7 @@ def run(args):
                 provider.release.set()
                 sink.wait(event)
                 image = case_root / "actual-product-banner.bmp"
+                click_observation = None
                 if desktop:
                     if name == "question":
                         rows = F.witness(case_root)
@@ -256,13 +281,20 @@ def run(args):
                         native.focus(expected_window)
                     found = native("toast-click", toast_title, P.COPY[event], image)
                     P.require(found.get("found") is True and found.get("real_mouse_click") is True, "native_product_toast_not_physically_clicked")
-                    wait_for(lambda: native("foreground")["hwnd"] == expected_window["hwnd"], "native_click_returned_to_wrong_window")
+                    if name in ("click-off", "stale-origin"):
+                        click_observation = observe_unchanged_focus(native, expected_window, stop_capture)
+                    else:
+                        def returned_to_origin():
+                            observed = native("foreground")
+                            return observed["hwnd"] == expected_window["hwnd"] and observed["keyboard_hwnd"] == expected_window["hwnd"]
+                        wait_for(returned_to_origin, "native_click_returned_to_wrong_window")
                 else:
                     found = native("toast", toast_title, P.COPY[event], image, allowed=(0, 3))
                     P.require(found.get("found") is False and native("foreground")["hwnd"] == distractor.window["hwnd"],
                               "disabled_desktop_had_native_effect")
-                time.sleep(0.5)
-                stop_capture.write_text("stop\n")
+                if not stop_capture.exists():
+                    time.sleep(0.5)
+                    stop_capture.write_text("stop\n")
                 rest, errors = capture.communicate(timeout=5)
                 P.require(capture.returncode == 0 and not errors, "native_loopback_capture_failed")
                 audio = json.loads(rest)
@@ -297,6 +329,7 @@ def run(args):
                     "configured_cue_envelope_match": correlation, "audio_sha256": P.sha(pcm),
                     "banner_screenshot_sha256": P.sha(image) if desktop else None,
                     "origin_window": origin.window, "distractor_window": distractor.window,
+                    "unchanged_click_observation": click_observation,
                     "checks": {key: True for key in ("native_tui", "configured_banner_policy", "configured_audio_policy",
                                "configured_click_policy", "native_event_counts", "ambient_root_isolated", "owned_terminal_collected")}})
             finally:
