@@ -3,6 +3,11 @@ name: Pi native desktop prerequisites
 on:
   pull_request:
   workflow_dispatch:
+    inputs:
+      windows_client_runner:
+        description: Existing Windows Client runner label; empty uses the repository override or hosted Windows 11 ARM
+        type: string
+        required: false
 
 permissions:
   contents: read
@@ -13,13 +18,19 @@ concurrency:
 
 jobs:
   prerequisites:
-    name: Pi native prerequisites / ${{ matrix.platform }}
-    runs-on: ${{ matrix.platform == 'linux' && (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || vars.CI_LINUX_RUNNER || 'ubuntu-24.04') || matrix.platform == 'darwin' && (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'macos-15' || vars.CI_MACOS_15_RUNNER || 'macos-15') || 'windows-2025' }}
+    name: Pi native prerequisites / ${{ matrix.lane }}
+    runs-on: ${{ matrix.platform == 'linux' && (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || vars.CI_LINUX_RUNNER || 'ubuntu-24.04') || matrix.platform == 'darwin' && (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'macos-15' || vars.CI_MACOS_15_RUNNER || 'macos-15') || matrix.runner }}
     timeout-minutes: 12
     strategy:
       fail-fast: false
       matrix:
-        platform: [linux, darwin, windows]
+        include:
+          - {platform: linux, lane: linux}
+          - {platform: darwin, lane: darwin}
+          - {platform: windows, lane: windows-server, runner: windows-2025}
+          - platform: windows
+            lane: windows-client
+            runner: ${{ inputs.windows_client_runner || vars.CI_PI_WINDOWS_DESKTOP_RUNNER || 'windows-11-vs2026-arm' }}
     steps:
       - name: Checkout exact candidate
         uses: actions/checkout@v7
@@ -40,7 +51,8 @@ jobs:
         run: |
           $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products '*' -property installationPath
           if (!$vs) { throw 'Visual Studio prerequisite unavailable' }
-          $cmd = '"' + $vs + '\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul && set'
+          $arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'x64' }
+          $cmd = '"' + $vs + '\Common7\Tools\VsDevCmd.bat" -arch=' + $arch + ' -host_arch=' + $arch + ' >nul && set'
           cmd.exe /d /s /c $cmd | ForEach-Object {
             if ($_ -match '^(PATH|INCLUDE|LIB|LIBPATH)=(.*)$') { "$($matches[1])=$($matches[2])" >> $env:GITHUB_ENV }
           }
@@ -58,7 +70,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: pi-native-prerequisites-${{ matrix.platform }}-${{ github.event.pull_request.head.sha || github.sha }}
+          name: pi-native-prerequisites-${{ matrix.lane }}-${{ github.event.pull_request.head.sha || github.sha }}
           path: ${{ runner.temp }}/pi-native-preflight/evidence.json
           if-no-files-found: error
           retention-days: 14

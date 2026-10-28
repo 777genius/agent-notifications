@@ -7,6 +7,12 @@ has `desktop_qualified: false`; `prerequisites_ready` establishes these observer
 not a Pi banner, notification permission, product sound or notification click.
 Unavailable prerequisites exit nonzero with an `unqualified` receipt. Windows
 Server cannot substitute for the required Windows Client desktop.
+The separate early Client lane uses the existing `windows-11-vs2026-arm` runner.
+An already configured Client runner can be selected with
+`CI_PI_WINDOWS_DESKTOP_RUNNER` or the workflow's `windows_client_runner` input.
+Receipts record the host architecture. A later run of the shipped amd64 product
+on ARM must explicitly record Windows x64 emulation rather than claim amd64
+hardware. The Server and Client receipts stay separate.
 
 The Linux fixture owns its Xvfb display, Openbox, D-Bus session, dunst, two xterms
 and PulseAudio null sink. It activates both windows, records a known PCM cue from
