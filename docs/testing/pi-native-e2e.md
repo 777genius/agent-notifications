@@ -117,3 +117,11 @@ idle RPC UI and print completion. It records event counts and outcome metadata,
 never transcripts. Every provider and child is collected. This is native Pi
 contract evidence; product installation, TUI delivery, one-shot product shutdown
 drain and desktop acceptance are separate candidate gates.
+
+The same workflow also submits a real prompt in Pi's normal TUI and waits for the
+actual provider reply and settled event before `/quit`. Unix uses an owned PTY;
+Windows uses the narrow fixed-argument `pi_native_pty_windows.cpp` ConPTY bridge,
+with the Pi process tree owned by a kill-on-close job. The receipt requires actual
+`mode:tui`, one provider request, one settlement and collected shutdown. Startup
+alone does not pass. A PTY receipt still grants no visible desktop, sound or
+click-to-focus result.

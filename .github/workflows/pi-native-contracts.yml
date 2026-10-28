@@ -52,6 +52,27 @@ jobs:
           $pin = Get-Content -LiteralPath (Join-Path $evidence 'acquisition.json') -Raw | ConvertFrom-Json
           python -B scripts/pi-native-contracts.py --pi-executable $pin.executable --report (Join-Path $evidence 'events.json')
           exit $LASTEXITCODE
+      - name: Build narrow native Windows ConPTY fixture
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products '*' -property installationPath
+          if (!$vs) { throw 'Native Visual Studio compiler unavailable' }
+          $source = Join-Path $env:GITHUB_WORKSPACE 'tests\integration\pi_native_pty_windows.cpp'
+          $binary = Join-Path $env:RUNNER_TEMP 'TEST-pi-conpty.exe'
+          $object = Join-Path $env:RUNNER_TEMP 'TEST-pi-conpty.obj'
+          $cmd = '"' + $vs + '\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul && cl /nologo /std:c++20 /EHsc /W4 /DUNICODE /D_UNICODE "' + $source + '" /Fe:"' + $binary + '" /Fo:"' + $object + '"'
+          cmd.exe /d /s /c $cmd
+          if ($LASTEXITCODE -ne 0) { throw 'Native ConPTY fixture compile failed' }
+      - name: Actual TUI prompt and reply on native PTY or ConPTY
+        shell: pwsh
+        run: |
+          $evidence = Join-Path $env:RUNNER_TEMP 'pi-native-contracts'
+          $pin = Get-Content -LiteralPath (Join-Path $evidence 'acquisition.json') -Raw | ConvertFrom-Json
+          $tuiArgs = @('--pi-executable', $pin.executable, '--report', (Join-Path $evidence 'tui.json'))
+          if ($IsWindows) { $tuiArgs += @('--pty-bridge', (Join-Path $env:RUNNER_TEMP 'TEST-pi-conpty.exe')) }
+          python -B scripts/pi-native-tui.py @tuiArgs
+          exit $LASTEXITCODE
       - name: Preserve bounded contract evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
