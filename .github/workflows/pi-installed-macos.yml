@@ -12,6 +12,10 @@ on:
       - 'go.sum'
   workflow_dispatch:
     inputs:
+      source_sha:
+        description: Exact immutable source commit; empty uses the dispatched ref
+        type: string
+        required: false
       observer_only:
         description: Compile and observe native permissions before building the product
         type: boolean
@@ -19,6 +23,20 @@ on:
         default: false
       hosted_observer:
         description: Use official macos-15 only for observer-only diagnostics
+        type: boolean
+        required: false
+        default: false
+  workflow_call:
+    inputs:
+      source_sha:
+        type: string
+        required: false
+        default: ''
+      observer_only:
+        type: boolean
+        required: false
+        default: false
+      hosted_observer:
         type: boolean
         required: false
         default: false
@@ -40,11 +58,11 @@ jobs:
       GOTOOLCHAIN: local
       CGO_ENABLED: '1'
       MACOSX_DEPLOYMENT_TARGET: '12.0'
-      SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      SOURCE_SHA: ${{ inputs.source_sha || github.event.pull_request.head.sha || github.sha }}
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ inputs.source_sha || github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
       - uses: actions/setup-python@v7
         with:
@@ -154,7 +172,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: pi-installed-macos-${{ github.event.pull_request.head.sha || github.sha }}
+          name: pi-installed-macos-${{ inputs.source_sha || github.event.pull_request.head.sha || github.sha }}
           path: ${{ runner.temp }}/TEST-pi-macos/evidence/*
           if-no-files-found: error
           retention-days: 14

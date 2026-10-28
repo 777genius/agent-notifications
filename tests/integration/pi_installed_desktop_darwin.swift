@@ -121,6 +121,7 @@ final class ProductCapture: NSObject, SCStreamOutput, SCStreamDelegate, @uncheck
     private var peak: Float = 0
     private var nonzero = 0
     private var sumSquares: Double = 0
+    private var closed = false
     init(path: String) throws {
         FileManager.default.createFile(atPath: path, contents: nil)
         output = try FileHandle(forWritingTo: URL(fileURLWithPath: path))
@@ -129,6 +130,7 @@ final class ProductCapture: NSObject, SCStreamOutput, SCStreamDelegate, @uncheck
         guard buffer.isValid else { return }
         lock.lock()
         defer { lock.unlock() }
+        guard !closed else { return }
         if type == .screen { frames += 1; return }
         guard type == .audio, let description = buffer.formatDescription else { return }
         let format = AVAudioFormat(cmAudioFormatDescription: description)
@@ -161,7 +163,12 @@ final class ProductCapture: NSObject, SCStreamOutput, SCStreamDelegate, @uncheck
                 "audio_nonzero_samples": nonzero, "audio_rms": samples > 0 ? sqrt(sumSquares / Double(samples)) : 0,
                 "sample_rate": 48000, "channels": 1, "format": "s16le"]
     }
-    func close() throws { try output.close() }
+    func close() throws {
+        lock.lock()
+        defer { lock.unlock() }
+        closed = true
+        try output.close()
+    }
 }
 
 @main struct PiInstalledDesktop {
