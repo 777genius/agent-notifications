@@ -69,7 +69,11 @@ jobs:
         with:
           python-version: '3.12'
       - name: Keep the actual asynchronous Pi child attached to native stdin
-        run: python -B scripts/test_pi_macos_terminal_fixture.py -v
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/TEST-pi-macos/evidence"
+          python -B scripts/test_pi_macos_terminal_fixture.py -v 2>&1 | tee "$RUNNER_TEMP/TEST-pi-macos/evidence/terminal-pty.txt"
       - name: Compile the native product observers first
         shell: bash
         run: |

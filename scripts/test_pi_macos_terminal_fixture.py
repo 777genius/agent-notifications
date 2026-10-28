@@ -19,7 +19,7 @@ spec.loader.exec_module(M)
 class TerminalInput(unittest.TestCase):
     def test_actual_async_launcher_keeps_both_ttys_and_collects_child(self):
         with tempfile.TemporaryDirectory(prefix="TEST-pi-terminal-pty-") as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             cwd = root / "TEST project with spaces"
             cwd.mkdir()
             result = root / "native-tty.json"
