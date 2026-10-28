@@ -233,3 +233,19 @@ test("platform availability follows the published channel snapshot", () => {
   assert.match(command("gemini", "macos", "install")!, /--product gemini --desktop\)$/);
   assert.match(command(["claude", "gemini"], "macos", "update")!, /--products claude,gemini\)$/);
 });
+
+test("Pi commands use common selection and independent observer consent", () => {
+  for (const target of ["macos", "linux", "windows"] as const) {
+    const prefix = "(set -o pipefail; curl -fsSL https://agent-notifications.com/install.sh | bash -s -- ";
+    assert.equal(command("pi", target, "install"), prefix + "--product pi --desktop)");
+    assert.equal(command("pi", target, "update"), prefix + "--product pi)");
+    assert.equal(command("pi", target, "install", false, {desktop: false, webhook: true}), prefix + "--product pi --webhook)");
+    assert.equal(command(["pi", "gemini", "claude", "pi"], target, "install", false), prefix + "--products claude,gemini,pi --skip-agent-notify --desktop)");
+    assert.equal(command("pi", target, "install", true, {desktop: false, webhook: false}), null);
+    assert.equal(command("pi", target, "configure"), null);
+    const snippet = command(["pi", "codex"], target, "install", true, {desktop: true, webhook: true})!;
+    const result = spawnSync("bash", [], {input: `curl() { cat <<'INSTALLER'\nprintf '%s\\n' "$@"\nINSTALLER\n}\n${snippet}`, encoding: "utf8"});
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, "--products\ncodex,pi\n--desktop\n--webhook\n");
+  }
+});

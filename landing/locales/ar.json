@@ -1,17 +1,17 @@
 {
-  "seo": { "title": "Agent Notifications - حافظ على تركيزك", "description": "إشعارات سطح المكتب وWebhooks لـ Claude وCodex CLI وOpenCode. Gemini CLI: macOS / Linux / Windows. Cursor CLI: Linux amd64 / macOS arm64 / Windows amd64. Qoder: حزمة منفصلة." },
+  "seo": { "title": "Agent Notifications - حافظ على تركيزك", "description": "إشعارات سطح المكتب وWebhooks لـ Claude وCodex CLI وOpenCode. Gemini CLI: macOS / Linux / Windows. Cursor CLI: Linux amd64 / macOS arm64 / Windows amd64. Qoder: حزمة منفصلة. Pi: الصوت والعودة إلى الطرفية في TUI المحلية." },
   "language": { "label": "اللغة", "current": "اللغة الحالية: {language}", "search": "ابحث عن لغة", "noResults": "لم يتم العثور على لغات", "switchError": "تعذر تغيير اللغة. يرجى المحاولة مجددًا." },
   "accessibility": { "skip": "انتقل إلى المحتوى", "platforms": "أنظمة التشغيل المدعومة",
     "agents": "تكاملات الوكلاء المدعومة" },
   "brand": { "tagline": "لوكلاء البرمجة لديك" },
   "nav": { "ariaLabel": "الرئيسية", "features": "المزايا", "install": "التثبيت", "faq": "الأسئلة الشائعة" },
-  "hero": { "eyebrow": "مراقبة أقل. إنجاز أكثر.", "title": "حافظ على تركيزك", "emphasis": "سننبهك عند الحاجة", "leadFirst": "دع وكيلك يعمل. واعرف متى ينتهي.", "leadSecond": "إشعارات سطح المكتب وWebhooks لـ Claude وCodex CLI وOpenCode. Gemini CLI: macOS / Linux / Windows. Cursor CLI: Linux amd64 / macOS arm64 / Windows amd64. Qoder: حزمة منفصلة.", "primary": "إعداد الإشعارات", "secondary": "استكشف على GitHub", "note": "مفتوح المصدر · يعمل محليًا" },
+  "hero": { "eyebrow": "مراقبة أقل. إنجاز أكثر.", "title": "حافظ على تركيزك", "emphasis": "سننبهك عند الحاجة", "leadFirst": "دع وكيلك يعمل. واعرف متى ينتهي.", "leadSecond": "إشعارات سطح المكتب وWebhooks لـ Claude وCodex CLI وOpenCode. Gemini CLI: macOS / Linux / Windows. Cursor CLI: Linux amd64 / macOS arm64 / Windows amd64. Qoder: حزمة منفصلة. Pi: الصوت والعودة إلى الطرفية في TUI المحلية.", "primary": "إعداد الإشعارات", "secondary": "استكشف على GitHub", "note": "مفتوح المصدر · يعمل محليًا" },
   "common": { "now": "الآن", "beta": "تجريبي" },
   "features": {
     "eyebrow": "التنبيه المناسب. في الوقت المناسب.", "titleFirst": "حافظ على انتباهك", "titleSecond": "تخلص من التحقق المستمر",
     "items": {
-      "1": { "label": "العودة بنقرة", "title": "عد بنقرة واحدة", "text": "انقر على الإشعار للعودة إلى الطرفية أو المحرر أو علامة التبويب الأصلية حيث يتوفر الدعم. لـ Claude وCodex CLI فقط؛ يعتمد الدعم على الطرفية ونظام التشغيل." },
-      "2": { "label": "التحكم في الصوت", "title": "صوت لكل لحظة", "text": "اختر الأصوات واضبط مستواها وحدد جهاز الصوت. أبقِ التنبيهات التي تريدها واكتم البقية. لـ Claude وCodex CLI فقط." },
+      "1": { "label": "العودة بنقرة", "title": "عد بنقرة واحدة", "text": "انقر على الإشعار للعودة إلى الطرفية أو المحرر أو علامة التبويب الأصلية حيث يتوفر الدعم. لـ Claude وCodex CLI وPi فقط؛ يعتمد الدعم على الطرفية ونظام التشغيل." },
+      "2": { "label": "التحكم في الصوت", "title": "صوت لكل لحظة", "text": "اختر الأصوات واضبط مستواها وحدد جهاز الصوت. أبقِ التنبيهات التي تريدها واكتم البقية. لـ Claude وCodex CLI وPi فقط." },
       "3": { "label": "تكاملات خطافات الويب", "title": "سير عملك متصل", "text": "أرسل التحديثات إلى Slack وDiscord وTelegram وLark/Feishu وخطافات ويب مخصصة. اضبط الوجهات لبيئة عملك." }
     },
     "preview": { "focus":"انقر للعودة","return":"عد إلى الطرفية","done": "أنهى وكيلك العمل", "ready": "جاهز عندما تكون جاهزًا.", "sound": "صوتك. بالمستوى الذي تختاره.", "event": "حدث من الوكيل" },
@@ -21,7 +21,7 @@
     "eyebrow": "نقرة واحدة. النافذة الصحيحة.",
     "titleFirst": "مصمم لبيئة عملك",
     "titleSecond": "وليس لطرفية واحدة فقط",
-    "intro": "لـ Claude وCodex CLI فقط. يتكيف التركيز بالنقر مع ما تستخدمه بالفعل. إليك بالضبط مدى دقة النقرة على كل منصة.",
+    "intro": "لـ Claude وCodex CLI وPi فقط. يتكيف التركيز بالنقر مع ما تستخدمه بالفعل. إليك بالضبط مدى دقة النقرة على كل منصة.",
     "columns": {
       "app": "الطرفية / بيئة التطوير",
       "macos": "macOS",
@@ -82,10 +82,10 @@
   "faq": {
     "eyebrow": "بعض الأمور التي ينبغي معرفتها", "title": "الأسئلة الشائعة", "subtitle": "كل ما تحتاجه للعودة إلى العمل.",
     "items": {
-      "1": { "question": "هل أحتاج إلى تثبيت جميع الوكلاء؟", "answer": "اختر أي مجموعة من Claude وCodex CLI وOpenCode وGemini CLI (على macOS / Linux / Windows فقط). ثبّت الوكلاء المختارين أولاً؛ الأوامر أدناه تثبّت الإشعارات." },
+      "1": { "question": "هل أحتاج إلى تثبيت جميع الوكلاء؟", "answer": "اختر أي مجموعة من Claude وCodex CLI وOpenCode وGemini CLI + Pi (على macOS / Linux / Windows فقط). ثبّت الوكلاء المختارين أولاً؛ الأوامر أدناه تثبّت الإشعارات." },
       "2": { "question": "هل تُثبَّت خطافات Codex تلقائيًا؟", "answer": "نعم. يسجل المثبّت الخطافات ويحفظ نسخة ثابتة من بيئة التشغيل. افتح /hooks في Codex لمراجعتها ومنحها الثقة. تحتاج التعريفات المعدلة إلى مراجعة جديدة." },
       "3": { "question": "هل يعيد التحديث ضبط إعداداتي؟", "answer": "يحافظ المثبّت على إعداداتك المشتركة وخطافات Codex التابعة لجهات أخرى. يستخدم التثبيت والتحديث الأمر نفسه. أعد تشغيل الوكيل المختار بعد التحديث." },
-      "4": { "question": "هل يمكنني اختيار ما يصدر صوتًا؟", "answer": "نعم. اضبط الأصوات ومستوى الصوت وجهاز الصوت وقنوات الإشعارات. اختر الإعداد في الدليل للاطلاع على الخطوات الخاصة بوكيلك. لـ Claude وCodex CLI فقط." },
+      "4": { "question": "هل يمكنني اختيار ما يصدر صوتًا؟", "answer": "نعم. اضبط الأصوات ومستوى الصوت وجهاز الصوت وقنوات الإشعارات. اختر الإعداد في الدليل للاطلاع على الخطوات الخاصة بوكيلك. لـ Claude وCodex CLI وPi فقط." },
       "5": { "question": "هل يعمل التركيز بالنقر في كل البيئات؟", "answer": "يختلف الدعم حسب نظام التشغيل والطرفية. يحتاج iTerm2 إلى واجهة Python الخاصة به لتحديد علامة التبويب بدقة. يركّز Windows Terminal على نافذة؛ يستطيع Warp استهداف علامة تبويب أو جزء محدد. OpenCode: تنبيهات صامتة لاكتمال الجلسة الرئيسية والأسئلة وطلبات الأذونات والأخطاء. لا يدعم الصوت أو التركيز بالنقر.", "link": "تحقق من البيئات المدعومة." },
       "6": { "question": "ماذا لو لم يصلني إشعار؟", "answer": "تحقق من أذونات الإشعارات في نظام التشغيل ومن القنوات المختارة. بالنسبة إلى Codex، تأكد من منح الخطافات الثقة.", "link": "اتبع دليل استكشاف الأخطاء لإجراء الفحوص الخاصة بالمنصة." }
     }
@@ -129,7 +129,7 @@
     "products": { "claude": "Claude", "codex": "Codex CLI", "both": "Claude + Codex CLI",
       "opencode": "OpenCode",
       "gemini": "Gemini CLI",
-      "cursor": "Cursor CLI", "qoder": "Qoder" },
+      "cursor": "Cursor CLI", "qoder": "Qoder", "pi": "Pi" },
     "targets": { "unknown": "اختر نظام التشغيل المستهدف", "macos": "macOS", "linux": "Linux", "windows": "Windows · Git Bash", "manual": "التعليمات اليدوية" },
     "prerequisiteTitle": "Codex CLI", "prerequisiteText": "يتطلب إصدارًا مستقرًا منشورًا من الإضافة ≥1.42.0.", "checkReleases": "تحقق من الإصدارات",
     "configure": { "title": "اختر الصوت الذي يناسبك", "claudeBefore": "داخل محادثة Claude، شغّل", "claudeAfter": "هذا أمر شرطة مائلة في Claude، وليس أمرًا للصدفة.", "codexBefore": "بالنسبة إلى Codex، عدّل ملف الإعدادات المشتركة", "codexMiddle": "باتباع", "codexLink": "تعليمات الإعداد اليدوي الموثقة", "codexAfter": "لا يلزم Claude عند إعداد Codex وحده.", "shared": "تُحفظ الإعدادات المشتركة عند التحديث." },
@@ -167,6 +167,14 @@
       "guide": "إعداد OpenCode وحدوده",
       "restart": "أعد تشغيل OpenCode لتحميل الإضافة العامة. على macOS، اسمح بالإشعارات باتباع الدليل.",
       "configure": "استخدم config path --target opencode لإعدادات OpenCode. امنح موافقة desktop/webhook عبر setup-opencode واضبط وجهات Webhook بشكل منفصل."
+    },
+    "pi": {
+      "guide": "إعداد Pi والصوت والعودة إلى الطرفية",
+      "scope": "Pi المستقل: الاكتمال النهائي وأسئلة واجهة الإضافات المنتظرة للإدخال والأخطاء النهائية. يتطلب الصوت والتركيز بالنقر TUI محلية؛ وتعمل webhooks أيضًا في JSON وprint وRPC.",
+      "restart": "أعد تشغيل Pi أو نفّذ /reload لتحميل إضافة الإشعارات.",
+      "configure": "استخدم agents.pi في المخطط 2. تُحفظ موافقة سطح المكتب وwebhook بشكل منفصل؛ لا يُثبّت خادم MCP أو مهارة.",
+      "version": "استخدم Pi المستقل الرسمي؛ اختُبر مع v1.4.0. أغلفة npm في Windows غير مدعومة.",
+      "short": "Pi: الصوت والعودة إلى الطرفية في TUI المحلية."
     }
   },
   "agentSupport": {

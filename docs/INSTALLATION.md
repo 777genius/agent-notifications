@@ -100,6 +100,11 @@ Use `claude,opencode` or `codex,opencode` for two agents. The loader downloads a
 
 Add `,gemini` or `,qoder` to `--products` to include Gemini or Qoder. `--desktop` and `--webhook` apply to each selected OpenCode/Gemini/Qoder integration independently; configure webhook URLs separately. The public installer defaults fresh OpenCode/Gemini/Qoder installations to desktop on and webhooks off, and preserves saved channels on update when flags are omitted. `--skip-agent-notify` applies only to the Claude/Codex notification tool. These flags do not change Claude/Codex notification channels. Single-agent commands and `--product both` remain supported.
 
+Add `,pi` or use `--product pi --desktop` for Pi. Install its official standalone
+CLI first; Windows npm shims are not supported. Pi uses the same common installer,
+with separate desktop/webhook consent and local-TUI sound/click behavior.
+[Pi installation, configuration and lifecycle](pi-notifications.md).
+
 The installer shows recent safe checkpoints for each selected client above its live
 status, including its current operation and elapsed waiting time. Saved registration remains distinct from completed setup; a timeout or
 failed activation keeps that distinction visible. The bottom status shows the
@@ -123,6 +128,7 @@ After installation:
 - **Both:** complete both steps above.
 - **Qoder:** install the Qoder CLI and make `qoder` or `qodercli` available on `PATH`, then restart Qoder after installation. [Native setup and limits](QODER.md).
 - **Gemini CLI:** restart Gemini to reload its hooks. [Setup and limits](gemini-notifications.md).
+- **Pi:** restart Pi or run `/reload` to load the native extension. [Modes, sound and terminal focus](pi-notifications.md).
 - **OpenCode:** restart OpenCode to load its global plugin. On Mac, explicitly grant notification permission. OpenCode bootstrap requires release v1.46.0 or newer; see [OpenCode setup, channels and limits](opencode-notifications.md).
 
 When the selected release supports the portable wizard, the installer also registers the

@@ -1,5 +1,5 @@
 import Bowser from "bowser";
-export type AgentProduct = "claude" | "codex" | "opencode" | "gemini";
+export type AgentProduct = "claude" | "codex" | "opencode" | "gemini" | "pi";
 export type Product = AgentProduct | "both";
 export type Target = "unknown" | "macos" | "linux" | "windows" | "manual";
 export type Intent = "install" | "update" | "configure";
@@ -9,6 +9,7 @@ export const products = [
   { value: "both", label: "Claude + Codex" },
   { value: "opencode", label: "OpenCode" },
   { value: "gemini", label: "Gemini CLI" },
+  { value: "pi", label: "Pi" },
 ] as const;
 export const targets = [
   { value: "unknown", label: "Choose target OS" },
@@ -67,7 +68,7 @@ export function command(
         : [product]
       : product;
   if (!selected.length) return null;
-  const hasObserver = selected.includes("opencode") || selected.includes("gemini");
+  const hasObserver = selected.includes("opencode") || selected.includes("gemini") || selected.includes("pi");
   const channelChoices = openCodeChannels ?? (intent === "install" ? { desktop: true, webhook: false } : undefined);
   if (hasObserver && channelChoices && !channelChoices.desktop && !channelChoices.webhook)
     return null;
@@ -79,8 +80,8 @@ export function command(
       ? `${channelChoices.desktop ? " --desktop" : ""}${channelChoices.webhook ? " --webhook" : ""}`
       : "";
     const productFlag = new Set(selected).size > 1
-      ? `--products ${(["claude", "codex", "opencode", "gemini"] as const).filter((value) => selected.includes(value)).join(",")}`
-      : `--product ${selected.includes("gemini") ? "gemini" : "opencode"}`;
+      ? `--products ${(["claude", "codex", "opencode", "gemini", "pi"] as const).filter((value) => selected.includes(value)).join(",")}`
+      : `--product ${selected.includes("pi") ? "pi" : selected.includes("gemini") ? "gemini" : "opencode"}`;
     const pipeline = `curl -fsSL ${installerUrl} | bash -s -- ${productFlag}${skip}${channels}`;
     return `(set -o pipefail; ${pipeline})`;
   }

@@ -3,19 +3,19 @@ import { repo, type AgentProduct } from "~/data/install";
 
 const { t } = useI18n();
 type SupportedAgent = AgentProduct | "cursor" | "qoder";
-const agents: SupportedAgent[] = ["claude", "codex", "opencode", "gemini", "cursor", "qoder"];
+const agents: SupportedAgent[] = ["claude", "codex", "opencode", "gemini", "cursor", "qoder", "pi"];
 type Support = "yes" | "no" | "conditional";
 const rows: { key: string; support: Record<SupportedAgent, Support> }[] = [
-  { key: "completion", support: { claude: "yes", codex: "yes", opencode: "yes", gemini: "yes", cursor: "conditional", qoder: "yes" } },
-  { key: "question", support: { claude: "yes", codex: "conditional", opencode: "yes", gemini: "no", cursor: "no", qoder: "yes" } },
-  { key: "permission", support: { claude: "yes", codex: "yes", opencode: "yes", gemini: "yes", cursor: "no", qoder: "yes" } },
-  { key: "review", support: { claude: "yes", codex: "no", opencode: "no", gemini: "no", cursor: "no", qoder: "no" } },
-  { key: "plan", support: { claude: "yes", codex: "no", opencode: "no", gemini: "no", cursor: "no", qoder: "yes" } },
-  { key: "limit", support: { claude: "yes", codex: "conditional", opencode: "no", gemini: "no", cursor: "no", qoder: "no" } },
-  { key: "error", support: { claude: "yes", codex: "conditional", opencode: "yes", gemini: "no", cursor: "no", qoder: "no" } },
-  { key: "sound", support: { claude: "yes", codex: "yes", opencode: "no", gemini: "no", cursor: "no", qoder: "yes" } },
-  { key: "focus", support: { claude: "conditional", codex: "conditional", opencode: "no", gemini: "no", cursor: "no", qoder: "no" } },
-  { key: "webhook", support: { claude: "yes", codex: "yes", opencode: "yes", gemini: "yes", cursor: "yes", qoder: "yes" } },
+  { key: "completion", support: { claude: "yes", codex: "yes", opencode: "yes", gemini: "yes", cursor: "conditional", qoder: "yes", pi: "yes" } },
+  { key: "question", support: { claude: "yes", codex: "conditional", opencode: "yes", gemini: "no", cursor: "no", qoder: "yes", pi: "yes" } },
+  { key: "permission", support: { claude: "yes", codex: "yes", opencode: "yes", gemini: "yes", cursor: "no", qoder: "yes", pi: "no" } },
+  { key: "review", support: { claude: "yes", codex: "no", opencode: "no", gemini: "no", cursor: "no", qoder: "no", pi: "no" } },
+  { key: "plan", support: { claude: "yes", codex: "no", opencode: "no", gemini: "no", cursor: "no", qoder: "yes", pi: "no" } },
+  { key: "limit", support: { claude: "yes", codex: "conditional", opencode: "no", gemini: "no", cursor: "no", qoder: "no", pi: "no" } },
+  { key: "error", support: { claude: "yes", codex: "conditional", opencode: "yes", gemini: "no", cursor: "no", qoder: "no", pi: "yes" } },
+  { key: "sound", support: { claude: "yes", codex: "yes", opencode: "no", gemini: "no", cursor: "no", qoder: "yes", pi: "conditional" } },
+  { key: "focus", support: { claude: "conditional", codex: "conditional", opencode: "no", gemini: "no", cursor: "no", qoder: "no", pi: "conditional" } },
+  { key: "webhook", support: { claude: "yes", codex: "yes", opencode: "yes", gemini: "yes", cursor: "yes", qoder: "yes", pi: "yes" } },
 ];
 const icons = { yes: "✓", no: "✕", conditional: "✓*" };
 </script>
@@ -54,6 +54,7 @@ const icons = { yes: "✓", no: "✕", conditional: "✓*" };
       <p>{{ t("agentSupport.legend") }}</p>
       <p>{{ t("install.cursor.scope") }} <a :href="repo + '/blob/main/docs/cursor-notifications.md'">{{ t("install.cursor.guide") }} ↗</a></p>
       <p>{{ t("install.gemini.version") }} <a :href="repo + '/blob/main/docs/gemini-notifications.md'">{{ t("install.gemini.guide") }} ↗</a></p>
+      <p>{{ t("install.pi.scope") }} <a :href="repo + '/blob/main/docs/pi-notifications.md'">{{ t("install.pi.guide") }} ↗</a></p>
       <p>{{ t("install.qoder.source") }}</p>
       <p>{{ t("install.qoder.scope") }} <a :href="repo + '/blob/main/docs/QODER.md'">{{ t("install.qoder.guide") }} ↗</a></p>
       <details>

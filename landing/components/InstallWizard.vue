@@ -17,9 +17,9 @@ async function changeIntent(value: Intent) {
   installTitle.value?.focus({ preventScroll: true });
 }
 const qoderSelected = ref(false);
-const selectedProducts = reactive({ claude: true, codex: false, opencode: false, gemini: false });
+const selectedProducts = reactive({ claude: true, codex: false, opencode: false, gemini: false, pi: false });
 const selection = computed<AgentProduct[]>(() =>
-  (["claude", "codex", "opencode", "gemini"] as const).filter((value) => selectedProducts[value]),
+  (["claude", "codex", "opencode", "gemini", "pi"] as const).filter((value) => selectedProducts[value]),
 );
 const hasLegacy = computed(() => selectedProducts.claude || selectedProducts.codex);
 function toggleProduct(value: AgentProduct) {
@@ -217,6 +217,7 @@ qoder plugins list --json</code></pre>
       </p>
       <p v-if="selectedProducts.opencode">{{ t("install.opencode.configure") }}</p>
       <p v-if="selectedProducts.gemini"><a :href="repo + '/blob/main/docs/gemini-notifications.md'">{{ t("install.gemini.guide") }}</a>. {{ t("install.gemini.configure") }}</p>
+      <p v-if="selectedProducts.pi"><a :href="repo + '/blob/main/docs/pi-notifications.md'">{{ t("install.pi.guide") }}</a>. {{ t("install.pi.configure") }}</p>
       <p v-if="hasLegacy">{{ t("install.configure.shared") }}</p>
     </div>
     <div v-else-if="selectedProducts.gemini && target === 'unknown'" class="setup-panel instructions" role="status">
@@ -238,6 +239,7 @@ qoder plugins list --json</code></pre>
       </p>
       <p v-if="selectedProducts.opencode"><a :href="repo + '/blob/main/docs/opencode-notifications.md'">{{ t("install.opencode.guide") }}</a></p>
       <p v-if="selectedProducts.gemini">{{ t("install.gemini.version") }} <a :href="repo + '/blob/main/docs/gemini-notifications.md'">{{ t("install.gemini.guide") }}</a></p>
+      <p v-if="selectedProducts.pi">{{ t("install.pi.version") }} <a :href="repo + '/blob/main/docs/pi-notifications.md'">{{ t("install.pi.guide") }}</a></p>
     </div>
     <div v-else-if="!snippet" class="setup-panel instructions">
       <p>{{ t("install.chooseTarget") }}</p>
@@ -354,6 +356,7 @@ qoder plugins list --json</code></pre>
             </p>
             <p v-if="selectedProducts.opencode">{{ t("install.opencode.restart") }}</p>
             <p v-if="selectedProducts.gemini">{{ t("install.gemini.restart") }}</p>
+            <p v-if="selectedProducts.pi">{{ t("install.pi.restart") }}</p>
           </div>
         </article>
       </div>
@@ -362,6 +365,7 @@ qoder plugins list --json</code></pre>
     <AgentSupportTable />
     <footer v-if="!qoderSelected" class="install-footer">
       <a v-if="selectedProducts.gemini" :href="repo + '/blob/main/docs/gemini-notifications.md'">{{ t("install.gemini.guide") }} ↗</a>
+      <a v-if="selectedProducts.pi" :href="repo + '/blob/main/docs/pi-notifications.md'">{{ t("install.pi.guide") }} ↗</a>
       <a
         v-if="hasLegacy"
         :href="repo + (selectedProducts.codex

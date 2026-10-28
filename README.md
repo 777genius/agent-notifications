@@ -15,6 +15,8 @@
   <a href="docs/cursor-notifications.md"><img src="landing/public/agents/cursor.svg" width="64" height="64" alt="Cursor CLI" title="Cursor CLI" /></a>
   &nbsp;&nbsp;
   <a href="docs/QODER.md"><img src="landing/public/agents/qoder.svg" width="64" height="64" alt="Qoder" title="Qoder" /></a>
+  &nbsp;&nbsp;
+  <a href="docs/pi-notifications.md"><img src="landing/public/agents/pi.svg" width="64" height="64" alt="Pi" title="Pi" /></a>
 </p>
 
 [![Ubuntu CI](https://github.com/777genius/agent-notifications/actions/workflows/ci-ubuntu.yml/badge.svg?branch=main&event=push)](https://github.com/777genius/agent-notifications/actions/workflows/ci-ubuntu.yml?query=branch%3Amain+event%3Apush)
@@ -24,7 +26,7 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/777genius/agent-notifications.svg)](https://pkg.go.dev/github.com/777genius/agent-notifications)
 [![codecov](https://codecov.io/gh/777genius/agent-notifications/graph/badge.svg?branch=main)](https://codecov.io/gh/777genius/agent-notifications)
 
-Desktop notifications for **Claude, Codex CLI, OpenCode, Gemini CLI, Cursor CLI and Qoder** on **macOS, Linux and Windows**. Supported architectures and events vary by agent; see the support table and linked setup guides. Claude and Codex also support sounds and click-to-focus.
+Desktop notifications for **Claude, Codex CLI, OpenCode, Gemini CLI, Cursor CLI, Qoder and Pi** on **macOS, Linux and Windows**. Supported architectures and events vary by agent; see the support table and linked setup guides. Claude, Codex and Pi's local terminal UI support configured sounds and click-to-focus.
 
 <p align="center">
   <img width="100%" alt="macOS, Windows, Linux (left to right)" src="docs/images/notification-platform-labels.svg" />
@@ -43,7 +45,7 @@ Desktop notifications for **Claude, Codex CLI, OpenCode, Gemini CLI, Cursor CLI 
 
 **Cursor CLI:** [install separately with an explicit CLI executable and profile](docs/cursor-notifications.md). The managed UAP integration sends informational Stop notifications and optional webhooks; it does not provide Cursor IDE, question or permission alerts.
 
-Choose **Claude**, **Codex CLI**, **OpenCode**, **Gemini CLI**, **Qoder**, or a combination. Install the selected agent CLIs first and make them available on `PATH`. The installer also requires curl, Bash, and a working `python3` or `node` on `PATH`; see [agent/platform prerequisites](docs/INSTALLATION.md#prerequisites). Run the same command to update.
+Choose **Claude**, **Codex CLI**, **OpenCode**, **Gemini CLI**, **Qoder**, **Pi**, or a combination. Install the selected agent CLIs first and make them available on `PATH`. Pi uses its official standalone distribution. The installer also requires curl, Bash, and a working `python3` or `node` on `PATH`; see [agent/platform prerequisites](docs/INSTALLATION.md#prerequisites). Run the same command to update.
 
 **Windows:** use **Git Bash**, not WSL, for a native Windows installation.
 
@@ -54,6 +56,7 @@ After setup:
 - **OpenCode:** restart OpenCode; on macOS, [grant notification permission](docs/opencode-notifications.md#macos-notification-permission).
 - **Gemini CLI:** restart Gemini to reload its hooks.
 - **Qoder:** install the Qoder CLI first, then reload Qoder to activate its native plugin.
+- **Pi:** restart Pi or run `/reload`. Desktop sounds and click-to-focus use the originating local terminal; [setup, modes and settings](docs/pi-notifications.md).
 
 The installer selects a release from the [platform channels](docs/PLATFORM_RELEASE_CHANNELS.md) for your OS and architecture. See that page for current versions and the [release notes](https://github.com/777genius/agent-notifications/releases) for validation details and known limitations.
 
@@ -76,6 +79,8 @@ Use `--product claude` or `--product both` for Claude or Claude + Codex. For Cla
 
 On macOS/Linux/Windows, add `,gemini` to `--products` for all four agents, or use `--product gemini` for Gemini only. Fresh OpenCode/Gemini setup defaults to desktop notifications with webhooks off; updates preserve saved channel choices when no channel flags are supplied. Explicit flags replace the channel pair: `--desktop` enables desktop only, `--webhook` enables webhooks only, and both enable both. Webhook destinations need separate configuration. These flags do not change Claude/Codex channels.
 
+For Pi, use `--product pi --desktop` or add `,pi` to a combined `--products` selection. Pi has its own desktop/webhook consent and uses the same common installer. [Pi setup and event meanings](docs/pi-notifications.md).
+
 Claude/Codex setup also installs the `agent-notifications` MCP server and `agent-notifications` skill so an agent can notify you during a task. Open a new session after setup. When an existing managed MCP installation or binding is detected, automatic setup keeps absent clients off; use `--agent-notify` to add them explicitly. Use `--skip-agent-notify` to skip their setup for that run; it neither removes an existing MCP installation nor records a permanent opt-out. [Setup and recovery details](docs/INSTALLATION.md).
 
 </details>
@@ -85,7 +90,7 @@ Claude/Codex setup also installs the `agent-notifications` MCP server and `agent
 ## Features
 
 - **Task and attention alerts:** completions, questions, tool approvals and more, depending on the agent. See the table below.
-- **Click-to-focus and sounds (Claude/Codex):** focus the originating terminal or editor where supported; choose built-in or custom sounds, volume and audio output. [Supported terminals](docs/CLICK_TO_FOCUS.md) · [Sound settings](docs/CONFIGURATION.md#sound-options)
+- **Click-to-focus and sounds (Claude/Codex/Pi):** focus the originating terminal or editor where supported; choose built-in or custom sounds, volume and audio output. Pi desktop delivery requires its local terminal UI. [Supported terminals](docs/CLICK_TO_FOCUS.md) · [Sound settings](docs/CONFIGURATION.md#sound-options)
 - **Useful context:** Claude/Codex desktop alerts show project, git branch and native session names, with generated labels as fallback. OpenCode desktop alerts show native session names when available. Question alerts show the current question when supplied by the host. OpenCode webhooks retain generic text. [Session context](docs/CONFIGURATION.md#session-context) · [OpenCode context](docs/opencode-notifications.md)
 - **Less noise (Claude/Codex):** optional focus-aware desktop delivery, delays, filters and subagent alerts. Plugin-level Do Not Disturb detection is Linux-only. [Configuration](docs/CONFIGURATION.md#focus-aware--delayed-notifications) · [Do Not Disturb](docs/DO_NOT_DISTURB.md)
 - **Webhooks:** Slack, Discord, Telegram, Lark/Feishu and custom endpoints. [Integration guides](docs/webhooks/README.md)
@@ -101,6 +106,7 @@ Claude/Codex setup also installs the `agent-notifications` MCP server and `agent
 | **Gemini CLI** | Turn completion and tool permissions | No | [Cross-platform setup and qualification](docs/gemini-notifications.md) |
 | **Cursor CLI** | Agent loop stopping; fixed informational text | No | [Qualified versions, platforms and explicit setup](docs/cursor-notifications.md) |
 | **Qoder** | Completion, question, permission, plan and subagent/idle-teammate hooks; native plugin | Exact-chat focus unavailable | [Unified installation and native hooks](docs/QODER.md) |
+| **Pi** | Final completed activity, blocking extension UI questions and final API errors | Yes, in a known local terminal UI | [Common installation, modes, sound and terminal focus](docs/pi-notifications.md) |
 
 OpenCode V1 and V2 use one installed plugin. The installer does not restrict agent CLI versions. See [OpenCode setup, release reports and delivery limits](docs/opencode-notifications.md) for qualification of specific versions and platforms.
 
@@ -129,6 +135,8 @@ agent-notifications config inspect --target opencode --json
 ```
 
 Use the executable and control root reported by its installer. See [OpenCode settings](docs/opencode-notifications.md#edit-installed-opencode-settings) and [Gemini settings](docs/gemini-notifications.md#settings-duplicates-and-lifecycle) for agent-specific configuration and channel consent.
+
+Pi uses shared configuration with optional schema 2 `agents.pi` overrides. Its desktop route is local-TUI-only; explicitly enabled webhooks also work in JSON, print, RPC and remote sessions. [Pi configuration](docs/pi-notifications.md#sound-and-channel-settings).
 
 [Configuration reference](docs/CONFIGURATION.md) · [Per-agent overrides](docs/AGENT_CONFIGURATION.md) · [Sound previews](docs/interactive-sound-preview.md)
 

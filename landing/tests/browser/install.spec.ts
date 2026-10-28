@@ -17,11 +17,11 @@ async function chooseOS(page: Page, value: string) {
   await page.getByRole("combobox", { name: "Target operating system" }).click();
   await page.getByRole("option", { name: labels[value], exact: true }).click();
 }
-async function chooseAgents(page: Page, selected: readonly ("claude" | "codex" | "opencode" | "gemini")[]) {
-  const labels = { claude: "Claude", codex: "Codex CLI", opencode: "OpenCode", gemini: "Gemini CLI" };
+async function chooseAgents(page: Page, selected: readonly ("claude" | "codex" | "opencode" | "gemini" | "pi")[]) {
+  const labels = { claude: "Claude", codex: "Codex CLI", opencode: "OpenCode", gemini: "Gemini CLI", pi: "Pi" };
   // Select desired cards first so switching hosts never needs an empty selection.
   for (const wanted of [true, false])
-    for (const value of ["claude", "codex", "opencode", "gemini"] as const) {
+    for (const value of ["claude", "codex", "opencode", "gemini", "pi"] as const) {
       const card = page.getByRole("button", { name: labels[value], exact: true });
       if (selected.includes(value) === wanted &&
           (await card.getAttribute("aria-pressed")) !== String(wanted))
@@ -540,12 +540,12 @@ test("released agents toggle independently, copied commands and configuration co
   await page.getByRole("button", { name: "Copy command" }).click();
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("(set -o pipefail; " + prefix.replace("--product ", "--products ") + "claude,codex,opencode --desktop)");
   const table = page.getByRole("table", { name: "Compare agent features" });
-  await expect(table.getByRole("columnheader")).toHaveText(["Feature", "Claude", "Codex CLI", "OpenCode", /Gemini CLI\s*macOS \/ Linux \/ Windows/, "Cursor CLI", "Qoder"]);
-  await expect(table.getByRole("row", { name: /^Completed/ }).getByRole("cell")).toHaveText(["✓Supported", "✓Supported", "✓Supported", "✓Supported", "✓*Supported with limitations", "✓Supported"]);
-  await expect(table.getByRole("row", { name: /^Review/ }).getByRole("cell")).toHaveText(["✓Supported", "✕Not supported", "✕Not supported", "✕Not supported", "✕Not supported", "✕Not supported"]);
-  await expect(table.getByRole("row", { name: /^Sounds/ }).getByRole("cell")).toHaveText(["✓Supported", "✓Supported", "✕Not supported", "✕Not supported", "✕Not supported", "✓Supported"]);
-  await expect(table.getByRole("row", { name: /^Question/ }).getByRole("cell")).toHaveText(["✓Supported", "✓*Supported with limitations", "✓Supported", "✕Not supported", "✕Not supported", "✓Supported"]);
-  await expect(table.getByRole("row", { name: /^Errors/ }).getByRole("cell")).toHaveText(["✓Supported", "✓*Supported with limitations", "✓Supported", "✕Not supported", "✕Not supported", "✕Not supported"]);
+  await expect(table.getByRole("columnheader")).toHaveText(["Feature", "Claude", "Codex CLI", "OpenCode", /Gemini CLI\s*macOS \/ Linux \/ Windows/, "Cursor CLI", "Qoder", "Pi"]);
+  await expect(table.getByRole("row", { name: /^Completed/ }).getByRole("cell")).toHaveText(["✓Supported", "✓Supported", "✓Supported", "✓Supported", "✓*Supported with limitations", "✓Supported", "✓Supported"]);
+  await expect(table.getByRole("row", { name: /^Review/ }).getByRole("cell")).toHaveText(["✓Supported", "✕Not supported", "✕Not supported", "✕Not supported", "✕Not supported", "✕Not supported", "✕Not supported"]);
+  await expect(table.getByRole("row", { name: /^Sounds/ }).getByRole("cell")).toHaveText(["✓Supported", "✓Supported", "✕Not supported", "✕Not supported", "✕Not supported", "✓Supported", "✓*Supported with limitations"]);
+  await expect(table.getByRole("row", { name: /^Question/ }).getByRole("cell")).toHaveText(["✓Supported", "✓*Supported with limitations", "✓Supported", "✕Not supported", "✕Not supported", "✓Supported", "✓Supported"]);
+  await expect(table.getByRole("row", { name: /^Errors/ }).getByRole("cell")).toHaveText(["✓Supported", "✓*Supported with limitations", "✓Supported", "✕Not supported", "✕Not supported", "✕Not supported", "✓Supported"]);
   const compatibility = page.locator(".agent-support details");
   const qualification = compatibility.getByText("Claude permission prompts appear as Question alerts. Codex question hooks are experimental; error and limit detection uses final-message heuristics. See the linked guides for qualification details.", { exact: true });
   await expect(qualification).not.toBeVisible();
@@ -580,17 +580,32 @@ test("first feature explains supported click-to-focus and its agent scope", asyn
   await expect(feature.getByRole("heading", { name: "Return with one click" })).toBeVisible();
   await expect(feature).toContainText("CLICK TO FOCUS");
   await expect(feature).toContainText("terminal, editor or tab where supported");
-  await expect(feature).toContainText("Claude and Codex CLI only");
+  await expect(feature).toContainText("Claude, Codex CLI and Pi only");
   await expect(feature).toContainText("terminal and OS");
 });
 
+test("Pi uses the common installer and explains local TUI sound and focus", async ({ page }) => {
+  await page.goto("");
+  await chooseOS(page, "windows");
+  await chooseAgents(page, ["pi"]);
+  await expect(page.getByRole("button", { name: "Pi", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByLabel("Install command", { exact: true })).toHaveValue("(set -o pipefail; curl -fsSL https://agent-notifications.com/install.sh | bash -s -- --product pi --desktop)");
+  await expect(page.getByRole("checkbox", { name: /Let agents send/ })).toHaveCount(0);
+  await expect(page.locator(".next-steps")).toContainText("Restart Pi or run /reload");
+  await expect(page.locator(".agent-support-notes")).toContainText("Sound and click-to-focus require a local TUI");
+  await expect(page.locator(".install-footer").getByRole("link", { name: "Pi setup, sound and terminal focus ↗" })).toHaveAttribute("href", "https://github.com/777genius/agent-notifications/blob/main/docs/pi-notifications.md");
+  await page.getByRole("button", { name: "Configure", exact: true }).click();
+  await expect(page.locator(".configuration")).toContainText("schema 2 agents.pi");
+  await expect(page.locator(".configuration")).toContainText("no MCP server or skill is installed");
+});
+
 // Revealed sections must still be reachable through a direct URL and navigation.
-test("installation deep link and navigation expose the comparison and six agent logos", async ({ page }) => {
+test("installation deep link and navigation expose the comparison and seven agent logos", async ({ page }) => {
   await page.goto("#install");
   await expect(page).toHaveURL(/#install$/);
   await expect(page.locator("#install")).toBeInViewport();
   await expect(page.getByRole("table", { name: "Compare agent features" })).toBeVisible();
-  await expect(page.locator(".supported-agents").getByRole("img")).toHaveCount(6);
+  await expect(page.locator(".supported-agents").getByRole("img")).toHaveCount(7);
   await expect(page.getByRole("img", { name: "Cursor CLI", exact: true }).first()).toBeVisible();
   await expect(page.getByRole("link", { name: "Cursor CLI installation ↗" })).toHaveAttribute("href", "https://github.com/777genius/agent-notifications/blob/main/docs/cursor-notifications.md");
   await expect(page.getByRole("link", { name: "Qoder setup and hooks ↗" })).toHaveAttribute("href", "https://github.com/777genius/agent-notifications/blob/main/docs/QODER.md");
@@ -664,7 +679,7 @@ test("agent comparison stays readable on mobile and keeps all agents visible", a
     await chooseOS(page, "linux");
     await chooseAgents(page, ["opencode"]);
     const table = page.getByRole("table", { name: "Compare agent features" });
-    await expect(table.getByRole("columnheader")).toHaveCount(7);
+    await expect(table.getByRole("columnheader")).toHaveCount(8);
     await expect(table.getByRole("row")).toHaveCount(11);
     // The comparison belongs below the command and both next-step cards at every width.
     const comparison = await table.boundingBox();
