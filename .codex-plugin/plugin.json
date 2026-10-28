@@ -8,6 +8,6 @@
     "interface": {
         "displayName": "Agent Notifications",
         "shortDescription": "Desktop alerts for agents",
-        "composerIcon": "./brand/agent-notifications-logo-transparent.png"
+        "composerIcon": "./assets/icon.png"
     }
 }
