@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 import platform
 import shlex
+import shutil
 import signal
 import subprocess
 import tempfile
@@ -162,7 +163,7 @@ def envelope_match(recording, reference):
     """Compare the observed cue's 10ms energy contour with its actual asset.
 
     This checks configured cue identity in addition to recorded energy. The
-    reference is decoded only, never played. Cosine comparison tolerates the
+    reference is decoded only, never played. Centered cosine tolerates the
     capture's native gain and OS resampling while rejecting a flat ambient tone.
     """
     with wave.open(str(reference)) as source:
@@ -179,10 +180,15 @@ def envelope_match(recording, reference):
     while target and target[0] < 8:
         target.pop(0)
     P.require(len(target) >= 3 and len(actual) >= len(target), "configured_cue_recording_too_short")
+    mean = sum(target) / len(target)
+    target = [x - mean for x in target]
     target_norm = math.sqrt(sum(x * x for x in target))
+    P.require(target_norm > 0, "configured_cue_reference_has_no_contour")
     best = 0
     for offset in range(len(actual) - len(target) + 1):
         segment = actual[offset:offset + len(target)]
+        mean = sum(segment) / len(segment)
+        segment = [x - mean for x in segment]
         norm = math.sqrt(sum(x * x for x in segment))
         if norm > 0:
             best = max(best, sum(a * b for a, b in zip(segment, target)) / (norm * target_norm))
@@ -284,7 +290,9 @@ def run(args):
             # click. Its webhook is observed after that normal helper lifecycle.
             if not webhook_received:
                 sink.wait(expected)
-            time.sleep(0.4)
+            # The configured task-complete cue is 2.544s. Capture its complete
+            # native playback, including the tail after a prompt physical click.
+            time.sleep(3)
             (case_root / "capture-stop").touch()
             out, err = recorder.communicate(timeout=5)
             P.require(recorder.returncode == 0 and not err, "native_capture_not_collected")
@@ -339,9 +347,19 @@ def run(args):
             if terminal:
                 terminal.close()
             provider.close()
+            retained = args.report.parent / ("case-" + name)
+            retained.mkdir(parents=True, exist_ok=True)
+            for filename in ("actual-product-banner.png", "native-output.s16le", "capture-ready.json"):
+                source = case_root / filename
+                if source.is_file() and source.stat().st_size <= 16 * 1024 * 1024:
+                    shutil.copyfile(source, retained / filename)
 
     try:
         report["native_preflight"] = observer("preflight")
+        P.require(report["pi_acquisition"].get("version") == "1.4.0"
+                  and report["pi_acquisition"].get("binary_sha256") == report["pi_binary_sha256"]
+                  and command([args.pi_executable, "--version"]).strip() == "1.4.0",
+                  "official_pinned_pi_identity_wrong")
         P.require(report["helper"]["archive_sha256"] == HELPER_SHA
                   and command(["git", "-C", REPO, "rev-parse", "HEAD:swift-notifier"]).strip() == HELPER_SOURCE,
                   "signed_helper_source_or_archive_mismatch")
