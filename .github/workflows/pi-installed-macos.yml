@@ -159,6 +159,7 @@ jobs:
           python -B scripts/pi-installed-process-e2e.py \
             --candidate "$root/candidate/stage/claude-notifications-darwin-$arch" \
             --runtime-stage "$root/candidate/stage" --package "$root/candidate/package-A.zip" \
+            --replacement-runtime-stage "$root/candidate/replacement-stage" \
             --updated-package "$root/candidate/package-B.zip" --assets-root "$GITHUB_WORKSPACE" \
             --pi-executable "$root/pi/pi/pi" --report "$root/evidence/process.json"
       - name: Observe installed product completion question audio and physical click
