@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -25,6 +26,22 @@ func TestHelperProcess(t *testing.T) {
 		for {
 			time.Sleep(time.Second)
 		}
+	case "separate":
+		fmt.Fprint(os.Stderr, "non-fatal diagnostic\n")
+		fmt.Fprint(os.Stdout, "false\n")
+	case "aggregate-overflow":
+		var streams sync.WaitGroup
+		for _, stream := range []*os.File{os.Stdout, os.Stderr} {
+			streams.Add(1)
+			go func() {
+				defer streams.Done()
+				_, _ = stream.Write([]byte(strings.Repeat("x", OutputLimit/2+1)))
+			}()
+		}
+		streams.Wait()
+		for {
+			time.Sleep(time.Second)
+		}
 	case "descendant":
 		cmd := exec.Command(os.Args[0], "-test.run=TestHelperProcess")
 		cmd.Env = append(os.Environ(), "TEST_NOTIFICATION_HELPER=hang")
@@ -38,6 +55,29 @@ func TestHelperProcess(t *testing.T) {
 		}
 	}
 	os.Exit(0)
+}
+
+func TestOutputSeparatesSuccessfulStderr(t *testing.T) {
+	cmd := exec.Command(os.Args[0], "-test.run=^TestHelperProcess$")
+	cmd.Env = append(os.Environ(), "TEST_NOTIFICATION_HELPER=separate")
+	output, err := Output(context.Background(), cmd)
+	if err != nil || string(output) != "false\n" {
+		t.Fatalf("stdout=%q err=%v", output, err)
+	}
+}
+
+func TestOutputSharesBudgetAcrossConcurrentStreams(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	cmd := exec.Command(os.Args[0], "-test.run=^TestHelperProcess$")
+	cmd.Env = append(os.Environ(), "TEST_NOTIFICATION_HELPER=aggregate-overflow")
+	output, err := Output(ctx, cmd)
+	if !errors.Is(err, ErrOutputLimit) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		t.Fatalf("combined stdout/stderr did not cancel on overflow: %v", err)
+	}
+	if len(output) > OutputLimit/2+1 || cmd.ProcessState == nil {
+		t.Fatalf("stdout=%d bytes, process waited=%t", len(output), cmd.ProcessState != nil)
+	}
 }
 
 func TestCancellationAndOutputLimit(t *testing.T) {

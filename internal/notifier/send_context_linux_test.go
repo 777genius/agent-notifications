@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"io"
 	"net"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -16,6 +17,48 @@ import (
 	"github.com/777genius/agent-notifications/internal/daemon"
 	"github.com/777genius/agent-notifications/internal/notification"
 )
+
+func TestContextLinuxLocalityRequiresKnownTerminalEvidence(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		env  map[string]string
+		want bool
+	}{
+		{"missing", map[string]string{"DISPLAY": ":0"}, false},
+		{"unknown", map[string]string{"DISPLAY": ":0", "TERM_PROGRAM": "TEST-unknown-terminal"}, false},
+		{"known_terminal", map[string]string{"DISPLAY": ":0", "TERM_PROGRAM": "kitty"}, true},
+		{"known_wayland_terminal", map[string]string{"WAYLAND_DISPLAY": "wayland-0", "TERM_PROGRAM": "WezTerm"}, true},
+		{"native_gnome_indicator", map[string]string{"DISPLAY": ":0", "TERM_PROGRAM": "TEST-unknown-terminal", "GNOME_TERMINAL_SCREEN": "native-screen"}, true},
+		{"native_window", map[string]string{"DISPLAY": ":0", "TERM_PROGRAM": "TEST-unknown-terminal", "WINDOWID": "12345"}, true},
+		{"invalid_window", map[string]string{"DISPLAY": ":0", "WINDOWID": "not-a-window"}, false},
+		{"zero_window", map[string]string{"DISPLAY": ":0", "WINDOWID": "0"}, false},
+		{"terminal_without_desktop", map[string]string{"TERM_PROGRAM": "kitty"}, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			for _, key := range []string{"SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY", "WINDOWID", "DISPLAY", "WAYLAND_DISPLAY", "TERM_PROGRAM", "TERMINAL_EMULATOR", "VSCODE_INJECTION", "VSCODE_GIT_IPC_HANDLE", "GNOME_TERMINAL_SCREEN", "GNOME_TERMINAL_SERVICE", "TERMINATOR_UUID", "KONSOLE_VERSION", "KONSOLE_DBUS_SESSION", "ALACRITTY_WINDOW_ID", "WARP_FOCUS_URL", "WARP_TERMINAL_SESSION_UUID", "WARP_IS_LOCAL_SHELL_SESSION"} {
+				t.Setenv(key, "")
+			}
+			for key, value := range test.env {
+				t.Setenv(key, value)
+			}
+			if got := HasLocalTerminalContext(context.Background()); got != test.want {
+				t.Fatalf("local=%t, want %t", got, test.want)
+			}
+		})
+	}
+}
+
+func TestContextGsettingsStdoutSurvivesSuccessfulDiagnostic(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "gsettings"), []byte("#!/bin/sh\nprintf 'non-fatal diagnostic\\n' >&2\nprintf 'false\\n'\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", root)
+	shown, known := defaultGnomeShowBanners(context.Background())
+	if shown || !known {
+		t.Fatalf("show-banners=false lost: shown=%t known=%t", shown, known)
+	}
+}
 
 type contextCapturePort struct {
 	calls   int

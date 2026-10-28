@@ -9,6 +9,8 @@ import (
 	"github.com/777genius/agent-notifications/internal/winfocus"
 )
 
+var captureLocalWindowsTerminal = winfocus.CaptureContext
+
 func (n *Notifier) sendNativeDesktopContext(ctx context.Context, sound, title, body, subtitle, _, cwd, icon string, opts sendOptions) error {
 	if subtitle != "" {
 		body = subtitle + "\n" + body
@@ -28,10 +30,13 @@ func (n *Notifier) sendNativeDesktopContext(ctx context.Context, sound, title, b
 	return n.playSoundContext(ctx, sound, opts)
 }
 func hasNativeTerminal(ctx context.Context) bool {
-	if os.Getenv("WT_SESSION") != "" || os.Getenv("TERM_PROGRAM") != "" {
+	if ctx.Err() != nil {
+		return false
+	}
+	if os.Getenv("WT_SESSION") != "" {
 		return true
 	}
-	focus, ok := winfocus.CaptureContext(ctx, "")
+	focus, ok := captureLocalWindowsTerminal(ctx, "")
 	return ok && focus.HWND != 0 && focus.PID != 0
 }
 func desktopDNDContext(context.Context) bool { return false }

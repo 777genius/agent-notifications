@@ -122,33 +122,40 @@ func getClaudeNotificationsDesktopEntryPath() string {
 // GNOME Shell extension for activateByWmClass calls.
 // For Wayland-native apps this is the app_id in reverse-domain format.
 func GetGnomeWmClass(terminalName string) string {
+	class, _ := knownGnomeWmClass(terminalName)
+	return class
+}
+
+// Keep recognition and focus mapping in one place. Unknown names retain their
+// legacy focus fallback but cannot serve as positive local-terminal evidence.
+func knownGnomeWmClass(terminalName string) (string, bool) {
 	switch strings.ToLower(terminalName) {
 	case "ghostty":
-		return "com.mitchellh.ghostty"
+		return "com.mitchellh.ghostty", true
 	case "wezterm":
-		return "org.wezfurlong.wezterm"
+		return "org.wezfurlong.wezterm", true
 	case "code", "vscode", "visual studio code":
-		return "code"
+		return "code", true
 	case "alacritty":
-		return "Alacritty"
+		return "Alacritty", true
 	case "kitty":
-		return "kitty"
+		return "kitty", true
 	case "gnome-terminal":
-		return "org.gnome.Terminal"
+		return "org.gnome.Terminal", true
 	case "konsole":
-		return "org.kde.konsole"
+		return "org.kde.konsole", true
 	case "tilix":
-		return "com.gexperts.Tilix"
+		return "com.gexperts.Tilix", true
 	case "terminator":
-		return "Terminator"
+		return "Terminator", true
 	case "xfce4-terminal":
-		return "Xfce4-terminal"
+		return "Xfce4-terminal", true
 	case "mate-terminal":
-		return "Mate-terminal"
+		return "Mate-terminal", true
 	case "warpterminal", "warp":
-		return "dev.warp.Warp"
+		return "dev.warp.Warp", true
 	default:
-		return terminalName
+		return terminalName, false
 	}
 }
 
@@ -298,6 +305,16 @@ func GetFocusProjectPath(terminalName, cwd string) string {
 
 // GetTerminalName detects the current terminal from environment variables.
 func GetTerminalName() string {
+	return getTerminalName(false)
+}
+
+// HasKnownTerminalContext requires a recognized terminal or the existing
+// product-specific native indicators. An arbitrary TERM_PROGRAM is not proof.
+func HasKnownTerminalContext() bool {
+	return getTerminalName(true) != "Terminal"
+}
+
+func getTerminalName(knownOnly bool) string {
 	// JetBrains IDE terminals set no TERM_PROGRAM, so a TERM_PROGRAM or KONSOLE_*
 	// value seen in one was inherited from whatever launched the IDE. Detect the
 	// IDE before those checks; the ancestry walk rejects terminals started from it.
@@ -308,7 +325,9 @@ func GetTerminalName() string {
 	// Try TERM_PROGRAM first (set by many terminals). Skip an inherited
 	// WarpTerminal value when this process is Cursor/VS Code/etc.
 	if termProg := os.Getenv("TERM_PROGRAM"); termProg != "" {
-		if termProg != "WarpTerminal" || warpfocus.IsWarpHost() {
+		_, mapped := knownGnomeWmClass(termProg)
+		_, process := standaloneTerminalComms[strings.ToLower(termProg)]
+		if (!knownOnly || mapped || process) && (termProg != "WarpTerminal" || warpfocus.IsWarpHost()) {
 			return termProg
 		}
 	}

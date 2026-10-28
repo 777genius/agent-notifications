@@ -224,17 +224,39 @@ func startDaemonOnDemand(ctx context.Context, executable string) bool {
 	if err := cmd.Start(); err != nil {
 		return false
 	}
-	// Reap the intentionally detached persistent daemon when it eventually exits.
-	go func() { _ = cmd.Wait() }()
+	// Retain ownership until readiness succeeds. Failed startup must not leave
+	// this detached process or its descendants behind; an already-running daemon
+	// was handled above and never enters this ownership scope.
+	done := make(chan struct{})
+	go func() {
+		_ = cmd.Wait()
+		close(done)
+	}()
+	ready := false
+	defer func() {
+		if !ready {
+			// Setsid gives this child its own process group. Do not use a socket
+			// PID or a broad daemon search: only this startup instance is ours.
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+			<-done
+		}
+	}()
 
 	// Wait for daemon to be ready (up to 5 seconds)
+	startupCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
 	for i := 0; i < 50; i++ {
 		select {
-		case <-ctx.Done():
+		case <-startupCtx.Done():
 			return false
-		case <-time.After(100 * time.Millisecond):
+		case <-done:
+			return false
+		case <-ticker.C:
 		}
-		if isDaemonRunningContext(ctx) {
+		if isDaemonRunningContext(startupCtx) {
+			ready = true // The shared daemon and its eventual reap now outlive us.
 			return true
 		}
 	}

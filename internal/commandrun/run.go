@@ -6,8 +6,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"io"
 	"os/exec"
+	"sync"
 	"time"
 )
 
@@ -53,37 +53,54 @@ func Run(ctx context.Context, cmd *exec.Cmd) error {
 
 // Do not embed bytes.Buffer: its promoted ReadFrom would let io.Copy bypass
 // Write and therefore the output limit.
-type limitedBuffer struct {
-	buffer   bytes.Buffer
+type boundedOutput struct {
+	mu       sync.Mutex
+	stdout   bytes.Buffer
+	written  int
 	cancel   context.CancelFunc
 	overflow bool
 }
 
-func (b *limitedBuffer) Write(p []byte) (int, error) {
-	remaining := OutputLimit - b.buffer.Len()
-	if len(p) > remaining {
-		_, _ = b.buffer.Write(p[:remaining])
-		b.overflow = true
-		b.cancel()
-		return remaining, ErrOutputLimit
-	}
-	return b.buffer.Write(p)
+type outputWriter struct {
+	output *boundedOutput
+	stdout bool
 }
 
-// Output bounds both output streams together; cancellation on overflow prevents
-// a producer from holding the caller until its ordinary deadline.
+func (w outputWriter) Write(p []byte) (int, error) {
+	b := w.output
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	remaining := OutputLimit - b.written
+	n := min(len(p), remaining)
+	if w.stdout {
+		_, _ = b.stdout.Write(p[:n])
+	}
+	b.written += n
+	if len(p) > remaining {
+		b.overflow = true
+		b.cancel()
+		return n, ErrOutputLimit
+	}
+	return n, nil
+}
+
+// Output returns stdout, like exec.Cmd.Output, while bounding stdout and stderr
+// together. Diagnostics cannot corrupt parsed stdout, and either stream can
+// exhaust the shared budget and cancel the helper before its ordinary deadline.
 func Output(ctx context.Context, cmd *exec.Cmd) ([]byte, error) {
 	if ctx == nil || cmd == nil {
 		return nil, errors.New("invalid_helper_command")
 	}
 	operation, cancel := context.WithCancel(ctx)
 	defer cancel()
-	b := &limitedBuffer{cancel: cancel}
-	// os/exec serializes calls when stdout/stderr are the same writer.
-	cmd.Stdout, cmd.Stderr = io.Writer(b), io.Writer(b)
+	b := &boundedOutput{cancel: cancel}
+	cmd.Stdout = outputWriter{output: b, stdout: true}
+	cmd.Stderr = outputWriter{output: b}
 	err := Run(operation, cmd)
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	if b.overflow {
 		err = errors.Join(ErrOutputLimit, err)
 	}
-	return b.buffer.Bytes(), err
+	return b.stdout.Bytes(), err
 }

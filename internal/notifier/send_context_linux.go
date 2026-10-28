@@ -80,7 +80,8 @@ func hasNativeTerminal(ctx context.Context) bool {
 	if os.Getenv("DISPLAY") == "" && os.Getenv("WAYLAND_DISPLAY") == "" {
 		return false
 	}
-	return os.Getenv("WINDOWID") != "" || daemon.GetTerminalName() != "Terminal"
+	windowID, windowKnown := parseWindowID(os.Getenv("WINDOWID"))
+	return (windowKnown && windowID != 0) || daemon.HasKnownTerminalContext()
 }
 func desktopDNDContext(ctx context.Context) bool { return desktopIsDoNotDisturbContext(ctx) }
 func terminalHasFocusContext(parent context.Context, _, cwd string) bool {
