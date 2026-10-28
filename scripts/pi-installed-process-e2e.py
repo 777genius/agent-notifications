@@ -26,6 +26,7 @@ def load(name, filename):
 
 F = load("pi_native_fixture", "pi_native_fixture.py")
 P = load("pi_installed_fixture", "pi_installed_fixture.py")
+R = load("pi_runtime_replacement", "pi_runtime_replacement.py")
 
 
 def command(executable, args, root, env):
@@ -52,18 +53,19 @@ def run(args):
               "working_tree_dirty": bool(subprocess.check_output(["git", "status", "--porcelain"], cwd=REPO)),
               "host_os": platform.system(), "host_architecture": platform.machine(),
               "candidate_binary_sha256": P.sha(args.candidate), "package_sha256": P.sha(args.package),
+              "replacement_candidate_binary_sha256": P.sha(args.replacement_runtime_stage / args.candidate.name),
               "updated_package_sha256": P.sha(args.updated_package), "pi_binary_sha256": P.sha(args.pi_executable),
               "desktop_qualified": False, "release_equivalent_qualified": False, "cases": []}
     held = []
 
-    def setup(action, package=None, extra=()):
+    def setup(action, package=None, extra=(), executable=None):
         foreign = [profile / "settings.json", profile / "models.json", profile / "extensions/TEST-witness.ts"]
         before = {str(path): P.sha(path) for path in foreign if path.is_file()}
         selected_pi = args.pi_executable
         if action == "uninstall":
             P.require(shutil.which("pi", path=env["PATH"]) is None, "cli_missing_removal_requires_no_pi_on_path")
             selected_pi = None
-        value = P.setup(args.candidate, action, root, package or args.package, selected_pi, env, extra)
+        value = P.setup(executable or args.candidate, action, root, package or args.package, selected_pi, env, extra)
         P.require(all(path.is_file() and P.sha(path) == before[str(path)] for path in foreign if str(path) in before),
                   "common_pi_setup_changed_foreign_settings_or_extension")
         report["cases"].append({"case": "setup-" + action, "outcome": value["outcome"],
@@ -99,13 +101,17 @@ def run(args):
                 process.child.stdin.close()
             code = process.wait()
             P.require(code == 0 and process.stderr_bytes == 0, "installed_pi_exit_or_loader_diagnostic")
-            counts = F.verify_case(case, F.witness(case_root), provider.requests)
+            witness = F.witness(case_root)
+            counts = F.verify_case(case, witness, provider.requests)
+            outcomes = [value["outcome"] for value in witness if value["type"] == "agent_before_settle"]
             if case not in ("abort", "ui") and expected:
                 sink.wait(expected)
             sink.quiet()
-            report["cases"].append({"case": case, "mode": mode, "native_counts": counts,
-                                    "provider_requests": len(provider.requests), "webhook": expected,
-                                    "child_collected": True})
+            row = {"case": case, "mode": mode, "native_counts": counts,
+                   "native_outcome": outcomes[-1] if outcomes else None,
+                   "provider_requests": len(provider.requests), "webhook": expected, "child_collected": True}
+            report["cases"].append(row)
+            return row
         finally:
             if process:
                 process.close()
@@ -184,6 +190,8 @@ def run(args):
         native("success", expected=None)
         report["cases"][-1]["case"] = "webhook-consent-disabled"
         setup("install", extra=("--pi-desktop", "false", "--pi-webhook", "true"))
+        report["cases"].append(R.exercise(root, profile, args, env, sink, fixture=F, product=P,
+                                           command=command, setup=setup, native=native))
         # The same live native process captures A before the real package update.
         live_root = root / "live-A"
         live_provider = F.Provider("success")
@@ -255,9 +263,9 @@ def run(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ("candidate", "runtime-stage", "package", "updated-package", "assets-root", "pi-executable", "report"):
+    for name in ("candidate", "runtime-stage", "replacement-runtime-stage", "package", "updated-package", "assets-root", "pi-executable", "report"):
         parser.add_argument("--" + name, type=Path, required=True)
     args = parser.parse_args()
-    for name in ("candidate", "runtime_stage", "package", "updated_package", "assets_root", "pi_executable"):
+    for name in ("candidate", "runtime_stage", "replacement_runtime_stage", "package", "updated_package", "assets_root", "pi_executable"):
         setattr(args, name, getattr(args, name).resolve(strict=True))
     raise SystemExit(run(args))

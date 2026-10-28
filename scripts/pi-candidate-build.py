@@ -66,6 +66,17 @@ def linked_source(info, source):
             "candidate_linked_source_or_module_identity_invalid")
 
 
+def inventory(stage):
+    result = {}
+    for path in sorted(stage.rglob("*")):
+        relative = path.relative_to(stage).as_posix()
+        if path.is_symlink():
+            result[relative] = {"link": os.readlink(path)}
+        elif path.is_file():
+            result[relative] = {"sha256": sha(path), "bytes": path.stat().st_size}
+    return result
+
+
 def build(args):
     require(not args.output.exists(), "candidate_output_must_be_fresh")
     args.output.mkdir(parents=True, mode=0o700)
@@ -81,7 +92,8 @@ def build(args):
         result = subprocess.run([str(x) for x in argv], cwd=REPO, env=env, stdin=subprocess.DEVNULL,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
         require(len(result.stdout) + len(result.stderr) <= 4 * 1024 * 1024, "candidate_build_output_limit")
-        require(result.returncode == 0, "candidate_command_failed:" + str(argv[0]) + ":" + result.stderr.decode(errors="replace")[-4000:])
+        require(result.returncode == 0, "candidate_command_failed:" + str(argv[0]) + ":" +
+                (result.stdout + result.stderr).decode(errors="replace")[-4000:])
         return result.stdout.decode()
 
     try:
@@ -122,21 +134,37 @@ def build(args):
         report["go_build_information"] = info
         version = re.search(r'^var ConsumerVersion = "([^"]+)"$', (REPO / "internal/config/runtime.go").read_text(), re.MULTILINE)
         require(version is not None, "candidate_release_version_missing")
+        # This is a real executable from the identical clean source and module
+        # graph, with a normal linker version identity. Never corrupt bytes or
+        # insert a fixture delivery path to manufacture a runtime replacement.
+        replacement = args.output / "replacement-stage"
+        shutil.copytree(stage, replacement, symlinks=True)
+        replacement_version = version[1] + "-TEST-pi-runtime-replacement"
+        linker = "-s -w -X github.com/777genius/agent-notifications/internal/config.ConsumerVersion=" + replacement_version
+        for package in ("claude-notifications", "sound-preview", "list-devices", "list-sounds"):
+            name = package + "-" + args.platform + "-" + args.arch + suffix
+            run([args.go, "build", "-trimpath", "-ldflags=" + linker, "-o", replacement / name, "./cmd/" + package])
+        if args.platform == "windows":
+            run([args.go, "build", "-trimpath", "-ldflags=" + linker + " -H=windowsgui", "-o",
+                 replacement / "claude-notifications-windows-amd64-focus.exe", "./cmd/claude-notifications"])
+            run(["pwsh", "-NoProfile", "-File", REPO / "native/windows-callback/verify-embedded.ps1",
+                 "-Executable", replacement / main, "-Helper", args.output / "native-callback/helper.exe"])
+        replacement_info = run([args.go, "version", "-m", replacement / main])
+        linked_source(replacement_info, source)
+        require(run([replacement / main, "--version"]).strip().endswith(" v" + replacement_version),
+                "candidate_replacement_version_not_executable")
+        require(sha(stage / main) != sha(replacement / main), "candidate_replacement_bytes_unchanged")
         for label, package_version in (("A", version[1]), ("B", version[1] + "-TEST-pi-update")):
             run([args.go, "run", "./cmd/build-portable-package", "-version", package_version, "-os", args.platform,
                  "-arch", args.arch, "-executable", stage / main, "-output", args.output / ("package-" + label + ".zip"),
                  "-workdir", args.output / ("package-" + label)])
         require(not run(["git", "status", "--porcelain", "--untracked-files=all"]).strip(), "candidate_build_changed_checkout")
-        inventory = {}
-        for path in sorted(stage.rglob("*")):
-            relative = path.relative_to(stage).as_posix()
-            if path.is_symlink():
-                inventory[relative] = {"link": os.readlink(path)}
-            elif path.is_file():
-                inventory[relative] = {"sha256": sha(path), "bytes": path.stat().st_size}
         report.update(status="built", release_equivalent=True, candidate_binary=main,
                       candidate_binary_sha256=sha(stage / main), package_sha256=sha(args.output / "package-A.zip"),
-                      updated_package_sha256=sha(args.output / "package-B.zip"), stage_inventory=inventory,
+                      updated_package_sha256=sha(args.output / "package-B.zip"), stage_inventory=inventory(stage),
+                      replacement_runtime_version=replacement_version,
+                      replacement_candidate_binary_sha256=sha(replacement / main),
+                      replacement_go_build_information=replacement_info, replacement_stage_inventory=inventory(replacement),
                       canonical_assets={name: sha(REPO / name) for name in
                                         ("claude_icon.png", "sounds/task-complete.mp3", "sounds/question.mp3")})
     except Exception as error:
