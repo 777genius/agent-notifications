@@ -7,6 +7,7 @@
 #include "navigation_windows_token_queries.h"
 #include <UIAutomation.h>
 #include <mfapi.h>
+#include <mfidl.h>
 #include <mfreadwrite.h>
 #include <filesystem>
 #include <fstream>

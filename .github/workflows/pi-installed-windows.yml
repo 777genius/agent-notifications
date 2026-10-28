@@ -122,8 +122,10 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $root = "$env:RUNNER_TEMP/pi-installed-windows"
           New-Item -ItemType Directory -Path $root -Force | Out-Null
-          cl.exe /nologo /std:c++20 /EHsc /W4 /DUNICODE /D_UNICODE tests/integration/pi_installed_desktop_windows.cpp "/Fe:$root/observer.exe" "/Fo:$root/observer.obj" /link ole32.lib oleaut32.lib user32.lib uuid.lib winmm.lib wtsapi32.lib uiautomationcore.lib advapi32.lib bcrypt.lib gdi32.lib mfplat.lib mfreadwrite.lib mfuuid.lib
-          if ($LASTEXITCODE) { throw 'Windows product observer compile failed' }
+          $output = & cl.exe /nologo /std:c++20 /EHsc /W4 /DUNICODE /D_UNICODE tests/integration/pi_installed_desktop_windows.cpp "/Fe:$root/observer.exe" "/Fo:$root/observer.obj" /link ole32.lib oleaut32.lib user32.lib uuid.lib winmm.lib wtsapi32.lib uiautomationcore.lib advapi32.lib bcrypt.lib gdi32.lib mfplat.lib mfreadwrite.lib mfuuid.lib 2>&1
+          $code = $LASTEXITCODE
+          $output | Tee-Object -FilePath "$root/compiler.log"
+          if ($code) { throw 'Windows product observer compile failed' }
       - name: Parse the exact real Terminal child script without launching it
         shell: pwsh
         run: |
