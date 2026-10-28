@@ -32,10 +32,27 @@ jobs:
     outputs:
       mode: ${{ github.event_name == 'pull_request' && github.event.action == 'edited' && github.event.changes.base != null && 'full' || steps.release-scope.outputs.mode || steps.classify.outputs.mode }}
     steps:
-      - uses: 777genius/agent-notifications/.github/actions/checkout-pr-source@9f3300081c4ed28b7f01e8f0e22a10076c9dc6c5 # immutable checkout helper
+      - uses: actions/checkout@v7
         with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.action == 'edited' && github.event.changes.base != null && github.event.pull_request.head.sha || '' }}
           fetch-depth: 0
           persist-credentials: false
+      - &qualify_base_edit
+        name: Qualify exact changed-base source
+        if: ${{ github.event_name == 'pull_request' && github.event.action == 'edited' && github.event.changes.base != null }}
+        shell: bash
+        env:
+          CI_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          CI_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          CI_PR_SOURCE_HELPER_SHA: 80a9792c811231e9d10813d913f5a682dee18c6a
+        run: |
+          set -euo pipefail
+          helper_dir=$(mktemp -d "$RUNNER_TEMP/ci-pr-base-source.XXXXXX")
+          trap 'rm -rf "$helper_dir"' EXIT
+          git init --bare --quiet "$helper_dir/source.git"
+          git -C "$helper_dir/source.git" -c http.lowSpeedLimit=1024 -c http.lowSpeedTime=60 fetch --quiet --no-tags --depth=1 https://github.com/777genius/agent-notifications.git "$CI_PR_SOURCE_HELPER_SHA"
+          git -C "$helper_dir/source.git" show "$CI_PR_SOURCE_HELPER_SHA:tools/ci_qualify_pr_base.sh" > "$helper_dir/qualify.sh"
+          bash "$helper_dir/qualify.sh"
       - name: Test exact changed-base checkout contract
         if: ${{ !(github.event_name == 'pull_request' && github.event.action == 'edited' && github.event.changes.base != null) }}
         run: python3 -B tools/ci_pr_checkout_test.py
@@ -65,9 +82,12 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: 777genius/agent-notifications/.github/actions/checkout-pr-source@9f3300081c4ed28b7f01e8f0e22a10076c9dc6c5 # immutable checkout helper
+      - uses: actions/checkout@v7
         with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.action == 'edited' && github.event.changes.base != null && github.event.pull_request.head.sha || '' }}
           persist-credentials: false
+          fetch-depth: ${{ github.event_name == 'pull_request' && github.event.action == 'edited' && github.event.changes.base != null && '0' || '1' }}
+      - *qualify_base_edit
       - uses: actions/setup-go@v7
         with:
           go-version: '1.27.2'
@@ -97,7 +117,11 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: 777genius/agent-notifications/.github/actions/checkout-pr-source@9f3300081c4ed28b7f01e8f0e22a10076c9dc6c5 # immutable checkout helper
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.action == 'edited' && github.event.changes.base != null && github.event.pull_request.head.sha || '' }}
+          fetch-depth: ${{ github.event_name == 'pull_request' && github.event.action == 'edited' && github.event.changes.base != null && '0' || '1' }}
+      - *qualify_base_edit
 
       - name: Set up Go
         uses: actions/setup-go@v7
@@ -203,7 +227,11 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: 777genius/agent-notifications/.github/actions/checkout-pr-source@9f3300081c4ed28b7f01e8f0e22a10076c9dc6c5 # immutable checkout helper
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.action == 'edited' && github.event.changes.base != null && github.event.pull_request.head.sha || '' }}
+          fetch-depth: ${{ github.event_name == 'pull_request' && github.event.action == 'edited' && github.event.changes.base != null && '0' || '1' }}
+      - *qualify_base_edit
 
       - name: Run Swift tests
         run: swift test --package-path swift-notifier
@@ -216,9 +244,12 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: 777genius/agent-notifications/.github/actions/checkout-pr-source@9f3300081c4ed28b7f01e8f0e22a10076c9dc6c5 # immutable checkout helper
+      - uses: actions/checkout@v7
         with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.action == 'edited' && github.event.changes.base != null && github.event.pull_request.head.sha || '' }}
           persist-credentials: false
+          fetch-depth: ${{ github.event_name == 'pull_request' && github.event.action == 'edited' && github.event.changes.base != null && '0' || '1' }}
+      - *qualify_base_edit
       - name: Require actual full native success on this revision
         env:
           CI_MODE: ${{ needs.scope.outputs.mode }}
@@ -235,10 +266,12 @@ jobs:
       contents: read
       actions: read
     steps:
-      - uses: 777genius/agent-notifications/.github/actions/checkout-pr-source@9f3300081c4ed28b7f01e8f0e22a10076c9dc6c5 # immutable checkout helper
+      - uses: actions/checkout@v7
         with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.action == 'edited' && github.event.changes.base != null && github.event.pull_request.head.sha || '' }}
           fetch-depth: 0
           persist-credentials: false
+      - *qualify_base_edit
       - name: Reverify immutable full native checkout evidence
         env:
           GH_TOKEN: ${{ github.token }}
@@ -252,10 +285,12 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: 777genius/agent-notifications/.github/actions/checkout-pr-source@9f3300081c4ed28b7f01e8f0e22a10076c9dc6c5 # immutable checkout helper
+      - uses: actions/checkout@v7
         with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.action == 'edited' && github.event.changes.base != null && github.event.pull_request.head.sha || '' }}
           fetch-depth: 0
           persist-credentials: false
+      - *qualify_base_edit
       - name: Record only successful full native inputs
         env:
           CI_MODE: ${{ needs.scope.outputs.mode }}

@@ -7,10 +7,13 @@ import tempfile
 import unittest
 from unittest.mock import patch
 import json
+import re
+import textwrap
 
 import ci_native_evidence as evidence
 
-HELPER = Path(__file__).resolve().parents[1] / '.github/actions/checkout-pr-source/qualify-base-edit.sh'
+SOURCE_ROOT = Path(__file__).resolve().parents[1]
+HELPER = SOURCE_ROOT / 'tools/ci_qualify_pr_base.sh'
 
 
 class CheckoutFixture(unittest.TestCase):
@@ -79,6 +82,55 @@ class CheckoutFixture(unittest.TestCase):
                 for index, name in enumerate(names)]
         with self.assertRaisesRegex(ValueError, 'missing successful full job'):
             evidence.validate_jobs(jobs, 'ci-macos.yml')
+
+    def test_actual_pinned_bootstrap_isolated_fetch_and_cleanup(self):
+        # Only read the product's Git objects into an owned fixture mirror. No
+        # product command/provider executes; the tested checkout is this fixture.
+        self.git('checkout', '--detach', self.head)
+        (self.root / 'shared').write_text('head conflict\n')
+        conflict_head = self.commit()
+        self.git('checkout', '--detach', self.new_base)
+        (self.root / 'shared').write_text('base conflict\n')
+        conflict_base = self.commit()
+        self.git('checkout', '--detach', self.stale)
+        mirror = self.root / 'helper-mirror.git'
+        subprocess.run(['git', 'clone', '--bare', '--shared', str(SOURCE_ROOT), str(mirror)],
+                       check=True, capture_output=True, env=self.env, timeout=20)
+        runner_temp = self.root / 'runner-temp'
+        runner_temp.mkdir()
+        for workflow in ('ci-macos.yml', 'install-recovery-e2e.yml'):
+            text = (SOURCE_ROOT / '.github/workflows' / workflow).read_text()
+            block = text.split('      - &qualify_base_edit\n', 1)[1]
+            pin = re.search(r'CI_PR_SOURCE_HELPER_SHA: ([0-9a-f]{40})', block).group(1)
+            body = block.split('        run: |\n', 1)[1]
+            lines = []
+            for line in body.splitlines():
+                if line and not line.startswith('          '):
+                    break
+                lines.append(line)
+            command = textwrap.dedent('\n'.join(lines))
+            pinned = subprocess.check_output(['git', '-C', str(mirror), 'show',
+                                              pin + ':tools/ci_qualify_pr_base.sh'], text=True)
+            self.assertEqual(pinned, HELPER.read_text())
+            for case in ('valid', 'invalid', 'conflict', 'missing'):
+                with self.subTest(workflow=workflow, case=case):
+                    self.git('reset', '--hard', self.stale)
+                    head = 'bad' if case == 'invalid' else conflict_head if case == 'conflict' else self.head
+                    base = conflict_base if case == 'conflict' else '0' * 40 if case == 'missing' else self.new_base
+                    env = dict(self.env, CI_PR_HEAD_SHA=head,
+                               CI_PR_BASE_SHA=base, CI_PR_SOURCE_HELPER_SHA=pin,
+                               RUNNER_TEMP=str(runner_temp), GIT_CONFIG_COUNT='1',
+                               GIT_CONFIG_KEY_0='url.' + mirror.as_uri() + '.insteadOf',
+                               GIT_CONFIG_VALUE_0='https://github.com/777genius/agent-notifications.git')
+                    result = subprocess.run(['/bin/bash', '-c', command], cwd=self.root, env=env,
+                                            capture_output=True, text=True, timeout=30)
+                    self.assertEqual(result.returncode == 0, case == 'valid', result.stderr)
+                    self.assertFalse((self.root / '.git/shallow').exists())
+                    self.assertEqual(list(runner_temp.iterdir()), [])
+                    if case == 'valid':
+                        self.assertEqual((self.root / 'new-base').read_text(), 'new target input\n')
+                        self.assertEqual(self.git('show', '-s', '--format=%P', 'HEAD'),
+                                         f'{self.new_base} {self.head}')
 
     def test_identical_head_and_base_is_valid_without_fake_merge(self):
         result = self.qualify(base=self.head)
