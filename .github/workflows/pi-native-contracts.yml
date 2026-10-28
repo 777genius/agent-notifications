@@ -32,6 +32,20 @@ jobs:
         id: python
         with:
           python-version: '3.12'
+      - name: Resolve the interpreter actually used on this image
+        id: native_python
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          import sys
+          executable = Path(sys.executable).resolve(strict=True)
+          if not executable.is_file() or not os.access(executable, os.X_OK):
+              raise SystemExit('Actual Python executable unavailable')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('path=' + str(executable) + '\n')
+          PY
       - name: Pin and native oracle guards
         run: |
           python -B scripts/test_acquire_pi_native.py -v
@@ -41,7 +55,7 @@ jobs:
         env:
           PI_PLATFORM: ${{ matrix.platform }}
           PI_ARCH: ${{ matrix.arch }}
-          PYTHON_EXECUTABLE: ${{ steps.python.outputs.python-path }}
+          PYTHON_EXECUTABLE: ${{ steps.native_python.outputs.path }}
         run: |
           $ErrorActionPreference = 'Stop'
           $python = $env:PYTHON_EXECUTABLE
@@ -54,7 +68,7 @@ jobs:
       - name: Real Pi loader provider and lifecycle events
         shell: pwsh
         env:
-          PYTHON_EXECUTABLE: ${{ steps.python.outputs.python-path }}
+          PYTHON_EXECUTABLE: ${{ steps.native_python.outputs.path }}
         run: |
           $ErrorActionPreference = 'Stop'
           $evidence = Join-Path $env:RUNNER_TEMP 'pi-native-contracts'
@@ -78,7 +92,7 @@ jobs:
       - name: Actual TUI prompt and reply on native PTY or ConPTY
         shell: pwsh
         env:
-          PYTHON_EXECUTABLE: ${{ steps.python.outputs.python-path }}
+          PYTHON_EXECUTABLE: ${{ steps.native_python.outputs.path }}
         run: |
           $ErrorActionPreference = 'Stop'
           $evidence = Join-Path $env:RUNNER_TEMP 'pi-native-contracts'

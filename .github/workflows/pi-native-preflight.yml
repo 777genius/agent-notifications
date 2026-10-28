@@ -40,6 +40,20 @@ jobs:
         id: python
         with:
           python-version: '3.12'
+      - name: Resolve the interpreter actually used on this image
+        id: native_python
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          import sys
+          executable = Path(sys.executable).resolve(strict=True)
+          if not executable.is_file() or not os.access(executable, os.X_OK):
+              raise SystemExit('Actual Python executable unavailable')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('path=' + str(executable) + '\n')
+          PY
       - name: Reject incomplete prerequisite evidence
         run: python -B scripts/test_pi_native_preflight.py -v
       - name: Install controlled Linux desktop and audio fixtures
@@ -63,7 +77,7 @@ jobs:
         env:
           PI_PREFLIGHT_PLATFORM: ${{ matrix.platform }}
           PI_PREFLIGHT_SOURCE: ${{ github.event.pull_request.head.sha || github.sha }}
-          PYTHON_EXECUTABLE: ${{ steps.python.outputs.python-path }}
+          PYTHON_EXECUTABLE: ${{ steps.native_python.outputs.path }}
         run: |
           $ErrorActionPreference = 'Stop'
           $python = $env:PYTHON_EXECUTABLE
