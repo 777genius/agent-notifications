@@ -108,6 +108,19 @@ const faqIcons = [
             <div class="hero-actions">
               <a class="primary" href="#install">{{ t("hero.primary") }} <span>↗</span></a>
               <a class="secondary" :href="repo">{{ t("hero.secondary") }}</a>
+              <a
+                class="trendshift-badge"
+                href="https://trendshift.io/repositories/24861?utm_source=repository-badge&amp;utm_medium=badge&amp;utm_campaign=badge-repository-24861"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                <img
+                  src="https://trendshift.io/api/badge/repositories/24861"
+                  alt="777genius/agent-notifications | Trendshift"
+                  width="250"
+                  height="55"
+                />
+              </a>
             </div>
             <p class="hero-note">{{ t("hero.note") }}</p>
           </div>
