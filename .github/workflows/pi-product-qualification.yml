@@ -1,6 +1,11 @@
 name: Pi three-OS product qualification
 
 on:
+  pull_request:
+    paths:
+      - '.github/workflows/pi-product-qualification.yml'
+      - 'scripts/pi-qualification-aggregate.py'
+      - 'scripts/test_pi_qualification_aggregate.py'
   workflow_dispatch:
     inputs:
       source_sha:
@@ -30,14 +35,14 @@ jobs:
     runs-on: ${{ vars.CI_LINUX_RUNNER || 'ubuntu-24.04' }}
     timeout-minutes: 8
     env:
-      SOURCE_SHA: ${{ inputs.source_sha }}
+      SOURCE_SHA: ${{ inputs.source_sha || github.event.pull_request.head.sha || github.sha }}
       LINUX_RUN: ${{ inputs.linux_run }}
       MACOS_RUN: ${{ inputs.macos_run }}
       WINDOWS_RUN: ${{ inputs.windows_run }}
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.source_sha }}
+          ref: ${{ inputs.source_sha || github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
       - uses: actions/setup-python@v7
         with:
@@ -97,7 +102,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: pi-qualification-${{ inputs.source_sha }}
+          name: pi-qualification-${{ env.SOURCE_SHA }}
           path: ${{ runner.temp }}/TEST-pi-qualification/qualification.json
           if-no-files-found: error
           retention-days: 14
