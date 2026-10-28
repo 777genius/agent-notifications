@@ -101,6 +101,9 @@ print(json.dumps({'ok': True, 'pluginId': plugin, 'path': str(dest)}))
 				answer = "y\n"
 			}
 			r := f.terminal([]string{"--webhook", "--plain"}, promptStep{"comma-separated", "qoder\n", nil}, promptStep{setupProductsConfirmationTitle, answer, nil})
+			if r.code != 0 {
+				t.Logf("Qoder installer diagnostics: %s", f.diagnosticText())
+			}
 			requireBootstrapSuccess(t, r)
 			if !strings.Contains(r.screen, "Qoder (CLI present)") || !strings.Contains(r.screen, "Channels: Desktop off, Webhook on") {
 				t.Fatalf("Qoder selection or consent omitted: %s", r.screen)
