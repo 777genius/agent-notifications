@@ -1,0 +1,64 @@
+name: Pi native desktop prerequisites
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  prerequisites:
+    name: Pi native prerequisites / ${{ matrix.platform }}
+    runs-on: ${{ matrix.platform == 'linux' && (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || vars.CI_LINUX_RUNNER || 'ubuntu-24.04') || matrix.platform == 'darwin' && (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'macos-15' || vars.CI_MACOS_15_RUNNER || 'macos-15') || 'windows-2025' }}
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [linux, darwin, windows]
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Reject incomplete prerequisite evidence
+        run: python -B scripts/test_pi_native_preflight.py -v
+      - name: Install controlled Linux desktop and audio fixtures
+        if: matrix.platform == 'linux'
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y dbus-daemon dbus-bin dunst xvfb openbox xterm xdotool pulseaudio pulseaudio-utils alsa-utils libasound2-plugins libnotify-bin ffmpeg fonts-dejavu-core
+      - name: Prepare native Windows compiler environment
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products '*' -property installationPath
+          if (!$vs) { throw 'Visual Studio prerequisite unavailable' }
+          $cmd = '"' + $vs + '\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul && set'
+          cmd.exe /d /s /c $cmd | ForEach-Object {
+            if ($_ -match '^(PATH|INCLUDE|LIB|LIBPATH)=(.*)$') { "$($matches[1])=$($matches[2])" >> $env:GITHUB_ENV }
+          }
+          if ($LASTEXITCODE -ne 0) { throw 'Native compiler environment unavailable' }
+      - name: Observe GUI audio and native input prerequisites
+        shell: pwsh
+        env:
+          PI_PREFLIGHT_PLATFORM: ${{ matrix.platform }}
+          PI_PREFLIGHT_SOURCE: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          $report = Join-Path $env:RUNNER_TEMP 'pi-native-preflight/evidence.json'
+          python -B scripts/pi-native-preflight.py --execute-test-fixtures --platform $env:PI_PREFLIGHT_PLATFORM --source-sha $env:PI_PREFLIGHT_SOURCE --report $report
+          exit $LASTEXITCODE
+      - name: Preserve prerequisite receipt on pass or failure
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pi-native-prerequisites-${{ matrix.platform }}-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/pi-native-preflight/evidence.json
+          if-no-files-found: error
+          retention-days: 14
