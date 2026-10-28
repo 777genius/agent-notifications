@@ -1,0 +1,28 @@
+name: Checkout qualified PR source
+description: Preserve normal checkout identity and qualify meaningful PR base edits independently of the merge-ref cache.
+inputs:
+  fetch-depth:
+    description: Normal checkout history depth
+    default: '1'
+  persist-credentials:
+    description: Preserve the caller's normal checkout credential policy
+    default: 'true'
+  token:
+    description: Token used by actions/checkout
+    default: ${{ github.token }}
+runs:
+  using: composite
+  steps:
+    - uses: actions/checkout@v7
+      with:
+        ref: ${{ github.event_name == 'pull_request' && github.event.action == 'edited' && github.event.changes.base != null && github.event.pull_request.head.sha || '' }}
+        fetch-depth: ${{ github.event_name == 'pull_request' && github.event.action == 'edited' && github.event.changes.base != null && '0' || inputs.fetch-depth }}
+        persist-credentials: ${{ inputs.persist-credentials }}
+        token: ${{ inputs.token }}
+    - name: Qualify the exact changed-base pair
+      if: ${{ github.event_name == 'pull_request' && github.event.action == 'edited' && github.event.changes.base != null }}
+      shell: bash
+      env:
+        CI_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        CI_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      run: bash "$GITHUB_ACTION_PATH/qualify-base-edit.sh"
