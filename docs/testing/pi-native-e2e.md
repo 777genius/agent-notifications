@@ -151,6 +151,7 @@ the verified standalone Pi:
 python -B scripts/pi-installed-process-e2e.py \
   --candidate /absolute/TEST-inputs/bin/claude-notifications-linux-amd64 \
   --runtime-stage /absolute/TEST-inputs/bin \
+  --replacement-runtime-stage /absolute/TEST-inputs/replacement-stage \
   --package /absolute/TEST-inputs/package-A.zip \
   --updated-package /absolute/TEST-inputs/package-B.zip \
   --assets-root /absolute/checked-out-source \
@@ -167,8 +168,20 @@ original deadline. Configuration and consent off are separate negatives. A live
 Pi A is retained through a real package update; its terminal event must finish
 and its process/children be collected without a webhook. A fresh observer must
 work after update and missing-directory repair. A current live Pi B is retained
-through removal and must also finish without a webhook. No test calls `pi-event`
-or treats a mocked callback as native evidence.
+through removal and must also finish without a webhook. A newly launched Pi
+after removal must still complete its native provider request and foreign
+witness, with no notification effect.
+
+The separate executable replacement case retains a loaded Pi A while the normal
+managed runtime writer installs a second full bundle built from the same source
+with a distinct linker version. The unchanged-package common wizard refreshes
+the owned runtime receipt. The fixture compares the real executable SHA with
+both owned and derived metadata, keeps the package projection unchanged, and
+checks all sibling consumer records, policy bytes and foreign profile files.
+The old observer must finish with no webhook; a fresh Pi must deliver exactly
+once. The TEST retainer and preparation consumers are retired through the
+normal writer. No test calls `pi-event` or treats a mocked callback as native
+evidence.
 
 `scripts/pi-installed-desktop-linux.py` shares the same common setup and receipt
 readers. It reuses the owned X11/PulseAudio session, runs the actual Pi TUI in
@@ -183,8 +196,9 @@ audio. Every case inherits a foreign TEST `CLAUDE_PLUGIN_ROOT`, while helpers an
 cues must still come from receipt-owned runtime assets. The private product
 daemon and all terminals/providers/captures are collected.
 
-Use the same arguments as above without `--updated-package` for the Linux
-desktop script. Its receipt records `native_product_observations_passed`, exact
+Use the same arguments as above without `--updated-package` or
+`--replacement-runtime-stage` for the Linux desktop script. Its receipt records
+`native_product_observations_passed`, exact
 input/fixture hashes and whether the source checkout was dirty. Its
 `desktop_qualified` flag stays false: final acceptance still needs an exact,
 clean, pinned candidate and the macOS/Windows Client native receipts. A working
@@ -222,6 +236,38 @@ merged module identity follow the input inventory above. Permission observed in
 synthetic preflight is separate from the candidate helper's own notification
 permission and visible delivery.
 
+### Windows installed-product handoff
+
+`Pi installed Windows product` separates an ordinary Windows Server amd64
+build/process job from its Windows Client desktop job. The Server job builds
+the exact embedded callback, main, utilities and focus companion and runs the
+real installed Pi lifecycle suite. Its artifact cannot qualify desktop
+delivery. The Client job first compiles
+`tests/integration/pi_installed_desktop_windows.cpp` with the native MSVC image
+compiler and parses the exact PowerShell Terminal child launcher. These checks
+run before the render/input prerequisites, so an unavailable audio device does
+not hide compilation or launcher errors.
+
+On a configured Client desktop, `scripts/pi-installed-desktop-windows.py` runs
+the installed Pi in two real, separately identified Windows Terminal windows.
+It preserves Terminal's actual session identity, observes the native Shell
+toast through UI Automation, records a screenshot and physically clicks its
+visible point. Foreground and keyboard focus must return to the origin window.
+External WASAPI loopback records the product cue; Media Foundation only decodes
+the configured reference asset for comparison and never renders a replacement
+cue. A pending question, sound-off, click-off, desktop-off and closed-origin
+case use the same six-case contract as the other desktop lanes.
+
+The workflow's `windows_client_runner` input, or
+`CI_PI_WINDOWS_DESKTOP_RUNNER` repository variable, selects an existing Client
+runner. Its default is the existing `windows-11-vs2026-arm` route. Shipped amd64
+Pi and product binaries may run under Windows' x64 emulation on an ARM64 host;
+the receipt records that distinction. The Client consumes the same run's exact
+Server-built candidate and process evidence. It requires a genuine configured
+render endpoint, active interactive desktop, Shell notifications and working
+foreground/input observations. It does not install a driver or alter endpoint
+defaults to make the test pass.
+
 ## Clean candidate and final three-OS gate
 
 `scripts/pi-candidate-build.py` runs the ordinary four release build commands and
@@ -232,6 +278,9 @@ Windows additionally builds/verifies the embedded callback and focus companion;
 macOS receives the already authenticated signed helper/attestation directory.
 `build.json` records the exact source, module manifests/graph, actual Go build
 information, staged inventory, portable A/B hashes and canonical asset hashes.
+The separately inventoried `replacement-stage` uses the same release build
+commands and linked source with a distinct version identity; its executable
+must run and have a different SHA. Both stages are inputs to the process suite.
 No release is published.
 
 The installed Linux and macOS workflows retain these build inputs alongside
