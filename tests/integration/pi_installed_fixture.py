@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 import queue
 import re
+import socketserver
 import subprocess
 import threading
 import time
@@ -64,6 +65,13 @@ def capture(payload):
     return status
 
 
+class _LoopbackHTTPServer(http.server.ThreadingHTTPServer):
+    def server_bind(self):
+        # Preserve HTTPServer lifecycle/settings without resolving an unused name.
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
+
+
 class Webhooks:
     def __init__(self, hold_response=False):
         self.events, self.failures, self.rows = queue.Queue(), [], []
@@ -93,7 +101,7 @@ class Webhooks:
                 except (BrokenPipeError, ConnectionResetError):
                     pass  # A bounded product timeout may close the held request.
 
-        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.server = _LoopbackHTTPServer(("127.0.0.1", 0), Handler)
         self.server.daemon_threads = False
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()

@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import queue
 import signal
+import socketserver
 import subprocess
 import sys
 import threading
@@ -18,6 +19,13 @@ import time
 def require(value, code):
     if not value:
         raise RuntimeError(code)
+
+
+class _LoopbackHTTPServer(http.server.ThreadingHTTPServer):
+    def server_bind(self):
+        # Numeric TEST loopback needs no reverse DNS or local-network discovery.
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
 
 
 class Provider:
@@ -66,7 +74,7 @@ class Provider:
                 except (BrokenPipeError, ConnectionResetError):
                     pass  # Expected when the real Pi client aborts its HTTP stream.
 
-        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.server = _LoopbackHTTPServer(("127.0.0.1", 0), Handler)
         self.server.daemon_threads = True
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()

@@ -57,6 +57,7 @@ jobs:
           python -B scripts/test_pi_candidate_build.py -v
           python -B scripts/test_pi_qualification_aggregate.py -v
           python -B scripts/test_pi_installed_fixture.py -v
+          python -B scripts/test_pi_loopback_fixture.py -v
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
       - name: Build exact clean pinned release candidate
         run: |
