@@ -20,9 +20,11 @@ CHECKS = {"native_tui", "configured_banner_policy", "configured_audio_policy", "
 PROCESS_CASES = {"normal-quit-drains-admitted-webhook", "hung-quit-original-budget", "webhook-config-disabled",
                  "webhook-consent-disabled", "unchanged-reinstall-restores-derived-metadata",
                  "live-A-update-old-revision-denied", "live-B-remove-current-revision-denied",
-                 "setup-update", "setup-repair", "setup-uninstall", "fresh-after-remove-no-effect"}
+                 "setup-update", "setup-repair", "setup-uninstall", "fresh-after-remove-no-effect", "runtime-byte-replacement"}
 NATIVE_MODES = {("success", "json"), ("success", "print"), ("retry", "json"), ("followup", "json"),
                 ("error", "json"), ("abort", "rpc"), ("ui", "rpc")}
+SUCCESS_COUNTS = {"factory": 1, "agent_start": 1, "agent_end": 1, "agent_before_settle": 1,
+                  "agent_settled": 1, "ui_prompt_start": 0, "ui_prompt_end": 0}
 
 
 def require(ok, code):
@@ -82,6 +84,30 @@ def qualify(platform, source, build, acquisition, process, desktop):
             and NATIVE_MODES <= {(row.get("case"), row.get("mode")) for row in rows}, "installed_process_case_missing")
     removed = [row for row in rows if row.get("case") == "setup-uninstall"]
     require(removed and all(row.get("pi_executable_supplied") is False and row.get("foreign_bytes_preserved") is True for row in removed), "cli_missing_removal_not_observed")
+    fresh = [row for row in rows if row.get("case") == "fresh-after-remove-no-effect"]
+    require(len(fresh) == 1 and fresh[0].get("mode") == "json" and "webhook" in fresh[0] and fresh[0]["webhook"] is None
+            and fresh[0].get("child_collected") is True and fresh[0].get("provider_requests") == 1
+            and fresh[0].get("native_outcome") == "completed" and success_counts(fresh[0].get("native_counts")),
+            "fresh_post_removal_native_success_or_silence_unobserved")
+    replacement = build.get("replacement_candidate_binary_sha256")
+    require(isinstance(replacement, str) and re.fullmatch(r"[a-f0-9]{64}", replacement) and replacement != main_hash
+            and process.get("replacement_candidate_binary_sha256") == replacement, "runtime_replacement_identity_missing")
+    B.linked_source(build.get("replacement_go_build_information", ""), source)
+    replacement_inventory = build.get("replacement_stage_inventory", {})
+    require(regular_artifact(replacement_inventory.get(main_name, {}))
+            and replacement_inventory[main_name]["sha256"] == replacement, "replacement_main_inventory_mismatch")
+    for name in ("sound-preview", "list-devices", "list-sounds"):
+        require(regular_artifact(replacement_inventory.get(name + "-" + platform + "-" + arch + suffix, {})),
+                "replacement_companion_inventory_missing")
+    changed = [row for row in rows if row.get("case") == "runtime-byte-replacement"]
+    flags = ("package_projection_unchanged", "derived_and_owned_executable_match", "old_child_collected", "fresh_child_collected",
+             "foreign_bytes_preserved", "sibling_consumers_preserved", "policy_bytes_preserved", "preparation_retired", "test_retainer_retired")
+    require(len(changed) == 1 and changed[0].get("old_primary_sha256") == main_hash and changed[0].get("new_primary_sha256") == replacement
+            and all(changed[0].get(flag) is True for flag in flags)
+            and changed[0].get("old_provider_requests") == changed[0].get("fresh_provider_requests") == 1
+            and changed[0].get("old_webhook_count") == 0 and changed[0].get("fresh_webhook_count") == 1
+            and success_counts(changed[0].get("old_native_counts")) and success_counts(changed[0].get("fresh_native_counts")),
+            "runtime_byte_replacement_not_observed")
     require(desktop.get("native_product_observations_passed") is True and desktop.get("owned_children_collected") is True,
             "native_desktop_or_collection_not_observed")
     native = desktop.get("cases", [])
@@ -109,6 +135,10 @@ def regular_artifact(value):
     return (isinstance(value, dict) and not value.get("link") and isinstance(value.get("sha256"), str)
             and re.fullmatch(r"[a-f0-9]{64}", value["sha256"]) is not None
             and type(value.get("bytes")) is int and 0 < value["bytes"] <= 512 * 1024 * 1024)
+
+
+def success_counts(value):
+    return isinstance(value, dict) and all(type(value.get(key)) is int and value[key] == count for key, count in SUCCESS_COUNTS.items())
 
 
 def main():

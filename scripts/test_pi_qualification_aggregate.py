@@ -37,6 +37,18 @@ def metadata(platform="linux"):
     for row in process["cases"]:
         if row["case"] == "setup-uninstall":
             row.update(pi_executable_supplied=False, foreign_bytes_preserved=True)
+        if row["case"] == "fresh-after-remove-no-effect":
+            row.update(mode="json", provider_requests=1, webhook=None, child_collected=True,
+                       native_counts=dict(A.SUCCESS_COUNTS), native_outcome="completed")
+        if row["case"] == "runtime-byte-replacement":
+            row.update(old_primary_sha256=HASH, new_primary_sha256="c" * 64, old_provider_requests=1, fresh_provider_requests=1,
+                       old_webhook_count=0, fresh_webhook_count=1, old_native_counts=dict(A.SUCCESS_COUNTS), fresh_native_counts=dict(A.SUCCESS_COUNTS))
+            row.update({key: True for key in ("package_projection_unchanged", "derived_and_owned_executable_match", "old_child_collected",
+                "fresh_child_collected", "foreign_bytes_preserved", "sibling_consumers_preserved", "policy_bytes_preserved",
+                "preparation_retired", "test_retainer_retired")})
+    build.update(replacement_candidate_binary_sha256="c" * 64, replacement_go_build_information=build["go_build_information"],
+                 replacement_stage_inventory={name: {"sha256": "c" * 64, "bytes": 1} for name in names})
+    process["replacement_candidate_binary_sha256"] = "c" * 64
     desktop = {**identity, "native_product_observations_passed": True, "owned_children_collected": True,
                "cases": [{"case": name, "checks": {check: True for check in A.CHECKS},
                            "pending_question_at_click": name == "question"} for name in A.CASES]}
@@ -103,6 +115,32 @@ class AggregateGuards(unittest.TestCase):
             values[0]["stage_inventory"][name] = {}
             with self.assertRaises(ValueError):
                 A.qualify(platform, SOURCE, *values)
+
+    def test_fresh_removal_label_cannot_replace_actual_native_success_and_silence(self):
+        for change in ({}, {"webhook": "task_complete"}, {"child_collected": False}, {"provider_requests": 0},
+                       {"native_counts": {}}, {"native_outcome": "error"}):
+            values = metadata()
+            row = next(row for row in values[2]["cases"] if row["case"] == "fresh-after-remove-no-effect")
+            if not change:
+                row.clear(); row["case"] = "fresh-after-remove-no-effect"
+            else:
+                row.update(change)
+            with self.assertRaisesRegex(ValueError, "fresh_post_removal"):
+                A.qualify("linux", SOURCE, *values)
+        values = metadata()
+        row = next(row for row in values[2]["cases"] if row["case"] == "fresh-after-remove-no-effect")
+        row.pop("webhook")
+        with self.assertRaisesRegex(ValueError, "fresh_post_removal"):
+            A.qualify("linux", SOURCE, *values)
+
+    def test_runtime_change_requires_different_owned_bytes_and_real_old_fresh_events(self):
+        for change in ({"new_primary_sha256": HASH}, {"old_webhook_count": 1}, {"fresh_webhook_count": 0},
+                       {"old_native_counts": {}}, {"fresh_child_collected": False}, {"sibling_consumers_preserved": False}):
+            values = metadata()
+            row = next(row for row in values[2]["cases"] if row["case"] == "runtime-byte-replacement")
+            row.update(change)
+            with self.assertRaisesRegex(ValueError, "runtime_byte_replacement"):
+                A.qualify("linux", SOURCE, *values)
 
 
 if __name__ == "__main__":
