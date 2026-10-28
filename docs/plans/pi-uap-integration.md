@@ -1,16 +1,16 @@
 # Pi notifications through Universal Agent Plugins
 
-Status: initial plan for two independent critic rounds; implementation has not
-started. Owner scope: full Pi support on macOS, Linux and Windows, including
+Status: revision 2 after critic round 1; round 2 precedes implementation. Owner
+scope: full Pi support on macOS, Linux and Windows, including
 configured sound and a notification click returning to the originating terminal.
 All implementation and review workers use GPT-6.1 Sol with xhigh reasoning.
 
 ## Outcome and scope
 
-Pi becomes a selectable product in the existing Agent Notifications setup and
-receives a native observer extension through the Universal Agent Plugins (UAP)
-engine. Install, update, repair, inspection and removal use that engine's source
-snapshots, binding identity, ownership, journals and runtime handoff. Normal Pi
+Pi becomes a selectable product in the existing Agent Notifications setup. UAP
+materializes its managed package directly in Pi's native extension directory.
+Install, update, repair, inspection and removal use the existing source snapshots,
+binding identity, directory ownership/recovery and runtime handoff. Normal Pi
 activity reaches the existing notification configuration, rendering, sound and
 terminal navigation paths. README and landing present Pi as supported when this
 work is complete. Publication of a release is a later owner action.
@@ -42,11 +42,13 @@ compatibility Go module paths retain `github.com/777genius/plugin-kit-ai`.
   `internal/agentnotify/setupwizard/wizard.go`, `cmd/claude-notifications/setup_products*`,
   existing Claude notifier/navigation, and OpenCode/Gemini event adapters.
 
-Pi auto-discovers direct `.ts`/`.js` files and extension subdirectories containing
+Pi discovers direct `.ts`/`.js` files and extension subdirectories containing
 `index.ts` or `index.js`. Its user directory defaults to `~/.pi/agent`; nonempty
 `PI_CODING_AGENT_DIR` selects the agent directory itself. A complete owned
-subdirectory therefore avoids editing Pi settings and avoids a new arbitrary
-file-deletion API. A running session needs Pi's resource reload or restart.
+subdirectory avoids editing settings. Actual v1.4.0 standalone CLI discovery
+skips dot directories in its package-manager resource path, although the lower
+extension loader also accepts explicitly selected hidden paths. A running
+session needs resource reload or restart to load a changed observer.
 
 Pi v1.4.0 has an explicit `agent_settled` event after continuations finish.
 `turn_end` and `agent_end` are insufficient completion boundaries. The latest
@@ -63,11 +65,11 @@ prompts occur while idle with `hasUI:true`; abort can settle without a preceding
 boundary outcome. These observations support the event rules below; permanent
 candidate tests must reproduce them after both plan reviews.
 
-## ADR: a concrete Pi projection, with one bounded namespace
+## ADR: direct managed materialization and one bounded Pi namespace
 
-Add a Pi native-config adapter to UAP. Do not build a general namespace executor
-or shell-based installer. The adapter interprets one documented namespace,
-provisionally `com.universal-agent-plugins.pi`, in a standard `plugin.json`:
+Add a Pi adapter using the normal UAP directory transaction. Do not add a second
+native copy/swap transaction, native intent protocol, namespace executor or shell
+installer. It interprets `com.universal-agent-plugins.pi` in `plugin.json`:
 
 ```json
 {
@@ -80,14 +82,25 @@ provisionally `com.universal-agent-plugins.pi`, in a standard `plugin.json`:
 }
 ```
 
-Version 1 installs one selected extension directory at
-`<physical-pi-agent-dir>/extensions/<declared-plugin-name>/`. `source` is a
-portable package-relative directory with a real `index.ts` or `index.js`.
-Require contained real directories/files; reject traversal, absolute paths,
-links, reserved projection paths, ambiguous entrypoints and a nested Pi
-`package.json` manifest that could override the admitted entrypoint. The package
-name supplies destination identity; namespace data cannot select another
-profile or executable. UAP copies and verifies code but does not execute it.
+`TargetLayout` returns anchor `<physical-agent-dir>` and target root
+`<physical-agent-dir>/extensions`; common planning chooses its existing
+`<physicalArtifactID>` child. `StagingLayout` stages under the exact agent-dir
+parent of the watched root, using the existing reserved staging prefix. Existing
+dirswap journals own replacement, backup, quarantine, rollback and removal.
+
+Version 1 has one package-relative `source` directory and exactly one real
+`index.ts` or `index.js`. Require contained real directories/files; reject
+traversal, absolute paths, links, conflicting root `index.ts`/`index.js`, reserved
+projection files and root/nested `package.json` Pi entrypoint overrides. Generate
+a root `index.ts` factory that checks its physical location against bound
+`ActivePath` before dynamically importing the admitted source. Retained copies,
+backup/quarantine or an explicitly selected hidden copy must do nothing, including
+no source top-level side effects. Compare the real current location to the frozen
+physical `ActivePath` literal; never re-resolve the expected path through a new
+symlink. Actual Pi research passes active, retained-copy, explicit-hidden and
+misbound/symlink cases with source top-level effects only in the admitted active
+tree. This is research evidence; candidate tests must reproduce it.
+UAP itself never executes extension code.
 Unknown namespaces remain opaque and unsupported in every existing client.
 
 The current planner unconditionally emits `extension_semantics_not_established`.
@@ -101,7 +114,7 @@ validity. Record this ADR in UAP with the concrete contract and unsupported data
 ## UAP changes and boundaries
 
 Add `ClientPi`, display identity/aliases and a registry row in `domain/clients.go`;
-user scope, native extension support, automatic native-config lifecycle and no
+user scope, native extension support, directory-only lifecycle and no
 unqualified MCP/app/skill claims. Do not add project scope without evidence and
 separate acceptance. Add `clients/pi/` to `clients/all/registry.go` and implement
 the existing capabilities actually required:
@@ -113,49 +126,52 @@ the existing capabilities actually required:
 - `PlanPrecondition`, namespace qualification and `PlanRefiner`: admit the
   concrete extension schema, validate identity and report automatic installation
   with reload guidance. Do not equate installed bytes with runtime activation.
-- `Projector` and `ActiveNativeProjector`: produce and reconstruct the same
-  selected directory ownership from a sealed package; reserved descriptors are
-  digest-covered, and active reconstruction is read-only.
+- `TargetLayout`, `StagingLayout`, `Projector` and `ActiveNativeProjector`: place
+  the full managed package in native discovery, generate the guarded entrypoint
+  and descriptor, and reconstruct desired ownership read-only.
 - `RegistryInspector`, `ActivationPreflighter`, `AutomaticActivator`,
   `ReadOnlyVerifier` and `Lifecycle`: install/verify/remove only the exact
-  directory and digest recorded for this binding and physical profile.
+  managed package and digest; activation observes installed discovery bytes and
+  requests reload, without another native write or live-runtime claim.
 
-Use `NativeObjectOwnership` with a Pi directory kind, object ID, logical plugin
-name, exact destination, source-relative path and managed digest. Use existing
-path policy, file-tree copy/digest, `shared.RenameDirectoryExclusive`, native
-effect states and `shared.CompleteNativeConfigActivation`. Common UAP owns the
-outer operation journal and runtime handoff. Pi owns the bounded directory swap,
-backup and exact rollback. The project-components helper cannot be reused
-verbatim: it assumes skill/MCP pairs and a managed package inside its project
-root; do not weaken those invariants merely to fit Pi.
+Retain `managed_package_directory` ownership and existing file-tree/directory
+proofs. Declare Pi `LifecyclePrepared`, plus small explicit policies for owned
+plugin data and read-only native-directory verification. Add those declarations
+to the existing `packageNeedsPluginData` and `ShouldReadOnlyVerifyForScope`
+decisions; only Pi opts in, only an admitted extension needs data. Do not invent
+an MCP selection, reinterpret CLI registration or use `LifecycleNativeConfig` to
+obtain verification. Existing domain/native intent and VS Code source stay intact.
 
-Initial adoption must refuse foreign or merely byte-identical unowned content.
+Initial adoption refuses foreign or merely byte-identical unowned content.
 Update must preserve user edits and other Pi extensions. Repair may restore a
 missing owned extension but may not overwrite edits. Removal does not require
 the Pi CLI to remain installed; it requires the persisted physical root and
-ownership. A crash after a possible native write must retain uncertain evidence
-and require exact recovery, never infer ownership from a matching pathname.
+ownership. Crash recovery uses the existing directory transaction proof, never
+pathname/digest coincidence as new ownership. Test retained backup and quarantine
+against actual Pi loading as well as directory recovery.
 
 Add a typed Pi process-event source in `sdk/pi`, wired through `App.Pi()` and the
-existing descriptor/registrar generator. Keep this a small read-only notification
+existing descriptor/registrar generator: one `OnObservation` handler, fixed
+`pi-event` argv invocation and typed stdin JSON union for the two events below.
+Keep this a small read-only notification
 carrier; no tool execution, approval response, continuation or transcript API.
 Generate registry/support outputs from descriptors rather than hand-editing
 generated files. Do not claim the legacy authoring import/generate lane for Pi.
 
 ## Observer and runtime event contract
 
-The canonical Notifications package ships one Pi extension directory, using
-type-only Pi imports and Node built-ins. A digest-covered reserved UAP descriptor
-binds the extension to the committed package and plugin-data roots. Notifications
-resolves its executable and binding locator through its existing receipt/facts
-contract; the generic Pi provider has no Notifications-specific executable or
-policy knowledge. Descriptor materialization occurs only in the owned staging
-tree. It cannot contain shell text or arbitrary args. Freeze the exact resolver
-before implementation; copied extension code must not guess HOME or follow
-source-tree links to find a runtime.
+The canonical package ships one Pi source directory using type-only Pi imports
+and Node built-ins. A reserved, digest-covered UAP descriptor carries schema and
+bootstrap versions, bound `active_path`, `package_root`, `data_root` and canonical
+source tree digest. It is generated in staging and encoded in the guarded
+bootstrap, so a loaded observer captures it once rather than rereading changed
+files. Final whole-projection digest cannot be embedded in itself. Notifications
+resolves its binding and managed runtime from existing receipt/facts under these
+bound roots; UAP has no product-specific executable or policy code. No HOME
+guessing, external source links, shell text or arbitrary args enter this contract.
 
-The provisional v1 frame has `schema_version`, `event`, `observer_id`,
-`observation_id`, `session_id`, `cwd`, `mode` and `pi_pid`, plus exactly one of:
+The v1 frame has `schema_version`, `event`, `observer_id`, `observation_id`,
+`session_id`, `cwd`, `mode`, `pi_pid` and captured loaded-revision facts, plus one of:
 `settled: {aborted, boundary_outcome?}` or `prompt: {kind}`. Event values are
 `agent_settled` and `ui_prompt_start`. Observer and observation UUIDs are
 explicitly synthetic. Session ID and cwd come from Pi's extension context; PID
@@ -169,48 +185,68 @@ non-aborted settlement and a latest completed outcome; abort suppresses completi
 error maps to fixed `api_error`, and missing/inconsistent outcome fails closed.
 `ui_prompt_start` maps to question/waiting-for-input, not permission approval.
 End events and shutdown cancel pending producer work using synthetic identities;
-nested UI prompts must be matched without inventing native prompt IDs.
+nested UI prompts use a bounded synthetic stack. Idle prompts are independent of
+agent activity. Event handlers synchronously snapshot context/state and return
+`undefined`; no handler returns or awaits the child promise. Pi awaits settlement
+handlers, so an async transport handler would stall its final idle transition.
 
 Invoke the real helper directly with asynchronous `execFile`, `shell:false`, no
 detachment, inherited terminal environment, `cwd:ctx.cwd` and hidden Windows
 console. This preserves the live Pi parent chain for terminal/multiplexer hints.
-One observation gets one invocation and no automatic resend. Child failures do
-not throw into Pi or change its result. Frame/stdout/stderr limits are 64 KiB.
-Provisional budgets: Go delivery context at most 15 seconds and producer timeout
-16 seconds, including cancellation/reaping; critics must validate latency and
-whether these limits are sufficient for the existing OS focus handoffs.
-The existing shared observation budget is four seconds; a Pi budget must be a
-separate bounded helper and must not weaken that contract. Alternatively freeze
-four/five seconds for Pi if the native handoffs qualify within those limits.
+One observation gets one invocation and no resend. Track at most two children;
+drop excess work with no queue. Child failures cannot throw into Pi or change its
+result. Frame/stdout/stderr limits are 64 KiB. Go has a 15-second context budget
+through all capture, policy and delivery work. A separate Pi budget leaves the
+existing four-second shared observation contract unchanged. Producer lifetime is
+bounded to 16 seconds: TERM by 15.5 seconds, 250 ms grace, then hard kill and one
+join by the deadline. Prompt end/shutdown use the same cancellation/reaping path.
+Context-aware command runners must terminate/reap their descendants on all OSs.
+Never retry or choose another desktop backend after a possible handoff, and never
+claim cancellation retracts a notification or audio already delivered.
 
-Go validates bounded strict JSON, event-specific shape, canonical identity and
-binding generation before policy. A typed facts adapter derives fixed Pi
+At initialization, the admitted observer resolves the existing authoritative
+binding receipt and captures its final projected-artifact digest, canonical
+digest/bootstrap identity, binding ID, runtime root and primary executable
+SHA-256. The descriptor fences which package that receipt can describe; no final
+digest is embedded in its own projection. Every frame carries this captured
+revision, not newly read values. Under the existing lease, Go validates it against
+the current sealed UAP binding and current runtime before policy and immediately
+before sending. Changed projection/runtime, disable or removal denies old loaded
+observers until reload; an old observer cannot upgrade itself by rereading facts.
+Do not add generation to immutable `portable.Binding` or alter other integrations.
+
+Go also validates bounded strict JSON, event-specific shape and canonical
+identity. A typed facts adapter derives fixed Pi
 presentation, completion/question/error semantics and native session/cwd. Use
 the existing `observation.RecentCache` for per-channel claims keyed by binding,
-observer and observation identity. Recheck live generation/policy at the actual
-send boundary so disable, remove or retained-runtime changes revoke old writers.
+observer and observation identity.
 
 Reuse `notifier.New(effectivePiConfig).SendDesktop` behavior for sound and terminal
-focus, adding a narrow `SendDesktopContext` entrypoint if required while retaining
+focus, adding a narrow `SendDesktopContext` entrypoint while retaining
 the existing wrapper for existing agents. Existing OpenCode/Gemini delivery
 explicitly disables sound/navigation and is not a Pi implementation template.
 Cancellation must reach terminal capture helpers, multiplexer/Terminator probes,
 Linux daemon startup/ping/send and macOS helper launch, not merely wrap a blocking
 top-level call. Resolve native assets from the validated managed-runtime receipt;
 ambient `CLAUDE_PLUGIN_ROOT` must not redirect Pi to an unrelated helper.
-Pi desktop is TUI-only by default; RPC/JSON/print and remote contexts need explicit
-policy and independent webhook eligibility. Configuration uses the established
-per-agent layering and defaults. Webhook opt-in and Desktop opt-in remain the
-existing setup choices. Do not claim an OS acceptance receipt the backend lacks.
+The desktop policy admits only `mode:tui` with a known local terminal. Presence of
+`SSH_CONNECTION`, `SSH_CLIENT` or `SSH_TTY` means remote; unknown locality and
+RPC/JSON/print deny desktop. Do not add unqualified opt-in overrides. Explicitly
+enabled webhooks independently admit native events in all four modes and remote
+contexts. Configuration uses established per-agent layering and defaults;
+Desktop/Webhook consent remains the existing setup choice. A backend without a
+structured OS acceptance receipt cannot claim one.
 
 ## Notifications composition and product surface
 
 Add Pi to the portable integration vocabulary, setup product order/labels,
 captured environment/scopes, frozen intent validation, discovery, setup summary
 and config per-agent schema. Introduce explicit Pi agent-dir/executable options
-where the existing product interface needs them. Resolve Windows `pi.cmd` or
-native executables through the actual supported distribution path and never
-treat a command shim as a directly executable native binary without proof.
+where the existing product interface needs them. Freeze native qualification to
+the official standalone v1.4.0 distribution. On Windows accept its real `pi.exe`;
+an npm `pi.cmd` shim is not a directly executable native binary and is refused
+with explicit standalone/executable guidance. Adding npm launcher support needs
+its own native parity evidence rather than silent shell fallback.
 
 Compose `clients/pi` explicitly in the Notifications materializer and installer
 engine. Extend its existing installation/binding/runtime handoff and policy
@@ -230,7 +266,11 @@ disclaimers, release publication, and unrelated wording cleanup.
 1. Commit/push this concrete plan and open the Notifications draft PR early.
    Complete critic round 1, revise, then independent critic round 2 and revise.
    Record every finding and resolution before implementation.
-2. Open a linked UAP draft PR; implement the bounded Pi namespace/client adapter
+2. After round 2 approval, run native GUI/audio/terminal preflight first on the
+   actual available runners. Record ready/unqualified prerequisites before product
+   effects; continue unaffected implementation if a lane is unavailable, but keep
+   final acceptance and merge blocked until genuine three-OS evidence exists.
+   Open a linked UAP draft PR; implement the bounded Pi namespace/client adapter
    and SDK carrier. Push reviewable stages. Run native lifecycle/SDK gates and
    independent code review, fix findings, and merge UAP first.
 3. Pin Notifications integrationctl/agentplugins and SDK to the exact merged UAP
@@ -249,7 +289,7 @@ UAP: unit/contract tests cover client detection, profile override/canonicalizati
 namespace version/schema, unknown namespaces unchanged, malicious paths/symlinks,
 foreign/unowned collision, projection/reconstruction parity, cancellation,
 read-only verify, idempotence, replacement, missing repair, edited refusal,
-confirmed removal and uncertain native write recovery. Inject failures before
+confirmed removal and directory transaction recovery. Inject failures before
 swap, after backup, after publish, at receipt commit and during rollback/cleanup;
 retry/recovery must not delete foreign content. Run affected module suites,
 architecture/conformance guards, descriptor generation checks, and public SDK
@@ -267,44 +307,87 @@ existing agents' rendering/sound/navigation. Run the affected Go and JS suites,
 required repository gates, race tests where concurrency changes, landing build
 and documentation checks.
 
-Add a PR-triggered native Pi workflow on Ubuntu 24.04, macOS 15 and Windows 2025.
-Pin official standalone Pi v1.4.0 archives by OS/arch SHA-256 and check version.
-Build the candidate real product binary with `-trimpath` and record checkout and
-linked UAP identities. Use isolated TEST roots, environment allowlist and a fresh
-project; no real credentials. A loopback model fixture drives genuine Pi with
-`--offline --no-approve --no-mcp --no-tools`; the installed extension must be
-auto-discovered, never injected with `-e`. Record native event observations,
-fixture requests and production webhook delivery. Exercise successful completion,
-retry, terminal error, abort, queued continuation and UI prompt semantics, then
-idempotent reinstall, real binary replacement update, repair and removal. A final
-native turn after removal must deliver nothing, preserving foreign extensions
-and settings throughout. Cross-compilation is not native execution evidence.
+Baseline before implementation: Notifications config/notifier/daemon/hooks and
+UAP planner/Gemini suites pass. Existing Claude unreadable-directory tests fail
+when root bypasses chmod restrictions; rerun as an unprivileged user, do not fix
+unrelated Claude source. Some filesystem/socket checks require the proper sandbox.
 
-Desktop qualification is a separate blocking acceptance gate on each OS. Use two
-real terminal windows/sessions and real Pi; move focus away, produce the native
-event, observe the production banner and configured audio output, click the real
-notification and verify the originating session/window becomes foreground.
-Record product/Pi versions, OS/session, terminal, process/session identity, audio
-capture and click/foreground evidence. Cover completion/question defaults,
-sound-off, desktop-off, focus-off, wrong-window isolation, and available
-multiplexer behavior. Existing Linux D-Bus receipt, Windows disposable callback
-test and macOS intercepted sound arguments do not prove these requirements.
-Headless/locked/unavailable desktop or audio must report unqualified, never pass.
+PR native process lanes use `CI_LINUX_RUNNER` (currently `ubicloud-standard-4`),
+`CI_MACOS_15_RUNNER` (currently `namespace-profile-macos-15`) and Windows 2025;
+fallbacks are Ubuntu 24.04/macOS 15 only when the variables are absent. Existing
+runner names do not prove GUI/audio readiness. Pin official standalone Pi v1.4.0
+archives by OS/arch SHA-256 and verify version. Build the release-equivalent
+sealed product bundle with `-trimpath`, exact checkout and linked UAP identities,
+installed sounds and actual native helpers. macOS uses the pinned verified signed
+helper. Windows builds the native callback with `windows_callback_asset`, verifies
+the embedded asset and includes the `-H=windowsgui` focus companion. The installer
+must consume this receipt-bound bundle; a main-only test binary is insufficient.
 
-## Open decisions for critic round 1
+Use isolated TEST roots, an environment allowlist and fresh project, without real
+credentials. A loopback model fixture drives genuine Pi with
+`--offline --no-approve --no-mcp --no-tools`. Product extension loading is automatic,
+never `-e`; explicit `-e` is allowed only for the guarded-copy negative test.
+Default terminal behavior runs in a real PTY/ConPTY TUI on every OS; JSON/RPC
+fixtures independently prove zero desktop and explicitly configured webhooks.
+Record provider requests, native events and production delivery against this oracle:
 
-- Confirm the one-source-directory namespace shape/name and smallest shared
-  read-only namespace-admission hook; prevent generic execution or scope growth.
-- Specify exact crash-recovery ownership across Pi directory publish and the UAP
-  receipt; test recoverable uncertainty before choosing implementation details.
-- Freeze the reserved UAP package/data descriptor and Notifications receipt
-  resolver so generic projection does not acquire product-specific runtime code.
-- Freeze SDK frame/handler names, prompt matching/cancellation, mode policy and
-  deadline after reviewing actual native ordering and existing notifier latency.
-- Establish usable macOS/Linux/Windows desktop/audio/terminal environments and
-  their evidence runner before claiming sound and click-to-focus completion.
-- Check standalone Windows Pi versus npm shims and the supported distribution
-  floor. Native tests must use the same command path users will install.
+| Case | Requests / agent ends / settled | Required result |
+| --- | --- | --- |
+| Success | 1 / 1 / 1 | One completion |
+| Retry or queued followup | 2 / 2 / 1 | One final completion |
+| HTTP 400 | Native error; exit may be 0 | No completion despite non-aborted settlement |
+| Abort | Boundary outcome may be absent | Aborted settlement; no completion |
+| Idle RPC UI | 0 / 0 / 0 | Question webhook only when enabled; zero desktop |
+
+Keep Pi A alive across real replacement update. Its next native event must be
+denied on captured revision mismatch. Fresh/reloaded Pi B must deliver once.
+Exercise idempotent reinstall, missing-extension repair followed by fresh Pi,
+and CLI-missing removal. Both still-loaded observers and a fresh Pi after removal
+must deliver nothing while provider work and a foreign witness extension still
+succeed. Preserve foreign extensions/settings throughout. Run a real hung-helper
+case: Pi's settlement remains prompt, two-child bound holds, timeout/cancel reaps
+the helper and descendants, and there is no resend. Cross-compilation is not E2E.
+
+Native desktop qualification is blocking and separate from process-only lanes:
+
+| OS | Preflight and independent observations |
+| --- | --- |
+| Linux | Private D-Bus, Xvfb/Openbox, dunst, two nonce-identified xterms; PulseAudio null sink/monitor and ALSA-to-Pulse output. A known cue validates capture, real dunst mouse click plus active window ID/Pi PID/TTY proves focus. |
+| macOS | Unlocked WindowServer/user session, signed-helper notification permission, selected observer's Accessibility/screen permissions; two Terminal windows/TTYs; ScreenCaptureKit system-audio capture, real notification click and foreground window observation. |
+| Windows | Connected interactive WTS/input desktop on Windows Client, Shell/Toast Center/UI Automation, default render endpoint and WASAPI loopback; two terminal HWND/PID pairs, real toast click and foreground HWND. Hosted Server 2025 alone cannot qualify this lane. |
+
+Preflight proves observers with known fixtures before product effects. Production
+tests move focus away, observe the actual banner and configured digital audio
+output, click it, and verify the originating terminal. Cover sound-off,
+desktop-off, focus-off, wrong-window isolation and available multiplexer behavior.
+Record source/Pi/bundle hashes, OS/session, terminal, process identity, screenshot,
+audio monitor and click/foreground evidence. Audio capture proves output, not
+physical audibility. An aggregate required job accepts only three desktop passes
+for the exact candidate SHA/bundle, rejecting missing, skipped, not-run or
+unqualified receipts. Headless/locked/unavailable environments cannot pass. No
+three-OS desktop environment is claimed available before the preflight executes.
+
+## Round 1 findings and resolutions; round 2 gates
+
+| Finding | Revision 2 decision |
+| --- | --- |
+| R1-RUNTIME1: extra native copy is unrecoverable | Direct TargetLayout, normal directory journal, guarded bootstrap; no native intent protocol. |
+| R1-RUNTIME2: descriptor/data demand are incomplete | Reserved immutable roots/canonical descriptor, existing receipt resolver, explicit owned-data/verification policy, final digest captured after sealing. |
+| R1-RUNTIME3: deadlines/contexts are provisional | Mandatory context API through all subprocess/handoff paths; fixed 15/16-second bounds, grace/KILL/join, no fallback after possible handoff. |
+| R1-RUNTIME4: modes and old observer are ambiguous | Local TUI-only desktop, independent opted-in webhook; captured projected/runtime revision mismatch denies old code without global Binding generation changes. |
+| R1-RUNTIME5: callbacks can stall Pi | Synchronous snapshots/return, activity and prompt state separation, at most two children, cancellation and no queue/resend. |
+| R1-E2E1: desktop mechanisms/gate absent | Concrete preflight/observer matrix and exact-SHA aggregate; unavailable lanes remain blockers. |
+| R1-E2E2: main-only build is insufficient | Sealed release-equivalent bundle, verified signed macOS helper, embedded Windows callback/focus companion and installed sounds. |
+| R1-E2E3: lifecycle misses cached old code | Pi A denied after update; fresh B accepted; repair, CLI-missing remove and foreign-witness negative checks. |
+| R1-E2E4: non-TUI fixtures miss normal behavior | Real PTY/ConPTY TUI plus explicit non-TUI desktop-denial/webhook tests. |
+| R1-E2E5: insufficient native oracle | Provider/event/delivery count table includes retry/followup, error exit zero, abort without boundary and idle RPC UI. |
+| R1-E2E6: hung sender can block settlement | Real native hung-helper case asserts prompt settlement, admission bound and reaped child tree. |
+| R1-E2E7: Windows launcher parity is unproven | Official standalone-only floor; refuse npm shims until separately tested. |
+
+Round 2 must approve these bounded contracts and test oracles before code begins.
+Actual desktop/audio runner readiness and candidate qualification remain execution
+gates, not assumptions resolved by this document. Record any material adjustment
+and critic disposition before broadening the implementation scope.
 
 [pi-loader]: https://github.com/earendil-works/pi/blob/4a080252f06caf63a525d7873c5d94d3c23887e0/packages/coding-agent/src/core/extensions/loader.ts
 [pi-config]: https://github.com/earendil-works/pi/blob/4a080252f06caf63a525d7873c5d94d3c23887e0/packages/coding-agent/src/config.ts
