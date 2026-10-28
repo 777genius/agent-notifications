@@ -43,8 +43,8 @@ class WindowsShards(unittest.TestCase):
         text = job('test')
         self.assertIn('name: Test on Windows (${{ matrix.go }})', text)
         self.assertIn('needs: [scope, go-tests, installer-native]', text)
-        self.assertIn('always()', text)
-        self.assertNotIn('!cancelled()', text)
+        # Failed shards still fail this gate; a superseded workflow needs no runner.
+        self.assertIn('always() && !cancelled()', text)
         block = run_block(text, 'Require every Windows shard to succeed')
         env = {'SCOPE_RESULT': 'success', 'GO_TESTS_RESULT': 'success', 'INSTALLER_NATIVE_RESULT': 'success'}
         self.assertEqual(self.run_shell(block, **env), 0)

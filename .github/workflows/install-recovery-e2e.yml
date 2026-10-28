@@ -210,7 +210,7 @@ jobs:
   full-ci:
     name: ${{ github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null) && 'Metadata edit ignored (full recovery gate)' || 'Full install recovery required' }}
     needs: [scope, recovery]
-    if: ${{ always() && needs.scope.outputs.mode != 'release-tools' && needs.scope.outputs.mode != 'release-equivalent' && !(github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null)) }}
+    if: ${{ always() && !cancelled() && needs.scope.outputs.mode != 'release-tools' && needs.scope.outputs.mode != 'release-equivalent' && !(github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null)) }}
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || vars.CI_LINUX_RUNNER || 'ubuntu-latest' }}
     permissions:
       contents: read

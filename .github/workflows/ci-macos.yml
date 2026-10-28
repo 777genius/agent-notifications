@@ -13,10 +13,11 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, labeled, unlabeled, ready_for_review, edited]
 
-# Only a newer run for the same PR supersedes its checks.
+# PR/develop checks are replaceable; main runs retain exact-source release evidence.
+# Manual diagnostics and metadata-only edits keep independent groups.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null) && github.run_id || github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' && !(github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null)) }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null) && github.run_id || github.event.pull_request.number || github.event_name == 'push' && github.ref == 'refs/heads/develop' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/develop') || github.event_name == 'pull_request' && !(github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null)) }}
 
 jobs:
   # Body/title edits create no canonical check names and cannot cancel full CI.
@@ -207,7 +208,7 @@ jobs:
   full-ci:
     name: ${{ github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null) && 'Metadata edit ignored (full macOS gate)' || 'Full macOS CI required' }}
     needs: [scope, test, swift-test]
-    if: ${{ always() && needs.scope.outputs.mode != 'release-tools' && needs.scope.outputs.mode != 'release-equivalent' && !(github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null)) }}
+    if: ${{ always() && !cancelled() && needs.scope.outputs.mode != 'release-tools' && needs.scope.outputs.mode != 'release-equivalent' && !(github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null)) }}
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || vars.CI_LINUX_RUNNER || 'ubuntu-latest' }}
     permissions:
       contents: read

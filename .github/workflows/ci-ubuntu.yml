@@ -23,10 +23,11 @@ on:
         required: true
         default: false
 
-# Only a newer run for the same PR supersedes its checks.
+# PR/develop checks are replaceable; main runs retain exact-source release evidence.
+# Manual diagnostics and metadata-only edits keep independent groups.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.event_name == 'push' && github.ref == 'refs/heads/develop' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'push' && github.ref == 'refs/heads/develop' }}
 
 jobs:
   scope:
@@ -1981,7 +1982,7 @@ jobs:
 
   test:
     needs: [scope, go-tests, installer-native, cursor-physical]
-    if: ${{ always() && github.event_name != 'workflow_dispatch' && needs.scope.outputs.mode != 'release-tools' && needs.scope.outputs.mode != 'release-equivalent' }}
+    if: ${{ always() && !cancelled() && github.event_name != 'workflow_dispatch' && needs.scope.outputs.mode != 'release-tools' && needs.scope.outputs.mode != 'release-equivalent' }}
     # Keep the established required-check names while retries target only failed shards.
     name: Test on Ubuntu (${{ matrix.go }})
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || vars.CI_LINUX_RUNNER || 'ubuntu-latest' }}
