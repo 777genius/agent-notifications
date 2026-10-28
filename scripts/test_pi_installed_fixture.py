@@ -2,6 +2,8 @@
 import importlib.util
 import os
 from pathlib import Path
+import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -20,6 +22,97 @@ def body(status="task_complete"):
 
 
 class ObserverTests(unittest.TestCase):
+    def test_new_TEST_root_is_empty_private_and_refuses_other_prefixes(self):
+        with self.assertRaisesRegex(RuntimeError, "TEST_root_prefix"):
+            P.new_test_root("ordinary-user-directory-")
+        root = P.new_test_root("TEST-pi-root-")
+        self.addCleanup(shutil.rmtree, root)
+        self.assertTrue(root.is_absolute() and root.is_dir())
+        self.assertEqual(list(root.iterdir()), [])
+        if os.name != "nt":
+            self.assertEqual(stat.S_IMODE(root.stat().st_mode), 0o700)
+
+    @unittest.skipUnless(os.name == "nt", "actual Windows security descriptors required")
+    def test_real_windows_root_and_new_child_have_only_private_inherited_grants(self):
+        # Observe native descriptors independently of the writer. These are real
+        # filesystem inodes; no mocked product permission acceptance is involved.
+        import ctypes
+        from ctypes import wintypes
+        from collections import Counter
+        kernel, api = ctypes.WinDLL("kernel32", use_last_error=True), ctypes.WinDLL("advapi32", use_last_error=True)
+        pointer = ctypes.c_void_p
+        kernel.GetCurrentProcess.restype = wintypes.HANDLE
+        kernel.CloseHandle.argtypes = (wintypes.HANDLE,)
+        kernel.LocalFree.argtypes = (pointer,)
+        kernel.LocalFree.restype = pointer
+        api.OpenProcessToken.argtypes = (wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE))
+        api.GetTokenInformation.argtypes = (wintypes.HANDLE, ctypes.c_int, pointer, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD))
+        api.ConvertSidToStringSidW.argtypes = (pointer, ctypes.POINTER(pointer))
+        api.GetNamedSecurityInfoW.argtypes = (wintypes.LPWSTR, ctypes.c_int, wintypes.DWORD, ctypes.POINTER(pointer),
+                                            pointer, ctypes.POINTER(pointer), pointer, ctypes.POINTER(pointer))
+        api.GetNamedSecurityInfoW.restype = wintypes.DWORD
+        api.GetSecurityDescriptorControl.argtypes = (pointer, ctypes.POINTER(wintypes.WORD), ctypes.POINTER(wintypes.DWORD))
+        api.GetAce.argtypes = (pointer, wintypes.DWORD, ctypes.POINTER(pointer))
+
+        class ACL(ctypes.Structure):
+            _fields_ = [("revision", wintypes.BYTE), ("reserved", wintypes.BYTE), ("size", wintypes.WORD),
+                        ("count", wintypes.WORD), ("reserved2", wintypes.WORD)]
+
+        class AllowedACE(ctypes.Structure):
+            _fields_ = [("type", wintypes.BYTE), ("flags", wintypes.BYTE), ("size", wintypes.WORD), ("mask", wintypes.DWORD)]
+
+        def sid_text(sid):
+            text = pointer()
+            self.assertTrue(api.ConvertSidToStringSidW(sid, ctypes.byref(text)))
+            try:
+                return ctypes.wstring_at(text)
+            finally:
+                kernel.LocalFree(text)
+
+        token = wintypes.HANDLE()
+        self.assertTrue(api.OpenProcessToken(kernel.GetCurrentProcess(), 0x0008, ctypes.byref(token)))
+        try:
+            size = wintypes.DWORD()
+            api.GetTokenInformation(token, 1, None, 0, ctypes.byref(size))
+            self.assertTrue(0 < size.value < 65536)
+            data = ctypes.create_string_buffer(size.value)
+            self.assertTrue(api.GetTokenInformation(token, 1, data, size.value, ctypes.byref(size)))
+            current = sid_text(ctypes.cast(data, ctypes.POINTER(pointer))[0])
+        finally:
+            kernel.CloseHandle(token)
+
+        root = P.new_test_root("TEST-pi-acl-")
+        self.addCleanup(shutil.rmtree, root)
+        child = root / "new-product-descendant"
+        child.mkdir()
+        for path, inherited in ((root, False), (child, True)):
+            descriptor, owner, dacl = pointer(), pointer(), pointer()
+            self.assertEqual(api.GetNamedSecurityInfoW(str(path), 1, 5, ctypes.byref(owner), None,
+                                                       ctypes.byref(dacl), None, ctypes.byref(descriptor)), 0)
+            try:
+                if path == root:
+                    self.assertEqual(sid_text(owner), current)
+                else:
+                    self.assertIn(sid_text(owner), (current, "S-1-5-18", "S-1-5-32-544"))
+                self.assertTrue(dacl)
+                control, revision = wintypes.WORD(), wintypes.DWORD()
+                self.assertTrue(api.GetSecurityDescriptorControl(descriptor, ctypes.byref(control), ctypes.byref(revision)))
+                if path == root:
+                    self.assertTrue(control.value & 0x1000)  # Root inheritance is protected.
+                acl = ctypes.cast(dacl, ctypes.POINTER(ACL)).contents
+                self.assertEqual(acl.count, 3)
+                principals = []
+                for index in range(acl.count):
+                    address = pointer()
+                    self.assertTrue(api.GetAce(dacl, index, ctypes.byref(address)))
+                    ace = ctypes.cast(address, ctypes.POINTER(AllowedACE)).contents
+                    self.assertEqual((ace.type, ace.mask, ace.flags & 3), (0, 0x1F01FF, 3))
+                    self.assertEqual(bool(ace.flags & 0x10), inherited)
+                    principals.append(sid_text(address.value + ctypes.sizeof(AllowedACE)))
+                self.assertEqual(Counter(principals), Counter((current, "S-1-5-18", "S-1-5-32-544")))
+            finally:
+                kernel.LocalFree(descriptor)
+
     def test_canonical_config_and_native_witness_use_utf8_in_a_real_child(self):
         code = r'''
 import importlib.util

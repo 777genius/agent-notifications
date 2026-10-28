@@ -6,12 +6,15 @@ It never invokes pi-event or writes product authority, locators or extensions.
 """
 import hashlib
 import http.server
+import importlib.util
 import json
+import os
 from pathlib import Path
 import queue
 import re
 import socketserver
 import subprocess
+import tempfile
 import threading
 import time
 
@@ -26,6 +29,27 @@ def require(ok, code):
 
 def sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def new_test_root(prefix):
+    """Protect only a fresh TEST root before creating any product descendants.
+
+    Windows chmod does not remove a temporary parent's inherited write grants.
+    Reuse the existing native fixture's current-user/SYSTEM/Admin OICI DACL;
+    production admission remains responsible for accepting every installed inode.
+    """
+    require(isinstance(prefix, str) and re.fullmatch(r"TEST-pi-[a-z-]+-", prefix), "private_TEST_root_prefix_required")
+    root = Path(tempfile.mkdtemp(prefix=prefix)).resolve(strict=True)
+    require(root.is_dir() and not root.is_symlink() and not any(root.iterdir()), "fresh_empty_TEST_root_required")
+    if os.name == "nt":
+        source = Path(__file__).with_name("gemini_native_e2e.py")
+        spec = importlib.util.spec_from_file_location("pi_windows_private_root", source)
+        fixture = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(fixture)
+        fixture.private_windows_lab(root)
+    else:
+        root.chmod(0o700)
+    return root
 
 
 def observe_unchanged_focus(observe, expected, stop_capture, *, drain_seconds, seconds=15):

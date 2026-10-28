@@ -15,7 +15,6 @@ import platform
 import queue
 import shutil
 import subprocess
-import tempfile
 import threading
 import time
 import uuid
@@ -168,8 +167,7 @@ def reference(native, source, output):
 
 def run(args):
     P.require(os.name == "nt", "actual_windows_client_host_required")
-    root = Path(tempfile.mkdtemp(prefix="TEST-pi-windows-desktop-")).resolve()
-    root.chmod(0o700)
+    root = P.new_test_root("TEST-pi-windows-desktop-")
     report = {"schema_version": 1, "status": "unqualified", "scope": "actual_installed_pi_windows_desktop",
               "test_root": str(root), "source_sha": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO, text=True).strip(),
               "working_tree_dirty": bool(subprocess.check_output(["git", "status", "--porcelain"], cwd=REPO)),

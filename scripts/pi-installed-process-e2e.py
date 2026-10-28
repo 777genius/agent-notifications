@@ -11,7 +11,6 @@ from pathlib import Path
 import platform
 import shutil
 import subprocess
-import tempfile
 import time
 
 REPO = Path(__file__).resolve().parents[1]
@@ -38,8 +37,7 @@ def command(executable, args, root, env):
 
 
 def run(args):
-    root = Path(tempfile.mkdtemp(prefix="TEST-pi-installed-")).resolve()
-    root.chmod(0o700)
+    root = P.new_test_root("TEST-pi-installed-")
     sink, first_provider = P.Webhooks(), F.Provider("success")
     env = F.prepare(root, first_provider, "success")
     env["AGENT_NOTIFICATIONS_CONFIG"] = str(root / "global/config.json")
