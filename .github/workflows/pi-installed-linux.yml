@@ -74,6 +74,7 @@ jobs:
             --runtime-stage "$RUNNER_TEMP/TEST-pi-candidate/stage" \
             --package "$RUNNER_TEMP/TEST-pi-candidate/package-A.zip" \
             --updated-package "$RUNNER_TEMP/TEST-pi-candidate/package-B.zip" \
+            --replacement-runtime-stage "$RUNNER_TEMP/TEST-pi-candidate/replacement-stage" \
             --assets-root "$GITHUB_WORKSPACE" --pi-executable "$RUNNER_TEMP/TEST-pi-host/pi/pi" \
             --report "$RUNNER_TEMP/pi-installed-linux/process.json"
       - name: Actual TUI banners audio physical clicks and negative cases
