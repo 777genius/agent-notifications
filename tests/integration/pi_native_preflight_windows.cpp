@@ -12,6 +12,7 @@
 #include <cmath>
 #include <cstdint>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -33,6 +34,64 @@ static void pump(DWORD duration) {
     }
 }
 static const char* jsonBool(bool value) { return value ? "true" : "false"; }
+
+// Read-only inventory, collected by the same process/session as capture. No
+// service, endpoint, default role, driver or system setting is changed.
+static std::string serviceInventory(const wchar_t* name) {
+    DWORD state = 0, error = ERROR_SUCCESS, needed = 0;
+    const SC_HANDLE manager = OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CONNECT);
+    SC_HANDLE service = nullptr;
+    SERVICE_STATUS_PROCESS status{};
+    if (!manager) error = GetLastError();
+    else {
+        service = OpenServiceW(manager, name, SERVICE_QUERY_STATUS);
+        if (!service) error = GetLastError();
+        else if (!QueryServiceStatusEx(service, SC_STATUS_PROCESS_INFO, reinterpret_cast<BYTE*>(&status), sizeof status, &needed)) error = GetLastError();
+        else state = status.dwCurrentState;
+    }
+    if (service) CloseServiceHandle(service);
+    if (manager) CloseServiceHandle(manager);
+    return "{\"state\":" + std::to_string(state) + ",\"query_error\":" + std::to_string(error) + "}";
+}
+
+static std::string audioInventory(IMMDeviceEnumerator* enumerator) {
+    std::ostringstream result;
+    result << "{\"AudioSrv\":" << serviceInventory(L"AudioSrv")
+           << ",\"AudioEndpointBuilder\":" << serviceInventory(L"AudioEndpointBuilder");
+    ComPtr<IMMDeviceCollection> devices;
+    HRESULT hr = enumerator ? enumerator->EnumAudioEndpoints(eRender, DEVICE_STATEMASK_ALL, &devices) : E_POINTER;
+    UINT total = 0, active = 0, disabled = 0, unplugged = 0, notPresent = 0, unknown = 0;
+    if (SUCCEEDED(hr)) hr = devices->GetCount(&total);
+    if (SUCCEEDED(hr)) {
+        for (UINT index = 0; index < total; index++) {
+            ComPtr<IMMDevice> device;
+            DWORD state = 0;
+            if (FAILED(devices->Item(index, &device)) || FAILED(device->GetState(&state))) unknown++;
+            else {
+                if (state & DEVICE_STATE_ACTIVE) active++;
+                if (state & DEVICE_STATE_DISABLED) disabled++;
+                if (state & DEVICE_STATE_UNPLUGGED) unplugged++;
+                if (state & DEVICE_STATE_NOTPRESENT) notPresent++;
+            }
+        }
+    }
+    result << ",\"render_endpoints\":{\"hresult\":" << hr << ",\"total\":" << total
+           << ",\"active\":" << active << ",\"disabled\":" << disabled
+           << ",\"unplugged\":" << unplugged << ",\"not_present\":" << notPresent << ",\"unknown\":" << unknown << "},\"default_roles\":{";
+    const ERole roles[] = {eConsole, eMultimedia, eCommunications};
+    const char* labels[] = {"console", "multimedia", "communications"};
+    for (int index = 0; index < 3; index++) {
+        ComPtr<IMMDevice> device;
+        DWORD state = 0;
+        hr = enumerator ? enumerator->GetDefaultAudioEndpoint(eRender, roles[index], &device) : E_POINTER;
+        const HRESULT stateResult = SUCCEEDED(hr) ? device->GetState(&state) : hr;
+        if (index) result << ',';
+        result << '\"' << labels[index] << "\":{\"hresult\":" << hr
+               << ",\"state_hresult\":" << stateResult << ",\"state\":" << state << '}';
+    }
+    result << "}}";
+    return result.str();
+}
 
 int wmain(int argc, wchar_t** argv) {
     if (argc != 2) return 2;
@@ -112,6 +171,7 @@ int wmain(int argc, wchar_t** argv) {
     ComPtr<IAudioCaptureClient> capture;
     WAVEFORMATEX* format = nullptr;
     HRESULT audioResult = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, IID_PPV_ARGS(&enumerator));
+    const std::string inventory = audioInventory(enumerator.Get());
     if (SUCCEEDED(audioResult)) audioResult = enumerator->GetDefaultAudioEndpoint(eRender, eConsole, &endpoint);
     const bool audioEndpoint = SUCCEEDED(audioResult) && endpoint;
     std::uint64_t samples = 0;
@@ -171,6 +231,7 @@ int wmain(int argc, wchar_t** argv) {
               << ",\"known_cue_observed\":" << jsonBool(played && peak > 0.01)
               << "},\"measurements\":{\"session\":" << session << ",\"connection_known\":" << jsonBool(stateKnown)
               << ",\"input_desktop\":" << jsonBool(inputDesktop) << ",\"audio_hresult\":" << audioResult
-              << ",\"audio_samples\":" << samples << ",\"audio_peak\":" << peak << "}}\n";
+              << ",\"audio_samples\":" << samples << ",\"audio_peak\":" << peak
+              << ",\"audio_inventory\":" << inventory << "}}\n";
     return 0;
 }

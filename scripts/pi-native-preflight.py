@@ -252,7 +252,7 @@ def native(lab, audio, osname):
         executable = lab.root / "pi-native-preflight.exe"
         # CI prepares cl through the reviewed Visual Studio developer environment.
         lab.run(["cl.exe", "/nologo", "/std:c++20", "/EHsc", "/W4", "/DUNICODE", "/D_UNICODE", source,
-                 "/Fe:" + str(executable), "/Fo:" + str(lab.root / "probe.obj"), "/link", "ole32.lib", "user32.lib", "uuid.lib", "winmm.lib", "wtsapi32.lib", "uiautomationcore.lib"], timeout=90)
+                 "/Fe:" + str(executable), "/Fo:" + str(lab.root / "probe.obj"), "/link", "ole32.lib", "user32.lib", "uuid.lib", "winmm.lib", "wtsapi32.lib", "uiautomationcore.lib", "advapi32.lib"], timeout=90)
     lab.report["native_probe"] = {"source_sha256": digest(source), "executable_sha256": digest(executable)}
     out, code = lab.run([executable, audio], timeout=30, check=False)
     value = json.loads(out)

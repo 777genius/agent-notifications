@@ -24,7 +24,11 @@ native mouse input and ScreenCaptureKit audio capture. It never requests or gran
 permissions. Windows observes the actual WTS/input desktop and Client SKU, creates
 two disposable windows, verifies native input/foreground observation and records
 a known cue through WASAPI loopback. No process/return-code observation is treated
-as audio playback evidence.
+as audio playback evidence. Its read-only audio inventory records both audio
+service states, render endpoint counts across active/disabled/unplugged/missing
+states and all three default render roles in that same session. The product's
+pinned malgo/miniaudio WASAPI default uses `eConsole`, matching the capture probe;
+an absent configured render route remains unqualified.
 
 Run the evidence guards on any host:
 
