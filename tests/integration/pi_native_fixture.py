@@ -90,9 +90,9 @@ def prepare(root, provider, scenario, agent_dir=None):
         "api": "openai-completions", "baseUrl": provider.base_url, "apiKey": "TEST-only",
         "models": [{"id": "TEST-local", "name": "TEST local", "reasoning": False, "input": ["text"],
                     "contextWindow": 32000, "maxTokens": 1024,
-                    "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}}]}}}))
+                    "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}}]}}}), encoding="utf-8")
     (agent / "settings.json").write_text(json.dumps({"retry": {"enabled": scenario == "retry", "maxRetries": 1,
-        "baseDelayMs": 1, "provider": {"maxRetries": 0}}, "compaction": {"enabled": False}}))
+        "baseDelayMs": 1, "provider": {"maxRetries": 0}}, "compaction": {"enabled": False}}), encoding="utf-8")
     # This is a foreign TEST witness, not the candidate product extension. The
     # product fixture must install its observer exclusively through common setup.
     (agent / "extensions/TEST-witness.ts").write_text('''
@@ -113,7 +113,7 @@ export default function(pi) {
       aborted: event.aborted, outcome: event.outcome, reason: event.reason}));
   }
 }
-''')
+''', encoding="utf-8")
     env = {key: os.environ[key] for key in ("PATH", "SystemRoot", "SYSTEMROOT", "WINDIR", "ComSpec", "PATHEXT") if key in os.environ}
     env.update(HOME=str(root / "home"), USERPROFILE=str(root / "home"), PI_CODING_AGENT_DIR=str(agent),
                XDG_CONFIG_HOME=str(root / "home/.config"), XDG_DATA_HOME=str(root / "home/.local/share"),
@@ -207,7 +207,7 @@ class PiProcess:
 
 
 def witness(root):
-    return [json.loads(line) for line in (Path(root) / "witness.jsonl").read_text().splitlines()]
+    return [json.loads(line) for line in (Path(root) / "witness.jsonl").read_text(encoding="utf-8").splitlines()]
 
 
 def verify_case(case, rows, requests):

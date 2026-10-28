@@ -154,7 +154,7 @@ def run(args):
                                 "--consumer", "pi-runtime-preparation"], root, env)
         # Deliberately no --pi-agent-dir: use actual environment-only discovery.
         setup("install", extra=("--hooks", "false", "--agent-notify", "true", "--pi-desktop", "false", "--pi-webhook", "true"))
-        policy = json.loads((root / "control/agent-notifications.json").read_text())
+        policy = json.loads((root / "control/agent-notifications.json").read_text(encoding="utf-8"))
         P.require(policy.get("enabled") is False, "pi_setup_enabled_unrelated_mcp_policy")
         report["unrelated_mcp_policy_enabled"] = False
         initial = P.installed(root / "control", profile)
@@ -180,9 +180,9 @@ def run(args):
         # Effective configuration and saved installer consent independently
         # restrict the same real observer. Both negatives wait collected quit.
         config_path = root / "global/config.json"
-        disabled = json.loads(config_path.read_text())
+        disabled = json.loads(config_path.read_text(encoding="utf-8"))
         disabled["notifications"]["webhook"]["enabled"] = False
-        config_path.write_text(json.dumps(disabled) + "\n")
+        config_path.write_text(json.dumps(disabled) + "\n", encoding="utf-8")
         native("success", expected=None)
         report["cases"][-1]["case"] = "webhook-config-disabled"
         P.configure(config_path, args.assets_root / "config/config.json", sink, desktop=False)
@@ -256,7 +256,7 @@ def run(args):
         report["webhook_status_counts"] = {status: sum(row["status"] == status for row in sink.rows) for status in P.COPY}
         report["webhook_private_payload_failures"] = len(sink.failures)
         args.report.parent.mkdir(parents=True, exist_ok=True)
-        args.report.write_text(json.dumps(report, indent=2) + "\n")
+        args.report.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
         print(json.dumps({"status": report["status"], "failure": report.get("failure"), "desktop_qualified": False}))
     return 0 if report["status"] == "passed_installed_pi_process" else 1
 

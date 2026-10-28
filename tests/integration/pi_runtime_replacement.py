@@ -17,7 +17,7 @@ def exercise(root, profile, args, env, sink, *, fixture, product, command, setup
     saved_policy = policy.read_bytes()
 
     def ledger():
-        return json.loads((root / "control/ownership.json").read_text())
+        return json.loads((root / "control/ownership.json").read_text(encoding="utf-8"))
 
     baseline = ledger()["Consumers"]
     retainer = "TEST-pi-runtime-retainer"

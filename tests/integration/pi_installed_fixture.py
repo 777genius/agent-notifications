@@ -124,7 +124,7 @@ class Webhooks:
 
 
 def configure(path, defaults, sink, *, desktop=True, sound=True, click=True):
-    cfg = json.loads(Path(defaults).read_text())
+    cfg = json.loads(Path(defaults).read_text(encoding="utf-8"))
     cfg["schemaVersion"] = 2
     cfg["notifications"]["desktop"].update(enabled=desktop, sound=sound, clickToFocus=click,
                                               terminalBell=False, volume=1.0)
@@ -135,20 +135,20 @@ def configure(path, defaults, sink, *, desktop=True, sound=True, click=True):
     for status in COPY:
         cfg["statuses"][status]["title"] = "TEST private configured title"
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    path.write_text(json.dumps(cfg) + "\n")
+    path.write_text(json.dumps(cfg) + "\n", encoding="utf-8")
     path.chmod(0o600)
 
 
 def installed(control, profile):
     """Observe public installer receipts without supplying consumer authority."""
-    ledger = json.loads((control / "ownership.json").read_text())
+    ledger = json.loads((control / "ownership.json").read_text(encoding="utf-8"))
     bindings = [json.loads(c["Registration"]) for key, c in ledger["Consumers"].items()
                 if key.startswith("portable:") and c.get("Registration")]
     bindings = [b for b in bindings if b["integration"] == "pi"]
     require(len(bindings) == 1, "installed_pi_binding_not_unique")
     binding = bindings[0]
     require(Path(binding["controlRoot"]) == control, "installed_pi_control_root_mismatch")
-    state = json.loads((control.parent / "uap/state/state-v2.json").read_text())
+    state = json.loads((control.parent / "uap/state/state-v2.json").read_text(encoding="utf-8"))
     clients = [c for i in state["installations"] if i["installation_id"] == binding["installationID"]
                for c in i["clients"].values() if c["client_binding_id"] == binding["bindingID"]]
     require(len(clients) == 1, "installed_pi_uap_binding_not_unique")
@@ -159,7 +159,7 @@ def installed(control, profile):
             and re.fullmatch(r"agent-notify-[0-9a-f]{12}", active.name), "installed_pi_active_leaf_not_visible")
     require(client["activation"] == "active", "installed_pi_uap_not_active")
     data = Path(binding["dataRoot"])
-    runtime = json.loads((data / "pi-runtime.json").read_text())
+    runtime = json.loads((data / "pi-runtime.json").read_text(encoding="utf-8"))
     require(set(runtime) == {"schema_version", "locator", "executable", "primary_sha256", "loaded_revision"}
             and runtime["schema_version"] == 1, "installed_pi_runtime_shape")
     require(Path(runtime["executable"]) == Path(binding["runtimeRoot"]) / binding["primary"]
@@ -169,7 +169,7 @@ def installed(control, profile):
 
 
 def asset_receipts(control, runtime, canonical):
-    ledger = json.loads((control / "ownership.json").read_text())
+    ledger = json.loads((control / "ownership.json").read_text(encoding="utf-8"))
     result = {}
     for name in ("claude_icon.png", "sounds/task-complete.mp3", "sounds/question.mp3"):
         path = runtime / name

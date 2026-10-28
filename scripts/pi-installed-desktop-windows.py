@@ -118,7 +118,7 @@ class Terminal:
         self.exit_path = root / "process.exit"
         spec = root / "launch.json"
         spec.write_text(json.dumps({"environment": env, "cwd": str(cwd), "executable": str(executable) if executable else None,
-                                    "arguments": list(map(str, argv)), "exit_path": str(self.exit_path)}))
+                                    "arguments": list(map(str, argv)), "exit_path": str(self.exit_path)}), encoding="utf-8")
         launcher = root / "launch.ps1"
         launcher.write_text(POWERSHELL_LAUNCHER)
         # The real Terminal supplies WT_SESSION. Only its own child script
@@ -199,7 +199,7 @@ def run(args):
                                   "--consumer", "pi-runtime-preparation"], root, env)
         P.setup(args.candidate, "install", root, args.package, args.pi_executable, env,
                 ("--hooks", "false", "--agent-notify", "true", "--pi-desktop", "true", "--pi-webhook", "true"))
-        P.require(json.loads((root / "control/agent-notifications.json").read_text()).get("enabled") is False,
+        P.require(json.loads((root / "control/agent-notifications.json").read_text(encoding="utf-8")).get("enabled") is False,
                   "pi_setup_enabled_unrelated_mcp_policy")
         report["unrelated_mcp_policy_enabled"] = False
         view = P.installed(root / "control", root / "agent")
@@ -221,13 +221,13 @@ def run(args):
                 distraction = case_root / distractor_title; distraction.mkdir()
                 desktop, sound, click = name != "desktop-off", name != "sound-off", name != "click-off"
                 P.configure(root / "global/config.json", args.assets_root / "config/config.json", sink, desktop=desktop, sound=sound, click=click)
-                cfg = json.loads((root / "global/config.json").read_text())
+                cfg = json.loads((root / "global/config.json").read_text(encoding="utf-8"))
                 # Match the actual configured title exactly, without the
                 # default presentation suffix " [Pi]".
                 cfg["notifications"]["desktop"]["showSessionLabel"] = False
                 event = "question" if name == "question" else "task_complete"
                 cfg["statuses"][event]["title"] = toast_title
-                (root / "global/config.json").write_text(json.dumps(cfg) + "\n")
+                (root / "global/config.json").write_text(json.dumps(cfg) + "\n", encoding="utf-8")
                 argv = ["--offline", "--no-approve", "--no-session", "--no-mcp", "--no-tools", "--provider", "TEST-local",
                         "--model", "TEST-local", "--tui-mode", "regular"]
                 if name != "question":
@@ -360,7 +360,7 @@ def run(args):
                 if source.is_file():
                     target = args.report.parent / "native-captures" / case_root.name / name
                     target.parent.mkdir(parents=True, exist_ok=True); shutil.copy2(source, target)
-        args.report.write_text(json.dumps(report, indent=2) + "\n")
+        args.report.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
         print(json.dumps({"status": report["status"], "failure": report.get("failure"), "desktop_qualified": False}))
     return 0 if report["native_product_observations_passed"] and report["owned_children_collected"] else 1
 
