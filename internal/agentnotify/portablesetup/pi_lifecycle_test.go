@@ -20,12 +20,6 @@ import (
 // hand-written UAP receipt, consumer registration or projected extension.
 func TestPiCommonLifecycleAndAuthority(t *testing.T) {
 	b, ledger := bindingFixture(t)
-	on := true
-	var err error
-	ledger, err = installruntime.Commit(testCtx(t), installruntime.Request{ControlRoot: b.ControlRoot, RuntimeRoot: b.RuntimeRoot, Owner: b.Owner, ConsumerID: "existing", RefreshOnly: true, PolicyOnly: true, ExpectedGeneration: &ledger.Generation, PolicyEnabled: &on})
-	if err != nil {
-		t.Fatal(err)
-	}
 	root := filepath.Dir(b.ControlRoot)
 	uapRoot := filepath.Join(root, "uap")
 	mat, err := NewMaterializer(UAPRoots{StateFile: filepath.Join(uapRoot, "state", "state-v2.json"), LockFile: filepath.Join(uapRoot, "state", "mutation.lock"), OperationsDir: filepath.Join(uapRoot, "state", "operations"), PluginDataBase: filepath.Join(uapRoot, "plugin-data"), ManagedRoot: filepath.Join(uapRoot, "managed"), HelperExecutable: filepath.Join(b.RuntimeRoot, b.Primary)})
@@ -65,6 +59,10 @@ func TestPiCommonLifecycleAndAuthority(t *testing.T) {
 		return facts
 	}
 	facts := readRuntime()
+	policy, err := installruntime.ReadPolicySnapshot(testCtx(t), b.ControlRoot)
+	if err != nil || policy.Policy.Enabled || policy.Installation.Enabled {
+		t.Fatal("Pi registration changed unrelated portable enablement", err)
+	}
 
 	gate, binding, cfg, _, err := piauthority.Open(testCtx(t), selector, facts.LoadedRevision)
 	if err != nil {
@@ -134,6 +132,10 @@ func TestPiCommonLifecycleAndAuthority(t *testing.T) {
 	req.Operation = uapinstaller.OpRepair
 	if _, err := mat.Install(testCtx(t), req); err != nil {
 		t.Fatal(err)
+	}
+	repaired := readRuntime()
+	if _, _, _, _, err := piauthority.Open(testCtx(t), selector, repaired.LoadedRevision); err != nil {
+		t.Fatalf("fresh observer denied after native repair: %v", err)
 	}
 	snap, _ = installruntime.ReadInstalledSnapshot(b.ControlRoot)
 	req.ExpectedGeneration = snap.Ledger.Generation

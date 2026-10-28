@@ -100,7 +100,7 @@ func (g *Gate) qualify(ctx context.Context, snapshot installruntime.PolicySnapsh
 		return pievent.Binding{}, nil, Assets{}, installruntime.Identity{}, fmt.Errorf("%w: %s", ErrDenied, stage)
 	}
 	b := g.Binding
-	if ctx == nil || ctx.Err() != nil || b.Integration != portable.Pi || !snapshot.Policy.Enabled || !snapshot.Installation.Enabled || snapshot.Installation.Ledger.PendingMutation != nil || b.CheckSnapshot(snapshot.Installation) != nil {
+	if ctx == nil || ctx.Err() != nil || b.Integration != portable.Pi || snapshot.Installation.Ledger.PendingMutation != nil || b.CheckSnapshot(snapshot.Installation) != nil {
 		return deny("policy-or-consumer")
 	}
 	name, err := b.Filename()
@@ -193,7 +193,8 @@ func installedRevision(ctx context.Context, b portable.Binding, path string, sna
 		if selected != nil || !ok || installation.NeedsRebind || c.ClientID != string(domain.ClientPi) || c.Scope != string(domain.ScopeUser) || c.Scope != b.ScopeID || c.ClientBindingID != b.BindingID || c.PackageRevision == nil || c.NativeActivationAttempt != "" || c.PendingNativeIntent != nil || c.Materialization != domain.MaterializationMaterialized {
 			return deny()
 		}
-		if active && (c.Activation != domain.ActivationActive || c.Verification != domain.VerificationInstalled) {
+		verified := c.Verification == domain.VerificationInstalled || c.Verification == domain.VerificationPackageValid
+		if active && (c.Activation != domain.ActivationActive || !verified || c.Policy != domain.PolicyAllowed) {
 			return deny()
 		}
 		if c.ClientBindingID != domain.ComputeClientBindingID(b.InstallationID, c.ClientID, c.Scope, c.TargetLocator) || pi.New().ValidateBindingProfile(c.NativeProfileRoot, c) != nil {

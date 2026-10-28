@@ -26,10 +26,6 @@ func TestPiWizardReservedHandoffAndFreshConsumer(t *testing.T) {
 		t.Fatal(err)
 	}
 	on, off := true, false
-	ledger, err = installruntime.Commit(ctx, installruntime.Request{ControlRoot: control, RuntimeRoot: runtimeRoot, Owner: ledger.Owner, ConsumerID: piauthority.PreparationConsumer, RefreshOnly: true, PolicyOnly: true, PolicyEnabled: &on, ExpectedGeneration: &ledger.Generation})
-	if err != nil {
-		t.Fatal(err)
-	}
 	root := filepath.Dir(control)
 	profile := filepath.Join(root, "TEST-pi-agent")
 	pkg := filepath.Join(root, "TEST-pi-package")
@@ -52,6 +48,9 @@ func TestPiWizardReservedHandoffAndFreshConsumer(t *testing.T) {
 	s, err := installruntime.ReadPolicySnapshot(ctx, control)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if s.Policy.Enabled || s.Installation.Enabled {
+		t.Fatal("Pi setup enabled unrelated portable MCP policy")
 	}
 	if s.Installation.Ledger.PendingMutation != nil || len(s.Installation.Ledger.Consumers) != 1 {
 		t.Fatalf("unfinished/fake consumer: %+v", s.Installation.Ledger.Consumers)
