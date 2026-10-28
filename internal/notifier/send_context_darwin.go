@@ -16,6 +16,10 @@ import (
 	"github.com/777genius/agent-notifications/internal/warpfocus"
 )
 
+func validInstalledRuntime(opts sendOptions) bool {
+	return filepath.IsAbs(opts.runtimeRoot) && filepath.Clean(opts.runtimeRoot) == opts.runtimeRoot
+}
+
 func (n *Notifier) sendNativeDesktopContext(ctx context.Context, sound, title, body, subtitle, sessionID, cwd, _ string, opts sendOptions) error {
 	if !validInstalledRuntime(opts) || !filepath.IsAbs(opts.nativeHelper) {
 		return errors.New("installed_native_helper_required")

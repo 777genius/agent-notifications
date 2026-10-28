@@ -179,7 +179,7 @@ func TestDaemonStartupPreservesExistingDaemon(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer listener.Close()
+	defer func(listener net.Listener) { _ = listener.Close() }(listener)
 	go serveStartupPings(listener)
 	ctx, cancel := context.WithCancel(context.Background())
 	if !startDaemonOnDemand(ctx, "/TEST-must-not-start") {

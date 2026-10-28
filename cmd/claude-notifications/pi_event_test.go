@@ -64,7 +64,7 @@ func TestPiEventTransportRejectsMalformedArgsAndBoundedInput(t *testing.T) {
 		}
 	}
 	reader, writer := io.Pipe()
-	defer writer.Close()
+	defer func(writer *io.PipeWriter) { _ = writer.Close() }(writer)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
 	defer cancel()
 	started := time.Now()

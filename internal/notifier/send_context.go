@@ -5,7 +5,6 @@ import (
 	"errors"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strconv"
 	"time"
 
@@ -112,8 +111,4 @@ func (n *Notifier) playSoundContext(ctx context.Context, sound string, opts send
 		args = append(args, "--device", device)
 	}
 	return runContextSound(ctx, exec.Command(exe, args...))
-}
-
-func validInstalledRuntime(opts sendOptions) bool {
-	return filepath.IsAbs(opts.runtimeRoot) && filepath.Clean(opts.runtimeRoot) == opts.runtimeRoot
 }

@@ -34,7 +34,7 @@ func writeContextBell(ctx context.Context, path string) bool {
 	if err != nil {
 		return false
 	}
-	defer f.Close()
+	defer func(f *os.File) { _ = f.Close() }(f)
 	info, err := f.Stat()
 	if err != nil || info.Mode()&os.ModeCharDevice == 0 || ctx.Err() != nil {
 		return false

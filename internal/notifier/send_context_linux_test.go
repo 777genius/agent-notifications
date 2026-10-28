@@ -102,7 +102,7 @@ func TestContextLinuxCapturesOriginHintsAndNeverFallsBack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer listener.Close()
+	defer func(listener net.Listener) { _ = listener.Close() }(listener)
 	done := make(chan daemon.Request, 1)
 	go func() {
 		for i := 0; i < 2; i++ {
@@ -112,7 +112,7 @@ func TestContextLinuxCapturesOriginHintsAndNeverFallsBack(t *testing.T) {
 			}
 			var req daemon.Request
 			if json.NewDecoder(conn).Decode(&req) != nil {
-				conn.Close()
+				_ = conn.Close()
 				return
 			}
 			resp := daemon.Response{Type: req.Type}
@@ -123,7 +123,7 @@ func TestContextLinuxCapturesOriginHintsAndNeverFallsBack(t *testing.T) {
 				resp.Notify = &daemon.NotifyResponse{Success: true, NotificationID: 19}
 			}
 			_ = json.NewEncoder(conn).Encode(resp)
-			conn.Close()
+			_ = conn.Close()
 		}
 	}()
 	withFatalLinuxBeeep(t)
@@ -153,7 +153,7 @@ func TestContextLinuxHungDaemonCannotOutliveCaller(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer listener.Close()
+	defer func(listener net.Listener) { _ = listener.Close() }(listener)
 	closed := make(chan struct{})
 	go func() {
 		defer close(closed)
@@ -161,7 +161,7 @@ func TestContextLinuxHungDaemonCannotOutliveCaller(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer func(conn net.Conn) { _ = conn.Close() }(conn)
 		_, _ = io.Copy(io.Discard, conn)
 	}()
 	cfg := config.DefaultConfig()

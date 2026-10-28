@@ -27,8 +27,8 @@ func TestHelperProcess(t *testing.T) {
 			time.Sleep(time.Second)
 		}
 	case "separate":
-		fmt.Fprint(os.Stderr, "non-fatal diagnostic\n")
-		fmt.Fprint(os.Stdout, "false\n")
+		_, _ = fmt.Fprint(os.Stderr, "non-fatal diagnostic\n")
+		_, _ = fmt.Fprint(os.Stdout, "false\n")
 	case "aggregate-overflow":
 		var streams sync.WaitGroup
 		for _, stream := range []*os.File{os.Stdout, os.Stderr} {

@@ -86,9 +86,9 @@ func Build(req BuildRequest) (Package, error) {
 	}
 	name := binaryName(req.GOOS)
 	plugin := map[string]any{
-		"$schema":                        "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
-		"name":                           pluginName,
-		"version":                        req.Version,
+		"$schema":    "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+		"name":       pluginName,
+		"version":    req.Version,
 		"extensions": map[string]any{"com.universal-agent-plugins.pi": map[string]any{"version": 1, "source": "com.universal-agent-plugins.pi"}},
 	}
 	pluginJSON, err := json.MarshalIndent(plugin, "", "  ")
