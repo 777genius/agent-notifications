@@ -57,8 +57,17 @@ def run(args):
     held = []
 
     def setup(action, package=None, extra=()):
-        value = P.setup(args.candidate, action, root, package or args.package, args.pi_executable, env, extra)
-        report["cases"].append({"case": "setup-" + action, "outcome": value["outcome"]})
+        foreign = [profile / "settings.json", profile / "models.json", profile / "extensions/TEST-witness.ts"]
+        before = {str(path): P.sha(path) for path in foreign if path.is_file()}
+        selected_pi = args.pi_executable
+        if action == "uninstall":
+            P.require(shutil.which("pi", path=env["PATH"]) is None, "cli_missing_removal_requires_no_pi_on_path")
+            selected_pi = None
+        value = P.setup(args.candidate, action, root, package or args.package, selected_pi, env, extra)
+        P.require(all(path.is_file() and P.sha(path) == before[str(path)] for path in foreign if str(path) in before),
+                  "common_pi_setup_changed_foreign_settings_or_extension")
+        report["cases"].append({"case": "setup-" + action, "outcome": value["outcome"],
+                                "foreign_bytes_preserved": True, "pi_executable_supplied": selected_pi is not None})
         return value
 
     def native(case, mode="json", expected="task_complete"):
@@ -149,6 +158,13 @@ def run(args):
         report["env_only_profile_discovery"] = True
         setup("install")
         P.require(P.installed(root / "control", profile)["runtime"] == initial["runtime"], "installed_pi_reinstall_revision_changed")
+        derived = Path(initial["binding"]["dataRoot"]) / "pi-runtime.json"
+        original_derived = derived.read_bytes()
+        derived.unlink()
+        setup("install")
+        P.require(derived.read_bytes() == original_derived and P.installed(root / "control", profile)["runtime"] == initial["runtime"],
+                  "unchanged_reinstall_did_not_restore_exact_derived_metadata")
+        report["cases"].append({"case": "unchanged-reinstall-restores-derived-metadata", "projection_unchanged": True})
         for case, mode, expected in (("success", "json", "task_complete"), ("success", "print", "task_complete"),
                                      ("retry", "json", "task_complete"), ("followup", "json", "task_complete"),
                                      ("error", "json", "api_error"), ("abort", "rpc", None), ("ui", "rpc", "question")):
@@ -189,7 +205,7 @@ def run(args):
         live_provider.close()
         held.remove((live, live_provider))
         sink.quiet(1)
-        report["cases"].append({"case": "live-A-update-old-revision-denied", "native_settled": True, "webhook": None})
+        report["cases"].append({"case": "live-A-update-old-revision-denied", "native_settled": True, "webhook": None, "child_collected": True})
         native("success")
         # Missing owned package repair uses only the normal wizard.
         shutil.rmtree(updated["active"])
@@ -216,7 +232,7 @@ def run(args):
         live_provider.close()
         held.remove((live, live_provider))
         sink.quiet(1)
-        report["cases"].append({"case": "live-B-remove-current-revision-denied", "native_settled": True, "webhook": None})
+        report["cases"].append({"case": "live-B-remove-current-revision-denied", "native_settled": True, "webhook": None, "child_collected": True})
         P.require((profile / "extensions/TEST-witness.ts").is_file(), "installed_pi_foreign_extension_removed")
         report["status"] = "passed_installed_pi_process"
     except Exception as error:

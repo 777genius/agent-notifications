@@ -221,3 +221,41 @@ utilities, canonical source package, sound hashes, Pi acquisition and clean
 merged module identity follow the input inventory above. Permission observed in
 synthetic preflight is separate from the candidate helper's own notification
 permission and visible delivery.
+
+## Clean candidate and final three-OS gate
+
+`scripts/pi-candidate-build.py` runs the ordinary four release build commands and
+portable-package builder from one clean source checkout, with `GOWORK=off`. It
+refuses local module replacements, missing linked module sums, modified VCS
+identity, a mismatched native build host and a checkout changed by the build.
+Windows additionally builds/verifies the embedded callback and focus companion;
+macOS receives the already authenticated signed helper/attestation directory.
+`build.json` records the exact source, module manifests/graph, actual Go build
+information, staged inventory, portable A/B hashes and canonical asset hashes.
+No release is published.
+
+The installed Linux and macOS workflows retain these build inputs alongside
+`acquisition.json`, `process.json` and their actual native desktop receipt. The
+reusable workflows accept `source_sha` so callers can bind every job to the same
+immutable source. Standalone PR jobs use the pull request head commit.
+
+Run `Pi three-OS product qualification` with the exact source and the Linux,
+macOS and Windows Client **product** run IDs. It collects only the corresponding
+`pi-installed-<lane>-<SHA>` artifacts, then runs
+`scripts/pi-qualification-aggregate.py`. The aggregate requires matching clean
+source/module/asset identities, immutable Pi acquisition, all actual installed
+process/lifecycle cases and all six real native desktop cases on each OS. It
+also requires verified native Mac helper evidence and a Windows Client render
+route, embedded callback, focus companion and truthful x64-emulation disclosure
+when relevant. No callback/API submission or synthetic prerequisite receipt can
+replace a product desktop receipt.
+
+Missing run IDs/artifacts, skipped/unqualified cases, stale source, development
+replacements, absent audio, uncollected actors or a question no longer pending
+all leave `desktop_qualified: false` and a failing aggregate with per-OS reasons.
+This gate must pass before claiming full native qualification or merging the
+integration. The existing hosted Windows Client image has been observed with
+running audio services but zero render endpoints in every state; its synthetic
+foreground/input observers also failed. It cannot supply Windows sound evidence
+until an actual configured Client render route is available. Installing a new
+driver or substituting generated audio is not part of these fixtures.

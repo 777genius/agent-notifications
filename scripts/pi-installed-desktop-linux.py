@@ -14,6 +14,7 @@ import math
 import os
 from pathlib import Path
 import platform
+import shutil
 import signal
 import subprocess
 import sys
@@ -214,7 +215,10 @@ def run(args):
                 "sound_expected": expected_sound, "audio": stats, "audio_sha256": P.sha(recording),
                 "banner_screenshot_sha256": P.sha(screenshot) if desktop else None,
                 "pending_question_at_click": name == "question", "ambient_root_was_foreign": True,
-                "terminal_collected": terminal.poll() is not None})
+                "terminal_collected": terminal.poll() is not None,
+                "checks": {"native_tui": True, "configured_banner_policy": True, "configured_audio_policy": True,
+                           "configured_click_policy": True, "native_event_counts": True,
+                           "ambient_root_isolated": True, "owned_terminal_collected": terminal.poll() is not None}})
         finally:
             if terminal:
                 lab.stop(terminal)
@@ -274,6 +278,17 @@ def run(args):
         libc.prctl(36, prior_subreaper.value, 0, 0, 0)
         report["owned_children_collected"] = lab.report.get("owned_children_collected", False)
         args.report.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            artifact_root = args.report.parent / "native-captures"
+            for case_root in root.glob("case-*"):
+                for name in ("actual-product-banner.png", "native-output.s16le"):
+                    source = case_root / name
+                    if source.is_file() and not source.is_symlink():
+                        target = artifact_root / case_root.name / name
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(source, target)
+        except OSError as error:
+            report.update(status="failed", native_product_observations_passed=False, artifact_failure=str(error))
         args.report.write_text(json.dumps(report, indent=2) + "\n")
         print(json.dumps({"status": report["status"], "failure": report.get("failure"), "desktop_qualified": False}))
     return 0 if report["native_product_observations_passed"] and report["owned_children_collected"] else 1

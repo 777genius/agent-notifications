@@ -167,7 +167,9 @@ def setup(executable, operation, root, package, pi, env, extra=()):
     """Use only the existing public common setup wizard; no explicit Pi root."""
     argv = [executable, "setup-notifications", "wizard", "--action", operation, "--agents", "pi",
             "--package", package, "--control-root", root / "control", "--runtime-root", root / "runtime",
-            "--global-config", root / "global/config.json", "--pi-executable", pi, "--yes", "--json", *extra]
+            "--global-config", root / "global/config.json", "--yes", "--json", *extra]
+    if pi is not None:
+        argv += ["--pi-executable", pi]
     result = subprocess.run([str(x) for x in argv], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, cwd=root / "project", env=env, timeout=180)
     require(len(result.stdout) + len(result.stderr) <= 4 * 1024 * 1024, "installed_pi_setup_output_limit")
