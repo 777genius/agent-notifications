@@ -37,7 +37,7 @@ func onScreenWindows(_ pid: pid_t) -> [CGRect] {
     let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
     return windows.compactMap { row in
         guard (row[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == pid,
-              (row[kCGWindowAlpha as String] as? NSNumber)?.doubleValue ?? 0 > 0,
+              ((row[kCGWindowAlpha as String] as? NSNumber)?.doubleValue ?? 0) > 0,
               let bounds = row[kCGWindowBounds as String] as? [String: Any],
               let x = bounds["X"] as? NSNumber, let y = bounds["Y"] as? NSNumber,
               let width = bounds["Width"] as? NSNumber, let height = bounds["Height"] as? NSNumber,
