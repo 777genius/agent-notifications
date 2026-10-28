@@ -1,0 +1,122 @@
+name: Pi installed macOS desktop
+
+on:
+  workflow_dispatch:
+    inputs:
+      observer_only:
+        description: Compile and observe native permissions before building the product
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pi-installed-macos-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  macos:
+    name: Actual installed Pi / macOS
+    runs-on: ${{ vars.CI_MACOS_15_RUNNER || 'macos-15' }}
+    timeout-minutes: 30
+    env:
+      GOWORK: 'off'
+      GOTOOLCHAIN: local
+      CGO_ENABLED: '1'
+      MACOSX_DEPLOYMENT_TARGET: '12.0'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Compile the native product observers first
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/TEST-pi-macos/evidence"
+          swiftc -parse-as-library tests/integration/pi_installed_desktop_darwin.swift \
+            -framework AppKit -framework ApplicationServices -framework AVFoundation \
+            -framework CoreAudio -framework CoreMedia -framework ScreenCaptureKit \
+            -o "$RUNNER_TEMP/TEST-pi-macos/observer"
+          "$RUNNER_TEMP/TEST-pi-macos/observer" preflight > "$RUNNER_TEMP/TEST-pi-macos/evidence/observer-preflight.json"
+      - uses: actions/setup-go@v7
+        if: ${{ !inputs.observer_only }}
+        with:
+          go-version: '1.26.10'
+      - name: Build the exact candidate with the normal native and portable builders
+        if: ${{ !inputs.observer_only }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain)"
+          arch="$(go env GOARCH)"
+          stage="$RUNNER_TEMP/TEST-pi-macos/bin"
+          mkdir -p "$stage"
+          for command in claude-notifications sound-preview list-devices list-sounds; do
+            go build -trimpath -ldflags='-s -w' -o "$stage/$command-darwin-$arch" "./cmd/$command"
+          done
+          version="$(sed -n 's/^var ConsumerVersion = "\([^"]*\)"$/\1/p' internal/config/runtime.go)"
+          go run ./cmd/build-portable-package -version "$version" -os darwin -arch "$arch" \
+            -executable "$stage/claude-notifications-darwin-$arch" \
+            -output "$RUNNER_TEMP/TEST-pi-macos/package.zip" -workdir "$RUNNER_TEMP/TEST-pi-macos/portable"
+          go version -m "$stage/claude-notifications-darwin-$arch" > "$RUNNER_TEMP/TEST-pi-macos/evidence/go-build.txt"
+          go list -m -json all > "$RUNNER_TEMP/TEST-pi-macos/evidence/modules.json"
+      - name: Acquire the exact compatible signed helper and official Pi
+        if: ${{ !inputs.observer_only }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/TEST-pi-macos"
+          mkdir -p "$root/helper"
+          test "$(git rev-parse HEAD:swift-notifier)" = c96f5152b7d95322731dcefa535c561c1c94309a
+          gh release download v1.49.10 --repo 777genius/agent-notifications \
+            --pattern ClaudeNotifier.app.zip --pattern checksums.txt --dir "$root/helper"
+          python - "$root/helper" <<'PY'
+          import hashlib
+          from pathlib import Path
+          import sys
+          root = Path(sys.argv[1])
+          for name, expected in {
+              'ClaudeNotifier.app.zip': '4e23f2870e1cebd565f3f00a459fe0d6f909109226af7761be60933d819e59cc',
+              'checksums.txt': '5219911d72b1cf7e49ab60f9b3abad9b9f6eb78a732ec0ea6863162bc1b3bf89',
+          }.items():
+              if hashlib.sha256((root / name).read_bytes()).hexdigest() != expected:
+                  raise SystemExit('Pinned signed helper acquisition mismatch')
+          PY
+          unzip -q "$root/helper/ClaudeNotifier.app.zip" -d "$root/bin"
+          test -f "$root/bin/ClaudeNotifier.app.managed-runtime.json"
+          bash swift-notifier/scripts/verify-signing.sh "$root/bin/ClaudeNotifier.app" --notarized \
+            > "$root/evidence/helper-verification.txt" 2>&1
+          arch="$(go env GOARCH)"
+          python -B scripts/acquire-pi-native.py --download --platform darwin --arch "$arch" \
+            --output "$root/pi" --report "$root/evidence/pi-acquisition.json"
+      - name: Observe installed product completion question audio and physical click
+        if: ${{ !inputs.observer_only }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/TEST-pi-macos"
+          arch="$(go env GOARCH)"
+          python -B scripts/pi-installed-desktop-macos.py \
+            --candidate "$root/bin/claude-notifications-darwin-$arch" --runtime-stage "$root/bin" \
+            --package "$root/package.zip" --assets-root "$GITHUB_WORKSPACE" \
+            --pi-executable "$root/pi/pi/pi" --observer "$root/observer" \
+            --pi-acquisition "$root/evidence/pi-acquisition.json" \
+            --helper-archive "$root/helper/ClaudeNotifier.app.zip" \
+            --report "$root/evidence/evidence.json"
+      - name: Preserve native evidence even when an observation is unavailable
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pi-installed-macos-${{ github.sha }}
+          path: ${{ runner.temp }}/TEST-pi-macos/evidence/*
+          if-no-files-found: error
+          retention-days: 14
