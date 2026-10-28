@@ -45,7 +45,7 @@ class PostClickOracleTests(unittest.TestCase):
             return {"hwnd": 456 if wrong and not keyboard_only else 123,
                     "keyboard_hwnd": 456 if wrong else 123}
 
-        with patch.object(W, "time", SimpleNamespace(monotonic=clock.monotonic, sleep=clock.sleep)):
+        with patch.object(W.P, "time", SimpleNamespace(monotonic=clock.monotonic, sleep=clock.sleep)):
             result = W.observe_unchanged_focus(native, window, stop)
         return result, stop
 

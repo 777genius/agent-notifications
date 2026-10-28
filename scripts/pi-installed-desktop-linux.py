@@ -38,6 +38,12 @@ D = module("pi_installed_process", REPO / "scripts/pi-installed-process-e2e.py")
 CASES = ("completion", "question", "sound-off", "click-off", "desktop-off", "stale-origin")
 
 
+def observe_unchanged_focus(active, keyboard_pid, window, window_pid, stop_capture, seconds=15):
+    return P.observe_unchanged_focus(lambda: {"window": active(), "keyboard_pid": keyboard_pid()},
+                                     {"window": window, "keyboard_pid": window_pid}, stop_capture,
+                                     drain_seconds=0.4, seconds=seconds)
+
+
 def run(args):
     P.require(platform.system() == "Linux", "actual_linux_host_required")
     root = Path(tempfile.mkdtemp(prefix="TEST-pi-product-desktop-")).resolve()
@@ -149,6 +155,7 @@ def run(args):
             P.require(active() == distractor, "product_origin_not_backgrounded")
             provider.release.set()
             sink.wait("question" if name == "question" else "task_complete")
+            click_observation = None
             if desktop:
                 N.wait_for(lambda: displayed() == 1)
                 screenshot = case_root / "actual-product-banner.png"
@@ -164,8 +171,9 @@ def run(args):
                 if click and name != "stale-origin":
                     N.wait_for(lambda: active() == origin and keyboard_pid() == terminal.pid)
                 else:
-                    time.sleep(0.5)
-                    P.require(active() == distractor, "product_click_disabled_or_stale_target_activated")
+                    decoy_pid = int(lab.run(["xdotool", "getwindowpid", distractor])[0].strip())
+                    click_observation = observe_unchanged_focus(active, keyboard_pid, distractor, decoy_pid,
+                                                                 lambda: lab.stop(recorder))
                 foreground_after_click = active()
                 keyboard_after_click = keyboard_pid()
                 # dunst may keep an action-bearing banner displayed after its
@@ -183,7 +191,8 @@ def run(args):
                 keyboard_after_click = keyboard_pid()
             # Receiving the independently captured webhook follows the product's
             # synchronous desktop/audio attempt; drain the monitor's PCM buffer.
-            time.sleep(0.4)
+            if click_observation is None:
+                time.sleep(0.4)
             lab.stop(recorder)
             stats = bytes_stats(recording, baseline)
             expected_sound = sound and desktop
@@ -211,6 +220,7 @@ def run(args):
             report["cases"].append({"case": name, "native_mode": "tui", "banner_observed": desktop,
                 "real_mouse_click": desktop, "origin_window": origin, "distractor_window": distractor,
                 "foreground_after_click": foreground_after_click, "keyboard_pid_after_click": keyboard_after_click,
+                "unchanged_click_observation": click_observation,
                 "origin_xterm_pid": terminal.pid,
                 "sound_expected": expected_sound, "audio": stats, "audio_sha256": P.sha(recording),
                 "banner_screenshot_sha256": P.sha(screenshot) if desktop else None,

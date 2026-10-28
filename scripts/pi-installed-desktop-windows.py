@@ -74,24 +74,15 @@ def wait_for(predicate, code, seconds=15):
 
 
 def observe_unchanged_focus(native, window, stop_capture, seconds=15):
-    """Observe the whole click budget, even when the decoy is already focused.
+    def observed():
+        current = native("foreground")
+        return {"foreground_hwnd": current["hwnd"], "keyboard_hwnd": current["keyboard_hwnd"]}
 
-    Stop the independent cue recording after its existing drain interval; the
-    remaining focus observation must not extend WASAPI's bounded capture.
-    """
-    started, samples = time.monotonic(), 0
-    while True:
-        observed = native("foreground")
-        P.require(observed["hwnd"] == window["hwnd"] and observed["keyboard_hwnd"] == window["hwnd"],
-                  "disabled_or_stale_click_changed_foreground_or_keyboard")
-        samples += 1
-        elapsed = time.monotonic() - started
-        if elapsed >= 0.5 and not stop_capture.exists():
+    def stop():
+        if not stop_capture.exists():
             stop_capture.write_text("stop\n")
-        if elapsed >= seconds:
-            return {"elapsed_seconds": round(elapsed, 3), "samples": samples,
-                    "foreground_hwnd": observed["hwnd"], "keyboard_hwnd": observed["keyboard_hwnd"]}
-        time.sleep(0.05)
+    return P.observe_unchanged_focus(observed, {"foreground_hwnd": window["hwnd"], "keyboard_hwnd": window["hwnd"]},
+                                     stop, drain_seconds=0.5, seconds=seconds)
 
 
 def command(argv, *, timeout=25, allowed=(0,), env=None):

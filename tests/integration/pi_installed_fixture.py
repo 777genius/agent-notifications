@@ -27,6 +27,26 @@ def sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+def observe_unchanged_focus(observe, expected, stop_capture, *, drain_seconds, seconds=15):
+    """Sample native focus for the full click window, with a separate audio stop.
+
+    Platform adapters supply only their actual window/TTY/keyboard identity.
+    An already focused decoy is the baseline; it cannot end observation early.
+    """
+    started, samples, capture_stopped = time.monotonic(), 0, False
+    while True:
+        observed = observe()
+        require(observed == expected, "disabled_or_stale_click_changed_foreground_or_keyboard")
+        samples += 1
+        elapsed = time.monotonic() - started
+        if elapsed >= drain_seconds and not capture_stopped:
+            stop_capture()
+            capture_stopped = True
+        if elapsed >= seconds:
+            return {"elapsed_seconds": round(elapsed, 3), "samples": samples, **observed}
+        time.sleep(0.05)
+
+
 def capture(payload):
     """The actual custom webhook contract, projected to non-private classes."""
     require(isinstance(payload, dict) and set(payload) == {

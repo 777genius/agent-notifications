@@ -50,6 +50,14 @@ def wait_for(predicate, reason, seconds=12):
     raise RuntimeError(reason)
 
 
+def observe_unchanged_focus(terminal, stop_capture, seconds=15):
+    def observed():
+        current = terminal.front()
+        return {"window": current["window"], "tty": current["tty"]}
+    return P.observe_unchanged_focus(observed, {"window": terminal.window, "tty": terminal.tty},
+                                     stop_capture, drain_seconds=3, seconds=seconds)
+
+
 def command(argv, *, timeout=20):
     result = subprocess.run(list(map(str, argv)), stdin=subprocess.DEVNULL,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
@@ -271,7 +279,7 @@ def run(args):
             decoy.focus()
             P.require(decoy.is_front() and not terminal.is_front(), "native_pi_origin_not_backgrounded")
             provider.release.set()
-            screenshot, webhook_received = None, False
+            screenshot, webhook_received, click_observation = None, False, None
             if desktop:
                 banner = wait_for(lambda: observer("banner", P.COPY[expected])["matches"], "actual_product_banner_not_observed")
                 P.require(decoy.is_front(), "product_focused_before_physical_notification_click")
@@ -291,8 +299,7 @@ def run(args):
                 if click and name != "stale-origin":
                     wait_for(terminal.is_front, "product_click_did_not_focus_exact_origin")
                 else:
-                    time.sleep(0.5)
-                    P.require(decoy.is_front(), "disabled_or_stale_product_click_changed_terminal")
+                    click_observation = observe_unchanged_focus(decoy, lambda: (case_root / "capture-stop").touch())
                 after = terminal.front()
             else:
                 time.sleep(1.5)
@@ -304,8 +311,9 @@ def run(args):
                 sink.wait(expected)
             # The configured task-complete cue is 2.544s. Capture its complete
             # native playback, including the tail after a prompt physical click.
-            time.sleep(3)
-            (case_root / "capture-stop").touch()
+            if click_observation is None:
+                time.sleep(3)
+                (case_root / "capture-stop").touch()
             out, err = recorder.communicate(timeout=5)
             P.require(recorder.returncode == 0 and not err, "native_capture_not_collected")
             captured = json.loads(out)
@@ -342,6 +350,7 @@ def run(args):
             report["cases"].append({"case": name, "native_mode": "tui", "origin_window": terminal.window,
                 "origin_tty": terminal.tty, "origin_pi_pid": terminal.pid, "decoy_window": decoy.window,
                 "decoy_tty": decoy.tty, "foreground_after_click": after, "banner_matches": banner,
+                "unchanged_click_observation": click_observation,
                 "real_mouse_click": desktop, "banner_observed": desktop, "sound_expected": expected_sound,
                 "audio": audio, "audio_sha256": P.sha(recording),
                 "banner_screenshot_sha256": P.sha(screenshot) if screenshot else None,
