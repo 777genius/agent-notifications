@@ -282,8 +282,8 @@
     "installationInstructions": "Installation instructions",
     "configureSettings": "⚙ Configure settings",
     "agentNotify": {
-      "label": "Let agents send you notifications when they need your attention",
-      "hint": "Controls setup of a notification tool for Claude and Codex CLI during a task. Checked follows saved setup preferences; unchecked skips setup for this run and retains any existing tool."
+      "label": "Set up optional notification tools",
+      "hint": "Controls notification setup for selected Claude, Codex CLI and Cursor CLI. Checked follows saved setup preferences; unchecked skips their setup for this run, retaining existing registrations and consent. Qoder, OpenCode and Gemini are unaffected."
     },
     "capabilities": {
       "title": "Selected agent capabilities",

@@ -31,3 +31,7 @@ Two independent architecture and scope critics reviewed the current host and UAP
 - No migration/adoption framework, Pi changes, VS Code dedicated changes or local dependency replacements are left behind.
 
 Fixture-backed installer tests, retained native qualification and actual native desktop evidence will be reported separately. This work does not publish a release or broaden notification/navigation claims.
+
+## Final dependency
+
+UAP PR #547 merged as `21497bb2e4416798117f2b405cbc5160818fb34d`. Notifications pins that public immutable revision; final host gates use the merged source, including concurrent upstream changes. No local module replacements are used.

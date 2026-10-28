@@ -311,8 +311,8 @@
     "installationInstructions": "安装说明",
     "configureSettings": "⚙ 配置设置",
     "agentNotify": {
-      "label": "允许智能体在需要你关注时发送通知",
-      "hint": "控制 Claude 和 Codex CLI 任务中通知工具的设置。选中时遵循已保存的设置偏好；取消选中仅跳过本次设置，并保留已有工具。"
+      "label": "设置可选通知工具",
+      "hint": "控制所选 Claude、Codex CLI 和 Cursor CLI 的通知设置。选中时遵循已保存的偏好；取消选中仅跳过本次设置，保留已有注册和授权。Qoder、OpenCode 和 Gemini 不受影响。"
     },
     "capabilities": {
       "title": "所选代理的功能",

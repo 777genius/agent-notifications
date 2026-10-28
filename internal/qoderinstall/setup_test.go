@@ -444,7 +444,7 @@ func TestQoderUpdatePreservesOmittedChannelsAndConsentCAS(t *testing.T) {
 		t.Fatalf("both-off was lost: %+v %v", status, err)
 	}
 	r.PreserveChannels = false
-	r.Webhook = true
+	r.Desktop, r.Webhook = false, true
 	mustApply(t, ctx, r)
 	r.Desktop, r.Webhook = false, false
 	r.Fault = func(point string) error {

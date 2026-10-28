@@ -77,7 +77,7 @@ test("production command matrix, aftercare, clipboard and configuration", async 
   await page.getByRole("button", { name: "Install", exact: true }).click();
   await chooseOS(page, "linux");
   const agentNotify = page.getByRole("checkbox", {
-    name: /Let agents send you notifications when they need your attention/,
+    name: /Set up optional notification tools/,
   });
   await expect(agentNotify).toBeChecked();
   await expect(page.getByLabel("Install command")).toHaveValue(
@@ -559,7 +559,7 @@ test("released agents toggle independently, copied commands and configuration co
   await expect(page.getByText(/OpenCode CLI versions are not restricted/)).toBeVisible();
   await expect(page.getByRole("link", { name: "What is OpenCode V2? ↗" })).toHaveAttribute("href", "https://opencode.ai/v2/docs");
   await expect(page.getByRole("group", { name: "OpenCode notification channels" })).toHaveCount(0);
-  const agentNotify = page.getByRole("checkbox", { name: /Let agents send/ });
+  const agentNotify = page.getByRole("checkbox", { name: /Set up optional notification tools/ });
   await agentNotify.uncheck();
   await expect(page.getByLabel("Install command", { exact: true })).toHaveValue("(set -o pipefail; " + prefix.replace("--product ", "--products ") + "claude,codex,opencode --skip-agent-notify --desktop)");
   await page.getByRole("button", { name: "Configure", exact: true }).click();
@@ -720,6 +720,12 @@ test("Cursor and Qoder share combined installation, updates and guidance", async
   await expect(page.locator(".availability-note")).toContainText("requires the next matching platform release");
   await expect(page.locator(".next-steps")).toContainText("Restart Cursor CLI");
   await expect(page.locator(".next-steps")).toContainText("Restart Qoder");
+  const optionalSetup = page.getByRole("checkbox", { name: "Set up optional notification tools" });
+  await expect(page.getByText(/Controls notification setup for selected Claude, Codex CLI and Cursor CLI/)).toBeVisible();
+  await expect(page.getByText(/Qoder, OpenCode and Gemini are unaffected/)).toBeVisible();
+  await optionalSetup.uncheck();
+  await expect(page.getByLabel("Install command", { exact: true })).toHaveValue(expected.replace(" --desktop", " --skip-agent-notify --desktop"));
+  await optionalSetup.check();
   const notes = page.locator(".agent-support-notes");
   await expect(notes).toContainText("informational Stop alerts");
   await expect(notes).toContainText("Linux amd64, macOS arm64 and Windows amd64");
@@ -731,7 +737,7 @@ test("Cursor and Qoder share combined installation, updates and guidance", async
   await page.getByRole("button", { name: "Update", exact: true }).click();
   await expect(page.getByLabel("Update command", { exact: true })).toHaveValue(expected.replace(" --desktop", ""));
   await chooseAgents(page, ["cursor", "qoder"]);
-  await expect(page.getByRole("checkbox", { name: /Let agents send/ })).toHaveCount(0);
+  await expect(page.getByRole("checkbox", { name: /Set up optional notification tools/ })).toHaveCount(0);
   await expect(page.getByLabel("Update command", { exact: true })).toHaveValue(/--products qoder,cursor\)$/);
   await page.getByRole("button", { name: "Configure", exact: true }).click();
   await expect(page.locator(".configuration").getByRole("link", { name: "Cursor CLI installation", exact: true })).toBeVisible();
