@@ -90,7 +90,7 @@ For automation or terminals without a controlling TTY, choose explicitly and pre
 
 Use `claude`, `codex`, or `both` for Claude/Codex. The other product IDs are `opencode`, `gemini`, `qoder` and `cursor`. The selected host CLI must already be on `PATH`; this installs notifications only. Cursor uses the agent CLI launcher, and supports qualified Linux amd64, macOS arm64 and Windows amd64 hosts; [profile authority and filesystem requirements](cursor-notifications.md) still apply.
 
-The common Cursor/Qoder flow on `main` requires the next matching [platform release](PLATFORM_RELEASE_CHANNELS.md). The public loader selects the published channel for the target OS and architecture; editing or copying a command does not upgrade an older channel's capabilities.
+The common Cursor/Qoder flow is available in [platform release v1.49.11](PLATFORM_RELEASE_CHANNELS.md). The public loader selects the published channel for the target OS and architecture; editing or copying a command does not upgrade an older channel's capabilities.
 
 Select agents together in the guided setup, or pass one comma-separated list to the common loader:
 

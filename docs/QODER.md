@@ -10,8 +10,8 @@ update and removal; the shared runtime ledger records the notification consumer
 and its consent bound to that UAP installation and client binding.
 No MCP observer is installed.
 
-This UAP lifecycle and common Cursor/Qoder selection are implemented on `main`
-and require the next matching [platform release](PLATFORM_RELEASE_CHANNELS.md).
+This UAP lifecycle and common Cursor/Qoder selection are available in
+[platform release v1.49.11](PLATFORM_RELEASE_CHANNELS.md).
 Older custom Qoder installations are not adopted or migrated by this flow.
 
 ## Hook events

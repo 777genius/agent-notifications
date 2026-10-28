@@ -43,7 +43,7 @@ Desktop notifications for **Claude, Codex CLI, OpenCode, Gemini CLI, Cursor CLI 
 
 Choose **Claude**, **Codex CLI**, **OpenCode**, **Gemini CLI**, **Qoder**, **Cursor CLI**, or a combination. Install the selected agent CLIs first and make them available on `PATH`. The installer also requires curl, Bash, and a working `python3` or `node` on `PATH`; see [agent/platform prerequisites](docs/INSTALLATION.md#prerequisites). Run the same command to update.
 
-The common Cursor/Qoder flow described on `main` requires the next matching [platform release](docs/PLATFORM_RELEASE_CHANNELS.md). It uses one product selection and channel confirmation, with UAP managing each integration. Fresh OpenCode/Gemini/Qoder/Cursor installs default to desktop on and webhooks off; updates without channel flags preserve each agent's saved choice, including disabled channels. Cursor CLI sends informational Stop alerts on qualified Linux amd64, macOS arm64 and Windows amd64 hosts; see [its profile requirements and limits](docs/cursor-notifications.md).
+The common Cursor/Qoder flow is available in [platform release v1.49.11](docs/PLATFORM_RELEASE_CHANNELS.md). It uses one product selection and channel confirmation, with UAP managing each integration. Fresh OpenCode/Gemini/Qoder/Cursor installs default to desktop on and webhooks off; updates without channel flags preserve each agent's saved choice, including disabled channels. Cursor CLI sends informational Stop alerts on qualified Linux amd64, macOS arm64 and Windows amd64 hosts; see [its profile requirements and limits](docs/cursor-notifications.md).
 
 **Windows:** use **Git Bash**, not WSL, for a native Windows installation.
 

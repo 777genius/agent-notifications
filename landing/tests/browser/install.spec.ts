@@ -717,7 +717,7 @@ test("Cursor and Qoder share combined installation, updates and guidance", async
   const expected = "(set -o pipefail; curl -fsSL https://agent-notifications.com/install.sh | bash -s -- --products codex,qoder,cursor --desktop)";
   await expect(page.getByLabel("Install command", { exact: true })).toHaveValue(expected);
   await expect(page.locator(".qoder-install")).toHaveCount(0);
-  await expect(page.locator(".availability-note")).toContainText("requires the next matching platform release");
+  await expect(page.locator(".availability-note")).toContainText("available in platform release v1.49.11");
   await expect(page.locator(".next-steps")).toContainText("Restart Cursor CLI");
   await expect(page.locator(".next-steps")).toContainText("Restart Qoder");
   const optionalSetup = page.getByRole("checkbox", { name: "Set up optional notification tools" });
