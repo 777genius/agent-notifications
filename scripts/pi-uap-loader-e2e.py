@@ -57,7 +57,7 @@ def exercise(args):
                TMPDIR=str(root / "tmp"), TMP=str(root / "tmp"), TEMP=str(root / "tmp"), PI_OFFLINE="1",
                XDG_CONFIG_HOME=str(root / "home/.config"), TEST_PI_LOADER_RECORDS=str(root / "records.jsonl"))
     report = {"schema_version": 1, "scope": "actual_uap_engine_pi_loader", "status": "failed",
-              "pi_sha256": sha(args.pi_executable), "driver_sha256": sha(args.driver),
+              "pi_binary_sha256": sha(args.pi_executable), "driver_binary_sha256": sha(args.driver),
               "fixture_sha256": sha(__file__), "product_notifications_qualified": False, "phases": []}
 
     def run(argv, request=None):
@@ -96,7 +96,11 @@ def exercise(args):
             require(any(row.get("id") == "TEST-loader" and row.get("success") is True for row in responses), "installed_command_not_handled")
         else:
             require(not own and b'"name":"TEST-loader"' not in output, "inactive_source_executed")
-        report["phases"].append({"operation": label, "source_executions": len(own), "foreign_loaded": True})
+        report["phases"].append({"operation": label,
+            "source_callbacks": {"top_level": sum(row["type"] == "top-level" for row in own),
+                                 "factory": sum(row["type"] == "factory" for row in own),
+                                 "command": sum(row["type"] == "command" for row in own)},
+            "foreign_loaded": True})
 
     try:
         report["pi_version"] = run([args.pi_executable, "--offline", "--version"]).decode().strip()
