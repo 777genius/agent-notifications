@@ -215,7 +215,8 @@ def run(args):
               "pi_binary_sha256": P.sha(args.pi_executable), "pi_acquisition": json.loads(args.pi_acquisition.read_text()),
               "helper": {"release": "v1.49.10", "source_tree": HELPER_SOURCE,
                          "archive_sha256": P.sha(args.helper_archive)},
-              "desktop_qualified": False, "native_product_observations_passed": False, "cases": []}
+              "desktop_qualified": False, "native_product_observations_passed": False,
+              "native_helper_verified": False, "cases": []}
 
     def observer(*argv):
         return json.loads(command([args.observer, *argv]))
@@ -379,6 +380,7 @@ def run(args):
                   "installed_signed_helper_changed")
         report["helper"].update(installed_path=str(app), installed_tree_sha256=native["InstalledTreeSHA256"],
                                 executable_sha256=P.sha(helper), source_stage_attestation_sha256=P.sha(args.runtime_stage / "ClaudeNotifier.app.managed-runtime.json"))
+        report["native_helper_verified"] = True
         token, nonce = str(uuid.uuid4()), str(uuid.uuid4())
         permission = json.loads(command([helper, "--capabilities-json", "--permission-status", "--correlation-id", token, "--nonce", nonce]))
         P.require(permission.get("correlationID") == token and permission.get("nonce") == nonce, "candidate_helper_permission_identity_wrong")

@@ -90,7 +90,7 @@ jobs:
           pi_archive="$(python -c 'import json,sys; print(json.load(open("scripts/testdata/pi-native/pins.json"))["targets"]["darwin/" + sys.argv[1]]["archive"])' "$arch")"
           gh release download v1.4.0 --repo earendil-works/pi --pattern "$pi_archive" --dir "$root/pi-archive"
           python -B scripts/acquire-pi-native.py --archive "$root/pi-archive/$pi_archive" --platform darwin --arch "$arch" \
-            --output "$root/pi" --report "$root/evidence/pi-acquisition.json"
+            --output "$root/pi" --report "$root/evidence/acquisition.json"
       - name: Build the clean pinned candidate through the shared release recipes
         if: ${{ !inputs.observer_only }}
         shell: bash
@@ -106,6 +106,18 @@ jobs:
           set -e
           cp "$root/candidate/build.json" "$root/evidence/build.json"
           exit "$result"
+      - name: Exercise the actual installed process modes and owned lifecycle
+        if: ${{ !inputs.observer_only }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/TEST-pi-macos"
+          arch="$(go env GOARCH)"
+          python -B scripts/pi-installed-process-e2e.py \
+            --candidate "$root/candidate/stage/claude-notifications-darwin-$arch" \
+            --runtime-stage "$root/candidate/stage" --package "$root/candidate/package-A.zip" \
+            --updated-package "$root/candidate/package-B.zip" --assets-root "$GITHUB_WORKSPACE" \
+            --pi-executable "$root/pi/pi/pi" --report "$root/evidence/process.json"
       - name: Observe installed product completion question audio and physical click
         if: ${{ !inputs.observer_only }}
         shell: bash
@@ -117,7 +129,7 @@ jobs:
             --candidate "$root/candidate/stage/claude-notifications-darwin-$arch" --runtime-stage "$root/candidate/stage" \
             --package "$root/candidate/package-A.zip" --assets-root "$GITHUB_WORKSPACE" \
             --pi-executable "$root/pi/pi/pi" --observer "$root/observer" \
-            --pi-acquisition "$root/evidence/pi-acquisition.json" \
+            --pi-acquisition "$root/evidence/acquisition.json" \
             --helper-archive "$root/helper/ClaudeNotifier.app.zip" \
             --report "$root/evidence/evidence.json"
       - name: Preserve native evidence even when an observation is unavailable
