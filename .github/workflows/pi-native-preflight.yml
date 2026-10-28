@@ -27,7 +27,6 @@ jobs:
         include:
           - {platform: linux, lane: linux}
           - {platform: darwin, lane: darwin}
-          - {platform: windows, lane: windows-server, runner: windows-2025}
           - platform: windows
             lane: windows-client
             runner: ${{ inputs.windows_client_runner || vars.CI_PI_WINDOWS_DESKTOP_RUNNER || 'windows-11-vs2026-arm' }}
