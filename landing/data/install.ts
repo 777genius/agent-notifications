@@ -1,5 +1,6 @@
 import Bowser from "bowser";
-export type AgentProduct = "claude" | "codex" | "opencode" | "gemini";
+export const agentProducts = ["claude", "codex", "opencode", "gemini", "qoder", "cursor"] as const;
+export type AgentProduct = (typeof agentProducts)[number];
 export type Product = AgentProduct | "both";
 export type Target = "unknown" | "macos" | "linux" | "windows" | "manual";
 export type Intent = "install" | "update" | "configure";
@@ -9,6 +10,8 @@ export const products = [
   { value: "both", label: "Claude + Codex" },
   { value: "opencode", label: "OpenCode" },
   { value: "gemini", label: "Gemini CLI" },
+  { value: "qoder", label: "Qoder" },
+  { value: "cursor", label: "Cursor CLI" },
 ] as const;
 export const targets = [
   { value: "unknown", label: "Choose target OS" },
@@ -56,35 +59,30 @@ export function command(
   intent: Intent,
   agentNotify = true,
   // Explicit choices replace observer channels; omitted update choices preserve saved channels.
-  openCodeChannels?: { desktop: boolean; webhook: boolean },
+  channels?: { desktop: boolean; webhook: boolean },
 ): string | null {
   if (intent === "configure" || target === "unknown" || target === "manual")
     return null;
-  const selected: readonly AgentProduct[] =
+  const requested: readonly AgentProduct[] =
     typeof product === "string"
       ? product === "both"
         ? ["claude", "codex"]
         : [product]
       : product;
+  const selected = agentProducts.filter((value) => requested.includes(value));
   if (!selected.length) return null;
-  const hasObserver = selected.includes("opencode") || selected.includes("gemini");
-  const channelChoices = openCodeChannels ?? (intent === "install" ? { desktop: true, webhook: false } : undefined);
-  if (hasObserver && channelChoices && !channelChoices.desktop && !channelChoices.webhook)
-    return null;
+  const hasObserver = selected.some((value) => value !== "claude" && value !== "codex");
+  const channelChoices = channels ?? (intent === "install" ? { desktop: true, webhook: false } : undefined);
   const hasClaude = selected.includes("claude");
   const hasCodex = selected.includes("codex");
   const skip = (hasClaude || hasCodex) && !agentNotify ? " --skip-agent-notify" : "";
-  if (hasObserver) {
-    const channels = channelChoices
-      ? `${channelChoices.desktop ? " --desktop" : ""}${channelChoices.webhook ? " --webhook" : ""}`
-      : "";
-    const productFlag = new Set(selected).size > 1
-      ? `--products ${(["claude", "codex", "opencode", "gemini"] as const).filter((value) => selected.includes(value)).join(",")}`
-      : `--product ${selected.includes("gemini") ? "gemini" : "opencode"}`;
-    const pipeline = `curl -fsSL ${installerUrl} | bash -s -- ${productFlag}${skip}${channels}`;
-    return `(set -o pipefail; ${pipeline})`;
-  }
-  if (hasClaude && hasCodex)
-    return `(set -o pipefail; curl -fsSL ${installerUrl} | bash -s -- --products claude,codex${skip})`;
-  return `(set -o pipefail; curl -fsSL ${installerUrl} | bash -s -- --product ${hasCodex ? "codex" : "claude"}${skip})`;
+  const channelFlags = hasObserver && channelChoices
+    ? !channelChoices.desktop && !channelChoices.webhook
+      ? " --desktop=false --webhook=false"
+      : `${channelChoices.desktop ? " --desktop" : ""}${channelChoices.webhook ? " --webhook" : ""}`
+    : "";
+  const productFlag = selected.length > 1
+    ? `--products ${selected.join(",")}`
+    : `--product ${selected[0]}`;
+  return `(set -o pipefail; curl -fsSL ${installerUrl} | bash -s -- ${productFlag}${skip}${channelFlags})`;
 }

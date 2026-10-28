@@ -208,7 +208,7 @@ func validateBootstrapIntent(i confirmedBootstrapIntent) error {
 			return invalid()
 		}
 	}
-	if len(i.MCP.Selected) > 2 || len(i.MCP.Skipped) > 2 || len(i.MCP.Projection.Bindings) > 2 || len(i.MCP.Projection.Direct) > 2 {
+	if len(i.MCP.Selected) > 3 || len(i.MCP.Skipped) > 3 || len(i.MCP.Projection.Bindings) > 3 || len(i.MCP.Projection.Direct) > 2 {
 		return invalid()
 	}
 	seen := map[string]bool{}
@@ -298,8 +298,11 @@ func validateBootstrapIntent(i confirmedBootstrapIntent) error {
 			if err != nil {
 				return invalid()
 			}
-		} else if id == "cursor" || id == "copilot-vscode" {
-			desktop, webhook = i.Request.Desktop, i.Request.Webhook
+		} else if id == "cursor" {
+			desktop, webhook, err = resolveBootstrapChannels(i.Request, id, i.Initial.ChannelPolicy)
+			if err != nil {
+				return invalid()
+			}
 		}
 		if u.Product != id || u.Hooks != (portable && id != "cursor") || u.Native == portable || u.MCP != containsProduct(i.MCP.Selected, id) || u.Skill != u.MCP || u.PreservedOff != containsProduct(i.MCP.Skipped, id) || u.Desktop != desktop || u.Webhook != webhook {
 			return invalid()
@@ -323,6 +326,9 @@ func removeBootstrapIntent(path string, p selectorProvenance) error {
 func writeIntentScalars(out io.Writer, i confirmedBootstrapIntent) error {
 	var b bytes.Buffer
 	fmt.Fprintf(&b, "state-migration-required%c%t%c", 0, i.StateMigration != nil && i.StateMigration.Required, 0)
+	if containsProduct(i.Request.Products, "cursor") {
+		fmt.Fprintf(&b, "cursor-seed-enabled%c%t%c", 0, i.MCP.AllowPolicySeed && i.MCP.SeedEnabled, 0)
+	}
 	for _, key := range intentScalarKeys {
 		if value, ok := i.Scopes[key]; ok {
 			b.WriteString(key)
@@ -365,18 +371,10 @@ func validateBootstrapEffectRequest(r setupProductsArgs) error {
 		args = append(args, "--skip-agent-notify")
 	}
 	if r.DesktopSet {
-		if containsProduct(r.Products, "cursor") {
-			args = append(args, "--desktop")
-		} else {
-			args = append(args, "--desktop="+fmt.Sprint(r.Desktop))
-		}
+		args = append(args, "--desktop="+fmt.Sprint(r.Desktop))
 	}
 	if r.WebhookSet {
-		if containsProduct(r.Products, "cursor") {
-			args = append(args, "--webhook")
-		} else {
-			args = append(args, "--webhook="+fmt.Sprint(r.Webhook))
-		}
+		args = append(args, "--webhook="+fmt.Sprint(r.Webhook))
 	}
 	for key, value := range map[string]*bool{"local-native-stop": r.LocalNativeStop, "local-mcp": r.LocalMCP, "local-skills": r.LocalSkills, "manual": r.Manual} {
 		if value != nil {

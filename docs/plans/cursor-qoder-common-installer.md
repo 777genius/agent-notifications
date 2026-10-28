@@ -15,7 +15,7 @@ Two independent architecture and scope critics reviewed the current host and UAP
 ## Delivery sequence
 
 1. Add and verify the minimal profile-bound Qoder adapter change in UAP; open its PR after the first reviewable commit, review, fix, and merge it.
-2. Pin Notifications to the merged immutable UAP revision.
+2. Run the draft Notifications CI against the public immutable UAP candidate while upstream gates run; repin to the merged immutable UAP revision before final host validation and merge.
 3. Replace the Qoder custom registry writer with UAP lifecycle composition and the matching runtime/consent receipt.
 4. Extend the public loader, its published mirror, bootstrap, product discovery/capability protocol and immutable child admission for Cursor in mixed selections. Preserve one understandable common selection, consent and result.
 5. Update README, installation/Cursor/Qoder guides and the existing landing's actual multiselect/command generation.

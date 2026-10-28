@@ -66,7 +66,7 @@ func TestSetupProductsRejectsUnexpectedArguments(t *testing.T) {
 // Red regression: a capability/feature query reads stdin, polls a profile, or
 // pollutes machine output, preventing safe version-gated shell acquisition.
 func TestSetupProductsFixedFeatures(t *testing.T) {
-	for _, tc := range []struct{ command, want string }{{"capabilities", "setup-products-v1 claude codex opencode gemini qoder\n"}, {"features", "terminal-selector-v1\n"}, {"repair-capabilities", "cache-repair-v1\n"}} {
+	for _, tc := range []struct{ command, want string }{{"capabilities", "setup-products-v1 claude codex opencode gemini qoder cursor\n"}, {"features", "terminal-selector-v1\n"}, {"repair-capabilities", "cache-repair-v1\n"}} {
 		var output, prompts bytes.Buffer
 		if code := runSetupProducts([]string{tc.command}, strings.NewReader(""), &output, &prompts); code != 0 || output.String() != tc.want || prompts.Len() != 0 {
 			t.Fatalf("%s code=%d output=%q prompts=%q", tc.command, code, output.String(), prompts.String())
@@ -203,9 +203,6 @@ func TestCursorDiscoveryPlatformReasonPreservesPresence(t *testing.T) {
 				t.Fatal(err)
 			}
 			wantReason := ""
-			if !tc.selected {
-				wantReason = "explicit --scope-root and --client-executable required"
-			}
 			if !tc.present {
 				wantReason = "Cursor agent not found in selected PATH"
 			}
@@ -216,7 +213,7 @@ func TestCursorDiscoveryPlatformReasonPreservesPresence(t *testing.T) {
 			found := false
 			for _, f := range facts {
 				found = found || f.ID == "cursor"
-				if f.ID == "cursor" && (f.Reason != wantReason || f.Present != tc.present || f.Executable != executable || f.Profile != scopes["scope-root"] || f.Selectable != (supported && tc.selected && tc.present)) {
+				if f.ID == "cursor" && (f.Reason != wantReason || f.Present != tc.present || f.Executable != executable || f.Profile != scopes["scope-root"] || f.Selectable != supported) {
 					t.Fatalf("actual %s/%s discovery: %+v; reason=%q", runtime.GOOS, runtime.GOARCH, f, wantReason)
 				}
 			}

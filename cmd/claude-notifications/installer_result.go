@@ -69,6 +69,10 @@ func writeInstallerResult(path string, out io.Writer) error {
 		switch target.Outcome {
 		case "completed", "installed":
 			outcome = "completed"
+		case "absent":
+			if target.Reason == "preserved_existing_opt_out" {
+				outcome = "skipped"
+			}
 		case "activation_failed", "activation_not_attempted", "activation_timeout", "activation_canceled", "activation_deadline":
 			// This finite presentation category includes saved registration.
 			// The current attempt alone cannot prove that independent fact.

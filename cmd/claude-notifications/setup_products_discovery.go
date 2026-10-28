@@ -128,7 +128,11 @@ func productScopes(a setupProductsArgs, e productEnvironment) (map[string]string
 	if err != nil {
 		return nil, err
 	}
-	if profile := a.Scopes["scope-root"]; profile != "" {
+	profile := a.Scopes["scope-root"]
+	if profile == "" && (containsProduct(a.Products, "cursor") || a.Operation == "select") {
+		profile = filepath.Join(e.Home, ".cursor")
+	}
+	if profile != "" {
 		if containsProduct(a.Products, "copilot-vscode") {
 			scopes["scope-root"], err = installruntime.CanonicalPath(profile)
 		} else {
@@ -256,7 +260,12 @@ func discoverProductsWithDetector(ctx context.Context, a setupProductsArgs, e pr
 			return nil, nil, err
 		}
 		if id == "copilot-vscode" {
-			f := productFact{ID: id, Label: productLabels[id], Profile: scopes["scope-root"], Executable: scopes["client-executable"]}
+			// Cursor's ambient default is not an explicit Local profile selection.
+			localProfile, localExecutable := scopes["scope-root"], scopes["client-executable"]
+			if a.Scopes["scope-root"] == "" {
+				localProfile, localExecutable = "", ""
+			}
+			f := productFact{ID: id, Label: productLabels[id], Profile: localProfile, Executable: localExecutable}
 			if f.Profile == "" || f.Executable == "" || scopes["local-settings"] != filepath.Join(f.Profile, "settings.json") {
 				f.Reason = "explicit Local profile, settings and executable required"
 			} else {
@@ -278,10 +287,10 @@ func discoverProductsWithDetector(ctx context.Context, a setupProductsArgs, e pr
 			if !f.Selectable {
 				f.Reason = cursorPlatformReason
 			}
-			if scopes["scope-root"] == "" || scopes["client-executable"] == "" {
+			if scopes["scope-root"] == "" {
 				f.Selectable = false
 				if f.Reason == "" {
-					f.Reason = "explicit --scope-root and --client-executable required"
+					f.Reason = "Cursor profile unavailable"
 				}
 			}
 			p := scopes["client-executable"]
@@ -293,6 +302,7 @@ func discoverProductsWithDetector(ctx context.Context, a setupProductsArgs, e pr
 			}
 			if err == nil {
 				f.Present, f.Executable = true, p
+				scopes["client-executable"] = p
 			} else if f.Reason != cursorPlatformReason {
 				f.Reason = "Cursor agent not found in selected PATH"
 			}

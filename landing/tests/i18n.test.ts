@@ -79,3 +79,17 @@ test("crawler files publish every localized route", async () => {
   assert.equal(manifest.start_url, "/");
   assert.equal(manifest.scope, "/");
 });
+
+// Each locale must expose the common products without restoring source-only Qoder UI.
+test("every locale names Cursor and Qoder and explains their common release availability", async () => {
+  for (const locale of supportedLocales) {
+    const messages = flatten(await loadMessages(locale.file));
+    assert.equal(messages.get("install.products.cursor"), "Cursor CLI", locale.code);
+    assert.equal(messages.get("install.products.qoder"), "Qoder", locale.code);
+    assert.match(messages.get("install.availability")!, /main/, locale.code);
+    assert.match(messages.get("install.cursor.scope")!, /Linux amd64/, locale.code);
+    assert.ok(messages.has("install.cursor.restart"), locale.code);
+    for (const key of ["source", "build", "install"])
+      assert.equal(messages.has(`install.qoder.${key}`), false, `${locale.code}:${key}`);
+  }
+});

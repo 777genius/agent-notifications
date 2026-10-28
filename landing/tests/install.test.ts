@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { command, detectTarget, platformReleaseVersion } from "../data/install.ts";
+import { agentProducts, command, detectTarget, platformReleaseVersion } from "../data/install.ts";
 test("one-line setup contract for each product and supported target", () => {
   for (const product of ["claude", "codex", "both"] as const)
     for (const target of ["macos", "linux", "windows"] as const) {
@@ -61,7 +61,7 @@ test("OpenCode commands default fresh channels, preserve updates and omit MCP fl
     assert.equal(command("opencode", target, "update"), prefix + ")");
     assert.equal(command("opencode", target, "update", false, { desktop: false, webhook: true }), prefix + " --webhook)");
     assert.equal(command("opencode", target, "install", true, { desktop: true, webhook: true }), prefix + " --desktop --webhook)");
-    assert.equal(command("opencode", target, "install", true, { desktop: false, webhook: false }), null);
+    assert.equal(command("opencode", target, "install", true, { desktop: false, webhook: false }), prefix + " --desktop=false --webhook=false)");
     assert.equal(command("opencode", target, "configure"), null);
   }
   assert.equal(command("opencode", "manual", "install"), null);
@@ -89,10 +89,6 @@ test("all seven selections produce one loader command with host-scoped consent",
             { desktop: true, webhook: true },
             { desktop: false, webhook: false },
           ]) {
-            if (openCode && !channels.desktop && !channels.webhook) {
-              assert.equal(command(selected, target, intent, agentNotify, channels), null);
-              continue;
-            }
             const multiple = selected.length > 1;
             const product = multiple
               ? `--products ${selected.join(",")}`
@@ -100,7 +96,8 @@ test("all seven selections produce one loader command with host-scoped consent",
             const pipeline = "curl -fsSL https://agent-notifications.com/install.sh | bash -s -- " + product
               + (legacy && !agentNotify ? " --skip-agent-notify" : "")
               + (openCode && channels.desktop ? " --desktop" : "")
-              + (openCode && channels.webhook ? " --webhook" : "");
+              + (openCode && channels.webhook ? " --webhook" : "")
+              + (openCode && !channels.desktop && !channels.webhook ? " --desktop=false --webhook=false" : "");
             const expected = `(set -o pipefail; ${pipeline})`;
             const actual = command(selected, target, intent, agentNotify, channels);
             assert.equal(actual, expected);
@@ -124,7 +121,7 @@ test("mixed loader uses a canonical product list", () => {
 
 // The copied shell command must report a failed curl even if Bash accepts its input.
 test("every copied product command propagates empty and partial download failures without changing caller pipefail", () => {
-  for (const product of ["claude", "codex", "opencode", "gemini", ["claude", "opencode"]] as const)
+  for (const product of ["claude", "codex", "opencode", "gemini", "qoder", "cursor", ["codex", "qoder", "cursor"]] as const)
     for (const intent of ["install", "update"] as const)
       for (const partial of [false, true]) {
         const snippet = command(product, "linux", intent)!;
@@ -160,7 +157,7 @@ test("Gemini released commands preserve canonical selectors and shared observer 
     for (const target of ["macos", "linux", "windows"] as const) {
       assert.equal(command(products, target, "install", false, { desktop: false, webhook: true }), expected);
       assert.equal(command(products, target, "update", false, { desktop: false, webhook: true }), expected);
-      assert.equal(command(products, target, "install", true, { desktop: false, webhook: false }), null);
+      assert.match(command(products, target, "install", true, { desktop: false, webhook: false })!, /--desktop=false --webhook=false\)$/);
       assert.equal(command(products, target, "configure"), null);
       assert.equal(command(products, "unknown", "install"), null);
       assert.equal(command(products, "manual", "install"), null);
@@ -207,7 +204,7 @@ test("Gemini copied pipelines deliver exact installer argv", () => {
 
 // Updating must let the installer retain each observer's stored channel pair.
 test("default observer update pipelines omit channel overrides in installer argv", () => {
-  for (const products of ["opencode", "gemini", ["opencode", "gemini"], ["claude", "codex", "opencode", "gemini"]] as const) {
+  for (const products of ["opencode", "gemini", "qoder", "cursor", ["qoder", "cursor"], ["claude", "codex", "opencode", "gemini", "qoder", "cursor"]] as const) {
     const snippet = command(products, "linux", "update", false)!;
     const selection = typeof products === "string" ? products : products.join(",");
     const argv = [typeof products === "string" ? "--product" : "--products", selection];
@@ -232,4 +229,40 @@ test("platform availability follows the published channel snapshot", () => {
   assert.equal(platformReleaseVersion(snapshot, "manual"), null);
   assert.match(command("gemini", "macos", "install")!, /--product gemini --desktop\)$/);
   assert.match(command(["claude", "gemini"], "macos", "update")!, /--products claude,gemini\)$/);
+});
+
+// Every selected agent must survive canonicalization, including mixed Cursor/Qoder.
+test("all supported selections keep every product and preserve update channel consent", () => {
+  const canonical = ["claude", "codex", "opencode", "gemini", "qoder", "cursor"] as const;
+  assert.deepEqual(agentProducts, canonical);
+  for (let mask = 1; mask < 1 << canonical.length; mask++) {
+    const selected = canonical.filter((_, index) => mask & (1 << index));
+    const hasPortable = selected.some((value) => value === "claude" || value === "codex");
+    const hasObserver = selected.some((value) => value !== "claude" && value !== "codex");
+    const selector = `${selected.length > 1 ? "--products" : "--product"} ${selected.join(",")}`;
+    for (const target of ["macos", "linux", "windows"] as const) {
+      const reversed = [...selected].reverse();
+      assert.equal(command(reversed, target, "install"), `(set -o pipefail; curl -fsSL https://agent-notifications.com/install.sh | bash -s -- ${selector}${hasObserver ? " --desktop" : ""})`);
+      assert.equal(command([...reversed, selected[0]!], target, "update", false), `(set -o pipefail; curl -fsSL https://agent-notifications.com/install.sh | bash -s -- ${selector}${hasPortable ? " --skip-agent-notify" : ""})`);
+    }
+  }
+});
+
+// The emitted pipeline must pass combined selectors and explicit opt-outs literally.
+test("Cursor and Qoder copied commands carry exact combined argv", () => {
+  const cases = [
+    { selected: ["cursor"], intent: "install", channels: undefined, argv: ["--product", "cursor", "--desktop"] },
+    { selected: ["qoder"], intent: "update", channels: undefined, argv: ["--product", "qoder"] },
+    { selected: ["cursor", "qoder", "codex"], intent: "install", channels: { desktop: true, webhook: false }, argv: ["--products", "codex,qoder,cursor", "--skip-agent-notify", "--desktop"] },
+    { selected: ["cursor", "qoder"], intent: "update", channels: { desktop: false, webhook: false }, argv: ["--products", "qoder,cursor", "--desktop=false", "--webhook=false"] },
+  ] as const;
+  for (const { selected, intent, channels, argv } of cases) {
+    const snippet = command(selected, "linux", intent, false, channels)!;
+    const result = spawnSync("bash", [], {
+      input: `curl() { cat <<'INSTALLER'\nprintf '%s\\n' "$@"\nINSTALLER\n}\n${snippet}`,
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, argv.join("\n") + "\n");
+  }
 });

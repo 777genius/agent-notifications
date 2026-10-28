@@ -135,6 +135,7 @@ if [ "$status" -eq 0 ] && [ -n "${BOOTSTRAP_SUMMARY_FILE:-}" ]; then
             opencode) label=OpenCode ;;
             gemini) label="Gemini CLI" ;;
             qoder) label="Qoder" ;;
+            cursor) label="Cursor CLI" ;;
             *) continue ;;
         esac
         echo "  $label - installed; restart required." >> "$BOOTSTRAP_SUMMARY_FILE"
@@ -299,7 +300,7 @@ def run_case(name, tag=None, commit=None, fail='', status=0, expected=None, pipe
                 for call in calls:
                     selected = ['claude', 'codex'] if call[1] == 'both' else call[1].split(',')
                     for client in selected:
-                        label = {'claude': 'Claude', 'codex': 'Codex', 'opencode': 'OpenCode', 'gemini': 'Gemini CLI', 'qoder': 'Qoder'}[client]
+                        label = {'claude': 'Claude', 'codex': 'Codex', 'opencode': 'OpenCode', 'gemini': 'Gemini CLI', 'qoder': 'Qoder', 'cursor': 'Cursor CLI'}[client]
                         assert label + ' - installed; restart required.' in result.stdout, (name, result.stdout)
         elif expected is None:
             assert result.returncode != 0, (name, result.stdout, result.stderr)
@@ -542,9 +543,9 @@ run_case('stable fallback preserves second failure', args=fallback_args,
 product_sets = []
 for selection in ['claude','codex','opencode','gemini','qoder','codex,claude','codex,qoder',
                   'opencode,claude','opencode,codex','opencode,codex,claude',
-                  'claude,codex,opencode,gemini','claude,codex,opencode,gemini,qoder']:
+                  'claude,codex,opencode,gemini','claude,codex,opencode,gemini,qoder','cursor','qoder,cursor','codex,qoder,cursor']:
     args = ['--products', selection]
-    if any(p in selection.split(',') for p in ('opencode','gemini','qoder')):
+    if any(p in selection.split(',') for p in ('opencode','gemini','qoder','cursor')):
         args += ['--desktop']
     routed = [args]
     product_sets.append((selection, routed))
@@ -559,7 +560,7 @@ if sys.platform == 'darwin':
     if native_version.startswith('3.2.'):
         for selection, routed in product_sets:
             args = ['--products', selection]
-            if any(p in selection.split(',') for p in ('opencode','gemini','qoder')):
+            if any(p in selection.split(',') for p in ('opencode','gemini','qoder','cursor')):
                 args += ['--desktop']
             run_case('native Bash 3.2 product set ' + selection,
                      args=args, calls=routed, expected=0, bash_executable=native_bash)
@@ -569,7 +570,7 @@ if sys.platform == 'darwin':
                      bash_executable=native_bash)
     else:
         print('SKIP native Bash 3.2 fixtures: /bin/bash is ' + native_version)
-for selection in ['opencode','gemini','qoder','claude,codex,opencode,gemini','claude,codex,opencode,gemini,qoder']:
+for selection in ['opencode','gemini','qoder','claude,codex,opencode,gemini','claude,codex,opencode,gemini,qoder','cursor','qoder,cursor','codex,qoder,cursor']:
     run_case('omitted observer defaults '+selection,
              args=['--products',selection],calls=[['--products',selection]],expected=0,piped=True)
 run_case('explicit disabled observer flags survive the loader',

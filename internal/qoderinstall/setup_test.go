@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/ports"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -31,7 +33,7 @@ func TestQoderNativeProcess(t *testing.T) {
 	}
 	args = args[marker+1:]
 	fail := func(err error) { fmt.Fprintln(os.Stderr, err); os.Exit(3) }
-	if len(args) < 7 || args[0] != "--config-dir" || args[2] != "plugins" {
+	if len(args) < 5 || args[0] != "--config-dir" || args[2] != "plugins" {
 		fail(fmt.Errorf("invalid native invocation"))
 	}
 	profile := args[1]
@@ -55,23 +57,21 @@ func TestQoderNativeProcess(t *testing.T) {
 	plugins, _ := object(reg["plugins"])
 	settings := read(settingsPath)
 	enabled, _ := object(settings["enabledPlugins"])
-	// An external uninstall can write its referenced path. A live path here
-	// would make the isolated-planning test fail before it can touch anything.
-	if previous := plugins[PluginID]; len(previous) > 0 {
-		var entries []struct {
-			InstallPath string `json:"installPath"`
-		}
-		if json.Unmarshal(previous, &entries) != nil || len(entries) != 1 || !inside(profile, entries[0].InstallPath) {
-			fail(fmt.Errorf("native planner exposed live cache path"))
-		}
-		if args[3] == "uninstall" {
-			if err := os.WriteFile(filepath.Join(entries[0].InstallPath, ".orphaned_at"), []byte("native"), 0600); err != nil {
-				fail(err)
+	if args[3] == "list" {
+		entries := []map[string]string{}
+		for id, raw := range plugins {
+			var rows []struct{ Version string }
+			if json.Unmarshal(raw, &rows) != nil || len(rows) != 1 {
+				fail(fmt.Errorf("ambiguous registry"))
 			}
+			entries = append(entries, map[string]string{"id": id, "version": rows[0].Version})
 		}
+		_ = json.NewEncoder(os.Stdout).Encode(entries)
+		os.Exit(0)
 	}
 	result := map[string]any{"ok": true, "pluginId": PluginID}
-	if args[3] == "install" {
+	switch args[3] {
+	case "install":
 		source := args[4]
 		manifest := read(filepath.Join(source, ".qoder-plugin", "plugin.json"))
 		var version string
@@ -110,10 +110,21 @@ func TestQoderNativeProcess(t *testing.T) {
 		enabled[PluginID] = json.RawMessage("true")
 		result["path"] = target
 		result["version"] = version
-	} else {
+	case "uninstall":
+		if raw := plugins[PluginID]; len(raw) > 0 {
+			var rows []struct{ InstallPath string }
+			if json.Unmarshal(raw, &rows) != nil || len(rows) != 1 || !inside(profile, rows[0].InstallPath) {
+				fail(fmt.Errorf("invalid native package path"))
+			}
+			if err := os.RemoveAll(rows[0].InstallPath); err != nil {
+				fail(err)
+			}
+		}
 		delete(plugins, PluginID)
 		delete(enabled, PluginID)
 		result["fullyRemoved"] = true
+	default:
+		fail(fmt.Errorf("unsupported native fixture action"))
 	}
 	reg["version"] = json.RawMessage("2")
 	reg["plugins"] = mustJSON(plugins)
@@ -148,7 +159,7 @@ func fixture(t *testing.T) (Request, context.Context) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
 	t.Cleanup(cancel)
-	r := Request{Action: Install, ControlRoot: filepath.Join(root, "control"), RuntimeRoot: filepath.Join(root, "runtime"), HomeDir: filepath.Join(root, "home"), ConfigRoot: filepath.Join(root, "profile"), QoderExecutable: wrapper, BinarySource: exe, GOOS: runtime.GOOS, GOARCH: runtime.GOARCH, Version: "1.49.5", Webhook: true}
+	r := Request{Action: Install, ControlRoot: filepath.Join(root, "control"), RuntimeRoot: filepath.Join(root, "runtime"), HomeDir: filepath.Join(root, "home"), ConfigRoot: filepath.Join(root, "profile"), QoderExecutable: wrapper, BinarySource: exe, GOOS: runtime.GOOS, GOARCH: runtime.GOARCH, Version: "1.49.5", Webhook: true, Runner: nativeTestRunner{}}
 	r, err = normalize(r)
 	if err != nil {
 		t.Fatal(err)
@@ -175,15 +186,6 @@ func mustApply(t *testing.T, ctx context.Context, r Request) {
 func TestQoderLifecyclePreservesForeignProfileAndRetiresOwnedFiles(t *testing.T) {
 	r, ctx := fixture(t)
 	mustApply(t, ctx, r)
-	for _, rel := range []string{"settings.json", registryName} {
-		path := filepath.Join(r.ConfigRoot, filepath.FromSlash(rel))
-		if _, err := os.Lstat(path + ".lock"); !os.IsNotExist(err) {
-			t.Fatalf("installer occupied native host lock: %s %v", path, err)
-		}
-		if info, err := os.Stat(path + ".agent-notifications-qoder.lock"); err != nil || !info.Mode().IsRegular() {
-			t.Fatalf("separate installer coordination lock missing: %s %v", path, err)
-		}
-	}
 	status, err := Inspect(ctx, r)
 	if err != nil || status.Status != "installed" || !status.Webhook || status.Desktop {
 		t.Fatalf("inspection: %+v %v", status, err)
@@ -200,21 +202,28 @@ func TestQoderLifecyclePreservesForeignProfileAndRetiresOwnedFiles(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Model a file shipped by the preceding package at the same version/root.
-	legacy := filepath.Join(old.PackageRoot, "retired-owned.txt")
-	old.Files = append(old.Files, legacy)
-	before, err := installruntime.Fingerprint(filepath.Join(r.ControlRoot, receiptName))
+	if old.InstallationID == "" || old.UAPBindingID == "" || old.Pending {
+		t.Fatalf("UAP identity missing: %+v", old)
+	}
+	for path := range old.Files {
+		if _, owned := installruntime.OwnedFile(l, path); owned {
+			t.Fatalf("native cache has two owners: %s", path)
+		}
+	}
+	snapshot, err := installruntime.ReadPolicySnapshot(ctx, r.ControlRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = installruntime.Commit(ctx, installruntime.Request{ControlRoot: r.ControlRoot, RuntimeRoot: r.RuntimeRoot, Owner: "existing-installer", ConsumerID: ConsumerID, RefreshOnly: true, ExpectedGeneration: &l.Generation, Files: []installruntime.File{{Path: legacy, Data: []byte("prior shipped file"), Mode: 0600}, {Path: filepath.Join(r.ControlRoot, receiptName), Before: before, Data: mustJSON(old), Mode: 0600}}})
-	if err != nil {
-		t.Fatal(err)
+	desktop, webhook := ChannelsFromSnapshot(snapshot, r.ControlRoot, old.Executable, old.Binding)
+	if desktop || !webhook {
+		t.Fatal("UAP-bound receipt does not authorize selected delivery")
 	}
+	// Updating the package is UAP's lifecycle, including native replacement.
 	r.Action = Update
+	r.Version = "1.49.6"
 	mustApply(t, ctx, r)
-	if _, err = os.Lstat(legacy); !os.IsNotExist(err) {
-		t.Fatal("retired same-version shipped file survived")
+	if _, err := os.Stat(old.PackageRoot); !os.IsNotExist(err) {
+		t.Fatal("native previous package survived update")
 	}
 	// A sibling keeps the shared runtime alive during Qoder removal.
 	l, _, _ = installruntime.ReadOwnership(r.ControlRoot)
@@ -227,9 +236,7 @@ func TestQoderLifecyclePreservesForeignProfileAndRetiresOwnedFiles(t *testing.T)
 	if _, err = os.Lstat(filepath.Join(r.RuntimeRoot, name)); err != nil {
 		t.Fatal("Qoder removal deleted sibling runtime")
 	}
-	if _, err = os.Lstat(filepath.Join(old.PackageRoot, ".orphaned_at")); !os.IsNotExist(err) {
-		t.Fatal("native staging wrote into live package")
-	}
+
 	data, err := os.ReadFile(filepath.Join(r.ConfigRoot, "settings.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -318,5 +325,262 @@ func TestQoderLifecycleRefusesUserEditedAndUnownedPackage(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// Preserve the real CLI argv/environment and filesystem effects without using
+// the production containment transport in a unit fixture.
+type nativeTestRunner struct{ dir string }
+
+func (runner nativeTestRunner) Run(ctx context.Context, command ports.Command) (ports.CommandResult, error) {
+	child := exec.CommandContext(ctx, command.Argv[0], command.Argv[1:]...)
+	child.Env, child.Dir = command.Env, command.Dir
+	if runner.dir != "" {
+		child.Dir = runner.dir
+	}
+	out, err := child.Output()
+	result := ports.CommandResult{Stdout: out}
+	if e, ok := err.(*exec.ExitError); ok {
+		result.ExitCode = e.ExitCode()
+		result.Stderr = e.Stderr
+		return result, nil
+	}
+	return result, err
+}
+
+func TestQoderRemovalRetryAfterUAPCompletion(t *testing.T) {
+	r, ctx := fixture(t)
+	mustApply(t, ctx, r)
+	r.Action = Remove
+	r.Fault = func(point string) error {
+		if point == "qoder_uap_removed" {
+			return fmt.Errorf("TEST interruption")
+		}
+		return nil
+	}
+	if err := Apply(ctx, r); err == nil {
+		t.Fatal("fault did not interrupt removal")
+	}
+	l, _, err := installruntime.ReadOwnership(r.ControlRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old, err := readReceipt(r.ControlRoot, l)
+	if err != nil || !old.Pending || !old.Removing {
+		t.Fatalf("removal intent missing: %+v %v", old, err)
+	}
+	s, err := installruntime.ReadPolicySnapshot(ctx, r.ControlRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if desktop, webhook := ChannelsFromSnapshot(s, r.ControlRoot, old.Executable, old.Binding); desktop || webhook {
+		t.Fatal("interrupted removal retained consent")
+	}
+	r.Fault = nil
+	mustApply(t, ctx, r)
+	l, _, _ = installruntime.ReadOwnership(r.ControlRoot)
+	if _, ok := l.Consumers[ConsumerID]; ok {
+		t.Fatal("retry did not retire host consumer")
+	}
+}
+
+func TestQoderPendingNativeEditRefusesRetry(t *testing.T) {
+	for _, extra := range []bool{false, true} {
+		t.Run(fmt.Sprintf("extra_%t", extra), func(t *testing.T) {
+			r, ctx := fixture(t)
+			r.Fault = func(point string) error {
+				if point == "qoder_uap_installed" {
+					return fmt.Errorf("TEST interruption")
+				}
+				return nil
+			}
+			if err := Apply(ctx, r); err == nil {
+				t.Fatal("fault did not interrupt handoff")
+			}
+			l, _, _ := installruntime.ReadOwnership(r.ControlRoot)
+			old, err := readReceipt(r.ControlRoot, l)
+			if err != nil || !old.Pending {
+				t.Fatalf("pending receipt: %+v %v", old, err)
+			}
+			_, _, root, err := nativeRegistration(r.ConfigRoot)
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(root, "README.md")
+			if extra {
+				path = filepath.Join(root, "user.txt")
+			}
+			content := []byte("TEST user change after native activation")
+			if err = os.WriteFile(path, content, 0600); err != nil {
+				t.Fatal(err)
+			}
+			r.Fault = nil
+			if err = Apply(ctx, r); err == nil {
+				t.Fatal("pending retry deleted an unowned or edited native file")
+			}
+			if got, err := os.ReadFile(path); err != nil || string(got) != string(content) {
+				t.Fatal("refused retry changed native file")
+			}
+			s, err := installruntime.ReadPolicySnapshot(ctx, r.ControlRoot)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if desktop, webhook := ChannelsFromSnapshot(s, r.ControlRoot, old.Executable, old.Binding); desktop || webhook {
+				t.Fatal("incomplete handoff enabled consent")
+			}
+		})
+	}
+}
+
+func TestQoderUpdatePreservesOmittedChannelsAndConsentCAS(t *testing.T) {
+	r, ctx := fixture(t)
+	r.Desktop, r.Webhook = false, false
+	mustApply(t, ctx, r)
+	r.Action, r.PreserveChannels = Update, true
+	r.Desktop, r.Webhook = true, true
+	mustApply(t, ctx, r)
+	status, err := Inspect(ctx, r)
+	if err != nil || status.Desktop || status.Webhook {
+		t.Fatalf("both-off was lost: %+v %v", status, err)
+	}
+	r.PreserveChannels = false
+	r.Webhook = true
+	mustApply(t, ctx, r)
+	r.Desktop, r.Webhook = false, false
+	r.Fault = func(point string) error {
+		if point != "qoder_consent_revoked" {
+			return nil
+		}
+		return setChannels(ctx, r.ControlRoot, r.RuntimeRoot, true, false, "")
+	}
+	if err = Apply(ctx, r); err == nil || !strings.Contains(err.Error(), "concurrent_change") {
+		t.Fatalf("concurrent consent was adopted: %v", err)
+	}
+	s, err := installruntime.ReadPolicySnapshot(ctx, r.ControlRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	desktop, webhook, err := channels(s.Fields)
+	if err != nil || !desktop || webhook {
+		t.Fatal("user's concurrent consent was overwritten")
+	}
+}
+
+func TestQoderNativeCLIInstalledLifecycle(t *testing.T) {
+	executable := os.Getenv("AGENT_NOTIFY_QODER_NATIVE_EXE")
+	if executable == "" {
+		t.Skip("explicit pinned disposable Qoder CLI required")
+	}
+	r, _ := fixture(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
+	defer cancel()
+	r.QoderExecutable = executable
+	isolated := t.TempDir()
+	project := filepath.Join(isolated, "project")
+	if err := os.Mkdir(project, 0700); err != nil {
+		t.Fatal(err)
+	}
+	r.Runner = nativeTestRunner{dir: project}
+	for _, key := range []string{"XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME", "XDG_DATA_HOME"} {
+		dir := filepath.Join(isolated, key)
+		if err := os.Mkdir(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv(key, dir)
+	}
+	t.Setenv("HOME", isolated)
+	t.Setenv("USERPROFILE", isolated)
+	t.Setenv("QODER_CONFIG_DIR", filepath.Join(isolated, "ambient-default"))
+	mustApply(t, ctx, r)
+	status, err := Inspect(ctx, r)
+	if err != nil || status.Status != "installed" || !status.Webhook {
+		t.Fatalf("native installed result: %+v %v", status, err)
+	}
+	r.Action = Update
+	r.Version = "1.49.6"
+	mustApply(t, ctx, r)
+	r.Action = Remove
+	mustApply(t, ctx, r)
+	if _, err = os.Stat(filepath.Join(isolated, "ambient-default")); !os.IsNotExist(err) {
+		t.Fatal("native lifecycle touched ambient profile")
+	}
+}
+
+func TestQoderPendingUpdateBeforeNativeEffectsCanRetry(t *testing.T) {
+	r, ctx := fixture(t)
+	mustApply(t, ctx, r)
+	r.Action, r.Version = Update, "1.49.6"
+	r.Fault = func(point string) error {
+		if point == "qoder_runtime_prepared" {
+			return fmt.Errorf("TEST interruption before native effects")
+		}
+		return nil
+	}
+	if err := Apply(ctx, r); err == nil {
+		t.Fatal("fault did not interrupt update")
+	}
+	r.Fault = nil
+	mustApply(t, ctx, r)
+	status, err := Inspect(ctx, r)
+	if err != nil || !status.Webhook {
+		t.Fatalf("pending update did not resume: %+v %v", status, err)
+	}
+}
+
+func TestQoderFreshInstallRefusesOrphanNativeCache(t *testing.T) {
+	r, ctx := fixture(t)
+	root := filepath.Join(r.ConfigRoot, "plugins", "cache", "local", "agent-notifications-qoder", r.Version)
+	if err := os.MkdirAll(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "user.txt")
+	if err := os.WriteFile(path, []byte("keep"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Apply(ctx, r); err == nil || !strings.Contains(err.Error(), "without managed ownership") {
+		t.Fatalf("orphan cache was adopted: %v", err)
+	}
+	if got, err := os.ReadFile(path); err != nil || string(got) != "keep" {
+		t.Fatal("orphan cache was changed")
+	}
+	if _, err := os.Stat(filepath.Join(r.ConfigRoot, filepath.FromSlash(registryName))); !os.IsNotExist(err) {
+		t.Fatal("native CLI was dispatched before orphan refusal")
+	}
+}
+
+func TestQoderRetiredReceiptIsRefusedWithoutAdoption(t *testing.T) {
+	r, ctx := fixture(t)
+	mustApply(t, ctx, r)
+	l, _, err := installruntime.ReadOwnership(r.ControlRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old, err := readReceipt(r.ControlRoot, l)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old.Schema = 1
+	path := filepath.Join(r.ControlRoot, receiptName)
+	before, err := installruntime.Fingerprint(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = installruntime.Commit(ctx, installruntime.Request{ControlRoot: r.ControlRoot, RuntimeRoot: r.RuntimeRoot, Owner: "existing-installer", ConsumerID: ConsumerID, RefreshOnly: true, ExpectedGeneration: &l.Generation, Files: []installruntime.File{{Path: path, Before: before, Data: mustJSON(old), Mode: 0600}}}); err != nil {
+		t.Fatal(err)
+	}
+	registry := filepath.Join(r.ConfigRoot, filepath.FromSlash(registryName))
+	nativeBefore, err := os.ReadFile(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, action := range []Action{Update, Remove} {
+		r.Action = action
+		if err = Apply(ctx, r); err == nil || !strings.Contains(err.Error(), "legacy installation adoption is not supported") {
+			t.Fatalf("retired receipt was adopted by %s: %v", action, err)
+		}
+	}
+	nativeAfter, err := os.ReadFile(registry)
+	if err != nil || string(nativeAfter) != string(nativeBefore) {
+		t.Fatal("refusing retired receipt changed native registration")
 	}
 }

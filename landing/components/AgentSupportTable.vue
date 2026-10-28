@@ -2,7 +2,7 @@
 import { repo, type AgentProduct } from "~/data/install";
 
 const { t } = useI18n();
-type SupportedAgent = AgentProduct | "cursor" | "qoder";
+type SupportedAgent = AgentProduct;
 const agents: SupportedAgent[] = ["claude", "codex", "opencode", "gemini", "cursor", "qoder"];
 type Support = "yes" | "no" | "conditional";
 const rows: { key: string; support: Record<SupportedAgent, Support> }[] = [
@@ -54,7 +54,6 @@ const icons = { yes: "✓", no: "✕", conditional: "✓*" };
       <p>{{ t("agentSupport.legend") }}</p>
       <p>{{ t("install.cursor.scope") }} <a :href="repo + '/blob/main/docs/cursor-notifications.md'">{{ t("install.cursor.guide") }} ↗</a></p>
       <p>{{ t("install.gemini.version") }} <a :href="repo + '/blob/main/docs/gemini-notifications.md'">{{ t("install.gemini.guide") }} ↗</a></p>
-      <p>{{ t("install.qoder.source") }}</p>
       <p>{{ t("install.qoder.scope") }} <a :href="repo + '/blob/main/docs/QODER.md'">{{ t("install.qoder.guide") }} ↗</a></p>
       <details>
         <summary>{{ t("install.capabilities.details") }}</summary>
