@@ -102,6 +102,23 @@ def graph_pins(raw):
     return values
 
 
+def prepare_download_modfile(root, repo=REPO):
+    # `go mod download all` may add sums for graph-only modules. Keep that
+    # preparation outside the source tree; graph inspection and real builds
+    # continue to use the unmodified canonical module files.
+    directory = root / "download-modules"
+    directory.mkdir(mode=0o700)
+    original = {name: (repo / name).read_bytes() for name in ("go.mod", "go.sum")}
+    for name, body in original.items():
+        (directory / name).write_bytes(body)
+    return directory / "go.mod", original
+
+
+def require_canonical_modules(original, repo=REPO):
+    require(all((repo / name).read_bytes() == body for name, body in original.items()),
+            "canonical_module_files_changed")
+
+
 def build_identity(raw, modules, commit, osname, arch):
     # Actual `go version -m`, not go.mod intent, binds linked modules and VCS.
     dependencies, settings = {}, {}
@@ -249,7 +266,9 @@ def run(args):
         require(not (REPO / "go.work").exists(), "go_work_forbidden")
         mod = json.loads(command("go_mod_metadata", [go, "mod", "edit", "-json"]))
         require(not mod.get("Replace"), "Go_mod_replace_forbidden")
-        command("download_public_pins", [go, "mod", "download", "all"])
+        download_modfile, canonical_modules = prepare_download_modfile(root)
+        command("download_public_pins", [go, "mod", "download", "-modfile=" + str(download_modfile), "all"])
+        require_canonical_modules(canonical_modules)
         # Keep the full graph inside G0's bounded stream cap. Obtain directory
         # records with the actual -json interface only for the two staged trees.
         pins = graph_pins(command("module_graph", [go, "list", "-m", "-f",
@@ -263,6 +282,7 @@ def run(args):
         modules = module_graph(list(records.values()))
         write_json(evidence_dir / "go-modules.json", list(modules.values()))
         command("verify_public_pins", [go, "mod", "verify"])
+        require_canonical_modules(canonical_modules)
         staged = {}
         for label, name in (("sdk", SDK), ("agentplugins", INSTALLER)):
             origin = Path(modules[name]["Dir"]).resolve(strict=True)
@@ -418,6 +438,24 @@ def run(args):
 
 
 class PureChecks(unittest.TestCase):
+    def test_download_preparation_preserves_canonical_modules(self):
+        with tempfile.TemporaryDirectory(prefix="TEST-gemini-modules-") as directory:
+            root = Path(directory)
+            repo = root / "source"
+            repo.mkdir()
+            original = {"go.mod": b"module example.com/fixture\n\ngo 1.25.0\n", "go.sum": b"original sums\n"}
+            for name, body in original.items():
+                (repo / name).write_bytes(body)
+            modfile, captured = prepare_download_modfile(root, repo)
+            self.assertEqual(captured, original)
+            self.assertEqual(modfile.read_bytes(), original["go.mod"])
+            self.assertEqual(modfile.with_suffix(".sum").read_bytes(), original["go.sum"])
+            modfile.with_suffix(".sum").write_bytes(b"prepared graph sums\n")
+            require_canonical_modules(captured, repo)
+            (repo / "go.sum").write_bytes(b"unexpected source mutation\n")
+            with self.assertRaisesRegex(Red, "canonical_module_files_changed"):
+                require_canonical_modules(captured, repo)
+
     def test_UI_rejects_typed_commands(self):
         ui = {"permission_pattern": "public menu", "approve": "1\r", "deny": "2\r", "cancel": "\x1b", "source_sha256": "a" * 64}
         self.assertEqual(ui_contract(json.dumps(ui)), ui)
