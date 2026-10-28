@@ -146,7 +146,8 @@ def wait_for(predicate, seconds=8):
     raise Unqualified("fixture_readiness_timeout")
 
 
-def linux(lab, audio):
+def linux_desktop(lab):
+    """Owned X11/PulseAudio session reused by the actual installed-Pi fixture."""
     names = ("dbus-daemon", "Xvfb", "openbox", "dunst", "xterm", "xdotool", "pulseaudio", "pactl", "parec", "aplay", "notify-send", "ffmpeg")
     paths = {name: shutil.which(name) for name in names}
     lab.report["tools"] = {name: {"available": bool(path), **({"sha256": digest(path)} if path else {})} for name, path in paths.items()}
@@ -194,6 +195,12 @@ def linux(lab, audio):
         observed, _ = lab.run([paths["xdotool"], "getactivewindow"])
         if observed.strip() != window:
             raise Unqualified("foreground_fixture_mismatch")
+    return paths, server, window_ids
+
+
+def linux(lab, audio):
+    paths, server, window_ids = linux_desktop(lab)
+    nonce = uuid.uuid4().hex[:12]
     recording = lab.root / "known-cue.s16le"
     with recording.open("wb") as stream:
         recorder = subprocess.Popen([paths["parec"], "--device=TEST_pi_observer.monitor", "--format=s16le", "--rate=48000", "--channels=1", "--latency-msec=20"],

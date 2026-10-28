@@ -21,7 +21,7 @@ def require(value, code):
 
 
 class Provider:
-    def __init__(self, scenario):
+    def __init__(self, scenario, hold_reply=False):
         self.scenario, self.requests = scenario, []
         self.release = threading.Event()
         owner = self
@@ -40,6 +40,9 @@ class Provider:
                     self.send_error(400)
                     return
                 owner.requests.append({"path": self.path, "stream": True, "model": "TEST-local"})
+                if hold_reply and not owner.release.wait(30):
+                    self.send_error(504)
+                    return
                 if owner.scenario == "error" or owner.scenario == "retry" and len(owner.requests) == 1:
                     error = b'{"error":{"message":"invalid_api_key"}}' if owner.scenario == "error" else b'{"error":{"message":"overloaded_error"}}'
                     self.send_response(400 if owner.scenario == "error" else 503)
