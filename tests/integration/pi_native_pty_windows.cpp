@@ -69,9 +69,30 @@ static int runAttached(std::wstring executable, std::wstring command, const wcha
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
     limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
     if (!job || !SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limits, sizeof limits)) return 2;
-    if (!CreateProcessW(executable.c_str(), command.data(), nullptr, nullptr, FALSE,
-                        EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT | CREATE_SUSPENDED,
-                        nullptr, cwd, &startup.StartupInfo, &child)) return 2;
+    // A redirected controller's standard-handle values otherwise survive into
+    // the attached child, even though general handle inheritance is disabled.
+    // Windows fills NULL standard-handle entries with the attached console's
+    // actual handles (GetStdHandle's documented attach/startup behavior). Keep
+    // the controller pipes open and restore their table before any I/O threads.
+    const DWORD identifiers[]{STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE};
+    HANDLE controllerHandles[3]{};
+    for (int i = 0; i < 3; i++) controllerHandles[i] = GetStdHandle(identifiers[i]);
+    bool cleared = true;
+    for (int i = 0; i < 3; i++) if (!SetStdHandle(identifiers[i], nullptr)) cleared = false;
+    const BOOL created = cleared && CreateProcessW(executable.c_str(), command.data(), nullptr, nullptr, FALSE,
+        EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT | CREATE_SUSPENDED,
+        nullptr, cwd, &startup.StartupInfo, &child);
+    bool restored = true;
+    for (int i = 0; i < 3; i++) if (!SetStdHandle(identifiers[i], controllerHandles[i])) restored = false;
+    if (!created || !restored) {
+        if (created) {
+            TerminateProcess(child.hProcess, 2);
+            WaitForSingleObject(child.hProcess, 2000);
+            CloseHandle(child.hThread);
+            CloseHandle(child.hProcess);
+        }
+        return 2;
+    }
     if (!AssignProcessToJobObject(job, child.hProcess)) {
         TerminateProcess(child.hProcess, 2);
         WaitForSingleObject(child.hProcess, 2000);
