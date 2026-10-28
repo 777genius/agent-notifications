@@ -20,6 +20,50 @@ F = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(F)
 
 
+def observe_conpty_stdio(bridge, root, env):
+    """Observe a separate native child; these are host facts, never Pi evidence."""
+    path = root / "conpty-stdio.json"
+    result = {"scope": "host_only_conpty_stdio", "pi_executed": False, "desktop_qualified": False,
+              "controller_stdin_kept_open": True, "bridge_collected": False}
+    probe = None
+    try:
+        # Match the real Pi bridge's redirected parent handles exactly. In
+        # particular, communicate() would close stdin and change this experiment.
+        probe = subprocess.Popen([bridge, "--probe-stdio", root / "project", path], cwd=root / "project", env=env,
+                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        result["bridge_returncode"] = probe.wait(timeout=8)
+    except Exception as error:
+        result["failure"] = str(error)
+    finally:
+        if probe:
+            try:
+                if probe.poll() is None:
+                    subprocess.run(["taskkill.exe", "/PID", str(probe.pid), "/T", "/F"],
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+                    probe.wait(timeout=3)
+                result["bridge_collected"] = probe.poll() is not None
+                # Only after owned exit/teardown may the parent stdin close.
+                probe.stdin.close()
+                output = bytearray()
+                while len(output) <= 32768:
+                    block = probe.stdout.read1(min(4096, 32769 - len(output)))
+                    if not block:
+                        break
+                    output.extend(block)
+                result["bridge_output_bytes"] = len(output)
+                result["bridge_output_tail"] = output[-8192:].decode("utf-8", errors="replace")
+                result["bridge_output_limit_exceeded"] = len(output) > 32768
+                probe.stdout.close()
+            except Exception as error:
+                result["collection_failure"] = str(error)
+        if path.is_file() and not path.is_symlink() and path.stat().st_size <= 8192:
+            try:
+                result["native_child"] = json.loads(path.read_text())
+            except Exception as error:
+                result["observation_read_failure"] = str(error)
+    return result
+
+
 def execute(args):
     root = Path(tempfile.mkdtemp(prefix="TEST-pi-native-tui-")).resolve()
     root.chmod(0o700)
@@ -39,6 +83,8 @@ def execute(args):
             F.require(args.pty_bridge is not None, "native_conpty_bridge_required")
             bridge = args.pty_bridge.resolve(strict=True)
             report["conpty_bridge_sha256"] = hashlib.sha256(bridge.read_bytes()).hexdigest()
+            report["conpty_stdio_probe"] = observe_conpty_stdio(bridge, root, env)
+            F.require(report["conpty_stdio_probe"]["bridge_collected"], "native_conpty_stdio_probe_not_collected")
             child = subprocess.Popen([bridge, args.pi_executable, root / "project"], cwd=root / "project", env=env,
                                      stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         else:
