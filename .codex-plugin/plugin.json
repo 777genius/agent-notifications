@@ -1,5 +1,13 @@
 {
     "name": "claude-notifications-go",
     "version": "1.49.11",
-    "hooks": "./hooks/hooks-codex.json"
+    "hooks": "./hooks/hooks-codex.json",
+    "description": "Desktop notifications for coding agents with sounds and click-to-focus navigation.",
+    "repository": "https://github.com/777genius/agent-notifications",
+    "license": "GPL-3.0",
+    "interface": {
+        "displayName": "Agent Notifications",
+        "shortDescription": "Desktop alerts for agents",
+        "composerIcon": "./brand/agent-notifications-logo-transparent.png"
+    }
 }
