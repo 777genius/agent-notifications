@@ -195,12 +195,24 @@ def linux(lab, audio):
             raise Unqualified("foreground_fixture_mismatch")
     recording = lab.root / "known-cue.s16le"
     with recording.open("wb") as stream:
-        recorder = subprocess.Popen([paths["parec"], "--device=TEST_pi_observer.monitor", "--format=s16le", "--rate=48000", "--channels=1"],
+        recorder = subprocess.Popen([paths["parec"], "--device=TEST_pi_observer.monitor", "--format=s16le", "--rate=48000", "--channels=1", "--latency-msec=20"],
                                     cwd=lab.root, env=lab.env, stdout=stream, stderr=subprocess.DEVNULL, start_new_session=True)
     lab.children.append(recorder)
-    time.sleep(0.2)
-    lab.run([paths["aplay"], "-q", audio])
-    time.sleep(0.2)
+    # A running PID or elapsed sleep does not establish monitor readiness. Wait
+    # for actual baseline PCM, play once, then drain until its nonzero samples
+    # reach the file. Pulse/stdio buffering differs on hosted runners.
+    wait_for(lambda: recording.stat().st_size >= 9600)
+    baseline_samples = recording.stat().st_size // 2
+    lab.run([paths["aplay"], "-q", "--buffer-time=20000", audio])
+    drain_until = time.monotonic() + 4
+    while time.monotonic() < drain_until:
+        current = recording.read_bytes()
+        probe = array.array("h", current[:len(current) // 2 * 2])
+        if sys.byteorder != "little":
+            probe.byteswap()
+        if any(abs(value) > 1000 for value in probe):
+            break
+        time.sleep(0.05)
     lab.stop(recorder)
     raw = recording.read_bytes()
     values = array.array("h", raw[:len(raw) // 2 * 2])
@@ -219,7 +231,8 @@ def linux(lab, audio):
         action, _ = notify.communicate(timeout=5)
     except subprocess.TimeoutExpired:
         raise Unqualified("native_fixture_click_not_observed")
-    lab.report["measurements"] = {"audio_samples": len(values), "audio_peak_s16": peak, "audio_rms_s16": round(rms, 3),
+    lab.report["measurements"] = {"baseline_samples_before_cue": baseline_samples,
+                                   "audio_samples": len(values), "audio_peak_s16": peak, "audio_rms_s16": round(rms, 3),
                                    "fixture_action": action.decode().strip(), "window_count": len(set(window_ids)),
                                    "synthetic_screenshot_sha256": digest(shot)}
     return {"interactive_gui": server.poll() is None, "two_windows": len(set(window_ids)) == 2,
