@@ -74,4 +74,21 @@ func TestPiWizardReservedHandoffAndFreshConsumer(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, ".claude")); !os.IsNotExist(err) {
 		t.Fatal("Pi setup touched Claude profile", err)
 	}
+	// UAP may skip its package callback on unchanged bytes. Explicit channel
+	// opt-out remains a real policy operation in the same normal wizard.
+	req.PiWebhook = &off
+	result, err = Run(ctx, req)
+	if err != nil || (result.Outcome != "completed" && result.Outcome != "unchanged") {
+		t.Fatalf("unchanged package opt-out: %+v %v", result, err)
+	}
+	s, err = installruntime.ReadPolicySnapshot(ctx, control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if json.Unmarshal(s.Fields["route"], &channels) != nil || channels[piauthority.ChannelKey]["desktop"] || channels[piauthority.ChannelKey]["webhook"] {
+		t.Fatal("unchanged package ignored explicit Pi opt-out")
+	}
+	if s.Policy.Enabled || s.Installation.Enabled || s.Installation.Ledger.PendingMutation != nil {
+		t.Fatal("opt-out changed unrelated policy or left unfinished setup")
+	}
 }

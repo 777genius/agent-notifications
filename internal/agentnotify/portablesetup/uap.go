@@ -140,9 +140,12 @@ type MaterializeRequest struct {
 
 type Materializer struct {
 	PiChoices piauthority.Choices
-	Kernel    Service
-	Store     statev2.Store
-	Roots     UAPRoots
+	// One Install invocation records whether the committed package callback ran.
+	// An unchanged UAP package can still need an explicitly requested Pi choice.
+	piHandoffDone *bool
+	Kernel        Service
+	Store         statev2.Store
+	Roots         UAPRoots
 	// Registry is the explicit composition for this materializer and every
 	// engine it constructs. Nil retains the Claude/Codex composition.
 	Registry *clients.Registry
@@ -1103,36 +1106,25 @@ func (m Materializer) engineWithIdentities(req MaterializeRequest, generation *u
 			if err := refuseConflictingLocator(pb); err != nil {
 				return err
 			}
-			selectedReservation := res
-			if pb.Integration == portable.Pi && selectedReservation == nil {
-				action := string(packageOperation(req))
-				if req.HandoffAction != "" {
-					action = req.HandoffAction
-				}
-				selectedReservation, err = m.Kernel.matchingReservation(Request{Binding: pb, SourceDigest: req.SourceDigest, TreeDigest: req.TreeDigest, HelperDigest: req.HelperDigest, HelperVersion: req.HelperVersion}, action)
+			if pb.Integration == portable.Pi {
+				next, err := m.commitPiBinding(ctx, req, pb, res)
 				if err != nil {
 					return err
 				}
+				*generation = next
+				if m.piHandoffDone != nil {
+					*m.piHandoffDone = true
+				}
+				return nil
 			}
-			if _, err := m.Kernel.CommitBinding(ctx, Request{Binding: pb, ExpectedGeneration: *generation, Reservation: selectedReservation}); err != nil {
+			if _, err := m.Kernel.CommitBinding(ctx, Request{Binding: pb, ExpectedGeneration: *generation, Reservation: res}); err != nil {
 				return err
-			}
-			if pb.Integration == portable.Pi {
-				if err := piauthority.RetirePreparation(ctx, pb, selectedReservation, m.Kernel.ExpectedPolicy); err != nil {
-					return err
-				}
-				if err := piauthority.CommitChoices(ctx, pb, m.PiChoices, selectedReservation, m.Kernel.ExpectedPolicy); err != nil {
-					return err
-				}
 			}
 			snap, err := installruntime.ReadInstalledSnapshot(pb.ControlRoot)
 			if err != nil {
 				return err
 			}
 			*generation = snap.Ledger.Generation
-			if pb.Integration == portable.Pi {
-				return piauthority.Publish(ctx, pb, m.Roots.StateFile)
-			}
 			return nil
 		},
 	})
@@ -1373,6 +1365,9 @@ func (m Materializer) Install(ctx context.Context, req MaterializeRequest) (port
 	if err := m.validate(req, true); err != nil {
 		return portable.Binding{}, err
 	}
+	if req.Integration == portable.Pi {
+		m.piHandoffDone = new(bool)
+	}
 	var closePackage func()
 	var composeErr error
 	m, req, closePackage, composeErr = m.composeLocalPackage(ctx, req, true)
@@ -1457,6 +1452,12 @@ func (m Materializer) Install(ctx context.Context, req MaterializeRequest) (port
 	if err != nil {
 		return portable.Binding{}, err
 	}
+	if pb.Integration == portable.Pi && m.piHandoffDone != nil && !*m.piHandoffDone {
+		generation, err = m.commitPiBinding(ctx, req, pb, res)
+		if err != nil {
+			return portable.Binding{}, err
+		}
+	}
 	if err := recordClientFact(filepath.Dir(m.Roots.StateFile), clientFact{BindingID: pb.BindingID, ConfigRoot: req.ClientConfigRoot, Executable: req.ClientExecutable}, ClientID(req.Integration)); err != nil {
 		return portable.Binding{}, err
 	}
@@ -1535,6 +1536,11 @@ func validateGroupIdentities(reqs []MaterializeRequest) (map[string]Identity, er
 func (m Materializer) ApplyGroup(ctx context.Context, reqs []MaterializeRequest) ([]portable.Binding, error) {
 	if ctx == nil || len(reqs) != 2 {
 		return nil, ErrPreflight
+	}
+	for _, req := range reqs {
+		if req.Integration == portable.Pi {
+			m.piHandoffDone = new(bool)
+		}
 	}
 	for i := range reqs {
 		if err := m.validate(reqs[i], true); err != nil {
@@ -1669,6 +1675,12 @@ func (m Materializer) ApplyGroup(ctx context.Context, reqs []MaterializeRequest)
 		pb, err := Complete(req.Identity, req.Integration, facts.ClientID, facts.Scope, facts.TargetPath, facts.DataRoot)
 		if err != nil {
 			return nil, err
+		}
+		if pb.Integration == portable.Pi && m.piHandoffDone != nil && !*m.piHandoffDone {
+			generation, err = m.commitPiBinding(ctx, req, pb, res)
+			if err != nil {
+				return nil, err
+			}
 		}
 		if err := recordClientFact(filepath.Dir(m.Roots.StateFile), clientFact{BindingID: pb.BindingID, ConfigRoot: req.ClientConfigRoot, Executable: req.ClientExecutable}, ClientID(req.Integration)); err != nil {
 			return nil, err
