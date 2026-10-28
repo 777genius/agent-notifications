@@ -3,6 +3,7 @@
 #define _WIN32_WINNT 0x0A00
 #define NOMINMAX
 #include <windows.h>
+#include <iostream>
 #include <thread>
 #include <string>
 #include <vector>
@@ -12,7 +13,9 @@ int wmain(int argc, wchar_t** argv) {
     HANDLE inputRead = nullptr, inputWrite = nullptr, outputRead = nullptr, outputWrite = nullptr;
     if (!CreatePipe(&inputRead, &inputWrite, nullptr, 0) || !CreatePipe(&outputRead, &outputWrite, nullptr, 0)) return 2;
     HPCON console = nullptr;
+    std::cerr << "TEST-CONPTY create_pseudoconsole\n" << std::flush;
     if (FAILED(CreatePseudoConsole(COORD{120, 40}, inputRead, outputWrite, 0, &console))) return 2;
+    std::cerr << "TEST-CONPTY pseudoconsole_ready\n" << std::flush;
     CloseHandle(inputRead);
     CloseHandle(outputWrite);
     SIZE_T size = 0;
@@ -41,7 +44,8 @@ int wmain(int argc, wchar_t** argv) {
         WaitForSingleObject(child.hProcess, 2000);
         return 2;
     }
-    ResumeThread(child.hThread);
+    const DWORD resumed = ResumeThread(child.hThread);
+    std::cerr << "TEST-CONPTY resume_thread_result=" << resumed << " pid=" << child.dwProcessId << "\n" << std::flush;
     CloseHandle(child.hThread);
     std::thread output([&]() {
         char bytes[4096];

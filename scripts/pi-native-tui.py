@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Real Pi TUI submission/reply on a native PTY; no desktop claim."""
 import argparse
+from collections import Counter
 import hashlib
 import importlib.util
 import json
@@ -26,11 +27,13 @@ def execute(args):
     env = F.prepare(root, provider, "success")
     env.update(TERM="xterm-256color", LANG="C.UTF-8")
     report = {"schema_version": 1, "status": "failed", "scope": "actual_pi_tui_pty",
+              "test_root": str(root),
               "source_sha": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=FIXTURE.parents[2], text=True).strip(),
               "pi_binary_sha256": hashlib.sha256(args.pi_executable.read_bytes()).hexdigest(),
               "host_os": platform.system(), "host_architecture": platform.machine(), "desktop_qualified": False}
     child, master, reader = None, None, None
     output_bytes, errors = [0], []
+    output_head, output_tail = bytearray(), bytearray()
     try:
         if os.name == "nt":
             F.require(args.pty_bridge is not None, "native_conpty_bridge_required")
@@ -53,12 +56,18 @@ def execute(args):
         def drain():
             while True:
                 try:
-                    block = child.stdout.read(4096) if os.name == "nt" else os.read(master, 4096)
+                    # read() can wait for a full buffer on a live Windows pipe;
+                    # read1() retains actual partial startup output immediately.
+                    block = child.stdout.read1(4096) if os.name == "nt" else os.read(master, 4096)
                 except OSError:
                     break  # POSIX PTY returns EIO when its slave closes.
                 if not block:
                     break
                 output_bytes[0] += len(block)
+                output_head.extend(block[:max(0, 8192 - len(output_head))])
+                output_tail.extend(block)
+                if len(output_tail) > 8192:
+                    del output_tail[:-8192]
                 if output_bytes[0] > 4 * 1024 * 1024:
                     errors.append("native_tui_output_limit")
                     break
@@ -108,6 +117,27 @@ def execute(args):
         if reader:
             reader.join(timeout=2)
         provider.close()
+        # These are partial observations, never a substitute for the successful
+        # native-mode/settled/quit assertions above. The TEST transcript is bounded.
+        report["startup_diagnostics"] = {
+            "provider_requests": len(provider.requests), "console_bytes": output_bytes[0],
+            "console_head": output_head.decode("utf-8", errors="replace"),
+            "console_tail": output_tail.decode("utf-8", errors="replace"),
+            "conpty_stages_in_console_stream": os.name == "nt",
+            "child_returncode": child.poll() if child else None,
+            "owned_child_collected": child is not None and child.poll() is not None,
+            "reader_collected": reader is not None and not reader.is_alive(),
+            "reader_errors": errors,
+        }
+        try:
+            observed = F.witness(root) if (root / "witness.jsonl").exists() else []
+            report["startup_diagnostics"].update(
+                observed_counts=dict(Counter(row["type"] for row in observed)),
+                observed_modes=sorted({row["mode"] for row in observed if "mode" in row}),
+                observed_outcomes=[row.get("outcome") for row in observed if row["type"] == "agent_before_settle"],
+            )
+        except Exception as error:
+            report["startup_diagnostics"]["witness_read_failure"] = str(error)
         args.report.parent.mkdir(parents=True, exist_ok=True)
         args.report.write_text(json.dumps(report, indent=2) + "\n")
         print(json.dumps({"status": report["status"], "failure": report.get("failure"), "desktop_qualified": False}))
