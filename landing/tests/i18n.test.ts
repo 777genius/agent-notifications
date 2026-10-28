@@ -88,6 +88,7 @@ test("every locale names Cursor, Qoder and Pi and explains their common installe
     assert.equal(messages.get("install.products.qoder"), "Qoder", locale.code);
     for (const product of ["Cursor CLI", "Qoder", "Pi"])
       assert.ok(messages.get("install.availability")!.includes(product), `${locale.code}:${product}`);
+    assert.match(messages.get("install.availability")!, /v1\.49\.11/, locale.code);
     assert.match(messages.get("install.cursor.scope")!, /Linux amd64/, locale.code);
     assert.ok(messages.has("install.cursor.restart"), locale.code);
     for (const product of ["Claude", "Codex CLI", "Cursor CLI", "Qoder", "OpenCode", "Gemini", "Pi"])

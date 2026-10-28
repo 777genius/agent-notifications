@@ -209,7 +209,7 @@
     "scrollDown": "Scroll options down"
   },
   "install": {
-    "availability": "Cursor CLI, Qoder and Pi use the common installer with separate notification channel choices.", "cursor": {"guide": "Cursor CLI installation", "scope": "Cursor CLI: informational Stop alerts and optional webhooks on Linux amd64, macOS arm64 and Windows amd64. No Cursor IDE, sound or click-to-focus support. The installer validates the selected CLI and user profile.", "restart": "Restart Cursor CLI to load the informational Stop observer."},
+    "availability": "The common Cursor/Qoder installer is available in platform release v1.49.11. Cursor CLI, Qoder and Pi use the common installer with separate notification channel choices.", "cursor": {"guide": "Cursor CLI installation", "scope": "Cursor CLI: informational Stop alerts and optional webhooks on Linux amd64, macOS arm64 and Windows amd64. No Cursor IDE, sound or click-to-focus support. The installer validates the selected CLI and user profile.", "restart": "Restart Cursor CLI to load the informational Stop observer."},
     "qoder": {"guide": "Qoder setup and hooks", "scope": "Qoder: completion, question, permission, plan and teammate alerts with optional webhooks. Choose Qoder alongside other agents in the common installer; a notification click cannot open the exact existing chat.", "restart": "Restart Qoder to activate the hooks."},
     "title": "Set up notifications",
     "intro": "Follow the steps below to add notifications to {agent}.",
