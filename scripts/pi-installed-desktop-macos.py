@@ -50,6 +50,55 @@ def wait_for(predicate, reason, seconds=12):
     raise RuntimeError(reason)
 
 
+def wait_for_consent(request, observe, seconds=15):
+    """Observe the exact candidate dialog or the actual request's early exit."""
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        dialogs = observe()
+        if dialogs or request.poll() is not None:
+            return dialogs
+        time.sleep(0.05)
+    raise RuntimeError("actual_candidate_notification_consent_dialog_unavailable")
+
+
+def permission_receipt(stdout, stderr, exit_code):
+    """Retain bounded setup diagnostics; exit zero alone never proves a grant.
+
+    These are the installed product's fixed setup-notifications JSON envelope
+    and diagnostics, not Pi/provider output or notification contents.
+    """
+    bounded = len(stdout) + len(stderr) <= 65536
+    receipt = {"exit_code": exit_code, "stdout_bytes": len(stdout), "stderr_bytes": len(stderr),
+               "output_bounded": bounded, "stdout": stdout[:32768].decode("utf-8", errors="replace"),
+               "stderr": stderr[:32768].decode("utf-8", errors="replace")}
+    if bounded:
+        try:
+            value = json.loads(stdout)
+        except (ValueError, UnicodeError):
+            value = None
+        if isinstance(value, dict):
+            permission = value.get("permission")
+            if permission in ("allowed", "denied", "undetermined", "unavailable"):
+                receipt["permission"] = permission
+                receipt["matching_reason"] = value.get("reason") == "permission_" + permission
+    return receipt
+
+
+def observed_permission(receipt):
+    P.require(receipt["exit_code"] == 0 and receipt["stderr_bytes"] == 0 and receipt["output_bounded"]
+              and receipt.get("matching_reason") is True
+              and receipt.get("permission") in ("allowed", "denied", "undetermined"),
+              "normal_notification_consent_request_failed")
+    return receipt["permission"]
+
+
+def verify_permission_grant(request_receipt, fresh_receipt):
+    requested, fresh = observed_permission(request_receipt), observed_permission(fresh_receipt)
+    P.require(requested == "allowed" and fresh == "allowed",
+              "candidate_signed_helper_notification_permission_" + (requested if requested != "allowed" else fresh))
+    return fresh
+
+
 def observe_unchanged_focus(terminal, stop_capture, seconds=15):
     def observed():
         current = terminal.front()
@@ -222,6 +271,7 @@ def run(args):
     env = F.prepare(root, initial_provider, "success")
     env["AGENT_NOTIFICATIONS_CONFIG"] = str(root / "global/config.json")
     profile, terminals, helpers, app = root / "agent", [], [], None
+    permission_request = None
     report = {"schema_version": 1, "scope": "actual_installed_pi_macos_desktop", "status": "failed",
               "test_root": str(root), "source_sha": command(["git", "-C", REPO, "rev-parse", "HEAD"]).strip(),
               "working_tree_dirty": bool(command(["git", "-C", REPO, "status", "--porcelain"])),
@@ -405,22 +455,27 @@ def run(args):
         report["notification_consent"] = {"initial_permission": permission.get("permission"), "requested": False}
         if permission.get("permission") == "undetermined":
             started = time.monotonic()
-            request = subprocess.Popen([str(args.candidate), "setup-notifications", "request-permission",
+            permission_request = subprocess.Popen([str(args.candidate), "setup-notifications", "request-permission",
                                         "--control-root", str(root / "control"), "--expected-generation", str(ledger["Generation"]), "--json"],
                                        cwd=root / "project", env=env, stdin=subprocess.DEVNULL,
                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
-            helpers.append(request)
+            helpers.append(permission_request)
             report["notification_consent"]["requested"] = True
-            dialogs = wait_for(lambda: observer("notification-consent")["dialogs"],
-                               "actual_candidate_notification_consent_dialog_unavailable", seconds=15)
-            command(["/usr/sbin/screencapture", "-x", args.report.parent / "actual-notification-consent.png"])
-            click = observer("allow-notification-consent")
-            out, err = request.communicate(timeout=10)
-            P.require(request.returncode == 0 and not err and len(out) < 65536, "normal_notification_consent_request_failed")
-            permission = json.loads(out)
-            report["notification_consent"].update(dialogs=dialogs, physical_allow_click=click["physical_allow_click"],
-                                                   screenshot_sha256=P.sha(args.report.parent / "actual-notification-consent.png"),
-                                                   elapsed_seconds=round(time.monotonic() - started, 3), request_collected=True)
+            dialogs = wait_for_consent(permission_request, lambda: observer("notification-consent")["dialogs"])
+            report["notification_consent"].update(dialogs=dialogs, completed_without_dialog=not dialogs)
+            if dialogs:
+                command(["/usr/sbin/screencapture", "-x", args.report.parent / "actual-notification-consent.png"])
+                click = observer("allow-notification-consent")
+                report["notification_consent"].update(physical_allow_click=click["physical_allow_click"],
+                    screenshot_sha256=P.sha(args.report.parent / "actual-notification-consent.png"))
+            out, err = permission_request.communicate(timeout=10)
+            receipt = permission_receipt(out, err, permission_request.returncode)
+            report["notification_consent"].update(request_result=receipt,
+                elapsed_seconds=round(time.monotonic() - started, 3), request_collected=True)
+            fresh_out = D.command(args.candidate, ["setup-notifications", "permission-status", "--control-root", root / "control", "--json"], root, env)
+            fresh_receipt = permission_receipt(fresh_out, b"", 0)
+            report["notification_consent"]["fresh_permission_result"] = fresh_receipt
+            permission = {"permission": verify_permission_grant(receipt, fresh_receipt)}
         report["candidate_notification_permission"] = permission.get("permission")
         P.require(permission.get("permission") == "allowed", "candidate_signed_helper_notification_permission_unavailable")
         policy = json.loads((root / "control/agent-notifications.json").read_text())
@@ -441,6 +496,12 @@ def run(args):
         report.update(status="passed_native_product_observations", native_product_observations_passed=True)
     except Exception as error:
         report["failure"] = str(error)
+        if permission_request is not None:
+            report["notification_consent"]["request_running_at_failure"] = permission_request.poll() is None
+            try:
+                report["notification_consent"]["installed_helper_processes_at_failure"] = observer("helper-processes", str(app))
+            except Exception as observation_error:
+                report["notification_consent"]["helper_process_observation_failed"] = str(observation_error)
         try:
             screenshot = args.report.parent / "native-failure.png"
             command(["/usr/sbin/screencapture", "-x", screenshot])
@@ -462,6 +523,10 @@ def run(args):
                 except subprocess.TimeoutExpired:
                     os.killpg(child.pid, signal.SIGKILL)
                     child.communicate(timeout=3)
+            if child is permission_request:
+                out, err = child.communicate(timeout=3)
+                report["notification_consent"]["request_result"] = permission_receipt(out, err, child.returncode)
+                report["notification_consent"]["request_collected"] = child.poll() is not None
         if app is not None:
             try:
                 wait_for(lambda: not observer("helper-processes", str(app))["installed_helper_pids"],
