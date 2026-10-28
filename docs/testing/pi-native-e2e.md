@@ -72,3 +72,25 @@ launch Pi without `-e`. Explicit `-e` is reserved for the retained-copy negative
 loader test. Keep the old Pi process alive during update/removal to verify that
 captured old revisions are denied; use a new or reloaded process to verify the
 new installed projection.
+
+## Public UAP Engine and real Pi loader
+
+`scripts/pi-uap-loader-e2e.py` exercises the UAP repository's integration-test
+driver, whose implementation calls the public Engine `Prepare`/`Apply` API. It
+does not implement installation. The driver source is
+`install/integrationctl/agentplugins/clients/pi/testdata/driver/main.go` in UAP.
+
+```bash
+python -B scripts/pi-uap-loader-e2e.py \
+  --driver /absolute/TEST-tools/pi-uap-driver \
+  --pi-executable /absolute/verified-pi/pi \
+  --report /absolute/TEST-evidence/pi-uap-loader.json
+```
+
+The fixture asserts the actual visible artifact ID and runs that Engine-generated
+bootstrap with real Pi. It checks exact-once automatic loading, retained visible
+and explicit hidden negative copies, physical-path mismatch, idempotent install,
+replacement, missing-owned repair and removal while a foreign extension remains
+usable. Its synthetic package is independent of Notifications. The receipt marks
+product notification qualification false; production setup/runtime tests remain
+separate requirements.
