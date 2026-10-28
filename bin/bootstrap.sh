@@ -4048,7 +4048,19 @@ configure_agent_policy() {
             return 0 ;;
     esac
     local -a configure_cmd=(setup-notifications configure --provider "$PRODUCT")
-    configure_cmd+=(${CONFIGURE_ARGS[@]+"${CONFIGURE_ARGS[@]}"})
+    # Cursor authorities share the parsed request, but not this legacy policy
+    # command. Keep other normalized key/value pairs intact, including values
+    # that happen to look like Cursor option names.
+    local i=0
+    while [ "$i" -lt "${#CONFIGURE_ARGS[@]}" ]; do
+        case "${CONFIGURE_ARGS[$i]}" in
+            --scope-root|--client-executable) i=$((i + 2)); continue ;;
+            --navigation|--app|--team-id|--allow-unknown-caller|--allow-caller-asserted|--codex-home)
+                configure_cmd+=("${CONFIGURE_ARGS[$i]}" "${CONFIGURE_ARGS[$((i + 1))]}")
+                i=$((i + 2)); continue ;;
+        esac
+        configure_cmd+=("${CONFIGURE_ARGS[$i]}"); i=$((i + 1))
+    done
     if [ "${1:-}" = portable ]; then
         configure_cmd+=(--policy-only --preserve-enabled)
     fi

@@ -258,7 +258,12 @@ cat > "$SANDBOX/configure-parser" <<'EOF'
 preserve=0
 policy=0
 enabled=0
+value=false
+[ -z "${CONFIGURE_CAPTURE:-}" ] || printf '%s\0' "$@" > "$CONFIGURE_CAPTURE"
 for arg in "$@"; do
+    if [ "$value" = true ]; then value=false; continue; fi
+    case "$arg" in --scope-root|--client-executable) exit 41 ;; esac
+    case "$arg" in --provider|--navigation|--app|--team-id|--allow-unknown-caller|--allow-caller-asserted|--codex-home) value=true ;; esac
     [ "$arg" != --preserve-policy ] || preserve=$((preserve + 1))
     [ "$arg" != --policy-only ] || policy=$((policy + 1))
     [ "$arg" != --preserve-enabled ] || enabled=$((enabled + 1))
@@ -274,6 +279,22 @@ chmod +x "$SANDBOX/configure-parser"
     export EXPECTED_PRESERVE=0
     CONFIGURE_ARGS=(--navigation none --allow-unknown-caller true --allow-caller-asserted false)
     configure_agent_policy portable
+    CONFIGURE_ARGS=(--scope-root "$SANDBOX/cursor profile" --navigation none --client-executable "$SANDBOX/cursor agent" --allow-unknown-caller true --allow-caller-asserted false)
+    original_args="${CONFIGURE_ARGS[*]}"
+    configure_agent_policy portable
+    [ "${#CONFIGURE_ARGS[@]}" -eq 10 ] && [ "${CONFIGURE_ARGS[*]}" = "$original_args" ]
+    export EXPECTED_PRESERVE=1 CONFIGURE_CAPTURE="$SANDBOX/configure-argv"
+    CONFIGURE_ARGS=(--scope-root "$SANDBOX/cursor profile" --app "$SANDBOX/Terminal App.app" --team-id --client-executable --allow-unknown-caller true --allow-caller-asserted false --client-executable "$SANDBOX/cursor agent" --preserve-policy --json --request-permission)
+    original_args="${CONFIGURE_ARGS[*]}"
+    configure_agent_policy portable
+    [ "${CONFIGURE_ARGS[*]}" = "$original_args" ]
+    printf '%s\0' setup-notifications configure --provider claude --app "$SANDBOX/Terminal App.app" --team-id --client-executable --allow-unknown-caller true --allow-caller-asserted false --preserve-policy --json --request-permission --policy-only --preserve-enabled > "$SANDBOX/configure-expected"
+    python3 -I - "$CONFIGURE_CAPTURE" "$SANDBOX/configure-expected" <<'PY_CONFIGURE_ARGV'
+import pathlib, sys
+actual=pathlib.Path(sys.argv[1]).read_bytes().split(b'\0')[:-1]
+expected=pathlib.Path(sys.argv[2]).read_bytes().split(b'\0')[:-1]
+assert actual==expected,actual
+PY_CONFIGURE_ARGV
 )
 for tag in v1.42.0 v1.43.2 v2.0.0; do
     BOOTSTRAP_RELEASE_TAG="$tag"

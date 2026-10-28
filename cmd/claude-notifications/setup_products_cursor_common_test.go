@@ -60,6 +60,70 @@ func TestCursorCommonSelectionDefaultsAndChannelPairChoices(t *testing.T) {
 	}
 }
 
+func TestImplicitCursorProfileFailureKeepsOtherProductsSelectable(t *testing.T) {
+	e, a := setupProductsDiscoveryFixture(t)
+	profile := filepath.Join(e.Home, ".cursor")
+	if err := os.WriteFile(profile, []byte("TEST not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	facts, scopes, err := discoverProducts(context.Background(), a, e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scopes["scope-root"] != "" || scopes["client-executable"] != "" {
+		t.Fatal("invalid ambient Cursor profile acquired authority", scopes)
+	}
+	for _, fact := range facts {
+		if fact.ID == "cursor" && (fact.Selectable || fact.Reason == "") {
+			t.Fatal("invalid Cursor profile offered without a reason", fact)
+		}
+		if fact.ID == "claude" && !fact.Selectable {
+			t.Fatal("ambient Cursor profile blocked Claude", fact)
+		}
+	}
+	a.Products = []string{"cursor"}
+	if _, _, err := discoverProducts(context.Background(), a, e); err == nil {
+		t.Fatal("explicit Cursor selection ignored its invalid profile")
+	}
+	a.Products = nil
+	a.Scopes = map[string]string{"scope-root": profile}
+	if _, _, err := discoverProducts(context.Background(), a, e); err == nil {
+		t.Fatal("explicit profile authority was silently discarded")
+	}
+}
+
+func TestCursorExecutableAuthorityFollowsSelectedProfile(t *testing.T) {
+	for _, product := range []string{"claude", "qoder", "cursor"} {
+		t.Run(product, func(t *testing.T) {
+			e, _ := setupProductsDiscoveryFixture(t)
+			a, err := parseSetupProducts([]string{"confirm", "--products", product})
+			if err != nil {
+				t.Fatal(err)
+			}
+			cli := filepath.Join(e.PATH, fixtureProductName("cursor-agent"))
+			if err := os.WriteFile(cli, []byte("TEST inert Cursor agent"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			facts, scopes, err := discoverProducts(context.Background(), a, e)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, fact := range facts {
+				if fact.ID == "cursor" && (!fact.Present || fact.Executable == "") {
+					t.Fatal("unselected CLI presence was lost", fact)
+				}
+			}
+			if product == "cursor" {
+				if scopes["scope-root"] == "" || scopes["client-executable"] == "" {
+					t.Fatal("selected Cursor lost profile or CLI authority", scopes)
+				}
+			} else if scopes["scope-root"] != "" || scopes["client-executable"] != "" {
+				t.Fatal("unselected Cursor leaked into confirmation authority", scopes)
+			}
+		})
+	}
+}
+
 func TestPreservedCursorUnitProjectsSkippedInsteadOfCompleted(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "result.json")
 	body, err := json.Marshal(setupwizard.Result{Action: "install", Outcome: "unchanged", Reason: "existing_opt_out", Targets: preservedUnitTargets([]string{"cursor"})})

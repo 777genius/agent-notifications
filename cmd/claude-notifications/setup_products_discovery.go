@@ -129,6 +129,7 @@ func productScopes(a setupProductsArgs, e productEnvironment) (map[string]string
 		return nil, err
 	}
 	profile := a.Scopes["scope-root"]
+	implicitCursor := profile == "" && a.Operation == "select" && !containsProduct(a.Products, "cursor") && !containsProduct(a.Products, "copilot-vscode")
 	if profile == "" && (containsProduct(a.Products, "cursor") || a.Operation == "select") {
 		profile = filepath.Join(e.Home, ".cursor")
 	}
@@ -138,7 +139,9 @@ func productScopes(a setupProductsArgs, e productEnvironment) (map[string]string
 		} else {
 			scopes["scope-root"], err = cursor.New().ResolveProfileRoot(profile)
 		}
-		if err != nil {
+		if err != nil && implicitCursor {
+			delete(scopes, "scope-root")
+		} else if err != nil {
 			return nil, err
 		}
 	}
@@ -302,7 +305,9 @@ func discoverProductsWithDetector(ctx context.Context, a setupProductsArgs, e pr
 			}
 			if err == nil {
 				f.Present, f.Executable = true, p
-				scopes["client-executable"] = p
+				if scopes["scope-root"] != "" {
+					scopes["client-executable"] = p
+				}
 			} else if f.Reason != cursorPlatformReason {
 				f.Reason = "Cursor agent not found in selected PATH"
 			}
