@@ -80,20 +80,22 @@ class Provider:
         require(not self.thread.is_alive(), "provider_thread_not_collected")
 
 
-def prepare(root, provider, scenario):
+def prepare(root, provider, scenario, agent_dir=None):
     root = Path(root)
     for name in ("home", "agent/extensions", "project", "tmp"):
         (root / name).mkdir(parents=True, exist_ok=True, mode=0o700)
-    (root / "agent/models.json").write_text(json.dumps({"providers": {"TEST-local": {
+    agent = Path(agent_dir) if agent_dir is not None else root / "agent"
+    (agent / "extensions").mkdir(parents=True, exist_ok=True, mode=0o700)
+    (agent / "models.json").write_text(json.dumps({"providers": {"TEST-local": {
         "api": "openai-completions", "baseUrl": provider.base_url, "apiKey": "TEST-only",
         "models": [{"id": "TEST-local", "name": "TEST local", "reasoning": False, "input": ["text"],
                     "contextWindow": 32000, "maxTokens": 1024,
                     "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}}]}}}))
-    (root / "agent/settings.json").write_text(json.dumps({"retry": {"enabled": scenario == "retry", "maxRetries": 1,
+    (agent / "settings.json").write_text(json.dumps({"retry": {"enabled": scenario == "retry", "maxRetries": 1,
         "baseDelayMs": 1, "provider": {"maxRetries": 0}}, "compaction": {"enabled": False}}))
     # This is a foreign TEST witness, not the candidate product extension. The
     # product fixture must install its observer exclusively through common setup.
-    (root / "agent/extensions/TEST-witness.ts").write_text('''
+    (agent / "extensions/TEST-witness.ts").write_text('''
 import { appendFileSync } from "node:fs";
 export default function(pi) {
   const record = value => appendFileSync(process.env.TEST_PI_WITNESS, JSON.stringify(value) + "\\n");
@@ -103,6 +105,7 @@ export default function(pi) {
     if (!queued) { queued = true; pi.sendUserMessage("TEST followup", {deliverAs: "followUp"}); }
   });
   pi.registerCommand("TEST-dialog", {description: "TEST UI witness", handler: async (_args, ctx) => {
+    if (process.env.TEST_PI_DEFER_DIALOG === "1") await new Promise(resolve => setTimeout(resolve, 1000));
     await ctx.ui.input("TEST question");
   }});
   for (const name of ["session_start", "agent_start", "agent_end", "agent_before_settle", "agent_settled", "ui_prompt_start", "ui_prompt_end", "session_shutdown"]) {
@@ -112,7 +115,7 @@ export default function(pi) {
 }
 ''')
     env = {key: os.environ[key] for key in ("PATH", "SystemRoot", "SYSTEMROOT", "WINDIR", "ComSpec", "PATHEXT") if key in os.environ}
-    env.update(HOME=str(root / "home"), USERPROFILE=str(root / "home"), PI_CODING_AGENT_DIR=str(root / "agent"),
+    env.update(HOME=str(root / "home"), USERPROFILE=str(root / "home"), PI_CODING_AGENT_DIR=str(agent),
                XDG_CONFIG_HOME=str(root / "home/.config"), XDG_DATA_HOME=str(root / "home/.local/share"),
                XDG_CACHE_HOME=str(root / "home/.cache"), TMPDIR=str(root / "tmp"), TMP=str(root / "tmp"), TEMP=str(root / "tmp"),
                TEST_PI_WITNESS=str(root / "witness.jsonl"), TEST_PI_CASE=scenario, PI_OFFLINE="1")

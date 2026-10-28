@@ -131,3 +131,93 @@ with the Pi process tree owned by a kill-on-close job. The receipt requires actu
 `mode:tui`, one provider request, one settlement and collected shutdown. Startup
 alone does not pass. A PTY receipt still grants no visible desktop, sound or
 click-to-focus result.
+
+## Actual installed Notifications fixtures
+
+`scripts/pi-installed-process-e2e.py` uses the normal
+`internal-install-runtime --consumer pi-runtime-preparation` writer, then
+`setup-notifications wizard --action ... --agents pi`. It never pre-enables the
+unrelated portable MCP policy. Pi's explicit channel choices and effective
+configuration must suffice while that global policy remains disabled. The
+fixture checks that the neutral preparation consumer is retired, that Pi is the
+only remaining consumer, and that installed icon/sound hashes have real managed
+receipts. It never copies an observer, locator, policy or sound into place.
+
+Supply a complete normal release binary stage, two portable packages made by
+`cmd/build-portable-package` for the update test, the canonical asset source and
+the verified standalone Pi:
+
+```bash
+python -B scripts/pi-installed-process-e2e.py \
+  --candidate /absolute/TEST-inputs/bin/claude-notifications-linux-amd64 \
+  --runtime-stage /absolute/TEST-inputs/bin \
+  --package /absolute/TEST-inputs/package-A.zip \
+  --updated-package /absolute/TEST-inputs/package-B.zip \
+  --assets-root /absolute/checked-out-source \
+  --pi-executable /absolute/verified-pi/pi \
+  --report /absolute/TEST-evidence/installed-process.json
+```
+
+There is deliberately no `--pi-agent-dir`: actual `PI_CODING_AGENT_DIR` discovery
+must select the TEST profile. Real Pi then auto-loads the installed observer.
+Cases include JSON/print success, retry/followup final deduplication, error,
+abort, a question kept pending until its webhook arrives, normal one-shot quit
+with an already admitted held HTTP response, and a hung endpoint within the
+original deadline. Configuration and consent off are separate negatives. A live
+Pi A is retained through a real package update; its terminal event must finish
+and its process/children be collected without a webhook. A fresh observer must
+work after update and missing-directory repair. A current live Pi B is retained
+through removal and must also finish without a webhook. No test calls `pi-event`
+or treats a mocked callback as native evidence.
+
+`scripts/pi-installed-desktop-linux.py` shares the same common setup and receipt
+readers. It reuses the owned X11/PulseAudio session, runs the actual Pi TUI in
+Xterm and holds the loopback provider until a separate window is foreground.
+Completion and a still-pending blocking UI question each require the real dunst
+banner, a retained screenshot, independently captured output PCM and a physical
+mouse click that returns foreground and keyboard focus to the originating Xterm.
+Native history content is read after the controlled dismissal of that same
+banner. Sound-off requires zero PCM energy; click-off and a closed originating
+window must leave the distractor foreground; desktop-off must show no banner or
+audio. Every case inherits a foreign TEST `CLAUDE_PLUGIN_ROOT`, while helpers and
+cues must still come from receipt-owned runtime assets. The private product
+daemon and all terminals/providers/captures are collected.
+
+Use the same arguments as above without `--updated-package` for the Linux
+desktop script. Its receipt records `native_product_observations_passed`, exact
+input/fixture hashes and whether the source checkout was dirty. Its
+`desktop_qualified` flag stays false: final acceptance still needs an exact,
+clean, pinned candidate and the macOS/Windows Client native receipts. A working
+local GOWORK investigation does not qualify the final linked module graph.
+
+### macOS installed-product handoff
+
+Reuse `tests/integration/pi_installed_fixture.py` for the actual loopback webhook
+observer, supported schema 2 configuration (`preset: "custom"`), public setup
+argv, binding/runtime readers and asset-receipt checks. Reuse
+`tests/integration/pi_native_fixture.py` for the controlled model provider and
+foreign native witness. `Provider(..., hold_reply=True)` allows backgrounding
+the real Terminal window before final completion;
+`TEST_PI_DEFER_DIALOG=1` defers the foreign test command's blocking input by one
+second, allowing the question to open while Pi is backgrounded.
+
+The existing native primitive is
+`tests/integration/pi_native_preflight_darwin.swift`: its ScreenCaptureKit
+capture, Accessibility/input permission checks, native mouse event injection
+and foreground observation are reusable. The product observer must record
+external product audio rather than play the preflight's synthetic `NSSound` cue.
+Run Pi in a real disposable Terminal window and identify its native TTY/window;
+a detached PTY alone cannot establish Terminal click-to-focus. Observe the real
+Notification Center banner and physically click it while recording the returned
+foreground window/TTY and pending question. Do not replace the notification
+helper or fabricate its callback.
+
+The supplied native binary stage must include the authenticated signed
+`ClaudeNotifier.app` plus its external `.managed-runtime.json` attestation,
+using the existing signing/acquisition and managed runtime writer. The writer
+verifies/stages it and the installed receipt supplies its durable native path;
+do not redirect it through ambient `CLAUDE_PLUGIN_ROOT`. The candidate main and
+utilities, canonical source package, sound hashes, Pi acquisition and clean
+merged module identity follow the input inventory above. Permission observed in
+synthetic preflight is separate from the candidate helper's own notification
+permission and visible delivery.

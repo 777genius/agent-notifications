@@ -146,7 +146,7 @@ def wait_for(predicate, seconds=8):
     raise Unqualified("fixture_readiness_timeout")
 
 
-def linux_desktop(lab):
+def linux_desktop(lab, terminal_lifetime=90):
     """Owned X11/PulseAudio session reused by the actual installed-Pi fixture."""
     names = ("dbus-daemon", "Xvfb", "openbox", "dunst", "xterm", "xdotool", "pulseaudio", "pactl", "parec", "aplay", "notify-send", "ffmpeg")
     paths = {name: shutil.which(name) for name in names}
@@ -185,7 +185,7 @@ def linux_desktop(lab):
     window_ids = []
     for role in ("origin", "distractor"):
         title = "TEST-pi-" + role + "-" + nonce
-        lab.start([paths["xterm"], "-T", title, "-e", sys.executable, "-c", "import time; time.sleep(90)"])
+        lab.start([paths["xterm"], "-T", title, "-e", sys.executable, "-c", "import time; time.sleep(" + str(terminal_lifetime) + ")"])
         def search():
             out, status = lab.run([paths["xdotool"], "search", "--onlyvisible", "--name", "^" + title + "$"], check=False)
             return out.strip().splitlines()[0] if status == 0 and out.strip() else None
