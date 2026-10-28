@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	"github.com/777genius/agent-notifications/internal/agentnotify/setupwizard"
-	"github.com/777genius/agent-notifications/internal/installruntime"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients/cursor"
 )
 
 func TestCursorCommonSelectionDefaultsAndChannelPairChoices(t *testing.T) {
@@ -46,7 +46,7 @@ func TestCursorCommonSelectionDefaultsAndChannelPairChoices(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	profile, err := installruntime.CanonicalPath(filepath.Join(e.Home, ".cursor"))
+	profile, err := cursor.New().ResolveProfileRoot(filepath.Join(e.Home, ".cursor"))
 	if err != nil {
 		t.Fatal(err)
 	}

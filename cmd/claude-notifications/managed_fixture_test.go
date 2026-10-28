@@ -118,7 +118,7 @@ func managedFixtureOverlay(ctx context.Context, compiler string) (string, error)
 			return "", err
 		}
 		for _, file := range group.files {
-			if file != "managed_portable_fixture_test.go" {
+			if file != "managed_portable_fixture_test.go" && file != "managed_cli_fixture_test.go" {
 				replacements[filepath.Join(managedFixture.cwd, file)] = stub
 			}
 		}
