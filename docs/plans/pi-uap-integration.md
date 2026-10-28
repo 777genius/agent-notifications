@@ -1,6 +1,6 @@
 # Pi notifications through Universal Agent Plugins
 
-Status: revision 2 after critic round 1; round 2 precedes implementation. Owner
+Status: revision 3 after both critic rounds and the targeted round 2 correction. Owner
 scope: full Pi support on macOS, Linux and Windows, including
 configured sound and a notification click returning to the originating terminal.
 All implementation and review workers use GPT-6.1 Sol with xhigh reasoning.
@@ -102,6 +102,9 @@ misbound/symlink cases with source top-level effects only in the admitted active
 tree. This is research evidence; candidate tests must reproduce it.
 UAP itself never executes extension code.
 Unknown namespaces remain opaque and unsupported in every existing client.
+Before writes, preflight also refuses foreign `extensions/index.ts`, `index.js`
+or a watched-root `package.json` Pi entrypoint manifest that masks child discovery;
+preserve the foreign bytes and report the conflict instead of installing inertly.
 
 The current planner unconditionally emits `extension_semantics_not_established`.
 Add only the read-only adapter capability needed to validate a specific namespace
@@ -184,10 +187,10 @@ before a final settlement do not create duplicate activities. Completion require
 non-aborted settlement and a latest completed outcome; abort suppresses completion,
 error maps to fixed `api_error`, and missing/inconsistent outcome fails closed.
 `ui_prompt_start` maps to question/waiting-for-input, not permission approval.
-End events and shutdown cancel pending producer work using synthetic identities;
+End events cancel pending producer work using synthetic identities;
 nested UI prompts use a bounded synthetic stack. Idle prompts are independent of
 agent activity. Event handlers synchronously snapshot context/state and return
-`undefined`; no handler returns or awaits the child promise. Pi awaits settlement
+`undefined`; activity/prompt handlers never await a child. Pi awaits settlement
 handlers, so an async transport handler would stall its final idle transition.
 
 Invoke the real helper directly with asynchronous `execFile`, `shell:false`, no
@@ -199,7 +202,13 @@ result. Frame/stdout/stderr limits are 64 KiB. Go has a 15-second context budget
 through all capture, policy and delivery work. A separate Pi budget leaves the
 existing four-second shared observation contract unchanged. Producer lifetime is
 bounded to 16 seconds: TERM by 15.5 seconds, 250 ms grace, then hard kill and one
-join by the deadline. Prompt end/shutdown use the same cancellation/reaping path.
+join by the deadline. Prompt end uses the same cancellation/reaping path.
+Shutdown with `reason:quit` in JSON/print/RPC (including RPC stdin close) is the
+exception: the awaited handler drains only already admitted terminal completion/error
+webhook children to their original deadlines, with no new work or budget reset;
+TERM/KILL/join retain the same bound. Questions, TUI shutdown and every non-quit
+reason (`reload`, `new`, `resume`, `fork`) cancel promptly. One-shot webhook drain
+must not block TUI settlement or shutdown.
 Context-aware command runners must terminate/reap their descendants on all OSs.
 Never retry or choose another desktop backend after a possible handoff, and never
 claim cancellation retracts a notification or audio already delivered.
@@ -299,7 +308,7 @@ Notifications: strict frame tests cover duplicates/trailing JSON, wrong event
 shape, invalid modes/outcomes/IDs, private-data exclusion, per-channel dedup,
 revoked/stale bindings and effective Pi config. Observer tests cover repeated
 starts, successful/error/abort/retry/queued continuation, nested prompts, prompt
-end/shutdown cancellation, child error/hang and terminal environment ancestry.
+end/shutdown cancellation/drain, child error/hang and terminal environment ancestry.
 Setup/installer tests cover frozen consent, no write before confirmation,
 mixed-agent isolation, update/repair/remove and retained runtime compatibility.
 Test `SendDesktopContext` cancellation and legacy-wrapper behavior, preserving
@@ -346,7 +355,10 @@ and CLI-missing removal. Both still-loaded observers and a fresh Pi after remova
 must deliver nothing while provider work and a foreign witness extension still
 succeed. Preserve foreign extensions/settings throughout. Run a real hung-helper
 case: Pi's settlement remains prompt, two-child bound holds, timeout/cancel reaps
-the helper and descendants, and there is no resend. Cross-compilation is not E2E.
+the helper and descendants, and there is no resend. Actual JSON/print normal quit
+and RPC stdin-close tests assert one authorized terminal webhook survives shutdown;
+a hung child drains only to its original deadline. Also prove reload/reset,
+questions and TUI shutdown cancel promptly. Cross-compilation is not E2E.
 
 Native desktop qualification is blocking and separate from process-only lanes:
 
@@ -357,8 +369,9 @@ Native desktop qualification is blocking and separate from process-only lanes:
 | Windows | Connected interactive WTS/input desktop on Windows Client, Shell/Toast Center/UI Automation, default render endpoint and WASAPI loopback; two terminal HWND/PID pairs, real toast click and foreground HWND. Hosted Server 2025 alone cannot qualify this lane. |
 
 Preflight proves observers with known fixtures before product effects. Production
-tests move focus away, observe the actual banner and configured digital audio
-output, click it, and verify the originating terminal. Cover sound-off,
+tests use both completion and a still-pending TUI question: move focus away,
+observe the actual banner/configured digital audio, click it, and verify the
+originating terminal. Idle RPC questions do not substitute for this. Cover sound-off,
 desktop-off, focus-off, wrong-window isolation and available multiplexer behavior.
 Record source/Pi/bundle hashes, OS/session, terminal, process identity, screenshot,
 audio monitor and click/foreground evidence. Audio capture proves output, not
@@ -367,7 +380,7 @@ for the exact candidate SHA/bundle, rejecting missing, skipped, not-run or
 unqualified receipts. Headless/locked/unavailable environments cannot pass. No
 three-OS desktop environment is claimed available before the preflight executes.
 
-## Round 1 findings and resolutions; round 2 gates
+## Critic findings and resolutions
 
 | Finding | Revision 2 decision |
 | --- | --- |
@@ -383,8 +396,10 @@ three-OS desktop environment is claimed available before the preflight executes.
 | R1-E2E5: insufficient native oracle | Provider/event/delivery count table includes retry/followup, error exit zero, abort without boundary and idle RPC UI. |
 | R1-E2E6: hung sender can block settlement | Real native hung-helper case asserts prompt settlement, admission bound and reaped child tree. |
 | R1-E2E7: Windows launcher parity is unproven | Official standalone-only floor; refuse npm shims until separately tested. |
+| R2-E2E1: normal quit cancels one-shot webhooks | Await only bounded normal-quit drain of already admitted terminal webhook children; preserve original deadlines and prompt TUI/reload/question cancellation. Actual Pi drain research passes; candidate JSON/RPC and hung-child cases are required. |
+| R2-E2E2: question UI and watched-root masking need explicit coverage | Qualify actual pending TUI question banner/audio/click; preflight refuses masking foreign root entrypoints/manifests without modifying them. |
 
-Round 2 must approve these bounded contracts and test oracles before code begins.
+Both round 2 critics must verify this targeted correction before code begins.
 Actual desktop/audio runner readiness and candidate qualification remain execution
 gates, not assumptions resolved by this document. Record any material adjustment
 and critic disposition before broadening the implementation scope.
