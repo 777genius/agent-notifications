@@ -211,16 +211,44 @@ final class ProductCapture: NSObject, SCStreamOutput, SCStreamDelegate, @uncheck
                 publish(["checks": checks, "foreground": foreground(), "desktop_qualified": false])
                 guard checks.values.allSatisfy({ $0 }) else { throw ProbeError.unavailable("native_observer_prerequisite_unavailable") }
             case "foreground": publish(foreground())
-            case "helper-processes":
-                guard args.count == 2, args[1].hasPrefix("/"), args[1].hasSuffix(".app") else {
+            case "helper-processes", "activate-permission-helper":
+                guard args.count == (operation == "helper-processes" ? 2 : 4),
+                      args[1].hasPrefix("/"), args[1].hasSuffix(".app") else {
                     throw ProbeError.unavailable("physical_installed_app_required")
                 }
                 let expected = URL(fileURLWithPath: args[1]).resolvingSymlinksInPath().path
-                let pids = NSWorkspace.shared.runningApplications.filter {
+                let executable = URL(fileURLWithPath: expected).appendingPathComponent("Contents/MacOS/terminal-notifier-modern").path
+                let helpers = NSWorkspace.shared.runningApplications.filter {
                     $0.bundleIdentifier == "com.777genius.agent-notifications"
                     && $0.bundleURL?.resolvingSymlinksInPath().path == expected
-                }.map { Int($0.processIdentifier) }
-                publish(["installed_helper_pids": pids])
+                    && $0.executableURL?.resolvingSymlinksInPath().path == executable
+                }
+                func facts(_ app: NSRunningApplication) -> [String: Any] {
+                    return ["pid": Int(app.processIdentifier), "active": app.isActive,
+                            "finished_launching": app.isFinishedLaunching,
+                            "process_start_identity": app.launchDate.map { String($0.timeIntervalSince1970.bitPattern) } ?? "",
+                            "activation_policy": app.activationPolicy.rawValue]
+                }
+                var result: [String: Any] = ["installed_helper_pids": helpers.map { Int($0.processIdentifier) },
+                                            "installed_helpers": helpers.map { facts($0) }]
+                if operation == "activate-permission-helper" {
+                    guard let pid = Int32(args[2]), pid > 0, UInt64(args[3]) != nil else {
+                        throw ProbeError.unavailable("observed_owned_helper_pid_required")
+                    }
+                    let exact = helpers.filter { $0.processIdentifier == pid
+                        && $0.launchDate.map { String($0.timeIntervalSince1970.bitPattern) } == args[3] }
+                    // An early completed request can disappear between the two
+                    // observations. Never activate a replacement PID or relaunch.
+                    if exact.count == 1 {
+                        result["before"] = facts(exact[0])
+                        result["activation_requested"] = exact[0].activate(options: [.activateIgnoringOtherApps])
+                        result["after"] = facts(exact[0])
+                    } else {
+                        result["activation_requested"] = false
+                        result["observed_helper_no_longer_running"] = true
+                    }
+                }
+                publish(result)
             case "notification-consent", "allow-notification-consent":
                 guard args.count == 1 else { throw ProbeError.unavailable("fixed_notification_consent_only") }
                 let dialogs = notificationConsent()

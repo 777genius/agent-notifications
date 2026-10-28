@@ -93,6 +93,7 @@ jobs:
           retention-days: 14
   client:
     name: Actual installed Pi / Windows Client desktop
+    needs: build-process
     runs-on: ${{ inputs.windows_client_runner || vars.CI_PI_WINDOWS_DESKTOP_RUNNER || 'windows-11-vs2026-arm' }}
     timeout-minutes: 30
     env:

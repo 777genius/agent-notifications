@@ -82,6 +82,45 @@ class ConsentObservation(unittest.TestCase):
             with self.subTest(permission=permission), self.assertRaisesRegex(RuntimeError, "permission_" + permission):
                 M.verify_permission_grant(allowed, self.receipt(permission))
 
+    def test_activation_is_once_bound_to_observed_start_and_never_proves_grant(self):
+        child = self.child(b"", delay=20)
+        calls, receipt = [], {}
+        helper = {"pid": 41, "process_start_identity": "987654", "finished_launching": True}
+
+        def observe(*args):
+            calls.append(args)
+            if args[0] == "notification-consent":
+                return {"dialogs": []}
+            if args[0] == "helper-processes":
+                return {"installed_helpers": [helper]}
+            return {"activation_requested": True, "after": {"active": True}}
+
+        observed = M.consent_observer(child, observe, Path("/TEST/owned.app"), receipt)
+        self.assertEqual(observed(), [])
+        helper.update(pid=42, process_start_identity="different")
+        self.assertEqual(observed(), [])
+        self.assertEqual([row for row in calls if row[0] == "activate-permission-helper"],
+                         [("activate-permission-helper", "/TEST/owned.app", "41", "987654")])
+        with self.assertRaises((RuntimeError, KeyError)):
+            M.observed_permission(receipt["helper_activation"])
+
+    def test_exited_request_ambiguous_or_missing_start_never_activates(self):
+        exited = self.child(b"")
+        exited.communicate(timeout=3)
+        pending = self.child(b"", delay=20)
+        states = ((exited, [{"pid": 41, "process_start_identity": "987654", "finished_launching": True}]),
+                  (pending, [{"pid": 41, "finished_launching": True}]),
+                  (pending, [{"pid": 41}, {"pid": 42}]))
+        for child, helpers in states:
+            calls = []
+
+            def observe(*args):
+                calls.append(args)
+                return {"dialogs": []} if args[0] == "notification-consent" else {"installed_helpers": helpers}
+
+            self.assertEqual(M.consent_observer(child, observe, Path("/TEST/owned.app"), {})(), [])
+            self.assertFalse(any(row[0] == "activate-permission-helper" for row in calls))
+
     def test_early_denied_undetermined_and_unavailable_never_prove_grant(self):
         for permission in ("denied", "undetermined", "unavailable"):
             receipt = self.receipt(permission, code=1 if permission == "unavailable" else 0)

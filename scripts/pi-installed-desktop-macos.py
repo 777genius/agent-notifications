@@ -99,6 +99,27 @@ def verify_permission_grant(request_receipt, fresh_receipt):
     return fresh
 
 
+def consent_observer(request, observe, app, receipt):
+    """Activate at most the one existing verified request helper, never relaunch."""
+    attempted = False
+
+    def observed():
+        nonlocal attempted
+        dialogs = observe("notification-consent")["dialogs"]
+        if not dialogs and not attempted and request.poll() is None:
+            state = observe("helper-processes", str(app))
+            receipt["helper_observation"] = state
+            helpers = state.get("installed_helpers", [])
+            if len(helpers) == 1 and helpers[0].get("finished_launching") is True \
+                    and helpers[0].get("process_start_identity") and request.poll() is None:
+                attempted = True
+                receipt["helper_activation"] = observe("activate-permission-helper", str(app), str(helpers[0]["pid"]),
+                                                       helpers[0]["process_start_identity"])
+        return dialogs
+
+    return observed
+
+
 def observe_unchanged_focus(terminal, stop_capture, seconds=15):
     def observed():
         current = terminal.front()
@@ -461,7 +482,8 @@ def run(args):
                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
             helpers.append(permission_request)
             report["notification_consent"]["requested"] = True
-            dialogs = wait_for_consent(permission_request, lambda: observer("notification-consent")["dialogs"])
+            dialogs = wait_for_consent(permission_request,
+                consent_observer(permission_request, observer, app, report["notification_consent"]))
             report["notification_consent"].update(dialogs=dialogs, completed_without_dialog=not dialogs)
             if dialogs:
                 command(["/usr/sbin/screencapture", "-x", args.report.parent / "actual-notification-consent.png"])

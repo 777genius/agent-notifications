@@ -17,9 +17,9 @@
 #include <vector>
 
 using Microsoft::WRL::ComPtr;
-static bool clicked = false;
+static HWND clickedWindow = nullptr;
 static LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam) {
-    if (message == WM_LBUTTONUP) clicked = true;
+    if (message == WM_LBUTTONUP) clickedWindow = window;
     return DefWindowProcW(window, message, wParam, lParam);
 }
 static void pump(DWORD duration) {
@@ -34,6 +34,72 @@ static void pump(DWORD duration) {
     }
 }
 static const char* jsonBool(bool value) { return value ? "true" : "false"; }
+
+static HWND preflightKeyboardRoot() {
+    GUITHREADINFO info{};
+    info.cbSize = sizeof info;
+    const DWORD thread = GetWindowThreadProcessId(GetForegroundWindow(), nullptr);
+    return thread && GetGUIThreadInfo(thread, &info) && info.hwndFocus ? GetAncestor(info.hwndFocus, GA_ROOT) : nullptr;
+}
+static const char* desktopKind(HANDLE object, const wchar_t* expected) {
+    wchar_t name[128]{};
+    DWORD needed = 0;
+    if (!object || !GetUserObjectInformationW(object, UOI_NAME, name, sizeof name, &needed)) return "unavailable";
+    return std::wstring(name) == expected ? "expected" : "other";
+}
+struct OwnedInputAttempt {
+    HWND window = nullptr, clicked = nullptr, foreground = nullptr, keyboard = nullptr;
+    bool raised = false, requested = false, unoccluded = false;
+    UINT sent = 0;
+    DWORD inputError = 0;
+    bool focused() const { return foreground == window && keyboard == window; }
+    bool received() const { return unoccluded && sent == 3 && clicked == window && focused(); }
+};
+static OwnedInputAttempt observeOwnedInput(HWND window) {
+    OwnedInputAttempt result;
+    result.window = window;
+    // Only our disposable TEST window is raised. A programmatic foreground
+    // request may be denied for a background CI process; the real click below
+    // must independently deliver input and activate this exact HWND.
+    ShowWindow(window, SW_SHOWNORMAL);
+    result.raised = SetWindowPos(window, HWND_TOPMOST, 0, 0, 0, 0,
+                                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW) != FALSE;
+    UpdateWindow(window);
+    result.requested = SetForegroundWindow(window) != FALSE;
+    pump(100);
+    RECT client{};
+    POINT point{};
+    const int left = GetSystemMetrics(SM_XVIRTUALSCREEN), top = GetSystemMetrics(SM_YVIRTUALSCREEN);
+    const int width = GetSystemMetrics(SM_CXVIRTUALSCREEN), height = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+    if (GetClientRect(window, &client)) {
+        point = {(client.left + client.right) / 2, (client.top + client.bottom) / 2};
+        result.unoccluded = ClientToScreen(window, &point) && width > 1 && height > 1
+            && point.x >= left && point.x < left + width && point.y >= top && point.y < top + height
+            && GetAncestor(WindowFromPoint(point), GA_ROOT) == window;
+    }
+    clickedWindow = nullptr;
+    if (result.raised && result.unoccluded) {
+        INPUT inputs[3]{};
+        for (auto& item : inputs) item.type = INPUT_MOUSE;
+        inputs[0].mi.dx = static_cast<LONG>((static_cast<int64_t>(point.x) - left) * 65535 / (width - 1));
+        inputs[0].mi.dy = static_cast<LONG>((static_cast<int64_t>(point.y) - top) * 65535 / (height - 1));
+        inputs[0].mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK;
+        inputs[1].mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
+        inputs[2].mi.dwFlags = MOUSEEVENTF_LEFTUP;
+        SetLastError(ERROR_SUCCESS);
+        result.sent = SendInput(3, inputs, sizeof(INPUT));
+        result.inputError = result.sent == 3 ? ERROR_SUCCESS : GetLastError();
+        const auto deadline = GetTickCount64() + 2000;
+        while (GetTickCount64() < deadline) {
+            pump(20);
+            if (clickedWindow == window && GetForegroundWindow() == window && preflightKeyboardRoot() == window) break;
+        }
+    }
+    result.clicked = clickedWindow;
+    result.foreground = GetForegroundWindow();
+    result.keyboard = preflightKeyboardRoot();
+    return result;
+}
 
 // Read-only inventory, collected by the same process/session as capture. No
 // service, endpoint, default role, driver or system setting is changed.
@@ -111,6 +177,9 @@ int wmain(int argc, wchar_t** argv) {
     DWORD nameLength = 0;
     const bool inputDesktop = input && GetUserObjectInformationW(input, UOI_NAME, desktopName, sizeof desktopName, &nameLength)
         && std::wstring(desktopName) == L"Default";
+    const std::string inputKind = desktopKind(input, L"Default");
+    const std::string threadKind = desktopKind(GetThreadDesktop(GetCurrentThreadId()), L"Default");
+    const std::string stationKind = desktopKind(GetProcessWindowStation(), L"WinSta0");
     if (input) CloseDesktop(input);
     OSVERSIONINFOEXW os{};
     os.dwOSVersionInfoSize = sizeof os;
@@ -124,6 +193,7 @@ int wmain(int argc, wchar_t** argv) {
         && SUCCEEDED(automation->GetRootElement(&rootElement)) && rootElement;
     const bool interactive = session != 0 && connected && inputDesktop;
     bool twoWindows = false, foreground = false, inputObserved = false;
+    std::vector<OwnedInputAttempt> inputAttempts;
     // A locked/server session does not receive synthetic input or audio.
     if (interactive && windowsClient && shell && uia) {
         WNDCLASSW klass{};
@@ -142,25 +212,13 @@ int wmain(int argc, wchar_t** argv) {
         twoWindows = windows.size() == 2 && windows[0] != windows[1] && IsWindowVisible(windows[0]) && IsWindowVisible(windows[1]);
         if (twoWindows) {
             foreground = true;
-            for (HWND window : windows) {
-                SetForegroundWindow(window);
-                pump(100);
-                foreground = foreground && GetForegroundWindow() == window;
+            inputObserved = true;
+            for (HWND window : {windows[0], windows[1], windows[0]}) {
+                const auto attempt = observeOwnedInput(window);
+                inputAttempts.push_back(attempt);
+                foreground = foreground && attempt.focused();
+                inputObserved = inputObserved && attempt.received();
             }
-            SetForegroundWindow(windows[0]);
-            pump(100);
-            POINT point{200, 100};
-            ClientToScreen(windows[0], &point);
-            INPUT inputs[3]{};
-            for (auto& item : inputs) item.type = INPUT_MOUSE;
-            inputs[0].mi.dx = point.x * 65535 / (GetSystemMetrics(SM_CXSCREEN) - 1);
-            inputs[0].mi.dy = point.y * 65535 / (GetSystemMetrics(SM_CYSCREEN) - 1);
-            inputs[0].mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE;
-            inputs[1].mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
-            inputs[2].mi.dwFlags = MOUSEEVENTF_LEFTUP;
-            const UINT count = SendInput(3, inputs, sizeof(INPUT));
-            pump(200);
-            inputObserved = count == 3 && clicked && GetForegroundWindow() == windows[0];
         }
         for (HWND window : windows) DestroyWindow(window);
         UnregisterClassW(klass.lpszClassName, klass.hInstance);
@@ -223,6 +281,19 @@ int wmain(int argc, wchar_t** argv) {
         }
     }
     if (format) CoTaskMemFree(format);
+    std::ostringstream inputFacts;
+    inputFacts << '[';
+    for (size_t index = 0; index < inputAttempts.size(); index++) {
+        const auto& value = inputAttempts[index];
+        if (index) inputFacts << ',';
+        inputFacts << "{\"owned_hwnd\":" << reinterpret_cast<uintptr_t>(value.window)
+                   << ",\"raised\":" << jsonBool(value.raised) << ",\"foreground_request\":" << jsonBool(value.requested)
+                   << ",\"unoccluded\":" << jsonBool(value.unoccluded) << ",\"sent\":" << value.sent
+                   << ",\"input_error\":" << value.inputError << ",\"clicked_hwnd\":" << reinterpret_cast<uintptr_t>(value.clicked)
+                   << ",\"foreground_hwnd\":" << reinterpret_cast<uintptr_t>(value.foreground)
+                   << ",\"keyboard_hwnd\":" << reinterpret_cast<uintptr_t>(value.keyboard) << '}';
+    }
+    inputFacts << ']';
     std::cout << "{\"checks\":{\"windows_client\":" << jsonBool(windowsClient)
               << ",\"interactive_gui\":" << jsonBool(interactive) << ",\"shell\":" << jsonBool(shell)
               << ",\"uia\":" << jsonBool(uia) << ",\"two_windows\":" << jsonBool(twoWindows)
@@ -231,6 +302,8 @@ int wmain(int argc, wchar_t** argv) {
               << ",\"known_cue_observed\":" << jsonBool(played && peak > 0.01)
               << "},\"measurements\":{\"session\":" << session << ",\"connection_known\":" << jsonBool(stateKnown)
               << ",\"input_desktop\":" << jsonBool(inputDesktop) << ",\"audio_hresult\":" << audioResult
+              << ",\"input_desktop_kind\":\"" << inputKind << "\",\"thread_desktop_kind\":\"" << threadKind
+              << "\",\"window_station_kind\":\"" << stationKind << "\",\"owned_input_attempts\":" << inputFacts.str()
               << ",\"audio_samples\":" << samples << ",\"audio_peak\":" << peak
               << ",\"audio_inventory\":" << inventory << "}}\n";
     return 0;
