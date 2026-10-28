@@ -64,7 +64,7 @@ func TestSetupProductsCursorSelection(t *testing.T) {
 		{"cursor", []string{"--webhook"}, true},
 		{"cursor", []string{"--desktop", "--webhook"}, true},
 		{"cursor", []string{"--navigation", "none"}, false},
-		{"claude,cursor", nil, false}, {"claude,codex", nil, true},
+		{"claude,cursor", nil, true}, {"claude,codex", nil, true},
 	} {
 		args := append([]string{"confirm", "--products", tc.products}, tc.extra...)
 		if tc.products == "cursor" {
@@ -88,8 +88,8 @@ func TestCursorChannelQuestionRequiresOnlySingleSelection(t *testing.T) {
 			t.Fatalf("%v: %v", args, err)
 		}
 	}
-	if _, err := parseSetupProducts([]string{"confirm", "--products", "cursor", "--desktop"}); err == nil {
-		t.Fatal("native choice bypassed explicit profile/executable")
+	if _, err := parseSetupProducts([]string{"confirm", "--products", "cursor", "--desktop"}); err != nil {
+		t.Fatal("default Cursor discovery was rejected", err)
 	}
 }
 

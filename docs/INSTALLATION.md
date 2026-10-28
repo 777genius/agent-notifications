@@ -74,7 +74,7 @@ Use `--state-dir /path/to/private-TEST-cache` to reuse your own mode-700 cache.
 
 Prefer a guided setup? [Open the installation guide](https://777genius.github.io/agent-notifications/#install) to choose your agents, OS and task.
 
-The short setup loader handles release lookup and validation internally, then downloads the installer from its qualified immutable source snapshot. Run it and choose Claude, Codex, OpenCode, Gemini CLI, Qoder, or a combination:
+The short setup loader handles release lookup and validation internally, then downloads the installer from its qualified immutable source snapshot. Run it and choose Claude, Codex, OpenCode, Gemini CLI, Qoder, Cursor CLI, or a combination:
 
 ```bash
 (set -o pipefail; curl -fsSL https://agent-notifications.com/install.sh | bash)
@@ -88,17 +88,19 @@ For automation or terminals without a controlling TTY, choose explicitly and pre
 (set -o pipefail; curl -fsSL https://agent-notifications.com/install.sh | bash -s -- --product codex)
 ```
 
-Use `claude`, `codex`, or `both` for Claude/Codex. For OpenCode, use `--product opencode --desktop`, `--webhook`, or both channel flags to choose channels explicitly. The selected host CLI must already be on `PATH`; this installs notifications only.
+Use `claude`, `codex`, or `both` for Claude/Codex. The other product IDs are `opencode`, `gemini`, `qoder` and `cursor`. The selected host CLI must already be on `PATH`; this installs notifications only. Cursor uses the agent CLI launcher, and supports qualified Linux amd64, macOS arm64 and Windows amd64 hosts; [profile authority and filesystem requirements](cursor-notifications.md) still apply.
 
-You can select any combination of the supported agents in the guided setup. For Claude, Codex and OpenCode, use one loader command:
+The common Cursor/Qoder flow on `main` requires the next matching [platform release](PLATFORM_RELEASE_CHANNELS.md). The public loader selects the published channel for the target OS and architecture; editing or copying a command does not upgrade an older channel's capabilities.
+
+Select agents together in the guided setup, or pass one comma-separated list to the common loader:
 
 ```bash
-(set -o pipefail; curl -fsSL https://agent-notifications.com/install.sh | bash -s -- --products claude,codex,opencode --desktop)
+(set -o pipefail; curl -fsSL https://agent-notifications.com/install.sh | bash -s -- --products codex,qoder,cursor --desktop)
 ```
 
-Use `claude,opencode` or `codex,opencode` for two agents. The loader downloads and validates one installer, then starts selected Claude, Codex, OpenCode, Gemini and Qoder jobs concurrently on macOS and Linux. Shared settings and runtime writes are coordinated. Windows keeps sequential primary installation until native child-process cancellation is qualified. A client failure leaves successful clients installed and allows independent work to finish; the overall command still reports incomplete setup. Follow the saved recovery command for failed activation instead of reinstalling successful clients.
+The loader downloads and validates one installer, then applies each selected integration through its own lifecycle. UAP manages Qoder's native package and Cursor's qualified Stop observer; shared settings and runtime writes remain coordinated. Cursor keeps its selected CLI and physical profile authority throughout its operation. A client failure can leave successful clients installed; the overall command reports incomplete setup. Follow the saved recovery command for failed activation instead of reinstalling successful clients.
 
-Add `,gemini` or `,qoder` to `--products` to include Gemini or Qoder. `--desktop` and `--webhook` apply to each selected OpenCode/Gemini/Qoder integration independently; configure webhook URLs separately. The public installer defaults fresh OpenCode/Gemini/Qoder installations to desktop on and webhooks off, and preserves saved channels on update when flags are omitted. `--skip-agent-notify` applies only to the Claude/Codex notification tool. These flags do not change Claude/Codex notification channels. Single-agent commands and `--product both` remain supported.
+`--desktop` and `--webhook` apply to each selected OpenCode/Gemini/Qoder/Cursor integration, with consent saved independently. `--desktop` selects desktop only, `--webhook` selects webhooks only, and both select both channels. Configure webhook URLs separately. Fresh installs default to desktop on and webhooks off. Updates without channel flags preserve each selected agent's complete saved decision, including both channels off. Use `--desktop=false --webhook=false` to disable those channels explicitly while retaining the integration. `--skip-agent-notify` skips notification-tool setup for selected Claude/Codex clients and skips the selected Cursor integration for this run. Existing registrations and consent remain unchanged; Qoder, OpenCode and Gemini are unaffected. Single-agent commands and `--product both` remain supported.
 
 The installer shows recent safe checkpoints for each selected client above its live
 status, including its current operation and elapsed waiting time. Saved registration remains distinct from completed setup; a timeout or
@@ -122,6 +124,7 @@ After installation:
 - **Codex:** start Codex, run `/hooks`, then review and trust the installed hooks. The installer registers them automatically; no JSON editing or manual registration command is needed. Trust approval remains yours.
 - **Both:** complete both steps above.
 - **Qoder:** install the Qoder CLI and make `qoder` or `qodercli` available on `PATH`, then restart Qoder after installation. [Native setup and limits](QODER.md).
+- **Cursor CLI:** restart the selected agent CLI to load its Stop observer. Cursor IDE is outside this integration. [Qualified hosts and limits](cursor-notifications.md).
 - **Gemini CLI:** restart Gemini to reload its hooks. [Setup and limits](gemini-notifications.md).
 - **OpenCode:** restart OpenCode to load its global plugin. On Mac, explicitly grant notification permission. OpenCode bootstrap requires release v1.46.0 or newer; see [OpenCode setup, channels and limits](opencode-notifications.md).
 

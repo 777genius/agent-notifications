@@ -45,6 +45,7 @@ var phases = map[string]string{
 var outcomes = map[string]string{
 	"running": "running", "queued": "queued", "done": "done", "completed": "done",
 	"failed": "failed", "partial": "partial", "not_started": "not started",
+	"skipped":                                      "skipped; existing setup kept",
 	"activation_failed":                            "registration saved; activation failed",
 	"activation_not_attempted":                     "registration saved; activation not started",
 	"activation_timeout":                           "registration saved; activation timed out",
@@ -239,7 +240,7 @@ func (b *board) paint() error {
 			mark, color = "✗", "\x1b[31m"
 		case "partial", "state_requires_inspection", "registration_committed", "registration_committed_follow_up_not_started":
 			mark, color = "!", "\x1b[33m"
-		case "not_started":
+		case "not_started", "skipped":
 			mark = "-"
 		}
 		line := fmt.Sprintf("  %s %-12s  %s: %s", mark, clients[row.client], phases[row.phase], outcomes[row.outcome])

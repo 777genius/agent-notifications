@@ -4,9 +4,15 @@ The Qoder adapter hooks the same attention events as the Claude adapter:
 completion, questions, permission prompts, plan readiness, subagent
 completion, and idle teammates. Events arrive as native Qoder hook payloads;
 the dedicated native bundle registers one handler per event plus a platform
-executable. The unified installer builds this bundle from the verified release
-executable and records its native registration in the shared ownership ledger.
+executable. The common installer builds this bundle from the verified release
+executable. UAP manages native package delivery, registration, verification,
+update and removal; the shared runtime ledger records the notification consumer
+and its consent bound to that UAP installation and client binding.
 No MCP observer is installed.
+
+This UAP lifecycle and common Cursor/Qoder selection are implemented on `main`
+and require the next matching [platform release](PLATFORM_RELEASE_CHANNELS.md).
+Older custom Qoder installations are not adopted or migrated by this flow.
 
 ## Hook events
 
@@ -30,21 +36,28 @@ to a single notification. `PermissionRequest` notifications name the tool and ar
 
 ## Configuration
 
-Select **Qoder** in the unified installer, or pass `--product qoder`.
+Select **Qoder** in the common installer, alone or alongside other agents.
 The Qoder CLI must be available on the selected `PATH`; an IDE installation alone
 does not supply the plugin-management CLI. Both `qoder` and `qodercli` command
 names are supported when available. Installation and update use the same command:
 
 ```sh
-(set -o pipefail; curl -fsSL https://agent-notifications.com/install.sh | bash -s -- --product qoder)
+(set -o pipefail; curl -fsSL https://agent-notifications.com/install.sh | bash)
 ```
 
-The installer asks for desktop/webhook delivery and preserves independent channel
-choices on updates. Granting webhook consent does not configure a destination.
+For an explicit combined selection, pass `--products codex,qoder,cursor --desktop`
+to that loader. `--product qoder` selects Qoder alone. The installer shows one
+selection and channel confirmation. Fresh installs default to desktop on and
+webhooks off. Omitting channel flags on update preserves Qoder's complete saved
+choice, including both channels off. `--desktop` selects desktop only,
+`--webhook` selects webhooks only, and both select both channels. Use
+`--desktop=false --webhook=false` to retain the integration with delivery disabled.
+Granting webhook consent does not configure a destination.
 Managed hooks require both the recorded channel consent and shared notification
 settings. Uninstall removes only the owned plugin registration and bundle; edited
 or unowned files cause a refusal. Existing Qoder plugins and settings are preserved.
-The native profile root is `QODER_CONFIG_DIR`, defaulting to `~/.qoder`. Settings use
+The native profile root is `QODER_CONFIG_DIR`, defaulting to `~/.qoder`; native
+CLI operations are bound to that selected profile using `--config-dir`. Settings use
 the shared file reported by `claude-notifications config path`. An existing
 `AGENT_NOTIFICATIONS_CONFIG` selection is honored; set it to an absolute config
 file path when using a separate TEST profile. Qoder inherits global

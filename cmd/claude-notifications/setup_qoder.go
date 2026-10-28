@@ -46,7 +46,7 @@ func runQoderSetup(args []string, output io.Writer) int {
 			channelsSet = true
 		}
 	})
-	if (action == qoderinstall.Install || action == qoderinstall.Update) && !channelsSet {
+	if action == qoderinstall.Install && !channelsSet {
 		_, _ = fmt.Fprintln(output, "choose --desktop or --webhook explicitly")
 		return 2
 	}
@@ -58,7 +58,8 @@ func runQoderSetup(args []string, output io.Writer) int {
 		_, _ = fmt.Fprintln(output, "absolute --qoder-executable required")
 		return 2
 	}
-	timeout := 90 * time.Second
+	r.PreserveChannels = action == qoderinstall.Update && !channelsSet
+	timeout := 3 * time.Minute
 	if action == "request-permission" {
 		timeout = 130 * time.Second
 	}

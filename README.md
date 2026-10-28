@@ -41,9 +41,9 @@ Desktop notifications for **Claude, Codex CLI, OpenCode, Gemini CLI, Cursor CLI 
 (set -o pipefail; curl -fsSL https://agent-notifications.com/install.sh | bash)
 ```
 
-**Cursor CLI:** [install separately with an explicit CLI executable and profile](docs/cursor-notifications.md). The managed UAP integration sends informational Stop notifications and optional webhooks; it does not provide Cursor IDE, question or permission alerts.
+Choose **Claude**, **Codex CLI**, **OpenCode**, **Gemini CLI**, **Qoder**, **Cursor CLI**, or a combination. Install the selected agent CLIs first and make them available on `PATH`. The installer also requires curl, Bash, and a working `python3` or `node` on `PATH`; see [agent/platform prerequisites](docs/INSTALLATION.md#prerequisites). Run the same command to update.
 
-Choose **Claude**, **Codex CLI**, **OpenCode**, **Gemini CLI**, **Qoder**, or a combination. Install the selected agent CLIs first and make them available on `PATH`. The installer also requires curl, Bash, and a working `python3` or `node` on `PATH`; see [agent/platform prerequisites](docs/INSTALLATION.md#prerequisites). Run the same command to update.
+The common Cursor/Qoder flow described on `main` requires the next matching [platform release](docs/PLATFORM_RELEASE_CHANNELS.md). It uses one product selection and channel confirmation, with UAP managing each integration. Fresh OpenCode/Gemini/Qoder/Cursor installs default to desktop on and webhooks off; updates without channel flags preserve each agent's saved choice, including disabled channels. Cursor CLI sends informational Stop alerts on qualified Linux amd64, macOS arm64 and Windows amd64 hosts; see [its profile requirements and limits](docs/cursor-notifications.md).
 
 **Windows:** use **Git Bash**, not WSL, for a native Windows installation.
 
@@ -54,6 +54,7 @@ After setup:
 - **OpenCode:** restart OpenCode; on macOS, [grant notification permission](docs/opencode-notifications.md#macos-notification-permission).
 - **Gemini CLI:** restart Gemini to reload its hooks.
 - **Qoder:** install the Qoder CLI first, then reload Qoder to activate its native plugin.
+- **Cursor CLI:** restart Cursor CLI to load its informational Stop observer.
 
 The installer selects a release from the [platform channels](docs/PLATFORM_RELEASE_CHANNELS.md) for your OS and architecture. See that page for current versions and the [release notes](https://github.com/777genius/agent-notifications/releases) for validation details and known limitations.
 
@@ -99,7 +100,7 @@ Claude/Codex setup also installs the `agent-notifications` MCP server and `agent
 | **Codex CLI** | Turn completion and tool permissions; experimental question hooks and final-message question/error detection | Yes | [Setup and limits](docs/CODEX.md) |
 | **OpenCode** | Root-session completion, questions, permissions and errors | No | [Setup and limits](docs/opencode-notifications.md) |
 | **Gemini CLI** | Turn completion and tool permissions | No | [Cross-platform setup and qualification](docs/gemini-notifications.md) |
-| **Cursor CLI** | Agent loop stopping; fixed informational text | No | [Qualified versions, platforms and explicit setup](docs/cursor-notifications.md) |
+| **Cursor CLI** | Agent loop stopping; fixed informational text | No | [Qualified hosts, shared setup and profile authority](docs/cursor-notifications.md) |
 | **Qoder** | Completion, question, permission, plan and subagent/idle-teammate hooks; native plugin | Exact-chat focus unavailable | [Unified installation and native hooks](docs/QODER.md) |
 
 OpenCode V1 and V2 use one installed plugin. The installer does not restrict agent CLI versions. See [OpenCode setup, release reports and delivery limits](docs/opencode-notifications.md) for qualification of specific versions and platforms.

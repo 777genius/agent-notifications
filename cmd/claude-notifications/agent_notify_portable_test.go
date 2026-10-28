@@ -17,21 +17,9 @@ import (
 	"time"
 
 	"github.com/777genius/agent-notifications/internal/agentnotify/portable"
-	notifyruntime "github.com/777genius/agent-notifications/internal/agentnotify/runtime"
 	"github.com/777genius/agent-notifications/internal/installruntime"
-	"github.com/777genius/agent-notifications/internal/notifier"
 )
 
-// The subprocess executes the production composition, never a substitute
-// backend. A fixed clock permits Linux composition; native construction panics.
-// This fixture sends read-only MCP status requests exclusively.
-func init() {
-	if len(os.Args) > 1 && (os.Args[1] == "portable-launch" || os.Args[1] == "portable-primary") {
-		os.Exit(agentPortableRun(os.Args[1], os.Args[2:], notifyruntime.Options{BootClock: portableTestClock{}, DeliveryFactory: func(notifier.ManagedInstallation, string, notifier.BootClock) notifyruntime.Delivery {
-			panic("unexpected native composition")
-		}}))
-	}
-}
 func TestPortableProductionBridge(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
 	defer cancel()
@@ -249,7 +237,3 @@ func TestPortableChildEnvironmentPreservesDesktopSession(t *testing.T) {
 		}
 	}
 }
-
-type portableTestClock struct{}
-
-func (portableTestClock) Now() (string, float64, error) { return "portable-test-boot", 100, nil }

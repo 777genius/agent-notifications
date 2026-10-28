@@ -66,6 +66,8 @@ func parseSession(line string) (string, event, bool, error) {
 
 func activityLabel(e event) string {
 	switch e.outcome {
+	case "skipped":
+		return "Skipped; existing setup kept"
 	case "activation_timeout":
 		return "Activation timed out"
 	case "activation_not_attempted":
@@ -109,6 +111,8 @@ func (s *session) currentLines(width int, frame int) []string {
 		}
 		label, mark := outcomes[row.outcome], "!"
 		switch row.outcome {
+		case "skipped":
+			mark, label = "-", "Skipped; existing setup kept"
 		case "done", "completed":
 			mark = "+"
 			if row.phase == "verification" {

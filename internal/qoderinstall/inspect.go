@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
-	"path/filepath"
 	"runtime"
 
 	"github.com/777genius/agent-notifications/internal/installruntime"
@@ -49,27 +48,14 @@ func Inspect(ctx context.Context, r Request) (Status, error) {
 	if err = checkFiles(l, previous); err != nil {
 		return result, err
 	}
-	registry, err := readDocument(filepath.Join(r.ConfigRoot, filepath.FromSlash(registryName)))
-	if err != nil {
+	if err = checkUAP(ctx, r, previous); err != nil {
 		return result, err
-	}
-	entry, err := nativeEntry(registry.data)
-	if err != nil || compact(entry) != compact(previous.NativeEntry) {
-		return result, errors.New("native Qoder registration was edited")
-	}
-	settings, err := readDocument(filepath.Join(r.ConfigRoot, "settings.json"))
-	if err != nil {
-		return result, err
-	}
-	enabled, err := nativeEnabled(settings.data)
-	if err != nil || compact(enabled) != compact(previous.NativeEnabled) {
-		return result, errors.New("native Qoder activation was edited")
 	}
 	s, err := installruntime.ReadPolicySnapshot(ctx, r.ControlRoot)
 	if err != nil {
 		return result, err
 	}
-	result.Desktop, result.Webhook = ChannelsFromSnapshot(s, r.ControlRoot, filepath.Join(previous.PackageRoot, "bin", binaryName(r.GOOS)), previous.Binding)
+	result.Desktop, result.Webhook = ChannelsFromSnapshot(s, r.ControlRoot, previous.Executable, previous.Binding)
 	result.Status = "installed"
 	return result, nil
 }
@@ -132,33 +118,7 @@ func ChannelsFromSnapshot(s installruntime.PolicySnapshot, root, executable, bin
 	if err != nil || r.Binding != binding {
 		return false, false
 	}
-	got, err := installruntime.Fingerprint(executable)
-	want, ok := installruntime.OwnedFile(l, executable)
-	if err != nil || !ok || got != want {
-		return false, false
-	}
-	reg, err := readDocument(filepath.Join(r.ConfigRoot, filepath.FromSlash(registryName)))
-	if err != nil {
-		return false, false
-	}
-	entry, err := nativeEntry(reg.data)
-	if err != nil || compact(entry) != compact(r.NativeEntry) {
-		return false, false
-	}
-	settings, err := readDocument(filepath.Join(r.ConfigRoot, "settings.json"))
-	if err != nil {
-		return false, false
-	}
-	enabled, err := nativeEnabled(settings.data)
-	if err != nil || compact(enabled) != "true" {
-		return false, false
-	}
-	// The receipt also binds the hook definitions, avoiding delivery through a
-	// user-replaced native command while keeping global profile settings editable.
-	hook := filepath.Join(r.PackageRoot, "hooks", "hooks.json")
-	got, err = installruntime.Fingerprint(hook)
-	want, ok = installruntime.OwnedFile(l, hook)
-	if err != nil || !ok || got != want {
+	if r.Pending || r.Executable != executable || checkFiles(l, r) != nil || checkUAPState(root, r) != nil {
 		return false, false
 	}
 	desktop, webhook, err := channels(s.Fields)

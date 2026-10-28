@@ -17,11 +17,11 @@ async function chooseOS(page: Page, value: string) {
   await page.getByRole("combobox", { name: "Target operating system" }).click();
   await page.getByRole("option", { name: labels[value], exact: true }).click();
 }
-async function chooseAgents(page: Page, selected: readonly ("claude" | "codex" | "opencode" | "gemini")[]) {
-  const labels = { claude: "Claude", codex: "Codex CLI", opencode: "OpenCode", gemini: "Gemini CLI" };
+async function chooseAgents(page: Page, selected: readonly ("claude" | "codex" | "opencode" | "gemini" | "qoder" | "cursor")[]) {
+  const labels = { claude: "Claude", codex: "Codex CLI", opencode: "OpenCode", gemini: "Gemini CLI", qoder: "Qoder", cursor: "Cursor CLI" };
   // Select desired cards first so switching hosts never needs an empty selection.
   for (const wanted of [true, false])
-    for (const value of ["claude", "codex", "opencode", "gemini"] as const) {
+    for (const value of ["claude", "codex", "opencode", "gemini", "qoder", "cursor"] as const) {
       const card = page.getByRole("button", { name: labels[value], exact: true });
       if (selected.includes(value) === wanted &&
           (await card.getAttribute("aria-pressed")) !== String(wanted))
@@ -77,7 +77,7 @@ test("production command matrix, aftercare, clipboard and configuration", async 
   await page.getByRole("button", { name: "Install", exact: true }).click();
   await chooseOS(page, "linux");
   const agentNotify = page.getByRole("checkbox", {
-    name: /Let agents send you notifications when they need your attention/,
+    name: /Set up optional notification tools/,
   });
   await expect(agentNotify).toBeChecked();
   await expect(page.getByLabel("Install command")).toHaveValue(
@@ -510,7 +510,7 @@ test("guided reference layout, detected OS and mode focus", async ({
 test("released agents toggle independently, copied commands and configuration cover the selection", async ({ page }) => {
   await page.goto("");
   await chooseOS(page, "macos");
-  const labels = { claude: "Claude", codex: "Codex CLI", opencode: "OpenCode", gemini: "Gemini CLI" };
+  const labels = { claude: "Claude", codex: "Codex CLI", opencode: "OpenCode", gemini: "Gemini CLI", qoder: "Qoder", cursor: "Cursor CLI" };
   const prefix = "curl -fsSL https://agent-notifications.com/install.sh | bash -s -- --product ";
   const cases = [
     { selected: ["claude"], expected: "(set -o pipefail; " + prefix + "claude)" },
@@ -523,7 +523,7 @@ test("released agents toggle independently, copied commands and configuration co
   ] as const;
   for (const { selected, expected } of cases) {
     await chooseAgents(page, selected);
-    for (const value of ["claude", "codex", "opencode", "gemini"] as const)
+    for (const value of ["claude", "codex", "opencode", "gemini", "qoder", "cursor"] as const)
       await expect(page.getByRole("button", { name: labels[value], exact: true }))
         .toHaveAttribute("aria-pressed", String((selected as readonly string[]).includes(value)));
     await expect(page.getByLabel("Install command", { exact: true })).toHaveValue(expected);
@@ -559,7 +559,7 @@ test("released agents toggle independently, copied commands and configuration co
   await expect(page.getByText(/OpenCode CLI versions are not restricted/)).toBeVisible();
   await expect(page.getByRole("link", { name: "What is OpenCode V2? ↗" })).toHaveAttribute("href", "https://opencode.ai/v2/docs");
   await expect(page.getByRole("group", { name: "OpenCode notification channels" })).toHaveCount(0);
-  const agentNotify = page.getByRole("checkbox", { name: /Let agents send/ });
+  const agentNotify = page.getByRole("checkbox", { name: /Set up optional notification tools/ });
   await agentNotify.uncheck();
   await expect(page.getByLabel("Install command", { exact: true })).toHaveValue("(set -o pipefail; " + prefix.replace("--product ", "--products ") + "claude,codex,opencode --skip-agent-notify --desktop)");
   await page.getByRole("button", { name: "Configure", exact: true }).click();
@@ -709,20 +709,51 @@ test("platform channels enable Gemini and reset unsupported selections", async (
   await expect(page.getByRole("button", { name: "Copy command" })).toHaveCount(0);
 });
 
-test("Qoder offers native source-package installation and restores the guided installer", async ({ page }) => {
+// Cursor and Qoder must remain part of the same command through selection and update.
+test("Cursor and Qoder share combined installation, updates and guidance", async ({ page }) => {
   await page.goto("");
-  await chooseOS(page, "macos");
-  await page.getByRole("button", { name: "Qoder", exact: true }).click();
-  await expect(page.getByRole("button", { name: "Qoder", exact: true })).toHaveAttribute("aria-pressed", "true");
-  const panel = page.locator(".qoder-install");
-  await expect(panel).toContainText("No prebuilt Qoder ZIP is published");
-  await expect(panel).toContainText("qoder plugins install /absolute/path/to/package --scope user");
-  await expect(panel.getByRole("link")).toHaveAttribute("href", "https://github.com/777genius/agent-notifications/blob/main/docs/QODER.md#build-a-local-native-package");
-  await expect(page.getByLabel("Install command", { exact: true })).toHaveCount(0);
+  await chooseOS(page, "linux");
+  await chooseAgents(page, ["cursor", "codex", "qoder"]);
+  const expected = "(set -o pipefail; curl -fsSL https://agent-notifications.com/install.sh | bash -s -- --products codex,qoder,cursor --desktop)";
+  await expect(page.getByLabel("Install command", { exact: true })).toHaveValue(expected);
+  await expect(page.locator(".qoder-install")).toHaveCount(0);
+  await expect(page.locator(".availability-note")).toContainText("requires the next matching platform release");
+  await expect(page.locator(".next-steps")).toContainText("Restart Cursor CLI");
+  await expect(page.locator(".next-steps")).toContainText("Restart Qoder");
+  const optionalSetup = page.getByRole("checkbox", { name: "Set up optional notification tools" });
+  await expect(page.getByText(/Controls notification setup for selected Claude, Codex CLI and Cursor CLI/)).toBeVisible();
+  await expect(page.getByText(/Qoder, OpenCode and Gemini are unaffected/)).toBeVisible();
+  await optionalSetup.uncheck();
+  await expect(page.getByLabel("Install command", { exact: true })).toHaveValue(expected.replace(" --desktop", " --skip-agent-notify --desktop"));
+  await optionalSetup.check();
+  const notes = page.locator(".agent-support-notes");
+  await expect(notes).toContainText("informational Stop alerts");
+  await expect(notes).toContainText("Linux amd64, macOS arm64 and Windows amd64");
+  await expect(notes).toContainText("No Cursor IDE, sound or click-to-focus support");
+  await expect(notes).not.toContainText("Source package only");
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+  await page.getByRole("button", { name: "Copy command" }).click();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(expected);
+  await page.getByRole("button", { name: "Update", exact: true }).click();
+  await expect(page.getByLabel("Update command", { exact: true })).toHaveValue(expected.replace(" --desktop", ""));
+  await chooseAgents(page, ["cursor", "qoder"]);
+  await expect(page.getByRole("checkbox", { name: /Set up optional notification tools/ })).toHaveCount(0);
+  await expect(page.getByLabel("Update command", { exact: true })).toHaveValue(/--products qoder,cursor\)$/);
+  await page.getByRole("button", { name: "Configure", exact: true }).click();
+  await expect(page.locator(".configuration").getByRole("link", { name: "Cursor CLI installation", exact: true })).toBeVisible();
+  await expect(page.locator(".configuration").getByRole("link", { name: "Qoder setup and hooks", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Install", exact: true }).click();
+  for (const selected of [["cursor"], ["qoder"]] as const) {
+    await chooseAgents(page, selected);
+    await expect(page.getByLabel("Install command", { exact: true })).toHaveValue(new RegExp(`--product ${selected[0]} --desktop\\)$`));
+  }
   await page.setViewportSize({ width: 390, height: 900 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  await panel.screenshot({ path: "test-results/qoder-install.png" });
-  await page.getByRole("button", { name: "Claude", exact: true }).click();
-  await expect(panel).toHaveCount(0);
-  await expect(page.getByLabel("Install command", { exact: true })).toHaveValue(/--product claude/);
+  await page.locator("#install").screenshot({ path: "test-results/common-cursor-qoder-install.png" });
+  await chooseAgents(page, ["cursor", "qoder"]);
+  await chooseOS(page, "manual");
+  const manual = page.locator(".setup-panel.instructions");
+  await expect(manual.getByRole("link", { name: "Cursor CLI installation", exact: true })).toBeVisible();
+  await expect(manual.getByRole("link", { name: "Qoder setup and hooks", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Copy command" })).toHaveCount(0);
 });

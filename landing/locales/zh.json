@@ -1,7 +1,7 @@
 {
   "seo": {
     "title": "Agent Notifications - 专注工作，及时获知进展",
-    "description": "适用于 Claude、Codex CLI 和 OpenCode 的桌面通知与 Webhook。 Gemini CLI: macOS / Linux / Windows. Cursor CLI: Linux amd64 / macOS arm64 / Windows amd64. Qoder：独立安装包。"
+    "description": "为 Claude、Codex CLI、OpenCode、Gemini CLI、Cursor CLI 和 Qoder 提供桌面通知与 Webhook。支持范围因代理和平台而异。"
   },
   "language": {
     "label": "语言",
@@ -29,7 +29,7 @@
     "title": "保持专注",
     "emphasis": "需要你时，我们会提醒",
     "leadFirst": "让智能体安心工作，完成时你自然会知道。",
-    "leadSecond": "适用于 Claude、Codex CLI 和 OpenCode 的桌面通知与 Webhook。 Gemini CLI: macOS / Linux / Windows. Cursor CLI: Linux amd64 / macOS arm64 / Windows amd64. Qoder：独立安装包。",
+    "leadSecond": "为 Claude、Codex CLI、OpenCode、Gemini CLI、Cursor CLI 和 Qoder 提供桌面通知与 Webhook。支持范围因代理和平台而异。",
     "primary": "设置通知",
     "secondary": "在 GitHub 上查看",
     "note": "开源 · 本地运行"
@@ -137,7 +137,7 @@
     "items": {
       "1": {
         "question": "必须安装所有智能体吗？",
-        "answer": "可自由组合选择 Claude、Codex CLI、OpenCode 和 Gemini CLI（仅 macOS / Linux / Windows）。请先安装所选智能体；以下命令用于安装通知。"
+        "answer": "可任意组合 Claude、Codex CLI、OpenCode、Gemini CLI、Cursor CLI 和 Qoder。请先安装所选 CLI。Cursor 支持 Linux amd64、macOS arm64 和 Windows amd64；主机要求见指南。"
       },
       "2": {
         "question": "Codex hooks 会自动安装吗？",
@@ -234,8 +234,8 @@
     "scrollDown": "向下滚动选项"
   },
   "install": {
-    "cursor": {"guide": "安装 Cursor CLI", "scope": "Stop 通知和可选 Webhook。使用明确的 CLI 和配置目录路径单独安装；仅支持经过验证的 Linux amd64、macOS arm64 和 Windows amd64 版本。"},
-    "qoder": {"guide": "Qoder 设置与钩子", "scope": "支持完成、提问、权限、计划与队友通知，可选 Webhook。独立的原生包，通过 Qoder 插件安装器安装；点击通知无法打开确切的现有会话。", "source": "目前仅支持从源码构建。当前版本尚未发布预构建的 Qoder ZIP。", "build": "构建原生软件包", "install": "使用 Qoder CLI 安装解压后的软件包（替换路径）：", "restart": "重启 Qoder 以启用钩子。"},
+    "availability": "统一的 Cursor/Qoder 安装流程已在 main 实现，需要下一个对应平台版本。", "cursor": {"guide": "安装 Cursor CLI", "scope": "Cursor CLI：在 Linux amd64、macOS arm64 和 Windows amd64 上提供提示性的 Stop 通知和可选 Webhook。不支持 Cursor IDE、声音或点击聚焦。安装程序会验证所选 CLI 和用户配置目录。", "restart": "重启 Cursor CLI 以加载 Stop 通知观察器。"},
+    "qoder": {"guide": "Qoder 设置与钩子", "scope": "Qoder：完成、提问、权限、计划和团队成员通知，以及可选 Webhook。可在统一安装程序中与其他代理一起选择；点击通知无法打开准确的现有聊天。", "restart": "重启 Qoder 以启用钩子。"},
     "title": "设置通知",
     "intro": "按照以下步骤为 {agent} 添加通知。",
     "chooseAgent": "选择智能体",
@@ -311,8 +311,8 @@
     "installationInstructions": "安装说明",
     "configureSettings": "⚙ 配置设置",
     "agentNotify": {
-      "label": "允许智能体在需要你关注时发送通知",
-      "hint": "控制 Claude 和 Codex CLI 任务中通知工具的设置。选中时遵循已保存的设置偏好；取消选中仅跳过本次设置，并保留已有工具。"
+      "label": "设置可选通知工具",
+      "hint": "控制所选 Claude、Codex CLI 和 Cursor CLI 的通知设置。选中时遵循已保存的偏好；取消选中仅跳过本次设置，保留已有注册和授权。Qoder、OpenCode 和 Gemini 不受影响。"
     },
     "capabilities": {
       "title": "所选代理的功能",

@@ -305,7 +305,7 @@ func executeSetupWizardWith(ctx context.Context, args []string, out, errOut io.W
 	if err != nil {
 		return writeSetupWizardResult(out, jsonOut, setupwizard.Result{Action: string(req.Action), Outcome: "incomplete", Reason: "cursor_composition_required"}, err)
 	}
-	if confirmed != nil && (containsProduct(confirmed.Request.Products, "cursor") || containsProduct(confirmed.Request.Products, "copilot-vscode")) {
+	if confirmed != nil && (containsProduct(req.Agents, "cursor") || containsProduct(req.Agents, "copilot-vscode")) {
 		// The command already fenced and consumed the one immutable selection.
 		// Legacy BootstrapMCP evaluation captures a new policy observation; retain
 		// our original CAS instead of allowing that path to adopt an opt-out.
@@ -977,9 +977,22 @@ func admitBootstrapWizardIntent(path string, r setupwizard.Request) (setupwizard
 	if err != nil {
 		return r, nil, err
 	}
+	parent := intent
+	intent, err = bootstrapWizardChild(parent, r.Agents)
+	if err != nil {
+		return r, nil, err
+	}
 	expected := intentWizardRequest(intent)
 	if !sameWizardBootstrapScope(r, expected) || intent.Request.SkipAgentNotify {
 		return r, nil, errors.New("bootstrap request differs from confirmed intent")
+	}
+	if containsProduct(r.Agents, "cursor") {
+		checkpoint, cancel := context.WithTimeout(context.Background(), bootstrapInspectionTimeout)
+		defer cancel()
+		intent, err = admitCursorBootstrapChild(checkpoint, parent, intent, r)
+		if err != nil {
+			return r, nil, err
+		}
 	}
 	r.BootstrapMCP = &intent.MCP
 	r.BootstrapStateMigrationOwned = true
@@ -1136,12 +1149,18 @@ func commitConfirmedCursorConsent(ctx context.Context, r setupwizard.Request, re
 	if err != nil {
 		return deny(err)
 	}
-	if runtime.GOOS == "darwin" && i.Request.Desktop {
+	choices := bootstrapProductUnits{}
+	for _, unit := range i.Units {
+		if unit.Product == "cursor" {
+			choices = unit
+		}
+	}
+	if runtime.GOOS == "darwin" && choices.Desktop {
 		if _, err := copilotvscodeinstall.PrepareCursorNativeSpool(ctx, b.ControlRoot); err != nil {
 			return deny(err)
 		}
 	}
-	patch, err := copilotvscodeinstall.CursorPolicyPatch(b, copilotvscodeinstall.CursorChoices{Desktop: &i.Request.Desktop, Webhook: &i.Request.Webhook}, &previous)
+	patch, err := copilotvscodeinstall.CursorPolicyPatch(b, copilotvscodeinstall.CursorChoices{Desktop: &choices.Desktop, Webhook: &choices.Webhook}, &previous)
 	if err != nil {
 		return deny(err)
 	}
@@ -1149,7 +1168,7 @@ func commitConfirmedCursorConsent(ctx context.Context, r setupwizard.Request, re
 	if err != nil {
 		return deny(err)
 	}
-	if runtime.GOOS == "windows" && i.Request.Desktop {
+	if runtime.GOOS == "windows" && choices.Desktop {
 		home, err := os.UserHomeDir()
 		if err != nil {
 			return deny(err)

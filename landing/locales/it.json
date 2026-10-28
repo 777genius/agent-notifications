@@ -1,11 +1,11 @@
 {
-  "seo": { "title": "Agent Notifications - Mantieni la concentrazione", "description": "Notifiche desktop e webhook per Claude, Codex CLI e OpenCode. Gemini CLI: macOS / Linux / Windows. Cursor CLI: Linux amd64 / macOS arm64 / Windows amd64. Qoder: pacchetto separato." },
+  "seo": { "title": "Agent Notifications - Mantieni la concentrazione", "description": "Notifiche desktop e webhook per Claude, Codex CLI, OpenCode, Gemini CLI, Cursor CLI e Qoder. Si applicano limiti per agente e piattaforma." },
   "language": { "label": "Lingua", "current": "Lingua attuale: {language}", "search": "Cerca lingue", "noResults": "Nessuna lingua trovata", "switchError": "Impossibile cambiare lingua. Riprova." },
   "accessibility": { "skip": "Vai al contenuto", "platforms": "Sistemi operativi supportati",
     "agents": "Integrazioni degli agenti supportate" },
   "brand": { "tagline": "PER I TUOI AGENTI DI PROGRAMMAZIONE" },
   "nav": { "ariaLabel": "Principale", "features": "Funzionalità", "install": "Installa", "faq": "Domande frequenti" },
-  "hero": { "eyebrow": "MENO CONTROLLI. PIÙ SVILUPPO.", "title": "Mantieni la concentrazione", "emphasis": "Ti avvisiamo noi", "leadFirst": "Lascia lavorare il tuo agente. Scopri quando ha finito.", "leadSecond": "Notifiche desktop e webhook per Claude, Codex CLI e OpenCode. Gemini CLI: macOS / Linux / Windows. Cursor CLI: Linux amd64 / macOS arm64 / Windows amd64. Qoder: pacchetto separato.", "primary": "Configura le notifiche", "secondary": "Esplora su GitHub", "note": "Open source · Esecuzione locale" },
+  "hero": { "eyebrow": "MENO CONTROLLI. PIÙ SVILUPPO.", "title": "Mantieni la concentrazione", "emphasis": "Ti avvisiamo noi", "leadFirst": "Lascia lavorare il tuo agente. Scopri quando ha finito.", "leadSecond": "Notifiche desktop e webhook per Claude, Codex CLI, OpenCode, Gemini CLI, Cursor CLI e Qoder. Si applicano limiti per agente e piattaforma.", "primary": "Configura le notifiche", "secondary": "Esplora su GitHub", "note": "Open source · Esecuzione locale" },
   "common": { "now": "ora", "beta": "beta" },
   "features": {
     "eyebrow": "IL SEGNALE GIUSTO. AL MOMENTO GIUSTO.", "titleFirst": "Resta concentrato", "titleSecond": "Smetti di controllare di continuo",
@@ -82,7 +82,7 @@
   "faq": {
     "eyebrow": "QUALCHE COSA DA SAPERE", "title": "Domande frequenti", "subtitle": "Tutto ciò che serve per tornare al lavoro.",
     "items": {
-      "1": { "question": "Devo installare tutti gli agenti?", "answer": "Scegli una combinazione di Claude, Codex CLI, OpenCode e Gemini CLI (solo macOS / Linux / Windows). Installa prima gli agenti scelti; i comandi seguenti installano le notifiche." },
+      "1": { "question": "Devo installare tutti gli agenti?", "answer": "Seleziona qualsiasi combinazione di Claude, Codex CLI, OpenCode, Gemini CLI, Cursor CLI e Qoder. Installa prima i CLI scelti. Cursor supporta Linux amd64, macOS arm64 e Windows amd64; consulta i requisiti nella guida." },
       "2": { "question": "Gli hook di Codex vengono installati automaticamente?", "answer": "Sì. Il programma di installazione registra gli hook e salva una copia stabile del runtime. Apri /hooks in Codex per verificarli e autorizzarli. Le definizioni modificate richiedono una nuova verifica." },
       "3": { "question": "Un aggiornamento azzera le mie impostazioni?", "answer": "Il programma di installazione conserva la configurazione condivisa e gli hook di Codex di terze parti. Installazione e aggiornamento usano lo stesso comando. Riavvia l'agente selezionato dopo l'aggiornamento." },
       "4": { "question": "Posso scegliere quali eventi emettono un suono?", "answer": "Sì. Configura suoni, volume, dispositivo audio e canali di notifica. Scegli Configura nella guida per i passaggi specifici del tuo agente. Solo Claude e Codex CLI." },
@@ -122,9 +122,9 @@
   },
   "select": { "scrollUp": "Scorri le opzioni verso l'alto", "scrollDown": "Scorri le opzioni verso il basso" },
   "install": {
-    "cursor": {"guide": "Installare Cursor CLI", "scope": "Notifiche Stop e webhook opzionali. Installazione separata con percorsi CLI e profilo espliciti; solo versioni verificate Linux amd64, macOS arm64 e Windows amd64."},
-    "qoder": {"guide": "Configurazione e hook di Qoder", "scope": "Notifiche di completamento, domande, permessi, piani e compagni di squadra con webhook opzionali. Pacchetto nativo separato installato tramite l'installer dei plugin di Qoder; un clic sulla notifica non può aprire la chat esatta esistente.", "source": "Disponibile solo dai sorgenti. La versione attuale non include uno ZIP Qoder precompilato.", "build": "Compila il pacchetto nativo", "install": "Installa il pacchetto estratto con Qoder CLI (sostituisci il percorso):", "restart": "Riavvia Qoder per attivare gli hook."},
-    "agentNotify": {"label": "Consenti agli agenti di inviarti notifiche quando serve la tua attenzione", "hint": "Controlla la configurazione di uno strumento di notifica per Claude e Codex CLI durante un’attività. Se selezionato segue le preferenze salvate; se deselezionato salta la configurazione per questa esecuzione e conserva lo strumento esistente."},
+    "availability": "Il programma comune Cursor/Qoder è implementato su main e richiede la prossima versione della piattaforma corrispondente.", "cursor": {"guide": "Installare Cursor CLI", "scope": "Cursor CLI: avvisi Stop informativi e webhook facoltativi su Linux amd64, macOS arm64 e Windows amd64. Nessun supporto per Cursor IDE, suoni o messa a fuoco con clic. Il programma verifica CLI e profilo selezionati.", "restart": "Riavvia Cursor CLI per caricare l’osservatore Stop informativo."},
+    "qoder": {"guide": "Configurazione e hook di Qoder", "scope": "Qoder: avvisi di completamento, domande, permessi, piani e compagni, con webhook facoltativi. Selezionalo insieme agli altri agenti nel programma comune; un clic non apre la chat esistente esatta.", "restart": "Riavvia Qoder per attivare gli hook."},
+    "agentNotify": {"label": "Configurare gli strumenti di notifica facoltativi", "hint": "Controlla la configurazione delle notifiche per Claude, Codex CLI e Cursor CLI selezionati. Se selezionato segue le preferenze salvate; se deselezionato salta la configurazione per questa esecuzione e conserva registrazioni e consensi esistenti. Qoder, OpenCode e Gemini non sono interessati."},
     "title": "Configura le notifiche", "intro": "Segui i passaggi per aggiungere notifiche a {agent}.", "chooseAgent": "Scegli i tuoi agenti", "requires": "Richiede {agent}", "bothAgents": "Entrambi gli agenti", "bothSelected": "✓ Entrambi gli agenti selezionati", "installBoth": "Installa per entrambi gli agenti", "chooseComputer": "Scegli il computer su cui è in esecuzione il tuo agente", "selected": "Selezionato", "detected": "Rilevato automaticamente", "change": "Cambia", "targetOs": "Sistema operativo di destinazione",
     "products": { "claude": "Claude", "codex": "Codex CLI", "both": "Claude + Codex CLI",
       "opencode": "OpenCode",

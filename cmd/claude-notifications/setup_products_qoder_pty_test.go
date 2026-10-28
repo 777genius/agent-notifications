@@ -5,7 +5,11 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -26,6 +30,20 @@ func TestBootstrapPublicQoderConsentAndDispatch(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			f := newBootstrapFixture(t)
+			received := make(chan []byte, 2)
+			endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, _ := io.ReadAll(r.Body)
+				received <- body
+				w.WriteHeader(http.StatusOK)
+			}))
+			defer endpoint.Close()
+			config := filepath.Join(f.project, "TEST-qoder-config.json")
+			configData := []byte(fmt.Sprintf(`{"schemaVersion":2,"notifications":{"desktop":{"enabled":false},"webhook":{"enabled":false}},"agents":{"qoder":{"notifications":{"webhook":{"enabled":true,"url":%q,"preset":"slack"}}}}}`, endpoint.URL))
+			if !json.Valid(configData) {
+				t.Fatal("invalid managed Qoder delivery fixture configuration")
+			}
+			f.write(config, configData, 0600)
+			f.env = append(f.env, "AGENT_NOTIFICATIONS_CONFIG="+config)
 			profile := filepath.Join(f.home, "TEST selected Qoder profile")
 			if err := os.MkdirAll(profile, 0700); err != nil {
 				t.Fatal(err)
@@ -33,18 +51,27 @@ func TestBootstrapPublicQoderConsentAndDispatch(t *testing.T) {
 			f.write(filepath.Join(profile, "settings.json"), []byte("{\"foreign\":\"TEST-preserved\"}\n"), 0600)
 			f.env = append(f.env, "QODER_CONFIG_DIR="+profile)
 			calls := filepath.Join(f.project, "TEST native Qoder calls")
-			// The official binary name is qodercli. Its native staging contract is
-			// finite: it never reads auth or writes outside the supplied test stage.
+			// The UAP native CLI contract stays bound to this selected disposable
+			// profile for inventory, installation, verification and removal.
 			program := filepath.Join(f.tools, "TEST-qoder-native.py")
 			f.write(program, []byte(`import json, os, pathlib, shutil, sys
 args = sys.argv[1:]
 assert args[0] == '--config-dir' and args[2] == 'plugins', args
 profile = pathlib.Path(args[1])
-assert profile.name == 'profile' and profile.parent.name.startswith('TEST-agent-notifications-qoder-')
+assert profile == pathlib.Path(`+strconv.Quote(profile)+`)
 assert os.environ['QODER_CONFIG_DIR'] == str(profile)
-assert os.environ['HOME'] == os.environ['USERPROFILE'] and pathlib.Path.cwd().name == 'project'
+assert os.environ['HOME'] == os.environ['USERPROFILE']
+if args[3] == 'list':
+ registry = profile / 'plugins/installed_plugins_v2.json'
+ data = json.loads(registry.read_text()) if registry.exists() else {}
+ print(json.dumps([{'id': key, 'version': rows[0]['version']} for key, rows in data.get('plugins', {}).items()]))
+ sys.exit(0)
 if args[3] == 'uninstall':
- assert args[4:] == ['agent-notifications-qoder@local', '--scope', 'user', '--json', '--keep-data'], args
+ assert args[4:] == ['agent-notifications-qoder', '--scope', 'user'], args
+ registry = profile / 'plugins/installed_plugins_v2.json'
+ data = json.loads(registry.read_text())
+ for row in data.get('plugins', {}).get('agent-notifications-qoder@local', []):
+  shutil.rmtree(row['installPath'])
  for relative, field in [('plugins/installed_plugins_v2.json', 'plugins'), ('settings.json', 'enabledPlugins')]:
   path = profile / relative
   data = json.loads(path.read_text())
@@ -52,7 +79,7 @@ if args[3] == 'uninstall':
   path.write_text(json.dumps(data) + '\n')
  print(json.dumps({'ok': True, 'pluginId': 'agent-notifications-qoder@local', 'fullyRemoved': True}))
  sys.exit(0)
-assert len(args) == 8 and args[3] == 'install' and args[5:] == ['--scope', 'user', '--json'], args
+assert len(args) == 7 and args[3] == 'install' and args[5:] == ['--scope', 'user'], args
 source = pathlib.Path(args[4])
 manifest = json.loads((source / '.qoder-plugin/plugin.json').read_text())
 plugin = 'agent-notifications-qoder@local'
@@ -79,6 +106,9 @@ print(json.dumps({'ok': True, 'pluginId': plugin, 'path': str(dest)}))
 				answer = "y\n"
 			}
 			r := f.terminal([]string{"--webhook", "--plain"}, promptStep{"comma-separated", "qoder\n", nil}, promptStep{setupProductsConfirmationTitle, answer, nil})
+			if r.code != 0 {
+				t.Logf("Qoder installer diagnostics: %s", f.diagnosticText())
+			}
 			requireBootstrapSuccess(t, r)
 			if !strings.Contains(r.screen, "Qoder (CLI present)") || !strings.Contains(r.screen, "Channels: Desktop off, Webhook on") {
 				t.Fatalf("Qoder selection or consent omitted: %s", r.screen)
@@ -101,6 +131,24 @@ print(json.dumps({'ok': True, 'pluginId': plugin, 'path': str(dest)}))
 			}
 			if _, err := os.Stat(filepath.Join(f.home, ".qoder", "settings.json")); !os.IsNotExist(err) {
 				t.Fatalf("native install substituted default Qoder profile: %v", err)
+			}
+			consumer := f.ownership().Consumers["qoder-notifications"]
+			marker := "TEST-managed-qoder-completion"
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			event := exec.CommandContext(ctx, consumer.Commands[0], "qoder-event", "Stop", "--control-root", f.control(), "--binding", consumer.Commands[1])
+			event.Env, event.Dir, event.Stdin = f.env, f.project, strings.NewReader(fmt.Sprintf(`{"session_id":%q,"hook_event_name":"Stop","last_assistant_message":%q}`, marker, marker))
+			eventOut, eventErr := event.CombinedOutput()
+			cancel()
+			if eventErr != nil {
+				t.Fatalf("installed managed hook failed: %s %v", eventOut, eventErr)
+			}
+			select {
+			case body := <-received:
+				if !bytes.Contains(body, []byte(marker)) {
+					t.Fatalf("managed delivery lost event: %s", body)
+				}
+			case <-time.After(3 * time.Second):
+				t.Fatal("installed UAP-bound managed hook did not deliver its selected webhook")
 			}
 			assertQoderStalledInputAllowsRemove(t, f, profile)
 		})

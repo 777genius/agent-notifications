@@ -18,7 +18,7 @@ func TestSetupProductsChannelsDefaults(t *testing.T) {
 	for _, key := range []string{"HOME", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "OPENCODE_CONFIG_DIR", "GEMINI_CLI_HOME", "AGENT_NOTIFICATIONS_CONTROL_ROOT"} {
 		t.Setenv(key, filepath.Join(root, key))
 	}
-	for _, product := range []struct{ ids, title string }{{"claude,codex,opencode,gemini,qoder", "Notification channels for OpenCode, Gemini CLI, Qoder"}, {"cursor", "Notification channels for Cursor CLI (explicit profile)"}} {
+	for _, product := range []struct{ ids, title string }{{"claude,codex,opencode,gemini,qoder", "Notification channels for OpenCode, Gemini CLI, Qoder"}, {"cursor", "Notification channels for Cursor CLI"}} {
 		for _, tc := range []struct{ name, input, want string }{
 			{"enter", "\n", "desktop\n"},
 			{"both", "desktop,webhook\n", "desktop,webhook\n"},
@@ -77,7 +77,7 @@ func TestBootstrapReadableSummary(t *testing.T) {
 	shown := strings.Join(rows, "\n")
 	for _, want := range []string{
 		"Installation summary", "Claude: automatic notification hooks, agent-notify MCP, agent-notify skill", "Codex: automatic notification hooks, agent-notify stays off",
-		"Cursor CLI (explicit profile): agent-notify MCP, agent-notify skill\n    Channels: Desktop off, Webhook on", "Cursor workspace: /TEST scope-root/exact-end", "Cursor agent executable: /TEST client-executable/exact-end",
+		"Cursor CLI: agent-notify MCP, agent-notify skill\n    Channels: Desktop off, Webhook on", "Cursor workspace: /TEST scope-root/exact-end", "Cursor agent executable: /TEST client-executable/exact-end",
 		"Channels: Desktop on, Webhook off", "channels use your existing notification settings", "Notification service: off (kept)",
 		`raw-\xff-\x1b[31m/\u202e/end`, `Codex home: \"/TEST trailing \"`, `Desktop application: \"/TEST saved \" (kept)`,
 		i.Provenance.SourceCommit, i.Provenance.SHA256, "partial installation", "enabled destination",
