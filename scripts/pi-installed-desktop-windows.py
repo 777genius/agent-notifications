@@ -193,6 +193,17 @@ try {
 '''
 
 
+def shell_notification_state():
+    # Advisory shell state only. Do not warm the actual PowerShell/WinRT sender.
+    import ctypes
+    shell = ctypes.WinDLL("shell32", use_last_error=True)
+    shell.SHQueryUserNotificationState.argtypes = (ctypes.POINTER(ctypes.c_int),)
+    shell.SHQueryUserNotificationState.restype = ctypes.c_long
+    state = ctypes.c_int()
+    status = shell.SHQueryUserNotificationState(ctypes.byref(state))
+    return {"hresult": status, "state": state.value if status >= 0 else None}
+
+
 def toast_readiness(title):
     # Read only this candidate's fixed native identity; return no history text.
     import ctypes
@@ -208,12 +219,7 @@ def toast_readiness(title):
     result = command([powershell, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", TOAST_READINESS], timeout=15, env=env)
     P.require(len(result.stdout) <= 4096, "native_toast_readiness_output_bound")
     value = json.loads(result.stdout.decode(encoding="utf-8-sig"))
-    shell = ctypes.WinDLL("shell32", use_last_error=True)
-    shell.SHQueryUserNotificationState.argtypes = (ctypes.POINTER(ctypes.c_int),)
-    shell.SHQueryUserNotificationState.restype = ctypes.c_long
-    state = ctypes.c_int()
-    status = shell.SHQueryUserNotificationState(ctypes.byref(state))
-    value["shell_notification_state"] = {"hresult": status, "state": state.value if status >= 0 else None}
+    value["shell_notification_state"] = shell_notification_state()
     return value
 
 
@@ -458,9 +464,9 @@ def run(args):
         report["installed_asset_sha256"] = P.asset_receipts(root / "control", root / "runtime", args.assets_root)
         report["product_executed"] = True
         try:
-            report["native_toast_readiness_before"] = toast_readiness(None)
+            report["native_shell_state_before"] = shell_notification_state()
         except Exception as error:
-            report["native_toast_readiness_before"] = {"status": "unavailable", "failure": str(error)[-2000:]}
+            report["native_shell_state_before"] = {"status": "unavailable", "failure": str(error)[-2000:]}
         for name in CASES:
             case_root = root / ("case-" + name)
             provider = F.Provider("success", hold_reply=name != "question")
