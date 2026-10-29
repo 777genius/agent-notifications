@@ -3,7 +3,7 @@
 ## Reporting a vulnerability
 
 Report suspected security vulnerabilities privately to the maintainer at
-[iliyazelenkog@gmail.com](mailto:iliyazelenkog@gmail.com).
+[quantjumppro@gmail.com](mailto:quantjumppro@gmail.com).
 Please do not disclose vulnerability details in a public GitHub issue or pull
 request before the maintainer has had an opportunity to investigate.
 
