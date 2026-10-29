@@ -103,7 +103,7 @@ def verify_permission_grant(request_receipt, fresh_receipt):
     return fresh
 
 
-def consent_observer(request, observe, app, receipt, evidence_root):
+def consent_observer(request, observe, app, receipt, evidence_root=None):
     """Activate at most the one existing verified request helper, never relaunch."""
     attempted, captured = False, False
     began = time.monotonic()
@@ -120,7 +120,7 @@ def consent_observer(request, observe, app, receipt, evidence_root):
                 attempted = True
                 receipt["helper_activation"] = observe("activate-permission-helper", str(app), str(helpers[0]["pid"]),
                                                        helpers[0]["process_start_identity"])
-        if not captured and request.poll() is None and time.monotonic() - began >= 5:
+        if evidence_root is not None and not captured and request.poll() is None and time.monotonic() - began >= 5:
             captured = True
             pending = {"elapsed_seconds": round(time.monotonic() - began, 3), "original_request_running": True}
             try:
