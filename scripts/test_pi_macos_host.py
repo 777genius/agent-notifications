@@ -5,6 +5,7 @@ from pathlib import Path
 import unittest
 import tempfile
 from types import SimpleNamespace
+from unittest.mock import patch
 
 SPEC = importlib.util.spec_from_file_location("pi_macos_host", Path(__file__).with_name("pi-macos-host.py"))
 H = importlib.util.module_from_spec(SPEC)
@@ -70,13 +71,26 @@ class OfficialHostGuards(unittest.TestCase):
 
     def test_readiness_requires_actual_running_system_application_identity(self):
         state = {"disabled": False, "loaded": True, "running": True, "pid": 41}
-        app = {"pid": 41, "bundle_id": H.LABEL, "bundle_path": str(H.APP), "executable_path": str(H.EXE),
+        app = {"pid": 41, "bundle_id": H.BUNDLE_ID, "bundle_path": str(H.APP), "executable_path": str(H.EXE),
                "finished_launching": True, "process_start_identity": "123:456"}
         H.validate_running(state, {"applications": [app]})
         for change in ({"pid": 42}, {"bundle_path": "/TEST/foreign.app"}, {"executable_path": "/TEST/foreign"},
-                       {"bundle_id": "foreign"}, {"finished_launching": False}, {"process_start_identity": ""}):
+                       {"bundle_id": "foreign"}, {"bundle_id": H.LABEL},
+                       {"finished_launching": False}, {"process_start_identity": ""}):
             with self.assertRaises(ValueError):
                 H.validate_running(state, {"applications": [{**app, **change}]})
+
+    def test_launchd_service_identity_is_distinct_from_application_bundle_identity(self):
+        domain = "gui/501"
+        with patch.object(H, "command", side_effect=[
+                (0, '"com.apple.notificationcenterui.agent" => true', ""),
+                (113, "", 'Could not find service "com.apple.notificationcenterui.agent"')]) as observed:
+            self.assertEqual(H.inspect(domain), {"disabled": True, "loaded": False, "running": False})
+            self.assertEqual(observed.call_args_list[1].args[0],
+                             ["/bin/launchctl", "print", domain + "/com.apple.notificationcenterui.agent"])
+        with patch.object(H, "command", return_value=(0, '"com.apple.notificationcenterui" => true', "")):
+            with self.assertRaisesRegex(ValueError, "disabled_state_ambiguous"):
+                H.inspect(domain)
 
 
 if __name__ == "__main__":

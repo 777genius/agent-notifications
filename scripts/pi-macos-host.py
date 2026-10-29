@@ -14,7 +14,8 @@ import tempfile
 import time
 
 REPO = Path(__file__).resolve().parents[1]
-LABEL = "com.apple.notificationcenterui"
+LABEL = "com.apple.notificationcenterui.agent"
+BUNDLE_ID = "com.apple.notificationcenterui"
 PLIST = Path("/System/Library/LaunchAgents/com.apple.notificationcenterui.plist")
 APP = Path("/System/Library/CoreServices/NotificationCenter.app")
 EXE = APP / "Contents/MacOS/NotificationCenter"
@@ -111,7 +112,7 @@ def validate_running(state, native):
             and type(state.get("pid")) is int and state["pid"] > 0, "notification_agent_not_running")
     apps = native.get("applications", [])
     require(len(apps) == 1 and apps[0].get("pid") == state["pid"]
-            and apps[0].get("bundle_id") == LABEL and apps[0].get("bundle_path") == str(APP)
+            and apps[0].get("bundle_id") == BUNDLE_ID and apps[0].get("bundle_path") == str(APP)
             and apps[0].get("executable_path") == str(EXE) and apps[0].get("finished_launching") is True
             and apps[0].get("process_start_identity"), "system_notification_application_identity_unverified")
 

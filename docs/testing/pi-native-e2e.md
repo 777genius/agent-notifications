@@ -281,7 +281,7 @@ Center's UI agent during image construction. An owner may dispatch this workflow
 on that disposable GitHub-hosted image with `prepare_notification_center=true`.
 The preparation records the actual official image metadata, current GUI service
 and disabled states, and immutable Apple system-agent identity. Only the exact
-disabled/unloaded `com.apple.notificationcenterui` agent is enabled and
+disabled/unloaded `com.apple.notificationcenterui.agent` service is enabled and
 bootstrapped once; readiness is verified before the normal permission request.
 It does not change permission databases, notification grants, defaults or APNs
 services. Unknown, physical and Namespace hosts are excluded from this opt-in

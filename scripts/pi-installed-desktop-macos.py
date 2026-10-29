@@ -212,7 +212,7 @@ def permission_services():
             if len(values) == 4 and Path(values[3]).name in names and all(value.isdecimal() for value in values[:3]):
                 result["processes"].append(dict(zip(("pid", "ppid", "uid", "comm"), values)))
         domain = "gui/" + str(os.getuid())
-        for label in ("com.apple.notificationcenterui", "com.apple.usernoted", "com.apple.usernotificationsd"):
+        for label in ("com.apple.notificationcenterui.agent", "com.apple.usernoted", "com.apple.usernotificationsd"):
             state = subprocess.run(["/bin/launchctl", "print", domain + "/" + label], stdin=subprocess.DEVNULL,
                                    capture_output=True, timeout=3)
             text = state.stdout[:65536].decode(errors="replace")
@@ -224,7 +224,7 @@ def permission_services():
                                   capture_output=True, timeout=3)
         result["disabled_entries"] = [line.strip() for line in disabled.stdout[:65536].decode(errors="replace").splitlines()
                                       if any('"' + label + '"' in line for label in
-                                             ("com.apple.notificationcenterui", "com.apple.usernoted", "com.apple.usernotificationsd"))]
+                                             ("com.apple.notificationcenterui.agent", "com.apple.usernoted", "com.apple.usernotificationsd"))]
         result["disabled_query_exit"] = disabled.returncode
     except Exception as error:
         result["inconclusive_error_class"] = type(error).__name__
