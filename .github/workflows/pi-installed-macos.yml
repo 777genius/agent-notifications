@@ -1,4 +1,4 @@
-name: Pi installed macOS desktop
+name: Pi macOS installed process and native product
 
 on:
   pull_request:
@@ -65,12 +65,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: pi-installed-macos-${{ github.ref }}
-  cancel-in-progress: false
+  group: pi-installed-macos-${{ github.event_name }}-${{ inputs.observer_only && 'observer' || github.event_name == 'workflow_dispatch' && 'native' || 'process' }}-${{ github.event.pull_request.number || inputs.source_sha || github.sha }}-${{ inputs.macos_runner || inputs.observer_only && inputs.hosted_observer && 'macos-15' || github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'macos-15' || vars.CI_MACOS_15_RUNNER || 'macos-15' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   macos:
-    name: Actual installed Pi / macOS
+    name: ${{ inputs.observer_only && 'macOS native observer prerequisites' || github.event_name == 'workflow_dispatch' && 'Actual installed Pi / macOS native product' || 'Actual installed Pi / macOS process compatibility' }}
     runs-on: ${{ inputs.macos_runner || inputs.observer_only && inputs.hosted_observer && 'macos-15' || github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'macos-15' || vars.CI_MACOS_15_RUNNER || 'macos-15' }}
     timeout-minutes: 30
     env:
@@ -116,6 +116,10 @@ jobs:
             -framework CoreAudio -framework CoreMedia -framework ScreenCaptureKit \
             -o "$RUNNER_TEMP/TEST-pi-macos/observer"
           "$RUNNER_TEMP/TEST-pi-macos/observer" test-process-identity > "$RUNNER_TEMP/TEST-pi-macos/evidence/process-identity.json"
+      - name: Require native desktop observer prerequisites only for explicit native work
+        if: ${{ inputs.observer_only || github.event_name == 'workflow_dispatch' }}
+        shell: bash
+        run: |
           "$RUNNER_TEMP/TEST-pi-macos/observer" preflight > "$RUNNER_TEMP/TEST-pi-macos/evidence/observer-preflight.json"
       - name: Prepare the existing official Notification Center agent only when explicitly selected
         if: ${{ inputs.prepare_notification_center }}
@@ -177,7 +181,7 @@ jobs:
             --updated-package "$root/candidate/package-B.zip" --assets-root "$GITHUB_WORKSPACE" \
             --pi-executable "$root/pi/pi/pi" --report "$root/evidence/process.json"
       - name: Observe installed product completion question audio and physical click
-        if: ${{ !inputs.observer_only }}
+        if: ${{ github.event_name == 'workflow_dispatch' && !inputs.observer_only }}
         shell: bash
         run: |
           set -euo pipefail
@@ -191,11 +195,11 @@ jobs:
             --helper-archive "$root/helper/ClaudeNotifier-smoke.app.zip" \
             --helper-input "$root/evidence/helper-input.json" \
             --report "$root/evidence/evidence.json"
-      - name: Preserve native evidence even when an observation is unavailable
+      - name: Preserve exact lane evidence even when an observation is unavailable
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: pi-installed-macos-${{ inputs.source_sha || github.event.pull_request.head.sha || github.sha }}
+          name: ${{ inputs.observer_only && 'pi-macos-observer' || github.event_name == 'workflow_dispatch' && 'pi-installed-macos' || 'pi-installed-macos-process' }}-${{ inputs.source_sha || github.event.pull_request.head.sha || github.sha }}
           path: ${{ runner.temp }}/TEST-pi-macos/evidence/*
           if-no-files-found: error
           retention-days: 14
