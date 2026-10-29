@@ -15,10 +15,12 @@ import os
 from pathlib import Path
 import platform
 import plistlib
+import re
 import select
 import shlex
 import shutil
 import signal
+import stat
 import subprocess
 import tempfile
 import threading
@@ -878,6 +880,221 @@ def cleanup_case(actions, primary_failure, report, name):
             raise RuntimeError("owned_native_case_cleanup_failed")
 
 
+class NativeContextObservation:
+    """Read only original native transport metadata; never delivery evidence."""
+    unsealed = object()
+
+    def __init__(self, temporary, *, now=time.monotonic):
+        self.now, self.started = now, now()
+        self.stop_event = threading.Event()
+        self.seen, self.attempts, self.started_attempts = set(), set(), set()
+        self.bytes_read, self.entries_visited = 0, 0
+        self.receipt = {"scope": "read_only_original_native_context_metadata", "desktop_qualified": False,
+                        "diagnostic_only": True, "qualification_input": False, "absence_is_unknown": True, "maximum_seconds": 15,
+                        "maximum_bytes": 256 * 1024, "maximum_attempts": 8, "maximum_rows": 16,
+                        "maximum_directory_entries": 65536,
+                        "poll_interval_seconds": 0.005, "capped": False, "rows": []}
+        self.thread = None
+        fd = None
+        try:
+            P.require(temporary.is_absolute() and temporary.resolve(strict=True) == temporary
+                      and temporary.name == "tmp" and temporary.parent.name.startswith("case-")
+                      and temporary.parent.parent.name.startswith("TEST-pi-installed-macos-"),
+                      "owned_native_context_TEST_tmp_required")
+            fd = self.open_root(temporary)
+            try:
+                self.private_directory(fd)
+            except Exception:
+                os.close(fd)
+                fd = None
+                raise
+            self.thread = threading.Thread(target=self.run, args=(fd,), daemon=True)
+            self.thread.start()
+            fd = None  # The one owned thread closes its directory descriptor.
+        except Exception as error:
+            if fd is not None:
+                os.close(fd)
+            self.thread = None
+            self.receipt["unavailable_class"] = type(error).__name__
+
+    @staticmethod
+    def open_root(path):
+        fd = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+        try:
+            for component in path.parts[1:]:
+                child = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=fd)
+                os.close(fd)
+                fd = child
+            return fd
+        except Exception:
+            os.close(fd)
+            raise
+
+    @staticmethod
+    def private_directory(fd):
+        metadata = os.fstat(fd)
+        P.require(stat.S_ISDIR(metadata.st_mode) and metadata.st_uid == os.getuid()
+                  and stat.S_IMODE(metadata.st_mode) == 0o700, "native_context_private_directory_required")
+
+    def entries(self, fd, limit):
+        names = []
+        with os.scandir(fd) as entries:
+            for entry in entries:
+                if len(names) == limit or self.entries_visited >= self.receipt["maximum_directory_entries"]:
+                    self.receipt["capped"] = True
+                    raise RuntimeError("native_context_inventory_capped")
+                self.entries_visited += 1
+                names.append(entry.name)
+        return names
+
+    def directory(self, parent, name):
+        fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=parent)
+        try:
+            self.private_directory(fd)
+        except Exception:
+            os.close(fd)
+            raise
+        return fd
+
+    def read(self, directory, name, limit):
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=directory)
+        try:
+            before = os.fstat(fd)
+            P.require(stat.S_ISREG(before.st_mode) and before.st_uid == os.getuid()
+                      and stat.S_IMODE(before.st_mode) == 0o600
+                      and 0 < before.st_size <= limit, "native_context_private_file_required")
+            # OwnedRequest publishes by hardlink before unlinking its private
+            # temporary name. Observe only the subsequently sealed single link.
+            if before.st_nlink == 2:
+                self.receipt["unsealed_publications"] = self.receipt.get("unsealed_publications", 0) + 1
+                return self.unsealed
+            P.require(before.st_nlink == 1, "native_context_private_file_required")
+            if self.bytes_read + before.st_size > self.receipt["maximum_bytes"]:
+                self.receipt["capped"] = True
+                raise RuntimeError("native_context_bytes_capped")
+            raw = bytearray()
+            while len(raw) <= limit:
+                remaining = self.receipt["maximum_bytes"] - self.bytes_read
+                if remaining <= 0:
+                    break
+                data = os.read(fd, min(4096, limit + 1 - len(raw), remaining))
+                if not data:
+                    break
+                raw.extend(data)
+                self.bytes_read += len(data)
+            after = os.fstat(fd)
+            P.require(len(raw) == before.st_size and after.st_dev == before.st_dev and after.st_ino == before.st_ino
+                      and after.st_size == before.st_size and after.st_nlink == 1
+                      and after.st_uid == before.st_uid and after.st_mode == before.st_mode,
+                      "native_context_file_changed")
+            def fields(pairs):
+                value = {}
+                for key, item in pairs:
+                    P.require(key not in value, "duplicate_native_context_metadata_field")
+                    value[key] = item
+                return value
+            return json.loads(raw, object_pairs_hook=fields)
+        finally:
+            os.close(fd)
+
+    def scan(self, root):
+        uuid = r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}"
+        roots = [name for name in self.entries(root, 64)
+                 if re.fullmatch(r"agent-notifications-context-[A-Za-z0-9-]{1,64}", name)]
+        if len(roots) > 8:
+            self.receipt["capped"] = True
+            raise RuntimeError("native_context_roots_capped")
+        for name in roots:
+            try:
+                parent = self.directory(root, name)
+            except FileNotFoundError:
+                continue
+            try:
+                children = self.entries(parent, 8)
+                for identity in children:
+                    if re.fullmatch(uuid, identity) is None:
+                        continue
+                    try:
+                        directory = self.directory(parent, identity)
+                    except FileNotFoundError:
+                        continue
+                    try:
+                        for filename in sorted(self.entries(directory, 16), key=lambda value: not value.endswith(".started")):
+                            match = re.fullmatch("(" + uuid + r")\.(started|receipt)", filename)
+                            if match is None:
+                                continue
+                            nonce, phase = match.groups()
+                            key = (name, identity, nonce)
+                            if (key, phase) in self.seen:
+                                continue
+                            if key not in self.attempts and len(self.attempts) >= 8:
+                                self.receipt["capped"] = True
+                                raise RuntimeError("native_context_attempts_capped")
+                            self.attempts.add(key)
+                            try:
+                                value = self.read(directory, filename, 1024 if phase == "started" else 16384)
+                            except FileNotFoundError:
+                                continue
+                            if value is self.unsealed:
+                                continue
+                            P.require(isinstance(value, dict) and type(value.get("schemaVersion")) is int and value["schemaVersion"] == 1
+                                      and value.get("correlationID") == identity and value.get("nonce") == nonce,
+                                      "native_context_metadata_correlation_unverified")
+                            row = {"phase": phase, "elapsed_seconds": round(self.now() - self.started, 3)}
+                            if phase == "started":
+                                P.require(set(value) == {"schemaVersion", "correlationID", "nonce", "process"},
+                                          "native_context_started_shape")
+                                process = value.get("process")
+                                P.require(isinstance(process, dict) and set(process) == {"pid", "startSeconds", "startMicroseconds"}
+                                          and all(type(process[key]) is int for key in process)
+                                          and 0 < process["pid"] <= 0x7fffffff and 0 < process["startSeconds"] <= 0xffffffffffffffff
+                                          and 0 <= process["startMicroseconds"] < 1_000_000,
+                                          "native_context_started_process_shape")
+                                row["reported_process"] = process
+                                row["process_identity_verified"] = False
+                                self.started_attempts.add(key)
+                            else:
+                                P.require(set(value) == {"schemaVersion", "correlationID", "nonce", "notificationID", "status", "reason", "retrySafe"}
+                                          and value.get("notificationID") == identity and value.get("retrySafe") is False
+                                          and value.get("status") in ("rejected", "suppressed", "submitted", "unknown")
+                                          and value.get("reason") in ("malformed_request", "unsupported_version", "unsupported_action",
+                                              "invalid_file", "expired", "activation_required", "permission_denied",
+                                              "unsupported_notifier", "os_rejected", "os_accepted", "timeout"),
+                                          "native_context_receipt_shape")
+                                row.update(status=value["status"], reason=value["reason"],
+                                           matching_started_observed=key in self.started_attempts)
+                            if len(self.receipt["rows"]) >= 16:
+                                self.receipt["capped"] = True
+                                raise RuntimeError("native_context_rows_capped")
+                            self.receipt["rows"].append(row)
+                            self.seen.add((key, phase))
+                    finally:
+                        os.close(directory)
+            finally:
+                os.close(parent)
+
+    def run(self, fd):
+        try:
+            while not self.stop_event.is_set() and self.now() - self.started < 15:
+                self.scan(fd)
+                self.stop_event.wait(0.005)
+        except Exception as error:
+            self.receipt["unavailable_class"] = type(error).__name__
+        finally:
+            os.close(fd)
+
+    def close(self):
+        self.stop_event.set()
+        if self.thread is not None:
+            self.thread.join(timeout=1)
+        self.receipt.update(owned_thread_collected=self.thread is None or not self.thread.is_alive(),
+                            elapsed_seconds=round(self.now() - self.started, 3),
+                            bytes_read=self.bytes_read, entries_visited=self.entries_visited,
+                            attempts_observed=len(self.attempts))
+        P.require(self.receipt["owned_thread_collected"], "native_context_observer_not_collected")
+        return self.receipt
+
+
 def run(args):
     P.require(platform.system() == "Darwin", "actual_macos_host_required")
     root = Path(tempfile.mkdtemp(prefix="TEST-pi-installed-macos-")).resolve()
@@ -928,7 +1145,7 @@ def run(args):
     def case(name, decoy):
         case_root = root / ("case-" + name)
         provider = F.Provider("success", hold_reply=name != "question")
-        terminal, recorder = None, None
+        terminal, recorder, native_context = None, None, None
         primary_failure = None
         started = time.monotonic()
         timing = {}
@@ -959,6 +1176,11 @@ def run(args):
             baseline = json.loads((case_root / "capture-ready.json").read_text())
             P.require(baseline["audio_peak"] < 0.0001, "native_audio_baseline_not_quiet")
             timing["capture_ready_seconds"] = round(time.monotonic() - started, 3)
+            # Question events begin in the real input command, before provider
+            # release. Observe only this original case's native transport.
+            native_context = NativeContextObservation(case_root / "tmp")
+            timing["native_context_armed_seconds"] = round(time.monotonic() - started, 3)
+            report.setdefault("native_context_observations", []).append({"case": name, "observation": native_context.receipt})
             if name == "question":
                 terminal.focus()
                 terminal.type("/TEST-dialog")
@@ -1083,7 +1305,10 @@ def run(args):
                     if source.is_file() and not source.is_symlink() and source.stat().st_size <= 16 * 1024 * 1024:
                         shutil.copyfile(source, retained / filename)
 
-            actions = [("capture", stop_recorder)]
+            actions = []
+            if native_context is not None:
+                actions.append(("native_context_observation", native_context.close))
+            actions.append(("capture", stop_recorder))
             if terminal:
                 actions.append(("origin", terminal.close))
             actions.extend((("provider", provider.close), ("evidence", retain)))

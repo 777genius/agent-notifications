@@ -476,6 +476,156 @@ class FailedCaseEvidence(unittest.TestCase):
             M.cleanup_case([("origin", failed_close)], None, {}, "completion")
 
 
+class NativeContextEvidence(unittest.TestCase):
+    correlation = "11111111-1111-4111-8111-111111111111"
+    nonce = "22222222-2222-4222-8222-222222222222"
+
+    def transport(self, root):
+        temporary = root / "case-completion/tmp"
+        temporary.mkdir(parents=True, mode=0o700)
+        parent = temporary / "agent-notifications-context-123456"
+        parent.mkdir(mode=0o700)
+        directory = parent / self.correlation
+        directory.mkdir(mode=0o700)
+        return temporary, directory
+
+    def publish(self, directory, phase, value):
+        path = directory / (self.nonce + "." + phase)
+        path.write_text(json.dumps(value))
+        path.chmod(0o600)
+        return path
+
+    def test_original_transport_metadata_is_read_without_request_access_or_file_changes(self):
+        with tempfile.TemporaryDirectory(prefix="TEST-pi-installed-macos-") as temporary:
+            root = Path(temporary).resolve()
+            owned, directory = self.transport(root)
+            process = {"pid": os.getpid(), "startSeconds": 123, "startMicroseconds": 456}
+            started = self.publish(directory, "started", {"schemaVersion": 1, "correlationID": self.correlation,
+                "nonce": self.nonce, "process": process})
+            receipt = self.publish(directory, "receipt", {"schemaVersion": 1, "correlationID": self.correlation,
+                "nonce": self.nonce, "notificationID": self.correlation, "retrySafe": False,
+                "status": "rejected", "reason": "permission_denied"})
+            request = self.publish(directory, "request", {"arguments": ["TEST-private-prompt-token"], "bootID": "TEST-private-boot"})
+            before = {p.name: (p.read_bytes(), p.stat().st_ino, p.stat().st_mode, p.stat().st_nlink)
+                      for p in (started, receipt, request)}
+            reads, original_read = [], M.NativeContextObservation.read
+            def read(instance, fd, name, limit):
+                reads.append(name)
+                return original_read(instance, fd, name, limit)
+            with mock.patch.object(M.NativeContextObservation, "read", read):
+                watcher = M.NativeContextObservation(owned)
+                try:
+                    M.wait_for(lambda: len(watcher.receipt["rows"]) == 2, "TEST-original-metadata-not-observed", seconds=2)
+                finally:
+                    observed = watcher.close()
+            self.assertEqual(set(reads), {started.name, receipt.name})
+            self.assertEqual(before, {p.name: (p.read_bytes(), p.stat().st_ino, p.stat().st_mode, p.stat().st_nlink)
+                                      for p in (started, receipt, request)})
+            self.assertEqual(set(p.name for p in directory.iterdir()), set(before))
+            output = json.dumps(observed)
+            for private in (self.correlation, self.nonce, "TEST-private", str(root), "arguments", "bootID"):
+                self.assertNotIn(private, output)
+            self.assertEqual(observed["rows"][0]["reported_process"], process)
+            self.assertFalse(observed["rows"][0]["process_identity_verified"])
+            self.assertEqual(observed["rows"][1]["reason"], "permission_denied")
+            self.assertTrue(observed["rows"][1]["matching_started_observed"])
+            self.assertTrue(observed["owned_thread_collected"])
+            self.assertTrue(observed["absence_is_unknown"])
+            self.assertFalse(observed["qualification_input"])
+            self.assertFalse(watcher.thread.is_alive())
+
+    def test_symlink_and_inventory_cap_are_refusals_without_following_or_mutating_files(self):
+        for scenario in ("symlink", "inventory_cap", "oversized", "unknown_reason", "missing_real_fields", "retry_safe"):
+            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory(prefix="TEST-pi-installed-macos-") as temporary:
+                root = Path(temporary).resolve()
+                owned, directory = self.transport(root)
+                private = "TEST-private-unsupported-reason"
+                if scenario == "symlink":
+                    target = root / "foreign"
+                    target.write_text(private)
+                    (directory / (self.nonce + ".receipt")).symlink_to(target)
+                elif scenario == "inventory_cap":
+                    for number in range(65):
+                        (owned / ("TEST-extra-" + str(number))).touch()
+                elif scenario == "oversized":
+                    self.publish(directory, "receipt", "x" * 16385)
+                else:
+                    value = {"schemaVersion": 1, "correlationID": self.correlation, "nonce": self.nonce,
+                             "notificationID": self.correlation, "retrySafe": scenario == "retry_safe",
+                             "status": "rejected", "reason": private if scenario == "unknown_reason" else "permission_denied"}
+                    if scenario == "missing_real_fields":
+                        del value["notificationID"]
+                        del value["retrySafe"]
+                    self.publish(directory, "receipt", value)
+                watcher = M.NativeContextObservation(owned)
+                try:
+                    M.wait_for(lambda: "unavailable_class" in watcher.receipt, "TEST-unsafe-metadata-not-refused", seconds=2)
+                finally:
+                    value = watcher.close()
+                self.assertEqual(value["rows"], [])
+                self.assertTrue(value["owned_thread_collected"])
+                self.assertNotIn(private, json.dumps(value))
+                if scenario == "inventory_cap":
+                    self.assertTrue(value["capped"])
+                if scenario == "symlink":
+                    self.assertEqual(target.read_text(), private)
+                    self.assertTrue((directory / (self.nonce + ".receipt")).is_symlink())
+
+    def test_real_hardlink_publication_is_ignored_until_sealed_without_stopping_the_watcher(self):
+        with tempfile.TemporaryDirectory(prefix="TEST-pi-installed-macos-") as temporary:
+            root = Path(temporary).resolve()
+            owned, directory = self.transport(root)
+            watcher = M.NativeContextObservation(owned)
+            try:
+                for phase, value in (
+                    ("started", {"schemaVersion": 1, "correlationID": self.correlation, "nonce": self.nonce,
+                                 "process": {"pid": os.getpid(), "startSeconds": 123, "startMicroseconds": 456}}),
+                    ("receipt", {"schemaVersion": 1, "correlationID": self.correlation, "nonce": self.nonce,
+                                 "notificationID": self.correlation, "retrySafe": False,
+                                 "status": "submitted", "reason": "os_accepted"})):
+                    unsealed = directory / ("TEST-" + phase + ".tmp")
+                    unsealed.write_text(json.dumps(value))
+                    unsealed.chmod(0o600)
+                    final = directory / (self.nonce + "." + phase)
+                    count = watcher.receipt.get("unsealed_publications", 0)
+                    os.link(unsealed, final)
+                    M.wait_for(lambda: watcher.receipt.get("unsealed_publications", 0) > count,
+                               "TEST-hardlink-transition-not-seen", seconds=2)
+                    self.assertEqual(final.stat().st_nlink, 2)
+                    self.assertNotIn("unavailable_class", watcher.receipt)
+                    self.assertFalse(any(row["phase"] == phase for row in watcher.receipt["rows"]))
+                    unsealed.unlink()  # Only the actual producer seals publication.
+                    M.wait_for(lambda: any(row["phase"] == phase for row in watcher.receipt["rows"]),
+                               "TEST-sealed-publication-not-seen", seconds=2)
+                    self.assertEqual(final.stat().st_nlink, 1)
+                    self.assertEqual(json.loads(final.read_text()), value)
+            finally:
+                observed = watcher.close()
+            self.assertEqual([row["phase"] for row in observed["rows"]], ["started", "receipt"])
+            self.assertEqual(observed["rows"][1]["status"], "submitted")
+            self.assertTrue(observed["owned_thread_collected"])
+
+    def test_watch_lifetime_and_unavailable_root_never_claim_missing_delivery(self):
+        with tempfile.TemporaryDirectory(prefix="TEST-pi-installed-macos-") as temporary:
+            root = Path(temporary).resolve()
+            owned, _ = self.transport(root)
+            clock = [0.0]
+            watcher = M.NativeContextObservation(owned, now=lambda: clock[0])
+            clock[0] = 16
+            M.wait_for(lambda: not watcher.thread.is_alive(), "TEST-native-watch-not-expired", seconds=2)
+            value = watcher.close()
+            self.assertEqual(value["rows"], [])
+            self.assertEqual(value["elapsed_seconds"], 16)
+            self.assertTrue(value["absence_is_unknown"])
+            self.assertTrue(value["owned_thread_collected"])
+            self.assertFalse(value["qualification_input"])
+            rejected = M.NativeContextObservation(root)
+            value = rejected.close()
+            self.assertIsNone(rejected.thread)
+            self.assertEqual(value["unavailable_class"], "RuntimeError")
+            self.assertTrue(value["owned_thread_collected"])
+
+
 class PermissionUIIdentity(unittest.TestCase):
     def test_display_aliases_come_from_pinned_archive_and_identical_installed_metadata(self):
         archive = M.H.INPUTS / "ClaudeNotifier-smoke.app.zip"
