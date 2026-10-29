@@ -146,6 +146,9 @@ static std::string audioInventory(IMMDeviceEnumerator* enumerator) {
            << ",\"unplugged\":" << unplugged << ",\"not_present\":" << notPresent << ",\"unknown\":" << unknown << "},\"default_roles\":{";
     const ERole roles[] = {eConsole, eMultimedia, eCommunications};
     const char* labels[] = {"console", "multimedia", "communications"};
+    std::wstring consoleId;
+    bool consoleIdKnown = false;
+    int samePlaybackDefaults = -1;
     for (int index = 0; index < 3; index++) {
         ComPtr<IMMDevice> device;
         DWORD state = 0;
@@ -154,8 +157,17 @@ static std::string audioInventory(IMMDeviceEnumerator* enumerator) {
         if (index) result << ',';
         result << '\"' << labels[index] << "\":{\"hresult\":" << hr
                << ",\"state_hresult\":" << stateResult << ",\"state\":" << state << '}';
+        if (SUCCEEDED(hr) && index < 2) {
+            LPWSTR id = nullptr;
+            if (SUCCEEDED(device->GetId(&id)) && id) {
+                if (index == 0) { consoleId = id; consoleIdKnown = true; }
+                else if (consoleIdKnown) samePlaybackDefaults = consoleId == id ? 1 : 0;
+            }
+            if (id) CoTaskMemFree(id);
+        }
     }
-    result << "}}";
+    result << "},\"console_equals_multimedia_endpoint\":"
+           << (samePlaybackDefaults < 0 ? "null" : jsonBool(samePlaybackDefaults == 1)) << '}';
     return result.str();
 }
 
@@ -233,6 +245,10 @@ int wmain(int argc, wchar_t** argv) {
     if (SUCCEEDED(audioResult)) audioResult = enumerator->GetDefaultAudioEndpoint(eRender, eConsole, &endpoint);
     const bool audioEndpoint = SUCCEEDED(audioResult) && endpoint;
     std::uint64_t samples = 0;
+    std::uint64_t packetsObserved = 0, silentPackets = 0, nullDataPackets = 0, decodedSamples = 0;
+    DWORD packetFlags = 0;
+    unsigned playCalls = 0;
+    int decoderBits = 0;
     double peak = 0;
     bool captureStarted = false, played = false;
     if (audioEndpoint && interactive && windowsClient) {
@@ -248,9 +264,12 @@ int wmain(int argc, wchar_t** argv) {
                 const auto* extended = reinterpret_cast<WAVEFORMATEXTENSIBLE*>(format);
                 floating = IsEqualGUID(extended->SubFormat, KSDATAFORMAT_SUBTYPE_IEEE_FLOAT);
             }
+            decoderBits = floating && format->wBitsPerSample == 32 ? 32
+                : !floating && format->wBitsPerSample == 16 ? 16 : 0;
             const ULONGLONG start = GetTickCount64();
             while (GetTickCount64() - start < 2000) {
                 if (!played && GetTickCount64() - start >= 250) {
+                    playCalls++;
                     played = PlaySoundW(argv[1], nullptr, SND_FILENAME | SND_ASYNC | SND_NODEFAULT) != FALSE;
                 }
                 UINT32 packets = 0;
@@ -263,7 +282,12 @@ int wmain(int argc, wchar_t** argv) {
                     if (FAILED(audioResult)) break;
                     const auto count = static_cast<std::uint64_t>(frames) * format->nChannels;
                     samples += count;
+                    packetsObserved++;
+                    packetFlags |= flags;
+                    silentPackets += (flags & AUDCLNT_BUFFERFLAGS_SILENT) != 0;
+                    nullDataPackets += bytes == nullptr;
                     if (!(flags & AUDCLNT_BUFFERFLAGS_SILENT) && bytes) {
+                        if (decoderBits) decodedSamples += count;
                         for (std::uint64_t index = 0; index < count; index++) {
                             double value = 0;
                             if (floating && format->wBitsPerSample == 32) value = reinterpret_cast<const float*>(bytes)[index];
@@ -280,7 +304,26 @@ int wmain(int argc, wchar_t** argv) {
             PlaySoundW(nullptr, nullptr, 0);
         }
     }
-    if (format) CoTaskMemFree(format);
+    std::ostringstream mixFacts;
+    if (!format) mixFacts << "null";
+    else {
+        mixFacts << "{\"tag\":" << format->wFormatTag << ",\"channels\":" << format->nChannels
+                 << ",\"samples_per_second\":" << format->nSamplesPerSec << ",\"bits_per_sample\":" << format->wBitsPerSample
+                 << ",\"block_align\":" << format->nBlockAlign << ",\"cb_size\":" << format->cbSize;
+        if (format->wFormatTag == WAVE_FORMAT_EXTENSIBLE && format->cbSize >= 22) {
+            const auto* extended = reinterpret_cast<WAVEFORMATEXTENSIBLE*>(format);
+            mixFacts << ",\"valid_bits\":" << extended->Samples.wValidBitsPerSample << ",\"channel_mask\":" << extended->dwChannelMask
+                     << ",\"subtype\":{\"data1\":" << extended->SubFormat.Data1 << ",\"data2\":" << extended->SubFormat.Data2
+                     << ",\"data3\":" << extended->SubFormat.Data3 << ",\"data4\":[";
+            for (int index = 0; index < 8; index++) {
+                if (index) mixFacts << ',';
+                mixFacts << static_cast<unsigned>(extended->SubFormat.Data4[index]);
+            }
+            mixFacts << "]}";
+        }
+        mixFacts << '}';
+        CoTaskMemFree(format);
+    }
     std::ostringstream inputFacts;
     inputFacts << '[';
     for (size_t index = 0; index < inputAttempts.size(); index++) {
@@ -305,6 +348,10 @@ int wmain(int argc, wchar_t** argv) {
               << ",\"input_desktop_kind\":\"" << inputKind << "\",\"thread_desktop_kind\":\"" << threadKind
               << "\",\"window_station_kind\":\"" << stationKind << "\",\"owned_input_attempts\":" << inputFacts.str()
               << ",\"audio_samples\":" << samples << ",\"audio_peak\":" << peak
+              << ",\"played\":" << jsonBool(played) << ",\"play_call_count\":" << playCalls << ",\"mix_format\":" << mixFacts.str()
+              << ",\"decoder_bits\":" << decoderBits << ",\"packets_observed\":" << packetsObserved
+              << ",\"silent_packets\":" << silentPackets << ",\"null_data_packets\":" << nullDataPackets
+              << ",\"packet_flags_or\":" << packetFlags << ",\"decoded_samples\":" << decodedSamples
               << ",\"audio_inventory\":" << inventory << "}}\n";
     return 0;
 }

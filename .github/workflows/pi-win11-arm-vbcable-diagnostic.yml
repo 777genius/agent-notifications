@@ -1,0 +1,245 @@
+name: One-shot Pi Windows ARM audio forensics
+
+on:
+  push:
+    branches: [test/pi-win11-arm-audio-forensics]
+
+permissions:
+  contents: read
+
+jobs:
+  diagnostic:
+    runs-on: windows-11-vs2026-arm
+    timeout-minutes: 12
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      BASE_SOURCE_SHA: c78fafc307c1794a0ebaac1736b7f71a850609c4
+    steps:
+      - name: Require the isolated hosted Windows ARM client
+        id: host_guard
+        env:
+          DIAGNOSTIC_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+          DIAGNOSTIC_ROOT: ${{ runner.temp }}/TEST-pi-win11-arm-audio
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:DIAGNOSTIC_RUNNER_ENVIRONMENT -ne 'github-hosted' -or $env:GITHUB_REF -ne 'refs/heads/test/pi-win11-arm-audio-forensics') { throw 'Only the exact hosted diagnostic branch is allowed' }
+          if (!$IsWindows -or [Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString() -ne 'Arm64') { throw 'Native Windows ARM64 is required' }
+          $os = Get-CimInstance Win32_OperatingSystem
+          $admin = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+          New-Item -ItemType Directory -Path $env:DIAGNOSTIC_ROOT | Out-Null
+          "DIAGNOSTIC_ROOT=$env:DIAGNOSTIC_ROOT" >> $env:GITHUB_ENV
+          @{ source_sha=$env:GITHUB_SHA; base_source_sha=$env:BASE_SOURCE_SHA; runner_environment=$env:DIAGNOSTIC_RUNNER_ENVIRONMENT; image_version=$env:ImageVersion; os_version=$os.Version; product_type=$os.ProductType; native_arch='ARM64'; administrator=$admin; product_executed=$false; pi_executed=$false; desktop_qualified=$false } | ConvertTo-Json | Set-Content "$env:DIAGNOSTIC_ROOT/host.json"
+          if ($os.ProductType -ne 1 -or [int]$os.BuildNumber -lt 22000 -or !$admin) { throw 'An administrative Windows 11 Client job is required' }
+          git config --global core.autocrlf false
+          if ($LASTEXITCODE) { throw 'Canonical checkout bytes could not be preserved' }
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Prepare the existing native ARM64 compiler
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products '*' -property installationPath
+          if (!$vs) { throw 'Native Visual Studio unavailable' }
+          $cmd = '"' + $vs + '\Common7\Tools\VsDevCmd.bat" -arch=arm64 -host_arch=arm64 >nul && set'
+          cmd.exe /d /s /c $cmd | ForEach-Object {
+            if ($_ -match '^(PATH|INCLUDE|LIB|LIBPATH)=(.*)$') { "$($matches[1])=$($matches[2])" >> $env:GITHUB_ENV }
+          }
+          if ($LASTEXITCODE) { throw 'Native compiler environment unavailable' }
+      - name: One trusted installation attempt and unchanged actual prerequisite probe
+        id: probe
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = $env:DIAGNOSTIC_ROOT
+          $receipt = [ordered]@{ source_sha=$env:GITHUB_SHA; base_source_sha=$env:BASE_SOURCE_SHA; status='failed'; phase='initial'; install_attempted=$false; product_executed=$false; pi_executed=$false; desktop_qualified=$false }
+
+          function Get-PeMachine([string]$path) {
+            $reader = [IO.BinaryReader]::new([IO.File]::OpenRead($path))
+            try {
+              if ($reader.ReadUInt16() -ne 0x5a4d) { throw 'Missing PE DOS header' }
+              $reader.BaseStream.Position = 0x3c
+              $offset = $reader.ReadUInt32()
+              $reader.BaseStream.Position = $offset
+              if ($reader.ReadUInt32() -ne 0x4550) { throw 'Missing PE signature' }
+              return $reader.ReadUInt16()
+            } finally { $reader.Dispose() }
+          }
+          function Get-TrustedArmTool([string]$pattern) {
+            $file = Get-ChildItem -Path $pattern -File -ErrorAction SilentlyContinue | Sort-Object FullName -Descending | Select-Object -First 1
+            if (!$file -or (Get-PeMachine $file.FullName) -ne 0xaa64) { throw "Installed native ARM64 tool unavailable: $pattern" }
+            $signature = Get-AuthenticodeSignature -LiteralPath $file.FullName
+            if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch '(?:^|,\s*)O=Microsoft Corporation(?:,|$)') { throw 'Installed Microsoft tool trust unavailable' }
+            return @{ path=$file.FullName; file_version=$file.VersionInfo.FileVersion; sha256=(Get-FileHash -Algorithm SHA256 -LiteralPath $file.FullName).Hash; signature_status=[string]$signature.Status; signer=$signature.SignerCertificate.Subject; machine='ARM64' }
+          }
+          function Save-ReadOnlySnapshot([string]$name) {
+            [uint32]$renderTotal = 0
+            $renderResult = [PiAudioDiagnostic]::RenderCount([ref]$renderTotal)
+            $window = [PiAudioDiagnostic]::GetForegroundWindow()
+            [uint32]$processId = 0
+            [void][PiAudioDiagnostic]::GetWindowThreadProcessId($window, [ref]$processId)
+            $class = [Text.StringBuilder]::new(256)
+            [void][PiAudioDiagnostic]::GetClassName($window, $class, $class.Capacity)
+            $image = $null
+            $imageError = $null
+            if ($processId) {
+              try { $image = (Get-Process -Id $processId -ErrorAction Stop).Path }
+              catch { $imageError = $_.Exception.GetType().FullName }
+            }
+            $snapshot = @{ render_hresult=$renderResult; render_all_states_total=$renderTotal; foreground_hwnd=$window.ToInt64(); foreground_pid=$processId; foreground_process_image=$image; image_query_error=$imageError; foreground_class=$class.ToString(); virtual_screen=@{ x=[PiAudioDiagnostic]::GetSystemMetrics(76); y=[PiAudioDiagnostic]::GetSystemMetrics(77); width=[PiAudioDiagnostic]::GetSystemMetrics(78); height=[PiAudioDiagnostic]::GetSystemMetrics(79) }; services=@(Get-Service AudioSrv,AudioEndpointBuilder | Select-Object Name,Status) }
+            $snapshot | ConvertTo-Json -Depth 6 | Set-Content "$root/$name.json"
+            return $snapshot
+          }
+          try {
+            Add-Type -TypeDefinition @'
+          using System;
+          using System.Runtime.InteropServices;
+          using System.Text;
+          public static class PiAudioDiagnostic {
+            [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+            [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr window, out uint process);
+            [DllImport("user32.dll", CharSet=CharSet.Unicode, EntryPoint="GetClassNameW")] public static extern int GetClassName(IntPtr window, StringBuilder name, int count);
+            [DllImport("user32.dll")] public static extern int GetSystemMetrics(int index);
+            [ComImport, Guid("A95664D2-9614-4F35-A746-DE8DB63617E6"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+            private interface Enumerator { [PreserveSig] int EnumAudioEndpoints(int flow, uint states, out Collection devices); }
+            [ComImport, Guid("0BD7A1BE-7A1A-44DB-8397-CC5392387B5E"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+            private interface Collection { [PreserveSig] int GetCount(out uint count); }
+            public static int RenderCount(out uint total) {
+              total = 0; Enumerator enumerator = null; Collection devices = null;
+              try {
+                enumerator = (Enumerator)Activator.CreateInstance(Type.GetTypeFromCLSID(new Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")));
+                int result = enumerator.EnumAudioEndpoints(0, 15, out devices);
+                return result < 0 ? result : devices.GetCount(out total);
+              } catch (COMException error) { return error.ErrorCode; }
+              finally {
+                if (devices != null) Marshal.FinalReleaseComObject(devices);
+                if (enumerator != null) Marshal.FinalReleaseComObject(enumerator);
+              }
+            }
+          }
+          '@
+            $receipt.phase = 'source_and_empty_render_guard'
+            $parent = git rev-parse HEAD^
+            if ($LASTEXITCODE -or $parent -ne $env:BASE_SOURCE_SHA -or (git rev-parse HEAD) -ne $env:GITHUB_SHA) { throw 'Exact one-commit diagnostic source identity required' }
+            $changed = @(git diff --name-only $env:BASE_SOURCE_SHA HEAD)
+            $allowed = @('.github/workflows/pi-win11-arm-vbcable-diagnostic.yml', 'tests/integration/pi_native_preflight_windows.cpp')
+            if ($LASTEXITCODE -or $changed.Count -ne 2 -or (Compare-Object $allowed $changed) -or (git status --porcelain)) { throw 'Only the forensic workflow and observer measurements may differ from frozen source' }
+            'source_validated=true' >> $env:GITHUB_OUTPUT
+            $before = Save-ReadOnlySnapshot 'before'
+            if ($before.render_hresult -ne 0 -or $before.render_all_states_total -ne 0) {
+              $receipt.status = 'not_applicable'
+              throw 'Render inventory is unknown or not empty; preserve the existing route'
+            }
+
+            $receipt.phase = 'native_tools_and_vendor_verification'
+            $kits = "${env:ProgramFiles(x86)}\Windows Kits\10"
+            $devcon = Get-TrustedArmTool "$kits\Tools\*\arm64\devcon.exe"
+            $signtool = Get-TrustedArmTool "$kits\bin\*\arm64\signtool.exe"
+            $receipt.devcon = $devcon
+            $receipt.signtool = $signtool
+            $url = 'https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack45.zip'
+            $expected = 'b950e39f01af1d04ea623c8f6d8eb9b6ea5c477c637295fabf20631c85116bfb'
+            Invoke-WebRequest -Uri $url -OutFile "$root/vendor.zip" -TimeoutSec 60 -MaximumRedirection 3
+            $actual = (Get-FileHash "$root/vendor.zip" -Algorithm SHA256).Hash.ToLowerInvariant()
+            $receipt.acquisition = @{ url=$url; sha256=$actual; expected_sha256=$expected }
+            if ($actual -ne $expected) { throw 'Vendor archive SHA256 mismatch' }
+            Expand-Archive -LiteralPath "$root/vendor.zip" -DestinationPath "$root/vendor"
+            $inf = "$root/vendor/vbMmeCable64_win10.inf"
+            $cat = "$root/vendor/vbaudio_cable64_win10.cat"
+            $driver = "$root/vendor/vbaudio_cable64arm_win10.sys"
+            if ((Get-PeMachine $driver) -ne 0xaa64) { throw 'Vendor kernel driver is not native ARM64' }
+            $receipt.vendor_files = @($inf,$cat,$driver | ForEach-Object { @{ name=[IO.Path]::GetFileName($_); sha256=(Get-FileHash -LiteralPath $_ -Algorithm SHA256).Hash } })
+            & $signtool.path verify /kp /v /c $cat $inf $driver > "$root/catalog-verification.log" 2>&1
+            $receipt.catalog_verification_exit = $LASTEXITCODE
+            if ($LASTEXITCODE) { throw 'Normal kernel signing policy or catalog membership verification failed' }
+            $python = (& python -c 'from pathlib import Path; import sys; print(Path(sys.executable).resolve(strict=True))').Trim()
+            if ($LASTEXITCODE -or !(Test-Path -LiteralPath $python -PathType Leaf)) { throw 'Physical Python interpreter unavailable' }
+            & $python -B scripts/test_pi_native_preflight.py -v > "$root/oracle-contract-tests.log" 2>&1
+            if ($LASTEXITCODE) { throw 'Unchanged prerequisite contract tests failed' }
+
+            # Microsoft documents no reboot unless /r is passed. Never retry install:
+            # https://learn.microsoft.com/windows-hardware/drivers/devtest/devcon-install
+            $receipt.phase = 'one_native_install_attempt'
+            $receipt.install_attempted = $true
+            $install = Start-Process -FilePath $devcon.path -ArgumentList @('install', ('"' + $inf + '"'), 'VBAudioVACWDM') -WorkingDirectory "$root/vendor" -NoNewWindow -PassThru -RedirectStandardOutput "$root/install.stdout.log" -RedirectStandardError "$root/install.stderr.log"
+            $receipt.install_pid = $install.Id
+            if (!$install.WaitForExit(90000)) {
+              $receipt.install_timed_out = $true
+              try { $install.Kill($true); [void]$install.WaitForExit(5000) } catch { $receipt.install_stop_error = $_.Exception.Message }
+              throw 'Installation timed out; result unknown and no retry or reboot is allowed'
+            }
+            $receipt.install_exit = $install.ExitCode
+            if ($install.ExitCode -ne 0) { throw 'Installation failed or requires reboot; no retry or reboot is allowed' }
+
+            $receipt.phase = 'unchanged_actual_preflight'
+            & $python -B scripts/pi-native-preflight.py --execute-test-fixtures --platform windows --source-sha $env:GITHUB_SHA --report "$root/preflight.json" > "$root/preflight.log" 2>&1
+            $receipt.preflight_exit = $LASTEXITCODE
+            $proof = Get-Content -LiteralPath "$root/preflight.json" -Raw | ConvertFrom-Json
+            if ($receipt.preflight_exit -ne 0 -or $proof.source_sha -ne $env:GITHUB_SHA -or $proof.status -ne 'prerequisites_ready' -or $proof.product_executed -ne $false -or $proof.pi_executed -ne $false -or $proof.desktop_qualified -ne $false) { throw 'Actual endpoint/audio/foreground prerequisites remain unqualified' }
+            $receipt.status = 'prerequisites_ready'
+          } catch {
+            $receipt.failure = $_.Exception.Message
+            Write-Host "Diagnostic failure: $($receipt.failure)"
+          } finally {
+            try { [void](Save-ReadOnlySnapshot 'after') } catch { $receipt.after_inventory_error = $_.Exception.Message }
+            try { Get-Content -LiteralPath "$env:WINDIR/INF/setupapi.dev.log" -Tail 400 -ErrorAction Stop | Set-Content "$root/setupapi.dev.tail.log" } catch { $receipt.setupapi_log_error = $_.Exception.Message }
+            $receipt | ConvertTo-Json -Depth 8 | Set-Content "$root/diagnostic.json"
+          }
+          if ($receipt.status -ne 'prerequisites_ready') { exit 2 }
+      - name: Capture one read-only ephemeral desktop image
+        if: always() && steps.host_guard.outcome == 'success' && steps.probe.outputs.source_validated == 'true'
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = $env:DIAGNOSTIC_ROOT
+          $capture = @{ source_sha=$env:GITHUB_SHA; status='inconclusive'; product_executed=$false; pi_executed=$false; desktop_qualified=$false }
+          $bitmap = $null
+          $graphics = $null
+          try {
+            Add-Type -AssemblyName System.Drawing
+            Add-Type -TypeDefinition @'
+          using System;
+          using System.Runtime.InteropServices;
+          public static class PiReadOnlyScreen {
+            [DllImport("user32.dll")] public static extern int GetSystemMetrics(int index);
+            [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+          }
+          '@
+            $x = [PiReadOnlyScreen]::GetSystemMetrics(76)
+            $y = [PiReadOnlyScreen]::GetSystemMetrics(77)
+            $width = [PiReadOnlyScreen]::GetSystemMetrics(78)
+            $height = [PiReadOnlyScreen]::GetSystemMetrics(79)
+            $capture.virtual_screen = @{ x=$x; y=$y; width=$width; height=$height }
+            $capture.foreground_hwnd = [PiReadOnlyScreen]::GetForegroundWindow().ToInt64()
+            if ($width -le 0 -or $height -le 0 -or ([int64]$width * [int64]$height) -gt 16000000) { throw 'Read-only capture dimensions unavailable or exceed bound' }
+            $path = Join-Path $root 'desktop.png'
+            if (Test-Path -LiteralPath $path) { throw 'Fresh single screenshot output required' }
+            $bitmap = [Drawing.Bitmap]::new($width, $height, [Drawing.Imaging.PixelFormat]::Format24bppRgb)
+            $graphics = [Drawing.Graphics]::FromImage($bitmap)
+            $capture.method = 'CopyFromScreen(SourceCopy)'
+            $graphics.CopyFromScreen($x, $y, 0, 0, $bitmap.Size)
+            $bitmap.Save($path, [Drawing.Imaging.ImageFormat]::Png)
+            $capture.status = 'captured'
+            $capture.sha256 = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
+          } catch { $capture.failure = $_.Exception.Message }
+          finally {
+            if ($graphics) { $graphics.Dispose() }
+            if ($bitmap) { $bitmap.Dispose() }
+            $capture | ConvertTo-Json -Depth 5 | Set-Content "$root/screenshot.json"
+          }
+      - name: Preserve prerequisite receipts on pass or failure without vendor binaries
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: pi-win11-arm-audio-diagnostic-${{ github.sha }}-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/TEST-pi-win11-arm-audio/*.json
+            ${{ runner.temp }}/TEST-pi-win11-arm-audio/*.log
+            ${{ runner.temp }}/TEST-pi-win11-arm-audio/desktop.png
+          if-no-files-found: error
+          retention-days: 14
