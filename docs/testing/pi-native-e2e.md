@@ -313,6 +313,13 @@ System Settings, with the original request returning unavailable and a fresh
 query returning denied. The fixture preserves the original pending request
 and clicks only observed consent controls.
 
+The first real Terminal do-script on a fresh official host can request ordinary
+Automation consent from `hosted-compute-agent` to Terminal. The fixture retains
+that original owned `osascript` request within its original 20-second deadline
+and physically accepts only the exact verified Apple-owned prompt bound to the
+kernel-observed requester and target. The original window/TTY response and
+normal owned child collection remain required afterward.
+
 ### Windows installed-product handoff
 
 `Pi installed Windows product` separates an ordinary Windows Server amd64

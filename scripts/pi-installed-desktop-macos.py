@@ -471,6 +471,124 @@ def applescript(source):
     return command(["/usr/bin/osascript", "-e", source]).strip()
 
 
+def terminal_automation_admission(evidence_root, source):
+    """Continue only the already admitted disposable owner host's UI request."""
+    path = evidence_root / "host-preparation.json"
+    P.require(path.is_file() and not path.is_symlink() and path.stat().st_size <= 131072,
+              "official_terminal_automation_host_receipt_required")
+    host = json.loads(path.read_text())
+    admission = host.get("admission", {})
+    clock = time.get_clock_info("monotonic")
+    P.require(os.environ.get("GITHUB_REPOSITORY") == "777genius/agent-notifications"
+              and os.environ.get("GITHUB_ACTOR") == os.environ.get("GITHUB_TRIGGERING_ACTOR") == "777genius"
+              and os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch" and os.environ.get("GITHUB_RUN_ATTEMPT") == "1"
+              and os.environ.get("SOURCE_SHA") == source
+              and host.get("scope") == "explicit_disposable_official_macos_host_preparation"
+              and host.get("status") == "notification_center_ready"
+              and admission.get("source_sha") == source
+              and admission.get("image_os") == os.environ.get("ImageOS") == "macos15"
+              and admission.get("image_version") == os.environ.get("ImageVersion")
+              and admission.get("host", {}).get("os") == platform.system() == "Darwin"
+              and admission.get("host", {}).get("arch") == platform.machine() == "arm64"
+              and admission.get("host", {}).get("version") == platform.mac_ver()[0]
+              and platform.mac_ver()[0].startswith("15."), "official_owner_terminal_automation_host_required")
+    P.require(clock.implementation == "mach_absolute_time()" and clock.monotonic and not clock.adjustable,
+              "shared_terminal_automation_clock_unavailable")
+    return {"scope": "original_public_terminal_automation_only", "source_sha": source,
+            "host_preparation_sha256": P.sha(path), "requester": "hosted-compute-agent", "target": "com.apple.Terminal"}
+
+
+def terminal_applescript(source, observe, receipt, admit, *, now=time.monotonic, spawn=subprocess.Popen):
+    """Collect one original do-script through its normal Automation consent."""
+    started = now()
+    deadline = started + 20
+    child = spawn(["/usr/bin/osascript", "-e", source], stdin=subprocess.DEVNULL,
+                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+    receipt.update(original_pid=child.pid, original_deadline_monotonic=deadline, physical_allow_click=False)
+    actors, clicked, primary = None, False, None
+    try:
+        while child.poll() is None:
+            remaining = deadline - now()
+            P.require(remaining > 0, "original_terminal_applescript_deadline_expired")
+            if actors is None:
+                try:
+                    actors = observe("terminal-automation-actors", str(child.pid), str(os.getpid()), timeout=min(3, remaining))
+                    receipt["actors"] = actors
+                except Exception:
+                    if child.poll() is None:
+                        raise
+                    break
+            if actors.get("admitted") is True and not clicked and child.poll() is None:
+                remaining = deadline - now()
+                P.require(remaining > 0, "original_terminal_applescript_deadline_expired")
+                context = {key: value for key, value in actors.items() if key != "chain"}
+                context.update(deadlineMonotonic=deadline, clock="mach_absolute_time")
+                observed = observe("terminal-automation-consent", json.dumps(context, sort_keys=True), timeout=min(3, remaining))
+                dialogs = observed.get("dialogs", [])
+                if dialogs:
+                    P.require(len(dialogs) == 1 and child.poll() is None and now() < deadline,
+                              "unique_original_terminal_automation_dialog_required")
+                    receipt["host_admission"] = admit()
+                    context.update(officialHostAdmitted=True, dialog=dialogs[0])
+                    P.require(child.poll() is None and now() < deadline, "original_terminal_request_ended_before_allow")
+                    clicked = True
+                    result = observe("allow-terminal-automation", json.dumps(context, sort_keys=True), timeout=min(3, deadline - now()))
+                    receipt["allow_result"] = result
+                    P.require(result.get("physical_allow_click") is True and result.get("topmost_allow_item_verified") is True
+                              and result.get("original_request_verified") is True and result.get("denial_button_observed") is True
+                              and result.get("requestPID") == child.pid and result.get("requestStart") == actors.get("requestStart")
+                              and result.get("requesterPID") == actors.get("requesterPID")
+                              and result.get("requesterStart") == actors.get("requesterStart"),
+                              "original_terminal_automation_allow_unverified")
+                    receipt["physical_allow_click"] = True
+            time.sleep(0.02)
+        remaining = deadline - now()
+        P.require(remaining > 0, "original_terminal_applescript_deadline_expired")
+        out, err = child.communicate(timeout=remaining)
+        receipt["stdout_collected"] = True
+        P.require(now() < deadline, "original_terminal_applescript_deadline_expired")
+        receipt.update(exit_code=child.returncode, stdout_bytes=len(out), stderr_bytes=len(err),
+                       elapsed_seconds=round(now() - started, 3))
+        P.require(len(out) + len(err) < 1024 * 1024, "native_terminal_launch_output_limit")
+        P.require(child.returncode == 0 and not err, "original_terminal_applescript_failed")
+        return out.decode().strip()
+    except BaseException as error:
+        primary = error
+        receipt.update(failure_class=type(error).__name__, failure=str(error)[:4096])
+        raise
+    finally:
+        cleanup = []
+
+        def signal_original(sig):
+            try:
+                os.killpg(child.pid, sig)
+            except ProcessLookupError:
+                pass
+            except Exception as error:
+                cleanup.append(type(error).__name__ + ":" + str(error)[:256])
+
+        try:
+            if child.poll() is None:
+                signal_original(signal.SIGTERM)
+            if not receipt.get("stdout_collected"):
+                try:
+                    child.communicate(timeout=1)
+                except subprocess.TimeoutExpired:
+                    signal_original(signal.SIGKILL)
+                    child.communicate(timeout=1)
+            receipt["owned_child_collected"] = child.poll() is not None
+        except Exception as error:
+            cleanup.append(type(error).__name__ + ":" + str(error)[:256])
+            try:
+                receipt["owned_child_collected"] = child.poll() is not None
+            except Exception:
+                receipt["owned_child_collected"] = False
+        if cleanup:
+            receipt["cleanup_failures"] = cleanup
+            if primary is None:
+                raise RuntimeError("owned_terminal_launch_cleanup_failed")
+
+
 def quoted(value):
     # AppleScript string syntax. Shell arguments inside it are independently
     # escaped by shlex.quote before this language boundary.
@@ -500,7 +618,7 @@ def terminal_launcher(root, argv, env, cwd):
 
 class Terminal:
     """An owned real Terminal window and its observed native TTY/Pi PID."""
-    def __init__(self, root, argv, env, observer, cwd=None, *, owned):
+    def __init__(self, root, argv, env, observer, cwd=None, *, owned, launch=None):
         self.root, self.observer, self.closed = root, observer, False
         self.window = self.tty = self.pid = self.shell_pid = self.process_start_identity = None
         self.window_closed = False
@@ -513,7 +631,7 @@ class Terminal:
         # Every exception after the first launch side effect must leave a
         # reachable cleanup owner, even before window/child discovery finishes.
         owned.append(self)
-        result = applescript('tell application "Terminal"\nset t to do script '
+        result = (launch or applescript)('tell application id "com.apple.Terminal"\nset t to do script '
                              + quoted("/bin/bash --noprofile --norc " + shlex.quote(str(script)))
                              + '\nset custom title of t to ' + quoted(cwd.name)
                              + '\nset w to front window\nreturn (id of w as text) & "|" & (tty of t as text)\nend tell')
@@ -532,7 +650,7 @@ class Terminal:
         self.process_start_identity = identity["process_start_identity"]
 
     def focus(self):
-        applescript('tell application "Terminal"\nactivate\nset index of window id '
+        applescript('tell application id "com.apple.Terminal"\nactivate\nset index of window id '
                     + str(self.window) + ' to 1\nend tell')
         wait_for(lambda: self.is_front(), "owned_terminal_could_not_be_foregrounded")
 
@@ -540,7 +658,7 @@ class Terminal:
         native = self.observer("foreground")
         if native.get("bundle_id") != "com.apple.Terminal":
             return {"native": native, "window": None, "tty": None}
-        value = applescript('tell application "Terminal"\nreturn (id of front window as text) & "|" & '
+        value = applescript('tell application id "com.apple.Terminal"\nreturn (id of front window as text) & "|" & '
                             '(tty of selected tab of front window as text)\nend tell')
         window, tty = value.split("|", 1)
         return {"native": native, "window": int(window), "tty": tty}
@@ -583,7 +701,7 @@ class Terminal:
             # failure. Close only the exact window/TTY actually returned at launch.
             P.require(self.window is not None and self.tty is not None, "partial_terminal_cleanup_unverified")
             if not self.window_closed:
-                result = applescript('tell application "Terminal"\nif exists window id ' + str(self.window)
+                result = applescript('tell application id "com.apple.Terminal"\nif exists window id ' + str(self.window)
                             + ' then\nif (tty of selected tab of window id ' + str(self.window) + ') is not '
                             + quoted(self.tty) + ' then error "owned_terminal_window_identity_changed"\n'
                             + 'close window id ' + str(self.window) + ' saving no\nreturn "closed"\n'
@@ -676,6 +794,14 @@ def run(args):
                   "permission_ui_capture_unavailable")
         return {"artifact": screenshot.name, "sha256": P.sha(screenshot), "desktop_qualified": False}
 
+    report["terminal_automation"] = []
+
+    def launch_terminal(source):
+        receipt = {"scope": "original_owned_terminal_applescript", "desktop_qualified": False}
+        report["terminal_automation"].append(receipt)
+        return terminal_applescript(source, observer, receipt,
+            lambda: terminal_automation_admission(args.report.parent, report["source_sha"]))
+
     def case(name, decoy):
         case_root = root / ("case-" + name)
         provider = F.Provider("success", hold_reply=name != "question")
@@ -695,7 +821,7 @@ def run(args):
                 argv.append("TEST say done")
             cwd = case_root / "project" / ("TEST-Pi-" + name)
             cwd.mkdir()
-            terminal = Terminal(case_root, argv, native_env, observer, cwd, owned=terminals)
+            terminal = Terminal(case_root, argv, native_env, observer, cwd, owned=terminals, launch=launch_terminal)
             wait_for(lambda: (case_root / "witness.jsonl").exists()
                      and any(x["type"] == "session_start" for x in F.witness(case_root)), "actual_pi_tui_start_missing")
             rows = F.witness(case_root)
@@ -899,7 +1025,7 @@ def run(args):
         decoy_cwd = decoy_root / "project/TEST-Pi-decoy"
         decoy_cwd.mkdir()
         decoy = Terminal(decoy_root, ["/bin/sleep", "240"], {"PATH": "/usr/bin:/bin", "HOME": str(root / "home")},
-                         observer, decoy_cwd, owned=terminals)
+                         observer, decoy_cwd, owned=terminals, launch=launch_terminal)
         for name in CASES:
             case(name, decoy)
         report.update(status="passed_native_product_observations", native_product_observations_passed=True)
@@ -961,7 +1087,8 @@ def run(args):
                 report["native_helper_processes_collected"] = False
         initial_provider.close()
         sink.close()
-        report["owned_children_collected"] = not failures and all(t.collected() for t in terminals) and all(p.poll() is not None for p in helpers)
+        report["owned_children_collected"] = not failures and all(t.collected() for t in terminals) and all(p.poll() is not None for p in helpers) \
+            and all(row.get("owned_child_collected") is True for row in report["terminal_automation"])
         if failures or not report["owned_children_collected"]:
             report.update(status="failed", native_product_observations_passed=False, cleanup_failures=failures)
         args.report.parent.mkdir(parents=True, exist_ok=True)

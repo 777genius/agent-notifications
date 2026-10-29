@@ -142,6 +142,140 @@ class TerminalOwnership(unittest.TestCase):
             self.assertFalse(terminal.collected())
 
 
+class TerminalAutomation(unittest.TestCase):
+    def actors(self, child):
+        return {"admitted": True, "requestPID": child.pid, "requestStart": "TEST-original-birth",
+                "pythonPID": os.getpid(), "requesterPID": 123, "requesterStart": "TEST-requester-birth",
+                "requesterPath": "/TEST/hosted-compute-agent", "requesterUID": os.getuid(), "chain": []}
+
+    def waiting_child(self, kwargs, release=None):
+        code = ('import sys,time; from pathlib import Path; '
+                'release=Path(sys.argv[1]); '
+                'deadline=time.monotonic()+5; '
+                '\nwhile not release.exists() and time.monotonic()<deadline: time.sleep(.01)\n'
+                'print("7|/dev/ttysTEST")') if release else 'import time; time.sleep(5)'
+        return subprocess.Popen([sys.executable, "-c", code, str(release or "")], **kwargs)
+
+    def test_one_original_launch_survives_exact_consent_and_returns_original_window_tty(self):
+        with tempfile.TemporaryDirectory(prefix="TEST-pi-terminal-automation-") as temporary:
+            release, children, calls, receipt = Path(temporary) / "release", [], [], {}
+            clock = [0.0]
+
+            def spawn(argv, **kwargs):
+                self.assertEqual(argv, ["/usr/bin/osascript", "-e", "TEST original do-script"])
+                self.assertTrue(kwargs["start_new_session"])
+                children.append(self.waiting_child(kwargs, release))
+                return children[-1]
+
+            def observe(operation, *args, **kwargs):
+                calls.append(operation)
+                child = children[0]
+                if operation == "terminal-automation-actors":
+                    self.assertEqual(args, (str(child.pid), str(os.getpid())))
+                    return self.actors(child)
+                context = json.loads(args[0])
+                self.assertEqual(context["deadlineMonotonic"], 20)
+                self.assertEqual(context["requestPID"], child.pid)
+                if operation == "terminal-automation-consent":
+                    clock[0] = 2
+                    return {"dialogs": [{"TEST-original-OS-dialog": True}]}
+                self.assertEqual(operation, "allow-terminal-automation")
+                self.assertTrue(context["officialHostAdmitted"])
+                release.touch()
+                return {**self.actors(child), "physical_allow_click": True, "topmost_allow_item_verified": True,
+                        "original_request_verified": True, "denial_button_observed": True}
+
+            admit = mock.Mock(return_value={"TEST-official-host": True})
+            value = M.terminal_applescript("TEST original do-script", observe, receipt, admit,
+                                           now=lambda: clock[0], spawn=spawn)
+            self.assertEqual(value, "7|/dev/ttysTEST")
+            self.assertEqual(len(children), 1)
+            self.assertEqual(calls.count("allow-terminal-automation"), 1)
+            admit.assert_called_once()
+            self.assertTrue(receipt["owned_child_collected"])
+            self.assertEqual(receipt["original_deadline_monotonic"], 20)
+            self.assertEqual(receipt["exit_code"], 0)
+            with self.assertRaises(ProcessLookupError):
+                os.kill(children[0].pid, 0)
+
+    def test_completed_original_launch_never_requests_automation_or_relaunches(self):
+        children, receipt = [], {}
+        def spawn(argv, **kwargs):
+            child = subprocess.Popen([sys.executable, "-c", 'print("8|/dev/ttysDONE")'], **kwargs)
+            child.wait(timeout=3)
+            children.append(child)
+            return child
+        observer, admit = mock.Mock(), mock.Mock()
+        self.assertEqual(M.terminal_applescript("TEST original", observer, receipt, admit, spawn=spawn), "8|/dev/ttysDONE")
+        self.assertEqual(len(children), 1)
+        observer.assert_not_called()
+        admit.assert_not_called()
+        self.assertTrue(receipt["owned_child_collected"])
+
+    def test_observer_handoff_cannot_extend_original_twenty_second_deadline(self):
+        children, receipt, clock = [], {}, [0.0]
+        def spawn(argv, **kwargs):
+            children.append(self.waiting_child(kwargs))
+            return children[-1]
+        def observe(operation, *args, **kwargs):
+            self.assertEqual(operation, "terminal-automation-actors")
+            clock[0] = 21
+            return self.actors(children[0])
+        admit = mock.Mock()
+        with self.assertRaisesRegex(RuntimeError, "original_terminal_applescript_deadline_expired"):
+            M.terminal_applescript("TEST original", observe, receipt, admit, now=lambda: clock[0], spawn=spawn)
+        self.assertEqual(len(children), 1)
+        self.assertTrue(receipt["owned_child_collected"])
+        admit.assert_not_called()
+
+    def test_observer_primary_error_is_preserved_while_original_child_is_collected(self):
+        children, receipt = [], {}
+        def spawn(argv, **kwargs):
+            children.append(self.waiting_child(kwargs))
+            return children[-1]
+        observer = mock.Mock(side_effect=RuntimeError("TEST original observer failure"))
+        with self.assertRaisesRegex(RuntimeError, "TEST original observer failure"):
+            M.terminal_applescript("TEST original", observer, receipt, mock.Mock(), spawn=spawn)
+        self.assertEqual(len(children), 1)
+        self.assertTrue(receipt["owned_child_collected"])
+        observer.assert_called_once()
+
+    def test_late_completed_child_cannot_return_window_tty_after_observer_handoff(self):
+        clock, polls, receipt = [0.0], [0], {}
+        child = mock.Mock(pid=424242, returncode=0)
+        def poll():
+            polls[0] += 1
+            return None if polls[0] == 1 else 0
+        child.poll.side_effect = poll
+        child.communicate.return_value = (b"7|/dev/ttysLATE\n", b"")
+        def observe(*args, **kwargs):
+            clock[0] = 21
+            return {"admitted": False}
+        with mock.patch.object(M.os, "killpg") as kill:
+            with self.assertRaisesRegex(RuntimeError, "original_terminal_applescript_deadline_expired"):
+                M.terminal_applescript("TEST original", observe, receipt, mock.Mock(), now=lambda: clock[0],
+                                      spawn=mock.Mock(return_value=child))
+            kill.assert_not_called()
+        self.assertTrue(receipt["owned_child_collected"])
+        self.assertEqual(receipt["failure_class"], "RuntimeError")
+
+    def test_cleanup_error_is_retained_without_overwriting_original_failure(self):
+        receipt = {}
+        child = mock.Mock(pid=424242, returncode=None)
+        child.poll.return_value = None
+        def collect(*args, **kwargs):
+            child.poll.return_value = 0
+            return b"", b""
+        child.communicate.side_effect = collect
+        observer = mock.Mock(side_effect=RuntimeError("TEST primary observer failure"))
+        with mock.patch.object(M.os, "killpg", side_effect=PermissionError("TEST cleanup failure")):
+            with self.assertRaisesRegex(RuntimeError, "TEST primary observer failure"):
+                M.terminal_applescript("TEST original", observer, receipt, mock.Mock(), spawn=mock.Mock(return_value=child))
+        self.assertEqual(receipt["failure"], "TEST primary observer failure")
+        self.assertTrue(receipt["owned_child_collected"])
+        self.assertIn("PermissionError:TEST cleanup failure", receipt["cleanup_failures"])
+
+
 class PermissionUIIdentity(unittest.TestCase):
     def test_display_aliases_come_from_pinned_archive_and_identical_installed_metadata(self):
         archive = M.H.INPUTS / "ClaudeNotifier-smoke.app.zip"

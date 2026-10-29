@@ -9,6 +9,7 @@ import CoreAudio
 import CoreMedia
 import Darwin
 import ScreenCaptureKit
+import Security
 
 enum ProbeError: Error { case unavailable(String) }
 
@@ -501,6 +502,223 @@ func consentMonotonicTime() throws -> Double {
     return Double(mach_absolute_time()) * Double(info.numer) / Double(info.denom) / 1_000_000_000
 }
 
+func terminalAutomationUID(_ pid: pid_t) -> Int? {
+    var info = proc_bsdinfo()
+    let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+    guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size, info.pbi_pid == UInt32(pid) else { return nil }
+    return Int(info.pbi_uid)
+}
+
+@MainActor func terminalAutomationActors(_ pid: pid_t, pythonPID: pid_t) throws -> [String: Any] {
+    let original = try terminalProcessIdentity(pid)
+    let osascript = URL(fileURLWithPath: "/usr/bin/osascript").resolvingSymlinksInPath().path
+    guard original["status"] as? String == "observed", original["parent_pid"] as? Int == Int(pythonPID),
+          original["executable_path"] as? String == osascript else {
+        return ["admitted": false, "reason": "original_osascript_identity_unverified"]
+    }
+    var current = pid, seen = Set<pid_t>(), chain = [[String: Any]]()
+    for _ in 0..<32 {
+        guard current > 1, !seen.contains(current) else { break }
+        seen.insert(current)
+        var row = try terminalProcessIdentity(current)
+        var info = proc_bsdinfo()
+        let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+        guard row["status"] as? String == "observed", proc_pidinfo(current, PROC_PIDTBSDINFO, 0, &info, size) == size,
+              row["process_start_identity"] as? String == "\(info.pbi_start_tvsec):\(info.pbi_start_tvusec)" else {
+            return ["admitted": false, "reason": "automation_ancestor_changed", "chain": chain]
+        }
+        row["uid"] = Int(info.pbi_uid)
+        chain.append(row)
+        if (current == pid || current == pythonPID) && info.pbi_uid != getuid() {
+            return ["admitted": false, "reason": "original_osascript_or_python_user_mismatch", "chain": chain]
+        }
+        if let path = row["executable_path"] as? String,
+           URL(fileURLWithPath: path).lastPathComponent == "hosted-compute-agent" {
+            return ["admitted": info.pbi_uid == getuid(), "requestPID": Int(pid),
+                    "reason": info.pbi_uid == getuid() ? "same_user_requester" : "privileged_requester_role_requires_measured_admission",
+                    "requestStart": original["process_start_identity"]!, "pythonPID": Int(pythonPID),
+                    "requesterPID": Int(current), "requesterStart": row["process_start_identity"]!,
+                    "requesterPath": path, "requesterUID": Int(info.pbi_uid), "chain": chain]
+        }
+        current = pid_t(info.pbi_ppid)
+    }
+    return ["admitted": false, "reason": "responsible_hosted_compute_agent_not_observed", "chain": chain]
+}
+
+func verifiedAppleApplication(_ url: URL, identifier: String) -> Bool {
+    let path = url.resolvingSymlinksInPath().path
+    guard path == url.path, path.hasSuffix(".app"),
+          path.hasPrefix("/System/Library/") || path.hasPrefix("/System/Applications/"),
+          identifier.hasPrefix("com.apple."), identifier.range(of: "^[A-Za-z0-9.-]+$", options: .regularExpression) != nil,
+          Bundle(url: url)?.bundleIdentifier == identifier else { return false }
+    var requirement: SecRequirement?, code: SecStaticCode?
+    guard SecRequirementCreateWithString("anchor apple and identifier \"\(identifier)\"" as CFString, [], &requirement) == errSecSuccess,
+          SecStaticCodeCreateWithPath(url as CFURL, [], &code) == errSecSuccess,
+          let requirement, let code else { return false }
+    return SecStaticCodeCheckValidity(code, SecCSFlags(rawValue: kSecCSStrictValidate), requirement) == errSecSuccess
+}
+
+@MainActor struct TerminalAutomationDialog {
+    let owner: NSRunningApplication
+    let ownerStart: String
+    let box: CGRect
+    let allow: AXUIElement
+    let allowBox: CGRect
+    let denialBox: CGRect
+    let targetPID: pid_t
+    let targetStart: String
+    var receipt: [String: Any] {
+        ["ownerPID": Int(owner.processIdentifier), "ownerStart": ownerStart,
+         "ownerPath": owner.bundleURL!.path, "ownerBundle": owner.bundleIdentifier!,
+         "allowBounds": [Double(allowBox.minX), Double(allowBox.minY), Double(allowBox.width), Double(allowBox.height)],
+         "denialBounds": [Double(denialBox.minX), Double(denialBox.minY), Double(denialBox.width), Double(denialBox.height)],
+         "targetPID": Int(targetPID), "targetStart": targetStart,
+         "ownerUID": Int(getuid()), "targetUID": Int(getuid()),
+         "requester": "hosted-compute-agent", "target": "com.apple.Terminal", "apple_signature_verified": true]
+    }
+}
+
+@MainActor func terminalAutomationDialogs() -> [TerminalAutomationDialog] {
+    let terminalPath = "/System/Applications/Utilities/Terminal.app"
+    let targets = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.Terminal").filter {
+        !$0.isTerminated && $0.isFinishedLaunching && $0.bundleURL?.resolvingSymlinksInPath().path == terminalPath
+    }
+    guard targets.count == 1, terminalAutomationUID(targets[0].processIdentifier) == Int(getuid()),
+          let targetStart = processStartIdentity(targets[0].processIdentifier),
+          verifiedAppleApplication(URL(fileURLWithPath: terminalPath), identifier: "com.apple.Terminal"),
+          let targetIdentity = try? terminalProcessIdentity(targets[0].processIdentifier),
+          targetIdentity["executable_path"] as? String == terminalPath + "/Contents/MacOS/Terminal" else { return [] }
+    let titles = ["“hosted-compute-agent” wants access to control “Terminal”.",
+                  "\"hosted-compute-agent\" wants access to control \"Terminal\"."]
+    let bodies = ["Allowing control will provide access to documents and data in “Terminal”, and to perform actions within that app.",
+                  "Allowing control will provide access to documents and data in \"Terminal\", and to perform actions within that app."]
+    var candidates = [TerminalAutomationDialog]()
+    for app in NSWorkspace.shared.runningApplications {
+        guard let url = app.bundleURL, let identifier = app.bundleIdentifier, identifier.hasPrefix("com.apple."),
+              url.path.hasPrefix("/System/"), !app.isTerminated, terminalAutomationUID(app.processIdentifier) == Int(getuid()),
+              let start = processStartIdentity(app.processIdentifier) else { continue }
+        let visible = onScreenWindows(app.processIdentifier)
+        guard visible.contains(where: { $0.width >= 200 && $0.width <= 650 && $0.height >= 150 && $0.height <= 500 }) else { continue }
+        var remaining = 1200, capped = false
+        let first = candidates.count
+        func visit(_ element: AXUIElement, _ depth: Int) -> (String, [(AXUIElement, CGRect)], [CGRect]) {
+            guard remaining > 0, depth < 20 else { capped = true; return ("", [], []) }
+            remaining -= 1
+            let text = [kAXTitleAttribute, kAXValueAttribute, kAXDescriptionAttribute].compactMap { attribute(element, $0) as? String }
+            var labels = text.joined(separator: " "), allows = [(AXUIElement, CGRect)](), denials = [CGRect]()
+            if attribute(element, kAXRoleAttribute) as? String == kAXButtonRole,
+               attribute(element, kAXEnabledAttribute) as? Bool == true, let frame = rectangle(element),
+               visible.contains(where: { $0.contains(frame) }) {
+                if text.contains("Allow") { allows.append((element, frame)) }
+                if text.contains("Don't Allow") || text.contains("Don’t Allow") { denials.append(frame) }
+            }
+            for child in attribute(element, kAXChildrenAttribute) as? [AXUIElement] ?? [] {
+                let nested = visit(child, depth + 1)
+                labels += " " + nested.0; allows += nested.1; denials += nested.2
+            }
+            labels = labels.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }.joined(separator: " ")
+            if titles.contains(where: { labels.contains($0) }), bodies.contains(where: { labels.contains($0) }),
+               allows.count == 1, denials.count == 1, let frame = rectangle(element),
+               frame.width >= 200, frame.width <= 650, frame.height >= 150, frame.height <= 500,
+               frame.contains(allows[0].1), frame.contains(denials[0]), !allows[0].1.intersects(denials[0]),
+               visible.contains(where: { $0.contains(frame) }) {
+                candidates.append(TerminalAutomationDialog(owner: app, ownerStart: start, box: frame,
+                    allow: allows[0].0, allowBox: allows[0].1, denialBox: denials[0],
+                    targetPID: targets[0].processIdentifier, targetStart: targetStart))
+            }
+            return (String(labels.prefix(8192)), allows, denials)
+        }
+        _ = visit(AXUIElementCreateApplication(app.processIdentifier), 0)
+        if capped { return [] }
+        if candidates.count > first {
+            let identity = try? terminalProcessIdentity(app.processIdentifier)
+            if !verifiedAppleApplication(url, identifier: identifier)
+                || identity?["executable_path"] as? String != app.executableURL?.resolvingSymlinksInPath().path
+                || identity?["process_start_identity"] as? String != start { candidates.removeSubrange(first...) }
+        }
+    }
+    var result = [TerminalAutomationDialog]()
+    for candidate in candidates where !candidates.contains(where: {
+        $0.owner.processIdentifier == candidate.owner.processIdentifier && candidate.box.contains($0.box)
+        && $0.box.width * $0.box.height < candidate.box.width * candidate.box.height
+    }) {
+        if !result.contains(where: { $0.owner.processIdentifier == candidate.owner.processIdentifier && $0.box == candidate.box }) { result.append(candidate) }
+    }
+    return result
+}
+
+struct TerminalAutomationDialogIdentity: Decodable {
+    let ownerPID: Int32; let ownerStart: String; let ownerPath: String; let ownerBundle: String
+    let allowBounds: [Double]; let denialBounds: [Double]; let targetPID: Int32; let targetStart: String
+}
+struct TerminalAutomationContext: Decodable {
+    let requestPID: Int32; let requestStart: String; let pythonPID: Int32
+    let requesterPID: Int32; let requesterStart: String; let requesterPath: String; let requesterUID: Int
+    let deadlineMonotonic: Double; let clock: String; let officialHostAdmitted: Bool?
+    let dialog: TerminalAutomationDialogIdentity?
+}
+
+@MainActor func terminalAutomation(_ args: [String]) throws -> [String: Any] {
+    guard args.count == 2, args[1].utf8.count <= 16384, let data = args[1].data(using: .utf8),
+          let context = try? JSONDecoder().decode(TerminalAutomationContext.self, from: data),
+          context.clock == "mach_absolute_time", context.deadlineMonotonic.isFinite else {
+        throw ProbeError.unavailable("original_terminal_automation_context_required")
+    }
+    let now = try consentMonotonicTime()
+    guard context.deadlineMonotonic > now, context.deadlineMonotonic - now <= 20 else {
+        throw ProbeError.unavailable("original_terminal_automation_deadline_expired")
+    }
+    let deadline = min(context.deadlineMonotonic, now + 3)
+    func requireActors() throws {
+        let fresh = try terminalAutomationActors(context.requestPID, pythonPID: context.pythonPID)
+        guard try consentMonotonicTime() < deadline, fresh["admitted"] as? Bool == true,
+              fresh["requestStart"] as? String == context.requestStart,
+              fresh["requesterPID"] as? Int == Int(context.requesterPID), fresh["requesterStart"] as? String == context.requesterStart,
+              fresh["requesterPath"] as? String == context.requesterPath, fresh["requesterUID"] as? Int == context.requesterUID else {
+            throw ProbeError.unavailable("original_terminal_request_or_requester_changed")
+        }
+    }
+    try requireActors()
+    let dialogs = terminalAutomationDialogs()
+    var result: [String: Any] = ["dialogs": dialogs.map { $0.receipt }, "physical_allow_click": false]
+    if args[0] == "allow-terminal-automation" {
+        #if !arch(arm64)
+        throw ProbeError.unavailable("official_arm_terminal_automation_host_required")
+        #endif
+        let env = ProcessInfo.processInfo.environment
+        guard context.officialHostAdmitted == true, env["GITHUB_REPOSITORY"] == "777genius/agent-notifications",
+              env["GITHUB_ACTOR"] == "777genius", env["GITHUB_TRIGGERING_ACTOR"] == "777genius",
+              env["GITHUB_EVENT_NAME"] == "workflow_dispatch", env["GITHUB_RUN_ATTEMPT"] == "1", env["ImageOS"] == "macos15",
+              ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 15,
+              dialogs.count == 1, let expected = context.dialog else {
+            throw ProbeError.unavailable("official_original_terminal_automation_dialog_required")
+        }
+        let dialog = dialogs[0], receipt = dialog.receipt
+        guard dialog.owner.processIdentifier == expected.ownerPID, dialog.ownerStart == expected.ownerStart,
+              receipt["ownerPath"] as? String == expected.ownerPath, receipt["ownerBundle"] as? String == expected.ownerBundle,
+              receipt["allowBounds"] as? [Double] == expected.allowBounds, receipt["denialBounds"] as? [Double] == expected.denialBounds,
+              dialog.targetPID == expected.targetPID, dialog.targetStart == expected.targetStart else {
+            throw ProbeError.unavailable("original_terminal_automation_dialog_changed")
+        }
+        let control = ConsentMenu(receipt: [:], allow: dialog.allow, allowBox: dialog.allowBox)
+        let point = CGPoint(x: dialog.allowBox.midX, y: dialog.allowBox.midY)
+        try requireActors()
+        guard matchesProcessStart(expected.ownerPID, expected.ownerStart), matchesProcessStart(expected.targetPID, expected.targetStart),
+              CGWarpMouseCursorPosition(point) == .success else { throw ProbeError.unavailable("original_terminal_automation_owner_changed") }
+        try requireActors()
+        try requireTopmostConsentItem(control, owner: expected.ownerPID)
+        guard let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left),
+              let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left) else {
+            throw ProbeError.unavailable("physical_terminal_automation_click_unavailable")
+        }
+        down.post(tap: .cghidEventTap); up.post(tap: .cghidEventTap)
+        result.merge(["physical_allow_click": true, "topmost_allow_item_verified": true, "original_request_verified": true,
+            "denial_button_observed": true, "requestPID": Int(context.requestPID), "requestStart": context.requestStart,
+            "requesterPID": Int(context.requesterPID), "requesterStart": context.requesterStart]) { _, new in new }
+    }
+    return result
+}
+
 @MainActor func performConsentAction(_ args: [String]) async throws -> [String: Any] {
     let operation = args[0]
     let contexted = operation != "notification-consent"
@@ -841,6 +1059,13 @@ final class ProductCapture: NSObject, SCStreamOutput, SCStreamDelegate, @uncheck
             case "test-process-identity":
                 guard args.count == 1 else { throw ProbeError.unavailable("fixed_identity_test_only") }
                 publish(try testDirectChildIdentity())
+            case "terminal-automation-actors":
+                guard args.count == 3, let pid = Int32(args[1]), let parent = Int32(args[2]), pid > 0, parent > 0 else {
+                    throw ProbeError.unavailable("original_osascript_pid_required")
+                }
+                publish(try terminalAutomationActors(pid, pythonPID: parent))
+            case "terminal-automation-consent", "allow-terminal-automation":
+                publish(try terminalAutomation(args))
             case "preflight":
                 let session = CGSessionCopyCurrentDictionary() as? [String: Any] ?? [:]
                 var device = AudioDeviceID(0)
