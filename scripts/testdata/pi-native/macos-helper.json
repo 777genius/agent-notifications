@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "source_sha": "02b4332c46dd6d24355bcb0a88ef8fdf23c980b9",
+  "source_tree": "325591dbc55b59cf8f312d91e8e42c2e33aeb7a0",
+  "run_id": 40900596725,
+  "run_attempt": 1,
+  "artifact_id": 12910090079,
+  "archive_sha256": "37d29175e14cd4fe4bf44c24f02741b1d2a9a880efb79aff8dcf39cd1f9e2fef",
+  "executable_sha256": "ef972aa8e5f21e2185ba444900623bd0515ad9fc2868971dd14d8a61f57dbfbe",
+  "attestation_sha256": "9ac1fbce2aed7085285ab9d651a463b840081fbb5d445b64dbcbcdfc8af5e170",
+  "custody_sha256": "fa9666c02c109fb80545870d7583868f969f8ae1be2b7527118e223afd23372c",
+  "signing_run_sha256": "522a7690c298e427087dcafe1b4f77190720c9e36b9298c547f979d81dcc044b",
+  "signing_artifacts_sha256": "43b662720c359375593e8a2684b22f2b74912ac889d30292b8f143093d4a278b"
+}

@@ -7,6 +7,10 @@ on:
       - 'scripts/pi-installed-desktop-macos.py'
       - 'scripts/test_pi_macos_terminal_fixture.py'
       - 'scripts/pi-candidate-build.py'
+      - 'scripts/pi-macos-helper.py'
+      - 'scripts/test_pi_macos_helper.py'
+      - 'scripts/testdata/pi-native/macos-helper.json'
+      - 'scripts/testdata/pi-native/macos-helper/**'
       - 'tests/integration/pi_installed_desktop_darwin.swift'
       - 'tests/integration/pi_*fixture.py'
       - 'go.mod'
@@ -118,25 +122,8 @@ jobs:
         run: |
           set -euo pipefail
           root="$RUNNER_TEMP/TEST-pi-macos"
-          mkdir -p "$root/helper"
-          test "$(git rev-parse HEAD:swift-notifier)" = c96f5152b7d95322731dcefa535c561c1c94309a
-          gh release download v1.49.10 --repo 777genius/agent-notifications \
-            --pattern ClaudeNotifier.app.zip --pattern checksums.txt --dir "$root/helper"
-          python - "$root/helper" <<'PY'
-          import hashlib
-          from pathlib import Path
-          import sys
-          root = Path(sys.argv[1])
-          for name, expected in {
-              'ClaudeNotifier.app.zip': '4e23f2870e1cebd565f3f00a459fe0d6f909109226af7761be60933d819e59cc',
-              'checksums.txt': '5219911d72b1cf7e49ab60f9b3abad9b9f6eb78a732ec0ea6863162bc1b3bf89',
-          }.items():
-              if hashlib.sha256((root / name).read_bytes()).hexdigest() != expected:
-                  raise SystemExit('Pinned signed helper acquisition mismatch')
-          PY
-          unzip -q "$root/helper/ClaudeNotifier.app.zip" -d "$root/helper/native"
-          test -f "$root/helper/native/ClaudeNotifier.app.managed-runtime.json"
-          bash swift-notifier/scripts/verify-signing.sh "$root/helper/native/ClaudeNotifier.app" --notarized \
+          python -B scripts/test_pi_macos_helper.py -v
+          python -B scripts/pi-macos-helper.py --output "$root/helper" --report "$root/evidence/helper-input.json" \
             > "$root/evidence/helper-verification.txt" 2>&1
           arch="$(go env GOARCH)"
           pi_archive="$(python -c 'import json,sys; print(json.load(open("scripts/testdata/pi-native/pins.json"))["targets"]["darwin/" + sys.argv[1]]["archive"])' "$arch")"
@@ -183,7 +170,8 @@ jobs:
             --package "$root/candidate/package-A.zip" --assets-root "$GITHUB_WORKSPACE" \
             --pi-executable "$root/pi/pi/pi" --observer "$root/observer" \
             --pi-acquisition "$root/evidence/acquisition.json" \
-            --helper-archive "$root/helper/ClaudeNotifier.app.zip" \
+            --helper-archive "$root/helper/ClaudeNotifier-smoke.app.zip" \
+            --helper-input "$root/evidence/helper-input.json" \
             --report "$root/evidence/evidence.json"
       - name: Preserve native evidence even when an observation is unavailable
         if: always()

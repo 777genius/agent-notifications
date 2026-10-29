@@ -24,8 +24,6 @@ import wave
 
 REPO = Path(__file__).resolve().parents[1]
 CASES = ("completion", "question", "sound-off", "click-off", "desktop-off", "stale-origin")
-HELPER_SHA = "4e23f2870e1cebd565f3f00a459fe0d6f909109226af7761be60933d819e59cc"
-HELPER_SOURCE = "c96f5152b7d95322731dcefa535c561c1c94309a"
 
 
 def module(name, path):
@@ -38,6 +36,7 @@ def module(name, path):
 F = module("pi_native_fixture", REPO / "tests/integration/pi_native_fixture.py")
 P = module("pi_installed_fixture", REPO / "tests/integration/pi_installed_fixture.py")
 D = module("pi_installed_process", REPO / "scripts/pi-installed-process-e2e.py")
+H = module("pi_macos_helper", REPO / "scripts/pi-macos-helper.py")
 
 
 def wait_for(predicate, reason, seconds=12):
@@ -355,7 +354,7 @@ def run(args):
               "host_os": platform.system(), "host_architecture": platform.machine(),
               "candidate_binary_sha256": P.sha(args.candidate), "package_sha256": P.sha(args.package),
               "pi_binary_sha256": P.sha(args.pi_executable), "pi_acquisition": json.loads(args.pi_acquisition.read_text()),
-              "helper": {"release": "v1.49.10", "source_tree": HELPER_SOURCE,
+              "helper": {"input": json.loads(args.helper_input.read_text()),
                          "archive_sha256": P.sha(args.helper_archive)},
               "desktop_qualified": False, "native_product_observations_passed": False,
               "native_helper_verified": False, "cases": []}
@@ -504,9 +503,11 @@ def run(args):
                   and report["pi_acquisition"].get("binary_sha256") == report["pi_binary_sha256"]
                   and command([args.pi_executable, "--version"]).strip() == "1.4.0",
                   "official_pinned_pi_identity_wrong")
-        P.require(report["helper"]["archive_sha256"] == HELPER_SHA
-                  and command(["git", "-C", REPO, "rev-parse", "HEAD:swift-notifier"]).strip() == HELPER_SOURCE,
-                  "signed_helper_source_or_archive_mismatch")
+        helper_pin = H.load_pin()
+        H.candidate_tree(helper_pin)
+        H.validate_receipt(report["helper"]["input"], helper_pin)
+        P.require(report["helper"]["archive_sha256"] == helper_pin["archive_sha256"],
+                  "signed_helper_archive_mismatch")
         (root / "foreign-TEST-root").mkdir()
         P.configure(root / "global/config.json", args.assets_root / "config/config.json", sink)
         D.command(args.candidate, ["internal-install-runtime", "--stage", args.runtime_stage, "--target", root / "runtime/bin",
@@ -521,6 +522,9 @@ def run(args):
         helper = app / "Contents/MacOS/terminal-notifier-modern"
         P.require(P.sha(helper) == P.sha(args.runtime_stage / "ClaudeNotifier.app/Contents/MacOS/terminal-notifier-modern"),
                   "installed_signed_helper_changed")
+        P.require(P.sha(helper) == helper_pin["executable_sha256"]
+                  and P.sha(args.runtime_stage / "ClaudeNotifier.app.managed-runtime.json") == helper_pin["attestation_sha256"],
+                  "installed_signed_helper_pin_mismatch")
         report["helper"].update(installed_path=str(app), installed_tree_sha256=native["InstalledTreeSHA256"],
                                 executable_sha256=P.sha(helper), source_stage_attestation_sha256=P.sha(args.runtime_stage / "ClaudeNotifier.app.managed-runtime.json"))
         report["native_helper_verified"] = True
@@ -633,9 +637,9 @@ def run(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ("candidate", "runtime-stage", "package", "assets-root", "pi-executable", "observer", "pi-acquisition", "helper-archive", "report"):
+    for name in ("candidate", "runtime-stage", "package", "assets-root", "pi-executable", "observer", "pi-acquisition", "helper-archive", "helper-input", "report"):
         parser.add_argument("--" + name, type=Path, required=True)
     options = parser.parse_args()
-    for name in ("candidate", "runtime_stage", "package", "assets_root", "pi_executable", "observer", "pi_acquisition", "helper_archive"):
+    for name in ("candidate", "runtime_stage", "package", "assets_root", "pi_executable", "observer", "pi_acquisition", "helper_archive", "helper_input"):
         setattr(options, name, getattr(options, name).resolve(strict=True))
     raise SystemExit(run(options))

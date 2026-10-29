@@ -7,6 +7,7 @@ sealed-tree and external-attestation verification during actual installation.
 """
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -18,6 +19,9 @@ import subprocess
 REPO = Path(__file__).resolve().parents[1]
 PLATFORMS = {"Linux": "linux", "Darwin": "darwin", "Windows": "windows"}
 ARCHES = {"x86_64": "amd64", "AMD64": "amd64", "arm64": "arm64", "aarch64": "arm64", "ARM64": "arm64"}
+HELPER_SPEC = importlib.util.spec_from_file_location("pi_macos_helper", Path(__file__).with_name("pi-macos-helper.py"))
+H = importlib.util.module_from_spec(HELPER_SPEC)
+HELPER_SPEC.loader.exec_module(H)
 
 
 def require(ok, code):
@@ -126,9 +130,16 @@ def build(args):
             require(args.native_assets is not None, "authenticated_macos_helper_inputs_required")
             bundle, attestation = args.native_assets / "ClaudeNotifier.app", args.native_assets / "ClaudeNotifier.app.managed-runtime.json"
             require(bundle.is_dir() and attestation.is_file() and not attestation.is_symlink(), "macos_helper_and_attestation_required")
+            helper_input = json.loads((args.native_assets / "helper-input.json").read_text())
+            helper_pin = H.load_pin()
+            H.candidate_tree(helper_pin)
+            H.validate_receipt(helper_input, helper_pin)
+            require(sha(bundle / "Contents/MacOS/terminal-notifier-modern") == helper_pin["executable_sha256"]
+                    and sha(attestation) == helper_pin["attestation_sha256"], "candidate_macos_helper_pin_mismatch")
             shutil.copytree(bundle, stage / bundle.name, symlinks=True)
             shutil.copy2(attestation, stage / attestation.name)
             report["native_attestation_sha256"] = sha(attestation)
+            report["native_helper_input"] = helper_input
         info = run([args.go, "version", "-m", stage / main])
         linked_source(info, source)
         report["go_build_information"] = info

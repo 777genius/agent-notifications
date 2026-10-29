@@ -117,9 +117,19 @@ def qualify(platform, source, build, acquisition, process, desktop):
         if row["case"] == "question":
             require(row.get("pending_question_at_click") is True, "native_question_was_not_pending")
     if platform == "darwin":
+        pin = B.H.load_pin()
+        B.H.candidate_tree(pin)
+        B.H.validate_receipt(build.get("native_helper_input"), pin)
+        helper = desktop.get("helper", {})
+        B.H.validate_receipt(helper.get("input"), pin)
         attestation = inventory.get("ClaudeNotifier.app.managed-runtime.json", {})
         require(desktop.get("native_helper_verified") is True and regular_artifact(attestation)
-                and attestation["sha256"] == build.get("native_attestation_sha256"), "macos_candidate_native_helper_unverified")
+                and attestation["sha256"] == build.get("native_attestation_sha256") == pin["attestation_sha256"]
+                and inventory.get("ClaudeNotifier.app/Contents/MacOS/terminal-notifier-modern", {}).get("sha256") == pin["executable_sha256"]
+                and helper.get("archive_sha256") == pin["archive_sha256"]
+                and helper.get("executable_sha256") == pin["executable_sha256"]
+                and helper.get("source_stage_attestation_sha256") == pin["attestation_sha256"],
+                "macos_candidate_native_helper_unverified")
     if platform == "windows":
         require(build.get("embedded_callback_verified") is True
                 and regular_artifact(inventory.get("claude-notifications-windows-amd64-focus.exe", {}))

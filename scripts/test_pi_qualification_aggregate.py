@@ -2,6 +2,7 @@
 import importlib.util
 from pathlib import Path
 import unittest
+from unittest import mock
 
 PATH = Path(__file__).with_name("pi-qualification-aggregate.py")
 SPEC = importlib.util.spec_from_file_location("pi_aggregate", PATH)
@@ -9,6 +10,12 @@ A = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(A)
 SOURCE = "a" * 40
 HASH = "b" * 64
+HELPER_PIN = {"schema_version": 1, "source_sha": "d" * 40, "source_tree": "e" * 40,
+              "run_id": 41, "run_attempt": 1, "artifact_id": 42,
+              "archive_sha256": HASH, "executable_sha256": HASH, "attestation_sha256": HASH,
+              "custody_sha256": HASH, "signing_run_sha256": HASH, "signing_artifacts_sha256": HASH}
+HELPER_INPUT = {"schema_version": 1, "pin": HELPER_PIN, "signed_source_tree_verified": True,
+                "signature_and_notarization_verified": True}
 
 
 def metadata(platform="linux"):
@@ -56,6 +63,10 @@ def metadata(platform="linux"):
         desktop["native_helper_verified"] = True
         build["stage_inventory"]["ClaudeNotifier.app.managed-runtime.json"] = {"sha256": HASH, "bytes": 1}
         build["native_attestation_sha256"] = HASH
+        build["native_helper_input"] = HELPER_INPUT
+        build["stage_inventory"]["ClaudeNotifier.app/Contents/MacOS/terminal-notifier-modern"] = {"sha256": HASH, "bytes": 1}
+        desktop["helper"] = {"input": HELPER_INPUT, "archive_sha256": HASH,
+                             "executable_sha256": HASH, "source_stage_attestation_sha256": HASH}
     if platform == "windows":
         build["embedded_callback_verified"] = True
         build["stage_inventory"]["claude-notifications-windows-amd64-focus.exe"] = {"sha256": HASH, "bytes": 1}
@@ -64,6 +75,11 @@ def metadata(platform="linux"):
 
 
 class AggregateGuards(unittest.TestCase):
+    def setUp(self):
+        self.addCleanup(mock.patch.stopall)
+        mock.patch.object(A.B.H, "load_pin", return_value=HELPER_PIN).start()
+        mock.patch.object(A.B.H, "candidate_tree").start()
+
     def test_validated_metadata_contract_on_each_os(self):
         for platform in A.HOSTS:
             self.assertEqual(A.qualify(platform, SOURCE, *metadata(platform))["status"], "qualified")
@@ -101,6 +117,17 @@ class AggregateGuards(unittest.TestCase):
             A.qualify("windows", SOURCE, *values)
         values[3]["execution_mode"] = "x64_emulation"
         A.qualify("windows", SOURCE, *values)
+
+    def test_macos_signed_source_and_actual_helper_bytes_must_match_pin(self):
+        for change in (lambda values: values[0].pop("native_helper_input"),
+                       lambda values: values[3]["helper"].update(executable_sha256="f" * 64),
+                       lambda values: values[3]["helper"].update(archive_sha256="f" * 64),
+                       lambda values: values[0]["stage_inventory"]["ClaudeNotifier.app.managed-runtime.json"].update(sha256="f" * 64),
+                       lambda values: values[0]["stage_inventory"]["ClaudeNotifier.app/Contents/MacOS/terminal-notifier-modern"].update(sha256="f" * 64)):
+            values = metadata("darwin")
+            change(values)
+            with self.assertRaises(ValueError):
+                A.qualify("darwin", SOURCE, *values)
 
     def test_missing_pi_hash_and_empty_native_inventory_cannot_agree_as_null(self):
         values = metadata()
