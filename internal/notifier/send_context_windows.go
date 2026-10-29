@@ -12,6 +12,7 @@ import (
 var captureLocalWindowsTerminal = winfocus.CaptureContext
 
 func (n *Notifier) sendNativeDesktopContext(ctx context.Context, sound, title, body, subtitle, _, cwd, icon string, opts sendOptions) error {
+	traceTestDesktopPhase(ctx, testNativeStarted)
 	if subtitle != "" {
 		body = subtitle + "\n" + body
 	}
@@ -24,10 +25,17 @@ func (n *Notifier) sendNativeDesktopContext(ctx context.Context, sound, title, b
 			toast.ActivationType, toast.ActivationArguments = "protocol", focus.EncodeURI()
 		}
 	}
-	if err := submitWindowsToast(ctx, toast); err != nil {
+	traceTestDesktopPhase(ctx, testFocusReady)
+	traceTestDesktopPhase(ctx, testToastStarted)
+	err := submitWindowsToast(ctx, toast)
+	traceTestDesktopPhase(ctx, testToastReturned)
+	if err != nil {
 		return err
 	}
-	return n.playSoundContext(ctx, sound, opts)
+	traceTestDesktopPhase(ctx, testSoundStarted)
+	err = n.playSoundContext(ctx, sound, opts)
+	traceTestDesktopPhase(ctx, testSoundReturned)
+	return err
 }
 func hasNativeTerminal(ctx context.Context) bool {
 	if ctx.Err() != nil {
