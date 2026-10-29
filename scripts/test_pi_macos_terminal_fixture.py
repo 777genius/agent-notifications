@@ -4,6 +4,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import plistlib
 import pty
 import select
 import subprocess
@@ -12,6 +13,7 @@ import tempfile
 import time
 import unittest
 from unittest import mock
+import zipfile
 
 REPO = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("pi_installed_macos", REPO / "scripts/pi-installed-desktop-macos.py")
@@ -140,6 +142,30 @@ class TerminalOwnership(unittest.TestCase):
             self.assertFalse(terminal.collected())
 
 
+class PermissionUIIdentity(unittest.TestCase):
+    def test_display_aliases_come_from_pinned_archive_and_identical_installed_metadata(self):
+        archive = M.H.INPUTS / "ClaudeNotifier-smoke.app.zip"
+        pin = M.H.load_pin()
+        with zipfile.ZipFile(archive) as packaged:
+            body = packaged.read("ClaudeNotifier.app/Contents/Info.plist")
+        with tempfile.TemporaryDirectory(prefix="TEST-pi-permission-identity-") as temporary:
+            app = Path(temporary) / "owned.app"
+            info = app / "Contents/Info.plist"
+            info.parent.mkdir(parents=True)
+            info.write_bytes(body)
+            identity = M.permission_ui_identity(archive, app, pin)
+            self.assertEqual(identity["display_names"], ["Agent Notifications", "ClaudeNotifier"])
+            self.assertEqual(identity["bundle_id"], M.H.BUNDLE)
+            self.assertEqual(identity["installed_info_plist_sha256"], M.P.sha(info))
+            with self.assertRaisesRegex(RuntimeError, "archive_identity_mismatch"):
+                M.permission_ui_identity(archive, app, {**pin, "archive_sha256": "0" * 64})
+            metadata = plistlib.loads(body)
+            metadata["CFBundleDisplayName"] = "TEST foreign"
+            info.write_bytes(plistlib.dumps(metadata))
+            with self.assertRaisesRegex(RuntimeError, "installed_metadata_mismatch"):
+                M.permission_ui_identity(archive, app, pin)
+
+
 class ConsentObservation(unittest.TestCase):
     """Real child exit/pipe/timeout observations; these never qualify desktop."""
     def child(self, stdout, stderr=b"", code=0, delay=0):
@@ -162,6 +188,13 @@ class ConsentObservation(unittest.TestCase):
         self.assertEqual(M.wait_for_consent(child, lambda: [], seconds=3), [])
         stdout, actual_stderr = child.communicate(timeout=3)
         return M.permission_receipt(stdout, actual_stderr, child.returncode)
+
+    def actor_receipt(self, child, candidate):
+        return {"request_process_identity": {"status": "observed", "pid": child.pid, "parent_pid": os.getpid(),
+                "executable_path": str(candidate), "process_start_identity": "123456:789"},
+                "request_helper_identity": {"pid": 41, "finished_launching": True, "process_start_identity": "987654:123"},
+                "permission_card_identity": {"candidate_name": "ClaudeNotifier", "os_dialog_pid": 81,
+                "os_owner_start_identity": "555555:111", "bounds": [664, 40, 344, 73]}}
 
     def test_early_allowed_requires_fresh_native_allowed_result(self):
         allowed = self.receipt("allowed")
@@ -232,7 +265,7 @@ class ConsentObservation(unittest.TestCase):
         helper = {"pid": 41, "process_start_identity": "987654:123", "finished_launching": True}
         identity = {"status": "observed", "pid": child.pid, "parent_pid": os.getpid(),
                     "executable_path": str(candidate), "process_start_identity": "123456:789"}
-        card = {"candidate_name": "ClaudeNotifier", "fixed_permission_body_observed": True}
+        card = self.actor_receipt(child, candidate)["permission_card_identity"]
         calls, receipt = [], {}
 
         def observe(operation, *args, **kwargs):
@@ -240,12 +273,12 @@ class ConsentObservation(unittest.TestCase):
             if operation == "terminal-process-identity":
                 return identity
             if operation == "notification-consent":
-                return {"dialogs": [card]}
+                return {"dialogs": [card], "permission_cards": [card]}
             if operation == "helper-processes":
                 return {"installed_helpers": [helper]}
             if operation == "allow-notification-consent":
                 return {"physical_hover": True, "physical_options_click": True, "physical_allow_click": True,
-                        "denial_button_observed": True, "original_request_verified": True,
+                        "denial_button_observed": True, "original_request_verified": True, "pointer_at_target": True,
                         "installed_helper_pid": 41, "installed_helper_start_identity": "987654:123",
                         "original_request_pid": child.pid, "original_request_start_identity": "123456:789"}
             self.fail("unexpected native operation " + operation)
@@ -255,8 +288,14 @@ class ConsentObservation(unittest.TestCase):
         helper.update(pid=42, process_start_identity="replacement")
         click = M.allow_consent(child, observe, app, candidate, receipt, 15, now=lambda: 10)
         actions = [row for row in calls if row[0] == "allow-notification-consent"]
-        self.assertEqual(actions, [("allow-notification-consent", (str(app), "41", "987654:123",
-                         str(child.pid), "123456:789", str(candidate), "5"), {"timeout": 5})])
+        self.assertEqual(len(actions), 1)
+        context = json.loads(actions[0][1][0])
+        self.assertEqual(context, {"app": str(app), "helperPID": 41, "helperStart": "987654:123",
+                         "requestPID": child.pid, "requestStart": "123456:789", "requestExecutable": str(candidate),
+                         "deadlineMonotonic": 15, "clock": "mach_absolute_time", "ownerPID": 81,
+                         "ownerStart": "555555:111", "candidateName": "ClaudeNotifier",
+                         "cardBounds": [664, 40, 344, 73]})
+        self.assertEqual(actions[0][2], {"timeout": 5})
         self.assertFalse(any(row[0] == "activate-permission-helper" for row in calls))
         self.assertIs(receipt["physical_consent_flow"], click)
         with self.assertRaises((RuntimeError, KeyError)):
@@ -291,13 +330,12 @@ class ConsentObservation(unittest.TestCase):
     def test_native_click_requires_exact_actor_and_visible_denial_receipt(self):
         child = self.child(b"", delay=20)
         candidate = Path(sys.executable).resolve()
-        receipt = {"request_process_identity": {"status": "observed", "pid": child.pid, "parent_pid": os.getpid(),
-                   "executable_path": str(candidate), "process_start_identity": "123456:789"},
-                   "request_helper_identity": {"pid": 41, "finished_launching": True, "process_start_identity": "987654:123"}}
+        receipt = self.actor_receipt(child, candidate)
         click = {"physical_allow_click": True, "denial_button_observed": True, "original_request_verified": True,
+                 "pointer_at_target": True,
                  "installed_helper_pid": 41, "installed_helper_start_identity": "987654:123",
                  "original_request_pid": child.pid, "original_request_start_identity": "123456:789"}
-        for change in ({"physical_allow_click": False}, {"denial_button_observed": False},
+        for change in ({"physical_allow_click": False}, {"denial_button_observed": False}, {"pointer_at_target": False},
                        {"original_request_verified": False}, {"installed_helper_pid": 42},
                        {"installed_helper_start_identity": "replacement"}, {"original_request_pid": child.pid + 1},
                        {"original_request_start_identity": "replacement"}):
@@ -347,6 +385,54 @@ class ConsentObservation(unittest.TestCase):
             clock[0] = 5.0
             self.assertEqual(observed(), dialogs)
             self.assertEqual(captures, [])
+
+    def test_permission_card_hover_and_observed_options_are_once_bound_to_original_request(self):
+        child = self.child(b"", delay=20)
+        candidate = Path(sys.executable).resolve()
+        receipt = self.actor_receipt(child, candidate)
+        card = receipt["permission_card_identity"]
+        phase, calls, captures = [0], [], []
+
+        def observe(operation, *args, **kwargs):
+            calls.append(operation)
+            if operation in ("hover-notification-consent", "open-notification-consent-options"):
+                context = json.loads(args[0])
+                self.assertEqual(context["requestPID"], child.pid)
+                self.assertEqual(context["helperPID"], 41)
+                self.assertEqual(context["ownerPID"], 81)
+                self.assertEqual(context["deadlineMonotonic"], 15)
+                self.assertEqual(context["clock"], "mach_absolute_time")
+                phase[0] = 1 if operation == "hover-notification-consent" else 2
+                return {"physical_pointer_hover": phase[0] == 1, "physical_options_click": phase[0] == 2,
+                        "pointer_at_target": True, "original_request_verified": True,
+                        "installed_helper_pid": 41, "installed_helper_start_identity": "987654:123",
+                        "original_request_pid": child.pid, "original_request_start_identity": "123456:789"}
+            self.assertEqual(operation, "notification-consent")
+            return {"dialogs": [{"observed_allow": True}] if phase[0] == 2 else [],
+                    "permission_cards": [{**card, "options_bounds": [1, 2, 3, 4]}] if phase[0] else [card]}
+
+        observed = M.consent_observer(child, observe, Path("/TEST/owned.app"), receipt, now=lambda: 10,
+                                      ui_capture=lambda phase: captures.append(phase) or {"desktop_qualified": False},
+                                      candidate=candidate, deadline=15)
+        self.assertEqual(observed(), [])
+        self.assertEqual(observed(), [])
+        self.assertEqual(observed(), [{"observed_allow": True}])
+        self.assertEqual(observed(), [{"observed_allow": True}])
+        self.assertEqual(calls.count("hover-notification-consent"), 1)
+        self.assertEqual(calls.count("open-notification-consent-options"), 1)
+        self.assertEqual(captures, ["hover", "options"])
+        self.assertNotIn("allow-notification-consent", calls)
+        with self.assertRaises((KeyError, RuntimeError)):
+            M.observed_permission(receipt)
+
+    def test_completed_request_or_ambiguous_permission_cards_never_hover(self):
+        for code, cards in ((0, [{}]), (None, [{}, {}])):
+            request = mock.Mock(poll=mock.Mock(return_value=code))
+            observe = mock.Mock(return_value={"dialogs": [], "permission_cards": cards})
+            observed = M.consent_observer(request, observe, Path("/TEST/owned.app"), {})
+            self.assertEqual(observed(), [])
+            self.assertFalse(any(call.args[0] in ("hover-notification-consent", "open-notification-consent-options",
+                                                 "allow-notification-consent") for call in observe.call_args_list))
 
     def test_pending_capture_failure_is_inconclusive_and_not_retried(self):
         class Request:

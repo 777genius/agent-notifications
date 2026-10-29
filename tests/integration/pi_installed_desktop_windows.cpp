@@ -32,6 +32,8 @@ struct OwnedProcess {
     DWORD pid = 0;
     ULONGLONG created = 0;
     std::wstring image;
+    bool terminationRequested = false;
+    DWORD terminationError = ERROR_SUCCESS;
     ~OwnedProcess() { if (handle) CloseHandle(handle); }
 };
 static bool running(HANDLE process) {
@@ -150,19 +152,28 @@ static std::string collectOwnedProcess(std::unique_ptr<OwnedProcess> root) {
     discover();
     for (;;) {
         for (const auto& process : owned) {
-            if (running(process->handle)) {
-                const bool terminated = TerminateProcess(process->handle, 1);
-                const DWORD error = terminated ? ERROR_SUCCESS : GetLastError();
-                if (!terminated && running(process->handle))
+            if (running(process->handle) && !process->terminationRequested) {
+                // Termination is asynchronous. A process already exiting may
+                // report ACCESS_DENIED before its retained object is signaled.
+                const BOOL requested = TerminateProcess(process->handle, 1);
+                process->terminationError = requested ? ERROR_SUCCESS : GetLastError();
+                if (!requested && process->terminationError != ERROR_ACCESS_DENIED && running(process->handle))
                     throw std::runtime_error("owned_process_termination_failed:pid=" + std::to_string(process->pid)
                         + ":creation_time=" + std::to_string(process->created)
                         + ":role=" + (process.get() == owned.front().get() ? "root" : "descendant")
                         + ":image_leaf=" + utf8(fs::path(process->image).filename().wstring())
-                        + ":winerror=" + std::to_string(error) + ":handle_state=non_signaled");
+                        + ":winerror=" + std::to_string(process->terminationError) + ":handle_state=non_signaled");
+                process->terminationRequested = true;
             }
         }
         const bool added = discover();
-        need(GetTickCount64() < deadline, "owned_process_cleanup_timeout");
+        if (GetTickCount64() >= deadline) {
+            const auto pending = std::find_if(owned.begin(), owned.end(), [](const auto& p) { return running(p->handle); });
+            throw std::runtime_error("owned_process_cleanup_timeout:pid=" + std::to_string(pending == owned.end() ? 0 : (*pending)->pid)
+                + ":creation_time=" + std::to_string(pending == owned.end() ? 0 : (*pending)->created)
+                + ":image_leaf=" + (pending == owned.end() ? std::string{} : utf8(fs::path((*pending)->image).filename().wstring()))
+                + ":winerror=" + std::to_string(pending == owned.end() ? 0 : (*pending)->terminationError));
+        }
         if (!added && std::none_of(owned.begin(), owned.end(), [](const auto& p) { return running(p->handle); })) break;
         pump(10);
     }
@@ -237,10 +248,23 @@ static int testProcessIdentity() {
         DeleteFileW(marker); throw;
     }
     DeleteFileW(marker);
+    {
+        TestChild denied(L"process-test-child");
+        auto original = processIdentity(denied.process.dwProcessId);
+        need(original != nullptr, "process_guard_denied_identity_missing");
+        HANDLE queryOnly = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, original->pid);
+        need(queryOnly != nullptr, "process_guard_query_handle_missing");
+        bool refused = false;
+        try { collectOwnedProcess(heldProcess(queryOnly, original->created, original->image)); }
+        catch (const std::runtime_error& error) {
+            refused = std::string(error.what()).rfind("owned_process_cleanup_timeout:pid=", 0) == 0;
+        }
+        need(refused && running(original->handle), "live_denied_process_falsely_collected");
+    }
     std::cout << "{\"scope\":\"native_owned_process_cleanup_only\",\"mismatched_birth_rejected\":true,"
                  "\"mismatched_image_rejected\":true,\"reaped_identity_rejected\":true,"
                  "\"root_exited_before_live_descendant_collection\":true,"
-                 "\"actual_descendant_collected\":true,\"desktop_qualified\":false}\n";
+                 "\"actual_descendant_collected\":true,\"live_denied_process_rejected\":true,\"desktop_qualified\":false}\n";
     return 0;
 }
 static std::wstring title(HWND window) {
@@ -340,20 +364,39 @@ static std::wstring elementName(IUIAutomationElement* element) {
     std::wstring value = raw ? raw : L""; if (raw) SysFreeString(raw);
     need(value.size() <= 4096, "native_ui_text_bound"); return value;
 }
-static ComPtr<IUIAutomationElement> card(IUIAutomation* automation, const std::wstring& expected, const std::wstring& body) {
+struct ToastTrace {
+    int maxTitleMatches = 0;
+    bool shellProviderSeen = false;
+    std::string stage = "not_started";
+    std::vector<int> ancestorTypes;
+};
+static std::string toastTrace(const ToastTrace& trace) {
+    std::string types = "[";
+    for (const auto type : trace.ancestorTypes) { if (types.size() > 1) types += ','; types += std::to_string(type); }
+    return "\"max_exact_title_matches\":" + std::to_string(trace.maxTitleMatches)
+        + ",\"shell_provider_seen\":" + jsonBool(trace.shellProviderSeen)
+        + ",\"last_stage\":\"" + trace.stage + "\",\"ancestor_control_types\":" + types + "]";
+}
+static ComPtr<IUIAutomationElement> card(IUIAutomation* automation, const std::wstring& expected, const std::wstring& body, ToastTrace& trace) {
     ComPtr<IUIAutomationElement> root, text; hrcheck(automation->GetRootElement(&root));
     VARIANT name{}; name.vt = VT_BSTR; name.bstrVal = SysAllocString(expected.c_str());
     ComPtr<IUIAutomationCondition> match; hrcheck(automation->CreatePropertyCondition(UIA_NamePropertyId, name, &match)); VariantClear(&name);
     ComPtr<IUIAutomationElementArray> all; hrcheck(root->FindAll(TreeScope_Descendants, match.Get(), &all));
     int total = 0; hrcheck(all->get_Length(&total)); need(total <= 1, "product_toast_title_ambiguous");
+    trace.maxTitleMatches = std::max(trace.maxTitleMatches, total);
+    trace.stage = "exact_title_missing";
     if (!total) return nullptr;
     hrcheck(all->GetElement(0, &text));
-    int pid = 0; hrcheck(text->get_CurrentProcessId(&pid)); if (!shellOwner(pid)) return nullptr;
+    int pid = 0; hrcheck(text->get_CurrentProcessId(&pid));
+    trace.stage = "exact_title_provider_not_shell";
+    if (!shellOwner(pid)) return nullptr;
+    trace.shellProviderSeen = true; trace.ancestorTypes.clear(); trace.stage = "exact_card_ancestor_missing";
     ComPtr<IUIAutomationTreeWalker> walker; hrcheck(automation->get_ControlViewWalker(&walker));
     auto current = text;
     for (int depth = 0; depth < 6; depth++) {
         CONTROLTYPEID type = 0; int currentPID = 0;
         hrcheck(current->get_CurrentControlType(&type)); hrcheck(current->get_CurrentProcessId(&currentPID));
+        trace.ancestorTypes.push_back(type);
         if (currentPID != pid) return nullptr;
         if (type == UIA_ButtonControlTypeId || type == UIA_ListItemControlTypeId) {
             ComPtr<IUIAutomationCondition> yes; hrcheck(automation->CreateTrueCondition(&yes));
@@ -365,19 +408,31 @@ static ComPtr<IUIAutomationElement> card(IUIAutomation* automation, const std::w
                 const auto value = elementName(child.Get());
                 titleSeen = titleSeen || value == expected; bodySeen = bodySeen || value.find(body) != std::wstring::npos;
             }
-            if (titleSeen && bodySeen) return current;
+            if (titleSeen && bodySeen) { trace.stage = "exact_card_selected"; return current; }
+            trace.stage = "exact_card_title_or_body_missing";
         }
         ComPtr<IUIAutomationElement> parent; hrcheck(walker->GetParentElement(current.Get(), &parent));
         if (!parent) break; current = parent;
     }
     return nullptr;
 }
-static int toast(const std::wstring& expected, const std::wstring& body, const fs::path& image, bool click) {
+static int toast(const std::wstring& expected, const std::wstring& body, const fs::path& image, bool click, const fs::path& ready = {}) {
     need(testTitle(expected) && !body.empty() && body.size() <= 256, "owned_product_toast_selector_required");
     ComPtr<IUIAutomation> automation; hrcheck(CoCreateInstance(CLSID_CUIAutomation, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&automation)));
-    const auto until = GetTickCount64() + 15000;
+    if (!ready.empty()) {
+        need(!click && !fs::exists(ready), "observation_only_toast_ready_path_required");
+        auto pending = ready; pending += L".pending";
+        need(!fs::exists(pending), "observation_only_toast_pending_path_required");
+        {
+            std::ofstream file(pending); file << "{\"ready\":true,\"observation_only\":true,\"budget_ms\":15000}\n";
+            need(file.good(), "toast_observer_ready_write_failed");
+        }
+        fs::rename(pending, ready);
+    }
+    ToastTrace trace;
+    const auto started = GetTickCount64(), until = started + 15000;
     while (GetTickCount64() < until) {
-        auto selected = card(automation.Get(), expected, body);
+        auto selected = card(automation.Get(), expected, body, trace);
         if (selected) {
             BOOL offscreen = TRUE, clickable = FALSE; POINT point{};
             hrcheck(selected->get_CurrentIsOffscreen(&offscreen)); hrcheck(selected->GetClickablePoint(&point, &clickable));
@@ -388,12 +443,13 @@ static int toast(const std::wstring& expected, const std::wstring& body, const f
                 need(owner(GetAncestor(WindowFromPoint(point), GA_ROOT)) == static_cast<DWORD>(pid), "product_toast_click_occluded");
                 need(mouse(point), "product_toast_native_mouse_denied");
             }
-            std::cout << "{\"found\":true,\"native_shell_pid\":" << pid << ",\"real_mouse_click\":" << jsonBool(click) << "}\n";
+            std::cout << "{\"found\":true,\"native_shell_pid\":" << pid << ",\"real_mouse_click\":" << jsonBool(click)
+                      << ",\"elapsed_ms\":" << GetTickCount64() - started << ',' << toastTrace(trace) << "}\n";
             return 0;
         }
         pump(100);
     }
-    std::cout << "{\"found\":false}\n"; return 3;
+    std::cout << "{\"found\":false,\"elapsed_ms\":" << GetTickCount64() - started << ',' << toastTrace(trace) << "}\n"; return 3;
 }
 static int capture(const fs::path& path, const fs::path& stop, int routeCount, wchar_t** routeArgs) {
     ComPtr<IMMDeviceEnumerator> enumerator; ComPtr<IMMDevice> endpoint; ComPtr<IAudioClient> client; ComPtr<IAudioCaptureClient> reader;
@@ -541,6 +597,7 @@ int wmain(int argc, wchar_t** argv) {
             std::cout << "{\"ok\":true}\n"; return 0;
         }
         if ((mode == L"toast" || mode == L"toast-click") && argc == 5) return toast(argv[2], argv[3], argv[4], mode == L"toast-click");
+        if (mode == L"toast-watch" && argc == 6) return toast(argv[2], argv[3], argv[4], false, argv[5]);
         throw std::runtime_error("unsupported_native_observer_command");
     } catch (const NavigationTokenTEST::Failure& error) {
         std::cerr << error.query << ':' << error.error; return 2;

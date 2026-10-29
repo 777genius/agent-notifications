@@ -131,6 +131,92 @@ def cleanup_case(actions, *, primary_failure, report, case):
             raise RuntimeError("native_case_cleanup_failed:" + failures[0]["failure"])
 
 
+def start_toast_watcher(native, title, body, root, deadline, helpers):
+    ready = root / "early-toast-ready.json"
+    child = subprocess.Popen([str(native.executable), "toast-watch", title, body,
+                              str(root / "early-product-banner.bmp"), str(ready)],
+                             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             creationflags=subprocess.CREATE_NO_WINDOW)
+    helpers.append(child)
+    try:
+        wait_for(ready.exists, "early_toast_observer_not_ready", seconds=max(0, min(5, deadline - time.monotonic())))
+        P.require(ready.is_file() and not ready.is_symlink() and ready.stat().st_size <= 4096,
+                  "early_toast_observer_ready_file_invalid")
+        P.require(json.loads(ready.read_text()) == {"ready": True, "observation_only": True, "budget_ms": 15000},
+                  "early_toast_observer_ready_invalid")
+    except Exception:
+        collect_toast_watcher(child, root / "early-toast-observation.json", deadline)
+        raise
+    return child
+
+
+def collect_toast_watcher(child, receipt, deadline):
+    if child is None:
+        return
+    value = {"observation_only": True, "qualification_input": False}
+    try:
+        out, errors = child.communicate(timeout=max(0.1, deadline - time.monotonic()))
+    except subprocess.TimeoutExpired:
+        child.kill()  # Only this directly owned observation process.
+        out, errors = child.communicate(timeout=3)
+        value["deadline_expired"] = True
+    value.update(exit_code=child.returncode, stdout_bytes=len(out), stderr_bytes=len(errors))
+    if len(out) + len(errors) <= 65536:
+        value["stderr"] = errors.decode(errors="replace")[-2000:]
+        try:
+            value["observation"] = json.loads(out)
+        except ValueError:
+            value["invalid_stdout"] = out.decode(errors="replace")[-2000:]
+    receipt.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+
+
+TOAST_READINESS = r'''$ErrorActionPreference='Stop'
+$phase='notifier'
+try {
+  [Windows.UI.Notifications.ToastNotificationManager,Windows.UI.Notifications,ContentType=WindowsRuntime] | Out-Null
+  $id='Claude Code Notifications'
+  $notifier=[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($id)
+  $setting=[string]$notifier.Setting
+  $phase='history'
+  $items=@([Windows.UI.Notifications.ToastNotificationManager]::History.GetHistory($id))
+  if ($items.Count -gt 64) { throw 'history_bound' }
+  $matched=0
+  foreach ($item in $items) {
+    $texts=@($item.Content.GetElementsByTagName('text'))
+    if ($texts.Count -gt 16) { throw 'history_text_bound' }
+    if (@($texts | Where-Object { $_.InnerText -ceq $env:TEST_PI_EXPECTED_TOAST_TITLE }).Count) { $matched++ }
+  }
+  @{status='observed';app_id=$id;setting=$setting;history_total=$items.Count;exact_title_history_matches=$matched} | ConvertTo-Json -Compress
+} catch {
+  @{status='unavailable';phase=$phase;setting=$setting;hresult=$_.Exception.HResult} | ConvertTo-Json -Compress
+}
+'''
+
+
+def toast_readiness(title):
+    # Read only this candidate's fixed native identity; return no history text.
+    import ctypes
+    from ctypes import wintypes
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.GetSystemDirectoryW.argtypes = (wintypes.LPWSTR, wintypes.UINT)
+    kernel.GetSystemDirectoryW.restype = wintypes.UINT
+    directory = ctypes.create_unicode_buffer(32768)
+    count = kernel.GetSystemDirectoryW(directory, len(directory))
+    P.require(0 < count < len(directory), "native_system_powershell_directory_unavailable")
+    powershell = Path(directory.value) / "WindowsPowerShell/v1.0/powershell.exe"
+    env = dict(os.environ, TEST_PI_EXPECTED_TOAST_TITLE=title or "")
+    result = command([powershell, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", TOAST_READINESS], timeout=15, env=env)
+    P.require(len(result.stdout) <= 4096, "native_toast_readiness_output_bound")
+    value = json.loads(result.stdout.decode(encoding="utf-8-sig"))
+    shell = ctypes.WinDLL("shell32", use_last_error=True)
+    shell.SHQueryUserNotificationState.argtypes = (ctypes.POINTER(ctypes.c_int),)
+    shell.SHQueryUserNotificationState.restype = ctypes.c_long
+    state = ctypes.c_int()
+    status = shell.SHQueryUserNotificationState(ctypes.byref(state))
+    value["shell_notification_state"] = {"hresult": status, "state": state.value if status >= 0 else None}
+    return value
+
+
 def command(argv, *, timeout=25, allowed=(0,), env=None, handles=()):
     startup = None
     if handles:
@@ -146,8 +232,10 @@ def command(argv, *, timeout=25, allowed=(0,), env=None, handles=()):
         for handle in handles:
             os.set_handle_inheritable(handle, False)
     P.require(len(result.stdout) + len(result.stderr) <= 1024 * 1024, "native_observer_output_limit")
-    P.require(result.returncode in allowed, "native_command_failed:" + Path(argv[0]).name + ":"
-              + result.stderr.decode(errors="replace")[-2000:])
+    P.require(result.returncode in allowed, "native_command_failed:" + Path(argv[0]).name + ":mode="
+              + str(argv[1])[:64] + ":exit=" + str(result.returncode) + ":stderr="
+              + result.stderr.decode(errors="replace")[-2000:] + ":stdout="
+              + result.stdout.decode(errors="replace")[-2000:])
     return result
 
 
@@ -202,6 +290,7 @@ class Terminal:
         self.executable = str(executable) if executable else None
         self.pi_identity, self.process_handle, self.window_closed = None, None, False
         self.process_cleanup = None
+        self.cleanup_stage_failures = []
         self.window = {"title": title}
         root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.exit_path = root / "process.exit"
@@ -249,6 +338,12 @@ class Terminal:
     def close(self):
         if self.closed:
             return
+        failures = []
+
+        def failed(stage, error):
+            failures.append(error)
+            self.cleanup_stage_failures.append({"stage": stage, "failure": str(error)[-2000:]})
+
         try:
             if self.executable:
                 P.require(self.pi_identity is not None and self.process_handle is not None,
@@ -256,22 +351,29 @@ class Terminal:
                 self.process_cleanup = self.native.held_process(self.process_handle, "collect-owned-handle",
                                                                 self.pi_identity["creation_time"], self.executable)
                 P.require(self.process_cleanup.get("collected") is True, "owned_pi_process_cleanup_unverified")
-        finally:
-            try:
-                if self.process_handle is not None:
-                    self.process_handle.close()
-                    self.process_handle = None
-            finally:
-                if not self.window_closed:
-                    found = self.native("window", self.window["title"])
-                    if found.get("hwnd"):
-                        if not self.window.get("hwnd"):
-                            self.window = {**found, "title": self.window["title"]}
-                        self.native("close", self.window["hwnd"], self.window["pid"], self.window["title"])
-                        wait_for(lambda: not self.native("window", self.window["title"]).get("hwnd"), "owned_terminal_window_not_closed")
-                    else:
-                        P.require(self.window.get("hwnd"), "partial_terminal_cleanup_unverified")
-                    self.window_closed = True
+        except Exception as error:
+            failed("process_collection", error)
+        try:
+            if self.process_handle is not None:
+                self.process_handle.close()
+                self.process_handle = None
+        except Exception as error:
+            failed("handle_close", error)
+        try:
+            if not self.window_closed:
+                found = self.native("window", self.window["title"])
+                if found.get("hwnd"):
+                    if not self.window.get("hwnd"):
+                        self.window = {**found, "title": self.window["title"]}
+                    self.native("close", self.window["hwnd"], self.window["pid"], self.window["title"])
+                    wait_for(lambda: not self.native("window", self.window["title"]).get("hwnd"), "owned_terminal_window_not_closed")
+                else:
+                    P.require(self.window.get("hwnd"), "partial_terminal_cleanup_unverified")
+                self.window_closed = True
+        except Exception as error:
+            failed("window_close", error)
+        if failures:
+            raise failures[0]
         self.closed = True
 
 
@@ -304,6 +406,7 @@ def run(args):
               "desktop_qualified": False, "native_product_observations_passed": False, "product_executed": False, "cases": []}
     report["execution_mode"] = "x64_emulation" if platform.machine().lower() in ("arm64", "aarch64") else "native_amd64"
     native, sink, initial_provider, terminals, helpers = Native(args.observer), None, None, [], []
+    diagnostic_title = None
 
     def observe_failure():
         if report.get("failure_observation_attempted"):
@@ -354,10 +457,15 @@ def run(args):
         P.require(P.sha(view["runtime"]["executable"]) == P.sha(args.candidate), "native_installed_candidate_mismatch")
         report["installed_asset_sha256"] = P.asset_receipts(root / "control", root / "runtime", args.assets_root)
         report["product_executed"] = True
+        try:
+            report["native_toast_readiness_before"] = toast_readiness(None)
+        except Exception as error:
+            report["native_toast_readiness_before"] = {"status": "unavailable", "failure": str(error)[-2000:]}
         for name in CASES:
             case_root = root / ("case-" + name)
             provider = F.Provider("success", hold_reply=name != "question")
-            origin = distractor = capture = neutral = None
+            origin = distractor = capture = neutral = watcher = None
+            case_deadline = None
             primary_failure = None
             stop_capture, stop_neutral = case_root / "capture.stop", case_root / "neutral.stop"
             try:
@@ -365,6 +473,7 @@ def run(args):
                 case_env.update(TEST_PI_DEFER_DIALOG="1", CLAUDE_PLUGIN_ROOT=str(root / "foreign-TEST-root"))
                 nonce = uuid.uuid4().hex
                 origin_title, distractor_title, toast_title = "TEST-Pi-origin-" + nonce, "TEST-Pi-distractor-" + nonce, "TEST-Pi-toast-" + nonce
+                diagnostic_title = toast_title
                 project = case_root / origin_title
                 (case_root / "project").rename(project)
                 distraction = case_root / distractor_title; distraction.mkdir()
@@ -395,13 +504,21 @@ def run(args):
                 ready = json.loads(capture.stdout.readline())
                 P.require(ready.get("ready") is True, "actual_audio_capture_not_ready")
                 P.require(ready.get("audio_route") == report["audio_capture_route"], "native_capture_readiness_route_changed")
+                capture_started = time.monotonic()
+                case_deadline = capture_started + 30
+                timing = {"case": name, "scope": "diagnostic_only", "capture_budget_seconds": 30}
+                report.setdefault("toast_observation_timings", []).append(timing)
+                watcher = start_toast_watcher(native, toast_title, P.COPY[event], case_root, case_deadline, helpers)
+                timing["early_watcher_ready_seconds"] = round(time.monotonic() - capture_started, 3)
                 if name == "question":
                     native.focus(origin.window); native.type(origin.window, "/TEST-dialog")
                 else:
                     wait_for(lambda: bool(provider.requests), "native_pi_model_request_missing")
                 native.focus(distractor.window)
+                timing["provider_release_seconds"] = round(time.monotonic() - capture_started, 3)
                 provider.release.set()
                 sink.wait(event)
+                timing["webhook_received_seconds"] = round(time.monotonic() - capture_started, 3)
                 image = case_root / "actual-product-banner.bmp"
                 click_observation = None
                 if desktop:
@@ -418,6 +535,7 @@ def run(args):
                         helpers.append(neutral)
                         expected_window = {**json.loads(neutral.stdout.readline()), "title": neutral_title}
                         native.focus(expected_window)
+                    timing["late_toast_observer_started_seconds"] = round(time.monotonic() - capture_started, 3)
                     found = native("toast-click", toast_title, P.COPY[event], image)
                     P.require(found.get("found") is True and found.get("real_mouse_click") is True, "native_product_toast_not_physically_clicked")
                     if name in ("click-off", "stale-origin"):
@@ -475,12 +593,14 @@ def run(args):
             except Exception as error:
                 primary_failure = str(error)
                 report["native_observation_failure"] = {"case": name, "failure": primary_failure}
+                report["case_failure"] = {"case": name, "failure": str(error)}
                 observe_failure()  # Before the owned Terminal windows are closed.
                 raise
             finally:
                 actions = [(role, terminal.close) for role, terminal in (("origin", origin), ("distractor", distractor)) if terminal]
                 actions.extend((("capture", lambda: stop_helper(capture, stop_capture)),
-                                ("neutral", lambda: stop_helper(neutral, stop_neutral)), ("provider", provider.close)))
+                                ("neutral", lambda: stop_helper(neutral, stop_neutral)), ("provider", provider.close),
+                                ("toast_watcher", lambda: collect_toast_watcher(watcher, case_root / "early-toast-observation.json", case_deadline))))
                 cleanup_case(actions, primary_failure=primary_failure, report=report, case=name)
         report.update(status="passed_native_product_observations", native_product_observations_passed=True)
     except Exception as error:
@@ -495,6 +615,7 @@ def run(args):
                 failures.append(str(error))
         report["terminal_cleanup"] = [{"case": terminal.root.parent.name, "role": terminal.root.name,
                                       "process_identity": terminal.pi_identity, "process_cleanup": terminal.process_cleanup,
+                                      "stage_failures": terminal.cleanup_stage_failures,
                                       "window_closed": terminal.window_closed, "collected": terminal.closed}
                                      for terminal in terminals]
         for helper in helpers:
@@ -504,12 +625,17 @@ def run(args):
             initial_provider.close()
         if sink:
             sink.close()
+        try:
+            report["native_toast_readiness_after"] = toast_readiness(diagnostic_title)
+        except Exception as error:
+            report["native_toast_readiness_after"] = {"status": "unavailable", "failure": str(error)[-2000:]}
         report["owned_children_collected"] = not failures and all(t.closed for t in terminals) and all(p.poll() is not None for p in helpers)
         if failures:
             report.update(status="failed", native_product_observations_passed=False, cleanup_failures=failures)
         args.report.parent.mkdir(parents=True, exist_ok=True)
         for case_root in root.glob("case-*"):
             for name in ("native-output.s16le", "actual-product-banner.bmp", "witness.jsonl",
+                         "early-product-banner.bmp", "early-toast-ready.json", "early-toast-observation.json",
                          "origin/launch-state.json", "origin/launch-at-failure.json", "origin/process.exit", "origin/launch-failure.bmp",
                          "distractor/launch-state.json", "distractor/launch-at-failure.json", "distractor/process.exit", "distractor/launch-failure.bmp"):
                 source = case_root / name

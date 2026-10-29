@@ -100,9 +100,11 @@ class LauncherDiagnosticsTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "discovery_failed"):
                     W.Terminal("wt.exe", "pwsh.exe", root / "origin", "TEST-Pi-origin-pending", root / "pi.exe", [], {}, root, native, owned=owned)
             self.assertEqual(len(owned), 1)
-            with self.assertRaisesRegex(RuntimeError, "partial_terminal_cleanup_unverified"):
+            with self.assertRaisesRegex(RuntimeError, "partial_pi_process_cleanup_unverified"):
                 owned[0].close()
             self.assertFalse(owned[0].closed)
+            self.assertEqual([row["failure"] for row in owned[0].cleanup_stage_failures],
+                             ["partial_pi_process_cleanup_unverified", "partial_terminal_cleanup_unverified"])
             native.assert_called_once_with("window", "TEST-Pi-origin-pending")
 
     @unittest.skipUnless(os.name == "nt" and shutil.which("pwsh.exe"), "Actual Windows PowerShell guard only")
@@ -130,6 +132,26 @@ class LauncherDiagnosticsTests(unittest.TestCase):
 
 
 class CaseCleanupTests(unittest.TestCase):
+    def test_native_no_banner_exit_retains_mode_status_and_observation(self):
+        result = subprocess.CompletedProcess([], 3, b'{"found":false}', b'')
+        with patch.object(W.subprocess, "run", return_value=result):
+            with self.assertRaisesRegex(RuntimeError, r'native_command_failed:observer.exe:mode=toast-click:exit=3:stderr=:stdout=\{"found":false\}'):
+                W.command(["observer.exe", "toast-click", "TEST-Pi-toast-owned", "TEST body", "image.bmp"])
+
+    def test_early_watcher_deadline_collects_only_its_owned_process_and_keeps_refusal_receipt(self):
+        with tempfile.TemporaryDirectory(prefix="TEST-pi-toast-watch-") as directory:
+            child = Mock(returncode=-1)
+            child.communicate.side_effect = [subprocess.TimeoutExpired("toast-watch", 0.1), (b'{"found":false}', b'')]
+            receipt = Path(directory) / "early.json"
+            with patch.object(W.time, "monotonic", return_value=20):
+                W.collect_toast_watcher(child, receipt, deadline=19)
+            child.kill.assert_called_once_with()
+            self.assertEqual(child.communicate.call_args_list[0].kwargs, {"timeout": 0.1})
+            proof = json.loads(receipt.read_text())
+            self.assertTrue(proof["deadline_expired"])
+            self.assertFalse(proof["qualification_input"])
+            self.assertEqual(proof["observation"], {"found": False})
+
     def test_primary_observation_survives_cleanup_refusal_and_all_resources_are_attempted(self):
         report = {}
         origin = Mock(side_effect=RuntimeError("owned_process_termination_failed:pid=41:winerror=5"))
@@ -173,7 +195,22 @@ class ProcessCleanupTests(unittest.TestCase):
         terminal.process_handle = Mock(value=234)
         terminal.window = {"hwnd": 123, "pid": 456, "title": "TEST-Pi-origin-process"}
         terminal.window_closed, terminal.exit_path = False, root / "process.exit"
+        terminal.cleanup_stage_failures = []
         return terminal
+
+    def test_process_and_window_refusals_are_retained_without_masking_first_failure(self):
+        with tempfile.TemporaryDirectory(prefix="TEST-pi-nested-cleanup-") as directory:
+            native = Mock(side_effect=[{"hwnd": 123, "pid": 456}, RuntimeError("owned_terminal_identity_changed")])
+            native.held_process.side_effect = RuntimeError("owned_process_cleanup_timeout:pid=41:winerror=5")
+            terminal = self.terminal(Path(directory), native)
+            handle = terminal.process_handle
+            with self.assertRaisesRegex(RuntimeError, "^owned_process_cleanup_timeout:pid=41:winerror=5$"):
+                terminal.close()
+            self.assertEqual(terminal.cleanup_stage_failures, [
+                {"stage": "process_collection", "failure": "owned_process_cleanup_timeout:pid=41:winerror=5"},
+                {"stage": "window_close", "failure": "owned_terminal_identity_changed"}])
+            handle.close.assert_called_once_with()
+            self.assertFalse(terminal.closed)
 
     def test_retained_original_handle_collects_after_exit_without_pid_lookup_or_taskkill(self):
         with tempfile.TemporaryDirectory(prefix="TEST-pi-process-cleanup-") as directory:

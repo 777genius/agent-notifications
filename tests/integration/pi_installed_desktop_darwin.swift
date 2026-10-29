@@ -185,230 +185,308 @@ func onScreenWindows(_ pid: pid_t) -> [CGRect] {
     }
 }
 
-private let consentBody = "Notifications may include alerts, sounds, and icon badges."
-private let consentTitles = ["“ClaudeNotifier” Notifications": "ClaudeNotifier",
-                             "\"ClaudeNotifier\" Notifications": "ClaudeNotifier",
-                             "“Agent Notifications” Notifications": "Agent Notifications",
-                             "\"Agent Notifications\" Notifications": "Agent Notifications"]
-
-struct ConsentControl {
-    let element: AXUIElement
-    let box: CGRect
-}
-
-struct ConsentFacts {
-    var names = Set<String>()
-    var body = false
-    var allows = [ConsentControl]()
-    var denials = [ConsentControl]()
-    var options = [ConsentControl]()
-    var complete = true
-}
-
-@MainActor struct ConsentSurface {
-    let owner: NSRunningApplication
-    let ownerStart: String
-    let element: AXUIElement
-    let box: CGRect
-    let name: String
-    let facts: ConsentFacts
-
-    var receipt: [String: Any] {
-        ["observer": "native_accessibility", "os_dialog_bundle": owner.bundleIdentifier ?? "",
-         "os_dialog_pid": Int(owner.processIdentifier), "os_owner_start_identity": ownerStart,
-         "candidate_name": name, "fixed_permission_body_observed": true,
-         "on_screen_owner_verified": true,
-         "bounds": [Double(box.minX), Double(box.minY), Double(box.width), Double(box.height)]]
+// The first macOS authorization UI can be a collapsed Notification Center
+// card. Scope both its display identity and controls to the smallest AX subtree
+// carrying the exact title/body; unrelated cards never supply an Allow button.
+@MainActor func consentControlTree(_ root: AXUIElement, box: CGRect) -> [String: Any] {
+    var nodes = [[String: Any]](), visited = 0, capped = false
+    func bounded(_ value: String, _ limit: Int = 96) -> String {
+        let bytes = Array(value.utf8.prefix(limit))
+        var count = bytes.count
+        while count > 0 {
+            if let text = String(bytes: bytes.prefix(count), encoding: .utf8) { return text }
+            count -= 1
+        }
+        return ""
     }
+    func visit(_ element: AXUIElement, _ depth: Int, _ parent: Int?) {
+        guard visited < 64, depth < 12, nodes.count < 16 else { capped = true; return }
+        visited += 1
+        var nextParent = parent
+        if let frame = rectangle(element), box.contains(CGPoint(x: frame.midX, y: frame.midY)) {
+            var actions: CFArray?
+            let status = AXUIElementCopyActionNames(element, &actions)
+            let index = nodes.count
+            var row: [String: Any] = ["index": index, "depth": depth,
+                "role": bounded(attribute(element, kAXRoleAttribute) as? String ?? "", 64),
+                "bounds": [Double(frame.minX), Double(frame.minY), Double(frame.width), Double(frame.height)],
+                "action_query_status": status.rawValue,
+                "actions": (actions as? [String] ?? []).prefix(4).map { bounded($0, 64) }]
+            if let parent { row["parent"] = parent }
+            for (key, name) in [("title", kAXTitleAttribute), ("description", kAXDescriptionAttribute),
+                                ("help", kAXHelpAttribute), ("identifier", "AXIdentifier")] {
+                if let value = attribute(element, name) as? String { row[key] = bounded(value) }
+            }
+            nodes.append(row)
+            nextParent = index
+        }
+        for child in attribute(element, kAXChildrenAttribute) as? [AXUIElement] ?? [] { visit(child, depth + 1, nextParent) }
+    }
+    visit(root, 0, nil)
+    return ["scope": "verified_unique_permission_card_only", "nodes": nodes, "visited_nodes": visited,
+            "traversal_capped": capped, "maximum_nodes": 16, "maximum_visited_nodes": 64, "maximum_depth": 12,
+            "maximum_attribute_bytes": 96, "desktop_qualified": false]
 }
 
-func visibleConsentBox(_ element: AXUIElement, _ visible: [CGRect]) -> CGRect? {
-    guard attribute(element, "AXHidden") as? Bool != true, let box = rectangle(element),
-          [box.minX, box.minY, box.width, box.height].allSatisfy({ $0.isFinite }),
-          visible.contains(where: { $0.contains(CGPoint(x: box.midX, y: box.midY)) }) else { return nil }
-    return box
-}
-
-// Keep only fixed permission tokens. Candidate title and body must occur inside
-// one smallest visible card; unrelated Notification Center labels cannot join it.
-@MainActor func consentFacts(_ element: AXUIElement, visible: [CGRect], remaining: inout Int,
-                             depth: Int = 0, collect: ((AXUIElement, ConsentFacts) -> Void)? = nil) -> ConsentFacts {
-    guard remaining > 0, depth < 20 else { return ConsentFacts(complete: false) }
-    remaining -= 1
-    var facts = ConsentFacts()
-    let text = [kAXValueAttribute, kAXTitleAttribute, kAXDescriptionAttribute].compactMap {
-        attribute(element, $0) as? String
-    }.flatMap { $0.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces) } }
-    for value in text {
-        if let name = consentTitles[value] { facts.names.insert(name) }
-        if value == consentBody { facts.body = true }
-    }
-    let role = attribute(element, kAXRoleAttribute) as? String ?? ""
-    if [kAXButtonRole, kAXMenuButtonRole, kAXMenuItemRole].contains(role),
-       let box = visibleConsentBox(element, visible) {
-        let control = ConsentControl(element: element, box: box)
-        if text.contains("Allow") { facts.allows.append(control) }
-        if text.contains("Don't Allow") || text.contains("Don’t Allow") { facts.denials.append(control) }
-        if text.contains("Options") { facts.options.append(control) }
-    }
-    for child in attribute(element, kAXChildrenAttribute) as? [AXUIElement] ?? [] {
-        let nested = consentFacts(child, visible: visible, remaining: &remaining, depth: depth + 1, collect: collect)
-        facts.names.formUnion(nested.names)
-        facts.body = facts.body || nested.body
-        facts.allows += nested.allows
-        facts.denials += nested.denials
-        facts.options += nested.options
-        facts.complete = facts.complete && nested.complete
-    }
-    collect?(element, facts)
-    return facts
-}
-
-@MainActor func notificationConsent() -> [ConsentSurface] {
-    let owners = ["com.apple.notificationcenterui": "/System/Library/CoreServices/NotificationCenter.app",
-                  "com.apple.UserNotificationCenter": "/System/Library/CoreServices/UserNotificationCenter.app"]
-    var candidates = [ConsentSurface]()
-    for app in NSWorkspace.shared.runningApplications {
-        guard let expected = owners[app.bundleIdentifier ?? ""], !app.isTerminated,
-              app.bundleURL?.resolvingSymlinksInPath().path == expected,
-              let start = processStartIdentity(app.processIdentifier) else { continue }
+@MainActor func notificationPermissionCards(_ names: [String], includeControls: Bool = false) -> [[String: Any]] {
+    let body = "Notifications may include alerts, sounds, and icon badges."
+    var result = [[String: Any]]()
+    for app in NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.notificationcenterui") {
+        guard !app.isTerminated, app.bundleURL?.resolvingSymlinksInPath().path == "/System/Library/CoreServices/NotificationCenter.app",
+              let ownerStart = processStartIdentity(app.processIdentifier) else { continue }
+        let root = AXUIElementCreateApplication(app.processIdentifier)
         let visible = onScreenWindows(app.processIdentifier)
-        var remaining = 1600
-        let inventory = consentFacts(AXUIElementCreateApplication(app.processIdentifier), visible: visible, remaining: &remaining) { element, facts in
-            guard facts.complete, facts.names.count == 1, facts.body, let name = facts.names.first,
-                  let box = visibleConsentBox(element, visible),
-                  box.width >= 100, box.width <= 600, box.height >= 40, box.height <= 400 else { return }
-            candidates.append(ConsentSurface(owner: app, ownerStart: start, element: element, box: box, name: name, facts: facts))
+        var remaining = 1200
+        var capped = false
+        let firstCard = result.count
+        typealias Contents = (names: Set<String>, titles: Int, bodies: Int, allows: [CGRect], denials: [CGRect], options: [CGRect])
+        func visit(_ element: AXUIElement, _ depth: Int) -> Contents {
+            guard remaining > 0, depth < 20 else { capped = true; return ([], 0, 0, [], [], []) }
+            remaining -= 1
+            let text = [kAXValueAttribute, kAXTitleAttribute, kAXDescriptionAttribute].compactMap {
+                attribute(element, $0) as? String
+            }
+            var candidate = Set(names.filter { name in
+                text.contains("“" + name + "” Notifications") || text.contains("\"" + name + "\" Notifications")
+            })
+            let ownTitle = candidate.isEmpty ? 0 : 1
+            let ownBody = text.contains(body) ? 1 : 0
+            var childTitles = 0, childBodies = 0
+            var allows = [CGRect]()
+            var options = [CGRect]()
+            var denials = [CGRect]()
+            let firstChildCard = result.count
+            let role = attribute(element, kAXRoleAttribute) as? String ?? ""
+            if [kAXButtonRole, kAXMenuItemRole].contains(role), text.contains("Allow"),
+               let box = rectangle(element), visible.contains(where: { $0.contains(CGPoint(x: box.midX, y: box.midY)) }) {
+                allows.append(box)
+            }
+            if [kAXButtonRole, kAXMenuItemRole].contains(role),
+               text.contains("Don't Allow") || text.contains("Don’t Allow"), let box = rectangle(element),
+               visible.contains(where: { $0.contains(CGPoint(x: box.midX, y: box.midY)) }) {
+                denials.append(box)
+            }
+            if [kAXButtonRole, kAXMenuButtonRole].contains(role), text.contains("Options"),
+               let box = rectangle(element), visible.contains(where: { $0.contains(CGPoint(x: box.midX, y: box.midY)) }) {
+                options.append(box)
+            }
+            for child in attribute(element, kAXChildrenAttribute) as? [AXUIElement] ?? [] {
+                let state = visit(child, depth + 1)
+                candidate.formUnion(state.names); childTitles += state.titles; childBodies += state.bodies
+                allows.append(contentsOf: state.allows); denials.append(contentsOf: state.denials)
+                options.append(contentsOf: state.options)
+            }
+            // Repeated ancestor attributes describe the same logical text.
+            let titles = max(ownTitle, childTitles), bodies = max(ownBody, childBodies)
+            if depth > 0, [kAXGroupRole, kAXButtonRole].contains(role), candidate.count == 1,
+               titles == 1, bodies == 1, let box = rectangle(element),
+               [box.minX, box.minY, box.width, box.height].allSatisfy({ $0.isFinite }),
+               box.width >= 100, box.width <= 600, box.height >= 40, box.height <= 400,
+               visible.contains(where: { $0.contains(box) }) {
+                let scopedAllows = allows.filter { box.contains(CGPoint(x: $0.midX, y: $0.midY)) }
+                let scopedDenials = denials.filter { box.contains(CGPoint(x: $0.midX, y: $0.midY)) }
+                let scopedOptions = options.filter { box.contains(CGPoint(x: $0.midX, y: $0.midY)) }
+                var card: [String: Any] = ["os_dialog_bundle": "com.apple.notificationcenterui",
+                    "os_dialog_pid": Int(app.processIdentifier), "os_owner_start_identity": ownerStart,
+                    "candidate_name": candidate.first!, "fixed_body": body,
+                    "card_role": role,
+                    "on_screen_owner_verified": true, "bounds": [Double(box.minX), Double(box.minY), Double(box.width), Double(box.height)]]
+                card["_element"] = element
+                if scopedAllows.count == 1 && scopedDenials.count == 1 {
+                    let button = scopedAllows[0]
+                    card["allow_bounds"] = [Double(button.minX), Double(button.minY), Double(button.width), Double(button.height)]
+                    card["denial_button_observed"] = true
+                }
+                if scopedOptions.count == 1 {
+                    let button = scopedOptions[0]
+                    card["options_bounds"] = [Double(button.minX), Double(button.minY), Double(button.width), Double(button.height)]
+                }
+                let childCards = Array(result[firstChildCard...])
+                let actionable = card["allow_bounds"] != nil || card["options_bounds"] != nil
+                if childCards.isEmpty {
+                    result.append(card)
+                } else if childCards.count == 1 && actionable
+                            && childCards[0]["allow_bounds"] == nil && childCards[0]["options_bounds"] == nil {
+                    // Buttons may be siblings of the title/body text group.
+                    // Use its nearest actionable group with the same sole anchors.
+                    result.removeSubrange(firstChildCard...)
+                    result.append(card)
+                }
+            }
+            return (candidate, titles, bodies, allows, denials, options)
         }
-        guard inventory.complete else { return [] }
+        _ = visit(root, 0)
+        if capped { result.removeSubrange(firstCard...) }
     }
-    // AX ancestors may repeat the card. Remove enclosing ancestors, then merge
-    // identical rectangles. Two distinct candidate cards remain ambiguous.
-    let smallest = candidates.filter { outer in
-        !candidates.contains { inner in
-            inner.owner.processIdentifier == outer.owner.processIdentifier
-            && outer.box.contains(inner.box) && inner.box.width * inner.box.height < outer.box.width * outer.box.height
+    return result.map { value in
+        var card = value
+        let element = card.removeValue(forKey: "_element") as! AXUIElement
+        if includeControls && result.count == 1, let bounds = card["bounds"] as? [Double] {
+            card["scoped_control_tree"] = consentControlTree(element,
+                box: CGRect(x: bounds[0], y: bounds[1], width: bounds[2], height: bounds[3]))
         }
+        return card
     }
-    var result = [ConsentSurface]()
-    for surface in smallest where !result.contains(where: {
-        $0.owner.processIdentifier == surface.owner.processIdentifier && $0.box == surface.box && $0.name == surface.name
-    }) { result.append(surface) }
-    return result
 }
 
-func physicalConsentClick(_ box: CGRect) throws {
-    let point = CGPoint(x: box.midX, y: box.midY)
-    guard let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left),
-          let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left) else {
-        throw ProbeError.unavailable("physical_consent_event_unavailable")
+@MainActor func notificationConsent(_ cards: [[String: Any]]) -> [[String: Any]] {
+    // A generic whole-window Allow scan must never bypass the exact card.
+    cards.compactMap { card -> [String: Any]? in
+        guard let button = card["allow_bounds"], card["denial_button_observed"] as? Bool == true else { return nil }
+        var dialog = card
+        dialog["bounds"] = button
+        dialog["allow_button"] = "Allow"
+        return dialog
     }
-    down.post(tap: .cghidEventTap)
-    up.post(tap: .cghidEventTap)
 }
 
-@MainActor func allowNotificationConsent(_ args: [String]) throws -> [String: Any] {
-    guard args.count == 8, args[1].hasPrefix("/"), args[1].hasSuffix(".app"),
-          let helperPID = Int32(args[2]), helperPID > 0, !args[3].isEmpty,
-          let requestPID = Int32(args[4]), requestPID > 0, !args[5].isEmpty,
-          args[6].hasPrefix("/"), let remaining = Double(args[7]), remaining.isFinite, remaining > 0 else {
-        throw ProbeError.unavailable("original_consent_actors_and_budget_required")
+struct ConsentActionContext: Decodable {
+    let app: String
+    let helperPID: Int32
+    let helperStart: String
+    let requestPID: Int32
+    let requestStart: String
+    let requestExecutable: String
+    let deadlineMonotonic: Double
+    let clock: String
+    let ownerPID: Int32
+    let ownerStart: String
+    let candidateName: String
+    let cardBounds: [Double]
+}
+
+func consentMonotonicTime() throws -> Double {
+    // CPython 3.12 time.monotonic() uses this same system-wide Mach epoch.
+    var info = mach_timebase_info_data_t()
+    guard mach_timebase_info(&info) == KERN_SUCCESS, info.denom > 0 else {
+        throw ProbeError.unavailable("shared_consent_monotonic_clock_unavailable")
     }
-    let expected = URL(fileURLWithPath: args[1]).resolvingSymlinksInPath().path
-    let executable = URL(fileURLWithPath: expected).appendingPathComponent("Contents/MacOS/terminal-notifier-modern").path
-    let deadline = ProcessInfo.processInfo.systemUptime + min(3, remaining)
-    var consentOwner: (pid: pid_t, start: String)?
-    func requireActors() throws {
-        let request = try terminalProcessIdentity(requestPID, expectedStart: args[5])
-        let helper = try terminalProcessIdentity(helperPID, expectedStart: args[3])
-        let helpers = NSWorkspace.shared.runningApplications.filter {
-            $0.bundleIdentifier == "com.777genius.agent-notifications"
-            && $0.bundleURL?.resolvingSymlinksInPath().path == expected
-            && $0.executableURL?.resolvingSymlinksInPath().path == executable && !$0.isTerminated
-        }
-        guard ProcessInfo.processInfo.systemUptime < deadline,
-              request["status"] as? String == "observed", request["executable_path"] as? String == args[6],
-              helper["status"] as? String == "observed", helper["executable_path"] as? String == executable,
-              helper["parent_pid"] as? Int == Int(requestPID),
-              helpers.count == 1, helpers[0].processIdentifier == helperPID, helpers[0].isFinishedLaunching,
-              matchesProcessStart(helperPID, args[3]) else {
-            throw ProbeError.unavailable("original_consent_request_or_helper_changed")
-        }
-        if let consentOwner, !matchesProcessStart(consentOwner.pid, consentOwner.start) {
-            throw ProbeError.unavailable("original_system_consent_owner_changed")
-        }
+    return Double(mach_absolute_time()) * Double(info.numer) / Double(info.denom) / 1_000_000_000
+}
+
+@MainActor func performConsentAction(_ args: [String]) async throws -> [String: Any] {
+    let operation = args[0]
+    let action = operation != "notification-consent"
+    let names = Array(args.dropFirst(action ? 2 : 1))
+    guard (1...3).contains(names.count), names.allSatisfy({ !$0.isEmpty && $0.count <= 80
+        && !$0.unicodeScalars.contains(where: { $0.value < 32 }) }) else {
+        throw ProbeError.unavailable("verified_permission_display_identity_required")
     }
-    try requireActors()
-    let initial = notificationConsent()
-    guard initial.count == 1 else { throw ProbeError.unavailable("unique_candidate_notification_consent_card_required") }
-    let original = initial[0]
-    consentOwner = (original.owner.processIdentifier, original.ownerStart)
-    func refresh() throws -> ConsentSurface {
-        let current = notificationConsent()
-        guard current.count == 1, current[0].owner.processIdentifier == original.owner.processIdentifier,
-              current[0].ownerStart == original.ownerStart, current[0].name == original.name,
-              current[0].box.intersects(original.box) else {
+    var cards = notificationPermissionCards(names)
+    var dialogs = notificationConsent(cards)
+    var result: [String: Any] = [:]
+    if action {
+        guard args.count >= 3, args[1].utf8.count <= 8192,
+              let data = args[1].data(using: .utf8),
+              let context = try? JSONDecoder().decode(ConsentActionContext.self, from: data),
+              context.app.hasPrefix("/"), context.app.hasSuffix(".app"), context.helperPID > 0,
+              context.requestPID > 0, context.ownerPID > 0, !context.helperStart.isEmpty,
+              !context.requestStart.isEmpty, !context.ownerStart.isEmpty, context.requestExecutable.hasPrefix("/"),
+              context.deadlineMonotonic.isFinite, context.clock == "mach_absolute_time", names.contains(context.candidateName),
+              context.cardBounds.count == 4, context.cardBounds.allSatisfy({ $0.isFinite }),
+              context.cardBounds[2] > 0, context.cardBounds[3] > 0 else {
+            throw ProbeError.unavailable("original_consent_actors_card_and_budget_required")
+        }
+        let now = try consentMonotonicTime()
+        guard context.deadlineMonotonic > now, context.deadlineMonotonic - now <= 130 else {
+            throw ProbeError.unavailable("original_consent_deadline_expired_or_clock_mismatched")
+        }
+        let deadline = min(context.deadlineMonotonic, now + 3)
+        let app = URL(fileURLWithPath: context.app).resolvingSymlinksInPath().path
+        let executable = URL(fileURLWithPath: app).appendingPathComponent("Contents/MacOS/terminal-notifier-modern").path
+        let originalBox = CGRect(x: context.cardBounds[0], y: context.cardBounds[1], width: context.cardBounds[2], height: context.cardBounds[3])
+        func requireActors() throws {
+            let request = try terminalProcessIdentity(context.requestPID, expectedStart: context.requestStart)
+            let helper = try terminalProcessIdentity(context.helperPID, expectedStart: context.helperStart)
+            let helpers = NSWorkspace.shared.runningApplications.filter {
+                $0.bundleIdentifier == "com.777genius.agent-notifications" && !$0.isTerminated
+                && $0.bundleURL?.resolvingSymlinksInPath().path == app
+                && $0.executableURL?.resolvingSymlinksInPath().path == executable
+            }
+            guard try consentMonotonicTime() < deadline,
+                  request["status"] as? String == "observed", request["executable_path"] as? String == context.requestExecutable,
+                  helper["status"] as? String == "observed", helper["executable_path"] as? String == executable,
+                  helper["parent_pid"] as? Int == Int(context.requestPID), helpers.count == 1,
+                  helpers[0].processIdentifier == context.helperPID, helpers[0].isFinishedLaunching,
+                  matchesProcessStart(context.helperPID, context.helperStart),
+                  matchesProcessStart(context.ownerPID, context.ownerStart) else {
+                throw ProbeError.unavailable("original_consent_request_helper_or_owner_changed")
+            }
+        }
+        // Refresh this same card immediately before input. All target controls
+        // must remain inside its exact sole-title/body native subtree and box.
+        cards = notificationPermissionCards(names, includeControls: true)
+        guard cards.count == 1, cards[0]["os_dialog_pid"] as? Int == Int(context.ownerPID),
+              cards[0]["os_owner_start_identity"] as? String == context.ownerStart,
+              cards[0]["candidate_name"] as? String == context.candidateName,
+              let bounds = cards[0]["bounds"] as? [Double], bounds.count == 4,
+              CGRect(x: bounds[0], y: bounds[1], width: bounds[2], height: bounds[3]).intersects(originalBox) else {
             throw ProbeError.unavailable("original_candidate_notification_consent_card_changed")
         }
-        return current[0]
-    }
-    var hovered = false, optionsClicked = false
-    var menuRoot: AXUIElement?
-    var surface = try refresh()
-    if surface.facts.allows.count != 1 || surface.facts.denials.count != 1 {
-        try requireActors()
-        guard let move = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved,
-                                 mouseCursorPosition: CGPoint(x: surface.box.midX, y: surface.box.midY), mouseButton: .left) else {
-            throw ProbeError.unavailable("physical_consent_hover_unavailable")
+        let target: [Double]
+        if operation == "hover-notification-consent" {
+            target = bounds
+        } else if operation == "open-notification-consent-options" {
+            guard let options = cards[0]["options_bounds"] as? [Double] else {
+                throw ProbeError.unavailable("unique_candidate_notification_options_control_required")
+            }
+            target = options
+        } else {
+            guard operation == "allow-notification-consent", cards[0]["denial_button_observed"] as? Bool == true,
+                  let allow = cards[0]["allow_bounds"] as? [Double] else {
+                throw ProbeError.unavailable("candidate_consent_allow_and_denial_unavailable")
+            }
+            target = allow
         }
-        move.post(tap: .cghidEventTap)
-        hovered = true
-        repeat {
-            usleep(20_000)
-            surface = try refresh()
-            if surface.facts.allows.count == 1 && surface.facts.denials.count == 1 { break }
-            if surface.facts.options.count == 1 { break }
-        } while ProcessInfo.processInfo.systemUptime < deadline
-    }
-    var controls = surface.facts
-    if controls.allows.count != 1 || controls.denials.count != 1 {
-        surface = try refresh()
-        guard surface.facts.options.count == 1,
-              surface.box.contains(CGPoint(x: surface.facts.options[0].box.midX, y: surface.facts.options[0].box.midY)) else {
-            throw ProbeError.unavailable("unique_candidate_consent_options_unavailable")
+        guard target.count == 4, target.allSatisfy({ $0.isFinite }), target[2] > 0, target[3] > 0 else {
+            throw ProbeError.unavailable("actual_consent_control_bounds_unavailable")
         }
-        let options = surface.facts.options[0]
+        let point = CGPoint(x: target[0] + target[2] / 2, y: target[1] + target[3] / 2)
+        let box = CGRect(x: bounds[0], y: bounds[1], width: bounds[2], height: bounds[3])
+        guard box.contains(point), let before = CGEvent(source: nil)?.location else {
+            throw ProbeError.unavailable("candidate_scoped_pointer_target_unavailable")
+        }
         try requireActors()
-        try physicalConsentClick(options.box)
-        optionsClicked = true
-        menuRoot = options.element
-        repeat {
-            usleep(20_000)
-            surface = try refresh()
-            var count = 256
-            // Only this candidate's Options descendants may supply menu items.
-            // Never search the Notification Center root for a generic Allow.
-            controls = consentFacts(options.element, visible: onScreenWindows(surface.owner.processIdentifier), remaining: &count)
-            if controls.complete && controls.allows.count == 1 && controls.denials.count == 1 { break }
-        } while ProcessInfo.processInfo.systemUptime < deadline
+        result["action_before_card"] = cards[0]
+        // Position and event are separate public Quartz operations. Retain the
+        // observed cursor position instead of assuming a posted move took effect.
+        guard CGWarpMouseCursorPosition(point) == .success else {
+            throw ProbeError.unavailable("physical_permission_pointer_position_failed")
+        }
+        if operation == "hover-notification-consent" {
+            try requireActors()
+            guard let event = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved,
+                                     mouseCursorPosition: point, mouseButton: .left) else {
+                throw ProbeError.unavailable("physical_permission_hover_unavailable")
+            }
+            event.post(tap: .cghidEventTap)
+        } else {
+            try requireActors()
+            guard let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left),
+                  let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left) else {
+                throw ProbeError.unavailable("physical_permission_click_unavailable")
+            }
+            down.post(tap: .cghidEventTap); up.post(tap: .cghidEventTap)
+        }
+        try await Task.sleep(nanoseconds: 200_000_000)
+        guard let after = CGEvent(source: nil)?.location else { throw ProbeError.unavailable("native_pointer_observation_unavailable") }
+        result.merge(["action_target_bounds": target, "pointer_before": [Double(before.x), Double(before.y)],
+                  "pointer_after": [Double(after.x), Double(after.y)], "pointer_target": [Double(point.x), Double(point.y)],
+                  "pointer_at_target": abs(after.x - point.x) <= 1 && abs(after.y - point.y) <= 1,
+                  "original_request_verified": true, "installed_helper_pid": Int(context.helperPID),
+                  "installed_helper_start_identity": context.helperStart, "original_request_pid": Int(context.requestPID),
+                  "original_request_start_identity": context.requestStart,
+                  "deadline_monotonic": context.deadlineMonotonic, "clock": context.clock,
+                  "denial_button_observed": cards[0]["denial_button_observed"] as? Bool == true]) { _, new in new }
+        cards = notificationPermissionCards(names, includeControls: true)
+        dialogs = notificationConsent(cards)
     }
-    surface = try refresh()
-    if let menuRoot {
-        var count = 256
-        controls = consentFacts(menuRoot, visible: onScreenWindows(surface.owner.processIdentifier), remaining: &count)
-    } else {
-        controls = surface.facts
-    }
-    guard controls.complete, controls.allows.count == 1, controls.denials.count == 1,
-          controls.allows[0].box != controls.denials[0].box else {
-        throw ProbeError.unavailable("candidate_consent_allow_and_denial_unavailable")
-    }
-    try requireActors()
-    try physicalConsentClick(controls.allows[0].box)
-    return ["dialogs": [surface.receipt], "physical_hover": hovered, "physical_options_click": optionsClicked,
-            "physical_allow_click": true, "denial_button_observed": true, "original_request_verified": true,
-            "installed_helper_pid": Int(helperPID), "installed_helper_start_identity": args[3],
-            "original_request_pid": Int(requestPID), "original_request_start_identity": args[5]]
+    result["dialogs"] = dialogs
+    result["permission_cards"] = cards
+    result["physical_pointer_hover"] = operation == "hover-notification-consent"
+    result["physical_options_click"] = operation == "open-notification-consent-options"
+    result["physical_allow_click"] = operation == "allow-notification-consent"
+    return result
 }
 
 // Failure-only metadata. Fixed token comparisons never serialize AX labels or
@@ -661,11 +739,8 @@ final class ProductCapture: NSObject, SCStreamOutput, SCStreamDelegate, @uncheck
                     }
                 }
                 publish(result)
-            case "notification-consent":
-                guard args.count == 1 else { throw ProbeError.unavailable("fixed_notification_consent_only") }
-                publish(["dialogs": notificationConsent().map { $0.receipt }])
-            case "allow-notification-consent":
-                publish(try allowNotificationConsent(args))
+            case "notification-consent", "hover-notification-consent", "open-notification-consent-options", "allow-notification-consent":
+                publish(try await performConsentAction(args))
             case "banner", "click":
                 guard args.count == 2, ["Pi completed a task", "Pi is waiting for input"].contains(args[1]) else {
                     throw ProbeError.unavailable("fixed_product_body_required")
