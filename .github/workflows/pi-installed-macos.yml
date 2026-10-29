@@ -178,7 +178,7 @@ jobs:
           set -euo pipefail
           root="$RUNNER_TEMP/TEST-pi-macos"
           arch="$(go env GOARCH)"
-          python -B scripts/pi-installed-desktop-macos.py \
+          python -B scripts/pi-macos-terminal-diagnostic.py -- "$(command -v python)" -B scripts/pi-installed-desktop-macos.py \
             --candidate "$root/candidate/stage/claude-notifications-darwin-$arch" --runtime-stage "$root/candidate/stage" \
             --package "$root/candidate/package-A.zip" --assets-root "$GITHUB_WORKSPACE" \
             --pi-executable "$root/pi/pi/pi" --observer "$root/observer" \
