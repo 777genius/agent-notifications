@@ -171,7 +171,9 @@ struct TestChild {
     explicit TestChild(const std::wstring& arguments) {
         STARTUPINFOW startup{}; startup.cb = sizeof startup;
         auto command = L"\"" + selfImage() + L"\" " + arguments;
-        need(CreateProcessW(nullptr, command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW,
+        // These marker/sleep fixtures need no console. CREATE_NO_WINDOW can
+        // allocate a hidden console host, adding an implicit owned descendant.
+        need(CreateProcessW(nullptr, command.data(), nullptr, nullptr, FALSE, DETACHED_PROCESS,
                             nullptr, nullptr, &startup, &process), "process_guard_child_start_failed");
     }
     ~TestChild() {
