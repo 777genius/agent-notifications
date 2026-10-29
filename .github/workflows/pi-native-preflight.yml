@@ -14,6 +14,11 @@ on:
         type: boolean
         default: false
 
+      inspect_notification_ui:
+        description: Work-ref only public Notification Center selector inventory; requires fresh owner preparation and never runs the product
+        type: boolean
+        default: false
+
 permissions:
   contents: read
 
@@ -96,6 +101,11 @@ jobs:
     env:
       SOURCE_SHA: ${{ github.sha }}
     steps:
+      - name: Require explicit fresh host for optional public UI inventory
+        if: inputs.inspect_notification_ui
+        shell: pwsh
+        run: |
+          if ('${{ inputs.prepare_host }}' -cne 'true') { throw 'Notification UI inspection requires explicit fresh host preparation' }
       - name: Preserve canonical source bytes
         shell: pwsh
         run: git config --global core.autocrlf false
@@ -127,9 +137,12 @@ jobs:
         shell: pwsh
         env:
           PI_WINDOWS_HOST_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+          PI_WINDOWS_HOST_RUNNER_LABEL: ${{ inputs.windows_client_runner || vars.CI_PI_WINDOWS_DESKTOP_RUNNER || 'windows-11-vs2026-arm' }}
         run: |
           New-Item -ItemType Directory -Path "$env:RUNNER_TEMP/pi-native-preflight" -Force | Out-Null
-          & ./scripts/pi-windows-host.ps1 -Root "$env:RUNNER_TEMP/pi-native-preflight/host"
+          $preparation = @{ Root="$env:RUNNER_TEMP/pi-native-preflight/host" }
+          if ('${{ inputs.inspect_notification_ui }}' -ceq 'true') { $preparation.InspectNotificationCenterOnly = $true }
+          & ./scripts/pi-windows-host.ps1 @preparation
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Require the original real WinMM cue and native input observations
         shell: pwsh
@@ -150,6 +163,7 @@ jobs:
           path: |
             ${{ runner.temp }}/pi-native-preflight/**/*.json
             ${{ runner.temp }}/pi-native-preflight/**/*.log
+            ${{ runner.temp }}/pi-native-preflight/**/*.bmp
             ${{ steps.host_preparation.outputs.evidence_root }}
           if-no-files-found: error
           retention-days: 14

@@ -1,5 +1,6 @@
-param([string]$Root, [string]$Receipt, [switch]$VerifyOnly)
+param([string]$Root, [string]$Receipt, [switch]$VerifyOnly, [switch]$InspectNotificationCenterOnly)
 $ErrorActionPreference = 'Stop'
+if ($VerifyOnly -and $InspectNotificationCenterOnly) { throw 'Inspection cannot be combined with driver verification' }
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $driverHash = '2dc35db3dfad0f25771a3e59af38e8b1268878ebe127476ea75fee109f2927dd'
 $infHash = '61c857be74831cc299d9be62f8d49d137f14063454fc54f859d5bc9b4b813daf'
@@ -56,6 +57,7 @@ if ($env:PI_WINDOWS_HOST_RUNNER_ENVIRONMENT -ne 'github-hosted' -or $env:GITHUB_
 $os = Get-CimInstance Win32_OperatingSystem
 $admin = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if ($os.ProductType -ne 1 -or [int]$os.BuildNumber -lt 22000 -or !$admin -or (Test-Path -LiteralPath $Root)) { throw 'Fresh administrative Windows Client fixture root required' }
+if ($InspectNotificationCenterOnly -and $env:PI_WINDOWS_HOST_RUNNER_LABEL -cne 'windows-11-vs2026-arm') { throw 'Public UI inspection requires the official hosted Client image' }
 New-Item -ItemType Directory -Path $Root | Out-Null
 $source = git -C $repositoryRoot rev-parse HEAD
 if ($LASTEXITCODE -or $source -cne $env:SOURCE_SHA) { throw 'Exact source checkout required' }
@@ -80,6 +82,60 @@ if ($LASTEXITCODE) { throw 'Finite OOBE setup failed or unknown; no driver or pr
 $env:PI_WINDOWS_HOST_SETUP = '1'
 & "$Root/host-observer.exe" shell > "$Root/shell-overlay.json"
 if ($LASTEXITCODE) { throw 'Single bound Search overlay dismissal failed or unknown' }
+
+if ($InspectNotificationCenterOnly) {
+    # Explicit work-ref selector discovery, before driver/product/WinRT sender
+    # work. The actual public control must be observed before any future toggle.
+    $shellPaths = [ordered]@{
+        explorer='explorer.exe'
+        system32_shell_host='System32\ShellHost.exe'
+        shell_experience_host='SystemApps\ShellExperienceHost_cw5n1h2txyewy\ShellExperienceHost.exe'
+        cbs_shell_host='SystemApps\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\ShellHost.exe'
+        cbs_search_host='SystemApps\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\SearchHost.exe'
+    }
+    $verifiedShells = @()
+    foreach ($kind in $shellPaths.Keys) {
+        $image = Join-Path $env:WINDIR $shellPaths[$kind]
+        if (!(Test-Path -LiteralPath $image -PathType Leaf)) { continue }
+        $signature = Get-AuthenticodeSignature -LiteralPath $image
+        if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch '(?:^|,\s*)O=Microsoft Corporation(?:,|$)') { throw 'Shell image Microsoft signature unavailable' }
+        $verifiedShells += @{ image_kind=$kind; image_sha256=(Hash $image); signature='valid_microsoft' }
+    }
+    if (@($verifiedShells | Where-Object { $_.image_kind -ceq 'explorer' }).Count -ne 1) { throw 'Signed Explorer admission unavailable' }
+    @{ schema_version=1; scope='public_notification_ui_inspection_only'; source_sha=$source; product_executed=$false; qualification_input=$false;
+       runner=$env:PI_WINDOWS_HOST_RUNNER_LABEL; runner_environment=$env:PI_WINDOWS_HOST_RUNNER_ENVIRONMENT; attempt=1;
+       actor=$env:GITHUB_ACTOR; triggering_actor=$env:GITHUB_TRIGGERING_ACTOR; windows_build=[int]$os.BuildNumber;
+       native_observer_sha256=(Hash "$Root/host-observer.exe"); signed_shell_images=$verifiedShells } |
+        ConvertTo-Json -Depth 5 | Set-Content -LiteralPath "$Root/notification-ui-admission.json" -Encoding utf8NoBOM
+    $env:PI_WINDOWS_NOTIFICATION_UI_INSPECTION = '1'
+    $probe = $null; $primaryInspectionFailure = $null; $probeCleanupFailure = $null; $probeCollected = $false
+    try {
+        $probe = Start-Process -FilePath "$Root/host-observer.exe" -ArgumentList @('notifications-inspect', ('"' + $Root + '"')) -NoNewWindow -PassThru -RedirectStandardOutput "$Root/notification-ui.json" -RedirectStandardError "$Root/notification-ui.stderr.log"
+        if (!$probe.WaitForExit(25000)) { throw 'Bounded public UI inspection timed out; outcome unknown, no retry' }
+        if ($probe.ExitCode -ne 0) { throw 'Public UI inspection unavailable or incomplete; no product attempt' }
+        foreach ($verified in $verifiedShells) {
+            if ((Hash (Join-Path $env:WINDIR $shellPaths[$verified.image_kind])) -cne $verified.image_sha256) { throw 'Admitted Shell image changed during inspection' }
+        }
+    } catch { $primaryInspectionFailure = $_ }
+    finally {
+        if ($probe) {
+            try {
+                if (!$probe.HasExited) { $probe.Kill() } # This owned observer only.
+                $probeCollected = $probe.WaitForExit(3000)
+                if (!$probeCollected) { throw 'Owned public UI observer not collected' }
+            } catch { $probeCleanupFailure = $_.Exception.GetType().Name }
+            finally { try { $probe.Dispose() } catch { if (!$probeCleanupFailure) { $probeCleanupFailure = $_.Exception.GetType().Name } } }
+        }
+        try {
+            @{ scope='public_notification_ui_inspection_only'; product_executed=$false; qualification_input=$false;
+               owned_observer_collected=$probeCollected; cleanup_error_class=$probeCleanupFailure; settings_writes=0 } |
+                ConvertTo-Json -Compress | Set-Content -LiteralPath "$Root/notification-ui-collection.json" -Encoding utf8NoBOM
+        } catch { if (!$probeCleanupFailure) { $probeCleanupFailure = $_.Exception.GetType().Name } }
+    }
+    if ($primaryInspectionFailure) { throw $primaryInspectionFailure }
+    if (!$probeCollected -or $probeCleanupFailure) { throw 'Public UI observer cleanup unavailable' }
+    throw 'Read-only notification UI inventory captured; reviewed actual selector required before product work'
+}
 
 # The only driver setup is the measured, authenticated one-shot route. Refuse
 # any pre-existing render device or VB instance, preserving configured hosts.
