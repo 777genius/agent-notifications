@@ -38,6 +38,7 @@ def module(name, path):
 F = module("pi_native_fixture", REPO / "tests/integration/pi_native_fixture.py")
 P = module("pi_installed_fixture", REPO / "tests/integration/pi_installed_fixture.py")
 D = module("pi_installed_process", REPO / "scripts/pi-installed-process-e2e.py")
+T = module("pi_terminal_permission", REPO / "scripts/pi-terminal-permission-diagnostic.py")
 
 
 def wait_for(predicate, reason, seconds=12):
@@ -528,10 +529,10 @@ def run(args):
         report["notification_consent"] = {"initial_permission": permission.get("permission"), "requested": False}
         if permission.get("permission") == "undetermined":
             started = time.monotonic()
-            permission_request = subprocess.Popen([str(args.candidate), "setup-notifications", "request-permission",
+            permission_request = T.TerminalPermissionRequest([str(args.candidate), "setup-notifications", "request-permission",
                                         "--control-root", str(root / "control"), "--expected-generation", str(ledger["Generation"]), "--json"],
-                                       cwd=root / "project", env=env, stdin=subprocess.DEVNULL,
-                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+                                       root / "project", env, observer, args.report.parent)
+            report["notification_consent"]["terminal_driver"] = permission_request.identity
             helpers.append(permission_request)
             report["notification_consent"]["requested"] = True
             dialogs = wait_for_consent(permission_request,
