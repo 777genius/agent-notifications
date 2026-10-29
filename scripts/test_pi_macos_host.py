@@ -92,6 +92,18 @@ class OfficialHostGuards(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "disabled_state_ambiguous"):
                 H.inspect(domain)
 
+    def test_ambiguous_disabled_state_retains_both_readonly_queries_before_refusal(self):
+        observed = {}
+        disabled = 'disabled services = {\n}\n'
+        service_error = 'Could not find service "com.apple.notificationcenterui.agent"'
+        with patch.object(H, "command", side_effect=[(0, disabled, ""), (113, "", service_error)]) as queried:
+            with self.assertRaisesRegex(ValueError, "notification_agent_disabled_state_ambiguous"):
+                H.inspect("gui/501", observed)
+        self.assertEqual(observed, {"domain": "gui/501",
+                                   "disabled_query": {"exit_code": 0, "stdout": disabled, "stderr": ""},
+                                   "service_query": {"exit_code": 113, "stdout": "", "stderr": service_error}})
+        self.assertEqual([call.args[0][1] for call in queried.call_args_list], ["print-disabled", "print"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -84,12 +84,16 @@ def system_agent(observed=None, evidence_root=None):
             "device": facts.st_dev, "inode": facts.st_ino, "label": LABEL, "program": program}
 
 
-def inspect(domain):
+def inspect(domain, observed=None):
     code, text, error = command(["/bin/launchctl", "print-disabled", domain])
+    if observed is not None:
+        observed.update(domain=domain, disabled_query={"exit_code": code, "stdout": text, "stderr": error})
     require(code == 0, "disabled_state_query_failed")
     disabled = re.findall(r'"' + re.escape(LABEL) + r'"\s*=>\s*(true|false)', text)
-    require(len(disabled) == 1, "notification_agent_disabled_state_ambiguous")
     code, text, error = command(["/bin/launchctl", "print", domain + "/" + LABEL])
+    if observed is not None:
+        observed["service_query"] = {"exit_code": code, "stdout": text, "stderr": error}
+    require(len(disabled) == 1, "notification_agent_disabled_state_ambiguous")
     if code != 0:
         require("Could not find service" in error and LABEL in error, "notification_agent_query_failed")
         return {"disabled": disabled[0] == "true", "loaded": False, "running": False}
@@ -147,7 +151,8 @@ def prepare(args):
         report["system_agent"] = expected
         require(code == 0, "apple_system_notification_application_signature_unverified")
         domain = "gui/" + str(os.getuid())
-        before = inspect(domain)
+        report["launchd_before_queries"] = {}
+        before = inspect(domain, report["launchd_before_queries"])
         report["before"] = before
         code, output, error = command([args.observer, "notification-center-state"])
         require(code == 0, "notification_agent_native_observer_failed")
@@ -169,7 +174,8 @@ def prepare(args):
             require(code == 0, "notification_agent_preparation_failed:" + operation)
         deadline = time.monotonic() + 10
         while True:
-            report["after"] = inspect(domain)
+            report["launchd_after_queries"] = {}
+            report["after"] = inspect(domain, report["launchd_after_queries"])
             code, output, error = command([args.observer, "notification-center-state"])
             require(code == 0, "notification_agent_native_observer_failed")
             report["native_identity"] = json.loads(output)
