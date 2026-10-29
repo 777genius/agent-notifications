@@ -76,6 +76,9 @@ jobs:
           New-Item -ItemType Directory -Path $out -Force | Out-Null
           cmd.exe /d /s /c ($setup + ' && cl /nologo /std:c++20 /EHsc /W4 /DUNICODE /D_UNICODE tests/integration/pi_installed_desktop_windows.cpp /Fe:"' + $out + '/observer.exe" /Fo:"' + $out + '/observer.obj" /link ole32.lib oleaut32.lib user32.lib uuid.lib winmm.lib wtsapi32.lib uiautomationcore.lib advapi32.lib bcrypt.lib gdi32.lib mfplat.lib mfreadwrite.lib mfuuid.lib propsys.lib cfgmgr32.lib')
           if ($LASTEXITCODE) { throw 'Desktop observer compile failed' }
+          & "$out/observer.exe" test-process-identity
+          if ($LASTEXITCODE) { throw 'Native held-handle process cleanup guards failed' }
+          "PI_WINDOWS_OBSERVER_TEST_PATH=$out/observer.exe" >> $env:GITHUB_ENV
           cmd.exe /d /s /c ($setup + ' && cl /nologo /std:c++20 /EHsc /W4 /DUNICODE /D_UNICODE tests/integration/pi_windows_host.cpp /Fe:"' + $out + '/host.exe" /Fo:"' + $out + '/host.obj" /link ole32.lib oleaut32.lib user32.lib uuid.lib propsys.lib advapi32.lib cfgmgr32.lib')
           if ($LASTEXITCODE) { throw 'Host observer compile failed' }
       - name: Build exact shipped amd64 callback main utilities and focus companion

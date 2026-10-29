@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -80,7 +81,7 @@ class LauncherDiagnosticsTests(unittest.TestCase):
             title = "TEST-Pi-origin-owned"
             with patch.object(W, "command") as launched, patch.object(W, "wait_for", side_effect=RuntimeError("discovery_failed")):
                 with self.assertRaisesRegex(RuntimeError, "discovery_failed"):
-                    W.Terminal("wt.exe", "pwsh.exe", root / "origin", title, root / "pi.exe", [], {}, root, native, owned=owned)
+                    W.Terminal("wt.exe", "pwsh.exe", root / "origin", title, None, [], {}, root, native, owned=owned)
             launched.assert_called_once()
             self.assertEqual(len(owned), 1)
             terminal = owned[0]
@@ -124,6 +125,90 @@ class LauncherDiagnosticsTests(unittest.TestCase):
             self.assertIn("Real Windows Terminal session unavailable", observed["error"])
             self.assertNotIn("child_exit_code", observed)
             self.assertFalse((root / "process.exit").exists())
+
+
+class ProcessCleanupTests(unittest.TestCase):
+    def terminal(self, root, native):
+        terminal = W.Terminal.__new__(W.Terminal)
+        terminal.root, terminal.native, terminal.closed = root, native, False
+        terminal.executable, terminal.pi_pid = str(root / "pi.exe"), 41
+        terminal.pi_identity = {"creation_time": "123456789"}
+        terminal.process_handle = Mock(value=234)
+        terminal.window = {"hwnd": 123, "pid": 456, "title": "TEST-Pi-origin-process"}
+        terminal.window_closed, terminal.exit_path = False, root / "process.exit"
+        return terminal
+
+    def test_retained_original_handle_collects_after_exit_without_pid_lookup_or_taskkill(self):
+        with tempfile.TemporaryDirectory(prefix="TEST-pi-process-cleanup-") as directory:
+            root = Path(directory)
+            native = Mock(return_value={"hwnd": 0})
+            native.held_process.return_value = {"collected": True, "descendants_collected": 1}
+            terminal = self.terminal(root, native)
+            handle = terminal.process_handle
+            with patch.object(W, "command") as external:
+                terminal.close()
+            external.assert_not_called()
+            native.held_process.assert_called_once_with(handle, "collect-owned-handle", "123456789", str(root / "pi.exe"))
+            native.assert_called_once_with("window", "TEST-Pi-origin-process")
+            handle.close.assert_called_once()
+            self.assertTrue(terminal.closed)
+
+    def test_unknown_identity_never_falls_back_to_numeric_pid_and_remains_uncollected(self):
+        with tempfile.TemporaryDirectory(prefix="TEST-pi-process-cleanup-") as directory:
+            root = Path(directory)
+            native = Mock(side_effect=[{"hwnd": 123, "pid": 456}, {"ok": True}])
+            native.held_process.side_effect = RuntimeError("owned_process_token_unavailable")
+            terminal = self.terminal(root, native)
+            with patch.object(W, "command") as external, patch.object(W, "wait_for"):
+                with self.assertRaisesRegex(RuntimeError, "owned_process_token_unavailable"):
+                    terminal.close()
+            external.assert_not_called()
+            native.assert_any_call("close", 123, 456, "TEST-Pi-origin-process")
+            self.assertTrue(terminal.window_closed)
+            self.assertFalse(terminal.closed)
+
+    def test_unverified_startup_closes_only_owned_window_without_claiming_child_collection(self):
+        with tempfile.TemporaryDirectory(prefix="TEST-pi-process-cleanup-") as directory:
+            native = Mock(return_value={"hwnd": 0})
+            terminal = self.terminal(Path(directory), native)
+            terminal.pi_identity = None
+            with patch.object(W, "command") as external:
+                with self.assertRaisesRegex(RuntimeError, "partial_pi_process_cleanup_unverified"):
+                    terminal.close()
+            external.assert_not_called()
+            native.assert_called_once_with("window", "TEST-Pi-origin-process")
+            self.assertTrue(terminal.window_closed)
+            self.assertFalse(terminal.closed)
+
+    def test_unverified_native_birth_or_image_cannot_become_cleanup_authority(self):
+        with tempfile.TemporaryDirectory(prefix="TEST-pi-process-cleanup-") as directory:
+            root = Path(directory)
+            for change in ({"present": False}, {"creation_time": ""}, {"creation_time": "0"},
+                           {"pid": 42}, {"executable": str(root / "foreign.exe")}):
+                native = Mock(return_value={"present": True, "pid": 41, "creation_time": "123456789",
+                                            "executable": str(root / "pi.exe"), **change})
+                native.held_process.return_value = native.return_value
+                terminal = self.terminal(root, native)
+                terminal.pi_identity = None
+                handle = Mock(value=234)
+                with patch.object(W, "ProcessHandle", return_value=handle):
+                    with self.subTest(change=change), self.assertRaisesRegex(RuntimeError, "owned_pi_process_identity_unverified"):
+                        terminal.bind_process(41)
+                self.assertIsNone(terminal.pi_identity)
+                native.held_process.assert_called_once_with(handle, "process-identity-handle", str(root / "pi.exe"))
+
+    @unittest.skipUnless(os.name == "nt" and os.environ.get("PI_WINDOWS_OBSERVER_TEST_PATH"), "Actual inherited native process handle guard only")
+    def test_actual_inherited_handle_identity_and_wrong_birth_refusal(self):
+        native = W.Native(Path(os.environ["PI_WINDOWS_OBSERVER_TEST_PATH"]))
+        handle = W.ProcessHandle(os.getpid())
+        image = str(Path(sys.executable).resolve(strict=True))
+        try:
+            identity = native.held_process(handle, "process-identity-handle", image)
+            self.assertEqual(identity["pid"], os.getpid())
+            with self.assertRaisesRegex(RuntimeError, "owned_process_birth_changed"):
+                native.held_process(handle, "collect-owned-handle", str(int(identity["creation_time"]) + 1), image)
+        finally:
+            handle.close()
 
 
 if __name__ == "__main__":

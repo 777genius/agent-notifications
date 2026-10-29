@@ -14,6 +14,9 @@
 #include <algorithm>
 #include <cwctype>
 #include <stdexcept>
+#include <tlhelp32.h>
+#include <map>
+#include <memory>
 
 namespace fs = std::filesystem;
 static void need(bool value, const char* code) { if (!value) throw std::runtime_error(code); }
@@ -23,6 +26,203 @@ static std::string utf8(const std::wstring& value) {
     std::string result(size, 0);
     WideCharToMultiByte(CP_UTF8, 0, value.data(), static_cast<int>(value.size()), result.data(), size, nullptr, nullptr);
     return result;
+}
+struct OwnedProcess {
+    HANDLE handle = nullptr;
+    DWORD pid = 0;
+    ULONGLONG created = 0;
+    std::wstring image;
+    ~OwnedProcess() { if (handle) CloseHandle(handle); }
+};
+static bool running(HANDLE process) {
+    const auto state = WaitForSingleObject(process, 0);
+    need(state == WAIT_OBJECT_0 || state == WAIT_TIMEOUT, "owned_process_wait_unavailable");
+    return state == WAIT_TIMEOUT;
+}
+static bool sameImage(const std::wstring& a, const std::wstring& b) {
+    const auto left = fs::path(a).lexically_normal().wstring(), right = fs::path(b).lexically_normal().wstring();
+    return fs::path(a).is_absolute() && fs::path(b).is_absolute()
+        && CompareStringOrdinal(left.c_str(), -1, right.c_str(), -1, TRUE) == CSTR_EQUAL;
+}
+static void processBirth(OwnedProcess& process) {
+    FILETIME created{}, exited{}, kernel{}, user{};
+    need(GetProcessTimes(process.handle, &created, &exited, &kernel, &user), "owned_process_birth_unavailable");
+    process.created = (static_cast<ULONGLONG>(created.dwHighDateTime) << 32) | created.dwLowDateTime;
+}
+static void processFacts(OwnedProcess& process) {
+    processBirth(process);
+    wchar_t image[32768]{}; DWORD length = 32768;
+    need(QueryFullProcessImageNameW(process.handle, 0, image, &length) && length > 0 && length < 32768,
+         "owned_process_image_unavailable");
+    process.image.assign(image, length);
+    NavigationTokenTEST::Token token, self;
+    need(OpenProcessToken(process.handle, TOKEN_QUERY, &token.handle)
+         && OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &self.handle), "owned_process_token_unavailable");
+    const auto actual = NavigationTokenTEST::facts(token.handle), expected = NavigationTokenTEST::facts(self.handle);
+    need(actual.sid == expected.sid && actual.auth == expected.auth && actual.session == expected.session,
+         "owned_process_user_or_session_changed");
+}
+static std::unique_ptr<OwnedProcess> processIdentity(DWORD pid) {
+    need(pid != 0, "owned_process_pid_required");
+    auto process = std::make_unique<OwnedProcess>(); process->pid = pid;
+    process->handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE | SYNCHRONIZE, FALSE, pid);
+    if (!process->handle) {
+        need(GetLastError() == ERROR_INVALID_PARAMETER, "owned_process_open_unavailable");
+        return nullptr;
+    }
+    if (!running(process->handle)) return nullptr;
+    processFacts(*process);
+    if (!running(process->handle)) return nullptr;
+    return process;
+}
+static std::unique_ptr<OwnedProcess> heldProcess(HANDLE handle, ULONGLONG expectedBirth, const std::wstring& image) {
+    auto process = std::make_unique<OwnedProcess>(); process->handle = handle;
+    process->pid = GetProcessId(handle); need(process->pid != 0, "owned_process_handle_invalid");
+    processBirth(*process);
+    need(!expectedBirth || process->created == expectedBirth, "owned_process_birth_changed");
+    if (running(handle)) {
+        processFacts(*process);
+        need(sameImage(process->image, image), "owned_process_image_changed");
+    } else {
+        // This is the same retained kernel object whose live image/token were
+        // verified at binding. Holding it across /quit prevents PID recycling.
+        need(expectedBirth != 0, "owned_process_exited_before_binding");
+        process->image = image;
+    }
+    return process;
+}
+static HANDLE duplicateHeld(HANDLE original) {
+    HANDLE duplicate = nullptr;
+    need(DuplicateHandle(GetCurrentProcess(), original, GetCurrentProcess(), &duplicate, 0, FALSE, DUPLICATE_SAME_ACCESS),
+         "owned_process_handle_duplicate_failed");
+    return duplicate;
+}
+static std::map<DWORD, DWORD> processParents() {
+    OwnedProcess snapshot;
+    snapshot.handle = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    need(snapshot.handle != INVALID_HANDLE_VALUE, "owned_process_snapshot_unavailable");
+    PROCESSENTRY32W entry{}; entry.dwSize = sizeof entry;
+    std::map<DWORD, DWORD> parents;
+    BOOL found = Process32FirstW(snapshot.handle, &entry);
+    while (found) {
+        need(parents.size() < 65536, "owned_process_snapshot_bound");
+        parents.emplace(entry.th32ProcessID, entry.th32ParentProcessID);
+        found = Process32NextW(snapshot.handle, &entry);
+    }
+    need(GetLastError() == ERROR_NO_MORE_FILES, "owned_process_snapshot_incomplete");
+    return parents;
+}
+static std::string collectOwnedProcess(std::unique_ptr<OwnedProcess> root) {
+    std::vector<std::unique_ptr<OwnedProcess>> owned; owned.push_back(std::move(root));
+    // Keep every admitted process handle open. Its PID cannot be recycled while
+    // descendants are discovered, rechecked and terminated through those handles.
+    const auto deadline = GetTickCount64() + 3000;
+    auto discover = [&]() {
+        bool added = false, again = true;
+        while (again) {
+            again = false; const auto parents = processParents();
+            for (const auto& [candidate, parent] : parents) {
+                if (std::any_of(owned.begin(), owned.end(), [&](const auto& p) { return p->pid == candidate; })) continue;
+                const auto ancestor = std::find_if(owned.begin(), owned.end(), [&](const auto& p) { return p->pid == parent; });
+                if (ancestor == owned.end()) continue;
+                const auto parentCreated = (*ancestor)->created;
+                auto child = processIdentity(candidate);
+                const auto current = processParents();
+                if (!child || !running(child->handle)) {
+                    need(std::none_of(parents.begin(), parents.end(), [&](const auto& p) { return p.second == candidate; }),
+                         "owned_descendant_subtree_identity_unverified");
+                    continue;
+                }
+                const auto entry = current.find(candidate);
+                need(entry != current.end(), "owned_descendant_lineage_unavailable");
+                if (entry->second != parent) {
+                    need(std::none_of(parents.begin(), parents.end(), [&](const auto& p) { return p.second == candidate; }),
+                         "owned_descendant_replacement_subtree_unverified");
+                    continue; // The old descendant exited; never target its replacement.
+                }
+                need(child->created >= parentCreated, "owned_descendant_predates_parent");
+                need(owned.size() < 64 && GetTickCount64() < deadline, "owned_process_cleanup_bound");
+                owned.push_back(std::move(child)); added = again = true;
+            }
+        }
+        return added;
+    };
+    discover();
+    for (;;) {
+        for (const auto& process : owned) {
+            if (running(process->handle))
+                need(TerminateProcess(process->handle, 1) || !running(process->handle), "owned_process_termination_failed");
+        }
+        const bool added = discover();
+        need(GetTickCount64() < deadline, "owned_process_cleanup_timeout");
+        if (!added && std::none_of(owned.begin(), owned.end(), [](const auto& p) { return running(p->handle); })) break;
+        pump(10);
+    }
+    return "{\"collected\":true,\"original_identity_changed\":false,\"descendants_collected\":"
+        + std::to_string(owned.size() - 1) + "}";
+}
+static std::wstring selfImage() {
+    wchar_t value[32768]{}; const auto length = GetModuleFileNameW(nullptr, value, 32768);
+    need(length > 0 && length < 32768, "process_guard_self_image_unavailable");
+    return std::wstring(value, length);
+}
+struct TestChild {
+    PROCESS_INFORMATION process{};
+    explicit TestChild(const std::wstring& arguments) {
+        STARTUPINFOW startup{}; startup.cb = sizeof startup;
+        auto command = L"\"" + selfImage() + L"\" " + arguments;
+        need(CreateProcessW(nullptr, command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW,
+                            nullptr, nullptr, &startup, &process), "process_guard_child_start_failed");
+    }
+    ~TestChild() {
+        if (process.hProcess) {
+            if (WaitForSingleObject(process.hProcess, 0) == WAIT_TIMEOUT) {
+                TerminateProcess(process.hProcess, 1); WaitForSingleObject(process.hProcess, 3000);
+            }
+            CloseHandle(process.hProcess);
+        }
+        if (process.hThread) CloseHandle(process.hThread);
+    }
+};
+static int testProcessIdentity() {
+    wchar_t temporary[32768]{}, marker[MAX_PATH]{};
+    const auto length = GetTempPathW(32768, temporary);
+    need(length > 0 && length < MAX_PATH && GetTempFileNameW(temporary, L"TPI", 0, marker), "process_guard_temp_path_failed");
+    TestChild child(L"process-test-tree \"" + std::wstring(marker) + L"\"");
+    auto root = processIdentity(child.process.dwProcessId);
+    need(root && sameImage(root->image, selfImage()), "process_guard_child_identity_missing");
+    DWORD leafPID = 0; const auto deadline = GetTickCount64() + 5000;
+    while (!leafPID && GetTickCount64() < deadline) { std::ifstream input(marker); input >> leafPID; if (!leafPID) Sleep(20); }
+    auto leaf = leafPID ? processIdentity(leafPID) : nullptr;
+    const auto parents = processParents();
+    need(leaf && parents.contains(leafPID) && parents.at(leafPID) == root->pid
+         && leaf->created >= root->created && sameImage(leaf->image, root->image), "process_guard_descendant_identity_missing");
+    try {
+        bool refused = false;
+        try { collectOwnedProcess(heldProcess(duplicateHeld(root->handle), root->created + 1, root->image)); }
+        catch (const std::runtime_error& error) { refused = std::string(error.what()) == "owned_process_birth_changed"; }
+        need(refused && running(root->handle) && running(leaf->handle), "mismatched_process_birth_was_signalled");
+        refused = false;
+        try { collectOwnedProcess(heldProcess(duplicateHeld(root->handle), root->created, L"C:\\TEST\\foreign.exe")); }
+        catch (const std::runtime_error& error) { refused = std::string(error.what()) == "owned_process_image_changed"; }
+        need(refused && running(root->handle) && running(leaf->handle), "mismatched_process_image_was_signalled");
+        need(TerminateProcess(root->handle, 0) && WaitForSingleObject(root->handle, 3000) == WAIT_OBJECT_0
+             && running(leaf->handle), "process_guard_root_exit_with_live_leaf_missing");
+        const auto result = collectOwnedProcess(heldProcess(duplicateHeld(root->handle), root->created, root->image));
+        need(result.find("\"descendants_collected\":1") != std::string::npos
+             && !running(root->handle) && !running(leaf->handle), "owned_process_tree_not_collected");
+        const auto reaped = collectOwnedProcess(heldProcess(duplicateHeld(root->handle), root->created, root->image));
+        need(reaped.find("\"descendants_collected\":0") != std::string::npos, "reaped_process_tree_still_running");
+    } catch (...) {
+        if (running(leaf->handle)) { TerminateProcess(leaf->handle, 1); WaitForSingleObject(leaf->handle, 3000); }
+        DeleteFileW(marker); throw;
+    }
+    DeleteFileW(marker);
+    std::cout << "{\"scope\":\"native_owned_process_cleanup_only\",\"mismatched_birth_rejected\":true,"
+                 "\"mismatched_image_rejected\":true,\"reaped_identity_rejected\":true,"
+                 "\"root_exited_before_live_descendant_collection\":true,"
+                 "\"actual_descendant_collected\":true,\"desktop_qualified\":false}\n";
+    return 0;
 }
 static std::wstring title(HWND window) {
     wchar_t value[1024]{}; GetWindowTextW(window, value, 1024); return value;
@@ -265,6 +465,24 @@ int wmain(int argc, wchar_t** argv) {
         need(argc >= 2, "native_observer_command_required"); const std::wstring mode = argv[1];
         if (mode == L"preflight" && (argc == 3 || argc == 9)) return piPrerequisiteEntry(argc - 1, argv + 1);
         hrcheck(CoInitializeEx(nullptr, COINIT_MULTITHREADED));
+        if (mode == L"process-test-child" && argc == 2) { Sleep(20000); return 0; }
+        if (mode == L"process-test-tree" && argc == 3) {
+            TestChild child(L"process-test-child");
+            { std::ofstream ready(argv[2]); ready << child.process.dwProcessId; need(ready.good(), "process_guard_ready_file_failed"); }
+            Sleep(20000); return 0;
+        }
+        if (mode == L"test-process-identity" && argc == 2) return testProcessIdentity();
+        if ((mode == L"process-identity-handle" && argc == 4) || (mode == L"collect-owned-handle" && argc == 5)) {
+            const auto raw = std::stoull(argv[2]); need(raw > 0 && raw <= UINTPTR_MAX, "owned_process_handle_required");
+            const auto handle = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(raw));
+            if (mode == L"collect-owned-handle") {
+                const auto created = std::stoull(argv[3]); need(created > 0, "owned_process_birth_required");
+                std::cout << collectOwnedProcess(heldProcess(handle, created, argv[4])) << '\n'; return 0;
+            }
+            auto process = heldProcess(handle, 0, argv[3]);
+            std::cout << "{\"present\":true,\"pid\":" << process->pid << ",\"creation_time\":\"" << process->created
+                      << "\",\"executable\":" << NavigationTokenTEST::quoted(utf8(process->image)) << "}\n"; return 0;
+        }
         if (mode == L"screenshot" && argc == 3) { screenshot(argv[2]); std::cout << "{\"captured\":true}\n"; return 0; }
         if (mode == L"capture" && (argc == 4 || argc == 10)) return capture(argv[2], argv[3], argc - 4, argv + 4);
         if (mode == L"decode" && argc == 4) return decode(argv[2], argv[3]);

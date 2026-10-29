@@ -109,14 +109,43 @@ def observe_unchanged_focus(native, window, stop_capture, seconds=15):
                                      stop, drain_seconds=0.5, seconds=seconds)
 
 
-def command(argv, *, timeout=25, allowed=(0,), env=None):
-    result = subprocess.run(list(map(str, argv)), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE, timeout=timeout, env=env,
-                            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+def command(argv, *, timeout=25, allowed=(0,), env=None, handles=()):
+    startup = None
+    if handles:
+        startup = subprocess.STARTUPINFO()
+        startup.lpAttributeList = {"handle_list": list(handles)}
+    try:
+        for handle in handles:
+            os.set_handle_inheritable(handle, True)
+        result = subprocess.run(list(map(str, argv)), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, timeout=timeout, env=env, startupinfo=startup, close_fds=True,
+                                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+    finally:
+        for handle in handles:
+            os.set_handle_inheritable(handle, False)
     P.require(len(result.stdout) + len(result.stderr) <= 1024 * 1024, "native_observer_output_limit")
     P.require(result.returncode in allowed, "native_command_failed:" + Path(argv[0]).name + ":"
               + result.stderr.decode(errors="replace")[-2000:])
     return result
+
+
+class ProcessHandle:
+    def __init__(self, pid):
+        P.require(type(pid) is int and 0 < pid <= 0xFFFFFFFF, "owned_pi_process_pid_invalid")
+        import ctypes
+        from ctypes import wintypes
+        self.kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        self.kernel.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+        self.kernel.OpenProcess.restype = wintypes.HANDLE
+        self.kernel.CloseHandle.argtypes = (wintypes.HANDLE,)
+        self.kernel.CloseHandle.restype = wintypes.BOOL
+        self.value = self.kernel.OpenProcess(0x00101001, False, pid)  # query, terminate, synchronize
+        P.require(self.value, "owned_pi_process_handle_unavailable")
+
+    def close(self):
+        if self.value is not None:
+            P.require(self.kernel.CloseHandle(self.value), "owned_pi_process_handle_close_failed")
+            self.value = None
 
 
 class Native:
@@ -139,10 +168,18 @@ class Native:
     def type(self, window, value):
         self("type", window["hwnd"], window["pid"], window["title"], value)
 
+    def held_process(self, handle, mode, *args):
+        P.require(handle.value is not None, "owned_pi_process_handle_already_closed")
+        result = command([self.executable, mode, handle.value, *args], handles=(handle.value,))
+        return json.loads(result.stdout.decode())
+
 
 class Terminal:
     def __init__(self, wt, powershell, root, title, executable, argv, env, cwd, native, *, owned):
         self.root, self.native, self.pi_pid, self.closed = root, native, None, False
+        self.executable = str(executable) if executable else None
+        self.pi_identity, self.process_handle, self.window_closed = None, None, False
+        self.process_cleanup = None
         self.window = {"title": title}
         root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.exit_path = root / "process.exit"
@@ -168,6 +205,17 @@ class Terminal:
         self.window = {**native("window", title), "title": title}
         P.require(self.window["hwnd"] == found, "native_terminal_window_changed")
 
+    def bind_process(self, pid):
+        self.pi_pid = pid
+        self.process_handle = ProcessHandle(pid)
+        identity = self.native.held_process(self.process_handle, "process-identity-handle", self.executable)
+        P.require(identity.get("present") is True and identity.get("pid") == pid
+                  and isinstance(identity.get("creation_time"), str) and identity["creation_time"].isdigit()
+                  and int(identity["creation_time"]) > 0
+                  and os.path.normcase(identity.get("executable", "")) == os.path.normcase(self.executable),
+                  "owned_pi_process_identity_unverified")
+        self.pi_identity = identity
+
     def collect(self):
         wait_for(self.exit_path.exists, "native_pi_exit_not_collected", seconds=12)
         P.require(self.exit_path.read_text().strip() == "0", "native_pi_exit_failed")
@@ -176,16 +224,29 @@ class Terminal:
     def close(self):
         if self.closed:
             return
-        if self.pi_pid and not self.exit_path.exists():
-            command(["taskkill.exe", "/PID", self.pi_pid, "/T", "/F"], allowed=(0, 128))
-        found = self.native("window", self.window["title"])
-        if found.get("hwnd"):
-            if not self.window.get("hwnd"):
-                self.window = {**found, "title": self.window["title"]}
-            self.native("close", self.window["hwnd"], self.window["pid"], self.window["title"])
-            wait_for(lambda: not self.native("window", self.window["title"]).get("hwnd"), "owned_terminal_window_not_closed")
-        else:
-            P.require(self.window.get("hwnd"), "partial_terminal_cleanup_unverified")
+        try:
+            if self.executable:
+                P.require(self.pi_identity is not None and self.process_handle is not None,
+                          "partial_pi_process_cleanup_unverified")
+                self.process_cleanup = self.native.held_process(self.process_handle, "collect-owned-handle",
+                                                                self.pi_identity["creation_time"], self.executable)
+                P.require(self.process_cleanup.get("collected") is True, "owned_pi_process_cleanup_unverified")
+        finally:
+            try:
+                if self.process_handle is not None:
+                    self.process_handle.close()
+                    self.process_handle = None
+            finally:
+                if not self.window_closed:
+                    found = self.native("window", self.window["title"])
+                    if found.get("hwnd"):
+                        if not self.window.get("hwnd"):
+                            self.window = {**found, "title": self.window["title"]}
+                        self.native("close", self.window["hwnd"], self.window["pid"], self.window["title"])
+                        wait_for(lambda: not self.native("window", self.window["title"]).get("hwnd"), "owned_terminal_window_not_closed")
+                    else:
+                        P.require(self.window.get("hwnd"), "partial_terminal_cleanup_unverified")
+                    self.window_closed = True
         self.closed = True
 
 
@@ -299,7 +360,7 @@ def run(args):
                          and any(row["type"] == "session_start" for row in F.witness(case_root)), "real_pi_tui_start_missing")
                 rows = F.witness(case_root)
                 P.require(all(row.get("mode") == "tui" for row in rows if row["type"] != "factory"), "actual_pi_mode_not_tui")
-                origin.pi_pid = next(row["pid"] for row in rows if row["type"] == "factory")
+                origin.bind_process(next(row["pid"] for row in rows if row["type"] == "factory"))
                 distractor = Terminal(wt, powershell, case_root / "distractor", distractor_title, None, [], case_env, distraction, native, owned=terminals)
                 pcm = case_root / "native-output.s16le"
                 capture = subprocess.Popen([str(args.observer), "capture", str(pcm), str(stop_capture), *native.route_arguments()], stdout=subprocess.PIPE,
@@ -409,6 +470,10 @@ def run(args):
                 terminal.close()
             except Exception as error:
                 failures.append(str(error))
+        report["terminal_cleanup"] = [{"case": terminal.root.parent.name, "role": terminal.root.name,
+                                      "process_identity": terminal.pi_identity, "process_cleanup": terminal.process_cleanup,
+                                      "window_closed": terminal.window_closed, "collected": terminal.closed}
+                                     for terminal in terminals]
         for helper in helpers:
             if helper.poll() is None:
                 helper.kill(); helper.communicate(timeout=3)

@@ -10,6 +10,7 @@
 #include <cfg.h>
 #include <iostream>
 #include <stdexcept>
+#include <vector>
 
 namespace PiWindowsAudioFixture {
 struct Endpoint {
@@ -81,22 +82,44 @@ static std::string metadata(const std::wstring& instance, const Endpoint& render
         ",\"render_endpoint_id\":" + quote(render.id) + ",\"capture_endpoint_id\":" + quote(capture.id) +
         ",\"render_topology_id\":" + quote(render.topology) + ",\"capture_topology_id\":" + quote(capture.topology) + "}";
 }
-static std::string discoverPair(const std::wstring& instance, IMMDeviceEnumerator* enumerator, IMMDevice* defaultRender) {
+struct InitialPair {
+    UINT activeCaptures = 0, exactCaptures = 0;
+    std::vector<Endpoint> candidates;
+    std::string value;
+};
+static InitialPair discoverPair(const std::wstring& instance, IMMDeviceEnumerator* enumerator, IMMDevice* defaultRender) {
+    InitialPair result;
     const auto render = inspect(enumerator, defaultRender, eRender);
     if (_wcsicmp(render.instance.c_str(), instance.c_str()) != 0)
         throw std::runtime_error("audio_fixture_render_driver_mismatch:actual=" + quote(render.instance));
-    Microsoft::WRL::ComPtr<IMMDeviceCollection> devices; UINT count{}, matches{}; Endpoint capture;
-    check(SUCCEEDED(enumerator->EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE, &devices)) && SUCCEEDED(devices->GetCount(&count)),
+    Microsoft::WRL::ComPtr<IMMDeviceCollection> devices; Endpoint capture;
+    check(SUCCEEDED(enumerator->EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE, &devices)) && SUCCEEDED(devices->GetCount(&result.activeCaptures)),
           "audio_fixture_capture_enumeration_unavailable");
-    for (UINT index = 0; index < count; ++index) {
+    check(result.activeCaptures <= 64, "audio_fixture_capture_inventory_bound");
+    for (UINT index = 0; index < result.activeCaptures; ++index) {
         Microsoft::WRL::ComPtr<IMMDevice> candidate;
         check(SUCCEEDED(devices->Item(index, &candidate)), "audio_fixture_capture_identity_unavailable");
         if (property(candidate.Get(), PKEY_Device_FriendlyName).find(L"(VB-Audio Virtual Cable)") == std::wstring::npos) continue;
         auto inspected = inspect(enumerator, candidate.Get(), eCapture);
-        if (_wcsicmp(inspected.instance.c_str(), instance.c_str()) == 0) { ++matches; capture = inspected; }
+        if (_wcsicmp(inspected.instance.c_str(), instance.c_str()) == 0) {
+            ++result.exactCaptures; capture = inspected;
+            if (result.candidates.size() < 2) result.candidates.push_back(inspected);
+        }
     }
-    check(matches == 1, "audio_fixture_sole_driver_capture_required");
-    return metadata(instance, render, capture);
+    if (result.exactCaptures == 1) result.value = metadata(instance, render, capture);
+    return result;
+}
+static std::string initialInventory(const InitialPair& pair) {
+    std::string result = "\"active_capture_endpoints\":" + std::to_string(pair.activeCaptures)
+        + ",\"exact_driver_captures\":" + std::to_string(pair.exactCaptures) + ",\"exact_driver_candidates\":[";
+    size_t emitted = 0;
+    for (const auto& candidate : pair.candidates) {
+        const auto item = "{\"endpoint_id\":" + quote(candidate.id) + ",\"topology_id\":" + quote(candidate.topology) + "}";
+        if (result.size() + item.size() > 30000) break;
+        if (emitted++) result += ',';
+        result += item;
+    }
+    return result + "],\"candidate_ids_truncated\":" + (emitted < pair.exactCaptures ? "true" : "false");
 }
 static std::string discover(const std::wstring& instance) {
     Microsoft::WRL::ComPtr<IMMDeviceEnumerator> enumerator;
@@ -106,7 +129,7 @@ static std::string discover(const std::wstring& instance) {
     // This is initial discovery only: freeze no receipt until the complete exact
     // driver-bound pair is unchanged for two seconds within one 15-second budget.
     const auto started = GetTickCount64(), deadline = started + 15000;
-    ULONGLONG stableSince{}; std::string previous; unsigned candidates{}, observations{}; size_t traceBytes{};
+    ULONGLONG stableSince{}; std::string previous, previousInventory; unsigned candidates{}, observations{}; size_t traceBytes{};
     while (true) {
         driver(instance);
         Microsoft::WRL::ComPtr<IMMDevice> defaultRender;
@@ -115,16 +138,36 @@ static std::string discover(const std::wstring& instance) {
             previous.clear(); stableSince = 0;
         } else {
             if (FAILED(result)) throw std::runtime_error("audio_fixture_default_render_query_failed:hr=" + std::to_string(result));
-            const auto pair = discoverPair(instance, enumerator.Get(), defaultRender.Get());
+            const auto discovered = discoverPair(instance, enumerator.Get(), defaultRender.Get());
             const auto now = GetTickCount64(); ++observations;
-            if (pair != previous) {
-                const auto line = "{\"initial_publication_candidate\":" + pair + ",\"elapsed_ms\":" + std::to_string(now - started) + "}\n";
-                check(++candidates <= 8 && traceBytes + line.size() <= 32768, "audio_fixture_initial_publication_trace_bound");
+            const auto inventory = initialInventory(discovered);
+            if (inventory != previousInventory) {
+                const auto phase = discovered.exactCaptures == 0 ? "capture_not_published"
+                    : discovered.exactCaptures == 1 ? "capture_pair_observed" : "ambiguous_capture";
+                const auto line = std::string("{\"initial_publication_phase\":\"") + phase
+                    + "\",\"elapsed_ms\":" + std::to_string(now - started) + ',' + inventory + "}\n";
+                check(traceBytes + line.size() <= 32768, "audio_fixture_initial_publication_trace_bound");
                 traceBytes += line.size(); std::cerr << line;
-                previous = pair; stableSince = now;
-            } else if (now - stableSince >= 2000 && now <= deadline) {
-                std::cerr << "{\"initial_publication_stable_ms\":" << now - stableSince << ",\"observations\":" << observations << "}\n";
-                return pair;
+            }
+            previousInventory = inventory;
+            if (discovered.exactCaptures > 1)
+                throw std::runtime_error("audio_fixture_sole_driver_capture_required:matches=" + std::to_string(discovered.exactCaptures));
+            const auto& pair = discovered.value;
+            if (discovered.exactCaptures == 0) {
+                // Only complete, successful enumeration proving zero exact
+                // captures is pending publication. Ambiguity/API/identity/PnP
+                // failures still refuse; the original 15-second budget remains.
+                previous.clear(); stableSince = 0;
+            } else {
+                if (pair != previous) {
+                    const auto line = "{\"initial_publication_candidate\":" + pair + ",\"elapsed_ms\":" + std::to_string(now - started) + "}\n";
+                    check(++candidates <= 8 && traceBytes + line.size() <= 32768, "audio_fixture_initial_publication_trace_bound");
+                    traceBytes += line.size(); std::cerr << line;
+                    previous = pair; stableSince = now;
+                } else if (now - stableSince >= 2000 && now <= deadline) {
+                    std::cerr << "{\"initial_publication_stable_ms\":" << now - stableSince << ",\"observations\":" << observations << "}\n";
+                    return pair;
+                }
             }
         }
         check(GetTickCount64() < deadline, "audio_fixture_initial_pair_publication_timeout");
