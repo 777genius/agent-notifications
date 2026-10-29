@@ -30,7 +30,12 @@ def apple_quote(value):
 
 
 def apple(source):
-    return subprocess.check_output(["/usr/bin/osascript", "-e", source], text=True, timeout=15).strip()
+    try:
+        return subprocess.check_output(["/usr/bin/osascript", "-e", source], text=True, timeout=15).strip()
+    except subprocess.TimeoutExpired:
+        evidence = Path(argv[argv.index("--report") + 1]).parent
+        subprocess.run(["/usr/sbin/screencapture", "-x", str(evidence / "driver-failure.png")], timeout=10, check=False)
+        raise
 
 
 identity = apple('tell application "Terminal"\nactivate\nset t to do script '
