@@ -106,15 +106,17 @@ class LauncherDiagnosticsTests(unittest.TestCase):
             native.assert_called_once_with("window", "TEST-Pi-origin-pending")
 
     @unittest.skipUnless(os.name == "nt" and shutil.which("pwsh.exe"), "Actual Windows PowerShell guard only")
-    def test_missing_real_terminal_records_failure_without_starting_pi(self):
+    def test_case_aliases_parse_before_missing_real_terminal_refuses_pi(self):
         with tempfile.TemporaryDirectory(prefix="TEST Pi launcher ") as directory:
             root = Path(directory)
-            launcher, spec, state = root / "launch.ps1", root / "launch.json", root / "launch-state.json"
-            launcher.write_text(W.POWERSHELL_LAUNCHER)
-            spec.write_text(json.dumps({"state_path": str(state), "observer": str(root / "missing-observer.exe"),
-                                        "failure_image": str(root / "failure.bmp"), "executable": None,
-                                        "environment": {}, "arguments": [], "cwd": str(root),
-                                        "exit_path": str(root / "process.exit"), "witness_path": str(root / "witness.jsonl")}))
+            terminal_root = root / "origin"
+            native = Mock(executable=root / "missing-observer.exe", return_value={"hwnd": 123, "pid": 456})
+            # Exercise the actual launch-spec producer with aliases returned by
+            # Windows os.environ; this never starts a Terminal or product.
+            with patch.object(W, "command"), patch.object(W, "wait_for", return_value=123):
+                W.Terminal("wt.exe", "pwsh.exe", terminal_root, "TEST-Pi-origin-json", None, [],
+                           {"SystemRoot": "C:\\Windows", "SYSTEMROOT": "C:\\Windows"}, root, native, owned=[])
+            launcher, spec, state = terminal_root / "launch.ps1", terminal_root / "launch.json", terminal_root / "launch-state.json"
             env = {key: value for key, value in os.environ.items() if key not in ("WT_SESSION", "WT_PROFILE_ID")}
             result = subprocess.run([shutil.which("pwsh.exe"), "-NoLogo", "-NoProfile", "-File", str(launcher), "-Spec", str(spec)],
                                     env=env, stdin=subprocess.DEVNULL, capture_output=True, timeout=10)
@@ -124,7 +126,7 @@ class LauncherDiagnosticsTests(unittest.TestCase):
             self.assertIs(observed["wt_session_present"], False)
             self.assertIn("Real Windows Terminal session unavailable", observed["error"])
             self.assertNotIn("child_exit_code", observed)
-            self.assertFalse((root / "process.exit").exists())
+            self.assertFalse((terminal_root / "process.exit").exists())
 
 
 class ProcessCleanupTests(unittest.TestCase):

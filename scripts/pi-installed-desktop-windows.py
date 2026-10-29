@@ -184,7 +184,10 @@ class Terminal:
         root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.exit_path = root / "process.exit"
         spec = root / "launch.json"
-        spec.write_text(json.dumps({"environment": env, "cwd": str(cwd), "executable": str(executable) if executable else None,
+        # Windows environment names are case-insensitive. Python can supply
+        # both aliases, which PowerShell's JSON object reader must not receive.
+        environment = {key.upper(): value for key, value in env.items()}
+        spec.write_text(json.dumps({"environment": environment, "cwd": str(cwd), "executable": str(executable) if executable else None,
                                     "arguments": list(map(str, argv)), "exit_path": str(self.exit_path),
                                     "state_path": str(root / "launch-state.json"), "observer": str(native.executable),
                                     "failure_image": str(root / "launch-failure.bmp"),
