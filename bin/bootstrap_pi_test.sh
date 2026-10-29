@@ -50,6 +50,28 @@ case "$1 ${2:-}" in
             if [ "$key" = global-config ]; then printf '%s\n' "$value"; exit 0; fi
         done < "$TEST_PI_ATOMS"
         exit 97 ;;
+    'config installer')
+        [ "$#" -eq 4 ] && [ "$3" = runtime-root ] && [ -f "$TEST_PI_CASE/runtime-installed" ] || exit 1
+        printf '%s\n' "$TEST_PI_RUNTIME_ROOT" ;;
+    'internal-install-runtime --stage')
+        # Inert writer boundary: the genuine shell decides whether to call it.
+        # Canonical asset bytes/ownership are covered by the native Go test.
+        printf '%s\0' "$@" >> "$TEST_PI_CASE/runtime-writes"
+        printf '\0' >> "$TEST_PI_CASE/runtime-writes"
+        [ "${TEST_PI_RUNTIME_EXIT:-0}" -eq 0 ] || exit "$TEST_PI_RUNTIME_EXIT"
+        shift
+        target= entry=
+        while [ "$#" -gt 0 ]; do
+            case "$1" in
+                --target) target=$2; shift 2 ;;
+                --entry) entry=$2; shift 2 ;;
+                *) shift ;;
+            esac
+        done
+        [ -n "$target" ] && [ -n "$entry" ] || exit 97
+        mkdir -p "$target"
+        cp "$TEST_PI_HELPER" "$target/$entry"
+        touch "$TEST_PI_CASE/runtime-installed" ;;
     'setup-products preflight') exit "${TEST_PI_PREFLIGHT_EXIT:-0}" ;;
     'setup-notifications --help') printf '%s\n' '--policy-only --preserve-enabled' ;;
     'setup-notifications wizard')
@@ -80,6 +102,32 @@ configure_agent_policy() { printf 'unexpected-policy\n' >> "$TEST_PI_CASE/stages
 bootstrap_abs_command() { printf 'unexpected-discovery\n' >> "$TEST_PI_CASE/stages"; return 99; }
 main "$@"
 PI_MAIN
+cat > "$SANDBOX/runtime-runner" <<'PI_RUNTIME'
+#!/bin/bash
+set -euo pipefail
+source "$TEST_PI_FUNCTIONS"
+bootstrap_release_os_arch() { printf 'linux amd64\n'; }
+_SELECTOR_INTENT="$TEST_PI_CASE/intent.json"
+_FROZEN_CONTROL="$TEST_PI_CASE/control"
+_FROZEN_RUNTIME="$TEST_PI_RUNTIME_ROOT"
+_FROZEN_CURSOR_SEED=${TEST_PI_CURSOR_SEED:-false}
+_CONFIG_STAGE="$TEST_PI_CASE/stage"
+_CONFIG_HELPER=$TEST_PI_HELPER
+mkdir "$_CONFIG_STAGE"
+# Exercise the real Cursor then Pi preparation against one shared binary.
+prepare_cursor_runtime
+[ "$_CURSOR_RUNTIME_PREPARED" = true ]
+prepare_cursor_runtime
+[ "$_CURSOR_RUNTIME_PREPARED" = false ]
+export TEST_PI_RUNTIME_EXIT=${TEST_PI_FAIL_ON_PI:-0}
+if prepare_managed_runtime "$@"; then status=0; else status=$?; fi
+printf '%s\n' "$_MANAGED_RUNTIME_PREPARED" > "$TEST_PI_CASE/prepared"
+[ "$status" -eq 0 ] || exit "$status"
+if [ "${TEST_PI_RUNTIME_REPEAT:-false}" = true ]; then
+    prepare_managed_runtime "$@"
+    printf '%s\n' "$_MANAGED_RUNTIME_PREPARED" >> "$TEST_PI_CASE/prepared"
+fi
+PI_RUNTIME
 python3 -I - "$SANDBOX" <<'PY_PI'
 import os, pathlib, subprocess, sys
 lab = pathlib.Path(sys.argv[1])
@@ -195,4 +243,34 @@ if os.name!='nt':
     code,calls,stages,out=run([], {'TEST_PI_PREPARED':'true','TEST_PI_CANCEL':'true'}, tty=True)
     assert code==0 and stages==['runtime'] and not matching(calls,['setup-notifications','wizard']), out
 print('PASS Pi frozen bootstrap routing, channel preservation, refreshed intent and refusal boundaries (composition only)')
+
+def runtime_request(args, **changes):
+    case = lab / ('runtime-'+str(len(list(lab.glob('runtime-*')))))
+    case.mkdir()
+    env = dict(os.environ, TEST_PI_CASE=str(case), TEST_PI_RUNTIME_ROOT=str(case/'runtime'), **changes)
+    proc = subprocess.run([bash, str(lab/'runtime-runner'), *args], env=env,
+                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=20)
+    trace = case/'runtime-writes'
+    writes = [row.split(b'\0') for row in trace.read_bytes().split(b'\0\0') if row] if trace.exists() else []
+    prepared = (case/'prepared').read_text().splitlines() if (case/'prepared').exists() else []
+    return proc.returncode, writes, prepared, proc.stdout
+
+pi_preparation=['--consumer','pi-runtime-preparation']
+for seeded in ('false','true'):
+    for repeated in ('false','true'):
+        code,writes,prepared,out=runtime_request(pi_preparation, TEST_PI_CURSOR_SEED=seeded,
+                                                TEST_PI_RUNTIME_REPEAT=repeated)
+        assert code==0 and len(writes)==(3 if repeated=='true' else 2), (code,writes,prepared,out)
+        assert (b'--seed-enabled-if-absent' in writes[0]) == (seeded=='true'), writes
+        assert all(value(call,'--consumer')==b'pi-runtime-preparation' for call in writes[1:]), writes
+        assert prepared==(['true','true'] if repeated=='true' else ['true']), prepared
+# An unsuccessful Pi writer must not be reported as a prepared runtime.
+code,writes,prepared,out=runtime_request(pi_preparation, TEST_PI_FAIL_ON_PI='73')
+assert code!=0 and len(writes)==2 and prepared==['false'], (code,writes,prepared,out)
+# The finite private call contract is checked before the matching-byte shortcut.
+for args in (['--consumer','foreign-consumer'], pi_preparation+['--seed-enabled-if-absent'],
+             ['--seed-enabled-if-absent','extra'], ['--consumer=pi-runtime-preparation']):
+    code,writes,prepared,out=runtime_request(args)
+    assert code!=0 and len(writes)==1 and prepared==['false'], (args,code,writes,prepared,out)
+print('PASS genuine shared-runtime Cursor reuse, Pi writer admission/revalidation and refusal boundaries (composition only)')
 PY_PI

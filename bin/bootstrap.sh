@@ -4167,14 +4167,26 @@ prepare_cursor_runtime() {
 # products keep their own immutable integration confirmation after this step.
 prepare_managed_runtime() {
     _MANAGED_RUNTIME_PREPARED=false
-    local runtime os arch primary native base target="$_FROZEN_RUNTIME/bin"
+    local runtime os arch primary native base target="$_FROZEN_RUNTIME/bin" pi_preparation=false
+    # Private callers select only Cursor byte preparation or the Pi asset writer.
+    # Reject other requests before the matching-binary shortcut can hide them.
+    case "$#" in
+        0) ;;
+        1) [ "$1" = --seed-enabled-if-absent ] || return 1 ;;
+        2)
+            [ "$1" = --consumer ] && [ "$2" = pi-runtime-preparation ] || return 1
+            pi_preparation=true ;;
+        *) return 1 ;;
+    esac
     [ -n "$_SELECTOR_INTENT" ] && [ -n "$_FROZEN_CONTROL" ] && [ -n "$_FROZEN_RUNTIME" ] || return 1
     read -r os arch < <(bootstrap_release_os_arch) || return 1
     primary="claude-notifications-$os-$arch"
     [ "$os" != windows ] || primary="$primary.exe"
     if runtime=$("$_CONFIG_HELPER" config installer runtime-root "$_FROZEN_CONTROL"); then
         [ "$runtime" = "$_FROZEN_RUNTIME" ] || return 1
-        if cmp -s "$_CONFIG_HELPER" "$target/$primary"; then return 0; fi
+        # A shared Cursor binary does not imply that Pi's assets are owned.
+        # The existing Go transaction validates and stages them on every Pi call.
+        if cmp -s "$_CONFIG_HELPER" "$target/$primary" && [ "$pi_preparation" != true ]; then return 0; fi
     else
         if [ -e "$_FROZEN_CONTROL/ownership.json" ] || [ -L "$_FROZEN_CONTROL/ownership.json" ] ||
            [ -e "$_FROZEN_RUNTIME" ] || [ -L "$_FROZEN_RUNTIME" ]; then
