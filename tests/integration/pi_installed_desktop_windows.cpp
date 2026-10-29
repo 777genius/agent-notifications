@@ -208,9 +208,18 @@ static int testProcessIdentity() {
         need(refused && running(root->handle) && running(leaf->handle), "mismatched_process_image_was_signalled");
         need(TerminateProcess(root->handle, 0) && WaitForSingleObject(root->handle, 3000) == WAIT_OBJECT_0
              && running(leaf->handle), "process_guard_root_exit_with_live_leaf_missing");
+        const auto afterExit = processParents();
+        std::cout << "{\"scope\":\"native_owned_process_cleanup_guard\",\"phase\":\"root_exited_leaf_live\",\"root_pid\":"
+                  << root->pid << ",\"leaf_pid\":" << leaf->pid << ",\"leaf_snapshot_present\":"
+                  << (afterExit.contains(leaf->pid) ? "true" : "false") << ",\"leaf_parent_pid\":"
+                  << (afterExit.contains(leaf->pid) ? afterExit.at(leaf->pid) : 0) << "}\n" << std::flush;
         const auto result = collectOwnedProcess(heldProcess(duplicateHeld(root->handle), root->created, root->image));
+        const bool rootRunning = running(root->handle), leafRunning = running(leaf->handle);
+        std::cout << "{\"scope\":\"native_owned_process_cleanup_guard\",\"phase\":\"collection_returned\",\"result\":"
+                  << result << ",\"root_running\":" << (rootRunning ? "true" : "false")
+                  << ",\"leaf_running\":" << (leafRunning ? "true" : "false") << "}\n" << std::flush;
         need(result.find("\"descendants_collected\":1") != std::string::npos
-             && !running(root->handle) && !running(leaf->handle), "owned_process_tree_not_collected");
+             && !rootRunning && !leafRunning, "owned_process_tree_not_collected");
         const auto reaped = collectOwnedProcess(heldProcess(duplicateHeld(root->handle), root->created, root->image));
         need(reaped.find("\"descendants_collected\":0") != std::string::npos, "reaped_process_tree_still_running");
     } catch (...) {
