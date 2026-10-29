@@ -191,7 +191,9 @@ def configure(path, defaults, sink, *, desktop=True, sound=True, click=True):
     # fixed private webhook body. These are TEST strings, never user content.
     for status in COPY:
         cfg["statuses"][status]["title"] = "TEST private configured title"
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    # Windows 0700 installs a protected OWNER RIGHTS DACL. Inherit the
+    # explicit current-user/SYSTEM/Admin ACL already set on our TEST root.
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o777 if os.name == "nt" else 0o700)
     path.write_text(json.dumps(cfg) + "\n", encoding="utf-8")
     path.chmod(0o600)
 

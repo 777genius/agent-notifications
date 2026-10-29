@@ -7,6 +7,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
@@ -14,12 +15,27 @@ PATH = Path(__file__).resolve().parents[1] / "tests/integration/pi_installed_fix
 SPEC = importlib.util.spec_from_file_location("pi_installed_fixture", PATH)
 P = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(P)
+NATIVE_SPEC = importlib.util.spec_from_file_location("pi_native_fixture", PATH.with_name("pi_native_fixture.py"))
+F = importlib.util.module_from_spec(NATIVE_SPEC)
+NATIVE_SPEC.loader.exec_module(F)
 
 
 def body(status="task_complete"):
     return {"schema_version": "1.0", "status": status, "notification_type": status,
             "agent_source": "pi", "message": P.COPY[status], "timestamp": "2026-10-28T10:00:00Z",
             "session_id": "", "source": "claude-notifications", "title": "Pi"}
+
+
+def prepared_paths(root):
+    provider = SimpleNamespace(base_url="http://127.0.0.1/TEST-model")
+    F.prepare(root, provider, "success")
+    nested, profile = root / "case", root / "shared-agent"
+    F.prepare(nested, provider, "success", agent_dir=profile)
+    config = root / "global/config.json"
+    P.configure(config, PATH.parents[2] / "config/config.json", SimpleNamespace(url="http://127.0.0.1/TEST-pi"))
+    leaves = [root / "global", profile / "extensions"]
+    leaves += [base / name for base in (root, nested) for name in ("home", "agent/extensions", "project", "tmp")]
+    return config, leaves
 
 
 class ObserverTests(unittest.TestCase):
@@ -93,7 +109,7 @@ class ObserverTests(unittest.TestCase):
             diagnose.assert_called_once_with("TEST-candidate", root, env)
 
     @unittest.skipUnless(os.name == "nt", "actual Windows security descriptors required")
-    def test_real_windows_root_and_new_child_have_only_private_inherited_grants(self):
+    def test_real_windows_prepared_descendants_have_only_private_inherited_grants(self):
         # Observe native descriptors independently of the writer. These are real
         # filesystem inodes; no mocked product permission acceptance is involved.
         import ctypes
@@ -143,9 +159,10 @@ class ObserverTests(unittest.TestCase):
 
         root = P.new_test_root("TEST-pi-acl-")
         self.addCleanup(shutil.rmtree, root)
-        child = root / "new-product-descendant"
-        child.mkdir()
-        for path, inherited in ((root, False), (child, True)):
+        config, leaves = prepared_paths(root)
+        self.assertTrue(config.is_file() and all(path.is_dir() for path in leaves))
+        for path in [root, *sorted(root.rglob("*"))]:
+            inherited = path != root
             descriptor, owner, dacl = pointer(), pointer(), pointer()
             self.assertEqual(api.GetNamedSecurityInfoW(str(path), 1, 5, ctypes.byref(owner), None,
                                                        ctypes.byref(dacl), None, ctypes.byref(descriptor)), 0)
@@ -157,8 +174,7 @@ class ObserverTests(unittest.TestCase):
                 self.assertTrue(dacl)
                 control, revision = wintypes.WORD(), wintypes.DWORD()
                 self.assertTrue(api.GetSecurityDescriptorControl(descriptor, ctypes.byref(control), ctypes.byref(revision)))
-                if path == root:
-                    self.assertTrue(control.value & 0x1000)  # Root inheritance is protected.
+                self.assertEqual(bool(control.value & 0x1000), not inherited)
                 acl = ctypes.cast(dacl, ctypes.POINTER(ACL)).contents
                 self.assertEqual(acl.count, 3)
                 principals = []
@@ -166,12 +182,21 @@ class ObserverTests(unittest.TestCase):
                     address = pointer()
                     self.assertTrue(api.GetAce(dacl, index, ctypes.byref(address)))
                     ace = ctypes.cast(address, ctypes.POINTER(AllowedACE)).contents
-                    self.assertEqual((ace.type, ace.mask, ace.flags & 3), (0, 0x1F01FF, 3))
+                    self.assertEqual((ace.type, ace.mask, ace.flags & 3), (0, 0x1F01FF, 3 if path.is_dir() else 0))
                     self.assertEqual(bool(ace.flags & 0x10), inherited)
                     principals.append(sid_text(address.value + ctypes.sizeof(AllowedACE)))
                 self.assertEqual(Counter(principals), Counter((current, "S-1-5-18", "S-1-5-32-544")))
             finally:
                 kernel.LocalFree(descriptor)
+
+    @unittest.skipIf(os.name == "nt", "POSIX permission bits required")
+    def test_prepared_posix_directory_modes_remain_private(self):
+        root = P.new_test_root("TEST-pi-modes-")
+        self.addCleanup(shutil.rmtree, root)
+        config, leaves = prepared_paths(root)
+        for path in [root, *leaves]:
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o700, str(path))
+        self.assertEqual(stat.S_IMODE(config.stat().st_mode), 0o600)
 
     def test_canonical_config_and_native_witness_use_utf8_in_a_real_child(self):
         code = r'''

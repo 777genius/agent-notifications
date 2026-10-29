@@ -90,10 +90,13 @@ class Provider:
 
 def prepare(root, provider, scenario, agent_dir=None):
     root = Path(root)
+    # Windows 0700 replaces the private root's inherited ACL with OWNER RIGHTS.
+    # Keep the caller's private boundary and let descendants inherit its grants.
+    directory_mode = 0o777 if os.name == "nt" else 0o700
     for name in ("home", "agent/extensions", "project", "tmp"):
-        (root / name).mkdir(parents=True, exist_ok=True, mode=0o700)
+        (root / name).mkdir(parents=True, exist_ok=True, mode=directory_mode)
     agent = Path(agent_dir) if agent_dir is not None else root / "agent"
-    (agent / "extensions").mkdir(parents=True, exist_ok=True, mode=0o700)
+    (agent / "extensions").mkdir(parents=True, exist_ok=True, mode=directory_mode)
     (agent / "models.json").write_text(json.dumps({"providers": {"TEST-local": {
         "api": "openai-completions", "baseUrl": provider.base_url, "apiKey": "TEST-only",
         "models": [{"id": "TEST-local", "name": "TEST local", "reasoning": False, "input": ["text"],
