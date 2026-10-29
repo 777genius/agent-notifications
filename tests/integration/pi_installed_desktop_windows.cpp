@@ -150,8 +150,16 @@ static std::string collectOwnedProcess(std::unique_ptr<OwnedProcess> root) {
     discover();
     for (;;) {
         for (const auto& process : owned) {
-            if (running(process->handle))
-                need(TerminateProcess(process->handle, 1) || !running(process->handle), "owned_process_termination_failed");
+            if (running(process->handle)) {
+                const bool terminated = TerminateProcess(process->handle, 1);
+                const DWORD error = terminated ? ERROR_SUCCESS : GetLastError();
+                if (!terminated && running(process->handle))
+                    throw std::runtime_error("owned_process_termination_failed:pid=" + std::to_string(process->pid)
+                        + ":creation_time=" + std::to_string(process->created)
+                        + ":role=" + (process.get() == owned.front().get() ? "root" : "descendant")
+                        + ":image_leaf=" + utf8(fs::path(process->image).filename().wstring())
+                        + ":winerror=" + std::to_string(error) + ":handle_state=non_signaled");
+            }
         }
         const bool added = discover();
         need(GetTickCount64() < deadline, "owned_process_cleanup_timeout");

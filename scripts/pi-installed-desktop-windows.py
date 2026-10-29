@@ -109,6 +109,28 @@ def observe_unchanged_focus(native, window, stop_capture, seconds=15):
                                      stop, drain_seconds=0.5, seconds=seconds)
 
 
+def stop_helper(helper, stop):
+    if helper and helper.poll() is None:
+        if not stop.exists():
+            stop.write_text("stop\n")
+        helper.communicate(timeout=5)
+
+
+def cleanup_case(actions, *, primary_failure, report, case):
+    failures = []
+    for resource, close in actions:
+        try:
+            close()
+        except Exception as error:
+            failures.append({"case": case, "resource": resource, "failure": str(error)[-2000:]})
+    if failures:
+        report.setdefault("case_cleanup_failures", []).extend(failures)
+        # Cleanup must attempt every owned resource without replacing the
+        # observation that caused it. A cleanup-only failure still refuses.
+        if primary_failure is None:
+            raise RuntimeError("native_case_cleanup_failed:" + failures[0]["failure"])
+
+
 def command(argv, *, timeout=25, allowed=(0,), env=None, handles=()):
     startup = None
     if handles:
@@ -336,6 +358,7 @@ def run(args):
             case_root = root / ("case-" + name)
             provider = F.Provider("success", hold_reply=name != "question")
             origin = distractor = capture = neutral = None
+            primary_failure = None
             stop_capture, stop_neutral = case_root / "capture.stop", case_root / "neutral.stop"
             try:
                 case_env = F.prepare(case_root, provider, "success", agent_dir=root / "agent")
@@ -449,25 +472,22 @@ def run(args):
                     "unchanged_click_observation": click_observation,
                     "checks": {key: True for key in ("native_tui", "configured_banner_policy", "configured_audio_policy",
                                "configured_click_policy", "native_event_counts", "ambient_root_isolated", "owned_terminal_collected")}})
-            except Exception:
+            except Exception as error:
+                primary_failure = str(error)
+                report["native_observation_failure"] = {"case": name, "failure": primary_failure}
                 observe_failure()  # Before the owned Terminal windows are closed.
                 raise
             finally:
-                if origin:
-                    origin.close()
-                if distractor:
-                    distractor.close()
-                if capture and capture.poll() is None:
-                    stop_capture.write_text("stop\n"); capture.communicate(timeout=5)
-                if neutral and neutral.poll() is None:
-                    stop_neutral.write_text("stop\n"); neutral.communicate(timeout=5)
-                provider.close()
+                actions = [(role, terminal.close) for role, terminal in (("origin", origin), ("distractor", distractor)) if terminal]
+                actions.extend((("capture", lambda: stop_helper(capture, stop_capture)),
+                                ("neutral", lambda: stop_helper(neutral, stop_neutral)), ("provider", provider.close)))
+                cleanup_case(actions, primary_failure=primary_failure, report=report, case=name)
         report.update(status="passed_native_product_observations", native_product_observations_passed=True)
     except Exception as error:
         report["failure"] = str(error)
         observe_failure()
     finally:
-        failures = []
+        failures = [row["failure"] for row in report.get("case_cleanup_failures", [])]
         for terminal in reversed(terminals):
             try:
                 terminal.close()

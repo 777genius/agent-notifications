@@ -129,6 +129,41 @@ class LauncherDiagnosticsTests(unittest.TestCase):
             self.assertFalse((terminal_root / "process.exit").exists())
 
 
+class CaseCleanupTests(unittest.TestCase):
+    def test_primary_observation_survives_cleanup_refusal_and_all_resources_are_attempted(self):
+        report = {}
+        origin = Mock(side_effect=RuntimeError("owned_process_termination_failed:pid=41:winerror=5"))
+        distractor, capture, provider = Mock(), Mock(), Mock()
+        with self.assertRaisesRegex(RuntimeError, "^native_product_toast_missing$"):
+            try:
+                raise RuntimeError("native_product_toast_missing")
+            finally:
+                W.cleanup_case((("origin", origin), ("distractor", distractor), ("capture", capture), ("provider", provider)),
+                               primary_failure="native_product_toast_missing", report=report, case="completion")
+        for close in (origin, distractor, capture, provider):
+            close.assert_called_once_with()
+        self.assertEqual(report["case_cleanup_failures"], [{"case": "completion", "resource": "origin",
+                         "failure": "owned_process_termination_failed:pid=41:winerror=5"}])
+
+    def test_cleanup_only_failure_refuses_after_remaining_resources_are_collected(self):
+        report = {}
+        origin = Mock(side_effect=RuntimeError("cleanup_refused"))
+        provider = Mock()
+        with self.assertRaisesRegex(RuntimeError, "^native_case_cleanup_failed:cleanup_refused$"):
+            W.cleanup_case((("origin", origin), ("provider", provider)), primary_failure=None, report=report, case="completion")
+        provider.assert_called_once_with()
+        self.assertEqual(report["case_cleanup_failures"][0]["resource"], "origin")
+
+    def test_existing_capture_stop_is_preserved_while_helper_is_collected(self):
+        helper = Mock()
+        helper.poll.return_value = None
+        stop = Mock()
+        stop.exists.return_value = True
+        W.stop_helper(helper, stop)
+        stop.write_text.assert_not_called()
+        helper.communicate.assert_called_once_with(timeout=5)
+
+
 class ProcessCleanupTests(unittest.TestCase):
     def terminal(self, root, native):
         terminal = W.Terminal.__new__(W.Terminal)
