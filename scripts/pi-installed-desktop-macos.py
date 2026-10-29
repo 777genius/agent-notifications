@@ -767,6 +767,117 @@ def envelope_match(recording, reference):
     return round(best, 6)
 
 
+def case_failure_observation(case_root, terminal, provider, sink, data_root, helper_app, expected, observe, screenshot,
+                             *, now=time.monotonic):
+    """Failure-only fixed metadata, before owned UI/process cleanup begins."""
+    started = now()
+    deadline = started + 6
+    result = {"scope": "failed_owned_TEST_case_only", "desktop_qualified": False,
+              "maximum_seconds": 6, "provider_requests": len(provider.requests),
+              "provider_released": provider.release.is_set(), "witness": [], "webhooks": []}
+
+    def read(path, limit):
+        P.require(path.is_file() and not path.is_symlink() and path.stat().st_size <= limit,
+                  "case_diagnostic_file_unavailable_or_oversized")
+        with path.open("rb") as source:
+            raw = source.read(limit + 1)
+        P.require(len(raw) <= limit, "case_diagnostic_file_oversized")
+        return raw
+
+    def attempt(name, action):
+        try:
+            result[name] = action()
+        except Exception as error:
+            result[name] = {"status": "unavailable", "error_class": type(error).__name__}
+
+    def witness():
+        raw = read(case_root / "witness.jsonl", 65536)
+        lines = raw.splitlines()
+        P.require(len(lines) <= 64, "case_diagnostic_witness_rows_exceeded")
+        kinds = {"factory", "session_start", "agent_start", "agent_end", "agent_before_settle",
+                 "agent_settled", "ui_prompt_start", "ui_prompt_end", "session_shutdown"}
+        rows = []
+        for line in lines:
+            value = json.loads(line)
+            P.require(isinstance(value, dict) and value.get("type") in kinds, "case_diagnostic_witness_kind")
+            row = {"type": value["type"]}
+            for key in ("hasUI", "idle", "aborted"):
+                if type(value.get(key)) is bool:
+                    row[key] = value[key]
+            if value.get("mode") in ("tui", "rpc", "json", "print"):
+                row["mode"] = value["mode"]
+            if value.get("outcome") in ("completed", "aborted", "error"):
+                row["outcome"] = value["outcome"]
+            if type(value.get("pid")) is int and value["pid"] > 0:
+                row["pid"] = value["pid"]
+            rows.append(row)
+        return rows
+
+    def webhooks():
+        rows = list(sink.rows)
+        P.require(len(rows) <= 32, "case_diagnostic_webhook_rows_exceeded")
+        return [{"status": row["status"], "received_monotonic": row["received_monotonic"]}
+                for row in rows if row.get("status") in P.COPY
+                and type(row.get("received_monotonic")) in (int, float)
+                and math.isfinite(row["received_monotonic"])]
+
+    def cache():
+        # Attempt bits are not evidence of submission or visible delivery.
+        P.require(data_root.is_absolute() and data_root.resolve(strict=True) == data_root and data_root.is_dir()
+                  and data_root.is_relative_to(case_root.parent.resolve(strict=True)),
+                  "case_diagnostic_cache_outside_owned_TEST_root")
+        path = data_root / "observations.json"
+        if not path.exists():
+            return {"status": "absent"}
+        value = json.loads(read(path, 48 * 1024))
+        entries = value.get("entries") if isinstance(value, dict) else None
+        P.require(isinstance(entries, list) and len(entries) <= 256, "case_diagnostic_cache_shape")
+        bits = [row.get("bits") for row in entries if isinstance(row, dict)]
+        P.require(len(bits) == len(entries) and all(type(bit) is int and bit in (1, 2, 3) for bit in bits),
+                  "case_diagnostic_cache_bits")
+        return {"status": "observed_attempt_bits_only", "entries": len(bits),
+                "desktop_attempt_entries": sum(bool(bit & 1) for bit in bits),
+                "webhook_attempt_entries": sum(bool(bit & 2) for bit in bits)}
+
+    attempt("witness", witness)
+    attempt("webhooks", webhooks)
+    attempt("observation_cache", cache)
+    result["webhook_failure_count"] = len(sink.failures)
+    if terminal is not None:
+        result["origin"] = {"window": terminal.window, "tty": terminal.tty, "pid": terminal.pid,
+                            "shell_pid": terminal.shell_pid, "process_start_identity": terminal.process_start_identity,
+                            "window_closed": terminal.window_closed}
+
+    def bounded(action):
+        remaining = deadline - now()
+        P.require(remaining > 0, "case_diagnostic_deadline_expired")
+        return action(min(2, remaining))
+
+    attempt("screenshot", lambda: bounded(screenshot))
+    attempt("installed_helper_processes", lambda: bounded(lambda seconds: observe("helper-processes", str(helper_app), timeout=seconds)))
+    attempt("foreground", lambda: bounded(lambda seconds: observe("foreground", timeout=seconds)))
+    attempt("expected_banner", lambda: bounded(lambda seconds: observe("banner", P.COPY[expected], timeout=seconds)))
+    if terminal is not None and terminal.pid and terminal.process_start_identity:
+        attempt("origin_process", lambda: bounded(lambda seconds: observe("terminal-process-identity", str(terminal.pid),
+                    terminal.process_start_identity, timeout=seconds)))
+    result["elapsed_seconds"] = round(now() - started, 3)
+    return result
+
+
+def cleanup_case(actions, primary_failure, report, name):
+    """Attempt every owned cleanup and keep the actual observation failure."""
+    failures = []
+    for role, action in actions:
+        try:
+            action()
+        except Exception as error:
+            failures.append({"case": name, "role": role, "error_class": type(error).__name__})
+    if failures:
+        report.setdefault("case_cleanup_failures", []).extend(failures)
+        if primary_failure is None:
+            raise RuntimeError("owned_native_case_cleanup_failed")
+
+
 def run(args):
     P.require(platform.system() == "Darwin", "actual_macos_host_required")
     root = Path(tempfile.mkdtemp(prefix="TEST-pi-installed-macos-")).resolve()
@@ -818,6 +929,9 @@ def run(args):
         case_root = root / ("case-" + name)
         provider = F.Provider("success", hold_reply=name != "question")
         terminal, recorder = None, None
+        primary_failure = None
+        started = time.monotonic()
+        timing = {}
         desktop, sound, click = name != "desktop-off", name != "sound-off", name != "click-off"
         expected = "question" if name == "question" else "task_complete"
         try:
@@ -844,6 +958,7 @@ def run(args):
             wait_for((case_root / "capture-ready.json").exists, "native_product_capture_not_ready")
             baseline = json.loads((case_root / "capture-ready.json").read_text())
             P.require(baseline["audio_peak"] < 0.0001, "native_audio_baseline_not_quiet")
+            timing["capture_ready_seconds"] = round(time.monotonic() - started, 3)
             if name == "question":
                 terminal.focus()
                 terminal.type("/TEST-dialog")
@@ -851,10 +966,13 @@ def run(args):
                 wait_for(lambda: bool(provider.requests), "actual_pi_model_request_missing")
             decoy.focus()
             P.require(decoy.is_front() and not terminal.is_front(), "native_pi_origin_not_backgrounded")
+            timing["provider_release_seconds"] = round(time.monotonic() - started, 3)
             provider.release.set()
             screenshot, webhook_received, click_observation = None, False, None
             if desktop:
+                timing["banner_wait_started_seconds"] = round(time.monotonic() - started, 3)
                 banner = wait_for(lambda: observer("banner", P.COPY[expected])["matches"], "actual_product_banner_not_observed")
+                timing["banner_observed_seconds"] = round(time.monotonic() - started, 3)
                 P.require(decoy.is_front(), "product_focused_before_physical_notification_click")
                 if name == "question":
                     rows = F.witness(case_root)
@@ -930,23 +1048,46 @@ def run(args):
                 "pending_question_at_click": name == "question", "terminal_collected": terminal.collected(),
                 "checks": {key: True for key in ("native_tui", "configured_banner_policy", "configured_audio_policy",
                     "configured_click_policy", "native_event_counts", "ambient_root_isolated", "owned_terminal_collected")}})
+        except Exception as error:
+            primary_failure = error
+            timing["failure_seconds"] = round(time.monotonic() - started, 3)
+            failure = {"case": name, "failure": str(error), "timing": timing}
+            report["case_failure"] = failure
+            try:
+                def capture_failure_ui(seconds):
+                    path = case_root / "failure-before-cleanup.png"
+                    command(["/usr/sbin/screencapture", "-x", path], timeout=seconds)
+                    P.require(path.is_file() and not path.is_symlink() and path.stat().st_size <= 16 * 1024 * 1024,
+                              "case_diagnostic_screenshot_unavailable")
+                    return {"artifact": "case-" + name + "/" + path.name, "sha256": P.sha(path)}
+                failure["observations"] = case_failure_observation(case_root, terminal, provider, sink,
+                    Path(view["binding"]["dataRoot"]), app, expected, observer, capture_failure_ui)
+            except Exception as diagnostic_error:
+                failure["diagnostic_error_class"] = type(diagnostic_error).__name__
+            raise
         finally:
-            if recorder and recorder.poll() is None:
-                (case_root / "capture-stop").touch()
-                try:
-                    recorder.communicate(timeout=5)
-                except subprocess.TimeoutExpired:
-                    recorder.kill()
-                    recorder.communicate(timeout=3)
+            def stop_recorder():
+                if recorder and recorder.poll() is None:
+                    (case_root / "capture-stop").touch()
+                    try:
+                        recorder.communicate(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        recorder.kill()
+                        recorder.communicate(timeout=3)
+
+            def retain():
+                retained = args.report.parent / ("case-" + name)
+                retained.mkdir(parents=True, exist_ok=True)
+                for filename in ("actual-product-banner.png", "native-output.s16le", "capture-ready.json", "failure-before-cleanup.png"):
+                    source = case_root / filename
+                    if source.is_file() and not source.is_symlink() and source.stat().st_size <= 16 * 1024 * 1024:
+                        shutil.copyfile(source, retained / filename)
+
+            actions = [("capture", stop_recorder)]
             if terminal:
-                terminal.close()
-            provider.close()
-            retained = args.report.parent / ("case-" + name)
-            retained.mkdir(parents=True, exist_ok=True)
-            for filename in ("actual-product-banner.png", "native-output.s16le", "capture-ready.json"):
-                source = case_root / filename
-                if source.is_file() and source.stat().st_size <= 16 * 1024 * 1024:
-                    shutil.copyfile(source, retained / filename)
+                actions.append(("origin", terminal.close))
+            actions.extend((("provider", provider.close), ("evidence", retain)))
+            cleanup_case(actions, primary_failure, report, name)
 
     try:
         report["native_preflight"] = observer("preflight")
@@ -1067,7 +1208,8 @@ def run(args):
             except Exception:
                 consent["helper_sample"] = {"status": "inconclusive_sample_collection_failed"}
     finally:
-        failures = []
+        failures = ["case_cleanup_failed:" + row["case"] + ":" + row["role"] + ":" + row["error_class"]
+                    for row in report.get("case_cleanup_failures", [])]
         if permission_log is not None:
             report["notification_consent"]["service_log"] = permission_log.close()
             if not report["notification_consent"]["service_log"]["owned_child_collected"]:

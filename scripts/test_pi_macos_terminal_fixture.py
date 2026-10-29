@@ -387,6 +387,95 @@ class TerminalAutomation(unittest.TestCase):
         self.assertIn("PermissionError:TEST cleanup failure", receipt["cleanup_failures"])
 
 
+class FailedCaseEvidence(unittest.TestCase):
+    def state(self, root):
+        case = root / "case-completion"
+        data = root / "data"
+        case.mkdir()
+        data.mkdir()
+        provider = mock.Mock(requests=[{"path": "/v1/chat/completions", "stream": True, "model": "TEST-local"}])
+        provider.release.is_set.return_value = True
+        sink = mock.Mock(rows=[], failures=[])
+        return case, data, provider, sink
+
+    def test_fixed_projection_retains_actual_event_and_attempt_facts_without_private_values(self):
+        with tempfile.TemporaryDirectory(prefix="TEST-pi-failure-evidence-") as temporary:
+            root = Path(temporary).resolve()
+            case, data, provider, sink = self.state(root)
+            private = "TEST-private-prompt-reason-token-cache-key"
+            rows = [{"type": "factory", "pid": os.getpid(), "prompt": private},
+                    {"type": "agent_settled", "mode": "tui", "idle": True, "aborted": False,
+                     "outcome": "completed", "reason": private}]
+            (case / "witness.jsonl").write_text("\n".join(map(json.dumps, rows)))
+            (data / "observations.json").write_text(json.dumps({"boot": private,
+                "entries": [{"key": private, "until": 7.0, "bits": 3}]}))
+            sink.rows = [{"status": "task_complete", "received_monotonic": 7.0, "request_id": private, "message": private}]
+            observe = mock.Mock(return_value={"TEST-fixed-observation": True})
+            screenshot = mock.Mock(return_value={"artifact": "case-completion/failure-before-cleanup.png"})
+            value = M.case_failure_observation(case, None, provider, sink, data, root / "ClaudeNotifier.app",
+                                                "task_complete", observe, screenshot)
+            self.assertNotIn(private, json.dumps(value))
+            self.assertEqual(value["witness"][1], {"type": "agent_settled", "mode": "tui", "idle": True,
+                                                   "aborted": False, "outcome": "completed"})
+            self.assertEqual(value["webhooks"], [{"status": "task_complete", "received_monotonic": 7.0}])
+            self.assertEqual(value["observation_cache"], {"status": "observed_attempt_bits_only", "entries": 1,
+                "desktop_attempt_entries": 1, "webhook_attempt_entries": 1})
+            self.assertEqual(value["provider_requests"], 1)
+            self.assertFalse(value["desktop_qualified"])
+            self.assertEqual([call.args[0] for call in observe.call_args_list], ["helper-processes", "foreground", "banner"])
+            self.assertTrue(all(0 < call.kwargs["timeout"] <= 2 for call in observe.call_args_list))
+            screenshot.assert_called_once()
+
+    def test_untrusted_files_and_expired_diagnostic_budget_never_expand_observation(self):
+        with tempfile.TemporaryDirectory(prefix="TEST-pi-failure-evidence-") as temporary:
+            root = Path(temporary).resolve()
+            case, data, provider, sink = self.state(root)
+            private = "TEST-private-diagnostic-error"
+            (case / "witness.jsonl").write_bytes(b" " * 65537)
+            foreign = root / "foreign.json"
+            foreign.write_text(json.dumps({"entries": []}))
+            (data / "observations.json").symlink_to(foreign)
+            clock = [0.0]
+            def screenshot(seconds):
+                self.assertLessEqual(seconds, 2)
+                clock[0] = 6
+                raise RuntimeError(private)
+            observe = mock.Mock()
+            value = M.case_failure_observation(case, None, provider, sink, data, root / "ClaudeNotifier.app",
+                                                "task_complete", observe, screenshot, now=lambda: clock[0])
+            self.assertEqual(value["witness"]["status"], "unavailable")
+            self.assertEqual(value["observation_cache"]["status"], "unavailable")
+            self.assertEqual(value["screenshot"]["error_class"], "RuntimeError")
+            self.assertEqual(value["elapsed_seconds"], 6)
+            self.assertNotIn(private, json.dumps(value))
+            observe.assert_not_called()
+            outside = root.parent / "TEST-outside-binding"
+            value = M.case_failure_observation(case, None, provider, sink, outside, root / "ClaudeNotifier.app",
+                                                "task_complete", mock.Mock(), mock.Mock(return_value={}))
+            self.assertEqual(value["observation_cache"]["status"], "unavailable")
+
+    def test_cleanup_attempts_all_owners_and_retains_the_primary_observation_error(self):
+        calls, report = [], {}
+        primary = RuntimeError("TEST actual banner observation failure")
+        def failed_close():
+            calls.append("origin")
+            raise PermissionError("TEST cleanup error")
+        actions = [("origin", failed_close), ("provider", lambda: calls.append("provider")),
+                   ("evidence", lambda: calls.append("evidence"))]
+        try:
+            try:
+                raise primary
+            finally:
+                M.cleanup_case(actions, primary, report, "completion")
+        except RuntimeError as error:
+            self.assertIs(error, primary)
+        self.assertEqual(calls, ["origin", "provider", "evidence"])
+        self.assertEqual(report["case_cleanup_failures"],
+                         [{"case": "completion", "role": "origin", "error_class": "PermissionError"}])
+        with self.assertRaisesRegex(RuntimeError, "owned_native_case_cleanup_failed"):
+            M.cleanup_case([("origin", failed_close)], None, {}, "completion")
+
+
 class PermissionUIIdentity(unittest.TestCase):
     def test_display_aliases_come_from_pinned_archive_and_identical_installed_metadata(self):
         archive = M.H.INPUTS / "ClaudeNotifier-smoke.app.zip"
