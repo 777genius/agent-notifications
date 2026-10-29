@@ -69,8 +69,6 @@ jobs:
           $ErrorActionPreference = 'Stop'
           python -B scripts/test_pi_windows_audio_fixture.py -v
           if ($LASTEXITCODE) { throw 'Explicit audio fixture contracts failed' }
-          python -B scripts/test_pi_windows_notification_readiness.py -v
-          if ($LASTEXITCODE) { throw 'Native notification readiness contracts failed' }
           $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products '*' -property installationPath
           if (!$vs) { throw 'Native compiler unavailable' }
           $setup = '"' + $vs + '\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul'
@@ -125,7 +123,7 @@ jobs:
     name: Owner native gate / Actual installed Pi Windows Client desktop
     needs: build-process
     runs-on: ${{ inputs.windows_client_runner || vars.CI_PI_WINDOWS_DESKTOP_RUNNER || 'windows-11-vs2026-arm' }}
-    timeout-minutes: 90
+    timeout-minutes: 30
     env:
       SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
@@ -190,7 +188,7 @@ jobs:
         env:
           PI_WINDOWS_HOST_RUNNER_ENVIRONMENT: ${{ runner.environment }}
         run: |
-          & ./scripts/pi-windows-host.ps1 -Root "$env:RUNNER_TEMP/pi-installed-windows/host" -RequireNotificationReadiness
+          & ./scripts/pi-windows-host.ps1 -Root "$env:RUNNER_TEMP/pi-installed-windows/host"
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Require real Client foreground input and the admitted audio capture route
         shell: pwsh

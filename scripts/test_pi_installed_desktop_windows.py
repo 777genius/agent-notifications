@@ -132,6 +132,17 @@ class LauncherDiagnosticsTests(unittest.TestCase):
 
 
 class CaseCleanupTests(unittest.TestCase):
+    def test_initial_shell_observation_does_not_launch_or_warm_winrt(self):
+        shell = Mock()
+        def observed(pointer):
+            pointer._obj.value = 6
+            return 0
+        shell.SHQueryUserNotificationState.side_effect = observed
+        with patch("ctypes.WinDLL", create=True, return_value=shell) as library, patch.object(W, "command") as child:
+            self.assertEqual(W.shell_notification_state(), {"hresult": 0, "state": 6})
+        library.assert_called_once_with("shell32", use_last_error=True)
+        child.assert_not_called()
+
     def test_native_no_banner_exit_retains_mode_status_and_observation(self):
         result = subprocess.CompletedProcess([], 3, b'{"found":false}', b'')
         with patch.object(W.subprocess, "run", return_value=result):
