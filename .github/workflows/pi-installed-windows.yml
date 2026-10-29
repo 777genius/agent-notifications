@@ -6,6 +6,7 @@ on:
       - '.github/workflows/pi-installed-windows.yml'
       - 'scripts/pi-*'
       - 'scripts/test_pi_*'
+      - 'scripts/pi-windows-host.ps1'
       - 'tests/integration/pi_*'
       - 'tests/integration/navigation_windows_token_queries.h'
       - 'cmd/claude-notifications/**'
@@ -21,9 +22,14 @@ on:
   workflow_dispatch:
     inputs:
       windows_client_runner:
-        description: Existing configured Windows Client runner; no drivers are installed
+        description: Existing configured Client runner, or the hosted ARM TEST image with explicit preparation
         type: string
         required: false
+
+      prepare_host:
+        description: Prepare one fresh owner-dispatched hosted ARM Client with the authenticated virtual audio fixture
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -57,6 +63,21 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
+      - name: Compile the Windows desktop and host observers without native effects
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python -B scripts/test_pi_windows_audio_fixture.py -v
+          if ($LASTEXITCODE) { throw 'Explicit audio fixture contracts failed' }
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products '*' -property installationPath
+          if (!$vs) { throw 'Native compiler unavailable' }
+          $setup = '"' + $vs + '\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul'
+          $out = "$env:RUNNER_TEMP/TEST-pi-observer-compile"
+          New-Item -ItemType Directory -Path $out -Force | Out-Null
+          cmd.exe /d /s /c ($setup + ' && cl /nologo /std:c++20 /EHsc /W4 /DUNICODE /D_UNICODE tests/integration/pi_installed_desktop_windows.cpp /Fe:"' + $out + '/observer.exe" /Fo:"' + $out + '/observer.obj" /link ole32.lib oleaut32.lib user32.lib uuid.lib winmm.lib wtsapi32.lib uiautomationcore.lib advapi32.lib bcrypt.lib gdi32.lib mfplat.lib mfreadwrite.lib mfuuid.lib propsys.lib cfgmgr32.lib')
+          if ($LASTEXITCODE) { throw 'Desktop observer compile failed' }
+          cmd.exe /d /s /c ($setup + ' && cl /nologo /std:c++20 /EHsc /W4 /DUNICODE /D_UNICODE tests/integration/pi_windows_host.cpp /Fe:"' + $out + '/host.exe" /Fo:"' + $out + '/host.obj" /link ole32.lib oleaut32.lib user32.lib uuid.lib propsys.lib advapi32.lib cfgmgr32.lib')
+          if ($LASTEXITCODE) { throw 'Host observer compile failed' }
       - name: Build exact shipped amd64 callback main utilities and focus companion
         shell: pwsh
         run: |
@@ -91,8 +112,12 @@ jobs:
             ${{ runner.temp }}/pi-installed-windows-process/*.json
           if-no-files-found: error
           retention-days: 14
+  # PR checks compile observers and qualify real Pi processes. The genuine
+  # desktop receipt comes from this explicit owner lane; the three-OS aggregate
+  # still rejects missing/skipped/unqualified Windows desktop evidence.
   client:
-    name: Actual installed Pi / Windows Client desktop
+    if: github.event_name == 'workflow_dispatch' && github.repository == '777genius/agent-notifications' && github.actor == '777genius' && github.triggering_actor == '777genius'
+    name: Owner native gate / Actual installed Pi Windows Client desktop
     needs: build-process
     runs-on: ${{ inputs.windows_client_runner || vars.CI_PI_WINDOWS_DESKTOP_RUNNER || 'windows-11-vs2026-arm' }}
     timeout-minutes: 30
@@ -127,7 +152,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $root = "$env:RUNNER_TEMP/pi-installed-windows"
           New-Item -ItemType Directory -Path $root -Force | Out-Null
-          $output = & cl.exe /nologo /std:c++20 /EHsc /W4 /DUNICODE /D_UNICODE tests/integration/pi_installed_desktop_windows.cpp "/Fe:$root/observer.exe" "/Fo:$root/observer.obj" /link ole32.lib oleaut32.lib user32.lib uuid.lib winmm.lib wtsapi32.lib uiautomationcore.lib advapi32.lib bcrypt.lib gdi32.lib mfplat.lib mfreadwrite.lib mfuuid.lib 2>&1
+          $output = & cl.exe /nologo /std:c++20 /EHsc /W4 /DUNICODE /D_UNICODE tests/integration/pi_installed_desktop_windows.cpp "/Fe:$root/observer.exe" "/Fo:$root/observer.obj" /link ole32.lib oleaut32.lib user32.lib uuid.lib winmm.lib wtsapi32.lib uiautomationcore.lib advapi32.lib bcrypt.lib gdi32.lib mfplat.lib mfreadwrite.lib mfuuid.lib propsys.lib cfgmgr32.lib 2>&1
           $code = $LASTEXITCODE
           $output | Tee-Object -FilePath "$root/compiler.log"
           if ($code) { throw 'Windows product observer compile failed' }
@@ -149,11 +174,28 @@ jobs:
           $tokens = $null; $errors = $null
           $null = [Management.Automation.Language.Parser]::ParseFile("$env:RUNNER_TEMP/pi-installed-windows/launcher.ps1", [ref]$tokens, [ref]$errors)
           if ($errors.Count) { $errors | Format-List; throw 'Actual Terminal child script parse failed' }
-      - name: Require real Client foreground input and render capture prerequisites
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        if: inputs.prepare_host
+        with:
+          node-version: '24.21.0'
+      - name: Prepare only the fresh owner-dispatched hosted Client fixture
+        if: inputs.prepare_host
+        id: host_preparation
         shell: pwsh
+        env:
+          PI_WINDOWS_HOST_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+        run: |
+          & ./scripts/pi-windows-host.ps1 -Root "$env:RUNNER_TEMP/pi-installed-windows/host"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Require real Client foreground input and the admitted audio capture route
+        shell: pwsh
+        env:
+          PI_WINDOWS_AUDIO_FIXTURE: ${{ steps.host_preparation.outputs.audio_fixture }}
         run: |
           $ErrorActionPreference = 'Stop'
-          python -B scripts/pi-native-preflight.py --execute-test-fixtures --platform windows --source-sha "$env:SOURCE_SHA" --report "$env:RUNNER_TEMP/pi-installed-windows/prerequisites.json"
+          $audioArgs = @()
+          if ($env:PI_WINDOWS_AUDIO_FIXTURE) { $audioArgs = @('--windows-audio-fixture', $env:PI_WINDOWS_AUDIO_FIXTURE) }
+          python -B scripts/pi-native-preflight.py --execute-test-fixtures --platform windows --source-sha "$env:SOURCE_SHA" --report "$env:RUNNER_TEMP/pi-installed-windows/prerequisites.json" @audioArgs
           exit $LASTEXITCODE
       - name: Collect the same-run shipped amd64 process candidate
         shell: pwsh
@@ -176,19 +218,29 @@ jobs:
           Copy-Item -LiteralPath "$inputRoot/pi-installed-windows-process/process.json" -Destination "$env:RUNNER_TEMP/pi-installed-windows/process.json"
       - name: Actual real Terminal Pi banners recorded cues physical clicks and negatives
         shell: pwsh
+        env:
+          PI_WINDOWS_AUDIO_FIXTURE: ${{ steps.host_preparation.outputs.audio_fixture }}
         run: |
           $ErrorActionPreference = 'Stop'
           $root = "$env:RUNNER_TEMP/pi-installed-windows"
           $candidate = "$env:RUNNER_TEMP/TEST-pi-windows-input/TEST-pi-windows-candidate"
           python -B scripts/acquire-pi-native.py --download --platform windows --arch amd64 --output "$env:RUNNER_TEMP/TEST-pi-client-host" --report "$root/acquisition.json"
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          python -B scripts/pi-installed-desktop-windows.py --candidate "$candidate/stage/claude-notifications-windows-amd64.exe" --runtime-stage "$candidate/stage" --package "$candidate/package-A.zip" --assets-root "$env:GITHUB_WORKSPACE" --pi-executable "$env:RUNNER_TEMP/TEST-pi-client-host/pi/pi.exe" --observer "$root/observer.exe" --report "$root/desktop.json"
+          $audioArgs = @()
+          if ($env:PI_WINDOWS_AUDIO_FIXTURE) { $audioArgs = @('--windows-audio-fixture', $env:PI_WINDOWS_AUDIO_FIXTURE) }
+          python -B scripts/pi-installed-desktop-windows.py --candidate "$candidate/stage/claude-notifications-windows-amd64.exe" --runtime-stage "$candidate/stage" --package "$candidate/package-A.zip" --assets-root "$env:GITHUB_WORKSPACE" --pi-executable "$env:RUNNER_TEMP/TEST-pi-client-host/pi/pi.exe" --observer "$root/observer.exe" --report "$root/desktop.json" @audioArgs
           exit $LASTEXITCODE
       - name: Retain real Client observations without promoting process-only success
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: pi-installed-windows-${{ github.event.pull_request.head.sha || github.sha }}
-          path: ${{ runner.temp }}/pi-installed-windows/**
+          path: |
+            ${{ runner.temp }}/pi-installed-windows/**
+            ${{ steps.host_preparation.outputs.evidence_root }}
+            !${{ runner.temp }}/pi-installed-windows/host/vendor/**
+            !${{ runner.temp }}/pi-installed-windows/host/vendor.zip
+            !${{ runner.temp }}/pi-installed-windows/host/*.exe
+            !${{ runner.temp }}/pi-installed-windows/host/*.obj
           if-no-files-found: error
           retention-days: 14

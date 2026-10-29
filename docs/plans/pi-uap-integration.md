@@ -366,7 +366,28 @@ Native desktop qualification is blocking and separate from process-only lanes:
 | --- | --- |
 | Linux | Private D-Bus, Xvfb/Openbox, dunst, two nonce-identified xterms; PulseAudio null sink/monitor and ALSA-to-Pulse output. A known cue validates capture, real dunst mouse click plus active window ID/Pi PID/TTY proves focus. |
 | macOS | Unlocked WindowServer/user session, signed-helper notification permission, selected observer's Accessibility/screen permissions; two Terminal windows/TTYs; ScreenCaptureKit system-audio capture, real notification click and foreground window observation. |
-| Windows | Connected interactive WTS/input desktop on Windows Client, Shell/Toast Center/UI Automation, default render endpoint and WASAPI loopback; two terminal HWND/PID pairs, real toast click and foreground HWND. Hosted Server 2025 alone cannot qualify this lane. |
+| Windows | Connected interactive WTS/input desktop on Windows Client, Shell/Toast Center/UI Automation, default render endpoint and WASAPI capture; two terminal HWND/PID pairs, real toast click and foreground HWND. A configured physical host uses render loopback. The explicit disposable hosted ARM fixture captures the authenticated virtual cable's paired recording endpoint. Hosted Server 2025 alone cannot qualify this lane. |
+
+Windows PR jobs compile the native observers and run actual installed Pi process
+compatibility. Desktop qualification is an explicit owner-dispatched gate:
+run `pi-installed-windows.yml` on the candidate branch with `prepare_host=true`
+for the fresh hosted ARM Client, or leave preparation off for an already
+configured physical Client selected by `windows_client_runner`. The standalone
+`pi-native-preflight.yml` exposes the same manual preparation and proves only
+prerequisites. Process-only and desktop artifacts have distinct names; the
+mandatory three-OS aggregate still rejects an absent or skipped Windows desktop
+receipt for the exact candidate SHA.
+
+The hosted fixture uses the measured finite OOBE flow, one identity-bound Search
+overlay dismissal and one hash-pinned, normally kernel-signature-verified driver
+installation. Its explicit audio receipt binds the running PnP driver instance,
+installed driver bytes, both opaque endpoint IDs and both adapter topology IDs.
+Every admission revalidates the driver and opens those exact endpoints; an
+invalid explicit receipt fails without selecting another recording device.
+Omitting the receipt preserves physical-host render loopback. The unchanged
+WinMM `PlaySoundW` known cue must be captured before product execution, and the
+same route must capture every canonical cue and sound-off/desktop-off negative.
+This fixture changes observation only; production playback remains unchanged.
 
 Preflight proves observers with known fixtures before product effects. Production
 tests use both completion and a still-pending TUI question: move focus away,

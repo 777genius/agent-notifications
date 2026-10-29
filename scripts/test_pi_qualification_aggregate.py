@@ -71,6 +71,11 @@ def metadata(platform="linux"):
         build["embedded_callback_verified"] = True
         build["stage_inventory"]["claude-notifications-windows-amd64-focus.exe"] = {"sha256": HASH, "bytes": 1}
         desktop.update(windows_client=True, render_route_observed=True, host_architecture="AMD64")
+        route = {"kind": "render_loopback", "render_endpoint_id": "opaque-render"}
+        desktop.update(audio_capture_route=route, prerequisites={"status": "prerequisites_ready"},
+                       prerequisite_measurements={"audio_route": route, "known_cue_method": "PlaySoundW", "audio_samples": 96000, "audio_peak": 0.25})
+        for row in desktop["cases"]:
+            row["audio"] = {"audio_route": dict(route)}
     return build, acquisition, process, desktop
 
 
@@ -83,6 +88,40 @@ class AggregateGuards(unittest.TestCase):
     def test_validated_metadata_contract_on_each_os(self):
         for platform in A.HOSTS:
             self.assertEqual(A.qualify(platform, SOURCE, *metadata(platform))["status"], "qualified")
+
+    def test_windows_selected_route_and_original_cue_remain_mandatory(self):
+        for change in (lambda desktop: desktop.pop("audio_capture_route"),
+                       lambda desktop: desktop["prerequisite_measurements"].update(audio_peak=0),
+                       lambda desktop: desktop["prerequisite_measurements"].update(known_cue_method="synthetic_assertion"),
+                       lambda desktop: desktop["cases"][0]["audio"].update(audio_route={"kind": "default_microphone"})):
+            values = metadata("windows"); change(values[3])
+            with self.assertRaises(ValueError):
+                A.qualify("windows", SOURCE, *values)
+
+    def test_windows_explicit_pair_requires_verified_same_source_driver_and_route(self):
+        def paired():
+            values = metadata("windows")
+            route = {"kind": "signed_virtual_cable_capture", "driver_instance": "ROOT\\MEDIA\\0000",
+                     "render_endpoint_id": "opaque-render", "capture_endpoint_id": "opaque-capture",
+                     "render_topology_id": "opaque-render-adapter", "capture_topology_id": "opaque-capture-adapter"}
+            desktop = values[3]
+            desktop.update(audio_capture_route=dict(route), audio_fixture_verified=True,
+                           audio_fixture={"schema_version": 1, "source_sha": SOURCE, "route": dict(route),
+                                          "driver": {"instance_id": route["driver_instance"], "image_path": "C:\\TEST\\driver.sys",
+                                                     "image_sha256": A.W.DRIVER_SHA256, "inf_path": "C:\\TEST\\driver.inf",
+                                                     "catalog_path": "C:\\TEST\\driver.cat"}})
+            desktop["prerequisite_measurements"]["audio_route"] = dict(route)
+            for row in desktop["cases"]:
+                row["audio"]["audio_route"] = dict(route)
+            return values
+        self.assertEqual(A.qualify("windows", SOURCE, *paired())["status"], "qualified")
+        for change in (lambda desktop: desktop.pop("audio_fixture_verified"),
+                       lambda desktop: desktop["audio_fixture"].update(source_sha="f" * 40),
+                       lambda desktop: desktop["audio_fixture"]["driver"].update(image_sha256="f" * 64),
+                       lambda desktop: desktop["audio_fixture"]["route"].update(capture_topology_id="different-opaque-topology")):
+            values = paired(); change(values[3])
+            with self.assertRaises(ValueError):
+                A.qualify("windows", SOURCE, *values)
 
     def test_status_alone_partial_cases_and_old_source_never_pass(self):
         for mutate in (lambda values: values[3].update(cases=[]),

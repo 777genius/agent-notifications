@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Real common-install Pi in Windows Terminal -> native toast/audio/click.
 
-Requires an existing configured Client render route and real Windows Terminal.
-No driver, terminal emulator, notification sender or product frame is supplied.
+Requires a configured Client render route or an explicitly verified virtual
+capture fixture, plus real Windows Terminal. No notification sender or product
+frame is supplied.
 The only substitutes are the private loopback model and webhook destination.
 """
 import argparse
@@ -60,6 +61,7 @@ D = module("pi_installed_process", REPO / "scripts/pi-installed-process-e2e.py")
 N = module("pi_preflight", REPO / "scripts/pi-native-preflight.py")
 # Pure PCM envelope comparison; no macOS APIs run when importing this module.
 M = module("pi_audio_oracle", REPO / "scripts/pi-installed-desktop-macos.py")
+A = module("pi_windows_audio_fixture", REPO / "scripts/pi-windows-audio-fixture.py")
 
 
 def wait_for(predicate, code, seconds=15):
@@ -95,10 +97,15 @@ def command(argv, *, timeout=25, allowed=(0,), env=None):
 
 
 class Native:
-    def __init__(self, executable):
-        self.executable = executable
+    def __init__(self, executable, fixture=None):
+        self.executable, self.fixture = executable, fixture
+
+    def route_arguments(self):
+        return self.fixture.arguments() if self.fixture else []
 
     def __call__(self, *args, allowed=(0,)):
+        if args and args[0] == "preflight":
+            args = (*args, *self.route_arguments())
         result = command([self.executable, *args], allowed=allowed)
         return json.loads(result.stdout.decode())
 
@@ -178,12 +185,20 @@ def run(args):
     report["execution_mode"] = "x64_emulation" if platform.machine().lower() in ("arm64", "aarch64") else "native_amd64"
     native, sink, initial_provider, terminals, helpers = Native(args.observer), None, None, [], []
     try:
+        fixture = A.Fixture(args.windows_audio_fixture) if args.windows_audio_fixture else None
+        native.fixture = fixture
         cue = root / "known-prerequisite-cue.wav"
         N.cue(cue)
         prerequisite = native("preflight", cue)
         report["prerequisites"] = N.classify("windows", "windows", prerequisite["checks"])
         report["prerequisite_measurements"] = prerequisite["measurements"]
+        report["audio_capture_route"] = prerequisite["measurements"].get("audio_route")
+        if fixture:
+            report["audio_fixture"] = fixture.value
+            P.require(report["audio_capture_route"] == fixture.value["route"], "native_prerequisite_route_changed")
         P.require(report["prerequisites"]["status"] == "prerequisites_ready", "windows_client_native_prerequisites_unavailable")
+        if fixture:
+            report["audio_fixture_verified"] = True
         report.update(windows_client=True, render_route_observed=True)
         wt, powershell = shutil.which("wt.exe"), shutil.which("pwsh.exe")
         P.require(wt and powershell, "existing_windows_terminal_and_powershell_required")
@@ -240,11 +255,12 @@ def run(args):
                 distractor = Terminal(wt, powershell, case_root / "distractor", distractor_title, None, [], case_env, distraction, native)
                 terminals.append(distractor)
                 pcm = case_root / "native-output.s16le"
-                capture = subprocess.Popen([str(args.observer), "capture", str(pcm), str(stop_capture)], stdout=subprocess.PIPE,
+                capture = subprocess.Popen([str(args.observer), "capture", str(pcm), str(stop_capture), *native.route_arguments()], stdout=subprocess.PIPE,
                                            stderr=subprocess.PIPE, creationflags=subprocess.CREATE_NO_WINDOW)
                 helpers.append(capture)
                 ready = json.loads(capture.stdout.readline())
-                P.require(ready.get("ready") is True, "actual_loopback_capture_not_ready")
+                P.require(ready.get("ready") is True, "actual_audio_capture_not_ready")
+                P.require(ready.get("audio_route") == report["audio_capture_route"], "native_capture_readiness_route_changed")
                 if name == "question":
                     native.focus(origin.window); native.type(origin.window, "/TEST-dialog")
                 else:
@@ -285,8 +301,9 @@ def run(args):
                     time.sleep(0.5)
                     stop_capture.write_text("stop\n")
                 rest, errors = capture.communicate(timeout=5)
-                P.require(capture.returncode == 0 and not errors, "native_loopback_capture_failed")
+                P.require(capture.returncode == 0 and not errors, "native_audio_capture_failed")
                 audio = json.loads(rest)
+                P.require(audio.get("audio_route") == report["audio_capture_route"], "native_capture_terminal_route_changed")
                 P.require(audio.get("complete") is True and audio["elapsed_ms"] >= 500, "native_audio_window_incomplete")
                 expected_sound = sound and desktop
                 correlation = None
@@ -367,6 +384,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("candidate", "runtime-stage", "package", "assets-root", "pi-executable", "observer", "report"):
         parser.add_argument("--" + name, type=Path, required=True)
+    parser.add_argument("--windows-audio-fixture", type=Path)
     args = parser.parse_args()
     for name in ("candidate", "runtime_stage", "package", "assets_root", "pi_executable", "observer"):
         setattr(args, name, getattr(args, name).resolve(strict=True))

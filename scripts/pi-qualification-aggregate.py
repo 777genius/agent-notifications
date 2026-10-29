@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import math
 from pathlib import Path
 import re
 import subprocess
@@ -12,6 +13,9 @@ REPO = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location("pi_candidate_build", Path(__file__).with_name("pi-candidate-build.py"))
 B = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(B)
+WINDOWS_SPEC = importlib.util.spec_from_file_location("pi_windows_audio_fixture", Path(__file__).with_name("pi-windows-audio-fixture.py"))
+W = importlib.util.module_from_spec(WINDOWS_SPEC)
+WINDOWS_SPEC.loader.exec_module(W)
 PINS = json.loads((REPO / "scripts/testdata/pi-native/pins.json").read_text())
 HOSTS = {"linux": "Linux", "darwin": "Darwin", "windows": "Windows"}
 CASES = {"completion", "question", "sound-off", "click-off", "desktop-off", "stale-origin"}
@@ -135,6 +139,23 @@ def qualify(platform, source, build, acquisition, process, desktop):
                 and regular_artifact(inventory.get("claude-notifications-windows-amd64-focus.exe", {}))
                 and desktop.get("windows_client") is True and desktop.get("render_route_observed") is True,
                 "windows_client_audio_callback_or_focus_unobserved")
+        route = desktop.get("audio_capture_route", {})
+        require(isinstance(route, dict) and route.get("kind") in {"render_loopback", "signed_virtual_cable_capture"}
+                and isinstance(route.get("render_endpoint_id"), str) and route["render_endpoint_id"],
+                "windows_actual_audio_route_missing")
+        prerequisite = desktop.get("prerequisite_measurements", {})
+        peak = prerequisite.get("audio_peak")
+        require(desktop.get("prerequisites", {}).get("status") == "prerequisites_ready"
+                and prerequisite.get("audio_route") == route and prerequisite.get("known_cue_method") == "PlaySoundW"
+                and type(prerequisite.get("audio_samples")) is int and prerequisite["audio_samples"] >= 4800
+                and type(peak) in (int, float) and math.isfinite(peak) and peak > 0.01,
+                "windows_original_winmm_cue_not_observed_on_selected_route")
+        require(all(row.get("audio", {}).get("audio_route") == route for row in native), "windows_audio_route_changed_between_cases")
+        if route["kind"] == "signed_virtual_cable_capture":
+            fixture = desktop.get("audio_fixture")
+            W.validate(fixture, source)
+            require(desktop.get("audio_fixture_verified") is True and fixture["route"] == route,
+                    "windows_signed_virtual_route_not_verified")
         if desktop.get("host_architecture") in ("ARM64", "arm64", "aarch64") and arch == "amd64":
             require(desktop.get("execution_mode") == "x64_emulation", "windows_emulation_not_disclosed")
     return {"status": "qualified", "candidate_binary_sha256": main_hash, "package_sha256": package_hash,

@@ -176,20 +176,21 @@ static int toast(const std::wstring& expected, const std::wstring& body, const f
     }
     std::cout << "{\"found\":false}\n"; return 3;
 }
-static int capture(const fs::path& path, const fs::path& stop) {
+static int capture(const fs::path& path, const fs::path& stop, int routeCount, wchar_t** routeArgs) {
     ComPtr<IMMDeviceEnumerator> enumerator; ComPtr<IMMDevice> endpoint; ComPtr<IAudioClient> client; ComPtr<IAudioCaptureClient> reader;
     hrcheck(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, IID_PPV_ARGS(&enumerator)));
-    hrcheck(enumerator->GetDefaultAudioEndpoint(eRender, eConsole, &endpoint));
+    const auto route = PiWindowsAudioFixture::select(enumerator.Get(), routeCount, routeArgs);
+    endpoint = route.capture;
     hrcheck(endpoint->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, &client));
     WAVEFORMATEX* format = nullptr; hrcheck(client->GetMixFormat(&format));
     bool floating = format->wFormatTag == WAVE_FORMAT_IEEE_FLOAT;
     if (format->wFormatTag == WAVE_FORMAT_EXTENSIBLE && format->cbSize >= 22)
         floating = IsEqualGUID(reinterpret_cast<WAVEFORMATEXTENSIBLE*>(format)->SubFormat, KSDATAFORMAT_SUBTYPE_IEEE_FLOAT);
     need((floating && format->wBitsPerSample == 32) || (!floating && format->wBitsPerSample == 16), "unsupported_native_loopback_format");
-    hrcheck(client->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK, 10000000, 0, format, nullptr));
+    hrcheck(client->Initialize(AUDCLNT_SHAREMODE_SHARED, route.flags, 10000000, 0, format, nullptr));
     hrcheck(client->GetService(IID_PPV_ARGS(&reader))); hrcheck(client->Start());
     std::ofstream file(path, std::ios::binary); need(file.good() && !fs::exists(stop), "native_capture_path_invalid");
-    std::cout << "{\"ready\":true,\"sample_rate\":" << format->nSamplesPerSec << "}\n" << std::flush;
+    std::cout << "{\"ready\":true,\"sample_rate\":" << format->nSamplesPerSec << ",\"audio_route\":" << route.json << "}\n" << std::flush;
     const auto started = GetTickCount64(); uint64_t samples = 0, nonzero = 0; double peak = 0;
     while (!fs::exists(stop) && GetTickCount64() - started < 30000) {
         UINT32 packets = 0; hrcheck(reader->GetNextPacketSize(&packets));
@@ -219,7 +220,7 @@ static int capture(const fs::path& path, const fs::path& stop) {
     need(state == DEVICE_STATE_ACTIVE && file.good() && fs::exists(stop), "native_audio_capture_incomplete");
     std::cout << "{\"complete\":true,\"sample_rate\":" << rate << ",\"samples\":" << samples
               << ",\"peak\":" << peak << ",\"nonzero_samples\":" << nonzero
-              << ",\"elapsed_ms\":" << GetTickCount64() - started << "}\n"; return 0;
+              << ",\"elapsed_ms\":" << GetTickCount64() - started << ",\"audio_route\":" << route.json << "}\n"; return 0;
 }
 static int decode(const fs::path& source, const fs::path& output) {
     // Decode the actual configured asset for comparison only; never render it.
@@ -262,9 +263,9 @@ static int decode(const fs::path& source, const fs::path& output) {
 int wmain(int argc, wchar_t** argv) {
     try {
         need(argc >= 2, "native_observer_command_required"); const std::wstring mode = argv[1];
-        if (mode == L"preflight" && argc == 3) return piPrerequisiteEntry(2, argv + 1);
+        if (mode == L"preflight" && (argc == 3 || argc == 9)) return piPrerequisiteEntry(argc - 1, argv + 1);
         hrcheck(CoInitializeEx(nullptr, COINIT_MULTITHREADED));
-        if (mode == L"capture" && argc == 4) return capture(argv[2], argv[3]);
+        if (mode == L"capture" && (argc == 4 || argc == 10)) return capture(argv[2], argv[3], argc - 4, argv + 4);
         if (mode == L"decode" && argc == 4) return decode(argv[2], argv[3]);
         if (mode == L"neutral" && argc == 4) {
             const std::wstring name = argv[2]; need(testTitle(name) && !fs::exists(argv[3]), "owned_neutral_window_required");
