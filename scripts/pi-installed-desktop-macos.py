@@ -769,6 +769,59 @@ def envelope_match(recording, reference):
     return round(best, 6)
 
 
+def original_native_reader_observation(case_root):
+    """Project only the temporary opt-in original Go reader's closed result."""
+    path = case_root / "tmp/native-context-reader.json"
+    if not path.exists():
+        return {"status": "missing_unknown", "diagnostic_only": True, "qualification_input": False}
+    metadata = path.lstat()
+    P.require(stat.S_ISREG(metadata.st_mode) and metadata.st_uid == os.getuid()
+              and stat.S_IMODE(metadata.st_mode) == 0o600 and metadata.st_nlink == 1 and 0 < metadata.st_size <= 1024,
+              "native_reader_private_diagnostic_required")
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    try:
+        before = os.fstat(fd)
+        P.require(before.st_dev == metadata.st_dev and before.st_ino == metadata.st_ino,
+                  "native_reader_diagnostic_changed")
+        raw = os.read(fd, 1025)
+        after = os.fstat(fd)
+        P.require(len(raw) == before.st_size <= 1024 and after.st_size == before.st_size and after.st_nlink == 1
+                  and after.st_mode == before.st_mode and after.st_uid == before.st_uid,
+                  "native_reader_diagnostic_changed")
+    finally:
+        os.close(fd)
+    value = json.loads(raw)
+    required = {"schema_version", "diagnostic_only", "qualification_input", "stage", "launch_completed",
+                "launch_error_class", "final_error_class", "final_error_chain_deadline_exceeded", "final_error_chain_cancelled"}
+    optional = {"launch_exit_code", "launch_process_signaled", "launch_process_signal", "receipt_status", "receipt_reason"}
+    P.require(isinstance(value, dict) and required <= set(value) <= required | optional
+              and type(value["schema_version"]) is int and value["schema_version"] == 1
+              and value["diagnostic_only"] is True and value["qualification_input"] is False,
+              "native_reader_diagnostic_schema")
+    classes = {"none", "process_exit", "deadline_exceeded", "cancelled", "error"}
+    P.require(value["stage"] in ("admission", "capability_probe", "owner_identity", "continuous_clock", "request_preparation",
+                                "launchservices", "receipt_wait", "receipt_decode", "native_receipt")
+              and type(value["launch_completed"]) is bool and value["launch_error_class"] in classes | {"not_attempted"}
+              and value["final_error_class"] in classes
+              and type(value["final_error_chain_deadline_exceeded"]) is bool
+              and type(value["final_error_chain_cancelled"]) is bool, "native_reader_diagnostic_values")
+    if "launch_exit_code" in value:
+        P.require(value["launch_error_class"] == "process_exit" and type(value["launch_exit_code"]) is int
+                  and -1 <= value["launch_exit_code"] <= 255, "native_reader_diagnostic_exit_code")
+    if "launch_process_signaled" in value or "launch_process_signal" in value:
+        P.require(value["launch_error_class"] == "process_exit" and type(value.get("launch_process_signaled")) is bool
+                  and ((value["launch_process_signaled"] is False and "launch_process_signal" not in value)
+                       or (value["launch_process_signaled"] is True and type(value.get("launch_process_signal")) is int
+                           and 1 <= value["launch_process_signal"] <= 127)), "native_reader_diagnostic_signal")
+    if "receipt_status" in value or "receipt_reason" in value:
+        P.require(value["stage"] == "native_receipt"
+                  and value.get("receipt_status") in ("submitted", "rejected", "unknown")
+                  and value.get("receipt_reason") in ("malformed_request", "unsupported_version", "unsupported_action", "invalid_file",
+                      "expired", "activation_required", "permission_denied", "unsupported_notifier", "os_rejected", "os_accepted", "timeout"),
+                  "native_reader_diagnostic_receipt")
+    return {key: value[key] for key in required | optional if key in value}
+
+
 def case_failure_observation(case_root, terminal, provider, sink, data_root, helper_app, expected, observe, screenshot,
                              *, now=time.monotonic):
     """Failure-only fixed metadata, before owned UI/process cleanup begins."""
@@ -844,6 +897,7 @@ def case_failure_observation(case_root, terminal, provider, sink, data_root, hel
     attempt("witness", witness)
     attempt("webhooks", webhooks)
     attempt("observation_cache", cache)
+    attempt("original_native_reader", lambda: original_native_reader_observation(case_root))
     result["webhook_failure_count"] = len(sink.failures)
     if terminal is not None:
         result["origin"] = {"window": terminal.window, "tty": terminal.tty, "pid": terminal.pid,
@@ -1144,6 +1198,7 @@ def run(args):
 
     def case(name, decoy):
         case_root = root / ("case-" + name)
+        case_root.mkdir(mode=0o700)
         provider = F.Provider("success", hold_reply=name != "question")
         terminal, recorder, native_context = None, None, None
         primary_failure = None
@@ -1154,7 +1209,7 @@ def run(args):
         try:
             native_env = F.prepare(case_root, provider, "success", agent_dir=profile)
             native_env.update(AGENT_NOTIFICATIONS_CONFIG=str(root / "global/config.json"), TEST_PI_DEFER_DIALOG="1",
-                              CLAUDE_PLUGIN_ROOT=str(root / "foreign-TEST-root"))
+                              CLAUDE_PLUGIN_ROOT=str(root / "foreign-TEST-root"), AGENT_NOTIFICATIONS_TEST_NATIVE_READER="1")
             P.configure(root / "global/config.json", args.assets_root / "config/config.json", sink,
                         desktop=desktop, sound=sound, click=click)
             P.require(not observer("banner", P.COPY[expected])["matches"], "candidate_banner_baseline_not_empty")
@@ -1304,6 +1359,12 @@ def run(args):
                     source = case_root / filename
                     if source.is_file() and not source.is_symlink() and source.stat().st_size <= 16 * 1024 * 1024:
                         shutil.copyfile(source, retained / filename)
+                observed = {"case": name, "phase": "after_case_cleanup", "diagnostic_only": True, "qualification_input": False}
+                try:
+                    observed["reader"] = original_native_reader_observation(case_root)
+                except Exception as error:
+                    observed.update(status="unavailable", error_class=type(error).__name__)
+                report.setdefault("original_native_reader_observations", []).append(observed)
 
             actions = []
             if native_context is not None:

@@ -626,6 +626,58 @@ class NativeContextEvidence(unittest.TestCase):
             self.assertTrue(value["owned_thread_collected"])
 
 
+class OriginalNativeReaderEvidence(unittest.TestCase):
+    def test_missing_is_unknown_and_actual_closed_result_is_projected(self):
+        with tempfile.TemporaryDirectory(prefix="TEST-pi-installed-macos-") as temporary:
+            case = Path(temporary) / "case-completion"
+            (case / "tmp").mkdir(parents=True, mode=0o700)
+            self.assertEqual(M.original_native_reader_observation(case)["status"], "missing_unknown")
+            path = case / "tmp/native-context-reader.json"
+            value = {"schema_version": 1, "diagnostic_only": True, "qualification_input": False,
+                     "stage": "native_receipt", "launch_completed": True, "launch_error_class": "none",
+                     "receipt_status": "rejected", "receipt_reason": "os_rejected", "final_error_class": "error",
+                     "final_error_chain_deadline_exceeded": False, "final_error_chain_cancelled": False}
+            path.write_text(json.dumps(value))
+            path.chmod(0o600)
+            original = path.read_bytes()
+            self.assertEqual(M.original_native_reader_observation(case), value)
+            self.assertEqual(path.read_bytes(), original)
+            self.assertFalse(value["qualification_input"])
+            del value["receipt_status"]
+            del value["receipt_reason"]
+            value.update(stage="receipt_wait", launch_error_class="process_exit", final_error_class="process_exit",
+                         launch_exit_code=-1, launch_process_signaled=True, launch_process_signal=15,
+                         final_error_chain_deadline_exceeded=True, final_error_chain_cancelled=True)
+            path.write_text(json.dumps(value))
+            self.assertEqual(M.original_native_reader_observation(case), value)
+
+    def test_raw_private_fields_symlinks_unknown_values_and_oversize_never_enter_evidence(self):
+        for scenario in ("private_field", "unknown_stage", "symlink", "oversized"):
+            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory(prefix="TEST-pi-installed-macos-") as temporary:
+                case = Path(temporary) / "case-completion"
+                (case / "tmp").mkdir(parents=True, mode=0o700)
+                path = case / "tmp/native-context-reader.json"
+                value = {"schema_version": 1, "diagnostic_only": True, "qualification_input": False,
+                         "stage": "receipt_wait", "launch_completed": True, "launch_error_class": "process_exit",
+                         "launch_exit_code": 7, "final_error_class": "process_exit",
+                         "final_error_chain_deadline_exceeded": False, "final_error_chain_cancelled": False}
+                if scenario == "private_field":
+                    value["raw_error"] = "TEST-private-token"
+                if scenario == "unknown_stage":
+                    value["stage"] = "TEST-private-token"
+                if scenario == "symlink":
+                    foreign = Path(temporary) / "foreign"
+                    foreign.write_text(json.dumps(value))
+                    foreign.chmod(0o600)
+                    path.symlink_to(foreign)
+                else:
+                    path.write_text(" " * 1025 if scenario == "oversized" else json.dumps(value))
+                    path.chmod(0o600)
+                with self.assertRaises(RuntimeError) as caught:
+                    M.original_native_reader_observation(case)
+                self.assertNotIn("TEST-private-token", str(caught.exception))
+
+
 class PermissionUIIdentity(unittest.TestCase):
     def test_display_aliases_come_from_pinned_archive_and_identical_installed_metadata(self):
         archive = M.H.INPUTS / "ClaudeNotifier-smoke.app.zip"

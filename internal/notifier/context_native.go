@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"time"
 
@@ -51,6 +52,43 @@ type contextNativeOperations struct {
 	launch func(context.Context, string, string) error
 }
 
+// Temporary, explicitly opted-in native work-ref evidence. It never feeds
+// delivery admission or exposes the native envelope to Pi.
+type contextNativeDiagnostic struct {
+	SchemaVersion      int    `json:"schema_version"`
+	DiagnosticOnly     bool   `json:"diagnostic_only"`
+	QualificationInput bool   `json:"qualification_input"`
+	Stage              string `json:"stage"`
+	LaunchCompleted    bool   `json:"launch_completed"`
+	LaunchErrorClass   string `json:"launch_error_class"`
+	LaunchExitCode     *int   `json:"launch_exit_code,omitempty"`
+	LaunchSignaled     *bool  `json:"launch_process_signaled,omitempty"`
+	LaunchSignal       *int   `json:"launch_process_signal,omitempty"`
+	ReceiptStatus      string `json:"receipt_status,omitempty"`
+	ReceiptReason      string `json:"receipt_reason,omitempty"`
+	FinalErrorClass    string `json:"final_error_class"`
+	DeadlineInError    bool   `json:"final_error_chain_deadline_exceeded"`
+	CancelledInError   bool   `json:"final_error_chain_cancelled"`
+}
+
+func contextNativeDiagnosticError(err error) (string, *int) {
+	if err == nil {
+		return "none", nil
+	}
+	var exited *exec.ExitError
+	if errors.As(err, &exited) {
+		code := exited.ExitCode()
+		return "process_exit", &code
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "deadline_exceeded", nil
+	}
+	if errors.Is(err, context.Canceled) {
+		return "cancelled", nil
+	}
+	return "error", nil
+}
+
 func decodeContextNative(data []byte, value any) error {
 	d := json.NewDecoder(bytes.NewReader(data))
 	d.DisallowUnknownFields()
@@ -63,7 +101,19 @@ func decodeContextNative(data []byte, value any) error {
 	return nil
 }
 
-func runContextNativeApp(ctx context.Context, clock BootClock, executable string, args []string, operations contextNativeOperations) error {
+func runContextNativeApp(ctx context.Context, clock BootClock, executable string, args []string, operations contextNativeOperations) (returned error) {
+	diagnostic := contextNativeDiagnostic{SchemaVersion: 1, DiagnosticOnly: true, Stage: "admission", LaunchErrorClass: "not_attempted"}
+	emit := contextNativeDiagnosticSink()
+	// Register first: this runs after every original lease/process/temp cleanup.
+	defer func() {
+		if emit != nil {
+			defer func() { _ = recover() }() // Evidence can never replace the result.
+			diagnostic.FinalErrorClass, _ = contextNativeDiagnosticError(returned)
+			diagnostic.DeadlineInError = errors.Is(returned, context.DeadlineExceeded)
+			diagnostic.CancelledInError = errors.Is(returned, context.Canceled)
+			emit(diagnostic)
+		}
+	}()
 	if ctx == nil || clock == nil || operations.owner == nil || operations.stop == nil || operations.probe == nil || operations.launch == nil {
 		return errors.New("invalid_context_native_operation")
 	}
@@ -73,6 +123,7 @@ func runContextNativeApp(ctx context.Context, clock BootClock, executable string
 		return errors.New("invalid_context_native_deadline")
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, time.Second)
+	diagnostic.Stage = "capability_probe"
 	data, err := operations.probe(probeCtx)
 	cancel()
 	var capabilities struct {
@@ -82,15 +133,18 @@ func runContextNativeApp(ctx context.Context, clock BootClock, executable string
 	if err != nil || decodeContextNative(data, &capabilities) != nil || capabilities.SchemaVersion != 1 || len(capabilities.Versions) != 1 || capabilities.Versions[0] != 1 {
 		return errors.New("context_native_helper_required")
 	}
+	diagnostic.Stage = "owner_identity"
 	owner, err := operations.owner()
 	if err != nil || !owner.valid() {
 		return errors.New("context_native_owner_unavailable")
 	}
+	diagnostic.Stage = "continuous_clock"
 	boot, now, err := clock.Now()
 	remaining = time.Until(end)
 	if err != nil || boot == "" || now < 0 || remaining <= 0 || ctx.Err() != nil {
 		return errors.New("context_native_clock_unavailable")
 	}
+	diagnostic.Stage = "request_preparation"
 	id, err := uuidString()
 	if err != nil {
 		return err
@@ -154,7 +208,12 @@ func runContextNativeApp(ctx context.Context, clock BootClock, executable string
 	}
 	// The launcher is joined once; the app has a separate, exact process owner.
 	// Neither path retries an uncertain native handoff.
+	diagnostic.Stage = "launchservices"
 	launchErr := operations.launch(ctx, request, receipt)
+	diagnostic.LaunchCompleted = true
+	diagnostic.LaunchErrorClass, diagnostic.LaunchExitCode = contextNativeDiagnosticError(launchErr)
+	diagnostic.LaunchSignaled, diagnostic.LaunchSignal = contextNativeDiagnosticSignal(launchErr)
+	diagnostic.Stage = "receipt_wait"
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 	for {
@@ -163,10 +222,13 @@ func runContextNativeApp(ctx context.Context, clock BootClock, executable string
 		// waiting for open -W would instead kill that user action at this budget.
 		data, err = readPrivate(receipt, nativeprotocol.MaxEnvelopeBytes)
 		if err == nil {
+			diagnostic.Stage = "receipt_decode"
 			result, decodeErr := nativeprotocol.DecodeReceipt(data, id, nonce)
 			if decodeErr != nil {
 				return errors.Join(decodeErr, stop())
 			}
+			diagnostic.Stage = "native_receipt"
+			diagnostic.ReceiptStatus, diagnostic.ReceiptReason = result.Status, result.Reason
 			if result.Status == "submitted" {
 				return nil
 			}
