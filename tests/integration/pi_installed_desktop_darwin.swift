@@ -37,7 +37,8 @@ func terminalProcessIdentity(_ pid: pid_t, expectedStart: String? = nil) throws 
         throw ProbeError.unavailable("terminal_process_identity_unverified")
     }
     if let expectedStart, start != expectedStart { return ["status": "replaced", "pid": Int(pid)] }
-    var path = [CChar](repeating: 0, count: Int(PROC_PIDPATHINFO_MAXSIZE))
+    // Darwin's 4*MAXPATHLEN C macro is not imported into Swift by this SDK.
+    var path = [CChar](repeating: 0, count: 4096)
     let count = path.withUnsafeMutableBytes { proc_pidpath(pid, $0.baseAddress, UInt32($0.count)) }
     var info = proc_bsdinfo()
     let size = Int32(MemoryLayout<proc_bsdinfo>.size)
