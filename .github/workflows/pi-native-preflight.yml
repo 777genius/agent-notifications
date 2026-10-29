@@ -9,7 +9,6 @@ jobs:
     timeout-minutes: 15
     env:
       SOURCE_SHA: ${{ github.sha }}
-      PI_WINDOWS_HOST_RUNNER_ENVIRONMENT: ${{ runner.environment }}
     steps:
       - name: Preserve canonical bytes
         shell: pwsh
@@ -37,6 +36,8 @@ jobs:
       - name: Run reviewed finite fresh-host and exact endpoint preparation
         id: host
         shell: pwsh
+        env:
+          PI_WINDOWS_HOST_RUNNER_ENVIRONMENT: ${{ runner.environment }}
         run: |
           New-Item -ItemType Directory -Path "$env:RUNNER_TEMP/pi-paired-admission" | Out-Null
           & ./scripts/pi-windows-host.ps1 -Root "$env:RUNNER_TEMP/pi-paired-admission/host"
