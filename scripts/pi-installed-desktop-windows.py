@@ -141,8 +141,9 @@ class Native:
 
 
 class Terminal:
-    def __init__(self, wt, powershell, root, title, executable, argv, env, cwd, native):
+    def __init__(self, wt, powershell, root, title, executable, argv, env, cwd, native, *, owned):
         self.root, self.native, self.pi_pid, self.closed = root, native, None, False
+        self.window = {"title": title}
         root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.exit_path = root / "process.exit"
         spec = root / "launch.json"
@@ -158,6 +159,9 @@ class Terminal:
         launch_env = {key: value for key, value in os.environ.items() if key.upper() in {
             "PATH", "SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT", "USERPROFILE", "APPDATA", "LOCALAPPDATA",
             "PROGRAMDATA", "PROGRAMFILES", "PROGRAMFILES(X86)", "TMP", "TEMP"}}
+        # Window discovery can fail after wt has launched. Keep the partially
+        # initialized owner reachable so final cleanup still observes/closes it.
+        owned.append(self)
         command([wt, "-w", "new", "--title", title, "--suppressApplicationTitle", "-d", cwd,
                  powershell, "-NoLogo", "-NoProfile", "-File", launcher, "-Spec", spec], env=launch_env)
         found = wait_for(lambda: native("window", title).get("hwnd"), "real_windows_terminal_window_missing")
@@ -176,8 +180,12 @@ class Terminal:
             command(["taskkill.exe", "/PID", self.pi_pid, "/T", "/F"], allowed=(0, 128))
         found = self.native("window", self.window["title"])
         if found.get("hwnd"):
+            if not self.window.get("hwnd"):
+                self.window = {**found, "title": self.window["title"]}
             self.native("close", self.window["hwnd"], self.window["pid"], self.window["title"])
             wait_for(lambda: not self.native("window", self.window["title"]).get("hwnd"), "owned_terminal_window_not_closed")
+        else:
+            P.require(self.window.get("hwnd"), "partial_terminal_cleanup_unverified")
         self.closed = True
 
 
@@ -286,15 +294,13 @@ def run(args):
                         "--model", "TEST-local", "--tui-mode", "regular"]
                 if name != "question":
                     argv.append("TEST say done")
-                origin = Terminal(wt, powershell, case_root / "origin", origin_title, args.pi_executable, argv, case_env, project, native)
-                terminals.append(origin)
+                origin = Terminal(wt, powershell, case_root / "origin", origin_title, args.pi_executable, argv, case_env, project, native, owned=terminals)
                 wait_for(lambda: (case_root / "witness.jsonl").exists()
                          and any(row["type"] == "session_start" for row in F.witness(case_root)), "real_pi_tui_start_missing")
                 rows = F.witness(case_root)
                 P.require(all(row.get("mode") == "tui" for row in rows if row["type"] != "factory"), "actual_pi_mode_not_tui")
                 origin.pi_pid = next(row["pid"] for row in rows if row["type"] == "factory")
-                distractor = Terminal(wt, powershell, case_root / "distractor", distractor_title, None, [], case_env, distraction, native)
-                terminals.append(distractor)
+                distractor = Terminal(wt, powershell, case_root / "distractor", distractor_title, None, [], case_env, distraction, native, owned=terminals)
                 pcm = case_root / "native-output.s16le"
                 capture = subprocess.Popen([str(args.observer), "capture", str(pcm), str(stop_capture), *native.route_arguments()], stdout=subprocess.PIPE,
                                            stderr=subprocess.PIPE, creationflags=subprocess.CREATE_NO_WINDOW)

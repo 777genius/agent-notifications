@@ -8,7 +8,7 @@ import subprocess
 import tempfile
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 
 PATH = Path(__file__).with_name("pi-installed-desktop-windows.py")
@@ -73,6 +73,37 @@ class PostClickOracleTests(unittest.TestCase):
 
 
 class LauncherDiagnosticsTests(unittest.TestCase):
+    def test_window_discovery_failure_keeps_started_terminal_owned_for_cleanup(self):
+        with tempfile.TemporaryDirectory(prefix="TEST-pi-terminal-owner-") as directory:
+            root, owned = Path(directory), []
+            native = Mock(executable=root / "observer.exe")
+            title = "TEST-Pi-origin-owned"
+            with patch.object(W, "command") as launched, patch.object(W, "wait_for", side_effect=RuntimeError("discovery_failed")):
+                with self.assertRaisesRegex(RuntimeError, "discovery_failed"):
+                    W.Terminal("wt.exe", "pwsh.exe", root / "origin", title, root / "pi.exe", [], {}, root, native, owned=owned)
+            launched.assert_called_once()
+            self.assertEqual(len(owned), 1)
+            terminal = owned[0]
+            self.assertFalse(terminal.closed)
+            native.side_effect = [{"hwnd": 123, "pid": 456}, {"ok": True}]
+            with patch.object(W, "wait_for"):
+                terminal.close()
+            native.assert_any_call("close", 123, 456, title)
+            self.assertTrue(terminal.closed)
+
+    def test_partial_launch_without_observed_window_cannot_claim_cleanup(self):
+        with tempfile.TemporaryDirectory(prefix="TEST-pi-terminal-pending-") as directory:
+            root, owned = Path(directory), []
+            native = Mock(executable=root / "observer.exe", return_value={"hwnd": 0, "pid": 0})
+            with patch.object(W, "command"), patch.object(W, "wait_for", side_effect=RuntimeError("discovery_failed")):
+                with self.assertRaisesRegex(RuntimeError, "discovery_failed"):
+                    W.Terminal("wt.exe", "pwsh.exe", root / "origin", "TEST-Pi-origin-pending", root / "pi.exe", [], {}, root, native, owned=owned)
+            self.assertEqual(len(owned), 1)
+            with self.assertRaisesRegex(RuntimeError, "partial_terminal_cleanup_unverified"):
+                owned[0].close()
+            self.assertFalse(owned[0].closed)
+            native.assert_called_once_with("window", "TEST-Pi-origin-pending")
+
     @unittest.skipUnless(os.name == "nt" and shutil.which("pwsh.exe"), "Actual Windows PowerShell guard only")
     def test_missing_real_terminal_records_failure_without_starting_pi(self):
         with tempfile.TemporaryDirectory(prefix="TEST Pi launcher ") as directory:
