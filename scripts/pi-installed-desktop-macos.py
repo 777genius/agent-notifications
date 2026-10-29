@@ -14,11 +14,13 @@ import math
 import os
 from pathlib import Path
 import platform
+import select
 import shlex
 import shutil
 import signal
 import subprocess
 import tempfile
+import threading
 import time
 import wave
 
@@ -131,11 +133,109 @@ def consent_observer(request, observe, app, receipt, pending_capture=None, now=t
     return observed
 
 
-def capture_pending_consent(request, observe, app, evidence_root):
+class PermissionLog:
+    """One finite, read-only permission-only OS log stream with an owned child."""
+    def __init__(self, evidence_root, *, argv=None, seconds=20, limit=1024 * 1024):
+        self.path = evidence_root / "permission-services.ndjson"
+        P.require(not self.path.exists() and not self.path.is_symlink(), "permission_log_path_exists")
+        self.stop = threading.Event()
+        self.receipt = {"scope": "permission_only_service_logs", "desktop_qualified": False,
+                        "maximum_seconds": seconds, "output_limit_bytes": limit}
+        predicate = '(process == "terminal-notifier-modern") OR (process == "usernoted") OR (process == "NotificationCenter")'
+        self.child = subprocess.Popen(argv or ["/usr/bin/log", "stream", "--style", "ndjson", "--level", "debug",
+                                               "--predicate", predicate], stdin=subprocess.DEVNULL,
+                                      stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
+
+        def collect():
+            started, count = time.monotonic(), 0
+            try:
+                with self.path.open("xb") as output:
+                    while not self.stop.is_set() and time.monotonic() - started < seconds and count < limit:
+                        ready, _, _ = select.select([self.child.stdout], [], [], 0.05)
+                        if not ready:
+                            if self.child.poll() is not None:
+                                break
+                            continue
+                        data = os.read(self.child.stdout.fileno(), min(4096, limit - count))
+                        if not data:
+                            break
+                        output.write(data)
+                        count += len(data)
+                self.receipt.update(bytes=count, output_limit_reached=count == limit)
+            except Exception as error:
+                self.receipt["inconclusive_error_class"] = type(error).__name__
+            finally:
+                if self.child.poll() is None:
+                    try:
+                        os.killpg(self.child.pid, signal.SIGTERM)
+                    except ProcessLookupError:
+                        pass
+                self.child.stdout.close()
+                try:
+                    self.child.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    try:
+                        os.killpg(self.child.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    self.child.wait(timeout=2)
+                self.receipt.update(exit_code=self.child.returncode,
+                                    elapsed_seconds=round(time.monotonic() - started, 3))
+
+        self.thread = threading.Thread(target=collect)
+        self.thread.start()
+
+    def close(self):
+        self.stop.set()
+        self.thread.join(timeout=6)
+        if self.thread.is_alive():
+            try:
+                os.killpg(self.child.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            self.thread.join(timeout=2)
+        self.receipt["owned_child_collected"] = not self.thread.is_alive() and self.child.poll() is not None
+        if self.path.is_file() and not self.path.is_symlink():
+            self.receipt["sha256"] = P.sha(self.path)
+        return self.receipt
+
+
+def permission_services():
+    """Fixed process/service fields only; never change launchd or OS defaults."""
+    result = {"scope": "readonly_notification_services", "desktop_qualified": False}
+    names = {"terminal-notifier-modern", "usernoted", "usernotificationsd", "NotificationCenter"}
+    try:
+        rows = command(["/bin/ps", "-axo", "pid=,ppid=,uid=,comm="], timeout=3)
+        result["processes"] = []
+        for line in rows.splitlines():
+            values = line.split(None, 3)
+            if len(values) == 4 and Path(values[3]).name in names and all(value.isdecimal() for value in values[:3]):
+                result["processes"].append(dict(zip(("pid", "ppid", "uid", "comm"), values)))
+        domain = "gui/" + str(os.getuid())
+        for label in ("com.apple.notificationcenterui", "com.apple.usernoted", "com.apple.usernotificationsd"):
+            state = subprocess.run(["/bin/launchctl", "print", domain + "/" + label], stdin=subprocess.DEVNULL,
+                                   capture_output=True, timeout=3)
+            text = state.stdout[:65536].decode(errors="replace")
+            fields = [line.strip() for line in text.splitlines()
+                      if line.strip().startswith(("state = ", "pid = ", "runs = ", "last exit code = "))]
+            result[label] = {"exit_code": state.returncode, "fields": fields[:8],
+                             "output_bounded": len(state.stdout) + len(state.stderr) <= 65536}
+        disabled = subprocess.run(["/bin/launchctl", "print-disabled", domain], stdin=subprocess.DEVNULL,
+                                  capture_output=True, timeout=3)
+        result["disabled_entries"] = [line.strip() for line in disabled.stdout[:65536].decode(errors="replace").splitlines()
+                                      if any('"' + label + '"' in line for label in
+                                             ("com.apple.notificationcenterui", "com.apple.usernoted", "com.apple.usernotificationsd"))]
+        result["disabled_query_exit"] = disabled.returncode
+    except Exception as error:
+        result["inconclusive_error_class"] = type(error).__name__
+    return result
+
+
+def capture_pending_consent(request, observe, app, evidence_root, consent=None):
     """Read the original live request's UI once; observations never grant consent."""
     result = {"scope": "pending_original_notification_consent", "desktop_qualified": False,
               "original_request_running_before": request.poll() is None,
-              "maximum_command_seconds": 10}
+              "maximum_command_seconds": 21}
     if not result["original_request_running_before"]:
         return {**result, "original_request_running_after": False, "status": "inconclusive_original_request_completed"}
     try:
@@ -150,6 +250,8 @@ def capture_pending_consent(request, observe, app, evidence_root):
                   and 0 < screenshot.stat().st_size <= 16 * 1024 * 1024, "pending_consent_capture_unavailable")
         result["screenshot_sha256"] = P.sha(screenshot)
         result["native_diagnostics"] = observe("permission-diagnostics", str(app), timeout=4)
+        if consent is not None and request.poll() is None:
+            result["helper_sample"] = sample_permission_helper(observe, app, consent, evidence_root)
         result["status"] = "captured"
     except Exception as error:
         result.update(status="inconclusive_pending_capture_failed", error_class=type(error).__name__)
@@ -381,7 +483,7 @@ def run(args):
     env = F.prepare(root, initial_provider, "success")
     env["AGENT_NOTIFICATIONS_CONFIG"] = str(root / "global/config.json")
     profile, terminals, helpers, app = root / "agent", [], [], None
-    permission_request = None
+    permission_request = permission_log = None
     report = {"schema_version": 1, "scope": "actual_installed_pi_macos_desktop", "status": "failed",
               "test_root": str(root), "source_sha": command(["git", "-C", REPO, "rev-parse", "HEAD"]).strip(),
               "working_tree_dirty": bool(command(["git", "-C", REPO, "status", "--porcelain"])),
@@ -569,6 +671,8 @@ def run(args):
         permission = json.loads(D.command(args.candidate, ["setup-notifications", "permission-status", "--control-root", root / "control", "--json"], root, env))
         report["notification_consent"] = {"initial_permission": permission.get("permission"), "requested": False}
         if permission.get("permission") == "undetermined":
+            report["notification_consent"]["services_before_request"] = permission_services()
+            permission_log = PermissionLog(args.report.parent)
             started = time.monotonic()
             permission_request = subprocess.Popen([str(args.candidate), "setup-notifications", "request-permission",
                                         "--control-root", str(root / "control"), "--expected-generation", str(ledger["Generation"]), "--json"],
@@ -578,7 +682,8 @@ def run(args):
             report["notification_consent"]["requested"] = True
             dialogs = wait_for_consent(permission_request,
                 consent_observer(permission_request, observer, app, report["notification_consent"],
-                    lambda: capture_pending_consent(permission_request, observer, app, args.report.parent)))
+                    lambda: capture_pending_consent(permission_request, observer, app, args.report.parent,
+                                                     report["notification_consent"])))
             report["notification_consent"].update(dialogs=dialogs, completed_without_dialog=not dialogs)
             if dialogs:
                 command(["/usr/sbin/screencapture", "-x", args.report.parent / "actual-notification-consent.png"])
@@ -586,6 +691,7 @@ def run(args):
                 report["notification_consent"].update(physical_allow_click=click["physical_allow_click"],
                     screenshot_sha256=P.sha(args.report.parent / "actual-notification-consent.png"))
             out, err = permission_request.communicate(timeout=10)
+            report["notification_consent"]["service_log"] = permission_log.close()
             receipt = permission_receipt(out, err, permission_request.returncode)
             report["notification_consent"].update(request_result=receipt,
                 elapsed_seconds=round(time.monotonic() - started, 3), request_collected=True)
@@ -638,6 +744,10 @@ def run(args):
                 consent["helper_sample"] = {"status": "inconclusive_sample_collection_failed"}
     finally:
         failures = []
+        if permission_log is not None:
+            report["notification_consent"]["service_log"] = permission_log.close()
+            if not report["notification_consent"]["service_log"]["owned_child_collected"]:
+                failures.append("permission_diagnostic_log_not_collected")
         for terminal in reversed(terminals):
             try:
                 terminal.close()

@@ -103,8 +103,10 @@ def acquire(output, report):
     def command(argv):
         value = subprocess.run([str(arg) for arg in argv], cwd=REPO, stdin=subprocess.DEVNULL,
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=180)
-        require(value.returncode == 0 and len(value.stdout) + len(value.stderr) <= 2 * 1024 * 1024,
-                "macos_helper_acquisition_command_failed:" + str(argv[0]))
+        require(len(value.stdout) + len(value.stderr) <= 2 * 1024 * 1024, "macos_helper_acquisition_output_limit")
+        if value.returncode != 0:
+            diagnostics = (value.stdout + value.stderr).decode(errors="replace")[-8192:]
+            raise ValueError("macos_helper_acquisition_command_failed:" + str(argv[0]) + ":" + diagnostics)
         return value.stdout
 
     # These exact producer records and bytes were retained while the successful

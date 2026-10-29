@@ -234,6 +234,33 @@ class ConsentObservation(unittest.TestCase):
         self.assertIn("native_diagnostics", receipt)
         self.assertFalse(receipt["desktop_qualified"])
 
+    def test_permission_log_enforces_byte_limit_and_collects_real_child(self):
+        with tempfile.TemporaryDirectory(prefix="TEST-pi-permission-log-") as temporary:
+            log = M.PermissionLog(Path(temporary), argv=[sys.executable, "-c",
+                "import sys,time;sys.stdout.buffer.write(b'x'*4096);sys.stdout.flush();time.sleep(10)"],
+                seconds=2, limit=64)
+            deadline = time.monotonic() + 3
+            while log.thread.is_alive() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            receipt = log.close()
+            self.assertTrue(receipt["owned_child_collected"])
+            self.assertTrue(receipt["output_limit_reached"])
+            self.assertEqual(receipt["bytes"], 64)
+            self.assertEqual(log.path.read_bytes(), b"x" * 64)
+            self.assertIsNotNone(log.child.poll())
+            self.assertFalse(receipt["desktop_qualified"])
+
+    def test_permission_log_early_close_collects_a_silent_child(self):
+        with tempfile.TemporaryDirectory(prefix="TEST-pi-permission-log-") as temporary:
+            log = M.PermissionLog(Path(temporary), argv=[sys.executable, "-c", "import time;time.sleep(10)"],
+                                  seconds=20, limit=64)
+            started = time.monotonic()
+            receipt = log.close()
+            self.assertTrue(receipt["owned_child_collected"])
+            self.assertLess(time.monotonic() - started, 6)
+            self.assertEqual(receipt["bytes"], 0)
+            self.assertFalse(receipt["output_limit_reached"])
+
     def test_early_denied_undetermined_and_unavailable_never_prove_grant(self):
         for permission in ("denied", "undetermined", "unavailable"):
             receipt = self.receipt(permission, code=1 if permission == "unavailable" else 0)
