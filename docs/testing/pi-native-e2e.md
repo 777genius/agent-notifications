@@ -301,8 +301,9 @@ and every actual banner, audio and physical click check remains required.
 The consent observer derives display names from the pinned helper archive and
 requires identical installed bundle metadata. A collapsed authorization card
 must carry that exact quoted name and the fixed OS explanation in one native
-Notification Center group. The fixture may hover it once and physically open
-one observed Options control while the original request remains pending. Each
+Notification Center group. The fixture may hover it once, click the same card
+once if it remains collapsed, and physically open one observed Options control
+while the original request remains pending. Each
 step retains fresh native observations and a screenshot. Only a newly observed,
 unique Allow control with its denial alternative can be clicked; the original
 request and a fresh permission query must both report allowed.

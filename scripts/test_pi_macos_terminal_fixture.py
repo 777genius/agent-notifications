@@ -333,6 +333,48 @@ class ConsentObservation(unittest.TestCase):
             self.assertEqual(observed(), [])
             observe.assert_called_once_with("notification-consent")
 
+    def test_collapsed_card_is_clicked_once_after_hover_without_inferring_consent(self):
+        request = mock.Mock(poll=mock.Mock(return_value=None))
+        calls, captures, receipt = [], [], {}
+
+        def observe(operation, *args):
+            calls.append(operation)
+            if operation == "notification-consent":
+                return {"dialogs": [], "permission_cards": [{}]}
+            self.assertIn(operation, ("hover-notification-consent", "expand-notification-consent"))
+            return {"physical_card_click": operation == "expand-notification-consent", "dialogs": [], "permission_cards": []}
+
+        observed = M.consent_observer(request, observe, Path("/TEST/owned.app"), receipt,
+                                      ui_capture=lambda phase: captures.append(phase))
+        for _ in range(4):
+            self.assertEqual(observed(), [])
+        self.assertEqual(calls.count("hover-notification-consent"), 1)
+        self.assertEqual(calls.count("expand-notification-consent"), 1)
+        self.assertEqual(captures, ["hover", "expand"])
+        self.assertNotIn("allow-notification-consent", calls)
+        with self.assertRaises((KeyError, RuntimeError)):
+            M.observed_permission(receipt)
+
+    def test_card_expansion_never_follows_request_exit_or_opened_options(self):
+        for next_state in ("ended", "options"):
+            request = mock.Mock(poll=mock.Mock(return_value=None))
+            calls, phase = [], [0]
+
+            def observe(operation, *args):
+                calls.append(operation)
+                if operation == "hover-notification-consent":
+                    phase[0] = 1
+                    if next_state == "ended":
+                        request.poll.return_value = 0
+                if operation == "open-notification-consent-options":
+                    phase[0] = 2
+                return {"dialogs": [], "permission_cards": [{"options_bounds": [1, 2, 3, 4]}] if phase[0] == 1 else [{}]}
+
+            observed = M.consent_observer(request, observe, Path("/TEST/owned.app"), {})
+            for _ in range(4):
+                self.assertEqual(observed(), [])
+            self.assertNotIn("expand-notification-consent", calls)
+
     def test_pending_capture_failure_is_inconclusive_and_not_retried(self):
         class Request:
             def poll(self):

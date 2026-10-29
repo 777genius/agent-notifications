@@ -574,7 +574,8 @@ final class ProductCapture: NSObject, SCStreamOutput, SCStreamDelegate, @uncheck
                     }
                 }
                 publish(result)
-            case "notification-consent", "hover-notification-consent", "open-notification-consent-options", "allow-notification-consent":
+            case "notification-consent", "hover-notification-consent", "expand-notification-consent",
+                 "open-notification-consent-options", "allow-notification-consent":
                 let names = Array(args.dropFirst())
                 guard (1...3).contains(names.count), names.allSatisfy({ !$0.isEmpty && $0.count <= 80
                     && !$0.unicodeScalars.contains(where: { $0.value < 32 }) }) else {
@@ -582,28 +583,37 @@ final class ProductCapture: NSObject, SCStreamOutput, SCStreamDelegate, @uncheck
                 }
                 var cards = notificationPermissionCards(names)
                 var dialogs = notificationConsent(names, cards: cards)
+                let pointerBefore = CGEvent(source: nil)?.location
+                var pointerTarget: CGPoint?
                 if operation == "hover-notification-consent" {
                     guard cards.count == 1 else { throw ProbeError.unavailable("unique_candidate_notification_permission_card_required") }
                     let box = cards[0]["bounds"] as! [Double]
                     let point = CGPoint(x: box[0] + box[2] / 2, y: box[1] + box[3] / 2)
+                    pointerTarget = point
                     guard let event = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved,
                                               mouseCursorPosition: point, mouseButton: .left) else {
                         throw ProbeError.unavailable("physical_permission_hover_unavailable")
                     }
                     event.post(tap: .cghidEventTap)
                 }
-                if operation == "allow-notification-consent" || operation == "open-notification-consent-options" {
+                if ["allow-notification-consent", "open-notification-consent-options", "expand-notification-consent"].contains(operation) {
                     let box: [Double]
                     if operation == "open-notification-consent-options" {
                         guard cards.count == 1, let options = cards[0]["options_bounds"] as? [Double] else {
                             throw ProbeError.unavailable("unique_candidate_notification_options_control_required")
                         }
                         box = options
+                    } else if operation == "expand-notification-consent" {
+                        guard cards.count == 1, dialogs.isEmpty, cards[0]["options_bounds"] == nil else {
+                            throw ProbeError.unavailable("unique_collapsed_notification_permission_card_required")
+                        }
+                        box = cards[0]["bounds"] as! [Double]
                     } else {
                         guard dialogs.count == 1 else { throw ProbeError.unavailable("unique_candidate_notification_consent_dialog_required") }
                         box = dialogs[0]["bounds"] as! [Double]
                     }
                     let point = CGPoint(x: box[0] + box[2] / 2, y: box[1] + box[3] / 2)
+                    pointerTarget = point
                     guard let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left),
                           let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left) else {
                         throw ProbeError.unavailable("physical_permission_click_unavailable")
@@ -615,10 +625,19 @@ final class ProductCapture: NSObject, SCStreamOutput, SCStreamDelegate, @uncheck
                     cards = notificationPermissionCards(names)
                     dialogs = notificationConsent(names, cards: cards)
                 }
-                publish(["dialogs": dialogs, "permission_cards": cards,
-                         "physical_pointer_hover": operation == "hover-notification-consent",
-                         "physical_options_click": operation == "open-notification-consent-options",
-                         "physical_allow_click": operation == "allow-notification-consent"])
+                let pointerAfter = CGEvent(source: nil)?.location
+                let pointerObserved = pointerTarget != nil && pointerAfter != nil
+                    && abs(pointerAfter!.x - pointerTarget!.x) <= 1 && abs(pointerAfter!.y - pointerTarget!.y) <= 1
+                var receipt: [String: Any] = ["dialogs": dialogs, "permission_cards": cards,
+                    "physical_pointer_hover": operation == "hover-notification-consent" && pointerObserved,
+                    "physical_card_click": operation == "expand-notification-consent",
+                    "physical_options_click": operation == "open-notification-consent-options",
+                    "physical_allow_click": operation == "allow-notification-consent"]
+                if let pointerBefore { receipt["pointer_before"] = [Double(pointerBefore.x), Double(pointerBefore.y)] }
+                if let pointerTarget { receipt["pointer_target"] = [Double(pointerTarget.x), Double(pointerTarget.y)] }
+                if let pointerAfter { receipt["pointer_after"] = [Double(pointerAfter.x), Double(pointerAfter.y)] }
+                if pointerTarget != nil { receipt["pointer_target_observed"] = pointerObserved }
+                publish(receipt)
             case "banner", "click":
                 guard args.count == 2, ["Pi completed a task", "Pi is waiting for input"].contains(args[1]) else {
                     throw ProbeError.unavailable("fixed_product_body_required")

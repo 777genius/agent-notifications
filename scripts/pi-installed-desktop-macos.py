@@ -128,11 +128,11 @@ def permission_ui_identity(archive, app, pin):
 
 def consent_observer(request, observe, app, receipt, pending_capture=None, now=time.monotonic, ui_capture=None):
     """Activate at most the one existing verified request helper, never relaunch."""
-    attempted, captured, hovered, opened_options = False, False, False, False
+    attempted, captured, hovered, expanded, opened_options = False, False, False, False, False
     started = now()
 
     def observed():
-        nonlocal attempted, captured, hovered, opened_options
+        nonlocal attempted, captured, hovered, expanded, opened_options
         current = observe("notification-consent")
         dialogs = current["dialogs"]
         if not dialogs and not hovered and len(current.get("permission_cards", [])) == 1 and request.poll() is None:
@@ -146,6 +146,12 @@ def consent_observer(request, observe, app, receipt, pending_capture=None, now=t
             receipt["permission_card_options"] = observe("open-notification-consent-options")
             if ui_capture is not None:
                 receipt["permission_card_options_capture"] = ui_capture("options")
+        elif not dialogs and hovered and not expanded and not opened_options \
+                and len(current.get("permission_cards", [])) == 1 and request.poll() is None:
+            expanded = True
+            receipt["permission_card_expansion"] = observe("expand-notification-consent")
+            if ui_capture is not None:
+                receipt["permission_card_expansion_capture"] = ui_capture("expand")
         if not dialogs and not current.get("permission_cards") and not attempted and request.poll() is None:
             state = observe("helper-processes", str(app))
             receipt["helper_observation"] = state
@@ -560,7 +566,8 @@ def run(args):
               "native_helper_verified": False, "cases": []}
 
     def observer(*argv, timeout=20):
-        if argv and argv[0] in ("notification-consent", "hover-notification-consent", "open-notification-consent-options", "allow-notification-consent"):
+        if argv and argv[0] in ("notification-consent", "hover-notification-consent", "expand-notification-consent",
+                               "open-notification-consent-options", "allow-notification-consent"):
             argv = (*argv, *consent_names)
         return json.loads(command([args.observer, *argv], timeout=timeout))
 
