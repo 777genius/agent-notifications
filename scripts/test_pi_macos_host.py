@@ -92,6 +92,43 @@ class OfficialHostGuards(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "disabled_state_ambiguous"):
                 H.inspect(domain)
 
+    def test_disabled_refusal_retains_all_exact_readonly_responses_before_parsing(self):
+        disabled = b'disabled services = {\n}\n'
+        service_error = b'Could not find service "com.apple.notificationcenterui.agent"\n'
+        native = b'{"applications":[],"desktop_qualified":false}\n'
+        results = [SimpleNamespace(returncode=0, stdout=disabled, stderr=b""),
+                   SimpleNamespace(returncode=113, stdout=b"", stderr=service_error),
+                   SimpleNamespace(returncode=0, stdout=native, stderr=b"")]
+        with patch.object(H.subprocess, "run", side_effect=results) as commands:
+            snapshot = H.observe_host_state("gui/501", Path("/TEST/owned-observer"))
+        self.assertEqual([call.args[0] for call in commands.call_args_list], [
+            ["/bin/launchctl", "print-disabled", "gui/501"],
+            ["/bin/launchctl", "print", "gui/501/com.apple.notificationcenterui.agent"],
+            ["/TEST/owned-observer", "notification-center-state"]])
+        with self.assertRaisesRegex(ValueError, "disabled_state_ambiguous"):
+            H.inspect("gui/501", snapshot)
+        self.assertEqual(snapshot["disabled"]["stdout"], disabled.decode())
+        self.assertEqual(snapshot["service"]["stderr"], service_error.decode())
+        self.assertEqual(snapshot["service"]["exit_code"], 113)
+        self.assertEqual(snapshot["native"]["stdout"], native.decode())
+        self.assertTrue(all(row["output_bounded"] for row in snapshot.values()))
+
+    def test_failed_or_oversized_observation_retains_bounded_output_and_still_reads_other_fixed_states(self):
+        for first in (H.subprocess.TimeoutExpired("launchctl", 3, output=b"partial", stderr=b"TEST timeout"),
+                      SimpleNamespace(returncode=0, stdout=b"x" * 65537, stderr=b"TEST overflow")):
+            with self.subTest(first=type(first).__name__):
+                with patch.object(H.subprocess, "run", side_effect=[first,
+                        SimpleNamespace(returncode=113, stdout=b"", stderr=b"TEST service unavailable"),
+                        SimpleNamespace(returncode=0, stdout=b'{"applications":[]}', stderr=b"")]) as commands:
+                    snapshot = H.observe_host_state("gui/501", Path("/TEST/owned-observer"))
+                self.assertEqual(commands.call_count, 3)
+                self.assertIn("error_class", snapshot["disabled"])
+                self.assertLessEqual(len(snapshot["disabled"]["stdout"]) + len(snapshot["disabled"]["stderr"]), 65536)
+                self.assertEqual(snapshot["service"]["stderr"], "TEST service unavailable")
+                self.assertEqual(snapshot["native"]["exit_code"], 0)
+                with self.assertRaisesRegex(ValueError, "state_observation_unverified:disabled"):
+                    H.inspect("gui/501", snapshot)
+
 
 if __name__ == "__main__":
     unittest.main()

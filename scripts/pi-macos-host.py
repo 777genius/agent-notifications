@@ -26,10 +26,44 @@ def require(ok, reason):
         raise ValueError(reason)
 
 
-def command(argv, timeout=3):
-    result = subprocess.run([str(x) for x in argv], stdin=subprocess.DEVNULL, capture_output=True, timeout=timeout)
+def command(argv, timeout=3, observed=None):
+    def retain(code, stdout, stderr, timed_out=False):
+        if observed is not None:
+            output = stdout[:65536]
+            error = stderr[:max(0, 65536 - len(output))]
+            observed.update(exit_code=code, timed_out=timed_out, stdout_bytes=len(stdout), stderr_bytes=len(stderr),
+                            output_bounded=len(stdout) + len(stderr) <= 65536,
+                            stdout=output.decode(errors="replace"), stderr=error.decode(errors="replace"))
+    try:
+        result = subprocess.run([str(x) for x in argv], stdin=subprocess.DEVNULL, capture_output=True, timeout=timeout)
+    except subprocess.TimeoutExpired as error:
+        retain(None, error.stdout or b"", error.stderr or b"", True)
+        raise
+    retain(result.returncode, result.stdout, result.stderr)
     require(len(result.stdout) + len(result.stderr) <= 65536, "host_command_output_limit")
     return result.returncode, result.stdout.decode(errors="replace"), result.stderr.decode(errors="replace")
+
+
+def observe_host_state(domain, observer):
+    """Finish all three fixed read-only observations before parsing any state."""
+    snapshot = {}
+    for name, argv in (("disabled", ["/bin/launchctl", "print-disabled", domain]),
+                       ("service", ["/bin/launchctl", "print", domain + "/" + LABEL]),
+                       ("native", [observer, "notification-center-state"])):
+        row = snapshot[name] = {"argv": list(map(str, argv)), "timeout_seconds": 3}
+        try:
+            command(argv, observed=row)
+        except Exception as error:
+            row.update(error_class=type(error).__name__, error=str(error)[:4096])
+    return snapshot
+
+
+def snapshot_result(snapshot, name):
+    row = snapshot[name]
+    require(not row.get("error_class") and row.get("timed_out") is False
+            and row.get("output_bounded") is True and type(row.get("exit_code")) is int,
+            "notification_agent_state_observation_unverified:" + name)
+    return row["exit_code"], row["stdout"], row["stderr"]
 
 
 def admit(env, host, metadata, source, clean):
@@ -70,7 +104,7 @@ def system_agent(observed=None, evidence_root=None):
     value = plistlib.loads(body)
     program = value.get("Program") or (value.get("ProgramArguments") or [None])[0]
     identity = {"plist_sha256": hashlib.sha256(body).hexdigest(),
-                **{key: value.get(key) for key in ("Label", "Program", "BundleProgram")},
+                **{key: value.get(key) for key in ("Label", "Program", "BundleProgram", "Disabled", "RunAtLoad", "KeepAlive")},
                 "first_program_argument": (value.get("ProgramArguments") or [None])[0]}
     if observed is not None:
         observed.update(path=str(PLIST), device=facts.st_dev, inode=facts.st_ino,
@@ -84,12 +118,12 @@ def system_agent(observed=None, evidence_root=None):
             "device": facts.st_dev, "inode": facts.st_ino, "label": LABEL, "program": program}
 
 
-def inspect(domain):
-    code, text, error = command(["/bin/launchctl", "print-disabled", domain])
+def inspect(domain, snapshot=None):
+    code, text, error = snapshot_result(snapshot, "disabled") if snapshot is not None else command(["/bin/launchctl", "print-disabled", domain])
     require(code == 0, "disabled_state_query_failed")
     disabled = re.findall(r'"' + re.escape(LABEL) + r'"\s*=>\s*(true|false)', text)
     require(len(disabled) == 1, "notification_agent_disabled_state_ambiguous")
-    code, text, error = command(["/bin/launchctl", "print", domain + "/" + LABEL])
+    code, text, error = snapshot_result(snapshot, "service") if snapshot is not None else command(["/bin/launchctl", "print", domain + "/" + LABEL])
     if code != 0:
         require("Could not find service" in error and LABEL in error, "notification_agent_query_failed")
         return {"disabled": disabled[0] == "true", "loaded": False, "running": False}
@@ -147,11 +181,12 @@ def prepare(args):
         report["system_agent"] = expected
         require(code == 0, "apple_system_notification_application_signature_unverified")
         domain = "gui/" + str(os.getuid())
-        before = inspect(domain)
-        report["before"] = before
-        code, output, error = command([args.observer, "notification-center-state"])
+        report["state_before_observed"] = observe_host_state(domain, args.observer)
+        code, output, error = snapshot_result(report["state_before_observed"], "native")
         require(code == 0, "notification_agent_native_observer_failed")
         report["native_before"] = json.loads(output)
+        before = inspect(domain, report["state_before_observed"])
+        report["before"] = before
         actions = action_plan(before)
         if actions:
             require(report["native_before"].get("applications") == [], "unloaded_notification_agent_has_ambiguous_native_process")
