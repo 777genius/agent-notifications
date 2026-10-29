@@ -11,6 +11,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 REPO = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("pi_installed_macos", REPO / "scripts/pi-installed-desktop-macos.py")
@@ -137,6 +138,101 @@ class ConsentObservation(unittest.TestCase):
 
             self.assertEqual(M.consent_observer(child, observe, Path("/TEST/owned.app"), {})(), [])
             self.assertFalse(any(row[0] == "activate-permission-helper" for row in calls))
+
+    def test_pending_capture_waits_five_seconds_and_runs_once_without_request_retry(self):
+        class Request:
+            def poll(self):
+                return None
+        clock, captures, receipt = [0.0], [], {}
+
+        def observe(operation, *args):
+            return {"dialogs": []} if operation == "notification-consent" else {"installed_helpers": []}
+
+        def capture():
+            captures.append(clock[0])
+            return {"status": "captured", "desktop_qualified": False}
+
+        observed = M.consent_observer(Request(), observe, Path("/TEST/owned.app"), receipt, capture, lambda: clock[0])
+        for tick in (0.0, 4.999):
+            clock[0] = tick
+            self.assertEqual(observed(), [])
+            self.assertEqual(captures, [])
+        for tick in (5.0, 6.0, 120.0):
+            clock[0] = tick
+            self.assertEqual(observed(), [])
+        self.assertEqual(captures, [5.0])
+        self.assertFalse(receipt["pending_capture"]["desktop_qualified"])
+
+    def test_completed_request_or_accepted_dialog_never_triggers_pending_capture(self):
+        class Request:
+            code = None
+            def poll(self):
+                return self.code
+        for code, dialogs in ((0, []), (None, [{"accepted_dialog": True}])):
+            clock, captures, request = [0.0], [], Request()
+            request.code = code
+
+            def observe(operation, *args):
+                return {"dialogs": dialogs} if operation == "notification-consent" else {"installed_helpers": []}
+
+            observed = M.consent_observer(request, observe, Path("/TEST/owned.app"), {},
+                                          lambda: captures.append(True), lambda: clock[0])
+            clock[0] = 5.0
+            self.assertEqual(observed(), dialogs)
+            self.assertEqual(captures, [])
+
+    def test_pending_capture_failure_is_inconclusive_and_not_retried(self):
+        class Request:
+            def poll(self):
+                return None
+        clock, captures, receipt = [0.0], [], {}
+
+        def observe(operation, *args):
+            return {"dialogs": []} if operation == "notification-consent" else {"installed_helpers": []}
+
+        def capture():
+            captures.append(True)
+            raise RuntimeError("TEST observation unavailable")
+
+        observed = M.consent_observer(Request(), observe, Path("/TEST/owned.app"), receipt, capture, lambda: clock[0])
+        clock[0] = 5.0
+        self.assertEqual(observed(), [])
+        self.assertEqual(observed(), [])
+        self.assertEqual(captures, [True])
+        self.assertEqual(receipt["pending_capture"]["status"], "inconclusive_pending_capture_failed")
+        with self.assertRaises((RuntimeError, KeyError)):
+            M.observed_permission(receipt["pending_capture"])
+
+    def test_exit_during_pending_capture_retains_evidence_as_inconclusive(self):
+        class Request:
+            code = None
+            def poll(self):
+                return self.code
+        request, calls = Request(), []
+
+        def observe(operation, *args, timeout):
+            calls.append((operation, timeout))
+            if operation == "permission-diagnostics":
+                request.code = 0
+                return {"scope": "TEST native inventory"}
+            return {"installed_helpers": [{"pid": 41, "process_start_identity": "TEST-birth"}]}
+
+        def screenshot(argv, *, timeout):
+            self.assertEqual((argv[:2], timeout), (["/usr/sbin/screencapture", "-x"], 3))
+            Path(argv[2]).write_bytes(b"TEST screenshot bytes; not native evidence")
+
+        with tempfile.TemporaryDirectory(prefix="TEST-pi-consent-capture-") as temporary:
+            with mock.patch.object(M, "command", side_effect=screenshot) as capture:
+                receipt = M.capture_pending_consent(request, observe, Path("/TEST/owned.app"), Path(temporary))
+            capture.assert_called_once()
+            self.assertTrue((Path(temporary) / "pending-notification-consent.png").is_file())
+        self.assertEqual(calls, [("helper-processes", 3), ("permission-diagnostics", 4)])
+        self.assertTrue(receipt["original_request_running_before"])
+        self.assertFalse(receipt["original_request_running_after"])
+        self.assertEqual(receipt["status"], "inconclusive_original_request_completed")
+        self.assertIn("screenshot_sha256", receipt)
+        self.assertIn("native_diagnostics", receipt)
+        self.assertFalse(receipt["desktop_qualified"])
 
     def test_early_denied_undetermined_and_unavailable_never_prove_grant(self):
         for permission in ("denied", "undetermined", "unavailable"):
