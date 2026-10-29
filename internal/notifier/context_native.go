@@ -69,8 +69,16 @@ func runContextNativeApp(ctx context.Context, clock BootClock, executable string
 	}
 	end, ok := ctx.Deadline()
 	remaining := time.Until(end)
-	if !ok || remaining <= 0 || remaining > 15*time.Second || ctx.Err() != nil {
+	if !ok || remaining <= 0 || ctx.Err() != nil {
 		return errors.New("invalid_context_native_deadline")
+	}
+	// Signed context-notification protocol v1 accepts at most a 15s native
+	// request. Keep that transport limit within the caller's original deadline.
+	if remaining > 15*time.Second {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+		end, _ = ctx.Deadline()
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, time.Second)
 	data, err := operations.probe(probeCtx)

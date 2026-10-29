@@ -32,9 +32,10 @@ type Work = {
   cancel: () => void;
 };
 const FRAME_LIMIT = 64 << 10;
-const SOFT_LIFETIME = 15_500;
+// Leave the Go admission budget 500ms to finish before terminating the child.
+const SOFT_LIFETIME = 20_500;
 const KILL_GRACE = 250;
-const HARD_LIFETIME = 16_000;
+const HARD_LIFETIME = 21_000;
 const text = (value: unknown, max = 4096): value is string => typeof value === "string" && value.length > 0 && value.length <= max && !/[\u0000-\u001f\u007f]/u.test(value);
 const path = (value: unknown): value is string => text(value) && isAbsolute(value) && normalize(value) === value;
 const digest = (value: unknown): value is string => typeof value === "string" && /^sha256:[a-f0-9]{64}$/u.test(value);

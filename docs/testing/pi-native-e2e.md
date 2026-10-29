@@ -226,8 +226,8 @@ treating a log line or a reused PID as exit. This whole-path cancellation
 coverage is Linux-specific; it does not claim those controls ran on other OSes.
 A separate held-response case sends no cancellation control and observes the
 real helper's natural HTTP timeout against its original kernel birth. The
-production HTTP client expires after 10 seconds, within the outer 15-second
-consumer and 16-second producer budgets; this case does not claim it reaches
+production HTTP client expires after 10 seconds, within the outer 20-second
+consumer and 21-second producer budgets; this case does not claim it reaches
 the outer deadline. It requires original process collection, a still-running
 Pi session and no retry.
 

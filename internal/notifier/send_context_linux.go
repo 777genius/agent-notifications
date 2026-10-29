@@ -24,20 +24,24 @@ func (n *Notifier) sendNativeDesktopContext(ctx context.Context, sound, title, b
 		body = subtitle + "\n" + body
 	}
 	if !n.cfg.Notifications.Desktop.ClickToFocus {
+		if _, ok := ctx.Deadline(); !ok {
+			return errors.New("delivery_deadline_required")
+		}
+		// The plain delivery protocol keeps its existing 15s horizon. Sound
+		// still belongs to the caller's original overall notification budget.
+		deliveryCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
 		clock := SystemBootClock{}
 		boot, now, err := clock.Now()
 		if err != nil {
 			return err
 		}
-		end, ok := ctx.Deadline()
-		if !ok {
-			return errors.New("delivery_deadline_required")
-		}
+		end, _ := deliveryCtx.Deadline()
 		remaining := time.Until(end)
 		if remaining <= 0 || remaining > 15*time.Second {
 			return errors.New("invalid_delivery_deadline")
 		}
-		r := contextPlainLinuxDelivery(clock).Deliver(ctx, notification.Request{CorrelationID: uuid.NewString(), Content: notification.Content{Title: title, Body: body, Category: "info"}, Deadline: notification.Deadline{BootID: boot, NotAfter: now + remaining.Seconds()}, Policy: notification.PolicySnapshot{Valid: true, ExplicitEnabled: true, DesktopEnabled: true}, Navigation: notification.None, Silent: true})
+		r := contextPlainLinuxDelivery(clock).Deliver(deliveryCtx, notification.Request{CorrelationID: uuid.NewString(), Content: notification.Content{Title: title, Body: body, Category: "info"}, Deadline: notification.Deadline{BootID: boot, NotAfter: now + remaining.Seconds()}, Policy: notification.PolicySnapshot{Valid: true, ExplicitEnabled: true, DesktopEnabled: true}, Navigation: notification.None, Silent: true})
 		if r.Status != "submitted" {
 			return errors.New("desktop_handoff_unconfirmed")
 		}

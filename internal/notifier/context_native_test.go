@@ -67,6 +67,34 @@ func TestContextNativePreservesPresentationAndOriginalDeadline(t *testing.T) {
 	}
 }
 
+func TestContextNativeClipsLongParentToSignedHelperHorizon(t *testing.T) {
+	ops, request, stopped := contextNativeFixture(t)
+	parent, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	launch := ops.launch
+	ops.launch = func(ctx context.Context, request, receipt string) error {
+		end, ok := ctx.Deadline()
+		if !ok || time.Until(end) <= 14*time.Second || time.Until(end) > 15*time.Second {
+			t.Fatal("native child escaped the signed helper's 15s horizon")
+		}
+		return launch(ctx, request, receipt)
+	}
+	if err := runContextNativeApp(parent, contextNativeClock{}, "/TEST-owned-helper", []string{"-title", "Pi"}, ops); err != nil {
+		t.Fatal(err)
+	}
+	if request.NotAfter <= 114 || request.NotAfter > 115 || parent.Err() != nil || *stopped != 0 {
+		t.Fatalf("native clipping changed parent ownership: request=%+v parent=%v stopped=%d", request, parent.Err(), *stopped)
+	}
+}
+
+func TestContextNativeStillRequiresFiniteParentDeadline(t *testing.T) {
+	ops, _, _ := contextNativeFixture(t)
+	ops.probe = func(context.Context) ([]byte, error) { t.Fatal("probed unbounded caller"); return nil, nil }
+	if err := runContextNativeApp(context.Background(), contextNativeClock{}, "/TEST-owned-helper", nil, ops); err == nil {
+		t.Fatal("unbounded caller gained an implicit native deadline")
+	}
+}
+
 func TestContextNativeCancellationRevokesBeforeStoppingExactApp(t *testing.T) {
 	ops, _, stopped := contextNativeFixture(t)
 	launch := ops.launch

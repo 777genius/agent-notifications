@@ -11,7 +11,10 @@ import (
 	"github.com/777genius/agent-notifications/internal/notification/observation"
 )
 
-const TotalBudget = 15 * time.Second
+// TotalBudget is assigned once at admission. Cold Windows PowerShell startup,
+// native toast submission, configured sound and the following webhook all share
+// it; neither channel nor lifecycle shutdown may renew an admitted deadline.
+const TotalBudget = 20 * time.Second
 
 func validTime(boot string, now float64, err error) bool {
 	return err == nil && boot != "" && now >= 0 && !math.IsNaN(now) && !math.IsInf(now, 0)
