@@ -120,6 +120,44 @@ def qualify(platform, source, build, acquisition, process, desktop):
         require(all(row.get("checks", {}).get(check) is True for check in CHECKS), "native_desktop_check_unobserved:" + str(row.get("case")))
         if row["case"] == "question":
             require(row.get("pending_question_at_click") is True, "native_question_was_not_pending")
+    if platform == "linux":
+        lifecycle = desktop.get("lifecycle_cases", [])
+        require(len(lifecycle) == 5 and {row.get("case") for row in lifecycle} == {"reload", "new", "prompt-end", "quit", "timeout"},
+                "linux_actual_pi_cancellation_case_missing")
+        for row in lifecycle:
+            helpers = row.get("helper_identities", [])
+            expected = 2 if row["case"] == "reload" else 1
+            require(row.get("status") == "passed" and row.get("scope") == "actual_installed_pi_linux_tui"
+                    and all(row.get(key) is True for key in ("original_helper_subtree_collected", "terminal_collected", "no_resend"))
+                    and len(helpers) >= expected and all(kernel_identity(helper) for helper in helpers)
+                    and len({helper["pid"] for helper in helpers}) == len(helpers)
+                    and kernel_identity(row.get("pi_identity")), "linux_actual_pi_cancellation_unobserved")
+            require(row.get("admitted_helpers") == expected, "linux_pi_helper_admission_bound_unobserved")
+            if row["case"] == "timeout":
+                duration = row.get("natural_timeout_seconds")
+                require(type(duration) in (int, float) and math.isfinite(duration) and 9 <= duration < 13
+                        and row.get("production_http_timeout_seconds") == 10 and row.get("no_control_before_timeout") is True,
+                        "linux_original_webhook_timeout_unobserved")
+            else:
+                duration = row.get("cancellation_seconds")
+                require(type(duration) in (int, float) and math.isfinite(duration) and 0 <= duration < 3,
+                        "linux_original_helper_cancellation_was_not_prompt")
+            if row["case"] in ("reload", "new"):
+                require(row.get("fresh_observer_delivered_once") is True, "linux_pi_reset_did_not_restore_observer")
+            if row["case"] == "reload":
+                require(row.get("excess_observation_dropped") is True and row.get("settled_before_control") == 3,
+                        "linux_pi_hung_child_stalled_or_queued")
+        mux = desktop.get("multiplexer", {})
+        require(mux.get("case") == "tmux-completion" and mux.get("native_mode") == "tui"
+                and all(mux.get("checks", {}).get(check) is True for check in CHECKS)
+                and all(mux.get(key) is True for key in ("real_mouse_click", "banner_observed", "original_pane_selected", "owned_tmux_server_collected"))
+                and kernel_identity(mux.get("tmux_server_identity"))
+                and re.fullmatch(r"%[0-9]+", mux.get("origin_tmux_pane", "")) is not None,
+                "linux_real_tmux_click_or_collection_unobserved")
+        for row in [mux, *[row for row in native if row["case"] not in ("sound-off", "desktop-off")]]:
+            correlation = row.get("configured_cue_envelope_match")
+            require(type(correlation) in (int, float) and math.isfinite(correlation) and correlation >= 0.65,
+                    "linux_canonical_cue_not_observed")
     if platform == "darwin":
         pin = B.H.load_pin()
         B.H.candidate_tree(pin)
@@ -166,6 +204,11 @@ def regular_artifact(value):
     return (isinstance(value, dict) and not value.get("link") and isinstance(value.get("sha256"), str)
             and re.fullmatch(r"[a-f0-9]{64}", value["sha256"]) is not None
             and type(value.get("bytes")) is int and 0 < value["bytes"] <= 512 * 1024 * 1024)
+
+
+def kernel_identity(value):
+    return isinstance(value, dict) and all(type(value.get(key)) is int and value[key] > 0 for key in ("pid", "start_ticks")) \
+        and isinstance(value.get("executable"), str) and value["executable"].startswith("/")
 
 
 def success_counts(value):

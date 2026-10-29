@@ -7,7 +7,8 @@ has `desktop_qualified: false`; `prerequisites_ready` establishes these observer
 not a Pi banner, notification permission, product sound or notification click.
 Unavailable prerequisites exit nonzero with an `unqualified` receipt. Windows
 Server cannot substitute for the required Windows Client desktop.
-The separate early Client lane uses the existing `windows-11-vs2026-arm` runner.
+The Windows Client lane is an explicit owner-dispatched native gate and uses
+the existing `windows-11-vs2026-arm` runner by default.
 An already configured Client runner can be selected with
 `CI_PI_WINDOWS_DESKTOP_RUNNER` or the workflow's `windows_client_runner` input.
 Receipts record the host architecture. A later run of the shipped amd64 product
@@ -23,7 +24,9 @@ macOS uses actual session/permission observations, two disposable native windows
 native mouse input and ScreenCaptureKit audio capture. It never requests or grants
 permissions. Windows observes the actual WTS/input desktop and Client SKU, creates
 two disposable windows, verifies native input/foreground observation and records
-a known cue through WASAPI loopback. No process/return-code observation is treated
+a known cue through render loopback on an existing configured host, or through
+an explicitly admitted virtual cable's paired capture endpoint on a disposable
+prepared hosted Client. No process/return-code observation is treated
 as audio playback evidence. Its read-only audio inventory records both audio
 service states, render endpoint counts across active/disabled/unplugged/missing
 states and all three default render roles in that same session. The product's
@@ -204,7 +207,44 @@ input/fixture hashes and whether the source checkout was dirty. Its
 clean, pinned candidate and the macOS/Windows Client native receipts. A working
 local GOWORK investigation does not qualify the final linked module graph.
 
+The Linux desktop workflow also requires actual installed Pi TUI lifecycle
+checks while real receipt-owned Go webhook children wait on the fixture's held
+HTTP response. Three completed turns must settle promptly while only two
+children are admitted; `/reload` must cancel and collect those original kernel
+process identities without queued delivery. `/new`, completion of the blocking
+UI prompt, and TUI `/quit` independently exercise prompt cancellation. A fresh
+observer after reload/new must deliver once in the same Pi process. Linux
+`/proc` birth ticks and executable/parent identities establish which processes
+were admitted; the fixture observes original subtree collection rather than
+treating a log line or a reused PID as exit. This whole-path cancellation
+coverage is Linux-specific; it does not claim those controls ran on other OSes.
+A separate held-response case sends no cancellation control and observes the
+real helper's natural HTTP timeout against its original kernel birth. The
+production HTTP client expires after 10 seconds, within the outer 15-second
+consumer and 16-second producer budgets; this case does not claim it reaches
+the outer deadline. It requires original process collection, a still-running
+Pi session and no retry.
+
+A separate required completion runs inside an isolated tmux server with an
+owned socket and a known original pane. The fixture backgrounds that pane and
+the originating Xterm, then physically clicks the real product banner. Both
+the original pane and Xterm must regain focus. Its server and terminal are
+collected. Linux output recordings use the same canonical cue energy-contour
+comparison as the other desktop fixtures; decoding the reference never plays
+replacement audio. Missing lifecycle or tmux observations fail the aggregate.
+
 ### macOS installed-product handoff
+
+The automatic macOS PR job is `Actual installed Pi / macOS process compatibility`.
+It compiles the native observer, verifies kernel process identity, acquires the
+signed helper, builds the exact candidate and executes installed process cases.
+Its artifact is `pi-installed-macos-process-<SHA>` and cannot qualify desktop
+delivery. A manual full dispatch runs `Actual installed Pi / macOS native product`
+and emits `pi-installed-macos-<SHA>` only after attempting the complete product
+lane. Observer-only dispatches use `macOS native observer prerequisites` and
+`pi-macos-observer-<SHA>`. The aggregate accepts only the full product artifact
+and still requires its real native observations; neither another lane's success
+nor an uploaded failure receipt satisfies it.
 
 Reuse `tests/integration/pi_installed_fixture.py` for the actual loopback webhook
 observer, supported schema 2 configuration (`preset: "custom"`), public setup
@@ -236,6 +276,18 @@ merged module identity follow the input inventory above. Permission observed in
 synthetic preflight is separate from the candidate helper's own notification
 permission and visible delivery.
 
+The official macOS 15 ARM runner image intentionally unloads Notification
+Center's UI agent during image construction. An owner may dispatch this workflow
+on that disposable GitHub-hosted image with `prepare_notification_center=true`.
+The preparation records the actual official image metadata, current GUI service
+and disabled states, and immutable Apple system-agent identity. Only the exact
+disabled/unloaded `com.apple.notificationcenterui` agent is enabled and
+bootstrapped once; readiness is verified before the normal permission request.
+It does not change permission databases, notification grants, defaults or APNs
+services. Unknown, physical and Namespace hosts are excluded from this opt-in
+preparation. The signed helper must still receive normal user authorization,
+and every actual banner, audio and physical click check remains required.
+
 ### Windows installed-product handoff
 
 `Pi installed Windows product` separates an ordinary Windows Server amd64
@@ -253,7 +305,7 @@ the installed Pi in two real, separately identified Windows Terminal windows.
 It preserves Terminal's actual session identity, observes the native Shell
 toast through UI Automation, records a screenshot and physically clicks its
 visible point. Foreground and keyboard focus must return to the origin window.
-External WASAPI loopback records the product cue; Media Foundation only decodes
+The admitted WASAPI route records the product cue; Media Foundation only decodes
 the configured reference asset for comparison and never renders a replacement
 cue. A pending question, sound-off, click-off, desktop-off and closed-origin
 case use the same six-case contract as the other desktop lanes.
@@ -265,8 +317,17 @@ Pi and product binaries may run under Windows' x64 emulation on an ARM64 host;
 the receipt records that distinction. The Client consumes the same run's exact
 Server-built candidate and process evidence. It requires a genuine configured
 render endpoint, active interactive desktop, Shell notifications and working
-foreground/input observations. It does not install a driver or alter endpoint
-defaults to make the test pass.
+foreground/input observations. With preparation omitted it uses the existing
+render endpoint and loopback. An explicit owner dispatch with `prepare_host=true`
+admits only one fresh GitHub-hosted ARM Client: the measured finite OOBE flow,
+one bound Search overlay dismissal, and one hash-pinned normally kernel-signed
+virtual driver installation. It freezes the running PnP instance, installed
+driver bytes, both endpoint IDs and both adapter topology IDs, then revalidates
+them before each capture. Invalid explicit routes refuse without a default
+microphone or another endpoint fallback. The original `PlaySoundW` known cue
+must pass on that route before any product execution. Product playback,
+canonical cue comparisons, negative thresholds and endpoint defaults are
+unchanged. Process-only artifacts cannot replace this manual desktop receipt.
 
 ## Clean candidate and final three-OS gate
 
@@ -283,7 +344,7 @@ commands and linked source with a distinct version identity; its executable
 must run and have a different SHA. Both stages are inputs to the process suite.
 No release is published.
 
-The installed Linux and macOS workflows retain these build inputs alongside
+The Linux product and manual macOS product workflows retain these build inputs alongside
 `acquisition.json`, `process.json` and their actual native desktop receipt. The
 reusable workflows accept `source_sha` so callers can bind every job to the same
 immutable source. Standalone PR jobs use the pull request head commit.
@@ -306,5 +367,9 @@ This gate must pass before claiming full native qualification or merging the
 integration. The existing hosted Windows Client image has been observed with
 running audio services but zero render endpoints in every state; its synthetic
 foreground/input observers also failed. It cannot supply Windows sound evidence
-until an actual configured Client render route is available. Installing a new
-driver or substituting generated audio is not part of these fixtures.
+until an actual configured Client render route is available or the explicit
+authenticated disposable-host fixture passes its unchanged known-cue probe.
+Host preparation, compilation, acquisition, kernel-signature checks and
+prerequisite receipts do not qualify product delivery. Final macOS and Windows
+desktop qualification remains pending until their actual product observations
+and the complete three-OS aggregate pass for the final exact source.

@@ -35,7 +35,74 @@ N = module("pi_preflight", REPO / "scripts/pi-native-preflight.py")
 F = module("pi_native_fixture", REPO / "tests/integration/pi_native_fixture.py")
 P = module("pi_installed_fixture", REPO / "tests/integration/pi_installed_fixture.py")
 D = module("pi_installed_process", REPO / "scripts/pi-installed-process-e2e.py")
+M = module("pi_audio_oracle", REPO / "scripts/pi-installed-desktop-macos.py")
 CASES = ("completion", "question", "sound-off", "click-off", "desktop-off", "stale-origin")
+
+
+def process_identity(pid):
+    """Read a Linux kernel birth identity, checking it across the executable read."""
+    try:
+        process = Path("/proc") / str(pid)
+        before = (process / "stat").read_text().rsplit(")", 1)[1].split()
+        executable = os.readlink(process / "exe")
+        after = (process / "stat").read_text().rsplit(")", 1)[1].split()
+        if before[19] != after[19] or after[0] == "Z":
+            return None
+        return {"pid": int(pid), "ppid": int(after[1]), "start_ticks": int(after[19]), "executable": executable}
+    except (FileNotFoundError, ProcessLookupError):
+        return None
+
+
+def same_process(identity):
+    current = process_identity(identity["pid"])
+    return current is not None and current["start_ticks"] == identity["start_ticks"]
+
+
+def process_collected(identity):
+    """A reused PID cannot stand in for exit; collect an adopted zombie if ours."""
+    try:
+        fields = (Path("/proc") / str(identity["pid"]) / "stat").read_text().rsplit(")", 1)[1].split()
+        if int(fields[19]) != identity["start_ticks"]:
+            return True
+        if fields[0] == "Z":
+            try:
+                return os.waitpid(identity["pid"], os.WNOHANG)[0] == identity["pid"]
+            except ChildProcessError:
+                return False  # Its original parent must finish joining it.
+        return False
+    except (FileNotFoundError, ProcessLookupError):
+        return True
+
+
+def process_children(identity):
+    P.require(same_process(identity), "original_process_identity_changed")
+    # /proc/PID/task/TID/children requires an optional kernel configuration.
+    # Read kernel PPID fields instead; this also includes forks by Go threads.
+    processes = [path for path in Path("/proc").iterdir() if path.name.isdecimal()]
+    P.require(len(processes) <= 65536, "process_inventory_bound")
+    children = []
+    for path in processes:
+        try:
+            fields = (path / "stat").read_text().rsplit(")", 1)[1].split()
+            if int(fields[1]) == identity["pid"]:
+                child = process_identity(int(path.name))
+                if child and child["ppid"] == identity["pid"]:
+                    children.append(child)
+        except (FileNotFoundError, ProcessLookupError):
+            pass
+    P.require(same_process(identity), "original_process_identity_changed")
+    return children
+
+
+def process_tree(identity):
+    result, pending = [], [identity]
+    while pending:
+        current = pending.pop()
+        P.require(len(result) < 64, "owned_helper_subtree_bound")
+        if same_process(current):
+            result.append(current)
+            pending.extend(process_children(current))
+    return result
 
 
 def observe_unchanged_focus(active, keyboard_pid, window, window_pid, stop_capture, seconds=15):
@@ -63,7 +130,7 @@ def run(args):
               "host_os": platform.system(), "host_architecture": platform.machine(),
               "candidate_binary_sha256": P.sha(args.candidate), "package_sha256": P.sha(args.package),
               "pi_binary_sha256": P.sha(args.pi_executable), "desktop_qualified": False,
-              "native_product_observations_passed": False, "cases": []}
+              "native_product_observations_passed": False, "cases": [], "lifecycle_cases": []}
     # Adopt only this fixture's orphaned product daemon so cleanup can collect it.
     libc = ctypes.CDLL(None, use_errno=True)
     prior_subreaper = ctypes.c_int()
@@ -104,10 +171,111 @@ def run(args):
                 "rms_s16": round(math.sqrt(sum(x * x for x in values) / len(values)), 3) if values else 0,
                 "nonzero_samples": sum(abs(x) > 128 for x in values)}
 
+    def lifecycle_case(action):
+        """Real installed Pi controls cancel already admitted real Go children."""
+        case_root = root / ("case-lifecycle-" + action)
+        provider, destination = F.Provider("success"), P.Webhooks(hold_response=True)
+        terminal = None
+        row = {"case": action, "scope": "actual_installed_pi_linux_tui", "status": "running"}
+        report["lifecycle_cases"].append(row)
+        try:
+            native_env = desktop_env(F.prepare(case_root, provider, "success", agent_dir=profile))
+            P.configure(root / "global/config.json", args.assets_root / "config/config.json", destination,
+                        desktop=False, sound=False, click=False)
+            argv = ["xterm", "-T", "TEST Pi lifecycle " + action, "-geometry", "100x35+20+150", "-e",
+                    args.pi_executable, "--offline", "--no-approve", "--no-session", "--no-mcp", "--no-tools",
+                    "--provider", "TEST-local", "--model", "TEST-local", "--tui-mode", "regular"]
+            terminal = subprocess.Popen([str(x) for x in argv], cwd=case_root / "project", env=native_env,
+                                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                        start_new_session=True)
+            lab.children.append(terminal)
+            def window():
+                out, code = lab.run(["xdotool", "search", "--onlyvisible", "--pid", str(terminal.pid)], check=False)
+                found = out.strip().splitlines()
+                return found[0] if code == 0 and len(found) == 1 else None
+            origin = N.wait_for(window)
+            N.wait_for(lambda: any(x["type"] == "session_start" for x in F.witness(case_root)))
+            factory = next(x for x in F.witness(case_root) if x["type"] == "factory")
+            pi = process_identity(factory["pid"])
+            P.require(pi is not None and pi["executable"] == str(args.pi_executable), "native_pi_kernel_identity_missing")
+            lab.run(["xdotool", "windowactivate", "--sync", origin])
+            N.wait_for(lambda: active() == origin and keyboard_pid() == terminal.pid)
+            count = 3 if action == "reload" else 1
+            for index in range(count):
+                started = time.monotonic()
+                type_line("/TEST-dialog" if action == "prompt-end" else "TEST " + str(index))
+                event = "ui_prompt_start" if action == "prompt-end" else "agent_settled"
+                N.wait_for(lambda: sum(x["type"] == event for x in F.witness(case_root)) == index + 1, seconds=5)
+                P.require(time.monotonic() - started < 5, "native_pi_settlement_or_prompt_stalled")
+                if index < 2:
+                    destination.wait("question" if action == "prompt-end" else "task_complete", timeout=5)
+            destination.quiet(seconds=0.3)
+            helpers = [child for child in process_children(pi)
+                       if child["executable"] == str(root / "runtime/bin" / args.candidate.name)]
+            expected = 2 if action == "reload" else 1
+            P.require(len(helpers) == expected and len(destination.rows) == expected,
+                      "native_pi_original_helper_admission_bound_unobserved")
+            owned = [identity for helper in helpers for identity in process_tree(helper)]
+            P.require(len(owned) >= expected, "native_pi_helper_identity_disappeared_before_control")
+            row.update(pi_identity=pi, helper_identities=owned, admitted_helpers=len(helpers),
+                       excess_observation_dropped=action == "reload", settled_before_control=count if action != "prompt-end" else 0)
+            started = time.monotonic()
+            if action == "timeout":
+                # Production HTTP client timeout is 10s, below Pi's 15s consumer
+                # and 16s producer bounds. Keep the response held; send no control.
+                N.wait_for(lambda: all(process_collected(identity) for identity in owned), seconds=13)
+                uptime = float(Path("/proc/uptime").read_text().split()[0])
+                lifetime = uptime - helpers[0]["start_ticks"] / os.sysconf("SC_CLK_TCK")
+                P.require(9 <= lifetime < 13, "actual_webhook_original_timeout_not_observed")
+                P.require(same_process(pi), "helper_timeout_ended_pi")
+                row.update(natural_timeout_seconds=round(lifetime, 3), production_http_timeout_seconds=10,
+                           no_control_before_timeout=True)
+            else:
+                type_line("TEST accepted" if action == "prompt-end" else "/" + action)
+                N.wait_for(lambda: all(process_collected(identity) for identity in owned), seconds=3)
+                row["cancellation_seconds"] = round(time.monotonic() - started, 3)
+                P.require(row["cancellation_seconds"] < 3, "native_pi_helper_cancellation_was_not_prompt")
+            row["original_helper_subtree_collected"] = True
+            if action == "prompt-end":
+                N.wait_for(lambda: any(x["type"] == "ui_prompt_end" for x in F.witness(case_root)))
+                P.require(not provider.requests, "native_prompt_end_started_model_work")
+            elif action == "quit":
+                P.require(terminal.wait(timeout=3) == 0 and not same_process(pi), "native_tui_quit_not_collected")
+            elif action in ("new", "reload"):
+                N.wait_for(lambda: any(x["type"] == "session_shutdown" and x.get("reason") == action
+                                      for x in F.witness(case_root)))
+                N.wait_for(lambda: sum(x["type"] == "factory" for x in F.witness(case_root)) >= 2)
+                P.require(same_process(pi), "native_session_reset_replaced_pi_process")
+                destination.release.set()
+                type_line("TEST fresh")
+                destination.wait("task_complete", timeout=5)
+                N.wait_for(lambda: sum(x["type"] == "agent_settled" for x in F.witness(case_root)) == count + 1)
+                N.wait_for(lambda: not [child for child in process_children(pi)
+                                       if child["executable"] == str(root / "runtime/bin" / args.candidate.name)])
+                row["fresh_observer_delivered_once"] = True
+            destination.quiet(seconds=0.3)
+            P.require(len(destination.rows) == expected + (1 if action in ("new", "reload") else 0),
+                      "native_pi_cancelled_helper_was_resent")
+            if terminal.poll() is None:
+                type_line("/quit")
+                P.require(terminal.wait(timeout=3) == 0, "native_lifecycle_terminal_not_collected")
+            row.update(status="passed", native_control=None if action == "timeout" else action,
+                       terminal_collected=True, no_resend=True)
+        finally:
+            if terminal:
+                lab.stop(terminal)
+            destination.close()
+            provider.close()
+
     def case(name, distractor):
         case_root = root / ("case-" + name)
         provider = F.Provider("success", hold_reply=name != "question")
-        recorder, terminal = None, None
+        recorder, terminal, mux_identity, mux_pane = None, None, None, None
+        mux_socket = case_root / "tmux.sock"
+        multiplexed = name == "tmux-completion"
+
+        def tmux(*atoms):
+            return lab.run(["tmux", "-S", mux_socket, *atoms])[0].strip()
         sound, click, desktop = name != "sound-off", name != "click-off", name != "desktop-off"
         try:
             native_env = desktop_env(F.prepare(case_root, provider, "success", agent_dir=profile))
@@ -123,6 +291,9 @@ def run(args):
                     "--provider", "TEST-local", "--model", "TEST-local", "--tui-mode", "regular"]
             if name != "question":
                 argv.append("TEST say done")
+            if multiplexed:
+                P.require(len(str(mux_socket).encode()) < 104, "owned_tmux_socket_path_bound")
+                argv = argv[:6] + ["tmux", "-S", mux_socket, "-f", "/dev/null", "new-session", "-s", "TEST", "-n", "origin", "--"] + argv[6:]
             terminal = subprocess.Popen([str(x) for x in argv], cwd=case_root / "project", env=native_env,
                                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                         start_new_session=True)
@@ -137,6 +308,17 @@ def run(args):
             N.wait_for(lambda: (case_root / "witness.jsonl").exists()
                        and any(x["type"] == "session_start" for x in F.witness(case_root)))
             P.require(all(x.get("mode") == "tui" for x in F.witness(case_root) if x["type"] != "factory"), "product_pi_not_actual_tui")
+            if multiplexed:
+                mux_identity = process_identity(int(tmux("display-message", "-p", "#{pid}")))
+                P.require(mux_identity is not None and Path(mux_identity["executable"]).name == "tmux",
+                          "owned_tmux_server_identity_unavailable")
+                mux_pane = tmux("display-message", "-p", "-t", "TEST:origin", "#{pane_id}")
+                pane_pid = int(tmux("display-message", "-p", "-t", "TEST:origin", "#{pane_pid}"))
+                P.require(next(x for x in F.witness(case_root) if x["type"] == "factory")["pid"] == pane_pid,
+                          "tmux_origin_pane_is_not_actual_pi")
+                tmux("new-window", "-d", "-t", "TEST", "-n", "distractor", "/bin/sleep", "300")
+                tmux("select-window", "-t", "TEST:distractor")
+                P.require(tmux("display-message", "-p", "#{pane_id}") != mux_pane, "tmux_pane_not_backgrounded")
             recording = case_root / "native-output.s16le"
             with recording.open("wb") as stream:
                 recorder = subprocess.Popen(["parec", "--device=TEST_pi_observer.monitor", "--format=s16le", "--rate=48000",
@@ -170,6 +352,8 @@ def run(args):
                 lab.run(["xdotool", "mousemove", "1100", "70", "click", "1"])
                 if click and name != "stale-origin":
                     N.wait_for(lambda: active() == origin and keyboard_pid() == terminal.pid)
+                    if multiplexed:
+                        N.wait_for(lambda: tmux("display-message", "-p", "#{pane_id}") == mux_pane)
                 else:
                     decoy_pid = int(lab.run(["xdotool", "getwindowpid", distractor])[0].strip())
                     click_observation = observe_unchanged_focus(active, keyboard_pid, distractor, decoy_pid,
@@ -196,9 +380,15 @@ def run(args):
             lab.stop(recorder)
             stats = bytes_stats(recording, baseline)
             expected_sound = sound and desktop
+            correlation = None
             P.require(stats["samples"] >= 4800, "product_audio_capture_incomplete")
             if expected_sound:
                 P.require(stats["peak_s16"] > 1000 and stats["nonzero_samples"] >= 480, "actual_product_cue_not_observed")
+                reference = case_root / "configured-reference.wav"
+                lab.run(["ffmpeg", "-loglevel", "error", "-i", root / "runtime/sounds" / ("question.mp3" if name == "question" else "task-complete.mp3"),
+                         "-ac", "1", "-ar", "48000", "-c:a", "pcm_s16le", reference])
+                correlation = M.envelope_match(recording, reference)
+                P.require(correlation >= 0.65, "captured_audio_not_configured_cue")
             else:
                 P.require(stats["peak_s16"] == 0, "product_sound_off_was_audible")
             if terminal.poll() is None:
@@ -208,6 +398,11 @@ def run(args):
                     type_line("TEST accepted")
                     N.wait_for(lambda: any(x["type"] == "ui_prompt_end" for x in F.witness(case_root)))
                 type_line("/quit")
+                if multiplexed:
+                    N.wait_for(lambda: mux_pane not in tmux("list-panes", "-a", "-F", "#{pane_id}").splitlines())
+                    P.require(same_process(mux_identity), "owned_tmux_server_identity_changed")
+                    tmux("kill-server")
+                    N.wait_for(lambda: process_collected(mux_identity))
                 P.require(terminal.wait(timeout=10) == 0, "product_tui_not_collected")
             rows = F.witness(case_root)
             if name == "question":
@@ -217,19 +412,30 @@ def run(args):
             else:
                 F.verify_case("success", rows, provider.requests)
             sink.quiet()
-            report["cases"].append({"case": name, "native_mode": "tui", "banner_observed": desktop,
+            row = {"case": name, "native_mode": "tui", "banner_observed": desktop,
                 "real_mouse_click": desktop, "origin_window": origin, "distractor_window": distractor,
                 "foreground_after_click": foreground_after_click, "keyboard_pid_after_click": keyboard_after_click,
                 "unchanged_click_observation": click_observation,
                 "origin_xterm_pid": terminal.pid,
                 "sound_expected": expected_sound, "audio": stats, "audio_sha256": P.sha(recording),
+                "configured_cue_envelope_match": correlation,
                 "banner_screenshot_sha256": P.sha(screenshot) if desktop else None,
                 "pending_question_at_click": name == "question", "ambient_root_was_foreign": True,
                 "terminal_collected": terminal.poll() is not None,
                 "checks": {"native_tui": True, "configured_banner_policy": True, "configured_audio_policy": True,
                            "configured_click_policy": True, "native_event_counts": True,
-                           "ambient_root_isolated": True, "owned_terminal_collected": terminal.poll() is not None}})
+                           "ambient_root_isolated": True, "owned_terminal_collected": terminal.poll() is not None}}
+            if multiplexed:
+                row.update(origin_tmux_pane=mux_pane, tmux_server_identity=mux_identity,
+                           original_pane_selected=True, owned_tmux_server_collected=process_collected(mux_identity))
+                report["multiplexer"] = row
+            else:
+                report["cases"].append(row)
         finally:
+            if mux_identity:
+                if same_process(mux_identity):
+                    tmux("kill-server")
+                N.wait_for(lambda: process_collected(mux_identity))
             if terminal:
                 lab.stop(terminal)
             if recorder:
@@ -256,6 +462,9 @@ def run(args):
         report["cue_sha256"] = {name: P.sha(root / "runtime/sounds" / name) for name in ("task-complete.mp3", "question.mp3")}
         for name in CASES:
             case(name, distractors[-1])
+        case("tmux-completion", distractors[-1])
+        for action in ("reload", "new", "prompt-end", "quit", "timeout"):
+            lifecycle_case(action)
         report.update(status="passed_native_product_observations", native_product_observations_passed=True)
     except Exception as error:
         report["failure"] = str(error)

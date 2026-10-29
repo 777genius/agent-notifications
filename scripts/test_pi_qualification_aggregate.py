@@ -59,6 +59,22 @@ def metadata(platform="linux"):
     desktop = {**identity, "native_product_observations_passed": True, "owned_children_collected": True,
                "cases": [{"case": name, "checks": {check: True for check in A.CHECKS},
                            "pending_question_at_click": name == "question"} for name in A.CASES]}
+    if platform == "linux":
+        kernel = {"pid": 123, "ppid": 100, "start_ticks": 456, "executable": "/TEST/runtime/helper"}
+        desktop["lifecycle_cases"] = [{"case": action, "status": "passed", "scope": "actual_installed_pi_linux_tui",
+            "cancellation_seconds": 0.2, "helper_identities": [dict(kernel), {**kernel, "pid": 124}] if action == "reload" else [dict(kernel)],
+            "pi_identity": {**kernel, "pid": 100}, "original_helper_subtree_collected": True,
+            "terminal_collected": True, "no_resend": True,
+            "natural_timeout_seconds": 10.1, "production_http_timeout_seconds": 10, "no_control_before_timeout": True,
+            "admitted_helpers": 2 if action == "reload" else 1, "fresh_observer_delivered_once": True,
+            "excess_observation_dropped": action == "reload", "settled_before_control": 3 if action == "reload" else 1}
+            for action in ("reload", "new", "prompt-end", "quit", "timeout")]
+        desktop["multiplexer"] = {"case": "tmux-completion", "native_mode": "tui",
+            "checks": {check: True for check in A.CHECKS}, "real_mouse_click": True, "banner_observed": True,
+            "original_pane_selected": True, "owned_tmux_server_collected": True, "origin_tmux_pane": "%0",
+            "tmux_server_identity": kernel, "configured_cue_envelope_match": 0.9}
+        for row in desktop["cases"]:
+            row["configured_cue_envelope_match"] = None if row["case"] in ("sound-off", "desktop-off") else 0.9
     if platform == "darwin":
         desktop["native_helper_verified"] = True
         build["stage_inventory"]["ClaudeNotifier.app.managed-runtime.json"] = {"sha256": HASH, "bytes": 1}
@@ -88,6 +104,24 @@ class AggregateGuards(unittest.TestCase):
     def test_validated_metadata_contract_on_each_os(self):
         for platform in A.HOSTS:
             self.assertEqual(A.qualify(platform, SOURCE, *metadata(platform))["status"], "qualified")
+
+    def test_linux_real_lifecycle_birth_identities_tmux_and_canonical_audio_are_required(self):
+        for change in (lambda desktop: desktop.pop("lifecycle_cases"),
+                       lambda desktop: desktop["lifecycle_cases"][0].update(original_helper_subtree_collected=False),
+                       lambda desktop: desktop["lifecycle_cases"][0]["helper_identities"][0].update(start_ticks=0),
+                       lambda desktop: desktop["lifecycle_cases"][0].update(cancellation_seconds=15),
+                       lambda desktop: desktop["lifecycle_cases"][0].update(admitted_helpers=3),
+                       lambda desktop: desktop["lifecycle_cases"][0].update(excess_observation_dropped=False),
+                       lambda desktop: desktop["lifecycle_cases"][1].update(fresh_observer_delivered_once=False),
+                       lambda desktop: desktop["lifecycle_cases"][4].update(natural_timeout_seconds=30),
+                       lambda desktop: desktop["lifecycle_cases"][4].update(no_control_before_timeout=False),
+                       lambda desktop: desktop.pop("multiplexer"),
+                       lambda desktop: desktop["multiplexer"].update(original_pane_selected=False),
+                       lambda desktop: desktop["multiplexer"].update(owned_tmux_server_collected=False),
+                       lambda desktop: next(row for row in desktop["cases"] if row["case"] == "completion").update(configured_cue_envelope_match=0.1)):
+            values = metadata("linux"); change(values[3])
+            with self.assertRaises(ValueError):
+                A.qualify("linux", SOURCE, *values)
 
     def test_windows_selected_route_and_original_cue_remain_mandatory(self):
         for change in (lambda desktop: desktop.pop("audio_capture_route"),
