@@ -132,7 +132,9 @@ def qualify(platform, source, build, acquisition, process, desktop):
                     and len(helpers) >= expected and all(kernel_identity(helper) for helper in helpers)
                     and len({helper["pid"] for helper in helpers}) == len(helpers)
                     and kernel_identity(row.get("pi_identity")), "linux_actual_pi_cancellation_unobserved")
-            require(row.get("admitted_helpers") == expected, "linux_pi_helper_admission_bound_unobserved")
+            require(row.get("admitted_helpers") == expected and row.get("admitted_webhook_requests") == 1
+                    and row.get("helper_admission_counts") == ([1, 2, 2] if row["case"] == "reload" else [1]),
+                    "linux_pi_helper_admission_bound_unobserved")
             if row["case"] == "timeout":
                 duration = row.get("natural_timeout_seconds")
                 require(type(duration) in (int, float) and math.isfinite(duration) and 9 <= duration < 13

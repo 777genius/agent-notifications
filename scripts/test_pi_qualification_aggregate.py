@@ -66,7 +66,8 @@ def metadata(platform="linux"):
             "pi_identity": {**kernel, "pid": 100}, "original_helper_subtree_collected": True,
             "terminal_collected": True, "no_resend": True,
             "natural_timeout_seconds": 10.1, "production_http_timeout_seconds": 10, "no_control_before_timeout": True,
-            "admitted_helpers": 2 if action == "reload" else 1, "fresh_observer_delivered_once": True,
+            "admitted_helpers": 2 if action == "reload" else 1, "admitted_webhook_requests": 1,
+            "helper_admission_counts": [1, 2, 2] if action == "reload" else [1], "fresh_observer_delivered_once": True,
             "excess_observation_dropped": action == "reload", "settled_before_control": 3 if action == "reload" else 1}
             for action in ("reload", "new", "prompt-end", "quit", "timeout")]
         desktop["multiplexer"] = {"case": "tmux-completion", "native_mode": "tui",
@@ -112,6 +113,8 @@ class AggregateGuards(unittest.TestCase):
                        lambda desktop: desktop["lifecycle_cases"][0]["helper_identities"][0].update(start_ticks=0),
                        lambda desktop: desktop["lifecycle_cases"][0].update(cancellation_seconds=15),
                        lambda desktop: desktop["lifecycle_cases"][0].update(admitted_helpers=3),
+                       lambda desktop: desktop["lifecycle_cases"][0].update(admitted_webhook_requests=2),
+                       lambda desktop: desktop["lifecycle_cases"][0].update(helper_admission_counts=[1, 2, 3]),
                        lambda desktop: desktop["lifecycle_cases"][0].update(excess_observation_dropped=False),
                        lambda desktop: desktop["lifecycle_cases"][1].update(fresh_observer_delivered_once=False),
                        lambda desktop: desktop["lifecycle_cases"][4].update(natural_timeout_seconds=30),

@@ -208,9 +208,11 @@ clean, pinned candidate and the macOS/Windows Client native receipts. A working
 local GOWORK investigation does not qualify the final linked module graph.
 
 The Linux desktop workflow also requires actual installed Pi TUI lifecycle
-checks while real receipt-owned Go webhook children wait on the fixture's held
-HTTP response. Three completed turns must settle promptly while only two
-children are admitted; `/reload` must cancel and collect those original kernel
+checks while a real receipt-owned Go child waits on the fixture's held HTTP
+response. The retained installation lease serializes webhook handoffs: the
+second real Go child waits on that lease. Three completed turns must settle
+promptly with helper counts of one, two, then two, while only the first HTTP
+request reaches the sink; `/reload` must cancel and collect both original kernel
 process identities without queued delivery. `/new`, completion of the blocking
 UI prompt, and TUI `/quit` independently exercise prompt cancellation. A fresh
 observer after reload/new must deliver once in the same Pi process. Linux

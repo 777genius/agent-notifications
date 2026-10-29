@@ -198,27 +198,43 @@ def run(args):
             factory = next(x for x in F.witness(case_root) if x["type"] == "factory")
             pi = process_identity(factory["pid"])
             P.require(pi is not None and pi["executable"] == str(args.pi_executable), "native_pi_kernel_identity_missing")
+            def helper_children():
+                return sorted((child for child in process_children(pi)
+                               if child["executable"] == str(root / "runtime/bin" / args.candidate.name)),
+                              key=lambda child: child["pid"])
             lab.run(["xdotool", "windowactivate", "--sync", origin])
             N.wait_for(lambda: active() == origin and keyboard_pid() == terminal.pid)
             count = 3 if action == "reload" else 1
             row["phase"] = "admit_held_work"
+            admitted = []
+            row["helper_admission_counts"] = []
             for index in range(count):
                 started = time.monotonic()
                 type_line("/TEST-dialog" if action == "prompt-end" else "TEST " + str(index))
                 event = "ui_prompt_start" if action == "prompt-end" else "agent_settled"
                 N.wait_for(lambda: sum(x["type"] == event for x in F.witness(case_root)) == index + 1, seconds=5)
                 P.require(time.monotonic() - started < 5, "native_pi_settlement_or_prompt_stalled")
-                if index < 2:
+                if index == 0:
                     destination.wait("question" if action == "prompt-end" else "task_complete", timeout=5)
+                # The first HTTP handoff retains the exclusive installation
+                # lease. The second real Go child waits on that same lease;
+                # it cannot submit a second request until the first releases.
+                helpers = N.wait_for(lambda: (children if len(children := helper_children()) == min(index + 1, 2) else None), seconds=3)
+                if index < 2:
+                    P.require(all(child in helpers for child in admitted), "native_pi_original_helper_exited_before_control")
+                    admitted = helpers
+                else:
+                    P.require(helpers == admitted, "native_pi_excess_observation_replaced_original_helpers")
+                row["helper_admission_counts"].append(len(helpers))
             destination.quiet(seconds=0.3)
-            helpers = [child for child in process_children(pi)
-                       if child["executable"] == str(root / "runtime/bin" / args.candidate.name)]
+            helpers = helper_children()
             expected = 2 if action == "reload" else 1
-            P.require(len(helpers) == expected and len(destination.rows) == expected,
+            P.require(helpers == admitted and len(helpers) == expected and len(destination.rows) == 1,
                       "native_pi_original_helper_admission_bound_unobserved")
             owned = [identity for helper in helpers for identity in process_tree(helper)]
             P.require(len(owned) >= expected, "native_pi_helper_identity_disappeared_before_control")
             row.update(pi_identity=pi, helper_identities=owned, admitted_helpers=len(helpers),
+                       admitted_webhook_requests=len(destination.rows),
                        excess_observation_dropped=action == "reload", settled_before_control=count if action != "prompt-end" else 0)
             started = time.monotonic()
             row["phase"] = "natural_timeout" if action == "timeout" else "original_child_cancellation"
@@ -257,7 +273,7 @@ def run(args):
                                        if child["executable"] == str(root / "runtime/bin" / args.candidate.name)])
                 row["fresh_observer_delivered_once"] = True
             destination.quiet(seconds=0.3)
-            P.require(len(destination.rows) == expected + (1 if action in ("new", "reload") else 0),
+            P.require(len(destination.rows) == 1 + (1 if action in ("new", "reload") else 0),
                       "native_pi_cancelled_helper_was_resent")
             if terminal.poll() is None:
                 row["phase"] = "terminal_collection"
