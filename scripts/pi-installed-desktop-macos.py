@@ -523,7 +523,14 @@ def terminal_applescript(source, observe, receipt, admit, *, now=time.monotonic,
                 P.require(remaining > 0, "original_terminal_applescript_deadline_expired")
                 context = {key: value for key, value in actors.items() if key != "chain"}
                 context.update(deadlineMonotonic=deadline, clock="mach_absolute_time")
-                observed = observe("terminal-automation-consent", json.dumps(context, sort_keys=True), timeout=min(3, remaining))
+                try:
+                    observed = observe("terminal-automation-consent", json.dumps(context, sort_keys=True), timeout=min(3, remaining))
+                except Exception:
+                    # An already-authorized original can finish during the
+                    # native actor check. Collect its actual result below.
+                    if child.poll() is None:
+                        raise
+                    break
                 dialogs = observed.get("dialogs", [])
                 if dialogs:
                     P.require(len(dialogs) == 1 and child.poll() is None and now() < deadline,

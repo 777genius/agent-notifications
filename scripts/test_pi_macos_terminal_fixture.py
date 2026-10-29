@@ -228,6 +228,58 @@ class TerminalAutomation(unittest.TestCase):
         self.assertTrue(receipt["owned_child_collected"])
         admit.assert_not_called()
 
+    def test_natural_exit_during_consent_observation_collects_only_the_original_actual_result(self):
+        for exit_code in (0, 1):
+            with self.subTest(exit_code=exit_code), tempfile.TemporaryDirectory(prefix="TEST-pi-terminal-exit-") as temporary:
+                release, children, calls, receipt = Path(temporary) / "release", [], [], {}
+                def spawn(argv, **kwargs):
+                    code = ('import sys,time; from pathlib import Path; release=Path(sys.argv[1]); '
+                            'deadline=time.monotonic()+5\n'
+                            'while not release.exists() and time.monotonic()<deadline: time.sleep(.01)\n'
+                            'print("7|/dev/ttysTEST"); sys.exit(int(sys.argv[2]))')
+                    children.append(subprocess.Popen([sys.executable, "-c", code, str(release), str(exit_code)], **kwargs))
+                    return children[-1]
+                def observe(operation, *args, **kwargs):
+                    calls.append(operation)
+                    if operation == "terminal-automation-actors":
+                        return self.actors(children[0])
+                    self.assertEqual(operation, "terminal-automation-consent")
+                    release.touch()
+                    children[0].wait(timeout=3)
+                    raise RuntimeError("TEST original exited during native observation")
+                admit = mock.Mock()
+                if exit_code == 0:
+                    self.assertEqual(M.terminal_applescript("TEST original", observe, receipt, admit, spawn=spawn),
+                                     "7|/dev/ttysTEST")
+                else:
+                    with self.assertRaisesRegex(RuntimeError, "original_terminal_applescript_failed"):
+                        M.terminal_applescript("TEST original", observe, receipt, admit, spawn=spawn)
+                self.assertEqual(len(children), 1)
+                self.assertEqual(calls, ["terminal-automation-actors", "terminal-automation-consent"])
+                self.assertEqual(receipt["exit_code"], exit_code)
+                self.assertTrue(receipt["owned_child_collected"])
+                self.assertFalse(receipt["physical_allow_click"])
+                admit.assert_not_called()
+
+    def test_consent_observer_error_while_original_is_pending_remains_primary(self):
+        children, receipt = [], {}
+        def spawn(argv, **kwargs):
+            children.append(self.waiting_child(kwargs))
+            return children[-1]
+        def observe(operation, *args, **kwargs):
+            if operation == "terminal-automation-actors":
+                return self.actors(children[0])
+            self.assertEqual(operation, "terminal-automation-consent")
+            self.assertIsNone(children[0].poll())
+            raise RuntimeError("TEST live original observer failed")
+        admit = mock.Mock()
+        with self.assertRaisesRegex(RuntimeError, "TEST live original observer failed"):
+            M.terminal_applescript("TEST original", observe, receipt, admit, spawn=spawn)
+        self.assertEqual(len(children), 1)
+        self.assertTrue(receipt["owned_child_collected"])
+        self.assertFalse(receipt["physical_allow_click"])
+        admit.assert_not_called()
+
     def test_observer_primary_error_is_preserved_while_original_child_is_collected(self):
         children, receipt = [], {}
         def spawn(argv, **kwargs):
