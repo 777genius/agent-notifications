@@ -1,5 +1,22 @@
 {
     "name": "claude-notifications-go",
     "version": "1.49.11",
-    "hooks": "./hooks/hooks-codex.json"
+    "hooks": "./hooks/hooks-codex.json",
+    "description": "Desktop notifications for coding agents with sounds and click-to-focus navigation.",
+    "author": {
+        "name": "777genius",
+        "email": "quantjumppro@gmail.com"
+    },
+    "repository": "https://github.com/777genius/agent-notifications",
+    "license": "GPL-3.0-or-later",
+    "interface": {
+        "displayName": "Agent Notifications",
+        "shortDescription": "Desktop alerts for agents",
+        "longDescription": "Desktop notifications for developers using Codex CLI. Receive alerts when a turn finishes or your input is needed, with configurable sounds and click-to-focus navigation where supported. Requires a local Agent Notifications installation with Codex lifecycle hooks enabled.",
+        "developerName": "777genius",
+        "category": "Developer Tools",
+        "capabilities": ["Desktop notifications", "Notification sounds", "Click-to-focus navigation"],
+        "composerIcon": "./assets/icon.png",
+        "logo": "./assets/icon.png"
+    }
 }
