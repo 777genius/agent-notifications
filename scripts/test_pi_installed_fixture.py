@@ -39,6 +39,29 @@ def prepared_paths(root):
 
 
 class ObserverTests(unittest.TestCase):
+    def test_native_witness_can_start_after_terminal_visibility(self):
+        with tempfile.TemporaryDirectory(prefix="TEST-pi-witness-startup-") as name:
+            root = Path(name)
+            self.assertEqual(F.witness(root), [])
+            # Absence is never success: the final native oracle requires its
+            # actual factory and lifecycle observations.
+            with self.assertRaisesRegex(RuntimeError, "witness_factory_not_exactly_once"):
+                F.verify_case("success", F.witness(root), [{}])
+            row = {"type": "factory", "pid": 123}
+            (root / "witness.jsonl").write_text(P.json.dumps(row) + "\n", encoding="utf-8")
+            self.assertEqual(F.witness(root), [row])
+
+    def test_native_witness_corruption_does_not_become_pending_startup(self):
+        with tempfile.TemporaryDirectory(prefix="TEST-pi-witness-invalid-") as name:
+            root = Path(name)
+            path = root / "witness.jsonl"
+            path.write_text("malformed witness\n", encoding="utf-8")
+            with self.assertRaises(ValueError):
+                F.witness(root)
+            path.write_bytes(b"\xff")
+            with self.assertRaises(UnicodeDecodeError):
+                F.witness(root)
+
     def test_new_TEST_root_is_empty_private_and_refuses_other_prefixes(self):
         with self.assertRaisesRegex(RuntimeError, "TEST_root_prefix"):
             P.new_test_root("ordinary-user-directory-")

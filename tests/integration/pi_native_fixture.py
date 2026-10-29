@@ -218,7 +218,14 @@ class PiProcess:
 
 
 def witness(root):
-    return [json.loads(line) for line in (Path(root) / "witness.jsonl").read_text(encoding="utf-8").splitlines()]
+    # A visible native terminal can precede Pi's extension factory. Missing
+    # observations are pending until the caller's existing readiness deadline;
+    # malformed or unreadable witness bytes still fail the observation.
+    try:
+        data = (Path(root) / "witness.jsonl").read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return []
+    return [json.loads(line) for line in data.splitlines()]
 
 
 def verify_case(case, rows, requests):
