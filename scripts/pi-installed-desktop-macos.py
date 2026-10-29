@@ -103,12 +103,13 @@ def verify_permission_grant(request_receipt, fresh_receipt):
     return fresh
 
 
-def consent_observer(request, observe, app, receipt):
+def consent_observer(request, observe, app, receipt, evidence_root):
     """Activate at most the one existing verified request helper, never relaunch."""
-    attempted = False
+    attempted, captured = False, False
+    began = time.monotonic()
 
     def observed():
-        nonlocal attempted
+        nonlocal attempted, captured
         dialogs = observe("notification-consent")["dialogs"]
         if not dialogs and not attempted and request.poll() is None:
             state = observe("helper-processes", str(app))
@@ -119,6 +120,19 @@ def consent_observer(request, observe, app, receipt):
                 attempted = True
                 receipt["helper_activation"] = observe("activate-permission-helper", str(app), str(helpers[0]["pid"]),
                                                        helpers[0]["process_start_identity"])
+        if not captured and request.poll() is None and time.monotonic() - began >= 5:
+            captured = True
+            pending = {"elapsed_seconds": round(time.monotonic() - began, 3), "original_request_running": True}
+            try:
+                pending["installed_helper_processes"] = observe("helper-processes", str(app))
+                screenshot = evidence_root / "pending-notification-consent.png"
+                command(["/usr/sbin/screencapture", "-x", screenshot])
+                pending["screenshot_sha256"] = P.sha(screenshot)
+                pending["native_diagnostics"] = observe("permission-diagnostics", str(app), timeout=4)
+                pending["original_request_running_after_capture"] = request.poll() is None
+            except Exception as error:
+                pending["inconclusive_capture_failure"] = str(error)
+            receipt["pending_capture"] = pending
         return dialogs
 
     return observed
@@ -536,7 +550,7 @@ def run(args):
             helpers.append(permission_request)
             report["notification_consent"]["requested"] = True
             dialogs = wait_for_consent(permission_request,
-                consent_observer(permission_request, observer, app, report["notification_consent"]))
+                consent_observer(permission_request, observer, app, report["notification_consent"], args.report.parent))
             report["notification_consent"].update(dialogs=dialogs, completed_without_dialog=not dialogs)
             if dialogs:
                 command(["/usr/sbin/screencapture", "-x", args.report.parent / "actual-notification-consent.png"])
