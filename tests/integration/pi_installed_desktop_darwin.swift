@@ -185,45 +185,230 @@ func onScreenWindows(_ pid: pid_t) -> [CGRect] {
     }
 }
 
-@MainActor func notificationConsent() -> [[String: Any]] {
-    let allowed = Set(["com.apple.notificationcenterui", "com.apple.UserNotificationCenter",
-                       "com.apple.usernotificationsd", "com.777genius.agent-notifications"])
-    var result: [[String: Any]] = []
-    for app in NSWorkspace.shared.runningApplications where allowed.contains(app.bundleIdentifier ?? "") {
-        let root = AXUIElementCreateApplication(app.processIdentifier)
+private let consentBody = "Notifications may include alerts, sounds, and icon badges."
+private let consentTitles = ["“ClaudeNotifier” Notifications": "ClaudeNotifier",
+                             "\"ClaudeNotifier\" Notifications": "ClaudeNotifier",
+                             "“Agent Notifications” Notifications": "Agent Notifications",
+                             "\"Agent Notifications\" Notifications": "Agent Notifications"]
+
+struct ConsentControl {
+    let element: AXUIElement
+    let box: CGRect
+}
+
+struct ConsentFacts {
+    var names = Set<String>()
+    var body = false
+    var allows = [ConsentControl]()
+    var denials = [ConsentControl]()
+    var options = [ConsentControl]()
+    var complete = true
+}
+
+@MainActor struct ConsentSurface {
+    let owner: NSRunningApplication
+    let ownerStart: String
+    let element: AXUIElement
+    let box: CGRect
+    let name: String
+    let facts: ConsentFacts
+
+    var receipt: [String: Any] {
+        ["observer": "native_accessibility", "os_dialog_bundle": owner.bundleIdentifier ?? "",
+         "os_dialog_pid": Int(owner.processIdentifier), "os_owner_start_identity": ownerStart,
+         "candidate_name": name, "fixed_permission_body_observed": true,
+         "on_screen_owner_verified": true,
+         "bounds": [Double(box.minX), Double(box.minY), Double(box.width), Double(box.height)]]
+    }
+}
+
+func visibleConsentBox(_ element: AXUIElement, _ visible: [CGRect]) -> CGRect? {
+    guard attribute(element, "AXHidden") as? Bool != true, let box = rectangle(element),
+          [box.minX, box.minY, box.width, box.height].allSatisfy({ $0.isFinite }),
+          visible.contains(where: { $0.contains(CGPoint(x: box.midX, y: box.midY)) }) else { return nil }
+    return box
+}
+
+// Keep only fixed permission tokens. Candidate title and body must occur inside
+// one smallest visible card; unrelated Notification Center labels cannot join it.
+@MainActor func consentFacts(_ element: AXUIElement, visible: [CGRect], remaining: inout Int,
+                             depth: Int = 0, collect: ((AXUIElement, ConsentFacts) -> Void)? = nil) -> ConsentFacts {
+    guard remaining > 0, depth < 20 else { return ConsentFacts(complete: false) }
+    remaining -= 1
+    var facts = ConsentFacts()
+    let text = [kAXValueAttribute, kAXTitleAttribute, kAXDescriptionAttribute].compactMap {
+        attribute(element, $0) as? String
+    }.flatMap { $0.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces) } }
+    for value in text {
+        if let name = consentTitles[value] { facts.names.insert(name) }
+        if value == consentBody { facts.body = true }
+    }
+    let role = attribute(element, kAXRoleAttribute) as? String ?? ""
+    if [kAXButtonRole, kAXMenuButtonRole, kAXMenuItemRole].contains(role),
+       let box = visibleConsentBox(element, visible) {
+        let control = ConsentControl(element: element, box: box)
+        if text.contains("Allow") { facts.allows.append(control) }
+        if text.contains("Don't Allow") || text.contains("Don’t Allow") { facts.denials.append(control) }
+        if text.contains("Options") { facts.options.append(control) }
+    }
+    for child in attribute(element, kAXChildrenAttribute) as? [AXUIElement] ?? [] {
+        let nested = consentFacts(child, visible: visible, remaining: &remaining, depth: depth + 1, collect: collect)
+        facts.names.formUnion(nested.names)
+        facts.body = facts.body || nested.body
+        facts.allows += nested.allows
+        facts.denials += nested.denials
+        facts.options += nested.options
+        facts.complete = facts.complete && nested.complete
+    }
+    collect?(element, facts)
+    return facts
+}
+
+@MainActor func notificationConsent() -> [ConsentSurface] {
+    let owners = ["com.apple.notificationcenterui": "/System/Library/CoreServices/NotificationCenter.app",
+                  "com.apple.UserNotificationCenter": "/System/Library/CoreServices/UserNotificationCenter.app"]
+    var candidates = [ConsentSurface]()
+    for app in NSWorkspace.shared.runningApplications {
+        guard let expected = owners[app.bundleIdentifier ?? ""], !app.isTerminated,
+              app.bundleURL?.resolvingSymlinksInPath().path == expected,
+              let start = processStartIdentity(app.processIdentifier) else { continue }
         let visible = onScreenWindows(app.processIdentifier)
-        let windows = attribute(root, kAXWindowsAttribute) as? [AXUIElement] ?? [root]
-        for window in windows {
-            var labels = [String]()
-            var allowButtons = [CGRect]()
-            var remaining = 1200
-            func visit(_ element: AXUIElement, _ depth: Int) {
-                guard remaining > 0, depth < 20 else { return }
-                remaining -= 1
-                let text = [kAXValueAttribute, kAXTitleAttribute, kAXDescriptionAttribute].compactMap {
-                    attribute(element, $0) as? String
-                }
-                labels.append(contentsOf: text)
-                if attribute(element, kAXRoleAttribute) as? String == kAXButtonRole,
-                   text.contains("Allow"), let box = rectangle(element),
-                   visible.contains(where: { $0.contains(CGPoint(x: box.midX, y: box.midY)) }) { allowButtons.append(box) }
-                for child in attribute(element, kAXChildrenAttribute) as? [AXUIElement] ?? [] { visit(child, depth + 1) }
-            }
-            visit(window, 0)
-            let mentionsCandidate = labels.contains { $0.contains("Agent Notifications") }
-            let mentionsNotification = labels.contains { $0.lowercased().contains("notification") }
-            let hasDenial = labels.contains { $0 == "Don't Allow" || $0 == "Don’t Allow" }
-            if mentionsCandidate && mentionsNotification && hasDenial && allowButtons.count == 1 {
-                let box = allowButtons[0]
-                result.append(["observer": "native_accessibility", "os_dialog_bundle": app.bundleIdentifier ?? "",
-                               "os_dialog_pid": Int(app.processIdentifier), "candidate_name": "Agent Notifications",
-                               "allow_button": "Allow", "denial_button_observed": true,
-                               "on_screen_owner_verified": true,
-                               "bounds": [Double(box.minX), Double(box.minY), Double(box.width), Double(box.height)]])
-            }
+        var remaining = 1600
+        let inventory = consentFacts(AXUIElementCreateApplication(app.processIdentifier), visible: visible, remaining: &remaining) { element, facts in
+            guard facts.complete, facts.names.count == 1, facts.body, let name = facts.names.first,
+                  let box = visibleConsentBox(element, visible),
+                  box.width >= 100, box.width <= 600, box.height >= 40, box.height <= 400 else { return }
+            candidates.append(ConsentSurface(owner: app, ownerStart: start, element: element, box: box, name: name, facts: facts))
+        }
+        guard inventory.complete else { return [] }
+    }
+    // AX ancestors may repeat the card. Remove enclosing ancestors, then merge
+    // identical rectangles. Two distinct candidate cards remain ambiguous.
+    let smallest = candidates.filter { outer in
+        !candidates.contains { inner in
+            inner.owner.processIdentifier == outer.owner.processIdentifier
+            && outer.box.contains(inner.box) && inner.box.width * inner.box.height < outer.box.width * outer.box.height
         }
     }
+    var result = [ConsentSurface]()
+    for surface in smallest where !result.contains(where: {
+        $0.owner.processIdentifier == surface.owner.processIdentifier && $0.box == surface.box && $0.name == surface.name
+    }) { result.append(surface) }
     return result
+}
+
+func physicalConsentClick(_ box: CGRect) throws {
+    let point = CGPoint(x: box.midX, y: box.midY)
+    guard let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left),
+          let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left) else {
+        throw ProbeError.unavailable("physical_consent_event_unavailable")
+    }
+    down.post(tap: .cghidEventTap)
+    up.post(tap: .cghidEventTap)
+}
+
+@MainActor func allowNotificationConsent(_ args: [String]) throws -> [String: Any] {
+    guard args.count == 8, args[1].hasPrefix("/"), args[1].hasSuffix(".app"),
+          let helperPID = Int32(args[2]), helperPID > 0, !args[3].isEmpty,
+          let requestPID = Int32(args[4]), requestPID > 0, !args[5].isEmpty,
+          args[6].hasPrefix("/"), let remaining = Double(args[7]), remaining.isFinite, remaining > 0 else {
+        throw ProbeError.unavailable("original_consent_actors_and_budget_required")
+    }
+    let expected = URL(fileURLWithPath: args[1]).resolvingSymlinksInPath().path
+    let executable = URL(fileURLWithPath: expected).appendingPathComponent("Contents/MacOS/terminal-notifier-modern").path
+    let deadline = ProcessInfo.processInfo.systemUptime + min(3, remaining)
+    var consentOwner: (pid: pid_t, start: String)?
+    func requireActors() throws {
+        let request = try terminalProcessIdentity(requestPID, expectedStart: args[5])
+        let helper = try terminalProcessIdentity(helperPID, expectedStart: args[3])
+        let helpers = NSWorkspace.shared.runningApplications.filter {
+            $0.bundleIdentifier == "com.777genius.agent-notifications"
+            && $0.bundleURL?.resolvingSymlinksInPath().path == expected
+            && $0.executableURL?.resolvingSymlinksInPath().path == executable && !$0.isTerminated
+        }
+        guard ProcessInfo.processInfo.systemUptime < deadline,
+              request["status"] as? String == "observed", request["executable_path"] as? String == args[6],
+              helper["status"] as? String == "observed", helper["executable_path"] as? String == executable,
+              helper["parent_pid"] as? Int == Int(requestPID),
+              helpers.count == 1, helpers[0].processIdentifier == helperPID, helpers[0].isFinishedLaunching,
+              matchesProcessStart(helperPID, args[3]) else {
+            throw ProbeError.unavailable("original_consent_request_or_helper_changed")
+        }
+        if let consentOwner, !matchesProcessStart(consentOwner.pid, consentOwner.start) {
+            throw ProbeError.unavailable("original_system_consent_owner_changed")
+        }
+    }
+    try requireActors()
+    let initial = notificationConsent()
+    guard initial.count == 1 else { throw ProbeError.unavailable("unique_candidate_notification_consent_card_required") }
+    let original = initial[0]
+    consentOwner = (original.owner.processIdentifier, original.ownerStart)
+    func refresh() throws -> ConsentSurface {
+        let current = notificationConsent()
+        guard current.count == 1, current[0].owner.processIdentifier == original.owner.processIdentifier,
+              current[0].ownerStart == original.ownerStart, current[0].name == original.name,
+              current[0].box.intersects(original.box) else {
+            throw ProbeError.unavailable("original_candidate_notification_consent_card_changed")
+        }
+        return current[0]
+    }
+    var hovered = false, optionsClicked = false
+    var menuRoot: AXUIElement?
+    var surface = try refresh()
+    if surface.facts.allows.count != 1 || surface.facts.denials.count != 1 {
+        try requireActors()
+        guard let move = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved,
+                                 mouseCursorPosition: CGPoint(x: surface.box.midX, y: surface.box.midY), mouseButton: .left) else {
+            throw ProbeError.unavailable("physical_consent_hover_unavailable")
+        }
+        move.post(tap: .cghidEventTap)
+        hovered = true
+        repeat {
+            usleep(20_000)
+            surface = try refresh()
+            if surface.facts.allows.count == 1 && surface.facts.denials.count == 1 { break }
+            if surface.facts.options.count == 1 { break }
+        } while ProcessInfo.processInfo.systemUptime < deadline
+    }
+    var controls = surface.facts
+    if controls.allows.count != 1 || controls.denials.count != 1 {
+        surface = try refresh()
+        guard surface.facts.options.count == 1,
+              surface.box.contains(CGPoint(x: surface.facts.options[0].box.midX, y: surface.facts.options[0].box.midY)) else {
+            throw ProbeError.unavailable("unique_candidate_consent_options_unavailable")
+        }
+        let options = surface.facts.options[0]
+        try requireActors()
+        try physicalConsentClick(options.box)
+        optionsClicked = true
+        menuRoot = options.element
+        repeat {
+            usleep(20_000)
+            surface = try refresh()
+            var count = 256
+            // Only this candidate's Options descendants may supply menu items.
+            // Never search the Notification Center root for a generic Allow.
+            controls = consentFacts(options.element, visible: onScreenWindows(surface.owner.processIdentifier), remaining: &count)
+            if controls.complete && controls.allows.count == 1 && controls.denials.count == 1 { break }
+        } while ProcessInfo.processInfo.systemUptime < deadline
+    }
+    surface = try refresh()
+    if let menuRoot {
+        var count = 256
+        controls = consentFacts(menuRoot, visible: onScreenWindows(surface.owner.processIdentifier), remaining: &count)
+    } else {
+        controls = surface.facts
+    }
+    guard controls.complete, controls.allows.count == 1, controls.denials.count == 1,
+          controls.allows[0].box != controls.denials[0].box else {
+        throw ProbeError.unavailable("candidate_consent_allow_and_denial_unavailable")
+    }
+    try requireActors()
+    try physicalConsentClick(controls.allows[0].box)
+    return ["dialogs": [surface.receipt], "physical_hover": hovered, "physical_options_click": optionsClicked,
+            "physical_allow_click": true, "denial_button_observed": true, "original_request_verified": true,
+            "installed_helper_pid": Int(helperPID), "installed_helper_start_identity": args[3],
+            "original_request_pid": Int(requestPID), "original_request_start_identity": args[5]]
 }
 
 // Failure-only metadata. Fixed token comparisons never serialize AX labels or
@@ -476,17 +661,11 @@ final class ProductCapture: NSObject, SCStreamOutput, SCStreamDelegate, @uncheck
                     }
                 }
                 publish(result)
-            case "notification-consent", "allow-notification-consent":
+            case "notification-consent":
                 guard args.count == 1 else { throw ProbeError.unavailable("fixed_notification_consent_only") }
-                let dialogs = notificationConsent()
-                if operation == "allow-notification-consent" {
-                    guard dialogs.count == 1 else { throw ProbeError.unavailable("unique_candidate_notification_consent_dialog_required") }
-                    let box = dialogs[0]["bounds"] as! [Double]
-                    let point = CGPoint(x: box[0] + box[2] / 2, y: box[1] + box[3] / 2)
-                    CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left)?.post(tap: .cghidEventTap)
-                    CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left)?.post(tap: .cghidEventTap)
-                }
-                publish(["dialogs": dialogs, "physical_allow_click": operation == "allow-notification-consent"])
+                publish(["dialogs": notificationConsent().map { $0.receipt }])
+            case "allow-notification-consent":
+                publish(try allowNotificationConsent(args))
             case "banner", "click":
                 guard args.count == 2, ["Pi completed a task", "Pi is waiting for input"].contains(args[1]) else {
                     throw ProbeError.unavailable("fixed_product_body_required")

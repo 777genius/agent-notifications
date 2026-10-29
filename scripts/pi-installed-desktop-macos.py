@@ -103,6 +103,50 @@ def verify_permission_grant(request_receipt, fresh_receipt):
     return fresh
 
 
+def consent_request_identity(request, observe, candidate):
+    """Capture this one public CLI child; an early exit never needs a click."""
+    if request.poll() is not None:
+        return {"status": "original_request_completed_before_identity_observation"}
+    try:
+        identity = observe("terminal-process-identity", str(request.pid), timeout=3)
+        P.require(identity.get("status") == "observed" and identity.get("pid") == request.pid
+                  and identity.get("parent_pid") == os.getpid()
+                  and identity.get("executable_path") == str(candidate.resolve())
+                  and identity.get("process_start_identity"), "original_consent_cli_identity_unverified")
+        return identity
+    except Exception as error:
+        return {"status": "inconclusive_original_request_identity", "error_class": type(error).__name__}
+
+
+def allow_consent(request, observe, app, candidate, receipt, deadline, now=time.monotonic):
+    """One physical candidate-card flow; the original request budget is shared."""
+    remaining = deadline - now()
+    P.require(request.poll() is None and remaining > 0, "original_consent_request_no_longer_pending")
+    identity = receipt.get("request_process_identity", {})
+    helper = receipt.get("request_helper_identity", {})
+    P.require(identity.get("status") == "observed" and identity.get("pid") == request.pid
+              and identity.get("parent_pid") == os.getpid()
+              and identity.get("executable_path") == str(candidate.resolve())
+              and identity.get("process_start_identity")
+              and type(helper.get("pid")) is int and helper["pid"] > 0
+              and helper.get("finished_launching") is True and helper.get("process_start_identity"),
+              "original_consent_actors_unverified")
+    remaining = deadline - now()
+    P.require(request.poll() is None and remaining > 0, "original_consent_request_no_longer_pending")
+    click = observe("allow-notification-consent", str(app), str(helper["pid"]), helper["process_start_identity"],
+                    str(request.pid), identity["process_start_identity"], str(candidate.resolve()),
+                    str(remaining), timeout=min(5, remaining))
+    receipt["physical_consent_flow"] = click
+    P.require(click.get("physical_allow_click") is True and click.get("denial_button_observed") is True
+              and click.get("original_request_verified") is True
+              and click.get("installed_helper_pid") == helper["pid"]
+              and click.get("installed_helper_start_identity") == helper["process_start_identity"]
+              and click.get("original_request_pid") == request.pid
+              and click.get("original_request_start_identity") == identity["process_start_identity"],
+              "original_candidate_consent_physical_click_unverified")
+    return click
+
+
 def consent_observer(request, observe, app, receipt, pending_capture=None, now=time.monotonic):
     """Activate at most the one existing verified request helper, never relaunch."""
     attempted, captured = False, False
@@ -111,15 +155,18 @@ def consent_observer(request, observe, app, receipt, pending_capture=None, now=t
     def observed():
         nonlocal attempted, captured
         dialogs = observe("notification-consent")["dialogs"]
-        if not dialogs and not attempted and request.poll() is None:
+        if "request_helper_identity" not in receipt and request.poll() is None:
             state = observe("helper-processes", str(app))
             receipt["helper_observation"] = state
             helpers = state.get("installed_helpers", [])
             if len(helpers) == 1 and helpers[0].get("finished_launching") is True \
                     and helpers[0].get("process_start_identity") and request.poll() is None:
-                attempted = True
-                receipt["helper_activation"] = observe("activate-permission-helper", str(app), str(helpers[0]["pid"]),
-                                                       helpers[0]["process_start_identity"])
+                receipt["request_helper_identity"] = dict(helpers[0])
+        helper = receipt.get("request_helper_identity")
+        if not dialogs and not attempted and helper is not None and request.poll() is None:
+            attempted = True
+            receipt["helper_activation"] = observe("activate-permission-helper", str(app), str(helper["pid"]),
+                                                   helper["process_start_identity"])
         if not dialogs and not captured and pending_capture is not None and now() - started >= 5 \
                 and request.poll() is None:
             captured = True
@@ -703,14 +750,18 @@ def run(args):
                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
             helpers.append(permission_request)
             report["notification_consent"]["requested"] = True
+            consent_deadline = started + 130
+            report["notification_consent"]["request_process_identity"] = consent_request_identity(permission_request, observer, args.candidate)
             dialogs = wait_for_consent(permission_request,
                 consent_observer(permission_request, observer, app, report["notification_consent"],
                     lambda: capture_pending_consent(permission_request, observer, app, args.report.parent,
-                                                     report["notification_consent"])))
+                                                     report["notification_consent"])),
+                seconds=max(0, consent_deadline - time.monotonic()))
             report["notification_consent"].update(dialogs=dialogs, completed_without_dialog=not dialogs)
             if dialogs:
                 command(["/usr/sbin/screencapture", "-x", args.report.parent / "actual-notification-consent.png"])
-                click = observer("allow-notification-consent")
+                click = allow_consent(permission_request, observer, app, args.candidate,
+                                      report["notification_consent"], consent_deadline)
                 report["notification_consent"].update(physical_allow_click=click["physical_allow_click"],
                     screenshot_sha256=P.sha(args.report.parent / "actual-notification-consent.png"))
             out, err = permission_request.communicate(timeout=10)

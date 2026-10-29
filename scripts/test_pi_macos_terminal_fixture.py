@@ -226,6 +226,86 @@ class ConsentObservation(unittest.TestCase):
             self.assertEqual(M.consent_observer(child, observe, Path("/TEST/owned.app"), {})(), [])
             self.assertFalse(any(row[0] == "activate-permission-helper" for row in calls))
 
+    def test_collapsed_candidate_card_keeps_original_helper_and_public_request_for_one_click(self):
+        child = self.child(b"", delay=20)
+        candidate, app = Path(sys.executable).resolve(), Path("/TEST/owned.app")
+        helper = {"pid": 41, "process_start_identity": "987654:123", "finished_launching": True}
+        identity = {"status": "observed", "pid": child.pid, "parent_pid": os.getpid(),
+                    "executable_path": str(candidate), "process_start_identity": "123456:789"}
+        card = {"candidate_name": "ClaudeNotifier", "fixed_permission_body_observed": True}
+        calls, receipt = [], {}
+
+        def observe(operation, *args, **kwargs):
+            calls.append((operation, args, kwargs))
+            if operation == "terminal-process-identity":
+                return identity
+            if operation == "notification-consent":
+                return {"dialogs": [card]}
+            if operation == "helper-processes":
+                return {"installed_helpers": [helper]}
+            if operation == "allow-notification-consent":
+                return {"physical_hover": True, "physical_options_click": True, "physical_allow_click": True,
+                        "denial_button_observed": True, "original_request_verified": True,
+                        "installed_helper_pid": 41, "installed_helper_start_identity": "987654:123",
+                        "original_request_pid": child.pid, "original_request_start_identity": "123456:789"}
+            self.fail("unexpected native operation " + operation)
+
+        receipt["request_process_identity"] = M.consent_request_identity(child, observe, candidate)
+        self.assertEqual(M.consent_observer(child, observe, app, receipt)(), [card])
+        helper.update(pid=42, process_start_identity="replacement")
+        click = M.allow_consent(child, observe, app, candidate, receipt, 15, now=lambda: 10)
+        actions = [row for row in calls if row[0] == "allow-notification-consent"]
+        self.assertEqual(actions, [("allow-notification-consent", (str(app), "41", "987654:123",
+                         str(child.pid), "123456:789", str(candidate), "5"), {"timeout": 5})])
+        self.assertFalse(any(row[0] == "activate-permission-helper" for row in calls))
+        self.assertIs(receipt["physical_consent_flow"], click)
+        with self.assertRaises((RuntimeError, KeyError)):
+            M.observed_permission(click)
+
+    def test_completed_original_request_expired_budget_or_unverified_actors_never_click(self):
+        child = self.child(b"", delay=20)
+        candidate = Path(sys.executable).resolve()
+        identity = {"status": "observed", "pid": child.pid, "parent_pid": os.getpid(),
+                    "executable_path": str(candidate), "process_start_identity": "123456:789"}
+        receipt = {"request_process_identity": identity,
+                   "request_helper_identity": {"pid": 41, "finished_launching": True, "process_start_identity": "987654:123"}}
+        observer = mock.Mock()
+        with self.assertRaisesRegex(RuntimeError, "no_longer_pending"):
+            M.allow_consent(child, observer, Path("/TEST/owned.app"), candidate, receipt, 10, now=lambda: 10)
+        for change in ({"pid": child.pid + 1}, {"parent_pid": os.getpid() + 1},
+                       {"executable_path": "/TEST/foreign"}, {"process_start_identity": ""}):
+            changed = {**receipt, "request_process_identity": {**identity, **change}}
+            with self.subTest(change=change), self.assertRaisesRegex(RuntimeError, "actors_unverified"):
+                M.allow_consent(child, observer, Path("/TEST/owned.app"), candidate, changed, 15, now=lambda: 10)
+        for helper in ({}, {"pid": 41, "finished_launching": True},
+                       {"pid": 41, "finished_launching": False, "process_start_identity": "987654:123"}):
+            with self.subTest(helper=helper), self.assertRaisesRegex(RuntimeError, "actors_unverified"):
+                M.allow_consent(child, observer, Path("/TEST/owned.app"), candidate,
+                                {**receipt, "request_helper_identity": helper}, 15, now=lambda: 10)
+        child.terminate()
+        child.communicate(timeout=3)
+        with self.assertRaisesRegex(RuntimeError, "no_longer_pending"):
+            M.allow_consent(child, observer, Path("/TEST/owned.app"), candidate, receipt, 15, now=lambda: 10)
+        observer.assert_not_called()
+
+    def test_native_click_requires_exact_actor_and_visible_denial_receipt(self):
+        child = self.child(b"", delay=20)
+        candidate = Path(sys.executable).resolve()
+        receipt = {"request_process_identity": {"status": "observed", "pid": child.pid, "parent_pid": os.getpid(),
+                   "executable_path": str(candidate), "process_start_identity": "123456:789"},
+                   "request_helper_identity": {"pid": 41, "finished_launching": True, "process_start_identity": "987654:123"}}
+        click = {"physical_allow_click": True, "denial_button_observed": True, "original_request_verified": True,
+                 "installed_helper_pid": 41, "installed_helper_start_identity": "987654:123",
+                 "original_request_pid": child.pid, "original_request_start_identity": "123456:789"}
+        for change in ({"physical_allow_click": False}, {"denial_button_observed": False},
+                       {"original_request_verified": False}, {"installed_helper_pid": 42},
+                       {"installed_helper_start_identity": "replacement"}, {"original_request_pid": child.pid + 1},
+                       {"original_request_start_identity": "replacement"}):
+            native = mock.Mock(return_value={**click, **change})
+            with self.subTest(change=change), self.assertRaisesRegex(RuntimeError, "physical_click_unverified"):
+                M.allow_consent(child, native, Path("/TEST/owned.app"), candidate, receipt, 15, now=lambda: 10)
+            native.assert_called_once()
+
     def test_pending_capture_waits_five_seconds_and_runs_once_without_request_retry(self):
         class Request:
             def poll(self):
