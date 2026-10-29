@@ -141,6 +141,29 @@ def consent_request_identity(request, observe, candidate):
         return {"status": "inconclusive_original_request_identity", "error_class": type(error).__name__}
 
 
+def consent_menu_context(receipt):
+    """Carry only the popup newly created by the original Options click."""
+    step = receipt.get("permission_card_options", {})
+    menu = step.get("opened_menu_window", {})
+    card = receipt.get("permission_card_identity", {})
+    bounds, options = menu.get("bounds", []), menu.get("options_bounds", [])
+    P.require(step.get("physical_options_click") is True and step.get("original_request_verified") is True
+              and step.get("popup_windows_before_options") == []
+              and menu.get("new_after_original_options_click") is True
+              and menu.get("positive_alpha_verified") is True
+              and type(menu.get("window_id")) is int and menu["window_id"] > 0
+              and menu.get("owner_pid") == card.get("os_dialog_pid")
+              and isinstance(bounds, list) and isinstance(options, list) and len(bounds) == len(options) == 4
+              and all(type(x) in (int, float) and math.isfinite(x) for x in bounds + options)
+              and 0 < bounds[2] <= 400 and 0 < bounds[3] <= 400 and options[2] > 0 and options[3] > 0
+              and step.get("action_target_bounds") == options,
+              "original_options_menu_window_unverified")
+    after = step.get("popup_windows_after_options", [])
+    P.require(len(after) == 1 and all(after[0].get(key) == menu.get(key) for key in ("window_id", "owner_pid", "bounds", "layer")),
+              "original_options_menu_transition_unverified")
+    return {"menuWindowID": menu["window_id"], "menuBounds": bounds, "optionsBounds": options}
+
+
 def allow_consent(request, observe, app, candidate, receipt, deadline, now=time.monotonic,
                   operation="allow-notification-consent"):
     """One physical phase, bound to the same original actors/card/deadline."""
@@ -169,12 +192,14 @@ def allow_consent(request, observe, app, candidate, receipt, deadline, now=time.
                "requestExecutable": str(candidate.resolve()), "deadlineMonotonic": deadline, "clock": "mach_absolute_time",
                "ownerPID": card["os_dialog_pid"], "ownerStart": card["os_owner_start_identity"],
                "candidateName": card["candidate_name"], "cardBounds": bounds}
+    if operation == "observe-notification-consent-menu" or (operation == "allow-notification-consent" and "permission_card_options" in receipt):
+        context.update(consent_menu_context(receipt))
     click = observe(operation, json.dumps(context, sort_keys=True), timeout=min(5, remaining))
     flag = {"hover-notification-consent": "physical_pointer_hover",
             "open-notification-consent-options": "physical_options_click",
-            "allow-notification-consent": "physical_allow_click"}[operation]
+            "allow-notification-consent": "physical_allow_click", "observe-notification-consent-menu": None}[operation]
     receipt["physical_consent_flow" if operation == "allow-notification-consent" else operation] = click
-    P.require(click.get(flag) is True and click.get("pointer_at_target") is True
+    P.require((flag is None or (click.get(flag) is True and click.get("pointer_at_target") is True))
               and click.get("original_request_verified") is True
               and click.get("installed_helper_pid") == helper["pid"]
               and click.get("installed_helper_start_identity") == helper["process_start_identity"]
@@ -182,6 +207,12 @@ def allow_consent(request, observe, app, candidate, receipt, deadline, now=time.
               and click.get("original_request_start_identity") == identity["process_start_identity"]
               and (operation != "allow-notification-consent" or click.get("denial_button_observed") is True),
               "original_candidate_consent_physical_click_unverified")
+    if "menuWindowID" in context and (operation == "allow-notification-consent" or click.get("dialogs")):
+        observed = click.get("observed_menu", {})
+        P.require(observed.get("window_id") == context["menuWindowID"] and observed.get("bounds") == context["menuBounds"]
+                  and observed.get("options_bounds") == context["optionsBounds"] and observed.get("denial_button_observed") is True
+                  and (operation != "allow-notification-consent" or click.get("topmost_allow_item_verified") is True),
+                  "original_options_menu_identity_or_topmost_item_unverified")
     return click
 
 
@@ -193,7 +224,11 @@ def consent_observer(request, observe, app, receipt, pending_capture=None, now=t
 
     def observed():
         nonlocal attempted, captured, hovered, opened_options
-        current = observe("notification-consent")
+        if opened_options:
+            current = allow_consent(request, observe, app, candidate, receipt, deadline, now,
+                                    operation="observe-notification-consent-menu")
+        else:
+            current = observe("notification-consent")
         dialogs, cards = current["dialogs"], current.get("permission_cards", [])
         if "request_helper_identity" not in receipt and request.poll() is None:
             state = observe("helper-processes", str(app))
@@ -629,7 +664,7 @@ def run(args):
               "native_helper_verified": False, "cases": []}
 
     def observer(*argv, timeout=20):
-        if argv and argv[0] in ("notification-consent", "hover-notification-consent", "open-notification-consent-options", "allow-notification-consent"):
+        if argv and argv[0] in ("notification-consent", "observe-notification-consent-menu", "hover-notification-consent", "open-notification-consent-options", "allow-notification-consent"):
             argv = (*argv, *consent_names)
         return json.loads(command([args.observer, *argv], timeout=timeout))
 

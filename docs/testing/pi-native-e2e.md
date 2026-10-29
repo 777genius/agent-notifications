@@ -354,6 +354,25 @@ must pass on that route before any product execution. Product playback,
 canonical cue comparisons, negative thresholds and endpoint defaults are
 unchanged. Process-only artifacts cannot replace this manual desktop receipt.
 
+The installed-product workflow's fresh owner-prepared Clients also require an actual
+`SHQueryUserNotificationState` result of `S_OK` with
+`QUNS_ACCEPTS_NOTIFICATIONS` (5) before driver installation or product execution.
+Only `QUNS_QUIET_TIME` (6) waits naturally, for at most 65 minutes; other states,
+unknown results and API errors refuse. Microsoft documents quiet time as the
+[first hour after initial logon or OS setup](https://learn.microsoft.com/en-us/windows/win32/api/shellapi/ne-shellapi-query_user_notification_state).
+The helper samples every 15 seconds, logs progress each minute and retains start,
+finish, elapsed time, sample count, final HRESULT/state and bounded samples in
+`host/notification-readiness.json`. A scoped public execution-state request keeps
+the system/display available during this wait and restores the same thread's
+previous state in `finally`; acquisition or restoration failure refuses. It
+does not change notification policy, time, registry, input or screen saver
+settings. The Client job has a 90-minute limit for this host preparation; the
+product, native toast observer and audio capture deadlines remain unchanged.
+Readiness is a prerequisite, and all six actual banner/cue/click cases still
+have to pass.
+The separate synthetic preflight lane keeps its existing observer-only scope
+and does not request this product-banner readiness wait.
+
 ## Clean candidate and final three-OS gate
 
 `scripts/pi-candidate-build.py` runs the ordinary four release build commands and

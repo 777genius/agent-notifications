@@ -1,4 +1,4 @@
-param([string]$Root, [string]$Receipt, [switch]$VerifyOnly)
+param([string]$Root, [string]$Receipt, [switch]$VerifyOnly, [switch]$RequireNotificationReadiness)
 $ErrorActionPreference = 'Stop'
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $driverHash = '2dc35db3dfad0f25771a3e59af38e8b1268878ebe127476ea75fee109f2927dd'
@@ -80,6 +80,13 @@ if ($LASTEXITCODE) { throw 'Finite OOBE setup failed or unknown; no driver or pr
 $env:PI_WINDOWS_HOST_SETUP = '1'
 & "$Root/host-observer.exe" shell > "$Root/shell-overlay.json"
 if ($LASTEXITCODE) { throw 'Single bound Search overlay dismissal failed or unknown' }
+
+# Fresh Client images can remain in documented first-logon quiet time. Respect
+# that native state: wait naturally, without changing notification policy/time.
+if ($RequireNotificationReadiness) {
+    python -B scripts/pi-windows-notification-readiness.py --report "$Root/notification-readiness.json"
+    if ($LASTEXITCODE) { throw 'Actual accepting native notification state unavailable; no driver or product effects' }
+}
 
 # The only driver setup is the measured, authenticated one-shot route. Refuse
 # any pre-existing render device or VB instance, preserving configured hosts.

@@ -196,6 +196,13 @@ class ConsentObservation(unittest.TestCase):
                 "permission_card_identity": {"candidate_name": "ClaudeNotifier", "os_dialog_pid": 81,
                 "os_owner_start_identity": "555555:111", "bounds": [664, 40, 344, 73]}}
 
+    def menu_step(self):
+        window = {"window_id": 28, "owner_pid": 81, "layer": 101, "bounds": [918, 108, 97, 54], "positive_alpha_verified": True}
+        return {"physical_options_click": True, "original_request_verified": True,
+                "action_target_bounds": [918, 81, 80, 22], "popup_windows_before_options": [],
+                "popup_windows_after_options": [window], "opened_menu_window": {**window,
+                "options_bounds": [918, 81, 80, 22], "new_after_original_options_click": True}}
+
     def test_early_allowed_requires_fresh_native_allowed_result(self):
         allowed = self.receipt("allowed")
         self.assertEqual(M.verify_permission_grant(allowed, self.receipt("allowed")), "allowed")
@@ -395,15 +402,23 @@ class ConsentObservation(unittest.TestCase):
 
         def observe(operation, *args, **kwargs):
             calls.append(operation)
-            if operation in ("hover-notification-consent", "open-notification-consent-options"):
+            if operation in ("hover-notification-consent", "open-notification-consent-options", "observe-notification-consent-menu"):
                 context = json.loads(args[0])
                 self.assertEqual(context["requestPID"], child.pid)
                 self.assertEqual(context["helperPID"], 41)
                 self.assertEqual(context["ownerPID"], 81)
                 self.assertEqual(context["deadlineMonotonic"], 15)
                 self.assertEqual(context["clock"], "mach_absolute_time")
+                if operation == "observe-notification-consent-menu":
+                    self.assertEqual(context["menuWindowID"], 28)
+                    return {"original_request_verified": True, "installed_helper_pid": 41,
+                            "installed_helper_start_identity": "987654:123", "original_request_pid": child.pid,
+                            "original_request_start_identity": "123456:789", "dialogs": [{"observed_allow": True}],
+                            "permission_cards": [card], "observed_menu": {"window_id": 28, "bounds": [918, 108, 97, 54],
+                            "options_bounds": [918, 81, 80, 22], "denial_button_observed": True}}
                 phase[0] = 1 if operation == "hover-notification-consent" else 2
-                return {"physical_pointer_hover": phase[0] == 1, "physical_options_click": phase[0] == 2,
+                return {**(self.menu_step() if phase[0] == 2 else {}),
+                        "physical_pointer_hover": phase[0] == 1, "physical_options_click": phase[0] == 2,
                         "pointer_at_target": True, "original_request_verified": True,
                         "installed_helper_pid": 41, "installed_helper_start_identity": "987654:123",
                         "original_request_pid": child.pid, "original_request_start_identity": "123456:789"}
@@ -424,6 +439,58 @@ class ConsentObservation(unittest.TestCase):
         self.assertNotIn("allow-notification-consent", calls)
         with self.assertRaises((KeyError, RuntimeError)):
             M.observed_permission(receipt)
+
+    def test_menu_context_rejects_existing_ambient_or_mismatched_popup(self):
+        child = self.child(b"", delay=20)
+        candidate = Path(sys.executable).resolve()
+        receipt = self.actor_receipt(child, candidate)
+        step = self.menu_step()
+        receipt["permission_card_options"] = step
+        expected = {"menuWindowID": 28, "menuBounds": [918, 108, 97, 54], "optionsBounds": [918, 81, 80, 22]}
+        self.assertEqual(M.consent_menu_context(receipt), expected)
+        for change in ({"physical_options_click": False}, {"original_request_verified": False},
+                       {"popup_windows_before_options": [{"window_id": 28}]},
+                       {"popup_windows_before_options": [{"invalid_bounds": True}]},
+                       {"opened_menu_window": {**step["opened_menu_window"], "owner_pid": 82}},
+                       {"opened_menu_window": {**step["opened_menu_window"], "positive_alpha_verified": False}},
+                       {"opened_menu_window": {**step["opened_menu_window"], "bounds": [918, 108, 401, 54]}},
+                       {"opened_menu_window": {**step["opened_menu_window"], "new_after_original_options_click": False}},
+                       {"popup_windows_after_options": [{"invalid_inventory": True}]},
+                       {"popup_windows_after_options": [{**step["popup_windows_after_options"][0], "window_id": 29}]},
+                       {"popup_windows_after_options": step["popup_windows_after_options"] * 2}):
+            observer = mock.Mock()
+            with self.subTest(change=change), self.assertRaisesRegex(RuntimeError, "original_options_menu"):
+                M.allow_consent(child, observer, Path("/TEST/owned.app"), candidate,
+                                {**receipt, "permission_card_options": {**step, **change}}, 15, now=lambda: 10,
+                                operation="observe-notification-consent-menu")
+            observer.assert_not_called()
+
+    def test_menu_allow_requires_same_popup_and_topmost_item_after_original_options(self):
+        child = self.child(b"", delay=20)
+        candidate = Path(sys.executable).resolve()
+        receipt = self.actor_receipt(child, candidate)
+        receipt["permission_card_options"] = self.menu_step()
+        click = {"physical_allow_click": True, "pointer_at_target": True, "denial_button_observed": True,
+                 "original_request_verified": True, "installed_helper_pid": 41,
+                 "installed_helper_start_identity": "987654:123", "original_request_pid": child.pid,
+                 "original_request_start_identity": "123456:789", "topmost_allow_item_verified": True,
+                 "observed_menu": {"window_id": 28, "bounds": [918, 108, 97, 54],
+                 "options_bounds": [918, 81, 80, 22], "denial_button_observed": True}}
+        for change in ({"topmost_allow_item_verified": False},
+                       {"observed_menu": {**click["observed_menu"], "window_id": 29}},
+                       {"observed_menu": {**click["observed_menu"], "bounds": [1, 2, 97, 54]}},
+                       {"observed_menu": {**click["observed_menu"], "denial_button_observed": False}}):
+            observer = mock.Mock(return_value={**click, **change})
+            with self.subTest(change=change), self.assertRaisesRegex(RuntimeError, "menu_identity_or_topmost"):
+                M.allow_consent(child, observer, Path("/TEST/owned.app"), candidate, receipt, 15, now=lambda: 10)
+            observer.assert_called_once()
+        observer = mock.Mock(return_value=click)
+        self.assertIs(M.allow_consent(child, observer, Path("/TEST/owned.app"), candidate, receipt, 15, now=lambda: 10), click)
+        context = json.loads(observer.call_args.args[1])
+        self.assertEqual(context["menuWindowID"], 28)
+        self.assertEqual(context["deadlineMonotonic"], 15)
+        with self.assertRaises((KeyError, RuntimeError)):
+            M.observed_permission(click)
 
     def test_completed_request_or_ambiguous_permission_cards_never_hover(self):
         for code, cards in ((0, [{}]), (None, [{}, {}])):
