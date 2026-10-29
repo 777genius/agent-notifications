@@ -22,11 +22,16 @@ struct Route {
 };
 static void check(bool ok, const char* message) { if (!ok) throw std::runtime_error(message); }
 static std::string quote(const std::wstring& value) {
+    check(value.size() <= 4096, "audio_fixture_identity_bound");
     const int size = WideCharToMultiByte(CP_UTF8, 0, value.data(), static_cast<int>(value.size()), nullptr, 0, nullptr, nullptr);
     std::string utf8(size, '\0'), result = "\"";
     WideCharToMultiByte(CP_UTF8, 0, value.data(), static_cast<int>(value.size()), utf8.data(), size, nullptr, nullptr);
     for (unsigned char ch : utf8) { check(ch >= 32, "audio_fixture_control_character"); if (ch == '\\' || ch == '"') result += '\\'; result += ch; }
     return result + '"';
+}
+static void binding(const std::wstring& actual, const std::wstring& expected, const char* field) {
+    if (actual != expected)
+        throw std::runtime_error(std::string("audio_fixture_") + field + "_changed:expected=" + quote(expected) + ":actual=" + quote(actual));
 }
 static std::wstring property(IMMDevice* device, const PROPERTYKEY& key) {
     Microsoft::WRL::ComPtr<IPropertyStore> store;
@@ -125,13 +130,17 @@ static Route select(IMMDeviceEnumerator* enumerator, int count = 0, wchar_t** ar
     check(count == 6 && std::wstring(args[0]) == L"--virtual-cable", "audio_fixture_arguments_invalid");
     const std::wstring instance(args[1]); driver(instance);
     const auto render = inspect(enumerator, defaultRender.Get(), eRender);
-    check(render.id == args[2] && render.topology == args[4] && _wcsicmp(render.instance.c_str(), instance.c_str()) == 0,
-          "audio_fixture_default_render_binding_changed");
+    binding(render.id, args[2], "render_endpoint");
+    binding(render.topology, args[4], "render_topology");
+    if (_wcsicmp(render.instance.c_str(), instance.c_str()) != 0)
+        throw std::runtime_error("audio_fixture_render_driver_changed:expected=" + quote(instance) + ":actual=" + quote(render.instance));
     Microsoft::WRL::ComPtr<IMMDevice> selected;
     check(SUCCEEDED(enumerator->GetDevice(args[3], &selected)), "audio_fixture_capture_endpoint_missing");
     const auto capture = inspect(enumerator, selected.Get(), eCapture);
-    check(capture.id == args[3] && capture.topology == args[5] && _wcsicmp(capture.instance.c_str(), instance.c_str()) == 0,
-          "audio_fixture_capture_binding_changed");
+    binding(capture.id, args[3], "capture_endpoint");
+    binding(capture.topology, args[5], "capture_topology");
+    if (_wcsicmp(capture.instance.c_str(), instance.c_str()) != 0)
+        throw std::runtime_error("audio_fixture_capture_driver_changed:expected=" + quote(instance) + ":actual=" + quote(capture.instance));
     route.capture = selected; route.flags = 0; route.json = metadata(instance, render, capture); return route;
 }
 }

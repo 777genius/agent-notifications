@@ -121,6 +121,7 @@ if ($device.Count -ne 1 -or $device[0].ConfigManagerErrorCode -ne 0 -or @($devic
 $route = & "$Root/host-observer.exe" discover $device[0].PNPDeviceID 2> "$Root/endpoint-discovery.stderr.log"
 if ($LASTEXITCODE) { throw 'Exact driver-bound endpoint discovery failed; no microphone/default-capture fallback' }
 $proof = [ordered]@{ schema_version=1; source_sha=$source; driver=@{ instance_id=$device[0].PNPDeviceID; image_path=(DriverImage); image_sha256=$driverHash; inf_path=$inf; catalog_path=$catalog }; route=($route | ConvertFrom-Json) }
+$proof | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath "$Root/frozen-audio-fixture.json" -Encoding utf8NoBOM
 VerifyDriver $proof
 # Read-only negative admission: a changed opaque topology must refuse, then the
 # exact frozen pair must reopen. Neither command renders, captures or sends input.
@@ -129,7 +130,7 @@ $invalid = $atoms.Clone(); $invalid[5] += '-TEST-invalid-topology'
 & "$Root/host-observer.exe" verify @invalid 2> "$Root/binding-refusal.stderr.log" | Out-Null
 $refusal = $LASTEXITCODE
 if ($refusal -eq 0) { throw 'Changed capture topology unexpectedly admitted' }
-$validated = & "$Root/host-observer.exe" verify @atoms
+$validated = & "$Root/host-observer.exe" verify @atoms 2> "$Root/binding-valid.stderr.log"
 if ($LASTEXITCODE) { throw 'Exact frozen endpoint pair failed to reopen after refused admission' }
 $validated = $validated | ConvertFrom-Json
 foreach ($key in @('kind', 'driver_instance', 'render_endpoint_id', 'capture_endpoint_id', 'render_topology_id', 'capture_topology_id')) {
