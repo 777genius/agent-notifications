@@ -21,6 +21,46 @@ M = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(M)
 
 
+class ProductBannerObservation(unittest.TestCase):
+    def test_polls_share_one_absolute_deadline(self):
+        clock, timeouts = [100.0], []
+
+        def observe(operation, body, *, timeout):
+            self.assertEqual((operation, body), ("banner", "Pi completed a task"))
+            timeouts.append(timeout)
+            clock[0] += min(10, timeout)
+            return {"matches": []}
+
+        def pause(seconds):
+            clock[0] += seconds
+
+        with mock.patch.object(M.time, "monotonic", side_effect=lambda: clock[0]), \
+                mock.patch.object(M.time, "sleep", side_effect=pause):
+            with self.assertRaisesRegex(RuntimeError, "actual_product_banner_not_observed"):
+                M.wait_for_product_banner(observe, "Pi completed a task", 125)
+        self.assertEqual(len(timeouts), 3)
+        self.assertEqual(timeouts[0], 20)
+        self.assertAlmostEqual(timeouts[-1], 4.9)
+        self.assertEqual(clock[0], 125)
+
+    def test_only_observations_before_original_deadline_qualify(self):
+        for finished, allowed in ((124.9, True), (125.0, False), (126.0, False)):
+            with self.subTest(finished=finished):
+                clock = [100.0]
+
+                def observe(*args, **kwargs):
+                    clock[0] = finished
+                    return {"matches": [{"observed": True}]}
+
+                with mock.patch.object(M.time, "monotonic", side_effect=lambda: clock[0]):
+                    if allowed:
+                        self.assertEqual(M.wait_for_product_banner(observe, "Pi completed a task", 125),
+                                         [{"observed": True}])
+                    else:
+                        with self.assertRaisesRegex(RuntimeError, "actual_product_banner_not_observed"):
+                            M.wait_for_product_banner(observe, "Pi completed a task", 125)
+
+
 class PartialCaseEvidence(unittest.TestCase):
     def capture(self, root, observe):
         provider = mock.Mock(requests=[{"prompt": "TEST-secret"}])

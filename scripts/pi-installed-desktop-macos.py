@@ -28,6 +28,7 @@ import zipfile
 
 REPO = Path(__file__).resolve().parents[1]
 CASES = ("completion", "question", "sound-off", "click-off", "desktop-off", "stale-origin")
+BANNER_OBSERVATION_SECONDS = 25
 
 
 def module(name, path):
@@ -51,6 +52,19 @@ def wait_for(predicate, reason, seconds=12):
             return value
         time.sleep(0.05)
     raise RuntimeError(reason)
+
+
+def wait_for_product_banner(observe, body, deadline):
+    """Observe one trigger through its delivery budget without renewing it."""
+    while (remaining := deadline - time.monotonic()) > 0:
+        matches = observe("banner", body, timeout=min(20, remaining))["matches"]
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        if matches:
+            return matches
+        time.sleep(min(0.05, remaining))
+    raise RuntimeError("actual_product_banner_not_observed")
 
 
 def partial_case_failure(case_root, provider, sink, sink_start, expected, observe, app, origin_pid):
@@ -893,15 +907,20 @@ def run(args):
             P.require(baseline["audio_peak"] < 0.0001, "native_audio_baseline_not_quiet")
             if name == "question":
                 terminal.focus()
+                banner_deadline = time.monotonic() + BANNER_OBSERVATION_SECONDS
                 terminal.type("/TEST-dialog")
             else:
                 wait_for(lambda: bool(provider.requests), "actual_pi_model_request_missing")
             decoy.focus()
             P.require(decoy.is_front() and not terminal.is_front(), "native_pi_origin_not_backgrounded")
+            if name != "question":
+                # Pi settlement/startup precede the product's original 20s
+                # admission; the fixture must not cancel that work after 12s.
+                banner_deadline = time.monotonic() + BANNER_OBSERVATION_SECONDS
             provider.release.set()
             screenshot, webhook_received, click_observation = None, False, None
             if desktop:
-                banner = wait_for(lambda: observer("banner", P.COPY[expected])["matches"], "actual_product_banner_not_observed")
+                banner = wait_for_product_banner(observer, P.COPY[expected], banner_deadline)
                 P.require(decoy.is_front(), "product_focused_before_physical_notification_click")
                 if name == "question":
                     rows = F.witness(case_root)
