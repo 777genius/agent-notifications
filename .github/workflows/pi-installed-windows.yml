@@ -91,6 +91,9 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           python -B scripts/pi-candidate-build.py --platform windows --arch amd64 --output "$env:RUNNER_TEMP/TEST-pi-windows-candidate"
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          # TEMPORARY: no WinRT/native effects; this Server VM is not the Client.
+          go test ./internal/notifier -run '^TestTemporaryPowerShellTrace' -count=1
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Acquire the immutable standalone and run actual common setup lifecycle
         shell: pwsh
         run: |
