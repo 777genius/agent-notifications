@@ -1,7 +1,10 @@
 """Pure signing-input guards; these tests provide no native qualification."""
 import copy
 import importlib.util
+import json
 from pathlib import Path
+import subprocess
+import tempfile
 import unittest
 from unittest import mock
 
@@ -70,6 +73,83 @@ class SignedHelperGuards(unittest.TestCase):
                     H.validate_receipt({**receipt, field: value}, PIN)
         with self.assertRaises(ValueError):
             H.validate_receipt({**receipt, "pin": {**PIN, "source_sha": "f" * 40}}, PIN)
+
+
+TRANSPORT = (b'error is Error Domain=NSURLErrorDomain Code=-1005 "The network connection was lost." '
+             b'NSErrorFailingURLStringKey=https://api.apple-cloudkit.com/database/1/com.apple.gk.ticket-delivery/production/public/records/lookup\n'
+             b"CloudKit's response is inconsistent with expections: (null)\nThe validate action failed! Error 68.\n")
+
+
+class NativeVerificationGuards(unittest.TestCase):
+    def verify(self, results, *, fail=None, seconds_per_result=10):
+        with tempfile.TemporaryDirectory(prefix="TEST-pi-native-trust-") as name:
+            evidence = Path(name) / "verification.jsonl"
+            clock = [100.0]
+            def run(argv, **kwargs):
+                clock[0] += seconds_per_result
+                value = results.pop(0)
+                if isinstance(value, Exception):
+                    raise value
+                return subprocess.CompletedProcess(argv, *value)
+            with mock.patch.object(H.subprocess, "run", side_effect=run) as commands, \
+                    mock.patch.object(H.time, "monotonic", side_effect=lambda: clock[0]):
+                if fail:
+                    with self.assertRaisesRegex(ValueError, fail):
+                        H.verify_native_helper(Path(name) / "ClaudeNotifier.app", evidence)
+                else:
+                    H.verify_native_helper(Path(name) / "ClaudeNotifier.app", evidence)
+            rows = [json.loads(line) for line in evidence.read_text().splitlines()]
+            return rows, commands.call_args_list
+
+    def test_only_stapler_transport_retries_and_final_actual_trust_must_pass(self):
+        rows, calls = self.verify([(0, b"signature and publisher verified", b""), (68, TRANSPORT, b""),
+                                  (0, b"The validate action worked!", b""), (0, b"", b"accepted")])
+        self.assertEqual([(r["stage"], r["attempt"], r["retry"]) for r in rows],
+                         [("signature", 1, False), ("stapler", 1, True), ("stapler", 2, False), ("assessment", 1, False)])
+        self.assertEqual([r["timeout_seconds"] for r in rows], [180, 170, 160, 150])
+        self.assertEqual(rows[1]["stdout"], TRANSPORT.decode())
+        self.assertEqual(rows[-1]["stderr"], "accepted")
+        self.assertNotIn("--notarized", calls[0].args[0])
+        self.assertEqual(calls[1].args[0][:3], ["/usr/bin/xcrun", "stapler", "validate"])
+        self.assertEqual(calls[1].args[0], calls[2].args[0])
+        self.assertEqual(calls[3].args[0][:5], ["/usr/sbin/spctl", "--assess", "--type", "execute", "--verbose=2"])
+
+    def test_two_transport_failures_exhaust_attempts_and_never_assess_or_pass(self):
+        rows, calls = self.verify([(0, b"valid signature", b""), (68, TRANSPORT, b"first"), (68, TRANSPORT, b"second")],
+                                  fail="native_verification_failed:stapler")
+        self.assertEqual(len(calls), 3)
+        self.assertEqual([row["retry"] for row in rows], [False, True, False])
+        self.assertEqual([row["stderr"] for row in rows[1:]], ["first", "second"])
+
+    def test_signature_ticket_assessment_and_unmeasured_transport_failures_never_retry(self):
+        for output in (TRANSPORT.replace(b"-1005", b"-1001"), TRANSPORT.replace(b"api.apple-cloudkit.com", b"foreign.invalid"),
+                       b"The ticket is invalid.\n" + TRANSPORT, b"The ticket was revoked.\n" + TRANSPORT,
+                       b"No ticket found.\n", b"The validate action failed! Error 68.\n"):
+            with self.subTest(output=output):
+                rows, calls = self.verify([(0, b"valid signature", b""), (68, output, b"")], fail="failed:stapler")
+                self.assertEqual(len(calls), 2)
+                self.assertFalse(rows[-1]["retry"])
+        for stage, results in (("signature", [(1, b"", b"invalid signature")]),
+                               ("assessment", [(0, b"", b""), (0, b"valid ticket", b""), (1, TRANSPORT, b"rejected")])):
+            rows, calls = self.verify(results, fail="failed:" + stage)
+            self.assertEqual(len(calls), 1 if stage == "signature" else 3)
+            self.assertFalse(rows[-1]["retry"])
+
+    def test_timeout_is_retained_and_never_becomes_transport_retry(self):
+        rows, calls = self.verify([(0, b"valid signature", b""),
+            subprocess.TimeoutExpired("stapler", 170, output=TRANSPORT, stderr=b"still running")], fail="timeout:stapler")
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(rows[-1]["timed_out"])
+        self.assertIsNone(rows[-1]["returncode"])
+        self.assertEqual(rows[-1]["stdout"], TRANSPORT.decode())
+        self.assertFalse(rows[-1]["retry"])
+
+    def test_original_total_deadline_cannot_be_reset_or_overrun_by_success(self):
+        rows, calls = self.verify([(0, b"late signature result", b"")],
+                                  fail="native_verification_budget_expired", seconds_per_result=180)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(rows[0]["timeout_seconds"], 180)
+        self.assertFalse(rows[0]["within_budget"])
 
 
 if __name__ == "__main__":

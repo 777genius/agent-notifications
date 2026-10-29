@@ -7,6 +7,7 @@ from pathlib import Path, PurePosixPath
 import re
 import shutil
 import subprocess
+import time
 import zipfile
 
 REPO = Path(__file__).resolve().parents[1]
@@ -94,6 +95,59 @@ def candidate_tree(pin):
     require(source_tree("HEAD") == pin["source_tree"], "macos_helper_candidate_swift_source_mismatch")
 
 
+def stapler_transport_failure(code, output):
+    """Only the measured Apple ticket-lookup connection loss is retryable."""
+    return (code == 68
+            and re.search(r"Error Domain=NSURLErrorDomain Code=-1005\b", output) is not None
+            and "The network connection was lost." in output
+            and "https://api.apple-cloudkit.com/database/1/com.apple.gk.ticket-delivery/production/public/records/lookup" in output
+            and re.search(r"^The validate action failed! Error 68\.$", output, re.MULTILINE) is not None
+            and re.search(r"\b(?:invalid|rejected|revoked|untrusted)\b|\b(?:not trusted|not notarized|no ticket|not found)\b",
+                          output, re.IGNORECASE) is None)
+
+
+def verify_native_helper(app, evidence):
+    """Keep the original trust checks and one shared 180-second total budget."""
+    deadline = time.monotonic() + 180
+    evidence.parent.mkdir(parents=True, exist_ok=True)
+    # Retain each result before another command, even when verification fails.
+    # An existing file or symlink cannot replace this fresh evidence stream.
+    with evidence.open("x", encoding="utf-8") as stream:
+        for stage, argv in (
+                ("signature", ["bash", REPO / "swift-notifier/scripts/verify-signing.sh", app]),
+                ("stapler", ["/usr/bin/xcrun", "stapler", "validate", app]),
+                ("assessment", ["/usr/sbin/spctl", "--assess", "--type", "execute", "--verbose=2", app])):
+            for attempt in range(1, (2 if stage == "stapler" else 1) + 1):
+                remaining = deadline - time.monotonic()
+                require(remaining > 0, "macos_helper_native_verification_budget_expired")
+                timed_out = False
+                try:
+                    value = subprocess.run([str(arg) for arg in argv], cwd=REPO, stdin=subprocess.DEVNULL,
+                                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=remaining)
+                    code, stdout, stderr = value.returncode, value.stdout, value.stderr
+                except subprocess.TimeoutExpired as error:
+                    code, stdout, stderr, timed_out = None, error.stdout or b"", error.stderr or b"", True
+                within_budget = time.monotonic() < deadline
+                limit = 2 * 1024 * 1024
+                oversized = len(stdout) + len(stderr) > limit
+                stdout, stderr = stdout[:limit], stderr[:max(0, limit - len(stdout))]
+                output = (stdout + stderr).decode(errors="replace")
+                retry = (stage == "stapler" and attempt == 1 and not timed_out and not oversized and within_budget
+                         and stapler_transport_failure(code, output))
+                stream.write(json.dumps({"stage": stage, "attempt": attempt, "argv": list(map(str, argv)),
+                    "timeout_seconds": remaining, "returncode": code, "timed_out": timed_out,
+                    "within_budget": within_budget,
+                    "output_truncated": oversized, "stdout": stdout.decode(errors="replace"),
+                    "stderr": stderr.decode(errors="replace"), "retry": retry}) + "\n")
+                stream.flush()
+                require(not oversized, "macos_helper_acquisition_output_limit")
+                require(not timed_out, "macos_helper_native_verification_timeout:" + stage)
+                require(within_budget, "macos_helper_native_verification_budget_expired")
+                if code == 0:
+                    break
+                require(retry, "macos_helper_native_verification_failed:" + stage + ":" + output[-8192:])
+
+
 def acquire(output, report):
     pin = load_pin()
     candidate_tree(pin)
@@ -146,7 +200,7 @@ def acquire(output, report):
     native = output / "native"
     native.mkdir(mode=0o700)
     command(["/usr/bin/ditto", "-x", "-k", archive, native])
-    command(["bash", REPO / "swift-notifier/scripts/verify-signing.sh", native / "ClaudeNotifier.app", "--notarized"])
+    verify_native_helper(native / "ClaudeNotifier.app", report.parent / "helper-native-verification.jsonl")
     require(sha(native / "ClaudeNotifier.app/Contents/MacOS/terminal-notifier-modern") == pin["executable_sha256"]
             and sha(native / "ClaudeNotifier.app.managed-runtime.json") == pin["attestation_sha256"],
             "macos_helper_extracted_leaf_mismatch")
