@@ -53,26 +53,17 @@ func (n *Notifier) sendNativeDesktopContext(ctx context.Context, sound, title, b
 }
 
 func runNativeAppContext(ctx context.Context, app string, args []string) error {
-	root, err := os.MkdirTemp("", "agent-notifications-open-")
-	if err != nil {
-		return err
-	}
-	defer os.RemoveAll(root)
-	stderr := filepath.Join(root, "stderr")
-	argv := []string{"-W", "-n", "-g", "-i", "/dev/null", "-o", filepath.Join(root, "stdout"), "--stderr", stderr, app, "--args", "-launchedViaLaunchServices"}
-	argv = append(argv, args...)
-	err = commandrun.Run(ctx, exec.Command("/usr/bin/open", argv...))
-	data, _ := os.ReadFile(stderr)
-	if strings.Contains(string(data), macOSPermissionDeniedMessage) {
-		return &NotificationPermissionDeniedError{}
-	}
-	if err != nil {
-		return err
-	}
-	if len(data) != 0 {
-		return errors.New("native_helper_reported_error")
-	}
-	return nil
+	executable := filepath.Join(app, "Contents", "MacOS", "terminal-notifier-modern")
+	return runContextNativeApp(ctx, SystemBootClock{}, executable, args, contextNativeOperations{
+		owner: currentContextNativeProcess,
+		stop:  stopContextNativeProcess,
+		probe: func(ctx context.Context) ([]byte, error) {
+			return commandrun.Output(ctx, exec.Command(executable, "--capabilities-json", "--context-notification"))
+		},
+		launch: func(ctx context.Context, request, receipt string) error {
+			return commandrun.Run(ctx, exec.Command("/usr/bin/open", "-n", "-g", app, "--args", "--send-context-json", "--request-file", request, "--receipt-file", receipt, "-launchedViaLaunchServices"))
+		},
+	})
 }
 
 func terminalBundleContext(parent context.Context, override string) string {

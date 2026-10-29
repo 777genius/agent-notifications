@@ -9,7 +9,11 @@ let arguments = Array(CommandLine.arguments.dropFirst())
 
 let options = PermissionSetupRequest.optionPositions(arguments)
 
-if options.contains("--request-permission-json") {
+if arguments == ["--capabilities-json", "--context-notification"] {
+    ContextNotificationRuntime.capabilities()
+} else if options.contains("--send-context-json") {
+    ContextNotificationRuntime.send(arguments: arguments)
+} else if options.contains("--request-permission-json") {
     StructuredRuntime.requestPermission(arguments: arguments)
 } else if options.contains("--capabilities-json") {
     StructuredRuntime.capabilities(arguments: arguments)
