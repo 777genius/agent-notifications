@@ -21,6 +21,63 @@ M = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(M)
 
 
+class PartialCaseEvidence(unittest.TestCase):
+    def capture(self, root, observe):
+        provider = mock.Mock(requests=[{"prompt": "TEST-secret"}])
+        sink = mock.Mock(rows=[{"status": "question"},
+            {"status": "task_complete", "request_id": "TEST-secret", "payload": "TEST-secret"}],
+            failures=["previous failure", "TEST-secret"])
+        return M.partial_case_failure(root, provider, sink, (1, 1), "task_complete", observe,
+                                      Path("/TEST/ClaudeNotifier.app"), 41)
+
+    def test_fixed_counts_exclude_unknown_witness_and_sink_content(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            rows = [{"type": "factory", "pid": 41}, {"type": "agent_before_settle", "outcome": "completed"},
+                    {"type": "agent_settled", "mode": "tui", "hasUI": True, "idle": True, "aborted": False},
+                    {"type": "TEST-secret", "mode": "TEST-secret", "outcome": "TEST-secret", "body": "TEST-secret"}]
+            (root / "witness.jsonl").write_text("\n".join(map(json.dumps, rows)))
+            observe = mock.Mock(return_value={"installed_helpers": [{"active": False, "finished_launching": True,
+                "process_start_identity": "123:456", "extra": "TEST-secret"}]})
+            receipt = self.capture(root, observe)
+        self.assertEqual(receipt["provider_request_count"], 1)
+        self.assertEqual((receipt["sink_row_count"], receipt["sink_rows_sampled"], receipt["sink_failure_count"]), (1, 1, 1))
+        self.assertEqual((receipt["sink_expected_status_count"], receipt["sink_request_id_present_count"]), (1, 1))
+        witness = receipt["witness"]
+        self.assertTrue(witness["factory_matches_origin"])
+        self.assertEqual((witness["event_counts"]["agent_settled"], witness["unknown_event_count"]), (1, 1))
+        self.assertEqual(witness["boundary_outcome_counts"], {"completed": 1, "aborted": 0, "error": 0})
+        self.assertEqual(receipt["native_helpers"], {"count": 1, "active_count": 0,
+                         "finished_launching_count": 1, "kernel_birth_observed_count": 1})
+        self.assertNotIn("TEST-secret", json.dumps(receipt))
+        self.assertFalse(receipt["desktop_qualified"])
+        observe.assert_called_once_with("helper-processes", "/TEST/ClaudeNotifier.app", timeout=3)
+
+    def test_witness_limits_are_checked_before_json_parsing(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for body in (b"x" * 65537, b"{}\n" * 129):
+                with self.subTest(size=len(body)):
+                    (root / "witness.jsonl").write_bytes(body)
+                    with mock.patch.object(M.json, "loads", side_effect=AssertionError("must not parse")) as parse:
+                        receipt = self.capture(root, mock.Mock(return_value={"installed_helpers": []}))
+                    parse.assert_not_called()
+                    self.assertEqual(receipt["witness_error_class"], "RuntimeError")
+                    self.assertEqual(receipt["native_helpers"]["count"], 0)
+
+    def test_missing_and_malformed_witness_and_native_errors_remain_bounded(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            receipt = self.capture(root, mock.Mock(return_value={"installed_helpers": []}))
+            self.assertFalse(receipt["witness"]["file_present"])
+            self.assertEqual(receipt["witness"]["row_count"], 0)
+            (root / "witness.jsonl").write_text("TEST-secret invalid JSON")
+            receipt = self.capture(root, mock.Mock(side_effect=RuntimeError("TEST-secret native failure")))
+        self.assertEqual(receipt["witness_error_class"], "JSONDecodeError")
+        self.assertEqual(receipt["native_helpers_error_class"], "RuntimeError")
+        self.assertNotIn("TEST-secret", json.dumps(receipt))
+
+
 class TerminalInput(unittest.TestCase):
     def test_actual_async_launcher_keeps_both_ttys_and_collects_child(self):
         with tempfile.TemporaryDirectory(prefix="TEST-pi-terminal-pty-") as temporary:

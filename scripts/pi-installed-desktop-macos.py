@@ -53,6 +53,52 @@ def wait_for(predicate, reason, seconds=12):
     raise RuntimeError(reason)
 
 
+def partial_case_failure(case_root, provider, sink, sink_start, expected, observe, app, origin_pid):
+    """Project failed-case observations to fixed counts before owned cleanup."""
+    rows = sink.rows[sink_start[0]:sink_start[0] + 128]
+    result = {"desktop_qualified": False, "provider_request_count": len(provider.requests),
+              "sink_row_count": len(sink.rows) - sink_start[0], "sink_rows_sampled": len(rows),
+              "sink_failure_count": len(sink.failures) - sink_start[1],
+              "sink_expected_status_count": sum(row.get("status") == expected for row in rows),
+              "sink_request_id_present_count": sum(bool(row.get("request_id")) for row in rows)}
+    try:
+        path = case_root / "witness.jsonl"
+        if path.exists():
+            with path.open("rb") as source:
+                body = source.read(65537)
+            P.require(len(body) <= 65536, "partial_witness_byte_limit")
+            lines = body.splitlines()
+            P.require(len(lines) <= 128, "partial_witness_row_limit")
+            witness = [json.loads(line) for line in lines]
+            P.require(all(isinstance(row, dict) for row in witness), "partial_witness_shape")
+        else:
+            witness = []
+        kinds = ("factory", "session_start", "agent_start", "agent_end", "agent_before_settle",
+                 "agent_settled", "ui_prompt_start", "ui_prompt_end", "session_shutdown")
+        result["witness"] = {
+            "file_present": path.exists(), "row_count": len(witness),
+            "event_counts": {kind: sum(row.get("type") == kind for row in witness) for kind in kinds},
+            "unknown_event_count": sum(row.get("type") not in kinds for row in witness),
+            "factory_matches_origin": origin_pid is not None and any(
+                row.get("type") == "factory" and row.get("pid") == origin_pid for row in witness),
+            "tui_count": sum(row.get("mode") == "tui" for row in witness),
+            "true_counts": {key: sum(row.get(key) is True for row in witness)
+                            for key in ("hasUI", "idle", "aborted")},
+            "boundary_outcome_counts": {outcome: sum(row.get("type") == "agent_before_settle"
+                and row.get("outcome") == outcome for row in witness) for outcome in ("completed", "aborted", "error")}}
+    except Exception as error:
+        result["witness_error_class"] = type(error).__name__
+    try:
+        helpers = observe("helper-processes", str(app), timeout=3)["installed_helpers"]
+        result["native_helpers"] = {"count": len(helpers),
+            "active_count": sum(row.get("active") is True for row in helpers),
+            "finished_launching_count": sum(row.get("finished_launching") is True for row in helpers),
+            "kernel_birth_observed_count": sum(bool(row.get("process_start_identity")) for row in helpers)}
+    except Exception as error:
+        result["native_helpers_error_class"] = type(error).__name__
+    return result
+
+
 def wait_for_consent(request, observe, seconds=130):
     """Observe the exact candidate dialog or the actual request's early exit."""
     # Observe the one normal request through its helper's 120 s authorization
@@ -820,6 +866,7 @@ def run(args):
         terminal, recorder = None, None
         desktop, sound, click = name != "desktop-off", name != "sound-off", name != "click-off"
         expected = "question" if name == "question" else "task_complete"
+        sink_start = (len(sink.rows), len(sink.failures))
         try:
             native_env = F.prepare(case_root, provider, "success", agent_dir=profile)
             native_env.update(AGENT_NOTIFICATIONS_CONFIG=str(root / "global/config.json"), TEST_PI_DEFER_DIALOG="1",
@@ -930,6 +977,14 @@ def run(args):
                 "pending_question_at_click": name == "question", "terminal_collected": terminal.collected(),
                 "checks": {key: True for key in ("native_tui", "configured_banner_policy", "configured_audio_policy",
                     "configured_click_policy", "native_event_counts", "ambient_root_isolated", "owned_terminal_collected")}})
+        except Exception:
+            report["partial_case_failure"] = {"case": name, "desktop_qualified": False}
+            try:
+                report["partial_case_failure"].update(partial_case_failure(case_root, provider, sink, sink_start,
+                    expected, observer, app, terminal.pid if terminal else None))
+            except Exception as error:
+                report["partial_case_failure"]["evidence_error_class"] = type(error).__name__
+            raise
         finally:
             if recorder and recorder.poll() is None:
                 (case_root / "capture-stop").touch()
