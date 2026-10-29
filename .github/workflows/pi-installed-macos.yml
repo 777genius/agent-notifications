@@ -9,6 +9,8 @@ on:
       - 'scripts/pi-candidate-build.py'
       - 'scripts/pi-macos-helper.py'
       - 'scripts/test_pi_macos_helper.py'
+      - 'scripts/pi-macos-host.py'
+      - 'scripts/test_pi_macos_host.py'
       - 'scripts/testdata/pi-native/macos-helper.json'
       - 'scripts/testdata/pi-native/macos-helper/**'
       - 'tests/integration/pi_installed_desktop_darwin.swift'
@@ -25,6 +27,11 @@ on:
         description: Existing macOS runner for the complete product qualification; empty uses the configured route
         type: string
         required: false
+      prepare_notification_center:
+        description: Prepare only the existing Notification Center agent on a verified disposable official macOS 15 ARM host
+        type: boolean
+        required: false
+        default: false
       observer_only:
         description: Compile and observe native permissions before building the product
         type: boolean
@@ -110,6 +117,17 @@ jobs:
             -o "$RUNNER_TEMP/TEST-pi-macos/observer"
           "$RUNNER_TEMP/TEST-pi-macos/observer" test-process-identity > "$RUNNER_TEMP/TEST-pi-macos/evidence/process-identity.json"
           "$RUNNER_TEMP/TEST-pi-macos/observer" preflight > "$RUNNER_TEMP/TEST-pi-macos/evidence/observer-preflight.json"
+      - name: Prepare the existing official Notification Center agent only when explicitly selected
+        if: ${{ inputs.prepare_notification_center }}
+        shell: bash
+        env:
+          PI_MACOS_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+        run: |
+          set -euo pipefail
+          python -B scripts/test_pi_macos_host.py -v
+          python -B scripts/pi-macos-host.py --prepare-notification-center --source-sha "$SOURCE_SHA" \
+            --observer "$RUNNER_TEMP/TEST-pi-macos/observer" \
+            --report "$RUNNER_TEMP/TEST-pi-macos/evidence/host-preparation.json"
       - uses: actions/setup-go@v7
         if: ${{ !inputs.observer_only }}
         with:

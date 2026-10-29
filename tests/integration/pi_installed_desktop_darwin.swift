@@ -350,6 +350,18 @@ final class ProductCapture: NSObject, SCStreamOutput, SCStreamDelegate, @uncheck
                 publish(["checks": checks, "foreground": foreground(), "desktop_qualified": false])
                 guard checks.values.allSatisfy({ $0 }) else { throw ProbeError.unavailable("native_observer_prerequisite_unavailable") }
             case "foreground": publish(foreground())
+            case "notification-center-state":
+                guard args.count == 1 else { throw ProbeError.unavailable("fixed_system_notification_center_only") }
+                let apps = NSWorkspace.shared.runningApplications.filter {
+                    $0.bundleIdentifier == "com.apple.notificationcenterui" && !$0.isTerminated
+                }.map { app -> [String: Any] in
+                    ["pid": Int(app.processIdentifier), "bundle_id": app.bundleIdentifier ?? "",
+                     "bundle_path": app.bundleURL?.resolvingSymlinksInPath().path ?? "",
+                     "executable_path": app.executableURL?.resolvingSymlinksInPath().path ?? "",
+                     "finished_launching": app.isFinishedLaunching,
+                     "process_start_identity": processStartIdentity(app.processIdentifier) ?? ""]
+                }
+                publish(["applications": apps, "desktop_qualified": false])
             case "permission-diagnostics":
                 guard args.count == 2, args[1].hasPrefix("/"), args[1].hasSuffix(".app") else {
                     throw ProbeError.unavailable("physical_installed_app_required")
