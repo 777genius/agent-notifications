@@ -233,7 +233,7 @@ def case_failure_observation(case_root, origin, provider, sink, data_root, snaps
 def start_toast_watcher(native, title, body, root, deadline, helpers):
     ready = root / "early-toast-ready.json"
     child = subprocess.Popen([str(native.executable), "toast-watch", title, body,
-                              str(root / "early-product-banner.bmp"), str(ready)],
+                              str(root / "early-toast-observation.bmp"), str(ready)],
                              stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                              creationflags=subprocess.CREATE_NO_WINDOW)
     helpers.append(child)
@@ -247,6 +247,124 @@ def start_toast_watcher(native, title, body, root, deadline, helpers):
         collect_toast_watcher(child, root / "early-toast-observation.json", deadline)
         raise
     return child
+
+
+def start_process_watcher(origin, notifier_image, root, deadline, helpers, *, now=time.monotonic):
+    """Arm only a read-only observer, using the already retained Pi object."""
+    import ctypes
+    P.require(origin.process_handle is not None and origin.process_handle.value is not None and origin.pi_identity,
+              "process_watch_original_identity_required")
+    ticks = origin.process_handle.kernel.GetTickCount64
+    ticks.argtypes, ticks.restype = (), ctypes.c_ulonglong
+    native_now = ticks()
+    remaining_ms = int((deadline - now()) * 1000)
+    P.require(0 < remaining_ms <= 30000, "process_watch_original_deadline_required")
+    native_deadline = native_now + remaining_ms
+    P.require(root.is_absolute() and root.is_dir() and root.resolve(strict=True) == root
+              and root == origin.root.parent, "process_watch_owned_case_root_required")
+    ready, stop = root / "process-watch-ready.json", root / "process-watch.stop"
+    native_receipt = root / "process-timeline-native.json"
+    for path in (ready, ready.with_name(ready.name + ".pending"), stop, native_receipt,
+                 native_receipt.with_name(native_receipt.name + ".pending")):
+        P.require(not path.exists() and not path.is_symlink(), "process_watch_fresh_path_required")
+    handle = origin.process_handle.value
+    startup = subprocess.STARTUPINFO()
+    startup.lpAttributeList = {"handle_list": [handle]}
+    try:
+        os.set_handle_inheritable(handle, True)
+        child = subprocess.Popen([str(origin.native.executable), "process-watch-owned-handle", str(handle),
+            origin.pi_identity["creation_time"], origin.executable, str(notifier_image), str(ready), str(stop), str(native_deadline),
+            str(native_receipt)],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, startupinfo=startup,
+            close_fds=True, creationflags=subprocess.CREATE_NO_WINDOW)
+        helpers.append(child)  # Own the observer before any fallible readiness check.
+    finally:
+        os.set_handle_inheritable(handle, False)
+    return {"child": child, "stop": stop, "ready": ready, "deadline": deadline, "native_deadline": native_deadline,
+            "native_receipt": native_receipt}
+
+
+def require_process_watcher_ready(watcher, *, now=time.monotonic):
+    # Caller retains the watcher before this can fail, so case cleanup always
+    # attempts collection without replacing the original readiness refusal.
+    ready, deadline = watcher["ready"], watcher["deadline"]
+    wait_for(ready.exists, "process_watch_not_ready", seconds=max(0, min(5, deadline - now())))
+    P.require(ready.is_file() and not ready.is_symlink() and ready.stat().st_size <= 4096,
+              "process_watch_ready_file_invalid")
+    value = json.loads(ready.read_text())
+    P.require(isinstance(value, dict) and set(value) == {"ready", "observation_only", "original_identity_verified", "deadline_tick_ms"}
+              and all(value[key] is True for key in ("ready", "observation_only", "original_identity_verified"))
+              and type(value["deadline_tick_ms"]) is int and value["deadline_tick_ms"] == watcher["native_deadline"]
+              and now() < deadline, "process_watch_ready_invalid")
+
+
+def process_timeline(raw):
+    """Validate the closed native schema; never retain arbitrary child output."""
+    P.require(len(raw) <= 65536, "process_watch_output_bound")
+    value = json.loads(raw)
+    P.require(isinstance(value, dict) and set(value) == {"observation_only", "qualification_input", "misses_remain_unknown",
+              "stop_reason", "elapsed_ms", "inventory_scans", "missed_candidates", "processes"}
+              and value["observation_only"] is True and value["qualification_input"] is False
+              and value["misses_remain_unknown"] is True, "process_watch_receipt_invalid")
+    P.require(value["stop_reason"] in ("stop_requested", "deadline", "scan_bound", "observation_refused")
+              and type(value["elapsed_ms"]) is int and 0 <= value["elapsed_ms"] <= 60000
+              and type(value["inventory_scans"]) is int and 0 <= value["inventory_scans"] <= 1501
+              and type(value["missed_candidates"]) is int and 0 <= value["missed_candidates"] <= 65536 * 1501
+              and isinstance(value["processes"], list) and 1 <= len(value["processes"]) <= 64,
+              "process_watch_receipt_bound")
+    roles = {"original_pi", "direct_candidate", "candidate_descendant", "system_powershell_descendant", "other_descendant"}
+    leaves = {"pi.exe", "claude-notifications-windows-amd64.exe", "powershell.exe", "other"}
+    for row in value["processes"]:
+        P.require(isinstance(row, dict) and set(row) == {"pid", "parent_pid", "birth_filetime", "role", "image_leaf",
+                  "first_seen_ms", "last_handle_observed_ms", "exit_signaled_observed_ms", "exit_code"},
+                  "process_watch_row_shape")
+        P.require(type(row["pid"]) is int and 0 < row["pid"] <= 0xFFFFFFFF
+                  and type(row["parent_pid"]) is int and 0 <= row["parent_pid"] <= 0xFFFFFFFF
+                  and isinstance(row["birth_filetime"], str) and row["birth_filetime"].isascii()
+                  and row["birth_filetime"].isdigit() and 0 < int(row["birth_filetime"]) <= 0xFFFFFFFFFFFFFFFF
+                  and row["role"] in roles and row["image_leaf"] in leaves,
+                  "process_watch_row_identity")
+        P.require(all(type(row[key]) is int and 0 <= row[key] <= value["elapsed_ms"]
+                      for key in ("first_seen_ms", "last_handle_observed_ms"))
+                  and row["first_seen_ms"] <= row["last_handle_observed_ms"], "process_watch_row_time")
+        signaled, code = row["exit_signaled_observed_ms"], row["exit_code"]
+        P.require((signaled is None and code is None) or (type(signaled) is int
+                  and row["first_seen_ms"] <= signaled <= row["last_handle_observed_ms"]
+                  and type(code) is int and 0 <= code <= 0xFFFFFFFF), "process_watch_row_exit")
+    return value
+
+
+def collect_process_watcher(watcher, receipt, *, now=time.monotonic):
+    if watcher is None:
+        return
+    child, stop = watcher["child"], watcher["stop"]
+    value = {"observation_only": True, "qualification_input": False}
+    if child.poll() is None and not stop.exists():
+        stop.write_text("stop\n")
+    try:
+        out, errors = child.communicate(timeout=max(0.001, watcher["deadline"] - now()))
+    except subprocess.TimeoutExpired:
+        child.kill()  # Only the directly owned observation process, never an actor.
+        out, errors = child.communicate(timeout=3)
+        value["deadline_expired"] = True
+    value.update(exit_code=child.returncode, stdout_bytes=len(out), stderr_bytes=len(errors), watcher_collected=child.poll() is not None)
+    if child.returncode == 0 and not errors:
+        try:
+            ack = json.loads(out) if len(out) <= 128 else None
+            P.require(isinstance(ack, dict) and set(ack) == {"receipt_written"} and ack["receipt_written"] is True,
+                      "process_watch_ack_invalid")
+            path = watcher["native_receipt"]
+            P.require(path.is_file() and not path.is_symlink() and path.resolve(strict=True) == path
+                      and path.parent == stop.parent and path.stat().st_size <= 65536,
+                      "process_watch_closed_receipt_unavailable")
+            with path.open("rb") as source:
+                value["timeline"] = process_timeline(source.read(65537))
+        except Exception as error:
+            value.update(status="unavailable", error_class=type(error).__name__)
+    else:
+        value["status"] = "unavailable"
+    receipt.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+    P.require(value["watcher_collected"], "process_watch_owned_child_not_collected")
 
 
 def collect_toast_watcher(child, receipt, deadline):
@@ -581,7 +699,7 @@ def run(args):
         for name in CASES:
             case_root = root / ("case-" + name)
             provider = F.Provider("success", hold_reply=name != "question")
-            origin = distractor = capture = neutral = watcher = None
+            origin = distractor = capture = neutral = watcher = process_watcher = None
             case_deadline = None
             primary_failure = None
             stop_capture, stop_neutral = case_root / "capture.stop", case_root / "neutral.stop"
@@ -627,6 +745,9 @@ def run(args):
                 report.setdefault("toast_observation_timings", []).append(timing)
                 watcher = start_toast_watcher(native, toast_title, P.COPY[event], case_root, case_deadline, helpers)
                 timing["early_watcher_ready_seconds"] = round(time.monotonic() - capture_started, 3)
+                process_watcher = start_process_watcher(origin, view["runtime"]["executable"], case_root, case_deadline, helpers)
+                require_process_watcher_ready(process_watcher)
+                timing["process_watcher_ready_seconds"] = round(time.monotonic() - capture_started, 3)
                 if name == "question":
                     native.focus(origin.window); native.type(origin.window, "/TEST-dialog")
                 else:
@@ -718,7 +839,9 @@ def run(args):
                     report["case_failure"]["diagnostic_error_class"] = type(diagnostic_error).__name__
                 raise
             finally:
-                actions = [(role, terminal.close) for role, terminal in (("origin", origin), ("distractor", distractor)) if terminal]
+                # Stop observation before test cleanup changes any actor's exit.
+                actions = [("process_watcher", lambda: collect_process_watcher(process_watcher, case_root / "process-timeline.json"))]
+                actions.extend((role, terminal.close) for role, terminal in (("origin", origin), ("distractor", distractor)) if terminal)
                 actions.extend((("capture", lambda: stop_helper(capture, stop_capture)),
                                 ("neutral", lambda: stop_helper(neutral, stop_neutral)), ("provider", provider.close),
                                 ("toast_watcher", lambda: collect_toast_watcher(watcher, case_root / "early-toast-observation.json", case_deadline))))
@@ -756,7 +879,8 @@ def run(args):
         args.report.parent.mkdir(parents=True, exist_ok=True)
         for case_root in root.glob("case-*"):
             for name in ("native-output.s16le", "actual-product-banner.bmp", "witness.jsonl",
-                         "early-product-banner.bmp", "early-toast-ready.json", "early-toast-observation.json",
+                         "early-product-banner.bmp", "early-toast-observation.bmp", "early-toast-ready.json", "early-toast-observation.json",
+                         "process-watch-ready.json", "process-timeline.json",
                          "origin/launch-state.json", "origin/launch-at-failure.json", "origin/process.exit", "origin/launch-failure.bmp",
                          "distractor/launch-state.json", "distractor/launch-at-failure.json", "distractor/process.exit", "distractor/launch-failure.bmp"):
                 source = case_root / name

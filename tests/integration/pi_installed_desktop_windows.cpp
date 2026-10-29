@@ -64,10 +64,11 @@ static void processFacts(OwnedProcess& process) {
     need(actual.sid == expected.sid && actual.auth == expected.auth && actual.session == expected.session,
          "owned_process_user_or_session_changed");
 }
-static std::unique_ptr<OwnedProcess> processIdentity(DWORD pid) {
+static std::unique_ptr<OwnedProcess> processIdentity(DWORD pid,
+        DWORD access = PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE | SYNCHRONIZE) {
     need(pid != 0, "owned_process_pid_required");
     auto process = std::make_unique<OwnedProcess>(); process->pid = pid;
-    process->handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE | SYNCHRONIZE, FALSE, pid);
+    process->handle = OpenProcess(access, FALSE, pid);
     if (!process->handle) {
         need(GetLastError() == ERROR_INVALID_PARAMETER, "owned_process_open_unavailable");
         return nullptr;
@@ -113,6 +114,129 @@ static std::map<DWORD, DWORD> processParents() {
     }
     need(GetLastError() == ERROR_NO_MORE_FILES, "owned_process_snapshot_incomplete");
     return parents;
+}
+struct TimelineProcess {
+    std::unique_ptr<OwnedProcess> process;
+    DWORD parent = 0;
+    std::string role, imageLeaf;
+    ULONGLONG firstSeen = 0, lastObserved = 0, signaledObserved = 0;
+    bool signaled = false;
+    DWORD exitCode = 0;
+};
+static std::string watchOwnedProcesses(std::unique_ptr<OwnedProcess> root, const std::wstring& notifierImage,
+        const fs::path& ready, const fs::path& stop, ULONGLONG deadline) {
+    const auto started = GetTickCount64(), originalBirth = root->created;
+    need(deadline > started && deadline - started <= 30000, "process_watch_original_deadline_required");
+    need(running(root->handle), "process_watch_live_original_required");
+    wchar_t system[32768]{}; const auto count = GetSystemDirectoryW(system, 32768);
+    need(count > 0 && count < 32768 && fs::path(notifierImage).is_absolute(), "process_watch_image_required");
+    const auto systemPowerShell = (fs::path(system) / L"WindowsPowerShell" / L"v1.0" / L"powershell.exe").wstring();
+    auto knownLeaf = [](const std::wstring& image) -> std::string {
+        const auto leaf = fs::path(image).filename().wstring();
+        for (const auto expected : {L"pi.exe", L"claude-notifications-windows-amd64.exe", L"powershell.exe"})
+            if (CompareStringOrdinal(leaf.c_str(), -1, expected, -1, TRUE) == CSTR_EQUAL) return utf8(expected);
+        return "other";
+    };
+    std::vector<TimelineProcess> observed;
+    const auto rootLeaf = knownLeaf(root->image);
+    observed.push_back({std::move(root), 0, "original_pi", rootLeaf, 0, 0, 0, false, 0});
+    if (!ready.empty()) {
+        need(!fs::exists(fs::symlink_status(ready)) && !fs::exists(fs::symlink_status(stop)), "process_watch_fresh_markers_required");
+        auto pending = ready; pending += L".pending";
+        need(!fs::exists(fs::symlink_status(pending)), "process_watch_fresh_pending_required");
+        processBirth(*observed.front().process);
+        need(observed.front().process->created == originalBirth && running(observed.front().process->handle),
+             "process_watch_ready_original_changed");
+        {
+            std::ofstream file(pending);
+            file << "{\"ready\":true,\"observation_only\":true,\"original_identity_verified\":true,\"deadline_tick_ms\":" << deadline << "}\n";
+            need(file.good(), "process_watch_ready_write_failed");
+        }
+        need(GetTickCount64() < deadline, "process_watch_ready_expired");
+        fs::rename(pending, ready);
+    }
+    unsigned scans = 0, missed = 0;
+    std::string reason = "deadline";
+    auto inventory = [&]() {
+        need(scans < 1501 && GetTickCount64() < deadline, "process_watch_scan_bound");
+        ++scans;
+        return processParents();
+    };
+    auto original = [&]() {
+        processBirth(*observed.front().process);
+        need(observed.front().process->created == originalBirth, "process_watch_original_changed");
+    };
+    try {
+        while (GetTickCount64() < deadline) {
+            if (!stop.empty() && fs::exists(stop)) { reason = "stop_requested"; break; }
+            if (scans >= 1501) { reason = "scan_bound"; break; }
+            original();
+            const auto parents = inventory();
+            original();
+            for (const auto& [candidate, parent] : parents) {
+                if (GetTickCount64() >= deadline) break;
+                if (std::any_of(observed.begin(), observed.end(), [&](const auto& row) { return row.process->pid == candidate; })) continue;
+                const auto ancestor = std::find_if(observed.begin(), observed.end(), [&](const auto& row) { return row.process->pid == parent; });
+                if (ancestor == observed.end()) continue;
+                need(observed.size() < 64, "process_watch_handle_bound");
+                const auto parentCreated = ancestor->process->created;
+                // Observation handles cannot terminate/suspend any actor. Keep
+                // each admitted kernel object until the watcher is collected.
+                auto child = processIdentity(candidate, PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE);
+                if (!child) { ++missed; continue; }
+                const auto current = inventory();
+                original();
+                const auto entry = current.find(candidate);
+                if (entry == current.end() || entry->second != parent || child->created < parentCreated) { ++missed; continue; }
+                const auto first = GetTickCount64();
+                if (first >= deadline) { ++missed; break; }
+                std::string role = "other_descendant", leaf = "other";
+                if (sameImage(child->image, notifierImage)) {
+                    role = parent == observed.front().process->pid ? "direct_candidate" : "candidate_descendant";
+                    leaf = knownLeaf(child->image);
+                } else if (sameImage(child->image, systemPowerShell)) {
+                    role = "system_powershell_descendant"; leaf = "powershell.exe";
+                }
+                observed.push_back({std::move(child), parent, role, leaf, first - started, first - started, 0, false, 0});
+            }
+            for (auto& row : observed) {
+                if (GetTickCount64() >= deadline) break;
+                const auto birth = row.process->created;
+                processBirth(*row.process);
+                need(row.process->created == birth, "process_watch_retained_identity_changed");
+                const bool exited = !row.signaled && !running(row.process->handle);
+                DWORD exitCode = 0;
+                if (exited) need(GetExitCodeProcess(row.process->handle, &exitCode), "process_watch_exit_unavailable");
+                const auto now = GetTickCount64();
+                if (now >= deadline) break;
+                row.lastObserved = now - started;
+                if (exited) {
+                    row.signaled = true; row.signaledObserved = now - started; row.exitCode = exitCode;
+                }
+            }
+            const auto now = GetTickCount64();
+            if (now < deadline) Sleep(static_cast<DWORD>(std::min<ULONGLONG>(20, deadline - now)));
+        }
+    } catch (...) {
+        // Partial observations are never promoted into completeness or delivery.
+        reason = "observation_refused";
+    }
+    std::string rows = "[";
+    for (const auto& row : observed) {
+        if (rows.size() > 1) rows += ',';
+        rows += "{\"pid\":" + std::to_string(row.process->pid) + ",\"parent_pid\":" + std::to_string(row.parent)
+            + ",\"birth_filetime\":\"" + std::to_string(row.process->created) + "\",\"role\":\"" + row.role
+            + "\",\"image_leaf\":\"" + row.imageLeaf + "\",\"first_seen_ms\":" + std::to_string(row.firstSeen)
+            + ",\"last_handle_observed_ms\":" + std::to_string(row.lastObserved)
+            + ",\"exit_signaled_observed_ms\":" + (row.signaled ? std::to_string(row.signaledObserved) : "null")
+            + ",\"exit_code\":" + (row.signaled ? std::to_string(row.exitCode) : "null") + "}";
+    }
+    rows += ']';
+    auto result = "{\"observation_only\":true,\"qualification_input\":false,\"misses_remain_unknown\":true,\"stop_reason\":\""
+        + reason + "\",\"elapsed_ms\":" + std::to_string(GetTickCount64() - started) + ",\"inventory_scans\":"
+        + std::to_string(scans) + ",\"missed_candidates\":" + std::to_string(missed) + ",\"processes\":" + rows + "}";
+    need(result.size() < 65536, "process_watch_receipt_bound");
+    return result;
 }
 static std::string collectOwnedProcess(std::unique_ptr<OwnedProcess> root) {
     std::vector<std::unique_ptr<OwnedProcess>> owned; owned.push_back(std::move(root));
@@ -220,6 +344,28 @@ static int testProcessIdentity() {
          && leaf->created >= root->created && sameImage(leaf->image, root->image), "process_guard_descendant_identity_missing");
     try {
         bool refused = false;
+        try { watchOwnedProcesses(heldProcess(duplicateHeld(root->handle), root->created + 1, root->image), selfImage(), {}, {}, GetTickCount64() + 200); }
+        catch (const std::runtime_error& error) { refused = std::string(error.what()) == "owned_process_birth_changed"; }
+        need(refused && running(root->handle) && running(leaf->handle), "process_watch_wrong_birth_changed_actor");
+        refused = false;
+        try { watchOwnedProcesses(heldProcess(duplicateHeld(root->handle), root->created, L"C:\\TEST\\foreign.exe"), selfImage(), {}, {}, GetTickCount64() + 200); }
+        catch (const std::runtime_error& error) { refused = std::string(error.what()) == "owned_process_image_changed"; }
+        need(refused && running(root->handle) && running(leaf->handle), "process_watch_wrong_image_changed_actor");
+        {
+            TestChild foreign(L"process-test-child");
+            HANDLE queryOnly = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, root->pid);
+            need(queryOnly != nullptr, "process_watch_query_handle_missing");
+            const auto timeline = watchOwnedProcesses(heldProcess(queryOnly, root->created, root->image), selfImage(), {}, {}, GetTickCount64() + 200);
+            need(timeline.find("\"pid\":" + std::to_string(leaf->pid) + ",") != std::string::npos
+                 && timeline.find("\"pid\":" + std::to_string(foreign.process.dwProcessId) + ",") == std::string::npos
+                 && timeline.find("\"role\":\"direct_candidate\"") != std::string::npos
+                 && timeline.find("\"stop_reason\":\"deadline\"") != std::string::npos
+                 && running(root->handle) && running(leaf->handle) && WaitForSingleObject(foreign.process.hProcess, 0) == WAIT_TIMEOUT,
+                 "process_watch_readonly_descendant_guard_failed");
+            std::cout << "{\"scope\":\"native_readonly_descendant_watch_guard\",\"query_only_handles\":true,\"foreign_process_excluded\":true,"
+                         "\"wrong_birth_and_image_refused\":true,\"all_actors_still_live\":true,\"desktop_qualified\":false}\n" << std::flush;
+        }
+        refused = false;
         try { collectOwnedProcess(heldProcess(duplicateHeld(root->handle), root->created + 1, root->image)); }
         catch (const std::runtime_error& error) { refused = std::string(error.what()) == "owned_process_birth_changed"; }
         need(refused && running(root->handle) && running(leaf->handle), "mismatched_process_birth_was_signalled");
@@ -449,7 +595,10 @@ static int toast(const std::wstring& expected, const std::wstring& body, const f
         }
         pump(100);
     }
-    std::cout << "{\"found\":false,\"elapsed_ms\":" << GetTickCount64() - started << ',' << toastTrace(trace) << "}\n"; return 3;
+    bool failureCaptured = false;
+    if (!ready.empty()) { try { screenshot(image); failureCaptured = true; } catch (...) {} }
+    std::cout << "{\"found\":false,\"observation_end_screenshot\":" << jsonBool(failureCaptured)
+              << ",\"elapsed_ms\":" << GetTickCount64() - started << ',' << toastTrace(trace) << "}\n"; return 3;
 }
 static int capture(const fs::path& path, const fs::path& stop, int routeCount, wchar_t** routeArgs) {
     ComPtr<IMMDeviceEnumerator> enumerator; ComPtr<IMMDevice> endpoint; ComPtr<IAudioClient> client; ComPtr<IAudioCaptureClient> reader;
@@ -557,6 +706,24 @@ int wmain(int argc, wchar_t** argv) {
             auto process = heldProcess(handle, 0, argv[3]);
             std::cout << "{\"present\":true,\"pid\":" << process->pid << ",\"creation_time\":\"" << process->created
                       << "\",\"executable\":" << NavigationTokenTEST::quoted(utf8(process->image)) << "}\n"; return 0;
+        }
+        if (mode == L"process-watch-owned-handle" && argc == 10) {
+            const auto raw = std::stoull(argv[2]), birth = std::stoull(argv[3]), deadline = std::stoull(argv[8]);
+            need(raw > 0 && raw <= UINTPTR_MAX && birth > 0, "process_watch_original_handle_required");
+            const fs::path receipt = argv[9]; auto pending = receipt; pending += L".pending";
+            need(!fs::exists(fs::symlink_status(receipt)) && !fs::exists(fs::symlink_status(pending))
+                 && receipt.parent_path() == fs::path(argv[6]).parent_path() && receipt.parent_path() == fs::path(argv[7]).parent_path(),
+                 "process_watch_fresh_receipt_required");
+            const auto value = watchOwnedProcesses(heldProcess(reinterpret_cast<HANDLE>(static_cast<uintptr_t>(raw)), birth, argv[4]),
+                                                   argv[5], argv[6], argv[7], deadline);
+            {
+                std::ofstream file(pending); file << value << '\n';
+                need(file.good(), "process_watch_receipt_write_failed");
+            }
+            fs::rename(pending, receipt);
+            // The closed file avoids bulk stdout backpressure retaining the
+            // watcher past its original cutoff during a longer negative case.
+            std::cout << "{\"receipt_written\":true}\n"; return 0;
         }
         if (mode == L"screenshot" && argc == 3) { screenshot(argv[2]); std::cout << "{\"captured\":true}\n"; return 0; }
         if (mode == L"capture" && (argc == 4 || argc == 10)) return capture(argv[2], argv[3], argc - 4, argv + 4);

@@ -323,6 +323,144 @@ class FailedCaseEvidenceTests(unittest.TestCase):
             self.assertEqual(value["observation_cache"], {"status": "absent"})
 
 
+class ProcessTimelineTests(unittest.TestCase):
+    def timeline(self):
+        return {"observation_only": True, "qualification_input": False, "misses_remain_unknown": True,
+                "stop_reason": "stop_requested", "elapsed_ms": 70, "inventory_scans": 3, "missed_candidates": 1,
+                "processes": [{"pid": 41, "parent_pid": 0, "birth_filetime": "123456789", "role": "original_pi",
+                    "image_leaf": "pi.exe", "first_seen_ms": 0, "last_handle_observed_ms": 60,
+                    "exit_signaled_observed_ms": None, "exit_code": None},
+                    {"pid": 42, "parent_pid": 41, "birth_filetime": "123456790", "role": "direct_candidate",
+                    "image_leaf": "claude-notifications-windows-amd64.exe", "first_seen_ms": 10,
+                    "last_handle_observed_ms": 60, "exit_signaled_observed_ms": 40, "exit_code": 0}]}
+
+    def test_start_uses_only_original_handle_and_one_prelaunch_absolute_deadline(self):
+        with tempfile.TemporaryDirectory(prefix="TEST-pi-process-watch-") as temporary:
+            root, helpers = Path(temporary), []
+            origin = SimpleNamespace(root=root / "origin", process_handle=Mock(value=234), pi_identity={"creation_time": "123456789"},
+                                     executable="TEST-pi.exe", native=Mock(executable="observer.exe"))
+            origin.process_handle.kernel.GetTickCount64.return_value = 100000
+            child = Mock()
+            with patch.object(W.subprocess, "STARTUPINFO", create=True, return_value=SimpleNamespace()) as startup, \
+                    patch.object(W.subprocess, "CREATE_NO_WINDOW", create=True, new=0x08000000), \
+                    patch.object(W.os, "set_handle_inheritable", create=True) as inherit, \
+                    patch.object(W.subprocess, "Popen", return_value=child) as spawn:
+                watcher = W.start_process_watcher(origin, "TEST-notifier.exe", root, 30, helpers, now=lambda: 2.5)
+            self.assertEqual(helpers, [child])
+            self.assertIs(watcher["child"], child)
+            self.assertEqual(watcher["deadline"], 30)
+            self.assertEqual(watcher["native_deadline"], 127500)
+            self.assertEqual(spawn.call_args.args[0], ["observer.exe", "process-watch-owned-handle", "234", "123456789",
+                "TEST-pi.exe", "TEST-notifier.exe", str(root / "process-watch-ready.json"), str(root / "process-watch.stop"), "127500",
+                str(root / "process-timeline-native.json")])
+            self.assertEqual(startup.return_value.lpAttributeList, {"handle_list": [234]})
+            self.assertTrue(spawn.call_args.kwargs["close_fds"])
+            self.assertEqual(spawn.call_args.kwargs["stdin"], subprocess.DEVNULL)
+            self.assertEqual([call.args for call in inherit.call_args_list], [(234, True), (234, False)])
+            origin.process_handle.close.assert_not_called()
+            (root / "process-watch-ready.json").write_text(json.dumps({"ready": True, "observation_only": True,
+                "original_identity_verified": True, "deadline_tick_ms": 127500}))
+            W.require_process_watcher_ready(watcher, now=lambda: 3)
+            self.assertEqual(watcher["native_deadline"], 127500)
+
+    def test_expired_prelaunch_or_mismatched_ready_never_authorizes_a_new_lifetime(self):
+        origin = SimpleNamespace(process_handle=Mock(value=234), pi_identity={"creation_time": "123456789"})
+        origin.process_handle.kernel.GetTickCount64.return_value = 100000
+        with patch.object(W.subprocess, "Popen") as spawn:
+            with self.assertRaisesRegex(RuntimeError, "original_deadline_required"):
+                W.start_process_watcher(origin, "TEST-notifier.exe", Path("TEST-root"), 30, [], now=lambda: 30)
+        spawn.assert_not_called()
+        with tempfile.TemporaryDirectory(prefix="TEST-pi-process-watch-") as temporary:
+            ready = Path(temporary) / "ready.json"
+            watcher = {"ready": ready, "deadline": 30, "native_deadline": 127500}
+            for changes in ({"ready": 1}, {"original_identity_verified": False}, {"deadline_tick_ms": 127501}):
+                ready.write_text(json.dumps({"ready": True, "observation_only": True,
+                    "original_identity_verified": True, "deadline_tick_ms": 127500, **changes}))
+                with self.subTest(changes=changes), self.assertRaisesRegex(RuntimeError, "ready_invalid"):
+                    W.require_process_watcher_ready(watcher, now=lambda: 3)
+
+    def test_closed_timeline_preserves_observed_bounds_and_never_promotes_misses(self):
+        value = self.timeline()
+        self.assertEqual(W.process_timeline(json.dumps(value).encode()), value)
+        self.assertTrue(value["misses_remain_unknown"])
+        self.assertFalse(value["qualification_input"])
+        for field, change in (("role", "TEST-private-argv"), ("image_leaf", "C:/TEST-private/path.exe"),
+                              ("pid", True), ("exit_code", -1), ("exit_signaled_observed_ms", 100)):
+            broken = self.timeline()
+            broken["processes"][1][field] = change
+            with self.subTest(field=field), self.assertRaises(RuntimeError):
+                W.process_timeline(json.dumps(broken).encode())
+        for field, change in (("processes", [self.timeline()["processes"][0]] * 65), ("inventory_scans", 1502)):
+            broken = {**self.timeline(), field: change}
+            with self.subTest(field=field), self.assertRaises(RuntimeError):
+                W.process_timeline(json.dumps(broken).encode())
+
+    def test_collection_discards_raw_unknown_output_and_only_stops_owned_observer(self):
+        with tempfile.TemporaryDirectory(prefix="TEST-pi-process-watch-") as temporary:
+            root = Path(temporary)
+            private = "TEST-private-argv-stdout-error"
+            child = Mock(returncode=0)
+            child.poll.side_effect = [None, 0]
+            child.communicate.return_value = (b'{"receipt_written":true}\n', b"")
+            native_receipt = root / "process-timeline-native.json"
+            native_receipt.write_text(json.dumps({**self.timeline(), "private": private}))
+            watcher = {"child": child, "stop": root / "stop", "deadline": 30, "native_receipt": native_receipt}
+            receipt = root / "receipt.json"
+            W.collect_process_watcher(watcher, receipt, now=lambda: 20)
+            value = json.loads(receipt.read_text())
+            self.assertTrue(value["watcher_collected"])
+            self.assertEqual(value["status"], "unavailable")
+            self.assertNotIn(private, receipt.read_text())
+            self.assertEqual((root / "stop").read_text(), "stop\n")
+            child.kill.assert_not_called()
+            child.communicate.assert_called_once_with(timeout=10)
+
+    def test_collection_reads_only_closed_bounded_receipt_after_native_join(self):
+        with tempfile.TemporaryDirectory(prefix="TEST-pi-process-watch-") as temporary:
+            root = Path(temporary).resolve()
+            native_receipt = root / "process-timeline-native.json"
+            native_receipt.write_text(json.dumps(self.timeline()))
+            before = native_receipt.read_bytes()
+            child = Mock(returncode=0)
+            child.poll.return_value = 0
+            child.communicate.return_value = (b'{"receipt_written":true}\n', b"")
+            watcher = {"child": child, "stop": root / "stop", "deadline": 30, "native_receipt": native_receipt}
+            receipt = root / "receipt.json"
+            W.collect_process_watcher(watcher, receipt, now=lambda: 20)
+            self.assertEqual(json.loads(receipt.read_text())["timeline"], self.timeline())
+            self.assertEqual(native_receipt.read_bytes(), before)
+            self.assertFalse((root / "stop").exists())
+            child.kill.assert_not_called()
+            native_receipt.write_bytes(b" " * 65537)
+            W.collect_process_watcher(watcher, receipt, now=lambda: 20)
+            self.assertEqual(json.loads(receipt.read_text())["status"], "unavailable")
+
+    def test_deadline_collection_kills_reaps_only_watcher_and_keeps_primary_cleanup_path(self):
+        with tempfile.TemporaryDirectory(prefix="TEST-pi-process-watch-") as temporary:
+            root, calls, report = Path(temporary), [], {}
+            child = Mock(returncode=-1)
+            child.poll.side_effect = [None, -1]
+            child.communicate.side_effect = [subprocess.TimeoutExpired("process-watch", 0.001), (b"", b"TEST-private-error")]
+            watcher = {"child": child, "stop": root / "stop", "deadline": 30}
+            primary = RuntimeError("actual_primary_observation")
+            try:
+                try:
+                    raise primary
+                finally:
+                    W.cleanup_case((("process_watcher", lambda: W.collect_process_watcher(watcher, root / "receipt.json", now=lambda: 31)),
+                                    ("origin", lambda: calls.append("origin")), ("provider", lambda: calls.append("provider"))),
+                                   primary_failure=str(primary), report=report, case="completion")
+            except RuntimeError as error:
+                self.assertIs(error, primary)
+            self.assertEqual(calls, ["origin", "provider"])
+            child.kill.assert_called_once_with()
+            self.assertEqual(child.communicate.call_args_list[0].kwargs, {"timeout": 0.001})
+            value = json.loads((root / "receipt.json").read_text())
+            self.assertTrue(value["deadline_expired"])
+            self.assertTrue(value["watcher_collected"])
+            self.assertNotIn("TEST-private-error", json.dumps(value))
+
+
 class ProcessCleanupTests(unittest.TestCase):
     def terminal(self, root, native):
         terminal = W.Terminal.__new__(W.Terminal)
