@@ -4,6 +4,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import plistlib
 import pty
 import select
 import subprocess
@@ -12,6 +13,7 @@ import tempfile
 import time
 import unittest
 from unittest import mock
+import zipfile
 
 REPO = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("pi_installed_macos", REPO / "scripts/pi-installed-desktop-macos.py")
@@ -138,6 +140,30 @@ class TerminalOwnership(unittest.TestCase):
             signals = [call.args for call in observer.call_args_list if call.args[0] == "signal-owned-terminal-process"]
             self.assertEqual(signals, [("signal-owned-terminal-process", "41", "123:456", self.identity()["executable_path"], "TERM")])
             self.assertFalse(terminal.collected())
+
+
+class PermissionUIIdentity(unittest.TestCase):
+    def test_display_aliases_come_from_pinned_archive_and_identical_installed_metadata(self):
+        archive = M.H.INPUTS / "ClaudeNotifier-smoke.app.zip"
+        pin = M.H.load_pin()
+        with zipfile.ZipFile(archive) as packaged:
+            body = packaged.read("ClaudeNotifier.app/Contents/Info.plist")
+        with tempfile.TemporaryDirectory(prefix="TEST-pi-permission-identity-") as temporary:
+            app = Path(temporary) / "owned.app"
+            info = app / "Contents/Info.plist"
+            info.parent.mkdir(parents=True)
+            info.write_bytes(body)
+            identity = M.permission_ui_identity(archive, app, pin)
+            self.assertEqual(identity["display_names"], ["Agent Notifications", "ClaudeNotifier"])
+            self.assertEqual(identity["bundle_id"], M.H.BUNDLE)
+            self.assertEqual(identity["installed_info_plist_sha256"], M.P.sha(info))
+            with self.assertRaisesRegex(RuntimeError, "archive_identity_mismatch"):
+                M.permission_ui_identity(archive, app, {**pin, "archive_sha256": "0" * 64})
+            metadata = plistlib.loads(body)
+            metadata["CFBundleDisplayName"] = "TEST foreign"
+            info.write_bytes(plistlib.dumps(metadata))
+            with self.assertRaisesRegex(RuntimeError, "installed_metadata_mismatch"):
+                M.permission_ui_identity(archive, app, pin)
 
 
 class ConsentObservation(unittest.TestCase):
@@ -267,6 +293,45 @@ class ConsentObservation(unittest.TestCase):
             clock[0] = 5.0
             self.assertEqual(observed(), dialogs)
             self.assertEqual(captures, [])
+
+    def test_permission_card_hover_and_observed_options_are_once_bound_to_original_request(self):
+        class Request:
+            def poll(self):
+                return None
+        phase, calls, captures, receipt = [0], [], [], {}
+
+        def observe(operation, *args):
+            calls.append(operation)
+            if operation == "hover-notification-consent":
+                phase[0] = 1
+                return {"physical_pointer_hover": True, "permission_cards": [{"options_bounds": [1, 2, 3, 4]}]}
+            if operation == "open-notification-consent-options":
+                phase[0] = 2
+                return {"physical_options_click": True, "dialogs": [{"observed_allow": True}]}
+            self.assertEqual(operation, "notification-consent")
+            return {"dialogs": [{"observed_allow": True}] if phase[0] == 2 else [],
+                    "permission_cards": [{"options_bounds": [1, 2, 3, 4]}] if phase[0] else [{}]}
+
+        observed = M.consent_observer(Request(), observe, Path("/TEST/owned.app"), receipt,
+                                      ui_capture=lambda phase: captures.append(phase) or {"desktop_qualified": False})
+        self.assertEqual(observed(), [])
+        self.assertEqual(observed(), [])
+        self.assertEqual(observed(), [{"observed_allow": True}])
+        self.assertEqual(observed(), [{"observed_allow": True}])
+        self.assertEqual(calls.count("hover-notification-consent"), 1)
+        self.assertEqual(calls.count("open-notification-consent-options"), 1)
+        self.assertEqual(captures, ["hover", "options"])
+        self.assertNotIn("allow-notification-consent", calls)
+        with self.assertRaises((KeyError, RuntimeError)):
+            M.observed_permission(receipt)
+
+    def test_completed_request_or_ambiguous_permission_cards_never_hover(self):
+        for code, cards in ((0, [{}]), (None, [{}, {}])):
+            request = mock.Mock(poll=mock.Mock(return_value=code))
+            observe = mock.Mock(return_value={"dialogs": [], "permission_cards": cards})
+            observed = M.consent_observer(request, observe, Path("/TEST/owned.app"), {})
+            self.assertEqual(observed(), [])
+            observe.assert_called_once_with("notification-consent")
 
     def test_pending_capture_failure_is_inconclusive_and_not_retried(self):
         class Request:

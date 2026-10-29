@@ -14,6 +14,7 @@ import math
 import os
 from pathlib import Path
 import platform
+import plistlib
 import select
 import shlex
 import shutil
@@ -23,6 +24,7 @@ import tempfile
 import threading
 import time
 import wave
+import zipfile
 
 REPO = Path(__file__).resolve().parents[1]
 CASES = ("completion", "question", "sound-off", "click-off", "desktop-off", "stale-origin")
@@ -103,15 +105,48 @@ def verify_permission_grant(request_receipt, fresh_receipt):
     return fresh
 
 
-def consent_observer(request, observe, app, receipt, pending_capture=None, now=time.monotonic):
+def permission_ui_identity(archive, app, pin):
+    """Bind OS display aliases to the pinned archive and exact installed plist."""
+    P.require(H.sha(archive) == pin["archive_sha256"], "permission_ui_archive_identity_mismatch")
+    member = "ClaudeNotifier.app/Contents/Info.plist"
+    with zipfile.ZipFile(archive) as packaged:
+        P.require(0 < packaged.getinfo(member).file_size <= 65536, "permission_ui_metadata_limit")
+        body = packaged.read(member)
+    installed = app / "Contents/Info.plist"
+    P.require(installed.is_file() and not installed.is_symlink() and installed.stat().st_size <= 65536
+              and installed.read_bytes() == body, "permission_ui_installed_metadata_mismatch")
+    metadata = plistlib.loads(body)
+    P.require(metadata.get("CFBundleIdentifier") == H.BUNDLE
+              and metadata.get("CFBundleExecutable") == "terminal-notifier-modern", "permission_ui_bundle_identity_mismatch")
+    names = list(dict.fromkeys([metadata[key] for key in ("CFBundleDisplayName", "CFBundleName") if key in metadata]
+                              + [Path(member.split("/", 1)[0]).stem]))
+    P.require(all(isinstance(name, str) and 0 < len(name) <= 80 and not any(ord(c) < 32 for c in name)
+                  for name in names), "permission_ui_display_identity_invalid")
+    return {"bundle_id": metadata["CFBundleIdentifier"], "display_names": names,
+            "archive_member": member, "installed_info_plist_sha256": P.sha(installed)}
+
+
+def consent_observer(request, observe, app, receipt, pending_capture=None, now=time.monotonic, ui_capture=None):
     """Activate at most the one existing verified request helper, never relaunch."""
-    attempted, captured = False, False
+    attempted, captured, hovered, opened_options = False, False, False, False
     started = now()
 
     def observed():
-        nonlocal attempted, captured
-        dialogs = observe("notification-consent")["dialogs"]
-        if not dialogs and not attempted and request.poll() is None:
+        nonlocal attempted, captured, hovered, opened_options
+        current = observe("notification-consent")
+        dialogs = current["dialogs"]
+        if not dialogs and not hovered and len(current.get("permission_cards", [])) == 1 and request.poll() is None:
+            hovered = True
+            receipt["permission_card_hover"] = observe("hover-notification-consent")
+            if ui_capture is not None:
+                receipt["permission_card_hover_capture"] = ui_capture("hover")
+        elif not dialogs and hovered and not opened_options and len(current.get("permission_cards", [])) == 1 \
+                and current["permission_cards"][0].get("options_bounds") and request.poll() is None:
+            opened_options = True
+            receipt["permission_card_options"] = observe("open-notification-consent-options")
+            if ui_capture is not None:
+                receipt["permission_card_options_capture"] = ui_capture("options")
+        if not dialogs and not current.get("permission_cards") and not attempted and request.poll() is None:
             state = observe("helper-processes", str(app))
             receipt["helper_observation"] = state
             helpers = state.get("installed_helpers", [])
@@ -508,6 +543,7 @@ def run(args):
     env["AGENT_NOTIFICATIONS_CONFIG"] = str(root / "global/config.json")
     profile, terminals, helpers, app = root / "agent", [], [], None
     permission_request = permission_log = None
+    consent_names = []
     report = {"schema_version": 1, "scope": "actual_installed_pi_macos_desktop", "status": "failed",
               "test_root": str(root), "source_sha": command(["git", "-C", REPO, "rev-parse", "HEAD"]).strip(),
               "working_tree_dirty": bool(command(["git", "-C", REPO, "status", "--porcelain"])),
@@ -524,7 +560,17 @@ def run(args):
               "native_helper_verified": False, "cases": []}
 
     def observer(*argv, timeout=20):
+        if argv and argv[0] in ("notification-consent", "hover-notification-consent", "open-notification-consent-options", "allow-notification-consent"):
+            argv = (*argv, *consent_names)
         return json.loads(command([args.observer, *argv], timeout=timeout))
+
+    def capture_permission_ui(phase):
+        screenshot = args.report.parent / ("notification-consent-after-" + phase + ".png")
+        P.require(not screenshot.exists() and not screenshot.is_symlink(), "permission_ui_capture_path_exists")
+        command(["/usr/sbin/screencapture", "-x", screenshot], timeout=3)
+        P.require(screenshot.is_file() and 0 < screenshot.stat().st_size <= 16 * 1024 * 1024,
+                  "permission_ui_capture_unavailable")
+        return {"artifact": screenshot.name, "sha256": P.sha(screenshot), "desktop_qualified": False}
 
     def case(name, decoy):
         case_root = root / ("case-" + name)
@@ -691,6 +737,8 @@ def run(args):
         report["helper"].update(installed_path=str(app), installed_tree_sha256=native["InstalledTreeSHA256"],
                                 executable_sha256=P.sha(helper), source_stage_attestation_sha256=P.sha(args.runtime_stage / "ClaudeNotifier.app.managed-runtime.json"))
         report["native_helper_verified"] = True
+        report["helper"]["permission_ui_identity"] = permission_ui_identity(args.helper_archive, app, helper_pin)
+        consent_names = report["helper"]["permission_ui_identity"]["display_names"]
         permission = json.loads(D.command(args.candidate, ["setup-notifications", "permission-status", "--control-root", root / "control", "--json"], root, env))
         report["notification_consent"] = {"initial_permission": permission.get("permission"), "requested": False}
         if permission.get("permission") == "undetermined":
@@ -706,9 +754,10 @@ def run(args):
             dialogs = wait_for_consent(permission_request,
                 consent_observer(permission_request, observer, app, report["notification_consent"],
                     lambda: capture_pending_consent(permission_request, observer, app, args.report.parent,
-                                                     report["notification_consent"])))
+                                                     report["notification_consent"]), ui_capture=capture_permission_ui))
             report["notification_consent"].update(dialogs=dialogs, completed_without_dialog=not dialogs)
             if dialogs:
+                P.require(permission_request.poll() is None, "original_permission_request_ended_before_allow")
                 command(["/usr/sbin/screencapture", "-x", args.report.parent / "actual-notification-consent.png"])
                 click = observer("allow-notification-consent")
                 report["notification_consent"].update(physical_allow_click=click["physical_allow_click"],
