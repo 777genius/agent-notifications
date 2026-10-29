@@ -173,6 +173,101 @@ func onScreenWindows(_ pid: pid_t) -> [CGRect] {
     return result
 }
 
+// Failure-only metadata. Fixed token comparisons never serialize AX labels or
+// CG window names. Limits describe observation coverage, never a consent result.
+@MainActor func permissionDiagnostics(_ expected: String) -> [String: Any] {
+    let allowed = Set(["com.apple.notificationcenterui", "com.apple.UserNotificationCenter",
+                       "com.apple.usernotificationsd", "com.777genius.agent-notifications"])
+    let deadline = ProcessInfo.processInfo.systemUptime + 2
+    let timeout = AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), 0.05)
+    let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+    let cg: [[String: Any]] = windows.prefix(64).compactMap { row in
+        guard let pid = row[kCGWindowOwnerPID as String] as? NSNumber,
+              let number = row[kCGWindowNumber as String] as? NSNumber,
+              let layer = row[kCGWindowLayer as String] as? NSNumber,
+              let box = row[kCGWindowBounds as String] as? [String: Any],
+              let x = box["X"] as? NSNumber, let y = box["Y"] as? NSNumber,
+              let width = box["Width"] as? NSNumber, let height = box["Height"] as? NSNumber,
+              [x, y, width, height].allSatisfy({ $0.doubleValue.isFinite }) else { return nil }
+        return ["owner_pid": pid.intValue, "window_id": number.intValue, "layer": layer.intValue,
+                "bounds": [x.doubleValue, y.doubleValue, width.doubleValue, height.doubleValue]]
+    }
+    let applications = NSWorkspace.shared.runningApplications.filter {
+        allowed.contains($0.bundleIdentifier ?? "") && !$0.isTerminated
+        && ($0.bundleIdentifier != "com.777genius.agent-notifications"
+            || $0.bundleURL?.resolvingSymlinksInPath().path == expected)
+    }
+    var ax = [[String: Any]]()
+    for app in applications.prefix(timeout == .success ? 8 : 0) {
+        let root = AXUIElementCreateApplication(app.processIdentifier)
+        var counts = [String: Int]()
+        func count(_ name: String) -> (AXError, Int) {
+            guard ProcessInfo.processInfo.systemUptime < deadline else { return (.cannotComplete, 0) }
+            var value = CFIndex(0)
+            let status = AXUIElementGetAttributeValueCount(root, name as CFString, &value)
+            return (status, Int(value))
+        }
+        func value(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
+            guard ProcessInfo.processInfo.systemUptime < deadline else { return nil }
+            var result: CFTypeRef?
+            let status = AXUIElementCopyAttributeValue(element, name as CFString, &result)
+            counts[String(status.rawValue), default: 0] += 1
+            return status == .success ? result : nil
+        }
+        let windowCount = count(kAXWindowsAttribute), childCount = count(kAXChildrenAttribute)
+        let visible = onScreenWindows(app.processIdentifier)
+        var visited = 0, capped = false, candidate = false, notification = false, denial = false
+        var allows = 0, visibleAllows = 0
+        func visit(_ element: AXUIElement, _ depth: Int) {
+            guard visited < 256, depth < 12, ProcessInfo.processInfo.systemUptime < deadline else {
+                capped = true; return
+            }
+            visited += 1
+            var allow = false
+            for name in [kAXValueAttribute, kAXTitleAttribute, kAXDescriptionAttribute] {
+                guard let text = value(element, name) as? String else { continue }
+                candidate = candidate || text.contains("Agent Notifications")
+                notification = notification || text.lowercased().contains("notification")
+                denial = denial || text == "Don't Allow" || text == "Don’t Allow"
+                allow = allow || text == "Allow"
+            }
+            if allow && value(element, kAXRoleAttribute) as? String == kAXButtonRole {
+                allows += 1
+                if let box = rectangle(element), visible.contains(where: { $0.contains(CGPoint(x: box.midX, y: box.midY)) }) {
+                    visibleAllows += 1
+                }
+            }
+            guard visited < 256, ProcessInfo.processInfo.systemUptime < deadline else { capped = true; return }
+            var amount = CFIndex(0)
+            let status = AXUIElementGetAttributeValueCount(element, kAXChildrenAttribute as CFString, &amount)
+            counts[String(status.rawValue), default: 0] += 1
+            guard status == .success, amount > 0 else { return }
+            let limit = min(Int(amount), 32, 256 - visited)
+            capped = capped || Int(amount) > limit
+            var children: CFArray?
+            let childrenStatus = AXUIElementCopyAttributeValues(element, kAXChildrenAttribute as CFString, 0, limit, &children)
+            counts[String(childrenStatus.rawValue), default: 0] += 1
+            if childrenStatus == .success {
+                for child in children as? [AXUIElement] ?? [] { visit(child, depth + 1) }
+            }
+        }
+        visit(root, 0)
+        ax.append(["bundle_id": app.bundleIdentifier ?? "", "pid": Int(app.processIdentifier),
+                   "ax_windows_status": windowCount.0.rawValue, "ax_windows_count": windowCount.1,
+                   "ax_root_children_status": childCount.0.rawValue, "ax_root_children_count": childCount.1,
+                   "visited_nodes": visited, "traversal_capped": capped, "attribute_status_counts": counts,
+                   "candidate_name_present": candidate, "notification_token_present": notification,
+                   "denial_token_present": denial, "exact_allow_button_count": allows,
+                   "on_screen_allow_button_count": visibleAllows])
+    }
+    return ["scope": "failure_metadata_only", "desktop_qualified": false,
+            "cg_on_screen_windows": cg, "cg_window_count": windows.count, "cg_rows_capped": windows.count > 64,
+            "ax_known_owners": ax, "ax_owners_capped": applications.count > 8,
+            "ax_timeout_status": timeout.rawValue, "ax_traversal_skipped": timeout != .success, "time_limit_seconds": 2,
+            "node_limit_per_owner": 256, "depth_limit": 12, "children_limit_per_node": 32,
+            "time_limit_reached": ProcessInfo.processInfo.systemUptime >= deadline]
+}
+
 final class ProductCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
     private let lock = NSLock()
     private let output: FileHandle
@@ -255,6 +350,11 @@ final class ProductCapture: NSObject, SCStreamOutput, SCStreamDelegate, @uncheck
                 publish(["checks": checks, "foreground": foreground(), "desktop_qualified": false])
                 guard checks.values.allSatisfy({ $0 }) else { throw ProbeError.unavailable("native_observer_prerequisite_unavailable") }
             case "foreground": publish(foreground())
+            case "permission-diagnostics":
+                guard args.count == 2, args[1].hasPrefix("/"), args[1].hasSuffix(".app") else {
+                    throw ProbeError.unavailable("physical_installed_app_required")
+                }
+                publish(permissionDiagnostics(URL(fileURLWithPath: args[1]).resolvingSymlinksInPath().path))
             case "helper-processes", "activate-permission-helper":
                 guard args.count == (operation == "helper-processes" ? 2 : 4),
                       args[1].hasPrefix("/"), args[1].hasSuffix(".app") else {

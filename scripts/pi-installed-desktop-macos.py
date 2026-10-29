@@ -120,6 +120,55 @@ def consent_observer(request, observe, app, receipt):
     return observed
 
 
+def sample_permission_helper(observe, app, receipt, evidence_root):
+    """Sample only the original activated helper; diagnostics never prove consent."""
+    original = receipt.get("helper_activation", {}).get("before", {})
+    pid, start = original.get("pid"), original.get("process_start_identity")
+    result = {"status": "inconclusive_original_identity_unavailable", "desktop_qualified": False,
+              "duration_seconds": 1, "sampling_interval_ms": 10, "timeout_seconds": 5,
+              "output_limit_bytes": 262144}
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0 or not isinstance(start, str) or not start:
+        return result
+
+    def same_helper():
+        helpers = observe("helper-processes", str(app), timeout=3).get("installed_helpers", [])
+        return len(helpers) == 1 and helpers[0].get("pid") == pid \
+            and helpers[0].get("process_start_identity") == start
+
+    if not same_helper():
+        result["status"] = "inconclusive_original_identity_changed"
+        return result
+    # A fixed basename in the owned evidence directory is the only sample path.
+    sample = evidence_root.resolve(strict=True) / "permission-helper.sample.txt"
+    P.require(not sample.exists() and not sample.is_symlink(), "permission_sample_path_already_exists")
+    result.update(pid=pid, process_start_identity=start, identity_verified_before=True)
+    try:
+        try:
+            child = subprocess.run(["/usr/bin/sample", str(pid), "1", "10", "-file", str(sample)],
+                                   stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                   timeout=5)
+            result.update(exit_code=child.returncode, status="inconclusive_sample_output_unavailable"
+                          if child.returncode == 0 else "inconclusive_sample_command_failed")
+        except subprocess.TimeoutExpired:
+            result["status"] = "inconclusive_sample_timeout"
+        except OSError:
+            result["status"] = "inconclusive_sample_unavailable"
+        result["identity_verified_after"] = same_helper()
+        if not result["identity_verified_after"]:
+            result["status"] = "inconclusive_original_identity_changed"
+        elif result.get("exit_code") == 0 and sample.is_file() and not sample.is_symlink():
+            result["output_bytes"] = sample.stat().st_size
+            if 0 < result["output_bytes"] <= result["output_limit_bytes"]:
+                result.update(status="sample_collected", artifact=sample.name, sha256=P.sha(sample))
+            else:
+                result["status"] = "inconclusive_sample_output_limit"
+    finally:
+        # Keep no output if either ownership check or the output bound failed.
+        if result.get("status") != "sample_collected":
+            sample.unlink(missing_ok=True)
+    return result
+
+
 def observe_unchanged_focus(terminal, stop_capture, seconds=15):
     def observed():
         current = terminal.front()
@@ -308,8 +357,8 @@ def run(args):
               "desktop_qualified": False, "native_product_observations_passed": False,
               "native_helper_verified": False, "cases": []}
 
-    def observer(*argv):
-        return json.loads(command([args.observer, *argv]))
+    def observer(*argv, timeout=20):
+        return json.loads(command([args.observer, *argv], timeout=timeout))
 
     def case(name, decoy):
         case_root = root / ("case-" + name)
@@ -530,6 +579,16 @@ def run(args):
             report["native_failure_screenshot_sha256"] = P.sha(screenshot)
         except Exception as capture_error:
             report["native_failure_capture"] = str(capture_error)
+        if permission_request is not None and report.get("failure") == "actual_candidate_notification_consent_dialog_unavailable":
+            consent = report["notification_consent"]
+            try:
+                consent["failure_diagnostics"] = observer("permission-diagnostics", str(app), timeout=4)
+            except Exception:
+                consent["failure_diagnostics"] = {"status": "inconclusive_observer_unavailable"}
+            try:
+                consent["helper_sample"] = sample_permission_helper(observer, app, consent, args.report.parent)
+            except Exception:
+                consent["helper_sample"] = {"status": "inconclusive_sample_collection_failed"}
     finally:
         failures = []
         for terminal in reversed(terminals):
