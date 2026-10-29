@@ -59,7 +59,7 @@ def admit(env, host, metadata, source, clean):
             "image_metadata": fields, "host": host}
 
 
-def system_agent():
+def system_agent(observed=None, evidence_root=None):
     require(PLIST.resolve(strict=True) == PLIST and APP.resolve(strict=True) == APP
             and EXE.resolve(strict=True) == EXE, "immutable_system_agent_paths_required")
     facts = PLIST.stat(follow_symlinks=False)
@@ -68,7 +68,17 @@ def system_agent():
     body = PLIST.read_bytes()
     value = plistlib.loads(body)
     program = value.get("Program") or (value.get("ProgramArguments") or [None])[0]
-    require(value.get("Label") == LABEL and program == str(EXE), "exact_system_notification_agent_required")
+    identity = {"plist_sha256": hashlib.sha256(body).hexdigest(),
+                **{key: value.get(key) for key in ("Label", "Program", "BundleProgram")},
+                "first_program_argument": (value.get("ProgramArguments") or [None])[0]}
+    if observed is not None:
+        observed.update(path=str(PLIST), device=facts.st_dev, inode=facts.st_ino,
+                        owner_uid=facts.st_uid, mode=stat.S_IMODE(facts.st_mode), bytes=len(body), identity=identity)
+    if evidence_root is not None:
+        with (evidence_root / "notification-center-launchagent.plist").open("xb") as stream:
+            stream.write(body)
+    require(value.get("Label") == LABEL and program == str(EXE),
+            "exact_system_notification_agent_required:actual=" + json.dumps(identity, sort_keys=True)[:4096])
     return {"path": str(PLIST), "sha256": hashlib.sha256(body).hexdigest(),
             "device": facts.st_dev, "inode": facts.st_ino, "label": LABEL, "program": program}
 
@@ -125,10 +135,15 @@ def prepare(args):
         root = Path(tempfile.mkdtemp(prefix="TEST-pi-macos-host-", dir=os.environ["RUNNER_TEMP"])).resolve()
         root.chmod(0o700)
         report["test_root"] = str(root)
-        expected = system_agent()
-        report["system_agent"] = expected
+        # Inspect only the fixed system app, independently of any plist Program.
+        # Retain this read-only proof even if the plist schema refuses admission.
         code, output, error = command(["/usr/bin/codesign", "--verify", "--strict", "-R",
             '=anchor apple and identifier "com.apple.notificationcenterui"', APP])
+        report["system_application_signature"] = {"exit_code": code, "stdout": output, "stderr": error}
+        args.report.parent.mkdir(parents=True, exist_ok=True)
+        report["system_agent_observed"] = {}
+        expected = system_agent(report["system_agent_observed"], args.report.parent)
+        report["system_agent"] = expected
         require(code == 0, "apple_system_notification_application_signature_unverified")
         domain = "gui/" + str(os.getuid())
         before = inspect(domain)
