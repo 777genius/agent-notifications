@@ -679,6 +679,86 @@ func consentMonotonicTime() throws -> Double {
     return result
 }
 
+// Temporary read-only observation of the measured Terminal Automation prompt.
+// No owner is trusted for input here: discovering its actual identity is the
+// purpose of this nonqualifying probe. Arbitrary AX labels are never serialized.
+@MainActor func terminalAutomationDiagnostics() -> [String: Any] {
+    let deadline = ProcessInfo.processInfo.systemUptime + 3
+    var ancestry = [[String: Any]](), ancestorPID = getpid()
+    for _ in 0..<12 {
+        guard ancestorPID > 1, ProcessInfo.processInfo.systemUptime < deadline,
+              let identity = try? terminalProcessIdentity(ancestorPID), let parent = identity["parent_pid"] as? Int,
+              parent > 0, parent != Int(ancestorPID) else { break }
+        ancestry.append(identity)
+        ancestorPID = pid_t(parent)
+    }
+    let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+    var owners = [pid_t](), cg = [[String: Any]](), ax = [[String: Any]]()
+    for window in windows.prefix(64) {
+        guard let pid = window[kCGWindowOwnerPID as String] as? NSNumber,
+              let number = window[kCGWindowNumber as String] as? NSNumber,
+              let layer = window[kCGWindowLayer as String] as? NSNumber,
+              let box = window[kCGWindowBounds as String] as? [String: Any] else { continue }
+        if !owners.contains(pid.int32Value) { owners.append(pid.int32Value) }
+        cg.append(["owner_pid": pid.intValue, "window_number": number.intValue, "layer": layer.intValue,
+                   "bounds": ["X", "Y", "Width", "Height"].map { (box[$0] as? NSNumber)?.doubleValue ?? 0 }])
+    }
+    var visited = 0, capped = windows.count > 64 || owners.count > 12
+    for pid in owners.prefix(12) {
+        guard ProcessInfo.processInfo.systemUptime < deadline, visited < 768 else { capped = true; break }
+        var row = (try? terminalProcessIdentity(pid)) ?? ["pid": Int(pid), "status": "identity_unavailable"]
+        if let app = NSRunningApplication(processIdentifier: pid) {
+            row["bundle_id"] = app.bundleIdentifier ?? ""
+            row["bundle_path"] = app.bundleURL?.resolvingSymlinksInPath().path ?? ""
+        }
+        let root = AXUIElementCreateApplication(pid)
+        let timeout = AXUIElementSetMessagingTimeout(root, 0.05)
+        row["ax_timeout_status"] = timeout.rawValue
+        var nodes = [[String: Any]](), ownerVisited = 0
+        func visit(_ element: AXUIElement, _ depth: Int, _ parent: Int?) {
+            guard visited < 768, ownerVisited < 128, depth < 12, ProcessInfo.processInfo.systemUptime < deadline else {
+                capped = true; return
+            }
+            visited += 1; ownerVisited += 1
+            let text = [kAXValueAttribute, kAXTitleAttribute, kAXDescriptionAttribute].compactMap {
+                attribute(element, $0) as? String
+            }
+            let requester = text.contains { $0.contains("hosted-compute-agent") }
+            let target = text.contains { $0.contains("Terminal") }
+            let allow = text.contains("Allow"), denial = text.contains("Don’t Allow") || text.contains("Don't Allow")
+            let role = String((attribute(element, kAXRoleAttribute) as? String ?? "").prefix(80))
+            let index = ownerVisited - 1
+            if nodes.count < 24 && (requester || target || allow || denial || [kAXWindowRole, kAXSheetRole].contains(role)) {
+                var node: [String: Any] = ["index": index, "depth": depth, "role": role,
+                    "requester_token": requester, "terminal_token": target, "allow_token": allow, "denial_token": denial,
+                    "enabled": attribute(element, kAXEnabledAttribute) as? Bool == true]
+                if let parent { node["parent"] = parent }
+                if let box = rectangle(element) {
+                    node["bounds"] = [Double(box.minX), Double(box.minY), Double(box.width), Double(box.height)]
+                }
+                nodes.append(node)
+            }
+            var count = CFIndex(0)
+            guard AXUIElementGetAttributeValueCount(element, kAXChildrenAttribute as CFString, &count) == .success, count > 0 else { return }
+            let limit = min(Int(count), 32, 128 - ownerVisited, 768 - visited)
+            guard limit > 0 else { capped = true; return }
+            if Int(count) > limit { capped = true }
+            var children: CFArray?
+            if AXUIElementCopyAttributeValues(element, kAXChildrenAttribute as CFString, 0, limit, &children) == .success {
+                for child in children as? [AXUIElement] ?? [] { visit(child, depth + 1, index) }
+            }
+        }
+        if timeout == .success { visit(root, 0, nil) }
+        row["visited_nodes"] = ownerVisited
+        row["fixed_token_nodes"] = nodes
+        ax.append(row)
+    }
+    return ["scope": "terminal_automation_owner_observation_only", "desktop_qualified": false, "ui_inputs": 0,
+            "permission_grants": 0, "cg_windows": cg, "ax_visible_owners": ax, "observer_ancestry": ancestry,
+            "traversal_capped": capped, "visited_nodes": visited, "time_limit_reached": ProcessInfo.processInfo.systemUptime >= deadline,
+            "maximum_seconds": 3, "maximum_cg_rows": 64, "maximum_owners": 12, "maximum_nodes": 768]
+}
+
 // Failure-only metadata. Fixed token comparisons never serialize AX labels or
 // CG window names. Limits describe observation coverage, never a consent result.
 @MainActor func permissionDiagnostics(_ expected: String) -> [String: Any] {
@@ -856,6 +936,9 @@ final class ProductCapture: NSObject, SCStreamOutput, SCStreamDelegate, @uncheck
                 publish(["checks": checks, "foreground": foreground(), "desktop_qualified": false])
                 guard checks.values.allSatisfy({ $0 }) else { throw ProbeError.unavailable("native_observer_prerequisite_unavailable") }
             case "foreground": publish(foreground())
+            case "terminal-automation-diagnostics":
+                guard args.count == 1 else { throw ProbeError.unavailable("fixed_terminal_automation_observation_only") }
+                publish(terminalAutomationDiagnostics())
             case "terminal-process-identity", "signal-owned-terminal-process":
                 guard args.count >= 2, let pid = Int32(args[1]), pid > 0 else {
                     throw ProbeError.unavailable("owned_terminal_pid_required")

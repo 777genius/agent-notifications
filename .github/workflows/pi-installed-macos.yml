@@ -132,6 +132,52 @@ jobs:
           python -B scripts/pi-macos-host.py --prepare-notification-center --source-sha "$SOURCE_SHA" \
             --observer "$RUNNER_TEMP/TEST-pi-macos/observer" \
             --report "$RUNNER_TEMP/TEST-pi-macos/evidence/host-preparation.json"
+      - name: Observe the first Terminal Automation prompt without granting permission
+        if: ${{ inputs.observer_only }}
+        shell: bash
+        run: |
+          python - <<'PY'
+          import hashlib, json, os, subprocess
+          from pathlib import Path
+          root = Path(os.environ['RUNNER_TEMP']) / 'TEST-pi-macos'
+          report = {'scope': 'temporary_terminal_automation_observation_only', 'desktop_qualified': False,
+                    'source_sha': os.environ['SOURCE_SHA'], 'permission_grants': 0, 'ui_inputs': 0,
+                    'request_timeout_seconds': 20}
+          request = subprocess.Popen(['/usr/bin/osascript', '-e', 'tell application "Terminal" to get version'],
+                                     stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+          report['original_request_pid'] = request.pid
+          try:
+              out, err = request.communicate(timeout=20)
+              report['request_timed_out'] = False
+          except subprocess.TimeoutExpired:
+              report['request_timed_out'] = True
+              request.kill()
+              out, err = request.communicate(timeout=3)
+          finally:
+              if request.poll() is None:
+                  try:
+                      request.kill()
+                      request.communicate(timeout=3)
+                  except Exception as error:
+                      report['cleanup_failure_class'] = type(error).__name__
+              report['request_collected'] = request.poll() is not None
+              report['request_exit_code'] = request.returncode
+              report['original_request_ended_before_observation'] = request.poll() is not None
+              try:
+                  observed = subprocess.run([str(root / 'observer'), 'terminal-automation-diagnostics'],
+                      stdin=subprocess.DEVNULL, capture_output=True, timeout=5, check=True)
+                  if len(observed.stdout) > 65536:
+                      raise ValueError('automation_observation_output_limit')
+                  report['native_observation'] = json.loads(observed.stdout)
+                  screenshot = root / 'evidence/terminal-automation.png'
+                  subprocess.run(['/usr/sbin/screencapture', '-x', str(screenshot)], timeout=3, check=True)
+                  report['screenshot_sha256'] = hashlib.sha256(screenshot.read_bytes()).hexdigest()
+              except Exception as error:
+                  report['observation_failure_class'] = type(error).__name__
+              (root / 'evidence/terminal-automation.json').write_text(json.dumps(report, indent=2) + '\n')
+          if not report['request_collected']:
+              raise RuntimeError('original_automation_request_not_collected')
+          PY
       - uses: actions/setup-go@v7
         if: ${{ !inputs.observer_only }}
         with:
