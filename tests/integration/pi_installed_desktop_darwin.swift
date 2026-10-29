@@ -1749,7 +1749,9 @@ final class ProductCapture: NSObject, SCStreamOutput, SCStreamDelegate, @uncheck
                 try await Task.sleep(nanoseconds: 300_000_000)
                 let baseline = observer.measurements()
                 try JSONSerialization.data(withJSONObject: baseline).write(to: root.appendingPathComponent("capture-ready.json"), options: .atomic)
-                let deadline = Date().addingTimeInterval(30)
+                // Cover pre-trigger readiness/focus, one 25s banner observation
+                // and the configured cue tail. Normal collection stops sooner.
+                let deadline = Date().addingTimeInterval(45)
                 while !FileManager.default.fileExists(atPath: root.appendingPathComponent("capture-stop").path) && Date() < deadline {
                     try await Task.sleep(nanoseconds: 50_000_000)
                 }
