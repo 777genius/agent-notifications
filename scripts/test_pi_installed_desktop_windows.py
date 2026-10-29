@@ -74,6 +74,13 @@ class PostClickOracleTests(unittest.TestCase):
 
 
 class TemporaryDiagnosticQualificationTests(unittest.TestCase):
+    def test_failed_readonly_settings_observation_cannot_replace_primary_failure(self):
+        native = Mock(side_effect=RuntimeError("PRIVATE_NATIVE_DETAIL"))
+        with patch.object(W.shutil, "which", return_value="pwsh.exe"), patch.object(W, "command") as launch:
+            self.assertEqual(W.notification_settings_readonly(native, Path("TEST-root")), {"status": "unavailable"})
+        self.assertEqual(launch.call_args.args[0][-1], "Start-Process 'ms-settings:notifications' -ErrorAction Stop")
+        native.assert_called_once_with("notification-settings-readonly", Path("TEST-root"))
+
     def test_complete_instrumented_observations_cannot_qualify(self):
         fixture_spec = importlib.util.spec_from_file_location(
             "pi_aggregate_test_fixture", PATH.with_name("test_pi_qualification_aggregate.py"))

@@ -359,6 +359,92 @@ static std::wstring elementName(IUIAutomationElement* element) {
     std::wstring value = raw ? raw : L""; if (raw) SysFreeString(raw);
     need(value.size() <= 4096, "native_ui_text_bound"); return value;
 }
+// TEMPORARY failure-only observation. Navigate Settings; never toggle policy.
+static void notificationSettingsDiagnostic(const fs::path& directory) {
+    const char* stage = "settings_window", *dnd = "unavailable", *banners = "unavailable";
+    bool systemImage = false, overviewCaptured = false, appCaptured = false, navigated = false;
+    try {
+        ComPtr<IUIAutomation> automation; hrcheck(CoCreateInstance(CLSID_CUIAutomation, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&automation)));
+        auto named = [&](IUIAutomationElement* root, const wchar_t* label, TreeScope scope) {
+            VARIANT value{}; value.vt = VT_BSTR; value.bstrVal = SysAllocString(label);
+            ComPtr<IUIAutomationCondition> match; const auto made = automation->CreatePropertyCondition(UIA_NamePropertyId, value, &match); VariantClear(&value); hrcheck(made);
+            ComPtr<IUIAutomationElementArray> found; hrcheck(root->FindAll(scope, match.Get(), &found));
+            int count = 0; hrcheck(found->get_Length(&count)); need(count <= 8, "settings_observation_match_bound");
+            std::vector<ComPtr<IUIAutomationElement>> result;
+            for (int i = 0; i < count; i++) { ComPtr<IUIAutomationElement> element; hrcheck(found->GetElement(i, &element)); result.push_back(element); }
+            return result;
+        };
+        ComPtr<IUIAutomationElement> desktop, settings; hrcheck(automation->GetRootElement(&desktop));
+        std::unique_ptr<OwnedProcess> process;
+        wchar_t windows[32768]{}; const auto length = GetWindowsDirectoryW(windows, 32768);
+        need(length > 0 && length < 32768, "settings_system_directory_unavailable");
+        const auto expected = fs::path(windows) / L"ImmersiveControlPanel" / L"SystemSettings.exe";
+        const auto until = GetTickCount64() + 10000;
+        while (!settings && GetTickCount64() < until) {
+            for (const auto& candidate : named(desktop.Get(), L"Settings", TreeScope_Children)) {
+                int pid = 0; hrcheck(candidate->get_CurrentProcessId(&pid));
+                auto identity = std::make_unique<OwnedProcess>(); identity->pid = static_cast<DWORD>(pid);
+                identity->handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, identity->pid);
+                if (!identity->handle || !running(identity->handle)) continue;
+                processFacts(*identity);
+                if (!sameImage(identity->image, expected.wstring())) continue;
+                need(!settings, "settings_window_ambiguous"); settings = candidate; process = std::move(identity);
+            }
+            if (!settings) pump(100);
+        }
+        need(settings && process && running(process->handle), "settings_window_unavailable"); systemImage = true;
+        auto bound = [&](IUIAutomationElement* element) {
+            int pid = 0; hrcheck(element->get_CurrentProcessId(&pid));
+            need(static_cast<DWORD>(pid) == process->pid && running(process->handle), "settings_element_identity_changed");
+        };
+        auto toggleState = [&](const wchar_t* label) -> const char* {
+            ComPtr<IUIAutomationTogglePattern> selected;
+            for (const auto& element : named(settings.Get(), label, TreeScope_Descendants)) {
+                bound(element.Get()); ComPtr<IUIAutomationTogglePattern> pattern;
+                if (FAILED(element->GetCurrentPatternAs(UIA_TogglePatternId, IID_PPV_ARGS(&pattern)))) continue;
+                if (selected) return "ambiguous"; selected = pattern;
+            }
+            if (!selected) return "unavailable";
+            ToggleState state{}; hrcheck(selected->get_CurrentToggleState(&state));
+            return state == ToggleState_On ? "on" : state == ToggleState_Off ? "off" : "indeterminate";
+        };
+        stage = "do_not_disturb"; dnd = toggleState(L"Do not disturb");
+        screenshot(directory / "notification-settings.bmp"); overviewCaptured = true;
+        stage = "candidate_navigation";
+        ComPtr<IUIAutomationTreeWalker> walker; hrcheck(automation->get_ControlViewWalker(&walker));
+        ComPtr<IUIAutomationElement> destination; ComPtr<IUIAutomationInvokePattern> invoke;
+        for (const auto& label : named(settings.Get(), L"Claude Code Notifications", TreeScope_Descendants)) {
+            auto current = label;
+            for (int depth = 0; current && depth < 4; depth++) {
+                bound(current.Get()); CONTROLTYPEID type = 0; hrcheck(current->get_CurrentControlType(&type));
+                ComPtr<IUIAutomationTogglePattern> toggle;
+                const bool policyControl = SUCCEEDED(current->GetCurrentPatternAs(UIA_TogglePatternId, IID_PPV_ARGS(&toggle)));
+                ComPtr<IUIAutomationInvokePattern> candidate;
+                if (!policyControl && elementName(current.Get()) == L"Claude Code Notifications"
+                    && (type == UIA_ButtonControlTypeId || type == UIA_HyperlinkControlTypeId || type == UIA_ListItemControlTypeId)
+                    && SUCCEEDED(current->GetCurrentPatternAs(UIA_InvokePatternId, IID_PPV_ARGS(&candidate)))) {
+                    BOOL same = FALSE; if (destination) hrcheck(automation->CompareElements(destination.Get(), current.Get(), &same));
+                    need(!destination || same, "settings_candidate_navigation_ambiguous"); destination = current; invoke = candidate; break;
+                }
+                ComPtr<IUIAutomationElement> parent; hrcheck(walker->GetParentElement(current.Get(), &parent)); current = parent;
+            }
+        }
+        if (invoke) {
+            bound(destination.Get()); hrcheck(invoke->Invoke()); navigated = true; stage = "candidate_banners";
+            const auto appUntil = GetTickCount64() + 3000;
+            do { banners = toggleState(L"Show notification banners"); if (std::string(banners) != "unavailable") break; pump(100); } while (GetTickCount64() < appUntil);
+            screenshot(directory / "notification-app-settings.bmp"); appCaptured = true;
+        }
+        stage = "complete";
+    } catch (...) { /* Fixed phase/state only; preserve the original case failure. */ }
+    if (!overviewCaptured) {
+        try { screenshot(directory / "notification-settings.bmp"); overviewCaptured = true; } catch (...) { }
+    }
+    std::cout << "{\"scope\":\"failure_only_settings_readonly\",\"qualification_input\":false,\"stage\":\"" << stage
+              << "\",\"system_settings_image_verified\":" << jsonBool(systemImage) << ",\"do_not_disturb\":\"" << dnd
+              << "\",\"candidate_banner_setting\":\"" << banners << "\",\"candidate_page_navigated\":" << jsonBool(navigated)
+              << ",\"overview_captured\":" << jsonBool(overviewCaptured) << ",\"candidate_page_captured\":" << jsonBool(appCaptured) << "}\n";
+}
 static ComPtr<IUIAutomationElement> card(IUIAutomation* automation, const std::wstring& expected, const std::wstring& body) {
     ComPtr<IUIAutomationElement> root, text; hrcheck(automation->GetRootElement(&root));
     VARIANT name{}; name.vt = VT_BSTR; name.bstrVal = SysAllocString(expected.c_str());
@@ -522,6 +608,7 @@ int wmain(int argc, wchar_t** argv) {
                       << "\",\"executable\":" << NavigationTokenTEST::quoted(utf8(process->image)) << "}\n"; return 0;
         }
         if (mode == L"screenshot" && argc == 3) { screenshot(argv[2]); std::cout << "{\"captured\":true}\n"; return 0; }
+        if (mode == L"notification-settings-readonly" && argc == 3) { notificationSettingsDiagnostic(argv[2]); return 0; }
         if (mode == L"capture" && (argc == 4 || argc == 10)) return capture(argv[2], argv[3], argc - 4, argv + 4);
         if (mode == L"decode" && argc == 4) return decode(argv[2], argv[3]);
         if (mode == L"neutral" && argc == 4) {

@@ -270,6 +270,19 @@ def reference(native, source, output):
         file.writeframes(normalized_pcm(data, rate))
 
 
+def notification_settings_readonly(native, root):
+    # TEMPORARY: failure-only normal UI navigation; no notification-policy writes.
+    try:
+        powershell = shutil.which("pwsh.exe")
+        if not powershell:
+            return {"status": "unavailable"}
+        command([powershell, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
+                 "Start-Process 'ms-settings:notifications' -ErrorAction Stop"], timeout=5)
+        return native("notification-settings-readonly", root)
+    except Exception:
+        return {"status": "unavailable"}
+
+
 def mark_diagnostic_unqualified(report):
     # TEMPORARY: even complete instrumented observations cannot qualify.
     report["diagnostic_observations_complete"] = report["native_product_observations_passed"]
@@ -302,6 +315,7 @@ def run(args):
             native("screenshot", root / "failure-desktop.bmp")
         except Exception as diagnostic_error:
             report["failure_observation_error"] = str(diagnostic_error)
+        report["notification_settings_ui"] = notification_settings_readonly(native, root)
 
     try:
         fixture = A.Fixture(args.windows_audio_fixture) if args.windows_audio_fixture else None
@@ -504,9 +518,10 @@ def run(args):
                 if source.is_file() and not source.is_symlink() and source.stat().st_size <= bound:
                     target = args.report.parent / "native-captures" / case_root.name / name
                     target.parent.mkdir(parents=True, exist_ok=True); shutil.copy2(source, target)
-        failure_image = root / "failure-desktop.bmp"
-        if failure_image.is_file() and failure_image.stat().st_size <= 64 * 1024 * 1024:
-            shutil.copy2(failure_image, args.report.parent / failure_image.name)
+        for image_name in ("failure-desktop.bmp", "notification-settings.bmp", "notification-app-settings.bmp"):
+            failure_image = root / image_name
+            if failure_image.is_file() and not failure_image.is_symlink() and failure_image.stat().st_size <= 64 * 1024 * 1024:
+                shutil.copy2(failure_image, args.report.parent / failure_image.name)
         mark_diagnostic_unqualified(report)
         args.report.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
         print(json.dumps({"status": report["status"], "failure": report.get("failure"), "desktop_qualified": False}))
