@@ -121,10 +121,10 @@ def system_agent(observed=None, evidence_root=None):
 def inspect(domain, snapshot=None):
     code, text, error = snapshot_result(snapshot, "disabled") if snapshot is not None else command(["/bin/launchctl", "print-disabled", domain])
     require(code == 0, "disabled_state_query_failed")
-    disabled = re.findall(r'^\s*"' + re.escape(LABEL) + r'"\s*=>\s*([^\r\n]*)$', text, re.MULTILINE)
-    require(len(disabled) == 1 and disabled[0].strip() in ("true", "false", "disabled", "enabled"),
+    disabled = re.findall(r'^[ \t]*"' + re.escape(LABEL) + r'"[ \t]*=>[ \t]*([^\r\n]*)$', text, re.MULTILINE)
+    require(len(disabled) == 1 and disabled[0].strip(" \t") in ("true", "false", "disabled", "enabled"),
             "notification_agent_disabled_state_ambiguous")
-    is_disabled = disabled[0].strip() in ("true", "disabled")
+    is_disabled = disabled[0].strip(" \t") in ("true", "disabled")
     code, text, error = snapshot_result(snapshot, "service") if snapshot is not None else command(["/bin/launchctl", "print", domain + "/" + LABEL])
     if code != 0:
         require("Could not find service" in error and LABEL in error, "notification_agent_query_failed")

@@ -126,7 +126,8 @@ class OfficialHostGuards(unittest.TestCase):
             else:
                 with self.assertRaisesRegex(ValueError, "state_not_admitted"):
                     H.action_plan(state)
-        for value in ("unknown", "true unexpected", "disabled unexpected", "", 'disabled\n"' + H.LABEL + '" => true',
+        for value in ("unknown", "true unexpected", "disabled unexpected", "", "\ndisabled", "\ntrue", "\r\ndisabled", "\vdisabled",
+                      'disabled\n"' + H.LABEL + '" => true',
                       'disabled\n"' + H.LABEL + '" => unknown'):
             with self.subTest(value=value), patch.object(H, "command", return_value=(0, '"' + H.LABEL + '" => ' + value, "")):
                 with self.assertRaisesRegex(ValueError, "disabled_state_ambiguous"):
