@@ -17,6 +17,10 @@ on:
         description: Exact immutable source commit; empty uses the dispatched ref
         type: string
         required: false
+      macos_runner:
+        description: Existing macOS runner for the complete product qualification; empty uses the configured route
+        type: string
+        required: false
       observer_only:
         description: Compile and observe native permissions before building the product
         type: boolean
@@ -30,6 +34,10 @@ on:
   workflow_call:
     inputs:
       source_sha:
+        type: string
+        required: false
+        default: ''
+      macos_runner:
         type: string
         required: false
         default: ''
@@ -52,7 +60,7 @@ concurrency:
 jobs:
   macos:
     name: Actual installed Pi / macOS
-    runs-on: ${{ inputs.observer_only && inputs.hosted_observer && 'macos-15' || github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'macos-15' || vars.CI_MACOS_15_RUNNER || 'macos-15' }}
+    runs-on: ${{ inputs.macos_runner || inputs.observer_only && inputs.hosted_observer && 'macos-15' || github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'macos-15' || vars.CI_MACOS_15_RUNNER || 'macos-15' }}
     timeout-minutes: 30
     env:
       GOWORK: 'off'
