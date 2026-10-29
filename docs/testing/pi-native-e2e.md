@@ -308,6 +308,20 @@ step retains fresh native observations and a screenshot. Only a newly observed,
 unique Allow control with its denial alternative can be clicked; the original
 request and a fresh permission query must both report allowed.
 
+On the measured macOS 15 image, clicking that exact card can instead open the
+candidate's notification page in System Settings and finish the original request
+as unavailable. That result remains recorded. A separately typed Settings route
+requires a fresh denied native status, the direct card-to-page transition, the
+Apple-signed fixed System Settings bundle, and one exact candidate page with an
+enabled OFF checkbox labelled “Allow notifications”. The fixture may move only
+that Settings window within the observed display once if Notification Center covers the switch. A fresh
+topmost-window and accessibility hit check must bind the physical click to the
+actual checkbox. One click must leave the same owner's exact page switch ON,
+and a fresh candidate-native permission query must report allowed. The fixture
+never retries the original request, sets a permission value through accessibility,
+changes permission databases or treats Settings navigation as a grant. Bounded
+fixed-token Settings metadata and before/after screenshots are retained.
+
 ### Windows installed-product handoff
 
 `Pi installed Windows product` separates an ordinary Windows Server amd64

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Real child/PTY regressions for macOS Terminal and consent observations."""
 import importlib.util
+import copy
 import json
 import os
 from pathlib import Path
@@ -164,6 +165,93 @@ class PermissionUIIdentity(unittest.TestCase):
             info.write_bytes(plistlib.dumps(metadata))
             with self.assertRaisesRegex(RuntimeError, "installed_metadata_mismatch"):
                 M.permission_ui_identity(archive, app, pin)
+
+
+class SettingsConsent(unittest.TestCase):
+    def permission(self, value):
+        return M.permission_receipt(json.dumps({"permission": value, "reason": "permission_" + value}).encode(),
+                                    b"", 1 if value == "unavailable" else 0)
+
+    def consent(self):
+        return {"request_collected": True, "request_result": self.permission("unavailable"),
+                "permission_card_expansion": {"physical_card_click": True, "pointer_target_observed": True,
+                    "expanded_candidate_name": "ClaudeNotifier", "settings_before": {
+                        "observation_complete": True, "pages": []}}}
+
+    def page(self):
+        return {"pid": 42, "process_start_identity": "123:456", "window_number": 7,
+                "candidate_name": "ClaudeNotifier", "switch_on": False}
+
+    def click(self):
+        return {"physical_toggle_click": True, "switch_on": True,
+                "same_settings_page_verified": True, "physical_hit_verified": True}
+
+    def test_settings_grant_preserves_failed_callback_and_requires_fresh_native_allowed(self):
+        consent, calls, captures = self.consent(), [], []
+        original = copy.deepcopy(consent["request_result"])
+
+        def observe(operation, *args):
+            calls.append((operation, *args))
+            return {"pages": [self.page()], "observation_complete": True} if operation == "notification-settings" else self.click()
+
+        with mock.patch.object(M, "command", return_value="") as signature:
+            self.assertEqual(M.grant_in_notification_settings(consent, self.permission("denied"), observe,
+                lambda: self.permission("allowed"), lambda phase: captures.append(phase)), "allowed")
+        self.assertIn('=anchor apple and identifier "com.apple.systempreferences"', signature.call_args.args[0])
+        self.assertEqual(consent["request_result"], original)
+        self.assertEqual(consent["settings_route"]["permission_before"]["permission"], "denied")
+        self.assertEqual(consent["settings_route"]["permission_after"]["permission"], "allowed")
+        self.assertEqual([call for call in calls if call[0] == "allow-notification-settings"],
+                         [("allow-notification-settings", "42", "123:456", "7", "ClaudeNotifier")])
+        self.assertEqual(captures, ["settings-before-toggle", "settings-after-toggle"])
+        with self.assertRaisesRegex(RuntimeError, "normal_notification_consent_request_failed"):
+            M.verify_permission_grant(original, self.permission("allowed"))
+
+    def test_unproved_card_transition_or_original_result_never_enters_settings(self):
+        changes = (
+            lambda c: c.update(request_collected=False),
+            lambda c: c.update(request_result=self.permission("allowed")),
+            lambda c: c["request_result"].update(exit_code=0),
+            lambda c: c["request_result"].update(stderr_bytes=1),
+            lambda c: c["permission_card_expansion"].update(physical_card_click=False),
+            lambda c: c["permission_card_expansion"].update(pointer_target_observed=False),
+            lambda c: c["permission_card_expansion"]["settings_before"].update(observation_complete=False),
+            lambda c: c["permission_card_expansion"]["settings_before"].update(pages=[self.page()]),
+            lambda c: c["permission_card_expansion"].update(expanded_candidate_name=""),
+        )
+        for change in changes:
+            consent, observe = self.consent(), mock.Mock()
+            change(consent)
+            with self.subTest(consent=consent), mock.patch.object(M, "command") as signature:
+                with self.assertRaisesRegex(RuntimeError, "notification_settings_route_unverified"):
+                    M.grant_in_notification_settings(consent, self.permission("denied"), observe, mock.Mock(), mock.Mock())
+                observe.assert_not_called()
+                signature.assert_not_called()
+
+    def test_wrong_page_or_on_switch_never_toggles_and_unproved_toggle_never_queries_grant(self):
+        for change in ({"candidate_name": "TEST foreign"}, {"switch_on": True}):
+            observe = mock.Mock(return_value={"observation_complete": True, "pages": [{**self.page(), **change}]})
+            with self.subTest(page=change), mock.patch.object(M, "command", return_value=""):
+                with self.assertRaisesRegex(RuntimeError, "notification_settings_off_switch_unverified"):
+                    M.grant_in_notification_settings(self.consent(), self.permission("denied"), observe, mock.Mock(), mock.Mock())
+            observe.assert_called_once_with("notification-settings")
+        for missing in self.click():
+            fresh = mock.Mock(return_value=self.permission("allowed"))
+            observe = mock.Mock(side_effect=lambda operation, *args:
+                {"observation_complete": True, "pages": [self.page()]} if operation == "notification-settings"
+                else {**self.click(), missing: False})
+            with self.subTest(missing=missing), mock.patch.object(M, "command", return_value=""):
+                with self.assertRaisesRegex(RuntimeError, "notification_settings_physical_grant_unverified"):
+                    M.grant_in_notification_settings(self.consent(), self.permission("denied"), observe, fresh, mock.Mock())
+            fresh.assert_not_called()
+
+    def test_denied_fresh_status_after_physical_toggle_still_fails(self):
+        observe = mock.Mock(side_effect=lambda operation, *args:
+            {"observation_complete": True, "pages": [self.page()]} if operation == "notification-settings" else self.click())
+        with mock.patch.object(M, "command", return_value=""):
+            with self.assertRaisesRegex(RuntimeError, "candidate_notification_settings_permission_not_allowed"):
+                M.grant_in_notification_settings(self.consent(), self.permission("denied"), observe,
+                                                lambda: self.permission("denied"), mock.Mock())
 
 
 class ConsentObservation(unittest.TestCase):

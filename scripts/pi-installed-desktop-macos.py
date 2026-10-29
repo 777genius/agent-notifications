@@ -105,6 +105,57 @@ def verify_permission_grant(request_receipt, fresh_receipt):
     return fresh
 
 
+def grant_in_notification_settings(consent, before, observe, fresh_permission, capture):
+    """A separate normal Settings grant never rewrites the original callback."""
+    expansion = consent.get("permission_card_expansion", {})
+    requested = consent.get("request_result", {})
+    P.require(consent.get("request_collected") is True
+              and requested.get("permission") == "unavailable" and requested.get("matching_reason") is True
+              and requested.get("output_bounded") is True and requested.get("stderr_bytes") == 0
+              and requested.get("exit_code") == 1
+              and expansion.get("physical_card_click") is True
+              and expansion.get("pointer_target_observed") is True
+              and expansion.get("settings_before", {}).get("observation_complete") is True
+              and not expansion["settings_before"].get("pages")
+              and expansion.get("expanded_candidate_name")
+              and observed_permission(before) == "denied", "notification_settings_route_unverified")
+    route = consent["settings_route"] = {"route": "physical_system_settings", "permission_before": before,
+                                         "original_request_preserved": True}
+    command(["/usr/bin/codesign", "--verify", "--strict", "-R",
+             '=anchor apple and identifier "com.apple.systempreferences"',
+             "/System/Applications/System Settings.app"], timeout=5)
+    route["apple_signature_verified"] = True
+    # System Settings may still be finishing its ordinary launch after the
+    # original request exits. Wait only for this exact page, never navigate.
+    def page():
+        state = observe("notification-settings")
+        route["observation"] = state
+        pages = state.get("pages", [])
+        return pages[0] if state.get("observation_complete") is True and len(pages) == 1 else None
+    state = wait_for(page, "exact_candidate_notification_settings_page_unavailable", seconds=5)
+    P.require(state.get("candidate_name") == expansion["expanded_candidate_name"]
+              and state.get("switch_on") is False, "notification_settings_off_switch_unverified")
+    route["before_toggle_capture"] = capture("settings-before-toggle")
+    try:
+        click = observe("allow-notification-settings", str(state["pid"]), state["process_start_identity"],
+                        str(state["window_number"]), state["candidate_name"])
+        route["physical_toggle"] = click
+    finally:
+        for key, operation in (("after_toggle_observation", lambda: observe("notification-settings")),
+                               ("after_toggle_capture", lambda: capture("settings-after-toggle"))):
+            try:
+                route[key] = operation()
+            except Exception as error:
+                route[key] = {"error_class": type(error).__name__, "desktop_qualified": False}
+    P.require(click.get("physical_toggle_click") is True and click.get("switch_on") is True
+              and click.get("same_settings_page_verified") is True and click.get("physical_hit_verified") is True,
+              "notification_settings_physical_grant_unverified")
+    after = fresh_permission()
+    route["permission_after"] = after
+    P.require(observed_permission(after) == "allowed", "candidate_notification_settings_permission_not_allowed")
+    return "allowed"
+
+
 def permission_ui_identity(archive, app, pin):
     """Bind OS display aliases to the pinned archive and exact installed plist."""
     P.require(H.sha(archive) == pin["archive_sha256"], "permission_ui_archive_identity_mismatch")
@@ -566,7 +617,7 @@ def run(args):
               "native_helper_verified": False, "cases": []}
 
     def observer(*argv, timeout=20):
-        if argv and argv[0] in ("notification-consent", "hover-notification-consent", "expand-notification-consent",
+        if argv and argv[0] in ("notification-settings", "notification-consent", "hover-notification-consent", "expand-notification-consent",
                                "open-notification-consent-options", "allow-notification-consent"):
             argv = (*argv, *consent_names)
         return json.loads(command([args.observer, *argv], timeout=timeout))
@@ -774,10 +825,16 @@ def run(args):
             receipt = permission_receipt(out, err, permission_request.returncode)
             report["notification_consent"].update(request_result=receipt,
                 elapsed_seconds=round(time.monotonic() - started, 3), request_collected=True)
-            fresh_out = D.command(args.candidate, ["setup-notifications", "permission-status", "--control-root", root / "control", "--json"], root, env)
-            fresh_receipt = permission_receipt(fresh_out, b"", 0)
+            def fresh_permission():
+                fresh_out = D.command(args.candidate, ["setup-notifications", "permission-status", "--control-root", root / "control", "--json"], root, env)
+                return permission_receipt(fresh_out, b"", 0)
+            fresh_receipt = fresh_permission()
             report["notification_consent"]["fresh_permission_result"] = fresh_receipt
-            permission = {"permission": verify_permission_grant(receipt, fresh_receipt)}
+            if receipt.get("permission") == "unavailable" and report["notification_consent"].get("permission_card_expansion"):
+                permission = {"permission": grant_in_notification_settings(report["notification_consent"], fresh_receipt,
+                    observer, fresh_permission, capture_permission_ui)}
+            else:
+                permission = {"permission": verify_permission_grant(receipt, fresh_receipt)}
         report["candidate_notification_permission"] = permission.get("permission")
         P.require(permission.get("permission") == "allowed", "candidate_signed_helper_notification_permission_unavailable")
         policy = json.loads((root / "control/agent-notifications.json").read_text())

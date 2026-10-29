@@ -1,6 +1,7 @@
 // TEST observer for the installed Pi product. Never sends a notification,
 // plays a cue or performs the product's focus callback. Ordinary OS consent
-// uses only a physical click on the uniquely observed candidate Allow dialog.
+// uses physical input on the uniquely observed candidate dialog or its exact
+// System Settings page. Neither AXPress nor a permission value setter is used.
 // ScreenCaptureKit/CGEvent primitives match pi_native_preflight_darwin.swift.
 import AppKit
 import ApplicationServices
@@ -324,6 +325,188 @@ func onScreenWindows(_ pid: pid_t) -> [CGRect] {
     return result
 }
 
+private let settingsBundle = "/System/Applications/System Settings.app"
+
+@MainActor struct NotificationSettingsPage {
+    let app: NSRunningApplication
+    let start: String
+    let window: AXUIElement
+    let number: Int
+    let name: String
+    let toggle: AXUIElement
+    let on: Bool
+    let box: CGRect
+
+    var receipt: [String: Any] {
+        ["pid": Int(app.processIdentifier), "bundle_id": "com.apple.systempreferences",
+         "bundle_path": settingsBundle, "process_start_identity": start,
+         "window_number": number, "candidate_name": name, "switch_label": "Allow notifications",
+         "switch_role": kAXCheckBoxRole, "switch_on": on,
+         "switch_bounds": [Double(box.minX), Double(box.minY), Double(box.width), Double(box.height)]]
+    }
+}
+
+func cgBox(_ row: [String: Any]) -> CGRect? {
+    guard let bounds = row[kCGWindowBounds as String] as? [String: Any],
+          let x = bounds["X"] as? NSNumber, let y = bounds["Y"] as? NSNumber,
+          let width = bounds["Width"] as? NSNumber, let height = bounds["Height"] as? NSNumber,
+          [x, y, width, height].allSatisfy({ $0.doubleValue.isFinite }),
+          width.doubleValue > 0, height.doubleValue > 0 else { return nil }
+    return CGRect(x: x.doubleValue, y: y.doubleValue, width: width.doubleValue, height: height.doubleValue)
+}
+
+// Fixed-token, finite observation only. Unknown switch roles/values remain in
+// bounded metadata and never become an alternate way to grant permission.
+@MainActor func notificationSettings(_ names: [String]) -> (pages: [NotificationSettingsPage], receipt: [String: Any]) {
+    var pages = [NotificationSettingsPage](), controls = [[String: Any]](), candidateWindows = [[String: Any]]()
+    var complete = true, visited = 0, windowCount = 0
+    let deadline = ProcessInfo.processInfo.systemUptime + 2
+    let owners = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.systempreferences")
+    let cg = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+    if owners.count > 1 { complete = false }
+    for app in owners.prefix(1) {
+        guard app.bundleURL?.resolvingSymlinksInPath().path == settingsBundle,
+              app.executableURL?.resolvingSymlinksInPath().path == settingsBundle + "/Contents/MacOS/System Settings",
+              let start = processStartIdentity(app.processIdentifier),
+              let identity = try? terminalProcessIdentity(app.processIdentifier),
+              identity["executable_path"] as? String == settingsBundle + "/Contents/MacOS/System Settings" else {
+            complete = false; continue
+        }
+        let root = AXUIElementCreateApplication(app.processIdentifier)
+        guard AXUIElementSetMessagingTimeout(root, 0.05) == .success,
+              let windows = attribute(root, kAXWindowsAttribute) as? [AXUIElement], windows.count <= 4 else {
+            complete = false; continue
+        }
+        windowCount += windows.count
+        for window in windows {
+            var aliases = Set<String>(), switches = [(AXUIElement, Bool, CGRect)]()
+            func visit(_ element: AXUIElement, _ depth: Int) {
+                guard visited < 1200, depth < 20, ProcessInfo.processInfo.systemUptime < deadline else {
+                    complete = false; return
+                }
+                visited += 1
+                let text = [kAXValueAttribute, kAXTitleAttribute, kAXDescriptionAttribute].compactMap {
+                    attribute(element, $0) as? String
+                }
+                aliases.formUnion(names.filter { text.contains($0) })
+                let role = attribute(element, kAXRoleAttribute) as? String ?? ""
+                if text.contains("Allow notifications") {
+                    let value = attribute(element, kAXValueAttribute) as? NSNumber
+                    let boolean = value != nil && (value!.doubleValue == 0 || value!.doubleValue == 1)
+                    let enabled = attribute(element, kAXEnabledAttribute) as? Bool == true
+                    if controls.count < 16 {
+                        var control: [String: Any] = ["role": String(role.prefix(80)), "enabled": enabled,
+                            "boolean_value_observed": boolean]
+                        if boolean { control["switch_on"] = value!.intValue == 1 }
+                        if let parent = attribute(element, kAXParentAttribute), CFGetTypeID(parent) == AXUIElementGetTypeID() {
+                            let container = parent as! AXUIElement
+                            control["parent_role"] = String((attribute(container, kAXRoleAttribute) as? String ?? "").prefix(80))
+                            control["sibling_roles"] = (attribute(container, kAXChildrenAttribute) as? [AXUIElement] ?? []).prefix(8).map {
+                                String((attribute($0, kAXRoleAttribute) as? String ?? "").prefix(80))
+                            }
+                        }
+                        controls.append(control)
+                    } else { complete = false }
+                    if role == kAXCheckBoxRole, boolean, enabled, let box = rectangle(element) {
+                        switches.append((element, value!.intValue == 1, box))
+                    }
+                }
+                for child in attribute(element, kAXChildrenAttribute) as? [AXUIElement] ?? [] { visit(child, depth + 1) }
+            }
+            visit(window, 0)
+            if !aliases.isEmpty {
+                var metadata: [String: Any] = ["candidate_names": aliases.sorted(), "actionable_switch_count": switches.count]
+                if let box = rectangle(window) {
+                    metadata["bounds"] = [Double(box.minX), Double(box.minY), Double(box.width), Double(box.height)]
+                }
+                candidateWindows.append(metadata)
+            }
+            guard aliases.count == 1, switches.count == 1, let name = aliases.first,
+                  let windowBox = rectangle(window), windowBox.contains(switches[0].2) else { continue }
+            let matching = cg.filter {
+                ($0[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == app.processIdentifier
+                && cgBox($0) == windowBox && (($0[kCGWindowAlpha as String] as? NSNumber)?.doubleValue ?? 0) > 0
+            }
+            guard matching.count == 1, let number = matching[0][kCGWindowNumber as String] as? NSNumber,
+                  matchesProcessStart(app.processIdentifier, start) else { complete = false; continue }
+            pages.append(NotificationSettingsPage(app: app, start: start, window: window, number: number.intValue,
+                name: name, toggle: switches[0].0, on: switches[0].1, box: switches[0].2))
+        }
+    }
+    if !complete { pages.removeAll() }
+    return (pages, ["pages": pages.map { $0.receipt }, "observation_complete": complete,
+                    "owner_count": owners.count, "window_count": windowCount, "visited_nodes": visited,
+                    "fixed_allow_label_controls": controls, "candidate_windows": candidateWindows, "desktop_qualified": false])
+}
+
+@MainActor func settingsWindowAtToggle(_ page: NotificationSettingsPage) -> Bool {
+    let point = CGPoint(x: page.box.midX, y: page.box.midY)
+    let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+    guard let top = windows.first(where: { (($0[kCGWindowAlpha as String] as? NSNumber)?.doubleValue ?? 0) > 0
+        && cgBox($0)?.contains(point) == true }),
+          (top[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == page.app.processIdentifier,
+          (top[kCGWindowNumber as String] as? NSNumber)?.intValue == page.number else { return false }
+    return true
+}
+
+@MainActor func settingsHitVerified(_ page: NotificationSettingsPage) -> Bool {
+    guard settingsWindowAtToggle(page) else { return false }
+    let point = CGPoint(x: page.box.midX, y: page.box.midY)
+    var hit: AXUIElement?
+    guard AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(), Float(point.x), Float(point.y), &hit) == .success else { return false }
+    for _ in 0..<12 {
+        guard let current = hit else { return false }
+        if CFEqual(current, page.toggle) { return true }
+        guard let parent = attribute(current, kAXParentAttribute), CFGetTypeID(parent) == AXUIElementGetTypeID() else { return false }
+        hit = parent as! AXUIElement
+    }
+    return false
+}
+
+@MainActor func allowNotificationSettings(_ pid: pid_t, start: String, number: Int, name: String) async throws -> [String: Any] {
+    var receipt: [String: Any] = ["physical_toggle_click": false, "physical_hit_verified": false,
+                                "same_settings_page_verified": false, "window_moved": false]
+    func exact() -> NotificationSettingsPage? {
+        let state = notificationSettings([name])
+        receipt["observation"] = state.receipt
+        guard state.pages.count == 1 else { return nil }
+        let page = state.pages[0]
+        return page.app.processIdentifier == pid && page.start == start && page.number == number
+            && page.name == name && page.app.isActive ? page : nil
+    }
+    guard var page = exact(), !page.on else { return receipt }
+    receipt["before"] = page.receipt
+    if !settingsWindowAtToggle(page) {
+        // NC cards cover the measured top-right switch. Move only this exact
+        // window to the display's bottom-left once; moving it never grants permission.
+        let display = CGDisplayBounds(CGMainDisplayID())
+        guard let box = rectangle(page.window), box.width <= display.width, box.height <= display.height else { return receipt }
+        var point = CGPoint(x: display.minX, y: display.maxY - box.height)
+        guard display.contains(CGRect(origin: point, size: box.size)), point != box.origin,
+              let position = AXValueCreate(.cgPoint, &point),
+              AXUIElementSetAttributeValue(page.window, kAXPositionAttribute as CFString, position) == .success else { return receipt }
+        receipt["window_moved"] = true
+        try await Task.sleep(nanoseconds: 200_000_000)
+        guard let refreshed = exact(), !refreshed.on else { return receipt }
+        page = refreshed
+    }
+    guard settingsHitVerified(page), matchesProcessStart(pid, start) else { return receipt }
+    receipt["physical_hit_verified"] = true
+    let point = CGPoint(x: page.box.midX, y: page.box.midY)
+    guard let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left),
+          let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left) else { return receipt }
+    down.post(tap: .cghidEventTap); up.post(tap: .cghidEventTap)
+    receipt["physical_toggle_click"] = true
+    receipt["pointer_target"] = [Double(point.x), Double(point.y)]
+    try await Task.sleep(nanoseconds: 200_000_000)
+    if let after = exact(), after.on {
+        receipt["same_settings_page_verified"] = true
+        receipt["switch_on"] = true
+        receipt["after"] = after.receipt
+    }
+    return receipt
+}
+
 // Failure-only metadata. Fixed token comparisons never serialize AX labels or
 // CG window names. Limits describe observation coverage, never a consent result.
 @MainActor func permissionDiagnostics(_ expected: String) -> [String: Any] {
@@ -574,6 +757,18 @@ final class ProductCapture: NSObject, SCStreamOutput, SCStreamDelegate, @uncheck
                     }
                 }
                 publish(result)
+            case "notification-settings":
+                let names = Array(args.dropFirst())
+                guard (1...3).contains(names.count), names.allSatisfy({ !$0.isEmpty && $0.count <= 80 }) else {
+                    throw ProbeError.unavailable("verified_permission_display_identity_required")
+                }
+                publish(notificationSettings(names).receipt)
+            case "allow-notification-settings":
+                guard args.count == 5, let pid = Int32(args[1]), pid > 0, !args[2].isEmpty,
+                      let number = Int(args[3]), number > 0, !args[4].isEmpty, args[4].count <= 80 else {
+                    throw ProbeError.unavailable("observed_candidate_settings_page_required")
+                }
+                publish(try await allowNotificationSettings(pid, start: args[2], number: number, name: args[4]))
             case "notification-consent", "hover-notification-consent", "expand-notification-consent",
                  "open-notification-consent-options", "allow-notification-consent":
                 let names = Array(args.dropFirst())
@@ -581,10 +776,12 @@ final class ProductCapture: NSObject, SCStreamOutput, SCStreamDelegate, @uncheck
                     && !$0.unicodeScalars.contains(where: { $0.value < 32 }) }) else {
                     throw ProbeError.unavailable("verified_permission_display_identity_required")
                 }
+                let settingsBefore = operation == "expand-notification-consent" ? notificationSettings(names).receipt : nil
                 var cards = notificationPermissionCards(names)
                 var dialogs = notificationConsent(names, cards: cards)
                 let pointerBefore = CGEvent(source: nil)?.location
                 var pointerTarget: CGPoint?
+                var expandedName: String?
                 if operation == "hover-notification-consent" {
                     guard cards.count == 1 else { throw ProbeError.unavailable("unique_candidate_notification_permission_card_required") }
                     let box = cards[0]["bounds"] as! [Double]
@@ -608,6 +805,7 @@ final class ProductCapture: NSObject, SCStreamOutput, SCStreamDelegate, @uncheck
                             throw ProbeError.unavailable("unique_collapsed_notification_permission_card_required")
                         }
                         box = cards[0]["bounds"] as! [Double]
+                        expandedName = cards[0]["candidate_name"] as? String
                     } else {
                         guard dialogs.count == 1 else { throw ProbeError.unavailable("unique_candidate_notification_consent_dialog_required") }
                         box = dialogs[0]["bounds"] as! [Double]
@@ -637,6 +835,11 @@ final class ProductCapture: NSObject, SCStreamOutput, SCStreamDelegate, @uncheck
                 if let pointerTarget { receipt["pointer_target"] = [Double(pointerTarget.x), Double(pointerTarget.y)] }
                 if let pointerAfter { receipt["pointer_after"] = [Double(pointerAfter.x), Double(pointerAfter.y)] }
                 if pointerTarget != nil { receipt["pointer_target_observed"] = pointerObserved }
+                if let settingsBefore {
+                    receipt["settings_before"] = settingsBefore
+                    receipt["expanded_candidate_name"] = expandedName
+                    receipt["settings_after"] = notificationSettings(names).receipt
+                }
                 publish(receipt)
             case "banner", "click":
                 guard args.count == 2, ["Pi completed a task", "Pi is waiting for input"].contains(args[1]) else {
