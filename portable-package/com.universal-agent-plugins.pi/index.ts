@@ -1,8 +1,8 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { execFile, type ChildProcess } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { closeSync, fstatSync, lstatSync, openSync, readSync, realpathSync } from "node:fs";
-import { isAbsolute, join, normalize, relative } from "node:path";
+import { appendFileSync, closeSync, fstatSync, lstatSync, openSync, readSync, realpathSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, normalize, relative } from "node:path";
 
 type Descriptor = Readonly<{
   schema_version: number;
@@ -40,6 +40,41 @@ const path = (value: unknown): value is string => text(value) && isAbsolute(valu
 const digest = (value: unknown): value is string => typeof value === "string" && /^sha256:[a-f0-9]{64}$/u.test(value);
 const object = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value);
 const sameKeys = (value: Record<string, unknown>, keys: string[]) => Object.keys(value).sort().join("\0") === keys.sort().join("\0");
+
+// TEMPORARY DIAGNOSTIC ONLY: fixed native codes into the existing private TEST
+// witness. Never forward arbitrary child stderr or ship this in a final build.
+export function recordTestDiagnostic(stderr: unknown): void {
+  try {
+    const filename = process.env.TEST_PI_WITNESS;
+    if (!path(filename) || basename(filename) !== "witness.jsonl" || !basename(dirname(filename)).startsWith("case-") ||
+        !basename(dirname(dirname(filename))).startsWith("TEST-pi-windows-desktop-") || typeof stderr !== "string") return;
+    const info = lstatSync(filename);
+    if (!info.isFile() || info.isSymbolicLink() || info.size > FRAME_LIMIT || realpathSync(filename) !== filename) return;
+    const phases = new Set(["admitted", "resolve_started", "resolve_ready", "resolve_refused", "consume_started", "channels_ready",
+      "claim_started", "lease_started", "lease_ready", "invoke_started", "invoke_returned", "consume_returned"]);
+    const effects = new Set(["suppressed", "expired", "cache_unavailable", "duplicate", "revoked", "unknown", "submitted"]);
+    const reasons = new Set(["invalid_fact", "unsupported_fact", "expired", "not_registered", "invalid_config", "channels_disabled",
+      "delivery_uncertain", "no_attempt", "hook_handoff", "consumer_unavailable"]);
+    let output = "";
+    for (const line of stderr.slice(0, 32768).split("\n").slice(0, 64)) {
+      let row: unknown;
+      try { row = JSON.parse(line); } catch { continue; }
+      if (!object(row) || !sameKeys(row, ["type", "phase", "channel", "elapsed_ms", "remaining_ms", "context", ...(row.receipt === undefined ? [] : ["receipt"])]) ||
+          row.type !== "TEST_pi_native_trace" || typeof row.phase !== "string" || !phases.has(row.phase) ||
+          typeof row.channel !== "string" || !["", "desktop", "webhook"].includes(row.channel) ||
+          typeof row.context !== "string" || !["active", "cancelled", "deadline_exceeded"].includes(row.context) ||
+          !Number.isInteger(row.elapsed_ms) || Number(row.elapsed_ms) < 0 || Number(row.elapsed_ms) > 60000 ||
+          !Number.isInteger(row.remaining_ms) || Number(row.remaining_ms) < 0 || Number(row.remaining_ms) > 15000) continue;
+      if (row.receipt !== undefined) {
+        if (!object(row.receipt) || !["suppressed", "unknown", "submitted"].includes(String(row.receipt.status)) ||
+            !Object.entries(row.receipt).every(([key, value]) => typeof value === "string" &&
+              (key === "status" || key === "reason" && reasons.has(value) || ["desktop", "webhook"].includes(key) && effects.has(value)))) continue;
+      }
+      output += JSON.stringify({ type: "TEST_pi_native_trace", trace: row }) + "\n";
+    }
+    if (output && info.size + Buffer.byteLength(output) <= FRAME_LIMIT) appendFileSync(filename, output);
+  } catch { /* diagnostics never affect observation or delivery */ }
+}
 
 function readJSON(filename: string): unknown {
   const info = lstatSync(filename);
@@ -128,7 +163,7 @@ export default function notifications(pi: ExtensionAPI, descriptor: Descriptor):
       let killTimer: ReturnType<typeof setTimeout> | undefined;
       let softTimer: ReturnType<typeof setTimeout>;
       let hardTimer: ReturnType<typeof setTimeout>;
-      const child = execFile(runtime.executable, ["pi-event", "--binding", runtime.selector], { cwd, env: process.env, shell: false, windowsHide: true, maxBuffer: FRAME_LIMIT }, () => { /* native result is never exposed to Pi */ });
+      const child = execFile(runtime.executable, ["pi-event", "--binding", runtime.selector], { cwd, env: process.env, shell: false, windowsHide: true, maxBuffer: FRAME_LIMIT }, (_error, _stdout, stderr) => { recordTestDiagnostic(stderr); });
       const hardKill = () => {
         if (closed) return;
         try { child.kill("SIGKILL"); } catch { /* process may already have exited */ }

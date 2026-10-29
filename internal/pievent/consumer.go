@@ -98,6 +98,7 @@ func (c Consumer) Consume(parent context.Context, f pisource.Facts, d notificati
 	}
 	ctx, cancel := watch(parent, c.Clock, d, duration)
 	defer cancel()
+	TraceTestPhase(ctx, c.Clock, d, TestConsumeStarted, "", nil)
 	if c.Gate == nil || c.Binding.InstallationID == "" || c.Binding.BindingID == "" || c.Binding.Generation == 0 || f.Revision.BindingID != c.Binding.BindingID {
 		return Receipt{Status: "suppressed", Reason: "not_registered"}
 	}
@@ -105,6 +106,7 @@ func (c Consumer) Consume(parent context.Context, f pisource.Facts, d notificati
 		return Receipt{Status: "suppressed", Reason: "invalid_config"}
 	}
 	channels := c.Gate.Channels(ctx, c.Binding, f.Revision)
+	TraceTestPhase(ctx, c.Clock, d, TestChannelsReady, "", nil)
 	out = Receipt{Status: "suppressed", Reason: "channels_disabled"}
 	effect := func(ch Channel, invoke func() error) string {
 		if _, ok := remaining(c.Clock, d); !ok || ctx.Err() != nil {
@@ -114,6 +116,7 @@ func (c Consumer) Consume(parent context.Context, f pisource.Facts, d notificati
 		if ch == WebhookChannel {
 			bit = 2
 		}
+		TraceTestPhase(ctx, c.Clock, d, TestClaimStarted, ch, nil)
 		claimed, err := c.Cache.Claim(ctx, marker(c.Binding, f), bit)
 		if err != nil {
 			return "cache_unavailable"
@@ -121,16 +124,20 @@ func (c Consumer) Consume(parent context.Context, f pisource.Facts, d notificati
 		if !claimed {
 			return "duplicate"
 		}
+		TraceTestPhase(ctx, c.Clock, d, TestLeaseStarted, ch, nil)
 		release, err := c.Gate.Acquire(ctx, c.Binding, f.Revision, ch)
 		if err != nil || release == nil {
 			return "revoked"
 		}
 		defer release()
+		TraceTestPhase(ctx, c.Clock, d, TestLeaseReady, ch, nil)
 		if _, ok := remaining(c.Clock, d); !ok || ctx.Err() != nil {
 			return "expired"
 		}
 		attempted = true
+		TraceTestPhase(ctx, c.Clock, d, TestInvokeStarted, ch, nil)
 		err = invoke()
+		TraceTestPhase(ctx, c.Clock, d, TestInvokeReturned, ch, nil)
 		if errors.Is(err, notification.ErrSuppressed) {
 			return "suppressed"
 		}

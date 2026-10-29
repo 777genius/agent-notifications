@@ -73,6 +73,22 @@ class PostClickOracleTests(unittest.TestCase):
         self.assertLess(stop.at, 0.6)
 
 
+class TemporaryDiagnosticQualificationTests(unittest.TestCase):
+    def test_complete_instrumented_observations_cannot_qualify(self):
+        fixture_spec = importlib.util.spec_from_file_location(
+            "pi_aggregate_test_fixture", PATH.with_name("test_pi_qualification_aggregate.py"))
+        fixture = importlib.util.module_from_spec(fixture_spec)
+        fixture_spec.loader.exec_module(fixture)
+        values = fixture.metadata("windows")
+        aggregate, report = fixture.A, values[3]
+        self.assertEqual(aggregate.qualify("windows", fixture.SOURCE, *values)["status"], "qualified")
+        W.mark_diagnostic_unqualified(report)
+        self.assertIs(report["diagnostic_observations_complete"], True)
+        self.assertIs(report["native_product_observations_passed"], False)
+        with self.assertRaisesRegex(ValueError, "native_desktop_or_collection_not_observed"):
+            aggregate.qualify("windows", fixture.SOURCE, *values)
+
+
 class LauncherDiagnosticsTests(unittest.TestCase):
     def test_window_discovery_failure_keeps_started_terminal_owned_for_cleanup(self):
         with tempfile.TemporaryDirectory(prefix="TEST-pi-terminal-owner-") as directory:

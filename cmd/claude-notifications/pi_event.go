@@ -81,6 +81,7 @@ func runPiEventWith(parent context.Context, clock observation.Clock, args []stri
 		return 0
 	}
 	defer cancel()
+	pievent.TraceTestPhase(ctx, clock, deadline, pievent.TestAdmitted, "", nil)
 	selector, ok := parsePiEventArgs(args)
 	if !ok || resolve == nil {
 		return 0
@@ -95,10 +96,14 @@ func runPiEventWith(parent context.Context, clock observation.Clock, args []stri
 	if err != nil || ctx.Err() != nil || facts.PiPID != os.Getppid() {
 		return 0
 	}
+	pievent.TraceTestPhase(ctx, clock, deadline, pievent.TestResolveStarted, "", nil)
 	consumer, err := resolve(ctx, selector, facts)
 	if err != nil || ctx.Err() != nil {
+		pievent.TraceTestPhase(ctx, clock, deadline, pievent.TestResolveRefused, "", nil)
 		return 0
 	}
-	_ = consumer.Consume(ctx, facts, deadline)
+	pievent.TraceTestPhase(ctx, clock, deadline, pievent.TestResolveReady, "", nil)
+	receipt := consumer.Consume(ctx, facts, deadline)
+	pievent.TraceTestPhase(ctx, clock, deadline, pievent.TestConsumeReturned, "", &receipt)
 	return 0
 }

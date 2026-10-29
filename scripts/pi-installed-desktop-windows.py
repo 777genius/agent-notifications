@@ -270,10 +270,16 @@ def reference(native, source, output):
         file.writeframes(normalized_pcm(data, rate))
 
 
+def mark_diagnostic_unqualified(report):
+    # TEMPORARY: even complete instrumented observations cannot qualify.
+    report["diagnostic_observations_complete"] = report["native_product_observations_passed"]
+    report["native_product_observations_passed"] = False
+
+
 def run(args):
     P.require(os.name == "nt", "actual_windows_client_host_required")
     root = P.new_test_root("TEST-pi-windows-desktop-")
-    report = {"schema_version": 1, "status": "unqualified", "scope": "actual_installed_pi_windows_desktop",
+    report = {"schema_version": 1, "status": "unqualified", "scope": "test_only_pi_windows_delivery_timing_diagnostic", "diagnostic_only": True,
               "test_root": str(root), "source_sha": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO, text=True).strip(),
               "working_tree_dirty": bool(subprocess.check_output(["git", "status", "--porcelain"], cwd=REPO)),
               "host_os": platform.system(), "host_architecture": platform.machine(), "script_sha256": P.sha(__file__),
@@ -501,6 +507,7 @@ def run(args):
         failure_image = root / "failure-desktop.bmp"
         if failure_image.is_file() and failure_image.stat().st_size <= 64 * 1024 * 1024:
             shutil.copy2(failure_image, args.report.parent / failure_image.name)
+        mark_diagnostic_unqualified(report)
         args.report.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
         print(json.dumps({"status": report["status"], "failure": report.get("failure"), "desktop_qualified": False}))
     return 0 if report["native_product_observations_passed"] and report["owned_children_collected"] else 1
