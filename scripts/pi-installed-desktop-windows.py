@@ -23,6 +23,7 @@ import wave
 
 REPO = Path(__file__).resolve().parents[1]
 CASES = ("completion", "question", "sound-off", "click-off", "desktop-off", "stale-origin")
+CAPTURE_BUDGET_SECONDS = 45
 POWERSHELL_LAUNCHER = '''param([Parameter(Mandatory=$true)][string]$Spec)
 $ErrorActionPreference = 'Stop'
 $inputSpec = Get-Content -LiteralPath $Spec -Raw | ConvertFrom-Json
@@ -511,19 +512,25 @@ def run(args):
                 P.require(ready.get("ready") is True, "actual_audio_capture_not_ready")
                 P.require(ready.get("audio_route") == report["audio_capture_route"], "native_capture_readiness_route_changed")
                 capture_started = time.monotonic()
-                case_deadline = capture_started + 30
-                timing = {"case": name, "scope": "diagnostic_only", "capture_budget_seconds": 30}
+                case_deadline = capture_started + CAPTURE_BUDGET_SECONDS
+                timing = {"case": name, "scope": "diagnostic_only", "capture_budget_seconds": CAPTURE_BUDGET_SECONDS}
                 report.setdefault("toast_observation_timings", []).append(timing)
                 watcher = start_toast_watcher(native, toast_title, P.COPY[event], case_root, case_deadline, helpers)
                 timing["early_watcher_ready_seconds"] = round(time.monotonic() - capture_started, 3)
                 if name == "question":
-                    native.focus(origin.window); native.type(origin.window, "/TEST-dialog")
+                    native.focus(origin.window)
+                    webhook_deadline = time.monotonic() + 25
+                    native.type(origin.window, "/TEST-dialog")
                 else:
                     wait_for(lambda: bool(provider.requests), "native_pi_model_request_missing")
                 native.focus(distractor.window)
                 timing["provider_release_seconds"] = round(time.monotonic() - capture_started, 3)
+                if name != "question":
+                    webhook_deadline = time.monotonic() + 25
                 provider.release.set()
-                sink.wait(event)
+                # The trigger precedes Go admission. Observe its 20s product
+                # budget with a fixed margin, never renewed after typing/focus.
+                sink.wait(event, timeout=max(0, min(webhook_deadline, case_deadline) - time.monotonic()))
                 timing["webhook_received_seconds"] = round(time.monotonic() - capture_started, 3)
                 image = case_root / "actual-product-banner.bmp"
                 click_observation = None

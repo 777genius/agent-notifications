@@ -466,8 +466,11 @@ static int capture(const fs::path& path, const fs::path& stop, int routeCount, w
     hrcheck(client->GetService(IID_PPV_ARGS(&reader))); hrcheck(client->Start());
     std::ofstream file(path, std::ios::binary); need(file.good() && !fs::exists(stop), "native_capture_path_invalid");
     std::cout << "{\"ready\":true,\"sample_rate\":" << format->nSamplesPerSec << ",\"audio_route\":" << route.json << "}\n" << std::flush;
+    // This observer includes pre-trigger setup and post-handoff click/drain
+    // time; the product keeps its independent 20s admission deadline.
+    constexpr uint64_t captureSeconds = 45;
     const auto started = GetTickCount64(); uint64_t samples = 0, nonzero = 0; double peak = 0;
-    while (!fs::exists(stop) && GetTickCount64() - started < 30000) {
+    while (!fs::exists(stop) && GetTickCount64() - started < captureSeconds * 1000) {
         UINT32 packets = 0; hrcheck(reader->GetNextPacketSize(&packets));
         while (packets) {
             BYTE* bytes = nullptr; UINT32 frames = 0; DWORD flags = 0;
@@ -486,7 +489,7 @@ static int capture(const fs::path& path, const fs::path& stop, int routeCount, w
                 samples++; if (std::abs(static_cast<int>(pcm)) > 128) nonzero++;
             }
             hrcheck(reader->ReleaseBuffer(frames)); hrcheck(reader->GetNextPacketSize(&packets));
-            need(samples <= static_cast<uint64_t>(format->nSamplesPerSec) * 31, "native_audio_capture_bound");
+            need(samples <= static_cast<uint64_t>(format->nSamplesPerSec) * (captureSeconds + 1), "native_audio_capture_bound");
         }
         pump(5);
     }
