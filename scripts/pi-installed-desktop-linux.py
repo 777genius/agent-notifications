@@ -176,7 +176,7 @@ def run(args):
         case_root = root / ("case-lifecycle-" + action)
         provider, destination = F.Provider("success"), P.Webhooks(hold_response=True)
         terminal = None
-        row = {"case": action, "scope": "actual_installed_pi_linux_tui", "status": "running"}
+        row = {"case": action, "scope": "actual_installed_pi_linux_tui", "status": "running", "phase": "tui_startup"}
         report["lifecycle_cases"].append(row)
         try:
             native_env = desktop_env(F.prepare(case_root, provider, "success", agent_dir=profile))
@@ -201,6 +201,7 @@ def run(args):
             lab.run(["xdotool", "windowactivate", "--sync", origin])
             N.wait_for(lambda: active() == origin and keyboard_pid() == terminal.pid)
             count = 3 if action == "reload" else 1
+            row["phase"] = "admit_held_work"
             for index in range(count):
                 started = time.monotonic()
                 type_line("/TEST-dialog" if action == "prompt-end" else "TEST " + str(index))
@@ -220,6 +221,7 @@ def run(args):
             row.update(pi_identity=pi, helper_identities=owned, admitted_helpers=len(helpers),
                        excess_observation_dropped=action == "reload", settled_before_control=count if action != "prompt-end" else 0)
             started = time.monotonic()
+            row["phase"] = "natural_timeout" if action == "timeout" else "original_child_cancellation"
             if action == "timeout":
                 # Production HTTP client timeout is 10s, below Pi's 15s consumer
                 # and 16s producer bounds. Keep the response held; send no control.
@@ -242,6 +244,7 @@ def run(args):
             elif action == "quit":
                 P.require(terminal.wait(timeout=3) == 0 and not same_process(pi), "native_tui_quit_not_collected")
             elif action in ("new", "reload"):
+                row["phase"] = "fresh_observer_after_reset"
                 N.wait_for(lambda: any(x["type"] == "session_shutdown" and x.get("reason") == action
                                       for x in F.witness(case_root)))
                 N.wait_for(lambda: sum(x["type"] == "factory" for x in F.witness(case_root)) >= 2)
@@ -257,9 +260,10 @@ def run(args):
             P.require(len(destination.rows) == expected + (1 if action in ("new", "reload") else 0),
                       "native_pi_cancelled_helper_was_resent")
             if terminal.poll() is None:
+                row["phase"] = "terminal_collection"
                 type_line("/quit")
                 P.require(terminal.wait(timeout=3) == 0, "native_lifecycle_terminal_not_collected")
-            row.update(status="passed", native_control=None if action == "timeout" else action,
+            row.update(status="passed", phase="complete", native_control=None if action == "timeout" else action,
                        terminal_collected=True, no_resend=True)
         finally:
             if terminal:
@@ -273,6 +277,9 @@ def run(args):
         recorder, terminal, mux_identity, mux_pane = None, None, None, None
         mux_socket = case_root / "tmux.sock"
         multiplexed = name == "tmux-completion"
+        progress = {"case": name, "status": "running", "phase": "initialization"}
+        if multiplexed:
+            report["multiplexer"] = progress
 
         def tmux(*atoms):
             return lab.run(["tmux", "-S", mux_socket, *atoms])[0].strip()
@@ -316,9 +323,12 @@ def run(args):
                 pane_pid = int(tmux("display-message", "-p", "-t", "TEST:origin", "#{pane_pid}"))
                 P.require(next(x for x in F.witness(case_root) if x["type"] == "factory")["pid"] == pane_pid,
                           "tmux_origin_pane_is_not_actual_pi")
+                progress.update(origin_window=origin, origin_xterm_pid=terminal.pid, origin_tmux_pane=mux_pane,
+                                tmux_server_identity=mux_identity, origin_pi_pid=pane_pid)
                 tmux("new-window", "-d", "-t", "TEST", "-n", "distractor", "/bin/sleep", "300")
                 tmux("select-window", "-t", "TEST:distractor")
                 P.require(tmux("display-message", "-p", "#{pane_id}") != mux_pane, "tmux_pane_not_backgrounded")
+                progress["active_pane_before_click"] = tmux("display-message", "-p", "#{pane_id}")
             recording = case_root / "native-output.s16le"
             with recording.open("wb") as stream:
                 recorder = subprocess.Popen(["parec", "--device=TEST_pi_observer.monitor", "--format=s16le", "--rate=48000",
@@ -350,10 +360,14 @@ def run(args):
                     lab.stop(terminal)
                     N.wait_for(lambda: terminal.poll() is not None)
                 lab.run(["xdotool", "mousemove", "1100", "70", "click", "1"])
+                progress["phase"] = "outer_window_focus_after_click"
                 if click and name != "stale-origin":
                     N.wait_for(lambda: active() == origin and keyboard_pid() == terminal.pid)
                     if multiplexed:
-                        N.wait_for(lambda: tmux("display-message", "-p", "#{pane_id}") == mux_pane)
+                        progress["phase"] = "documented_tmux_window_fallback"
+                        progress["active_pane_after_click"] = tmux("display-message", "-p", "#{pane_id}")
+                        P.require(progress["active_pane_after_click"] == progress["active_pane_before_click"],
+                                  "linux_tmux_unsupported_pane_was_changed")
                 else:
                     decoy_pid = int(lab.run(["xdotool", "getwindowpid", distractor])[0].strip())
                     click_observation = observe_unchanged_focus(active, keyboard_pid, distractor, decoy_pid,
@@ -392,11 +406,18 @@ def run(args):
             else:
                 P.require(stats["peak_s16"] == 0, "product_sound_off_was_audible")
             if terminal.poll() is None:
+                progress["phase"] = "terminal_shutdown"
                 lab.run(["xdotool", "windowactivate", "--sync", origin])
                 N.wait_for(lambda: active() == origin and keyboard_pid() == terminal.pid)
                 if name == "question":
                     type_line("TEST accepted")
                     N.wait_for(lambda: any(x["type"] == "ui_prompt_end" for x in F.witness(case_root)))
+                if multiplexed:
+                    # Cleanup only: pane selection is unsupported on Linux.
+                    # The real click's window/pane result was recorded above.
+                    P.require(tmux("display-message", "-p", "#{pane_id}") == progress["active_pane_before_click"],
+                              "linux_tmux_unsupported_pane_was_changed")
+                    tmux("select-window", "-t", "TEST:origin")
                 type_line("/quit")
                 if multiplexed:
                     N.wait_for(lambda: mux_pane not in tmux("list-panes", "-a", "-F", "#{pane_id}").splitlines())
@@ -427,11 +448,22 @@ def run(args):
                            "ambient_root_isolated": True, "owned_terminal_collected": terminal.poll() is not None}}
             if multiplexed:
                 row.update(origin_tmux_pane=mux_pane, tmux_server_identity=mux_identity,
-                           original_pane_selected=True, owned_tmux_server_collected=process_collected(mux_identity))
+                           pane_focus_supported=False, outer_window_focus_observed=True,
+                           active_pane_before_click=progress["active_pane_before_click"],
+                           active_pane_after_click=progress["active_pane_after_click"],
+                           owned_tmux_server_collected=process_collected(mux_identity), status="passed")
                 report["multiplexer"] = row
             else:
                 report["cases"].append(row)
         finally:
+            if multiplexed and report["multiplexer"].get("status") != "passed":
+                try:
+                    progress["foreground_after_failure"] = {"window": active(), "keyboard_pid": keyboard_pid()}
+                    if mux_identity and same_process(mux_identity):
+                        progress["active_pane_after_failure"] = tmux("display-message", "-p", "#{pane_id}")
+                    progress["status"] = "failed"
+                except Exception as error:
+                    progress["diagnostic_error_class"] = type(error).__name__
             if mux_identity:
                 if same_process(mux_identity):
                     tmux("kill-server")
@@ -462,9 +494,9 @@ def run(args):
         report["cue_sha256"] = {name: P.sha(root / "runtime/sounds" / name) for name in ("task-complete.mp3", "question.mp3")}
         for name in CASES:
             case(name, distractors[-1])
-        case("tmux-completion", distractors[-1])
         for action in ("reload", "new", "prompt-end", "quit", "timeout"):
             lifecycle_case(action)
+        case("tmux-completion", distractors[-1])
         report.update(status="passed_native_product_observations", native_product_observations_passed=True)
     except Exception as error:
         report["failure"] = str(error)

@@ -227,9 +227,13 @@ Pi session and no retry.
 
 A separate required completion runs inside an isolated tmux server with an
 owned socket and a known original pane. The fixture backgrounds that pane and
-the originating Xterm, then physically clicks the real product banner. Both
-the original pane and Xterm must regain focus. Its server and terminal are
-collected. Linux output recordings use the same canonical cue energy-contour
+the originating Xterm, then physically clicks the real product banner. The
+original Xterm must regain focus. The existing support matrix marks tmux pane
+selection unsupported on Linux, so this case explicitly records
+`pane_focus_supported: false` and requires the currently selected pane to stay
+unchanged. It does not claim pane restoration. Selecting the Pi pane afterward
+is fixture cleanup only. Its server and terminal are collected. Linux output
+recordings use the same canonical cue energy-contour
 comparison as the other desktop fixtures; decoding the reference never plays
 replacement audio. Missing lifecycle or tmux observations fail the aggregate.
 

@@ -71,7 +71,8 @@ def metadata(platform="linux"):
             for action in ("reload", "new", "prompt-end", "quit", "timeout")]
         desktop["multiplexer"] = {"case": "tmux-completion", "native_mode": "tui",
             "checks": {check: True for check in A.CHECKS}, "real_mouse_click": True, "banner_observed": True,
-            "original_pane_selected": True, "owned_tmux_server_collected": True, "origin_tmux_pane": "%0",
+            "pane_focus_supported": False, "outer_window_focus_observed": True, "active_pane_before_click": "%1",
+            "active_pane_after_click": "%1", "owned_tmux_server_collected": True, "origin_tmux_pane": "%0",
             "tmux_server_identity": kernel, "configured_cue_envelope_match": 0.9}
         for row in desktop["cases"]:
             row["configured_cue_envelope_match"] = None if row["case"] in ("sound-off", "desktop-off") else 0.9
@@ -116,7 +117,9 @@ class AggregateGuards(unittest.TestCase):
                        lambda desktop: desktop["lifecycle_cases"][4].update(natural_timeout_seconds=30),
                        lambda desktop: desktop["lifecycle_cases"][4].update(no_control_before_timeout=False),
                        lambda desktop: desktop.pop("multiplexer"),
-                       lambda desktop: desktop["multiplexer"].update(original_pane_selected=False),
+                       lambda desktop: desktop["multiplexer"].update(outer_window_focus_observed=False),
+                       lambda desktop: desktop["multiplexer"].update(pane_focus_supported=True),
+                       lambda desktop: desktop["multiplexer"].update(active_pane_after_click="%0"),
                        lambda desktop: desktop["multiplexer"].update(owned_tmux_server_collected=False),
                        lambda desktop: next(row for row in desktop["cases"] if row["case"] == "completion").update(configured_cue_envelope_match=0.1)):
             values = metadata("linux"); change(values[3])

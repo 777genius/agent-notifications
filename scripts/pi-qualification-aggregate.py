@@ -150,10 +150,14 @@ def qualify(platform, source, build, acquisition, process, desktop):
         mux = desktop.get("multiplexer", {})
         require(mux.get("case") == "tmux-completion" and mux.get("native_mode") == "tui"
                 and all(mux.get("checks", {}).get(check) is True for check in CHECKS)
-                and all(mux.get(key) is True for key in ("real_mouse_click", "banner_observed", "original_pane_selected", "owned_tmux_server_collected"))
+                and all(mux.get(key) is True for key in ("real_mouse_click", "banner_observed", "outer_window_focus_observed", "owned_tmux_server_collected"))
+                and mux.get("pane_focus_supported") is False
+                and re.fullmatch(r"%[0-9]+", mux.get("active_pane_before_click", "")) is not None
+                and mux.get("active_pane_before_click") != mux.get("origin_tmux_pane")
+                and mux.get("active_pane_after_click") == mux.get("active_pane_before_click")
                 and kernel_identity(mux.get("tmux_server_identity"))
                 and re.fullmatch(r"%[0-9]+", mux.get("origin_tmux_pane", "")) is not None,
-                "linux_real_tmux_click_or_collection_unobserved")
+                "linux_real_tmux_window_fallback_or_collection_unobserved")
         for row in [mux, *[row for row in native if row["case"] not in ("sound-off", "desktop-off")]]:
             correlation = row.get("configured_cue_envelope_match")
             require(type(correlation) in (int, float) and math.isfinite(correlation) and correlation >= 0.65,
