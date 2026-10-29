@@ -31,6 +31,28 @@ def sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+def windows_native_temp_parent():
+    """Ignore Python's TMPDIR preference; retain native Windows temp selection."""
+    require(os.name == "nt", "windows_native_temp_parent_requires_windows")
+    import ctypes
+    from ctypes import wintypes
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    try:
+        get_temp = kernel.GetTempPath2W
+    except AttributeError:  # Older Windows has only the original native API.
+        get_temp = kernel.GetTempPathW
+    get_temp.argtypes = (wintypes.DWORD, wintypes.LPWSTR)
+    get_temp.restype = wintypes.DWORD
+    buffer = ctypes.create_unicode_buffer(32768)
+    count = get_temp(len(buffer), buffer)
+    require(0 < count < len(buffer), "windows_native_temp_parent_length")
+    value = buffer.value
+    require(len(value.encode("utf-16-le")) // 2 == count, "windows_native_temp_parent_length")
+    parent = Path(value)
+    require(parent.is_absolute() and parent.is_dir(), "windows_native_temp_parent_invalid")
+    return parent.resolve(strict=True)
+
+
 def new_test_root(prefix):
     """Protect only a fresh TEST root before creating any product descendants.
 
@@ -39,7 +61,10 @@ def new_test_root(prefix):
     production admission remains responsible for accepting every installed inode.
     """
     require(isinstance(prefix, str) and re.fullmatch(r"TEST-pi-[a-z-]+-", prefix), "private_TEST_root_prefix_required")
-    root = Path(tempfile.mkdtemp(prefix=prefix)).resolve(strict=True)
+    # RUNNER_TEMP/Python TMPDIR may select D:\a\_temp, whose ancestors grant
+    # foreign DeleteChild. A private child DACL cannot make those ancestors safe.
+    parent = windows_native_temp_parent() if os.name == "nt" else None
+    root = Path(tempfile.mkdtemp(prefix=prefix, dir=parent)).resolve(strict=True)
     require(root.is_dir() and not root.is_symlink() and not any(root.iterdir()), "fresh_empty_TEST_root_required")
     if os.name == "nt":
         source = Path(__file__).with_name("gemini_native_e2e.py")
@@ -215,6 +240,42 @@ def asset_receipts(control, runtime, canonical):
     return result
 
 
+def setup_config_diagnostic(executable, root, env):
+    """Inspect only this TEST config; expose typed native security metadata."""
+    try:
+        root = Path(root)
+        require(root.is_absolute() and root.name.startswith("TEST-pi-")
+                and root.resolve(strict=True) == root and root.is_dir()
+                and (root / "project").is_dir(), "setup_config_diagnostic_TEST_root_required")
+        selected = dict(env, PLUGIN_ROOT=str(root), AGENT_NOTIFICATIONS_CONFIG=str(root / "global/config.json"))
+        with tempfile.TemporaryFile() as output:
+            subprocess.run([str(executable), "config", "inspect", "--json"], stdin=subprocess.DEVNULL,
+                           stdout=output, stderr=subprocess.DEVNULL, cwd=root / "project", env=selected, timeout=15)
+            output.seek(0)
+            raw = output.read(65537)
+        require(len(raw) <= 65536, "setup_config_diagnostic_output_limit")
+        value = json.loads(raw)
+        require(isinstance(value, dict) and isinstance(value.get("errorCode"), str)
+                and re.fullmatch(r"Config[A-Za-z]{1,48}", value["errorCode"]), "setup_config_diagnostic_error_code")
+        result = {"errorCode": value["errorCode"]}
+        detail = value.get("permissionFailure")
+        if isinstance(detail, dict):
+            safe = {}
+            for key, pattern, limit in (("objectPath", r"[^\x00-\x1f]+", 32768), ("reason", r"[a-z_]+", 128),
+                                        ("trusteeSid", r"S-\d+(?:-\d+)+", 256), ("ownerSid", r"S-\d+(?:-\d+)+", 256)):
+                field = detail.get(key)
+                if isinstance(field, str) and 0 < len(field) <= limit and re.fullmatch(pattern, field):
+                    safe[key] = field
+            mask = detail.get("accessMask")
+            if type(mask) is int and 0 <= mask <= 0xFFFFFFFF:
+                safe["accessMask"] = mask
+            if safe:
+                result["permissionFailure"] = safe
+        return result
+    except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired):
+        return {}
+
+
 def setup(executable, operation, root, package, pi, env, extra=()):
     """Use only the existing public common setup wizard; no explicit Pi root."""
     argv = [executable, "setup-notifications", "wizard", "--action", operation, "--agents", "pi",
@@ -229,6 +290,8 @@ def setup(executable, operation, root, package, pi, env, extra=()):
         value = json.loads(result.stdout)
     except ValueError:
         raise RuntimeError("installed_pi_setup_not_json:" + result.stderr.decode(errors="replace")[-2000:])
-    require(result.returncode == 0 and value.get("outcome") in ("completed", "unchanged"),
-            "installed_pi_setup_failed:" + value.get("reason", "unknown"))
+    if result.returncode != 0 or value.get("outcome") not in ("completed", "unchanged"):
+        diagnostic = setup_config_diagnostic(executable, root, env) if value.get("reason") == "global_config_parent_invalid" else {}
+        suffix = ":config_inspect=" + json.dumps(diagnostic, sort_keys=True) if diagnostic else ""
+        raise RuntimeError("installed_pi_setup_failed:" + value.get("reason", "unknown") + suffix)
     return value

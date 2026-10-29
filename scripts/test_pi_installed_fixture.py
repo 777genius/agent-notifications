@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 PATH = Path(__file__).resolve().parents[1] / "tests/integration/pi_installed_fixture.py"
 SPEC = importlib.util.spec_from_file_location("pi_installed_fixture", PATH)
@@ -31,6 +32,65 @@ class ObserverTests(unittest.TestCase):
         self.assertEqual(list(root.iterdir()), [])
         if os.name != "nt":
             self.assertEqual(stat.S_IMODE(root.stat().st_mode), 0o700)
+
+    @unittest.skipUnless(os.name == "nt", "actual Windows temp API required")
+    def test_windows_root_ignores_python_TMPDIR_override(self):
+        parent = P.windows_native_temp_parent()
+        with tempfile.TemporaryDirectory(prefix="TEST-pi-tmpdir-trap-", dir=parent) as trap:
+            with mock.patch.dict(os.environ, {"TMPDIR": trap}), mock.patch.object(tempfile, "tempdir", None):
+                self.assertEqual(Path(tempfile.gettempdir()).resolve(), Path(trap).resolve())
+                root = P.new_test_root("TEST-pi-native-temp-")
+                self.addCleanup(shutil.rmtree, root)
+            self.assertEqual(root.parent, parent)
+            self.assertNotEqual(root.parent, Path(trap).resolve())
+            self.assertEqual(list(Path(trap).iterdir()), [])
+
+    def test_setup_diagnostic_is_guarded_bounded_typed_and_failure_only(self):
+        root = P.new_test_root("TEST-pi-diagnostic-")
+        self.addCleanup(shutil.rmtree, root)
+        (root / "project").mkdir()
+        env = {"AGENT_NOTIFICATIONS_CONFIG": "TEST-ambient-config", "PLUGIN_ROOT": "TEST-ambient-root"}
+        detail = {"objectPath": str(root), "reason": "unrelated_write_grant", "trusteeSid": "S-1-1-0",
+                  "ownerSid": "S-1-5-18", "accessMask": 64, "private": "TEST-secret"}
+
+        def inspect(argv, **kwargs):
+            self.assertEqual(argv, ["TEST-candidate", "config", "inspect", "--json"])
+            self.assertEqual(kwargs["env"]["AGENT_NOTIFICATIONS_CONFIG"], str(root / "global/config.json"))
+            self.assertEqual(kwargs["env"]["PLUGIN_ROOT"], str(root))
+            self.assertEqual((kwargs["cwd"], kwargs["timeout"], kwargs["stderr"]), (root / "project", 15, subprocess.DEVNULL))
+            kwargs["stdout"].write(P.json.dumps({"errorCode": "ConfigPermissionDenied", "permissionFailure": detail,
+                                               "selection": {"path": "TEST-secret"}, "settings": "TEST-secret"}).encode())
+
+        with mock.patch.object(P.subprocess, "run", side_effect=inspect) as run:
+            diagnostic = P.setup_config_diagnostic("TEST-candidate", root, env)
+            self.assertEqual(diagnostic, {"errorCode": "ConfigPermissionDenied",
+                                         "permissionFailure": {key: value for key, value in detail.items() if key != "private"}})
+            self.assertNotIn("TEST-secret", P.json.dumps(diagnostic))
+            self.assertEqual(P.setup_config_diagnostic("TEST-candidate", root / "project", env), {})
+            self.assertEqual(run.call_count, 1)
+        with mock.patch.object(P.subprocess, "run", side_effect=lambda _argv, **kw: kw["stdout"].write(b"x" * 65537)):
+            self.assertEqual(P.setup_config_diagnostic("TEST-candidate", root, env), {})
+        with mock.patch.object(P.subprocess, "run", side_effect=subprocess.TimeoutExpired("TEST-candidate", 15)):
+            self.assertEqual(P.setup_config_diagnostic("TEST-candidate", root, env), {})
+        for payload, expected in (({"errorCode": ["TEST-secret"]}, {}),
+                                  ({"errorCode": "ConfigPermissionDenied", "permissionFailure": "TEST-secret"},
+                                   {"errorCode": "ConfigPermissionDenied"}),
+                                  ({"errorCode": "ConfigPermissionDenied", "permissionFailure": {
+                                      "objectPath": [], "reason": 1, "trusteeSid": "TEST-secret", "accessMask": True}},
+                                   {"errorCode": "ConfigPermissionDenied"})):
+            with mock.patch.object(P.subprocess, "run", side_effect=lambda _argv, **kw: kw["stdout"].write(P.json.dumps(payload).encode())):
+                self.assertEqual(P.setup_config_diagnostic("TEST-candidate", root, env), expected)
+        with mock.patch.object(P, "setup_config_diagnostic", return_value={}) as diagnose:
+            for outcome, reason, code in (("completed", "global_config_parent_invalid", 0), ("incomplete", "other_failure", 1),
+                                          ("incomplete", "global_config_parent_invalid", 1)):
+                result = subprocess.CompletedProcess([], code, P.json.dumps({"outcome": outcome, "reason": reason}).encode(), b"")
+                with mock.patch.object(P.subprocess, "run", return_value=result):
+                    if code:
+                        with self.assertRaisesRegex(RuntimeError, "installed_pi_setup_failed"):
+                            P.setup("TEST-candidate", "install", root, "TEST-package", None, env)
+                    else:
+                        P.setup("TEST-candidate", "install", root, "TEST-package", None, env)
+            diagnose.assert_called_once_with("TEST-candidate", root, env)
 
     @unittest.skipUnless(os.name == "nt", "actual Windows security descriptors required")
     def test_real_windows_root_and_new_child_have_only_private_inherited_grants(self):
