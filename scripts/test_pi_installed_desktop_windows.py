@@ -336,7 +336,7 @@ class ProcessTimelineTests(unittest.TestCase):
 
     def test_start_uses_only_original_handle_and_one_prelaunch_absolute_deadline(self):
         with tempfile.TemporaryDirectory(prefix="TEST-pi-process-watch-") as temporary:
-            root, helpers = Path(temporary), []
+            root, helpers = Path(temporary).resolve(strict=True), []
             origin = SimpleNamespace(root=root / "origin", process_handle=Mock(value=234), pi_identity={"creation_time": "123456789"},
                                      executable="TEST-pi.exe", native=Mock(executable="observer.exe"))
             origin.process_handle.kernel.GetTickCount64.return_value = 100000
