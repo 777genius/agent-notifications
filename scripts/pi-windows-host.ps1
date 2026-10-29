@@ -118,7 +118,7 @@ $device = @(Get-CimInstance Win32_PnPEntity | Where-Object { $_.Service -eq 'VBA
 $device | Select-Object PNPDeviceID,Service,ConfigManagerErrorCode,HardwareID | ConvertTo-Json -Depth 3 | Set-Content "$Root/driver-instance.json"
 Get-CimInstance Win32_SystemDriver -Filter "Name='VBAudioVACMME'" | Select-Object Name,State,Started,PathName | ConvertTo-Json | Set-Content "$Root/driver-service.json"
 if ($device.Count -ne 1 -or $device[0].ConfigManagerErrorCode -ne 0 -or @($device[0].HardwareID) -notcontains 'VBAudioVACWDM') { throw 'Unique installed virtual driver instance unavailable' }
-$route = & "$Root/host-observer.exe" discover $device[0].PNPDeviceID
+$route = & "$Root/host-observer.exe" discover $device[0].PNPDeviceID 2> "$Root/endpoint-discovery.stderr.log"
 if ($LASTEXITCODE) { throw 'Exact driver-bound endpoint discovery failed; no microphone/default-capture fallback' }
 $proof = [ordered]@{ schema_version=1; source_sha=$source; driver=@{ instance_id=$device[0].PNPDeviceID; image_path=(DriverImage); image_sha256=$driverHash; inf_path=$inf; catalog_path=$catalog }; route=($route | ConvertFrom-Json) }
 VerifyDriver $proof

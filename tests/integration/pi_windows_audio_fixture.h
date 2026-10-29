@@ -79,8 +79,21 @@ static std::string discover(const std::wstring& instance) {
     driver(instance);
     Microsoft::WRL::ComPtr<IMMDeviceEnumerator> enumerator;
     Microsoft::WRL::ComPtr<IMMDevice> defaultRender;
-    check(SUCCEEDED(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, IID_PPV_ARGS(&enumerator))) &&
-          SUCCEEDED(enumerator->GetDefaultAudioEndpoint(eRender, eConsole, &defaultRender)), "audio_fixture_default_render_unavailable");
+    check(SUCCEEDED(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, IID_PPV_ARGS(&enumerator))),
+          "audio_fixture_enumerator_unavailable");
+    // Successful PnP installation can precede AudioEndpointBuilder publication on
+    // a fresh guest. Only wait for the documented absent-default result; other
+    // failures and every subsequent driver/topology mismatch refuse immediately.
+    const auto deadline = GetTickCount64() + 15000;
+    HRESULT renderResult{};
+    do {
+        renderResult = enumerator->GetDefaultAudioEndpoint(eRender, eConsole, &defaultRender);
+        if (renderResult != HRESULT_FROM_WIN32(ERROR_NOT_FOUND) || GetTickCount64() >= deadline) break;
+        Sleep(50);
+    } while (true);
+    if (FAILED(renderResult))
+        throw std::runtime_error(renderResult == HRESULT_FROM_WIN32(ERROR_NOT_FOUND) ? "audio_fixture_default_render_publication_timeout" :
+                                 "audio_fixture_default_render_query_failed:hr=" + std::to_string(renderResult));
     const auto render = inspect(enumerator.Get(), defaultRender.Get(), eRender);
     if (_wcsicmp(render.instance.c_str(), instance.c_str()) != 0)
         throw std::runtime_error("audio_fixture_render_driver_mismatch:actual=" + quote(render.instance));
