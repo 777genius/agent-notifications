@@ -8,6 +8,7 @@
 #include <functiondiscoverykeys_devpkey.h>
 #include <cfgmgr32.h>
 #include <cfg.h>
+#include <iostream>
 #include <stdexcept>
 
 namespace PiWindowsAudioFixture {
@@ -80,26 +81,8 @@ static std::string metadata(const std::wstring& instance, const Endpoint& render
         ",\"render_endpoint_id\":" + quote(render.id) + ",\"capture_endpoint_id\":" + quote(capture.id) +
         ",\"render_topology_id\":" + quote(render.topology) + ",\"capture_topology_id\":" + quote(capture.topology) + "}";
 }
-static std::string discover(const std::wstring& instance) {
-    driver(instance);
-    Microsoft::WRL::ComPtr<IMMDeviceEnumerator> enumerator;
-    Microsoft::WRL::ComPtr<IMMDevice> defaultRender;
-    check(SUCCEEDED(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, IID_PPV_ARGS(&enumerator))),
-          "audio_fixture_enumerator_unavailable");
-    // Successful PnP installation can precede AudioEndpointBuilder publication on
-    // a fresh guest. Only wait for the documented absent-default result; other
-    // failures and every subsequent driver/topology mismatch refuse immediately.
-    const auto deadline = GetTickCount64() + 15000;
-    HRESULT renderResult{};
-    do {
-        renderResult = enumerator->GetDefaultAudioEndpoint(eRender, eConsole, &defaultRender);
-        if (renderResult != HRESULT_FROM_WIN32(ERROR_NOT_FOUND) || GetTickCount64() >= deadline) break;
-        Sleep(50);
-    } while (true);
-    if (FAILED(renderResult))
-        throw std::runtime_error(renderResult == HRESULT_FROM_WIN32(ERROR_NOT_FOUND) ? "audio_fixture_default_render_publication_timeout" :
-                                 "audio_fixture_default_render_query_failed:hr=" + std::to_string(renderResult));
-    const auto render = inspect(enumerator.Get(), defaultRender.Get(), eRender);
+static std::string discoverPair(const std::wstring& instance, IMMDeviceEnumerator* enumerator, IMMDevice* defaultRender) {
+    const auto render = inspect(enumerator, defaultRender, eRender);
     if (_wcsicmp(render.instance.c_str(), instance.c_str()) != 0)
         throw std::runtime_error("audio_fixture_render_driver_mismatch:actual=" + quote(render.instance));
     Microsoft::WRL::ComPtr<IMMDeviceCollection> devices; UINT count{}, matches{}; Endpoint capture;
@@ -109,11 +92,44 @@ static std::string discover(const std::wstring& instance) {
         Microsoft::WRL::ComPtr<IMMDevice> candidate;
         check(SUCCEEDED(devices->Item(index, &candidate)), "audio_fixture_capture_identity_unavailable");
         if (property(candidate.Get(), PKEY_Device_FriendlyName).find(L"(VB-Audio Virtual Cable)") == std::wstring::npos) continue;
-        auto inspected = inspect(enumerator.Get(), candidate.Get(), eCapture);
+        auto inspected = inspect(enumerator, candidate.Get(), eCapture);
         if (_wcsicmp(inspected.instance.c_str(), instance.c_str()) == 0) { ++matches; capture = inspected; }
     }
     check(matches == 1, "audio_fixture_sole_driver_capture_required");
     return metadata(instance, render, capture);
+}
+static std::string discover(const std::wstring& instance) {
+    Microsoft::WRL::ComPtr<IMMDeviceEnumerator> enumerator;
+    check(SUCCEEDED(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, IID_PPV_ARGS(&enumerator))),
+          "audio_fixture_enumerator_unavailable");
+    // A fresh driver can publish one default before publishing its final default.
+    // This is initial discovery only: freeze no receipt until the complete exact
+    // driver-bound pair is unchanged for two seconds within one 15-second budget.
+    const auto started = GetTickCount64(), deadline = started + 15000;
+    ULONGLONG stableSince{}; std::string previous; unsigned candidates{}, observations{}; size_t traceBytes{};
+    while (true) {
+        driver(instance);
+        Microsoft::WRL::ComPtr<IMMDevice> defaultRender;
+        const HRESULT result = enumerator->GetDefaultAudioEndpoint(eRender, eConsole, &defaultRender);
+        if (result == HRESULT_FROM_WIN32(ERROR_NOT_FOUND)) {
+            previous.clear(); stableSince = 0;
+        } else {
+            if (FAILED(result)) throw std::runtime_error("audio_fixture_default_render_query_failed:hr=" + std::to_string(result));
+            const auto pair = discoverPair(instance, enumerator.Get(), defaultRender.Get());
+            const auto now = GetTickCount64(); ++observations;
+            if (pair != previous) {
+                const auto line = "{\"initial_publication_candidate\":" + pair + ",\"elapsed_ms\":" + std::to_string(now - started) + "}\n";
+                check(++candidates <= 8 && traceBytes + line.size() <= 32768, "audio_fixture_initial_publication_trace_bound");
+                traceBytes += line.size(); std::cerr << line;
+                previous = pair; stableSince = now;
+            } else if (now - stableSince >= 2000 && now <= deadline) {
+                std::cerr << "{\"initial_publication_stable_ms\":" << now - stableSince << ",\"observations\":" << observations << "}\n";
+                return pair;
+            }
+        }
+        check(GetTickCount64() < deadline, "audio_fixture_initial_pair_publication_timeout");
+        Sleep(50);
+    }
 }
 // Five opaque atoms come only from the verified, frozen fixture receipt. An
 // explicit invalid selection refuses; it never falls back to another device.
