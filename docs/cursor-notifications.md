@@ -1,44 +1,37 @@
 # Cursor CLI notifications
 
-Agent Notifications 1.49.1 adds managed Cursor CLI Stop notifications through the public Universal Agent Plugins (UAP) SDK. Install, update, disable and uninstall preserve unrelated hooks. Cursor IDE is a separate product and is not covered by this integration.
+Agent Notifications supports managed Cursor CLI Stop notifications through the public Universal Agent Plugins (UAP) SDK. Install, update, disable and uninstall preserve unrelated hooks. Cursor IDE is a separate product and is not covered by this integration.
+
+The common product selection is available in [platform release v1.49.11](PLATFORM_RELEASE_CHANNELS.md). Earlier platform channels can retain the separate Cursor setup contract from their release notes.
 
 ## Qualified hosts
 
-| Platform | Required Cursor CLI version |
+| Platform | Tested Cursor CLI version |
 | --- | --- |
 | Linux amd64 | `2026.09.28-64d2043` |
 | macOS arm64 | `2026.09.18-9a7762b` |
 | Windows amd64 | `2026.10.01-e373342` |
 
-The installer requires the exact qualified version, an explicit user profile and the actual CLI executable. macOS Intel, Linux arm64, Windows arm64, WSL and other CLI versions are not qualified. Linux also requires the qualified native filesystem identity API; the CI kernel/filesystem evidence does not establish support for every Linux installation. Unsupported hosts stop before activation.
+The installer validates the selected user profile and actual CLI executable; it does not restrict the CLI version. The versions above record historical qualification, not an admission allowlist. macOS Intel, Linux arm64, Windows arm64 and WSL are not qualified. Linux also requires the qualified native filesystem identity API; the CI kernel/filesystem evidence does not establish support for every Linux installation. Unsupported hosts stop before activation.
 
 ## Install or update
 
-Install the matching official Cursor CLI first. Select the user profile whose `hooks.json` Cursor reads; the usual directory is `~/.cursor`. Use the CLI launcher, not the Cursor editor executable.
-
-On macOS arm64 or Linux amd64, with `cursor-agent` available on `PATH`:
+Install the official Cursor CLI first and make its agent launcher available on `PATH`. Run the common installer and select **Cursor CLI**, alone or alongside other agents:
 
 ```bash
-CURSOR_CLI=$(command -v cursor-agent) || exit 1
-CURSOR_PROFILE="$HOME/.cursor"
-(set -o pipefail; curl -fsSL https://agent-notifications.com/install.sh | bash -s -- \
-  --product cursor --scope-root "$CURSOR_PROFILE" \
-  --client-executable "$CURSOR_CLI" --desktop)
+(set -o pipefail; curl -fsSL https://agent-notifications.com/install.sh | bash)
 ```
 
-On Windows amd64, use Git Bash with **native absolute Windows paths**. Replace these examples with the actual profile and official `cursor-agent.cmd` launcher:
+For an explicit combined selection:
 
 ```bash
-CURSOR_CLI='C:/Users/YOUR_USER/AppData/Local/cursor-agent/cursor-agent.cmd'
-CURSOR_PROFILE='C:/Users/YOUR_USER/.cursor'
 (set -o pipefail; curl -fsSL https://agent-notifications.com/install.sh | bash -s -- \
-  --product cursor --scope-root "$CURSOR_PROFILE" \
-  --client-executable "$CURSOR_CLI" --desktop)
+  --products codex,qoder,cursor --desktop)
 ```
 
-Read the installer confirmation and restart Cursor CLI after setup. Cursor must be installed separately; do not combine it with other agents in `--products`. The generic installer menu does not infer a trusted Cursor profile for you.
+Read the common confirmation, including the Cursor profile and CLI path, then restart Cursor CLI after setup. The normal profile is `~/.cursor`, whose `hooks.json` the CLI reads. For another profile, pass `--scope-root` and `--client-executable` together as clean absolute paths; these override discovery for Cursor and do not change sibling agents' profiles. Use the agent CLI launcher rather than the Cursor editor executable. On Windows amd64, run the installer in Git Bash and use native absolute Windows paths for overrides.
 
-Run the same command to update. Omitting channel flags during update preserves saved consent. `--desktop` selects desktop only, `--webhook` selects webhooks only, and both select both channels. Webhooks require a separately configured destination; installing with `--webhook` does not create one. Do not change an existing unrelated hook to point to Agent Notifications manually.
+Run the same command to update. Fresh installs default to desktop on and webhooks off. Omitting channel flags during update preserves saved consent, including both channels off. `--desktop` selects desktop only, `--webhook` selects webhooks only, and both select both channels. `--desktop=false --webhook=false` disables delivery while retaining registration. Webhooks require a separately configured destination; installing with `--webhook` does not create one. Do not change an unrelated hook to point to Agent Notifications manually.
 
 ## Delivery and limits
 
@@ -66,6 +59,6 @@ Pass the exact `--control-root`, `--runtime-root` and `--global-config` paths re
   --client-executable "$CURSOR_CLI" --yes --json
 ```
 
-An empty interactive channel selection cancels setup; it does not disable notifications. Cursor bootstrap does not accept explicit false channel flags; use the wizard command above. An update without channel flags preserves disabled consent. Uninstall removes only owned integration entries and runtime references, preserving foreign hook entries and other clients.
+An empty interactive channel selection cancels setup; it does not disable notifications. An update without channel flags preserves disabled consent. Uninstall removes only owned integration entries and runtime references, preserving foreign hook entries and other clients.
 
 [General installation and prerequisites](INSTALLATION.md) · [Configuration](CONFIGURATION.md) · [Platform release channels](PLATFORM_RELEASE_CHANNELS.md)

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import {
   command,
-  platformReleaseVersion,
+  agentProducts,
   detectTarget,
   products,
   targets,
@@ -10,7 +10,6 @@ import {
   type Target,
   type Intent,
 } from "~/data/install";
-import channelSnapshot from "../../release-channels.tsv?raw";
 const { t } = useI18n();
 const installTitle = ref<HTMLHeadingElement>();
 async function changeIntent(value: Intent) {
@@ -18,9 +17,9 @@ async function changeIntent(value: Intent) {
   await nextTick();
   installTitle.value?.focus({ preventScroll: true });
 }
-const selectedProducts = reactive({ claude: true, codex: false, opencode: false, gemini: false });
+const selectedProducts = reactive({ claude: true, codex: false, opencode: false, gemini: false, qoder: false, cursor: false });
 const selection = computed<AgentProduct[]>(() =>
-  (["claude", "codex", "opencode", "gemini"] as const).filter((value) => selectedProducts[value]),
+  agentProducts.filter((value) => selectedProducts[value]),
 );
 const hasLegacy = computed(() => selectedProducts.claude || selectedProducts.codex);
 function toggleProduct(value: AgentProduct) {
@@ -58,7 +57,6 @@ const agentNotify = ref(true);
 const snippet = computed(() =>
   command(selection.value, target.value, intent.value, agentNotify.value),
 );
-const qualifiedVersion = computed(() => platformReleaseVersion(channelSnapshot, target.value));
 watch(target, (value) => {
   if (value === "unknown" && selectedProducts.gemini) {
     selectedProducts.gemini = false;
@@ -99,9 +97,9 @@ async function copy() {
         {{ t("install.title") }}
       </h2>
       <p>{{ t("install.intro", { agent: agentName }) }}</p>
+      <p v-if="selectedProducts.cursor || selectedProducts.qoder" class="availability-note">{{ t("install.availability") }}</p>
     </header>
 
-    <p v-if="qualifiedVersion" class="install-release-version">{{ t("install.platformRelease", { version: qualifiedVersion, os: osLabel }) }}</p>
     <div
       class="agent-cards"
       role="group"
@@ -200,6 +198,8 @@ async function copy() {
       </p>
       <p v-if="selectedProducts.opencode">{{ t("install.opencode.configure") }}</p>
       <p v-if="selectedProducts.gemini"><a :href="repo + '/blob/main/docs/gemini-notifications.md'">{{ t("install.gemini.guide") }}</a>. {{ t("install.gemini.configure") }}</p>
+      <p v-if="selectedProducts.cursor">{{ t("install.cursor.scope") }} <a :href="repo + '/blob/main/docs/cursor-notifications.md'">{{ t("install.cursor.guide") }}</a></p>
+      <p v-if="selectedProducts.qoder">{{ t("install.qoder.scope") }} <a :href="repo + '/blob/main/docs/QODER.md'">{{ t("install.qoder.guide") }}</a></p>
       <p v-if="hasLegacy">{{ t("install.configure.shared") }}</p>
     </div>
     <div v-else-if="selectedProducts.gemini && target === 'unknown'" class="setup-panel instructions" role="status">
@@ -221,6 +221,8 @@ async function copy() {
       </p>
       <p v-if="selectedProducts.opencode"><a :href="repo + '/blob/main/docs/opencode-notifications.md'">{{ t("install.opencode.guide") }}</a></p>
       <p v-if="selectedProducts.gemini">{{ t("install.gemini.version") }} <a :href="repo + '/blob/main/docs/gemini-notifications.md'">{{ t("install.gemini.guide") }}</a></p>
+      <p v-if="selectedProducts.cursor">{{ t("install.cursor.scope") }} <a :href="repo + '/blob/main/docs/cursor-notifications.md'">{{ t("install.cursor.guide") }}</a></p>
+      <p v-if="selectedProducts.qoder">{{ t("install.qoder.scope") }} <a :href="repo + '/blob/main/docs/QODER.md'">{{ t("install.qoder.guide") }}</a></p>
     </div>
     <div v-else-if="!snippet" class="setup-panel instructions">
       <p>{{ t("install.chooseTarget") }}</p>
@@ -337,6 +339,8 @@ async function copy() {
             </p>
             <p v-if="selectedProducts.opencode">{{ t("install.opencode.restart") }}</p>
             <p v-if="selectedProducts.gemini">{{ t("install.gemini.restart") }}</p>
+            <p v-if="selectedProducts.cursor">{{ t("install.cursor.restart") }}</p>
+            <p v-if="selectedProducts.qoder">{{ t("install.qoder.restart") }}</p>
           </div>
         </article>
       </div>
@@ -380,3 +384,7 @@ async function copy() {
     </footer>
   </section>
 </template>
+
+<style scoped>
+.install-heading .availability-note { margin-top: 12px; font-size: 13px; color: #d6bd8b; }
+</style>

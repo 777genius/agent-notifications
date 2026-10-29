@@ -820,9 +820,10 @@ def run(args):
         require(sys.platform == "darwin" and args.desktop and Path(args.native_app).is_dir(), "Mac_app_with_desktop_required")
     install = test_artifact(args.cli_install_root)
     executable = str(physical(args.gemini_executable))
-    identity = g0.cli_identity(executable, str(install))
+    identity = g0.cli_identity(executable, str(install), args.gemini_version)
     node, shell = physical(args.node_executable), physical(args.hook_shell)
     ui = ui_contract(args.ui_contract, install)
+    g0.qualified_ui(ui, args.gemini_version)
     modules = {}
     for label, value in (("SDK", args.sdk_module_root), ("installer", args.installer_module_root)):
         module = test_artifact(value)
@@ -897,7 +898,7 @@ def run(args):
             evidence["native_version_probe"] = "running"
             code, out, version_err = g0.bounded_process([str(node), executable, "--version"], b"", lab / "profile", env, 60 if os.name == "nt" else 12)
             evidence["native_version_probe"] = g0.version_probe(code, out, version_err, (lab, install, node, node.parent))
-            require(code == 0 and out.strip() == b"0.62.0", "actual_native_version")
+            require(code == 0 and out.strip() == args.gemini_version.encode(), "actual_native_version")
             # Known parser errors/help are checked before installation mutations.
             for tail, expected in (([], 2), (["install", "--help"], 2), (["install", "--AN-TEST-unknown"], 2)):
                 code, out, err = g0.bounded_process([args.binary, "setup-gemini", *tail], b"", lab / "profile", env, 12)
@@ -946,7 +947,7 @@ def run(args):
             # Conservative lower bound on the first bridge's existing watchdog:
             # its actual timer starts later, after Terminal starts the child.
             owned_input_deadline = time.monotonic() + args.timeout
-            terminal = g0.Terminal(node, executable, install, lab, env, ui, args.timeout)
+            terminal = g0.Terminal(node, executable, install, lab, env, ui, args.timeout, args.gemini_version)
             initial_join_active = True
             cases, rows = g0.exercise(lab, fixture, terminal, ui, observer=lambda p: native_rows(g0, p))
             before_remove_counts = settle(g0, lab, fixture, terminal, delivery_counts(rows), cache_baseline=cache_baseline)
@@ -1012,7 +1013,7 @@ def run(args):
             fixture.arm("plain")
             previous = native_rows(g0, lab)
             capture_collection_known = False
-            terminal = g0.Terminal(node, executable, install, lab, env, ui, args.timeout)
+            terminal = g0.Terminal(node, executable, install, lab, env, ui, args.timeout, args.gemini_version)
             end = time.monotonic() + 25
             while time.monotonic() < end:
                 terminal.drain()
@@ -1482,7 +1483,7 @@ class PureChecks(unittest.TestCase):
             def fail_at_boundary(*args):
                 return settle(g0, lab, fixture, terminal, delivery_counts(g0.observations(lab)))
             g0.minimal_env = Mock(side_effect=fail_at_boundary)
-            args = argparse.Namespace(trusted_orchestrator=True, timeout=60, g0_driver=None,
+            args = argparse.Namespace(trusted_orchestrator=True, timeout=60, g0_driver=None, gemini_version="0.62.0",
                 binary=str(artifact), update_binary=None, desktop=False, native_app=None,
                 cli_install_root=root, gemini_executable=str(artifact), node_executable=str(artifact),
                 hook_shell=str(artifact), ui_contract=None, sdk_module_root=root,
@@ -1490,7 +1491,7 @@ class PureChecks(unittest.TestCase):
             _, g0path = load_g0()
             with timer, patch(__name__ + ".load_g0", return_value=(g0, g0path)), \
                     patch(__name__ + ".test_artifact", side_effect=Path), \
-                    patch(__name__ + ".ui_contract", return_value={}), self.assertRaises(Red) as caught:
+                    patch(__name__ + ".ui_contract", return_value={"source_sha256": g0.QUALIFICATION_PINS["0.62.0"][1]}), self.assertRaises(Red) as caught:
                 run(args)
             manifest = read_json(lab / "production-evidence.json")
             self.assertEqual(str(caught.exception), "production_webhook_missing")
@@ -1561,6 +1562,27 @@ class PureChecks(unittest.TestCase):
             data = b"MZ\r\nowned\x1aTEST\x00\r\n"
             path.write_bytes(data)
             self.assertEqual(bounded_read(path), data)
+
+    def test_exact_qualification_identity_and_UI_binding(self):
+        # A newer package, wrong selected endpoint, or mismatched menu source
+        # must fail before a native child can start. This never executes a CLI.
+        g0, _ = load_g0()
+        expected = {"0.62.0": "b460678f3db508407554afd604cc9d6635becb2a",
+                    "0.65.0": "6006c14a4decfe4b891c6263ad6ad5992e404b5b"}
+        # Exercise the endpoint/source and UI contracts directly. Actual native
+        # E2E independently validates the installed package and TEST confinement;
+        # a fake package here would only duplicate that filesystem contract.
+        for version, commit in expected.items():
+            self.assertEqual(g0.qualification_pin(version)[0], commit)
+            other = "0.65.0" if version == "0.62.0" else "0.62.0"
+            filename = "gemini-ui-contract.json" if version == "0.62.0" else "gemini-ui-contract-0.65.0.json"
+            ui = json.loads(Path(__file__).with_name(filename).read_text())
+            g0.qualified_ui(ui, version)
+            with self.assertRaises(g0.Red):
+                g0.qualified_ui(ui, other)
+        for version in ("0.61.0", "0.63.0", "0.66.0", "0.65.0-preview.1", "latest", "^0.65.0"):
+            with self.assertRaises(g0.Red):
+                g0.qualification_pin(version)
 
     def test_public_version_startup_diagnostic(self):
         # Observable break: Intel --version exit 1 had no ERR_/MODULE code;
@@ -1677,6 +1699,7 @@ def main():
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--trusted-orchestrator", action="store_true", help="external trusted runner attestation; never use inside provider sandbox")
     parser.add_argument("--desktop", action="store_true")
+    parser.add_argument("--gemini-version", default="0.62.0", choices=("0.62.0", "0.65.0"))
     parser.add_argument("--timeout", type=int, default=240)
     for flag in ("binary", "update-binary", "native-app", "gemini-executable", "node-executable", "cli-install-root", "lab-root", "hook-shell", "system-root",
                  "ui-contract", "g0-driver", "sdk-module-root", "installer-module-root", "frame-classifier", "cache-join-reader"):

@@ -23,8 +23,8 @@ make preview-installer PREVIEW_ARGS='--gemini-cli /absolute/path/to/gemini'
 This builds the committed source and its real portable package into a private
 reusable TEST cache, then runs the installer with fresh HOME, working directory
 and client profiles. It discovers the actual Claude, Codex, OpenCode and Gemini
-executables before creating the private PATH. Missing CLIs remain absent; an
-unsupported installed version is reported by the real installer. The optional
+executables before creating the private PATH. Missing CLIs remain absent;
+incompatible CLI capabilities are reported by the real installer. The optional
 `--gemini-cli` override selects a real executable for this preview only.
 Native Claude installations use a private local copy of the installed executable
 to avoid launch delays on external disks. SHA256 and the macOS signature are
@@ -64,7 +64,7 @@ Use `--state-dir /path/to/private-TEST-cache` to reuse your own mode-700 cache.
 
 ## Prerequisites
 
-- Install the selected agent CLIs first. OpenCode accepts stable V1 >= 1.18.29 and V2 >= 2.0.0; this does not qualify every version in that range. See [OpenCode setup and limits](opencode-notifications.md), including the stock Windows V1 original-event-age limitation. Gemini requires exactly CLI 0.62.0 on macOS/Linux/Windows; other versions are rejected.
+- Install the selected agent CLIs first. The installer does not impose CLI version minimums, maximums or exact-version allowlists. Tested versions and platform limitations are documented separately in the [OpenCode guide](opencode-notifications.md) and [Gemini guide](gemini-notifications.md).
 - `curl`, Bash, and a working `python3` or `node` on `PATH` for installer metadata and checksum validation. A Windows Store Python stub is not sufficient.
 - Git for Claude marketplace setup, `tar` for Codex bundles, and `unzip` for the macOS desktop helper.
 - **Windows users:** Git Bash (included with [Git for Windows](https://git-scm.com/download/win)). Do not use WSL for a native Windows installation.
@@ -74,7 +74,7 @@ Use `--state-dir /path/to/private-TEST-cache` to reuse your own mode-700 cache.
 
 Prefer a guided setup? [Open the installation guide](https://777genius.github.io/agent-notifications/#install) to choose your agents, OS and task.
 
-The short setup loader handles release lookup and validation internally, then downloads the installer from its qualified immutable source snapshot. Run it and choose Claude, Codex, OpenCode, Gemini CLI, or a combination:
+The short setup loader handles release lookup and validation internally, then downloads the installer from its qualified immutable source snapshot. Run it and choose Claude, Codex, OpenCode, Gemini CLI, Qoder, Cursor CLI, or a combination:
 
 ```bash
 (set -o pipefail; curl -fsSL https://agent-notifications.com/install.sh | bash)
@@ -88,20 +88,22 @@ For automation or terminals without a controlling TTY, choose explicitly and pre
 (set -o pipefail; curl -fsSL https://agent-notifications.com/install.sh | bash -s -- --product codex)
 ```
 
-Use `claude`, `codex`, or `both` for Claude/Codex. For OpenCode, use `--product opencode --desktop`, `--webhook`, or both channel flags to choose channels explicitly. The selected host CLI must already be on `PATH`; this installs notifications only.
+Use `claude`, `codex`, or `both` for Claude/Codex. The other product IDs are `opencode`, `gemini`, `qoder` and `cursor`. The selected host CLI must already be on `PATH`; this installs notifications only. Cursor uses the agent CLI launcher, and supports qualified Linux amd64, macOS arm64 and Windows amd64 hosts; [profile authority and filesystem requirements](cursor-notifications.md) still apply.
 
-You can select any combination of the supported agents in the guided setup. For Claude, Codex and OpenCode, use one loader command:
+The common Cursor/Qoder flow is available in [platform release v1.49.11](PLATFORM_RELEASE_CHANNELS.md). The public loader selects the published channel for the target OS and architecture; editing or copying a command does not upgrade an older channel's capabilities.
+
+Select agents together in the guided setup, or pass one comma-separated list to the common loader:
 
 ```bash
-(set -o pipefail; curl -fsSL https://agent-notifications.com/install.sh | bash -s -- --products claude,codex,opencode --desktop)
+(set -o pipefail; curl -fsSL https://agent-notifications.com/install.sh | bash -s -- --products codex,qoder,cursor --desktop)
 ```
 
-Use `claude,opencode` or `codex,opencode` for two agents. The loader downloads and validates one installer, then runs Claude/Codex setup followed by OpenCode setup. It stops at the first failure; an earlier successful installation remains installed. Fix the reported error and rerun the same command to complete setup.
+The loader downloads and validates one installer, then applies each selected integration through its own lifecycle. UAP manages Qoder's native package and Cursor's qualified Stop observer; shared settings and runtime writes remain coordinated. Cursor keeps its selected CLI and physical profile authority throughout its operation. A client failure can leave successful clients installed; the overall command reports incomplete setup. Follow the saved recovery command for failed activation instead of reinstalling successful clients.
 
-Add `,gemini` to `--products` to include Gemini. `--desktop` and `--webhook` apply to each selected OpenCode/Gemini integration independently; configure webhook URLs separately. The public installer defaults fresh OpenCode/Gemini installations to desktop on and webhooks off, and preserve saved channels on update when flags are omitted. `--skip-agent-notify` applies only to the Claude/Codex notification tool. These flags do not change Claude/Codex notification channels. Single-agent commands and `--product both` remain supported.
+`--desktop` and `--webhook` apply to each selected OpenCode/Gemini/Qoder/Cursor integration, with consent saved independently. `--desktop` selects desktop only, `--webhook` selects webhooks only, and both select both channels. Configure webhook URLs separately. Fresh installs default to desktop on and webhooks off. Updates without channel flags preserve each selected agent's complete saved decision, including both channels off. Use `--desktop=false --webhook=false` to disable those channels explicitly while retaining the integration. `--skip-agent-notify` skips notification-tool setup for selected Claude/Codex clients and skips the selected Cursor integration for this run. Existing registrations and consent remain unchanged; Qoder, OpenCode and Gemini are unaffected. Single-agent commands and `--product both` remain supported.
 
 The installer shows recent safe checkpoints for each selected client above its live
-status. Saved registration remains distinct from completed setup; a timeout or
+status, including its current operation and elapsed waiting time. Saved registration remains distinct from completed setup; a timeout or
 failed activation keeps that distinction visible. The bottom status shows the
 current stage and observed client counts. Resizing reduces history first; very
 small terminals switch to plain output.
@@ -121,6 +123,8 @@ After installation:
 - **Claude:** restart Claude. Optionally run `/claude-notifications-go:settings` to configure sounds.
 - **Codex:** start Codex, run `/hooks`, then review and trust the installed hooks. The installer registers them automatically; no JSON editing or manual registration command is needed. Trust approval remains yours.
 - **Both:** complete both steps above.
+- **Qoder:** install the Qoder CLI and make `qoder` or `qodercli` available on `PATH`, then restart Qoder after installation. [Native setup and limits](QODER.md).
+- **Cursor CLI:** restart the selected agent CLI to load its Stop observer. Cursor IDE is outside this integration. [Qualified hosts and limits](cursor-notifications.md).
 - **Gemini CLI:** restart Gemini to reload its hooks. [Setup and limits](gemini-notifications.md).
 - **OpenCode:** restart OpenCode to load its global plugin. On Mac, explicitly grant notification permission. OpenCode bootstrap requires release v1.46.0 or newer; see [OpenCode setup, channels and limits](opencode-notifications.md).
 
@@ -239,6 +243,36 @@ the session log is bounded to 2 MiB. Read the existing log for details without
 running installation again. `BOOTSTRAP_VERBOSE=1` displays printable diagnostic
 details at the end of a requested install. If logging fails, the installer reports
 that limitation and keeps raw command output out of the default display.
+
+### Restore a pruned Claude cache
+
+The bootstrap installer checks for managed files lost when Claude prunes an old
+versioned plugin cache. If exact recovery is possible, interactive setup offers
+to restore those files before preparing the normal installation plan. Declining
+leaves the installation unchanged. Explicit noninteractive installation performs
+the same repair automatically. Existing files with changed content or permissions
+remain conflicts; repair never overwrites them or resets configuration.
+If the read-only repair preview cannot complete, bootstrap leaves the decision
+to the normal installer's existing validation, reinstall and journal recovery.
+Failures after repair starts stop setup instead of being ignored.
+
+Recovery uses matching owned copies or verified payloads retained outside the
+Claude cache by newer installers. The payloads are optional support, not another
+installation or a policy source. Native application links require the recorded
+native generation to remain intact. An older installation without an exact copy
+or retained payload still requires recovery from a trusted matching package;
+the installer does not bypass its fingerprint check.
+
+To run only this repair, using an installed helper that supports it:
+
+```sh
+claude-notifications setup-products repair-cache
+# Explicit unattended repair, with the same identity checks:
+claude-notifications setup-products repair-cache --yes
+```
+
+This restores the existing integrations. Removing a fully abandoned consumer is
+a separate operation described below.
 
 ### Recover an entirely absent installer consumer
 

@@ -110,13 +110,13 @@ jobs:
           path: source/.task-tools/artifacts/signed
       - name: Record completed owner signing run provenance
         env: {GH_TOKEN: '${{ github.token }}'}
-        run: gh api repos/777genius/agent-notifications/actions/runs/$SIGNING_RUN > source/.task-tools/artifacts/signing-run.json
+        run: gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SIGNING_RUN" > source/.task-tools/artifacts/signing-run.json
       - name: Record current owner custody run and completed build jobs
         env: {GH_TOKEN: '${{ github.token }}'}
         run: |
           set -euo pipefail
-          gh api repos/777genius/agent-notifications/actions/runs/$GITHUB_RUN_ID > source/.task-tools/artifacts/custody-run.json
-          gh api "repos/777genius/agent-notifications/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs?per_page=100" > source/.task-tools/artifacts/custody-jobs.json
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" > source/.task-tools/artifacts/custody-run.json
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs?per_page=100" > source/.task-tools/artifacts/custody-jobs.json
       - name: Rebuild exact self-contained bundle without replacing embedded bytes
         working-directory: source/opencode-plugin
         run: |

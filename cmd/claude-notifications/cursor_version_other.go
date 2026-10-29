@@ -2,12 +2,7 @@
 
 package main
 
-import (
-	"context"
-	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/adapters/clientdetect"
-	"path/filepath"
-)
-
-func probeCursorVersion(ctx context.Context, executable string, environment []string) (string, error) {
-	return clientdetect.NewOS(filepath.Dir(executable)).ProbeVersionWithEnvironment(ctx, executable, environment)
-}
+// Host CLI versions must not gate installation. Test/qualification versions
+// describe evidence, not minimums, maximums or exact-version allowlists.
+// Keep this source-package placeholder so cache overlays replace the historical
+// probe instead of leaving its old implementation in an existing plugin root.

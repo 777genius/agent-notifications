@@ -38,6 +38,7 @@ func installRuntime(args []string, output io.Writer) error {
 	purge := flags.Bool("purge-native", false, "explicitly remove retained callback on final uninstall")
 	printNativePath := flags.Bool("print-native-path", false, "print only the committed durable native generation path")
 	consumer := flags.String("consumer", "claude-hooks", "managed consumer identity")
+	seedEnabled := flags.Bool("seed-enabled-if-absent", false, "initialize absent shared enablement for a confirmed notification install")
 	orphan := flags.Bool("recover-orphan-consumer", false, "recover exactly one entirely absent consumer")
 	redo := flags.Bool("recover-pending", false, "replay the existing pending transaction")
 	rollback := flags.Bool("rollback-pending", false, "reverse the existing pending transaction (does not restore payload)")
@@ -51,6 +52,9 @@ func installRuntime(args []string, output io.Writer) error {
 	}
 	seen := map[string]bool{}
 	flags.Visit(func(f *flag.Flag) { seen[f.Name] = true })
+	if *seedEnabled && (*remove || *refresh || *entry == "" || *control == "") {
+		return fmt.Errorf("enablement seed requires an explicit new runtime installation")
+	}
 	if *orphan || *redo || *rollback {
 		modes := 0
 		for _, enabled := range []bool{*orphan, *redo, *rollback} {
@@ -336,6 +340,20 @@ func installRuntime(args []string, output io.Writer) error {
 		files = append(files, aliases...)
 	}
 	req := installruntime.Request{RefreshOnly: *refresh, RelocateVersionedCache: *relocateCache, ControlRoot: *control, Owner: "existing-installer", RuntimeRoot: filepath.Dir(destination), ConsumerID: *consumer, Files: files, Native: native, RemoveConsumer: *remove, PurgeNative: *purge}
+	seedAfterCommit := false
+	if *seedEnabled {
+		snapshot, err := installruntime.ReadPolicySnapshot(ctx, *control)
+		if err != nil {
+			return err
+		}
+		if snapshot.Installation.Recovery || snapshot.Installation.Ledger.PendingMutation != nil {
+			return installruntime.ErrPolicyRecovery
+		}
+		req.ExpectedGeneration, req.ExpectedPolicy = &snapshot.Installation.Ledger.Generation, &snapshot.Preimage
+		if _, present := snapshot.Fields["enabled"]; !present {
+			seedAfterCommit = true
+		}
+	}
 	if strings.HasSuffix(*entry, ".exe") {
 		hooks := filepath.Join(filepath.Dir(destination), "hooks", "hooks.json")
 		exe := filepath.Join(destination, *entry)
@@ -411,6 +429,13 @@ func installRuntime(args []string, output io.Writer) error {
 		}
 	}
 	ledger, err := installruntime.Commit(ctx, req)
+	if err == nil && seedAfterCommit {
+		// The kernel requires an existing consumer before any policy mutation.
+		// Runtime-only commit preserves policy bytes. Retain the original policy
+		// preimage as well as its returned generation; manual edits need not
+		// advance that generation and must never become our new seed preimage.
+		ledger, err = seedCommittedRuntimeEnablement(ctx, req, ledger)
+	}
 	if err == nil {
 		if !*printNativePath {
 			_, _ = fmt.Fprintf(output, "managed-runtime committed generation=%d\n", ledger.Generation)
@@ -435,6 +460,14 @@ func installRuntime(args []string, output io.Writer) error {
 		}
 	}
 	return err
+}
+
+func seedCommittedRuntimeEnablement(ctx context.Context, runtimeRequest installruntime.Request, committed installruntime.Ledger) (installruntime.Ledger, error) {
+	if runtimeRequest.ExpectedPolicy == nil {
+		return committed, installruntime.ErrPolicyConflict
+	}
+	on := true
+	return installruntime.Commit(ctx, installruntime.Request{ControlRoot: runtimeRequest.ControlRoot, RuntimeRoot: runtimeRequest.RuntimeRoot, Owner: runtimeRequest.Owner, ConsumerID: runtimeRequest.ConsumerID, RefreshOnly: true, PolicyOnly: true, ExpectedGeneration: &committed.Generation, ExpectedPolicy: runtimeRequest.ExpectedPolicy, PolicyEnabled: &on})
 }
 
 func printRuntimeNativePath(output io.Writer, ledger installruntime.Ledger) error {

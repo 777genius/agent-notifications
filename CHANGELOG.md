@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.49.11] - 2026-10-28
+
+### Added
+- Install Cursor CLI and Qoder through the common multi-agent installer with shared runtime coordination and explicit channel consent ([#541](https://github.com/777genius/agent-notifications/pull/541)).
+
+### Fixed
+- Preserve saved notification channels on updates without channel flags and bind Qoder native lifecycle operations to the selected canonical UAP profile ([#541](https://github.com/777genius/agent-notifications/pull/541)).
+- Bind helper capture cleanup to its owning shell so watchdog cleanup cannot remove parent diagnostics ([#542](https://github.com/777genius/agent-notifications/pull/542)).
+
+### Platform notes
+- Cursor CLI and Qoder share the common notification configuration; existing webhook destinations also receive events from these integrations when selected. User-edited or unowned native state is preserved and requires explicit reconciliation.
+- Uses the basic five-platform artifact profile with separate downloaded macOS and Codex checks. This does not claim full native, eleven-cell OpenCode, visible desktop, cold-start, physical Intel or live-provider qualification.
+
+## [1.49.10] - 2026-10-26
+
+### Added
+- Install Qoder from the unified installer with independent desktop/webhook consent. Build the native plugin from the verified release executable, preserve other plugins/settings, and support managed inspection, update and removal.
+- Include Qoder in combined installation commands and localized landing guidance.
+
+### Fixed
+- Install selected clients concurrently on macOS and Linux, coordinate shared runtime and settings writes, and preserve successful clients when another client fails.
+- Use bounded 30-second Claude verification and isolate cleanup-confirmed local timeouts so an unrelated client can finish activating.
+- Show each client's current operation and elapsed wait, retaining saved registration and partial-completion facts after failure or cancellation.
+
+### Validation
+- Native Qoder lifecycle and real-turn qualification are recorded in `docs/handoffs/qoder-native-e2e.md`; synthetic hook tests do not establish native delivery.
+
+## [1.49.9] - 2026-10-26
+
+### Fixed
+- Remove host CLI version admission restrictions for Gemini, OpenCode and Cursor, and remove the Codex inventory version allowlist. Preserve capability, schema, ownership and release-provenance checks; exact versions remain only as reproducible test targets.
+
+## [1.49.8] - 2026-10-26
+
+### Fixed
+- Recover exact managed files lost when Claude prunes a versioned plugin cache still used by other integrations. Retain verified recovery copies outside the cache, preserve foreign edits and settings, and keep existing upgrade and transaction recovery paths.
+- Fail closed when a Ghostty terminal ID no longer identifies the intended terminal ([#520](https://github.com/777genius/agent-notifications/pull/520)).
+
+### Platform notes
+- This release uses the basic five-platform artifact profile with separate downloaded macOS and Codex checks. It does not claim visible desktop, full native, eleven-cell OpenCode, cold-start, physical Intel or live-provider qualification.
+
 ## [1.49.7] - 2026-10-23
 
 ### Fixed

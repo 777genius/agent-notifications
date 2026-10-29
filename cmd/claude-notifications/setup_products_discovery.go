@@ -14,6 +14,7 @@ import (
 	"github.com/777genius/agent-notifications/internal/cursorinstall"
 	"github.com/777genius/agent-notifications/internal/geminiinstall"
 	"github.com/777genius/agent-notifications/internal/installruntime"
+	"github.com/777genius/agent-notifications/internal/qoderinstall"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/adapters/clientdetect"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients/claude"
@@ -36,7 +37,7 @@ type productEnvironment struct {
 }
 
 // Snapshot only profile authorities and PATH. Neither credentials nor content
-// of agent configuration is needed to compose the four existing providers.
+// of agent configuration is needed to compose the existing providers and native Qoder installer.
 func captureProductEnvironment() (productEnvironment, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -47,7 +48,7 @@ func captureProductEnvironment() (productEnvironment, error) {
 		return productEnvironment{}, err
 	}
 	e := productEnvironment{Home: home, PATH: os.Getenv("PATH"), DefaultControlRoot: control, Config: config.SnapshotEnv(), Values: map[string]string{}}
-	for _, key := range []string{"CLAUDE_CONFIG_DIR", "CLAUDE_HOME", "CODEX_HOME", "OPENCODE_CONFIG_DIR", "GEMINI_CLI_HOME", "XDG_CONFIG_HOME", "AGENT_NOTIFICATIONS_CONTROL_ROOT", "PATHEXT", "LOCALAPPDATA", "APPDATA", "ProgramFiles", "ProgramW6432", "ProgramFiles(x86)"} {
+	for _, key := range []string{"CLAUDE_CONFIG_DIR", "CLAUDE_HOME", "CODEX_HOME", "OPENCODE_CONFIG_DIR", "GEMINI_CLI_HOME", "QODER_CONFIG_DIR", "XDG_CONFIG_HOME", "AGENT_NOTIFICATIONS_CONTROL_ROOT", "PATHEXT", "LOCALAPPDATA", "APPDATA", "ProgramFiles", "ProgramW6432", "ProgramFiles(x86)"} {
 		e.Values[key] = os.Getenv(key)
 	}
 	return e, nil
@@ -116,13 +117,31 @@ func productScopes(a setupProductsArgs, e productEnvironment) (map[string]string
 	if err != nil {
 		return nil, err
 	}
-	if profile := a.Scopes["scope-root"]; profile != "" {
+	qoderRoot := a.Scopes["qoder-config-root"]
+	if qoderRoot == "" {
+		qoderRoot = e.Values["QODER_CONFIG_DIR"]
+	}
+	if qoderRoot != "" && !validProductPath(qoderRoot) {
+		return nil, errors.New("invalid Qoder config authority")
+	}
+	scopes["qoder-config-root"], err = qoderinstall.ResolveConfigRoot(qoderinstall.Request{HomeDir: e.Home, ConfigRoot: qoderRoot})
+	if err != nil {
+		return nil, err
+	}
+	profile := a.Scopes["scope-root"]
+	implicitCursor := profile == "" && a.Operation == "select" && !containsProduct(a.Products, "cursor") && !containsProduct(a.Products, "copilot-vscode")
+	if profile == "" && (containsProduct(a.Products, "cursor") || a.Operation == "select") {
+		profile = filepath.Join(e.Home, ".cursor")
+	}
+	if profile != "" {
 		if containsProduct(a.Products, "copilot-vscode") {
 			scopes["scope-root"], err = installruntime.CanonicalPath(profile)
 		} else {
 			scopes["scope-root"], err = cursor.New().ResolveProfileRoot(profile)
 		}
-		if err != nil {
+		if err != nil && implicitCursor {
+			delete(scopes, "scope-root")
+		} else if err != nil {
 			return nil, err
 		}
 	}
@@ -151,7 +170,7 @@ func productScopes(a setupProductsArgs, e productEnvironment) (map[string]string
 	if a.Scopes["claude-config"] != "" || e.Values["CLAUDE_CONFIG_DIR"] != "" {
 		claudeMCPParent = scopes["claude-config"]
 	}
-	for _, key := range []string{"claude-config", "codex-home", "control-root", "opencode-config-dir", "gemini-config-root"} {
+	for _, key := range []string{"claude-config", "codex-home", "control-root", "opencode-config-dir", "gemini-config-root", "qoder-config-root"} {
 		info, err := os.Stat(scopes[key])
 		if err != nil && !os.IsNotExist(err) {
 			return nil, err
@@ -224,6 +243,9 @@ func discoverProductsWithDetector(ctx context.Context, a setupProductsArgs, e pr
 		var err error
 		if p == "" {
 			p, err = lookupProductExecutable(name, e)
+			if name == "qoder" && errors.Is(err, exec.ErrNotFound) {
+				p, err = lookupProductExecutable("qodercli", e)
+			}
 		}
 		if err == nil {
 			p, err = normalizeProductExecutable(p)
@@ -235,13 +257,18 @@ func discoverProductsWithDetector(ctx context.Context, a setupProductsArgs, e pr
 	if err != nil {
 		return nil, nil, err
 	}
-	facts := make([]productFact, 0, 4)
+	facts := make([]productFact, 0, len(productOrder))
 	for _, id := range productOrder {
 		if err := ctx.Err(); err != nil {
 			return nil, nil, err
 		}
 		if id == "copilot-vscode" {
-			f := productFact{ID: id, Label: productLabels[id], Profile: scopes["scope-root"], Executable: scopes["client-executable"]}
+			// Cursor's ambient default is not an explicit Local profile selection.
+			localProfile, localExecutable := scopes["scope-root"], scopes["client-executable"]
+			if a.Scopes["scope-root"] == "" {
+				localProfile, localExecutable = "", ""
+			}
+			f := productFact{ID: id, Label: productLabels[id], Profile: localProfile, Executable: localExecutable}
 			if f.Profile == "" || f.Executable == "" || scopes["local-settings"] != filepath.Join(f.Profile, "settings.json") {
 				f.Reason = "explicit Local profile, settings and executable required"
 			} else {
@@ -263,10 +290,10 @@ func discoverProductsWithDetector(ctx context.Context, a setupProductsArgs, e pr
 			if !f.Selectable {
 				f.Reason = cursorPlatformReason
 			}
-			if scopes["scope-root"] == "" || scopes["client-executable"] == "" {
+			if scopes["scope-root"] == "" {
 				f.Selectable = false
 				if f.Reason == "" {
-					f.Reason = "explicit --scope-root and --client-executable required"
+					f.Reason = "Cursor profile unavailable"
 				}
 			}
 			p := scopes["client-executable"]
@@ -278,6 +305,9 @@ func discoverProductsWithDetector(ctx context.Context, a setupProductsArgs, e pr
 			}
 			if err == nil {
 				f.Present, f.Executable = true, p
+				if scopes["scope-root"] != "" {
+					scopes["client-executable"] = p
+				}
 			} else if f.Reason != cursorPlatformReason {
 				f.Reason = "Cursor agent not found in selected PATH"
 			}
@@ -292,6 +322,8 @@ func discoverProductsWithDetector(ctx context.Context, a setupProductsArgs, e pr
 			key = "codex-home"
 		case "gemini":
 			key = "gemini-config-root"
+		case "qoder":
+			key = "qoder-config-root"
 		}
 		f := productFact{ID: id, Label: productLabels[id], Profile: scopes[key], Selectable: true}
 		if runtime.GOOS != "linux" && runtime.GOOS != "darwin" && runtime.GOOS != "windows" || runtime.GOARCH != "amd64" && runtime.GOARCH != "arm64" || runtime.GOOS == "windows" && runtime.GOARCH == "arm64" {
@@ -311,6 +343,11 @@ func discoverProductsWithDetector(ctx context.Context, a setupProductsArgs, e pr
 					f.Evidence = append(f.Evidence, s.Evidence)
 				}
 			}
+		}
+		// Qoder uses its native hook package and is not an MCP registry client.
+		// Probe only the captured PATH, just like the registered CLI providers.
+		if id == "qoder" {
+			_, _ = detector.LookPath(id)
 		}
 		l := memo[id]
 		if l.err != nil {

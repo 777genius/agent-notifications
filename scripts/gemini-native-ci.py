@@ -173,7 +173,7 @@ def run(args):
         bridge = g0path.with_name("gemini_native_pty.cjs")
         require(bridge.is_file(), "G0_bridge_missing")
         g5path = source(args.g5_driver, "gemini_notifications_e2e.py")
-        uipath = source(args.ui_contract, "gemini-ui-contract.json")
+        uipath = source(args.ui_contract, "gemini-ui-contract.json" if args.gemini_version == "0.62.0" else "gemini-ui-contract-" + args.gemini_version + ".json")
         require(uipath.stat().st_size <= 16384, "UI_size")
         raw_ui = uipath.read_bytes()
         ui = ui_contract(raw_ui)
@@ -182,6 +182,9 @@ def run(args):
         spec = importlib.util.spec_from_file_location("gemini_ci_g0", g0path)
         g0 = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(g0)
+        g0.qualification_pin(args.gemini_version)
+        g0.qualified_ui(ui, args.gemini_version)
+        evidence["qualification_version"] = args.gemini_version
         node, go, git = tool("node"), tool("go"), tool("git")
         shell = Path(args.hook_shell).resolve(strict=True)
         system_root = str(Path(args.system_root).resolve(strict=True)) if args.system_root else None
@@ -317,18 +320,18 @@ def run(args):
         install.mkdir(mode=0o700)
         (install / MARKER).write_text("fresh exact TEST CLI installation\n", encoding="utf-8")
         write_json(install / "package.json", {"name": "an-gemini-test", "private": True,
-                                             "dependencies": {"@google/gemini-cli": "0.62.0"}})
+                                             "dependencies": {"@google/gemini-cli": args.gemini_version}})
         command("npm_exact_CLI", [node, npm, "install", "--prefix", install, "--include=optional", "--no-audit", "--no-fund"], cwd=install)
         shutil.copyfile(install / "package-lock.json", evidence_dir / "npm-package-lock.json")
         package = install / "node_modules/@google/gemini-cli/package.json"
         info = json.loads(package.read_bytes())
         entry = info["bin"] if isinstance(info["bin"], str) else info["bin"]["gemini"]
         executable = (package.parent / entry).resolve(strict=True)
-        evidence["CLI"] = {"physical_path": str(executable), **g0.cli_identity(str(executable), str(install))}
+        evidence["CLI"] = {"physical_path": str(executable), **g0.cli_identity(str(executable), str(install), args.gemini_version)}
         installed_ui = install / "ui-contract.json"
         installed_ui.write_bytes(raw_ui)  # Exact trusted public metadata; no reconstructed menu.
         require(sha(installed_ui) == sha(uipath), "UI_copy_mismatch")
-        common = ["--gemini-executable", executable, "--node-executable", node, "--cli-install-root", install,
+        common = ["--gemini-version", args.gemini_version, "--gemini-executable", executable, "--node-executable", node, "--cli-install-root", install,
                   "--hook-shell", shell, "--ui-contract", installed_ui, "--timeout", "240"]
         if system_root:
             common += ["--system-root", system_root]
@@ -459,6 +462,7 @@ def main():
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--trusted-github-runner", action="store_true")
     parser.add_argument("--g5-only", action="store_true")
+    parser.add_argument("--gemini-version", default="0.62.0", choices=("0.62.0", "0.65.0"))
     for name in ("platform", "arch", "commit", "hook-shell", "system-root", "g0-driver", "g5-driver", "ui-contract"):
         parser.add_argument("--" + name)
     args = parser.parse_args()

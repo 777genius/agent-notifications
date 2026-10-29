@@ -1,0 +1,33 @@
+{
+  "status": "MIGRATION_PASS_NATIVE_ENVIRONMENT_BLOCKED",
+  "candidate_sha256": "5530903ee43731d81da3c21a22015b7c8c8efa3a8e12bda5a89529c251e06287",
+  "candidate_package_sha256": "f55ae2788f227487fc424d7b7b35feacd4bfa2f8ed1f9ddb1651d72757c60731",
+  "stable_tag": "v1.49.8",
+  "stable_release_id": 424253661,
+  "legacy_state_sha256": "7a421c324596799e5e56e8ea9772f9d3a063f77484facf6217fea0b8e3872c3f",
+  "state_migration": {
+    "outcome": "completed",
+    "sourceSchema": 4,
+    "targetSchema": 5,
+    "backupPath": "/tmp/TEST-an-upgrade-fixed-history/TEST-upgrade/uap/state/state-v2.json.schema4.backup-agentplugins-20261027T111944.778045937Z-7a421c324596",
+    "migrated": 1,
+    "needsRebind": 0
+  },
+  "backup_byte_identical": true,
+  "authoritative_schema_after": 5,
+  "native_activation": {
+    "status": "NOT_QUALIFIED",
+    "reason": "verify Claude Code plugin listing: run Claude Code plugin listing: ordinary containment proc prerequisite is unavailable: live task 189035/189043 has no children interface (open /proc/189035/task/189043/children: no such file or directory)"
+  },
+  "user_data": {
+    "settings_local": "{ \"TEST_user_setting\": 9007199254740993 }\n",
+    "config": "{\"schemaVersion\":2,\"notifications\":{\"desktop\":{\"enabled\":false,\"volume\":0.37}},\"future\":{\"canary\":9007199254740993}}\n",
+    "product_data": [
+      [
+        "uap/plugin-data/agent-notify-acdd5909bde1/TEST-user-data.txt",
+        "user-edited plugin data\n"
+      ]
+    ]
+  },
+  "boundary": "Actual native activation and repeat remain required on the hosted Linux runner; this receipt proves real historical4->5 migration and exact backup only."
+}

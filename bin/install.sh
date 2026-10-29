@@ -126,9 +126,18 @@ run_install_helper() (
     # EXIT runs after Bash unwinds function locals on an interrupted wait.
     # This subshell owns the trap state, so assignments cannot leak to callers.
     child="" watchdog="" capture=""
+    helper_run_owner=$BASH_SUBSHELL
+    if [ "${BASHPID+x}" = x ]; then helper_run_owner=$BASHPID; fi
     local status timeout
     capture=$(mktemp -d "${TMPDIR:-${TEMP:-/tmp}}/install-helper.XXXXXX") || exit 1
     cleanup_helper_run() {
+        # Expand the shell identity directly: an inherited early EXIT trap can
+        # observe a stale BASHPID through the value-default expansion operator.
+        if [ "${BASHPID+x}" = x ]; then
+            [ "$helper_run_owner" = "$BASHPID" ] || return 0
+        else
+            [ "$helper_run_owner" = "$BASH_SUBSHELL" ] || return 0
+        fi
         [ -z "$watchdog" ] || kill "$watchdog" 2>/dev/null || true
         [ -z "$child" ] || kill -KILL -- "-$child" 2>/dev/null || true
         [ -z "$watchdog" ] || wait "$watchdog" 2>/dev/null || true

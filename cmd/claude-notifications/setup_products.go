@@ -38,7 +38,7 @@ func runSetupProductsContext(ctx context.Context, args []string, input io.Reader
 		return fail(2, err)
 	}
 	if a.Operation == "capabilities" {
-		if err := writeSelectorResult(ctx, output, "setup-products-v1 claude codex opencode gemini\n"); err != nil {
+		if err := writeSelectorResult(ctx, output, "setup-products-v1 claude codex opencode gemini qoder cursor\n"); err != nil {
 			return fail(1, err)
 		}
 		return 0
@@ -49,7 +49,25 @@ func runSetupProductsContext(ctx context.Context, args []string, input io.Reader
 		}
 		return 0
 	}
-	if a.Operation == "intent-args" || a.Operation == "preflight" {
+	if a.Operation == "repair-capabilities" {
+		if err := writeSelectorResult(ctx, output, "cache-repair-v1\n"); err != nil {
+			return fail(1, err)
+		}
+		return 0
+	}
+	if a.Operation == "migration-capabilities" {
+		if err := writeSelectorResult(ctx, output, "state-migration-v1\n"); err != nil {
+			return fail(1, err)
+		}
+		return 0
+	}
+	if a.Operation == "repair-cache" {
+		if err := repairBootstrapCache(ctx, a, input, output, prompts); err != nil {
+			return fail(1, err)
+		}
+		return 0
+	}
+	if a.Operation == "intent-args" || a.Operation == "preflight" || a.Operation == "migration-apply" {
 		provenance, err := currentSelectorProvenance()
 		if err != nil {
 			return fail(1, err)
@@ -58,9 +76,14 @@ func runSetupProductsContext(ctx context.Context, args []string, input io.Reader
 		if err != nil {
 			return fail(1, err)
 		}
-		if a.Operation == "intent-args" {
+		switch a.Operation {
+		case "intent-args":
 			err = writeIntentScalars(output, intent)
-		} else {
+		case "migration-apply":
+			mutation, cancel := context.WithTimeout(ctx, 3*time.Minute)
+			defer cancel()
+			err = applyBootstrapStateMigration(mutation, intent, output, prompts)
+		case "preflight":
 			checkpoint, cancel := context.WithTimeout(ctx, bootstrapInspectionTimeout)
 			defer cancel()
 			err = runSetupProductsBusy(checkpoint, prompts, setupProductsBusyRich(input, prompts, a.Mode), "Rechecking installation…", func() error {
@@ -108,7 +131,7 @@ func runSetupProductsContext(ctx context.Context, args []string, input io.Reader
 				label := f.Label
 				if f.Present {
 					label += " (CLI present)"
-					if f.ID != "cursor" && f.ID != "copilot-vscode" {
+					if f.ID != "copilot-vscode" {
 						defaults = append(defaults, f.ID)
 					}
 				} else {
@@ -194,7 +217,7 @@ func runSetupProductsContext(ctx context.Context, args []string, input io.Reader
 			return fail(1, err)
 		}
 		if answer.Cancelled || !answer.Accepted {
-			if err := writeSelectorResult(ctx, prompts, "Installation cancelled. No changes were applied.\n"); err != nil {
+			if err := writeSelectorResult(ctx, prompts, "Installation cancelled. No further changes were applied.\n"); err != nil {
 				return fail(1, err)
 			}
 			return 0
@@ -223,7 +246,7 @@ func runSetupProductsContext(ctx context.Context, args []string, input io.Reader
 	if a.Operation == "channels" {
 		products := []string{}
 		for _, id := range a.Products {
-			if id == "opencode" || id == "gemini" || id == "cursor" || id == "copilot-vscode" {
+			if id == "opencode" || id == "gemini" || id == "qoder" || id == "cursor" || id == "copilot-vscode" {
 				products = append(products, productLabels[id])
 			}
 		}
@@ -242,7 +265,7 @@ func runSetupProductsContext(ctx context.Context, args []string, input io.Reader
 		return fail(1, err)
 	}
 	if selection.Cancelled || !selection.Accepted || len(selection.IDs) == 0 {
-		if err := writeSelectorResult(ctx, prompts, "Installation cancelled. No changes were applied.\n"); err != nil {
+		if err := writeSelectorResult(ctx, prompts, "Installation cancelled. No further changes were applied.\n"); err != nil {
 			return fail(1, err)
 		}
 		return 0

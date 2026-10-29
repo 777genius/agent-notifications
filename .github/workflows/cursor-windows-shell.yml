@@ -5,6 +5,7 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+# Installed native qualification and manual runs retain independent evidence and cleanup.
 jobs:
   native-shell:
     runs-on: windows-2025

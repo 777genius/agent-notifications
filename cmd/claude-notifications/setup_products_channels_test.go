@@ -16,7 +16,8 @@ func TestBootstrapObserverChannelDefaults(t *testing.T) {
 		flags                  []string
 		want                   [][2]bool
 	}{
-		{name: "fresh", products: "opencode,gemini", want: [][2]bool{{true, false}, {true, false}}},
+		{name: "fresh", products: "opencode,gemini,qoder", want: [][2]bool{{true, false}, {true, false}, {true, false}}},
+		{name: "qoder-preserves-own-leaf", products: "qoder", policy: `{"openCodeNotifications":{"desktop":true,"webhook":false},"qoderNotifications":{"desktop":false,"webhook":true}}`, want: [][2]bool{{false, true}}},
 		{name: "preserve-independent", products: "opencode,gemini", policy: `{"openCodeNotifications":{"desktop":false,"webhook":false},"geminiNotifications":{"desktop":false,"webhook":true}}`, want: [][2]bool{{false, false}, {false, true}}},
 		{name: "shared-destination-grants-nothing", products: "gemini", policy: `{"openCodeNotifications":{"desktop":false,"webhook":true},"foreign":{"destination":"TEST"}}`, want: [][2]bool{{true, false}}},
 		{name: "explicit-selected-only", products: "opencode", policy: `{"openCodeNotifications":{"desktop":false,"webhook":true},"geminiNotifications":{"desktop":false,"webhook":true}}`, flags: []string{"--desktop"}, want: [][2]bool{{true, false}}},

@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 
+	"github.com/777genius/agent-notifications/install/uapinstaller"
 	"github.com/777genius/agent-notifications/internal/agentnotify/setupwizard"
 	"github.com/777genius/agent-notifications/internal/config"
 	"github.com/777genius/agent-notifications/internal/installruntime"
@@ -23,10 +24,11 @@ type confirmedBootstrapIntent struct {
 	Provenance  selectorProvenance  `json:"provenance"`
 	Request     setupProductsArgs   `json:"request"`
 	// Byte values preserve Unix path bytes through JSON without lossy UTF8 repair.
-	Scopes  map[string][]byte                 `json:"scopes"`
-	Units   []bootstrapProductUnits           `json:"units"`
-	Initial bootstrapInitialObservation       `json:"initial"`
-	MCP     setupwizard.BootstrapMCPSelection `json:"mcp"`
+	Scopes         map[string][]byte                 `json:"scopes"`
+	Units          []bootstrapProductUnits           `json:"units"`
+	Initial        bootstrapInitialObservation       `json:"initial"`
+	MCP            setupwizard.BootstrapMCPSelection `json:"mcp"`
+	StateMigration *uapinstaller.StateMigrationPlan  `json:"stateMigration,omitempty"`
 }
 type bootstrapProductUnits struct {
 	Product                                                   string
@@ -39,7 +41,7 @@ type bootstrapInitialObservation struct {
 	ChannelPolicy   []byte
 }
 
-var intentScalarKeys = []string{"home", "claude-config", "claude-mcp-config", "codex-home", "codex-mcp-config", "opencode-config-dir", "gemini-config-root", "control-root", "runtime-root", "global-config", "claude-executable", "codex-executable", "opencode-executable", "gemini-executable", "scope-root", "client-executable", "local-settings"}
+var intentScalarKeys = []string{"home", "claude-config", "claude-mcp-config", "codex-home", "codex-mcp-config", "opencode-config-dir", "gemini-config-root", "qoder-config-root", "control-root", "runtime-root", "global-config", "claude-executable", "codex-executable", "opencode-executable", "gemini-executable", "qoder-executable", "scope-root", "client-executable", "local-settings"}
 
 func intentWizardRequest(i confirmedBootstrapIntent) setupwizard.Request {
 	scopes := i.Scopes
@@ -124,6 +126,13 @@ func buildConfirmedBootstrapIntent(ctx context.Context, a setupProductsArgs, e p
 		}
 	}
 	r := intentWizardRequest(i)
+	if !a.SkipAgentNotify && len(r.Agents) > 0 {
+		migration, prepareErr := setupwizard.PrepareStateMigration(ctx, r.ControlRoot)
+		if prepareErr != nil {
+			return i, nil, bootstrapStateMigrationError(prepareErr)
+		}
+		i.StateMigration = &migration
+	}
 	// Confirmation observes stored units without granting the selected route.
 	// The direct caller constructs fresh authority before Plan/Run, after the
 	// frozen selection has preserved absent siblings and explicit opt-outs.
@@ -187,7 +196,10 @@ func buildConfirmedBootstrapIntent(ctx context.Context, a setupProductsArgs, e p
 				return i, nil, err
 			}
 		} else if id == "cursor" {
-			u.Desktop, u.Webhook = a.Desktop, a.Webhook
+			u.Desktop, u.Webhook, err = resolveBootstrapChannels(a, id, i.Initial.ChannelPolicy)
+			if err != nil {
+				return i, nil, err
+			}
 		}
 		i.Units = append(i.Units, u)
 	}
@@ -214,6 +226,11 @@ func preflightBootstrapIntent(ctx context.Context, i confirmedBootstrapIntent, a
 	if !reflect.DeepEqual(i.Request, comparable) {
 		return errors.New("intent arguments differ from confirmed request")
 	}
+	if i.StateMigration != nil {
+		if err := setupwizard.CheckStateMigration(ctx, string(i.Scopes["control-root"]), *i.StateMigration); err != nil {
+			return bootstrapStateMigrationError(err)
+		}
+	}
 	root := string(i.Scopes["control-root"])
 	policy, err := installruntime.ReadPolicySnapshot(ctx, root)
 	if err != nil {
@@ -235,7 +252,7 @@ func preflightBootstrapIntent(ctx context.Context, i confirmedBootstrapIntent, a
 		}
 	}
 	for _, key := range intentScalarKeys {
-		if key == "home" || key == "global-config" || key == "claude-mcp-config" || key == "codex-mcp-config" || containsProduct([]string{"claude-executable", "codex-executable", "opencode-executable", "gemini-executable", "client-executable"}, key) {
+		if key == "home" || key == "global-config" || key == "claude-mcp-config" || key == "codex-mcp-config" || containsProduct([]string{"claude-executable", "codex-executable", "opencode-executable", "gemini-executable", "qoder-executable", "client-executable"}, key) {
 			continue
 		}
 		if path := string(i.Scopes[key]); path != "" {
@@ -263,6 +280,9 @@ func preflightBootstrapIntent(ctx context.Context, i confirmedBootstrapIntent, a
 
 func bootstrapIntentSummary(i confirmedBootstrapIntent, policy map[string]json.RawMessage) ([]string, error) {
 	raw := []string{"Installation summary", "", "Components to install"}
+	if m := i.StateMigration; m != nil && m.Required {
+		raw = append(raw, fmt.Sprintf("  Upgrade UAP registry schema %d -> %d before client registration; save an exact backup (%d installation(s)).", m.SourceSchema, m.TargetSchema, m.Installations))
+	}
 	for _, u := range i.Units {
 		parts := []string{}
 		if u.Product == "copilot-vscode" {
@@ -369,10 +389,7 @@ func resolveBootstrapChannels(a setupProductsArgs, product string, raw json.RawM
 	if len(raw) > 0 && (json.Unmarshal(raw, &route) != nil || route == nil) {
 		return false, false, errors.New("invalid observer channel policy")
 	}
-	key := "openCodeNotifications"
-	if product == "gemini" {
-		key = "geminiNotifications"
-	}
+	key := bootstrapObserverChannelKey(product)
 	value, present := route[key]
 	if !present {
 		return true, false, nil
@@ -388,14 +405,14 @@ func resolveBootstrapChannels(a setupProductsArgs, product string, raw json.RawM
 // than the bounded host handoff, and unrelated preferences never drive defaults.
 func selectedBootstrapChannelPolicy(products []string, raw []byte) ([]byte, error) {
 	selected := map[string]json.RawMessage{}
-	if !containsProduct(products, "opencode") && !containsProduct(products, "gemini") {
+	if !containsProduct(products, "opencode") && !containsProduct(products, "gemini") && !containsProduct(products, "qoder") && !containsProduct(products, "cursor") {
 		return nil, nil
 	}
 	var route map[string]json.RawMessage
 	if len(raw) > 0 && (json.Unmarshal(raw, &route) != nil || route == nil) {
 		return nil, errors.New("invalid observer channel policy")
 	}
-	for _, pair := range [][2]string{{"opencode", "openCodeNotifications"}, {"gemini", "geminiNotifications"}} {
+	for _, pair := range [][2]string{{"opencode", "openCodeNotifications"}, {"gemini", "geminiNotifications"}, {"qoder", "qoderNotifications"}, {"cursor", "cursorNotifications"}} {
 		if containsProduct(products, pair[0]) {
 			if leaf, ok := route[pair[1]]; ok {
 				selected[pair[1]] = leaf
@@ -403,4 +420,20 @@ func selectedBootstrapChannelPolicy(products []string, raw []byte) ([]byte, erro
 		}
 	}
 	return json.Marshal(selected)
+}
+
+// Native observer channel leaves share one frozen consent contract.
+func bootstrapObserverChannelKey(product string) string {
+	switch product {
+	case "opencode":
+		return "openCodeNotifications"
+	case "gemini":
+		return "geminiNotifications"
+	case "qoder":
+		return "qoderNotifications"
+	case "cursor":
+		return "cursorNotifications"
+	default:
+		return ""
+	}
 }

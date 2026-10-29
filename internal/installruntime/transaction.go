@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"sort"
 	"strings"
 )
@@ -84,6 +85,8 @@ type transaction struct {
 // Request stages ordinary file bytes before Commit. Prepare runs under the
 // component and config locks, and may only compute adapter-owned JSON changes.
 type Request struct {
+	// cacheRepair is set only by the exact missing-cache repair adapter.
+	cacheRepair bool
 	// OrphanRecovery is an exclusive absence-only metadata transaction.
 	// ExpectedPolicy may additionally fence preview's raw policy observation.
 	OrphanRecovery *OrphanRecoveryRequest
@@ -136,7 +139,12 @@ type Request struct {
 	ExpectedGeneration                          *uint64
 	Files                                       []File
 	ConfigPaths                                 []string
-	Prepare                                     func() ([]File, error)
+	// AdapterConfigPaths excludes external adapter documents from asset
+	// ownership without using the host's own lock filename. ConfigPaths must
+	// supply separate installer coordination identities. Per-file CAS still
+	// detects native edits; these locks do not coordinate native host writers.
+	AdapterConfigPaths []string
+	Prepare            func() ([]File, error)
 	// RecoverOnly replays a pending journal and returns without refresh, install,
 	// or consumer registration. It does not require owner/runtime/package.
 	RecoverOnly bool
@@ -236,6 +244,61 @@ func pathWithinRoot(root, path string) bool {
 	return err == nil && relative != "." && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
 }
 
+func validateAdapterConfigPaths(r Request, control string, l Ledger) (map[string]bool, error) {
+	result := map[string]bool{}
+	if len(r.AdapterConfigPaths) == 0 {
+		return result, nil
+	}
+	protected := []string{control, r.RuntimeRoot, l.RuntimeRoot}
+	for _, consumer := range l.Consumers {
+		protected = append(protected, consumer.RuntimeRoot)
+	}
+	if l.Native != nil {
+		protected = append(protected, l.Native.Path, l.Native.PreviousPath)
+		for _, generation := range l.Native.Published {
+			protected = append(protected, generation.Path)
+		}
+	}
+	if r.Native != nil {
+		protected = append(protected, r.Native.After.Path, r.Native.Before.Path)
+	}
+	for _, path := range r.AdapterConfigPaths {
+		physical, err := CanonicalPath(path)
+		if err != nil || !filepath.IsAbs(path) || physical != path || result[path] {
+			return nil, fmt.Errorf("adapter document requires a unique absolute canonical path")
+		}
+		if _, owned := OwnedFile(l, path); owned {
+			return nil, fmt.Errorf("adapter document cannot de-own a managed asset")
+		}
+		comparison := path
+		if runtime.GOOS == "darwin" || runtime.GOOS == "windows" {
+			comparison = strings.ToLower(path)
+			for owned := range l.Files {
+				if strings.EqualFold(owned, path) {
+					return nil, fmt.Errorf("adapter document aliases a managed asset")
+				}
+			}
+		}
+		for _, root := range protected {
+			if root == "" {
+				continue
+			}
+			canonical, err := CanonicalPath(root)
+			if err != nil {
+				return nil, err
+			}
+			if runtime.GOOS == "darwin" || runtime.GOOS == "windows" {
+				canonical = strings.ToLower(canonical)
+			}
+			if comparison == canonical || pathWithinRoot(canonical, comparison) {
+				return nil, fmt.Errorf("adapter document overlaps managed control, runtime or native assets")
+			}
+		}
+		result[path] = true
+	}
+	return result, nil
+}
+
 // A shared binding keeps executing its recorded primary under the previous
 // cache root until its own binding migration changes that locator. Publish the
 // same verified sender there in the relocation transaction, or refuse the move
@@ -318,6 +381,9 @@ func retainedPortablePrimaryFiles(l Ledger, oldRoot, newRoot, movingID string, s
 // order. The durable redo record precedes every live mutation. Recovery checks
 // every identity before changing anything and refuses ambiguous foreign edits.
 func Commit(ctx context.Context, r Request) (result Ledger, resultErr error) {
+	if len(r.AdapterConfigPaths) > 0 && (len(r.ConfigPaths) == 0 || r.PolicyOnly || r.OrphanRecovery != nil || r.cacheRepair || r.Reservation != nil || r.ClearReservation || r.RecoverOnly || r.RollbackPending || r.RetireNative) {
+		return Ledger{}, fmt.Errorf("adapter documents require an ordinary transaction with explicit coordination locks")
+	}
 	if r.OrphanRecovery != nil {
 		return commitOrphan(ctx, r)
 	}
@@ -395,7 +461,7 @@ func Commit(ctx context.Context, r Request) (result Ledger, resultErr error) {
 		}
 	}
 	lockComponent := Lock
-	if r.PolicyOnly || orphanPending {
+	if r.PolicyOnly || orphanPending || r.cacheRepair {
 		lockComponent = LockExisting
 	}
 	unlock, err := lockComponent(ctx, filepath.Join(root, ".component-install.lock"))
@@ -430,7 +496,7 @@ func Commit(ctx context.Context, r Request) (result Ledger, resultErr error) {
 		}
 	}
 	if readErr == nil {
-		if r.PolicyOnly {
+		if r.PolicyOnly || r.cacheRepair {
 			return Ledger{}, ErrPolicyRecovery
 		}
 		paths = append(paths, pending.ConfigPaths...)
@@ -453,7 +519,7 @@ func Commit(ctx context.Context, r Request) (result Ledger, resultErr error) {
 			continue
 		}
 		lockConfig := Lock
-		if (r.PolicyOnly || orphanPending) && p == policyPath {
+		if (r.PolicyOnly || orphanPending || r.cacheRepair) && p == policyPath {
 			lockConfig = LockExisting
 		}
 		release, e := lockConfig(ctx, p+".lock")
@@ -463,6 +529,10 @@ func Commit(ctx context.Context, r Request) (result Ledger, resultErr error) {
 		defer release()
 	}
 	l, err := readLedger(root)
+	if err != nil {
+		return l, err
+	}
+	adapterConfigs, err := validateAdapterConfigPaths(r, root, l)
 	if err != nil {
 		return l, err
 	}
@@ -940,6 +1010,12 @@ func Commit(ctx context.Context, r Request) (result Ledger, resultErr error) {
 				config = true
 			}
 		}
+		if adapterConfigs[f.Path] {
+			if f.Link != "" {
+				return l, fmt.Errorf("adapter document cannot be a symbolic link")
+			}
+			config = true
+		}
 		if !config {
 			if f.Remove {
 				delete(next.Files, f.Path)
@@ -984,6 +1060,7 @@ func Commit(ctx context.Context, r Request) (result Ledger, resultErr error) {
 		}
 	}
 	journalAttempted = true
+	retainCacheRepairPayloads(root, tx.After, tx.Files)
 	if err := writeTransaction(marker, tx); err != nil {
 		return l, err
 	}
@@ -1178,6 +1255,7 @@ func recoverTransaction(ctx context.Context, root string, current Ledger, tx tra
 	if err := discardTransactionBlobs(filepath.Join(root, "transaction.json")); err != nil {
 		return err
 	}
+	pruneCacheRepairPayloads(root, after)
 	return syncDir(root)
 }
 

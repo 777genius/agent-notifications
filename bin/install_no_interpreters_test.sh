@@ -108,6 +108,16 @@ list_process_pairs() {
     case "$diagnostic" in *SECRET-CANARY*|*"$AGENT_NOTIFICATIONS_CONFIG"*) exit 1 ;; esac
     case "$diagnostic" in *ConfigInvalid*) ;; *) exit 1 ;; esac
     unset LEAK
+    # A helper/watchdog subshell can inherit cleanup before installing its own
+    # traps. It must never delete or reap resources owned by the runner.
+    foreign_cleanup_helper() {
+        cleanup_helper_run
+        printf 'SECRET-CANARY\nConfigInvalid\n' >&2
+        return 1
+    }
+    diagnostic=$(run_install_helper foreign_cleanup_helper 2>&1 || true)
+    [ "$diagnostic" = ConfigInvalid ]
+    for capture in "$TMPDIR"/install-helper.*; do [ ! -e "$capture" ]; done
     export HANG=1 CHILD_PID_FILE="$box/helper-child.pid" INSTALL_HELPER_TIMEOUT_SECONDS=1
     if install_config_preflight "$EXPECTED_TARGET"; then exit 1; else [ "$?" = 2 ]; fi
     child=$(cat "$CHILD_PID_FILE")

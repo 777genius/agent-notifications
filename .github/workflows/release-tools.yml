@@ -1,12 +1,17 @@
 name: Release tooling contracts
 on:
   pull_request:
-    paths: ['scripts/release-*', 'scripts/basic-release-assets*', 'scripts/basic-release-assets/**', 'scripts/testdata/release-public-verify/**', 'scripts/testdata/release-canary/**', 'tools/ci_release_scope*', 'tools/ci_native_evidence*', 'tools/ci_ubuntu_*', 'tools/ci_windows_shards*', 'scripts/release-artifact-e2e.py', 'scripts/ci-ubuntu-go-shard.sh', 'docs/RELEASE.md', 'docs/RELEASE_SPEED.md', 'scripts/codex-offline-release-smoke/**', 'scripts/codex-release-gate*', 'scripts/stage-released-loader*', '.github/workflows/basic-release.yml', '.github/workflows/release-tools.yml', 'Makefile']
+    paths: ['scripts/release-*', 'scripts/basic-release-assets*', 'scripts/basic-release-assets/**', 'scripts/testdata/release-public-verify/**', 'scripts/testdata/release-canary/**', 'tools/ci_release_scope*', 'tools/ci_native_evidence*', 'tools/ci_ubuntu_*', 'tools/ci_windows_shards*', 'scripts/release-artifact-e2e.py', 'scripts/ci-ubuntu-go-shard.sh', 'docs/RELEASE.md', 'docs/RELEASE_SPEED.md', 'scripts/codex-offline-release-smoke/**', 'scripts/codex-release-gate*', 'scripts/stage-released-loader*', '.github/workflows/basic-release.yml', '.github/workflows/unified-release.yml', '.github/workflows/macos-qualification.yml', '.github/workflows/notifier-signing-smoke.yml', '.github/workflows/macos-release-lifecycle.yml', '.github/workflows/navigation-windows-*.yml', '.github/workflows/release-tools.yml', '.github/actionlint.yaml', 'Makefile']
   push:
     branches: [main]
-    paths: ['scripts/release-*', 'scripts/basic-release-assets*', 'scripts/basic-release-assets/**', 'scripts/testdata/release-public-verify/**', 'scripts/testdata/release-canary/**', 'tools/ci_release_scope*', 'tools/ci_native_evidence*', 'tools/ci_ubuntu_*', 'tools/ci_windows_shards*', 'scripts/release-artifact-e2e.py', 'scripts/ci-ubuntu-go-shard.sh', 'docs/RELEASE.md', 'docs/RELEASE_SPEED.md', 'scripts/codex-offline-release-smoke/**', 'scripts/codex-release-gate*', 'scripts/stage-released-loader*', '.github/workflows/basic-release.yml', '.github/workflows/release-tools.yml', 'Makefile']
+    paths: ['scripts/release-*', 'scripts/basic-release-assets*', 'scripts/basic-release-assets/**', 'scripts/testdata/release-public-verify/**', 'scripts/testdata/release-canary/**', 'tools/ci_release_scope*', 'tools/ci_native_evidence*', 'tools/ci_ubuntu_*', 'tools/ci_windows_shards*', 'scripts/release-artifact-e2e.py', 'scripts/ci-ubuntu-go-shard.sh', 'docs/RELEASE.md', 'docs/RELEASE_SPEED.md', 'scripts/codex-offline-release-smoke/**', 'scripts/codex-release-gate*', 'scripts/stage-released-loader*', '.github/workflows/basic-release.yml', '.github/workflows/unified-release.yml', '.github/workflows/macos-qualification.yml', '.github/workflows/notifier-signing-smoke.yml', '.github/workflows/macos-release-lifecycle.yml', '.github/workflows/navigation-windows-*.yml', '.github/workflows/release-tools.yml', '.github/actionlint.yaml', 'Makefile']
 permissions:
   contents: read
+# Supersede PR checks; retain each main push as exact-source release evidence.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   contracts:
     name: Release tooling contracts

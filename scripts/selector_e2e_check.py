@@ -5,6 +5,9 @@ from pathlib import Path
 import sys
 
 REQUIRED = {
+    "TestBootstrapPublicQoderConsentAndDispatch",
+    "TestBootstrapPublicQoderConsentAndDispatch/cancel",
+    "TestBootstrapPublicQoderConsentAndDispatch/approve",
     "TestSetupProductsScopedPresence",
     "TestBootstrapSelectorPTY",
     "TestBootstrapSelectionDoesNotApproveConsent",
@@ -14,6 +17,9 @@ REQUIRED = {
     "TestBootstrapPartialProgress",
     "TestBootstrapNormalizedRouteConsent",
     "TestBootstrapPendingJSON",
+    "TestBootstrapRepairsPrunedSharedCacheBeforeConfirmation",
+    "TestBootstrapRepairsPrunedSharedCacheBeforeConfirmation/n",
+    "TestBootstrapRepairsPrunedSharedCacheBeforeConfirmation/y",
     "TestBootstrapStaleSelectedFacts/last-binding-or-keep-off-before-first-effect",
     "TestBootstrapStaleSelectedFacts/own-hooks-generation-then-portable-admission",
     "TestBootstrapStaleSelectedFacts/unchanged-projection-own-generation-success",

@@ -4,9 +4,10 @@ go 1.25.8
 
 require (
 	github.com/777genius/plugin-kit-ai/cli v0.0.0-20261009180127-66c4943e0c83
-	github.com/777genius/plugin-kit-ai/install/integrationctl v0.1.1-0.20261011092622-35e444fdf875
-	github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins v0.0.0-20261012092440-dd4bf1847ea1
+	github.com/777genius/plugin-kit-ai/install/integrationctl v0.1.1-0.20261028104641-21497bb2e441
+	github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins v0.0.0-20261028104641-21497bb2e441
 	github.com/777genius/plugin-kit-ai/sdk v1.3.0
+	github.com/charmbracelet/x/term v0.2.2
 	github.com/creack/pty v1.1.24
 	github.com/esiqveland/notify v0.14.0
 	github.com/gen2brain/beeep v0.11.2
@@ -35,11 +36,11 @@ require (
 	github.com/charmbracelet/x/ansi v0.11.6 // indirect
 	github.com/charmbracelet/x/exp/ordered v0.1.0 // indirect
 	github.com/charmbracelet/x/exp/strings v0.0.0-20240722160745-212f7b056ed0 // indirect
-	github.com/charmbracelet/x/term v0.2.2 // indirect
 	github.com/charmbracelet/x/termios v0.1.1 // indirect
 	github.com/charmbracelet/x/windows v0.2.2 // indirect
 	github.com/clipperhouse/displaywidth v0.11.0 // indirect
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
+	github.com/creachadair/tomledit v0.0.29 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/dlclark/regexp2 v1.12.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect

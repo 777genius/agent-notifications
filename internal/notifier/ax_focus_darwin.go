@@ -376,9 +376,9 @@ func retryWindowFocusWithDelays(fn func() int, delays []time.Duration, sleep fun
 }
 
 // FocusAppWindow raises the window matching cwd for the given bundleID app.
-// For Ghostty: first tries an exact terminal ID match when available, then
-// falls back to exact AppleScript cwd matching, then finally AXDocument
-// (OSC 7 file:// URL) if Automation is unavailable or no exact match is found.
+// For Ghostty: when a terminal ID is available, focuses only that terminal and
+// fails closed if it is gone. Otherwise uses exact AppleScript cwd matching, then
+// finally AXDocument (OSC 7 file:// URL) if Automation is unavailable or no exact match is found.
 // For other apps: uses CGS to find the window across Spaces then raises via AXTitle. macOS only.
 func FocusAppWindow(bundleID, cwd string) error {
 	return FocusAppWindowWithOptions(bundleID, cwd, FocusWindowOptions{})
@@ -465,6 +465,9 @@ func focusGhosttyWindowWithOptions(
 ) error {
 	if err := exactFocus(cwd, opts); err == nil {
 		return nil
+	} else if strings.TrimSpace(opts.GhosttyTerminalID) != "" {
+		// A stale terminal ID must not degrade into focusing an unrelated same-cwd tab.
+		return err
 	} else {
 		logging.Debug("Ghostty exact tab focus unavailable, falling back to AXDocument: %v", err)
 	}
@@ -473,11 +476,7 @@ func focusGhosttyWindowWithOptions(
 
 func tryGhosttyExactFocus(cwd string, opts FocusWindowOptions) error {
 	if terminalID := strings.TrimSpace(opts.GhosttyTerminalID); terminalID != "" {
-		if err := ghosttyAppleScriptIDRunner(terminalID); err == nil {
-			return nil
-		} else {
-			logging.Debug("Ghostty terminal-id focus failed for %s, falling back to cwd match: %v", terminalID, err)
-		}
+		return ghosttyAppleScriptIDRunner(terminalID)
 	}
 
 	return tryGhosttyAppleScriptFocus(cwd)
@@ -612,7 +611,14 @@ end normalizePath
 
 on focusMatchingTerminal(searchPaths)
 	tell application "Ghostty"
-		set allTerminals to terminals
+		set allTerminals to {}
+		repeat with w in windows
+			repeat with tb in tabs of w
+				repeat with t in (terminals of tb)
+					set end of allTerminals to contents of t
+				end repeat
+			end repeat
+		end repeat
 		repeat with candidate in searchPaths
 			set normalizedCandidate to my normalizePath(contents of candidate)
 			set matchCount to 0
@@ -628,6 +634,7 @@ on focusMatchingTerminal(searchPaths)
 			end repeat
 			if matchCount is 1 then
 				focus matchedTerminal
+				activate
 				return true
 			end if
 			if matchCount is greater than 1 then
@@ -655,13 +662,18 @@ on run argv
 	set wantedID to item 1 of argv
 
 	tell application "Ghostty"
-		repeat with t in terminals
-			try
-				if (id of t as string) is wantedID then
-					focus t
-					return
-				end if
-			end try
+		repeat with w in windows
+			repeat with tb in tabs of w
+				repeat with t in (terminals of tb)
+					try
+						if (id of t as string) is wantedID then
+							focus t
+							activate
+							return
+						end if
+					end try
+				end repeat
+			end repeat
 		end repeat
 	end tell
 

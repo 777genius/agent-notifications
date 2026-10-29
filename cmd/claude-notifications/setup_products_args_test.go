@@ -23,6 +23,8 @@ func TestSetupProductsNormalizedArguments(t *testing.T) {
 		{"partial-route", []string{"confirm", "--products", "claude", "--navigation", "none"}, false},
 		{"duplicate-route", []string{"confirm", "--products", "claude", "--preserve-policy", "--preserve-policy"}, false},
 		{"skip-route", []string{"confirm", "--products", "claude", "--skip-agent-notify", "--request-permission"}, false},
+		{"qoder-no-mcp", []string{"confirm", "--products", "qoder", "--agent-notify"}, false},
+		{"qoder-channels", []string{"channels", "--products", "qoder"}, true},
 		{"observers-mcp", []string{"confirm", "--products", "gemini", "--webhook", "--agent-notify"}, false},
 		{"portable-channels", []string{"confirm", "--products", "codex", "--desktop"}, false},
 		{"observer-default-channels", []string{"confirm", "--products", "opencode"}, true},
@@ -62,7 +64,7 @@ func TestSetupProductsCursorSelection(t *testing.T) {
 		{"cursor", []string{"--webhook"}, true},
 		{"cursor", []string{"--desktop", "--webhook"}, true},
 		{"cursor", []string{"--navigation", "none"}, false},
-		{"claude,cursor", nil, false}, {"claude,codex", nil, true},
+		{"claude,cursor", nil, true}, {"claude,codex", nil, true},
 	} {
 		args := append([]string{"confirm", "--products", tc.products}, tc.extra...)
 		if tc.products == "cursor" {
@@ -86,8 +88,8 @@ func TestCursorChannelQuestionRequiresOnlySingleSelection(t *testing.T) {
 			t.Fatalf("%v: %v", args, err)
 		}
 	}
-	if _, err := parseSetupProducts([]string{"confirm", "--products", "cursor", "--desktop"}); err == nil {
-		t.Fatal("native choice bypassed explicit profile/executable")
+	if _, err := parseSetupProducts([]string{"confirm", "--products", "cursor", "--desktop"}); err != nil {
+		t.Fatal("default Cursor discovery was rejected", err)
 	}
 }
 

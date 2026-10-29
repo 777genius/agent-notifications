@@ -387,7 +387,7 @@ def verify_origin():
     run, candidate, archive = bindings()
     matrix = recovery_matrix()
     repository = os.environ.get('GITHUB_REPOSITORY', '')
-    require(repository == '777genius/agent-notifications', 'release_repository_required')
+    require(repository in ('777genius/agent-notifications', 'universal-agent-plugins/agent-notifications'), 'release_repository_required')
     base = f'repos/{repository}/actions/runs/{run}'
     origin = github_json(base)
     require(str(origin['id']) == run and origin['head_sha'] == candidate and

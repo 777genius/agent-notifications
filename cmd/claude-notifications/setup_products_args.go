@@ -7,9 +7,9 @@ import (
 	"strings"
 )
 
-var productOrder = []string{"claude", "codex", "opencode", "gemini", "cursor", "copilot-vscode"}
-var productLabels = map[string]string{"claude": "Claude", "codex": "Codex", "opencode": "OpenCode", "gemini": "Gemini CLI", "cursor": "Cursor CLI (explicit profile)", "copilot-vscode": "VS Code Local (explicit profile)"}
-var scopeKeys = []string{"claude-config", "codex-home", "opencode-config-dir", "gemini-home", "gemini-config-root", "claude-executable", "codex-executable", "opencode-executable", "gemini-executable", "control-root", "scope-root", "client-executable", "local-settings"}
+var productOrder = []string{"claude", "codex", "opencode", "gemini", "qoder", "cursor", "copilot-vscode"}
+var productLabels = map[string]string{"claude": "Claude", "codex": "Codex", "opencode": "OpenCode", "gemini": "Gemini CLI", "qoder": "Qoder", "cursor": "Cursor CLI", "copilot-vscode": "VS Code Local (explicit profile)"}
+var scopeKeys = []string{"claude-config", "codex-home", "opencode-config-dir", "gemini-home", "gemini-config-root", "qoder-config-root", "claude-executable", "codex-executable", "opencode-executable", "gemini-executable", "qoder-executable", "control-root", "scope-root", "client-executable", "local-settings"}
 
 type setupProductsArgs struct {
 	Operation, Mode, IntentFile                    string
@@ -20,6 +20,9 @@ type setupProductsArgs struct {
 	LocalNativeStop, LocalMCP, LocalSkills, Manual *bool
 	Configure                                      notificationConfigureRequest
 	ConfigureArgs                                  []string
+
+	// Recovery switches never enter a confirmed installation intent.
+	RepairApproved, BootstrapCacheRepair bool `json:"-"`
 }
 
 func parseSetupProducts(args []string) (r setupProductsArgs, err error) {
@@ -31,12 +34,12 @@ func parseSetupProducts(args []string) (r setupProductsArgs, err error) {
 	}
 	r.Operation = args[0]
 	switch r.Operation {
-	case "capabilities", "features":
+	case "capabilities", "features", "repair-capabilities", "migration-capabilities":
 		if len(args) != 1 {
 			return invalid()
 		}
 		return r, nil
-	case "select", "channels", "confirm", "prepare", "intent-args", "preflight":
+	case "select", "channels", "confirm", "prepare", "intent-args", "preflight", "migration-apply", "repair-cache":
 	default:
 		return invalid()
 	}
@@ -53,7 +56,7 @@ func parseSetupProducts(args []string) (r setupProductsArgs, err error) {
 		if !strings.HasPrefix(raw, "--") {
 			return invalid()
 		}
-		boolean := key == "plain" || key == "desktop" || key == "webhook" || key == "agent-notify" || key == "skip-agent-notify" || key == "preserve-policy" || key == "request-permission"
+		boolean := key == "plain" || key == "yes" || key == "bootstrap" || key == "desktop" || key == "webhook" || key == "agent-notify" || key == "skip-agent-notify" || key == "preserve-policy" || key == "request-permission"
 		if boolean {
 			if inline && (key != "desktop" && key != "webhook" || value != "true" && value != "false") {
 				return invalid()
@@ -84,6 +87,10 @@ func parseSetupProducts(args []string) (r setupProductsArgs, err error) {
 		}
 		seen[key] = true
 		switch key {
+		case "bootstrap":
+			r.BootstrapCacheRepair = true
+		case "yes":
+			r.RepairApproved = true
 		case "local-native-stop", "local-mcp", "local-skills", "manual":
 			on, e := parseBoolFlag(value)
 			if e != nil {
@@ -130,6 +137,17 @@ func parseSetupProducts(args []string) (r setupProductsArgs, err error) {
 			r.Scopes[key] = value
 		}
 	}
+	if r.Operation == "repair-cache" {
+		for key := range seen {
+			if key != "yes" && key != "control-root" && key != "bootstrap" {
+				return invalid()
+			}
+		}
+		return r, nil
+	}
+	if r.RepairApproved || r.BootstrapCacheRepair {
+		return invalid()
+	}
 	if r.AgentNotify && r.SkipAgentNotify || (r.Scopes["scope-root"] == "") != (r.Scopes["client-executable"] == "") {
 		return invalid()
 	}
@@ -139,7 +157,7 @@ func parseSetupProducts(args []string) (r setupProductsArgs, err error) {
 		}
 		return r, nil
 	}
-	if r.Operation == "intent-args" {
+	if r.Operation == "intent-args" || r.Operation == "migration-apply" {
 		if r.IntentFile == "" || len(seen) != 1 || modeSeen {
 			return invalid()
 		}
@@ -165,24 +183,7 @@ func parseSetupProducts(args []string) (r setupProductsArgs, err error) {
 	if r.LocalNativeStop != nil || r.LocalMCP != nil || r.LocalSkills != nil || r.Manual != nil || r.Scopes["local-settings"] != "" {
 		return invalid()
 	}
-	if containsProduct(r.Products, "cursor") {
-		for _, raw := range args {
-			if strings.HasPrefix(raw, "--desktop=") || strings.HasPrefix(raw, "--webhook=") {
-				return invalid()
-			}
-		}
-		// Cursor is one existing selected wizard operation; the two-client
-		// Claude/Codex group and their policy configuration keep their meaning.
-		if len(r.Products) != 1 || routePresent || (r.Operation == "channels" && (len(seen) != 1 || r.IntentFile != "")) ||
-			((r.Operation == "confirm" || r.Operation == "prepare") && (r.Scopes["scope-root"] == "" || r.Scopes["client-executable"] == "")) {
-			return invalid()
-		}
-		if r.Operation == "preflight" && (r.IntentFile == "" || len(r.Scopes) > 0 || modeSeen) {
-			return invalid()
-		}
-		return r, nil
-	}
-	if r.Scopes["scope-root"] != "" || r.Scopes["client-executable"] != "" {
+	if !containsProduct(r.Products, "cursor") && (r.Scopes["scope-root"] != "" || r.Scopes["client-executable"] != "") {
 		return invalid()
 	}
 	portable, observer := false, false
@@ -204,7 +205,7 @@ func parseSetupProducts(args []string) (r setupProductsArgs, err error) {
 			return invalid()
 		}
 	}
-	if (!portable && (routePresent || r.AgentNotify || r.SkipAgentNotify)) || (!observer && (r.DesktopSet || r.WebhookSet)) || (r.SkipAgentNotify && routePresent) {
+	if (!portable && routePresent || !portable && !containsProduct(r.Products, "cursor") && (r.AgentNotify || r.SkipAgentNotify)) || (!observer && (r.DesktopSet || r.WebhookSet)) || (r.SkipAgentNotify && routePresent) {
 		return invalid()
 	}
 	if portable && !r.SkipAgentNotify {

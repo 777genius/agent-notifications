@@ -13,10 +13,11 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, labeled, unlabeled, ready_for_review, edited]
 
-# Only a newer run for the same PR supersedes its checks.
+# PR/develop checks are replaceable; main runs retain exact-source release evidence.
+# Manual diagnostics and metadata-only edits keep independent groups.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null) && github.run_id || github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' && !(github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null)) }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null) && github.run_id || github.event.pull_request.number || github.event_name == 'push' && github.ref == 'refs/heads/develop' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/develop') || github.event_name == 'pull_request' && !(github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null)) }}
 
 jobs:
   # Body/title edits create no canonical check names and cannot cancel full CI.
@@ -29,12 +30,32 @@ jobs:
       contents: read
       actions: read
     outputs:
-      mode: ${{ steps.release-scope.outputs.mode || steps.classify.outputs.mode }}
+      mode: ${{ github.event_name == 'pull_request' && github.event.action == 'edited' && github.event.changes.base != null && 'full' || steps.release-scope.outputs.mode || steps.classify.outputs.mode }}
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.action == 'edited' && github.event.changes.base != null && github.event.pull_request.head.sha || '' }}
           fetch-depth: 0
           persist-credentials: false
+      - &qualify_base_edit
+        name: Qualify exact changed-base source
+        if: ${{ github.event_name == 'pull_request' && github.event.action == 'edited' && github.event.changes.base != null }}
+        shell: bash
+        env:
+          CI_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          CI_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          CI_PR_SOURCE_HELPER_SHA: 80a9792c811231e9d10813d913f5a682dee18c6a
+        run: |
+          set -euo pipefail
+          helper_dir=$(mktemp -d "$RUNNER_TEMP/ci-pr-base-source.XXXXXX")
+          trap 'rm -rf "$helper_dir"' EXIT
+          git init --bare --quiet "$helper_dir/source.git"
+          git -C "$helper_dir/source.git" -c http.lowSpeedLimit=1024 -c http.lowSpeedTime=60 fetch --quiet --no-tags --depth=1 https://github.com/777genius/agent-notifications.git "$CI_PR_SOURCE_HELPER_SHA"
+          git -C "$helper_dir/source.git" show "$CI_PR_SOURCE_HELPER_SHA:tools/ci_qualify_pr_base.sh" > "$helper_dir/qualify.sh"
+          bash "$helper_dir/qualify.sh"
+      - name: Test exact changed-base checkout contract
+        if: ${{ !(github.event_name == 'pull_request' && github.event.action == 'edited' && github.event.changes.base != null) }}
+        run: python3 -B tools/ci_pr_checkout_test.py
       - name: Test conservative classification and installer mode contracts
         run: |
           python3 scripts/ci_macos_scope_test.py
@@ -46,7 +67,7 @@ jobs:
         run: python3 scripts/ci_macos_scope.py classify
       - name: Classify release tooling only when native scope is full
         id: release-scope
-        if: steps.classify.outputs.mode == 'full'
+        if: ${{ steps.classify.outputs.mode == 'full' && !(github.event_name == 'pull_request' && github.event.action == 'edited' && github.event.changes.base != null) }}
         env:
           GH_TOKEN: ${{ github.token }}
           CI_NATIVE_WORKFLOW: ci-macos.yml
@@ -63,7 +84,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.action == 'edited' && github.event.changes.base != null && github.event.pull_request.head.sha || '' }}
           persist-credentials: false
+          fetch-depth: ${{ github.event_name == 'pull_request' && github.event.action == 'edited' && github.event.changes.base != null && '0' || '1' }}
+      - *qualify_base_edit
       - uses: actions/setup-go@v7
         with:
           go-version: '1.27.2'
@@ -94,6 +118,10 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.action == 'edited' && github.event.changes.base != null && github.event.pull_request.head.sha || '' }}
+          fetch-depth: ${{ github.event_name == 'pull_request' && github.event.action == 'edited' && github.event.changes.base != null && '0' || '1' }}
+      - *qualify_base_edit
 
       - name: Set up Go
         uses: actions/setup-go@v7
@@ -200,6 +228,10 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.action == 'edited' && github.event.changes.base != null && github.event.pull_request.head.sha || '' }}
+          fetch-depth: ${{ github.event_name == 'pull_request' && github.event.action == 'edited' && github.event.changes.base != null && '0' || '1' }}
+      - *qualify_base_edit
 
       - name: Run Swift tests
         run: swift test --package-path swift-notifier
@@ -207,14 +239,17 @@ jobs:
   full-ci:
     name: ${{ github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null) && 'Metadata edit ignored (full macOS gate)' || 'Full macOS CI required' }}
     needs: [scope, test, swift-test]
-    if: ${{ always() && needs.scope.outputs.mode != 'release-tools' && needs.scope.outputs.mode != 'release-equivalent' && !(github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null)) }}
+    if: ${{ always() && !cancelled() && needs.scope.outputs.mode != 'release-tools' && needs.scope.outputs.mode != 'release-equivalent' && !(github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null)) }}
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || vars.CI_LINUX_RUNNER || 'ubuntu-latest' }}
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.action == 'edited' && github.event.changes.base != null && github.event.pull_request.head.sha || '' }}
           persist-credentials: false
+          fetch-depth: ${{ github.event_name == 'pull_request' && github.event.action == 'edited' && github.event.changes.base != null && '0' || '1' }}
+      - *qualify_base_edit
       - name: Require actual full native success on this revision
         env:
           CI_MODE: ${{ needs.scope.outputs.mode }}
@@ -224,7 +259,7 @@ jobs:
   release-equivalent:
     name: Release-equivalent native proof (macOS)
     needs: scope
-    if: needs.scope.outputs.mode == 'release-equivalent'
+    if: ${{ needs.scope.outputs.mode == 'release-equivalent' && !(github.event_name == 'pull_request' && github.event.action == 'edited' && github.event.changes.base != null) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -233,8 +268,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.action == 'edited' && github.event.changes.base != null && github.event.pull_request.head.sha || '' }}
           fetch-depth: 0
           persist-credentials: false
+      - *qualify_base_edit
       - name: Reverify immutable full native checkout evidence
         env:
           GH_TOKEN: ${{ github.token }}
@@ -243,15 +280,17 @@ jobs:
   native-input-evidence:
     name: Native input evidence (macOS)
     needs: [scope, test, swift-test]
-    if: ${{ !cancelled() && needs.scope.outputs.mode == 'full' }}
+    if: ${{ !cancelled() && needs.scope.outputs.mode == 'full' && !(github.event_name == 'pull_request' && github.event.action == 'edited' && github.event.changes.base != null) }}
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || vars.CI_LINUX_RUNNER || 'ubuntu-latest' }}
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.action == 'edited' && github.event.changes.base != null && github.event.pull_request.head.sha || '' }}
           fetch-depth: 0
           persist-credentials: false
+      - *qualify_base_edit
       - name: Record only successful full native inputs
         env:
           CI_MODE: ${{ needs.scope.outputs.mode }}

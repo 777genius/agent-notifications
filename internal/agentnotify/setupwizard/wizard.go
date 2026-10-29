@@ -88,6 +88,11 @@ type Request struct {
 	// identities before the confirmed intent is published. It is restored from
 	// that intent on retry, never reconstructed from a changed host environment.
 	MigrationBindings map[string]MigrationBinding
+	// StateMigration is the read-only registry snapshot shown at confirmation.
+	// Run refuses changed bytes instead of approving a different migration.
+	StateMigration *uapinstaller.StateMigrationPlan
+	// StateMigrationProgress reports the separate, completed registry upgrade.
+	StateMigrationProgress func(StateMigrationOutcome)
 	// RemovalBindings freezes the exact portable consumer that uninstall will
 	// revoke. A retry restores it from the confirmed intent after kernel revoke.
 	RemovalBindings map[string]RemovalBinding
@@ -109,6 +114,14 @@ type Request struct {
 	// BootstrapMCP is consumed by the command admission boundary. Plan/Run use
 	// the verified generation, then existing reservation/config CAS protects apply.
 	BootstrapMCP *BootstrapMCPSelection
+	// BootstrapStateMigrationOwned is set only by admission of the confirmed
+	// bootstrap handoff. Its parent owns registry migration even when a client
+	// composition clears BootstrapMCP; direct /init generation fences do not.
+	BootstrapStateMigrationOwned bool
+	// BootstrapReadyClients only narrows effects after the complete immutable
+	// bootstrap projection has been revalidated. A failed primary registration
+	// must not prevent an independent, already confirmed client from activating.
+	BootstrapReadyClients []string
 	// ClaudeRunner overrides Claude activation probing. Production leaves it
 	// nil so the OS process runner is used. Isolated tests inject a listing
 	// fixture; the field is never parsed from CLI flags.
@@ -127,6 +140,9 @@ type Request struct {
 	// Progress reports large confirmed phases to the host. JSON stdout stays
 	// one result; the CLI writes these lines to stderr. Nil is silent.
 	Progress func(string)
+	// ClientProgress is presentation-only, finite per-client lifecycle activity.
+	// No provider output, paths, or executable recovery commands flow through it.
+	ClientProgress func(client, phase, outcome string)
 	// DiscoverAgents supplies Claude/Codex executable presence for the TTY
 	// picker. Production sets this from Engine.Discover. Nil skips presence
 	// labels. The function must not execute found files.
@@ -175,15 +191,16 @@ type NextAction struct {
 }
 
 type Result struct {
-	Action         string          `json:"action"`
-	Outcome        string          `json:"outcome"`
-	Reason         string          `json:"reason,omitempty"`
-	InstallationID string          `json:"installationID,omitempty"`
-	Generation     uint64          `json:"generation,omitempty"`
-	Command        []string        `json:"command,omitempty"`
-	Targets        []TargetResult  `json:"targets,omitempty"`
-	Readiness      []ReadinessFact `json:"readiness,omitempty"`
-	NextActions    []NextAction    `json:"nextActions,omitempty"`
+	StateMigration *StateMigrationOutcome `json:"stateMigration,omitempty"`
+	Action         string                 `json:"action"`
+	Outcome        string                 `json:"outcome"`
+	Reason         string                 `json:"reason,omitempty"`
+	InstallationID string                 `json:"installationID,omitempty"`
+	Generation     uint64                 `json:"generation,omitempty"`
+	Command        []string               `json:"command,omitempty"`
+	Targets        []TargetResult         `json:"targets,omitempty"`
+	Readiness      []ReadinessFact        `json:"readiness,omitempty"`
+	NextActions    []NextAction           `json:"nextActions,omitempty"`
 	// DataRetained is true after the last live binding is removed while
 	// PLUGIN_DATA remains. Absent inspect rows are not a license to run.
 	DataRetained bool `json:"dataRetained,omitempty"`
@@ -213,6 +230,9 @@ func (r Result) ExitCode() int {
 func Run(ctx context.Context, req Request) (Result, error) {
 	req.LocalConfig = copyLocalConfig(req.LocalConfig)
 	out, err := run(ctx, &req)
+	if errors.Is(err, uapinstaller.ErrMigrationRequired) {
+		out.Outcome, out.Reason = "incomplete", "state_migration_required"
+	}
 	// Hooks can return the kernel conflict directly; portable boundaries wrap
 	// it as ErrConcurrentChange. Keep completed targets, but require new consent.
 	if errors.Is(err, installruntime.ErrPolicyConflict) && !errors.Is(err, portablesetup.ErrConcurrentChange) {
@@ -220,6 +240,10 @@ func Run(ctx context.Context, req Request) (Result, error) {
 	}
 	if errors.Is(err, portablesetup.ErrConcurrentChange) || out.Reason == "concurrent_change" {
 		out.Outcome, out.Reason = "conflict", "concurrent_change"
+		out.Command, out.NextActions = nil, nil
+		return out, err
+	}
+	if strings.HasPrefix(out.Reason, "state_migration_") {
 		out.Command, out.NextActions = nil, nil
 		return out, err
 	}
@@ -247,6 +271,29 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 	plan := SetupPlan{Text: text, Request: req, Result: attachWizardCommand(req, ev.out)}
 	if ev.stop {
 		return plan, ev.err
+	}
+	if len(ev.notifyAgents) > 0 {
+		if req.StateMigration != nil {
+			if err := CheckStateMigration(ctx, req.ControlRoot, *req.StateMigration); err != nil {
+				plan.Result = StateMigrationFailure(req, err)
+				return plan, err
+			}
+		}
+		migration, err := PrepareStateMigration(ctx, req.ControlRoot)
+		if err != nil {
+			plan.Result = StateMigrationFailure(req, err)
+			return plan, err
+		}
+		if req.StateMigration != nil && *req.StateMigration != migration {
+			plan.Result = StateMigrationFailure(req, uapinstaller.ErrPlanChanged)
+			return plan, uapinstaller.ErrPlanChanged
+		}
+		req.StateMigration = &migration
+		plan.Request = req
+		if migration.Required {
+			text += " " + stateMigrationSummary(migration)
+			plan.annotations = append(plan.annotations, stateMigrationSummary(migration))
+		}
 	}
 	if req.Action == ActionInstall || req.Action == ActionUpdate || req.Action == ActionRepair {
 		var releasePackage func()
@@ -457,6 +504,32 @@ func run(ctx context.Context, req *Request) (Result, error) {
 	if req.Action == ActionInspect {
 		got, err := inspect(ctx, *req, ev.agents, ev.snap, ev.runtimeRoot, ev.out)
 		return attachReadiness(*req, ev.agents, got, false), err
+	}
+	if len(ev.notifyAgents) > 0 {
+		migrated, migrationErr := applyRequestedStateMigration(ctx, req)
+		if migrationErr != nil {
+			out := StateMigrationFailure(*req, migrationErr)
+			out.StateMigration = migrated
+			return out, migrationErr
+		}
+		if migrated != nil {
+			// Registry migration invalidates all pre-migration UAP plans. Rebuild
+			// them before publishing an intent or touching any client registration.
+			plan, planErr := Plan(ctx, *req)
+			if plan.Request.StateMigration != nil && plan.Request.StateMigration.Required {
+				out := StateMigrationFailure(*req, uapinstaller.ErrPlanChanged)
+				out.StateMigration = migrated
+				return out, uapinstaller.ErrPlanChanged
+			}
+			if planErr != nil || !plan.Ready {
+				plan.Result.StateMigration = migrated
+				return plan.Result, planErr
+			}
+			*req = plan.Request
+			out, runErr := run(ctx, req)
+			out.StateMigration = migrated
+			return out, runErr
+		}
 	}
 	if ev.snap.Recovery {
 		// A journal replay advances the ledger generation. Recover before any
@@ -2993,6 +3066,7 @@ func materializer(req Request, snap installruntime.InstalledSnapshot, runtimeRoo
 		RequireLiveProfiles: true,
 	})
 	mat.Kernel.ExpectedPolicy = req.BootstrapExpectedPolicy
+	mat.Progress = req.ClientProgress
 	if err != nil {
 		return mat, err
 	}

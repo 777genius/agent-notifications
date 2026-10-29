@@ -1,0 +1,5 @@
+# Existing Windows ARM/VS2026 runner label is newer than pinned actionlint.
+# This only teaches the linter the exact label; it does not change dispatch.
+self-hosted-runner:
+  labels:
+    - windows-11-vs2026-arm

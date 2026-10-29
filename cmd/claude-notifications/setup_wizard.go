@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -94,6 +93,14 @@ func executeSetupWizardWith(ctx context.Context, args []string, out, errOut io.W
 	}
 	args, uiMode, uiErr := stripWizardUIMode(args)
 	args, bootstrapIntentFile, intentFlagErr := stripBootstrapIntentFile(args)
+	args, bootstrapReadyClients, readyClientsErr := stripBootstrapReadyClients(args)
+	args, bootstrapProgressFile, progressFileErr := stripBootstrapProgressFile(args)
+	if readyClientsErr == nil {
+		readyClientsErr = progressFileErr
+	}
+	if intentFlagErr == nil {
+		intentFlagErr = readyClientsErr
+	}
 	if intentFlagErr == nil {
 		intentFlagErr = uiErr
 	}
@@ -138,6 +145,9 @@ func executeSetupWizardWith(ctx context.Context, args []string, out, errOut io.W
 		return writeSetupWizardResult(out, jsonOut, setupwizard.Result{Action: string(req.Action), Outcome: "invalid", Reason: "invalid_arguments"}, nil)
 	}
 	var confirmed *confirmedBootstrapIntent
+	if (len(bootstrapReadyClients) > 0 || bootstrapProgressFile != "") && bootstrapIntentFile == "" {
+		return writeSetupWizardResult(out, jsonOut, setupwizard.Result{Action: string(req.Action), Outcome: "invalid", Reason: "invalid_arguments"}, nil)
+	}
 	if bootstrapIntentFile != "" {
 		if !installOrUpdate || !req.Yes || jsonOut && needsWizardInteraction(req) {
 			return writeSetupWizardResult(out, jsonOut, setupwizard.Result{Action: string(req.Action), Outcome: "invalid", Reason: "invalid_arguments"}, nil)
@@ -146,8 +156,25 @@ func executeSetupWizardWith(ctx context.Context, args []string, out, errOut io.W
 		if err != nil {
 			return writeSetupWizardResult(out, jsonOut, setupwizard.Result{Action: string(req.Action), Outcome: "conflict", Reason: "concurrent_change"}, err)
 		}
+		if err := admitBootstrapReadyClients(&req, bootstrapReadyClients); err != nil {
+			return writeSetupWizardResult(out, jsonOut, setupwizard.Result{Action: string(req.Action), Outcome: "invalid", Reason: "invalid_arguments"}, err)
+		}
+		if bootstrapProgressFile != "" {
+			progress, closeProgress, progressErr := openBootstrapProgress(bootstrapIntentFile, bootstrapProgressFile)
+			if progressErr != nil {
+				return writeSetupWizardResult(out, jsonOut, setupwizard.Result{Action: string(req.Action), Outcome: "invalid", Reason: "invalid_arguments"}, progressErr)
+			}
+			defer closeProgress()
+			req.ClientProgress = progress
+		}
 	}
 	if errOut != nil {
+		req.StateMigrationProgress = func(m setupwizard.StateMigrationOutcome) {
+			if m.BackupPath != "" {
+				_, _ = fmt.Fprintln(errOut, "UAP registry backup: "+setupDisplayPath(m.BackupPath))
+			}
+			_, _ = fmt.Fprintf(errOut, "UAP registry migration %s: schema %d -> %d.\n", m.Outcome, m.SourceSchema, m.TargetSchema)
+		}
 		req.Progress = func(phase string) {
 			if jsonOut {
 				_, _ = fmt.Fprintln(errOut, "phase", phase)
@@ -278,7 +305,7 @@ func executeSetupWizardWith(ctx context.Context, args []string, out, errOut io.W
 	if err != nil {
 		return writeSetupWizardResult(out, jsonOut, setupwizard.Result{Action: string(req.Action), Outcome: "incomplete", Reason: "cursor_composition_required"}, err)
 	}
-	if confirmed != nil && (containsProduct(confirmed.Request.Products, "cursor") || containsProduct(confirmed.Request.Products, "copilot-vscode")) {
+	if confirmed != nil && (containsProduct(req.Agents, "cursor") || containsProduct(req.Agents, "copilot-vscode")) {
 		// The command already fenced and consumed the one immutable selection.
 		// Legacy BootstrapMCP evaluation captures a new policy observation; retain
 		// our original CAS instead of allowing that path to adopt an opt-out.
@@ -370,7 +397,11 @@ func validInstallOrUpdateRequest(req setupwizard.Request) bool {
 }
 
 func runInstallOrUpdate(ctx context.Context, req setupwizard.Request, preserveExistingUnits bool) (result setupwizard.Result, err error) {
+	var migration *setupwizard.StateMigrationOutcome
 	defer func() {
+		if migration != nil {
+			result.StateMigration = migration
+		}
 		if result.Reason == "concurrent_change" {
 			// The original auto selection is stale. A direct mutation retry
 			// would turn an opt-out into an implicit Add.
@@ -378,6 +409,22 @@ func runInstallOrUpdate(ctx context.Context, req setupwizard.Request, preserveEx
 			result.NextActions = nil
 		}
 	}()
+	// Auto mode inspects before it chooses Update/Add phases. Validate the UAP
+	// registry first so inspection cannot leak parser errors or recommend native
+	// recovery for an old schema that needs its previous installer.
+	if req.AgentNotify == nil || *req.AgentNotify {
+		if req.StateMigration != nil {
+			if err := setupwizard.CheckStateMigration(ctx, req.ControlRoot, *req.StateMigration); err != nil {
+				return setupwizard.StateMigrationFailure(req, err), err
+			}
+		} else {
+			prepared, err := setupwizard.PrepareStateMigration(ctx, req.ControlRoot)
+			if err != nil {
+				return setupwizard.StateMigrationFailure(req, err), err
+			}
+			req.StateMigration = &prepared
+		}
+	}
 	inspect := req
 	inspect.Action = setupwizard.ActionInspect
 	before, inspectErr := setupwizard.Run(ctx, inspect)
@@ -401,7 +448,9 @@ func runInstallOrUpdate(ctx context.Context, req setupwizard.Request, preserveEx
 		if e != nil {
 			return setupwizard.Result{Action: string(req.Action), Outcome: "conflict", Reason: "concurrent_change"}, e
 		}
-		req.Agents = append([]string(nil), req.BootstrapMCP.Selected...)
+		// Observe/check the full frozen projection above, including clients whose
+		// primary install failed. Only the ensuing effects may be narrowed.
+		req.Agents = readyBootstrapAgents(req.BootstrapMCP.Selected, req.BootstrapReadyClients)
 		preserved = append([]string(nil), req.BootstrapMCP.Skipped...)
 		if len(req.Agents) == 0 {
 			return setupwizard.Result{Action: string(req.Action), Outcome: "unchanged", Reason: "existing_opt_out", Targets: preservedUnitTargets(preserved)}, nil
@@ -444,6 +493,9 @@ func runInstallOrUpdate(ctx context.Context, req setupwizard.Request, preserveEx
 		}
 		if plan.Ready {
 			result, runErr := setupwizard.Run(ctx, plan.Request)
+			if migration == nil {
+				migration = result.StateMigration
+			}
 			if runErr != nil || result.ExitCode() != 0 {
 				return result, runErr
 			}
@@ -463,12 +515,26 @@ func runInstallOrUpdate(ctx context.Context, req setupwizard.Request, preserveEx
 				return phasePlan.Result, planErr
 			}
 			result, runErr := setupwizard.Run(ctx, phasePlan.Request)
+			if migration == nil {
+				migration = result.StateMigration
+			}
 			if runErr != nil || result.ExitCode() != 0 {
 				return result, runErr
 			}
 			if req.BootstrapExpectedGeneration != nil {
 				*req.BootstrapExpectedGeneration = result.Generation
 			}
+			// Our completed phase consumed its reviewed registry snapshot. Bind
+			// the next phase to the resulting current schema; never approve a
+			// second old-schema migration that appeared during this invocation.
+			current, prepareErr := setupwizard.PrepareStateMigration(ctx, req.ControlRoot)
+			if prepareErr != nil {
+				return setupwizard.StateMigrationFailure(req, prepareErr), prepareErr
+			}
+			if current.Required {
+				return setupwizard.StateMigrationFailure(req, uapinstaller.ErrPlanChanged), uapinstaller.ErrPlanChanged
+			}
+			req.StateMigration = &current
 		}
 	}
 	return setupwizard.Result{Action: string(req.Action), Outcome: "incomplete", Reason: "update_required_after_retries"}, setupwizard.ErrRefused
@@ -911,11 +977,25 @@ func admitBootstrapWizardIntent(path string, r setupwizard.Request) (setupwizard
 	if err != nil {
 		return r, nil, err
 	}
+	parent := intent
+	intent, err = bootstrapWizardChild(parent, r.Agents)
+	if err != nil {
+		return r, nil, err
+	}
 	expected := intentWizardRequest(intent)
 	if !sameWizardBootstrapScope(r, expected) || intent.Request.SkipAgentNotify {
 		return r, nil, errors.New("bootstrap request differs from confirmed intent")
 	}
+	if containsProduct(r.Agents, "cursor") {
+		checkpoint, cancel := context.WithTimeout(context.Background(), bootstrapInspectionTimeout)
+		defer cancel()
+		intent, err = admitCursorBootstrapChild(checkpoint, parent, intent, r)
+		if err != nil {
+			return r, nil, err
+		}
+	}
 	r.BootstrapMCP = &intent.MCP
+	r.BootstrapStateMigrationOwned = true
 	if containsProduct(intent.Request.Products, "cursor") || containsProduct(intent.Request.Products, "copilot-vscode") {
 		generation, policy := intent.Initial.Generation, intent.Initial.Policy
 		r.BootstrapExpectedGeneration, r.BootstrapExpectedPolicy = &generation, &policy
@@ -1069,12 +1149,18 @@ func commitConfirmedCursorConsent(ctx context.Context, r setupwizard.Request, re
 	if err != nil {
 		return deny(err)
 	}
-	if runtime.GOOS == "darwin" && i.Request.Desktop {
+	choices := bootstrapProductUnits{}
+	for _, unit := range i.Units {
+		if unit.Product == "cursor" {
+			choices = unit
+		}
+	}
+	if runtime.GOOS == "darwin" && choices.Desktop {
 		if _, err := copilotvscodeinstall.PrepareCursorNativeSpool(ctx, b.ControlRoot); err != nil {
 			return deny(err)
 		}
 	}
-	patch, err := copilotvscodeinstall.CursorPolicyPatch(b, copilotvscodeinstall.CursorChoices{Desktop: &i.Request.Desktop, Webhook: &i.Request.Webhook}, &previous)
+	patch, err := copilotvscodeinstall.CursorPolicyPatch(b, copilotvscodeinstall.CursorChoices{Desktop: &choices.Desktop, Webhook: &choices.Webhook}, &previous)
 	if err != nil {
 		return deny(err)
 	}
@@ -1082,7 +1168,7 @@ func commitConfirmedCursorConsent(ctx context.Context, r setupwizard.Request, re
 	if err != nil {
 		return deny(err)
 	}
-	if runtime.GOOS == "windows" && i.Request.Desktop {
+	if runtime.GOOS == "windows" && choices.Desktop {
 		home, err := os.UserHomeDir()
 		if err != nil {
 			return deny(err)
@@ -1286,25 +1372,11 @@ func composeCursorWizard(ctx context.Context, req setupwizard.Request) (_ setupw
 		if agent == "" {
 			agent = req.ClientExecutable
 		}
+		// Do not gate the installed Cursor CLI on a test/qualification version.
+		// Admit by executable presence and the profile/capability contract below.
 		agent, err = normalizeProductExecutable(agent)
 		if err != nil {
 			return req, err
-		}
-		versionTimeout := 2 * time.Second
-		if runtime.GOOS == "darwin" || runtime.GOOS == "windows" {
-			versionTimeout = 15 * time.Second
-		}
-		probe, cancel := context.WithTimeout(ctx, versionTimeout)
-		environment := []string{"HOME=" + filepath.Dir(req.CursorConfig), "PATH=" + os.Getenv("PATH")}
-		if runtime.GOOS == "darwin" {
-			// Use noninteractive mode for the bounded version inspection.
-			environment = append(environment, "AGENT_CLI_CREDENTIAL_STORE=file", "CI=1")
-		}
-		version, e := probeCursorVersion(probe, agent, environment)
-		cancel()
-		expectedVersion, _ := cursorinstall.CurrentTuple()
-		if e != nil || expectedVersion == "" || strings.TrimSpace(version) != expectedVersion {
-			return req, fmt.Errorf("cursor agent version is outside the fixed tuple: %w", e)
 		}
 		req.ClientExecutables = map[string]string{"cursor": agent}
 		if filepath.Base(req.CursorConfig) != ".cursor" {

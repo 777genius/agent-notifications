@@ -8,7 +8,8 @@ export interface FakeRemote {
 const path = process.env.TEST_RELEASE_CANARY_REMOTE!;
 const state = JSON.parse(readFileSync(path, 'utf8')) as FakeRemote;
 const args = process.argv.slice(2);
-const endpoint = args.find(value => value.startsWith('repos/777genius/agent-notifications/'))?.slice('repos/777genius/agent-notifications/'.length);
+const repository = process.env.TEST_RELEASE_CANARY_REPOSITORY ?? '777genius/agent-notifications';
+const endpoint = args.find(value => value.startsWith(`repos/${repository}/`))?.slice(`repos/${repository}/`.length);
 if (args[0] !== 'api' || !endpoint || args.includes('--method')) throw new Error('TEST fake-gh accepts read-only API only');
 state.reads.push(endpoint);
 writeFileSync(path, JSON.stringify(state));

@@ -469,9 +469,10 @@ func TestCursorCallerAcknowledgedTokenAndMatchingPendingRetry(t *testing.T) {
 	if _, err := installruntime.Commit(ctx, installruntime.Request{ControlRoot: control, RuntimeRoot: runtimeRoot, Owner: "existing-installer", ConsumerID: "TEST-owner", Files: []installruntime.File{{Path: observer, Data: []byte("TEST-inert" + installruntime.WriterProtocolMarker), Mode: 0700}}}); err != nil {
 		t.Fatal(err)
 	}
-	version, _ := cursorinstall.CurrentTuple()
 	agent := filepath.Join(root, "TEST-version-agent")
-	if err := os.WriteFile(agent, []byte("#!/bin/sh\nprintf '%s\\n' '"+version+"'\n"), 0700); err != nil {
+	// Version discovery is not an admission requirement. This inert CLI cannot
+	// answer --version, but the profile/ownership contract below is unchanged.
+	if err := os.WriteFile(agent, []byte("#!/bin/sh\nexit 97\n"), 0700); err != nil {
 		t.Fatal(err)
 	}
 	pkg := filepath.Join(root, "TEST-package")
@@ -1041,8 +1042,8 @@ func TestCursorCallerMissingPackageRefusalAndOwnedCleanup(t *testing.T) {
 		}
 	}
 	r.ClientExecutable = env.probe // Existing inert version fixture, never a real agent.
-	if _, err := composeCursorWizard(ctx, r); err == nil || !strings.Contains(err.Error(), "version is outside") {
-		t.Fatalf("wrong version: %v", err)
+	if _, err := composeCursorWizard(ctx, r); !errors.Is(err, setupwizard.ErrRefused) {
+		t.Fatalf("invalid profile namespace: %v", err)
 	}
 	if fetches != 0 {
 		t.Fatal("release fetched before refusal", fetches)

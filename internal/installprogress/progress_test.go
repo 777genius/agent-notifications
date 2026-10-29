@@ -307,3 +307,30 @@ func TestActivationRowsRemainDistinctAtNarrowWidths(t *testing.T) {
 		}
 	}
 }
+
+func TestLegacyBoardShowsConcurrentClientOperations(t *testing.T) {
+	var out bytes.Buffer
+	now := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
+	b := board{options: Options{Output: &out, Rich: true, Width: 108}, now: func() time.Time { return now }}
+	b.update(event{"claude", "marketplace", "running"})
+	now = now.Add(2 * time.Second)
+	b.update(event{"codex", "runtime", "running"})
+	b.update(event{"global", "installing-codex", "running"})
+	now = now.Add(3 * time.Second)
+	if err := b.paint(); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Checking marketplace (5s)", "Installing runtime (3s)"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("concurrent board missing %q: %q", want, out.String())
+		}
+	}
+	out.Reset()
+	b.update(event{"claude", "marketplace", "failed"})
+	if err := b.paint(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "✗ Claude Code") || strings.Contains(out.String(), "✓") {
+		t.Fatalf("failed operation marked complete: %q", out.String())
+	}
+}

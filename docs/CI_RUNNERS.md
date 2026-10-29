@@ -85,11 +85,31 @@ this source qualification grants no installed native E or consent.
 
 ## Concurrency and rollback
 
-Active PR workflows group by workflow, event and PR number, cancelling only
-superseded runs of the same PR. Other events use the unique run ID, so dispatches,
-pushes and tags remain independent. Core `main` pushes are deliberately retained:
-they may provide exact-source release evidence, and removing queued PR work does
-not require invalidating it. Disabled ReviewRouter keeps its existing concurrency.
+Ordinary PR workflows group by workflow, event and PR number, cancelling only
+superseded checks of the same PR. Metadata-only edits and manual diagnostics retain
+independent groups. Core `develop` push checks may replace earlier checks of that
+same branch; they never share a group with PR checks.
+
+Core `main` pushes and `release-tools.yml` main pushes remain independent because
+[release qualification](../.github/workflows/basic-release.yml) rejects cancelled
+latest checks for the exact candidate SHA,
+including checks outside its named native receipt requirements. The installed
+Cursor Windows feature-branch qualification also retains every push and manual
+run: its native result, evidence and owned cleanup must finish independently.
+Release/tag workflows and Pages deployments retain their existing independent
+operations. Disabled ReviewRouter keeps its existing concurrency.
+
+Meaningful PR base edits use a run-local merge of the exact event base and head,
+rather than GitHub's potentially stale synthetic merge commit. Both edited-event
+workflows force full native CI for that pair; title/body-only no-ops retain their
+existing isolation. The checkout helper is pinned independently of the checked-out
+source, so a stale checkout cannot select its implementation.
+
+A run-local base-edit merge is not release qualification. Those runs cannot use
+release-equivalent mode or create immutable native-input receipts. The unchanged
+release verifier still requires remotely fetchable exact-SHA evidence from an
+ordinary qualified run; skipped evidence is never accepted. Normal PR, push and
+manual checkout identities and release pins retain their existing behavior.
 
 Remove the applicable repository variable to restore the original GitHub runner
 without editing semantic matrices. Workflow changes affect future runs only;

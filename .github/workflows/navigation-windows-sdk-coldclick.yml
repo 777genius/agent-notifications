@@ -45,7 +45,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   sdk-coldclick:
-    if: github.repository == '777genius/agent-notifications' && github.run_attempt == 1
+    if: (github.repository == '777genius/agent-notifications' || github.repository == 'universal-agent-plugins/agent-notifications') && github.run_attempt == 1
     runs-on: windows-11-vs2026-arm
     timeout-minutes: 20
     steps:
@@ -180,7 +180,7 @@ jobs:
           SDK_OBSERVER: ${{ steps.build.outputs.observer }}
           SDK_OBSERVER_SHA256: ${{ steps.build.outputs.observer_sha256 }}
         run: |
-          if ($env:GITHUB_RUN_ATTEMPT -ne '1' -or $env:GITHUB_EVENT_NAME -cne 'workflow_dispatch' -or $env:GITHUB_REPOSITORY -cne '777genius/agent-notifications' -or (git rev-parse HEAD) -cne $env:NAVIGATION_SOURCE_SHA) { throw 'first exact-source manual TEST attempt required' }
+          if ($env:GITHUB_RUN_ATTEMPT -ne '1' -or $env:GITHUB_EVENT_NAME -cne 'workflow_dispatch' -or $env:GITHUB_REPOSITORY -cnotin @('777genius/agent-notifications', 'universal-agent-plugins/agent-notifications') -or (git rev-parse HEAD) -cne $env:NAVIGATION_SOURCE_SHA) { throw 'first exact-source manual TEST attempt required' }
           $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User
           $sidBytes = [byte[]]::new($sid.BinaryLength); $sid.GetBinaryForm($sidBytes, 0)
           $sidHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($sidBytes)).ToLowerInvariant()

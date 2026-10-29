@@ -316,3 +316,127 @@ func TestSessionRejectsTrailingFragmentAcrossStartupReadBoundary(t *testing.T) {
 		t.Fatalf("terminal journal accepted trailing fragment: %v %q", err, out.String())
 	}
 }
+
+// A singular installer stage used to hide concurrent clients' own phases and
+// counters could report failed clients as active. Exercise the shared model and
+// the visible rich frame with a deterministic observation clock.
+func TestSessionConcurrentClientPhasesAndElapsedRemainIndependent(t *testing.T) {
+	now := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
+	s := &session{
+		rows:    board{now: func() time.Time { return now }},
+		history: map[string][]event{}, last: map[string]event{}, lost: map[string]bool{},
+	}
+	apply := func(line string) {
+		t.Helper()
+		kind, e, _, err := parseSession(line)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s.apply(kind, e)
+	}
+	apply("transition\tclaude\tmarketplace\trunning")
+	now = now.Add(5 * time.Second)
+	apply("transition\tcodex\tdownload\trunning")
+	apply("transition\tglobal\tinstalling-codex\trunning")
+	now = now.Add(7 * time.Second)
+	apply("snapshot\tclaude\tmarketplace\trunning")
+	var out bytes.Buffer
+	v := sessionView{s: s, options: Options{Output: &out, Rich: true, Width: 100, Height: 24, Activity: "off"}}
+	if err := v.paint(); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"Claude Code: Checking marketplace (12s)",
+		"Codex CLI: Downloading files (7s)",
+		"Completed 0; active 2; queued 0",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("missing independent progress %q: %q", want, out.String())
+		}
+	}
+	apply("transition\tclaude\truntime\trunning")
+	now = now.Add(3 * time.Second)
+	lines := strings.Join(s.currentLines(100, 0), "\n")
+	if !strings.Contains(lines, "Installing runtime (3s)") || !strings.Contains(lines, "Downloading files (10s)") {
+		t.Fatalf("phase change reset another client's elapsed time: %q", lines)
+	}
+	apply("transition\tcodex\tdownload\tfailed")
+	if s.counters() != "Completed 0; active 1; queued 0" {
+		t.Fatalf("failure counted as active or complete: %s", s.counters())
+	}
+	lines = strings.Join(s.currentLines(100, 0), "\n")
+	if !strings.Contains(lines, "! Codex CLI: failed") || strings.Contains(lines, "Codex CLI: Downloading files") || strings.Contains(lines, "Installed;") {
+		t.Fatalf("failure projected as active or complete: %q", lines)
+	}
+	apply("transition\tclaude\tverification\trunning")
+	apply("snapshot\tgemini\twaiting\trunning")
+	lines = strings.Join(s.currentLines(100, 0), "\n")
+	if !strings.Contains(lines, "Verifying registration") || !strings.Contains(lines, "Waiting for shared settings") {
+		t.Fatal(lines)
+	}
+	apply("transition\tclaude\tverification\tdone")
+	lines = strings.Join(s.currentLines(100, 0), "\n")
+	if !strings.Contains(lines, "Registration verified") || strings.Contains(lines, "Installed;") || s.counters() != "Completed 0; active 1; queued 0" {
+		t.Fatalf("probe completion was presented as completed setup: %s / %q", s.counters(), lines)
+	}
+	s.stopped, s.rows.stopped = true, true
+	lines = strings.Join(s.currentLines(100, 0), "\n")
+	if s.counters() != "Completed 0; active 0; queued 0" || strings.Contains(lines, "⠋") || !strings.Contains(lines, "last observed running") {
+		t.Fatalf("observer stop claimed active or completed work: %s / %q", s.counters(), lines)
+	}
+}
+
+func TestSessionUncertainSnapshotNeedsAuthoritativeActivity(t *testing.T) {
+	s := &session{history: map[string][]event{}, last: map[string]event{}, lost: map[string]bool{}}
+	s.apply("snapshot", event{"claude", "registration", "state_requires_inspection"})
+	s.apply("snapshot", event{"codex", "MCP", "registration_committed"})
+	lines := strings.Join(s.currentLines(100, 0), "\n")
+	if s.counters() != "Completed 0; active 0; queued 0" || strings.Contains(lines, "⠋") || strings.Contains(lines, "observed") {
+		t.Fatalf("partial state invented live work: %s / %q", s.counters(), lines)
+	}
+	s.apply("transition", event{"global", "installing-claude", "running"})
+	s.apply("snapshot", event{"claude", "MCP", "activation_timeout"})
+	lines = strings.Join(s.currentLines(100, 0), "\n")
+	if s.counters() != "Completed 0; active 0; queued 0" || !strings.Contains(lines, "Timed out") || !strings.Contains(lines, "Registration saved") || strings.Contains(lines, "⠋") {
+		t.Fatalf("legacy stage hid the saved-registration failure: %s / %q", s.counters(), lines)
+	}
+}
+
+// Qoder shares the finite observer phases; its addition must neither reject the
+// journal nor change ordering or imply that a committed registration completed.
+func TestSessionQoderConcurrentProgressAndPartialTruth(t *testing.T) {
+	s := &session{history: map[string][]event{}, last: map[string]event{}, lost: map[string]bool{}}
+	for _, line := range []string{
+		"snapshot\tqoder\tpending\tnot_started",
+		"snapshot\tcursor\tpending\tnot_started",
+		"transition\tgemini\tdownload\trunning",
+		"transition\tglobal\tinstalling-qoder\trunning",
+		"transition\tqoder\truntime\trunning",
+	} {
+		kind, e, _, err := parseSession(line)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s.apply(kind, e)
+	}
+	lines := strings.Join(s.currentLines(100, 0), "\n")
+	if !strings.Contains(lines, "Qoder: Installing runtime") || !strings.Contains(lines, "Gemini CLI: Downloading files") || s.counters() != "Completed 0; active 2; queued 1" {
+		t.Fatalf("Qoder hid concurrent activity: %q / %s", lines, s.counters())
+	}
+	if strings.Index(lines, "Gemini CLI:") > strings.Index(lines, "Qoder:") || strings.Index(lines, "Qoder:") > strings.Index(lines, "Cursor:") {
+		t.Fatalf("Qoder did not retain canonical product order: %q", lines)
+	}
+	s.apply("transition", event{"global", "installing-qoder", "done"})
+	s.apply("transition", event{"qoder", "config", "registration_committed"})
+	lines = strings.Join(s.currentLines(100, 0), "\n")
+	if !strings.Contains(lines, "! Qoder: Registration saved; follow-up pending") || strings.Contains(lines, "Qoder: Installed;") || s.counters() != "Completed 0; active 1; queued 1" {
+		t.Fatalf("Qoder partial result promoted: %q / %s", lines, s.counters())
+	}
+	var out bytes.Buffer
+	if err := Run(context.Background(), eventFile(t, "qoder\tcomplete\tcompleted\nstop\t\t\n"), Options{Output: &out}); err != nil {
+		t.Fatal(err)
+	}
+	if out.String() != "Qoder: complete - done\n" {
+		t.Fatalf("legacy observer omitted Qoder: %q", out.String())
+	}
+}

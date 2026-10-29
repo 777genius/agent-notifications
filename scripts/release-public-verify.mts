@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { GitHub, need, validate, type Manifest } from './basic-release-assets.mts';
+import { GitHub, need, validate, releaseRepository, type Manifest } from './basic-release-assets.mts';
 import { parseChannels } from './release-preflight.mts';
 
 type ObjectValue = Record<string, unknown>;
@@ -70,7 +70,7 @@ export async function verifyPublicRelease(input: PublicReleaseInputs) {
     'public loader requires HTTPS (HTTP allowed only for local test servers)');
   need(!url.username && !url.password, 'loader URL must not contain credentials');
   const m = validate(resolve(input.sealedDirectory));
-  const gh = new GitHub(m.repository);
+  const gh = new GitHub(releaseRepository(m.repository));
   const mainBefore = ref(gh, 'heads', 'main', input.mainSHA);
   const release = read(gh, `releases/tags/${m.releaseTag}`);
   const releaseID = releaseIdentity(release, m, 'public');
@@ -128,7 +128,7 @@ export async function verifyPublicRelease(input: PublicReleaseInputs) {
   const mainAfter = ref(gh, 'heads', 'main', input.mainSHA);
   return {
     status: 'public_release_verified', verifiedAt: new Date().toISOString(),
-    sealManifestSHA256: hash(readFileSync(resolve(input.sealedDirectory, 'manifest.json'))), scope, repository: m.repository, releaseTag: m.releaseTag,
+    sealManifestSHA256: hash(readFileSync(resolve(input.sealedDirectory, 'manifest.json'))), scope, repository: m.repository, verifiedRepository: gh.repo, releaseTag: m.releaseTag,
     candidateSHA: m.candidateSHA, sourceSHA: m.candidateSHA, mainSHA: input.mainSHA,
     producer: { runID: m.runID, runAttempt: m.runAttempt, operatorSHA: m.operatorSHA },
     publicRelease: { id: releaseID, latestID: latest.id, tag, assetCount: assets.length, assets },

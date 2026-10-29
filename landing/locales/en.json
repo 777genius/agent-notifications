@@ -1,7 +1,7 @@
 {
   "seo": {
     "title": "Agent Notifications - Stay in flow",
-    "description": "Desktop notifications and webhooks for Claude, Codex CLI and OpenCode. Gemini CLI: macOS / Linux / Windows. Cursor CLI: Linux amd64 / macOS arm64 / Windows amd64. Qoder: separate package."
+    "description": "Desktop notifications and webhooks for Claude, Codex CLI, OpenCode, Gemini CLI, Cursor CLI and Qoder. Agent and platform limits apply."
   },
   "language": {
     "label": "Language",
@@ -27,7 +27,7 @@
     "title": "Stay in flow",
     "emphasis": "We'll get your attention",
     "leadFirst": "Let your agent work. Know when it's done.",
-    "leadSecond": "Desktop notifications and webhooks for Claude, Codex CLI and OpenCode. Gemini CLI: macOS / Linux / Windows. Cursor CLI: Linux amd64 / macOS arm64 / Windows amd64. Qoder: separate package.",
+    "leadSecond": "Desktop notifications and webhooks for Claude, Codex CLI, OpenCode, Gemini CLI, Cursor CLI and Qoder. Agent and platform limits apply.",
     "primary": "Set up notifications",
     "secondary": "Explore on GitHub",
     "note": "Open source · Runs locally"
@@ -134,7 +134,7 @@
     "items": {
       "1": {
         "question": "Do I need every agent installed?",
-        "answer": "Select any combination of Claude, Codex CLI, OpenCode and Gemini CLI (macOS / Linux / Windows only). Install the selected agents first; the commands below install notifications."
+        "answer": "Select any combination of Claude, Codex CLI, OpenCode, Gemini CLI, Cursor CLI and Qoder. Install the selected CLIs first. Cursor supports Linux amd64, macOS arm64 and Windows amd64; see its guide for host requirements."
       },
       "2": {
         "question": "Are Codex hooks installed automatically?",
@@ -181,25 +181,25 @@
     "items": {
       "question": { "title": "❓ Question", "body": "What would you like to name the test file in /tmp/?" },
       "plan": { "title": "📋 Plan", "body": "Plan: Create test file in /tmp/" },
-      "completed": { "title": "✅ Completed", "body": "Done. Installation now comes right after the hero.", "detail": "✏️ 3 edited  ⏱ 35s" },
-      "review": { "title": "🔍 Review", "body": "Review complete. No issues found in the updated installer." },
+      "completed": { "title": "✅ Install notifications", "body": "Done. Installation now comes right after the hero.", "detail": "✏️ 3 edited  ⏱ 35s" },
+      "review": { "title": "🔍 Review the installer", "body": "Review complete. No issues found in the updated installer." },
       "permission": { "title": "🔐 Permission Request", "body": "Approval required: shell" },
       "limit": { "title": "⏱️ Session Limit Reached", "body": "Session limit reached. Please wait before continuing." },
       "error": { "title": "🔴 API Error: 401", "body": "Authentication expired. Please sign in again." },
       "opencodeComplete": {
-        "title": "OpenCode",
+        "title": "✅ Update the dashboard",
         "body": "Task completed"
       },
       "opencodeQuestion": {
-        "title": "OpenCode",
-        "body": "OpenCode asked a question"
+        "title": "❓ Which test file name?",
+        "body": "What would you like to name the test file in /tmp/?"
       },
       "opencodePermission": {
-        "title": "OpenCode",
+        "title": "🔐 Permission Request",
         "body": "OpenCode requested permission"
       },
       "opencodeError": {
-        "title": "OpenCode",
+        "title": "🔴 OpenCode · Errors",
         "body": "An error needs your attention"
       }
     }
@@ -209,9 +209,8 @@
     "scrollDown": "Scroll options down"
   },
   "install": {
-    "cursor": {"guide": "Cursor CLI installation", "scope": "Stop notifications and optional webhooks. Separate setup with explicit CLI/profile paths; qualified Linux amd64, macOS arm64 and Windows amd64 versions only."},
-    "qoder": {"guide": "Qoder setup and hooks", "scope": "Completion, question, permission, plan and teammate alerts with optional webhooks. Separate native package installed through the Qoder plugin installer; a notification click cannot open the exact existing chat."},
-    "platformRelease": "Qualified release for {os}: {version}.",
+    "availability": "The common Cursor/Qoder installer is available in platform release v1.49.11.", "cursor": {"guide": "Cursor CLI installation", "scope": "Cursor CLI: informational Stop alerts and optional webhooks on Linux amd64, macOS arm64 and Windows amd64. No Cursor IDE, sound or click-to-focus support. The installer validates the selected CLI and user profile.", "restart": "Restart Cursor CLI to load the informational Stop observer."},
+    "qoder": {"guide": "Qoder setup and hooks", "scope": "Qoder: completion, question, permission, plan and teammate alerts with optional webhooks. Choose Qoder alongside other agents in the common installer; a notification click cannot open the exact existing chat.", "restart": "Restart Qoder to activate the hooks."},
     "title": "Set up notifications",
     "intro": "Follow the steps below to add notifications to {agent}.",
     "chooseAgent": "Choose your agents",
@@ -283,8 +282,8 @@
     "installationInstructions": "Installation instructions",
     "configureSettings": "⚙ Configure settings",
     "agentNotify": {
-      "label": "Let agents send you notifications when they need your attention",
-      "hint": "Controls setup of a notification tool for Claude and Codex CLI during a task. Checked follows saved setup preferences; unchecked skips setup for this run and retains any existing tool."
+      "label": "Set up optional notification tools",
+      "hint": "Controls notification setup for selected Claude, Codex CLI and Cursor CLI. Checked follows saved setup preferences; unchecked skips their setup for this run, retaining existing registrations and consent. Qoder, OpenCode and Gemini are unaffected."
     },
     "capabilities": {
       "title": "Selected agent capabilities",
@@ -295,7 +294,7 @@
       "gemini": "Gemini CLI (macOS / Linux / Windows): silent turn-completed and tool-permission alerts. A completed turn does not imply success or a final answer. No sound, click-to-focus, question, error, plan, review or nested-agent parity."
     },
     "gemini": {
-      "version": "Gemini CLI requires exactly version 0.62.0. Available on macOS / Linux / Windows only; other CLI versions are rejected.",
+      "version": "Gemini CLI versions are not restricted. Available on macOS / Linux / Windows. Tested versions and platform coverage are documented in the Gemini guide.",
       "guide": "Gemini setup and limits",
       "restart": "Restart Gemini CLI to load the notification observer.",
       "configure": "Use the Gemini guide for channel consent and shared settings; no MCP tool or skill is installed. Built-in Gemini notifications can duplicate desktop alerts. Choose one desktop source or webhook-only; built-in settings are not changed."
@@ -308,7 +307,7 @@
       "channelsTitle": "OpenCode notification channels",
       "channelsHint": "These choices apply only to OpenCode. Allow at least one channel; webhook URLs are configured separately.",
       "scope": "OpenCode: silent completion, question, permission and error alerts for root sessions. No sound or click-to-focus.",
-      "version": "Stable OpenCode V1 ≥1.18.29 and V2 ≥2.0.0 are accepted. Qualification varies by version and platform; see the setup guide.",
+      "version": "OpenCode CLI versions are not restricted. Tested versions and platform coverage are documented in the setup guide.",
       "desktop": "Allow desktop notifications",
       "webhook": "Allow webhook notifications",
       "chooseChannel": "Choose at least one notification channel.",

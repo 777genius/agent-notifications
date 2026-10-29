@@ -27,7 +27,7 @@ case "$(uname -s)" in
         ;;
 esac
 export TEST_BOOTSTRAP_BASH
-for tool in bash sh env cygpath python3 node curl wget tar gzip unzip zip mktemp rm cat cp mv chmod mkdir ln uname tr wc head cmp grep sed awk dirname basename find sort sha256sum shasum cut xargs sleep date stat diff touch readlink dd od go gcc cc pkg-config; do
+for tool in bash sh env cygpath python3 node curl wget tar gzip unzip zip mktemp rm cat cp mv chmod mkdir rmdir ln uname tr wc head cmp grep sed awk dirname basename find sort sha256sum shasum cut xargs sleep date stat diff touch readlink dd od go gcc cc pkg-config; do
     tool_path=$(type -P "$tool" 2>/dev/null || true)
     [ -z "$tool_path" ] || test_env_place_tool "$tool_path" "$SANDBOX/trusted-tools/$tool"
 done
@@ -61,8 +61,17 @@ env -u HOME USERPROFILE="$SANDBOX/windows profile" CLAUDE_HOME="$SANDBOX/legacy 
     bash -c 'source "$1"; [ "$CLAUDE_HOME" = "$2" ]' \
     _ "$SANDBOX/functions.sh" "$SANDBOX/explicit config"
 source "$SANDBOX/functions.sh"
+# CHLD from the job-list queries reproduces Bash's adjacent-substitution trap
+# parser failure without timing a signal. The shell itself is never its child.
+bash -c '
+    source "$1"
+    trap : CHLD
+    if progress_child_running "$$"; then exit 1; fi
+' _ "$SANDBOX/functions.sh"
 # All macOS application queries in this suite must be explicitly mocked.
 bootstrap_macos_command() { echo "Unexpected macOS application query in fixture" >&2; return 1; }
+
+bash "$ROOT/bin/bootstrap_state_migration_test.sh"
 
 # Regression: an omitted route on macOS must reach configure with the registered
 # official app (including spaces) and preserve-policy; explicit decisions must
@@ -177,7 +186,19 @@ CONFIGURE_ROUTE
     [ "${SELECTED_PRODUCTS[*]}" = "claude codex opencode gemini" ]
     [ "${OPENCODE_ARGS[*]}" = --webhook ]
 )
-for args in "--products gemini,gemini --webhook" "--products claude,,gemini --webhook" "--product gemini --webhook --agent-notify"; do
+# Qoder shares observer channels while retaining the selected legacy group.
+(
+    PRODUCT=""; CONFIGURE_ARGS=(); OPENCODE_ARGS=()
+    select_product --products codex,qoder --webhook --skip-agent-notify
+    [ "$LEGACY_PRODUCT" = codex ]
+    [ "${SELECTED_PRODUCTS[*]}" = "codex qoder" ]
+    [ "${OPENCODE_ARGS[*]}" = --webhook ]
+    PRODUCT=""; CONFIGURE_ARGS=(); OPENCODE_ARGS=()
+    select_product --product qoder --desktop
+    [ "$CONFIGURE_NOTIFICATIONS" = false ]
+    [ "${SELECTED_PRODUCTS[*]}" = qoder ]
+)
+for args in "--products gemini,gemini --webhook" "--products claude,,gemini --webhook" "--product gemini --webhook --agent-notify" "--products qoder,qoder --webhook" "--product qoder --agent-notify"; do
     if ( PRODUCT=""; CONFIGURE_ARGS=(); OPENCODE_ARGS=(); select_product $args ); then
         echo "accepted invalid Gemini bundle: $args" >&2; exit 1
     fi
@@ -188,92 +209,35 @@ for args in "--product claude --desktop" "--product codex --webhook" "--product 
         exit 1
     fi
 done
-# A real disposable PATH executable covers common --version output formats.
-# No installed user host is queried by these prerequisite checks.
+# Presence is required, but host version output (or a failed --version command)
+# must never gate installation. These inert executables must not be launched.
 (
     mkdir -p "$SANDBOX/version-cli"
-    cat > "$SANDBOX/version-cli/opencode" <<'HOST_VERSION'
+    for product in opencode gemini; do
+        cat > "$SANDBOX/version-cli/$product" <<'HOST_VERSION'
 #!/bin/bash
-[ "$#" -eq 1 ] && [ "$1" = --version ] || exit 2
-[ "$PWD" -ef "$HOME" ] && [ "$HOME" -ef "$USERPROFILE" ] || exit 3
-case "$PWD" in */bootstrap-opencode-TEST-*/profile) ;; *) exit 4 ;; esac
-[ -f "${BASH_SOURCE[0]%/*}/version" ] || exit 7
-cat "${BASH_SOURCE[0]%/*}/version"
+printf '0.1.0-future-preview\n'
+: > "${BASH_SOURCE[0]%/*}/unexpected-version-probe"
+exit 97
 HOST_VERSION
-    chmod +x "$SANDBOX/version-cli/opencode"
+        chmod +x "$SANDBOX/version-cli/$product"
+    done
     export PATH="$SANDBOX/version-cli:$PATH"
-    PRODUCT=opencode
-    OPENCODE_ARGS=(--webhook)
-    for version in '1.18.29' '1.18.33' 'v1.18.33' 'OpenCode version: v1.18.33' '1.19.0' '2.0.0' 'v2.0.21'; do
-        printf '%s\n' "$version" > "$SANDBOX/version-cli/version"
-        [ -z "$(check_prerequisites 2>&1)" ]
-        diagnostic=$(BOOTSTRAP_VERBOSE=1 check_prerequisites 2>&1)
-        [[ "$diagnostic" == *"detected $version."* ]]
+    for PRODUCT in opencode gemini; do
+        OPENCODE_ARGS=(--webhook)
+        check_prerequisites
     done
-    for version in '1.18.4' '1.18.28' '1.17.99' '3.0.0' '2.0.0-beta.1' '2.0.0+build' '02.0.0' '2.00.0' '2.0.000' '2.9999999.0' 'OpenCode v2.0.0 (compatibility 1.18.33)' 'unknown' $'2.0.0\n1.18.33' $'unknown\e[31m\rterminal-control'; do
-        printf '%s\n' "$version" > "$SANDBOX/version-cli/version"
-        if diagnostic=$(check_prerequisites 2>&1); then
-            echo "accepted unsupported host output: $version" >&2
-            exit 1
-        fi
-        quoted_version=$(LC_ALL=C printf '%q' "$version")
-        quoted_cli=$(LC_ALL=C printf '%q' "$SANDBOX/version-cli/opencode")
-        [[ "$diagnostic" == *"detected $quoted_version"* ]]
-        [[ "$diagnostic" == *"CLI: $quoted_cli"* ]]
-        [[ "$diagnostic" == *"Older OpenCode V1 releases have not been verified with this installed notification plugin."* ]]
-        [[ "$diagnostic" == *"Update the selected OpenCode CLI shown above; the desktop app and CLI can have different versions."* ]]
-        [[ "$diagnostic" != *$'\e'* && "$diagnostic" != *$'\r'* ]]
-    done
-    # Untrusted output is bounded before quoting, while the guard still rejects it.
-    printf '%700s\n' '' | tr ' ' x > "$SANDBOX/version-cli/version"
-    if diagnostic=$(check_prerequisites 2>&1); then exit 1; fi
-    [[ "$diagnostic" == *"detected $(printf '%512s' '' | tr ' ' x)..."* ]]
-    [ "${#diagnostic}" -lt 1600 ]
-    # Escaping control bytes must not expand the diagnostic beyond its cap.
-    printf '%512s' '' | tr ' ' '\001' > "$SANDBOX/version-cli/version"
-    if diagnostic=$(check_prerequisites 2>&1); then exit 1; fi
-    [ "${#diagnostic}" -lt 1600 ]
-    [[ "$diagnostic" != *$'\e'* && "$diagnostic" != *$'\r'* && "$diagnostic" != *$'\001'* ]]
-    rm "$SANDBOX/version-cli/version"
-    if diagnostic=$(check_prerequisites 2>&1); then exit 1; fi
-    [[ "$diagnostic" == *"Cannot determine OpenCode version. CLI: $quoted_cli"* ]]
+    [ ! -e "$SANDBOX/version-cli/unexpected-version-probe" ]
 )
-# Gemini's prerequisite may execute only the disposable version fixture here.
-# Assert actual isolated cwd/home, dotenv sentinels and system redirects rather
-# than matching shell source. A changed version must stop before installation.
+# Keep the independent untrusted-diagnostic escaping/size contract.
 (
-    mkdir -p "$SANDBOX/gemini-version-cli"
-    cat > "$SANDBOX/gemini-version-cli/gemini" <<'GEMINI_VERSION'
-#!/bin/bash
-[ "$#" -eq 1 ] && [ "$1" = --version ] || exit 2
-[ "$PWD" -ef "$HOME" ] && [ "$USERPROFILE" -ef "$HOME" ] && [ "$GEMINI_CLI_HOME" -ef "$HOME" ] || exit 3
-[ -z "${GEMINI_SETUP_ENV_CANARY:-}" ] || exit 4
-for file in "$HOME/.gemini/.env" "$HOME/.env"; do
-    [ -f "$file" ] && [ ! -s "$file" ] || exit 5
-done
-probe=$(dirname "$HOME")
-[ "$GEMINI_CLI_SYSTEM_SETTINGS_PATH" = "$probe/settings.json" ] || exit 6
-[ "$GEMINI_CLI_SYSTEM_DEFAULTS_PATH" = "$probe/defaults.json" ] || exit 6
-for file in "$GEMINI_CLI_SYSTEM_SETTINGS_PATH" "$GEMINI_CLI_SYSTEM_DEFAULTS_PATH"; do
-    [ ! -e "$file" ] && [ ! -L "$file" ] || exit 6
-done
-[ "$GEMINI_CLI_TRUSTED_FOLDERS_PATH" = "$probe/trust.json" ] && [ -f "$GEMINI_CLI_TRUSTED_FOLDERS_PATH" ] || exit 6
-printf '0.62.0\n'
-GEMINI_VERSION
-    chmod +x "$SANDBOX/gemini-version-cli/gemini"
-    export PATH="$SANDBOX/gemini-version-cli:$PATH" GEMINI_SETUP_ENV_CANARY=synthetic-not-a-secret
-    PRODUCT=gemini
-    OPENCODE_ARGS=(--webhook)
-    check_prerequisites
-    sed 's/0\.62\.0/0.63.0/' "$SANDBOX/gemini-version-cli/gemini" > "$SANDBOX/gemini-version-cli/next"
-    mv "$SANDBOX/gemini-version-cli/next" "$SANDBOX/gemini-version-cli/gemini"
-    chmod +x "$SANDBOX/gemini-version-cli/gemini"
-    if diagnostic=$(check_prerequisites 2>&1); then
-        echo "accepted unqualified Gemini version" >&2; exit 1
-    fi
-    [[ "$diagnostic" == *"Unsupported Gemini CLI version; detected 0.63.0. Requires 0.62.0."* ]]
-    [[ "$diagnostic" == *"npm install -g @google/gemini-cli@0.62.0"* ]]
+    diagnostic=$(bootstrap_diagnostic_quote $'unknown\e[31m\rterminal-control')
+    [[ "$diagnostic" != *$'\e'* && "$diagnostic" != *$'\r'* ]]
+    value=$(printf '%700s' '' | tr ' ' x)
+    diagnostic=$(bootstrap_diagnostic_quote "$value")
+    [ "${#diagnostic}" -le 515 ]
 )
+
 quoted=$(quote_shell_command "$SANDBOX/bin space/cli" --package "$SANDBOX/pkg space" --codex-home "$CODEX_HOME")
 eval "set -- $quoted"
 [ "$#" -eq 5 ] || { echo "quoted argc $#"; exit 1; }
@@ -301,7 +265,12 @@ cat > "$SANDBOX/configure-parser" <<'EOF'
 preserve=0
 policy=0
 enabled=0
+value=false
+[ -z "${CONFIGURE_CAPTURE:-}" ] || printf '%s\0' "$@" > "$CONFIGURE_CAPTURE"
 for arg in "$@"; do
+    if [ "$value" = true ]; then value=false; continue; fi
+    case "$arg" in --scope-root|--client-executable) exit 41 ;; esac
+    case "$arg" in --provider|--navigation|--app|--team-id|--allow-unknown-caller|--allow-caller-asserted|--codex-home) value=true ;; esac
     [ "$arg" != --preserve-policy ] || preserve=$((preserve + 1))
     [ "$arg" != --policy-only ] || policy=$((policy + 1))
     [ "$arg" != --preserve-enabled ] || enabled=$((enabled + 1))
@@ -317,6 +286,22 @@ chmod +x "$SANDBOX/configure-parser"
     export EXPECTED_PRESERVE=0
     CONFIGURE_ARGS=(--navigation none --allow-unknown-caller true --allow-caller-asserted false)
     configure_agent_policy portable
+    CONFIGURE_ARGS=(--scope-root "$SANDBOX/cursor profile" --navigation none --client-executable "$SANDBOX/cursor agent" --allow-unknown-caller true --allow-caller-asserted false)
+    original_args="${CONFIGURE_ARGS[*]}"
+    configure_agent_policy portable
+    [ "${#CONFIGURE_ARGS[@]}" -eq 10 ] && [ "${CONFIGURE_ARGS[*]}" = "$original_args" ]
+    export EXPECTED_PRESERVE=1 CONFIGURE_CAPTURE="$SANDBOX/configure-argv"
+    CONFIGURE_ARGS=(--scope-root "$SANDBOX/cursor profile" --app "$SANDBOX/Terminal App.app" --team-id --client-executable --allow-unknown-caller true --allow-caller-asserted false --client-executable "$SANDBOX/cursor agent" --preserve-policy --json --request-permission)
+    original_args="${CONFIGURE_ARGS[*]}"
+    configure_agent_policy portable
+    [ "${CONFIGURE_ARGS[*]}" = "$original_args" ]
+    printf '%s\0' setup-notifications configure --provider claude --app "$SANDBOX/Terminal App.app" --team-id --client-executable --allow-unknown-caller true --allow-caller-asserted false --preserve-policy --json --request-permission --policy-only --preserve-enabled > "$SANDBOX/configure-expected"
+    python3 -I - "$CONFIGURE_CAPTURE" "$SANDBOX/configure-expected" <<'PY_CONFIGURE_ARGV'
+import pathlib, sys
+actual=pathlib.Path(sys.argv[1]).read_bytes().split(b'\0')[:-1]
+expected=pathlib.Path(sys.argv[2]).read_bytes().split(b'\0')[:-1]
+assert actual==expected,actual
+PY_CONFIGURE_ARGV
 )
 for tag in v1.42.0 v1.43.2 v2.0.0; do
     BOOTSTRAP_RELEASE_TAG="$tag"
@@ -489,10 +474,8 @@ WIZARD_PACKAGE_ROOT=""
     MARKETPLACE_SOURCE="new/repo"
     # shellcheck disable=SC2034
     MARKETPLACE_NAME="claude-notifications-go"
-    # shellcheck disable=SC2034
-    LEGACY_MARKETPLACE_REPOS="old/retired-repo"
     config_preflight() { :; }
-    calls="$SANDBOX/marketplace-calls"; declared_repo="old/retired-repo"
+    calls="$SANDBOX/marketplace-calls"; declared_repo="777genius/claude-notifications-go"
     marketplace_declared_repo() { printf '%s\n' "$declared_repo"; }
     claude() {
         printf '%s\n' "$*" >> "$calls"
@@ -511,10 +494,12 @@ WIZARD_PACKAGE_ROOT=""
         fi
         return 0
     }
-    : > "$calls"; rm -f "$SANDBOX/marketplace-add-called"
-    setup_marketplace
-    [ "$(grep -c '^plugin marketplace add' "$calls")" = 2 ] || { echo "expected retry add after self-heal"; exit 1; }
-    grep -q '^plugin marketplace remove claude-notifications-go$' "$calls" || { echo "expected self-heal remove"; exit 1; }
+    for declared_repo in 777genius/claude-notifications-go 777genius/agent-notifications; do
+        : > "$calls"; rm -f "$SANDBOX/marketplace-add-called"
+        setup_marketplace
+        [ "$(grep -c '^plugin marketplace add' "$calls")" = 2 ] || { echo "expected retry add after self-heal"; exit 1; }
+        grep -q '^plugin marketplace remove claude-notifications-go$' "$calls" || { echo "expected self-heal remove"; exit 1; }
+    done
 
     declared_repo="someone-else/unrelated-fork"
     : > "$calls"; rm -f "$SANDBOX/marketplace-add-called"
@@ -652,7 +637,16 @@ check_prerequisites() { :; }; detect_platform() { :; }
 resolve_bootstrap_release() { BOOTSTRAP_TAG=v1.43.2; }
 install_claude() { [ "$CN_PRODUCT" = claude ]; PLUGIN_ROOT='bundle space'; echo claude >> "$SANDBOX/calls"; }
 install_codex() { [ "${CN_PRODUCT:-}" = sentinel ]; echo codex >> "$SANDBOX/calls"; }
-stage_historical_baselines() { :; }; stage_config_helper() { _CONFIG_STAGE=$(mktemp -d); }; config_preflight() { :; }; initialize_config() { :; }
+cat > "$SANDBOX/repair-helper" <<'REPAIR_PEER'
+#!/bin/bash
+case "$1 ${2:-}" in
+    'setup-products repair-capabilities') printf 'cache-repair-v1\n' ;;
+    'setup-products repair-cache') printf 'ready\n' ;;
+    *) exit 99 ;;
+esac
+REPAIR_PEER
+chmod +x "$SANDBOX/repair-helper"
+stage_historical_baselines() { :; }; stage_config_helper() { _CONFIG_STAGE=$(mktemp -d); _CONFIG_HELPER="$SANDBOX/repair-helper"; }; config_preflight() { :; }; initialize_config() { :; }
 export CN_PRODUCT=sentinel
 for product in claude codex both; do
     : > "$SANDBOX/calls"
@@ -749,6 +743,46 @@ EARLY_CANARY
     [ ! -s "$SANDBOX/disabled-session-stage.err" ]
 )
 
+# Frozen delivery-config paths retain the caller's implicit/explicit source.
+# Repeated dispatch cannot suppress migration guards by inventing an override;
+# a changed default after frozen environment mapping must refuse before writers.
+(
+    export TEST_FROZEN_GLOBAL="$SANDBOX/frozen delivery config.json"
+    export TEST_IMPLICIT_CONFIG="$TEST_FROZEN_GLOBAL"
+    export TEST_CONFIG_ATOMS="$SANDBOX/config source atoms"
+    _CONFIG_STAGE=$(mktemp -d)
+    _CONFIG_HELPER="$_CONFIG_STAGE/helper"
+    _SELECTOR_INTENT="$_CONFIG_STAGE/selector-intent.json"
+    _PRODUCT_CSV=claude,codex; SELECTED_PRODUCTS=(claude codex)
+    printf '%s\0' home "$INSTALLER_HOME" control-root "$SANDBOX/config-source/agent-notifications" \
+        global-config "$TEST_FROZEN_GLOBAL" claude-config "$CLAUDE_HOME" claude-mcp-config "$SANDBOX/.claude.json" \
+        claude-executable "$SANDBOX/mock-claude" codex-home "$DEFAULT_CODEX_HOME" \
+        codex-mcp-config "$SANDBOX/codex.toml" codex-executable "$SANDBOX/mock-codex" > "$TEST_CONFIG_ATOMS"
+    cat > "$_CONFIG_HELPER" <<'CONFIG_SOURCE_PEER'
+#!/bin/bash
+case "$1 ${2:-}" in
+    'setup-products intent-args') cat "$TEST_CONFIG_ATOMS" ;;
+    'config path') printf '%s\n' "${AGENT_NOTIFICATIONS_CONFIG:-$TEST_IMPLICIT_CONFIG}" ;;
+    *) exit 97 ;;
+esac
+CONFIG_SOURCE_PEER
+    chmod +x "$_CONFIG_HELPER"
+    for source in implicit explicit; do
+        unset AGENT_NOTIFICATIONS_CONFIG
+        if [ "$source" = explicit ]; then export AGENT_NOTIFICATIONS_CONFIG="$SANDBOX/original explicit config.json"; fi
+        for repeat in 1 2; do
+            load_frozen_dispatch
+            [ "$_FROZEN_GLOBAL_CONFIG" = "$TEST_FROZEN_GLOBAL" ]
+            if [ "$source" = implicit ]; then [ -z "${AGENT_NOTIFICATIONS_CONFIG+x}" ]
+            else [ "$AGENT_NOTIFICATIONS_CONFIG" = "$TEST_FROZEN_GLOBAL" ]; fi
+        done
+    done
+    unset AGENT_NOTIFICATIONS_CONFIG
+    TEST_IMPLICIT_CONFIG="$SANDBOX/drifted config.json"
+    if load_frozen_dispatch; then echo 'Frozen config drift was accepted' >&2; exit 1; fi
+    [ -z "${AGENT_NOTIFICATIONS_CONFIG+x}" ]
+)
+
 # Cursor used to fail product parsing or lose its two frozen scalar arguments.
 # Drive the real main/selector/wizard composition through disposable argv peers;
 # no installer, vendor, provider, delivery or materializer executes here.
@@ -764,23 +798,33 @@ trace_name="${1#--}-${2:-none}"
 [ "${2:-}" != wizard ] || trace_name="$trace_name-$4"
 printf '%s\0' "$@" > "$TEST_TRACE/$trace_name"
 case "$1 ${2:-}" in
-    'setup-products capabilities') printf 'setup-products-v1 claude codex opencode gemini\n' ;;
+    'setup-products capabilities') printf 'setup-products-v1 claude codex opencode gemini qoder cursor\n' ;;
     'setup-products features') printf 'terminal-selector-v1\n' ;;
+    'setup-products repair-capabilities') printf 'cache-repair-v1\n' ;;
+    'setup-products repair-cache') printf 'ready\n' ;;
     'setup-products select') printf '%s\n' "${TEST_SELECTION:-cursor}" ;;
     'setup-products channels') [ "${TEST_CANCEL:-}" = channels ] || printf '%s\n' "$TEST_CHANNELS" ;;
-    'setup-products confirm')
+    'setup-products confirm'|'setup-products prepare')
+        reply=approved; [ "$2" != prepare ] || reply=prepared
         [ "${TEST_CANCEL:-}" != confirm ] || exit 0
         while [ "$#" -gt 0 ]; do
             if [ "$1" = --intent-file ]; then printf 'TEST immutable checkpoint' > "$2"; break; fi
             shift
         done
-        printf 'approved\n' ;;
+        printf '%s\n' "$reply" ;;
     'setup-products intent-args') cat "$TEST_ATOMS" ;;
+    'config path')
+        while IFS= read -r -d '' key && IFS= read -r -d '' value; do
+            if [ "$key" = global-config ]; then printf '%s\n' "$value"; exit 0; fi
+        done < "$TEST_ATOMS"
+        exit 97 ;;
     'setup-products preflight') exit "${TEST_PREFLIGHT_EXIT:-0}" ;;
     'setup-notifications --help') printf '%s\n' '--policy-only --preserve-enabled' ;;
     'setup-notifications wizard')
         if [ "${TEST_WIZARD_WARNING:-0}" = 1 ]; then printf '{"warning":"foreign-callback-fixture"}\n' >&2; fi
-        if [ "$4" = inspect ]; then printf '{"targets":[]}\n'; else exit "${TEST_WIZARD_EXIT:-0}"; fi ;;
+        if [ "$4" = inspect ]; then printf '{"targets":[]}\n'; else
+            [ -z "${TEST_MIXED_FLOW:-}" ] || printf 'cursor\n' >> "$TEST_TRACE/ORDER"
+            exit "${TEST_WIZARD_EXIT:-0}"; fi ;;
     *) exit 97 ;;
 esac
 CURSOR_PEER
@@ -796,11 +840,23 @@ acquire_wizard_portable_asset() { WIZARD_PACKAGE_ROOT="$TEST_TRACE/TEST package 
 # runtime preparation is exercised by the downloaded Cursor bootstrap canary.
 prepare_cursor_runtime() { _CURSOR_RUNTIME_PREPARED=false; }
 bootstrap_abs_command() { printf unexpected-discovery >> "$TEST_TRACE/mutation"; return 1; }
-install_legacy_products() { printf legacy >> "$TEST_TRACE/mutation"; return 99; }
+stage_historical_baselines() { :; }; config_preflight() { :; }
+parallel_install_available() { [ "${TEST_MIXED_FLOW:-}" = parallel ]; }
+install_products_parallel() {
+    _PARALLEL_ACTIVE=true; _PARALLEL_READY_CLIENTS=codex
+    mkdir -p "$_CONFIG_STAGE/parallel"
+    printf 'codex\nqoder\n' >> "$TEST_TRACE/ORDER"
+}
+install_legacy_products() {
+    if [ "${TEST_MIXED_FLOW:-}" = sequential ]; then printf 'codex\n' >> "$TEST_TRACE/ORDER"; return 0; fi
+    printf legacy >> "$TEST_TRACE/mutation"; return 99
+}
+install_qoder() { printf 'qoder\n' >> "$TEST_TRACE/ORDER"; }
 install_opencode() { printf opencode >> "$TEST_TRACE/mutation"; return 99; }
 install_gemini() { printf gemini >> "$TEST_TRACE/mutation"; return 99; }
 initialize_config() { printf config >> "$TEST_TRACE/mutation"; return 99; }
 main "$@"
+progress_write_final_snapshot > "$TEST_TRACE/STATUS"
 CURSOR_MAIN
     chmod +x "$TEST_CORE"
     python3 - "$SANDBOX" <<'PY_CURSOR'
@@ -818,7 +874,8 @@ runtime = str(sandbox / 'TEST installed core space')
 global_config = str(sandbox / 'TEST policy space.json')
 atoms = [('home', str(sandbox / 'TEST frozen home')), ('control-root', control),
          ('runtime-root', runtime), ('global-config', global_config),
-         ('scope-root', profile), ('client-executable', vendor)]
+         ('scope-root', profile), ('client-executable', vendor),
+         ('cursor-desktop','true'), ('cursor-webhook','false'), ('cursor-channel-preimage','absent'),('cursor-seed-enabled','true')]
 requested = ['--scope-root', str(sandbox / 'TEST requested cursor'),
              '--client-executable', str(sandbox / 'TEST requested vendor')]
 def run(args, changes=None, raw=None):
@@ -836,23 +893,25 @@ def run(args, changes=None, raw=None):
     finally:
         if process.poll() is None: process.kill(); process.communicate()
         os.close(master)
-    calls = [p.read_bytes().split(b'\0')[:-1] for p in trace.iterdir() if p.name != 'mutation']
+    calls = [p.read_bytes().split(b'\0')[:-1] for p in trace.iterdir() if p.name not in ('mutation','ORDER','STATUS')]
     return process.returncode, calls, output.decode(errors='replace')
 def call(calls, prefix):
-    return next(c for c in calls if c[:len(prefix)] == [s.encode() for s in prefix])
+    matches = [c for c in calls if c[:len(prefix)] == [s.encode() for s in prefix]]
+    assert matches, (prefix, calls)
+    return matches[0]
 def value(args, key): return args[args.index(key.encode())+1]
 for selection in (['--product', 'cursor'], ['--products', 'cursor'], []):
     for channels in (['--desktop'], ['--webhook'], ['--desktop', '--webhook'], []):
         code, calls, output = run(selection+requested+['--agent-notify']+channels)
         # Old parsing rejected Cursor; dropped CSV/selector IDs prevented dispatch.
         assert code == 0, output
-        confirm = call(calls, ['setup-products', 'confirm'])
+        confirm = call(calls, ['setup-products', 'confirm' if not selection else 'prepare'])
         # Original explicit scope must reach confirmation before frozen argv replaces it.
         assert value(confirm, '--scope-root') == requested[1].encode()
         assert value(confirm, '--client-executable') == requested[3].encode()
         # Desktop-only/webhook-only must not broaden to the absent sibling channel.
         for flag in ('--desktop', '--webhook'):
-            assert (flag.encode() in confirm) == (not channels or flag in channels)
+            assert (flag.encode() in confirm) == (flag in channels)
         preflight = call(calls, ['setup-products', 'preflight'])
         install = call(calls, ['setup-notifications', 'wizard', '--action', 'install'])
         inspect = call(calls, ['setup-notifications', 'wizard', '--action', 'inspect'])
@@ -878,8 +937,8 @@ for warning in ('0', '1'):
     assert ('Maintenance: installer reported additional details.' in output) == (warning == '1'), output
     assert not any(value in output for value in ('Diagnostics:', 'saved in Diagnostics', '"targets"', 'foreign-callback-fixture')), output
 # Cancellation at either question must finish without writing or granting consent.
-for cancel in ('channels', 'confirm'):
-    code, calls, output = run(['--product', 'cursor']+requested, {'TEST_CANCEL': cancel})
+for cancel in ('confirm',):
+    code, calls, output = run(requested, {'TEST_CANCEL': cancel})
     assert code == 0 and not any(c[:1] == [b'setup-notifications'] for c in calls), output
     # Cancellation must also stop legacy/observer/config writes and discovery.
     assert not (trace/'mutation').exists() and 'Boost your productivity' not in output, output
@@ -888,6 +947,8 @@ code, calls, output = run(['--product', 'cursor']+requested+['--skip-agent-notif
 assert code == 0 and not any(c[:1] == [b'setup-notifications'] for c in calls), output
 # A skipped unit must not run another installer/config writer before returning.
 assert not (trace/'mutation').exists(), output
+assert b'cursor\tcomplete\tskipped\n' in (trace/'STATUS').read_bytes(), output
+assert 'Cursor' in output and 'skipped; existing setup kept' in output and 'restart required' not in output, output
 valid = b''.join(k.encode()+b'\0'+v.encode()+b'\0' for k,v in atoms)
 # Duplicate, unknown, relative, missing or truncated frozen scalars must stop before writers.
 for raw in (valid+b'scope-root\0'+profile.encode()+b'\0', valid+b'invented-key\0/TEST\0',
@@ -904,11 +965,27 @@ for changes in ({'TEST_PREFLIGHT_EXIT':'73'}, {'TEST_WIZARD_EXIT':'77'}):
     # Checkpoint/caller refusal must not enter unrelated installers/config writes.
     assert not (trace/'mutation').exists(), output
 # Missing/duplicate selected scope, mixed products and navigation must fail before acquisition.
-for args in (['--product','cursor'], ['--product','cursor']+requested[:2],
-        ['--product','cursor']+requested+requested[:2], ['--products','claude,cursor']+requested,
+for args in (['--product','cursor']+requested[:2],
+        ['--product','cursor']+requested+requested[:2],
         ['--product','claude']+requested, ['--product','cursor']+requested+['--navigation','none']):
     code, calls, output = run(args)
     assert code != 0 and not calls and not (trace/'mutation').exists(), output
+# Actual common dispatch keeps Cursor after both sequential and parallel siblings.
+mixed = atoms + [('codex-home', str(sandbox/'TEST-codex')),
+    ('codex-mcp-config',str(sandbox/'TEST-codex'/'config.toml')),
+    ('codex-executable',str(sandbox/'TEST-codex-cli')),
+    ('qoder-config-root',str(sandbox/'TEST-qoder')),
+    ('qoder-executable',str(sandbox/'TEST-qoder-cli')),
+    ('qoder-desktop','true'),('qoder-webhook','false'),('qoder-channel-preimage','absent')]
+for flow in ('sequential','parallel'):
+    code,calls,output = run(['--products','codex,qoder,cursor','--desktop'],
+        {'TEST_MIXED_FLOW':flow}, raw=b''.join(k.encode()+b'\0'+v.encode()+b'\0' for k,v in mixed))
+    assert code == 0, output
+    assert (trace/'ORDER').read_text().splitlines() == ['codex','qoder','cursor'], output
+    install = call(calls,['setup-notifications','wizard','--action','install'])
+    assert value(install,'--agents') == b'cursor' and b'--bootstrap-ready-clients' not in install
+    assert len([c for c in calls if c[:2] == [b'setup-products',b'prepare']]) == 1
+    assert not any(c[:2] == [b'setup-products',b'confirm'] for c in calls)
 print('Cursor frozen bootstrap argv and refusal fixtures passed (composition only)')
 PY_CURSOR
 )
@@ -941,7 +1018,7 @@ trap 'echo OBSERVER_INTERRUPTED >&2; exit 0' TERM INT HUP
 while ! grep -q '^stop' "$file"; do sleep 0.02; done
 cp "$file" "$TEST_PROGRESS_COPY"
 printf 'OBSERVER_STOP\\n' >&2
-''')
+''', newline='\n')
 helper.chmod(0o700)
 script = sandbox / 'progress-lifecycle.sh'
 script.write_text('''#!/bin/bash
@@ -1001,7 +1078,7 @@ fi
 if [ "$status" -eq 0 ]; then report_progress 0; report_diagnostics; else report_setup_failure "$status"; fi
 if [ "${BOOTSTRAP_VERBOSE:-0}" = 1 ]; then bootstrap_diagnostics view "$_DIAGNOSTIC_LOG" >&2; fi
 exit "$status"
-''')
+''', newline='\n')
 def run(name, mode='auto', old=False, color=False, terminal=True, helper_path=helper, failure=0, cancel=False, broken=False, stop_failure=False, summary=False, summary_transform_failure=False, summary_replace_failure=False, verbose=False, dumb=False, narrow=False):
     tmp = sandbox / ('progress-' + name); tmp.mkdir()
     env = os.environ.copy()
@@ -1148,7 +1225,7 @@ status=0
 run_setup_stage 'Installing fixture' emit_failure || status=$?
 [ "$status" -eq 37 ] || exit 99
 report_setup_failure "$status"
-''')
+''', newline='\n')
 for engine in ('python3', 'node'):
     if engine == 'node' and not shutil.which('node'): continue
     cases = ('default', 'private', 'public', 'temporary', 'write-failed') if os.name == 'nt' else ('default', 'private', 'symlink', 'public', 'temporary', 'write-failed')
@@ -1189,6 +1266,510 @@ for engine in ('python3', 'node'):
 print('PASS private durable diagnostic storage or native Windows refusal, truncation, symlink denial and honest write failure')
 PY_DIAGNOSTIC_STORAGE
 
+# A lock release between failed mkdir and inspection must retry, while an
+# existing non-directory lock, cancel marker or nonblocking contention must keep
+# its finite refusal/status contract. No installer/vendor command runs here.
+python3 -I - "$SANDBOX" "$TEST_BOOTSTRAP_BASH" <<'PY_WRITER_GATE_RACE'
+import os, pathlib, shutil, subprocess, sys
+sandbox,bash=pathlib.Path(sys.argv[1]),sys.argv[2]
+# Finite PATH entries are extensionless Bash wrappers on native Windows.
+# Resolve in the shell that executes them; Python which() applies PATHEXT and
+# cannot discover those wrappers. This retains the same allowlisted tools.
+real_mkdir,real_rmdir=subprocess.check_output(
+    [bash,'-c','type -P mkdir && type -P rmdir'],text=True).splitlines()
+assert real_mkdir and real_rmdir
+script=sandbox/'writer-gate-race-TEST.sh'
+script.write_text(r'''#!/bin/bash
+source "$TEST_GATE_SOURCE"
+_PARALLEL_ROOT="$TEST_GATE_CASE"
+fixture_callback() {
+    [ "$_PARALLEL_GATE_HELD" = true ] || return 91
+    printf 'acquired\n' >> "$TEST_GATE_CASE/callbacks"
+}
+set -- fixture_callback
+case "$TEST_GATE_MODE" in busy|file-try|symlink-try|always-absent-try) set -- --try fixture_callback ;; esac
+status=0
+if [ "$TEST_GATE_MODE" = always-absent-try ]; then
+    attempts=0
+    while [ "$attempts" -lt 40 ]; do
+        status=0; bootstrap_writer_gate "$@" || status=$?
+        [ "$status" -eq 75 ] || break
+        attempts=$((attempts + 1))
+    done
+else
+    bootstrap_writer_gate "$@" || status=$?
+fi
+printf '%s\n' "$_PARALLEL_GATE_ABSENT_FAILURES" > "$TEST_GATE_CASE/absent-failures"
+printf '%s\n' "$status" > "$TEST_GATE_CASE/status"
+printf '%s\n' "$_PARALLEL_GATE_BUSY" > "$TEST_GATE_CASE/busy"
+''', newline='\n')
+mkdir_stub=r'''#!/bin/bash
+if [ "$1" = "$TEST_GATE_CASE/writer.lock" ]; then
+    printf 'attempt\n' >> "$TEST_GATE_CASE/attempts"
+    case "$TEST_GATE_MODE" in always-absent|always-absent-try) exit 1 ;; esac
+    if [ "$TEST_GATE_MODE" = race ] && [ ! -e "$TEST_GATE_CASE/released" ]; then
+        "$TEST_REAL_MKDIR" "$@" 2>/dev/null
+        status=$?
+        [ "$status" -ne 0 ] || exit 92
+        # The owner releases after mkdir has failed, before the caller sees it.
+        "$TEST_REAL_RMDIR" "$@" || exit 93
+        : > "$TEST_GATE_CASE/released"
+        exit "$status"
+    fi
+fi
+exec "$TEST_REAL_MKDIR" "$@"
+'''
+for mode in ('race','file','file-try','busy','cancel','always-absent','always-absent-try') + (() if os.name=='nt' else ('symlink','symlink-try')):
+    case=sandbox/('writer-gate-'+mode); case.mkdir(mode=0o700)
+    tools=case/'tools';tools.mkdir(mode=0o700)
+    stub=tools/'mkdir';stub.write_text(mkdir_stub, newline='\n');stub.chmod(0o700)
+    lock=case/'writer.lock'
+    if mode in ('race','busy'): lock.mkdir(mode=0o700)
+    elif mode in ('file','file-try'): lock.write_text('must remain untouched\n')
+    elif mode in ('symlink','symlink-try'): lock.symlink_to(case/'missing-target')
+    elif mode=='cancel': (case/'cancel').touch()
+    env=dict(os.environ,PATH=str(tools)+os.pathsep+os.environ['PATH'],TEST_GATE_MODE=mode,TEST_GATE_CASE=str(case),
+             TEST_GATE_SOURCE=str(sandbox/'functions.sh'),TEST_REAL_MKDIR=real_mkdir,TEST_REAL_RMDIR=real_rmdir)
+    proc=subprocess.run([bash,str(script)],env=env,capture_output=True,timeout=8)
+    assert proc.returncode==0,(mode,proc.stdout,proc.stderr)
+    expected={'race':0,'file':1,'file-try':1,'symlink':1,'symlink-try':1,'busy':75,'cancel':130,'always-absent':1,'always-absent-try':1}[mode]
+    assert int((case/'status').read_text())==expected,(mode,proc.stdout,proc.stderr)
+    assert (case/'busy').read_text()==('true\n' if mode=='busy' else 'false\n')
+    if mode=='race':
+        assert (case/'callbacks').read_text()=='acquired\n'
+        assert (case/'attempts').read_text()=='attempt\nattempt\n'
+        assert not lock.exists() and not (case/'cancel').exists()
+    else:
+        assert not (case/'callbacks').exists(),mode
+        if mode in ('file','file-try'): assert lock.read_text()=='must remain untouched\n'
+        if mode in ('symlink','symlink-try'): assert lock.is_symlink()
+        if mode=='busy': assert lock.is_dir() and (case/'absent-failures').read_text()=='0\n'
+        if mode in ('always-absent','always-absent-try'):
+            assert (case/'absent-failures').read_text()=='32\n'
+            assert len((case/'attempts').read_text().splitlines())==32 and (case/'cancel').is_file()
+print('PASS writer gate release race, invalid paths, cancel/nonblocking statuses and bounded absent-path failures')
+PY_WRITER_GATE_RACE
+
+# Latches fail if jobs serialize, failures cancel siblings, policy is seeded
+# after observer consent, or shared transactions overlap.
+python3 -I - "$SANDBOX" "$TEST_BOOTSTRAP_BASH" <<'PY_PARALLEL_INSTALL'
+import atexit, os, pathlib, shutil, signal, subprocess, sys, time
+children=[]
+def cleanup_children():
+    for proc in children:
+        if proc.poll() is None:
+            proc.terminate()
+            try: proc.communicate(timeout=8)
+            except subprocess.TimeoutExpired:
+                proc.kill(); proc.communicate(timeout=8)
+atexit.register(cleanup_children)
+sandbox, bash = pathlib.Path(sys.argv[1]), sys.argv[2]
+script = sandbox/'parallel-installer-TEST.sh'
+script.write_text(r'''#!/bin/bash
+source "$TEST_PARALLEL_SOURCE"
+_UI_MODE=plain
+_CONFIG_STAGE="$TEST_PARALLEL_CASE/stage"
+_CONFIG_HELPER="$_CONFIG_STAGE/helper"
+_SELECTOR_INTENT="$TEST_PARALLEL_CASE/frozen-intent"
+CONFIGURE_NOTIFICATIONS=true
+SELECTED_PRODUCTS=(claude codex opencode gemini qoder)
+_PRODUCT_CSV=claude,codex,opencode,gemini,qoder
+LEGACY_PRODUCT=both
+_PROGRESS_IDS=(claude codex opencode gemini qoder)
+_PROGRESS_PHASES=(pending pending pending pending pending)
+_PROGRESS_OUTCOMES=(not_started not_started not_started not_started not_started)
+BOOTSTRAP_SUMMARY_FILE="$TEST_PARALLEL_CASE/summary"
+export BOOTSTRAP_SUMMARY_FILE
+# Fixture adapters only: no agent/vendor CLI or real profile is used.
+progress_child_running() {
+    if [ "${TEST_PARALLEL_FAIL:-}" = trailing ] && [ ! -f "$TEST_PARALLEL_CASE/trailing-injected" ] &&
+        [ -f "$_PARALLEL_ROOT/opencode/result" ]; then
+        local index=0
+        while [ "$index" -lt "${#_PARALLEL_PIDS[@]}" ]; do
+            if [ "${_PARALLEL_CLIENTS[$index]}" = opencode ] && [ "${_PARALLEL_PIDS[$index]}" = "$1" ]; then
+                # Inject exactly after the parent's ordinary drain, after this
+                # worker exits, and before its authoritative result is merged.
+                wait "$1" || return 0
+                printf 'transition\topencode\truntime\trunning\n' >> "$_PARALLEL_ROOT/opencode/events"
+                : > "$TEST_PARALLEL_CASE/trailing-injected"
+                return 1
+            fi
+            index=$((index + 1))
+        done
+    fi
+    local running result=1 _BOOTSTRAP_JOB_QUERY=true _BOOTSTRAP_JOB_QUERY_INTERRUPT=0
+    for running in $(jobs -pr; jobs -ps); do
+        if [ "$running" = "$1" ]; then result=0; break; fi
+    done
+    _BOOTSTRAP_JOB_QUERY=false
+    [ "$_BOOTSTRAP_JOB_QUERY_INTERRUPT" -eq 0 ] || exit "$_BOOTSTRAP_JOB_QUERY_INTERRUPT"
+    return "$result"
+}
+parallel_phase() {
+    if [ -z "$_PARALLEL_WORKER" ]; then
+        if [ "${TEST_PARALLEL_FAIL:-}" = crash-holder ] && [ "$1" = waiting ] && [ -f "$TEST_PARALLEL_CASE/holder-ready" ]; then
+            : > "$TEST_PARALLEL_CASE/seed-attempt"
+        fi
+        return 0
+    fi
+    progress_phase "$_PARALLEL_WORKER" "$1" running
+}
+progress_start() { printf 'renderer-start\n' >> "$TEST_PARALLEL_CASE/renderer"; }
+progress_stop() { :; }
+diagnostic_capture_stage() {
+    printf '%s:%s\n' "$_DIAGNOSTIC_LABEL" "$1" >> "$TEST_PARALLEL_CASE/diagnostics"
+    [ -z "$_PROGRESS_STDERR" ] || cat "$_PROGRESS_STDERR" >> "$TEST_PARALLEL_CASE/private-errors"
+}
+fixture_commit() {
+    mkdir "$TEST_PARALLEL_CASE/critical" || { echo overlap >> "$TEST_PARALLEL_CASE/overlap"; return 1; }
+    [ "$_PARALLEL_GATE_HELD" = true ] || return 1
+    printf '%s\n' "$1" >> "$TEST_PARALLEL_CASE/writers"
+    sleep 0.05
+    rmdir "$TEST_PARALLEL_CASE/critical" || return 1
+    if [ "$1" = qoder ] && [ "${TEST_PARALLEL_FAIL:-}" = qoder ]; then
+        echo 'exact Qoder failure receipt' >&2
+        return 1
+    fi
+}
+initialize_config() { printf 'init\n' >> "$TEST_PARALLEL_CASE/init"; }
+configure_agent_policy() {
+    [ "$PRODUCT" = both ] && [ "$1" = portable ] || return 1
+    [ "$_SELECTOR_INTENT" = "$TEST_PARALLEL_CASE/frozen-intent" ] || return 1
+    [ -f "$TEST_PARALLEL_CASE/codex-ready" ] || [ -f "$TEST_PARALLEL_CASE/claude-ready" ] || return 1
+    fixture_commit policy || return 1
+    : > "$TEST_PARALLEL_CASE/policy-seeded"
+}
+install_claude() {
+    parallel_phase marketplace
+    : > "$TEST_PARALLEL_CASE/claude-started"
+    if [ "${TEST_PARALLEL_FAIL:-}" = crash-holder ]; then
+        while [ ! -f "$TEST_PARALLEL_CASE/codex-ready" ]; do sleep 0.05; done
+        fixture_hold_and_crash() {
+            : > "$TEST_PARALLEL_CASE/holder-ready"
+            while [ ! -f "$TEST_PARALLEL_CASE/holder-crash" ]; do sleep 0.05; done
+            bash -c 'kill -KILL "$PPID"'
+        }
+        bootstrap_writer_gate fixture_hold_and_crash
+        return 1
+    fi
+    if [ "${TEST_PARALLEL_CANCEL:-}" = 1 ]; then
+        bash -c 'printf "%s\n" "$$" > "$TEST_PARALLEL_CASE/grandchild-pid"; while :; do sleep 0.2; done' &
+        wait "$!"
+    fi
+    while [ ! -f "$TEST_PARALLEL_CASE/claude-release" ]; do sleep 0.05; done
+    [ "${TEST_PARALLEL_FAIL:-}" != all-legacy ] || return 1
+    [ "${TEST_PARALLEL_FAIL:-}" != claude ] || { echo 'exact Claude failure receipt' >&2; return 1; }
+    bootstrap_writer_gate fixture_commit claude || return 1
+    PLUGIN_ROOT="$TEST_PARALLEL_CASE/claude-owned"
+    CONFIGURE_BINARY="$_CONFIG_STAGE/helper"
+    : > "$TEST_PARALLEL_CASE/claude-ready"
+}
+install_codex() {
+    parallel_phase download
+    [ "${TEST_PARALLEL_FAIL:-}" != all-legacy ] || return 1
+    bootstrap_writer_gate fixture_commit codex || return 1
+    CONFIGURE_BINARY="$_CONFIG_STAGE/helper"
+    : > "$TEST_PARALLEL_CASE/codex-ready"
+    if [ "${TEST_PARALLEL_FAIL:-}" = crash-holder ]; then
+        while [ ! -f "$TEST_PARALLEL_CASE/holder-ready" ]; do sleep 0.05; done
+    fi
+}
+fixture_observer() {
+    parallel_phase download
+    : > "$TEST_PARALLEL_CASE/$1-acquired"
+    parallel_policy_barrier || return 1
+    [ -f "$TEST_PARALLEL_CASE/policy-seeded" ] || return 1
+    bootstrap_writer_gate fixture_commit "$1" || return 1
+    printf '  %s summary\n' "$1" > "$BOOTSTRAP_SUMMARY_FILE"
+    : > "$TEST_PARALLEL_CASE/$1-ready"
+}
+install_opencode() { fixture_observer opencode; }
+install_gemini() { fixture_observer gemini; }
+install_qoder() { fixture_observer qoder; }
+configure_agent_notify() {
+    [ "$PRODUCT" = both ] && [ "$_PARALLEL_POLICY_READY" = true ] || return 1
+    [ "$_SELECTOR_INTENT" = "$TEST_PARALLEL_CASE/frozen-intent" ] || return 1
+    printf '%s\n' "$_PARALLEL_READY_CLIENTS" > "$TEST_PARALLEL_CASE/mcp-ready-clients"
+    [ -f "$TEST_PARALLEL_CASE/opencode-ready" ] && [ -f "$TEST_PARALLEL_CASE/gemini-ready" ] || return 1
+    [ "${TEST_PARALLEL_FAIL:-}" = qoder ] || [ -f "$TEST_PARALLEL_CASE/qoder-ready" ] || return 1
+    local client
+    for client in claude codex; do
+        case ",$_PARALLEL_READY_CLIENTS," in *",$client,"*) progress_phase "$client" MCP completed ;; esac
+    done
+    if [ "${TEST_PARALLEL_FAIL:-}" = mcp-partial ]; then
+        progress_phase claude MCP activation_timeout
+        return 1
+    fi
+    [ "${TEST_PARALLEL_FAIL:-}" != mcp ]
+}
+print_success() { printf '  %s summary\n' "$PRODUCT" >> "$BOOTSTRAP_SUMMARY_FILE"; }
+install_cleanup_traps
+status=0
+install_products_parallel || status=$?
+progress_write_final_snapshot > "$TEST_PARALLEL_CASE/final"
+printf '%s\n' "$status" > "$TEST_PARALLEL_CASE/status"
+exit "$status"
+''', newline='\n')
+def wait_for(path, proc):
+    limit = time.monotonic()+30
+    while not path.exists():
+        if proc.poll() is not None:
+            out, err = proc.communicate()
+            raise AssertionError((str(path), proc.returncode, out, err))
+        assert time.monotonic()<limit, str(path)
+        time.sleep(.02)
+for failure in ('', 'claude', 'mcp', 'all-legacy', 'trailing', 'crash-holder', 'mcp-partial', 'gate-release', 'qoder', 'gate-mkdir'):
+    case = sandbox/('parallel-'+(failure or 'success')); case.mkdir(mode=0o700)
+    (case/'stage').mkdir(); helper=case/'stage'/'helper'; helper.write_text('#!/bin/bash\nexit 0\n', newline='\n'); helper.chmod(0o700)
+    (case/'frozen-intent').write_text('immutable fixture intent\n')
+    env=dict(os.environ, TEST_PARALLEL_SOURCE=str(sandbox/'functions.sh'), TEST_PARALLEL_CASE=str(case), TEST_PARALLEL_FAIL=failure)
+    if failure=='gate-release':
+        real_rmdir=subprocess.check_output([bash,'-c','type -P rmdir'],text=True).strip(); assert real_rmdir
+        tools=case/'tools'; tools.mkdir(mode=0o700)
+        stub=tools/'rmdir'
+        stub.write_text('''#!/bin/bash
+case "$1" in */writer.lock)
+    if [ ! -e "$TEST_PARALLEL_CASE/release-failed" ]; then
+        : > "$TEST_PARALLEL_CASE/release-failed"
+        exit 1
+    fi ;;
+esac
+exec "$TEST_REAL_RMDIR" "$@"
+''', newline='\n')
+        stub.chmod(0o700)
+        env.update(PATH=str(tools)+os.pathsep+env['PATH'], TEST_REAL_RMDIR=real_rmdir)
+    if failure=='gate-mkdir':
+        real_mkdir=subprocess.check_output([bash,'-c','type -P mkdir'],text=True).strip(); assert real_mkdir
+        tools=case/'tools'; tools.mkdir(mode=0o700)
+        stub=tools/'mkdir'
+        stub.write_text('''#!/bin/bash
+case "$1" in */writer.lock)
+    : > "$TEST_PARALLEL_CASE/mkdir-failed"
+    exit 1 ;;
+esac
+exec "$TEST_REAL_MKDIR" "$@"
+''', newline='\n')
+        stub.chmod(0o700)
+        env.update(PATH=str(tools)+os.pathsep+env['PATH'], TEST_REAL_MKDIR=real_mkdir)
+    proc=subprocess.Popen([bash, str(script)], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    children.append(proc)
+    names=('claude-started','opencode-acquired','gemini-acquired','qoder-acquired') if failure=='all-legacy' else ('claude-started','codex-ready','opencode-ready','gemini-ready','qoder-ready')
+    if failure=='gate-mkdir': names=('claude-started','mkdir-failed','opencode-acquired','gemini-acquired','qoder-acquired')
+    if failure=='gate-release': names=('claude-started','release-failed','opencode-acquired','gemini-acquired','qoder-acquired')
+    if failure=='qoder': names=('claude-started','codex-ready','opencode-ready','gemini-ready','qoder-acquired')
+    if failure=='crash-holder':
+        for name in ('holder-ready', 'seed-attempt'): wait_for(case/name, proc)
+        (case/'holder-crash').touch()
+    for name in names: wait_for(case/name, proc)
+    if failure=='trailing': wait_for(case/'trailing-injected', proc)
+    assert not (case/'claude-release').exists() and proc.poll() is None
+    journal=case/'stage'/'parallel'/'progress.events'
+    if os.name!='nt': assert journal.stat().st_mode & 0o777 == 0o600
+    for stage in case.glob('bootstrap-parallel-*'):
+        if os.name!='nt': assert stage.stat().st_mode & 0o777 == 0o700
+    (case/'claude-release').touch()
+    out, err=proc.communicate(timeout=12)
+    assert proc.returncode == (1 if failure in ('claude','mcp','all-legacy','crash-holder','mcp-partial','gate-release','qoder','gate-mkdir') else 0), (failure, out, err)
+    assert not (case/'overlap').exists()
+    if failure in ('gate-release','gate-mkdir'):
+        assert not (case/'mcp-ready-clients').exists() and not (case/'init').exists()
+        assert '\tcomplete\tcompleted' not in (case/'final').read_text()
+        assert not (case/'summary').exists() or not (case/'summary').read_text()
+        continue
+    if failure=='all-legacy':
+        assert not (case/'policy-seeded').exists() and not (case/'mcp-ready-clients').exists() and not (case/'init').exists()
+        assert not (case/'opencode-ready').exists() and not (case/'gemini-ready').exists() and not (case/'qoder-ready').exists()
+        assert 'approved shared policy preparation is unavailable' in (case/'private-errors').read_text()
+        continue
+    assert (case/'init').read_text()=='init\n'
+    assert (case/'mcp-ready-clients').read_text()==('codex\n' if failure in ('claude','crash-holder') else 'claude,codex\n')
+    assert (case/'frozen-intent').read_text()=='immutable fixture intent\n'
+    assert ''.join(line+'\n' for line in (case/'summary').read_text().splitlines() if not line.startswith('  Delivery has not been verified.'))==('' if failure in ('claude','crash-holder') else '  claude summary\n')+'  codex summary\n  opencode summary\n  gemini summary\n'+('' if failure=='qoder' else '  qoder summary\n')
+    final=(case/'final').read_text()
+    assert 'opencode\tcomplete\tcompleted' in final and 'gemini\tcomplete\tcompleted' in final
+    assert 'codex\tcomplete\tcompleted' in final
+    if failure=='qoder':
+        assert 'qoder\tcomplete\tcompleted' not in final and 'exact Qoder failure receipt' in (case/'private-errors').read_text()
+    else: assert 'qoder\tcomplete\tcompleted' in final
+    assert 'qoder\n' in (case/'writers').read_text()
+    if failure=='mcp-partial': assert 'claude\tMCP\tactivation_timeout' in final
+    elif failure not in ('claude','crash-holder'): assert 'claude\tcomplete\tcompleted' in final
+    if failure=='claude': assert 'exact Claude failure receipt' in (case/'private-errors').read_text()
+    diagnostics=(case/'diagnostics').read_text()
+    indexes=[diagnostics.index('Installing '+client+' notifications:') for client in ('claude','codex','opencode','gemini','qoder')]
+    assert indexes==sorted(indexes)
+# Cancellation must terminate every owned group's descendants before cleanup.
+if os.name != 'nt':
+    case=sandbox/'parallel-cancel'; case.mkdir(mode=0o700); (case/'stage').mkdir()
+    helper=case/'stage'/'helper'; helper.write_text('#!/bin/bash\nexit 0\n', newline='\n'); helper.chmod(0o700)
+    (case/'frozen-intent').write_text('fixture\n')
+    env=dict(os.environ, TEST_PARALLEL_SOURCE=str(sandbox/'functions.sh'), TEST_PARALLEL_CASE=str(case), TEST_PARALLEL_CANCEL='1')
+    proc=subprocess.Popen([bash, str(script)], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    children.append(proc)
+    wait_for(case/'grandchild-pid', proc)
+    while not (case/'grandchild-pid').stat().st_size: time.sleep(.01)
+    pid=int((case/'grandchild-pid').read_text())
+    proc.send_signal(signal.SIGTERM)
+    out, err=proc.communicate(timeout=8)
+    assert proc.returncode==143, (out,err)
+    try: os.kill(pid,0)
+    except ProcessLookupError: pass
+    else:
+        state=pathlib.Path('/proc')/str(pid)/'stat'
+        assert state.exists() and state.read_text().split()[2]=='Z', (pid,out,err)
+print('PASS five concurrent installer jobs including independent Qoder, policy barrier, serialized writers, isolated failure, completion-tail IPC, crashed lock holder, failed gate release and descendant cancellation')
+PY_PARALLEL_INSTALL
+
+# The parent must interrupt its synchronous wait while a native helper still
+# owns a client probe in a separate group, and allow that containment to close.
+python3 -I - "$SANDBOX" "$TEST_BOOTSTRAP_BASH" <<'PY_PARENT_HELPER_CANCEL'
+import os, pathlib, signal, subprocess, sys, time
+sandbox, bash = pathlib.Path(sys.argv[1]), sys.argv[2]
+if os.name == 'nt':
+    print('Parent helper process-group fixture requires POSIX; Windows parallel fanout is not advertised')
+    raise SystemExit(0)
+script=sandbox/'parent-helper-cancel-TEST.sh'
+script.write_text(r'''#!/bin/bash
+source "$TEST_PROGRESS_SOURCE"
+_UI_MODE=plain
+_PARALLEL_ROOT="$TEST_AUX_CASE/jobs"
+_PARALLEL_ACTIVE=true
+_PARALLEL_IN_FLIGHT=true
+_CONFIG_STAGE="$TEST_AUX_CASE/stage"
+_CONFIG_HELPER="$TEST_AUX_CASE/helper"
+CONFIGURE_BINARY="$_CONFIG_HELPER"
+PLUGIN_ROOT="$TEST_AUX_CASE/plugin"
+PRODUCT=codex
+DEFAULT_CODEX_HOME="$TEST_AUX_CASE/codex"
+_CODEX_EXEC="$TEST_AUX_CASE/absent-client"
+BOOTSTRAP_TAG=""
+_PARALLEL_POLICY_READY=true
+CONFIGURE_NOTIFICATIONS=true
+_PROGRESS_IDS=(codex)
+_PROGRESS_PHASES=(MCP)
+_PROGRESS_OUTCOMES=(registration_committed)
+case "$TEST_AUX_PHASE" in
+    typed-progress|typed-complete)
+        PRODUCT=both
+        _PARALLEL_FOLLOW_UP_STARTED=true
+        _PARALLEL_CLIENTS=(claude codex)
+        _PROGRESS_IDS=(claude codex)
+        _PROGRESS_PHASES=(MCP MCP)
+        _PROGRESS_OUTCOMES=(registration_committed registration_committed)
+        _PROGRESS_JOURNAL="$_CONFIG_STAGE/parallel/progress.events" ;;
+esac
+progress_start() { :; }
+progress_stop() { :; }
+report_progress() { progress_write_final_snapshot > "$TEST_AUX_CASE/final"; }
+report_diagnostics() { :; }
+diagnostic_capture_stage() {
+    if [ -n "$_PROGRESS_LOG" ] && [ -n "$_PROGRESS_STDERR" ]; then
+        cat "$_PROGRESS_LOG" "$_PROGRESS_STDERR" >> "$TEST_AUX_CASE/diagnostics"
+    fi
+}
+install_cleanup_traps
+case "$TEST_AUX_PHASE" in
+    install|inspect|typed-progress|typed-complete) run_setup_stage 'Configuring agent notification tools' setup_agent_notify_wizard ;;
+    config) run_setup_stage 'Preparing notification settings' initialize_config ;;
+    policy) run_setup_stage 'Preparing approved notification policy' configure_agent_policy portable ;;
+    download) run_setup_stage 'Downloading portable package' fetch_bootstrap_file http://fixture.invalid/package "$TEST_AUX_CASE/package" ;;
+esac
+''', newline='\n')
+helper=r'''#!/bin/bash
+set -eu
+case "$1 ${2:-}" in
+    'setup-notifications --help') echo '--policy-only --preserve-enabled'; exit 0 ;;
+    'installer-progress '*) exit 1 ;;
+    'setup-notifications wizard')
+        if [ "$TEST_AUX_PHASE" != "${4:-}" ]; then
+            case "$TEST_AUX_PHASE:${4:-}" in typed-progress:install|typed-complete:install) ;;
+                *) echo '{"outcome":"completed","targets":[]}'; exit 0 ;; esac
+        fi ;;
+    'config init') [ "$TEST_AUX_PHASE" = config ] || exit 91 ;;
+    'setup-notifications configure') [ "$TEST_AUX_PHASE" = policy ] || exit 92 ;;
+    '-fsSL '*) [ "$TEST_AUX_PHASE" = download ] || exit 93 ;;
+    *) exit 94 ;;
+esac
+set -m
+bash -c 'trap "exit 0" TERM INT HUP; while :; do sleep 0.1; done' &
+probe=$!
+set +m
+printf '%s\n' "$probe" > "$TEST_AUX_CASE/probe-pid"
+printf '%s\n' "$$" > "$TEST_AUX_CASE/helper-pid"
+close_containment() {
+    trap - TERM INT HUP
+    # Longer than the former one-second shell escalation. The helper must stay
+    # alive long enough to close the separately grouped native client probe.
+    sleep 1.2
+    kill -TERM -- "-$probe" 2>/dev/null || true
+    wait "$probe" 2>/dev/null || true
+    printf 'native-containment-closed\n' > "$TEST_AUX_CASE/closed"
+    exit 0
+}
+trap close_containment TERM INT HUP
+case "$TEST_AUX_PHASE" in
+    typed-progress|typed-complete)
+        printf 'transition\tclaude\tMCP\tactivation_timeout\n' >> "$TEST_AUX_CASE/stage/parallel/progress.events"
+        if [ "$TEST_AUX_PHASE" = typed-complete ]; then
+            printf 'transition\tcodex\tMCP\tcompleted\n' >> "$TEST_AUX_CASE/stage/parallel/progress.events"
+        else
+            printf 'transition\tcodex\tverification\trunning\n' >> "$TEST_AUX_CASE/stage/parallel/progress.events"
+        fi ;;
+esac
+printf 'parent-helper-live\n'
+printf 'ready\n' > "$TEST_AUX_CASE/started"
+wait "$probe"
+'''
+def wait_file(path, proc):
+    limit=time.monotonic()+20
+    while not path.exists() or not path.stat().st_size:
+        assert proc.poll() is None, proc.communicate()
+        assert time.monotonic()<limit, str(path)
+        time.sleep(.02)
+def gone(pid):
+    try: os.kill(pid, 0)
+    except ProcessLookupError: return True
+    state=pathlib.Path('/proc')/str(pid)/'stat'
+    return state.exists() and state.read_text().split()[2]=='Z'
+for phase in ('install','inspect','config','policy','download','typed-progress','typed-complete'):
+    case=sandbox/('parent-helper-'+phase); case.mkdir(mode=0o700)
+    for name in ('jobs','stage','stage/parallel','plugin','plugin/portable-package','tools'): (case/name).mkdir(mode=0o700)
+    (case/'plugin'/'portable-package'/'plugin.json').write_text('{}')
+    if phase in ('typed-progress','typed-complete'):
+        for client in ('claude','codex'):
+            job=case/'jobs'/client; job.mkdir(mode=0o700)
+            for leaf in ('stdout','stderr'): (job/leaf).write_text('')
+            (job/'result').write_text('installer-worker-v1\n0\n\n\nMCP\nregistration_committed_follow_up_not_started\n\n')
+    for path in (case/'helper',case/'tools'/'curl'): path.write_text(helper, newline='\n'); path.chmod(0o700)
+    env=dict(os.environ, TEST_PROGRESS_SOURCE=str(sandbox/'functions.sh'), TEST_AUX_CASE=str(case), TEST_AUX_PHASE=phase,
+             PATH=str(case/'tools')+os.pathsep+os.environ['PATH'])
+    proc=subprocess.Popen([bash,str(script)],env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+    try:
+        wait_file(case/'helper-pid',proc); wait_file(case/'probe-pid',proc); wait_file(case/'started',proc)
+        owner=int((case/'helper-pid').read_text()); probe=int((case/'probe-pid').read_text())
+        started=time.monotonic(); proc.send_signal(signal.SIGTERM)
+        out,err=proc.communicate(timeout=9)
+        assert proc.returncode==143, (phase,out,err)
+        assert time.monotonic()-started<8, phase
+        assert (case/'closed').read_text()=='native-containment-closed\n', (phase,out,err)
+        assert gone(owner) and gone(probe), (phase,owner,probe,out,err)
+        assert (case/'stage').is_dir() and (case/'jobs').is_dir(), phase
+        assert b'required force' not in err, (phase,err)
+        assert 'parent-helper-live' in (case/'diagnostics').read_text(), phase
+        if phase in ('typed-progress','typed-complete'):
+            final=(case/'final').read_text()
+            assert 'claude\tMCP\tactivation_timeout' in final, final
+            if phase=='typed-progress':
+                assert 'codex\tverification\trunning' in final and 'codex\tcomplete\tcompleted' not in final, final
+            else: assert 'codex\tcomplete\tcompleted' in final, final
+    finally:
+        if proc.poll() is None:
+            proc.terminate()
+            try: proc.communicate(timeout=9)
+            except subprocess.TimeoutExpired: proc.kill(); proc.communicate(timeout=5)
+print('PASS parent cancellation closes helper containment, retains interrupted captures and preserves typed timeout/completion journal facts')
+PY_PARENT_HELPER_CANCEL
+
 [ "$_PRODUCT_TEST_UNIT_ONLY" != true ] || exit 0
 # Local HTTP and controlling-PTY integration. Installer/registration are explicit
 # fake adapters here; the fetched bootstrap, archive extraction and curl are real.
@@ -1200,7 +1781,7 @@ root, sandbox = map(pathlib.Path, sys.argv[1:])
 web = sandbox / 'http'; web.mkdir()
 fixture_bootstrap = (root / 'bin/bootstrap.sh').read_text(encoding='utf-8').replace(
     '\nmain "$@"', '\nbootstrap_macos_command() { return 1; }\nmain "$@"')
-(web / 'bootstrap.sh').write_text(fixture_bootstrap, encoding='utf-8')
+(web / 'bootstrap.sh').write_text(fixture_bootstrap, encoding='utf-8', newline='\n')
 (web / 'latest').write_text('{"tag_name":"v1.42.0"}')
 release_commits = {'v1.42.0': 'a' * 40, 'v1.43.0': 'b' * 40, 'v2.0.0': 'c' * 40}
 (web / 'commits').mkdir()
@@ -1270,6 +1851,8 @@ if args[0]=='setup-codex':
 if args[0]=='setup-notifications':
     print('Error: unknown command: setup-notifications', file=sys.stderr)
     sys.exit(1)
+if args[:2]==['setup-products','repair-cache']:
+    print('ready'); sys.exit()
 assert args[0]=='config'
 legacy=pathlib.Path(os.environ['HOME'])/'.claude/claude-notifications-go/config.json'
 neutral=pathlib.Path(os.environ['XDG_CONFIG_HOME'])/'agent-notifications/config.json'
@@ -1391,7 +1974,7 @@ def write_origin_installer(path, origin):
         'chmod +x "$INSTALL_TARGET_DIR"/claude-notifications*',
         'printf %s\\\\n '+origin+' > "$INSTALL_TARGET_DIR/script-origin"\nchmod +x "$INSTALL_TARGET_DIR"/claude-notifications*',
         1,
-    ))
+    ), newline='\n')
 for tag in ['v1.42.0', 'v1.43.0', 'v2.0.0']:
     write_origin_installer(web / tag / 'bin' / 'install.sh', tag)
 write_origin_installer(web / 'main' / 'bin' / 'install.sh', 'managed')
@@ -1499,7 +2082,8 @@ assert (live/'bin/claude-notifications').read_text() == 'stale'
 # Menu routing for Claude/both uses explicit adapters; Codex below exercises
 # the complete bootstrap HTTP/staging path with fake runtime assets.
 dispatch = fixture_bootstrap.replace('main "$@"', '')
-dispatch += '\ncheck_prerequisites() { :; }\nresolve_bootstrap_release() { :; }\nstage_historical_baselines() { :; }\nstage_config_helper() { _CONFIG_STAGE=$(mktemp -d); }\nconfig_preflight() { :; }\ninitialize_config() { :; }\ninstall_claude() { echo CLAUDE_ADAPTER; }\ninstall_codex() { echo CODEX_ADAPTER; }\nmain "$@"\n'
+dispatch += '\ncheck_prerequisites() { :; }\nresolve_bootstrap_release() { :; }\nstage_historical_baselines() { :; }\nstage_config_helper() { _CONFIG_STAGE=$(mktemp -d); _CONFIG_HELPER=REPAIR_PEER_PATH; }\nconfig_preflight() { :; }\ninitialize_config() { :; }\ninstall_claude() { echo CLAUDE_ADAPTER; }\ninstall_codex() { echo CODEX_ADAPTER; }\nmain "$@"\n'
+dispatch = dispatch.replace('REPAIR_PEER_PATH', shlex.quote(str(sandbox/'repair-helper')))
 (web / 'dispatch.sh').write_bytes(dispatch.encode('utf-8'))
 # The native SelectMany UI is independently exercised against the actual
 # candidate by bootstrap_opencode_test.sh. This fixture checks shell routing.
@@ -1788,7 +2372,7 @@ def place_runtime_cmd(dest, src):
     if base in ('python', 'python.exe', 'python3', 'python3.exe', 'node', 'node.exe') and (
             '/windowsapps/' in n or '/system32/' in n or '/syswow64/' in n):
         return
-    dest.write_text('#!/bin/sh\nexec {} "$@"\n'.format(shlex.quote(src.replace('\\', '/'))))
+    dest.write_text('#!/bin/sh\nexec {} "$@"\n'.format(shlex.quote(src.replace('\\', '/'))), newline='\n')
     dest.chmod(0o755)
 def fixture_tool(name):
     found = shutil.which(name)

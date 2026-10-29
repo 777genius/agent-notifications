@@ -16,6 +16,7 @@ interface State {
 const path = process.env.TEST_GH_STATE!;
 const state = JSON.parse(readFileSync(path, 'utf8')) as State;
 const args = process.argv.slice(2);
+const repository = process.env.TEST_GH_REPOSITORY ?? '777genius/agent-notifications';
 const save = () => writeFileSync(path, JSON.stringify(state));
 function fail(message: string): never { console.error(message); process.exit(1); }
 const field = (name: string) => args[args.indexOf(name) + 1];
@@ -25,7 +26,7 @@ const body = (value: unknown, status = 200): void => {
 };
 const fields = new Map(args.filter((_, index) => args[index - 1] === '-f').map(x => { const split = x.indexOf('='); return [x.slice(0, split), x.slice(split + 1)] as const; }));
 if (args[0] === 'api') {
-  const endpoint = args.find(x => x.startsWith('repos/777genius/agent-notifications/'))?.slice('repos/777genius/agent-notifications/'.length);
+  const endpoint = args.find(x => x.startsWith(`repos/${repository}/`))?.slice(`repos/${repository}/`.length);
   if (!endpoint) fail('explicit correct repository required');
   if (args.includes('POST')) {
     if (endpoint !== 'git/refs' || state.tag) fail('unexpected tag mutation');
@@ -63,7 +64,7 @@ if (args[0] === 'api') {
     else fail(`unexpected read ${endpoint}`);
   }
 } else if (args[0] === 'release') {
-  if (!args.includes('--repo') || field('--repo') !== '777genius/agent-notifications' || args.includes('--clobber')) fail('explicit repo/no clobber required');
+  if (!args.includes('--repo') || field('--repo') !== repository || args.includes('--clobber')) fail('explicit repo/no clobber required');
   if (args[1] === 'create') {
     state.draftAttempts = (state.draftAttempts ?? 0) + 1; save();
     if (!state.tag || state.release || !args.includes('--draft') || !args.includes('--latest=false') || !args.includes('--verify-tag')) fail('unsafe draft mutation');

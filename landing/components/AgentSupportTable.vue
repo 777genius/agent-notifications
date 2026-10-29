@@ -2,7 +2,7 @@
 import { repo, type AgentProduct } from "~/data/install";
 
 const { t } = useI18n();
-type SupportedAgent = AgentProduct | "cursor" | "qoder";
+type SupportedAgent = AgentProduct;
 const agents: SupportedAgent[] = ["claude", "codex", "opencode", "gemini", "cursor", "qoder"];
 type Support = "yes" | "no" | "conditional";
 const rows: { key: string; support: Record<SupportedAgent, Support> }[] = [
@@ -71,7 +71,7 @@ const icons = { yes: "✓", no: "✕", conditional: "✓*" };
 
 <style scoped>
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
-.agent-support { margin: 0 40px 22px; border: 1px solid #293648; border-radius: 10px; overflow: hidden; }
+.agent-support { margin: 32px 40px 22px; border: 1px solid #293648; border-radius: 10px; overflow: hidden; }
 .agent-support-scroll { overflow-x: auto; }
 .agent-support-scroll:focus-visible { outline: 2px solid #a78bfa; outline-offset: -2px; }
 .agent-support-table { width: 100%; border-collapse: collapse; font-size: 13px; }

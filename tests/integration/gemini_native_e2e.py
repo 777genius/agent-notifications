@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Credential-free Gemini 0.62.0 TEST fixture; native execution is orchestrator-only.
+"""Credential-free exactly pinned Gemini TEST fixture; native execution is orchestrator-only.
 
 Red: missing CLI-emitted events/UI, nonneutral stdout, unsafe roots, wrong TEST
 file effects, request/output overflow, or unconfirmed child shutdown. G0 uses
@@ -26,7 +26,15 @@ import time
 from urllib.parse import urlsplit
 
 VERSION = "0.62.0"
-SOURCE = "b460678f3db508407554afd604cc9d6635becb2a"
+# Qualification endpoints, not the production compatibility range. Each entry is
+# an immutable official google-gemini/gemini-cli release commit and SHA256 of
+# packages/cli/src/ui/components/messages/ToolConfirmationMessage.tsx there.
+QUALIFICATION_PINS = {
+    "0.62.0": ("b460678f3db508407554afd604cc9d6635becb2a",
+               "34054c9b546feab9f6c176508c68e8451d50d39bd00e4001fe556ce737274377"),
+    "0.65.0": ("6006c14a4decfe4b891c6263ad6ad5992e404b5b",
+               "e27b736ab8d8cc5ab90183bbadab83fac5805e762967cfe11c88e882af2fb974"),
+}
 LIMIT = 1024 * 1024
 MARKER = ".an-gemini-TEST"
 CASES = ("plain", "equal", "approve", "deny", "cancel", "recovery")
@@ -266,7 +274,17 @@ def package_digest(directory):
     return tree.hexdigest()
 
 
-def cli_identity(executable, install_root):
+def qualification_pin(version):
+    require(version in QUALIFICATION_PINS, "unqualified_CLI_version")
+    return QUALIFICATION_PINS[version]
+
+
+def qualified_ui(ui, version):
+    require(ui.get("source_sha256") == qualification_pin(version)[1], "UI_source_version_mismatch")
+
+
+def cli_identity(executable, install_root, version=VERSION):
+    source_commit, _ = qualification_pin(version)
     root = physical(install_root)
     require((root / MARKER).is_file(), "explicit_TEST_installation_marker_missing")
     require(any(re.fullmatch(r"TEST(?:[-_].*)?", x) for x in root.parts), "TEST_installation_required")
@@ -280,9 +298,9 @@ def cli_identity(executable, install_root):
         if package.is_file():
             data = json.loads(package.read_text())
             if data.get("name") == "@google/gemini-cli":
-                require(data.get("version") == VERSION, "wrong_CLI_version")
+                require(data.get("version") == version, "wrong_CLI_version")
                 require(data.get("optionalDependencies", {}).get("@lydell/node-pty") == "1.1.0", "wrong_PTY_pin")
-                return {"version": VERSION, "source_commit": SOURCE,
+                return {"version": version, "source_commit": source_commit,
                         "package_json_sha256": digest(package.read_bytes()), "installed_package_tree_sha256": package_digest(parent),
                         "bundle_sha256": digest(exe.read_bytes())}
     raise Red("CLI_package_identity_missing")
@@ -752,7 +770,8 @@ class CaseObservation:
 
 class Terminal:
     """Node bridge emits classifications only; native PTY text stays in bounded RAM."""
-    def __init__(self, node, executable, install_root, lab, env, ui, timeout):
+    def __init__(self, node, executable, install_root, lab, env, ui, timeout, version=VERSION):
+        qualification_pin(version)
         env = dict(env, AGENT_NOTIFICATIONS_OBSERVATION_DIAGNOSTICS="1")
         self.telemetry_lab, self.telemetry_captured = lab, False
         self.owned_input_capture = {"qualified": False, "frames": []}
@@ -776,7 +795,7 @@ class Terminal:
             self.events.put({"closed": True})
         threading.Thread(target=reader, daemon=True).start()
         try:
-            self.send({"op": "start", "node": str(node), "executable": str(executable), "installRoot": str(install_root),
+            self.send({"op": "start", "node": str(node), "executable": str(executable), "installRoot": str(install_root), "version": version,
                    "cwd": str(lab / "profile"), "env": env, "permissionPattern": ui["permission_pattern"],
                    "timeoutMs": int(timeout * 1000)})
             self.identity = self.wait("ready", 10)
@@ -981,6 +1000,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for flag in ("gemini-executable", "node-executable", "cli-install-root", "lab-root", "hook-shell", "system-root", "ui-contract", "probe-command", "record-root", "event", "native-shell"):
         parser.add_argument("--" + flag)
+    parser.add_argument("--gemini-version", default=VERSION, choices=tuple(QUALIFICATION_PINS))
     parser.add_argument("--timeout", type=int, default=180)
     parser.add_argument("--capture-frames", action="store_true")
     args = parser.parse_args()
@@ -992,11 +1012,12 @@ def main():
     require(60 <= args.timeout <= 240, "timeout_out_of_bounds")
     args.gemini_executable = str(physical(args.gemini_executable))
     args.cli_install_root = str(physical(args.cli_install_root))
-    identity = cli_identity(args.gemini_executable, args.cli_install_root)
+    identity = cli_identity(args.gemini_executable, args.cli_install_root, args.gemini_version)
     node, shell = physical(args.node_executable), physical(args.hook_shell)
     ui_path = physical(args.ui_contract)
     require(inside(ui_path, physical(args.cli_install_root)) and ui_path.stat().st_size <= 16384, "UI_contract_must_be_in_TEST_installation")
     ui = json.loads(ui_path.read_text())
+    qualified_ui(ui, args.gemini_version)
     require(set(ui) == {"permission_pattern", "approve", "deny", "cancel", "source_sha256"}, "UI_contract_fields")
     require(re.fullmatch(r"[0-9a-f]{64}", ui["source_sha256"]) is not None, "UI_source_hash_missing")
     require(all(isinstance(ui[k], str) and 0 < len(ui[k]) <= 32 for k in ("approve", "deny", "cancel")), "UI_keys_invalid")
@@ -1034,9 +1055,9 @@ def main():
             manifest["native_version_probe"] = "running"
             code, out, version_err = bounded_process([str(node), args.gemini_executable, "--version"], b"", lab / "profile", env, 60 if os.name == "nt" else 12)
             manifest["native_version_probe"] = version_probe(code, out, version_err, (lab, args.cli_install_root, node, node.parent))
-            require(code == 0 and out.strip() == VERSION.encode(), "native_version_mismatch")
+            require(code == 0 and out.strip() == args.gemini_version.encode(), "native_version_mismatch")
             fixture.arm("plain")
-            terminal = Terminal(node, args.gemini_executable, args.cli_install_root, lab, env, ui, args.timeout)
+            terminal = Terminal(node, args.gemini_executable, args.cli_install_root, lab, env, ui, args.timeout, args.gemini_version)
             try:
                 results, rows = exercise(lab, fixture, terminal, ui)
             except Exception as exc:

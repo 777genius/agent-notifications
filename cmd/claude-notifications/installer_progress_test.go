@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -79,6 +80,7 @@ func TestInstallerProgressNonTerminalFallbackKeepsStdoutClean(t *testing.T) {
 func TestInstallerSessionCapabilityAndPromotionAreSeparateCleanContracts(t *testing.T) {
 	for _, tc := range []struct{ flag, expected string }{
 		{"--session-capabilities", "installer-progress-session-v1\n"},
+		{"--parallel-capabilities", "installer-parallel-v1\n"},
 		{"--promotion", "Boost your productivity"},
 	} {
 		errout, err := os.CreateTemp(t.TempDir(), "stderr")
@@ -87,13 +89,21 @@ func TestInstallerSessionCapabilityAndPromotionAreSeparateCleanContracts(t *test
 		}
 		defer closeFixture(t, errout)
 		var out bytes.Buffer
-		if code := installerProgressMain([]string{tc.flag}, &out, errout); code != 0 {
+		code := installerProgressMain([]string{tc.flag}, &out, errout)
+		unsupported := tc.flag == "--parallel-capabilities" && runtime.GOOS != "darwin" && runtime.GOOS != "linux"
+		if unsupported {
+			if code != 1 || out.Len() != 0 {
+				t.Fatalf("unqualified native cancellation advertised: exit=%d stdout=%q", code, out.String())
+			}
+			continue
+		}
+		if code != 0 {
 			t.Fatalf("%s: exit %d", tc.flag, code)
 		}
 		if !strings.Contains(out.String(), tc.expected) || strings.Contains(out.String(), "\x1b") {
 			t.Fatalf("%s: %q", tc.flag, out.String())
 		}
-		if tc.flag == "--session-capabilities" && out.String() != tc.expected {
+		if strings.HasSuffix(tc.flag, "-capabilities") && out.String() != tc.expected {
 			t.Fatal("nonexact capability")
 		}
 		info, err := errout.Stat()

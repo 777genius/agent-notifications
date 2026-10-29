@@ -61,7 +61,18 @@ test('every stale public release heading or README platform version fails', () =
     assert.throws(() => validate(files, { ...options, mode: 'prepared-promotion' }), /version stale/);
   }
 });
-test('all twelve shared release headings require exactly the OS and channel-version placeholders', () => {
+test('landing layouts without a release heading retain channel validation', () => {
+  const files = fixture(true);
+  for (const locale of locales) {
+    const path = `landing/locales/${locale}.json`, data = JSON.parse(files[path]!);
+    delete data.install.platformRelease;
+    files[path] = JSON.stringify(data);
+  }
+  validate(files, { ...options, mode: 'prepared-promotion' });
+  files['README.md'] = files['README.md']!.replaceAll('1.49.0', '1.48.5');
+  assert.throws(() => validate(files, { ...options, mode: 'prepared-promotion' }), /version stale/);
+});
+test('all retained release headings require exactly the OS and channel-version placeholders', () => {
   for (const locale of locales) {
     for (const heading of [
       'Qualified release for {os}.', 'Qualified release: {version}.',

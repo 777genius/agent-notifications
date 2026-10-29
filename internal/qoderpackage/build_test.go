@@ -154,3 +154,44 @@ func TestRejectArchiveCaseAlias(t *testing.T) {
 		t.Fatalf("package created before refusal: %v", err)
 	}
 }
+
+func TestManagedHooksUseExactOwnedRuntimeEntrypoint(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "verified binary")
+	if err := os.WriteFile(source, []byte("TEST final executable"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	control := filepath.Join(root, "shared control")
+	executable := filepath.Join(root, "shared runtime", "claude-notifications-linux-amd64")
+	got, err := Build(BuildRequest{Version: "1.49.6", GOOS: "linux", GOARCH: "amd64", Executable: source, OutputRoot: filepath.Join(root, "native package"), ManagedControlRoot: control, Binding: "TEST-owned-binding", ManagedExecutable: executable})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(got.Root, "hooks", "hooks.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Hooks map[string][]struct {
+			Hooks []struct {
+				Command string
+				Args    []string
+			}
+		}
+	}
+	if err = json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	if len(doc.Hooks) != 6 {
+		t.Fatalf("managed event set differs: %s", raw)
+	}
+	for event, groups := range doc.Hooks {
+		if len(groups) != 1 || len(groups[0].Hooks) != 1 {
+			t.Fatalf("ambiguous managed hook: %s", event)
+		}
+		hook := groups[0].Hooks[0]
+		if hook.Command != executable || !reflect.DeepEqual(hook.Args, []string{"qoder-event", event, "--control-root", control, "--binding", "TEST-owned-binding"}) {
+			t.Fatalf("managed hook bypassed exact runtime receipt: %+v", hook)
+		}
+	}
+}

@@ -4,7 +4,7 @@ import { chmodSync, closeSync, lstatSync, mkdirSync, mkdtempSync, openSync, read
   realpathSync, statfsSync, writeFileSync, writeSync } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { GitHub, need, validate, type Asset, type Manifest } from './basic-release-assets.mts';
+import { GitHub, need, validate, releaseRepository, type Asset, type Manifest } from './basic-release-assets.mts';
 
 type ObjectValue = Record<string, unknown>;
 export interface CanaryInputs {
@@ -118,7 +118,7 @@ export async function runCanary(input: CanaryInputs) {
   const scratch = privateDirectory(input.scratch);
   const m = validate(resolve(input.seal));
   const manifestSHA256 = hash(readFileSync(join(resolve(input.seal), 'manifest.json')));
-  const gh = new GitHub(m.repository);
+  const gh = new GitHub(releaseRepository(m.repository));
   const before = snapshot(gh, m, input, selectedName);
   const spaceBefore = available(scratch);
   // The measured transfer is the selected executable only. Profiles/logs have a
@@ -131,7 +131,7 @@ export async function runCanary(input: CanaryInputs) {
   const receiptFD = openSync(receipt, 'wx', 0o600);
   try {
     const binary = join(root, before.selected.name);
-    await download(m.repository, before.selected, binary);
+    await download(gh.repo, before.selected, binary);
     const downloaded = snapshot(gh, m, input, before.selected.name);
     need(JSON.stringify(downloaded) === JSON.stringify(before), 'release/asset identity changed during download');
     const runtimeRoot = join(root, 'runtime'); mkdirSync(runtimeRoot, { mode: 0o700 });
@@ -150,7 +150,7 @@ export async function runCanary(input: CanaryInputs) {
     need(hash(readFileSync(binary)) === before.selected.sha256 &&
       hash(readFileSync(join(resolve(input.seal), 'manifest.json'))) === manifestSHA256,
     'local binary or seal manifest changed during canary');
-    const report = { status: 'release_canary_passed', at: new Date().toISOString(), scope, repository: m.repository,
+    const report = { status: 'release_canary_passed', at: new Date().toISOString(), scope, repository: m.repository, verifiedRepository: gh.repo,
       releaseTag: m.releaseTag, candidateSHA: m.candidateSHA, manifestSHA256,
       producer: { operatorSHA: m.operatorSHA, runID: m.runID, runAttempt: m.runAttempt },
       root, receipt, scratch: { availableBeforeBytes: spaceBefore, requiredBytes, downloadBytes: before.selected.size,

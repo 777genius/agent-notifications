@@ -48,16 +48,15 @@ func probeNotificationCodex(ctx context.Context, home string) (notificationCodex
 		err := cmd.Run()
 		return output.Bytes(), err
 	}
-	version, err := run("--version")
-	if err != nil {
-		return result, err
-	}
-	result.ClientVersion = strings.TrimSpace(string(version))
-	if !qualifiedNotificationCodexVersion(result.ClientVersion) {
-		return result, errors.New("unsupported_codex_version")
+	// Version output is diagnostic only. The actual inventory schema and owned
+	// cache identities below determine whether this client can be inspected.
+	// Never turn exact native test versions into a host CLI admission allowlist.
+	if version, err := run("--version"); err == nil {
+		result.ClientVersion = strings.TrimSpace(string(version))
 	}
 	result.CacheLayoutQualified = true
-	result.Installed, err = run("plugin", "list", "--json")
+	installed, err := run("plugin", "list", "--json")
+	result.Installed = installed
 	if err != nil {
 		return result, err
 	}
@@ -90,15 +89,15 @@ func (b *notificationInventoryBuffer) Write(p []byte) (int, error) {
 	return b.Buffer.Write(p)
 }
 
-// The cache adapter is intentionally pinned. The controller supplied evidence; the
-// exact layout was qualified against actual 0.152.0, 0.153.4, and 0.155.1 add/list observations.
+// The cache adapter validates the observed inventory schema and exact owned paths.
+// Historical layout tests used actual 0.152.0, 0.153.4, and 0.155.1 add/list observations.
 // Missing, ambiguous or unsupported identities fail closed, without cache scans.
 func inspectCodexNotificationPackages(ctx context.Context, home string, probe notificationCodexProbe) (notificationInventory, error) {
 	unknown := func() (notificationInventory, error) {
 		return notificationInventory{State: "unknown"}, errors.New("inventory_unknown")
 	}
 	observed, err := probe(ctx, home)
-	if err != nil || !qualifiedNotificationCodexVersion(observed.ClientVersion) {
+	if err != nil {
 		return unknown()
 	}
 	if strictjson.Validate(observed.Installed, strictjson.Budget{Bytes: 1 << 20, Depth: 24, Entries: 10000}) != nil {
@@ -249,7 +248,10 @@ func inspectCodexNotificationPackages(ctx context.Context, home string, probe no
 		if err != nil {
 			return err
 		}
-		a, _ := json.Marshal(observed)
+		// Diagnostic version changes do not change inventory authority.
+		prior := observed
+		prior.ClientVersion, next.ClientVersion = "", ""
+		a, _ := json.Marshal(prior)
 		b, _ := json.Marshal(next)
 		if !bytes.Equal(a, b) {
 			return errors.New("inventory_changed")
@@ -293,9 +295,4 @@ func notificationCacheToken(s string) bool {
 		}
 	}
 	return true
-}
-
-// Only these exact CLI versions have controller-qualified inventory evidence.
-func qualifiedNotificationCodexVersion(version string) bool {
-	return version == "codex-cli 0.152.0" || version == "codex-cli 0.153.4" || version == "codex-cli 0.155.1"
 }
