@@ -684,11 +684,19 @@ func consentMonotonicTime() throws -> Double {
 // purpose of this nonqualifying probe. Arbitrary AX labels are never serialized.
 @MainActor func terminalAutomationDiagnostics() -> [String: Any] {
     let deadline = ProcessInfo.processInfo.systemUptime + 3
+    func observedUID(_ pid: pid_t, start: String?) -> Int? {
+        var info = proc_bsdinfo()
+        let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+        guard let start, proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size,
+              info.pbi_pid == UInt32(pid), "\(info.pbi_start_tvsec):\(info.pbi_start_tvusec)" == start else { return nil }
+        return Int(info.pbi_uid)
+    }
     var ancestry = [[String: Any]](), ancestorPID = getpid()
     for _ in 0..<12 {
         guard ancestorPID > 1, ProcessInfo.processInfo.systemUptime < deadline,
-              let identity = try? terminalProcessIdentity(ancestorPID), let parent = identity["parent_pid"] as? Int,
+              var identity = try? terminalProcessIdentity(ancestorPID), let parent = identity["parent_pid"] as? Int,
               parent > 0, parent != Int(ancestorPID) else { break }
+        if let uid = observedUID(ancestorPID, start: identity["process_start_identity"] as? String) { identity["uid"] = uid }
         ancestry.append(identity)
         ancestorPID = pid_t(parent)
     }
@@ -707,6 +715,7 @@ func consentMonotonicTime() throws -> Double {
     for pid in owners.prefix(12) {
         guard ProcessInfo.processInfo.systemUptime < deadline, visited < 768 else { capped = true; break }
         var row = (try? terminalProcessIdentity(pid)) ?? ["pid": Int(pid), "status": "identity_unavailable"]
+        if let uid = observedUID(pid, start: row["process_start_identity"] as? String) { row["uid"] = uid }
         if let app = NSRunningApplication(processIdentifier: pid) {
             row["bundle_id"] = app.bundleIdentifier ?? ""
             row["bundle_path"] = app.bundleURL?.resolvingSymlinksInPath().path ?? ""
