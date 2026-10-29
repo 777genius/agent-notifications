@@ -8,6 +8,7 @@ Missing or unobserved prerequisites exit 2 and remain unqualified.
 import argparse
 import array
 import hashlib
+import importlib.util
 import json
 import math
 import os
@@ -249,7 +250,7 @@ def linux(lab, audio):
             "known_cue_observed": peak > 1000 and rms > 100}
 
 
-def native(lab, audio, osname):
+def native(lab, audio, osname, windows_audio_fixture=None):
     if osname == "darwin":
         source = REPO / "tests/integration/pi_native_preflight_darwin.swift"
         executable = lab.root / "pi-native-preflight"
@@ -259,9 +260,17 @@ def native(lab, audio, osname):
         executable = lab.root / "pi-native-preflight.exe"
         # CI prepares cl through the reviewed Visual Studio developer environment.
         lab.run(["cl.exe", "/nologo", "/std:c++20", "/EHsc", "/W4", "/DUNICODE", "/D_UNICODE", source,
-                 "/Fe:" + str(executable), "/Fo:" + str(lab.root / "probe.obj"), "/link", "ole32.lib", "user32.lib", "uuid.lib", "winmm.lib", "wtsapi32.lib", "uiautomationcore.lib", "advapi32.lib"], timeout=90)
+                 "/Fe:" + str(executable), "/Fo:" + str(lab.root / "probe.obj"), "/link", "ole32.lib", "user32.lib", "uuid.lib", "winmm.lib", "wtsapi32.lib", "uiautomationcore.lib", "advapi32.lib", "propsys.lib", "cfgmgr32.lib"], timeout=90)
     lab.report["native_probe"] = {"source_sha256": digest(source), "executable_sha256": digest(executable)}
-    out, code = lab.run([executable, audio], timeout=30, check=False)
+    route = []
+    if windows_audio_fixture is not None:
+        spec = importlib.util.spec_from_file_location("pi_windows_audio_fixture", REPO / "scripts/pi-windows-audio-fixture.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        fixture = module.Fixture(windows_audio_fixture)
+        route = fixture.arguments()
+        lab.report["audio_fixture"] = fixture.value
+    out, code = lab.run([executable, audio, *route], timeout=30, check=False)
     value = json.loads(out)
     if not isinstance(value, dict) or set(value) != {"checks", "measurements"} or not isinstance(value["checks"], dict):
         raise Unqualified("native_probe_shape")
@@ -278,7 +287,10 @@ def main():
     parser.add_argument("--source-sha", required=True)
     parser.add_argument("--report", type=Path, required=True)
     parser.add_argument("--execute-test-fixtures", action="store_true", required=True)
+    parser.add_argument("--windows-audio-fixture", type=Path)
     args = parser.parse_args()
+    if args.windows_audio_fixture is not None and args.platform != "windows":
+        parser.error("virtual audio fixture requires native Windows")
     if not re.fullmatch(r"[0-9a-f]{40}", args.source_sha):
         parser.error("exact source SHA required")
     actual = subprocess.check_output(["git", "-C", REPO, "rev-parse", "HEAD"], text=True).strip()
@@ -299,7 +311,7 @@ def main():
         audio = root / "known-cue.wav"
         cue(audio)
         report["known_cue_sha256"] = digest(audio)
-        facts = linux(lab, audio) if args.platform == "linux" else native(lab, audio, args.platform)
+        facts = linux(lab, audio) if args.platform == "linux" else native(lab, audio, args.platform, args.windows_audio_fixture)
     except (Unqualified, OSError, ValueError, subprocess.SubprocessError) as error:
         report["prerequisite_failure"] = str(error) if isinstance(error, Unqualified) else type(error).__name__
     finally:

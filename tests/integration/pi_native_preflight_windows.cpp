@@ -15,6 +15,7 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include "pi_windows_audio_fixture.h"
 
 using Microsoft::WRL::ComPtr;
 static HWND clickedWindow = nullptr;
@@ -160,7 +161,7 @@ static std::string audioInventory(IMMDeviceEnumerator* enumerator) {
 }
 
 int wmain(int argc, wchar_t** argv) {
-    if (argc != 2) return 2;
+    if (argc != 2 && argc != 8) return 2;
     const HRESULT init = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     if (FAILED(init)) return 2;
     DWORD session = 0;
@@ -230,7 +231,15 @@ int wmain(int argc, wchar_t** argv) {
     WAVEFORMATEX* format = nullptr;
     HRESULT audioResult = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, IID_PPV_ARGS(&enumerator));
     const std::string inventory = audioInventory(enumerator.Get());
-    if (SUCCEEDED(audioResult)) audioResult = enumerator->GetDefaultAudioEndpoint(eRender, eConsole, &endpoint);
+    PiWindowsAudioFixture::Route audioRoute;
+    if (SUCCEEDED(audioResult)) {
+        try { audioRoute = PiWindowsAudioFixture::select(enumerator.Get(), argc - 2, argv + 2); endpoint = audioRoute.capture; }
+        catch (const std::exception& error) {
+            std::cerr << error.what() << '\n';
+            std::cout << "{\"checks\":{},\"measurements\":{\"audio_route_invalid\":true}}\n";
+            return 2;
+        }
+    }
     const bool audioEndpoint = SUCCEEDED(audioResult) && endpoint;
     std::uint64_t samples = 0;
     double peak = 0;
@@ -238,7 +247,7 @@ int wmain(int argc, wchar_t** argv) {
     if (audioEndpoint && interactive && windowsClient) {
         audioResult = endpoint->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, &client);
         if (SUCCEEDED(audioResult)) audioResult = client->GetMixFormat(&format);
-        if (SUCCEEDED(audioResult)) audioResult = client->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK, 10000000, 0, format, nullptr);
+        if (SUCCEEDED(audioResult)) audioResult = client->Initialize(AUDCLNT_SHAREMODE_SHARED, audioRoute.flags, 10000000, 0, format, nullptr);
         if (SUCCEEDED(audioResult)) audioResult = client->GetService(IID_PPV_ARGS(&capture));
         if (SUCCEEDED(audioResult)) audioResult = client->Start();
         captureStarted = SUCCEEDED(audioResult);
@@ -305,6 +314,7 @@ int wmain(int argc, wchar_t** argv) {
               << ",\"input_desktop_kind\":\"" << inputKind << "\",\"thread_desktop_kind\":\"" << threadKind
               << "\",\"window_station_kind\":\"" << stationKind << "\",\"owned_input_attempts\":" << inputFacts.str()
               << ",\"audio_samples\":" << samples << ",\"audio_peak\":" << peak
+              << ",\"audio_route\":" << audioRoute.json
               << ",\"audio_inventory\":" << inventory << "}}\n";
     return 0;
 }
