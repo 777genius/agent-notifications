@@ -523,7 +523,19 @@ def terminal_applescript(source, observe, receipt, admit, *, now=time.monotonic,
                 P.require(remaining > 0, "original_terminal_applescript_deadline_expired")
                 context = {key: value for key, value in actors.items() if key != "chain"}
                 context.update(deadlineMonotonic=deadline, clock="mach_absolute_time")
-                observed = observe("terminal-automation-consent", json.dumps(context, sort_keys=True), timeout=min(3, remaining))
+                try:
+                    observed = observe("terminal-automation-consent", json.dumps(context, sort_keys=True), timeout=min(3, remaining))
+                except Exception as error:
+                    if child.poll() is None:
+                        raise
+                    # A fast, already-authorized do-script can exit while the
+                    # read-only observer revalidates its kernel identity. Only
+                    # its own stdout can establish the returned window/TTY.
+                    receipt["completed_request_observation_error"] = type(error).__name__ + ":" + str(error)[:1024]
+                    break
+                if child.poll() is not None:
+                    receipt["completed_during_consent_observation"] = True
+                    break
                 dialogs = observed.get("dialogs", [])
                 if dialogs:
                     P.require(len(dialogs) == 1 and child.poll() is None and now() < deadline,

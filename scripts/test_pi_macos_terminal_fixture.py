@@ -212,6 +212,65 @@ class TerminalAutomation(unittest.TestCase):
         admit.assert_not_called()
         self.assertTrue(receipt["owned_child_collected"])
 
+    def test_original_exit_during_readonly_consent_collects_only_its_stdout_within_deadline(self):
+        for outcome in ("identity_disappeared", "stale_dialog", "expired_identity_disappeared"):
+            with self.subTest(outcome=outcome), tempfile.TemporaryDirectory(prefix="TEST-pi-terminal-exit-") as temporary:
+                release, children, calls, receipt, clock = Path(temporary) / "release", [], [], {}, [0.0]
+                def spawn(argv, **kwargs):
+                    children.append(self.waiting_child(kwargs, release))
+                    return children[-1]
+                def observe(operation, *args, **kwargs):
+                    calls.append(operation)
+                    if operation == "terminal-automation-actors":
+                        return self.actors(children[0])
+                    self.assertEqual(operation, "terminal-automation-consent")
+                    self.assertEqual(json.loads(args[0])["deadlineMonotonic"], 20)
+                    release.touch()
+                    children[0].wait(timeout=3)
+                    if outcome == "stale_dialog":
+                        return {"dialogs": [{"TEST-ended-request-dialog": True}]}
+                    if outcome.startswith("expired"):
+                        clock[0] = 21
+                    raise RuntimeError("TEST terminal_process_identity_unverified")
+                admit = mock.Mock()
+                if outcome.startswith("expired"):
+                    with self.assertRaisesRegex(RuntimeError, "original_terminal_applescript_deadline_expired"):
+                        M.terminal_applescript("TEST original", observe, receipt, admit, now=lambda: clock[0], spawn=spawn)
+                else:
+                    self.assertEqual(M.terminal_applescript("TEST original", observe, receipt, admit,
+                                                           now=lambda: clock[0], spawn=spawn), "7|/dev/ttysTEST")
+                    self.assertEqual(receipt["exit_code"], 0)
+                self.assertEqual(len(children), 1)
+                self.assertEqual(calls, ["terminal-automation-actors", "terminal-automation-consent"])
+                self.assertFalse(receipt["physical_allow_click"])
+                self.assertTrue(receipt["owned_child_collected"])
+                admit.assert_not_called()
+                if outcome == "stale_dialog":
+                    self.assertTrue(receipt["completed_during_consent_observation"])
+                else:
+                    self.assertIn("terminal_process_identity_unverified", receipt["completed_request_observation_error"])
+
+    def test_pending_original_readonly_consent_error_still_fails_and_collects_child(self):
+        children, calls, receipt = [], [], {}
+        def spawn(argv, **kwargs):
+            children.append(self.waiting_child(kwargs))
+            return children[-1]
+        def observe(operation, *args, **kwargs):
+            calls.append(operation)
+            if operation == "terminal-automation-actors":
+                return self.actors(children[0])
+            self.assertEqual(operation, "terminal-automation-consent")
+            self.assertIsNone(children[0].poll())
+            raise RuntimeError("TEST pending original observation failed")
+        admit = mock.Mock()
+        with self.assertRaisesRegex(RuntimeError, "TEST pending original observation failed"):
+            M.terminal_applescript("TEST original", observe, receipt, admit, spawn=spawn)
+        self.assertEqual(len(children), 1)
+        self.assertEqual(calls, ["terminal-automation-actors", "terminal-automation-consent"])
+        self.assertTrue(receipt["owned_child_collected"])
+        self.assertFalse(receipt["physical_allow_click"])
+        admit.assert_not_called()
+
     def test_observer_handoff_cannot_extend_original_twenty_second_deadline(self):
         children, receipt, clock = [], {}, [0.0]
         def spawn(argv, **kwargs):
