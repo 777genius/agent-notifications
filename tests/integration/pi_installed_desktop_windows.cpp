@@ -32,6 +32,8 @@ struct OwnedProcess {
     DWORD pid = 0;
     ULONGLONG created = 0;
     std::wstring image;
+    bool terminationRequested = false;
+    DWORD terminationError = ERROR_SUCCESS;
     ~OwnedProcess() { if (handle) CloseHandle(handle); }
 };
 static bool running(HANDLE process) {
@@ -150,11 +152,23 @@ static std::string collectOwnedProcess(std::unique_ptr<OwnedProcess> root) {
     discover();
     for (;;) {
         for (const auto& process : owned) {
-            if (running(process->handle))
-                need(TerminateProcess(process->handle, 1) || !running(process->handle), "owned_process_termination_failed");
+            if (running(process->handle) && !process->terminationRequested) {
+                // Termination is asynchronous. A process already exiting may
+                // report ACCESS_DENIED before its retained object is signaled.
+                const BOOL requested = TerminateProcess(process->handle, 1);
+                process->terminationError = requested ? ERROR_SUCCESS : GetLastError();
+                if (!requested && process->terminationError != ERROR_ACCESS_DENIED && running(process->handle))
+                    throw std::runtime_error("owned_process_termination_failed:pid=" + std::to_string(process->pid)
+                                             + ":error=" + std::to_string(process->terminationError));
+                process->terminationRequested = true;
+            }
         }
         const bool added = discover();
-        need(GetTickCount64() < deadline, "owned_process_cleanup_timeout");
+        if (GetTickCount64() >= deadline) {
+            const auto pending = std::find_if(owned.begin(), owned.end(), [](const auto& p) { return running(p->handle); });
+            throw std::runtime_error("owned_process_cleanup_timeout:pid=" + std::to_string(pending == owned.end() ? 0 : (*pending)->pid)
+                                     + ":error=" + std::to_string(pending == owned.end() ? 0 : (*pending)->terminationError));
+        }
         if (!added && std::none_of(owned.begin(), owned.end(), [](const auto& p) { return running(p->handle); })) break;
         pump(10);
     }
@@ -229,10 +243,23 @@ static int testProcessIdentity() {
         DeleteFileW(marker); throw;
     }
     DeleteFileW(marker);
+    {
+        TestChild denied(L"process-test-child");
+        auto original = processIdentity(denied.process.dwProcessId);
+        need(original != nullptr, "process_guard_denied_identity_missing");
+        HANDLE queryOnly = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, original->pid);
+        need(queryOnly != nullptr, "process_guard_query_handle_missing");
+        bool refused = false;
+        try { collectOwnedProcess(heldProcess(queryOnly, original->created, original->image)); }
+        catch (const std::runtime_error& error) {
+            refused = std::string(error.what()).rfind("owned_process_cleanup_timeout:pid=", 0) == 0;
+        }
+        need(refused && running(original->handle), "live_denied_process_falsely_collected");
+    }
     std::cout << "{\"scope\":\"native_owned_process_cleanup_only\",\"mismatched_birth_rejected\":true,"
                  "\"mismatched_image_rejected\":true,\"reaped_identity_rejected\":true,"
                  "\"root_exited_before_live_descendant_collection\":true,"
-                 "\"actual_descendant_collected\":true,\"desktop_qualified\":false}\n";
+                 "\"actual_descendant_collected\":true,\"live_denied_process_rejected\":true,\"desktop_qualified\":false}\n";
     return 0;
 }
 static std::wstring title(HWND window) {

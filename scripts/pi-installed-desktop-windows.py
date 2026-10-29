@@ -449,7 +449,8 @@ def run(args):
                     "unchanged_click_observation": click_observation,
                     "checks": {key: True for key in ("native_tui", "configured_banner_policy", "configured_audio_policy",
                                "configured_click_policy", "native_event_counts", "ambient_root_isolated", "owned_terminal_collected")}})
-            except Exception:
+            except Exception as error:
+                report["case_failure"] = {"case": name, "failure": str(error)}
                 observe_failure()  # Before the owned Terminal windows are closed.
                 raise
             finally:
