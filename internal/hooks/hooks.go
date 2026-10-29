@@ -371,10 +371,22 @@ func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 			return nil
 		}
 
-		// A real turn writes the transcript just before Stop. A headless resume
-		// of a finished session fires Stop without appending anything (#119).
+		// Analyze and allow legacy payloads to settle before checking age: a
+		// long-running turn may not have flushed its final record yet.
+		bench.Start("stop.analyze")
+		status, parsedMessages, err = h.handleStopEvent(ev)
+		bench.Elapsed("stop.analyze")
+		if err != nil {
+			return err
+		}
+		if strings.TrimSpace(p.AssistantMessage) == "" {
+			status, parsedMessages = h.settleClaudeTranscript(ev, status, parsedMessages)
+		}
+
+		// A headless resume of a finished session fires Stop without appending
+		// anything (#119). Check after settling and before changing team state.
 		if age := platform.FileAge(ev.Session.TranscriptPath); age > staleTranscriptSeconds &&
-			!claudeStopHasUnflushedReply(ev.Session.TranscriptPath, p.AssistantMessage) {
+			!claudeStopHasUnflushedReply(parsedMessages, p.AssistantMessage) {
 			logging.Debug("Stop: transcript unchanged for %ds, skipping stale completion", age)
 			h.cleanupOldLocks()
 			return nil
@@ -414,16 +426,6 @@ func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 		}
 		// teamMode "always" or not a team lead: fall through to normal processing
 
-		// Analyze the transcript to determine status
-		bench.Start("stop.analyze")
-		status, parsedMessages, err = h.handleStopEvent(ev)
-		bench.Elapsed("stop.analyze")
-		if err != nil {
-			return err
-		}
-		if strings.TrimSpace(p.AssistantMessage) == "" {
-			status, parsedMessages = h.settleClaudeTranscript(ev, status, parsedMessages)
-		}
 		status, insight = h.enrichClaudeStop(status, p.AssistantMessage, parsedMessages)
 		// Note: We don't delete session state here to preserve cooldown info
 		// State files have TTL and will be cleaned up automatically
@@ -979,16 +981,13 @@ func claudeStopIsReview(messages []jsonl.Message, final string) bool {
 
 // A final reply missing from the transcript is a long generation whose flush
 // has not landed yet, not a resume of an already finished turn.
-func claudeStopHasUnflushedReply(path, final string) bool {
+func claudeStopHasUnflushedReply(messages []jsonl.Message, final string) bool {
 	final = strings.Join(strings.Fields(final), " ")
 	if final == "" {
 		return false
 	}
-	messages, err := jsonl.ParseFile(path)
-	if err != nil {
-		return false
-	}
-	last := jsonl.ExtractTextFromMessages(jsonl.GetLastAssistantMessages(messages, 1))
+	currentTurn := jsonl.FilterMessagesAfterTimestamp(messages, jsonl.GetLastUserTimestamp(messages))
+	last := jsonl.ExtractTextFromMessages(jsonl.GetLastAssistantMessages(currentTurn, 1))
 	return strings.Join(strings.Fields(strings.Join(last, " ")), " ") != final
 }
 

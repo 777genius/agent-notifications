@@ -432,34 +432,50 @@ func TestClaudeRepeatedQuestionKeepsLegacyContentDedup(t *testing.T) {
 }
 
 func TestClaudeStopWithoutPayloadWaitsOnlyForTranscriptGrowth(t *testing.T) {
-	setTestHome(t, t.TempDir())
-	transcript := filepath.Join(t.TempDir(), "session.jsonl")
-	user := `{"type":"user","timestamp":"2026-09-24T12:00:00Z","message":{"role":"user","content":"say ready"}}` + "\n"
-	if err := os.WriteFile(transcript, []byte(user), 0600); err != nil {
-		t.Fatal(err)
-	}
-	mock := &mockNotifier{}
-	h := &Handler{cfg: &config.Config{Notifications: config.NotificationsConfig{Desktop: config.DesktopConfig{Enabled: true}}},
-		dedupMgr: dedup.NewManager(), stateMgr: state.NewManager(), teamStateMgr: teamstate.NewManager(""),
-		notifierSvc: mock, webhookSvc: &mockWebhook{}, pluginRoot: t.TempDir()}
-	payload, err := json.Marshal(HookData{SessionID: "settling-without-payload", TranscriptPath: transcript,
-		HookEventName: "Stop", CWD: t.TempDir()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	previousSleep := settleSleepFunc
-	t.Cleanup(func() { settleSleepFunc = previousSleep })
-	settleSleepFunc = func(time.Duration) {
-		if err := os.WriteFile(transcript, []byte(user+
-			`{"type":"assistant","timestamp":"2026-09-24T12:00:01Z","message":{"role":"assistant","content":[{"type":"text","text":"Ready."}]}}`+"\n"), 0600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := h.HandleHook("Stop", strings.NewReader(string(payload))); err != nil {
-		t.Fatal(err)
-	}
-	if mock.callCount() != 1 || !strings.Contains(mock.lastCall().message, "Ready") {
-		t.Fatalf("settled Stop notification = %+v, count=%d", mock.lastCall(), mock.callCount())
+	for _, tc := range []struct {
+		name string
+		age  time.Duration
+	}{
+		{name: "fresh transcript"},
+		{name: "long-running turn", age: 45 * time.Minute},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setTestHome(t, t.TempDir())
+			transcript := filepath.Join(t.TempDir(), "session.jsonl")
+			user := `{"type":"user","timestamp":"2026-09-24T12:00:00Z","message":{"role":"user","content":"say ready"}}` + "\n"
+			if err := os.WriteFile(transcript, []byte(user), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if tc.age > 0 {
+				old := time.Now().Add(-tc.age)
+				if err := os.Chtimes(transcript, old, old); err != nil {
+					t.Fatal(err)
+				}
+			}
+			mock := &mockNotifier{}
+			h := &Handler{cfg: &config.Config{Notifications: config.NotificationsConfig{Desktop: config.DesktopConfig{Enabled: true}}},
+				dedupMgr: dedup.NewManager(), stateMgr: state.NewManager(), teamStateMgr: teamstate.NewManager(""),
+				notifierSvc: mock, webhookSvc: &mockWebhook{}, pluginRoot: t.TempDir()}
+			payload, err := json.Marshal(HookData{SessionID: "settling-without-payload", TranscriptPath: transcript,
+				HookEventName: "Stop", CWD: t.TempDir()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			previousSleep := settleSleepFunc
+			t.Cleanup(func() { settleSleepFunc = previousSleep })
+			settleSleepFunc = func(time.Duration) {
+				if err := os.WriteFile(transcript, []byte(user+
+					`{"type":"assistant","timestamp":"2026-09-24T12:00:01Z","message":{"role":"assistant","content":[{"type":"text","text":"Ready."}]}}`+"\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := h.HandleHook("Stop", strings.NewReader(string(payload))); err != nil {
+				t.Fatal(err)
+			}
+			if mock.callCount() != 1 || !strings.Contains(mock.lastCall().message, "Ready") {
+				t.Fatalf("settled Stop notification = %+v, count=%d", mock.lastCall(), mock.callCount())
+			}
+		})
 	}
 }
 
@@ -944,6 +960,35 @@ func TestHandler_Stop_StaleTranscriptUnflushedReplyNotifies(t *testing.T) {
 	}
 	if !mockNotif.wasCalled() {
 		t.Error("expected notification for a reply not yet in the transcript")
+	}
+}
+
+func TestHandler_Stop_StaleTranscriptRepeatsPriorTurnReply(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	transcript := filepath.Join(t.TempDir(), "session.jsonl")
+	content := `{"type":"user","timestamp":"2026-09-24T12:00:00Z","message":{"role":"user","content":"first"}}` + "\n" +
+		`{"type":"assistant","timestamp":"2026-09-24T12:00:01Z","message":{"role":"assistant","content":[{"type":"text","text":"Done."}]}}` + "\n" +
+		`{"type":"user","timestamp":"2026-09-24T12:01:00Z","message":{"role":"user","content":"second"}}` + "\n"
+	if err := os.WriteFile(transcript, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-11 * time.Minute)
+	if err := os.Chtimes(transcript, old, old); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{Notifications: config.NotificationsConfig{Desktop: config.DesktopConfig{Enabled: true}}}
+	h, mock, _ := newTestHandler(t, cfg)
+	payload, err := json.Marshal(HookData{SessionID: "stale-repeated-reply", TranscriptPath: transcript,
+		LastAssistantMessage: "Done.", HookEventName: "Stop", CWD: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.HandleHook("Stop", strings.NewReader(string(payload))); err != nil {
+		t.Fatal(err)
+	}
+	if mock.callCount() != 1 || mock.lastCall().status != analyzer.StatusTaskComplete ||
+		!strings.Contains(mock.lastCall().message, "Done.") {
+		t.Fatalf("new long turn notification = %+v, count=%d", mock.lastCall(), mock.callCount())
 	}
 }
 
