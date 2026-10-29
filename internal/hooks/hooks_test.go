@@ -432,34 +432,50 @@ func TestClaudeRepeatedQuestionKeepsLegacyContentDedup(t *testing.T) {
 }
 
 func TestClaudeStopWithoutPayloadWaitsOnlyForTranscriptGrowth(t *testing.T) {
-	setTestHome(t, t.TempDir())
-	transcript := filepath.Join(t.TempDir(), "session.jsonl")
-	user := `{"type":"user","timestamp":"2026-09-24T12:00:00Z","message":{"role":"user","content":"say ready"}}` + "\n"
-	if err := os.WriteFile(transcript, []byte(user), 0600); err != nil {
-		t.Fatal(err)
-	}
-	mock := &mockNotifier{}
-	h := &Handler{cfg: &config.Config{Notifications: config.NotificationsConfig{Desktop: config.DesktopConfig{Enabled: true}}},
-		dedupMgr: dedup.NewManager(), stateMgr: state.NewManager(), teamStateMgr: teamstate.NewManager(""),
-		notifierSvc: mock, webhookSvc: &mockWebhook{}, pluginRoot: t.TempDir()}
-	payload, err := json.Marshal(HookData{SessionID: "settling-without-payload", TranscriptPath: transcript,
-		HookEventName: "Stop", CWD: t.TempDir()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	previousSleep := settleSleepFunc
-	t.Cleanup(func() { settleSleepFunc = previousSleep })
-	settleSleepFunc = func(time.Duration) {
-		if err := os.WriteFile(transcript, []byte(user+
-			`{"type":"assistant","timestamp":"2026-09-24T12:00:01Z","message":{"role":"assistant","content":[{"type":"text","text":"Ready."}]}}`+"\n"), 0600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := h.HandleHook("Stop", strings.NewReader(string(payload))); err != nil {
-		t.Fatal(err)
-	}
-	if mock.callCount() != 1 || !strings.Contains(mock.lastCall().message, "Ready") {
-		t.Fatalf("settled Stop notification = %+v, count=%d", mock.lastCall(), mock.callCount())
+	for _, tc := range []struct {
+		name string
+		age  time.Duration
+	}{
+		{name: "fresh transcript"},
+		{name: "long-running turn", age: 45 * time.Minute},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setTestHome(t, t.TempDir())
+			transcript := filepath.Join(t.TempDir(), "session.jsonl")
+			user := `{"type":"user","timestamp":"2026-09-24T12:00:00Z","message":{"role":"user","content":"say ready"}}` + "\n"
+			if err := os.WriteFile(transcript, []byte(user), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if tc.age > 0 {
+				old := time.Now().Add(-tc.age)
+				if err := os.Chtimes(transcript, old, old); err != nil {
+					t.Fatal(err)
+				}
+			}
+			mock := &mockNotifier{}
+			h := &Handler{cfg: &config.Config{Notifications: config.NotificationsConfig{Desktop: config.DesktopConfig{Enabled: true}}},
+				dedupMgr: dedup.NewManager(), stateMgr: state.NewManager(), teamStateMgr: teamstate.NewManager(""),
+				notifierSvc: mock, webhookSvc: &mockWebhook{}, pluginRoot: t.TempDir()}
+			payload, err := json.Marshal(HookData{SessionID: "settling-without-payload", TranscriptPath: transcript,
+				HookEventName: "Stop", CWD: t.TempDir()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			previousSleep := settleSleepFunc
+			t.Cleanup(func() { settleSleepFunc = previousSleep })
+			settleSleepFunc = func(time.Duration) {
+				if err := os.WriteFile(transcript, []byte(user+
+					`{"type":"assistant","timestamp":"2026-09-24T12:00:01Z","message":{"role":"assistant","content":[{"type":"text","text":"Ready."}]}}`+"\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := h.HandleHook("Stop", strings.NewReader(string(payload))); err != nil {
+				t.Fatal(err)
+			}
+			if mock.callCount() != 1 || !strings.Contains(mock.lastCall().message, "Ready") {
+				t.Fatalf("settled Stop notification = %+v, count=%d", mock.lastCall(), mock.callCount())
+			}
+		})
 	}
 }
 
@@ -878,6 +894,101 @@ func TestHandler_Stop_TaskComplete(t *testing.T) {
 	call := mockNotif.lastCall()
 	if call.status != analyzer.StatusTaskComplete {
 		t.Errorf("got status %v, want StatusTaskComplete", call.status)
+	}
+}
+
+// A headless resume of a finished session fires Stop without appending to the
+// transcript; it must not repeat the original completion (#119).
+func TestHandler_Stop_StaleTranscriptSkipped(t *testing.T) {
+	cfg := &config.Config{
+		Notifications: config.NotificationsConfig{
+			Desktop: config.DesktopConfig{Enabled: true},
+		},
+	}
+
+	handler, mockNotif, _ := newTestHandler(t, cfg)
+
+	transcriptPath := createTempTranscript(t,
+		buildTranscriptWithTools([]string{"Read", "Edit", "Write"}, 300))
+	old := time.Now().Add(-45 * time.Minute)
+	if err := os.Chtimes(transcriptPath, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	hookData := buildHookDataJSON(HookData{
+		SessionID:            "test-session-stale",
+		TranscriptPath:       transcriptPath,
+		LastAssistantMessage: strings.Repeat("a", 300),
+		CWD:                  "/test",
+	})
+
+	if err := handler.HandleHook("Stop", hookData); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if mockNotif.wasCalled() {
+		t.Errorf("unexpected notification for stale transcript: %+v", mockNotif.lastCall())
+	}
+}
+
+// A final reply that took longer than the stale window may reach Stop before
+// it is flushed; the old transcript mtime must not drop it.
+func TestHandler_Stop_StaleTranscriptUnflushedReplyNotifies(t *testing.T) {
+	cfg := &config.Config{
+		Notifications: config.NotificationsConfig{
+			Desktop: config.DesktopConfig{Enabled: true},
+		},
+	}
+
+	handler, mockNotif, _ := newTestHandler(t, cfg)
+
+	transcriptPath := createTempTranscript(t,
+		buildTranscriptWithTools([]string{"Read", "Edit", "Write"}, 300))
+	old := time.Now().Add(-45 * time.Minute)
+	if err := os.Chtimes(transcriptPath, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	hookData := buildHookDataJSON(HookData{
+		SessionID:            "test-session-stale-unflushed",
+		TranscriptPath:       transcriptPath,
+		LastAssistantMessage: "Done.",
+		CWD:                  "/test",
+	})
+
+	if err := handler.HandleHook("Stop", hookData); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !mockNotif.wasCalled() {
+		t.Error("expected notification for a reply not yet in the transcript")
+	}
+}
+
+func TestHandler_Stop_StaleTranscriptRepeatsPriorTurnReply(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	transcript := filepath.Join(t.TempDir(), "session.jsonl")
+	content := `{"type":"user","timestamp":"2026-09-24T12:00:00Z","message":{"role":"user","content":"first"}}` + "\n" +
+		`{"type":"assistant","timestamp":"2026-09-24T12:00:01Z","message":{"role":"assistant","content":[{"type":"text","text":"Done."}]}}` + "\n" +
+		`{"type":"user","timestamp":"2026-09-24T12:01:00Z","message":{"role":"user","content":"second"}}` + "\n"
+	if err := os.WriteFile(transcript, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-11 * time.Minute)
+	if err := os.Chtimes(transcript, old, old); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{Notifications: config.NotificationsConfig{Desktop: config.DesktopConfig{Enabled: true}}}
+	h, mock, _ := newTestHandler(t, cfg)
+	payload, err := json.Marshal(HookData{SessionID: "stale-repeated-reply", TranscriptPath: transcript,
+		LastAssistantMessage: "Done.", HookEventName: "Stop", CWD: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.HandleHook("Stop", strings.NewReader(string(payload))); err != nil {
+		t.Fatal(err)
+	}
+	if mock.callCount() != 1 || mock.lastCall().status != analyzer.StatusTaskComplete ||
+		!strings.Contains(mock.lastCall().message, "Done.") {
+		t.Fatalf("new long turn notification = %+v, count=%d", mock.lastCall(), mock.callCount())
 	}
 }
 
@@ -2740,6 +2851,48 @@ func TestHandler_Stop_TeamMode_Smart_NotifiesWhenAllIdle(t *testing.T) {
 
 	if !mockNotif.wasCalled() {
 		t.Error("expected notification when lead stops and all teammates are idle")
+	}
+}
+
+func TestHandler_Stop_TeamMode_StaleTranscriptKeepsTeamState(t *testing.T) {
+	sessionID := "test-team-stale-session"
+	teamName := "test-stale-team"
+	claudeDir := setupTeamConfig(t, teamName, sessionID, []string{"alice"})
+	setTestHome(t, claudeDir)
+
+	transcriptPath := createTempTranscript(t, buildTranscriptWithTools([]string{"Write"}, 50))
+	old := time.Now().Add(-45 * time.Minute)
+	if err := os.Chtimes(transcriptPath, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &config.Config{
+		Notifications: config.NotificationsConfig{
+			Desktop:  config.DesktopConfig{Enabled: true},
+			TeamMode: "wait-all",
+		},
+	}
+	handler, mockNotif, _ := newTestHandler(t, cfg)
+	teamMgr := setupTeamStateManager(t, claudeDir)
+	teamMgr.RecordTeammateIdle(teamName, "alice") //nolint:errcheck
+
+	hookData := buildHookDataJSON(HookData{
+		SessionID:      sessionID,
+		TranscriptPath: transcriptPath,
+		CWD:            "/test",
+	})
+	if err := handler.HandleHook("Stop", hookData); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if mockNotif.wasCalled() {
+		t.Error("unexpected notification for stale transcript")
+	}
+	st, err := teamMgr.LoadState(teamName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.LeadStopped || st.NotifiedAt != 0 {
+		t.Errorf("stale Stop must not touch team state: %+v", st)
 	}
 }
 
