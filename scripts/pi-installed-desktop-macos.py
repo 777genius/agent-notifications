@@ -361,13 +361,19 @@ def terminal_launcher(root, argv, env, cwd):
 
 class Terminal:
     """An owned real Terminal window and its observed native TTY/Pi PID."""
-    def __init__(self, root, argv, env, observer, cwd=None):
+    def __init__(self, root, argv, env, observer, cwd=None, *, owned):
         self.root, self.observer, self.closed = root, observer, False
+        self.window = self.tty = self.pid = self.shell_pid = self.process_start_identity = None
+        self.window_closed = False
+        self.executable = str(Path(argv[0]).resolve(strict=True))
         root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.pid_path, self.exit_path = root / "process.pid", root / "process.exit"
         self.shell_path = root / "shell.pid"
         cwd = cwd or root / "project"
         script = terminal_launcher(root, argv, env, cwd)
+        # Every exception after the first launch side effect must leave a
+        # reachable cleanup owner, even before window/child discovery finishes.
+        owned.append(self)
         result = applescript('tell application "Terminal"\nset t to do script '
                              + quoted("/bin/bash --noprofile --norc " + shlex.quote(str(script)))
                              + '\nset custom title of t to ' + quoted(cwd.name)
@@ -378,6 +384,13 @@ class Terminal:
         wait_for(self.pid_path.exists, "native_pi_pid_missing")
         self.pid = int(self.pid_path.read_text())
         self.shell_pid = int(self.shell_path.read_text())
+        P.require(self.pid > 0 and self.shell_pid > 0, "owned_terminal_pid_invalid")
+        identity = observer("terminal-process-identity", str(self.pid))
+        P.require(identity.get("status") == "observed" and identity.get("pid") == self.pid
+                  and identity.get("parent_pid") == self.shell_pid
+                  and identity.get("executable_path") == self.executable
+                  and identity.get("process_start_identity"), "owned_terminal_process_identity_unverified")
+        self.process_start_identity = identity["process_start_identity"]
 
     def focus(self):
         applescript('tell application "Terminal"\nactivate\nset index of window id '
@@ -402,31 +415,42 @@ class Terminal:
         self.observer("type", text)
 
     def collected(self):
-        if not self.exit_path.exists():
-            return False
-        try:
-            os.kill(self.pid, 0)
-            return False
-        except ProcessLookupError:
+        if self.closed:
             return True
+        if not self.process_start_identity or not self.exit_path.exists():
+            return False
+        state = self.observer("terminal-process-identity", str(self.pid), self.process_start_identity)
+        P.require(state.get("status") in ("observed", "absent", "replaced"), "owned_terminal_collection_unverified")
+        return state["status"] in ("absent", "replaced")
 
     def close(self):
         if self.closed:
             return
-        if self.pid_path.exists() and not self.collected():
-            try:
-                os.kill(self.pid, signal.SIGTERM)
-                wait_for(self.collected, "owned_terminal_process_not_collected", seconds=3)
-            except (ProcessLookupError, RuntimeError):
+        try:
+            P.require(self.process_start_identity, "partial_terminal_cleanup_unverified")
+            if not self.collected():
+                self.observer("signal-owned-terminal-process", str(self.pid), self.process_start_identity,
+                              self.executable, "TERM")
                 try:
-                    os.kill(self.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                wait_for(self.collected, "owned_terminal_process_not_reaped", seconds=3)
-        # Only the exact window/TTY created above is eligible for fixture close.
-        applescript('tell application "Terminal"\nif exists window id ' + str(self.window)
-                    + ' then\nif (tty of selected tab of window id ' + str(self.window) + ') is '
-                    + quoted(self.tty) + ' then close window id ' + str(self.window) + ' saving no\nend if\nend tell')
+                    wait_for(self.collected, "owned_terminal_process_not_collected", seconds=3)
+                except RuntimeError as error:
+                    if str(error) != "owned_terminal_process_not_collected":
+                        raise
+                    self.observer("signal-owned-terminal-process", str(self.pid), self.process_start_identity,
+                                  self.executable, "KILL")
+                    wait_for(self.collected, "owned_terminal_process_not_reaped", seconds=3)
+        finally:
+            # Never discover ownership from a different foreground window on
+            # failure. Close only the exact window/TTY actually returned at launch.
+            P.require(self.window is not None and self.tty is not None, "partial_terminal_cleanup_unverified")
+            if not self.window_closed:
+                result = applescript('tell application "Terminal"\nif exists window id ' + str(self.window)
+                            + ' then\nif (tty of selected tab of window id ' + str(self.window) + ') is not '
+                            + quoted(self.tty) + ' then error "owned_terminal_window_identity_changed"\n'
+                            + 'close window id ' + str(self.window) + ' saving no\nreturn "closed"\n'
+                            + 'else\nreturn "absent"\nend if\nend tell')
+                P.require(result in ("closed", "absent"), "owned_terminal_window_cleanup_unverified")
+                self.window_closed = True
         self.closed = True
 
 
@@ -521,8 +545,7 @@ def run(args):
                 argv.append("TEST say done")
             cwd = case_root / "project" / ("TEST-Pi-" + name)
             cwd.mkdir()
-            terminal = Terminal(case_root, argv, native_env, observer, cwd)
-            terminals.append(terminal)
+            terminal = Terminal(case_root, argv, native_env, observer, cwd, owned=terminals)
             wait_for(lambda: (case_root / "witness.jsonl").exists()
                      and any(x["type"] == "session_start" for x in F.witness(case_root)), "actual_pi_tui_start_missing")
             rows = F.witness(case_root)
@@ -712,8 +735,8 @@ def run(args):
         (decoy_root / "project").mkdir(parents=True)
         decoy_cwd = decoy_root / "project/TEST-Pi-decoy"
         decoy_cwd.mkdir()
-        decoy = Terminal(decoy_root, ["/bin/sleep", "240"], {"PATH": "/usr/bin:/bin", "HOME": str(root / "home")}, observer, decoy_cwd)
-        terminals.append(decoy)
+        decoy = Terminal(decoy_root, ["/bin/sleep", "240"], {"PATH": "/usr/bin:/bin", "HOME": str(root / "home")},
+                         observer, decoy_cwd, owned=terminals)
         for name in CASES:
             case(name, decoy)
         report.update(status="passed_native_product_observations", native_product_observations_passed=True)

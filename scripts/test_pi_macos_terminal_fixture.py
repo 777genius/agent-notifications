@@ -53,6 +53,93 @@ class TerminalInput(unittest.TestCase):
                 os.close(slave)
 
 
+class TerminalOwnership(unittest.TestCase):
+    def identity(self):
+        return {"status": "observed", "pid": 41, "parent_pid": 40,
+                "process_start_identity": "123:456", "executable_path": str(Path("/bin/sleep").resolve())}
+
+    def launch(self, root, observer, owned):
+        (root / "process.pid").write_text("41\n")
+        (root / "shell.pid").write_text("40\n")
+        return M.Terminal(root, ["/bin/sleep", "20"], {}, observer, root, owned=owned)
+
+    def test_failed_child_discovery_retains_owner_and_exact_window_cleanup_without_claiming_collection(self):
+        with tempfile.TemporaryDirectory(prefix="TEST-pi-terminal-owner-") as temporary:
+            root, owned = Path(temporary), []
+
+            def launch(_):
+                self.assertEqual(len(owned), 1)
+                return "7|/dev/ttysTEST"
+
+            with mock.patch.object(M, "applescript", side_effect=launch), \
+                    mock.patch.object(M, "wait_for", side_effect=RuntimeError("native_pi_pid_missing")):
+                with self.assertRaisesRegex(RuntimeError, "native_pi_pid_missing"):
+                    M.Terminal(root, ["/bin/sleep", "20"], {}, mock.Mock(), root, owned=owned)
+            owner = owned[0]
+            self.assertFalse(owner.collected())
+            with mock.patch.object(M, "applescript", return_value="closed") as cleanup:
+                with self.assertRaisesRegex(RuntimeError, "partial_terminal_cleanup_unverified"):
+                    owner.close()
+            self.assertIn("window id 7", cleanup.call_args.args[0])
+            self.assertIn('"/dev/ttysTEST"', cleanup.call_args.args[0])
+            self.assertTrue(owner.window_closed)
+            self.assertFalse(owner.closed)
+            self.assertFalse(owner.collected())
+
+    def test_failed_launch_response_keeps_unresolved_owner_uncollected(self):
+        with tempfile.TemporaryDirectory(prefix="TEST-pi-terminal-owner-") as temporary:
+            owned = []
+            with mock.patch.object(M, "applescript", side_effect=RuntimeError("TEST response unavailable")) as native:
+                with self.assertRaisesRegex(RuntimeError, "TEST response unavailable"):
+                    M.Terminal(Path(temporary), ["/bin/sleep", "20"], {}, mock.Mock(), owned=owned)
+                with self.assertRaisesRegex(RuntimeError, "partial_terminal_cleanup_unverified"):
+                    owned[0].close()
+            self.assertEqual(native.call_count, 1)
+            self.assertFalse(owned[0].collected())
+
+    def test_initial_birth_path_and_launcher_parent_must_be_verified_before_cleanup_can_signal(self):
+        changes = ({"status": "absent"}, {"parent_pid": 42}, {"executable_path": "/TEST/foreign"},
+                   {"process_start_identity": ""})
+        for change in changes:
+            with self.subTest(change=change), tempfile.TemporaryDirectory(prefix="TEST-pi-terminal-owner-") as temporary:
+                owned = []
+                observer = mock.Mock(return_value={**self.identity(), **change})
+                with mock.patch.object(M, "applescript", side_effect=["7|/dev/ttysTEST", "closed"]):
+                    with self.assertRaisesRegex(RuntimeError, "owned_terminal_process_identity_unverified"):
+                        self.launch(Path(temporary), observer, owned)
+                    with self.assertRaisesRegex(RuntimeError, "partial_terminal_cleanup_unverified"):
+                        owned[0].close()
+                self.assertFalse(any(call.args[0] == "signal-owned-terminal-process" for call in observer.call_args_list))
+                self.assertFalse(owned[0].collected())
+
+    def test_reused_pid_is_collected_without_signalling_replacement(self):
+        with tempfile.TemporaryDirectory(prefix="TEST-pi-terminal-owner-") as temporary:
+            root, owned = Path(temporary), []
+            observer = mock.Mock(side_effect=[self.identity(), {"status": "replaced", "pid": 41}])
+            with mock.patch.object(M, "applescript", side_effect=["7|/dev/ttysTEST", "closed"]):
+                terminal = self.launch(root, observer, owned)
+                terminal.exit_path.write_text("0\n")
+                terminal.close()
+            self.assertTrue(terminal.closed)
+            self.assertTrue(terminal.collected())
+            self.assertEqual([call.args for call in observer.call_args_list],
+                             [("terminal-process-identity", "41"), ("terminal-process-identity", "41", "123:456")])
+
+    def test_signal_identity_failure_closes_only_owned_window_and_never_escalates(self):
+        with tempfile.TemporaryDirectory(prefix="TEST-pi-terminal-owner-") as temporary:
+            owned = []
+            observer = mock.Mock(side_effect=[self.identity(), RuntimeError("owned_terminal_process_identity_mismatch")])
+            with mock.patch.object(M, "applescript", side_effect=["7|/dev/ttysTEST", "closed"]):
+                terminal = self.launch(Path(temporary), observer, owned)
+                with self.assertRaisesRegex(RuntimeError, "owned_terminal_process_identity_mismatch"):
+                    terminal.close()
+            self.assertTrue(terminal.window_closed)
+            self.assertFalse(terminal.closed)
+            signals = [call.args for call in observer.call_args_list if call.args[0] == "signal-owned-terminal-process"]
+            self.assertEqual(signals, [("signal-owned-terminal-process", "41", "123:456", self.identity()["executable_path"], "TERM")])
+            self.assertFalse(terminal.collected())
+
+
 class ConsentObservation(unittest.TestCase):
     """Real child exit/pipe/timeout observations; these never qualify desktop."""
     def child(self, stdout, stderr=b"", code=0, delay=0):

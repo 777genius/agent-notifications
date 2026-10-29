@@ -28,6 +28,43 @@ func matchesProcessStart(_ pid: pid_t, _ expected: String) -> Bool {
     return !expected.isEmpty && processStartIdentity(pid) == expected
 }
 
+// Direct Terminal children are not NSRunningApplications. Keep their cleanup
+// bound to the original kernel birth and executable, including on failed setup.
+func terminalProcessIdentity(_ pid: pid_t, expectedStart: String? = nil) throws -> [String: Any] {
+    guard pid > 0 else { throw ProbeError.unavailable("owned_terminal_pid_required") }
+    guard let start = processStartIdentity(pid) else {
+        if kill(pid, 0) == -1 && errno == ESRCH { return ["status": "absent", "pid": Int(pid)] }
+        throw ProbeError.unavailable("terminal_process_identity_unverified")
+    }
+    if let expectedStart, start != expectedStart { return ["status": "replaced", "pid": Int(pid)] }
+    var path = [CChar](repeating: 0, count: Int(PROC_PIDPATHINFO_MAXSIZE))
+    let count = path.withUnsafeMutableBytes { proc_pidpath(pid, $0.baseAddress, UInt32($0.count)) }
+    var info = proc_bsdinfo()
+    let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+    guard count > 0, Int(count) < path.count, path.contains(0),
+          proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size,
+          info.pbi_pid == UInt32(pid), "\(info.pbi_start_tvsec):\(info.pbi_start_tvusec)" == start,
+          matchesProcessStart(pid, start) else {
+        throw ProbeError.unavailable("terminal_process_identity_changed_or_unverified")
+    }
+    let executable = URL(fileURLWithPath: String(cString: path)).resolvingSymlinksInPath().path
+    return ["status": "observed", "pid": Int(pid), "parent_pid": Int(info.pbi_ppid),
+            "process_start_identity": start, "executable_path": executable]
+}
+
+func signalOwnedTerminalProcess(_ pid: pid_t, start: String, executable: String, signal: Int32) throws -> [String: Any] {
+    let identity = try terminalProcessIdentity(pid, expectedStart: start)
+    if ["absent", "replaced"].contains(identity["status"] as? String ?? "") {
+        return ["signal_sent": false, "original_process_collected": true]
+    }
+    guard identity["executable_path"] as? String == executable, matchesProcessStart(pid, start) else {
+        throw ProbeError.unavailable("owned_terminal_process_identity_mismatch")
+    }
+    let result = kill(pid, signal)
+    guard result == 0 || errno == ESRCH else { throw ProbeError.unavailable("owned_terminal_process_signal_failed") }
+    return ["signal_sent": result == 0, "original_process_collected": result != 0]
+}
+
 func testDirectChildIdentity() throws -> [String: Any] {
     let child = Process()
     child.executableURL = URL(fileURLWithPath: "/bin/sleep")
@@ -42,13 +79,28 @@ func testDirectChildIdentity() throws -> [String: Any] {
           !matchesProcessStart(pid, "1:0") else {
         throw ProbeError.unavailable("direct_child_kernel_identity_unavailable_or_unstable")
     }
-    child.terminate()
+    let observed = try terminalProcessIdentity(pid)
+    let executable = URL(fileURLWithPath: "/bin/sleep").resolvingSymlinksInPath().path
+    guard observed["executable_path"] as? String == executable,
+          observed["parent_pid"] as? Int == Int(getpid()),
+          try signalOwnedTerminalProcess(pid, start: "1:0", executable: executable, signal: SIGTERM)["signal_sent"] as? Bool == false,
+          child.isRunning else { throw ProbeError.unavailable("mismatched_terminal_birth_signalled") }
+    do {
+        _ = try signalOwnedTerminalProcess(pid, start: identity, executable: "/TEST/foreign", signal: SIGKILL)
+        throw ProbeError.unavailable("mismatched_terminal_path_signalled")
+    } catch ProbeError.unavailable("owned_terminal_process_identity_mismatch") { }
+    guard child.isRunning,
+          try signalOwnedTerminalProcess(pid, start: identity, executable: executable, signal: SIGTERM)["signal_sent"] as? Bool == true else {
+        throw ProbeError.unavailable("owned_terminal_child_not_signalled")
+    }
     child.waitUntilExit()
-    guard !matchesProcessStart(pid, identity) else {
+    guard !matchesProcessStart(pid, identity),
+          try signalOwnedTerminalProcess(pid, start: identity, executable: executable, signal: SIGKILL)["signal_sent"] as? Bool == false else {
         throw ProbeError.unavailable("terminated_child_kernel_identity_still_matched")
     }
     return ["scope": "native_direct_child_kernel_identity_only", "stable_identity": true,
             "mismatched_identity_rejected": true, "reaped_child_identity_rejected": true,
+            "terminal_birth_and_path_signal_guards": true,
             "child_collected": !child.isRunning, "desktop_qualified": false]
 }
 
@@ -350,6 +402,19 @@ final class ProductCapture: NSObject, SCStreamOutput, SCStreamDelegate, @uncheck
                 publish(["checks": checks, "foreground": foreground(), "desktop_qualified": false])
                 guard checks.values.allSatisfy({ $0 }) else { throw ProbeError.unavailable("native_observer_prerequisite_unavailable") }
             case "foreground": publish(foreground())
+            case "terminal-process-identity", "signal-owned-terminal-process":
+                guard args.count >= 2, let pid = Int32(args[1]), pid > 0 else {
+                    throw ProbeError.unavailable("owned_terminal_pid_required")
+                }
+                if operation == "terminal-process-identity" {
+                    guard args.count == 2 || args.count == 3 else { throw ProbeError.unavailable("terminal_identity_arguments_invalid") }
+                    publish(try terminalProcessIdentity(pid, expectedStart: args.count == 3 ? args[2] : nil))
+                } else {
+                    guard args.count == 5, !args[2].isEmpty, args[3].hasPrefix("/"),
+                          ["TERM", "KILL"].contains(args[4]) else { throw ProbeError.unavailable("owned_terminal_signal_arguments_invalid") }
+                    publish(try signalOwnedTerminalProcess(pid, start: args[2], executable: args[3],
+                                                          signal: args[4] == "TERM" ? SIGTERM : SIGKILL))
+                }
             case "notification-center-state":
                 guard args.count == 1 else { throw ProbeError.unavailable("fixed_system_notification_center_only") }
                 let apps = NSWorkspace.shared.runningApplications.filter {
