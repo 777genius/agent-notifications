@@ -103,7 +103,7 @@ func runContextNativeApp(ctx context.Context, clock BootClock, executable string
 	if err != nil {
 		return err
 	}
-	defer os.RemoveAll(root)
+	defer func(root string) { _ = os.RemoveAll(root) }(root)
 	root, err = filepath.EvalSymlinks(root)
 	if err != nil {
 		return err
