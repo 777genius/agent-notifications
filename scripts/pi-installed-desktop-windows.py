@@ -10,6 +10,7 @@ import argparse
 import audioop
 import importlib.util
 import json
+import math
 import os
 from pathlib import Path
 import platform
@@ -129,6 +130,104 @@ def cleanup_case(actions, *, primary_failure, report, case):
         # observation that caused it. A cleanup-only failure still refuses.
         if primary_failure is None:
             raise RuntimeError("native_case_cleanup_failed:" + failures[0]["failure"])
+
+
+def case_failure_observation(case_root, origin, provider, sink, data_root, snapshot, *, now=time.monotonic):
+    """Read only bounded TEST metadata after failure, before owned cleanup."""
+    started = now()
+    deadline = started + 6
+    result = {"scope": "failed_owned_TEST_case_only", "desktop_qualified": False,
+              "qualification_input": False, "maximum_seconds": 6}
+
+    def attempt(name, action):
+        try:
+            P.require(now() < deadline, "case_diagnostic_deadline_expired")
+            result[name] = action()
+        except Exception as error:
+            result[name] = {"status": "unavailable", "error_class": type(error).__name__}
+
+    def read(path, limit):
+        P.require(path.is_file() and not path.is_symlink() and path.resolve(strict=True) == path
+                  and path.stat().st_size <= limit, "case_diagnostic_file_unavailable")
+        with path.open("rb") as source:
+            raw = source.read(limit + 1)
+        P.require(len(raw) <= limit, "case_diagnostic_file_oversized")
+        return raw
+
+    def provider_facts():
+        count, released = len(provider.requests), provider.release.is_set()
+        P.require(count <= 64 and type(released) is bool, "case_diagnostic_provider_bound")
+        return {"requests": count, "released": released}
+
+    def witness():
+        lines = read(case_root / "witness.jsonl", 65536).splitlines()
+        P.require(len(lines) <= 64, "case_diagnostic_witness_rows_exceeded")
+        kinds = {"factory", "session_start", "agent_start", "agent_end", "agent_before_settle",
+                 "agent_settled", "ui_prompt_start", "ui_prompt_end", "session_shutdown"}
+        rows = []
+        for line in lines:
+            value = json.loads(line)
+            P.require(isinstance(value, dict) and value.get("type") in kinds, "case_diagnostic_witness_kind")
+            row = {"type": value["type"]}
+            for key in ("hasUI", "idle", "aborted"):
+                if type(value.get(key)) is bool:
+                    row[key] = value[key]
+            if value.get("mode") in ("tui", "rpc", "json", "print"):
+                row["mode"] = value["mode"]
+            if value.get("outcome") in ("completed", "aborted", "error"):
+                row["outcome"] = value["outcome"]
+            if type(value.get("pid")) is int and 0 < value["pid"] <= 0xFFFFFFFF:
+                row["pid"] = value["pid"]
+            rows.append(row)
+        return rows
+
+    def webhook_facts():
+        rows, failures = list(sink.rows), len(sink.failures)
+        P.require(len(rows) <= 32 and failures <= 32, "case_diagnostic_webhook_bound")
+        return {"failure_count": failures, "rows": [
+            {"status": row["status"], "received_monotonic": row["received_monotonic"]}
+            for row in rows if isinstance(row, dict) and row.get("status") in P.COPY
+            and type(row.get("received_monotonic")) in (int, float)
+            and math.isfinite(row["received_monotonic"]) and row["received_monotonic"] >= 0]}
+
+    def cache():
+        # Attempt bits precede effect admission; they prove no submission/delivery.
+        P.require(data_root.is_absolute() and data_root.resolve(strict=True) == data_root and data_root.is_dir()
+                  and data_root.is_relative_to(case_root.parent.resolve(strict=True)),
+                  "case_diagnostic_cache_outside_owned_TEST_root")
+        path = data_root / "observations.json"
+        if not path.exists():
+            P.require(not path.is_symlink(), "case_diagnostic_cache_link")
+            return {"status": "absent"}
+        value = json.loads(read(path, 48 * 1024))
+        entries = value.get("entries") if isinstance(value, dict) else None
+        P.require(isinstance(entries, list) and len(entries) <= 256, "case_diagnostic_cache_shape")
+        bits = [row.get("bits") for row in entries if isinstance(row, dict)]
+        P.require(len(bits) == len(entries) and all(type(bit) is int and bit in (1, 2, 3) for bit in bits),
+                  "case_diagnostic_cache_bits")
+        return {"status": "observed_attempt_bits_only", "entries": len(bits),
+                "desktop_attempt_entries": sum(bool(bit & 1) for bit in bits),
+                "webhook_attempt_entries": sum(bool(bit & 2) for bit in bits)}
+
+    attempt("provider", provider_facts)
+    attempt("witness", witness)
+    attempt("webhooks", webhook_facts)
+    attempt("observation_cache", cache)
+    attempt("precleanup_ui", lambda: snapshot(deadline))
+    if origin is not None:
+        def process():
+            P.require(origin.process_handle is not None and origin.pi_identity is not None,
+                      "case_diagnostic_original_process_unbound")
+            remaining = deadline - now()
+            P.require(remaining > 0, "case_diagnostic_deadline_expired")
+            identity = origin.native.held_process(origin.process_handle, "process-identity-handle", origin.executable,
+                                                 timeout=min(2, remaining))
+            P.require(identity == origin.pi_identity, "case_diagnostic_original_process_changed")
+            return {"status": "original_retained_identity_observed", "pid": identity["pid"],
+                    "creation_time": identity["creation_time"]}
+        attempt("origin_process", process)
+    result["elapsed_seconds"] = round(now() - started, 3)
+    return result
 
 
 def start_toast_watcher(native, title, body, root, deadline, helpers):
@@ -271,10 +370,10 @@ class Native:
     def route_arguments(self):
         return self.fixture.arguments() if self.fixture else []
 
-    def __call__(self, *args, allowed=(0,)):
+    def __call__(self, *args, allowed=(0,), timeout=25):
         if args and args[0] == "preflight":
             args = (*args, *self.route_arguments())
-        result = command([self.executable, *args], allowed=allowed)
+        result = command([self.executable, *args], allowed=allowed, timeout=timeout)
         return json.loads(result.stdout.decode())
 
     def focus(self, window):
@@ -284,9 +383,9 @@ class Native:
     def type(self, window, value):
         self("type", window["hwnd"], window["pid"], window["title"], value)
 
-    def held_process(self, handle, mode, *args):
+    def held_process(self, handle, mode, *args, timeout=25):
         P.require(handle.value is not None, "owned_pi_process_handle_already_closed")
-        result = command([self.executable, mode, handle.value, *args], handles=(handle.value,))
+        result = command([self.executable, mode, handle.value, *args], handles=(handle.value,), timeout=timeout)
         return json.loads(result.stdout.decode())
 
 
@@ -414,19 +513,31 @@ def run(args):
     native, sink, initial_provider, terminals, helpers = Native(args.observer), None, None, [], []
     diagnostic_title = None
 
-    def observe_failure():
+    def observe_failure(deadline=None):
         if report.get("failure_observation_attempted"):
-            return
+            return {"status": "already_attempted"}
         report["failure_observation_attempted"] = True
+        deadline = time.monotonic() + 4 if deadline is None else deadline
+        observations = {}
         try:
             for terminal in terminals:
                 state = terminal.root / "launch-state.json"
                 if state.is_file() and not state.is_symlink() and state.stat().st_size <= 65536:
                     shutil.copy2(state, terminal.root / "launch-at-failure.json")
-            report["failure_foreground"] = native("foreground")
-            native("screenshot", root / "failure-desktop.bmp")
         except Exception as diagnostic_error:
-            report["failure_observation_error"] = str(diagnostic_error)
+            observations["launcher_state"] = {"error_class": type(diagnostic_error).__name__}
+        for label, args in (("foreground", ("foreground",)), ("screenshot", ("screenshot", root / "failure-desktop.bmp"))):
+            try:
+                remaining = deadline - time.monotonic()
+                P.require(remaining > 0, "case_diagnostic_deadline_expired")
+                value = native(*args, timeout=min(2, remaining))
+                if label == "foreground":
+                    report["failure_foreground"] = value
+                observations[label] = {"status": "observed"}
+            except Exception as diagnostic_error:
+                observations[label] = {"status": "unavailable", "error_class": type(diagnostic_error).__name__}
+        report["failure_ui_observations"] = observations
+        return observations
 
     try:
         fixture = A.Fixture(args.windows_audio_fixture) if args.windows_audio_fixture else None
@@ -600,7 +711,11 @@ def run(args):
                 primary_failure = str(error)
                 report["native_observation_failure"] = {"case": name, "failure": primary_failure}
                 report["case_failure"] = {"case": name, "failure": str(error)}
-                observe_failure()  # Before the owned Terminal windows are closed.
+                try:
+                    report["case_failure"]["observations"] = case_failure_observation(
+                        case_root, origin, provider, sink, Path(view["binding"]["dataRoot"]), observe_failure)
+                except Exception as diagnostic_error:
+                    report["case_failure"]["diagnostic_error_class"] = type(diagnostic_error).__name__
                 raise
             finally:
                 actions = [(role, terminal.close) for role, terminal in (("origin", origin), ("distractor", distractor)) if terminal]

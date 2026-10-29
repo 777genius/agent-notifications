@@ -197,6 +197,132 @@ class CaseCleanupTests(unittest.TestCase):
         helper.communicate.assert_called_once_with(timeout=5)
 
 
+class FailedCaseEvidenceTests(unittest.TestCase):
+    def state(self, root):
+        case, data = root / "case-completion", root / "data"
+        case.mkdir()
+        data.mkdir()
+        (case / "witness.jsonl").write_text('{"type":"agent_settled","mode":"tui","idle":true}\n')
+        provider = Mock(requests=[{"TEST-private-provider-payload": "private"}])
+        provider.release.is_set.return_value = True
+        sink = Mock(rows=[], failures=[])
+        return case, data, provider, sink
+
+    def origin(self):
+        identity = {"present": True, "pid": 41, "creation_time": "123456789", "executable": "TEST-pi.exe"}
+        native = Mock()
+        native.held_process.return_value = identity
+        return SimpleNamespace(native=native, process_handle=Mock(value=234), pi_identity=identity,
+                               executable="TEST-pi.exe")
+
+    def test_fixed_projection_retains_attempt_facts_and_original_handle_without_private_values(self):
+        with tempfile.TemporaryDirectory(prefix="TEST-pi-failure-evidence-") as temporary:
+            root = Path(temporary).resolve()
+            case, data, provider, sink = self.state(root)
+            private = "TEST-private-prompt-reason-token-cache-key"
+            (case / "witness.jsonl").write_text(json.dumps({"type": "agent_settled", "mode": "tui",
+                "idle": True, "aborted": False, "outcome": "completed", "reason": private, "prompt": private}) + "\n")
+            cache = data / "observations.json"
+            cache.write_text(json.dumps({"boot": private, "entries": [
+                {"key": private, "until": 7.0, "bits": bit} for bit in (1, 2, 3)]}))
+            before = cache.read_bytes()
+            sink.rows = [{"status": "task_complete", "received_monotonic": 7.0, "request_id": private, "message": private},
+                         {"status": private, "received_monotonic": 8.0},
+                         {"status": "question", "received_monotonic": float("inf")}]
+            origin, snapshot = self.origin(), Mock(return_value={"screenshot": {"status": "observed"}})
+            value = W.case_failure_observation(case, origin, provider, sink, data, snapshot, now=lambda: 10.0)
+            self.assertNotIn(private, json.dumps(value))
+            self.assertEqual(value["provider"], {"requests": 1, "released": True})
+            self.assertEqual(value["witness"], [{"type": "agent_settled", "mode": "tui", "idle": True,
+                                                 "aborted": False, "outcome": "completed"}])
+            self.assertEqual(value["webhooks"], {"failure_count": 0, "rows": [
+                {"status": "task_complete", "received_monotonic": 7.0}]})
+            self.assertEqual(value["observation_cache"], {"status": "observed_attempt_bits_only", "entries": 3,
+                "desktop_attempt_entries": 2, "webhook_attempt_entries": 2})
+            origin.native.held_process.assert_called_once_with(origin.process_handle, "process-identity-handle",
+                                                               "TEST-pi.exe", timeout=2)
+            origin.process_handle.close.assert_not_called()
+            self.assertEqual(value["origin_process"], {"status": "original_retained_identity_observed", "pid": 41,
+                                                       "creation_time": "123456789"})
+            self.assertFalse(value["qualification_input"])
+            self.assertFalse(value["desktop_qualified"])
+            self.assertEqual(cache.read_bytes(), before)
+            snapshot.assert_called_once_with(16.0)
+
+    def test_file_and_row_bounds_are_typed_unavailable_instead_of_partial_success(self):
+        with tempfile.TemporaryDirectory(prefix="TEST-pi-failure-evidence-") as temporary:
+            root = Path(temporary).resolve()
+            case, data, provider, sink = self.state(root)
+            witness, cache = case / "witness.jsonl", data / "observations.json"
+            for witness_bytes in (b" " * 65537, b'{"type":"agent_settled"}\n' * 65, b'{"type":"TEST-private-type"}\n'):
+                witness.write_bytes(witness_bytes)
+                value = W.case_failure_observation(case, None, provider, sink, data, Mock(return_value={}))
+                self.assertEqual(value["witness"]["status"], "unavailable")
+            for content in (" " * (48 * 1024 + 1), json.dumps({"entries": [{"bits": 1}] * 257}),
+                            json.dumps({"entries": [{"bits": True}]})):
+                cache.write_text(content)
+                value = W.case_failure_observation(case, None, provider, sink, data, Mock(return_value={}))
+                self.assertEqual(value["observation_cache"]["status"], "unavailable")
+            sink.rows = [{}] * 33
+            provider.requests = [{}] * 65
+            value = W.case_failure_observation(case, None, provider, sink, data, Mock(return_value={}))
+            self.assertEqual(value["webhooks"]["status"], "unavailable")
+            self.assertEqual(value["provider"]["status"], "unavailable")
+
+    def test_links_nonregular_and_outside_cache_never_supply_attempt_evidence(self):
+        with tempfile.TemporaryDirectory(prefix="TEST-pi-failure-evidence-") as temporary:
+            root = Path(temporary).resolve()
+            case, data, provider, sink = self.state(root)
+            cache, foreign = data / "observations.json", root / "foreign.json"
+            foreign.write_text('{"entries":[{"bits":3}]}')
+            cache.symlink_to(foreign)
+            value = W.case_failure_observation(case, None, provider, sink, data, Mock(return_value={}))
+            self.assertEqual(value["observation_cache"]["status"], "unavailable")
+            cache.unlink()
+            cache.mkdir()
+            value = W.case_failure_observation(case, None, provider, sink, data, Mock(return_value={}))
+            self.assertEqual(value["observation_cache"]["status"], "unavailable")
+            value = W.case_failure_observation(case, None, provider, sink, root.parent, Mock(return_value={}))
+            self.assertEqual(value["observation_cache"]["status"], "unavailable")
+
+    def test_expired_diagnostic_budget_never_starts_original_process_query_or_renews_deadline(self):
+        with tempfile.TemporaryDirectory(prefix="TEST-pi-failure-evidence-") as temporary:
+            root = Path(temporary).resolve()
+            case, data, provider, sink = self.state(root)
+            clock, origin = Clock(), self.origin()
+            def snapshot(deadline):
+                self.assertEqual(deadline, 6)
+                clock.now = 6
+                raise RuntimeError("TEST-private-diagnostic-error")
+            value = W.case_failure_observation(case, origin, provider, sink, data, snapshot, now=clock.monotonic)
+            self.assertEqual(value["precleanup_ui"], {"status": "unavailable", "error_class": "RuntimeError"})
+            self.assertEqual(value["origin_process"], {"status": "unavailable", "error_class": "RuntimeError"})
+            self.assertEqual(value["elapsed_seconds"], 6)
+            self.assertNotIn("TEST-private-diagnostic-error", json.dumps(value))
+            origin.native.held_process.assert_not_called()
+
+    def test_snapshot_refusal_does_not_skip_retained_query_or_mask_primary_cleanup_path(self):
+        with tempfile.TemporaryDirectory(prefix="TEST-pi-failure-evidence-") as temporary:
+            root = Path(temporary).resolve()
+            case, data, provider, sink = self.state(root)
+            origin, primary, calls, report = self.origin(), RuntimeError("actual_primary_observation"), [], {}
+            try:
+                try:
+                    raise primary
+                finally:
+                    value = W.case_failure_observation(case, origin, provider, sink, data,
+                        Mock(side_effect=PermissionError("TEST-private-snapshot-error")))
+                    W.cleanup_case((("origin", lambda: calls.append("origin")), ("provider", lambda: calls.append("provider"))),
+                                   primary_failure=str(primary), report=report, case="completion")
+            except RuntimeError as error:
+                self.assertIs(error, primary)
+            self.assertEqual(calls, ["origin", "provider"])
+            origin.native.held_process.assert_called_once()
+            self.assertEqual(value["precleanup_ui"]["error_class"], "PermissionError")
+            self.assertNotIn("TEST-private-snapshot-error", json.dumps(value))
+            self.assertEqual(value["observation_cache"], {"status": "absent"})
+
+
 class ProcessCleanupTests(unittest.TestCase):
     def terminal(self, root, native):
         terminal = W.Terminal.__new__(W.Terminal)
