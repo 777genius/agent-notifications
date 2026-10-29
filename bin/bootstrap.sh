@@ -1373,10 +1373,11 @@ progress_snapshots() {
 }
 
 progress_child_running() {
-    # Keep the parent job roster: a pipeline loses it in Bash. Defer an
-    # interrupt's exit until Bash finishes parsing these command substitutions.
+    # Keep the parent job roster in one command substitution: a signal trap can
+    # corrupt Bash's parser between adjacent substitutions. Defer an interrupt's
+    # exit until Bash finishes parsing this substitution.
     local running result=1 _BOOTSTRAP_JOB_QUERY=true _BOOTSTRAP_JOB_QUERY_INTERRUPT=0
-    for running in $(jobs -pr) $(jobs -ps); do
+    for running in $(jobs -pr; jobs -ps); do
         if [ "$running" = "$1" ]; then result=0; break; fi
     done
     _BOOTSTRAP_JOB_QUERY=false

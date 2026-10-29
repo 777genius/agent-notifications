@@ -61,6 +61,13 @@ env -u HOME USERPROFILE="$SANDBOX/windows profile" CLAUDE_HOME="$SANDBOX/legacy 
     bash -c 'source "$1"; [ "$CLAUDE_HOME" = "$2" ]' \
     _ "$SANDBOX/functions.sh" "$SANDBOX/explicit config"
 source "$SANDBOX/functions.sh"
+# CHLD from the job-list queries reproduces Bash's adjacent-substitution trap
+# parser failure without timing a signal. The shell itself is never its child.
+bash -c '
+    source "$1"
+    trap : CHLD
+    if progress_child_running "$$"; then exit 1; fi
+' _ "$SANDBOX/functions.sh"
 # All macOS application queries in this suite must be explicitly mocked.
 bootstrap_macos_command() { echo "Unexpected macOS application query in fixture" >&2; return 1; }
 
@@ -1391,7 +1398,7 @@ progress_child_running() {
         done
     fi
     local running result=1 _BOOTSTRAP_JOB_QUERY=true _BOOTSTRAP_JOB_QUERY_INTERRUPT=0
-    for running in $(jobs -pr) $(jobs -ps); do
+    for running in $(jobs -pr; jobs -ps); do
         if [ "$running" = "$1" ]; then result=0; break; fi
     done
     _BOOTSTRAP_JOB_QUERY=false
