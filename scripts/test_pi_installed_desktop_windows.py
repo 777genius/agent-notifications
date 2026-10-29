@@ -74,6 +74,25 @@ class PostClickOracleTests(unittest.TestCase):
 
 
 class TemporaryDiagnosticQualificationTests(unittest.TestCase):
+    def test_real_windows_profile_preserves_private_pi_identity_and_drops_host_secrets(self):
+        private = {key: "TEST-private-" + key for key in (
+            "HOME", "USERPROFILE", "PI_CODING_AGENT_DIR", "AGENT_NOTIFICATIONS_CONFIG", "XDG_CONFIG_HOME",
+            "XDG_DATA_HOME", "XDG_CACHE_HOME", "TMPDIR", "TMP", "TEMP", "PATH", "TEST_PI_WITNESS", "PI_OFFLINE")}
+        real = {key: "TEST-real-" + key for key in ("USERPROFILE", "APPDATA", "LOCALAPPDATA")}
+        host = {**real, "PRIVATE_HOST_TOKEN": "PRIVATE-secret", "AGENT_NOTIFICATIONS_WEBHOOK_URL": "PRIVATE-url",
+                "PATH": "PRIVATE-host-path"}
+        with patch.dict(W.os.environ, host, clear=True):
+            actual = W.native_windows_profile(private)
+        self.assertEqual(actual, {**private, **real})
+        self.assertEqual(private["USERPROFILE"], "TEST-private-USERPROFILE")
+
+    def test_missing_real_windows_profile_refuses_split_profile(self):
+        for missing in ("USERPROFILE", "APPDATA", "LOCALAPPDATA"):
+            host = {key: "TEST-real" for key in ("USERPROFILE", "APPDATA", "LOCALAPPDATA") if key != missing}
+            with patch.dict(W.os.environ, host, clear=True):
+                with self.assertRaisesRegex(RuntimeError, "actual_windows_profile_environment_missing"):
+                    W.native_windows_profile({"PI_CODING_AGENT_DIR": "TEST-private-agent"})
+
     def test_failed_readonly_settings_observation_cannot_replace_primary_failure(self):
         native = Mock(side_effect=RuntimeError("PRIVATE_NATIVE_DETAIL"))
         with patch.object(W.os, "startfile", create=True) as launch:

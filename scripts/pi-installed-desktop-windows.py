@@ -270,6 +270,14 @@ def reference(native, source, output):
         file.writeframes(normalized_pcm(data, rate))
 
 
+def native_windows_profile(env):
+    # Keep the registered Windows profile intact. Pi's explicit agent directory,
+    # private HOME/XDG/config/tmp and offline model remain isolated below it.
+    keys = ("USERPROFILE", "APPDATA", "LOCALAPPDATA")
+    P.require(all(os.environ.get(key) for key in keys), "actual_windows_profile_environment_missing")
+    return {**env, **{key: os.environ[key] for key in keys}}
+
+
 def notification_settings_readonly(native, root):
     # TEMPORARY: failure-only normal UI navigation; no notification-policy writes.
     phase = "settings_uri_launch"
@@ -334,7 +342,7 @@ def run(args):
         wt, powershell = shutil.which("wt.exe"), shutil.which("pwsh.exe")
         P.require(wt and powershell, "existing_windows_terminal_and_powershell_required")
         sink, initial_provider = P.Webhooks(), F.Provider("success")
-        env = F.prepare(root, initial_provider, "success")
+        env = native_windows_profile(F.prepare(root, initial_provider, "success"))
         env["AGENT_NOTIFICATIONS_CONFIG"] = str(root / "global/config.json")
         (root / "foreign-TEST-root").mkdir()
         P.configure(root / "global/config.json", args.assets_root / "config/config.json", sink)
@@ -356,7 +364,7 @@ def run(args):
             origin = distractor = capture = neutral = None
             stop_capture, stop_neutral = case_root / "capture.stop", case_root / "neutral.stop"
             try:
-                case_env = F.prepare(case_root, provider, "success", agent_dir=root / "agent")
+                case_env = native_windows_profile(F.prepare(case_root, provider, "success", agent_dir=root / "agent"))
                 case_env.update(TEST_PI_DEFER_DIALOG="1", CLAUDE_PLUGIN_ROOT=str(root / "foreign-TEST-root"))
                 nonce = uuid.uuid4().hex
                 origin_title, distractor_title, toast_title = "TEST-Pi-origin-" + nonce, "TEST-Pi-distractor-" + nonce, "TEST-Pi-toast-" + nonce
