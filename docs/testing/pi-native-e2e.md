@@ -313,8 +313,10 @@ candidate's notification page in System Settings and finish the original request
 as unavailable. That result remains recorded. A separately typed Settings route
 requires a fresh denied native status, the direct card-to-page transition, the
 Apple-signed fixed System Settings bundle, and one exact candidate page with an
-enabled OFF checkbox labelled “Allow notifications”. The fixture may move only
-that Settings window within the observed display once if Notification Center covers the switch. A fresh
+enabled OFF checkbox labelled “Allow notifications”, either directly or by the
+sole exact label in its immediate AXGroup with one direct checkbox sibling. The
+fixture may move only that Settings window within the observed display once if
+Notification Center covers the switch. A fresh
 topmost-window and accessibility hit check must bind the physical click to the
 actual checkbox. One click must leave the same owner's exact page switch ON,
 and a fresh candidate-native permission query must report allowed. The fixture

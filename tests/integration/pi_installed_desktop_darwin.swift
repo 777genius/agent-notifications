@@ -380,6 +380,18 @@ func cgBox(_ row: [String: Any]) -> CGRect? {
         windowCount += windows.count
         for window in windows {
             var aliases = Set<String>(), switches = [(AXUIElement, Bool, CGRect)]()
+            func appendSwitch(_ element: AXUIElement, group: AXUIElement? = nil) {
+                guard attribute(element, kAXRoleAttribute) as? String == kAXCheckBoxRole,
+                      let value = attribute(element, kAXValueAttribute) as? NSNumber,
+                      value.doubleValue == 0 || value.doubleValue == 1,
+                      attribute(element, kAXEnabledAttribute) as? Bool == true,
+                      let box = rectangle(element),
+                      !switches.contains(where: { CFEqual($0.0, element) }) else { return }
+                if let group {
+                    guard let groupBox = rectangle(group), groupBox.contains(box) else { return }
+                }
+                switches.append((element, value.intValue == 1, box))
+            }
             func visit(_ element: AXUIElement, _ depth: Int) {
                 guard visited < 1200, depth < 20, ProcessInfo.processInfo.systemUptime < deadline else {
                     complete = false; return
@@ -401,15 +413,31 @@ func cgBox(_ row: [String: Any]) -> CGRect? {
                         if let parent = attribute(element, kAXParentAttribute), CFGetTypeID(parent) == AXUIElementGetTypeID() {
                             let container = parent as! AXUIElement
                             control["parent_role"] = String((attribute(container, kAXRoleAttribute) as? String ?? "").prefix(80))
-                            control["sibling_roles"] = (attribute(container, kAXChildrenAttribute) as? [AXUIElement] ?? []).prefix(8).map {
+                            let siblings = attribute(container, kAXChildrenAttribute) as? [AXUIElement] ?? []
+                            control["sibling_roles"] = siblings.prefix(8).map {
                                 String((attribute($0, kAXRoleAttribute) as? String ?? "").prefix(80))
+                            }
+                            // The measured Settings row exposes its label and
+                            // checkbox as direct siblings, not a checkbox title.
+                            let row = siblings.count <= 8 ? siblings : []
+                            let labels = row.filter { sibling in
+                                [kAXValueAttribute, kAXTitleAttribute, kAXDescriptionAttribute].contains {
+                                    attribute(sibling, $0) as? String == "Allow notifications"
+                                }
+                            }
+                            let checkboxes = row.filter { attribute($0, kAXRoleAttribute) as? String == kAXCheckBoxRole }
+                            if role == kAXStaticTextRole, attribute(container, kAXRoleAttribute) as? String == kAXGroupRole,
+                               labels.count == 1, CFEqual(labels[0], element), checkboxes.count == 1,
+                               let labelBox = rectangle(element), let groupBox = rectangle(container), groupBox.contains(labelBox) {
+                                appendSwitch(checkboxes[0], group: container)
+                                let state = attribute(checkboxes[0], kAXValueAttribute) as? NSNumber
+                                control["direct_sibling_checkbox_boolean"] = state != nil && (state!.doubleValue == 0 || state!.doubleValue == 1)
+                                control["direct_sibling_checkbox_enabled"] = attribute(checkboxes[0], kAXEnabledAttribute) as? Bool == true
                             }
                         }
                         controls.append(control)
                     } else { complete = false }
-                    if role == kAXCheckBoxRole, boolean, enabled, let box = rectangle(element) {
-                        switches.append((element, value!.intValue == 1, box))
-                    }
+                    if role == kAXCheckBoxRole { appendSwitch(element) }
                 }
                 for child in attribute(element, kAXChildrenAttribute) as? [AXUIElement] ?? [] { visit(child, depth + 1) }
             }
