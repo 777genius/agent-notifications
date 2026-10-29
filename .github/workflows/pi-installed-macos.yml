@@ -137,46 +137,50 @@ jobs:
         shell: bash
         run: |
           python - <<'PY'
-          import hashlib, json, os, subprocess
+          import hashlib, importlib.util, json, os, subprocess
           from pathlib import Path
           root = Path(os.environ['RUNNER_TEMP']) / 'TEST-pi-macos'
+          spec = importlib.util.spec_from_file_location('pi_macos_automation', 'scripts/pi-installed-desktop-macos.py')
+          fixture = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(fixture)
+          def observe(*args):
+              result = fixture.command([root / 'observer', *args], timeout=5)
+              if len(result.encode()) > 65536:
+                  raise ValueError('automation_observation_output_limit')
+              return json.loads(result)
+          owned = []
           report = {'scope': 'temporary_terminal_automation_observation_only', 'desktop_qualified': False,
                     'source_sha': os.environ['SOURCE_SHA'], 'permission_grants': 0, 'ui_inputs': 0,
-                    'request_timeout_seconds': 20}
-          request = subprocess.Popen(['/usr/bin/osascript', '-e', 'tell application "Terminal" to get version'],
-                                     stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-          report['original_request_pid'] = request.pid
+                    'request_timeout_seconds': 20, 'launch_api': 'existing_owned_Terminal_constructor'}
           try:
-              out, err = request.communicate(timeout=20)
-              report['request_timed_out'] = False
-          except subprocess.TimeoutExpired:
-              report['request_timed_out'] = True
-              request.kill()
-              out, err = request.communicate(timeout=3)
+              fixture.Terminal(root / 'TEST-automation-terminal', ['/bin/sleep', '30'],
+                               {'PATH': '/usr/bin:/bin', 'HOME': os.environ['HOME']}, observe, root, owned=owned)
+              report['launch_returned'] = True
+          except Exception as error:
+              report['primary_failure_class'] = type(error).__name__
+              report['primary_failure'] = str(error)[:4096]
+              report['request_timed_out'] = isinstance(error, subprocess.TimeoutExpired)
           finally:
-              if request.poll() is None:
-                  try:
-                      request.kill()
-                      request.communicate(timeout=3)
-                  except Exception as error:
-                      report['cleanup_failure_class'] = type(error).__name__
-              report['request_collected'] = request.poll() is not None
-              report['request_exit_code'] = request.returncode
-              report['original_request_ended_before_observation'] = request.poll() is not None
+              # The unchanged synchronous constructor's subprocess.run either
+              # returned or killed/reaped its original osascript before raising.
+              report['original_launch_ended_before_observation'] = True
               try:
-                  observed = subprocess.run([str(root / 'observer'), 'terminal-automation-diagnostics'],
-                      stdin=subprocess.DEVNULL, capture_output=True, timeout=5, check=True)
-                  if len(observed.stdout) > 65536:
-                      raise ValueError('automation_observation_output_limit')
-                  report['native_observation'] = json.loads(observed.stdout)
+                  report['native_observation'] = observe('terminal-automation-diagnostics')
                   screenshot = root / 'evidence/terminal-automation.png'
                   subprocess.run(['/usr/sbin/screencapture', '-x', str(screenshot)], timeout=3, check=True)
                   report['screenshot_sha256'] = hashlib.sha256(screenshot.read_bytes()).hexdigest()
               except Exception as error:
                   report['observation_failure_class'] = type(error).__name__
+              report['cleanup_failures'] = []
+              for terminal in reversed(owned):
+                  try:
+                      terminal.close()
+                  except Exception as error:
+                      report['cleanup_failures'].append(str(error)[:1024])
+              report['owned_terminal_children_collected'] = bool(owned) and all(t.collected() for t in owned)
               (root / 'evidence/terminal-automation.json').write_text(json.dumps(report, indent=2) + '\n')
-          if not report['request_collected']:
-              raise RuntimeError('original_automation_request_not_collected')
+          if report.get('primary_failure') or report['cleanup_failures'] or not report['owned_terminal_children_collected']:
+              raise RuntimeError('temporary_terminal_automation_observation_failed')
           PY
       - uses: actions/setup-go@v7
         if: ${{ !inputs.observer_only }}
