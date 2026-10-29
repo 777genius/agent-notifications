@@ -26,24 +26,47 @@ CASES = ("completion", "question", "sound-off", "click-off", "desktop-off", "sta
 POWERSHELL_LAUNCHER = '''param([Parameter(Mandatory=$true)][string]$Spec)
 $ErrorActionPreference = 'Stop'
 $inputSpec = Get-Content -LiteralPath $Spec -Raw | ConvertFrom-Json
-$terminal = @{}
-foreach ($key in @('WT_SESSION', 'WT_PROFILE_ID')) {
-  $value = [Environment]::GetEnvironmentVariable($key, 'Process')
-  if ($value) { $terminal[$key] = $value }
+$state = [ordered]@{ phase='read_spec'; powershell_pid=$PID }
+function SaveState([string]$Phase) {
+  $state['phase'] = $Phase
+  [IO.File]::WriteAllText([string]$inputSpec.state_path, ($state | ConvertTo-Json -Compress))
 }
-if (!$terminal['WT_SESSION']) { throw 'Real Windows Terminal session unavailable' }
-Get-ChildItem Env: | ForEach-Object { [Environment]::SetEnvironmentVariable($_.Name, $null, 'Process') }
-foreach ($entry in $inputSpec.environment.PSObject.Properties) {
-  [Environment]::SetEnvironmentVariable($entry.Name, [string]$entry.Value, 'Process')
+function CaptureFailure {
+  try { & ([string]$inputSpec.observer) screenshot ([string]$inputSpec.failure_image) | Out-Null } catch { }
 }
-foreach ($key in $terminal.Keys) { [Environment]::SetEnvironmentVariable($key, $terminal[$key], 'Process') }
-Set-Location -LiteralPath $inputSpec.cwd
-if ($inputSpec.executable) {
-  $childArgs = @($inputSpec.arguments | ForEach-Object { [string]$_ })
-  & ([string]$inputSpec.executable) @childArgs
-  $code = $LASTEXITCODE
-} else { Start-Sleep -Seconds 180; $code = 0 }
-[IO.File]::WriteAllText([string]$inputSpec.exit_path, [string]$code)
+try {
+  $terminal = @{}
+  foreach ($key in @('WT_SESSION', 'WT_PROFILE_ID')) {
+    $value = [Environment]::GetEnvironmentVariable($key, 'Process')
+    if ($value) { $terminal[$key] = $value }
+  }
+  $state['wt_session_present'] = [bool]$terminal['WT_SESSION']
+  SaveState 'terminal_environment'
+  if (!$terminal['WT_SESSION']) { throw 'Real Windows Terminal session unavailable' }
+  Get-ChildItem Env: | ForEach-Object { [Environment]::SetEnvironmentVariable($_.Name, $null, 'Process') }
+  foreach ($entry in $inputSpec.environment.PSObject.Properties) {
+    [Environment]::SetEnvironmentVariable($entry.Name, [string]$entry.Value, 'Process')
+  }
+  foreach ($key in $terminal.Keys) { [Environment]::SetEnvironmentVariable($key, $terminal[$key], 'Process') }
+  SaveState 'private_environment'
+  Set-Location -LiteralPath $inputSpec.cwd
+  if ($inputSpec.executable) {
+    $childArgs = @($inputSpec.arguments | ForEach-Object { [string]$_ })
+    SaveState 'child_running'
+    & ([string]$inputSpec.executable) @childArgs
+    $code = $LASTEXITCODE
+    $state['child_exit_code'] = $code
+    SaveState 'child_exited'
+    if ($code -ne 0 -or ![IO.File]::Exists([string]$inputSpec.witness_path)) { CaptureFailure }
+  } else { Start-Sleep -Seconds 180; $code = 0 }
+  [IO.File]::WriteAllText([string]$inputSpec.exit_path, [string]$code)
+} catch {
+  $detail = ($_ | Out-String) + $_.ScriptStackTrace
+  $state['error'] = $detail.Substring(0, [Math]::Min(4096, $detail.Length))
+  SaveState 'launcher_failed'
+  CaptureFailure
+  throw
+}
 exit 0
 '''
 
@@ -124,7 +147,10 @@ class Terminal:
         self.exit_path = root / "process.exit"
         spec = root / "launch.json"
         spec.write_text(json.dumps({"environment": env, "cwd": str(cwd), "executable": str(executable) if executable else None,
-                                    "arguments": list(map(str, argv)), "exit_path": str(self.exit_path)}), encoding="utf-8")
+                                    "arguments": list(map(str, argv)), "exit_path": str(self.exit_path),
+                                    "state_path": str(root / "launch-state.json"), "observer": str(native.executable),
+                                    "failure_image": str(root / "launch-failure.bmp"),
+                                    "witness_path": str(root.parent / "witness.jsonl")}), encoding="utf-8")
         launcher = root / "launch.ps1"
         launcher.write_text(POWERSHELL_LAUNCHER)
         # The real Terminal supplies WT_SESSION. Only its own child script
@@ -184,6 +210,21 @@ def run(args):
               "desktop_qualified": False, "native_product_observations_passed": False, "product_executed": False, "cases": []}
     report["execution_mode"] = "x64_emulation" if platform.machine().lower() in ("arm64", "aarch64") else "native_amd64"
     native, sink, initial_provider, terminals, helpers = Native(args.observer), None, None, [], []
+
+    def observe_failure():
+        if report.get("failure_observation_attempted"):
+            return
+        report["failure_observation_attempted"] = True
+        try:
+            for terminal in terminals:
+                state = terminal.root / "launch-state.json"
+                if state.is_file() and not state.is_symlink() and state.stat().st_size <= 65536:
+                    shutil.copy2(state, terminal.root / "launch-at-failure.json")
+            report["failure_foreground"] = native("foreground")
+            native("screenshot", root / "failure-desktop.bmp")
+        except Exception as diagnostic_error:
+            report["failure_observation_error"] = str(diagnostic_error)
+
     try:
         fixture = A.Fixture(args.windows_audio_fixture) if args.windows_audio_fixture else None
         native.fixture = fixture
@@ -338,6 +379,9 @@ def run(args):
                     "unchanged_click_observation": click_observation,
                     "checks": {key: True for key in ("native_tui", "configured_banner_policy", "configured_audio_policy",
                                "configured_click_policy", "native_event_counts", "ambient_root_isolated", "owned_terminal_collected")}})
+            except Exception:
+                observe_failure()  # Before the owned Terminal windows are closed.
+                raise
             finally:
                 if origin:
                     origin.close()
@@ -351,6 +395,7 @@ def run(args):
         report.update(status="passed_native_product_observations", native_product_observations_passed=True)
     except Exception as error:
         report["failure"] = str(error)
+        observe_failure()
     finally:
         failures = []
         for terminal in reversed(terminals):
@@ -370,11 +415,17 @@ def run(args):
             report.update(status="failed", native_product_observations_passed=False, cleanup_failures=failures)
         args.report.parent.mkdir(parents=True, exist_ok=True)
         for case_root in root.glob("case-*"):
-            for name in ("native-output.s16le", "actual-product-banner.bmp"):
+            for name in ("native-output.s16le", "actual-product-banner.bmp", "witness.jsonl",
+                         "origin/launch-state.json", "origin/launch-at-failure.json", "origin/process.exit", "origin/launch-failure.bmp",
+                         "distractor/launch-state.json", "distractor/launch-at-failure.json", "distractor/process.exit", "distractor/launch-failure.bmp"):
                 source = case_root / name
-                if source.is_file():
+                bound = 64 * 1024 * 1024 if source.suffix in (".bmp", ".s16le") else 65536
+                if source.is_file() and not source.is_symlink() and source.stat().st_size <= bound:
                     target = args.report.parent / "native-captures" / case_root.name / name
                     target.parent.mkdir(parents=True, exist_ok=True); shutil.copy2(source, target)
+        failure_image = root / "failure-desktop.bmp"
+        if failure_image.is_file() and failure_image.stat().st_size <= 64 * 1024 * 1024:
+            shutil.copy2(failure_image, args.report.parent / failure_image.name)
         args.report.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
         print(json.dumps({"status": report["status"], "failure": report.get("failure"), "desktop_qualified": False}))
     return 0 if report["native_product_observations_passed"] and report["owned_children_collected"] else 1

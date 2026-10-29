@@ -1,6 +1,11 @@
 """Regression guards for the Windows observation oracle, not native evidence."""
 import importlib.util
+import json
+import os
 from pathlib import Path
+import shutil
+import subprocess
+import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -65,6 +70,29 @@ class PostClickOracleTests(unittest.TestCase):
         self.assertEqual(result["keyboard_hwnd"], 123)
         self.assertGreaterEqual(stop.at, 0.5)
         self.assertLess(stop.at, 0.6)
+
+
+class LauncherDiagnosticsTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == "nt" and shutil.which("pwsh.exe"), "Actual Windows PowerShell guard only")
+    def test_missing_real_terminal_records_failure_without_starting_pi(self):
+        with tempfile.TemporaryDirectory(prefix="TEST Pi launcher ") as directory:
+            root = Path(directory)
+            launcher, spec, state = root / "launch.ps1", root / "launch.json", root / "launch-state.json"
+            launcher.write_text(W.POWERSHELL_LAUNCHER)
+            spec.write_text(json.dumps({"state_path": str(state), "observer": str(root / "missing-observer.exe"),
+                                        "failure_image": str(root / "failure.bmp"), "executable": None,
+                                        "environment": {}, "arguments": [], "cwd": str(root),
+                                        "exit_path": str(root / "process.exit"), "witness_path": str(root / "witness.jsonl")}))
+            env = {key: value for key, value in os.environ.items() if key not in ("WT_SESSION", "WT_PROFILE_ID")}
+            result = subprocess.run([shutil.which("pwsh.exe"), "-NoLogo", "-NoProfile", "-File", str(launcher), "-Spec", str(spec)],
+                                    env=env, stdin=subprocess.DEVNULL, capture_output=True, timeout=10)
+            self.assertNotEqual(result.returncode, 0)
+            observed = json.loads(state.read_text(encoding="utf-8-sig"))
+            self.assertEqual(observed["phase"], "launcher_failed")
+            self.assertIs(observed["wt_session_present"], False)
+            self.assertIn("Real Windows Terminal session unavailable", observed["error"])
+            self.assertNotIn("child_exit_code", observed)
+            self.assertFalse((root / "process.exit").exists())
 
 
 if __name__ == "__main__":

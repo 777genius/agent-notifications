@@ -265,6 +265,7 @@ int wmain(int argc, wchar_t** argv) {
         need(argc >= 2, "native_observer_command_required"); const std::wstring mode = argv[1];
         if (mode == L"preflight" && (argc == 3 || argc == 9)) return piPrerequisiteEntry(argc - 1, argv + 1);
         hrcheck(CoInitializeEx(nullptr, COINIT_MULTITHREADED));
+        if (mode == L"screenshot" && argc == 3) { screenshot(argv[2]); std::cout << "{\"captured\":true}\n"; return 0; }
         if (mode == L"capture" && (argc == 4 || argc == 10)) return capture(argv[2], argv[3], argc - 4, argv + 4);
         if (mode == L"decode" && argc == 4) return decode(argv[2], argv[3]);
         if (mode == L"neutral" && argc == 4) {
