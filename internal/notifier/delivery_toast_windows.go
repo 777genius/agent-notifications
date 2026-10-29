@@ -30,7 +30,39 @@ type windowsPowerShellToastSession struct {
 	trustedReady            func(context.Context) error
 }
 
-const windowsToastPowerShell = `$ErrorActionPreference='Stop'; [Windows.UI.Notifications.ToastNotificationManager,Windows.UI.Notifications,ContentType=WindowsRuntime] | Out-Null; $xmlBytes=[Convert]::FromBase64String($env:AGENT_NOTIFICATIONS_TOAST_XML); $xmlText=[Text.Encoding]::UTF8.GetString($xmlBytes); $doc=[Windows.Data.Xml.Dom.XmlDocument,Windows.Data.Xml.Dom.XmlDocument,ContentType=WindowsRuntime]::New(); $doc.LoadXml($xmlText); $toast=[Windows.UI.Notifications.ToastNotification,Windows.UI.Notifications,ContentType=WindowsRuntime]::New($doc); [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($env:AGENT_NOTIFICATIONS_TOAST_APP_ID).Show($toast)`
+// TEMPORARY fixed checkpoints; never merge this script into the final candidate.
+const windowsToastPowerShell = `$ErrorActionPreference='Stop'
+$TESTDeadline=[long]0
+$TESTTraceEnabled=[long]::TryParse($env:TEST_PI_TRACE_DEADLINE,[ref]$TESTDeadline) -and $TESTDeadline -ge 0 -and $TESTDeadline -le 4294967295L
+function TESTTrace([string]$phase) {
+  try {
+    if (!$TESTTraceEnabled) { return }
+    $now=([long][Environment]::TickCount -band 4294967295L)
+    $delta=$TESTDeadline-$now
+    if ($delta -gt 2147483647L) { $delta-=4294967296L }
+    if ($delta -lt -2147483648L) { $delta+=4294967296L }
+    $remaining=[Math]::Max(0L,[Math]::Min(15000L,$delta))
+    $elapsed=[Math]::Max(0L,[Math]::Min(60000L,15000L-$delta))
+    $state='active'; if ($delta -le 0) { $state='deadline_exceeded' }
+    [Console]::Error.WriteLine('{"type":"TEST_pi_native_trace","phase":"'+$phase+'","channel":"desktop","elapsed_ms":'+$elapsed+',"remaining_ms":'+$remaining+',"context":"'+$state+'"}')
+  } catch { }
+}
+try {
+  TESTTrace 'powershell_entered'
+  [Windows.UI.Notifications.ToastNotificationManager,Windows.UI.Notifications,ContentType=WindowsRuntime] | Out-Null
+  TESTTrace 'winrt_ready'
+  $xmlBytes=[Convert]::FromBase64String($env:AGENT_NOTIFICATIONS_TOAST_XML)
+  $xmlText=[Text.Encoding]::UTF8.GetString($xmlBytes)
+  $doc=[Windows.Data.Xml.Dom.XmlDocument,Windows.Data.Xml.Dom.XmlDocument,ContentType=WindowsRuntime]::New()
+  $doc.LoadXml($xmlText)
+  TESTTrace 'xml_loaded'
+  $toast=[Windows.UI.Notifications.ToastNotification,Windows.UI.Notifications,ContentType=WindowsRuntime]::New($doc)
+  TESTTrace 'toast_created'
+  $notifier=[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($env:AGENT_NOTIFICATIONS_TOAST_APP_ID)
+  TESTTrace 'notifier_created'
+  $notifier.Show($toast)
+  TESTTrace 'toast_shown'
+} catch { TESTTrace 'toast_failed'; exit 1 }`
 
 var submitWindowsToast = runWindowsToast
 var resolveWindowsPowerShell = systemWindowsPowerShell
@@ -61,7 +93,10 @@ func runWindowsToast(ctx context.Context, p windowsToastPayload) error {
 		return err
 	}
 	cmd := windowsToastCommand(ctx, powershell, data, p.AppID)
+	trace := &testPowerShellTrace{}
+	cmd.Stderr = trace
 	err = commandrun.Run(ctx, cmd)
+	trace.forward(os.Stderr)
 	if ctx.Err() != nil {
 		return errors.Join(ctx.Err(), err)
 	}
@@ -75,6 +110,9 @@ func windowsToastCommand(ctx context.Context, powershell string, data []byte, ap
 		"AGENT_NOTIFICATIONS_TOAST_XML="+base64.StdEncoding.EncodeToString(data),
 		"AGENT_NOTIFICATIONS_TOAST_APP_ID="+appID,
 	)
+	if deadline := testToastDeadline(ctx); deadline != "" {
+		cmd.Env = append(cmd.Env, "TEST_PI_TRACE_DEADLINE="+deadline)
+	}
 	// The terminal bell frees the hook's hidden console before delivery, so a
 	// console child would otherwise get a new, visible console window.
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: windows.CREATE_NO_WINDOW}

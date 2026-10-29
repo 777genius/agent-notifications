@@ -272,15 +272,13 @@ def reference(native, source, output):
 
 def notification_settings_readonly(native, root):
     # TEMPORARY: failure-only normal UI navigation; no notification-policy writes.
+    phase = "settings_uri_launch"
     try:
-        powershell = shutil.which("pwsh.exe")
-        if not powershell:
-            return {"status": "unavailable"}
-        command([powershell, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
-                 "Start-Process 'ms-settings:notifications' -ErrorAction Stop"], timeout=5)
+        os.startfile("ms-settings:notifications")
+        phase = "settings_ui_observer"
         return native("notification-settings-readonly", root)
     except Exception:
-        return {"status": "unavailable"}
+        return {"status": "unavailable", "phase": phase}
 
 
 def mark_diagnostic_unqualified(report):

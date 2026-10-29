@@ -52,7 +52,8 @@ export function recordTestDiagnostic(stderr: unknown): void {
     if (!info.isFile() || info.isSymbolicLink() || info.size > FRAME_LIMIT || realpathSync(filename) !== filename) return;
     const phases = new Set(["admitted", "resolve_started", "resolve_ready", "resolve_refused", "consume_started", "channels_ready",
       "claim_started", "lease_started", "lease_ready", "invoke_started", "invoke_returned", "consume_returned",
-      "native_started", "focus_ready", "toast_started", "toast_returned", "sound_started", "sound_returned"]);
+      "native_started", "focus_ready", "toast_started", "toast_returned", "sound_started", "sound_returned",
+      "powershell_entered", "winrt_ready", "xml_loaded", "toast_created", "notifier_created", "toast_shown", "toast_failed"]);
     const effects = new Set(["suppressed", "expired", "cache_unavailable", "duplicate", "revoked", "unknown", "submitted"]);
     const reasons = new Set(["invalid_fact", "unsupported_fact", "expired", "not_registered", "invalid_config", "channels_disabled",
       "delivery_uncertain", "no_attempt", "hook_handoff", "consumer_unavailable"]);
