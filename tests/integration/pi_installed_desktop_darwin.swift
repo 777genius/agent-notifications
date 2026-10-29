@@ -532,8 +532,7 @@ func terminalAutomationUID(_ pid: pid_t) -> Int? {
         if (current == pid || current == pythonPID) && info.pbi_uid != getuid() {
             return ["admitted": false, "reason": "original_osascript_or_python_user_mismatch", "chain": chain]
         }
-        if let path = row["executable_path"] as? String,
-           URL(fileURLWithPath: path).lastPathComponent == "hosted-compute-agent" {
+        if let path = row["executable_path"] as? String, path == "/opt/hca/hosted-compute-agent" {
             return ["admitted": info.pbi_uid == getuid(), "requestPID": Int(pid),
                     "reason": info.pbi_uid == getuid() ? "same_user_requester" : "privileged_requester_role_requires_measured_admission",
                     "requestStart": original["process_start_identity"]!, "pythonPID": Int(pythonPID),
@@ -580,6 +579,8 @@ func verifiedAppleApplication(_ url: URL, identifier: String) -> Bool {
 
 @MainActor func terminalAutomationDialogs() -> [TerminalAutomationDialog] {
     let terminalPath = "/System/Applications/Utilities/Terminal.app"
+    let ownerBundle = "com.apple.UserNotificationCenter"
+    let ownerPath = "/System/Library/CoreServices/UserNotificationCenter.app"
     let targets = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.Terminal").filter {
         !$0.isTerminated && $0.isFinishedLaunching && $0.bundleURL?.resolvingSymlinksInPath().path == terminalPath
     }
@@ -593,9 +594,11 @@ func verifiedAppleApplication(_ url: URL, identifier: String) -> Bool {
     let bodies = ["Allowing control will provide access to documents and data in “Terminal”, and to perform actions within that app.",
                   "Allowing control will provide access to documents and data in \"Terminal\", and to perform actions within that app."]
     var candidates = [TerminalAutomationDialog]()
-    for app in NSWorkspace.shared.runningApplications {
-        guard let url = app.bundleURL, let identifier = app.bundleIdentifier, identifier.hasPrefix("com.apple."),
-              url.path.hasPrefix("/System/"), !app.isTerminated, terminalAutomationUID(app.processIdentifier) == Int(getuid()),
+    for app in NSRunningApplication.runningApplications(withBundleIdentifier: ownerBundle) {
+        guard let url = app.bundleURL, let identifier = app.bundleIdentifier, identifier == ownerBundle,
+              url.resolvingSymlinksInPath().path == ownerPath,
+              app.executableURL?.resolvingSymlinksInPath().path == ownerPath + "/Contents/MacOS/UserNotificationCenter",
+              !app.isTerminated, terminalAutomationUID(app.processIdentifier) == Int(getuid()),
               let start = processStartIdentity(app.processIdentifier) else { continue }
         let visible = onScreenWindows(app.processIdentifier)
         guard visible.contains(where: { $0.width >= 200 && $0.width <= 650 && $0.height >= 150 && $0.height <= 500 }) else { continue }
@@ -711,6 +714,7 @@ struct TerminalAutomationContext: Decodable {
               let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left) else {
             throw ProbeError.unavailable("physical_terminal_automation_click_unavailable")
         }
+        try requireActors()
         down.post(tap: .cghidEventTap); up.post(tap: .cghidEventTap)
         result.merge(["physical_allow_click": true, "topmost_allow_item_verified": true, "original_request_verified": true,
             "denial_button_observed": true, "requestPID": Int(context.requestPID), "requestStart": context.requestStart,
