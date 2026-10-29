@@ -192,6 +192,7 @@ class ProcessCleanupTests(unittest.TestCase):
         terminal.root, terminal.native, terminal.closed = root, native, False
         terminal.executable, terminal.pi_pid = str(root / "pi.exe"), 41
         terminal.pi_identity = {"creation_time": "123456789"}
+        terminal.process_cleanup = None
         terminal.process_handle = Mock(value=234)
         terminal.window = {"hwnd": 123, "pid": 456, "title": "TEST-Pi-origin-process"}
         terminal.window_closed, terminal.exit_path = False, root / "process.exit"
@@ -241,6 +242,24 @@ class ProcessCleanupTests(unittest.TestCase):
             self.assertTrue(terminal.window_closed)
             self.assertFalse(terminal.closed)
 
+    def test_window_retry_preserves_already_collected_original_process(self):
+        with tempfile.TemporaryDirectory(prefix="TEST-pi-process-cleanup-") as directory:
+            native = Mock(side_effect=[{"hwnd": 123, "pid": 456}, RuntimeError("owned_terminal_identity_changed")])
+            native.held_process.return_value = {"collected": True, "descendants_collected": 0}
+            terminal = self.terminal(Path(directory), native)
+            handle = terminal.process_handle
+            with self.assertRaisesRegex(RuntimeError, "owned_terminal_identity_changed"):
+                terminal.close()
+            self.assertFalse(terminal.closed)
+            self.assertIsNone(terminal.process_handle)
+            native.side_effect = None
+            native.return_value = {"hwnd": 0}
+            terminal.close()
+            self.assertTrue(terminal.closed)
+            self.assertTrue(terminal.window_closed)
+            native.held_process.assert_called_once()
+            handle.close.assert_called_once()
+
     def test_unverified_startup_closes_only_owned_window_without_claiming_child_collection(self):
         with tempfile.TemporaryDirectory(prefix="TEST-pi-process-cleanup-") as directory:
             native = Mock(return_value={"hwnd": 0})
@@ -283,6 +302,19 @@ class ProcessCleanupTests(unittest.TestCase):
                 native.held_process(handle, "collect-owned-handle", str(int(identity["creation_time"]) + 1), image)
         finally:
             handle.close()
+
+    @unittest.skipUnless(os.name == "nt" and os.environ.get("PI_WINDOWS_OBSERVER_TEST_PATH"), "Actual native window identity guard only")
+    def test_absent_window_close_is_idempotent_but_live_foreign_window_refuses(self):
+        import ctypes
+        from ctypes import wintypes
+        native = W.Native(Path(os.environ["PI_WINDOWS_OBSERVER_TEST_PATH"]))
+        self.assertIs(native("close", 0, 0, "TEST-Pi-origin-absent")["already_absent"], True)
+        user = ctypes.WinDLL("user32", use_last_error=True)
+        user.GetDesktopWindow.restype = wintypes.HWND
+        desktop = user.GetDesktopWindow()
+        self.assertTrue(desktop)
+        with self.assertRaisesRegex(RuntimeError, "owned_terminal_identity_changed"):
+            native("close", desktop, 0, "TEST-Pi-origin-foreign")
 
 
 if __name__ == "__main__":

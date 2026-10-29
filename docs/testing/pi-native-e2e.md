@@ -307,6 +307,12 @@ step retains fresh native observations and a screenshot. Only a newly observed,
 unique Allow control with its denial alternative can be clicked; the original
 request and a fresh permission query must both report allowed.
 
+On the official macOS 15 image, [native run 40953849815](https://github.com/777genius/agent-notifications/actions/runs/40953849815)
+measured a card-body click opening the application's Notifications pane in
+System Settings, with the original request returning unavailable and a fresh
+query returning denied. The fixture preserves the original pending request
+and clicks only observed consent controls.
+
 ### Windows installed-product handoff
 
 `Pi installed Windows product` separates an ordinary Windows Server amd64

@@ -591,7 +591,16 @@ int wmain(int argc, wchar_t** argv) {
             std::cout << "{\"hwnd\":" << reinterpret_cast<uintptr_t>(window) << ",\"pid\":" << owner(window) << "}\n"; return 0;
         }
         if ((mode == L"activate" || mode == L"close" || mode == L"type") && argc >= 5) {
-            HWND window = boundWindow(argv[2], argv[3], argv[4]);
+            HWND window = nullptr;
+            try { window = boundWindow(argv[2], argv[3], argv[4]); }
+            catch (const std::runtime_error&) {
+                // The owned shell can exit after lookup, while its Pi child is
+                // collected. Only an actually absent original HWND is complete.
+                if (mode != L"close" || !testTitle(argv[4])) throw;
+                const auto original = reinterpret_cast<HWND>(static_cast<uintptr_t>(std::stoull(argv[2])));
+                if (IsWindow(original)) throw;
+                std::cout << "{\"ok\":true,\"already_absent\":true}\n"; return 0;
+            }
             if (mode == L"close") PostMessageW(window, WM_CLOSE, 0, 0);
             else { foreground(window); if (mode == L"type") { need(argc == 6, "native_text_required"); typeLine(window, argv[5]); } }
             std::cout << "{\"ok\":true}\n"; return 0;

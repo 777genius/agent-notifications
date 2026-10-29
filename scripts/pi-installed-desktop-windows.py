@@ -345,7 +345,7 @@ class Terminal:
             self.cleanup_stage_failures.append({"stage": stage, "failure": str(error)[-2000:]})
 
         try:
-            if self.executable:
+            if self.executable and not (self.process_cleanup and self.process_cleanup.get("collected") is True):
                 P.require(self.pi_identity is not None and self.process_handle is not None,
                           "partial_pi_process_cleanup_unverified")
                 self.process_cleanup = self.native.held_process(self.process_handle, "collect-owned-handle",
