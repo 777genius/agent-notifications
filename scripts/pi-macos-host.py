@@ -121,16 +121,18 @@ def system_agent(observed=None, evidence_root=None):
 def inspect(domain, snapshot=None):
     code, text, error = snapshot_result(snapshot, "disabled") if snapshot is not None else command(["/bin/launchctl", "print-disabled", domain])
     require(code == 0, "disabled_state_query_failed")
-    disabled = re.findall(r'"' + re.escape(LABEL) + r'"\s*=>\s*(true|false)', text)
-    require(len(disabled) == 1, "notification_agent_disabled_state_ambiguous")
+    disabled = re.findall(r'^\s*"' + re.escape(LABEL) + r'"\s*=>\s*([^\r\n]*)$', text, re.MULTILINE)
+    require(len(disabled) == 1 and disabled[0].strip() in ("true", "false", "disabled", "enabled"),
+            "notification_agent_disabled_state_ambiguous")
+    is_disabled = disabled[0].strip() in ("true", "disabled")
     code, text, error = snapshot_result(snapshot, "service") if snapshot is not None else command(["/bin/launchctl", "print", domain + "/" + LABEL])
     if code != 0:
         require("Could not find service" in error and LABEL in error, "notification_agent_query_failed")
-        return {"disabled": disabled[0] == "true", "loaded": False, "running": False}
+        return {"disabled": is_disabled, "loaded": False, "running": False}
     states = re.findall(r"^\s*state = ([^\n]+)$", text, re.MULTILINE)
     pids = re.findall(r"^\s*pid = ([0-9]+)\s*$", text, re.MULTILINE)
     require(len(states) == 1 and len(pids) <= 1, "notification_agent_service_state_ambiguous")
-    return {"disabled": disabled[0] == "true", "loaded": True, "running": states[0] == "running",
+    return {"disabled": is_disabled, "loaded": True, "running": states[0] == "running",
             "pid": int(pids[0]) if pids else None}
 
 
@@ -204,10 +206,11 @@ def prepare(args):
             require(code == 0, "notification_agent_preparation_failed:" + operation)
         deadline = time.monotonic() + 10
         while True:
-            report["after"] = inspect(domain)
-            code, output, error = command([args.observer, "notification-center-state"])
+            report["state_after_observed"] = observe_host_state(domain, args.observer)
+            code, output, error = snapshot_result(report["state_after_observed"], "native")
             require(code == 0, "notification_agent_native_observer_failed")
             report["native_identity"] = json.loads(output)
+            report["after"] = inspect(domain, report["state_after_observed"])
             try:
                 validate_running(report["after"], report["native_identity"])
                 break

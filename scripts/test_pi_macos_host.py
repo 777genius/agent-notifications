@@ -113,6 +113,25 @@ class OfficialHostGuards(unittest.TestCase):
         self.assertEqual(snapshot["native"]["stdout"], native.decode())
         self.assertTrue(all(row["output_bounded"] for row in snapshot.values()))
 
+    def test_actual_launchctl_disabled_text_preserves_exact_state_and_action_guards(self):
+        domain = "gui/501"
+        for value, expected in (("disabled", True), ("true", True), ("enabled", False), ("false", False)):
+            with self.subTest(value=value), patch.object(H, "command", side_effect=[
+                    (0, '\n\tdisabled services = {\n\t\t"' + H.LABEL + '" => ' + value + '\n\t}\n', ""),
+                    (113, "", 'Bad request.\nCould not find service "' + H.LABEL + '" in domain for user gui: 501\n')]):
+                state = H.inspect(domain)
+            self.assertEqual(state, {"disabled": expected, "loaded": False, "running": False})
+            if expected:
+                self.assertEqual(H.action_plan(state), ["enable", "bootstrap"])
+            else:
+                with self.assertRaisesRegex(ValueError, "state_not_admitted"):
+                    H.action_plan(state)
+        for value in ("unknown", "true unexpected", "disabled unexpected", "", 'disabled\n"' + H.LABEL + '" => true',
+                      'disabled\n"' + H.LABEL + '" => unknown'):
+            with self.subTest(value=value), patch.object(H, "command", return_value=(0, '"' + H.LABEL + '" => ' + value, "")):
+                with self.assertRaisesRegex(ValueError, "disabled_state_ambiguous"):
+                    H.inspect(domain)
+
     def test_failed_or_oversized_observation_retains_bounded_output_and_still_reads_other_fixed_states(self):
         for first in (H.subprocess.TimeoutExpired("launchctl", 3, output=b"partial", stderr=b"TEST timeout"),
                       SimpleNamespace(returncode=0, stdout=b"x" * 65537, stderr=b"TEST overflow")):
