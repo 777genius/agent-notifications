@@ -9,6 +9,7 @@
 #include <cfgmgr32.h>
 #include <cfg.h>
 #include <iostream>
+#include <optional>
 #include <stdexcept>
 
 namespace PiWindowsAudioFixture {
@@ -81,7 +82,7 @@ static std::string metadata(const std::wstring& instance, const Endpoint& render
         ",\"render_endpoint_id\":" + quote(render.id) + ",\"capture_endpoint_id\":" + quote(capture.id) +
         ",\"render_topology_id\":" + quote(render.topology) + ",\"capture_topology_id\":" + quote(capture.topology) + "}";
 }
-static std::string discoverPair(const std::wstring& instance, IMMDeviceEnumerator* enumerator, IMMDevice* defaultRender) {
+static std::optional<std::string> discoverPair(const std::wstring& instance, IMMDeviceEnumerator* enumerator, IMMDevice* defaultRender) {
     const auto render = inspect(enumerator, defaultRender, eRender);
     if (_wcsicmp(render.instance.c_str(), instance.c_str()) != 0)
         throw std::runtime_error("audio_fixture_render_driver_mismatch:actual=" + quote(render.instance));
@@ -95,6 +96,7 @@ static std::string discoverPair(const std::wstring& instance, IMMDeviceEnumerato
         auto inspected = inspect(enumerator, candidate.Get(), eCapture);
         if (_wcsicmp(inspected.instance.c_str(), instance.c_str()) == 0) { ++matches; capture = inspected; }
     }
+    if (!matches) return std::nullopt; // Render and capture publication are independent.
     check(matches == 1, "audio_fixture_sole_driver_capture_required");
     return metadata(instance, render, capture);
 }
@@ -106,7 +108,7 @@ static std::string discover(const std::wstring& instance) {
     // This is initial discovery only: freeze no receipt until the complete exact
     // driver-bound pair is unchanged for two seconds within one 15-second budget.
     const auto started = GetTickCount64(), deadline = started + 15000;
-    ULONGLONG stableSince{}; std::string previous; unsigned candidates{}, observations{}; size_t traceBytes{};
+    ULONGLONG stableSince{}; std::string previous; unsigned candidates{}, observations{}; size_t traceBytes{}; bool capturePendingReported{};
     while (true) {
         driver(instance);
         Microsoft::WRL::ComPtr<IMMDevice> defaultRender;
@@ -115,16 +117,22 @@ static std::string discover(const std::wstring& instance) {
             previous.clear(); stableSince = 0;
         } else {
             if (FAILED(result)) throw std::runtime_error("audio_fixture_default_render_query_failed:hr=" + std::to_string(result));
-            const auto pair = discoverPair(instance, enumerator.Get(), defaultRender.Get());
+            const auto candidate = discoverPair(instance, enumerator.Get(), defaultRender.Get());
             const auto now = GetTickCount64(); ++observations;
-            if (pair != previous) {
-                const auto line = "{\"initial_publication_candidate\":" + pair + ",\"elapsed_ms\":" + std::to_string(now - started) + "}\n";
+            if (!candidate) {
+                previous.clear(); stableSince = 0;
+                if (!capturePendingReported) {
+                    std::cerr << "{\"initial_capture_matches\":0,\"elapsed_ms\":" << now - started << "}\n";
+                    capturePendingReported = true;
+                }
+            } else if (*candidate != previous) {
+                const auto line = "{\"initial_publication_candidate\":" + *candidate + ",\"elapsed_ms\":" + std::to_string(now - started) + "}\n";
                 check(++candidates <= 8 && traceBytes + line.size() <= 32768, "audio_fixture_initial_publication_trace_bound");
                 traceBytes += line.size(); std::cerr << line;
-                previous = pair; stableSince = now;
+                previous = *candidate; stableSince = now;
             } else if (now - stableSince >= 2000 && now <= deadline) {
                 std::cerr << "{\"initial_publication_stable_ms\":" << now - stableSince << ",\"observations\":" << observations << "}\n";
-                return pair;
+                return *candidate;
             }
         }
         check(GetTickCount64() < deadline, "audio_fixture_initial_pair_publication_timeout");
