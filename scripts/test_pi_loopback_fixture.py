@@ -21,10 +21,11 @@ def load(filename):
 F, P = load("pi_native_fixture.py"), load("pi_installed_fixture.py")
 
 
-def post(address, path, value):
+def post(address, path, value, request_id=None):
     body = json.dumps(value).encode("utf-8")
+    correlation = "" if request_id is None else f"X-Request-ID: {request_id}\r\n"
     request = (f"POST {path} HTTP/1.0\r\nHost: 127.0.0.1\r\n"
-               f"Content-Type: application/json\r\nContent-Length: {len(body)}\r\n\r\n").encode() + body
+               f"Content-Type: application/json\r\n{correlation}Content-Length: {len(body)}\r\n\r\n").encode() + body
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as connection:
         connection.settimeout(2)
         connection.connect(address)
@@ -72,9 +73,12 @@ class LoopbackTests(unittest.TestCase):
             response = post(sink.server.server_address, "/TEST-pi", {
                 "schema_version": "1.0", "status": "task_complete", "notification_type": "task_complete",
                 "agent_source": "pi", "message": P.COPY["task_complete"], "title": "Pi",
-                "timestamp": "2026-10-28T10:00:00Z", "session_id": "", "source": "claude-notifications"})
+                "timestamp": "2026-10-28T10:00:00Z", "session_id": "", "source": "claude-notifications"},
+                request_id="00000000-0000-4000-8000-000000000001")
             self.assertIn(b"204 No Content", response)
-            self.assertEqual(sink.wait("task_complete")["status"], "task_complete")
+            observed = sink.wait("task_complete")
+            self.assertEqual(observed["status"], "task_complete")
+            self.assertEqual(observed["request_id"], "00000000-0000-4000-8000-000000000001")
         finally:
             sink.close()
         self.assertFalse(sink.thread.is_alive())

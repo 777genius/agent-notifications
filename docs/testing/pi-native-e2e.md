@@ -213,7 +213,11 @@ response. The retained installation lease serializes webhook handoffs: the
 second real Go child waits on that lease. Three completed turns must settle
 promptly with helper counts of one, two, then two, while only the first HTTP
 request reaches the sink; `/reload` must cancel and collect both original kernel
-process identities without queued delivery. `/new`, completion of the blocking
+process identities without queued third delivery. A second already admitted
+request may cross the handoff while cancellation releases the first lease;
+its existing request UUID is collected before fresh work starts. The fresh
+observer must add exactly one distinct request UUID after that boundary.
+`/new`, completion of the blocking
 UI prompt, and TUI `/quit` independently exercise prompt cancellation. A fresh
 observer after reload/new must deliver once in the same Pi process. Linux
 `/proc` birth ticks and executable/parent identities establish which processes

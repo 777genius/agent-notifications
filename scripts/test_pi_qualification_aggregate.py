@@ -68,6 +68,8 @@ def metadata(platform="linux"):
             "natural_timeout_seconds": 10.1, "production_http_timeout_seconds": 10, "no_control_before_timeout": True,
             "admitted_helpers": 2 if action == "reload" else 1, "admitted_webhook_requests": 1,
             "helper_admission_counts": [1, 2, 2] if action == "reload" else [1], "fresh_observer_delivered_once": True,
+            "original_webhook_request_ids": ["00000000-0000-4000-8000-000000000001"],
+            "fresh_webhook_request_id": "00000000-0000-4000-8000-000000000003", "fresh_webhook_received_after_start": True,
             "excess_observation_dropped": action == "reload", "settled_before_control": 3 if action == "reload" else 1}
             for action in ("reload", "new", "prompt-end", "quit", "timeout")]
         desktop["multiplexer"] = {"case": "tmux-completion", "native_mode": "tui",
@@ -115,6 +117,10 @@ class AggregateGuards(unittest.TestCase):
                        lambda desktop: desktop["lifecycle_cases"][0].update(admitted_helpers=3),
                        lambda desktop: desktop["lifecycle_cases"][0].update(admitted_webhook_requests=2),
                        lambda desktop: desktop["lifecycle_cases"][0].update(helper_admission_counts=[1, 2, 3]),
+                       lambda desktop: desktop["lifecycle_cases"][0].update(original_webhook_request_ids=["00000000-0000-4000-8000-000000000001"] * 2),
+                       lambda desktop: desktop["lifecycle_cases"][0].update(original_webhook_request_ids=[]),
+                       lambda desktop: desktop["lifecycle_cases"][0].update(fresh_webhook_request_id="00000000-0000-4000-8000-000000000001"),
+                       lambda desktop: desktop["lifecycle_cases"][0].update(fresh_webhook_received_after_start=False),
                        lambda desktop: desktop["lifecycle_cases"][0].update(excess_observation_dropped=False),
                        lambda desktop: desktop["lifecycle_cases"][1].update(fresh_observer_delivered_once=False),
                        lambda desktop: desktop["lifecycle_cases"][4].update(natural_timeout_seconds=30),
@@ -128,6 +134,15 @@ class AggregateGuards(unittest.TestCase):
             values = metadata("linux"); change(values[3])
             with self.assertRaises(ValueError):
                 A.qualify("linux", SOURCE, *values)
+
+    def test_linux_cancel_can_finish_a_second_previously_admitted_effect(self):
+        values = metadata("linux")
+        requests = values[3]["lifecycle_cases"][0]["original_webhook_request_ids"]
+        requests.append("00000000-0000-4000-8000-000000000002")
+        self.assertEqual(A.qualify("linux", SOURCE, *values)["status"], "qualified")
+        requests.append("00000000-0000-4000-8000-000000000004")
+        with self.assertRaisesRegex(ValueError, "original_webhook_admission_or_identity"):
+            A.qualify("linux", SOURCE, *values)
 
     def test_windows_selected_route_and_original_cue_remain_mandatory(self):
         for change in (lambda desktop: desktop.pop("audio_capture_route"),

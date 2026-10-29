@@ -135,6 +135,11 @@ def qualify(platform, source, build, acquisition, process, desktop):
             require(row.get("admitted_helpers") == expected and row.get("admitted_webhook_requests") == 1
                     and row.get("helper_admission_counts") == ([1, 2, 2] if row["case"] == "reload" else [1]),
                     "linux_pi_helper_admission_bound_unobserved")
+            old_requests = row.get("original_webhook_request_ids", [])
+            require(isinstance(old_requests, list) and 1 <= len(old_requests) <= expected
+                    and all(isinstance(value, str) and re.fullmatch(r"[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}", value)
+                            for value in old_requests) and len(set(old_requests)) == len(old_requests),
+                    "linux_original_webhook_admission_or_identity_unobserved")
             if row["case"] == "timeout":
                 duration = row.get("natural_timeout_seconds")
                 require(type(duration) in (int, float) and math.isfinite(duration) and 9 <= duration < 13
@@ -145,7 +150,11 @@ def qualify(platform, source, build, acquisition, process, desktop):
                 require(type(duration) in (int, float) and math.isfinite(duration) and 0 <= duration < 3,
                         "linux_original_helper_cancellation_was_not_prompt")
             if row["case"] in ("reload", "new"):
-                require(row.get("fresh_observer_delivered_once") is True, "linux_pi_reset_did_not_restore_observer")
+                fresh = row.get("fresh_webhook_request_id", "")
+                require(row.get("fresh_observer_delivered_once") is True
+                        and row.get("fresh_webhook_received_after_start") is True
+                        and isinstance(fresh, str) and re.fullmatch(r"[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}", fresh)
+                        and fresh not in old_requests, "linux_pi_reset_did_not_restore_observer")
             if row["case"] == "reload":
                 require(row.get("excess_observation_dropped") is True and row.get("settled_before_control") == 3,
                         "linux_pi_hung_child_stalled_or_queued")

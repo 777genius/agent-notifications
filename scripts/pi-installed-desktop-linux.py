@@ -14,6 +14,8 @@ import math
 import os
 from pathlib import Path
 import platform
+import queue
+import re
 import shutil
 import signal
 import subprocess
@@ -214,6 +216,7 @@ def run(args):
                 event = "ui_prompt_start" if action == "prompt-end" else "agent_settled"
                 N.wait_for(lambda: sum(x["type"] == event for x in F.witness(case_root)) == index + 1, seconds=5)
                 P.require(time.monotonic() - started < 5, "native_pi_settlement_or_prompt_stalled")
+                row.update(observations_before_control=index + 1, admitted_webhook_requests=len(destination.rows))
                 if index == 0:
                     destination.wait("question" if action == "prompt-end" else "task_complete", timeout=5)
                 # The first HTTP handoff retains the exclusive installation
@@ -226,6 +229,7 @@ def run(args):
                 else:
                     P.require(helpers == admitted, "native_pi_excess_observation_replaced_original_helpers")
                 row["helper_admission_counts"].append(len(helpers))
+                row["admitted_webhook_requests"] = len(destination.rows)
             destination.quiet(seconds=0.3)
             helpers = helper_children()
             expected = 2 if action == "reload" else 1
@@ -254,6 +258,21 @@ def run(args):
                 row["cancellation_seconds"] = round(time.monotonic() - started, 3)
                 P.require(row["cancellation_seconds"] < 3, "native_pi_helper_cancellation_was_not_prompt")
             row["original_helper_subtree_collected"] = True
+            # Cancellation cannot retract a second already-admitted handoff
+            # that raced the first child's lease release. Collect its request
+            # before submitting fresh work; no third/queued effect is allowed.
+            while True:
+                try:
+                    old = destination.events.get(timeout=0.3)
+                except queue.Empty:
+                    break
+                P.require(not destination.failures and old["status"] == "task_complete"
+                          and len(destination.rows) <= expected, "native_pi_unadmitted_old_webhook")
+            old_requests = [value["request_id"] for value in destination.rows]
+            P.require(1 <= len(old_requests) <= expected and len(set(old_requests)) == len(old_requests)
+                      and all(re.fullmatch(r"[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}", value) for value in old_requests),
+                      "native_pi_old_request_identity_missing_or_repeated")
+            row["original_webhook_request_ids"] = old_requests
             if action == "prompt-end":
                 N.wait_for(lambda: any(x["type"] == "ui_prompt_end" for x in F.witness(case_root)))
                 P.require(not provider.requests, "native_prompt_end_started_model_work")
@@ -264,16 +283,23 @@ def run(args):
                 N.wait_for(lambda: any(x["type"] == "session_shutdown" and x.get("reason") == action
                                       for x in F.witness(case_root)))
                 N.wait_for(lambda: sum(x["type"] == "factory" for x in F.witness(case_root)) >= 2)
+                N.wait_for(lambda: any(x["type"] == "session_start" and x.get("reason") == action
+                                      for x in F.witness(case_root)))
                 P.require(same_process(pi), "native_session_reset_replaced_pi_process")
                 destination.release.set()
+                fresh_started = time.monotonic()
                 type_line("TEST fresh")
-                destination.wait("task_complete", timeout=5)
+                fresh = destination.wait("task_complete", timeout=5)
+                P.require(fresh["received_monotonic"] >= fresh_started and fresh["request_id"] not in old_requests
+                          and re.fullmatch(r"[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}", fresh["request_id"]),
+                          "native_pi_fresh_webhook_not_attributed_to_reset_observer")
+                row.update(fresh_webhook_request_id=fresh["request_id"], fresh_webhook_received_after_start=True)
                 N.wait_for(lambda: sum(x["type"] == "agent_settled" for x in F.witness(case_root)) == count + 1)
                 N.wait_for(lambda: not [child for child in process_children(pi)
                                        if child["executable"] == str(root / "runtime/bin" / args.candidate.name)])
                 row["fresh_observer_delivered_once"] = True
             destination.quiet(seconds=0.3)
-            P.require(len(destination.rows) == 1 + (1 if action in ("new", "reload") else 0),
+            P.require(len(destination.rows) == len(old_requests) + (1 if action in ("new", "reload") else 0),
                       "native_pi_cancelled_helper_was_resent")
             if terminal.poll() is None:
                 row["phase"] = "terminal_collection"

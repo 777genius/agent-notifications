@@ -136,7 +136,10 @@ class Webhooks:
                     size = int(self.headers.get("content-length", "0"))
                     require(self.path == "/TEST-pi" and 0 < size <= 16384, "pi_webhook_request_shape")
                     status = capture(json.loads(self.rfile.read(size)))
-                    row = {"status": status, "received_monotonic": time.monotonic()}
+                    request_id = self.headers.get("X-Request-ID", "")
+                    if not re.fullmatch(r"[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}", request_id):
+                        request_id = ""  # Retain no arbitrary headers in evidence.
+                    row = {"status": status, "received_monotonic": time.monotonic(), "request_id": request_id}
                     owner.rows.append(row)
                     owner.events.put(row)
                     if hold_response:
