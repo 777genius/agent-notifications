@@ -50,8 +50,11 @@ def wait_for(predicate, reason, seconds=12):
     raise RuntimeError(reason)
 
 
-def wait_for_consent(request, observe, seconds=15):
+def wait_for_consent(request, observe, seconds=130):
     """Observe the exact candidate dialog or the actual request's early exit."""
+    # Observe the one normal request through its helper's 120 s authorization
+    # budget (Go allows 125 s inside a 130 s setup lease). This is an observation
+    # cap, not a guarantee about the CLI's total lifetime before native setup.
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
         dialogs = observe()
@@ -568,6 +571,7 @@ def run(args):
     except Exception as error:
         report["failure"] = str(error)
         if permission_request is not None:
+            report["notification_consent"].setdefault("elapsed_seconds", round(time.monotonic() - started, 3))
             report["notification_consent"]["request_running_at_failure"] = permission_request.poll() is None
             try:
                 report["notification_consent"]["installed_helper_processes_at_failure"] = observer("helper-processes", str(app))

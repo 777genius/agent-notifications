@@ -82,6 +82,23 @@ class ConsentObservation(unittest.TestCase):
             with self.subTest(permission=permission), self.assertRaisesRegex(RuntimeError, "permission_" + permission):
                 M.verify_permission_grant(allowed, self.receipt(permission))
 
+    def test_original_request_can_exit_after_former_observer_deadline(self):
+        body = json.dumps({"reason": "permission_allowed", "permission": "allowed"}).encode()
+        started = time.monotonic()
+        child = self.child(body, delay=16)
+        # The real child has written its result but remains pending. Observing
+        # stdout alone must not finish the request before its natural exit.
+        self.assertEqual(select.select([child.stdout], [], [], 3)[0], [child.stdout])
+        self.assertIsNone(child.poll())
+        self.assertEqual(M.wait_for_consent(child, lambda: []), [])
+        out, err = child.communicate(timeout=3)
+        self.assertGreaterEqual(time.monotonic() - started, 15)
+        self.assertLess(time.monotonic() - started, 30)
+        self.assertEqual(child.returncode, 0)
+        self.assertEqual(M.observed_permission(M.permission_receipt(out, err, child.returncode)), "allowed")
+        with self.assertRaises(ProcessLookupError):
+            os.kill(child.pid, 0)
+
     def test_activation_is_once_bound_to_observed_start_and_never_proves_grant(self):
         child = self.child(b"", delay=20)
         calls, receipt = [], {}
