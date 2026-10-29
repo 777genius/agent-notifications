@@ -35,6 +35,10 @@ import (
 // delay can never push the hook past the timeout configured in hooks.json.
 const maxNotifyDelaySeconds = 25
 
+// Claude Stop is skipped when the transcript has not been written for this
+// long; a finished session resumed with no new turn must not re-notify.
+const staleTranscriptSeconds = 10 * 60
+
 const (
 	transcriptSettleWait     = 500 * time.Millisecond
 	transcriptSettleInterval = 25 * time.Millisecond
@@ -367,6 +371,27 @@ func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 			return nil
 		}
 
+		// Analyze and allow legacy payloads to settle before checking age: a
+		// long-running turn may not have flushed its final record yet.
+		bench.Start("stop.analyze")
+		status, parsedMessages, err = h.handleStopEvent(ev)
+		bench.Elapsed("stop.analyze")
+		if err != nil {
+			return err
+		}
+		if strings.TrimSpace(p.AssistantMessage) == "" {
+			status, parsedMessages = h.settleClaudeTranscript(ev, status, parsedMessages)
+		}
+
+		// A headless resume of a finished session fires Stop without appending
+		// anything (#119). Check after settling and before changing team state.
+		if age := platform.FileAge(ev.Session.TranscriptPath); age > staleTranscriptSeconds &&
+			!claudeStopHasUnflushedReply(parsedMessages, p.AssistantMessage) {
+			logging.Debug("Stop: transcript unchanged for %ds, skipping stale completion", age)
+			h.cleanupOldLocks()
+			return nil
+		}
+
 		// Team mode: check if this session is a team lead and suppress if needed
 		if h.cfg.GetTeamMode() == "wait-all" {
 			if teamInfo := h.teamStateMgr.DetectTeamLead(ev.Session.SessionID); teamInfo != nil {
@@ -401,16 +426,6 @@ func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 		}
 		// teamMode "always" or not a team lead: fall through to normal processing
 
-		// Analyze the transcript to determine status
-		bench.Start("stop.analyze")
-		status, parsedMessages, err = h.handleStopEvent(ev)
-		bench.Elapsed("stop.analyze")
-		if err != nil {
-			return err
-		}
-		if strings.TrimSpace(p.AssistantMessage) == "" {
-			status, parsedMessages = h.settleClaudeTranscript(ev, status, parsedMessages)
-		}
 		status, insight = h.enrichClaudeStop(status, p.AssistantMessage, parsedMessages)
 		// Note: We don't delete session state here to preserve cooldown info
 		// State files have TTL and will be cleaned up automatically
@@ -962,6 +977,18 @@ func claudeStopIsReview(messages []jsonl.Message, final string) bool {
 		return len(recentText) > 200
 	}
 	return len(recentText)+len(final) > 200
+}
+
+// A final reply missing from the transcript is a long generation whose flush
+// has not landed yet, not a resume of an already finished turn.
+func claudeStopHasUnflushedReply(messages []jsonl.Message, final string) bool {
+	final = strings.Join(strings.Fields(final), " ")
+	if final == "" {
+		return false
+	}
+	currentTurn := jsonl.FilterMessagesAfterTimestamp(messages, jsonl.GetLastUserTimestamp(messages))
+	last := jsonl.ExtractTextFromMessages(jsonl.GetLastAssistantMessages(currentTurn, 1))
+	return strings.Join(strings.Fields(strings.Join(last, " ")), " ") != final
 }
 
 // Older Claude versions may omit last_assistant_message. In that case only,

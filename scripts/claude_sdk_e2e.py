@@ -535,6 +535,45 @@ Set-Acl -LiteralPath $env:CLAUDE_SDK_TEST_LAB -AclObject $acl
         return {"direct_error": err[-1000:].decode(errors="replace"),
                 "wrapper_failopen": os.name != "nt"}
 
+    def stale_stop(self):
+        """Suppress stale completions while delivering an unflushed new turn's repeated reply."""
+        message = "Done."
+        user = {"type": "user", "timestamp": "2026-09-24T12:00:00Z",
+                "message": {"role": "user", "content": "first request"}}
+        reply = {"type": "assistant", "timestamp": "2026-09-24T12:00:01Z",
+                 "message": {"role": "assistant", "content": [{"type": "text", "text": message}]}}
+        completed = self.project / "TEST stale completed transcript.jsonl"
+        completed.write_text("\n".join(json.dumps(row) for row in (user, reply)) + "\n", encoding="utf-8")
+        completed.chmod(0o600)
+        old = time.time() - 45 * 60
+        os.utime(completed, (old, old))
+        for session, fields in (
+                ("TEST-stale-stop-with-payload", {"last_assistant_message": message}),
+                ("TEST-stale-stop-without-payload", {})):
+            state_path = self.tmp / f"claude-session-state-{session}.json"
+            require(not state_path.exists(), "stale replay must start with fresh notification state")
+            before = len(self.sink.snapshot())
+            payload = self.payload("Stop", session, transcript_path=str(completed), **fields)
+            self.success(self.run(self.command("Stop"), json.dumps(payload).encode()))
+            require(len(self.sink.snapshot()) == before, "stale completed transcript emitted a webhook")
+            require(not state_path.exists(), "stale completed transcript created notification state")
+        current = self.project / "TEST long current turn transcript.jsonl"
+        next_user = {"type": "user", "timestamp": "2026-09-24T12:01:00Z",
+                     "message": {"role": "user", "content": "second request"}}
+        current.write_text("\n".join(json.dumps(row) for row in (user, reply, next_user)) + "\n",
+                           encoding="utf-8")
+        current.chmod(0o600)
+        old = time.time() - 11 * 60
+        os.utime(current, (old, old))
+        session = "TEST-long-stop-repeated-reply"
+        require(not (self.tmp / f"claude-session-state-{session}.json").exists(),
+                "long current turn must start with fresh notification state")
+        self.emit("Stop", session, "task_complete", message,
+                  fields={"transcript_path": str(current), "last_assistant_message": message})
+        return {"stale_age_seconds": 45 * 60, "stale_payload_and_legacy_replays_suppressed": True,
+                "stale_notification_state_created": False, "long_turn_age_seconds": 11 * 60,
+                "repeated_reply_current_turn_webhooks": 1, "fresh_session_identities": True}
+
     def team(self):
         """Verify durable team completion, reset, and replay suppression."""
         team = "TEST-sdk-team"
@@ -695,6 +734,7 @@ Set-Acl -LiteralPath $env:CLAUDE_SDK_TEST_LAB -AclObject $acl
             self.check("Stop_message_direct_CLI", lambda: self.emit(
                 "Stop", "TEST-cli-stop", "task_complete", "Direct CLI fixture complete.", route="direct",
                 fields={"last_assistant_message": "Direct CLI fixture complete."}))
+            self.check("Stop_stale_replay_and_long_current_turn_repeated_reply", self.stale_stop)
             self.check("SubagentStop_explicit_opt_in_message", lambda: self.emit(
                 "SubagentStop", "TEST-subagent", "task_complete", "Subagent fixture complete.",
                 fields={"last_assistant_message": "Subagent fixture complete."}))
