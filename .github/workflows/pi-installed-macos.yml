@@ -134,6 +134,62 @@ jobs:
           python -B scripts/pi-macos-host.py --prepare-notification-center --source-sha "$SOURCE_SHA" \
             --observer "$RUNNER_TEMP/TEST-pi-macos/observer" \
             --report "$RUNNER_TEMP/TEST-pi-macos/evidence/host-preparation.json"
+      - name: TEMPORARY inspect global notification presentation without changing settings
+        if: ${{ always() && inputs.observer_only }}
+        shell: bash
+        run: |
+          python - <<'PY'
+          import hashlib, json, os, subprocess, time
+          from pathlib import Path
+          root = Path(os.environ['RUNNER_TEMP']) / 'TEST-pi-macos'
+          evidence = root / 'evidence'
+          receipt = {'scope': 'read_only_global_notification_presentation', 'desktop_qualified': False,
+              'source_sha': os.environ['SOURCE_SHA'], 'settings_changed': False,
+              'candidate_app_settings': 'not_observed_without_installed_candidate',
+              'active_focus_status': 'not_inferred_from_configuration_page', 'pages': []}
+          def command(argv, timeout=3):
+              result = subprocess.run(list(map(str, argv)), stdin=subprocess.DEVNULL,
+                  capture_output=True, timeout=timeout, check=True)
+              if len(result.stdout) + len(result.stderr) > 65536:
+                  raise RuntimeError('bounded_settings_command_output_required')
+              return result.stdout
+          try:
+              preflight = json.loads((evidence / 'observer-preflight.json').read_text())['checks']
+              if not all(preflight.get(key) is True for key in ('interactive_gui', 'screen_permission', 'input_permission')):
+                  raise RuntimeError('read_only_settings_observer_prerequisites_unavailable')
+              for pane in ('Notifications', 'Focus'):
+                  row = {'requested_pane': pane, 'page_header_verified': False}
+                  receipt['pages'].append(row)
+                  try:
+                      # Normal System Settings pane navigation only. URL success
+                      # is never interpreted as the observed page or a grant.
+                      uri = 'x-apple.systempreferences:com.apple.' + pane + '-Settings.extension'
+                      command(['/usr/bin/open', '-b', 'com.apple.systempreferences', uri])
+                      time.sleep(2)
+                      before = json.loads(command([root / 'observer', 'settings-owner']))
+                      row['owner_before'] = before
+                      screenshot = evidence / ('global-' + pane.lower() + '-settings.png')
+                      if screenshot.exists() or screenshot.is_symlink():
+                          raise RuntimeError('fresh_settings_screenshot_required')
+                      command(['/usr/sbin/screencapture', '-x', screenshot])
+                      if not screenshot.is_file() or not 0 < screenshot.stat().st_size <= 16 * 1024 * 1024:
+                          raise RuntimeError('bounded_settings_screenshot_required')
+                      row.update(screenshot=screenshot.name, screenshot_sha256=hashlib.sha256(screenshot.read_bytes()).hexdigest())
+                      after = json.loads(command([root / 'observer', 'settings-owner']))
+                      row['owner_after'] = after
+                      row['same_apple_owner_verified'] = all(before.get(key) == after.get(key)
+                          for key in ('pid', 'process_start_identity', 'bundle_path', 'executable_path'))
+                      row['page_header_verified'] = row['same_apple_owner_verified'] and before.get('observed_header') == after.get('observed_header') == pane
+                  except Exception as error:
+                      row['inconclusive_error_class'] = type(error).__name__
+          except Exception as error:
+              receipt['inconclusive_error_class'] = type(error).__name__
+          finally:
+              receipt['status'] = 'observed_global_pages' if len(receipt['pages']) == 2 and all(
+                  page.get('page_header_verified') is True for page in receipt['pages']) else 'inconclusive_global_pages'
+              (evidence / 'global-presentation-settings.json').write_text(json.dumps(receipt, indent=2) + '\n')
+              print(json.dumps({'status': receipt['status'], 'desktop_qualified': False}))
+          PY
       - uses: actions/setup-go@v7
         if: ${{ !inputs.observer_only }}
         with:

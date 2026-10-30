@@ -1085,6 +1085,39 @@ final class ProductCapture: NSObject, SCStreamOutput, SCStreamDelegate, @uncheck
                 publish(["checks": checks, "foreground": foreground(), "desktop_qualified": false])
                 guard checks.values.allSatisfy({ $0 }) else { throw ProbeError.unavailable("native_observer_prerequisite_unavailable") }
             case "foreground": publish(foreground())
+            case "settings-owner":
+                // TEMPORARY read-only global Settings inspection. Navigation
+                // never proves a page identity or changes a preference.
+                let path = "/System/Applications/System Settings.app"
+                guard args.count == 1, let app = NSWorkspace.shared.frontmostApplication,
+                      app.bundleIdentifier == "com.apple.systempreferences",
+                      app.bundleURL?.path == path,
+                      app.executableURL?.resolvingSymlinksInPath().path == path + "/Contents/MacOS/System Settings",
+                      verifiedAppleApplication(URL(fileURLWithPath: path), identifier: "com.apple.systempreferences"),
+                      let start = processStartIdentity(app.processIdentifier) else {
+                    throw ProbeError.unavailable("genuine_apple_settings_foreground_required")
+                }
+                let identity = try terminalProcessIdentity(app.processIdentifier, expectedStart: start)
+                guard identity["executable_path"] as? String == path + "/Contents/MacOS/System Settings" else {
+                    throw ProbeError.unavailable("apple_settings_executable_changed")
+                }
+                let root = AXUIElementCreateApplication(app.processIdentifier)
+                guard AXUIElementSetMessagingTimeout(root, 0.05) == .success else {
+                    throw ProbeError.unavailable("settings_ax_timeout_unavailable")
+                }
+                var header = "unavailable"
+                if let value = attribute(root, kAXFocusedWindowAttribute), CFGetTypeID(value) == AXUIElementGetTypeID() {
+                    let title = attribute(value as! AXUIElement, kAXTitleAttribute) as? String ?? ""
+                    if ["Notifications", "Focus"].contains(title) { header = title }
+                }
+                guard matchesProcessStart(app.processIdentifier, start) else {
+                    throw ProbeError.unavailable("apple_settings_birth_changed")
+                }
+                publish(["scope": "read_only_global_settings_owner", "desktop_qualified": false,
+                         "pid": Int(app.processIdentifier), "process_start_identity": start,
+                         "bundle_id": "com.apple.systempreferences", "bundle_path": path,
+                         "executable_path": path + "/Contents/MacOS/System Settings",
+                         "apple_signature_verified": true, "observed_header": header])
             case "terminal-process-identity", "signal-owned-terminal-process":
                 guard args.count >= 2, let pid = Int32(args[1]), pid > 0 else {
                     throw ProbeError.unavailable("owned_terminal_pid_required")
