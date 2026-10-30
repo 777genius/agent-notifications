@@ -27,6 +27,7 @@ CASES = ("completion", "question", "sound-off", "click-off", "desktop-off", "sta
 DIAGNOSTIC_CASES = ("click-off", "completion")
 CAPTURE_BUDGET_SECONDS = 45
 PROCESS_WATCH_SCAN_LIMIT = CAPTURE_BUDGET_SECONDS * 50 + 65
+OBSERVER_COLLECTION_GRACE_SECONDS = 1.0
 POWERSHELL_LAUNCHER = '''param([Parameter(Mandatory=$true)][string]$Spec)
 $ErrorActionPreference = 'Stop'
 $inputSpec = Get-Content -LiteralPath $Spec -Raw | ConvertFrom-Json
@@ -131,6 +132,16 @@ def original_toast_deadline(handle, deadline, *, now=time.monotonic):
     remaining = int((deadline - now()) * 1000)
     P.require(0 < remaining <= 25000, "original_toast_observation_deadline_required")
     return current + remaining
+
+
+def observe_live_toast(native, handle, title, body, image, deadline, *, now=time.monotonic):
+    native_until = original_toast_deadline(handle, deadline, now=now)
+    remaining = deadline - now()
+    P.require(0 < remaining <= 25, "original_toast_observation_deadline_required")
+    # Input/search still stops at native_until. Allow only bounded process
+    # collection after that cutoff so final JSON/COM teardown is not killed.
+    return native("toast-click-until", title, body, image, native_until,
+                  timeout=remaining + OBSERVER_COLLECTION_GRACE_SECONDS)
 
 
 def stop_helper(helper, stop):
@@ -875,9 +886,7 @@ def run(args):
                         found = native("toast-click", toast_title, P.COPY[event], image, timeout=min(25, remaining))
                     else:
                         action_deadline = min(webhook_deadline, case_deadline)
-                        native_until = original_toast_deadline(origin.process_handle, action_deadline)
-                        found = native("toast-click-until", toast_title, P.COPY[event], image, native_until,
-                                       timeout=min(25, max(0.001, action_deadline - time.monotonic())))
+                        found = observe_live_toast(native, origin.process_handle, toast_title, P.COPY[event], image, action_deadline)
                     P.require(found.get("found") is True and found.get("real_mouse_click") is True, "native_product_toast_not_physically_clicked")
                     if name in ("click-off", "stale-origin"):
                         click_observation = observe_unchanged_focus(native, expected_window, stop_capture, live_delivery=name == "click-off")

@@ -673,9 +673,9 @@ static std::unique_ptr<ToastCard> card(IUIAutomation* automation, const std::wst
         need(count >= 0 && count <= 1 && total + count <= 1, "product_toast_title_ambiguous");
         if (count) { hrcheck(all->GetElement(0, &text)); total += count; }
     }
-    ++trace.completeRootScans;
+    budget(); ++trace.completeRootScans;
     trace.maxTitleMatches = std::max(trace.maxTitleMatches, total); trace.stage = "exact_title_missing";
-    budget(); if (!total) return nullptr;
+    if (!total) return nullptr;
     int pid = 0; toastcheck(text->get_CurrentProcessId(&pid)); need(pid > 0, "product_toast_provider_missing");
     trace.stage = "exact_title_provider_not_shell";
     if (!shells.contains(pid)) { need(shells.size() < 8, "product_toast_shell_owner_bound"); shells.emplace(pid, std::make_shared<ToastShell>(pid)); }
@@ -794,7 +794,7 @@ static int toast(const std::wstring& expected, const std::wstring& body, const f
                           << ",\"exact_title_and_body\":true,\"real_mouse_click\":" << jsonBool(click)
                           << ",\"accepted_mouse_events\":" << (click ? 2 : 0) << ",\"original_deadline_tick_ms\":" << until
                           << ",\"budget_remaining_ms_at_start\":" << until - started
-                          << ",\"elapsed_ms\":" << GetTickCount64() - started << ',' << toastTrace(trace) << "}\n"; return 0;
+                          << ",\"elapsed_ms\":" << GetTickCount64() - started << ',' << toastTrace(trace) << "}\n" << std::flush; return 0;
             }
         } catch (const ToastDeadline&) { trace.deadlineExpired = true; break; }
         catch (const ToastUnavailable&) {
@@ -802,11 +802,12 @@ static int toast(const std::wstring& expected, const std::wstring& body, const f
         }
         pump(100);
     }
+    trace.deadlineExpired = true;
     need(knownToastAbsence(trace), "product_toast_absence_unverified");
     bool captured = false; if (!ready.empty()) { try { screenshot(image); captured = true; } catch (...) {} }
     std::cout << "{\"found\":false,\"observation_end_screenshot\":" << jsonBool(captured)
               << ",\"original_deadline_tick_ms\":" << until << ",\"budget_remaining_ms_at_start\":" << until - started
-              << ",\"elapsed_ms\":" << GetTickCount64() - started << ',' << toastTrace(trace) << "}\n"; return 3;
+              << ",\"elapsed_ms\":" << GetTickCount64() - started << ',' << toastTrace(trace) << "}\n" << std::flush; return 3;
 }
 static int capture(const fs::path& path, const fs::path& stop, int routeCount, wchar_t** routeArgs) {
     ComPtr<IMMDeviceEnumerator> enumerator; ComPtr<IMMDevice> endpoint; ComPtr<IAudioClient> client; ComPtr<IAudioCaptureClient> reader;

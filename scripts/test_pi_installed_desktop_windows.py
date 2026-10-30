@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
@@ -83,6 +84,32 @@ class PostClickOracleTests(unittest.TestCase):
 
 
 class OriginalWebhookDeadlineTests(unittest.TestCase):
+    def test_observer_collects_refusal_after_original_deadline_without_renewing_it(self):
+        deadline = time.monotonic() + 0.25
+        handle = SimpleNamespace(kernel=SimpleNamespace(GetTickCount64=Mock(return_value=100000)))
+        observed = []
+        script = '''import json,sys,time
+deadline=float(sys.argv[1])
+while time.monotonic() < deadline: time.sleep(0.002)
+print(json.dumps({"found":False,"original_cutoff_reached":True}),flush=True)
+time.sleep(0.12)
+sys.exit(3)
+'''
+        def native(mode, title, body, image, until, *, timeout):
+            observed.append((mode, until, timeout))
+            result = W.command([sys.executable, "-c", script, str(deadline)], timeout=timeout, allowed=(3,))
+            return json.loads(result.stdout)
+        result = W.observe_live_toast(native, handle, "TEST-Pi-toast-owned", "TEST body", "TEST.bmp", deadline)
+        self.assertEqual(result, {"found": False, "original_cutoff_reached": True})
+        mode, until, timeout = observed[0]
+        self.assertEqual(mode, "toast-click-until")
+        self.assertTrue(100000 < until <= 100250)
+        self.assertTrue(W.OBSERVER_COLLECTION_GRACE_SECONDS < timeout <= 1.25)
+        native = Mock()
+        with self.assertRaisesRegex(RuntimeError, "original_toast_observation_deadline_required"):
+            W.observe_live_toast(native, handle, "TEST-Pi-toast-owned", "TEST body", "TEST.bmp", 5, now=lambda: 5)
+        native.assert_not_called()
+
     def test_required_original_webhook_uses_only_existing_capture_remainder(self):
         sink, timing = Mock(), {}
         sink.wait.return_value = {"received_monotonic": 28.5}
