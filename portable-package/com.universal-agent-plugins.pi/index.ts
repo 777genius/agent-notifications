@@ -50,9 +50,10 @@ export function recordTestDiagnostic(stderr: unknown): void {
         !basename(dirname(filename)).startsWith("case-") ||
         !["TEST-pi-installed-macos-", "TEST-pi-windows-desktop-"].some(prefix => basename(dirname(dirname(filename))).startsWith(prefix)) ||
         typeof stderr !== "string") return;
-    const info = lstatSync(filename), parent = lstatSync(dirname(filename));
+    const info = lstatSync(filename), parent = lstatSync(dirname(filename)), privateRoot = lstatSync(dirname(dirname(filename)));
     if (!info.isFile() || info.isSymbolicLink() || info.size > FRAME_LIMIT || realpathSync(filename) !== filename ||
-        !parent.isDirectory() || (process.platform !== "win32" && (parent.mode & 0o077) !== 0)) return;
+        !parent.isDirectory() || !privateRoot.isDirectory() ||
+        (process.platform !== "win32" && (privateRoot.mode & 0o077) !== 0)) return;
     const phases = new Set(["admission", "resolve", "desktop_channel", "local_terminal", "tui_mode", "desktop_status",
       "desktop_claim", "desktop_lease", "webhook_claim", "webhook_lease", "desktop_result", "webhook_result", "consumer_result",
       "native_runtime", "native_bundle", "native_probe", "native_capabilities", "native_owner", "native_clock", "native_request",
