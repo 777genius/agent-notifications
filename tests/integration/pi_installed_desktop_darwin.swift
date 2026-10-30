@@ -729,6 +729,7 @@ struct TerminalAutomationContext: Decodable {
     let parent: Int?
     let box: CGRect?
     let exactNotifications: Bool
+    let exactPolicyLabel: String?
     let press: Bool
     let inert: Bool
     let childrenVerified: Bool
@@ -794,8 +795,12 @@ struct TerminalAutomationContext: Decodable {
         let inert = ((["AXCell", "AXGroup"].contains(role) && actions?.isEmpty == true) || passive?.safe == true)
             && (children != nil || (unsupportedLeaf && ["AXStaticText", "AXImage"].contains(role)))
         let index = nodes.count, box = rectangle(element)
+        let policyLabels = ["Allow notifications when mirroring or sharing the display": "mirroring_or_sharing",
+            "Allow notifications when the display is sleeping": "display_sleeping",
+            "Allow notifications when the screen is locked": "screen_locked"]
         nodes.append(SettingsInspectionNode(element: element, role: role, parent: parent, box: box,
-            exactNotifications: texts.contains("Notifications"), press: pressed, inert: inert,
+            exactNotifications: texts.contains("Notifications"), exactPolicyLabel: texts.compactMap { policyLabels[$0] }.first,
+            press: pressed, inert: inert,
             childrenVerified: children != nil, subtreeComplete: children != nil || unsupportedLeaf))
         var row: [String: Any] = ["index": index, "depth": depth, "role": role, "fixed_labels": tags.sorted(),
             "navigation_press_action": pressed, "inert_navigation_descendant": inert,
@@ -842,7 +847,191 @@ struct TerminalAutomationContext: Decodable {
         "tree_scope": retainedSidebar == nil ? "app_windows" : "retained_sidebar"])
 }
 
-@MainActor func inspectGlobalNotificationSettings(_ args: [String]) async throws -> [String: Any] {
+@MainActor func settingsPhysicalClick(_ element: AXUIElement, box: CGRect, owner: pid_t, deadline: Double,
+                                      verify: () throws -> Void) throws {
+    try verify()
+    let point = CGPoint(x: box.midX, y: box.midY)
+    guard try consentMonotonicTime() < deadline, CGWarpMouseCursorPosition(point) == .success else {
+        throw ProbeError.unavailable("settings_owned_pointer_unavailable")
+    }
+    var hit: AXUIElement?
+    guard AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(), Float(point.x), Float(point.y), &hit) == .success,
+          var current = hit else { throw ProbeError.unavailable("settings_owned_hit_unavailable") }
+    var matched = false
+    for _ in 0..<4 {
+        var pid = pid_t(0)
+        guard AXUIElementGetPid(current, &pid) == .success, pid == owner else { break }
+        if CFEqual(current, element) { matched = true; break }
+        guard let role = attribute(current, kAXRoleAttribute) as? String, ["AXStaticText", "AXImage"].contains(role),
+              let parent = attribute(current, kAXParentAttribute), CFGetTypeID(parent) == AXUIElementGetTypeID() else { break }
+        current = parent as! AXUIElement
+    }
+    try verify()
+    guard matched, rectangle(element) == box, try consentMonotonicTime() < deadline,
+          let cursor = CGEvent(source: nil)?.location, abs(cursor.x - point.x) <= 1, abs(cursor.y - point.y) <= 1,
+          let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left),
+          let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left) else {
+        throw ProbeError.unavailable("settings_owned_click_refused")
+    }
+    down.post(tap: .cghidEventTap); up.post(tap: .cghidEventTap)
+}
+
+@MainActor final class SettingsPresentationPreparation {
+    var app: NSRunningApplication?
+    var start = ""
+    var window: AXUIElement?
+    var windowBox: CGRect?
+    var receipt: [String: Any] = ["scope": "fresh_owned_public_notification_presentation_preparation",
+        "qualification_input": false, "desktop_qualified": false, "status": "refused", "maximum_seconds": 6,
+        "settings_instance_was_new": false, "owned_window_observed": false, "owned_window_disappeared": false,
+        "close_click_performed": false, "settings_process_collected": false, "sharing_click_performed": false]
+    func current() -> Bool {
+        guard let app else { return false }
+        return !app.isTerminated && matchesProcessStart(app.processIdentifier, start)
+            && terminalAutomationUID(app.processIdentifier) == Int(getuid())
+            && (try? terminalProcessIdentity(app.processIdentifier)["executable_path"] as? String)
+                == "/System/Applications/System Settings.app/Contents/MacOS/System Settings"
+    }
+    func requireWindow() throws {
+        guard current(), let app, let window, let box = windowBox,
+              let windows = attribute(AXUIElementCreateApplication(app.processIdentifier), kAXWindowsAttribute) as? [AXUIElement],
+              windows.count == 1, CFEqual(windows[0], window), rectangle(window) == box,
+              onScreenWindows(app.processIdentifier).contains(box) else { throw ProbeError.unavailable("original_owned_settings_window_changed") }
+    }
+    func close(deadline: Double) async throws {
+        guard let app, let window else { throw ProbeError.unavailable("owned_settings_window_not_observed") }
+        try requireWindow()
+        guard let value = attribute(window, kAXCloseButtonAttribute), CFGetTypeID(value) == AXUIElementGetTypeID() else {
+            throw ProbeError.unavailable("owned_settings_close_button_unavailable")
+        }
+        let button = value as! AXUIElement
+        guard let box = rectangle(button), attribute(button, kAXRoleAttribute) as? String == kAXButtonRole,
+              attribute(button, kAXSubroleAttribute) as? String == kAXCloseButtonSubrole else {
+            throw ProbeError.unavailable("owned_settings_close_button_unverified")
+        }
+        try settingsPhysicalClick(button, box: box, owner: app.processIdentifier, deadline: deadline) {
+            try self.requireWindow()
+            guard let fresh = attribute(window, kAXCloseButtonAttribute), CFEqual(fresh, button),
+                  attribute(button, kAXRoleAttribute) as? String == kAXButtonRole,
+                  attribute(button, kAXSubroleAttribute) as? String == kAXCloseButtonSubrole,
+                  attribute(button, kAXEnabledAttribute) as? Bool == true else { throw ProbeError.unavailable("owned_settings_close_button_changed") }
+        }
+        receipt["close_click_performed"] = true
+        while try consentMonotonicTime() < deadline {
+            let windows = attribute(AXUIElementCreateApplication(app.processIdentifier), kAXWindowsAttribute) as? [AXUIElement]
+            if onScreenWindows(app.processIdentifier).isEmpty && (windows?.contains(where: { CFEqual($0, window) }) == false || app.isTerminated) {
+                receipt["owned_window_disappeared"] = true
+                receipt["settings_process_running_after_cleanup"] = current()
+                return
+            }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        throw ProbeError.unavailable("owned_settings_window_disappearance_unverified")
+    }
+}
+
+@MainActor func prepareNotificationPresentation(_ nodes: [SettingsInspectionNode], preparation: SettingsPresentationPreparation,
+                                                deadline: Double) async throws {
+    struct Pair { let label: SettingsInspectionNode; let button: SettingsInspectionNode; let group: SettingsInspectionNode }
+    let labels = ["mirroring_or_sharing": "Allow notifications when mirroring or sharing the display",
+        "display_sleeping": "Allow notifications when the display is sleeping", "screen_locked": "Allow notifications when the screen is locked"]
+    var pairs = [String: Pair]()
+    for (kind, _) in labels {
+        let matches = nodes.enumerated().compactMap { index, label -> Pair? in
+            guard label.exactPolicyLabel == kind, label.role == "AXStaticText", let parent = label.parent,
+                  nodes[parent].role == "AXGroup", nodes[parent].childrenVerified, nodes[parent].subtreeComplete,
+                  index + 1 < nodes.count, let textBox = label.box else { return nil }
+            let button = nodes[index + 1]
+            guard button.parent == parent, button.role == "AXCheckBox", button.childrenVerified, button.subtreeComplete,
+                  button.press, let box = button.box, box.minX >= textBox.maxX,
+                  textBox.minY <= box.midY, box.midY <= textBox.maxY else { return nil }
+            return Pair(label: label, button: button, group: nodes[parent])
+        }
+        guard matches.count == 1 else { throw ProbeError.unavailable("sharing_policy_exact_control_required") }
+        pairs[kind] = matches[0]
+    }
+    guard let app = preparation.app, let sharing = pairs["mirroring_or_sharing"],
+          pairs.values.allSatisfy({ CFEqual($0.group.element, sharing.group.element) }) else {
+        throw ProbeError.unavailable("sharing_policy_group_unverified")
+    }
+    func frame() throws -> [String: String] {
+        try preparation.requireWindow()
+        guard try consentMonotonicTime() < deadline,
+              let children = attribute(sharing.group.element, kAXChildrenAttribute) as? [AXUIElement] else {
+            throw ProbeError.unavailable("sharing_policy_original_group_changed")
+        }
+        var states = [String: String]()
+        for (kind, pair) in pairs {
+            var pid = pid_t(0), labelPID = pid_t(0), groupPID = pid_t(0)
+            guard AXUIElementGetPid(pair.button.element, &pid) == .success, pid == app.processIdentifier,
+                  AXUIElementGetPid(pair.label.element, &labelPID) == .success, labelPID == pid,
+                  AXUIElementGetPid(pair.group.element, &groupPID) == .success, groupPID == pid,
+                  attribute(pair.group.element, kAXRoleAttribute) as? String == "AXGroup",
+                  attribute(pair.label.element, kAXRoleAttribute) as? String == "AXStaticText",
+                  let index = children.firstIndex(where: { CFEqual($0, pair.label.element) }), index + 1 < children.count,
+                  CFEqual(children[index + 1], pair.button.element), rectangle(pair.label.element) == pair.label.box,
+                  rectangle(pair.button.element) == pair.button.box, rectangle(pair.group.element) == pair.group.box,
+                  [kAXTitleAttribute, kAXDescriptionAttribute, kAXValueAttribute].contains(where: { attribute(pair.label.element, $0) as? String == labels[kind] }),
+                  attribute(pair.button.element, kAXRoleAttribute) as? String == "AXCheckBox",
+                  attribute(pair.button.element, kAXEnabledAttribute) as? Bool == true,
+                  let value = attribute(pair.button.element, kAXValueAttribute) as? NSNumber,
+                  [0.0, 1.0].contains(value.doubleValue) else { throw ProbeError.unavailable("sharing_policy_original_control_changed") }
+            states[kind] = value.doubleValue == 1 ? "on" : "off"
+        }
+        return states
+    }
+    let before = try frame()
+    preparation.receipt["policy_before"] = before
+    preparation.receipt["sharing_checkbox_bounds"] = sharing.button.box.map { [Double($0.minX), Double($0.minY), Double($0.width), Double($0.height)] }
+    if before["mirroring_or_sharing"] == "off" {
+        guard let box = sharing.button.box else { throw ProbeError.unavailable("sharing_policy_control_bounds_unavailable") }
+        try settingsPhysicalClick(sharing.button.element, box: box, owner: app.processIdentifier, deadline: deadline) {
+            guard try frame() == before else { throw ProbeError.unavailable("sharing_policy_state_changed_before_click") }
+        }
+        preparation.receipt["sharing_click_performed"] = true
+        let settle = min(deadline, (try consentMonotonicTime()) + 0.75)
+        while try consentMonotonicTime() < settle {
+            if try frame()["mirroring_or_sharing"] == "on" { break }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+    }
+    let after = try frame()
+    preparation.receipt["policy_after"] = after
+    guard after["mirroring_or_sharing"] == "on", before["display_sleeping"] == after["display_sleeping"],
+          before["screen_locked"] == after["screen_locked"] else { throw ProbeError.unavailable("sharing_policy_on_or_unchanged_controls_unverified") }
+    preparation.receipt["policy_on_verified"] = true
+}
+
+@MainActor func prepareGlobalNotificationPresentation(_ args: [String]) async throws -> [String: Any] {
+    let started = try consentMonotonicTime()
+    let environment = ProcessInfo.processInfo.environment
+    guard args.count == 2, let deadline = Double(args[1]), deadline.isFinite, deadline > started, deadline - started <= 6,
+          environment["PI_MACOS_PRESENTATION_ADMITTED"] == "1",
+          environment["GITHUB_REPOSITORY"] == "777genius/agent-notifications", environment["GITHUB_EVENT_NAME"] == "workflow_dispatch",
+          environment["GITHUB_ACTOR"] == "777genius", environment["GITHUB_TRIGGERING_ACTOR"] == "777genius",
+          environment["GITHUB_RUN_ATTEMPT"] == "1", environment["PI_MACOS_RUNNER_ENVIRONMENT"] == "github-hosted",
+          environment["ImageOS"] == "macos15", getuid() != 0 else { throw ProbeError.unavailable("explicit_fresh_owner_presentation_preparation_required") }
+    let preparation = SettingsPresentationPreparation()
+    do {
+        preparation.receipt["inspection_before_cleanup"] = try await inspectGlobalNotificationSettings(args, preparation: preparation)
+    } catch {
+        preparation.receipt["primary_failure_class"] = error is ProbeError ? "probe_refusal" : "native_exception"
+        if let refusal = error as? ProbeError, case .unavailable(let code) = refusal { preparation.receipt["primary_refusal"] = code }
+    }
+    do { try await preparation.close(deadline: deadline) }
+    catch {
+        preparation.receipt["cleanup_failure_class"] = error is ProbeError ? "probe_refusal" : "native_exception"
+        if let refusal = error as? ProbeError, case .unavailable(let code) = refusal { preparation.receipt["cleanup_refusal"] = code }
+    }
+    if preparation.receipt["primary_failure_class"] == nil, preparation.receipt["cleanup_failure_class"] == nil,
+       preparation.receipt["policy_on_verified"] as? Bool == true, preparation.receipt["owned_window_disappeared"] as? Bool == true {
+        preparation.receipt["status"] = "prepared"
+    }
+    preparation.receipt["elapsed_seconds"] = (try consentMonotonicTime()) - started
+    return preparation.receipt
+}
+
+@MainActor func inspectGlobalNotificationSettings(_ args: [String], preparation: SettingsPresentationPreparation? = nil) async throws -> [String: Any] {
     let now = try consentMonotonicTime()
     guard args.count == 2, let deadline = Double(args[1]), deadline.isFinite, deadline > now, deadline - now <= 6 else {
         throw ProbeError.unavailable("original_settings_inspection_deadline_required")
@@ -852,6 +1041,7 @@ struct TerminalAutomationContext: Decodable {
     guard verifiedAppleApplication(url, identifier: identifier) else { throw ProbeError.unavailable("signed_apple_settings_required") }
     let before = NSRunningApplication.runningApplications(withBundleIdentifier: identifier).map { Int($0.processIdentifier) }
     guard before.count <= 1 else { throw ProbeError.unavailable("unique_settings_instance_required") }
+    if preparation != nil && !before.isEmpty { throw ProbeError.unavailable("new_owned_settings_instance_required") }
     let configuration = NSWorkspace.OpenConfiguration()
     configuration.activates = true
     configuration.createsNewApplicationInstance = false
@@ -861,6 +1051,9 @@ struct TerminalAutomationContext: Decodable {
           terminalAutomationUID(app.processIdentifier) == Int(getuid()), let start = processStartIdentity(app.processIdentifier) else {
         throw ProbeError.unavailable("settings_owner_identity_unverified")
     }
+    preparation?.app = app
+    preparation?.start = start
+    preparation?.receipt["settings_instance_was_new"] = true
     func current() -> Bool {
         !app.isTerminated && matchesProcessStart(app.processIdentifier, start)
             && terminalAutomationUID(app.processIdentifier) == Int(getuid())
@@ -872,6 +1065,13 @@ struct TerminalAutomationContext: Decodable {
     }
     guard current(), !onScreenWindows(app.processIdentifier).isEmpty, try consentMonotonicTime() < deadline else {
         throw ProbeError.unavailable("settings_window_unavailable")
+    }
+    if let preparation {
+        guard let windows = attribute(AXUIElementCreateApplication(app.processIdentifier), kAXWindowsAttribute) as? [AXUIElement],
+              windows.count == 1, let box = rectangle(windows[0]) else { throw ProbeError.unavailable("single_new_owned_settings_window_required") }
+        preparation.window = windows[0]; preparation.windowBox = box
+        preparation.receipt["owned_window_observed"] = true
+        try preparation.requireWindow()
     }
     var first = settingsInspectionTree(app, deadline: deadline)
     let readyDeadline = min(deadline, (try consentMonotonicTime()) + 2)
@@ -886,7 +1086,9 @@ struct TerminalAutomationContext: Decodable {
         "owner_bundle": identifier, "owner_path": path, "apple_signature_verified": true, "settings_left_open": true,
         "settings_present_before": before, "opened_new_settings_instance": !before.contains(Int(app.processIdentifier)),
         "initial_tree": first.1, "notifications_navigation_performed": false, "sidebar_scroll_performed": false,
-        "observed_notifications_sidebar_count": 0]
+        "observed_notifications_sidebar_count": 0, "observed_notifications_navigation_rows": 0]
+    result["elapsed_seconds"] = (try consentMonotonicTime()) - now
+    preparation?.receipt["inspection_before_cleanup"] = result
     func withinBounds(_ tree: [String: Any]) -> Bool {
         guard let reasons = tree["cap_reasons"] as? [String] else { return false }
         let hard = Set(["messaging_timeout", "deadline", "node_or_depth_limit", "window_limit", "windows_unavailable"])
@@ -1048,7 +1250,13 @@ struct TerminalAutomationContext: Decodable {
             try await Task.sleep(nanoseconds: 200_000_000)
         }
     }
-    if current(), try consentMonotonicTime() < deadline { result["final_tree"] = settingsInspectionTree(app, deadline: deadline).1 }
+    if current(), try consentMonotonicTime() < deadline {
+        let final = settingsInspectionTree(app, deadline: deadline)
+        result["final_tree"] = final.1
+        result["elapsed_seconds"] = (try consentMonotonicTime()) - now
+        preparation?.receipt["inspection_before_cleanup"] = result
+        if let preparation { try await prepareNotificationPresentation(final.0, preparation: preparation, deadline: deadline) }
+    }
     result["elapsed_seconds"] = (try consentMonotonicTime()) - now
     return result
 }
@@ -1402,6 +1610,8 @@ final class ProductCapture: NSObject, SCStreamOutput, SCStreamDelegate, @uncheck
                 publish(try terminalAutomation(args))
             case "inspect-global-notification-settings":
                 publish(try await inspectGlobalNotificationSettings(args))
+            case "prepare-global-notification-presentation":
+                publish(try await prepareGlobalNotificationPresentation(args))
             case "preflight":
                 let session = CGSessionCopyCurrentDictionary() as? [String: Any] ?? [:]
                 var device = AudioDeviceID(0)

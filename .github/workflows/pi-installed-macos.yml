@@ -32,6 +32,11 @@ on:
         type: boolean
         required: false
         default: false
+      prepare_notification_presentation:
+        description: Allow notifications while mirroring or sharing through the public Settings UI on the admitted fresh TEST host
+        type: boolean
+        required: false
+        default: false
       observer_only:
         description: Compile and observe native permissions before building the product
         type: boolean
@@ -132,12 +137,24 @@ jobs:
           python -B scripts/pi-macos-host.py --prepare-notification-center --source-sha "$SOURCE_SHA" \
             --observer "$RUNNER_TEMP/TEST-pi-macos/observer" \
             --report "$RUNNER_TEMP/TEST-pi-macos/evidence/host-preparation.json"
+      - name: Require the separate public presentation policy opt-in to use the admitted fresh host route
+        if: ${{ inputs.prepare_notification_presentation }}
+        shell: bash
+        env:
+          DISPATCH: ${{ github.event_name }}
+          SERVICE_PREPARED: ${{ inputs.prepare_notification_center }}
+          OBSERVER_ONLY: ${{ inputs.observer_only }}
+          HOSTED_OBSERVER: ${{ inputs.hosted_observer }}
+        run: |
+          test "$DISPATCH" = workflow_dispatch
+          test "$SERVICE_PREPARED" = true
+          test "$OBSERVER_ONLY" != true || test "$HOSTED_OBSERVER" = true
       - uses: actions/setup-go@v7
         if: ${{ !inputs.observer_only }}
         with:
           go-version: '1.26.10'
       - name: Inspect public global Notifications settings with the real capture active
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.observer_only && inputs.hosted_observer && inputs.prepare_notification_center }}
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.observer_only && inputs.hosted_observer && inputs.prepare_notification_center && !inputs.prepare_notification_presentation }}
         shell: bash
         run: |
           set -euo pipefail
@@ -149,6 +166,23 @@ jobs:
           spec.loader.exec_module(fixture)
           result = fixture.inspect_global_notification_settings(Path(sys.argv[1]), Path(sys.argv[2]))
           raise SystemExit(0 if result['status'] == 'inspected' and result['owned_capture_collected'] else 1)
+          PY
+      - name: Prepare only the explicitly selected public sharing presentation policy and dismiss the owned Settings window
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.prepare_notification_presentation }}
+        shell: bash
+        env:
+          PI_MACOS_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+          PI_MACOS_NOTIFICATION_PRESENTATION_PREPARE: '1'
+        run: |
+          set -euo pipefail
+          python -B - "$RUNNER_TEMP/TEST-pi-macos/observer" "$RUNNER_TEMP/TEST-pi-macos/evidence" <<'PY'
+          import importlib.util, sys
+          from pathlib import Path
+          spec = importlib.util.spec_from_file_location('pi_macos_presentation_prepare', 'scripts/pi-installed-desktop-macos.py')
+          fixture = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(fixture)
+          result = fixture.inspect_global_notification_settings(Path(sys.argv[1]), Path(sys.argv[2]), prepare_presentation=True)
+          raise SystemExit(0 if result['status'] == 'prepared' and result['owned_capture_collected'] else 1)
           PY
       - name: Acquire the exact compatible signed helper and official Pi
         if: ${{ !inputs.observer_only }}

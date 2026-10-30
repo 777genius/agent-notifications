@@ -298,6 +298,17 @@ services. Unknown, physical and Namespace hosts are excluded from this opt-in
 preparation. The signed helper must still receive normal user authorization,
 and every actual banner, audio and physical click check remains required.
 
+The separate `prepare_notification_presentation=true` input defaults to false
+and requires that admitted official-host service preparation. It uses the public
+Notifications pane to turn on only **Allow notifications when mirroring or
+sharing the display**, when that exact observed control is off, and verifies
+the same control is on while the real capture is active. The sleeping-display
+and locked-screen settings must remain unchanged. A short verification dispatch
+uses `observer_only=true`, `hosted_observer=true` and both preparation inputs;
+it closes only its newly owned Settings window and cannot qualify delivery.
+Full product qualification still requires normal candidate consent, all six
+actual banner/audio/physical-click cases and owned cleanup at the final source.
+
 The consent observer derives display names from the pinned helper archive and
 requires identical installed bundle metadata. A collapsed authorization card
 must carry that exact quoted name and the fixed OS explanation in one native
@@ -321,6 +332,14 @@ kernel-observed requester and target. The original window/TTY response and
 normal owned child collection remain required afterward.
 
 ### Windows installed-product handoff
+
+On the admitted fresh official Client host, the existing explicit
+`prepare_host=true` route now verifies the observed public Notification Center
+Do not disturb control is off before product work. It uses at most one physical
+click on the exact verified control, then verifies off and closes that panel.
+This setup does not wait out Do not disturb, edit the registry or warm up a
+candidate notification sender. The original readiness and native product gates
+remain required; setup evidence alone cannot qualify delivery.
 
 `Pi installed Windows product` separates an ordinary Windows Server amd64
 build/process job from its Windows Client desktop job. The Server job builds

@@ -519,9 +519,9 @@ def observe_unchanged_focus(terminal, stop_capture, seconds=15):
                                      stop_capture, drain_seconds=3, seconds=seconds)
 
 
-def command(argv, *, timeout=20):
+def command(argv, *, timeout=20, env=None):
     result = subprocess.run(list(map(str, argv)), stdin=subprocess.DEVNULL,
-                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout, env=env)
     P.require(len(result.stdout) + len(result.stderr) < 1024 * 1024, "native_observer_output_limit")
     P.require(result.returncode == 0, "native_command_failed:" + Path(argv[0]).name + ":"
               + result.stderr.decode(errors="replace")[-1000:] + result.stdout.decode(errors="replace")[-1000:])
@@ -923,8 +923,84 @@ def global_settings_capture_measurements(value):
     return value
 
 
-def inspect_global_notification_settings(observer, evidence_root, *, execute=command, spawn=subprocess.Popen):
-    """Isolated observer lane: no product, helper acquisition or notification."""
+def presentation_preparation_admission(observer, evidence_root):
+    """Reuse the existing strict host admission; never prepare a service again."""
+    host = module("pi_macos_policy_host", REPO / "scripts/pi-macos-host.py")
+    P.require(os.environ.get("PI_MACOS_NOTIFICATION_PRESENTATION_PREPARE") == "1", "explicit_presentation_opt_in_required")
+    metadata = Path(os.environ["HOME"]) / "imagedata.json"
+    P.require(metadata.is_file() and not metadata.is_symlink() and metadata.stat().st_size <= 65536,
+              "actual_official_image_metadata_required")
+    source = command(["git", "-C", REPO, "rev-parse", "HEAD"], timeout=2).strip()
+    actual = {"os": platform.system(), "arch": platform.machine(), "version": platform.mac_ver()[0],
+              "build": command(["/usr/bin/sw_vers", "-buildVersion"], timeout=2).strip()}
+    admitted = host.admit(os.environ, actual, json.loads(metadata.read_text()), source,
+                         command(["git", "-C", REPO, "status", "--porcelain", "--untracked-files=all"], timeout=2) == "")
+    report = evidence_root / "host-preparation.json"
+    P.require(report.is_file() and not report.is_symlink() and report.stat().st_size <= 256 * 1024,
+              "prior_notification_center_preparation_required")
+    prepared = json.loads(report.read_text())
+    P.require(prepared.get("scope") == "explicit_disposable_official_macos_host_preparation"
+              and prepared.get("status") == "notification_center_ready" and prepared.get("admission") == admitted,
+              "same_admitted_host_preparation_required")
+    host.validate_running(prepared["after"], json.loads(command([observer, "notification-center-state"], timeout=2)))
+    return admitted
+
+
+def presentation_preparation_projection(value):
+    required = {"scope", "qualification_input", "desktop_qualified", "status", "maximum_seconds", "elapsed_seconds",
+                "settings_instance_was_new", "owned_window_observed", "owned_window_disappeared", "close_click_performed",
+                "settings_process_collected", "sharing_click_performed"}
+    optional = {"inspection_before_cleanup", "primary_failure_class", "cleanup_failure_class", "policy_before", "policy_after",
+                "sharing_checkbox_bounds", "policy_on_verified", "settings_process_running_after_cleanup", "primary_refusal", "cleanup_refusal"}
+    P.require(isinstance(value, dict) and required <= set(value) <= required | optional
+              and value["scope"] == "fresh_owned_public_notification_presentation_preparation"
+              and value["qualification_input"] is False and value["desktop_qualified"] is False
+              and value["status"] in ("prepared", "refused") and value["maximum_seconds"] == 6
+              and type(value["elapsed_seconds"]) in (int, float) and 0 <= value["elapsed_seconds"] <= 6
+              and value["settings_process_collected"] is False,
+              "closed_presentation_preparation_required")
+    for key in ("settings_instance_was_new", "owned_window_observed", "owned_window_disappeared", "close_click_performed",
+                "sharing_click_performed", "policy_on_verified", "settings_process_running_after_cleanup"):
+        P.require(key not in value or type(value[key]) is bool, "presentation_preparation_boolean_required")
+    for key in ("primary_failure_class", "cleanup_failure_class"):
+        P.require(key not in value or value[key] in ("probe_refusal", "native_exception"), "presentation_preparation_closed_failure_required")
+    refusals = {"settings_owned_pointer_unavailable", "settings_owned_hit_unavailable", "settings_owned_click_refused",
+        "original_owned_settings_window_changed", "owned_settings_window_not_observed", "owned_settings_close_button_unavailable",
+        "owned_settings_close_button_unverified", "owned_settings_close_button_changed", "owned_settings_window_disappearance_unverified",
+        "sharing_policy_exact_control_required", "sharing_policy_group_unverified", "sharing_policy_original_group_changed",
+        "sharing_policy_original_control_changed", "sharing_policy_control_bounds_unavailable", "sharing_policy_state_changed_before_click",
+        "sharing_policy_on_or_unchanged_controls_unverified", "original_settings_inspection_deadline_required", "signed_apple_settings_required",
+        "unique_settings_instance_required", "new_owned_settings_instance_required", "settings_owner_identity_unverified", "settings_window_unavailable",
+        "single_new_owned_settings_window_required", "settings_sidebar_pointer_unavailable", "settings_sidebar_hit_unavailable",
+        "settings_sidebar_owner_or_hit_changed", "settings_navigation_pointer_unavailable", "settings_navigation_hit_unavailable",
+        "settings_navigation_hit_is_not_inert", "settings_navigation_owner_or_deadline_changed"}
+    for key in ("primary_refusal", "cleanup_refusal"):
+        P.require(key not in value or (value[key] in refusals and value.get(key.replace("refusal", "failure_class")) == "probe_refusal"),
+                  "presentation_preparation_closed_refusal_required")
+    for key in ("policy_before", "policy_after"):
+        P.require(key not in value or (isinstance(value[key], dict)
+                  and set(value[key]) == {"mirroring_or_sharing", "display_sleeping", "screen_locked"}
+                  and all(state in ("on", "off") for state in value[key].values())), "presentation_preparation_states_required")
+    if "sharing_checkbox_bounds" in value:
+        P.require(isinstance(value["sharing_checkbox_bounds"], list) and len(value["sharing_checkbox_bounds"]) == 4
+                  and all(type(number) in (int, float) and math.isfinite(number) for number in value["sharing_checkbox_bounds"]),
+                  "presentation_preparation_bounds_required")
+    if "inspection_before_cleanup" in value:
+        global_settings_projection(value["inspection_before_cleanup"])
+    if value["status"] == "prepared":
+        before, after = value.get("policy_before", {}), value.get("policy_after", {})
+        P.require(value["settings_instance_was_new"] and value["owned_window_observed"] and value["owned_window_disappeared"]
+                  and value["close_click_performed"] and value.get("policy_on_verified") is True
+                  and not {"primary_failure_class", "cleanup_failure_class"} & set(value)
+                  and "inspection_before_cleanup" in value and after.get("mirroring_or_sharing") == "on"
+                  and all(before.get(key) == after.get(key) for key in ("display_sleeping", "screen_locked"))
+                  and value["sharing_click_performed"] == (before.get("mirroring_or_sharing") == "off"),
+                  "physical_presentation_on_and_owned_window_cleanup_unverified")
+    return value
+
+
+def inspect_global_notification_settings(observer, evidence_root, *, prepare_presentation=False, execute=command, spawn=subprocess.Popen):
+    """Public UI only; the optional policy change requires separate admission."""
     evidence_root.mkdir(parents=True, exist_ok=True)
     root = Path(tempfile.mkdtemp(prefix="TEST-macos-notification-settings-")).resolve()
     root.chmod(0o700)
@@ -933,6 +1009,9 @@ def inspect_global_notification_settings(observer, evidence_root, *, execute=com
               "desktop_qualified": False, "status": "unavailable", "capture_original_maximum_seconds": 30,
               "capture_started": False, "owned_capture_collected": True}
     try:
+        if prepare_presentation:
+            result["scope"] = "explicit_fresh_host_notification_presentation_preparation"
+            result["host_admission"] = presentation_preparation_admission(observer, evidence_root)
         capture = spawn([str(observer), "capture", str(root)], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                         stderr=subprocess.PIPE, start_new_session=True)
         result.update(capture_started=True, owned_capture_collected=False)
@@ -948,9 +1027,15 @@ def inspect_global_notification_settings(observer, evidence_root, *, execute=com
         P.require(clock.implementation == "mach_absolute_time()" and clock.monotonic and not clock.adjustable,
                   "global_settings_shared_clock_required")
         deadline = time.monotonic() + 6
-        raw = execute([observer, "inspect-global-notification-settings", str(deadline)], timeout=6)
+        operation = "prepare-global-notification-presentation" if prepare_presentation else "inspect-global-notification-settings"
+        native_env = {**os.environ, "PI_MACOS_PRESENTATION_ADMITTED": "1"} if prepare_presentation else None
+        raw = execute([observer, operation, str(deadline)], timeout=6, **({"env": native_env} if prepare_presentation else {}))
         P.require(len(raw) <= 256 * 1024, "global_settings_output_bound")
-        result["settings"] = global_settings_projection(json.loads(raw))
+        if prepare_presentation:
+            result["preparation"] = presentation_preparation_projection(json.loads(raw))
+            P.require(result["preparation"]["status"] == "prepared", "presentation_preparation_or_owned_cleanup_refused")
+        else:
+            result["settings"] = global_settings_projection(json.loads(raw))
         result["capture_active_after_inspection"] = capture.poll() is None
         P.require(result["capture_active_after_inspection"], "global_settings_capture_ended_during_inspection")
         screenshot = evidence_root / "global-notifications-settings.png"
@@ -959,7 +1044,7 @@ def inspect_global_notification_settings(observer, evidence_root, *, execute=com
                   "global_settings_screenshot_unavailable")
         result["capture_active_after_screenshot"] = capture.poll() is None
         P.require(result["capture_active_after_screenshot"], "global_settings_capture_ended_before_screenshot")
-        result.update(status="inspected", screenshot_sha256=P.sha(screenshot))
+        result.update(status="prepared" if prepare_presentation else "inspected", screenshot_sha256=P.sha(screenshot))
     except Exception as error:
         result["failure_class"] = type(error).__name__
     finally:

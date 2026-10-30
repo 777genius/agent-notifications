@@ -718,6 +718,68 @@ class GlobalSettingsInspection(unittest.TestCase):
                 "unclassified_action_count": 0}], "traversal_capped": False, "cap_reasons": [],
                 "maximum_nodes": 256, "maximum_depth": 18, "maximum_children": 64, "ax_timeout_status": 0, "tree_scope": "app_windows"}}
 
+    def prepared(self, *, already_on=False):
+        return {"scope": "fresh_owned_public_notification_presentation_preparation", "qualification_input": False,
+            "desktop_qualified": False, "status": "prepared", "maximum_seconds": 6, "elapsed_seconds": 0.1,
+            "settings_instance_was_new": True, "owned_window_observed": True, "owned_window_disappeared": True,
+            "close_click_performed": True, "settings_process_collected": False, "settings_process_running_after_cleanup": True,
+            "sharing_click_performed": not already_on, "policy_on_verified": True,
+            "policy_before": {"mirroring_or_sharing": "on" if already_on else "off", "display_sleeping": "off", "screen_locked": "on"},
+            "policy_after": {"mirroring_or_sharing": "on", "display_sleeping": "off", "screen_locked": "on"},
+            "sharing_checkbox_bounds": [813, 382, 26, 15], "inspection_before_cleanup": self.settings()}
+
+    def test_prepared_policy_requires_only_on_transition_and_real_owned_window_cleanup(self):
+        for already_on in (False, True):
+            value = self.prepared(already_on=already_on)
+            self.assertIs(M.presentation_preparation_projection(value), value)
+        for scenario in ("other_setting_changed", "window_left_open", "false_process_collection", "reused_settings",
+                         "already_on_clicked", "primary_failure", "private_field"):
+            value = self.prepared()
+            if scenario == "other_setting_changed":
+                value["policy_after"]["screen_locked"] = "off"
+            elif scenario == "window_left_open":
+                value["owned_window_disappeared"] = False
+            elif scenario == "false_process_collection":
+                value["settings_process_collected"] = True
+            elif scenario == "reused_settings":
+                value["settings_instance_was_new"] = False
+            elif scenario == "already_on_clicked":
+                value["policy_before"]["mirroring_or_sharing"] = "on"
+            elif scenario == "primary_failure":
+                value["primary_failure_class"] = "probe_refusal"
+            else:
+                value["raw_private_ui_text"] = "TEST-private-user-text"
+            with self.subTest(scenario=scenario), self.assertRaises(RuntimeError) as caught:
+                M.presentation_preparation_projection(value)
+            self.assertNotIn("TEST-private-user-text", str(caught.exception))
+
+    def test_refused_host_admission_starts_no_capture_or_settings_operation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            execute, spawn = mock.Mock(), mock.Mock()
+            with mock.patch.object(M, "presentation_preparation_admission", side_effect=RuntimeError("TEST-private-refusal")):
+                value = M.inspect_global_notification_settings(Path("/TEST-observer"), Path(temporary),
+                    prepare_presentation=True, execute=execute, spawn=spawn)
+        execute.assert_not_called()
+        spawn.assert_not_called()
+        self.assertEqual(value["status"], "unavailable")
+        self.assertFalse(value["capture_started"])
+        self.assertNotIn("TEST-private-refusal", json.dumps(value))
+
+    def test_early_inspection_refusal_retains_primary_and_cleanup_facts(self):
+        value = self.prepared()
+        value.update(status="refused", sharing_click_performed=False, owned_window_disappeared=False,
+                     primary_failure_class="probe_refusal", primary_refusal="settings_sidebar_hit_unavailable",
+                     cleanup_failure_class="probe_refusal", cleanup_refusal="owned_settings_close_button_changed")
+        for key in ("policy_before", "policy_after", "policy_on_verified", "sharing_checkbox_bounds"):
+            del value[key]
+        # The original snapshot precedes row discovery and has a legitimate
+        # observed-zero counter; it must not erase either later refusal.
+        self.assertEqual(value["inspection_before_cleanup"]["observed_notifications_navigation_rows"], 0)
+        projected = M.presentation_preparation_projection(value)
+        self.assertIs(projected, value)
+        self.assertEqual(projected["primary_refusal"], "settings_sidebar_hit_unavailable")
+        self.assertEqual(projected["cleanup_refusal"], "owned_settings_close_button_changed")
+
     def measurements(self, frames):
         return {"audio_samples": 14400, "audio_peak": 0, "screen_frames": frames, "audio_nonzero_samples": 0,
                 "audio_rms": 0, "sample_rate": 48000, "channels": 1, "format": "s16le"}
@@ -769,8 +831,9 @@ class GlobalSettingsInspection(unittest.TestCase):
             self.assertNotIn("TEST-private-user-text", str(caught.exception))
 
     def test_real_owned_capture_is_collected_after_inspection_or_primary_failure(self):
-        for failed in (False, True):
-            with self.subTest(failed=failed), tempfile.TemporaryDirectory(prefix="TEST-settings-observer-") as temporary:
+        for preparing, failed, refused in ((False, False, False), (False, True, False),
+                                          (True, False, False), (True, True, False), (True, False, True)):
+            with self.subTest(preparing=preparing, failed=failed, refused=refused), tempfile.TemporaryDirectory(prefix="TEST-settings-observer-") as temporary:
                 children, calls = [], []
                 root = Path(temporary)
                 baseline, final = self.measurements(2), self.measurements(4)
@@ -787,18 +850,28 @@ class GlobalSettingsInspection(unittest.TestCase):
                 def execute(argv, **kwargs):
                     calls.append(argv)
                     self.assertIsNone(children[0].poll())
-                    if argv[1] == "inspect-global-notification-settings":
+                    if argv[1] in ("inspect-global-notification-settings", "prepare-global-notification-presentation"):
                         self.assertLessEqual(kwargs["timeout"], 6)
                         if failed:
                             raise RuntimeError("TEST-private-native-failure")
+                        if preparing:
+                            self.assertEqual(kwargs["env"]["PI_MACOS_PRESENTATION_ADMITTED"], "1")
+                            prepared = self.prepared()
+                            if refused:
+                                prepared.update(status="refused", primary_failure_class="probe_refusal", cleanup_failure_class="native_exception",
+                                                owned_window_disappeared=False)
+                            return json.dumps(prepared)
                         return json.dumps(self.settings())
                     self.assertEqual(argv[0], "/usr/sbin/screencapture")
                     Path(argv[2]).write_bytes(b"TEST screenshot only; never native qualification")
                     return ""
                 clock = mock.Mock(implementation="mach_absolute_time()", monotonic=True, adjustable=False)
-                with mock.patch.object(M.time, "get_clock_info", return_value=clock):
-                    result = M.inspect_global_notification_settings(root / "TEST-observer", root / "evidence", execute=execute, spawn=spawn)
-                self.assertEqual(result["status"], "unavailable" if failed else "inspected")
+                with mock.patch.object(M.time, "get_clock_info", return_value=clock), \
+                     mock.patch.object(M, "presentation_preparation_admission", return_value={"source_sha": "a" * 40}) as admission:
+                    result = M.inspect_global_notification_settings(root / "TEST-observer", root / "evidence",
+                        prepare_presentation=preparing, execute=execute, spawn=spawn)
+                self.assertEqual(admission.call_count, int(preparing))
+                self.assertEqual(result["status"], "unavailable" if failed or refused else "prepared" if preparing else "inspected")
                 self.assertTrue(result["owned_capture_collected"])
                 self.assertTrue(result["capture_frames_advanced"])
                 self.assertFalse(result["qualification_input"])
@@ -806,13 +879,20 @@ class GlobalSettingsInspection(unittest.TestCase):
                 self.assertEqual(len(children), 1)
                 with self.assertRaises(ProcessLookupError):
                     os.kill(children[0].pid, 0)
-                if failed:
+                if failed or refused:
                     self.assertEqual(result["failure_class"], "RuntimeError")
                     self.assertEqual(len(calls), 1)
+                    if refused:
+                        self.assertEqual(result["preparation"]["primary_failure_class"], "probe_refusal")
+                        self.assertEqual(result["preparation"]["cleanup_failure_class"], "native_exception")
                 else:
                     self.assertTrue(result["capture_active_after_inspection"])
                     self.assertTrue(result["capture_active_after_screenshot"])
-                    self.assertTrue(result["settings"]["settings_left_open"])
+                    if preparing:
+                        self.assertTrue(result["preparation"]["owned_window_disappeared"])
+                        self.assertFalse(result["preparation"]["settings_process_collected"])
+                    else:
+                        self.assertTrue(result["settings"]["settings_left_open"])
 
 
 class PermissionUIIdentity(unittest.TestCase):
