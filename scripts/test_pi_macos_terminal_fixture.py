@@ -713,7 +713,9 @@ class GlobalSettingsInspection(unittest.TestCase):
             "initial_tree": {"nodes": [{"index": 0, "depth": 0, "role": "AXCheckBox", "fixed_labels": ["mirroring_or_sharing"],
                 "navigation_press_action": True, "inert_navigation_descendant": False, "value_enum": "off",
                 "children_query_status": 0, "children_array_verified": True, "action_query_status": 0,
-                "action_array_verified": True, "subtree_complete": True}], "traversal_capped": False, "cap_reasons": [],
+                "action_array_verified": True, "subtree_complete": True,
+                "public_action_bits": {"press": True, "increment": False, "decrement": False, "confirm": False, "pick": False, "show_menu": False},
+                "unclassified_action_count": 0}], "traversal_capped": False, "cap_reasons": [],
                 "maximum_nodes": 256, "maximum_depth": 18, "maximum_children": 64, "ax_timeout_status": 0, "tree_scope": "app_windows"}}
 
     def measurements(self, frames):
@@ -748,7 +750,7 @@ class GlobalSettingsInspection(unittest.TestCase):
         self.assertIs(M.global_settings_projection(value), value)
         self.assertFalse(value["qualification_input"])
         self.assertFalse(value["desktop_qualified"])
-        for scenario in ("ambiguous_scroll", "private_reason", "contradictory_query", "hidden_cap"):
+        for scenario in ("ambiguous_scroll", "private_reason", "contradictory_query", "hidden_cap", "private_action", "settable_without_query"):
             candidate = json.loads(json.dumps(value))
             if scenario == "ambiguous_scroll":
                 candidate["observed_notifications_sidebar_count"] = 2
@@ -756,8 +758,12 @@ class GlobalSettingsInspection(unittest.TestCase):
                 candidate["sidebar_reveal_tree"]["cap_reasons"] = ["TEST-private-user-text"]
             elif scenario == "contradictory_query":
                 candidate["sidebar_reveal_tree"]["nodes"][0]["children_array_verified"] = True
-            else:
+            elif scenario == "hidden_cap":
                 candidate["sidebar_reveal_tree"]["cap_reasons"] = []
+            elif scenario == "private_action":
+                candidate["sidebar_reveal_tree"]["nodes"][0]["public_action_bits"]["TEST-private-user-text"] = True
+            else:
+                candidate["sidebar_reveal_tree"]["nodes"][0]["value_settable"] = False
             with self.subTest(scenario=scenario), self.assertRaises(RuntimeError) as caught:
                 M.global_settings_projection(candidate)
             self.assertNotIn("TEST-private-user-text", str(caught.exception))

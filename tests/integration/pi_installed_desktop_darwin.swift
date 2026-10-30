@@ -735,6 +735,16 @@ struct TerminalAutomationContext: Decodable {
     var subtreeComplete: Bool
 }
 
+@MainActor func settingsPassiveNavigationLeaf(_ element: AXUIElement, role: String, actions: [String]) -> (safe: Bool, status: AXError, settable: Bool) {
+    var settable = DarwinBoolean(false)
+    let status = AXUIElementIsAttributeSettable(element, kAXValueAttribute as CFString, &settable)
+    // A contextual-menu action is never invoked by this fixture's left click.
+    // Unknown/state-changing actions and writable values remain inadmissible.
+    let safe = ["AXStaticText", "AXImage"].contains(role) && actions.allSatisfy { $0 == kAXShowMenuAction }
+        && status == .success && !settable.boolValue
+    return (safe, status, settable.boolValue)
+}
+
 @MainActor func settingsInspectionTree(_ app: NSRunningApplication, deadline: Double,
                                        retainedSidebar: AXUIElement? = nil) -> ([SettingsInspectionNode], [String: Any]) {
     let root = AXUIElementCreateApplication(app.processIdentifier)
@@ -779,8 +789,10 @@ struct TerminalAutomationContext: Decodable {
         // malformed arrays and failed container reads never prove completeness.
         if children == nil && !unsupportedLeaf { capped = true; capReasons.insert("children_unavailable") }
         let pressed = actions?.contains(kAXPressAction) == true
-        let inert = ["AXStaticText", "AXImage", "AXCell", "AXGroup"].contains(role) && actionStatus == .success
-            && actions?.isEmpty == true && (children != nil || (unsupportedLeaf && ["AXStaticText", "AXImage"].contains(role)))
+        let passive = ["AXStaticText", "AXImage"].contains(role) && actions != nil
+            ? settingsPassiveNavigationLeaf(element, role: role, actions: actions!) : nil
+        let inert = ((["AXCell", "AXGroup"].contains(role) && actions?.isEmpty == true) || passive?.safe == true)
+            && (children != nil || (unsupportedLeaf && ["AXStaticText", "AXImage"].contains(role)))
         let index = nodes.count, box = rectangle(element)
         nodes.append(SettingsInspectionNode(element: element, role: role, parent: parent, box: box,
             exactNotifications: texts.contains("Notifications"), press: pressed, inert: inert,
@@ -790,6 +802,14 @@ struct TerminalAutomationContext: Decodable {
             "children_query_status": childStatus.rawValue, "children_array_verified": children != nil,
             "action_query_status": actionStatus.rawValue, "action_array_verified": actions != nil,
             "subtree_complete": children != nil || unsupportedLeaf]
+        let publicActions = ["press": kAXPressAction, "increment": kAXIncrementAction, "decrement": kAXDecrementAction,
+            "confirm": kAXConfirmAction, "pick": kAXPickAction, "show_menu": kAXShowMenuAction]
+        row["public_action_bits"] = publicActions.mapValues { actions?.contains($0) == true }
+        row["unclassified_action_count"] = actions?.filter { !publicActions.values.contains($0) }.count ?? 0
+        if let passive {
+            row["value_settable_query_status"] = passive.status.rawValue
+            if passive.status == .success { row["value_settable"] = passive.settable }
+        }
         if let parent { row["parent"] = parent }
         if let box { row["bounds"] = [Double(box.minX), Double(box.minY), Double(box.width), Double(box.height)] }
         for (key, name) in [(kAXEnabledAttribute, "enabled"), (kAXSelectedAttribute, "selected")] {
@@ -880,8 +900,8 @@ struct TerminalAutomationContext: Decodable {
         for _ in 0..<8 {
             guard let actual = cursor else { break }
             let ancestor = first.0[actual]
-            if ancestor.role == "AXRow" { row = ancestor }
-            if ancestor.role == "AXOutline", ancestor.subtreeComplete, row != nil { outline = ancestor }
+            if ancestor.role == "AXRow", ancestor.subtreeComplete { row = ancestor }
+            if ancestor.role == "AXOutline", ancestor.childrenVerified, row != nil { outline = ancestor }
             if ancestor.role == "AXScrollArea", ancestor.childrenVerified, let outline, let row {
                 if !sidebars.contains(where: { CFEqual($0.area.element, ancestor.element) }) { sidebars.append((ancestor, row, outline)) }
                 break
@@ -952,7 +972,7 @@ struct TerminalAutomationContext: Decodable {
                     var parent = row.parent, sidebar = false
                     for _ in 0..<8 {
                         guard let actualParent = parent else { break }
-                        if nodes[actualParent].role == "AXOutline", nodes[actualParent].subtreeComplete { sidebar = true; break }
+                        if nodes[actualParent].role == "AXOutline", nodes[actualParent].childrenVerified { sidebar = true; break }
                         parent = nodes[actualParent].parent
                     }
                     if sidebar && inertSubtree, let box = row.box, onScreenWindows(app.processIdentifier).contains(where: { $0.contains(box) }),
@@ -994,7 +1014,7 @@ struct TerminalAutomationContext: Decodable {
         if withinBounds(fresh.1), refreshed.count == 1, current(), candidateCurrent(refreshed[0], in: fresh.0),
            CFEqual(rows[0].element, refreshed[0].element), let box = refreshed[0].box, let originalBox = rows[0].box, box == originalBox,
            try consentMonotonicTime() < deadline {
-            let point = CGPoint(x: box.midX, y: box.midY)
+            let point = CGPoint(x: box.maxX - min(12, box.width / 4), y: box.midY)
             guard CGWarpMouseCursorPosition(point) == .success else { throw ProbeError.unavailable("settings_navigation_pointer_unavailable") }
             var hit: AXUIElement?
             guard AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(), Float(point.x), Float(point.y), &hit) == .success,
@@ -1011,7 +1031,9 @@ struct TerminalAutomationContext: Decodable {
                 var actions: CFArray?
                 guard ["AXStaticText", "AXImage", "AXCell", "AXGroup"].contains(role),
                       AXUIElementCopyActionNames(element, &actions) == .success,
-                      let actionNames = actions as? [String], actionNames.isEmpty,
+                      let actionNames = actions as? [String],
+                      (["AXCell", "AXGroup"].contains(role) ? actionNames.isEmpty
+                        : settingsPassiveNavigationLeaf(element, role: role, actions: actionNames).safe),
                       let parent = attribute(element, kAXParentAttribute), CFGetTypeID(parent) == AXUIElementGetTypeID() else { break }
                 element = parent as! AXUIElement
             }

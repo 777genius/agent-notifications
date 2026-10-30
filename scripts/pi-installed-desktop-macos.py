@@ -874,14 +874,28 @@ def global_settings_projection(value):
                   and isinstance(tree["nodes"], list) and len(tree["nodes"]) <= 256, "closed_global_settings_tree_required")
         for index, row in enumerate(tree["nodes"]):
             fixed = {"index", "depth", "role", "fixed_labels", "navigation_press_action", "inert_navigation_descendant",
-                     "children_query_status", "children_array_verified", "action_query_status", "action_array_verified", "subtree_complete"}
+                     "children_query_status", "children_array_verified", "action_query_status", "action_array_verified", "subtree_complete",
+                     "public_action_bits", "unclassified_action_count"}
             P.require(isinstance(row, dict) and fixed <= set(row)
-                      <= fixed | {"parent", "bounds", "enabled", "selected", "value_boolean", "value_enum"}
+                      <= fixed | {"parent", "bounds", "enabled", "selected", "value_boolean", "value_enum", "value_settable_query_status", "value_settable"}
                       and type(row["index"]) is int and row["index"] == index and type(row["depth"]) is int and 0 <= row["depth"] < 18
                       and row["role"] in roles and isinstance(row["fixed_labels"], list) and len(row["fixed_labels"]) <= len(labels)
                       and all(label in labels for label in row["fixed_labels"]) and type(row["navigation_press_action"]) is bool
                       and type(row["inert_navigation_descendant"]) is bool and type(row["subtree_complete"]) is bool,
                       "closed_global_settings_node_required")
+            action_keys = {"press", "increment", "decrement", "confirm", "pick", "show_menu"}
+            P.require(isinstance(row["public_action_bits"], dict) and set(row["public_action_bits"]) == action_keys
+                      and all(type(bit) is bool for bit in row["public_action_bits"].values())
+                      and row["public_action_bits"]["press"] == row["navigation_press_action"]
+                      and type(row["unclassified_action_count"]) is int and 0 <= row["unclassified_action_count"] <= 65536,
+                      "global_settings_action_bits_invalid")
+            if "value_settable_query_status" in row:
+                P.require(type(row["value_settable_query_status"]) is int and -(2 ** 31) <= row["value_settable_query_status"] < 2 ** 31
+                          and ((row["value_settable_query_status"] == 0 and type(row.get("value_settable")) is bool)
+                               or (row["value_settable_query_status"] != 0 and "value_settable" not in row)),
+                          "global_settings_settable_status_invalid")
+            else:
+                P.require("value_settable" not in row, "global_settings_settable_status_required")
             for prefix in ("children", "action"):
                 P.require(type(row[prefix + "_query_status"]) is int and -(2 ** 31) <= row[prefix + "_query_status"] < 2 ** 31
                           and type(row[prefix + "_array_verified"]) is bool
@@ -935,7 +949,7 @@ def inspect_global_notification_settings(observer, evidence_root, *, execute=com
                   "global_settings_shared_clock_required")
         deadline = time.monotonic() + 6
         raw = execute([observer, "inspect-global-notification-settings", str(deadline)], timeout=6)
-        P.require(len(raw) <= 128 * 1024, "global_settings_output_bound")
+        P.require(len(raw) <= 256 * 1024, "global_settings_output_bound")
         result["settings"] = global_settings_projection(json.loads(raw))
         result["capture_active_after_inspection"] = capture.poll() is None
         P.require(result["capture_active_after_inspection"], "global_settings_capture_ended_during_inspection")
