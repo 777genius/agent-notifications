@@ -104,7 +104,7 @@ func testDirectChildIdentity() throws -> [String: Any] {
     return ["scope": "native_direct_child_kernel_identity_only", "stable_identity": true,
             "mismatched_identity_rejected": true, "reaped_child_identity_rejected": true,
             "terminal_birth_and_path_signal_guards": true,
-            "child_collected": !child.isRunning, "desktop_qualified": false]
+            "child_collected": !child.isRunning, "physical_focus_path_identity_guard": try testFocusPhysicalPathIdentity(), "desktop_qualified": false]
 }
 
 func publish(_ value: [String: Any]) {
@@ -724,6 +724,30 @@ struct TerminalAutomationContext: Decodable {
     return result
 }
 
+// POSIX realpath preserves physical /private/var identity across Foundation aliases.
+func focusPhysicalPath(_ path: String) -> String? {
+    guard path.hasPrefix("/"), path.utf8.count < 4096, !path.utf8.contains(0),
+          let resolved = path.withCString({ Darwin.realpath($0, nil) }) else { return nil }
+    defer { free(resolved) }
+    guard let value = String(validatingUTF8: resolved), value.utf8.count < 4096 else { return nil }
+    return value
+}
+
+func testFocusPhysicalPathIdentity() throws -> Bool {
+    let root = "/private/tmp/TEST-pi-focus-path-" + UUID().uuidString
+    let alias = String(root.dropFirst("/private".count)), link = root + "/alias"
+    try FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+    defer { try? FileManager.default.removeItem(atPath: root) }
+    try FileManager.default.createSymbolicLink(atPath: link, withDestinationPath: root)
+    guard focusPhysicalPath(root) == root, focusPhysicalPath(alias) == root, focusPhysicalPath(link) == root,
+          focusPhysicalPath(link) != link, focusPhysicalPath(root + "/missing") == nil,
+          focusPhysicalPath("relative") == nil, focusPhysicalPath(root + "\0ignored") == nil,
+          focusPhysicalPath("/" + String(repeating: "x", count: 4096)) == nil else {
+        throw ProbeError.unavailable("physical_focus_path_identity_guard_failed")
+    }
+    return true
+}
+
 // Diagnostic only: follow the original, real product click's public Screen
 // Recording prompt. This never grants permission or substitutes for focus.
 struct FocusPermissionContext: Decodable {
@@ -818,7 +842,7 @@ struct FocusPermissionContext: Decodable {
 @MainActor func focusPermissionScreenshot(_ path: String, deadline: Double) async throws -> Bool {
     let url = URL(fileURLWithPath: path), parent = url.deletingLastPathComponent()
     guard url.lastPathComponent == "focus-permission-pane.png", parent.lastPathComponent == "case-completion",
-          parent.path == parent.resolvingSymlinksInPath().path,
+          focusPhysicalPath(parent.path) == parent.path,
           parent.deletingLastPathComponent().lastPathComponent.hasPrefix("TEST-pi-installed-macos-") else {
         throw ProbeError.unavailable("screen_snapshot_owned_path_required")
     }
@@ -857,10 +881,13 @@ struct FocusPermissionContext: Decodable {
     var result: [String: Any] = ["scope": "original_click_screen_permission_inspection", "diagnostic_only": true,
         "qualification_input": false, "desktop_qualified": false, "maximum_seconds": 6, "status": "unavailable",
         "physical_open_settings_click": false, "permission_control_action_performed": false,
-        "responsible_row_association": "display_name_only_unverified", "screenshot_child_collected": true]
+        "responsible_row_association": "display_name_only_unverified", "screenshot_child_collected": true,
+        "observation_phase": "original_click_readonly", "normal_settings_route_requested": false]
     do {
         let helperURL = URL(fileURLWithPath: context.helperPath), executable = helperURL.appendingPathComponent("Contents/MacOS/terminal-notifier-modern")
-        guard helperURL.path == helperURL.resolvingSymlinksInPath().path, helperURL.pathExtension == "app",
+        let executablePath = context.helperPath + "/Contents/MacOS/terminal-notifier-modern"
+        guard focusPhysicalPath(context.helperPath) == context.helperPath, helperURL.pathExtension == "app",
+              focusPhysicalPath(executable.path) == executablePath,
               Bundle(url: helperURL)?.bundleIdentifier == "com.777genius.agent-notifications",
               context.helperSHA256.count == 64,
               let size = try? executable.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey]),
@@ -880,49 +907,76 @@ struct FocusPermissionContext: Decodable {
             guard let windows = attribute(AXUIElementCreateApplication(app.processIdentifier), kAXWindowsAttribute) as? [AXUIElement], windows.isEmpty else { throw ProbeError.unavailable("screen_settings_preexisting_window") }
         }
         result["settings_process_present_before"] = !before.isEmpty
+        let beforeStart = before.first.flatMap { processStartIdentity($0.processIdentifier) }
         var captured: (NSRunningApplication, String)?
         let captureDeadline = min(actionDeadline, started + 1)
+        var registeredCount = 0, matchingCount = 0, observations = 0
         while try consentMonotonicTime() < captureDeadline {
-            let apps = NSWorkspace.shared.runningApplications.filter { !$0.isTerminated && $0.bundleURL?.resolvingSymlinksInPath() == helperURL && $0.executableURL?.resolvingSymlinksInPath() == executable }
-            if apps.count == 1, let start = processStartIdentity(apps[0].processIdentifier), terminalAutomationUID(apps[0].processIdentifier) == Int(getuid()) { captured = (apps[0], start); break }
+            let registered = NSWorkspace.shared.runningApplications.filter {
+                !$0.isTerminated && $0.bundleIdentifier == "com.777genius.agent-notifications"
+            }
+            registeredCount = registered.count; observations += 1
+            guard registered.count <= 8 else { throw ProbeError.unavailable("original_callback_helper_ambiguous") }
+            let apps = registered.filter {
+                guard let bundle = $0.bundleURL, let binary = $0.executableURL else { return false }
+                return focusPhysicalPath(bundle.path) == context.helperPath && focusPhysicalPath(binary.path) == executablePath
+            }
+            matchingCount = apps.count
             if apps.count > 1 { throw ProbeError.unavailable("original_callback_helper_ambiguous") }
+            if let app = apps.first, let start = processStartIdentity(app.processIdentifier),
+               terminalAutomationUID(app.processIdentifier) == Int(getuid()),
+               let identity = try? terminalProcessIdentity(app.processIdentifier, expectedStart: start),
+               identity["status"] as? String == "observed", let path = identity["executable_path"] as? String,
+               focusPhysicalPath(path) == executablePath { captured = (app, start); break }
             try await Task.sleep(nanoseconds: 20_000_000)
         }
-        guard let (helper, helperStart) = captured else { throw ProbeError.unavailable("original_callback_helper_unavailable") }
-        result["captured_helper_pid"] = Int(helper.processIdentifier); result["captured_helper_start"] = helperStart
-        func requireActors() throws {
-            let origin = try terminalProcessIdentity(context.originPID, expectedStart: context.originStart)
-            guard try consentMonotonicTime() < actionDeadline, origin["status"] as? String == "observed",
-                  origin["executable_path"] as? String == context.originExecutable, terminalAutomationUID(context.originPID) == Int(getuid()),
-                  !helper.isTerminated, matchesProcessStart(helper.processIdentifier, helperStart),
-                  terminalAutomationUID(helper.processIdentifier) == Int(getuid()),
-                  (try? terminalProcessIdentity(helper.processIdentifier)["executable_path"] as? String) == executable.path else { throw ProbeError.unavailable("original_focus_actors_changed") }
+        result["callback_app_observations"] = observations
+        if observations > 0 {
+            result["registered_candidate_count"] = registeredCount
+            result["matching_candidate_count"] = matchingCount
         }
-        var found: FocusScreenDialog?
-        while try consentMonotonicTime() < actionDeadline {
-            try requireActors()
-            found = try focusScreenDialog(deadline: actionDeadline)
-            if found != nil { break }
-            try await Task.sleep(nanoseconds: 50_000_000)
+        if let (helper, start) = captured {
+            result["captured_helper_pid"] = Int(helper.processIdentifier); result["captured_helper_start"] = start
+        } else {
+            // Absence from this interval cannot prove that a callback is alive
+            // or ended. Preserve the original refusal; later UI has no authority.
+            result["failure_class"] = "probe_refusal"; result["refusal"] = "original_callback_helper_unavailable"
+            result["observation_phase"] = "postfailure_readonly"
         }
-        guard let dialog = found else { throw ProbeError.unavailable("original_screen_dialog_unavailable") }
-        result["dialog"] = ["owner_pid": Int(dialog.app.processIdentifier), "owner_start": dialog.start,
-            "owner_bundle": dialog.app.bundleIdentifier!, "owner_path": dialog.app.bundleURL!.path, "apple_signature_verified": true,
-            "fixed_requester": "ClaudeNotifier", "fixed_body_matched": true, "distinct_open_and_deny": true,
-            "open_bounds": [Double(dialog.openBox.minX), Double(dialog.openBox.minY), Double(dialog.openBox.width), Double(dialog.openBox.height)]]
-        try settingsPhysicalClick(dialog.open, box: dialog.openBox, owner: dialog.app.processIdentifier, deadline: actionDeadline) {
-            try requireActors()
-            guard matchesProcessStart(dialog.app.processIdentifier, dialog.start),
-                  let fresh = try focusScreenDialog(deadline: actionDeadline), fresh.app.processIdentifier == dialog.app.processIdentifier,
-                  fresh.start == dialog.start, CFEqual(fresh.element, dialog.element), CFEqual(fresh.open, dialog.open),
-                  fresh.box == dialog.box, fresh.openBox == dialog.openBox, fresh.denyBox == dialog.denyBox else { throw ProbeError.unavailable("original_screen_dialog_changed") }
+        do {
+            let dialogDeadline = min(actionDeadline - 2, (try consentMonotonicTime()) + 1)
+            guard try consentMonotonicTime() < dialogDeadline else { throw ProbeError.unavailable("screen_dialog_inventory_capped") }
+            if let dialog = try focusScreenDialog(deadline: dialogDeadline) {
+                result["dialog"] = ["owner_pid": Int(dialog.app.processIdentifier), "owner_start": dialog.start,
+                    "owner_bundle": dialog.app.bundleIdentifier!, "owner_path": dialog.app.bundleURL!.path, "apple_signature_verified": true,
+                    "fixed_requester": "ClaudeNotifier", "fixed_body_matched": true, "distinct_open_and_deny": true,
+                    "open_bounds": [Double(dialog.openBox.minX), Double(dialog.openBox.minY), Double(dialog.openBox.width), Double(dialog.openBox.height)]]
+            } else { throw ProbeError.unavailable("original_screen_dialog_unavailable") }
+        } catch {
+            result["dialog_observation_failure_class"] = error is ProbeError ? "probe_refusal" : "native_exception"
+            if let value = error as? ProbeError, case .unavailable(let code) = value { result["dialog_observation_refusal"] = code }
         }
-        result["physical_open_settings_click"] = true
+        // Normal fixed-pane navigation is independent readback, never input to
+        // the old dialog and never a claim that its original callback survived.
+        guard try consentMonotonicTime() < actionDeadline else { throw ProbeError.unavailable("screen_settings_readback_deadline_expired") }
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true; configuration.createsNewApplicationInstance = false
+        let pane = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")!
+        result["normal_settings_route_requested"] = true
+        let opened = try await NSWorkspace.shared.open([pane], withApplicationAt: URL(fileURLWithPath: settingsPath), configuration: configuration)
+        guard opened.bundleIdentifier == "com.apple.systempreferences", opened.bundleURL?.path == settingsPath,
+              opened.executableURL?.path == settingsPath + "/Contents/MacOS/System Settings",
+              terminalAutomationUID(opened.processIdentifier) == Int(getuid()),
+              let openedStart = processStartIdentity(opened.processIdentifier),
+              before.isEmpty || (before[0].processIdentifier == opened.processIdentifier && beforeStart == openedStart) else {
+            throw ProbeError.unavailable("settings_owner_identity_unverified")
+        }
+        result["settings_owner_pid"] = Int(opened.processIdentifier); result["settings_owner_start"] = openedStart
         while try consentMonotonicTime() < actionDeadline {
             let apps = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.systempreferences")
             if apps.count == 1 {
                 let app = apps[0]
-                if before.isEmpty || before[0].processIdentifier == app.processIdentifier,
+                if app.processIdentifier == opened.processIdentifier, matchesProcessStart(app.processIdentifier, openedStart),
                    app.bundleURL?.path == settingsPath, terminalAutomationUID(app.processIdentifier) == Int(getuid()), let start = processStartIdentity(app.processIdentifier),
                    let windows = attribute(AXUIElementCreateApplication(app.processIdentifier), kAXWindowsAttribute) as? [AXUIElement], windows.count == 1, let box = rectangle(windows[0]) {
                     preparation.app = app; preparation.start = start; preparation.window = windows[0]; preparation.windowBox = box
@@ -936,12 +990,13 @@ struct FocusPermissionContext: Decodable {
         try preparation.requireWindow()
         guard let app = preparation.app else { throw ProbeError.unavailable("owned_settings_window_not_observed") }
         result["settings_owner_pid"] = Int(app.processIdentifier); result["settings_owner_start"] = preparation.start
-        result["pane"] = settingsInspectionTree(app, deadline: actionDeadline).1
+        result["pane"] = settingsInspectionTree(app, deadline: actionDeadline, installedHelperPath: context.helperPath).1
         result["screenshot_captured"] = try await focusPermissionScreenshot(context.screenshotPath, deadline: deadline - 0.35)
-        result["status"] = "inspected"
+        if result["failure_class"] == nil { result["status"] = "inspected" }
     } catch {
-        result["failure_class"] = error is ProbeError ? "probe_refusal" : "native_exception"
-        if let value = error as? ProbeError, case .unavailable(let code) = value { result["refusal"] = code }
+        let prefix = result["failure_class"] == nil ? "" : "readback_"
+        result[prefix + "failure_class"] = error is ProbeError ? "probe_refusal" : "native_exception"
+        if let value = error as? ProbeError, case .unavailable(let code) = value { result[prefix + "refusal"] = code }
     }
     if preparation.window != nil {
         do { try await preparation.close(deadline: deadline) }
@@ -979,7 +1034,8 @@ struct FocusPermissionContext: Decodable {
 }
 
 @MainActor func settingsInspectionTree(_ app: NSRunningApplication, deadline: Double,
-                                       retainedSidebar: AXUIElement? = nil, retainedDetail: AXUIElement? = nil) -> ([SettingsInspectionNode], [String: Any]) {
+                                       retainedSidebar: AXUIElement? = nil, retainedDetail: AXUIElement? = nil,
+                                       installedHelperPath: String? = nil) -> ([SettingsInspectionNode], [String: Any]) {
     let root = AXUIElementCreateApplication(app.processIdentifier)
     let timeout = AXUIElementSetMessagingTimeout(root, 0.05)
     var nodes = [SettingsInspectionNode](), rows = [[String: Any]](), capped = timeout != .success
@@ -1050,6 +1106,9 @@ struct FocusPermissionContext: Decodable {
             row["value_settable_query_status"] = passive.status.rawValue
             if passive.status == .success { row["value_settable"] = passive.settable }
         }
+        if let installedHelperPath, let value = attribute(element, kAXURLAttribute),
+           CFGetTypeID(value) == CFURLGetTypeID(), let url = value as? URL, url.isFileURL,
+           let physical = focusPhysicalPath(url.path) { row["matches_installed_helper"] = physical == installedHelperPath }
         if let parent { row["parent"] = parent }
         if let box { row["bounds"] = [Double(box.minX), Double(box.minY), Double(box.width), Double(box.height)] }
         for (key, name) in [(kAXEnabledAttribute, "enabled"), (kAXSelectedAttribute, "selected")] {

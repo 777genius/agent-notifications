@@ -894,7 +894,7 @@ def global_settings_projection(value):
                      "children_query_status", "children_array_verified", "action_query_status", "action_array_verified", "subtree_complete",
                      "public_action_bits", "unclassified_action_count"}
             P.require(isinstance(row, dict) and fixed <= set(row)
-                      <= fixed | {"parent", "bounds", "enabled", "selected", "value_boolean", "value_enum", "value_settable_query_status", "value_settable"}
+                      <= fixed | {"parent", "bounds", "enabled", "selected", "value_boolean", "value_enum", "value_settable_query_status", "value_settable", "matches_installed_helper"}
                       and type(row["index"]) is int and row["index"] == index and type(row["depth"]) is int and 0 <= row["depth"] < 18
                       and row["role"] in roles and isinstance(row["fixed_labels"], list) and len(row["fixed_labels"]) <= len(labels)
                       and all(label in labels for label in row["fixed_labels"]) and type(row["navigation_press_action"]) is bool
@@ -923,7 +923,7 @@ def global_settings_projection(value):
             if "bounds" in row:
                 P.require(isinstance(row["bounds"], list) and len(row["bounds"]) == 4
                           and all(type(number) in (int, float) and math.isfinite(number) for number in row["bounds"]), "global_settings_bounds_invalid")
-            for key in ("enabled", "selected", "value_boolean"):
+            for key in ("enabled", "selected", "value_boolean", "matches_installed_helper"):
                 P.require(key not in row or type(row[key]) is bool, "global_settings_boolean_invalid")
             P.require("value_enum" not in row or row["value_enum"] in labels | {"on", "off"}, "global_settings_enum_invalid")
     return value
@@ -967,26 +967,30 @@ def focus_permission_projection(value):
     required = {'scope', 'diagnostic_only', 'qualification_input', 'desktop_qualified', 'maximum_seconds', 'status',
         'physical_open_settings_click', 'permission_control_action_performed', 'responsible_row_association',
         'screenshot_child_collected', 'owned_window_observed', 'owned_window_disappeared', 'close_click_performed',
-        'settings_process_collected', 'elapsed_seconds'}
+        'settings_process_collected', 'elapsed_seconds', 'observation_phase', 'normal_settings_route_requested'}
     optional = {'settings_process_present_before', 'captured_helper_pid', 'captured_helper_start', 'dialog',
-        'settings_owner_pid', 'settings_owner_start', 'pane', 'screenshot_captured', 'failure_class', 'refusal', 'cleanup_failure_class'}
+        'settings_owner_pid', 'settings_owner_start', 'pane', 'screenshot_captured', 'failure_class', 'refusal', 'cleanup_failure_class',
+        'registered_candidate_count', 'matching_candidate_count', 'callback_app_observations',
+        'dialog_observation_failure_class', 'dialog_observation_refusal', 'readback_failure_class', 'readback_refusal'}
     P.require(isinstance(value, dict) and required <= set(value) <= required | optional
               and value['scope'] == 'original_click_screen_permission_inspection'
               and value['diagnostic_only'] is True and value['qualification_input'] is False and value['desktop_qualified'] is False
               and value['maximum_seconds'] == 6 and value['status'] in ('inspected', 'unavailable')
-              and value['permission_control_action_performed'] is False and value['settings_process_collected'] is False
+              and value['permission_control_action_performed'] is False and value['physical_open_settings_click'] is False
+              and value['settings_process_collected'] is False
+              and value['observation_phase'] in ('original_click_readonly', 'postfailure_readonly')
               and value['responsible_row_association'] == 'display_name_only_unverified'
               and type(value['elapsed_seconds']) in (float, int) and 0 <= value['elapsed_seconds'] <= 6,
               'closed_focus_permission_receipt_required')
     for key in ('physical_open_settings_click', 'screenshot_child_collected', 'owned_window_observed', 'owned_window_disappeared',
-                'close_click_performed', 'settings_process_present_before', 'screenshot_captured'):
+                'close_click_performed', 'settings_process_present_before', 'screenshot_captured', 'normal_settings_route_requested'):
         P.require(key not in value or type(value[key]) is bool, 'focus_permission_boolean_required')
     for key in ('captured_helper_pid', 'settings_owner_pid'):
         P.require(key not in value or type(value[key]) is int and value[key] > 0, 'focus_permission_pid_required')
     for key in ('captured_helper_start', 'settings_owner_start'):
         P.require(key not in value or isinstance(value[key], str) and re.fullmatch(r'[1-9][0-9]{0,19}:[0-9]{1,6}', value[key]),
                   'focus_permission_birth_required')
-    for key in ('failure_class', 'cleanup_failure_class'):
+    for key in ('failure_class', 'cleanup_failure_class', 'dialog_observation_failure_class', 'readback_failure_class'):
         P.require(key not in value or value[key] in ('probe_refusal', 'native_exception'), 'focus_permission_failure_class_required')
     refusals = {'screen_dialog_inventory_unknown', 'screen_dialog_inventory_capped', 'screen_dialog_inventory_incomplete',
         'screen_dialog_ambiguous', 'screen_dialog_owner_unverified', 'screen_snapshot_owned_path_required', 'screen_snapshot_path_exists',
@@ -994,9 +998,27 @@ def focus_permission_projection(value):
         'unique_settings_instance_required', 'screen_settings_preexisting_window', 'original_callback_helper_ambiguous',
         'original_callback_helper_unavailable', 'original_focus_actors_changed', 'original_screen_dialog_unavailable',
         'original_screen_dialog_changed', 'owned_settings_window_not_observed', 'original_owned_settings_window_changed',
-        'settings_owned_pointer_unavailable', 'settings_owned_hit_unavailable', 'settings_owned_click_refused'}
-    P.require('refusal' not in value or value['refusal'] in refusals and value.get('failure_class') == 'probe_refusal',
-              'focus_permission_closed_refusal_required')
+        'settings_owned_pointer_unavailable', 'settings_owned_hit_unavailable', 'settings_owned_click_refused',
+        'settings_owner_identity_unverified', 'screen_settings_readback_deadline_expired'}
+    for prefix in ('', 'dialog_observation_', 'readback_'):
+        P.require(prefix + 'refusal' not in value or (value[prefix + 'refusal'] in refusals
+                  and value.get(prefix + 'failure_class') == 'probe_refusal'), 'focus_permission_closed_refusal_required')
+    if 'callback_app_observations' in value:
+        count = value['callback_app_observations']
+        P.require(type(count) is int and 0 <= count <= 64, 'focus_permission_observation_bound')
+        counts = {'registered_candidate_count', 'matching_candidate_count'}
+        P.require((counts <= set(value) if count else not counts & set(value)), 'focus_permission_counts_required')
+    else:
+        P.require(not {'registered_candidate_count', 'matching_candidate_count'} & set(value), 'focus_permission_counts_required')
+    if 'registered_candidate_count' in value:
+        P.require(type(value['registered_candidate_count']) is int and type(value['matching_candidate_count']) is int
+                  and 0 <= value['matching_candidate_count'] <= value['registered_candidate_count'] <= 8,
+                  'focus_permission_counts_bound')
+    P.require(('captured_helper_pid' in value) == ('captured_helper_start' in value), 'focus_permission_paired_birth_required')
+    if value['observation_phase'] == 'postfailure_readonly':
+        P.require(value['status'] == 'unavailable' and value.get('failure_class') == 'probe_refusal'
+                  and value.get('refusal') == 'original_callback_helper_unavailable'
+                  and 'captured_helper_pid' not in value, 'postfailure_observation_has_no_original_authority')
     if 'dialog' in value:
         dialog = value['dialog']
         P.require(isinstance(dialog, dict) and set(dialog) == {'owner_pid', 'owner_start', 'owner_bundle', 'owner_path',
@@ -1010,9 +1032,8 @@ def focus_permission_projection(value):
                   and dialog['fixed_body_matched'] is True and dialog['distinct_open_and_deny'] is True
                   and isinstance(dialog['open_bounds'], list) and len(dialog['open_bounds']) == 4
                   and all(type(x) in (int, float) and math.isfinite(x) for x in dialog['open_bounds']), 'focus_permission_dialog_required')
-    P.require(not value['physical_open_settings_click'] or {'dialog', 'captured_helper_pid', 'captured_helper_start'} <= set(value),
-              'focus_permission_original_dialog_and_helper_required')
     if 'pane' in value:
+        P.require(value['normal_settings_route_requested'], 'focus_permission_readonly_route_required')
         global_settings_projection({'scope': 'readonly_global_notification_settings', 'diagnostic_only': True, 'qualification_input': False,
             'desktop_qualified': False, 'maximum_seconds': 6, 'owner_pid': value.get('settings_owner_pid'),
             'owner_start_identity': value.get('settings_owner_start'), 'owner_uid': os.getuid(), 'owner_bundle': 'com.apple.systempreferences',
@@ -1044,7 +1065,9 @@ def inspect_original_click_permission(observer, case_root, app, helper_hash, ter
         P.require(now() < inspector_deadline, 'original_focus_inspection_deadline_expired')
         inspection = focus_permission_projection(json.loads(body))
         receipt['inspection'] = inspection
-        receipt['owned_resources_collected'] = inspection['screenshot_child_collected'] and (not inspection['owned_window_observed'] or inspection['owned_window_disappeared'])
+        receipt['owned_resources_collected'] = inspection['screenshot_child_collected'] and (
+            inspection['owned_window_observed'] and inspection['owned_window_disappeared']
+            if inspection['normal_settings_route_requested'] else not inspection['owned_window_observed'])
     except Exception as error:
         receipt['failure_class'] = type(error).__name__
     return receipt

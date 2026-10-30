@@ -27,15 +27,57 @@ class OriginalFocusPermissionInspection(unittest.TestCase):
             'desktop_qualified': False, 'maximum_seconds': 6, 'status': 'unavailable', 'physical_open_settings_click': False,
             'permission_control_action_performed': False, 'responsible_row_association': 'display_name_only_unverified',
             'screenshot_child_collected': True, 'owned_window_observed': False, 'owned_window_disappeared': False,
-            'close_click_performed': False, 'settings_process_collected': False, 'elapsed_seconds': 0.2}
+            'close_click_performed': False, 'settings_process_collected': False, 'elapsed_seconds': 0.2,
+            'observation_phase': 'original_click_readonly', 'normal_settings_route_requested': False}
 
     def test_closed_projection_refuses_private_text_permission_actions_and_unbound_navigation(self):
         self.assertEqual(M.focus_permission_projection(self.receipt()), self.receipt())
         for field, value in [('raw_ui_text', 'TEST-private'), ('permission_control_action_performed', True),
                 ('responsible_row_association', 'verified'), ('physical_open_settings_click', True), ('elapsed_seconds', 6.01),
-                ('failure_class', 'TEST-private'), ('refusal', 'TEST-private')]:
+                ('failure_class', 'TEST-private'), ('refusal', 'TEST-private'), ('observation_phase', 'TEST-private'),
+                ('normal_settings_route_requested', 'true'), ('readback_refusal', 'TEST-private'),
+                ('callback_app_observations', 65), ('registered_candidate_count', 1)]:
             with self.subTest(field=field), self.assertRaises(RuntimeError):
                 M.focus_permission_projection({**self.receipt(), field: value})
+
+    def test_postfailure_readback_preserves_missing_actor_and_rejects_authority_or_private_urls(self):
+        value = self.receipt()
+        value.update(observation_phase='postfailure_readonly', failure_class='probe_refusal',
+            refusal='original_callback_helper_unavailable', callback_app_observations=3,
+            registered_candidate_count=0, matching_candidate_count=0, normal_settings_route_requested=True,
+            settings_owner_pid=42, settings_owner_start='456:789', owned_window_observed=True,
+            owned_window_disappeared=True, close_click_performed=True)
+        value['pane'] = GlobalSettingsInspection().settings()['initial_tree']
+        value['pane']['nodes'][0]['matches_installed_helper'] = True
+        self.assertIs(M.focus_permission_projection(value), value)
+        for scenario in ('live_actor', 'success_status', 'erased_refusal', 'bad_counts', 'url_not_boolean', 'private_url'):
+            candidate = json.loads(json.dumps(value))
+            if scenario == 'live_actor':
+                candidate.update(captured_helper_pid=43, captured_helper_start='123:456')
+            elif scenario == 'success_status':
+                candidate['status'] = 'inspected'
+            elif scenario == 'erased_refusal':
+                del candidate['refusal']
+            elif scenario == 'bad_counts':
+                candidate['matching_candidate_count'] = 1
+            elif scenario == 'url_not_boolean':
+                candidate['pane']['nodes'][0]['matches_installed_helper'] = 'true'
+            else:
+                candidate['pane']['nodes'][0]['raw_url'] = '/TEST-private-path'
+            with self.subTest(scenario=scenario), self.assertRaises(RuntimeError) as caught:
+                M.focus_permission_projection(candidate)
+            self.assertNotIn('TEST-private', str(caught.exception))
+
+    def test_requested_settings_route_without_observed_window_never_claims_collection(self):
+        value = {**self.receipt(), 'normal_settings_route_requested': True}
+        info = mock.Mock(implementation='mach_absolute_time()', monotonic=True, adjustable=False)
+        terminal = mock.Mock(pid=41, process_start_identity='123:456', executable='/TEST/pi')
+        with mock.patch.object(M.time, 'get_clock_info', return_value=info):
+            result = M.inspect_original_click_permission(Path('/TEST/observer'), Path('/TEST/case-completion'),
+                Path('/TEST/helper.app'), 'a' * 64, terminal, 104,
+                execute=lambda *args, **kwargs: json.dumps(value), now=lambda: 100)
+        self.assertFalse(result['owned_resources_collected'])
+        self.assertFalse(result['desktop_qualified'])
 
     def test_inspection_consumes_original_absolute_deadline_and_never_qualifies(self):
         clock = [100.0]
