@@ -24,6 +24,7 @@ import wave
 
 REPO = Path(__file__).resolve().parents[1]
 CASES = ("completion", "question", "sound-off", "click-off", "desktop-off", "stale-origin")
+DIAGNOSTIC_CASES = ("click-off", "completion")
 CAPTURE_BUDGET_SECONDS = 45
 PROCESS_WATCH_SCAN_LIMIT = CAPTURE_BUDGET_SECONDS * 50 + 65
 POWERSHELL_LAUNCHER = '''param([Parameter(Mandatory=$true)][string]$Spec)
@@ -152,6 +153,25 @@ def cleanup_case(actions, *, primary_failure, report, case):
         # observation that caused it. A cleanup-only failure still refuses.
         if primary_failure is None:
             raise RuntimeError("native_case_cleanup_failed:" + failures[0]["failure"])
+
+
+def collect_diagnostic_case(actions, report, outcome, origin=None):
+    """Preserve each original result and cleanup; always reach the next control."""
+    try:
+        cleanup_case(actions, primary_failure=outcome.get("failure"), report=report, case=outcome["case"])
+    except Exception as error:
+        outcome["cleanup_failure"] = str(error)
+    outcome["cleanup_failures"] = [row for row in report.get("case_cleanup_failures", []) if row["case"] == outcome["case"]]
+    process = origin.process_cleanup if origin else None
+    outcome["original_process_subtree_collected"] = bool(origin and origin.pi_identity and process
+        and process.get("collected") is True and process.get("original_identity_changed") is False)
+    report.setdefault("diagnostic_case_results", []).append(outcome)
+
+
+def finalize_diagnostic(report):
+    # Scope flags alone do not exclude receipts from the real aggregate.
+    report.update(status="unqualified_diagnostic", diagnostic_only=True,
+                  desktop_qualified=False, native_product_observations_passed=False)
 
 
 def case_failure_observation(case_root, origin, provider, sink, data_root, snapshot, *, now=time.monotonic):
@@ -287,7 +307,8 @@ def start_process_watcher(origin, notifier_image, root, deadline, helpers, *, no
     ready, stop = root / "process-watch-ready.json", root / "process-watch.stop"
     native_receipt = root / "process-timeline-native.json"
     for path in (ready, ready.with_name(ready.name + ".pending"), stop, native_receipt,
-                 native_receipt.with_name(native_receipt.name + ".pending")):
+                 native_receipt.with_name(native_receipt.name + ".pending"),
+                 root / "delivery-exit.bmp", root / "delivery-after-500ms.bmp"):
         P.require(not path.exists() and not path.is_symlink(), "process_watch_fresh_path_required")
     handle = origin.process_handle.value
     startup = subprocess.STARTUPINFO()
@@ -325,7 +346,7 @@ def process_timeline(raw):
     P.require(len(raw) <= 65536, "process_watch_output_bound")
     value = json.loads(raw)
     P.require(isinstance(value, dict) and set(value) == {"observation_only", "qualification_input", "misses_remain_unknown",
-              "stop_reason", "elapsed_ms", "inventory_scans", "missed_candidates", "processes"}
+              "stop_reason", "elapsed_ms", "inventory_scans", "missed_candidates", "processes", "delivery_frames"}
               and value["observation_only"] is True and value["qualification_input"] is False
               and value["misses_remain_unknown"] is True, "process_watch_receipt_invalid")
     P.require(value["stop_reason"] in ("stop_requested", "deadline", "scan_bound", "observation_refused")
@@ -353,6 +374,24 @@ def process_timeline(raw):
         P.require((signaled is None and code is None) or (type(signaled) is int
                   and row["first_seen_ms"] <= signaled <= row["last_handle_observed_ms"]
                   and type(code) is int and 0 <= code <= 0xFFFFFFFF), "process_watch_row_exit")
+    frames = value["delivery_frames"]
+    phases = ["first_retained_system_powershell_exit", "after_500ms"]
+    P.require(isinstance(frames, list) and len(frames) <= 2, "delivery_frame_bound")
+    for index, frame in enumerate(frames):
+        P.require(isinstance(frame, dict) and set(frame) == {"phase", "pid", "birth_filetime", "exit_code", "exit_observed_ms",
+                  "started_ms", "completed_ms", "original_deadline_ms", "captured"}
+                  and frame["phase"] == phases[index] and type(frame["captured"]) is bool, "delivery_frame_shape")
+        actors = [row for row in value["processes"] if row["pid"] == frame["pid"] and row["birth_filetime"] == frame["birth_filetime"]
+                  and row["role"] == "system_powershell_descendant" and row["exit_code"] == frame["exit_code"]
+                  and row["exit_signaled_observed_ms"] == frame["exit_observed_ms"]]
+        P.require(len(actors) == 1 and all(type(frame[key]) is int for key in
+                  ("pid", "exit_code", "exit_observed_ms", "started_ms", "completed_ms", "original_deadline_ms"))
+                  and 0 <= frame["exit_observed_ms"] <= frame["started_ms"] <= frame["completed_ms"] <= value["elapsed_ms"]
+                  and frame["started_ms"] < frame["original_deadline_ms"] <= CAPTURE_BUDGET_SECONDS * 1000
+                  and (not frame["captured"] or frame["completed_ms"] < frame["original_deadline_ms"]), "delivery_frame_identity_or_time")
+        if index:
+            P.require(all(frame[key] == frames[0][key] for key in ("pid", "birth_filetime", "exit_code", "exit_observed_ms", "original_deadline_ms"))
+                      and frame["started_ms"] >= frame["exit_observed_ms"] + 500, "delivery_frame_original_followup_required")
     return value
 
 
@@ -648,7 +687,8 @@ def run(args):
               "host_os": platform.system(), "host_architecture": platform.machine(), "script_sha256": P.sha(__file__),
               "candidate_binary_sha256": P.sha(args.candidate), "package_sha256": P.sha(args.package),
               "pi_binary_sha256": P.sha(args.pi_executable), "native_observer_sha256": P.sha(args.observer),
-              "desktop_qualified": False, "native_product_observations_passed": False, "product_executed": False, "cases": []}
+              "desktop_qualified": False, "native_product_observations_passed": False, "product_executed": False, "cases": [],
+              "diagnostic_only": True, "diagnostic_case_order": list(DIAGNOSTIC_CASES)}
     report["execution_mode"] = "x64_emulation" if platform.machine().lower() in ("arm64", "aarch64") else "native_amd64"
     native, sink, initial_provider, terminals, helpers = Native(args.observer), None, None, [], []
     diagnostic_title = None
@@ -718,14 +758,24 @@ def run(args):
             report["native_shell_state_before"] = shell_notification_state()
         except Exception as error:
             report["native_shell_state_before"] = {"status": "unavailable", "failure": str(error)[-2000:]}
-        for name in CASES:
+        for name in DIAGNOSTIC_CASES:
+            if name == "completion" and not report["diagnostic_case_results"][-1]["original_process_subtree_collected"]:
+                report["diagnostic_case_results"].append({"case": name, "observation": "unavailable",
+                    "reason": "plain_case_process_collection_unverified", "cleanup_failures": []})
+                continue
             case_root = root / ("case-" + name)
-            provider = F.Provider("success", hold_reply=name != "question")
+            provider = case_sink = None
             origin = distractor = capture = neutral = watcher = process_watcher = None
             case_deadline = None
             primary_failure = None
+            outcome = {"case": name, "observation": "not_completed"}
+            report.pop("failure_observation_attempted", None)
             stop_capture, stop_neutral = case_root / "capture.stop", case_root / "neutral.stop"
             try:
+                # A failed plain case can leave its task_complete row unread.
+                # The protocol control must observe its own independent sink.
+                case_sink = P.Webhooks()
+                provider = F.Provider("success", hold_reply=name != "question")
                 case_env = F.prepare(case_root, provider, "success", agent_dir=root / "agent")
                 case_env.update(TEST_PI_DEFER_DIALOG="1", CLAUDE_PLUGIN_ROOT=str(root / "foreign-TEST-root"))
                 nonce = uuid.uuid4().hex
@@ -735,7 +785,7 @@ def run(args):
                 (case_root / "project").rename(project)
                 distraction = case_root / distractor_title; distraction.mkdir()
                 desktop, sound, click = name != "desktop-off", name != "sound-off", name != "click-off"
-                P.configure(root / "global/config.json", args.assets_root / "config/config.json", sink, desktop=desktop, sound=sound, click=click)
+                P.configure(root / "global/config.json", args.assets_root / "config/config.json", case_sink, desktop=desktop, sound=sound, click=click)
                 cfg = json.loads((root / "global/config.json").read_text(encoding="utf-8"))
                 # Match the actual configured title exactly, without the
                 # default presentation suffix " [Pi]".
@@ -787,7 +837,7 @@ def run(args):
                 # origin collection; desktop-off keeps its full post-delivery
                 # absence scan rather than missing a late unwanted banner.
                 if name in ("stale-origin", "desktop-off"):
-                    await_case_webhook(sink, event, min(webhook_deadline, case_deadline), timing, capture_started)
+                    await_case_webhook(case_sink, event, min(webhook_deadline, case_deadline), timing, capture_started)
                 image = case_root / "actual-product-banner.bmp"
                 click_observation = None
                 if desktop:
@@ -829,7 +879,7 @@ def run(args):
                     P.require(found.get("found") is False and native("foreground")["hwnd"] == distractor.window["hwnd"],
                               "disabled_desktop_had_native_effect")
                 if name not in ("stale-origin", "desktop-off"):
-                    await_case_webhook(sink, event, min(webhook_deadline, case_deadline), timing, capture_started)
+                    await_case_webhook(case_sink, event, min(webhook_deadline, case_deadline), timing, capture_started)
                 if not stop_capture.exists():
                     time.sleep(0.5)
                     stop_capture.write_text("stop\n")
@@ -862,7 +912,7 @@ def run(args):
                               and sum(row["type"] == "ui_prompt_end" for row in rows) == 1, "native_question_lifecycle_wrong")
                 else:
                     F.verify_case("success", rows, provider.requests)
-                sink.quiet()
+                case_sink.quiet()
                 report["cases"].append({"case": name, "native_mode": "tui", "banner_observed": desktop,
                     "real_mouse_click": desktop, "pending_question_at_click": name == "question", "audio": audio,
                     "configured_cue_envelope_match": correlation, "audio_sha256": P.sha(pcm),
@@ -872,27 +922,36 @@ def run(args):
                     "unchanged_click_observation": click_observation,
                     "checks": {key: True for key in ("native_tui", "configured_banner_policy", "configured_audio_policy",
                                "configured_click_policy", "native_event_counts", "ambient_root_isolated", "owned_terminal_collected")}})
+                outcome["observation"] = "passed"
             except Exception as error:
                 primary_failure = str(error)
-                report["native_observation_failure"] = {"case": name, "failure": primary_failure}
-                report["case_failure"] = {"case": name, "failure": str(error)}
+                outcome.update(observation="failed", failure=primary_failure)
+                report.setdefault("failure", primary_failure)
+                report.setdefault("native_observation_failure", {"case": name, "failure": primary_failure})
+                report.setdefault("case_failure", outcome)
                 try:
-                    report["case_failure"]["observations"] = case_failure_observation(
-                        case_root, origin, provider, sink, Path(view["binding"]["dataRoot"]), observe_failure)
+                    outcome["observations"] = case_failure_observation(
+                        case_root, origin, provider, case_sink, Path(view["binding"]["dataRoot"]), observe_failure)
+                    failure_image = root / "failure-desktop.bmp"
+                    if failure_image.is_file() and not failure_image.is_symlink() and failure_image.stat().st_size <= 64 * 1024 * 1024:
+                        shutil.copy2(failure_image, case_root / "failure-desktop.bmp")
                 except Exception as diagnostic_error:
-                    report["case_failure"]["diagnostic_error_class"] = type(diagnostic_error).__name__
-                raise
+                    outcome["diagnostic_error_class"] = type(diagnostic_error).__name__
             finally:
                 # Stop observation before test cleanup changes any actor's exit.
                 actions = [("process_watcher", lambda: collect_process_watcher(process_watcher, case_root / "process-timeline.json"))]
                 actions.extend((role, terminal.close) for role, terminal in (("origin", origin), ("distractor", distractor)) if terminal)
                 actions.extend((("capture", lambda: stop_helper(capture, stop_capture)),
-                                ("neutral", lambda: stop_helper(neutral, stop_neutral)), ("provider", provider.close),
+                                ("neutral", lambda: stop_helper(neutral, stop_neutral)), ("provider", lambda: provider.close() if provider else None),
+                                ("webhook", lambda: case_sink.close() if case_sink else None),
                                 ("toast_watcher", lambda: collect_toast_watcher(watcher, case_root / "early-toast-observation.json", case_deadline))))
-                cleanup_case(actions, primary_failure=primary_failure, report=report, case=name)
-        report.update(status="passed_native_product_observations", native_product_observations_passed=True)
+                collect_diagnostic_case(actions, report, outcome, origin)
+                if case_sink:
+                    outcome["webhooks"] = {"failure_count": len(case_sink.failures), "rows": [
+                        {key: row[key] for key in ("status", "received_monotonic")} for row in case_sink.rows]}
+        report["diagnostic_comparison_executed"] = True
     except Exception as error:
-        report["failure"] = str(error)
+        report.setdefault("failure", str(error))
         observe_failure()
     finally:
         failures = [row["failure"] for row in report.get("case_cleanup_failures", [])]
@@ -920,9 +979,11 @@ def run(args):
         report["owned_children_collected"] = not failures and all(t.closed for t in terminals) and all(p.poll() is not None for p in helpers)
         if failures:
             report.update(status="failed", native_product_observations_passed=False, cleanup_failures=failures)
+        finalize_diagnostic(report)
         args.report.parent.mkdir(parents=True, exist_ok=True)
         for case_root in root.glob("case-*"):
-            for name in ("native-output.s16le", "actual-product-banner.bmp", "witness.jsonl",
+            for name in ("native-output.s16le", "actual-product-banner.bmp", "witness.jsonl", "failure-desktop.bmp",
+                         "delivery-exit.bmp", "delivery-after-500ms.bmp",
                          "early-product-banner.bmp", "early-toast-observation.bmp", "early-toast-ready.json", "early-toast-observation.json",
                          "process-watch-ready.json", "process-timeline.json",
                          "origin/launch-state.json", "origin/launch-at-failure.json", "origin/process.exit", "origin/launch-failure.bmp",

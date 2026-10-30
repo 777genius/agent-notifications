@@ -131,6 +131,7 @@ struct TimelineProcess {
     bool signaled = false;
     DWORD exitCode = 0;
 };
+static void screenshot(const fs::path& path);
 static std::string watchOwnedProcesses(std::unique_ptr<OwnedProcess> root, const std::wstring& notifierImage,
         const fs::path& ready, const fs::path& stop, ULONGLONG deadline) {
     const auto started = GetTickCount64(), originalBirth = root->created;
@@ -165,6 +166,33 @@ static std::string watchOwnedProcesses(std::unique_ptr<OwnedProcess> root, const
     }
     unsigned scans = 0, missed = 0;
     std::string reason = "deadline";
+    // Temporary, nonqualifying pixels from a retained system PowerShell child.
+    // No notification API or second watcher is introduced before delivery.
+    OwnedProcess* deliveryPowerShell = nullptr;
+    ULONGLONG deliveryBirth = 0, deliveryExit = 0;
+    DWORD deliveryExitCode = 0;
+    bool followupAttempted = false;
+    std::string deliveryFrames = "[";
+    auto captureDelivery = [&](const char* phase, const wchar_t* name) {
+        if (GetTickCount64() >= deadline) return;
+        processBirth(*deliveryPowerShell);
+        need(deliveryPowerShell->created == deliveryBirth && !running(deliveryPowerShell->handle), "delivery_frame_retained_child_changed");
+        const auto path = ready.parent_path() / name;
+        need(!fs::exists(fs::symlink_status(path)), "delivery_frame_fresh_path_required");
+        const auto began = GetTickCount64();
+        if (began >= deadline) return;
+        bool captured = false;
+        try {
+            screenshot(path); captured = GetTickCount64() < deadline;
+        } catch (...) {} // Missing/late pixels remain unknown, never absence proof.
+        const auto completed = GetTickCount64();
+        if (deliveryFrames.size() > 1) deliveryFrames += ',';
+        deliveryFrames += "{\"phase\":\"" + std::string(phase) + "\",\"pid\":" + std::to_string(deliveryPowerShell->pid)
+            + ",\"birth_filetime\":\"" + std::to_string(deliveryBirth) + "\",\"exit_code\":" + std::to_string(deliveryExitCode)
+            + ",\"exit_observed_ms\":" + std::to_string(deliveryExit - started) + ",\"started_ms\":" + std::to_string(began - started)
+            + ",\"completed_ms\":" + std::to_string(completed - started) + ",\"original_deadline_ms\":" + std::to_string(deadline - started)
+            + ",\"captured\":" + jsonBool(captured) + "}";
+    };
     auto inventory = [&]() {
         need(scans < processWatchScanLimit && GetTickCount64() < deadline, "process_watch_scan_bound");
         ++scans;
@@ -220,9 +248,17 @@ static std::string watchOwnedProcesses(std::unique_ptr<OwnedProcess> root, const
                 row.lastObserved = now - started;
                 if (exited) {
                     row.signaled = true; row.signaledObserved = now - started; row.exitCode = exitCode;
+                    if (!ready.empty() && !deliveryPowerShell && row.role == "system_powershell_descendant") {
+                        deliveryPowerShell = row.process.get(); deliveryBirth = row.process->created;
+                        deliveryExit = now; deliveryExitCode = exitCode;
+                        captureDelivery("first_retained_system_powershell_exit", L"delivery-exit.bmp");
+                    }
                 }
             }
             const auto now = GetTickCount64();
+            if (deliveryPowerShell && !followupAttempted && now >= deliveryExit + 500 && now < deadline) {
+                followupAttempted = true; captureDelivery("after_500ms", L"delivery-after-500ms.bmp");
+            }
             if (now < deadline) Sleep(static_cast<DWORD>(std::min<ULONGLONG>(20, deadline - now)));
         }
     } catch (...) {
@@ -242,7 +278,8 @@ static std::string watchOwnedProcesses(std::unique_ptr<OwnedProcess> root, const
     rows += ']';
     auto result = "{\"observation_only\":true,\"qualification_input\":false,\"misses_remain_unknown\":true,\"stop_reason\":\""
         + reason + "\",\"elapsed_ms\":" + std::to_string(GetTickCount64() - started) + ",\"inventory_scans\":"
-        + std::to_string(scans) + ",\"missed_candidates\":" + std::to_string(missed) + ",\"processes\":" + rows + "}";
+        + std::to_string(scans) + ",\"missed_candidates\":" + std::to_string(missed) + ",\"processes\":" + rows
+        + ",\"delivery_frames\":" + deliveryFrames + "]}";
     need(result.size() < 65536, "process_watch_receipt_bound");
     return result;
 }

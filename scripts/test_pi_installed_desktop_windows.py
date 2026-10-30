@@ -171,6 +171,36 @@ class LauncherDiagnosticsTests(unittest.TestCase):
 
 
 class CaseCleanupTests(unittest.TestCase):
+    def test_temporary_comparison_preserves_failed_plain_and_separate_control_cleanup(self):
+        report = {"failure": "original_plain_failure"}
+        plain = {"case": "click-off", "observation": "failed", "failure": report["failure"]}
+        control = {"case": "completion", "observation": "passed"}
+        original = SimpleNamespace(pi_identity={"pid": 41}, process_cleanup={"collected": True, "original_identity_changed": False})
+        refused, remaining, control_close = Mock(side_effect=RuntimeError("window_cleanup_refused")), Mock(), Mock()
+        W.collect_diagnostic_case((("window", refused), ("capture", remaining)), report, plain, original)
+        W.collect_diagnostic_case((("origin", control_close),), report, control, original)
+        remaining.assert_called_once_with()
+        control_close.assert_called_once_with()
+        self.assertEqual(report["failure"], "original_plain_failure")
+        self.assertEqual(report["diagnostic_case_results"], [plain, control])
+        self.assertEqual(plain["failure"], "original_plain_failure")
+        self.assertTrue(plain["original_process_subtree_collected"])
+        self.assertEqual(len(plain["cleanup_failures"]), 1)
+        self.assertEqual(control["cleanup_failures"], [])
+        unknown = {"case": "click-off", "observation": "failed", "failure": "first"}
+        W.collect_diagnostic_case((), {}, unknown, SimpleNamespace(pi_identity={"pid": 41}, process_cleanup=None))
+        self.assertFalse(unknown["original_process_subtree_collected"])
+
+    def test_temporary_finalizer_forces_real_aggregate_refusal_even_for_valid_control(self):
+        spec = importlib.util.spec_from_file_location("pi_aggregate_guards", Path(__file__).with_name("test_pi_qualification_aggregate.py"))
+        guards = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(guards)
+        receipts = guards.metadata("windows")
+        self.assertEqual(guards.A.qualify("windows", guards.SOURCE, *receipts)["status"], "qualified")
+        W.finalize_diagnostic(receipts[-1])
+        with self.assertRaisesRegex(ValueError, "^native_desktop_or_collection_not_observed$"):
+            guards.A.qualify("windows", guards.SOURCE, *receipts)
+
     def test_initial_shell_observation_does_not_launch_or_warm_winrt(self):
         shell = Mock()
         def observed(pointer):
@@ -366,6 +396,7 @@ class ProcessTimelineTests(unittest.TestCase):
     def timeline(self):
         return {"observation_only": True, "qualification_input": False, "misses_remain_unknown": True,
                 "stop_reason": "stop_requested", "elapsed_ms": 70, "inventory_scans": 3, "missed_candidates": 1,
+                "delivery_frames": [],
                 "processes": [{"pid": 41, "parent_pid": 0, "birth_filetime": "123456789", "role": "original_pi",
                     "image_leaf": "pi.exe", "first_seen_ms": 0, "last_handle_observed_ms": 60,
                     "exit_signaled_observed_ms": None, "exit_code": None},
@@ -431,6 +462,28 @@ class ProcessTimelineTests(unittest.TestCase):
             broken["processes"][1][field] = change
             with self.subTest(field=field), self.assertRaises(RuntimeError):
                 W.process_timeline(json.dumps(broken).encode())
+
+    def test_delivery_pixels_require_the_retained_exit_and_keep_late_capture_unknown(self):
+        value = self.timeline()
+        value["processes"][1].update(role="system_powershell_descendant", image_leaf="powershell.exe")
+        frame = {"phase": "first_retained_system_powershell_exit", "pid": 42, "birth_filetime": "123456790", "exit_code": 0,
+                 "exit_observed_ms": 40, "started_ms": 41, "completed_ms": 45, "original_deadline_ms": 50, "captured": True}
+        value["delivery_frames"] = [frame]
+        self.assertEqual(W.process_timeline(json.dumps(value).encode()), value)
+        frame.update(completed_ms=55, captured=False)
+        self.assertFalse(W.process_timeline(json.dumps(value).encode())["delivery_frames"][0]["captured"])
+        for changes in ({"captured": True}, {"pid": 43}, {"exit_observed_ms": 39}, {"raw": "TEST-private-value"}):
+            broken = json.loads(json.dumps(value)); broken["delivery_frames"][0].update(changes)
+            with self.subTest(changes=changes), self.assertRaises(RuntimeError):
+                W.process_timeline(json.dumps(broken).encode())
+        value["elapsed_ms"] = 700
+        second = {**frame, "phase": "after_500ms", "started_ms": 540, "completed_ms": 550, "original_deadline_ms": 650, "captured": True}
+        frame.update(original_deadline_ms=650)
+        value["delivery_frames"].append(second)
+        self.assertEqual(len(W.process_timeline(json.dumps(value).encode())["delivery_frames"]), 2)
+        second["started_ms"] = 539
+        with self.assertRaisesRegex(RuntimeError, "delivery_frame_original_followup_required"):
+            W.process_timeline(json.dumps(value).encode())
         for field, change in (("processes", [self.timeline()["processes"][0]] * 65), ("inventory_scans", W.PROCESS_WATCH_SCAN_LIMIT + 1)):
             broken = {**self.timeline(), field: change}
             with self.subTest(field=field), self.assertRaises(RuntimeError):
