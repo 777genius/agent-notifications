@@ -427,6 +427,81 @@ static std::wstring elementName(IUIAutomationElement* element) {
     std::wstring value = raw ? raw : L""; if (raw) SysFreeString(raw);
     need(value.size() <= 4096, "native_ui_text_bound"); return value;
 }
+// TEMPORARY: one normal Win+N after the original failure. Never toggle DND,
+// invoke a card, or emit unknown UI text. This cannot qualify a product banner.
+static void notificationCenterDiagnostic(const std::wstring& expected, const fs::path& image) {
+    need(testTitle(expected), "owned_notification_title_required");
+    const HWND shellWindow = GetShellWindow(); OwnedProcess shell; shell.pid = owner(shellWindow);
+    shell.handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, shell.pid);
+    need(shellWindow && shell.handle && running(shell.handle), "notification_shell_unavailable"); processFacts(shell);
+    wchar_t windows[32768]{}; const auto length = GetWindowsDirectoryW(windows, 32768);
+    need(length && length < 32768 && sameImage(shell.image, (fs::path(windows) / L"explorer.exe").wstring()), "notification_shell_image_required");
+    HDESK desktop = OpenInputDesktop(0, FALSE, DESKTOP_READOBJECTS); wchar_t desktopName[128]{}; DWORD bytes = 0;
+    const bool inputReady = desktop && GetUserObjectInformationW(desktop, UOI_NAME, desktopName, sizeof desktopName, &bytes) && std::wstring(desktopName) == L"Default";
+    if (desktop) CloseDesktop(desktop); need(inputReady, "notification_input_desktop_required");
+    for (int key : {VK_LWIN, VK_RWIN, static_cast<int>('N'), VK_SHIFT, VK_CONTROL, VK_MENU})
+        need(!(GetAsyncKeyState(key) & 0x8000), "notification_existing_key_press");
+    INPUT keys[4]{}; for (auto& value : keys) value.type = INPUT_KEYBOARD;
+    keys[0].ki.wVk = VK_LWIN; keys[1].ki.wVk = 'N'; keys[2].ki.wVk = 'N'; keys[2].ki.dwFlags = KEYEVENTF_KEYUP;
+    keys[3].ki.wVk = VK_LWIN; keys[3].ki.dwFlags = KEYEVENTF_KEYUP;
+    need(running(shell.handle) && GetShellWindow() == shellWindow, "notification_shell_changed");
+    const UINT sent = SendInput(4, keys, sizeof(INPUT)); const DWORD inputError = sent == 4 ? ERROR_SUCCESS : GetLastError();
+    bool releaseUnknown = false;
+    // A partial prefix owns only these unmatched downs; never release a user's
+    // pre-existing keys. Finish releases before any fallible UIA operation.
+    if (sent == 2) { INPUT up = keys[2]; releaseUnknown = SendInput(1, &up, sizeof(INPUT)) != 1; }
+    if (sent > 0 && sent < 4) { INPUT up = keys[3]; releaseUnknown = (SendInput(1, &up, sizeof(INPUT)) != 1) || releaseUnknown; }
+    need(sent == 4 && !releaseUnknown, "notification_center_chord_unconfirmed");
+    pump(750); screenshot(image);
+    ComPtr<IUIAutomation> automation; hrcheck(CoCreateInstance(CLSID_CUIAutomation, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&automation)));
+    ComPtr<IUIAutomationElement> root; hrcheck(automation->GetRootElement(&root));
+    ComPtr<IUIAutomationTreeWalker> walker; hrcheck(automation->get_ControlViewWalker(&walker));
+    std::string rows = "["; int retained = 0;
+    for (const auto& needle : {std::wstring(L"Do not disturb"), expected}) {
+        VARIANT value{}; value.vt = VT_BSTR; value.bstrVal = SysAllocString(needle.c_str());
+        const auto flags = needle == expected ? PropertyConditionFlags_MatchSubstring
+            : static_cast<PropertyConditionFlags>(PropertyConditionFlags_MatchSubstring | PropertyConditionFlags_IgnoreCase);
+        ComPtr<IUIAutomationCondition> match; const auto made = automation->CreatePropertyConditionEx(UIA_NamePropertyId, value, flags, &match); VariantClear(&value); hrcheck(made);
+        ComPtr<IUIAutomationElementArray> found; hrcheck(root->FindAll(TreeScope_Descendants, match.Get(), &found));
+        int count = 0; hrcheck(found->get_Length(&count)); need(count <= 8, "notification_center_match_bound");
+        for (int i = 0; i < count; i++) {
+            ComPtr<IUIAutomationElement> element; hrcheck(found->GetElement(i, &element)); int pid = 0; hrcheck(element->get_CurrentProcessId(&pid));
+            if (!shellOwner(static_cast<DWORD>(pid))) continue;
+            OwnedProcess provider; provider.pid = static_cast<DWORD>(pid);
+            provider.handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, provider.pid);
+            if (!provider.handle || !running(provider.handle)) continue; processFacts(provider);
+            const auto name = elementName(element.Get()); const bool dnd = needle != expected;
+            const char* label = name == L"Do not disturb is on" || name == L"Turn off do not disturb" ? "on"
+                : name == L"Do not disturb is off" || name == L"Turn on do not disturb" ? "off" : "unavailable";
+            if (dnd && name != L"Do not disturb" && std::string(label) == "unavailable") continue;
+            const char* toggle = "unavailable"; ComPtr<IUIAutomationTogglePattern> pattern;
+            if (dnd && SUCCEEDED(element->GetCurrentPatternAs(UIA_TogglePatternId, IID_PPV_ARGS(&pattern)))) {
+                ToggleState state{}; hrcheck(pattern->get_CurrentToggleState(&state));
+                toggle = state == ToggleState_On ? "on" : state == ToggleState_Off ? "off" : "indeterminate";
+            }
+            CONTROLTYPEID type = 0; BOOL offscreen = TRUE, enabled = FALSE, clickable = FALSE; POINT point{};
+            hrcheck(element->get_CurrentControlType(&type)); hrcheck(element->get_CurrentIsOffscreen(&offscreen)); hrcheck(element->get_CurrentIsEnabled(&enabled));
+            hrcheck(element->GetClickablePoint(&point, &clickable)); HWND nativeRoot = nullptr; auto current = element;
+            for (int depth = 0; current && depth < 6; depth++) {
+                UIA_HWND hwnd{}; hrcheck(current->get_CurrentNativeWindowHandle(&hwnd));
+                if (hwnd) { nativeRoot = GetAncestor(reinterpret_cast<HWND>(hwnd), GA_ROOT); break; }
+                ComPtr<IUIAutomationElement> parent; hrcheck(walker->GetParentElement(current.Get(), &parent)); current = parent;
+            }
+            wchar_t rootClass[128]{}; if (nativeRoot) GetClassNameW(nativeRoot, rootClass, 128);
+            const char* klass = std::wstring(rootClass) == L"Windows.UI.Core.CoreWindow" ? "core_window"
+                : std::wstring(rootClass) == L"Shell_TrayWnd" ? "taskbar" : nativeRoot ? "other" : "unavailable";
+            need(running(provider.handle), "notification_provider_changed");
+            if (retained++) rows += ',';
+            rows += std::string("{\"kind\":\"") + (dnd ? "dnd" : "owned_title") + "\",\"provider_pid\":" + std::to_string(pid)
+                + ",\"same_owner_verified\":true,\"name_exact_title\":" + jsonBool(name == expected) + ",\"label_state\":\"" + label + "\",\"toggle_state\":\"" + toggle
+                + "\",\"control_type\":" + std::to_string(type) + ",\"offscreen\":" + jsonBool(offscreen) + ",\"enabled\":" + jsonBool(enabled) + ",\"clickable\":" + jsonBool(clickable)
+                + ",\"root_hwnd\":" + std::to_string(reinterpret_cast<uintptr_t>(nativeRoot)) + ",\"root_class\":\"" + klass + "\"}";
+        }
+    }
+    need(running(shell.handle) && GetShellWindow() == shellWindow, "notification_shell_changed");
+    std::cout << "{\"scope\":\"post_failure_notification_center_readonly\",\"qualification_input\":false,\"win_n_events\":" << sent
+              << ",\"input_error\":" << inputError << ",\"shell_owner_verified\":true,\"key_release_unknown\":false,\"rows\":" << rows << "]}\n";
+}
 struct ToastTrace {
     int maxTitleMatches = 0;
     bool shellProviderSeen = false;
@@ -657,6 +732,7 @@ int wmain(int argc, wchar_t** argv) {
             std::cout << "{\"hwnd\":" << reinterpret_cast<uintptr_t>(window) << ",\"pid\":" << owner(window) << "}\n"; return 0;
         }
         if (mode == L"terminal-settings-readonly" && argc == 5) { terminalSettingsDiagnostic(argv[2], argv[3], argv[4]); return 0; }
+        if (mode == L"notification-center-readonly" && argc == 4) { notificationCenterDiagnostic(argv[2], argv[3]); return 0; }
         if ((mode == L"activate" || mode == L"close" || mode == L"type") && argc >= 5) {
             HWND window = nullptr;
             try { window = boundWindow(argv[2], argv[3], argv[4]); }

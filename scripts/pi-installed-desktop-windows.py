@@ -443,6 +443,16 @@ def run(args):
             report["terminal_settings_diagnostic"] = native("terminal-settings-readonly", original.window["hwnd"], original.window["pid"], original.window["title"]) if original else {"status": "unavailable"}
         except Exception:
             report["terminal_settings_diagnostic"] = {"status": "unavailable"}
+        # TEMPORARY: normal read-only UI observation only after the primary
+        # failure and confirmed own history. It cannot create a passing banner.
+        if diagnostic_title:
+            try:
+                readiness = toast_readiness(diagnostic_title)
+                report["native_toast_readiness_after"] = readiness
+                if readiness.get("status") == "observed" and readiness.get("setting") == "Enabled" and readiness.get("exact_title_history_matches") == 1:
+                    report["notification_center_diagnostic"] = native("notification-center-readonly", diagnostic_title, root / "notification-center.bmp")
+            except Exception:
+                report["notification_center_diagnostic"] = {"status": "unavailable"}
 
     try:
         fixture = A.Fixture(args.windows_audio_fixture) if args.windows_audio_fixture else None
@@ -655,10 +665,11 @@ def run(args):
             initial_provider.close()
         if sink:
             sink.close()
-        try:
-            report["native_toast_readiness_after"] = toast_readiness(diagnostic_title)
-        except Exception as error:
-            report["native_toast_readiness_after"] = {"status": "unavailable", "failure": str(error)[-2000:]}
+        if "native_toast_readiness_after" not in report:
+            try:
+                report["native_toast_readiness_after"] = toast_readiness(diagnostic_title)
+            except Exception as error:
+                report["native_toast_readiness_after"] = {"status": "unavailable", "failure": str(error)[-2000:]}
         report["owned_children_collected"] = not failures and all(t.closed for t in terminals) and all(p.poll() is not None for p in helpers)
         if failures:
             report.update(status="failed", native_product_observations_passed=False, cleanup_failures=failures)
@@ -676,6 +687,9 @@ def run(args):
         failure_image = root / "failure-desktop.bmp"
         if failure_image.is_file() and failure_image.stat().st_size <= 64 * 1024 * 1024:
             shutil.copy2(failure_image, args.report.parent / failure_image.name)
+        center_image = root / "notification-center.bmp"
+        if center_image.is_file() and center_image.stat().st_size <= 64 * 1024 * 1024:
+            shutil.copy2(center_image, args.report.parent / center_image.name)
         mark_diagnostic_unqualified(report)
         args.report.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
         print(json.dumps({"status": report["status"], "failure": report.get("failure"), "desktop_qualified": False}))
