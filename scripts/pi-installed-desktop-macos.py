@@ -846,7 +846,7 @@ def global_settings_projection(value):
     required = {"scope", "diagnostic_only", "qualification_input", "desktop_qualified", "maximum_seconds", "owner_pid",
                 "owner_start_identity", "owner_uid", "owner_bundle", "owner_path", "apple_signature_verified", "settings_left_open",
                 "settings_present_before", "opened_new_settings_instance", "initial_tree", "notifications_navigation_performed",
-                "observed_notifications_navigation_rows", "sidebar_scroll_performed", "observed_notifications_sidebar_count", "elapsed_seconds"}
+                "observed_notifications_navigation_rows", "sidebar_scroll_performed", "observed_notifications_sidebar_count", "notifications_page_ready", "elapsed_seconds"}
     P.require(isinstance(value, dict) and required <= set(value) <= required | {"final_tree", "sidebar_reveal_tree"}
               and value["scope"] == "readonly_global_notification_settings" and value["diagnostic_only"] is True
               and value["qualification_input"] is False and value["desktop_qualified"] is False and value["maximum_seconds"] == 6
@@ -859,6 +859,7 @@ def global_settings_projection(value):
               and all(type(pid) is int and pid > 0 for pid in value["settings_present_before"])
               and type(value["opened_new_settings_instance"]) is bool
               and value["opened_new_settings_instance"] == (value["owner_pid"] not in value["settings_present_before"])
+              and type(value["notifications_page_ready"]) is bool
               and type(value["notifications_navigation_performed"]) is bool
               and type(value["sidebar_scroll_performed"]) is bool
               and type(value["observed_notifications_sidebar_count"]) is int and 0 <= value["observed_notifications_sidebar_count"] <= 256
@@ -981,7 +982,7 @@ def presentation_preparation_projection(value):
     refusals = {"settings_owned_pointer_unavailable", "settings_owned_hit_unavailable", "settings_owned_click_refused",
         "original_owned_settings_window_changed", "owned_settings_window_not_observed", "owned_settings_close_button_unavailable",
         "owned_settings_close_button_unverified", "owned_settings_close_button_changed", "owned_settings_window_disappearance_unverified",
-        "sharing_policy_exact_control_required", "sharing_policy_group_unverified", "sharing_policy_original_group_changed",
+        "notifications_policy_page_not_ready", "sharing_policy_exact_control_required", "sharing_policy_group_unverified", "sharing_policy_original_group_changed",
         "sharing_policy_original_control_changed", "sharing_policy_control_bounds_unavailable", "sharing_policy_state_changed_before_click",
         "sharing_policy_on_or_unchanged_controls_unverified", "original_settings_inspection_deadline_required", "signed_apple_settings_required",
         "unique_settings_instance_required", "new_owned_settings_instance_required", "settings_owner_identity_unverified", "settings_window_unavailable",
@@ -1006,7 +1007,8 @@ def presentation_preparation_projection(value):
         P.require(value["settings_instance_was_new"] and value["owned_window_observed"] and value["owned_window_disappeared"]
                   and value["close_click_performed"] and value.get("policy_on_verified") is True
                   and not {"primary_failure_class", "cleanup_failure_class"} & set(value)
-                  and "inspection_before_cleanup" in value and after.get("mirroring_or_sharing") == "on"
+                  and value.get("inspection_before_cleanup", {}).get("notifications_page_ready") is True
+                  and after.get("mirroring_or_sharing") == "on"
                   and all(before.get(key) == after.get(key) for key in ("display_sleeping", "screen_locked"))
                   and value["sharing_click_performed"] == (before.get("mirroring_or_sharing") == "off"),
                   "physical_presentation_on_and_owned_window_cleanup_unverified")

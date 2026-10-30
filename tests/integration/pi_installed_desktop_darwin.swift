@@ -942,7 +942,7 @@ struct TerminalAutomationContext: Decodable {
                   nodes[parent].role == "AXGroup", nodes[parent].childrenVerified, nodes[parent].subtreeComplete,
                   index + 1 < nodes.count, let textBox = label.box else { return nil }
             let button = nodes[index + 1]
-            guard button.parent == parent, button.role == "AXCheckBox", button.childrenVerified, button.subtreeComplete,
+            guard button.parent == parent, button.role == "AXCheckBox", button.subtreeComplete,
                   button.press, let box = button.box, box.minX >= textBox.maxX,
                   textBox.minY <= box.midY, box.midY <= textBox.maxY else { return nil }
             return Pair(label: label, button: button, group: nodes[parent])
@@ -1045,7 +1045,8 @@ struct TerminalAutomationContext: Decodable {
     let configuration = NSWorkspace.OpenConfiguration()
     configuration.activates = true
     configuration.createsNewApplicationInstance = false
-    let app = try await NSWorkspace.shared.openApplication(at: url, configuration: configuration)
+    let pane = URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension")!
+    let app = try await NSWorkspace.shared.open([pane], withApplicationAt: url, configuration: configuration)
     guard app.bundleIdentifier == identifier, app.bundleURL?.resolvingSymlinksInPath().path == path,
           app.executableURL?.resolvingSymlinksInPath().path == path + "/Contents/MacOS/System Settings",
           terminalAutomationUID(app.processIdentifier) == Int(getuid()), let start = processStartIdentity(app.processIdentifier) else {
@@ -1073,189 +1074,50 @@ struct TerminalAutomationContext: Decodable {
         preparation.receipt["owned_window_observed"] = true
         try preparation.requireWindow()
     }
+    func pageReady(_ nodes: [SettingsInspectionNode]) -> Bool {
+        guard current(), let focused = attribute(AXUIElementCreateApplication(app.processIdentifier), kAXFocusedWindowAttribute),
+              CFGetTypeID(focused) == AXUIElementGetTypeID(),
+              attribute(focused as! AXUIElement, kAXTitleAttribute) as? String == "Notifications" else { return false }
+        let windows = nodes.indices.filter { nodes[$0].role == "AXWindow" && CFEqual(nodes[$0].element, focused) }
+        guard windows.count == 1 else { return false }
+        for kind in ["mirroring_or_sharing", "display_sleeping", "screen_locked"] {
+            let labels = nodes.filter { $0.role == "AXStaticText" && $0.exactPolicyLabel == kind }
+            guard labels.count == 1 else { return false }
+            var parent = labels[0].parent, inWindow = false
+            for _ in 0..<18 {
+                guard let index = parent else { break }
+                if index == windows[0] { inWindow = true; break }
+                parent = nodes[index].parent
+            }
+            if !inWindow { return false }
+        }
+        guard current(), let observed = try? consentMonotonicTime() else { return false }
+        return observed < deadline
+    }
     var first = settingsInspectionTree(app, deadline: deadline)
     let readyDeadline = min(deadline, (try consentMonotonicTime()) + 2)
-    while first.1["traversal_capped"] as? Bool == false && !first.0.contains(where: { $0.exactNotifications }) {
+    var ready = pageReady(first.0)
+    while !ready && current() {
         if try consentMonotonicTime() >= readyDeadline { break }
         try await Task.sleep(nanoseconds: 50_000_000)
         first = settingsInspectionTree(app, deadline: deadline)
+        ready = pageReady(first.0)
     }
     var result: [String: Any] = ["scope": "readonly_global_notification_settings", "diagnostic_only": true,
         "qualification_input": false, "desktop_qualified": false, "maximum_seconds": 6,
         "owner_pid": Int(app.processIdentifier), "owner_start_identity": start, "owner_uid": Int(getuid()),
         "owner_bundle": identifier, "owner_path": path, "apple_signature_verified": true, "settings_left_open": true,
         "settings_present_before": before, "opened_new_settings_instance": !before.contains(Int(app.processIdentifier)),
-        "initial_tree": first.1, "notifications_navigation_performed": false, "sidebar_scroll_performed": false,
+        "initial_tree": first.1, "notifications_page_ready": ready,
+        "notifications_navigation_performed": false, "sidebar_scroll_performed": false,
         "observed_notifications_sidebar_count": 0, "observed_notifications_navigation_rows": 0]
     result["elapsed_seconds"] = (try consentMonotonicTime()) - now
     preparation?.receipt["inspection_before_cleanup"] = result
-    func withinBounds(_ tree: [String: Any]) -> Bool {
-        guard let reasons = tree["cap_reasons"] as? [String] else { return false }
-        let hard = Set(["messaging_timeout", "deadline", "node_or_depth_limit", "window_limit", "windows_unavailable"])
-        return !reasons.contains(where: { hard.contains($0) })
-    }
-    // The measured sidebar exposes the exact label below its visible viewport.
-    // Scroll only its original, verified ScrollArea; this never activates a row.
-    var sidebars = [(area: SettingsInspectionNode, row: SettingsInspectionNode, outline: SettingsInspectionNode)]()
-    for (index, node) in first.0.enumerated() where node.exactNotifications {
-        var cursor = first.0[index].parent, row: SettingsInspectionNode?, outline: SettingsInspectionNode?
-        for _ in 0..<8 {
-            guard let actual = cursor else { break }
-            let ancestor = first.0[actual]
-            if ancestor.role == "AXRow", ancestor.subtreeComplete { row = ancestor }
-            if ancestor.role == "AXOutline", ancestor.childrenVerified, row != nil { outline = ancestor }
-            if ancestor.role == "AXScrollArea", ancestor.childrenVerified, let outline, let row {
-                if !sidebars.contains(where: { CFEqual($0.area.element, ancestor.element) }) { sidebars.append((ancestor, row, outline)) }
-                break
-            }
-            cursor = ancestor.parent
-        }
-    }
-    result["observed_notifications_sidebar_count"] = sidebars.count
-    if withinBounds(first.1), sidebars.count == 1, current(),
-       let area = sidebars[0].area.box, let row = sidebars[0].row.box, row.minY >= area.maxY,
-       onScreenWindows(app.processIdentifier).contains(where: { $0.contains(area) }),
-       try consentMonotonicTime() + 0.2 < deadline {
-        let point = CGPoint(x: area.midX, y: area.midY)
-        guard CGDisplayBounds(CGMainDisplayID()).contains(point), CGWarpMouseCursorPosition(point) == .success else {
-            throw ProbeError.unavailable("settings_sidebar_pointer_unavailable")
-        }
-        var hit: AXUIElement?
-        guard AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(), Float(point.x), Float(point.y), &hit) == .success,
-              var element = hit else { throw ProbeError.unavailable("settings_sidebar_hit_unavailable") }
-        var matched = false
-        for _ in 0..<12 {
-            var pid = pid_t(0)
-            guard AXUIElementGetPid(element, &pid) == .success, pid == app.processIdentifier else { break }
-            if CFEqual(element, sidebars[0].area.element) {
-                matched = attribute(element, kAXRoleAttribute) as? String == "AXScrollArea" && rectangle(element) == area
-                break
-            }
-            guard let role = attribute(element, kAXRoleAttribute) as? String,
-                  ["AXStaticText", "AXImage", "AXCell", "AXGroup", "AXRow", "AXOutline"].contains(role),
-                  let parent = attribute(element, kAXParentAttribute), CFGetTypeID(parent) == AXUIElementGetTypeID() else { break }
-            element = parent as! AXUIElement
-        }
-        guard matched, current(), try consentMonotonicTime() + 0.2 < deadline,
-              let cursor = CGEvent(source: nil)?.location, abs(cursor.x - point.x) <= 1, abs(cursor.y - point.y) <= 1,
-              let scroll = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: -240, wheel2: 0, wheel3: 0) else {
-            throw ProbeError.unavailable("settings_sidebar_owner_or_hit_changed")
-        }
-        scroll.location = point
-        scroll.post(tap: .cghidEventTap)
-        result["sidebar_scroll_performed"] = true
-        try await Task.sleep(nanoseconds: 120_000_000)
-        if current(), try consentMonotonicTime() < deadline {
-            first = settingsInspectionTree(app, deadline: deadline, retainedSidebar: sidebars[0].area.element)
-            result["sidebar_reveal_tree"] = first.1
-        }
-    }
-    func candidates(_ nodes: [SettingsInspectionNode]) -> [SettingsInspectionNode] {
-        var selected = [SettingsInspectionNode]()
-        for (index, node) in nodes.enumerated() where node.exactNotifications {
-            var cursor: Int? = index
-            for _ in 0..<8 {
-                guard let actual = cursor else { break }
-                let row = nodes[actual]
-                if row.role == "AXCell", row.inert, let rowParent = row.parent,
-                   nodes[rowParent].role == "AXRow", nodes[rowParent].subtreeComplete {
-                    // A row containing a toggle or an unknown interactive child
-                    // is never a navigation target, even when its label matches.
-                    let inertSubtree = nodes.indices.allSatisfy { child in
-                        if child == actual { return true }
-                        var ancestor = nodes[child].parent
-                        for _ in 0..<18 {
-                            guard let parent = ancestor else { return true }
-                            if parent == rowParent { return nodes[child].inert }
-                            ancestor = nodes[parent].parent
-                        }
-                        return false
-                    }
-                    var parent = row.parent, sidebar = false
-                    for _ in 0..<8 {
-                        guard let actualParent = parent else { break }
-                        if nodes[actualParent].role == "AXOutline", nodes[actualParent].childrenVerified { sidebar = true; break }
-                        parent = nodes[actualParent].parent
-                    }
-                    if sidebar && inertSubtree, let box = row.box, onScreenWindows(app.processIdentifier).contains(where: { $0.contains(box) }),
-                       CGDisplayBounds(CGMainDisplayID()).contains(CGPoint(x: box.midX, y: box.midY)),
-                       attribute(row.element, kAXEnabledAttribute) as? Bool == true,
-                       !selected.contains(where: { CFEqual($0.element, row.element) }) { selected.append(row) }
-                    break
-                }
-                if !row.inert { break }
-                cursor = row.parent
-            }
-        }
-        return selected
-    }
-    func candidateCurrent(_ node: SettingsInspectionNode, in nodes: [SettingsInspectionNode]) -> Bool {
-        guard let parent = node.parent, nodes[parent].role == "AXRow" else { return false }
-        var required = [node, nodes[parent]], cursor = nodes[parent].parent
-        for _ in 0..<8 {
-            guard let actual = cursor else { return false }
-            if nodes[actual].role == "AXOutline" { required.append(nodes[actual]); break }
-            cursor = nodes[actual].parent
-        }
-        guard required.count == 3, attribute(node.element, kAXEnabledAttribute) as? Bool == true else { return false }
-        return required.allSatisfy { expected in
-            var pid = pid_t(0)
-            return AXUIElementGetPid(expected.element, &pid) == .success && pid == app.processIdentifier
-                && attribute(expected.element, kAXRoleAttribute) as? String == expected.role
-                && expected.box != nil && rectangle(expected.element) == expected.box
-        }
-    }
-    let rows = candidates(first.0)
-    result["observed_notifications_navigation_rows"] = rows.count
-    if withinBounds(first.1), sidebars.count == 1, rows.count == 1, current(), try consentMonotonicTime() < deadline {
-        // The post-scroll sidebar is already fresh; never spend another full
-        // Settings traversal before the one navigation click.
-        let fresh = result["sidebar_scroll_performed"] as? Bool == true ? first
-            : settingsInspectionTree(app, deadline: deadline, retainedSidebar: sidebars[0].area.element)
-        let refreshed = candidates(fresh.0)
-        if withinBounds(fresh.1), refreshed.count == 1, current(), candidateCurrent(refreshed[0], in: fresh.0),
-           CFEqual(rows[0].element, refreshed[0].element), let box = refreshed[0].box, let originalBox = rows[0].box, box == originalBox,
-           try consentMonotonicTime() < deadline {
-            let point = CGPoint(x: box.maxX - min(12, box.width / 4), y: box.midY)
-            guard CGWarpMouseCursorPosition(point) == .success else { throw ProbeError.unavailable("settings_navigation_pointer_unavailable") }
-            var hit: AXUIElement?
-            guard AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(), Float(point.x), Float(point.y), &hit) == .success,
-                  var element = hit else { throw ProbeError.unavailable("settings_navigation_hit_unavailable") }
-            var matched = false
-            for _ in 0..<8 {
-                var pid = pid_t(0)
-                guard AXUIElementGetPid(element, &pid) == .success, pid == app.processIdentifier else { break }
-                if CFEqual(element, refreshed[0].element) {
-                    matched = attribute(element, kAXRoleAttribute) as? String == refreshed[0].role
-                    break
-                }
-                let role = attribute(element, kAXRoleAttribute) as? String ?? ""
-                var actions: CFArray?
-                guard ["AXStaticText", "AXImage", "AXCell", "AXGroup"].contains(role),
-                      AXUIElementCopyActionNames(element, &actions) == .success,
-                      let actionNames = actions as? [String],
-                      (["AXCell", "AXGroup"].contains(role) ? actionNames.isEmpty
-                        : settingsPassiveNavigationLeaf(element, role: role, actions: actionNames).safe),
-                      let parent = attribute(element, kAXParentAttribute), CFGetTypeID(parent) == AXUIElementGetTypeID() else { break }
-                element = parent as! AXUIElement
-            }
-            guard matched else { throw ProbeError.unavailable("settings_navigation_hit_is_not_inert") }
-            guard current(), candidateCurrent(refreshed[0], in: fresh.0), try consentMonotonicTime() < deadline,
-                  let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left),
-                  let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left) else {
-                throw ProbeError.unavailable("settings_navigation_owner_or_deadline_changed")
-            }
-            down.post(tap: .cghidEventTap); up.post(tap: .cghidEventTap)
-            result["notifications_navigation_performed"] = true
-            try await Task.sleep(nanoseconds: 200_000_000)
-        }
-    }
-    if current(), try consentMonotonicTime() < deadline {
-        let final = settingsInspectionTree(app, deadline: deadline)
-        result["final_tree"] = final.1
-        result["elapsed_seconds"] = (try consentMonotonicTime()) - now
-        preparation?.receipt["inspection_before_cleanup"] = result
-        if let preparation { try await prepareNotificationPresentation(final.0, preparation: preparation, deadline: deadline) }
+    // The fixed pane URL opens the actual policy page without sidebar input.
+    // Preserve the original six-second budget for preparation and owned cleanup.
+    if let preparation {
+        guard ready else { throw ProbeError.unavailable("notifications_policy_page_not_ready") }
+        try await prepareNotificationPresentation(first.0, preparation: preparation, deadline: deadline)
     }
     result["elapsed_seconds"] = (try consentMonotonicTime()) - now
     return result

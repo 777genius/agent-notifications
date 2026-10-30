@@ -747,7 +747,7 @@ class GlobalSettingsInspection(unittest.TestCase):
             "desktop_qualified": False, "maximum_seconds": 6, "owner_pid": os.getpid(), "owner_uid": os.getuid(),
             "owner_start_identity": "123:456", "owner_bundle": "com.apple.systempreferences",
             "owner_path": "/System/Applications/System Settings.app", "apple_signature_verified": True, "settings_left_open": True,
-            "settings_present_before": [], "opened_new_settings_instance": True, "notifications_navigation_performed": False,
+            "settings_present_before": [], "opened_new_settings_instance": True, "notifications_page_ready": True, "notifications_navigation_performed": False,
             "observed_notifications_navigation_rows": 0, "sidebar_scroll_performed": False,
             "observed_notifications_sidebar_count": 0, "elapsed_seconds": 0.1,
             "initial_tree": {"nodes": [{"index": 0, "depth": 0, "role": "AXCheckBox", "fixed_labels": ["mirroring_or_sharing"],
@@ -773,7 +773,7 @@ class GlobalSettingsInspection(unittest.TestCase):
             value = self.prepared(already_on=already_on)
             self.assertIs(M.presentation_preparation_projection(value), value)
         for scenario in ("other_setting_changed", "window_left_open", "false_process_collection", "reused_settings",
-                         "already_on_clicked", "primary_failure", "private_field"):
+                         "already_on_clicked", "primary_failure", "page_not_ready", "private_field"):
             value = self.prepared()
             if scenario == "other_setting_changed":
                 value["policy_after"]["screen_locked"] = "off"
@@ -787,6 +787,8 @@ class GlobalSettingsInspection(unittest.TestCase):
                 value["policy_before"]["mirroring_or_sharing"] = "on"
             elif scenario == "primary_failure":
                 value["primary_failure_class"] = "probe_refusal"
+            elif scenario == "page_not_ready":
+                value["inspection_before_cleanup"]["notifications_page_ready"] = False
             else:
                 value["raw_private_ui_text"] = "TEST-private-user-text"
             with self.subTest(scenario=scenario), self.assertRaises(RuntimeError) as caught:
@@ -826,7 +828,7 @@ class GlobalSettingsInspection(unittest.TestCase):
 
     def test_projection_refuses_private_labels_unknown_values_and_foreign_owners(self):
         self.assertEqual(M.global_settings_projection(self.settings()), self.settings())
-        for field in ("private_label", "private_value", "foreign_owner", "extra_text"):
+        for field in ("private_label", "private_value", "foreign_owner", "page_ready_not_boolean", "extra_text"):
             value = self.settings()
             if field == "private_label":
                 value["initial_tree"]["nodes"][0]["fixed_labels"] = ["TEST-private-user-text"]
@@ -834,6 +836,8 @@ class GlobalSettingsInspection(unittest.TestCase):
                 value["initial_tree"]["nodes"][0]["value_enum"] = "TEST-private-user-text"
             elif field == "foreign_owner":
                 value["owner_path"] = "/TEST/foreign.app"
+            elif field == "page_ready_not_boolean":
+                value["notifications_page_ready"] = "true"
             else:
                 value["initial_tree"]["nodes"][0]["raw_description"] = "TEST-private-user-text"
             with self.subTest(field=field), self.assertRaises(RuntimeError) as caught:
