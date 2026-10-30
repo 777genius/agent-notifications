@@ -98,7 +98,7 @@ def wait_for(predicate, code, seconds=15):
     raise RuntimeError(code)
 
 
-def observe_unchanged_focus(native, window, stop_capture, seconds=15):
+def observe_unchanged_focus(native, window, stop_capture, seconds=15, *, live_delivery=False):
     def observed():
         current = native("foreground")
         return {"foreground_hwnd": current["hwnd"], "keyboard_hwnd": current["keyboard_hwnd"]}
@@ -107,7 +107,14 @@ def observe_unchanged_focus(native, window, stop_capture, seconds=15):
         if not stop_capture.exists():
             stop_capture.write_text("stop\n")
     return P.observe_unchanged_focus(observed, {"foreground_hwnd": window["hwnd"], "keyboard_hwnd": window["hwnd"]},
-                                     stop, drain_seconds=0.5, seconds=seconds)
+                                     stop, drain_seconds=seconds if live_delivery else 0.5, seconds=seconds)
+
+
+def await_case_webhook(sink, event, deadline, timing, capture_started, *, now=time.monotonic):
+    remaining = deadline - now()
+    P.require(remaining > 0, "original_case_webhook_deadline_expired")
+    sink.wait(event, timeout=min(20, remaining))
+    timing["webhook_received_seconds"] = round(now() - capture_started, 3)
 
 
 def stop_helper(helper, stop):
@@ -755,12 +762,18 @@ def run(args):
                 native.focus(distractor.window)
                 timing["provider_release_seconds"] = round(time.monotonic() - capture_started, 3)
                 provider.release.set()
-                sink.wait(event)
-                timing["webhook_received_seconds"] = round(time.monotonic() - capture_started, 3)
+                # Desktop delivery precedes sound and the webhook in the real
+                # consumer. Observe/click the live banner before that serial
+                # handoff can outlast it. Stale-origin alone must drain delivery
+                # before collecting the origin and its still-active descendants.
+                if name == "stale-origin":
+                    await_case_webhook(sink, event, case_deadline, timing, capture_started)
                 image = case_root / "actual-product-banner.bmp"
                 click_observation = None
                 if desktop:
                     if name == "question":
+                        wait_for(lambda: any(row["type"] == "ui_prompt_start" for row in F.witness(case_root)),
+                                 "native_question_not_pending", seconds=max(0, min(15, case_deadline - time.monotonic())))
                         rows = F.witness(case_root)
                         P.require(any(row["type"] == "ui_prompt_start" for row in rows)
                                   and not any(row["type"] == "ui_prompt_end" for row in rows), "native_question_not_pending")
@@ -774,10 +787,12 @@ def run(args):
                         expected_window = {**json.loads(neutral.stdout.readline()), "title": neutral_title}
                         native.focus(expected_window)
                     timing["late_toast_observer_started_seconds"] = round(time.monotonic() - capture_started, 3)
-                    found = native("toast-click", toast_title, P.COPY[event], image)
+                    remaining = case_deadline - time.monotonic()
+                    P.require(remaining > 0, "original_case_toast_deadline_expired")
+                    found = native("toast-click", toast_title, P.COPY[event], image, timeout=min(25, remaining))
                     P.require(found.get("found") is True and found.get("real_mouse_click") is True, "native_product_toast_not_physically_clicked")
                     if name in ("click-off", "stale-origin"):
-                        click_observation = observe_unchanged_focus(native, expected_window, stop_capture)
+                        click_observation = observe_unchanged_focus(native, expected_window, stop_capture, live_delivery=name == "click-off")
                     else:
                         def returned_to_origin():
                             observed = native("foreground")
@@ -787,6 +802,8 @@ def run(args):
                     found = native("toast", toast_title, P.COPY[event], image, allowed=(0, 3))
                     P.require(found.get("found") is False and native("foreground")["hwnd"] == distractor.window["hwnd"],
                               "disabled_desktop_had_native_effect")
+                if name != "stale-origin":
+                    await_case_webhook(sink, event, case_deadline, timing, capture_started)
                 if not stop_capture.exists():
                     time.sleep(0.5)
                     stop_capture.write_text("stop\n")

@@ -5,6 +5,7 @@
 #include "pi_native_preflight_windows.cpp"
 #undef wmain
 #include "navigation_windows_token_queries.h"
+#include "pi_windows_shell_image.h"
 #include <UIAutomation.h>
 #include <mfapi.h>
 #include <mfidl.h>
@@ -329,7 +330,9 @@ struct TestChild {
         if (process.hThread) CloseHandle(process.hThread);
     }
 };
+static void testToastSelection();
 static int testProcessIdentity() {
+    testToastSelection();
     wchar_t temporary[32768]{}, marker[MAX_PATH]{};
     const auto length = GetTempPathW(32768, temporary);
     need(length > 0 && length < MAX_PATH && GetTempFileNameW(temporary, L"TPI", 0, marker), "process_guard_temp_path_failed");
@@ -486,32 +489,72 @@ static void screenshot(const fs::path& path) {
     SelectObject(memory, previous); DeleteObject(bitmap); DeleteDC(memory); ReleaseDC(nullptr, screen);
     need(file.good(), "screen_capture_file_failed");
 }
-static bool shellOwner(DWORD pid) {
-    HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
-    if (!process) return false;
-    wchar_t image[32768]{}, windows[32768]{}; DWORD size = 32768;
-    const bool known = QueryFullProcessImageNameW(process, 0, image, &size) && GetWindowsDirectoryW(windows, 32768);
-    NavigationTokenTEST::Token token, self;
-    bool matched = false;
-    if (known && OpenProcessToken(process, TOKEN_QUERY, &token.handle) && OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &self.handle)) {
-        const auto a = NavigationTokenTEST::facts(token.handle), b = NavigationTokenTEST::facts(self.handle);
-        std::wstring actual = image, prefix = std::wstring(windows) + L"\\";
-        std::transform(actual.begin(), actual.end(), actual.begin(), towlower);
-        std::transform(prefix.begin(), prefix.end(), prefix.begin(), towlower);
-        const auto leaf = fs::path(actual).filename().wstring();
-        DWORD code = 0;
-        matched = GetExitCodeProcess(process, &code) && code == STILL_ACTIVE && a.sid == b.sid && a.session == b.session
-            && actual.rfind(prefix, 0) == 0 && (leaf == L"shellexperiencehost.exe" || leaf == L"shellhost.exe" || leaf == L"explorer.exe");
-    }
-    CloseHandle(process); return matched;
+struct ToastUnavailable {};
+static void toastcheck(HRESULT value) {
+    if (value == UIA_E_ELEMENTNOTAVAILABLE) throw ToastUnavailable{};
+    hrcheck(value);
 }
+struct ToastShell {
+    std::unique_ptr<OwnedProcess> process;
+    std::unique_ptr<PiWindowsShellImageTEST::InspectionImage> image;
+    ULONGLONG birth = 0;
+    std::wstring path;
+    explicit ToastShell(DWORD pid) {
+        process = processIdentity(pid, PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE);
+        need(process != nullptr, "product_toast_shell_process_unavailable");
+        birth = process->created; path = process->image;
+        auto leaf = fs::path(path).filename().wstring();
+        std::transform(leaf.begin(), leaf.end(), leaf.begin(), towlower);
+        need(leaf == L"shellexperiencehost.exe" || leaf == L"shellhost.exe" || leaf == L"explorer.exe", "product_toast_shell_image_not_admitted");
+        try {
+            image = std::make_unique<PiWindowsShellImageTEST::InspectionImage>(path); image->verifyMicrosoft();
+            need(image->verifiedStable, "product_toast_shell_signature_unverified");
+        } catch (const char*) { throw std::runtime_error("product_toast_shell_image_proof_refused"); }
+        validate();
+    }
+    void validate(bool bytes = false) {
+        need(running(process->handle), "product_toast_original_shell_exited"); processFacts(*process);
+        need(process->created == birth && sameImage(process->image, path), "product_toast_original_shell_changed");
+        if (bytes) {
+            try { need(image->currentHash() == image->hash, "product_toast_original_shell_image_changed"); }
+            catch (const char*) { throw std::runtime_error("product_toast_shell_image_revalidation_refused"); }
+        }
+    }
+};
 static std::wstring elementName(IUIAutomationElement* element) {
-    BSTR raw = nullptr; hrcheck(element->get_CurrentName(&raw));
+    BSTR raw = nullptr; toastcheck(element->get_CurrentName(&raw));
     std::wstring value = raw ? raw : L""; if (raw) SysFreeString(raw);
     need(value.size() <= 4096, "native_ui_text_bound"); return value;
 }
+static bool toastCardType(CONTROLTYPEID type) {
+    return type == UIA_ButtonControlTypeId || type == UIA_ListItemControlTypeId || type == UIA_WindowControlTypeId;
+}
+static bool toastBody(const std::wstring& value, const std::wstring& expected, const std::wstring& body) {
+    if (value == body) return true;
+    const std::wstring prefix = L"TEST-Pi-toast-";
+    return expected.rfind(prefix, 0) == 0 && value == L"TEST-Pi-origin-" + expected.substr(prefix.size()) + L"\n" + body;
+}
+static bool toastGeometry(const RECT& box, const RECT& title, int width, int height) {
+    return box.left >= 0 && box.top >= 0 && box.right <= width && box.bottom <= height
+        && box.right > box.left && box.bottom > box.top && title.right > title.left && title.bottom > title.top
+        && title.left >= box.left && title.top >= box.top && title.right <= box.right && title.bottom <= box.bottom
+        && static_cast<uint64_t>(box.right - box.left) * (box.bottom - box.top) < static_cast<uint64_t>(width) * height;
+}
+static std::string toastRuntime(IUIAutomationElement* element) {
+    SAFEARRAY* raw = nullptr; toastcheck(element->GetRuntimeId(&raw)); need(raw != nullptr, "product_toast_runtime_missing");
+    std::string result = "[";
+    try {
+        LONG low = 0, high = -1; VARTYPE type = VT_EMPTY;
+        need(SafeArrayGetDim(raw) == 1 && SUCCEEDED(SafeArrayGetVartype(raw, &type)) && type == VT_I4
+            && SUCCEEDED(SafeArrayGetLBound(raw, 1, &low)) && SUCCEEDED(SafeArrayGetUBound(raw, 1, &high))
+            && high >= low && high - low < 32, "product_toast_runtime_bound");
+        for (LONG i = low; i <= high; ++i) { LONG value = 0; hrcheck(SafeArrayGetElement(raw, &i, &value));
+            if (i != low) result += ','; result += std::to_string(value); }
+    } catch (...) { SafeArrayDestroy(raw); throw; }
+    SafeArrayDestroy(raw); return result + ']';
+}
 struct ToastTrace {
-    int maxTitleMatches = 0;
+    int maxTitleMatches = 0, staleElements = 0;
     bool shellProviderSeen = false;
     std::string stage = "not_started";
     std::vector<int> ancestorTypes;
@@ -520,84 +563,143 @@ static std::string toastTrace(const ToastTrace& trace) {
     std::string types = "[";
     for (const auto type : trace.ancestorTypes) { if (types.size() > 1) types += ','; types += std::to_string(type); }
     return "\"max_exact_title_matches\":" + std::to_string(trace.maxTitleMatches)
-        + ",\"shell_provider_seen\":" + jsonBool(trace.shellProviderSeen)
+        + ",\"shell_provider_seen\":" + jsonBool(trace.shellProviderSeen) + ",\"stale_element_reacquisitions\":" + std::to_string(trace.staleElements)
         + ",\"last_stage\":\"" + trace.stage + "\",\"ancestor_control_types\":" + types + "]";
 }
-static ComPtr<IUIAutomationElement> card(IUIAutomation* automation, const std::wstring& expected, const std::wstring& body, ToastTrace& trace) {
-    ComPtr<IUIAutomationElement> root, text; hrcheck(automation->GetRootElement(&root));
+struct ToastCard {
+    ComPtr<IUIAutomationElement> element, title;
+    std::shared_ptr<ToastShell> shell;
+    RECT box{}, titleBox{};
+    std::string runtime, titleRuntime;
+    CONTROLTYPEID type = 0;
+};
+static std::unique_ptr<ToastCard> card(IUIAutomation* automation, const std::wstring& expected, const std::wstring& body,
+        ToastTrace& trace, std::map<DWORD, std::shared_ptr<ToastShell>>& shells, ULONGLONG until) {
+    auto budget = [&]() { need(GetTickCount64() < until, "original_product_toast_deadline"); };
+    budget(); ComPtr<IUIAutomationElement> root, text; toastcheck(automation->GetRootElement(&root));
     VARIANT name{}; name.vt = VT_BSTR; name.bstrVal = SysAllocString(expected.c_str());
-    ComPtr<IUIAutomationCondition> match; hrcheck(automation->CreatePropertyCondition(UIA_NamePropertyId, name, &match)); VariantClear(&name);
-    ComPtr<IUIAutomationElementArray> all; hrcheck(root->FindAll(TreeScope_Descendants, match.Get(), &all));
-    int total = 0; hrcheck(all->get_Length(&total)); need(total <= 1, "product_toast_title_ambiguous");
-    trace.maxTitleMatches = std::max(trace.maxTitleMatches, total);
-    trace.stage = "exact_title_missing";
-    if (!total) return nullptr;
-    hrcheck(all->GetElement(0, &text));
-    int pid = 0; hrcheck(text->get_CurrentProcessId(&pid));
+    ComPtr<IUIAutomationCondition> match; const auto condition = automation->CreatePropertyCondition(UIA_NamePropertyId, name, &match); VariantClear(&name); toastcheck(condition);
+    ComPtr<IUIAutomationElementArray> all; toastcheck(root->FindAll(TreeScope_Descendants, match.Get(), &all));
+    int total = 0; toastcheck(all->get_Length(&total)); need(total <= 1, "product_toast_title_ambiguous");
+    trace.maxTitleMatches = std::max(trace.maxTitleMatches, total); trace.stage = "exact_title_missing";
+    budget(); if (!total) return nullptr;
+    toastcheck(all->GetElement(0, &text));
+    int pid = 0; toastcheck(text->get_CurrentProcessId(&pid)); need(pid > 0, "product_toast_provider_missing");
     trace.stage = "exact_title_provider_not_shell";
-    if (!shellOwner(pid)) return nullptr;
+    if (!shells.contains(pid)) { need(shells.size() < 8, "product_toast_shell_owner_bound"); shells.emplace(pid, std::make_shared<ToastShell>(pid)); }
+    auto shell = shells.at(pid); shell->validate(); budget();
     trace.shellProviderSeen = true; trace.ancestorTypes.clear(); trace.stage = "exact_card_ancestor_missing";
-    ComPtr<IUIAutomationTreeWalker> walker; hrcheck(automation->get_ControlViewWalker(&walker));
+    ComPtr<IUIAutomationTreeWalker> walker; toastcheck(automation->get_ControlViewWalker(&walker));
+    RECT titleBox{}; BOOL offscreen = TRUE; toastcheck(text->get_CurrentBoundingRectangle(&titleBox)); toastcheck(text->get_CurrentIsOffscreen(&offscreen));
+    if (offscreen) return nullptr;
     auto current = text;
     for (int depth = 0; depth < 6; depth++) {
-        CONTROLTYPEID type = 0; int currentPID = 0;
-        hrcheck(current->get_CurrentControlType(&type)); hrcheck(current->get_CurrentProcessId(&currentPID));
-        trace.ancestorTypes.push_back(type);
+        budget(); CONTROLTYPEID type = 0; int currentPID = 0;
+        toastcheck(current->get_CurrentControlType(&type)); toastcheck(current->get_CurrentProcessId(&currentPID)); trace.ancestorTypes.push_back(type);
         if (currentPID != pid) return nullptr;
-        if (type == UIA_ButtonControlTypeId || type == UIA_ListItemControlTypeId) {
-            ComPtr<IUIAutomationCondition> yes; hrcheck(automation->CreateTrueCondition(&yes));
-            ComPtr<IUIAutomationElementArray> children; hrcheck(current->FindAll(TreeScope_Descendants, yes.Get(), &children));
-            int count = 0; hrcheck(children->get_Length(&count)); need(count <= 64, "product_toast_group_bound");
-            bool titleSeen = false, bodySeen = false;
+        if (toastCardType(type)) {
+            RECT box{}; toastcheck(current->get_CurrentBoundingRectangle(&box)); toastcheck(current->get_CurrentIsOffscreen(&offscreen));
+            if (offscreen || !toastGeometry(box, titleBox, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN))) return nullptr;
+            ComPtr<IUIAutomationCondition> yes; toastcheck(automation->CreateTrueCondition(&yes));
+            ComPtr<IUIAutomationElementArray> children; toastcheck(current->FindAll(TreeScope_Descendants, yes.Get(), &children));
+            int count = 0; toastcheck(children->get_Length(&count)); need(count <= 64, "product_toast_group_bound");
+            int titleSeen = 0, bodySeen = 0;
             for (int index = 0; index < count; index++) {
-                ComPtr<IUIAutomationElement> child; hrcheck(children->GetElement(index, &child));
-                const auto value = elementName(child.Get());
-                titleSeen = titleSeen || value == expected; bodySeen = bodySeen || value.find(body) != std::wstring::npos;
+                budget(); ComPtr<IUIAutomationElement> child; toastcheck(children->GetElement(index, &child));
+                int childPID = 0; toastcheck(child->get_CurrentProcessId(&childPID)); need(childPID == pid, "product_toast_child_provider_changed");
+                const auto value = elementName(child.Get()); titleSeen += value == expected; bodySeen += toastBody(value, expected, body);
             }
-            if (titleSeen && bodySeen) { trace.stage = "exact_card_selected"; return current; }
+            need(titleSeen <= 1 && bodySeen <= 1, "product_toast_card_content_ambiguous");
+            if (titleSeen == 1 && bodySeen == 1) {
+                auto result = std::make_unique<ToastCard>(); result->element = current; result->title = text; result->shell = shell;
+                result->box = box; result->titleBox = titleBox; result->type = type;
+                result->runtime = toastRuntime(current.Get()); result->titleRuntime = toastRuntime(text.Get());
+                shell->validate(); budget(); trace.stage = "exact_card_selected"; return result;
+            }
             trace.stage = "exact_card_title_or_body_missing";
+            if (type == UIA_WindowControlTypeId) return nullptr; // Never promote an unrelated outer Window.
         }
-        ComPtr<IUIAutomationElement> parent; hrcheck(walker->GetParentElement(current.Get(), &parent));
+        ComPtr<IUIAutomationElement> parent; toastcheck(walker->GetParentElement(current.Get(), &parent));
         if (!parent) break; current = parent;
     }
     return nullptr;
 }
+static void testToastSelection() {
+    need(toastCardType(UIA_WindowControlTypeId) && !toastCardType(UIA_PaneControlTypeId), "toast_guard_measured_window_type");
+    const std::wstring title = L"TEST-Pi-toast-owned", body = L"Pi completed a task";
+    need(toastBody(body, title, body) && toastBody(L"TEST-Pi-origin-owned\n" + body, title, body)
+        && !toastBody(L"foreign " + body, title, body) && !toastBody(L"TEST-Pi-origin-foreign\n" + body, title, body), "toast_guard_exact_controlled_body");
+    need(toastGeometry({10, 10, 300, 200}, {30, 50, 200, 80}, 1024, 768)
+        && !toastGeometry({0, 0, 1024, 768}, {30, 50, 200, 80}, 1024, 768)
+        && !toastGeometry({10, 10, 300, 200}, {301, 50, 400, 80}, 1024, 768), "toast_guard_card_geometry");
+    bool refused = false;
+    try { ToastShell foreign(GetCurrentProcessId()); } catch (const std::runtime_error&) { refused = true; }
+    need(refused, "toast_guard_foreign_actor_admitted");
+}
 static int toast(const std::wstring& expected, const std::wstring& body, const fs::path& image, bool click, const fs::path& ready = {}) {
     need(testTitle(expected) && !body.empty() && body.size() <= 256, "owned_product_toast_selector_required");
+    const auto started = GetTickCount64(), until = started + 15000;
     ComPtr<IUIAutomation> automation; hrcheck(CoCreateInstance(CLSID_CUIAutomation, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&automation)));
     if (!ready.empty()) {
         need(!click && !fs::exists(ready), "observation_only_toast_ready_path_required");
-        auto pending = ready; pending += L".pending";
-        need(!fs::exists(pending), "observation_only_toast_pending_path_required");
-        {
-            std::ofstream file(pending); file << "{\"ready\":true,\"observation_only\":true,\"budget_ms\":15000}\n";
-            need(file.good(), "toast_observer_ready_write_failed");
-        }
+        auto pending = ready; pending += L".pending"; need(!fs::exists(pending), "observation_only_toast_pending_path_required");
+        { std::ofstream file(pending); file << "{\"ready\":true,\"observation_only\":true,\"budget_ms\":15000}\n"; need(file.good(), "toast_observer_ready_write_failed"); }
         fs::rename(pending, ready);
     }
-    ToastTrace trace;
-    const auto started = GetTickCount64(), until = started + 15000;
+    ToastTrace trace; std::map<DWORD, std::shared_ptr<ToastShell>> shells; bool inputAttempted = false;
     while (GetTickCount64() < until) {
-        auto selected = card(automation.Get(), expected, body, trace);
-        if (selected) {
-            BOOL offscreen = TRUE, clickable = FALSE; POINT point{};
-            hrcheck(selected->get_CurrentIsOffscreen(&offscreen)); hrcheck(selected->GetClickablePoint(&point, &clickable));
-            int pid = 0; hrcheck(selected->get_CurrentProcessId(&pid));
-            need(!offscreen && clickable && shellOwner(pid), "product_toast_not_visible_clickable_shell");
-            screenshot(image);
-            if (click) {
-                need(owner(GetAncestor(WindowFromPoint(point), GA_ROOT)) == static_cast<DWORD>(pid), "product_toast_click_occluded");
-                need(mouse(point), "product_toast_native_mouse_denied");
+        try {
+            auto selected = card(automation.Get(), expected, body, trace, shells, until);
+            if (selected) {
+                screenshot(image); need(GetTickCount64() < until, "original_product_toast_deadline");
+                auto fresh = card(automation.Get(), expected, body, trace, shells, until);
+                BOOL same = FALSE;
+                if (!fresh || !EqualRect(&selected->box, &fresh->box) || !EqualRect(&selected->titleBox, &fresh->titleBox)
+                    || selected->runtime != fresh->runtime || selected->titleRuntime != fresh->titleRuntime
+                    || selected->shell != fresh->shell) { trace.stage = "card_changed_before_handoff"; pump(100); continue; }
+                toastcheck(automation->CompareElements(selected->element.Get(), fresh->element.Get(), &same));
+                if (!same) { trace.stage = "card_changed_before_handoff"; pump(100); continue; }
+                const POINT point{(fresh->titleBox.left + fresh->titleBox.right) / 2, (fresh->titleBox.top + fresh->titleBox.bottom) / 2};
+                if (click) {
+                    fresh->shell->validate(true);
+                    need(!(GetAsyncKeyState(VK_LBUTTON) & 0x8000) && SetCursorPos(point.x, point.y), "product_toast_pointer_unavailable");
+                    ComPtr<IUIAutomationElement> hit; toastcheck(automation->ElementFromPoint(point, &hit)); need(hit != nullptr, "product_toast_topmost_hit_missing");
+                    ComPtr<IUIAutomationTreeWalker> walker; toastcheck(automation->get_ControlViewWalker(&walker)); bool matched = false;
+                    for (unsigned depth = 0; hit && depth < 6; ++depth) {
+                        int pid = 0; CONTROLTYPEID type = 0; toastcheck(hit->get_CurrentProcessId(&pid));
+                        need(pid == static_cast<int>(fresh->shell->process->pid), "product_toast_hit_provider_changed");
+                        toastcheck(automation->CompareElements(hit.Get(), fresh->element.Get(), &same)); if (same) { matched = true; break; }
+                        toastcheck(hit->get_CurrentControlType(&type)); need(type == UIA_TextControlTypeId || type == UIA_ImageControlTypeId, "product_toast_hit_is_not_controlled_text");
+                        ComPtr<IUIAutomationElement> parent; toastcheck(walker->GetParentElement(hit.Get(), &parent)); hit = parent;
+                    }
+                    RECT latestTitle{}; toastcheck(fresh->title->get_CurrentBoundingRectangle(&latestTitle));
+                    need(elementName(fresh->title.Get()) == expected && toastRuntime(fresh->title.Get()) == fresh->titleRuntime
+                        && toastRuntime(fresh->element.Get()) == fresh->runtime && EqualRect(&latestTitle, &fresh->titleBox), "product_toast_controlled_text_changed");
+                    fresh->shell->validate(); POINT actual{};
+                    need(matched && owner(GetAncestor(WindowFromPoint(point), GA_ROOT)) == fresh->shell->process->pid
+                        && GetCursorPos(&actual) && actual.x == point.x && actual.y == point.y && !(GetAsyncKeyState(VK_LBUTTON) & 0x8000)
+                        && GetTickCount64() < until, "product_toast_exact_topmost_handoff_refused");
+                    inputAttempted = true; INPUT events[2]{}; events[0].type = events[1].type = INPUT_MOUSE;
+                    events[0].mi.dwFlags = MOUSEEVENTF_LEFTDOWN; events[1].mi.dwFlags = MOUSEEVENTF_LEFTUP;
+                    const auto accepted = SendInput(2, events, sizeof(INPUT));
+                    if (accepted == 1) { INPUT release{}; release.type = INPUT_MOUSE; release.mi.dwFlags = MOUSEEVENTF_LEFTUP; SendInput(1, &release, sizeof release); }
+                    need(accepted == 2, "product_toast_native_mouse_uncertain");
+                }
+                std::cout << "{\"found\":true,\"native_shell_pid\":" << fresh->shell->process->pid << ",\"shell_birth\":\"" << fresh->shell->birth
+                          << "\",\"signed_shell_image_sha256\":\"" << fresh->shell->image->hash << "\",\"card_control_type\":" << fresh->type
+                          << ",\"card_bounds\":[" << fresh->box.left << ',' << fresh->box.top << ',' << fresh->box.right << ',' << fresh->box.bottom
+                          << "],\"controlled_title_bounds\":[" << fresh->titleBox.left << ',' << fresh->titleBox.top << ',' << fresh->titleBox.right << ',' << fresh->titleBox.bottom
+                          << "],\"card_runtime_id\":" << fresh->runtime << ",\"controlled_title_runtime_id\":" << fresh->titleRuntime
+                          << ",\"exact_title_and_body\":true,\"real_mouse_click\":" << jsonBool(click)
+                          << ",\"elapsed_ms\":" << GetTickCount64() - started << ',' << toastTrace(trace) << "}\n"; return 0;
             }
-            std::cout << "{\"found\":true,\"native_shell_pid\":" << pid << ",\"real_mouse_click\":" << jsonBool(click)
-                      << ",\"elapsed_ms\":" << GetTickCount64() - started << ',' << toastTrace(trace) << "}\n";
-            return 0;
+        } catch (const ToastUnavailable&) {
+            need(!inputAttempted, "product_toast_stale_after_input_unknown"); ++trace.staleElements; trace.stage = "stale_element_reacquiring";
         }
         pump(100);
     }
-    bool failureCaptured = false;
-    if (!ready.empty()) { try { screenshot(image); failureCaptured = true; } catch (...) {} }
-    std::cout << "{\"found\":false,\"observation_end_screenshot\":" << jsonBool(failureCaptured)
+    bool captured = false; if (!ready.empty()) { try { screenshot(image); captured = true; } catch (...) {} }
+    std::cout << "{\"found\":false,\"observation_end_screenshot\":" << jsonBool(captured)
               << ",\"elapsed_ms\":" << GetTickCount64() - started << ',' << toastTrace(trace) << "}\n"; return 3;
 }
 static int capture(const fs::path& path, const fs::path& stop, int routeCount, wchar_t** routeArgs) {

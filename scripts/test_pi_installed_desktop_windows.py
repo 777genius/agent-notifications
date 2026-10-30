@@ -41,7 +41,7 @@ class CaptureStop:
 
 
 class PostClickOracleTests(unittest.TestCase):
-    def observe(self, wrong_after=None, keyboard_only=False):
+    def observe(self, wrong_after=None, keyboard_only=False, live_delivery=False):
         clock, window = Clock(), {"hwnd": 123}
         stop = CaptureStop(clock)
 
@@ -52,7 +52,7 @@ class PostClickOracleTests(unittest.TestCase):
                     "keyboard_hwnd": 456 if wrong else 123}
 
         with patch.object(W.P, "time", SimpleNamespace(monotonic=clock.monotonic, sleep=clock.sleep)):
-            result = W.observe_unchanged_focus(native, window, stop)
+            result = W.observe_unchanged_focus(native, window, stop, live_delivery=live_delivery)
         return result, stop
 
     def test_delayed_wrong_focus_is_not_admitted_by_initial_decoy(self):
@@ -71,6 +71,29 @@ class PostClickOracleTests(unittest.TestCase):
         self.assertEqual(result["keyboard_hwnd"], 123)
         self.assertGreaterEqual(stop.at, 0.5)
         self.assertLess(stop.at, 0.6)
+
+    def test_live_click_monitors_full_focus_window_without_truncating_later_cue(self):
+        result, stop = self.observe(live_delivery=True)
+        self.assertGreaterEqual(result["elapsed_seconds"], 15)
+        self.assertGreater(result["samples"], 250)
+        self.assertGreaterEqual(stop.at, 15)
+        self.assertLess(stop.at, 15.1)
+        with self.assertRaisesRegex(RuntimeError, "changed_foreground_or_keyboard"):
+            self.observe(wrong_after=3, live_delivery=True)
+
+
+class OriginalWebhookDeadlineTests(unittest.TestCase):
+    def test_required_original_webhook_uses_only_existing_capture_remainder(self):
+        sink, timing = Mock(), {}
+        W.await_case_webhook(sink, "task_complete", 30, timing, 0, now=lambda: 28.5)
+        sink.wait.assert_called_once_with("task_complete", timeout=1.5)
+        self.assertEqual(timing, {"webhook_received_seconds": 28.5})
+
+    def test_expired_original_budget_does_not_start_another_wait(self):
+        sink = Mock()
+        with self.assertRaisesRegex(RuntimeError, "original_case_webhook_deadline_expired"):
+            W.await_case_webhook(sink, "task_complete", 30, {}, 0, now=lambda: 30)
+        sink.wait.assert_not_called()
 
 
 class LauncherDiagnosticsTests(unittest.TestCase):
