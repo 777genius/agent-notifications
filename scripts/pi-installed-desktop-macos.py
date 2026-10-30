@@ -885,8 +885,8 @@ def global_settings_projection(value):
     required = {"scope", "diagnostic_only", "qualification_input", "desktop_qualified", "maximum_seconds", "owner_pid",
                 "owner_start_identity", "owner_uid", "owner_bundle", "owner_path", "apple_signature_verified", "settings_left_open",
                 "settings_present_before", "opened_new_settings_instance", "initial_tree", "notifications_navigation_performed",
-                "observed_notifications_navigation_rows", "elapsed_seconds"}
-    P.require(isinstance(value, dict) and required <= set(value) <= required | {"final_tree"}
+                "observed_notifications_navigation_rows", "sidebar_scroll_performed", "observed_notifications_sidebar_count", "elapsed_seconds"}
+    P.require(isinstance(value, dict) and required <= set(value) <= required | {"final_tree", "sidebar_reveal_tree"}
               and value["scope"] == "readonly_global_notification_settings" and value["diagnostic_only"] is True
               and value["qualification_input"] is False and value["desktop_qualified"] is False and value["maximum_seconds"] == 6
               and value["owner_bundle"] == "com.apple.systempreferences"
@@ -899,6 +899,9 @@ def global_settings_projection(value):
               and type(value["opened_new_settings_instance"]) is bool
               and value["opened_new_settings_instance"] == (value["owner_pid"] not in value["settings_present_before"])
               and type(value["notifications_navigation_performed"]) is bool
+              and type(value["sidebar_scroll_performed"]) is bool
+              and type(value["observed_notifications_sidebar_count"]) is int and 0 <= value["observed_notifications_sidebar_count"] <= 256
+              and (not value["sidebar_scroll_performed"] or value["observed_notifications_sidebar_count"] == 1)
               and type(value["observed_notifications_navigation_rows"]) is int and 0 <= value["observed_notifications_navigation_rows"] <= 256
               and (not value["notifications_navigation_performed"] or value["observed_notifications_navigation_rows"] == 1)
               and type(value["elapsed_seconds"]) in (int, float) and 0 <= value["elapsed_seconds"] <= 6,
@@ -909,22 +912,34 @@ def global_settings_projection(value):
     roles = {"AXApplication", "AXWindow", "AXGroup", "AXSplitGroup", "AXScrollArea", "AXOutline", "AXList", "AXRow", "AXStaticText",
              "AXButton", "AXCheckBox", "AXPopUpButton", "AXRadioButton", "AXRadioGroup", "AXToolbar", "AXScrollBar", "AXSlider",
              "AXTextField", "AXTable", "AXColumn", "AXCell", "AXImage", "AXHeading", "other"}
-    for name in ("initial_tree", "final_tree"):
+    for name in ("initial_tree", "sidebar_reveal_tree", "final_tree"):
         if name not in value:
             continue
         tree = value[name]
-        P.require(isinstance(tree, dict) and set(tree) == {"nodes", "traversal_capped", "maximum_nodes", "maximum_depth", "maximum_children", "ax_timeout_status"}
-                  and tree["maximum_nodes"] == 256 and tree["maximum_depth"] == 18 and tree["maximum_children"] == 32
+        reasons = {"messaging_timeout", "deadline", "node_or_depth_limit", "children_unavailable", "children_limit", "window_limit", "windows_unavailable"}
+        P.require(isinstance(tree, dict) and set(tree) == {"nodes", "traversal_capped", "maximum_nodes", "maximum_depth", "maximum_children", "cap_reasons", "ax_timeout_status", "tree_scope"}
+                  and tree["maximum_nodes"] == 256 and tree["maximum_depth"] == 18 and tree["maximum_children"] == 64
+                  and tree["tree_scope"] in ("app_windows", "retained_sidebar")
                   and type(tree["traversal_capped"]) is bool and type(tree["ax_timeout_status"]) is int
+                  and isinstance(tree["cap_reasons"], list) and len(tree["cap_reasons"]) <= len(reasons)
+                  and all(reason in reasons for reason in tree["cap_reasons"])
+                  and tree["traversal_capped"] == bool(tree["cap_reasons"])
                   and isinstance(tree["nodes"], list) and len(tree["nodes"]) <= 256, "closed_global_settings_tree_required")
         for index, row in enumerate(tree["nodes"]):
-            P.require(isinstance(row, dict) and {"index", "depth", "role", "fixed_labels", "navigation_press_action", "inert_navigation_descendant"} <= set(row)
-                      <= {"index", "depth", "role", "fixed_labels", "navigation_press_action", "inert_navigation_descendant", "parent", "bounds", "enabled", "selected", "value_boolean", "value_enum"}
+            fixed = {"index", "depth", "role", "fixed_labels", "navigation_press_action", "inert_navigation_descendant",
+                     "children_query_status", "children_array_verified", "action_query_status", "action_array_verified", "subtree_complete"}
+            P.require(isinstance(row, dict) and fixed <= set(row)
+                      <= fixed | {"parent", "bounds", "enabled", "selected", "value_boolean", "value_enum"}
                       and type(row["index"]) is int and row["index"] == index and type(row["depth"]) is int and 0 <= row["depth"] < 18
                       and row["role"] in roles and isinstance(row["fixed_labels"], list) and len(row["fixed_labels"]) <= len(labels)
                       and all(label in labels for label in row["fixed_labels"]) and type(row["navigation_press_action"]) is bool
-                      and type(row["inert_navigation_descendant"]) is bool,
+                      and type(row["inert_navigation_descendant"]) is bool and type(row["subtree_complete"]) is bool,
                       "closed_global_settings_node_required")
+            for prefix in ("children", "action"):
+                P.require(type(row[prefix + "_query_status"]) is int and -(2 ** 31) <= row[prefix + "_query_status"] < 2 ** 31
+                          and type(row[prefix + "_array_verified"]) is bool
+                          and (not row[prefix + "_array_verified"] or row[prefix + "_query_status"] == 0),
+                          "global_settings_query_status_invalid")
             if "parent" in row:
                 P.require(type(row["parent"]) is int and 0 <= row["parent"] < index, "global_settings_parent_invalid")
             if "bounds" in row:

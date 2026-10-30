@@ -731,17 +731,23 @@ struct TerminalAutomationContext: Decodable {
     let exactNotifications: Bool
     let press: Bool
     let inert: Bool
+    let childrenVerified: Bool
+    var subtreeComplete: Bool
 }
 
-@MainActor func settingsInspectionTree(_ app: NSRunningApplication, deadline: Double) -> ([SettingsInspectionNode], [String: Any]) {
+@MainActor func settingsInspectionTree(_ app: NSRunningApplication, deadline: Double,
+                                       retainedSidebar: AXUIElement? = nil) -> ([SettingsInspectionNode], [String: Any]) {
     let root = AXUIElementCreateApplication(app.processIdentifier)
     let timeout = AXUIElementSetMessagingTimeout(root, 0.05)
     var nodes = [SettingsInspectionNode](), rows = [[String: Any]](), capped = timeout != .success
+    var capReasons = Set<String>()
+    if capped { capReasons.insert("messaging_timeout") }
     let roles: Set<String> = ["AXApplication", "AXWindow", "AXGroup", "AXSplitGroup", "AXScrollArea", "AXOutline", "AXList",
         "AXRow", "AXStaticText", "AXButton", "AXCheckBox", "AXPopUpButton", "AXRadioButton", "AXRadioGroup", "AXToolbar",
         "AXScrollBar", "AXSlider", "AXTextField", "AXTable", "AXColumn", "AXCell", "AXImage", "AXHeading"]
-    func visit(_ element: AXUIElement, parent: Int?, depth: Int) {
-        guard let now = try? consentMonotonicTime(), now < deadline, nodes.count < 256, depth < 18 else { capped = true; return }
+    @discardableResult func visit(_ element: AXUIElement, parent: Int?, depth: Int) -> Bool {
+        guard let now = try? consentMonotonicTime(), now < deadline else { capped = true; capReasons.insert("deadline"); return false }
+        guard nodes.count < 256, depth < 18 else { capped = true; capReasons.insert("node_or_depth_limit"); return false }
         let rawRole = attribute(element, kAXRoleAttribute) as? String ?? ""
         let role = roles.contains(rawRole) ? rawRole : "other"
         let texts = [kAXTitleAttribute, kAXDescriptionAttribute, kAXValueAttribute].compactMap { attribute(element, $0) as? String }
@@ -767,17 +773,23 @@ struct TerminalAutomationContext: Decodable {
         var childValues: CFTypeRef?
         let childStatus = AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &childValues)
         let children = childStatus == .success ? childValues as? [AXUIElement] : nil
-        // Unsupported leaf children can be shown, but cannot prove that a
-        // navigation subtree is complete. Uncertain containers cap the scan.
-        if children == nil && !(childStatus == .attributeUnsupported && ["AXStaticText", "AXImage"].contains(role)) { capped = true }
+        let leafRoles = ["AXStaticText", "AXImage", "AXCheckBox", "AXPopUpButton", "AXRadioButton", "AXSlider", "AXTextField", "AXButton", "AXHeading"]
+        let unsupportedLeaf = childStatus == .attributeUnsupported && leafRoles.contains(role)
+        // A known static leaf may explicitly lack children. Missing values,
+        // malformed arrays and failed container reads never prove completeness.
+        if children == nil && !unsupportedLeaf { capped = true; capReasons.insert("children_unavailable") }
         let pressed = actions?.contains(kAXPressAction) == true
         let inert = ["AXStaticText", "AXImage", "AXCell", "AXGroup"].contains(role) && actionStatus == .success
-            && actions?.isEmpty == true && children != nil
+            && actions?.isEmpty == true && (children != nil || (unsupportedLeaf && ["AXStaticText", "AXImage"].contains(role)))
         let index = nodes.count, box = rectangle(element)
         nodes.append(SettingsInspectionNode(element: element, role: role, parent: parent, box: box,
-                                            exactNotifications: texts.contains("Notifications"), press: pressed, inert: inert))
+            exactNotifications: texts.contains("Notifications"), press: pressed, inert: inert,
+            childrenVerified: children != nil, subtreeComplete: children != nil || unsupportedLeaf))
         var row: [String: Any] = ["index": index, "depth": depth, "role": role, "fixed_labels": tags.sorted(),
-                                  "navigation_press_action": pressed, "inert_navigation_descendant": inert]
+            "navigation_press_action": pressed, "inert_navigation_descendant": inert,
+            "children_query_status": childStatus.rawValue, "children_array_verified": children != nil,
+            "action_query_status": actionStatus.rawValue, "action_array_verified": actions != nil,
+            "subtree_complete": children != nil || unsupportedLeaf]
         if let parent { row["parent"] = parent }
         if let box { row["bounds"] = [Double(box.minX), Double(box.minY), Double(box.width), Double(box.height)] }
         for (key, name) in [(kAXEnabledAttribute, "enabled"), (kAXSelectedAttribute, "selected")] {
@@ -790,16 +802,24 @@ struct TerminalAutomationContext: Decodable {
             else if let text = value as? String, let fixed = labels[text] { row["value_enum"] = fixed }
         }
         rows.append(row)
-        guard let children else { return }
-        if children.count > 32 { capped = true }
-        for child in children.prefix(32) { visit(child, parent: index, depth: depth + 1) }
+        guard let children else { return unsupportedLeaf }
+        let childLimit = ["AXOutline", "AXList"].contains(role) ? 64 : 32
+        var complete = children.count <= childLimit
+        if !complete { capped = true; capReasons.insert("children_limit") }
+        for child in children.prefix(childLimit) { if !visit(child, parent: index, depth: depth + 1) { complete = false } }
+        nodes[index].subtreeComplete = complete
+        rows[index]["subtree_complete"] = complete
+        return complete
     }
-    if timeout == .success, let windows = attribute(root, kAXWindowsAttribute) as? [AXUIElement] {
-        if windows.count > 4 { capped = true }
+    if timeout == .success, let retainedSidebar {
+        visit(retainedSidebar, parent: nil, depth: 0)
+    } else if timeout == .success, let windows = attribute(root, kAXWindowsAttribute) as? [AXUIElement] {
+        if windows.count > 4 { capped = true; capReasons.insert("window_limit") }
         for window in windows.prefix(4) { visit(window, parent: nil, depth: 0) }
-    } else { capped = true }
+    } else { capped = true; capReasons.insert("windows_unavailable") }
     return (nodes, ["nodes": rows, "traversal_capped": capped, "maximum_nodes": 256, "maximum_depth": 18,
-                    "maximum_children": 32, "ax_timeout_status": timeout.rawValue])
+        "maximum_children": 64, "cap_reasons": capReasons.sorted(), "ax_timeout_status": timeout.rawValue,
+        "tree_scope": retainedSidebar == nil ? "app_windows" : "retained_sidebar"])
 }
 
 @MainActor func inspectGlobalNotificationSettings(_ args: [String]) async throws -> [String: Any] {
@@ -845,7 +865,69 @@ struct TerminalAutomationContext: Decodable {
         "owner_pid": Int(app.processIdentifier), "owner_start_identity": start, "owner_uid": Int(getuid()),
         "owner_bundle": identifier, "owner_path": path, "apple_signature_verified": true, "settings_left_open": true,
         "settings_present_before": before, "opened_new_settings_instance": !before.contains(Int(app.processIdentifier)),
-        "initial_tree": first.1, "notifications_navigation_performed": false]
+        "initial_tree": first.1, "notifications_navigation_performed": false, "sidebar_scroll_performed": false,
+        "observed_notifications_sidebar_count": 0]
+    func withinBounds(_ tree: [String: Any]) -> Bool {
+        guard let reasons = tree["cap_reasons"] as? [String] else { return false }
+        let hard = Set(["messaging_timeout", "deadline", "node_or_depth_limit", "window_limit", "windows_unavailable"])
+        return !reasons.contains(where: { hard.contains($0) })
+    }
+    // The measured sidebar exposes the exact label below its visible viewport.
+    // Scroll only its original, verified ScrollArea; this never activates a row.
+    var sidebars = [(area: SettingsInspectionNode, row: SettingsInspectionNode, outline: SettingsInspectionNode)]()
+    for (index, node) in first.0.enumerated() where node.exactNotifications {
+        var cursor = first.0[index].parent, row: SettingsInspectionNode?, outline: SettingsInspectionNode?
+        for _ in 0..<8 {
+            guard let actual = cursor else { break }
+            let ancestor = first.0[actual]
+            if ancestor.role == "AXRow" { row = ancestor }
+            if ancestor.role == "AXOutline", ancestor.subtreeComplete, row != nil { outline = ancestor }
+            if ancestor.role == "AXScrollArea", ancestor.childrenVerified, let outline, let row {
+                if !sidebars.contains(where: { CFEqual($0.area.element, ancestor.element) }) { sidebars.append((ancestor, row, outline)) }
+                break
+            }
+            cursor = ancestor.parent
+        }
+    }
+    result["observed_notifications_sidebar_count"] = sidebars.count
+    if withinBounds(first.1), sidebars.count == 1, current(),
+       let area = sidebars[0].area.box, let row = sidebars[0].row.box, row.minY >= area.maxY,
+       onScreenWindows(app.processIdentifier).contains(where: { $0.contains(area) }),
+       try consentMonotonicTime() + 0.2 < deadline {
+        let point = CGPoint(x: area.midX, y: area.midY)
+        guard CGDisplayBounds(CGMainDisplayID()).contains(point), CGWarpMouseCursorPosition(point) == .success else {
+            throw ProbeError.unavailable("settings_sidebar_pointer_unavailable")
+        }
+        var hit: AXUIElement?
+        guard AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(), Float(point.x), Float(point.y), &hit) == .success,
+              var element = hit else { throw ProbeError.unavailable("settings_sidebar_hit_unavailable") }
+        var matched = false
+        for _ in 0..<12 {
+            var pid = pid_t(0)
+            guard AXUIElementGetPid(element, &pid) == .success, pid == app.processIdentifier else { break }
+            if CFEqual(element, sidebars[0].area.element) {
+                matched = attribute(element, kAXRoleAttribute) as? String == "AXScrollArea" && rectangle(element) == area
+                break
+            }
+            guard let role = attribute(element, kAXRoleAttribute) as? String,
+                  ["AXStaticText", "AXImage", "AXCell", "AXGroup", "AXRow", "AXOutline"].contains(role),
+                  let parent = attribute(element, kAXParentAttribute), CFGetTypeID(parent) == AXUIElementGetTypeID() else { break }
+            element = parent as! AXUIElement
+        }
+        guard matched, current(), try consentMonotonicTime() + 0.2 < deadline,
+              let cursor = CGEvent(source: nil)?.location, abs(cursor.x - point.x) <= 1, abs(cursor.y - point.y) <= 1,
+              let scroll = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: -240, wheel2: 0, wheel3: 0) else {
+            throw ProbeError.unavailable("settings_sidebar_owner_or_hit_changed")
+        }
+        scroll.location = point
+        scroll.post(tap: .cghidEventTap)
+        result["sidebar_scroll_performed"] = true
+        try await Task.sleep(nanoseconds: 120_000_000)
+        if current(), try consentMonotonicTime() < deadline {
+            first = settingsInspectionTree(app, deadline: deadline, retainedSidebar: sidebars[0].area.element)
+            result["sidebar_reveal_tree"] = first.1
+        }
+    }
     func candidates(_ nodes: [SettingsInspectionNode]) -> [SettingsInspectionNode] {
         var selected = [SettingsInspectionNode]()
         for (index, node) in nodes.enumerated() where node.exactNotifications {
@@ -853,7 +935,8 @@ struct TerminalAutomationContext: Decodable {
             for _ in 0..<8 {
                 guard let actual = cursor else { break }
                 let row = nodes[actual]
-                if row.role == "AXRow" || (row.role == "AXButton" && row.exactNotifications && row.press) {
+                if row.role == "AXCell", row.inert, let rowParent = row.parent,
+                   nodes[rowParent].role == "AXRow", nodes[rowParent].subtreeComplete {
                     // A row containing a toggle or an unknown interactive child
                     // is never a navigation target, even when its label matches.
                     let inertSubtree = nodes.indices.allSatisfy { child in
@@ -861,7 +944,7 @@ struct TerminalAutomationContext: Decodable {
                         var ancestor = nodes[child].parent
                         for _ in 0..<18 {
                             guard let parent = ancestor else { return true }
-                            if parent == actual { return nodes[child].inert }
+                            if parent == rowParent { return nodes[child].inert }
                             ancestor = nodes[parent].parent
                         }
                         return false
@@ -869,7 +952,7 @@ struct TerminalAutomationContext: Decodable {
                     var parent = row.parent, sidebar = false
                     for _ in 0..<8 {
                         guard let actualParent = parent else { break }
-                        if ["AXOutline", "AXList"].contains(nodes[actualParent].role) { sidebar = true; break }
+                        if nodes[actualParent].role == "AXOutline", nodes[actualParent].subtreeComplete { sidebar = true; break }
                         parent = nodes[actualParent].parent
                     }
                     if sidebar && inertSubtree, let box = row.box, onScreenWindows(app.processIdentifier).contains(where: { $0.contains(box) }),
@@ -884,12 +967,31 @@ struct TerminalAutomationContext: Decodable {
         }
         return selected
     }
+    func candidateCurrent(_ node: SettingsInspectionNode, in nodes: [SettingsInspectionNode]) -> Bool {
+        guard let parent = node.parent, nodes[parent].role == "AXRow" else { return false }
+        var required = [node, nodes[parent]], cursor = nodes[parent].parent
+        for _ in 0..<8 {
+            guard let actual = cursor else { return false }
+            if nodes[actual].role == "AXOutline" { required.append(nodes[actual]); break }
+            cursor = nodes[actual].parent
+        }
+        guard required.count == 3, attribute(node.element, kAXEnabledAttribute) as? Bool == true else { return false }
+        return required.allSatisfy { expected in
+            var pid = pid_t(0)
+            return AXUIElementGetPid(expected.element, &pid) == .success && pid == app.processIdentifier
+                && attribute(expected.element, kAXRoleAttribute) as? String == expected.role
+                && expected.box != nil && rectangle(expected.element) == expected.box
+        }
+    }
     let rows = candidates(first.0)
     result["observed_notifications_navigation_rows"] = rows.count
-    if first.1["traversal_capped"] as? Bool == false, rows.count == 1, current(), try consentMonotonicTime() < deadline {
-        let fresh = settingsInspectionTree(app, deadline: deadline)
+    if withinBounds(first.1), sidebars.count == 1, rows.count == 1, current(), try consentMonotonicTime() < deadline {
+        // The post-scroll sidebar is already fresh; never spend another full
+        // Settings traversal before the one navigation click.
+        let fresh = result["sidebar_scroll_performed"] as? Bool == true ? first
+            : settingsInspectionTree(app, deadline: deadline, retainedSidebar: sidebars[0].area.element)
         let refreshed = candidates(fresh.0)
-        if fresh.1["traversal_capped"] as? Bool == false, refreshed.count == 1, current(),
+        if withinBounds(fresh.1), refreshed.count == 1, current(), candidateCurrent(refreshed[0], in: fresh.0),
            CFEqual(rows[0].element, refreshed[0].element), let box = refreshed[0].box, let originalBox = rows[0].box, box == originalBox,
            try consentMonotonicTime() < deadline {
             let point = CGPoint(x: box.midX, y: box.midY)
@@ -914,7 +1016,7 @@ struct TerminalAutomationContext: Decodable {
                 element = parent as! AXUIElement
             }
             guard matched else { throw ProbeError.unavailable("settings_navigation_hit_is_not_inert") }
-            guard current(), try consentMonotonicTime() < deadline,
+            guard current(), candidateCurrent(refreshed[0], in: fresh.0), try consentMonotonicTime() < deadline,
                   let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left),
                   let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left) else {
                 throw ProbeError.unavailable("settings_navigation_owner_or_deadline_changed")

@@ -760,10 +760,13 @@ class GlobalSettingsInspection(unittest.TestCase):
             "owner_start_identity": "123:456", "owner_bundle": "com.apple.systempreferences",
             "owner_path": "/System/Applications/System Settings.app", "apple_signature_verified": True, "settings_left_open": True,
             "settings_present_before": [], "opened_new_settings_instance": True, "notifications_navigation_performed": False,
-            "observed_notifications_navigation_rows": 0, "elapsed_seconds": 0.1,
+            "observed_notifications_navigation_rows": 0, "sidebar_scroll_performed": False,
+            "observed_notifications_sidebar_count": 0, "elapsed_seconds": 0.1,
             "initial_tree": {"nodes": [{"index": 0, "depth": 0, "role": "AXCheckBox", "fixed_labels": ["mirroring_or_sharing"],
-                "navigation_press_action": True, "inert_navigation_descendant": False, "value_enum": "off"}], "traversal_capped": False,
-                "maximum_nodes": 256, "maximum_depth": 18, "maximum_children": 32, "ax_timeout_status": 0}}
+                "navigation_press_action": True, "inert_navigation_descendant": False, "value_enum": "off",
+                "children_query_status": 0, "children_array_verified": True, "action_query_status": 0,
+                "action_array_verified": True, "subtree_complete": True}], "traversal_capped": False, "cap_reasons": [],
+                "maximum_nodes": 256, "maximum_depth": 18, "maximum_children": 64, "ax_timeout_status": 0, "tree_scope": "app_windows"}}
 
     def measurements(self, frames):
         return {"audio_samples": 14400, "audio_peak": 0, "screen_frames": frames, "audio_nonzero_samples": 0,
@@ -783,6 +786,32 @@ class GlobalSettingsInspection(unittest.TestCase):
                 value["initial_tree"]["nodes"][0]["raw_description"] = "TEST-private-user-text"
             with self.subTest(field=field), self.assertRaises(RuntimeError) as caught:
                 M.global_settings_projection(value)
+            self.assertNotIn("TEST-private-user-text", str(caught.exception))
+
+    def test_scroll_and_uncertain_query_facts_remain_closed_and_diagnostic_only(self):
+        value = self.settings()
+        value.update(sidebar_scroll_performed=True, observed_notifications_sidebar_count=1)
+        value["sidebar_reveal_tree"] = json.loads(json.dumps(value["initial_tree"]))
+        tree = value["sidebar_reveal_tree"]
+        tree["tree_scope"] = "retained_sidebar"
+        tree["traversal_capped"] = True
+        tree["cap_reasons"] = ["children_unavailable"]
+        tree["nodes"][0].update(children_query_status=-25205, children_array_verified=False, subtree_complete=False)
+        self.assertIs(M.global_settings_projection(value), value)
+        self.assertFalse(value["qualification_input"])
+        self.assertFalse(value["desktop_qualified"])
+        for scenario in ("ambiguous_scroll", "private_reason", "contradictory_query", "hidden_cap"):
+            candidate = json.loads(json.dumps(value))
+            if scenario == "ambiguous_scroll":
+                candidate["observed_notifications_sidebar_count"] = 2
+            elif scenario == "private_reason":
+                candidate["sidebar_reveal_tree"]["cap_reasons"] = ["TEST-private-user-text"]
+            elif scenario == "contradictory_query":
+                candidate["sidebar_reveal_tree"]["nodes"][0]["children_array_verified"] = True
+            else:
+                candidate["sidebar_reveal_tree"]["cap_reasons"] = []
+            with self.subTest(scenario=scenario), self.assertRaises(RuntimeError) as caught:
+                M.global_settings_projection(candidate)
             self.assertNotIn("TEST-private-user-text", str(caught.exception))
 
     def test_real_owned_capture_is_collected_after_inspection_or_primary_failure(self):
