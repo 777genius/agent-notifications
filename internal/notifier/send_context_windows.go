@@ -12,6 +12,19 @@ import (
 var captureLocalWindowsTerminal = winfocus.CaptureContext
 
 func (n *Notifier) sendNativeDesktopContext(ctx context.Context, sound, title, body, subtitle, _, cwd, icon string, opts sendOptions) error {
+	// TEMPORARY: fixed boundary codes only; never forward native error text.
+	traceTestNative(ctx, "native_started", "started")
+	returned := func(phase string, err error) {
+		code := "ok"
+		if ctx.Err() == context.DeadlineExceeded {
+			code = "deadline_exceeded"
+		} else if ctx.Err() != nil {
+			code = "cancelled"
+		} else if err != nil {
+			code = "error"
+		}
+		traceTestNative(ctx, phase, code)
+	}
 	if subtitle != "" {
 		body = subtitle + "\n" + body
 	}
@@ -24,10 +37,17 @@ func (n *Notifier) sendNativeDesktopContext(ctx context.Context, sound, title, b
 			toast.ActivationType, toast.ActivationArguments = "protocol", focus.EncodeURI()
 		}
 	}
-	if err := submitWindowsToast(ctx, toast); err != nil {
+	traceTestNative(ctx, "focus_ready", "ready")
+	traceTestNative(ctx, "toast_started", "started")
+	err := submitWindowsToast(ctx, toast)
+	returned("toast_returned", err)
+	if err != nil {
 		return err
 	}
-	return n.playSoundContext(ctx, sound, opts)
+	traceTestNative(ctx, "sound_started", "started")
+	err = n.playSoundContext(ctx, sound, opts)
+	returned("sound_returned", err)
+	return err
 }
 func hasNativeTerminal(ctx context.Context) bool {
 	if ctx.Err() != nil {

@@ -17,6 +17,9 @@
 #include <tlhelp32.h>
 #include <map>
 #include <memory>
+#include <appmodel.h>
+#include <shlobj.h>
+#pragma comment(lib, "shell32.lib")
 
 namespace fs = std::filesystem;
 static void need(bool value, const char* code) { if (!value) throw std::runtime_error(code); }
@@ -281,6 +284,66 @@ static HWND boundWindow(const wchar_t* raw, const wchar_t* pid, const std::wstri
     need(testTitle(expected) && IsWindow(window) && IsWindowVisible(window) && owner(window) == std::stoul(pid)
          && terminalClass(window) && title(window).rfind(expected, 0) == 0, "owned_terminal_identity_changed");
     return window;
+}
+// TEMPORARY failure-only readback. This models the expected settings location
+// from TerminalSettingsModel/FileUtils.cpp (Microsoft Terminal 3c47a05), not a
+// query of the settings path inside Terminal. Never emit paths or file content.
+static void terminalSettingsDiagnostic(const wchar_t* raw, const wchar_t* pid, const std::wstring& expected) {
+    const HWND window = boundWindow(raw, pid, expected);
+    wchar_t klass[128]{}; GetClassNameW(window, klass, 128);
+    need(std::wstring(klass) == L"CASCADIA_HOSTING_WINDOW_CLASS", "terminal_diagnostic_class_required");
+    OwnedProcess process; process.pid = owner(window);
+    process.handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, process.pid);
+    need(process.handle && running(process.handle), "terminal_diagnostic_process_unavailable");
+    processFacts(process);
+    need(_wcsicmp(fs::path(process.image).filename().c_str(), L"WindowsTerminal.exe") == 0, "terminal_diagnostic_image_required");
+
+    std::vector<BYTE> identity(8192); UINT32 identitySize = static_cast<UINT32>(identity.size());
+    const LONG packageError = GetPackageId(process.handle, &identitySize, identity.data());
+    const char* kind = "unavailable";
+    std::string version = "[0,0,0,0]";
+    wchar_t family[256]{}; UINT32 familySize = 256;
+    const LONG familyError = packageError == ERROR_SUCCESS ? GetPackageFamilyName(process.handle, &familySize, family) : packageError;
+    if (packageError == ERROR_SUCCESS) {
+        const auto package = reinterpret_cast<const PACKAGE_ID*>(identity.data());
+        kind = package->name && std::wstring(package->name) == L"Microsoft.WindowsTerminal" ? "packaged_release"
+            : package->name && std::wstring(package->name) == L"Microsoft.WindowsTerminalPreview" ? "packaged_preview" : "packaged_other";
+        const auto v = package->version;
+        version = "[" + std::to_string(v.Major) + ',' + std::to_string(v.Minor) + ',' + std::to_string(v.Build) + ',' + std::to_string(v.Revision) + ']';
+    } else if (packageError == APPMODEL_ERROR_NO_PACKAGE) kind = "unpackaged";
+
+    PWSTR local = nullptr;
+    const HRESULT folderError = SHGetKnownFolderPath(FOLDERID_LocalAppData, KF_FLAG_NO_PACKAGE_REDIRECTION, nullptr, &local);
+    const fs::path base = SUCCEEDED(folderError) && local ? fs::path(local) : fs::path{};
+    if (local) CoTaskMemFree(local);
+    fs::path settings; const char* model = "unavailable"; DWORD portableError = ERROR_SUCCESS;
+    if (packageError == ERROR_SUCCESS && familyError == ERROR_SUCCESS && !base.empty()) {
+        settings = base / L"Packages" / family / L"LocalState"; model = "derived_packaged_localstate";
+    } else if (packageError == APPMODEL_ERROR_NO_PACKAGE) {
+        const auto directory = fs::path(process.image).parent_path();
+        const DWORD marker = GetFileAttributesW((directory / L".portable").c_str());
+        if (marker == INVALID_FILE_ATTRIBUTES) portableError = GetLastError();
+        if (marker != INVALID_FILE_ATTRIBUTES) {
+            settings = directory / L"settings"; model = "derived_unpacked_portable";
+        } else if ((portableError == ERROR_FILE_NOT_FOUND || portableError == ERROR_PATH_NOT_FOUND) && !base.empty()) {
+            settings = base / L"Microsoft" / L"Windows Terminal"; model = "derived_unpacked_localappdata";
+        }
+    }
+    const auto fact = [](const fs::path& path) {
+        if (path.empty()) return std::string("{\"state\":\"not_queried\",\"winerror\":0}");
+        const DWORD attributes = GetFileAttributesW(path.c_str());
+        const DWORD error = attributes == INVALID_FILE_ATTRIBUTES ? GetLastError() : ERROR_SUCCESS;
+        const char* state = attributes != INVALID_FILE_ATTRIBUTES ? (attributes & FILE_ATTRIBUTE_DIRECTORY ? "directory" : "file")
+            : error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND ? "missing" : "unavailable";
+        return std::string("{\"state\":\"") + state + "\",\"winerror\":" + std::to_string(error) + '}';
+    };
+    need(running(process.handle) && boundWindow(raw, pid, expected) == window, "terminal_diagnostic_owner_changed");
+    std::cout << "{\"scope\":\"failure_only_terminal_settings_readonly\",\"qualification_input\":false,\"window_class\":\"cascadia\",\"same_owner_verified\":true,\"package_kind\":\"" << kind
+              << "\",\"package_version_known\":" << jsonBool(packageError == ERROR_SUCCESS) << ",\"package_version\":" << version
+              << ",\"package_error\":" << packageError << ",\"family_error\":" << familyError << ",\"portable_marker_error\":" << portableError
+              << ",\"known_folder_hresult\":" << static_cast<uint32_t>(folderError) << ",\"settings_path_model\":\"" << model
+              << "\",\"local_app_data\":" << fact(base) << ",\"settings_parent\":" << fact(settings)
+              << ",\"settings_file\":" << fact(settings.empty() ? fs::path{} : settings / L"settings.json") << "}\n";
 }
 static HWND keyboardRoot() {
     GUITHREADINFO info{}; info.cbSize = sizeof info;
@@ -593,6 +656,7 @@ int wmain(int argc, wchar_t** argv) {
             const HWND window = search.found.empty() ? nullptr : search.found[0];
             std::cout << "{\"hwnd\":" << reinterpret_cast<uintptr_t>(window) << ",\"pid\":" << owner(window) << "}\n"; return 0;
         }
+        if (mode == L"terminal-settings-readonly" && argc == 5) { terminalSettingsDiagnostic(argv[2], argv[3], argv[4]); return 0; }
         if ((mode == L"activate" || mode == L"close" || mode == L"type") && argc >= 5) {
             HWND window = nullptr;
             try { window = boundWindow(argv[2], argv[3], argv[4]); }

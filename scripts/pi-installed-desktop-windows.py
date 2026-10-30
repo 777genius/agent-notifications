@@ -401,10 +401,18 @@ def reference(native, source, output):
         file.writeframes(normalized_pcm(data, rate))
 
 
+def mark_diagnostic_unqualified(report):
+    # TEMPORARY: scope metadata alone does not make aggregate qualification refuse.
+    report["diagnostic_observations_complete"] = report["native_product_observations_passed"]
+    report["native_product_observations_passed"] = False
+    if report["diagnostic_observations_complete"]:
+        report["status"] = "unqualified_diagnostic"
+
+
 def run(args):
     P.require(os.name == "nt", "actual_windows_client_host_required")
     root = P.new_test_root("TEST-pi-windows-desktop-")
-    report = {"schema_version": 1, "status": "unqualified", "scope": "actual_installed_pi_windows_desktop",
+    report = {"schema_version": 1, "status": "unqualified", "scope": "temporary_pi_windows_delivery_diagnostic", "diagnostic_only": True,
               "test_root": str(root), "source_sha": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO, text=True).strip(),
               "working_tree_dirty": bool(subprocess.check_output(["git", "status", "--porcelain"], cwd=REPO)),
               "host_os": platform.system(), "host_architecture": platform.machine(), "script_sha256": P.sha(__file__),
@@ -428,6 +436,13 @@ def run(args):
             native("screenshot", root / "failure-desktop.bmp")
         except Exception as diagnostic_error:
             report["failure_observation_error"] = str(diagnostic_error)
+        # TEMPORARY: inspect the original owned Terminal only after failure.
+        # This cannot acknowledge a modal, launch an app or change any setting.
+        try:
+            original = next((terminal for terminal in reversed(terminals) if terminal.executable and not terminal.window_closed and terminal.window.get("hwnd")), None)
+            report["terminal_settings_diagnostic"] = native("terminal-settings-readonly", original.window["hwnd"], original.window["pid"], original.window["title"]) if original else {"status": "unavailable"}
+        except Exception:
+            report["terminal_settings_diagnostic"] = {"status": "unavailable"}
 
     try:
         fixture = A.Fixture(args.windows_audio_fixture) if args.windows_audio_fixture else None
@@ -449,6 +464,7 @@ def run(args):
         P.require(wt and powershell, "existing_windows_terminal_and_powershell_required")
         sink, initial_provider = P.Webhooks(), F.Provider("success")
         env = F.prepare(root, initial_provider, "success")
+        env["TEST_PI_NATIVE_DIAGNOSTIC"] = "1"
         env["AGENT_NOTIFICATIONS_CONFIG"] = str(root / "global/config.json")
         (root / "foreign-TEST-root").mkdir()
         P.configure(root / "global/config.json", args.assets_root / "config/config.json", sink)
@@ -477,6 +493,7 @@ def run(args):
             stop_capture, stop_neutral = case_root / "capture.stop", case_root / "neutral.stop"
             try:
                 case_env = F.prepare(case_root, provider, "success", agent_dir=root / "agent")
+                case_env["TEST_PI_NATIVE_DIAGNOSTIC"] = "1"
                 case_env.update(TEST_PI_DEFER_DIALOG="1", CLAUDE_PLUGIN_ROOT=str(root / "foreign-TEST-root"))
                 nonce = uuid.uuid4().hex
                 origin_title, distractor_title, toast_title = "TEST-Pi-origin-" + nonce, "TEST-Pi-distractor-" + nonce, "TEST-Pi-toast-" + nonce
@@ -659,6 +676,7 @@ def run(args):
         failure_image = root / "failure-desktop.bmp"
         if failure_image.is_file() and failure_image.stat().st_size <= 64 * 1024 * 1024:
             shutil.copy2(failure_image, args.report.parent / failure_image.name)
+        mark_diagnostic_unqualified(report)
         args.report.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
         print(json.dumps({"status": report["status"], "failure": report.get("failure"), "desktop_qualified": False}))
     return 0 if report["native_product_observations_passed"] and report["owned_children_collected"] else 1

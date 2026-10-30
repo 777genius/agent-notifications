@@ -181,6 +181,12 @@ jobs:
         if: inputs.prepare_host
         with:
           node-version: '24.21.0'
+      - name: Validate temporary typed diagnostic on actual Windows without native effects
+        if: inputs.prepare_host
+        shell: pwsh
+        run: |
+          node --experimental-strip-types --test pi-plugin/test-diagnostic.test.mjs
+          if ($LASTEXITCODE) { throw 'Temporary native trace privacy guard failed' }
       - name: Prepare only the fresh owner-dispatched hosted Client fixture
         if: inputs.prepare_host
         id: host_preparation

@@ -132,6 +132,18 @@ class LauncherDiagnosticsTests(unittest.TestCase):
 
 
 class CaseCleanupTests(unittest.TestCase):
+    def test_actual_finalizer_prevents_otherwise_valid_windows_qualification(self):
+        guards = W.module("pi_aggregate_guards", W.REPO / "scripts/test_pi_qualification_aggregate.py")
+        aggregate = guards.A
+        build, acquisition, process, desktop = guards.metadata("windows")
+        with patch.object(aggregate.B.H, "load_pin", return_value=guards.HELPER_PIN), patch.object(aggregate.B.H, "candidate_tree"):
+            self.assertEqual(aggregate.qualify("windows", guards.SOURCE, build, acquisition, process, desktop)["status"], "qualified")
+            W.mark_diagnostic_unqualified(desktop)
+            self.assertTrue(desktop["diagnostic_observations_complete"])
+            self.assertFalse(desktop["native_product_observations_passed"])
+            with self.assertRaisesRegex(ValueError, "native_desktop_or_collection_not_observed"):
+                aggregate.qualify("windows", guards.SOURCE, build, acquisition, process, desktop)
+
     def test_initial_shell_observation_does_not_launch_or_warm_winrt(self):
         shell = Mock()
         def observed(pointer):
