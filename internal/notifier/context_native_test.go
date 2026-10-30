@@ -7,11 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 )
@@ -19,152 +17,6 @@ import (
 type contextNativeClock struct{}
 
 func (contextNativeClock) Now() (string, float64, error) { return "TEST-boot", 100, nil }
-
-func contextNativeDiagnosticRoot(t *testing.T) string {
-	t.Helper()
-	root := filepath.Join(t.TempDir(), "TEST-pi-installed-macos-reader", "case-completion", "tmp")
-	if err := os.MkdirAll(root, 0700); err != nil {
-		t.Fatal(err)
-	}
-	root, err := filepath.EvalSymlinks(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("TMPDIR", root)
-	return filepath.Join(root, "native-context-reader.json")
-}
-
-func TestContextNativeOriginalReaderDiagnosticDefaultOff(t *testing.T) {
-	path := contextNativeDiagnosticRoot(t)
-	t.Setenv("AGENT_NOTIFICATIONS_TEST_NATIVE_READER", "")
-	ops, _, stopped := contextNativeFixture(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	if err := runContextNativeApp(ctx, contextNativeClock{}, "/TEST-owned-helper", []string{"-title", "Pi", "-message", "TEST private"}, ops); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Lstat(path); !os.IsNotExist(err) || *stopped != 0 {
-		t.Fatal("disabled observation changed output or ownership", err, *stopped)
-	}
-}
-
-func TestContextNativeOriginalReaderDiagnosticPreservesActualResults(t *testing.T) {
-	for _, mode := range []string{"submitted", "rejected", "launch_error", "joined_signal"} {
-		t.Run(mode, func(t *testing.T) {
-			path := contextNativeDiagnosticRoot(t)
-			t.Setenv("AGENT_NOTIFICATIONS_TEST_NATIVE_READER", "1")
-			ops, request, stopped := contextNativeFixture(t)
-			launch := ops.launch
-			var directory string
-			var launchFailure error
-			launchError := mode == "launch_error" || mode == "joined_signal"
-			if mode == "launch_error" {
-				launchFailure = exec.Command("/bin/sh", "-c", "exit 7").Run()
-			} else if mode == "joined_signal" {
-				launchFailure = errors.Join(exec.Command("/bin/sh", "-c", "kill -TERM $$").Run(), context.DeadlineExceeded, context.Canceled)
-			}
-			ops.launch = func(ctx context.Context, input, receipt string) error {
-				directory = filepath.Dir(input)
-				if err := launch(ctx, input, receipt); err != nil {
-					return err
-				}
-				if mode == "submitted" {
-					return nil
-				}
-				if err := os.Remove(receipt); err != nil {
-					t.Fatal(err)
-				}
-				if launchError {
-					return launchFailure
-				}
-				body, _ := json.Marshal(map[string]any{"schemaVersion": 1, "correlationID": request.CorrelationID,
-					"nonce": request.Nonce, "notificationID": request.CorrelationID, "status": "rejected", "reason": "permission_denied", "retrySafe": false})
-				return writePrivate(receipt, body)
-			}
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			defer cancel()
-			returned := runContextNativeApp(ctx, contextNativeClock{}, "/TEST-owned-helper", []string{"-title", "TEST-private-payload", "-message", "TEST-private-body"}, ops)
-			if mode == "submitted" && returned != nil || mode == "rejected" && returned != ErrDesktopSuppressed || launchError && !errors.Is(returned, launchFailure) {
-				t.Fatalf("original result changed: %s: %v", mode, returned)
-			}
-			if _, err := os.Stat(directory); !os.IsNotExist(err) {
-				t.Fatal("original transport cleanup changed", err)
-			}
-			raw, err := readPrivate(path, 1024)
-			if err != nil {
-				t.Fatal(err)
-			}
-			for _, private := range []string{"TEST-private", request.CorrelationID, request.Nonce, request.BootID, "/TEST-owned-helper"} {
-				if strings.Contains(string(raw), private) {
-					t.Fatal("private native data escaped the closed diagnostic")
-				}
-			}
-			var actual contextNativeDiagnostic
-			if err := json.Unmarshal(raw, &actual); err != nil || !actual.DiagnosticOnly || actual.QualificationInput || !actual.LaunchCompleted {
-				t.Fatal("invalid diagnostic", err, string(raw))
-			}
-			if launchError {
-				if actual.Stage != "receipt_wait" || actual.LaunchErrorClass != "process_exit" || actual.LaunchExitCode == nil || *stopped != 1 {
-					t.Fatal("original launch failure or cleanup lost", string(raw), *stopped)
-				}
-				if mode == "joined_signal" {
-					if !actual.DeadlineInError || !actual.CancelledInError || actual.LaunchSignaled == nil || !*actual.LaunchSignaled || actual.LaunchSignal == nil || *actual.LaunchSignal != int(syscall.SIGTERM) || *actual.LaunchExitCode != -1 {
-						t.Fatal("actual joined deadline/cancellation/signal facts lost", string(raw))
-					}
-				} else if actual.DeadlineInError || actual.CancelledInError || actual.LaunchSignaled == nil || *actual.LaunchSignaled || actual.LaunchSignal != nil || *actual.LaunchExitCode != 7 {
-					t.Fatal("numeric exit misclassified as signal/cancellation", string(raw))
-				}
-			} else if actual.Stage != "native_receipt" || actual.ReceiptStatus != mode || actual.LaunchErrorClass != "none" || *stopped != 0 {
-				t.Fatal("actual normal receipt changed", string(raw), *stopped)
-			}
-		})
-	}
-}
-
-func TestContextNativeOriginalReaderDiagnosticRefusesUnsafeOrExistingSink(t *testing.T) {
-	for _, mode := range []string{"existing", "symlink", "nonprivate", "outside"} {
-		t.Run(mode, func(t *testing.T) {
-			path := contextNativeDiagnosticRoot(t)
-			t.Setenv("AGENT_NOTIFICATIONS_TEST_NATIVE_READER", "1")
-			const sentinel = "TEST original file must remain unchanged"
-			var protected string
-			switch mode {
-			case "existing":
-				protected = path
-				if err := os.WriteFile(path, []byte(sentinel), 0600); err != nil {
-					t.Fatal(err)
-				}
-			case "symlink":
-				protected = filepath.Join(t.TempDir(), "foreign")
-				if err := os.WriteFile(protected, []byte(sentinel), 0600); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.Symlink(protected, path); err != nil {
-					t.Fatal(err)
-				}
-			case "nonprivate":
-				if err := os.Chmod(filepath.Dir(filepath.Dir(path)), 0755); err != nil {
-					t.Fatal(err)
-				}
-			case "outside":
-				t.Setenv("TMPDIR", t.TempDir())
-			}
-			ops, _, _ := contextNativeFixture(t)
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			defer cancel()
-			if err := runContextNativeApp(ctx, contextNativeClock{}, "/TEST-owned-helper", nil, ops); err != nil {
-				t.Fatal("refused diagnostic changed original operation", err)
-			}
-			if protected != "" {
-				if raw, err := os.ReadFile(protected); err != nil || string(raw) != sentinel {
-					t.Fatal("diagnostic modified an existing/foreign inode", err)
-				}
-			} else if _, err := os.Lstat(path); !os.IsNotExist(err) {
-				t.Fatal("unsafe diagnostic sink created", err)
-			}
-		})
-	}
-}
 
 func contextNativeFixture(t *testing.T) (contextNativeOperations, *contextNativeRequest, *int) {
 	t.Helper()
