@@ -540,18 +540,38 @@ static void toastcheck(HRESULT value) {
     if (value == UIA_E_ELEMENTNOTAVAILABLE) throw ToastUnavailable{};
     hrcheck(value);
 }
+static bool toastShellLeaf(const std::wstring& path) {
+    auto leaf = fs::path(path).filename().wstring();
+    std::transform(leaf.begin(), leaf.end(), leaf.begin(), towlower);
+    return leaf == L"shellexperiencehost.exe" || leaf == L"shellhost.exe" || leaf == L"explorer.exe";
+}
+static std::unique_ptr<OwnedProcess> toastShellRootProcess(DWORD pid) {
+    auto process = std::make_unique<OwnedProcess>(); process->pid = pid;
+    process->handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, pid);
+    need(process->handle && running(process->handle), "product_toast_root_owner_unavailable");
+    wchar_t image[32768]{}; DWORD length = 32768;
+    need(QueryFullProcessImageNameW(process->handle, 0, image, &length) && length > 0 && length < 32768,
+         "product_toast_root_image_unavailable");
+    process->image.assign(image, length);
+    if (!toastShellLeaf(process->image)) return nullptr;
+    NavigationTokenTEST::Token token, self;
+    need(OpenProcessToken(process->handle, TOKEN_QUERY, &token.handle)
+         && OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &self.handle), "product_toast_root_token_unavailable");
+    const auto actual = NavigationTokenTEST::facts(token.handle), expected = NavigationTokenTEST::facts(self.handle);
+    if (actual.sid != expected.sid || actual.auth != expected.auth || actual.session != expected.session) return nullptr;
+    processBirth(*process);
+    return process;
+}
 struct ToastShell {
     std::unique_ptr<OwnedProcess> process;
     std::unique_ptr<PiWindowsShellImageTEST::InspectionImage> image;
     ULONGLONG birth = 0;
     std::wstring path;
-    explicit ToastShell(DWORD pid) {
-        process = processIdentity(pid, PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE);
+    explicit ToastShell(DWORD pid) : ToastShell(processIdentity(pid, PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE)) {}
+    explicit ToastShell(std::unique_ptr<OwnedProcess> original) : process(std::move(original)) {
         need(process != nullptr, "product_toast_shell_process_unavailable");
         birth = process->created; path = process->image;
-        auto leaf = fs::path(path).filename().wstring();
-        std::transform(leaf.begin(), leaf.end(), leaf.begin(), towlower);
-        need(leaf == L"shellexperiencehost.exe" || leaf == L"shellhost.exe" || leaf == L"explorer.exe", "product_toast_shell_image_not_admitted");
+        need(toastShellLeaf(path), "product_toast_shell_image_not_admitted");
         try {
             image = std::make_unique<PiWindowsShellImageTEST::InspectionImage>(path); image->verifyMicrosoft();
             need(image->verifiedStable, "product_toast_shell_signature_unverified");
@@ -600,16 +620,19 @@ static std::string toastRuntime(IUIAutomationElement* element) {
     SafeArrayDestroy(raw); return result + ']';
 }
 struct ToastTrace {
-    int maxTitleMatches = 0, staleElements = 0;
-    bool shellProviderSeen = false;
+    int maxTitleMatches = 0, staleElements = 0, completeRootScans = 0;
+    bool shellProviderSeen = false, deadlineExpired = false;
     std::string stage = "not_started";
     std::vector<int> ancestorTypes;
 };
+static bool knownToastAbsence(const ToastTrace& trace) { return trace.completeRootScans > 0 && trace.staleElements == 0; }
 static std::string toastTrace(const ToastTrace& trace) {
     std::string types = "[";
     for (const auto type : trace.ancestorTypes) { if (types.size() > 1) types += ','; types += std::to_string(type); }
     return "\"max_exact_title_matches\":" + std::to_string(trace.maxTitleMatches)
         + ",\"shell_provider_seen\":" + jsonBool(trace.shellProviderSeen) + ",\"stale_element_reacquisitions\":" + std::to_string(trace.staleElements)
+        + ",\"deadline_expired\":" + jsonBool(trace.deadlineExpired)
+        + ",\"complete_root_scans\":" + std::to_string(trace.completeRootScans)
         + ",\"last_stage\":\"" + trace.stage + "\",\"ancestor_control_types\":" + types + "]";
 }
 struct ToastCard {
@@ -622,14 +645,37 @@ struct ToastCard {
 static std::unique_ptr<ToastCard> card(IUIAutomation* automation, const std::wstring& expected, const std::wstring& body,
         ToastTrace& trace, std::map<DWORD, std::shared_ptr<ToastShell>>& shells, ULONGLONG until) {
     auto budget = [&]() { toastBudget(until); };
-    budget(); ComPtr<IUIAutomationElement> root, text; toastcheck(automation->GetRootElement(&root));
+    budget(); ComPtr<IUIAutomationElement> root, text; hrcheck(automation->GetRootElement(&root));
     VARIANT name{}; name.vt = VT_BSTR; name.bstrVal = SysAllocString(expected.c_str());
     ComPtr<IUIAutomationCondition> match; const auto condition = automation->CreatePropertyCondition(UIA_NamePropertyId, name, &match); VariantClear(&name); toastcheck(condition);
-    ComPtr<IUIAutomationElementArray> all; toastcheck(root->FindAll(TreeScope_Descendants, match.Get(), &all));
-    int total = 0; toastcheck(all->get_Length(&total)); need(total <= 1, "product_toast_title_ambiguous");
+    // Microsoft explicitly advises against traversing the entire desktop.
+    // Inventory its children, then search every admitted Shell root, retaining
+    // aggregate nonce uniqueness and the original deadline. Unknown inventory
+    // or provider errors refuse; they cannot establish notification absence.
+    trace.stage = "desktop_children_query";
+    ComPtr<IUIAutomationCondition> yes; hrcheck(automation->CreateTrueCondition(&yes));
+    ComPtr<IUIAutomationElementArray> windows; hrcheck(root->FindAll(TreeScope_Children, yes.Get(), &windows));
+    int roots = 0; hrcheck(windows->get_Length(&roots)); need(roots >= 0 && roots <= 256, "product_toast_root_inventory_bound");
+    int total = 0;
+    for (int index = 0; index < roots; ++index) {
+        budget(); trace.stage = "shell_root_owner_query";
+        ComPtr<IUIAutomationElement> window; hrcheck(windows->GetElement(index, &window));
+        int pid = 0; hrcheck(window->get_CurrentProcessId(&pid)); need(pid > 0, "product_toast_root_provider_missing");
+        if (!shells.contains(pid)) {
+            auto process = toastShellRootProcess(pid);
+            if (!process) continue;
+            need(shells.size() < 8, "product_toast_shell_owner_bound");
+            shells.emplace(pid, std::make_shared<ToastShell>(std::move(process)));
+        }
+        shells.at(pid)->validate(); budget(); trace.stage = "shell_root_nonce_query";
+        ComPtr<IUIAutomationElementArray> all; hrcheck(window->FindAll(TreeScope_Subtree, match.Get(), &all));
+        int count = 0; hrcheck(all->get_Length(&count));
+        need(count >= 0 && count <= 1 && total + count <= 1, "product_toast_title_ambiguous");
+        if (count) { hrcheck(all->GetElement(0, &text)); total += count; }
+    }
+    ++trace.completeRootScans;
     trace.maxTitleMatches = std::max(trace.maxTitleMatches, total); trace.stage = "exact_title_missing";
     budget(); if (!total) return nullptr;
-    toastcheck(all->GetElement(0, &text));
     int pid = 0; toastcheck(text->get_CurrentProcessId(&pid)); need(pid > 0, "product_toast_provider_missing");
     trace.stage = "exact_title_provider_not_shell";
     if (!shells.contains(pid)) { need(shells.size() < 8, "product_toast_shell_owner_bound"); shells.emplace(pid, std::make_shared<ToastShell>(pid)); }
@@ -673,6 +719,10 @@ static std::unique_ptr<ToastCard> card(IUIAutomation* automation, const std::wst
     return nullptr;
 }
 static void testToastSelection() {
+    ToastTrace unknown, complete, stale;
+    complete.completeRootScans = stale.completeRootScans = 1; stale.staleElements = 1;
+    need(!knownToastAbsence(unknown) && knownToastAbsence(complete) && !knownToastAbsence(stale), "toast_guard_unknown_is_not_absence");
+    need(!toastShellRootProcess(GetCurrentProcessId()), "toast_guard_foreign_root_admitted");
     need(toastCardType(UIA_WindowControlTypeId) && !toastCardType(UIA_PaneControlTypeId), "toast_guard_measured_window_type");
     const std::wstring title = L"TEST-Pi-toast-owned", body = L"Pi completed a task";
     need(toastBody(body, title, body) && toastBody(L"TEST-Pi-origin-owned\n" + body, title, body)
@@ -746,12 +796,13 @@ static int toast(const std::wstring& expected, const std::wstring& body, const f
                           << ",\"budget_remaining_ms_at_start\":" << until - started
                           << ",\"elapsed_ms\":" << GetTickCount64() - started << ',' << toastTrace(trace) << "}\n"; return 0;
             }
-        } catch (const ToastDeadline&) { trace.stage = "original_toast_deadline_expired"; break; }
+        } catch (const ToastDeadline&) { trace.deadlineExpired = true; break; }
         catch (const ToastUnavailable&) {
             need(!inputAttempted, "product_toast_stale_after_input_unknown"); ++trace.staleElements; trace.stage = "stale_element_reacquiring";
         }
         pump(100);
     }
+    need(knownToastAbsence(trace), "product_toast_absence_unverified");
     bool captured = false; if (!ready.empty()) { try { screenshot(image); captured = true; } catch (...) {} }
     std::cout << "{\"found\":false,\"observation_end_screenshot\":" << jsonBool(captured)
               << ",\"original_deadline_tick_ms\":" << until << ",\"budget_remaining_ms_at_start\":" << until - started
