@@ -621,11 +621,13 @@ static std::string toastRuntime(IUIAutomationElement* element) {
 }
 struct ToastTrace {
     int maxTitleMatches = 0, staleElements = 0, completeRootScans = 0;
-    bool shellProviderSeen = false, deadlineExpired = false;
+    bool shellProviderSeen = false, deadlineExpired = false, rootScanComplete = false;
     std::string stage = "not_started";
     std::vector<int> ancestorTypes;
 };
-static bool knownToastAbsence(const ToastTrace& trace) { return trace.completeRootScans > 0 && trace.staleElements == 0; }
+static bool knownToastAbsence(const ToastTrace& trace) {
+    return trace.rootScanComplete && trace.maxTitleMatches == 0 && trace.staleElements == 0;
+}
 static std::string toastTrace(const ToastTrace& trace) {
     std::string types = "[";
     for (const auto type : trace.ancestorTypes) { if (types.size() > 1) types += ','; types += std::to_string(type); }
@@ -633,6 +635,7 @@ static std::string toastTrace(const ToastTrace& trace) {
         + ",\"shell_provider_seen\":" + jsonBool(trace.shellProviderSeen) + ",\"stale_element_reacquisitions\":" + std::to_string(trace.staleElements)
         + ",\"deadline_expired\":" + jsonBool(trace.deadlineExpired)
         + ",\"complete_root_scans\":" + std::to_string(trace.completeRootScans)
+        + ",\"last_root_scan_complete\":" + jsonBool(trace.rootScanComplete)
         + ",\"last_stage\":\"" + trace.stage + "\",\"ancestor_control_types\":" + types + "]";
 }
 struct ToastCard {
@@ -645,7 +648,8 @@ struct ToastCard {
 static std::unique_ptr<ToastCard> card(IUIAutomation* automation, const std::wstring& expected, const std::wstring& body,
         ToastTrace& trace, std::map<DWORD, std::shared_ptr<ToastShell>>& shells, ULONGLONG until) {
     auto budget = [&]() { toastBudget(until); };
-    budget(); ComPtr<IUIAutomationElement> root, text; hrcheck(automation->GetRootElement(&root));
+    budget(); trace.rootScanComplete = false;
+    ComPtr<IUIAutomationElement> root, text; hrcheck(automation->GetRootElement(&root));
     VARIANT name{}; name.vt = VT_BSTR; name.bstrVal = SysAllocString(expected.c_str());
     ComPtr<IUIAutomationCondition> match; const auto condition = automation->CreatePropertyCondition(UIA_NamePropertyId, name, &match); VariantClear(&name); toastcheck(condition);
     // Microsoft explicitly advises against traversing the entire desktop.
@@ -670,11 +674,13 @@ static std::unique_ptr<ToastCard> card(IUIAutomation* automation, const std::wst
         shells.at(pid)->validate(); budget(); trace.stage = "shell_root_nonce_query";
         ComPtr<IUIAutomationElementArray> all; hrcheck(window->FindAll(TreeScope_Subtree, match.Get(), &all));
         int count = 0; hrcheck(all->get_Length(&count));
-        need(count >= 0 && count <= 1 && total + count <= 1, "product_toast_title_ambiguous");
+        need(count >= 0 && count <= 1, "product_toast_title_ambiguous");
+        trace.maxTitleMatches = std::max(trace.maxTitleMatches, total + count);
+        need(total + count <= 1, "product_toast_title_ambiguous");
         if (count) { hrcheck(all->GetElement(0, &text)); total += count; }
     }
-    budget(); ++trace.completeRootScans;
-    trace.maxTitleMatches = std::max(trace.maxTitleMatches, total); trace.stage = "exact_title_missing";
+    budget(); trace.rootScanComplete = true; ++trace.completeRootScans;
+    trace.stage = "exact_title_missing";
     if (!total) return nullptr;
     int pid = 0; toastcheck(text->get_CurrentProcessId(&pid)); need(pid > 0, "product_toast_provider_missing");
     trace.stage = "exact_title_provider_not_shell";
@@ -719,9 +725,12 @@ static std::unique_ptr<ToastCard> card(IUIAutomation* automation, const std::wst
     return nullptr;
 }
 static void testToastSelection() {
-    ToastTrace unknown, complete, stale;
-    complete.completeRootScans = stale.completeRootScans = 1; stale.staleElements = 1;
-    need(!knownToastAbsence(unknown) && knownToastAbsence(complete) && !knownToastAbsence(stale), "toast_guard_unknown_is_not_absence");
+    ToastTrace unknown, complete, stale, partial, matched;
+    complete.rootScanComplete = stale.rootScanComplete = matched.rootScanComplete = true;
+    complete.completeRootScans = stale.completeRootScans = partial.completeRootScans = matched.completeRootScans = 1;
+    stale.staleElements = 1; matched.maxTitleMatches = 1;
+    need(!knownToastAbsence(unknown) && knownToastAbsence(complete) && !knownToastAbsence(stale)
+        && !knownToastAbsence(partial) && !knownToastAbsence(matched), "toast_guard_unknown_is_not_absence");
     need(!toastShellRootProcess(GetCurrentProcessId()), "toast_guard_foreign_root_admitted");
     need(toastCardType(UIA_WindowControlTypeId) && !toastCardType(UIA_PaneControlTypeId), "toast_guard_measured_window_type");
     const std::wstring title = L"TEST-Pi-toast-owned", body = L"Pi completed a task";
@@ -803,11 +812,12 @@ static int toast(const std::wstring& expected, const std::wstring& body, const f
         pump(100);
     }
     trace.deadlineExpired = true;
-    need(knownToastAbsence(trace), "product_toast_absence_unverified");
+    const bool absenceVerified = knownToastAbsence(trace);
     bool captured = false; if (!ready.empty()) { try { screenshot(image); captured = true; } catch (...) {} }
-    std::cout << "{\"found\":false,\"observation_end_screenshot\":" << jsonBool(captured)
+    std::cout << "{\"found\":false,\"absence_verified\":" << jsonBool(absenceVerified)
+              << ",\"observation_end_screenshot\":" << jsonBool(captured)
               << ",\"original_deadline_tick_ms\":" << until << ",\"budget_remaining_ms_at_start\":" << until - started
-              << ",\"elapsed_ms\":" << GetTickCount64() - started << ',' << toastTrace(trace) << "}\n" << std::flush; return 3;
+              << ",\"elapsed_ms\":" << GetTickCount64() - started << ',' << toastTrace(trace) << "}\n" << std::flush; return absenceVerified ? 3 : 4;
 }
 static int capture(const fs::path& path, const fs::path& stop, int routeCount, wchar_t** routeArgs) {
     ComPtr<IMMDeviceEnumerator> enumerator; ComPtr<IMMDevice> endpoint; ComPtr<IAudioClient> client; ComPtr<IAudioCaptureClient> reader;
