@@ -1317,7 +1317,10 @@ struct FocusPermissionContext: Decodable {
     let configuration = NSWorkspace.OpenConfiguration()
     configuration.activates = true
     configuration.createsNewApplicationInstance = false
-    let app = try await NSWorkspace.shared.openApplication(at: url, configuration: configuration)
+    // This exact public pane route was observed with the same signed Settings
+    // owner and strict controls in the completed owner 5e977 run.
+    let pane = URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension")!
+    let app = try await NSWorkspace.shared.open([pane], withApplicationAt: url, configuration: configuration)
     guard app.bundleIdentifier == identifier, app.bundleURL?.resolvingSymlinksInPath().path == path,
           app.executableURL?.resolvingSymlinksInPath().path == path + "/Contents/MacOS/System Settings",
           terminalAutomationUID(app.processIdentifier) == Int(getuid()), let start = processStartIdentity(app.processIdentifier) else {
@@ -1365,6 +1368,19 @@ struct FocusPermissionContext: Decodable {
         guard let reasons = tree["cap_reasons"] as? [String] else { return false }
         let hard = Set(["messaging_timeout", "deadline", "node_or_depth_limit", "window_limit", "windows_unavailable"])
         return !reasons.contains(where: { hard.contains($0) })
+    }
+    // A ready pane needs no sidebar scroll, category click or duplicate full
+    // inventory. The unchanged action rechecks these exact original controls.
+    if current(), withinBounds(first.1), settingsPolicyPairs(first.0) != nil,
+       try consentMonotonicTime() < deadline - 0.65 {
+        result["notifications_page_ready"] = true
+        preparation?.receipt["inspection_before_cleanup"] = result
+        if let preparation {
+            preparation.receipt["policy_readiness_observations"] = 1
+            try await prepareNotificationPresentation(first.0, preparation: preparation, deadline: deadline - 0.25)
+        }
+        result["elapsed_seconds"] = (try consentMonotonicTime()) - now
+        return result
     }
     // The measured sidebar exposes the exact label below its visible viewport.
     // Scroll only its original, verified ScrollArea; this never activates a row.
