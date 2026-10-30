@@ -1,8 +1,8 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { execFile, type ChildProcess } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { closeSync, fstatSync, lstatSync, openSync, readSync, realpathSync } from "node:fs";
-import { isAbsolute, join, normalize, relative } from "node:path";
+import { appendFileSync, closeSync, fstatSync, lstatSync, openSync, readSync, realpathSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, normalize, relative } from "node:path";
 
 type Descriptor = Readonly<{
   schema_version: number;
@@ -41,6 +41,45 @@ const path = (value: unknown): value is string => text(value) && isAbsolute(valu
 const digest = (value: unknown): value is string => typeof value === "string" && /^sha256:[a-f0-9]{64}$/u.test(value);
 const object = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value);
 const sameKeys = (value: Record<string, unknown>, keys: string[]) => Object.keys(value).sort().join("\0") === keys.sort().join("\0");
+
+// TEMPORARY NATIVE DIAGNOSTIC ONLY: never retain arbitrary child stderr.
+export function recordTestDiagnostic(stderr: unknown): void {
+  try {
+    const filename = process.env.TEST_PI_WITNESS;
+    if (process.env.TEST_PI_NATIVE_DIAGNOSTIC !== "1" || !path(filename) || basename(filename) !== "witness.jsonl" ||
+        !basename(dirname(filename)).startsWith("case-") ||
+        !["TEST-pi-installed-macos-", "TEST-pi-windows-desktop-"].some(prefix => basename(dirname(dirname(filename))).startsWith(prefix)) ||
+        typeof stderr !== "string") return;
+    const info = lstatSync(filename), parent = lstatSync(dirname(filename));
+    if (!info.isFile() || info.isSymbolicLink() || info.size > FRAME_LIMIT || realpathSync(filename) !== filename ||
+        !parent.isDirectory() || (process.platform !== "win32" && (parent.mode & 0o077) !== 0)) return;
+    const phases = new Set(["admission", "resolve", "desktop_channel", "local_terminal", "tui_mode", "desktop_status",
+      "desktop_claim", "desktop_lease", "webhook_claim", "webhook_lease", "desktop_result", "webhook_result", "consumer_result",
+      "native_runtime", "native_bundle", "native_probe", "native_capabilities", "native_owner", "native_clock", "native_request",
+      "native_launch", "native_receipt", "native_started", "focus_ready", "toast_started", "toast_returned", "sound_started", "sound_returned",
+      "cache_validate", "cache_path", "cache_root", "cache_prepare", "cache_lock", "cache_clock", "cache_read", "cache_decode",
+      "cache_record", "cache_encode", "cache_publish", "cache_published", "cache_budget"]);
+    const codes = new Set(["", "ready", "started", "refused", "enabled", "disabled", "deadline", "canceled", "process_error",
+      "invalid", "unavailable", "suppressed", "expired", "cache_unavailable", "duplicate", "revoked", "unknown", "submitted",
+      "invalid_fact", "unsupported_fact", "not_registered", "invalid_config", "channels_disabled", "delivery_uncertain",
+      "no_attempt", "hook_handoff", "consumer_unavailable", "os_accepted", "os_rejected", "permission_denied", "activation_required",
+      "timeout", "malformed_request", "invalid_file", "unsupported_version", "unsupported_action", "unsupported_notifier",
+      "ok", "cancelled", "deadline_exceeded", "error", "invalid_request", "invalid_path", "validation", "invalid_clock", "none",
+      "invalid_document", "os_error", "sharing_violation", "lock_violation", "permission", "not_found", "active", "not_started"]);
+    let output = "";
+    for (const line of stderr.slice(0, 32768).split("\n").slice(0, 64)) {
+      let row: unknown;
+      try { row = JSON.parse(line); } catch { continue; }
+      if (!object(row) || !sameKeys(row, ["type", "phase", "code", "elapsed_ms", "remaining_ms"]) ||
+          row.type !== "TEST_pi_native_delivery" || typeof row.phase !== "string" || !phases.has(row.phase) ||
+          typeof row.code !== "string" || !codes.has(row.code) ||
+          !Number.isInteger(row.elapsed_ms) || Number(row.elapsed_ms) < 0 || Number(row.elapsed_ms) > 60000 ||
+          !Number.isInteger(row.remaining_ms) || Number(row.remaining_ms) < 0 || Number(row.remaining_ms) > 20000) continue;
+      output += JSON.stringify({ type: "TEST_pi_native_delivery", trace: row }) + "\n";
+    }
+    if (output && info.size + Buffer.byteLength(output) <= FRAME_LIMIT) appendFileSync(filename, output);
+  } catch { /* diagnostic failure never changes delivery */ }
+}
 
 function readJSON(filename: string): unknown {
   const info = lstatSync(filename);
@@ -129,7 +168,7 @@ export default function notifications(pi: ExtensionAPI, descriptor: Descriptor):
       let killTimer: ReturnType<typeof setTimeout> | undefined;
       let softTimer: ReturnType<typeof setTimeout>;
       let hardTimer: ReturnType<typeof setTimeout>;
-      const child = execFile(runtime.executable, ["pi-event", "--binding", runtime.selector], { cwd, env: process.env, shell: false, windowsHide: true, maxBuffer: FRAME_LIMIT }, () => { /* native result is never exposed to Pi */ });
+      const child = execFile(runtime.executable, ["pi-event", "--binding", runtime.selector], { cwd, env: process.env, shell: false, windowsHide: true, maxBuffer: FRAME_LIMIT }, (_error, _stdout, stderr) => { recordTestDiagnostic(stderr); });
       const hardKill = () => {
         if (closed) return;
         try { child.kill("SIGKILL"); } catch { /* process may already have exited */ }

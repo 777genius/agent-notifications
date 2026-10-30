@@ -29,6 +29,42 @@ import zipfile
 REPO = Path(__file__).resolve().parents[1]
 CASES = ("completion", "question", "sound-off", "click-off", "desktop-off", "stale-origin")
 BANNER_OBSERVATION_SECONDS = 25
+TEST_PHASES = {"admission", "resolve", "desktop_channel", "local_terminal", "tui_mode", "desktop_status",
+    "desktop_claim", "desktop_lease", "webhook_claim", "webhook_lease", "desktop_result", "webhook_result", "consumer_result",
+    "native_runtime", "native_bundle", "native_probe", "native_capabilities", "native_owner", "native_clock", "native_request",
+    "native_launch", "native_receipt", "native_started", "focus_ready", "toast_started", "toast_returned", "sound_started", "sound_returned",
+    "cache_validate", "cache_path", "cache_root", "cache_prepare", "cache_lock", "cache_clock", "cache_read", "cache_decode",
+    "cache_record", "cache_encode", "cache_publish", "cache_published", "cache_budget"}
+TEST_CODES = {"", "ready", "started", "refused", "enabled", "disabled", "deadline", "canceled", "process_error",
+    "invalid", "unavailable", "suppressed", "expired", "cache_unavailable", "duplicate", "revoked", "unknown", "submitted",
+    "invalid_fact", "unsupported_fact", "not_registered", "invalid_config", "channels_disabled", "delivery_uncertain",
+    "no_attempt", "hook_handoff", "consumer_unavailable", "os_accepted", "os_rejected", "permission_denied", "activation_required",
+    "timeout", "malformed_request", "invalid_file", "unsupported_version", "unsupported_action", "unsupported_notifier",
+    "ok", "cancelled", "deadline_exceeded", "error", "invalid_request", "invalid_path", "validation", "invalid_clock", "none",
+    "invalid_document", "os_error", "sharing_violation", "lock_violation", "permission", "not_found", "active", "not_started"}
+
+
+def test_diagnostic_rows(rows):
+    # TEMPORARY: revalidate the closed stderr projection before retaining it.
+    result = []
+    for row in rows[:128]:
+        trace = row.get("trace") if isinstance(row, dict) and row.get("type") == "TEST_pi_native_delivery" else None
+        if not isinstance(trace, dict) or set(trace) != {"type", "phase", "code", "elapsed_ms", "remaining_ms"}:
+            continue
+        if trace["type"] == "TEST_pi_native_delivery" and type(trace["phase"]) is str and trace["phase"] in TEST_PHASES \
+                and type(trace["code"]) is str and trace["code"] in TEST_CODES \
+                and type(trace["elapsed_ms"]) is int and 0 <= trace["elapsed_ms"] <= 60000 \
+                and type(trace["remaining_ms"]) is int and 0 <= trace["remaining_ms"] <= 20000:
+            result.append(dict(trace))
+    return result
+
+
+def mark_diagnostic_unqualified(report):
+    # TEMPORARY: even complete instrumented observations cannot qualify.
+    report["diagnostic_observations_complete"] = report["native_product_observations_passed"]
+    report["native_product_observations_passed"] = False
+    if report["diagnostic_observations_complete"]:
+        report["status"] = "unqualified_diagnostic"
 
 
 def module(name, path):
@@ -100,6 +136,7 @@ def partial_case_failure(case_root, provider, sink, sink_start, expected, observ
                             for key in ("hasUI", "idle", "aborted")},
             "boundary_outcome_counts": {outcome: sum(row.get("type") == "agent_before_settle"
                 and row.get("outcome") == outcome for row in witness) for outcome in ("completed", "aborted", "error")}}
+        result["diagnostic_trace"] = test_diagnostic_rows(witness)
     except Exception as error:
         result["witness_error_class"] = type(error).__name__
     try:
@@ -838,7 +875,7 @@ def run(args):
     profile, terminals, helpers, app = root / "agent", [], [], None
     permission_request = permission_log = None
     consent_names = []
-    report = {"schema_version": 1, "scope": "actual_installed_pi_macos_desktop", "status": "failed",
+    report = {"schema_version": 1, "scope": "test_only_pi_macos_delivery_diagnostic", "diagnostic_only": True, "status": "failed",
               "test_root": str(root), "source_sha": command(["git", "-C", REPO, "rev-parse", "HEAD"]).strip(),
               "working_tree_dirty": bool(command(["git", "-C", REPO, "status", "--porcelain"])),
               "script_sha256": P.sha(__file__), "observer_source_sha256": P.sha(REPO / "tests/integration/pi_installed_desktop_darwin.swift"),
@@ -884,6 +921,7 @@ def run(args):
         try:
             native_env = F.prepare(case_root, provider, "success", agent_dir=profile)
             native_env.update(AGENT_NOTIFICATIONS_CONFIG=str(root / "global/config.json"), TEST_PI_DEFER_DIALOG="1",
+                              TEST_PI_NATIVE_DIAGNOSTIC="1",
                               CLAUDE_PLUGIN_ROOT=str(root / "foreign-TEST-root"))
             P.configure(root / "global/config.json", args.assets_root / "config/config.json", sink,
                         desktop=desktop, sound=sound, click=click)
@@ -987,6 +1025,7 @@ def run(args):
                 F.verify_case("success", rows, provider.requests)
             sink.quiet()
             report["cases"].append({"case": name, "native_mode": "tui", "origin_window": terminal.window,
+                "diagnostic_trace": test_diagnostic_rows(rows),
                 "origin_tty": terminal.tty, "origin_pi_pid": terminal.pid, "decoy_window": decoy.window,
                 "decoy_tty": decoy.tty, "foreground_after_click": after, "banner_matches": banner,
                 "unchanged_click_observation": click_observation,
@@ -1178,6 +1217,7 @@ def run(args):
         if failures or not report["owned_children_collected"]:
             report.update(status="failed", native_product_observations_passed=False, cleanup_failures=failures)
         args.report.parent.mkdir(parents=True, exist_ok=True)
+        mark_diagnostic_unqualified(report)
         args.report.write_text(json.dumps(report, indent=2) + "\n")
         print(json.dumps({"status": report["status"], "failure": report.get("failure"), "desktop_qualified": False}))
     return 0 if report["native_product_observations_passed"] and report["owned_children_collected"] else 1

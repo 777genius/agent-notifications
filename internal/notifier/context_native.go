@@ -81,24 +81,41 @@ func runContextNativeApp(ctx context.Context, clock BootClock, executable string
 		end, _ = ctx.Deadline()
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, time.Second)
+	traceTestNative(ctx, "native_probe", "started")
 	data, err := operations.probe(probeCtx)
+	probeCode := "ready"
+	if errors.Is(probeCtx.Err(), context.DeadlineExceeded) {
+		probeCode = "deadline"
+	} else if probeCtx.Err() != nil {
+		probeCode = "canceled"
+	} else if err != nil {
+		probeCode = "process_error"
+	}
 	cancel()
+	traceTestNative(ctx, "native_probe", probeCode)
 	var capabilities struct {
 		SchemaVersion int   `json:"schemaVersion"`
 		Versions      []int `json:"contextNotificationVersions"`
 	}
 	if err != nil || decodeContextNative(data, &capabilities) != nil || capabilities.SchemaVersion != 1 || len(capabilities.Versions) != 1 || capabilities.Versions[0] != 1 {
+		traceTestNative(ctx, "native_capabilities", "refused")
 		return errors.New("context_native_helper_required")
 	}
+	traceTestNative(ctx, "native_capabilities", "ready")
 	owner, err := operations.owner()
 	if err != nil || !owner.valid() {
+		traceTestNative(ctx, "native_owner", "refused")
 		return errors.New("context_native_owner_unavailable")
 	}
+	traceTestNative(ctx, "native_owner", "ready")
 	boot, now, err := clock.Now()
 	remaining = time.Until(end)
 	if err != nil || boot == "" || now < 0 || remaining <= 0 || ctx.Err() != nil {
+		traceTestNative(ctx, "native_clock", "refused")
 		return errors.New("context_native_clock_unavailable")
 	}
+	traceTestNative(ctx, "native_clock", "ready")
+	traceTestNative(ctx, "native_request", "started")
 	id, err := uuidString()
 	if err != nil {
 		return err
@@ -126,8 +143,10 @@ func runContextNativeApp(ctx context.Context, clock BootClock, executable string
 		return errors.New("invalid_context_native_request")
 	}
 	if err := writePrivate(request, body); err != nil {
+		traceTestNative(ctx, "native_request", "refused")
 		return err
 	}
+	traceTestNative(ctx, "native_request", "ready")
 	// Revoke before inspecting the started receipt. A native reader publishes
 	// its exact process identity before attempting an effect; if publication
 	// races cancellation, its missing request/claim check denies the effect.
@@ -163,6 +182,11 @@ func runContextNativeApp(ctx context.Context, clock BootClock, executable string
 	// The launcher is joined once; the app has a separate, exact process owner.
 	// Neither path retries an uncertain native handoff.
 	launchErr := operations.launch(ctx, request, receipt)
+	launchCode := "ready"
+	if launchErr != nil {
+		launchCode = "process_error"
+	}
+	traceTestNative(ctx, "native_launch", launchCode)
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 	for {
@@ -173,8 +197,10 @@ func runContextNativeApp(ctx context.Context, clock BootClock, executable string
 		if err == nil {
 			result, decodeErr := nativeprotocol.DecodeReceipt(data, id, nonce)
 			if decodeErr != nil {
+				traceTestNative(ctx, "native_receipt", "invalid")
 				return errors.Join(decodeErr, stop())
 			}
+			traceTestNative(ctx, "native_receipt", result.Reason)
 			if result.Status == "submitted" {
 				return nil
 			}
@@ -188,6 +214,7 @@ func runContextNativeApp(ctx context.Context, clock BootClock, executable string
 		// interval; keep that check and wait for the sealed receipt, within the
 		// same deadline. An unreadable/unsafe receipt can never admit a retry.
 		if launchErr != nil || ctx.Err() != nil {
+			traceTestNative(ctx, "native_receipt", "unavailable")
 			return errors.Join(launchErr, ctx.Err(), stop())
 		}
 		select {

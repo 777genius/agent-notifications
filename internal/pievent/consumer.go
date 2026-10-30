@@ -105,6 +105,17 @@ func (c Consumer) Consume(parent context.Context, f pisource.Facts, d notificati
 		return Receipt{Status: "suppressed", Reason: "invalid_config"}
 	}
 	channels := c.Gate.Channels(ctx, c.Binding, f.Revision)
+	for _, check := range []struct {
+		phase string
+		value bool
+	}{{"desktop_channel", channels.Desktop}, {"local_terminal", c.LocalTerminal},
+		{"tui_mode", f.Mode == "tui"}, {"desktop_status", c.Config.IsStatusDesktopEnabled(string(status))}} {
+		code := "disabled"
+		if check.value {
+			code = "enabled"
+		}
+		TraceTest(ctx, check.phase, code)
+	}
 	out = Receipt{Status: "suppressed", Reason: "channels_disabled"}
 	effect := func(ch Channel, invoke func() error) string {
 		if _, ok := remaining(c.Clock, d); !ok || ctx.Err() != nil {
@@ -114,17 +125,26 @@ func (c Consumer) Consume(parent context.Context, f pisource.Facts, d notificati
 		if ch == WebhookChannel {
 			bit = 2
 		}
+		TraceTest(ctx, string(ch)+"_claim", "started")
 		claimed, err := c.Cache.Claim(ctx, marker(c.Binding, f), bit)
 		if err != nil {
+			var failure *observation.ClaimFailure
+			if errors.As(err, &failure) {
+				TraceTest(ctx, "cache_"+failure.Phase, failure.Class)
+				TraceTest(ctx, "cache_budget", failure.BudgetState)
+			}
 			return "cache_unavailable"
 		}
 		if !claimed {
 			return "duplicate"
 		}
+		TraceTest(ctx, string(ch)+"_claim", "ready")
 		release, err := c.Gate.Acquire(ctx, c.Binding, f.Revision, ch)
 		if err != nil || release == nil {
+			TraceTest(ctx, string(ch)+"_lease", "refused")
 			return "revoked"
 		}
+		TraceTest(ctx, string(ch)+"_lease", "ready")
 		defer release()
 		if _, ok := remaining(c.Clock, d); !ok || ctx.Err() != nil {
 			return "expired"

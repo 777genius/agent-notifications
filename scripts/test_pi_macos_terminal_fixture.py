@@ -61,6 +61,30 @@ class ProductBannerObservation(unittest.TestCase):
                             M.wait_for_product_banner(observe, "Pi completed a task", 125)
 
 
+class TemporaryMacDiagnostic(unittest.TestCase):
+    def test_python_projection_rejects_raw_unknown_and_coerced_fields(self):
+        valid = {"type": "TEST_pi_native_delivery", "phase": "desktop_result", "code": "submitted",
+                 "elapsed_ms": 500, "remaining_ms": 19500}
+        invalid = [{**valid, "code": "TEST-secret"}, {**valid, "raw": "TEST-secret"},
+                   {**valid, "phase": ["desktop_result"]}, {**valid, "elapsed_ms": True},
+                   {**valid, "remaining_ms": 20001}, {**valid, "code": None}]
+        rows = [{"type": "TEST_pi_native_delivery", "trace": trace} for trace in invalid + [valid]]
+        self.assertEqual(M.test_diagnostic_rows(rows), [valid])
+
+    def test_actual_finalizer_prevents_otherwise_valid_mac_qualification(self):
+        guards = M.module("pi_aggregate_guards", REPO / "scripts/test_pi_qualification_aggregate.py")
+        aggregate = guards.A
+        build, acquisition, process, desktop = guards.metadata("darwin")
+        with mock.patch.object(aggregate.B.H, "load_pin", return_value=guards.HELPER_PIN), \
+                mock.patch.object(aggregate.B.H, "candidate_tree"):
+            self.assertEqual(aggregate.qualify("darwin", guards.SOURCE, build, acquisition, process, desktop)["status"], "qualified")
+            M.mark_diagnostic_unqualified(desktop)
+            self.assertTrue(desktop["diagnostic_observations_complete"])
+            self.assertFalse(desktop["native_product_observations_passed"])
+            with self.assertRaisesRegex(ValueError, "native_desktop_or_collection_not_observed"):
+                aggregate.qualify("darwin", guards.SOURCE, build, acquisition, process, desktop)
+
+
 class PartialCaseEvidence(unittest.TestCase):
     def capture(self, root, observe):
         provider = mock.Mock(requests=[{"prompt": "TEST-secret"}])

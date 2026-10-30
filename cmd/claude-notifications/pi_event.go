@@ -81,6 +81,7 @@ func runPiEventWith(parent context.Context, clock observation.Clock, args []stri
 		return 0
 	}
 	defer cancel()
+	pievent.TraceTest(ctx, "admission", "ready")
 	selector, ok := parsePiEventArgs(args)
 	if !ok || resolve == nil {
 		return 0
@@ -97,8 +98,13 @@ func runPiEventWith(parent context.Context, clock observation.Clock, args []stri
 	}
 	consumer, err := resolve(ctx, selector, facts)
 	if err != nil || ctx.Err() != nil {
+		pievent.TraceTest(ctx, "resolve", "refused")
 		return 0
 	}
-	_ = consumer.Consume(ctx, facts, deadline)
+	pievent.TraceTest(ctx, "resolve", "ready")
+	receipt := consumer.Consume(ctx, facts, deadline)
+	pievent.TraceTest(ctx, "desktop_result", receipt.Desktop)
+	pievent.TraceTest(ctx, "webhook_result", receipt.Webhook)
+	pievent.TraceTest(ctx, "consumer_result", receipt.Reason)
 	return 0
 }

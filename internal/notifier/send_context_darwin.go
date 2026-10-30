@@ -22,8 +22,10 @@ func validInstalledRuntime(opts sendOptions) bool {
 
 func (n *Notifier) sendNativeDesktopContext(ctx context.Context, sound, title, body, subtitle, sessionID, cwd, _ string, opts sendOptions) error {
 	if !validInstalledRuntime(opts) || !filepath.IsAbs(opts.nativeHelper) {
+		traceTestNative(ctx, "native_runtime", "refused")
 		return errors.New("installed_native_helper_required")
 	}
+	traceTestNative(ctx, "native_runtime", "ready")
 	bundleID := terminalBundleContext(ctx, n.cfg.Notifications.Desktop.TerminalBundleID)
 	args := []string{"-title", title, "-message", body}
 	if n.cfg.Notifications.Desktop.ClickToFocus && bundleID != "" {
@@ -46,8 +48,10 @@ func (n *Notifier) sendNativeDesktopContext(ctx context.Context, sound, title, b
 		return err
 	}
 	if app, ok := claudeNotifierAppPath(opts.nativeHelper); ok {
+		traceTestNative(ctx, "native_bundle", "ready")
 		return runNativeAppContext(ctx, app, args)
 	}
+	traceTestNative(ctx, "native_bundle", "refused")
 	_, err := commandrun.Output(ctx, exec.Command(opts.nativeHelper, args...))
 	return err
 }
