@@ -452,11 +452,14 @@ static void notificationCenterDiagnostic(const std::wstring& expected, const fs:
     if (sent == 2) { INPUT up = keys[2]; releaseUnknown = SendInput(1, &up, sizeof(INPUT)) != 1; }
     if (sent > 0 && sent < 4) { INPUT up = keys[3]; releaseUnknown = (SendInput(1, &up, sizeof(INPUT)) != 1) || releaseUnknown; }
     need(sent == 4 && !releaseUnknown, "notification_center_chord_unconfirmed");
-    pump(750); screenshot(image);
+    const auto observationStarted = GetTickCount64(), observationDeadline = observationStarted + 5000;
     ComPtr<IUIAutomation> automation; hrcheck(CoCreateInstance(CLSID_CUIAutomation, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&automation)));
     ComPtr<IUIAutomationElement> root; hrcheck(automation->GetRootElement(&root));
     ComPtr<IUIAutomationTreeWalker> walker; hrcheck(automation->get_ControlViewWalker(&walker));
-    std::string rows = "["; int retained = 0;
+    std::string rows; int retained = 0, dndMatches = 0, titleMatches = 0, ownerRefused = 0;
+    bool visible = false;
+    do {
+    rows = "["; retained = dndMatches = titleMatches = ownerRefused = 0;
     for (const auto& needle : {std::wstring(L"Do not disturb"), expected}) {
         VARIANT value{}; value.vt = VT_BSTR; value.bstrVal = SysAllocString(needle.c_str());
         const auto flags = needle == expected ? PropertyConditionFlags_MatchSubstring
@@ -464,9 +467,10 @@ static void notificationCenterDiagnostic(const std::wstring& expected, const fs:
         ComPtr<IUIAutomationCondition> match; const auto made = automation->CreatePropertyConditionEx(UIA_NamePropertyId, value, flags, &match); VariantClear(&value); hrcheck(made);
         ComPtr<IUIAutomationElementArray> found; hrcheck(root->FindAll(TreeScope_Descendants, match.Get(), &found));
         int count = 0; hrcheck(found->get_Length(&count)); need(count <= 8, "notification_center_match_bound");
+        if (needle == expected) titleMatches = count; else dndMatches = count;
         for (int i = 0; i < count; i++) {
             ComPtr<IUIAutomationElement> element; hrcheck(found->GetElement(i, &element)); int pid = 0; hrcheck(element->get_CurrentProcessId(&pid));
-            if (!shellOwner(static_cast<DWORD>(pid))) continue;
+            if (!shellOwner(static_cast<DWORD>(pid))) { ownerRefused++; continue; }
             OwnedProcess provider; provider.pid = static_cast<DWORD>(pid);
             provider.handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, provider.pid);
             if (!provider.handle || !running(provider.handle)) continue; processFacts(provider);
@@ -491,6 +495,7 @@ static void notificationCenterDiagnostic(const std::wstring& expected, const fs:
             const char* klass = std::wstring(rootClass) == L"Windows.UI.Core.CoreWindow" ? "core_window"
                 : std::wstring(rootClass) == L"Shell_TrayWnd" ? "taskbar" : nativeRoot ? "other" : "unavailable";
             need(running(provider.handle), "notification_provider_changed");
+            visible = visible || !offscreen;
             if (retained++) rows += ',';
             rows += std::string("{\"kind\":\"") + (dnd ? "dnd" : "owned_title") + "\",\"provider_pid\":" + std::to_string(pid)
                 + ",\"same_owner_verified\":true,\"name_exact_title\":" + jsonBool(name == expected) + ",\"label_state\":\"" + label + "\",\"toggle_state\":\"" + toggle
@@ -498,9 +503,15 @@ static void notificationCenterDiagnostic(const std::wstring& expected, const fs:
                 + ",\"root_hwnd\":" + std::to_string(reinterpret_cast<uintptr_t>(nativeRoot)) + ",\"root_class\":\"" + klass + "\"}";
         }
     }
+    if (!visible && GetTickCount64() < observationDeadline) pump(100);
+    } while (!visible && GetTickCount64() < observationDeadline);
+    screenshot(image);
     need(running(shell.handle) && GetShellWindow() == shellWindow, "notification_shell_changed");
     std::cout << "{\"scope\":\"post_failure_notification_center_readonly\",\"qualification_input\":false,\"win_n_events\":" << sent
-              << ",\"input_error\":" << inputError << ",\"shell_owner_verified\":true,\"key_release_unknown\":false,\"rows\":" << rows << "]}\n";
+              << ",\"input_error\":" << inputError << ",\"shell_owner_verified\":true,\"key_release_unknown\":false"
+              << ",\"post_chord_elapsed_ms\":" << GetTickCount64() - observationStarted << ",\"recognized_visible_ui_observed\":" << jsonBool(visible)
+              << ",\"dnd_name_matches\":" << dndMatches << ",\"owned_title_name_matches\":" << titleMatches
+              << ",\"owner_refused_matches\":" << ownerRefused << ",\"rows\":" << rows << "]}\n";
 }
 struct ToastTrace {
     int maxTitleMatches = 0;
