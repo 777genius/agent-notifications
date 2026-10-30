@@ -20,8 +20,15 @@
 #include <memory>
 
 namespace fs = std::filesystem;
+static constexpr uint64_t observationSeconds = 45;
+// The 20ms cadence plus at most 64 retained descendant verification scans.
+static constexpr unsigned processWatchScanLimit = observationSeconds * 50 + 65;
 static void need(bool value, const char* code) { if (!value) throw std::runtime_error(code); }
-static void hrcheck(HRESULT value) { if (FAILED(value)) throw std::runtime_error("native_hresult:" + std::to_string(value)); }
+struct NativeHRESULT : std::runtime_error {
+    HRESULT value;
+    explicit NativeHRESULT(HRESULT result) : std::runtime_error("native_hresult:" + std::to_string(result)), value(result) {}
+};
+static void hrcheck(HRESULT value) { if (FAILED(value)) throw NativeHRESULT(value); }
 static std::string utf8(const std::wstring& value) {
     const int size = WideCharToMultiByte(CP_UTF8, 0, value.data(), static_cast<int>(value.size()), nullptr, 0, nullptr, nullptr);
     std::string result(size, 0);
@@ -127,7 +134,7 @@ struct TimelineProcess {
 static std::string watchOwnedProcesses(std::unique_ptr<OwnedProcess> root, const std::wstring& notifierImage,
         const fs::path& ready, const fs::path& stop, ULONGLONG deadline) {
     const auto started = GetTickCount64(), originalBirth = root->created;
-    need(deadline > started && deadline - started <= 30000, "process_watch_original_deadline_required");
+    need(deadline > started && deadline - started <= observationSeconds * 1000, "process_watch_original_deadline_required");
     need(running(root->handle), "process_watch_live_original_required");
     wchar_t system[32768]{}; const auto count = GetSystemDirectoryW(system, 32768);
     need(count > 0 && count < 32768 && fs::path(notifierImage).is_absolute(), "process_watch_image_required");
@@ -159,7 +166,7 @@ static std::string watchOwnedProcesses(std::unique_ptr<OwnedProcess> root, const
     unsigned scans = 0, missed = 0;
     std::string reason = "deadline";
     auto inventory = [&]() {
-        need(scans < 1501 && GetTickCount64() < deadline, "process_watch_scan_bound");
+        need(scans < processWatchScanLimit && GetTickCount64() < deadline, "process_watch_scan_bound");
         ++scans;
         return processParents();
     };
@@ -170,7 +177,7 @@ static std::string watchOwnedProcesses(std::unique_ptr<OwnedProcess> root, const
     try {
         while (GetTickCount64() < deadline) {
             if (!stop.empty() && fs::exists(stop)) { reason = "stop_requested"; break; }
-            if (scans >= 1501) { reason = "scan_bound"; break; }
+            if (scans >= processWatchScanLimit) { reason = "scan_bound"; break; }
             original();
             const auto parents = inventory();
             original();
@@ -490,6 +497,8 @@ static void screenshot(const fs::path& path) {
     need(file.good(), "screen_capture_file_failed");
 }
 struct ToastUnavailable {};
+struct ToastDeadline {};
+static void toastBudget(ULONGLONG until) { if (GetTickCount64() >= until) throw ToastDeadline{}; }
 static void toastcheck(HRESULT value) {
     if (value == UIA_E_ELEMENTNOTAVAILABLE) throw ToastUnavailable{};
     hrcheck(value);
@@ -575,7 +584,7 @@ struct ToastCard {
 };
 static std::unique_ptr<ToastCard> card(IUIAutomation* automation, const std::wstring& expected, const std::wstring& body,
         ToastTrace& trace, std::map<DWORD, std::shared_ptr<ToastShell>>& shells, ULONGLONG until) {
-    auto budget = [&]() { need(GetTickCount64() < until, "original_product_toast_deadline"); };
+    auto budget = [&]() { toastBudget(until); };
     budget(); ComPtr<IUIAutomationElement> root, text; toastcheck(automation->GetRootElement(&root));
     VARIANT name{}; name.vt = VT_BSTR; name.bstrVal = SysAllocString(expected.c_str());
     ComPtr<IUIAutomationCondition> match; const auto condition = automation->CreatePropertyCondition(UIA_NamePropertyId, name, &match); VariantClear(&name); toastcheck(condition);
@@ -597,9 +606,11 @@ static std::unique_ptr<ToastCard> card(IUIAutomation* automation, const std::wst
         budget(); CONTROLTYPEID type = 0; int currentPID = 0;
         toastcheck(current->get_CurrentControlType(&type)); toastcheck(current->get_CurrentProcessId(&currentPID)); trace.ancestorTypes.push_back(type);
         if (currentPID != pid) return nullptr;
+        if (type == UIA_WindowControlTypeId && depth != 1) return nullptr;
         if (toastCardType(type)) {
-            RECT box{}; toastcheck(current->get_CurrentBoundingRectangle(&box)); toastcheck(current->get_CurrentIsOffscreen(&offscreen));
-            if (offscreen || !toastGeometry(box, titleBox, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN))) return nullptr;
+            RECT box{}; BOOL enabled = FALSE;
+            toastcheck(current->get_CurrentBoundingRectangle(&box)); toastcheck(current->get_CurrentIsOffscreen(&offscreen)); toastcheck(current->get_CurrentIsEnabled(&enabled));
+            if (offscreen || !enabled || !toastGeometry(box, titleBox, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN))) return nullptr;
             ComPtr<IUIAutomationCondition> yes; toastcheck(automation->CreateTrueCondition(&yes));
             ComPtr<IUIAutomationElementArray> children; toastcheck(current->FindAll(TreeScope_Descendants, yes.Get(), &children));
             int count = 0; toastcheck(children->get_Length(&count)); need(count <= 64, "product_toast_group_bound");
@@ -636,14 +647,16 @@ static void testToastSelection() {
     try { ToastShell foreign(GetCurrentProcessId()); } catch (const std::runtime_error&) { refused = true; }
     need(refused, "toast_guard_foreign_actor_admitted");
 }
-static int toast(const std::wstring& expected, const std::wstring& body, const fs::path& image, bool click, const fs::path& ready = {}) {
+static int toast(const std::wstring& expected, const std::wstring& body, const fs::path& image, bool click, const fs::path& ready = {}, ULONGLONG originalUntil = 0) {
     need(testTitle(expected) && !body.empty() && body.size() <= 256, "owned_product_toast_selector_required");
-    const auto started = GetTickCount64(), until = started + 15000;
+    const auto started = GetTickCount64();
+    const auto until = originalUntil ? originalUntil : started + (ready.empty() ? 15000 : 25000);
+    need(until > started && until - started <= 25000, "original_product_toast_deadline_required");
     ComPtr<IUIAutomation> automation; hrcheck(CoCreateInstance(CLSID_CUIAutomation, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&automation)));
     if (!ready.empty()) {
         need(!click && !fs::exists(ready), "observation_only_toast_ready_path_required");
         auto pending = ready; pending += L".pending"; need(!fs::exists(pending), "observation_only_toast_pending_path_required");
-        { std::ofstream file(pending); file << "{\"ready\":true,\"observation_only\":true,\"budget_ms\":15000}\n"; need(file.good(), "toast_observer_ready_write_failed"); }
+        { std::ofstream file(pending); file << "{\"ready\":true,\"observation_only\":true,\"budget_ms\":25000}\n"; need(file.good(), "toast_observer_ready_write_failed"); }
         fs::rename(pending, ready);
     }
     ToastTrace trace; std::map<DWORD, std::shared_ptr<ToastShell>> shells; bool inputAttempted = false;
@@ -651,7 +664,7 @@ static int toast(const std::wstring& expected, const std::wstring& body, const f
         try {
             auto selected = card(automation.Get(), expected, body, trace, shells, until);
             if (selected) {
-                screenshot(image); need(GetTickCount64() < until, "original_product_toast_deadline");
+                screenshot(image); toastBudget(until);
                 auto fresh = card(automation.Get(), expected, body, trace, shells, until);
                 BOOL same = FALSE;
                 if (!fresh || !EqualRect(&selected->box, &fresh->box) || !EqualRect(&selected->titleBox, &fresh->titleBox)
@@ -677,8 +690,9 @@ static int toast(const std::wstring& expected, const std::wstring& body, const f
                         && toastRuntime(fresh->element.Get()) == fresh->runtime && EqualRect(&latestTitle, &fresh->titleBox), "product_toast_controlled_text_changed");
                     fresh->shell->validate(); POINT actual{};
                     need(matched && owner(GetAncestor(WindowFromPoint(point), GA_ROOT)) == fresh->shell->process->pid
-                        && GetCursorPos(&actual) && actual.x == point.x && actual.y == point.y && !(GetAsyncKeyState(VK_LBUTTON) & 0x8000)
-                        && GetTickCount64() < until, "product_toast_exact_topmost_handoff_refused");
+                        && GetCursorPos(&actual) && actual.x == point.x && actual.y == point.y && !(GetAsyncKeyState(VK_LBUTTON) & 0x8000),
+                        "product_toast_exact_topmost_handoff_refused");
+                    toastBudget(until);
                     inputAttempted = true; INPUT events[2]{}; events[0].type = events[1].type = INPUT_MOUSE;
                     events[0].mi.dwFlags = MOUSEEVENTF_LEFTDOWN; events[1].mi.dwFlags = MOUSEEVENTF_LEFTUP;
                     const auto accepted = SendInput(2, events, sizeof(INPUT));
@@ -691,15 +705,19 @@ static int toast(const std::wstring& expected, const std::wstring& body, const f
                           << "],\"controlled_title_bounds\":[" << fresh->titleBox.left << ',' << fresh->titleBox.top << ',' << fresh->titleBox.right << ',' << fresh->titleBox.bottom
                           << "],\"card_runtime_id\":" << fresh->runtime << ",\"controlled_title_runtime_id\":" << fresh->titleRuntime
                           << ",\"exact_title_and_body\":true,\"real_mouse_click\":" << jsonBool(click)
+                          << ",\"accepted_mouse_events\":" << (click ? 2 : 0) << ",\"original_deadline_tick_ms\":" << until
+                          << ",\"budget_remaining_ms_at_start\":" << until - started
                           << ",\"elapsed_ms\":" << GetTickCount64() - started << ',' << toastTrace(trace) << "}\n"; return 0;
             }
-        } catch (const ToastUnavailable&) {
+        } catch (const ToastDeadline&) { trace.stage = "original_toast_deadline_expired"; break; }
+        catch (const ToastUnavailable&) {
             need(!inputAttempted, "product_toast_stale_after_input_unknown"); ++trace.staleElements; trace.stage = "stale_element_reacquiring";
         }
         pump(100);
     }
     bool captured = false; if (!ready.empty()) { try { screenshot(image); captured = true; } catch (...) {} }
     std::cout << "{\"found\":false,\"observation_end_screenshot\":" << jsonBool(captured)
+              << ",\"original_deadline_tick_ms\":" << until << ",\"budget_remaining_ms_at_start\":" << until - started
               << ",\"elapsed_ms\":" << GetTickCount64() - started << ',' << toastTrace(trace) << "}\n"; return 3;
 }
 static int capture(const fs::path& path, const fs::path& stop, int routeCount, wchar_t** routeArgs) {
@@ -718,7 +736,7 @@ static int capture(const fs::path& path, const fs::path& stop, int routeCount, w
     std::ofstream file(path, std::ios::binary); need(file.good() && !fs::exists(stop), "native_capture_path_invalid");
     std::cout << "{\"ready\":true,\"sample_rate\":" << format->nSamplesPerSec << ",\"audio_route\":" << route.json << "}\n" << std::flush;
     const auto started = GetTickCount64(); uint64_t samples = 0, nonzero = 0; double peak = 0;
-    while (!fs::exists(stop) && GetTickCount64() - started < 30000) {
+    while (!fs::exists(stop) && GetTickCount64() - started < observationSeconds * 1000) {
         UINT32 packets = 0; hrcheck(reader->GetNextPacketSize(&packets));
         while (packets) {
             BYTE* bytes = nullptr; UINT32 frames = 0; DWORD flags = 0;
@@ -737,7 +755,7 @@ static int capture(const fs::path& path, const fs::path& stop, int routeCount, w
                 samples++; if (std::abs(static_cast<int>(pcm)) > 128) nonzero++;
             }
             hrcheck(reader->ReleaseBuffer(frames)); hrcheck(reader->GetNextPacketSize(&packets));
-            need(samples <= static_cast<uint64_t>(format->nSamplesPerSec) * 31, "native_audio_capture_bound");
+            need(samples <= static_cast<uint64_t>(format->nSamplesPerSec) * (observationSeconds + 1), "native_audio_capture_bound");
         }
         pump(5);
     }
@@ -875,6 +893,7 @@ int wmain(int argc, wchar_t** argv) {
             std::cout << "{\"ok\":true}\n"; return 0;
         }
         if ((mode == L"toast" || mode == L"toast-click") && argc == 5) return toast(argv[2], argv[3], argv[4], mode == L"toast-click");
+        if (mode == L"toast-click-until" && argc == 6) return toast(argv[2], argv[3], argv[4], true, {}, std::stoull(argv[5]));
         if (mode == L"toast-watch" && argc == 6) return toast(argv[2], argv[3], argv[4], false, argv[5]);
         throw std::runtime_error("unsupported_native_observer_command");
     } catch (const NavigationTokenTEST::Failure& error) {

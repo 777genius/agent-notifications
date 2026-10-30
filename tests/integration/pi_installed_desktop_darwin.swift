@@ -835,7 +835,7 @@ struct FocusPermissionContext: Decodable {
         child.waitUntilExit()
     }
     let stop = min(deadline, (try consentMonotonicTime()) + 0.6)
-    while child.isRunning && (try consentMonotonicTime()) < stop { try await Task.sleep(nanoseconds: 10_000_000) }
+    while try consentMonotonicTime() < stop && child.isRunning { try await Task.sleep(nanoseconds: 10_000_000) }
     if child.isRunning { kill(child.processIdentifier, SIGKILL) }
     // Foundation retains/reaps this exact child; never rediscover another PID.
     child.waitUntilExit()
@@ -1358,7 +1358,7 @@ struct FocusPermissionContext: Decodable {
         "owner_bundle": identifier, "owner_path": path, "apple_signature_verified": true, "settings_left_open": true,
         "settings_present_before": before, "opened_new_settings_instance": !before.contains(Int(app.processIdentifier)),
         "initial_tree": first.1, "notifications_navigation_performed": false, "sidebar_scroll_performed": false,
-        "observed_notifications_sidebar_count": 0, "observed_notifications_navigation_rows": 0]
+        "observed_notifications_sidebar_count": 0, "observed_notifications_navigation_rows": 0, "notifications_page_ready": false]
     result["elapsed_seconds"] = (try consentMonotonicTime()) - now
     preparation?.receipt["inspection_before_cleanup"] = result
     func withinBounds(_ tree: [String: Any]) -> Bool {
@@ -1543,10 +1543,11 @@ struct FocusPermissionContext: Decodable {
             preparation.receipt["policy_readiness_observations"] = observations
         }
         result["final_tree"] = final.1
+        result["notifications_page_ready"] = current() && settingsPolicyPairs(final.0) != nil
         result["elapsed_seconds"] = (try consentMonotonicTime()) - now
         preparation?.receipt["inspection_before_cleanup"] = result
         if let preparation {
-            guard withinBounds(final.1) else { throw ProbeError.unavailable("sharing_policy_exact_control_required") }
+            guard withinBounds(final.1), result["notifications_page_ready"] as? Bool == true else { throw ProbeError.unavailable("notifications_policy_page_not_ready") }
             try await prepareNotificationPresentation(final.0, preparation: preparation, deadline: controlDeadline)
         }
     }
@@ -2025,7 +2026,8 @@ final class ProductCapture: NSObject, SCStreamOutput, SCStreamDelegate, @uncheck
                 CGEvent(keyboardEventSource: nil, virtualKey: 36, keyDown: false)?.post(tap: .cghidEventTap)
                 publish(["physical_keyboard_input": true])
             case "capture":
-                guard args.count == 2 else { throw ProbeError.unavailable("capture_root_required") }
+                guard args.count == 2 || (args.count == 3 && ["30", "45"].contains(args[2])) else { throw ProbeError.unavailable("capture_root_required") }
+                let captureSeconds = args.count == 3 ? Double(args[2])! : 45
                 let root = URL(fileURLWithPath: args[1])
                 let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
                 guard let display = content.displays.first else { throw ProbeError.unavailable("capture_display_missing") }
@@ -2043,7 +2045,7 @@ final class ProductCapture: NSObject, SCStreamOutput, SCStreamDelegate, @uncheck
                 try await Task.sleep(nanoseconds: 300_000_000)
                 let baseline = observer.measurements()
                 try JSONSerialization.data(withJSONObject: baseline).write(to: root.appendingPathComponent("capture-ready.json"), options: .atomic)
-                let deadline = Date().addingTimeInterval(30)
+                let deadline = Date().addingTimeInterval(captureSeconds)
                 while !FileManager.default.fileExists(atPath: root.appendingPathComponent("capture-stop").path) && Date() < deadline {
                     try await Task.sleep(nanoseconds: 50_000_000)
                 }

@@ -85,15 +85,31 @@ class PostClickOracleTests(unittest.TestCase):
 class OriginalWebhookDeadlineTests(unittest.TestCase):
     def test_required_original_webhook_uses_only_existing_capture_remainder(self):
         sink, timing = Mock(), {}
+        sink.wait.return_value = {"received_monotonic": 28.5}
         W.await_case_webhook(sink, "task_complete", 30, timing, 0, now=lambda: 28.5)
         sink.wait.assert_called_once_with("task_complete", timeout=1.5)
         self.assertEqual(timing, {"webhook_received_seconds": 28.5})
 
-    def test_expired_original_budget_does_not_start_another_wait(self):
+    def test_queued_original_receipt_is_accepted_after_focus_without_renewing_wait(self):
+        sink, timing = Mock(), {}
+        sink.wait.return_value = {"received_monotonic": 23.5}
+        W.await_case_webhook(sink, "task_complete", 25, timing, 0, now=lambda: 30)
+        sink.wait.assert_called_once_with("task_complete", timeout=0)
+        self.assertEqual(timing, {"webhook_received_seconds": 23.5})
+
+    def test_expired_original_budget_never_accepts_a_late_receipt(self):
         sink = Mock()
+        sink.wait.return_value = {"received_monotonic": 30.001}
         with self.assertRaisesRegex(RuntimeError, "original_case_webhook_deadline_expired"):
             W.await_case_webhook(sink, "task_complete", 30, {}, 0, now=lambda: 30)
-        sink.wait.assert_not_called()
+        sink.wait.assert_called_once_with("task_complete", timeout=0)
+
+    def test_live_toast_uses_one_original_native_deadline_with_no_new_lifetime(self):
+        handle = SimpleNamespace(kernel=SimpleNamespace(GetTickCount64=Mock(return_value=100000)))
+        self.assertEqual(W.original_toast_deadline(handle, 25, now=lambda: 23.5), 101500)
+        for deadline, now in ((25, 25), (26, 0)):
+            with self.subTest(deadline=deadline, now=now), self.assertRaisesRegex(RuntimeError, "original_toast_observation_deadline_required"):
+                W.original_toast_deadline(handle, deadline, now=lambda: now)
 
 
 class LauncherDiagnosticsTests(unittest.TestCase):
@@ -368,13 +384,13 @@ class ProcessTimelineTests(unittest.TestCase):
                     patch.object(W.subprocess, "CREATE_NO_WINDOW", create=True, new=0x08000000), \
                     patch.object(W.os, "set_handle_inheritable", create=True) as inherit, \
                     patch.object(W.subprocess, "Popen", return_value=child) as spawn:
-                watcher = W.start_process_watcher(origin, "TEST-notifier.exe", root, 30, helpers, now=lambda: 2.5)
+                watcher = W.start_process_watcher(origin, "TEST-notifier.exe", root, 45, helpers, now=lambda: 2.5)
             self.assertEqual(helpers, [child])
             self.assertIs(watcher["child"], child)
-            self.assertEqual(watcher["deadline"], 30)
-            self.assertEqual(watcher["native_deadline"], 127500)
+            self.assertEqual(watcher["deadline"], 45)
+            self.assertEqual(watcher["native_deadline"], 142500)
             self.assertEqual(spawn.call_args.args[0], ["observer.exe", "process-watch-owned-handle", "234", "123456789",
-                "TEST-pi.exe", "TEST-notifier.exe", str(root / "process-watch-ready.json"), str(root / "process-watch.stop"), "127500",
+                "TEST-pi.exe", "TEST-notifier.exe", str(root / "process-watch-ready.json"), str(root / "process-watch.stop"), "142500",
                 str(root / "process-timeline-native.json")])
             self.assertEqual(startup.return_value.lpAttributeList, {"handle_list": [234]})
             self.assertTrue(spawn.call_args.kwargs["close_fds"])
@@ -382,9 +398,9 @@ class ProcessTimelineTests(unittest.TestCase):
             self.assertEqual([call.args for call in inherit.call_args_list], [(234, True), (234, False)])
             origin.process_handle.close.assert_not_called()
             (root / "process-watch-ready.json").write_text(json.dumps({"ready": True, "observation_only": True,
-                "original_identity_verified": True, "deadline_tick_ms": 127500}))
+                "original_identity_verified": True, "deadline_tick_ms": 142500}))
             W.require_process_watcher_ready(watcher, now=lambda: 3)
-            self.assertEqual(watcher["native_deadline"], 127500)
+            self.assertEqual(watcher["native_deadline"], 142500)
 
     def test_expired_prelaunch_or_mismatched_ready_never_authorizes_a_new_lifetime(self):
         origin = SimpleNamespace(process_handle=Mock(value=234), pi_identity={"creation_time": "123456789"})
@@ -392,6 +408,8 @@ class ProcessTimelineTests(unittest.TestCase):
         with patch.object(W.subprocess, "Popen") as spawn:
             with self.assertRaisesRegex(RuntimeError, "original_deadline_required"):
                 W.start_process_watcher(origin, "TEST-notifier.exe", Path("TEST-root"), 30, [], now=lambda: 30)
+            with self.assertRaisesRegex(RuntimeError, "original_deadline_required"):
+                W.start_process_watcher(origin, "TEST-notifier.exe", Path("TEST-root"), 46, [], now=lambda: 0)
         spawn.assert_not_called()
         with tempfile.TemporaryDirectory(prefix="TEST-pi-process-watch-") as temporary:
             ready = Path(temporary) / "ready.json"
@@ -413,7 +431,7 @@ class ProcessTimelineTests(unittest.TestCase):
             broken["processes"][1][field] = change
             with self.subTest(field=field), self.assertRaises(RuntimeError):
                 W.process_timeline(json.dumps(broken).encode())
-        for field, change in (("processes", [self.timeline()["processes"][0]] * 65), ("inventory_scans", 1502)):
+        for field, change in (("processes", [self.timeline()["processes"][0]] * 65), ("inventory_scans", W.PROCESS_WATCH_SCAN_LIMIT + 1)):
             broken = {**self.timeline(), field: change}
             with self.subTest(field=field), self.assertRaises(RuntimeError):
                 W.process_timeline(json.dumps(broken).encode())

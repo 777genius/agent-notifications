@@ -30,6 +30,7 @@ import zipfile
 
 REPO = Path(__file__).resolve().parents[1]
 CASES = ("completion", "question", "sound-off", "click-off", "desktop-off", "stale-origin")
+BANNER_OBSERVATION_SECONDS = 25
 
 
 def module(name, path):
@@ -53,6 +54,19 @@ def wait_for(predicate, reason, seconds=12):
             return value
         time.sleep(0.05)
     raise RuntimeError(reason)
+
+
+def wait_for_product_banner(observe, body, deadline):
+    """Observe one trigger through its delivery budget without renewing it."""
+    while (remaining := deadline - time.monotonic()) > 0:
+        matches = observe("banner", body, timeout=min(20, remaining))["matches"]
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        if matches:
+            return matches
+        time.sleep(min(0.05, remaining))
+    raise RuntimeError("actual_product_banner_not_observed")
 
 
 def partial_case_failure(case_root, provider, sink, sink_start, expected, observe, app, origin_pid, *, observations=None):
@@ -832,7 +846,7 @@ def global_settings_projection(value):
     required = {"scope", "diagnostic_only", "qualification_input", "desktop_qualified", "maximum_seconds", "owner_pid",
                 "owner_start_identity", "owner_uid", "owner_bundle", "owner_path", "apple_signature_verified", "settings_left_open",
                 "settings_present_before", "opened_new_settings_instance", "initial_tree", "notifications_navigation_performed",
-                "observed_notifications_navigation_rows", "sidebar_scroll_performed", "observed_notifications_sidebar_count", "elapsed_seconds"}
+                "observed_notifications_navigation_rows", "sidebar_scroll_performed", "observed_notifications_sidebar_count", "notifications_page_ready", "elapsed_seconds"}
     P.require(isinstance(value, dict) and required <= set(value) <= required | {"final_tree", "sidebar_reveal_tree"}
               and value["scope"] == "readonly_global_notification_settings" and value["diagnostic_only"] is True
               and value["qualification_input"] is False and value["desktop_qualified"] is False and value["maximum_seconds"] == 6
@@ -845,6 +859,7 @@ def global_settings_projection(value):
               and all(type(pid) is int and pid > 0 for pid in value["settings_present_before"])
               and type(value["opened_new_settings_instance"]) is bool
               and value["opened_new_settings_instance"] == (value["owner_pid"] not in value["settings_present_before"])
+              and type(value["notifications_page_ready"]) is bool
               and type(value["notifications_navigation_performed"]) is bool
               and type(value["sidebar_scroll_performed"]) is bool
               and type(value["observed_notifications_sidebar_count"]) is int and 0 <= value["observed_notifications_sidebar_count"] <= 256
@@ -1004,28 +1019,32 @@ def focus_permission_projection(value):
             'owner_path': '/System/Applications/System Settings.app', 'apple_signature_verified': True, 'settings_left_open': True,
             'settings_present_before': [], 'opened_new_settings_instance': True, 'initial_tree': value['pane'],
             'notifications_navigation_performed': False, 'observed_notifications_navigation_rows': 0, 'sidebar_scroll_performed': False,
-            'observed_notifications_sidebar_count': 0, 'elapsed_seconds': value['elapsed_seconds']})
+            'observed_notifications_sidebar_count': 0, 'notifications_page_ready': False, 'elapsed_seconds': value['elapsed_seconds']})
     return value
 
 
 def inspect_original_click_permission(observer, case_root, app, helper_hash, terminal, deadline, *, execute=command, now=time.monotonic):
     """One diagnostic handoff consumes the original click deadline; no grant/focus."""
-    receipt = {'diagnostic_only': True, 'qualification_input': False, 'desktop_qualified': False}
+    receipt = {'diagnostic_only': True, 'qualification_input': False, 'desktop_qualified': False, 'owned_resources_collected': False}
     try:
         clock = time.get_clock_info('monotonic')
         P.require(clock.implementation == 'mach_absolute_time()' and clock.monotonic and not clock.adjustable,
                   'shared_focus_inspection_clock_required')
-        remaining = min(6, deadline - now())
+        inspector_deadline = min(deadline, now() + 6)
+        remaining = inspector_deadline - now()
         P.require(remaining > 0, 'original_click_deadline_expired')
         context = {'helperPath': str(app), 'helperSHA256': helper_hash, 'originPID': terminal.pid,
             'originStart': terminal.process_start_identity, 'originExecutable': terminal.executable,
-            'clock': 'mach_absolute_time', 'deadlineMonotonic': min(deadline, now() + remaining),
+            'clock': 'mach_absolute_time', 'deadlineMonotonic': inspector_deadline,
             'originalHelperBaselineEmpty': True, 'originalPhysicalClickObserved': True,
             'screenshotPath': str(case_root / 'focus-permission-pane.png')}
         body = execute([observer, 'inspect-focus-screen-permission', json.dumps(context)], timeout=remaining,
                        env={**os.environ, 'PI_MACOS_FOCUS_INSPECTION_ADMITTED': '1'})
         P.require(len(body) <= 256 * 1024, 'focus_permission_output_limit')
-        receipt['inspection'] = focus_permission_projection(json.loads(body))
+        P.require(now() < inspector_deadline, 'original_focus_inspection_deadline_expired')
+        inspection = focus_permission_projection(json.loads(body))
+        receipt['inspection'] = inspection
+        receipt['owned_resources_collected'] = inspection['screenshot_child_collected'] and (not inspection['owned_window_observed'] or inspection['owned_window_disappeared'])
     except Exception as error:
         receipt['failure_class'] = type(error).__name__
     return receipt
@@ -1053,7 +1072,7 @@ def presentation_preparation_projection(value):
     refusals = {"settings_owned_pointer_unavailable", "settings_owned_hit_unavailable", "settings_owned_click_refused",
         "original_owned_settings_window_changed", "owned_settings_window_not_observed", "owned_settings_close_button_unavailable",
         "owned_settings_close_button_unverified", "owned_settings_close_button_changed", "owned_settings_window_disappearance_unverified",
-        "sharing_policy_exact_control_required", "sharing_policy_group_unverified", "sharing_policy_original_group_changed",
+        "notifications_policy_page_not_ready", "sharing_policy_exact_control_required", "sharing_policy_group_unverified", "sharing_policy_original_group_changed",
         "sharing_policy_original_control_changed", "sharing_policy_control_bounds_unavailable", "sharing_policy_state_changed_before_click",
         "sharing_policy_on_or_unchanged_controls_unverified", "original_settings_inspection_deadline_required", "signed_apple_settings_required",
         "unique_settings_instance_required", "new_owned_settings_instance_required", "settings_owner_identity_unverified", "settings_window_unavailable",
@@ -1080,7 +1099,8 @@ def presentation_preparation_projection(value):
         P.require(value["settings_instance_was_new"] and value["owned_window_observed"] and value["owned_window_disappeared"]
                   and value["close_click_performed"] and value.get("policy_on_verified") is True
                   and not {"primary_failure_class", "cleanup_failure_class"} & set(value)
-                  and "inspection_before_cleanup" in value and after.get("mirroring_or_sharing") == "on"
+                  and value.get("inspection_before_cleanup", {}).get("notifications_page_ready") is True
+                  and after.get("mirroring_or_sharing") == "on"
                   and all(before.get(key) == after.get(key) for key in ("display_sleeping", "screen_locked"))
                   and value["sharing_click_performed"] == (before.get("mirroring_or_sharing") == "off"),
                   "physical_presentation_on_and_owned_window_cleanup_unverified")
@@ -1100,7 +1120,7 @@ def inspect_global_notification_settings(observer, evidence_root, *, prepare_pre
         if prepare_presentation:
             result["scope"] = "explicit_fresh_host_notification_presentation_preparation"
             result["host_admission"] = presentation_preparation_admission(observer, evidence_root)
-        capture = spawn([str(observer), "capture", str(root)], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+        capture = spawn([str(observer), "capture", str(root), "30"], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                         stderr=subprocess.PIPE, start_new_session=True)
         result.update(capture_started=True, owned_capture_collected=False)
         wait_for(lambda: (root / "capture-ready.json").is_file(), "global_settings_capture_not_ready", seconds=5)
@@ -1590,17 +1610,22 @@ def run(args):
             report.setdefault("native_context_observations", []).append({"case": name, "observation": native_context.receipt})
             if name == "question":
                 terminal.focus()
+                banner_deadline = time.monotonic() + BANNER_OBSERVATION_SECONDS
                 terminal.type("/TEST-dialog")
             else:
                 wait_for(lambda: bool(provider.requests), "actual_pi_model_request_missing")
             decoy.focus()
             P.require(decoy.is_front() and not terminal.is_front(), "native_pi_origin_not_backgrounded")
             timing["provider_release_seconds"] = round(time.monotonic() - started, 3)
+            if name != "question":
+                # Pi settlement/startup precede the product's original 20s
+                # admission; the fixture must not cancel that work after 12s.
+                banner_deadline = time.monotonic() + BANNER_OBSERVATION_SECONDS
             provider.release.set()
             screenshot, webhook_received, click_observation = None, False, None
             if desktop:
                 timing["banner_wait_started_seconds"] = round(time.monotonic() - started, 3)
-                banner = wait_for(lambda: observer("banner", P.COPY[expected])["matches"], "actual_product_banner_not_observed")
+                banner = wait_for_product_banner(observer, P.COPY[expected], banner_deadline)
                 timing["banner_observed_seconds"] = round(time.monotonic() - started, 3)
                 P.require(decoy.is_front(), "product_focused_before_physical_notification_click")
                 if name == "question":
@@ -1624,9 +1649,14 @@ def run(args):
                 if inspect_click_permission and name == "completion":
                     report["click_permission_diagnostic"] = inspect_original_click_permission(args.observer, case_root, app,
                         report["helper"]["executable_sha256"], terminal, click_deadline)
-                    # Settings navigation is diagnosis only. Never count this
-                    # original click or a later fixture focus as a qualified case.
-                    raise RuntimeError("product_click_did_not_focus_exact_origin")
+                    diagnostic = report["click_permission_diagnostic"]
+                    if not diagnostic["owned_resources_collected"]:
+                        report.setdefault("case_cleanup_failures", []).append({"case": name, "role": "focus_permission_inspection", "error_class": "unverified_owned_resources"})
+                    # Inspection consumes the original click budget. Neither its
+                    # navigation nor a later focus can qualify this probe case.
+                    wait_for(terminal.is_front, "product_click_did_not_focus_exact_origin", seconds=max(0, click_deadline - time.monotonic()))
+                    diagnostic["origin_focus_observed_after_inspection"] = True
+                    raise RuntimeError("click_permission_diagnostic_not_qualification")
                 if click and name != "stale-origin":
                     wait_for(terminal.is_front, "product_click_did_not_focus_exact_origin", seconds=max(0, click_deadline - time.monotonic()))
                 else:

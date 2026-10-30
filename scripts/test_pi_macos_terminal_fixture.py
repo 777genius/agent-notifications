@@ -21,6 +21,105 @@ M = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(M)
 
 
+class OriginalFocusPermissionInspection(unittest.TestCase):
+    def receipt(self):
+        return {'scope': 'original_click_screen_permission_inspection', 'diagnostic_only': True, 'qualification_input': False,
+            'desktop_qualified': False, 'maximum_seconds': 6, 'status': 'unavailable', 'physical_open_settings_click': False,
+            'permission_control_action_performed': False, 'responsible_row_association': 'display_name_only_unverified',
+            'screenshot_child_collected': True, 'owned_window_observed': False, 'owned_window_disappeared': False,
+            'close_click_performed': False, 'settings_process_collected': False, 'elapsed_seconds': 0.2}
+
+    def test_closed_projection_refuses_private_text_permission_actions_and_unbound_navigation(self):
+        self.assertEqual(M.focus_permission_projection(self.receipt()), self.receipt())
+        for field, value in [('raw_ui_text', 'TEST-private'), ('permission_control_action_performed', True),
+                ('responsible_row_association', 'verified'), ('physical_open_settings_click', True), ('elapsed_seconds', 6.01),
+                ('failure_class', 'TEST-private'), ('refusal', 'TEST-private')]:
+            with self.subTest(field=field), self.assertRaises(RuntimeError):
+                M.focus_permission_projection({**self.receipt(), field: value})
+
+    def test_inspection_consumes_original_absolute_deadline_and_never_qualifies(self):
+        clock = [100.0]
+        terminal = mock.Mock(pid=41, process_start_identity='123:456', executable='/TEST/pi')
+        def execute(argv, *, timeout, env):
+            context = json.loads(argv[2])
+            self.assertEqual(argv[:2], [Path('/TEST/observer'), 'inspect-focus-screen-permission'])
+            self.assertEqual(timeout, 4)
+            self.assertEqual(context['deadlineMonotonic'], 104)
+            self.assertTrue(context['originalHelperBaselineEmpty'])
+            self.assertTrue(context['originalPhysicalClickObserved'])
+            self.assertEqual(env['PI_MACOS_FOCUS_INSPECTION_ADMITTED'], '1')
+            clock[0] = 103
+            return json.dumps(self.receipt())
+        info = mock.Mock(implementation='mach_absolute_time()', monotonic=True, adjustable=False)
+        with mock.patch.object(M.time, 'get_clock_info', return_value=info):
+            result = M.inspect_original_click_permission(Path('/TEST/observer'), Path('/TEST/case-completion'),
+                Path('/TEST/helper.app'), 'a' * 64, terminal, 104, execute=execute, now=lambda: clock[0])
+        self.assertFalse(result['qualification_input'])
+        self.assertFalse(result['desktop_qualified'])
+        self.assertTrue(result['owned_resources_collected'])
+        self.assertNotIn('failure_class', result)
+
+    def test_late_inspection_and_uncertain_window_cleanup_remain_uncollected(self):
+        info = mock.Mock(implementation='mach_absolute_time()', monotonic=True, adjustable=False)
+        terminal = mock.Mock(pid=41, process_start_identity='123:456', executable='/TEST/pi')
+        for late in (False, True):
+            clock = [100.0]
+            def execute(*args, **kwargs):
+                clock[0] = 107 if late else 101
+                return json.dumps({**self.receipt(), 'owned_window_observed': True})
+            with self.subTest(late=late), mock.patch.object(M.time, 'get_clock_info', return_value=info):
+                result = M.inspect_original_click_permission(Path('/TEST/observer'), Path('/TEST/case-completion'),
+                    Path('/TEST/helper.app'), 'a' * 64, terminal, 112, execute=execute, now=lambda: clock[0])
+            self.assertFalse(result['owned_resources_collected'])
+            self.assertEqual('failure_class' in result, late)
+        execute = mock.Mock()
+        with mock.patch.object(M.time, 'get_clock_info', return_value=info):
+            result = M.inspect_original_click_permission(Path('/TEST/observer'), Path('/TEST/case-completion'),
+                Path('/TEST/helper.app'), 'a' * 64, terminal, 100, execute=execute, now=lambda: 100)
+        execute.assert_not_called()
+        self.assertFalse(result['owned_resources_collected'])
+
+
+class ProductBannerObservation(unittest.TestCase):
+    def test_polls_share_one_absolute_deadline(self):
+        clock, timeouts = [100.0], []
+
+        def observe(operation, body, *, timeout):
+            self.assertEqual((operation, body), ("banner", "Pi completed a task"))
+            timeouts.append(timeout)
+            clock[0] += min(10, timeout)
+            return {"matches": []}
+
+        def pause(seconds):
+            clock[0] += seconds
+
+        with mock.patch.object(M.time, "monotonic", side_effect=lambda: clock[0]), \
+                mock.patch.object(M.time, "sleep", side_effect=pause):
+            with self.assertRaisesRegex(RuntimeError, "actual_product_banner_not_observed"):
+                M.wait_for_product_banner(observe, "Pi completed a task", 125)
+        self.assertEqual(len(timeouts), 3)
+        self.assertEqual(timeouts[0], 20)
+        self.assertAlmostEqual(timeouts[-1], 4.9)
+        self.assertEqual(clock[0], 125)
+
+    def test_only_observations_before_original_deadline_qualify(self):
+        for finished, allowed in ((124.9, True), (125.0, False), (126.0, False)):
+            with self.subTest(finished=finished):
+                clock = [100.0]
+
+                def observe(*args, **kwargs):
+                    clock[0] = finished
+                    return {"matches": [{"observed": True}]}
+
+                with mock.patch.object(M.time, "monotonic", side_effect=lambda: clock[0]):
+                    if allowed:
+                        self.assertEqual(M.wait_for_product_banner(observe, "Pi completed a task", 125),
+                                         [{"observed": True}])
+                    else:
+                        with self.assertRaisesRegex(RuntimeError, "actual_product_banner_not_observed"):
+                            M.wait_for_product_banner(observe, "Pi completed a task", 125)
+
+
 class PartialCaseEvidence(unittest.TestCase):
     def capture(self, root, observe):
         provider = mock.Mock(requests=[{"prompt": "TEST-secret"}])
@@ -707,7 +806,7 @@ class GlobalSettingsInspection(unittest.TestCase):
             "desktop_qualified": False, "maximum_seconds": 6, "owner_pid": os.getpid(), "owner_uid": os.getuid(),
             "owner_start_identity": "123:456", "owner_bundle": "com.apple.systempreferences",
             "owner_path": "/System/Applications/System Settings.app", "apple_signature_verified": True, "settings_left_open": True,
-            "settings_present_before": [], "opened_new_settings_instance": True, "notifications_navigation_performed": False,
+            "settings_present_before": [], "opened_new_settings_instance": True, "notifications_page_ready": True, "notifications_navigation_performed": False,
             "observed_notifications_navigation_rows": 0, "sidebar_scroll_performed": False,
             "observed_notifications_sidebar_count": 0, "elapsed_seconds": 0.1,
             "initial_tree": {"nodes": [{"index": 0, "depth": 0, "role": "AXCheckBox", "fixed_labels": ["mirroring_or_sharing"],
@@ -733,7 +832,7 @@ class GlobalSettingsInspection(unittest.TestCase):
             value = self.prepared(already_on=already_on)
             self.assertIs(M.presentation_preparation_projection(value), value)
         for scenario in ("other_setting_changed", "window_left_open", "false_process_collection", "reused_settings",
-                         "already_on_clicked", "primary_failure", "private_field"):
+                         "already_on_clicked", "primary_failure", "page_not_ready", "private_field"):
             value = self.prepared()
             if scenario == "other_setting_changed":
                 value["policy_after"]["screen_locked"] = "off"
@@ -747,6 +846,8 @@ class GlobalSettingsInspection(unittest.TestCase):
                 value["policy_before"]["mirroring_or_sharing"] = "on"
             elif scenario == "primary_failure":
                 value["primary_failure_class"] = "probe_refusal"
+            elif scenario == "page_not_ready":
+                value["inspection_before_cleanup"]["notifications_page_ready"] = False
             else:
                 value["raw_private_ui_text"] = "TEST-private-user-text"
             with self.subTest(scenario=scenario), self.assertRaises(RuntimeError) as caught:
@@ -813,7 +914,7 @@ class GlobalSettingsInspection(unittest.TestCase):
 
     def test_projection_refuses_private_labels_unknown_values_and_foreign_owners(self):
         self.assertEqual(M.global_settings_projection(self.settings()), self.settings())
-        for field in ("private_label", "private_value", "foreign_owner", "extra_text"):
+        for field in ("private_label", "private_value", "foreign_owner", "page_ready_not_boolean", "extra_text"):
             value = self.settings()
             if field == "private_label":
                 value["initial_tree"]["nodes"][0]["fixed_labels"] = ["TEST-private-user-text"]
@@ -821,6 +922,8 @@ class GlobalSettingsInspection(unittest.TestCase):
                 value["initial_tree"]["nodes"][0]["value_enum"] = "TEST-private-user-text"
             elif field == "foreign_owner":
                 value["owner_path"] = "/TEST/foreign.app"
+            elif field == "page_ready_not_boolean":
+                value["notifications_page_ready"] = "true"
             else:
                 value["initial_tree"]["nodes"][0]["raw_description"] = "TEST-private-user-text"
             with self.subTest(field=field), self.assertRaises(RuntimeError) as caught:

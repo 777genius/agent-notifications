@@ -24,6 +24,8 @@ import wave
 
 REPO = Path(__file__).resolve().parents[1]
 CASES = ("completion", "question", "sound-off", "click-off", "desktop-off", "stale-origin")
+CAPTURE_BUDGET_SECONDS = 45
+PROCESS_WATCH_SCAN_LIMIT = CAPTURE_BUDGET_SECONDS * 50 + 65
 POWERSHELL_LAUNCHER = '''param([Parameter(Mandatory=$true)][string]$Spec)
 $ErrorActionPreference = 'Stop'
 $inputSpec = Get-Content -LiteralPath $Spec -Raw | ConvertFrom-Json
@@ -111,10 +113,23 @@ def observe_unchanged_focus(native, window, stop_capture, seconds=15, *, live_de
 
 
 def await_case_webhook(sink, event, deadline, timing, capture_started, *, now=time.monotonic):
-    remaining = deadline - now()
-    P.require(remaining > 0, "original_case_webhook_deadline_expired")
-    sink.wait(event, timeout=min(20, remaining))
-    timing["webhook_received_seconds"] = round(now() - capture_started, 3)
+    # Consumption can follow a full negative focus window. Only the actual
+    # request arrival, never a renewed wait, may satisfy the original deadline.
+    row = sink.wait(event, timeout=max(0, deadline - now()))
+    received = row.get("received_monotonic") if isinstance(row, dict) else None
+    P.require(type(received) in (int, float) and math.isfinite(received)
+              and capture_started <= received <= deadline, "original_case_webhook_deadline_expired")
+    timing["webhook_received_seconds"] = round(received - capture_started, 3)
+
+
+def original_toast_deadline(handle, deadline, *, now=time.monotonic):
+    import ctypes
+    ticks = handle.kernel.GetTickCount64
+    ticks.argtypes, ticks.restype = (), ctypes.c_ulonglong
+    current = ticks()
+    remaining = int((deadline - now()) * 1000)
+    P.require(0 < remaining <= 25000, "original_toast_observation_deadline_required")
+    return current + remaining
 
 
 def stop_helper(helper, stop):
@@ -248,7 +263,7 @@ def start_toast_watcher(native, title, body, root, deadline, helpers):
         wait_for(ready.exists, "early_toast_observer_not_ready", seconds=max(0, min(5, deadline - time.monotonic())))
         P.require(ready.is_file() and not ready.is_symlink() and ready.stat().st_size <= 4096,
                   "early_toast_observer_ready_file_invalid")
-        P.require(json.loads(ready.read_text()) == {"ready": True, "observation_only": True, "budget_ms": 15000},
+        P.require(json.loads(ready.read_text()) == {"ready": True, "observation_only": True, "budget_ms": 25000},
                   "early_toast_observer_ready_invalid")
     except Exception:
         collect_toast_watcher(child, root / "early-toast-observation.json", deadline)
@@ -265,7 +280,7 @@ def start_process_watcher(origin, notifier_image, root, deadline, helpers, *, no
     ticks.argtypes, ticks.restype = (), ctypes.c_ulonglong
     native_now = ticks()
     remaining_ms = int((deadline - now()) * 1000)
-    P.require(0 < remaining_ms <= 30000, "process_watch_original_deadline_required")
+    P.require(0 < remaining_ms <= CAPTURE_BUDGET_SECONDS * 1000, "process_watch_original_deadline_required")
     native_deadline = native_now + remaining_ms
     P.require(root.is_absolute() and root.is_dir() and root.resolve(strict=True) == root
               and root == origin.root.parent, "process_watch_owned_case_root_required")
@@ -315,8 +330,8 @@ def process_timeline(raw):
               and value["misses_remain_unknown"] is True, "process_watch_receipt_invalid")
     P.require(value["stop_reason"] in ("stop_requested", "deadline", "scan_bound", "observation_refused")
               and type(value["elapsed_ms"]) is int and 0 <= value["elapsed_ms"] <= 60000
-              and type(value["inventory_scans"]) is int and 0 <= value["inventory_scans"] <= 1501
-              and type(value["missed_candidates"]) is int and 0 <= value["missed_candidates"] <= 65536 * 1501
+              and type(value["inventory_scans"]) is int and 0 <= value["inventory_scans"] <= PROCESS_WATCH_SCAN_LIMIT
+              and type(value["missed_candidates"]) is int and 0 <= value["missed_candidates"] <= 65536 * PROCESS_WATCH_SCAN_LIMIT
               and isinstance(value["processes"], list) and 1 <= len(value["processes"]) <= 64,
               "process_watch_receipt_bound")
     roles = {"original_pi", "direct_candidate", "candidate_descendant", "system_powershell_descendant", "other_descendant"}
@@ -747,8 +762,8 @@ def run(args):
                 P.require(ready.get("ready") is True, "actual_audio_capture_not_ready")
                 P.require(ready.get("audio_route") == report["audio_capture_route"], "native_capture_readiness_route_changed")
                 capture_started = time.monotonic()
-                case_deadline = capture_started + 30
-                timing = {"case": name, "scope": "diagnostic_only", "capture_budget_seconds": 30}
+                case_deadline = capture_started + CAPTURE_BUDGET_SECONDS
+                timing = {"case": name, "scope": "diagnostic_only", "capture_budget_seconds": CAPTURE_BUDGET_SECONDS}
                 report.setdefault("toast_observation_timings", []).append(timing)
                 watcher = start_toast_watcher(native, toast_title, P.COPY[event], case_root, case_deadline, helpers)
                 timing["early_watcher_ready_seconds"] = round(time.monotonic() - capture_started, 3)
@@ -756,18 +771,23 @@ def run(args):
                 require_process_watcher_ready(process_watcher)
                 timing["process_watcher_ready_seconds"] = round(time.monotonic() - capture_started, 3)
                 if name == "question":
-                    native.focus(origin.window); native.type(origin.window, "/TEST-dialog")
+                    native.focus(origin.window)
+                    webhook_deadline = time.monotonic() + 25
+                    native.type(origin.window, "/TEST-dialog")
                 else:
                     wait_for(lambda: bool(provider.requests), "native_pi_model_request_missing")
                 native.focus(distractor.window)
                 timing["provider_release_seconds"] = round(time.monotonic() - capture_started, 3)
+                if name != "question":
+                    webhook_deadline = time.monotonic() + 25
                 provider.release.set()
                 # Desktop delivery precedes sound and the webhook in the real
                 # consumer. Observe/click the live banner before that serial
-                # handoff can outlast it. Stale-origin alone must drain delivery
-                # before collecting the origin and its still-active descendants.
-                if name == "stale-origin":
-                    await_case_webhook(sink, event, case_deadline, timing, capture_started)
+                # handoff can outlast it. Stale-origin must drain delivery before
+                # origin collection; desktop-off keeps its full post-delivery
+                # absence scan rather than missing a late unwanted banner.
+                if name in ("stale-origin", "desktop-off"):
+                    await_case_webhook(sink, event, min(webhook_deadline, case_deadline), timing, capture_started)
                 image = case_root / "actual-product-banner.bmp"
                 click_observation = None
                 if desktop:
@@ -789,7 +809,13 @@ def run(args):
                     timing["late_toast_observer_started_seconds"] = round(time.monotonic() - capture_started, 3)
                     remaining = case_deadline - time.monotonic()
                     P.require(remaining > 0, "original_case_toast_deadline_expired")
-                    found = native("toast-click", toast_title, P.COPY[event], image, timeout=min(25, remaining))
+                    if name == "stale-origin":
+                        found = native("toast-click", toast_title, P.COPY[event], image, timeout=min(25, remaining))
+                    else:
+                        action_deadline = min(webhook_deadline, case_deadline)
+                        native_until = original_toast_deadline(origin.process_handle, action_deadline)
+                        found = native("toast-click-until", toast_title, P.COPY[event], image, native_until,
+                                       timeout=min(25, max(0.001, action_deadline - time.monotonic())))
                     P.require(found.get("found") is True and found.get("real_mouse_click") is True, "native_product_toast_not_physically_clicked")
                     if name in ("click-off", "stale-origin"):
                         click_observation = observe_unchanged_focus(native, expected_window, stop_capture, live_delivery=name == "click-off")
@@ -802,8 +828,8 @@ def run(args):
                     found = native("toast", toast_title, P.COPY[event], image, allowed=(0, 3))
                     P.require(found.get("found") is False and native("foreground")["hwnd"] == distractor.window["hwnd"],
                               "disabled_desktop_had_native_effect")
-                if name != "stale-origin":
-                    await_case_webhook(sink, event, case_deadline, timing, capture_started)
+                if name not in ("stale-origin", "desktop-off"):
+                    await_case_webhook(sink, event, min(webhook_deadline, case_deadline), timing, capture_started)
                 if not stop_capture.exists():
                     time.sleep(0.5)
                     stop_capture.write_text("stop\n")
@@ -841,6 +867,7 @@ def run(args):
                     "real_mouse_click": desktop, "pending_question_at_click": name == "question", "audio": audio,
                     "configured_cue_envelope_match": correlation, "audio_sha256": P.sha(pcm),
                     "banner_screenshot_sha256": P.sha(image) if desktop else None,
+                    "native_banner_observation": found,
                     "origin_window": origin.window, "distractor_window": distractor.window,
                     "unchanged_click_observation": click_observation,
                     "checks": {key: True for key in ("native_tui", "configured_banner_policy", "configured_audio_policy",
