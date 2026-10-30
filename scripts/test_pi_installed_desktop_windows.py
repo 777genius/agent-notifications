@@ -112,6 +112,37 @@ class OriginalWebhookDeadlineTests(unittest.TestCase):
                 W.original_toast_deadline(handle, deadline, now=lambda: now)
 
 
+class ToastObserverConcurrencyTests(unittest.TestCase):
+    def test_positive_live_gate_has_one_observer_and_preserves_native_failure_evidence(self):
+        for case in ("completion", "question", "sound-off", "click-off"):
+            helpers = []
+            with self.subTest(case=case), patch.object(W, "start_toast_watcher") as prearm, \
+                 patch.object(W.subprocess, "run", return_value=subprocess.CompletedProcess([], 3,
+                     b'{"found":false,"last_stage":"exact_title_missing","max_exact_title_matches":0}', b'')) as actual:
+                self.assertIsNone(W.prearm_case_toast_observer(case, None, "TEST-Pi-toast-owned", "TEST body", Path("TEST-case"), 45, helpers))
+                prearm.assert_not_called()
+                with self.assertRaisesRegex(RuntimeError, r'mode=toast-click-until:exit=3:.*exact_title_missing'):
+                    W.Native(Path("observer.exe"))("toast-click-until", "TEST-Pi-toast-owned", "TEST body", "TEST.bmp", 25000)
+                actual.assert_called_once()
+                self.assertEqual(helpers, [])
+
+    def test_deferred_gates_keep_the_original_ready_watcher_owned_before_delivery(self):
+        for case in ("stale-origin", "desktop-off"):
+            helpers, sequence = [], []
+            child = Mock()
+            def ready(*args):
+                sequence.append("early_observer_ready")
+                helpers.append(child)
+                return child
+            with self.subTest(case=case), patch.object(W, "start_toast_watcher", side_effect=ready) as prearm:
+                observed = W.prearm_case_toast_observer(case, "TEST-native", "TEST-Pi-toast-owned", "TEST body", Path("TEST-case"), 45, helpers)
+                sequence.append("event_release")
+                self.assertIs(observed, child)
+                self.assertEqual(helpers, [child])
+                prearm.assert_called_once_with("TEST-native", "TEST-Pi-toast-owned", "TEST body", Path("TEST-case"), 45, helpers)
+                self.assertEqual(sequence, ["early_observer_ready", "event_release"])
+
+
 class LauncherDiagnosticsTests(unittest.TestCase):
     def test_window_discovery_failure_keeps_started_terminal_owned_for_cleanup(self):
         with tempfile.TemporaryDirectory(prefix="TEST-pi-terminal-owner-") as directory:

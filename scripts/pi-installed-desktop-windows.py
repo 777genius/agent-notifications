@@ -291,6 +291,16 @@ def start_toast_watcher(native, title, body, root, deadline, helpers):
     return child
 
 
+def prearm_case_toast_observer(case, native, title, body, root, deadline, helpers):
+    P.require(case in CASES, "known_toast_observation_case_required")
+    # The actual live click observer already covers the original handoff in
+    # positive cases. A second whole-desktop UIA poller would duplicate that
+    # observation. Deferred stale/absence gates still need their early witness.
+    if case in ("stale-origin", "desktop-off"):
+        return start_toast_watcher(native, title, body, root, deadline, helpers)
+    return None
+
+
 def start_process_watcher(origin, notifier_image, root, deadline, helpers, *, now=time.monotonic):
     """Arm only a read-only observer, using the already retained Pi object."""
     import ctypes
@@ -815,8 +825,10 @@ def run(args):
                 case_deadline = capture_started + CAPTURE_BUDGET_SECONDS
                 timing = {"case": name, "scope": "diagnostic_only", "capture_budget_seconds": CAPTURE_BUDGET_SECONDS}
                 report.setdefault("toast_observation_timings", []).append(timing)
-                watcher = start_toast_watcher(native, toast_title, P.COPY[event], case_root, case_deadline, helpers)
-                timing["early_watcher_ready_seconds"] = round(time.monotonic() - capture_started, 3)
+                watcher = prearm_case_toast_observer(name, native, toast_title, P.COPY[event], case_root, case_deadline, helpers)
+                timing["prearmed_diagnostic_observer"] = watcher is not None
+                if watcher is not None:
+                    timing["early_watcher_ready_seconds"] = round(time.monotonic() - capture_started, 3)
                 process_watcher = start_process_watcher(origin, view["runtime"]["executable"], case_root, case_deadline, helpers)
                 require_process_watcher_ready(process_watcher)
                 timing["process_watcher_ready_seconds"] = round(time.monotonic() - capture_started, 3)
