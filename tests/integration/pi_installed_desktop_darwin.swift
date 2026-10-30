@@ -755,6 +755,7 @@ struct FocusPermissionContext: Decodable {
     let originPID: Int32; let originStart: String; let originExecutable: String
     let deadlineMonotonic: Double; let clock: String; let screenshotPath: String
     let originalHelperBaselineEmpty: Bool; let originalPhysicalClickObserved: Bool
+    let knownCopies: [String: String]?
 }
 
 @MainActor struct FocusScreenDialog {
@@ -899,6 +900,47 @@ struct FocusPermissionContext: Decodable {
         var code: SecStaticCode?
         guard SecStaticCodeCreateWithPath(helperURL as CFURL, [], &code) == errSecSuccess, let code,
               SecStaticCodeCheckValidity(code, SecCSFlags(rawValue: kSecCSStrictValidate), nil) == errSecSuccess else { throw ProbeError.unavailable("original_helper_signature_required") }
+        var expectedRequirement: SecRequirement?
+        let requirementStatus = SecCodeCopyDesignatedRequirement(code, [], &expectedRequirement)
+        func copyProof(_ image: String, pid: pid_t, start: String) -> [String: Any]? {
+            let suffix = "/Contents/MacOS/terminal-notifier-modern"
+            guard let canonical = focusPhysicalPath(image), canonical.hasSuffix(suffix) else { return nil }
+            let bundle = String(canonical.dropLast(suffix.count))
+            guard bundle.hasSuffix(".app"), Bundle(path: bundle)?.bundleIdentifier == "com.777genius.agent-notifications" else { return nil }
+            let known = context.knownCopies ?? [:]
+            let provenance = bundle == context.helperPath ? "installed_generation"
+                : known.first(where: { ["acquisition", "stage"].contains($0.key) && focusPhysicalPath($0.value) == bundle })?.key ?? "other"
+            var proof: [String: Any] = ["canonical_bundle_path": bundle, "provenance": provenance,
+                "expected_requirement_status": requirementStatus, "verified": false]
+            if let expectedFile = try? FileManager.default.attributesOfItem(atPath: executablePath),
+               let actualFile = try? FileManager.default.attributesOfItem(atPath: canonical),
+               let expectedDevice = expectedFile[.systemNumber] as? NSNumber, let expectedInode = expectedFile[.systemFileNumber] as? NSNumber,
+               let actualDevice = actualFile[.systemNumber] as? NSNumber, let actualInode = actualFile[.systemFileNumber] as? NSNumber {
+                proof["same_installed_file"] = expectedDevice == actualDevice && expectedInode == actualInode
+            }
+            guard let values = try? URL(fileURLWithPath: canonical).resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]),
+                  values.isRegularFile == true, let size = values.fileSize, size > 0, size <= 16 * 1024 * 1024,
+                  let bytes = try? Data(contentsOf: URL(fileURLWithPath: canonical), options: .mappedIfSafe), bytes.count == size else { return proof }
+            let digest = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+            proof["executable_sha256"] = digest
+            var actual: SecStaticCode?
+            let createStatus = SecStaticCodeCreateWithPath(URL(fileURLWithPath: bundle) as CFURL, [], &actual)
+            proof["static_code_status"] = createStatus
+            guard createStatus == errSecSuccess, let actual, requirementStatus == errSecSuccess, let expectedRequirement else { return proof }
+            let signatureStatus = SecStaticCodeCheckValidity(actual, SecCSFlags(rawValue: kSecCSStrictValidate), nil)
+            let matches = SecStaticCodeCheckValidity(actual, SecCSFlags(rawValue: kSecCSStrictValidate), expectedRequirement)
+            proof["signature_status"] = signatureStatus; proof["designated_requirement_status"] = matches
+            var guest: SecCode?
+            let guestStatus = SecCodeCopyGuestWithAttributes(nil, [kSecGuestAttributePid as String: NSNumber(value: pid)] as CFDictionary, [], &guest)
+            proof["guest_code_status"] = guestStatus
+            if guestStatus == errSecSuccess, let guest {
+                let runningStatus = SecCodeCheckValidity(guest, [], expectedRequirement)
+                proof["running_code_status"] = runningStatus
+                proof["verified"] = digest == context.helperSHA256 && signatureStatus == errSecSuccess && matches == errSecSuccess
+                    && runningStatus == errSecSuccess && terminalAutomationUID(pid) == Int(getuid()) && matchesProcessStart(pid, start)
+            }
+            return proof
+        }
         let settingsPath = "/System/Applications/System Settings.app"
         guard verifiedAppleApplication(URL(fileURLWithPath: settingsPath), identifier: "com.apple.systempreferences") else { throw ProbeError.unavailable("signed_apple_settings_required") }
         let before = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.systempreferences")
@@ -908,6 +950,9 @@ struct FocusPermissionContext: Decodable {
         }
         result["settings_process_present_before"] = !before.isEmpty
         let beforeStart = before.first.flatMap { processStartIdentity($0.processIdentifier) }
+        // One code snapshot per stable actor/image in this invocation. The
+        // outer process, image and UID observations remain fresh on every poll.
+        var codeSnapshots = [String: [String: Any]](), attemptedSnapshots = Set<String>()
         func registeredFacts(_ app: NSRunningApplication) -> [String: Any] {
             func pathState(_ url: URL?, expected: String) -> String {
                 guard let url else { return "missing" }
@@ -929,6 +974,19 @@ struct FocusPermissionContext: Decodable {
             row["kernel_identity"] = "observed"; row["process_start_identity"] = start
             row["kernel_image_path"] = image
             if let uid { row["uid_match"] = uid == Int(getuid()) ? "same" : "different" }
+            let snapshotKey = "\(pid):\(start):" + (focusPhysicalPath(path) ?? path)
+            if attemptedSnapshots.insert(snapshotKey).inserted, let proof = copyProof(path, pid: pid, start: start) {
+                codeSnapshots[snapshotKey] = proof
+            }
+            if var proof = codeSnapshots[snapshotKey] {
+                proof["verified"] = proof["verified"] as? Bool == true && uid == Int(getuid())
+                row["code_identity"] = proof
+            }
+            if !matchesProcessStart(pid, start) {
+                row["kernel_identity"] = "unavailable"; row.removeValue(forKey: "process_start_identity")
+                row["kernel_image_path"] = "unavailable"; row["uid_match"] = "unavailable"
+                if var proof = row["code_identity"] as? [String: Any] { proof["verified"] = false; row["code_identity"] = proof }
+            }
             return row
         }
         var captured: (NSRunningApplication, String)?

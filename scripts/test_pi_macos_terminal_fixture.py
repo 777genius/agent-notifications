@@ -108,6 +108,43 @@ class OriginalFocusPermissionInspection(unittest.TestCase):
                 M.focus_permission_projection(candidate)
             self.assertNotIn('TEST-private', str(caught.exception))
 
+    def test_copy_code_proof_requires_pinned_hash_signature_requirement_and_live_identity(self):
+        value = self.receipt()
+        value.update(observation_phase='postfailure_readonly', failure_class='probe_refusal',
+            refusal='original_callback_helper_unavailable', callback_app_observations=1,
+            registered_candidate_count=1, matching_candidate_count=0, registered_candidates=[{
+                'pid': 43, 'kernel_identity': 'observed', 'process_start_identity': '123:456',
+                'registered_bundle_path': 'different', 'registered_image_path': 'different',
+                'kernel_image_path': 'different', 'uid_match': 'same', 'code_identity': {
+                    'canonical_bundle_path': '/TEST-candidate/stage/ClaudeNotifier.app', 'provenance': 'stage',
+                    'expected_requirement_status': 0, 'static_code_status': 0, 'signature_status': 0,
+                    'designated_requirement_status': 0, 'guest_code_status': 0, 'running_code_status': 0,
+                    'executable_sha256': 'a' * 64, 'same_installed_file': False, 'verified': True}}])
+        self.assertIs(M.focus_permission_projection(value, expected_helper_hash='a' * 64), value)
+        self.assertNotIn('captured_helper_pid', value)
+        for scenario in ('wrong_hash', 'signature_failure', 'requirement_failure', 'guest_failure', 'missing_status', 'unknown_field', 'bad_path'):
+            candidate = json.loads(json.dumps(value)); proof = candidate['registered_candidates'][0]['code_identity']
+            if scenario == 'wrong_hash':
+                proof['executable_sha256'] = 'b' * 64
+            elif scenario == 'signature_failure':
+                proof['signature_status'] = -67050
+            elif scenario == 'requirement_failure':
+                proof['designated_requirement_status'] = -67050
+            elif scenario == 'guest_failure':
+                proof['running_code_status'] = -67050
+            elif scenario == 'missing_status':
+                del proof['running_code_status']
+            elif scenario == 'unknown_field':
+                proof['raw_private_text'] = 'TEST-private'
+            else:
+                proof['canonical_bundle_path'] = '/TEST-invalid\n.app'
+            with self.subTest(scenario=scenario), self.assertRaises(RuntimeError) as caught:
+                M.focus_permission_projection(candidate, expected_helper_hash='a' * 64)
+            self.assertNotIn('TEST-private', str(caught.exception))
+        proof = value['registered_candidates'][0]['code_identity']; proof['verified'] = False
+        del proof['running_code_status']
+        self.assertIs(M.focus_permission_projection(value), value)
+
     def test_requested_settings_route_without_observed_window_never_claims_collection(self):
         value = {**self.receipt(), 'normal_settings_route_requested': True}
         info = mock.Mock(implementation='mach_absolute_time()', monotonic=True, adjustable=False)

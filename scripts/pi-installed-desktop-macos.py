@@ -963,7 +963,7 @@ def presentation_preparation_admission(observer, evidence_root):
     return admitted
 
 
-def focus_permission_projection(value):
+def focus_permission_projection(value, expected_helper_hash=None):
     required = {'scope', 'diagnostic_only', 'qualification_input', 'desktop_qualified', 'maximum_seconds', 'status',
         'physical_open_settings_click', 'permission_control_action_performed', 'responsible_row_association',
         'screenshot_child_collected', 'owned_window_observed', 'owned_window_disappeared', 'close_click_performed',
@@ -1023,7 +1023,7 @@ def focus_permission_projection(value):
                   'focus_permission_registered_rows_bound')
         fixed = {'pid', 'kernel_identity', 'registered_bundle_path', 'registered_image_path', 'kernel_image_path', 'uid_match'}
         for row in rows:
-            P.require(isinstance(row, dict) and fixed <= set(row) <= fixed | {'process_start_identity'}
+            P.require(isinstance(row, dict) and fixed <= set(row) <= fixed | {'process_start_identity', 'code_identity'}
                       and type(row['pid']) is int and row['pid'] > 0
                       and row['kernel_identity'] in ('observed', 'absent', 'replaced', 'unavailable')
                       and row['registered_bundle_path'] in ('match', 'different', 'missing', 'unresolved')
@@ -1037,6 +1037,26 @@ def focus_permission_projection(value):
             else:
                 P.require('process_start_identity' not in row and row['kernel_image_path'] == 'unavailable'
                           and row['uid_match'] == 'unavailable', 'focus_permission_unknown_kernel_is_not_mismatch')
+            if 'code_identity' in row:
+                proof = row['code_identity']
+                fields = {'canonical_bundle_path', 'provenance', 'expected_requirement_status', 'verified'}
+                statuses = {'expected_requirement_status', 'static_code_status', 'signature_status',
+                            'designated_requirement_status', 'guest_code_status', 'running_code_status'}
+                P.require(isinstance(proof, dict) and fields <= set(proof)
+                          <= fields | statuses | {'same_installed_file', 'executable_sha256'}
+                          and isinstance(proof['canonical_bundle_path'], str) and proof['canonical_bundle_path'].startswith('/')
+                          and proof['canonical_bundle_path'].endswith('.app') and len(proof['canonical_bundle_path'].encode()) <= 4096
+                          and not any(ord(ch) < 32 for ch in proof['canonical_bundle_path'])
+                          and proof['provenance'] in ('installed_generation', 'acquisition', 'stage', 'other')
+                          and type(proof['verified']) is bool
+                          and all(type(proof[key]) is int and -(2 ** 31) <= proof[key] < 2 ** 31 for key in statuses & set(proof))
+                          and ('same_installed_file' not in proof or type(proof['same_installed_file']) is bool)
+                          and ('executable_sha256' not in proof or (isinstance(proof['executable_sha256'], str)
+                               and re.fullmatch(r'[0-9a-f]{64}', proof['executable_sha256']))), 'focus_permission_closed_code_identity')
+                P.require(not proof['verified'] or (row['kernel_identity'] == 'observed' and row['uid_match'] == 'same'
+                          and statuses <= set(proof) and all(proof[key] == 0 for key in statuses)
+                          and proof.get('executable_sha256') == expected_helper_hash and expected_helper_hash is not None),
+                          'focus_permission_complete_live_code_proof_required')
         P.require(len({row['pid'] for row in rows}) == len(rows)
                   and sum(row['registered_bundle_path'] == row['registered_image_path'] == 'match' for row in rows)
                       == value['matching_candidate_count'], 'focus_permission_registered_counts_consistent')
@@ -1076,7 +1096,7 @@ def focus_permission_projection(value):
     return value
 
 
-def inspect_original_click_permission(observer, case_root, app, helper_hash, terminal, deadline, *, execute=command, now=time.monotonic):
+def inspect_original_click_permission(observer, case_root, app, helper_hash, terminal, deadline, *, execute=command, now=time.monotonic, known_copies=None):
     """One diagnostic handoff consumes the original click deadline; no grant/focus."""
     receipt = {'diagnostic_only': True, 'qualification_input': False, 'desktop_qualified': False, 'owned_resources_collected': False}
     try:
@@ -1090,12 +1110,12 @@ def inspect_original_click_permission(observer, case_root, app, helper_hash, ter
             'originStart': terminal.process_start_identity, 'originExecutable': terminal.executable,
             'clock': 'mach_absolute_time', 'deadlineMonotonic': inspector_deadline,
             'originalHelperBaselineEmpty': True, 'originalPhysicalClickObserved': True,
-            'screenshotPath': str(case_root / 'focus-permission-pane.png')}
+            'screenshotPath': str(case_root / 'focus-permission-pane.png'), 'knownCopies': known_copies or {}}
         body = execute([observer, 'inspect-focus-screen-permission', json.dumps(context)], timeout=remaining,
                        env={**os.environ, 'PI_MACOS_FOCUS_INSPECTION_ADMITTED': '1'})
         P.require(len(body) <= 256 * 1024, 'focus_permission_output_limit')
         P.require(now() < inspector_deadline, 'original_focus_inspection_deadline_expired')
-        inspection = focus_permission_projection(json.loads(body))
+        inspection = focus_permission_projection(json.loads(body), expected_helper_hash=helper_hash)
         receipt['inspection'] = inspection
         receipt['owned_resources_collected'] = inspection['screenshot_child_collected'] and (
             inspection['owned_window_observed'] and inspection['owned_window_disappeared']
@@ -1703,7 +1723,9 @@ def run(args):
                 P.require(clicked["physical_mouse_click"] and clicked["matches"], "physical_product_banner_click_missing")
                 if inspect_click_permission and name == "completion":
                     report["click_permission_diagnostic"] = inspect_original_click_permission(args.observer, case_root, app,
-                        report["helper"]["executable_sha256"], terminal, click_deadline)
+                        report["helper"]["executable_sha256"], terminal, click_deadline,
+                        known_copies={"acquisition": str(args.helper_archive.parent / "native/ClaudeNotifier.app"),
+                                      "stage": str(args.runtime_stage / "ClaudeNotifier.app")})
                     diagnostic = report["click_permission_diagnostic"]
                     if not diagnostic["owned_resources_collected"]:
                         report.setdefault("case_cleanup_failures", []).append({"case": name, "role": "focus_permission_inspection", "error_class": "unverified_owned_resources"})
