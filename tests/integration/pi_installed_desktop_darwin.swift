@@ -633,23 +633,25 @@ private let captureSharingLabel = "Allow notifications when mirroring or sharing
             throw ProbeError.unavailable("unique_notifications_settings_cg_window_required")
         }
         var controls = [NotificationCaptureControl](), visited = 0, capped = false
+        var capReasons = [String: Int]()
+        func cap(_ reason: String, _ detail: Int = 0) { capped = true; capReasons[reason] = detail }
         metadata = []
         func children(_ element: AXUIElement) -> [AXUIElement] {
             var count = CFIndex(0)
             var values: CFArray?
             let status = AXUIElementGetAttributeValueCount(element, kAXChildrenAttribute as CFString, &count)
             guard status == .success else {
-                if status != .attributeUnsupported && status != .noValue { capped = true }
+                if status != .attributeUnsupported && status != .noValue { cap("child_count_ax_error", Int(status.rawValue)) }
                 return []
             }
-            guard count >= 0 else { capped = true; return [] }
-            if count > 32 { capped = true }
+            guard count >= 0 else { cap("negative_child_count", Int(count)); return [] }
+            if count > 32 { cap("child_limit", Int(count)) }
             let amount = min(Int(count), 32)
             if amount == 0 { return [] }
-            guard AXUIElementCopyAttributeValues(element, kAXChildrenAttribute as CFString, 0, amount, &values) == .success,
-                  let copied = values as? [AXUIElement], copied.count == amount else {
-                capped = true; return []
-            }
+            let copiedStatus = AXUIElementCopyAttributeValues(element, kAXChildrenAttribute as CFString, 0, amount, &values)
+            guard copiedStatus == .success else { cap("child_copy_ax_error", Int(copiedStatus.rawValue)); return [] }
+            guard let copied = values as? [AXUIElement] else { cap("child_copy_type"); return [] }
+            guard copied.count == amount else { cap("child_copy_count", copied.count); return [] }
             return copied
         }
         func add(_ element: AXUIElement) {
@@ -663,7 +665,9 @@ private let captureSharingLabel = "Allow notifications when mirroring or sharing
                 element: element, box: box, role: role, enabled: enabled, on: on))
         }
         func visit(_ element: AXUIElement, _ depth: Int) {
-            guard visited < 1200, depth < 20, ProcessInfo.processInfo.systemUptime < deadline else { capped = true; return }
+            guard visited < 1200 else { cap("node_limit", visited); return }
+            guard depth < 20 else { cap("depth_limit", depth); return }
+            guard ProcessInfo.processInfo.systemUptime < deadline else { cap("deadline"); return }
             visited += 1
             let role = attribute(element, kAXRoleAttribute) as? String ?? ""
             let direct = children(element)
@@ -696,8 +700,22 @@ private let captureSharingLabel = "Allow notifications when mirroring or sharing
             }
             if role == kAXGroupRole, direct.count <= 8, labels.count == 1,
                let group = rectangle(element), let label = rectangle(labels[0]), group.contains(label) {
-                let switches = direct.filter { roles.contains(attribute($0, kAXRoleAttribute) as? String ?? "") }
-                if switches.count == 1, let box = rectangle(switches[0]), group.contains(box) { add(switches[0]) }
+                // The observed global group is a flat list of label/control
+                // pairs. Bind only the exact label's immediately following
+                // checkbox on the same visible row, never another row's switch.
+                if let index = direct.firstIndex(where: { CFEqual($0, labels[0]) }), index + 1 < direct.count {
+                    let control = direct[index + 1]
+                    if roles.contains(attribute(control, kAXRoleAttribute) as? String ?? ""),
+                       let box = rectangle(control), group.contains(box), label.maxX <= box.minX,
+                       label.minY < box.maxY, box.minY < label.maxY {
+                        let rowControls = direct.filter { child in
+                            guard roles.contains(attribute(child, kAXRoleAttribute) as? String ?? ""),
+                                  let frame = rectangle(child) else { return false }
+                            return label.minY < frame.maxY && frame.minY < label.maxY
+                        }
+                        if rowControls.count == 1 { add(control) }
+                    }
+                }
             }
             for child in direct { visit(child, depth + 1) }
         }
@@ -705,6 +723,7 @@ private let captureSharingLabel = "Allow notifications when mirroring or sharing
         result["control_count"] = controls.count
         result["visited_nodes"] = visited
         result["traversal_capped"] = capped
+        result["traversal_cap_reasons"] = capReasons
         guard !capped, controls.count == 1, matchesProcessStart(app.processIdentifier, start),
               ProcessInfo.processInfo.systemUptime < deadline else {
             throw ProbeError.unavailable("unique_complete_sharing_control_observation_required")
