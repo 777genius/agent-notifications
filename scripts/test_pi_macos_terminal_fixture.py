@@ -44,13 +44,15 @@ class OriginalFocusPermissionInspection(unittest.TestCase):
         value = self.receipt()
         value.update(observation_phase='postfailure_readonly', failure_class='probe_refusal',
             refusal='original_callback_helper_unavailable', callback_app_observations=3,
-            registered_candidate_count=0, matching_candidate_count=0, normal_settings_route_requested=True,
+            registered_candidate_count=0, matching_candidate_count=0, registered_candidates=[], normal_settings_route_requested=True,
             settings_owner_pid=42, settings_owner_start='456:789', owned_window_observed=True,
             owned_window_disappeared=True, close_click_performed=True)
         value['pane'] = GlobalSettingsInspection().settings()['initial_tree']
+        value['pane'].update(tree_scope='retained_detail', traversal_capped=False)
+        value.update(whole_window_complete=False, settings_window_header='screen_system_audio_recording')
         value['pane']['nodes'][0]['matches_installed_helper'] = True
         self.assertIs(M.focus_permission_projection(value), value)
-        for scenario in ('live_actor', 'success_status', 'erased_refusal', 'bad_counts', 'url_not_boolean', 'private_url'):
+        for scenario in ('live_actor', 'success_status', 'erased_refusal', 'bad_counts', 'url_not_boolean', 'private_url', 'false_whole_window', 'unknown_header'):
             candidate = json.loads(json.dumps(value))
             if scenario == 'live_actor':
                 candidate.update(captured_helper_pid=43, captured_helper_start='123:456')
@@ -62,8 +64,46 @@ class OriginalFocusPermissionInspection(unittest.TestCase):
                 candidate['matching_candidate_count'] = 1
             elif scenario == 'url_not_boolean':
                 candidate['pane']['nodes'][0]['matches_installed_helper'] = 'true'
+            elif scenario == 'false_whole_window':
+                candidate['whole_window_complete'] = True
+            elif scenario == 'unknown_header':
+                candidate['settings_window_header'] = 'TEST-private'
             else:
                 candidate['pane']['nodes'][0]['raw_url'] = '/TEST-private-path'
+            with self.subTest(scenario=scenario), self.assertRaises(RuntimeError) as caught:
+                M.focus_permission_projection(candidate)
+            self.assertNotIn('TEST-private', str(caught.exception))
+
+    def test_registered_and_kernel_path_states_remain_distinct_without_original_authority(self):
+        value = self.receipt()
+        value.update(observation_phase='postfailure_readonly', failure_class='probe_refusal',
+            refusal='original_callback_helper_unavailable', callback_app_observations=2,
+            registered_candidate_count=1, matching_candidate_count=0, registered_candidates=[{
+                'pid': 43, 'kernel_identity': 'observed', 'process_start_identity': '123:456',
+                'registered_bundle_path': 'different', 'registered_image_path': 'missing',
+                'kernel_image_path': 'match', 'uid_match': 'same'}])
+        self.assertIs(M.focus_permission_projection(value), value)
+        self.assertNotIn('captured_helper_pid', value)
+        for state in ('absent', 'replaced', 'unavailable'):
+            candidate = json.loads(json.dumps(value))
+            row = candidate['registered_candidates'][0]
+            row.update(kernel_identity=state, kernel_image_path='unavailable', uid_match='unavailable')
+            del row['process_start_identity']
+            self.assertIs(M.focus_permission_projection(candidate), candidate)
+        for scenario in ('raw_path', 'missing_birth', 'unknown_as_difference', 'counter_mismatch', 'extra_rows'):
+            candidate = json.loads(json.dumps(value))
+            row = candidate['registered_candidates'][0]
+            if scenario == 'raw_path':
+                row['raw_path'] = '/TEST-private-path'
+            elif scenario == 'missing_birth':
+                del row['process_start_identity']
+            elif scenario == 'unknown_as_difference':
+                row.update(kernel_identity='unavailable', kernel_image_path='different')
+                del row['process_start_identity']
+            elif scenario == 'counter_mismatch':
+                candidate['matching_candidate_count'] = 1
+            else:
+                candidate['registered_candidates'] *= 9
             with self.subTest(scenario=scenario), self.assertRaises(RuntimeError) as caught:
                 M.focus_permission_projection(candidate)
             self.assertNotIn('TEST-private', str(caught.exception))

@@ -970,7 +970,8 @@ def focus_permission_projection(value):
         'settings_process_collected', 'elapsed_seconds', 'observation_phase', 'normal_settings_route_requested'}
     optional = {'settings_process_present_before', 'captured_helper_pid', 'captured_helper_start', 'dialog',
         'settings_owner_pid', 'settings_owner_start', 'pane', 'screenshot_captured', 'failure_class', 'refusal', 'cleanup_failure_class',
-        'registered_candidate_count', 'matching_candidate_count', 'callback_app_observations',
+        'registered_candidate_count', 'matching_candidate_count', 'callback_app_observations', 'registered_candidates',
+        'whole_window_complete', 'settings_window_header',
         'dialog_observation_failure_class', 'dialog_observation_refusal', 'readback_failure_class', 'readback_refusal'}
     P.require(isinstance(value, dict) and required <= set(value) <= required | optional
               and value['scope'] == 'original_click_screen_permission_inspection'
@@ -1007,13 +1008,38 @@ def focus_permission_projection(value):
         count = value['callback_app_observations']
         P.require(type(count) is int and 0 <= count <= 64, 'focus_permission_observation_bound')
         counts = {'registered_candidate_count', 'matching_candidate_count'}
-        P.require((counts <= set(value) if count else not counts & set(value)), 'focus_permission_counts_required')
+        P.require((counts <= set(value) and 'registered_candidates' in value if count
+                   else not (counts | {'registered_candidates'}) & set(value)), 'focus_permission_counts_required')
     else:
-        P.require(not {'registered_candidate_count', 'matching_candidate_count'} & set(value), 'focus_permission_counts_required')
+        P.require(not {'registered_candidate_count', 'matching_candidate_count', 'registered_candidates'} & set(value),
+                  'focus_permission_counts_required')
     if 'registered_candidate_count' in value:
         P.require(type(value['registered_candidate_count']) is int and type(value['matching_candidate_count']) is int
                   and 0 <= value['matching_candidate_count'] <= value['registered_candidate_count'] <= 8,
                   'focus_permission_counts_bound')
+    if 'registered_candidates' in value:
+        rows = value['registered_candidates']
+        P.require(isinstance(rows, list) and len(rows) == value['registered_candidate_count'] <= 8,
+                  'focus_permission_registered_rows_bound')
+        fixed = {'pid', 'kernel_identity', 'registered_bundle_path', 'registered_image_path', 'kernel_image_path', 'uid_match'}
+        for row in rows:
+            P.require(isinstance(row, dict) and fixed <= set(row) <= fixed | {'process_start_identity'}
+                      and type(row['pid']) is int and row['pid'] > 0
+                      and row['kernel_identity'] in ('observed', 'absent', 'replaced', 'unavailable')
+                      and row['registered_bundle_path'] in ('match', 'different', 'missing', 'unresolved')
+                      and row['registered_image_path'] in ('match', 'different', 'missing', 'unresolved')
+                      and row['kernel_image_path'] in ('match', 'different', 'unresolved', 'unavailable')
+                      and row['uid_match'] in ('same', 'different', 'unavailable'), 'focus_permission_closed_registered_row')
+            if row['kernel_identity'] == 'observed':
+                P.require(isinstance(row.get('process_start_identity'), str)
+                          and re.fullmatch(r'[1-9][0-9]{0,19}:[0-9]{1,6}', row['process_start_identity'])
+                          and row['kernel_image_path'] != 'unavailable', 'focus_permission_kernel_birth_required')
+            else:
+                P.require('process_start_identity' not in row and row['kernel_image_path'] == 'unavailable'
+                          and row['uid_match'] == 'unavailable', 'focus_permission_unknown_kernel_is_not_mismatch')
+        P.require(len({row['pid'] for row in rows}) == len(rows)
+                  and sum(row['registered_bundle_path'] == row['registered_image_path'] == 'match' for row in rows)
+                      == value['matching_candidate_count'], 'focus_permission_registered_counts_consistent')
     P.require(('captured_helper_pid' in value) == ('captured_helper_start' in value), 'focus_permission_paired_birth_required')
     if value['observation_phase'] == 'postfailure_readonly':
         P.require(value['status'] == 'unavailable' and value.get('failure_class') == 'probe_refusal'
@@ -1033,7 +1059,13 @@ def focus_permission_projection(value):
                   and isinstance(dialog['open_bounds'], list) and len(dialog['open_bounds']) == 4
                   and all(type(x) in (int, float) and math.isfinite(x) for x in dialog['open_bounds']), 'focus_permission_dialog_required')
     if 'pane' in value:
-        P.require(value['normal_settings_route_requested'], 'focus_permission_readonly_route_required')
+        P.require(value['normal_settings_route_requested'] and type(value.get('whole_window_complete')) is bool,
+                  'focus_permission_readonly_route_required')
+        P.require(value['whole_window_complete'] == (value['pane'].get('tree_scope') == 'app_windows'
+                  and value['pane'].get('traversal_capped') is False), 'focus_permission_scope_completeness_required')
+        P.require('settings_window_header' not in value or (value['pane'].get('tree_scope') == 'retained_detail'
+                  and value['settings_window_header'] in ('screen_recording', 'screen_system_audio_recording')),
+                  'focus_permission_fixed_window_header_required')
         global_settings_projection({'scope': 'readonly_global_notification_settings', 'diagnostic_only': True, 'qualification_input': False,
             'desktop_qualified': False, 'maximum_seconds': 6, 'owner_pid': value.get('settings_owner_pid'),
             'owner_start_identity': value.get('settings_owner_start'), 'owner_uid': os.getuid(), 'owner_bundle': 'com.apple.systempreferences',

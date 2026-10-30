@@ -908,6 +908,29 @@ struct FocusPermissionContext: Decodable {
         }
         result["settings_process_present_before"] = !before.isEmpty
         let beforeStart = before.first.flatMap { processStartIdentity($0.processIdentifier) }
+        func registeredFacts(_ app: NSRunningApplication) -> [String: Any] {
+            func pathState(_ url: URL?, expected: String) -> String {
+                guard let url else { return "missing" }
+                guard let physical = focusPhysicalPath(url.path) else { return "unresolved" }
+                return physical == expected ? "match" : "different"
+            }
+            let pid = app.processIdentifier, before = processStartIdentity(app.processIdentifier)
+            var row: [String: Any] = ["pid": Int(pid), "kernel_identity": "unavailable", "uid_match": "unavailable",
+                "registered_bundle_path": pathState(app.bundleURL, expected: context.helperPath),
+                "registered_image_path": pathState(app.executableURL, expected: executablePath), "kernel_image_path": "unavailable"]
+            guard let identity = try? terminalProcessIdentity(pid, expectedStart: before) else { return row }
+            if identity["status"] as? String == "absent" { row["kernel_identity"] = "absent"; return row }
+            if identity["status"] as? String == "replaced" { row["kernel_identity"] = "replaced"; return row }
+            guard identity["status"] as? String == "observed", let start = identity["process_start_identity"] as? String,
+                  let path = identity["executable_path"] as? String else { return row }
+            let uid = terminalAutomationUID(pid)
+            let image = pathState(URL(fileURLWithPath: path), expected: executablePath)
+            guard matchesProcessStart(pid, start) else { return row }
+            row["kernel_identity"] = "observed"; row["process_start_identity"] = start
+            row["kernel_image_path"] = image
+            if let uid { row["uid_match"] = uid == Int(getuid()) ? "same" : "different" }
+            return row
+        }
         var captured: (NSRunningApplication, String)?
         let captureDeadline = min(actionDeadline, started + 1)
         var registeredCount = 0, matchingCount = 0, observations = 0
@@ -917,17 +940,18 @@ struct FocusPermissionContext: Decodable {
             }
             registeredCount = registered.count; observations += 1
             guard registered.count <= 8 else { throw ProbeError.unavailable("original_callback_helper_ambiguous") }
+            let facts = registered.map(registeredFacts)
+            result["registered_candidates"] = facts
             let apps = registered.filter {
                 guard let bundle = $0.bundleURL, let binary = $0.executableURL else { return false }
                 return focusPhysicalPath(bundle.path) == context.helperPath && focusPhysicalPath(binary.path) == executablePath
             }
             matchingCount = apps.count
             if apps.count > 1 { throw ProbeError.unavailable("original_callback_helper_ambiguous") }
-            if let app = apps.first, let start = processStartIdentity(app.processIdentifier),
-               terminalAutomationUID(app.processIdentifier) == Int(getuid()),
-               let identity = try? terminalProcessIdentity(app.processIdentifier, expectedStart: start),
-               identity["status"] as? String == "observed", let path = identity["executable_path"] as? String,
-               focusPhysicalPath(path) == executablePath { captured = (app, start); break }
+            if let app = apps.first, let fact = facts.first(where: { $0["pid"] as? Int == Int(app.processIdentifier) }),
+               fact["kernel_identity"] as? String == "observed", fact["kernel_image_path"] as? String == "match",
+               fact["uid_match"] as? String == "same", let start = fact["process_start_identity"] as? String,
+               matchesProcessStart(app.processIdentifier, start) { captured = (app, start); break }
             try await Task.sleep(nanoseconds: 20_000_000)
         }
         result["callback_app_observations"] = observations
@@ -990,7 +1014,13 @@ struct FocusPermissionContext: Decodable {
         try preparation.requireWindow()
         guard let app = preparation.app else { throw ProbeError.unavailable("owned_settings_window_not_observed") }
         result["settings_owner_pid"] = Int(app.processIdentifier); result["settings_owner_start"] = preparation.start
-        result["pane"] = settingsInspectionTree(app, deadline: actionDeadline, installedHelperPath: context.helperPath).1
+        let detail = try focusSettingsDetail(preparation, deadline: actionDeadline)
+        let pane = settingsInspectionTree(app, deadline: actionDeadline, retainedDetail: detail?.element, installedHelperPath: context.helperPath).1
+        result["pane"] = pane
+        if let detail { result["settings_window_header"] = detail.header }
+        // A complete targeted detail never proves that the unvisited sidebar or
+        // other window content was observed. Partial scope remains explicit.
+        result["whole_window_complete"] = detail == nil && (pane["traversal_capped"] as? Bool == false)
         result["screenshot_captured"] = try await focusPermissionScreenshot(context.screenshotPath, deadline: deadline - 0.35)
         if result["failure_class"] == nil { result["status"] = "inspected" }
     } catch {
@@ -1008,6 +1038,43 @@ struct FocusPermissionContext: Decodable {
     result["settings_process_collected"] = false
     result["elapsed_seconds"] = (try consentMonotonicTime()) - started
     return result
+}
+
+// Read only the measured right-hand Settings detail before its long sidebar.
+// Selection is local to the exact owned window and its immediate split panes.
+@MainActor func focusSettingsDetail(_ preparation: SettingsPresentationPreparation, deadline: Double) throws -> (element: AXUIElement, header: String)? {
+    try preparation.requireWindow()
+    guard let app = preparation.app, let window = preparation.window, let frame = preparation.windowBox else { return nil }
+    let titles = ["Screen Recording": "screen_recording", "Screen & System Audio Recording": "screen_system_audio_recording"]
+    guard let title = attribute(window, kAXTitleAttribute) as? String, let header = titles[title] else { return nil }
+    func children(_ element: AXUIElement) -> [AXUIElement]? {
+        guard let now = try? consentMonotonicTime(), now < deadline,
+              let values = attribute(element, kAXChildrenAttribute) as? [AXUIElement], values.count <= 8 else { return nil }
+        return values
+    }
+    func isRole(_ element: AXUIElement, _ role: String) -> Bool {
+        var pid = pid_t(0)
+        return AXUIElementGetPid(element, &pid) == .success && pid == app.processIdentifier
+            && attribute(element, kAXRoleAttribute) as? String == role
+    }
+    guard let top = children(window) else { return nil }
+    let groups = top.filter { isRole($0, "AXGroup") && rectangle($0) == frame }
+    guard groups.count == 1, let content = children(groups[0]) else { return nil }
+    let splits = content.filter { isRole($0, "AXSplitGroup") && rectangle($0) == frame }
+    guard splits.count == 1, let panes = children(splits[0]) else { return nil }
+    let left = panes.filter {
+        guard isRole($0, "AXGroup"), let box = rectangle($0) else { return false }
+        return box.minX == frame.minX && box.minY == frame.minY && box.height == frame.height
+            && box.width > 0 && box.maxX < frame.maxX
+    }
+    guard left.count == 1, let sidebar = rectangle(left[0]) else { return nil }
+    let details = panes.filter {
+        guard isRole($0, "AXGroup"), let box = rectangle($0) else { return false }
+        return box.minX >= sidebar.maxX && frame.contains(box) && box.width > 0 && box.height > 0
+    }
+    try preparation.requireWindow()
+    guard details.count == 1, try consentMonotonicTime() < deadline else { return nil }
+    return (details[0], header)
 }
 
 @MainActor struct SettingsInspectionNode {
