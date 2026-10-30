@@ -104,7 +104,7 @@ func testDirectChildIdentity() throws -> [String: Any] {
     return ["scope": "native_direct_child_kernel_identity_only", "stable_identity": true,
             "mismatched_identity_rejected": true, "reaped_child_identity_rejected": true,
             "terminal_birth_and_path_signal_guards": true,
-            "child_collected": !child.isRunning, "desktop_qualified": false]
+            "child_collected": !child.isRunning, "physical_focus_path_identity_guard": try testFocusPhysicalPathIdentity(), "desktop_qualified": false]
 }
 
 func publish(_ value: [String: Any]) {
@@ -724,6 +724,33 @@ struct TerminalAutomationContext: Decodable {
     return result
 }
 
+// Foundation's resolver can replace /private/var with /var. Physical
+// identity must use POSIX realpath on both the supplied and observed paths.
+func focusPhysicalPath(_ path: String) -> String? {
+    guard path.hasPrefix("/"), path.utf8.count < 4096, !path.utf8.contains(0),
+          let resolved = path.withCString({ Darwin.realpath($0, nil) }) else { return nil }
+    defer { free(resolved) }
+    guard let value = String(validatingUTF8: resolved), value.utf8.count < 4096 else { return nil }
+    return value
+}
+
+func testFocusPhysicalPathIdentity() throws -> Bool {
+    let root = "/private/tmp/TEST-pi-focus-path-" + UUID().uuidString
+    let alias = String(root.dropFirst("/private".count))
+    try FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+    defer { try? FileManager.default.removeItem(atPath: root) }
+    let link = root + "/alias"
+    try FileManager.default.createSymbolicLink(atPath: link, withDestinationPath: root)
+    guard focusPhysicalPath(root) == root, focusPhysicalPath(alias) == root,
+          focusPhysicalPath(link) == root, focusPhysicalPath(link) != link,
+          URL(fileURLWithPath: root).resolvingSymlinksInPath().path != root,
+          focusPhysicalPath(root + "/missing") == nil, focusPhysicalPath("relative") == nil,
+          focusPhysicalPath(root + "\0ignored") == nil, focusPhysicalPath("/" + String(repeating: "x", count: 4096)) == nil else {
+        throw ProbeError.unavailable("physical_focus_path_identity_guard_failed")
+    }
+    return true
+}
+
 // Diagnostic only: follow the original, real product click's public Screen
 // Recording prompt. This never grants permission or substitutes for focus.
 struct FocusPermissionContext: Decodable {
@@ -818,7 +845,7 @@ struct FocusPermissionContext: Decodable {
 @MainActor func focusPermissionScreenshot(_ path: String, deadline: Double) async throws -> Bool {
     let url = URL(fileURLWithPath: path), parent = url.deletingLastPathComponent()
     guard url.lastPathComponent == "focus-permission-pane.png", parent.lastPathComponent == "case-completion",
-          parent.path == parent.resolvingSymlinksInPath().path,
+          focusPhysicalPath(parent.path) == parent.path,
           parent.deletingLastPathComponent().lastPathComponent.hasPrefix("TEST-pi-installed-macos-") else {
         throw ProbeError.unavailable("screen_snapshot_owned_path_required")
     }
@@ -860,7 +887,9 @@ struct FocusPermissionContext: Decodable {
         "responsible_row_association": "display_name_only_unverified", "screenshot_child_collected": true]
     do {
         let helperURL = URL(fileURLWithPath: context.helperPath), executable = helperURL.appendingPathComponent("Contents/MacOS/terminal-notifier-modern")
-        guard helperURL.path == helperURL.resolvingSymlinksInPath().path, helperURL.pathExtension == "app",
+        let executablePath = context.helperPath + "/Contents/MacOS/terminal-notifier-modern"
+        guard focusPhysicalPath(context.helperPath) == context.helperPath, helperURL.pathExtension == "app",
+              focusPhysicalPath(executable.path) == executablePath,
               Bundle(url: helperURL)?.bundleIdentifier == "com.777genius.agent-notifications",
               context.helperSHA256.count == 64,
               let size = try? executable.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey]),
@@ -883,7 +912,10 @@ struct FocusPermissionContext: Decodable {
         var captured: (NSRunningApplication, String)?
         let captureDeadline = min(actionDeadline, started + 1)
         while try consentMonotonicTime() < captureDeadline {
-            let apps = NSWorkspace.shared.runningApplications.filter { !$0.isTerminated && $0.bundleURL?.resolvingSymlinksInPath() == helperURL && $0.executableURL?.resolvingSymlinksInPath() == executable }
+            let apps = NSWorkspace.shared.runningApplications.filter {
+                guard !$0.isTerminated, let bundle = $0.bundleURL, let binary = $0.executableURL else { return false }
+                return focusPhysicalPath(bundle.path) == context.helperPath && focusPhysicalPath(binary.path) == executablePath
+            }
             if apps.count == 1, let start = processStartIdentity(apps[0].processIdentifier), terminalAutomationUID(apps[0].processIdentifier) == Int(getuid()) { captured = (apps[0], start); break }
             if apps.count > 1 { throw ProbeError.unavailable("original_callback_helper_ambiguous") }
             try await Task.sleep(nanoseconds: 20_000_000)
@@ -892,11 +924,13 @@ struct FocusPermissionContext: Decodable {
         result["captured_helper_pid"] = Int(helper.processIdentifier); result["captured_helper_start"] = helperStart
         func requireActors() throws {
             let origin = try terminalProcessIdentity(context.originPID, expectedStart: context.originStart)
+            let callback = try terminalProcessIdentity(helper.processIdentifier, expectedStart: helperStart)
             guard try consentMonotonicTime() < actionDeadline, origin["status"] as? String == "observed",
                   origin["executable_path"] as? String == context.originExecutable, terminalAutomationUID(context.originPID) == Int(getuid()),
                   !helper.isTerminated, matchesProcessStart(helper.processIdentifier, helperStart),
                   terminalAutomationUID(helper.processIdentifier) == Int(getuid()),
-                  (try? terminalProcessIdentity(helper.processIdentifier)["executable_path"] as? String) == executable.path else { throw ProbeError.unavailable("original_focus_actors_changed") }
+                  callback["status"] as? String == "observed", let callbackPath = callback["executable_path"] as? String,
+                  focusPhysicalPath(callbackPath) == executablePath else { throw ProbeError.unavailable("original_focus_actors_changed") }
         }
         var found: FocusScreenDialog?
         while try consentMonotonicTime() < actionDeadline {
