@@ -6,6 +6,7 @@
 #include <audioclient.h>
 #include <UIAutomation.h>
 #include <wtsapi32.h>
+#include <dwmapi.h>
 #include "pi_windows_audio_fixture.h"
 #include "navigation_windows_token_queries.h"
 #include <functiondiscoverykeys_devpkey.h>
@@ -19,10 +20,12 @@
 #include <memory>
 #include <functional>
 #include <algorithm>
+#include <sstream>
 #pragma comment(lib, "Uiautomationcore.lib")
 #pragma comment(lib, "Bcrypt.lib")
 #pragma comment(lib, "Wtsapi32.lib")
 #pragma comment(lib, "Gdi32.lib")
+#pragma comment(lib, "Dwmapi.lib")
 
 using Microsoft::WRL::ComPtr;
 namespace fs = std::filesystem;
@@ -130,6 +133,22 @@ static std::string inspectionText(BSTR raw) {
     WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, value.data(), static_cast<int>(value.size()), result.data(), count, nullptr, nullptr);
     return NavigationTokenTEST::quoted(result);
 }
+struct InspectionWindows { std::vector<HWND> windows; unsigned visited = 0, unknown = 0; bool capped = false; };
+static InspectionWindows inspectionVisibleWindows() {
+    InspectionWindows inventory;
+    const BOOL enumerated = EnumWindows([](HWND window, LPARAM value) -> BOOL {
+        auto& result = *reinterpret_cast<InspectionWindows*>(value);
+        if (++result.visited > 256) { result.capped = true; return FALSE; }
+        if (IsWindowVisible(window)) {
+            DWORD cloaked = 0;
+            if (FAILED(DwmGetWindowAttribute(window, DWMWA_CLOAKED, &cloaked, sizeof cloaked))) ++result.unknown;
+            else if (!cloaked) result.windows.push_back(window);
+        }
+        return TRUE;
+    }, reinterpret_cast<LPARAM>(&inventory));
+    demand(enumerated && !inventory.capped, "inspection visible window inventory bound or error");
+    return inventory;
+}
 static void inspectNotificationCenter(const fs::path& root) {
     const auto source = environment(L"SOURCE_SHA");
     demand(environment(L"GITHUB_REPOSITORY") == L"777genius/agent-notifications" && environment(L"GITHUB_EVENT_NAME") == L"workflow_dispatch"
@@ -146,6 +165,8 @@ static void inspectNotificationCenter(const fs::path& root) {
     const HWND shell = GetShellWindow(); DWORD shellPID = 0; GetWindowThreadProcessId(shell, &shellPID);
     InspectionOwner explorer(shellPID); demand(explorer.imageKind == "explorer", "exact Explorer required before chord");
     inspectionScreenshot(root / L"notification-ui-before.bmp");
+    const auto baseline = inspectionVisibleWindows();
+    const HWND foregroundBefore = GetForegroundWindow();
     const auto prefix = "{\"scope\":\"public_notification_center_inspection_only\",\"product_executed\":false,\"qualification_input\":false,\"settings_writes\":0,\"native_show_attempts\":0";
     inspectionFile(root / L"notification-ui-intent.json", std::string(prefix) + ",\"explorer_pid\":" + std::to_string(shellPID)
         + ",\"explorer_birth\":\"" + std::to_string(explorer.birth) + "\",\"one_win_n_chord_intended\":true}");
@@ -168,18 +189,58 @@ static void inspectNotificationCenter(const fs::path& root) {
     inspectionFile(root / L"notification-ui-input.json", std::string(prefix) + ",\"win_n_chord_attempts\":1,\"accepted_key_events\":"
         + std::to_string(keys.accepted) + ",\"key_release_unknown\":" + (keys.releaseUnknown ? "true" : "false") + "}");
     demand(accepted && !keys.releaseUnknown, "single notification chord was not collected");
-    Sleep(500); budget(); inspectionScreenshot(root / L"notification-ui-after.bmp");
-    const HWND panel = GetForegroundWindow(); DWORD panelPID = 0; GetWindowThreadProcessId(panel, &panelPID);
-    std::vector<std::unique_ptr<InspectionOwner>> owners; owners.push_back(std::make_unique<InspectionOwner>(panelPID));
-    ComPtr<IUIAutomation> automation; demand(SUCCEEDED(CoCreateInstance(CLSID_CUIAutomation, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&automation))), "inspection UIA unavailable");
-    ComPtr<IUIAutomationElement> element; demand(SUCCEEDED(automation->ElementFromHandle(panel, &element)) && element, "foreground panel UIA unavailable");
-    ComPtr<IUIAutomationTreeWalker> walker; demand(SUCCEEDED(automation->get_ControlViewWalker(&walker)), "inspection walker unavailable");
-    unsigned visited = 0, totalVisited = 0, skipped = 0, errors = 0; bool complete = true; std::string rows;
+    std::vector<std::unique_ptr<InspectionOwner>> owners;
     auto owner = [&](DWORD pid) -> InspectionOwner* {
         for (const auto& held : owners) if (held->pid == pid) { held->validate(); return held.get(); }
         demand(owners.size() < 8, "inspection provider bound");
         owners.push_back(std::make_unique<InspectionOwner>(pid)); return owners.back().get();
     };
+    struct Surface { HWND window; DWORD pid; ULONGLONG birth, firstSeen, lastSeen; unsigned samples; };
+    std::vector<Surface> surfaces;
+    std::vector<DWORD> foreignPIDs;
+    unsigned discoveryScans = 0, discoveryErrors = 0, visibilityUnknown = baseline.unknown;
+    bool discoveryComplete = baseline.unknown == 0;
+    const auto discoveryDeadline = std::min(deadline, started + 12000);
+    ULONGLONG lastArrival = GetTickCount64();
+    // SendInput acceptance is not a Shell handoff. Observe newly visible real
+    // Shell surfaces instead of treating a transient Progman foreground as the
+    // panel. All roots share the original deadline and census/output caps.
+    while (GetTickCount64() < discoveryDeadline && discoveryScans < 120) {
+        ++discoveryScans; budget(); explorer.validate(); inspectionDesktop();
+        demand(GetShellWindow() == shell, "Explorer window changed during arrival");
+        const auto visible = inspectionVisibleWindows();
+        visibilityUnknown += visible.unknown;
+        if (visible.unknown) discoveryComplete = false;
+        for (const auto window : visible.windows) {
+            if (window == shell || std::find(baseline.windows.begin(), baseline.windows.end(), window) != baseline.windows.end()) continue;
+            DWORD pid = 0; GetWindowThreadProcessId(window, &pid);
+            if (!pid || std::find(foreignPIDs.begin(), foreignPIDs.end(), pid) != foreignPIDs.end()) continue;
+            InspectionOwner* held = nullptr;
+            try { held = owner(pid); } catch (...) {
+                demand(foreignPIDs.size() < 256, "inspection rejected provider bound");
+                foreignPIDs.push_back(pid); continue;
+            }
+            const auto now = GetTickCount64(); budget();
+            const auto found = std::find_if(surfaces.begin(), surfaces.end(), [&](const auto& value) { return value.window == window; });
+            if (found == surfaces.end()) {
+                if (surfaces.size() == 4) { discoveryComplete = false; ++discoveryErrors; continue; }
+                surfaces.push_back({window, pid, held->birth, now - started, now - started, 1}); lastArrival = now;
+            } else {
+                demand(found->pid == pid && found->birth == held->birth, "inspection surface identity changed");
+                found->lastSeen = now - started; ++found->samples;
+            }
+        }
+        // Allow the actual asynchronous popup to settle; no extra shortcut or
+        // guessed control is used. Missing/competing surfaces remain diagnostic.
+        if (!surfaces.empty() && GetTickCount64() - started >= 3000 && GetTickCount64() - lastArrival >= 500) break;
+        Sleep(100);
+    }
+    budget(); inspectionScreenshot(root / L"notification-ui-after.bmp");
+    const HWND foregroundAfterArrival = GetForegroundWindow();
+    ComPtr<IUIAutomation> automation; demand(SUCCEEDED(CoCreateInstance(CLSID_CUIAutomation, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&automation))), "inspection UIA unavailable");
+    ComPtr<IUIAutomationTreeWalker> walker; demand(SUCCEEDED(automation->get_ControlViewWalker(&walker)), "inspection walker unavailable");
+    unsigned visited = 0, totalVisited = 0, skipped = 0, errors = discoveryErrors;
+    bool complete = discoveryComplete && surfaces.size() == 1; std::string rows, roots;
     std::function<void(ComPtr<IUIAutomationElement>, unsigned, int)> walk;
     walk = [&](ComPtr<IUIAutomationElement> node, unsigned depth, int parent) {
         budget(); demand(depth <= 12 && visited < 128 && totalVisited++ < 512, "inspection census bound");
@@ -227,14 +288,53 @@ static void inspectNotificationCenter(const fs::path& root) {
         while (child) { walk(child, depth + 1, static_cast<int>(index)); ComPtr<IUIAutomationElement> next;
             demand(SUCCEEDED(walker->GetNextSiblingElement(child.Get(), &next)), "inspection sibling walk failed"); child = next; }
     };
-    try { walk(element, 0, -1); } catch (...) { ++errors; complete = false; }
+    for (const auto& surface : surfaces) {
+        bool current = false;
+        try {
+            budget(); DWORD actualPID = 0; GetWindowThreadProcessId(surface.window, &actualPID);
+            auto* held = owner(surface.pid);
+            DWORD cloaked = 0;
+            current = IsWindow(surface.window) && IsWindowVisible(surface.window) && actualPID == surface.pid
+                && SUCCEEDED(DwmGetWindowAttribute(surface.window, DWMWA_CLOAKED, &cloaked, sizeof cloaked)) && !cloaked
+                && held->birth == surface.birth && surface.samples >= 2;
+            demand(current, "inspection surface no longer stable");
+            ComPtr<IUIAutomationElement> element;
+            demand(SUCCEEDED(automation->ElementFromHandle(surface.window, &element)) && element, "observed Shell surface UIA unavailable");
+            int rootPID = 0;
+            demand(SUCCEEDED(element->get_CurrentProcessId(&rootPID)) && rootPID == static_cast<int>(surface.pid), "inspection root provider changed");
+            walk(element, 0, -1);
+            DWORD finalPID = 0; GetWindowThreadProcessId(surface.window, &finalPID);
+            held->validate(); budget();
+            current = IsWindowVisible(surface.window) && finalPID == surface.pid
+                && SUCCEEDED(DwmGetWindowAttribute(surface.window, DWMWA_CLOAKED, &cloaked, sizeof cloaked)) && !cloaked;
+            demand(current, "inspection surface disappeared during census");
+        } catch (...) { ++errors; complete = false; current = false; }
+        if (!roots.empty()) roots += ',';
+        roots += "{\"hwnd\":" + std::to_string(reinterpret_cast<uintptr_t>(surface.window)) + ",\"provider_pid\":" + std::to_string(surface.pid)
+            + ",\"provider_birth\":\"" + std::to_string(surface.birth) + "\",\"visible_before_chord\":false,\"first_seen_ms\":" + std::to_string(surface.firstSeen)
+            + ",\"last_seen_ms\":" + std::to_string(surface.lastSeen) + ",\"observed_samples\":" + std::to_string(surface.samples)
+            + ",\"foreground_at_arrival_end\":" + (foregroundAfterArrival == surface.window ? "true" : "false")
+            + ",\"stable_through_census\":" + (current ? "true" : "false") + "}";
+    }
     try { explorer.validate(); inspectionDesktop(); for (const auto& held : owners) held->validate(); }
     catch (...) { ++errors; complete = false; }
-    if (GetForegroundWindow() != panel || GetTickCount64() >= deadline) complete = false;
-    std::cout << prefix << ",\"status\":\"unqualified_selector_inventory_only\",\"walk_completed\":" << (complete ? "true" : "false")
+    if (GetTickCount64() >= deadline) complete = false;
+    std::ostringstream receipt;
+    receipt << prefix << ",\"status\":\"unqualified_selector_inventory_only\",\"walk_completed\":" << (complete ? "true" : "false")
         << ",\"visited\":" << visited << ",\"total_visited\":" << totalVisited << ",\"skipped_providers\":" << skipped << ",\"errors\":" << errors
-        << ",\"elapsed_ms\":" << GetTickCount64() - started << ",\"panel_hwnd\":" << reinterpret_cast<uintptr_t>(panel)
-        << ",\"panel_provider_pid\":" << panelPID << ",\"rows\":[" << rows << "]}\n";
+        << ",\"elapsed_ms\":" << GetTickCount64() - started << ",\"baseline_visible_windows\":" << baseline.windows.size()
+        << ",\"visibility_unknown_samples\":" << visibilityUnknown << ",\"rejected_provider_count\":" << foreignPIDs.size()
+        << ",\"discovery_scans\":" << discoveryScans << ",\"surface_identity_is_not_control_identity\":true,\"surfaces_ambiguous\":" << (surfaces.size() > 1 ? "true" : "false")
+        << ",\"foreground_before_hwnd\":" << reinterpret_cast<uintptr_t>(foregroundBefore)
+        << ",\"foreground_after_arrival_hwnd\":" << reinterpret_cast<uintptr_t>(foregroundAfterArrival)
+        << ",\"foreground_final_hwnd\":" << reinterpret_cast<uintptr_t>(GetForegroundWindow())
+        << ",\"baseline_hwnds\":[";
+    for (size_t index = 0; index < baseline.windows.size(); ++index) {
+        if (index) receipt << ','; receipt << reinterpret_cast<uintptr_t>(baseline.windows[index]);
+    }
+    receipt << "],\"surfaces\":[" << roots << "],\"rows\":[" << rows << "]}";
+    demand(receipt.str().size() <= 65536, "inspection total receipt bound");
+    std::cout << receipt.str() << '\n';
 }
 
 static std::vector<BYTE> user(HANDLE process) {
