@@ -187,6 +187,7 @@ jobs:
         shell: pwsh
         env:
           PI_WINDOWS_HOST_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+          PI_WINDOWS_HOST_RUNNER_LABEL: ${{ inputs.windows_client_runner || vars.CI_PI_WINDOWS_DESKTOP_RUNNER || 'windows-11-vs2026-arm' }}
         run: |
           & ./scripts/pi-windows-host.ps1 -Root "$env:RUNNER_TEMP/pi-installed-windows/host"
           if ($LASTEXITCODE) { exit $LASTEXITCODE }

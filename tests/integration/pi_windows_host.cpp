@@ -283,12 +283,180 @@ static InspectionWindows inspectionVisibleWindows() {
     demand(enumerated && !inventory.capped, "inspection visible window inventory bound or error");
     return inventory;
 }
-static void inspectNotificationCenter(const fs::path& root) {
+static std::string inspectionRuntime(IUIAutomationElement* element) {
+    SAFEARRAY* array = nullptr; demand(SUCCEEDED(element->GetRuntimeId(&array)) && array, "DND runtime identity unavailable");
+    std::string value = "[";
+    try {
+        LONG lo = 0, hi = -1; VARTYPE type = VT_EMPTY;
+        demand(SafeArrayGetDim(array) == 1 && SUCCEEDED(SafeArrayGetVartype(array, &type)) && type == VT_I4
+            && SUCCEEDED(SafeArrayGetLBound(array, 1, &lo)) && SUCCEEDED(SafeArrayGetUBound(array, 1, &hi))
+            && hi >= lo && hi - lo < 32, "DND runtime identity bound");
+        for (LONG index = lo; index <= hi; ++index) { LONG item = 0;
+            demand(SUCCEEDED(SafeArrayGetElement(array, &index, &item)), "DND runtime identity read failed");
+            if (index != lo) value += ','; value += std::to_string(item); }
+    } catch (...) { SafeArrayDestroy(array); throw; }
+    SafeArrayDestroy(array); return value + ']';
+}
+struct DNDControl {
+    ComPtr<IUIAutomationElement> grid, button;
+    RECT gridBox{}, buttonBox{};
+    std::string gridRuntime, buttonRuntime;
+    ToggleState state = ToggleState_Indeterminate;
+};
+static void prepareNotificationCenter(const fs::path& directory, IUIAutomation* automation, IUIAutomationTreeWalker* walker,
+        IUIAutomationElement* panel, HWND window, InspectionOwner& shellOwner, InspectionOwner& explorer,
+        ULONGLONG deadline, unsigned& visited, const std::function<bool()>& closeChord, unsigned& closeKeyEvents) {
+    const char* primary = nullptr; const char* cleanup = nullptr;
+    int beforeState = -1, afterState = -1; unsigned mouseEvents = 0;
+    bool mouseDown = false, releaseUnknown = false, clickAttempted = false, offVerified = false, panelClosed = false;
+    bool beforeImage = false, afterImage = false, closedImage = false;
+    const bool knownShell = shellOwner.imageKind == "shell_experience_host" && shellOwner.observation && shellOwner.observation->fixedName
+        && shellOwner.diagnosticImage && shellOwner.diagnosticImage->verifiedStable;
+    DNDControl original;
+    auto budget = [&]() { demand(GetTickCount64() < deadline, "original DND preparation deadline"); };
+    auto actor = [&]() {
+        budget(); inspectionDesktop(); explorer.validate(); shellOwner.validate(); shellOwner.verifyImageUnchanged(); budget();
+        demand(knownShell, "exact verified known ShellExperienceHost required for preparation");
+        DWORD pid = 0; GetWindowThreadProcessId(window, &pid); int provider = 0;
+        demand(window && IsWindow(window) && IsWindowVisible(window) && pid == shellOwner.pid
+            && GetForegroundWindow() == window && SUCCEEDED(panel->get_CurrentProcessId(&provider)) && provider == static_cast<int>(pid),
+            "DND original foreground owner changed");
+    };
+    auto frame = [&]() {
+        actor(); DNDControl found; unsigned grids = 0, buttons = 0;
+        auto children = [&](IUIAutomationElement* parent, const std::function<void(ComPtr<IUIAutomationElement>)>& inspect) {
+            ComPtr<IUIAutomationElement> child; demand(SUCCEEDED(walker->GetFirstChildElement(parent, &child)), "DND child query failed");
+            unsigned count = 0;
+            while (child) {
+                budget(); demand(++count <= 32 && visited++ < 512, "DND control discovery bound"); inspect(child);
+                ComPtr<IUIAutomationElement> next; demand(SUCCEEDED(walker->GetNextSiblingElement(child.Get(), &next)), "DND sibling query failed"); child = next;
+            }
+        };
+        auto fixed = [&](IUIAutomationElement* element, const char* id, const char* klass, CONTROLTYPEID expected, RECT& box) {
+            BSTR raw = nullptr; demand(SUCCEEDED(element->get_CurrentAutomationId(&raw)), "DND automation id unavailable");
+            const auto actualID = inspectionText(raw);
+            if (actualID != NavigationTokenTEST::quoted(id)) return false;
+            demand(SUCCEEDED(element->get_CurrentClassName(&raw)), "DND class unavailable"); const auto actualClass = inspectionText(raw);
+            int pid = 0; CONTROLTYPEID type = 0; BOOL enabled = FALSE, offscreen = TRUE;
+            demand(actualClass == NavigationTokenTEST::quoted(klass) && SUCCEEDED(element->get_CurrentProcessId(&pid)) && pid == static_cast<int>(shellOwner.pid)
+                && SUCCEEDED(element->get_CurrentControlType(&type)) && type == expected
+                && SUCCEEDED(element->get_CurrentIsEnabled(&enabled)) && enabled
+                && SUCCEEDED(element->get_CurrentIsOffscreen(&offscreen)) && !offscreen
+                && SUCCEEDED(element->get_CurrentBoundingRectangle(&box)) && box.left >= 0 && box.top >= 0
+                && box.right <= GetSystemMetrics(SM_CXSCREEN) && box.bottom <= GetSystemMetrics(SM_CYSCREEN)
+                && box.right > box.left && box.bottom > box.top, "DND exact visible control refused");
+            return true;
+        };
+        children(panel, [&](ComPtr<IUIAutomationElement> element) {
+            RECT box{};
+            if (fixed(element.Get(), "NotificationCenterGrid", "NamedContainerAutomationPeer", UIA_GroupControlTypeId, box)) {
+                ++grids; found.grid = element; found.gridBox = box;
+                BSTR name = nullptr; demand(SUCCEEDED(element->get_CurrentName(&name)), "DND grid public name unavailable");
+                demand(inspectionText(name) == "\"Notifications\"", "DND grid public name changed");
+            }
+        });
+        demand(grids == 1, "unique exact NotificationCenterGrid required");
+        children(found.grid.Get(), [&](ComPtr<IUIAutomationElement> element) {
+            RECT box{};
+            if (fixed(element.Get(), "DoNotDisturbButton", "ToggleButton", UIA_ButtonControlTypeId, box)) {
+                ++buttons; found.button = element; found.buttonBox = box;
+                demand(box.left >= found.gridBox.left && box.top >= found.gridBox.top && box.right <= found.gridBox.right && box.bottom <= found.gridBox.bottom,
+                    "DND button outside original grid");
+                ComPtr<IUIAutomationTogglePattern> pattern;
+                demand(SUCCEEDED(element->GetCurrentPatternAs(UIA_TogglePatternId, IID_PPV_ARGS(&pattern))) && pattern
+                    && SUCCEEDED(pattern->get_CurrentToggleState(&found.state)) && (found.state == ToggleState_Off || found.state == ToggleState_On),
+                    "DND toggle state unknown");
+            }
+        });
+        demand(buttons == 1, "unique exact DoNotDisturbButton required");
+        found.gridRuntime = inspectionRuntime(found.grid.Get()); found.buttonRuntime = inspectionRuntime(found.button.Get()); actor(); return found;
+    };
+    auto same = [&](const DNDControl& fresh) {
+        BOOL grid = FALSE, button = FALSE;
+        return SUCCEEDED(automation->CompareElements(original.grid.Get(), fresh.grid.Get(), &grid)) && grid
+            && SUCCEEDED(automation->CompareElements(original.button.Get(), fresh.button.Get(), &button)) && button
+            && original.gridRuntime == fresh.gridRuntime && original.buttonRuntime == fresh.buttonRuntime
+            && EqualRect(&original.gridBox, &fresh.gridBox) && EqualRect(&original.buttonBox, &fresh.buttonBox);
+    };
+    auto mouse = [&](bool up) {
+        INPUT event{}; event.type = INPUT_MOUSE; event.mi.dwFlags = up ? MOUSEEVENTF_LEFTUP : MOUSEEVENTF_LEFTDOWN;
+        if (SendInput(1, &event, sizeof event) != 1) return false;
+        ++mouseEvents; mouseDown = !up; return true;
+    };
+    try {
+        original = frame(); beforeState = original.state;
+        inspectionScreenshot(directory / L"notification-preparation-before.bmp"); beforeImage = true;
+        auto fresh = frame(); demand(same(fresh) && fresh.state == original.state, "DND control changed before preparation");
+        if (beforeState == ToggleState_On) {
+            demand(!(GetAsyncKeyState(VK_LBUTTON) & 0x8000), "existing mouse press prevents DND preparation");
+            const POINT point{(fresh.buttonBox.left + fresh.buttonBox.right) / 2, (fresh.buttonBox.top + fresh.buttonBox.bottom) / 2};
+            demand(SetCursorPos(point.x, point.y), "DND physical pointer unavailable");
+            ComPtr<IUIAutomationElement> hit; demand(SUCCEEDED(automation->ElementFromPoint(point, &hit)) && hit, "DND topmost hit unavailable");
+            bool matched = false;
+            for (unsigned depth = 0; hit && depth < 4; ++depth) {
+                budget(); int pid = 0; BOOL equal = FALSE; CONTROLTYPEID type = 0;
+                demand(SUCCEEDED(hit->get_CurrentProcessId(&pid)) && pid == static_cast<int>(shellOwner.pid), "DND hit provider changed");
+                demand(SUCCEEDED(automation->CompareElements(hit.Get(), fresh.button.Get(), &equal)), "DND hit identity unavailable");
+                if (equal) { matched = true; break; }
+                demand(SUCCEEDED(hit->get_CurrentControlType(&type)) && (type == UIA_TextControlTypeId || type == UIA_ImageControlTypeId), "DND hit is not original button content");
+                ComPtr<IUIAutomationElement> parent; demand(SUCCEEDED(walker->GetParentElement(hit.Get(), &parent)), "DND hit ancestry unavailable"); hit = parent;
+            }
+            POINT actual{}; actor(); auto final = frame();
+            demand(matched && same(final) && final.state == ToggleState_On && GetCursorPos(&actual) && actual.x == point.x && actual.y == point.y
+                && GetAncestor(WindowFromPoint(point), GA_ROOT) == window && !(GetAsyncKeyState(VK_LBUTTON) & 0x8000), "DND exact topmost click refused");
+            clickAttempted = true;
+            demand(mouse(false) && mouse(true), "DND physical click incomplete");
+            for (unsigned sample = 0; sample < 60; ++sample) {
+                actor(); ComPtr<IUIAutomationTogglePattern> pattern; ToggleState state = ToggleState_Indeterminate;
+                demand(visited++ < 512 && SUCCEEDED(original.button->GetCurrentPatternAs(UIA_TogglePatternId, IID_PPV_ARGS(&pattern))) && pattern
+                    && SUCCEEDED(pattern->get_CurrentToggleState(&state)) && (state == ToggleState_On || state == ToggleState_Off), "DND post-click state unknown");
+                if (state == ToggleState_Off) break;
+                Sleep(50);
+            }
+        }
+        fresh = frame(); demand(same(fresh) && fresh.state == ToggleState_Off, "DND OFF was not verified");
+        afterState = fresh.state; offVerified = true;
+        inspectionScreenshot(directory / L"notification-preparation-after.bmp"); afterImage = true;
+    } catch (const char* reason) { primary = reason; }
+    catch (...) { primary = "typed_DND_preparation_exception"; }
+    if (mouseDown && !mouse(true)) { releaseUnknown = true; cleanup = "owned DND mouse release unknown"; }
+    try {
+        actor(); demand(closeChord(), "DND close shortcut incomplete");
+        for (unsigned sample = 0; sample < 40; ++sample) {
+            budget(); BOOL offscreen = FALSE; DWORD cloaked = 0;
+            panelClosed = !IsWindow(window) || !IsWindowVisible(window)
+                || (SUCCEEDED(DwmGetWindowAttribute(window, DWMWA_CLOAKED, &cloaked, sizeof cloaked)) && cloaked != 0)
+                || (SUCCEEDED(panel->get_CurrentIsOffscreen(&offscreen)) && offscreen);
+            if (panelClosed && GetForegroundWindow() != window) break;
+            panelClosed = false; Sleep(50);
+        }
+        demand(panelClosed, "DND panel closure was not verified");
+        explorer.validate(); inspectionDesktop(); budget();
+        inspectionScreenshot(directory / L"notification-preparation-closed.bmp"); closedImage = true;
+    } catch (const char* reason) { if (!cleanup) cleanup = reason; }
+    catch (...) { if (!cleanup) cleanup = "typed_DND_panel_cleanup_exception"; }
+    try {
+        inspectionFile(directory / L"notification-preparation.json", "{\"scope\":\"fresh_owned_public_DND_preparation\",\"product_executed\":false,\"native_show_attempts\":0,\"qualification_input\":false"
+            ",\"provider_pid\":" + std::to_string(shellOwner.pid) + ",\"provider_birth\":\"" + std::to_string(shellOwner.birth) + "\",\"known_shell_experience_host\":" + (knownShell ? "true" : "false")
+            + ",\"image_sha256\":" + NavigationTokenTEST::quoted(shellOwner.diagnosticImage ? shellOwner.diagnosticImage->hash : "")
+            + ",\"grid_runtime_id\":" + (original.gridRuntime.empty() ? "null" : original.gridRuntime) + ",\"button_runtime_id\":" + (original.buttonRuntime.empty() ? "null" : original.buttonRuntime)
+            + ",\"before_toggle_state\":" + std::to_string(beforeState) + ",\"after_toggle_state\":" + std::to_string(afterState)
+            + ",\"physical_click_attempted\":" + (clickAttempted ? "true" : "false") + ",\"accepted_mouse_events\":" + std::to_string(mouseEvents)
+            + ",\"owned_mouse_release_unknown\":" + (releaseUnknown ? "true" : "false") + ",\"off_verified\":" + (offVerified ? "true" : "false")
+            + ",\"close_key_events\":" + std::to_string(closeKeyEvents) + ",\"panel_closed_verified\":" + (panelClosed ? "true" : "false")
+            + ",\"before_screenshot\":" + (beforeImage ? "true" : "false") + ",\"after_screenshot\":" + (afterImage ? "true" : "false")
+            + ",\"closed_screenshot\":" + (closedImage ? "true" : "false") + ",\"primary_failure\":" + (primary ? NavigationTokenTEST::quoted(primary) : "null")
+            + ",\"cleanup_failure\":" + (cleanup ? NavigationTokenTEST::quoted(cleanup) : "null") + "}");
+    } catch (...) { if (!primary) primary = "DND preparation receipt unavailable"; }
+    if (primary) throw primary; if (cleanup) throw cleanup;
+    demand(offVerified && panelClosed && !releaseUnknown, "DND preparation remained unknown");
+}
+static void inspectNotificationCenter(const fs::path& root, bool prepare = false) {
     const auto source = environment(L"SOURCE_SHA");
     demand(environment(L"GITHUB_REPOSITORY") == L"777genius/agent-notifications" && environment(L"GITHUB_EVENT_NAME") == L"workflow_dispatch"
            && environment(L"GITHUB_ACTOR") == L"777genius" && environment(L"GITHUB_TRIGGERING_ACTOR") == L"777genius"
            && environment(L"GITHUB_RUN_ATTEMPT") == L"1" && environment(L"PI_WINDOWS_HOST_SETUP") == L"1"
-           && environment(L"PI_WINDOWS_NOTIFICATION_UI_INSPECTION") == L"1"
+           && environment(prepare ? L"PI_WINDOWS_NOTIFICATION_UI_PREPARATION" : L"PI_WINDOWS_NOTIFICATION_UI_INSPECTION") == L"1"
            && environment(L"PI_WINDOWS_HOST_RUNNER_ENVIRONMENT") == L"github-hosted"
            && environment(L"PI_WINDOWS_HOST_RUNNER_LABEL") == L"windows-11-vs2026-arm"
            && source.size() == 40 && std::all_of(source.begin(), source.end(), [](wchar_t c) { return (c >= L'0' && c <= L'9') || (c >= L'a' && c <= L'f'); }),
@@ -532,6 +700,7 @@ static void inspectNotificationCenter(const fs::path& root) {
     }
     std::ostringstream receipt;
     receipt << prefix << ",\"status\":\"unqualified_selector_inventory_only\",\"walk_completed\":" << (complete ? "true" : "false")
+        << ",\"snapshot_before_preparation\":" << (prepare ? "true" : "false")
         << ",\"visited\":" << visited << ",\"total_visited\":" << totalVisited << ",\"skipped_providers\":" << skipped << ",\"errors\":" << errors
         << ",\"elapsed_ms\":" << GetTickCount64() - started << ",\"baseline_visible_windows\":" << baseline.windows.size()
         << ",\"visibility_unknown_samples\":" << visibilityUnknown << ",\"rejected_provider_count\":" << foreignPIDs.size()
@@ -550,6 +719,19 @@ static void inspectNotificationCenter(const fs::path& root) {
     receipt << "],\"surfaces\":[" << roots << "],\"observed_providers\":[" << actorJSON << "],\"rows\":[" << rows << "]}";
     demand(receipt.str().size() <= 65536, "inspection total receipt bound");
     std::cout << receipt.str() << '\n';
+    if (prepare) {
+        demand(complete && surfaces.size() == 1 && finalActorsAndDesktopValidated, "unambiguous complete public notification surface required");
+        auto* held = owner(surfaces[0].pid); unsigned closeKeyEvents = 0;
+        auto closeChord = [&]() {
+            for (int key : {VK_LWIN, VK_RWIN, static_cast<int>('N'), VK_SHIFT, VK_CONTROL, VK_MENU})
+                demand(!(GetAsyncKeyState(key) & 0x8000), "existing key press prevents panel close");
+            const auto before = keys.accepted;
+            const bool sent = keys.send(VK_LWIN, false) && keys.send('N', false) && keys.send('N', true) && keys.send(VK_LWIN, true);
+            keys.release(); closeKeyEvents = keys.accepted - before; return sent && !keys.releaseUnknown;
+        };
+        prepareNotificationCenter(root, automation.Get(), walker.Get(), surfaces[0].element.Get(), surfaces[0].window,
+            *held, explorer, deadline, totalVisited, closeChord, closeKeyEvents);
+    }
 }
 
 static std::vector<BYTE> user(HANDLE process) {
@@ -607,6 +789,8 @@ int wmain(int argc, wchar_t** argv) {
         const std::wstring mode(argv[1]);
         if (mode == L"notifications-inspect" && argc == 3) {
             inspectNotificationCenter(argv[2]);
+        } else if (mode == L"notifications-prepare" && argc == 3) {
+            inspectNotificationCenter(argv[2], true);
         } else if (mode == L"shell" && argc == 2) {
             auto env = [](const wchar_t* key) { wchar_t value[256]{}; const DWORD size = GetEnvironmentVariableW(key, value, 256); return size && size < 256 ? std::wstring(value, size) : L""; };
             if (env(L"GITHUB_REPOSITORY") != L"777genius/agent-notifications" || env(L"GITHUB_EVENT_NAME") != L"workflow_dispatch" ||

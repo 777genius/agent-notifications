@@ -57,7 +57,7 @@ if ($env:PI_WINDOWS_HOST_RUNNER_ENVIRONMENT -ne 'github-hosted' -or $env:GITHUB_
 $os = Get-CimInstance Win32_OperatingSystem
 $admin = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if ($os.ProductType -ne 1 -or [int]$os.BuildNumber -lt 22000 -or !$admin -or (Test-Path -LiteralPath $Root)) { throw 'Fresh administrative Windows Client fixture root required' }
-if ($InspectNotificationCenterOnly -and $env:PI_WINDOWS_HOST_RUNNER_LABEL -cne 'windows-11-vs2026-arm') { throw 'Public UI inspection requires the official hosted Client image' }
+if ($env:PI_WINDOWS_HOST_RUNNER_LABEL -cne 'windows-11-vs2026-arm') { throw 'Public notification preparation requires the official hosted Client image' }
 New-Item -ItemType Directory -Path $Root | Out-Null
 $source = git -C $repositoryRoot rev-parse HEAD
 if ($LASTEXITCODE -or $source -cne $env:SOURCE_SHA) { throw 'Exact source checkout required' }
@@ -83,9 +83,8 @@ $env:PI_WINDOWS_HOST_SETUP = '1'
 & "$Root/host-observer.exe" shell > "$Root/shell-overlay.json"
 if ($LASTEXITCODE) { throw 'Single bound Search overlay dismissal failed or unknown' }
 
-if ($InspectNotificationCenterOnly) {
-    # Explicit work-ref selector discovery, before driver/product/WinRT sender
-    # work. The actual public control must be observed before any future toggle.
+# Public notification preparation precedes driver/product/WinRT sender work.
+# The separate inspection mode remains read-only and deliberately unqualified.
     $shellPaths = [ordered]@{
         explorer='explorer.exe'
         system32_shell_host='System32\ShellHost.exe'
@@ -102,15 +101,19 @@ if ($InspectNotificationCenterOnly) {
         $verifiedShells += @{ image_kind=$kind; image_sha256=(Hash $image); signature='valid_microsoft' }
     }
     if (@($verifiedShells | Where-Object { $_.image_kind -ceq 'explorer' }).Count -ne 1) { throw 'Signed Explorer admission unavailable' }
-    @{ schema_version=1; scope='public_notification_ui_inspection_only'; source_sha=$source; product_executed=$false; qualification_input=$false;
+    @{ schema_version=1; scope=$(if ($InspectNotificationCenterOnly) { 'public_notification_ui_inspection_only' } else { 'fresh_owned_public_DND_preparation' }); source_sha=$source; product_executed=$false; qualification_input=$false;
        runner=$env:PI_WINDOWS_HOST_RUNNER_LABEL; runner_environment=$env:PI_WINDOWS_HOST_RUNNER_ENVIRONMENT; attempt=1;
        actor=$env:GITHUB_ACTOR; triggering_actor=$env:GITHUB_TRIGGERING_ACTOR; windows_build=[int]$os.BuildNumber;
        native_observer_sha256=(Hash "$Root/host-observer.exe"); signed_shell_images=$verifiedShells } |
         ConvertTo-Json -Depth 5 | Set-Content -LiteralPath "$Root/notification-ui-admission.json" -Encoding utf8NoBOM
-    $env:PI_WINDOWS_NOTIFICATION_UI_INSPECTION = '1'
+    $notificationMode = if ($InspectNotificationCenterOnly) { 'notifications-inspect' } else { 'notifications-prepare' }
+    $notificationScope = if ($InspectNotificationCenterOnly) { 'public_notification_ui_inspection_only' } else { 'fresh_owned_public_DND_preparation' }
+    if ($InspectNotificationCenterOnly) { $env:PI_WINDOWS_NOTIFICATION_UI_INSPECTION = '1' }
+    else { $env:PI_WINDOWS_NOTIFICATION_UI_PREPARATION = '1' }
+    $preparationProof = $null
     $probe = $null; $primaryInspectionFailure = $null; $probeCleanupFailure = $null; $probeCollected = $false
     try {
-        $probe = Start-Process -FilePath "$Root/host-observer.exe" -ArgumentList @('notifications-inspect', ('"' + $Root + '"')) -NoNewWindow -PassThru -RedirectStandardOutput "$Root/notification-ui.json" -RedirectStandardError "$Root/notification-ui.stderr.log"
+        $probe = Start-Process -FilePath "$Root/host-observer.exe" -ArgumentList @($notificationMode, ('"' + $Root + '"')) -NoNewWindow -PassThru -RedirectStandardOutput "$Root/notification-ui.json" -RedirectStandardError "$Root/notification-ui.stderr.log"
         if (!$probe.WaitForExit(25000)) { throw 'Bounded public UI inspection timed out; outcome unknown, no retry' }
         if ($probe.ExitCode -ne 0) { throw 'Public UI inspection unavailable or incomplete; no product attempt' }
         foreach ($verified in $verifiedShells) {
@@ -152,6 +155,24 @@ if ($InspectNotificationCenterOnly) {
         @{ scope='readonly_observed_windows_image_evidence'; diagnostic_only=$true; mutation_authorized=$false;
            product_executed=$false; qualification_input=$false; observed_images=$observedImages } |
             ConvertTo-Json -Depth 5 | Set-Content -LiteralPath "$Root/notification-ui-observed-images.json" -Encoding utf8NoBOM
+        if (!$InspectNotificationCenterOnly) {
+            $preparationFile = Get-Item -LiteralPath "$Root/notification-preparation.json"
+            if ($preparationFile.Length -gt 65536) { throw 'Notification preparation receipt exceeds its bound' }
+            $preparationProof = Get-Content -LiteralPath $preparationFile.FullName -Raw | ConvertFrom-Json
+            $actorProof = @($observedImages | Where-Object { $_.provider_pid -eq $preparationProof.provider_pid -and
+                $_.provider_birth -ceq $preparationProof.provider_birth -and $_.verified_microsoft -and
+                $_.image_sha256 -ceq $preparationProof.image_sha256 })
+            if ($preparationProof.scope -cne 'fresh_owned_public_DND_preparation' -or $preparationProof.product_executed -ne $false -or
+                $preparationProof.native_show_attempts -ne 0 -or !$preparationProof.known_shell_experience_host -or
+                $preparationProof.before_toggle_state -notin @(0,1) -or $preparationProof.after_toggle_state -ne 0 -or
+                !$preparationProof.off_verified -or !$preparationProof.panel_closed_verified -or $preparationProof.owned_mouse_release_unknown -or
+                !$preparationProof.before_screenshot -or !$preparationProof.after_screenshot -or !$preparationProof.closed_screenshot -or
+                $preparationProof.close_key_events -ne 4 -or $preparationProof.primary_failure -or $preparationProof.cleanup_failure -or $actorProof.Count -ne 1 -or
+                ($preparationProof.before_toggle_state -eq 1 -and (!$preparationProof.physical_click_attempted -or $preparationProof.accepted_mouse_events -ne 2)) -or
+                ($preparationProof.before_toggle_state -eq 0 -and ($preparationProof.physical_click_attempted -or $preparationProof.accepted_mouse_events -ne 0))) {
+                throw 'Exact owned public DND OFF preparation or panel closure is not proved'
+            }
+        }
     } catch { $primaryInspectionFailure = $_ }
     finally {
         if ($probe) {
@@ -163,15 +184,15 @@ if ($InspectNotificationCenterOnly) {
             finally { try { $probe.Dispose() } catch { if (!$probeCleanupFailure) { $probeCleanupFailure = $_.Exception.GetType().Name } } }
         }
         try {
-            @{ scope='public_notification_ui_inspection_only'; product_executed=$false; qualification_input=$false;
-               owned_observer_collected=$probeCollected; cleanup_error_class=$probeCleanupFailure; settings_writes=0 } |
+            @{ scope=$notificationScope; product_executed=$false; qualification_input=$false;
+               owned_observer_collected=$probeCollected; cleanup_error_class=$probeCleanupFailure;
+               settings_writes_observed=$(if ($InspectNotificationCenterOnly) { 0 } elseif ($preparationProof -and $preparationProof.off_verified) { $preparationProof.before_toggle_state } else { $null }) } |
                 ConvertTo-Json -Compress | Set-Content -LiteralPath "$Root/notification-ui-collection.json" -Encoding utf8NoBOM
         } catch { if (!$probeCleanupFailure) { $probeCleanupFailure = $_.Exception.GetType().Name } }
     }
     if ($primaryInspectionFailure) { throw $primaryInspectionFailure }
     if (!$probeCollected -or $probeCleanupFailure) { throw 'Public UI observer cleanup unavailable' }
-    throw 'Read-only notification UI inventory captured; reviewed actual selector required before product work'
-}
+    if ($InspectNotificationCenterOnly) { throw 'Read-only notification UI inventory captured; reviewed actual selector required before product work' }
 
 # The only driver setup is the measured, authenticated one-shot route. Refuse
 # any pre-existing render device or VB instance, preserving configured hosts.
