@@ -866,7 +866,7 @@ def global_settings_projection(value):
         reasons = {"messaging_timeout", "deadline", "node_or_depth_limit", "children_unavailable", "children_limit", "window_limit", "windows_unavailable"}
         P.require(isinstance(tree, dict) and set(tree) == {"nodes", "traversal_capped", "maximum_nodes", "maximum_depth", "maximum_children", "cap_reasons", "ax_timeout_status", "tree_scope"}
                   and tree["maximum_nodes"] == 256 and tree["maximum_depth"] == 18 and tree["maximum_children"] == 64
-                  and tree["tree_scope"] in ("app_windows", "retained_sidebar")
+                  and tree["tree_scope"] in ("app_windows", "retained_sidebar", "retained_detail")
                   and type(tree["traversal_capped"]) is bool and type(tree["ax_timeout_status"]) is int
                   and isinstance(tree["cap_reasons"], list) and len(tree["cap_reasons"]) <= len(reasons)
                   and all(reason in reasons for reason in tree["cap_reasons"])
@@ -951,7 +951,8 @@ def presentation_preparation_projection(value):
                 "settings_instance_was_new", "owned_window_observed", "owned_window_disappeared", "close_click_performed",
                 "settings_process_collected", "sharing_click_performed"}
     optional = {"inspection_before_cleanup", "primary_failure_class", "cleanup_failure_class", "policy_before", "policy_after",
-                "sharing_checkbox_bounds", "policy_on_verified", "settings_process_running_after_cleanup", "primary_refusal", "cleanup_refusal"}
+                "sharing_checkbox_bounds", "policy_on_verified", "settings_process_running_after_cleanup", "primary_refusal", "cleanup_refusal",
+                "policy_readiness_observations"}
     P.require(isinstance(value, dict) and required <= set(value) <= required | optional
               and value["scope"] == "fresh_owned_public_notification_presentation_preparation"
               and value["qualification_input"] is False and value["desktop_qualified"] is False
@@ -977,6 +978,8 @@ def presentation_preparation_projection(value):
     for key in ("primary_refusal", "cleanup_refusal"):
         P.require(key not in value or (value[key] in refusals and value.get(key.replace("refusal", "failure_class")) == "probe_refusal"),
                   "presentation_preparation_closed_refusal_required")
+    P.require("policy_readiness_observations" not in value or (type(value["policy_readiness_observations"]) is int
+              and 1 <= value["policy_readiness_observations"] <= 4), "presentation_preparation_readiness_bound")
     for key in ("policy_before", "policy_after"):
         P.require(key not in value or (isinstance(value[key], dict)
                   and set(value[key]) == {"mirroring_or_sharing", "display_sleeping", "screen_locked"}

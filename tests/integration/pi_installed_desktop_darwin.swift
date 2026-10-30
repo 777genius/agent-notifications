@@ -747,7 +747,7 @@ struct TerminalAutomationContext: Decodable {
 }
 
 @MainActor func settingsInspectionTree(_ app: NSRunningApplication, deadline: Double,
-                                       retainedSidebar: AXUIElement? = nil) -> ([SettingsInspectionNode], [String: Any]) {
+                                       retainedSidebar: AXUIElement? = nil, retainedDetail: AXUIElement? = nil) -> ([SettingsInspectionNode], [String: Any]) {
     let root = AXUIElementCreateApplication(app.processIdentifier)
     let timeout = AXUIElementSetMessagingTimeout(root, 0.05)
     var nodes = [SettingsInspectionNode](), rows = [[String: Any]](), capped = timeout != .success
@@ -838,13 +838,15 @@ struct TerminalAutomationContext: Decodable {
     }
     if timeout == .success, let retainedSidebar {
         visit(retainedSidebar, parent: nil, depth: 0)
+    } else if timeout == .success, let retainedDetail {
+        visit(retainedDetail, parent: nil, depth: 0)
     } else if timeout == .success, let windows = attribute(root, kAXWindowsAttribute) as? [AXUIElement] {
         if windows.count > 4 { capped = true; capReasons.insert("window_limit") }
         for window in windows.prefix(4) { visit(window, parent: nil, depth: 0) }
     } else { capped = true; capReasons.insert("windows_unavailable") }
     return (nodes, ["nodes": rows, "traversal_capped": capped, "maximum_nodes": 256, "maximum_depth": 18,
         "maximum_children": 64, "cap_reasons": capReasons.sorted(), "ax_timeout_status": timeout.rawValue,
-        "tree_scope": retainedSidebar == nil ? "app_windows" : "retained_sidebar"])
+        "tree_scope": retainedSidebar != nil ? "retained_sidebar" : retainedDetail != nil ? "retained_detail" : "app_windows"])
 }
 
 @MainActor func settingsPhysicalClick(_ element: AXUIElement, box: CGRect, owner: pid_t, deadline: Double,
@@ -930,14 +932,18 @@ struct TerminalAutomationContext: Decodable {
     }
 }
 
-@MainActor func prepareNotificationPresentation(_ nodes: [SettingsInspectionNode], preparation: SettingsPresentationPreparation,
-                                                deadline: Double) async throws {
-    struct Pair { let label: SettingsInspectionNode; let button: SettingsInspectionNode; let group: SettingsInspectionNode }
+@MainActor struct SettingsPolicyPair {
+    let label: SettingsInspectionNode
+    let button: SettingsInspectionNode
+    let group: SettingsInspectionNode
+}
+
+@MainActor func settingsPolicyPairs(_ nodes: [SettingsInspectionNode]) -> [String: SettingsPolicyPair]? {
     let labels = ["mirroring_or_sharing": "Allow notifications when mirroring or sharing the display",
         "display_sleeping": "Allow notifications when the display is sleeping", "screen_locked": "Allow notifications when the screen is locked"]
-    var pairs = [String: Pair]()
+    var pairs = [String: SettingsPolicyPair]()
     for (kind, _) in labels {
-        let matches = nodes.enumerated().compactMap { index, label -> Pair? in
+        let matches = nodes.enumerated().compactMap { index, label -> SettingsPolicyPair? in
             guard label.exactPolicyLabel == kind, label.role == "AXStaticText", let parent = label.parent,
                   nodes[parent].role == "AXGroup", nodes[parent].childrenVerified, nodes[parent].subtreeComplete,
                   index + 1 < nodes.count, let textBox = label.box else { return nil }
@@ -945,14 +951,45 @@ struct TerminalAutomationContext: Decodable {
             guard button.parent == parent, button.role == "AXCheckBox", button.childrenVerified, button.subtreeComplete,
                   button.press, let box = button.box, box.minX >= textBox.maxX,
                   textBox.minY <= box.midY, box.midY <= textBox.maxY else { return nil }
-            return Pair(label: label, button: button, group: nodes[parent])
+            return SettingsPolicyPair(label: label, button: button, group: nodes[parent])
         }
-        guard matches.count == 1 else { throw ProbeError.unavailable("sharing_policy_exact_control_required") }
+        guard matches.count == 1 else { return nil }
         pairs[kind] = matches[0]
     }
-    guard let app = preparation.app, let sharing = pairs["mirroring_or_sharing"],
-          pairs.values.allSatisfy({ CFEqual($0.group.element, sharing.group.element) }) else {
-        throw ProbeError.unavailable("sharing_policy_group_unverified")
+    guard let sharing = pairs["mirroring_or_sharing"], pairs.values.allSatisfy({ CFEqual($0.group.element, sharing.group.element) }) else { return nil }
+    return pairs
+}
+
+@MainActor func settingsCurrentDetail(_ preparation: SettingsPresentationPreparation, sidebar: CGRect) throws -> AXUIElement? {
+    try preparation.requireWindow()
+    guard let app = preparation.app, let window = preparation.window, let windowBox = preparation.windowBox else { return nil }
+    func children(_ element: AXUIElement) -> [AXUIElement]? {
+        guard let values = attribute(element, kAXChildrenAttribute) as? [AXUIElement], values.count <= 8 else { return nil }
+        return values
+    }
+    func isRole(_ element: AXUIElement, _ role: String) -> Bool {
+        var pid = pid_t(0)
+        return AXUIElementGetPid(element, &pid) == .success && pid == app.processIdentifier
+            && attribute(element, kAXRoleAttribute) as? String == role
+    }
+    guard let top = children(window) else { return nil }
+    let groups = top.filter { isRole($0, "AXGroup") && rectangle($0) == windowBox }
+    guard groups.count == 1, let content = children(groups[0]) else { return nil }
+    let splits = content.filter { isRole($0, "AXSplitGroup") && rectangle($0) == windowBox }
+    guard splits.count == 1, let panes = children(splits[0]) else { return nil }
+    let details = panes.filter { element in
+        guard isRole(element, "AXGroup"), let box = rectangle(element) else { return false }
+        return box.minX >= sidebar.maxX && windowBox.contains(box) && box.width > 1 && box.height > 1
+    }
+    return details.count == 1 ? details[0] : nil
+}
+
+@MainActor func prepareNotificationPresentation(_ nodes: [SettingsInspectionNode], preparation: SettingsPresentationPreparation,
+                                                deadline: Double) async throws {
+    let labels = ["mirroring_or_sharing": "Allow notifications when mirroring or sharing the display",
+        "display_sleeping": "Allow notifications when the display is sleeping", "screen_locked": "Allow notifications when the screen is locked"]
+    guard let pairs = settingsPolicyPairs(nodes), let app = preparation.app, let sharing = pairs["mirroring_or_sharing"] else {
+        throw ProbeError.unavailable("sharing_policy_exact_control_required")
     }
     func frame() throws -> [String: String] {
         try preparation.requireWindow()
@@ -1251,11 +1288,32 @@ struct TerminalAutomationContext: Decodable {
         }
     }
     if current(), try consentMonotonicTime() < deadline {
-        let final = settingsInspectionTree(app, deadline: deadline)
+        var final = settingsInspectionTree(app, deadline: deadline)
+        let controlDeadline = deadline - 0.25 // Preserve the original owned-close budget.
+        if let preparation {
+            let readyDeadline = min(controlDeadline - 0.4, (try consentMonotonicTime()) + 1.25)
+            var observations = 1
+            // Selection and toolbar arrival precede the asynchronous detail
+            // pane. Reacquire only its fresh public structure, never navigate
+            // or retry the policy action while waiting for the exact controls.
+            while (!withinBounds(final.1) || settingsPolicyPairs(final.0) == nil) && observations < 4 {
+                guard sidebars.count == 1, let sidebar = sidebars[0].area.box,
+                      try consentMonotonicTime() + 0.05 < readyDeadline else { break }
+                try await Task.sleep(nanoseconds: 50_000_000)
+                observations += 1
+                if let detail = try settingsCurrentDetail(preparation, sidebar: sidebar) {
+                    final = settingsInspectionTree(app, deadline: readyDeadline, retainedDetail: detail)
+                }
+            }
+            preparation.receipt["policy_readiness_observations"] = observations
+        }
         result["final_tree"] = final.1
         result["elapsed_seconds"] = (try consentMonotonicTime()) - now
         preparation?.receipt["inspection_before_cleanup"] = result
-        if let preparation { try await prepareNotificationPresentation(final.0, preparation: preparation, deadline: deadline) }
+        if let preparation {
+            guard withinBounds(final.1) else { throw ProbeError.unavailable("sharing_policy_exact_control_required") }
+            try await prepareNotificationPresentation(final.0, preparation: preparation, deadline: controlDeadline)
+        }
     }
     result["elapsed_seconds"] = (try consentMonotonicTime()) - now
     return result

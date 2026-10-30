@@ -780,6 +780,33 @@ class GlobalSettingsInspection(unittest.TestCase):
         self.assertEqual(projected["primary_refusal"], "settings_sidebar_hit_unavailable")
         self.assertEqual(projected["cleanup_refusal"], "owned_settings_close_button_changed")
 
+    def test_pane_readiness_is_bounded_and_never_replaces_on_or_cleanup_proof(self):
+        value = self.prepared()
+        value["policy_readiness_observations"] = 4
+        value["inspection_before_cleanup"]["final_tree"] = json.loads(json.dumps(value["inspection_before_cleanup"]["initial_tree"]))
+        value["inspection_before_cleanup"]["final_tree"]["tree_scope"] = "retained_detail"
+        self.assertIs(M.presentation_preparation_projection(value), value)
+        for scenario in ("too_many_reads", "false_on", "expired_original_budget", "missing_cleanup", "private_scope"):
+            candidate = json.loads(json.dumps(value))
+            if scenario == "too_many_reads":
+                candidate["policy_readiness_observations"] = 5
+            elif scenario == "false_on":
+                candidate["policy_on_verified"] = False
+            elif scenario == "expired_original_budget":
+                candidate["elapsed_seconds"] = 6.001
+            elif scenario == "missing_cleanup":
+                candidate["owned_window_disappeared"] = False
+            else:
+                candidate["inspection_before_cleanup"]["final_tree"]["tree_scope"] = "TEST-private-user-text"
+            with self.subTest(scenario=scenario), self.assertRaises(RuntimeError) as caught:
+                M.presentation_preparation_projection(candidate)
+            self.assertNotIn("TEST-private-user-text", str(caught.exception))
+        value.update(status="refused", sharing_click_performed=False, primary_failure_class="probe_refusal",
+                     primary_refusal="sharing_policy_exact_control_required")
+        for key in ("policy_before", "policy_after", "policy_on_verified", "sharing_checkbox_bounds"):
+            del value[key]
+        self.assertEqual(M.presentation_preparation_projection(value)["primary_refusal"], "sharing_policy_exact_control_required")
+
     def measurements(self, frames):
         return {"audio_samples": 14400, "audio_peak": 0, "screen_frames": frames, "audio_nonzero_samples": 0,
                 "audio_rms": 0, "sample_rate": 48000, "channels": 1, "format": "s16le"}
