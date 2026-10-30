@@ -121,6 +121,8 @@ jobs:
         shell: bash
         run: |
           "$RUNNER_TEMP/TEST-pi-macos/observer" preflight > "$RUNNER_TEMP/TEST-pi-macos/evidence/observer-preflight.json"
+          python -B scripts/pi-native-preflight.py --execute-test-fixtures --platform darwin \
+            --source-sha "$SOURCE_SHA" --report "$RUNNER_TEMP/TEST-pi-macos/evidence/known-cue-preflight.json"
       - name: Prepare the existing official Notification Center agent only when explicitly selected
         if: ${{ inputs.prepare_notification_center }}
         shell: bash
