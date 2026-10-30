@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Explicitly prepare only the official disposable Mac runner's NC agent."""
+"""Explicitly prepare the disposable official Mac runner for captured notifications."""
 import argparse
 import hashlib
 import json
@@ -153,6 +153,65 @@ def validate_running(state, native):
             and apps[0].get("process_start_identity"), "system_notification_application_identity_unverified")
 
 
+def validate_capture_result(result):
+    before, after = result.get("before", {}), result.get("after", {})
+    require(result.get("scope") == "explicit_disposable_notification_capture_ui"
+            and result.get("desktop_qualified") is False and result.get("status") == "notification_capture_ready"
+            and before.get("enabled") is True and after.get("enabled") is True and after.get("on") is True
+            and type(before.get("on")) is bool and before.get("apple_signature_verified") is True
+            and after.get("apple_signature_verified") is True and before.get("page") == "Notifications"
+            and before.get("label") == "Allow notifications when mirroring or sharing the display"
+            and before.get("role") in ("AXCheckBox", "AXSwitch")
+            and type(before.get("owner_pid")) is int and before["owner_pid"] > 0
+            and isinstance(before.get("owner_start"), str) and re.fullmatch(r"[0-9]+:[0-9]+", before["owner_start"])
+            and type(before.get("window_id")) is int and before["window_id"] > 0
+            and isinstance(before.get("bounds"), list) and len(before["bounds"]) == 4
+            and all(before.get(key) == after.get(key) for key in
+                    ("owner_pid", "owner_start", "window_id", "bounds", "role", "page", "label")),
+            "notification_capture_same_control_on_proof_required")
+    require(result.get("physical_mouse_click") is (not before["on"])
+            and (before["on"] or result.get("topmost_hit_verified") is True and result.get("pointer_at_target") is True),
+            "notification_capture_one_physical_click_proof_required")
+
+
+def prepare_capture(observer, evidence_root):
+    """Called only after fresh official-host admission and NC readiness."""
+    report = {"scope": "explicit_disposable_notification_capture_ui", "desktop_qualified": False}
+    def screenshot(phase):
+        path = evidence_root / ("notification-capture-" + phase + ".png")
+        require(not path.exists() and not path.is_symlink(), "fresh_notification_capture_screenshot_required")
+        code, _, _ = command(["/usr/sbin/screencapture", "-x", path])
+        require(code == 0 and path.is_file() and not path.is_symlink()
+                and 0 < path.stat().st_size <= 16 * 1024 * 1024, "notification_capture_screenshot_failed")
+        report[phase + "_screenshot_sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    try:
+        # Normal Settings navigation; the native observer must independently bind
+        # the actual Apple Notifications page and exact sharing-display control.
+        code, _, _ = command(["/usr/bin/open", "-b", "com.apple.systempreferences",
+                              "x-apple.systempreferences:com.apple.Notifications-Settings.extension"])
+        require(code == 0, "notification_capture_settings_navigation_failed")
+        time.sleep(2)
+        screenshot("before")
+        observed = report["native_observation"] = {}
+        try:
+            command([observer, "prepare-notification-capture"], timeout=12, observed=observed)
+        finally:
+            try:
+                screenshot("after")
+            except Exception as error:
+                report["after_screenshot_error_class"] = type(error).__name__
+        require(observed.get("output_bounded") is True and observed.get("timed_out") is False
+                and observed.get("exit_code") == 0, "notification_capture_native_preparation_failed")
+        report["result"] = json.loads(observed["stdout"])
+        validate_capture_result(report["result"])
+        return report
+    except Exception as error:
+        report["failure_class"] = type(error).__name__
+        raise
+    finally:
+        (evidence_root / "notification-capture-preparation.json").write_text(json.dumps(report, indent=2) + "\n")
+
+
 def prepare(args):
     report = {"scope": "explicit_disposable_official_macos_host_preparation", "desktop_qualified": False,
               "permission_requests_executed": 0, "actions": [], "status": "unqualified"}
@@ -217,7 +276,9 @@ def prepare(args):
             except ValueError:
                 require(time.monotonic() < deadline, "notification_agent_readiness_unqualified")
                 time.sleep(0.1)
-        report.update(status="notification_center_ready", already_ready=not report["actions"])
+        report["notification_capture"] = prepare_capture(args.observer, args.report.parent)
+        report.update(status="notification_center_ready", already_ready=not report["actions"]
+                      and report["notification_capture"]["result"]["physical_mouse_click"] is False)
     except Exception as error:
         report["failure"] = str(error)
     args.report.parent.mkdir(parents=True, exist_ok=True)

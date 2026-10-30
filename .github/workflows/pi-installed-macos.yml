@@ -28,7 +28,7 @@ on:
         type: string
         required: false
       prepare_notification_center:
-        description: Prepare only the existing Notification Center agent on a verified disposable official macOS 15 ARM host
+        description: Prepare the existing Notification Center agent and allow captured notifications through normal UI on a verified disposable official macOS 15 ARM host
         type: boolean
         required: false
         default: false

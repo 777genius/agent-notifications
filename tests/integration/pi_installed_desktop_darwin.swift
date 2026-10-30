@@ -557,6 +557,214 @@ func verifiedAppleApplication(_ url: URL, identifier: String) -> Bool {
     return SecStaticCodeCheckValidity(code, SecCSFlags(rawValue: kSecCSStrictValidate), requirement) == errSecSuccess
 }
 
+private let captureSharingLabel = "Allow notifications when mirroring or sharing the display"
+
+@MainActor struct NotificationCaptureControl {
+    let pid: pid_t; let start: String; let window: Int
+    let element: AXUIElement; let box: CGRect; let role: String
+    let enabled: Bool; let on: Bool
+    var receipt: [String: Any] {
+        ["owner_pid": Int(pid), "owner_start": start, "window_id": window,
+         "apple_signature_verified": true, "page": "Notifications", "label": captureSharingLabel,
+         "role": role, "enabled": enabled, "on": on,
+         "bounds": [Double(box.minX), Double(box.minY), Double(box.width), Double(box.height)]]
+    }
+}
+
+@MainActor func prepareNotificationCapture() async -> [String: Any] {
+    let deadline = ProcessInfo.processInfo.systemUptime + 8
+    let bundle = "/System/Applications/System Settings.app"
+    let roles = [kAXCheckBoxRole, "AXSwitch"]
+    var result: [String: Any] = ["scope": "explicit_disposable_notification_capture_ui", "desktop_qualified": false,
+                               "status": "unqualified", "physical_mouse_click": false]
+    var metadata = [[String: Any]]()
+    func labelled(_ element: AXUIElement) -> Bool {
+        [kAXTitleAttribute, kAXValueAttribute, kAXDescriptionAttribute].contains {
+            attribute(element, $0) as? String == captureSharingLabel
+        }
+    }
+    func boolean(_ element: AXUIElement) -> Bool? {
+        guard let number = attribute(element, kAXValueAttribute) as? NSNumber,
+              number.doubleValue == 0 || number.doubleValue == 1 else { return nil }
+        return number.boolValue
+    }
+    func cgBox(_ row: [String: Any]) -> CGRect? {
+        guard let data = row[kCGWindowBounds as String] as? [String: Any],
+              let x = data["X"] as? NSNumber, let y = data["Y"] as? NSNumber,
+              let w = data["Width"] as? NSNumber, let h = data["Height"] as? NSNumber,
+              [x, y, w, h].allSatisfy({ $0.doubleValue.isFinite }), w.doubleValue > 0, h.doubleValue > 0 else { return nil }
+        return CGRect(x: CGFloat(x.doubleValue), y: CGFloat(y.doubleValue), width: CGFloat(w.doubleValue), height: CGFloat(h.doubleValue))
+    }
+    func windows() -> [[String: Any]] {
+        (CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? [])
+            .filter { (($0[kCGWindowAlpha as String] as? NSNumber)?.doubleValue ?? 0) > 0 }
+    }
+    func observe() throws -> NotificationCaptureControl {
+        guard ProcessInfo.processInfo.systemUptime < deadline,
+              let app = NSWorkspace.shared.frontmostApplication, app.bundleIdentifier == "com.apple.systempreferences",
+              app.bundleURL?.path == bundle,
+              app.executableURL?.resolvingSymlinksInPath().path == bundle + "/Contents/MacOS/System Settings",
+              verifiedAppleApplication(URL(fileURLWithPath: bundle), identifier: "com.apple.systempreferences"),
+              let start = processStartIdentity(app.processIdentifier) else {
+            throw ProbeError.unavailable("genuine_notifications_settings_owner_required")
+        }
+        let identity = try terminalProcessIdentity(app.processIdentifier, expectedStart: start)
+        guard identity["executable_path"] as? String == bundle + "/Contents/MacOS/System Settings" else {
+            throw ProbeError.unavailable("notifications_settings_executable_changed")
+        }
+        result["settings_owner"] = ["pid": Int(app.processIdentifier), "process_start_identity": start,
+                                    "bundle_path": bundle, "apple_signature_verified": true]
+        let root = AXUIElementCreateApplication(app.processIdentifier)
+        guard AXUIElementSetMessagingTimeout(root, 0.05) == .success,
+              let value = attribute(root, kAXFocusedWindowAttribute), CFGetTypeID(value) == AXUIElementGetTypeID() else {
+            throw ProbeError.unavailable("notifications_settings_window_unavailable")
+        }
+        let window = value as! AXUIElement
+        guard attribute(window, kAXTitleAttribute) as? String == "Notifications", let frame = rectangle(window) else {
+            throw ProbeError.unavailable("exact_notifications_settings_page_required")
+        }
+        let matching = windows().filter {
+            ($0[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == app.processIdentifier
+                && ($0[kCGWindowLayer as String] as? NSNumber)?.intValue == 0 && cgBox($0) == frame
+        }
+        result["focused_window_bounds"] = [Double(frame.minX), Double(frame.minY), Double(frame.width), Double(frame.height)]
+        result["matching_cg_windows"] = matching.count
+        guard matching.count == 1, let number = matching[0][kCGWindowNumber as String] as? NSNumber else {
+            throw ProbeError.unavailable("unique_notifications_settings_cg_window_required")
+        }
+        var controls = [NotificationCaptureControl](), visited = 0, capped = false
+        metadata = []
+        func children(_ element: AXUIElement) -> [AXUIElement] {
+            var count = CFIndex(0)
+            var values: CFArray?
+            let status = AXUIElementGetAttributeValueCount(element, kAXChildrenAttribute as CFString, &count)
+            guard status == .success else {
+                if status != .attributeUnsupported && status != .noValue { capped = true }
+                return []
+            }
+            guard count >= 0 else { capped = true; return [] }
+            if count > 32 { capped = true }
+            let amount = min(Int(count), 32)
+            if amount == 0 { return [] }
+            guard AXUIElementCopyAttributeValues(element, kAXChildrenAttribute as CFString, 0, amount, &values) == .success,
+                  let copied = values as? [AXUIElement], copied.count == amount else {
+                capped = true; return []
+            }
+            return copied
+        }
+        func add(_ element: AXUIElement) {
+            guard let role = attribute(element, kAXRoleAttribute) as? String, roles.contains(role),
+                  let on = boolean(element), let enabled = attribute(element, kAXEnabledAttribute) as? Bool,
+                  let box = rectangle(element), box.width.isFinite, box.height.isFinite, frame.contains(box),
+                  !controls.contains(where: { CFEqual($0.element, element) }) else { return }
+            var pid = pid_t(0)
+            guard AXUIElementGetPid(element, &pid) == .success, pid == app.processIdentifier else { return }
+            controls.append(NotificationCaptureControl(pid: pid, start: start, window: number.intValue,
+                element: element, box: box, role: role, enabled: enabled, on: on))
+        }
+        func visit(_ element: AXUIElement, _ depth: Int) {
+            guard visited < 1200, depth < 20, ProcessInfo.processInfo.systemUptime < deadline else { capped = true; return }
+            visited += 1
+            let role = attribute(element, kAXRoleAttribute) as? String ?? ""
+            let direct = children(element)
+            if labelled(element), metadata.count < 8 {
+                var row: [String: Any] = ["exact_label_node": true,
+                    "role": ([kAXGroupRole, kAXStaticTextRole, kAXButtonRole] + roles).contains(role) ? role : "other"]
+                if let on = boolean(element) { row["on"] = on }
+                var owner = pid_t(0)
+                if AXUIElementGetPid(element, &owner) == .success {
+                    row["ax_pid"] = Int(owner); row["owner_matches_settings"] = owner == app.processIdentifier
+                }
+                metadata.append(row)
+            }
+            if labelled(element), roles.contains(role) { add(element) }
+            let labels = direct.filter { attribute($0, kAXRoleAttribute) as? String == kAXStaticTextRole && labelled($0) }
+            if !labels.isEmpty && metadata.count < 8 {
+                metadata.append(["parent_is_group": role == kAXGroupRole, "exact_label_children": labels.count,
+                    "children": direct.prefix(8).map { child -> [String: Any] in
+                        let childRole = attribute(child, kAXRoleAttribute) as? String ?? ""
+                        var row: [String: Any] = ["role": ([kAXGroupRole, kAXStaticTextRole, kAXButtonRole] + roles).contains(childRole) ? childRole : "other",
+                                                 "exact_label": labelled(child)]
+                        if let on = boolean(child) { row["on"] = on }
+                        if let enabled = attribute(child, kAXEnabledAttribute) as? Bool { row["enabled"] = enabled }
+                        var owner = pid_t(0)
+                        if AXUIElementGetPid(child, &owner) == .success {
+                            row["ax_pid"] = Int(owner); row["owner_matches_settings"] = owner == app.processIdentifier
+                        }
+                        return row
+                    }])
+            }
+            if role == kAXGroupRole, direct.count <= 8, labels.count == 1,
+               let group = rectangle(element), let label = rectangle(labels[0]), group.contains(label) {
+                let switches = direct.filter { roles.contains(attribute($0, kAXRoleAttribute) as? String ?? "") }
+                if switches.count == 1, let box = rectangle(switches[0]), group.contains(box) { add(switches[0]) }
+            }
+            for child in direct { visit(child, depth + 1) }
+        }
+        visit(window, 0)
+        result["control_count"] = controls.count
+        result["visited_nodes"] = visited
+        result["traversal_capped"] = capped
+        guard !capped, controls.count == 1, matchesProcessStart(app.processIdentifier, start),
+              ProcessInfo.processInfo.systemUptime < deadline else {
+            throw ProbeError.unavailable("unique_complete_sharing_control_observation_required")
+        }
+        return controls[0]
+    }
+    func same(_ a: NotificationCaptureControl, _ b: NotificationCaptureControl) -> Bool {
+        a.pid == b.pid && a.start == b.start && a.window == b.window && a.box == b.box && a.role == b.role
+    }
+    do {
+        let before = try observe()
+        result["before"] = before.receipt
+        guard before.enabled else { throw ProbeError.unavailable("sharing_control_disabled") }
+        if !before.on {
+            let fresh = try observe()
+            guard same(before, fresh), fresh.enabled, !fresh.on else { throw ProbeError.unavailable("sharing_control_changed_before_input") }
+            let point = CGPoint(x: fresh.box.midX, y: fresh.box.midY)
+            guard let top = windows().first(where: { cgBox($0)?.contains(point) == true }),
+                  (top[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == fresh.pid,
+                  (top[kCGWindowNumber as String] as? NSNumber)?.intValue == fresh.window else {
+                throw ProbeError.unavailable("sharing_control_cg_hit_occluded")
+            }
+            var hit: AXUIElement?
+            guard AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(), Float(point.x), Float(point.y), &hit) == .success,
+                  var current = hit else { throw ProbeError.unavailable("sharing_control_ax_hit_unavailable") }
+            var matched = false
+            for _ in 0..<8 {
+                if CFEqual(current, fresh.element) { matched = true; break }
+                guard let parent = attribute(current, kAXParentAttribute), CFGetTypeID(parent) == AXUIElementGetTypeID() else { break }
+                current = parent as! AXUIElement
+            }
+            guard matched, CGWarpMouseCursorPosition(point) == .success,
+                  let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left),
+                  let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left) else {
+                throw ProbeError.unavailable("sharing_control_physical_hit_unverified")
+            }
+            // The hit query can block. Rebind the same actor/control and original
+            // UI deadline after that IPC and immediately before posting input.
+            guard rectangle(fresh.element) == fresh.box, boolean(fresh.element) == false,
+                  attribute(fresh.element, kAXEnabledAttribute) as? Bool == true,
+                  matchesProcessStart(fresh.pid, fresh.start), NSWorkspace.shared.frontmostApplication?.processIdentifier == fresh.pid,
+                  ProcessInfo.processInfo.systemUptime < deadline else { throw ProbeError.unavailable("sharing_control_input_no_longer_admitted") }
+            down.post(tap: .cghidEventTap); up.post(tap: .cghidEventTap)
+            result["physical_mouse_click"] = true
+            result["topmost_hit_verified"] = true
+            try await Task.sleep(nanoseconds: 200_000_000)
+            guard let pointer = CGEvent(source: nil)?.location, abs(pointer.x - point.x) <= 1, abs(pointer.y - point.y) <= 1 else {
+                throw ProbeError.unavailable("sharing_control_pointer_position_unverified")
+            }
+            result["pointer_at_target"] = true
+        }
+        let after = try observe()
+        result["after"] = after.receipt
+        guard same(before, after), after.enabled, after.on else { throw ProbeError.unavailable("sharing_control_on_readback_required") }
+        result["status"] = "notification_capture_ready"
+    } catch { result["failure"] = String(describing: error) }
+    result["known_label_structure"] = metadata
+    return result
+}
+
 @MainActor struct TerminalAutomationDialog {
     let owner: NSRunningApplication
     let ownerStart: String
@@ -1085,6 +1293,9 @@ final class ProductCapture: NSObject, SCStreamOutput, SCStreamDelegate, @uncheck
                 publish(["checks": checks, "foreground": foreground(), "desktop_qualified": false])
                 guard checks.values.allSatisfy({ $0 }) else { throw ProbeError.unavailable("native_observer_prerequisite_unavailable") }
             case "foreground": publish(foreground())
+            case "prepare-notification-capture":
+                guard args.count == 1 else { throw ProbeError.unavailable("fixed_notification_capture_preparation_only") }
+                publish(await prepareNotificationCapture())
             case "terminal-process-identity", "signal-owned-terminal-process":
                 guard args.count >= 2, let pid = Int32(args[1]), pid > 0 else {
                     throw ProbeError.unavailable("owned_terminal_pid_required")

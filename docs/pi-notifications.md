@@ -148,6 +148,16 @@ checking its return action. Inspect the separate webhook destination if enabled.
 An accepted helper/API call alone does not establish a visible banner, audio
 output or successful terminal activation.
 
+The owner-dispatched macOS qualification lane records the desktop with
+ScreenCaptureKit. Its explicit disposable-host preparation starts Apple's
+existing Notification Center agent and enables **Allow notifications when
+mirroring or sharing the display** through the normal Notifications settings UI.
+The observer requires a unique labelled control, verifies the Apple window and
+physical hit target, and reads the setting back after at most one click. This
+host recording condition does not grant the candidate's notification permission
+or change Pi's notification policy. Normal candidate permission, actual banner,
+configured audio and physical origin-window click remain separate gates.
+
 The [native evidence guide](testing/pi-native-e2e.md) distinguishes actual Pi
 process/loader checks, desktop observer prerequisites and candidate desktop
 qualification. See [troubleshooting](troubleshooting.md) for shared delivery and

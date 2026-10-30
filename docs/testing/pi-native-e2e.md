@@ -293,8 +293,15 @@ The preparation records the actual official image metadata, current GUI service
 and disabled states, and immutable Apple system-agent identity. Only the exact
 disabled/unloaded `com.apple.notificationcenterui.agent` service is enabled and
 bootstrapped once; readiness is verified before the normal permission request.
-It does not change permission databases, notification grants, defaults or APNs
-services. Unknown, physical and Namespace hosts are excluded from this opt-in
+The same explicit host preparation uses the normal Notifications settings UI
+to enable **Allow notifications when mirroring or sharing the display**, because
+the product observer records with ScreenCaptureKit. It requires one uniquely
+labelled, enabled native control on the genuine Apple page, verifies its physical
+hit target, clicks at most once when OFF, and requires fresh ON readback. An
+already-ON setting receives no input; ambiguous observations refuse preparation.
+Before/after screenshots and bounded control metadata are retained. No direct
+`defaults`, permission-database, notification-grant or APNs writes are used.
+Unknown, physical and Namespace hosts are excluded from this opt-in
 preparation. The signed helper must still receive normal user authorization,
 and every actual banner, audio and physical click check remains required.
 

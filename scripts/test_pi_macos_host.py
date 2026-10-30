@@ -28,6 +28,58 @@ def facts(version="20260907.0337.1"):
 
 
 class OfficialHostGuards(unittest.TestCase):
+    def capture_result(self, on=False):
+        before = {"owner_pid": 41, "owner_start": "123:456", "window_id": 7, "bounds": [10, 20, 30, 20],
+                  "role": "AXCheckBox", "page": "Notifications", "apple_signature_verified": True,
+                  "label": "Allow notifications when mirroring or sharing the display", "enabled": True, "on": on}
+        return {"scope": "explicit_disposable_notification_capture_ui", "desktop_qualified": False,
+                "status": "notification_capture_ready", "before": before, "after": {**before, "on": True},
+                "physical_mouse_click": not on, "topmost_hit_verified": not on, "pointer_at_target": not on}
+
+    def test_capture_requires_same_live_control_on_and_at_most_one_physical_click(self):
+        for on in (False, True):
+            H.validate_capture_result(self.capture_result(on))
+        changes = [lambda value: value.update(status="unqualified"),
+                   lambda value: value["after"].update(owner_start="123:457"),
+                   lambda value: value["after"].update(on=False),
+                   lambda value: value["after"].update(apple_signature_verified=False),
+                   lambda value: value["before"].update(enabled=False),
+                   lambda value: value["before"].pop("bounds"),
+                   lambda value: value.update(physical_mouse_click=False),
+                   lambda value: value.update(topmost_hit_verified=False),
+                   lambda value: value.update(pointer_at_target=False)]
+        for change in changes:
+            value = self.capture_result()
+            change(value)
+            with self.assertRaises(ValueError):
+                H.validate_capture_result(value)
+        value = self.capture_result(True)
+        value["physical_mouse_click"] = True
+        with self.assertRaises(ValueError):
+            H.validate_capture_result(value)
+
+    def test_failed_capture_keeps_original_native_result_and_after_capture_error(self):
+        with tempfile.TemporaryDirectory(prefix="TEST-pi-macos-capture-") as temporary:
+            root = Path(temporary)
+            value = self.capture_result()
+            value["status"] = "unqualified"
+            def command(argv, timeout=3, observed=None):
+                if argv[0] == "/usr/sbin/screencapture":
+                    if str(argv[-1]).endswith("after.png"):
+                        raise RuntimeError("TEST private screenshot error")
+                    Path(argv[-1]).write_bytes(b"TEST pixels")
+                if observed is not None:
+                    observed.update(exit_code=0, timed_out=False, output_bounded=True, stdout=H.json.dumps(value))
+                return 0, "", ""
+            with patch.object(H, "command", side_effect=command), patch.object(H.time, "sleep"):
+                with self.assertRaisesRegex(ValueError, "same_control_on_proof_required"):
+                    H.prepare_capture(Path("/TEST/observer"), root)
+            receipt = H.json.loads((root / "notification-capture-preparation.json").read_text())
+            self.assertEqual(receipt["result"], value)
+            self.assertEqual(receipt["after_screenshot_error_class"], "RuntimeError")
+            self.assertEqual(receipt["failure_class"], "ValueError")
+            self.assertNotIn("private screenshot error", H.json.dumps(receipt))
+
     def test_rejected_existing_or_symlink_report_preserves_foreign_bytes(self):
         with tempfile.TemporaryDirectory(prefix="TEST-pi-macos-host-report-") as temporary:
             root = Path(temporary)
