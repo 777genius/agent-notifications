@@ -7,6 +7,7 @@ import ApplicationServices
 import AVFoundation
 import CoreAudio
 import CoreMedia
+import CryptoKit
 import Darwin
 import ScreenCaptureKit
 import Security
@@ -723,6 +724,237 @@ struct TerminalAutomationContext: Decodable {
     return result
 }
 
+// Diagnostic only: follow the original, real product click's public Screen
+// Recording prompt. This never grants permission or substitutes for focus.
+struct FocusPermissionContext: Decodable {
+    let helperPath: String; let helperSHA256: String
+    let originPID: Int32; let originStart: String; let originExecutable: String
+    let deadlineMonotonic: Double; let clock: String; let screenshotPath: String
+    let originalHelperBaselineEmpty: Bool; let originalPhysicalClickObserved: Bool
+}
+
+@MainActor struct FocusScreenDialog {
+    let app: NSRunningApplication; let start: String; let element: AXUIElement; let box: CGRect
+    let open: AXUIElement; let openBox: CGRect; let denyBox: CGRect
+}
+
+@MainActor func focusScreenDialog(deadline: Double) throws -> FocusScreenDialog? {
+    var candidates = [FocusScreenDialog](), remaining = 1200, windowsSeen = 0
+    for app in NSWorkspace.shared.runningApplications {
+        guard try consentMonotonicTime() < deadline else { throw ProbeError.unavailable("screen_dialog_inventory_capped") }
+        guard !app.isTerminated, let url = app.bundleURL, let identifier = app.bundleIdentifier,
+              identifier.hasPrefix("com.apple."), url.path.hasPrefix("/System/"),
+              terminalAutomationUID(app.processIdentifier) == Int(getuid()),
+              let start = processStartIdentity(app.processIdentifier) else { continue }
+        let visible = onScreenWindows(app.processIdentifier).filter { $0.width >= 200 && $0.width <= 650 && $0.height >= 120 && $0.height <= 500 }
+        guard !visible.isEmpty else { continue }
+        let root = AXUIElementCreateApplication(app.processIdentifier)
+        guard AXUIElementSetMessagingTimeout(root, 0.04) == .success,
+              let windows = attribute(root, kAXWindowsAttribute) as? [AXUIElement], windows.count <= 16 else {
+            throw ProbeError.unavailable("screen_dialog_inventory_unknown")
+        }
+        for window in windows {
+            guard let windowBox = rectangle(window), visible.contains(windowBox) else { continue }
+            // The measured OS alert has this public window title. A different
+            // explicit title cannot supply this dialog; absent titles are scanned.
+            if let title = attribute(window, kAXTitleAttribute) as? String, !title.isEmpty, title != "Screen Recording" { continue }
+            windowsSeen += 1
+            guard windowsSeen <= 16 else { throw ProbeError.unavailable("screen_dialog_inventory_capped") }
+            var capped = false
+            func visit(_ element: AXUIElement, _ depth: Int) -> (String, [(AXUIElement, CGRect)], [CGRect]) {
+                guard remaining > 0, depth < 18, let now = try? consentMonotonicTime(), now < deadline else { capped = true; return ("", [], []) }
+                remaining -= 1
+                var pid = pid_t(0)
+                guard AXUIElementGetPid(element, &pid) == .success, pid == app.processIdentifier else { capped = true; return ("", [], []) }
+                let role = attribute(element, kAXRoleAttribute) as? String ?? ""
+                let texts = [kAXTitleAttribute, kAXValueAttribute, kAXDescriptionAttribute].compactMap { attribute(element, $0) as? String }
+                var labels = texts.joined(separator: " "), opens = [(AXUIElement, CGRect)](), denials = [CGRect]()
+                if role == kAXButtonRole, attribute(element, kAXEnabledAttribute) as? Bool == true,
+                   let box = rectangle(element), windowBox.contains(box) {
+                    if texts.contains("Open System Settings") { opens.append((element, box)) }
+                    if texts.contains("Deny") { denials.append(box) }
+                }
+                var raw: CFTypeRef?
+                let status = AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &raw)
+                if status == .success, let children = raw as? [AXUIElement], children.count <= 64 {
+                    for child in children {
+                        let nested = visit(child, depth + 1)
+                        labels += " " + nested.0; opens += nested.1; denials += nested.2
+                    }
+                } else if !(status == .attributeUnsupported && ["AXStaticText", "AXImage", "AXButton"].contains(role)) { capped = true }
+                labels = labels.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }.joined(separator: " ")
+                let titles = ["“ClaudeNotifier” would like to record this computer’s screen and audio.",
+                              "\"ClaudeNotifier\" would like to record this computer's screen and audio."]
+                let body = "Grant access to this application in Privacy & Security settings, located in System Settings."
+                if titles.contains(where: { labels.contains($0) }), labels.contains(body), opens.count == 1, denials.count == 1,
+                   let box = rectangle(element), windowBox.contains(box), box.contains(opens[0].1), box.contains(denials[0]),
+                   !opens[0].1.intersects(denials[0]), box.width >= 200, box.height >= 120 {
+                    candidates.append(FocusScreenDialog(app: app, start: start, element: element, box: box,
+                        open: opens[0].0, openBox: opens[0].1, denyBox: denials[0]))
+                }
+                if labels.utf8.count > 16384 { capped = true; return ("", [], []) }
+                return (labels, opens, denials)
+            }
+            _ = visit(window, 0)
+            if capped { throw ProbeError.unavailable("screen_dialog_inventory_incomplete") }
+        }
+    }
+    let smallest = candidates.filter { candidate in !candidates.contains {
+        $0.app.processIdentifier == candidate.app.processIdentifier && candidate.box.contains($0.box)
+            && $0.box.width * $0.box.height < candidate.box.width * candidate.box.height
+    }}
+    var unique = [FocusScreenDialog]()
+    for candidate in smallest where !unique.contains(where: { $0.app.processIdentifier == candidate.app.processIdentifier && $0.box == candidate.box }) { unique.append(candidate) }
+    guard unique.count <= 1 else { throw ProbeError.unavailable("screen_dialog_ambiguous") }
+    guard let dialog = unique.first else { return nil }
+    guard let url = dialog.app.bundleURL, let identifier = dialog.app.bundleIdentifier,
+          verifiedAppleApplication(url, identifier: identifier),
+          let identity = try? terminalProcessIdentity(dialog.app.processIdentifier),
+          identity["executable_path"] as? String == dialog.app.executableURL?.resolvingSymlinksInPath().path,
+          identity["process_start_identity"] as? String == dialog.start else { throw ProbeError.unavailable("screen_dialog_owner_unverified") }
+    return dialog
+}
+
+@MainActor func focusPermissionScreenshot(_ path: String, deadline: Double) async throws -> Bool {
+    let url = URL(fileURLWithPath: path), parent = url.deletingLastPathComponent()
+    guard url.lastPathComponent == "focus-permission-pane.png", parent.lastPathComponent == "case-completion",
+          parent.path == parent.resolvingSymlinksInPath().path,
+          parent.deletingLastPathComponent().lastPathComponent.hasPrefix("TEST-pi-installed-macos-") else {
+        throw ProbeError.unavailable("screen_snapshot_owned_path_required")
+    }
+    let fd = open(path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600)
+    guard fd >= 0 else { throw ProbeError.unavailable("screen_snapshot_path_exists") }
+    close(fd)
+    let child = Process()
+    child.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+    child.arguments = ["-x", path]
+    child.standardInput = FileHandle.nullDevice; child.standardOutput = FileHandle.nullDevice; child.standardError = FileHandle.nullDevice
+    try child.run()
+    defer {
+        if child.isRunning { kill(child.processIdentifier, SIGKILL) }
+        child.waitUntilExit()
+    }
+    let stop = min(deadline, (try consentMonotonicTime()) + 0.6)
+    while child.isRunning && (try consentMonotonicTime()) < stop { try await Task.sleep(nanoseconds: 10_000_000) }
+    if child.isRunning { kill(child.processIdentifier, SIGKILL) }
+    // Foundation retains/reaps this exact child; never rediscover another PID.
+    child.waitUntilExit()
+    return child.terminationStatus == 0
+}
+
+@MainActor func inspectFocusPermission(_ args: [String]) async throws -> [String: Any] {
+    let started = try consentMonotonicTime(), env = ProcessInfo.processInfo.environment
+    guard args.count == 2, args[1].utf8.count <= 16384, let data = args[1].data(using: .utf8),
+          let context = try? JSONDecoder().decode(FocusPermissionContext.self, from: data), context.clock == "mach_absolute_time",
+          context.deadlineMonotonic.isFinite, context.deadlineMonotonic > started, context.deadlineMonotonic - started <= 6,
+          context.originalHelperBaselineEmpty, context.originalPhysicalClickObserved,
+          env["PI_MACOS_FOCUS_INSPECTION_ADMITTED"] == "1", env["GITHUB_REPOSITORY"] == "777genius/agent-notifications",
+          env["GITHUB_EVENT_NAME"] == "workflow_dispatch", env["GITHUB_ACTOR"] == "777genius", env["GITHUB_TRIGGERING_ACTOR"] == "777genius",
+          env["GITHUB_RUN_ATTEMPT"] == "1", env["PI_MACOS_RUNNER_ENVIRONMENT"] == "github-hosted", env["ImageOS"] == "macos15",
+          getuid() != 0, ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 15 else { throw ProbeError.unavailable("original_admitted_focus_inspection_required") }
+    let deadline = context.deadlineMonotonic, actionDeadline = deadline - 0.8
+    let preparation = SettingsPresentationPreparation()
+    var result: [String: Any] = ["scope": "original_click_screen_permission_inspection", "diagnostic_only": true,
+        "qualification_input": false, "desktop_qualified": false, "maximum_seconds": 6, "status": "unavailable",
+        "physical_open_settings_click": false, "permission_control_action_performed": false,
+        "responsible_row_association": "display_name_only_unverified", "screenshot_child_collected": true]
+    do {
+        let helperURL = URL(fileURLWithPath: context.helperPath), executable = helperURL.appendingPathComponent("Contents/MacOS/terminal-notifier-modern")
+        guard helperURL.path == helperURL.resolvingSymlinksInPath().path, helperURL.pathExtension == "app",
+              Bundle(url: helperURL)?.bundleIdentifier == "com.777genius.agent-notifications",
+              context.helperSHA256.count == 64,
+              let size = try? executable.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey]),
+              size.isRegularFile == true, let count = size.fileSize, count > 0, count <= 16 * 1024 * 1024,
+              let helperData = try? Data(contentsOf: executable, options: .mappedIfSafe), helperData.count <= 16 * 1024 * 1024,
+              SHA256.hash(data: helperData).map({ String(format: "%02x", $0) }).joined() == context.helperSHA256 else {
+            throw ProbeError.unavailable("original_pinned_helper_required")
+        }
+        var code: SecStaticCode?
+        guard SecStaticCodeCreateWithPath(helperURL as CFURL, [], &code) == errSecSuccess, let code,
+              SecStaticCodeCheckValidity(code, SecCSFlags(rawValue: kSecCSStrictValidate), nil) == errSecSuccess else { throw ProbeError.unavailable("original_helper_signature_required") }
+        let settingsPath = "/System/Applications/System Settings.app"
+        guard verifiedAppleApplication(URL(fileURLWithPath: settingsPath), identifier: "com.apple.systempreferences") else { throw ProbeError.unavailable("signed_apple_settings_required") }
+        let before = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.systempreferences")
+        guard before.count <= 1 else { throw ProbeError.unavailable("unique_settings_instance_required") }
+        for app in before {
+            guard let windows = attribute(AXUIElementCreateApplication(app.processIdentifier), kAXWindowsAttribute) as? [AXUIElement], windows.isEmpty else { throw ProbeError.unavailable("screen_settings_preexisting_window") }
+        }
+        result["settings_process_present_before"] = !before.isEmpty
+        var captured: (NSRunningApplication, String)?
+        let captureDeadline = min(actionDeadline, started + 1)
+        while try consentMonotonicTime() < captureDeadline {
+            let apps = NSWorkspace.shared.runningApplications.filter { !$0.isTerminated && $0.bundleURL?.resolvingSymlinksInPath() == helperURL && $0.executableURL?.resolvingSymlinksInPath() == executable }
+            if apps.count == 1, let start = processStartIdentity(apps[0].processIdentifier), terminalAutomationUID(apps[0].processIdentifier) == Int(getuid()) { captured = (apps[0], start); break }
+            if apps.count > 1 { throw ProbeError.unavailable("original_callback_helper_ambiguous") }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        guard let (helper, helperStart) = captured else { throw ProbeError.unavailable("original_callback_helper_unavailable") }
+        result["captured_helper_pid"] = Int(helper.processIdentifier); result["captured_helper_start"] = helperStart
+        func requireActors() throws {
+            let origin = try terminalProcessIdentity(context.originPID, expectedStart: context.originStart)
+            guard try consentMonotonicTime() < actionDeadline, origin["status"] as? String == "observed",
+                  origin["executable_path"] as? String == context.originExecutable, terminalAutomationUID(context.originPID) == Int(getuid()),
+                  !helper.isTerminated, matchesProcessStart(helper.processIdentifier, helperStart),
+                  terminalAutomationUID(helper.processIdentifier) == Int(getuid()),
+                  (try? terminalProcessIdentity(helper.processIdentifier)["executable_path"] as? String) == executable.path else { throw ProbeError.unavailable("original_focus_actors_changed") }
+        }
+        var found: FocusScreenDialog?
+        while try consentMonotonicTime() < actionDeadline {
+            try requireActors()
+            found = try focusScreenDialog(deadline: actionDeadline)
+            if found != nil { break }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        guard let dialog = found else { throw ProbeError.unavailable("original_screen_dialog_unavailable") }
+        result["dialog"] = ["owner_pid": Int(dialog.app.processIdentifier), "owner_start": dialog.start,
+            "owner_bundle": dialog.app.bundleIdentifier!, "owner_path": dialog.app.bundleURL!.path, "apple_signature_verified": true,
+            "fixed_requester": "ClaudeNotifier", "fixed_body_matched": true, "distinct_open_and_deny": true,
+            "open_bounds": [Double(dialog.openBox.minX), Double(dialog.openBox.minY), Double(dialog.openBox.width), Double(dialog.openBox.height)]]
+        try settingsPhysicalClick(dialog.open, box: dialog.openBox, owner: dialog.app.processIdentifier, deadline: actionDeadline) {
+            try requireActors()
+            guard matchesProcessStart(dialog.app.processIdentifier, dialog.start),
+                  let fresh = try focusScreenDialog(deadline: actionDeadline), fresh.app.processIdentifier == dialog.app.processIdentifier,
+                  fresh.start == dialog.start, CFEqual(fresh.element, dialog.element), CFEqual(fresh.open, dialog.open),
+                  fresh.box == dialog.box, fresh.openBox == dialog.openBox, fresh.denyBox == dialog.denyBox else { throw ProbeError.unavailable("original_screen_dialog_changed") }
+        }
+        result["physical_open_settings_click"] = true
+        while try consentMonotonicTime() < actionDeadline {
+            let apps = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.systempreferences")
+            if apps.count == 1 {
+                let app = apps[0]
+                if before.isEmpty || before[0].processIdentifier == app.processIdentifier,
+                   app.bundleURL?.path == settingsPath, terminalAutomationUID(app.processIdentifier) == Int(getuid()), let start = processStartIdentity(app.processIdentifier),
+                   let windows = attribute(AXUIElementCreateApplication(app.processIdentifier), kAXWindowsAttribute) as? [AXUIElement], windows.count == 1, let box = rectangle(windows[0]) {
+                    preparation.app = app; preparation.start = start; preparation.window = windows[0]; preparation.windowBox = box
+                    preparation.receipt["owned_window_observed"] = true
+                    try preparation.requireWindow()
+                    break
+                }
+            }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        try preparation.requireWindow()
+        guard let app = preparation.app else { throw ProbeError.unavailable("owned_settings_window_not_observed") }
+        result["settings_owner_pid"] = Int(app.processIdentifier); result["settings_owner_start"] = preparation.start
+        result["pane"] = settingsInspectionTree(app, deadline: actionDeadline).1
+        result["screenshot_captured"] = try await focusPermissionScreenshot(context.screenshotPath, deadline: deadline - 0.35)
+        result["status"] = "inspected"
+    } catch {
+        result["failure_class"] = error is ProbeError ? "probe_refusal" : "native_exception"
+        if let value = error as? ProbeError, case .unavailable(let code) = value { result["refusal"] = code }
+    }
+    if preparation.window != nil {
+        do { try await preparation.close(deadline: deadline) }
+        catch { result["cleanup_failure_class"] = error is ProbeError ? "probe_refusal" : "native_exception" }
+    }
+    result["owned_window_observed"] = preparation.window != nil
+    result["owned_window_disappeared"] = preparation.receipt["owned_window_disappeared"] as? Bool ?? false
+    result["close_click_performed"] = preparation.receipt["close_click_performed"] as? Bool ?? false
+    result["settings_process_collected"] = false
+    result["elapsed_seconds"] = (try consentMonotonicTime()) - started
+    return result
+}
+
 @MainActor struct SettingsInspectionNode {
     let element: AXUIElement
     let role: String
@@ -767,6 +999,9 @@ struct TerminalAutomationContext: Decodable {
             "Application Notifications": "application_notifications", "Allow notifications": "allow_notifications",
             "Allow Notifications": "allow_notifications", "Notifications Off": "notifications_off", "Banners": "banners",
             "Alerts": "alerts", "None": "none", "Sound": "sound", "Sounds": "sound", "Focus": "focus",
+            "Screen Recording": "screen_recording", "Screen & System Audio Recording": "screen_system_audio_recording",
+            "Privacy & Security": "privacy_security", "ClaudeNotifier": "candidate_claude_notifier", "Agent Notifications": "candidate_agent_notifications",
+            "Quit & Reopen": "quit_reopen", "Later": "later", "Open System Settings": "open_system_settings", "Deny": "deny",
             "Do Not Disturb": "do_not_disturb", "Always": "always", "When Unlocked": "when_unlocked", "Never": "never"]
         for text in texts {
             if let tag = labels[text] { tags.insert(tag) }
@@ -1685,6 +1920,7 @@ final class ProductCapture: NSObject, SCStreamOutput, SCStreamDelegate, @uncheck
                 publish(["checks": checks, "foreground": foreground(), "desktop_qualified": false])
                 guard checks.values.allSatisfy({ $0 }) else { throw ProbeError.unavailable("native_observer_prerequisite_unavailable") }
             case "foreground": publish(foreground())
+            case "inspect-focus-screen-permission": publish(try await inspectFocusPermission(args))
             case "terminal-process-identity", "signal-owned-terminal-process":
                 guard args.count >= 2, let pid = Int32(args[1]), pid > 0 else {
                     throw ProbeError.unavailable("owned_terminal_pid_required")

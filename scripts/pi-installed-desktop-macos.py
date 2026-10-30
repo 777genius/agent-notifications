@@ -855,7 +855,9 @@ def global_settings_projection(value):
               "closed_global_settings_owner_receipt_required")
     labels = {"notifications", "notification_center", "application_notifications", "allow_notifications", "notifications_off",
               "banners", "alerts", "none", "sound", "focus", "do_not_disturb", "always", "when_unlocked", "never",
-              "mirroring_or_sharing", "display_sleeping", "screen_locked", "play_sound", "alert_style", "notifications_silenced"}
+              "mirroring_or_sharing", "display_sleeping", "screen_locked", "play_sound", "alert_style", "notifications_silenced",
+              "screen_recording", "screen_system_audio_recording", "privacy_security", "candidate_claude_notifier",
+              "candidate_agent_notifications", "quit_reopen", "later", "open_system_settings", "deny"}
     roles = {"AXApplication", "AXWindow", "AXGroup", "AXSplitGroup", "AXScrollArea", "AXOutline", "AXList", "AXRow", "AXStaticText",
              "AXButton", "AXCheckBox", "AXPopUpButton", "AXRadioButton", "AXRadioGroup", "AXToolbar", "AXScrollBar", "AXSlider",
              "AXTextField", "AXTable", "AXColumn", "AXCell", "AXImage", "AXHeading", "other"}
@@ -944,6 +946,89 @@ def presentation_preparation_admission(observer, evidence_root):
               "same_admitted_host_preparation_required")
     host.validate_running(prepared["after"], json.loads(command([observer, "notification-center-state"], timeout=2)))
     return admitted
+
+
+def focus_permission_projection(value):
+    required = {'scope', 'diagnostic_only', 'qualification_input', 'desktop_qualified', 'maximum_seconds', 'status',
+        'physical_open_settings_click', 'permission_control_action_performed', 'responsible_row_association',
+        'screenshot_child_collected', 'owned_window_observed', 'owned_window_disappeared', 'close_click_performed',
+        'settings_process_collected', 'elapsed_seconds'}
+    optional = {'settings_process_present_before', 'captured_helper_pid', 'captured_helper_start', 'dialog',
+        'settings_owner_pid', 'settings_owner_start', 'pane', 'screenshot_captured', 'failure_class', 'refusal', 'cleanup_failure_class'}
+    P.require(isinstance(value, dict) and required <= set(value) <= required | optional
+              and value['scope'] == 'original_click_screen_permission_inspection'
+              and value['diagnostic_only'] is True and value['qualification_input'] is False and value['desktop_qualified'] is False
+              and value['maximum_seconds'] == 6 and value['status'] in ('inspected', 'unavailable')
+              and value['permission_control_action_performed'] is False and value['settings_process_collected'] is False
+              and value['responsible_row_association'] == 'display_name_only_unverified'
+              and type(value['elapsed_seconds']) in (float, int) and 0 <= value['elapsed_seconds'] <= 6,
+              'closed_focus_permission_receipt_required')
+    for key in ('physical_open_settings_click', 'screenshot_child_collected', 'owned_window_observed', 'owned_window_disappeared',
+                'close_click_performed', 'settings_process_present_before', 'screenshot_captured'):
+        P.require(key not in value or type(value[key]) is bool, 'focus_permission_boolean_required')
+    for key in ('captured_helper_pid', 'settings_owner_pid'):
+        P.require(key not in value or type(value[key]) is int and value[key] > 0, 'focus_permission_pid_required')
+    for key in ('captured_helper_start', 'settings_owner_start'):
+        P.require(key not in value or isinstance(value[key], str) and re.fullmatch(r'[1-9][0-9]{0,19}:[0-9]{1,6}', value[key]),
+                  'focus_permission_birth_required')
+    for key in ('failure_class', 'cleanup_failure_class'):
+        P.require(key not in value or value[key] in ('probe_refusal', 'native_exception'), 'focus_permission_failure_class_required')
+    refusals = {'screen_dialog_inventory_unknown', 'screen_dialog_inventory_capped', 'screen_dialog_inventory_incomplete',
+        'screen_dialog_ambiguous', 'screen_dialog_owner_unverified', 'screen_snapshot_owned_path_required', 'screen_snapshot_path_exists',
+        'original_pinned_helper_required', 'original_helper_signature_required', 'signed_apple_settings_required',
+        'unique_settings_instance_required', 'screen_settings_preexisting_window', 'original_callback_helper_ambiguous',
+        'original_callback_helper_unavailable', 'original_focus_actors_changed', 'original_screen_dialog_unavailable',
+        'original_screen_dialog_changed', 'owned_settings_window_not_observed', 'original_owned_settings_window_changed',
+        'settings_owned_pointer_unavailable', 'settings_owned_hit_unavailable', 'settings_owned_click_refused'}
+    P.require('refusal' not in value or value['refusal'] in refusals and value.get('failure_class') == 'probe_refusal',
+              'focus_permission_closed_refusal_required')
+    if 'dialog' in value:
+        dialog = value['dialog']
+        P.require(isinstance(dialog, dict) and set(dialog) == {'owner_pid', 'owner_start', 'owner_bundle', 'owner_path',
+                  'apple_signature_verified', 'fixed_requester', 'fixed_body_matched', 'distinct_open_and_deny', 'open_bounds'}
+                  and type(dialog['owner_pid']) is int and dialog['owner_pid'] > 0
+                  and isinstance(dialog['owner_start'], str) and re.fullmatch(r'[1-9][0-9]{0,19}:[0-9]{1,6}', dialog['owner_start'])
+                  and isinstance(dialog['owner_bundle'], str) and re.fullmatch(r'com\.apple\.[A-Za-z0-9.-]{1,160}', dialog['owner_bundle'])
+                  and isinstance(dialog['owner_path'], str) and len(dialog['owner_path']) <= 512
+                  and dialog['owner_path'].startswith(('/System/Library/', '/System/Applications/')) and dialog['owner_path'].endswith('.app')
+                  and dialog['apple_signature_verified'] is True and dialog['fixed_requester'] == 'ClaudeNotifier'
+                  and dialog['fixed_body_matched'] is True and dialog['distinct_open_and_deny'] is True
+                  and isinstance(dialog['open_bounds'], list) and len(dialog['open_bounds']) == 4
+                  and all(type(x) in (int, float) and math.isfinite(x) for x in dialog['open_bounds']), 'focus_permission_dialog_required')
+    P.require(not value['physical_open_settings_click'] or {'dialog', 'captured_helper_pid', 'captured_helper_start'} <= set(value),
+              'focus_permission_original_dialog_and_helper_required')
+    if 'pane' in value:
+        global_settings_projection({'scope': 'readonly_global_notification_settings', 'diagnostic_only': True, 'qualification_input': False,
+            'desktop_qualified': False, 'maximum_seconds': 6, 'owner_pid': value.get('settings_owner_pid'),
+            'owner_start_identity': value.get('settings_owner_start'), 'owner_uid': os.getuid(), 'owner_bundle': 'com.apple.systempreferences',
+            'owner_path': '/System/Applications/System Settings.app', 'apple_signature_verified': True, 'settings_left_open': True,
+            'settings_present_before': [], 'opened_new_settings_instance': True, 'initial_tree': value['pane'],
+            'notifications_navigation_performed': False, 'observed_notifications_navigation_rows': 0, 'sidebar_scroll_performed': False,
+            'observed_notifications_sidebar_count': 0, 'elapsed_seconds': value['elapsed_seconds']})
+    return value
+
+
+def inspect_original_click_permission(observer, case_root, app, helper_hash, terminal, deadline, *, execute=command, now=time.monotonic):
+    """One diagnostic handoff consumes the original click deadline; no grant/focus."""
+    receipt = {'diagnostic_only': True, 'qualification_input': False, 'desktop_qualified': False}
+    try:
+        clock = time.get_clock_info('monotonic')
+        P.require(clock.implementation == 'mach_absolute_time()' and clock.monotonic and not clock.adjustable,
+                  'shared_focus_inspection_clock_required')
+        remaining = min(6, deadline - now())
+        P.require(remaining > 0, 'original_click_deadline_expired')
+        context = {'helperPath': str(app), 'helperSHA256': helper_hash, 'originPID': terminal.pid,
+            'originStart': terminal.process_start_identity, 'originExecutable': terminal.executable,
+            'clock': 'mach_absolute_time', 'deadlineMonotonic': min(deadline, now() + remaining),
+            'originalHelperBaselineEmpty': True, 'originalPhysicalClickObserved': True,
+            'screenshotPath': str(case_root / 'focus-permission-pane.png')}
+        body = execute([observer, 'inspect-focus-screen-permission', json.dumps(context)], timeout=remaining,
+                       env={**os.environ, 'PI_MACOS_FOCUS_INSPECTION_ADMITTED': '1'})
+        P.require(len(body) <= 256 * 1024, 'focus_permission_output_limit')
+        receipt['inspection'] = focus_permission_projection(json.loads(body))
+    except Exception as error:
+        receipt['failure_class'] = type(error).__name__
+    return receipt
 
 
 def presentation_preparation_projection(value):
@@ -1452,6 +1537,9 @@ def run(args):
         return {"artifact": screenshot.name, "sha256": P.sha(screenshot), "desktop_qualified": False}
 
     report["terminal_automation"] = []
+    inspect_click_permission = os.environ.get("PI_MACOS_INSPECT_CLICK_PERMISSION") == "1"
+    if inspect_click_permission:
+        report["click_permission_diagnostic_admission"] = presentation_preparation_admission(args.observer, args.report.parent)
 
     def launch_terminal(source):
         receipt = {"scope": "original_owned_terminal_applescript", "desktop_qualified": False}
@@ -1526,10 +1614,21 @@ def run(args):
                     webhook_received = True
                     terminal.close()
                     decoy.focus()
+                if inspect_click_permission and name == "completion":
+                    before_helpers = observer("helper-processes", str(app))
+                    P.require(before_helpers.get("installed_helper_pids") == [], "original_click_helper_baseline_not_empty")
+                click_deadline = time.monotonic() + 12
                 clicked = observer("click", P.COPY[expected])
+                timing["physical_click_returned_seconds"] = round(time.monotonic() - started, 3)
                 P.require(clicked["physical_mouse_click"] and clicked["matches"], "physical_product_banner_click_missing")
+                if inspect_click_permission and name == "completion":
+                    report["click_permission_diagnostic"] = inspect_original_click_permission(args.observer, case_root, app,
+                        report["helper"]["executable_sha256"], terminal, click_deadline)
+                    # Settings navigation is diagnosis only. Never count this
+                    # original click or a later fixture focus as a qualified case.
+                    raise RuntimeError("product_click_did_not_focus_exact_origin")
                 if click and name != "stale-origin":
-                    wait_for(terminal.is_front, "product_click_did_not_focus_exact_origin")
+                    wait_for(terminal.is_front, "product_click_did_not_focus_exact_origin", seconds=max(0, click_deadline - time.monotonic()))
                 else:
                     click_observation = observe_unchanged_focus(decoy, lambda: (case_root / "capture-stop").touch())
                 after = terminal.front()
@@ -1626,7 +1725,7 @@ def run(args):
             def retain():
                 retained = args.report.parent / ("case-" + name)
                 retained.mkdir(parents=True, exist_ok=True)
-                for filename in ("actual-product-banner.png", "native-output.s16le", "capture-ready.json", "failure-before-cleanup.png"):
+                for filename in ("actual-product-banner.png", "native-output.s16le", "capture-ready.json", "failure-before-cleanup.png", "focus-permission-pane.png"):
                     source = case_root / filename
                     if source.is_file() and not source.is_symlink() and source.stat().st_size <= 16 * 1024 * 1024:
                         shutil.copyfile(source, retained / filename)

@@ -37,6 +37,11 @@ on:
         type: boolean
         required: false
         default: false
+      inspect_click_permission:
+        description: Diagnose only the first original click's Screen Recording dialog and public Settings pane; never qualifies product delivery
+        type: boolean
+        required: false
+        default: false
       observer_only:
         description: Compile and observe native permissions before building the product
         type: boolean
@@ -84,6 +89,7 @@ jobs:
       CGO_ENABLED: '1'
       MACOSX_DEPLOYMENT_TARGET: '12.0'
       SOURCE_SHA: ${{ inputs.source_sha || github.event.pull_request.head.sha || github.sha }}
+      PI_MACOS_RUNNER_ENVIRONMENT: ${{ runner.environment }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -153,6 +159,19 @@ jobs:
         if: ${{ !inputs.observer_only }}
         with:
           go-version: '1.26.10'
+      - name: Admit only the explicitly selected original click permission diagnostic
+        if: ${{ inputs.inspect_click_permission }}
+        shell: bash
+        env:
+          DISPATCH: ${{ github.event_name }}
+          SERVICE_PREPARED: ${{ inputs.prepare_notification_center }}
+          PRESENTATION_PREPARED: ${{ inputs.prepare_notification_presentation }}
+          OBSERVER_ONLY: ${{ inputs.observer_only }}
+        run: |
+          test "$DISPATCH" = workflow_dispatch
+          test "$SERVICE_PREPARED" = true
+          test "$PRESENTATION_PREPARED" = true
+          test "$OBSERVER_ONLY" != true
       - name: Inspect public global Notifications settings with the real capture active
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.observer_only && inputs.hosted_observer && inputs.prepare_notification_center && !inputs.prepare_notification_presentation }}
         shell: bash
@@ -231,6 +250,9 @@ jobs:
       - name: Observe installed product completion question audio and physical click
         if: ${{ github.event_name == 'workflow_dispatch' && !inputs.observer_only }}
         shell: bash
+        env:
+          PI_MACOS_INSPECT_CLICK_PERMISSION: ${{ inputs.inspect_click_permission && '1' || '0' }}
+          PI_MACOS_NOTIFICATION_PRESENTATION_PREPARE: ${{ inputs.prepare_notification_presentation && '1' || '0' }}
         run: |
           set -euo pipefail
           root="$RUNNER_TEMP/TEST-pi-macos"
