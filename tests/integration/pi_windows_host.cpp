@@ -7,6 +7,9 @@
 #include <UIAutomation.h>
 #include <wtsapi32.h>
 #include <dwmapi.h>
+#include <wintrust.h>
+#include <softpub.h>
+#include <wincrypt.h>
 #include "pi_windows_audio_fixture.h"
 #include "navigation_windows_token_queries.h"
 #include <functiondiscoverykeys_devpkey.h>
@@ -26,6 +29,8 @@
 #pragma comment(lib, "Wtsapi32.lib")
 #pragma comment(lib, "Gdi32.lib")
 #pragma comment(lib, "Dwmapi.lib")
+#pragma comment(lib, "Wintrust.lib")
+#pragma comment(lib, "Crypt32.lib")
 
 using Microsoft::WRL::ComPtr;
 namespace fs = std::filesystem;
@@ -71,34 +76,163 @@ static std::vector<std::pair<std::wstring, std::string>> shellImages() {
         {base + L"\\SystemApps\\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\\ShellHost.exe", "cbs_shell_host"},
         {base + L"\\SystemApps\\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\\SearchHost.exe", "cbs_search_host"}};
 }
+static std::wstring inspectionFinalPath(HANDLE file) {
+    wchar_t path[32768]{};
+    const auto count = GetFinalPathNameByHandleW(file, path, 32768, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+    demand(count > 0 && count < 32768, "diagnostic canonical image unavailable");
+    std::wstring result(path, count);
+    if (result.starts_with(L"\\\\?\\")) result.erase(0, 4);
+    demand(result.size() <= 512, "diagnostic canonical image length bound");
+    return result;
+}
+static std::string inspectionUTF8(const std::wstring& value) {
+    const int size = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, value.data(), static_cast<int>(value.size()), nullptr, 0, nullptr, nullptr);
+    demand(size > 0 && size <= 2048, "diagnostic image encoding bound");
+    std::string result(size, 0);
+    demand(WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, value.data(), static_cast<int>(value.size()), result.data(), size, nullptr, nullptr) == size,
+           "diagnostic image encoding unavailable");
+    return result;
+}
+struct InspectionImage {
+    HANDLE file = INVALID_HANDLE_VALUE;
+    std::wstring path;
+    std::string rootKind = "redacted", hash;
+    LONG trustStatus = TRUST_E_NOSIGNATURE;
+    bool microsoft = false, verifiedStable = false;
+    explicit InspectionImage(const std::wstring& input) {
+        file = CreateFileW(input.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        demand(file != INVALID_HANDLE_VALUE, "diagnostic image open unavailable");
+        try {
+            path = inspectionFinalPath(file);
+            wchar_t windows[32768]{}; const auto length = GetWindowsDirectoryW(windows, 32768);
+            demand(length > 0 && length < 32768, "diagnostic Windows root unavailable");
+            HANDLE directory = CreateFileW(windows, FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+                                            FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+            demand(directory != INVALID_HANDLE_VALUE, "diagnostic Windows root open unavailable");
+            std::wstring base;
+            try { base = inspectionFinalPath(directory); } catch (...) { CloseHandle(directory); throw; }
+            CloseHandle(directory);
+            for (const auto& item : std::vector<std::pair<std::wstring, std::string>>{{base + L"\\System32\\", "system32"}, {base + L"\\SystemApps\\", "systemapps"}})
+                if (_wcsnicmp(path.c_str(), item.first.c_str(), item.first.size()) == 0) rootKind = item.second;
+            if (_wcsicmp(path.c_str(), (base + L"\\explorer.exe").c_str()) == 0) rootKind = "fixed_explorer";
+            demand(rootKind != "redacted", "diagnostic image outside protected Windows roots");
+            hash = currentHash();
+        } catch (...) { CloseHandle(file); file = INVALID_HANDLE_VALUE; throw; }
+    }
+    ~InspectionImage() { if (file != INVALID_HANDLE_VALUE) CloseHandle(file); }
+    std::string currentHash() {
+        LARGE_INTEGER size{}, zero{};
+        demand(GetFileSizeEx(file, &size) && size.QuadPart > 0 && size.QuadPart <= 64 * 1024 * 1024
+               && SetFilePointerEx(file, zero, nullptr, FILE_BEGIN), "diagnostic image size or seek unavailable");
+        std::vector<BYTE> bytes(static_cast<size_t>(size.QuadPart)); size_t offset = 0;
+        while (offset < bytes.size()) {
+            DWORD read = 0; const auto count = static_cast<DWORD>(std::min<size_t>(65536, bytes.size() - offset));
+            demand(ReadFile(file, bytes.data() + offset, count, &read, nullptr) && read == count, "diagnostic image read unavailable");
+            offset += read;
+        }
+        demand(inspectionFinalPath(file) == path, "diagnostic image canonical path changed");
+        return NavigationTokenTEST::digest(bytes.data(), static_cast<DWORD>(bytes.size()));
+    }
+    void verifyMicrosoft() {
+        WINTRUST_FILE_INFO info{}; info.cbStruct = sizeof info; info.pcwszFilePath = path.c_str(); info.hFile = file;
+        WINTRUST_DATA trust{}; trust.cbStruct = sizeof trust; trust.dwUIChoice = WTD_UI_NONE; trust.fdwRevocationChecks = WTD_REVOKE_NONE;
+        trust.dwUnionChoice = WTD_CHOICE_FILE; trust.pFile = &info; trust.dwStateAction = WTD_STATEACTION_VERIFY;
+        trust.dwProvFlags = WTD_CACHE_ONLY_URL_RETRIEVAL;
+        GUID action = WINTRUST_ACTION_GENERIC_VERIFY_V2;
+        const auto noInteractiveUser = reinterpret_cast<HWND>(INVALID_HANDLE_VALUE);
+        trustStatus = WinVerifyTrust(noInteractiveUser, &action, &trust);
+        // Signer O is obtained from the chain of this exact verified file, not
+        // from an unrelated certificate. No UI or network retrieval is allowed.
+        if (trustStatus == ERROR_SUCCESS && trust.hWVTStateData) {
+            const HMODULE module = GetModuleHandleW(L"wintrust.dll");
+            const auto provider = reinterpret_cast<decltype(&WTHelperProvDataFromStateData)>(GetProcAddress(module, "WTHelperProvDataFromStateData"));
+            const auto signer = reinterpret_cast<decltype(&WTHelperGetProvSignerFromChain)>(GetProcAddress(module, "WTHelperGetProvSignerFromChain"));
+            auto* data = provider ? provider(trust.hWVTStateData) : nullptr;
+            auto* chain = data && signer ? signer(data, 0, FALSE, 0) : nullptr;
+            if (chain && chain->csCertChain && chain->pasCertChain && chain->pasCertChain[0].pCert) {
+                wchar_t organization[256]{};
+                const auto count = CertGetNameStringW(chain->pasCertChain[0].pCert, CERT_NAME_ATTR_TYPE, 0,
+                    const_cast<char*>(szOID_ORGANIZATION_NAME), organization, 256);
+                microsoft = count > 1 && count < 256 && wcscmp(organization, L"Microsoft Corporation") == 0;
+            }
+        }
+        trust.dwStateAction = WTD_STATEACTION_CLOSE;
+        demand(WinVerifyTrust(noInteractiveUser, &action, &trust) == ERROR_SUCCESS, "diagnostic trust state close failed");
+        demand(currentHash() == hash, "diagnostic image changed during signature verification");
+        verifiedStable = trustStatus == ERROR_SUCCESS && microsoft;
+    }
+};
+struct InspectionActorFacts {
+    DWORD pid = 0, win32Error = 0, session = 0; ULONGLONG birth = 0;
+    bool running = false, tokenKnown = false, sameSID = false, sameAuth = false, sameSession = false, fixedName = false;
+    std::string refusal = "unknown", imageError = "none", imageRoot = "redacted", imageJSON = "null", basenameJSON = "null", hash;
+    LONG trustStatus = TRUST_E_NOSIGNATURE; bool microsoft = false, imageStable = false;
+};
 struct InspectionOwner {
     HANDLE process = nullptr; DWORD pid = 0; ULONGLONG birth = 0; std::string imageKind;
     std::wstring image;
-    explicit InspectionOwner(DWORD value) : pid(value) {
+    std::shared_ptr<InspectionActorFacts> observation;
+    std::unique_ptr<InspectionImage> diagnosticImage;
+    explicit InspectionOwner(DWORD value, std::shared_ptr<InspectionActorFacts> facts = {}) : pid(value), observation(std::move(facts)) {
+        if (observation) observation->pid = pid;
         process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, pid);
-        if (!process) throw "Shell provider process unavailable";
-        try { validate(true); } catch (...) { CloseHandle(process); process = nullptr; throw; }
+        if (!process) { if (observation) { observation->win32Error = GetLastError(); observation->refusal = "process_open_failed"; } throw "Shell provider process unavailable"; }
+        try { validate(true); if (observation) observation->refusal = "none"; }
+        catch (const char* reason) { if (observation) observation->refusal = reason; CloseHandle(process); process = nullptr; throw; }
+        catch (const NavigationTokenTEST::Failure& failure) {
+            if (observation) { observation->refusal = "token_query_failed"; observation->win32Error = failure.error; }
+            CloseHandle(process); process = nullptr; throw;
+        } catch (...) { if (observation) observation->refusal = "typed_query_exception"; CloseHandle(process); process = nullptr; throw; }
     }
     ~InspectionOwner() { if (process) CloseHandle(process); }
     void validate(bool initial = false) {
         demand(WaitForSingleObject(process, 0) == WAIT_TIMEOUT, "Shell provider exited");
+        if (observation) observation->running = true;
         FILETIME created{}, exited{}, kernel{}, used{};
-        demand(GetProcessTimes(process, &created, &exited, &kernel, &used), "Shell birth unavailable");
+        if (!GetProcessTimes(process, &created, &exited, &kernel, &used)) {
+            if (observation) observation->win32Error = GetLastError(); throw "Shell birth unavailable";
+        }
         const auto actualBirth = (static_cast<ULONGLONG>(created.dwHighDateTime) << 32) | created.dwLowDateTime;
+        if (observation) observation->birth = actualBirth;
         demand(actualBirth != 0 && (initial || actualBirth == birth), "Shell birth changed");
         wchar_t path[32768]{}; DWORD count = 32768;
-        demand(QueryFullProcessImageNameW(process, 0, path, &count) && count > 0 && count < 32768, "Shell image unavailable");
+        if (!QueryFullProcessImageNameW(process, 0, path, &count)) {
+            if (observation) observation->win32Error = GetLastError(); throw "Shell image unavailable";
+        }
+        demand(count > 0 && count < 32768, "Shell image length unavailable");
         auto known = shellImages(); const auto match = std::find_if(known.begin(), known.end(), [&](const auto& item) {
             return _wcsicmp(path, item.first.c_str()) == 0;
         });
-        demand(match != known.end() && (initial || _wcsicmp(path, image.c_str()) == 0), "Shell provider image not admitted");
+        if (initial && observation) {
+            observation->fixedName = match != known.end();
+            try {
+                diagnosticImage = std::make_unique<InspectionImage>(path);
+                observation->imageRoot = diagnosticImage->rootKind;
+                observation->imageJSON = NavigationTokenTEST::quoted(inspectionUTF8(diagnosticImage->path));
+                observation->basenameJSON = NavigationTokenTEST::quoted(inspectionUTF8(fs::path(diagnosticImage->path).filename().wstring()));
+                observation->hash = diagnosticImage->hash;
+                diagnosticImage->verifyMicrosoft();
+                observation->trustStatus = diagnosticImage->trustStatus; observation->microsoft = diagnosticImage->microsoft;
+            } catch (const char* reason) { observation->imageError = reason; }
+            if (diagnosticImage) { observation->trustStatus = diagnosticImage->trustStatus; observation->microsoft = diagnosticImage->microsoft;
+                observation->imageStable = diagnosticImage->verifiedStable; }
+        }
         NavigationTokenTEST::Token actual, own;
-        demand(OpenProcessToken(process, TOKEN_QUERY, &actual.handle)
-               && OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &own.handle), "Shell token unavailable");
+        if (!OpenProcessToken(process, TOKEN_QUERY, &actual.handle) || !OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &own.handle)) {
+            if (observation) observation->win32Error = GetLastError(); throw "Shell token unavailable";
+        }
         const auto a = NavigationTokenTEST::facts(actual.handle), b = NavigationTokenTEST::facts(own.handle);
+        if (observation) { observation->tokenKnown = true; observation->sameSID = a.sid == b.sid;
+            observation->sameAuth = a.auth == b.auth; observation->sameSession = a.session == b.session && a.session != 0; observation->session = a.session; }
         demand(a.sid == b.sid && a.auth == b.auth && a.session == b.session && a.session != 0, "Shell user authentication or session changed");
-        if (initial) { birth = actualBirth; image = path; imageKind = match->second; }
+        // This fallback exists only for the explicitly nonqualifying read-only
+        // inspection. It grants no Shell mutation or product authorization.
+        const bool diagnostic = observation && diagnosticImage && diagnosticImage->verifiedStable
+            && (diagnosticImage->rootKind == "system32" || diagnosticImage->rootKind == "systemapps");
+        demand((match != known.end() || diagnostic) && (initial || _wcsicmp(path, image.c_str()) == 0), "Shell provider image not admitted");
+        if (initial) { birth = actualBirth; image = path; imageKind = match != known.end() ? match->second : "observed_signed_windows_diagnostic"; }
     }
+    void verifyImageUnchanged() { if (diagnosticImage) demand(diagnosticImage->currentHash() == diagnosticImage->hash, "diagnostic image bytes changed"); }
 };
 static void inspectionFile(const fs::path& path, const std::string& value) {
     demand(!fs::exists(fs::symlink_status(path)) && value.size() <= 65536, "fresh bounded inspection receipt required");
@@ -167,6 +301,36 @@ static void inspectNotificationCenter(const fs::path& root) {
     inspectionScreenshot(root / L"notification-ui-before.bmp");
     const auto baseline = inspectionVisibleWindows();
     const HWND foregroundBefore = GetForegroundWindow();
+    ComPtr<IUIAutomation> automation; demand(SUCCEEDED(CoCreateInstance(CLSID_CUIAutomation, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&automation))), "inspection UIA unavailable");
+    ComPtr<IUIAutomationTreeWalker> walker; demand(SUCCEEDED(automation->get_ControlViewWalker(&walker)), "inspection walker unavailable");
+    unsigned uiaDiscoveryVisited = 0, uiaDiscoveryErrors = 0;
+    auto visibleUIARoots = [&]() {
+        std::vector<ComPtr<IUIAutomationElement>> result;
+        ComPtr<IUIAutomationElement> desktop, child;
+        demand(SUCCEEDED(automation->GetRootElement(&desktop)) && desktop
+               && SUCCEEDED(walker->GetFirstChildElement(desktop.Get(), &child)), "inspection UIA desktop roots unavailable");
+        unsigned thisPass = 0;
+        while (child) {
+            budget();
+            if (thisPass == 32 || uiaDiscoveryVisited == 256) { ++uiaDiscoveryErrors; break; }
+            ++thisPass; ++uiaDiscoveryVisited;
+            BOOL offscreen = TRUE; RECT box{};
+            if (FAILED(child->get_CurrentIsOffscreen(&offscreen))) ++uiaDiscoveryErrors;
+            else if (!offscreen) {
+                if (FAILED(child->get_CurrentBoundingRectangle(&box))) ++uiaDiscoveryErrors;
+                else if (box.right > box.left && box.bottom > box.top && box.right > 0 && box.bottom > 0
+                    && box.left < GetSystemMetrics(SM_CXSCREEN) && box.top < GetSystemMetrics(SM_CYSCREEN)) result.push_back(child);
+            }
+            ComPtr<IUIAutomationElement> next;
+            if (FAILED(walker->GetNextSiblingElement(child.Get(), &next))) { ++uiaDiscoveryErrors; break; }
+            child = next;
+        }
+        return result;
+    };
+    const auto baselineUIA = visibleUIARoots();
+    auto sameElement = [&](IUIAutomationElement* a, IUIAutomationElement* b) {
+        BOOL same = FALSE; demand(SUCCEEDED(automation->CompareElements(a, b, &same)), "inspection UIA identity unavailable"); return same != FALSE;
+    };
     const auto prefix = "{\"scope\":\"public_notification_center_inspection_only\",\"product_executed\":false,\"qualification_input\":false,\"settings_writes\":0,\"native_show_attempts\":0";
     inspectionFile(root / L"notification-ui-intent.json", std::string(prefix) + ",\"explorer_pid\":" + std::to_string(shellPID)
         + ",\"explorer_birth\":\"" + std::to_string(explorer.birth) + "\",\"one_win_n_chord_intended\":true}");
@@ -189,23 +353,43 @@ static void inspectNotificationCenter(const fs::path& root) {
     inspectionFile(root / L"notification-ui-input.json", std::string(prefix) + ",\"win_n_chord_attempts\":1,\"accepted_key_events\":"
         + std::to_string(keys.accepted) + ",\"key_release_unknown\":" + (keys.releaseUnknown ? "true" : "false") + "}");
     demand(accepted && !keys.releaseUnknown, "single notification chord was not collected");
+    std::vector<std::shared_ptr<InspectionActorFacts>> actors;
     std::vector<std::unique_ptr<InspectionOwner>> owners;
     auto owner = [&](DWORD pid) -> InspectionOwner* {
         for (const auto& held : owners) if (held->pid == pid) { held->validate(); return held.get(); }
         demand(owners.size() < 8, "inspection provider bound");
-        owners.push_back(std::make_unique<InspectionOwner>(pid)); return owners.back().get();
+        demand(actors.size() < 16, "inspection actor facts bound");
+        auto facts = std::make_shared<InspectionActorFacts>(); actors.push_back(facts);
+        owners.push_back(std::make_unique<InspectionOwner>(pid, facts)); return owners.back().get();
     };
-    struct Surface { HWND window; DWORD pid; ULONGLONG birth, firstSeen, lastSeen; unsigned samples; };
+    struct Surface { HWND window; DWORD pid; ULONGLONG birth, firstSeen, lastSeen; unsigned samples; ComPtr<IUIAutomationElement> element; bool uia; };
     std::vector<Surface> surfaces;
     std::vector<DWORD> foreignPIDs;
     unsigned discoveryScans = 0, discoveryErrors = 0, visibilityUnknown = baseline.unknown;
     bool discoveryComplete = baseline.unknown == 0;
     const auto discoveryDeadline = std::min(deadline, started + 12000);
-    ULONGLONG lastArrival = GetTickCount64();
+    ULONGLONG nextUIAPass = GetTickCount64(); unsigned uiaPasses = 0;
+    std::string discoveryFailure = "none";
+    auto observe = [&](ComPtr<IUIAutomationElement> element, HWND window, DWORD pid, bool uia) {
+        if (!pid || std::find(foreignPIDs.begin(), foreignPIDs.end(), pid) != foreignPIDs.end()) return;
+        InspectionOwner* held = nullptr;
+        try { held = owner(pid); } catch (...) {
+            demand(foreignPIDs.size() < 256, "inspection rejected provider bound"); foreignPIDs.push_back(pid); return;
+        }
+        const auto now = GetTickCount64(); budget();
+        const auto found = std::find_if(surfaces.begin(), surfaces.end(), [&](const auto& value) { return sameElement(value.element.Get(), element.Get()); });
+        if (found == surfaces.end()) {
+            if (surfaces.size() == 4) { discoveryComplete = false; ++discoveryErrors; return; }
+            surfaces.push_back({window, pid, held->birth, now - started, now - started, 1, element, uia});
+        } else {
+            demand(found->pid == pid && found->birth == held->birth, "inspection surface identity changed");
+            found->lastSeen = now - started; ++found->samples; found->uia = found->uia || uia;
+        }
+    };
     // SendInput acceptance is not a Shell handoff. Observe newly visible real
     // Shell surfaces instead of treating a transient Progman foreground as the
     // panel. All roots share the original deadline and census/output caps.
-    while (GetTickCount64() < discoveryDeadline && discoveryScans < 120) {
+    try { while (GetTickCount64() < discoveryDeadline && discoveryScans < 120) {
         ++discoveryScans; budget(); explorer.validate(); inspectionDesktop();
         demand(GetShellWindow() == shell, "Explorer window changed during arrival");
         const auto visible = inspectionVisibleWindows();
@@ -214,33 +398,38 @@ static void inspectNotificationCenter(const fs::path& root) {
         for (const auto window : visible.windows) {
             if (window == shell || std::find(baseline.windows.begin(), baseline.windows.end(), window) != baseline.windows.end()) continue;
             DWORD pid = 0; GetWindowThreadProcessId(window, &pid);
-            if (!pid || std::find(foreignPIDs.begin(), foreignPIDs.end(), pid) != foreignPIDs.end()) continue;
-            InspectionOwner* held = nullptr;
-            try { held = owner(pid); } catch (...) {
-                demand(foreignPIDs.size() < 256, "inspection rejected provider bound");
-                foreignPIDs.push_back(pid); continue;
-            }
-            const auto now = GetTickCount64(); budget();
-            const auto found = std::find_if(surfaces.begin(), surfaces.end(), [&](const auto& value) { return value.window == window; });
-            if (found == surfaces.end()) {
-                if (surfaces.size() == 4) { discoveryComplete = false; ++discoveryErrors; continue; }
-                surfaces.push_back({window, pid, held->birth, now - started, now - started, 1}); lastArrival = now;
-            } else {
-                demand(found->pid == pid && found->birth == held->birth, "inspection surface identity changed");
-                found->lastSeen = now - started; ++found->samples;
-            }
+            ComPtr<IUIAutomationElement> element;
+            if (SUCCEEDED(automation->ElementFromHandle(window, &element)) && element) observe(element, window, pid, false);
+            else { ++discoveryErrors; discoveryComplete = false; }
         }
-        // Allow the actual asynchronous popup to settle; no extra shortcut or
-        // guessed control is used. Missing/competing surfaces remain diagnostic.
-        if (!surfaces.empty() && GetTickCount64() - started >= 3000 && GetTickCount64() - lastArrival >= 500) break;
+        if (GetTickCount64() >= nextUIAPass && uiaPasses < 24 && uiaDiscoveryVisited < 256) {
+            ++uiaPasses;
+            // EnumWindows excludes immersive application roots on Windows 8+.
+            // A bounded UIA desktop-child inventory observes those actual roots.
+            for (const auto& element : visibleUIARoots()) {
+                if (std::any_of(baselineUIA.begin(), baselineUIA.end(), [&](const auto& before) { return sameElement(before.Get(), element.Get()); })) continue;
+                UIA_HWND handle{}; int pid = 0;
+                if (SUCCEEDED(element->get_CurrentNativeWindowHandle(&handle)) && SUCCEEDED(element->get_CurrentProcessId(&pid)) && pid > 0
+                    && reinterpret_cast<HWND>(handle) != shell) observe(element, reinterpret_cast<HWND>(handle), static_cast<DWORD>(pid), true);
+                else { ++discoveryErrors; discoveryComplete = false; }
+            }
+            nextUIAPass = GetTickCount64() + 500;
+        }
         Sleep(100);
+    } } catch (const char* reason) { discoveryFailure = reason; ++discoveryErrors; discoveryComplete = false; }
+    catch (...) { discoveryFailure = "typed_discovery_exception"; ++discoveryErrors; discoveryComplete = false; }
+    bool afterScreenshot = false;
+    if (GetTickCount64() < deadline) {
+        try { inspectionScreenshot(root / L"notification-ui-after.bmp"); afterScreenshot = true; }
+        catch (...) { ++discoveryErrors; discoveryComplete = false; }
     }
-    budget(); inspectionScreenshot(root / L"notification-ui-after.bmp");
     const HWND foregroundAfterArrival = GetForegroundWindow();
-    ComPtr<IUIAutomation> automation; demand(SUCCEEDED(CoCreateInstance(CLSID_CUIAutomation, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&automation))), "inspection UIA unavailable");
-    ComPtr<IUIAutomationTreeWalker> walker; demand(SUCCEEDED(automation->get_ControlViewWalker(&walker)), "inspection walker unavailable");
-    unsigned visited = 0, totalVisited = 0, skipped = 0, errors = discoveryErrors;
-    bool complete = discoveryComplete && surfaces.size() == 1; std::string rows, roots;
+    DWORD foregroundPID = 0; GetWindowThreadProcessId(foregroundAfterArrival, &foregroundPID);
+    if (GetTickCount64() < deadline && foregroundPID && std::find(foreignPIDs.begin(), foreignPIDs.end(), foregroundPID) == foreignPIDs.end()) {
+        try { owner(foregroundPID); } catch (...) { discoveryComplete = false; }
+    }
+    unsigned visited = 0, totalVisited = uiaDiscoveryVisited, skipped = 0, errors = discoveryErrors + uiaDiscoveryErrors;
+    bool complete = discoveryComplete && !uiaDiscoveryErrors && surfaces.size() == 1; std::string rows, roots;
     std::function<void(ComPtr<IUIAutomationElement>, unsigned, int)> walk;
     walk = [&](ComPtr<IUIAutomationElement> node, unsigned depth, int parent) {
         budget(); demand(depth <= 12 && visited < 128 && totalVisited++ < 512, "inspection census bound");
@@ -252,15 +441,16 @@ static void inspectNotificationCenter(const fs::path& root) {
                && SUCCEEDED(node->get_CurrentIsOffscreen(&offscreen)) && SUCCEEDED(node->get_CurrentBoundingRectangle(&bounds)), "inspection fixed properties unavailable");
         BSTR id = nullptr, klass = nullptr, name = nullptr;
         demand(SUCCEEDED(node->get_CurrentAutomationId(&id)), "inspection automation id unavailable");
-        const auto automationID = inspectionText(id);
+        auto automationID = inspectionText(id);
         demand(SUCCEEDED(node->get_CurrentClassName(&klass)), "inspection class unavailable");
-        const auto className = inspectionText(klass);
+        auto className = inspectionText(klass);
         demand(SUCCEEDED(node->get_CurrentName(&name)), "inspection name query unavailable");
         const std::wstring nameValue = name && SysStringLen(name) <= 128 ? name : L""; if (name) SysFreeString(name);
         std::string publicName = "null";
-        for (const auto label : {L"Notifications", L"Do not disturb", L"Do not disturb on", L"Do not disturb off",
+        for (const auto label : {L"Notifications", L"Notification Center", L"Do not disturb", L"Do not disturb on", L"Do not disturb off",
                  L"Do not disturb is on", L"Do not disturb is off", L"Turn on do not disturb", L"Turn off do not disturb"})
             if (nameValue == label) { BSTR copy = SysAllocString(label); publicName = inspectionText(copy); break; }
+        if (held->imageKind == "observed_signed_windows_diagnostic" && publicName == "null") { automationID = "null"; className = "null"; }
         SAFEARRAY* runtime = nullptr; demand(SUCCEEDED(node->GetRuntimeId(&runtime)) && runtime, "inspection runtime id unavailable");
         LONG lo = 0, hi = -1; VARTYPE variant = VT_EMPTY;
         const bool arrayValid = SafeArrayGetDim(runtime) == 1 && SUCCEEDED(SafeArrayGetVartype(runtime, &variant)) && variant == VT_I4
@@ -281,7 +471,7 @@ static void inspectNotificationCenter(const fs::path& root) {
             + ",\"public_name\":" + publicName + ",\"enabled\":" + (enabled ? "true" : "false") + ",\"offscreen\":" + (offscreen ? "true" : "false")
             + ",\"bounds\":[" + std::to_string(bounds.left) + ',' + std::to_string(bounds.top) + ',' + std::to_string(bounds.right) + ',' + std::to_string(bounds.bottom)
             + "],\"runtime_id\":" + runtimeJSON + ",\"toggle_state\":" + (toggleKnown ? std::to_string(state) : "null") + ",\"toggle_pattern_hresult\":" + std::to_string(pattern) + "}";
-        demand(rows.size() + row.size() <= 60000, "inspection output bound");
+        demand(rows.size() + row.size() <= 45000, "inspection output bound");
         if (!rows.empty()) rows += ','; rows += row;
         held->validate(); budget();
         ComPtr<IUIAutomationElement> child; demand(SUCCEEDED(walker->GetFirstChildElement(node.Get(), &child)), "inspection child walk failed");
@@ -291,39 +481,64 @@ static void inspectNotificationCenter(const fs::path& root) {
     for (const auto& surface : surfaces) {
         bool current = false;
         try {
-            budget(); DWORD actualPID = 0; GetWindowThreadProcessId(surface.window, &actualPID);
+            budget(); DWORD actualPID = 0; if (surface.window) GetWindowThreadProcessId(surface.window, &actualPID);
             auto* held = owner(surface.pid);
             DWORD cloaked = 0;
-            current = IsWindow(surface.window) && IsWindowVisible(surface.window) && actualPID == surface.pid
-                && SUCCEEDED(DwmGetWindowAttribute(surface.window, DWMWA_CLOAKED, &cloaked, sizeof cloaked)) && !cloaked
+            BOOL offscreen = TRUE; int rootPID = 0; UIA_HWND actualHandle{};
+            current = SUCCEEDED(surface.element->get_CurrentProcessId(&rootPID)) && rootPID == static_cast<int>(surface.pid)
+                && SUCCEEDED(surface.element->get_CurrentIsOffscreen(&offscreen)) && !offscreen
+                && SUCCEEDED(surface.element->get_CurrentNativeWindowHandle(&actualHandle)) && reinterpret_cast<HWND>(actualHandle) == surface.window
+                && (!surface.window || (IsWindow(surface.window) && IsWindowVisible(surface.window) && actualPID == surface.pid
+                    && SUCCEEDED(DwmGetWindowAttribute(surface.window, DWMWA_CLOAKED, &cloaked, sizeof cloaked)) && !cloaked))
                 && held->birth == surface.birth && surface.samples >= 2;
             demand(current, "inspection surface no longer stable");
-            ComPtr<IUIAutomationElement> element;
-            demand(SUCCEEDED(automation->ElementFromHandle(surface.window, &element)) && element, "observed Shell surface UIA unavailable");
-            int rootPID = 0;
-            demand(SUCCEEDED(element->get_CurrentProcessId(&rootPID)) && rootPID == static_cast<int>(surface.pid), "inspection root provider changed");
-            walk(element, 0, -1);
-            DWORD finalPID = 0; GetWindowThreadProcessId(surface.window, &finalPID);
-            held->validate(); budget();
-            current = IsWindowVisible(surface.window) && finalPID == surface.pid
-                && SUCCEEDED(DwmGetWindowAttribute(surface.window, DWMWA_CLOAKED, &cloaked, sizeof cloaked)) && !cloaked;
+            held->verifyImageUnchanged(); budget();
+            walk(surface.element, 0, -1);
+            DWORD finalPID = 0; if (surface.window) GetWindowThreadProcessId(surface.window, &finalPID);
+            held->validate(); held->verifyImageUnchanged(); budget();
+            current = SUCCEEDED(surface.element->get_CurrentProcessId(&rootPID)) && rootPID == static_cast<int>(surface.pid)
+                && SUCCEEDED(surface.element->get_CurrentIsOffscreen(&offscreen)) && !offscreen
+                && SUCCEEDED(surface.element->get_CurrentNativeWindowHandle(&actualHandle)) && reinterpret_cast<HWND>(actualHandle) == surface.window
+                && (!surface.window || (IsWindowVisible(surface.window) && finalPID == surface.pid
+                    && SUCCEEDED(DwmGetWindowAttribute(surface.window, DWMWA_CLOAKED, &cloaked, sizeof cloaked)) && !cloaked));
             demand(current, "inspection surface disappeared during census");
         } catch (...) { ++errors; complete = false; current = false; }
         if (!roots.empty()) roots += ',';
         roots += "{\"hwnd\":" + std::to_string(reinterpret_cast<uintptr_t>(surface.window)) + ",\"provider_pid\":" + std::to_string(surface.pid)
             + ",\"provider_birth\":\"" + std::to_string(surface.birth) + "\",\"visible_before_chord\":false,\"first_seen_ms\":" + std::to_string(surface.firstSeen)
             + ",\"last_seen_ms\":" + std::to_string(surface.lastSeen) + ",\"observed_samples\":" + std::to_string(surface.samples)
+            + ",\"discovered_via_uia\":" + (surface.uia ? "true" : "false")
             + ",\"foreground_at_arrival_end\":" + (foregroundAfterArrival == surface.window ? "true" : "false")
             + ",\"stable_through_census\":" + (current ? "true" : "false") + "}";
     }
-    try { explorer.validate(); inspectionDesktop(); for (const auto& held : owners) held->validate(); }
+    bool finalActorsAndDesktopValidated = false;
+    try { explorer.validate(); inspectionDesktop(); for (const auto& held : owners) held->validate(); finalActorsAndDesktopValidated = true; }
     catch (...) { ++errors; complete = false; }
     if (GetTickCount64() >= deadline) complete = false;
+    std::string actorJSON; bool actorFactsCapped = false;
+    for (const auto& actor : actors) {
+        const std::string row = "{\"provider_pid\":" + std::to_string(actor->pid) + ",\"provider_birth\":\"" + std::to_string(actor->birth)
+            + "\",\"running_observed\":" + (actor->running ? "true" : "false") + ",\"fixed_name_admitted\":" + (actor->fixedName ? "true" : "false")
+            + ",\"refusal\":" + NavigationTokenTEST::quoted(actor->refusal) + ",\"query_win32_error\":" + std::to_string(actor->win32Error)
+            + ",\"token_facts_known\":" + (actor->tokenKnown ? "true" : "false") + ",\"same_user_sid\":" + (actor->sameSID ? "true" : "false")
+            + ",\"same_authentication\":" + (actor->sameAuth ? "true" : "false") + ",\"same_session\":" + (actor->sameSession ? "true" : "false")
+            + ",\"token_session\":" + std::to_string(actor->session) + ",\"canonical_image_root\":" + NavigationTokenTEST::quoted(actor->imageRoot)
+            + ",\"canonical_windows_image\":" + actor->imageJSON + ",\"image_basename\":" + actor->basenameJSON + ",\"image_sha256\":" + NavigationTokenTEST::quoted(actor->hash)
+            + ",\"image_query_error\":" + NavigationTokenTEST::quoted(actor->imageError) + ",\"winverifytrust_status\":" + std::to_string(actor->trustStatus)
+            + ",\"verified_signer_microsoft_organization\":" + (actor->microsoft ? "true" : "false")
+            + ",\"signature_image_stable\":" + (actor->imageStable ? "true" : "false") + ",\"diagnostic_only\":true,\"mutation_authorized\":false}";
+        if (actorJSON.size() + row.size() > 12000) { actorFactsCapped = true; complete = false; break; }
+        if (!actorJSON.empty()) actorJSON += ','; actorJSON += row;
+    }
     std::ostringstream receipt;
     receipt << prefix << ",\"status\":\"unqualified_selector_inventory_only\",\"walk_completed\":" << (complete ? "true" : "false")
         << ",\"visited\":" << visited << ",\"total_visited\":" << totalVisited << ",\"skipped_providers\":" << skipped << ",\"errors\":" << errors
         << ",\"elapsed_ms\":" << GetTickCount64() - started << ",\"baseline_visible_windows\":" << baseline.windows.size()
         << ",\"visibility_unknown_samples\":" << visibilityUnknown << ",\"rejected_provider_count\":" << foreignPIDs.size()
+        << ",\"uia_discovery_visited\":" << uiaDiscoveryVisited << ",\"uia_discovery_passes\":" << uiaPasses
+        << ",\"discovery_failure\":" << NavigationTokenTEST::quoted(discoveryFailure) << ",\"after_screenshot_captured\":" << (afterScreenshot ? "true" : "false")
+        << ",\"initially_validated_input_desktop\":\"Default\",\"initially_validated_station\":\"WinSta0\""
+        << ",\"final_actors_and_desktop_validated\":" << (finalActorsAndDesktopValidated ? "true" : "false") << ",\"actor_facts_capped\":" << (actorFactsCapped ? "true" : "false")
         << ",\"discovery_scans\":" << discoveryScans << ",\"surface_identity_is_not_control_identity\":true,\"surfaces_ambiguous\":" << (surfaces.size() > 1 ? "true" : "false")
         << ",\"foreground_before_hwnd\":" << reinterpret_cast<uintptr_t>(foregroundBefore)
         << ",\"foreground_after_arrival_hwnd\":" << reinterpret_cast<uintptr_t>(foregroundAfterArrival)
@@ -332,7 +547,7 @@ static void inspectNotificationCenter(const fs::path& root) {
     for (size_t index = 0; index < baseline.windows.size(); ++index) {
         if (index) receipt << ','; receipt << reinterpret_cast<uintptr_t>(baseline.windows[index]);
     }
-    receipt << "],\"surfaces\":[" << roots << "],\"rows\":[" << rows << "]}";
+    receipt << "],\"surfaces\":[" << roots << "],\"observed_providers\":[" << actorJSON << "],\"rows\":[" << rows << "]}";
     demand(receipt.str().size() <= 65536, "inspection total receipt bound");
     std::cout << receipt.str() << '\n';
 }

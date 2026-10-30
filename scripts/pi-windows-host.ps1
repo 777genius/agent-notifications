@@ -116,6 +116,42 @@ if ($InspectNotificationCenterOnly) {
         foreach ($verified in $verifiedShells) {
             if ((Hash (Join-Path $env:WINDIR $shellPaths[$verified.image_kind])) -cne $verified.image_sha256) { throw 'Admitted Shell image changed during inspection' }
         }
+        # Independent post-observation image evidence only. This does not admit
+        # an actor, retry a census, authorize settings changes, or run a sender.
+        $inventoryFile = Get-Item -LiteralPath "$Root/notification-ui.json"
+        if ($inventoryFile.Length -gt 65536) { throw 'Observed UI inventory exceeds its bound' }
+        $inventory = Get-Content -LiteralPath $inventoryFile.FullName -Raw | ConvertFrom-Json
+        if (@($inventory.observed_providers).Count -gt 16) { throw 'Observed UI actor evidence exceeds its bound' }
+        $observedImages = @()
+        foreach ($actor in @($inventory.observed_providers)) {
+            $imageEvidence = @{ provider_pid=$actor.provider_pid; provider_birth=$actor.provider_birth;
+                diagnostic_only=$true; mutation_authorized=$false; image_root=$actor.canonical_image_root;
+                canonical_windows_image=$null; image_sha256=$null; native_hash_matches=$false;
+                authenticode_status='unavailable'; verified_microsoft=$false; query_error_class=$null }
+            try {
+                if (!$actor.canonical_windows_image) { throw 'Observed image was redacted or unavailable' }
+                $image = [IO.Path]::GetFullPath([string]$actor.canonical_windows_image)
+                if ($image.Length -gt 512 -or !($image.StartsWith((Join-Path $env:WINDIR 'System32\'), [StringComparison]::OrdinalIgnoreCase) -or
+                    $image.StartsWith((Join-Path $env:WINDIR 'SystemApps\'), [StringComparison]::OrdinalIgnoreCase) -or
+                    $image.Equals((Join-Path $env:WINDIR 'explorer.exe'), [StringComparison]::OrdinalIgnoreCase))) { throw 'Observed image outside protected roots' }
+                $file = Get-Item -LiteralPath $image
+                if (!$file.PSIsContainer -and $file.Length -gt 0 -and $file.Length -le 67108864) {
+                    $imageEvidence.canonical_windows_image = $image
+                    $beforeHash = Hash $image
+                    $signature = Get-AuthenticodeSignature -LiteralPath $image
+                    $afterHash = Hash $image
+                    $imageEvidence.image_sha256 = $afterHash
+                    $imageEvidence.native_hash_matches = $beforeHash -ceq $afterHash -and $afterHash -ceq $actor.image_sha256
+                    $imageEvidence.authenticode_status = $signature.Status.ToString()
+                    $imageEvidence.verified_microsoft = $imageEvidence.native_hash_matches -and $signature.Status -eq 'Valid' -and
+                        $signature.SignerCertificate.Subject -match '(?:^|,\s*)O=Microsoft Corporation(?:,|$)'
+                } else { throw 'Observed image file bound unavailable' }
+            } catch { $imageEvidence.query_error_class = $_.Exception.GetType().Name }
+            $observedImages += $imageEvidence
+        }
+        @{ scope='readonly_observed_windows_image_evidence'; diagnostic_only=$true; mutation_authorized=$false;
+           product_executed=$false; qualification_input=$false; observed_images=$observedImages } |
+            ConvertTo-Json -Depth 5 | Set-Content -LiteralPath "$Root/notification-ui-observed-images.json" -Encoding utf8NoBOM
     } catch { $primaryInspectionFailure = $_ }
     finally {
         if ($probe) {
