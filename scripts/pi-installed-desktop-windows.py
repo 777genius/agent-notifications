@@ -24,6 +24,9 @@ import wave
 
 REPO = Path(__file__).resolve().parents[1]
 CASES = ("completion", "question", "sound-off", "click-off", "desktop-off", "stale-origin")
+CAPTURE_BUDGET_SECONDS = 45
+# One 20ms inventory per interval, plus bounded descendant verification scans.
+PROCESS_WATCH_SCAN_LIMIT = CAPTURE_BUDGET_SECONDS * 50 + 65
 POWERSHELL_LAUNCHER = '''param([Parameter(Mandatory=$true)][string]$Spec)
 $ErrorActionPreference = 'Stop'
 $inputSpec = Get-Content -LiteralPath $Spec -Raw | ConvertFrom-Json
@@ -258,7 +261,7 @@ def start_process_watcher(origin, notifier_image, root, deadline, helpers, *, no
     ticks.argtypes, ticks.restype = (), ctypes.c_ulonglong
     native_now = ticks()
     remaining_ms = int((deadline - now()) * 1000)
-    P.require(0 < remaining_ms <= 30000, "process_watch_original_deadline_required")
+    P.require(0 < remaining_ms <= CAPTURE_BUDGET_SECONDS * 1000, "process_watch_original_deadline_required")
     native_deadline = native_now + remaining_ms
     P.require(root.is_absolute() and root.is_dir() and root.resolve(strict=True) == root
               and root == origin.root.parent, "process_watch_owned_case_root_required")
@@ -308,8 +311,8 @@ def process_timeline(raw):
               and value["misses_remain_unknown"] is True, "process_watch_receipt_invalid")
     P.require(value["stop_reason"] in ("stop_requested", "deadline", "scan_bound", "observation_refused")
               and type(value["elapsed_ms"]) is int and 0 <= value["elapsed_ms"] <= 60000
-              and type(value["inventory_scans"]) is int and 0 <= value["inventory_scans"] <= 1501
-              and type(value["missed_candidates"]) is int and 0 <= value["missed_candidates"] <= 65536 * 1501
+              and type(value["inventory_scans"]) is int and 0 <= value["inventory_scans"] <= PROCESS_WATCH_SCAN_LIMIT
+              and type(value["missed_candidates"]) is int and 0 <= value["missed_candidates"] <= 65536 * PROCESS_WATCH_SCAN_LIMIT
               and isinstance(value["processes"], list) and 1 <= len(value["processes"]) <= 64,
               "process_watch_receipt_bound")
     roles = {"original_pi", "direct_candidate", "candidate_descendant", "system_powershell_descendant", "other_descendant"}
@@ -740,8 +743,8 @@ def run(args):
                 P.require(ready.get("ready") is True, "actual_audio_capture_not_ready")
                 P.require(ready.get("audio_route") == report["audio_capture_route"], "native_capture_readiness_route_changed")
                 capture_started = time.monotonic()
-                case_deadline = capture_started + 30
-                timing = {"case": name, "scope": "diagnostic_only", "capture_budget_seconds": 30}
+                case_deadline = capture_started + CAPTURE_BUDGET_SECONDS
+                timing = {"case": name, "scope": "diagnostic_only", "capture_budget_seconds": CAPTURE_BUDGET_SECONDS}
                 report.setdefault("toast_observation_timings", []).append(timing)
                 watcher = start_toast_watcher(native, toast_title, P.COPY[event], case_root, case_deadline, helpers)
                 timing["early_watcher_ready_seconds"] = round(time.monotonic() - capture_started, 3)
@@ -749,13 +752,19 @@ def run(args):
                 require_process_watcher_ready(process_watcher)
                 timing["process_watcher_ready_seconds"] = round(time.monotonic() - capture_started, 3)
                 if name == "question":
-                    native.focus(origin.window); native.type(origin.window, "/TEST-dialog")
+                    native.focus(origin.window)
+                    webhook_deadline = time.monotonic() + 25
+                    native.type(origin.window, "/TEST-dialog")
                 else:
                     wait_for(lambda: bool(provider.requests), "native_pi_model_request_missing")
                 native.focus(distractor.window)
                 timing["provider_release_seconds"] = round(time.monotonic() - capture_started, 3)
+                if name != "question":
+                    webhook_deadline = time.monotonic() + 25
                 provider.release.set()
-                sink.wait(event)
+                # The trigger precedes Go admission. Observe its 20s product
+                # budget with a fixed margin, never renewed after typing/focus.
+                sink.wait(event, timeout=max(0, min(webhook_deadline, case_deadline) - time.monotonic()))
                 timing["webhook_received_seconds"] = round(time.monotonic() - capture_started, 3)
                 image = case_root / "actual-product-banner.bmp"
                 click_observation = None
