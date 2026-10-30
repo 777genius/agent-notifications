@@ -243,8 +243,8 @@ def run(args):
             started = time.monotonic()
             row["phase"] = "natural_timeout" if action == "timeout" else "original_child_cancellation"
             if action == "timeout":
-                # Production HTTP client timeout is 10s, below Pi's 15s consumer
-                # and 16s producer bounds. Keep the response held; send no control.
+                # Production HTTP client timeout is 10s, below Pi's 20s consumer
+                # and 21s producer bounds. Keep the response held; send no control.
                 N.wait_for(lambda: all(process_collected(identity) for identity in owned), seconds=13)
                 uptime = float(Path("/proc/uptime").read_text().split()[0])
                 lifetime = uptime - helpers[0]["start_ticks"] / os.sysconf("SC_CLK_TCK")

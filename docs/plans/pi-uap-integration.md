@@ -198,11 +198,15 @@ detachment, inherited terminal environment, `cwd:ctx.cwd` and hidden Windows
 console. This preserves the live Pi parent chain for terminal/multiplexer hints.
 One observation gets one invocation and no resend. Track at most two children;
 drop excess work with no queue. Child failures cannot throw into Pi or change its
-result. Frame/stdout/stderr limits are 64 KiB. Go has a 15-second context budget
+result. Frame/stdout/stderr limits are 64 KiB. Go has a 20-second context budget
 through all capture, policy and delivery work. A separate Pi budget leaves the
 existing four-second shared observation contract unchanged. Producer lifetime is
-bounded to 16 seconds: TERM by 15.5 seconds, 250 ms grace, then hard kill and one
+bounded to 21 seconds: TERM by 20.5 seconds, 250 ms grace, then hard kill and one
 join by the deadline. Prompt end uses the same cancellation/reaping path.
+The budget is assigned once at admission, including cold Windows PowerShell
+startup, native submission, configured sound and the following webhook. Native
+protocols with a 15-second request horizon use a child deadline clipped to that
+horizon and the original parent deadline; the signed helper contract is unchanged.
 Shutdown with `reason:quit` in JSON/print/RPC (including RPC stdin close) is the
 exception: the awaited handler drains only already admitted terminal completion/error
 webhook children to their original deadlines, with no new work or budget reset;
@@ -407,7 +411,7 @@ three-OS desktop environment is claimed available before the preflight executes.
 | --- | --- |
 | R1-RUNTIME1: extra native copy is unrecoverable | Direct TargetLayout, normal directory journal, guarded bootstrap; no native intent protocol. |
 | R1-RUNTIME2: descriptor/data demand are incomplete | Reserved immutable roots/canonical descriptor, existing receipt resolver, explicit owned-data/verification policy, final digest captured after sealing. |
-| R1-RUNTIME3: deadlines/contexts are provisional | Mandatory context API through all subprocess/handoff paths; fixed 15/16-second bounds, grace/KILL/join, no fallback after possible handoff. |
+| R1-RUNTIME3: deadlines/contexts are provisional | Mandatory context API through all subprocess/handoff paths; fixed 20/21-second bounds, native request horizons preserved, grace/KILL/join, no fallback after possible handoff. |
 | R1-RUNTIME4: modes and old observer are ambiguous | Local TUI-only desktop, independent opted-in webhook; captured projected/runtime revision mismatch denies old code without global Binding generation changes. |
 | R1-RUNTIME5: callbacks can stall Pi | Synchronous snapshots/return, activity and prompt state separation, at most two children, cancellation and no queue/resend. |
 | R1-E2E1: desktop mechanisms/gate absent | Concrete preflight/observer matrix and exact-SHA aggregate; unavailable lanes remain blockers. |

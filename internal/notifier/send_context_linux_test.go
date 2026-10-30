@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -61,14 +62,56 @@ func TestContextGsettingsStdoutSurvivesSuccessfulDiagnostic(t *testing.T) {
 }
 
 type contextCapturePort struct {
-	calls   int
-	request notification.Request
+	calls    int
+	request  notification.Request
+	deadline time.Time
 }
 
-func (p *contextCapturePort) Deliver(_ context.Context, r notification.Request) notification.Receipt {
+func (p *contextCapturePort) Deliver(ctx context.Context, r notification.Request) notification.Receipt {
 	p.calls++
 	p.request = r
+	p.deadline, _ = ctx.Deadline()
 	return notification.Receipt{CorrelationID: r.CorrelationID, Status: "submitted"}
+}
+
+func TestContextLinuxPlainDeliveryClipsOnlyNativeHorizon(t *testing.T) {
+	previous := contextPlainLinuxDelivery
+	previousSound := runContextSound
+	t.Cleanup(func() { contextPlainLinuxDelivery = previous; runContextSound = previousSound })
+	port := &contextCapturePort{}
+	contextPlainLinuxDelivery = func(BootClock) notification.DeliveryPort { return port }
+	cfg := config.DefaultConfig()
+	cfg.Notifications.Desktop.ClickToFocus = false
+	cfg.Notifications.Desktop.Sound = true
+	cfg.Notifications.Desktop.Volume = 0.25
+	parent, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	soundCalled := false
+	runContextSound = func(ctx context.Context, _ *exec.Cmd) error {
+		soundCalled = true
+		if ctx != parent {
+			t.Fatal("native horizon shortened the caller's configured sound budget")
+		}
+		return nil
+	}
+	cue := filepath.Join(t.TempDir(), "TEST-cue.mp3")
+	if err := os.WriteFile(cue, []byte("TEST sound sender boundary"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	before, now, err := (SystemBootClock{}).Now()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := New(cfg).sendNativeDesktopContext(parent, cue, "Pi", "fixed body", "", "", t.TempDir(), "", sendOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	_, after, err := (SystemBootClock{}).Now()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if port.calls != 1 || !soundCalled || port.request.Deadline.BootID != before || port.request.Deadline.NotAfter <= now+14 || port.request.Deadline.NotAfter > after+15 || time.Until(port.deadline) > 15*time.Second || parent.Err() != nil {
+		t.Fatalf("native horizon changed overall parent: request=%+v parent=%v", port.request, parent.Err())
+	}
 }
 
 func TestContextLinuxFocusOffUsesExistingActionlessDelivery(t *testing.T) {
