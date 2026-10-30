@@ -822,6 +822,147 @@ def original_native_reader_observation(case_root):
     return {key: value[key] for key in required | optional if key in value}
 
 
+def global_settings_projection(value):
+    required = {"scope", "diagnostic_only", "qualification_input", "desktop_qualified", "maximum_seconds", "owner_pid",
+                "owner_start_identity", "owner_uid", "owner_bundle", "owner_path", "apple_signature_verified", "settings_left_open",
+                "settings_present_before", "opened_new_settings_instance", "initial_tree", "notifications_navigation_performed",
+                "observed_notifications_navigation_rows", "elapsed_seconds"}
+    P.require(isinstance(value, dict) and required <= set(value) <= required | {"final_tree"}
+              and value["scope"] == "readonly_global_notification_settings" and value["diagnostic_only"] is True
+              and value["qualification_input"] is False and value["desktop_qualified"] is False and value["maximum_seconds"] == 6
+              and value["owner_bundle"] == "com.apple.systempreferences"
+              and value["owner_path"] == "/System/Applications/System Settings.app"
+              and value["apple_signature_verified"] is True and value["settings_left_open"] is True
+              and type(value["owner_pid"]) is int and value["owner_pid"] > 0 and type(value["owner_uid"]) is int and value["owner_uid"] == os.getuid()
+              and isinstance(value["owner_start_identity"], str) and re.fullmatch(r"[1-9][0-9]{0,19}:[0-9]{1,6}", value["owner_start_identity"])
+              and isinstance(value["settings_present_before"], list) and len(value["settings_present_before"]) <= 1
+              and all(type(pid) is int and pid > 0 for pid in value["settings_present_before"])
+              and type(value["opened_new_settings_instance"]) is bool
+              and value["opened_new_settings_instance"] == (value["owner_pid"] not in value["settings_present_before"])
+              and type(value["notifications_navigation_performed"]) is bool
+              and type(value["observed_notifications_navigation_rows"]) is int and 0 <= value["observed_notifications_navigation_rows"] <= 256
+              and (not value["notifications_navigation_performed"] or value["observed_notifications_navigation_rows"] == 1)
+              and type(value["elapsed_seconds"]) in (int, float) and 0 <= value["elapsed_seconds"] <= 6,
+              "closed_global_settings_owner_receipt_required")
+    labels = {"notifications", "notification_center", "application_notifications", "allow_notifications", "notifications_off",
+              "banners", "alerts", "none", "sound", "focus", "do_not_disturb", "always", "when_unlocked", "never",
+              "mirroring_or_sharing", "display_sleeping", "screen_locked", "play_sound", "alert_style", "notifications_silenced"}
+    roles = {"AXApplication", "AXWindow", "AXGroup", "AXSplitGroup", "AXScrollArea", "AXOutline", "AXList", "AXRow", "AXStaticText",
+             "AXButton", "AXCheckBox", "AXPopUpButton", "AXRadioButton", "AXRadioGroup", "AXToolbar", "AXScrollBar", "AXSlider",
+             "AXTextField", "AXTable", "AXColumn", "AXCell", "AXImage", "AXHeading", "other"}
+    for name in ("initial_tree", "final_tree"):
+        if name not in value:
+            continue
+        tree = value[name]
+        P.require(isinstance(tree, dict) and set(tree) == {"nodes", "traversal_capped", "maximum_nodes", "maximum_depth", "maximum_children", "ax_timeout_status"}
+                  and tree["maximum_nodes"] == 256 and tree["maximum_depth"] == 18 and tree["maximum_children"] == 32
+                  and type(tree["traversal_capped"]) is bool and type(tree["ax_timeout_status"]) is int
+                  and isinstance(tree["nodes"], list) and len(tree["nodes"]) <= 256, "closed_global_settings_tree_required")
+        for index, row in enumerate(tree["nodes"]):
+            P.require(isinstance(row, dict) and {"index", "depth", "role", "fixed_labels", "navigation_press_action", "inert_navigation_descendant"} <= set(row)
+                      <= {"index", "depth", "role", "fixed_labels", "navigation_press_action", "inert_navigation_descendant", "parent", "bounds", "enabled", "selected", "value_boolean", "value_enum"}
+                      and type(row["index"]) is int and row["index"] == index and type(row["depth"]) is int and 0 <= row["depth"] < 18
+                      and row["role"] in roles and isinstance(row["fixed_labels"], list) and len(row["fixed_labels"]) <= len(labels)
+                      and all(label in labels for label in row["fixed_labels"]) and type(row["navigation_press_action"]) is bool
+                      and type(row["inert_navigation_descendant"]) is bool,
+                      "closed_global_settings_node_required")
+            if "parent" in row:
+                P.require(type(row["parent"]) is int and 0 <= row["parent"] < index, "global_settings_parent_invalid")
+            if "bounds" in row:
+                P.require(isinstance(row["bounds"], list) and len(row["bounds"]) == 4
+                          and all(type(number) in (int, float) and math.isfinite(number) for number in row["bounds"]), "global_settings_bounds_invalid")
+            for key in ("enabled", "selected", "value_boolean"):
+                P.require(key not in row or type(row[key]) is bool, "global_settings_boolean_invalid")
+            P.require("value_enum" not in row or row["value_enum"] in labels | {"on", "off"}, "global_settings_enum_invalid")
+    return value
+
+
+def global_settings_capture_measurements(value):
+    P.require(isinstance(value, dict) and set(value) == {"audio_samples", "audio_peak", "screen_frames", "audio_nonzero_samples",
+              "audio_rms", "sample_rate", "channels", "format"} and value["sample_rate"] == 48000
+              and value["channels"] == 1 and value["format"] == "s16le"
+              and all(type(value[key]) is int and 0 <= value[key] <= 10_000_000 for key in ("audio_samples", "screen_frames", "audio_nonzero_samples"))
+              and value["audio_nonzero_samples"] <= value["audio_samples"]
+              and all(type(value[key]) in (int, float) and math.isfinite(value[key]) and 0 <= value[key] <= 100 for key in ("audio_peak", "audio_rms")),
+              "global_settings_capture_measurements_invalid")
+    return value
+
+
+def inspect_global_notification_settings(observer, evidence_root, *, execute=command, spawn=subprocess.Popen):
+    """Isolated observer lane: no product, helper acquisition or notification."""
+    evidence_root.mkdir(parents=True, exist_ok=True)
+    root = Path(tempfile.mkdtemp(prefix="TEST-macos-notification-settings-")).resolve()
+    root.chmod(0o700)
+    started, capture = time.monotonic(), None
+    result = {"scope": "observer_only_global_notifications", "diagnostic_only": True, "qualification_input": False,
+              "desktop_qualified": False, "status": "unavailable", "capture_original_maximum_seconds": 30,
+              "capture_started": False, "owned_capture_collected": True}
+    try:
+        capture = spawn([str(observer), "capture", str(root)], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE, start_new_session=True)
+        result.update(capture_started=True, owned_capture_collected=False)
+        wait_for(lambda: (root / "capture-ready.json").is_file(), "global_settings_capture_not_ready", seconds=5)
+        ready = root / "capture-ready.json"
+        P.require(not ready.is_symlink() and ready.stat().st_size <= 4096, "global_settings_capture_ready_invalid")
+        baseline = global_settings_capture_measurements(json.loads(ready.read_text()))
+        P.require(baseline["screen_frames"] > 0 and baseline["audio_samples"] > 0, "global_settings_capture_not_observing")
+        result["capture_baseline"] = baseline
+        P.require(capture.poll() is None, "global_settings_capture_not_running")
+        result["capture_active_before_inspection"] = True
+        clock = time.get_clock_info("monotonic")
+        P.require(clock.implementation == "mach_absolute_time()" and clock.monotonic and not clock.adjustable,
+                  "global_settings_shared_clock_required")
+        deadline = time.monotonic() + 6
+        raw = execute([observer, "inspect-global-notification-settings", str(deadline)], timeout=6)
+        P.require(len(raw) <= 128 * 1024, "global_settings_output_bound")
+        result["settings"] = global_settings_projection(json.loads(raw))
+        result["capture_active_after_inspection"] = capture.poll() is None
+        P.require(result["capture_active_after_inspection"], "global_settings_capture_ended_during_inspection")
+        screenshot = evidence_root / "global-notifications-settings.png"
+        execute(["/usr/sbin/screencapture", "-x", screenshot], timeout=2)
+        P.require(screenshot.is_file() and not screenshot.is_symlink() and screenshot.stat().st_size <= 16 * 1024 * 1024,
+                  "global_settings_screenshot_unavailable")
+        result["capture_active_after_screenshot"] = capture.poll() is None
+        P.require(result["capture_active_after_screenshot"], "global_settings_capture_ended_before_screenshot")
+        result.update(status="inspected", screenshot_sha256=P.sha(screenshot))
+    except Exception as error:
+        result["failure_class"] = type(error).__name__
+    finally:
+        if capture is not None:
+            try:
+                (root / "capture-stop").touch()
+                try:
+                    out, err = capture.communicate(timeout=max(0.001, min(3, started + 30 - time.monotonic())))
+                except subprocess.TimeoutExpired:
+                    capture.kill()
+                    out, err = capture.communicate(timeout=2)
+                result.update(capture_exit_code=capture.returncode, capture_stdout_bytes=len(out), capture_stderr_bytes=len(err),
+                              owned_capture_collected=capture.poll() is not None)
+                if capture.returncode != 0 or err or not result["owned_capture_collected"]:
+                    result["status"] = "unavailable"
+                elif len(out) <= 4096:
+                    captured = json.loads(out)
+                    P.require(isinstance(captured, dict) and set(captured) == {"baseline", "measurements"}, "global_settings_capture_result_invalid")
+                    result["capture_final_measurements"] = global_settings_capture_measurements(captured["measurements"])
+                    result["capture_frames_advanced"] = captured["measurements"]["screen_frames"] > result.get("capture_baseline", {}).get("screen_frames", 0)
+                    if not result["capture_frames_advanced"]:
+                        result["status"] = "unavailable"
+                else:
+                    result["status"] = "unavailable"
+            except Exception as error:
+                result.update(status="unavailable", cleanup_failure_class=type(error).__name__)
+                try:
+                    if capture.poll() is None:
+                        capture.kill()
+                    capture.communicate(timeout=2)
+                except Exception:
+                    pass
+                result["owned_capture_collected"] = capture.poll() is not None
+        result["elapsed_seconds"] = round(time.monotonic() - started, 3)
+        (evidence_root / "global-notifications-settings.json").write_text(json.dumps(result, indent=2) + "\n")
+    return result
+
+
 def case_failure_observation(case_root, terminal, provider, sink, data_root, helper_app, expected, observe, screenshot,
                              *, now=time.monotonic):
     """Failure-only fixed metadata, before owned UI/process cleanup begins."""

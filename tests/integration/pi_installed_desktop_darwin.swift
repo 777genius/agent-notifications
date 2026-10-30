@@ -723,6 +723,212 @@ struct TerminalAutomationContext: Decodable {
     return result
 }
 
+@MainActor struct SettingsInspectionNode {
+    let element: AXUIElement
+    let role: String
+    let parent: Int?
+    let box: CGRect?
+    let exactNotifications: Bool
+    let press: Bool
+    let inert: Bool
+}
+
+@MainActor func settingsInspectionTree(_ app: NSRunningApplication, deadline: Double) -> ([SettingsInspectionNode], [String: Any]) {
+    let root = AXUIElementCreateApplication(app.processIdentifier)
+    let timeout = AXUIElementSetMessagingTimeout(root, 0.05)
+    var nodes = [SettingsInspectionNode](), rows = [[String: Any]](), capped = timeout != .success
+    let roles: Set<String> = ["AXApplication", "AXWindow", "AXGroup", "AXSplitGroup", "AXScrollArea", "AXOutline", "AXList",
+        "AXRow", "AXStaticText", "AXButton", "AXCheckBox", "AXPopUpButton", "AXRadioButton", "AXRadioGroup", "AXToolbar",
+        "AXScrollBar", "AXSlider", "AXTextField", "AXTable", "AXColumn", "AXCell", "AXImage", "AXHeading"]
+    func visit(_ element: AXUIElement, parent: Int?, depth: Int) {
+        guard let now = try? consentMonotonicTime(), now < deadline, nodes.count < 256, depth < 18 else { capped = true; return }
+        let rawRole = attribute(element, kAXRoleAttribute) as? String ?? ""
+        let role = roles.contains(rawRole) ? rawRole : "other"
+        let texts = [kAXTitleAttribute, kAXDescriptionAttribute, kAXValueAttribute].compactMap { attribute(element, $0) as? String }
+        var tags = Set<String>()
+        let labels = ["Notifications": "notifications", "Notification Center": "notification_center",
+            "Application Notifications": "application_notifications", "Allow notifications": "allow_notifications",
+            "Allow Notifications": "allow_notifications", "Notifications Off": "notifications_off", "Banners": "banners",
+            "Alerts": "alerts", "None": "none", "Sound": "sound", "Sounds": "sound", "Focus": "focus",
+            "Do Not Disturb": "do_not_disturb", "Always": "always", "When Unlocked": "when_unlocked", "Never": "never"]
+        for text in texts {
+            if let tag = labels[text] { tags.insert(tag) }
+            let folded = text.lowercased()
+            if folded.contains("mirroring") || (folded.contains("sharing") && folded.contains("display")) { tags.insert("mirroring_or_sharing") }
+            if folded.contains("display") && folded.contains("sleep") { tags.insert("display_sleeping") }
+            if folded.contains("screen") && folded.contains("locked") { tags.insert("screen_locked") }
+            if folded.contains("play sound") { tags.insert("play_sound") }
+            if folded.contains("alert style") { tags.insert("alert_style") }
+            if folded.contains("notifications silenced") { tags.insert("notifications_silenced") }
+        }
+        var actionNames: CFArray?
+        let actionStatus = AXUIElementCopyActionNames(element, &actionNames)
+        let actions = actionStatus == .success ? actionNames as? [String] : nil
+        var childValues: CFTypeRef?
+        let childStatus = AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &childValues)
+        let children = childStatus == .success ? childValues as? [AXUIElement] : nil
+        // Unsupported leaf children can be shown, but cannot prove that a
+        // navigation subtree is complete. Uncertain containers cap the scan.
+        if children == nil && !(childStatus == .attributeUnsupported && ["AXStaticText", "AXImage"].contains(role)) { capped = true }
+        let pressed = actions?.contains(kAXPressAction) == true
+        let inert = ["AXStaticText", "AXImage", "AXCell", "AXGroup"].contains(role) && actionStatus == .success
+            && actions?.isEmpty == true && children != nil
+        let index = nodes.count, box = rectangle(element)
+        nodes.append(SettingsInspectionNode(element: element, role: role, parent: parent, box: box,
+                                            exactNotifications: texts.contains("Notifications"), press: pressed, inert: inert))
+        var row: [String: Any] = ["index": index, "depth": depth, "role": role, "fixed_labels": tags.sorted(),
+                                  "navigation_press_action": pressed, "inert_navigation_descendant": inert]
+        if let parent { row["parent"] = parent }
+        if let box { row["bounds"] = [Double(box.minX), Double(box.minY), Double(box.width), Double(box.height)] }
+        for (key, name) in [(kAXEnabledAttribute, "enabled"), (kAXSelectedAttribute, "selected")] {
+            if let value = attribute(element, key), CFGetTypeID(value) == CFBooleanGetTypeID() { row[name] = (value as! NSNumber).boolValue }
+        }
+        if let value = attribute(element, kAXValueAttribute) {
+            if CFGetTypeID(value) == CFBooleanGetTypeID() { row["value_boolean"] = (value as! NSNumber).boolValue }
+            else if ["AXCheckBox", "AXRadioButton"].contains(role), let number = value as? NSNumber,
+                    [0.0, 1.0].contains(number.doubleValue) { row["value_enum"] = number.doubleValue == 1 ? "on" : "off" }
+            else if let text = value as? String, let fixed = labels[text] { row["value_enum"] = fixed }
+        }
+        rows.append(row)
+        guard let children else { return }
+        if children.count > 32 { capped = true }
+        for child in children.prefix(32) { visit(child, parent: index, depth: depth + 1) }
+    }
+    if timeout == .success, let windows = attribute(root, kAXWindowsAttribute) as? [AXUIElement] {
+        if windows.count > 4 { capped = true }
+        for window in windows.prefix(4) { visit(window, parent: nil, depth: 0) }
+    } else { capped = true }
+    return (nodes, ["nodes": rows, "traversal_capped": capped, "maximum_nodes": 256, "maximum_depth": 18,
+                    "maximum_children": 32, "ax_timeout_status": timeout.rawValue])
+}
+
+@MainActor func inspectGlobalNotificationSettings(_ args: [String]) async throws -> [String: Any] {
+    let now = try consentMonotonicTime()
+    guard args.count == 2, let deadline = Double(args[1]), deadline.isFinite, deadline > now, deadline - now <= 6 else {
+        throw ProbeError.unavailable("original_settings_inspection_deadline_required")
+    }
+    let identifier = "com.apple.systempreferences", path = "/System/Applications/System Settings.app"
+    let url = URL(fileURLWithPath: path)
+    guard verifiedAppleApplication(url, identifier: identifier) else { throw ProbeError.unavailable("signed_apple_settings_required") }
+    let before = NSRunningApplication.runningApplications(withBundleIdentifier: identifier).map { Int($0.processIdentifier) }
+    guard before.count <= 1 else { throw ProbeError.unavailable("unique_settings_instance_required") }
+    let configuration = NSWorkspace.OpenConfiguration()
+    configuration.activates = true
+    configuration.createsNewApplicationInstance = false
+    let app = try await NSWorkspace.shared.openApplication(at: url, configuration: configuration)
+    guard app.bundleIdentifier == identifier, app.bundleURL?.resolvingSymlinksInPath().path == path,
+          app.executableURL?.resolvingSymlinksInPath().path == path + "/Contents/MacOS/System Settings",
+          terminalAutomationUID(app.processIdentifier) == Int(getuid()), let start = processStartIdentity(app.processIdentifier) else {
+        throw ProbeError.unavailable("settings_owner_identity_unverified")
+    }
+    func current() -> Bool {
+        !app.isTerminated && matchesProcessStart(app.processIdentifier, start)
+            && terminalAutomationUID(app.processIdentifier) == Int(getuid())
+            && (try? terminalProcessIdentity(app.processIdentifier)["executable_path"] as? String) == path + "/Contents/MacOS/System Settings"
+    }
+    while current() && onScreenWindows(app.processIdentifier).isEmpty {
+        if try consentMonotonicTime() >= deadline { break }
+        try await Task.sleep(nanoseconds: 50_000_000)
+    }
+    guard current(), !onScreenWindows(app.processIdentifier).isEmpty, try consentMonotonicTime() < deadline else {
+        throw ProbeError.unavailable("settings_window_unavailable")
+    }
+    var first = settingsInspectionTree(app, deadline: deadline)
+    let readyDeadline = min(deadline, (try consentMonotonicTime()) + 2)
+    while first.1["traversal_capped"] as? Bool == false && !first.0.contains(where: { $0.exactNotifications }) {
+        if try consentMonotonicTime() >= readyDeadline { break }
+        try await Task.sleep(nanoseconds: 50_000_000)
+        first = settingsInspectionTree(app, deadline: deadline)
+    }
+    var result: [String: Any] = ["scope": "readonly_global_notification_settings", "diagnostic_only": true,
+        "qualification_input": false, "desktop_qualified": false, "maximum_seconds": 6,
+        "owner_pid": Int(app.processIdentifier), "owner_start_identity": start, "owner_uid": Int(getuid()),
+        "owner_bundle": identifier, "owner_path": path, "apple_signature_verified": true, "settings_left_open": true,
+        "settings_present_before": before, "opened_new_settings_instance": !before.contains(Int(app.processIdentifier)),
+        "initial_tree": first.1, "notifications_navigation_performed": false]
+    func candidates(_ nodes: [SettingsInspectionNode]) -> [SettingsInspectionNode] {
+        var selected = [SettingsInspectionNode]()
+        for (index, node) in nodes.enumerated() where node.exactNotifications {
+            var cursor: Int? = index
+            for _ in 0..<8 {
+                guard let actual = cursor else { break }
+                let row = nodes[actual]
+                if row.role == "AXRow" || (row.role == "AXButton" && row.exactNotifications && row.press) {
+                    // A row containing a toggle or an unknown interactive child
+                    // is never a navigation target, even when its label matches.
+                    let inertSubtree = nodes.indices.allSatisfy { child in
+                        if child == actual { return true }
+                        var ancestor = nodes[child].parent
+                        for _ in 0..<18 {
+                            guard let parent = ancestor else { return true }
+                            if parent == actual { return nodes[child].inert }
+                            ancestor = nodes[parent].parent
+                        }
+                        return false
+                    }
+                    var parent = row.parent, sidebar = false
+                    for _ in 0..<8 {
+                        guard let actualParent = parent else { break }
+                        if ["AXOutline", "AXList"].contains(nodes[actualParent].role) { sidebar = true; break }
+                        parent = nodes[actualParent].parent
+                    }
+                    if sidebar && inertSubtree, let box = row.box, onScreenWindows(app.processIdentifier).contains(where: { $0.contains(box) }),
+                       CGDisplayBounds(CGMainDisplayID()).contains(CGPoint(x: box.midX, y: box.midY)),
+                       attribute(row.element, kAXEnabledAttribute) as? Bool == true,
+                       !selected.contains(where: { CFEqual($0.element, row.element) }) { selected.append(row) }
+                    break
+                }
+                if !row.inert { break }
+                cursor = row.parent
+            }
+        }
+        return selected
+    }
+    let rows = candidates(first.0)
+    result["observed_notifications_navigation_rows"] = rows.count
+    if first.1["traversal_capped"] as? Bool == false, rows.count == 1, current(), try consentMonotonicTime() < deadline {
+        let fresh = settingsInspectionTree(app, deadline: deadline)
+        let refreshed = candidates(fresh.0)
+        if fresh.1["traversal_capped"] as? Bool == false, refreshed.count == 1, current(),
+           CFEqual(rows[0].element, refreshed[0].element), let box = refreshed[0].box, let originalBox = rows[0].box, box == originalBox,
+           try consentMonotonicTime() < deadline {
+            let point = CGPoint(x: box.midX, y: box.midY)
+            guard CGWarpMouseCursorPosition(point) == .success else { throw ProbeError.unavailable("settings_navigation_pointer_unavailable") }
+            var hit: AXUIElement?
+            guard AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(), Float(point.x), Float(point.y), &hit) == .success,
+                  var element = hit else { throw ProbeError.unavailable("settings_navigation_hit_unavailable") }
+            var matched = false
+            for _ in 0..<8 {
+                var pid = pid_t(0)
+                guard AXUIElementGetPid(element, &pid) == .success, pid == app.processIdentifier else { break }
+                if CFEqual(element, refreshed[0].element) {
+                    matched = attribute(element, kAXRoleAttribute) as? String == refreshed[0].role
+                    break
+                }
+                let role = attribute(element, kAXRoleAttribute) as? String ?? ""
+                var actions: CFArray?
+                guard ["AXStaticText", "AXImage", "AXCell", "AXGroup"].contains(role),
+                      AXUIElementCopyActionNames(element, &actions) == .success,
+                      let actionNames = actions as? [String], actionNames.isEmpty,
+                      let parent = attribute(element, kAXParentAttribute), CFGetTypeID(parent) == AXUIElementGetTypeID() else { break }
+                element = parent as! AXUIElement
+            }
+            guard matched else { throw ProbeError.unavailable("settings_navigation_hit_is_not_inert") }
+            guard current(), try consentMonotonicTime() < deadline,
+                  let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left),
+                  let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left) else {
+                throw ProbeError.unavailable("settings_navigation_owner_or_deadline_changed")
+            }
+            down.post(tap: .cghidEventTap); up.post(tap: .cghidEventTap)
+            result["notifications_navigation_performed"] = true
+            try await Task.sleep(nanoseconds: 200_000_000)
+        }
+    }
+    if current(), try consentMonotonicTime() < deadline { result["final_tree"] = settingsInspectionTree(app, deadline: deadline).1 }
+    result["elapsed_seconds"] = (try consentMonotonicTime()) - now
+    return result
+}
+
 @MainActor func performConsentAction(_ args: [String]) async throws -> [String: Any] {
     let operation = args[0]
     let contexted = operation != "notification-consent"
@@ -1070,6 +1276,8 @@ final class ProductCapture: NSObject, SCStreamOutput, SCStreamDelegate, @uncheck
                 publish(try terminalAutomationActors(pid, pythonPID: parent))
             case "terminal-automation-consent", "allow-terminal-automation":
                 publish(try terminalAutomation(args))
+            case "inspect-global-notification-settings":
+                publish(try await inspectGlobalNotificationSettings(args))
             case "preflight":
                 let session = CGSessionCopyCurrentDictionary() as? [String: Any] ?? [:]
                 var device = AudioDeviceID(0)

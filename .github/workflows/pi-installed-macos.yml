@@ -136,6 +136,20 @@ jobs:
         if: ${{ !inputs.observer_only }}
         with:
           go-version: '1.26.10'
+      - name: Inspect public global Notifications settings with the real capture active
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.observer_only && inputs.hosted_observer && inputs.prepare_notification_center }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -B - "$RUNNER_TEMP/TEST-pi-macos/observer" "$RUNNER_TEMP/TEST-pi-macos/evidence" <<'PY'
+          import importlib.util, sys
+          from pathlib import Path
+          spec = importlib.util.spec_from_file_location('pi_macos_settings_observer', 'scripts/pi-installed-desktop-macos.py')
+          fixture = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(fixture)
+          result = fixture.inspect_global_notification_settings(Path(sys.argv[1]), Path(sys.argv[2]))
+          raise SystemExit(0 if result['status'] == 'inspected' and result['owned_capture_collected'] else 1)
+          PY
       - name: Acquire the exact compatible signed helper and official Pi
         if: ${{ !inputs.observer_only }}
         shell: bash

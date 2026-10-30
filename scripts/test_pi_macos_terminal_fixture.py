@@ -678,6 +678,85 @@ class OriginalNativeReaderEvidence(unittest.TestCase):
                 self.assertNotIn("TEST-private-token", str(caught.exception))
 
 
+class GlobalSettingsInspection(unittest.TestCase):
+    def settings(self):
+        return {"scope": "readonly_global_notification_settings", "diagnostic_only": True, "qualification_input": False,
+            "desktop_qualified": False, "maximum_seconds": 6, "owner_pid": os.getpid(), "owner_uid": os.getuid(),
+            "owner_start_identity": "123:456", "owner_bundle": "com.apple.systempreferences",
+            "owner_path": "/System/Applications/System Settings.app", "apple_signature_verified": True, "settings_left_open": True,
+            "settings_present_before": [], "opened_new_settings_instance": True, "notifications_navigation_performed": False,
+            "observed_notifications_navigation_rows": 0, "elapsed_seconds": 0.1,
+            "initial_tree": {"nodes": [{"index": 0, "depth": 0, "role": "AXCheckBox", "fixed_labels": ["mirroring_or_sharing"],
+                "navigation_press_action": True, "inert_navigation_descendant": False, "value_enum": "off"}], "traversal_capped": False,
+                "maximum_nodes": 256, "maximum_depth": 18, "maximum_children": 32, "ax_timeout_status": 0}}
+
+    def measurements(self, frames):
+        return {"audio_samples": 14400, "audio_peak": 0, "screen_frames": frames, "audio_nonzero_samples": 0,
+                "audio_rms": 0, "sample_rate": 48000, "channels": 1, "format": "s16le"}
+
+    def test_projection_refuses_private_labels_unknown_values_and_foreign_owners(self):
+        self.assertEqual(M.global_settings_projection(self.settings()), self.settings())
+        for field in ("private_label", "private_value", "foreign_owner", "extra_text"):
+            value = self.settings()
+            if field == "private_label":
+                value["initial_tree"]["nodes"][0]["fixed_labels"] = ["TEST-private-user-text"]
+            elif field == "private_value":
+                value["initial_tree"]["nodes"][0]["value_enum"] = "TEST-private-user-text"
+            elif field == "foreign_owner":
+                value["owner_path"] = "/TEST/foreign.app"
+            else:
+                value["initial_tree"]["nodes"][0]["raw_description"] = "TEST-private-user-text"
+            with self.subTest(field=field), self.assertRaises(RuntimeError) as caught:
+                M.global_settings_projection(value)
+            self.assertNotIn("TEST-private-user-text", str(caught.exception))
+
+    def test_real_owned_capture_is_collected_after_inspection_or_primary_failure(self):
+        for failed in (False, True):
+            with self.subTest(failed=failed), tempfile.TemporaryDirectory(prefix="TEST-settings-observer-") as temporary:
+                children, calls = [], []
+                root = Path(temporary)
+                baseline, final = self.measurements(2), self.measurements(4)
+                def spawn(argv, **kwargs):
+                    captured = Path(argv[2])
+                    code = ('import json,sys,time; from pathlib import Path; root=Path(sys.argv[1]); '
+                            '(root/"capture-ready.json").write_text(sys.argv[2]); deadline=time.monotonic()+5\n'
+                            'while not (root/"capture-stop").exists() and time.monotonic()<deadline: time.sleep(.01)\n'
+                            'print(sys.argv[3])')
+                    child = subprocess.Popen([sys.executable, "-c", code, str(captured), json.dumps(baseline),
+                                              json.dumps({"baseline": baseline, "measurements": final})], **kwargs)
+                    children.append(child)
+                    return child
+                def execute(argv, **kwargs):
+                    calls.append(argv)
+                    self.assertIsNone(children[0].poll())
+                    if argv[1] == "inspect-global-notification-settings":
+                        self.assertLessEqual(kwargs["timeout"], 6)
+                        if failed:
+                            raise RuntimeError("TEST-private-native-failure")
+                        return json.dumps(self.settings())
+                    self.assertEqual(argv[0], "/usr/sbin/screencapture")
+                    Path(argv[2]).write_bytes(b"TEST screenshot only; never native qualification")
+                    return ""
+                clock = mock.Mock(implementation="mach_absolute_time()", monotonic=True, adjustable=False)
+                with mock.patch.object(M.time, "get_clock_info", return_value=clock):
+                    result = M.inspect_global_notification_settings(root / "TEST-observer", root / "evidence", execute=execute, spawn=spawn)
+                self.assertEqual(result["status"], "unavailable" if failed else "inspected")
+                self.assertTrue(result["owned_capture_collected"])
+                self.assertTrue(result["capture_frames_advanced"])
+                self.assertFalse(result["qualification_input"])
+                self.assertNotIn("TEST-private-native-failure", json.dumps(result))
+                self.assertEqual(len(children), 1)
+                with self.assertRaises(ProcessLookupError):
+                    os.kill(children[0].pid, 0)
+                if failed:
+                    self.assertEqual(result["failure_class"], "RuntimeError")
+                    self.assertEqual(len(calls), 1)
+                else:
+                    self.assertTrue(result["capture_active_after_inspection"])
+                    self.assertTrue(result["capture_active_after_screenshot"])
+                    self.assertTrue(result["settings"]["settings_left_open"])
+
+
 class PermissionUIIdentity(unittest.TestCase):
     def test_display_aliases_come_from_pinned_archive_and_identical_installed_metadata(self):
         archive = M.H.INPUTS / "ClaudeNotifier-smoke.app.zip"
