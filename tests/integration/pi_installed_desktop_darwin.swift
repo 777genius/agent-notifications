@@ -1015,12 +1015,12 @@ struct FocusPermissionContext: Decodable {
         guard let app = preparation.app else { throw ProbeError.unavailable("owned_settings_window_not_observed") }
         result["settings_owner_pid"] = Int(app.processIdentifier); result["settings_owner_start"] = preparation.start
         let detail = try focusSettingsDetail(preparation, deadline: actionDeadline)
-        let pane = settingsInspectionTree(app, deadline: actionDeadline, retainedDetail: detail?.element, installedHelperPath: context.helperPath).1
-        result["pane"] = pane
+        let paneTree = settingsInspectionTree(app, deadline: actionDeadline, retainedDetail: detail?.element, installedHelperPath: context.helperPath).1
+        result["pane"] = paneTree
         if let detail { result["settings_window_header"] = detail.header }
         // A complete targeted detail never proves that the unvisited sidebar or
         // other window content was observed. Partial scope remains explicit.
-        result["whole_window_complete"] = detail == nil && (pane["traversal_capped"] as? Bool == false)
+        result["whole_window_complete"] = detail == nil && (paneTree["traversal_capped"] as? Bool == false)
         result["screenshot_captured"] = try await focusPermissionScreenshot(context.screenshotPath, deadline: deadline - 0.35)
         if result["failure_class"] == nil { result["status"] = "inspected" }
     } catch {
