@@ -89,7 +89,6 @@ jobs:
       CGO_ENABLED: '1'
       MACOSX_DEPLOYMENT_TARGET: '12.0'
       SOURCE_SHA: ${{ inputs.source_sha || github.event.pull_request.head.sha || github.sha }}
-      PI_MACOS_RUNNER_ENVIRONMENT: ${{ runner.environment }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -253,6 +252,7 @@ jobs:
         if: ${{ github.event_name == 'workflow_dispatch' && !inputs.observer_only }}
         shell: bash
         env:
+          PI_MACOS_RUNNER_ENVIRONMENT: ${{ runner.environment }}
           PI_MACOS_INSPECT_CLICK_PERMISSION: ${{ inputs.inspect_click_permission && '1' || '0' }}
           PI_MACOS_NOTIFICATION_PRESENTATION_PREPARE: ${{ inputs.prepare_notification_presentation && '1' || '0' }}
         run: |
