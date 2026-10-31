@@ -176,9 +176,10 @@ jobs:
           { head -n 1 coverage-rest.txt; tail -n +2 coverage-rest.txt; tail -n +2 coverage-gemini.txt; } > coverage.txt
         shell: bash
 
-      - name: Repeat config crash recovery
-        run: go test -race -count=10 -run '^TestStoreKilledLockOwner$' ./internal/config
+      - name: Repeat config crash recovery and two-process preparation
         shell: bash
+        run: |
+          go test -race -count=10 -run 'TestStoreKilledLockOwner|TestPrepareTwoProcess' ./internal/config
 
       - name: Preserve complete atomic Go coverage
         uses: actions/upload-artifact@v7
