@@ -10,7 +10,7 @@ import (
 	"github.com/777genius/agent-notifications/internal/notification"
 )
 
-func stageWindowsRoute(context.Context, Options, Request, map[string]json.RawMessage) (*installruntime.WindowsChange, error) {
+func stageWindowsRoute(context.Context, Options, Request, map[string]json.RawMessage, installruntime.PolicySnapshot) (*installruntime.WindowsChange, error) {
 	return nil, nil
 }
 func verifyWindowsRoute(context.Context, notification.WindowsBinding) error {

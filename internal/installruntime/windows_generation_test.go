@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/777genius/agent-notifications/internal/windowscallback"
@@ -58,11 +59,14 @@ func TestWindowsJournalDecisionAndRetention(t *testing.T) {
 	}
 	tx.Windows.Phase = "preparing"
 	tx.Schema = 4
+	tx.After.Schema = 4
+	tx.After.WriterFloor = 4
+	tx.After.WindowsRetained = nil
 	if e = writeTransaction(marker, tx); e != nil {
 		t.Fatal(e)
 	}
-	if _, e = readTransactionFile(marker); e == nil {
-		t.Fatal("participant admitted under reader-ignorable schema4")
+	if _, e = readTransactionFile(marker); e == nil || !strings.Contains(e.Error(), "windows participant requires schema6") {
+		t.Fatalf("schema4 participant rejected for the wrong reason: %v", e)
 	}
 }
 
