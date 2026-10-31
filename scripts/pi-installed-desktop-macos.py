@@ -605,7 +605,7 @@ def terminal_applescript(source, observe, receipt, admit, *, now=time.monotonic,
                     actors = observe("terminal-automation-actors", str(child.pid), str(os.getpid()), timeout=min(3, remaining))
                     receipt["actors"] = actors
                 except Exception:
-                    if not exited_within(child, min(5, remaining), now):
+                    if not exited_within(child, min(1, remaining), now):
                         raise
                     break
             if actors.get("admitted") is True and not clicked and child.poll() is None:
@@ -616,7 +616,7 @@ def terminal_applescript(source, observe, receipt, admit, *, now=time.monotonic,
                 try:
                     observed = observe("terminal-automation-consent", json.dumps(context, sort_keys=True), timeout=min(3, remaining))
                 except Exception as error:
-                    if not exited_within(child, min(5, deadline - now()), now):
+                    if not exited_within(child, min(1, deadline - now()), now):
                         raise
                     # A fast, already-authorized do-script can exit while the
                     # read-only observer revalidates its kernel identity. Only
