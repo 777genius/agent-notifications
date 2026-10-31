@@ -11,7 +11,7 @@ func TestDesktopRequestDoesNotGrantOpenCodeNavigation(t *testing.T) {
 	content := notification.Content{Title: "OpenCode", Body: "Completed", Category: "info"}
 	deadline := notification.Deadline{BootID: "boot", NotAfter: 101.5}
 	for _, tc := range []struct {
-		name       string
+		name        string
 		nativeSound bool
 	}{
 		{"default_silent", false},
