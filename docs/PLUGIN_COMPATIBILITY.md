@@ -13,8 +13,10 @@ This accepted range does not mean every host version has been tested. See the
 for the scope of historical host/platform checks. Root-session completion,
 question, permission and error notifications are covered; desktop alerts can use
 bounded native session titles and current question text, while webhooks stay generic.
-It does not inherit portable MCP consent, sound or click-to-focus behavior. Other global/project notification plugins and OpenCode's
-native desktop alerts can cause duplicates. Disable overlapping sources in the
+It does not inherit portable MCP consent, custom sounds or click-to-focus.
+An explicit `notifications.desktop.systemSound` opt-in can request only the
+operating system's default cue. Other global/project notification plugins and
+OpenCode's native desktop alerts can cause duplicates. Disable overlapping sources in the
 profile rather than installing this plugin twice. Owned or foreign plugin
 conflicts are preserved and reported. [Setup and compatibility limits](opencode-notifications.md).
 
