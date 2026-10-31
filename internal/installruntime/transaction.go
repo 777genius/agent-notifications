@@ -90,7 +90,7 @@ type transaction struct {
 type Request struct {
 	// cacheRepair is set only by the exact missing-cache repair adapter.
 	cacheRepair bool
-	Windows *WindowsChange
+	Windows     *WindowsChange
 	// OrphanRecovery is an exclusive absence-only metadata transaction.
 	// ExpectedPolicy may additionally fence preview's raw policy observation.
 	OrphanRecovery *OrphanRecoveryRequest
