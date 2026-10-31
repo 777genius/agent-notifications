@@ -9,7 +9,7 @@ permissions:
 jobs:
   pinned-basic-retained-and-package:
     if: ${{ github.repository == '777genius/agent-notifications' && github.event.head_commit.message == 'ci(windows) admit three pinned qualification phases on 00aaded' && github.run_attempt == 1 }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Dispatch three separately gated Windows 11 VM qualifications
