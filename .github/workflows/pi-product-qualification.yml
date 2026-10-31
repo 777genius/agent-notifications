@@ -1,0 +1,108 @@
+name: Pi three-OS product qualification
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/pi-product-qualification.yml'
+      - 'scripts/pi-qualification-aggregate.py'
+      - 'scripts/test_pi_qualification_aggregate.py'
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact candidate source commit shared by all receipts
+        type: string
+        required: true
+      linux_run:
+        description: Run containing pi-installed-linux-SHA
+        type: string
+        required: false
+      macos_run:
+        description: Run containing pi-installed-macos-SHA
+        type: string
+        required: false
+      windows_run:
+        description: Run containing pi-installed-windows-SHA; Client product evidence is required
+        type: string
+        required: false
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  qualify:
+    name: Exact candidate / all three native desktops
+    runs-on: ${{ vars.CI_LINUX_RUNNER || 'ubuntu-24.04' }}
+    timeout-minutes: 8
+    env:
+      SOURCE_SHA: ${{ inputs.source_sha || github.event.pull_request.head.sha || github.sha }}
+      LINUX_RUN: ${{ inputs.linux_run }}
+      MACOS_RUN: ${{ inputs.macos_run }}
+      WINDOWS_RUN: ${{ inputs.windows_run }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.source_sha || github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Validate exact source and missing-evidence rejection
+        run: |
+          [[ "$SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          python -B scripts/test_pi_candidate_build.py -v
+          python -B scripts/test_pi_qualification_aggregate.py -v
+      - name: Collect candidate receipts without substituting prerequisite evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/TEST-pi-qualification"
+          mkdir -p "$root/evidence"
+          for lane in linux macos windows; do
+            case "$lane" in
+              linux) run="$LINUX_RUN"; platform=linux ;;
+              macos) run="$MACOS_RUN"; platform=darwin ;;
+              windows) run="$WINDOWS_RUN"; platform=windows ;;
+            esac
+            mkdir -p "$root/raw/$platform" "$root/evidence/$platform"
+            if [[ "$run" =~ ^[0-9]+$ ]]; then
+              if ! gh run download "$run" --repo "$GITHUB_REPOSITORY" \
+                --name "pi-installed-$lane-$SOURCE_SHA" --dir "$root/raw/$platform"; then
+                echo "$platform candidate artifact unavailable; qualification remains blocked"
+              fi
+            else
+              echo "$platform has no candidate run; qualification remains blocked"
+            fi
+          done
+          python - "$root" <<'PY'
+          import hashlib
+          from pathlib import Path
+          import shutil
+          import sys
+          root = Path(sys.argv[1])
+          for platform in ('linux', 'darwin', 'windows'):
+              raw = root / 'raw' / platform
+              for name in ('build.json', 'acquisition.json', 'process.json', 'desktop.json', 'evidence.json'):
+                  paths = [p for p in raw.rglob(name) if p.is_file() and not p.is_symlink() and p.stat().st_size <= 2 * 1024 * 1024]
+                  hashes = {hashlib.sha256(p.read_bytes()).hexdigest() for p in paths}
+                  # Linux preserves a second identical build receipt beside its
+                  # native evidence. Differing duplicate receipts stay absent.
+                  if paths and len(hashes) == 1:
+                      shutil.copy2(paths[0], root / 'evidence' / platform / name)
+          PY
+      - name: Require clean pinned candidate and real product delivery on all OSes
+        if: always()
+        run: |
+          python -B scripts/pi-qualification-aggregate.py --source-sha "$SOURCE_SHA" \
+            --evidence-root "$RUNNER_TEMP/TEST-pi-qualification/evidence" \
+            --report "$RUNNER_TEMP/TEST-pi-qualification/qualification.json"
+      - name: Preserve qualified or explicitly blocked aggregate
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: pi-qualification-${{ env.SOURCE_SHA }}
+          path: ${{ runner.temp }}/TEST-pi-qualification/qualification.json
+          if-no-files-found: error
+          retention-days: 14

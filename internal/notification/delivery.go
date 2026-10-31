@@ -2,7 +2,13 @@
 // Validation/policy loading, origin mapping and durable admission belong to callers.
 package notification
 
-import "context"
+import (
+	"context"
+	"errors"
+)
+
+// ErrSuppressed is an intentional no-effect desktop policy outcome.
+var ErrSuppressed = errors.New("desktop_suppressed")
 
 type Content struct {
 	Title    string

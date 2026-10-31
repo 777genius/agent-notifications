@@ -57,6 +57,9 @@ runtimes. Unknown fields inside `agents.<id>` are rejected by strict agent
 validation rather than preserved. Claude/Codex hooks select their own profiles; OpenCode has a separate observer
 profile and consent. Gemini also has a separate observer profile and consent
 on its supported macOS/Linux/Windows releases, described below.
+Pi selects `agents.pi` with separate channel consent; its desktop sound and
+terminal action require a known local TUI. Enabled Pi webhooks are independent of
+that desktop mode policy. See [Pi settings and event meanings](pi-notifications.md).
 
 `config edit` and the settings wizard edit global fields only and preserve agent
 sections. `/agents/...` edits are rejected; use a text editor for these sections.

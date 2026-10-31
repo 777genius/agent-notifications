@@ -11,6 +11,7 @@ import (
 
 	"github.com/godbus/dbus/v5"
 
+	"github.com/777genius/agent-notifications/internal/commandrun"
 	"github.com/777genius/agent-notifications/internal/logging"
 )
 
@@ -80,7 +81,10 @@ type dndReaders struct {
 // leaves the corresponding reader nil or unreadable and therefore reports "not
 // in DND", so the notification is delivered.
 func desktopIsDoNotDisturb() bool {
-	ctx, cancel := context.WithTimeout(context.Background(), dndProbeTimeout)
+	return desktopIsDoNotDisturbContext(context.Background())
+}
+func desktopIsDoNotDisturbContext(parent context.Context) bool {
+	ctx, cancel := context.WithTimeout(parent, dndProbeTimeout)
 	defer cancel()
 
 	desktop := currentDesktop()
@@ -251,7 +255,7 @@ func defaultGnomeShowBanners(ctx context.Context) (bool, bool) {
 	callCtx, cancel := context.WithTimeout(ctx, gsettingsTimeout)
 	defer cancel()
 
-	out, err := exec.CommandContext(callCtx, "gsettings", "get", gnomeNotificationsSchema, gnomeShowBannersKey).Output()
+	out, err := commandrun.Output(callCtx, exec.Command("gsettings", "get", gnomeNotificationsSchema, gnomeShowBannersKey))
 	if err != nil {
 		logging.Debug("DND: gsettings %s unavailable: %v", gnomeShowBannersKey, err)
 		return false, false

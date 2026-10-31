@@ -5,8 +5,10 @@
 package daemon
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -44,6 +46,12 @@ func (c *Client) SendNotification(
 	hints FocusHints,
 	timeout int,
 ) (*NotifyResponse, error) {
+	return c.SendNotificationContext(context.Background(), title, body, appIcon, hints, timeout)
+}
+
+// SendNotificationContext uses the same daemon protocol and retains the caller's
+// deadline through dial, write and read. It is the existing focus-on protocol.
+func (c *Client) SendNotificationContext(ctx context.Context, title, body, appIcon string, hints FocusHints, timeout int) (*NotifyResponse, error) {
 	req := Request{
 		Type:    MessageTypeNotify,
 		Version: ProtocolVersion,
@@ -68,7 +76,7 @@ func (c *Client) SendNotification(
 		},
 	}
 
-	resp, err := c.send(req)
+	resp, err := c.sendContext(ctx, req)
 	if err != nil {
 		return nil, err
 	}
@@ -82,12 +90,15 @@ func (c *Client) SendNotification(
 
 // Ping checks if the daemon is responding and returns status info
 func (c *Client) Ping() (*PingResponse, error) {
+	return c.pingContext(context.Background())
+}
+func (c *Client) pingContext(ctx context.Context) (*PingResponse, error) {
 	req := Request{
 		Type:    MessageTypePing,
 		Version: ProtocolVersion,
 	}
 
-	resp, err := c.send(req)
+	resp, err := c.sendContext(ctx, req)
 	if err != nil {
 		return nil, err
 	}
@@ -112,14 +123,23 @@ func (c *Client) Stop() error {
 
 // send sends a request to the daemon and returns the response
 func (c *Client) send(req Request) (*Response, error) {
-	conn, err := net.DialTimeout("unix", c.socketPath, 5*time.Second)
+	return c.sendContext(context.Background(), req)
+}
+func (c *Client) sendContext(parent context.Context, req Request) (*Response, error) {
+	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
+	defer cancel()
+	dialer := net.Dialer{Timeout: 5 * time.Second}
+	conn, err := dialer.DialContext(ctx, "unix", c.socketPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to daemon: %w", err)
 	}
 	defer func() { _ = conn.Close() }()
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stop()
 
 	// Set deadlines
-	if err := conn.SetDeadline(time.Now().Add(30 * time.Second)); err != nil {
+	deadline, _ := ctx.Deadline()
+	if err := conn.SetDeadline(deadline); err != nil {
 		return nil, fmt.Errorf("failed to set deadline: %w", err)
 	}
 
@@ -130,7 +150,7 @@ func (c *Client) send(req Request) (*Response, error) {
 	}
 
 	// Read response
-	decoder := json.NewDecoder(conn)
+	decoder := json.NewDecoder(io.LimitReader(conn, 64<<10))
 	var resp Response
 	if err := decoder.Decode(&resp); err != nil {
 		return nil, fmt.Errorf("failed to read response: %w", err)
@@ -141,27 +161,50 @@ func (c *Client) send(req Request) (*Response, error) {
 
 // IsDaemonRunning checks if the daemon is running and responsive
 func IsDaemonRunning() bool {
+	return isDaemonRunningContext(context.Background())
+}
+func isDaemonRunningContext(ctx context.Context) bool {
 	client, err := NewClient()
 	if err != nil {
 		return false
 	}
 
-	_, err = client.Ping()
+	_, err = client.pingContext(ctx)
 	return err == nil
 }
 
 // StartDaemonOnDemand starts the daemon if it's not already running.
 // Returns true if daemon is running (either started now or was already running).
 func StartDaemonOnDemand() bool {
+	return startDaemonOnDemand(context.Background(), "")
+}
+
+// StartDaemonOnDemandContext owns startup readiness, not the persistent daemon.
+// A daemon is deliberately shared and survives a successful readiness probe.
+func StartDaemonOnDemandContext(ctx context.Context) bool {
+	executable, err := os.Executable()
+	if err != nil {
+		return false
+	}
+	return startDaemonOnDemand(ctx, executable)
+}
+func startDaemonOnDemand(ctx context.Context, executable string) bool {
 	// Check if already running
-	if IsDaemonRunning() {
+	if isDaemonRunningContext(ctx) {
 		return true
+	}
+	if ctx.Err() != nil {
+		return false
 	}
 
 	// Find the daemon binary
-	daemonPath, err := findDaemonBinary()
-	if err != nil {
-		return false
+	daemonPath := executable
+	if daemonPath == "" {
+		var err error
+		daemonPath, err = findDaemonBinary()
+		if err != nil {
+			return false
+		}
 	}
 
 	// Start daemon in background
@@ -181,11 +224,39 @@ func StartDaemonOnDemand() bool {
 	if err := cmd.Start(); err != nil {
 		return false
 	}
+	// Retain ownership until readiness succeeds. Failed startup must not leave
+	// this detached process or its descendants behind; an already-running daemon
+	// was handled above and never enters this ownership scope.
+	done := make(chan struct{})
+	go func() {
+		_ = cmd.Wait()
+		close(done)
+	}()
+	ready := false
+	defer func() {
+		if !ready {
+			// Setsid gives this child its own process group. Do not use a socket
+			// PID or a broad daemon search: only this startup instance is ours.
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+			<-done
+		}
+	}()
 
 	// Wait for daemon to be ready (up to 5 seconds)
+	startupCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
 	for i := 0; i < 50; i++ {
-		time.Sleep(100 * time.Millisecond)
-		if IsDaemonRunning() {
+		select {
+		case <-startupCtx.Done():
+			return false
+		case <-done:
+			return false
+		case <-ticker.C:
+		}
+		if isDaemonRunningContext(startupCtx) {
+			ready = true // The shared daemon and its eventual reap now outlive us.
 			return true
 		}
 	}

@@ -231,9 +231,25 @@ test("platform availability follows the published channel snapshot", () => {
   assert.match(command(["claude", "gemini"], "macos", "update")!, /--products claude,gemini\)$/);
 });
 
+test("Pi commands use common selection and independent observer consent", () => {
+  for (const target of ["macos", "linux", "windows"] as const) {
+    const prefix = "(set -o pipefail; curl -fsSL https://agent-notifications.com/install.sh | bash -s -- ";
+    assert.equal(command("pi", target, "install"), prefix + "--product pi --desktop)");
+    assert.equal(command("pi", target, "update"), prefix + "--product pi)");
+    assert.equal(command("pi", target, "install", false, {desktop: false, webhook: true}), prefix + "--product pi --webhook)");
+    assert.equal(command(["pi", "gemini", "claude", "pi"], target, "install", false), prefix + "--products claude,gemini,pi --skip-agent-notify --desktop)");
+    assert.equal(command("pi", target, "install", true, {desktop: false, webhook: false}), prefix + "--product pi --desktop=false --webhook=false)");
+    assert.equal(command("pi", target, "configure"), null);
+    const snippet = command(["pi", "codex"], target, "install", true, {desktop: true, webhook: true})!;
+    const result = spawnSync("bash", [], {input: `curl() { cat <<'INSTALLER'\nprintf '%s\\n' "$@"\nINSTALLER\n}\n${snippet}`, encoding: "utf8"});
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, "--products\ncodex,pi\n--desktop\n--webhook\n");
+  }
+});
+
 // Every selected agent must survive canonicalization, including mixed Cursor/Qoder.
 test("all supported selections keep every product and preserve update channel consent", () => {
-  const canonical = ["claude", "codex", "opencode", "gemini", "qoder", "cursor"] as const;
+  const canonical = ["claude", "codex", "opencode", "gemini", "qoder", "cursor", "pi"] as const;
   assert.deepEqual(agentProducts, canonical);
   for (let mask = 1; mask < 1 << canonical.length; mask++) {
     const selected = canonical.filter((_, index) => mask & (1 << index));

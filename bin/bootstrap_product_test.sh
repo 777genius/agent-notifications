@@ -72,6 +72,7 @@ bash -c '
 bootstrap_macos_command() { echo "Unexpected macOS application query in fixture" >&2; return 1; }
 
 bash "$ROOT/bin/bootstrap_state_migration_test.sh"
+bash "$ROOT/bin/bootstrap_pi_test.sh"
 
 # Regression: an omitted route on macOS must reach configure with the registered
 # official app (including spaces) and preserve-policy; explicit decisions must
