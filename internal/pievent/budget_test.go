@@ -16,21 +16,21 @@ func TestAdmissionAssignsOneDeadlineForColdSequentialDelivery(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer cancel()
-	if deadline.BootID != "TEST-boot" || deadline.NotAfter != 120 {
+	if deadline.BootID != "TEST-boot" || deadline.NotAfter != 125 {
 		t.Fatalf("admission deadline: %+v", deadline)
 	}
-	if end, ok := ctx.Deadline(); !ok || time.Until(end) <= 19*time.Second || time.Until(end) > 20*time.Second {
-		t.Fatal("admission did not bound its context to 20s")
+	if end, ok := ctx.Deadline(); !ok || time.Until(end) <= 24*time.Second || time.Until(end) > 25*time.Second {
+		t.Fatal("admission did not bound its context to 25s")
 	}
 	// Completing the desktop late must leave only the original remainder for
 	// the webhook, rather than grant a fresh full budget to the next channel.
-	if left, ok := remaining(budgetClock(119), deadline); !ok || left != time.Second {
+	if left, ok := remaining(budgetClock(124), deadline); !ok || left != time.Second {
 		t.Fatalf("original deadline renewed: remaining=%v valid=%t", left, ok)
 	}
-	if _, ok := remaining(budgetClock(120), deadline); ok {
+	if _, ok := remaining(budgetClock(125), deadline); ok {
 		t.Fatal("expired admitted event revived")
 	}
-	deadline.NotAfter = 120.001
+	deadline.NotAfter = 125.001
 	if _, ok := remaining(budgetClock(100), deadline); ok {
 		t.Fatal("deadline beyond the admission maximum accepted")
 	}

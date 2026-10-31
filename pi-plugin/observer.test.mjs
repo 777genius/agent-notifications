@@ -120,14 +120,14 @@ test("loaded code cannot refresh its revision by rereading a new locator", async
   assert.equal(rows(f.delivered)[0].loaded_revision.projection_digest, f.runtime.loaded_revision.projection_digest);
 });
 
-test("normal non-TUI quit does not reset a hung child's original lifetime", { timeout: 27000 }, async t => {
+test("normal non-TUI quit does not reset a hung child's original lifetime", { timeout: 32000 }, async t => {
   const f = await fixture(t, { hang: true, ignoreTerm: true });
   const born = Date.now(); f.settle();
   await waitFor(() => rows(f.invoked).length === 1);
   await sleep(200);
   await f.emit("session_shutdown", { reason: "quit" });
   const elapsed = Date.now() - born;
-  assert.ok(elapsed >= 20_500 && elapsed < 21_500, `original child lifetime: ${elapsed}ms`);
+  assert.ok(elapsed >= 25_500 && elapsed < 26_500, `original child lifetime: ${elapsed}ms`);
   assert.equal(rows(f.delivered).length, 0);
   assert.equal(rows(f.invoked).length, 1);
 });
