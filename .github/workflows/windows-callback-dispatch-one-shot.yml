@@ -8,7 +8,7 @@ permissions:
   actions: write
 jobs:
   signed-archive-intake:
-    if: ${{ github.repository == '777genius/agent-notifications' && github.event.head_commit.message == 'ci(windows) signed archive intake f00b56b' && github.run_attempt == 1 }}
+    if: ${{ github.repository == '777genius/agent-notifications' && github.event.head_commit.message == 'ci(windows) signed archive intake fc994a8' && github.run_attempt == 1 }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -18,8 +18,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          target='f00b56b36850053c649f61293ccb31da72d24ab2'
-          parent='228ca171b4a0b4c10222571e7c8b87ba0f160958'
+          target='fc994a81e624531bdfd37ad015508ecefbd10fbd'
+          parent='30968141e49596c2207b9c42c5546bbc57539a4c'
           current="$(gh api repos/777genius/agent-notifications/git/ref/heads/test/windows-installed-cold-callback -q .object.sha)"
           actualParent="$(gh api repos/777genius/agent-notifications/git/ref/heads/feat/windows-callback-installed -q .object.sha)"
           if [[ "$current" != "$target" || "$actualParent" != "$parent" ]]; then
