@@ -5,9 +5,11 @@ questions, permission requests and terminal errors**. Desktop completion uses
 `✅ [Native session title]` when available, and questions show their actual text
 as `❓ Actual question?` with the session title as context. macOS uses a native
 subtitle; Linux and Windows include that context above the body. Missing context
-falls back to generic OpenCode copy. Alerts remain silent and do not navigate to
-a terminal or session when clicked. Plan/review events and sound controls are
-outside this integration.
+falls back to generic OpenCode copy. Alerts remain silent by default;
+an **explicit opt-in** can request the OS's built-in notification sound where
+the desktop supports it. This is not the Claude/Codex custom-sound/volume
+engine. Clicking does not navigate to a terminal or OpenCode session, and
+plan/review events are outside this integration.
 
 Agent Notifications uses
 **one installed plugin** for OpenCode V1 and
@@ -198,6 +200,30 @@ inspection private. For a custom control root, include `--control-root` on the
 edit as well. Inspect again after success. Settings are read on subsequent events;
 a settings-only edit does not replace the loaded plugin or require a restart.
 
+### Optional system notification sound (OpenCode)
+
+The managed OpenCode observer is **silent by default**, including on upgrades.
+It never inherits the global `sound: true` default as permission to start
+audio. To request the operating system's **default notification cue** (not
+Claude/Codex MP3 sounds), first inspect the managed revision as above, then
+apply this single existing config leaf through the managed editor:
+
+```bash
+printf '%s\n' '{"set":{"/notifications/desktop/systemSound":true}}' |
+  "$NOTIFICATIONS_BIN" config edit --target opencode --stdin --expect-revision 'REVISION_FROM_INSPECT'
+```
+
+The existing `notifications.desktop.sound` master switch must also be
+enabled; `systemSound` starts as absent/off. Set it to `false` to opt out
+without disabling banners. The native macOS notification helper, Windows toast
+and Linux notification daemon decide whether an audible default cue is actually
+played; OS Do Not Disturb and notification permissions may silence it. This
+setting does **not** enable custom sound files, volume/device selection or
+Click-to-Focus, and success from the OS notification API does not prove audible
+playback. Do not enable OpenCode's own V2 `attention.sound` in parallel if a
+single cue per event is desired. Keep the installed OpenCode desktop channel
+consented; setting sound does not grant notification channel consent.
+
 The editor uses the existing config leaf validation and raw-value preservation,
 then the managed transaction's policy CAS, component/config locks and generation
 publication. Unedited policy fields, other agents' route settings, setup channel
@@ -298,8 +324,9 @@ check other plugins in your OpenCode profile.
 
 One-shot `opencode run` may exit before asynchronous delivery completes. Delivery
 at host shutdown is best effort; notification delivery after process exit is not
-guaranteed. Root-session events only are covered; nested subagent events, audio,
-click-to-focus and plan/review alerts are outside this integration.
+guaranteed. Root-session events only are covered; nested subagent events,
+custom audio controls, click-to-focus and plan/review alerts remain outside this
+integration. The optional OS default sound is subject to platform settings.
 
 V2 completion means one positively verified final answer per native busy period.
 Queued or steered inputs can share that period. A tool step, retry, compaction
