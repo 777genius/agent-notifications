@@ -75,9 +75,9 @@ func (c ComposedConsumer) ConsumeEntry(entry *Entry, input io.ReadCloser) Receip
 	if err != nil {
 		return Receipt{Status: "rejected", Reason: "invalid_config"}
 	}
-	// An inherited/global sound default never changes existing OpenCode
-	// installs from silent to audible. Only an explicit OpenCode profile opts in.
-	nativeSound := doc.ExplicitAgentDesktopSound(config.AgentOpenCode) && cfg.Notifications.Desktop.Sound
+	// The system cue is opt-in; existing OpenCode installations remain silent.
+	// Native sound does not grant a terminal/chat navigation target.
+	nativeSound := cfg.IsSystemSoundEnabled()
 	if !entry.Check() {
 		return Receipt{Status: "suppressed", Reason: string(Expired)}
 	}
