@@ -521,7 +521,11 @@ func terminalAutomationUID(_ pid: pid_t) -> Int? {
     for _ in 0..<32 {
         guard current > 1, !seen.contains(current) else { break }
         seen.insert(current)
-        var row = try terminalProcessIdentity(current)
+        // Ancestors owned by another user (Terminal's root-owned login) are not
+        // always inspectable; an unverifiable ancestor only withholds admission.
+        guard var row = try? terminalProcessIdentity(current) else {
+            return ["admitted": false, "reason": "automation_ancestor_unobservable", "chain": chain]
+        }
         var info = proc_bsdinfo()
         let size = Int32(MemoryLayout<proc_bsdinfo>.size)
         guard row["status"] as? String == "observed", proc_pidinfo(current, PROC_PIDTBSDINFO, 0, &info, size) == size,

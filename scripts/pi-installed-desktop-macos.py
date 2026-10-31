@@ -46,6 +46,11 @@ D = module("pi_installed_process", REPO / "scripts/pi-installed-process-e2e.py")
 H = module("pi_macos_helper", REPO / "scripts/pi-macos-helper.py")
 
 
+def same_executable(observed, expected):
+    """The native observer reports /tmp for /private/tmp; compare physical paths."""
+    return isinstance(observed, str) and Path(observed).resolve() == Path(expected).resolve()
+
+
 def wait_for(predicate, reason, seconds=12):
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
@@ -209,7 +214,7 @@ def consent_request_identity(request, observe, candidate):
         identity = observe("terminal-process-identity", str(request.pid), timeout=3)
         P.require(identity.get("status") == "observed" and identity.get("pid") == request.pid
                   and identity.get("parent_pid") == os.getpid()
-                  and identity.get("executable_path") == str(candidate.resolve())
+                  and same_executable(identity.get("executable_path"), candidate)
                   and identity.get("process_start_identity"), "original_consent_cli_identity_unverified")
         return identity
     except Exception as error:
@@ -248,7 +253,7 @@ def allow_consent(request, observe, app, candidate, receipt, deadline, now=time.
     helper = receipt.get("request_helper_identity", {})
     P.require(identity.get("status") == "observed" and identity.get("pid") == request.pid
               and identity.get("parent_pid") == os.getpid()
-              and identity.get("executable_path") == str(candidate.resolve())
+              and same_executable(identity.get("executable_path"), candidate)
               and identity.get("process_start_identity")
               and type(helper.get("pid")) is int and helper["pid"] > 0
               and helper.get("finished_launching") is True and helper.get("process_start_identity"),
@@ -573,6 +578,16 @@ def terminal_automation_admission(evidence_root, source):
             "host_preparation_sha256": P.sha(path), "requester": "hosted-compute-agent", "target": "com.apple.Terminal"}
 
 
+def exited_within(child, seconds, now=time.monotonic):
+    """A fast do-script can exit while a read-only observer is still reading its
+    kernel identity; give that process a short grace to be collected before
+    the observer failure is treated as real."""
+    end = now() + seconds
+    while child.poll() is None and now() < end:
+        time.sleep(0.02)
+    return child.poll() is not None
+
+
 def terminal_applescript(source, observe, receipt, admit, *, now=time.monotonic, spawn=subprocess.Popen):
     """Collect one original do-script through its normal Automation consent."""
     started = now()
@@ -590,7 +605,7 @@ def terminal_applescript(source, observe, receipt, admit, *, now=time.monotonic,
                     actors = observe("terminal-automation-actors", str(child.pid), str(os.getpid()), timeout=min(3, remaining))
                     receipt["actors"] = actors
                 except Exception:
-                    if child.poll() is None:
+                    if not exited_within(child, min(5, remaining), now):
                         raise
                     break
             if actors.get("admitted") is True and not clicked and child.poll() is None:
@@ -601,7 +616,7 @@ def terminal_applescript(source, observe, receipt, admit, *, now=time.monotonic,
                 try:
                     observed = observe("terminal-automation-consent", json.dumps(context, sort_keys=True), timeout=min(3, remaining))
                 except Exception as error:
-                    if child.poll() is None:
+                    if not exited_within(child, min(5, deadline - now()), now):
                         raise
                     # A fast, already-authorized do-script can exit while the
                     # read-only observer revalidates its kernel identity. Only
@@ -732,7 +747,7 @@ class Terminal:
         identity = observer("terminal-process-identity", str(self.pid))
         P.require(identity.get("status") == "observed" and identity.get("pid") == self.pid
                   and identity.get("parent_pid") == self.shell_pid
-                  and identity.get("executable_path") == self.executable
+                  and same_executable(identity.get("executable_path"), self.executable)
                   and identity.get("process_start_identity"), "owned_terminal_process_identity_unverified")
         self.process_start_identity = identity["process_start_identity"]
 
