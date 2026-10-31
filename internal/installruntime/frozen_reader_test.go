@@ -317,6 +317,18 @@ func TestFrozenActualMainReaderProvenanceAndExecution(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
+	// Populate Go's module cache from the verified historical go.mod/go.sum.
+	// Only acquisition can use the ordinary proxy; the old reader runs offline.
+	prefetch := exec.CommandContext(ctx, goTool, "mod", "download")
+	prefetch.Dir = baseline
+	prefetch.Env = append(os.Environ(), "GOTOOLCHAIN=local", "GOWORK=off")
+	prefetch.WaitDelay = 5 * time.Second
+	var prefetchOutput frozenReaderOutput
+	prefetchOutput.cancel = cancel
+	prefetch.Stdout, prefetch.Stderr = &prefetchOutput, &prefetchOutput
+	if err := prefetch.Run(); err != nil {
+		t.Fatalf("historical reader pinned module acquisition failed: %v\n%s", err, prefetchOutput.Bytes())
+	}
 	command := exec.CommandContext(ctx, goTool, "test", "-v", "-mod=readonly", "-count=1", "-timeout=45s", "-run=^TestActualMain0F63RejectsWindows6BeforeBlobs$", "./internal/installruntime")
 	command.WaitDelay = 5 * time.Second
 	command.Dir = baseline
