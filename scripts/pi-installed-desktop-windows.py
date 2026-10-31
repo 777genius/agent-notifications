@@ -523,6 +523,10 @@ class Native:
     def type(self, window, value):
         self("type", window["hwnd"], window["pid"], window["title"], value)
 
+    def quit_pi(self, window):
+        # Real Pi exit keybinding, not a Unicode /quit prompt followed by Enter.
+        self("pi-quit", window["hwnd"], window["pid"], window["title"])
+
     def held_process(self, handle, mode, *args, timeout=25):
         P.require(handle.value is not None, "owned_pi_process_handle_already_closed")
         result = command([self.executable, mode, handle.value, *args], handles=(handle.value,), timeout=timeout)
@@ -859,7 +863,7 @@ def run(args):
                     if name == "question":
                         native.type(origin.window, "TEST accepted")
                         wait_for(lambda: any(row["type"] == "ui_prompt_end" for row in F.witness(case_root)), "native_question_not_collected")
-                    native.type(origin.window, "/quit"); origin.collect()
+                    native.quit_pi(origin.window); origin.collect()
                 rows = F.witness(case_root)
                 if name == "question":
                     P.require(not provider.requests and sum(row["type"] == "ui_prompt_start" for row in rows) == 1

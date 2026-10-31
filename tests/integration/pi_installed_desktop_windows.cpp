@@ -478,6 +478,15 @@ static void typeLine(HWND window, const std::wstring& value) {
     }
     key(VK_RETURN, false); key(VK_RETURN, true);
 }
+// Pi's native TUI exits with Ctrl+D when the editor is empty. A Unicode
+// /quit line sent through SendInput can instead submit another model turn.
+static void quitPi(HWND window) {
+    need(GetForegroundWindow() == window && keyboardRoot() == window, "quitting_requires_owned_foreground");
+    // Clear any unsubmitted editor text first; do not send Enter or a prompt.
+    key(VK_CONTROL, false); key('U', false); key('U', true); key(VK_CONTROL, true);
+    pump(30);
+    key(VK_CONTROL, false); key('D', false); key('D', true); key(VK_CONTROL, true);
+}
 static void screenshot(const fs::path& path) {
     const int width = GetSystemMetrics(SM_CXSCREEN), height = GetSystemMetrics(SM_CYSCREEN);
     need(width > 0 && height > 0 && static_cast<uint64_t>(width) * height <= 16000000, "screen_capture_bound");
@@ -877,7 +886,7 @@ int wmain(int argc, wchar_t** argv) {
             const HWND window = search.found.empty() ? nullptr : search.found[0];
             std::cout << "{\"hwnd\":" << reinterpret_cast<uintptr_t>(window) << ",\"pid\":" << owner(window) << "}\n"; return 0;
         }
-        if ((mode == L"activate" || mode == L"close" || mode == L"type") && argc >= 5) {
+        if ((mode == L"activate" || mode == L"close" || mode == L"type" || mode == L"pi-quit") && argc >= 5) {
             HWND window = nullptr;
             try { window = boundWindow(argv[2], argv[3], argv[4]); }
             catch (const std::runtime_error&) {
@@ -889,7 +898,11 @@ int wmain(int argc, wchar_t** argv) {
                 std::cout << "{\"ok\":true,\"already_absent\":true}\n"; return 0;
             }
             if (mode == L"close") PostMessageW(window, WM_CLOSE, 0, 0);
-            else { foreground(window); if (mode == L"type") { need(argc == 6, "native_text_required"); typeLine(window, argv[5]); } }
+            else {
+                foreground(window);
+                if (mode == L"type") { need(argc == 6, "native_text_required"); typeLine(window, argv[5]); }
+                if (mode == L"pi-quit") { need(argc == 5, "native_pi_quit_arguments_required"); quitPi(window); }
+            }
             std::cout << "{\"ok\":true}\n"; return 0;
         }
         if ((mode == L"toast" || mode == L"toast-click") && argc == 5) return toast(argv[2], argv[3], argv[4], mode == L"toast-click");

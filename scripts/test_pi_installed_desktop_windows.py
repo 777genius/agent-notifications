@@ -112,6 +112,18 @@ class OriginalWebhookDeadlineTests(unittest.TestCase):
                 W.original_toast_deadline(handle, deadline, now=lambda: now)
 
 
+class NativePiQuitTests(unittest.TestCase):
+    def test_quit_uses_owned_terminal_native_keybinding_not_new_prompt(self):
+        native = W.Native("observer.exe")
+        window = {"hwnd": 123, "pid": 456, "title": "TEST-Pi-origin-owned"}
+        with patch.object(W, "command") as run:
+            run.return_value = SimpleNamespace(stdout=b'{"ok":true}')
+            native.quit_pi(window)
+        argv = run.call_args.args[0]
+        self.assertEqual(argv, ["observer.exe", "pi-quit", 123, 456, "TEST-Pi-origin-owned"])
+        self.assertNotIn("/quit", argv)
+
+
 class LauncherDiagnosticsTests(unittest.TestCase):
     def test_real_terminal_launch_uses_explicit_powershell_profile_not_default_wsl(self):
         with tempfile.TemporaryDirectory(prefix="TEST-pi-terminal-profile-") as directory:
