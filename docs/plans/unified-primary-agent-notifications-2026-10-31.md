@@ -1,6 +1,6 @@
 # Unified notifications for Claude Code, Codex CLI and OpenCode
 
-**Date:** 2026-10-31. **Baseline:** main at 06ab7ae317c832e909bc76e998d07e388596292a. **Status:** plan/spikes, not native acceptance. **PR:** one coherent draft; source changes must be proved at its exact head.
+**Date:** 2026-10-31. **Baseline:** main at 06ab7ae317c832e909bc76e998d07e388596292a. **Status:** three plan-critical reviews completed; first shared-policy/opt-out code slice implemented. OpenCode sound/Click-to-Focus and wider origin capture are **not** implemented or native-qualified. **PR:** one coherent draft; source changes must be proved at its exact head.
 
 ## 1. Goal and precise success condition
 
@@ -37,6 +37,18 @@ One consistent delivery policy for three priority agents, using existing cross-p
 **S4: native callback lifecycle.** For any newly advertised click test installed producer, real visual banner and **physical click after producer exits** on the claimed OS. Native helper signature, origin identity, update/uninstall revocation, OS authorization prompts, duplicate clicks, wrong-window attempts and unknown outcomes are critical. Do not retry after an OS submission of unknown effect. OS acceptance is not click success.
 
 **S5: isolated regression.** Existing focused Go tests, OpenCode Node plugin tests, real pinned CLI with loopback provider and TEST configuration. No unrelated user project, live credentials, transcript text or broad new test framework. Each native receipt records source SHA, CLI version, OS/arch, binary/helper identity, real click/visual/cue and cleanup.
+
+### Spike outcome record (current candidate)
+
+| Spike | Evidence | Decision |
+| --- | --- | --- |
+| S1 Claude/Codex | Source audit of hook session identity, existing macOS Ghostty capture and cross-platform focus; no installed two-window experiment yet | Preserve existing routes and hashed Codex state. Fix proven opt-out on shared legacy path; do not expand precision claims |
+| S2 OpenCode | Current server facts contain no local TUI binding. Upstream V2 CLI TUI API documents local attention/route, but installed 2.0.21 API and callback not physically qualified | Keep server Navigation=None; avoid wrong-window activation |
+| S3 sound | Existing OpenCode consumer hardcodes Silent=true and SoundEnabled=false. Typed native protocol does not carry configured custom sound route; V2 host sound may duplicate | Preserve silent OpenCode delivery. Require explicit owner/consent and actual cue proof before enabling |
+| S4 native click | No new native callback route was introduced or qualified by this slice | No new click support claim |
+| S5 tests | Added focused Go regression and pure policy tests; CI checks are the authoritative Go 1.25+/native validation | Do not count local Go 1.23 execution as repository acceptance |
+
+**Implemented code slice:** `internal/notifier/notifier.go` selects multiplexer callback actions only with clickToFocus enabled; `notifier_action_policy_test.go` covers four multiplexer alternatives and enable/fallback. `internal/notification/admission.go` centralizes native transport's pre-effect navigation/consent/config decision with `admission_test.go`; macOS, Linux and Windows typed transports reuse it without changing platform-specific target proof or receipt logic. This is a safe foundation, **not** the completion of all feature goals.
 
 ## 4. Decision after spikes
 
