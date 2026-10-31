@@ -25,12 +25,18 @@ type LinuxBinding struct {
 	SHA256       string `json:"sha256"`
 }
 
+type WindowsBinding struct {
+	SnapshotPath string `json:"snapshotPath"`
+	SHA256       string `json:"sha256"`
+}
+
 // DesktopTarget is supplied by a trusted integration and setup adapter, never
 // decoded from model arguments. App identity is operator-pinned, not inferred
 // from cwd, metadata text, or whichever app happens to be foreground.
 type DesktopTarget struct {
 	Provider        string
 	Linux           LinuxBinding
+	Windows         WindowsBinding
 	ThreadID        string
 	ApplicationPath string
 	TeamID          string
