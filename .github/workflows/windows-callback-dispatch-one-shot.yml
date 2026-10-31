@@ -8,7 +8,7 @@ permissions:
   actions: write
 jobs:
   pinned-basic-retained-and-package:
-    if: ${{ github.repository == '777genius/agent-notifications' && github.event.head_commit.message == 'ci(windows) admit three pinned qualification phases on b55a8f4' && github.run_attempt == 1 }}
+    if: ${{ github.repository == '777genius/agent-notifications' && github.event.head_commit.message == 'ci(windows) admit three pinned qualification phases on 00aaded' && github.run_attempt == 1 }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -18,7 +18,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          target='b55a8f40975098f8794822577ecd7be2800049fc'
+          target='00aaded19727c12ec3d498ff873913167a8502e2'
           parent='228ca171b4a0b4c10222571e7c8b87ba0f160958'
           expectedArchiveSHA='d442a3d7d5c229f45e5e11995711ac2619c8dbc89e3fa2bc185287dc8db8e76e'
           expectedFullName='OpenAI.Codex_26.1027.3384.0_x64__2p2nqsd0c76g0'
