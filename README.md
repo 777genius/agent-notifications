@@ -28,7 +28,7 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/777genius/agent-notifications.svg)](https://pkg.go.dev/github.com/777genius/agent-notifications)
 [![codecov](https://codecov.io/gh/777genius/agent-notifications/graph/badge.svg?branch=main)](https://codecov.io/gh/777genius/agent-notifications)
 
-Desktop notifications for **Claude, Codex CLI, OpenCode, Gemini CLI, Cursor CLI and Qoder** on **macOS, Linux and Windows**. Supported architectures and events vary by agent; see the support table and linked setup guides. Claude and Codex support sounds and click-to-focus where qualified; Qoder supports sounds, and OpenCode can explicitly request an OS-default notification cue (platform-dependent).
+Desktop notifications for **Claude, Codex CLI, OpenCode, Gemini CLI, Cursor CLI and Qoder** on **macOS, Linux and Windows**. Supported architectures and events vary by agent; see the support table and linked setup guides. Claude and Codex support sounds and click-to-focus where qualified; Qoder supports sounds, but its focus behavior is not yet qualified.
 
 <p align="center">
   <img width="100%" alt="macOS, Windows, Linux (left to right)" src="docs/images/notification-platform-labels.svg" />
@@ -102,12 +102,14 @@ Claude/Codex setup also installs the `agent-notifications` MCP server and `agent
 | --- | --- | --- | --- | --- |
 | **Claude Code** | Completions, reviews, questions, plans, session limits and API errors | Yes | Terminal/editor, OS-dependent | [Notification types](docs/NOTIFICATION_TYPES.md) |
 | **Codex CLI** | Turn completion and tool permissions; experimental question hooks and final-message question/error detection | Yes | Terminal/editor where supported; separately configured Codex desktop chat route | [Setup and limits](docs/CODEX.md) |
-| **OpenCode** | Root-session completion, questions, permissions and errors | Optional OS default (opt-in) | No | [Setup and limits](docs/opencode-notifications.md) |
+| **OpenCode** | Root-session completion, questions, permissions and errors | No (published v1.49.11) | No | [Setup and limits](docs/opencode-notifications.md) |
 | **Gemini CLI** | Turn completion and tool permissions | No | No | [Cross-platform setup and qualification](docs/gemini-notifications.md) |
 | **Cursor CLI** | Agent loop stopping; fixed informational text | No | No | [Qualified hosts, shared setup and profile authority](docs/cursor-notifications.md) |
 | **Qoder** | Completion, question, permission, plan and subagent/idle-teammate hooks; native plugin | Yes | Not qualified; exact-chat focus unavailable | [Unified installation and native hooks](docs/QODER.md) |
 
 **[Detailed support matrix](docs/AGENT_SUPPORT_MATRIX.md)** — event coverage, sounds, terminal vs exact-chat navigation, currently unshipped Copilot/Pi work, evidence limits and effort estimates.
+
+**Unreleased source change:** OpenCode's optional OS-default cue (`systemSound`) is implemented in source but is **not present in the published v1.49.11 platform channels**. Do not mark it supported for guided installations until a newly qualified release is published.
 
 OpenCode V1 and V2 use one installed plugin. The installer does not restrict agent CLI versions. See [OpenCode setup, release reports and delivery limits](docs/opencode-notifications.md) for qualification of specific versions and platforms.
 
