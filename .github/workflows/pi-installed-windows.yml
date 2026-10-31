@@ -63,6 +63,12 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
+      - name: Parse owner-only Terminal preparation without executing system changes
+        shell: pwsh
+        run: |
+          $tokens = $null; $errors = $null
+          $null = [Management.Automation.Language.Parser]::ParseFile('scripts/pi-windows-host.ps1', [ref]$tokens, [ref]$errors)
+          if ($errors.Count) { $errors | Format-List; throw 'Owner-only Terminal preparation syntax invalid' }
       - name: Compile the Windows desktop and host observers without native effects
         shell: pwsh
         run: |
