@@ -196,8 +196,14 @@ func (n *Notifier) SendDesktop(status analyzer.Status, message, sessionID, cwd s
 // a mux builder returns executable click actions even if the generic fallback
 // would have omitted them.
 func selectTerminalNotifierArgs(title, message, bundleID, cwd, ghosttyTerminalID string, clickToFocus bool, cfg *config.Config) []string {
+	return selectTerminalNotifierArgsWithDetector(title, message, bundleID, cwd, ghosttyTerminalID, clickToFocus, cfg, detectMultiplexerArgs)
+}
+
+// The detector seam lets tests prove that disabled navigation never captures
+// or invokes a terminal multiplexer, independently of machine environment.
+func selectTerminalNotifierArgsWithDetector(title, message, bundleID, cwd, ghosttyTerminalID string, clickToFocus bool, cfg *config.Config, detect func(string, string, string, *config.Config) ([]string, string)) []string {
 	if clickToFocus {
-		if muxArgs, muxName := detectMultiplexerArgs(title, message, bundleID, cfg); muxArgs != nil {
+		if muxArgs, muxName := detect(title, message, bundleID, cfg); muxArgs != nil {
 			logging.Debug("%s detected, using multiplexer-specific -execute", muxName)
 			return muxArgs
 		} else if muxName != "" {
