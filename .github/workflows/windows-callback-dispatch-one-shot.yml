@@ -8,7 +8,7 @@ permissions:
   actions: write
 jobs:
   signed-intake:
-    if: ${{ github.repository == '777genius/agent-notifications' && github.event.head_commit.message == 'ci(windows): authorize signed intake on b55a8f4' && github.run_attempt == 1 }}
+    if: ${{ github.repository == '777genius/agent-notifications' && github.event.head_commit.message == 'ci(windows) authorize signed intake on b55a8f4' && github.run_attempt == 1 }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
