@@ -1,0 +1,33 @@
+name: One-shot signed Windows callback intake dispatch
+on:
+  push:
+    branches: [ci/win-callback-dispatch-20261031]
+    paths: ['.github/workflows/windows-callback-dispatch-one-shot.yml']
+permissions:
+  contents: read
+  actions: write
+jobs:
+  signed-intake:
+    if: ${{ github.repository == '777genius/agent-notifications' && github.event.head_commit.message == 'ci(windows): authorize signed intake on b55a8f4' && github.run_attempt == 1 }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Source-pinned workflow_dispatch of the read-only archive intake
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          target='b55a8f40975098f8794822577ecd7be2800049fc'
+          current="$(gh api repos/777genius/agent-notifications/git/ref/heads/test/windows-installed-cold-callback -q .object.sha)"
+          if [[ "$current" != "$target" ]]; then
+            echo 'Target changed; refuse intake dispatch' >&2
+            exit 1
+          fi
+          gh api --method POST repos/777genius/agent-notifications/actions/workflows/windows-callback-contracts.yml/dispatches \
+            -f ref=test/windows-installed-cold-callback \
+            -f 'inputs[admission]=one-fresh-disposable-installed-callback' \
+            -f 'inputs[phase]=archive_intake' \
+            -f 'inputs[scenario]=basic' \
+            -f 'inputs[coreRef]='
+          echo 'Admitted read-only archive intake dispatched; installed effects remain unadmitted.'
