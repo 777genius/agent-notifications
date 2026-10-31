@@ -95,9 +95,9 @@ func advanceWindows(ctx context.Context, root string, tx *transaction, fault fun
 		return nil
 	}
 	w := tx.Windows
-	if w.End == 0 {
-		w.End = windowsGenerationDeadline(ctx)
-	}
+	// Each recovery/advancement attempt gets its own bounded operation window.
+	// End is transient, never part of the durable decision or journal.
+	w.End = windowsGenerationDeadline(ctx)
 	if e := validateWindowsChange(w, root); e != nil {
 		return e
 	}

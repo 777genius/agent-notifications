@@ -947,21 +947,27 @@ namespace wcb {
   inline void restoreShortcut(const Generation& g,uint64_t end){
     auto p=shortcutPath(g,end);
     auto parents=shortcutParents(p,end);
-    installedBudget(end);
-    if(GetFileAttributesW(p.c_str())==INVALID_FILE_ATTRIBUTES){
-      require(GetLastError()==ERROR_FILE_NOT_FOUND);
-      return;
+    auto stage=p;
+    stage+=L".stage";
+    // A failed publish may leave only the owned stage, not a final shortcut.
+    // Refuse foreign stages; only final links require complete COM readback.
+    for(const auto& leaf:{stage,p}){
+      installedBudget(end);
+      if(GetFileAttributesW(leaf.c_str())==INVALID_FILE_ATTRIBUTES){
+        require(GetLastError()==ERROR_FILE_NOT_FOUND);
+        continue;
+      }
+      auto file=writableLeaf(leaf,g);
+      installedBudget(end);
+      if(leaf==p)shortcutReadbackBytes(g,bytes(file.h,65536),end);
+      installedBudget(end);
+      FILE_DISPOSITION_INFO disposition{
+        TRUE
+      };
+      require(SetFileInformationByHandle(file.h,FileDispositionInfo,&disposition,sizeof(disposition)));
+      installedBudget(end);
+      file.closeChecked();
     }
-    auto file=writableLeaf(p,g);
-    installedBudget(end);
-    shortcutReadbackBytes(g,bytes(file.h,65536),end);
-    installedBudget(end);
-    FILE_DISPOSITION_INFO disposition{
-      TRUE
-    };
-    require(SetFileInformationByHandle(file.h,FileDispositionInfo,&disposition,sizeof(disposition)));
-    installedBudget(end);
-    file.closeChecked();
   }
   inline std::vector<std::string> operatorFields(){
     std::vector<uint8_t>b;

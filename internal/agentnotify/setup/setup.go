@@ -192,7 +192,7 @@ func Apply(ctx context.Context, o Options, r Request) (result Result, err error)
 	if e != nil {
 		return result, e
 	}
-	w, e := stageWindowsRoute(ctx, o, r, fields)
+	w, e := stageWindowsRoute(ctx, o, r, fields, s)
 	if e != nil {
 		return result, fail("windows_callback_unavailable", e)
 	}

@@ -321,7 +321,11 @@ func TestFrozenActualMainReaderProvenanceAndExecution(t *testing.T) {
 	// Only acquisition can use the ordinary proxy; the old reader runs offline.
 	prefetch := exec.CommandContext(ctx, goTool, "mod", "download")
 	prefetch.Dir = baseline
-	prefetch.Env = append(os.Environ(), "GOTOOLCHAIN=local", "GOWORK=off")
+	prefetch.Env = append(os.Environ(), "GOTOOLCHAIN=local", "GOWORK=off",
+		// The recovery CI sets GOPROXY=off globally. Only this explicit module
+		// acquisition uses the pinned historical go.mod/go.sum; the reader
+		// execution below still has GOPROXY=off and GOSUMDB=off.
+		"GOPROXY=https://proxy.golang.org,direct", "GOSUMDB=sum.golang.org")
 	prefetch.WaitDelay = 5 * time.Second
 	var prefetchOutput frozenReaderOutput
 	prefetchOutput.cancel = cancel
