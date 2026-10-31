@@ -1,4 +1,4 @@
-name: One-shot signed Windows callback intake dispatch
+name: One-shot pinned Windows callback installed qualification
 on:
   push:
     branches: [ci/win-callback-dispatch-20261031]
@@ -7,27 +7,45 @@ permissions:
   contents: read
   actions: write
 jobs:
-  signed-intake:
-    if: ${{ github.repository == '777genius/agent-notifications' && github.event.head_commit.message == 'ci(windows) authorize signed intake on b55a8f4' && github.run_attempt == 1 }}
+  pinned-basic-retained-and-package:
+    if: ${{ github.repository == '777genius/agent-notifications' && github.event.head_commit.message == 'ci(windows) admit three pinned qualification phases on b55a8f4' && github.run_attempt == 1 }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - name: Source-pinned workflow_dispatch of the read-only archive intake
+      - name: Dispatch three separately gated Windows 11 VM qualifications
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           target='b55a8f40975098f8794822577ecd7be2800049fc'
+          parent='228ca171b4a0b4c10222571e7c8b87ba0f160958'
+          expectedArchiveSHA='d442a3d7d5c229f45e5e11995711ac2619c8dbc89e3fa2bc185287dc8db8e76e'
+          expectedFullName='OpenAI.Codex_26.1027.3384.0_x64__2p2nqsd0c76g0'
           current="$(gh api repos/777genius/agent-notifications/git/ref/heads/test/windows-installed-cold-callback -q .object.sha)"
-          if [[ "$current" != "$target" ]]; then
-            echo 'Target changed; refuse intake dispatch' >&2
+          currentParent="$(gh api repos/777genius/agent-notifications/git/ref/heads/feat/windows-callback-installed -q .object.sha)"
+          if [[ "$current" != "$target" || "$currentParent" != "$parent" ]]; then
+            echo 'Head or parent changed; refusing all installed effects' >&2
             exit 1
           fi
-          gh api --method POST repos/777genius/agent-notifications/actions/workflows/windows-callback-contracts.yml/dispatches \
-            -f ref=test/windows-installed-cold-callback \
-            -f 'inputs[admission]=one-fresh-disposable-installed-callback' \
-            -f 'inputs[phase]=archive_intake' \
-            -f 'inputs[scenario]=basic' \
-            -f 'inputs[coreRef]='
-          echo 'Admitted read-only archive intake dispatched; installed effects remain unadmitted.'
+          if [[ ! "$expectedArchiveSHA" =~ ^[a-f0-9]{64}$ ]] ||
+             [[ "$expectedFullName" != OpenAI.Codex_*_x64__2p2nqsd0c76g0 ]]; then
+            echo 'Independently accepted official archive pins invalid' >&2
+            exit 1
+          fi
+          dispatch() {
+            local phase="$1" scenario="$2" core="$3"
+            echo "Dispatching one fresh Windows qualification: phase=$phase scenario=$scenario"
+            gh api --method POST repos/777genius/agent-notifications/actions/workflows/windows-callback-contracts.yml/dispatches \
+              -f ref=test/windows-installed-cold-callback \
+              -f 'inputs[admission]='$(if [[ "$phase" == package_noshow ]]; then printf '%s' one-fresh-disposable-package-noshow; else printf '%s' one-fresh-disposable-installed-callback; fi) \
+              -f "inputs[phase]=$phase" \
+              -f "inputs[scenario]=$scenario" \
+              -f "inputs[expectedArchiveSHA]=$expectedArchiveSHA" \
+              -f "inputs[expectedFullName]=$expectedFullName" \
+              -f "inputs[coreRef]=$core"
+          }
+          dispatch installed basic ''
+          dispatch installed retained ''
+          dispatch package_noshow package_noshow "$parent"
+          echo 'Three source-bound fresh Windows jobs requested. No automatic retry admitted.'
