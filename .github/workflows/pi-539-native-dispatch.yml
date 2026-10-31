@@ -1,0 +1,37 @@
+name: Pi 539 guarded native E2E dispatch
+
+on:
+  push:
+    branches:
+      - work/pi-539-native-dispatch
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Dispatch pinned native product tests without source changes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo="777genius/agent-notifications"
+          ref="feat/pi-uap-end-to-end"
+          sha="15e9aa90274417fba98d475f34dac1f5f2823153"
+          actual="$(gh api "repos/$repo/git/ref/heads/$ref" --jq .object.sha)"
+          if [[ "$actual" != "$sha" ]]; then
+            echo "Ref moved; refusing stale E2E ($actual != $sha)" >&2
+            exit 1
+          fi
+          echo "Dispatching native macOS product at pinned candidate"
+          jq -n --arg ref "$ref" --arg sha "$sha" '{ref:$ref,inputs:{source_sha:$sha,macos_runner:"macos-15",prepare_notification_center:"true",prepare_notification_presentation:"true",inspect_click_permission:"false",observer_only:"false",hosted_observer:"false"}}' |
+            gh api -X POST "repos/$repo/actions/workflows/pi-installed-macos.yml/dispatches" --input -
+          echo "Dispatching native Windows product at pinned candidate"
+          jq -n --arg ref "$ref" '{ref:$ref,inputs:{windows_client_runner:"windows-11-vs2026-arm",prepare_host:"true"}}' |
+            gh api -X POST "repos/$repo/actions/workflows/pi-installed-windows.yml/dispatches" --input -
+          echo "Native dispatch accepted"
