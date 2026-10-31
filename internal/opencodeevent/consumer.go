@@ -12,7 +12,6 @@ import (
 	"github.com/777genius/agent-notifications/internal/strictjson"
 	"github.com/777genius/agent-notifications/internal/webhook"
 	uap "github.com/777genius/plugin-kit-ai/sdk/opencode"
-	"github.com/google/uuid"
 )
 
 // Gate is the current, read-only opt-in and registration decision. A nil gate
@@ -119,14 +118,10 @@ func (c Consumer) Consume(ctx context.Context, input io.Reader) Receipt {
 		if c.Desktop != nil && c.Clock != nil {
 			boot, now, clockErr := c.Clock.Now()
 			if clockErr == nil && boot != "" {
-				receipt := c.Desktop.Deliver(ctx, notification.Request{
-					Content:       desktopContent(event, display, m.content, c.Config.IsSessionLabelEnabled()),
-					CorrelationID: uuid.NewString(),
-					Deadline:      notification.Deadline{BootID: boot, NotAfter: now + 10},
-					Policy:        notification.PolicySnapshot{Valid: true, ExplicitEnabled: true, DesktopEnabled: true, SoundEnabled: false},
-					Navigation:    notification.None,
-					Silent:        true,
-				})
+				receipt := c.Desktop.Deliver(ctx, desktopRequest(
+					desktopContent(event, display, m.content, c.Config.IsSessionLabelEnabled()),
+					notification.Deadline{BootID: boot, NotAfter: now + 10},
+					c.Config.IsSystemSoundEnabled()))
 				result.Desktop = receipt.Status
 			}
 		}

@@ -12,7 +12,6 @@ import (
 	"github.com/777genius/agent-notifications/internal/installruntime"
 	"github.com/777genius/agent-notifications/internal/notification"
 	"github.com/777genius/agent-notifications/internal/webhook"
-	"github.com/google/uuid"
 )
 
 // ComposedConsumer is the production boundary: one snapshot and one E1 claim.
@@ -76,6 +75,9 @@ func (c ComposedConsumer) ConsumeEntry(entry *Entry, input io.ReadCloser) Receip
 	if err != nil {
 		return Receipt{Status: "rejected", Reason: "invalid_config"}
 	}
+	// The system cue is opt-in; existing OpenCode installations remain silent.
+	// Native sound does not grant a terminal/chat navigation target.
+	nativeSound := cfg.IsSystemSoundEnabled()
 	if !entry.Check() {
 		return Receipt{Status: "suppressed", Reason: string(Expired)}
 	}
@@ -98,8 +100,9 @@ func (c ComposedConsumer) ConsumeEntry(entry *Entry, input io.ReadCloser) Receip
 		result.Desktop = "unavailable"
 		if ready() && c.Desktop != nil {
 			if port := c.Desktop(h); port != nil && ready() {
-				r := port.Deliver(h.Context(), notification.Request{Content: desktopContent(fact.Event, fact.Display, m.content, cfg.IsSessionLabelEnabled()), CorrelationID: uuid.NewString(), Deadline: h.Deadline(),
-					Policy: notification.PolicySnapshot{Valid: true, ExplicitEnabled: true, DesktopEnabled: true, SoundEnabled: false}, Navigation: notification.None, Silent: true})
+				r := port.Deliver(h.Context(), desktopRequest(
+					desktopContent(fact.Event, fact.Display, m.content, cfg.IsSessionLabelEnabled()),
+					h.Deadline(), nativeSound))
 				// Provider-specific text is not a private helper receipt authority.
 				switch r.Status {
 				case "submitted", "unknown", "unavailable", "rejected":
