@@ -25,7 +25,7 @@ Sources: [Claude/Codex/Qoder product event boundary](../internal/hooks/event.go)
 | --- | --- | --- | --- | --- | --- |
 | Claude Code | Yes | Yes | Yes | Supported, OS/terminal-dependent; pane precision varies | Not established |
 | Codex CLI | Yes | Yes | Yes | Legacy terminal focus where supported | Separate verified, configured Codex-desktop navigation path; platform/installation qualification matters |
-| OpenCode | Yes | Yes | No: explicit silent delivery | No: `Navigation=None` | No |
+| OpenCode | Yes | Yes | Optional OS-default cue after explicit `systemSound` opt-in; no custom audio/volume controls | No: `Navigation=None` | No |
 | Gemini CLI | Yes | Yes | No: explicit silent delivery | No: `Navigation=None` | No |
 | Cursor CLI | Yes (qualified hosts only) | Yes | No: explicit silent delivery | No: `Navigation=None` | No |
 | Qoder CLI | Yes | Yes | Yes: shared hook notifier | **Not qualified**: Claude-only Ghostty capture; generic legacy window activation must not be advertised as exact/guaranteed | No |
@@ -34,7 +34,7 @@ Sources: [Claude/Codex/Qoder product event boundary](../internal/hooks/event.go)
 
 Important implementation detail: `internal/hooks/hooks.go` and `internal/notifier/notifier.go` share sound, desktop and webhook delivery across Claude, Codex and Qoder. However, terminal-target capture for Ghostty is explicitly Claude-only. Qoder's setup guide currently describes `clickToFocus` as inert. The shared lower-level notifier can attempt generic activation when enabled; its existence is **not** evidence that Qoder has reliable, session-bound navigation. Resolve the documentation/runtime ambiguity with a native test before promoting support.
 
-Modern observer consumers intentionally use narrow fact types and separate registered-consent gates: [OpenCode](../internal/opencodeevent/consumer.go), [Gemini](../internal/geminievent/consumer.go), [Cursor](../internal/cursorevent/consumer.go). All three currently select `Navigation=None`, disable sound, and do not provide an origin bound to the local terminal. This is a genuine missing feature, not merely a README omission.
+Modern observer consumers intentionally use narrow fact types and separate registered-consent gates: [OpenCode](../internal/opencodeevent/consumer.go), [Gemini](../internal/geminievent/consumer.go), [Cursor](../internal/cursorevent/consumer.go). All three select `Navigation=None` and do not provide a trusted local terminal origin. OpenCode may explicitly request the OS-default cue; Gemini and Cursor remain silent. This is a genuine missing feature, not merely a README omission.
 
 ## Additional implementations and candidates (not advertised as shipped)
 
