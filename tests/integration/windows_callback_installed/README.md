@@ -36,7 +36,11 @@ The harness never repairs an existing caller file or relies on Node chmod to
 establish Windows ACL privacy. ONE notify
 with synthetic context is actually collected before ONE genuine Shell UIA
 Invoke. The native observer is armed before Show and awaits durable sender
-and route evidence before attempting UIA selection. The observer pins A's physical helper/snapshot/record and holds the fresh
+and route evidence before attempting UIA selection. It accepts the exact
+source-bound JSON only after the writing handle has closed, retrying only
+missing or still-exclusive files under a finite budget. The controller
+likewise waits for a closed click-armed receipt. Revocation does not pass
+--global-config: the shipping disable parser forbids that flag. The observer pins A's physical helper/snapshot/record and holds the fresh
 callback process HANDLE through exit using an independent collector armed before
 the synchronous sole Invoke. After durable click intent, a fresh bounded census
 rechecks exact title/body/provider ancestry, visible/enabled row and current

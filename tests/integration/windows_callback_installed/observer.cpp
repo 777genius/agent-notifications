@@ -105,6 +105,29 @@ static std::wstring string(JsonObject j, const wchar_t* key) {
 static void join(JsonObject j) {
  require(string(j,L"source") == wide(source) && string(j,L"nonce") == wide(nonce));
 }
+// Exactly the owner's durable handoff, not an existence-only race with its
+// exclusive writer. Never retry unknown/foreign file failures or bad JSON.
+static JsonObject awaitPublished(const wchar_t* leaf) {
+ const auto path = root/leaf;
+ for (;;) {
+  budget();
+  Handle file(CreateFileW(path.c_str(),GENERIC_READ|READ_CONTROL,FILE_SHARE_READ,
+   nullptr,OPEN_EXISTING,FILE_FLAG_OPEN_REPARSE_POINT,nullptr));
+  if (file.h != INVALID_HANDLE_VALUE) {
+   BY_HANDLE_FILE_INFORMATION info{};
+   require(GetFileInformationByHandle(file.h,&info)
+    && !(info.dwFileAttributes&(FILE_ATTRIBUTE_REPARSE_POINT|FILE_ATTRIBUTE_DIRECTORY))
+    && info.nNumberOfLinks==1);
+   auto data=bytes(file.h);
+   auto json=JsonObject::Parse(wide(std::string(data.begin(),data.end())));
+   join(json);
+   return json;
+  }
+  const DWORD code=GetLastError();
+  require(code==ERROR_FILE_NOT_FOUND || code==ERROR_SHARING_VIOLATION);
+  Sleep(10);
+ }
+}
 static std::string processSID(HANDLE process, DWORD& integrity) {
  Handle token;
  require(OpenProcessToken(process,TOKEN_QUERY,&token.h));
@@ -675,8 +698,8 @@ struct Route {
  Record record;
  std::string snapshotSHA;
  std::vector<Handle> files;
- Route() {
-  clickAt("route_json_join"); auto request = read(L"route.json"); join(request);
+ explicit Route(const JsonObject& request) {
+  clickAt("route_json_join"); join(request);
   const auto p = fs::path(string(request,L"snapshot_path"));
   path = p.parent_path();
   clickAt("route_path_grammar"); require(p.filename() == L"generation.wne" && rootGrammar(narrow(path.wstring())));
@@ -965,20 +988,11 @@ static void click() {
   auto armed=fact(); put(armed,L"status","armed_before_show");
   clickAt("publish_click_ready"); publish(L"click-armed.json",armed);
   end=GetTickCount64()+90000; // Finite precondition wait; no alternate input.
-  const auto waitForController=[&](const wchar_t* leaf){
-    while(GetFileAttributesW((root/leaf).c_str())==INVALID_FILE_ATTRIBUTES) {
-      require(GetLastError()==ERROR_FILE_NOT_FOUND);
-      budget(); Sleep(10);
-    }
-    budget();
-  };
-  clickAt("await_sender"); waitForController(L"sender.json");
-  clickAt("await_route"); waitForController(L"route.json");
-  end=GetTickCount64()+30000; // New, finite action budget from durable route.
-  clickAt("route_open"); Route route;
-  auto sender = read(L"sender.json"); join(sender);
+  clickAt("await_sender"); const auto sender=awaitPublished(L"sender.json");
   require(sender.GetNamedBoolean(L"collected") && sender.GetNamedNumber(L"code") == 0);
-  const auto request = read(L"route.json");
+  clickAt("await_route"); const auto request=awaitPublished(L"route.json");
+  end=GetTickCount64()+30000; // Finite action budget after durable route.
+  clickAt("route_open"); Route route(request);
   const auto title = string(request,L"title"), body = string(request,L"body");
   require(title == L"Navigation TEST "+wide(nonce) && body == L"Cold callback TEST "+wide(nonce));
   clickAt("cold_helper_census"); require(helpers(route).empty());

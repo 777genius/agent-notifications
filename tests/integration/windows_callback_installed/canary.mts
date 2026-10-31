@@ -92,7 +92,9 @@ async function ledger(): Promise<Ledger> { return JSON.parse((await boundedRead(
 async function setup(operation: 'enable'|'disable', route=false, allowCallerAsserted=true): Promise<void> {
   const current = await ledger();
   const args = ['setup-notifications',operation,'--control-root',control,'--runtime-root',runtime,
-    '--global-config',global,'--expected-generation',String(current.Generation),'--json'];
+    '--expected-generation',String(current.Generation),'--json'];
+  // Revocation accepts no --global-config; it is independently policy-only.
+  if (operation === 'enable') args.push('--global-config',global);
   if (route) args.push('--navigation','desktop_thread','--allow-unknown-caller','false','--allow-caller-asserted',String(allowCallerAsserted));
   await run(route ? 'setup-route' : operation === 'enable' ? 'preserved-route-readiness-and-policy-write' : 'disable',original,args);
 }
@@ -177,8 +179,10 @@ async function main(): Promise<void> {
   const armStart = Date.now();
   while (true) {
     if (clickFailure !== undefined) throw clickFailure;
-    const raw = await readFile(path.join(root,'click-armed.json')).catch((e:NodeJS.ErrnoException) => {
-      if (e.code === 'ENOENT') return null;
+    // Receipt publication uses a Windows exclusive CreateFile until durable
+    // flush and close. Existence is insufficient; only share/absence may wait.
+    const raw = await boundedRead(path.join(root,'click-armed.json'),8192).catch((e:NodeJS.ErrnoException) => {
+      if (e.code === 'ENOENT' || e.code === 'EBUSY') return null;
       throw e;
     });
     if (raw !== null) {
