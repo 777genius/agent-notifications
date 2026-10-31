@@ -95,8 +95,12 @@ Do not call native OS implementations from the domain/hook source. Notification 
 
 ## 8. Three critical reviews (must be filled after real review)
 
-### R1: SOLID, Clean Architecture, DDD/DRY
-Pending: record counterarguments, exact affected section, accepted/rejected corrections and updated plan revision. Do not call an unrun external agent a reviewer.
+### R1: SOLID, Clean Architecture, DDD/DRY — completed (self-critical, not an external subagent)
+**Challenge A (accepted):** “one delivery mechanism” is not synonymous with making the legacy hook notifier call the modern structured port. Existing Claude/Codex callback and OpenCode native lease have different security/admission lifetimes. Revised decision: share *semantic decisions* and tested lower-level OS services, keep compatibility adapter until verified migration. No large new architecture package.
+**Challenge B (accepted):** a new support manifest/code generator would add tooling without improving native qualification. Revised decision: update the existing README/site entries from measured source evidence; if divergence appears, add one narrow static consistency test rather than a generator.
+**Challenge C (accepted):** a DDD aggregate/repository around one-shot notifications adds no business invariant. Revised decision: small value types and ports already in internal/notification are sufficient; no persistence layer.
+**Challenge D (accepted):** sound support is an *effect*, not an event; don't blend source-specific event classification with one generic status analyzer.
+**Scope correction:** first production change will repair a concrete shared legacy notifier defect, with a regression test: macOS multiplexer detection currently runs even when clickToFocus=false and can produce executable click actions. Then proceed to any newly proven OpenCode V2 local route. A plan alone does not qualify the new route.
 
 ### R2: authorization, privacy and lifecycle
 Pending: adversarial event-origin ambiguity, callback lifetime, version binding, OS permissions, dedup and sound duplicate findings.
