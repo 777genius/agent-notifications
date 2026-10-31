@@ -6,8 +6,9 @@ questions, permission requests and terminal errors**. Desktop completion uses
 as `❓ Actual question?` with the session title as context. macOS uses a native
 subtitle; Linux and Windows include that context above the body. Missing context
 falls back to generic OpenCode copy. Alerts remain silent by default;
-an **explicit opt-in** can request the OS's built-in notification sound where
-the desktop supports it. This is not the Claude/Codex custom-sound/volume
+the **unreleased source** offers an explicit opt-in to request the OS's
+built-in notification sound where supported. The published v1.49.11 platform
+channels remain silent. This is not the Claude/Codex custom-sound/volume
 engine. Clicking does not navigate to a terminal or OpenCode session, and
 plan/review events are outside this integration.
 
@@ -201,6 +202,12 @@ edit as well. Inspect again after success. Settings are read on subsequent event
 a settings-only edit does not replace the loaded plugin or require a restart.
 
 ### Optional system notification sound (OpenCode)
+
+**Release boundary:** The public installer currently selects **v1.49.11**,
+which does **not** contain this option. The following configuration applies
+only to source builds carrying this feature; do not expect it to work in a
+published installation until a new qualified platform release is promoted.
+No installer version restriction or opt-in is changed by this source patch.
 
 The managed OpenCode observer is **silent by default**, including on upgrades.
 It never inherits the global `sound: true` default as permission to start
