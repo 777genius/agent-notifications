@@ -4,6 +4,10 @@
 <h1 align="center"><a href="https://agent-notifications.com/">Agent Notifications</a></h1>
 
 <p align="center">
+  Built using <a href="https://github.com/777genius/universal-agent-plugins">Universal Agent Plugins</a>
+</p>
+
+<p align="center">
   <a href="#install-or-update"><img src="landing/public/agents/claude.png" width="64" height="64" alt="Claude" title="Claude" /></a>
   &nbsp;&nbsp;
   <a href="docs/CODEX.md"><img src="brand/codex-logo.svg" width="64" height="64" alt="Codex CLI" title="Codex CLI" /></a>
