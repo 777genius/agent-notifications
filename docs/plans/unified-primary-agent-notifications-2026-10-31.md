@@ -110,8 +110,16 @@ Do not call native OS implementations from the domain/hook source. Notification 
 **Finding 5 (accepted):** don't log raw native event, session ID, helper path, terminal URLs, prompt, transcript, or command. Keep fixed error/status reason codes and the existing private source gating. Denied OS permissions stay denied.
 **Concrete regression P0:** prevent any -activate/-execute selection when clickToFocus is disabled even if TMUX/ZELLIJ/WEZTERM/KITTY hints are present; test that target-detection side effects are not invoked. Preserve the existing ordinary notification and sound flags.
 
-### R3: executability and E2E qualification
-Pending: inspect actual released OpenCode V2 features, test feasibility, current CI, narrow scope, rollback, merge conditions. Negative spikes must remain negative.
+### R3: executability and E2E qualification — completed (self-critical, not an external subagent)
+**Finding A (accepted; blocker):** V2 upstream *current* TUI-plugin docs alone do not establish that our qualified pinned OpenCode V2 2.0.21 ships the same local API. Verify the installed package and actual context/attention/route behaviour before extending the installer. Until then no OpenCode click or custom-sound claim, no changes to the OpenCode private wire.
+**Finding B (accepted):** even the V2 host attention.notify API provides a sound/notification request, not a native physical click callback. Do not label that exact terminal or chat navigation. A second native, authenticated client-aware route is independently required.
+**Finding C (accepted):** repository requires Go >=1.25.8 and offline local worker has Go 1.23.2 with no GitHub network. Local Go 1.23 compile is not an acceptance signal; GitHub Actions must run targeted tests on the exact candidate SHA. Existing draft CI deliberately excludes full macOS/Windows native lanes: ready_for_review and exact-source full CI are required.
+**Finding D (accepted):** macOS/Windows physical-click tests are not replaceable with Go or Node mocks. If runner cannot obtain interactive OS permission or verified installed callback, preserve the negative result and keep draft/disable unsupported feature. Do not merge an unqualified feature just to close the PR.
+**Finding E (accepted):** a single PR avoids duplicated CI, but it must not expand into unrelated Pi #539, Windows #423/#424 or installer rewrite. Implement the small proven shared notifier regression immediately; later native OpenCode enablement is a conditional lane, not a promise.
+**Finding F (accepted):** native evidence must be matched to exactly the final PR head; a prior successful source, process-only canary, or accepted helper signature without actual click is not sufficient.
+**Review provenance:** Three ordered adversarial passes were performed here by the assistant; no external smart-model subagents were available/invoked. PR review comments and automated CI, when produced, are distinct external evidence.
+
+**Revised go/no-go after reviews:** prioritize the click opt-out bug plus characterization tests as a small independently testable vertical slice; do not force a general navigation abstraction or OpenCode TUI install without an actual positive S2/S4 spike. Any wider functionality remains in-scope for the plan but *not* declared delivered by that first slice.
 
 ## 9. Definition of done
 
