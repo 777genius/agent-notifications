@@ -118,11 +118,10 @@ func (c Consumer) Consume(ctx context.Context, input io.Reader) Receipt {
 		if c.Desktop != nil && c.Clock != nil {
 			boot, now, clockErr := c.Clock.Now()
 			if clockErr == nil && boot != "" {
-				// The legacy consumer has no bound per-agent policy document; keep
-				// silent behavior and never infer sound consent from global defaults.
 				receipt := c.Desktop.Deliver(ctx, desktopRequest(
 					desktopContent(event, display, m.content, c.Config.IsSessionLabelEnabled()),
-					notification.Deadline{BootID: boot, NotAfter: now + 10}, false))
+					notification.Deadline{BootID: boot, NotAfter: now + 10},
+					c.Config.IsSystemSoundEnabled()))
 				result.Desktop = receipt.Status
 			}
 		}
