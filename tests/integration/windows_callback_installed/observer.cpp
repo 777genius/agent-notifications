@@ -1040,8 +1040,11 @@ int wmain(int argc, wchar_t** argv) {
   root = physical(roots.back().h);
   require(rootGrammar(narrow(root.wstring())));
   end = GetTickCount64()+(mode == L"deploy" ? 120000 : 30000);
-  // A finite TEST actor watchdog is collection infrastructure, not proof of SDK drain.
-  std::thread([limit=GetTickCount64()+135000] {
+  // Click waits up to 90s for durable sender/route, 30s for UIA and 70s
+  // for receiver collection. Keep the outer watchdog strictly beyond that
+  // finite sum; other actors retain their original tighter ceiling.
+  // This is process supervision, never a global SDK drain assertion.
+  std::thread([limit=GetTickCount64()+(mode == L"click" ? 240000 : 135000)] {
    while (GetTickCount64() < limit) Sleep(100);
    ExitProcess(124);
   }).detach();

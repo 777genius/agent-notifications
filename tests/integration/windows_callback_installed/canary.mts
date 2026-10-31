@@ -84,7 +84,10 @@ async function run(label: string, exe: string, args: string[], input='', timeout
     } },timeout+10000).unref();
   });
 }
-async function actor(mode: string): Promise<void> { await run(mode,observer,[mode,root,tuple.nonce,source],'',140000); }
+async function actor(mode: string): Promise<void> {
+  // The outer process/pipe join outlives the click watchdog; no retry.
+  await run(mode,observer,[mode,root,tuple.nonce,source],'',mode === 'click' ? 250000 : 140000);
+}
 async function ledger(): Promise<Ledger> { return JSON.parse((await boundedRead(path.join(control,'ownership.json'))).toString()) as Ledger; }
 async function setup(operation: 'enable'|'disable', route=false, allowCallerAsserted=true): Promise<void> {
   const current = await ledger();
