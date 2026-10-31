@@ -11,9 +11,11 @@ Run `/claude-notifications-go:settings` to configure sounds, volume, webhooks, a
 Managed OpenCode uses its own control-root policy, selected with `config path --target opencode --json` and `config inspect --target opencode --json`. It does not use the default shared config target below. See [installed OpenCode settings](opencode-notifications.md#edit-installed-opencode-settings) for custom control roots and revision-checked edits.
 It sends alerts for `task_complete`, `question`,
 `permission_request` and `opencode_error`. Desktop alerts are silent by
-default, but `notifications.desktop.systemSound: true` explicitly requests the
-OS default notification cue when the master sound setting is enabled; custom
-Claude/Codex sounds, volume controls and click-to-focus remain unavailable.
+default in published v1.49.11. Unreleased source builds introduce
+`notifications.desktop.systemSound: true` to explicitly request the OS default
+notification cue when the master sound setting is enabled; this does not
+alter the published release until the next qualified platform promotion.
+Custom Claude/Codex sounds, volume controls and click-to-focus remain unavailable.
 Desktop alerts can include native session titles and current question text;
 webhooks use generic text. Claude status templates do not apply.
 Channel settings can restrict delivery, but they do not grant consent:
