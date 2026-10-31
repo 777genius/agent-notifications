@@ -62,6 +62,55 @@ New-Item -ItemType Directory -Path $Root | Out-Null
 $source = git -C $repositoryRoot rev-parse HEAD
 if ($LASTEXITCODE -or $source -cne $env:SOURCE_SHA) { throw 'Exact source checkout required' }
 
+# This disposable owner-only Client image has a broken inherited Windows
+# Terminal startup (missing settings path and an unrelated WSL update tab).
+# Prepare only Terminal's documented user settings before the first TEST tab;
+# the actual Pi TUI, Windows notification delivery and foreground clicks stay
+# native and unmodified. Never execute this on configured/non-hosted machines.
+$terminalPackage = @(Get-AppxPackage -Name Microsoft.WindowsTerminal | Where-Object {
+    $_.PackageFamilyName -ceq 'Microsoft.WindowsTerminal_8wekyb3d8bbwe'
+})
+if ($terminalPackage.Count -ne 1) { throw 'Official stable Windows Terminal package required for TEST Client' }
+$terminalRoot = Join-Path $env:LOCALAPPDATA 'Packages\\Microsoft.WindowsTerminal_8wekyb3d8bbwe\\LocalState'
+if (!(Test-Path -LiteralPath $terminalRoot -PathType Container)) {
+    New-Item -ItemType Directory -Path $terminalRoot -Force | Out-Null
+}
+$terminalDir = Get-Item -LiteralPath $terminalRoot
+if (!$terminalDir.PSIsContainer -or ($terminalDir.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+    throw 'Physical Windows Terminal settings directory required'
+}
+$terminalSettings = Join-Path $terminalRoot 'settings.json'
+$priorHash = $null
+if (Test-Path -LiteralPath $terminalSettings) {
+    $original = Get-Item -LiteralPath $terminalSettings
+    if ($original.PSIsContainer -or ($original.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
+        $original.Length -gt 65536) { throw 'Bounded regular Windows Terminal user settings required' }
+    $priorHash = Hash $terminalSettings
+}
+# Microsoft-supported settings: explicitly select PowerShell and never restore
+# a WSL startup tab from a persisted window on this fresh TEST host.
+$terminalConfig = [ordered]@{
+    defaultProfile = 'Windows PowerShell'
+    firstWindowPreference = 'defaultProfile'
+    startupActions = ''
+    disabledProfileSources = @('Windows.Terminal.Wsl')
+}
+$terminalBody = $terminalConfig | ConvertTo-Json -Depth 3
+[IO.File]::WriteAllText($terminalSettings, $terminalBody + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
+$readback = Get-Content -LiteralPath $terminalSettings -Raw | ConvertFrom-Json
+if ($readback.defaultProfile -cne 'Windows PowerShell' -or
+    $readback.firstWindowPreference -cne 'defaultProfile' -or
+    $readback.startupActions -cne '' -or
+    @($readback.disabledProfileSources).Count -ne 1 -or
+    $readback.disabledProfileSources[0] -cne 'Windows.Terminal.Wsl') {
+    throw 'Exact disposable Terminal startup settings readback failed'
+}
+@{ scope='fresh_owner_host_windows_terminal_settings'; source_sha=$source;
+   previous_hash=$priorHash; prepared_hash=(Hash $terminalSettings);
+   wsl_dynamic_profiles_disabled=$true; default_powershell_profile=$true;
+   qualification_input=$false; product_executed=$false } |
+    ConvertTo-Json -Compress | Set-Content -LiteralPath "$Root/windows-terminal-preparation.json" -Encoding utf8NoBOM
+
 # Reuse the already qualified, nonce-bound finite privacy OOBE flow; no process
 # killing, registry policy edits, arbitrary key sequence or alternate flow.
 npm ci --prefix opencode-plugin --ignore-scripts --no-audit --no-fund
