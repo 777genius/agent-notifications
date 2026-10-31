@@ -177,6 +177,27 @@ func TestPR3NavigationSelectionAndSoundOptOut(t *testing.T) {
 		t.Fatal("required navigation downgraded")
 	}
 }
+func TestPR3OptedInSystemSoundHasNoNavigationAction(t *testing.T) {
+	h := newPR3Harness(t)
+	r := pr3Request()
+	r.Navigation = notification.None
+	r.Target = notification.DesktopTarget{}
+	r.Policy.ClickToFocus = false
+	r.Policy.SoundEnabled = true
+	r.Silent = false
+	got := h.delivery.Deliver(context.Background(), r)
+	var wire struct {
+		Action string
+		Silent bool
+	}
+	if err := json.Unmarshal(h.wire, &wire); err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != "submitted" || wire.Action != "none" || wire.Silent {
+		t.Fatalf("opted-in sound must use the existing native cue without navigation: %+v wire=%+v", got, wire)
+	}
+}
+
 func TestPR3UnknownNeverRetriesOrFallsBack(t *testing.T) {
 	for _, reply := range [][]byte{nil, []byte("bad"), []byte(strings.Replace(string(pr3Receipt("submitted", "os_accepted")), pr3Nonce, pr3Correlation, 1)), pr3Receipt("unknown", "timeout")} {
 		h := newPR3Harness(t)
