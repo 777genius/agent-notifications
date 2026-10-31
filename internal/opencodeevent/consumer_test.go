@@ -46,6 +46,24 @@ func TestChannelGateDoesNotBroadenDesktopConsentToWebhook(t *testing.T) {
 	}
 }
 
+func TestConsumePropagatesExplicitSystemSoundWithoutNavigation(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Notifications.Desktop.Sound = true
+	optIn := true
+	cfg.Notifications.Desktop.SystemSound = &optIn
+	desktop := &captureDesktop{}
+	c := Consumer{Gate: channelGate{desktop: true}, Config: cfg, Desktop: desktop, Clock: fixedClock{}}
+	result := c.Consume(context.Background(), strings.NewReader(frame("turn_idle_verified", "local-test", true)))
+	if result.Desktop != "submitted" || result.Webhook != "" || len(desktop.calls) != 1 {
+		t.Fatalf("explicit sound delivery: receipt=%+v attempts=%d", result, len(desktop.calls))
+	}
+	request := desktop.calls[0]
+	if request.Silent || !request.Policy.SoundEnabled || request.Policy.ClickToFocus ||
+		request.Navigation != notification.None || request.Target != (notification.DesktopTarget{}) {
+		t.Fatalf("system sound changed navigation or lost opt-in: %+v", request)
+	}
+}
+
 func frame(kind, marker string, root bool) string {
 	return fmt.Sprintf(`{"version":1,"kind":%q,"sessionID":%q,"turnID":"turn","messageID":"message","rootSession":%t}`, kind, marker, root)
 }
