@@ -9,6 +9,7 @@ on:
         default: false
         type: boolean
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - '.github/workflows/selector-bootstrap-e2e.yml'
       - 'cmd/claude-notifications/setup_products*'
@@ -33,6 +34,7 @@ concurrency:
 
 jobs:
   selector:
+    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}
     name: Selector on ${{ matrix.os }}
     runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.use_github_runner && matrix.os || github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && matrix.os || matrix.os == 'macos-15' && (vars.CI_MACOS_15_RUNNER || 'macos-15') || matrix.os == 'macos-26' && (vars.CI_MACOS_26_RUNNER || 'macos-26') || matrix.os }}
     timeout-minutes: 15
@@ -69,6 +71,7 @@ jobs:
           if-no-files-found: error
 
   windows-shell:
+    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}
     name: Bootstrap shell on Windows
     runs-on: windows-2025
     timeout-minutes: 10

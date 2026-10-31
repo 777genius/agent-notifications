@@ -3,6 +3,7 @@ name: Claude SDK native blackbox E2E
 on:
   workflow_dispatch:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - '.github/workflows/claude-sdk-e2e.yml'
       - 'scripts/claude_sdk_e2e.py'
@@ -25,6 +26,7 @@ concurrency:
 
 jobs:
   sdk-blackbox:
+    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}
     name: Claude SDK ${{ matrix.os }}
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && matrix.runner || matrix.runner == 'ubuntu-24.04' && (vars.CI_LINUX_RUNNER || 'ubuntu-24.04') || matrix.runner }}
     timeout-minutes: 20

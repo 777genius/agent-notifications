@@ -1,6 +1,7 @@
 name: Navigation Windows official package metadata TEST
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - '.github/workflows/navigation-windows-vendor-metadata.yml'
       - 'tests/integration/navigation_windows_vendor_metadata.ts'
@@ -27,6 +28,7 @@ concurrency:
 
 jobs:
   vendor-metadata:
+    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}
     permissions:
       contents: read
       actions: read

@@ -64,7 +64,7 @@ jobs:
 
   go-tests:
     needs: scope
-    if: ${{ !cancelled() && needs.scope.outputs.mode != 'release-tools' && needs.scope.outputs.mode != 'release-equivalent' }}
+    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (!cancelled() && needs.scope.outputs.mode != 'release-tools' && needs.scope.outputs.mode != 'release-equivalent') }}
     name: Windows Go tests (${{ matrix.go }})
     runs-on: windows-latest
     # Preserve every existing native test and offline E2E budget.
@@ -189,7 +189,7 @@ jobs:
 
   installer-native:
     needs: scope
-    if: ${{ !cancelled() && needs.scope.outputs.mode != 'release-tools' && needs.scope.outputs.mode != 'release-equivalent' }}
+    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (!cancelled() && needs.scope.outputs.mode != 'release-tools' && needs.scope.outputs.mode != 'release-equivalent') }}
     name: Windows installers and native E2E (${{ matrix.go }})
     runs-on: windows-latest
     # Preserve every existing native test and offline E2E budget.
@@ -333,7 +333,7 @@ jobs:
 
   test:
     needs: [scope, go-tests, installer-native]
-    if: ${{ always() && !cancelled() && needs.scope.outputs.mode != 'release-tools' && needs.scope.outputs.mode != 'release-equivalent' }}
+    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (always() && !cancelled() && needs.scope.outputs.mode != 'release-tools' && needs.scope.outputs.mode != 'release-equivalent') }}
     name: Test on Windows (${{ matrix.go }})
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || vars.CI_LINUX_RUNNER || 'ubuntu-latest' }}
     permissions: {}
@@ -388,7 +388,7 @@ jobs:
   native-input-evidence:
     name: Native input evidence (Windows)
     needs: [scope, go-tests, installer-native, test]
-    if: ${{ !cancelled() && needs.scope.outputs.mode == 'full' }}
+    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (!cancelled() && needs.scope.outputs.mode == 'full') }}
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || vars.CI_LINUX_RUNNER || 'ubuntu-latest' }}
     permissions:
       contents: read

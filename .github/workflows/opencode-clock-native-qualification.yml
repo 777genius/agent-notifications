@@ -2,6 +2,7 @@ name: OpenCode native clock API prequalification
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - '.github/workflows/opencode-clock-native-qualification.yml'
       - 'scripts/opencode-clock-native-qualification.py'
@@ -26,6 +27,7 @@ concurrency:
 
 jobs:
   clock-api:
+    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}
     name: Clock API ${{ matrix.platform }} ${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 20

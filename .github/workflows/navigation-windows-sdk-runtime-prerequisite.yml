@@ -1,6 +1,7 @@
 name: Navigation Windows SDK runtime prerequisite (no notifications)
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - '.github/workflows/navigation-windows-sdk-runtime-prerequisite.yml'
       - 'tests/integration/windows_appsdk_build/**'
@@ -16,7 +17,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   sdk-prerequisite:
-    if: (github.repository == '777genius/agent-notifications' || github.repository == 'universal-agent-plugins/agent-notifications') && github.run_attempt == 1
+    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && ((github.repository == '777genius/agent-notifications' || github.repository == 'universal-agent-plugins/agent-notifications') && github.run_attempt == 1) }}
     runs-on: windows-11-vs2026-arm
     timeout-minutes: 15
     steps:
