@@ -177,7 +177,9 @@ jobs:
         shell: bash
 
       - name: Repeat config crash recovery and two-process preparation
-        run: go test -race -count=10 -run '^(TestStoreKilledLockOwner|TestPrepareTwoProcess)
+        shell: bash
+        run: |
+          go test -race -count=10 -run 'TestStoreKilledLockOwner|TestPrepareTwoProcess' ./internal/config
       - name: Preserve complete atomic Go coverage
         uses: actions/upload-artifact@v7
         with:
