@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"os/exec"
@@ -202,19 +203,35 @@ func TestPrepareProcess(t *testing.T) {
 func TestPrepareTwoProcess(t *testing.T) {
 	c, l, d := prepPaths(t)
 	putPrep(t, d, disabledDesktop)
-	var cmds []*exec.Cmd
+	type child struct {
+		cmd    *exec.Cmd
+		output *bytes.Buffer
+	}
+	var children []child
 	for i := 0; i < 2; i++ {
 		cmd := exec.Command(os.Args[0], "-test.run=^TestPrepareProcess$")
 		cmd.Env = append(os.Environ(), "PREP_CHILD=1", "PREP_C="+c, "PREP_L="+l, "PREP_D="+d)
+		output := &bytes.Buffer{}
+		// Both destinations share one writer; os/exec serializes its copy.
+		// Keep the child's actual test failure visible in Windows CI.
+		cmd.Stdout, cmd.Stderr = output, output
 		if e := cmd.Start(); e != nil {
 			t.Fatal(e)
 		}
-		cmds = append(cmds, cmd)
+		children = append(children, child{cmd: cmd, output: output})
 	}
-	for _, cmd := range cmds {
-		if e := cmd.Wait(); e != nil {
-			t.Fatal(e)
+	for i, child := range children {
+		if e := child.cmd.Wait(); e != nil {
+			output := child.output.String()
+			// A child only runs this one fixture, but keep failure output bounded.
+			if len(output) > 4096 {
+				output = output[len(output)-4096:]
+			}
+			t.Errorf("config preparation child %d failed: %v\n%s", i, e, output)
 		}
+	}
+	if t.Failed() {
+		return
 	}
 	b, _ := os.ReadFile(c)
 	if string(b) != disabledDesktop {
