@@ -13,7 +13,7 @@ const rows: { key: string; support: Record<SupportedAgent, Support> }[] = [
   { key: "plan", support: { claude: "yes", codex: "no", opencode: "no", gemini: "no", cursor: "no", qoder: "yes" } },
   { key: "limit", support: { claude: "yes", codex: "conditional", opencode: "no", gemini: "no", cursor: "no", qoder: "no" } },
   { key: "error", support: { claude: "yes", codex: "conditional", opencode: "yes", gemini: "no", cursor: "no", qoder: "no" } },
-  { key: "sound", support: { claude: "yes", codex: "yes", opencode: "conditional", gemini: "no", cursor: "no", qoder: "yes" } },
+  { key: "sound", support: { claude: "yes", codex: "yes", opencode: "no", gemini: "no", cursor: "no", qoder: "yes" } },
   { key: "focus", support: { claude: "conditional", codex: "conditional", opencode: "no", gemini: "no", cursor: "no", qoder: "no" } },
   { key: "webhook", support: { claude: "yes", codex: "yes", opencode: "yes", gemini: "yes", cursor: "yes", qoder: "yes" } },
 ];
