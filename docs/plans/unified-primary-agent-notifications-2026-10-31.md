@@ -102,8 +102,13 @@ Do not call native OS implementations from the domain/hook source. Notification 
 **Challenge D (accepted):** sound support is an *effect*, not an event; don't blend source-specific event classification with one generic status analyzer.
 **Scope correction:** first production change will repair a concrete shared legacy notifier defect, with a regression test: macOS multiplexer detection currently runs even when clickToFocus=false and can produce executable click actions. Then proceed to any newly proven OpenCode V2 local route. A plan alone does not qualify the new route.
 
-### R2: authorization, privacy and lifecycle
-Pending: adversarial event-origin ambiguity, callback lifetime, version binding, OS permissions, dedup and sound duplicate findings.
+### R2: authorization, privacy and lifecycle — completed (self-critical, not an external subagent)
+**Finding 1 (accepted; high):** environment values such as TERM_PROGRAM, TMUX_PANE or WARP_FOCUS_URL are process-local hints, not verified installed OS window/client identity. A general terminal-origin target may use them only at their existing qualified precision; do not turn them into a trusted exact-chat route. Same-project/multiple-client negative tests are mandatory.
+**Finding 2 (accepted; high):** OpenCode server events may be emitted for multiple local and remote TUIs. Session ID plus project CWD is insufficient for a focus target. An optional V2 host TUI adapter must be independently authenticated/bound and remain disabled if local callback ownership is unproven.
+**Finding 3 (accepted):** clicks occur after the hook/producer exits. Origin/callback state, if any, must be an immutable snapshot bound to selected installed version and user authorization, not a read of current active process or latest selected installation. Never resume a foreign app after update.
+**Finding 4 (accepted):** sound is one side effect; a delivery uncertainty may have played a cue even when a receipt is missing. No fallback/retry or second host cue after uncertain submission. Explicit opt-in and mute remain authoritative.
+**Finding 5 (accepted):** don't log raw native event, session ID, helper path, terminal URLs, prompt, transcript, or command. Keep fixed error/status reason codes and the existing private source gating. Denied OS permissions stay denied.
+**Concrete regression P0:** prevent any -activate/-execute selection when clickToFocus is disabled even if TMUX/ZELLIJ/WEZTERM/KITTY hints are present; test that target-detection side effects are not invoked. Preserve the existing ordinary notification and sound flags.
 
 ### R3: executability and E2E qualification
 Pending: inspect actual released OpenCode V2 features, test feasibility, current CI, narrow scope, rollback, merge conditions. Negative spikes must remain negative.
