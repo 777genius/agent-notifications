@@ -558,7 +558,11 @@ class Terminal:
         # Window discovery can fail after wt has launched. Keep the partially
         # initialized owner reachable so final cleanup still observes/closes it.
         owned.append(self)
-        command([wt, "-w", "new", "--title", title, "--suppressApplicationTitle", "-d", cwd,
+        # An explicit real Windows PowerShell profile keeps a hosted Terminal's
+        # default WSL profile from opening an unrelated update prompt/tab.
+        # The requested command remains the actual PowerShell Pi TUI launcher.
+        command([wt, "-w", "new", "new-tab", "--profile", "Windows PowerShell",
+                 "--title", title, "--suppressApplicationTitle", "-d", cwd,
                  powershell, "-NoLogo", "-NoProfile", "-File", launcher, "-Spec", spec], env=launch_env)
         found = wait_for(lambda: native("window", title).get("hwnd"), "real_windows_terminal_window_missing")
         self.window = {**native("window", title), "title": title}

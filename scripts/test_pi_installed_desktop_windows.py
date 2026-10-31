@@ -113,6 +113,21 @@ class OriginalWebhookDeadlineTests(unittest.TestCase):
 
 
 class LauncherDiagnosticsTests(unittest.TestCase):
+    def test_real_terminal_launch_uses_explicit_powershell_profile_not_default_wsl(self):
+        with tempfile.TemporaryDirectory(prefix="TEST-pi-terminal-profile-") as directory:
+            root = Path(directory)
+            native = Mock(executable=root / "observer.exe", return_value={"hwnd": 123, "pid": 456})
+            with patch.object(W, "command") as launched, patch.object(W, "wait_for", return_value=123):
+                W.Terminal("wt.exe", "pwsh.exe", root / "origin", "TEST-Pi-origin-profile",
+                           None, [], {}, root, native, owned=[])
+            argv = launched.call_args.args[0]
+            self.assertEqual(argv[:7], ["wt.exe", "-w", "new", "new-tab",
+                                        "--profile", "Windows PowerShell", "--title"])
+            self.assertEqual(argv[7], "TEST-Pi-origin-profile")
+            self.assertIn("pwsh.exe", argv)
+            self.assertNotIn("wsl.exe", argv)
+            self.assertIn("--suppressApplicationTitle", argv)
+
     def test_window_discovery_failure_keeps_started_terminal_owned_for_cleanup(self):
         with tempfile.TemporaryDirectory(prefix="TEST-pi-terminal-owner-") as directory:
             root, owned = Path(directory), []
