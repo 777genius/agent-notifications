@@ -8,17 +8,42 @@ on:
       - '.github/workflows/windows-callback-contracts.yml'
       - '.github/workflows/release.yml'
   workflow_dispatch:
+    inputs:
+      admission:
+        description: 'Empty keeps contracts inert; explicit fresh TEST admission enables the installed workflow'
+        type: string
+        default: ''
+      phase:
+        description: 'Read-only signed x64 archive intake first; installed requires independently accepted pins'
+        type: choice
+        default: archive_intake
+        options: [archive_intake, installed, package_noshow]
+      expectedArchiveSHA:
+        description: 'Raw SHA256 accepted from a separate Windows signed archive intake'
+        type: string
+        default: ''
+      expectedFullName:
+        description: 'Exact x64 package FullName accepted from the same intake'
+        type: string
+        default: ''
+      scenario:
+        type: choice
+        default: basic
+        options: [basic, retained, package_noshow]
+      coreRef:
+        description: 'package_noshow only; mandatory explicit reviewed 40-lowerhex same-repo ancestor; empty is valid only for inherited installed phases'
+        type: string
+        default: ''
 permissions:
   contents: read
 # Supersede automatic checks; keep each manual operation independent.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.event_name == 'push' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
 jobs:
   compile-and-inert-contracts:
     name: SDK compile, inert wire and private registry TEST contracts
-    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}
+    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (github.event_name == 'pull_request' || inputs.phase != 'package_noshow') }}
     runs-on: windows-latest
     timeout-minutes: 15
     steps:
@@ -119,3 +144,25 @@ jobs:
           path: ${{ runner.temp }}/windows-callback-contracts
           if-no-files-found: error
           retention-days: 14
+
+  admitted-installed-proof:
+    if: github.event_name == 'workflow_dispatch' && github.repository == '777genius/agent-notifications' && github.run_attempt == 1 && inputs.admission == 'one-fresh-disposable-installed-callback' && (inputs.phase == 'archive_intake' || inputs.phase == 'installed') && inputs.coreRef == '' && (inputs.scenario == 'basic' || inputs.scenario == 'retained')
+    uses: ./.github/workflows/windows-callback-installed-canary.yml
+    with:
+      admission: ${{ inputs.admission }}
+      phase: ${{ inputs.phase }}
+      expectedArchiveSHA: ${{ inputs.expectedArchiveSHA }}
+      expectedFullName: ${{ inputs.expectedFullName }}
+      scenario: ${{ inputs.scenario }}
+      coreRef: ''
+
+  admitted-package-noshow-proof:
+    if: github.event_name == 'workflow_dispatch' && github.repository == '777genius/agent-notifications' && github.run_attempt == 1 && inputs.admission == 'one-fresh-disposable-package-noshow' && inputs.phase == 'package_noshow' && inputs.scenario == 'package_noshow' && inputs.coreRef != ''
+    uses: ./.github/workflows/windows-callback-installed-canary.yml
+    with:
+      admission: ${{ inputs.admission }}
+      phase: ${{ inputs.phase }}
+      expectedArchiveSHA: ${{ inputs.expectedArchiveSHA }}
+      expectedFullName: ${{ inputs.expectedFullName }}
+      scenario: ${{ inputs.scenario }}
+      coreRef: ${{ inputs.coreRef }}
