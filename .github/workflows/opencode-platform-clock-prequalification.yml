@@ -2,6 +2,7 @@ name: OpenCode actual platform clock module prequalification
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - 'scripts/opencode-platform-clock-prequalification.*'
       - 'scripts/testdata/opencode-platform-clock-prequalification/**'
@@ -36,6 +37,7 @@ concurrency:
 
 jobs:
   module-clock:
+    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}
     name: Actual module ${{ matrix.platform }} ${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 20

@@ -1,6 +1,7 @@
 name: Navigation Windows read-only token prerequisite
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - '.github/workflows/navigation-windows-token-preflight.yml'
       - 'tests/integration/navigation_windows_token_probe.cpp'
@@ -13,7 +14,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   token-prerequisite:
-    if: (github.repository == '777genius/agent-notifications' || github.repository == 'universal-agent-plugins/agent-notifications') && github.run_attempt == 1
+    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && ((github.repository == '777genius/agent-notifications' || github.repository == 'universal-agent-plugins/agent-notifications') && github.run_attempt == 1) }}
     runs-on: windows-11-vs2026-arm
     timeout-minutes: 10
     steps:

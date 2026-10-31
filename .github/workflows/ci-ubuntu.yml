@@ -1806,7 +1806,7 @@ jobs:
 
   installer-native:
     needs: scope
-    if: ${{ !cancelled() && github.event_name != 'workflow_dispatch' && needs.scope.outputs.mode != 'release-tools' && needs.scope.outputs.mode != 'release-equivalent' }}
+    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (!cancelled() && github.event_name != 'workflow_dispatch' && needs.scope.outputs.mode != 'release-tools' && needs.scope.outputs.mode != 'release-equivalent') }}
     name: Ubuntu installers and native E2E (${{ matrix.go }})
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || vars.CI_LINUX_RUNNER || 'ubuntu-24.04' }}
     timeout-minutes: 40
@@ -1895,7 +1895,7 @@ jobs:
 
   cursor-physical:
     needs: scope
-    if: ${{ !cancelled() && github.event_name != 'workflow_dispatch' && needs.scope.outputs.mode != 'release-tools' && needs.scope.outputs.mode != 'release-equivalent' }}
+    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (!cancelled() && github.event_name != 'workflow_dispatch' && needs.scope.outputs.mode != 'release-tools' && needs.scope.outputs.mode != 'release-equivalent') }}
     name: Cursor physical Ubuntu qualification (1.26)
     # The frozen positive materializer requires the qualified Ubuntu/kernel tuple.
     runs-on: ubuntu-24.04
@@ -1982,7 +1982,7 @@ jobs:
 
   test:
     needs: [scope, go-tests, installer-native, cursor-physical]
-    if: ${{ always() && !cancelled() && github.event_name != 'workflow_dispatch' && needs.scope.outputs.mode != 'release-tools' && needs.scope.outputs.mode != 'release-equivalent' }}
+    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (always() && !cancelled() && github.event_name != 'workflow_dispatch' && needs.scope.outputs.mode != 'release-tools' && needs.scope.outputs.mode != 'release-equivalent') }}
     # Keep the established required-check names while retries target only failed shards.
     name: Test on Ubuntu (${{ matrix.go }})
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || vars.CI_LINUX_RUNNER || 'ubuntu-latest' }}
@@ -2032,7 +2032,7 @@ jobs:
   native-evidence:
     name: Native input evidence (Ubuntu)
     needs: [scope, go-tests, installer-native, cursor-physical, opencode-plugin, lint, test]
-    if: ${{ !cancelled() && github.event_name != 'workflow_dispatch' && needs.scope.outputs.mode == 'full' }}
+    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (!cancelled() && github.event_name != 'workflow_dispatch' && needs.scope.outputs.mode == 'full') }}
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || vars.CI_LINUX_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 5
     permissions:
