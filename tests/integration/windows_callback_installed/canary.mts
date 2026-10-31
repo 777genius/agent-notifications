@@ -203,6 +203,19 @@ async function main(): Promise<void> {
     rollback_qualified:false,old_floor4_refusal_qualified:false,rendered_chat_claim:false,authenticated_click_claim:false});
 }
 try { await main(); } catch (error) {
+  // Failure-only, bounded TEST diagnostics: no private paths, arbitrary UI text or retry.
+  try {
+    const report = JSON.parse((await boundedRead(path.join(root,'click.failure.json'),8192)).toString()) as Record<string,unknown>;
+    const stage = report.last_click_step;
+    if (typeof stage === 'string' && /^[a-z][a-z0-9_]{0,63}$/.test(stage)) {
+      const facts: Record<string,string|number> = {last_click_step:stage};
+      for (const key of ['uia_roots','uia_nodes','uia_title_matches','uia_body_matches','uia_last_name_length']) {
+        const value = report[key];
+        if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 && value <= 4096) facts[key] = value;
+      }
+      console.error('TEST UIA refusal stage (no retry): '+JSON.stringify(facts));
+    }
+  } catch { /* Diagnostic best effort must never change the original refusal. */ }
   // No automatic retry and no destructive cleanup after a possibly entered effect.
   if (await readFile(path.join(root,'scope.json')).catch(() => null))
     await persist('failure.json',{...tuple,error:String(error),unknown,retained_until_job_teardown:true}).catch(() => {});
