@@ -105,28 +105,29 @@ static std::wstring string(JsonObject j, const wchar_t* key) {
 static void join(JsonObject j) {
  require(string(j,L"source") == wide(source) && string(j,L"nonce") == wide(nonce));
 }
-// Exactly the owner's durable handoff, not an existence-only race with its
-// exclusive writer. Never retry unknown/foreign file failures or bad JSON.
+// Do not confuse JSON creation with completed publication: the controller's
+// Node write can be opened by a reader while bytes are still incomplete.
+// It creates this fresh directory marker only after flush and close. The
+// directory operation is atomic and is not itself a partially written file.
 static JsonObject awaitPublished(const wchar_t* leaf) {
- const auto path = root/leaf;
+ const auto marker=root/(std::wstring(leaf)+L".ready");
  for (;;) {
   budget();
-  Handle file(CreateFileW(path.c_str(),GENERIC_READ|READ_CONTROL,FILE_SHARE_READ,
-   nullptr,OPEN_EXISTING,FILE_FLAG_OPEN_REPARSE_POINT,nullptr));
-  if (file.h != INVALID_HANDLE_VALUE) {
-   BY_HANDLE_FILE_INFORMATION info{};
-   require(GetFileInformationByHandle(file.h,&info)
-    && !(info.dwFileAttributes&(FILE_ATTRIBUTE_REPARSE_POINT|FILE_ATTRIBUTE_DIRECTORY))
-    && info.nNumberOfLinks==1);
-   auto data=bytes(file.h);
-   auto json=JsonObject::Parse(wide(std::string(data.begin(),data.end())));
-   join(json);
-   return json;
+  const DWORD attrs=GetFileAttributesW(marker.c_str());
+  if (attrs != INVALID_FILE_ATTRIBUTES) {
+   require((attrs&FILE_ATTRIBUTE_DIRECTORY) && !(attrs&FILE_ATTRIBUTE_REPARSE_POINT));
+   break;
   }
-  const DWORD code=GetLastError();
-  require(code==ERROR_FILE_NOT_FOUND || code==ERROR_SHARING_VIOLATION);
+  require(GetLastError()==ERROR_FILE_NOT_FOUND);
   Sleep(10);
  }
+ // Hold the marker and original JSON with the standard no-reparse custody.
+ auto ready=open(marker,true);
+ auto file=open(root/leaf,false);
+ auto data=bytes(file.h);
+ auto json=JsonObject::Parse(wide(std::string(data.begin(),data.end())));
+ join(json);
+ return json;
 }
 static std::string processSID(HANDLE process, DWORD& integrity) {
  Handle token;

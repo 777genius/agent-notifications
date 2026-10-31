@@ -199,6 +199,9 @@ async function main(): Promise<void> {
   const receipt = JSON.parse(receiptRaw) as {status: string; replayed: boolean; request_id: string};
   assert.equal(receipt.status,'submitted'); assert.equal(receipt.replayed,false); assert.equal(receipt.request_id,'TEST-'+tuple.nonce);
   await persist('sender.json',{...tuple,collected:true,code:0,receipt});
+  // An atomic directory-creation marker follows the completed fsync+close.
+  // The native reader never treats the mere existence of a JSON leaf as ready.
+  await mkdir(path.join(root,'sender.json.ready'));
   const generation = path.dirname(a.binding.SnapshotPath), attempts = path.join(generation,'attempts');
   const recordNames = await readdir(path.join(generation,'records')); assert.equal(recordNames.length,1);
   const record = envelope(await boundedRead(path.join(generation,'records',recordNames[0]!)),2,5);
@@ -217,6 +220,7 @@ async function main(): Promise<void> {
   // Publish A only after verifying sender and retained prerequisites.
   // The already-armed watcher may now attempt one genuine Shell Invoke.
   await persist('route.json',{...tuple,snapshot_path:a.binding.SnapshotPath,snapshot_sha:a.binding.SHA256,reference:record[1],thread,title,body});
+  await mkdir(path.join(root,'route.json.ready'));
   await clickTask;
   if (clickFailure !== undefined) throw clickFailure;
   const receiver = JSON.parse((await boundedRead(path.join(root,'receiver.json'))).toString()) as Receiver;
