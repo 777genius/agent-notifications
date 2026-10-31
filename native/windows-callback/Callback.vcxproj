@@ -29,6 +29,6 @@
     </ClCompile>
     <Link><SubSystem>Windows</SubSystem><AdditionalDependencies>Windowsapp.lib;Advapi32.lib;Bcrypt.lib;Wtsapi32.lib;%(AdditionalDependencies)</AdditionalDependencies></Link>
   </ItemDefinitionGroup>
-  <ItemGroup><ClCompile Include="helper.cpp" /><ClInclude Include="wire.h" /><ClInclude Include="custody.h" /><ClInclude Include="attempt.h" /></ItemGroup>
+  <ItemGroup><ClCompile Include="helper.cpp" /><ClInclude Include="wire.h" /><ClInclude Include="custody.h" /><ClInclude Include="attempt.h" /><ClInclude Include="capacity.h" /><ClInclude Include="installed.h" /></ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

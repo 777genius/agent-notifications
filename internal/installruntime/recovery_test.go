@@ -430,7 +430,7 @@ func TestSchema4PublicRecoveryIntegrity(t *testing.T) {
 				case "legacy-v1", "legacy-v2", "legacy-v3":
 					tx["Schema"] = json.RawMessage(strings.TrimPrefix(kind, "legacy-v"))
 				case "unsupported-schema-before-blob":
-					tx["Schema"] = json.RawMessage("6")
+					tx["Schema"] = json.RawMessage("7")
 				case "schema5-v4-carrier-before-blob":
 					// Schema5 supports orphan metadata decisions only.
 					tx["Schema"] = json.RawMessage("5")
