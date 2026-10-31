@@ -543,7 +543,7 @@ test("released agents toggle independently, copied commands and configuration co
   await expect(table.getByRole("columnheader")).toHaveText(["Feature", "Claude", "Codex CLI", "OpenCode", /Gemini CLI\s*macOS \/ Linux \/ Windows/, "Cursor CLI", "Qoder"]);
   await expect(table.getByRole("row", { name: /^Completed/ }).getByRole("cell")).toHaveText(["✓Supported", "✓Supported", "✓Supported", "✓Supported", "✓*Supported with limitations", "✓Supported"]);
   await expect(table.getByRole("row", { name: /^Review/ }).getByRole("cell")).toHaveText(["✓Supported", "✕Not supported", "✕Not supported", "✕Not supported", "✕Not supported", "✕Not supported"]);
-  await expect(table.getByRole("row", { name: /^Sounds/ }).getByRole("cell")).toHaveText(["✓Supported", "✓Supported", "✓*Supported with limitations", "✕Not supported", "✕Not supported", "✓Supported"]);
+  await expect(table.getByRole("row", { name: /^Sounds/ }).getByRole("cell")).toHaveText(["✓Supported", "✓Supported", "✕Not supported", "✕Not supported", "✕Not supported", "✓Supported"]);
   await expect(table.getByRole("row", { name: /^Question/ }).getByRole("cell")).toHaveText(["✓Supported", "✓*Supported with limitations", "✓Supported", "✕Not supported", "✕Not supported", "✓Supported"]);
   await expect(table.getByRole("row", { name: /^Errors/ }).getByRole("cell")).toHaveText(["✓Supported", "✓*Supported with limitations", "✓Supported", "✕Not supported", "✕Not supported", "✕Not supported"]);
   const compatibility = page.locator(".agent-support details");
