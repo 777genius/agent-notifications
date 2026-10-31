@@ -53,18 +53,10 @@ func (d *WindowsToastDelivery) checkAndDeliver(ctx context.Context, r notificati
 		out.Reason = reason
 		return out
 	}
-	nav := r.Navigation
-	if nav == "" {
-		nav = notification.Required
-	}
-	if nav != notification.Required && nav != notification.BestEffort && nav != notification.None {
-		return out
-	}
-	if !r.Policy.Valid {
-		return finish("rejected", "configuration_invalid")
-	}
-	if !r.Policy.ExplicitEnabled || !r.Policy.DesktopEnabled {
-		return finish("suppressed", "disabled")
+	decision := notification.AssessDelivery(r)
+	nav := decision.Navigation
+	if decision.Status != "" {
+		return finish(decision.Status, decision.Reason)
 	}
 	if nav == notification.None || !r.Policy.ClickToFocus {
 		out.Navigation = notification.NavigationResult{Capability: "disabled", Precision: "none", Reason: "navigation_disabled"}
