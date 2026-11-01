@@ -1,4 +1,4 @@
-name: One-shot pinned Windows installed callback qualifications
+name: One-shot source-pinned Windows UIA basic qualification
 on:
   push:
     branches: [ci/win-callback-dispatch-20261031]
@@ -8,17 +8,17 @@ permissions:
   actions: write
 jobs:
   qualified-windows:
-    if: ${{ github.repository == '777genius/agent-notifications' && github.event.head_commit.message == 'ci(windows) admit installed basic retained package 87dc8b1' && github.run_attempt == 1 }}
+    if: ${{ github.repository == '777genius/agent-notifications' && github.event.head_commit.message == 'ci(windows) admit exact Shell UIA basic 67585fb' && github.run_attempt == 1 }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - name: Dispatch three independent fresh effect tests after reviewed signed archive pin
+      - name: Dispatch exactly one fresh installed basic Windows Shell UIA proof
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          source='87dc8b1acf55992a61874b5580093c402cfd8f7e'
+          source='67585fb6ef2369438fe9feb4e339f25806d4d749'
           parent='9c2395f234549aeac24b4d311a4399f359ad7886'
           signedIntakeRun='41298548456'
           rawSHA='d442a3d7d5c229f45e5e11995711ac2619c8dbc89e3fa2bc185287dc8db8e76e'
@@ -29,33 +29,19 @@ jobs:
           intakeConclusion="$(gh api repos/777genius/agent-notifications/actions/runs/$signedIntakeRun -q .conclusion)"
           if [[ "$current" != "$source" || "$currentParent" != "$parent" || \
                 "$intakeHead" != '9e8c9938709b9e43888bf7c57fc320cfd506684d' || "$intakeConclusion" != 'success' ]]; then
-            echo 'Source/parent changed or reviewed signed archive intake no longer accepted; refuse' >&2
+            echo 'Source, parent or signed archive intake authority changed; refuse.' >&2
             exit 1
           fi
           if [[ ! "$rawSHA" =~ ^[a-f0-9]{64}$ || "$fullName" != OpenAI.Codex_*_x64__2p2nqsd0c76g0 ]]; then
-            echo 'Signed archive pin malformed; refuse' >&2
+            echo 'Archive pin is not exact; refuse.' >&2
             exit 1
           fi
-          # The original signed archive came from a separately reviewed, successful
-          # read-only intake. Each fresh effect job independently re-downloads it
-          # and requires these exact hash and FullName pins before any deployment.
-          dispatch() {
-            local phase="$1" scenario="$2" ancestor="$3" admission
-            if [[ "$phase" == package_noshow ]]; then
-              admission=one-fresh-disposable-package-noshow
-            else
-              admission=one-fresh-disposable-installed-callback
-            fi
-            gh api --method POST repos/777genius/agent-notifications/actions/workflows/windows-callback-contracts.yml/dispatches \
-              -f ref=test/windows-installed-cold-callback \
-              -f "inputs[admission]=$admission" \
-              -f "inputs[phase]=$phase" \
-              -f "inputs[scenario]=$scenario" \
-              -f "inputs[expectedArchiveSHA]=$rawSHA" \
-              -f "inputs[expectedFullName]=$fullName" \
-              -f "inputs[coreRef]=$ancestor"
-          }
-          dispatch installed basic ''
-          dispatch installed retained ''
-          dispatch package_noshow package_noshow "$parent"
-          echo 'Three source-pinned single-attempt Windows jobs dispatched; no automatic retry.'
+          gh api --method POST repos/777genius/agent-notifications/actions/workflows/windows-callback-contracts.yml/dispatches \
+            -f ref=test/windows-installed-cold-callback \
+            -f 'inputs[admission]=one-fresh-disposable-installed-callback' \
+            -f 'inputs[phase]=installed' \
+            -f 'inputs[scenario]=basic' \
+            -f "inputs[expectedArchiveSHA]=$rawSHA" \
+            -f "inputs[expectedFullName]=$fullName" \
+            -f 'inputs[coreRef]='
+          echo 'One fresh source-pinned Windows installed basic test dispatched, no retry.'
