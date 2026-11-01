@@ -420,13 +420,13 @@ jobs:
           }
           '@
           $foreground = [TestOnlyForegroundWindow]::GetForegroundWindow()
-          [uint32]$pid = 0
+          [uint32]$foregroundProcessId = 0
           if ($foreground -eq [IntPtr]::Zero -or
-              [TestOnlyForegroundWindow]::GetWindowThreadProcessId($foreground, [ref]$pid) -eq 0 -or
-              $pid -eq 0) {
+              [TestOnlyForegroundWindow]::GetWindowThreadProcessId($foreground, [ref]$foregroundProcessId) -eq 0 -or
+              $foregroundProcessId -eq 0) {
             throw 'interactive foreground identity unavailable; no TEST cleanup'
           }
-          $process = [Diagnostics.Process]::GetProcessById([int]$pid)
+          $process = [Diagnostics.Process]::GetProcessById([int]$foregroundProcessId)
           try {
             if ($process.ProcessName -cne 'WWAHost') {
               Write-Output 'TEST_FIRST_LOGON_OVERLAY_DISMISSED=0;reason=other_foreground'
