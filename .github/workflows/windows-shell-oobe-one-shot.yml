@@ -7,7 +7,7 @@ permissions:
   contents: read
 jobs:
   shell-overlay:
-    if: ${{ github.repository == '777genius/agent-notifications' && github.run_attempt == 1 && github.event.head_commit.message == 'probe-windows-arm-notification-state-v10' }}
+    if: ${{ github.repository == '777genius/agent-notifications' && github.run_attempt == 1 && github.event.head_commit.message == 'probe-windows-arm-quiet-hours-policy-v11' }}
     runs-on: windows-11-vs2026-arm
     timeout-minutes: 8
     steps:
@@ -77,6 +77,13 @@ jobs:
           $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
           if ($bounds.Width -lt 640 -or $bounds.Height -lt 480) { throw 'insufficient desktop geometry' }
           $notificationStateBefore = [TestOnlyShellProbe]::NotificationState()
+          # Disposable CI user only: official ADMX_WPN NoQuietHours policy.
+          # A change is a preflight hypothesis, never callback qualification.
+          $quietPolicy = 'HKCU:\SOFTWARE\Policies\Microsoft\Windows\CurrentVersion\QuietHours'
+          New-Item -Path $quietPolicy -Force | Out-Null
+          New-ItemProperty -Path $quietPolicy -Name Enable -PropertyType DWord -Value 1 -Force | Out-Null
+          Start-Sleep -Milliseconds 500
+          $notificationStateAfterQuietPolicy = [TestOnlyShellProbe]::NotificationState()
           $before = Census
           $foregroundBefore = KnownProcess ([TestOnlyShellProbe]::ForegroundPid())
           $brokerFound = $before['UserOOBEBroker'] -gt 0
@@ -193,6 +200,8 @@ jobs:
           $notificationStateAfterShortcut = [TestOnlyShellProbe]::NotificationState()
           $report = [ordered]@{
             notificationStateBefore = $notificationStateBefore
+            notificationStateAfterQuietPolicy = $notificationStateAfterQuietPolicy
+            disposableQuietHoursPolicyEnable = 1
             notificationStateAfterCleanup = $notificationStateAfterCleanup
             notificationStateAfterShortcut = $notificationStateAfterShortcut
             shellShortcut = 'Win+A_twice_then_Win+N_notification_center'
