@@ -1,0 +1,58 @@
+name: TEST-only Windows 11 Notification Center policy inventory
+on:
+  push:
+    branches: [ci/windows-uia-shell-preflight-20261101]
+    paths: ['.github/workflows/windows-notification-policy-readonly-one-shot.yml']
+permissions:
+  contents: read
+jobs:
+  notification-policy:
+    if: ${{ github.repository == '777genius/agent-notifications' && github.run_attempt == 1 }}
+    runs-on: windows-11-vs2026-arm
+    timeout-minutes: 6
+    steps:
+      - name: Read bounded Notification Center policy and Shell process presence
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $wanted=@(
+            @{root='HKLM:\SOFTWARE\Policies\Microsoft\Windows\Explorer';name='DisableNotificationCenter'},
+            @{root='HKCU:\SOFTWARE\Policies\Microsoft\Windows\Explorer';name='DisableNotificationCenter'},
+            @{root='HKLM:\SOFTWARE\Policies\Microsoft\Windows\CurrentVersion\PushNotifications';name='NoToastApplicationNotification'},
+            @{root='HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\PushNotifications';name='ToastEnabled'},
+            @{root='HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Notifications\Settings';name='NOC_GLOBAL_SETTING_TOASTS_ENABLED'},
+            @{root='HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Notifications\Settings';name='NOC_GLOBAL_SETTING_ALLOW_NOTIFICATION_SOUND'}
+          )
+          $results=@()
+          foreach($row in $wanted){
+            $value=$null;$present=$false;$kind='absent'
+            try{
+              $key=Get-Item -LiteralPath $row.root -ErrorAction Stop
+              $names=@($key.GetValueNames())
+              if($row.name -in $names){
+                $present=$true
+                $raw=$key.GetValue($row.name)
+                if($raw -is [int] -or $raw -is [long]){
+                  $value=[int]$raw;$kind='integer'
+                }else{$kind='noninteger'}
+              }
+            }catch [System.Management.Automation.ItemNotFoundException]{
+            }catch [System.Management.Automation.PSArgumentException]{
+            }
+            $results+=@{scope=$row.root;valueName=$row.name;present=$present;type=$kind;value=$value}
+          }
+          $session=[System.Diagnostics.Process]::GetCurrentProcess().SessionId
+          $shell=@()
+          foreach($n in @('explorer','ShellHost','ShellExperienceHost','StartMenuExperienceHost','TextInputHost','RuntimeBroker')){
+            $found=@(Get-Process -Name $n -ErrorAction SilentlyContinue | Where-Object {$_.SessionId -eq $session})
+            $shell+=@{name=$n;inSession=$found.Count}
+          }
+          $out=@{
+            scope='TEST-only read-only notification policy and process count'
+            session=$session
+            productEffects=$false
+            uiClickQualified=$false
+            values=$results
+            shellProcessCount=$shell
+          }
+          Write-Output ('NOTIFICATION_POLICY='+($out|ConvertTo-Json -Depth 6 -Compress))
