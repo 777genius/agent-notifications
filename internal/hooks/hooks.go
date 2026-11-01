@@ -72,6 +72,7 @@ type HookData struct {
 	CWD                  string          `json:"cwd"`
 	ToolName             string          `json:"tool_name,omitempty"`
 	HookEventName        string          `json:"hook_event_name,omitempty"`
+	ErrorType            string          `json:"error_type,omitempty"`
 	// Team-related fields (present in TeammateIdle, TaskCreated, TaskCompleted hooks)
 	TeamName     string `json:"team_name,omitempty"`
 	TeammateName string `json:"teammate_name,omitempty"`
@@ -430,6 +431,17 @@ func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 		// Note: We don't delete session state here to preserve cooldown info
 		// State files have TTL and will be cleaned up automatically
 		defer h.cleanupOldLocks()
+	case StopFailurePayload:
+		if ev.Product != ProductQoder {
+			return fmt.Errorf("stop failure is only supported by Qoder")
+		}
+		// StopFailure is distinct from completion. Preserve the OS/HTTP event
+		// category but never expose the provider's raw native error body.
+		status = analyzer.StatusAPIError
+		if p.RateLimited {
+			status = analyzer.StatusAPIErrorOverloaded
+		}
+		defer h.cleanupOldLocks()
 	case SubagentStopPayload:
 		if ev.Product == ProductCodex {
 			// Codex SubagentStop delivery mirrors the Claude opt-in
@@ -633,7 +645,7 @@ func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 	// only; a session content lock held by another hook must not drop them.
 	// Claude retains its original session locking, including permissions.
 	skipContentLock := (ev.Product == ProductCodex || ev.Product == ProductQoder) && (status == analyzer.StatusPermissionRequest ||
-		ev.Kind() == EventPreToolUse || ev.Kind() == EventSubagentStop)
+		ev.Kind() == EventPreToolUse || ev.Kind() == EventSubagentStop || ev.Kind() == EventStopFailure)
 	contentLockAcquired := false
 	if !skipContentLock {
 		contentLockAcquired, err = h.dedupMgr.AcquireContentLock(keys.stateKey)
