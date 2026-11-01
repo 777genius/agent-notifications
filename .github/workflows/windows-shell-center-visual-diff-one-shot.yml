@@ -1,0 +1,77 @@
+name: TEST-only Windows 11 Notification Center visual-change diagnostic
+on:
+  push:
+    branches: [ci/windows-uia-shell-preflight-20261101]
+    paths: ['.github/workflows/windows-shell-center-visual-diff-one-shot.yml']
+permissions:
+  contents: read
+jobs:
+  display:
+    if: ${{ github.repository == '777genius/agent-notifications' && github.run_attempt == 1 }}
+    runs-on: windows-11-vs2026-arm
+    timeout-minutes: 6
+    steps:
+      - name: Count display pixel changes after exactly one Win+N without recording images
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          Add-Type -AssemblyName System.Windows.Forms,System.Drawing
+          $code=@'
+          using System;
+          using System.Runtime.InteropServices;
+          public static class OneShotCenterKey {
+            [StructLayout(LayoutKind.Sequential)]
+            public struct Key { public ushort vk, scan; public uint flags, time; public IntPtr extra; }
+            [StructLayout(LayoutKind.Explicit, Size=40)]
+            public struct Input { [FieldOffset(0)] public uint type; [FieldOffset(8)] public Key key; }
+            [DllImport("user32.dll", SetLastError=true)]
+            public static extern uint SendInput(uint n, [In] Input[] data, int size);
+            public static uint SendOnce(){
+              var inputs = new Input[4];
+              for(int i=0;i<4;i++) inputs[i].type=1;
+              inputs[0].key.vk=0x5b; inputs[1].key.vk=0x4e;
+              inputs[2].key.vk=0x4e; inputs[2].key.flags=2;
+              inputs[3].key.vk=0x5b; inputs[3].key.flags=2;
+              return SendInput(4,inputs,Marshal.SizeOf(typeof(Input)));
+            }
+          }
+          '@
+          Add-Type -TypeDefinition $code
+          $bounds=[System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+          if($bounds.Width -lt 640 -or $bounds.Height -lt 480){throw 'screen geometry not suitable'}
+          function Capture-Private {
+            $image=New-Object System.Drawing.Bitmap($bounds.Width,$bounds.Height)
+            $graphics=[System.Drawing.Graphics]::FromImage($image)
+            try {
+              $graphics.CopyFromScreen($bounds.Location,[System.Drawing.Point]::Empty,$bounds.Size)
+            } finally {$graphics.Dispose()}
+            return $image
+          }
+          $before=Capture-Private
+          try {
+            $inserted=[OneShotCenterKey]::SendOnce()
+            if($inserted -ne 4){throw 'the single Win+N sequence was not inserted'}
+            Start-Sleep -Milliseconds 1400
+            $after=Capture-Private
+            try {
+              $count=0;$changed=0
+              $minX=[int]($bounds.Width*2/3)
+              for($y=0;$y -lt $bounds.Height;$y+=8){
+                for($x=$minX;$x -lt $bounds.Width;$x+=8){
+                  $count++
+                  if($before.GetPixel($x,$y).ToArgb() -ne $after.GetPixel($x,$y).ToArgb()){$changed++}
+                }
+              }
+              $report=[ordered]@{
+                scope='no_image_retained_disposable_shell_visual_diff_only'
+                desktopSession=[System.Diagnostics.Process]::GetCurrentProcess().SessionId
+                insertedKeyEvents=$inserted
+                sampledRightThirdPixels=$count
+                changedRightThirdSamples=$changed
+                appToastSent=$false
+                shellUIAInvokeQualified=$false
+                callbackQualified=$false
+              }
+              Write-Output ('NOTIFICATION_CENTER_VISUAL_DIFF='+($report|ConvertTo-Json -Compress))
+            } finally {$after.Dispose()}
+          } finally {$before.Dispose()}
