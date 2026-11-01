@@ -179,6 +179,17 @@ class AdmissionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'latest source check'):
             self.verify()
 
+    def test_non_completed_latest_source_check_blocks_admission(self):
+        for status in ('queued', 'in_progress'):
+            with self.subTest(status=status):
+                self.api = API()
+                native.gh.side_effect = self.api
+                row = dict(self.api.checks[0], id=10000, name='Unfinished additional qualification',
+                           status=status, conclusion=None)
+                self.api.checks.append(row)
+                with self.assertRaisesRegex(ValueError, 'latest source check did not succeed'):
+                    self.verify()
+
     def test_latest_source_workflow_failure_cannot_inherit_prior_green(self):
         for conclusion in ('failure', 'cancelled', 'timed_out'):
             with self.subTest(conclusion=conclusion):

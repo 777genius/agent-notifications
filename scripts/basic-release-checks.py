@@ -129,7 +129,7 @@ def verify(source, repository):
             latest[key] = check
     ignored, old_jobs = [], {}
     for check in latest.values():
-        if check['conclusion'] not in BAD:
+        if check['status'] == 'completed' and check['conclusion'] not in BAD:
             continue
         exception = obsolete_placeholder(check, runs, selected, repository, source, old_jobs)
         require(exception is not None, 'latest source check did not succeed: ' + check['name'])
