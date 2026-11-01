@@ -8,7 +8,7 @@ permissions:
   actions: write
 jobs:
   admitted:
-    if: ${{ github.repository == '777genius/agent-notifications' && github.run_attempt == 1 && github.event.head_commit.message == 'test(windows): dispatch fresh quiet-ready basic and retained' }}
+    if: ${{ github.repository == '777genius/agent-notifications' && github.run_attempt == 1 && github.event.head_commit.message == 'test(windows): dispatch fresh quiet-ready basic and retained v2' }}
     strategy:
       fail-fast: false
       matrix:
