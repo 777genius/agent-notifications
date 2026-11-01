@@ -1,4 +1,4 @@
-name: TEST-only Windows ARM NoQuietHours enabled-zero presentation preflight
+name: TEST-only Windows ARM NoQuietHours policy refresh preflight
 on:
   push:
     branches: [ci/windows-shell-quiet-hours-zero-20261101]
@@ -7,7 +7,7 @@ permissions:
   contents: read
 jobs:
   shell-overlay:
-    if: ${{ github.repository == '777genius/agent-notifications' && github.run_attempt == 1 && github.event.head_commit.message == 'probe-windows-noquiet-hours-enabled-zero-v1' }}
+    if: ${{ github.repository == '777genius/agent-notifications' && github.run_attempt == 1 && github.event.head_commit.message == 'probe-windows-noquiet-hours-gpupdate-v2' }}
     runs-on: windows-11-vs2026-arm
     timeout-minutes: 8
     steps:
@@ -83,6 +83,10 @@ jobs:
           New-Item -Path $quietPolicy -Force | Out-Null
           New-ItemProperty -Path $quietPolicy -Name Enable -PropertyType DWord -Value 0 -Force | Out-Null
           Start-Sleep -Milliseconds 500
+          # Apply the exact test-user's local policy, without touching product state.
+          # A failed refresh is diagnostic, not an excuse to skip UIA/refusal checks.
+          $policyRefresh = Start-Process -FilePath (Join-Path $env:WINDIR 'System32\gpupdate.exe') -ArgumentList '/target:user','/force','/wait:30' -PassThru -Wait -NoNewWindow
+          $policyRefreshExitCode = $policyRefresh.ExitCode
           $notificationStateAfterQuietPolicy = [TestOnlyShellProbe]::NotificationState()
           $before = Census
           $foregroundBefore = KnownProcess ([TestOnlyShellProbe]::ForegroundPid())
@@ -202,6 +206,7 @@ jobs:
             notificationStateBefore = $notificationStateBefore
             notificationStateAfterQuietPolicy = $notificationStateAfterQuietPolicy
             disposableQuietHoursPolicyEnable = 0
+            policyRefreshExitCode = $policyRefreshExitCode
             notificationStateAfterCleanup = $notificationStateAfterCleanup
             notificationStateAfterShortcut = $notificationStateAfterShortcut
             shellShortcut = 'Win+A_twice_then_Win+N_notification_center'
