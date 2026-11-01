@@ -15,11 +15,11 @@ import (
 // Windows callback generation. The trusted callback binding and every
 // generation-defining route field must remain identical.
 func sameWindowsCallbackGeneration(candidate, previous Route) bool {
- return candidate.LocalRouting && previous.LocalRouting &&
-  candidate.ApplicationPath == "" && previous.ApplicationPath == "" &&
-  candidate.TeamID == "" && previous.TeamID == "" &&
-  candidate.Windows != (notification.WindowsBinding{}) &&
-  candidate.Windows == previous.Windows
+	return candidate.LocalRouting && previous.LocalRouting &&
+		candidate.ApplicationPath == "" && previous.ApplicationPath == "" &&
+		candidate.TeamID == "" && previous.TeamID == "" &&
+		candidate.Windows != (notification.WindowsBinding{}) &&
+		candidate.Windows == previous.Windows
 }
 
 func stageWindowsRoute(ctx context.Context, o Options, r Request, fields map[string]json.RawMessage, existing installruntime.PolicySnapshot) (*installruntime.WindowsChange, error) {
