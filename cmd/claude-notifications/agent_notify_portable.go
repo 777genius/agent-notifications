@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"encoding/hex"
+	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -48,6 +50,15 @@ func agentPortableRun(command string, args []string, options notifyruntime.Optio
 	}
 	lease, err := portable.Acquire(ctx, dataRoot, name)
 	if err != nil {
+		reason := "portable_binding_invalid"
+		if errors.Is(err, context.DeadlineExceeded) {
+			reason = "installation_lease_timeout"
+		} else if errors.Is(err, context.Canceled) {
+			reason = "startup_canceled"
+		}
+		// stdout belongs to MCP. Keep diagnostics bounded and never expose raw
+		// errors, locator content, environment, or filesystem paths.
+		_, _ = fmt.Fprintf(os.Stderr, "%s: %s\n", command, reason)
 		return 2
 	}
 	if command == "portable-primary" {

@@ -202,9 +202,14 @@ func TestPortableProductionBridge(t *testing.T) {
 	cmd := exec.CommandContext(ctx, filepath.Join(b.RuntimeRoot, b.Primary), "portable-launch", "--locator", claude)
 	cmd.Env = []string{"PLUGIN_ROOT=" + pkg, "PLUGIN_DATA=" + b.DataRoot}
 	var stdout bytes.Buffer
+	var stderr bytes.Buffer
 	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
 	if e = cmd.Run(); e == nil || stdout.Len() != 0 {
-		t.Fatal("missing locator did not fail silently before protocol")
+		t.Fatal("missing locator emitted protocol or started a server")
+	}
+	if stderr.String() != "portable-launch: portable_binding_invalid\n" {
+		t.Fatalf("missing bounded startup diagnostic: %q", stderr.String())
 	}
 	if _, e = os.Stat(filepath.Join(b.RuntimeRoot, b.Primary)); e != nil {
 		t.Fatal("cleanup relocated primary")

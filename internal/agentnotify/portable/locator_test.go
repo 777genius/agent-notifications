@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -18,6 +19,20 @@ import (
 
 	"github.com/777genius/agent-notifications/internal/installruntime"
 )
+
+func TestAcquireReportsLeaseDeadline(t *testing.T) {
+	b, name, _ := fixture(t)
+	release, err := installruntime.LockExisting(testContext(t), filepath.Join(b.ControlRoot, ".component-install.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	if _, err := Acquire(ctx, b.DataRoot, name); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("lease contention lost its cause: %v", err)
+	}
+}
 
 func fixture(t *testing.T) (Binding, string, installruntime.Request) {
 	return fixtureWithPrimaryFile(t, "primary")

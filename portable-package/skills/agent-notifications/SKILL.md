@@ -1,9 +1,21 @@
 ---
 name: agent-notifications
-description: Send an Agent Notifications desktop notification when the user requests one, attention is needed, or a meaningful milestone warrants an alert during ongoing work.
+description: Send an Agent Notifications desktop notification when the user requests one, attention is needed, or a meaningful milestone warrants an alert during ongoing work. Discover the notify and notification_status tools before reporting them unavailable.
 ---
 
-Use the Agent Notifications plugin's `notify` tool. Installation and notification permissions must already be configured. When using MCP and `notification_status` is available, check that read-only tool for this chat before choosing navigation. Its navigation eligibility reflects configuration and caller context, not proof that the OS will display a banner or open the chat.
+Use the Agent Notifications plugin's `notify` tool. Installation and notification permissions must already be configured.
+
+## Find the tools before declaring them unavailable
+
+MCP tools may be deferred: their full definitions need not appear in the initial tool list. Reading this skill does not discover or call them. Before reporting an unavailable tool:
+
+1. Use the current client's tool discovery/search facility to find `notification_status` and `notify`, searching for Agent Notifications or `agent_notifications`. In a runtime exposing `ALL_TOOLS` and `tools`, inspect matching entries in `ALL_TOOLS`, read their schemas, then invoke the returned exact name through `tools`. For example, the namespace can be `mcp__agent_notifications__notification_status` and `mcp__agent_notifications__notify`. Other clients may prefix the plugin/server name differently; do not require one hard-coded namespace.
+2. Call the discovered read-only `notification_status` with `{}` for this chat when available, then choose navigation from its result. A successful status call establishes that the server is reachable; disabled policy or unavailable navigation does not mean the tool itself is missing. Its navigation eligibility is not proof that the OS will display a banner or open the chat.
+3. If an alert is warranted under the rules below, call the discovered `notify` tool and interpret its receipt. A status check alone does not send a notification.
+
+An absent MCP resources list or a missing shell executable is not evidence that MCP tools are unavailable. Only report missing tools after discovery returns no matching tool, or report the actual connection/startup/call error when a tool is found but fails. If the client offers no discovery facility, state that limitation. Do not claim to have checked a server you did not call, and do not recommend reinstalling a working server merely because its tools were initially deferred. If discovery really finds no tool, explain that the skill is present but the MCP tool is not exposed to this session; after installation or an update, a new client session may be needed.
+
+## Decide whether to send
 
 Leave routine task/turn completion to automatic lifecycle hooks. Do not call `notify` merely to say done or summarize the final result just before the final response, or relabel that same completion as `progress` or `attention`.
 A normal "notify me when done" request does not ask for an extra alert on top of the completion hook.
