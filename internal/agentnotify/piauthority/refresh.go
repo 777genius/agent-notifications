@@ -38,6 +38,12 @@ func RefreshInstalled(ctx context.Context, controlRoot string) error {
 		if !strings.HasPrefix(key, "portable:") {
 			continue
 		}
+		// Historical non-hash portable consumer names are not UAP bindings.
+		// Canonical portable registrations use the SHA-256 key of their bytes.
+		// Do not parse an unrelated legacy registration as a Pi binding.
+		if len(key) != len("portable:")+64 {
+			continue
+		}
 		var b portable.Binding
 		if err := json.Unmarshal([]byte(consumer.Registration), &b); err != nil {
 			failures = append(failures, fmt.Errorf("installed portable consumer %s: unreadable registration: %w", key, ErrDenied))
