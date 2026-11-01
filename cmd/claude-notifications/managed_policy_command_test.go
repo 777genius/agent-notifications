@@ -454,3 +454,48 @@ func TestManagedPolicyCLIWebhookEnvContract(t *testing.T) {
 		t.Fatal("managed save expanded the event-only secret")
 	}
 }
+
+
+// Regression: a Windows callback upgrade keeps OpenCode's existing policy
+// editable through the real CLI without resetting shared schema6/floor6 or
+// rewriting another agent's consent and raw settings.
+func TestManagedPolicyCLIEditAfterWindowsLedgerPromotion(t *testing.T) {
+	root, before := managedPolicyFixture(t)
+	before.Schema = installruntime.WindowsGenerationLedgerSchema
+	before.WriterFloor = installruntime.WindowsGenerationWriterFloor
+	encoded, err := json.Marshal(before)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "ownership.json"), encoded, 0600); err != nil {
+		t.Fatal(err)
+	}
+	revision := policyRevision(t)
+	code, _, stderr := policyCLI(t, []string{"edit", "--target", "opencode", "--stdin", "--expect-revision", revision},
+		`{"set":{"/notifications/desktop/volume":0.25}}`)
+	if code != 0 {
+		t.Fatalf("managed schema6 policy edit refused: %s", stderr)
+	}
+	after, recovery, err := installruntime.ReadOwnership(root)
+	if err != nil || recovery || after.Schema != installruntime.WindowsGenerationLedgerSchema ||
+		after.WriterFloor != installruntime.WindowsGenerationWriterFloor ||
+		after.Generation != before.Generation+1 || after.PolicyGeneration != before.PolicyGeneration+1 {
+		t.Fatalf("promoted policy writer lost ledger protocol: %+v %v", after, err)
+	}
+	if !reflect.DeepEqual(after.Consumers, before.Consumers) || !reflect.DeepEqual(after.Files, before.Files) {
+		t.Fatal("promoted policy edit changed registration or unrelated owned files")
+	}
+	policy, err := os.ReadFile(filepath.Join(root, "agent-notifications.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, preserved := range []string{"9007199254740993", "${AGENT_NOTIFICATIONS_WEBHOOK_URL}", "unrelatedAgent", "foreign_status"} {
+		if !bytes.Contains(policy, []byte(preserved)) {
+			t.Fatalf("promoted policy edit lost a raw value: %s", preserved)
+		}
+	}
+	updated := policyRevision(t)
+	if updated == revision {
+		t.Fatal("promoted policy edit did not publish a new revision")
+	}
+}
