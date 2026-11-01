@@ -1,14 +1,14 @@
-name: TEST-only Windows ARM NoQuietHours policy refresh preflight
+name: TEST-only Windows 11 ARM alternative hosted image Shell preflight
 on:
   push:
-    branches: [ci/windows-shell-quiet-hours-zero-20261101]
+    branches: [ci/windows-shell-alt-arm-20261101]
     paths: ['.github/workflows/windows-shell-oobe-one-shot.yml']
 permissions:
   contents: read
 jobs:
   shell-overlay:
-    if: ${{ github.repository == '777genius/agent-notifications' && github.run_attempt == 1 && github.event.head_commit.message == 'probe-windows-noquiet-hours-gpupdate-v2' }}
-    runs-on: windows-11-vs2026-arm
+    if: ${{ github.repository == '777genius/agent-notifications' && github.run_attempt == 1 && github.event.head_commit.message == 'probe-windows-alt-arm-image-v1' }}
+    runs-on: windows-11-arm
     timeout-minutes: 8
     steps:
       - name: Inspect and dismiss only known first-logon overlay, then probe the Shell
