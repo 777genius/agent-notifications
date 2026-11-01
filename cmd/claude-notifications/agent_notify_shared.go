@@ -157,7 +157,7 @@ func startSharedDaemon(lease *portable.Lease, name string) (<-chan error, error)
 	if err != nil {
 		return nil, err
 	}
-	defer null.Close()
+	defer func() { _ = null.Close() }()
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = null, null, null
 	if err := cmd.Start(); err != nil {
 		return nil, err
@@ -224,7 +224,7 @@ func agentPortableSharedDaemon(ctx context.Context, binding portable.Binding, na
 	if err != nil {
 		return 2
 	}
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 	token := make([]byte, 32)
 	if _, err := rand.Read(token); err != nil {
 		return 2

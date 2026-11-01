@@ -249,7 +249,7 @@ func (f *portableSharedFixture) authenticate(ctx context.Context, r sharedstate.
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	token, err := hex.DecodeString(r.Token)
 	if err != nil {
 		return fmt.Errorf("invalid daemon token encoding")
@@ -287,7 +287,7 @@ func (f *portableSharedFixture) stopOwnedDaemon(r sharedstate.Record) error {
 	if err != nil {
 		return err
 	}
-	defer process.Release()
+	defer func() { _ = process.Release() }()
 	if err := process.Signal(syscall.SIGTERM); err != nil && err != os.ErrProcessDone {
 		return err
 	}
@@ -317,7 +317,7 @@ func (d *portableSharedDiagnostics) Write(p []byte) (int, error) {
 func (d *portableSharedDiagnostics) text() string {
 	d.Lock()
 	defer d.Unlock()
-	return d.Buffer.String()
+	return d.String()
 }
 
 type portableSharedBridge struct {
