@@ -430,6 +430,22 @@ class AdmissionTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'latest source workflow did not succeed'):
                     self.verify()
 
+    def test_pre_main_pr_rejects_foreign_merge_base_even_when_compare_says_ahead(self):
+        for run in self.api.runs:
+            run.update(event='pull_request', head_branch='fix/release-candidate')
+        original = self.api.__call__
+
+        def forged_compare(path, binary=False):
+            result = original(path, binary)
+            if '/compare/' in path:
+                result = {**result, 'status': 'ahead',
+                          'merge_base_commit': {'sha': 'e' * 40}}
+            return result
+
+        native.gh.side_effect = forged_compare
+        with self.assertRaisesRegex(ValueError, 'latest source workflow did not succeed'):
+            self.verify()
+
     def test_pre_main_pr_authority_change_during_verification_fails(self):
         for run in self.api.runs:
             run.update(event='pull_request', head_branch='fix/release-candidate')
