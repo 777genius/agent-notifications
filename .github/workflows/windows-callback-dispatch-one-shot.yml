@@ -8,7 +8,7 @@ permissions:
   actions: write
 jobs:
   qualified-windows:
-    if: ${{ github.repository == '777genius/agent-notifications' && github.event.head_commit.message == 'ci(windows) admit read-only Shell census basic 0d4e14e' && github.run_attempt == 1 }}
+    if: ${{ github.repository == '777genius/agent-notifications' && github.event.head_commit.message == 'ci(windows) admit read-only Shell census basic d4d9501' && github.run_attempt == 1 }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -18,7 +18,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          source='0d4e14ebc451e46dbb041308decf09b5a68eab7b'
+          source='d4d9501d9b42c1dc9f9526ce3f8d943b2d091619'
           parent='9c2395f234549aeac24b4d311a4399f359ad7886'
           signedIntakeRun='41298548456'
           rawSHA='d442a3d7d5c229f45e5e11995711ac2619c8dbc89e3fa2bc185287dc8db8e76e'
