@@ -237,7 +237,7 @@ func buildDefaultConfig(pluginRoot string) *Config {
 func defaultStatuses(pluginRoot string) map[string]StatusInfo {
 	return map[string]StatusInfo{
 		"agent_stopping": {Title: "Copilot in VS Code"},
-		"agent_error":   {Title: "🔴 Agent error", Sound: filepath.Join(pluginRoot, "sounds", "error.mp3")},
+		"agent_error":    {Title: "🔴 Agent error", Sound: filepath.Join(pluginRoot, "sounds", "error.mp3")},
 		"task_complete": {
 			Title: "✅ Completed",
 			Sound: filepath.Join(pluginRoot, "sounds", "task-complete.mp3"),
