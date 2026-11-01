@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/777genius/agent-notifications/internal/analyzer"
+	"github.com/777genius/agent-notifications/internal/config"
 	"github.com/777genius/agent-notifications/internal/qodersource"
 )
 
@@ -53,6 +54,91 @@ func TestQoderStopFlow(t *testing.T) {
 	}
 	if len(notify.calls) != before+1 {
 		t.Fatal("another session suppressed")
+	}
+}
+
+func qoderFailureTestConfig() *config.Config {
+	cfg := codexTestConfig()
+	cfg.Statuses[string(analyzer.StatusAgentError)] = config.StatusInfo{Title: "Qoder stopped unexpectedly"}
+	cfg.Statuses[string(analyzer.StatusAPIErrorOverloaded)] = config.StatusInfo{Title: "Qoder rate limited"}
+	return cfg
+}
+
+// An actual Qoder StopFailure is not a successful Stop, and host error text
+// may contain credentials/requests. Only the fixed class reaches delivery.
+func TestQoderStopFailureRoutesWithoutLeakingRawProviderError(t *testing.T) {
+	handler, notify, _ := newTestHandler(t, qoderFailureTestConfig())
+	handler.product, handler.source = ProductQoder, QoderSource{}
+	for _, tc := range []struct {
+		errorType string
+		want      analyzer.Status
+	}{
+		{"rate_limit", analyzer.StatusAPIErrorOverloaded},
+		{"authentication_failed", analyzer.StatusAgentError},
+		{"server_error", analyzer.StatusAgentError},
+	} {
+		session := fmt.Sprintf("../../qoder-stop-failure-%s-%d", tc.errorType, time.Now().UnixNano())
+		input := fmt.Sprintf(`{"session_id":%q,"cwd":"/TEST-qoder","hook_event_name":"StopFailure","error_type":%q,"error":"PRIVATE_API_KEY_TEST","error_details":"PRIVATE_REQUEST_TEST","transcript_path":"/must-not-read","last_assistant_message":"PRIVATE_COMPLETION_TEST"}`, session, tc.errorType)
+		if err := handler.HandleHook("StopFailure", strings.NewReader(input)); err != nil {
+			t.Fatal(err)
+		}
+		call := notify.lastCall()
+		if call == nil || call.status != tc.want {
+			t.Fatalf("Qoder StopFailure %q status %+v; want %q", tc.errorType, call, tc.want)
+		}
+		for _, secret := range []string{"PRIVATE_API_KEY_TEST", "PRIVATE_REQUEST_TEST", "PRIVATE_COMPLETION_TEST", "must-not-read"} {
+			if strings.Contains(call.message, secret) {
+				t.Fatalf("native Qoder error leaked provider content: %q", call.message)
+			}
+		}
+		before := len(notify.calls)
+		if err := handler.HandleHook("StopFailure", strings.NewReader(input)); err != nil {
+			t.Fatal(err)
+		}
+		if len(notify.calls) != before {
+			t.Fatal("duplicate failure created second alert")
+		}
+	}
+}
+
+// A successful turn and an unexpected failure are distinct user events even
+// when the assistant content looks like the fixed failure banner. The
+// event-scoped lock still suppresses an exact repeated failure invocation.
+func TestQoderStopFailureDoesNotCollideWithCompletedTurnDedup(t *testing.T) {
+	handler, notify, _ := newTestHandler(t, qoderFailureTestConfig())
+	handler.product, handler.source = ProductQoder, QoderSource{}
+	session := fmt.Sprintf("../../qoder-stop-vs-failure-%d", time.Now().UnixNano())
+	stop := fmt.Sprintf(`{"session_id":%q,"cwd":"/TEST-qoder","hook_event_name":"Stop","stop_hook_active":false,"last_assistant_message":"Qoder stopped unexpectedly"}`, session)
+	failure := fmt.Sprintf(`{"session_id":%q,"cwd":"/TEST-qoder","hook_event_name":"StopFailure","error_type":"server_error","error":"PRIVATE_ERROR"}`, session)
+	if err := handler.HandleHook("Stop", strings.NewReader(stop)); err != nil {
+		t.Fatal(err)
+	}
+	if err := handler.HandleHook("StopFailure", strings.NewReader(failure)); err != nil {
+		t.Fatal(err)
+	}
+	if len(notify.calls) != 2 || notify.lastCall() == nil || notify.lastCall().status != analyzer.StatusAgentError {
+		t.Fatalf("Qoder failure collapsed into prior successful Stop: %+v", notify.calls)
+	}
+	if err := handler.HandleHook("StopFailure", strings.NewReader(failure)); err != nil {
+		t.Fatal(err)
+	}
+	if len(notify.calls) != 2 {
+		t.Fatalf("event-scoped duplicate failure was redelivered: %d", len(notify.calls))
+	}
+}
+
+func TestQoderStopFailureCannotImpersonateOtherEventsOrProducts(t *testing.T) {
+	for _, payload := range []struct{ event, raw string }{
+		{"StopFailure", `{"session_id":"s","hook_event_name":"Stop","error_type":"rate_limit"}`},
+		{"StopFailure", `{"hook_event_name":"StopFailure","error_type":"rate_limit"}`},
+		{"Stop", `{"session_id":"s","hook_event_name":"StopFailure","error_type":"rate_limit"}`},
+	} {
+		if _, err := (QoderSource{}).Decode(context.Background(), payload.event, strings.NewReader(payload.raw)); err == nil {
+			t.Fatalf("accepted mismatched Qoder event %q", payload.event)
+		}
+	}
+	if err := ValidateEvent(Event{Product: ProductClaude, PayloadEventName: "StopFailure", Session: SessionContext{SessionID: "s"}, Payload: StopFailurePayload{RateLimited: true}}); err == nil {
+		t.Fatal("Claude impersonated Qoder-only failure event")
 	}
 }
 
@@ -192,7 +278,7 @@ func TestQoderTeammateIdleDecodeAndGuard(t *testing.T) {
 // Qoder prompts and subagent stops must still deliver, exactly like Codex;
 // completions keep the session lock so a racing Stop cannot double-notify.
 func TestQoderEventsDeliverWhileContentLockHeld(t *testing.T) {
-	for _, kind := range []string{"PermissionRequest", "PreToolUse", "SubagentStop", "Stop"} {
+	for _, kind := range []string{"PermissionRequest", "PreToolUse", "SubagentStop", "StopFailure", "Stop"} {
 		t.Run(kind, func(t *testing.T) {
 			root := t.TempDir()
 			t.Setenv("TMPDIR", root)
@@ -207,11 +293,13 @@ func TestQoderEventsDeliverWhileContentLockHeld(t *testing.T) {
 				body = `,"tool_name":"ExitPlanMode"`
 			case "SubagentStop":
 				body = `,"last_assistant_message":"Sub done"`
+			case "StopFailure":
+				body = `,"error_type":"server_error","error":"PRIVATE_NATIVE_ERROR"`
 			case "Stop":
 				body = `,"stop_hook_active":false,"last_assistant_message":"Done"`
 			}
 			payload := fmt.Sprintf(`{"session_id":%q,"cwd":"/TEST-qoder","hook_event_name":%q%s}`, session, kind, body)
-			cfg := codexTestConfig()
+			cfg := qoderFailureTestConfig()
 			cfg.Notifications.NotifyOnSubagentStop = true
 			noSuppress := false
 			cfg.Notifications.SuppressForSubagents = &noSuppress
