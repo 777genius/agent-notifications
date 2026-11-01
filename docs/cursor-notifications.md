@@ -37,7 +37,12 @@ Run the same command to update. Fresh installs default to desktop on and webhook
 
 A native `stop` event causes a fixed informational alert: **Cursor CLI is stopping**. A stopped agent loop does not establish successful task completion. Unknown status values are suppressed; the notification does not classify questions, plans, permissions or errors.
 
-Cursor delivery is silent and informational: no sounds, click-to-focus, focus-aware suppression or task-text analysis is promised. Desktop and webhook consent are separate. Same-generation duplicates are suppressed. Linux installed E2E observed notification-service delivery; macOS arm64 included a visible notification; Windows CI observed the installed child's successful Toast API submission, not a visible interactive banner.
+Published v1.49.11 Cursor delivery is silent and informational. Unreleased source
+can explicitly request the OS default notification cue with
+`notifications.desktop.systemSound=true` and the existing master sound switch.
+This is **not** configurable MP3/volume output, a guarantee of an audible cue,
+or click-to-focus. Focus-aware suppression and task-text analysis are not
+promised. Desktop and webhook consent are separate. Same-generation duplicates are suppressed. Linux installed E2E observed notification-service delivery; macOS arm64 included a visible notification; Windows CI observed the installed child's successful Toast API submission, not a visible interactive banner.
 
 ## Inspect, disable and remove
 

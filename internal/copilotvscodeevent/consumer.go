@@ -115,7 +115,9 @@ func (c Consumer) Consume(parent context.Context, f source.Facts, d notification
 				out.Reason = reason
 			} else {
 				attempted = true
-				out.Desktop = deliver(ctx, c.Desktop, notification.Request{Content: notification.Content{Title: "Copilot in VS Code", Body: "Copilot in VS Code is stopping", Category: "info"}, CorrelationID: uuid.NewString(), Deadline: d, Navigation: notification.None, Silent: true, Policy: notification.PolicySnapshot{Valid: true, ExplicitEnabled: true, DesktopEnabled: true}})
+				out.Desktop = deliver(ctx, c.Desktop, notification.InformationalDesktopRequest(
+					notification.Content{Title: "Copilot in VS Code", Body: "Copilot in VS Code is stopping", Category: "info"},
+					uuid.NewString(), d, c.Config.IsSystemSoundEnabled()))
 			}
 		}
 	}
