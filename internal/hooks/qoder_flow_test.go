@@ -66,8 +66,8 @@ func TestQoderStopFailureRoutesWithoutLeakingRawProviderError(t *testing.T) {
 		want      analyzer.Status
 	}{
 		{"rate_limit", analyzer.StatusAPIErrorOverloaded},
-		{"authentication_failed", analyzer.StatusAPIError},
-		{"server_error", analyzer.StatusAPIError},
+		{"authentication_failed", analyzer.StatusAgentError},
+		{"server_error", analyzer.StatusAgentError},
 	} {
 		session := fmt.Sprintf("../../qoder-stop-failure-%s-%d", tc.errorType, time.Now().UnixNano())
 		input := fmt.Sprintf(`{"session_id":%q,"cwd":"/TEST-qoder","hook_event_name":"StopFailure","error_type":%q,"error":"PRIVATE_API_KEY_TEST","error_details":"PRIVATE_REQUEST_TEST","transcript_path":"/must-not-read","last_assistant_message":"PRIVATE_COMPLETION_TEST"}`, session, tc.errorType)
@@ -244,7 +244,7 @@ func TestQoderTeammateIdleDecodeAndGuard(t *testing.T) {
 // Qoder prompts and subagent stops must still deliver, exactly like Codex;
 // completions keep the session lock so a racing Stop cannot double-notify.
 func TestQoderEventsDeliverWhileContentLockHeld(t *testing.T) {
-	for _, kind := range []string{"PermissionRequest", "PreToolUse", "SubagentStop", "Stop"} {
+	for _, kind := range []string{"PermissionRequest", "PreToolUse", "SubagentStop", "StopFailure", "Stop"} {
 		t.Run(kind, func(t *testing.T) {
 			root := t.TempDir()
 			t.Setenv("TMPDIR", root)
@@ -259,6 +259,8 @@ func TestQoderEventsDeliverWhileContentLockHeld(t *testing.T) {
 				body = `,"tool_name":"ExitPlanMode"`
 			case "SubagentStop":
 				body = `,"last_assistant_message":"Sub done"`
+			case "StopFailure":
+				body = `,"error_type":"server_error","error":"PRIVATE_NATIVE_ERROR"`
 			case "Stop":
 				body = `,"stop_hook_active":false,"last_assistant_message":"Done"`
 			}
