@@ -45,8 +45,8 @@ jobs:
             while ($null -ne $first) {
               $roots++
               if ($roots -gt 128) { throw 'bounded UIA root count exceeded' }
-              $pid=$first.Current.ProcessId
-              $proc=Get-Process -Id $pid -ErrorAction SilentlyContinue
+              $processId=$first.Current.ProcessId
+              $proc=Get-Process -Id $processId -ErrorAction SilentlyContinue
               $name=if($null -eq $proc){''}else{[string]$proc.ProcessName}
               if($name -in @('explorer','ShellHost','ShellExperienceHost')) {
                 $shellRoots++
