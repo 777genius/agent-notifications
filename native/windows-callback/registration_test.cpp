@@ -1071,10 +1071,20 @@ int wmain(int argc,wchar_t** argv){
     wchar_t actions[8]{};
     require(GetEnvironmentVariableW(L"GITHUB_ACTIONS",actions,8)==4&&!wcscmp(actions,L"true"));
     const bool child=argc==2&&!wcscmp(argv[1],L"--registry-child");
-    require(argc==1||child);
+    const bool operatorChild=argc==2&&!wcscmp(argv[1],L"--operator-stdin-child");
+    require(argc==1||child||operatorChild);
     std::thread([limit=GetTickCount64()+(child?35000:50000)]{
       while(GetTickCount64()<limit)Sleep(10);ExitProcess(124);
     }).detach();
+    if(operatorChild){
+      stage("operator_stdin_binary");
+      const auto fields=operatorFields();
+      require(fields.size()==4&&fields[0]==std::string(32,'a')&&fields[1]==std::string(26,'T')
+        &&fields[2]=="Line one\nLine two\t&<>"&&fields[3]=="0");
+      require(text(fields[2],4096,true)&&xml(fields[2],true)==L"Line one\nLine two\t&amp;&lt;&gt;");
+      std::cout<<"TEST native binary stdin and permitted body XML passed\n";
+      return 0;
+    }
     if(child)return registryContracts()?0:77;
     prepareAndCollect();
     return 0;

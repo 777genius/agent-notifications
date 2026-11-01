@@ -100,6 +100,47 @@ jobs:
              privateRegistryTest=$true; publicInstalledCallbackQualified=$false; passed=($code -eq 0 -and $bounded) } |
             ConvertTo-Json -Depth 5 | Set-Content -LiteralPath "$root\fixture-evidence.json" -Encoding utf8
           if ($code -ne 0 -or !$bounded) { throw 'private registry TEST did not qualify' }
+      - name: Prove binary stdin length 0x1A and permitted body XML (TEST subprocess)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = Join-Path $env:RUNNER_TEMP 'windows-callback-registration-test/out/TEST-registration-contracts.exe'
+          $fields = [System.Collections.Generic.List[byte[]]]::new()
+          $fields.Add([Text.Encoding]::UTF8.GetBytes(('a' * 32)))
+          $fields.Add([Text.Encoding]::UTF8.GetBytes(('T' * 26)))
+          $fields.Add([Text.Encoding]::UTF8.GetBytes([string]::Concat('Line one',[char]10,'Line two',[char]9,'&<>')))
+          $fields.Add([Text.Encoding]::UTF8.GetBytes('0'))
+          $frame = [System.Collections.Generic.List[byte]]::new()
+          $frame.AddRange([Text.Encoding]::ASCII.GetBytes('WNCB0001'))
+          foreach ($value in [byte[]]@(1,0,3,0)) { $frame.Add($value) }
+          foreach ($field in $fields) {
+            $frame.AddRange([BitConverter]::GetBytes([uint32]$field.Length))
+            $frame.AddRange($field)
+          }
+          if ($frame[48] -ne 26) { throw 'fixture title length prefix is not 0x1A' }
+          $info = [System.Diagnostics.ProcessStartInfo]::new()
+          $info.FileName = $exe
+          $info.Arguments = '--operator-stdin-child'
+          $info.UseShellExecute = $false
+          $info.RedirectStandardInput = $true
+          $info.RedirectStandardOutput = $true
+          $info.RedirectStandardError = $true
+          $info.CreateNoWindow = $true
+          $info.Environment['GITHUB_ACTIONS'] = 'true'
+          $p = [System.Diagnostics.Process]::Start($info)
+          if (!$p) { throw 'TEST operator child did not start' }
+          try {
+            $bytes = $frame.ToArray()
+            $p.StandardInput.BaseStream.Write($bytes,0,$bytes.Length)
+            $p.StandardInput.Close()
+            if (!$p.WaitForExit(15000)) { $p.Kill($true); throw 'TEST operator child timed out' }
+            $out = $p.StandardOutput.ReadToEnd().Trim()
+            $err = $p.StandardError.ReadToEnd()
+            if ($p.ExitCode -ne 0 -or $out -cne 'TEST native binary stdin and permitted body XML passed' -or $err) {
+              throw 'native operator stdin/body contract failed'
+            }
+            Write-Output $out
+          } finally { $p.Dispose() }
       - name: Retain separate private registry TEST evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7 repository pin
