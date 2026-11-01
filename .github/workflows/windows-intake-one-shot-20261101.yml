@@ -1,0 +1,30 @@
+name: Fresh signed Windows callback intake source 7a37daa
+on:
+  push:
+    branches: [ci/windows-signed-intake-20261101]
+    paths: ['.github/workflows/windows-intake-one-shot-20261101.yml']
+permissions:
+  contents: read
+  actions: write
+jobs:
+  source-bound-intake:
+    if: ${{ github.repository == '777genius/agent-notifications' && github.run_attempt == 1 && github.event.head_commit.message == 'ci(windows) signed intake source 7a37daa' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Dispatch read-only signed archive inspection
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected='7a37daa45cd44e9a6b4115ffa14dcdbe4097f59a'
+          actual="$(gh api repos/777genius/agent-notifications/git/ref/heads/test/windows-installed-cold-callback -q .object.sha)"
+          test "$actual" = "$expected" || { echo 'Source changed: refuse' >&2; exit 1; }
+          gh api --method POST repos/777genius/agent-notifications/actions/workflows/windows-callback-contracts.yml/dispatches \
+            -f ref=test/windows-installed-cold-callback \
+            -f 'inputs[admission]=one-fresh-disposable-installed-callback' \
+            -f 'inputs[phase]=archive_intake' \
+            -f 'inputs[scenario]=basic' \
+            -f 'inputs[coreRef]='
+          echo 'Only read-only archive intake was dispatched.'
