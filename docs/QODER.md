@@ -45,6 +45,9 @@ not establish a visible platform banner until native E2E qualification.
 
 ## Configuration
 
+**Sound asset limitation:** The standalone Qoder native UAP bundle currently does not include the repository's built-in MP3 files, despite using the shared sound configuration. A configured built-in cue may therefore be silent even when the banner is submitted; this predates StopFailure. [Issue #562](https://github.com/777genius/agent-notifications/issues/562) tracks qualified assets, packaging and installed audio E2E. Do not treat sound-path configuration as proof of an audible notification.
+
+
 Select **Qoder** in the common installer, alone or alongside other agents.
 The Qoder CLI must be available on the selected `PATH`; an IDE installation alone
 does not supply the plugin-management CLI. Both `qoder` and `qodercli` command
