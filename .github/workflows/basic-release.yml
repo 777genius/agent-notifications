@@ -68,14 +68,24 @@ jobs:
             .head_sha==$source and .conclusion=="success" and .event=="workflow_dispatch" and
             .head_branch=="release/macos-signing" and .path==".github/workflows/macos-qualification.yml" and
             .actor.login==$owner and .triggering_actor.login==$owner' "$RUNNER_TEMP/signing-run.json"
-          gh api "repos/$GITHUB_REPOSITORY/commits/$RELEASE_CANDIDATE_SHA/check-runs?per_page=100" > "$RUNNER_TEMP/checks.json"
-          jq -e '.total_count==(.check_runs|length) and
-            (.check_runs | group_by(.name) | map(max_by(.id))) as $latest |
-            ([$latest[]|select(.conclusion=="failure" or .conclusion=="cancelled" or .conclusion=="timed_out")]|length)==0 and
-            (["Test on Ubuntu (1.25)","Test on Ubuntu (1.26)","Test on Windows (1.25)","Test on Windows (1.26)","Test on macOS (1.25)","Test on macOS (1.26)","Swift notifier tests","Full macOS CI required","Lint","OpenCode plugin bundle"] |
-             all(. as $name | any($latest[]; .name==$name and .status=="completed" and .conclusion=="success")))' "$RUNNER_TEMP/checks.json"
       - uses: actions/checkout@v7
         with: {ref: '${{ inputs.candidate_sha }}', persist-credentials: false}
+      - name: Load the exact executed release operator
+        uses: actions/checkout@v7
+        with: {ref: '${{ github.sha }}', path: operator, persist-credentials: false}
+      - name: Verify current-source full native CI and complete check history
+        env: {GH_TOKEN: '${{ github.token }}'}
+        run: |
+          python3 -B operator/scripts/basic-release-checks.py --source-sha "$RELEASE_CANDIDATE_SHA" \
+            --report "$RUNNER_TEMP/basic-source-checks.json"
+      - name: Preserve exact current-source CI admission evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: basic-source-checks-${{ inputs.candidate_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/basic-source-checks.json
+          if-no-files-found: ignore
+          retention-days: 14
       - name: Verify all five version values and changelog
         shell: bash
         run: |
@@ -89,9 +99,6 @@ jobs:
           test "$(jq -er '.plugins[] | select(.name=="claude-notifications-go") | .version' .claude-plugin/marketplace.json)" = "$version"
           awk -v version="$version" 'index($0, "## [" version "]") == 1 {found=1} END {exit !found}' CHANGELOG.md
           grep -Fx "      - '!$RELEASE_TAG'" .github/workflows/release.yml
-      - name: Check executed operator also excludes the tag from the full release workflow
-        uses: actions/checkout@v7
-        with: {ref: '${{ github.sha }}', path: operator, persist-credentials: false}
       - name: Require operator tag exclusion
         shell: bash
         run: grep -Fx "      - '!$RELEASE_TAG'" operator/.github/workflows/release.yml
@@ -502,14 +509,22 @@ jobs:
               public_binary = dist / ('claude-notifications-' + target + ('.exe' if target.startswith('windows') else ''))
               with safe_zip(dist / ('agent-notify-portable-' + target + '.zip'), 96 * 1024 * 1024) as packed:
                   expected_files = {'plugin.json', 'mcp.json', 'THIRD_PARTY_NOTICES.txt',
-                                    'skills/agent-notifications/SKILL.md', 'bin/' + binary_name}
-                  expected_dirs = {'bin/', 'skills/', 'skills/agent-notifications/'}
+                                    'skills/agent-notifications/SKILL.md', 'bin/' + binary_name,
+                                    'com.universal-agent-plugins.pi/index.ts'}
+                  expected_dirs = {'bin/', 'skills/', 'skills/agent-notifications/',
+                                   'com.universal-agent-plugins.pi/'}
                   need({item.filename for item in packed.infolist() if not item.is_dir()} == expected_files
                        and {item.filename for item in packed.infolist() if item.is_dir()} <= expected_dirs,
                        'exact_portable_layout_required')
                   plugin = json.loads(packed.read('plugin.json'))
                   need(plugin == {'$schema': 'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json',
-                                  'name': 'agent-notify', 'version': tag[1:]}, 'portable_version_identity_required')
+                                  'name': 'agent-notify', 'version': tag[1:],
+                                  'extensions': {'com.universal-agent-plugins.pi': {
+                                      'version': 1, 'source': 'com.universal-agent-plugins.pi'}}},
+                       'portable_version_identity_required')
+                  need(packed.read('com.universal-agent-plugins.pi/index.ts') ==
+                       (source / 'portable-package/com.universal-agent-plugins.pi/index.ts').read_bytes(),
+                       'portable_pi_extension_source_required')
                   mcp = json.loads(packed.read('mcp.json'))
                   need(mcp == {'$schema': 'https://agent-plugins.org/schemas/1.0.0/mcp.schema.json',
                                'mcpServers': {'agent-notifications': {'type': 'stdio', 'command': './bin/' + binary_name,

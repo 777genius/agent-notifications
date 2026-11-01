@@ -91,6 +91,7 @@ release-tools-check: release-workflow-check ## Typecheck and test release toolin
 	@node --test scripts/release-progress.test.mts scripts/release-preflight.test.mts scripts/basic-release-assets/assets.test.mts scripts/release-wait.test.mts scripts/release-public-verify.test.mts
 	@python3 -B tools/ci_release_scope_test.py
 	@python3 -B tools/ci_native_evidence_test.py
+	@python3 -B scripts/test_basic_release_checks.py
 	@python3 -B tools/ci_ubuntu_shards_test.py
 	@python3 -B tools/ci_windows_shards_test.py
 	@node --test scripts/release-canary.test.mts
