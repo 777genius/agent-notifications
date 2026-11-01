@@ -154,7 +154,7 @@ func (d *directory) open(name string, access uint32, disposition uint32, securit
 		return nil, err
 	}
 	if _, err = strictHandle(handle, false); err != nil {
-		windows.CloseHandle(handle)
+		_ = windows.CloseHandle(handle)
 		return nil, err
 	}
 	return os.NewFile(uintptr(handle), name), nil
@@ -185,7 +185,7 @@ func (d *directory) read(name string, limit int64) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	info, err := f.Stat()
 	if err != nil {
 		return nil, err
