@@ -9,6 +9,9 @@
 #include <winrt/Windows.Data.Xml.Dom.h>
 #include <winrt/Windows.UI.Notifications.h>
 #include <iostream>
+#include <io.h>
+#include <fcntl.h>
+#include <cstdio>
 #include <array>
 #include <cstring>
 #include <exception>
@@ -970,6 +973,8 @@ namespace wcb {
     }
   }
   inline std::vector<std::string> operatorFields(){
+    // The binary length prefix can contain 0x1A, which MSVC text stdin treats as EOF.
+    require(_setmode(_fileno(stdin),_O_BINARY)!=-1);
     std::vector<uint8_t>b;
     char c;
     while(std::cin.get(c)){
@@ -978,8 +983,8 @@ namespace wcb {
     }
     return decode(b,3,4);
   }
-  inline std::wstring xml(const std::string& value){
-    require(value.empty()||text(value,4096));
+  inline std::wstring xml(const std::string& value,bool body=false){
+    require(value.empty()||text(value,4096,body));
     std::wstring out;
     for(auto c:wide(value)){
       switch(c){

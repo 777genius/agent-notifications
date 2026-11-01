@@ -30,6 +30,8 @@ Qoder mark: unmodified square brand mark published on qoder.com (the
 canonical schema.org Organization logo asset). Brand names and marks remain
 the property of their owners.
 
-Pi integration mark: original Greek-letter pi vector drawn for this repository,
-distributed under this repository's MIT license. It identifies the Pi integration;
-it is not a copied upstream Pi logo and does not imply endorsement.
+Pi logo: unmodified official Pi SVG from https://pi.dev/logo-auto.svg,
+referenced by https://github.com/earendil-works/pi/blob/main/README.md.
+SHA-256: abd66e7868b2d24f0f0895f9237ee8a6dcb22337583b0dc54aeb595acecb4d6b.
+Pi marks remain the property of their owners; use identifies the supported host
+and does not imply endorsement.

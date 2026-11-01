@@ -11,6 +11,17 @@ import (
 	"github.com/777genius/agent-notifications/internal/windowscallback"
 )
 
+// A user may change delivery consent without consuming a new retained
+// Windows callback generation. The trusted callback binding and every
+// generation-defining route field must remain identical.
+func sameWindowsCallbackGeneration(candidate, previous Route) bool {
+	return candidate.LocalRouting && previous.LocalRouting &&
+		candidate.ApplicationPath == "" && previous.ApplicationPath == "" &&
+		candidate.TeamID == "" && previous.TeamID == "" &&
+		candidate.Windows != (notification.WindowsBinding{}) &&
+		candidate.Windows == previous.Windows
+}
+
 func stageWindowsRoute(ctx context.Context, o Options, r Request, fields map[string]json.RawMessage, existing installruntime.PolicySnapshot) (*installruntime.WindowsChange, error) {
 	if o.Platform != "windows" || r.Route == nil || !r.Route.LocalRouting {
 		return nil, nil
@@ -27,7 +38,7 @@ func stageWindowsRoute(ctx context.Context, o Options, r Request, fields map[str
 			previous.Windows != (notification.WindowsBinding{}) {
 			candidate := *r.Route
 			candidate.Windows = previous.Windows
-			if candidate == previous {
+			if sameWindowsCallbackGeneration(candidate, previous) {
 				// Idempotent setup may reuse only the ledger-owned, still-ready
 				// generation. Never silently adopt a caller or foreign snapshot.
 				owned := false

@@ -19,8 +19,6 @@ import (
 	"github.com/777genius/agent-notifications/internal/notification/observation"
 	"github.com/777genius/agent-notifications/internal/notifier"
 	"github.com/777genius/agent-notifications/internal/webhook"
-	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/adapters/statev2"
-	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/domain"
 	uapinstaller "github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/installer"
 )
 
@@ -122,48 +120,6 @@ func cursorInstalledInputs(ctx context.Context, b portable.Binding, snapshot ins
 	cfg := uapinstaller.Config{StateRoot: filepath.Join(root, "state"), StateFile: filepath.Join(root, "state", "state-v2.json"),
 		LockFile: filepath.Join(root, "state", "mutation.lock"), OperationsDir: filepath.Join(root, "state", "operations"),
 		PluginDataBase: filepath.Join(root, "plugin-data"), ManagedRoot: filepath.Join(root, "managed"), TempRoot: temp}
-	deny := func() (uapinstaller.Config, cursorinstall.Authority, error) {
-		return cfg, cursorinstall.Authority{}, portable.ErrInvalid
-	}
-	if ctx.Err() != nil || b.Integration != portable.Cursor || b.CheckSnapshot(snapshot) != nil {
-		return deny()
-	}
-	state, err := (statev2.Store{Path: cfg.StateFile}).Load()
-	if err != nil {
-		return cfg, cursorinstall.Authority{}, err
-	}
-	var selected *domain.ClientBinding
-	for _, installation := range state.Installations {
-		if installation.InstallationID != b.InstallationID {
-			continue
-		}
-		c, ok := installation.Clients[b.BindingID]
-		if selected != nil || !ok || installation.NeedsRebind || c.ClientBindingID != b.BindingID ||
-			c.ClientID != string(domain.ClientCursor) || c.Scope != b.ScopeID || c.Scope != string(domain.ScopeUser) ||
-			c.ClientBindingID != domain.ComputeClientBindingID(b.InstallationID, c.ClientID, c.Scope, c.TargetLocator) ||
-			c.NativeProfileRoot != b.ScopeRoot || c.ProfileNamespace != cfg.StateRoot || c.ProfileAuthority == nil ||
-			c.ProfileAuthority.IsZero() || c.ProfileAuthority.Facts().CanonicalRoot != b.ScopeRoot ||
-			c.SelectedDelivery.Validate() != nil || c.SelectedDelivery.ValidateClient(domain.ClientCursor) != nil ||
-			c.SelectedDelivery.ValidateCursorObjects(c.NativeObjects) != nil {
-			return deny()
-		}
-		data, ok := installation.DataReceipts[c.DataReceiptID]
-		if !ok || data.Locator != b.DataRoot {
-			return deny()
-		}
-		selected = &c
-	}
-	if selected == nil {
-		return deny()
-	}
-	facts, ok := selected.SelectedDelivery.CursorFacts()
-	executable, err := portable.ResolvePrimaryExecutable(snapshot.Ledger, b.Primary)
-	name, nameErr := b.Filename()
-	if !ok || err != nil || nameErr != nil || facts.ProfileRoot != b.ScopeRoot ||
-		facts.Selector != filepath.Join(b.DataRoot, name) || facts.Executable != executable || ctx.Err() != nil {
-		return deny()
-	}
-	return cfg, cursorinstall.Authority{ProfileRoot: facts.ProfileRoot, CursorVersion: facts.CursorVersion,
-		QualificationID: facts.QualificationID, Executable: executable,
-		ExecutableDigest: "sha256:" + snapshot.Ledger.Files[executable].SHA256, Selector: facts.Selector, ObjectID: facts.ObjectID}, nil
+	fixed, err := cursorinstall.InstalledAuthority(ctx, b, snapshot, cfg.StateFile)
+	return cfg, fixed, err
 }

@@ -208,6 +208,45 @@ func consume(t *testing.T, c cursor.Consumer, f source.Facts) cursor.Receipt {
 	return c.Consume(ctx, f, d)
 }
 
+// Cursor's public Stop event is informational even when the OS cue is enabled.
+// Audio consent cannot turn a project/session ID into a click-to-focus target.
+func TestCursorSystemSoundOptInPreservesFixedDelivery(t *testing.T) {
+	on, off := true, false
+	for _, tc := range []struct {
+		name    string
+		master  bool
+		optIn   *bool
+		audible bool
+	}{
+		{"legacy_default", true, nil, false},
+		{"explicit_opt_out", true, &off, false},
+		{"explicit_opt_in", true, &on, true},
+		{"master_disabled", false, &on, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, _ := fixture(t)
+			c.Gate = testGate{channels: cursor.Channels{Desktop: true}}
+			c.Config.Notifications.Desktop.Sound = tc.master
+			c.Config.Notifications.Desktop.SystemSound = tc.optIn
+			attempts := 0
+			c.Desktop = desktopFunc(func(_ context.Context, req notification.Request) notification.Receipt {
+				attempts++
+				if req.Content != (notification.Content{Title: "Cursor CLI", Body: "Cursor CLI is stopping", Category: "info"}) ||
+					req.Navigation != notification.None || req.Target != (notification.DesktopTarget{}) ||
+					req.Policy.ClickToFocus || req.Policy.SoundEnabled != tc.audible ||
+					req.Silent == tc.audible || req.CorrelationID == "" {
+					t.Fatalf("Cursor audio consent changed navigation/content: %+v", req)
+				}
+				return notification.Receipt{Status: "submitted"}
+			})
+			result := consume(t, c, facts(t, frame))
+			if attempts != 1 || result.Status != "submitted" || result.Desktop != "submitted" || result.Webhook != "" {
+				t.Fatalf("Cursor receipt or channel changed: %+v attempts=%d", result, attempts)
+			}
+		})
+	}
+}
+
 type cacheDocument struct {
 	Entries []struct {
 		Key   string

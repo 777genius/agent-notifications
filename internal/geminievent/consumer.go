@@ -135,11 +135,10 @@ func (c Consumer) Consume(parent context.Context, facts geminisource.Facts, dead
 			if reason := claim(DesktopChannel); reason != "" {
 				out.Desktop = reason
 			} else {
-				out.Desktop = deliver(ctx, c.Desktop, notification.Request{
-					Content: content, CorrelationID: uuid.NewString(), Deadline: deadline,
-					Policy:     notification.PolicySnapshot{Valid: true, ExplicitEnabled: true, DesktopEnabled: true},
-					Navigation: notification.None, Silent: true,
-				})
+				// Explicit sound consent requests only the OS default cue.
+				// This observer has no trusted terminal or chat target.
+				out.Desktop = deliver(ctx, c.Desktop, notification.InformationalDesktopRequest(
+					content, uuid.NewString(), deadline, c.Config.IsSystemSoundEnabled()))
 			}
 		}
 	}
