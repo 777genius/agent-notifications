@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/777genius/agent-notifications/internal/agentnotify"
 	notifycli "github.com/777genius/agent-notifications/internal/agentnotify/cli"
 	notifymcp "github.com/777genius/agent-notifications/internal/agentnotify/mcp"
 	"github.com/777genius/agent-notifications/internal/agentnotify/origin"
@@ -84,6 +85,18 @@ func agentNotifyMain(command string, args []string, options notifyruntime.Option
 	return agentNotifyExecute(ctx, command, args, options)
 }
 func agentNotifyExecute(ctx context.Context, command string, args []string, options notifyruntime.Options) int {
+	return agentNotifyExecutePorts(ctx, command, args, options, nil)
+}
+
+// A portable bridge owns only the MCP transport. Its backend is the shared
+// service; ordinary CLI/direct-MCP composition retains its existing lifecycle.
+type agentMCPPorts struct {
+	Backend notifymcp.Backend
+	Status  notifymcp.StatusPort
+	Clock   agentnotify.Clock
+}
+
+func agentNotifyExecutePorts(ctx context.Context, command string, args []string, options notifyruntime.Options, ports *agentMCPPorts) int {
 	integration, help, valid := agentNotifyFlags(command, args)
 	// Release flag leases only after every adapter, watcher and stream is closed.
 	// Reverse setup order also handles stdout/stderr sharing an open description.
@@ -128,17 +141,23 @@ func agentNotifyExecute(ctx context.Context, command string, args []string, opti
 		}
 		return 0
 	}
-	backend, err := notifyruntime.New(options)
-	if err != nil {
+	if ports == nil {
+		backend, err := notifyruntime.New(options)
+		if err != nil {
+			return fail("runtime_unavailable")
+		}
+		// Close only after adapter work and its input/output workers have joined.
+		defer func() {
+			closeCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			_ = backend.Close(closeCtx)
+		}()
+		ports = &agentMCPPorts{Backend: backend, Status: agentNotifyStatus{backend}, Clock: backend.Clock()}
+	}
+	if ports.Backend == nil || ports.Status == nil || ports.Clock == nil {
 		return fail("runtime_unavailable")
 	}
-	// Close only after adapter work and its input/output workers have joined.
-	defer func() {
-		closeCtx, cancel := context.WithTimeout(context.Background(), time.Second)
-		defer cancel()
-		_ = backend.Close(closeCtx)
-	}()
-	if backend.Clock().Now().BootID == "" {
+	if ports.Clock.Now().BootID == "" {
 		return fail("unsupported_platform")
 	}
 	input, err := open(os.Stdin)
@@ -159,9 +178,9 @@ func agentNotifyExecute(ctx context.Context, command string, args []string, opti
 	}()
 	defer func() { close(done); <-joined }()
 	if command == "notify" {
-		return notifycli.Run(ctx, args, input, output, diagnostic, notifycli.Options{Backend: backend, Clock: backend.Clock()})
+		return notifycli.Run(ctx, args, input, output, diagnostic, notifycli.Options{Backend: ports.Backend, Clock: ports.Clock})
 	}
-	err = notifymcp.Run(ctx, owned, notifymcp.Options{Backend: backend, Clock: backend.Clock(), Status: agentNotifyStatus{backend}, AdapterKind: integration})
+	err = notifymcp.Run(ctx, owned, notifymcp.Options{Backend: ports.Backend, Clock: ports.Clock, Status: ports.Status, AdapterKind: integration})
 	if err != nil {
 		return fail("connection_closed")
 	}

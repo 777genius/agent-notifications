@@ -14,7 +14,7 @@ import (
 // This fixture sends read-only MCP status requests exclusively. Keeping its
 // dispatch separate lets the bounded managed image omit unrelated test bodies.
 func init() {
-	if len(os.Args) > 1 && (os.Args[1] == "portable-launch" || os.Args[1] == "portable-primary") {
+	if len(os.Args) > 1 && (os.Args[1] == "portable-launch" || os.Args[1] == "portable-primary" || os.Args[1] == "portable-shared-daemon") {
 		os.Exit(agentPortableRun(os.Args[1], os.Args[2:], notifyruntime.Options{BootClock: portableTestClock{}, DeliveryFactory: func(notifier.ManagedInstallation, string, notifier.BootClock) notifyruntime.Delivery {
 			panic("unexpected native composition")
 		}}))
