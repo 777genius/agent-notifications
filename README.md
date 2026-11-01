@@ -110,7 +110,7 @@ Claude/Codex setup also installs the `agent-notifications` MCP server and `agent
 | **OpenCode** | Root-session completion, questions, permissions and errors | No (published v1.49.11) | No | [Setup and limits](docs/opencode-notifications.md) |
 | **Gemini CLI** | Turn completion and tool permissions | No | No | [Cross-platform setup and qualification](docs/gemini-notifications.md) |
 | **Cursor CLI** | Agent loop stopping; fixed informational text | No | No | [Qualified hosts, shared setup and profile authority](docs/cursor-notifications.md) |
-| **Qoder** | Completion, question, permission, plan and subagent/idle-teammate hooks; native plugin | Configured; MP3 bundle fix awaits next release | Not qualified; exact-chat focus unavailable | [Unified installation and native hooks](docs/QODER.md) |
+| **Qoder** | Completion, question, permission, plan and subagent/idle-teammate hooks; source-only StopFailure alerts not in v1.49.11 | Configured; MP3 bundle fix awaits next release | Not qualified; exact-chat focus unavailable | [Unified installation and native hooks](docs/QODER.md) |
 
 | **Pi** | Final completed activity, blocking extension UI questions and final API errors | Yes, local TUI | Originating local terminal; native qualification varies by OS | [Common installation, modes, sound and terminal focus](docs/pi-notifications.md) |
 
