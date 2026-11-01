@@ -188,8 +188,9 @@ def run(args):
         native("success", expected=None)
         report["cases"][-1]["case"] = "webhook-consent-disabled"
         setup("install", extra=("--pi-desktop", "false", "--pi-webhook", "true"))
-        report["cases"].append(R.exercise(root, profile, args, env, sink, fixture=F, product=P,
-                                           command=command, setup=setup, native=native))
+        replacement_case, retire_cursor = R.exercise(root, profile, args, env, sink, fixture=F, product=P,
+                                                     command=command, native=native)
+        report["cases"].append(replacement_case)
         # The same live native process captures A before the real package update.
         live_root = root / "live-A"
         live_provider = F.Provider("success")
@@ -242,6 +243,7 @@ def run(args):
         native("success", expected=None)
         report["cases"][-1]["case"] = "fresh-after-remove-no-effect"
         P.require((profile / "extensions/TEST-witness.ts").is_file(), "installed_pi_foreign_extension_removed")
+        retire_cursor()
         report["status"] = "passed_installed_pi_process"
     except Exception as error:
         report["failure"] = str(error)

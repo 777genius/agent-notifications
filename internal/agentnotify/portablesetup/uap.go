@@ -1026,6 +1026,10 @@ func (m Materializer) engineWithIdentities(req MaterializeRequest, generation *u
 			return nil, err
 		}
 	}
+	registry, err := m.piRetainedRegistry(req, registry)
+	if err != nil {
+		return nil, err
+	}
 	return uapinstaller.New(uapinstaller.Config{
 		IndependentActivations: true,
 		Progress: func(event uapinstaller.ProgressEvent) {

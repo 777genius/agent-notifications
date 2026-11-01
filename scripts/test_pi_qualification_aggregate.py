@@ -47,12 +47,13 @@ def metadata(platform="linux"):
         if row["case"] == "fresh-after-remove-no-effect":
             row.update(mode="json", provider_requests=1, webhook=None, child_collected=True,
                        native_counts=dict(A.SUCCESS_COUNTS), native_outcome="completed")
-        if row["case"] == "runtime-byte-replacement":
+        if row["case"] == "cursor-only-shared-runtime-replacement":
             row.update(old_primary_sha256=HASH, new_primary_sha256="c" * 64, old_provider_requests=1, fresh_provider_requests=1,
                        old_webhook_count=0, fresh_webhook_count=1, old_native_counts=dict(A.SUCCESS_COUNTS), fresh_native_counts=dict(A.SUCCESS_COUNTS))
             row.update({key: True for key in ("package_projection_unchanged", "derived_and_owned_executable_match", "old_child_collected",
                 "fresh_child_collected", "foreign_bytes_preserved", "sibling_consumers_preserved", "policy_bytes_preserved",
-                "preparation_retired", "test_retainer_retired")})
+                "real_cursor_sdk_lifecycle", "cursor_and_writer_retired", "cursor_preserved_during_pi_lifecycle")})
+            row.update(pi_setup_repeated=False, cursor_native_qualified=False)
     build.update(replacement_candidate_binary_sha256="c" * 64, replacement_go_build_information=build["go_build_information"],
                  replacement_stage_inventory={name: {"sha256": "c" * 64, "bytes": 1} for name in names})
     process["replacement_candidate_binary_sha256"] = "c" * 64
@@ -256,9 +257,11 @@ class AggregateGuards(unittest.TestCase):
 
     def test_runtime_change_requires_different_owned_bytes_and_real_old_fresh_events(self):
         for change in ({"new_primary_sha256": HASH}, {"old_webhook_count": 1}, {"fresh_webhook_count": 0},
-                       {"old_native_counts": {}}, {"fresh_child_collected": False}, {"sibling_consumers_preserved": False}):
+                       {"old_native_counts": {}}, {"fresh_child_collected": False}, {"sibling_consumers_preserved": False},
+                       {"real_cursor_sdk_lifecycle": False}, {"pi_setup_repeated": True}, {"cursor_native_qualified": True},
+                       {"cursor_preserved_during_pi_lifecycle": False}):
             values = metadata()
-            row = next(row for row in values[2]["cases"] if row["case"] == "runtime-byte-replacement")
+            row = next(row for row in values[2]["cases"] if row["case"] == "cursor-only-shared-runtime-replacement")
             row.update(change)
             with self.assertRaisesRegex(ValueError, "runtime_byte_replacement"):
                 A.qualify("linux", SOURCE, *values)
