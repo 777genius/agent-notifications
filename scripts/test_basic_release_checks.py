@@ -164,7 +164,7 @@ class AdmissionTests(unittest.TestCase):
                     self.verify()
 
     def test_real_failure_cancellation_timeout_and_foreign_app_stay_blocking(self):
-        for conclusion in ('failure', 'cancelled', 'timed_out'):
+        for conclusion in ('failure', 'cancelled', 'timed_out', 'action_required'):
             with self.subTest(conclusion=conclusion):
                 self.api = API()
                 native.gh.side_effect = self.api

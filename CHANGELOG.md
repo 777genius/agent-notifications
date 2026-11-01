@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Integrate Pi into autodetection, the common multi-agent installer and portable UAP packages. Support final completion, blocking extension UI questions and final errors with independent desktop/webhook consent; maintain update, repair, reload, removal and stale-observer revocation ([#539](https://github.com/777genius/agent-notifications/pull/539), [#538](https://github.com/777genius/agent-notifications/issues/538)).
 - Reuse configured sounds and originating local-terminal focus for Pi's local TUI. Print, JSON, RPC and remote sessions support explicitly enabled webhooks.
-- Add OpenCode's opt-in native OS-default notification cue while retaining no-navigation delivery ([#554](https://github.com/777genius/agent-notifications/pull/554)).
+- Add opt-in native OS-default notification cues for OpenCode, Gemini CLI and Cursor CLI while retaining no-navigation delivery ([#554](https://github.com/777genius/agent-notifications/pull/554), [#555](https://github.com/777genius/agent-notifications/pull/555)).
 
 ### Fixed
 - Suppress Claude Stop notifications from stale transcripts ([#521](https://github.com/777genius/agent-notifications/pull/521)).

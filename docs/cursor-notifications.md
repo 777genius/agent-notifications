@@ -37,7 +37,7 @@ Run the same command to update. Fresh installs default to desktop on and webhook
 
 A native `stop` event causes a fixed informational alert: **Cursor CLI is stopping**. A stopped agent loop does not establish successful task completion. Unknown status values are suppressed; the notification does not classify questions, plans, permissions or errors.
 
-Published v1.50.0 Cursor delivery is silent and informational. Unreleased source
+Cursor delivery is informational and silent by default. Since v1.50.0, it
 can explicitly request the OS default notification cue with
 `notifications.desktop.systemSound=true` and the existing master sound switch.
 This is **not** configurable MP3/volume output, a guarantee of an audible cue,
