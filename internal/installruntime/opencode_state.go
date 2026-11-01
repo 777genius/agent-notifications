@@ -32,6 +32,7 @@ func OpenCodeLedgerCompatible(l Ledger) bool {
 		return false
 	}
 }
+
 const OpenCodeWriterProtocolMarker = "agent-notifications-managed-writer-protocol-v4"
 const OpenCodeStoreLimit = 1 << 20
 const OpenCodeStoreLock = ".opencode-admission.lock"

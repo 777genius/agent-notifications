@@ -47,11 +47,11 @@ func TestManagedOpenCodeReaderAcceptsKnownWindowsLedgerPromotion(t *testing.T) {
 		Consumers: map[string]installruntime.Consumer{managedOpenCodeConsumer: consumer},
 		Files: map[string]installruntime.Identity{
 			executable: {Exists: true},
-			plugin: {Exists: true, SHA256: registration.BundleSHA256},
+			plugin:     {Exists: true, SHA256: registration.BundleSHA256},
 		},
 	}
 	snapshot := installruntime.PolicySnapshot{
-		Preimage: installruntime.Identity{Exists: true},
+		Preimage:     installruntime.Identity{Exists: true},
 		Installation: installruntime.InstalledSnapshot{Ledger: l},
 	}
 	if !validManagedOpenCode(root, snapshot) {
