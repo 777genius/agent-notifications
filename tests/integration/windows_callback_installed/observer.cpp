@@ -1009,17 +1009,37 @@ static void sameSelection(IUIAutomation* automation, const Selection& old, const
 }
 // Read-only diagnostic for this exact selected application ID. History
 // is never evidence of user interaction and cannot authorize Shell Invoke.
-static void historyDiagnostic(const Route& route) {
+static void historyDiagnostic(const Route& route, const std::wstring& title, const std::wstring& body) {
  auto report=fact();
  put(report,L"scope","read_only_unqualified_toast_history");
  put(report,L"snapshot_sha",route.snapshotSHA);
+ const auto aumid=winrt::hstring(wide(route.snapshot.aumid));
+ try {
+  using namespace winrt::Windows::UI::Notifications;
+  // Read-only effective OS/user/app display policy; never change permissions.
+  budget();
+  num(report,L"notification_setting",uint32_t(ToastNotificationManager::CreateToastNotifier(aumid).Setting()));
+ } catch (const winrt::hresult_error& error) {
+  num(report,L"notification_setting_hresult",DWORD(error.code().value));
+ } catch (...) {
+  put(report,L"notification_setting_status","unavailable");
+ }
  try {
   using namespace winrt::Windows::UI::Notifications;
   budget();
-  const auto items=ToastNotificationManager::History().GetHistory(winrt::hstring(wide(route.snapshot.aumid)));
+  const auto items=ToastNotificationManager::History().GetHistory(aumid);
   const auto count=items.Size();
   require(count<=128);
+  unsigned exact=0, suppressed=0;
+  for (const auto& toast : items) {
+   budget();
+   const auto xml=std::wstring(toast.Content().GetXml().c_str());
+   if (xml.size()<=8192 && xml.find(title)!=std::wstring::npos && xml.find(body)!=std::wstring::npos) ++exact;
+   if (toast.SuppressPopup()) ++suppressed;
+  }
   num(report,L"count",count);
+  num(report,L"exact_test_payloads",exact);
+  num(report,L"popup_suppressed",suppressed);
   put(report,L"status","queried");
  } catch (const winrt::hresult_error& error) {
   put(report,L"status","winrt_error");
@@ -1149,7 +1169,7 @@ static void click() {
    clickForegroundChanged.store(foregroundAfter!=foregroundBefore?1:0,std::memory_order_relaxed);
    publishClickRefusal(failure);
    end=GetTickCount64()+3000; // Separate bounded diagnostic window.
-   try { historyDiagnostic(route); } catch (...) {}
+   try { historyDiagnostic(route,title,body); } catch (...) {}
    clickStep.store(failedAt,std::memory_order_relaxed);
    std::rethrow_exception(failure);
   }
