@@ -771,10 +771,13 @@ struct Route {
   clickAt("route_record_open"); files.push_back(open(path/L"records"/(wide(reference)+L".wne"),false));
   clickAt("route_record_bind"); record = Record::read(bytes(files.back().h)); record.bind(snapshot,snapshotSHA);
   require(record.reference == reference && record.thread == narrow(string(request,L"thread")));
-  clickAt("route_generation_ownership"); for (size_t i = path.relative_path().empty() ? 0 : 1; i < files.size(); ++i) {
-   // Only generation objects, not ordinary ancestors, have this strict DACL.
-   if (physical(files[i].h).rfind(path.wstring(),0) == 0) owned(files[i].h,snapshot.sid);
-  }
+  clickAt("route_generation_ownership");
+  // The held generation directory is followed by exactly five generation
+  // objects. Never let case-variant string matching bypass ownership checks.
+  require(files.size() >= 6);
+  const size_t generation = files.size() - 6;
+  require(physical(files[generation].h) == path.wstring());
+  for (size_t i = generation; i < files.size(); ++i) owned(files[i].h,snapshot.sid);
   clickAt("route_selected_package"); packages(wide(snapshot.full),false); budget();
  }
 };
