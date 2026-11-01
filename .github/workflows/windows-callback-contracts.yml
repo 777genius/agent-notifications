@@ -105,12 +105,11 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $exe = Join-Path $env:RUNNER_TEMP 'windows-callback-registration-test/out/TEST-registration-contracts.exe'
-          $fields = @(
-            [Text.Encoding]::UTF8.GetBytes(('a' * 32)),
-            [Text.Encoding]::UTF8.GetBytes(('T' * 26)),
-            [Text.Encoding]::UTF8.GetBytes([string]::Concat('Line one',[char]10,'Line two',[char]9,'&<>')),
-            [Text.Encoding]::UTF8.GetBytes('0')
-          )
+          $fields = [System.Collections.Generic.List[byte[]]]::new()
+          $fields.Add([Text.Encoding]::UTF8.GetBytes(('a' * 32)))
+          $fields.Add([Text.Encoding]::UTF8.GetBytes(('T' * 26)))
+          $fields.Add([Text.Encoding]::UTF8.GetBytes([string]::Concat('Line one',[char]10,'Line two',[char]9,'&<>')))
+          $fields.Add([Text.Encoding]::UTF8.GetBytes('0'))
           $frame = [System.Collections.Generic.List[byte]]::new()
           $frame.AddRange([Text.Encoding]::ASCII.GetBytes('WNCB0001'))
           foreach ($value in [byte[]]@(1,0,3,0)) { $frame.Add($value) }
