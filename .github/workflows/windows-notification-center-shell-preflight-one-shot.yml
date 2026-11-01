@@ -1,0 +1,92 @@
+name: TEST-only Windows 11 Notification Center Shell UIA preflight
+on:
+  push:
+    branches: [ci/windows-uia-shell-preflight-20261101]
+    paths: ['.github/workflows/windows-notification-center-shell-preflight-one-shot.yml']
+permissions:
+  contents: read
+jobs:
+  shell-center-readonly-diagnostic:
+    if: ${{ github.repository == '777genius/agent-notifications' && github.run_attempt == 1 }}
+    runs-on: windows-11-vs2026-arm
+    timeout-minutes: 8
+    steps:
+      - name: Observe exact Shell UIA before and after one Win+N, no product effects
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
+          $csharp = @'
+          using System;
+          using System.Runtime.InteropServices;
+          public static class TestOnlyCenterInput {
+            [StructLayout(LayoutKind.Sequential)]
+            public struct Key { public ushort vk; public ushort scan; public uint flags; public uint time; public IntPtr extra; }
+            [StructLayout(LayoutKind.Explicit, Size=40)]
+            public struct Input { [FieldOffset(0)] public uint type; [FieldOffset(8)] public Key key; }
+            [DllImport("user32.dll", SetLastError=true)]
+            public static extern uint SendInput(uint count, [In] Input[] input, int size);
+            public static uint OpenOnce() {
+              var a = new Input[4];
+              for(int i=0;i<4;i++){a[i].type=1;}
+              a[0].key.vk=0x5b; a[1].key.vk=0x4e;
+              a[2].key.vk=0x4e; a[2].key.flags=2;
+              a[3].key.vk=0x5b; a[3].key.flags=2;
+              return SendInput(4,a,Marshal.SizeOf(typeof(Input)));
+            }
+          }
+          '@
+          Add-Type -TypeDefinition $csharp
+          $walker = [System.Windows.Automation.TreeWalker]::RawViewWalker
+          function Snapshot-Shell {
+            $shellRoots=0; $shellNodes=0; $hints=0; $onscreen=0; $roots=0; $unknown=0
+            $root=[System.Windows.Automation.AutomationElement]::RootElement
+            $first=$walker.GetFirstChild($root)
+            while ($null -ne $first) {
+              $roots++
+              if ($roots -gt 128) { throw 'bounded UIA root count exceeded' }
+              $pid=$first.Current.ProcessId
+              $proc=Get-Process -Id $pid -ErrorAction SilentlyContinue
+              $name=if($null -eq $proc){''}else{[string]$proc.ProcessName}
+              if($name -in @('explorer','ShellHost','ShellExperienceHost')) {
+                $shellRoots++
+                $pending=New-Object System.Collections.ArrayList
+                [void]$pending.Add(@($first,0))
+                while($pending.Count -gt 0) {
+                  $row=$pending[$pending.Count-1]
+                  $pending.RemoveAt($pending.Count-1)
+                  $element=$row[0]; $depth=[int]$row[1]
+                  $shellNodes++
+                  if($shellNodes -gt 2048 -or $depth -gt 24){throw 'bounded Shell UIA census exceeded'}
+                  $literal=[string]$element.Current.Name
+                  if($literal -match '(?i)notification|calendar|do not disturb|clear all'){$hints++}
+                  if(-not $element.Current.IsOffscreen){$onscreen++}
+                  $child=$walker.GetFirstChild($element)
+                  while($null -ne $child) {
+                    [void]$pending.Add(@($child,$depth+1))
+                    if($pending.Count+$shellNodes -gt 2048){throw 'bounded UIA pending node limit exceeded'}
+                    $child=$walker.GetNextSibling($child)
+                  }
+                }
+              }
+              else {$unknown++}
+              $first=$walker.GetNextSibling($first)
+            }
+            return [ordered]@{rootCount=$roots;shellRoots=$shellRoots;shellNodes=$shellNodes;
+              visibleShellNodes=$onscreen;notificationNameHints=$hints;nonShellRoots=$unknown}
+          }
+          $before=Snapshot-Shell
+          $injected=[TestOnlyCenterInput]::OpenOnce()
+          Start-Sleep -Seconds 2
+          $after=Snapshot-Shell
+          $result=[ordered]@{
+            scope='fresh_shell_ui_observation_only'
+            source='27b7acb99aa12bc56aff80cea369b40aa783a03b'
+            session=[System.Diagnostics.Process]::GetCurrentProcess().SessionId
+            keyEventsInserted=[int]$injected
+            before=$before;after=$after
+            genuineShellToastInvokeQualified=$false
+            coldCallbackQualified=$false
+          }
+          Write-Output ('SHELL_CENTER_PREFLIGHT='+($result|ConvertTo-Json -Depth 5 -Compress))
+          if($injected -ne 4){throw 'One Win+N input not inserted on the actual desktop'}
