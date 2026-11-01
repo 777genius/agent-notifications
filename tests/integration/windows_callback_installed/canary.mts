@@ -223,6 +223,14 @@ async function main(): Promise<void> {
   await mkdir(path.join(root,'route.json.ready'));
   await clickTask;
   if (clickFailure !== undefined) throw clickFailure;
+  // Shortcut insertion is not click proof: only the Shell Invoke and cold
+  // receiver evidence can qualify the callback.
+  const centerInput = JSON.parse((await boundedRead(path.join(root,'notification-center-input.json'),8192)).toString()) as
+    {source: string; nonce: string; mode: string; qualification: string; input_events_inserted: number};
+  assert.equal(centerInput.source,source); assert.equal(centerInput.nonce,tuple.nonce);
+  assert.equal(centerInput.mode,'windows_notification_center_shortcut');
+  assert.equal(centerInput.qualification,'input_only_not_callback');
+  assert.equal(centerInput.input_events_inserted,4);
   const receiver = JSON.parse((await boundedRead(path.join(root,'receiver.json'))).toString()) as Receiver;
   const names = new Set(await readdir(attempts)); assert(names.size <= 24);
   const callbacks = [...names].filter(n => n.endsWith('.intent') && !before.includes(n)); assert.equal(callbacks.length,1);

@@ -1051,6 +1051,27 @@ static void click() {
   const auto title = string(request,L"title"), body = string(request,L"body");
   require(title == L"Navigation TEST "+wide(nonce) && body == L"Cold callback TEST "+wide(nonce));
   clickAt("cold_helper_census"); require(helpers(route).empty());
+  // Windows keeps the submitted toast in Notification Center if its transient
+  // banner is no longer visible. Test ONE documented Win+N Shell action.
+  // This input never selects a toast or directly activates its COM.
+  clickAt("notification_center_input_custody"); interactive(); budget();
+  require(!(GetAsyncKeyState(VK_LWIN)&0x8000) &&
+          !(GetAsyncKeyState(VK_RWIN)&0x8000) &&
+          !(GetAsyncKeyState(VK_CONTROL)&0x8000) &&
+          !(GetAsyncKeyState(VK_MENU)&0x8000));
+  auto center=fact(); put(center,L"mode","windows_notification_center_shortcut");
+  put(center,L"qualification","input_only_not_callback");
+  publish(L"notification-center.intent.json",center);
+  INPUT keys[4]{};
+  for(auto& key:keys)key.type=INPUT_KEYBOARD;
+  keys[0].ki.wVk=VK_LWIN;
+  keys[1].ki.wVk=L'N';
+  keys[2].ki.wVk=L'N'; keys[2].ki.dwFlags=KEYEVENTF_KEYUP;
+  keys[3].ki.wVk=VK_LWIN; keys[3].ki.dwFlags=KEYEVENTF_KEYUP;
+  clickAt("notification_center_input_once"); budget();
+  require(SendInput(4,keys,sizeof(INPUT))==4); budget();
+  num(center,L"input_events_inserted",4);
+  publish(L"notification-center-input.json",center);
   clickAt("uia_select_notification"); Selection selected;
   try {
    while (!selected.row) { budget(); selected = census(automation.Get(),walker.Get(),title,body); if (!selected.row) Sleep(50); }

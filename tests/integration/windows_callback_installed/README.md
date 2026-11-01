@@ -18,8 +18,12 @@ source-bound x64 Go/helper bytes. This is an explicit x64 emulation experiment.
 The actual machine/token/session facts are evidence, not native x64 transfer.
 Server/absent desktop, preexisting package family, unknown/denied shared registry parents,
 permission Disabled, ambiguous UI and unknown collections refuse. Parents are
-observed before setup and never created to force success. A missing visible
-banner/default row fails; there is no alternate input or OOBE path.
+observed before setup and never created to force success. A missing visible Notification Center row/default action fails; there is no
+alternate callback invocation, direct COM activation or OOBE path. The observer
+opens the standard Windows 11 Notification Center with one Win+N shortcut after
+the submitted Show and immutable route evidence, then performs one genuine
+Shell UIA Invoke on the exact, revalidated notification row. Key insertion
+alone never qualifies a click.
 
 The normal managed installer creates a disposable producer. Setup and ordinary
 notify share a fresh TEST `APPDATA` directory, so the normal
@@ -36,7 +40,8 @@ The harness never repairs an existing caller file or relies on Node chmod to
 establish Windows ACL privacy. ONE notify
 with synthetic context is actually collected before ONE genuine Shell UIA
 Invoke. The native observer is armed before Show and awaits durable sender
-and route evidence before attempting UIA selection. It accepts the exact
+and route evidence before opening the OS Notification Center and attempting
+UIA selection. It accepts the exact
 source-bound JSON only after the writer's completed flush/close is followed
 by a unique, atomically created directory readiness marker. No incomplete
 or partial JSON is ever parsed. The controller likewise waits for a closed
@@ -45,7 +50,9 @@ click-armed receipt. Revocation does not pass
 callback process HANDLE through exit using an independent collector armed before
 the synchronous sole Invoke. After durable click intent, a fresh bounded census
 rechecks exact title/body/provider ancestry, visible/enabled row and current
-Invoke pattern. URI evidence is derived from immutable
+Invoke pattern. A separate input-only receipt proves exactly four Win+N key
+events were inserted; only the Shell UIA Invoke, fresh receiver and immutable
+callback records authorize final qualification. URI evidence is derived from immutable
 record bytes; actual OS URI payload, authenticated click, rendered chat, focus,
 atomic FullName locking and global SDK drain are not claimed.
 
