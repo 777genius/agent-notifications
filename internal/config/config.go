@@ -549,6 +549,7 @@ func (c *Config) Validate() error {
 		"session_limit_reached": true,
 		"api_error":             true,
 		"api_error_overloaded":  true,
+		"agent_error":           true,
 		"permission_request":    true,
 	}
 	for i, f := range c.Notifications.SuppressFilters {
