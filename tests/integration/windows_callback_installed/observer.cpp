@@ -23,6 +23,7 @@
 #include <atomic>
 #include <algorithm>
 #include <utility>
+#include <string_view>
 #include <optional>
 #include <cstddef>
 #include <iostream>
@@ -364,6 +365,17 @@ static uint32_t codexProtocols(const std::vector<uint8_t>& raw) {
 }
 // Breakage: raw UTF16 is wrongly converted as UTF8, or byte loading accepts a
 // DTD/external declaration, malformed bytes/document or duplicate codex registration.
+// Diagnostic only: match actual toast <text> nodes, not incidental XML
+// substrings in attributes or unrelated payload. This never admits a click.
+static bool exactTestToastText(const winrt::Windows::Data::Xml::Dom::XmlDocument& content,
+ const std::wstring& title, const std::wstring& body) {
+ const auto labels=content.GetElementsByTagName(L"text");
+ if (labels.Size()!=2) return false;
+ const auto first=labels.GetAt(0).InnerText(), second=labels.GetAt(1).InnerText();
+ if (first.size()>4096 || second.size()>4096) return false;
+ return std::wstring_view(first.c_str(),first.size())==std::wstring_view(title)
+  && std::wstring_view(second.c_str(),second.size())==std::wstring_view(body);
+}
 // Literal independent documents test the real SDK parser in memory only.
 static void xmlContracts() {
  const std::string utf8 = "<?xml version='1.0' encoding='UTF-8'?><Package><Protocol Name='codex'/></Package>";
@@ -410,6 +422,19 @@ static void xmlContracts() {
   old.LoadXml(wide(std::string(bom16.begin(),bom16.end())),settings);
  } catch (const winrt::hresult_error&) { oldRejected = true; }
  require(oldRejected);
+ // The history diagnostic must not mistake a launch attribute, partial label,
+ // swapped texts, or extra text for the exact submitted toast.
+ archiveAt("inert_history_text_exactness");
+ auto matches = [](const wchar_t* xml) {
+  winrt::Windows::Data::Xml::Dom::XmlDocument doc;
+  doc.LoadXml(xml);
+  return exactTestToastText(doc,L"Navigation TEST",L"Cold callback TEST");
+ };
+ require(matches(L"<toast><visual><binding template='ToastGeneric'><text>Navigation TEST</text><text>Cold callback TEST</text></binding></visual></toast>"));
+ require(!matches(L"<toast launch='Navigation TEST Cold callback TEST'><visual><binding template='ToastGeneric'><text>Other</text><text>Other</text></binding></visual></toast>"));
+ require(!matches(L"<toast><visual><binding template='ToastGeneric'><text>Navigation TEST extra</text><text>Cold callback TEST</text></binding></visual></toast>"));
+ require(!matches(L"<toast><visual><binding template='ToastGeneric'><text>Cold callback TEST</text><text>Navigation TEST</text></binding></visual></toast>"));
+ require(!matches(L"<toast><visual><binding template='ToastGeneric'><text>Navigation TEST</text><text>Cold callback TEST</text><text>Extra</text></binding></visual></toast>"));
  std::cout << "TEST byte XML contracts passed; legacy UTF16 string-load rejected; no native target effects\n";
 }
 struct Archive {
@@ -1033,9 +1058,11 @@ static void historyDiagnostic(const Route& route, const std::wstring& title, con
   unsigned exact=0, suppressed=0;
   for (const auto& toast : items) {
    budget();
-   const auto xml=std::wstring(toast.Content().GetXml().c_str());
-   if (xml.size()<=8192 && xml.find(title)!=std::wstring::npos && xml.find(body)!=std::wstring::npos) ++exact;
-   if (toast.SuppressPopup()) ++suppressed;
+   // Count suppression only for exact matching synthetic notifications.
+   if (exactTestToastText(toast.Content(),title,body)) {
+    ++exact;
+    if (toast.SuppressPopup()) ++suppressed;
+   }
   }
   num(report,L"count",count);
   num(report,L"exact_test_payloads",exact);
