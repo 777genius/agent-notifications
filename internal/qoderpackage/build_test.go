@@ -2,13 +2,17 @@ package qoderpackage
 
 import (
 	"archive/zip"
+	"bytes"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
 	"runtime"
 	"strings"
 	"testing"
+
+	soundassets "github.com/777genius/agent-notifications/sounds"
 )
 
 func TestNativeBundleContract(t *testing.T) {
@@ -67,7 +71,7 @@ func TestNativeBundleContract(t *testing.T) {
 				binary += ".exe"
 			}
 			wantEvents := []struct{ event, matcher string }{
-				{"Stop", ""}, {"Notification", ""}, {"PermissionRequest", ""}, {"SubagentStop", ""}, {"TeammateIdle", ""}, {"PreToolUse", "ExitPlanMode|AskUserQuestion"},
+				{"Stop", ""}, {"StopFailure", ""}, {"Notification", ""}, {"PermissionRequest", ""}, {"SubagentStop", ""}, {"TeammateIdle", ""}, {"PreToolUse", "ExitPlanMode|AskUserQuestion"},
 			}
 			if len(hooks.Hooks) != len(wantEvents) {
 				t.Fatalf("unexpected native hook set: %s", raw)
@@ -112,7 +116,40 @@ func TestNativeBundleContract(t *testing.T) {
 					t.Fatalf("missing %s", name)
 				}
 			}
-			if len(seen) != 6 {
+			for _, name := range []string{"task-complete.mp3", "review-complete.mp3", "question.mp3", "plan-ready.mp3", "error.mp3"} {
+				rel := "sounds/" + name
+				builtin, err := soundassets.Builtins.ReadFile(name)
+				if err != nil || len(builtin) == 0 {
+					t.Fatalf("built-in audio source %s: %v", name, err)
+				}
+				actual, err := os.ReadFile(filepath.Join(got.Root, "sounds", name))
+				if err != nil || !bytes.Equal(actual, builtin) {
+					t.Fatalf("native sound payload %s differs from reviewed source: %v", name, err)
+				}
+				if !seen[rel] {
+					t.Fatalf("native archive missing %s", rel)
+				}
+				var zipped []byte
+				for _, entry := range archive.File {
+					if entry.Name != rel {
+						continue
+					}
+					reader, err := entry.Open()
+					if err != nil {
+						t.Fatal(err)
+					}
+					zipped, err = io.ReadAll(reader)
+					closeErr := reader.Close()
+					if err != nil || closeErr != nil {
+						t.Fatalf("archive sound %s: %v / %v", rel, err, closeErr)
+					}
+					break
+				}
+				if !bytes.Equal(zipped, builtin) {
+					t.Fatalf("archive sound %s differs from package source", rel)
+				}
+			}
+			if len(seen) != 11 {
 				t.Fatalf("unexpected extra runtime/observer: %v", seen)
 			}
 			if _, err := Build(req); err == nil {
@@ -182,7 +219,7 @@ func TestManagedHooksUseExactOwnedRuntimeEntrypoint(t *testing.T) {
 	if err = json.Unmarshal(raw, &doc); err != nil {
 		t.Fatal(err)
 	}
-	if len(doc.Hooks) != 6 {
+	if len(doc.Hooks) != 7 {
 		t.Fatalf("managed event set differs: %s", raw)
 	}
 	for event, groups := range doc.Hooks {

@@ -47,6 +47,10 @@
     "replaceNotificationsPerSession": null
   },
   "statuses": {
+    "agent_error": {
+      "title": "🔴 Agent error",
+      "sound": "ASSET_ROOT/sounds/error.mp3"
+    },
     "agent_stopping": {
       "title": "Copilot in VS Code",
       "sound": ""
