@@ -64,14 +64,28 @@ func prepareGlobalConfig(ctx context.Context, canonicalPath, legacyPath, default
 	if err = validateStoreTarget(canonicalPath); err != nil {
 		return result, err
 	}
-	parent, err := openStoreParent(filepath.Dir(canonicalPath), true)
+	var parent *storeParent
+	// Another cooperating preparer can still be publishing this directory
+	// before its permanent target lock exists. Retry only the native sharing
+	// gap, within the caller's original deadline, repeating the strict walk.
+	err = checkInitEntryContext(ctx, canonicalPath, func(string) error {
+		var e error
+		parent, e = openStoreParent(filepath.Dir(canonicalPath), true)
+		return e
+	})
 	if err != nil {
 		return result, pathErrorAt(canonicalPath, "prepare-open-parent", err)
 	}
 	defer parent.close()
 	name := filepath.Base(canonicalPath)
 	// Validate existing files before creating a lock or staging new bytes.
-	if _, err = parent.read(name); err != nil && !os.IsNotExist(err) {
+	// Keep the pre-lock security probe. A file publication can temporarily
+	// conflict with its open too; each retry repeats ACL/link/reparse checks.
+	err = checkInitEntryContext(ctx, canonicalPath, func(string) error {
+		_, e := parent.read(name)
+		return e
+	})
+	if err != nil && !os.IsNotExist(err) {
 		return result, pathErrorAt(canonicalPath, "prepare-prelock-read", err)
 	}
 	unlock, err := parent.lock(ctx, name+".lock", false, true)
