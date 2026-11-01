@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.50.0] - 2026-11-01
+
+### Added
+- Integrate Pi into autodetection, the common multi-agent installer and portable UAP packages. Support final completion, blocking extension UI questions and final errors with independent desktop/webhook consent; maintain update, repair, reload, removal and stale-observer revocation ([#539](https://github.com/777genius/agent-notifications/pull/539), [#538](https://github.com/777genius/agent-notifications/issues/538)).
+- Reuse configured sounds and originating local-terminal focus for Pi's local TUI. Print, JSON, RPC and remote sessions support explicitly enabled webhooks.
+- Add OpenCode's opt-in native OS-default notification cue while retaining no-navigation delivery ([#554](https://github.com/777genius/agent-notifications/pull/554)).
+
+### Fixed
+- Suppress Claude Stop notifications from stale transcripts ([#521](https://github.com/777genius/agent-notifications/pull/521)).
+- Respect click opt-out and share native admission across notification consumers ([#550](https://github.com/777genius/agent-notifications/pull/550)).
+- Include the Pi observer in sealed portable-package and isolated Codex smoke verification.
+
+### Platform notes
+- Pi uses the common notification config. Existing webhook destinations receive Pi events only when Pi webhook consent is enabled. Tested standalone Pi v1.4.0; Windows requires the real standalone pi.exe rather than an npm command shim. Restart Pi or run /reload after installation changes.
+- Owner-approved Pi acceptance uses real installed hook/lifecycle checks on all three OSes and Linux native desktop cases. The owner manually observed a Mac completion banner and click back to Terminal at an earlier source. Full macOS/Windows native sound, callback and negative-case qualification remains pending.
+- Uses the basic five-platform artifact profile with separate downloaded macOS/Codex checks. Does not claim full native, eleven-cell OpenCode, physical Intel, cold-start or live-provider qualification.
+
 ## [1.49.11] - 2026-10-28
 
 ### Added
