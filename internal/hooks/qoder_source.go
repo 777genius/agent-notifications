@@ -16,9 +16,10 @@ type QoderSource struct{}
 
 // QoderHookEvents is the notification-suitable hook set wired end to end.
 // Mirrors the Claude adapter set (PreToolUse/Notification/Stop/SubagentStop/
-// TeammateIdle) plus PermissionRequest, which Qoder supports natively.
+// TeammateIdle) plus native PermissionRequest and StopFailure.
 var QoderHookEvents = []string{
 	"Stop",
+	"StopFailure",
 	"Notification",
 	"PermissionRequest",
 	"SubagentStop",
@@ -74,6 +75,10 @@ func (QoderSource) Decode(ctx context.Context, event string, input io.Reader) (E
 	switch event {
 	case "Notification":
 		ev.Payload = NotificationPayload{}
+	case "StopFailure":
+		// Use a fixed, non-sensitive failure category. The native error body,
+		// details, last assistant text and transcript path are never rendered.
+		ev.Payload = StopFailurePayload{RateLimited: wire.ErrorType == "rate_limit"}
 	case "PermissionRequest":
 		ev.Payload = PermissionRequestPayload{ToolName: wire.ToolName, ToolInput: append(json.RawMessage(nil), wire.ToolInput...)}
 	case "SubagentStop":
