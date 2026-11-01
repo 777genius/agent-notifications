@@ -1,4 +1,4 @@
-name: One-shot source-pinned Windows UIA retained Shell census qualification
+name: One-shot source-pinned Windows package-noshow recovery qualification
 on:
   push:
     branches: [ci/win-callback-dispatch-20261031]
@@ -8,11 +8,11 @@ permissions:
   actions: write
 jobs:
   qualified-windows:
-    if: ${{ github.repository == '777genius/agent-notifications' && github.event.head_commit.message == 'ci(windows) admit read-only Shell census retained 27b7acb' && github.run_attempt == 1 }}
+    if: ${{ github.repository == '777genius/agent-notifications' && github.event.head_commit.message == 'ci(windows) admit package-noshow recovery 27b7acb' && github.run_attempt == 1 }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - name: Dispatch one fresh retained Windows Shell UIA proof with diagnostic census
+      - name: Dispatch one fresh Windows package-noshow recovery proof
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -38,10 +38,10 @@ jobs:
           fi
           gh api --method POST repos/777genius/agent-notifications/actions/workflows/windows-callback-contracts.yml/dispatches \
             -f ref=test/windows-installed-cold-callback \
-            -f 'inputs[admission]=one-fresh-disposable-installed-callback' \
-            -f 'inputs[phase]=installed' \
-            -f 'inputs[scenario]=retained' \
+            -f 'inputs[admission]=one-fresh-disposable-package-noshow' \
+            -f 'inputs[phase]=package_noshow' \
+            -f 'inputs[scenario]=package_noshow' \
             -f "inputs[expectedArchiveSHA]=$rawSHA" \
             -f "inputs[expectedFullName]=$fullName" \
-            -f 'inputs[coreRef]='
-          echo 'One fresh source-pinned installed retained test dispatched, no retry.'
+            -f 'inputs[coreRef]=228ca171b4a0b4c10222571e7c8b87ba0f160958'
+          echo 'One fresh source-pinned package_noshow test dispatched, no retry.'
