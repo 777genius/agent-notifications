@@ -70,12 +70,17 @@ static std::atomic<uint32_t> clickStationObserved{0}, clickStationVisible{0}, cl
 // a Shell provider, UIA selection, Invoke or callback.
 static std::atomic<uint32_t> clickUserNotificationStateAtArm{0}, clickUserNotificationHRESULTAtArm{0};
 static std::atomic<uint32_t> clickUserNotificationStateAtRefusal{0}, clickUserNotificationHRESULTAtRefusal{0};
-static void notificationPresentationHint(std::atomic<uint32_t>& observed, std::atomic<uint32_t>& status) noexcept {
+static std::atomic<uint32_t> clickUserNotificationQueriedAtArm{0}, clickUserNotificationQueriedAtRefusal{0};
+static void notificationPresentationHint(std::atomic<uint32_t>& observed, std::atomic<uint32_t>& status,
+                                        std::atomic<uint32_t>& queried) noexcept {
   QUERY_USER_NOTIFICATION_STATE value{};
   const HRESULT result=SHQueryUserNotificationState(&value);
   status.store(DWORD(result),std::memory_order_relaxed);
   if(SUCCEEDED(result) && value>=QUNS_NOT_PRESENT && value<=QUNS_APP)
     observed.store(uint32_t(value),std::memory_order_relaxed);
+  // State 0 / HRESULT 0 is never claimed as a query unless this marker is set.
+  // Failure to retrieve a usable state also records an attempted query.
+  queried.store(1,std::memory_order_relaxed);
 }
 static void clickAt(const char* step) { clickStep.store(step,std::memory_order_relaxed); }
 // MSVC path::root_path treats the device introducer as root (\\?\),
@@ -1093,6 +1098,13 @@ static void historyDiagnostic(const Route& route, const std::wstring& title, con
 // not happen. CREATE_NEW prevents a second report from replacing the first.
 static void publishClickRefusal(std::exception_ptr cause) noexcept {
  try {
+  // Revalidation/Invoke failures bypass the first Shell UIA census catch.
+  // Snapshot their presentation state once after interactive arm admission,
+  // without granting selection/Invoke authority or changing the refusal.
+  if(clickUserNotificationQueriedAtArm.load(std::memory_order_relaxed) &&
+     !clickUserNotificationQueriedAtRefusal.load(std::memory_order_relaxed))
+    notificationPresentationHint(clickUserNotificationStateAtRefusal,clickUserNotificationHRESULTAtRefusal,
+                                 clickUserNotificationQueriedAtRefusal);
   auto report=fact(); put(report,L"phase","click"); put(report,L"outcome","refused_or_unknown");
   put(report,L"last_click_step",clickStep.load(std::memory_order_relaxed));
   num(report,L"uia_roots",clickRoots.load(std::memory_order_relaxed));
@@ -1112,8 +1124,10 @@ static void publishClickRefusal(std::exception_ptr cause) noexcept {
   num(report,L"foreground_before",clickForegroundBefore.load(std::memory_order_relaxed));
   num(report,L"foreground_after",clickForegroundAfter.load(std::memory_order_relaxed));
   num(report,L"foreground_changed",clickForegroundChanged.load(std::memory_order_relaxed));
+   num(report,L"user_notification_queried_at_arm",clickUserNotificationQueriedAtArm.load(std::memory_order_relaxed));
    num(report,L"user_notification_state_at_arm",clickUserNotificationStateAtArm.load(std::memory_order_relaxed));
    num(report,L"user_notification_hresult_at_arm",clickUserNotificationHRESULTAtArm.load(std::memory_order_relaxed));
+   num(report,L"user_notification_queried_at_refusal",clickUserNotificationQueriedAtRefusal.load(std::memory_order_relaxed));
    num(report,L"user_notification_state_at_refusal",clickUserNotificationStateAtRefusal.load(std::memory_order_relaxed));
    num(report,L"user_notification_hresult_at_refusal",clickUserNotificationHRESULTAtRefusal.load(std::memory_order_relaxed));
   if (cause) {
@@ -1133,7 +1147,8 @@ static void publishClickRefusal(std::exception_ptr cause) noexcept {
 static void click() {
   // Establish real interactive UIA readiness before the shipping toast is shown.
   clickAt("interactive_desktop"); interactive();
-  notificationPresentationHint(clickUserNotificationStateAtArm,clickUserNotificationHRESULTAtArm);
+  notificationPresentationHint(clickUserNotificationStateAtArm,clickUserNotificationHRESULTAtArm,
+                               clickUserNotificationQueriedAtArm);
   clickAt("uia_create"); ComPtr<IUIAutomation> automation;
   budget(); winrt::check_hresult(CoCreateInstance(CLSID_CUIAutomation,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&automation)));
   ComPtr<IUIAutomationTreeWalker> walker;
@@ -1211,7 +1226,8 @@ static void click() {
    const HWND foregroundAfter=GetForegroundWindow();
    clickForegroundAfter.store(foregroundAfter?1:0,std::memory_order_relaxed);
    clickForegroundChanged.store(foregroundAfter!=foregroundBefore?1:0,std::memory_order_relaxed);
-   notificationPresentationHint(clickUserNotificationStateAtRefusal,clickUserNotificationHRESULTAtRefusal);
+   notificationPresentationHint(clickUserNotificationStateAtRefusal,clickUserNotificationHRESULTAtRefusal,
+                                 clickUserNotificationQueriedAtRefusal);
    publishClickRefusal(failure);
    end=GetTickCount64()+3000; // Separate bounded diagnostic window.
    try { historyDiagnostic(route,title,body); } catch (...) {}
