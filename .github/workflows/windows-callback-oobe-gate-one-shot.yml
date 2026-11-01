@@ -1,0 +1,86 @@
+name: One-shot Windows Client OOBE host gate TEST preflight
+on:
+  push:
+    branches: [ci/windows-callback-oobe-gate-first-attempt-20261101]
+    paths: ['.github/workflows/windows-callback-oobe-gate-one-shot.yml']
+permissions:
+  contents: read
+jobs:
+  oobe:
+    if: ${{ github.repository == '777genius/agent-notifications' && github.run_attempt == 1 && github.event.head_commit.message == 'test-windows-callback-oobe-gate-first-attempt' }}
+    runs-on: windows-11-vs2026-arm
+    timeout-minutes: 6
+    env:
+      TEST_INSTALLED_ADMISSION: one-fresh-disposable-installed-callback
+      TEST_INSTALLED_PHASE: installed
+    steps:
+      - name: Execute exact copied #424 TEST-only pre-effect OOBE gate (no app effects)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # This is disposable test-host preparation, before any signed archive
+          # deployment/installation/Show. Never act on an operator's Windows VM,
+          # an arbitrary process, or a process without exact OS-image identity.
+          if ($env:GITHUB_ACTIONS -cne 'true' -or
+              $env:GITHUB_REPOSITORY -cne '777genius/agent-notifications' -or
+              $env:GITHUB_RUN_ATTEMPT -cne '1' -or
+              $env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or
+              $env:TEST_INSTALLED_ADMISSION -cne 'one-fresh-disposable-installed-callback' -or
+              $env:TEST_INSTALLED_PHASE -cne 'installed') {
+            throw 'not an admitted fresh disposable installed TEST host'
+          }
+          $os = Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction Stop
+          if ($os.ProductType -ne 1 -or [int]$os.BuildNumber -lt 22000) {
+            throw 'only Windows 11 Client may have the first-login TEST overlay dismissed'
+          }
+          Add-Type -TypeDefinition @'
+          using System;
+          using System.Runtime.InteropServices;
+          public static class TestOnlyForegroundWindow {
+            [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+            [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
+          }
+          '@
+          $foreground = [TestOnlyForegroundWindow]::GetForegroundWindow()
+          [uint32]$pid = 0
+          if ($foreground -eq [IntPtr]::Zero -or
+              [TestOnlyForegroundWindow]::GetWindowThreadProcessId($foreground, [ref]$pid) -eq 0 -or
+              $pid -eq 0) {
+            throw 'interactive foreground identity unavailable; no TEST cleanup'
+          }
+          $process = [Diagnostics.Process]::GetProcessById([int]$pid)
+          try {
+            if ($process.ProcessName -cne 'WWAHost') {
+              Write-Output 'TEST_FIRST_LOGON_OVERLAY_DISMISSED=0;reason=other_foreground'
+            } else {
+              $image = [string]$process.MainModule.FileName
+              $systemRoot = [string]$env:WINDIR
+              $sameSession = $process.SessionId -eq [Diagnostics.Process]::GetCurrentProcess().SessionId
+              $systemImage = $image.StartsWith($systemRoot + '\', [StringComparison]::OrdinalIgnoreCase) -and
+                             [IO.Path]::GetFileName($image) -ieq 'WWAHost.exe'
+              if (-not $sameSession -or -not $systemImage) {
+                throw 'foreign or unverified foreground WWAHost; refusing TEST cleanup'
+              }
+              # One exact, already-held OS process only; never sweep, retry or
+              # mutate a product/client registration, package, user policy or toast.
+              $process.Kill()
+              if (-not $process.WaitForExit(10000)) { throw 'OOBE process exit not collected' }
+              Write-Output 'TEST_FIRST_LOGON_OVERLAY_DISMISSED=1'
+            }
+          } finally { $process.Dispose() }
+      - name: Report fixed native notification status without Show, package or input
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Add-Type -TypeDefinition @'
+          using System;
+          using System.Runtime.InteropServices;
+          public static class TestOnlyQuietQuery {
+            [DllImport("shell32.dll")] public static extern int SHQueryUserNotificationState(out int status);
+          }
+          '@
+          [int]$value=0
+          $hr=[TestOnlyQuietQuery]::SHQueryUserNotificationState([ref]$value)
+          if ($hr -ne 0) { throw 'read-only QUNS query failed' }
+          Write-Output ('OOBE_GATE_PREFLIGHT_QUERY=' + $value)
+          Write-Output ('OOBE_GATE_PREFLIGHT_SCOPE=disposable/no-install/no-toast/no-ui-invoke/no-callback')
