@@ -1,0 +1,51 @@
+name: TEST-only Windows 11 notification presentation policy inventory
+on:
+  push:
+    branches: [ci/windows-uia-shell-preflight-20261101]
+    paths: ['.github/workflows/windows-shell-notification-policy-readonly.yml']
+permissions:
+  contents: read
+jobs:
+  policy:
+    if: ${{ github.repository == '777genius/agent-notifications' && github.run_attempt == 1 }}
+    runs-on: windows-11-vs2026-arm
+    timeout-minutes: 5
+    steps:
+      - name: Read fixed Notification Center and toast policy facts, no product or system changes
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $items=@(
+            @('user_disable_center','HKCU:\Software\Policies\Microsoft\Windows\Explorer','DisableNotificationCenter'),
+            @('machine_disable_center','HKLM:\SOFTWARE\Policies\Microsoft\Windows\Explorer','DisableNotificationCenter'),
+            @('user_toast_enabled','HKCU:\Software\Microsoft\Windows\CurrentVersion\PushNotifications','ToastEnabled'),
+            @('machine_disable_toast','HKLM:\SOFTWARE\Policies\Microsoft\Windows\CurrentVersion\PushNotifications','NoToastApplicationNotification'),
+            @('user_global_toast','HKCU:\Software\Microsoft\Windows\CurrentVersion\Notifications\Settings','NOC_GLOBAL_SETTING_TOASTS_ENABLED'),
+            @('user_global_dnd','HKCU:\Software\Microsoft\Windows\CurrentVersion\Notifications\Settings','NOC_GLOBAL_SETTING_DND')
+          )
+          $entries=@{}
+          foreach($entry in $items){
+            $key=$entry[0];$path=$entry[1];$value=$entry[2]
+            $item=Get-ItemProperty -LiteralPath $path -ErrorAction SilentlyContinue
+            $number=$null
+            if($null -ne $item){
+              $prop=$item.PSObject.Properties[$value]
+              if($null -ne $prop){$number=$prop.Value}
+            }
+            if($null -eq $number){$entries[$key]='not_configured'}
+            elseif($number -is [int] -and $number -eq 0){$entries[$key]='zero'}
+            elseif($number -is [int] -and $number -eq 1){$entries[$key]='one'}
+            else{$entries[$key]='other'}
+          }
+          $services=Get-Service -Name 'WpnService','WpnUserService*' -ErrorAction SilentlyContinue
+          $report=[ordered]@{
+            scope='read_only_current_user_notification_policy_hints'
+            session=[System.Diagnostics.Process]::GetCurrentProcess().SessionId
+            registry=$entries
+            pushNotificationServicesFound=@($services).Count
+            pushNotificationServicesRunning=@($services|Where-Object{$_.Status -eq 'Running'}).Count
+            notificationCenterActuallyOpened=$false
+            productToastSent=$false
+            callbackQualified=$false
+          }
+          Write-Output ('SHELL_POLICY_PREFLIGHT='+($report|ConvertTo-Json -Depth 5 -Compress))
