@@ -69,6 +69,13 @@ func TestManagedOpenCodeReaderAcceptsKnownWindowsLedgerPromotion(t *testing.T) {
 		}
 	}
 	snapshot.Installation.Ledger.WriterFloor = installruntime.WindowsGenerationWriterFloor
+	// A pending reservation cannot be committed by the ordinary managed editor;
+	// refuse it before showing an editable document, even at a compatible floor.
+	snapshot.Installation.Ledger.PendingMutation = &installruntime.PendingMutation{}
+	if validManagedOpenCode(root, snapshot) {
+		t.Fatal("managed editor admitted an unresolved owner reservation")
+	}
+	snapshot.Installation.Ledger.PendingMutation = nil
 	registration.OriginBound = false
 	if validManagedOpenCode(root, snapshot) {
 		t.Fatal("Windows floor promotion bypassed OpenCode origin binding")
