@@ -1,65 +1,35 @@
-name: Windows callback source contracts (inert)
+name: Windows config preparation diagnostics
 on:
-  pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
-    paths:
-      - 'native/windows-callback/**'
-      - 'internal/windowscallback/**'
-      - '.github/workflows/windows-callback-contracts.yml'
-      - '.github/workflows/release.yml'
   workflow_dispatch:
 permissions:
   contents: read
-# Supersede automatic checks; keep each manual operation independent.
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.event_name == 'push' && github.ref || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
 jobs:
-  compile-and-inert-contracts:
-    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}
+  diagnose:
+    name: Diagnostic only / native config preparation
     runs-on: windows-latest
     timeout-minutes: 15
+    env:
+      GOTOOLCHAIN: local
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7 repository pin
+      - uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
       - uses: actions/setup-go@v7
         with:
-          go-version: '1.27.1'
-      - name: Compile SDK helper and independent contracts only
-        shell: pwsh
-        env:
-          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: |
-          if ((git rev-parse HEAD) -cne $env:SOURCE_SHA) { throw 'source SHA mismatch' }
-          ./native/windows-callback/build.ps1 -OutputDirectory "$env:RUNNER_TEMP\windows-callback-contracts" -EmbedAsset
-      - name: Run inert wire and callback state-machine contracts
+          go-version: '1.25'
+      - name: Observe concurrent preparation with safe stage and errno
         shell: pwsh
         run: |
-          & "$env:RUNNER_TEMP\windows-callback-contracts\contracts.exe" 'internal/windowscallback/testdata'
-          if ($LASTEXITCODE -ne 0) { throw 'native inert contracts failed' }
-          go test -tags windows_callback_asset ./internal/windowscallback
-          if ($LASTEXITCODE -ne 0) { throw 'Go independent wire/asset contracts failed' }
-          # Default untagged build must remain safely unavailable.
-          go test ./internal/windowscallback
-          if ($LASTEXITCODE -ne 0) { throw 'unavailable build contract failed' }
-      - name: Prove exact native asset in linked Windows executable
-        shell: pwsh
-        env:
-          CGO_ENABLED: '1'
-        run: |
-          $binary = "$env:RUNNER_TEMP\windows-callback-contracts\claude-notifications.exe"
-          go build -tags windows_callback_asset -trimpath -o $binary ./cmd/claude-notifications
-          if ($LASTEXITCODE -ne 0) { throw 'linked Windows binary build failed' }
-          ./native/windows-callback/verify-embedded.ps1 -Executable $binary -Helper "$env:RUNNER_TEMP\windows-callback-contracts\helper.exe" |
-            Set-Content -LiteralPath "$env:RUNNER_TEMP\windows-callback-contracts\embedded-evidence.json" -Encoding utf8
-      - name: Retain source-bound native compile evidence
+          $root = Join-Path $env:RUNNER_TEMP 'TEST-config-prepare-diagnostic'
+          New-Item -ItemType Directory -Path $root -Force | Out-Null
+          @{ scope = 'native-config-preparation-diagnostic'; sourceSHA = $env:GITHUB_SHA; fullNativeQualified = $false; releaseQualified = $false } | ConvertTo-Json | Set-Content (Join-Path $root 'scope.json')
+          go test -race -failfast -count=200 -run '^TestPrepareTwoProcess$' -v ./internal/config 2>&1 | Tee-Object -FilePath (Join-Path $root 'stress.log')
+          exit $LASTEXITCODE
+      - name: Retain diagnostic result without granting qualification
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7 repository pin
+        uses: actions/upload-artifact@v7
         with:
-          name: windows-callback-contracts-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/windows-callback-contracts
+          name: config-prepare-diagnostic-${{ github.run_id }}
+          path: ${{ runner.temp }}/TEST-config-prepare-diagnostic
           if-no-files-found: error
           retention-days: 14

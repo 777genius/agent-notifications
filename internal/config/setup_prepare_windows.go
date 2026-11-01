@@ -20,11 +20,11 @@ func prepareGlobalConfigParent(path string) error {
 	}
 	parent, err := openStoreParent(filepath.Dir(path), true)
 	if err != nil {
-		return pathError(path, err)
+		return pathErrorAt(path, "prepare-parent-open", err)
 	}
 	defer parent.close()
 	if err = parent.verify(); err != nil {
-		return pathError(path, err)
+		return pathErrorAt(path, "prepare-parent-verify", err)
 	}
 	return nil
 }
@@ -41,7 +41,7 @@ func inspectPreparedCanonical(path string) error {
 		return nil
 	}
 	if err != nil {
-		return pathError(path, err)
+		return pathErrorAt(path, "prepare-inspect-parent-open", err)
 	}
 	defer parent.close()
 	_, err = parent.read(filepath.Base(path))
@@ -49,10 +49,10 @@ func inspectPreparedCanonical(path string) error {
 		return nil
 	}
 	if err != nil {
-		return pathError(path, err)
+		return pathErrorAt(path, "prepare-inspect-read", err)
 	}
 	if err = parent.verify(); err != nil {
-		return pathError(path, err)
+		return pathErrorAt(path, "prepare-inspect-parent-verify", err)
 	}
 	return nil
 }
@@ -66,21 +66,21 @@ func prepareGlobalConfig(ctx context.Context, canonicalPath, legacyPath, default
 	}
 	parent, err := openStoreParent(filepath.Dir(canonicalPath), true)
 	if err != nil {
-		return result, pathError(canonicalPath, err)
+		return result, pathErrorAt(canonicalPath, "prepare-open-parent", err)
 	}
 	defer parent.close()
 	name := filepath.Base(canonicalPath)
 	// Validate existing files before creating a lock or staging new bytes.
 	if _, err = parent.read(name); err != nil && !os.IsNotExist(err) {
-		return result, pathError(canonicalPath, err)
+		return result, pathErrorAt(canonicalPath, "prepare-prelock-read", err)
 	}
 	unlock, err := parent.lock(ctx, name+".lock", false, true)
 	if err != nil {
-		return result, pathError(canonicalPath, err)
+		return result, pathErrorAt(canonicalPath, "prepare-lock", err)
 	}
 	defer unlock()
 	if err = parent.verify(); err != nil {
-		return result, pathError(canonicalPath, err)
+		return result, pathErrorAt(canonicalPath, "prepare-locked-parent-verify", err)
 	}
 	before, err := parent.read(name)
 	absent := os.IsNotExist(err)
@@ -106,7 +106,7 @@ func prepareGlobalConfig(ctx context.Context, canonicalPath, legacyPath, default
 			break
 		}
 	} else if err != nil {
-		return result, pathError(canonicalPath, err)
+		return result, pathErrorAt(canonicalPath, "prepare-locked-read", err)
 	}
 	out, _, changed, err := completeDesktop(raw, true)
 	if err != nil {
@@ -116,13 +116,13 @@ func prepareGlobalConfig(ctx context.Context, canonicalPath, legacyPath, default
 		err = parent.verify()
 		result.Ready = err == nil
 		if err != nil {
-			return result, pathError(canonicalPath, err)
+			return result, pathErrorAt(canonicalPath, "prepare-noop-parent-verify", err)
 		}
 		return result, nil
 	}
 	temp, err := parent.writeArtifact(name, "tmp", out)
 	if err != nil {
-		return result, pathError(canonicalPath, err)
+		return result, pathErrorAt(canonicalPath, "prepare-write-artifact", err)
 	}
 	discard := true
 	defer func() {
@@ -136,7 +136,7 @@ func prepareGlobalConfig(ctx context.Context, canonicalPath, legacyPath, default
 	if !absent {
 		current, e := parent.read(name)
 		if e != nil {
-			return result, pathError(canonicalPath, e)
+			return result, pathErrorAt(canonicalPath, "prepare-preimage-read", e)
 		}
 		if !bytes.Equal(before.Bytes, current.Bytes) {
 			return result, &Error{Code: ConfigConflict, Path: canonicalPath}
@@ -150,28 +150,31 @@ func prepareGlobalConfig(ctx context.Context, canonicalPath, legacyPath, default
 		if errors.As(err, &ce) && (ce.Code == ConfigCommitUncertain || ce.Code == ConfigRecoveryRequired) {
 			discard = false
 			result.Changed = true
-			return result, err
+			return result, pathErrorAt(canonicalPath, "prepare-publish", err)
 		}
 		if !absent || !errors.As(err, &ce) || ce.Code != ConfigConflict {
-			return result, pathError(canonicalPath, err)
+			return result, pathErrorAt(canonicalPath, "prepare-publish", err)
 		}
 		result.Source = "canonical"
 	} else {
 		result.Changed = true
 		if err = parent.sync(); err != nil {
-			return result, &Error{Code: ConfigCommitUncertain, Path: canonicalPath}
+			return result, sanitizedError(ConfigCommitUncertain, canonicalPath, 0, "prepare-sync", err)
 		}
 	}
+	stage := "prepare-post-read"
 	persisted, err := parent.read(name)
 	if err == nil {
+		stage = "prepare-post-parent-verify"
 		err = parent.verify()
 	}
 	if err == nil {
+		stage = "prepare-post-validate"
 		_, _, _, err = ValidateGlobalDesktop(persisted.Bytes)
 	}
 	result.Ready = err == nil
 	if err != nil {
-		return result, pathError(canonicalPath, err)
+		return result, pathErrorAt(canonicalPath, stage, err)
 	}
 	return result, nil
 }
