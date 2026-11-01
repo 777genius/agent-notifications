@@ -140,7 +140,20 @@ jobs:
           go test -p 1 -v -race -coverprofile=coverage-observation.txt -covermode=atomic ./internal/notification/observation ./internal/copilotvscodeevent ./cmd/claude-notifications || command_status=$?
           if (( qualification_status == 0 )); then qualification_status=$command_status; fi
           printf '%s\n' "$command_status" > observation-evidence/observation.exit || { if (( qualification_status == 0 )); then qualification_status=1; fi; }
-          { head -n 1 coverage-gemini-event.txt && tail -n +2 coverage-gemini-event.txt && tail -n +2 coverage-cursor-event.txt && tail -n +2 coverage-observation.txt; } > coverage-gemini.txt || { if (( qualification_status == 0 )); then qualification_status=1; fi; }
+          # Pi's real two-channel consumer also writes the same bounded recent
+          # cache. Qualify it under the existing isolated native file-I/O profile
+          # instead of the globally concurrent package batch; keep race,
+          # original deadlines, exact failures and full atomic coverage.
+          command_status=0
+          pipeline_status=(0 0)
+          observation_profile_start pievent
+          go test -p 1 -v -race -coverprofile=coverage-pi-event.txt -covermode=atomic -trace=observation-evidence/pievent.trace ./internal/pievent 2>&1 | tee observation-evidence/pievent.log || pipeline_status=("${PIPESTATUS[@]}")
+          command_status=${pipeline_status[0]}
+          observation_profile_stop
+          if (( command_status == 0 )); then command_status=${pipeline_status[1]}; fi
+          if (( qualification_status == 0 )); then qualification_status=$command_status; fi
+          printf '%s\n' "${pipeline_status[0]}" > observation-evidence/pievent.exit || { if (( qualification_status == 0 )); then qualification_status=1; fi; }
+          { head -n 1 coverage-gemini-event.txt && tail -n +2 coverage-gemini-event.txt && tail -n +2 coverage-cursor-event.txt && tail -n +2 coverage-observation.txt && tail -n +2 coverage-pi-event.txt; } > coverage-gemini.txt || { if (( qualification_status == 0 )); then qualification_status=1; fi; }
           exit "$qualification_status"
 
       - name: Repeat Gemini channel consent and failed-marker suppression
@@ -167,7 +180,7 @@ jobs:
         run: |
           set -euo pipefail
           packages=$(go list ./...)
-          remaining_packages=$(printf '%s\n' "$packages" | grep -Fvx -e 'github.com/777genius/agent-notifications/internal/geminievent' -e 'github.com/777genius/agent-notifications/internal/cursorevent' -e 'github.com/777genius/agent-notifications/internal/notification/observation' -e 'github.com/777genius/agent-notifications/internal/copilotvscodeevent' -e 'github.com/777genius/agent-notifications/cmd/claude-notifications')
+          remaining_packages=$(printf '%s\n' "$packages" | grep -Fvx -e 'github.com/777genius/agent-notifications/internal/geminievent' -e 'github.com/777genius/agent-notifications/internal/cursorevent' -e 'github.com/777genius/agent-notifications/internal/notification/observation' -e 'github.com/777genius/agent-notifications/internal/copilotvscodeevent' -e 'github.com/777genius/agent-notifications/internal/pievent' -e 'github.com/777genius/agent-notifications/cmd/claude-notifications')
           mapfile -t remaining <<< "$remaining_packages"
           # Go 1.25 measured 539s here; Go 1.26 exceeded the default 10m
           # package deadline across aggregate filesystem-sync tests. Keep every
