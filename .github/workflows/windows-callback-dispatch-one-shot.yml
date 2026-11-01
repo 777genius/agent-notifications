@@ -8,7 +8,7 @@ permissions:
   actions: write
 jobs:
   qualified-windows:
-    if: ${{ github.repository == '777genius/agent-notifications' && github.event.head_commit.message == 'ci(windows) admit installed basic retained package e77190e' && github.run_attempt == 1 }}
+    if: ${{ github.repository == '777genius/agent-notifications' && github.event.head_commit.message == 'ci(windows) admit installed basic retained package 87dc8b1' && github.run_attempt == 1 }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -18,8 +18,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          source='e77190ee3d622574a80aa728b50820daec51b25d'
-          parent='30968141e49596c2207b9c42c5546bbc57539a4c'
+          source='87dc8b1acf55992a61874b5580093c402cfd8f7e'
+          parent='9c2395f234549aeac24b4d311a4399f359ad7886'
           signedIntakeRun='41298548456'
           rawSHA='d442a3d7d5c229f45e5e11995711ac2619c8dbc89e3fa2bc185287dc8db8e76e'
           fullName='OpenAI.Codex_26.1027.3384.0_x64__2p2nqsd0c76g0'
