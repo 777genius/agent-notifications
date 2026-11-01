@@ -1,6 +1,7 @@
 package geminievent
 
 import (
+	"fmt"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -62,6 +63,34 @@ func consumerFixture(t *testing.T) (Consumer, geminisource.Facts, notification.D
 	cfg.Notifications.Webhook = config.WebhookConfig{Enabled: true, URL: "https://example.test/hook", Format: "json"}
 	return Consumer{Gate: testGate{channels: Channels{true, true}}, Binding: Binding{"installation", 1}, Config: cfg, Clock: clock, Cache: &RecentCache{Root: root, Clock: clock}},
 		geminisource.Facts{SessionID: "PRIVATE_NATIVE_SESSION", Event: geminisource.AfterAgent, Timestamp: "2026-10-01T05:00:00Z"}, notification.Deadline{BootID: "test-boot", NotAfter: 14}
+}
+
+// The native OS cue is explicitly opted into for one agent; it must never
+// grant a terminal or chat target, change the fixed event copy or enable HTTP.
+func TestGeminiSystemSoundRequiresOptInWithoutNavigation(t *testing.T) {
+	for _, sound := range []bool{false, true} {
+		t.Run(fmt.Sprintf("systemSound=%t", sound), func(t *testing.T) {
+			c, facts, deadline := consumerFixture(t)
+			c.Gate = testGate{channels: Channels{Desktop: true}}
+			c.Config.Notifications.Desktop.Sound = true
+			c.Config.Notifications.Desktop.SystemSound = &sound
+			attempts := 0
+			c.Desktop = deliveryFunc(func(_ context.Context, req notification.Request) notification.Receipt {
+				attempts++
+				if req.Content != (notification.Content{Title: "Gemini CLI", Body: "Gemini CLI completed a turn", Category: "info"}) ||
+					req.Navigation != notification.None || req.Target != (notification.DesktopTarget{}) ||
+					req.Policy.ClickToFocus || req.Silent == sound || req.Policy.SoundEnabled != sound ||
+					req.Deadline != deadline || req.CorrelationID == "" {
+					t.Fatalf("native sound changed Gemini authority: %+v", req)
+				}
+				return notification.Receipt{Status: "submitted"}
+			})
+			r := c.Consume(context.Background(), facts, deadline)
+			if r.Status != "submitted" || r.Desktop != "submitted" || r.Webhook != "" || attempts != 1 {
+				t.Fatalf("Gemini channel or sound behavior changed: receipt=%+v attempts=%d", r, attempts)
+			}
+		})
+	}
 }
 
 // Red condition: concurrent duplicate invocations reach desktop/HTTP again,
