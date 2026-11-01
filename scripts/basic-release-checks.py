@@ -44,13 +44,21 @@ def checks(repository, source):
 
 
 def select_run(repository, workflow, runs):
-    # Release receipts must come from main pushes: PR merge refs may execute
-    # a workflow definition that differs from the candidate source tree.
+    owned = [run for run in runs
+             if run.get('path') == '.github/workflows/' + workflow
+             and (run.get('head_repository') or {}).get('full_name') == repository]
+    # Prefer the main-push authority once the candidate is promoted. A failed
+    # main run must never fall back to an older green pull request.
+    main = [run for run in owned
+            if run.get('event') == 'push' and run.get('head_branch') == 'main']
+    if main:
+        return native.latest_source_run(repository, workflow, main)
+    # Before promotion, the owner's same-repository PR may qualify the exact
+    # candidate. verify_run additionally requires immutable full native
+    # receipts, successful concrete jobs and an equivalent *entire* checkout
+    # tree, including the workflow definition executed from the merge ref.
     return native.latest_source_run(repository, workflow,
-                                    [run for run in runs
-                                     if run.get('path') == '.github/workflows/' + workflow
-                                     and run.get('event') == 'push' and run.get('head_branch') == 'main'
-                                     and (run.get('head_repository') or {}).get('full_name') == repository])
+                                    [run for run in owned if run.get('event') == 'pull_request'])
 
 
 def foreign_pull_check(check, runs, repository):
