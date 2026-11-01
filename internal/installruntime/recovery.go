@@ -357,9 +357,9 @@ func reverseTransaction(current Ledger, tx transaction) (transaction, error) {
 	// Retain every charged Windows generation, including a private generation
 	// from an interrupted setup. Absence/process exit never releases capacity.
 	after.WindowsRetained = append([]windowscallback.Binding(nil), tx.After.WindowsRetained...)
-	if after.DecoderFloor < tx.After.DecoderFloor {
-		after.DecoderFloor = tx.After.DecoderFloor
-	}
+	// Rollback retains the predecessor's native decoder floor when the new
+	// native tree was never published. Only the confirmed replacement above
+	// may promote DecoderFloor together with its matching Native record.
 	reverseSchema := transactionSchemaFor(after, Request{})
 	if tx.Windows != nil {
 		reverseSchema = WindowsGenerationTransactionSchema
