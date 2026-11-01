@@ -1,0 +1,102 @@
+name: TEST-only Windows 11 taskbar clock UIA preflight
+on:
+  push:
+    branches: [ci/windows-uia-shell-preflight-20261101]
+    paths: ['.github/workflows/windows-shell-clock-uia-preflight-one-shot.yml']
+permissions:
+  contents: read
+jobs:
+  clock:
+    if: ${{ github.repository == '777genius/agent-notifications' && github.run_attempt == 1 }}
+    runs-on: windows-11-vs2026-arm
+    timeout-minutes: 8
+    steps:
+      - name: Probe exact taskbar clock and Notification Center UI without product effects
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
+          $api = @'
+          using System;
+          using System.Runtime.InteropServices;
+          public static class TestOnlyClockProbe {
+            [DllImport("user32.dll", CharSet=CharSet.Unicode)]
+            public static extern IntPtr FindWindow(string className, string windowName);
+            [DllImport("user32.dll")]
+            public static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
+          }
+          '@
+          Add-Type -TypeDefinition $api
+          $session = [System.Diagnostics.Process]::GetCurrentProcess().SessionId
+          $tray = [TestOnlyClockProbe]::FindWindow('Shell_TrayWnd', $null)
+          if($tray -eq [IntPtr]::Zero){ throw 'trusted taskbar not present' }
+          $ownerId = [uint32]0
+          $null = [TestOnlyClockProbe]::GetWindowThreadProcessId($tray,[ref]$ownerId)
+          $owner = Get-Process -Id $ownerId -ErrorAction Stop
+          $expected = Join-Path $env:WINDIR 'explorer.exe'
+          if($owner.ProcessName -cne 'explorer' -or $owner.SessionId -ne $session -or $owner.Path -ine $expected) {
+            throw 'taskbar not owned by expected Explorer in current session'
+          }
+          $walker = [System.Windows.Automation.TreeWalker]::RawViewWalker
+          function Census([System.Windows.Automation.AutomationElement]$element, [int]$limit) {
+            $stack = New-Object System.Collections.ArrayList
+            [void]$stack.Add([pscustomobject]@{element=$element;depth=0})
+            $count = 0
+            $hintCount = 0
+            $clock = New-Object System.Collections.ArrayList
+            while($stack.Count -gt 0){
+              $current = $stack[$stack.Count - 1]
+              $stack.RemoveAt($stack.Count - 1)
+              $item = $current.element
+              $depth = $current.depth
+              $count++
+              if($count -gt $limit -or $depth -gt 24){throw 'bounded UIA census exceeded'}
+              $id = [string]$item.Current.AutomationId
+              $name = [string]$item.Current.Name
+              if($name -match '(?i)notification center|calendar|clear all|do not disturb'){$hintCount++}
+              if($id -in @('SystemClockButton','NotificationCenterButton') -and
+                 $item.Current.ControlType.Id -eq [System.Windows.Automation.ControlType]::Button.Id){
+                [void]$clock.Add($item)
+              }
+              $child = $walker.GetFirstChild($item)
+              while($null -ne $child){
+                [void]$stack.Add([pscustomobject]@{element=$child;depth=($depth+1)})
+                if($stack.Count + $count -gt $limit){throw 'bounded UIA pending elements exceeded'}
+                $child = $walker.GetNextSibling($child)
+              }
+            }
+            return [pscustomobject]@{nodes=$count;nameHints=$hintCount;clockElements=$clock}
+          }
+          $trayElement = [System.Windows.Automation.AutomationElement]::FromHandle($tray)
+          $before = Census $trayElement 1024
+          $clockCount = $before.clockElements.Count
+          $outcome = 'no_exact_clock_button'
+          $invoked = 0
+          if($clockCount -eq 1) {
+            try {
+              $pattern = $before.clockElements[0].GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
+              $pattern.Invoke()
+              $invoked = 1
+              $outcome = 'taskbar_clock_invoke_returned'
+              Start-Sleep -Milliseconds 1000
+            } catch {
+              $outcome = 'exact_clock_not_invokable'
+            }
+          } elseif ($clockCount -gt 1) {
+            $outcome = 'ambiguous_clock_buttons'
+          }
+          $after = Census $trayElement 1024
+          $report = [ordered]@{
+            scope='disposable_taskbar_clock_accessibility_preflight_only'
+            taskbarExplorerSameSession=$true
+            clockCandidates=$clockCount
+            clockUIAInvokes=$invoked
+            outcome=$outcome
+            beforeNodes=$before.nodes
+            afterNodes=$after.nodes
+            beforeNotificationNameHints=$before.nameHints
+            afterNotificationNameHints=$after.nameHints
+            installedShowPerformed=$false
+            toastCallbackQualified=$false
+          }
+          Write-Output ('TASKBAR_CLOCK_PREFLIGHT='+($report|ConvertTo-Json -Compress))
