@@ -392,15 +392,34 @@ class AdmissionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'latest source check'):
             self.verify()
 
-    def test_only_owner_main_push_runs_qualify_release_source(self):
-        for mutation in ({'event': 'pull_request'}, {'head_branch': 'feature'},
-                         {'head_repository': {'full_name': 'fork/repo'}}):
+    def test_pre_main_candidate_uses_only_full_same_repo_pr_receipts(self):
+        for run in self.api.runs:
+            run.update(event='pull_request', head_branch='fix/release-candidate')
+        self.assertEqual(self.verify()['status'], 'passed')
+        # Full job custody remains mandatory even before the main push.
+        self.api.jobs[10][0]['conclusion'] = 'failure'
+        with self.assertRaisesRegex(ValueError, 'missing successful full job'):
+            self.verify()
+
+    def test_only_owner_main_push_or_same_repo_pr_runs_qualify_source(self):
+        for mutation in ({'head_branch': 'feature'},
+                         {'event': 'workflow_dispatch'},
+                         {'head_repository': {'full_name': 'fork/repo'}},
+                         {'event': 'pull_request', 'head_repository': {'full_name': 'fork/repo'}}):
             with self.subTest(mutation=mutation):
                 self.api = API()
                 native.gh.side_effect = self.api
                 self.api.runs[0].update(mutation)
                 with self.assertRaisesRegex(ValueError, 'latest source workflow did not succeed'):
                     self.verify()
+
+    def test_failed_main_push_cannot_fall_back_to_older_pr_receipts(self):
+        self.api.runs[0]['conclusion'] = 'failure'
+        earlier = API.run(999, 'ci-macos.yml')
+        earlier.update(event='pull_request', head_branch='fix/release-candidate')
+        self.api.runs.append(earlier)
+        with self.assertRaisesRegex(ValueError, 'latest source workflow did not succeed'):
+            self.verify()
 
     def test_foreign_fork_pr_cannot_shadow_owned_main_source_and_check(self):
         run = API.run(999, 'ci-macos.yml', 'action_required')
