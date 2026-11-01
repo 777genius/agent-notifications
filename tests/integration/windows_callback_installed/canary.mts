@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { mkdir, open, readFile, readdir, realpath, unlink } from 'node:fs/promises';
@@ -32,6 +32,7 @@ const control = path.join(profile,'agent-notifications'), global = path.join(roo
 const title = 'Navigation TEST '+tuple.nonce, body = 'Cold callback TEST '+tuple.nonce;
 const thread = 'TEST/'+tuple.nonce+'/percent%雪';
 let count = 0, unknown = false, removed = false;
+let clickProcess: ChildProcess | undefined;
 const childEnv: NodeJS.ProcessEnv = {...env,AGENT_NOTIFICATIONS_CONFIG:global};
 // Windows environment names are case-insensitive; avoid duplicate spellings.
 for (const name of Object.keys(childEnv)) if (name.toLowerCase() === 'appdata' ||
@@ -60,6 +61,10 @@ async function run(label: string, exe: string, args: string[], input='', timeout
   await persist(id+'-'+label+'.intent.json',{...tuple,exe,args,inputSHA:sha(Buffer.from(input)),timeout});
   return await new Promise<string>((resolve,reject) => {
     const child = spawn(exe,args,{env:childEnv,stdio:['pipe','pipe','pipe'],windowsHide:true});
+    if (label === 'click') {
+      assert.equal(clickProcess,undefined,'single click observer process');
+      clickProcess = child;
+    }
     let bytes = 0, out = '', error = '', fault: Error | undefined;
     const stop = (e: Error): void => { fault ??= e; unknown = true; child.kill(); };
     const timer = setTimeout(() => stop(new Error('owned child deadline; effect/collection unknown')),timeout);
@@ -175,7 +180,19 @@ async function main(): Promise<void> {
   assert.equal(sha(await boundedRead(contextPath,4096)),contextReceipt.sha256);
   // The native interactive Shell/UIA observer is ready before the sole Show.
   let clickFailure: unknown;
-  const clickTask = actor('click').catch((e:unknown) => { clickFailure = e ?? new Error('click refused'); });
+  let clickSettled = false;
+  const clickTask = actor('click').then(
+    () => { clickSettled = true; },
+    (e:unknown) => { clickSettled = true; clickFailure = e ?? new Error('click refused'); },
+  );
+  // The durable arm receipt is a past observation, not a process-liveness lease.
+  // Refuse every following effect if the single observer has exited or custody is uncertain.
+  const requireLiveObserver = (): void => {
+    if (!clickProcess || clickProcess.exitCode !== null || clickProcess.signalCode !== null ||
+        clickProcess.killed || clickSettled || clickFailure !== undefined || unknown) {
+      throw new Error('native click observer exited or collection unknown; no following effect');
+    }
+  };
   const armStart = Date.now();
   while (true) {
     if (clickFailure !== undefined) throw clickFailure;
@@ -194,6 +211,7 @@ async function main(): Promise<void> {
     if (Date.now()-armStart >= 20000) throw new Error('native UIA observer did not arm before Show');
     await new Promise<void>((resolve) => setTimeout(resolve,50));
   }
+  requireLiveObserver();
   const receiptRaw = await run('one-show',original,['notify','--context-file',contextPath],
     JSON.stringify({title,body,category:'info',request_id:'TEST-'+tuple.nonce,navigation:'required'}));
   const receipt = JSON.parse(receiptRaw) as {status: string; replayed: boolean; request_id: string};
@@ -213,12 +231,15 @@ async function main(): Promise<void> {
   assert.equal((await boundedRead(path.join(attempts,shows[0]!.replace('.intent','.result')))).toString(),'show_returned=1 effect_entered=1\n');
   if (scenario === 'retained') {
     // One explicit route policy change generates B; identical setup reuses A.
+    requireLiveObserver();
     await setup('enable',true,false); const b = await ledger(); assert.equal(b.WindowsRetained?.length,2);
     assert(b.WindowsRetained![1]!.SnapshotPath !== a.binding.SnapshotPath);
+    requireLiveObserver();
     await removeProducer(); assert((await boundedRead(a.binding.SnapshotPath)).equals(a.raw));
   }
   // Publish A only after verifying sender and retained prerequisites.
   // The already-armed watcher may now attempt one genuine Shell Invoke.
+  requireLiveObserver();
   await persist('route.json',{...tuple,snapshot_path:a.binding.SnapshotPath,snapshot_sha:a.binding.SHA256,reference:record[1],thread,title,body});
   await mkdir(path.join(root,'route.json.ready'));
   await clickTask;
