@@ -7,8 +7,8 @@ permissions:
   contents: read
 jobs:
   shell-overlay:
-    if: ${{ github.repository == '777genius/agent-notifications' && github.run_attempt == 1 && github.event.head_commit.message == 'probe-windows-x64-shell-v7' }}
-    runs-on: windows-2025
+    if: ${{ github.repository == '777genius/agent-notifications' && github.run_attempt == 1 && github.event.head_commit.message == 'probe-windows-arm-quicksettings-v8' }}
+    runs-on: windows-11-vs2026-arm
     timeout-minutes: 8
     steps:
       - name: Inspect and dismiss only known first-logon overlay, then probe the Shell
@@ -35,8 +35,8 @@ jobs:
             public static uint OpenOnce() {
               var input = new Input[4];
               for (int i=0;i<4;i++) input[i].type=1;
-              input[0].key.vk=0x5b; input[1].key.vk=0x4e;
-              input[2].key.vk=0x4e; input[2].key.flags=2;
+              input[0].key.vk=0x5b; input[1].key.vk=0x41;
+              input[2].key.vk=0x41; input[2].key.flags=2;
               input[3].key.vk=0x5b; input[3].key.flags=2;
               return SendInput(4,input,Marshal.SizeOf(typeof(Input)));
             }
@@ -181,6 +181,7 @@ jobs:
             $packageManagerTypeFound = [bool]([Windows.Management.Deployment.PackageManager,Windows.Management.Deployment,ContentType=WindowsRuntime])
           } catch { $packageManagerTypeFound = $false }
           $report = [ordered]@{
+            shellShortcut = 'Win+A_quick_settings_not_notification_center'
             scope = 'one_shot_disposable_no_product_notification_overlay_diagnostic'
             session = $session
             overlayProcessCountsBefore = $before
@@ -192,7 +193,7 @@ jobs:
             unexpectedOobePathsRefused = $refused
             overlayProcessCountsAfter = $after
             foregroundAfterCleanup = $foregroundAfterCleanup
-            foregroundAfterWinN = (KnownProcess ([TestOnlyShellProbe]::ForegroundPid()))
+            foregroundAfterWinShortcut = (KnownProcess ([TestOnlyShellProbe]::ForegroundPid()))
             inputKeyEvents = $inserted
             sampledRightThirdPixels = $count
             changedRightThirdSamples = $changed
