@@ -28,11 +28,59 @@ P = load("pi_installed_fixture", "pi_installed_fixture.py")
 R = load("pi_runtime_replacement", "pi_runtime_replacement.py")
 
 
+# CLI results may include recovery commands, profiles and provider errors. Only
+# these closed product codes enter portable evidence; arbitrary text is omitted.
+_COMMAND_CODES = {
+    "action": {"install", "update", "repair", "uninstall", "inspect"},
+    "outcome": {"completed", "unchanged", "incomplete", "invalid", "conflict", "cancelled",
+                "installed", "removed", "absent", "activation_failed", "ready"},
+    "reason": {"cursor_composition_required", "cursor_identity_unavailable", "local_composition_required",
+               "global_config_parent_invalid", "activation_incomplete", "portable_preflight_failed",
+               "portable_remove_failed", "invalid_arguments", "pending_setup_required", "concurrent_change",
+               "state_migration_required", "state_requires_inspection", "live_profile_conflict",
+               "package_acquisition_failed", "recorded_package_unavailable", "recovery_required",
+               "owned_profile_unavailable", "binding_not_installed", "activation_failed"},
+    "client": {"pi", "cursor", "claude", "codex", "copilot-vscode"},
+    "failureStage": {"preflight", "materialization", "activation", "verification", "deactivation", "removal"},
+}
+
+
+def _command_failure(result):
+    """Project a failed CLI response to bounded, non-private product codes."""
+    diagnostic = {"exit_code": result.returncode, "stderr_present": bool(result.stderr)}
+    try:
+        value = json.loads(result.stdout)
+    except (ValueError, UnicodeDecodeError):
+        return diagnostic
+    if not isinstance(value, dict):
+        return diagnostic
+    diagnostic["json_stdout"] = True
+
+    def codes(source, keys):
+        safe = {}
+        for key in keys:
+            entry = source.get(key)
+            if isinstance(entry, str) and entry in _COMMAND_CODES[key]:
+                safe[key] = entry
+            elif entry is not None:
+                safe[key + "_redacted"] = True
+        return safe
+
+    diagnostic.update(codes(value, ("action", "outcome", "reason")))
+    targets = value.get("targets")
+    if isinstance(targets, list):
+        diagnostic["targets"] = [codes(row, ("client", "outcome", "reason", "failureStage"))
+                                 for row in targets[:8] if isinstance(row, dict)]
+    return diagnostic
+
+
 def command(executable, args, root, env):
     result = subprocess.run([str(executable), *map(str, args)], stdin=subprocess.DEVNULL,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=root / "project", env=env, timeout=180)
     P.require(len(result.stdout) + len(result.stderr) <= 4 * 1024 * 1024, "product_command_output_limit")
-    P.require(result.returncode == 0, "product_command_failed:" + str(args[0]) + ":" + result.stderr.decode(errors="replace")[-2000:])
+    if result.returncode != 0:
+        name = str(args[0]) if str(args[0]) in ("setup-notifications", "internal-install-runtime") else "unknown"
+        raise RuntimeError("product_command_failed:" + name + ":" + json.dumps(_command_failure(result), sort_keys=True))
     return result.stdout
 
 
