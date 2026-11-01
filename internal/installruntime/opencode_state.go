@@ -17,6 +17,21 @@ import (
 // OpenCode private Init/Purge recovery must be refused by the published Local3 kernel
 // before it reads blobs or publishes generic files. Ledger/journal schema4 is retained.
 const OpenCodeWriterFloor = 4
+
+// OpenCodeLedgerCompatible accepts only the two published persisted protocols
+// understood by this kernel. A Windows callback promotion keeps the OpenCode
+// registration and its private origin binding but advances the shared ledger
+// to schema/floor 6. Unknown or mismatched versions must still refuse.
+func OpenCodeLedgerCompatible(l Ledger) bool {
+	switch l.Schema {
+	case transactionSchemaV4:
+		return l.WriterFloor == OpenCodeWriterFloor
+	case WindowsGenerationLedgerSchema:
+		return l.WriterFloor == WindowsGenerationWriterFloor
+	default:
+		return false
+	}
+}
 const OpenCodeWriterProtocolMarker = "agent-notifications-managed-writer-protocol-v4"
 const OpenCodeStoreLimit = 1 << 20
 const OpenCodeStoreLock = ".opencode-admission.lock"
