@@ -543,6 +543,11 @@ def run(args):
     except Exception as error:
         report["failure"] = str(error)
     finally:
+        # Preserve the closed tool/exit category of the first failed private
+        # fixture command without exposing its stdout, stderr or environment.
+        if "command_failure" in lab.report:
+            fault = lab.report["command_failure"]
+            report["fixture_command_failure"] = {"tool": fault["tool"], "exit": fault["exit"]}
         # Stop only the daemon proved to belong to this TEST session and writer.
         pid_files = list((lab.root / "runtime").glob("claude-notifications*.pid"))
         for pid_file in pid_files:

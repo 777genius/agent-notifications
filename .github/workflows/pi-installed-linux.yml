@@ -32,7 +32,9 @@ concurrency:
 jobs:
   linux:
     name: Actual installed Pi / Linux
-    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || vars.CI_LINUX_RUNNER || 'ubuntu-24.04' }}
+    # The mixed Pi/Cursor case requires Cursor's existing qualified Azure
+    # kernel/ext4 ancestry, just like ci-ubuntu.yml's cursor-physical job.
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
       GOWORK: 'off'
