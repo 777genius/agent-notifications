@@ -7,7 +7,7 @@ permissions:
   contents: read
 jobs:
   shell-overlay:
-    if: ${{ github.repository == '777genius/agent-notifications' && github.run_attempt == 1 && github.event.head_commit.message == 'probe-windows-x64-shell-v5' }}
+    if: ${{ github.repository == '777genius/agent-notifications' && github.run_attempt == 1 && github.event.head_commit.message == 'probe-windows-x64-shell-v6' }}
     runs-on: windows-2025
     timeout-minutes: 8
     steps:
@@ -137,6 +137,33 @@ jobs:
               }
             } finally { $imageAfter.Dispose() }
           } finally { $imageBefore.Dispose() }
+          Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
+          $rootUIA = [System.Windows.Automation.AutomationElement]::RootElement
+          $walker = [System.Windows.Automation.TreeWalker]::RawViewWalker
+          $stack = New-Object 'System.Collections.Generic.Stack[System.Windows.Automation.AutomationElement]'
+          $stack.Push($rootUIA)
+          $nodes = 0; $centerNames = 0; $clockNames = 0; $shellNames = 0; $onScreen = 0
+          while ($stack.Count -gt 0 -and $nodes -lt 1000) {
+            $el = $stack.Pop()
+            $nodes++
+            try {
+              $c = $el.Current
+              $name = [string]$c.Name
+              $automation = [string]$c.AutomationId
+              $offscreen = [bool]$c.IsOffscreen
+              if (-not $offscreen) { $onScreen++ }
+              if ($name -match '(?i)notification center|clear all notifications|do not disturb') { $centerNames++ }
+              if ($name -match '(?i)calendar|clock|date and time') { $clockNames++ }
+              if ($automation -match '(?i)notification|clock|calendar') { $shellNames++ }
+              $ch = $walker.GetFirstChild($el)
+              $local = 0
+              while ($null -ne $ch -and $local -lt 80 -and $nodes + $stack.Count -lt 1100) {
+                $stack.Push($ch)
+                $local++
+                $ch = $walker.GetNextSibling($ch)
+              }
+            } catch { continue }
+          }
           $report = [ordered]@{
             scope = 'one_shot_disposable_no_product_notification_overlay_diagnostic'
             session = $session
@@ -153,6 +180,11 @@ jobs:
             inputKeyEvents = $inserted
             sampledRightThirdPixels = $count
             changedRightThirdSamples = $changed
+            uiaNodes = $nodes
+            uiaOnScreen = $onScreen
+            uiaNotificationNameHints = $centerNames
+            uiaClockNameHints = $clockNames
+            uiaShellAutomationIdHints = $shellNames
             screenshotsSaved = $false
             productToastSent = $false
             shellUIAInvokeQualified = $false
