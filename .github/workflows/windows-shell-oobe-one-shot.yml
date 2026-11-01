@@ -7,9 +7,9 @@ permissions:
   contents: read
 jobs:
   shell-overlay:
-    if: ${{ github.repository == '777genius/agent-notifications' && github.run_attempt == 1 && github.event.head_commit.message == 'probe-windows-arm-quiet-hours-policy-v11' }}
+    if: ${{ github.repository == '777genius/agent-notifications' && github.run_attempt == 1 && github.event.head_commit.message == 'probe-windows-arm-quiet-time-expiry-v12' }}
     runs-on: windows-11-vs2026-arm
-    timeout-minutes: 8
+    timeout-minutes: 80
     steps:
       - name: Inspect and dismiss only known first-logon overlay, then probe the Shell
         shell: powershell
@@ -129,6 +129,22 @@ jobs:
           [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
           Start-Sleep -Milliseconds 1200
           $notificationStateAfterCleanup = [TestOnlyShellProbe]::NotificationState()
+          # The documented OOBE quiet period is ~1 hour after first sign-in.
+          # Keep this **same disposable Windows 11 Client session** alive, with no
+          # app Show or callback effects, to measure natural expiry (no clock hack).
+          $quietCycles = 0
+          while ($notificationStateAfterCleanup -eq '6' -and $quietCycles -lt 70) {
+            Start-Sleep -Seconds 60
+            $quietCycles++
+            $notificationStateAfterCleanup = [TestOnlyShellProbe]::NotificationState()
+            if (($quietCycles % 5) -eq 0) {
+              Write-Output ("QUIET_TIME_PREFLIGHT_MINUTES=" + $quietCycles + ";state=" + $notificationStateAfterCleanup)
+            }
+          }
+          Write-Output ("QUIET_TIME_PREFLIGHT_TERMINAL=" + $notificationStateAfterCleanup + ";minutes=" + $quietCycles)
+          if ($notificationStateAfterCleanup -ne '5') {
+            throw 'disposable Windows client did not reach QUNS_ACCEPTS_NOTIFICATIONS; no Shell action performed'
+          }
           $after = Census
           $foregroundAfterCleanup = KnownProcess ([TestOnlyShellProbe]::ForegroundPid())
           # Establish and close one Quick Settings shell surface first (inert UI preflight).
@@ -203,6 +219,7 @@ jobs:
             notificationStateAfterQuietPolicy = $notificationStateAfterQuietPolicy
             disposableQuietHoursPolicyEnable = 1
             notificationStateAfterCleanup = $notificationStateAfterCleanup
+            quietTimeMinutesElapsed = $quietCycles
             notificationStateAfterShortcut = $notificationStateAfterShortcut
             shellShortcut = 'Win+A_twice_then_Win+N_notification_center'
             priorQuickSettingsInputEvents = $firstQuick + $secondQuick
