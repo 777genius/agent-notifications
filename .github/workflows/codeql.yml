@@ -11,8 +11,8 @@ permissions:
 
 jobs:
   analyze:
-    name: CodeQL (${{ matrix.language }})
-    runs-on: ubuntu-24.04
+    name: CodeQL (${{ matrix.language }}, ${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 40
     permissions:
       actions: read
@@ -21,7 +21,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        language: [go, python]
+        include:
+          - { language: go, platform: linux, runner: ubuntu-24.04 }
+          - { language: go, platform: macos, runner: macos-15 }
+          - { language: go, platform: windows, runner: windows-2022 }
+          - { language: python, platform: linux, runner: ubuntu-24.04 }
     steps:
       - uses: actions/checkout@v7
         with:
@@ -30,8 +34,8 @@ jobs:
         if: matrix.language == 'go'
         with:
           go-version: '1.25.8'
-      - name: Install Go native dependencies
-        if: matrix.language == 'go'
+      - name: Install Linux native dependencies
+        if: matrix.language == 'go' && matrix.platform == 'linux'
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev
       - uses: github/codeql-action/init@v4
         with:
@@ -42,4 +46,4 @@ jobs:
         run: go build ./...
       - uses: github/codeql-action/analyze@v4
         with:
-          category: /language:${{ matrix.language }}
+          category: /language:${{ matrix.language }}/platform:${{ matrix.platform }}
