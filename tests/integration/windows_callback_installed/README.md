@@ -1,7 +1,20 @@
 This TEST proof invokes the actual stripped shipping CLI and embedded classic
 helper. It has no TEST COM registration, Launcher, Show, OOBE or production hook.
 Local execution is forbidden; the entire explicit job must be a fresh disposable
-Windows 11 VM/profile. Automatic PR jobs compile/typecheck and run only inert
+Windows 11 VM/profile.
+The effectful installed workflow now handles one first-login Windows Shell
+presentation precondition *before* normal install or Show: on the one-fresh,
+first-attempt GitHub-hosted Windows 11 Client VM, it inspects only the current
+foreground process and, if this is the exact same-session OS-image WWAHost.exe,
+stops that one first-login overlay and collects its exit. Foreign foreground
+windows, unknown host/platform identity, paths outside the Windows system
+directory, and any failed custody check do not authorize cleanup. This does
+not alter notification settings, registrations, client packages or test
+notification state. The subsequent separate native
+SHQueryUserNotificationState gate **still requires value 5** before effects,
+and neither the cleanup nor state 5 substitutes for a visible unique Shell
+UIA row, real Invoke, cold receiver and generation/source joins. The
+automatic PR phase remains inert. Automatic PR jobs compile/typecheck and run only inert
 independent evidence joins. No workflow dispatch is authorized by this source.
 
 Run archive_intake first. The fixed official URL comes from
