@@ -164,7 +164,7 @@ class AdmissionTests(unittest.TestCase):
                     self.verify()
 
     def test_real_failure_cancellation_timeout_and_foreign_app_stay_blocking(self):
-        for conclusion in ('failure', 'cancelled', 'timed_out', 'action_required'):
+        for conclusion in ('failure', 'cancelled', 'timed_out', 'action_required', 'startup_failure', 'stale'):
             with self.subTest(conclusion=conclusion):
                 self.api = API()
                 native.gh.side_effect = self.api
@@ -190,6 +190,57 @@ class AdmissionTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'latest source check did not succeed'):
                     self.verify()
 
+    def executing_release(self):
+        run = API.run(999, 'basic-release.yml')
+        run.update(event='workflow_dispatch', status='in_progress', conclusion=None,
+                   head_branch='main', actor={'login': '777genius'},
+                   triggering_actor={'login': '777genius'})
+        self.api.runs.append(run)
+        job = {'id': 99900, 'name': 'Verify owner and exact basic candidate',
+               'status': 'in_progress', 'conclusion': None, 'run_attempt': 1}
+        self.api.jobs[999] = [job]
+        self.api.checks.append(self.api.check(job, run))
+        patch.dict(os.environ, {'GITHUB_EVENT_NAME': 'workflow_dispatch',
+                               'GITHUB_REF': 'refs/heads/main', 'GITHUB_JOB': 'verify-version',
+                               'GITHUB_SHA': SOURCE, 'GITHUB_RUN_ID': '999',
+                               'GITHUB_RUN_ATTEMPT': '1'}).start()
+        return run, job
+
+    def test_exact_current_release_run_is_exempt_but_other_checks_are_not(self):
+        run, job = self.executing_release()
+        self.assertEqual(self.verify()['status'], 'passed')
+        # Check-suite exclusion happens before choosing the latest per name:
+        # an external failed Actions job of the same name must not be masked.
+        row = self.api.check(job, run)
+        row.update(id=99899, conclusion='failure', status='completed',
+                   check_suite={'id': self.api.runs[0]['check_suite_id']})
+        self.api.checks.append(row)
+        with self.assertRaisesRegex(ValueError, 'latest source check did not succeed'):
+            self.verify()
+
+    def test_release_run_exemption_requires_exact_owner_identity(self):
+        for altered, value in [('event', 'pull_request'), ('head_branch', 'other'),
+                               ('run_attempt', 2), ('actor', {'login': 'other'})]:
+            with self.subTest(altered=altered):
+                self.api = API()
+                native.gh.side_effect = self.api
+                run, _ = self.executing_release()
+                run[altered] = value
+                with self.assertRaisesRegex(ValueError, 'executing basic release run'):
+                    self.verify()
+
+    def test_optional_skipped_neutral_are_allowed_but_cannot_mask_failures(self):
+        for conclusion in ('skipped', 'neutral'):
+            with self.subTest(conclusion=conclusion):
+                self.api = API()
+                native.gh.side_effect = self.api
+                row = dict(self.api.checks[0], id=10000, name='Optional native gate',
+                           status='completed', conclusion=conclusion)
+                self.api.checks.append(row)
+                self.assertEqual(self.verify()['status'], 'passed')
+                self.api.checks.append(dict(row, id=9999, conclusion='failure'))
+                with self.assertRaisesRegex(ValueError, 'masked a failure'):
+                    self.verify()
     def test_latest_source_workflow_failure_cannot_inherit_prior_green(self):
         for conclusion in ('failure', 'cancelled', 'timed_out'):
             with self.subTest(conclusion=conclusion):

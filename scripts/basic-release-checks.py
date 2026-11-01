@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
 import ci_native_evidence as native  # noqa: E402
 
 REPOSITORIES = {'777genius/agent-notifications', 'universal-agent-plugins/agent-notifications'}
-BAD = {'failure', 'cancelled', 'timed_out', 'action_required'}
+NON_BLOCKING = {'success', 'skipped', 'neutral'}
 
 
 def require(ok, reason):
@@ -93,11 +93,39 @@ def obsolete_placeholder(check, runs, selected, repository, source, old_jobs):
             'replacement_run_attempt': replacement['run']['run_attempt']}
 
 
+def executing_release_run(source, repository, runs):
+    # Only the current owner-dispatched release operator may exclude its own
+    # check suite. Other runs and foreign-app checks remain in the census.
+    if (os.environ.get('GITHUB_EVENT_NAME') != 'workflow_dispatch'
+            or os.environ.get('GITHUB_REF') != 'refs/heads/main'
+            or os.environ.get('GITHUB_JOB') != 'verify-version'
+            or os.environ.get('GITHUB_SHA') != source
+            or os.environ.get('GITHUB_REPOSITORY') != repository):
+        return None
+    run_id, attempt = os.environ.get('GITHUB_RUN_ID', ''), os.environ.get('GITHUB_RUN_ATTEMPT', '')
+    require(re.fullmatch(r'[1-9][0-9]*', run_id) and re.fullmatch(r'[1-9][0-9]*', attempt),
+            'invalid executing basic release run identity')
+    matching = [run for run in runs if run['id'] == int(run_id)]
+    require(len(matching) == 1, 'executing basic release run missing from source census')
+    run = matching[0]
+    require(run.get('event') == 'workflow_dispatch'
+            and run.get('path') == '.github/workflows/basic-release.yml'
+            and run.get('head_sha') == source and run.get('head_branch') == 'main'
+            and run.get('run_attempt') == int(attempt)
+            and run.get('status') == 'in_progress' and run.get('conclusion') is None
+            and type(run.get('check_suite_id')) is int
+            and (run.get('actor') or {}).get('login') == '777genius'
+            and (run.get('triggering_actor') or {}).get('login') == '777genius'
+            and (run.get('head_repository') or {}).get('full_name') == repository,
+            'executing basic release run is not the authenticated owner operator')
+    return run
+
 def verify(source, repository):
     require(repository in REPOSITORIES and re.fullmatch(r'[a-f0-9]{40}', source), 'invalid release source')
     require(native.git('rev-parse', 'HEAD').decode().strip() == source, 'candidate checkout differs from source')
     before = checks(repository, source)
     runs = source_runs(repository, source)
+    operator_run = executing_release_run(source, repository, runs)
     event = {'repository': {'full_name': repository}}
     selected = {}
     for workflow in native.CONTRACTS:
@@ -124,18 +152,31 @@ def verify(source, repository):
             selected[workflow]['full_gate_job_id'] = guard['id']
     latest = {}
     for check in before:
+        if (operator_run is not None and check['app_slug'] == 'github-actions'
+                and check['suite_id'] == operator_run['check_suite_id']):
+            continue
         key = (check['app_id'], check['name'])
         if key not in latest or latest[key]['id'] < check['id']:
             latest[key] = check
     ignored, old_jobs = [], {}
     for check in latest.values():
-        if check['status'] == 'completed' and check['conclusion'] not in BAD:
+        if check['status'] == 'completed' and check['conclusion'] in NON_BLOCKING:
+            if check['conclusion'] != 'success':
+                # Optional skipped/neutral checks cannot hide an earlier
+                # failed or still-running check with this app/name identity.
+                older = [row for row in before if row['app_id'] == check['app_id']
+                         and row['name'] == check['name'] and row['id'] < check['id']]
+                require(all(row['status'] == 'completed' and row['conclusion'] in NON_BLOCKING
+                            for row in older), 'latest skipped/neutral source check masked a failure: ' + check['name'])
             continue
         exception = obsolete_placeholder(check, runs, selected, repository, source, old_jobs)
         require(exception is not None, 'latest source check did not succeed: ' + check['name'])
         ignored.append(exception)
     # No new push/run/attempt/check result may replace the census used above.
     final_runs = source_runs(repository, source)
+    if operator_run is not None:
+        require(any(run['id'] == operator_run['id'] and identity(run) == identity(operator_run)
+                    for run in final_runs), 'executing basic release run changed during admission')
     for workflow, value in selected.items():
         final = select_run(repository, workflow, final_runs)
         require(final is not None and identity(final) == value['run'],
