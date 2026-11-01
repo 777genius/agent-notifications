@@ -1,13 +1,13 @@
-name: TEST-only Windows 11 ARM first-logon Shell overlay probe
+name: TEST-only Windows ARM NoQuietHours enabled-zero presentation preflight
 on:
   push:
-    branches: [ci/windows-shell-oobe-probe-20261101]
+    branches: [ci/windows-shell-quiet-hours-zero-20261101]
     paths: ['.github/workflows/windows-shell-oobe-one-shot.yml']
 permissions:
   contents: read
 jobs:
   shell-overlay:
-    if: ${{ github.repository == '777genius/agent-notifications' && github.run_attempt == 1 && github.event.head_commit.message == 'probe-windows-arm-quiet-hours-policy-v11' }}
+    if: ${{ github.repository == '777genius/agent-notifications' && github.run_attempt == 1 && github.event.head_commit.message == 'probe-windows-noquiet-hours-enabled-zero-v1' }}
     runs-on: windows-11-vs2026-arm
     timeout-minutes: 8
     steps:
@@ -81,7 +81,7 @@ jobs:
           # A change is a preflight hypothesis, never callback qualification.
           $quietPolicy = 'HKCU:\SOFTWARE\Policies\Microsoft\Windows\CurrentVersion\QuietHours'
           New-Item -Path $quietPolicy -Force | Out-Null
-          New-ItemProperty -Path $quietPolicy -Name Enable -PropertyType DWord -Value 1 -Force | Out-Null
+          New-ItemProperty -Path $quietPolicy -Name Enable -PropertyType DWord -Value 0 -Force | Out-Null
           Start-Sleep -Milliseconds 500
           $notificationStateAfterQuietPolicy = [TestOnlyShellProbe]::NotificationState()
           $before = Census
@@ -201,7 +201,7 @@ jobs:
           $report = [ordered]@{
             notificationStateBefore = $notificationStateBefore
             notificationStateAfterQuietPolicy = $notificationStateAfterQuietPolicy
-            disposableQuietHoursPolicyEnable = 1
+            disposableQuietHoursPolicyEnable = 0
             notificationStateAfterCleanup = $notificationStateAfterCleanup
             notificationStateAfterShortcut = $notificationStateAfterShortcut
             shellShortcut = 'Win+A_twice_then_Win+N_notification_center'
