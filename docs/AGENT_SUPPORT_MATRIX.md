@@ -15,7 +15,7 @@ Legend: **Yes** = implemented; **Limited** = only under the stated event/host co
 | OpenCode V1/V2 | Yes: verified root-session idle | Yes | Yes | Yes: terminal error | No | No: root-session filter |
 | Gemini CLI | Yes: AfterAgent means a turn ended, **not task success** | No | Yes: Notification/ToolPermission | No distinct error/limit alerts | No | No qualified parity |
 | Cursor CLI | Limited: native Stop means loop stopped, including abort/error | No | No | No distinct alert: completion/abort/error use the same informational wording | No | No qualified subagent alerts |
-| Qoder CLI | Yes: Stop | Yes | Yes | No dedicated StopFailure alert | Plan yes; review no | Limited: opt-in SubagentStop; idle teammates |
+| Qoder CLI | Yes: Stop | Yes | Yes | No in published v1.49.11; unreleased source adds a generic StopFailure event and separate rate-limit class | Plan yes; review no | Limited: opt-in SubagentStop; idle teammates |
 
 Sources: [Claude/Codex/Qoder product event boundary](../internal/hooks/event.go), [shared hook handler](../internal/hooks/hooks.go), [OpenCode consumer](../internal/opencodeevent/consumer.go), [Gemini consumer](../internal/geminievent/consumer.go), [Cursor consumer](../internal/cursorevent/consumer.go); [Qoder](QODER.md), [Codex](CODEX.md), [OpenCode](opencode-notifications.md), [Gemini](gemini-notifications.md), [Cursor](cursor-notifications.md).
 
