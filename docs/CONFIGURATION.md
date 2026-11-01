@@ -25,6 +25,19 @@ does not enable portable MCP notifications. Webhooks also need a configured,
 enabled destination and an enabled status channel. Restart OpenCode after setup
 or update. [Full setup and limits](opencode-notifications.md).
 
+## Shared native observer sound policy (unreleased source)
+
+Gemini CLI and Cursor CLI use the normal selected shared configuration, not
+the separate managed OpenCode control root. Current public platform channels
+(v1.49.11) still deliver silent alerts. In unreleased source builds, the optional
+`notifications.desktop.systemSound` Boolean requests the **OS default cue**
+only when `notifications.desktop.sound` is enabled. Missing/false settings remain
+silent, and `agents.gemini` / `agents.cursor` schema-2 profiles can override
+the shared value independently. A selected desktop channel is still required.
+No sound file, output device, volume, focus target or chat-route API is added.
+The internal Copilot-in-VS-Code observer uses the same policy but is not a
+publicly qualified installer target. See the [support matrix](AGENT_SUPPORT_MATRIX.md).
+
 ## Manual Configuration
 
 Use the installed config-capable executable (shown as `$NOTIFICATIONS_BIN` in recipes):
