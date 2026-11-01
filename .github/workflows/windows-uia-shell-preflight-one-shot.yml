@@ -1,0 +1,103 @@
+name: TEST-only Windows 11 ARM cross-process UIA session preflight
+on:
+  push:
+    branches: [ci/windows-uia-shell-preflight-20261101]
+    paths: ['.github/workflows/windows-uia-shell-preflight-one-shot.yml']
+permissions:
+  contents: read
+concurrency:
+  group: TEST-windows-uia-shell-preflight-once
+  cancel-in-progress: false
+jobs:
+  cross-process-uia:
+    if: ${{ github.repository == '777genius/agent-notifications' && github.run_attempt == 1 }}
+    runs-on: windows-11-vs2026-arm
+    timeout-minutes: 8
+    steps:
+      - name: Show a disposable WinForms window and find its exact UIA tree
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Add-Type -AssemblyName System.Windows.Forms
+          Add-Type -AssemblyName UIAutomationClient
+          Add-Type -AssemblyName UIAutomationTypes
+          $marker = "TEST-Win11-UIA-$env:GITHUB_RUN_ID"
+          $env:TEST_UIA_MARKER = $marker
+          $scriptPath = Join-Path $env:RUNNER_TEMP 'TEST-cross-process-uia.ps1'
+          @'
+          Add-Type -AssemblyName System.Windows.Forms
+          $form = New-Object System.Windows.Forms.Form
+          $form.Text = [Environment]::GetEnvironmentVariable('TEST_UIA_MARKER')
+          $form.StartPosition = 'CenterScreen'
+          $form.Width = 460
+          $form.Height = 180
+          $form.TopMost = $true
+          $label = New-Object System.Windows.Forms.Label
+          $label.Text = $form.Text + '-child'
+          $label.AutoSize = $true
+          $label.Left = 16
+          $label.Top = 24
+          $form.Controls.Add($label)
+          [System.Windows.Forms.Application]::Run($form)
+          '@ | Set-Content -LiteralPath $scriptPath -Encoding UTF8
+          $exe = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
+          $args = @('-NoProfile','-NonInteractive','-STA','-ExecutionPolicy','Bypass','-File',('"' + $scriptPath + '"'))
+          $child = Start-Process -FilePath $exe -ArgumentList $args -PassThru
+          $found = $false
+          $exactProcess = $false
+          $visible = $false
+          $labelFound = $false
+          $count = 0
+          try {
+            $root = [System.Windows.Automation.AutomationElement]::RootElement
+            $condition = New-Object System.Windows.Automation.PropertyCondition(
+              [System.Windows.Automation.AutomationElement]::NameProperty, $marker
+            )
+            $until = [DateTime]::UtcNow.AddSeconds(35)
+            do {
+              if ($child.HasExited) { throw 'TEST WinForms worker exited before its window was observed' }
+              $roots = $root.FindAll([System.Windows.Automation.TreeScope]::Children,
+                [System.Windows.Automation.Condition]::TrueCondition)
+              $count = $roots.Count
+              if ($count -gt 128) { throw 'UIA root count exceeds bounded diagnostic scope' }
+              $match = $root.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
+              if ($null -ne $match) {
+                $found = $true
+                $exactProcess = $match.Current.ProcessId -eq $child.Id
+                $bounds = $match.Current.BoundingRectangle
+                $visible = (-not $match.Current.IsOffscreen) -and $bounds.Width -gt 0 -and $bounds.Height -gt 0
+                $labelCondition = New-Object System.Windows.Automation.PropertyCondition(
+                  [System.Windows.Automation.AutomationElement]::NameProperty, ($marker + '-child')
+                )
+                $labelFound = $null -ne $match.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
+                  $labelCondition)
+                break
+              }
+              Start-Sleep -Milliseconds 150
+            } while ([DateTime]::UtcNow -lt $until)
+            $primary = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+            $result = [ordered]@{
+              scope = 'disposable_inert_cross_process_uia_only'
+              source = '27b7acb99aa12bc56aff80cea369b40aa783a03b'
+              session = [System.Diagnostics.Process]::GetCurrentProcess().SessionId
+              rootCount = $count
+              screenWidthPositive = $primary.Width -gt 0
+              screenHeightPositive = $primary.Height -gt 0
+              ownFormFound = $found
+              processPidMatched = $exactProcess
+              formOnscreen = $visible
+              childLabelMatched = $labelFound
+              actualNotificationClickQualified = $false
+            }
+            Write-Output ('UIA_PREFLIGHT=' + ($result | ConvertTo-Json -Compress))
+            if (-not ($found -and $exactProcess -and $visible -and $labelFound)) {
+              throw 'Cross-process UIA/onscreen TEST fixture not qualified on this runner'
+            }
+          } finally {
+            if (-not $child.HasExited) {
+              $null = $child.CloseMainWindow()
+              Start-Sleep -Milliseconds 200
+              if (-not $child.HasExited) { $child.Kill() }
+            }
+            $child.WaitForExit(3000) | Out-Null
+          }
