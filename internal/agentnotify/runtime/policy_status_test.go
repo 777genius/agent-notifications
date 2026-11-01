@@ -86,7 +86,16 @@ func TestStatusNavigationEligibility(t *testing.T) {
 	if got := navigationStatus(base, policy, &caller, "linux"); got != (agentnotify.NavigationStatus{Capability: "unavailable", Precision: "none", Reason: "application_unavailable"}) {
 		t.Fatalf("Linux without explicit binding: %+v", got)
 	}
-	for _, platform := range []string{"windows", "freebsd"} {
+	if got := navigationStatus(base, policy, &caller, "windows"); got != (agentnotify.NavigationStatus{Capability: "unavailable", Precision: "none", Reason: "windows_binding_unavailable"}) {
+		t.Fatalf("Windows without explicit binding: %+v", got)
+	}
+	bound := policy
+	bound.Route.ApplicationPath, bound.Route.TeamID = "", ""
+	bound.Route.Windows = notification.WindowsBinding{SnapshotPath: `\\?\C:\TEST\windows-callback\aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\generation.wne`, SHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+	if got := navigationStatus(base, bound, &caller, "windows"); got != (agentnotify.NavigationStatus{Capability: "eligible", Precision: "chat_id", Scope: "selected_windows_generation", Reason: "configured_codex_desktop"}) {
+		t.Fatalf("Windows explicit binding: %+v", got)
+	}
+	for _, platform := range []string{"freebsd"} {
 		if got := navigationStatus(base, policy, &caller, platform); got != (agentnotify.NavigationStatus{Capability: "unavailable", Precision: "none", Reason: "unsupported_platform"}) {
 			t.Fatalf("%s navigation: %+v", platform, got)
 		}
@@ -127,6 +136,8 @@ func TestContextualStatusReadsOnceWithoutEffectsOrIdentityDisclosure(t *testing.
 	wantNavigation := agentnotify.NavigationStatus{Capability: "eligible", Precision: "chat_id", Scope: "local_current_profile", Reason: "configured_codex_desktop"}
 	if runtime.GOOS == "linux" {
 		wantNavigation.Scope = "selected_linux_installation"
+	} else if runtime.GOOS == "windows" {
+		wantNavigation = agentnotify.NavigationStatus{Capability: "unavailable", Precision: "none", Reason: "windows_binding_unavailable"}
 	} else if runtime.GOOS != "darwin" {
 		wantNavigation = agentnotify.NavigationStatus{Capability: "unavailable", Precision: "none", Reason: "unsupported_platform"}
 	}
