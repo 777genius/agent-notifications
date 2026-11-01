@@ -8,7 +8,7 @@ permissions:
   actions: write
 jobs:
   admitted:
-    if: ${{ github.repository == '777genius/agent-notifications' && github.run_attempt == 1 && github.event.head_commit.message == 'quietready-dispatch-v5' }}
+    if: ${{ github.repository == '777genius/agent-notifications' && github.run_attempt == 1 && github.event.head_commit.message == 'quietready-dispatch-final-ea9f140-v6' }}
     strategy:
       fail-fast: false
       matrix:
@@ -23,8 +23,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          source='1719b9135a32a2f05e1b3bb5e6c55ba507784944'
-          parent='9c2395f234549aeac24b4d311a4399f359ad7886'
+          source='ea9f140a8dadab1c916bc8a531b2c0222cb031b3'
+          parent='38bb1173df535c05eb8eff9e8d4f5f43d45807c6'
           acceptedIntakeRun='41298548456'
           acceptedIntakeHead='9e8c9938709b9e43888bf7c57fc320cfd506684d'
           rawSHA='d442a3d7d5c229f45e5e11995711ac2619c8dbc89e3fa2bc185287dc8db8e76e'
