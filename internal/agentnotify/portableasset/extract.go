@@ -189,7 +189,7 @@ func extractEntry(destRoot string, f *zip.File, seen map[string]bool) (int64, er
 
 func allowedArchivePath(name string) bool {
 	switch name {
-	case "plugin.json", "mcp.json", "skills/agent-notifications/SKILL.md", "skills/agent-notify/SKILL.md", thirdpartynotices.Filename:
+	case "plugin.json", "mcp.json", "skills/agent-notifications/SKILL.md", "skills/agent-notify/SKILL.md", "com.universal-agent-plugins.pi/index.ts", thirdpartynotices.Filename:
 		return true
 	}
 	if strings.HasPrefix(name, "bin/") && strings.Count(name, "/") == 1 {

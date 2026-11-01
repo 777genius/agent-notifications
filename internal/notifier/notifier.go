@@ -95,7 +95,11 @@ func (n *Notifier) SendDesktop(status analyzer.Status, message, sessionID, cwd s
 	// Windows Terminal). Platform-specific; see bell_other.go / bell_windows.go.
 	// A terminal bell bypasses macOS Focus, even when the notification is quiet.
 	if !platform.IsMacOS() && n.cfg.IsTerminalBellEnabled() {
-		sendTerminalBell()
+		if sendOpts.executionContext != nil {
+			sendTerminalBellContext(sendOpts.executionContext)
+		} else {
+			sendTerminalBell()
+		}
 	}
 
 	if !n.cfg.IsDesktopEnabled() {
@@ -119,6 +123,9 @@ func (n *Notifier) SendDesktop(status analyzer.Status, message, sessionID, cwd s
 	if appIcon != "" && !platform.FileExists(appIcon) {
 		logging.Warn("App icon not found: %s, using default", appIcon)
 		appIcon = ""
+	}
+	if sendOpts.executionContext != nil {
+		return n.sendNativeDesktopContext(sendOpts.executionContext, statusInfo.Sound, title, cleanMessage, subtitle, sessionID, cwd, appIcon, sendOpts)
 	}
 
 	// macOS: prefer ClaudeNotifier/terminal-notifier so the common path keeps the

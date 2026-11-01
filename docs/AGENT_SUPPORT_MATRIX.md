@@ -41,7 +41,7 @@ Modern observer consumers intentionally use narrow fact types and separate regis
 | Integration | Current repository evidence | Public support status |
 | --- | --- | --- |
 | Copilot in VS Code | [Local Stop observer](../internal/copilotvscodeevent/consumer.go) and [SDK source](../internal/copilotvscodesource/source.go) exist; silent, informational, `Navigation=None` | Internal code exists; not part of the six-agent public installer/README selection. Native qualification and product exposure need an explicit decision |
-| Pi | [Draft PR #539](https://github.com/777genius/agent-notifications/pull/539) adds final completion, blocking extension question, final error, configured sound and local-terminal focus using shared primitives | **Not in main.** Linux native acceptance reported; full macOS/Windows click/sound acceptance pending |
+| Pi | [PR #539](https://github.com/777genius/agent-notifications/pull/539) integrates final completion, blocking extension question, final error, configured sound and local-terminal focus using shared primitives | Release candidate: common installer and hooks/lifecycle on three OSes; Linux desktop qualification and owner-observed Mac banner/click. Full macOS/Windows native acceptance pending; see [release scope](testing/pi-native-e2e.md#owner-approved-hooklifecycle-release-profile-2026-11-01) |
 | GitHub Copilot CLI | Native hooks include `agentStop`, `subagentStop`, `errorOccurred`, `permissionRequest` and `notification` | Research / new integration; separate from Copilot in VS Code |
 | Kiro CLI | Official hooks provide agent-stop and tool events | Research / new integration; qualify real CLI hooks and local origin first |
 

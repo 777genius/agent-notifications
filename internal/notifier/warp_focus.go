@@ -30,7 +30,9 @@ func buildWarpFocusScript(focusURL, bundleID, cwd string) string {
 // -execute command so Warp+tmux/zellij still land on the originating Warp
 // pane, then switch the inner multiplexer target.
 func injectWarpFocusURL(args []string) []string {
-	focusURL := warpFocusURL()
+	return injectResolvedWarpURL(args, warpFocusURL())
+}
+func injectResolvedWarpURL(args []string, focusURL string) []string {
 	if focusURL == "" {
 		return args
 	}

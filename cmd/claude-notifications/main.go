@@ -141,6 +141,9 @@ func main() {
 
 // dispatchEarlyCommand preserves the observation routes before global logging.
 func dispatchEarlyCommand() bool {
+	if len(os.Args) > 1 && os.Args[1] == "pi-event" {
+		os.Exit(runPiEvent(os.Args[2:], os.Stdin, os.Stdout, resolveInstalledPiConsumer))
+	}
 	if len(os.Args) > 1 && os.Args[1] == "installer-progress" {
 		os.Exit(installerProgressMain(os.Args[2:], os.Stdout, os.Stderr))
 	}

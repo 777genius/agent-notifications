@@ -1,7 +1,7 @@
 {
   "seo": {
     "title": "Agent Notifications - Stay in flow",
-    "description": "Desktop notifications and webhooks for Claude, Codex CLI, OpenCode, Gemini CLI, Cursor CLI and Qoder. Agent and platform limits apply."
+    "description": "Desktop notifications and webhooks for Claude, Codex CLI, OpenCode, Gemini CLI, Cursor CLI, Qoder and Pi. Agent and platform limits apply. Pi: sounds and terminal focus in the local TUI."
   },
   "language": {
     "label": "Language",
@@ -27,7 +27,7 @@
     "title": "Stay in flow",
     "emphasis": "We'll get your attention",
     "leadFirst": "Let your agent work. Know when it's done.",
-    "leadSecond": "Desktop notifications and webhooks for Claude, Codex CLI, OpenCode, Gemini CLI, Cursor CLI and Qoder. Agent and platform limits apply.",
+    "leadSecond": "Desktop notifications and webhooks for Claude, Codex CLI, OpenCode, Gemini CLI, Cursor CLI, Qoder and Pi. Agent and platform limits apply. Pi: sounds and terminal focus in the local TUI.",
     "primary": "Set up notifications",
     "secondary": "Explore on GitHub",
     "note": "Open source · Runs locally"
@@ -41,12 +41,12 @@
       "1": {
         "label": "CLICK TO FOCUS",
         "title": "Return with one click",
-        "text": "Click a notification to return to its terminal, editor or tab where supported. Claude and Codex CLI only; support depends on your terminal and OS."
+        "text": "Click a notification to return to its terminal, editor or tab where supported. Claude, Codex CLI and Pi only; support depends on your terminal and OS."
       },
       "2": {
         "label": "SOUND CONTROLS",
         "title": "A sound for every moment",
-        "text": "Pick sounds, set the volume, and choose an audio device. Keep the signals you want and quiet the rest. Claude and Codex CLI only."
+        "text": "Pick sounds, set the volume, and choose an audio device. Keep the signals you want and quiet the rest. Claude, Codex CLI and Pi only."
       },
       "3": {
         "label": "WEBHOOK INTEGRATIONS",
@@ -69,7 +69,7 @@
     "eyebrow": "ONE CLICK. THE RIGHT WINDOW.",
     "titleFirst": "Built for your setup",
     "titleSecond": "Not just one terminal",
-    "intro": "Claude and Codex CLI only. Click-to-focus adapts to what you already run. Here is exactly how precise the click gets on each platform.",
+    "intro": "Claude, Codex CLI and Pi only. Click-to-focus adapts to what you already run. Here is exactly how precise the click gets on each platform.",
     "columns": {
       "app": "Terminal / IDE",
       "macos": "macOS",
@@ -134,7 +134,7 @@
     "items": {
       "1": {
         "question": "Do I need every agent installed?",
-        "answer": "Select any combination of Claude, Codex CLI, OpenCode, Gemini CLI, Cursor CLI and Qoder. Install the selected CLIs first. Cursor supports Linux amd64, macOS arm64 and Windows amd64; see its guide for host requirements."
+        "answer": "Select any combination of Claude, Codex CLI, OpenCode, Gemini CLI, Cursor CLI, Qoder and Pi. Install the selected CLIs first. Cursor supports Linux amd64, macOS arm64 and Windows amd64; see its guide for host requirements."
       },
       "2": {
         "question": "Are Codex hooks installed automatically?",
@@ -146,7 +146,7 @@
       },
       "4": {
         "question": "Can I choose what makes a sound?",
-        "answer": "Yes. Configure sounds, volume, audio device and notification channels. Choose Configure in the guide for the steps specific to your agent. Claude and Codex CLI only."
+        "answer": "Yes. Configure sounds, volume, audio device and notification channels. Choose Configure in the guide for the steps specific to your agent. Claude, Codex CLI and Pi only."
       },
       "5": {
         "question": "Does click-to-focus work everywhere?",
@@ -209,7 +209,7 @@
     "scrollDown": "Scroll options down"
   },
   "install": {
-    "availability": "The common Cursor/Qoder installer is available in platform release v1.49.11.", "cursor": {"guide": "Cursor CLI installation", "scope": "Cursor CLI: informational Stop alerts and optional webhooks on Linux amd64, macOS arm64 and Windows amd64. No Cursor IDE, sound or click-to-focus support. The installer validates the selected CLI and user profile.", "restart": "Restart Cursor CLI to load the informational Stop observer."},
+    "availability": "The common Cursor/Qoder installer is available in platform release v1.49.11. Cursor CLI, Qoder and Pi use the common installer with separate notification channel choices.", "cursor": {"guide": "Cursor CLI installation", "scope": "Cursor CLI: informational Stop alerts and optional webhooks on Linux amd64, macOS arm64 and Windows amd64. No Cursor IDE, sound or click-to-focus support. The installer validates the selected CLI and user profile.", "restart": "Restart Cursor CLI to load the informational Stop observer."},
     "qoder": {"guide": "Qoder setup and hooks", "scope": "Qoder: completion, question, permission, plan and teammate alerts with optional webhooks. Choose Qoder alongside other agents in the common installer; a notification click cannot open the exact existing chat.", "restart": "Restart Qoder to activate the hooks."},
     "title": "Set up notifications",
     "intro": "Follow the steps below to add notifications to {agent}.",
@@ -229,7 +229,8 @@
       "both": "Claude + Codex CLI",
       "opencode": "OpenCode",
       "gemini": "Gemini CLI",
-      "cursor": "Cursor CLI", "qoder": "Qoder"
+      "cursor": "Cursor CLI", "qoder": "Qoder",
+      "pi": "Pi"
     },
     "targets": {
       "unknown": "Choose target OS",
@@ -283,7 +284,7 @@
     "configureSettings": "⚙ Configure settings",
     "agentNotify": {
       "label": "Set up optional notification tools",
-      "hint": "Controls notification setup for selected Claude, Codex CLI and Cursor CLI. Checked follows saved setup preferences; unchecked skips their setup for this run, retaining existing registrations and consent. Qoder, OpenCode and Gemini are unaffected."
+      "hint": "Controls notification setup for selected Claude, Codex CLI and Cursor CLI. Checked follows saved setup preferences; unchecked skips their setup for this run, retaining existing registrations and consent. Qoder, OpenCode, Gemini and Pi are unaffected."
     },
     "capabilities": {
       "title": "Selected agent capabilities",
@@ -314,6 +315,14 @@
       "guide": "OpenCode setup and limitations",
       "restart": "Restart OpenCode to load the global plugin. On macOS, grant notification permission using the setup guide.",
       "configure": "Use config path --target opencode for OpenCode settings. Enable desktop/webhook consent with setup-opencode; configure webhook endpoints separately."
+    },
+    "pi": {
+      "guide": "Pi setup, sound and terminal focus",
+      "scope": "Pi standalone: final completion, blocking extension UI questions and final errors. Sound and click-to-focus require a local TUI; enabled webhooks also work in JSON, print and RPC.",
+      "restart": "Restart Pi or run /reload to load the notification extension.",
+      "configure": "Use schema 2 agents.pi overrides for shared settings. Desktop and webhook consent are saved separately; no MCP server or skill is installed.",
+      "version": "Official standalone Pi; tested with v1.4.0. Windows npm shims are not supported.",
+      "short": "Pi: sounds and terminal focus in the local TUI."
     }
   },
   "agentSupport": {

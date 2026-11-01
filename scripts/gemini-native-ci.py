@@ -94,12 +94,60 @@ def module_graph(values):
 def graph_pins(raw):
     values = []
     for line in raw.decode("utf-8").splitlines():
-        if not line.strip():
+        if not line:
             continue
-        fields = line.split()
+        fields = line.split("\t")
         require(len(fields) == 4, "Go_graph_pin_fields")
         values.append(dict(zip(("Path", "Version", "Sum", "GoModSum"), fields)))
     return values
+
+
+def complete_graph_pins(values, raw_sums):
+    # Membership comes only from the canonical graph. The private Go-generated
+    # receipt supplies checksums that `go list` may omit for graph-only modules.
+    sums = {}
+    for line in raw_sums.decode("utf-8").splitlines():
+        fields = line.split()
+        require(len(fields) == 3, "Go_download_checksum_fields")
+        path, version, checksum = fields
+        require(version.startswith("v") and checksum.startswith("h1:"), "Go_download_checksum_invalid")
+        key = (path, version)
+        if key in sums:
+            require(sums[key] == checksum, "Go_download_checksum_conflicting")
+            raise Red("Go_download_checksum_duplicate")
+        sums[key] = checksum
+    completed = []
+    for item in values:
+        pin = dict(item)
+        for field, suffix in (("Sum", ""), ("GoModSum", "/go.mod")):
+            key = (item["Path"], item["Version"] + suffix)
+            require(key in sums, "Go_graph_checksum_missing")
+            require(not item[field] or item[field] == sums[key], "Go_graph_checksum_mismatch")
+            pin[field] = sums[key]
+        completed.append(pin)
+    return completed
+
+
+def prepare_download_modfile(root, repo=REPO):
+    # `go mod download all` may add sums for graph-only modules. Keep that
+    # preparation outside the source tree; graph inspection and real builds
+    # continue to use the unmodified canonical module files.
+    directory = root / "download-modules"
+    directory.mkdir(mode=0o700)
+    original = {name: (repo / name).read_bytes() for name in ("go.mod", "go.sum")}
+    for name, body in original.items():
+        (directory / name).write_bytes(body)
+    return directory / "go.mod", original
+
+
+def require_canonical_modules(original, repo=REPO):
+    require(all((repo / name).read_bytes() == body for name, body in original.items()),
+            "canonical_module_files_changed")
+
+
+def download_checksum_receipt(modfile, original):
+    require(modfile.read_bytes() == original["go.mod"], "download_module_file_changed")
+    return modfile.with_suffix(".sum").read_bytes()
 
 
 def build_identity(raw, modules, commit, osname, arch):
@@ -249,11 +297,15 @@ def run(args):
         require(not (REPO / "go.work").exists(), "go_work_forbidden")
         mod = json.loads(command("go_mod_metadata", [go, "mod", "edit", "-json"]))
         require(not mod.get("Replace"), "Go_mod_replace_forbidden")
-        command("download_public_pins", [go, "mod", "download", "all"])
+        download_modfile, canonical_modules = prepare_download_modfile(root)
+        command("download_public_pins", [go, "mod", "download", "-modfile=" + str(download_modfile), "all"])
+        require_canonical_modules(canonical_modules)
+        checksum_receipt = download_checksum_receipt(download_modfile, canonical_modules)
         # Keep the full graph inside G0's bounded stream cap. Obtain directory
         # records with the actual -json interface only for the two staged trees.
         pins = graph_pins(command("module_graph", [go, "list", "-m", "-f",
-                          "{{if not .Main}}{{.Path}} {{.Version}} {{.Sum}} {{.GoModSum}}{{end}}", "all"]))
+                          "{{if not .Main}}{{.Path}}\t{{.Version}}\t{{.Sum}}\t{{.GoModSum}}{{end}}", "all"]))
+        pins = complete_graph_pins(pins, checksum_receipt)
         selected = json_stream(command("module_directories", [go, "list", "-m", "-json", SDK, INSTALLER]))
         records = {item["Path"]: item for item in pins}
         for item in selected:
@@ -263,6 +315,7 @@ def run(args):
         modules = module_graph(list(records.values()))
         write_json(evidence_dir / "go-modules.json", list(modules.values()))
         command("verify_public_pins", [go, "mod", "verify"])
+        require_canonical_modules(canonical_modules)
         staged = {}
         for label, name in (("sdk", SDK), ("agentplugins", INSTALLER)):
             origin = Path(modules[name]["Dir"]).resolve(strict=True)
@@ -418,6 +471,28 @@ def run(args):
 
 
 class PureChecks(unittest.TestCase):
+    def test_download_preparation_preserves_canonical_modules(self):
+        with tempfile.TemporaryDirectory(prefix="TEST-gemini-modules-") as directory:
+            root = Path(directory)
+            repo = root / "source"
+            repo.mkdir()
+            original = {"go.mod": b"module example.com/fixture\n\ngo 1.25.0\n", "go.sum": b"original sums\n"}
+            for name, body in original.items():
+                (repo / name).write_bytes(body)
+            modfile, captured = prepare_download_modfile(root, repo)
+            self.assertEqual(captured, original)
+            self.assertEqual(modfile.read_bytes(), original["go.mod"])
+            self.assertEqual(modfile.with_suffix(".sum").read_bytes(), original["go.sum"])
+            modfile.with_suffix(".sum").write_bytes(b"prepared graph sums\n")
+            self.assertEqual(download_checksum_receipt(modfile, captured), b"prepared graph sums\n")
+            require_canonical_modules(captured, repo)
+            modfile.write_bytes(original["go.mod"] + b"require example.com/extra v1.0.0\n")
+            with self.assertRaisesRegex(Red, "download_module_file_changed"):
+                download_checksum_receipt(modfile, captured)
+            (repo / "go.sum").write_bytes(b"unexpected source mutation\n")
+            with self.assertRaisesRegex(Red, "canonical_module_files_changed"):
+                require_canonical_modules(captured, repo)
+
     def test_UI_rejects_typed_commands(self):
         ui = {"permission_pattern": "public menu", "approve": "1\r", "deny": "2\r", "cancel": "\x1b", "source_sha256": "a" * 64}
         self.assertEqual(ui_contract(json.dumps(ui)), ui)
@@ -446,7 +521,7 @@ class PureChecks(unittest.TestCase):
             run(argparse.Namespace(trusted_github_runner=False))
 
     def test_graph_and_home_boundaries(self):
-        self.assertEqual(graph_pins(b"\npublic/module v1.0.0 h1:pin h1:mod\n")[0]["Version"], "v1.0.0")
+        self.assertEqual(graph_pins(b"\npublic/module\tv1.0.0\th1:pin\th1:mod\n")[0]["Version"], "v1.0.0")
         with self.assertRaises(Red):
             graph_pins(b"public/module v1.0.0\n")
         # A hosted runner temp directory under HOME must be rejected for labs.
@@ -455,6 +530,34 @@ class PureChecks(unittest.TestCase):
             outside(home / "work/_temp/TEST-lab", (REPO, home))
         with self.assertRaises(Red):
             outside(REPO / "TEST-lab", (REPO, home))
+
+    def test_graph_receipt_preserves_membership_and_optional_fields(self):
+        raw = b"public/first\tv1.0.0\t\th1:first-mod\npublic/second\tv2.0.0\t\t\n"
+        pins = graph_pins(raw)
+        self.assertEqual((pins[0]["Sum"], pins[1]["GoModSum"]), ("", ""))
+        receipt = (b"public/first v1.0.0 h1:first\npublic/first v1.0.0/go.mod h1:first-mod\n"
+                   b"public/second v2.0.0 h1:second\npublic/second v2.0.0/go.mod h1:second-mod\n"
+                   b"public/extra v3.0.0 h1:extra\npublic/extra v3.0.0/go.mod h1:extra-mod\n")
+        completed = complete_graph_pins(pins, receipt)
+        self.assertEqual([item["Path"] for item in completed], ["public/first", "public/second"])
+        self.assertEqual(completed[0]["Sum"], "h1:first")
+        self.assertEqual(completed[1]["GoModSum"], "h1:second-mod")
+        self.assertEqual(pins[0]["Sum"], "")
+
+    def test_graph_receipt_rejects_missing_duplicate_and_conflicting_checksums(self):
+        pins = graph_pins(b"public/module\tv1.0.0\th1:pin\th1:mod\n")
+        receipt = b"public/module v1.0.0 h1:pin\npublic/module v1.0.0/go.mod h1:mod\n"
+        cases = (
+            (receipt.splitlines(keepends=True)[0], "Go_graph_checksum_missing"),
+            (receipt.splitlines(keepends=True)[1], "Go_graph_checksum_missing"),
+            (receipt + b"public/module v1.0.0 h1:pin\n", "Go_download_checksum_duplicate"),
+            (receipt + b"public/module v1.0.0 h1:other\n", "Go_download_checksum_conflicting"),
+            (receipt.replace(b"h1:pin", b"h1:other"), "Go_graph_checksum_mismatch"),
+            (receipt.replace(b"h1:mod", b"h1:other"), "Go_graph_checksum_mismatch"),
+        )
+        for body, code in cases:
+            with self.subTest(code=code, body=body), self.assertRaisesRegex(Red, code):
+                complete_graph_pins(pins, body)
 
 
 def main():

@@ -3,11 +3,15 @@
 package warpfocus
 
 import (
+	"context"
 	"errors"
 	"net/url"
 	"os"
 	"os/exec"
 	"strings"
+	"time"
+
+	"github.com/777genius/agent-notifications/internal/commandrun"
 )
 
 var errInvalidFocusURL = errors.New("warpfocus: not a Warp session focus URL")
@@ -34,6 +38,17 @@ var allowedSchemes = map[string]bool{
 // not a Warp host (for example Cursor or VS Code launched from a Warp pane,
 // which inherit Warp's environment).
 func FromEnv() string {
+	return fromEnv(tmuxEnvironment)
+}
+
+// FromEnvContext captures the same originating Warp session while retaining
+// the caller's deadline through optional tmux environment queries.
+func FromEnvContext(parent context.Context) string {
+	ctx, cancel := context.WithTimeout(parent, 2*time.Second)
+	defer cancel()
+	return fromEnv(func(name string) string { return tmuxEnvironmentContext(ctx, name) })
+}
+func fromEnv(readTmux func(string) string) string {
 	if !IsWarpHost() {
 		return ""
 	}
@@ -46,10 +61,10 @@ func FromEnv() string {
 	if os.Getenv("TMUX") == "" {
 		return ""
 	}
-	if url := Normalize(tmuxEnvironment(FocusURLEnv)); url != "" {
+	if url := Normalize(readTmux(FocusURLEnv)); url != "" {
 		return url
 	}
-	return FromSessionUUID(tmuxEnvironment(SessionUUIDEnv))
+	return FromSessionUUID(readTmux(SessionUUIDEnv))
 }
 
 // IsWarpHost reports whether this process is running in a Warp terminal
@@ -157,6 +172,9 @@ func normalizeSessionID(raw string) string {
 }
 
 func tmuxEnvironment(name string) string {
+	return tmuxEnvironmentContext(context.Background(), name)
+}
+func tmuxEnvironmentContext(ctx context.Context, name string) string {
 	tmuxPath := "tmux"
 	if path, err := exec.LookPath("tmux"); err == nil {
 		tmuxPath = path
@@ -171,7 +189,7 @@ func tmuxEnvironment(name string) string {
 		args = append(args, extra...)
 		args = append(args, name)
 		cmd := exec.Command(tmuxPath, args...)
-		output, err := cmd.Output()
+		output, err := commandrun.Output(ctx, cmd)
 		if err != nil {
 			continue
 		}

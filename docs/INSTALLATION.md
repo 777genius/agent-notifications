@@ -74,7 +74,7 @@ Use `--state-dir /path/to/private-TEST-cache` to reuse your own mode-700 cache.
 
 Prefer a guided setup? [Open the installation guide](https://777genius.github.io/agent-notifications/#install) to choose your agents, OS and task.
 
-The short setup loader handles release lookup and validation internally, then downloads the installer from its qualified immutable source snapshot. Run it and choose Claude, Codex, OpenCode, Gemini CLI, Qoder, Cursor CLI, or a combination:
+The short setup loader handles release lookup and validation internally, then downloads the installer from its qualified immutable source snapshot. Run it and choose Claude, Codex, OpenCode, Gemini CLI, Qoder, Cursor CLI, Pi, or a combination:
 
 ```bash
 (set -o pipefail; curl -fsSL https://agent-notifications.com/install.sh | bash)
@@ -88,7 +88,7 @@ For automation or terminals without a controlling TTY, choose explicitly and pre
 (set -o pipefail; curl -fsSL https://agent-notifications.com/install.sh | bash -s -- --product codex)
 ```
 
-Use `claude`, `codex`, or `both` for Claude/Codex. The other product IDs are `opencode`, `gemini`, `qoder` and `cursor`. The selected host CLI must already be on `PATH`; this installs notifications only. Cursor uses the agent CLI launcher, and supports qualified Linux amd64, macOS arm64 and Windows amd64 hosts; [profile authority and filesystem requirements](cursor-notifications.md) still apply.
+Use `claude`, `codex`, or `both` for Claude/Codex. The other product IDs are `opencode`, `gemini`, `qoder`, `cursor` and `pi`. The selected host CLI must already be on `PATH`; this installs notifications only. Cursor uses the agent CLI launcher, and supports qualified Linux amd64, macOS arm64 and Windows amd64 hosts; [profile authority and filesystem requirements](cursor-notifications.md) still apply.
 
 The common Cursor/Qoder flow is available in [platform release v1.49.11](PLATFORM_RELEASE_CHANNELS.md). The public loader selects the published channel for the target OS and architecture; editing or copying a command does not upgrade an older channel's capabilities.
 
@@ -100,7 +100,12 @@ Select agents together in the guided setup, or pass one comma-separated list to 
 
 The loader downloads and validates one installer, then applies each selected integration through its own lifecycle. UAP manages Qoder's native package and Cursor's qualified Stop observer; shared settings and runtime writes remain coordinated. Cursor keeps its selected CLI and physical profile authority throughout its operation. A client failure can leave successful clients installed; the overall command reports incomplete setup. Follow the saved recovery command for failed activation instead of reinstalling successful clients.
 
-`--desktop` and `--webhook` apply to each selected OpenCode/Gemini/Qoder/Cursor integration, with consent saved independently. `--desktop` selects desktop only, `--webhook` selects webhooks only, and both select both channels. Configure webhook URLs separately. Fresh installs default to desktop on and webhooks off. Updates without channel flags preserve each selected agent's complete saved decision, including both channels off. Use `--desktop=false --webhook=false` to disable those channels explicitly while retaining the integration. `--skip-agent-notify` skips notification-tool setup for selected Claude/Codex clients and skips the selected Cursor integration for this run. Existing registrations and consent remain unchanged; Qoder, OpenCode and Gemini are unaffected. Single-agent commands and `--product both` remain supported.
+`--desktop` and `--webhook` apply to each selected OpenCode/Gemini/Qoder/Cursor/Pi integration, with consent saved independently. `--desktop` selects desktop only, `--webhook` selects webhooks only, and both select both channels. Configure webhook URLs separately. Fresh installs default to desktop on and webhooks off. Updates without channel flags preserve each selected agent's complete saved decision, including both channels off. Use `--desktop=false --webhook=false` to disable those channels explicitly while retaining the integration. `--skip-agent-notify` skips notification-tool setup for selected Claude/Codex clients and skips the selected Cursor integration for this run. Existing registrations and consent remain unchanged; Qoder, OpenCode, Gemini and Pi are unaffected. Single-agent commands and `--product both` remain supported.
+
+Add `,pi` or use `--product pi --desktop` for Pi. Install its official standalone
+CLI first; Windows npm shims are not supported. Pi uses the same common installer,
+with separate desktop/webhook consent and local-TUI sound/click behavior.
+[Pi installation, configuration and lifecycle](pi-notifications.md).
 
 The installer shows recent safe checkpoints for each selected client above its live
 status, including its current operation and elapsed waiting time. Saved registration remains distinct from completed setup; a timeout or
@@ -126,6 +131,7 @@ After installation:
 - **Qoder:** install the Qoder CLI and make `qoder` or `qodercli` available on `PATH`, then restart Qoder after installation. [Native setup and limits](QODER.md).
 - **Cursor CLI:** restart the selected agent CLI to load its Stop observer. Cursor IDE is outside this integration. [Qualified hosts and limits](cursor-notifications.md).
 - **Gemini CLI:** restart Gemini to reload its hooks. [Setup and limits](gemini-notifications.md).
+- **Pi:** restart Pi or run `/reload` to load the native extension. [Modes, sound and terminal focus](pi-notifications.md).
 - **OpenCode:** restart OpenCode to load its global plugin. On Mac, explicitly grant notification permission. OpenCode bootstrap requires release v1.46.0 or newer; see [OpenCode setup, channels and limits](opencode-notifications.md).
 
 When the selected release supports the portable wizard, the installer also registers the
