@@ -59,6 +59,8 @@ static void inertUriAttributes(const char* label, const winrt::Windows::Foundati
 static void archiveAt(const char* step) { archiveStep = step; }
 static std::atomic<const char*> clickStep{"entry"};
 static std::atomic<uint32_t> clickRoots{0}, clickNodes{0}, clickTitles{0}, clickBodies{0}, clickNameLength{0};
+// Failure-only census diagnostics: hints never extend the trusted Shell image list.
+static std::atomic<uint32_t> clickAllowedRoots{0}, clickExcludedRoots{0}, clickExcludedShellNames{0}, clickPreCenterAllowedRoots{0};
 static void clickAt(const char* step) { clickStep.store(step,std::memory_order_relaxed); }
 // MSVC path::root_path treats the device introducer as root (\\?\),
 // not the DOS volume. Decompose only the already validated physical drive
@@ -733,7 +735,7 @@ struct Route {
 };
 // Only this positive, held kernel-image classification can exclude a provider.
 // Opening/querying a provider is not optional: unknown must reject the census.
-struct KnownForeignShell final {};
+struct KnownForeignShell final { bool familiarShellName; };
 static bool shellImage(const std::wstring& path) {
  wchar_t windows[32768]{};
  const auto n = GetWindowsDirectoryW(windows,32768); require(n && n < 32768);
@@ -773,7 +775,15 @@ struct Process {
   require(GetProcessId(handle.h) == id && WaitForSingleObject(handle.h,0) == WAIT_TIMEOUT);
   // Read only the held process/kernel image before excluding known foreign
   // roots. Never inspect foreign paths, signatures, tokens or other resources.
-  clickAt("shell_image_classification"); if (shell && !shellImage(path)) throw KnownForeignShell{};
+  clickAt("shell_image_classification"); if (shell && !shellImage(path)) {
+    // Kernel image basename is diagnostic only; full-path signing and
+    // allowlist qualification remain mandatory for any selectable Shell root.
+    const auto name=fs::path(path).filename().wstring();
+    const bool hint=_wcsicmp(name.c_str(),L"ShellHost.exe")==0 ||
+      _wcsicmp(name.c_str(),L"ShellExperienceHost.exe")==0 ||
+      _wcsicmp(name.c_str(),L"explorer.exe")==0;
+    throw KnownForeignShell{hint};
+  }
   clickAt("process_birth"); born = birth(handle.h);
   DWORD session = 0;
   clickAt("process_user_session"); require(ProcessIdToSessionId(pid,&session) && session == ownSession()
@@ -841,6 +851,9 @@ static Selection census(IUIAutomation* automation, IUIAutomationTreeWalker* walk
  clickRoots.store(0,std::memory_order_relaxed); clickNodes.store(0,std::memory_order_relaxed);
  clickTitles.store(0,std::memory_order_relaxed); clickBodies.store(0,std::memory_order_relaxed);
  clickNameLength.store(0,std::memory_order_relaxed);
+ clickAllowedRoots.store(0,std::memory_order_relaxed);
+ clickExcludedRoots.store(0,std::memory_order_relaxed);
+ clickExcludedShellNames.store(0,std::memory_order_relaxed);
  ComPtr<IUIAutomationElement> desktop, first;
  budget(); winrt::check_hresult(automation->GetRootElement(&desktop));
  budget(); winrt::check_hresult(walker->GetFirstChildElement(desktop.Get(),&first));
@@ -851,11 +864,13 @@ static Selection census(IUIAutomation* automation, IUIAutomationTreeWalker* walk
   std::unique_ptr<Process> owner;
   clickAt("uia_root_pid"); require(pid > 0);
   try { owner = std::make_unique<Process>(DWORD(pid),true,nullptr); }
-  catch (const KnownForeignShell&) {
-   // A positively classified non-Shell kernel image is the only exclusion.
-   // Every allowlisted/unknown failure escapes and invalidates this census.
+  catch (const KnownForeignShell& foreign) {
+   // No excluded element is traversed, selected or invoked.
+   clickExcludedRoots.fetch_add(1,std::memory_order_relaxed);
+   if (foreign.familiarShellName) clickExcludedShellNames.fetch_add(1,std::memory_order_relaxed);
   }
   if (owner) {
+   clickAllowedRoots.fetch_add(1,std::memory_order_relaxed);
    struct Node { ComPtr<IUIAutomationElement> element; unsigned depth; };
    std::vector<Node> pending{{first,0}};
    while (!pending.empty()) {
@@ -1019,6 +1034,10 @@ static void publishClickRefusal(std::exception_ptr cause) noexcept {
   num(report,L"uia_title_matches",clickTitles.load(std::memory_order_relaxed));
   num(report,L"uia_body_matches",clickBodies.load(std::memory_order_relaxed));
   num(report,L"uia_last_name_length",clickNameLength.load(std::memory_order_relaxed));
+  num(report,L"uia_allowed_shell_roots",clickAllowedRoots.load(std::memory_order_relaxed));
+  num(report,L"uia_excluded_roots",clickExcludedRoots.load(std::memory_order_relaxed));
+  num(report,L"uia_excluded_shell_names",clickExcludedShellNames.load(std::memory_order_relaxed));
+  num(report,L"uia_pre_center_allowed_roots",clickPreCenterAllowedRoots.load(std::memory_order_relaxed));
   if (cause) {
    try { std::rethrow_exception(cause); }
    catch (const winrt::hresult_error& error) {
@@ -1064,6 +1083,7 @@ static void click() {
     if (selected.row || GetTickCount64()>=bannerUntil) break;
     Sleep(50);
    }
+   clickPreCenterAllowedRoots.store(clickAllowedRoots.load(std::memory_order_relaxed),std::memory_order_relaxed);
    auto center=fact();
    put(center,L"qualification","input_only_not_callback");
    if (selected.row) {
