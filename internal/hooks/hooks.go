@@ -437,7 +437,7 @@ func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 		}
 		// StopFailure is distinct from completion. Preserve the OS/HTTP event
 		// category but never expose the provider's raw native error body.
-		status = analyzer.StatusAPIError
+		status = analyzer.StatusAgentError
 		if p.RateLimited {
 			status = analyzer.StatusAPIErrorOverloaded
 		}
