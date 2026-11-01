@@ -1,27 +1,38 @@
 """Observe a real Pi across the normal managed runtime's executable update.
 
-Every mutation uses the existing runtime writer or common setup wizard. The
-foreign TEST retainer is a truthful shared-runtime consumer, never an authority
-record manufactured by this fixture.
+Every mutation uses Cursor's existing runtime writer or common setup wizard.
+Cursor is installed through the real SDK/filesystem boundary; no native Cursor
+agent is started and no Cursor desktop or hook qualification is claimed.
 """
 import json
 
 
-def exercise(root, profile, args, env, sink, *, fixture, product, command, setup, native):
+def exercise(root, profile, args, env, sink, *, fixture, product, command, native):
     replacement = args.replacement_runtime_stage / args.candidate.name
     old_hash, new_hash = product.sha(args.candidate), product.sha(replacement)
     product.require(old_hash != new_hash, "runtime_replacement_requires_distinct_executable_bytes")
     old = product.installed(root / "control", profile)
     product.require(old["runtime"]["primary_sha256"] == old_hash, "runtime_replacement_initial_image_mismatch")
     policy = root / "control/agent-notifications.json"
-    saved_policy = policy.read_bytes()
 
     def ledger():
         return json.loads((root / "control/ownership.json").read_text(encoding="utf-8"))
 
     baseline = ledger()["Consumers"]
-    retainer = "TEST-pi-runtime-retainer"
-    product.require(retainer not in baseline, "runtime_replacement_retainer_already_exists")
+
+    def cursor(action, executable):
+        profile_root = root / ".cursor"
+        profile_root.mkdir(mode=0o700, exist_ok=True)
+        update = action == "update"
+        argv = ["setup-notifications", "wizard", "--action", "install" if update else action, "--agents", "cursor",
+                "--hooks", "false", "--agent-notify", "true", "--package", args.package if action == "install" else args.updated_package,
+                "--control-root", root / "control", "--runtime-root", root / "runtime",
+                "--global-config", root / "global/config.json", "--scope-root", profile_root,
+                "--client-executable", executable, "--yes", "--json"]
+        if update:
+            argv += ["--install-or-update"]
+        value = json.loads(command(executable, argv, root, env))
+        product.require(value.get("outcome") in ("completed", "unchanged"), "runtime_replacement_cursor_setup_failed")
 
     def writer(executable, stage, consumer, remove=False):
         argv = ["internal-install-runtime", "--target", root / "runtime/bin", "--entry", args.candidate.name,
@@ -29,11 +40,14 @@ def exercise(root, profile, args, env, sink, *, fixture, product, command, setup
         argv += ["--remove"] if remove else ["--stage", stage]
         return command(executable, argv, root, env)
 
-    writer(args.candidate, args.runtime_stage, retainer)
+    cursor("install", args.candidate)
     retained = ledger()["Consumers"]
-    product.require(set(retained) == set(baseline) | {retainer}
+    cursor_keys = [key for key, value in retained.items() if value.get("Registration")
+                   and json.loads(value["Registration"]).get("integration") == "cursor"]
+    product.require(len(cursor_keys) == 1 and set(retained) == set(baseline) | set(cursor_keys)
                     and all(retained[key] == value for key, value in baseline.items()),
-                    "runtime_replacement_retainer_changed_existing_consumers")
+                    "runtime_replacement_cursor_changed_existing_consumers")
+    saved_policy = policy.read_bytes()
     case_root = root / "runtime-byte-old-A"
     provider, live = fixture.Provider("success"), None
     try:
@@ -44,15 +58,16 @@ def exercise(root, profile, args, env, sink, *, fixture, product, command, setup
             pass
         foreign = [profile / name for name in ("settings.json", "models.json", "extensions/TEST-witness.ts")]
         before_foreign = {path: product.sha(path) for path in foreign}
-        # The replacement writer commits actual executable bytes and truthful
-        # preparation ownership. The unchanged package's normal wizard must
-        # refresh derived discovery and retire only that preparation record.
-        writer(replacement, args.replacement_runtime_stage, "pi-runtime-preparation")
+        # This is prepare_cursor_runtime's exact existing writer route. Pi
+        # discovery must already be fresh before Cursor's integration update;
+        # no Pi setup, metadata repair or artificial retainer participates.
+        writer(replacement, args.replacement_runtime_stage, "claude-hooks")
         prepared = ledger()
-        product.require(set(prepared["Consumers"]) == set(retained) | {"pi-runtime-preparation"}
+        product.require(set(prepared["Consumers"]) == set(retained) | {"claude-hooks"}
                         and all(prepared["Consumers"][key] == value for key, value in retained.items()),
-                        "runtime_replacement_preparation_changed_existing_consumers")
-        setup("install", executable=replacement)
+                        "runtime_replacement_cursor_writer_changed_existing_consumers")
+        product.installed(root / "control", profile)
+        cursor("update", replacement)
         current, installed = product.installed(root / "control", profile), ledger()
         executable = current["runtime"]["executable"]
         old_revision = old["runtime"]["loaded_revision"]
@@ -65,11 +80,18 @@ def exercise(root, profile, args, env, sink, *, fixture, product, command, setup
         product.require({key: value for key, value in old_revision.items() if key != "primary_sha256"}
                         == {key: value for key, value in new_revision.items() if key != "primary_sha256"},
                         "runtime_replacement_changed_package_or_binding_identity")
-        product.require(installed["Consumers"] == retained and not installed.get("PendingMutation")
+        product.require(installed["Consumers"] == prepared["Consumers"] and not installed.get("PendingMutation")
                         and policy.read_bytes() == saved_policy,
-                        "runtime_replacement_handoff_changed_siblings_policy_or_preparation")
+                        "runtime_replacement_cursor_update_changed_siblings_or_policy")
         product.require(all(path.is_file() and product.sha(path) == digest for path, digest in before_foreign.items()),
                         "runtime_replacement_changed_foreign_profile_bytes")
+        cursor_consumers = {key: installed["Consumers"][key] for key in cursor_keys}
+
+        def cursor_files():
+            return {str(path.relative_to(root / ".cursor")): product.sha(path)
+                    for path in (root / ".cursor").rglob("*") if path.is_file()}
+
+        saved_cursor_files = cursor_files()
         live.send({"id": "TEST-runtime-A-stale", "type": "prompt", "message": "TEST say done"})
         while live.next().get("type") != "agent_settled":
             pass
@@ -81,18 +103,34 @@ def exercise(root, profile, args, env, sink, *, fixture, product, command, setup
         fresh = native("success")
         product.require(len(sink.rows) == before_delivery + 1 and fresh["webhook"] == "task_complete",
                         "runtime_replacement_fresh_pi_did_not_deliver_once")
-        writer(replacement, args.replacement_runtime_stage, retainer, remove=True)
-        product.require(ledger()["Consumers"] == baseline and policy.read_bytes() == saved_policy,
-                        "runtime_replacement_retainer_retirement_changed_existing_authority")
-        product.asset_receipts(root / "control", root / "runtime", args.assets_root)
-        return {"case": "runtime-byte-replacement", "old_primary_sha256": old_hash, "new_primary_sha256": new_hash,
+        result = {"case": "cursor-only-shared-runtime-replacement", "old_primary_sha256": old_hash, "new_primary_sha256": new_hash,
                 "package_projection_unchanged": True, "derived_and_owned_executable_match": True,
                 "old_native_counts": old_counts, "old_provider_requests": len(provider.requests),
                 "old_webhook_count": 0, "old_child_collected": True,
                 "fresh_native_counts": fresh["native_counts"], "fresh_provider_requests": fresh["provider_requests"],
                 "fresh_webhook_count": len(sink.rows) - before_delivery, "fresh_child_collected": fresh["child_collected"],
                 "foreign_bytes_preserved": True, "sibling_consumers_preserved": True, "policy_bytes_preserved": True,
-                "preparation_retired": True, "test_retainer_retired": True}
+                "pi_setup_repeated": False, "real_cursor_sdk_lifecycle": True,
+                "cursor_native_qualified": False, "cursor_and_writer_retired": False,
+                "cursor_preserved_during_pi_lifecycle": False}
+
+        def retire_cursor():
+            # The caller first exercises Pi-only update/repair/removal while
+            # Cursor stays installed. Retire only Cursor and its byte writer.
+            consumers = ledger()["Consumers"]
+            product.require(all(consumers.get(key) == value for key, value in cursor_consumers.items())
+                            and cursor_files() == saved_cursor_files,
+                            "pi_only_lifecycle_changed_retained_cursor_binding_or_files")
+            result["cursor_preserved_during_pi_lifecycle"] = True
+            expected = {key: value for key, value in consumers.items()
+                        if key not in cursor_keys and key != "claude-hooks"}
+            cursor("uninstall", replacement)
+            writer(replacement, args.replacement_runtime_stage, "claude-hooks", remove=True)
+            product.require(ledger()["Consumers"] == expected,
+                            "runtime_replacement_cursor_retirement_changed_existing_authority")
+            result["cursor_and_writer_retired"] = True
+
+        return result, retire_cursor
     finally:
         if live:
             live.close()

@@ -237,6 +237,7 @@ func buildDefaultConfig(pluginRoot string) *Config {
 func defaultStatuses(pluginRoot string) map[string]StatusInfo {
 	return map[string]StatusInfo{
 		"agent_stopping": {Title: "Copilot in VS Code"},
+		"agent_error":    {Title: "🔴 Agent error", Sound: filepath.Join(pluginRoot, "sounds", "error.mp3")},
 		"task_complete": {
 			Title: "✅ Completed",
 			Sound: filepath.Join(pluginRoot, "sounds", "task-complete.mp3"),
@@ -548,6 +549,7 @@ func (c *Config) Validate() error {
 		"session_limit_reached": true,
 		"api_error":             true,
 		"api_error_overloaded":  true,
+		"agent_error":           true,
 		"permission_request":    true,
 	}
 	for i, f := range c.Notifications.SuppressFilters {

@@ -68,6 +68,14 @@ func qoderKeys(ev Event) eventKeys {
 	switch p := ev.Payload.(type) {
 	case StopPayload:
 		lockFields = append(lockFields, p.AssistantMessage)
+	case StopFailurePayload:
+		// Distinguish consecutive failure classes from a completed turn
+		// without hashing raw error text or transient diagnostic secrets.
+		if p.RateLimited {
+			lockFields = append(lockFields, "stop_failure", "rate_limit")
+		} else {
+			lockFields = append(lockFields, "stop_failure", "other")
+		}
 	case SubagentStopPayload:
 		lockFields = append(lockFields, "subagent", p.Stop.AssistantMessage)
 	case PermissionRequestPayload:

@@ -25,6 +25,7 @@ const (
 	EventPreToolUse        EventKind = "pre_tool_use"
 	EventNotification      EventKind = "notification"
 	EventStop              EventKind = "stop"
+	EventStopFailure       EventKind = "stop_failure"
 	EventSubagentStop      EventKind = "subagent_stop"
 	EventPermissionRequest EventKind = "permission_request"
 	EventTeammateIdle      EventKind = "teammate_idle"
@@ -78,6 +79,13 @@ type StopPayload struct {
 	Continuation     bool
 }
 
+// StopFailurePayload is a Qoder-only unexpected agent failure.
+// Only the allowlisted class enters notification policy. Host error details,
+// prompt contents and native transcript paths stay out of the typed payload.
+type StopFailurePayload struct {
+	RateLimited bool
+}
+
 // SubagentStopPayload is a subagent turn completion.
 type SubagentStopPayload struct {
 	Stop  StopPayload
@@ -110,6 +118,7 @@ type TeammateIdlePayload struct {
 }
 
 func (StopPayload) eventKind() EventKind              { return EventStop }
+func (StopFailurePayload) eventKind() EventKind       { return EventStopFailure }
 func (SubagentStopPayload) eventKind() EventKind      { return EventSubagentStop }
 func (PermissionRequestPayload) eventKind() EventKind { return EventPermissionRequest }
 func (PreToolUsePayload) eventKind() EventKind        { return EventPreToolUse }
@@ -135,6 +144,9 @@ func ValidateEvent(e Event) error {
 	}
 	if e.Session.SessionID == "" {
 		return fmt.Errorf("event is missing a session id")
+	}
+	if _, ok := e.Payload.(StopFailurePayload); ok && e.Product != ProductQoder {
+		return fmt.Errorf("stop failure notification only supported for Qoder")
 	}
 	if p, ok := e.Payload.(SubagentStopPayload); ok {
 		if e.Product == ProductCodex && (p.Agent == nil || p.Agent.ID == "") {

@@ -264,7 +264,11 @@ func TestCursorMissingProofHasNoEffects(t *testing.T) {
 	}
 	sink := &cursorSink{}
 	p := NewCursorDesktop(f.g, cursorevent.Binding{}, sink)
-	p.Deliver(cursorContext(t), notification.Request{Navigation: notification.None, Silent: true, Policy: notification.PolicySnapshot{Valid: true, ExplicitEnabled: true, DesktopEnabled: true}})
+	for _, sound := range []bool{false, true} {
+		p.Deliver(cursorContext(t), notification.InformationalDesktopRequest(
+			notification.Content{Title: "Cursor CLI", Body: "Cursor CLI is stopping", Category: "info"},
+			"TEST-native-correlation", notification.Deadline{}, sound))
+	}
 	if sink.calls != 0 || !bytes.Equal(before, cursorRead(t, filepath.Join(f.b.ControlRoot, "agent-notifications.json"))) {
 		t.Fatal("unproved effect or policy write")
 	}
