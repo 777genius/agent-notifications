@@ -7,10 +7,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -89,10 +92,12 @@ func TestPortableConcurrentStartup(t *testing.T) {
 	}
 }
 
-func probePortableStartup(ctx context.Context, executable string, b portable.Binding, name string) error {
+func probePortableStartup(ctx context.Context, executable string, b portable.Binding, name string) (resultErr error) {
 	cmd := exec.CommandContext(ctx, executable, "portable-launch", "--data-root", b.DataRoot, "--locator", name)
 	cmd.Dir = b.ScopeRoot
 	cmd.Env = []string{"PLUGIN_DATA=" + b.DataRoot}
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.WaitDelay = time.Second
 	input, err := cmd.StdinPipe()
 	if err != nil {
 		return err
@@ -104,12 +109,33 @@ func probePortableStartup(ctx context.Context, executable string, b portable.Bin
 	}
 	var diagnostic bytes.Buffer
 	cmd.Stderr = &diagnostic
+	// A legacy primary can inherit both output pipes. Killing only its launcher
+	// leaves ReadBytes blocked, so cancel the owned group and close our pipe ends.
+	terminate := func() error {
+		err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		_ = input.Close()
+		_ = output.Close()
+		if errors.Is(err, syscall.ESRCH) {
+			return os.ErrProcessDone
+		}
+		return err
+	}
+	cmd.Cancel = terminate
 	if err := cmd.Start(); err != nil {
 		_ = input.Close()
 		_ = output.Close()
 		return err
 	}
-	defer func() { _ = input.Close(); _ = cmd.Process.Signal(syscall.SIGTERM); _ = cmd.Wait() }()
+	defer func() {
+		_ = terminate()
+		_ = cmd.Wait() // Sole Wait owner; joins the stderr writer before reading it.
+		if resultErr != nil {
+			if ctx.Err() != nil {
+				resultErr = fmt.Errorf("%w: %v", ctx.Err(), resultErr)
+			}
+			resultErr = fmt.Errorf("%w; stderr=%s", resultErr, diagnostic.String())
+		}
+	}()
 	reader := bufio.NewReader(output)
 	exchange := func(id int, method, params string) (json.RawMessage, error) {
 		if _, err := fmt.Fprintf(input, "{\"jsonrpc\":\"2.0\",\"id\":%d,\"method\":%q,\"params\":%s}\n", id, method, params); err != nil {
@@ -117,9 +143,7 @@ func probePortableStartup(ctx context.Context, executable string, b portable.Bin
 		}
 		line, err := reader.ReadBytes('\n')
 		if err != nil {
-			// Reap before reading stderr, which exec writes concurrently.
-			_ = cmd.Wait()
-			return nil, fmt.Errorf("%s: %w; stderr=%s", method, err, diagnostic.String())
+			return nil, fmt.Errorf("%s: %w", method, err)
 		}
 		var response struct {
 			ID     int             `json:"id"`
@@ -166,4 +190,99 @@ func probePortableStartup(ctx context.Context, executable string, b portable.Bin
 		return fmt.Errorf("invalid read-only status: %s", raw)
 	}
 	return nil
+}
+
+func TestPortableStartupCancellationClosesInheritedPipes(t *testing.T) {
+	root := t.TempDir()
+	executable := filepath.Join(root, "TEST-silent-launcher")
+	// The silent child inherits stdout AND stderr. CommandContext's default
+	// launcher-only kill cannot unblock the probe's synchronous protocol read.
+	script := "#!/bin/sh\n/bin/sleep 60 &\nchild=$!\nprintf '%s %s\\n' \"$$\" \"$child\" > \"$PLUGIN_DATA/ready\"\nwait \"$child\"\n"
+	if err := os.WriteFile(executable, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- probePortableStartup(ctx, executable, portable.Binding{ScopeRoot: root, DataRoot: root}, "TEST-locator")
+	}()
+	var launcher, child int
+	var childGroup int
+	joined := false
+	defer func() {
+		cancel()
+		// These PIDs come solely from the fresh owned script. Before Wait has
+		// returned, clean its group or its one child even when testing old code.
+		if !joined && launcher > 0 {
+			if group, err := syscall.Getpgid(launcher); err == nil && group == launcher {
+				_ = syscall.Kill(-launcher, syscall.SIGKILL)
+			}
+		}
+		if child > 0 && childGroup > 0 {
+			// Also clean a survivor if a regression closes pipes without killing
+			// descendants. Verify its recorded group and exact fixture command.
+			group, err := syscall.Getpgid(child)
+			command, inspectErr := exec.Command("ps", "-p", strconv.Itoa(child), "-o", "command=").Output()
+			if err == nil && group == childGroup && inspectErr == nil && strings.TrimSpace(string(command)) == "/bin/sleep 60" {
+				_ = syscall.Kill(child, syscall.SIGKILL)
+			}
+		}
+		if !joined {
+			select {
+			case err := <-done:
+				if err == nil {
+					t.Error("canceled TEST startup probe unexpectedly succeeded")
+				}
+			case <-time.After(2 * time.Second):
+				t.Error("TEST startup probe did not join after fixture cleanup")
+			}
+		}
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		raw, err := os.ReadFile(filepath.Join(root, "ready"))
+		if err == nil {
+			if _, err := fmt.Sscanf(string(raw), "%d %d", &launcher, &child); err == nil && launcher > 0 && child > 0 {
+				break
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if launcher <= 0 || child <= 0 {
+		t.Fatal("TEST silent child did not publish readiness")
+	}
+	childGroup, err := syscall.Getpgid(child)
+	if err != nil {
+		t.Fatalf("inspect ready TEST child group: %v", err)
+	}
+	cancel()
+	select {
+	case err := <-done:
+		joined = true
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("canceled startup returned %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("startup probe hung on a silent child's inherited pipes after cancellation")
+	}
+	for _, pid := range []int{launcher, child} {
+		deadline := time.Now().Add(time.Second)
+		for {
+			out, err := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "stat=").Output()
+			if exit, ok := err.(*exec.ExitError); ok && exit.ExitCode() == 1 {
+				break
+			}
+			if err != nil {
+				t.Fatalf("inspect TEST process: %v", err)
+			}
+			if strings.HasPrefix(strings.TrimSpace(string(out)), "Z") {
+				break // An unreaped orphan has exited and holds no inherited pipes.
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("owned TEST process %d remained running after cancellation", pid)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
 }
