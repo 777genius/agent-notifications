@@ -56,10 +56,17 @@ function machine(bytes: Buffer): number {
   const p = bytes.readUInt32LE(60); assert(p+6 <= bytes.length && bytes.subarray(p,p+4).equals(Buffer.from([80,69,0,0])));
   return bytes.readUInt16LE(p+4);
 }
-async function run(label: string, exe: string, args: string[], input='', timeout=150000): Promise<string> {
+async function run(
+  label: string, exe: string, args: string[], input='', timeout=150000, beforeEffect?: () => void,
+): Promise<string> {
   const id = (++count).toString().padStart(2,'0');
+  beforeEffect?.();
   await persist(id+'-'+label+'.intent.json',{...tuple,exe,args,inputSHA:sha(Buffer.from(input)),timeout});
+  // The arm receipt is not a lifetime lease. Recheck after the await and at
+  // the last synchronous boundary before starting each possibly effectful child.
+  beforeEffect?.();
   return await new Promise<string>((resolve,reject) => {
+    beforeEffect?.();
     const child = spawn(exe,args,{env:childEnv,stdio:['pipe','pipe','pipe'],windowsHide:true});
     if (label === 'click') {
       assert.equal(clickProcess,undefined,'single click observer process');
@@ -94,14 +101,16 @@ async function actor(mode: string): Promise<void> {
   await run(mode,observer,[mode,root,tuple.nonce,source],'',mode === 'click' ? 250000 : 140000);
 }
 async function ledger(): Promise<Ledger> { return JSON.parse((await boundedRead(path.join(control,'ownership.json'))).toString()) as Ledger; }
-async function setup(operation: 'enable'|'disable', route=false, allowCallerAsserted=true): Promise<void> {
+async function setup(
+  operation: 'enable'|'disable', route=false, allowCallerAsserted=true, beforeEffect?: () => void,
+): Promise<void> {
   const current = await ledger();
   const args = ['setup-notifications',operation,'--control-root',control,'--runtime-root',runtime,
     '--expected-generation',String(current.Generation),'--json'];
   // Revocation accepts no --global-config; it is independently policy-only.
   if (operation === 'enable') args.push('--global-config',global);
   if (route) args.push('--navigation','desktop_thread','--allow-unknown-caller','false','--allow-caller-asserted',String(allowCallerAsserted));
-  await run(route ? 'setup-route' : operation === 'enable' ? 'preserved-route-readiness-and-policy-write' : 'disable',original,args);
+  await run(route ? 'setup-route' : operation === 'enable' ? 'preserved-route-readiness-and-policy-write' : 'disable',original,args,'',150000,beforeEffect);
 }
 async function acquire(): Promise<void> {
   await persist('acquisition.json',{...tuple,...await acquireOfficialArchive(root,tuple)});
@@ -115,10 +124,12 @@ async function routeA(): Promise<{binding: {SnapshotPath: string; SHA256: string
   assert.equal(snapshot[8],'OpenAI.Codex_2p2nqsd0c76g0');
   return {binding,snapshot,raw};
 }
-async function removeProducer(): Promise<void> {
-  await setup('disable');
+async function removeProducer(beforeEffect?: () => void): Promise<void> {
+  beforeEffect?.();
+  await setup('disable',false,true,beforeEffect);
+  beforeEffect?.();
   await run('remove-producer',original,['internal-install-runtime','--remove','--target',bin,
-    '--entry',entry,'--control-root',control,'--consumer','claude-hooks']);
+    '--entry',entry,'--control-root',control,'--consumer','claude-hooks'],'',150000,beforeEffect);
   // This literal synthetic config is owned by this controller, never a project/client config.
   await unlink(global); removed = true;
   await persist('cleanup.json',{...tuple,producer_removed:true,config_removed:true,retained_until_job_teardown:true,
@@ -213,9 +224,10 @@ async function main(): Promise<void> {
   }
   requireLiveObserver();
   const receiptRaw = await run('one-show',original,['notify','--context-file',contextPath],
-    JSON.stringify({title,body,category:'info',request_id:'TEST-'+tuple.nonce,navigation:'required'}));
+    JSON.stringify({title,body,category:'info',request_id:'TEST-'+tuple.nonce,navigation:'required'}),150000,requireLiveObserver);
   const receipt = JSON.parse(receiptRaw) as {status: string; replayed: boolean; request_id: string};
   assert.equal(receipt.status,'submitted'); assert.equal(receipt.replayed,false); assert.equal(receipt.request_id,'TEST-'+tuple.nonce);
+  requireLiveObserver();
   await persist('sender.json',{...tuple,collected:true,code:0,receipt});
   // An atomic directory-creation marker follows the completed fsync+close.
   // The native reader never treats the mere existence of a JSON leaf as ready.
@@ -232,10 +244,10 @@ async function main(): Promise<void> {
   if (scenario === 'retained') {
     // One explicit route policy change generates B; identical setup reuses A.
     requireLiveObserver();
-    await setup('enable',true,false); const b = await ledger(); assert.equal(b.WindowsRetained?.length,2);
+    await setup('enable',true,false,requireLiveObserver); const b = await ledger(); assert.equal(b.WindowsRetained?.length,2);
     assert(b.WindowsRetained![1]!.SnapshotPath !== a.binding.SnapshotPath);
     requireLiveObserver();
-    await removeProducer(); assert((await boundedRead(a.binding.SnapshotPath)).equals(a.raw));
+    await removeProducer(requireLiveObserver); assert((await boundedRead(a.binding.SnapshotPath)).equals(a.raw));
   }
   // Publish A only after verifying sender and retained prerequisites.
   // The already-armed watcher may now attempt one genuine Shell Invoke.
