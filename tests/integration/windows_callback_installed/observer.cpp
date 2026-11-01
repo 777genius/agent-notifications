@@ -61,6 +61,9 @@ static std::atomic<const char*> clickStep{"entry"};
 static std::atomic<uint32_t> clickRoots{0}, clickNodes{0}, clickTitles{0}, clickBodies{0}, clickNameLength{0};
 // Failure-only census diagnostics: hints never extend the trusted Shell image list.
 static std::atomic<uint32_t> clickAllowedRoots{0}, clickExcludedRoots{0}, clickExcludedShellNames{0}, clickPreCenterAllowedRoots{0};
+// These counters are read-only diagnostics, never inputs to selection or custody.
+static std::atomic<uint32_t> clickPreCenterNodes{0}, clickTitleFragments{0}, clickBodyFragments{0};
+static std::atomic<uint32_t> clickStationObserved{0}, clickStationVisible{0}, clickForegroundBefore{0}, clickForegroundAfter{0}, clickForegroundChanged{0};
 static void clickAt(const char* step) { clickStep.store(step,std::memory_order_relaxed); }
 // MSVC path::root_path treats the device introducer as root (\\?\),
 // not the DOS volume. Decompose only the already validated physical drive
@@ -851,6 +854,7 @@ static Selection census(IUIAutomation* automation, IUIAutomationTreeWalker* walk
  clickRoots.store(0,std::memory_order_relaxed); clickNodes.store(0,std::memory_order_relaxed);
  clickTitles.store(0,std::memory_order_relaxed); clickBodies.store(0,std::memory_order_relaxed);
  clickNameLength.store(0,std::memory_order_relaxed);
+ clickTitleFragments.store(0,std::memory_order_relaxed); clickBodyFragments.store(0,std::memory_order_relaxed);
  clickAllowedRoots.store(0,std::memory_order_relaxed);
  clickExcludedRoots.store(0,std::memory_order_relaxed);
  clickExcludedShellNames.store(0,std::memory_order_relaxed);
@@ -878,6 +882,9 @@ static Selection census(IUIAutomation* automation, IUIAutomationTreeWalker* walk
     clickAt("uia_node_depth_count_limit"); budget(); owner->live(); ++nodes; clickNodes.store(nodes,std::memory_order_relaxed); require(nodes <= 2048 && node.depth <= 24);
     clickAt("uia_node_provider_identity"); int provider = 0; winrt::check_hresult(node.element->get_CurrentProcessId(&provider)); require(provider == pid);
     clickAt("uia_node_name"); const auto literal = name(node.element.Get());
+    // Combined accessible names are diagnostic only. Selection stays exact.
+    if (literal.find(title)!=std::wstring::npos) clickTitleFragments.fetch_add(1,std::memory_order_relaxed);
+    if (literal.find(body)!=std::wstring::npos) clickBodyFragments.fetch_add(1,std::memory_order_relaxed);
     if (literal == body) { clickAt("uia_body_uniqueness"); ++bodies; clickBodies.store(bodies,std::memory_order_relaxed); require(!found.body); found.body = node.element; }
     if (literal == title) {
      clickAt("uia_title_uniqueness"); ++titles; clickTitles.store(titles,std::memory_order_relaxed); require(titles == 1); found.title = node.element; found.pid = DWORD(pid);
@@ -1038,6 +1045,14 @@ static void publishClickRefusal(std::exception_ptr cause) noexcept {
   num(report,L"uia_excluded_roots",clickExcludedRoots.load(std::memory_order_relaxed));
   num(report,L"uia_excluded_shell_names",clickExcludedShellNames.load(std::memory_order_relaxed));
   num(report,L"uia_pre_center_allowed_roots",clickPreCenterAllowedRoots.load(std::memory_order_relaxed));
+  num(report,L"uia_pre_center_nodes",clickPreCenterNodes.load(std::memory_order_relaxed));
+  num(report,L"uia_title_fragment_names",clickTitleFragments.load(std::memory_order_relaxed));
+  num(report,L"uia_body_fragment_names",clickBodyFragments.load(std::memory_order_relaxed));
+  num(report,L"station_flags_observed",clickStationObserved.load(std::memory_order_relaxed));
+  num(report,L"station_visible",clickStationVisible.load(std::memory_order_relaxed));
+  num(report,L"foreground_before",clickForegroundBefore.load(std::memory_order_relaxed));
+  num(report,L"foreground_after",clickForegroundAfter.load(std::memory_order_relaxed));
+  num(report,L"foreground_changed",clickForegroundChanged.load(std::memory_order_relaxed));
   if (cause) {
    try { std::rethrow_exception(cause); }
    catch (const winrt::hresult_error& error) {
@@ -1075,6 +1090,7 @@ static void click() {
   // This is observation only; both paths still require the same unique row,
   // its current Invoke pattern and independent cold receiver proof.
   Selection selected;
+  HWND foregroundBefore = nullptr;
   try {
    clickAt("uia_probe_visible_banner");
    const auto bannerUntil=std::min(end,GetTickCount64()+1500);
@@ -1084,6 +1100,7 @@ static void click() {
     Sleep(50);
    }
    clickPreCenterAllowedRoots.store(clickAllowedRoots.load(std::memory_order_relaxed),std::memory_order_relaxed);
+   clickPreCenterNodes.store(clickNodes.load(std::memory_order_relaxed),std::memory_order_relaxed);
    auto center=fact();
    put(center,L"qualification","input_only_not_callback");
    if (selected.row) {
@@ -1100,6 +1117,14 @@ static void click() {
             !(GetAsyncKeyState(VK_CONTROL)&0x8000) &&
             !(GetAsyncKeyState(VK_MENU)&0x8000));
     put(center,L"mode","windows_notification_center_shortcut");
+    // Read-only desktop visibility hints; failure never authorizes a click.
+    USEROBJECTFLAGS stationFlags{}; DWORD stationBytes=0;
+    const bool stationKnown=GetUserObjectInformationW(GetProcessWindowStation(),UOI_FLAGS,
+      &stationFlags,sizeof(stationFlags),&stationBytes)!=FALSE;
+    clickStationObserved.store(stationKnown?1:0,std::memory_order_relaxed);
+    clickStationVisible.store(stationKnown && (stationFlags.dwFlags&WSF_VISIBLE)?1:0,std::memory_order_relaxed);
+    foregroundBefore=GetForegroundWindow();
+    clickForegroundBefore.store(foregroundBefore?1:0,std::memory_order_relaxed);
     publish(L"notification-center.intent.json",center);
     INPUT keys[4]{};
     for(auto& key:keys)key.type=INPUT_KEYBOARD;
@@ -1119,6 +1144,9 @@ static void click() {
    // history must never suppress the original UIA exception or its counters.
    const auto failure=std::current_exception();
    const auto failedAt=clickStep.load(std::memory_order_relaxed);
+   const HWND foregroundAfter=GetForegroundWindow();
+   clickForegroundAfter.store(foregroundAfter?1:0,std::memory_order_relaxed);
+   clickForegroundChanged.store(foregroundAfter!=foregroundBefore?1:0,std::memory_order_relaxed);
    publishClickRefusal(failure);
    end=GetTickCount64()+3000; // Separate bounded diagnostic window.
    try { historyDiagnostic(route); } catch (...) {}
