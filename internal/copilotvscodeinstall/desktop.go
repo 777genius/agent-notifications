@@ -63,7 +63,12 @@ func NewDesktop(g Gate, b copilotvscodeevent.Binding, spool string, backend noti
 type localDesktop struct{ backend notification.DeliveryPort }
 
 func (p localDesktop) Deliver(ctx context.Context, r notification.Request) notification.Receipt {
-	if p.backend == nil || r.Navigation != notification.None || !r.Silent || !r.Policy.Valid ||
+	// An explicitly opted-in OS cue is permitted without giving a local Stop
+	// observation authority to navigate. Silent requests may still suppress
+	// sound even when the initial policy allowed it (e.g. mute/DND).
+	if p.backend == nil || r.Navigation != notification.None ||
+		r.Policy.ClickToFocus || r.Target != (notification.DesktopTarget{}) ||
+		(!r.Silent && !r.Policy.SoundEnabled) || !r.Policy.Valid ||
 		!r.Policy.ExplicitEnabled || !r.Policy.DesktopEnabled {
 		return notification.Receipt{CorrelationID: r.CorrelationID, Status: "rejected", Reason: "local_route_unavailable"}
 	}
