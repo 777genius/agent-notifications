@@ -7,7 +7,7 @@ permissions:
   contents: read
 jobs:
   shell-overlay:
-    if: ${{ github.repository == '777genius/agent-notifications' && github.run_attempt == 1 && github.event.head_commit.message == 'probe-windows-oobe-shell-v3' }}
+    if: ${{ github.repository == '777genius/agent-notifications' && github.run_attempt == 1 && github.event.head_commit.message == 'probe-windows-oobe-shell-v4' }}
     runs-on: windows-11-vs2026-arm
     timeout-minutes: 8
     steps:
@@ -27,6 +27,7 @@ jobs:
             [DllImport("user32.dll", SetLastError=true)]
             public static extern uint SendInput(uint n, [In] Input[] data, int size);
             [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+            [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hwnd, int command);
             [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
             public static uint ForegroundPid() {
               uint pid; GetWindowThreadProcessId(GetForegroundWindow(), out pid); return pid;
@@ -79,6 +80,14 @@ jobs:
           $foregroundId = [TestOnlyShellProbe]::ForegroundPid()
           $stopped = 0
           $refused = 0
+          # Proven image-build mitigation on a disposable CI image, not operator OS:
+          # https://github.com/actions/runner-images/pull/14673
+          $privacy = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\OOBE'
+          New-Item -Path $privacy -Force | Out-Null
+          Set-ItemProperty -Path $privacy -Name DisablePrivacyExperience -Type DWord -Value 1
+          $engagement = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\UserProfileEngagement'
+          New-Item -Path $engagement -Force | Out-Null
+          Set-ItemProperty -Path $engagement -Name ScoobeSystemSettingEnabled -Type DWord -Value 0
           # The GitHub-hosted VM is disposable. Never touch any non-OOBE app,
           # product installation, notification, foreign profile or consent.
           foreach ($name in @('UserOOBEBroker','WWAHost')) {
@@ -93,6 +102,17 @@ jobs:
               }
               Stop-Process -Id $p.Id -Force -ErrorAction Stop
               $stopped++
+            }
+          }
+          # Minimize only the known Microsoft first-logon System Properties dialog;
+          # do not sweep arbitrary windows or touch the product/UIA authority.
+          $systemDialogMinimized = 0
+          foreach ($p in @(Get-Process -Name SystemPropertiesPerformance -ErrorAction SilentlyContinue)) {
+            if ($p.SessionId -ne $session -or $p.MainWindowHandle -eq [IntPtr]::Zero) { continue }
+            try { $sysPath = [string]$p.Path } catch { $sysPath = '' }
+            if ($sysPath.StartsWith($env:WINDIR + '\', [StringComparison]::OrdinalIgnoreCase)) {
+              [void][TestOnlyShellProbe]::ShowWindow($p.MainWindowHandle,6)
+              $systemDialogMinimized++
             }
           }
           # Dismiss any first-logon Start overlay, without terminating the shell.
@@ -123,6 +143,8 @@ jobs:
             overlayProcessCountsBefore = $before
             foregroundBefore = $foregroundBefore
             oobeBrokerFound = $brokerFound
+            privacyPolicyConfiguredInDisposableVm = $true
+            systemDialogMinimized = $systemDialogMinimized
             selectedOobeProcessesStopped = $stopped
             unexpectedOobePathsRefused = $refused
             overlayProcessCountsAfter = $after
