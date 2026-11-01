@@ -502,14 +502,22 @@ jobs:
               public_binary = dist / ('claude-notifications-' + target + ('.exe' if target.startswith('windows') else ''))
               with safe_zip(dist / ('agent-notify-portable-' + target + '.zip'), 96 * 1024 * 1024) as packed:
                   expected_files = {'plugin.json', 'mcp.json', 'THIRD_PARTY_NOTICES.txt',
-                                    'skills/agent-notifications/SKILL.md', 'bin/' + binary_name}
-                  expected_dirs = {'bin/', 'skills/', 'skills/agent-notifications/'}
+                                    'skills/agent-notifications/SKILL.md', 'bin/' + binary_name,
+                                    'com.universal-agent-plugins.pi/index.ts'}
+                  expected_dirs = {'bin/', 'skills/', 'skills/agent-notifications/',
+                                   'com.universal-agent-plugins.pi/'}
                   need({item.filename for item in packed.infolist() if not item.is_dir()} == expected_files
                        and {item.filename for item in packed.infolist() if item.is_dir()} <= expected_dirs,
                        'exact_portable_layout_required')
                   plugin = json.loads(packed.read('plugin.json'))
                   need(plugin == {'$schema': 'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json',
-                                  'name': 'agent-notify', 'version': tag[1:]}, 'portable_version_identity_required')
+                                  'name': 'agent-notify', 'version': tag[1:],
+                                  'extensions': {'com.universal-agent-plugins.pi': {
+                                      'version': 1, 'source': 'com.universal-agent-plugins.pi'}}},
+                       'portable_version_identity_required')
+                  need(packed.read('com.universal-agent-plugins.pi/index.ts') ==
+                       (source / 'portable-package/com.universal-agent-plugins.pi/index.ts').read_bytes(),
+                       'portable_pi_extension_source_required')
                   mcp = json.loads(packed.read('mcp.json'))
                   need(mcp == {'$schema': 'https://agent-plugins.org/schemas/1.0.0/mcp.schema.json',
                                'mcpServers': {'agent-notifications': {'type': 'stdio', 'command': './bin/' + binary_name,
