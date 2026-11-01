@@ -129,7 +129,64 @@ func TestPiCommonLifecycleAndAuthority(t *testing.T) {
 	if err := piauthority.RefreshInstalled(testCtx(t), b.ControlRoot); err != nil || readRuntime() != refreshed {
 		t.Fatalf("unchanged runtime discovery refresh was not idempotent: %v", err)
 	}
-	facts = refreshed
+	// A damaged second Pi registration must not strand this healthy binding.
+	// It has a genuine committed consumer but no UAP package/data receipt.
+	broken := installed
+	broken.BindingID = "000-broken-pi"
+	broken.InstallationID = "00000000-0000-4000-8000-000000000542"
+	broken.DataRoot = filepath.Join(root, "broken-pi-data")
+	broken.ScopeRoot = filepath.Join(root, "broken-pi-profile")
+	for _, dir := range []string{broken.DataRoot, broken.ScopeRoot} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	brokenKey, brokenConsumer, _, err := broken.Registration()
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeBroken, err := installruntime.ReadInstalledSnapshot(b.ControlRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := installruntime.Commit(testCtx(t), installruntime.Request{
+		ControlRoot: b.ControlRoot, RuntimeRoot: b.RuntimeRoot, Owner: b.Owner,
+		ConsumerID: brokenKey, Consumer: brokenConsumer, ExpectedGeneration: &beforeBroken.Ledger.Generation,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	beforePrimary, err = installruntime.Fingerprint(primary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := installruntime.Commit(testCtx(t), installruntime.Request{
+		ControlRoot: b.ControlRoot, RuntimeRoot: b.RuntimeRoot, Owner: b.Owner,
+		ConsumerID: "existing", RefreshOnly: true,
+		Files: []installruntime.File{{Path: primary, Before: beforePrimary, Data: []byte("TEST second cursor upgrade"), Mode: 0700}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := piauthority.RefreshInstalled(testCtx(t), b.ControlRoot); err == nil {
+		t.Fatal("damaged Pi binding error was hidden")
+	}
+	currentHealthy := readRuntime()
+	if currentHealthy.PrimarySHA256 == refreshed.PrimarySHA256 {
+		t.Fatal("damaged Pi binding prevented a healthy sibling refresh")
+	}
+	if _, _, _, _, err := piauthority.Open(testCtx(t), selector, currentHealthy.LoadedRevision); err != nil {
+		t.Fatalf("healthy Pi binding denied after another binding failed: %v", err)
+	}
+	beforeRemoval, err := installruntime.ReadInstalledSnapshot(b.ControlRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := installruntime.Commit(testCtx(t), installruntime.Request{
+		ControlRoot: b.ControlRoot, RuntimeRoot: b.RuntimeRoot, Owner: b.Owner,
+		ConsumerID: brokenKey, RemoveConsumer: true, ExpectedGeneration: &beforeRemoval.Ledger.Generation,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	facts = currentHealthy
 	// A changed canonical source seals a new projection; the live old observer
 	// cannot borrow current receipts by rereading mutable derived metadata.
 	path := filepath.Join(pkg, "com.universal-agent-plugins.pi", "index.ts")
