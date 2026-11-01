@@ -3,6 +3,7 @@ package piauthority
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"sort"
@@ -51,10 +52,13 @@ func RefreshInstalled(ctx context.Context, controlRoot string) error {
 		bindings = append(bindings, b)
 	}
 	sort.Slice(bindings, func(i, j int) bool { return bindings[i].BindingID < bindings[j].BindingID })
+	// One invalid Pi installation must not strand other healthy profiles after
+	// the shared executable has already been committed by a sibling product.
+	var failures []error
 	for _, b := range bindings {
 		if err := Publish(ctx, b, stateFile(b)); err != nil {
-			return fmt.Errorf("refresh installed Pi binding %s: %w", b.BindingID, err)
+			failures = append(failures, fmt.Errorf("refresh installed Pi binding %s: %w", b.BindingID, err))
 		}
 	}
-	return nil
+	return errors.Join(failures...)
 }
