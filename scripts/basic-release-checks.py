@@ -44,8 +44,28 @@ def checks(repository, source):
 
 
 def select_run(repository, workflow, runs):
+    # Release receipts must come from main pushes: PR merge refs may execute
+    # a workflow definition that differs from the candidate source tree.
     return native.latest_source_run(repository, workflow,
-                                    [run for run in runs if run.get('path') == '.github/workflows/' + workflow])
+                                    [run for run in runs
+                                     if run.get('path') == '.github/workflows/' + workflow
+                                     and run.get('event') == 'push' and run.get('head_branch') == 'main'
+                                     and (run.get('head_repository') or {}).get('full_name') == repository])
+
+
+def foreign_pull_check(check, runs, repository):
+    # A fork PR can reuse a candidate SHA but cannot qualify or veto main.
+    # Ignore only the Actions check in its uniquely identified foreign suite.
+    if check['app_slug'] != 'github-actions':
+        return None
+    origins = [run for run in runs if run.get('check_suite_id') == check['suite_id']]
+    if len(origins) != 1:
+        return None
+    run = origins[0]
+    owner = (run.get('head_repository') or {}).get('full_name')
+    if run.get('event') != 'pull_request' or not owner or owner == repository:
+        return None
+    return {'check_id': check['id'], 'source_run_id': run['id'], 'foreign_head_repository': owner}
 
 
 def identity(run):
@@ -122,6 +142,50 @@ def superseded_conditional(check, latest, runs, selected, repository, source, ol
     return {**proof, 'replacement_check_id': latest['id'], 'replacement_check_conclusion': 'skipped'}
 
 
+def superseded_successful_retry(older, latest, runs, repository, source, job_cache):
+    # A green same-named check cannot retire a failure from another workflow,
+    # an unfinished job, or an action_required/stale/startup_failure result.
+    if (older['status'] != 'completed' or older['conclusion'] not in ('failure', 'cancelled', 'timed_out')
+            or older['app_slug'] != 'github-actions' or latest['app_slug'] != 'github-actions'):
+        return None
+    origins = [run for run in runs if run.get('check_suite_id') == older['suite_id']]
+    replacements = [run for run in runs if run.get('check_suite_id') == latest['suite_id']]
+    if len(origins) != 1 or len(replacements) != 1:
+        return None
+    origin, replacement = origins[0], replacements[0]
+    if (origin.get('path') != replacement.get('path')
+            or not isinstance(replacement.get('path'), str)
+            or not replacement['path'].startswith('.github/workflows/')
+            or origin.get('head_sha') != source or replacement.get('head_sha') != source
+            or (origin.get('head_repository') or {}).get('full_name') != repository
+            or (replacement.get('head_repository') or {}).get('full_name') != repository
+            or origin.get('event') not in ('push', 'pull_request')
+            or replacement.get('event') != 'push' or replacement.get('head_branch') != 'main'
+            or origin.get('status') != 'completed'
+            or replacement.get('status') != 'completed' or replacement.get('conclusion') != 'success'
+            or origin['id'] > replacement['id']):
+        return None
+    if origin['id'] == replacement['id']:
+        # Another same-name matrix job in the same attempt is not a retry.
+        run_id = origin['id']
+        if run_id not in job_cache:
+            job_cache[run_id] = native.pages('repos/' + repository + '/actions/runs/'
+                                            + str(run_id) + '/jobs?filter=all', 'jobs')
+        old = [job for job in job_cache[run_id] if job.get('id') == older['id']]
+        new = [job for job in job_cache[run_id] if job.get('id') == latest['id']]
+        if (len(old) != 1 or len(new) != 1
+                or old[0].get('name') != older['name'] or new[0].get('name') != latest['name']
+                or old[0].get('status') != 'completed' or old[0].get('conclusion') != older['conclusion']
+                or new[0].get('status') != 'completed' or new[0].get('conclusion') != 'success'
+                or type(old[0].get('run_attempt')) is not int
+                or type(replacement.get('run_attempt')) is not int
+                or old[0]['run_attempt'] >= replacement['run_attempt']
+                or new[0].get('run_attempt') != replacement['run_attempt']):
+            return None
+    return {'check_id': older['id'], 'replacement_check_id': latest['id'],
+            'origin_run': identity(origin), 'replacement_run': identity(replacement)}
+
+
 def executing_release_run(source, repository, runs):
     # Only the current owner-dispatched release operator may exclude its own
     # check suite. Other runs and foreign-app checks remain in the census.
@@ -180,33 +244,40 @@ def verify(source, repository):
             require(guard.get('status') == 'completed' and guard.get('conclusion') == 'success',
                     'full macOS gate did not succeed')
             selected[workflow]['full_gate_job_id'] = guard['id']
-    latest, eligible = {}, []
+    latest, eligible, ignored_foreign = {}, [], []
     for check in before:
         if (operator_run is not None and check['app_slug'] == 'github-actions'
                 and check['suite_id'] == operator_run['check_suite_id']):
+            continue
+        foreign = foreign_pull_check(check, runs, repository)
+        if foreign is not None:
+            ignored_foreign.append(foreign)
             continue
         eligible.append(check)
         key = (check['app_id'], check['name'])
         if key not in latest or latest[key]['id'] < check['id']:
             latest[key] = check
-    ignored, ignored_conditionals, old_jobs = [], [], {}
+    ignored, ignored_conditionals, ignored_retries, old_jobs = [], [], [], {}
     for check in latest.values():
         if check['status'] == 'completed' and check['conclusion'] in NON_BLOCKING:
-            if check['conclusion'] != 'success':
-                # An optional skip may supersede only an authenticated old
-                # unexecuted cancellation from this successful canonical run's
-                # own workflow. Real failures, pending checks and neutral masks
-                # remain blocking. The operator's own suite stays excluded.
-                older = [row for row in eligible if row['app_id'] == check['app_id']
-                         and row['name'] == check['name'] and row['id'] < check['id']]
-                for row in older:
-                    if row['status'] == 'completed' and row['conclusion'] in NON_BLOCKING:
-                        continue
+            # A job name is not an identity; also examine bad historical rows
+            # when the latest check is successful, not only for skips.
+            older = [row for row in eligible if row['app_id'] == check['app_id']
+                     and row['name'] == check['name'] and row['id'] < check['id']]
+            for row in older:
+                if row['status'] == 'completed' and row['conclusion'] in NON_BLOCKING:
+                    continue
+                if check['conclusion'] != 'success':
                     exception = superseded_conditional(row, check, runs, selected, repository, source,
                                                        old_jobs, selected_jobs)
                     require(exception is not None,
                             'latest skipped/neutral source check masked a failure: ' + check['name'])
                     ignored_conditionals.append(exception)
+                else:
+                    retry = superseded_successful_retry(row, check, runs, repository, source, selected_jobs)
+                    require(retry is not None,
+                            'latest successful source check masked a failure: ' + check['name'])
+                    ignored_retries.append(retry)
             continue
         exception = obsolete_placeholder(check, runs, selected, repository, source, old_jobs)
         require(exception is not None, 'latest source check did not succeed: ' + check['name'])
@@ -224,11 +295,19 @@ def verify(source, repository):
         initial = next(run for run in runs if run['id'] == run_id)
         require(identity(native.gh('repos/' + repository + '/actions/runs/' + str(run_id))) == identity(initial),
                 'superseded source attempt changed during admission')
+    for proof in ignored_retries:
+        for key in ('origin_run', 'replacement_run'):
+            old = proof[key]
+            current = [run for run in final_runs if run['id'] == old['id']]
+            require(len(current) == 1 and identity(current[0]) == old,
+                    'successful source retry changed during admission')
     require(checks(repository, source) == before, 'source check census changed during admission')
     require(native.git('rev-parse', 'HEAD').decode().strip() == source, 'candidate checkout changed during admission')
     return {'schema_version': 1, 'status': 'passed', 'repository': repository, 'source_sha': source,
             'selected_workflows': selected, 'ignored_superseded_placeholders': ignored,
             'ignored_superseded_conditionals': ignored_conditionals,
+            'ignored_successful_retries': ignored_retries,
+            'ignored_foreign_pull_checks': ignored_foreign,
             'check_census': before,
             'check_census_sha256': hashlib.sha256(json.dumps(before, sort_keys=True).encode()).hexdigest()}
 

@@ -48,8 +48,8 @@ class API:
     @staticmethod
     def run(number, workflow, conclusion='success'):
         return {'id': number, 'run_attempt': 1, 'head_sha': SOURCE, 'check_suite_id': number + 1000,
-                'path': '.github/workflows/' + workflow, 'event': 'pull_request', 'status': 'completed',
-                'conclusion': conclusion, 'head_repository': {'full_name': REPO}}
+                'path': '.github/workflows/' + workflow, 'event': 'push', 'head_branch': 'main',
+                'status': 'completed', 'conclusion': conclusion, 'head_repository': {'full_name': REPO}}
 
     @staticmethod
     def check(job, run):
@@ -67,6 +67,7 @@ class API:
 
     def placeholder(self, workflow='ci-ubuntu.yml', name='Ubuntu Go tests (${{ matrix.go }}, ${{ matrix.shard }})'):
         run = self.run(1, workflow, 'cancelled')
+        run.update(event='pull_request', head_branch='test/previous')
         self.runs.append(run)
         job = {'id': 1, 'name': name, 'status': 'completed', 'conclusion': 'cancelled', 'steps': [], 'run_attempt': 1}
         self.jobs[1] = [job]
@@ -78,6 +79,7 @@ class API:
         origin = next((run for run in self.runs if run['id'] == origin_id), None)
         if origin is None:
             origin = self.run(origin_id, workflow, 'cancelled')
+            origin.update(event='pull_request', head_branch='test/previous')
             if origin_suite is not None:
                 origin['check_suite_id'] = origin_suite
             self.runs.append(origin)
@@ -388,6 +390,75 @@ class AdmissionTests(unittest.TestCase):
         self.api.checks.append(row)
         self.api.checks.append({**row, 'id': 10001, 'conclusion': 'success', 'app': {'id': 2, 'slug': 'other-app'}})
         with self.assertRaisesRegex(ValueError, 'latest source check'):
+            self.verify()
+
+    def test_only_owner_main_push_runs_qualify_release_source(self):
+        for mutation in ({'event': 'pull_request'}, {'head_branch': 'feature'},
+                         {'head_repository': {'full_name': 'fork/repo'}}):
+            with self.subTest(mutation=mutation):
+                self.api = API()
+                native.gh.side_effect = self.api
+                self.api.runs[0].update(mutation)
+                with self.assertRaisesRegex(ValueError, 'latest source workflow did not succeed'):
+                    self.verify()
+
+    def test_foreign_fork_pr_cannot_shadow_owned_main_source_and_check(self):
+        run = API.run(999, 'ci-macos.yml', 'action_required')
+        run.update(event='pull_request', head_repository={'full_name': 'fork/repo'})
+        self.api.runs.append(run)
+        job = {'id': 19999, 'name': self.api.checks[0]['name'],
+               'status': 'completed', 'conclusion': 'action_required'}
+        self.api.checks.append(self.api.check(job, run))
+        result = self.verify()
+        self.assertEqual([row['check_id'] for row in result['ignored_foreign_pull_checks']], [19999])
+        run['head_repository'] = {'full_name': REPO}
+        with self.assertRaisesRegex(ValueError, 'latest source check did not succeed'):
+            self.verify()
+
+    def test_identical_check_name_from_other_workflow_never_masks_failure(self):
+        for status, conclusion in (('completed', 'failure'), ('in_progress', None)):
+            with self.subTest(status=status):
+                self.api = API()
+                native.gh.side_effect = self.api
+                first, later = API.run(201, 'release.yml', 'failure'), API.run(202, 'unified-release.yml')
+                self.api.runs.extend((first, later))
+                name = 'Build linux amd64'
+                self.api.checks.append(self.api.check(
+                    {'id': 20001, 'name': name, 'status': status, 'conclusion': conclusion}, first))
+                self.api.checks.append(self.api.check(
+                    {'id': 20002, 'name': name, 'status': 'completed', 'conclusion': 'success'}, later))
+                with self.assertRaisesRegex(ValueError, 'latest successful source check masked a failure'):
+                    self.verify()
+
+    def test_completed_same_workflow_main_retry_is_proven_not_name_only(self):
+        first, later = API.run(201, 'release.yml', 'failure'), API.run(202, 'release.yml')
+        self.api.runs.extend((first, later))
+        name = 'Build linux amd64'
+        self.api.checks.extend((
+            self.api.check({'id': 20001, 'name': name, 'status': 'completed',
+                            'conclusion': 'failure'}, first),
+            self.api.check({'id': 20002, 'name': name, 'status': 'completed',
+                            'conclusion': 'success'}, later)))
+        result = self.verify()
+        self.assertEqual([row['check_id'] for row in result['ignored_successful_retries']], [20001])
+        self.api.checks[-2]['conclusion'] = 'action_required'
+        with self.assertRaisesRegex(ValueError, 'latest successful source check masked a failure'):
+            self.verify()
+
+    def test_same_run_retry_requires_actual_new_attempt(self):
+        run = API.run(201, 'release.yml')
+        run['run_attempt'] = 2
+        self.api.runs.append(run)
+        name = 'Build linux amd64'
+        old = {'id': 20001, 'name': name, 'status': 'completed', 'conclusion': 'failure',
+               'run_attempt': 1}
+        new = {'id': 20002, 'name': name, 'status': 'completed', 'conclusion': 'success',
+               'run_attempt': 2}
+        self.api.jobs[201] = [old, new]
+        self.api.checks.extend((self.api.check(old, run), self.api.check(new, run)))
+        self.assertEqual(self.verify()['ignored_successful_retries'][0]['check_id'], 20001)
+        old['run_attempt'] = 2
+        with self.assertRaisesRegex(ValueError, 'latest successful source check masked a failure'):
             self.verify()
 
     def test_missing_concrete_job_receipt_and_bad_custody_are_rejected(self):
