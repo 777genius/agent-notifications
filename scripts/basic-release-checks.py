@@ -161,6 +161,16 @@ def superseded_successful_retry(older, latest, runs, repository, source, job_cac
     if len(origins) != 1 or len(replacements) != 1:
         return None
     origin, replacement = origins[0], replacements[0]
+    # Before main promotion a verified same-repository PR can also supersede
+    # a prior failed PR attempt. Never use a PR retry to overrule an existing
+    # main-push authority for this workflow and source.
+    main_retry = replacement.get('event') == 'push' and replacement.get('head_branch') == 'main'
+    pre_main_retry = (replacement.get('event') == 'pull_request'
+                      and not any(run.get('path') == replacement.get('path')
+                                  and run.get('head_sha') == source and run.get('event') == 'push'
+                                  and run.get('head_branch') == 'main'
+                                  and (run.get('head_repository') or {}).get('full_name') == repository
+                                  for run in runs))
     if (origin.get('path') != replacement.get('path')
             or not isinstance(replacement.get('path'), str)
             or not replacement['path'].startswith('.github/workflows/')
@@ -168,7 +178,7 @@ def superseded_successful_retry(older, latest, runs, repository, source, job_cac
             or (origin.get('head_repository') or {}).get('full_name') != repository
             or (replacement.get('head_repository') or {}).get('full_name') != repository
             or origin.get('event') not in ('push', 'pull_request')
-            or replacement.get('event') != 'push' or replacement.get('head_branch') != 'main'
+            or not (main_retry or pre_main_retry)
             or origin.get('status') != 'completed'
             or replacement.get('status') != 'completed' or replacement.get('conclusion') != 'success'
             or origin['id'] > replacement['id']):

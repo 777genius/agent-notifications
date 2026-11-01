@@ -449,6 +449,25 @@ class AdmissionTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'latest successful source check masked a failure'):
                     self.verify()
 
+    def test_pre_main_same_repo_pr_retry_can_supersede_failure(self):
+        for run in self.api.runs:
+            run.update(event='pull_request', head_branch='fix/release-candidate')
+        first, later = API.run(201, 'release.yml', 'failure'), API.run(202, 'release.yml')
+        for run in (first, later):
+            run.update(event='pull_request', head_branch='fix/release-candidate')
+        self.api.runs.extend((first, later))
+        name = 'Build linux amd64'
+        older = self.api.check({'id': 20001, 'name': name, 'status': 'completed',
+                                'conclusion': 'failure'}, first)
+        newer = self.api.check({'id': 20002, 'name': name, 'status': 'completed',
+                                'conclusion': 'success'}, later)
+        self.api.checks.extend((older, newer))
+        self.assertEqual(self.verify()['ignored_successful_retries'][0]['check_id'], 20001)
+        # An existing failed main-push authority cannot be retired by PR CI.
+        self.api.runs.append(API.run(203, 'release.yml', 'failure'))
+        with self.assertRaisesRegex(ValueError, 'latest successful source check masked a failure'):
+            self.verify()
+
     def test_completed_same_workflow_main_retry_is_proven_not_name_only(self):
         first, later = API.run(201, 'release.yml', 'failure'), API.run(202, 'release.yml')
         self.api.runs.extend((first, later))
