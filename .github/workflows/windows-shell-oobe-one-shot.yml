@@ -7,7 +7,7 @@ permissions:
   contents: read
 jobs:
   shell-overlay:
-    if: ${{ github.repository == '777genius/agent-notifications' && github.run_attempt == 1 && github.event.head_commit.message == 'test(windows): probe first-logon shell overlay on disposable ARM client' }}
+    if: ${{ github.repository == '777genius/agent-notifications' && github.run_attempt == 1 && github.event.head_commit.message == 'probe-windows-oobe-shell-v2' }}
     runs-on: windows-11-vs2026-arm
     timeout-minutes: 8
     steps:
@@ -42,10 +42,10 @@ jobs:
           }
           '@
           Add-Type -TypeDefinition $code
-          function KnownProcess([uint32]$pid) {
-            if ($pid -eq 0) { return 'none' }
+          function KnownProcess([uint32]$processId) {
+            if ($processId -eq 0) { return 'none' }
             try {
-              $p = [System.Diagnostics.Process]::GetProcessById([int]$pid)
+              $p = [System.Diagnostics.Process]::GetProcessById([int]$processId)
               if ($p.SessionId -ne [System.Diagnostics.Process]::GetCurrentProcess().SessionId) { return 'other_session' }
               if ($p.ProcessName -in @('WWAHost','UserOOBEBroker','StartMenuExperienceHost','SystemPropertiesPerformance','WindowsTerminal','OpenConsole','explorer','pwsh','powershell','wsl')) {
                 return $p.ProcessName
