@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -24,6 +25,7 @@ import (
 	"github.com/777genius/agent-notifications/internal/config"
 	"github.com/777genius/agent-notifications/internal/installruntime"
 	"github.com/777genius/agent-notifications/internal/notifier"
+	"github.com/777genius/agent-notifications/internal/strictjson"
 )
 
 const agentNotifySetupHelp = `Usage: claude-notifications setup-notifications OPERATION [OPTIONS]
@@ -252,20 +254,83 @@ func parseAgentNotifySetup(args []string) (a agentNotifySetupArgs, help bool, er
 }
 
 type agentNotifySetupResult struct {
-	Diagnostic          *installruntime.SnapshotDiagnostic `json:"diagnostic,omitempty"`
-	GlobalConfiguration string                             `json:"globalConfiguration,omitempty"`
-	Source              string                             `json:"source,omitempty"`
-	Changed             bool                               `json:"changed,omitempty"`
-	Ready               bool                               `json:"ready,omitempty"`
-	Reason              string                             `json:"reason"`
-	Generation          uint64                             `json:"generation,omitempty"`
-	ExplicitIntent      bool                               `json:"explicitIntent"`
-	RuntimeEligible     bool                               `json:"runtimeEligible"`
-	Configuration       string                             `json:"configuration,omitempty"`
-	DesktopEnabled      *bool                              `json:"desktopEnabled,omitempty"`
-	OfflineCapability   string                             `json:"offlineCapability,omitempty"`
-	Permission          string                             `json:"permission"`
-	Activation          string                             `json:"activation"`
+	Diagnostic          *agentNotifySetupDiagnostic `json:"diagnostic,omitempty"`
+	GlobalConfiguration string                      `json:"globalConfiguration,omitempty"`
+	Source              string                      `json:"source,omitempty"`
+	Changed             bool                        `json:"changed,omitempty"`
+	Ready               bool                        `json:"ready,omitempty"`
+	Reason              string                      `json:"reason"`
+	Generation          uint64                      `json:"generation,omitempty"`
+	ExplicitIntent      bool                        `json:"explicitIntent"`
+	RuntimeEligible     bool                        `json:"runtimeEligible"`
+	Configuration       string                      `json:"configuration,omitempty"`
+	DesktopEnabled      *bool                       `json:"desktopEnabled,omitempty"`
+	OfflineCapability   string                      `json:"offlineCapability,omitempty"`
+	Permission          string                      `json:"permission"`
+	Activation          string                      `json:"activation"`
+}
+
+// agentNotifySetupDiagnostic is a typed transport union. Its wire shape stays
+// exactly one of the two bounded diagnostic records; callers cannot inject an
+// arbitrary JSON value into setup output.
+type agentNotifySetupDiagnostic struct {
+	Admission *installruntime.AdmissionDiagnostic
+	Snapshot  *installruntime.SnapshotDiagnostic
+}
+
+func (d agentNotifySetupDiagnostic) MarshalJSON() ([]byte, error) {
+	if d.Admission != nil && d.Snapshot != nil {
+		return nil, fmt.Errorf("ambiguous setup diagnostic")
+	}
+	switch {
+	case d.Admission != nil:
+		return json.Marshal(d.Admission)
+	case d.Snapshot != nil:
+		return json.Marshal(d.Snapshot)
+	default:
+		return []byte("null"), nil
+	}
+}
+
+func (d *agentNotifySetupDiagnostic) UnmarshalJSON(data []byte) error {
+	if err := strictjson.Validate(data, strictjson.Budget{Bytes: 64 * 1024, Depth: 4, Entries: 16}); err != nil {
+		return fmt.Errorf("invalid setup diagnostic JSON")
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	decode := func(value any) error {
+		decoder := json.NewDecoder(bytes.NewReader(data))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(value); err != nil {
+			return err
+		}
+		if err := decoder.Decode(new(any)); err != io.EOF {
+			return fmt.Errorf("trailing setup diagnostic")
+		}
+		return nil
+	}
+	_, phase := fields["phase"]
+	_, code := fields["code"]
+	_, action := fields["action"]
+	if phase && !code && !action {
+		d.Snapshot = nil
+		d.Admission = new(installruntime.AdmissionDiagnostic)
+		if err := decode(d.Admission); err != nil {
+			return err
+		}
+		return nil
+	}
+	if !phase && code && action {
+		d.Admission = nil
+		d.Snapshot = new(installruntime.SnapshotDiagnostic)
+		if err := decode(d.Snapshot); err != nil {
+			return err
+		}
+		return nil
+	}
+	return fmt.Errorf("ambiguous setup diagnostic")
 }
 
 // Composition overrides are private to hosted tests. Production always uses the
@@ -300,6 +365,7 @@ func agentNotifySetupExecute(ctx context.Context, args []string, out io.Writer, 
 		return executeSetupWizard(ctx, args[1:], out)
 	}
 	a, help, e := parseAgentNotifySetup(args)
+	var diagnostic *agentNotifySetupDiagnostic
 	emit := func(r agentNotifySetupResult, code int) int {
 		permissionOp := a.operation == "permission-status" || a.operation == "request-permission"
 		if r.Permission == "" {
@@ -327,17 +393,23 @@ func agentNotifySetupExecute(ctx context.Context, args []string, out io.Writer, 
 				}{r, r.Changed, r.Ready})
 			} else if code != 0 && (a.operation != "status" || r.Configuration == "") {
 				err = json.NewEncoder(out).Encode(struct {
-					Reason     string                             `json:"reason"`
-					Generation uint64                             `json:"generation,omitempty"`
-					Diagnostic *installruntime.SnapshotDiagnostic `json:"diagnostic,omitempty"`
-				}{r.Reason, r.Generation, r.Diagnostic})
+					Reason     string                      `json:"reason"`
+					Generation uint64                      `json:"generation,omitempty"`
+					Diagnostic *agentNotifySetupDiagnostic `json:"diagnostic,omitempty"`
+				}{r.Reason, r.Generation, func() *agentNotifySetupDiagnostic {
+					if diagnostic != nil {
+						return diagnostic
+					}
+					return r.Diagnostic
+				}()})
 			} else {
 				err = json.NewEncoder(out).Encode(r)
 			}
 		} else if code != 0 && permissionOp {
 			_, err = fmt.Fprintf(out, "%s; generation=%d. Permission: unavailable. Read-only permission-status may clarify; consult setup-notifications --help for prerequisites.\n", r.Reason, r.Generation)
-		} else if code != 0 && r.Diagnostic != nil {
-			_, err = fmt.Fprintf(out, "%s; generation=%d; diagnostic=%s; path=%q. %s\n", r.Reason, r.Generation, r.Diagnostic.Code, r.Diagnostic.Path, r.Diagnostic.Action)
+		} else if code != 0 && r.Diagnostic != nil && r.Diagnostic.Snapshot != nil {
+			d := r.Diagnostic.Snapshot
+			_, err = fmt.Fprintf(out, "%s; generation=%d; diagnostic=%s; path=%q. %s\n", r.Reason, r.Generation, d.Code, d.Path, d.Action)
 		} else if code != 0 {
 			_, err = fmt.Fprintf(out, "%s; generation=%d. Read setup-notifications --help; prepare or repair managed installation/settings with the existing installer, then reread status before retrying.\n", r.Reason, r.Generation)
 		} else {
@@ -423,7 +495,7 @@ func agentNotifySetupExecute(ctx context.Context, args []string, out io.Writer, 
 		if a.operation == "status" {
 			r.Generation = s.Ledger.Generation
 			d := installruntime.SnapshotDiagnosticFor(e)
-			r.Diagnostic = &d
+			r.Diagnostic = &agentNotifySetupDiagnostic{Snapshot: &d}
 		}
 		return emit(r, 1)
 	}
@@ -598,6 +670,9 @@ func agentNotifySetupExecute(ctx context.Context, args []string, out io.Writer, 
 	r.Generation = result.Generation
 	if err != nil {
 		r.Reason = agentNotifySetupReason(ctx, err)
+		if projected := notifysetup.CommitDiagnostic(err); projected != nil {
+			diagnostic = &agentNotifySetupDiagnostic{Admission: projected}
+		}
 		return emit(r, 1)
 	}
 	r.Reason = "enabled"

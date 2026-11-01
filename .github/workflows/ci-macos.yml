@@ -120,7 +120,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           ref: ${{ github.event_name == 'pull_request' && github.event.action == 'edited' && github.event.changes.base != null && github.event.pull_request.head.sha || '' }}
-          fetch-depth: ${{ github.event_name == 'pull_request' && github.event.action == 'edited' && github.event.changes.base != null && '0' || '1' }}
+          fetch-depth: 0 # Frozen-reader compatibility needs exact historical commits.
       - *qualify_base_edit
 
       - name: Set up Go

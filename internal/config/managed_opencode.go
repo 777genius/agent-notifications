@@ -146,7 +146,7 @@ func ReadManagedOpenCode(ctx context.Context, root string, assets AssetContext) 
 func validManagedOpenCode(root string, s installruntime.PolicySnapshot) bool {
 	l := s.Installation.Ledger
 	c, ok := l.Consumers[managedOpenCodeConsumer]
-	if !ok || l.ID == "" || l.Owner != "existing-installer" || l.Schema != 4 || l.WriterFloor != installruntime.OpenCodeWriterFloor ||
+	if !ok || l.ID == "" || l.Owner != "existing-installer" || l.PendingMutation != nil || !installruntime.OpenCodeLedgerCompatible(l) ||
 		l.PolicyGeneration == 0 || !filepath.IsAbs(l.RuntimeRoot) || filepath.Clean(l.RuntimeRoot) != l.RuntimeRoot ||
 		!s.Preimage.Exists || s.Preimage.Link != "" || c.OpenCode == nil || !c.OpenCode.Valid() || !c.OpenCode.OriginBound ||
 		!filepath.IsAbs(c.RuntimeRoot) || filepath.Clean(c.RuntimeRoot) != c.RuntimeRoot ||

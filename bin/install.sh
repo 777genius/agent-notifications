@@ -4,8 +4,9 @@
 # agent-notifications-managed-writer-protocol-v1
 # agent-notifications-managed-writer-protocol-v3
 # agent-notifications-managed-writer-protocol-v4
+# agent-notifications-managed-writer-protocol-v6
 # Managed publication and recovery delegate to the verified Go kernel, which
-# enforces the shared ledger's Local/OpenCode floor before changing live state.
+# enforces the shared ledger's Local/OpenCode/Windows floor before changing live state.
 
 set -e
 

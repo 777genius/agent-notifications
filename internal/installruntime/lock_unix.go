@@ -3,6 +3,7 @@
 package installruntime
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"golang.org/x/sys/unix"
@@ -78,4 +79,11 @@ func privateDirectory(path string) error {
 		return fmt.Errorf("control directory must be owned and private")
 	}
 	return nil
+}
+
+func ensureLockDirectory(ctx context.Context, path string, mode os.FileMode) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return ensureDir(path, mode)
 }

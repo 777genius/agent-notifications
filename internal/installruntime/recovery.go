@@ -8,9 +8,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/777genius/agent-notifications/internal/strictjson"
+	"github.com/777genius/agent-notifications/internal/windowscallback"
 )
 
 // A checksum detects valid-JSON corruption of the recovery record. It is not
@@ -201,8 +201,22 @@ func decodeTransactionBlobs(data []byte, blobDir string) (transaction, error) {
 			}
 		}
 	}
-	if !acceptedTransactionSchema(tx.Schema) || tx.After.Generation <= tx.Before.Generation || tx.After.PolicyGeneration <= tx.Before.PolicyGeneration || tx.After.ID == "" || tx.After.Consumers == nil || tx.After.Files == nil || tx.Before.Consumers == nil || tx.Before.Files == nil {
+	if !acceptedTransactionSchema(tx.Schema) || !acceptedLedgerSchema(tx.Before.Schema) || !acceptedLedgerSchema(tx.After.Schema) ||
+		tx.After.Generation <= tx.Before.Generation || tx.After.PolicyGeneration <= tx.Before.PolicyGeneration || tx.After.ID == "" || tx.After.Consumers == nil || tx.After.Files == nil || tx.Before.Consumers == nil || tx.Before.Files == nil {
 		return tx, fmt.Errorf("invalid transaction schema")
+	}
+	if validateWindowsRetained(tx.Before) != nil || validateWindowsRetained(tx.After) != nil {
+		return tx, fmt.Errorf("invalid Windows retained journal")
+	}
+	if e := validateWindowsPayload(tx.Windows); e != nil {
+		return tx, e
+	}
+	if tx.Schema == WindowsGenerationTransactionSchema {
+		if err := validateWindowsTransaction(tx); err != nil {
+			return tx, err
+		}
+	} else if tx.Windows != nil {
+		return tx, fmt.Errorf("windows participant requires schema6")
 	}
 	seen := map[string]bool{}
 	for _, f := range tx.Files {
@@ -244,6 +258,11 @@ func checkPolicyGeneration(root string, l Ledger) error {
 // snapshots. It never restores an entire directory and never downgrades an
 // already promoted callback reader. A foreign edit makes rollback refuse.
 func reverseTransaction(current Ledger, tx transaction) (transaction, error) {
+	if tx.Windows != nil {
+		if err := validateWindowsTransaction(tx); err != nil {
+			return transaction{}, err
+		}
+	}
 	if tx.OrphanRecovery != nil {
 		return reverseOrphanTransaction(current, tx)
 	}
@@ -335,7 +354,25 @@ func reverseTransaction(current Ledger, tx transaction) (transaction, error) {
 			}
 		}
 	}
-	reverse := transaction{Schema: transactionSchemaFor(after, Request{}), Before: current, After: after, ConfigPaths: tx.ConfigPaths, Rollback: true}
+	// Retain every charged Windows generation, including a private generation
+	// from an interrupted setup. Absence/process exit never releases capacity.
+	after.WindowsRetained = append([]windowscallback.Binding(nil), tx.After.WindowsRetained...)
+	// Rollback retains the predecessor's native decoder floor when the new
+	// native tree was never published. Only the confirmed replacement above
+	// may promote DecoderFloor together with its matching Native record.
+	reverseSchema := transactionSchemaFor(after, Request{})
+	if tx.Windows != nil {
+		reverseSchema = WindowsGenerationTransactionSchema
+	}
+	reverse := transaction{Schema: reverseSchema, Before: current, After: after, ConfigPaths: tx.ConfigPaths, Rollback: true}
+	if tx.Windows != nil {
+		if windowsCommitDecided(tx.Windows) {
+			return transaction{}, ErrPolicyRecovery
+		}
+		w := *tx.Windows
+		w.Phase = "rollback_decided"
+		reverse.Windows = &w
+	}
 	if tx.Native != nil && after.Native != nil {
 		parents, err := pathAnchors(after.Native.Path, false)
 		if err != nil {
@@ -404,6 +441,9 @@ func marshalTransaction(tx transaction) ([]byte, error) {
 	if tx.Schema == transactionSchemaV5 {
 		return marshalOrphanTransaction(tx)
 	}
+	if tx.Schema == WindowsGenerationTransactionSchema {
+		return marshalWindowsTransaction(tx)
+	}
 	if tx.Schema != transactionSchemaV4 {
 		return json.Marshal(tx)
 	}
@@ -416,10 +456,13 @@ func unmarshalTransaction(data []byte, schema int, tx *transaction) error {
 	if schema == transactionSchemaV5 {
 		return unmarshalOrphanTransaction(data, tx)
 	}
+	if schema == WindowsGenerationTransactionSchema {
+		return unmarshalWindowsTransaction(data, tx)
+	}
 	if schema != transactionSchemaV4 {
 		return json.Unmarshal(data, tx)
 	}
-	if err := validateTransactionV4Files(data); err != nil {
+	if err := validateVersionedFiles(data, "schema4"); err != nil {
 		return err
 	}
 	wire := transactionV4{transaction: tx}
@@ -435,25 +478,38 @@ func unmarshalTransaction(data []byte, schema int, tx *transaction) error {
 
 // Only the exact versioned carrier may supply the write set. Typed JSON
 // decoding otherwise accepts case-folded aliases and ignores unknown carriers.
-func validateTransactionV4Files(data []byte) error {
+func validateVersionedFiles(data []byte, schemaName string) error {
+	if strictjson.Validate(data, strictjson.Budget{Bytes: maxManagedFile, Depth: 32, Entries: 100000}) != nil {
+		return fmt.Errorf("invalid %s transaction JSON", schemaName)
+	}
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(data, &fields); err != nil {
 		return err
 	}
+	known := map[string]bool{
+		"Windows": true, "OrphanRecovery": true, "OpenCodeInit": true, "OpenCodePurge": true,
+		"ConfigPaths": true, "Native": true, "Schema": true, "Before": true,
+		"After": true, "Files": true, "Rollback": true,
+	}
 	for name := range fields {
-		if name != "Files" && strings.EqualFold(name, "Files") {
-			return fmt.Errorf("invalid schema4 Files carrier")
+		if !known[name] {
+			return fmt.Errorf("unknown %s transaction field", schemaName)
 		}
 	}
 	var files map[string]json.RawMessage
-	if json.Unmarshal(fields["Files"], &files) != nil || len(files) != 1 || files["Changes"] == nil {
-		return fmt.Errorf("invalid schema4 Files container")
+	if json.Unmarshal(fields["Files"], &files) != nil || len(files) != 1 {
+		return fmt.Errorf("invalid %s Files container", schemaName)
+	}
+	for name := range files {
+		if name != "Changes" {
+			return fmt.Errorf("unknown %s Files field", schemaName)
+		}
 	}
 	// writeTransaction always emits an array, including for an empty write set.
 	// Null would silently discard changes just like an omitted carrier.
 	changes := bytes.TrimSpace(files["Changes"])
 	if len(changes) == 0 || changes[0] != '[' {
-		return fmt.Errorf("invalid schema4 Changes shape")
+		return fmt.Errorf("invalid %s Changes shape", schemaName)
 	}
 	return nil
 }

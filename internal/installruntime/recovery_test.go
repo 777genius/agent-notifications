@@ -125,14 +125,20 @@ func TestReverseUnpublishedNativeKeepsPredecessor(t *testing.T) {
 		Before: NativeRecord{Path: before, SHA256: hashA},
 		After:  NativeRecord{Path: afterPath, SHA256: hashB},
 	}
-	tx.Before.Native = &NativeRecord{Path: before, SHA256: hashA}
-	tx.After.Native = &NativeRecord{Path: afterPath, SHA256: hashB}
+	tx.Before.Native = &NativeRecord{Path: before, SHA256: hashA, DecoderFloor: 1}
+	tx.After.Native = &NativeRecord{Path: afterPath, SHA256: hashB, DecoderFloor: 2}
+	tx.Before.DecoderFloor, tx.After.DecoderFloor = 1, 2
+	tx.Native.Before.DecoderFloor, tx.Native.After.DecoderFloor = 1, 2
 	reverse, err := reverseTransaction(tx.After, tx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if reverse.After.Native == nil || reverse.After.Native.Path != before || reverse.After.Native.SHA256 != hashA {
 		t.Fatalf("predecessor lost: %+v", reverse.After.Native)
+	}
+	if reverse.After.DecoderFloor != 1 || reverse.After.Native.DecoderFloor != 1 {
+		t.Fatalf("rollback promoted an unpublished native decoder floor: ledger=%d native=%d",
+			reverse.After.DecoderFloor, reverse.After.Native.DecoderFloor)
 	}
 	if reverse.Native == nil || reverse.Native.After.Path != before || reverse.Native.After.SHA256 != hashA {
 		t.Fatalf("predecessor NativeChange not persisted: %+v", reverse.Native)
@@ -430,7 +436,7 @@ func TestSchema4PublicRecoveryIntegrity(t *testing.T) {
 				case "legacy-v1", "legacy-v2", "legacy-v3":
 					tx["Schema"] = json.RawMessage(strings.TrimPrefix(kind, "legacy-v"))
 				case "unsupported-schema-before-blob":
-					tx["Schema"] = json.RawMessage("6")
+					tx["Schema"] = json.RawMessage("7")
 				case "schema5-v4-carrier-before-blob":
 					// Schema5 supports orphan metadata decisions only.
 					tx["Schema"] = json.RawMessage("5")
