@@ -70,10 +70,14 @@ callback records authorize final qualification. URI evidence is derived from imm
 record bytes; actual OS URI payload, authenticated click, rendered chat, focus,
 atomic FullName locking and global SDK drain are not claimed.
 
-Retained mode explicitly changes one route field to add B without Show B
-(identical setup reuses owned A), then disables/removes the producer through
-normal owner operations and removes only the controller's synthetic config.
-A remains byte-identical and its deliberately clicked action must resolve A.
+Retained mode first shows A, then uses two supported owner setup operations:
+explicit `--navigation none`, followed by `--navigation desktop_thread`.
+The first disables local routing without releasing or deleting A; the second
+stages a genuinely new, retained B. Consent-only edits intentionally reuse A
+and must **not** be treated as a new generation. The test proves both retained
+bindings, never shows B, then disables/removes the producer through normal
+owner operations and removes only the controller's synthetic config. A remains
+byte-identical and its deliberately clicked action must resolve A.
 Successful producer rollback and real floor4 writer refusal/old-action
 compatibility remain pending separate qualification; no fake versions/hooks.
 
