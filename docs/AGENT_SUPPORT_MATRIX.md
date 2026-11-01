@@ -26,15 +26,15 @@ Sources: [Claude/Codex/Qoder product event boundary](../internal/hooks/event.go)
 | Claude Code | Yes | Yes | Yes | Supported, OS/terminal-dependent; pane precision varies | Not established |
 | Codex CLI | Yes | Yes | Yes | Legacy terminal focus where supported | Separate verified, configured Codex-desktop navigation path; platform/installation qualification matters |
 | OpenCode | Yes | Yes | No in published v1.49.11; unreleased source has optional OS-default `systemSound` opt-in | No: `Navigation=None` | No |
-| Gemini CLI | Yes | Yes | No: explicit silent delivery | No: `Navigation=None` | No |
-| Cursor CLI | Yes (qualified hosts only) | Yes | No: explicit silent delivery | No: `Navigation=None` | No |
+| Gemini CLI | Yes | Yes | No in published v1.49.11; unreleased source adds optional OS-default cue after explicit opt-in | No: `Navigation=None` | No |
+| Cursor CLI | Yes (qualified hosts only) | Yes | No in published v1.49.11; unreleased source adds optional OS-default cue after explicit opt-in | No: `Navigation=None` | No |
 | Qoder CLI | Yes | Yes | Yes: shared hook notifier | **Not qualified**: Claude-only Ghostty capture; generic legacy window activation must not be advertised as exact/guaranteed | No |
 
 “Desktop” means the implementation provides a submission path; it does **not** mean visible banners or physical click callbacks were observed on every platform. [Terminal / IDE focus precision](CLICK_TO_FOCUS.md) explains window versus pane/tab and the OS permissions.
 
 Important implementation detail: `internal/hooks/hooks.go` and `internal/notifier/notifier.go` share sound, desktop and webhook delivery across Claude, Codex and Qoder. However, terminal-target capture for Ghostty is explicitly Claude-only. Qoder's setup guide currently describes `clickToFocus` as inert. The shared lower-level notifier can attempt generic activation when enabled; its existence is **not** evidence that Qoder has reliable, session-bound navigation. Resolve the documentation/runtime ambiguity with a native test before promoting support.
 
-Modern observer consumers intentionally use narrow fact types and separate registered-consent gates: [OpenCode](../internal/opencodeevent/consumer.go), [Gemini](../internal/geminievent/consumer.go), [Cursor](../internal/cursorevent/consumer.go). All three select `Navigation=None` and do not provide a trusted local terminal origin. The unreleased OpenCode source can explicitly request an OS-default cue, but published v1.49.11 remains silent; Gemini and Cursor remain silent. This is a genuine missing feature, not merely a README omission.
+Modern observer consumers intentionally use narrow fact types and separate registered-consent gates: [OpenCode](../internal/opencodeevent/consumer.go), [Gemini](../internal/geminievent/consumer.go), [Cursor](../internal/cursorevent/consumer.go). All three select `Navigation=None` and do not provide a trusted local terminal origin. Unreleased OpenCode, Gemini and Cursor source can explicitly request an OS-default cue; **published v1.49.11 remains silent for all three**. Internal Copilot-in-VS-Code follows the same native request contract but is not publicly shipped. This is a genuine missing feature, not merely a README omission.
 
 ## Additional implementations and candidates (not advertised as shipped)
 
