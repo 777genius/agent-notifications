@@ -6,6 +6,14 @@ the extension through Universal Agent Plugins. In Pi's local terminal UI, deskto
 alerts use configured sounds and return to the originating terminal when clicked.
 Explicitly enabled webhooks also work in print, JSON, RPC and remote sessions.
 
+## Qualification
+
+Release acceptance covers real Pi hooks and installed update/repair/remove/reload
+checks on all three OSes, with native desktop cases on Linux. The owner also
+manually confirmed a completion banner and click back to the Pi Terminal window
+on macOS. Full macOS/Windows desktop sound and negative-case qualification is
+pending; see the [test scope and retained limitations](testing/pi-native-e2e.md#owner-approved-hooklifecycle-release-profile-2026-11-01).
+
 ## Install or update
 
 Install the [official standalone Pi distribution](https://github.com/earendil-works/pi#getting-started)

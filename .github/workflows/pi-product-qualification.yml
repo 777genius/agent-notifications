@@ -1,11 +1,8 @@
 name: Pi three-OS product qualification
 
 on:
-  pull_request:
-    paths:
-      - '.github/workflows/pi-product-qualification.yml'
-      - 'scripts/pi-qualification-aggregate.py'
-      - 'scripts/test_pi_qualification_aggregate.py'
+  # Full native qualification needs explicit producer run IDs. Ordinary PRs
+  # qualify installed hooks/lifecycle in the platform workflows instead.
   workflow_dispatch:
     inputs:
       source_sha:

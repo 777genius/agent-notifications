@@ -15,6 +15,12 @@ on:
       - 'scripts/testdata/pi-native/macos-helper/**'
       - 'tests/integration/pi_installed_desktop_darwin.swift'
       - 'tests/integration/pi_*fixture.py'
+      - 'cmd/claude-notifications/**'
+      - 'internal/agentnotify/**'
+      - 'internal/pievent/**'
+      - 'internal/pisource/**'
+      - 'internal/notifier/**'
+      - 'portable-package/**'
       - 'go.mod'
       - 'go.sum'
   workflow_dispatch:

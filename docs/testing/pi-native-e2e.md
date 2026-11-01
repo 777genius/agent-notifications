@@ -414,8 +414,8 @@ replace a product desktop receipt.
 Missing run IDs/artifacts, skipped/unqualified cases, stale source, development
 replacements, absent audio, uncollected actors or a question no longer pending
 all leave `desktop_qualified: false` and a failing aggregate with per-OS reasons.
-This gate must pass before claiming full native qualification or merging the
-integration. The existing hosted Windows Client image has been observed with
+This gate must pass before claiming full native qualification. The owner-approved
+hook/lifecycle release profile below does not make that claim. The existing hosted Windows Client image has been observed with
 running audio services but zero render endpoints in every state; its synthetic
 foreground/input observers also failed. It cannot supply Windows sound evidence
 until an actual configured Client render route is available or the explicit
@@ -424,3 +424,25 @@ Host preparation, compilation, acquisition, kernel-signature checks and
 prerequisite receipts do not qualify product delivery. Final macOS and Windows
 desktop qualification remains pending until their actual product observations
 and the complete three-OS aggregate pass for the final exact source.
+
+## Owner-approved hook/lifecycle release profile (2026-11-01)
+
+The owner authorized shipping Pi with installed hook/lifecycle checks instead of
+requiring the full macOS/Windows desktop aggregate, then requested completion
+and release. The release still requires successful current-source ordinary CI,
+real Pi event contracts and installed process/lifecycle checks on Linux, macOS
+and Windows, plus the Linux native desktop suite and the standard release
+artifact/signing/canary checks in [RELEASE.md](../RELEASE.md).
+
+The owner manually observed the Pi completion notification on their Mac and
+confirmed that clicking it opened Terminal `Pi-manual-check`. This observation
+belongs to the earlier local test at `a97ebfca`; it is not a signed receipt for
+new candidate bytes, a sound measurement, or proof of all six desktop cases.
+The local script reported zero webhook observations, so this manual observation
+does not establish webhook delivery; platform process tests qualify that path.
+
+Full native macOS/Windows sound, negative-case and callback qualification remains
+pending. Preserve previous failed runs. The manual three-OS aggregate and its
+strict assertions remain unchanged; it is invoked only with explicit producer
+run IDs, never automatically without those inputs. Its fixture tests continue
+to run in platform CI. Release notes must disclose the narrower qualification.
