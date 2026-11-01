@@ -353,7 +353,7 @@ jobs:
     # Native observer is ARM64; shipping Go/helper/client are verified x64.
     # This is an explicit emulation experiment, never native x64 proof transfer.
     runs-on: windows-11-vs2026-arm
-    timeout-minutes: 15
+    timeout-minutes: 90
     env:
       TEST_INSTALLED_ADMISSION: ${{ inputs.admission }}
       TEST_INSTALLED_SCENARIO: ${{ inputs.scenario }}
@@ -390,6 +390,38 @@ jobs:
           if (!$vs) { throw 'native ARM64 MSVC unavailable' }
           & "$vs\MSBuild\Current\Bin\MSBuild.exe" tests/integration/windows_callback_installed/Observer.vcxproj /t:Build /p:Configuration=Release /p:Platform=ARM64 "/p:OutDir=$out\" "/p:IntDir=$out\obj\" /verbosity:minimal
           if ($LASTEXITCODE -ne 0) { throw 'native observer compile failed' }
+      - name: Require real Windows notification acceptance after first-logon Quiet Time
+        if: inputs.phase == 'installed'
+        timeout-minutes: 75
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # This disposable job must retain its own Windows 11 Client login.
+          # No time manipulation, notification-policy change, product Show, or
+          # callback attempt is made while first-login Quiet Time remains.
+          Add-Type -TypeDefinition @'
+          using System;
+          using System.Runtime.InteropServices;
+          public static class TestOnlyNotificationAcceptance {
+            [DllImport("shell32.dll")]
+            public static extern int SHQueryUserNotificationState(out int state);
+          }
+          '@
+          for ($n=0; $n -le 420; $n++) {
+            [int]$state = 0
+            $hr = [TestOnlyNotificationAcceptance]::SHQueryUserNotificationState([ref]$state)
+            if ($hr -ne 0) { throw 'unknown Windows notification presentation status; refuse before installation' }
+            if ($state -eq 5) {
+              Write-Output ('WINDOWS_NOTIFICATION_ACCEPTED=5;elapsed_slots=' + $n)
+              break
+            }
+            if ($state -ne 6) {
+              throw ('Windows notification presentation state is not acceptable: ' + $state)
+            }
+            if ($n -eq 420) { throw 'first-login Quiet Time did not expire within bounded disposable job' }
+            if (($n % 30) -eq 0) { Write-Output ('WINDOWS_QUIET_TIME_WAIT=6;elapsed_slots=' + $n) }
+            Start-Sleep -Seconds 10
+          }
       - name: ONE normal shipping setup/Show and genuine default Shell action
         shell: pwsh
         run: |
