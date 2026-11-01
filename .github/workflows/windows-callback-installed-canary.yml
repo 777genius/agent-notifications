@@ -490,14 +490,14 @@ jobs:
           name: TEST-installed-evidence-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/TEST-installed-*/*.json
-            ${{ runner.temp }}/TEST-installed-*/control/ownership.json
-            ${{ runner.temp }}/TEST-installed-*/control/transaction.json
-            ${{ runner.temp }}/TEST-installed-*/control/windows-callback/*/generation.wne
-            ${{ runner.temp }}/TEST-installed-*/control/windows-callback/*/operator.pending
-            ${{ runner.temp }}/TEST-installed-*/control/windows-callback/*/operator.collected
-            ${{ runner.temp }}/TEST-installed-*/control/windows-callback/*/operator.failure
-            ${{ runner.temp }}/TEST-installed-*/control/windows-callback/*/records/*.wne
-            ${{ runner.temp }}/TEST-installed-*/control/windows-callback/*/attempts/*
+            ${{ runner.temp }}/TEST-installed-*/profile/agent-notifications/ownership.json
+            ${{ runner.temp }}/TEST-installed-*/profile/agent-notifications/transaction.json
+            ${{ runner.temp }}/TEST-installed-*/profile/agent-notifications/windows-callback/*/generation.wne
+            ${{ runner.temp }}/TEST-installed-*/profile/agent-notifications/windows-callback/*/operator.pending
+            ${{ runner.temp }}/TEST-installed-*/profile/agent-notifications/windows-callback/*/operator.collected
+            ${{ runner.temp }}/TEST-installed-*/profile/agent-notifications/windows-callback/*/operator.failure
+            ${{ runner.temp }}/TEST-installed-*/profile/agent-notifications/windows-callback/*/records/*.wne
+            ${{ runner.temp }}/TEST-installed-*/profile/agent-notifications/windows-callback/*/attempts/*
           if-no-files-found: warn
           retention-days: 14
 
