@@ -1,0 +1,6 @@
+<!-- Original Greek-pi integration mark, drawn for this repository; MIT license.
+     Identifies the Pi integration, without copying an upstream brand asset. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <rect x="2" y="2" width="60" height="60" rx="16" fill="#e7c88b"/>
+  <path d="M16 20h34v7h-7v17c0 3 1 4 4 4h3v7h-4c-7 0-11-3-11-10V27h-9v10c0 8-2 14-6 18h-9c5-6 7-11 7-19v-9h-2z" transform="translate(0 -5)" fill="#24211c"/>
+</svg>

@@ -38,7 +38,7 @@ func runSetupProductsContext(ctx context.Context, args []string, input io.Reader
 		return fail(2, err)
 	}
 	if a.Operation == "capabilities" {
-		if err := writeSelectorResult(ctx, output, "setup-products-v1 claude codex opencode gemini qoder cursor\n"); err != nil {
+		if err := writeSelectorResult(ctx, output, "setup-products-v1 claude codex opencode gemini qoder cursor pi\n"); err != nil {
 			return fail(1, err)
 		}
 		return 0
@@ -246,7 +246,7 @@ func runSetupProductsContext(ctx context.Context, args []string, input io.Reader
 	if a.Operation == "channels" {
 		products := []string{}
 		for _, id := range a.Products {
-			if id == "opencode" || id == "gemini" || id == "qoder" || id == "cursor" || id == "copilot-vscode" {
+			if id == "opencode" || id == "gemini" || id == "qoder" || id == "pi" || id == "cursor" || id == "copilot-vscode" {
 				products = append(products, productLabels[id])
 			}
 		}

@@ -1,7 +1,7 @@
 import { strict as assert } from 'node:assert';
 import { inflateRawSync } from 'node:zlib';
-const leaves=new Set(['THIRD_PARTY_NOTICES.txt','bin/claude-notifications','mcp.json','plugin.json','skills/agent-notifications/SKILL.md']);
-const directories=new Set(['bin/','skills/','skills/agent-notifications/']);
+const leaves=new Set(['THIRD_PARTY_NOTICES.txt','bin/claude-notifications','mcp.json','plugin.json','skills/agent-notifications/SKILL.md','com.universal-agent-plugins.pi/index.ts']);
+const directories=new Set(['bin/','skills/','skills/agent-notifications/','com.universal-agent-plugins.pi/']);
 function entries(zip:Buffer,native:boolean):Map<string,Buffer>{
  assert(zip.length>=22&&zip.length<=96<<20,'bounded_ZIP_input');
  let end=-1;
@@ -9,7 +9,7 @@ function entries(zip:Buffer,native:boolean):Map<string,Buffer>{
  assert(end>=0&&end+22+zip.readUInt16LE(end+20)===zip.length,'ZIP_EOCD_required');
  assert(zip.readUInt16LE(end+4)===0&&zip.readUInt16LE(end+6)===0,'single_disk_ZIP_required');
  const count=zip.readUInt16LE(end+10),offset=zip.readUInt32LE(end+16),size=zip.readUInt32LE(end+12);
- assert(count===zip.readUInt16LE(end+8)&&count>0&&count<=(native?128:8)&&offset+size===end,'finite_central_directory');
+ assert(count===zip.readUInt16LE(end+8)&&count>0&&count<=(native?128:leaves.size+directories.size)&&offset+size===end,'finite_central_directory');
  const seen=new Set<string>(),output=new Map<string,Buffer>();let cursor=offset,total=0;
  for(let i=0;i<count;i++){
   assert(cursor+46<=end&&zip.readUInt32LE(cursor)===0x02014b50,'central_header');
@@ -37,7 +37,7 @@ function entries(zip:Buffer,native:boolean):Map<string,Buffer>{
  }
  assert(cursor===end,'complete_central_directory');
  if(native)for(const name of ['ClaudeNotifier.app/Contents/MacOS/terminal-notifier-modern','ClaudeNotifier.app/Contents/Info.plist','ClaudeNotifier.app/Contents/Resources/managed-runtime.json','ClaudeNotifier.app.managed-runtime.json'])assert(output.has(name),'native_required_leaf_'+name);
- else assert(output.size===5&&[...leaves].every(name=>output.has(name)),'exact_five_regular_portable_leaves');
+ else assert(output.size===leaves.size&&[...leaves].every(name=>output.has(name)),'exact_six_regular_portable_leaves');
  return output;
 }
 export const portableEntries=(zip:Buffer)=>entries(zip,false);

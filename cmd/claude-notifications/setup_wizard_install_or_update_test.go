@@ -397,7 +397,17 @@ func TestWizardInstallOrUpdateRetainedDataE2E(t *testing.T) {
 func TestCursorCallerInspectRetainedAbsence(t *testing.T) {
 	ctx := setupCommandContext(t)
 	env := newWizardCLIEnv(t, ctx, false)
-	shared := []string{"--agents", "codex", "--hooks", "false", "--agent-notify", "true", "--yes", "--json", "--control-root", env.control, "--runtime-root", env.runtime, "--global-config", env.global, "--codex-home", env.codexHome, "--client-executable", env.probe, "--helper", env.probe, "--scope-root", env.scope, "--package", env.pkg}
+	// Reuse the immutable probe image with only Codex's client protocol selected;
+	// the portable helper and every Claude caller keep the original probe.
+	codex := filepath.Join(env.root, "TEST-wizard-codex")
+	image, err := os.ReadFile(env.probe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(codex, image, 0700); err != nil {
+		t.Fatal(err)
+	}
+	shared := []string{"--agents", "codex", "--hooks", "false", "--agent-notify", "true", "--yes", "--json", "--control-root", env.control, "--runtime-root", env.runtime, "--global-config", env.global, "--codex-home", env.codexHome, "--client-executable", codex, "--helper", env.probe, "--scope-root", env.scope, "--package", env.pkg}
 	var out bytes.Buffer
 	if code := executeSetupWizardWith(ctx, append([]string{"--action", "install"}, shared...), &out, io.Discard, strings.NewReader(""), false); code != 0 {
 		t.Fatalf("install fixture: %d %s", code, out.String())

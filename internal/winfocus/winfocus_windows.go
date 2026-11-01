@@ -3,6 +3,7 @@
 package winfocus
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -174,6 +175,17 @@ func pidForWindow(hwnd uintptr) uint32 {
 // window hosting Claude (e.g. WindowsTerminal.exe, Code.exe, conhost). It
 // records the handle, owning PID, title and project folder for later focus.
 func CaptureFocusContext(cwd string) (FocusContext, bool) {
+	return captureFocusContext(cwd, warpfocus.FromEnv())
+}
+
+// CaptureContext retains the event budget through optional tmux Warp hints.
+func CaptureContext(ctx context.Context, cwd string) (FocusContext, bool) {
+	if ctx.Err() != nil {
+		return FocusContext{}, false
+	}
+	return captureFocusContext(cwd, warpfocus.FromEnvContext(ctx))
+}
+func captureFocusContext(cwd, warpURL string) (FocusContext, bool) {
 	folder := ""
 	if cwd != "" {
 		folder = filepath.Base(cwd)
@@ -192,7 +204,7 @@ func CaptureFocusContext(cwd string) (FocusContext, bool) {
 
 	ctx := FocusContext{
 		Folder:  folder,
-		WarpURL: warpfocus.FromEnv(),
+		WarpURL: warpURL,
 	}
 
 	pid := windows.GetCurrentProcessId()

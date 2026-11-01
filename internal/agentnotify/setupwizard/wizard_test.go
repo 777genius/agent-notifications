@@ -7839,11 +7839,14 @@ func TestDiscoverAgentsReportsPresenceWithoutExecuting(t *testing.T) {
 	if _, err := os.Lstat(state); !os.IsNotExist(err) {
 		t.Fatal("discover created UAP state")
 	}
-	if len(got) != 2 || got[0].ID != "claude" || !got[0].Present || got[0].Path != path {
+	if len(got) != 3 || got[0].ID != "claude" || !got[0].Present || got[0].Path != path {
 		t.Fatalf("claude: %+v", got)
 	}
 	if got[1].Present || got[1].Path != "" || got[0].Bound || got[1].Bound {
 		t.Fatalf("codex should be absent: %+v", got)
+	}
+	if got[1].ID != "codex" || got[2].ID != "pi" || got[2].Present || got[2].Path != "" || got[2].Bound {
+		t.Fatalf("Pi discovery changed existing rows: %+v", got)
 	}
 }
 

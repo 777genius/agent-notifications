@@ -41,13 +41,13 @@ type bootstrapInitialObservation struct {
 	ChannelPolicy   []byte
 }
 
-var intentScalarKeys = []string{"home", "claude-config", "claude-mcp-config", "codex-home", "codex-mcp-config", "opencode-config-dir", "gemini-config-root", "qoder-config-root", "control-root", "runtime-root", "global-config", "claude-executable", "codex-executable", "opencode-executable", "gemini-executable", "qoder-executable", "scope-root", "client-executable", "local-settings"}
+var intentScalarKeys = []string{"home", "claude-config", "claude-mcp-config", "codex-home", "codex-mcp-config", "opencode-config-dir", "gemini-config-root", "qoder-config-root", "pi-agent-dir", "pi-executable", "control-root", "runtime-root", "global-config", "claude-executable", "codex-executable", "opencode-executable", "gemini-executable", "qoder-executable", "scope-root", "client-executable", "local-settings"}
 
 func intentWizardRequest(i confirmedBootstrapIntent) setupwizard.Request {
 	scopes := i.Scopes
 	ids := []string{}
 	for _, id := range i.Request.Products {
-		if id == "claude" || id == "codex" || id == "cursor" || id == "copilot-vscode" {
+		if id == "claude" || id == "codex" || id == "cursor" || id == "copilot-vscode" || id == "pi" && len(i.Request.Products) == 1 {
 			ids = append(ids, id)
 		}
 	}
@@ -57,7 +57,21 @@ func intentWizardRequest(i confirmedBootstrapIntent) setupwizard.Request {
 		ClaudeConfig: string(scopes["claude-config"]), CodexHome: string(scopes["codex-home"]),
 		CursorConfig: string(scopes["scope-root"]), ScopeRoot: string(scopes["scope-root"]),
 		MCPConfig:         map[string]string{"claude": string(scopes["claude-mcp-config"]), "codex": string(scopes["codex-mcp-config"])},
-		ClientExecutables: map[string]string{"claude": string(scopes["claude-executable"]), "codex": string(scopes["codex-executable"]), "cursor": string(scopes["client-executable"]), "copilot-vscode": string(scopes["client-executable"])},
+		ClientExecutables: map[string]string{"pi": string(scopes["pi-executable"]), "claude": string(scopes["claude-executable"]), "codex": string(scopes["codex-executable"]), "cursor": string(scopes["client-executable"]), "copilot-vscode": string(scopes["client-executable"])},
+	}
+	if len(ids) == 1 && ids[0] == "pi" {
+		r.PiAgentDir = string(scopes["pi-agent-dir"])
+		r.ClaudeConfig, r.CodexHome = "", ""
+		r.MCPConfig = nil
+		r.ClientExecutables = map[string]string{"pi": string(scopes["pi-executable"])}
+		for _, u := range i.Units {
+			if u.Product == "pi" {
+				desktop, webhook := u.Desktop, u.Webhook
+				r.PiDesktop = &desktop
+				r.PiWebhook = &webhook
+			}
+		}
+		r.PiChannelPreimage, _ = installruntime.ObserverChannelPreimage(i.Initial.ChannelPolicy, "piNotifications")
 	}
 	if i.LocalConfig != nil {
 		r.CursorConfig = ""
@@ -126,7 +140,7 @@ func buildConfirmedBootstrapIntent(ctx context.Context, a setupProductsArgs, e p
 		}
 	}
 	r := intentWizardRequest(i)
-	if !a.SkipAgentNotify && len(r.Agents) > 0 {
+	if (!a.SkipAgentNotify || containsProduct(r.Agents, "pi")) && len(r.Agents) > 0 {
 		migration, prepareErr := setupwizard.PrepareStateMigration(ctx, r.ControlRoot)
 		if prepareErr != nil {
 			return i, nil, bootstrapStateMigrationError(prepareErr)
@@ -143,7 +157,7 @@ func buildConfirmedBootstrapIntent(ctx context.Context, a setupProductsArgs, e p
 	if containsProduct(a.Products, "copilot-vscode") {
 		i.MCP.Selected = []string{"copilot-vscode"}
 		i.MCP.Projection.Profiles = map[string][]byte{"copilot-vscode": i.Scopes["scope-root"]}
-	} else if len(r.Agents) > 0 && !a.SkipAgentNotify {
+	} else if len(r.Agents) > 0 && (!a.SkipAgentNotify || containsProduct(r.Agents, "pi")) {
 		projection, generation, err := setupwizard.ObserveBootstrapMCP(ctx, r)
 		if err != nil {
 			return i, nil, err
@@ -152,7 +166,7 @@ func buildConfirmedBootstrapIntent(ctx context.Context, a setupProductsArgs, e p
 			return i, nil, errors.New("concurrent_change")
 		}
 		i.MCP.Projection = projection
-		if a.AgentNotify {
+		if a.AgentNotify || containsProduct(r.Agents, "pi") {
 			i.MCP.Selected = append([]string(nil), r.Agents...)
 		} else {
 			inspect := r
@@ -187,6 +201,9 @@ func buildConfirmedBootstrapIntent(ctx context.Context, a setupProductsArgs, e p
 	for _, id := range a.Products {
 		portable := id == "claude" || id == "codex" || id == "cursor" || id == "copilot-vscode"
 		u := bootstrapProductUnits{Product: id, Hooks: portable && id != "cursor", Native: !portable, MCP: containsProduct(i.MCP.Selected, id), Skill: containsProduct(i.MCP.Selected, id), PreservedOff: containsProduct(i.MCP.Skipped, id)}
+		if id == "pi" {
+			u.Hooks, u.Native, u.MCP, u.Skill, u.PreservedOff = false, true, false, false, false
+		}
 		if id == "copilot-vscode" {
 			u.Hooks, u.Native, u.MCP, u.Skill = false, i.LocalConfig.NativeStop, len(i.LocalConfig.MCPServers) > 0, len(i.LocalConfig.Skills) > 0
 			u.Desktop, u.Webhook = a.Desktop, a.Webhook
@@ -252,7 +269,7 @@ func preflightBootstrapIntent(ctx context.Context, i confirmedBootstrapIntent, a
 		}
 	}
 	for _, key := range intentScalarKeys {
-		if key == "home" || key == "global-config" || key == "claude-mcp-config" || key == "codex-mcp-config" || containsProduct([]string{"claude-executable", "codex-executable", "opencode-executable", "gemini-executable", "qoder-executable", "client-executable"}, key) {
+		if key == "home" || key == "global-config" || key == "claude-mcp-config" || key == "codex-mcp-config" || containsProduct([]string{"claude-executable", "codex-executable", "opencode-executable", "gemini-executable", "qoder-executable", "pi-executable", "client-executable"}, key) {
 			continue
 		}
 		if path := string(i.Scopes[key]); path != "" {
@@ -371,7 +388,7 @@ func bootstrapIntentSummary(i confirmedBootstrapIntent, policy map[string]json.R
 	}
 	raw = append(raw, "", "Technical details - verified installer", "  Release: "+i.Provenance.Version, "  Source commit: "+i.Provenance.SourceCommit, "  SHA256: "+i.Provenance.SHA256)
 	for _, b := range i.MCP.Projection.Bindings {
-		raw = append(raw, fmt.Sprintf("  %s MCP: installation %s; binding %s; target %s", b.Client, i.MCP.Projection.InstallationID, b.ID, bootstrapAuthority(string(b.Target))))
+		raw = append(raw, fmt.Sprintf("  %s "+bootstrapBindingKind(b.Client)+": installation %s; binding %s; target %s", b.Client, i.MCP.Projection.InstallationID, b.ID, bootstrapAuthority(string(b.Target))))
 	}
 	for _, d := range i.MCP.Projection.Direct {
 		raw = append(raw, "  Existing direct MCP entry: "+d.ID+"; config: "+bootstrapAuthority(string(d.Config)))
@@ -405,14 +422,14 @@ func resolveBootstrapChannels(a setupProductsArgs, product string, raw json.RawM
 // than the bounded host handoff, and unrelated preferences never drive defaults.
 func selectedBootstrapChannelPolicy(products []string, raw []byte) ([]byte, error) {
 	selected := map[string]json.RawMessage{}
-	if !containsProduct(products, "opencode") && !containsProduct(products, "gemini") && !containsProduct(products, "qoder") && !containsProduct(products, "cursor") {
+	if !containsProduct(products, "opencode") && !containsProduct(products, "gemini") && !containsProduct(products, "qoder") && !containsProduct(products, "cursor") && !containsProduct(products, "pi") {
 		return nil, nil
 	}
 	var route map[string]json.RawMessage
 	if len(raw) > 0 && (json.Unmarshal(raw, &route) != nil || route == nil) {
 		return nil, errors.New("invalid observer channel policy")
 	}
-	for _, pair := range [][2]string{{"opencode", "openCodeNotifications"}, {"gemini", "geminiNotifications"}, {"qoder", "qoderNotifications"}, {"cursor", "cursorNotifications"}} {
+	for _, pair := range [][2]string{{"opencode", "openCodeNotifications"}, {"gemini", "geminiNotifications"}, {"qoder", "qoderNotifications"}, {"cursor", "cursorNotifications"}, {"pi", "piNotifications"}} {
 		if containsProduct(products, pair[0]) {
 			if leaf, ok := route[pair[1]]; ok {
 				selected[pair[1]] = leaf
@@ -433,7 +450,16 @@ func bootstrapObserverChannelKey(product string) string {
 		return "qoderNotifications"
 	case "cursor":
 		return "cursorNotifications"
+	case "pi":
+		return "piNotifications"
 	default:
 		return ""
 	}
+}
+
+func bootstrapBindingKind(client string) string {
+	if client == "pi" {
+		return "native extension"
+	}
+	return "MCP"
 }

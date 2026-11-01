@@ -1,5 +1,5 @@
 import Bowser from "bowser";
-export const agentProducts = ["claude", "codex", "opencode", "gemini", "qoder", "cursor"] as const;
+export const agentProducts = ["claude", "codex", "opencode", "gemini", "qoder", "cursor", "pi"] as const;
 export type AgentProduct = (typeof agentProducts)[number];
 export type Product = AgentProduct | "both";
 export type Target = "unknown" | "macos" | "linux" | "windows" | "manual";
@@ -12,6 +12,7 @@ export const products = [
   { value: "gemini", label: "Gemini CLI" },
   { value: "qoder", label: "Qoder" },
   { value: "cursor", label: "Cursor CLI" },
+  { value: "pi", label: "Pi" },
 ] as const;
 export const targets = [
   { value: "unknown", label: "Choose target OS" },

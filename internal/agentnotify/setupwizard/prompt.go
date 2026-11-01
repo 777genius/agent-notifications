@@ -70,7 +70,7 @@ func (p *LinePrompt) SelectAgents(ctx context.Context, clients []AgentCapability
 		claude = agentChoiceLabel(clients, "claude", claude)
 		codex = agentChoiceLabel(clients, "codex", codex)
 	}
-	if _, err := io.WriteString(p.Out, "Install notifications for: 1) "+claude+"  2) "+codex+"  3) Both\nChoice: "); err != nil {
+	if _, err := io.WriteString(p.Out, "Install notifications for: 1) "+claude+"  2) "+codex+"  3) Both  4) Pi (native extension)\nChoice: "); err != nil {
 		return nil, err
 	}
 	line, err := readLine(ctx, p.reader())
@@ -84,6 +84,8 @@ func (p *LinePrompt) SelectAgents(ctx context.Context, clients []AgentCapability
 		return []string{"codex"}, nil
 	case "3":
 		return []string{"claude", "codex"}, nil
+	case "4":
+		return []string{"pi"}, nil
 	case "":
 		return nil, ErrPromptCanceled
 	default:
@@ -248,6 +250,10 @@ func FillInteractive(ctx context.Context, req Request, p Prompter, existing func
 	}
 	if req.Action == ActionInspect {
 		return req, nil
+	}
+	if len(req.Agents) == 1 && req.Agents[0] == "pi" && unitFlagsOmitted(req) {
+		req.Hooks = boolPtr(false)
+		req.AgentNotify = boolPtr(true)
 	}
 	if unitFlagsOmitted(req) && !req.Yes && req.Action != ActionUpdate && req.Action != ActionRepair {
 		live := lookupLiveUnits(req)
@@ -542,10 +548,19 @@ func RetryCommand(req Request) []string {
 	appendPath("--global-config", req.GlobalConfig)
 	appendPath("--codex-home", req.CodexHome)
 	appendPath("--claude-config", req.ClaudeConfig)
+	appendPath("--pi-agent-dir", req.PiAgentDir)
+	appendPath("--pi-channel-preimage", req.PiChannelPreimage)
+	if req.PiDesktop != nil {
+		cmd = append(cmd, "--pi-desktop", boolFlag(*req.PiDesktop))
+	}
+	if req.PiWebhook != nil {
+		cmd = append(cmd, "--pi-webhook", boolFlag(*req.PiWebhook))
+	}
 	appendPath("--client-executable", req.ClientExecutable)
 	if req.ClientExecutables != nil {
 		appendPath("--claude-executable", req.ClientExecutables["claude"])
 		appendPath("--codex-executable", req.ClientExecutables["codex"])
+		appendPath("--pi-executable", req.ClientExecutables["pi"])
 	}
 	appendPath("--helper", req.Helper)
 	appendPath("--scope-root", req.ScopeRoot)

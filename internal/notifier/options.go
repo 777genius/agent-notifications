@@ -1,11 +1,21 @@
 package notifier
 
+import "context"
+
 // SendOption customises a single desktop notification delivery.
 type SendOption func(*sendOptions)
 
 type sendOptions struct {
-	muteSound        bool
-	hookPresentation *HookPresentation
+	muteSound                 bool
+	hookPresentation          *HookPresentation
+	executionContext          context.Context
+	runtimeRoot, nativeHelper string
+}
+
+// WithInstalledRuntime supplies paths already verified by the installation
+// owner under its retained lease. Event/model fields must never supply them.
+func WithInstalledRuntime(root, helper string) SendOption {
+	return func(o *sendOptions) { o.runtimeRoot, o.nativeHelper = root, helper }
 }
 
 // HookPresentation carries literal hook content without the legacy bracket
