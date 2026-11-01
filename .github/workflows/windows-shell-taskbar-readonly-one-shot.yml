@@ -1,0 +1,68 @@
+name: TEST-only Windows 11 taskbar readiness inventory
+on:
+  push:
+    branches: [ci/windows-uia-shell-preflight-20261101]
+    paths: ['.github/workflows/windows-shell-taskbar-readonly-one-shot.yml']
+permissions:
+  contents: read
+jobs:
+  tray:
+    if: ${{ github.repository == '777genius/agent-notifications' && github.run_attempt == 1 }}
+    runs-on: windows-11-vs2026-arm
+    timeout-minutes: 5
+    steps:
+      - name: Read Shell taskbar/window presence without launching apps
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          Add-Type -AssemblyName System.Windows.Forms
+          $native=@'
+          using System;
+          using System.Runtime.InteropServices;
+          public static class TestOnlyShellWindows {
+            [DllImport("user32.dll",CharSet=CharSet.Unicode)]public static extern IntPtr FindWindow(string cls,string name);
+            [DllImport("user32.dll")]public static extern bool IsWindowVisible(IntPtr h);
+            [DllImport("user32.dll")]public static extern IntPtr GetForegroundWindow();
+            [DllImport("user32.dll")]public static extern IntPtr GetShellWindow();
+            [DllImport("user32.dll")]public static extern uint GetWindowThreadProcessId(IntPtr h,out uint id);
+            [DllImport("kernel32.dll")]public static extern uint WTSGetActiveConsoleSessionId();
+            [DllImport("user32.dll")]public static extern bool GetWindowRect(IntPtr hwnd,out Rect rect);
+            [StructLayout(LayoutKind.Sequential)]public struct Rect {
+              public int Left,Top,Right,Bottom;
+            }
+          }
+          '@
+          Add-Type -TypeDefinition $native
+          $session=[System.Diagnostics.Process]::GetCurrentProcess().SessionId
+          $screen=[System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+          $rows=@()
+          foreach($cls in @('Shell_TrayWnd','Shell_SecondaryTrayWnd','Progman','WorkerW','NotifyIconOverflowWindow','ControlCenterWindow','Windows.UI.Core.CoreWindow')){
+            $h=[TestOnlyShellWindows]::FindWindow($cls,$null)
+            $found=$h -ne [IntPtr]::Zero
+            $pidValue=[uint32]0
+            $visible=$false;$inSession=$false;$rectPositive=$false
+            if($found){
+              $null=[TestOnlyShellWindows]::GetWindowThreadProcessId($h,[ref]$pidValue)
+              $p=Get-Process -Id $pidValue -ErrorAction SilentlyContinue
+              $inSession=$null -ne $p -and $p.SessionId -eq $session
+              $visible=[TestOnlyShellWindows]::IsWindowVisible($h)
+              $rect=New-Object TestOnlyShellWindows+Rect
+              if([TestOnlyShellWindows]::GetWindowRect($h,[ref]$rect)){
+                $rectPositive=$rect.Right -gt $rect.Left -and $rect.Bottom -gt $rect.Top
+              }
+            }
+            $rows+=@{windowClass=$cls;exists=$found;visible=$visible;ownedByCurrentSession=$inSession;positiveBounds=$rectPositive}
+          }
+          $shell=[TestOnlyShellWindows]::GetShellWindow()
+          $foreground=[TestOnlyShellWindows]::GetForegroundWindow()
+          $report=[ordered]@{
+            scope='read_only_shell_taskbar_identity_preflight'
+            session=$session
+            activeConsoleSession=[TestOnlyShellWindows]::WTSGetActiveConsoleSessionId()
+            screenPositive=($screen.Width -gt 0 -and $screen.Height -gt 0)
+            shellWindowPresent=($shell -ne [IntPtr]::Zero)
+            foregroundPresent=($foreground -ne [IntPtr]::Zero)
+            windowClasses=$rows
+            installationOrCallbackQualified=$false
+          }
+          Write-Output ('SHELL_TASKBAR_INVENTORY='+($report|ConvertTo-Json -Depth 5 -Compress))
