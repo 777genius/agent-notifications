@@ -839,7 +839,8 @@ static Selection census(IUIAutomation* automation, IUIAutomationTreeWalker* walk
  ComPtr<IUIAutomationElement> desktop, first;
  budget(); winrt::check_hresult(automation->GetRootElement(&desktop));
  budget(); winrt::check_hresult(walker->GetFirstChildElement(desktop.Get(),&first));
- unsigned rootsSeen = 0, nodes = 0, titles = 0;
+ unsigned rootsSeen = 0, nodes = 0, titles = 0, bodies = 0;
+ clickTitles.store(0,std::memory_order_relaxed); clickBodies.store(0,std::memory_order_relaxed);
  while (first) {
   clickAt("uia_root_count_limit"); budget(); ++rootsSeen; clickRoots.store(rootsSeen,std::memory_order_relaxed); require(rootsSeen <= 128);
   int pid = 0; winrt::check_hresult(first->get_CurrentProcessId(&pid));
@@ -858,7 +859,7 @@ static Selection census(IUIAutomation* automation, IUIAutomationTreeWalker* walk
     clickAt("uia_node_depth_count_limit"); budget(); owner->live(); ++nodes; clickNodes.store(nodes,std::memory_order_relaxed); require(nodes <= 2048 && node.depth <= 24);
     clickAt("uia_node_provider_identity"); int provider = 0; winrt::check_hresult(node.element->get_CurrentProcessId(&provider)); require(provider == pid);
     clickAt("uia_node_name"); const auto literal = name(node.element.Get());
-    if (literal == body) { clickAt("uia_body_uniqueness"); clickBodies.fetch_add(1,std::memory_order_relaxed); require(!found.body); found.body = node.element; }
+    if (literal == body) { clickAt("uia_body_uniqueness"); ++bodies; clickBodies.store(bodies,std::memory_order_relaxed); require(!found.body); found.body = node.element; }
     if (literal == title) {
      clickAt("uia_title_uniqueness"); ++titles; clickTitles.store(titles,std::memory_order_relaxed); require(titles == 1); found.title = node.element; found.pid = DWORD(pid);
      auto parent = node.element;
@@ -1020,9 +1021,18 @@ static void click() {
   const auto title = string(request,L"title"), body = string(request,L"body");
   require(title == L"Navigation TEST "+wide(nonce) && body == L"Cold callback TEST "+wide(nonce));
   clickAt("cold_helper_census"); require(helpers(route).empty());
-  historyDiagnostic(route);
   clickAt("uia_select_notification"); Selection selected;
- while (!selected.row) { budget(); selected = census(automation.Get(),walker.Get(),title,body); if (!selected.row) Sleep(50); }
+  try {
+   while (!selected.row) { budget(); selected = census(automation.Get(),walker.Get(),title,body); if (!selected.row) Sleep(50); }
+  } catch (...) {
+   // Diagnostics are strictly after a refused real UIA selection; never
+   // delay a visible toast, change the primary refusal, or authorize Invoke.
+   const auto failedAt=clickStep.load(std::memory_order_relaxed);
+   end=GetTickCount64()+3000; // Separate bounded diagnostic window.
+   try { historyDiagnostic(route); } catch (...) {}
+   clickStep.store(failedAt,std::memory_order_relaxed);
+   throw;
+  }
  clickAt("selected_shell_identity"); Process shell(selected.pid,true,nullptr);
  auto proof = fact(); put(proof,L"snapshot_sha",route.snapshotSHA);
  put(proof,L"reference",route.record.reference); put(proof,L"generation",route.snapshot.generation);
