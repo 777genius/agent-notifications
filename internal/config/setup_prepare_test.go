@@ -3,6 +3,7 @@ package config
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -197,6 +198,10 @@ func TestPrepareProcess(t *testing.T) {
 	}
 	_, e := PrepareGlobalConfig(context.Background(), os.Getenv("PREP_C"), os.Getenv("PREP_L"), os.Getenv("PREP_D"))
 	if e != nil {
+		var ce *Error
+		if errors.As(e, &ce) {
+			t.Fatalf("%v [stage=%s win32=%d]", e, ce.causeStage, ce.causeErrno)
+		}
 		t.Fatal(e)
 	}
 }

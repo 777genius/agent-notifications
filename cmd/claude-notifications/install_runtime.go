@@ -438,6 +438,9 @@ func installRuntime(args []string, output io.Writer) error {
 			return extra, nil
 		}
 	}
+	if err := piauthority.EnlistRuntimeRefresh(ctx, &req); err != nil {
+		return err
+	}
 	ledger, err := installruntime.Commit(ctx, req)
 	if err == nil && seedAfterCommit {
 		// The kernel requires an existing consumer before any policy mutation.
