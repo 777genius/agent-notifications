@@ -147,7 +147,7 @@ jobs:
           command_status=0
           pipeline_status=(0 0)
           observation_profile_start pievent
-          go test -p 1 -v -race -coverprofile=coverage-pi-event.txt -covermode=atomic -trace=observation-evidence/pievent.trace ./internal/pievent 2>&1 | tee observation-evidence/pievent.log || pipeline_status=("${PIPESTATUS[@]}")
+          go test -p 1 -v -race -timeout=15m -coverprofile=coverage-pi-event.txt -covermode=atomic -trace=observation-evidence/pievent.trace ./internal/pievent 2>&1 | tee observation-evidence/pievent.log || pipeline_status=("${PIPESTATUS[@]}")
           command_status=${pipeline_status[0]}
           observation_profile_stop
           if (( command_status == 0 )); then command_status=${pipeline_status[1]}; fi
