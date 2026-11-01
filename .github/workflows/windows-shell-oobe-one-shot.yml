@@ -6,8 +6,39 @@ on:
 permissions:
   contents: read
 jobs:
+  cancel-previous-disposable:
+    if: ${{ github.repository == '777genius/agent-notifications' && github.run_attempt == 1 && github.event.head_commit.message == 'probe-windows-arm-quiet-time-expiry-v13' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    permissions:
+      contents: read
+      actions: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Cancel only previous flawed user-scoped-QuietHours test
+        shell: bash
+        run: |
+          set -euo pipefail
+          run_id=41347033715
+          expected='3f7821cb83e58191735e68fe972e72c00963dfcc'
+          response="$(gh api "repos/777genius/agent-notifications/actions/runs/$run_id")"
+          actual="$(jq -r .head_sha <<<"$response")"
+          branch="$(jq -r .head_branch <<<"$response")"
+          status="$(jq -r .status <<<"$response")"
+          [[ "$actual" == "$expected" && "$branch" == 'ci/windows-shell-oobe-probe-20261101' ]] || exit 1
+          if [[ "$status" == 'completed' ]]; then
+            echo 'Previous diagnostic already completed; no cancellation necessary.'
+          elif [[ "$status" == 'in_progress' || "$status" == 'queued' ]]; then
+            gh api --method POST "repos/777genius/agent-notifications/actions/runs/$run_id/cancel"
+            echo 'Cancelled the single exact-SHA previous disposable diagnostic; no user/product run affected.'
+          else
+            echo "Unrecognized run status; refusing to cancel: $status" >&2
+            exit 1
+          fi
   shell-overlay:
-    if: ${{ github.repository == '777genius/agent-notifications' && github.run_attempt == 1 && github.event.head_commit.message == 'probe-windows-arm-quiet-time-expiry-v12' }}
+    needs: cancel-previous-disposable
+    if: ${{ github.repository == '777genius/agent-notifications' && github.run_attempt == 1 && github.event.head_commit.message == 'probe-windows-arm-quiet-time-expiry-v13' }}
     runs-on: windows-11-vs2026-arm
     timeout-minutes: 80
     steps:
@@ -81,7 +112,7 @@ jobs:
           # A change is a preflight hypothesis, never callback qualification.
           $quietPolicy = 'HKCU:\SOFTWARE\Policies\Microsoft\Windows\CurrentVersion\QuietHours'
           New-Item -Path $quietPolicy -Force | Out-Null
-          New-ItemProperty -Path $quietPolicy -Name Enable -PropertyType DWord -Value 1 -Force | Out-Null
+          New-ItemProperty -Path $quietPolicy -Name Enable -PropertyType DWord -Value 0 -Force | Out-Null
           Start-Sleep -Milliseconds 500
           $notificationStateAfterQuietPolicy = [TestOnlyShellProbe]::NotificationState()
           $before = Census
@@ -217,7 +248,7 @@ jobs:
           $report = [ordered]@{
             notificationStateBefore = $notificationStateBefore
             notificationStateAfterQuietPolicy = $notificationStateAfterQuietPolicy
-            disposableQuietHoursPolicyEnable = 1
+            disposableQuietHoursPolicyEnable = 0
             notificationStateAfterCleanup = $notificationStateAfterCleanup
             quietTimeMinutesElapsed = $quietCycles
             notificationStateAfterShortcut = $notificationStateAfterShortcut
