@@ -14,6 +14,7 @@ import (
 	"github.com/777genius/agent-notifications/internal/agentnotify/portableasset"
 	"github.com/777genius/agent-notifications/internal/installruntime"
 	"github.com/777genius/agent-notifications/internal/thirdpartynotices"
+	soundassets "github.com/777genius/agent-notifications/sounds"
 )
 
 type BuildRequest struct {
@@ -140,6 +141,15 @@ func Build(req BuildRequest) (Package, error) {
 		files[path] = append(body, '\n')
 	}
 	files["bin/"+name] = binary
+	// Package the same five repository-owned cues for standalone and managed
+	// Qoder installations. Never resolve sounds from an ambient user directory.
+	for _, name := range []string{"task-complete.mp3", "review-complete.mp3", "question.mp3", "plan-ready.mp3", "error.mp3"} {
+		cue, err := soundassets.Builtins.ReadFile(name)
+		if err != nil || len(cue) == 0 {
+			return Package{}, fmt.Errorf("embedded Qoder cue %s unavailable: %v", name, err)
+		}
+		files["sounds/"+name] = cue
+	}
 	for rel, body := range files {
 		path := filepath.Join(req.OutputRoot, filepath.FromSlash(rel))
 		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
