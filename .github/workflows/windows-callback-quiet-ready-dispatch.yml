@@ -1,0 +1,52 @@
+name: One-shot exact-source Windows callback quiet-ready physical admission
+on:
+  push:
+    branches: [ci/win-callback-quiet-ready-dispatch-20261101]
+    paths: ['.github/workflows/windows-callback-quiet-ready-dispatch.yml']
+permissions:
+  contents: read
+  actions: write
+jobs:
+  admitted:
+    if: ${{ github.repository == '777genius/agent-notifications' && github.run_attempt == 1 && github.event.head_commit.message == 'test(windows): dispatch fresh quiet-ready basic and retained' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario: [basic, retained]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Dispatch exactly one fresh source-pinned Windows Client ${{ matrix.scenario }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TEST_SCENARIO: ${{ matrix.scenario }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          source='8eed4d361a7db2c62de8490ceb6594f60d597e85'
+          parent='9c2395f234549aeac24b4d311a4399f359ad7886'
+          acceptedIntakeRun='41298548456'
+          acceptedIntakeHead='9e8c9938709b9e43888bf7c57fc320cfd506684d'
+          rawSHA='d442a3d7d5c229f45e5e11995711ac2619c8dbc89e3fa2bc185287dc8db8e76e'
+          fullName='OpenAI.Codex_26.1027.3384.0_x64__2p2nqsd0c76g0'
+          [[ "$TEST_SCENARIO" == basic || "$TEST_SCENARIO" == retained ]] || exit 1
+          current="$(gh api repos/777genius/agent-notifications/git/ref/heads/test/windows-installed-cold-callback -q .object.sha)"
+          currentParent="$(gh api repos/777genius/agent-notifications/git/ref/heads/feat/windows-callback-installed -q .object.sha)"
+          intake="$(gh api repos/777genius/agent-notifications/actions/runs/$acceptedIntakeRun)"
+          intakeHead="$(jq -r .head_sha <<<"$intake")"
+          intakeConclusion="$(jq -r .conclusion <<<"$intake")"
+          intakeAttempt="$(jq -r .run_attempt <<<"$intake")"
+          if [[ "$current" != "$source" || "$currentParent" != "$parent" || "$intakeHead" != "$acceptedIntakeHead" || "$intakeConclusion" != success || "$intakeAttempt" != 1 ]]; then
+            echo 'Refuse: source, parent or independently accepted signed archive intake changed.' >&2
+            exit 1
+          fi
+          [[ "$rawSHA" =~ ^[a-f0-9]{64}$ && "$fullName" == OpenAI.Codex_*_x64__2p2nqsd0c76g0 ]] || exit 1
+          gh api --method POST repos/777genius/agent-notifications/actions/workflows/windows-callback-contracts.yml/dispatches \
+            -f ref=test/windows-installed-cold-callback \
+            -f 'inputs[admission]=one-fresh-disposable-installed-callback' \
+            -f 'inputs[phase]=installed' \
+            -f "inputs[scenario]=$TEST_SCENARIO" \
+            -f "inputs[expectedArchiveSHA]=$rawSHA" \
+            -f "inputs[expectedFullName]=$fullName" \
+            -f 'inputs[coreRef]='
+          echo "Fresh disposable current-source $TEST_SCENARIO dispatched ONCE; this is not E2E qualification."
