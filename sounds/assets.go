@@ -6,5 +6,6 @@ package soundassets
 import "embed"
 
 // Builtins contains the original five tracked MP3 files.
+//
 //go:embed *.mp3
 var Builtins embed.FS
