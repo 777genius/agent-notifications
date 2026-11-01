@@ -32,6 +32,12 @@ func LockExisting(ctx context.Context, path string) (func(), error) {
 }
 
 func lock(ctx context.Context, path string, create bool) (func(), error) {
+	return lockMode(ctx, path, create, false)
+}
+
+// Readers pin the existing inode without excluding other read-only startup
+// checks. All installation writers continue to acquire an exclusive lock.
+func lockMode(ctx context.Context, path string, create, shared bool) (func(), error) {
 	if _, ok := ctx.Deadline(); !ok {
 		return nil, fmt.Errorf("installation lock requires a deadline")
 	}
@@ -49,7 +55,13 @@ func lock(ctx context.Context, path string, create bool) (func(), error) {
 			_ = f.Close()
 			return nil, err
 		}
-		acquired, err := tryLock(f)
+		var acquired bool
+		var err error
+		if shared {
+			acquired, err = tryReadLock(f)
+		} else {
+			acquired, err = tryLock(f)
+		}
 		if err != nil {
 			_ = f.Close()
 			return nil, err

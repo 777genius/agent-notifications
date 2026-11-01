@@ -439,8 +439,11 @@ type Lease struct {
 // Acquire rejects missing/revoked/foreign bindings before any runtime work.
 // The consumer record, not a data marker, authorizes the complete identity.
 func Acquire(ctx context.Context, data, name string) (*Lease, error) {
-	if ctx == nil || ctx.Err() != nil || !selector.MatchString(name) {
+	if ctx == nil || !selector.MatchString(name) {
 		return nil, ErrInvalid
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
@@ -461,10 +464,19 @@ func Acquire(ctx context.Context, data, name string) (*Lease, error) {
 			return nil, ErrInvalid
 		}
 	}
-	snapshot, err := installruntime.ReadInstalledSnapshot(b.ControlRoot)
+	snapshot, release, err := installruntime.AcquireCurrentSetupLease(ctx, b.ControlRoot)
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		return nil, ErrInvalid
 	}
+	success := false
+	defer func() {
+		if !success {
+			release()
+		}
+	}()
 	if err = b.CheckSnapshot(snapshot); err != nil {
 		return nil, err
 	}
@@ -476,17 +488,13 @@ func Acquire(ctx context.Context, data, name string) (*Lease, error) {
 	if checkPrimary(executable) != nil {
 		return nil, ErrInvalid
 	}
-	_, release, err := installruntime.AcquireSetupLease(ctx, b.ControlRoot, snapshot)
-	if err != nil {
-		return nil, ErrInvalid
-	}
 	// Recheck the selected file under the lease: a locator removed while waiting
 	// for setup must not become an admitted launch.
 	current, readErr := readPrivate(data, name)
 	if readErr != nil || !bytes.Equal(current, raw) || checkPrimary(executable) != nil {
-		release()
 		return nil, ErrInvalid
 	}
+	success = true
 	return &Lease{Binding: b, Executable: executable, SHA256: snapshot.Ledger.Files[executable].SHA256, Release: release}, nil
 }
 
