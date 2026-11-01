@@ -32,6 +32,14 @@ func Publish(ctx context.Context, b portable.Binding, path string) (err error) {
 	if err != nil {
 		return err
 	}
+	// Pin the installed generation from revision verification through the file
+	// write. A concurrent Cursor/runtime upgrade cannot supersede this hash
+	// and then have its newer locator overwritten by an earlier publication.
+	snapshot, release, err := installruntime.AcquireSetupLease(ctx, b.ControlRoot, snapshot)
+	if err != nil {
+		return err
+	}
+	defer release()
 	revision, _, err := installedRevision(ctx, b, path, snapshot, false)
 	if err != nil {
 		return err

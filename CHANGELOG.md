@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Suppress Claude Stop notifications from stale transcripts ([#521](https://github.com/777genius/agent-notifications/pull/521)).
 - Respect click opt-out and share native admission across notification consumers ([#550](https://github.com/777genius/agent-notifications/pull/550)).
 - Include the Pi observer in sealed portable-package and isolated Codex smoke verification.
+- Keep retained Pi notifications working after Cursor-only runtime upgrades, preserve Cursor during Pi-only lifecycle operations, and retain repair of missing owned runtime files ([#560](https://github.com/777genius/agent-notifications/issues/560)).
+- Wait for transient Windows configuration sharing conflicts within the original preparation deadline.
 
 ### Platform notes
 - Pi uses the common notification config. Existing webhook destinations receive Pi events only when Pi webhook consent is enabled. Tested standalone Pi v1.4.0; Windows requires the real standalone pi.exe rather than an npm command shim. Restart Pi or run /reload after installation changes.
