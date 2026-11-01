@@ -249,6 +249,16 @@ try { await main(); } catch (error) {
       }
       console.error('TEST UIA refusal stage (no retry): '+JSON.stringify(facts));
     }
+    const h = JSON.parse((await boundedRead(path.join(root,'toast-history-diagnostic.json'),8192)).toString()) as Record<string,unknown>;
+    if (h.source===source && h.nonce===tuple.nonce && h.scope==='read_only_unqualified_toast_history') {
+      const diagnostic: Record<string,string|number> = {};
+      if (typeof h.status==='string' && ['queried','winrt_error','unavailable_or_bounded'].includes(h.status)) diagnostic.status=h.status;
+      for (const key of ['count','hresult']) {
+        const v=h[key];
+        if (typeof v==='number' && Number.isSafeInteger(v) && v>=0 && v<=4294967295) diagnostic[key]=v;
+      }
+      console.error('TEST read-only toast history (not click proof): '+JSON.stringify(diagnostic));
+    }
   } catch { /* Diagnostic best effort must never change the original refusal. */ }
   // No automatic retry and no destructive cleanup after a possibly entered effect.
   if (await readFile(path.join(root,'scope.json')).catch(() => null))

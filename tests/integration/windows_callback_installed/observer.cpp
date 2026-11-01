@@ -18,6 +18,7 @@
 #include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.ApplicationModel.h>
 #include <winrt/Windows.System.h>
+#include <winrt/Windows.UI.Notifications.h>
 #include <thread>
 #include <atomic>
 #include <algorithm>
@@ -979,6 +980,28 @@ static void sameSelection(IUIAutomation* automation, const Selection& old, const
   BOOL same = FALSE; budget(); winrt::check_hresult(automation->CompareElements(pair.first,pair.second,&same)); require(same);
  }
 }
+// Read-only diagnostic for this exact selected application ID. History
+// is never evidence of user interaction and cannot authorize Shell Invoke.
+static void historyDiagnostic(const Route& route) {
+ auto report=fact();
+ put(report,L"scope","read_only_unqualified_toast_history");
+ put(report,L"snapshot_sha",route.snapshotSHA);
+ try {
+  using namespace winrt::Windows::UI::Notifications;
+  budget();
+  const auto items=ToastNotificationManager::History().GetHistory(winrt::hstring(wide(route.snapshot.aumid)));
+  const auto count=items.Size();
+  require(count<=128);
+  num(report,L"count",count);
+  put(report,L"status","queried");
+ } catch (const winrt::hresult_error& error) {
+  put(report,L"status","winrt_error");
+  num(report,L"hresult",DWORD(error.code().value));
+ } catch (...) {
+  put(report,L"status","unavailable_or_bounded");
+ }
+ publish(L"toast-history-diagnostic.json",report);
+}
 static void click() {
   // Establish real interactive UIA readiness before the shipping toast is shown.
   clickAt("interactive_desktop"); interactive();
@@ -997,6 +1020,7 @@ static void click() {
   const auto title = string(request,L"title"), body = string(request,L"body");
   require(title == L"Navigation TEST "+wide(nonce) && body == L"Cold callback TEST "+wide(nonce));
   clickAt("cold_helper_census"); require(helpers(route).empty());
+  historyDiagnostic(route);
   clickAt("uia_select_notification"); Selection selected;
  while (!selected.row) { budget(); selected = census(automation.Get(),walker.Get(),title,body); if (!selected.row) Sleep(50); }
  clickAt("selected_shell_identity"); Process shell(selected.pid,true,nullptr);
