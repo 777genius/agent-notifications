@@ -28,7 +28,7 @@ Sources: [Claude/Codex/Qoder product event boundary](../internal/hooks/event.go)
 | OpenCode | Yes | Yes | No in published v1.49.11; unreleased source has optional OS-default `systemSound` opt-in | No: `Navigation=None` | No |
 | Gemini CLI | Yes | Yes | No: explicit silent delivery | No: `Navigation=None` | No |
 | Cursor CLI | Yes (qualified hosts only) | Yes | No: explicit silent delivery | No: `Navigation=None` | No |
-| Qoder CLI | Yes | Yes | Yes: shared hook notifier | **Not qualified**: Claude-only Ghostty capture; generic legacy window activation must not be advertised as exact/guaranteed | No |
+| Qoder CLI | Yes | Yes | Shared notifier supports configured cues, but standalone UAP bundle lacks built-in MP3 assets (issue #562) | **Not qualified**: Claude-only Ghostty capture; generic legacy window activation must not be advertised as exact/guaranteed | No |
 
 “Desktop” means the implementation provides a submission path; it does **not** mean visible banners or physical click callbacks were observed on every platform. [Terminal / IDE focus precision](CLICK_TO_FOCUS.md) explains window versus pane/tab and the OS permissions.
 
