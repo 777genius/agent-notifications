@@ -488,6 +488,14 @@ func TestManagedPolicyCLIEditAfterWindowsLedgerPromotion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	parsed, err := config.ParseDocument(policy, filepath.Join(root, "agent-notifications.json"), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	effective, err := parsed.Effective(config.ValidationAssets(""))
+	if err != nil || effective.Notifications.Desktop.Volume != 0.25 {
+		t.Fatalf("promoted policy did not persist requested desktop volume: %+v %v", effective.Notifications.Desktop.Volume, err)
+	}
 	for _, preserved := range []string{"9007199254740993", "${AGENT_NOTIFICATIONS_WEBHOOK_URL}", "unrelatedAgent", "foreign_status"} {
 		if !bytes.Contains(policy, []byte(preserved)) {
 			t.Fatalf("promoted policy edit lost a raw value: %s", preserved)
