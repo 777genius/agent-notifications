@@ -93,6 +93,43 @@ func TestPiCommonLifecycleAndAuthority(t *testing.T) {
 		t.Fatalf("hidden/wrong active path: %s", client.TargetLocator)
 	}
 	assertPiExcludedOwnershipMarkers(t, root, client.TargetLocator, selector, facts)
+	// Cursor-only runtime replacement must update Pi's derived discovery data.
+	// The shared installer changes the owned executable without running Pi setup
+	// or replacing Pi's installed UAP package/consumer.
+	primary := filepath.Join(b.RuntimeRoot, b.Primary)
+	beforePrimary, err := installruntime.Fingerprint(primary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := installruntime.Commit(testCtx(t), installruntime.Request{
+		ControlRoot: b.ControlRoot, RuntimeRoot: b.RuntimeRoot, Owner: b.Owner,
+		ConsumerID: "existing", RefreshOnly: true,
+		Files: []installruntime.File{{Path: primary, Before: beforePrimary, Data: []byte("TEST cursor upgraded primary"), Mode: 0700}},
+	}); err != nil {
+		t.Fatalf("sibling runtime update failed: %v", err)
+	}
+	if _, _, _, _, err := piauthority.Open(testCtx(t), selector, facts.LoadedRevision); err == nil {
+		t.Fatal("old Pi observer accepted changed shared executable")
+	}
+	if channels := gate.Channels(testCtx(t), binding, facts.LoadedRevision); channels != (pievent.Channels{}) {
+		t.Fatalf("stale Pi observer retained channels: %+v", channels)
+	}
+	if err := piauthority.RefreshInstalled(testCtx(t), b.ControlRoot); err != nil {
+		t.Fatalf("shared runtime refresh did not publish Pi discovery: %v", err)
+	}
+	refreshed := readRuntime()
+	if refreshed.PrimarySHA256 == facts.PrimarySHA256 || refreshed.LoadedRevision.PrimarySHA256 != refreshed.PrimarySHA256 ||
+		refreshed.LoadedRevision.ProjectionDigest != facts.LoadedRevision.ProjectionDigest {
+		t.Fatalf("Pi shared-runtime discovery was not precisely refreshed: old=%+v new=%+v", facts, refreshed)
+	}
+	freshGate, freshBinding, _, _, err := piauthority.Open(testCtx(t), selector, refreshed.LoadedRevision)
+	if err != nil || !freshGate.Channels(testCtx(t), freshBinding, refreshed.LoadedRevision).Desktop {
+		t.Fatalf("fresh Pi observer denied after sibling update: %v", err)
+	}
+	if err := piauthority.RefreshInstalled(testCtx(t), b.ControlRoot); err != nil || readRuntime() != refreshed {
+		t.Fatalf("unchanged runtime discovery refresh was not idempotent: %v", err)
+	}
+	facts = refreshed
 	// A changed canonical source seals a new projection; the live old observer
 	// cannot borrow current receipts by rereading mutable derived metadata.
 	path := filepath.Join(pkg, "com.universal-agent-plugins.pi", "index.ts")

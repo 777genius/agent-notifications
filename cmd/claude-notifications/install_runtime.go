@@ -446,6 +446,12 @@ func installRuntime(args []string, output io.Writer) error {
 		// advance that generation and must never become our new seed preimage.
 		ledger, err = seedCommittedRuntimeEnablement(ctx, req, ledger)
 	}
+	if err == nil && !*remove && hasSender {
+		// Cursor and Pi may share this executable. After the managed commit,
+		// reconstruct Pi's derived locator from its still-authorized UAP
+		// binding. Never grant an observer authority from this metadata.
+		err = piauthority.RefreshInstalled(ctx, *control)
+	}
 	if err == nil {
 		if !*printNativePath {
 			_, _ = fmt.Fprintf(output, "managed-runtime committed generation=%d\n", ledger.Generation)
