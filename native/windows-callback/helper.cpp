@@ -187,14 +187,14 @@ struct SDKOperations {
      return 0;
     }
     const auto fields=operatorFields();
-    require(hex(fields[0],32)&&text(fields[1],4096)&&(fields[2].empty()||text(fields[2],4096))&&(fields[3]=="0"||fields[3]=="1"));
+    require(hex(fields[0],32)&&text(fields[1],4096)&&(fields[2].empty()||text(fields[2],4096,true))&&(fields[3]=="0"||fields[3]=="1"));
     generation.record(fields[0]);
     ops.exact(generation.snapshot);
     installedBudget(end);
     attempt=randomID();
     reserveAttempt(generation,attempt,end);
     const std::wstring launch=L"WinEnvelope1:open_thread:"+wide(fields[0]);
-    const std::wstring payload=L"<toast launch=\""+launch+L"\"><visual><binding template=\"ToastGeneric\"><text>"+xml(fields[1])+L"</text><text>"+xml(fields[2])+L"</text></binding></visual><audio silent=\""+(fields[3]=="1"?L"true":L"false")+L"\"/></toast>";
+    const std::wstring payload=L"<toast launch=\""+launch+L"\"><visual><binding template=\"ToastGeneric\"><text>"+xml(fields[1])+L"</text><text>"+xml(fields[2],true)+L"</text></binding></visual><audio silent=\""+(fields[3]=="1"?L"true":L"false")+L"\"/></toast>";
     winrt::Windows::Data::Xml::Dom::XmlDocument doc;
     doc.LoadXml(payload);
     ToastNotification toast(doc);
