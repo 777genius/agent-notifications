@@ -102,15 +102,17 @@ async function actor(mode: string): Promise<void> {
 }
 async function ledger(): Promise<Ledger> { return JSON.parse((await boundedRead(path.join(control,'ownership.json'))).toString()) as Ledger; }
 async function setup(
-  operation: 'enable'|'disable', route=false, allowCallerAsserted=true, beforeEffect?: () => void,
+  operation: 'enable'|'disable', route: boolean|'none'=false, allowCallerAsserted=true, beforeEffect?: () => void,
 ): Promise<void> {
   const current = await ledger();
   const args = ['setup-notifications',operation,'--control-root',control,'--runtime-root',runtime,
     '--expected-generation',String(current.Generation),'--json'];
   // Revocation accepts no --global-config; it is independently policy-only.
   if (operation === 'enable') args.push('--global-config',global);
-  if (route) args.push('--navigation','desktop_thread','--allow-unknown-caller','false','--allow-caller-asserted',String(allowCallerAsserted));
-  await run(route ? 'setup-route' : operation === 'enable' ? 'preserved-route-readiness-and-policy-write' : 'disable',original,args,'',150000,beforeEffect);
+  if (route === true) args.push('--navigation','desktop_thread','--allow-unknown-caller','false','--allow-caller-asserted',String(allowCallerAsserted));
+  if (route === 'none') args.push('--navigation','none','--allow-unknown-caller','false','--allow-caller-asserted',String(allowCallerAsserted));
+  const label = route === 'none' ? 'setup-route-none' : route === true ? 'setup-route' : operation === 'enable' ? 'preserved-route-readiness-and-policy-write' : 'disable';
+  await run(label,original,args,'',150000,beforeEffect);
 }
 async function acquire(): Promise<void> {
   await persist('acquisition.json',{...tuple,...await acquireOfficialArchive(root,tuple)});
@@ -242,10 +244,21 @@ async function main(): Promise<void> {
   assert(new RegExp(`^WinShow1 [a-f0-9]{32} ${record[1]} ${a.binding.SHA256} [0-9]+\\n$`).test(show));
   assert.equal((await boundedRead(path.join(attempts,shows[0]!.replace('.intent','.result')))).toString(),'show_returned=1 effect_entered=1\n');
   if (scenario === 'retained') {
-    // One explicit route policy change generates B; identical setup reuses A.
+    // A consent-only edit must reuse A. Instead use the supported local-route
+    // transition A -> explicit navigation none -> new desktop_thread B. The
+    // retained A binding must remain charged, byte-identical and click-eligible.
     requireLiveObserver();
-    await setup('enable',true,false,requireLiveObserver); const b = await ledger(); assert.equal(b.WindowsRetained?.length,2);
-    assert(b.WindowsRetained![1]!.SnapshotPath !== a.binding.SnapshotPath);
+    await setup('enable','none',true,requireLiveObserver);
+    const intermediate = await ledger(); assert.equal(intermediate.WindowsRetained?.length,1);
+    assert.equal(intermediate.WindowsRetained[0]!.SnapshotPath,a.binding.SnapshotPath);
+    assert.equal(intermediate.WindowsRetained[0]!.SHA256,a.binding.SHA256);
+    requireLiveObserver();
+    await setup('enable',true,true,requireLiveObserver);
+    const b = await ledger(); assert.equal(b.WindowsRetained?.length,2);
+    assert.equal(b.WindowsRetained[0]!.SnapshotPath,a.binding.SnapshotPath);
+    assert.equal(b.WindowsRetained[0]!.SHA256,a.binding.SHA256);
+    assert(b.WindowsRetained[1]!.SnapshotPath !== a.binding.SnapshotPath);
+    assert(b.WindowsRetained[1]!.SHA256 !== a.binding.SHA256);
     requireLiveObserver();
     await removeProducer(requireLiveObserver); assert((await boundedRead(a.binding.SnapshotPath)).equals(a.raw));
   }
