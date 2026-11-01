@@ -1,4 +1,4 @@
-name: Fresh signed Windows callback intake source 7a37daa
+name: Fresh signed Windows callback intake source de49898
 on:
   push:
     branches: [ci/windows-signed-intake-20261101]
@@ -8,7 +8,7 @@ permissions:
   actions: write
 jobs:
   source-bound-intake:
-    if: ${{ github.repository == '777genius/agent-notifications' && github.run_attempt == 1 && github.event.head_commit.message == 'ci(windows) signed intake source 7a37daa' }}
+    if: ${{ github.repository == '777genius/agent-notifications' && github.run_attempt == 1 && github.event.head_commit.message == 'ci(windows) signed intake source de49898' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -18,7 +18,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          expected='7a37daa45cd44e9a6b4115ffa14dcdbe4097f59a'
+          expected='de4989840c53cf34c7a0b2bff22eb15603323c18'
           actual="$(gh api repos/777genius/agent-notifications/git/ref/heads/test/windows-installed-cold-callback -q .object.sha)"
           test "$actual" = "$expected" || { echo 'Source changed: refuse' >&2; exit 1; }
           gh api --method POST repos/777genius/agent-notifications/actions/workflows/windows-callback-contracts.yml/dispatches \
