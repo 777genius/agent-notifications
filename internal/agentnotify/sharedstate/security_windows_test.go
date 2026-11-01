@@ -1,8 +1,10 @@
 package sharedstate
 
 import (
+	"encoding/json"
 	"github.com/777genius/agent-notifications/internal/installruntime"
 	"golang.org/x/sys/windows"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -99,5 +101,15 @@ func TestWindowsDiscoveryReadDoesNotBlockPublication(t *testing.T) {
 	}
 	if got, err := s.Read(); err != nil || got != next {
 		t.Fatal("replacement endpoint unavailable")
+	}
+	// Replacement must preserve the caller's live read handle and its original
+	// bytes, rather than mutate the old inode or close the reader to rename.
+	previousBytes, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal("original discovery handle became unreadable")
+	}
+	var previous document
+	if err := json.Unmarshal(previousBytes, &previous); err != nil || previous.Record != first {
+		t.Fatal("publication mutated the original discovery inode")
 	}
 }

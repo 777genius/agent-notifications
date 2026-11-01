@@ -1,10 +1,13 @@
 package sharedstate
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"unsafe"
 
 	"github.com/777genius/agent-notifications/internal/installruntime"
@@ -15,7 +18,6 @@ type directory struct {
 	path    string
 	roots   []*installruntime.PrivateCacheRoot
 	handles []windows.Handle
-	cache   *installruntime.PrivateCacheRoot
 }
 
 func (d *directory) close() {
@@ -144,7 +146,6 @@ func openDirectory(s *Store, create bool) (*directory, []string, error) {
 		if len(s.ids) > i && s.ids[i] != id {
 			return fail(fmt.Errorf("directory identity changed"))
 		}
-		d.cache = root
 	}
 	return d, ids, nil
 }
@@ -202,5 +203,89 @@ func (d *directory) read(name string, limit int64) ([]byte, error) {
 	}
 	return data, nil
 }
-func (d *directory) write(name string, data []byte) error { return d.cache.Write(name, data) }
-func (d *directory) remove(name string) error             { return installruntime.RemoveConfinedName(d.path, name) }
+
+// write publishes with POSIX replacement semantics: a reader of the old
+// immutable record keeps that inode, while new opens see the replacement.
+// Legacy FileRenameInformation rejects an open destination even when all its
+// readers specified FILE_SHARE_DELETE, so the observation-cache writer cannot
+// supply this discovery contract.
+func (d *directory) write(name string, data []byte) (err error) {
+	var nonce [16]byte
+	if _, err = rand.Read(nonce[:]); err != nil {
+		return err
+	}
+	security, err := privateSecurity(false)
+	if err != nil {
+		return err
+	}
+	temp := ".endpoint-" + hex.EncodeToString(nonce[:])
+	f, err := d.open(temp, windows.GENERIC_READ|windows.GENERIC_WRITE|windows.DELETE, windows.CREATE_NEW, security)
+	if err != nil {
+		return err
+	}
+	published := false
+	defer func() {
+		if !published {
+			remove := byte(1)
+			_ = windows.SetFileInformationByHandle(windows.Handle(f.Fd()), windows.FileDispositionInfo, &remove, 1)
+		}
+		if closeErr := f.Close(); err == nil {
+			err = closeErr
+		}
+	}()
+	written, err := f.Write(data)
+	if err != nil {
+		return err
+	}
+	if written != len(data) {
+		return io.ErrShortWrite
+	}
+	// Recheck strict credential custody immediately before replacing a target.
+	// The caller retains the server lock; all ancestor directories stay pinned.
+	parent := d.handles[len(d.handles)-1]
+	if _, err = strictHandle(parent, true); err != nil {
+		return err
+	}
+	target, err := d.open(name, windows.GENERIC_READ, windows.OPEN_EXISTING, nil)
+	if err == nil {
+		err = target.Close()
+	}
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err = renameEndpoint(windows.Handle(f.Fd()), parent, name); err != nil {
+		return err
+	}
+	published = true
+	return nil
+}
+
+// FILE_RENAME_INFO with FileRenameInfoEx accepts the POSIX flag. The root
+// handle confines the single-component destination to the validated directory.
+// Unsupported filesystems fail closed; there is no remove-then-rename fallback.
+// https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/ns-ntifs-_file_rename_information
+func renameEndpoint(source, parent windows.Handle, name string) error {
+	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, `\/:`) {
+		return fmt.Errorf("invalid relative endpoint component")
+	}
+	encoded, err := windows.UTF16FromString(name)
+	if err != nil {
+		return err
+	}
+	type renameInfo struct {
+		Flags  uint32
+		Root   windows.Handle
+		Length uint32
+		Name   [1]uint16
+	}
+	offset := unsafe.Offsetof(renameInfo{}.Name)
+	length := int(unsafe.Sizeof(renameInfo{})) + len(encoded)*2
+	buffer := make([]byte, length)
+	info := (*renameInfo)(unsafe.Pointer(&buffer[0]))
+	info.Flags = windows.FILE_RENAME_REPLACE_IF_EXISTS | windows.FILE_RENAME_POSIX_SEMANTICS
+	info.Root = parent
+	info.Length = uint32((len(encoded) - 1) * 2)
+	copy(unsafe.Slice((*uint16)(unsafe.Pointer(&buffer[offset])), len(encoded)), encoded)
+	return windows.SetFileInformationByHandle(source, windows.FileRenameInfoEx, &buffer[0], uint32(len(buffer)))
+}
+func (d *directory) remove(name string) error { return installruntime.RemoveConfinedName(d.path, name) }
