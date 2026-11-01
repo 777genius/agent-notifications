@@ -207,10 +207,15 @@ assert.throws(() => compileManifestJoin({...compile,sources:{...compile.sources,
 
 // The build facts must come from actual buildinfo/race-symbol bytes; a literal
 // manifest command or flag cannot replace missing binary provenance.
-assert.throws(() => compileManifestJoin(compile,tuple,actualBuildProvenance(
-  Buffer.from(testBuildInfo.replace('-tags=windows_callback_asset','')),
-  Buffer.from(shippingBuildInfo),Buffer.from(raceSymbols),
-)));
+{
+  const untagged = testBuildInfo.replace('\tbuild\t-tags=windows_callback_asset\n','');
+  assert.notEqual(untagged,testBuildInfo);
+  assert.throws(() => compileManifestJoin(
+    {...compile,buildProvenance:{...compile.buildProvenance,testBuildInfoSHA256:hashText(untagged)}},
+    tuple,
+    actualBuildProvenance(Buffer.from(untagged),Buffer.from(shippingBuildInfo),Buffer.from(raceSymbols)),
+  ));
+}
 assert.throws(() => compileManifestJoin(compile,tuple,actualBuildProvenance(
   Buffer.from(testBuildInfo),Buffer.from(shippingBuildInfo),Buffer.from('runtime.raceinit\n'),
 )));
