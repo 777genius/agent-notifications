@@ -60,8 +60,8 @@ def unresolved(name):
     return '${{' in name or name.startswith('github.event.') and ' && ' in name and ' || ' in name
 
 
-def obsolete_placeholder(check, runs, selected, repository, source, old_jobs):
-    if check['status'] != 'completed' or check['conclusion'] != 'cancelled' or not unresolved(check['name']):
+def superseded_unexecuted(check, runs, selected, repository, source, old_jobs):
+    if check['status'] != 'completed' or check['conclusion'] != 'cancelled':
         return None
     if check['app_slug'] != 'github-actions':
         return None
@@ -91,6 +91,35 @@ def obsolete_placeholder(check, runs, selected, repository, source, old_jobs):
     return {'check_id': check['id'], 'name': check['name'], 'source_run': identity(origin),
             'replacement_run_id': replacement['run']['id'],
             'replacement_run_attempt': replacement['run']['run_attempt']}
+
+
+def obsolete_placeholder(check, runs, selected, repository, source, old_jobs):
+    if not unresolved(check['name']):
+        return None
+    return superseded_unexecuted(check, runs, selected, repository, source, old_jobs)
+
+
+def superseded_conditional(check, latest, runs, selected, repository, source, old_jobs, selected_jobs):
+    if (latest['status'] != 'completed' or latest['conclusion'] != 'skipped'
+            or latest['app_slug'] != 'github-actions'
+            or check['app_id'] != latest['app_id'] or check['name'] != latest['name']):
+        return None
+    proof = superseded_unexecuted(check, runs, selected, repository, source, old_jobs)
+    if proof is None:
+        return None
+    workflow = proof['source_run']['path'].removeprefix('.github/workflows/')
+    replacement = selected[workflow]['run']
+    if latest['suite_id'] != replacement['check_suite_id'] or check['id'] >= latest['id']:
+        return None
+    if replacement['id'] not in selected_jobs:
+        selected_jobs[replacement['id']] = native.pages('repos/' + repository + '/actions/runs/'
+                                                       + str(replacement['id']) + '/jobs?filter=all', 'jobs')
+    jobs = [job for job in selected_jobs[replacement['id']] if job.get('id') == latest['id']]
+    if (len(jobs) != 1 or jobs[0].get('name') != latest['name']
+            or jobs[0].get('status') != 'completed' or jobs[0].get('conclusion') != 'skipped'
+            or jobs[0].get('run_attempt') != replacement['run_attempt'] or jobs[0].get('steps') != []):
+        return None
+    return {**proof, 'replacement_check_id': latest['id'], 'replacement_check_conclusion': 'skipped'}
 
 
 def executing_release_run(source, repository, runs):
@@ -127,7 +156,7 @@ def verify(source, repository):
     runs = source_runs(repository, source)
     operator_run = executing_release_run(source, repository, runs)
     event = {'repository': {'full_name': repository}}
-    selected = {}
+    selected, selected_jobs = {}, {}
     for workflow in native.CONTRACTS:
         run = select_run(repository, workflow, runs)
         require(run is not None and run.get('status') == 'completed' and run.get('conclusion') == 'success',
@@ -143,6 +172,7 @@ def verify(source, repository):
             # addition to the canonical test/Swift receipt dependencies.
             jobs = native.pages('repos/' + repository + '/actions/runs/' + str(run['id'])
                                 + '/jobs?filter=all', 'jobs')
+            selected_jobs[run['id']] = jobs
             guards = [job for job in jobs if job.get('name') == 'Full macOS CI required']
             require(guards and all(type(job.get('id')) is int for job in guards),
                     'full macOS gate missing')
@@ -150,24 +180,33 @@ def verify(source, repository):
             require(guard.get('status') == 'completed' and guard.get('conclusion') == 'success',
                     'full macOS gate did not succeed')
             selected[workflow]['full_gate_job_id'] = guard['id']
-    latest = {}
+    latest, eligible = {}, []
     for check in before:
         if (operator_run is not None and check['app_slug'] == 'github-actions'
                 and check['suite_id'] == operator_run['check_suite_id']):
             continue
+        eligible.append(check)
         key = (check['app_id'], check['name'])
         if key not in latest or latest[key]['id'] < check['id']:
             latest[key] = check
-    ignored, old_jobs = [], {}
+    ignored, ignored_conditionals, old_jobs = [], [], {}
     for check in latest.values():
         if check['status'] == 'completed' and check['conclusion'] in NON_BLOCKING:
             if check['conclusion'] != 'success':
-                # Optional skipped/neutral checks cannot hide an earlier
-                # failed or still-running check with this app/name identity.
-                older = [row for row in before if row['app_id'] == check['app_id']
+                # An optional skip may supersede only an authenticated old
+                # unexecuted cancellation from this successful canonical run's
+                # own workflow. Real failures, pending checks and neutral masks
+                # remain blocking. The operator's own suite stays excluded.
+                older = [row for row in eligible if row['app_id'] == check['app_id']
                          and row['name'] == check['name'] and row['id'] < check['id']]
-                require(all(row['status'] == 'completed' and row['conclusion'] in NON_BLOCKING
-                            for row in older), 'latest skipped/neutral source check masked a failure: ' + check['name'])
+                for row in older:
+                    if row['status'] == 'completed' and row['conclusion'] in NON_BLOCKING:
+                        continue
+                    exception = superseded_conditional(row, check, runs, selected, repository, source,
+                                                       old_jobs, selected_jobs)
+                    require(exception is not None,
+                            'latest skipped/neutral source check masked a failure: ' + check['name'])
+                    ignored_conditionals.append(exception)
             continue
         exception = obsolete_placeholder(check, runs, selected, repository, source, old_jobs)
         require(exception is not None, 'latest source check did not succeed: ' + check['name'])
@@ -189,6 +228,7 @@ def verify(source, repository):
     require(native.git('rev-parse', 'HEAD').decode().strip() == source, 'candidate checkout changed during admission')
     return {'schema_version': 1, 'status': 'passed', 'repository': repository, 'source_sha': source,
             'selected_workflows': selected, 'ignored_superseded_placeholders': ignored,
+            'ignored_superseded_conditionals': ignored_conditionals,
             'check_census': before,
             'check_census_sha256': hashlib.sha256(json.dumps(before, sort_keys=True).encode()).hexdigest()}
 

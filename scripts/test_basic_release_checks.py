@@ -21,13 +21,16 @@ REPO = '777genius/agent-notifications'
 
 
 class API:
-    def __init__(self):
+    def __init__(self, selected=None):
         self.runs, self.jobs, self.artifacts, self.archives, self.checks = [], {}, {}, {}, []
         self.requests = []
         self.after_checks = None
         self.check_reads = 0
         for index, (workflow, contract) in enumerate(native.CONTRACTS.items(), 10):
             run = self.run(index, workflow)
+            if selected:
+                run.update(selected[workflow])
+            run_id = run['id']
             self.runs.append(run)
             jobs = []
             names = (*contract[2], contract[1], *(['Full macOS CI required'] if workflow == 'ci-macos.yml' else []))
@@ -36,11 +39,11 @@ class API:
                        'run_attempt': 1, 'steps': [{'name': 'actual fixture job', 'conclusion': 'success'}]}
                 jobs.append(job)
                 self.checks.append(self.check(job, run))
-            self.jobs[index] = jobs
+            self.jobs[run_id] = jobs
             proof = {'schema': 1, 'mode': 'full', 'repository': REPO, 'workflow': workflow,
-                     'run_id': index, 'run_attempt': 1, 'source_head': SOURCE,
+                     'run_id': run_id, 'run_attempt': 1, 'source_head': SOURCE,
                      'tested_commit': SOURCE, 'tested_tree': TREE, 'jobs': list(contract[0])}
-            self.set_proof(index, workflow, proof)
+            self.set_proof(run_id, workflow, proof)
 
     @staticmethod
     def run(number, workflow, conclusion='success'):
@@ -69,6 +72,28 @@ class API:
         self.jobs[1] = [job]
         self.checks.append(self.check(job, run))
         return run, job, self.checks[-1]
+
+    def conditional(self, workflow='ci-windows.yml', name='Release tools scoped contract (Windows)',
+                    origin_id=1, check_id=1, latest_id=10000, origin_suite=None):
+        origin = next((run for run in self.runs if run['id'] == origin_id), None)
+        if origin is None:
+            origin = self.run(origin_id, workflow, 'cancelled')
+            if origin_suite is not None:
+                origin['check_suite_id'] = origin_suite
+            self.runs.append(origin)
+            self.jobs[origin_id] = []
+        selected = next(run for run in self.runs if run['path'] == '.github/workflows/' + workflow
+                        and run['conclusion'] == 'success')
+        jobs, rows = [], []
+        for run, number, conclusion in ((origin, check_id, 'cancelled'), (selected, latest_id, 'skipped')):
+            job = {'id': number, 'name': name, 'status': 'completed', 'conclusion': conclusion,
+                   'steps': [], 'run_attempt': run['run_attempt']}
+            self.jobs[run['id']].append(job)
+            row = self.check(job, run)
+            self.checks.append(row)
+            jobs.append(job)
+            rows.append(row)
+        return origin, jobs[0], rows[0], selected, jobs[1], rows[1]
 
     def __call__(self, request, binary=False):
         self.requests.append(request)
@@ -241,6 +266,109 @@ class AdmissionTests(unittest.TestCase):
                 self.api.checks.append(dict(row, id=9999, conclusion='failure'))
                 with self.assertRaisesRegex(ValueError, 'masked a failure'):
                     self.verify()
+
+    def test_selected_conditional_skip_supersedes_only_authenticated_unexecuted_cancellation(self):
+        origin, _, older, selected, _, latest = self.api.conditional()
+        result = self.verify()
+        ignored = result['ignored_superseded_conditionals']
+        self.assertEqual(len(ignored), 1)
+        self.assertEqual(ignored[0]['check_id'], older['id'])
+        self.assertEqual(ignored[0]['source_run']['id'], origin['id'])
+        self.assertEqual(ignored[0]['replacement_run_id'], selected['id'])
+        self.assertEqual(ignored[0]['replacement_check_id'], latest['id'])
+        self.assertEqual(result['ignored_superseded_placeholders'], [])
+
+    def test_real_c1_conditional_census_shape_is_accepted(self):
+        # Exact seven formerly admitted check pairs from source0233's authentic
+        # census. Only SOURCE/tree/artifact contents are normalized by this API.
+        selected = {
+            'ci-macos.yml': {'id': 41299717757, 'check_suite_id': 111935138271},
+            'ci-windows.yml': {'id': 41299717729, 'check_suite_id': 111935138192},
+            'ci-ubuntu.yml': {'id': 41299717707, 'check_suite_id': 111935138134},
+            'install-recovery-e2e.yml': {'id': 41299717702, 'check_suite_id': 111935138135},
+        }
+        self.api = API(selected)
+        native.gh.side_effect = self.api
+        pairs = [
+            ('ci-windows.yml', 'Release tools scoped contract (Windows)', 41299680166, 111935041274, 124827960334, 124829193657),
+            ('ci-macos.yml', 'Release-equivalent native proof (macOS)', 41299680283, 111935041565, 124827960712, 124829289001),
+            ('install-recovery-e2e.yml', 'Release-equivalent native proof (recovery)', 41299680117, 111935041170, 124827960728, 124828393731),
+            ('ci-ubuntu.yml', 'Release tools scoped contract (Ubuntu)', 41299680195, 111935041373, 124827960848, 124828273899),
+            ('ci-windows.yml', 'Release-equivalent native proof (Windows)', 41299680166, 111935041274, 124827960863, 124829193687),
+            ('ci-ubuntu.yml', 'Reused native qualification (Ubuntu)', 41299680195, 111935041373, 124827960867, 124828273797),
+            ('ci-macos.yml', "github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null) && 'Metadata edit ignored (release tools)' || 'Release tools scoped contract (macOS)'", 41299680283, 111935041565, 124827960878, 124829289142),
+        ]
+        for workflow, name, run_id, suite, old_id, latest_id in pairs:
+            self.api.conditional(workflow, name, run_id, old_id, latest_id, suite)
+        for row in self.api.checks:
+            row['app']['id'] = 15368
+        ignored = self.verify()['ignored_superseded_conditionals']
+        self.assertEqual({row['check_id'] for row in ignored}, {row[4] for row in pairs})
+        self.assertTrue(all(row['replacement_run_id'] == selected[row['source_run']['path'].split('/')[-1]]['id']
+                            for row in ignored))
+
+    def test_conditional_history_preserves_failure_pending_and_custody_guards(self):
+        mutations = [
+            ('older-check', 'conclusion', value) for value in
+            ('failure', 'timed_out', 'stale', 'action_required', 'startup_failure')]
+        mutations += [('older-check', 'status', value) for value in ('queued', 'in_progress')]
+        mutations += [('older-job', 'steps', [{'name': 'actually executed'}]), ('older-job', 'run_attempt', 2),
+                      ('older-job', 'id', 2), ('older-job', 'name', 'different job'),
+                      ('older-check', 'app', {'id': 2, 'slug': 'foreign-app'}),
+                      ('older-check', 'app', {'id': 1, 'slug': 'foreign-app'}),
+                      ('origin', 'head_repository', {'full_name': 'other/repo'}), ('origin', 'event', 'push'),
+                      ('origin', 'head_sha', 'c' * 40), ('origin', 'status', 'in_progress'),
+                      ('origin', 'conclusion', 'failure'),
+                      ('latest-check', 'conclusion', 'neutral'), ('latest-check', 'check_suite', {'id': 99999}),
+                      ('latest-check', 'app', {'id': 2, 'slug': 'foreign-app'}),
+                      ('latest-check', 'app', {'id': 1, 'slug': 'foreign-app'}),
+                      ('latest-check', 'status', 'queued'), ('latest-check', 'status', 'in_progress'),
+                      ('latest-job', 'steps', [{'name': 'actually executed'}]), ('latest-job', 'run_attempt', 2),
+                      ('latest-job', 'id', 20000), ('latest-job', 'name', 'different job'),
+                      ('latest-job', 'status', 'in_progress'), ('latest-job', 'conclusion', 'success')]
+        for target, field, value in mutations:
+            with self.subTest(target=target, field=field, value=value):
+                self.api = API()
+                native.gh.side_effect = self.api
+                origin, old_job, older, _, latest_job, latest = self.api.conditional()
+                {'origin': origin, 'older-job': old_job, 'older-check': older,
+                 'latest-job': latest_job, 'latest-check': latest}[target][field] = value
+                with self.assertRaises(ValueError):
+                    self.verify()
+
+    def test_conditional_cancellation_does_not_change_latest_placeholder_exception(self):
+        self.api.placeholder(name='Real conditional native qualification')
+        with self.assertRaisesRegex(ValueError, 'latest source check'):
+            self.verify()
+
+    def test_conditional_history_excludes_only_authenticated_operator_suite(self):
+        operator, job = self.executing_release()
+        origin, _, _, _, _, _ = self.api.conditional()
+        job.update(id=9999, name='Release tools scoped contract (Windows)')
+        self.api.checks[-3] = self.api.check(job, operator)
+        self.assertEqual(self.verify()['status'], 'passed')
+
+        failure = dict(job, id=9998, status='completed', conclusion='failure')
+        self.api.checks.append(self.api.check(failure, origin))
+        with self.assertRaisesRegex(ValueError, 'masked a failure'):
+            self.verify()
+
+    def test_superseded_conditional_origin_is_revalidated_after_admission(self):
+        origin, _, _, _, _, _ = self.api.conditional()
+        request = 'repos/' + REPO + '/actions/runs/' + str(origin['id'])
+        reads = 0
+
+        def gh(path, binary=False):
+            nonlocal reads
+            if path == request:
+                reads += 1
+                if reads == 2:
+                    origin['run_attempt'] = 2
+            return self.api(path, binary)
+
+        native.gh.side_effect = gh
+        with self.assertRaisesRegex(ValueError, 'superseded source attempt changed during admission'):
+            self.verify()
     def test_latest_source_workflow_failure_cannot_inherit_prior_green(self):
         for conclusion in ('failure', 'cancelled', 'timed_out'):
             with self.subTest(conclusion=conclusion):
