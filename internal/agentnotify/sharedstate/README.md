@@ -29,7 +29,9 @@ root, namespace and identity-directory inode identities are rechecked on reuse.
 Unix files require current ownership, exact 0600 mode, one link and no extended
 ACL; directories require current ownership, exact 0700 mode and no extended ACL.
 Windows uses held non-reparse ancestor handles and explicit protected private
-DACLs at creation. Its checks reject foreign read access in addition to writes,
+DACLs at creation. Atomic publication uses FileRenameInfoEx with POSIX replacement
+semantics, so existing discovery readers retain their immutable original inode
+while new readers see the replacement. Its checks reject foreign read access in addition to writes,
 including ACL grants that the installer's non-secret observation cache permits.
 Existing access controls are never silently repaired.
 

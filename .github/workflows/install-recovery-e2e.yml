@@ -1,6 +1,8 @@
 name: Install reboot recovery E2E
 
 on:
+  push:
+    branches: [main]
   pull_request:
     types: [opened, synchronize, reopened, labeled, unlabeled, ready_for_review, edited]
   workflow_dispatch:
