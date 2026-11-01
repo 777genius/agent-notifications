@@ -82,7 +82,7 @@ func connectSharedDaemon(ctx context.Context, data, name string) (net.Conn, erro
 		}
 		if starting != nil {
 			select {
-			case <-starting:
+			case _ = <-starting: // Only completion matters; election revalidates before another start.
 				starting = nil
 				if attempts >= 2 {
 					return nil, errSharedUnavailable

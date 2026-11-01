@@ -484,14 +484,20 @@ func (c *portableSharedBridge) close() error {
 	c.closeOnce.Do(func() {
 		_ = c.input.Close()
 		select {
-		case <-c.done:
+		case err := <-c.done:
+			if err != nil {
+				c.closeErr = fmt.Errorf("TEST bridge exit: %w", err)
+			}
 		case <-time.After(5 * time.Second):
 			_ = c.cmd.Process.Signal(syscall.SIGTERM)
 			select {
-			case <-c.done:
+			case err := <-c.done:
+				if err != nil {
+					c.closeErr = fmt.Errorf("TEST bridge exit: %w", err)
+				}
 			case <-time.After(5 * time.Second):
 				_ = c.cmd.Process.Kill()
-				<-c.done
+				_ = <-c.done
 				c.closeErr = fmt.Errorf("TEST bridge did not stop after stdin closure or SIGTERM")
 			}
 		}
