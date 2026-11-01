@@ -11,7 +11,7 @@ and its consent bound to that UAP installation and client binding.
 No MCP observer is installed.
 
 This UAP lifecycle and common Cursor/Qoder selection are available in
-[platform release v1.49.11](PLATFORM_RELEASE_CHANNELS.md).
+[platform release v1.50.0](PLATFORM_RELEASE_CHANNELS.md).
 Older custom Qoder installations are not adopted or migrated by this flow.
 
 ## Hook events

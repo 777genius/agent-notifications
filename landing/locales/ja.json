@@ -15,7 +15,7 @@
         "title": "🔴 OpenCode · エラー",
         "body": "エラーの確認が必要です"
       }}},"select":{"scrollUp":"選択肢を上にスクロール","scrollDown":"選択肢を下にスクロール"},"install":{
-    "availability": "Cursor/Qoder の共通インストーラーはプラットフォームリリース v1.49.11 で利用できます。 Cursor CLI、Qoder、Pi は共通インストーラーを使い、通知チャネルを個別に選択できます。", "cursor": {"guide": "Cursor CLI のインストール", "scope": "Cursor CLI：Linux amd64、macOS arm64、Windows amd64 で情報通知の Stop アラートと任意の Webhook に対応。Cursor IDE、サウンド、クリックでのフォーカスは非対応です。インストーラーが選択した CLI とユーザープロファイルを検証します。", "restart": "Cursor CLI を再起動して Stop 通知オブザーバーを読み込んでください。"},
+    "availability": "Cursor/Qoder/Pi の共通インストーラーはプラットフォームリリース v1.50.0 で利用できます。 Cursor CLI、Qoder、Pi は共通インストーラーを使い、通知チャネルを個別に選択できます。", "cursor": {"guide": "Cursor CLI のインストール", "scope": "Cursor CLI：Linux amd64、macOS arm64、Windows amd64 で情報通知の Stop アラートと任意の Webhook に対応。Cursor IDE、サウンド、クリックでのフォーカスは非対応です。インストーラーが選択した CLI とユーザープロファイルを検証します。", "restart": "Cursor CLI を再起動して Stop 通知オブザーバーを読み込んでください。"},
     "qoder": {"guide": "Qoder のセットアップとフック", "scope": "Qoder：完了、質問、権限、計画、チームメンバーの通知と任意の Webhook。共通インストーラーで他のエージェントと一緒に選択できます。通知クリックでは既存の正確なチャットを開けません。", "restart": "Qoder を再起動してフックを有効にします。"},
     "agentNotify": {"label": "任意の通知ツールを設定する", "hint": "選択した Claude、Codex CLI、Cursor CLI の通知設定を管理します。オンの場合は保存済みの設定に従います。オフの場合は今回の設定をスキップし、既存の登録と同意を保持します。Qoder、OpenCode、Gemini、Pi には影響しません。"},"title":"通知を設定","intro":"以下の手順で {agent} に通知を追加します。","chooseAgent":"エージェントを選択","requires":"{agent} が必要です","bothAgents":"両方のエージェント","bothSelected":"✓ 両方のエージェントを選択済み","installBoth":"両方のエージェントにインストール","chooseComputer":"エージェントを実行するコンピューターを選択","selected":"選択済み","detected":"自動検出","change":"変更","targetOs":"対象のオペレーティングシステム","products":{"claude":"Claude","codex":"Codex CLI","both":"Claude + Codex CLI",
       "opencode": "OpenCode",

@@ -733,7 +733,7 @@ test("Cursor and Qoder share combined installation, updates and guidance", async
   await expect(page.getByLabel("Install command", { exact: true })).toHaveValue(expected);
   await expect(page.locator(".qoder-install")).toHaveCount(0);
   await expect(page.locator(".availability-note")).toContainText("use the common installer");
-  await expect(page.locator(".availability-note")).toContainText("available in platform release v1.49.11");
+  await expect(page.locator(".availability-note")).toContainText("available in platform release v1.50.0");
   await expect(page.locator(".next-steps")).toContainText("Restart Cursor CLI");
   await expect(page.locator(".next-steps")).toContainText("Restart Qoder");
   const optionalSetup = page.getByRole("checkbox", { name: "Set up optional notification tools" });
