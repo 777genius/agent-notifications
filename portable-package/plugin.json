@@ -1,5 +1,11 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "agent-notify",
-  "version": "1.0.0"
+  "version": "1.0.0",
+  "extensions": {
+    "com.universal-agent-plugins.pi": {
+      "version": 1,
+      "source": "com.universal-agent-plugins.pi"
+    }
+  }
 }

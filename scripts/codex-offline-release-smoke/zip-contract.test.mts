@@ -12,10 +12,13 @@ function zip(entries:Entry[]):Buffer{
  const table=Buffer.concat(central),end=Buffer.alloc(22);end.writeUInt32LE(0x06054b50);end.writeUInt16LE(entries.length,8);end.writeUInt16LE(entries.length,10);end.writeUInt32LE(table.length,12);end.writeUInt32LE(offset,16);
  return Buffer.concat([...locals,table,end]);
 }
-const names=['THIRD_PARTY_NOTICES.txt','bin/claude-notifications','mcp.json','plugin.json','skills/agent-notifications/SKILL.md'];
+const names=['THIRD_PARTY_NOTICES.txt','bin/claude-notifications','mcp.json','plugin.json','skills/agent-notifications/SKILL.md','com.universal-agent-plugins.pi/index.ts'];
 const valid=names.map(name=>({name}));
-assert.equal(portableEntries(zip(valid)).size,5);
+assert.equal(portableEntries(zip(valid)).size,6);
 assert.throws(()=>portableEntries(zip(valid.slice(1))));
+assert.throws(()=>portableEntries(zip(valid.slice(0,-1))),'missing Pi observer is rejected');
+assert.equal(portableEntries(zip([...valid,...['bin/','skills/','skills/agent-notifications/','com.universal-agent-plugins.pi/'].map(name=>({name,bytes:Buffer.alloc(0),mode:0x41ed}))])).size,6);
+assert.throws(()=>portableEntries(zip([...valid,{name:'com.universal-agent-plugins.pi/foreign.ts'}])));
 assert.throws(()=>portableEntries(zip([...valid,valid[0]!])));
 assert.throws(()=>portableEntries(zip([...valid,{name:'../escape'}])));
 assert.throws(()=>portableEntries(zip(valid.map((e,i)=>i===1?{...e,mode:0xa1ff}:e))));
@@ -26,4 +29,4 @@ assert.throws(()=>nativeEntries(zip([...native,{name:'ClaudeNotifier.app/../esca
 assert.throws(()=>nativeEntries(zip([...native,{name:'ClaudeNotifier.app/Contents/link',mode:0xa1ff}])));
 assert.throws(()=>nativeEntries(zip([...native,{name:'other.app/Contents/file'}])));
 assert.throws(()=>nativeEntries(zip(native.slice(1))));
-console.log(JSON.stringify({portable_five_leaves:true,missing_duplicate_traversal_symlink_and_mismatch_rejected:true,native_required_leaves:true,native_escape_symlink_foreign_and_missing_rejected:true,runtimeExecution:false}));
+console.log(JSON.stringify({portable_six_leaves:true,missing_duplicate_traversal_symlink_and_mismatch_rejected:true,native_required_leaves:true,native_escape_symlink_foreign_and_missing_rejected:true,runtimeExecution:false}));

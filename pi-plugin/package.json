@@ -1,0 +1,7 @@
+{
+  "name": "agent-notifications-pi-observer-tests",
+  "private": true,
+  "type": "module",
+  "scripts": { "check": "node --test *.test.mjs" },
+  "engines": { "node": ">=22.18.0" }
+}

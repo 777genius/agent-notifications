@@ -27,6 +27,10 @@ final class UNNotificationService: NotificationSending {
     }
 
     func send(config: NotificationConfig, completion: @escaping (Result<Void, Error>) -> Void) {
+        send(config: config, admitted: { true }, completion: completion)
+    }
+
+    func send(config: NotificationConfig, admitted: () -> Bool, completion: @escaping (Result<Void, Error>) -> Void) {
         // Set app icon explicitly so macOS picks it up for notifications
         if let iconURL = Bundle.main.url(forResource: "AppIcon", withExtension: "icns"),
            let icon = NSImage(contentsOf: iconURL) {
@@ -39,6 +43,7 @@ final class UNNotificationService: NotificationSending {
 
         let identifier = config.group ?? UUID().uuidString
         let request = UNNotificationRequest(identifier: identifier, content: content, trigger: nil)
+        guard admitted() else { completion(.failure(NativeReason.expired)); return }
         center.add(request) { error in
             if let error = error { completion(.failure(NotificationServiceError.sendFailed(error))) }
             else { completion(.success(())) }

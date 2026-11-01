@@ -166,7 +166,7 @@ if (phase === 'prepare') {
   const portableZip=await regularFile(await realpath(bundleInput),96<<20); assert.equal(hash(portableZip),portableZipSHA256);
   const portable=portableEntries(portableZip);
   const portableManifest=JSON.parse(portable.get('plugin.json')!.toString()) as unknown;
-  assert.deepEqual(portableManifest,{$schema:'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json',name:'agent-notify',version},'portable_version_identity');
+  assert.deepEqual(portableManifest,{$schema:'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json',name:'agent-notify',version,extensions:{'com.universal-agent-plugins.pi':{version:1,source:'com.universal-agent-plugins.pi'}}},'portable_version_identity');
   assert.deepEqual(JSON.parse(portable.get('mcp.json')!.toString()),{$schema:'https://agent-plugins.org/schemas/1.0.0/mcp.schema.json',mcpServers:{'agent-notifications':{type:'stdio',command:'./bin/claude-notifications',args:[],env:{}}}},'portable_exact_MCP_contract');
   assert.equal(hash(portable.get('bin/claude-notifications')!),sha256,'portable_matches_raw_draft_binary');
   const nativeZip=await regularFile(nativeZipInput,32<<20);assert.equal(hash(nativeZip),nativeZipSHA256,'native_draft_ZIP_identity');
@@ -178,6 +178,7 @@ if (phase === 'prepare') {
   assert(nativeCustody.signatureVerified===true&&nativeCustody.signingTeam==='86399583GS'&&nativeCustody.bundleID==='com.777genius.agent-notifications','native_custody_publisher_identity');
   assert.equal((await run({} as Meta, '/usr/bin/git', ['-C', source, 'rev-parse', 'HEAD'], source)).stdout.trim(), candidate);
   await run({} as Meta, '/usr/bin/git', ['-C', source, 'diff', '--exit-code', 'HEAD'], source);
+  assert.deepEqual(portable.get('com.universal-agent-plugins.pi/index.ts'),await regularFile(join(source,'portable-package/com.universal-agent-plugins.pi/index.ts'),2<<20),'portable_Pi_observer_matches_candidate_source');
   assert(Number(process.versions.node.split('.')[0])>=24,'Node_24_or_newer_required');
   await regularFile('/usr/sbin/spctl',32<<20);
   const modelPort = Number(modelPortInput), webhookPort = Number(webhookPortInput);

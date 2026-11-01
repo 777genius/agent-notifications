@@ -131,7 +131,7 @@ const faqIcons = [
       <div data-reveal class="compatibility">
         <span role="group" :aria-label="t('accessibility.platforms')"><PlatformLogos /></span>
         <span class="supported-agents" role="group" :aria-label="t('accessibility.agents')">
-          <AgentLogo v-for="agent in ['claude', 'codex', 'opencode', 'gemini', 'cursor', 'qoder'] as const" :key="agent" :agent="agent" />
+          <AgentLogo v-for="agent in ['claude', 'codex', 'opencode', 'gemini', 'cursor', 'qoder', 'pi'] as const" :key="agent" :agent="agent" />
         </span>
       </div>
       <InstallWizard data-reveal />
@@ -213,5 +213,5 @@ const faqIcons = [
 
 <style scoped>
 .compatibility { flex-wrap: wrap; gap: 20px; }
-.supported-agents { display: inline-flex; align-items: center; gap: 16px; }
+.supported-agents { display: inline-flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 16px; max-width: 100%; }
 </style>

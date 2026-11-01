@@ -18,10 +18,15 @@ There is no promise of final-only delivery or root/nested-agent parity. Gemini
 notifications do not include prompts, tool arguments, transcripts or model answers.
 The integration observes these signals; it does not approve tools or change answers.
 
-Desktop alerts are silent. Webhooks require explicit consent and separately
-configured endpoints. Sound, click-to-focus, questions, errors, plans, reviews,
-session-limit alerts, MCP notification tools and the `agent-notifications` skill are not
-Gemini capabilities. Claude/Codex capabilities and OpenCode limits remain separate.
+Desktop alerts are silent in the **published v1.49.11**. New, unreleased source
+can request the **OS default notification cue** after explicit
+`notifications.desktop.systemSound=true` consent, provided the master desktop
+`sound` setting is enabled. This is not Claude/Codex custom audio, configured
+volume/device playback or evidence of audible sound on every host.
+Webhooks still require separate consent and configured endpoints.
+Click-to-focus, questions, errors, plans, reviews, session-limit alerts,
+MCP notification tools and the `agent-notifications` skill are not Gemini
+capabilities. Claude/Codex capabilities and OpenCode limits remain separate.
 
 ## Installation
 
@@ -77,8 +82,9 @@ Gemini's built-in notifications or modify their settings.
 
 Use the installer's reported configuration path and Gemini guide rather
 than the Claude/Codex portable MCP wizard. The `agents.gemini` profile
-controls the two supported statuses and allowed delivery channels. Shared sound or
-focus settings cannot add those capabilities. Channel consent belongs to Gemini;
+controls the two supported statuses and allowed delivery channels. The unreleased
+source-only `systemSound` option requests the OS default cue after consent;
+it cannot enable other event types or Click to Focus. Channel consent belongs to Gemini;
 OpenCode consent is separate. Webhook consent alone does not configure an endpoint.
 
 Duplicate suppression records attempts per channel for a 60-second window, with

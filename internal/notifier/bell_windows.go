@@ -5,12 +5,19 @@
 package notifier
 
 import (
+	"context"
 	"fmt"
 	"unsafe"
 
 	"github.com/777genius/agent-notifications/internal/logging"
 	"golang.org/x/sys/windows"
 )
+
+func sendTerminalBellContext(ctx context.Context) {
+	if ctx.Err() == nil {
+		sendTerminalBell()
+	}
+}
 
 var (
 	modkernel32       = windows.NewLazySystemDLL("kernel32.dll")

@@ -25,6 +25,7 @@ import (
 
 	"github.com/777genius/agent-notifications/install/uapinstaller"
 	"github.com/777genius/agent-notifications/internal/agentnotify/clientsetup"
+	"github.com/777genius/agent-notifications/internal/agentnotify/piauthority"
 	"github.com/777genius/agent-notifications/internal/agentnotify/portable"
 	"github.com/777genius/agent-notifications/internal/agentnotify/portablesetup"
 	"github.com/777genius/agent-notifications/internal/agentnotify/registration"
@@ -66,6 +67,10 @@ type Request struct {
 	// profiles first; remaining empty roots take this snapshot. Run and
 	// Plan do not reread the process environment.
 	GlobalConfig, CodexHome, ClaudeConfig string
+	PiAgentDir, EnvPiAgentDir             string
+	PiAgentNotify                         *bool
+	PiDesktop, PiWebhook                  *bool
+	PiChannelPreimage                     string
 	// Cursor selection is explicit, never filled from discovery or environment.
 	// Fixed authority is provided by the qualified composition owner; it does
 	// not replace physical capture, installed receipts, or channel consent.
@@ -1341,6 +1346,20 @@ func restoreOmittedFromIntent(req Request, agents []portable.Integration, intent
 			} else if req.CursorConfig != target.Profile {
 				return req, agents, portablesetup.ErrIntentConflict
 			}
+		case "pi":
+			if target.PiChannels == nil {
+				return req, agents, portablesetup.ErrIntentConflict
+			}
+			frozen := target.PiChannels
+			if req.PiDesktop != nil && (frozen.Desktop == nil || *req.PiDesktop != *frozen.Desktop) || req.PiWebhook != nil && (frozen.Webhook == nil || *req.PiWebhook != *frozen.Webhook) || req.PiChannelPreimage != "" && req.PiChannelPreimage != frozen.Preimage {
+				return req, agents, portablesetup.ErrIntentConflict
+			}
+			req.PiDesktop, req.PiWebhook, req.PiChannelPreimage = frozen.Desktop, frozen.Webhook, frozen.Preimage
+			if req.PiAgentDir == "" {
+				req.PiAgentDir = target.Profile
+			} else if req.PiAgentDir != target.Profile {
+				return req, agents, portablesetup.ErrIntentConflict
+			}
 		case "claude":
 			if req.ClaudeConfig == "" {
 				req.ClaudeConfig = target.Profile
@@ -1479,12 +1498,12 @@ func applyIntentUnits(req Request, want map[string]unitSelection) Request {
 		req.Hooks = boolPtr(uniform.hooks)
 		req.AgentNotify = boolPtr(uniform.notify)
 		req.ClaudeHooks, req.CodexHooks = nil, nil
-		req.ClaudeAgentNotify, req.CodexAgentNotify, req.CursorAgentNotify = nil, nil, nil
+		req.ClaudeAgentNotify, req.CodexAgentNotify, req.CursorAgentNotify, req.PiAgentNotify = nil, nil, nil, nil
 		return req
 	}
 	req.Hooks, req.AgentNotify = nil, nil
 	req.ClaudeHooks, req.CodexHooks = nil, nil
-	req.ClaudeAgentNotify, req.CodexAgentNotify, req.CursorAgentNotify = nil, nil, nil
+	req.ClaudeAgentNotify, req.CodexAgentNotify, req.CursorAgentNotify, req.PiAgentNotify = nil, nil, nil, nil
 	for client, sel := range want {
 		hooks, notify := boolPtr(sel.hooks), boolPtr(sel.notify)
 		switch client {
@@ -1505,6 +1524,8 @@ func applyIntentUnits(req Request, want map[string]unitSelection) Request {
 			if sel.skills {
 				req.LocalConfig.Skills = []string{"agent-notifications"}
 			}
+		case "pi":
+			req.PiAgentNotify = notify
 		case "cursor":
 			req.CursorAgentNotify = notify
 		}
@@ -1526,7 +1547,7 @@ func intentClients(intent portablesetup.Intent) []string {
 }
 
 func unitFlagsOmitted(req Request) bool {
-	return req.Hooks == nil && req.AgentNotify == nil && req.ClaudeHooks == nil && req.CodexHooks == nil && req.ClaudeAgentNotify == nil && req.CodexAgentNotify == nil && req.CursorAgentNotify == nil && req.LocalConfig == nil
+	return req.Hooks == nil && req.AgentNotify == nil && req.ClaudeHooks == nil && req.CodexHooks == nil && req.ClaudeAgentNotify == nil && req.CodexAgentNotify == nil && req.CursorAgentNotify == nil && req.PiAgentNotify == nil && req.LocalConfig == nil
 }
 
 func sameStringSet(a, b []string) bool {
@@ -2289,7 +2310,7 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 				out.Outcome, out.Reason = "incomplete", "client_config_required"
 				return out, ErrRefused
 			}
-			if !explicitAbs(clientExecutable(req, agent)) {
+			if agent != portable.Pi && !explicitAbs(clientExecutable(req, agent)) {
 				out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "incomplete", Reason: "client_executable_required"})
 				out.Outcome, out.Reason = "incomplete", "client_executable_required"
 				return out, ErrRefused
@@ -2852,6 +2873,10 @@ func retryRequestFromIntent(req Request, intent portablesetup.Intent) Request {
 				retry.CursorConfig = target.Profile
 				retry.ScopeRoot = target.Profile
 			}
+		case "pi":
+			if target.Profile != "" {
+				retry.PiAgentDir = target.Profile
+			}
 		case "claude":
 			if target.Profile != "" {
 				retry.ClaudeConfig = target.Profile
@@ -3066,6 +3091,7 @@ func materializer(req Request, snap installruntime.InstalledSnapshot, runtimeRoo
 		RequireLiveProfiles: true,
 	})
 	mat.Kernel.ExpectedPolicy = req.BootstrapExpectedPolicy
+	mat.PiChoices = piauthority.Choices{Desktop: req.PiDesktop, Webhook: req.PiWebhook, Preimage: req.PiChannelPreimage}
 	mat.Progress = req.ClientProgress
 	if err != nil {
 		return mat, err
@@ -3134,7 +3160,7 @@ func identity(req Request, snap installruntime.InstalledSnapshot, runtimeRoot st
 	configRoot := ""
 	if len(req.Agents) == 1 {
 		switch req.Agents[0] {
-		case string(portable.Codex), string(portable.Claude), string(portable.Cursor), string(portable.CopilotVSCode):
+		case string(portable.Codex), string(portable.Claude), string(portable.Cursor), string(portable.CopilotVSCode), string(portable.Pi):
 			clientID = portablesetup.ClientID(portable.Integration(req.Agents[0]))
 			configRoot = clientConfig(req, portable.Integration(req.Agents[0]))
 		}
@@ -3172,7 +3198,7 @@ func identity(req Request, snap installruntime.InstalledSnapshot, runtimeRoot st
 		var candidates []portablesetup.Identity
 		for _, name := range req.Agents {
 			agent := portable.Integration(name)
-			if agent != portable.Claude && agent != portable.Codex && agent != portable.Cursor && agent != portable.CopilotVSCode {
+			if agent != portable.Claude && agent != portable.Codex && agent != portable.Cursor && agent != portable.CopilotVSCode && agent != portable.Pi {
 				continue
 			}
 			if migration, ok := req.MigrationBindings[name]; ok {
@@ -3814,6 +3840,8 @@ func clientConfig(req Request, agent portable.Integration) string {
 			return filepath.Dir(req.LocalConfig.ProfileSettingsPath)
 		}
 		return ""
+	case portable.Pi:
+		return req.PiAgentDir
 	case portable.Cursor:
 		return req.CursorConfig
 	default:
@@ -3897,6 +3925,9 @@ func wizardIntentTargets(req Request, hookAgents, notifyAgents []portable.Integr
 		}
 		target.Units = append(target.Units, unit)
 		if unit == "agent-notify" {
+			if agent == portable.Pi {
+				target.PiChannels = &piauthority.Choices{Desktop: req.PiDesktop, Webhook: req.PiWebhook, Preimage: req.PiChannelPreimage}
+			}
 			target.MCPConfig = discoveryConfigPath(req, agent)
 			if removal, ok := req.RemovalBindings[id]; ok {
 				oldBinding := removal.Old
@@ -4095,6 +4126,8 @@ func normalizeAgents(agents []string) ([]portable.Integration, error) {
 			id = portable.Codex
 		case "copilot-vscode":
 			id = portable.CopilotVSCode
+		case "pi":
+			id = portable.Pi
 		case "cursor":
 			id = portable.Cursor
 		default:
@@ -4118,7 +4151,7 @@ func selectedUnits(req Request, agents []portable.Integration) (hooks, notify []
 			}
 			continue
 		}
-		if agent != portable.Cursor && agent != portable.CopilotVSCode && agentUnit(req.Hooks, perClientHooks(req, agent), defaultOn) {
+		if agent != portable.Cursor && agent != portable.CopilotVSCode && agent != portable.Pi && agentUnit(req.Hooks, perClientHooks(req, agent), defaultOn) {
 			hooks = append(hooks, agent)
 		}
 		if agentUnit(req.AgentNotify, perClientNotify(req, agent), defaultOn) {
@@ -4169,6 +4202,8 @@ func preserveLiveUnits(ctx context.Context, req Request, agents []portable.Integ
 			req.ClaudeHooks, req.ClaudeAgentNotify = hooks, notify
 		case portable.Codex:
 			req.CodexHooks, req.CodexAgentNotify = hooks, notify
+		case portable.Pi:
+			req.PiAgentNotify = notify
 		case portable.Cursor:
 			req.CursorAgentNotify = notify
 		}
@@ -4193,6 +4228,8 @@ func perClientNotify(req Request, agent portable.Integration) *bool {
 		return req.ClaudeAgentNotify
 	case portable.Codex:
 		return req.CodexAgentNotify
+	case portable.Pi:
+		return req.PiAgentNotify
 	case portable.Cursor:
 		return req.CursorAgentNotify
 	default:
@@ -4330,6 +4367,14 @@ func reportProgress(req Request, phase string) {
 func applyHostSnapshots(req *Request) {
 	if req == nil {
 		return
+	}
+	if req.PiAgentDir == "" {
+		for _, agent := range req.Agents {
+			if agent == "pi" {
+				req.PiAgentDir = req.EnvPiAgentDir
+				break
+			}
+		}
 	}
 	if req.CodexHome == "" {
 		req.CodexHome = req.EnvCodexHome

@@ -51,3 +51,28 @@ func TestSystemSoundCanBeEditedThroughExistingManagedLeaf(t *testing.T) {
 		t.Fatal("edited config is malformed")
 	}
 }
+
+func TestSystemSoundSchema2AgentProfilesStayIndependent(t *testing.T) {
+	raw := []byte(`{"schemaVersion":2,"notifications":{"desktop":{"enabled":true,"sound":true}},"agents":{"gemini":{"notifications":{"desktop":{"systemSound":false}}},"cursor":{"notifications":{"desktop":{"systemSound":true}}},"copilot-vscode":{"notifications":{"desktop":{"systemSound":true,"sound":false}}}}}`)
+	d, err := ParseDocument(raw, "/TEST/agent-notifications.json", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		agent AgentID
+		want  bool
+	}{
+		{AgentClaude, false},
+		{AgentGemini, false},
+		{AgentCursor, true},
+		{AgentCopilotVSCode, false},
+	} {
+		view, err := d.Effective(AssetContext{Agent: tc.agent, PluginRoot: "/TEST"})
+		if err != nil {
+			t.Fatal(tc.agent, err)
+		}
+		if got := view.IsSystemSoundEnabled(); got != tc.want {
+			t.Fatalf("%s system sound = %t; want %t (profile leak)", tc.agent, got, tc.want)
+		}
+	}
+}

@@ -150,7 +150,7 @@ jobs:
           fi
 
       - name: Build binary
-        run: go build -o bin/claude-notifications ./cmd/claude-notifications
+        run: go build -ldflags="-s -w" -trimpath -o bin/claude-notifications ./cmd/claude-notifications
 
       # Build first so installer units retain their wrapper presence assertion.
       # Their helpers use private sandboxes and ephemeral HTTP ports, while

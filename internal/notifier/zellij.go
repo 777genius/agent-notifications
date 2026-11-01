@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/777genius/agent-notifications/internal/commandrun"
+
 	"github.com/777genius/agent-notifications/internal/daemon"
 	"github.com/777genius/agent-notifications/internal/logging"
 )
@@ -45,10 +47,13 @@ var zellijProbeTimeout = 2 * time.Second
 // the user is waiting for, so a zellij that never answers must not hold that up.
 // A timeout reads as unsupported, which lands on the tab path.
 func ZellijSupportsPaneFocus() bool {
-	ctx, cancel := context.WithTimeout(context.Background(), zellijProbeTimeout)
+	return zellijSupportsPaneFocusContext(context.Background())
+}
+func zellijSupportsPaneFocusContext(parent context.Context) bool {
+	ctx, cancel := context.WithTimeout(parent, zellijProbeTimeout)
 	defer cancel()
 
-	return exec.CommandContext(ctx, getZellijPath(), "action", "focus-pane-id", "--help").Run() == nil
+	return commandrun.Run(ctx, exec.Command(getZellijPath(), "action", "focus-pane-id", "--help")) == nil
 }
 
 // zellijLayoutTimeout bounds the dump-layout call. A variable so the test can
@@ -69,6 +74,9 @@ const zellijLayoutWaitDelay = 100 * time.Millisecond
 // answering costs the deadline and then reports a failed target, which every
 // caller already treats as "no zellij focus" rather than "no notification".
 func GetZellijTabTarget() (tabName, sessionName string, err error) {
+	return getZellijTabTargetContext(context.Background())
+}
+func getZellijTabTargetContext(parent context.Context) (tabName, sessionName string, err error) {
 	sessionName = os.Getenv("ZELLIJ_SESSION_NAME")
 	if sessionName == "" {
 		return "", "", fmt.Errorf("ZELLIJ_SESSION_NAME not set")
@@ -76,13 +84,13 @@ func GetZellijTabTarget() (tabName, sessionName string, err error) {
 
 	zellijPath := getZellijPath()
 
-	ctx, cancel := context.WithTimeout(context.Background(), zellijLayoutTimeout)
+	ctx, cancel := context.WithTimeout(parent, zellijLayoutTimeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, zellijPath, "action", "dump-layout")
+	cmd := exec.Command(zellijPath, "action", "dump-layout")
 	cmd.WaitDelay = zellijLayoutWaitDelay
 
-	output, err := cmd.Output()
+	output, err := commandrun.Output(ctx, cmd)
 	// The kill surfaces as "signal: killed", which does not say why, so the
 	// deadline is reported ahead of the process error.
 	if ctx.Err() == context.DeadlineExceeded {
