@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/777genius/agent-notifications/internal/analyzer"
+	"github.com/777genius/agent-notifications/internal/config"
 	"github.com/777genius/agent-notifications/internal/qodersource"
 )
 
@@ -56,10 +57,17 @@ func TestQoderStopFlow(t *testing.T) {
 	}
 }
 
+func qoderFailureTestConfig() *config.Config {
+	cfg := codexTestConfig()
+	cfg.Statuses[string(analyzer.StatusAgentError)] = config.StatusInfo{Title: "Qoder stopped unexpectedly"}
+	cfg.Statuses[string(analyzer.StatusAPIErrorOverloaded)] = config.StatusInfo{Title: "Qoder rate limited"}
+	return cfg
+}
+
 // An actual Qoder StopFailure is not a successful Stop, and host error text
 // may contain credentials/requests. Only the fixed class reaches delivery.
 func TestQoderStopFailureRoutesWithoutLeakingRawProviderError(t *testing.T) {
-	handler, notify, _ := newTestHandler(t, codexTestConfig())
+	handler, notify, _ := newTestHandler(t, qoderFailureTestConfig())
 	handler.product, handler.source = ProductQoder, QoderSource{}
 	for _, tc := range []struct {
 		errorType string
@@ -265,7 +273,7 @@ func TestQoderEventsDeliverWhileContentLockHeld(t *testing.T) {
 				body = `,"stop_hook_active":false,"last_assistant_message":"Done"`
 			}
 			payload := fmt.Sprintf(`{"session_id":%q,"cwd":"/TEST-qoder","hook_event_name":%q%s}`, session, kind, body)
-			cfg := codexTestConfig()
+			cfg := qoderFailureTestConfig()
 			cfg.Notifications.NotifyOnSubagentStop = true
 			noSuppress := false
 			cfg.Notifications.SuppressForSubagents = &noSuppress
