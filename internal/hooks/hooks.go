@@ -681,7 +681,8 @@ func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 	// Turn-level duplicates of the event itself stay bounded by the
 	// turn+tool/agent(+call)-scoped dedup lock.
 	skipContentDedup := status == analyzer.StatusPermissionRequest ||
-		(ev.Product == ProductCodex && (ev.Kind() == EventPreToolUse || ev.Kind() == EventSubagentStop))
+		(ev.Product == ProductCodex && (ev.Kind() == EventPreToolUse || ev.Kind() == EventSubagentStop)) ||
+		(ev.Product == ProductQoder && ev.Kind() == EventStopFailure)
 	if !skipContentDedup {
 		isDuplicateStop, stopErr := h.stateMgr.IsDuplicateStopPayload(keys.stateKey, stopHash, 180)
 		if stopErr != nil {
