@@ -82,7 +82,14 @@ static void notificationPresentationHint(std::atomic<uint32_t>& observed, std::a
   // Failure to retrieve a usable state also records an attempted query.
   queried.store(1,std::memory_order_relaxed);
 }
-static void clickAt(const char* step) { clickStep.store(step,std::memory_order_relaxed); }
+// Once the click actor is armed, only its own thread may advance the
+// failure step. The receiver collector has independent work and must not
+// overwrite a failure during UIA selection, revalidation or Invoke.
+static std::atomic<DWORD> clickOwnerThread{0};
+static void clickAt(const char* step) {
+ const DWORD owner=clickOwnerThread.load(std::memory_order_relaxed);
+ if(!owner || owner==GetCurrentThreadId()) clickStep.store(step,std::memory_order_relaxed);
+}
 // MSVC path::root_path treats the device introducer as root (\\?\),
 // not the DOS volume. Decompose only the already validated physical drive
 // grammar, preserving the exact namespace and every ancestor hold.
@@ -1148,6 +1155,7 @@ static void publishClickRefusal(std::exception_ptr cause) noexcept {
  } catch (...) {} // Diagnostic failure cannot change the original refusal.
 }
 static void click() {
+  clickOwnerThread.store(GetCurrentThreadId(),std::memory_order_relaxed);
   // Establish real interactive UIA readiness before the shipping toast is shown.
   clickAt("interactive_desktop"); interactive();
   notificationPresentationHint(clickUserNotificationStateAtArm,clickUserNotificationHRESULTAtArm,
