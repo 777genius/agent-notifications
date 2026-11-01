@@ -17,13 +17,18 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version: '1.25'
+      - name: Observe native sharing denials on private TEST inputs
+        shell: pwsh
+        run: |
+          go test -race -run '^TestPrepareWindowsNativeSharingDiagnostic$' -v ./internal/config
+          exit $LASTEXITCODE
       - name: Observe concurrent preparation with safe stage and errno
         shell: pwsh
         run: |
           $root = Join-Path $env:RUNNER_TEMP 'TEST-config-prepare-diagnostic'
           New-Item -ItemType Directory -Path $root -Force | Out-Null
           @{ scope = 'native-config-preparation-diagnostic'; sourceSHA = $env:GITHUB_SHA; fullNativeQualified = $false; releaseQualified = $false } | ConvertTo-Json | Set-Content (Join-Path $root 'scope.json')
-          go test -race -failfast -count=200 -run '^TestPrepareTwoProcess$' -v ./internal/config 2>&1 | Tee-Object -FilePath (Join-Path $root 'stress.log')
+          go test -race -failfast -count=100 -run 'TestStoreKilledLockOwner|TestPrepareTwoProcess' -v ./internal/config 2>&1 | Tee-Object -FilePath (Join-Path $root 'stress.log')
           exit $LASTEXITCODE
       - name: Retain diagnostic result without granting qualification
         if: always()
