@@ -7,7 +7,7 @@ permissions:
   contents: read
 jobs:
   shell-overlay:
-    if: ${{ github.repository == '777genius/agent-notifications' && github.run_attempt == 1 && github.event.head_commit.message == 'probe-windows-oobe-shell-v2' }}
+    if: ${{ github.repository == '777genius/agent-notifications' && github.run_attempt == 1 && github.event.head_commit.message == 'probe-windows-oobe-shell-v3' }}
     runs-on: windows-11-vs2026-arm
     timeout-minutes: 8
     steps:
@@ -76,6 +76,7 @@ jobs:
           $before = Census
           $foregroundBefore = KnownProcess ([TestOnlyShellProbe]::ForegroundPid())
           $brokerFound = $before['UserOOBEBroker'] -gt 0
+          $foregroundId = [TestOnlyShellProbe]::ForegroundPid()
           $stopped = 0
           $refused = 0
           # The GitHub-hosted VM is disposable. Never touch any non-OOBE app,
@@ -84,7 +85,7 @@ jobs:
             foreach ($p in @(Get-Process -Name $name -ErrorAction SilentlyContinue)) {
               if ($p.SessionId -ne $session) { continue }
               $title = [string]$p.MainWindowTitle
-              $isPrivacyWindow = $name -eq 'WWAHost' -and $title -match '(?i)choose privacy settings|privacy settings for your device'
+              $isPrivacyWindow = $name -eq 'WWAHost' -and ($title -match '(?i)choose privacy settings|privacy settings for your device' -or $p.Id -eq $foregroundId)
               if ($name -eq 'WWAHost' -and -not ($brokerFound -or $isPrivacyWindow)) { continue }
               try { $path = [string]$p.Path } catch { $path = '' }
               if (-not $path.StartsWith($env:WINDIR + '\', [StringComparison]::OrdinalIgnoreCase)) {
