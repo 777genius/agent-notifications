@@ -1,0 +1,123 @@
+name: TEST-only Windows 11 Shell hotkey positive-control UIA
+on:
+  push:
+    branches: [ci/windows-uia-shell-preflight-20261101]
+    paths: ['.github/workflows/windows-hotkey-positive-control-one-shot.yml']
+permissions:
+  contents: read
+jobs:
+  hotkeys:
+    if: ${{ github.repository == '777genius/agent-notifications' && github.run_attempt == 1 }}
+    runs-on: windows-11-vs2026-arm
+    timeout-minutes: 8
+    steps:
+      - name: Observe Win+R dialog before checking Win+N, no notification effects
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Add-Type -AssemblyName System.Windows.Forms,UIAutomationClient,UIAutomationTypes
+          $source = @'
+          using System;
+          using System.Runtime.InteropServices;
+          public static class TestOnlyHotKeys {
+            [StructLayout(LayoutKind.Sequential)]
+            public struct Key { public ushort vk; public ushort scan; public uint flags; public uint time; public IntPtr extra; }
+            [StructLayout(LayoutKind.Explicit,Size=40)]
+            public struct Input { [FieldOffset(0)] public uint type; [FieldOffset(8)] public Key key; }
+            [DllImport("user32.dll",SetLastError=true)] public static extern uint SendInput(uint count,[In] Input[] data,int size);
+            [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+            [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hwnd);
+            public static uint Combo(ushort second) {
+              var inputs = new Input[4];
+              foreach(var i in new int[]{0,1,2,3})inputs[i].type=1;
+              inputs[0].key.vk=0x5b;inputs[1].key.vk=second;
+              inputs[2].key.vk=second;inputs[2].key.flags=2;
+              inputs[3].key.vk=0x5b;inputs[3].key.flags=2;
+              return SendInput(4,inputs,Marshal.SizeOf(typeof(Input)));
+            }
+            public static uint Escape() {
+              var inputs=new Input[2];
+              inputs[0].type=1;inputs[0].key.vk=0x1b;
+              inputs[1].type=1;inputs[1].key.vk=0x1b;inputs[1].key.flags=2;
+              return SendInput(2,inputs,Marshal.SizeOf(typeof(Input)));
+            }
+          }
+          '@
+          Add-Type -TypeDefinition $source
+          $marker="TEST-WinHotkey-$env:GITHUB_RUN_ID"
+          $env:TEST_UIA_MARKER=$marker
+          $scriptPath=Join-Path $env:RUNNER_TEMP 'TEST-hotkey-focus.ps1'
+          @'
+          Add-Type -AssemblyName System.Windows.Forms
+          $form=New-Object System.Windows.Forms.Form
+          $form.Text=[Environment]::GetEnvironmentVariable('TEST_UIA_MARKER')
+          $form.Width=420;$form.Height=180
+          $form.StartPosition='CenterScreen'
+          $form.ShowInTaskbar=$true
+          $form.Add_Shown({ $form.Activate() })
+          [System.Windows.Forms.Application]::Run($form)
+          '@ | Set-Content -LiteralPath $scriptPath -Encoding UTF8
+          $exe=Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
+          $proc=Start-Process -FilePath $exe -ArgumentList @('-NoProfile','-NonInteractive','-STA','-ExecutionPolicy','Bypass','-File',('"' + $scriptPath + '"')) -PassThru
+          try {
+            $root=[System.Windows.Automation.AutomationElement]::RootElement
+            $formCondition=New-Object System.Windows.Automation.PropertyCondition(
+              [System.Windows.Automation.AutomationElement]::NameProperty,$marker
+            )
+            $formWindow=$null
+            $until=[DateTime]::UtcNow.AddSeconds(35)
+            while($null -eq $formWindow -and [DateTime]::UtcNow -lt $until){
+              if($proc.HasExited){throw 'Test-only WinForms worker exited'}
+              $formWindow=$root.FindFirst([System.Windows.Automation.TreeScope]::Children,$formCondition)
+              if($null -eq $formWindow){Start-Sleep -Milliseconds 150}
+            }
+            if($null -eq $formWindow -or $formWindow.Current.ProcessId -ne $proc.Id){
+              throw 'No exact test-owned interactive window'
+            }
+            $handle=[IntPtr]$formWindow.Current.NativeWindowHandle
+            $setFocus=[TestOnlyHotKeys]::SetForegroundWindow($handle)
+            Start-Sleep -Milliseconds 250
+            $focusedBefore=([TestOnlyHotKeys]::GetForegroundWindow() -eq $handle)
+            $runCondition=New-Object System.Windows.Automation.PropertyCondition(
+              [System.Windows.Automation.AutomationElement]::NameProperty,'Run'
+            )
+            $runBefore=$null -ne $root.FindFirst([System.Windows.Automation.TreeScope]::Children,$runCondition)
+            $runInput=[TestOnlyHotKeys]::Combo(0x52)
+            Start-Sleep -Seconds 2
+            $runAfter=$null -ne $root.FindFirst([System.Windows.Automation.TreeScope]::Children,$runCondition)
+            $runForeground=([TestOnlyHotKeys]::GetForegroundWindow() -ne $handle)
+            $escapeInput=[TestOnlyHotKeys]::Escape()
+            Start-Sleep -Milliseconds 450
+            $centerInput=[TestOnlyHotKeys]::Combo(0x4e)
+            Start-Sleep -Seconds 2
+            $roots=$root.FindAll([System.Windows.Automation.TreeScope]::Children,
+              [System.Windows.Automation.Condition]::TrueCondition)
+            $hints=0
+            $shellRoots=0
+            for($i=0;$i -lt [Math]::Min($roots.Count,128);$i++){
+              $entry=$roots.Item($i)
+              $name=[string]$entry.Current.Name
+              if($name -match '(?i)notification|calendar|quick settings|action center'){$hints++}
+              $p=Get-Process -Id $entry.Current.ProcessId -ErrorAction SilentlyContinue
+              if($null -ne $p -and $p.ProcessName -in @('explorer','ShellHost','ShellExperienceHost')){$shellRoots++}
+            }
+            $result=[ordered]@{
+              scope='inert_shell_hotkey_positive_control'
+              session=[System.Diagnostics.Process]::GetCurrentProcess().SessionId
+              ownWindowFound=$true;focusWasSet=$setFocus;ownWindowForeground=$focusedBefore
+              runDialogAlreadyOpen=$runBefore;runInputInserted=$runInput
+              runDialogFoundAfterWinR=$runAfter;foregroundChangedAfterWinR=$runForeground
+              escapeInputInserted=$escapeInput;centerInputInserted=$centerInput
+              afterCenterRootCount=$roots.Count;afterCenterShellRoots=$shellRoots
+              notificationTopLevelHints=$hints
+              actualToastClickQualified=$false
+            }
+            Write-Output ('HOTKEY_PREFLIGHT='+($result|ConvertTo-Json -Compress))
+          } finally {
+            if(-not $proc.HasExited){
+              $null=$proc.CloseMainWindow()
+              Start-Sleep -Milliseconds 200
+              if(-not $proc.HasExited){$proc.Kill()}
+            }
+            $proc.WaitForExit(3000)|Out-Null
+          }
