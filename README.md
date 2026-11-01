@@ -30,7 +30,7 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/777genius/agent-notifications.svg)](https://pkg.go.dev/github.com/777genius/agent-notifications)
 [![codecov](https://codecov.io/gh/777genius/agent-notifications/graph/badge.svg?branch=main)](https://codecov.io/gh/777genius/agent-notifications)
 
-Desktop notifications for **Claude, Codex CLI, OpenCode, Gemini CLI, Cursor CLI, Qoder and Pi** on **macOS, Linux and Windows**. Supported architectures and events vary by agent; see the support table and linked setup guides. Claude, Codex and Pi's local terminal UI support sounds and click-to-focus where qualified; Qoder supports sounds, but its focus behavior is not yet qualified.
+Desktop notifications for **Claude, Codex CLI, OpenCode, Gemini CLI, Cursor CLI, Qoder and Pi** on **macOS, Linux and Windows**. Supported architectures and events vary by agent; see the support table and linked setup guides. Claude, Codex and Pi's local terminal UI support sounds and click-to-focus where qualified; Qoder's built-in MP3 assets require a later qualified release; its focus behavior is not qualified.
 
 <p align="center">
   <img width="100%" alt="macOS, Windows, Linux (left to right)" src="docs/images/notification-platform-labels.svg" />
@@ -95,7 +95,7 @@ Claude/Codex setup also installs the `agent-notifications` MCP server and `agent
 ## Features
 
 - **Task and attention alerts:** completions, questions, tool approvals and more, depending on the agent. See the table below.
-- **Click-to-focus (Claude/Codex/Pi) and sounds (Claude/Codex/Qoder/Pi):** focus the originating terminal or editor where qualified; choose built-in or custom sounds, volume and audio output. [Supported terminals](docs/CLICK_TO_FOCUS.md) · [Sound settings](docs/CONFIGURATION.md#sound-options)
+- **Click-to-focus (Claude/Codex/Pi) and sounds (Claude/Codex/Pi; Qoder built-ins pending release):** focus the originating terminal or editor where qualified; choose built-in or custom sounds, volume and audio output. [Supported terminals](docs/CLICK_TO_FOCUS.md) · [Sound settings](docs/CONFIGURATION.md#sound-options)
 - **Useful context:** Claude/Codex desktop alerts show project, git branch and native session names, with generated labels as fallback. OpenCode desktop alerts show native session names when available. Question alerts show the current question when supplied by the host. OpenCode webhooks retain generic text. [Session context](docs/CONFIGURATION.md#session-context) · [OpenCode context](docs/opencode-notifications.md)
 - **Less noise (Claude/Codex):** optional focus-aware desktop delivery, delays, filters and subagent alerts. Plugin-level Do Not Disturb detection is Linux-only. [Configuration](docs/CONFIGURATION.md#focus-aware--delayed-notifications) · [Do Not Disturb](docs/DO_NOT_DISTURB.md)
 - **Webhooks:** Slack, Discord, Telegram, Lark/Feishu and custom endpoints. [Integration guides](docs/webhooks/README.md)
@@ -110,7 +110,7 @@ Claude/Codex setup also installs the `agent-notifications` MCP server and `agent
 | **OpenCode** | Root-session completion, questions, permissions and errors | Opt-in OS-default cue | No | [Setup and limits](docs/opencode-notifications.md) |
 | **Gemini CLI** | Turn completion and tool permissions | No | No | [Cross-platform setup and qualification](docs/gemini-notifications.md) |
 | **Cursor CLI** | Agent loop stopping; fixed informational text | No | No | [Qualified hosts, shared setup and profile authority](docs/cursor-notifications.md) |
-| **Qoder** | Completion, question, permission, plan and subagent/idle-teammate hooks; native plugin | Yes | Not qualified; exact-chat focus unavailable | [Unified installation and native hooks](docs/QODER.md) |
+| **Qoder** | Completion, question, permission, plan and subagent/idle-teammate hooks; source-only StopFailure alerts not in v1.49.11 | Configured; MP3 bundle fix awaits next release | Not qualified; exact-chat focus unavailable | [Unified installation and native hooks](docs/QODER.md) |
 
 | **Pi** | Final completed activity, blocking extension UI questions and final API errors | Yes, local TUI | Originating local terminal; native qualification varies by OS | [Common installation, modes, sound and terminal focus](docs/pi-notifications.md) |
 

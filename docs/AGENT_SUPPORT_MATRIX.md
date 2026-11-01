@@ -2,6 +2,8 @@
 
 Audit updated for the v1.50.0 promotion on 2026-11-01. This is a **source-and-documentation review**, not fresh native desktop acceptance. For platform/version gates use the linked agent guides and [release channels](PLATFORM_RELEASE_CHANNELS.md).
 
+The v1.50.0 artifacts are frozen at [7981f185 (C4)](https://github.com/777genius/agent-notifications/commit/7981f185d0d158799cba19387f976c9e72c4e73c). Qoder's `StopFailure` handler and five bundled MP3 additions from [#558](https://github.com/777genius/agent-notifications/pull/558) were merged after that source and remain **unreleased**. The published Qoder hooks from v1.49.11 remain the v1.50.0 release baseline; a manifest version on current main does not qualify later source changes for that release.
+
 **Key distinction:** showing an alert, focusing the originating terminal window/pane, and opening the exact originating desktop chat are three separate capabilities. The same notification transport can be shared without pretending an agent session ID is a verified desktop-chat ID.
 
 ## Shipped integrations: observed event coverage
@@ -15,7 +17,7 @@ Legend: **Yes** = implemented; **Limited** = only under the stated event/host co
 | OpenCode V1/V2 | Yes: verified root-session idle | Yes | Yes | Yes: terminal error | No | No: root-session filter |
 | Gemini CLI | Yes: AfterAgent means a turn ended, **not task success** | No | Yes: Notification/ToolPermission | No distinct error/limit alerts | No | No qualified parity |
 | Cursor CLI | Limited: native Stop means loop stopped, including abort/error | No | No | No distinct alert: completion/abort/error use the same informational wording | No | No qualified subagent alerts |
-| Qoder CLI | Yes: Stop | Yes | Yes | No dedicated StopFailure alert | Plan yes; review no | Limited: opt-in SubagentStop; idle teammates |
+| Qoder CLI | Yes: Stop | Yes | Yes | No in v1.49.11 or frozen v1.50.0; unreleased source adds generic StopFailure and separate rate-limit classification | Plan yes; review no | Limited: opt-in SubagentStop; idle teammates |
 | Pi | Yes: final successful settlement | Limited: blocking extension UI | No dedicated permission event | Yes: final failed settlement | No dedicated plan/review | No intermediate/aborted completion |
 
 Sources: [Claude/Codex/Qoder product event boundary](../internal/hooks/event.go), [shared hook handler](../internal/hooks/hooks.go), [OpenCode consumer](../internal/opencodeevent/consumer.go), [Gemini consumer](../internal/geminievent/consumer.go), [Cursor consumer](../internal/cursorevent/consumer.go); [Qoder](QODER.md), [Codex](CODEX.md), [OpenCode](opencode-notifications.md), [Gemini](gemini-notifications.md), [Cursor](cursor-notifications.md).
@@ -29,7 +31,7 @@ Sources: [Claude/Codex/Qoder product event boundary](../internal/hooks/event.go)
 | OpenCode | Yes | Yes | Opt-in OS-default `systemSound` cue since v1.50.0 | No: `Navigation=None` | No |
 | Gemini CLI | Yes | Yes | Opt-in OS-default `systemSound` cue since v1.50.0 | No: `Navigation=None` | No |
 | Cursor CLI | Yes (qualified hosts only) | Yes | Opt-in OS-default `systemSound` cue since v1.50.0 | No: `Navigation=None` | No |
-| Qoder CLI | Yes | Yes | Yes: shared hook notifier | **Not qualified**: Claude-only Ghostty capture; generic legacy window activation must not be advertised as exact/guaranteed | No |
+| Qoder CLI | Yes | Yes | Shared notifier supports cues; v1.49.11 and frozen v1.50.0 bundles lack built-in MP3s; unreleased source packages all five (issue #562) | **Not qualified**: Claude-only Ghostty capture; generic legacy window activation must not be advertised as exact/guaranteed | No |
 | Pi | Local TUI only | Yes, explicit consent | Yes, configured local TUI | Originating terminal; Linux desktop suite, owner-observed Mac banner/click; full macOS/Windows native acceptance pending | No |
 
 “Desktop” means the implementation provides a submission path; it does **not** mean visible banners or physical click callbacks were observed on every platform. [Terminal / IDE focus precision](CLICK_TO_FOCUS.md) explains window versus pane/tab and the OS permissions.
@@ -52,7 +54,7 @@ Source references: [GitHub Copilot hooks](https://docs.github.com/en/copilot/ref
 
 | Agent | Native event opportunity | Guardrail |
 | --- | --- | --- |
-| Qoder | `StopFailure` provides explicit error categories; `PermissionDenied` is also documented | Distinguish blocked workflow vs noisy per-tool failures; do not include raw error, prompts or tool arguments |
+| Qoder | Qualify and release the source-only `StopFailure` handler; investigate documented `PermissionDenied` | Distinguish blocked workflow vs noisy per-tool failures; do not include raw error, prompts or tool arguments |
 | Cursor CLI | Separate known `stop.status` values (`completed`, `aborted`, `error`) rather than presenting them all as “stopping”; investigate `subagentStop` and tool failures | Verify **Cursor CLI** event dispatch, not merely Cursor IDE hook documentation. Stop status is not proof a task succeeded |
 | OpenCode | Native `session.status`, `session.error`, permission events and parent/child sessions offer expansion candidates | Preserve root-only behavior until duplicates, nested ownership and exact event ordering are proven |
 | Gemini CLI | Native hooks also include `SessionEnd`, `AfterTool` and more | Session end is **not** task completion; `Notification` currently exposes ToolPermission, not an arbitrary “question” event |
@@ -73,7 +75,7 @@ See the existing [navigation design and review](plans/notification-navigation-ad
 
 ## Rough incremental engineering scope
 
-Estimates below are **changed LOC** (not a measurement of currently missing code), against current main, excluding Pi PR #539 and potential large native harnesses. They include validation in the test column but are **not** promises that an unsupported upstream event exists.
+Estimates below are **changed LOC** (not a measurement of currently missing code), against current main, excluding the released Pi integration from PR #539 and potential large native harnesses. They include validation in the test column but are **not** promises that an unsupported upstream event exists.
 
 | Workstream | Production changed LOC | Focused tests changed LOC |
 | --- | ---: | ---: |
@@ -86,7 +88,7 @@ Estimates below are **changed LOC** (not a measurement of currently missing code
 
 Subtotal: roughly **1,150–2,850 production LOC** and **1,780–3,920 focused-test LOC**, plus **150–300 docs/data LOC** and perhaps **800–2,500 OS native installed-E2E/fixture LOC**; about **3,900–9,600 changed LOC** for this broad scope. Exact desktop-chat navigation for every IDE, cross-OS authorization and a fully repeatable interactive physical-click harness are **separate higher-risk projects** and may exceed those numbers.
 
-A **new** GitHub Copilot CLI or Kiro CLI installer/adapter is each a different effort, provisionally **1,500–4,000 additional changed LOC** including tests/install qualification. Native upstream compatibility and sandbox restrictions can invalidate these ranges. Pi's very large ongoing draft is a reminder that full OS-specific acceptance can dominate adapter code.
+A **new** GitHub Copilot CLI or Kiro CLI installer/adapter is each a different effort, provisionally **1,500–4,000 additional changed LOC** including tests/install qualification. Native upstream compatibility and sandbox restrictions can invalidate these ranges. Pi's native validation harness illustrates how full OS-specific acceptance can dominate adapter code.
 
 ## Acceptance before changing a capability from “No” to “Supported”
 
