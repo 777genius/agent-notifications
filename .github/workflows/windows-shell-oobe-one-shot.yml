@@ -7,7 +7,7 @@ permissions:
   contents: read
 jobs:
   shell-overlay:
-    if: ${{ github.repository == '777genius/agent-notifications' && github.run_attempt == 1 && github.event.head_commit.message == 'probe-windows-arm-prime-notification-v9' }}
+    if: ${{ github.repository == '777genius/agent-notifications' && github.run_attempt == 1 && github.event.head_commit.message == 'probe-windows-arm-notification-state-v10' }}
     runs-on: windows-11-vs2026-arm
     timeout-minutes: 8
     steps:
@@ -27,6 +27,8 @@ jobs:
             [DllImport("user32.dll", SetLastError=true)]
             public static extern uint SendInput(uint n, [In] Input[] data, int size);
             [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+            [DllImport("shell32.dll")] public static extern int SHQueryUserNotificationState(out int state);
+            public static string NotificationState() { int state; int hr=SHQueryUserNotificationState(out state); return hr==0 ? state.ToString() : "hresult"; }
             [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hwnd, int command);
             [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
             public static uint ForegroundPid() {
@@ -74,6 +76,7 @@ jobs:
           $session = [System.Diagnostics.Process]::GetCurrentProcess().SessionId
           $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
           if ($bounds.Width -lt 640 -or $bounds.Height -lt 480) { throw 'insufficient desktop geometry' }
+          $notificationStateBefore = [TestOnlyShellProbe]::NotificationState()
           $before = Census
           $foregroundBefore = KnownProcess ([TestOnlyShellProbe]::ForegroundPid())
           $brokerFound = $before['UserOOBEBroker'] -gt 0
@@ -118,6 +121,7 @@ jobs:
           # Dismiss any first-logon Start overlay, without terminating the shell.
           [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
           Start-Sleep -Milliseconds 1200
+          $notificationStateAfterCleanup = [TestOnlyShellProbe]::NotificationState()
           $after = Census
           $foregroundAfterCleanup = KnownProcess ([TestOnlyShellProbe]::ForegroundPid())
           # Establish and close one Quick Settings shell surface first (inert UI preflight).
@@ -186,7 +190,11 @@ jobs:
           try {
             $packageManagerTypeFound = [bool]([Windows.Management.Deployment.PackageManager,Windows.Management.Deployment,ContentType=WindowsRuntime])
           } catch { $packageManagerTypeFound = $false }
+          $notificationStateAfterShortcut = [TestOnlyShellProbe]::NotificationState()
           $report = [ordered]@{
+            notificationStateBefore = $notificationStateBefore
+            notificationStateAfterCleanup = $notificationStateAfterCleanup
+            notificationStateAfterShortcut = $notificationStateAfterShortcut
             shellShortcut = 'Win+A_twice_then_Win+N_notification_center'
             priorQuickSettingsInputEvents = $firstQuick + $secondQuick
             scope = 'one_shot_disposable_no_product_notification_overlay_diagnostic'
