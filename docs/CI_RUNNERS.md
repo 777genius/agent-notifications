@@ -55,6 +55,11 @@ These contracts require new qualification before changing provider:
   Both ordinary Go test versions and installer E2E use managed routing; the
   separate physical job preserves all original commands/positive markers and
   is required by both Ubuntu aggregates and native-input evidence.
+- `pi-installed-linux.yml`: the installed Pi process now exercises a real
+  shared Cursor binding through install, update and Pi-only removal. It uses
+  stock `ubuntu-24.04`, matching `cursor-physical` above. Managed Ubuntu runners
+  do not qualify Cursor's exact kernel/ext4/profile contract; the runtime guards
+  remain unchanged.
 - `gemini-native-e2e.yml`: all original runners remain. Its trusted wrapper
   (`scripts/gemini-native-ci.py`) explicitly requires
   `RUNNER_ENVIRONMENT == 'github-hosted'` before side effects. Having PowerShell
