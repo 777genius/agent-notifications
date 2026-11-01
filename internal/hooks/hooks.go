@@ -678,6 +678,9 @@ func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 	//   blocking prompt;
 	// - Codex SubagentStop: parallel subagents finishing with an identical
 	//   final message must not collapse into one notification.
+	// - Qoder StopFailure: an actual failure must not collapse into a previous
+	//   successful Stop with identical copy; its class-scoped event lock still
+	//   suppresses duplicate invocations.
 	// Turn-level duplicates of the event itself stay bounded by the
 	// turn+tool/agent(+call)-scoped dedup lock.
 	skipContentDedup := status == analyzer.StatusPermissionRequest ||
