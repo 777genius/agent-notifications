@@ -1,4 +1,4 @@
-name: One-shot source-pinned Windows installed basic Shell presentation qualification
+name: One-shot source-pinned Windows physical basic QUNS diagnostic
 on:
   push:
     branches: [ci/win-callback-dispatch-20261031]
@@ -8,7 +8,7 @@ permissions:
   actions: write
 jobs:
   qualified-windows:
-    if: ${{ github.repository == '777genius/agent-notifications' && github.event.head_commit.message == 'ci(windows) admit installed basic 713b945' && github.run_attempt == 1 }}
+    if: ${{ github.repository == '777genius/agent-notifications' && github.event.head_commit.message == 'ci(windows) admit installed basic 091d21e' && github.run_attempt == 1 }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -18,7 +18,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          source='713b945d28f6a704dc8eedf7dc10801cbf4e3dea'
+          source='091d21ed7af82c618ee2d13d2ff30213a1ffb0ad'
           parent='9c2395f234549aeac24b4d311a4399f359ad7886'
           signedIntakeRun='41298548456'
           rawSHA='d442a3d7d5c229f45e5e11995711ac2619c8dbc89e3fa2bc185287dc8db8e76e'
