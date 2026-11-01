@@ -1,4 +1,4 @@
-name: TEST-only Windows ARM NoQuietHours policy refresh preflight
+name: TEST-only Windows ARM quiet-time natural-expiry preflight
 on:
   push:
     branches: [ci/windows-shell-quiet-hours-zero-20261101]
@@ -7,9 +7,9 @@ permissions:
   contents: read
 jobs:
   shell-overlay:
-    if: ${{ github.repository == '777genius/agent-notifications' && github.run_attempt == 1 && github.event.head_commit.message == 'probe-windows-noquiet-hours-gpupdate-v2' }}
+    if: ${{ github.repository == '777genius/agent-notifications' && github.run_attempt == 1 && github.event.head_commit.message == 'probe-windows-noquiet-hours-expiry-v3' }}
     runs-on: windows-11-vs2026-arm
-    timeout-minutes: 8
+    timeout-minutes: 80
     steps:
       - name: Inspect and dismiss only known first-logon overlay, then probe the Shell
         shell: powershell
@@ -133,6 +133,22 @@ jobs:
           [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
           Start-Sleep -Milliseconds 1200
           $notificationStateAfterCleanup = [TestOnlyShellProbe]::NotificationState()
+          # The Windows first-login quiet period is documented as about one hour.
+          # Keep this same disposable CLIENT session alive to observe natural
+          # expiry, rather than altering the clock or weakening Shell admission.
+          $quietCycles = 0
+          while ($notificationStateAfterCleanup -eq '6' -and $quietCycles -lt 70) {
+            Start-Sleep -Seconds 60
+            $quietCycles++
+            $notificationStateAfterCleanup = [TestOnlyShellProbe]::NotificationState()
+            if (($quietCycles % 5) -eq 0) {
+              Write-Output ("QUIET_TIME_PREFLIGHT_MINUTES=" + $quietCycles + ";state=" + $notificationStateAfterCleanup)
+            }
+          }
+          Write-Output ("QUIET_TIME_PREFLIGHT_TERMINAL=" + $notificationStateAfterCleanup + ";minutes=" + $quietCycles)
+          if ($notificationStateAfterCleanup -ne '5') {
+            throw 'fresh Windows 11 Client did not exit QUNS_QUIET_TIME; no presentation or product action qualified'
+          }
           $after = Census
           $foregroundAfterCleanup = KnownProcess ([TestOnlyShellProbe]::ForegroundPid())
           # Establish and close one Quick Settings shell surface first (inert UI preflight).
@@ -208,6 +224,7 @@ jobs:
             disposableQuietHoursPolicyEnable = 0
             policyRefreshExitCode = $policyRefreshExitCode
             notificationStateAfterCleanup = $notificationStateAfterCleanup
+            quietTimeMinutesElapsed = $quietCycles
             notificationStateAfterShortcut = $notificationStateAfterShortcut
             shellShortcut = 'Win+A_twice_then_Win+N_notification_center'
             priorQuickSettingsInputEvents = $firstQuick + $secondQuick
