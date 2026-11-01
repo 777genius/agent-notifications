@@ -8,7 +8,7 @@ permissions:
   actions: write
 jobs:
   qualified-windows:
-    if: ${{ github.repository == '777genius/agent-notifications' && github.event.head_commit.message == 'ci(windows) admit installed basic retained package 9e8c993' && github.run_attempt == 1 }}
+    if: ${{ github.repository == '777genius/agent-notifications' && github.event.head_commit.message == 'ci(windows) admit installed basic retained package e15256c' && github.run_attempt == 1 }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -18,9 +18,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          source='9e8c9938709b9e43888bf7c57fc320cfd506684d'
+          source='e15256cb2d16247ba9f3c6564d6bf1f9266592a6'
           parent='30968141e49596c2207b9c42c5546bbc57539a4c'
-          signedIntakeRun='41293804983'
+          signedIntakeRun='41298548456'
           rawSHA='d442a3d7d5c229f45e5e11995711ac2619c8dbc89e3fa2bc185287dc8db8e76e'
           fullName='OpenAI.Codex_26.1027.3384.0_x64__2p2nqsd0c76g0'
           current="$(gh api repos/777genius/agent-notifications/git/ref/heads/test/windows-installed-cold-callback -q .object.sha)"
@@ -28,7 +28,7 @@ jobs:
           intakeHead="$(gh api repos/777genius/agent-notifications/actions/runs/$signedIntakeRun -q .head_sha)"
           intakeConclusion="$(gh api repos/777genius/agent-notifications/actions/runs/$signedIntakeRun -q .conclusion)"
           if [[ "$current" != "$source" || "$currentParent" != "$parent" || \
-                "$intakeHead" != 'de4989840c53cf34c7a0b2bff22eb15603323c18' || "$intakeConclusion" != 'success' ]]; then
+                "$intakeHead" != '9e8c9938709b9e43888bf7c57fc320cfd506684d' || "$intakeConclusion" != 'success' ]]; then
             echo 'Source/parent changed or reviewed signed archive intake no longer accepted; refuse' >&2
             exit 1
           fi
