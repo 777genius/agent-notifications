@@ -6,6 +6,7 @@
 #include <psapi.h>
 #include <softpub.h>
 #include <shlwapi.h>
+#include <shellapi.h>
 #include <tlhelp32.h>
 #include <uiautomation.h>
 #include <wtsapi32.h>
@@ -65,6 +66,17 @@ static std::atomic<uint32_t> clickAllowedRoots{0}, clickExcludedRoots{0}, clickE
 // These counters are read-only diagnostics, never inputs to selection or custody.
 static std::atomic<uint32_t> clickPreCenterNodes{0}, clickTitleFragments{0}, clickBodyFragments{0};
 static std::atomic<uint32_t> clickStationObserved{0}, clickStationVisible{0}, clickForegroundBefore{0}, clickForegroundAfter{0}, clickForegroundChanged{0};
+// Read-only current-user notification-presentation hints: never authorize
+// a Shell provider, UIA selection, Invoke or callback.
+static std::atomic<uint32_t> clickUserNotificationStateAtArm{0}, clickUserNotificationHRESULTAtArm{0};
+static std::atomic<uint32_t> clickUserNotificationStateAtRefusal{0}, clickUserNotificationHRESULTAtRefusal{0};
+static void notificationPresentationHint(std::atomic<uint32_t>& observed, std::atomic<uint32_t>& status) noexcept {
+  QUERY_USER_NOTIFICATION_STATE value{};
+  const HRESULT result=SHQueryUserNotificationState(&value);
+  status.store(DWORD(result),std::memory_order_relaxed);
+  if(SUCCEEDED(result) && value>=QUNS_NOT_PRESENT && value<=QUNS_APP)
+    observed.store(uint32_t(value),std::memory_order_relaxed);
+}
 static void clickAt(const char* step) { clickStep.store(step,std::memory_order_relaxed); }
 // MSVC path::root_path treats the device introducer as root (\\?\),
 // not the DOS volume. Decompose only the already validated physical drive
@@ -1100,6 +1112,10 @@ static void publishClickRefusal(std::exception_ptr cause) noexcept {
   num(report,L"foreground_before",clickForegroundBefore.load(std::memory_order_relaxed));
   num(report,L"foreground_after",clickForegroundAfter.load(std::memory_order_relaxed));
   num(report,L"foreground_changed",clickForegroundChanged.load(std::memory_order_relaxed));
+   num(report,L"user_notification_state_at_arm",clickUserNotificationStateAtArm.load(std::memory_order_relaxed));
+   num(report,L"user_notification_hresult_at_arm",clickUserNotificationHRESULTAtArm.load(std::memory_order_relaxed));
+   num(report,L"user_notification_state_at_refusal",clickUserNotificationStateAtRefusal.load(std::memory_order_relaxed));
+   num(report,L"user_notification_hresult_at_refusal",clickUserNotificationHRESULTAtRefusal.load(std::memory_order_relaxed));
   if (cause) {
    try { std::rethrow_exception(cause); }
    catch (const winrt::hresult_error& error) {
@@ -1117,6 +1133,7 @@ static void publishClickRefusal(std::exception_ptr cause) noexcept {
 static void click() {
   // Establish real interactive UIA readiness before the shipping toast is shown.
   clickAt("interactive_desktop"); interactive();
+  notificationPresentationHint(clickUserNotificationStateAtArm,clickUserNotificationHRESULTAtArm);
   clickAt("uia_create"); ComPtr<IUIAutomation> automation;
   budget(); winrt::check_hresult(CoCreateInstance(CLSID_CUIAutomation,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&automation)));
   ComPtr<IUIAutomationTreeWalker> walker;
@@ -1194,6 +1211,7 @@ static void click() {
    const HWND foregroundAfter=GetForegroundWindow();
    clickForegroundAfter.store(foregroundAfter?1:0,std::memory_order_relaxed);
    clickForegroundChanged.store(foregroundAfter!=foregroundBefore?1:0,std::memory_order_relaxed);
+   notificationPresentationHint(clickUserNotificationStateAtRefusal,clickUserNotificationHRESULTAtRefusal);
    publishClickRefusal(failure);
    end=GetTickCount64()+3000; // Separate bounded diagnostic window.
    try { historyDiagnostic(route,title,body); } catch (...) {}

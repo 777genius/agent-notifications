@@ -290,7 +290,8 @@ try { await main(); } catch (error) {
       for (const key of ['uia_roots','uia_nodes','uia_title_matches','uia_body_matches','uia_last_name_length',
         'uia_allowed_shell_roots','uia_excluded_roots','uia_excluded_shell_names','uia_pre_center_allowed_roots',
         'uia_pre_center_nodes','uia_title_fragment_names','uia_body_fragment_names',
-        'station_flags_observed','station_visible','foreground_before','foreground_after','foreground_changed']) {
+        'station_flags_observed','station_visible','foreground_before','foreground_after','foreground_changed',
+         'user_notification_state_at_arm','user_notification_state_at_refusal']) {
         const value = report[key];
         if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 && value <= 4096) facts[key] = value;
       }

@@ -11,7 +11,7 @@
   <PropertyGroup><TargetName>TEST-installed-observer</TargetName></PropertyGroup>
   <ItemDefinitionGroup>
     <ClCompile><LanguageStandard>stdcpp20</LanguageStandard><WarningLevel>Level4</WarningLevel><ConformanceMode>true</ConformanceMode><ExceptionHandling>Sync</ExceptionHandling><RuntimeLibrary>MultiThreaded</RuntimeLibrary><AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions></ClCompile>
-    <Link><SubSystem>Console</SubSystem><AdditionalDependencies>windowsapp.lib;ole32.lib;oleaut32.lib;user32.lib;uiautomationcore.lib;wtsapi32.lib;shlwapi.lib;wintrust.lib;crypt32.lib;psapi.lib;%(AdditionalDependencies)</AdditionalDependencies></Link>
+    <Link><SubSystem>Console</SubSystem><AdditionalDependencies>windowsapp.lib;ole32.lib;oleaut32.lib;user32.lib;uiautomationcore.lib;wtsapi32.lib;shlwapi.lib;shell32.lib;wintrust.lib;crypt32.lib;psapi.lib;%(AdditionalDependencies)</AdditionalDependencies></Link>
   </ItemDefinitionGroup>
   <ItemGroup><ClCompile Include="observer.cpp" /></ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
