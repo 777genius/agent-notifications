@@ -24,7 +24,7 @@ func openDirectory(s *Store, create bool) (*directory, []string, error) {
 		return nil, nil, err
 	}
 	current := os.NewFile(uintptr(fd), "/")
-	fail := func(err error) (*directory, []string, error) { current.Close(); return nil, nil, err }
+	fail := func(err error) (*directory, []string, error) { _ = current.Close(); return nil, nil, err }
 	for _, part := range strings.Split(strings.TrimPrefix(s.root, "/"), "/") {
 		if part == "" {
 			continue
@@ -33,7 +33,7 @@ func openDirectory(s *Store, create bool) (*directory, []string, error) {
 		if err != nil {
 			return fail(err)
 		}
-		current.Close()
+		_ = current.Close()
 		current = os.NewFile(uintptr(next), part)
 	}
 	var ids []string
@@ -49,7 +49,7 @@ func openDirectory(s *Store, create bool) (*directory, []string, error) {
 			if err != nil {
 				return fail(err)
 			}
-			current.Close()
+			_ = current.Close()
 			current = os.NewFile(uintptr(next), name)
 		}
 		var st unix.Stat_t
@@ -87,7 +87,7 @@ func (d *directory) open(name string, flags int) (*os.File, error) {
 		err = checkACL(fd)
 	}
 	if err != nil {
-		f.Close()
+		_ = f.Close()
 		return nil, err
 	}
 	return f, nil
@@ -114,7 +114,7 @@ func (d *directory) read(name string, limit int64) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	info, err := f.Stat()
 	if err != nil {
 		return nil, err
@@ -141,7 +141,7 @@ func (d *directory) write(name string, data []byte) error {
 	if err != nil {
 		return err
 	}
-	defer unix.Unlinkat(int(d.file.Fd()), temp, 0)
+	defer func() { _ = unix.Unlinkat(int(d.file.Fd()), temp, 0) }()
 	_, err = f.Write(data)
 	closeErr := f.Close()
 	if err == nil {

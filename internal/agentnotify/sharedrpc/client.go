@@ -90,7 +90,7 @@ func (c Client) call(ctx context.Context, frame []byte) (response, bool, error) 
 		}
 		return response{}, false, errProtocol
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	cleanup, err := boundConnection(callCtx, conn, 15*time.Second)
 	if err != nil {
 		return response{}, false, errProtocol

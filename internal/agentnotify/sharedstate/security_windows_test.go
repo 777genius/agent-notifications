@@ -32,7 +32,7 @@ func TestWindowsRefusesForeignReadACL(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer windows.CloseHandle(h)
+			defer func() { _ = windows.CloseHandle(h) }()
 			user, err := windows.GetCurrentProcessToken().GetTokenUser()
 			if err != nil {
 				t.Fatal(err)
@@ -91,7 +91,7 @@ func TestWindowsDiscoveryReadDoesNotBlockPublication(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 	next := first
 	next.PID++
 	if err := s.Publish(next); err != nil {
