@@ -16,8 +16,9 @@ SPEC = importlib.util.spec_from_file_location('basic_release_checks', Path(__fil
 checks = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(checks)
 native = checks.native
-SOURCE, TREE = 'a' * 40, 'b' * 40
+SOURCE, TREE, BASE = 'a' * 40, 'b' * 40, 'c' * 40
 REPO = '777genius/agent-notifications'
+REPO_ID = 1079317825
 
 
 class API:
@@ -47,9 +48,12 @@ class API:
 
     @staticmethod
     def run(number, workflow, conclusion='success'):
+        pr = {'number': 559, 'base': {'ref': 'main', 'sha': BASE, 'repo': {'id': REPO_ID}},
+              'head': {'sha': SOURCE, 'repo': {'id': REPO_ID}}}
         return {'id': number, 'run_attempt': 1, 'head_sha': SOURCE, 'check_suite_id': number + 1000,
                 'path': '.github/workflows/' + workflow, 'event': 'push', 'head_branch': 'main',
-                'status': 'completed', 'conclusion': conclusion, 'head_repository': {'full_name': REPO}}
+                'status': 'completed', 'conclusion': conclusion,
+                'head_repository': {'full_name': REPO, 'id': REPO_ID}, 'pull_requests': [pr]}
 
     @staticmethod
     def check(job, run):
@@ -110,6 +114,11 @@ class API:
                 self.check_reads += 1
                 if self.check_reads == 2 and self.after_checks:
                     self.after_checks(self)
+        elif path.startswith(prefix + 'compare/'):
+            ancestor, _, candidate = path.removeprefix(prefix + 'compare/').partition('...')
+            return {'status': 'ahead' if ancestor == BASE and candidate == SOURCE else 'diverged',
+                    'base_commit': {'sha': ancestor},
+                    'merge_base_commit': {'sha': BASE}}
         elif path.startswith(prefix + 'actions/runs/'):
             suffix = path.removeprefix(prefix + 'actions/runs/').split('/')
             run_id = int(suffix[0])
@@ -399,6 +408,42 @@ class AdmissionTests(unittest.TestCase):
         # Full job custody remains mandatory even before the main push.
         self.api.jobs[10][0]['conclusion'] = 'failure'
         with self.assertRaisesRegex(ValueError, 'missing successful full job'):
+            self.verify()
+
+    def test_pre_main_pr_refuses_foreign_base_or_unreviewed_merge_tree(self):
+        changes = [
+            ('base_ref', lambda run: run['pull_requests'][0]['base'].update(ref='feature')),
+            ('base_not_ancestor', lambda run: run['pull_requests'][0]['base'].update(sha='d' * 40)),
+            ('base_repo', lambda run: run['pull_requests'][0]['base']['repo'].update(id=999)),
+            ('head_repo', lambda run: run['pull_requests'][0]['head']['repo'].update(id=999)),
+            ('head_sha', lambda run: run['pull_requests'][0]['head'].update(sha='f' * 40)),
+            ('missing_pr', lambda run: run.update(pull_requests=[])),
+            ('ambiguous_pr', lambda run: run['pull_requests'].append(copy.deepcopy(run['pull_requests'][0]))),
+        ]
+        for label, mutate in changes:
+            with self.subTest(label=label):
+                self.api = API()
+                native.gh.side_effect = self.api
+                for run in self.api.runs:
+                    run.update(event='pull_request', head_branch='fix/release-candidate')
+                mutate(self.api.runs[0])
+                with self.assertRaisesRegex(ValueError, 'latest source workflow did not succeed'):
+                    self.verify()
+
+    def test_pre_main_pr_authority_change_during_verification_fails(self):
+        for run in self.api.runs:
+            run.update(event='pull_request', head_branch='fix/release-candidate')
+        original = self.api.__call__
+        reads = 0
+        def gh(path, binary=False):
+            nonlocal reads
+            if '/actions/runs?head_sha=' in path and 'page=1' in path:
+                reads += 1
+                if reads == 2:
+                    self.api.runs[0]['pull_requests'][0]['base']['sha'] = 'd' * 40
+            return original(path, binary)
+        native.gh.side_effect = gh
+        with self.assertRaises(ValueError):
             self.verify()
 
     def test_only_owner_main_push_or_same_repo_pr_runs_qualify_source(self):

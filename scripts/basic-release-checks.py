@@ -43,22 +43,46 @@ def checks(repository, source):
     return sorted(result, key=lambda row: row['id'])
 
 
-def select_run(repository, workflow, runs):
+def authentic_candidate_pull(repository, source, run):
+    # The candidate's PR must have run against a base already contained in C.
+    # Otherwise GitHub executes a synthetic merge containing unreviewed base
+    # workflow code, which can manufacture its own "native receipt" artifact.
+    pulls = run.get('pull_requests')
+    if run.get('event') != 'pull_request' or not isinstance(pulls, list) or len(pulls) != 1:
+        return False
+    pr = pulls[0]
+    base, head = pr.get('base') or {}, pr.get('head') or {}
+    repo_id = (run.get('head_repository') or {}).get('id')
+    base_sha = base.get('sha')
+    if (type(repo_id) is not int or type(pr.get('number')) is not int
+            or (base.get('repo') or {}).get('id') != repo_id
+            or (head.get('repo') or {}).get('id') != repo_id
+            or head.get('sha') != source or run.get('head_sha') != source
+            or base.get('ref') != 'main' or not isinstance(base_sha, str)
+            or not re.fullmatch(r'[a-f0-9]{40}', base_sha)):
+        return False
+    # GitHub's own merge-base, not an artifact-authored tested_commit, proves
+    # the executed PR merge cannot add a workflow absent from the candidate.
+    ancestry = native.gh('repos/' + repository + '/compare/' + base_sha + '...' + source + '?per_page=1')
+    return (ancestry.get('status') in ('ahead', 'identical')
+            and (ancestry.get('base_commit') or {}).get('sha') == base_sha
+            and (ancestry.get('merge_base_commit') or {}).get('sha') == base_sha)
+
+
+def select_run(repository, workflow, runs, source):
     owned = [run for run in runs
              if run.get('path') == '.github/workflows/' + workflow
              and (run.get('head_repository') or {}).get('full_name') == repository]
-    # Prefer the main-push authority once the candidate is promoted. A failed
-    # main run must never fall back to an older green pull request.
+    # A main-push source is always authoritative, even if its CI failed.
     main = [run for run in owned
             if run.get('event') == 'push' and run.get('head_branch') == 'main']
     if main:
         return native.latest_source_run(repository, workflow, main)
-    # Before promotion, the owner's same-repository PR may qualify the exact
-    # candidate. verify_run additionally requires immutable full native
-    # receipts, successful concrete jobs and an equivalent *entire* checkout
-    # tree, including the workflow definition executed from the merge ref.
+    # Pre-main assets may use only a same-repo PR with an authenticated
+    # ancestor main base; full native jobs/receipts are verified separately.
     return native.latest_source_run(repository, workflow,
-                                    [run for run in owned if run.get('event') == 'pull_request'])
+                                    [run for run in owned
+                                     if authentic_candidate_pull(repository, source, run)])
 
 
 def foreign_pull_check(check, runs, repository):
@@ -77,8 +101,19 @@ def foreign_pull_check(check, runs, repository):
 
 
 def identity(run):
-    return {key: run.get(key) for key in ('id', 'run_attempt', 'head_sha', 'check_suite_id',
-                                         'path', 'event', 'status', 'conclusion')}
+    value = {key: run.get(key) for key in ('id', 'run_attempt', 'head_sha', 'check_suite_id',
+                                           'path', 'event', 'status', 'conclusion')}
+    # Freeze the GitHub PR association that authorizes pre-main admission.
+    value['head_repo_id'] = (run.get('head_repository') or {}).get('id')
+    value['pull_refs'] = [{
+        'number': pr.get('number'),
+        'base_sha': (pr.get('base') or {}).get('sha'),
+        'base_ref': (pr.get('base') or {}).get('ref'),
+        'base_repo_id': ((pr.get('base') or {}).get('repo') or {}).get('id'),
+        'head_sha': (pr.get('head') or {}).get('sha'),
+        'head_repo_id': ((pr.get('head') or {}).get('repo') or {}).get('id')
+    } for pr in (run.get('pull_requests') or [])]
+    return value
 
 
 def unresolved(name):
@@ -165,7 +200,7 @@ def superseded_successful_retry(older, latest, runs, repository, source, job_cac
     # a prior failed PR attempt. Never use a PR retry to overrule an existing
     # main-push authority for this workflow and source.
     main_retry = replacement.get('event') == 'push' and replacement.get('head_branch') == 'main'
-    pre_main_retry = (replacement.get('event') == 'pull_request'
+    pre_main_retry = (authentic_candidate_pull(repository, source, replacement)
                       and not any(run.get('path') == replacement.get('path')
                                   and run.get('head_sha') == source and run.get('event') == 'push'
                                   and run.get('head_branch') == 'main'
@@ -240,7 +275,7 @@ def verify(source, repository):
     event = {'repository': {'full_name': repository}}
     selected, selected_jobs = {}, {}
     for workflow in native.CONTRACTS:
-        run = select_run(repository, workflow, runs)
+        run = select_run(repository, workflow, runs, source)
         require(run is not None and run.get('status') == 'completed' and run.get('conclusion') == 'success',
                 'latest source workflow did not succeed: ' + workflow)
         # Canonical verifier checks concrete expected jobs, full receipt/run
@@ -306,7 +341,7 @@ def verify(source, repository):
         require(any(run['id'] == operator_run['id'] and identity(run) == identity(operator_run)
                     for run in final_runs), 'executing basic release run changed during admission')
     for workflow, value in selected.items():
-        final = select_run(repository, workflow, final_runs)
+        final = select_run(repository, workflow, final_runs, source)
         require(final is not None and identity(final) == value['run'],
                 'latest source workflow changed during admission: ' + workflow)
     for run_id in old_jobs:
