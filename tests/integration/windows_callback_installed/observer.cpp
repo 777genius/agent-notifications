@@ -26,6 +26,7 @@
 #include <optional>
 #include <cstddef>
 #include <iostream>
+#include <exception>
 #include "../../../native/windows-callback/custody.h"
 #include "../../../native/windows-callback/capacity.h"
 using namespace wcb;
@@ -836,11 +837,12 @@ struct Selection { ComPtr<IUIAutomationElement> row, title, body; DWORD pid = 0;
 static Selection census(IUIAutomation* automation, IUIAutomationTreeWalker* walker,
  const std::wstring& title, const std::wstring& body) {
  Selection found;
+ // Counters describe the *current* attempt, even if the first UIA call throws.
+ clickTitles.store(0,std::memory_order_relaxed); clickBodies.store(0,std::memory_order_relaxed);
  ComPtr<IUIAutomationElement> desktop, first;
  budget(); winrt::check_hresult(automation->GetRootElement(&desktop));
  budget(); winrt::check_hresult(walker->GetFirstChildElement(desktop.Get(),&first));
  unsigned rootsSeen = 0, nodes = 0, titles = 0, bodies = 0;
- clickTitles.store(0,std::memory_order_relaxed); clickBodies.store(0,std::memory_order_relaxed);
  while (first) {
   clickAt("uia_root_count_limit"); budget(); ++rootsSeen; clickRoots.store(rootsSeen,std::memory_order_relaxed); require(rootsSeen <= 128);
   int pid = 0; winrt::check_hresult(first->get_CurrentProcessId(&pid));
@@ -1003,6 +1005,32 @@ static void historyDiagnostic(const Route& route) {
  }
  publish(L"toast-history-diagnostic.json",report);
 }
+// Preserve the original cause before any non-authorizing history query. The
+// outer entrypoint invokes this again only if earlier failure publication did
+// not happen. CREATE_NEW prevents a second report from replacing the first.
+static void publishClickRefusal(std::exception_ptr cause) noexcept {
+ try {
+  auto report=fact(); put(report,L"phase","click"); put(report,L"outcome","refused_or_unknown");
+  put(report,L"last_click_step",clickStep.load(std::memory_order_relaxed));
+  num(report,L"uia_roots",clickRoots.load(std::memory_order_relaxed));
+  num(report,L"uia_nodes",clickNodes.load(std::memory_order_relaxed));
+  num(report,L"uia_title_matches",clickTitles.load(std::memory_order_relaxed));
+  num(report,L"uia_body_matches",clickBodies.load(std::memory_order_relaxed));
+  num(report,L"uia_last_name_length",clickNameLength.load(std::memory_order_relaxed));
+  if (cause) {
+   try { std::rethrow_exception(cause); }
+   catch (const winrt::hresult_error& error) {
+    put(report,L"failure_kind","hresult"); num(report,L"hresult",DWORD(error.code().value));
+   }
+   catch (const std::exception&) { put(report,L"failure_kind","contract_or_io_refusal"); }
+   catch (...) { put(report,L"failure_kind","unknown_exception"); }
+  } else {
+   put(report,L"failure_kind","unknown_exception");
+  }
+  report.Insert(L"retained_until_job_teardown",JsonValue::CreateBooleanValue(true));
+  publish(L"click.failure.json",report);
+ } catch (...) {} // Diagnostic failure cannot change the original refusal.
+}
 static void click() {
   // Establish real interactive UIA readiness before the shipping toast is shown.
   clickAt("interactive_desktop"); interactive();
@@ -1025,13 +1053,15 @@ static void click() {
   try {
    while (!selected.row) { budget(); selected = census(automation.Get(),walker.Get(),title,body); if (!selected.row) Sleep(50); }
   } catch (...) {
-   // Diagnostics are strictly after a refused real UIA selection; never
-   // delay a visible toast, change the primary refusal, or authorize Invoke.
+   // Durable failure facts precede non-authorizing history; synchronous WinRT
+   // history must never suppress the original UIA exception or its counters.
+   const auto failure=std::current_exception();
    const auto failedAt=clickStep.load(std::memory_order_relaxed);
+   publishClickRefusal(failure);
    end=GetTickCount64()+3000; // Separate bounded diagnostic window.
    try { historyDiagnostic(route); } catch (...) {}
    clickStep.store(failedAt,std::memory_order_relaxed);
-   throw;
+   std::rethrow_exception(failure);
   }
  clickAt("selected_shell_identity"); Process shell(selected.pid,true,nullptr);
  auto proof = fact(); put(proof,L"snapshot_sha",route.snapshotSHA);
@@ -1113,24 +1143,25 @@ int wmain(int argc, wchar_t** argv) {
   else require(false);
   return 0;
  } catch (...) {
-  try { auto report = fact(); put(report,L"phase",phase); put(report,L"outcome","refused_or_unknown");
-   if (phase == "click") {
-    put(report,L"last_click_step",clickStep.load(std::memory_order_relaxed));
-    num(report,L"uia_roots",clickRoots.load(std::memory_order_relaxed)); num(report,L"uia_nodes",clickNodes.load(std::memory_order_relaxed));
-    num(report,L"uia_title_matches",clickTitles.load(std::memory_order_relaxed)); num(report,L"uia_body_matches",clickBodies.load(std::memory_order_relaxed));
-    num(report,L"uia_last_name_length",clickNameLength.load(std::memory_order_relaxed));
-   }
-   if (archiveFacts || phase == "click") {
-    if (archiveFacts) { put(report,L"last_archive_step",archiveStep); report.Insert(L"archive_observations",*archiveFacts); }
-    try { throw; }
-    catch (const winrt::hresult_error& error) {
-     put(report,L"failure_kind","hresult"); num(report,L"hresult",DWORD(error.code().value));
+  if (phase == "click") {
+   // Fallback when failure occurred before the UIA census catch.
+   publishClickRefusal(std::current_exception());
+  } else {
+   try {
+    auto report=fact(); put(report,L"phase",phase); put(report,L"outcome","refused_or_unknown");
+    if (archiveFacts) {
+     put(report,L"last_archive_step",archiveStep); report.Insert(L"archive_observations",*archiveFacts);
+     try { throw; }
+     catch (const winrt::hresult_error& error) {
+      put(report,L"failure_kind","hresult"); num(report,L"hresult",DWORD(error.code().value));
+     }
+     catch (const std::exception&) { put(report,L"failure_kind","contract_or_io_refusal"); }
+     catch (...) { put(report,L"failure_kind","unknown_exception"); }
     }
-    catch (const std::exception&) { put(report,L"failure_kind","contract_or_io_refusal"); }
-    catch (...) { put(report,L"failure_kind","unknown_exception"); }
-   }
-   report.Insert(L"retained_until_job_teardown",JsonValue::CreateBooleanValue(true));
-   publish((wide(phase)+L".failure.json").c_str(),report); } catch (...) {}
+    report.Insert(L"retained_until_job_teardown",JsonValue::CreateBooleanValue(true));
+    publish((wide(phase)+L".failure.json").c_str(),report);
+   } catch (...) {}
+  }
   if (phase == "prepare-global-parent") { try { closeGlobalParentRoots(); } catch (...) {} }
   return 1;
  }
