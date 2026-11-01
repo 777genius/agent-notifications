@@ -49,13 +49,16 @@ func ownedLiteral(t *testing.T, generation, kind string) io.ReadCloser {
 	return io.NopCloser(bytes.NewReader(literalPrivate(t, generation, kind)))
 }
 
-func composedFixture(t *testing.T, url string) (context.Context, ComposedConsumer, *mutableSnapshot) {
+func composedFixture(t *testing.T, url string, systemSound ...bool) (context.Context, ComposedConsumer, *mutableSnapshot) {
 	t.Helper()
 	ctx, a, r, _ := admissionFixture(t)
 	fields := r.Expected.Fields
 	fields["route"] = json.RawMessage(`{"openCodeNotifications":{"desktop":true,"webhook":true}}`)
 
 	notifications := map[string]any{"desktop": map[string]any{"enabled": true, "sound": true}, "webhook": map[string]any{"enabled": true, "url": url, "preset": "custom", "headers": map[string]string{"X-Secret": "CONFIG_PRIVATE_SENTINEL"}, "payloadFields": map[string]any{"secret": "CONFIG_PRIVATE_SENTINEL"}, "retry": map[string]any{"enabled": true, "maxAttempts": 3}}}
+	if len(systemSound) != 0 {
+		notifications["desktop"].(map[string]any)["systemSound"] = systemSound[0]
+	}
 	fields["notifications"], _ = json.Marshal(notifications)
 	fields["statuses"] = json.RawMessage(`{"task_complete":{"title":"CONFIG_PRIVATE_SENTINEL"},"opencode_error":{"title":"CONFIG_PRIVATE_SENTINEL"}}`)
 	document, err := json.Marshal(fields)
@@ -132,6 +135,31 @@ func TestComposedOneDurableClaimBothChannelsAndPrivacy(t *testing.T) {
 		t.Fatal("duplicate reopened a channel claim")
 	}
 }
+func TestComposedExplicitSystemSoundDoesNotEnableNavigation(t *testing.T) {
+	ctx, c, _ := composedFixture(t, "http://127.0.0.1:1", true)
+	c.SendWebhook = func(context.Context, *config.Config, webhook.SendContext) error { return nil }
+	requests := make(chan notification.Request, 1)
+	c.Desktop = func(*Handoff) notification.DeliveryPort {
+		return desktopFunc(func(_ context.Context, request notification.Request) notification.Receipt {
+			requests <- request
+			return notification.Receipt{Status: "submitted"}
+		})
+	}
+	got := c.Consume(ctx, time.Now(), ownedLiteral(t, "v1", "turn_idle_verified"))
+	if got.Status != "submitted" || got.Desktop != "submitted" || got.Webhook != "submitted" {
+		t.Fatalf("opted-in native delivery failed: %+v", got)
+	}
+	select {
+	case request := <-requests:
+		if request.Silent || !request.Policy.SoundEnabled || request.Policy.ClickToFocus ||
+			request.Navigation != notification.None || request.Target != (notification.DesktopTarget{}) {
+			t.Fatalf("sound opt-in must not create a focus target: %+v", request)
+		}
+	default:
+		t.Fatal("no native desktop request")
+	}
+}
+
 func TestComposedInvalidPrivateFramesHaveZeroFilesystemOrProviderEffects(t *testing.T) {
 	ctx, c, _ := composedFixture(t, "http://127.0.0.1:1")
 	c.Desktop = func(*Handoff) notification.DeliveryPort { t.Fatal("invalid frame reached desktop"); return nil }

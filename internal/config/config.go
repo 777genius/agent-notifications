@@ -57,6 +57,7 @@ type NotificationsConfig struct {
 type DesktopConfig struct {
 	Enabled          bool    `json:"enabled"`
 	Sound            bool    `json:"sound"`
+	SystemSound      *bool   `json:"systemSound,omitempty"` // OS default cue for supported native observers; opt-in (default: off)
 	TerminalBell     *bool   `json:"terminalBell"`          // Send BEL to /dev/tty for terminal tab indicators (default: true)
 	Volume           float64 `json:"volume"`                // Volume level 0.0-1.0, default 1.0 (full volume)
 	AudioDevice      string  `json:"audioDevice"`           // Audio output device name (empty = system default)
@@ -79,6 +80,13 @@ type WebhookConfig struct {
 	Retry          RetryConfig            `json:"retry"`
 	CircuitBreaker CircuitBreakerConfig   `json:"circuitBreaker"`
 	RateLimit      RateLimitConfig        `json:"rateLimit"`
+}
+
+// IsSystemSoundEnabled requires affirmative native sound consent in addition
+// to the existing global sound switch. Missing config never starts audio.
+func (c *Config) IsSystemSoundEnabled() bool {
+	return c != nil && c.Notifications.Desktop.Sound &&
+		c.Notifications.Desktop.SystemSound != nil && *c.Notifications.Desktop.SystemSound
 }
 
 // RetryConfig represents retry settings
