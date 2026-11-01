@@ -160,7 +160,9 @@ func TestProviderAndDeadlineConfinement(t *testing.T) {
 		t.Fatalf("backend called %d times", calls.Load())
 	}
 	cancel()
-	awaitServer(t, done)
+	if err := awaitServer(t, done); !errors.Is(err, context.Canceled) {
+		t.Fatalf("shutdown: %v", err)
+	}
 }
 
 // Fails if a fake daemon at a reused port sees any notification bytes before
@@ -173,7 +175,7 @@ func TestFakeServerReceivesNoPayloadOrToken(t *testing.T) {
 		attempts.Add(1)
 		client, fake := net.Pipe()
 		go func() {
-			defer fake.Close()
+			defer func() { _ = fake.Close() }()
 			hello := make([]byte, 4096)
 			n, _ := fake.Read(hello)
 			hello = hello[:n]
@@ -212,7 +214,11 @@ func TestWrongAuthenticationNeverDispatches(t *testing.T) {
 		t.Run(fmt.Sprint(wrongIdentity), func(t *testing.T) {
 			client, server := net.Pipe()
 			done := make(chan struct{})
-			go func() { defer close(done); defer server.Close(); serveConnection(context.Background(), server, o) }()
+			go func() {
+				defer close(done)
+				defer func() { _ = server.Close() }()
+				serveConnection(context.Background(), server, o)
+			}()
 			identity, token := o.Identity, append([]byte(nil), o.Token...)
 			if wrongIdentity {
 				identity = "other-profile"
@@ -243,7 +249,7 @@ func TestDroppedReplyIsUnknownAndNeverRetried(t *testing.T) {
 		dials.Add(1)
 		client, server := net.Pipe()
 		go func() {
-			defer server.Close()
+			defer func() { _ = server.Close() }()
 			var req request
 			if readFrame(server, &req) == nil {
 				effects.Add(1)
@@ -273,7 +279,11 @@ func TestStrictFramesAndNoUntrustedControls(t *testing.T) {
 	} {
 		client, server := net.Pipe()
 		done := make(chan struct{})
-		go func() { defer close(done); defer server.Close(); serveConnection(context.Background(), server, o) }()
+		go func() {
+			defer close(done)
+			defer func() { _ = server.Close() }()
+			serveConnection(context.Background(), server, o)
+		}()
 		secured, err := AuthenticateClient(context.Background(), client, o.Identity, o.Token)
 		if err != nil {
 			t.Fatal(err)
@@ -401,14 +411,16 @@ func TestBridgeCancellationCancelsBackendWithoutStoppingService(t *testing.T) {
 		t.Fatalf("bridge disconnect stopped service: %v", err)
 	}
 	cancelServer()
-	awaitServer(t, done)
+	if err := awaitServer(t, done); !errors.Is(err, context.Canceled) {
+		t.Fatalf("shutdown: %v", err)
+	}
 }
 
 // Possession of the server role key must not authorize a client certificate.
 func TestServerCertificateCannotReflectAsClient(t *testing.T) {
 	o := testOptions(nil)
 	client, server := net.Pipe()
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	serverConfig, err := authenticationConfig(o.Identity, o.Token, false)
 	if err != nil {
 		t.Fatal(err)
@@ -420,7 +432,7 @@ func TestServerCertificateCannotReflectAsClient(t *testing.T) {
 	clientConfig.Certificates = serverConfig.Certificates
 	done := make(chan error, 1)
 	go func() {
-		defer server.Close()
+		defer func() { _ = server.Close() }()
 		_, err := authenticateServer(context.Background(), server, serverConfig)
 		done <- err
 	}()
@@ -451,13 +463,15 @@ func TestActiveConnectionBoundIncludesAuthenticatedIdleClients(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer first.Close()
+	defer func() { _ = first.Close() }()
 	r := c.Notify(context.Background(), testPayload(), testOrigin("overflow"), testDeadline())
 	if r.Status != "rejected" || !r.RetrySafe {
 		t.Fatalf("capacity refusal must precede RPC write: %+v", r)
 	}
 	cancel()
-	awaitServer(t, done)
+	if err := awaitServer(t, done); !errors.Is(err, context.Canceled) {
+		t.Fatalf("shutdown: %v", err)
+	}
 }
 
 type capturedStream struct {
@@ -492,12 +506,12 @@ func TestActiveTCPRelayCannotReadNotification(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer daemon.Close()
+	defer func() { _ = daemon.Close() }()
 	proxy, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer proxy.Close()
+	defer func() { _ = proxy.Close() }()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	serverDone := make(chan error, 1)
@@ -510,12 +524,12 @@ func TestActiveTCPRelayCannotReadNotification(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer front.Close()
+		defer func() { _ = front.Close() }()
 		back, err := net.Dial("tcp4", daemon.Addr().String())
 		if err != nil {
 			return
 		}
-		defer back.Close()
+		defer func() { _ = back.Close() }()
 		copied := make(chan struct{}, 1)
 		go func() { _, _ = io.Copy(back, io.TeeReader(front, &capture)); _ = back.Close(); copied <- struct{}{} }()
 		_, _ = io.Copy(front, io.TeeReader(back, &capture))
@@ -550,5 +564,7 @@ func TestActiveTCPRelayCannotReadNotification(t *testing.T) {
 		t.Fatal("active relay observed private plaintext")
 	}
 	cancel()
-	awaitServer(t, serverDone)
+	if err := awaitServer(t, serverDone); !errors.Is(err, context.Canceled) {
+		t.Fatalf("shutdown: %v", err)
+	}
 }
