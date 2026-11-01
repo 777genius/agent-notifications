@@ -23,13 +23,13 @@ func (s *soundPolicySink) Deliver(_ context.Context, r notification.Request) not
 // reject a legitimately opted-in cue or accept a navigable/unconsented request.
 func TestLocalDesktopNativeSoundAndNavigationGate(t *testing.T) {
 	for _, tc := range []struct {
-		name        string
-		silent      bool
-		sound       bool
-		navigation  notification.Navigation
-		click       bool
-		target      notification.DesktopTarget
-		wantSubmit  bool
+		name       string
+		silent     bool
+		sound      bool
+		navigation notification.Navigation
+		click      bool
+		target     notification.DesktopTarget
+		wantSubmit bool
 	}{
 		{name: "original silent", silent: true, navigation: notification.None, wantSubmit: true},
 		{name: "explicit OS sound", silent: false, sound: true, navigation: notification.None, wantSubmit: true},
