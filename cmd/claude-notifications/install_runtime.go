@@ -446,11 +446,12 @@ func installRuntime(args []string, output io.Writer) error {
 		// advance that generation and must never become our new seed preimage.
 		ledger, err = seedCommittedRuntimeEnablement(ctx, req, ledger)
 	}
+	var piRefreshErr error
 	if err == nil && !*remove && hasSender {
 		// Cursor and Pi may share this executable. After the managed commit,
 		// reconstruct Pi's derived locator from its still-authorized UAP
 		// binding. Never grant an observer authority from this metadata.
-		err = piauthority.RefreshInstalled(ctx, *control)
+		piRefreshErr = piauthority.RefreshInstalled(ctx, *control)
 	}
 	if err == nil {
 		if !*printNativePath {
@@ -469,11 +470,15 @@ func installRuntime(args []string, output io.Writer) error {
 			}
 		}
 		if *printNativePath {
-			return printRuntimeNativePath(output, ledger)
-		}
-		if *purge {
+			if pathErr := printRuntimeNativePath(output, ledger); pathErr != nil {
+				return pathErr
+			}
+		} else if *purge {
 			_, _ = fmt.Fprintln(output, "Callback entrypoint purge completed; pending notifications may no longer open targets. Running callbacks are not stopped.")
 		}
+	}
+	if piRefreshErr != nil {
+		return fmt.Errorf("managed runtime committed generation=%d, but Pi discovery refresh failed; repair the affected Pi binding and retry: %w", ledger.Generation, piRefreshErr)
 	}
 	return err
 }

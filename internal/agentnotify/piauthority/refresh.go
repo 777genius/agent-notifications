@@ -33,13 +33,15 @@ func RefreshInstalled(ctx context.Context, controlRoot string) error {
 		return installruntime.ErrPolicyRecovery
 	}
 	var bindings []portable.Binding
+	var failures []error
 	for key, consumer := range snapshot.Ledger.Consumers {
 		if !strings.HasPrefix(key, "portable:") {
 			continue
 		}
 		var b portable.Binding
 		if err := json.Unmarshal([]byte(consumer.Registration), &b); err != nil {
-			return ErrDenied
+			failures = append(failures, fmt.Errorf("installed portable consumer %s: unreadable registration: %w", key, ErrDenied))
+			continue
 		}
 		if b.Integration != portable.Pi {
 			continue
@@ -47,14 +49,14 @@ func RefreshInstalled(ctx context.Context, controlRoot string) error {
 		wantKey, wantConsumer, _, err := b.Registration()
 		if err != nil || wantKey != key || !reflect.DeepEqual(consumer, wantConsumer) ||
 			b.ControlRoot != controlRoot || b.CheckSnapshot(snapshot) != nil {
-			return ErrDenied
+			failures = append(failures, fmt.Errorf("installed Pi consumer %s: registration or snapshot validation failed: %w", key, ErrDenied))
+			continue
 		}
 		bindings = append(bindings, b)
 	}
 	sort.Slice(bindings, func(i, j int) bool { return bindings[i].BindingID < bindings[j].BindingID })
 	// One invalid Pi installation must not strand other healthy profiles after
 	// the shared executable has already been committed by a sibling product.
-	var failures []error
 	for _, b := range bindings {
 		if err := Publish(ctx, b, stateFile(b)); err != nil {
 			failures = append(failures, fmt.Errorf("refresh installed Pi binding %s: %w", b.BindingID, err))
