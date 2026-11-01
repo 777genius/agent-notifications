@@ -2,7 +2,7 @@
 
 The Qoder adapter hooks the same attention events as the Claude adapter:
 completion, questions, permission prompts, plan readiness, subagent
-completion, idle teammates and (in unreleased source) unexpected stop failures.
+completion, idle teammates and unexpected stop failures.
 Events arrive as native Qoder hook payloads;
 the dedicated native bundle registers one handler per event plus a platform
 executable. The common installer builds this bundle from the verified release
@@ -11,10 +11,14 @@ update and removal; the shared runtime ledger records the notification consumer
 and its consent bound to that UAP installation and client binding.
 No MCP observer is installed.
 
-This UAP lifecycle and common Cursor/Qoder selection are available in
-[platform release v1.49.11](PLATFORM_RELEASE_CHANNELS.md). The extra
-`StopFailure` notification is **source-only** until a later qualified native
-Qoder package and platform release are published.
+This UAP lifecycle and common Cursor/Qoder selection were released in v1.49.11
+and remain available in [platform release v1.50.0](PLATFORM_RELEASE_CHANNELS.md).
+The v1.50.0 artifacts are frozen at [7da3329d (C5)](https://github.com/777genius/agent-notifications/commit/7da3329d625eae9cdb29ce665f413e9fb9d03d3a).
+This source includes the `StopFailure` notification and five bundled MP3 assets
+from [#558](https://github.com/777genius/agent-notifications/pull/558), verified by
+source/package/runtime tests. Those tests do not establish full native Qoder
+desktop or audible playback qualification; audio acceptance remains tracked in
+[#562](https://github.com/777genius/agent-notifications/issues/562).
 Older custom Qoder installations are not adopted or migrated by this flow.
 
 ## Hook events
@@ -22,14 +26,14 @@ Older custom Qoder installations are not adopted or migrated by this flow.
 | Event | Notification | Default |
 | --- | --- | --- |
 | `Stop` | task complete | on |
-| `StopFailure` | unexpected agent error; rate limit distinguished | on, unreleased source only |
+| `StopFailure` | unexpected agent error; rate limit distinguished | on, since v1.50.0 |
 | `Notification` | question | on |
 | `PermissionRequest` | permission request | on |
 | `PreToolUse` (matcher `ExitPlanMode\|AskUserQuestion`) | plan ready / question | on |
 | `SubagentStop` | subagent task complete | off (opt-in) |
 | `TeammateIdle` | idle teammate | on; records idle state, team-completion alert requires a stopped lead |
 
-`Stop` rides the Go SDK's Qoder transport. The other six are decoded directly
+`Stop` rides the Go SDK's Qoder transport. The other six events are decoded directly
 as strict hook JSON: the event name inside the payload must match the handler,
 oversized payloads are rejected, and no transcript path is assumed —
 everything is derived from the event payload itself. Continuation turns never
@@ -40,13 +44,21 @@ to a single notification. `PermissionRequest` notifications name the tool and ar
 only the documented `rate_limit` class maps to `api_error_overloaded`, and all
 other errors map to the generic `agent_error` status. Error text, details and
 last assistant message are excluded from notification copy; configured
-webhook/desktop channel consent still applies. This source-only event does
-not establish a visible platform banner until native E2E qualification.
+webhook/desktop channel consent still applies. Source/runtime tests of this
+event do not establish visible platform banners; native E2E qualification is
+separate.
 
 ## Configuration
 
-**Sound asset release boundary:** Published v1.49.11 Qoder native UAP packages did not include the built-in MP3 assets, so configured cues could be silent. The unreleased source now embeds the existing five reviewed MP3 files into both standalone and managed Qoder bundles and verifies their exact contents in native package and ZIP tests. This does **not** retroactively update v1.49.11, prove audible physical playback, or permit sounds before user consent. [Issue #562](https://github.com/777genius/agent-notifications/issues/562) tracks release/native audio qualification.
-
+**Sound asset release boundary:** Published v1.49.11 Qoder native UAP packages
+did not include the built-in MP3 assets, so configured cues could be silent.
+The v1.50.0 C5 source embeds the existing five reviewed MP3 files into both standalone and managed
+Qoder bundles and verifies their exact contents in native package and ZIP tests.
+This fixes the missing package assets for v1.50.0, without changing v1.49.11.
+Source/package/runtime tests do not prove audible physical playback or permit
+sounds before user consent.
+[Issue #562](https://github.com/777genius/agent-notifications/issues/562) tracks
+release/native audio qualification.
 
 Select **Qoder** in the common installer, alone or alongside other agents.
 The Qoder CLI must be available on the selected `PATH`; an IDE installation alone
@@ -136,7 +148,7 @@ package those exact bytes. For example, on Linux amd64:
 ```sh
 GOWORK=off go build -o /absolute/TEST-qoder/claude-notifications ./cmd/claude-notifications
 GOWORK=off go run ./cmd/build-qoder-package \
-  -version 1.49.5 -os linux -arch amd64 \
+  -version 1.50.0 -os linux -arch amd64 \
   -executable /absolute/TEST-qoder/claude-notifications \
   -workdir /absolute/TEST-qoder/package \
   -output /absolute/TEST-qoder/agent-notify-qoder-linux-amd64.zip
@@ -146,6 +158,8 @@ Use `darwin` or `windows` and the correct `amd64`/`arm64` for other hosts. Windo
 packages contain `bin/claude-notifications.exe`. This command does not cross-build
 the executable. Output roots and archives must be new paths. The default version
 comes from the same `config.ConsumerVersion` as the existing portable builder.
+A local package's version label alone does not make it an official release
+artifact. Published v1.50.0 bytes are bound to the C5 source above.
 
 The expanded package includes both a standard identity `plugin.json` and native
 `.qoder-plugin/plugin.json`, plus `hooks/hooks.json`. The package identity is

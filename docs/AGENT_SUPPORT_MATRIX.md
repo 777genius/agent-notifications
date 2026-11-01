@@ -1,6 +1,8 @@
 # Agent support: capabilities, evidence and expansion
 
-Audit snapshot: 2026-10-31, `main` at `06ab7ae317c832e909bc76e998d07e388596292a`. This is a **source-and-documentation review**, not fresh native desktop acceptance. For platform/version gates use the linked agent guides and [release channels](PLATFORM_RELEASE_CHANNELS.md).
+Audit updated for the v1.50.0 promotion on 2026-11-01. This is a **source-and-documentation review**, not fresh native desktop acceptance. For platform/version gates use the linked agent guides and [release channels](PLATFORM_RELEASE_CHANNELS.md).
+
+The v1.50.0 artifacts are frozen at [7da3329d (C5)](https://github.com/777genius/agent-notifications/commit/7da3329d625eae9cdb29ce665f413e9fb9d03d3a). This source includes Qoder's `StopFailure` handler and five bundled MP3 additions from [#558](https://github.com/777genius/agent-notifications/pull/558), covered by source/package/runtime tests. Native audible qualification remains pending in [#562](https://github.com/777genius/agent-notifications/issues/562); packaged assets and unit checks do not establish full Qoder desktop acceptance.
 
 **Key distinction:** showing an alert, focusing the originating terminal window/pane, and opening the exact originating desktop chat are three separate capabilities. The same notification transport can be shared without pretending an agent session ID is a verified desktop-chat ID.
 
@@ -15,7 +17,8 @@ Legend: **Yes** = implemented; **Limited** = only under the stated event/host co
 | OpenCode V1/V2 | Yes: verified root-session idle | Yes | Yes | Yes: terminal error | No | No: root-session filter |
 | Gemini CLI | Yes: AfterAgent means a turn ended, **not task success** | No | Yes: Notification/ToolPermission | No distinct error/limit alerts | No | No qualified parity |
 | Cursor CLI | Limited: native Stop means loop stopped, including abort/error | No | No | No distinct alert: completion/abort/error use the same informational wording | No | No qualified subagent alerts |
-| Qoder CLI | Yes: Stop | Yes | Yes | No in published v1.49.11; unreleased source adds generic StopFailure and separate rate-limit classification | Plan yes; review no | Limited: opt-in SubagentStop; idle teammates |
+| Qoder CLI | Yes: Stop | Yes | Yes | Yes: generic StopFailure and separate rate-limit classification since v1.50.0 | Plan yes; review no | Limited: opt-in SubagentStop; idle teammates |
+| Pi | Yes: final successful settlement | Limited: blocking extension UI | No dedicated permission event | Yes: final failed settlement | No dedicated plan/review | No intermediate/aborted completion |
 
 Sources: [Claude/Codex/Qoder product event boundary](../internal/hooks/event.go), [shared hook handler](../internal/hooks/hooks.go), [OpenCode consumer](../internal/opencodeevent/consumer.go), [Gemini consumer](../internal/geminievent/consumer.go), [Cursor consumer](../internal/cursorevent/consumer.go); [Qoder](QODER.md), [Codex](CODEX.md), [OpenCode](opencode-notifications.md), [Gemini](gemini-notifications.md), [Cursor](cursor-notifications.md).
 
@@ -25,23 +28,27 @@ Sources: [Claude/Codex/Qoder product event boundary](../internal/hooks/event.go)
 | --- | --- | --- | --- | --- | --- |
 | Claude Code | Yes | Yes | Yes | Supported, OS/terminal-dependent; pane precision varies | Not established |
 | Codex CLI | Yes | Yes | Yes | Legacy terminal focus where supported | Separate verified, configured Codex-desktop navigation path; platform/installation qualification matters |
-| OpenCode | Yes | Yes | No in published v1.49.11; unreleased source has optional OS-default `systemSound` opt-in | No: `Navigation=None` | No |
-| Gemini CLI | Yes | Yes | No in published v1.49.11; unreleased source adds optional OS-default cue after explicit opt-in | No: `Navigation=None` | No |
-| Cursor CLI | Yes (qualified hosts only) | Yes | No in published v1.49.11; unreleased source adds optional OS-default cue after explicit opt-in | No: `Navigation=None` | No |
-| Qoder CLI | Yes | Yes | Shared notifier supports cues; v1.49.11 standalone bundle lacks built-in MP3s; unreleased source packages all five (issue #562) | **Not qualified**: Claude-only Ghostty capture; generic legacy window activation must not be advertised as exact/guaranteed | No |
+| OpenCode | Yes | Yes | Opt-in OS-default `systemSound` cue since v1.50.0 | No: `Navigation=None` | No |
+| Gemini CLI | Yes | Yes | Opt-in OS-default `systemSound` cue since v1.50.0 | No: `Navigation=None` | No |
+| Cursor CLI | Yes (qualified hosts only) | Yes | Opt-in OS-default `systemSound` cue since v1.50.0 | No: `Navigation=None` | No |
+| Qoder CLI | Yes | Yes | Configured cues; v1.50.0 bundles all five MP3s, native audible qualification pending (issue #562) | **Not qualified**: Claude-only Ghostty capture; generic legacy window activation must not be advertised as exact/guaranteed | No |
+| Pi | Local TUI only | Yes, explicit consent | Yes, configured local TUI | Originating terminal; Linux desktop suite, owner-observed Mac banner/click; full macOS/Windows native acceptance pending | No |
 
 “Desktop” means the implementation provides a submission path; it does **not** mean visible banners or physical click callbacks were observed on every platform. [Terminal / IDE focus precision](CLICK_TO_FOCUS.md) explains window versus pane/tab and the OS permissions.
 
+Pi's process/lifecycle suite uses 27 cases per OS on Linux, macOS and Windows
+with isolated TEST profiles. This scope does not establish full native
+macOS/Windows desktop acceptance; see [#561](https://github.com/777genius/agent-notifications/issues/561).
+
 Important implementation detail: `internal/hooks/hooks.go` and `internal/notifier/notifier.go` share sound, desktop and webhook delivery across Claude, Codex and Qoder. However, terminal-target capture for Ghostty is explicitly Claude-only. Qoder's setup guide currently describes `clickToFocus` as inert. The shared lower-level notifier can attempt generic activation when enabled; its existence is **not** evidence that Qoder has reliable, session-bound navigation. Resolve the documentation/runtime ambiguity with a native test before promoting support.
 
-Modern observer consumers intentionally use narrow fact types and separate registered-consent gates: [OpenCode](../internal/opencodeevent/consumer.go), [Gemini](../internal/geminievent/consumer.go), [Cursor](../internal/cursorevent/consumer.go). All three select `Navigation=None` and do not provide a trusted local terminal origin. Unreleased OpenCode, Gemini and Cursor source can explicitly request an OS-default cue; **published v1.49.11 remains silent for all three**. Internal Copilot-in-VS-Code follows the same native request contract but is not publicly shipped. This is a genuine missing feature, not merely a README omission.
+Modern observer consumers use narrow fact types and separate registered-consent gates: [OpenCode](../internal/opencodeevent/consumer.go), [Gemini](../internal/geminievent/consumer.go), [Cursor](../internal/cursorevent/consumer.go). All three select `Navigation=None` and do not provide a trusted local terminal origin. OpenCode, Gemini and Cursor can explicitly request an OS-default cue since v1.50.0 ([#555](https://github.com/777genius/agent-notifications/pull/555)). Missing or false opt-in remains silent; this is not configurable audio or a guarantee of an audible cue on every host. Internal Copilot-in-VS-Code follows the same source policy but is not publicly shipped.
 
 ## Additional implementations and candidates (not advertised as shipped)
 
 | Integration | Current repository evidence | Public support status |
 | --- | --- | --- |
-| Copilot in VS Code | [Local Stop observer](../internal/copilotvscodeevent/consumer.go) and [SDK source](../internal/copilotvscodesource/source.go) exist; silent, informational, `Navigation=None` | Internal code exists; not part of the six-agent public installer/README selection. Native qualification and product exposure need an explicit decision |
-| Pi | [PR #539](https://github.com/777genius/agent-notifications/pull/539) integrates final completion, blocking extension question, final error, configured sound and local-terminal focus using shared primitives | Release candidate: common installer and hooks/lifecycle on three OSes; Linux desktop qualification and owner-observed Mac banner/click. Full macOS/Windows native acceptance pending; see [release scope](testing/pi-native-e2e.md#owner-approved-hooklifecycle-release-profile-2026-11-01) |
+| Copilot in VS Code | [Local Stop observer](../internal/copilotvscodeevent/consumer.go) and [SDK source](../internal/copilotvscodesource/source.go) exist; informational, `Navigation=None`, optional OS-default cue in source | Internal code exists; not part of the seven-agent public installer/README selection. Native qualification and product exposure need an explicit decision |
 | GitHub Copilot CLI | Native hooks include `agentStop`, `subagentStop`, `errorOccurred`, `permissionRequest` and `notification` | Research / new integration; separate from Copilot in VS Code |
 | Kiro CLI | Official hooks provide agent-stop and tool events | Research / new integration; qualify real CLI hooks and local origin first |
 
@@ -51,7 +58,7 @@ Source references: [GitHub Copilot hooks](https://docs.github.com/en/copilot/ref
 
 | Agent | Native event opportunity | Guardrail |
 | --- | --- | --- |
-| Qoder | `StopFailure` provides explicit error categories; `PermissionDenied` is also documented | Distinguish blocked workflow vs noisy per-tool failures; do not include raw error, prompts or tool arguments |
+| Qoder | Qualify visible StopFailure delivery and audible cues; investigate documented `PermissionDenied` | Distinguish blocked workflow vs noisy per-tool failures; do not include raw error, prompts or tool arguments |
 | Cursor CLI | Separate known `stop.status` values (`completed`, `aborted`, `error`) rather than presenting them all as “stopping”; investigate `subagentStop` and tool failures | Verify **Cursor CLI** event dispatch, not merely Cursor IDE hook documentation. Stop status is not proof a task succeeded |
 | OpenCode | Native `session.status`, `session.error`, permission events and parent/child sessions offer expansion candidates | Preserve root-only behavior until duplicates, nested ownership and exact event ordering are proven |
 | Gemini CLI | Native hooks also include `SessionEnd`, `AfterTool` and more | Session end is **not** task completion; `Notification` currently exposes ToolPermission, not an arbitrary “question” event |
@@ -72,7 +79,7 @@ See the existing [navigation design and review](plans/notification-navigation-ad
 
 ## Rough incremental engineering scope
 
-Estimates below are **changed LOC** (not a measurement of currently missing code), against current main, excluding Pi PR #539 and potential large native harnesses. They include validation in the test column but are **not** promises that an unsupported upstream event exists.
+Estimates below are **changed LOC** (not a measurement of currently missing code), against current main, excluding the released Pi integration from PR #539 and potential large native harnesses. They include validation in the test column but are **not** promises that an unsupported upstream event exists.
 
 | Workstream | Production changed LOC | Focused tests changed LOC |
 | --- | ---: | ---: |
@@ -85,7 +92,7 @@ Estimates below are **changed LOC** (not a measurement of currently missing code
 
 Subtotal: roughly **1,150–2,850 production LOC** and **1,780–3,920 focused-test LOC**, plus **150–300 docs/data LOC** and perhaps **800–2,500 OS native installed-E2E/fixture LOC**; about **3,900–9,600 changed LOC** for this broad scope. Exact desktop-chat navigation for every IDE, cross-OS authorization and a fully repeatable interactive physical-click harness are **separate higher-risk projects** and may exceed those numbers.
 
-A **new** GitHub Copilot CLI or Kiro CLI installer/adapter is each a different effort, provisionally **1,500–4,000 additional changed LOC** including tests/install qualification. Native upstream compatibility and sandbox restrictions can invalidate these ranges. Pi's very large ongoing draft is a reminder that full OS-specific acceptance can dominate adapter code.
+A **new** GitHub Copilot CLI or Kiro CLI installer/adapter is each a different effort, provisionally **1,500–4,000 additional changed LOC** including tests/install qualification. Native upstream compatibility and sandbox restrictions can invalidate these ranges. Pi's native validation harness illustrates how full OS-specific acceptance can dominate adapter code.
 
 ## Acceptance before changing a capability from “No” to “Supported”
 

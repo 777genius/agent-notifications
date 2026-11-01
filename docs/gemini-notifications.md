@@ -18,8 +18,8 @@ There is no promise of final-only delivery or root/nested-agent parity. Gemini
 notifications do not include prompts, tool arguments, transcripts or model answers.
 The integration observes these signals; it does not approve tools or change answers.
 
-Desktop alerts are silent in the **published v1.49.11**. New, unreleased source
-can request the **OS default notification cue** after explicit
+Desktop alerts are silent by default. Since **v1.50.0**, they can request the
+**OS default notification cue** after explicit
 `notifications.desktop.systemSound=true` consent, provided the master desktop
 `sound` setting is enabled. This is not Claude/Codex custom audio, configured
 volume/device playback or evidence of audible sound on every host.
@@ -82,8 +82,8 @@ Gemini's built-in notifications or modify their settings.
 
 Use the installer's reported configuration path and Gemini guide rather
 than the Claude/Codex portable MCP wizard. The `agents.gemini` profile
-controls the two supported statuses and allowed delivery channels. The unreleased
-source-only `systemSound` option requests the OS default cue after consent;
+controls the two supported statuses and allowed delivery channels. The v1.50.0
+`systemSound` option requests the OS default cue after consent;
 it cannot enable other event types or Click to Focus. Channel consent belongs to Gemini;
 OpenCode consent is separate. Webhook consent alone does not configure an endpoint.
 

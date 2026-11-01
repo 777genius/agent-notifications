@@ -2,7 +2,7 @@
 
 Agent Notifications supports managed Cursor CLI Stop notifications through the public Universal Agent Plugins (UAP) SDK. Install, update, disable and uninstall preserve unrelated hooks. Cursor IDE is a separate product and is not covered by this integration.
 
-The common product selection is available in [platform release v1.49.11](PLATFORM_RELEASE_CHANNELS.md). Earlier platform channels can retain the separate Cursor setup contract from their release notes.
+The common product selection is available in [platform release v1.50.0](PLATFORM_RELEASE_CHANNELS.md). Earlier platform channels can retain the separate Cursor setup contract from their release notes.
 
 ## Qualified hosts
 
@@ -37,7 +37,7 @@ Run the same command to update. Fresh installs default to desktop on and webhook
 
 A native `stop` event causes a fixed informational alert: **Cursor CLI is stopping**. A stopped agent loop does not establish successful task completion. Unknown status values are suppressed; the notification does not classify questions, plans, permissions or errors.
 
-Published v1.49.11 Cursor delivery is silent and informational. Unreleased source
+Cursor delivery is informational and silent by default. Since v1.50.0, it
 can explicitly request the OS default notification cue with
 `notifications.desktop.systemSound=true` and the existing master sound switch.
 This is **not** configurable MP3/volume output, a guarantee of an audible cue,
