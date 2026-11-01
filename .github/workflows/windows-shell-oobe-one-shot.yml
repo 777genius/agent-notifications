@@ -1,0 +1,138 @@
+name: TEST-only Windows 11 ARM first-logon Shell overlay probe
+on:
+  push:
+    branches: [ci/windows-shell-oobe-probe-20261101]
+    paths: ['.github/workflows/windows-shell-oobe-one-shot.yml']
+permissions:
+  contents: read
+jobs:
+  shell-overlay:
+    if: ${{ github.repository == '777genius/agent-notifications' && github.run_attempt == 1 && github.event.head_commit.message == 'test(windows): probe first-logon shell overlay on disposable ARM client' }}
+    runs-on: windows-11-vs2026-arm
+    timeout-minutes: 8
+    steps:
+      - name: Inspect and dismiss only known first-logon overlay, then probe the Shell
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Add-Type -AssemblyName System.Windows.Forms,System.Drawing
+          $code = @'
+          using System;
+          using System.Runtime.InteropServices;
+          public static class TestOnlyShellProbe {
+            [StructLayout(LayoutKind.Sequential)]
+            public struct Key { public ushort vk, scan; public uint flags, time; public IntPtr extra; }
+            [StructLayout(LayoutKind.Explicit, Size=40)]
+            public struct Input { [FieldOffset(0)] public uint type; [FieldOffset(8)] public Key key; }
+            [DllImport("user32.dll", SetLastError=true)]
+            public static extern uint SendInput(uint n, [In] Input[] data, int size);
+            [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+            [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
+            public static uint ForegroundPid() {
+              uint pid; GetWindowThreadProcessId(GetForegroundWindow(), out pid); return pid;
+            }
+            public static uint OpenOnce() {
+              var input = new Input[4];
+              for (int i=0;i<4;i++) input[i].type=1;
+              input[0].key.vk=0x5b; input[1].key.vk=0x4e;
+              input[2].key.vk=0x4e; input[2].key.flags=2;
+              input[3].key.vk=0x5b; input[3].key.flags=2;
+              return SendInput(4,input,Marshal.SizeOf(typeof(Input)));
+            }
+          }
+          '@
+          Add-Type -TypeDefinition $code
+          function KnownProcess([uint32]$pid) {
+            if ($pid -eq 0) { return 'none' }
+            try {
+              $p = [System.Diagnostics.Process]::GetProcessById([int]$pid)
+              if ($p.SessionId -ne [System.Diagnostics.Process]::GetCurrentProcess().SessionId) { return 'other_session' }
+              if ($p.ProcessName -in @('WWAHost','UserOOBEBroker','StartMenuExperienceHost','SystemPropertiesPerformance','WindowsTerminal','OpenConsole','explorer','pwsh','powershell','wsl')) {
+                return $p.ProcessName
+              }
+              return 'other'
+            } catch { return 'exited' }
+          }
+          function Census {
+            $names = @('WWAHost','UserOOBEBroker','StartMenuExperienceHost','SystemPropertiesPerformance','WindowsTerminal','OpenConsole','wsl')
+            $rows = @{}
+            $session = [System.Diagnostics.Process]::GetCurrentProcess().SessionId
+            foreach ($name in $names) {
+              $matches = @(Get-Process -Name $name -ErrorAction SilentlyContinue | Where-Object { $_.SessionId -eq $session })
+              $rows[$name] = $matches.Count
+            }
+            return $rows
+          }
+          function Capture {
+            $image = New-Object System.Drawing.Bitmap($bounds.Width,$bounds.Height)
+            $graphics = [System.Drawing.Graphics]::FromImage($image)
+            try { $graphics.CopyFromScreen($bounds.Location,[System.Drawing.Point]::Empty,$bounds.Size) }
+            finally { $graphics.Dispose() }
+            return $image
+          }
+          $session = [System.Diagnostics.Process]::GetCurrentProcess().SessionId
+          $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+          if ($bounds.Width -lt 640 -or $bounds.Height -lt 480) { throw 'insufficient desktop geometry' }
+          $before = Census
+          $foregroundBefore = KnownProcess ([TestOnlyShellProbe]::ForegroundPid())
+          $brokerFound = $before['UserOOBEBroker'] -gt 0
+          $stopped = 0
+          $refused = 0
+          # The GitHub-hosted VM is disposable. Never touch any non-OOBE app,
+          # product installation, notification, foreign profile or consent.
+          foreach ($name in @('UserOOBEBroker','WWAHost')) {
+            foreach ($p in @(Get-Process -Name $name -ErrorAction SilentlyContinue)) {
+              if ($p.SessionId -ne $session) { continue }
+              $title = [string]$p.MainWindowTitle
+              $isPrivacyWindow = $name -eq 'WWAHost' -and $title -match '(?i)choose privacy settings|privacy settings for your device'
+              if ($name -eq 'WWAHost' -and -not ($brokerFound -or $isPrivacyWindow)) { continue }
+              try { $path = [string]$p.Path } catch { $path = '' }
+              if (-not $path.StartsWith($env:WINDIR + '\', [StringComparison]::OrdinalIgnoreCase)) {
+                $refused++; continue
+              }
+              Stop-Process -Id $p.Id -Force -ErrorAction Stop
+              $stopped++
+            }
+          }
+          # Dismiss any first-logon Start overlay, without terminating the shell.
+          [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
+          Start-Sleep -Milliseconds 1200
+          $after = Census
+          $foregroundAfterCleanup = KnownProcess ([TestOnlyShellProbe]::ForegroundPid())
+          $imageBefore = Capture
+          try {
+            $inserted = [TestOnlyShellProbe]::OpenOnce()
+            if ($inserted -ne 4) { throw 'failed to insert exactly one Win+N sequence' }
+            Start-Sleep -Milliseconds 1400
+            $imageAfter = Capture
+            try {
+              $count = 0; $changed = 0
+              $startX = [int]($bounds.Width*2/3)
+              for ($y=0;$y -lt $bounds.Height;$y+=8) {
+                for ($x=$startX;$x -lt $bounds.Width;$x+=8) {
+                  $count++
+                  if ($imageBefore.GetPixel($x,$y).ToArgb() -ne $imageAfter.GetPixel($x,$y).ToArgb()) { $changed++ }
+                }
+              }
+            } finally { $imageAfter.Dispose() }
+          } finally { $imageBefore.Dispose() }
+          $report = [ordered]@{
+            scope = 'one_shot_disposable_no_product_notification_overlay_diagnostic'
+            session = $session
+            overlayProcessCountsBefore = $before
+            foregroundBefore = $foregroundBefore
+            oobeBrokerFound = $brokerFound
+            selectedOobeProcessesStopped = $stopped
+            unexpectedOobePathsRefused = $refused
+            overlayProcessCountsAfter = $after
+            foregroundAfterCleanup = $foregroundAfterCleanup
+            foregroundAfterWinN = (KnownProcess ([TestOnlyShellProbe]::ForegroundPid()))
+            inputKeyEvents = $inserted
+            sampledRightThirdPixels = $count
+            changedRightThirdSamples = $changed
+            screenshotsSaved = $false
+            productToastSent = $false
+            shellUIAInvokeQualified = $false
+            installedCallbackQualified = $false
+          }
+          Write-Output ('OOBE_SHELL_PREFLIGHT=' + ($report | ConvertTo-Json -Compress -Depth 4))
