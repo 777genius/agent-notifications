@@ -1,4 +1,4 @@
-name: One-shot pinned Windows callback installed qualifications
+name: One-shot source-pinned Windows callback signed archive intake
 on:
   push:
     branches: [ci/win-callback-dispatch-20261031]
@@ -7,52 +7,29 @@ permissions:
   contents: read
   actions: write
 jobs:
-  pinned-basic-retained-package:
-    if: ${{ github.repository == '777genius/agent-notifications' && github.event.head_commit.message == 'ci(windows) admit pinned basic retained package fc994a8' && github.run_attempt == 1 }}
+  signed-intake:
+    if: ${{ github.repository == '777genius/agent-notifications' && github.event.head_commit.message == 'ci(windows) intake 9e8c9938 source-bound signed archive' && github.run_attempt == 1 }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - name: Dispatch independently admitted fresh Windows 11 qualifications
+      - name: Dispatch one read-only signed archive intake on the exact PR source
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          source='fc994a81e624531bdfd37ad015508ecefbd10fbd'
+          source='9e8c9938709b9e43888bf7c57fc320cfd506684d'
           parent='30968141e49596c2207b9c42c5546bbc57539a4c'
-          rawSHA='d442a3d7d5c229f45e5e11995711ac2619c8dbc89e3fa2bc185287dc8db8e76e'
-          fullName='OpenAI.Codex_26.1027.3384.0_x64__2p2nqsd0c76g0'
           current="$(gh api repos/777genius/agent-notifications/git/ref/heads/test/windows-installed-cold-callback -q .object.sha)"
           currentParent="$(gh api repos/777genius/agent-notifications/git/ref/heads/feat/windows-callback-installed -q .object.sha)"
-          intakeHead="$(gh api repos/777genius/agent-notifications/actions/runs/41248506288 -q .head_sha)"
-          intakeResult="$(gh api repos/777genius/agent-notifications/actions/runs/41248506288 -q .conclusion)"
-          if [[ "$current" != "$source" || "$currentParent" != "$parent" ||
-                "$intakeHead" != 'f00b56b36850053c649f61293ccb31da72d24ab2' ||
-                "$intakeResult" != 'success' ]]; then
-            echo 'Changed source or unqualified prior signed archive intake; refusing effects' >&2
+          if [[ "$current" != "$source" || "$currentParent" != "$parent" ]]; then
+            echo 'Parent or source changed; fail closed without dispatch' >&2
             exit 1
           fi
-          if [[ ! "$rawSHA" =~ ^[a-f0-9]{64}$ ||
-                "$fullName" != OpenAI.Codex_*_x64__2p2nqsd0c76g0 ]]; then
-            echo 'Source-bound signed archive identity invalid' >&2
-            exit 1
-          fi
-          dispatch() {
-            local phase="$1" scenario="$2" ancestor="$3" admission
-            if [[ "$phase" == package_noshow ]]; then admission=one-fresh-disposable-package-noshow
-            else admission=one-fresh-disposable-installed-callback
-            fi
-            echo "Admit ONE fresh Windows VM: phase=$phase scenario=$scenario"
-            gh api --method POST repos/777genius/agent-notifications/actions/workflows/windows-callback-contracts.yml/dispatches \
-              -f ref=test/windows-installed-cold-callback \
-              -f "inputs[admission]=$admission" \
-              -f "inputs[phase]=$phase" \
-              -f "inputs[scenario]=$scenario" \
-              -f "inputs[expectedArchiveSHA]=$rawSHA" \
-              -f "inputs[expectedFullName]=$fullName" \
-              -f "inputs[coreRef]=$ancestor"
-          }
-          dispatch installed basic ''
-          dispatch installed retained ''
-          dispatch package_noshow package_noshow "$parent"
-          echo 'Three independent first-attempt source-bound Windows qualifications requested; no retry.'
+          gh api --method POST repos/777genius/agent-notifications/actions/workflows/windows-callback-contracts.yml/dispatches \
+            -f ref=test/windows-installed-cold-callback \
+            -f 'inputs[admission]=one-fresh-disposable-installed-callback' \
+            -f 'inputs[phase]=archive_intake' \
+            -f 'inputs[scenario]=basic' \
+            -f 'inputs[coreRef]='
+          echo 'Dispatched one new source-pinned read-only signed archive intake; no installation or click.'
