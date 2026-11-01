@@ -51,7 +51,7 @@ func Serve(ctx context.Context, listener net.Listener, o ServerOptions) error {
 	}
 	serveCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 	var mu sync.Mutex
 	active := 0
 	lastIdle := time.Now()
