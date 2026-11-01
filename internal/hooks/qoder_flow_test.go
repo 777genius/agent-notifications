@@ -101,6 +101,32 @@ func TestQoderStopFailureRoutesWithoutLeakingRawProviderError(t *testing.T) {
 	}
 }
 
+// A successful turn and an unexpected failure are distinct user events even
+// when the assistant content looks like the fixed failure banner. The
+// event-scoped lock still suppresses an exact repeated failure invocation.
+func TestQoderStopFailureDoesNotCollideWithCompletedTurnDedup(t *testing.T) {
+	handler, notify, _ := newTestHandler(t, qoderFailureTestConfig())
+	handler.product, handler.source = ProductQoder, QoderSource{}
+	session := fmt.Sprintf("../../qoder-stop-vs-failure-%d", time.Now().UnixNano())
+	stop := fmt.Sprintf(`{"session_id":%q,"cwd":"/TEST-qoder","hook_event_name":"Stop","stop_hook_active":false,"last_assistant_message":"Qoder stopped unexpectedly"}`, session)
+	failure := fmt.Sprintf(`{"session_id":%q,"cwd":"/TEST-qoder","hook_event_name":"StopFailure","error_type":"server_error","error":"PRIVATE_ERROR"}`, session)
+	if err := handler.HandleHook("Stop", strings.NewReader(stop)); err != nil {
+		t.Fatal(err)
+	}
+	if err := handler.HandleHook("StopFailure", strings.NewReader(failure)); err != nil {
+		t.Fatal(err)
+	}
+	if len(notify.calls) != 2 || notify.lastCall() == nil || notify.lastCall().status != analyzer.StatusAgentError {
+		t.Fatalf("Qoder failure collapsed into prior successful Stop: %+v", notify.calls)
+	}
+	if err := handler.HandleHook("StopFailure", strings.NewReader(failure)); err != nil {
+		t.Fatal(err)
+	}
+	if len(notify.calls) != 2 {
+		t.Fatalf("event-scoped duplicate failure was redelivered: %d", len(notify.calls))
+	}
+}
+
 func TestQoderStopFailureCannotImpersonateOtherEventsOrProducts(t *testing.T) {
 	for _, payload := range []struct{ event, raw string }{
 		{"StopFailure", `{"session_id":"s","hook_event_name":"Stop","error_type":"rate_limit"}`},
