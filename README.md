@@ -90,7 +90,7 @@ Claude/Codex setup also installs the `agent-notifications` MCP server and `agent
 ## Features
 
 - **Task and attention alerts:** completions, questions, tool approvals and more, depending on the agent. See the table below.
-- **Click-to-focus (Claude/Codex) and sounds (Claude/Codex/Qoder):** focus the originating terminal or editor where qualified; choose built-in or custom sounds, volume and audio output. [Supported terminals](docs/CLICK_TO_FOCUS.md) · [Sound settings](docs/CONFIGURATION.md#sound-options)
+- **Click-to-focus (Claude/Codex) and sounds (Claude/Codex; Qoder asset-dependent):** focus the originating terminal or editor where qualified; choose built-in or custom sounds, volume and audio output. [Supported terminals](docs/CLICK_TO_FOCUS.md) · [Sound settings](docs/CONFIGURATION.md#sound-options)
 - **Useful context:** Claude/Codex desktop alerts show project, git branch and native session names, with generated labels as fallback. OpenCode desktop alerts show native session names when available. Question alerts show the current question when supplied by the host. OpenCode webhooks retain generic text. [Session context](docs/CONFIGURATION.md#session-context) · [OpenCode context](docs/opencode-notifications.md)
 - **Less noise (Claude/Codex):** optional focus-aware desktop delivery, delays, filters and subagent alerts. Plugin-level Do Not Disturb detection is Linux-only. [Configuration](docs/CONFIGURATION.md#focus-aware--delayed-notifications) · [Do Not Disturb](docs/DO_NOT_DISTURB.md)
 - **Webhooks:** Slack, Discord, Telegram, Lark/Feishu and custom endpoints. [Integration guides](docs/webhooks/README.md)
@@ -105,7 +105,7 @@ Claude/Codex setup also installs the `agent-notifications` MCP server and `agent
 | **OpenCode** | Root-session completion, questions, permissions and errors | No (published v1.49.11) | No | [Setup and limits](docs/opencode-notifications.md) |
 | **Gemini CLI** | Turn completion and tool permissions | No | No | [Cross-platform setup and qualification](docs/gemini-notifications.md) |
 | **Cursor CLI** | Agent loop stopping; fixed informational text | No | No | [Qualified hosts, shared setup and profile authority](docs/cursor-notifications.md) |
-| **Qoder** | Completion, question, permission, plan and subagent/idle-teammate hooks; native plugin | Yes | Not qualified; exact-chat focus unavailable | [Unified installation and native hooks](docs/QODER.md) |
+| **Qoder** | Completion, question, permission, plan and subagent/idle-teammate hooks; native plugin | Configured; standalone bundle lacks built-in MP3 assets | Not qualified; exact-chat focus unavailable | [Unified installation and native hooks](docs/QODER.md) |
 
 **[Detailed support matrix](docs/AGENT_SUPPORT_MATRIX.md)** — event coverage, sounds, terminal vs exact-chat navigation, currently unshipped Copilot/Pi work, evidence limits and effort estimates.
 
