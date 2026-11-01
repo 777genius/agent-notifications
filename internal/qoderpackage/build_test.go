@@ -67,7 +67,7 @@ func TestNativeBundleContract(t *testing.T) {
 				binary += ".exe"
 			}
 			wantEvents := []struct{ event, matcher string }{
-				{"Stop", ""}, {"Notification", ""}, {"PermissionRequest", ""}, {"SubagentStop", ""}, {"TeammateIdle", ""}, {"PreToolUse", "ExitPlanMode|AskUserQuestion"},
+				{"Stop", ""}, {"StopFailure", ""}, {"Notification", ""}, {"PermissionRequest", ""}, {"SubagentStop", ""}, {"TeammateIdle", ""}, {"PreToolUse", "ExitPlanMode|AskUserQuestion"},
 			}
 			if len(hooks.Hooks) != len(wantEvents) {
 				t.Fatalf("unexpected native hook set: %s", raw)
@@ -182,7 +182,7 @@ func TestManagedHooksUseExactOwnedRuntimeEntrypoint(t *testing.T) {
 	if err = json.Unmarshal(raw, &doc); err != nil {
 		t.Fatal(err)
 	}
-	if len(doc.Hooks) != 6 {
+	if len(doc.Hooks) != 7 {
 		t.Fatalf("managed event set differs: %s", raw)
 	}
 	for event, groups := range doc.Hooks {
