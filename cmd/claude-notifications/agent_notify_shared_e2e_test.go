@@ -497,8 +497,8 @@ func (c *portableSharedBridge) close() error {
 				}
 			case <-time.After(5 * time.Second):
 				_ = c.cmd.Process.Kill()
-				_ = <-c.done
-				c.closeErr = fmt.Errorf("TEST bridge did not stop after stdin closure or SIGTERM")
+				exitErr := <-c.done
+				c.closeErr = fmt.Errorf("TEST bridge did not stop after stdin closure or SIGTERM: %v", exitErr)
 			}
 		}
 		for tail := range c.frames {

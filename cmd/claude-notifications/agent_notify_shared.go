@@ -74,7 +74,7 @@ func connectSharedDaemon(ctx context.Context, data, name string) (net.Conn, erro
 	}
 	ticker := time.NewTicker(25 * time.Millisecond)
 	defer ticker.Stop()
-	var starting <-chan error
+	var starting <-chan struct{}
 	attempts := 0
 	for {
 		if conn, err := dialSharedRecord(ctx, state); err == nil {
@@ -82,7 +82,7 @@ func connectSharedDaemon(ctx context.Context, data, name string) (net.Conn, erro
 		}
 		if starting != nil {
 			select {
-			case _ = <-starting: // Only completion matters; election revalidates before another start.
+			case <-starting:
 				starting = nil
 				if attempts >= 2 {
 					return nil, errSharedUnavailable
@@ -146,7 +146,7 @@ func dialSharedRecord(ctx context.Context, state *sharedstate.Store) (net.Conn, 
 	return secured, nil
 }
 
-func startSharedDaemon(lease *portable.Lease, name string) (<-chan error, error) {
+func startSharedDaemon(lease *portable.Lease, name string) (<-chan struct{}, error) {
 	// The service is not CommandContext-owned by any one chat. Null streams
 	// prevent it from retaining that chat's stdio after the bridge exits.
 	cmd := exec.Command(lease.Executable, "portable-shared-daemon", "--locator", name, "--runtime-sha256", lease.SHA256)
@@ -162,8 +162,10 @@ func startSharedDaemon(lease *portable.Lease, name string) (<-chan error, error)
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
-	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
+	done := make(chan struct{})
+	// Election needs completion, not the child exit cause. The next starter
+	// must revalidate the binding before another execution attempt.
+	go func() { _ = cmd.Wait(); close(done) }()
 	return done, nil
 }
 
