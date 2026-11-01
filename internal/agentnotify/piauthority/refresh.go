@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -102,7 +103,7 @@ func EnlistRuntimeRefresh(ctx context.Context, req *installruntime.Request) erro
 			b := item.binding
 			revision, _, err := installedRevisionWithPrimaryRepair(ctx, b, stateFile(b), current, false, item.missing)
 			if err != nil {
-				return nil, err
+				return nil, fmt.Errorf("retained Pi binding %s blocks this runtime update; repair or remove the Pi integration first: %w", b.BindingID, err)
 			}
 			name, err := b.Filename()
 			if err != nil {

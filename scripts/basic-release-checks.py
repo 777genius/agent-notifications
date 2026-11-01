@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
 import ci_native_evidence as native  # noqa: E402
 
 REPOSITORIES = {'777genius/agent-notifications', 'universal-agent-plugins/agent-notifications'}
-BAD = {'failure', 'cancelled', 'timed_out'}
+BAD = {'failure', 'cancelled', 'timed_out', 'action_required'}
 
 
 def require(ok, reason):
