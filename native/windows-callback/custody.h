@@ -116,11 +116,14 @@ struct Generation {
   module.resize(n);
   helperFile=open(module,false);
   root=fs::path(physical(helperFile.h)).parent_path();
-  require(rootGrammar(narrow(root.wstring()))&&fs::path(module).filename()==L"helper.exe");
+  const auto rootText=root.wstring();
+  require(rootGrammar(narrow(rootText))&&fs::path(module).filename()==L"helper.exe");
+  // The admitted grammar is exactly an extended local-drive path. MSVC treats
+  // \\?\ as the generic root_path(), so split the validated drive prefix itself.
   // Hold each ancestor against replacement; reject junctions before trusting root.
-  fs::path path=root.root_path();
+  fs::path path=rootText.substr(0,7);
   guards.push_back(open(path,true));
-  for(const auto& part:root.relative_path()){path/=part;
+  for(const auto& part:fs::path(rootText.substr(7))){path/=part;
   guards.push_back(open(path,true));
   }
   require(physical(guards.back().h)==root.wstring());owned(guards.back().h,sid);owned(helperFile.h,sid);
