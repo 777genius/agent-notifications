@@ -1,4 +1,4 @@
-name: One-shot source-pinned Windows UIA retained qualification
+name: One-shot source-pinned Windows UIA basic Shell census qualification
 on:
   push:
     branches: [ci/win-callback-dispatch-20261031]
@@ -8,17 +8,17 @@ permissions:
   actions: write
 jobs:
   qualified-windows:
-    if: ${{ github.repository == '777genius/agent-notifications' && github.event.head_commit.message == 'ci(windows) admit exact Shell UIA retained 9f0ce54' && github.run_attempt == 1 }}
+    if: ${{ github.repository == '777genius/agent-notifications' && github.event.head_commit.message == 'ci(windows) admit read-only Shell census basic 0d4e14e' && github.run_attempt == 1 }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - name: Dispatch exactly one fresh retained Windows Shell UIA proof
+      - name: Dispatch one fresh basic Windows Shell UIA proof with diagnostic census
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          source='9f0ce54c2bdaa127ac14fb33c4c39a091f5c0b03'
+          source='0d4e14ebc451e46dbb041308decf09b5a68eab7b'
           parent='9c2395f234549aeac24b4d311a4399f359ad7886'
           signedIntakeRun='41298548456'
           rawSHA='d442a3d7d5c229f45e5e11995711ac2619c8dbc89e3fa2bc185287dc8db8e76e'
@@ -40,8 +40,8 @@ jobs:
             -f ref=test/windows-installed-cold-callback \
             -f 'inputs[admission]=one-fresh-disposable-installed-callback' \
             -f 'inputs[phase]=installed' \
-            -f 'inputs[scenario]=retained' \
+            -f 'inputs[scenario]=basic' \
             -f "inputs[expectedArchiveSHA]=$rawSHA" \
             -f "inputs[expectedFullName]=$fullName" \
             -f 'inputs[coreRef]='
-          echo 'One fresh source-pinned Windows installed retained test dispatched, no retry.'
+          echo 'One fresh source-pinned installed basic test dispatched, no retry.'
