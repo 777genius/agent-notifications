@@ -466,8 +466,10 @@ func Acquire(ctx context.Context, data, name string) (*Lease, error) {
 	}
 	snapshot, release, err := installruntime.AcquireCurrentSetupLease(ctx, b.ControlRoot)
 	if err != nil {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
+		// Classify the operation's actual failure. A coincident deadline must
+		// not disguise a failed integrity or recovery check as contention.
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			return nil, err
 		}
 		return nil, ErrInvalid
 	}
