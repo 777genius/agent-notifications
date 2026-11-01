@@ -318,7 +318,7 @@ class AdmissionTests(unittest.TestCase):
                       ('older-job', 'id', 2), ('older-job', 'name', 'different job'),
                       ('older-check', 'app', {'id': 2, 'slug': 'foreign-app'}),
                       ('older-check', 'app', {'id': 1, 'slug': 'foreign-app'}),
-                      ('origin', 'head_repository', {'full_name': 'other/repo'}), ('origin', 'event', 'push'),
+                      ('origin', 'head_repository', {}), ('origin', 'event', 'push'),
                       ('origin', 'head_sha', 'c' * 40), ('origin', 'status', 'in_progress'),
                       ('origin', 'conclusion', 'failure'),
                       ('latest-check', 'conclusion', 'neutral'), ('latest-check', 'check_suite', {'id': 99999}),
