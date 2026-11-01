@@ -17,7 +17,7 @@ async function changeIntent(value: Intent) {
   await nextTick();
   installTitle.value?.focus({ preventScroll: true });
 }
-const selectedProducts = reactive({ claude: true, codex: false, opencode: false, gemini: false, qoder: false, cursor: false });
+const selectedProducts = reactive({ claude: true, codex: false, opencode: false, gemini: false, qoder: false, cursor: false, pi: false });
 const selection = computed<AgentProduct[]>(() =>
   agentProducts.filter((value) => selectedProducts[value]),
 );
@@ -200,6 +200,7 @@ async function copy() {
       <p v-if="selectedProducts.gemini"><a :href="repo + '/blob/main/docs/gemini-notifications.md'">{{ t("install.gemini.guide") }}</a>. {{ t("install.gemini.configure") }}</p>
       <p v-if="selectedProducts.cursor">{{ t("install.cursor.scope") }} <a :href="repo + '/blob/main/docs/cursor-notifications.md'">{{ t("install.cursor.guide") }}</a></p>
       <p v-if="selectedProducts.qoder">{{ t("install.qoder.scope") }} <a :href="repo + '/blob/main/docs/QODER.md'">{{ t("install.qoder.guide") }}</a></p>
+      <p v-if="selectedProducts.pi"><a :href="repo + '/blob/main/docs/pi-notifications.md'">{{ t("install.pi.guide") }}</a>. {{ t("install.pi.configure") }}</p>
       <p v-if="hasLegacy">{{ t("install.configure.shared") }}</p>
     </div>
     <div v-else-if="selectedProducts.gemini && target === 'unknown'" class="setup-panel instructions" role="status">
@@ -223,6 +224,7 @@ async function copy() {
       <p v-if="selectedProducts.gemini">{{ t("install.gemini.version") }} <a :href="repo + '/blob/main/docs/gemini-notifications.md'">{{ t("install.gemini.guide") }}</a></p>
       <p v-if="selectedProducts.cursor">{{ t("install.cursor.scope") }} <a :href="repo + '/blob/main/docs/cursor-notifications.md'">{{ t("install.cursor.guide") }}</a></p>
       <p v-if="selectedProducts.qoder">{{ t("install.qoder.scope") }} <a :href="repo + '/blob/main/docs/QODER.md'">{{ t("install.qoder.guide") }}</a></p>
+      <p v-if="selectedProducts.pi">{{ t("install.pi.version") }} <a :href="repo + '/blob/main/docs/pi-notifications.md'">{{ t("install.pi.guide") }}</a></p>
     </div>
     <div v-else-if="!snippet" class="setup-panel instructions">
       <p>{{ t("install.chooseTarget") }}</p>
@@ -341,6 +343,7 @@ async function copy() {
             <p v-if="selectedProducts.gemini">{{ t("install.gemini.restart") }}</p>
             <p v-if="selectedProducts.cursor">{{ t("install.cursor.restart") }}</p>
             <p v-if="selectedProducts.qoder">{{ t("install.qoder.restart") }}</p>
+            <p v-if="selectedProducts.pi">{{ t("install.pi.restart") }}</p>
           </div>
         </article>
       </div>
@@ -348,6 +351,7 @@ async function copy() {
     <AgentSupportTable />
     <footer class="install-footer">
       <a v-if="selectedProducts.gemini" :href="repo + '/blob/main/docs/gemini-notifications.md'">{{ t("install.gemini.guide") }} ↗</a>
+      <a v-if="selectedProducts.pi" :href="repo + '/blob/main/docs/pi-notifications.md'">{{ t("install.pi.guide") }} ↗</a>
       <a
         v-if="hasLegacy"
         :href="repo + (selectedProducts.codex

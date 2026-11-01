@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients/claude"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients/codex"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients/pi"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients/vscode"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/domain"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/managedstdio"
@@ -24,6 +26,7 @@ import (
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/packagesnapshot"
 
 	"github.com/777genius/agent-notifications/install/uapinstaller"
+	"github.com/777genius/agent-notifications/internal/agentnotify/piauthority"
 	"github.com/777genius/agent-notifications/internal/agentnotify/portable"
 	"github.com/777genius/agent-notifications/internal/copilotvscodeinstall"
 	"github.com/777genius/agent-notifications/internal/cursorinstall"
@@ -63,10 +66,10 @@ func declaredServerName(packageRoot string) string {
 
 const clientFactsFile = "client-facts.json"
 
-// NewRegistry is the explicit Notifications composition of the two supported
+// NewRegistry is the explicit Notifications composition of the supported
 // native clients. The UAP SDK intentionally rejects a nil registry.
 func NewRegistry() (*clients.Registry, error) {
-	return clients.NewRegistry(claude.New(), codex.New())
+	return clients.NewRegistry(claude.New(), codex.New(), pi.New())
 }
 
 // ClientID translates the portable registration vocabulary at the public engine boundary.
@@ -136,9 +139,13 @@ type MaterializeRequest struct {
 }
 
 type Materializer struct {
-	Kernel Service
-	Store  statev2.Store
-	Roots  UAPRoots
+	PiChoices piauthority.Choices
+	// One Install invocation records whether the committed package callback ran.
+	// An unchanged UAP package can still need an explicitly requested Pi choice.
+	piHandoffDone *bool
+	Kernel        Service
+	Store         statev2.Store
+	Roots         UAPRoots
 	// Registry is the explicit composition for this materializer and every
 	// engine it constructs. Nil retains the Claude/Codex composition.
 	Registry *clients.Registry
@@ -939,7 +946,7 @@ func explicitAbs(p string) bool {
 
 func (m Materializer) validate(req MaterializeRequest, install bool) error {
 	switch req.Integration {
-	case portable.Codex, portable.Claude:
+	case portable.Codex, portable.Claude, portable.Pi:
 	case portable.CopilotVSCode:
 		if selected, ok := clients.As[*vscode.LocalAdapter](m.Registry, domain.ClientVSCode); !ok || selected == nil || req.LocalConfig == nil {
 			return fmt.Errorf("%w: selected Local adapter and explicit selections required", ErrPreflight)
@@ -965,8 +972,11 @@ func (m Materializer) validate(req MaterializeRequest, install bool) error {
 			return err
 		}
 	}
-	if req.ClientExecutable == "" || !filepath.IsAbs(req.ClientExecutable) {
+	if (install || req.Integration != portable.Pi) && (req.ClientExecutable == "" || !filepath.IsAbs(req.ClientExecutable)) {
 		return fmt.Errorf("%w: client executable must be explicit", ErrPreflight)
+	}
+	if install && req.Integration == portable.Pi && portable.ValidatePiExecutable(req.ClientExecutable, runtime.GOOS) != nil {
+		return fmt.Errorf("%w: Windows Pi requires the native standalone executable", ErrPreflight)
 	}
 	if install && !explicitAbs(req.PackageRoot) {
 		return fmt.Errorf("%w: package root must be an explicit absolute path", ErrPreflight)
@@ -1095,6 +1105,17 @@ func (m Materializer) engineWithIdentities(req MaterializeRequest, generation *u
 			}
 			if err := refuseConflictingLocator(pb); err != nil {
 				return err
+			}
+			if pb.Integration == portable.Pi {
+				next, err := m.commitPiBinding(ctx, req, pb, res)
+				if err != nil {
+					return err
+				}
+				*generation = next
+				if m.piHandoffDone != nil {
+					*m.piHandoffDone = true
+				}
+				return nil
 			}
 			if _, err := m.Kernel.CommitBinding(ctx, Request{Binding: pb, ExpectedGeneration: *generation, Reservation: res}); err != nil {
 				return err
@@ -1344,6 +1365,9 @@ func (m Materializer) Install(ctx context.Context, req MaterializeRequest) (port
 	if err := m.validate(req, true); err != nil {
 		return portable.Binding{}, err
 	}
+	if req.Integration == portable.Pi {
+		m.piHandoffDone = new(bool)
+	}
 	var closePackage func()
 	var composeErr error
 	m, req, closePackage, composeErr = m.composeLocalPackage(ctx, req, true)
@@ -1428,6 +1452,12 @@ func (m Materializer) Install(ctx context.Context, req MaterializeRequest) (port
 	if err != nil {
 		return portable.Binding{}, err
 	}
+	if pb.Integration == portable.Pi && m.piHandoffDone != nil && !*m.piHandoffDone {
+		generation, err = m.commitPiBinding(ctx, req, pb, res)
+		if err != nil {
+			return portable.Binding{}, err
+		}
+	}
 	if err := recordClientFact(filepath.Dir(m.Roots.StateFile), clientFact{BindingID: pb.BindingID, ConfigRoot: req.ClientConfigRoot, Executable: req.ClientExecutable}, ClientID(req.Integration)); err != nil {
 		return portable.Binding{}, err
 	}
@@ -1446,6 +1476,9 @@ func integrationOf(facts uapinstaller.BindingFacts) portable.Integration {
 // Required components follow independent Local selections. Native Stop has no
 // dependency on the canonical MCP or skill components.
 func requiredComponents(req MaterializeRequest) []string {
+	if req.Integration == portable.Pi {
+		return nil
+	}
 	if req.Integration != portable.CopilotVSCode {
 		return []string{"mcp", "skills"}
 	}
@@ -1484,7 +1517,7 @@ func validateGroupIdentities(reqs []MaterializeRequest) (map[string]Identity, er
 	base := reqs[0].Identity
 	for _, req := range reqs {
 		client := ClientID(req.Integration)
-		if req.Integration != portable.Claude && req.Integration != portable.Codex && req.Integration != portable.CopilotVSCode {
+		if req.Integration != portable.Claude && req.Integration != portable.Codex && req.Integration != portable.CopilotVSCode && req.Integration != portable.Pi {
 			return nil, fmt.Errorf("%w: unsupported group client %s", ErrPreflight, client)
 		}
 		if _, exists := identities[client]; exists {
@@ -1503,6 +1536,11 @@ func validateGroupIdentities(reqs []MaterializeRequest) (map[string]Identity, er
 func (m Materializer) ApplyGroup(ctx context.Context, reqs []MaterializeRequest) ([]portable.Binding, error) {
 	if ctx == nil || len(reqs) != 2 {
 		return nil, ErrPreflight
+	}
+	for _, req := range reqs {
+		if req.Integration == portable.Pi {
+			m.piHandoffDone = new(bool)
+		}
 	}
 	for i := range reqs {
 		if err := m.validate(reqs[i], true); err != nil {
@@ -1637,6 +1675,12 @@ func (m Materializer) ApplyGroup(ctx context.Context, reqs []MaterializeRequest)
 		pb, err := Complete(req.Identity, req.Integration, facts.ClientID, facts.Scope, facts.TargetPath, facts.DataRoot)
 		if err != nil {
 			return nil, err
+		}
+		if pb.Integration == portable.Pi && m.piHandoffDone != nil && !*m.piHandoffDone {
+			generation, err = m.commitPiBinding(ctx, req, pb, res)
+			if err != nil {
+				return nil, err
+			}
 		}
 		if err := recordClientFact(filepath.Dir(m.Roots.StateFile), clientFact{BindingID: pb.BindingID, ConfigRoot: req.ClientConfigRoot, Executable: req.ClientExecutable}, ClientID(req.Integration)); err != nil {
 			return nil, err

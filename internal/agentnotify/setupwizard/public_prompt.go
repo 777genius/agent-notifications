@@ -52,6 +52,7 @@ func (p *PublicPrompt) SelectAgents(ctx context.Context, clients []AgentCapabili
 	options := []installerui.Option{
 		{ID: "claude", Label: agentChoiceLabel(clients, "claude", "Claude")},
 		{ID: "codex", Label: agentChoiceLabel(clients, "codex", "Codex")},
+		{ID: "pi", Label: agentChoiceLabel(clients, "pi", "Pi (native extension)")},
 	}
 	req := installerui.SelectRequest{Title: "Install notifications for", Options: options}
 	var result installerui.Selection

@@ -94,6 +94,7 @@ OPENCODE_ARGS=()
 _FROZEN_OPENCODE_CHANNELS=()
 _FROZEN_GEMINI_CHANNELS=()
 _FROZEN_QODER_CHANNELS=()
+_FROZEN_PI_CHANNELS=()
 _FROZEN_CURSOR_DESKTOP=false
 _FROZEN_CURSOR_WEBHOOK=false
 _FROZEN_CURSOR_SEED=false
@@ -116,6 +117,8 @@ _FROZEN_CODEX_MCP=""
 _FROZEN_OPENCODE=""
 _FROZEN_GEMINI=""
 _FROZEN_QODER=""
+_FROZEN_PI=""
+_PI_SETUP_CAPABLE=false
 _FROZEN_SCOPE_ROOT=""
 _FROZEN_CLIENT_EXEC=""
 _STATE_MIGRATION_CAPABLE=false
@@ -126,6 +129,7 @@ _CODEX_EXEC=codex
 _OPENCODE_EXEC=opencode
 _GEMINI_EXEC=gemini
 _QODER_EXEC=qoder
+_PI_EXEC=pi
 _PROGRESS_IDS=()
 _PROGRESS_PHASES=()
 _PROGRESS_OUTCOMES=()
@@ -287,16 +291,20 @@ check_prerequisites() {
         echo "Qoder CLI not found in selected PATH; install Qoder CLI first." >&2
         return 1
     fi
+    if [ "$PRODUCT" = pi ] && ! command -v "$_PI_EXEC" >/dev/null 2>&1; then
+        echo "Pi CLI not found in selected PATH; install Pi first." >&2
+        return 1
+    fi
     # Do not add host CLI min/max ranges, exact pins, or prerelease filters here.
     # New agent releases must not require an installer update just for admission.
     # Test-version pins are reproducibility evidence, not compatibility allowlists.
     # Capability/schema failures are handled by each integration at its boundary.
-    if { [ "$PRODUCT" = opencode ] || [ "$PRODUCT" = gemini ] || [ "$PRODUCT" = qoder ]; } && [ "$(bootstrap_release_os_arch)" = "windows arm64" ]; then
+    if { [ "$PRODUCT" = opencode ] || [ "$PRODUCT" = gemini ] || [ "$PRODUCT" = qoder ] || [ "$PRODUCT" = pi ]; } && [ "$(bootstrap_release_os_arch)" = "windows arm64" ]; then
         echo "Windows arm64 is not supported." >&2
         return 1
     fi
-    if { [ "$PRODUCT" = opencode ] || [ "$PRODUCT" = gemini ] || [ "$PRODUCT" = qoder ]; } && [ "$(uname -s)" = Darwin ] &&
-        { [[ " ${OPENCODE_ARGS[*]-} " = *" --desktop "* ]] || [[ " ${OPENCODE_ARGS[*]-} " = *" --desktop=true "* ]] || [[ " ${_FROZEN_OPENCODE_CHANNELS[*]-} ${_FROZEN_GEMINI_CHANNELS[*]-} ${_FROZEN_QODER_CHANNELS[*]-} " = *" --desktop=true "* ]]; } && ! command -v unzip >/dev/null 2>&1; then
+    if { [ "$PRODUCT" = opencode ] || [ "$PRODUCT" = gemini ] || [ "$PRODUCT" = qoder ] || [ "$PRODUCT" = pi ]; } && [ "$(uname -s)" = Darwin ] &&
+        { [[ " ${OPENCODE_ARGS[*]-} " = *" --desktop "* ]] || [[ " ${OPENCODE_ARGS[*]-} " = *" --desktop=true "* ]] || [[ " ${_FROZEN_OPENCODE_CHANNELS[*]-} ${_FROZEN_GEMINI_CHANNELS[*]-} ${_FROZEN_QODER_CHANNELS[*]-} " = *" --desktop=true "* ]] || [[ " ${_FROZEN_PI_CHANNELS[*]-} " = *" --pi-desktop=true "* ]]; } && ! command -v unzip >/dev/null 2>&1; then
         echo "unzip is required for the signed macOS notification helper." >&2
         exit 1
     fi
@@ -1813,7 +1821,7 @@ complete_configure_route() {
     local nav="" app="" team="" unknown="" asserted="" i=0
     while [ "$i" -lt "${#CONFIGURE_ARGS[@]}" ]; do
         case "${CONFIGURE_ARGS[$i]}" in
-            --navigation|--app|--team-id|--allow-unknown-caller|--allow-caller-asserted|--codex-home|--scope-root|--client-executable)
+            --navigation|--app|--team-id|--allow-unknown-caller|--allow-caller-asserted|--codex-home|--pi-agent-dir|--pi-executable|--scope-root|--client-executable)
                 i=$((i + 1))
                 [ "$i" -lt "${#CONFIGURE_ARGS[@]}" ] || { echo "Missing value for ${CONFIGURE_ARGS[$((i - 1))]}" >&2; return 1; }
                 case "${CONFIGURE_ARGS[$((i - 1))]}" in
@@ -1872,7 +1880,7 @@ complete_configure_route() {
 # Product selection must precede any filesystem or host CLI mutation.
 select_product() {
     local seen_agent_notify=false seen_skip_agent_notify=false seen_flags="" key value
-    local scope_root="" client_exec=""
+    local scope_root="" client_exec="" pi_scope=false pi_scope_args=0
     while [ "$#" -gt 0 ]; do
         key=${1%%=*}
         case "$key" in
@@ -1943,6 +1951,16 @@ select_product() {
                 case "$value" in /*|[A-Za-z]:/*|[A-Za-z]:\\*) ;; *) echo "$key must be absolute." >&2; return 1 ;; esac
                 case "$key" in --scope-root) scope_root=$value ;; *) client_exec=$value ;; esac
                 CONFIGURE_ARGS+=("$key" "$value") ;;
+            --pi-agent-dir|--pi-agent-dir=*|--pi-executable|--pi-executable=*)
+                case "$1" in
+                    *=*) value=${1#*=}; shift ;;
+                    *) [ "$#" -ge 2 ] || { echo "Missing value for $key" >&2; return 1; }; value=$2; shift 2 ;;
+                esac
+                [ "${#value}" -le 4096 ] || return 1
+                case "$value" in /*|[A-Za-z]:/*|[A-Za-z]:\\*) ;; *) echo "$key must be absolute." >&2; return 1 ;; esac
+                pi_scope=true
+                pi_scope_args=$((pi_scope_args + 2))
+                CONFIGURE_ARGS+=("$key" "$value") ;;
             --navigation=*|--app=*|--team-id=*|--allow-unknown-caller=*|--allow-caller-asserted=*|--codex-home=*)
                 value=${1#*=}; shift; set -- "$key" "$value" "$@"
                 # Already recorded this key; the value branch below consumes it.
@@ -1977,7 +1995,7 @@ select_product() {
                 CONFIGURE_ARGS+=("$1")
                 shift ;;
             --help|-h)
-                echo "Usage: bash bootstrap.sh [--product claude|codex|both|opencode|gemini|qoder|cursor | --products claude,codex,opencode,gemini,qoder,cursor] [--desktop] [--webhook] [--agent-notify|--skip-agent-notify] [--navigation none] [--scope-root PATH --client-executable PATH (advanced Cursor override)]"
+                echo "Usage: bash bootstrap.sh [--product claude|codex|both|opencode|gemini|qoder|cursor|pi | --products claude,codex,opencode,gemini,qoder,cursor,pi] [--desktop] [--webhook] [--agent-notify|--skip-agent-notify] [--navigation none] [--pi-agent-dir PATH --pi-executable PATH] [--scope-root PATH --client-executable PATH (advanced Cursor override)]"
                 exit 0 ;;
             *) echo "Unknown option: $1" >&2; return 1 ;;
         esac
@@ -1999,6 +2017,7 @@ select_product() {
         # Pure syntax only; applicability is checked after product selection.
         local selected_scope_count=0
         [ -z "$scope_root" ] || selected_scope_count=4
+        selected_scope_count=$((selected_scope_count + pi_scope_args))
         if [ "$AGENT_NOTIFY_REQUEST" = skip ] && [ "${#CONFIGURE_ARGS[@]}" -gt "$selected_scope_count" ]; then
             echo "Route flags require --agent-notify." >&2; return 1
         fi
@@ -2009,10 +2028,13 @@ select_product() {
     case "$PRODUCT" in
         bundle:*) csv=${PRODUCT#bundle:} ;;
         both) csv=claude,codex ;;
-        claude|codex|opencode|gemini|qoder|cursor) csv=$PRODUCT ;;
-        *) echo "Invalid product: $PRODUCT; use claude, codex, both, opencode, gemini, qoder or cursor." >&2; return 1 ;;
+        claude|codex|opencode|gemini|qoder|pi|cursor) csv=$PRODUCT ;;
+        *) echo "Invalid product: $PRODUCT; use claude, codex, both, opencode, gemini, qoder, pi or cursor." >&2; return 1 ;;
     esac
     case "$csv" in ''|,*|*,|*,,*) echo "Product selection contains an empty product." >&2; return 1 ;; esac
+    if [ "$pi_scope" = true ]; then
+        case ",$csv," in *,pi,*) ;; *) echo "Pi profile arguments require Pi selection." >&2; return 1 ;; esac
+    fi
     case ",$csv," in
         *,cursor,*) ;;
         *) [ -z "$scope_root$client_exec" ] || { echo "Selected scope/client arguments require Cursor." >&2; return 1; } ;;
@@ -2023,7 +2045,7 @@ select_product() {
     while :; do
         selected=${remaining%%,*}
         case "$selected" in
-            claude|codex|opencode|gemini|qoder|cursor) ;;
+            claude|codex|opencode|gemini|qoder|cursor|pi) ;;
             *) echo "Unknown product: $selected" >&2; return 1 ;;
         esac
         case ",$seen," in *",$selected,"*) echo "Duplicate product: $selected" >&2; return 1 ;; esac
@@ -2032,15 +2054,15 @@ select_product() {
         case "$selected" in
             claude|codex)
                 if [ -z "$LEGACY_PRODUCT" ]; then LEGACY_PRODUCT=$selected; else LEGACY_PRODUCT=both; fi ;;
-            opencode|gemini|qoder|cursor) observers=$((observers+1)) ;;
+            opencode|gemini|qoder|cursor|pi) observers=$((observers+1)) ;;
         esac
         case "$remaining" in *,*) remaining=${remaining#*,} ;; *) break ;; esac
     done
     if [ "$observers" -eq 0 ] && [ "${#OPENCODE_ARGS[@]}" -gt 0 ]; then
-        echo "--desktop/--webhook require OpenCode, Gemini, Qoder or Cursor." >&2; return 1
+        echo "--desktop/--webhook require OpenCode, Gemini, Qoder, Cursor or Pi." >&2; return 1
     fi
-    local advanced_count=0
-    [ -z "$scope_root" ] || advanced_count=4
+    local advanced_count=$pi_scope_args
+    [ -z "$scope_root" ] || advanced_count=$((advanced_count + 4))
     if [ -z "$LEGACY_PRODUCT" ]; then
         if { [ "$seen_agent_notify" = true ] || [ "$seen_skip_agent_notify" = true ]; } && [[ ",$csv," != *,cursor,* ]] || [ "${#CONFIGURE_ARGS[@]}" -ne "$advanced_count" ]; then
             echo "Observers use --desktop/--webhook consent, not agent-notify or navigation flags." >&2
@@ -2849,6 +2871,7 @@ compact_rich_setup_summary() {
             if ($0 == "  OpenCode - installed; restart required to load the global plugin.") client = "opencode"
             if ($0 == "  Gemini CLI - installed; restart required.") client = "gemini"
             if ($0 == "  Qoder - installed; restart required.") client = "qoder"
+            if ($0 == "  Pi - installed; restart Pi to load the native extension.") client = "pi"
             if (client != "") {
                 current = client
                 if (chosen(client)) next
@@ -2924,7 +2947,7 @@ report_progress() {
         if [ "$outcome" = completed ] && [ "${1:-0}" -eq 0 ] && [ "${BOOTSTRAP_VERBOSE:-0}" != 1 ] && [ "$_PROGRESS_JOURNAL_DISABLED" != true ]; then
             i=$((i + 1)); continue
         fi
-        case "${_PROGRESS_IDS[$i]}" in claude) label='Claude Code' ;; codex) label='Codex CLI' ;; opencode) label=OpenCode ;; gemini) label='Gemini CLI' ;; qoder) label=Qoder ;; cursor) label=Cursor ;; *) label=Client ;; esac
+        case "${_PROGRESS_IDS[$i]}" in claude) label='Claude Code' ;; codex) label='Codex CLI' ;; opencode) label=OpenCode ;; gemini) label='Gemini CLI' ;; qoder) label=Qoder ;; pi) label=Pi ;; cursor) label=Cursor ;; *) label=Client ;; esac
         case "$outcome" in
             not_started) outcome='queued; not started' ;;
             completed) outcome='completed; restart required' ;;
@@ -3028,6 +3051,9 @@ observer_install_apply() {
 
 parallel_install_available() {
     [ "${#SELECTED_PRODUCTS[@]}" -gt 1 ] && [ "$_PRODUCT_CSV" != cursor ] || return 1
+    # Pi's common portable call follows the existing primary stages. Its
+    # immutable intent must observe any runtime preparation they committed.
+    case ",$_PRODUCT_CSV," in *,pi,*) return 1 ;; esac
     local capability
     capability=$("$_CONFIG_HELPER" installer-progress --parallel-capabilities </dev/null 2>/dev/null) || return 1
     [ "$capability" = installer-parallel-v1 ]
@@ -3541,7 +3567,7 @@ selector_record() {
     local item remaining=$_SELECTOR_RECORD seen=""
     while :; do
         item=${remaining%%,*}
-        case "$1:$item" in products:claude|products:codex|products:opencode|products:gemini|products:qoder|products:cursor|channels:desktop|channels:webhook) ;; *) echo "Invalid selector ID." >&2; return 1 ;; esac
+        case "$1:$item" in products:claude|products:codex|products:opencode|products:gemini|products:qoder|products:pi|products:cursor|channels:desktop|channels:webhook) ;; *) echo "Invalid selector ID." >&2; return 1 ;; esac
         case ",$seen," in *",$item,"*) echo "Duplicate selector ID." >&2; return 1 ;; esac
         seen=${seen:+$seen,}$item
         case "$remaining" in *,*) remaining=${remaining#*,} ;; *) break ;; esac
@@ -3555,6 +3581,7 @@ load_frozen_dispatch() {
     [ -z "${AGENT_NOTIFICATIONS_CONFIG:-}" ] || config_explicit=true
     _FROZEN_GLOBAL_CONFIG=""
     _FROZEN_STATE_MIGRATION_REQUIRED=""
+    _FROZEN_PI_CHANNELS=()
     local result="$_CONFIG_STAGE/intent-args.result" status=0 size key value seen=""
     "$_CONFIG_HELPER" setup-products intent-args --intent-file "$_SELECTOR_INTENT" >"$result" </dev/null || status=$?
     [ "$status" -eq 0 ] || return "$status"
@@ -3577,7 +3604,7 @@ load_frozen_dispatch() {
                 case "$value" in true|false) ;; *) return 1 ;; esac
                 _FROZEN_STATE_MIGRATION_REQUIRED=$value
                 continue ;;
-            opencode-channel-preimage|gemini-channel-preimage|qoder-channel-preimage|cursor-channel-preimage)
+            opencode-channel-preimage|gemini-channel-preimage|qoder-channel-preimage|pi-channel-preimage|cursor-channel-preimage)
                 if [ "$value" != absent ]; then
                     [ "${#value}" -eq 64 ] || return 1
                     case "$value" in *[!0-9a-f]*) return 1 ;; esac
@@ -3587,11 +3614,12 @@ load_frozen_dispatch() {
                     opencode-*) _FROZEN_OPENCODE_CHANNELS+=("--channel-preimage=$value") ;;
                     gemini-*) _FROZEN_GEMINI_CHANNELS+=("--channel-preimage=$value") ;;
                     qoder-*) _FROZEN_QODER_CHANNELS+=("--channel-preimage=$value") ;;
+                    pi-*) _FROZEN_PI_CHANNELS+=("--$key=$value") ;;
                 esac
                 continue ;;
         esac
         case "$key" in
-            opencode-desktop|opencode-webhook|gemini-desktop|gemini-webhook|qoder-desktop|qoder-webhook|cursor-desktop|cursor-webhook)
+            opencode-desktop|opencode-webhook|gemini-desktop|gemini-webhook|qoder-desktop|qoder-webhook|pi-desktop|pi-webhook|cursor-desktop|cursor-webhook)
                 case "$value" in true|false) ;; *) return 1 ;; esac
                 case ",$_PRODUCT_CSV," in *",${key%-*},"*) ;; *) return 1 ;; esac
                 case "$key" in
@@ -3600,6 +3628,7 @@ load_frozen_dispatch() {
                     qoder-*) _FROZEN_QODER_CHANNELS+=("--${key#qoder-}=$value") ;;
                     cursor-desktop) _FROZEN_CURSOR_DESKTOP=$value ;;
                     cursor-webhook) _FROZEN_CURSOR_WEBHOOK=$value ;;
+                    pi-*) _FROZEN_PI_CHANNELS+=("--$key=$value") ;;
                 esac
                 continue ;;
         esac
@@ -3613,6 +3642,7 @@ load_frozen_dispatch() {
             opencode-config-dir) _FROZEN_OPENCODE=$value; export OPENCODE_CONFIG_DIR="$value" ;;
             gemini-config-root) _FROZEN_GEMINI=$value ;;
             qoder-config-root) _FROZEN_QODER=$value ;;
+            pi-agent-dir) _FROZEN_PI=$value ;;
             control-root) _FROZEN_CONTROL=$value ;;
             runtime-root) _FROZEN_RUNTIME=$value ;;
             global-config)
@@ -3625,6 +3655,7 @@ load_frozen_dispatch() {
             opencode-executable) _OPENCODE_EXEC=$value ;;
             gemini-executable) _GEMINI_EXEC=$value ;;
             qoder-executable) _QODER_EXEC=$value ;;
+            pi-executable) _PI_EXEC=$value ;;
             scope-root) _FROZEN_SCOPE_ROOT=$value ;;
             client-executable) _FROZEN_CLIENT_EXEC=$value ;;
             *) return 1 ;;
@@ -3642,6 +3673,7 @@ load_frozen_dispatch() {
             opencode) required="$required opencode-config-dir opencode-executable opencode-desktop opencode-webhook opencode-channel-preimage" ;;
             gemini) required="$required gemini-config-root gemini-executable gemini-desktop gemini-webhook gemini-channel-preimage" ;;
             qoder) required="$required qoder-config-root qoder-executable qoder-desktop qoder-webhook qoder-channel-preimage" ;;
+            pi) required="$required pi-agent-dir pi-executable pi-desktop pi-webhook pi-channel-preimage runtime-root" ;;
             cursor) required="$required scope-root client-executable cursor-desktop cursor-webhook cursor-channel-preimage cursor-seed-enabled" ;;
         esac
     done
@@ -3696,7 +3728,7 @@ selector_scope_args() {
     local i=0
     while [ "$i" -lt "${#CONFIGURE_ARGS[@]}" ]; do
         case "${CONFIGURE_ARGS[$i]}" in
-            --codex-home|--scope-root|--client-executable)
+            --codex-home|--scope-root|--client-executable|--pi-agent-dir|--pi-executable)
                 _SCOPE_ARGS+=("${CONFIGURE_ARGS[$i]}" "${CONFIGURE_ARGS[$((i + 1))]}") ;;
         esac
         i=$((i + 1))
@@ -3710,7 +3742,7 @@ selector_effect_args() {
         local i=0
         while [ "$i" -lt "${#CONFIGURE_ARGS[@]}" ]; do
             case "${CONFIGURE_ARGS[$i]}" in
-                --codex-home|--scope-root|--client-executable) i=$((i + 2)); continue ;;
+                --codex-home|--scope-root|--client-executable|--pi-agent-dir|--pi-executable) i=$((i + 2)); continue ;;
                 --json) i=$((i + 1)); continue ;;
             esac
             _EFFECT_ARGS+=("${CONFIGURE_ARGS[$i]}"); i=$((i + 1))
@@ -3773,9 +3805,17 @@ main() {
         cache_repair_size=$(LC_ALL=C wc -c <"$_SELECTOR_RESULT") || return 1
         [ "$cache_repair_reply" = ready ] && [ "$cache_repair_size" -eq 6 ] || { echo "Invalid cache repair result bytes." >&2; return 1; }
     fi
-    if [ "$_INTERACTIVE_INTENT" = true ] || [[ "$original_product" = bundle:* ]] || [ "$original_product" = gemini ] || [ "$original_product" = qoder ]; then
+    if [ "$_INTERACTIVE_INTENT" = true ] || [[ "$original_product" = bundle:* ]] || [ "$original_product" = gemini ] || [ "$original_product" = qoder ] || [ "$original_product" = pi ]; then
         selector_collect capabilities || return $?
-        selector_exact 'setup-products-v1 claude codex opencode gemini qoder cursor' capabilities || return 1
+        if printf '%s\n' 'setup-products-v1 claude codex opencode gemini qoder cursor pi' | cmp -s - "$_SELECTOR_RESULT"; then
+            _PI_SETUP_CAPABLE=true
+        elif printf '%s\n' 'setup-products-v1 claude codex opencode gemini qoder pi' | cmp -s - "$_SELECTOR_RESULT"; then
+            _PI_SETUP_CAPABLE=true
+        elif printf '%s\n' 'setup-products-v1 claude codex opencode gemini qoder cursor' | cmp -s - "$_SELECTOR_RESULT"; then
+            :
+        else
+            selector_exact 'setup-products-v1 claude codex opencode gemini qoder' capabilities || return 1
+        fi
     fi
     if [ "$_INTERACTIVE_INTENT" = true ]; then
         selector_collect features || return $?
@@ -3793,9 +3833,10 @@ main() {
     fi
     _PRODUCT_CSV=""
     # Canonical product order remains the existing command order.
-    for selected in claude codex opencode gemini qoder cursor; do
+    for selected in claude codex opencode gemini qoder cursor pi; do
         case " ${SELECTED_PRODUCTS[*]} " in *" $selected "*) _PRODUCT_CSV=${_PRODUCT_CSV:+$_PRODUCT_CSV,}$selected ;; esac
     done
+    case ",$_PRODUCT_CSV," in *,pi,*) [ "$_PI_SETUP_CAPABLE" = true ] || { echo "The matching setup helper does not support Pi." >&2; return 1; } ;; esac
     if [ "$_CHANNEL_PENDING" = true ]; then
         selector_collect channels --products "$_PRODUCT_CSV" ${UI_ARGS[@]+"${UI_ARGS[@]}"} || return $?
         selector_record channels || return 1
@@ -3814,7 +3855,7 @@ main() {
     fi
     if [ "$_INTERACTIVE_INTENT" != true ]; then
         case ",$_PRODUCT_CSV," in
-            *,opencode,*|*,gemini,*|*,qoder,*|*,cursor,*)
+            *,opencode,*|*,gemini,*|*,qoder,*|*,cursor,*|*,pi,*)
                 _SELECTOR_INTENT="$_CONFIG_STAGE/selector-intent.json"
                 selector_scope_args
                 selector_collect prepare "${_EFFECT_ARGS[@]}" ${_SCOPE_ARGS[@]+"${_SCOPE_ARGS[@]}"} --intent-file "$_SELECTOR_INTENT" || return $?
@@ -3883,6 +3924,7 @@ main() {
             [ "$status" -eq 0 ] || break
             progress_phase "$selected" complete completed
         done
+
     fi
     # Cursor uses its existing qualified single-target caller after every
     # sibling worker and portable follow-up has completed. Parallel selection
@@ -3904,6 +3946,20 @@ main() {
         else
             progress_phase cursor complete skipped
         fi
+    fi
+    # Pi refreshes its own immutable intent only after every sibling, including
+    # Cursor, has finished using the original confirmed parent.
+    if [ "$status" -eq 0 ]; then
+        case ",$_PRODUCT_CSV," in
+            *,pi,*)
+                PRODUCT=pi
+                run_setup_stage "Installing Pi notifications" install_pi || status=$?
+                if [ "${_PI_CONFIRM_CANCELLED:-false}" = true ]; then
+                    echo "Pi integration canceled; prepared runtime retained."
+                    return 0
+                fi
+                [ "$status" -ne 0 ] || progress_phase pi complete completed ;;
+        esac
     fi
     if [ "$status" -ne 0 ]; then
         report_setup_failure "$status"
@@ -4055,7 +4111,7 @@ configure_agent_policy() {
     local i=0
     while [ "$i" -lt "${#CONFIGURE_ARGS[@]}" ]; do
         case "${CONFIGURE_ARGS[$i]}" in
-            --scope-root|--client-executable) i=$((i + 2)); continue ;;
+            --scope-root|--client-executable|--pi-agent-dir|--pi-executable) i=$((i + 2)); continue ;;
             --navigation|--app|--team-id|--allow-unknown-caller|--allow-caller-asserted|--codex-home)
                 configure_cmd+=("${CONFIGURE_ARGS[$i]}" "${CONFIGURE_ARGS[$((i + 1))]}")
                 i=$((i + 2)); continue ;;
@@ -4079,8 +4135,8 @@ configure_agent_policy() {
 report_wizard_portable_missing() {
     local reason="$1"
     echo -e "${YELLOW}⚠ Agent-notify wizard skipped; ${reason}.${NC}" >&2
-    if [ "$PRODUCT" = cursor ]; then
-        echo "Cursor setup is incomplete; inspect the selected profile and owned state before retrying." >&2
+    if [ "$PRODUCT" = cursor ] || [ "$PRODUCT" = pi ]; then
+        echo "$PRODUCT setup is incomplete; inspect the selected profile and owned state before retrying." >&2
     else
         echo -e "${YELLOW}  Plugin/hooks registration completed. Inspect the selected clients and owned registration before resuming the portable phase with the verified package for this release.${NC}" >&2
     fi
@@ -4096,20 +4152,42 @@ report_wizard_portable_missing() {
 # original decisions before binding the resulting generation for CAS.
 prepare_cursor_runtime() {
     _CURSOR_RUNTIME_PREPARED=false
-    local runtime os arch primary native base target
+    local runtime
     [ -n "$_SELECTOR_INTENT" ] && [ -n "$_FROZEN_CONTROL" ] || return 1
     if runtime=$("$_CONFIG_HELPER" config installer runtime-root "$_FROZEN_CONTROL"); then
         [ -z "$_FROZEN_RUNTIME" ] || [ "$runtime" = "$_FROZEN_RUNTIME" ] || return 1
         _FROZEN_RUNTIME=$runtime
     fi
-    [ -n "$_FROZEN_RUNTIME" ] || return 1
-    target="$_FROZEN_RUNTIME/bin"
+    local -a seed_args=()
+    [ "$_FROZEN_CURSOR_SEED" != true ] || seed_args=(--seed-enabled-if-absent)
+    prepare_managed_runtime ${seed_args[@]+"${seed_args[@]}"} || return $?
+    _CURSOR_RUNTIME_PREPARED=$_MANAGED_RUNTIME_PREPARED
+}
+
+# Shared byte acquisition uses the existing managed-runtime writer. Native
+# products keep their own immutable integration confirmation after this step.
+prepare_managed_runtime() {
+    _MANAGED_RUNTIME_PREPARED=false
+    local runtime os arch primary native base target="$_FROZEN_RUNTIME/bin" pi_preparation=false
+    # Private callers select only Cursor byte preparation or the Pi asset writer.
+    # Reject other requests before the matching-binary shortcut can hide them.
+    case "$#" in
+        0) ;;
+        1) [ "$1" = --seed-enabled-if-absent ] || return 1 ;;
+        2)
+            [ "$1" = --consumer ] && [ "$2" = pi-runtime-preparation ] || return 1
+            pi_preparation=true ;;
+        *) return 1 ;;
+    esac
+    [ -n "$_SELECTOR_INTENT" ] && [ -n "$_FROZEN_CONTROL" ] && [ -n "$_FROZEN_RUNTIME" ] || return 1
     read -r os arch < <(bootstrap_release_os_arch) || return 1
     primary="claude-notifications-$os-$arch"
     [ "$os" != windows ] || primary="$primary.exe"
     if runtime=$("$_CONFIG_HELPER" config installer runtime-root "$_FROZEN_CONTROL"); then
         [ "$runtime" = "$_FROZEN_RUNTIME" ] || return 1
-        if cmp -s "$_CONFIG_HELPER" "$target/$primary"; then return 0; fi
+        # A shared Cursor binary does not imply that Pi's assets are owned.
+        # The existing Go transaction validates and stages them on every Pi call.
+        if cmp -s "$_CONFIG_HELPER" "$target/$primary" && [ "$pi_preparation" != true ]; then return 0; fi
     else
         if [ -e "$_FROZEN_CONTROL/ownership.json" ] || [ -L "$_FROZEN_CONTROL/ownership.json" ] ||
            [ -e "$_FROZEN_RUNTIME" ] || [ -L "$_FROZEN_RUNTIME" ]; then
@@ -4120,9 +4198,13 @@ prepare_cursor_runtime() {
     base="${BOOTSTRAP_RELEASES_BASE_URL:-https://github.com/${REPO}/releases}/download/$BOOTSTRAP_TAG"
     case "$os" in
         darwin)
-            fetch_bootstrap_file "$base/ClaudeNotifier.app.zip" "$_CONFIG_STAGE/ClaudeNotifier.app.zip" || return 1
-            verify_bootstrap_checksum "$_CONFIG_STAGE" ClaudeNotifier.app.zip || return 1
-            unzip -q "$_CONFIG_STAGE/ClaudeNotifier.app.zip" -d "$_CONFIG_STAGE" || return 1 ;;
+            # A preceding selected observer may already have staged this exact
+            # signed app. The common Go writer revalidates native custody.
+            if [ ! -d "$_CONFIG_STAGE/ClaudeNotifier.app" ]; then
+                fetch_bootstrap_file "$base/ClaudeNotifier.app.zip" "$_CONFIG_STAGE/ClaudeNotifier.app.zip" || return 1
+                verify_bootstrap_checksum "$_CONFIG_STAGE" ClaudeNotifier.app.zip || return 1
+                unzip -q "$_CONFIG_STAGE/ClaudeNotifier.app.zip" -d "$_CONFIG_STAGE" || return 1
+            fi ;;
         windows)
             native="claude-notifications-windows-$arch-focus.exe"
             fetch_bootstrap_file "$base/$native" "$_CONFIG_STAGE/$native" || return 1
@@ -4130,13 +4212,73 @@ prepare_cursor_runtime() {
     esac
     # Use the existing verified Go writer with the exact frozen control root.
     # It owns private directory creation, native custody and saved-policy CAS.
-    local -a seed_args=()
-    [ "$_FROZEN_CURSOR_SEED" != true ] || seed_args=(--seed-enabled-if-absent)
     "$_CONFIG_HELPER" internal-install-runtime --stage "$_CONFIG_STAGE" --target "$target" \
-        --entry "$primary" --control-root "$_FROZEN_CONTROL" ${seed_args[@]+"${seed_args[@]}"} || return 1
+        --entry "$primary" --control-root "$_FROZEN_CONTROL" "$@" || return 1
     runtime=$("$_CONFIG_HELPER" config installer runtime-root "$_FROZEN_CONTROL") || return 1
     [ "$runtime" = "$_FROZEN_RUNTIME" ] && cmp -s "$_CONFIG_HELPER" "$target/$primary" || return 1
-    _CURSOR_RUNTIME_PREPARED=true
+    _MANAGED_RUNTIME_PREPARED=true
+}
+
+install_pi() {
+    [ -n "$_SELECTOR_INTENT" ] && [ -n "$_FROZEN_PI" ] && [ -n "$_PI_EXEC" ] || return 1
+    _PI_CONFIRM_CANCELLED=false
+    progress_phase pi preparation state_requires_inspection
+    # This records prepared bytes without pretending a Claude installation
+    # exists. The common composition retires it after the real Pi consumer commits.
+    prepare_managed_runtime --consumer pi-runtime-preparation || return $?
+    # Other selected products may have advanced the shared runtime too. Use a
+    # Pi-only immutable projection after those stages, without replaying them.
+    if [ "$_MANAGED_RUNTIME_PREPARED" = true ] || [ "$_PRODUCT_CSV" != pi ]; then
+        refresh_pi_integration_intent || return $?
+        [ "$_PI_CONFIRM_CANCELLED" != true ] || return 0
+    fi
+    CONFIGURE_BINARY=$_CONFIG_HELPER
+    PLUGIN_ROOT=""
+    progress_phase pi portable state_requires_inspection
+    setup_agent_notify_wizard || return $?
+    local report
+    report=$(mktemp "${TMPDIR:-/tmp}/bootstrap-pi-summary-XXXXXX") || return 1
+    {
+        echo "  Pi - installed; restart Pi to load the native extension."
+        print_delivery_note
+    } > "$report"
+    publish_setup_summary "$report"
+    local status=$?
+    rm -f "$report"
+    return "$status"
+}
+
+refresh_pi_integration_intent() {
+    local control=$_FROZEN_CONTROL runtime=$_FROZEN_RUNTIME profile=$_FROZEN_PI client=$_PI_EXEC config=$_FROZEN_GLOBAL_CONFIG
+    local original_csv=$_PRODUCT_CSV channel operation=prepare expected_channels="${_FROZEN_PI_CHANNELS[*]}"
+    local -a original_products=("${SELECTED_PRODUCTS[@]}") effects=(--products pi) scopes=(--pi-agent-dir "$profile" --pi-executable "$client")
+    for channel in "${_FROZEN_PI_CHANNELS[@]}"; do
+        case "$channel" in --pi-desktop=*|--pi-webhook=*) effects+=("--${channel#--pi-}") ;; esac
+    done
+    _SELECTOR_INTENT="$_CONFIG_STAGE/selector-pi-runtime-intent.json"
+    if [ "$_INTERACTIVE_INTENT" = true ]; then
+        echo "Review Pi integration in the prepared shared runtime."
+        exec 3<>/dev/tty || return 1
+        _PROMPT_OPEN=true
+        operation=confirm
+    fi
+    selector_collect "$operation" "${effects[@]}" "${scopes[@]}" --intent-file "$_SELECTOR_INTENT" ${UI_ARGS[@]+"${UI_ARGS[@]}"} || { close_prompt; return 1; }
+    if [ "$operation" = confirm ] && [ ! -s "$_SELECTOR_RESULT" ]; then
+        close_prompt
+        _PI_CONFIRM_CANCELLED=true
+        return 0
+    fi
+    if [ "$operation" = confirm ]; then selector_exact approved confirm; else selector_exact prepared prepare; fi || { close_prompt; return 1; }
+    close_prompt
+    _PRODUCT_CSV=pi; SELECTED_PRODUCTS=(pi)
+    local status=0
+    load_frozen_dispatch || status=$?
+    _PRODUCT_CSV=$original_csv; SELECTED_PRODUCTS=("${original_products[@]}")
+    [ "$status" -eq 0 ] || return "$status"
+    [ "$_FROZEN_CONTROL" = "$control" ] && [ "$_FROZEN_RUNTIME" = "$runtime" ] &&
+        [ "$_FROZEN_PI" = "$profile" ] && [ "$_PI_EXEC" = "$client" ] &&
+        [ "$_FROZEN_GLOBAL_CONFIG" = "$config" ] && [ "${_FROZEN_PI_CHANNELS[*]}" = "$expected_channels" ] || return 1
+    "$_CONFIG_HELPER" setup-products preflight --intent-file "$_SELECTOR_INTENT" "${effects[@]}" </dev/null
 }
 
 bootstrap_abs_command() {
@@ -4180,8 +4322,8 @@ setup_agent_notify_wizard() {
     local policy_help
     policy_help=$("$CONFIGURE_BINARY" setup-notifications --help </dev/null 2>/dev/null) || policy_help=""
     if [[ "$policy_help" != *--policy-only* || "$policy_help" != *--preserve-enabled* ]]; then
-        if [ "$PRODUCT" = cursor ]; then
-            echo "Cursor setup is incomplete; the matching portable setup caller is required." >&2
+        if [ "$PRODUCT" = cursor ] || [ "$PRODUCT" = pi ]; then
+            echo "$PRODUCT setup is incomplete; the matching portable setup caller is required." >&2
         else
             echo "agent-notify setup skipped; installed binary predates portable setup. Plugin/hooks install succeeded. Update to a matching release before enabling MCP." >&2
         fi
@@ -4196,6 +4338,7 @@ setup_agent_notify_wizard() {
         codex) agents=codex ;;
         both) agents=claude,codex ;;
         cursor) agents=cursor ;;
+        pi) agents=pi ;;
         *) echo "invalid product for wizard: $PRODUCT" >&2; return 1 ;;
     esac
     while [ "$i" -lt "${#CONFIGURE_ARGS[@]}" ]; do
@@ -4234,7 +4377,9 @@ setup_agent_notify_wizard() {
     fi
     # Preserve policy enablement and accepted route/consent before the wizard
     # migrates client registration to the portable package.
-    if [ "$PRODUCT" = cursor ]; then
+    if [ "$PRODUCT" = pi ]; then
+        [ -n "$_SELECTOR_INTENT" ] && [ -n "$_FROZEN_PI" ] && [ -n "$_PI_EXEC" ] || return 1
+    elif [ "$PRODUCT" = cursor ]; then
         [ -n "$_SELECTOR_INTENT" ] && [ -n "$_FROZEN_SCOPE_ROOT" ] && [ -n "$_FROZEN_CLIENT_EXEC" ] || return 1
         # The approved caller derives its observer from the installed primary;
         # the selected vendor executable is only client authority.
@@ -4249,20 +4394,22 @@ setup_agent_notify_wizard() {
     fi
     set -- setup-notifications wizard --action install --install-or-update --agents "$agents" --hooks false --agent-notify true --yes \
         --package "$package_root"
-    [ "$PRODUCT" = cursor ] || set -- "$@" --plugin-root "$plugin_root"
+    case "$PRODUCT" in cursor|pi) ;; *) set -- "$@" --plugin-root "$plugin_root" ;; esac
     if [ -n "$_SELECTOR_INTENT" ]; then
         if [ "$PRODUCT" != cursor ] && [ -n "$_PARALLEL_READY_CLIENTS" ]; then
             set -- "$@" --bootstrap-ready-clients "$_PARALLEL_READY_CLIENTS" --bootstrap-progress-file "$_PROGRESS_JOURNAL"
         fi
         set -- "$@" --bootstrap-intent-file "$_SELECTOR_INTENT" --control-root "$_FROZEN_CONTROL" --global-config "$_FROZEN_GLOBAL_CONFIG"
         [ -z "$_FROZEN_RUNTIME" ] || set -- "$@" --runtime-root "$_FROZEN_RUNTIME"
-        if [ "$PRODUCT" != cursor ]; then
+        if [ "$PRODUCT" != cursor ] && [ "$PRODUCT" != pi ]; then
             [ -z "$_FROZEN_CODEX_MCP" ] || set -- "$@" --mcp-config "$_FROZEN_CODEX_MCP"
         fi
     else
         [ "$AGENT_NOTIFY_REQUEST" != auto ] || set -- "$@" --preserve-existing-units
     fi
-    if [ "$PRODUCT" != cursor ]; then
+    if [ "$PRODUCT" = pi ]; then
+        set -- "$@" --pi-agent-dir "$_FROZEN_PI" --pi-executable "$_PI_EXEC" "${_FROZEN_PI_CHANNELS[@]}"
+    elif [ "$PRODUCT" != cursor ]; then
         case "$(uname -s 2>/dev/null)" in
             MINGW*|MSYS*|CYGWIN*) ;; # Go resolves the native managed .exe from the installed primary.
             *) set -- "$@" --helper "$CONFIGURE_BINARY" ;;
@@ -4326,7 +4473,9 @@ setup_agent_notify_wizard() {
     cat "$wizard_result"
     # Keep failure output human and runnable; only the post-commit read uses JSON.
     set -- setup-notifications wizard --action inspect --agents "$agents" --json
-    if [ "$PRODUCT" = cursor ]; then
+    if [ "$PRODUCT" = pi ]; then
+        set -- "$@" --pi-agent-dir "$_FROZEN_PI" --pi-executable "$_PI_EXEC"
+    elif [ "$PRODUCT" = cursor ]; then
         set -- "$@" --scope-root "$_FROZEN_SCOPE_ROOT" --client-executable "$_FROZEN_CLIENT_EXEC"
     else
         set -- "$@" --codex-home "$wizard_codex_home" --claude-config "$CLAUDE_HOME"
@@ -4335,7 +4484,7 @@ setup_agent_notify_wizard() {
     if [ -n "$_SELECTOR_INTENT" ]; then
         set -- "$@" --control-root "$_FROZEN_CONTROL" --global-config "$_FROZEN_GLOBAL_CONFIG"
         [ -z "$_FROZEN_RUNTIME" ] || set -- "$@" --runtime-root "$_FROZEN_RUNTIME"
-        if [ "$PRODUCT" != cursor ]; then
+        if [ "$PRODUCT" != cursor ] && [ "$PRODUCT" != pi ]; then
             [ -z "$_FROZEN_CODEX_MCP" ] || set -- "$@" --mcp-config "$_FROZEN_CODEX_MCP"
         fi
     fi
@@ -4368,8 +4517,12 @@ apply_wizard_progress() {
             next)
                 [ "$phase" = category ] || { status=1; break; }
                 case "$outcome" in activation_available|unavailable) recovery=$outcome ;; *) status=1; break ;; esac ;;
-            claude|codex|opencode|gemini|qoder|cursor)
-                [ "$phase" = MCP ] || { status=1; break; }
+            claude|codex|opencode|gemini|qoder|pi|cursor)
+                if [ "$kind" = pi ]; then
+                    [ "$phase" = registration ] || { status=1; break; }
+                else
+                    [ "$phase" = MCP ] || { status=1; break; }
+                fi
                 case "$outcome" in activation_failed|activation_not_attempted|activation_timeout|activation_canceled|activation_deadline|completed|skipped|registration_committed|state_requires_inspection) ;; *) status=1; break ;; esac
                 case "$seen" in *" $kind "*) status=1; break ;; esac
                 seen="$seen$kind "

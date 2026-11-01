@@ -28,7 +28,7 @@ type session struct {
 
 func (s *session) apply(kind string, e event) bool {
 	changed := s.rows.update(e)
-	order := map[string]int{"claude": 0, "codex": 1, "opencode": 2, "gemini": 3, "qoder": 4, "cursor": 5, "global": 6}
+	order := map[string]int{"claude": 0, "codex": 1, "opencode": 2, "gemini": 3, "qoder": 4, "pi": 5, "cursor": 6, "global": 7}
 	sort.SliceStable(s.rows.rows, func(i, j int) bool { return order[s.rows.rows[i].client] < order[s.rows.rows[j].client] })
 	if kind != "transition" {
 		return changed

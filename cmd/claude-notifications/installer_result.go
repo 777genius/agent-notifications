@@ -61,7 +61,7 @@ func writeInstallerResult(path string, out io.Writer) error {
 		if target.Unit != "agent-notify" && target.Unit != "direct-mcp" {
 			continue
 		}
-		if target.Client != "claude" && target.Client != "codex" && target.Client != "opencode" && target.Client != "gemini" && target.Client != "cursor" || seen[target.Client] {
+		if target.Client != "claude" && target.Client != "codex" && target.Client != "opencode" && target.Client != "gemini" && target.Client != "cursor" && target.Client != "pi" || seen[target.Client] {
 			continue
 		}
 		seen[target.Client] = true
@@ -84,7 +84,7 @@ func writeInstallerResult(path string, out io.Writer) error {
 				outcome = "registration_committed"
 			}
 		}
-		if _, err := fmt.Fprintf(out, "%s\tMCP\t%s\n", target.Client, outcome); err != nil {
+		if _, err := fmt.Fprintf(out, "%s\t%s\t%s\n", target.Client, installerTargetPhase(target.Client), outcome); err != nil {
 			return err
 		}
 	}
@@ -138,4 +138,11 @@ func usableInstallerRecovery(next setupwizard.NextAction) bool {
 	}
 	req, _, err := parseSetupWizard(next.Command[2:])
 	return err == nil && req.Yes && filepath.IsAbs(req.ControlRoot) && (req.Action == setupwizard.ActionInstall || req.Action == setupwizard.ActionUpdate || req.Action == setupwizard.ActionRepair)
+}
+
+func installerTargetPhase(client string) string {
+	if client == "pi" {
+		return "registration"
+	}
+	return "MCP"
 }

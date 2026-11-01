@@ -18,6 +18,7 @@ const (
 	AgentQoder                 AgentID = "qoder"
 	AgentOpenCode              AgentID = "opencode"
 	AgentGemini                AgentID = "gemini"
+	AgentPi                    AgentID = "pi"
 	AgentCopilotVSCode         AgentID = "copilot-vscode"
 	AgentCursor                AgentID = "cursor"
 	AssetRootPlaceholder               = "AGENT_NOTIFICATIONS_ROOT"

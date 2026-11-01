@@ -12,6 +12,7 @@ final class OwnedRequest {
     private let receiptName: String
     private var attempted = false
     private var ownsReceipt = false
+    private var claimIdentity: (dev_t, ino_t)?
 
     init(requestPath: String, receiptPath: String) throws {
         let request = URL(fileURLWithPath: requestPath)
@@ -58,6 +59,9 @@ final class OwnedRequest {
         let claim = openat(directory, nonce + ".claim",
                            O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
         guard claim >= 0 else { throw NativeReason.invalid_file }
+        var claimMetadata = stat()
+        guard fstat(claim, &claimMetadata) == 0 else { close(claim); throw NativeReason.invalid_file }
+        claimIdentity = (claimMetadata.st_dev, claimMetadata.st_ino)
         close(claim)
         ownsReceipt = true
         let fd = openat(directory, requestName, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
@@ -91,6 +95,27 @@ final class OwnedRequest {
             throw NativeReason.invalid_file
         }
         let data = try JSONEncoder().encode(receipt)
+        try writeExclusive(data, name: receiptName)
+    }
+
+    // Context mode retains this exact claim as a cancellation lease. The
+    // caller removes it before reading the started-process receipt and killing
+    // that exact app. Recreating a same-named claim cannot revive this reader.
+    func contextIsLive() -> Bool {
+        guard ownsReceipt, let identity = claimIdentity else { return false }
+        var metadata = stat()
+        return fstatat(directory, nonce + ".claim", &metadata, AT_SYMLINK_NOFOLLOW) == 0 &&
+            metadata.st_dev == identity.0 && metadata.st_ino == identity.1 &&
+            metadata.st_mode & S_IFMT == S_IFREG && metadata.st_mode & 0o7777 == 0o600 &&
+            metadata.st_uid == geteuid() && metadata.st_nlink == 1
+    }
+
+    func writeContextStarted(_ data: Data) throws {
+        guard contextIsLive(), data.count <= 1024 else { throw NativeReason.invalid_file }
+        try writeExclusive(data, name: nonce + ".started")
+    }
+
+    private func writeExclusive(_ data: Data, name: String) throws {
         let temporary = nonce + "." + UUID().uuidString + ".tmp"
         let fd = openat(directory, temporary, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
         guard fd >= 0 else { throw NativeReason.invalid_file }
@@ -105,7 +130,7 @@ final class OwnedRequest {
             }
         }
         guard fsync(fd) == 0,
-              linkat(directory, temporary, directory, receiptName, 0) == 0 else {
+              linkat(directory, temporary, directory, name, 0) == 0 else {
             throw NativeReason.invalid_file
         }
     }

@@ -16,6 +16,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	notificationassets "github.com/777genius/agent-notifications"
+	"github.com/777genius/agent-notifications/internal/agentnotify/piauthority"
 	"github.com/777genius/agent-notifications/internal/installruntime"
 	"github.com/777genius/agent-notifications/skills"
 )
@@ -425,7 +427,15 @@ func installRuntime(args []string, output io.Writer) error {
 				// read that removal as a foreign edit.
 				extra = append(extra, installruntime.File{Path: legacy, Before: legacyBefore, Remove: true})
 			}
-			return append(extra, installruntime.File{Path: path, Before: before, Data: skills.AgentNotify(), Mode: 0600}), nil
+			extra = append(extra, installruntime.File{Path: path, Before: before, Data: skills.AgentNotify(), Mode: 0600})
+			if req.ConsumerID == piauthority.PreparationConsumer {
+				assets, err := preparePiRuntimeAssets(req.RuntimeRoot, ledger)
+				if err != nil {
+					return nil, err
+				}
+				extra = append(extra, assets...)
+			}
+			return extra, nil
 		}
 	}
 	ledger, err := installruntime.Commit(ctx, req)
@@ -460,6 +470,30 @@ func installRuntime(args []string, output io.Writer) error {
 		}
 	}
 	return err
+}
+
+func preparePiRuntimeAssets(root string, ledger installruntime.Ledger) ([]installruntime.File, error) {
+	names := []string{"claude_icon.png", "sounds/task-complete.mp3", "sounds/review-complete.mp3", "sounds/question.mp3", "sounds/plan-ready.mp3", "sounds/error.mp3"}
+	files := make([]installruntime.File, 0, len(names))
+	for _, name := range names {
+		path := filepath.Join(root, filepath.FromSlash(name))
+		before, err := installruntime.Fingerprint(path)
+		if err != nil {
+			return nil, err
+		}
+		if before.Exists {
+			owned, ok := installruntime.OwnedFile(ledger, path)
+			if !ok || owned != before || before.Link != "" {
+				return nil, fmt.Errorf("pi runtime asset is not an unchanged owned file: %s", path)
+			}
+		}
+		body, err := notificationassets.NotificationAssets.ReadFile(name)
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, installruntime.File{Path: path, Before: before, Data: body, Mode: 0600})
+	}
+	return files, nil
 }
 
 func seedCommittedRuntimeEnablement(ctx context.Context, runtimeRequest installruntime.Request, committed installruntime.Ledger) (installruntime.Ledger, error) {

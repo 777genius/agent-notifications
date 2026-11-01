@@ -29,13 +29,14 @@ main() {
     seen=""
     route_seen=""
     nav="" app="" team="" caller_unknown="" caller_asserted="" notify=""
-    scope_root="" client_exec=""
+    scope_root="" client_exec="" pi_scope=0
     cursor_args=()
+    pi_args=()
     # Classify questions and validate new flags before the first download.
     while [ "$#" -gt 0 ]; do
         key=${1%%=*}
         case "$key" in
-            --ui|--plain|--product|--products|--desktop|--webhook|--json|--scope-root|--client-executable)
+            --ui|--plain|--product|--products|--desktop|--webhook|--json|--scope-root|--client-executable|--pi-agent-dir|--pi-executable)
                 case "$key" in
                     --ui|--plain) ;;
                     *) case ",$seen," in *",$key,"*) echo "Use $key once." >&2; exit 1 ;; esac
@@ -72,7 +73,7 @@ main() {
                 esac
                 [ -n "$singleton" ] || { echo "Empty product selector." >&2; exit 1; }
                 if [ "$selector" = --product ]; then
-                    case "$singleton" in claude|codex|both|opencode|gemini|qoder|cursor) ;; *) echo "Invalid product." >&2; exit 1 ;; esac
+                    case "$singleton" in claude|codex|both|opencode|gemini|qoder|cursor|pi) ;; *) echo "Invalid product." >&2; exit 1 ;; esac
                 fi ;;
             --scope-root|--scope-root=*|--client-executable|--client-executable=*)
                 case "$1" in
@@ -81,6 +82,13 @@ main() {
                 esac
                 case "$value" in /*|[A-Za-z]:/*|[A-Za-z]:\\*) ;; *) echo "Path must be absolute." >&2; exit 1 ;; esac
                 case "$key" in --scope-root) scope_root=$value ;; *) client_exec=$value ;; esac ;;
+            --pi-agent-dir|--pi-agent-dir=*|--pi-executable|--pi-executable=*)
+                case "$1" in
+                    *=*) value=${1#*=}; shift ;;
+                    *) [ "$#" -ge 2 ] || { echo "Missing value for $key." >&2; exit 1; }; value=$2; shift 2 ;;
+                esac
+                case "$value" in /*|[A-Za-z]:/*|[A-Za-z]:\\*) ;; *) echo "Path must be absolute." >&2; exit 1 ;; esac
+                pi_scope=1 ;;
             --desktop|--webhook|--desktop=true|--desktop=false|--webhook=true|--webhook=false) channels=$((channels + 1)); shift ;;
             --json) json=1; shift ;;
             --agent-notify|--skip-agent-notify|--request-permission|--preserve-policy|--navigation|--navigation=*|--app|--app=*|--team-id|--team-id=*|--allow-unknown-caller|--allow-unknown-caller=*|--allow-caller-asserted|--allow-caller-asserted=*|--codex-home|--codex-home=*)
@@ -119,6 +127,9 @@ main() {
     if [ -n "$scope_root" ] && [ "$selector" = --product ] && [ "$singleton" != cursor ]; then
         echo "Selected scope/client arguments require Cursor." >&2; exit 1
     fi
+    if [ "$pi_scope" -eq 1 ] && [ "$selector" = --product ] && [ "$singleton" != pi ]; then
+        echo "Pi profile arguments require Pi selection." >&2; exit 1
+    fi
     if [ -n "$nav$app$team$caller_unknown$caller_asserted" ]; then
         if [ "$nav" = none ]; then
             [ -z "$app$team" ] && [ -n "$caller_unknown" ] && [ -n "$caller_asserted" ] || { echo "Incomplete or conflicting route." >&2; exit 1; }
@@ -129,7 +140,7 @@ main() {
     if [ "$notify" = --skip-agent-notify ]; then
         case ",$route_seen," in *,--navigation,*|*,--app,*|*,--team-id,*|*,--allow-unknown-caller,*|*,--allow-caller-asserted,*|*,--preserve-policy,*|*,--request-permission,*) echo "Route flags require agent-notify." >&2; exit 1 ;; esac
     fi
-    if [ "$selector" = --product ] && { [ "$singleton" = gemini ] || [ "$singleton" = opencode ] || [ "$singleton" = qoder ]; }; then
+    if [ "$selector" = --product ] && { [ "$singleton" = gemini ] || [ "$singleton" = opencode ] || [ "$singleton" = qoder ] || [ "$singleton" = pi ]; }; then
         [ -z "$route_seen" ] && [ "$json" -eq 0 ] || { echo "Observers use channel flags only." >&2; exit 1; }
     fi
     [ -z "$activity_mode" ] || activity_args+=(--activity "$activity_mode")
@@ -149,8 +160,8 @@ main() {
     for arg in "$@"; do
         case "$arg" in
             --products|--products=*) multi=1; new_setup=1 ;;
-            --product=gemini|--product=qoder|--product=cursor) new_setup=1 ;;
-            gemini|qoder|cursor) [ "$previous" != --product ] || new_setup=1 ;;
+            --product=gemini|--product=qoder|--product=cursor|--product=pi) new_setup=1 ;;
+            gemini|qoder|cursor|pi) [ "$previous" != --product ] || new_setup=1 ;;
         esac
         previous=$arg
     done
@@ -160,7 +171,7 @@ main() {
     opencode_channels=0
     if [ "$multi" -eq 1 ]; then
         selector_seen=0
-        claude=0 codex=0 opencode=0 gemini=0 qoder=0 cursor=0
+        claude=0 codex=0 opencode=0 gemini=0 qoder=0 cursor=0 pi=0
         notify=""
         help=0
         while [ "$#" -gt 0 ]; do
@@ -187,6 +198,7 @@ main() {
                             gemini) [ "$gemini" -eq 0 ] || { echo "Duplicate product: gemini." >&2; exit 1; }; gemini=1 ;;
                             qoder) [ "$qoder" -eq 0 ] || { echo "Duplicate product: qoder." >&2; exit 1; }; qoder=1 ;;
                             cursor) [ "$cursor" -eq 0 ] || { echo "Duplicate product: cursor." >&2; exit 1; }; cursor=1 ;;
+                            pi) [ "$pi" -eq 0 ] || { echo "Duplicate product: pi." >&2; exit 1; }; pi=1 ;;
                             *) echo "Unknown product: $product." >&2; exit 1 ;;
                         esac
                         case "$remaining" in
@@ -208,6 +220,8 @@ main() {
                 --scope-root|--client-executable)
                     cursor_args+=("$1" "$2"); shift ;;
                 --scope-root=*|--client-executable=*) cursor_args+=("$1") ;;
+                --pi-agent-dir|--pi-executable) pi_args+=("$1" "$2"); shift ;;
+                --pi-agent-dir=*|--pi-executable=*) pi_args+=("$1") ;;
                 --activity|--activity-limit) shift ;;
                 --activity=*|--activity-limit=*) ;;
                 --ui|--ui=*)
@@ -219,8 +233,8 @@ main() {
             shift
         done
         if [ "$help" -eq 1 ]; then
-            echo "Usage: bash install.sh --products claude,codex,opencode,gemini,qoder,cursor [--agent-notify|--skip-agent-notify] [--desktop] [--webhook]"
-            echo "Choose any nonempty subset. Agent-notify options apply to Claude/Codex/Cursor; channel flags apply to OpenCode/Gemini/Qoder/Cursor. Cursor defaults to ~/.cursor and cursor-agent on PATH; advanced overrides require both --scope-root and --client-executable."
+            echo "Usage: bash install.sh --products claude,codex,opencode,gemini,qoder,cursor,pi [--agent-notify|--skip-agent-notify] [--desktop] [--webhook]"
+            echo "Choose any nonempty subset. Agent-notify options apply to Claude/Codex/Cursor; channel flags apply to OpenCode/Gemini/Qoder/Cursor/Pi. Cursor defaults to ~/.cursor and cursor-agent on PATH; advanced overrides require both --scope-root and --client-executable."
             exit 0
         fi
         if [ "$claude" -eq 1 ] && [ "$codex" -eq 1 ]; then
@@ -236,8 +250,11 @@ main() {
         if [ -n "$scope_root" ] && [ "$cursor" -eq 0 ]; then
             echo "Selected scope/client arguments require Cursor." >&2; exit 1
         fi
-        if [ "$opencode" -eq 0 ] && [ "$gemini" -eq 0 ] && [ "$qoder" -eq 0 ] && [ "$cursor" -eq 0 ] && [ "$opencode_channels" -gt 0 ]; then
-            echo "--desktop/--webhook require OpenCode, Gemini, Qoder or Cursor in --products." >&2; exit 1
+        if [ "$pi_scope" -eq 1 ] && [ "$pi" -eq 0 ]; then
+            echo "Pi profile arguments require Pi selection." >&2; exit 1
+        fi
+        if [ "$opencode" -eq 0 ] && [ "$gemini" -eq 0 ] && [ "$qoder" -eq 0 ] && [ "$cursor" -eq 0 ] && [ "$pi" -eq 0 ] && [ "$opencode_channels" -gt 0 ]; then
+            echo "--desktop/--webhook require OpenCode, Gemini, Qoder, Cursor or Pi in --products." >&2; exit 1
         fi
     fi
     command -v curl >/dev/null 2>&1 || {
@@ -381,7 +398,7 @@ main() {
         capability_status=0
         run_bootstrap --capabilities >"$stage/capabilities" 2>/dev/null || capability_status=$?
         if [ "$capability_status" -ne 0 ] || ! printf 'bootstrap-products-v1\n' | cmp -s - "$stage/capabilities"; then
-            if [ "$multi" -eq 1 ] && [ "$gemini" -eq 0 ] && [ "$qoder" -eq 0 ] && [ "$cursor" -eq 0 ] && [ "$pending" -eq 0 ] && [ -z "$ui_mode" ]; then
+            if [ "$multi" -eq 1 ] && [ "$gemini" -eq 0 ] && [ "$qoder" -eq 0 ] && [ "$cursor" -eq 0 ] && [ "$pi" -eq 0 ] && [ "$pending" -eq 0 ] && [ -z "$ui_mode" ]; then
                 # Older releases accept one legacy product group per invocation.
                 # Stop on either failure; the second group may fail after the first installed.
                 if [ -n "$legacy_product" ]; then
@@ -407,7 +424,7 @@ main() {
         summary="$stage/summary.txt"
         export BOOTSTRAP_SUMMARY_FILE="$summary"
         # Check every selected prerequisite before the first mutation.
-        run_bootstrap --products "$selection" ${cursor_args[@]+"${cursor_args[@]}"} ${legacy_args[@]+"${legacy_args[@]}"} ${opencode_args[@]+"${opencode_args[@]}"} ${ui_args[@]+"${ui_args[@]}"} ${activity_args[@]+"${activity_args[@]}"}
+        run_bootstrap --products "$selection" ${cursor_args[@]+"${cursor_args[@]}"} ${pi_args[@]+"${pi_args[@]}"} ${legacy_args[@]+"${legacy_args[@]}"} ${opencode_args[@]+"${opencode_args[@]}"} ${ui_args[@]+"${ui_args[@]}"} ${activity_args[@]+"${activity_args[@]}"}
         if [ -s "$summary" ]; then
             printf '\nInstallation complete\n\n'
             cat "$summary"

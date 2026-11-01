@@ -16,8 +16,8 @@ import (
 )
 
 // The parent stays immutable. Its only portable child operations are the
-// selected Claude/Codex group and Cursor alone; arbitrary subsets cannot expand
-// or replace a confirmed scope.
+// selected Claude/Codex group, Cursor alone, and an exactly Pi-only parent;
+// arbitrary subsets cannot expand or replace a confirmed scope.
 func bootstrapWizardChild(parent confirmedBootstrapIntent, agents []string) (confirmedBootstrapIntent, error) {
 	legacy := []string{}
 	for _, id := range parent.Request.Products {
@@ -27,7 +27,8 @@ func bootstrapWizardChild(parent confirmedBootstrapIntent, agents []string) (con
 	}
 	cursor := len(agents) == 1 && agents[0] == "cursor" && containsProduct(parent.Request.Products, "cursor")
 	local := len(agents) == 1 && agents[0] == "copilot-vscode" && reflect.DeepEqual(parent.Request.Products, agents)
-	if !cursor && !local && (len(legacy) == 0 || !reflect.DeepEqual(legacy, agents)) {
+	pi := len(agents) == 1 && agents[0] == "pi" && reflect.DeepEqual(parent.Request.Products, agents)
+	if !cursor && !local && !pi && (len(legacy) == 0 || !reflect.DeepEqual(legacy, agents)) {
 		return parent, errors.New("bootstrap request differs from confirmed child scope")
 	}
 	child := parent
