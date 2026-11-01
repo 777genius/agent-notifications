@@ -27,8 +27,8 @@ Sources: [Claude/Codex/Qoder product event boundary](../internal/hooks/event.go)
 | Claude Code | Yes | Yes | Yes | Supported, OS/terminal-dependent; pane precision varies | Not established |
 | Codex CLI | Yes | Yes | Yes | Legacy terminal focus where supported | Separate verified, configured Codex-desktop navigation path; platform/installation qualification matters |
 | OpenCode | Yes | Yes | Opt-in OS-default `systemSound` cue since v1.50.0 | No: `Navigation=None` | No |
-| Gemini CLI | Yes | Yes | No: explicit silent delivery | No: `Navigation=None` | No |
-| Cursor CLI | Yes (qualified hosts only) | Yes | No: explicit silent delivery | No: `Navigation=None` | No |
+| Gemini CLI | Yes | Yes | No in v1.50.0; later source adds optional OS-default cue after explicit opt-in | No: `Navigation=None` | No |
+| Cursor CLI | Yes (qualified hosts only) | Yes | No in v1.50.0; later source adds optional OS-default cue after explicit opt-in | No: `Navigation=None` | No |
 | Qoder CLI | Yes | Yes | Yes: shared hook notifier | **Not qualified**: Claude-only Ghostty capture; generic legacy window activation must not be advertised as exact/guaranteed | No |
 | Pi | Local TUI only | Yes, explicit consent | Yes, configured local TUI | Originating terminal; Linux desktop suite, owner-observed Mac banner/click; full macOS/Windows native acceptance pending | No |
 
@@ -36,13 +36,13 @@ Sources: [Claude/Codex/Qoder product event boundary](../internal/hooks/event.go)
 
 Important implementation detail: `internal/hooks/hooks.go` and `internal/notifier/notifier.go` share sound, desktop and webhook delivery across Claude, Codex and Qoder. However, terminal-target capture for Ghostty is explicitly Claude-only. Qoder's setup guide currently describes `clickToFocus` as inert. The shared lower-level notifier can attempt generic activation when enabled; its existence is **not** evidence that Qoder has reliable, session-bound navigation. Resolve the documentation/runtime ambiguity with a native test before promoting support.
 
-Modern observer consumers intentionally use narrow fact types and separate registered-consent gates: [OpenCode](../internal/opencodeevent/consumer.go), [Gemini](../internal/geminievent/consumer.go), [Cursor](../internal/cursorevent/consumer.go). All three select `Navigation=None` and do not provide a trusted local terminal origin. OpenCode can explicitly request an OS-default cue since v1.50.0; Gemini and Cursor remain silent. This is a genuine missing feature, not merely a README omission.
+Modern observer consumers use narrow fact types and separate registered-consent gates: [OpenCode](../internal/opencodeevent/consumer.go), [Gemini](../internal/geminievent/consumer.go), [Cursor](../internal/cursorevent/consumer.go). All three select `Navigation=None` and do not provide a trusted local terminal origin. OpenCode can explicitly request an OS-default cue since v1.50.0. Gemini and Cursor remain silent in the frozen v1.50.0 release; later main source adds their opt-in OS cue in [#555](https://github.com/777genius/agent-notifications/pull/555), which is outside that release snapshot. Internal Copilot-in-VS-Code follows the same source policy but is not publicly shipped.
 
 ## Additional implementations and candidates (not advertised as shipped)
 
 | Integration | Current repository evidence | Public support status |
 | --- | --- | --- |
-| Copilot in VS Code | [Local Stop observer](../internal/copilotvscodeevent/consumer.go) and [SDK source](../internal/copilotvscodesource/source.go) exist; silent, informational, `Navigation=None` | Internal code exists; not part of the seven-agent public installer/README selection. Native qualification and product exposure need an explicit decision |
+| Copilot in VS Code | [Local Stop observer](../internal/copilotvscodeevent/consumer.go) and [SDK source](../internal/copilotvscodesource/source.go) exist; informational, `Navigation=None`, optional OS-default cue in unreleased source | Internal code exists; not part of the seven-agent public installer/README selection. Native qualification and product exposure need an explicit decision |
 | GitHub Copilot CLI | Native hooks include `agentStop`, `subagentStop`, `errorOccurred`, `permissionRequest` and `notification` | Research / new integration; separate from Copilot in VS Code |
 | Kiro CLI | Official hooks provide agent-stop and tool events | Research / new integration; qualify real CLI hooks and local origin first |
 

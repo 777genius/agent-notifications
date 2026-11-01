@@ -91,6 +91,47 @@ func consume(t *testing.T, c local.Consumer, f source.Facts) local.Receipt {
 	return c.Consume(ctx, f, d)
 }
 
+// This private adapter is not publicly shipped, but it must obey the same
+// explicit sound/no-navigation semantics before it can be qualified for users.
+func TestCopilotVSCodeSystemSoundKeepsStopInformational(t *testing.T) {
+	on, off := true, false
+	for _, tc := range []struct {
+		name    string
+		enabled *bool
+		want    bool
+	}{
+		{"default_silent", nil, false},
+		{"explicitly_disabled", &off, false},
+		{"explicitly_enabled", &on, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			clock := &testClock{}
+			c := local.Consumer{
+				Binding: binding(), Gate: testGate{channels: local.Channels{Desktop: true}},
+				Config: cfg(t, "http://127.0.0.1:1"), Clock: clock,
+				Cache: &observation.RecentCache{Root: cacheRoot(t), Clock: clock},
+			}
+			c.Config.Notifications.Desktop.Sound = true
+			c.Config.Notifications.Desktop.SystemSound = tc.enabled
+			calls := 0
+			c.Desktop = desktopFunc(func(_ context.Context, req notification.Request) notification.Receipt {
+				calls++
+				if req.Content != (notification.Content{Title: "Copilot in VS Code", Body: "Copilot in VS Code is stopping", Category: "info"}) ||
+					req.Navigation != notification.None || req.Target != (notification.DesktopTarget{}) ||
+					req.Policy.ClickToFocus || req.Policy.SoundEnabled != tc.want ||
+					req.Silent == tc.want || req.CorrelationID == "" {
+					t.Fatalf("Copilot notification acquired unsanctioned target or audio: %+v", req)
+				}
+				return notification.Receipt{Status: "submitted"}
+			})
+			r := consume(t, c, facts(t, frame))
+			if r.Status != "submitted" || r.Desktop != "submitted" || r.Webhook != "" || calls != 1 {
+				t.Fatalf("Copilot adapter changed channel/correlation: %+v calls=%d", r, calls)
+			}
+		})
+	}
+}
+
 // Test effect owners acquire exactly one lease, then recheck. Consumer must
 // have released its cache lock first. Production policy composition is N2.
 func leasedSender(t *testing.T, g testGate, b local.Binding, root string) local.WebhookSender {

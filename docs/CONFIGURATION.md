@@ -11,10 +11,8 @@ Run `/claude-notifications-go:settings` to configure sounds, volume, webhooks, a
 Managed OpenCode uses its own control-root policy, selected with `config path --target opencode --json` and `config inspect --target opencode --json`. It does not use the default shared config target below. See [installed OpenCode settings](opencode-notifications.md#edit-installed-opencode-settings) for custom control roots and revision-checked edits.
 It sends alerts for `task_complete`, `question`,
 `permission_request` and `opencode_error`. Desktop alerts are silent by
-default in published v1.49.11. Unreleased source builds introduce
-`notifications.desktop.systemSound: true` to explicitly request the OS default
-notification cue when the master sound setting is enabled; this does not
-alter the published release until the next qualified platform promotion.
+default. Since v1.50.0, `notifications.desktop.systemSound: true` explicitly
+requests the OS default notification cue when the master sound setting is enabled.
 Custom Claude/Codex sounds, volume controls and click-to-focus remain unavailable.
 Desktop alerts can include native session titles and current question text;
 webhooks use generic text. Claude status templates do not apply.
@@ -24,6 +22,20 @@ use `setup-opencode install|update` with explicit
 does not enable portable MCP notifications. Webhooks also need a configured,
 enabled destination and an enabled status channel. Restart OpenCode after setup
 or update. [Full setup and limits](opencode-notifications.md).
+
+## Shared native observer sound policy (unreleased source)
+
+Gemini CLI and Cursor CLI use the normal selected shared configuration, not
+the separate managed OpenCode control root. Current public platform channels
+(v1.50.0) still deliver silent Gemini/Cursor alerts. Later main source, outside
+the frozen release snapshot, adds the optional
+`notifications.desktop.systemSound` Boolean requests the **OS default cue**
+only when `notifications.desktop.sound` is enabled. Missing/false settings remain
+silent, and `agents.gemini` / `agents.cursor` schema-2 profiles can override
+the shared value independently. A selected desktop channel is still required.
+No sound file, output device, volume, focus target or chat-route API is added.
+The internal Copilot-in-VS-Code observer uses the same policy but is not a
+publicly qualified installer target. See the [support matrix](AGENT_SUPPORT_MATRIX.md).
 
 ## Manual Configuration
 
