@@ -455,7 +455,6 @@ func TestManagedPolicyCLIWebhookEnvContract(t *testing.T) {
 	}
 }
 
-
 // Regression: a Windows callback upgrade keeps OpenCode's existing policy
 // editable through the real CLI without resetting shared schema6/floor6 or
 // rewriting another agent's consent and raw settings.
