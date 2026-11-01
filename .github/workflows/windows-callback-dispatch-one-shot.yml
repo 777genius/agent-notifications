@@ -1,4 +1,4 @@
-name: One-shot source-pinned Windows callback signed archive intake
+name: One-shot pinned Windows installed callback qualifications
 on:
   push:
     branches: [ci/win-callback-dispatch-20261031]
@@ -7,12 +7,12 @@ permissions:
   contents: read
   actions: write
 jobs:
-  signed-intake:
-    if: ${{ github.repository == '777genius/agent-notifications' && github.event.head_commit.message == 'ci(windows) intake 9e8c9938 source-bound signed archive' && github.run_attempt == 1 }}
+  qualified-windows:
+    if: ${{ github.repository == '777genius/agent-notifications' && github.event.head_commit.message == 'ci(windows) admit installed basic retained package 9e8c993' && github.run_attempt == 1 }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - name: Dispatch one read-only signed archive intake on the exact PR source
+      - name: Dispatch three independent fresh effect tests after reviewed signed archive pin
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -20,16 +20,42 @@ jobs:
           set -euo pipefail
           source='9e8c9938709b9e43888bf7c57fc320cfd506684d'
           parent='30968141e49596c2207b9c42c5546bbc57539a4c'
+          signedIntakeRun='41293804983'
+          rawSHA='d442a3d7d5c229f45e5e11995711ac2619c8dbc89e3fa2bc185287dc8db8e76e'
+          fullName='OpenAI.Codex_26.1027.3384.0_x64__2p2nqsd0c76g0'
           current="$(gh api repos/777genius/agent-notifications/git/ref/heads/test/windows-installed-cold-callback -q .object.sha)"
           currentParent="$(gh api repos/777genius/agent-notifications/git/ref/heads/feat/windows-callback-installed -q .object.sha)"
-          if [[ "$current" != "$source" || "$currentParent" != "$parent" ]]; then
-            echo 'Parent or source changed; fail closed without dispatch' >&2
+          intakeHead="$(gh api repos/777genius/agent-notifications/actions/runs/$signedIntakeRun -q .head_sha)"
+          intakeConclusion="$(gh api repos/777genius/agent-notifications/actions/runs/$signedIntakeRun -q .conclusion)"
+          if [[ "$current" != "$source" || "$currentParent" != "$parent" || \
+                "$intakeHead" != 'de4989840c53cf34c7a0b2bff22eb15603323c18' || "$intakeConclusion" != 'success' ]]; then
+            echo 'Source/parent changed or reviewed signed archive intake no longer accepted; refuse' >&2
             exit 1
           fi
-          gh api --method POST repos/777genius/agent-notifications/actions/workflows/windows-callback-contracts.yml/dispatches \
-            -f ref=test/windows-installed-cold-callback \
-            -f 'inputs[admission]=one-fresh-disposable-installed-callback' \
-            -f 'inputs[phase]=archive_intake' \
-            -f 'inputs[scenario]=basic' \
-            -f 'inputs[coreRef]='
-          echo 'Dispatched one new source-pinned read-only signed archive intake; no installation or click.'
+          if [[ ! "$rawSHA" =~ ^[a-f0-9]{64}$ || "$fullName" != OpenAI.Codex_*_x64__2p2nqsd0c76g0 ]]; then
+            echo 'Signed archive pin malformed; refuse' >&2
+            exit 1
+          fi
+          # The original signed archive came from a separately reviewed, successful
+          # read-only intake. Each fresh effect job independently re-downloads it
+          # and requires these exact hash and FullName pins before any deployment.
+          dispatch() {
+            local phase="$1" scenario="$2" ancestor="$3" admission
+            if [[ "$phase" == package_noshow ]]; then
+              admission=one-fresh-disposable-package-noshow
+            else
+              admission=one-fresh-disposable-installed-callback
+            fi
+            gh api --method POST repos/777genius/agent-notifications/actions/workflows/windows-callback-contracts.yml/dispatches \
+              -f ref=test/windows-installed-cold-callback \
+              -f "inputs[admission]=$admission" \
+              -f "inputs[phase]=$phase" \
+              -f "inputs[scenario]=$scenario" \
+              -f "inputs[expectedArchiveSHA]=$rawSHA" \
+              -f "inputs[expectedFullName]=$fullName" \
+              -f "inputs[coreRef]=$ancestor"
+          }
+          dispatch installed basic ''
+          dispatch installed retained ''
+          dispatch package_noshow package_noshow "$parent"
+          echo 'Three source-pinned single-attempt Windows jobs dispatched; no automatic retry.'
