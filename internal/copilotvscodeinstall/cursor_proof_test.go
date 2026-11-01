@@ -1043,14 +1043,18 @@ func localPublicFixture(t *testing.T, manualRoute ...bool) (cursorFixture, *vsco
 	if err != nil {
 		t.Fatal(err)
 	}
-	prepared, err := engine.Prepare(cursorContext(t), uapinstaller.Request{Operation: uapinstaller.OpInstall, PackageRoot: f.pkg, ClientID: "vscode", ClientExecutable: f.fixed.Executable,
+	// Installation verification needs its own bounded setup budget on Windows
+	// under race/coverage; event admission still uses cursorContext(t).
+	installCtx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	prepared, err := engine.Prepare(installCtx, uapinstaller.Request{Operation: uapinstaller.OpInstall, PackageRoot: f.pkg, ClientID: "vscode", ClientExecutable: f.fixed.Executable,
 		ClientConfigRoot: f.b.ScopeRoot, InstallationID: f.b.InstallationID})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = prepared.Close() }()
 	profileBefore := cursorRead(t, localConfig.ProfileSettingsPath)
-	result, err := engine.Apply(cursorContext(t), prepared, uapinstaller.Decision{Confirmed: true})
+	result, err := engine.Apply(installCtx, prepared, uapinstaller.Decision{Confirmed: true})
 	if len(manualRoute) != 0 && manualRoute[0] && runtime.GOOS != "linux" && (runtime.GOOS != "darwin" || runtime.GOARCH != "arm64") {
 		const refusal = "local profile metadata mutation unqualified on this OS; native Windows ACL/profile CI required"
 		if err == nil || err.Error() != refusal || result.Reason != refusal || result.Outcome != "incomplete" || !result.Mutated || result.Client.Activation != string(domain.ActivationPrepared) || result.Binding.BindingID != f.b.BindingID || result.Binding.DataRoot != f.b.DataRoot {

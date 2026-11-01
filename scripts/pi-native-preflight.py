@@ -192,10 +192,15 @@ def linux_desktop(lab, terminal_lifetime=90):
             return out.strip().splitlines()[0] if status == 0 and out.strip() else None
         window_ids.append(wait_for(search))
     for window in window_ids:
-        lab.run([paths["xdotool"], "windowactivate", "--sync", window])
-        observed, _ = lab.run([paths["xdotool"], "getactivewindow"])
-        if observed.strip() != window:
-            raise Unqualified("foreground_fixture_mismatch")
+        # The Xvfb display can be ready before Openbox publishes active-window
+        # support. Retry the real WM activation/observation, never assume focus.
+        def activated():
+            _, status = lab.run([paths["xdotool"], "windowactivate", window], check=False)
+            if status != 0:
+                return False
+            observed, status = lab.run([paths["xdotool"], "getactivewindow"], check=False)
+            return status == 0 and observed.strip() == window
+        wait_for(activated)
     return paths, server, window_ids
 
 

@@ -2,7 +2,7 @@
 
 Audit updated for the v1.50.0 promotion on 2026-11-01. This is a **source-and-documentation review**, not fresh native desktop acceptance. For platform/version gates use the linked agent guides and [release channels](PLATFORM_RELEASE_CHANNELS.md).
 
-The v1.50.0 artifacts are frozen at [7981f185 (C4)](https://github.com/777genius/agent-notifications/commit/7981f185d0d158799cba19387f976c9e72c4e73c). Qoder's `StopFailure` handler and five bundled MP3 additions from [#558](https://github.com/777genius/agent-notifications/pull/558) were merged after that source and remain **unreleased**. The published Qoder hooks from v1.49.11 remain the v1.50.0 release baseline; a manifest version on current main does not qualify later source changes for that release.
+The v1.50.0 artifacts are frozen at [7da3329d (C5)](https://github.com/777genius/agent-notifications/commit/7da3329d625eae9cdb29ce665f413e9fb9d03d3a). This source includes Qoder's `StopFailure` handler and five bundled MP3 additions from [#558](https://github.com/777genius/agent-notifications/pull/558), covered by source/package/runtime tests. Native audible qualification remains pending in [#562](https://github.com/777genius/agent-notifications/issues/562); packaged assets and unit checks do not establish full Qoder desktop acceptance.
 
 **Key distinction:** showing an alert, focusing the originating terminal window/pane, and opening the exact originating desktop chat are three separate capabilities. The same notification transport can be shared without pretending an agent session ID is a verified desktop-chat ID.
 
@@ -17,7 +17,7 @@ Legend: **Yes** = implemented; **Limited** = only under the stated event/host co
 | OpenCode V1/V2 | Yes: verified root-session idle | Yes | Yes | Yes: terminal error | No | No: root-session filter |
 | Gemini CLI | Yes: AfterAgent means a turn ended, **not task success** | No | Yes: Notification/ToolPermission | No distinct error/limit alerts | No | No qualified parity |
 | Cursor CLI | Limited: native Stop means loop stopped, including abort/error | No | No | No distinct alert: completion/abort/error use the same informational wording | No | No qualified subagent alerts |
-| Qoder CLI | Yes: Stop | Yes | Yes | No in v1.49.11 or frozen v1.50.0; unreleased source adds generic StopFailure and separate rate-limit classification | Plan yes; review no | Limited: opt-in SubagentStop; idle teammates |
+| Qoder CLI | Yes: Stop | Yes | Yes | Yes: generic StopFailure and separate rate-limit classification since v1.50.0 | Plan yes; review no | Limited: opt-in SubagentStop; idle teammates |
 | Pi | Yes: final successful settlement | Limited: blocking extension UI | No dedicated permission event | Yes: final failed settlement | No dedicated plan/review | No intermediate/aborted completion |
 
 Sources: [Claude/Codex/Qoder product event boundary](../internal/hooks/event.go), [shared hook handler](../internal/hooks/hooks.go), [OpenCode consumer](../internal/opencodeevent/consumer.go), [Gemini consumer](../internal/geminievent/consumer.go), [Cursor consumer](../internal/cursorevent/consumer.go); [Qoder](QODER.md), [Codex](CODEX.md), [OpenCode](opencode-notifications.md), [Gemini](gemini-notifications.md), [Cursor](cursor-notifications.md).
@@ -31,10 +31,14 @@ Sources: [Claude/Codex/Qoder product event boundary](../internal/hooks/event.go)
 | OpenCode | Yes | Yes | Opt-in OS-default `systemSound` cue since v1.50.0 | No: `Navigation=None` | No |
 | Gemini CLI | Yes | Yes | Opt-in OS-default `systemSound` cue since v1.50.0 | No: `Navigation=None` | No |
 | Cursor CLI | Yes (qualified hosts only) | Yes | Opt-in OS-default `systemSound` cue since v1.50.0 | No: `Navigation=None` | No |
-| Qoder CLI | Yes | Yes | Shared notifier supports cues; v1.49.11 and frozen v1.50.0 bundles lack built-in MP3s; unreleased source packages all five (issue #562) | **Not qualified**: Claude-only Ghostty capture; generic legacy window activation must not be advertised as exact/guaranteed | No |
+| Qoder CLI | Yes | Yes | Configured cues; v1.50.0 bundles all five MP3s, native audible qualification pending (issue #562) | **Not qualified**: Claude-only Ghostty capture; generic legacy window activation must not be advertised as exact/guaranteed | No |
 | Pi | Local TUI only | Yes, explicit consent | Yes, configured local TUI | Originating terminal; Linux desktop suite, owner-observed Mac banner/click; full macOS/Windows native acceptance pending | No |
 
 “Desktop” means the implementation provides a submission path; it does **not** mean visible banners or physical click callbacks were observed on every platform. [Terminal / IDE focus precision](CLICK_TO_FOCUS.md) explains window versus pane/tab and the OS permissions.
+
+Pi's process/lifecycle suite uses 27 cases per OS on Linux, macOS and Windows
+with isolated TEST profiles. This scope does not establish full native
+macOS/Windows desktop acceptance; see [#561](https://github.com/777genius/agent-notifications/issues/561).
 
 Important implementation detail: `internal/hooks/hooks.go` and `internal/notifier/notifier.go` share sound, desktop and webhook delivery across Claude, Codex and Qoder. However, terminal-target capture for Ghostty is explicitly Claude-only. Qoder's setup guide currently describes `clickToFocus` as inert. The shared lower-level notifier can attempt generic activation when enabled; its existence is **not** evidence that Qoder has reliable, session-bound navigation. Resolve the documentation/runtime ambiguity with a native test before promoting support.
 
@@ -54,7 +58,7 @@ Source references: [GitHub Copilot hooks](https://docs.github.com/en/copilot/ref
 
 | Agent | Native event opportunity | Guardrail |
 | --- | --- | --- |
-| Qoder | Qualify and release the source-only `StopFailure` handler; investigate documented `PermissionDenied` | Distinguish blocked workflow vs noisy per-tool failures; do not include raw error, prompts or tool arguments |
+| Qoder | Qualify visible StopFailure delivery and audible cues; investigate documented `PermissionDenied` | Distinguish blocked workflow vs noisy per-tool failures; do not include raw error, prompts or tool arguments |
 | Cursor CLI | Separate known `stop.status` values (`completed`, `aborted`, `error`) rather than presenting them all as “stopping”; investigate `subagentStop` and tool failures | Verify **Cursor CLI** event dispatch, not merely Cursor IDE hook documentation. Stop status is not proof a task succeeded |
 | OpenCode | Native `session.status`, `session.error`, permission events and parent/child sessions offer expansion candidates | Preserve root-only behavior until duplicates, nested ownership and exact event ordering are proven |
 | Gemini CLI | Native hooks also include `SessionEnd`, `AfterTool` and more | Session end is **not** task completion; `Notification` currently exposes ToolPermission, not an arbitrary “question” event |
