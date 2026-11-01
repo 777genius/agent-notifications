@@ -1,0 +1,120 @@
+name: TEST-only physical input to owned WinForms window
+on:
+  push:
+    branches: [ci/windows-uia-shell-preflight-20261101]
+    paths: ['.github/workflows/windows-native-input-positive-control-one-shot.yml']
+permissions:
+  contents: read
+jobs:
+  own-click:
+    if: ${{ github.repository == '777genius/agent-notifications' && github.run_attempt == 1 }}
+    runs-on: windows-11-vs2026-arm
+    timeout-minutes: 8
+    steps:
+      - name: Mouse SendInput clicks exact disposable test UIA button
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Add-Type -AssemblyName System.Windows.Forms,UIAutomationClient,UIAutomationTypes
+          $interop = @'
+          using System;
+          using System.Runtime.InteropServices;
+          public static class TestOnlyOwnInput {
+            [StructLayout(LayoutKind.Sequential)]
+            public struct Mouse { public int dx,dy; public uint mouseData,flags,time; public IntPtr extra; }
+            [StructLayout(LayoutKind.Explicit,Size=40)]
+            public struct Input { [FieldOffset(0)] public uint type; [FieldOffset(8)] public Mouse mouse; }
+            [DllImport("user32.dll",SetLastError=true)] public static extern uint SendInput(uint n,[In] Input[] values,int size);
+            [DllImport("user32.dll",SetLastError=true)] public static extern bool SetCursorPos(int x,int y);
+            [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+            public static uint Click(int x,int y) {
+              if(!SetCursorPos(x,y)) return 0;
+              var inputs=new Input[2];
+              inputs[0].type=0;inputs[0].mouse.flags=2;
+              inputs[1].type=0;inputs[1].mouse.flags=4;
+              return SendInput(2,inputs,Marshal.SizeOf(typeof(Input)));
+            }
+          }
+          '@
+          Add-Type -TypeDefinition $interop
+          $marker="TEST-OwnUI-$env:GITHUB_RUN_ID"
+          $flag=Join-Path $env:RUNNER_TEMP ("TEST-own-click-"+$env:GITHUB_RUN_ID+".txt")
+          $env:TEST_OWN_UI_MARKER=$marker
+          $env:TEST_OWN_UI_FLAG=$flag
+          $script=Join-Path $env:RUNNER_TEMP 'TEST-own-ui.ps1'
+          @'
+          Add-Type -AssemblyName System.Windows.Forms
+          $f=New-Object System.Windows.Forms.Form
+          $f.Text=[Environment]::GetEnvironmentVariable('TEST_OWN_UI_MARKER')
+          $f.TopMost=$true
+          $f.StartPosition='CenterScreen'
+          $f.Width=420;$f.Height=220
+          $button=New-Object System.Windows.Forms.Button
+          $button.Text='TEST-OWN-CLICK'
+          $button.Left=45;$button.Top=60
+          $button.Width=280;$button.Height=70
+          $button.Add_Click({
+            [System.IO.File]::WriteAllText(
+              [Environment]::GetEnvironmentVariable('TEST_OWN_UI_FLAG'),'observed')
+          })
+          $f.Controls.Add($button)
+          [System.Windows.Forms.Application]::Run($f)
+          '@ | Set-Content -LiteralPath $script -Encoding UTF8
+          $exe=Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
+          $proc=Start-Process -FilePath $exe -ArgumentList @('-NoProfile','-NonInteractive','-STA','-ExecutionPolicy','Bypass','-File',('"' + $script + '"')) -PassThru
+          try {
+            $root=[System.Windows.Automation.AutomationElement]::RootElement
+            $condition=New-Object System.Windows.Automation.PropertyCondition(
+              [System.Windows.Automation.AutomationElement]::NameProperty,$marker)
+            $form=$null
+            $until=[DateTime]::UtcNow.AddSeconds(35)
+            while($null -eq $form -and [DateTime]::UtcNow -lt $until){
+              if($proc.HasExited){throw 'TEST-only WinForms child exited'}
+              $form=$root.FindFirst([System.Windows.Automation.TreeScope]::Children,$condition)
+              if($null -eq $form){Start-Sleep -Milliseconds 100}
+            }
+            if($null -eq $form -or $form.Current.ProcessId -ne $proc.Id -or $form.Current.IsOffscreen){
+              throw 'Exact test-owned window not visible; refuse input'
+            }
+            $buttonCondition=New-Object System.Windows.Automation.PropertyCondition(
+              [System.Windows.Automation.AutomationElement]::NameProperty,'TEST-OWN-CLICK')
+            $button=$form.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$buttonCondition)
+            if($null -eq $button -or $button.Current.ProcessId -ne $proc.Id -or $button.Current.IsOffscreen){
+              throw 'Exact test-owned clickable button absent; refuse input'
+            }
+            $rect=$button.Current.BoundingRectangle
+            $screen=[System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+            $x=[int]($rect.Left+$rect.Width/2)
+            $y=[int]($rect.Top+$rect.Height/2)
+            if($rect.Width -lt 60 -or $rect.Height -lt 30 -or
+              $x -lt $screen.Left -or $x -ge $screen.Right -or
+              $y -lt $screen.Top -or $y -ge $screen.Bottom){throw 'TEST button outside bounded screen'}
+            $foregroundBefore=[TestOnlyOwnInput]::GetForegroundWindow()
+            $inserted=[TestOnlyOwnInput]::Click($x,$y)
+            $stop=[DateTime]::UtcNow.AddSeconds(4)
+            while(-not(Test-Path -LiteralPath $flag) -and [DateTime]::UtcNow -lt $stop){
+              Start-Sleep -Milliseconds 100
+            }
+            $clicked=Test-Path -LiteralPath $flag
+            $result=[ordered]@{
+              scope='one-test-owned-window-only'
+              source='713b945d28f6a704dc8eedf7dc10801cbf4e3dea'
+              session=[System.Diagnostics.Process]::GetCurrentProcess().SessionId
+              exactOwnerPidMatched=$true
+              ownButtonFound=$true
+              mouseEventsInserted=[int]$inserted
+              foregroundWasOwnWindow=($foregroundBefore -eq [IntPtr]$form.Current.NativeWindowHandle)
+              ownClickHandlerObserved=[bool]$clicked
+              notificationClicked=$false
+              callbackQualified=$false
+            }
+            Write-Output ('TEST_OWN_INPUT='+($result|ConvertTo-Json -Compress))
+            if($inserted -ne 2 -or -not $clicked){throw 'TEST-own mouse input did not reach WinForms click handler'}
+          } finally {
+            if(-not $proc.HasExited){
+              $null=$proc.CloseMainWindow()
+              Start-Sleep -Milliseconds 150
+              if(-not $proc.HasExited){$proc.Kill()}
+            }
+            $proc.WaitForExit(3000)|Out-Null
+          }
