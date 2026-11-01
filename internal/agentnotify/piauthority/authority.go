@@ -169,6 +169,12 @@ func readConfig(b portable.Binding) (*config.Config, installruntime.Identity, er
 // installedRevision is shared with publication but never reads pi-runtime.json.
 // That file helps the producer find an executable; it grants no authority here.
 func installedRevision(ctx context.Context, b portable.Binding, path string, snapshot installruntime.InstalledSnapshot, active bool) (pisource.Revision, domain.ClientBinding, error) {
+	return installedRevisionWithPrimaryRepair(ctx, b, path, snapshot, active, "")
+}
+
+// Only runtime preparation supplies an exact staged, absent primary path.
+// Delivery/publication always use installedRevision and require live owned bytes.
+func installedRevisionWithPrimaryRepair(ctx context.Context, b portable.Binding, path string, snapshot installruntime.InstalledSnapshot, active bool, missingPrimary string) (pisource.Revision, domain.ClientBinding, error) {
 	deny := func() (pisource.Revision, domain.ClientBinding, error) {
 		return pisource.Revision{}, domain.ClientBinding{}, ErrDenied
 	}
@@ -231,7 +237,18 @@ func installedRevision(ctx context.Context, b portable.Binding, path string, sna
 	}
 	executable, err := portable.ResolvePrimaryExecutable(snapshot.Ledger, b.Primary)
 	if err != nil {
-		return deny()
+		// CheckSnapshot above still requires this exact executable's owned,
+		// regular, executable ledger identity. Commit alone may republish an
+		// absent staged file; existing edited or linked bytes never qualify.
+		wanted := filepath.Join(b.RuntimeRoot, filepath.FromSlash(b.Primary))
+		if missingPrimary == "" || missingPrimary != wanted {
+			return deny()
+		}
+		absent, readErr := installruntime.Fingerprint(missingPrimary)
+		if readErr != nil || absent != (installruntime.Identity{}) {
+			return deny()
+		}
+		executable = missingPrimary
 	}
 	primary, ok := snapshot.Ledger.Files[executable]
 	if !ok {

@@ -24,7 +24,7 @@ CHECKS = {"native_tui", "configured_banner_policy", "configured_audio_policy", "
 PROCESS_CASES = {"normal-quit-drains-admitted-webhook", "hung-quit-original-budget", "webhook-config-disabled",
                  "webhook-consent-disabled", "unchanged-reinstall-restores-derived-metadata",
                  "live-A-update-old-revision-denied", "live-B-remove-current-revision-denied",
-                 "setup-update", "setup-repair", "setup-uninstall", "fresh-after-remove-no-effect", "runtime-byte-replacement"}
+                 "setup-update", "setup-repair", "setup-uninstall", "fresh-after-remove-no-effect", "cursor-only-shared-runtime-replacement"}
 NATIVE_MODES = {("success", "json"), ("success", "print"), ("retry", "json"), ("followup", "json"),
                 ("error", "json"), ("abort", "rpc"), ("ui", "rpc")}
 SUCCESS_COUNTS = {"factory": 1, "agent_start": 1, "agent_end": 1, "agent_before_settle": 1,
@@ -103,11 +103,13 @@ def qualify(platform, source, build, acquisition, process, desktop):
     for name in ("sound-preview", "list-devices", "list-sounds"):
         require(regular_artifact(replacement_inventory.get(name + "-" + platform + "-" + arch + suffix, {})),
                 "replacement_companion_inventory_missing")
-    changed = [row for row in rows if row.get("case") == "runtime-byte-replacement"]
+    changed = [row for row in rows if row.get("case") == "cursor-only-shared-runtime-replacement"]
     flags = ("package_projection_unchanged", "derived_and_owned_executable_match", "old_child_collected", "fresh_child_collected",
-             "foreign_bytes_preserved", "sibling_consumers_preserved", "policy_bytes_preserved", "preparation_retired", "test_retainer_retired")
+             "foreign_bytes_preserved", "sibling_consumers_preserved", "policy_bytes_preserved", "real_cursor_sdk_lifecycle", "cursor_and_writer_retired",
+             "cursor_preserved_during_pi_lifecycle")
     require(len(changed) == 1 and changed[0].get("old_primary_sha256") == main_hash and changed[0].get("new_primary_sha256") == replacement
             and all(changed[0].get(flag) is True for flag in flags)
+            and changed[0].get("pi_setup_repeated") is False and changed[0].get("cursor_native_qualified") is False
             and changed[0].get("old_provider_requests") == changed[0].get("fresh_provider_requests") == 1
             and changed[0].get("old_webhook_count") == 0 and changed[0].get("fresh_webhook_count") == 1
             and success_counts(changed[0].get("old_native_counts")) and success_counts(changed[0].get("fresh_native_counts")),

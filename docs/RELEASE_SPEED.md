@@ -60,6 +60,13 @@ P still needs its own loader/parser/docs CI. A new C, including a version-only
 change, needs new bytes and baseline artifact checks. Never copy old success into
 a new source report. Preserve real Rosetta/GUI failures and actual closure.
 
+Basic draft admission uses the canonical full native receipts for the exact
+candidate and a paginated check census. A cancelled, unexpanded Actions job
+placeholder can be retired only when its original PR run never executed that
+job and a newer successful full run of the same workflow qualifies the same
+source. Real failures, missing receipts, newer cancellations and changed run
+attempts remain blocking. The admission receipt records both run identities.
+
 ## Downloaded host canary in one command
 
 After the draft has its complete sealed inventory, choose its numeric GitHub

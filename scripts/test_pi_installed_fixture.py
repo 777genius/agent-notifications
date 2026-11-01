@@ -18,6 +18,9 @@ SPEC.loader.exec_module(P)
 NATIVE_SPEC = importlib.util.spec_from_file_location("pi_native_fixture", PATH.with_name("pi_native_fixture.py"))
 F = importlib.util.module_from_spec(NATIVE_SPEC)
 NATIVE_SPEC.loader.exec_module(F)
+PROCESS_SPEC = importlib.util.spec_from_file_location("pi_installed_process", Path(__file__).with_name("pi-installed-process-e2e.py"))
+PROCESS = importlib.util.module_from_spec(PROCESS_SPEC)
+PROCESS_SPEC.loader.exec_module(PROCESS)
 
 
 def body(status="task_complete"):
@@ -39,6 +42,34 @@ def prepared_paths(root):
 
 
 class ObserverTests(unittest.TestCase):
+    def test_failed_product_command_retains_only_closed_cli_codes(self):
+        payload = {"action": "install", "outcome": "incomplete", "reason": "cursor_composition_required",
+                   "command": ["TEST-private-command"], "installationID": "TEST-private-id",
+                   "targets": [{"client": "cursor", "outcome": "activation_failed", "failureStage": "activation",
+                                "reason": "private_secret_that_looks_like_a_code", "profile": "TEST-private-profile"}],
+                   "config": {"password": "TEST-private-config"}}
+        result = subprocess.CompletedProcess([], 1, P.json.dumps(payload).encode(), b"TEST-private-stderr")
+        expected = {"exit_code": 1, "stderr_present": True, "json_stdout": True,
+                    "action": "install", "outcome": "incomplete", "reason": "cursor_composition_required",
+                    "targets": [{"client": "cursor", "outcome": "activation_failed",
+                                 "failureStage": "activation", "reason_redacted": True}]}
+        self.assertEqual(PROCESS._command_failure(result), expected)
+        with mock.patch.object(PROCESS.subprocess, "run", return_value=result):
+            with self.assertRaises(RuntimeError) as failure:
+                PROCESS.command("TEST-candidate", ["setup-notifications"], Path("/TEST-private-root"), {})
+        message = str(failure.exception)
+        self.assertEqual(message, "product_command_failed:setup-notifications:" + P.json.dumps(expected, sort_keys=True))
+        self.assertNotIn("TEST-private", message)
+        self.assertNotIn("private_secret", message)
+        for stdout in (b"TEST-private-raw", b"\xff", b"[]", b"null"):
+            result = subprocess.CompletedProcess([], -9, stdout, b"TEST-private-stderr")
+            self.assertEqual(PROCESS._command_failure(result), {"exit_code": -9, "stderr_present": True})
+        payload = {"action": "private_action", "outcome": "private_outcome", "reason": "private_reason",
+                   "targets": [{"client": "private_client", "failureStage": "private_stage"}] * 20}
+        diagnostic = PROCESS._command_failure(subprocess.CompletedProcess([], 2, P.json.dumps(payload).encode(), b""))
+        self.assertEqual(len(diagnostic["targets"]), 8)
+        self.assertNotIn("private_", P.json.dumps(diagnostic))
+
     def test_native_witness_can_start_after_terminal_visibility(self):
         with tempfile.TemporaryDirectory(prefix="TEST-pi-witness-startup-") as name:
             root = Path(name)
