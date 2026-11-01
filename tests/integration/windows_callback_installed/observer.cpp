@@ -838,7 +838,9 @@ static Selection census(IUIAutomation* automation, IUIAutomationTreeWalker* walk
  const std::wstring& title, const std::wstring& body) {
  Selection found;
  // Counters describe the *current* attempt, even if the first UIA call throws.
+ clickRoots.store(0,std::memory_order_relaxed); clickNodes.store(0,std::memory_order_relaxed);
  clickTitles.store(0,std::memory_order_relaxed); clickBodies.store(0,std::memory_order_relaxed);
+ clickNameLength.store(0,std::memory_order_relaxed);
  ComPtr<IUIAutomationElement> desktop, first;
  budget(); winrt::check_hresult(automation->GetRootElement(&desktop));
  budget(); winrt::check_hresult(walker->GetFirstChildElement(desktop.Get(),&first));
