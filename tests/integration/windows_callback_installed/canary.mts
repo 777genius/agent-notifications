@@ -249,9 +249,12 @@ async function main(): Promise<void> {
   const centerInput = JSON.parse((await boundedRead(path.join(root,'notification-center-input.json'),8192)).toString()) as
     {source: string; nonce: string; mode: string; qualification: string; input_events_inserted: number};
   assert.equal(centerInput.source,source); assert.equal(centerInput.nonce,tuple.nonce);
-  assert.equal(centerInput.mode,'windows_notification_center_shortcut');
   assert.equal(centerInput.qualification,'input_only_not_callback');
-  assert.equal(centerInput.input_events_inserted,4);
+  assert(
+    (centerInput.mode==='visible_banner_observed' && centerInput.input_events_inserted===0) ||
+    (centerInput.mode==='windows_notification_center_shortcut' && centerInput.input_events_inserted===4),
+    'only exact direct banner or one Win+N notification-center input is admitted',
+  );
   const receiver = JSON.parse((await boundedRead(path.join(root,'receiver.json'))).toString()) as Receiver;
   const names = new Set(await readdir(attempts)); assert(names.size <= 24);
   const callbacks = [...names].filter(n => n.endsWith('.intent') && !before.includes(n)); assert.equal(callbacks.length,1);

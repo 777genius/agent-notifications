@@ -1051,30 +1051,49 @@ static void click() {
   const auto title = string(request,L"title"), body = string(request,L"body");
   require(title == L"Navigation TEST "+wide(nonce) && body == L"Cold callback TEST "+wide(nonce));
   clickAt("cold_helper_census"); require(helpers(route).empty());
-  // Windows keeps the submitted toast in Notification Center if its transient
-  // banner is no longer visible. Test ONE documented Win+N Shell action.
-  // This input never selects a toast or directly activates its COM.
-  clickAt("notification_center_input_custody"); interactive(); budget();
-  require(!(GetAsyncKeyState(VK_LWIN)&0x8000) &&
-          !(GetAsyncKeyState(VK_RWIN)&0x8000) &&
-          !(GetAsyncKeyState(VK_CONTROL)&0x8000) &&
-          !(GetAsyncKeyState(VK_MENU)&0x8000));
-  auto center=fact(); put(center,L"mode","windows_notification_center_shortcut");
-  put(center,L"qualification","input_only_not_callback");
-  publish(L"notification-center.intent.json",center);
-  INPUT keys[4]{};
-  for(auto& key:keys)key.type=INPUT_KEYBOARD;
-  keys[0].ki.wVk=VK_LWIN;
-  keys[1].ki.wVk=L'N';
-  keys[2].ki.wVk=L'N'; keys[2].ki.dwFlags=KEYEVENTF_KEYUP;
-  keys[3].ki.wVk=VK_LWIN; keys[3].ki.dwFlags=KEYEVENTF_KEYUP;
-  clickAt("notification_center_input_once"); budget();
-  require(SendInput(4,keys,sizeof(INPUT))==4); budget();
-  num(center,L"input_events_inserted",4);
-  publish(L"notification-center-input.json",center);
-  clickAt("uia_select_notification"); Selection selected;
+  // Try the already visible, exact Shell notification first. Pressing
+  // Win+N unconditionally can close an already open notification surface.
+  // This is observation only; both paths still require the same unique row,
+  // its current Invoke pattern and independent cold receiver proof.
+  Selection selected;
   try {
-   while (!selected.row) { budget(); selected = census(automation.Get(),walker.Get(),title,body); if (!selected.row) Sleep(50); }
+   clickAt("uia_probe_visible_banner");
+   const auto bannerUntil=std::min(end,GetTickCount64()+1500);
+   while (!selected.row) {
+    budget(); selected=census(automation.Get(),walker.Get(),title,body);
+    if (selected.row || GetTickCount64()>=bannerUntil) break;
+    Sleep(50);
+   }
+   auto center=fact();
+   put(center,L"qualification","input_only_not_callback");
+   if (selected.row) {
+    put(center,L"mode","visible_banner_observed");
+    num(center,L"input_events_inserted",0);
+    publish(L"notification-center.intent.json",center);
+   } else {
+    // Windows keeps the submitted toast in Notification Center when its
+    // transient banner is no longer visible. ONE documented Win+N opens it;
+    // key insertion never directly activates a toast or proves a callback.
+    clickAt("notification_center_input_custody"); interactive(); budget();
+    require(!(GetAsyncKeyState(VK_LWIN)&0x8000) &&
+            !(GetAsyncKeyState(VK_RWIN)&0x8000) &&
+            !(GetAsyncKeyState(VK_CONTROL)&0x8000) &&
+            !(GetAsyncKeyState(VK_MENU)&0x8000));
+    put(center,L"mode","windows_notification_center_shortcut");
+    publish(L"notification-center.intent.json",center);
+    INPUT keys[4]{};
+    for(auto& key:keys)key.type=INPUT_KEYBOARD;
+    keys[0].ki.wVk=VK_LWIN;
+    keys[1].ki.wVk=L'N';
+    keys[2].ki.wVk=L'N'; keys[2].ki.dwFlags=KEYEVENTF_KEYUP;
+    keys[3].ki.wVk=VK_LWIN; keys[3].ki.dwFlags=KEYEVENTF_KEYUP;
+    clickAt("notification_center_input_once"); budget();
+    require(SendInput(4,keys,sizeof(INPUT))==4); budget();
+    num(center,L"input_events_inserted",4);
+   }
+   publish(L"notification-center-input.json",center);
+   clickAt("uia_select_notification");
+   while (!selected.row) { budget(); selected=census(automation.Get(),walker.Get(),title,body); if (!selected.row) Sleep(50); }
   } catch (...) {
    // Durable failure facts precede non-authorizing history; synchronous WinRT
    // history must never suppress the original UIA exception or its counters.
