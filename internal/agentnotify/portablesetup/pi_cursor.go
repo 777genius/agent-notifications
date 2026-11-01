@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"time"
 
 	"github.com/777genius/agent-notifications/internal/agentnotify/portable"
@@ -56,7 +57,7 @@ func (m Materializer) piRetainedRegistry(req MaterializeRequest, registry *clien
 		if json.Unmarshal([]byte(consumer.Registration), &b) != nil || b.Integration != portable.Cursor || b.InstallationID != req.Identity.InstallationID || b.BindingID != bindingID {
 			continue
 		}
-		if retained != nil || b.ControlRoot != req.Identity.ControlRoot || !portable.ExactCommittedBinding(snapshot.Ledger, b) {
+		if retained != nil || physicalRoot(b.ControlRoot) != physicalRoot(req.Identity.ControlRoot) || !portable.ExactCommittedBinding(snapshot.Ledger, b) {
 			return nil, ErrPreflight
 		}
 		retained = &b
@@ -66,7 +67,8 @@ func (m Materializer) piRetainedRegistry(req MaterializeRequest, registry *clien
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	fixed, err := cursorinstall.InstalledAuthority(ctx, *retained, snapshot, m.Roots.StateFile)
+	statePath := filepath.Join(filepath.Dir(retained.ControlRoot), "uap", "state", "state-v2.json")
+	fixed, err := cursorinstall.InstalledAuthority(ctx, *retained, snapshot, statePath)
 	if err != nil {
 		return nil, err
 	}
