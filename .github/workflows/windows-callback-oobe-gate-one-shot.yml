@@ -7,7 +7,7 @@ permissions:
   contents: read
 jobs:
   oobe:
-    if: ${{ github.repository == '777genius/agent-notifications' && github.run_attempt == 1 && github.event.head_commit.message == 'test-windows-callback-oobe-gate-first-attempt' }}
+    if: ${{ github.repository == '777genius/agent-notifications' && github.run_attempt == 1 && github.event.head_commit.message == 'test-windows-callback-oobe-gate-fixed-v2' }}
     runs-on: windows-11-vs2026-arm
     timeout-minutes: 6
     env:
@@ -42,13 +42,13 @@ jobs:
           }
           '@
           $foreground = [TestOnlyForegroundWindow]::GetForegroundWindow()
-          [uint32]$pid = 0
+          [uint32]$foregroundProcessId = 0
           if ($foreground -eq [IntPtr]::Zero -or
-              [TestOnlyForegroundWindow]::GetWindowThreadProcessId($foreground, [ref]$pid) -eq 0 -or
-              $pid -eq 0) {
+              [TestOnlyForegroundWindow]::GetWindowThreadProcessId($foreground, [ref]$foregroundProcessId) -eq 0 -or
+              $foregroundProcessId -eq 0) {
             throw 'interactive foreground identity unavailable; no TEST cleanup'
           }
-          $process = [Diagnostics.Process]::GetProcessById([int]$pid)
+          $process = [Diagnostics.Process]::GetProcessById([int]$foregroundProcessId)
           try {
             if ($process.ProcessName -cne 'WWAHost') {
               Write-Output 'TEST_FIRST_LOGON_OVERLAY_DISMISSED=0;reason=other_foreground'
