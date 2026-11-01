@@ -1,4 +1,4 @@
-name: One-shot source-pinned Windows package-noshow recovery qualification
+name: One-shot source-pinned Windows installed basic Shell presentation qualification
 on:
   push:
     branches: [ci/win-callback-dispatch-20261031]
@@ -8,17 +8,17 @@ permissions:
   actions: write
 jobs:
   qualified-windows:
-    if: ${{ github.repository == '777genius/agent-notifications' && github.event.head_commit.message == 'ci(windows) admit package-noshow recovery 27b7acb' && github.run_attempt == 1 }}
+    if: ${{ github.repository == '777genius/agent-notifications' && github.event.head_commit.message == 'ci(windows) admit installed basic 713b945' && github.run_attempt == 1 }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - name: Dispatch one fresh Windows package-noshow recovery proof
+      - name: Dispatch one fresh installed Windows basic Shell callback proof
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          source='27b7acb99aa12bc56aff80cea369b40aa783a03b'
+          source='713b945d28f6a704dc8eedf7dc10801cbf4e3dea'
           parent='9c2395f234549aeac24b4d311a4399f359ad7886'
           signedIntakeRun='41298548456'
           rawSHA='d442a3d7d5c229f45e5e11995711ac2619c8dbc89e3fa2bc185287dc8db8e76e'
@@ -38,10 +38,10 @@ jobs:
           fi
           gh api --method POST repos/777genius/agent-notifications/actions/workflows/windows-callback-contracts.yml/dispatches \
             -f ref=test/windows-installed-cold-callback \
-            -f 'inputs[admission]=one-fresh-disposable-package-noshow' \
-            -f 'inputs[phase]=package_noshow' \
-            -f 'inputs[scenario]=package_noshow' \
+            -f 'inputs[admission]=one-fresh-disposable-installed-callback' \
+            -f 'inputs[phase]=installed' \
+            -f 'inputs[scenario]=basic' \
             -f "inputs[expectedArchiveSHA]=$rawSHA" \
             -f "inputs[expectedFullName]=$fullName" \
-            -f 'inputs[coreRef]=228ca171b4a0b4c10222571e7c8b87ba0f160958'
-          echo 'One fresh source-pinned package_noshow test dispatched, no retry.'
+            -f 'inputs[coreRef]='
+          echo 'One fresh source-pinned installed basic proof dispatched, no replay.'
