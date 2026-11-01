@@ -198,6 +198,28 @@ func (n *Notifier) SendDesktop(status analyzer.Status, message, sessionID, cwd s
 	return n.sendWithBeeep(title, cleanMessage, appIcon, statusInfo.Sound, sendOpts)
 }
 
+// selectTerminalNotifierArgs keeps the same opt-out across ordinary terminals
+// and multiplexers. Detection is allowed only for a navigation-enabled send:
+// a mux builder returns executable click actions even if the generic fallback
+// would have omitted them.
+func selectTerminalNotifierArgs(title, message, bundleID, cwd, ghosttyTerminalID string, clickToFocus bool, cfg *config.Config) []string {
+	return selectTerminalNotifierArgsWithDetector(title, message, bundleID, cwd, ghosttyTerminalID, clickToFocus, cfg, detectMultiplexerArgs)
+}
+
+// The detector seam lets tests prove that disabled navigation never captures
+// or invokes a terminal multiplexer, independently of machine environment.
+func selectTerminalNotifierArgsWithDetector(title, message, bundleID, cwd, ghosttyTerminalID string, clickToFocus bool, cfg *config.Config, detect func(string, string, string, *config.Config) ([]string, string)) []string {
+	if clickToFocus {
+		if muxArgs, muxName := detect(title, message, bundleID, cfg); muxArgs != nil {
+			logging.Debug("%s detected, using multiplexer-specific -execute", muxName)
+			return muxArgs
+		} else if muxName != "" {
+			logging.Debug("%s detected but target capture failed, falling back to -activate", muxName)
+		}
+	}
+	return buildTerminalNotifierArgsWithOptions(title, message, bundleID, cwd, ghosttyTerminalID, clickToFocus)
+}
+
 // sendWithTerminalNotifier sends notification via terminal-notifier on macOS
 // with click-to-focus support (clicking notification activates the terminal)
 func (n *Notifier) sendWithTerminalNotifier(title, message, subtitle, sessionID string, _ bool, cwd string, clickToFocus bool, soundFile ...string) error {
@@ -212,16 +234,9 @@ func (n *Notifier) sendWithTerminalNotifier(title, message, subtitle, sessionID 
 		ghosttyTerminalID = loadStoredGhosttyTerminalID(sessionID)
 	}
 
-	var args []string
-	if muxArgs, muxName := detectMultiplexerArgs(title, message, bundleID, n.cfg); muxArgs != nil {
-		args = muxArgs
-		logging.Debug("%s detected, using multiplexer-specific -execute", muxName)
-	} else {
-		if muxName != "" {
-			logging.Debug("%s detected but target capture failed, falling back to -activate", muxName)
-		}
-		args = buildTerminalNotifierArgsWithOptions(title, message, bundleID, cwd, ghosttyTerminalID, clickToFocus)
-	}
+	// Navigation is an explicit per-delivery choice. Multiplexer builders
+	// generate -execute actions, so they must never run when focus is disabled.
+	args := selectTerminalNotifierArgs(title, message, bundleID, cwd, ghosttyTerminalID, clickToFocus, n.cfg)
 
 	// Keep the legacy boolean parameter for existing callers, but never opt
 	// ordinary desktop notifications into an interruption that bypasses Focus.

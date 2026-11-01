@@ -9,6 +9,7 @@ on:
         options: [full, g5-only]
         description: Full G0/G5 or one fresh Linux amd64 G5 diagnostic
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - '.github/workflows/gemini-native-e2e.yml'
       - 'scripts/gemini-native-ci.py'
@@ -33,6 +34,7 @@ permissions:
 
 jobs:
   native-webhook:
+    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}
     name: Gemini ${{ matrix.gemini }} ${{ matrix.platform }} ${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 20

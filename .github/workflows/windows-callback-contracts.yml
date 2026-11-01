@@ -1,6 +1,7 @@
 name: Windows callback source contracts (inert)
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - 'native/windows-callback/**'
       - 'internal/windowscallback/**'
@@ -16,6 +17,7 @@ concurrency:
 
 jobs:
   compile-and-inert-contracts:
+    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}
     runs-on: windows-latest
     timeout-minutes: 15
     steps:

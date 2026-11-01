@@ -1,6 +1,7 @@
 name: Navigation Windows packaged native TEST callback
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - '.github/workflows/navigation-windows-msix-native-e2e.yml'
       - 'tests/integration/navigation_windows_msix_probe.cpp'
@@ -28,6 +29,7 @@ concurrency:
 
 jobs:
   packaged-client:
+    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}
     runs-on: windows-11-vs2026-arm
     # New manual composition adds bounded acquisition/signature/Add/Remove outside the UI lease.
     timeout-minutes: 25

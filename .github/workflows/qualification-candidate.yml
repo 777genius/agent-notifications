@@ -3,6 +3,7 @@ name: Qualification candidate
 on:
   workflow_dispatch:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - '.github/workflows/qualification-candidate.yml'
 
@@ -15,6 +16,7 @@ concurrency:
 
 jobs:
   portable-candidate:
+    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}
     name: Candidate ${{ matrix.platform }} ${{ matrix.arch }}
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && matrix.os || matrix.os == 'ubuntu-22.04' && (vars.CI_LINUX_2204_RUNNER || 'ubuntu-22.04') || matrix.os == 'ubuntu-22.04-arm' && (vars.CI_LINUX_ARM_2204_RUNNER || 'ubuntu-22.04-arm') || matrix.os == 'macos-15' && (vars.CI_MACOS_15_RUNNER || 'macos-15') || matrix.os }}
     timeout-minutes: 35
