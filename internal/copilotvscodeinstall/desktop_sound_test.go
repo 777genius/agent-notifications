@@ -44,8 +44,8 @@ func TestLocalDesktopNativeSoundAndNavigationGate(t *testing.T) {
 			p := localDesktop{backend: sink}
 			r := notification.Request{
 				CorrelationID: "TEST-correlation",
-				Content: notification.Content{Title: "TEST", Body: "stop", Category: "info"},
-				Navigation: tc.navigation, Target: tc.target, Silent: tc.silent,
+				Content:       notification.Content{Title: "TEST", Body: "stop", Category: "info"},
+				Navigation:    tc.navigation, Target: tc.target, Silent: tc.silent,
 				Policy: notification.PolicySnapshot{
 					Valid: true, ExplicitEnabled: true, DesktopEnabled: true,
 					ClickToFocus: tc.click, SoundEnabled: tc.sound,
