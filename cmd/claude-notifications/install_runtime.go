@@ -540,6 +540,7 @@ type runtimeRecoveryResult struct {
 	NativeValidated       bool     `json:"native_validated"`
 	NativeIdentityRefresh bool     `json:"native_identity_refresh"`
 	Mode                  string   `json:"mode"`
+	PostCommit            bool     `json:"post_commit,omitempty"`
 }
 
 func recoveryCLIText(s string) bool {
@@ -570,11 +571,17 @@ func boundedRecoveryText(s string) string {
 // Keep the original typed cause available to callers without exposing ledger or
 // journal contents through main's stderr error rendering.
 type runtimeRecoveryPublicError struct {
-	code  string
-	cause error
+	code       string
+	cause      error
+	postCommit bool
 }
 
-func (e *runtimeRecoveryPublicError) Error() string { return "runtime recovery refused: " + e.code }
+func (e *runtimeRecoveryPublicError) Error() string {
+	if e.postCommit {
+		return "runtime recovery committed; post-commit reconciliation failed: " + e.code
+	}
+	return "runtime recovery refused: " + e.code
+}
 func (e *runtimeRecoveryPublicError) Unwrap() error { return e.cause }
 
 // Pending replay must never bootstrap an installation or create missing locks.
@@ -614,6 +621,7 @@ func runRuntimeRecovery(out io.Writer, control, consumer, runtimeRoot, id string
 		r.Mode = "recover-pending"
 	}
 	var operationErr error
+	var piRefreshErr error
 	if orphan {
 		r.Mode, r.ConsumerID, r.RuntimeRoot = "recover-orphan-consumer", consumer, runtimeRoot
 		if preview {
@@ -671,6 +679,20 @@ func runRuntimeRecovery(out io.Writer, control, consumer, runtimeRoot, id string
 		r.Admissible = err == nil
 		if err == nil {
 			r.InstallationID, r.Generation = boundedRecoveryText(ledger.ID), ledger.Generation
+			if redo {
+				// A replay may install new shared sender bytes without an ordinary
+				// installer invocation. Skip unrelated, incomplete orphan state only
+				// when no canonical portable consumer could represent a Pi binding.
+				for key := range ledger.Consumers {
+					if strings.HasPrefix(key, "portable:") && len(key) == len("portable:")+64 {
+						refreshCtx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+						piRefreshErr = piauthority.RefreshInstalled(refreshCtx, control)
+						cancel()
+						r.PostCommit = piRefreshErr != nil
+						break
+					}
+				}
+			}
 		}
 	}
 	if operationErr != nil {
@@ -687,7 +709,7 @@ func runRuntimeRecovery(out io.Writer, control, consumer, runtimeRoot, id string
 	if asJSON {
 		writeErr = json.NewEncoder(out).Encode(r)
 	} else {
-		_, writeErr = fmt.Fprintf(out, "%s installation=%q generation=%d consumer=%q runtime=%q admissible=%t selected=%d native-validated=%t native-identity-refresh=%t conflict=%s path=%q\n", r.Mode, r.InstallationID, r.Generation, r.ConsumerID, r.RuntimeRoot, r.Admissible, r.SelectedCount, r.NativeValidated, r.NativeIdentityRefresh, r.ConflictCode, r.ConflictPath)
+		_, writeErr = fmt.Fprintf(out, "%s installation=%q generation=%d consumer=%q runtime=%q admissible=%t selected=%d native-validated=%t native-identity-refresh=%t conflict=%s path=%q post-commit=%t\n", r.Mode, r.InstallationID, r.Generation, r.ConsumerID, r.RuntimeRoot, r.Admissible, r.SelectedCount, r.NativeValidated, r.NativeIdentityRefresh, r.ConflictCode, r.ConflictPath, r.PostCommit)
 		for _, path := range r.SelectedPaths {
 			if writeErr != nil {
 				break
@@ -703,6 +725,9 @@ func runRuntimeRecovery(out io.Writer, control, consumer, runtimeRoot, id string
 	}
 	if operationErr != nil {
 		return &runtimeRecoveryPublicError{code: "recovery_conflict", cause: operationErr}
+	}
+	if piRefreshErr != nil {
+		return &runtimeRecoveryPublicError{code: "post_commit_pi_refresh", cause: piRefreshErr, postCommit: true}
 	}
 	return nil
 }

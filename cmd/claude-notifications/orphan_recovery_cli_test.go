@@ -230,6 +230,80 @@ func TestOrphanRecoveryCLIPendingIsStandaloneAfterConsumerDisappears(t *testing.
 	}
 }
 
+// A standalone redo can publish a shared sender revision without visiting the
+// ordinary install path. Keep a committed replay visible even when its Pi
+// discovery reconciliation must subsequently be repaired.
+func TestOrphanRecoveryCLIPendingPiRefreshAfterRedo(t *testing.T) {
+	for _, mode := range []string{"recover-pending", "rollback-pending"} {
+		t.Run(mode, func(t *testing.T) {
+			root := orphanCLIUnitRoot(t)
+			control, runtimeRoot := filepath.Join(root, "control"), filepath.Join(root, "runtime")
+			primary := filepath.Join(runtimeRoot, "primary")
+			candidate := "portable:" + strings.Repeat("a", 64)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+			_, err := installruntime.Commit(ctx, installruntime.Request{
+				ControlRoot: control, Owner: "existing-installer", RuntimeRoot: runtimeRoot,
+				ConsumerID: candidate, Consumer: installruntime.Consumer{Registration: "TEST invalid Pi binding"},
+				Files: []installruntime.File{{Path: primary, Data: []byte("first"), Mode: 0700}},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			before, err := installruntime.Fingerprint(primary)
+			if err != nil {
+				t.Fatal(err)
+			}
+			interrupted := errors.New("TEST interruption after ledger publication")
+			_, err = installruntime.Commit(ctx, installruntime.Request{
+				ControlRoot: control, Owner: "existing-installer", RuntimeRoot: runtimeRoot,
+				ConsumerID: candidate, RefreshOnly: true,
+				Files: []installruntime.File{{Path: primary, Before: before, Data: []byte("second"), Mode: 0700}},
+				Fault: func(phase string) error {
+					if phase == "ledger" {
+						return interrupted
+					}
+					return nil
+				},
+			})
+			if !errors.Is(err, interrupted) {
+				t.Fatalf("pending replay fixture not reached: %v", err)
+			}
+			var out bytes.Buffer
+			err = installRuntime([]string{"--" + mode, "--control-root", control, "--json"}, &out)
+			var result runtimeRecoveryResult
+			if e := json.Unmarshal(out.Bytes(), &result); e != nil {
+				t.Fatalf("unreadable recovery result %q: %v", &out, e)
+			}
+			after, pending, readErr := installruntime.ReadOwnership(control)
+			if readErr != nil || pending || result.Generation != after.Generation ||
+				result.InstallationID != after.ID || !result.Admissible || result.ConflictCode != "" {
+				t.Fatalf("recovery journal/identity lost: %+v pending=%t err=%v", result, pending, readErr)
+			}
+			primaryBytes, readErr := os.ReadFile(primary)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if mode == "recover-pending" {
+				var public *runtimeRecoveryPublicError
+				if !errors.As(err, &public) || public.code != "post_commit_pi_refresh" ||
+					!public.postCommit || !result.PostCommit || string(primaryBytes) != "second" ||
+					strings.Contains(err.Error(), control) || !strings.Contains(err.Error(), "committed; post-commit") {
+					t.Fatalf("redo lost committed state or exposed private error: %v %+v primary=%q", err, result, primaryBytes)
+				}
+			} else if err != nil || result.PostCommit || string(primaryBytes) != "first" {
+				t.Fatalf("rollback unexpectedly refreshed Pi: %v %+v primary=%q", err, result, primaryBytes)
+			}
+			if _, err := installruntime.Commit(ctx, installruntime.Request{
+				ControlRoot: control, Owner: "existing-installer", RuntimeRoot: runtimeRoot,
+				ConsumerID: candidate, RemoveConsumer: true,
+			}); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 func TestOrphanRecoveryCLIPreviewIsBoundedAndDoesNotAcquireLocks(t *testing.T) {
 	root := orphanCLIUnitRoot(t)
 	control, primary, orphan := filepath.Join(root, "control"), filepath.Join(root, "primary"), filepath.Join(root, "orphan")
