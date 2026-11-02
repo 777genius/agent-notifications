@@ -100,6 +100,27 @@ def foreign_pull_check(check, runs, repository):
     return {'check_id': check['id'], 'source_run_id': run['id'], 'foreign_head_repository': owner}
 
 
+def check_history_key(check, runs, repository, source):
+    key = (check['app_id'], check['name'])
+    if check['app_slug'] != 'github-actions':
+        return key
+    origins = [run for run in runs if run.get('check_suite_id') == check['suite_id']]
+    if len(origins) == 1:
+        origin = origins[0]
+        path = origin.get('path')
+        if (origin.get('head_sha') == source
+                and (origin.get('head_repository') or {}).get('full_name') == repository
+                and isinstance(path, str) and re.fullmatch(r'\.github/workflows/[^/]+\.(?:yml|yaml)', path)):
+            # A completed skipped run supplies no retry authority. Its optional
+            # checks must not replace the workflow's actual execution history.
+            if origin.get('status') == 'completed' and origin.get('conclusion') == 'skipped':
+                return (*key, 'suite', check['suite_id'])
+            return (*key, 'workflow', path)
+    # Without one authenticated workflow origin, retain the check in its own
+    # suite. Another suite's green check cannot mask it or authorize a retry.
+    return (*key, 'suite', check['suite_id'])
+
+
 def identity(run):
     value = {key: run.get(key) for key in ('id', 'run_attempt', 'head_sha', 'check_suite_id',
                                            'path', 'event', 'status', 'conclusion')}
@@ -297,7 +318,7 @@ def verify(source, repository):
             require(guard.get('status') == 'completed' and guard.get('conclusion') == 'success',
                     'full macOS gate did not succeed')
             selected[workflow]['full_gate_job_id'] = guard['id']
-    latest, eligible, ignored_foreign = {}, [], []
+    latest, eligible, history_keys, ignored_foreign = {}, [], {}, []
     for check in before:
         if (operator_run is not None and check['app_slug'] == 'github-actions'
                 and check['suite_id'] == operator_run['check_suite_id']):
@@ -307,7 +328,8 @@ def verify(source, repository):
             ignored_foreign.append(foreign)
             continue
         eligible.append(check)
-        key = (check['app_id'], check['name'])
+        key = check_history_key(check, runs, repository, source)
+        history_keys[check['id']] = key
         if key not in latest or latest[key]['id'] < check['id']:
             latest[key] = check
     ignored, ignored_conditionals, ignored_retries, old_jobs = [], [], [], {}
@@ -315,8 +337,8 @@ def verify(source, repository):
         if check['status'] == 'completed' and check['conclusion'] in NON_BLOCKING:
             # A job name is not an identity; also examine bad historical rows
             # when the latest check is successful, not only for skips.
-            older = [row for row in eligible if row['app_id'] == check['app_id']
-                     and row['name'] == check['name'] and row['id'] < check['id']]
+            older = [row for row in eligible if history_keys[row['id']] == history_keys[check['id']]
+                     and row['id'] < check['id']]
             for row in older:
                 if row['status'] == 'completed' and row['conclusion'] in NON_BLOCKING:
                     continue
