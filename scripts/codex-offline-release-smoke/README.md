@@ -91,6 +91,13 @@ inherited. Wrappers come from `git archive C`; symlink copies use
 checks SourceCommit/Version/SHA of that same executable before idempotent setup.
 Repeated setup must preserve fixture Claude files and hook definitions.
 
+Private TEST processes receive the fixed `RUST_LOG=info,codex_hooks=trace` filter
+to request additional native telemetry in TEST logs and captured stderr. The
+filter is not inherited from the operator environment. The actual CLI may emit
+general INFO records without an explicit hook exit or timeout outcome; absence
+of such a record remains unknown. This does not establish the cause of a previous
+failure or change the native Stop/webhook acceptance requirements.
+
 Keep exactly one owned `server` process live, save its process handle and wait
 for `server-ready.json`. From a separate genuine controlling TTY:
 
