@@ -461,14 +461,64 @@ jobs:
           public static class TestOnlyNotificationAcceptance {
             [DllImport("shell32.dll")]
             public static extern int SHQueryUserNotificationState(out int state);
+            [DllImport("user32.dll")]
+            public static extern IntPtr GetForegroundWindow();
+            [DllImport("user32.dll")]
+            public static extern uint GetWindowThreadProcessId(IntPtr window, out uint pid);
+            [DllImport("user32.dll")]
+            public static extern void keybd_event(byte key, byte scan, uint flags, UIntPtr extra);
           }
           '@
-          for ($n=0; $n -le 420; $n++) {
+          function NotificationState {
             [int]$state = 0
             $hr = [TestOnlyNotificationAcceptance]::SHQueryUserNotificationState([ref]$state)
             if ($hr -ne 0) { throw 'unknown Windows notification presentation status; refuse before installation' }
+            return $state
+          }
+          for ($n=0; $n -le 420; $n++) {
+            $state = NotificationState
             if ($state -eq 5) {
               Write-Output ('WINDOWS_NOTIFICATION_ACCEPTED=5;elapsed_slots=' + $n)
+              break
+            }
+            if ($state -eq 7) {
+              # Windows Search can retain foreground app mode when the first-
+              # login Quiet Time ends. Only the exact current-user Windows
+              # Search OS image permits one TEST-only ESC + show-desktop input
+              # before *any* app install/Show. This never clicks a notification.
+              $window = [TestOnlyNotificationAcceptance]::GetForegroundWindow()
+              [uint32]$foregroundProcessId = 0
+              if ($window -eq [IntPtr]::Zero -or
+                  [TestOnlyNotificationAcceptance]::GetWindowThreadProcessId($window, [ref]$foregroundProcessId) -eq 0 -or
+                  $foregroundProcessId -eq 0) { throw 'QUNS_APP: foreground identity unavailable; no installation' }
+              $process = [Diagnostics.Process]::GetProcessById([int]$foregroundProcessId)
+              try {
+                $image = [IO.Path]::GetFullPath((Join-Path $env:WINDIR 'SystemApps\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\SearchHost.exe'))
+                if ($process.ProcessName -cne 'SearchHost' -or
+                    $process.SessionId -ne [Diagnostics.Process]::GetCurrentProcess().SessionId -or
+                    -not [String]::Equals([string]$process.MainModule.FileName, $image,
+                                          [StringComparison]::OrdinalIgnoreCase) -or
+                    $process.HasExited) { throw 'QUNS_APP: unverified SearchHost; no installation' }
+                [TestOnlyNotificationAcceptance]::keybd_event(0x1B,0,0,[UIntPtr]::Zero)
+                [TestOnlyNotificationAcceptance]::keybd_event(0x1B,0,2,[UIntPtr]::Zero)
+                Write-Output 'TEST_SEARCH_ESC_ONCE=1;no_product_effect=1'
+              } finally { $process.Dispose() }
+              Start-Sleep -Seconds 2
+              $state = NotificationState
+              Write-Output ('TEST_AFTER_SEARCH_ESC_STATE=' + $state)
+              if ($state -eq 7) {
+                [TestOnlyNotificationAcceptance]::keybd_event(0x5B,0,0,[UIntPtr]::Zero)
+                [TestOnlyNotificationAcceptance]::keybd_event(0x44,0,0,[UIntPtr]::Zero)
+                [TestOnlyNotificationAcceptance]::keybd_event(0x44,0,2,[UIntPtr]::Zero)
+                [TestOnlyNotificationAcceptance]::keybd_event(0x5B,0,2,[UIntPtr]::Zero)
+                Write-Output 'TEST_SHOW_DESKTOP_ONCE=1;no_product_effect=1'
+                Start-Sleep -Seconds 2
+                $state = NotificationState
+                Write-Output ('TEST_AFTER_SHOW_DESKTOP_STATE=' + $state)
+              }
+              # No implicit app-mode exception, fallback or retry is allowed.
+              if ($state -ne 5) { throw ('Windows notification presentation remains blocked: ' + $state) }
+              Write-Output ('WINDOWS_NOTIFICATION_ACCEPTED=5;elapsed_slots=' + $n + ';desktop_preflight=1')
               break
             }
             if ($state -ne 6) {
