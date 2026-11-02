@@ -1,0 +1,169 @@
+name: One-shot Windows 11 ARM OS SearchHost termination diagnostic
+on:
+  push:
+    branches: [ci/windows-shell-searchhost-terminate-20261102]
+    paths: ['.github/workflows/windows-shell-searchhost-terminate.yml']
+permissions:
+  contents: read
+jobs:
+  probe:
+    if: ${{ github.repository == '777genius/agent-notifications' && github.run_attempt == 1 && github.ref == 'refs/heads/ci/windows-shell-searchhost-terminate-20261102' && github.event.head_commit.message == 'probe-quns-app-searchhost-terminate-v1' }}
+    runs-on: windows-11-vs2026-arm
+    timeout-minutes: 79
+    env:
+      TEST_INSTALLED_ADMISSION: one-fresh-disposable-installed-callback
+      TEST_INSTALLED_PHASE: installed
+    steps:
+      - name: Dismiss only verified first-logon foreground WWAHost in disposable TEST VM
+        timeout-minutes: 2
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # This is disposable test-host preparation, before any signed archive
+          # deployment/installation/Show. Never act on an operator's Windows VM,
+          # an arbitrary process, or a process without exact OS-image identity.
+          if ($env:GITHUB_ACTIONS -cne 'true' -or
+              $env:GITHUB_REPOSITORY -cne '777genius/agent-notifications' -or
+              $env:GITHUB_RUN_ATTEMPT -cne '1' -or
+              $env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or
+              $env:TEST_INSTALLED_ADMISSION -cne 'one-fresh-disposable-installed-callback' -or
+              $env:TEST_INSTALLED_PHASE -cne 'installed') {
+            throw 'not an admitted fresh disposable installed TEST host'
+          }
+          $os = Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction Stop
+          if ($os.ProductType -ne 1 -or [int]$os.BuildNumber -lt 22000) {
+            throw 'only Windows 11 Client may have the first-login TEST overlay dismissed'
+          }
+          Add-Type -TypeDefinition @'
+          using System;
+          using System.Runtime.InteropServices;
+          public static class TestOnlyForegroundWindow {
+            [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+            [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
+          }
+          '@
+          $foreground = [TestOnlyForegroundWindow]::GetForegroundWindow()
+          [uint32]$foregroundProcessId = 0
+          if ($foreground -eq [IntPtr]::Zero -or
+              [TestOnlyForegroundWindow]::GetWindowThreadProcessId($foreground, [ref]$foregroundProcessId) -eq 0 -or
+              $foregroundProcessId -eq 0) {
+            throw 'interactive foreground identity unavailable; no TEST cleanup'
+          }
+          $process = [Diagnostics.Process]::GetProcessById([int]$foregroundProcessId)
+          try {
+            if ($process.ProcessName -cne 'WWAHost') {
+              Write-Output 'TEST_FIRST_LOGON_OVERLAY_DISMISSED=0;reason=other_foreground'
+            } else {
+              $image = [string]$process.MainModule.FileName
+              $systemRoot = [string]$env:WINDIR
+              $sameSession = $process.SessionId -eq [Diagnostics.Process]::GetCurrentProcess().SessionId
+              $systemImage = $image.StartsWith($systemRoot + '\', [StringComparison]::OrdinalIgnoreCase) -and
+                             [IO.Path]::GetFileName($image) -ieq 'WWAHost.exe'
+              if (-not $sameSession -or -not $systemImage) {
+                throw 'foreign or unverified foreground WWAHost; refusing TEST cleanup'
+              }
+              # One exact, already-held OS process only; never sweep, retry or
+              # mutate a product/client registration, package, user policy or toast.
+              $process.Kill()
+              if (-not $process.WaitForExit(10000)) { throw 'OOBE process exit not collected' }
+              Write-Output 'TEST_FIRST_LOGON_OVERLAY_DISMISSED=1'
+            }
+          } finally { $process.Dispose() }
+      - name: Wait for natural first-login quiet expiry, then diagnose exact OS foreground SearchHost
+        shell: pwsh
+        timeout-minutes: 76
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Differential only: after the naturally observed transition from QUNS6,
+          # stop ONE exact foreground OS SearchHost in a disposable GitHub Windows
+          # Client, then read QUNS again. Never install a product or send a toast.
+          if ($env:GITHUB_ACTIONS -cne 'true' -or
+              $env:GITHUB_REPOSITORY -cne '777genius/agent-notifications' -or
+              $env:GITHUB_RUN_ATTEMPT -cne '1' -or
+              $env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or
+              $env:TEST_INSTALLED_ADMISSION -cne 'one-fresh-disposable-installed-callback' -or
+              $env:TEST_INSTALLED_PHASE -cne 'installed') { throw 'not a disposable TEST host' }
+          $os = Get-CimInstance Win32_OperatingSystem
+          if ($os.ProductType -ne 1 -or [int]$os.BuildNumber -lt 22000) { throw 'Windows 11 Client required' }
+          Add-Type -TypeDefinition @'
+          using System;
+          using System.Runtime.InteropServices;
+          public static class TestOnlySearchTerminate {
+            [DllImport("shell32.dll")] public static extern int SHQueryUserNotificationState(out int state);
+            [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+            [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr window, out uint pid);
+          }
+          '@
+          function QueryState {
+            [int]$value = 0
+            $hr = [TestOnlySearchTerminate]::SHQueryUserNotificationState([ref]$value)
+            if ($hr -ne 0) { throw 'QUNS query failed' }
+            return $value
+          }
+          function ForegroundClass {
+            $window = [TestOnlySearchTerminate]::GetForegroundWindow()
+            if ($window -eq [IntPtr]::Zero) { return 'none' }
+            [uint32]$ownerId = 0
+            if ([TestOnlySearchTerminate]::GetWindowThreadProcessId($window, [ref]$ownerId) -eq 0 -or $ownerId -eq 0) { return 'unknown' }
+            try {
+              $p = [Diagnostics.Process]::GetProcessById([int]$ownerId)
+              try {
+                if ($p.SessionId -ne [Diagnostics.Process]::GetCurrentProcess().SessionId) { return 'other_session' }
+                $name = [string]$p.ProcessName
+                if ($name -cmatch '^[A-Za-z0-9_-]{1,64}$') { return $name }
+                return 'unrecognized'
+              } finally { $p.Dispose() }
+            } catch { return 'exited' }
+          }
+          Write-Output 'TEST_SCOPE=one_disposable_system_SearchHost_termination_only;no_product;no_install;no_toast;no_UIA;no_notification_policy'
+          [int]$endState = 0
+          for ($slot = 0; $slot -le 440; $slot++) {
+            $endState = QueryState
+            if ($endState -ne 6) {
+              Write-Output ("TEST_QUIET_EXIT_STATE=" + $endState + ";elapsed_slots=" + $slot)
+              break
+            }
+            if (($slot % 30) -eq 0) { Write-Output ("TEST_QUIET_WAIT_6;elapsed_slots=" + $slot) }
+            if ($slot -eq 440) { throw 'natural quiet expiry not observed within bound' }
+            Start-Sleep -Seconds 10
+          }
+          Write-Output ('TEST_BEFORE_OS_TERMINATION_FOREGROUND=' + (ForegroundClass))
+          if ($endState -ne 7) {
+            Write-Output 'TEST_TERMINATE_SKIPPED=not_QUNS_APP7'
+            Write-Output 'TEST_DIAGNOSTIC_ONLY=1;installed_callback_qualified=false'
+            exit 0
+          }
+          $window = [TestOnlySearchTerminate]::GetForegroundWindow()
+          [uint32]$foregroundProcessId = 0
+          if ($window -eq [IntPtr]::Zero -or
+              [TestOnlySearchTerminate]::GetWindowThreadProcessId($window, [ref]$foregroundProcessId) -eq 0 -or
+              $foregroundProcessId -eq 0) { throw 'foreground owner unavailable; no termination' }
+          $target = [Diagnostics.Process]::GetProcessById([int]$foregroundProcessId)
+          try {
+            $expected = [IO.Path]::GetFullPath((Join-Path $env:WINDIR 'SystemApps\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\SearchHost.exe'))
+            $sameSession = $target.SessionId -eq [Diagnostics.Process]::GetCurrentProcess().SessionId
+            $sameImage = [String]::Equals([string]$target.MainModule.FileName, $expected, [StringComparison]::OrdinalIgnoreCase)
+            Write-Output ('TEST_OS_SEARCHHOST_IMAGE_VERIFIED=' + $sameImage)
+            if (-not $sameSession -or $target.ProcessName -cne 'SearchHost' -or -not $sameImage) {
+              throw 'foreground not exact same-session OS SearchHost; no termination'
+            }
+            [uint32]$confirmationId = 0
+            $checkWindow = [TestOnlySearchTerminate]::GetForegroundWindow()
+            if ($checkWindow -ne $window -or
+                [TestOnlySearchTerminate]::GetWindowThreadProcessId($checkWindow, [ref]$confirmationId) -eq 0 -or
+                $confirmationId -ne $foregroundProcessId -or $target.HasExited) {
+              throw 'foreground changed before exact OS termination'
+            }
+            # Microsoft documents ending SearchHost as a supported Search restart.
+            # This is only an OS-only differential; NEVER reusable to bypass QUNS in production.
+            $target.Kill()
+            if (-not $target.WaitForExit(10000)) { throw 'OS SearchHost exit not collected' }
+            Write-Output 'TEST_EXACT_OS_SEARCHHOST_STOPPED=1'
+          } finally { $target.Dispose() }
+          Start-Sleep -Seconds 2
+          Write-Output ('TEST_AFTER_2S_NOTIFICATION_STATE=' + (QueryState))
+          Write-Output ('TEST_AFTER_2S_FOREGROUND=' + (ForegroundClass))
+          Start-Sleep -Seconds 10
+          Write-Output ('TEST_AFTER_12S_NOTIFICATION_STATE=' + (QueryState))
+          Write-Output ('TEST_AFTER_12S_FOREGROUND=' + (ForegroundClass))
+          Write-Output 'TEST_DIAGNOSTIC_ONLY=1;installed_callback_qualified=false'
