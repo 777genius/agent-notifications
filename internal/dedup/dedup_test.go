@@ -66,6 +66,53 @@ func TestAcquireLock(t *testing.T) {
 	assert.True(t, acquired)
 }
 
+// Slow native I/O can outlive both TTLs between two logical fixture actions.
+// Keep real files and age them explicitly, without sleeping or changing TTLs.
+func TestExplicitFileAgeKeepsLogicalFreshnessIndependentOfElapsedNativeTime(t *testing.T) {
+	root := t.TempDir()
+	fresh := NewManagerWithFileAge(func(string) int64 { return 0 })
+	fresh.tempDir = root
+	native := NewManagerWithFileAge(nil)
+	native.tempDir = root
+	ordinary := NewManager()
+	ordinary.tempDir = root
+	old := time.Now().Add(-10 * time.Second)
+
+	acquired, err := fresh.AcquireLock("elapsed-event", "StopFailure")
+	require.NoError(t, err)
+	require.True(t, acquired)
+	path := fresh.getLockPath("elapsed-event", "StopFailure")
+	require.NoError(t, os.Chtimes(path, old, old))
+	// The old wall-clock replay oracle would now permit another alert.
+	require.False(t, native.CheckEarlyDuplicate("elapsed-event", "StopFailure"))
+	require.False(t, ordinary.CheckEarlyDuplicate("elapsed-event", "StopFailure"))
+	require.True(t, fresh.CheckEarlyDuplicate("elapsed-event", "StopFailure"))
+	acquired, err = fresh.AcquireLock("elapsed-event", "StopFailure")
+	require.NoError(t, err)
+	require.False(t, acquired)
+	acquired, err = native.AcquireLock("elapsed-event", "StopFailure")
+	require.NoError(t, err)
+	require.True(t, acquired)
+
+	acquired, err = fresh.AcquireContentLock("elapsed-content")
+	require.NoError(t, err)
+	require.True(t, acquired)
+	path = filepath.Join(root, "claude-notification-elapsed-content-content.lock")
+	require.NoError(t, os.Chtimes(path, old, old))
+	before, err := os.Stat(path)
+	require.NoError(t, err)
+	acquired, err = fresh.AcquireContentLock("elapsed-content")
+	require.NoError(t, err)
+	require.False(t, acquired)
+	after, err := os.Stat(path)
+	require.NoError(t, err)
+	require.True(t, os.SameFile(before, after))
+	// The old ownership probe would itself expire and replace the held file.
+	acquired, err = native.AcquireContentLock("elapsed-content")
+	require.NoError(t, err)
+	require.True(t, acquired)
+}
+
 func TestAcquireLockConcurrent(t *testing.T) {
 	mgr := &Manager{tempDir: t.TempDir()}
 	sessionID := "concurrent-test"
