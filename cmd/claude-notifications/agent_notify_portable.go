@@ -3,8 +3,9 @@ package main
 import (
 	"context"
 	"encoding/hex"
+	"errors"
+	"fmt"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"syscall"
@@ -22,7 +23,7 @@ func agentPortableRun(command string, args []string, options notifyruntime.Optio
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	var expectedHash string
-	if command == "portable-primary" {
+	if command == "portable-primary" || command == "portable-shared-daemon" {
 		if len(args) != 4 || args[2] != "--runtime-sha256" || len(args[3]) != 64 {
 			return 2
 		}
@@ -46,8 +47,27 @@ func agentPortableRun(command string, args []string, options notifyruntime.Optio
 	if err != nil {
 		return 2
 	}
+	if command == "portable-launch" {
+		return agentPortableBridge(ctx, dataRoot, name, options)
+	}
+	if command == "portable-shared-daemon" {
+		discovery, err := portable.Discover(ctx, dataRoot, name)
+		if err != nil || discovery.SHA256 != expectedHash {
+			return 2
+		}
+		return agentPortableSharedDaemon(ctx, discovery.Binding, name, expectedHash, options)
+	}
 	lease, err := portable.Acquire(ctx, dataRoot, name)
 	if err != nil {
+		reason := "portable_binding_invalid"
+		if errors.Is(err, context.DeadlineExceeded) {
+			reason = "installation_lease_timeout"
+		} else if errors.Is(err, context.Canceled) {
+			reason = "startup_canceled"
+		}
+		// stdout belongs to MCP. Keep diagnostics bounded and never expose raw
+		// errors, locator content, environment, or filesystem paths.
+		_, _ = fmt.Fprintf(os.Stderr, "%s: %s\n", command, reason)
 		return 2
 	}
 	if command == "portable-primary" {
@@ -71,24 +91,8 @@ func agentPortableRun(command string, args []string, options notifyruntime.Optio
 		}
 		return agentNotifyExecute(ctx, "mcp-server", []string{"--integration", string(b.Integration)}, options)
 	}
-	child := exec.CommandContext(ctx, lease.Executable, "portable-primary", "--locator", name, "--runtime-sha256", lease.SHA256)
-	child.Env = portableChildEnvironment(lease.Binding.DataRoot, os.Getenv("PLUGIN_ROOT"))
-	child.Dir = lease.Binding.RuntimeRoot
-	child.Stdin = os.Stdin
-	child.Stdout = os.Stdout
-	child.Stderr = os.Stderr
-	err = child.Start()
-	lease.Release() // Primary revalidates; never retain component lock for stdio lifetime.
-	if err != nil {
-		return 2
-	}
-	if err = child.Wait(); err != nil {
-		if exit, ok := err.(*exec.ExitError); ok {
-			return exit.ExitCode()
-		}
-		return 2
-	}
-	return 0
+	lease.Release()
+	return 2
 }
 
 func portableChildEnvironment(dataRoot, pluginRoot string) []string {

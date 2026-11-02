@@ -53,6 +53,18 @@ func validateLockFile(f *os.File, writable bool) error {
 
 // Called with flock held and the named inode verified. Descriptor-based chmod
 // preserves other holders' lock identity and never follows a substituted path.
+func tryReadLock(f *os.File) (bool, error) {
+	err := unix.Flock(int(f.Fd()), unix.LOCK_SH|unix.LOCK_NB)
+	if errors.Is(err, unix.EWOULDBLOCK) || errors.Is(err, unix.EAGAIN) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+// Open the final component without following links, then validate the descriptor
+// before flock. Writable callers may adopt read-only public permissions only
+// after acquiring the lock. Never unlink a stale lock or replace its inode.
+
 func prepareLockedFile(f *os.File, writable bool) error {
 	if err := validateLockFile(f, writable); err != nil {
 		return err
