@@ -29,10 +29,10 @@ jobs:
   installer:
     # Includes draft PRs; the configured route supplies fresh disposable Actions VMs.
     name: Public regression and candidate full installer / macOS 26
-    runs-on: ${{ vars.CI_MACOS_26_RUNNER || 'macos-26' }}
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'macos-26' || vars.CI_MACOS_26_RUNNER || 'macos-26' }}
     timeout-minutes: 25
     env:
-      PI_INSTALLER_NAMESPACE: ${{ startsWith(vars.CI_MACOS_26_RUNNER, 'namespace-profile-') && 'true' || 'false' }}
+      PI_INSTALLER_NAMESPACE: ${{ !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && startsWith(vars.CI_MACOS_26_RUNNER, 'namespace-profile-') && 'true' || 'false' }}
       GOWORK: 'off'
       CGO_ENABLED: '1'
       MACOSX_DEPLOYMENT_TARGET: '12.0'
