@@ -15,7 +15,7 @@
       "3": { "label": "INTEGRAZIONI WEBHOOK", "title": "Il tuo flusso di lavoro, connesso", "text": "Invia aggiornamenti a Slack, Discord, Telegram, Lark/Feishu e webhook personalizzati. Configura le destinazioni per il tuo ambiente di lavoro." }
     },
     "preview": { "focus":"Fai clic per tornare","return":"Torna al terminale","done": "Il tuo agente ha finito", "ready": "Pronto quando vuoi.", "sound": "Il tuo suono. Il tuo volume.", "event": "Evento dell'agente" },
-    "foot": "Il supporto per la messa a fuoco con un clic dipende dal terminale e dal sistema operativo. OpenCode: avvisi silenziosi di completamento, domande, permessi ed errori per la sessione principale. Senza suoni né attivazione della finestra al clic.", "details": "Vedi i dettagli delle piattaforme"
+    "foot": "Il supporto per la messa a fuoco con un clic dipende dal terminale e dal sistema operativo. OpenCode: avvisi di completamento, domande, permessi ed errori per la sessione principale. Senza suoni né attivazione della finestra al clic.", "details": "Vedi i dettagli delle piattaforme"
   },
   "terminalSupport": {
     "eyebrow": "UN CLIC. LA FINESTRA GIUSTA.",
@@ -86,7 +86,7 @@
       "2": { "question": "Gli hook di Codex vengono installati automaticamente?", "answer": "Sì. Il programma di installazione registra gli hook e salva una copia stabile del runtime. Apri /hooks in Codex per verificarli e autorizzarli. Le definizioni modificate richiedono una nuova verifica." },
       "3": { "question": "Un aggiornamento azzera le mie impostazioni?", "answer": "Il programma di installazione conserva la configurazione condivisa e gli hook di Codex di terze parti. Installazione e aggiornamento usano lo stesso comando. Riavvia l'agente selezionato dopo l'aggiornamento." },
       "4": { "question": "Posso scegliere quali eventi emettono un suono?", "answer": "Sì. Configura suoni, volume, dispositivo audio e canali di notifica. Scegli Configura nella guida per i passaggi specifici del tuo agente. Solo Claude, Codex CLI e Pi." },
-      "5": { "question": "La messa a fuoco con un clic funziona ovunque?", "answer": "Il supporto varia in base al sistema operativo e al terminale. iTerm2 richiede la sua API Python per selezionare la scheda esatta. Windows Terminal porta in primo piano una finestra; Warp può selezionare una scheda o un riquadro preciso. OpenCode: avvisi silenziosi di completamento, domande, permessi ed errori per la sessione principale. Senza suoni né attivazione della finestra al clic.", "link": "Consulta gli ambienti supportati." },
+      "5": { "question": "La messa a fuoco con un clic funziona ovunque?", "answer": "Il supporto varia in base al sistema operativo e al terminale. iTerm2 richiede la sua API Python per selezionare la scheda esatta. Windows Terminal porta in primo piano una finestra; Warp può selezionare una scheda o un riquadro preciso. OpenCode: avvisi di completamento, domande, permessi ed errori per la sessione principale. Senza suoni né attivazione della finestra al clic.", "link": "Consulta gli ambienti supportati." },
       "6": { "question": "E se non ricevo una notifica?", "answer": "Controlla le autorizzazioni delle notifiche del sistema operativo e i canali scelti. Per Codex, verifica che gli hook siano autorizzati.", "link": "Segui la risoluzione dei problemi per i controlli specifici della piattaforma." }
     }
   },
@@ -122,7 +122,7 @@
   },
   "select": { "scrollUp": "Scorri le opzioni verso l'alto", "scrollDown": "Scorri le opzioni verso il basso" },
   "install": {
-    "availability": "Il programma comune Cursor/Qoder/Pi è disponibile nella versione della piattaforma v1.50.1. Cursor CLI, Qoder e Pi usano l’installer comune con scelte separate per i canali di notifica.", "cursor": {"guide": "Installare Cursor CLI", "scope": "Cursor CLI: avvisi Stop informativi e webhook facoltativi su Linux amd64, macOS arm64 e Windows amd64. Nessun supporto per Cursor IDE, suoni o messa a fuoco con clic. Il programma verifica CLI e profilo selezionati.", "restart": "Riavvia Cursor CLI per caricare l’osservatore Stop informativo."},
+    "availability": "Cursor CLI, Qoder e Pi usano l’installer comune con scelte separate per i canali di notifica.", "cursor": {"guide": "Installare Cursor CLI", "scope": "Cursor CLI: avvisi Stop informativi e webhook facoltativi su Linux amd64, macOS arm64 e Windows amd64. Nessun supporto per Cursor IDE o messa a fuoco con clic. Il programma verifica CLI e profilo selezionati.", "restart": "Riavvia Cursor CLI per caricare l’osservatore Stop informativo."},
     "qoder": {"guide": "Configurazione e hook di Qoder", "scope": "Qoder: avvisi di completamento, domande, permessi, piani e compagni, con webhook facoltativi. Selezionalo insieme agli altri agenti nel programma comune; un clic non apre la chat esistente esatta.", "restart": "Riavvia Qoder per attivare gli hook."},
     "agentNotify": {"label": "Configurare gli strumenti di notifica facoltativi", "hint": "Controlla la configurazione delle notifiche per Claude, Codex CLI e Cursor CLI selezionati. Se selezionato segue le preferenze salvate; se deselezionato salta la configurazione per questa esecuzione e conserva registrazioni e consensi esistenti. Qoder, OpenCode, Gemini e Pi non sono interessati."},
     "title": "Configura le notifiche", "intro": "Segui i passaggi per aggiungere notifiche a {agent}.", "chooseAgent": "Scegli i tuoi agenti", "requires": "Richiede {agent}", "bothAgents": "Entrambi gli agenti", "bothSelected": "✓ Entrambi gli agenti selezionati", "installBoth": "Installa per entrambi gli agenti", "chooseComputer": "Scegli il computer su cui è in esecuzione il tuo agente", "selected": "Selezionato", "detected": "Rilevato automaticamente", "change": "Cambia", "targetOs": "Sistema operativo di destinazione",
@@ -144,8 +144,8 @@
       "details": "Compatibilità",
       "claude": "Avvisi di completamento, revisione, domande, piani, limiti di sessione ed errori API. Suoni e ritorno con un clic dove supportati.",
       "codex": "Avvisi di completamento e permessi. Suoni e ritorno con un clic dove supportati. Verifica e autorizza gli hook installati in /hooks.",
-      "opencode": "Avvisi silenziosi di completamento, domande, permessi ed errori nelle sessioni principali. Nessun suono o ritorno con un clic.",
-      "gemini": "Gemini CLI (macOS / Linux / Windows): avvisi silenziosi di turno concluso e permesso per strumenti. Un turno concluso non implica successo né risposta finale. Nessun suono, focus al clic, domanda, errore, piano, revisione o parità per agenti annidati."
+      "opencode": "Avvisi di completamento, domande, permessi ed errori nelle sessioni principali. Nessun ritorno con un clic.",
+      "gemini": "Gemini CLI (macOS / Linux / Windows): avvisi di turno concluso e permesso per strumenti. Un turno concluso non implica successo né risposta finale. Nessun focus al clic, domanda, errore, piano, revisione o parità per agenti annidati."
     },
     "gemini": {
       "version": "Nessuna restrizione di versione per Gemini CLI. Disponibile su macOS / Linux / Windows. Versioni e piattaforme testate sono nella guida Gemini.",
@@ -160,7 +160,7 @@
     "opencode": {
       "channelsTitle": "Canali di notifica OpenCode",
       "channelsHint": "Queste scelte valgono solo per OpenCode. Autorizza almeno un canale; gli URL dei webhook si configurano separatamente.",
-      "scope": "OpenCode: avvisi silenziosi di completamento, domande, permessi ed errori per la sessione principale. Senza suoni né attivazione della finestra al clic.",
+      "scope": "OpenCode: Avvisi di completamento, domande, permessi ed errori nelle sessioni principali. Nessun ritorno con un clic.",
       "version": "Nessuna restrizione di versione per OpenCode CLI. Versioni e piattaforme testate sono nella guida di configurazione.",
       "desktop": "Consenti notifiche desktop",
       "webhook": "Consenti notifiche webhook",
@@ -186,7 +186,7 @@
     "no": "Non supportata",
     "conditional": "Supportata con limiti",
     "legend": "✓ Supportata · ✕ Non supportata · ✓* Con limiti",
-    "conditions": "* Le domande di Codex dipendono dalla modalità; errori e limiti vengono rilevati dal messaggio finale. Il focus al clic dipende dal sistema e dal terminale.",
+    "conditions": "* Le domande di Codex dipendono dalla modalità; errori e limiti vengono rilevati dal messaggio finale. Il focus al clic dipende dal sistema e dal terminale. OpenCode, Gemini CLI e Cursor CLI: suono di sistema facoltativo tramite notifications.desktop.systemSound=true; senza audio personalizzato o focus al clic. Qoder: errori e limiti API tramite StopFailure; cinque MP3 inclusi, riproduzione nativa udibile non verificata.",
     "qualification": "Le richieste di permesso Claude appaiono come domande. Gli hook delle domande Codex sono sperimentali; errori e limiti sono dedotti dal testo del messaggio finale. Consulta le guide collegate per i dettagli della validazione.",
     "v2Link": "Cos'è OpenCode V2?",
     "rows": {

@@ -543,19 +543,19 @@ test("released agents toggle independently, copied commands and configuration co
   await expect(table.getByRole("columnheader")).toHaveText(["Feature", "Claude", "Codex CLI", "OpenCode", /Gemini CLI\s*macOS \/ Linux \/ Windows/, "Cursor CLI", "Qoder", "Pi"]);
   await expect(table.getByRole("row", { name: /^Completed/ }).getByRole("cell")).toHaveText(["✓Supported", "✓Supported", "✓Supported", "✓Supported", "✓*Supported with limitations", "✓Supported", "✓Supported"]);
   await expect(table.getByRole("row", { name: /^Review/ }).getByRole("cell")).toHaveText(["✓Supported", "✕Not supported", "✕Not supported", "✕Not supported", "✕Not supported", "✕Not supported", "✕Not supported"]);
-  await expect(table.getByRole("row", { name: /^Sounds/ }).getByRole("cell")).toHaveText(["✓Supported", "✓Supported", "✕Not supported", "✕Not supported", "✕Not supported", "✓Supported", "✓*Supported with limitations"]);
+  await expect(table.getByRole("row", { name: /^Sounds/ }).getByRole("cell")).toHaveText(["✓Supported", "✓Supported", "✓*Supported with limitations", "✓*Supported with limitations", "✓*Supported with limitations", "✓*Supported with limitations", "✓*Supported with limitations"]);
   await expect(table.getByRole("row", { name: /^Question/ }).getByRole("cell")).toHaveText(["✓Supported", "✓*Supported with limitations", "✓Supported", "✕Not supported", "✕Not supported", "✓Supported", "✓Supported"]);
-  await expect(table.getByRole("row", { name: /^Errors/ }).getByRole("cell")).toHaveText(["✓Supported", "✓*Supported with limitations", "✓Supported", "✕Not supported", "✕Not supported", "✕Not supported", "✓Supported"]);
+  await expect(table.getByRole("row", { name: /^Errors/ }).getByRole("cell")).toHaveText(["✓Supported", "✓*Supported with limitations", "✓Supported", "✕Not supported", "✕Not supported", "✓Supported", "✓Supported"]);
   const compatibility = page.locator(".agent-support details");
   const qualification = compatibility.getByText("Claude permission prompts appear as Question alerts. Codex question hooks are experimental; error and limit detection uses final-message heuristics. See the linked guides for qualification details.", { exact: true });
   await expect(qualification).not.toBeVisible();
   await expect(compatibility.getByText(/^\* Codex questions depend/)).not.toBeVisible();
-  await expect(compatibility.getByText(/^OpenCode: silent completion/)).not.toBeVisible();
+  await expect(compatibility.getByText(/^OpenCode: completion/)).not.toBeVisible();
   await expect(page.getByText(/OpenCode CLI versions are not restricted/)).not.toBeVisible();
   await page.locator(".agent-support summary").click();
   await expect(qualification).toBeVisible();
   await expect(compatibility.getByText(/^\* Codex questions depend/)).toBeVisible();
-  await expect(compatibility.getByText(/^OpenCode: silent completion/)).toBeVisible();
+  await expect(compatibility.getByText(/^OpenCode: completion/)).toBeVisible();
   await expect(page.getByText(/OpenCode CLI versions are not restricted/)).toBeVisible();
   await expect(page.getByRole("link", { name: "What is OpenCode V2? ↗" })).toHaveAttribute("href", "https://opencode.ai/v2/docs");
   await expect(page.getByRole("group", { name: "OpenCode notification channels" })).toHaveCount(0);
@@ -626,17 +626,19 @@ test("Gemini selection works on macOS while feature limits remain visible", asyn
   await expect(table.getByRole("columnheader").nth(4)).toContainText("macOS / Linux / Windows");
   for (const [feature, supported] of [
     [/^Completed/, true], [/^Permission Request/, true], [/^Webhooks/, true],
-    [/^Question/, false], [/^Errors/, false], [/^Sounds/, false],
+    [/^Question/, false], [/^Errors/, false],
     [/^Click-to-focus/, false], [/^Plan/, false], [/^Review/, false], [/^Session Limit/, false],
   ] as const) {
     await expect(table.getByRole("row", { name: feature }).getByRole("cell").nth(3))
       .toHaveText(supported ? "✓Supported" : "✕Not supported");
   }
+  await expect(table.getByRole("row", { name: /^Sounds/ }).getByRole("cell").nth(3))
+    .toHaveText("✓*Supported with limitations");
   const details = page.locator(".agent-support details");
   await expect(details.getByText(/A completed turn does not imply success or a final answer/)).not.toBeVisible();
   await page.locator(".agent-support summary").click();
   await expect(details).toContainText("A completed turn does not imply success or a final answer");
-  await expect(details).toContainText("silent turn-completed and tool-permission alerts");
+  await expect(details).toContainText("turn-completed and tool-permission alerts");
   const gemini = page.getByRole("button", { name: "Gemini CLI", exact: true });
   await expect(gemini).toBeVisible();
   await expect(gemini).toBeEnabled();
@@ -733,7 +735,6 @@ test("Cursor and Qoder share combined installation, updates and guidance", async
   await expect(page.getByLabel("Install command", { exact: true })).toHaveValue(expected);
   await expect(page.locator(".qoder-install")).toHaveCount(0);
   await expect(page.locator(".availability-note")).toContainText("use the common installer");
-  await expect(page.locator(".availability-note")).toContainText("available in platform release v1.50.1");
   await expect(page.locator(".next-steps")).toContainText("Restart Cursor CLI");
   await expect(page.locator(".next-steps")).toContainText("Restart Qoder");
   const optionalSetup = page.getByRole("checkbox", { name: "Set up optional notification tools" });
@@ -745,8 +746,17 @@ test("Cursor and Qoder share combined installation, updates and guidance", async
   const notes = page.locator(".agent-support-notes");
   await expect(notes).toContainText("informational Stop alerts");
   await expect(notes).toContainText("Linux amd64, macOS arm64 and Windows amd64");
-  await expect(notes).toContainText("No Cursor IDE, sound or click-to-focus support");
+  await expect(notes).toContainText("No Cursor IDE or click-to-focus support");
   await expect(notes).not.toContainText("Source package only");
+  const table = page.getByRole("table", { name: "Compare agent features" });
+  for (const index of [2, 3, 4, 5]) {
+    await expect(table.getByRole("row", { name: /^Sounds/ }).getByRole("cell").nth(index))
+      .toHaveText("✓*Supported with limitations");
+  }
+  await expect(table.getByRole("row", { name: /^Errors/ }).getByRole("cell").nth(5))
+    .toHaveText("✓Supported");
+  await expect(table.getByRole("row", { name: /^Session Limit/ }).getByRole("cell").nth(5))
+    .toHaveText("✓*Supported with limitations");
   await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
   await page.getByRole("button", { name: "Copy command" }).click();
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(expected);

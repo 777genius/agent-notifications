@@ -51,6 +51,30 @@ AGENT_NOTIFY_STARTUP_STRESS=1 GOWORK=off go test ./cmd/claude-notifications \
 
 This test sends no desktop notification and changes no operator profile.
 
+### Many chats and the shared notification backend
+
+Portable MCP adapters now share one backend per installed binding, provider and
+profile. Each chat retains a lightweight stdio adapter that captures its own call
+metadata. Eight is a regression-test size, not a supported maximum. The shared
+service lifecycle test covers 32 clients by default and 32/64/128 with:
+
+```sh
+AGENT_NOTIFY_SHARED_STRESS=1 GOWORK=off go test ./cmd/claude-notifications \
+  -run '^TestPortableSharedDaemonLifecycle$' -count=1 -v -timeout=4m
+```
+
+This exercises initialization, tools/list, status, one backend per binding and
+reconnection after terminating only the test backend. It sends no notification.
+The service exits after ten idle minutes and restarts on a later call. Existing
+notification rate limits still apply; simultaneous chats do not imply unlimited
+notification throughput. After a request has been transmitted, a lost response
+is reported as `unknown` with `retry_safe=false`; do not resend automatically.
+
+The endpoint is an authenticated, encrypted loopback connection selected from
+private plugin data. Removing a binding or refreshing the installed primary
+invalidates the old service. Restart the client after updating the package so
+new MCP sessions use the shared adapter.
+
 ## OpenCode notifications missing or duplicated
 
 - Confirm the host version with `opencode --version`. Published support: 1.18.33. The dual-API candidate is tested with 1.18.33,

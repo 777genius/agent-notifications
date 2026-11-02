@@ -15,7 +15,7 @@
         "title": "🔴 OpenCode · エラー",
         "body": "エラーの確認が必要です"
       }}},"select":{"scrollUp":"選択肢を上にスクロール","scrollDown":"選択肢を下にスクロール"},"install":{
-    "availability": "Cursor/Qoder/Pi の共通インストーラーはプラットフォームリリース v1.50.1 で利用できます。 Cursor CLI、Qoder、Pi は共通インストーラーを使い、通知チャネルを個別に選択できます。", "cursor": {"guide": "Cursor CLI のインストール", "scope": "Cursor CLI：Linux amd64、macOS arm64、Windows amd64 で情報通知の Stop アラートと任意の Webhook に対応。Cursor IDE、サウンド、クリックでのフォーカスは非対応です。インストーラーが選択した CLI とユーザープロファイルを検証します。", "restart": "Cursor CLI を再起動して Stop 通知オブザーバーを読み込んでください。"},
+    "availability": "Cursor CLI、Qoder、Pi は共通インストーラーを使い、通知チャネルを個別に選択できます。", "cursor": {"guide": "Cursor CLI のインストール", "scope": "Cursor CLI：Linux amd64、macOS arm64、Windows amd64 で情報通知の Stop アラートと任意の Webhook に対応。Cursor IDE、クリックでのフォーカスは非対応です。インストーラーが選択した CLI とユーザープロファイルを検証します。", "restart": "Cursor CLI を再起動して Stop 通知オブザーバーを読み込んでください。"},
     "qoder": {"guide": "Qoder のセットアップとフック", "scope": "Qoder：完了、質問、権限、計画、チームメンバーの通知と任意の Webhook。共通インストーラーで他のエージェントと一緒に選択できます。通知クリックでは既存の正確なチャットを開けません。", "restart": "Qoder を再起動してフックを有効にします。"},
     "agentNotify": {"label": "任意の通知ツールを設定する", "hint": "選択した Claude、Codex CLI、Cursor CLI の通知設定を管理します。オンの場合は保存済みの設定に従います。オフの場合は今回の設定をスキップし、既存の登録と同意を保持します。Qoder、OpenCode、Gemini、Pi には影響しません。"},"title":"通知を設定","intro":"以下の手順で {agent} に通知を追加します。","chooseAgent":"エージェントを選択","requires":"{agent} が必要です","bothAgents":"両方のエージェント","bothSelected":"✓ 両方のエージェントを選択済み","installBoth":"両方のエージェントにインストール","chooseComputer":"エージェントを実行するコンピューターを選択","selected":"選択済み","detected":"自動検出","change":"変更","targetOs":"対象のオペレーティングシステム","products":{"claude":"Claude","codex":"Codex CLI","both":"Claude + Codex CLI",
       "opencode": "OpenCode",
@@ -27,8 +27,8 @@
       "details": "互換性の詳細",
       "claude": "完了、レビュー、質問、計画、セッション制限、API エラーを通知。対応環境ではサウンドとクリックで戻る機能も利用できます。",
       "codex": "完了と権限要求を通知。対応環境ではサウンドとクリックで戻る機能も利用できます。/hooks でインストール済みフックを確認して信頼してください。",
-      "opencode": "ルートセッションの完了、質問、権限要求、エラーを無音で通知。サウンドやクリックで戻る機能はありません。",
-      "gemini": "Gemini CLI (macOS / Linux / Windows)：ターン終了とツール許可要求を無音で通知します。ターン終了は成功や最終回答を意味しません。音、クリックでのフォーカス、質問、エラー、計画、レビュー通知や入れ子エージェントの同等対応はありません。"
+      "opencode": "ルートセッションの完了、質問、権限要求、エラーを通知。クリックで戻る機能はありません。",
+      "gemini": "Gemini CLI (macOS / Linux / Windows)：ターン終了とツール許可要求を通知します。ターン終了は成功や最終回答を意味しません。クリックでのフォーカス、質問、エラー、計画、レビュー通知や入れ子エージェントの同等対応はありません。"
     },
     "gemini": {
       "version": "Gemini CLI のバージョン制限はありません。macOS / Linux / Windows に対応。テスト済みのバージョンとプラットフォームは Gemini ガイドを参照してください。",
@@ -43,7 +43,7 @@
     "opencode": {
       "channelsTitle": "OpenCode の通知チャネル",
       "channelsHint": "この選択は OpenCode のみに適用されます。少なくとも1つのチャネルを許可してください。Webhook URL は別途設定します。",
-      "scope": "OpenCode：ルートセッションの完了、質問、権限要求、エラーを静かに通知します。サウンドとクリックによるフォーカスには対応しません。",
+      "scope": "OpenCode: ルートセッションの完了、質問、権限要求、エラーを通知。クリックで戻る機能はありません。",
       "version": "OpenCode CLI のバージョン制限はありません。テスト済みのバージョンとプラットフォームは設定ガイドを参照してください。",
       "desktop": "デスクトップ通知を許可",
       "webhook": "Webhook 通知を許可",
@@ -68,7 +68,7 @@
     "no": "非対応",
     "conditional": "制限付きで対応",
     "legend": "✓ 対応 · ✕ 非対応 · ✓* 制限付き",
-    "conditions": "* Codex の質問はモードに依存します。エラーと上限は最終メッセージから検出されます。クリックでのフォーカスは OS とターミナルに依存します。",
+    "conditions": "* Codex の質問はモードに依存します。エラーと上限は最終メッセージから検出されます。クリックでのフォーカスは OS とターミナルに依存します。 OpenCode、Gemini CLI、Cursor CLI：notifications.desktop.systemSound=true でシステム通知音を明示的に有効化できます。独自音声やクリックでのフォーカスは非対応。Qoder：StopFailure のエラーと API 制限に対応。MP3 を5個同梱していますが、ネイティブの音声再生は未検証です。",
     "qualification": "Claude の権限要求は質問通知として表示されます。Codex の質問フックは実験的機能で、エラーと制限は最終メッセージの文面から推定します。検証の詳細はリンク先のガイドをご覧ください。",
     "v2Link": "OpenCode V2 とは？",
     "rows": {

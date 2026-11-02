@@ -62,7 +62,7 @@
       "sound": "Your sound. Your volume.",
       "event": "Agent event"
     },
-    "foot": "Click-to-focus support depends on your terminal and OS. OpenCode: silent completion, question, permission and error alerts for root sessions. No sound or click-to-focus.",
+    "foot": "Click-to-focus support depends on your terminal and OS. OpenCode: completion, question, permission and error alerts for root sessions. No click-to-focus.",
     "details": "See platform details"
   },
   "terminalSupport": {
@@ -150,7 +150,7 @@
       },
       "5": {
         "question": "Does click-to-focus work everywhere?",
-        "answer": "Support varies by OS and terminal. iTerm2 needs its Python API for precise tab targeting. Windows Terminal focuses a window; Warp can target an exact tab or pane. OpenCode: silent completion, question, permission and error alerts for root sessions. No sound or click-to-focus.",
+        "answer": "Support varies by OS and terminal. iTerm2 needs its Python API for precise tab targeting. Windows Terminal focuses a window; Warp can target an exact tab or pane. OpenCode: completion, question, permission and error alerts for root sessions. No click-to-focus.",
         "link": "Check supported environments."
       },
       "6": {
@@ -209,7 +209,7 @@
     "scrollDown": "Scroll options down"
   },
   "install": {
-    "availability": "The common Cursor/Qoder/Pi installer is available in platform release v1.50.1. Cursor CLI, Qoder and Pi use the common installer with separate notification channel choices.", "cursor": {"guide": "Cursor CLI installation", "scope": "Cursor CLI: informational Stop alerts and optional webhooks on Linux amd64, macOS arm64 and Windows amd64. No Cursor IDE, sound or click-to-focus support. The installer validates the selected CLI and user profile.", "restart": "Restart Cursor CLI to load the informational Stop observer."},
+    "availability": "Cursor CLI, Qoder and Pi use the common installer with separate notification channel choices.", "cursor": {"guide": "Cursor CLI installation", "scope": "Cursor CLI: informational Stop alerts and optional webhooks on Linux amd64, macOS arm64 and Windows amd64. No Cursor IDE or click-to-focus support. The installer validates the selected CLI and user profile.", "restart": "Restart Cursor CLI to load the informational Stop observer."},
     "qoder": {"guide": "Qoder setup and hooks", "scope": "Qoder: completion, question, permission, plan and teammate alerts with optional webhooks. Choose Qoder alongside other agents in the common installer; a notification click cannot open the exact existing chat.", "restart": "Restart Qoder to activate the hooks."},
     "title": "Set up notifications",
     "intro": "Follow the steps below to add notifications to {agent}.",
@@ -291,8 +291,8 @@
       "details": "Compatibility details",
       "claude": "Completion, review, question, plan, session limit and API error alerts, with sounds and click-to-focus where supported.",
       "codex": "Completion and permission alerts, with sounds and click-to-focus where supported. Review and trust installed hooks in /hooks.",
-      "opencode": "Silent completion, question, permission and error alerts for root sessions. No sound or click-to-focus.",
-      "gemini": "Gemini CLI (macOS / Linux / Windows): silent turn-completed and tool-permission alerts. A completed turn does not imply success or a final answer. No sound, click-to-focus, question, error, plan, review or nested-agent parity."
+      "opencode": "Completion, question, permission and error alerts for root sessions. No click-to-focus.",
+      "gemini": "Gemini CLI (macOS / Linux / Windows): turn-completed and tool-permission alerts. A completed turn does not imply success or a final answer. No click-to-focus, question, error, plan, review or nested-agent parity."
     },
     "gemini": {
       "version": "Gemini CLI versions are not restricted. Available on macOS / Linux / Windows. Tested versions and platform coverage are documented in the Gemini guide.",
@@ -307,7 +307,7 @@
     "opencode": {
       "channelsTitle": "OpenCode notification channels",
       "channelsHint": "These choices apply only to OpenCode. Allow at least one channel; webhook URLs are configured separately.",
-      "scope": "OpenCode: silent completion, question, permission and error alerts for root sessions. No sound or click-to-focus.",
+      "scope": "OpenCode: completion, question, permission and error alerts for root sessions. No click-to-focus.",
       "version": "OpenCode CLI versions are not restricted. Tested versions and platform coverage are documented in the setup guide.",
       "desktop": "Allow desktop notifications",
       "webhook": "Allow webhook notifications",
@@ -333,7 +333,7 @@
     "no": "Not supported",
     "conditional": "Supported with limitations",
     "legend": "✓ Supported · ✕ Not supported · ✓* Supported with limitations",
-    "conditions": "* Codex questions depend on the active mode; errors and limits are detected from the final message. Click-to-focus depends on your OS and terminal.",
+    "conditions": "* Codex questions depend on the active mode; errors and limits are detected from the final message. Click-to-focus depends on your OS and terminal. OpenCode, Gemini CLI and Cursor CLI: opt-in OS-default sound via notifications.desktop.systemSound=true; no custom audio or click-to-focus. Qoder: StopFailure errors and rate limits; five MP3 assets bundled, native audible playback unverified.",
     "qualification": "Claude permission prompts appear as Question alerts. Codex question hooks are experimental; error and limit detection uses final-message heuristics. See the linked guides for qualification details.",
     "v2Link": "What is OpenCode V2?",
     "rows": {

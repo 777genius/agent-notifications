@@ -12,7 +12,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  # Serialize main deploys across push and manual dispatch; only supersede PR checks.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -112,10 +113,56 @@ jobs:
               assert target.is_file() and source.read_bytes() == target.read_bytes(), f'Legacy rendered path changed: {rel}'
           PYTHON
           touch artifact/.nojekyll
+      # Rerunning a failed deploy preserves artifacts from previous attempts.
+      # Give each attempt its own Pages artifact and select it explicitly.
       - uses: actions/upload-pages-artifact@v5
         with:
+          name: github-pages-${{ github.run_id }}-${{ github.run_attempt }}
           path: artifact
           include-hidden-files: true
       - name: Deploy Pages
         id: deployment
         uses: actions/deploy-pages@v5
+        with:
+          artifact_name: github-pages-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Smoke test the deployed Pages and retained installer
+        env:
+          PAGES_URL: ${{ steps.deployment.outputs.page_url }}
+        run: |
+          python3 - <<'PYTHON'
+          import os
+          import time
+          from urllib.error import HTTPError, URLError
+          from urllib.request import HTTPRedirectHandler, Request, build_opener
+
+          class NoRedirect(HTTPRedirectHandler):
+              def redirect_request(self, req, fp, code, msg, headers, newurl):
+                  return None
+
+          base = os.environ['PAGES_URL'].rstrip('/') + '/'
+          opener = build_opener(NoRedirect())
+          paths = {
+              '': 'Agent Notifications',
+              'llms.txt': '# Agent Notifications',
+              'auth.md': '# Authentication and permissions',
+              'agents.md': '# Using Agent Notifications',
+              'install.sh': '#!/usr/bin/env bash',
+          }
+          for attempt in range(24):
+              try:
+                  for path, marker in paths.items():
+                      request = Request(base + path, headers={'User-Agent': 'agent-notifications-pages-e2e'})
+                      with opener.open(request, timeout=10) as response:
+                          assert response.status == 200, f'{path}: HTTP {response.status}'
+                          media_type = response.headers.get_content_type()
+                          if path in {'llms.txt', 'auth.md', 'agents.md'}:
+                              assert media_type.startswith('text/') and media_type != 'text/html', f'{path}: {media_type}'
+                          content = response.read(1048576).decode('utf-8', errors='replace')
+                          assert marker in content, f'{path}: missing expected content'
+                  print('Live Pages E2E passed:', base, ', '.join(paths))
+                  break
+              except (AssertionError, HTTPError, URLError, TimeoutError) as exc:
+                  if attempt == 23:
+                      raise SystemExit(f'Live Pages E2E failed after bounded retries: {exc}') from exc
+                  time.sleep(5)
+          PYTHON
