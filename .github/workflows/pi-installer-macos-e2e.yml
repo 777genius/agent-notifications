@@ -1,0 +1,63 @@
+name: Pi macOS full installer E2E
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - '.github/workflows/pi-installer-macos-e2e.yml'
+      - 'scripts/pi-installer-macos-e2e.sh'
+      - 'scripts/acquire-pi-native.py'
+      - 'scripts/testdata/pi-native/pins.json'
+      - 'scripts/pi-macos-helper.py'
+      - 'tests/integration/pi_*fixture.py'
+      - 'bin/**'
+      - 'cmd/**'
+      - 'internal/**'
+      - 'portable-package/**'
+      - 'go.mod'
+      - 'go.sum'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pi-installer-macos-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  installer:
+    # Includes draft PRs; the configured route supplies fresh disposable Actions VMs.
+    name: Public regression and candidate full installer / macOS 26
+    runs-on: ${{ vars.CI_MACOS_26_RUNNER || 'macos-26' }}
+    timeout-minutes: 25
+    env:
+      PI_INSTALLER_NAMESPACE: ${{ startsWith(vars.CI_MACOS_26_RUNNER, 'namespace-profile-') && 'true' || 'false' }}
+      GOWORK: 'off'
+      CGO_ENABLED: '1'
+      MACOSX_DEPLOYMENT_TARGET: '12.0'
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: '1.26.10'
+      - name: Install official Pi, reproduce public failure, install complete candidate
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/pi-installer-macos-e2e.sh
+      - name: Preserve original failure and candidate installation evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pi-installer-macos-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/TEST-pi-installer/evidence/*
+          if-no-files-found: error
+          retention-days: 14

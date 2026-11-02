@@ -97,6 +97,10 @@ func TestContextNativeStillRequiresFiniteParentDeadline(t *testing.T) {
 
 func TestContextNativeCancellationRevokesBeforeStoppingExactApp(t *testing.T) {
 	ops, _, stopped := contextNativeFixture(t)
+	// Cancel only after the native app has published its process identity.
+	// A tiny wall-clock deadline can expire before launch on busy CI runners.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 	launch := ops.launch
 	var directory string
 	ops.launch = func(ctx context.Context, request, receipt string) error {
@@ -107,6 +111,7 @@ func TestContextNativeCancellationRevokesBeforeStoppingExactApp(t *testing.T) {
 		if err := os.Remove(receipt); err != nil {
 			t.Fatal(err)
 		}
+		cancel()
 		<-ctx.Done()
 		// Joining open must not leave its independently launched app admitted.
 		// Hold that join until the cancellation lease has actually disappeared.
@@ -137,9 +142,7 @@ func TestContextNativeCancellationRevokesBeforeStoppingExactApp(t *testing.T) {
 		}
 		return stop(process, executable)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
-	defer cancel()
-	if err := runContextNativeApp(ctx, contextNativeClock{}, "/TEST-owned-helper", []string{"-title", "Pi", "-message", "fixed"}, ops); !errors.Is(err, context.DeadlineExceeded) || *stopped != 1 {
+	if err := runContextNativeApp(ctx, contextNativeClock{}, "/TEST-owned-helper", []string{"-title", "Pi", "-message", "fixed"}, ops); !errors.Is(err, context.Canceled) || *stopped != 1 {
 		t.Fatalf("cancel=%v stopped=%d", err, *stopped)
 	}
 	if _, err := os.Stat(directory); !os.IsNotExist(err) {

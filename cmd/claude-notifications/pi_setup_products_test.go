@@ -6,11 +6,48 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/777genius/agent-notifications/internal/agentnotify/setupwizard"
 )
+
+func TestPiMissingPATHExplainsExplicitExecutableRecovery(t *testing.T) {
+	e, a := setupProductsDiscoveryFixture(t)
+	a.Products = []string{"pi"}
+	name := "pi"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	cli := filepath.Join(e.Home, name)
+	if err := os.WriteFile(cli, []byte("TEST installed outside selected PATH; never execute"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := buildConfirmedBootstrapIntent(context.Background(), a, e, selectorProvenance{})
+	for _, want := range []string{"pi prerequisite unavailable: not found in selected PATH", "command -v pi", "--pi-executable /absolute/path/to/pi"} {
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("missing actionable Pi prerequisite diagnostic %q: %v", want, err)
+		}
+	}
+	if _, err := os.Lstat(e.DefaultControlRoot); !os.IsNotExist(err) {
+		t.Fatal("failed discovery created installation state", err)
+	}
+	a.Scopes["pi-executable"] = cli
+	facts, _, err := discoverProducts(context.Background(), a, e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fact := range facts {
+		if fact.ID == "pi" {
+			if !fact.Present || !fact.Selectable || fact.Executable == "" {
+				t.Fatalf("explicit Pi executable recovery unavailable: %+v", fact)
+			}
+			return
+		}
+	}
+	t.Fatal("Pi discovery omitted")
+}
 
 func TestPiUnselectedProfileCannotBlockOtherProducts(t *testing.T) {
 	e, a := setupProductsDiscoveryFixture(t)
