@@ -2,41 +2,99 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
+	"path/filepath"
+	"runtime"
 	"sync"
 
 	"github.com/777genius/agent-notifications/internal/geminievent"
+	"github.com/777genius/agent-notifications/internal/installruntime"
+	"github.com/777genius/agent-notifications/internal/strictjson"
 )
 
-// Operator diagnostics are best effort. Borrow the existing stdio adapter's
-// owned, cancelable descriptor, never the caller's descriptor itself. Sinks
-// without poller deadlines (regular files and synchronous Windows pipes) are
-// skipped rather than introducing an unbounded syscall or a new timeout.
+// The pinned observer deliberately discards stdout/stderr. Diagnostics use
+// only a pre-existing private local datagram receiver, never a new authority or
+// delivery endpoint. Missing/unsafe receivers and expired budgets drop hints.
 type geminiDiagnosticOutput struct {
-	ctx  context.Context
-	file *os.File
+	ctx                                   context.Context
+	mu                                    sync.Mutex
+	root, event, sessionSHA, timestampSHA string
 }
 
-func (w geminiDiagnosticOutput) Write(data []byte) (int, error) {
+// This is a semantic hint join only. It does not canonicalize JSON, claim byte
+// equality with SDK telemetry, or authorize any business event or delivery.
+func (w *geminiDiagnosticOutput) input(root, event string, payload []byte) {
+	if event != "AfterAgent" && event != "Notification" || strictjson.Validate(payload, strictjson.Budget{Bytes: geminiPayloadLimit, Depth: 64, Entries: 4096}) != nil {
+		return
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(payload, &fields) != nil {
+		return
+	}
+	values := make([]string, 3)
+	for i, key := range []string{"hook_event_name", "session_id", "timestamp"} {
+		if json.Unmarshal(fields[key], &values[i]) != nil || len(values[i]) == 0 || len(values[i]) > 4096 {
+			return
+		}
+	}
+	if values[0] != event {
+		return
+	}
+	session, timestamp := sha256.Sum256([]byte(values[1])), sha256.Sum256([]byte(values[2]))
+	w.mu.Lock()
+	w.root, w.event, w.sessionSHA, w.timestampSHA = root, event, hex.EncodeToString(session[:]), hex.EncodeToString(timestamp[:])
+	w.mu.Unlock()
+}
+
+func (w *geminiDiagnosticOutput) Write(data []byte) (int, error) {
 	deadline, ok := w.ctx.Deadline()
 	if err := w.ctx.Err(); err != nil {
 		return 0, err
 	}
-	if !ok || len(data) > 512 {
+	if !ok || len(data) > 256 {
 		return 0, io.ErrShortWrite
 	}
-	stream, err := agentNotifyFile(w.file)
+	w.mu.Lock()
+	root, event, session, timestamp := w.root, w.event, w.sessionSHA, w.timestampSHA
+	w.mu.Unlock()
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" || root == "" || len(session) != 64 || len(timestamp) != 64 {
+		return len(data), nil
+	}
+	path := filepath.Join(root, ".gd.sock")
+	if !filepath.IsAbs(root) || filepath.Clean(root) != root || len(path) > 100 || installruntime.CheckPrivateControlRoot(root) != nil {
+		return len(data), nil
+	}
+	before, err := os.Lstat(path)
+	if err != nil || before.Mode()&os.ModeSocket == 0 {
+		return len(data), nil
+	}
+	frame, err := json.Marshal(struct {
+		Version         int    `json:"version"`
+		Event           string `json:"event"`
+		SessionSHA256   string `json:"session_sha256"`
+		TimestampSHA256 string `json:"timestamp_sha256"`
+		Result          string `json:"result"`
+	}{1, event, session, timestamp, string(data)})
+	if err != nil || len(frame) > 512 {
+		return 0, io.ErrShortWrite
+	}
+	conn, err := (&net.Dialer{}).DialContext(w.ctx, "unixgram", path)
 	if err != nil {
 		return 0, err
 	}
-	defer func() { _ = stream.Close(); stream.release() }()
-	if !stream.pollable || stream.write != nil {
+	defer conn.Close()
+	after, err := os.Lstat(path)
+	if err != nil || !os.SameFile(before, after) {
 		return len(data), nil
 	}
-	if err := stream.file.SetWriteDeadline(deadline); err != nil {
+	if err := conn.SetWriteDeadline(deadline); err != nil {
 		return 0, err
 	}
 	done, joined := make(chan struct{}), make(chan struct{})
@@ -44,14 +102,15 @@ func (w geminiDiagnosticOutput) Write(data []byte) (int, error) {
 		defer close(joined)
 		select {
 		case <-w.ctx.Done():
-			_ = stream.Close()
+			_ = conn.Close()
 		case <-done:
 		}
 	}()
 	defer func() { close(done); <-joined }()
-	// Do not use stream.Write: it intentionally starts a separate one-second
-	// MCP write timeout, whereas this hook must retain its admission deadline.
-	return stream.file.Write(data)
+	if _, err := conn.Write(frame); err != nil {
+		return 0, err
+	}
+	return len(data), nil
 }
 
 // This diagnostic observes the ordinary hook. It never changes admission or

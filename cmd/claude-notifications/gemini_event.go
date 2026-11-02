@@ -97,11 +97,15 @@ func runGeminiEvent(args []string, input io.ReadCloser, output io.Writer) (code 
 		return 0
 	}
 	admission, admissionCancel = ctx, cancel
-	diagnostic.output = geminiDiagnosticOutput{ctx: ctx, file: os.Stderr}
+	diagnosticOutput := &geminiDiagnosticOutput{ctx: ctx}
+	diagnostic.output = diagnosticOutput
 	admitted = true
 	diagnostic.enter("input")
 	return runGeminiEventWith(ctx, args, input, output, func(ctx context.Context, a geminiEventArgs, payload []byte) {
 		defer diagnostic.recoverPanic()
+		if diagnostic.enabled {
+			diagnosticOutput.input(a.ControlRoot, a.Event, payload)
+		}
 		diagnostic.enter("decode")
 		facts, err := geminisource.Decode(ctx, a.Event, payload)
 		if err != nil {

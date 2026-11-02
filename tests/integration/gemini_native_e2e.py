@@ -578,8 +578,136 @@ def record_hook(args):
     print("{}", flush=True)  # Advisory even when a red classification was recorded.
 
 
+class EventDiagnosticReceiver:
+    """Private TEST hints, not delivery authority; no changes to owned hooks."""
+    def __init__(self, lab):
+        self.lock, self.stopping = threading.Lock(), threading.Event()
+        self.condition = threading.Condition(self.lock)
+        self.frames, self.invalid, self.closed = [], False, False
+        root = lab / "an-control"
+        require(lab.is_absolute() and lab.resolve() == lab
+                and any(re.fullmatch(r"TEST(?:[-_].*)?", part) for part in lab.parts)
+                and not inside(lab, Path.home().resolve())
+                and root.resolve() == root
+                and (lab / MARKER).read_bytes() == b"owned disposable Gemini native TEST\n", "TEST_diagnostic_namespace")
+        info = root.lstat()
+        require(stat.S_ISDIR(info.st_mode) and info.st_uid == os.getuid() and not info.st_mode & 0o077,
+                "TEST_diagnostic_private_root")
+        self.path = root / ".gd.sock"
+        require(len(os.fsencode(self.path)) <= 100 and not os.path.lexists(self.path), "TEST_diagnostic_socket_path")
+        self.socket = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+        self.identity = None
+        try:
+            self.credentials = hasattr(socket, "SO_PASSCRED")
+            if self.credentials:
+                self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_PASSCRED, 1)
+            self.socket.bind(str(self.path))
+            info = self.path.lstat()
+            self.identity = (info.st_dev, info.st_ino)
+            self.path.chmod(0o600)
+            self.socket.settimeout(0.05)
+            self.thread = threading.Thread(target=self.receive, daemon=False)
+            self.thread.start()
+        except Exception:
+            self.socket.close()
+            if self.identity is not None and os.path.lexists(self.path):
+                info = self.path.lstat()
+                if (info.st_dev, info.st_ino) == self.identity: self.path.unlink()
+            raise
+
+    def receive(self):
+        import array
+        import struct
+        received = 0
+        while True:
+            if self.stopping.is_set(): self.socket.setblocking(False)
+            try:
+                raw, ancillary, flags, _ = self.socket.recvmsg(513, socket.CMSG_SPACE(12))
+            except (socket.timeout, BlockingIOError):
+                if self.stopping.is_set(): return
+                continue
+            except OSError:
+                with self.condition:
+                    self.invalid = True
+                    self.condition.notify_all()
+                return
+            valid_peer = True
+            # recvmsg may install foreign passed descriptors even for a rejected
+            # packet. Close every received right; this protocol accepts no FDs.
+            for level, kind, data in ancillary:
+                if level == socket.SOL_SOCKET and kind == socket.SCM_RIGHTS:
+                    rights = array.array("i")
+                    rights.frombytes(data[:len(data) - len(data) % rights.itemsize])
+                    for fd in rights: os.close(fd)
+                    valid_peer = False
+                elif not (self.credentials and level == socket.SOL_SOCKET and kind == socket.SCM_CREDENTIALS):
+                    valid_peer = False
+            if self.credentials:
+                peers = [data for level, kind, data in ancillary
+                         if level == socket.SOL_SOCKET and kind == socket.SCM_CREDENTIALS]
+                valid_peer = valid_peer and len(peers) == 1 and len(peers[0]) == 12
+                if valid_peer:
+                    pid, uid, _ = struct.unpack("3i", peers[0])
+                    valid_peer = pid > 0 and uid == os.getuid()
+            frame = diagnostic_frame(raw) if valid_peer and not flags & socket.MSG_TRUNC else None
+            with self.lock:
+                if frame is None or len(self.frames) >= 64:
+                    self.invalid = True
+                else:
+                    self.frames.append(frame)
+                self.condition.notify_all()
+            received += 1
+            if self.stopping.is_set() and received >= 64: return
+
+    def wait_count(self, expected, deadline):
+        with self.condition:
+            while len(self.frames) < expected and not self.invalid:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0: return False
+                self.condition.wait(remaining)
+            return len(self.frames) == expected and not self.invalid
+
+    def snapshot(self):
+        with self.lock:
+            return {"frames": [{"join": frame["join"], "diagnostic": dict(frame["diagnostic"])} for frame in self.frames], "invalid": self.invalid}
+
+    def stop(self):
+        if not self.closed:
+            self.stopping.set()
+            self.thread.join(timeout=1)
+            require(not self.thread.is_alive(), "TEST_diagnostic_receiver_not_joined")
+            self.socket.close()
+            info = self.path.lstat()
+            require(stat.S_ISSOCK(info.st_mode) and (info.st_dev, info.st_ino) == self.identity,
+                    "TEST_diagnostic_socket_changed")
+            self.path.unlink()
+            self.closed = True
+        return self.snapshot()
+
+
+def diagnostic_frame(raw):
+    def unique(pairs):
+        value = dict(pairs)
+        if len(value) != len(pairs): raise ValueError("duplicate")
+        return value
+    try:
+        if not 0 < len(raw) <= 512: return None
+        value = json.loads(raw, object_pairs_hook=unique)
+        if (type(value) is not dict or set(value) != {"version", "event", "session_sha256", "timestamp_sha256", "result"}
+                or type(value["version"]) is not int or value["version"] != 1
+                or value["event"] not in ("AfterAgent", "Notification")
+                or any(type(value[key]) is not str or re.fullmatch(r"[0-9a-f]{64}", value[key]) is None
+                       for key in ("session_sha256", "timestamp_sha256"))
+                or type(value["result"]) is not str or len(value["result"].splitlines()) != 1): return None
+        rows = event_diagnostics(value["result"])
+        if len(rows) != 1: return None
+        return {"join": (value["event"], value["session_sha256"], value["timestamp_sha256"]), "diagnostic": rows[0]}
+    except (ValueError, UnicodeError, TypeError):
+        return None
+
+
 def event_diagnostics(stderr):
-    """Closed labels from the real owned hook's stderr, never arbitrary text."""
+    """Closed result labels from a private hint, never arbitrary text or authority."""
     pattern = (r"gemini\.event\.result phase=(admission|input|decode|executable|snapshot|registration|config|consume|none) "
                r"class=(unavailable|deadline|canceled|panic|completed|none) "
                r"status=(suppressed|submitted|unknown|rejected|none) "
@@ -598,12 +726,16 @@ def event_diagnostics(stderr):
     return rows if len(rows) <= 1 else []
 
 
-def capture_sdk_hook_outcomes(lab):
+def capture_sdk_hook_outcomes(lab, diagnostic_capture=None, *, retain=True):
     """Pre-teardown prefix only: SDK flush is unknown; absence is not non-invocation."""
     facts = dict(capture="unavailable", identity_checked=False, snapshot_stable=False,
                  parse_complete=False, SDK_flush_complete=False, absence_means="unknown",
                  records=0, owned_calls=0, unjoined_owned_calls=0, outcomes=[])
     owned_inputs = []  # Private memory only; never part of the closed projection.
+    hints = diagnostic_capture.snapshot() if diagnostic_capture is not None else {"frames": [], "invalid": False}
+    hinted, used, owned_join_counts = {}, set(), {}
+    for frame in hints["frames"]:
+        hinted.setdefault(frame["join"], []).append(frame["diagnostic"])
     try:
         path = lab / "sdk-private/telemetry.json"
         before = path.lstat()
@@ -620,23 +752,24 @@ def capture_sdk_hook_outcomes(lab):
         facts.update(capture="bounded_prefix", identity_checked=True,
                      snapshot_stable=(before.st_size, before.st_mtime_ns) == (after.st_size, after.st_mtime_ns),
                      bytes=len(raw))
-        # Retain the actual prefix privately even if later SDK writes/teardown append.
-        stamp = str(time.monotonic_ns())
-        # Windows Python 3.12's monotonic clock can repeat within one tick.
-        # Exclusive creation disambiguates owned names without overwriting any
-        # retained prefix, sleeping, or extending teardown deadlines.
-        for slot in range(7):
-            suffix = "" if slot == 0 else "-" + str(slot)
-            snapshot = path.parent / ("pre-teardown-" + stamp + suffix + ".json")
-            try:
-                stream = snapshot.open("xb")
-            except FileExistsError:
-                continue
-            with stream:
-                os.chmod(snapshot, 0o600); stream.write(raw)
-            break
-        else:
-            raise Red("SDK_prefix_snapshot_slot_bound")
+        if retain:
+            # Retain the actual prefix privately even if later SDK writes/teardown append.
+            stamp = str(time.monotonic_ns())
+            # Windows Python 3.12's monotonic clock can repeat within one tick.
+            # Exclusive creation disambiguates owned names without overwriting any
+            # retained prefix, sleeping, or extending teardown deadlines.
+            for slot in range(7):
+                suffix = "" if slot == 0 else "-" + str(slot)
+                snapshot = path.parent / ("pre-teardown-" + stamp + suffix + ".json")
+                try:
+                    stream = snapshot.open("xb")
+                except FileExistsError:
+                    continue
+                with stream:
+                    os.chmod(snapshot, 0o600); stream.write(raw)
+                break
+            else:
+                raise Red("SDK_prefix_snapshot_slot_bound")
         rows = observations(lab)
         joined = {}
         bodies = {}
@@ -673,6 +806,8 @@ def capture_sdk_hook_outcomes(lab):
             if incoming.get("cwd") != str(lab / "profile") or incoming.get("hook_event_name") != role or len(cases) != 1 or cases[0] not in CASES:
                 facts["unjoined_owned_calls"] += 1
                 continue
+            hint_key = (role, *(digest(v.encode()) for v in ids))
+            owned_join_counts[hint_key] = owned_join_counts.get(hint_key, 0) + 1
             require(len(facts["outcomes"]) < 64, "SDK_hook_outcome_bound")
             outcome = dict(role=role, case=cases[0], claim_failures=[])
             body = attr["hook_input"].encode("utf-8")
@@ -688,7 +823,10 @@ def capture_sdk_hook_outcomes(lab):
             if type(attr.get("success")) is bool: outcome["SDK_success"] = attr["success"]
             stderr = attr.get("stderr", "")
             require(isinstance(stderr, str) and len(stderr) <= 65536, "SDK_hook_stderr_bound")
-            outcome["event_diagnostics"] = event_diagnostics(stderr)
+            key = (role, *(digest(v.encode()) for v in ids))
+            candidates = hinted.get(key, [])
+            outcome["event_diagnostics"] = candidates if len(candidates) == 1 and not hints["invalid"] else []
+            if candidates: used.add(key)
             pattern = (r"observation\.claim\.failure phase=(validate|path|root|prepare|lock|clock|read|decode|record|encode|publish|published) "
                        r"class=(invalid_request|invalid_path|validation|invalid_clock|none|invalid_document|deadline|canceled|os_error|sharing_violation|lock_violation|permission|not_found) "
                        r"code=(\d{1,10}) elapsed_ns=(\d{1,18}) stage_ns=(\d{1,18}) budget_ns=(\d{1,18}) "
@@ -703,6 +841,20 @@ def capture_sdk_hook_outcomes(lab):
             facts["outcomes"].append(outcome)
     except Exception:
         facts["capture"] = "bounded_capture_or_parse_failed"
+    # A duplicate or unjoined packet makes the complete hint capture unknown.
+    # No first/last packet is selected. This semantic association is NOT byte
+    # equality with SDK telemetry and never establishes delivery authority.
+    # Private tuple hashes never enter public output.
+    diagnostic_joined = (diagnostic_capture is not None and bool(hints["frames"]) and not hints["invalid"]
+                         and used == set(hinted) and all(len(rows) == 1 for rows in hinted.values())
+                         and all(owned_join_counts.get(key) == 1 for key in hinted))
+    if not diagnostic_joined:
+        for row in facts["outcomes"]: row["event_diagnostics"] = []
+    facts["event_diagnostic_capture"] = {"classification": "completed" if diagnostic_joined else "unavailable",
+                                       "records": len(hints["frames"])}
+    diagnostic_complete = (diagnostic_joined and facts["owned_calls"] == 7 and facts["unjoined_owned_calls"] == 0
+                           and len(facts["outcomes"]) == 7
+                           and all(len(row["event_diagnostics"]) == 1 for row in facts["outcomes"]))
     # Only this closed projection is copied to CI; the SDK outfile remains private.
     encoded = json.dumps(facts, sort_keys=True) + "\n"
     projection_bounded = len(encoded.encode()) <= 65536
@@ -711,10 +863,38 @@ def capture_sdk_hook_outcomes(lab):
             snapshot_stable=False, parse_complete=False, SDK_flush_complete=False,
             absence_means="unknown", records=0, owned_calls=0, unjoined_owned_calls=0,
             outcomes=[]), sort_keys=True) + "\n"
-    (lab / "sdk-hook-outcomes.json").write_text(encoded)
+    if retain:
+        (lab / "sdk-hook-outcomes.json").write_text(encoded)
     # A closed parsed prefix is qualified observation, never an SDK flush receipt.
     qualified = projection_bounded and facts["capture"] == "bounded_prefix" and facts["snapshot_stable"] and facts["parse_complete"]
-    return {"qualified": qualified, "frames": owned_inputs if qualified else []}
+    retryable = (facts["capture"] == "bounded_prefix" and facts["parse_complete"]
+                 and facts["unjoined_owned_calls"] == 0 and facts["owned_calls"] <= 7
+                 and not hints["invalid"] and len(hints["frames"]) <= 7
+                 and all(len(rows) == 1 for rows in hinted.values())
+                 and all(count == 1 for count in owned_join_counts.values()))
+    return {"qualified": qualified, "frames": owned_inputs if qualified else [],
+            "diagnostic_complete": qualified and diagnostic_complete, "diagnostic_retryable": retryable}
+
+
+def await_initial_event_diagnostics(lab, receiver, deadline, *, now=time.monotonic,
+                                    pause=time.sleep, observe=capture_sdk_hook_outcomes):
+    """Read-only probes share the existing deadline; retain one final prefix.
+
+    Invalid/foreign/custody faults stop immediately. A valid closed prefix may
+    still lack not-yet-flushed SDK hook calls; SDK flush remains unknown.
+    """
+    while now() < deadline:
+        probe = observe(lab, receiver, retain=False)
+        if probe["diagnostic_complete"] or not probe["diagnostic_retryable"]:
+            break
+        remaining = deadline - now()
+        if remaining <= 0:
+            break
+        pause(min(0.025, remaining))
+    # Receiver drain/unlink precedes lifecycle mutations. Frozen hints stay in
+    # memory for existing later close snapshots; no later producer is started.
+    receiver.stop()
+    return observe(lab, receiver, retain=True)
 
 
 def install_test_hooks(lab, commands, shell, node, system_root=None, capture_frames=False):
@@ -903,7 +1083,7 @@ class Terminal:
         if not self.telemetry_captured:
             self.telemetry_captured = True
             try:
-                self.owned_input_capture = capture_sdk_hook_outcomes(self.telemetry_lab)
+                self.owned_input_capture = capture_sdk_hook_outcomes(self.telemetry_lab, getattr(self, "diagnostic_capture", None))
             except Exception:
                 pass  # Diagnostic publication must never prevent SDK teardown.
         failure = None
@@ -973,6 +1153,7 @@ def exercise(lab, fixture, terminal, ui, observer=observations):
             terminal.write_line("AN_TEST_" + ("PLAIN" if case in ("equal", "recovery") else case.upper()))
             state.mark("prompt_write_returned")
         end, acted, completion, permission = time.monotonic() + 25, False, False, False
+        terminal.case_deadline = end
         cancelled_at = None
         while time.monotonic() < end:
             terminal.drain()

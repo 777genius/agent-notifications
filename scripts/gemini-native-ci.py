@@ -37,7 +37,7 @@ def require(ok, code):
 def closed_sdk_projection(value, cases):
     keys = {"capture", "identity_checked", "snapshot_stable", "parse_complete", "SDK_flush_complete",
             "absence_means", "records", "owned_calls", "unjoined_owned_calls", "outcomes", "bytes",
-            "role", "case", "claim_failures", "event_diagnostics", "status", "reason", "desktop", "webhook", "SDK_exit_code", "SDK_duration_ms", "SDK_success",
+            "role", "case", "claim_failures", "event_diagnostics", "event_diagnostic_capture", "status", "reason", "desktop", "webhook", "SDK_exit_code", "SDK_duration_ms", "SDK_success",
             "phase", "classification", "code", "elapsed_ns", "stage_ns", "budget_ns", "budget_state", "publication_possible"}
     words = {"unavailable", "bounded_prefix", "incomplete_or_invalid_JSON_prefix", "bounded_capture_or_parse_failed",
              "projection_bound_exceeded",
