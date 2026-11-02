@@ -30,16 +30,20 @@ test("published locale HTML has unique canonical and matching Open Graph URL", a
     expect(canonical, path).toHaveLength(1);
     expect(canonical[0]).toContain(`href="${expected}"`);
     const alternates = tags.filter((tag) => /\brel="alternate"/.test(tag) && /\bhreflang="/.test(tag));
-    expect(alternates.some((tag) => tag.includes(`href="${expected}"`)), path).toBe(true);
-    for (const region of supportedLocales.filter((entry) => entry.language.includes("-"))) {
-      const href = `https://agent-notifications.com/${region.code === "en" ? "" : `${region.code}/`}`;
-      expect(
-        alternates.some((tag) =>
-          tag.includes(`hreflang="${region.code}"`) && tag.includes(`href="${href}"`),
-        ),
-        `${path}: missing ${region.code} catchall`,
-      ).toBe(true);
-    }
+    const localeUrl = (code: string) =>
+      `https://agent-notifications.com/${code === "en" ? "" : `${code}/`}`;
+    const expectedAlternates = [
+      ...supportedLocales.map((entry) => ({ hreflang: entry.language, href: localeUrl(entry.code) })),
+      ...supportedLocales
+        .filter((entry) => entry.language.includes("-"))
+        .map((entry) => ({ hreflang: entry.code, href: localeUrl(entry.code) })),
+      { hreflang: "x-default", href: localeUrl("en") },
+    ].sort((a, b) => a.hreflang.localeCompare(b.hreflang));
+    const actualAlternates = alternates.map((tag) => ({
+      hreflang: tag.match(/\bhreflang="([^"]+)"/)?.[1],
+      href: tag.match(/\bhref="([^"]+)"/)?.[1],
+    })).sort((a, b) => (a.hreflang ?? "").localeCompare(b.hreflang ?? ""));
+    expect(actualAlternates, `${path}: hreflang URL pairs`).toEqual(expectedAlternates);
     const ogTags = [...html.matchAll(/<meta\b[^>]*>/gi)].map((m) => m[0]).filter((tag) => /\bproperty="og:url"/.test(tag));
     expect(ogTags, path).toHaveLength(1);
     expect(ogTags[0]).toContain(`content="${expected}"`);
