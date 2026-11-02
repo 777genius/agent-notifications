@@ -1,0 +1,35 @@
+name: One-shot PR 579 proposed Pi macOS workflow qualification
+on:
+  push:
+    branches: [ci/pi-macos-pr579-dispatch-20261102]
+    paths: ['.github/workflows/pi-macos-pr579-dispatch-once.yml']
+permissions:
+  contents: read
+  actions: write
+jobs:
+  dispatch:
+    if: ${{ github.repository == '777genius/agent-notifications' && github.run_attempt == 1 && github.ref == 'refs/heads/ci/pi-macos-pr579-dispatch-20261102' && github.event.head_commit.message == 'dispatch-pi-macos-pr579-trusted-head-v1' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Admit exactly one fixed proposed-workflow macOS E2E
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          repo='777genius/agent-notifications'
+          target='3fd7e18d127cebc0ac22dd70b236332693c36b6e'
+          current="$(gh api "repos/$repo/git/ref/heads/fix/pi-macos-fork-isolation-20261102" -q .object.sha)"
+          pr="$(gh api "repos/$repo/pulls/579")"
+          prhead="$(jq -r .head.sha <<<"$pr")"
+          prbase="$(jq -r .base.ref <<<"$pr")"
+          prstate="$(jq -r .state <<<"$pr")"
+          prfork="$(jq -r .head.repo.fork <<<"$pr")"
+          author="$(gh api "repos/$repo/commits/$target" -q '.author.login')"
+          if [[ "$current" != "$target" || "$prhead" != "$target" || "$prbase" != 'main' || "$prstate" != 'open' || "$prfork" != 'false' || "$author" != '777genius' ]]; then
+            echo 'Refuse: not the exact owner-authored trusted PR #579 source; no workflow dispatch.' >&2
+            exit 1
+          fi
+          gh api --method POST "repos/$repo/actions/workflows/pi-installer-macos-e2e.yml/dispatches" -f ref=fix/pi-macos-fork-isolation-20261102
+          echo 'Dispatched one workflow_dispatch from fixed PR #579 HEAD; this is not installed E2E qualification.'
