@@ -29,6 +29,7 @@ export default defineNuxtConfig({
     locales: [...supportedLocales],
     defaultLocale: "en",
     strategy: "prefix_except_default",
+    trailingSlash: true,
     langDir: "locales",
     baseUrl: siteOrigin,
     detectBrowserLanguage: {
