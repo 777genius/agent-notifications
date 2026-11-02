@@ -119,7 +119,7 @@ func TestPortableProductionBridge(t *testing.T) {
 		if e != nil {
 			t.Fatal(e)
 		}
-		var diagnostics bytes.Buffer
+		var diagnostics busyTranscript
 		cmd.Stderr = &diagnostics
 		if e = cmd.Start(); e != nil {
 			t.Fatal(e)
@@ -178,17 +178,34 @@ func TestPortableProductionBridge(t *testing.T) {
 			}
 		}
 		exchange(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"notification_status","arguments":{}}}`, 3)
+		if diagnostic := diagnostics.String(); diagnostic != "" {
+			t.Fatalf("unexpected diagnostics before shutdown: %q", diagnostic)
+		}
 		if e = cmd.Process.Signal(syscall.SIGTERM); e != nil {
 			t.Fatal(e)
 		}
 		_ = in.Close()
-		_ = cmd.Wait()
+		waitErr := cmd.Wait()
 		done = true
 		if ctx.Err() != nil {
 			t.Fatal("cancellation failed")
 		}
-		if diagnostics.Len() != 0 {
-			t.Fatalf("unexpected diagnostics: %s", diagnostics.String())
+		if waitErr != nil {
+			exit, isExit := waitErr.(*exec.ExitError)
+			signaled := false
+			if isExit {
+				if status, ok := exit.Sys().(syscall.WaitStatus); ok {
+					signaled = status.Signaled() && status.Signal() == syscall.SIGTERM
+				}
+			}
+			if !isExit || (exit.ExitCode() != 2 && !signaled) {
+				t.Fatalf("shutdown failed: %v", waitErr)
+			}
+		}
+		// The in-process MCP bridge may report its bounded cancellation reason
+		// before the signal watcher closes stderr, as in the direct MCP contract.
+		if diagnostic := diagnostics.String(); diagnostic != "" && diagnostic != "connection_closed\n" {
+			t.Fatalf("unexpected shutdown diagnostics: %q", diagnostic)
 		}
 	}
 	for _, p := range []string{"journal", "native-spool"} {
