@@ -161,6 +161,18 @@ func AcquireSetupLease(ctx context.Context, root string, expected InstalledSnaps
 	return acquireInstalledLease(ctx, root, expected, false)
 }
 
+// AcquireCurrentSetupLease reads and pins the current installation in one pass.
+// Use this when the consumer has an independent registered identity to validate
+// under the lease, rather than a previously observed snapshot to compare. It
+// performs the same full integrity and recovery checks as AcquireSetupLease,
+// without requiring an expensive, immediately discarded pre-lock snapshot.
+// Its shared read lease permits concurrent startup checks while excluding
+// installation writers. It does not authorize delivery or enable policy.
+// The caller must release it.
+func AcquireCurrentSetupLease(ctx context.Context, root string) (InstalledSnapshot, func(), error) {
+	return acquireSnapshotLease(ctx, root, nil, false)
+}
+
 // AcquirePolicyLease pins the exact observed policy and installation through a
 // consumer's bounded handoff. Unlike AcquireInstalledLease, portable enablement
 // is not an admission condition: the consumer must check its own registration
@@ -213,6 +225,10 @@ func AcquirePolicyLease(ctx context.Context, root string, expected PolicySnapsho
 }
 
 func acquireInstalledLease(ctx context.Context, root string, expected InstalledSnapshot, requireEnabled bool) (InstalledSnapshot, func(), error) {
+	return acquireSnapshotLease(ctx, root, &expected, requireEnabled)
+}
+
+func acquireSnapshotLease(ctx context.Context, root string, expected *InstalledSnapshot, requireEnabled bool) (InstalledSnapshot, func(), error) {
 	var zero InstalledSnapshot
 	if root == "" {
 		var err error
@@ -225,7 +241,7 @@ func acquireInstalledLease(ctx context.Context, root string, expected InstalledS
 		return zero, nil, err
 	}
 	path := filepath.Join(root, ".component-install.lock")
-	release, err := LockExisting(ctx, path)
+	release, err := lockMode(ctx, path, false, expected == nil)
 	if err != nil {
 		return zero, nil, err
 	}
@@ -239,7 +255,7 @@ func acquireInstalledLease(ctx context.Context, root string, expected InstalledS
 	if err != nil {
 		return zero, nil, err
 	}
-	if current.Recovery || current.Ledger.ID == "" || !reflect.DeepEqual(current, expected) {
+	if current.Recovery || current.Ledger.ID == "" || (expected != nil && !reflect.DeepEqual(current, *expected)) {
 		return zero, nil, fmt.Errorf("installed snapshot changed or recovery required")
 	}
 	if requireEnabled && !current.Enabled {

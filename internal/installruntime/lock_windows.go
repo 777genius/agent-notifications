@@ -19,6 +19,15 @@ func tryLock(f *os.File) (bool, error) {
 	return err == nil, err
 }
 
+func tryReadLock(f *os.File) (bool, error) {
+	var overlapped windows.Overlapped
+	err := windows.LockFileEx(windows.Handle(f.Fd()), windows.LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0, &overlapped)
+	if errors.Is(err, windows.ERROR_LOCK_VIOLATION) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
 func prepareLockedFile(f *os.File, writable bool) error {
 	return nil
 }
