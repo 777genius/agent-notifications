@@ -37,7 +37,7 @@ useHead(() => ({
         href: publicLocaleUrl(entry.code),
       })),
     { rel: "alternate", hreflang: "x-default", href: publicLocaleUrl("en") },
-    { rel: "alternate", type: "text/plain", title: "llms.txt", href: `${base}llms.txt` },
+    { rel: "describedby", title: "llms.txt", href: `${base}llms.txt` },
     { rel: "icon", type: "image/png", href: brandLogo },
     { rel: "apple-touch-icon", href: brandLogo },
     { rel: "manifest", href: `${base}site.webmanifest` },
