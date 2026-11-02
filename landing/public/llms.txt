@@ -11,7 +11,7 @@
 - Installation prerequisites: https://github.com/777genius/agent-notifications/blob/main/docs/INSTALLATION.md
 - Agent/platform support matrix: https://github.com/777genius/agent-notifications#supported-agents
 - Notification MCP and optional skill: https://github.com/777genius/agent-notifications#install-or-update
-- Webhooks: https://github.com/777genius/agent-notifications/blob/main/docs/WEBHOOKS.md
+- Webhooks: https://github.com/777genius/agent-notifications/blob/main/docs/webhooks/README.md
 - Privacy and sign-in requirements: https://agent-notifications.com/auth.md
 - Instructions for AI assistants: https://agent-notifications.com/agents.md
 - Sitemap: https://agent-notifications.com/sitemap.xml
