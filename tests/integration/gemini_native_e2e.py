@@ -649,7 +649,7 @@ class EventDiagnosticReceiver:
                 if valid_peer:
                     pid, uid, _ = struct.unpack("3i", peers[0])
                     valid_peer = pid > 0 and uid == os.getuid()
-            frame = diagnostic_frame(raw) if valid_peer and not flags & socket.MSG_TRUNC else None
+            frame = diagnostic_frame(raw, flags=flags) if valid_peer else None
             with self.lock:
                 if frame is None or len(self.frames) >= 64:
                     self.invalid = True
@@ -685,12 +685,17 @@ class EventDiagnosticReceiver:
         return self.snapshot()
 
 
-def diagnostic_frame(raw):
+def diagnostic_frame(raw, *, flags=0):
     def unique(pairs):
         value = dict(pairs)
         if len(value) != len(pairs): raise ValueError("duplicate")
         return value
     try:
+        # A truncated ancillary buffer can hide SCM_RIGHTS behind credentials.
+        # Reject the packet even when its payload is complete valid JSON; the
+        # receiver still closes every descriptor visible in ancillary data.
+        if flags & (getattr(socket, "MSG_TRUNC", 0) | getattr(socket, "MSG_CTRUNC", 0)):
+            return None
         if not 0 < len(raw) <= 512: return None
         value = json.loads(raw, object_pairs_hook=unique)
         if (type(value) is not dict or set(value) != {"version", "event", "session_sha256", "timestamp_sha256", "result"}

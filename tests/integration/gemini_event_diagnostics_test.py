@@ -32,6 +32,15 @@ class DiagnosticsTests(unittest.TestCase):
             with self.subTest(value=value[:80]):
                 self.assertIsNone(fixture.diagnostic_frame(value))
 
+    def test_complete_payload_with_truncated_ancillary_is_rejected(self):
+        raw = self.frame('{"hook_event_name":"AfterAgent","session_id":"PRIVATE-session","timestamp":"PRIVATE-time"}')
+        self.assertIsNotNone(fixture.diagnostic_frame(raw))
+        self.assertIsNotNone(fixture.diagnostic_frame(raw, flags=0))
+        for name in ("MSG_CTRUNC", "MSG_TRUNC"):
+            if hasattr(socket, name):
+                with self.subTest(flag=name):
+                    self.assertIsNone(fixture.diagnostic_frame(raw, flags=getattr(socket, name)))
+
     def test_namespace_requires_private_existing_control(self):
         if os.name == "nt": self.skipTest("Unix diagnostic channel only")
         with tempfile.TemporaryDirectory(prefix="TEST-gd-", dir="/tmp") as directory:
