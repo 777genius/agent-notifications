@@ -189,7 +189,7 @@ func dispatchEarlyCommand() bool {
 		os.Exit(code)
 	}
 
-	if len(os.Args) > 1 && (os.Args[1] == "portable-launch" || os.Args[1] == "portable-primary") {
+	if len(os.Args) > 1 && (os.Args[1] == "portable-launch" || os.Args[1] == "portable-primary" || os.Args[1] == "portable-shared-daemon") {
 		os.Exit(agentPortableMain(os.Args[1], os.Args[2:]))
 	}
 
