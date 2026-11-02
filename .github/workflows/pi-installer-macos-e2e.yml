@@ -1,7 +1,8 @@
 name: Pi macOS full installer E2E
 
 on:
-  pull_request:
+  pull_request_target:
+    # Trusted default-branch workflow source; fork head code is never executed here.
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - '.github/workflows/pi-installer-macos-e2e.yml'
@@ -23,16 +24,20 @@ permissions:
 
 concurrency:
   group: pi-installer-macos-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request_target' }}
 
 jobs:
   installer:
-    # Includes draft PRs; the configured route supplies fresh disposable Actions VMs.
+    # The workflow comes from main (pull_request_target), never a PR merge
+    # commit. Only same-repo PR code may run on an organization-managed VM.
+    # External forks/unknown head repositories are not admitted to this
+    # effectful full-installer qualification; ordinary PR CI covers forks.
+    if: ${{ github.event_name != 'pull_request_target' || github.event.pull_request.head.repo.full_name == github.repository }}
     name: Public regression and candidate full installer / macOS 26
-    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'macos-26' || vars.CI_MACOS_26_RUNNER || 'macos-26' }}
+    runs-on: ${{ vars.CI_MACOS_26_RUNNER || 'macos-26' }}
     timeout-minutes: 25
     env:
-      PI_INSTALLER_NAMESPACE: ${{ !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && startsWith(vars.CI_MACOS_26_RUNNER, 'namespace-profile-') && 'true' || 'false' }}
+      PI_INSTALLER_NAMESPACE: ${{ startsWith(vars.CI_MACOS_26_RUNNER, 'namespace-profile-') && 'true' || 'false' }}
       GOWORK: 'off'
       CGO_ENABLED: '1'
       MACOSX_DEPLOYMENT_TARGET: '12.0'
