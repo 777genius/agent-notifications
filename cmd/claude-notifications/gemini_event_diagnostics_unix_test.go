@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -127,19 +128,47 @@ func TestGeminiEventDiagnosticBlockedDatagramRetainsAdmissionDeadline(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	filler, err := net.Dial("unixgram", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_ = filler.SetWriteDeadline(time.Now().Add(100 * time.Millisecond))
-	for i := 0; i < 1024; i++ {
-		if _, err = filler.Write([]byte{0}); err != nil {
-			break
+	// A timed-out send can mean sender-buffer exhaustion, or a deadline
+	// that elapsed before its first syscall. Fill without timers and require
+	// backpressure on the FIRST send of a fresh empty sender. Retain every
+	// sender so the verified queue precondition survives until writer.Write.
+	total, receiverFull := 0, false
+	for sender := 0; sender < 32 && total < 16384 && !receiverFull; sender++ {
+		filler, dialErr := net.DialUnix("unixgram", nil, &net.UnixAddr{Name: path, Net: "unixgram"})
+		if dialErr != nil {
+			t.Fatal(dialErr)
+		}
+		t.Cleanup(func() { _ = filler.Close() })
+		raw, rawErr := filler.SyscallConn()
+		if rawErr != nil {
+			t.Fatal(rawErr)
+		}
+		for sent := 0; total < 16384; sent++ {
+			var n int
+			var sendErr error
+			controlErr := raw.Control(func(fd uintptr) {
+				for {
+					n, sendErr = syscall.SendmsgN(int(fd), []byte{0}, nil, nil, syscall.MSG_DONTWAIT)
+					if sendErr != syscall.EINTR {
+						break
+					}
+				}
+			})
+			if controlErr != nil {
+				t.Fatal(controlErr)
+			}
+			if sendErr == syscall.EAGAIN || sendErr == syscall.EWOULDBLOCK {
+				receiverFull = sent == 0 && total > 0
+				break
+			}
+			if sendErr != nil || n != 1 {
+				t.Fatalf("TEST queue fill failed: bytes=%d error=%v", n, sendErr)
+			}
+			total++
 		}
 	}
-	_ = filler.Close()
-	if err == nil {
-		t.Fatal("TEST receiver queue not filled")
+	if !receiverFull {
+		t.Fatalf("TEST receiver backpressure unproved within bounds: writes=%d", total)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
 	defer cancel()
