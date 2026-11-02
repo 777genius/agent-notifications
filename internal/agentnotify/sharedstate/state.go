@@ -98,6 +98,18 @@ func validRecord(r Record) bool {
 	return err == nil && n > 0 && n <= 65535 && port == strconv.Itoa(n)
 }
 
+// publicationError retains only bounded native diagnostics. Raw OS errors can
+// contain paths or other untrusted text and must never escape into diagnostics.
+type publicationError struct {
+	phase  string
+	errno  uintptr
+	status uint32
+}
+
+func (e *publicationError) Error() string {
+	return fmt.Sprintf("phase=%s errno=%d ntstatus=0x%08x", e.phase, e.errno, e.status)
+}
+
 func safeError(action string, err error) error {
 	if errors.Is(err, os.ErrNotExist) {
 		return &os.PathError{Op: "shared endpoint " + action, Err: os.ErrNotExist}
@@ -107,6 +119,10 @@ func safeError(action string, err error) error {
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return fmt.Errorf("shared endpoint %s: %w", action, context.DeadlineExceeded)
+	}
+	var publication *publicationError
+	if errors.As(err, &publication) {
+		return fmt.Errorf("shared endpoint %s refused (%s)", action, publication)
 	}
 	// Neither untrusted JSON bytes nor token-bearing input errors escape here.
 	return fmt.Errorf("shared endpoint %s refused", action)

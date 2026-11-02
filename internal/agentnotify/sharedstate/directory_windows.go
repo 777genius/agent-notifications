@@ -3,11 +3,13 @@ package sharedstate
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"unsafe"
 
 	"github.com/777genius/agent-notifications/internal/installruntime"
@@ -210,15 +212,23 @@ func (d *directory) read(name string, limit int64) ([]byte, error) {
 // readers specified FILE_SHARE_DELETE, so the observation-cache writer cannot
 // supply this discovery contract.
 func (d *directory) write(name string, data []byte) (err error) {
+	phase := publicationRandom
+	defer func() {
+		if err != nil {
+			err = nativePublicationFailure(phase, err)
+		}
+	}()
 	var nonce [16]byte
 	if _, err = rand.Read(nonce[:]); err != nil {
 		return err
 	}
+	phase = publicationSecurity
 	security, err := privateSecurity(false)
 	if err != nil {
 		return err
 	}
 	temp := ".endpoint-" + hex.EncodeToString(nonce[:])
+	phase = publicationCreateTemp
 	f, err := d.open(temp, windows.GENERIC_READ|windows.GENERIC_WRITE|windows.DELETE, windows.CREATE_NEW, security)
 	if err != nil {
 		return err
@@ -229,10 +239,12 @@ func (d *directory) write(name string, data []byte) (err error) {
 			remove := byte(1)
 			_ = windows.SetFileInformationByHandle(windows.Handle(f.Fd()), windows.FileDispositionInfo, &remove, 1)
 		}
-		if closeErr := f.Close(); err == nil {
+		if closeErr := f.Close(); err == nil && closeErr != nil {
+			phase = publicationCloseTemp
 			err = closeErr
 		}
 	}()
+	phase = publicationWriteTemp
 	written, err := f.Write(data)
 	if err != nil {
 		return err
@@ -243,16 +255,20 @@ func (d *directory) write(name string, data []byte) (err error) {
 	// Recheck strict credential custody immediately before replacing a target.
 	// The caller retains the server lock; all ancestor directories stay pinned.
 	parent := d.handles[len(d.handles)-1]
+	phase = publicationValidateParent
 	if _, err = strictHandle(parent, true); err != nil {
 		return err
 	}
+	phase = publicationValidateTarget
 	target, err := d.open(name, windows.GENERIC_READ, windows.OPEN_EXISTING, nil)
 	if err == nil {
+		phase = publicationCloseTarget
 		err = target.Close()
 	}
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
+	phase = publicationRename
 	if err = renameEndpoint(windows.Handle(f.Fd()), parent, name); err != nil {
 		return err
 	}
@@ -260,8 +276,9 @@ func (d *directory) write(name string, data []byte) (err error) {
 	return nil
 }
 
-// FILE_RENAME_INFO with FileRenameInfoEx accepts the POSIX flag. The root
-// handle confines the single-component destination to the validated directory.
+// FileRenameInformationEx accepts POSIX replacement with a held RootDirectory,
+// matching Go's internal/syscall/windows.Renameat kernel-call contract. Bypass
+// the Win32 FileRenameInfoEx wrapper; use the native relative-rename contract.
 // Unsupported filesystems fail closed; there is no remove-then-rename fallback.
 // https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/ns-ntifs-_file_rename_information
 func renameEndpoint(source, parent windows.Handle, name string) error {
@@ -286,6 +303,47 @@ func renameEndpoint(source, parent windows.Handle, name string) error {
 	info.Root = parent
 	info.Length = uint32((len(encoded) - 1) * 2)
 	copy(unsafe.Slice((*uint16)(unsafe.Pointer(&buffer[offset])), len(encoded)), encoded)
-	return windows.SetFileInformationByHandle(source, windows.FileRenameInfoEx, &buffer[0], uint32(len(buffer)))
+	const fileRenameInformationEx = 65
+	var status windows.IO_STATUS_BLOCK
+	return windows.NtSetInformationFile(source, &status, &buffer[0], uint32(len(buffer)), fileRenameInformationEx)
 }
+
+type publicationPhase uint8
+
+const (
+	publicationRandom publicationPhase = iota
+	publicationSecurity
+	publicationCreateTemp
+	publicationWriteTemp
+	publicationValidateParent
+	publicationValidateTarget
+	publicationCloseTarget
+	publicationRename
+	publicationCloseTemp
+)
+
+func (p publicationPhase) String() string {
+	phases := [...]string{"random", "security", "create_temp", "write_temp", "validate_parent", "validate_target", "close_target", "rename", "close_temp"}
+	if int(p) >= len(phases) {
+		return "unknown"
+	}
+	return phases[p]
+}
+
+// Preserve numeric codes only; FormatMessage and raw OS errors may embed paths.
+func nativePublicationFailure(phase publicationPhase, cause error) error {
+	failure := &publicationError{phase: phase.String()}
+	var status windows.NTStatus
+	if errors.As(cause, &status) {
+		failure.status = uint32(status)
+		failure.errno = uintptr(status.Errno())
+		return failure
+	}
+	var errno syscall.Errno
+	if errors.As(cause, &errno) {
+		failure.errno = uintptr(errno)
+	}
+	return failure
+}
+
 func (d *directory) remove(name string) error { return installruntime.RemoveConfinedName(d.path, name) }
