@@ -91,6 +91,12 @@ inherited. Wrappers come from `git archive C`; symlink copies use
 checks SourceCommit/Version/SHA of that same executable before idempotent setup.
 Repeated setup must preserve fixture Claude files and hook definitions.
 
+Private TEST processes receive the fixed `RUST_LOG=info,codex_hooks=trace` filter
+to retain native hook lifecycle and outcome diagnostics in TEST logs and captured
+stderr. The filter is not inherited from the operator environment. This enables
+diagnosis in a fresh TEST context; it does not establish the cause of a previous
+failure or change smoke acceptance requirements.
+
 Keep exactly one owned `server` process live, save its process handle and wait
 for `server-ready.json`. From a separate genuine controlling TTY:
 
