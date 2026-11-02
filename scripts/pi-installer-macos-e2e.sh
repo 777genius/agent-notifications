@@ -192,7 +192,7 @@ printf '%s\n' "$recovery_status" > "$evidence/candidate-explicit-pi.exit"
 # Inspect installed ownership then let actual Pi discover/load the installed
 # extension and complete one prompt against the existing local model fixture.
 "$python" -B - "$repo" "$root" "$pi" "$release" <<'PY'
-import hashlib, importlib.util, json, os, sys
+import hashlib, importlib.util, json, os, subprocess, sys
 from pathlib import Path
 repo, root, pi, release = map(Path, sys.argv[1:])
 evidence = root / 'evidence'
@@ -212,14 +212,47 @@ assets = P.asset_receipts(control, runtime, repo)
 # The generated active entry imports the installed native carrier. Both remain
 # receipt-backed and unmodified; the TEST witness is a separate foreign extension.
 assert (installed['active'] / 'index.ts').is_file()
-provider, process = F.Provider('success'), None
+provider, sink, process = F.Provider('success'), P.Webhooks(), None
 try:
+    # Configure a real loopback TEST destination, then obtain webhook consent
+    # through the same normal installer. No receipt or authority is synthesized.
+    global_config = root / 'candidate/global/config.json'
+    P.configure(global_config, repo / 'config/config.json', sink, desktop=True)
+    home = root / 'candidate/home'
+    installer_env = {
+        'HOME': str(home), 'USERPROFILE': str(home), 'TMPDIR': str(root / 'candidate/tmp') + '/',
+        'XDG_CONFIG_HOME': str(home / '.config'), 'XDG_DATA_HOME': str(home / '.local/share'),
+        'XDG_CACHE_HOME': str(home / '.cache'), 'PI_CODING_AGENT_DIR': str(profile),
+        'AGENT_NOTIFICATIONS_CONFIG': str(global_config), 'PATH': '/usr/bin:/bin:/usr/sbin:/sbin',
+        'TERM': 'dumb', 'CI': 'true', 'NO_COLOR': '1', 'BOOTSTRAP_VERBOSE': '1',
+        'BOOTSTRAP_DIAGNOSTIC_ROOT': str(root / 'candidate/diagnostics'),
+        'BOOTSTRAP_RELEASE_TAG': 'v1.50.0', 'BOOTSTRAP_RELEASE_COMMIT': os.environ['PI_INSTALLER_SOURCE_SHA'],
+        'BOOTSTRAP_SOURCE_COMMIT': os.environ['PI_INSTALLER_SOURCE_SHA'],
+        'BOOTSTRAP_RELEASES_BASE_URL': 'file://' + str(root / 'releases'),
+        'BOOTSTRAP_RAW_BASE_URL': 'file://' + str(root / 'raw'),
+    }
+    with (evidence / 'candidate-webhook-consent.log').open('wb') as output:
+        consent = subprocess.run(['/bin/bash', str(repo / 'bin/bootstrap.sh'), '--products', 'pi',
+                                  '--desktop', '--webhook', '--plain', '--pi-executable', str(pi)],
+                                 cwd=root / 'candidate/project', env=installer_env, stdin=subprocess.DEVNULL,
+                                 stdout=output, stderr=subprocess.STDOUT, timeout=180)
+    (evidence / 'candidate-webhook-consent.exit').write_text(str(consent.returncode) + '\n')
+    assert consent.returncode == 0, 'normal_installer_webhook_consent_failed'
+    installed = P.installed(control, profile)
+    assert P.sha(installed['runtime']['executable']) == P.sha(release / 'claude-notifications-darwin-arm64')
+    assets = P.asset_receipts(control, Path(installed['binding']['runtimeRoot']), repo)
     case_root = root / 'candidate/process'
     env = F.prepare(case_root, provider, 'success', agent_dir=profile)
-    env['AGENT_NOTIFICATIONS_CONFIG'] = str(root / 'candidate/global/config.json')
+    env.update(HOME=str(home), USERPROFILE=str(home),
+               XDG_CONFIG_HOME=str(home / '.config'), XDG_DATA_HOME=str(home / '.local/share'),
+               XDG_CACHE_HOME=str(home / '.cache'), AGENT_NOTIFICATIONS_CONFIG=str(global_config))
     process = F.PiProcess(pi, case_root, env, 'json')
     assert process.wait() == 0 and process.stderr_bytes == 0, 'real_pi_loader_or_prompt_failed'
     counts = F.verify_case('success', F.witness(case_root), provider.requests)
+    # This can only arrive from the receipt-backed product extension's real
+    # pi-event child; the separate TEST witness never emits product callbacks.
+    webhook = sink.wait('task_complete')
+    sink.quiet()
     result = {'schema_version': 1, 'status': 'passed', 'source_sha': os.environ['PI_INSTALLER_SOURCE_SHA'],
               'public_missing_path': 'reproduced',
               'public_with_real_pi': (evidence / 'public-real-pi.outcome').read_text().strip(),
@@ -228,10 +261,13 @@ try:
               'installed_active_leaf': installed['active'].name, 'asset_sha256': assets,
               'candidate_executable_sha256': installed['runtime']['primary_sha256'],
               'desktop_qualified': False, 'banner_verified': False, 'audio_verified': False,
-              'click_verified': False, 'delivery_observed': False}
+              'click_verified': False, 'delivery_observed': True, 'delivery_channel': 'webhook',
+              'webhook_verified': True, 'webhook_count': len(sink.rows),
+              'webhook_status': webhook['status']}
     (evidence / 'installer-e2e.json').write_text(json.dumps(result, indent=2) + '\n')
 finally:
     if process:
         process.close()
     provider.close()
+    sink.close()
 PY
