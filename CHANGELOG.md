@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.50.1] - 2026-11-02
+
+### Fixed
+- Revalidate Pi's selected profile after shared-runtime preparation so common installer setup no longer stops with `concurrent_change` ([#575](https://github.com/777genius/agent-notifications/pull/575)).
+- Explain Pi's selected PATH lookup and the explicit `--pi-executable` recovery option when the installer cannot find Pi ([#575](https://github.com/777genius/agent-notifications/pull/575)).
+- Keep public installer renderer cleanup in its owning shell so stopping a download animation cannot remove the parent installer stage ([#575](https://github.com/777genius/agent-notifications/pull/575)).
+- Keep MCP notification tools available when multiple chats start concurrently, reuse verified startup snapshots under shared read leases, and preserve bounded startup diagnostics ([#564](https://github.com/777genius/agent-notifications/pull/564)).
+
+### Platform notes
+- Uses the basic five-platform artifact profile with separate downloaded macOS/Codex checks. Pi validation covers actual installation, hooks and lifecycle behavior; native desktop banner, audio and click qualification is not claimed.
+
 ## [1.50.0] - 2026-11-01
 
 ### Added
