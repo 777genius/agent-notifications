@@ -49,9 +49,9 @@ Desktop notifications for **Claude, Codex CLI, OpenCode, Gemini CLI, Cursor CLI,
 
 Choose **Claude**, **Codex CLI**, **OpenCode**, **Gemini CLI**, **Qoder**, **Cursor CLI**, **Pi**, or a combination. Install the selected agent CLIs first and make them available on `PATH`. Pi uses its official standalone distribution. The installer also requires curl, Bash, and a working `python3` or `node` on `PATH`; see [agent/platform prerequisites](docs/INSTALLATION.md#prerequisites). Run the same command to update.
 
-The common Cursor/Qoder/Pi flow is available in [platform release v1.50.0](docs/PLATFORM_RELEASE_CHANNELS.md). The common installer uses one product selection and channel confirmation, with UAP managing each integration. Fresh OpenCode/Gemini/Qoder/Cursor/Pi installs default to desktop on and webhooks off; updates without channel flags preserve each agent's saved choice, including disabled channels. Cursor CLI sends informational Stop alerts on qualified Linux amd64, macOS arm64 and Windows amd64 hosts; see [its profile requirements and limits](docs/cursor-notifications.md).
+The common Cursor/Qoder/Pi flow is available in [platform release v1.50.1](docs/PLATFORM_RELEASE_CHANNELS.md). The common installer uses one product selection and channel confirmation, with UAP managing each integration. Fresh OpenCode/Gemini/Qoder/Cursor/Pi installs default to desktop on and webhooks off; updates without channel flags preserve each agent's saved choice, including disabled channels. Cursor CLI sends informational Stop alerts on qualified Linux amd64, macOS arm64 and Windows amd64 hosts; see [its profile requirements and limits](docs/cursor-notifications.md).
 
-The v1.50.0 artifact source is [7da3329d (C5)](https://github.com/777genius/agent-notifications/commit/7da3329d625eae9cdb29ce665f413e9fb9d03d3a). It includes Qoder's `StopFailure` handler and five bundled MP3s, verified by source/package/runtime tests. Native audible qualification remains tracked in [#562](https://github.com/777genius/agent-notifications/issues/562).
+The v1.50.1 artifact source is [02a0581d](https://github.com/777genius/agent-notifications/commit/02a0581d384e0c438fea93f24f5cf9f6540ab1fd). It preserves Qoder's `StopFailure` handler and five bundled MP3s introduced in v1.50.0. Native audible qualification remains tracked in [#562](https://github.com/777genius/agent-notifications/issues/562).
 
 **Windows:** use **Git Bash**, not WSL, for a native Windows installation.
 
@@ -122,7 +122,7 @@ Windows in isolated TEST profiles. Those checks do not establish full native
 macOS/Windows desktop acceptance; remaining coverage is tracked in
 [#561](https://github.com/777genius/agent-notifications/issues/561).
 
-OpenCode, Gemini and Cursor's optional OS-default cue (`systemSound`) is available in v1.50.0 platform channels. It remains opt-in and does not enable click-to-focus.
+OpenCode, Gemini and Cursor's optional OS-default cue (`systemSound`) has been available since v1.50.0. It remains opt-in and does not enable click-to-focus.
 
 OpenCode V1 and V2 use one installed plugin. The installer does not restrict agent CLI versions. See [OpenCode setup, release reports and delivery limits](docs/opencode-notifications.md) for qualification of specific versions and platforms.
 
