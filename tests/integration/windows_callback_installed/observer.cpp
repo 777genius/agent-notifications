@@ -999,7 +999,11 @@ static Selection census(IUIAutomation* automation, IUIAutomationTreeWalker* walk
        type != UIA_CustomControlTypeId) continue;
    ComPtr<IUIAutomationInvokePattern> pattern;
    budget(); const HRESULT hr=candidate->GetCurrentPatternAs(UIA_InvokePatternId,IID_PPV_ARGS(&pattern));
-   if (SUCCEEDED(hr) && pattern) {
+   // An explicitly unsupported Invoke pattern may be skipped, but a provider
+   // failure must abort this census, not authorize a farther ancestor.
+   if (hr == UIA_E_NOTSUPPORTED) continue;
+   winrt::check_hresult(hr);
+   if (pattern) {
     clickCommonInvokable.fetch_add(1,std::memory_order_relaxed);
     found.row=candidate; break;
    }
