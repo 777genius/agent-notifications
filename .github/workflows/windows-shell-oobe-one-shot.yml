@@ -1,4 +1,4 @@
-name: TEST-only Windows 11 ARM first-logon Shell overlay probe
+name: One-shot TEST-only Windows 11 ARM QUNS_APP foreground diagnostic
 on:
   push:
     branches: [ci/windows-shell-oobe-probe-20261101]
@@ -6,283 +6,128 @@ on:
 permissions:
   contents: read
 jobs:
-  cancel-previous-disposable:
-    if: ${{ github.repository == '777genius/agent-notifications' && github.run_attempt == 1 && github.event.head_commit.message == 'probe-windows-arm-quiet-time-expiry-v13' }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 3
-    permissions:
-      contents: read
-      actions: write
-    env:
-      GH_TOKEN: ${{ github.token }}
-    steps:
-      - name: Cancel only previous flawed user-scoped-QuietHours test
-        shell: bash
-        run: |
-          set -euo pipefail
-          run_id=41347033715
-          expected='3f7821cb83e58191735e68fe972e72c00963dfcc'
-          response="$(gh api "repos/777genius/agent-notifications/actions/runs/$run_id")"
-          actual="$(jq -r .head_sha <<<"$response")"
-          branch="$(jq -r .head_branch <<<"$response")"
-          status="$(jq -r .status <<<"$response")"
-          [[ "$actual" == "$expected" && "$branch" == 'ci/windows-shell-oobe-probe-20261101' ]] || exit 1
-          if [[ "$status" == 'completed' ]]; then
-            echo 'Previous diagnostic already completed; no cancellation necessary.'
-          elif [[ "$status" == 'in_progress' || "$status" == 'queued' ]]; then
-            gh api --method POST "repos/777genius/agent-notifications/actions/runs/$run_id/cancel"
-            echo 'Cancelled the single exact-SHA previous disposable diagnostic; no user/product run affected.'
-          else
-            echo "Unrecognized run status; refusing to cancel: $status" >&2
-            exit 1
-          fi
-  shell-overlay:
-    needs: cancel-previous-disposable
-    if: ${{ github.repository == '777genius/agent-notifications' && github.run_attempt == 1 && github.event.head_commit.message == 'probe-windows-arm-quiet-time-expiry-v13' }}
+  census:
+    if: ${{ github.repository == '777genius/agent-notifications' && github.run_attempt == 1 && github.ref == 'refs/heads/ci/windows-shell-oobe-probe-20261101' && github.event.head_commit.message == 'probe-quns-app-owner-only-v14' }}
     runs-on: windows-11-vs2026-arm
-    timeout-minutes: 80
+    timeout-minutes: 79
+    env:
+      TEST_INSTALLED_ADMISSION: one-fresh-disposable-installed-callback
+      TEST_INSTALLED_PHASE: installed
     steps:
-      - name: Inspect and dismiss only known first-logon overlay, then probe the Shell
-        shell: powershell
+      - name: Dismiss only verified first-logon foreground WWAHost in disposable TEST VM
+        timeout-minutes: 2
+        shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          Add-Type -AssemblyName System.Windows.Forms,System.Drawing
-          $code = @'
+          # This is disposable test-host preparation, before any signed archive
+          # deployment/installation/Show. Never act on an operator's Windows VM,
+          # an arbitrary process, or a process without exact OS-image identity.
+          if ($env:GITHUB_ACTIONS -cne 'true' -or
+              $env:GITHUB_REPOSITORY -cne '777genius/agent-notifications' -or
+              $env:GITHUB_RUN_ATTEMPT -cne '1' -or
+              $env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or
+              $env:TEST_INSTALLED_ADMISSION -cne 'one-fresh-disposable-installed-callback' -or
+              $env:TEST_INSTALLED_PHASE -cne 'installed') {
+            throw 'not an admitted fresh disposable installed TEST host'
+          }
+          $os = Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction Stop
+          if ($os.ProductType -ne 1 -or [int]$os.BuildNumber -lt 22000) {
+            throw 'only Windows 11 Client may have the first-login TEST overlay dismissed'
+          }
+          Add-Type -TypeDefinition @'
           using System;
           using System.Runtime.InteropServices;
-          public static class TestOnlyShellProbe {
-            [StructLayout(LayoutKind.Sequential)]
-            public struct Key { public ushort vk, scan; public uint flags, time; public IntPtr extra; }
-            [StructLayout(LayoutKind.Explicit, Size=40)]
-            public struct Input { [FieldOffset(0)] public uint type; [FieldOffset(8)] public Key key; }
-            [DllImport("user32.dll", SetLastError=true)]
-            public static extern uint SendInput(uint n, [In] Input[] data, int size);
+          public static class TestOnlyForegroundWindow {
             [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
-            [DllImport("shell32.dll")] public static extern int SHQueryUserNotificationState(out int state);
-            public static string NotificationState() { int state; int hr=SHQueryUserNotificationState(out state); return hr==0 ? state.ToString() : "hresult"; }
-            [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hwnd, int command);
             [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
-            public static uint ForegroundPid() {
-              uint pid; GetWindowThreadProcessId(GetForegroundWindow(), out pid); return pid;
-            }
-            public static uint OpenOnce(ushort shortcut) {
-              var input = new Input[4];
-              for (int i=0;i<4;i++) input[i].type=1;
-              input[0].key.vk=0x5b; input[1].key.vk=shortcut;
-              input[2].key.vk=shortcut; input[2].key.flags=2;
-              input[3].key.vk=0x5b; input[3].key.flags=2;
-              return SendInput(4,input,Marshal.SizeOf(typeof(Input)));
-            }
           }
           '@
-          Add-Type -TypeDefinition $code
-          function KnownProcess([uint32]$processId) {
-            if ($processId -eq 0) { return 'none' }
-            try {
-              $p = [System.Diagnostics.Process]::GetProcessById([int]$processId)
-              if ($p.SessionId -ne [System.Diagnostics.Process]::GetCurrentProcess().SessionId) { return 'other_session' }
-              if ($p.ProcessName -in @('WWAHost','UserOOBEBroker','StartMenuExperienceHost','SystemPropertiesPerformance','WindowsTerminal','OpenConsole','explorer','pwsh','powershell','wsl')) {
-                return $p.ProcessName
-              }
-              return 'other'
-            } catch { return 'exited' }
+          $foreground = [TestOnlyForegroundWindow]::GetForegroundWindow()
+          [uint32]$foregroundProcessId = 0
+          if ($foreground -eq [IntPtr]::Zero -or
+              [TestOnlyForegroundWindow]::GetWindowThreadProcessId($foreground, [ref]$foregroundProcessId) -eq 0 -or
+              $foregroundProcessId -eq 0) {
+            throw 'interactive foreground identity unavailable; no TEST cleanup'
           }
-          function Census {
-            $names = @('WWAHost','UserOOBEBroker','StartMenuExperienceHost','SystemPropertiesPerformance','WindowsTerminal','OpenConsole','wsl')
-            $rows = @{}
-            $session = [System.Diagnostics.Process]::GetCurrentProcess().SessionId
+          $process = [Diagnostics.Process]::GetProcessById([int]$foregroundProcessId)
+          try {
+            if ($process.ProcessName -cne 'WWAHost') {
+              Write-Output 'TEST_FIRST_LOGON_OVERLAY_DISMISSED=0;reason=other_foreground'
+            } else {
+              $image = [string]$process.MainModule.FileName
+              $systemRoot = [string]$env:WINDIR
+              $sameSession = $process.SessionId -eq [Diagnostics.Process]::GetCurrentProcess().SessionId
+              $systemImage = $image.StartsWith($systemRoot + '\', [StringComparison]::OrdinalIgnoreCase) -and
+                             [IO.Path]::GetFileName($image) -ieq 'WWAHost.exe'
+              if (-not $sameSession -or -not $systemImage) {
+                throw 'foreign or unverified foreground WWAHost; refusing TEST cleanup'
+              }
+              # One exact, already-held OS process only; never sweep, retry or
+              # mutate a product/client registration, package, user policy or toast.
+              $process.Kill()
+              if (-not $process.WaitForExit(10000)) { throw 'OOBE process exit not collected' }
+              Write-Output 'TEST_FIRST_LOGON_OVERLAY_DISMISSED=1'
+            }
+          } finally { $process.Dispose() }
+      - name: Read-only quiet-expiry and foreground identity census (no install or Show)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Add-Type -TypeDefinition @'
+          using System;
+          using System.Runtime.InteropServices;
+          public static class TestOnlyQuietForeground {
+            [DllImport("shell32.dll")] public static extern int SHQueryUserNotificationState(out int state);
+            [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+            [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr window, out uint pid);
+          }
+          '@
+          $session = [Diagnostics.Process]::GetCurrentProcess().SessionId
+          function CurrentForegroundClass {
+            $window = [TestOnlyQuietForeground]::GetForegroundWindow()
+            if ($window -eq [IntPtr]::Zero) { return 'no_foreground' }
+            [uint32]$processId = 0
+            if ([TestOnlyQuietForeground]::GetWindowThreadProcessId($window, [ref]$processId) -eq 0 -or $processId -eq 0) {
+              return 'foreground_owner_unknown'
+            }
+            try {
+              $process = [Diagnostics.Process]::GetProcessById([int]$processId)
+              try {
+                if ($process.SessionId -ne $session) { return 'foreign_session' }
+                $name = [string]$process.ProcessName
+                if ($name -cmatch '^[A-Za-z0-9_-]{1,64}$') { return $name }
+                return 'nonascii_process_name'
+              } finally { $process.Dispose() }
+            } catch { return 'foreground_process_exited' }
+          }
+          function SessionAppCensus {
+            $names = @('WWAHost','UserOOBEBroker','ApplicationFrameHost','RuntimeBroker',
+                       'StartMenuExperienceHost','ShellExperienceHost','SystemSettings','WindowsTerminal')
+            $out = [ordered]@{}
             foreach ($name in $names) {
-              $matches = @(Get-Process -Name $name -ErrorAction SilentlyContinue | Where-Object { $_.SessionId -eq $session })
-              $rows[$name] = $matches.Count
+              $out[$name] = @(Get-Process -Name $name -ErrorAction SilentlyContinue |
+                             Where-Object { $_.SessionId -eq $session }).Count
             }
-            return $rows
+            return ($out | ConvertTo-Json -Compress)
           }
-          function Capture {
-            $image = New-Object System.Drawing.Bitmap($bounds.Width,$bounds.Height)
-            $graphics = [System.Drawing.Graphics]::FromImage($image)
-            try { $graphics.CopyFromScreen($bounds.Location,[System.Drawing.Point]::Empty,$bounds.Size) }
-            finally { $graphics.Dispose() }
-            return $image
-          }
-          $session = [System.Diagnostics.Process]::GetCurrentProcess().SessionId
-          $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-          if ($bounds.Width -lt 640 -or $bounds.Height -lt 480) { throw 'insufficient desktop geometry' }
-          $notificationStateBefore = [TestOnlyShellProbe]::NotificationState()
-          # Disposable CI user only: official ADMX_WPN NoQuietHours policy.
-          # A change is a preflight hypothesis, never callback qualification.
-          $quietPolicy = 'HKCU:\SOFTWARE\Policies\Microsoft\Windows\CurrentVersion\QuietHours'
-          New-Item -Path $quietPolicy -Force | Out-Null
-          New-ItemProperty -Path $quietPolicy -Name Enable -PropertyType DWord -Value 0 -Force | Out-Null
-          Start-Sleep -Milliseconds 500
-          $notificationStateAfterQuietPolicy = [TestOnlyShellProbe]::NotificationState()
-          $before = Census
-          $foregroundBefore = KnownProcess ([TestOnlyShellProbe]::ForegroundPid())
-          $brokerFound = $before['UserOOBEBroker'] -gt 0
-          $foregroundId = [TestOnlyShellProbe]::ForegroundPid()
-          $stopped = 0
-          $refused = 0
-          # Proven image-build mitigation on a disposable CI image, not operator OS:
-          # https://github.com/actions/runner-images/pull/14673
-          $privacy = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\OOBE'
-          New-Item -Path $privacy -Force | Out-Null
-          Set-ItemProperty -Path $privacy -Name DisablePrivacyExperience -Type DWord -Value 1
-          $engagement = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\UserProfileEngagement'
-          New-Item -Path $engagement -Force | Out-Null
-          Set-ItemProperty -Path $engagement -Name ScoobeSystemSettingEnabled -Type DWord -Value 0
-          # The GitHub-hosted VM is disposable. Never touch any non-OOBE app,
-          # product installation, notification, foreign profile or consent.
-          foreach ($name in @('UserOOBEBroker','WWAHost')) {
-            foreach ($p in @(Get-Process -Name $name -ErrorAction SilentlyContinue)) {
-              if ($p.SessionId -ne $session) { continue }
-              $title = [string]$p.MainWindowTitle
-              $isPrivacyWindow = $name -eq 'WWAHost' -and ($title -match '(?i)choose privacy settings|privacy settings for your device' -or $p.Id -eq $foregroundId)
-              if ($name -eq 'WWAHost' -and -not ($brokerFound -or $isPrivacyWindow)) { continue }
-              try { $path = [string]$p.Path } catch { $path = '' }
-              if (-not $path.StartsWith($env:WINDIR + '\', [StringComparison]::OrdinalIgnoreCase)) {
-                $refused++; continue
+          Write-Output 'TEST_SCOPE=one_shot_disposable_read_only_after_verified_WWAHost;no_product;no_install;no_Show;no_UIA_Invoke'
+          for ($slot = 0; $slot -le 440; $slot++) {
+            [int]$state = 0
+            $hr = [TestOnlyQuietForeground]::SHQueryUserNotificationState([ref]$state)
+            if ($hr -ne 0) { throw 'notification state query failed; no effects' }
+            if ($state -ne 6) {
+              Write-Output ("TEST_TERMINAL_NOTIFICATION_STATE=" + $state + ";elapsed_slots=" + $slot)
+              Write-Output ("TEST_TERMINAL_FOREGROUND_CLASS=" + (CurrentForegroundClass))
+              Write-Output ("TEST_TERMINAL_SAME_SESSION_APP_CENSUS=" + (SessionAppCensus))
+              Write-Output 'TEST_DIAGNOSTIC_ONLY=1;installed_callback_qualified=false'
+              if ($state -ne 5 -and $state -ne 7) {
+                throw 'unexpected blocked notification state; no product attempted'
               }
-              Stop-Process -Id $p.Id -Force -ErrorAction Stop
-              $stopped++
+              exit 0
             }
-          }
-          # Minimize only the known Microsoft first-logon System Properties dialog;
-          # do not sweep arbitrary windows or touch the product/UIA authority.
-          $systemDialogMinimized = 0
-          foreach ($p in @(Get-Process -Name SystemPropertiesPerformance -ErrorAction SilentlyContinue)) {
-            if ($p.SessionId -ne $session -or $p.MainWindowHandle -eq [IntPtr]::Zero) { continue }
-            try { $sysPath = [string]$p.Path } catch { $sysPath = '' }
-            if ($sysPath.StartsWith($env:WINDIR + '\', [StringComparison]::OrdinalIgnoreCase)) {
-              [void][TestOnlyShellProbe]::ShowWindow($p.MainWindowHandle,6)
-              $systemDialogMinimized++
+            if (($slot % 30) -eq 0) {
+              Write-Output ("TEST_QUIET_TIME_6;elapsed_slots=" + $slot)
             }
+            if ($slot -eq 440) { throw 'bounded first-login quiet interval did not expire' }
+            Start-Sleep -Seconds 10
           }
-          # Dismiss any first-logon Start overlay, without terminating the shell.
-          [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
-          Start-Sleep -Milliseconds 1200
-          $notificationStateAfterCleanup = [TestOnlyShellProbe]::NotificationState()
-          # The documented OOBE quiet period is ~1 hour after first sign-in.
-          # Keep this **same disposable Windows 11 Client session** alive, with no
-          # app Show or callback effects, to measure natural expiry (no clock hack).
-          $quietCycles = 0
-          while ($notificationStateAfterCleanup -eq '6' -and $quietCycles -lt 70) {
-            Start-Sleep -Seconds 60
-            $quietCycles++
-            $notificationStateAfterCleanup = [TestOnlyShellProbe]::NotificationState()
-            if (($quietCycles % 5) -eq 0) {
-              Write-Output ("QUIET_TIME_PREFLIGHT_MINUTES=" + $quietCycles + ";state=" + $notificationStateAfterCleanup)
-            }
-          }
-          Write-Output ("QUIET_TIME_PREFLIGHT_TERMINAL=" + $notificationStateAfterCleanup + ";minutes=" + $quietCycles)
-          if ($notificationStateAfterCleanup -ne '5') {
-            throw 'disposable Windows client did not reach QUNS_ACCEPTS_NOTIFICATIONS; no Shell action performed'
-          }
-          $after = Census
-          $foregroundAfterCleanup = KnownProcess ([TestOnlyShellProbe]::ForegroundPid())
-          # Establish and close one Quick Settings shell surface first (inert UI preflight).
-          $firstQuick = [TestOnlyShellProbe]::OpenOnce(0x41)
-          Start-Sleep -Milliseconds 1200
-          $secondQuick = [TestOnlyShellProbe]::OpenOnce(0x41)
-          Start-Sleep -Milliseconds 1200
-          if ($firstQuick -ne 4 -or $secondQuick -ne 4) { throw 'quick settings priming refused' }
-          $imageBefore = Capture
-          try {
-            $inserted = [TestOnlyShellProbe]::OpenOnce(0x4e)
-            if ($inserted -ne 4) { throw 'failed to insert exactly one Win+N sequence' }
-            Start-Sleep -Milliseconds 1400
-            $imageAfter = Capture
-            try {
-              $count = 0; $changed = 0
-              $startX = [int]($bounds.Width*2/3)
-              for ($y=0;$y -lt $bounds.Height;$y+=8) {
-                for ($x=$startX;$x -lt $bounds.Width;$x+=8) {
-                  $count++
-                  if ($imageBefore.GetPixel($x,$y).ToArgb() -ne $imageAfter.GetPixel($x,$y).ToArgb()) { $changed++ }
-                }
-              }
-            } finally { $imageAfter.Dispose() }
-          } finally { $imageBefore.Dispose() }
-          Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
-          $rootUIA = [System.Windows.Automation.AutomationElement]::RootElement
-          $walker = [System.Windows.Automation.TreeWalker]::RawViewWalker
-          $stack = New-Object 'System.Collections.Generic.Stack[System.Windows.Automation.AutomationElement]'
-          $stack.Push($rootUIA)
-          $nodes = 0; $centerNames = 0; $clockNames = 0; $shellNames = 0; $onScreen = 0; $exactCenter = 0; $dndHints = 0; $centerOwnerShell = 0; $centerOwnerOther = 0
-          while ($stack.Count -gt 0 -and $nodes -lt 1000) {
-            $el = $stack.Pop()
-            $nodes++
-            try {
-              $c = $el.Current
-              $name = [string]$c.Name
-              $automation = [string]$c.AutomationId
-              $offscreen = [bool]$c.IsOffscreen
-              if (-not $offscreen) { $onScreen++ }
-              if ($name -match '(?i)notification center|clear all notifications|do not disturb') {
-                $centerNames++
-                if ($name -match '(?i)notification center|clear all notifications') {
-                  $exactCenter++
-                  try {
-                    $owner = [System.Diagnostics.Process]::GetProcessById($c.ProcessId)
-                    if ($owner.ProcessName -in @('explorer','ShellExperienceHost','SystemSettings','ShellHost')) { $centerOwnerShell++ }
-                    else { $centerOwnerOther++ }
-                  } catch { $centerOwnerOther++ }
-                }
-                if ($name -match '(?i)do not disturb') { $dndHints++ }
-              }
-              if ($name -match '(?i)calendar|clock|date and time') { $clockNames++ }
-              if ($automation -match '(?i)notification|clock|calendar') { $shellNames++ }
-              $ch = $walker.GetFirstChild($el)
-              $local = 0
-              while ($null -ne $ch -and $local -lt 80 -and $nodes + $stack.Count -lt 1100) {
-                $stack.Push($ch)
-                $local++
-                $ch = $walker.GetNextSibling($ch)
-              }
-            } catch { continue }
-          }
-          $appxServiceFound = @(Get-Service -Name 'AppXSvc' -ErrorAction SilentlyContinue).Count
-          $packageManagerTypeFound = $false
-          try {
-            $packageManagerTypeFound = [bool]([Windows.Management.Deployment.PackageManager,Windows.Management.Deployment,ContentType=WindowsRuntime])
-          } catch { $packageManagerTypeFound = $false }
-          $notificationStateAfterShortcut = [TestOnlyShellProbe]::NotificationState()
-          $report = [ordered]@{
-            notificationStateBefore = $notificationStateBefore
-            notificationStateAfterQuietPolicy = $notificationStateAfterQuietPolicy
-            disposableQuietHoursPolicyEnable = 0
-            notificationStateAfterCleanup = $notificationStateAfterCleanup
-            quietTimeMinutesElapsed = $quietCycles
-            notificationStateAfterShortcut = $notificationStateAfterShortcut
-            shellShortcut = 'Win+A_twice_then_Win+N_notification_center'
-            priorQuickSettingsInputEvents = $firstQuick + $secondQuick
-            scope = 'one_shot_disposable_no_product_notification_overlay_diagnostic'
-            session = $session
-            overlayProcessCountsBefore = $before
-            foregroundBefore = $foregroundBefore
-            oobeBrokerFound = $brokerFound
-            privacyPolicyConfiguredInDisposableVm = $true
-            systemDialogMinimized = $systemDialogMinimized
-            selectedOobeProcessesStopped = $stopped
-            unexpectedOobePathsRefused = $refused
-            overlayProcessCountsAfter = $after
-            foregroundAfterCleanup = $foregroundAfterCleanup
-            foregroundAfterWinShortcut = (KnownProcess ([TestOnlyShellProbe]::ForegroundPid()))
-            inputKeyEvents = $inserted
-            sampledRightThirdPixels = $count
-            changedRightThirdSamples = $changed
-            uiaNodes = $nodes
-            uiaOnScreen = $onScreen
-            uiaNotificationNameHints = $centerNames
-            uiaExactNotificationCenterNames = $exactCenter
-            uiaDoNotDisturbNames = $dndHints
-            uiaNotificationCenterShellOwner = $centerOwnerShell
-            uiaNotificationCenterOtherOwner = $centerOwnerOther
-            appxDeploymentServiceFound = $appxServiceFound
-            packageManagerWinRTAvailable = $packageManagerTypeFound
-            uiaClockNameHints = $clockNames
-            uiaShellAutomationIdHints = $shellNames
-            screenshotsSaved = $false
-            productToastSent = $false
-            shellUIAInvokeQualified = $false
-            installedCallbackQualified = $false
-          }
-          Write-Output ('OOBE_SHELL_PREFLIGHT=' + ($report | ConvertTo-Json -Compress -Depth 4))
