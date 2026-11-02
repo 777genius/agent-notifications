@@ -22,13 +22,13 @@ For noninteractive product selection, **use the exact flags from the [official d
 
 ## 3. Connect agent notifications when supported
 
-Claude/Codex installation can also add a **local** `agent-notifications` MCP tool and skill. Restart or reload the agent to discover newly installed tools. Only invoke the tool after it appears in the active agent session. Tool availability and event coverage vary by runtime; never claim a sent alert merely because a command was suggested.
+Claude/Codex installation can also register the **local** `agent-notifications` MCP **server** and its skill. The MCP tools are named `notification_status` (read-only availability) and `notify` (send). Some clients defer tool definitions: use the current client's tool search/discovery for those exact tool names, or `agent_notifications`, before declaring them unavailable. Restart or reload after installing if discovery remains empty. Call the read-only status tool first, and invoke `notify` only when explicitly permitted and warranted; interpret its receipt rather than claiming an OS banner was shown. Tool availability and event coverage vary by runtime.
 
 The local tool does not make this public website an MCP server, and a cloud-only agent cannot access the user's localhost without an authorized local executor.
 
 ## 4. Verify and troubleshoot
 
-Use the [installation guide](https://github.com/777genius/agent-notifications/blob/main/docs/INSTALLATION.md) and [troubleshooting docs](https://github.com/777genius/agent-notifications#troubleshooting). Confirm notification permission and the chosen agent's hooks before troubleshooting sound/focus. Never print provider tokens, user webhook destinations or private config files.
+Use the [installation guide](https://github.com/777genius/agent-notifications/blob/main/docs/INSTALLATION.md) and [troubleshooting docs](https://github.com/777genius/agent-notifications/blob/main/docs/troubleshooting.md). Confirm notification permission and the chosen agent's hooks before troubleshooting sound/focus. Never print provider tokens, user webhook destinations or private config files.
 
 - [Website](https://agent-notifications.com/)
 - [Repository](https://github.com/777genius/agent-notifications)
