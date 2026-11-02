@@ -708,7 +708,8 @@ run_runtime_case('stub python3 without node', python=False, node=False, stub_pyt
 # before diagnostics, and never survives download failure or cancellation.
 if os.name != 'nt':
     import errno, pty, select, signal, time
-    for name, failed, cancelled in [('delayed', False, False), ('failure', True, False), ('cancel', False, True)]:
+    for name, failed, cancelled in [('delayed', False, False), ('renderer-startup', False, False),
+                                    ('failure', True, False), ('cancel', False, True)]:
         with tempfile.TemporaryDirectory(prefix='loader-progress-TEST-', dir=os.environ['TMPDIR']) as tmp:
             case = Path(tmp)
             (case/'bin').mkdir(); (case/'tmp space').mkdir()
@@ -736,6 +737,20 @@ fi
                        FAIL_DOWNLOAD='bootstrap' if failed else '',
                        TEST_LOADER_DELAY='5' if cancelled else '0.35')
             env.pop('NO_COLOR', None)
+            if name == 'renderer-startup':
+                # A short transport can finish before its renderer runs the first
+                # trap command. Hold that initialization to expose the inherited
+                # EXIT cleanup race deterministically when the parent stops it.
+                (case/'renderer-env.sh').write_text('''
+trap() {
+    if [ "$BASH_SUBSHELL" -gt 0 ] && [ "${1:-}" = 'exit 0' ]; then
+        : > "$CASE_DIR/renderer-delayed"
+        sleep 0.2
+    fi
+    builtin trap "$@"
+}
+''')
+                env['BASH_ENV'] = str(case/'renderer-env.sh')
             master, slave = pty.openpty()
             proc = subprocess.Popen([HOST_BASH, str(root/'bin/setup.sh'), '--product', 'codex'],
                                     env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
@@ -758,6 +773,8 @@ fi
             assert b'\x1b' not in output, (name, 'loader animation leaked to stdout', output)
             assert b'\x1b[2K' in data, (name, 'loader had no live activity', data)
             assert not list((case/'tmp space').iterdir()), (name, 'loader leaked staged data')
+            if name == 'renderer-startup':
+                assert (case/'renderer-delayed').is_file(), 'renderer startup delay did not run'
             if cancelled:
                 assert sent_cancel and proc.returncode in (143, -signal.SIGTERM), (name, proc.returncode, data)
                 assert b'BOOTSTRAP_RAN' not in output
