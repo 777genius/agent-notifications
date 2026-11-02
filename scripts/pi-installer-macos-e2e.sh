@@ -1,14 +1,18 @@
 #!/usr/bin/env bash
-# Full public/candidate installer regression on a disposable official runner only.
+# Full public/candidate installer regression on a disposable Actions VM only.
 set -euo pipefail
 umask 077
 
 repo=$(cd "$(dirname "$0")/.." && pwd -P)
-[ "${GITHUB_ACTIONS:-}" = true ] && [ "${RUNNER_ENVIRONMENT:-}" = github-hosted ] || {
-    echo 'This test requires a disposable official GitHub-hosted runner.' >&2; exit 1;
-}
-[ "$(uname -s)" = Darwin ] && [ "$(uname -m)" = arm64 ] && [[ "$(sw_vers -productVersion)" = 15.* ]] || {
-    echo 'This test requires official macos-15 ARM64.' >&2; exit 1;
+if ! { [ "${GITHUB_ACTIONS:-}" = true ] && {
+    [ "${RUNNER_ENVIRONMENT:-}" = github-hosted ] || {
+        [ "${PI_INSTALLER_NAMESPACE:-}" = true ] && [[ "${RUNNER_NAME:-}" = nsc-runner-* ]]
+    }
+}; }; then
+    echo 'This test requires a disposable GitHub-hosted or configured Namespace Actions VM.' >&2; exit 1
+fi
+[ "$(uname -s)" = Darwin ] && [ "$(uname -m)" = arm64 ] && [[ "$(sw_vers -productVersion)" = 26.* ]] || {
+    echo 'This test requires macOS 26 ARM64.' >&2; exit 1;
 }
 [ -n "${RUNNER_TEMP:-}" ] && [ ! -e "$RUNNER_TEMP/TEST-pi-installer" ] || exit 1
 mkdir -m 700 "$RUNNER_TEMP/TEST-pi-installer"
@@ -39,7 +43,8 @@ from pathlib import Path
 (Path(sys.argv[1]) / 'host-source.json').write_text(json.dumps({
     'source_sha': sys.argv[2], 'script_sha256': hashlib.sha256(Path(sys.argv[3]).read_bytes()).hexdigest(),
     'host_os': platform.system(), 'host_architecture': platform.machine(), 'host_version': platform.mac_ver()[0],
-    'runner_environment': os.environ['RUNNER_ENVIRONMENT'], 'run_id': os.environ.get('GITHUB_RUN_ID'),
+    'runner_environment': os.environ.get('RUNNER_ENVIRONMENT'), 'runner_name': os.environ.get('RUNNER_NAME'),
+    'namespace_route': os.environ.get('PI_INSTALLER_NAMESPACE') == 'true', 'run_id': os.environ.get('GITHUB_RUN_ID'),
     'run_attempt': os.environ.get('GITHUB_RUN_ATTEMPT'), 'desktop_qualified': False,
 }, indent=2) + '\n')
 PYHOST

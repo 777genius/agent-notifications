@@ -27,11 +27,12 @@ concurrency:
 
 jobs:
   installer:
-    # Deliberately includes draft PRs and never routes to a user-owned host.
-    name: Public regression and candidate full installer / official macOS 15
-    runs-on: macos-15
+    # Includes draft PRs; the configured route supplies fresh disposable Actions VMs.
+    name: Public regression and candidate full installer / macOS 26
+    runs-on: ${{ vars.CI_MACOS_26_RUNNER || 'macos-26' }}
     timeout-minutes: 25
     env:
+      PI_INSTALLER_NAMESPACE: ${{ startsWith(vars.CI_MACOS_26_RUNNER, 'namespace-profile-') && 'true' || 'false' }}
       GOWORK: 'off'
       CGO_ENABLED: '1'
       MACOSX_DEPLOYMENT_TARGET: '12.0'
