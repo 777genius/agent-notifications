@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"testing"
@@ -157,7 +158,10 @@ func TestGeminiEventDiagnosticBlockedDatagramRetainsAdmissionDeadline(t *testing
 			if controlErr != nil {
 				t.Fatal(controlErr)
 			}
-			if sendErr == syscall.EAGAIN || sendErr == syscall.EWOULDBLOCK {
+			// XNU's datagram uipc_send reports sbappendaddr receiver
+			// space exhaustion as ENOBUFS. Linux ENOBUFS is not accepted.
+			if sendErr == syscall.EAGAIN || sendErr == syscall.EWOULDBLOCK ||
+				(runtime.GOOS == "darwin" && sendErr == syscall.ENOBUFS) {
 				receiverFull = sent == 0 && total > 0
 				break
 			}
