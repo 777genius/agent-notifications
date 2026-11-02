@@ -112,10 +112,15 @@ jobs:
               assert target.is_file() and source.read_bytes() == target.read_bytes(), f'Legacy rendered path changed: {rel}'
           PYTHON
           touch artifact/.nojekyll
+      # A failed deploy-only rerun retains the previous attempt's artifact.
+      # Use the same unique attempt name for upload and deploy selection.
       - uses: actions/upload-pages-artifact@v5
         with:
+          name: github-pages-${{ github.run_id }}-${{ github.run_attempt }}
           path: artifact
           include-hidden-files: true
       - name: Deploy Pages
         id: deployment
         uses: actions/deploy-pages@v5
+        with:
+          artifact_name: github-pages-${{ github.run_id }}-${{ github.run_attempt }}
