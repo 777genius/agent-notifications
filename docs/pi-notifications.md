@@ -26,6 +26,13 @@ Git Bash on Windows:
 (set -o pipefail; curl -fsSL https://agent-notifications.com/install.sh | bash -s -- --product pi --desktop)
 ```
 
+If setup reports `pi prerequisite unavailable: not found in selected PATH`, run
+`command -v pi` and `pi --version` in the same shell. Add the installed Pi
+directory to that shell's exported `PATH` before retrying. A shell alias or
+function does not make Pi available to the installer. Alternatively, pass
+`--pi-executable /absolute/path/to/pi` with the product selection to use an
+existing executable outside `PATH`.
+
 Pi can share one setup command with other selected agents:
 
 ```bash
