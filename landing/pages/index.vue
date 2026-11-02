@@ -1,11 +1,17 @@
 <script setup lang="ts">
 import { repo } from "~/data/install";
+import { supportedLocales } from "~/data/i18n";
 
-const { t } = useI18n();
+const { t, locale } = useI18n();
 const pageRoot = ref<HTMLElement>();
 useScrollReveal(pageRoot);
 const localeHead = useLocaleHead({ seo: true });
-const base = useRuntimeConfig().app.baseURL;
+const config = useRuntimeConfig();
+const base = config.app.baseURL;
+const siteUrl = (config.public.siteUrl || "https://agent-notifications.com").replace(/\/+$/, "");
+const publicLocaleUrl = (code: string): string =>
+  new URL(code === "en" ? "" : `${code}/`, `${siteUrl}/`).href;
+const canonicalUrl = computed(() => publicLocaleUrl(locale.value));
 const brandLogo = `${base}agent-notifications-logo.png`;
 const publicBrandLogo =
   "https://agent-notifications.com/agent-notifications-logo.png";
@@ -14,17 +20,35 @@ useHead(() => ({
   title: t("seo.title"),
   htmlAttrs: localeHead.value.htmlAttrs,
   link: [
-    ...(localeHead.value.link ?? []),
+    ...(localeHead.value.link ?? []).filter((link) =>
+      link.rel !== "canonical" && !("hreflang" in link),
+    ),
+    { rel: "canonical", href: canonicalUrl.value },
+    ...supportedLocales.map((entry) => ({
+      rel: "alternate",
+      hreflang: entry.language,
+      href: publicLocaleUrl(entry.code),
+    })),
+    ...supportedLocales
+      .filter((entry) => entry.language.includes("-"))
+      .map((entry) => ({
+        rel: "alternate",
+        hreflang: entry.code,
+        href: publicLocaleUrl(entry.code),
+      })),
+    { rel: "alternate", hreflang: "x-default", href: publicLocaleUrl("en") },
+    { rel: "describedby", title: "llms.txt", href: `${base}llms.txt` },
     { rel: "icon", type: "image/png", href: brandLogo },
     { rel: "apple-touch-icon", href: brandLogo },
     { rel: "manifest", href: `${base}site.webmanifest` },
   ],
   meta: [
-    ...(localeHead.value.meta ?? []),
+    ...(localeHead.value.meta ?? []).filter((tag) => tag.property !== "og:url"),
     { name: "description", content: t("seo.description") },
     { property: "og:title", content: t("seo.title") },
     { property: "og:description", content: t("seo.description") },
     { property: "og:type", content: "website" },
+    { property: "og:url", content: canonicalUrl.value },
     { property: "og:site_name", content: "Agent Notifications" },
     { property: "og:image", content: publicBrandLogo },
     { name: "twitter:card", content: "summary" },
@@ -49,7 +73,7 @@ useHead(() => ({
           price: "0",
           priceCurrency: "USD",
         },
-        url: "https://agent-notifications.com/",
+        url: canonicalUrl.value,
         image: publicBrandLogo,
         downloadUrl: repo,
       }),
