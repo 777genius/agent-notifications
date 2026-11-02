@@ -1,13 +1,13 @@
-name: One-shot TEST-only Windows 11 ARM QUNS_APP foreground diagnostic
+name: One-shot Windows 11 ARM QUNS_APP SearchHost ESC differential
 on:
   push:
-    branches: [ci/windows-shell-oobe-probe-20261101]
+    branches: [ci/windows-shell-search-esc-diff-20261102]
     paths: ['.github/workflows/windows-shell-oobe-one-shot.yml']
 permissions:
   contents: read
 jobs:
   census:
-    if: ${{ github.repository == '777genius/agent-notifications' && github.run_attempt == 1 && github.ref == 'refs/heads/ci/windows-shell-oobe-probe-20261101' && github.event.head_commit.message == 'probe-quns-app-owner-only-v14' }}
+    if: ${{ github.repository == '777genius/agent-notifications' && github.run_attempt == 1 && github.ref == 'refs/heads/ci/windows-shell-search-esc-diff-20261102' && github.event.head_commit.message == 'probe-quns-app-search-esc-only-v15' }}
     runs-on: windows-11-vs2026-arm
     timeout-minutes: 79
     env:
@@ -131,3 +131,81 @@ jobs:
             if ($slot -eq 440) { throw 'bounded first-login quiet interval did not expire' }
             Start-Sleep -Seconds 10
           }
+
+      - name: OS-only identity-gated SearchHost ESC differential after quiet expiry
+        timeout-minutes: 2
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Diagnostic only, no package, Show, UIA, policy mutations or callback evidence.
+          # Tests whether a single ESC alone dismisses verified Windows Search.
+          if ($env:GITHUB_ACTIONS -cne 'true' -or
+              $env:GITHUB_REPOSITORY -cne '777genius/agent-notifications' -or
+              $env:GITHUB_RUN_ATTEMPT -cne '1' -or
+              $env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or
+              $env:TEST_INSTALLED_ADMISSION -cne 'one-fresh-disposable-installed-callback') {
+            throw 'not an admitted fresh disposable TEST host'
+          }
+          $os = Get-CimInstance Win32_OperatingSystem
+          if ($os.ProductType -ne 1 -or [int]$os.BuildNumber -lt 22000) { throw 'Windows 11 Client required' }
+          Add-Type -TypeDefinition @'
+          using System;
+          using System.Runtime.InteropServices;
+          public static class TestOnlySearchEsc {
+            [DllImport("shell32.dll")] public static extern int SHQueryUserNotificationState(out int state);
+            [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+            [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr window, out uint pid);
+            [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
+          }
+          '@
+          function NotificationState {
+            [int]$result = 0
+            $hr = [TestOnlySearchEsc]::SHQueryUserNotificationState([ref]$result)
+            if ($hr -ne 0) { throw 'SHQueryUserNotificationState failed' }
+            return $result
+          }
+          Write-Output 'TEST_SCOPE=OS_SearchHost_only_ESC_differential;policy_changes=0;no_product;no_install;no_Show;no_UIA_Invoke;callback_qualified=false'
+          $before = NotificationState
+          Write-Output "TEST_PRE_ESC_NOTIFICATION_STATE=$before"
+          if ($before -ne 7) {
+            Write-Output 'TEST_ESC_SKIPPED=not_QUNS_APP7'
+            exit 0
+          }
+          $window = [TestOnlySearchEsc]::GetForegroundWindow()
+          [uint32]$pid = 0
+          if ($window -eq [IntPtr]::Zero -or
+              [TestOnlySearchEsc]::GetWindowThreadProcessId($window, [ref]$pid) -eq 0 -or
+              $pid -eq 0) {
+            Write-Output 'TEST_ESC_SKIPPED=no_known_foreground'
+            exit 0
+          }
+          $target = [Diagnostics.Process]::GetProcessById([int]$pid)
+          try {
+            $expected = [IO.Path]::GetFullPath((Join-Path $env:WINDIR 'SystemApps\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\SearchHost.exe'))
+            $sameSession = $target.SessionId -eq [Diagnostics.Process]::GetCurrentProcess().SessionId
+            $sameImage = [String]::Equals([string]$target.MainModule.FileName, $expected,
+                                          [StringComparison]::OrdinalIgnoreCase)
+            Write-Output ('TEST_FOREGROUND_PROCESS_CLASS=' + $target.ProcessName)
+            Write-Output ('TEST_VERIFIED_SEARCHHOST_OS_IMAGE=' + $sameImage)
+            if (-not $sameSession -or $target.ProcessName -cne 'SearchHost' -or -not $sameImage) {
+              Write-Output 'TEST_ESC_SKIPPED=unverified_foreground'
+              exit 0
+            }
+            [uint32]$confirmPid = 0
+            $confirmWindow = [TestOnlySearchEsc]::GetForegroundWindow()
+            if ($confirmWindow -ne $window -or
+                [TestOnlySearchEsc]::GetWindowThreadProcessId($confirmWindow, [ref]$confirmPid) -eq 0 -or
+                $confirmPid -ne $pid -or $target.HasExited) {
+              Write-Output 'TEST_ESC_SKIPPED=foreground_changed'
+              exit 0
+            }
+            # Exactly one ESC keydown/up to foreground OS Search, never a toast click.
+            [TestOnlySearchEsc]::keybd_event(0x1B, 0, 0, [UIntPtr]::Zero)
+            [TestOnlySearchEsc]::keybd_event(0x1B, 0, 2, [UIntPtr]::Zero)
+            Write-Output 'TEST_SEARCHHOST_ESC_SENT=1'
+          } finally { $target.Dispose() }
+          Start-Sleep -Seconds 2
+          Write-Output ('TEST_POST_ESC_2S_NOTIFICATION_STATE=' + (NotificationState))
+          Start-Sleep -Seconds 10
+          Write-Output ('TEST_POST_ESC_12S_NOTIFICATION_STATE=' + (NotificationState))
+          Write-Output 'TEST_DIAGNOSTIC_ONLY=1;installed_callback_qualified=false'
