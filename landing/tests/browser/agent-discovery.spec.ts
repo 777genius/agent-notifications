@@ -31,6 +31,15 @@ test("published locale HTML has unique canonical and matching Open Graph URL", a
     expect(canonical[0]).toContain(`href="${expected}"`);
     const alternates = tags.filter((tag) => /\brel="alternate"/.test(tag) && /\bhreflang="/.test(tag));
     expect(alternates.some((tag) => tag.includes(`href="${expected}"`)), path).toBe(true);
+    for (const region of supportedLocales.filter((entry) => entry.language.includes("-"))) {
+      const href = `https://agent-notifications.com/${region.code === "en" ? "" : `${region.code}/`}`;
+      expect(
+        alternates.some((tag) =>
+          tag.includes(`hreflang="${region.code}"`) && tag.includes(`href="${href}"`),
+        ),
+        `${path}: missing ${region.code} catchall`,
+      ).toBe(true);
+    }
     const ogTags = [...html.matchAll(/<meta\b[^>]*>/gi)].map((m) => m[0]).filter((tag) => /\bproperty="og:url"/.test(tag));
     expect(ogTags, path).toHaveLength(1);
     expect(ogTags[0]).toContain(`content="${expected}"`);
