@@ -3,12 +3,15 @@ package hooks
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/777genius/agent-notifications/internal/analyzer"
 	"github.com/777genius/agent-notifications/internal/config"
+	"github.com/777genius/agent-notifications/internal/dedup"
 	"github.com/777genius/agent-notifications/internal/qodersource"
 )
 
@@ -64,10 +67,17 @@ func qoderFailureTestConfig() *config.Config {
 	return cfg
 }
 
+// These hook-policy fixtures keep invocation locks logically fresh while
+// exercising real atomic files. Native lock expiration is covered by dedup tests.
+func qoderFreshLocks() *dedup.Manager {
+	return dedup.NewManagerWithFileAge(func(string) int64 { return 0 })
+}
+
 // An actual Qoder StopFailure is not a successful Stop, and host error text
 // may contain credentials/requests. Only the fixed class reaches delivery.
 func TestQoderStopFailureRoutesWithoutLeakingRawProviderError(t *testing.T) {
 	handler, notify, _ := newTestHandler(t, qoderFailureTestConfig())
+	handler.dedupMgr = qoderFreshLocks()
 	handler.product, handler.source = ProductQoder, QoderSource{}
 	for _, tc := range []struct {
 		errorType string
@@ -106,6 +116,7 @@ func TestQoderStopFailureRoutesWithoutLeakingRawProviderError(t *testing.T) {
 // event-scoped lock still suppresses an exact repeated failure invocation.
 func TestQoderStopFailureDoesNotCollideWithCompletedTurnDedup(t *testing.T) {
 	handler, notify, _ := newTestHandler(t, qoderFailureTestConfig())
+	handler.dedupMgr = qoderFreshLocks()
 	handler.product, handler.source = ProductQoder, QoderSource{}
 	session := fmt.Sprintf("../../qoder-stop-vs-failure-%d", time.Now().UnixNano())
 	stop := fmt.Sprintf(`{"session_id":%q,"cwd":"/TEST-qoder","hook_event_name":"Stop","stop_hook_active":false,"last_assistant_message":"Qoder stopped unexpectedly"}`, session)
@@ -304,6 +315,7 @@ func TestQoderEventsDeliverWhileContentLockHeld(t *testing.T) {
 			noSuppress := false
 			cfg.Notifications.SuppressForSubagents = &noSuppress
 			h, notifier, _ := newTestHandler(t, cfg)
+			h.dedupMgr = qoderFreshLocks()
 			h.product = ProductQoder
 			h.source = QoderSource{}
 			ev, err := h.source.Decode(context.Background(), kind, strings.NewReader(payload))
@@ -314,6 +326,11 @@ func TestQoderEventsDeliverWhileContentLockHeld(t *testing.T) {
 			ok, err := h.dedupMgr.AcquireContentLock(key)
 			if err != nil || !ok {
 				t.Fatalf("hold lock: %v %v", ok, err)
+			}
+			lockPath := filepath.Join(root, fmt.Sprintf("claude-notification-%s-content.lock", key))
+			before, err := os.Stat(lockPath)
+			if err != nil {
+				t.Fatal(err)
 			}
 			defer func() {
 				if err := h.dedupMgr.ReleaseContentLock(key); err != nil {
@@ -330,8 +347,9 @@ func TestQoderEventsDeliverWhileContentLockHeld(t *testing.T) {
 			if got := notifier.callCount(); got != want {
 				t.Fatalf("deliveries while lock held = %d, want %d", got, want)
 			}
-			if ok, err := h.dedupMgr.AcquireContentLock(key); err != nil || ok {
-				t.Fatalf("handler removed another event's lock: %v %v", ok, err)
+			after, err := os.Stat(lockPath)
+			if err != nil || !os.SameFile(before, after) {
+				t.Fatalf("handler removed or replaced another event's lock: %v", err)
 			}
 		})
 	}

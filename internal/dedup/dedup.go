@@ -12,13 +12,25 @@ import (
 // Manager handles deduplication using two-phase locking
 type Manager struct {
 	tempDir string
+	fileAge func(string) int64
 }
 
 // NewManager creates a new deduplication manager
 func NewManager() *Manager {
-	return &Manager{
-		tempDir: platform.TempDir(),
+	return NewManagerWithFileAge(nil)
+}
+
+// NewManagerWithFileAge supplies the age source for lock TTL decisions.
+// A nil source retains the native filesystem clock used by NewManager.
+func NewManagerWithFileAge(fileAge func(string) int64) *Manager {
+	return &Manager{tempDir: platform.TempDir(), fileAge: fileAge}
+}
+
+func (m *Manager) lockAge(path string) int64 {
+	if m.fileAge != nil {
+		return m.fileAge(path)
 	}
+	return platform.FileAge(path)
 }
 
 // getLockPath returns the path to the lock file for a session and hook event
@@ -41,7 +53,7 @@ func (m *Manager) CheckEarlyDuplicate(sessionID string, hookEvent ...string) boo
 	}
 
 	// Check lock age
-	age := platform.FileAge(lockPath)
+	age := m.lockAge(lockPath)
 
 	// If mtime is unavailable (Windows issue) or lock is fresh (<2s), treat as duplicate
 	if age == -1 {
@@ -73,7 +85,7 @@ func (m *Manager) AcquireLock(sessionID string, hookEvent ...string) (bool, erro
 	}
 
 	// Lock exists - check if it's stale
-	age := platform.FileAge(lockPath)
+	age := m.lockAge(lockPath)
 
 	// If lock is fresh (<2s), we're a duplicate
 	if age >= 0 && age < 2 {
@@ -133,7 +145,7 @@ func (m *Manager) AcquireContentLock(sessionID string) (bool, error) {
 	}
 
 	// Lock exists - check if it's stale (5s TTL for content lock)
-	age := platform.FileAge(lockPath)
+	age := m.lockAge(lockPath)
 	if age >= 0 && age < 5 {
 		// Lock is fresh - wait a bit and try again
 		// This gives the first process time to complete
