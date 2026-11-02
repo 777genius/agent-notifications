@@ -89,7 +89,7 @@ func (w *geminiDiagnosticOutput) Write(data []byte) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	after, err := os.Lstat(path)
 	if err != nil || !os.SameFile(before, after) {
 		return len(data), nil
