@@ -29,6 +29,9 @@ test("published locale HTML has unique canonical and matching Open Graph URL", a
     const canonical = tags.filter((tag) => /\brel="canonical"/.test(tag));
     expect(canonical, path).toHaveLength(1);
     expect(canonical[0]).toContain(`href="${expected}"`);
+    const discoveryLinks = tags.filter((tag) => /\brel="describedby"/.test(tag));
+    expect(discoveryLinks, `${path}: llms.txt covering-file link`).toHaveLength(1);
+    expect(discoveryLinks[0]).toContain('href="/llms.txt"');
     const alternates = tags.filter((tag) => /\brel="alternate"/.test(tag) && /\bhreflang="/.test(tag));
     const localeUrl = (code: string) =>
       `https://agent-notifications.com/${code === "en" ? "" : `${code}/`}`;
