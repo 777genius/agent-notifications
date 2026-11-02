@@ -1,4 +1,4 @@
-name: One-shot Windows 11 ARM QUNS_APP SearchHost ESC differential
+name: One-shot Windows 11 ARM QUNS_APP SearchHost ESC and desktop differential
 on:
   push:
     branches: [ci/windows-shell-search-esc-diff-20261102]
@@ -7,7 +7,7 @@ permissions:
   contents: read
 jobs:
   census:
-    if: ${{ github.repository == '777genius/agent-notifications' && github.run_attempt == 1 && github.ref == 'refs/heads/ci/windows-shell-search-esc-diff-20261102' && github.event.head_commit.message == 'probe-quns-app-search-esc-only-v15' }}
+    if: ${{ github.repository == '777genius/agent-notifications' && github.run_attempt == 1 && github.ref == 'refs/heads/ci/windows-shell-search-esc-diff-20261102' && github.event.head_commit.message == 'probe-quns-app-search-esc-desktop-v16' }}
     runs-on: windows-11-vs2026-arm
     timeout-minutes: 79
     env:
@@ -132,7 +132,7 @@ jobs:
             Start-Sleep -Seconds 10
           }
 
-      - name: OS-only identity-gated SearchHost ESC differential after quiet expiry
+      - name: OS-only identity-gated SearchHost ESC then one Win+D differential
         timeout-minutes: 2
         shell: pwsh
         run: |
@@ -164,7 +164,7 @@ jobs:
             if ($hr -ne 0) { throw 'SHQueryUserNotificationState failed' }
             return $result
           }
-          Write-Output 'TEST_SCOPE=OS_SearchHost_only_ESC_differential;policy_changes=0;no_product;no_install;no_Show;no_UIA_Invoke;callback_qualified=false'
+          Write-Output 'TEST_SCOPE=OS_SearchHost_ESC_one_WinD_differential;policy_changes=0;no_product;no_install;no_Show;no_UIA_Invoke;callback_qualified=false'
           $before = NotificationState
           Write-Output "TEST_PRE_ESC_NOTIFICATION_STATE=$before"
           if ($before -ne 7) {
@@ -172,14 +172,14 @@ jobs:
             exit 0
           }
           $window = [TestOnlySearchEsc]::GetForegroundWindow()
-          [uint32]$pid = 0
+          [uint32]$foregroundProcessId = 0
           if ($window -eq [IntPtr]::Zero -or
-              [TestOnlySearchEsc]::GetWindowThreadProcessId($window, [ref]$pid) -eq 0 -or
-              $pid -eq 0) {
+              [TestOnlySearchEsc]::GetWindowThreadProcessId($window, [ref]$foregroundProcessId) -eq 0 -or
+              $foregroundProcessId -eq 0) {
             Write-Output 'TEST_ESC_SKIPPED=no_known_foreground'
             exit 0
           }
-          $target = [Diagnostics.Process]::GetProcessById([int]$pid)
+          $target = [Diagnostics.Process]::GetProcessById([int]$foregroundProcessId)
           try {
             $expected = [IO.Path]::GetFullPath((Join-Path $env:WINDIR 'SystemApps\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\SearchHost.exe'))
             $sameSession = $target.SessionId -eq [Diagnostics.Process]::GetCurrentProcess().SessionId
@@ -195,7 +195,7 @@ jobs:
             $confirmWindow = [TestOnlySearchEsc]::GetForegroundWindow()
             if ($confirmWindow -ne $window -or
                 [TestOnlySearchEsc]::GetWindowThreadProcessId($confirmWindow, [ref]$confirmPid) -eq 0 -or
-                $confirmPid -ne $pid -or $target.HasExited) {
+                $confirmPid -ne $foregroundProcessId -or $target.HasExited) {
               Write-Output 'TEST_ESC_SKIPPED=foreground_changed'
               exit 0
             }
@@ -207,5 +207,23 @@ jobs:
           Start-Sleep -Seconds 2
           Write-Output ('TEST_POST_ESC_2S_NOTIFICATION_STATE=' + (NotificationState))
           Start-Sleep -Seconds 10
-          Write-Output ('TEST_POST_ESC_12S_NOTIFICATION_STATE=' + (NotificationState))
+          $afterEsc = NotificationState
+          Write-Output ('TEST_POST_ESC_12S_NOTIFICATION_STATE=' + $afterEsc)
+          if ($afterEsc -eq 7) {
+            # A single documented show-desktop gesture on this disposable
+            # Windows 11 test VM only. No package/Show/callback/test-selection
+            # is triggered and no notification-policy or registry state changes.
+            # The original foreground was already exact-image verified SearchHost.
+            [TestOnlySearchEsc]::keybd_event(0x5B, 0, 0, [UIntPtr]::Zero)
+            [TestOnlySearchEsc]::keybd_event(0x44, 0, 0, [UIntPtr]::Zero)
+            [TestOnlySearchEsc]::keybd_event(0x44, 0, 2, [UIntPtr]::Zero)
+            [TestOnlySearchEsc]::keybd_event(0x5B, 0, 2, [UIntPtr]::Zero)
+            Write-Output 'TEST_SHOW_DESKTOP_INPUT_ONCE=1;no_toast_interaction=true'
+            Start-Sleep -Seconds 2
+            Write-Output ('TEST_POST_WIN_D_2S_NOTIFICATION_STATE=' + (NotificationState))
+            Start-Sleep -Seconds 10
+            Write-Output ('TEST_POST_WIN_D_12S_NOTIFICATION_STATE=' + (NotificationState))
+          } else {
+            Write-Output 'TEST_SHOW_DESKTOP_INPUT_ONCE=0;not_needed_or_not_app_mode'
+          }
           Write-Output 'TEST_DIAGNOSTIC_ONLY=1;installed_callback_qualified=false'
