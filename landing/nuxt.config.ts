@@ -15,6 +15,9 @@ export default defineNuxtConfig({
       title: "Agent Notifications",
     },
   },
+  runtimeConfig: {
+    public: { siteUrl },
+  },
   modules: ["@nuxtjs/i18n"],
   css: ["~/assets/main.css"],
   nitro: {
