@@ -34,6 +34,24 @@ def require(ok, code):
         raise Red(code)
 
 
+def closed_sdk_projection(value, cases):
+    keys = {"capture", "identity_checked", "snapshot_stable", "parse_complete", "SDK_flush_complete",
+            "absence_means", "records", "owned_calls", "unjoined_owned_calls", "outcomes", "bytes",
+            "role", "case", "claim_failures", "event_diagnostics", "status", "reason", "desktop", "webhook", "SDK_exit_code", "SDK_duration_ms", "SDK_success",
+            "phase", "classification", "code", "elapsed_ns", "stage_ns", "budget_ns", "budget_state", "publication_possible"}
+    words = {"unavailable", "bounded_prefix", "incomplete_or_invalid_JSON_prefix", "bounded_capture_or_parse_failed",
+             "projection_bound_exceeded",
+             "unknown", "AfterAgent", "Notification", *cases, "validate", "path", "root", "prepare", "lock", "clock",
+             "read", "decode", "record", "encode", "publish", "published", "invalid_request", "invalid_path", "validation",
+             "invalid_clock", "none", "invalid_document", "deadline", "canceled", "os_error", "sharing_violation",
+             "lock_violation", "permission", "not_found", "not_started", "active", "admission", "input", "executable", "snapshot", "registration", "config", "consume", "panic", "completed", "suppressed", "submitted", "rejected", "invalid_fact", "consumer_unavailable", "unsupported_fact", "expired", "not_registered", "invalid_config", "channels_disabled", "delivery_uncertain", "delivery_unavailable", "cache_unavailable", "no_attempt", "duplicate", "revoked"}
+    def closed(value):
+        if isinstance(value, dict): return set(value) <= keys and all(closed(v) for v in value.values())
+        if isinstance(value, list): return len(value) <= 64 and all(closed(v) for v in value)
+        return type(value) is bool or type(value) in (int, float) and -256 <= value <= 10**18 or type(value) is str and value in words
+    return isinstance(value, dict) and closed(value)
+
+
 def sha(path):
     value = hashlib.sha256()
     with path.open("rb") as stream:
@@ -426,21 +444,7 @@ def run(args):
                         raw = stream.read(65537)
                     require(len(raw) <= 65536, "SDK_hook_projection_bound")
                     facts = json.loads(raw)
-                    keys = {"capture", "identity_checked", "snapshot_stable", "parse_complete", "SDK_flush_complete",
-                            "absence_means", "records", "owned_calls", "unjoined_owned_calls", "outcomes", "bytes",
-                            "role", "case", "claim_failures", "SDK_exit_code", "SDK_duration_ms", "SDK_success",
-                            "phase", "classification", "code", "elapsed_ns", "stage_ns", "budget_ns", "budget_state", "publication_possible"}
-                    words = {"unavailable", "bounded_prefix", "incomplete_or_invalid_JSON_prefix", "bounded_capture_or_parse_failed",
-                             "projection_bound_exceeded",
-                             "unknown", "AfterAgent", "Notification", *g0.CASES, "validate", "path", "root", "prepare", "lock", "clock",
-                             "read", "decode", "record", "encode", "publish", "published", "invalid_request", "invalid_path", "validation",
-                             "invalid_clock", "none", "invalid_document", "deadline", "canceled", "os_error", "sharing_violation",
-                             "lock_violation", "permission", "not_found", "not_started", "active"}
-                    def closed(value):
-                        if isinstance(value, dict): return set(value) <= keys and all(closed(v) for v in value.values())
-                        if isinstance(value, list): return len(value) <= 64 and all(closed(v) for v in value)
-                        return type(value) is bool or type(value) in (int, float) and -256 <= value <= 10**18 or type(value) is str and value in words
-                    require(isinstance(facts, dict) and closed(facts), "SDK_hook_projection_not_closed")
+                    require(closed_sdk_projection(facts, g0.CASES), "SDK_hook_projection_not_closed")
                 except Exception:
                     facts = {"capture": "public_projection_unavailable", "absence_means": "unknown"}
                 try:
@@ -570,7 +574,12 @@ def main():
         parser.add_argument("--" + name)
     args = parser.parse_args()
     if args.self_test:
-        result = unittest.TextTestRunner().run(unittest.defaultTestLoader.loadTestsFromTestCase(PureChecks))
+        suite = unittest.defaultTestLoader.loadTestsFromTestCase(PureChecks)
+        diagnostics_spec = importlib.util.spec_from_file_location("gemini_event_diagnostic_tests", REPO / "tests/integration/gemini_event_diagnostics_test.py")
+        diagnostics = importlib.util.module_from_spec(diagnostics_spec)
+        diagnostics_spec.loader.exec_module(diagnostics)
+        suite.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(diagnostics.DiagnosticsTests))
+        result = unittest.TextTestRunner().run(suite)
         return 0 if result.wasSuccessful() else 1
     require(args.hook_shell, "explicit_hook_shell_required")
     return 0 if run(args) else 1

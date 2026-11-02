@@ -578,6 +578,26 @@ def record_hook(args):
     print("{}", flush=True)  # Advisory even when a red classification was recorded.
 
 
+def event_diagnostics(stderr):
+    """Closed labels from the real owned hook's stderr, never arbitrary text."""
+    pattern = (r"gemini\.event\.result phase=(admission|input|decode|executable|snapshot|registration|config|consume|none) "
+               r"class=(unavailable|deadline|canceled|panic|completed|none) "
+               r"status=(suppressed|submitted|unknown|rejected|none) "
+               r"reason=(invalid_fact|consumer_unavailable|unsupported_fact|expired|not_registered|invalid_config|channels_disabled|delivery_uncertain|delivery_unavailable|cache_unavailable|no_attempt|none) "
+               r"desktop=(expired|cache_unavailable|duplicate|revoked|unavailable|unknown|submitted|rejected|suppressed|none) "
+               r"webhook=(expired|cache_unavailable|duplicate|revoked|unavailable|unknown|submitted|rejected|suppressed|none)")
+    if not isinstance(stderr, str) or len(stderr) > 65536:
+        return []
+    rows = []
+    for line in stderr.splitlines():
+        match = re.fullmatch(pattern, line)
+        if match:
+            rows.append(dict(zip(("phase", "classification", "status", "reason", "desktop", "webhook"), match.groups())))
+    # Each invocation emits at most one final snapshot. Duplicates are unknown
+    # evidence, never a reason to copy a larger or untrusted stderr stream.
+    return rows if len(rows) <= 1 else []
+
+
 def capture_sdk_hook_outcomes(lab):
     """Pre-teardown prefix only: SDK flush is unknown; absence is not non-invocation."""
     facts = dict(capture="unavailable", identity_checked=False, snapshot_stable=False,
@@ -668,6 +688,7 @@ def capture_sdk_hook_outcomes(lab):
             if type(attr.get("success")) is bool: outcome["SDK_success"] = attr["success"]
             stderr = attr.get("stderr", "")
             require(isinstance(stderr, str) and len(stderr) <= 65536, "SDK_hook_stderr_bound")
+            outcome["event_diagnostics"] = event_diagnostics(stderr)
             pattern = (r"observation\.claim\.failure phase=(validate|path|root|prepare|lock|clock|read|decode|record|encode|publish|published) "
                        r"class=(invalid_request|invalid_path|validation|invalid_clock|none|invalid_document|deadline|canceled|os_error|sharing_violation|lock_violation|permission|not_found) "
                        r"code=(\d{1,10}) elapsed_ns=(\d{1,18}) stage_ns=(\d{1,18}) budget_ns=(\d{1,18}) "

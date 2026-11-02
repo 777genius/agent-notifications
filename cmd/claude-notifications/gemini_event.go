@@ -71,38 +71,66 @@ func runGeminiEvent(args []string, input io.ReadCloser, output io.Writer) (code 
 	// Admission precedes stdin. Even boot-clock failures and admission panics have
 	// the exact neutral response, without global error logging initialization.
 	admitted := false
+	diagnostic := &geminiEventDiagnostic{enabled: os.Getenv("AGENT_NOTIFICATIONS_OBSERVATION_DIAGNOSTICS") == "1", output: io.Discard, phase: "admission", class: "unavailable"}
+	var admission context.Context
+	var admissionCancel context.CancelFunc
 	defer func() {
-		if recover() != nil || !admitted {
+		if admissionCancel != nil {
+			defer admissionCancel()
+		}
+		panicked := recover() != nil
+		if panicked {
+			diagnostic.fail(nil, true)
+		}
+		if panicked || !admitted {
 			_, _ = io.WriteString(output, "{}\n")
 		}
+		if admission != nil {
+			diagnostic.expired(admission.Err())
+		}
+		diagnostic.emit()
 	}()
 	clock := notifier.SystemBootClock{}
 	ctx, deadline, cancel, err := geminievent.Admission(context.Background(), clock)
 	if err != nil {
+		diagnostic.fail(err, false)
 		return 0
 	}
-	defer cancel()
+	admission, admissionCancel = ctx, cancel
+	diagnostic.output = geminiDiagnosticOutput{ctx: ctx, file: os.Stderr}
 	admitted = true
+	diagnostic.enter("input")
 	return runGeminiEventWith(ctx, args, input, output, func(ctx context.Context, a geminiEventArgs, payload []byte) {
+		defer diagnostic.recoverPanic()
+		diagnostic.enter("decode")
 		facts, err := geminisource.Decode(ctx, a.Event, payload)
 		if err != nil {
+			diagnostic.fail(err, false)
 			return
 		}
+		diagnostic.enter("executable")
 		executable, err := os.Executable()
 		if err != nil {
+			diagnostic.fail(err, false)
 			return
 		}
+		diagnostic.enter("snapshot")
 		snapshot, err := installruntime.ReadPolicySnapshot(ctx, a.ControlRoot)
 		if err != nil {
+			diagnostic.fail(err, false)
 			return
 		}
 		gate := geminiGate{args: a, executable: executable, expected: snapshot}
+		diagnostic.enter("registration")
 		channels := gate.Channels(ctx, gate.binding())
 		if !channels.Desktop && !channels.Webhook {
+			diagnostic.fail(ctx.Err(), false)
 			return
 		}
+		diagnostic.enter("config")
 		cfg, err := config.LoadForAgentQuiet(filepath.Dir(executable), config.AgentGemini)
 		if err != nil {
+			diagnostic.fail(err, false)
 			return
 		}
 		consumer := geminievent.Consumer{Gate: gate, Binding: gate.binding(), Config: cfg, Clock: clock,
@@ -117,6 +145,7 @@ func runGeminiEvent(args []string, input io.ReadCloser, output io.Writer) (code 
 			defer func() { _ = sender.Shutdown(50 * time.Millisecond) }()
 			return sender.SendWithContext(message)
 		}
-		_ = consumer.Consume(ctx, facts, deadline)
+		diagnostic.enter("consume")
+		diagnostic.consumed(consumer.Consume(ctx, facts, deadline))
 	})
 }
