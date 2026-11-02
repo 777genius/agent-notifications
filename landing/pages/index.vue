@@ -27,7 +27,7 @@ useHead(() => ({
     { rel: "manifest", href: `${base}site.webmanifest` },
   ],
   meta: [
-    ...(localeHead.value.meta ?? []),
+    ...(localeHead.value.meta ?? []).filter((tag) => tag.property !== "og:url"),
     { name: "description", content: t("seo.description") },
     { property: "og:title", content: t("seo.title") },
     { property: "og:description", content: t("seo.description") },
