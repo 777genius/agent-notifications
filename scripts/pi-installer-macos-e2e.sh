@@ -100,15 +100,15 @@ if grep -Fq 'pi prerequisite unavailable' "$evidence/public-real-pi.log"; then e
 
 # Download the released inputs once, retain their original manifest, and verify
 # original bytes before reusing only the authentic signed native helper.
-tag=v1.50.0
+stable_tag=v1.50.0
 assets=(checksums.txt ClaudeNotifier.app.zip claude-notifications-darwin-arm64 \
     sound-preview-darwin-arm64 list-devices-darwin-arm64 list-sounds-darwin-arm64 \
     agent-notify-portable-darwin-arm64.zip)
 patterns=()
 for name in "${assets[@]}"; do patterns+=(--pattern "$name"); done
-gh release view "$tag" --repo 777genius/agent-notifications --json tagName,targetCommitish,url \
+gh release view "$stable_tag" --repo 777genius/agent-notifications --json tagName,targetCommitish,url \
     > "$evidence/public-release.json"
-gh release download "$tag" --repo 777genius/agent-notifications "${patterns[@]}" --dir "$root/downloads/stable"
+gh release download "$stable_tag" --repo 777genius/agent-notifications "${patterns[@]}" --dir "$root/downloads/stable"
 cp "$root/downloads/stable/checksums.txt" "$evidence/public-checksums.txt"
 "$python" - "$root/downloads/stable" "$evidence" <<'PY'
 import hashlib, json, sys
@@ -143,7 +143,17 @@ PY
 
 # Ordinary release build/packaging, with candidate checksums explicitly separated
 # from the immutable public checksums. No product executable or helper is faked.
-release="$root/releases/download/$tag"
+candidate_tag=$("$python" - "$repo/internal/config/runtime.go" <<'PYVERSION'
+import re, sys
+from pathlib import Path
+version = re.search(r'^var ConsumerVersion = "([^"]+)"$', Path(sys.argv[1]).read_text(), re.MULTILINE)
+if version is None:
+    raise RuntimeError('candidate_release_version_missing')
+print('v' + version[1])
+PYVERSION
+)
+export PI_INSTALLER_CANDIDATE_TAG="$candidate_tag"
+release="$root/releases/download/$candidate_tag"
 mkdir -p "$release" "$root/raw/$source_sha/bin"
 cp "$root/downloads/stable/ClaudeNotifier.app.zip" "$release/"
 cp "$repo/bin/install.sh" "$root/raw/$source_sha/bin/install.sh"
@@ -153,10 +163,10 @@ for package in claude-notifications sound-preview list-devices list-sounds; do
         -o "$release/$package-darwin-arm64" "./cmd/$package"
 done
 "$go" version -m "$release/claude-notifications-darwin-arm64" > "$evidence/candidate-build.txt"
-GOWORK=off CGO_ENABLED=1 "$go" run ./cmd/build-portable-package -version "${tag#v}" -os darwin -arch arm64 \
+GOWORK=off CGO_ENABLED=1 "$go" run ./cmd/build-portable-package -version "${candidate_tag#v}" -os darwin -arch arm64 \
     -executable "$release/claude-notifications-darwin-arm64" \
     -output "$release/agent-notify-portable-darwin-arm64.zip" -workdir "$root/portable-build"
-"$python" - "$release" "$evidence" "$source_sha" <<'PY'
+"$python" - "$release" "$evidence" "$source_sha" "$candidate_tag" <<'PY'
 import hashlib, json, sys
 from pathlib import Path
 stage, evidence = map(Path, sys.argv[1:3])
@@ -165,7 +175,7 @@ manifest = ''.join(digest + '  ' + name + '\n' for name, digest in assets.items(
 (stage / 'checksums.txt').write_text(manifest)
 (evidence / 'candidate-checksums.txt').write_text(manifest)
 (evidence / 'candidate-source.json').write_text(json.dumps({
-    'source_sha': sys.argv[3], 'kind': 'local_candidate_release_recipe',
+    'source_sha': sys.argv[3], 'candidate_tag': sys.argv[4], 'kind': 'local_candidate_release_recipe',
     'published_release': False, 'desktop_qualified': False, 'assets': assets,
 }, indent=2) + '\n')
 PY
@@ -173,7 +183,7 @@ PY
 candidate_status=0
 run_installer "$root/candidate" "$(dirname "$pi"):/usr/bin:/bin:/usr/sbin:/sbin" \
     "$repo/bin/bootstrap.sh" "$evidence/candidate-real-pi.log" \
-    /usr/bin/env BOOTSTRAP_RELEASE_TAG="$tag" BOOTSTRAP_RELEASE_COMMIT="$source_sha" \
+    /usr/bin/env BOOTSTRAP_RELEASE_TAG="$candidate_tag" BOOTSTRAP_RELEASE_COMMIT="$source_sha" \
     BOOTSTRAP_SOURCE_COMMIT="$source_sha" BOOTSTRAP_RELEASES_BASE_URL="file://$root/releases" \
     BOOTSTRAP_RAW_BASE_URL="file://$root/raw" || candidate_status=$?
 printf '%s\n' "$candidate_status" > "$evidence/candidate-real-pi.exit"
@@ -187,7 +197,7 @@ env -i HOME="$root/candidate/home" USERPROFILE="$root/candidate/home" TMPDIR="$r
     PI_CODING_AGENT_DIR="$root/candidate/home/.pi/agent" \
     AGENT_NOTIFICATIONS_CONFIG="$root/candidate/global/config.json" \
     PATH=/usr/bin:/bin:/usr/sbin:/sbin TERM=dumb CI=true NO_COLOR=1 BOOTSTRAP_VERBOSE=1 \
-    BOOTSTRAP_RELEASE_TAG="$tag" BOOTSTRAP_RELEASE_COMMIT="$source_sha" BOOTSTRAP_SOURCE_COMMIT="$source_sha" \
+    BOOTSTRAP_RELEASE_TAG="$candidate_tag" BOOTSTRAP_RELEASE_COMMIT="$source_sha" BOOTSTRAP_SOURCE_COMMIT="$source_sha" \
     BOOTSTRAP_RELEASES_BASE_URL="file://$root/releases" BOOTSTRAP_RAW_BASE_URL="file://$root/raw" \
     /bin/bash "$repo/bin/bootstrap.sh" --products pi --desktop --plain --pi-executable "$pi" \
     </dev/null > "$evidence/candidate-explicit-pi.log" 2>&1 || recovery_status=$?
@@ -231,7 +241,7 @@ try:
         'AGENT_NOTIFICATIONS_CONFIG': str(global_config), 'PATH': '/usr/bin:/bin:/usr/sbin:/sbin',
         'TERM': 'dumb', 'CI': 'true', 'NO_COLOR': '1', 'BOOTSTRAP_VERBOSE': '1',
         'BOOTSTRAP_DIAGNOSTIC_ROOT': str(root / 'candidate/diagnostics'),
-        'BOOTSTRAP_RELEASE_TAG': 'v1.50.0', 'BOOTSTRAP_RELEASE_COMMIT': os.environ['PI_INSTALLER_SOURCE_SHA'],
+        'BOOTSTRAP_RELEASE_TAG': os.environ['PI_INSTALLER_CANDIDATE_TAG'], 'BOOTSTRAP_RELEASE_COMMIT': os.environ['PI_INSTALLER_SOURCE_SHA'],
         'BOOTSTRAP_SOURCE_COMMIT': os.environ['PI_INSTALLER_SOURCE_SHA'],
         'BOOTSTRAP_RELEASES_BASE_URL': 'file://' + str(root / 'releases'),
         'BOOTSTRAP_RAW_BASE_URL': 'file://' + str(root / 'raw'),
@@ -259,6 +269,7 @@ try:
     webhook = sink.wait('task_complete')
     sink.quiet()
     result = {'schema_version': 1, 'status': 'passed', 'source_sha': os.environ['PI_INSTALLER_SOURCE_SHA'],
+              'candidate_tag': os.environ['PI_INSTALLER_CANDIDATE_TAG'],
               'public_missing_path': 'reproduced',
               'public_with_real_pi': (evidence / 'public-real-pi.outcome').read_text().strip(),
               'candidate_install': 'completed', 'explicit_executable_recovery': 'completed',
