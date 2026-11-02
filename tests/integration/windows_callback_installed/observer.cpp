@@ -65,6 +65,9 @@ static std::atomic<uint32_t> clickRoots{0}, clickNodes{0}, clickTitles{0}, click
 static std::atomic<uint32_t> clickAllowedRoots{0}, clickExcludedRoots{0}, clickExcludedShellNames{0}, clickPreCenterAllowedRoots{0};
 // These counters are read-only diagnostics, never inputs to selection or custody.
 static std::atomic<uint32_t> clickPreCenterNodes{0}, clickTitleFragments{0}, clickBodyFragments{0};
+// Bounded failure-only anatomy of the exact-title/body action ancestry.
+static std::atomic<uint32_t> clickTitleParents{0}, clickBodyParents{0}, clickCommonParents{0};
+static std::atomic<uint32_t> clickFirstCommonType{0}, clickCommonInvokable{0};
 static std::atomic<uint32_t> clickStationObserved{0}, clickStationVisible{0}, clickForegroundBefore{0}, clickForegroundAfter{0}, clickForegroundChanged{0};
 // Read-only current-user notification-presentation hints: never authorize
 // a Shell provider, UIA selection, Invoke or callback.
@@ -907,6 +910,9 @@ static Selection census(IUIAutomation* automation, IUIAutomationTreeWalker* walk
  clickTitles.store(0,std::memory_order_relaxed); clickBodies.store(0,std::memory_order_relaxed);
  clickNameLength.store(0,std::memory_order_relaxed);
  clickTitleFragments.store(0,std::memory_order_relaxed); clickBodyFragments.store(0,std::memory_order_relaxed);
+ clickTitleParents.store(0,std::memory_order_relaxed); clickBodyParents.store(0,std::memory_order_relaxed);
+ clickCommonParents.store(0,std::memory_order_relaxed);
+ clickFirstCommonType.store(0,std::memory_order_relaxed); clickCommonInvokable.store(0,std::memory_order_relaxed);
  clickAllowedRoots.store(0,std::memory_order_relaxed);
  clickExcludedRoots.store(0,std::memory_order_relaxed);
  clickExcludedShellNames.store(0,std::memory_order_relaxed);
@@ -939,16 +945,8 @@ static Selection census(IUIAutomation* automation, IUIAutomationTreeWalker* walk
     if (literal.find(body)!=std::wstring::npos) clickBodyFragments.fetch_add(1,std::memory_order_relaxed);
     if (literal == body) { clickAt("uia_body_uniqueness"); ++bodies; clickBodies.store(bodies,std::memory_order_relaxed); require(!found.body); found.body = node.element; }
     if (literal == title) {
-     clickAt("uia_title_uniqueness"); ++titles; clickTitles.store(titles,std::memory_order_relaxed); require(titles == 1); found.title = node.element; found.pid = DWORD(pid);
-     auto parent = node.element;
-     clickAt("uia_title_parent_row"); for (unsigned depth = 0; depth < 8; ++depth) {
-      ComPtr<IUIAutomationElement> next;
-      budget(); winrt::check_hresult(walker->GetParentElement(parent.Get(),&next)); require(next != nullptr);
-      winrt::check_hresult(next->get_CurrentProcessId(&provider)); require(provider == pid);
-      CONTROLTYPEID type = 0; winrt::check_hresult(next->get_CurrentControlType(&type)); parent = next;
-      if (type == UIA_ListItemControlTypeId) { found.row = next; break; }
-     }
-     require(found.row != nullptr);
+     clickAt("uia_title_uniqueness"); ++titles; clickTitles.store(titles,std::memory_order_relaxed);
+     require(titles == 1); found.title = node.element; found.pid = DWORD(pid);
     }
     ComPtr<IUIAutomationElement> child;
     budget(); winrt::check_hresult(walker->GetFirstChildElement(node.element.Get(),&child));
@@ -961,6 +959,52 @@ static Selection census(IUIAutomation* automation, IUIAutomationTreeWalker* walk
   }
   ComPtr<IUIAutomationElement> next;
   budget(); winrt::check_hresult(walker->GetNextSiblingElement(first.Get(),&next)); first = next;
+ }
+ if (found.title) {
+  clickAt("uia_exact_title_body_pair"); require(found.body != nullptr && found.pid > 0);
+  // Windows 11 may expose the toast default action as Button or Custom, not
+  // ListItem. Require the nearest invokable ancestor common to both *unique*
+  // literal text nodes, still owned by the same signed Shell provider.
+  auto parents = [&](ComPtr<IUIAutomationElement> child) {
+   std::vector<ComPtr<IUIAutomationElement>> path;
+   for (unsigned depth = 0; depth < 8; ++depth) {
+    ComPtr<IUIAutomationElement> next;
+    budget(); winrt::check_hresult(walker->GetParentElement(child.Get(),&next));
+    if (!next) break;
+    int provider = 0; winrt::check_hresult(next->get_CurrentProcessId(&provider));
+    if (provider <= 0 || DWORD(provider) != found.pid) break; // No crossing owner boundary.
+    path.push_back(next); child = next;
+   }
+   return path;
+  };
+  clickAt("uia_exact_ancestor_paths");
+  const auto titlePath=parents(found.title), bodyPath=parents(found.body);
+  clickTitleParents.store(uint32_t(titlePath.size()),std::memory_order_relaxed);
+  clickBodyParents.store(uint32_t(bodyPath.size()),std::memory_order_relaxed);
+  clickAt("uia_invokable_common_ancestor");
+  for (const auto& candidate : titlePath) {
+   bool common = false;
+   for (const auto& bodyAncestor : bodyPath) {
+    BOOL equal = FALSE;
+    budget(); winrt::check_hresult(automation->CompareElements(candidate.Get(),bodyAncestor.Get(),&equal));
+    if (equal) { common = true; break; }
+   }
+   if (!common) continue;
+   const auto count=clickCommonParents.fetch_add(1,std::memory_order_relaxed);
+   CONTROLTYPEID type = 0; budget(); winrt::check_hresult(candidate->get_CurrentControlType(&type));
+   if (count == 0) clickFirstCommonType.store(uint32_t(type),std::memory_order_relaxed);
+   // A Shell window, generic Pane, or notification action toolbar is never
+   // an acceptable default card action. Require native UIA InvokePattern.
+   if (type != UIA_ButtonControlTypeId && type != UIA_ListItemControlTypeId &&
+       type != UIA_CustomControlTypeId) continue;
+   ComPtr<IUIAutomationInvokePattern> pattern;
+   budget(); const HRESULT hr=candidate->GetCurrentPatternAs(UIA_InvokePatternId,IID_PPV_ARGS(&pattern));
+   if (SUCCEEDED(hr) && pattern) {
+    clickCommonInvokable.fetch_add(1,std::memory_order_relaxed);
+    found.row=candidate; break;
+   }
+  }
+  require(found.row != nullptr); // Never substitute LegacyIAccessible or input simulation.
  }
  if (found.row) {
   require(found.body != nullptr);
@@ -1129,6 +1173,11 @@ static void publishClickRefusal(std::exception_ptr cause) noexcept {
   num(report,L"uia_pre_center_nodes",clickPreCenterNodes.load(std::memory_order_relaxed));
   num(report,L"uia_title_fragment_names",clickTitleFragments.load(std::memory_order_relaxed));
   num(report,L"uia_body_fragment_names",clickBodyFragments.load(std::memory_order_relaxed));
+  num(report,L"uia_title_parent_depth",clickTitleParents.load(std::memory_order_relaxed));
+  num(report,L"uia_body_parent_depth",clickBodyParents.load(std::memory_order_relaxed));
+  num(report,L"uia_common_ancestors",clickCommonParents.load(std::memory_order_relaxed));
+  num(report,L"uia_first_common_control_type",clickFirstCommonType.load(std::memory_order_relaxed));
+  num(report,L"uia_common_invokable_ancestors",clickCommonInvokable.load(std::memory_order_relaxed));
   num(report,L"station_flags_observed",clickStationObserved.load(std::memory_order_relaxed));
   num(report,L"station_visible",clickStationVisible.load(std::memory_order_relaxed));
   num(report,L"foreground_before",clickForegroundBefore.load(std::memory_order_relaxed));
