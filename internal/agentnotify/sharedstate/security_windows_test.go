@@ -7,6 +7,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"testing"
 )
 
@@ -111,5 +113,61 @@ func TestWindowsDiscoveryReadDoesNotBlockPublication(t *testing.T) {
 	var previous document
 	if err := json.Unmarshal(previousBytes, &previous); err != nil || previous.Record != first {
 		t.Fatal("publication mutated the original discovery inode")
+	}
+}
+
+// A native rename refusal must preserve the prior record and expose only fixed
+// operation metadata, so CI distinguishes OS failures from invalid credentials.
+func TestWindowsPublicationFailurePreservesRecordAndReportsNativeCodes(t *testing.T) {
+	s := openStore(t, testRoot(t), keyA, runtimeA)
+	release := locked(t, s)
+	defer release()
+	first := endpoint()
+	if err := s.Publish(first); err != nil {
+		t.Fatal(err)
+	}
+	path, err := windows.UTF16PtrFromString(filepath.Join(s.dir, recordName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	attributes, err := windows.GetFileAttributes(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := windows.SetFileAttributes(path, attributes|windows.FILE_ATTRIBUTE_READONLY); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = windows.SetFileAttributes(path, attributes) }()
+	next := first
+	next.PID++
+	err = s.Publish(next)
+	if err == nil {
+		t.Fatal("read-only endpoint was replaced")
+	}
+	diagnostic := err.Error()
+	bounded := regexp.MustCompile(`^shared endpoint publication refused \(phase=rename errno=[1-9][0-9]{0,9} ntstatus=0x[0-9a-f]{8}\)$`)
+	if !bounded.MatchString(diagnostic) || strings.Contains(diagnostic, "ntstatus=0x00000000") {
+		t.Fatalf("native failure lacks bounded rename diagnostics: %v", err)
+	}
+	if got, err := s.Read(); err != nil || got != first {
+		t.Fatal("failed publication changed the endpoint")
+	}
+	entries, err := os.ReadDir(s.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".endpoint-") {
+			t.Fatal("failed publication retained temporary state")
+		}
+	}
+	if err := windows.SetFileAttributes(path, attributes); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Publish(next); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.Read(); err != nil || got != next {
+		t.Fatal("publication did not recover after native refusal")
 	}
 }
