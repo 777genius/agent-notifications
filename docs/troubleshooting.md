@@ -2,6 +2,55 @@
 
 Common installation and runtime issues.
 
+## An agent says the notification tool is unavailable after successful setup
+
+The `agent-notifications` skill is an instruction file; the `notify` and
+`notification_status` tools come from its MCP server. Some clients defer tool
+definitions until the agent searches for them. An agent must search its available
+tools for Agent Notifications, `agent_notifications`, `notification_status` or
+`notify` before treating an absent initial definition as a failed installation.
+MCP resources and shell `PATH` checks do not establish MCP tool availability.
+
+Ask the agent to discover and call `notification_status` with `{}` in the affected
+chat. A successful reply proves server connectivity for that session. Inspect its
+configuration and navigation fields separately from tool availability; it does
+not send a notification or verify lifecycle hooks, OS permission, banner display
+or click navigation. A requested test notification should use `notify` and retain
+the receipt: `submitted` means OS acceptance; confirm visible display separately.
+
+If discovery finds no matching tools, restart the selected client and open a new
+session after setup. If a tool is found but fails to start or connect, retain the
+actual error and check that client's plugin/MCP configuration and the profile
+selected during installation. Report which of these checks failed instead of a
+generic "unavailable". Reinstalling is unnecessary when the current status call
+succeeds. Remote or isolated worker sessions must expose their own MCP tools;
+installation in the operator's profile does not establish access inside a worker.
+
+### `connection closed: initialize response` during concurrent startup
+
+Older portable launchers can exhaust their installation-lease deadline when
+several chats or plugin discovery start together. They redundantly fingerprint
+the complete managed installation before and under the shared component lock,
+then repeat both checks in the installed primary. A successful single startup
+does not rule out this concurrency failure. The launcher now validates one full
+snapshot under a shared read lock in each process. Read-only startups may run
+together; installation writers still require the exclusive lock. Integrity,
+recovery and binding checks remain in place. Startup failures report a fixed stderr reason such as
+`portable-launch: installation_lease_timeout` or `portable_binding_invalid`;
+these diagnostics never enter MCP stdout. A timeout does not mean the binding
+is corrupt. An invalid binding still requires inspection of the installation.
+
+The production bridge test covers eight simultaneous initialize, tools/list
+and status exchanges in an isolated installation. To exercise a ledger of
+approximately 230MB as well, run:
+
+```sh
+AGENT_NOTIFY_STARTUP_STRESS=1 GOWORK=off go test ./cmd/claude-notifications \
+  -run '^TestPortableConcurrentStartup$' -count=1 -v -timeout=4m
+```
+
+This test sends no desktop notification and changes no operator profile.
+
 ## OpenCode notifications missing or duplicated
 
 - Confirm the host version with `opencode --version`. Published support: 1.18.33. The dual-API candidate is tested with 1.18.33,
