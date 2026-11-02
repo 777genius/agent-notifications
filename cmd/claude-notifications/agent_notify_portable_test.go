@@ -198,7 +198,9 @@ func TestPortableProductionBridge(t *testing.T) {
 					signaled = status.Signaled() && status.Signal() == syscall.SIGTERM
 				}
 			}
-			if !isExit || (exit.ExitCode() != 2 && !signaled) {
+			// SIGTERM cancels the launcher's CommandContext, which may kill its
+			// child. Forwarding that child's ExitCode(-1) through os.Exit yields 255.
+			if !isExit || (exit.ExitCode() != 2 && exit.ExitCode() != 255 && !signaled) {
 				t.Fatalf("shutdown failed: %v", waitErr)
 			}
 		}
