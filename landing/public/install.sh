@@ -269,6 +269,7 @@ main() {
     stage=$(mktemp -d "${TMPDIR:-/tmp}/agent-notifications-setup.XXXXXX")
     loader_progress_pid=""
     loader_download_pid=""
+    loader_owner_subshell=$BASH_SUBSHELL
     loader_child_stop() {
         local target="$1" running
         # A child already reaped by wait is no longer ours to signal, even if
@@ -292,7 +293,16 @@ main() {
         loader_progress_pid=""
         printf '\r\033[2K' >&2
     }
-    trap 'loader_download_stop; loader_progress_stop; rm -rf "$stage"' EXIT
+    loader_cleanup() {
+        # Bash can run an inherited EXIT trap when a just-forked renderer is
+        # terminated before it installs its own signal traps. Only the loader
+        # that created this stage may stop its children or remove its files.
+        [ "$BASH_SUBSHELL" -eq "$loader_owner_subshell" ] || return 0
+        loader_download_stop
+        loader_progress_stop
+        rm -rf "$stage"
+    }
+    trap 'loader_cleanup' EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM
     trap 'exit 129' HUP
