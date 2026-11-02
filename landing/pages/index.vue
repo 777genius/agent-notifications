@@ -9,9 +9,9 @@ const localeHead = useLocaleHead({ seo: true });
 const config = useRuntimeConfig();
 const base = config.app.baseURL;
 const siteUrl = (config.public.siteUrl || "https://agent-notifications.com").replace(/\/+$/, "");
-const canonicalUrl = computed(() =>
-  new URL(locale.value === "en" ? "" : `${locale.value}/`, `${siteUrl}/`).href,
-);
+const publicLocaleUrl = (code: string): string =>
+  new URL(code === "en" ? "" : `${code}/`, `${siteUrl}/`).href;
+const canonicalUrl = computed(() => publicLocaleUrl(locale.value));
 const brandLogo = `${base}agent-notifications-logo.png`;
 const publicBrandLogo =
   "https://agent-notifications.com/agent-notifications-logo.png";
@@ -27,9 +27,16 @@ useHead(() => ({
     ...supportedLocales.map((entry) => ({
       rel: "alternate",
       hreflang: entry.language,
-      href: new URL(entry.code === "en" ? "" : `${entry.code}/`, `${siteUrl}/`).href,
+      href: publicLocaleUrl(entry.code),
     })),
-    { rel: "alternate", hreflang: "x-default", href: `${siteUrl}/` },
+    ...supportedLocales
+      .filter((entry) => entry.language.includes("-"))
+      .map((entry) => ({
+        rel: "alternate",
+        hreflang: entry.code,
+        href: publicLocaleUrl(entry.code),
+      })),
+    { rel: "alternate", hreflang: "x-default", href: publicLocaleUrl("en") },
     { rel: "alternate", type: "text/plain", title: "llms.txt", href: `${base}llms.txt` },
     { rel: "icon", type: "image/png", href: brandLogo },
     { rel: "apple-touch-icon", href: brandLogo },
