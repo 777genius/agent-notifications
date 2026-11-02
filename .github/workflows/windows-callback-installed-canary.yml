@@ -499,14 +499,41 @@ jobs:
                     -not [String]::Equals([string]$process.MainModule.FileName, $image,
                                           [StringComparison]::OrdinalIgnoreCase) -or
                     $process.HasExited) { throw 'QUNS_APP: unverified SearchHost; no installation' }
+                [uint32]$confirmId = 0
+                $confirmWindow = [TestOnlyNotificationAcceptance]::GetForegroundWindow()
+                if ($confirmWindow -ne $window -or
+                    [TestOnlyNotificationAcceptance]::GetWindowThreadProcessId($confirmWindow, [ref]$confirmId) -eq 0 -or
+                    $confirmId -ne $foregroundProcessId -or $process.HasExited) {
+                  throw 'SearchHost foreground changed before ESC; no input or installation'
+                }
                 [TestOnlyNotificationAcceptance]::keybd_event(0x1B,0,0,[UIntPtr]::Zero)
                 [TestOnlyNotificationAcceptance]::keybd_event(0x1B,0,2,[UIntPtr]::Zero)
                 Write-Output 'TEST_SEARCH_ESC_ONCE=1;no_product_effect=1'
               } finally { $process.Dispose() }
               Start-Sleep -Seconds 2
               $state = NotificationState
+              Start-Sleep -Seconds 10
+              $state = NotificationState
               Write-Output ('TEST_AFTER_SEARCH_ESC_STATE=' + $state)
               if ($state -eq 7) {
+                # Search must remain the exact original OS foreground owner.
+                # A different foreground after ESC may be a foreign application.
+                $postWindow = [TestOnlyNotificationAcceptance]::GetForegroundWindow()
+                [uint32]$postProcessId = 0
+                if ($postWindow -ne $window -or
+                    [TestOnlyNotificationAcceptance]::GetWindowThreadProcessId($postWindow, [ref]$postProcessId) -eq 0 -or
+                    $postProcessId -ne $foregroundProcessId) {
+                  throw 'SearchHost foreground changed after ESC; no desktop input'
+                }
+                $postOwner = [Diagnostics.Process]::GetProcessById([int]$postProcessId)
+                try {
+                  if ($postOwner.ProcessName -cne 'SearchHost' -or $postOwner.HasExited -or
+                      $postOwner.SessionId -ne [Diagnostics.Process]::GetCurrentProcess().SessionId -or
+                      -not [String]::Equals([string]$postOwner.MainModule.FileName, $image,
+                                           [StringComparison]::OrdinalIgnoreCase)) {
+                    throw 'SearchHost OS owner changed after ESC; no desktop input'
+                  }
+                } finally { $postOwner.Dispose() }
                 [TestOnlyNotificationAcceptance]::keybd_event(0x5B,0,0,[UIntPtr]::Zero)
                 [TestOnlyNotificationAcceptance]::keybd_event(0x44,0,0,[UIntPtr]::Zero)
                 [TestOnlyNotificationAcceptance]::keybd_event(0x44,0,2,[UIntPtr]::Zero)
@@ -514,10 +541,14 @@ jobs:
                 Write-Output 'TEST_SHOW_DESKTOP_ONCE=1;no_product_effect=1'
                 Start-Sleep -Seconds 2
                 $state = NotificationState
+                Start-Sleep -Seconds 10
+                $state = NotificationState
                 Write-Output ('TEST_AFTER_SHOW_DESKTOP_STATE=' + $state)
               }
-              # No implicit app-mode exception, fallback or retry is allowed.
-              if ($state -ne 5) { throw ('Windows notification presentation remains blocked: ' + $state) }
+              # No input, Win+D, or transient state counts as acceptance.
+              if ($state -ne 5 -or (NotificationState) -ne 5) {
+                throw ('Windows notification presentation remains blocked: ' + $state)
+              }
               Write-Output ('WINDOWS_NOTIFICATION_ACCEPTED=5;elapsed_slots=' + $n + ';desktop_preflight=1')
               break
             }
