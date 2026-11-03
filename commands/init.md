@@ -143,13 +143,29 @@ if ! chmod +x "$INSTALLER" || ! "$INSTALLER" "${INSTALL_ARGS[@]}"; then
   echo "Installer failed; agent-notify setup was not attempted." >&2
   exit 1
 fi
-# An offline --force may retain an existing binary and return success without
-# publishing the missing ownership ledger. Never claim init succeeded or run
-# agent-notify against that unregistered bundle.
-if [ "$(uname -s 2>/dev/null)" = Linux ] && [ -n "$config_home" ] &&
-   [ ! -f "$config_home/agent-notifications/ownership.json" ]; then
-  echo "Managed runtime ownership was not established. Restore network access and rerun /init; existing files were retained." >&2
-  exit 1
+# An offline --force can retain an existing binary without publishing
+# ownership. A regular-looking ledger may also be corrupt or symlinked.
+# Use the existing read-only Go status to validate the managed snapshot;
+# configuration may still need preparing during the following setup.
+if [ "$(uname -s 2>/dev/null)" = Linux ]; then
+  ledger="$config_home/agent-notifications/ownership.json"
+  owner_binary="${CLAUDE_PLUGIN_ROOT}/bin/claude-notifications"
+  if [ -z "$config_home" ] || [ -L "$ledger" ] || [ ! -f "$ledger" ] || [ ! -x "$owner_binary" ]; then
+    echo "Managed runtime ownership was not established. Restore a verified runtime and rerun /init; existing files were retained." >&2
+    exit 1
+  fi
+  owner_status=$("$owner_binary" setup-notifications status --json </dev/null 2>/dev/null) || :
+  case "$owner_status" in
+    *'"generation":'[1-9]*)
+      case "$owner_status" in
+        *'"reason":"installation_invalid"'*|*'"reason":"managed_runtime_required"'*|*'"reason":"recovery_required"'*|*'"reason":"owner_conflict"'*|*'"reason":"runtime_conflict"'*)
+          echo "Managed runtime ownership validation failed. Inspect the installed runtime before retrying /init." >&2
+          exit 1 ;;
+      esac ;;
+    *)
+      echo "Managed runtime ownership validation failed. Inspect the installed runtime before retrying /init." >&2
+      exit 1 ;;
+  esac
 fi
 if [ "$SKIP_AGENT_NOTIFY" != true ]; then
   case "$(uname -s 2>/dev/null)" in
