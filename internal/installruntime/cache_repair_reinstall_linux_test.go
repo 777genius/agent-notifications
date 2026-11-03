@@ -74,7 +74,6 @@ func TestCacheRepairReinstalledLinuxMarketplaceReset(t *testing.T) {
 	}
 }
 
-
 // A marketplace reset authorizes only the precise shipped link and byte-identical
 // public skill mode. Any unknown edits, files or recovery payloads fail closed.
 func TestCacheRepairReinstalledLinuxMarketplaceRejectsForeignState(t *testing.T) {
