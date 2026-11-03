@@ -2516,6 +2516,19 @@ stage_and_promote_runtime() (
     live_published="$live_dir/$BINARY_NAME"
     guard_install_paths "$live_dir" "$live_published" || exit 1
 
+    # Claude can recreate a versioned Linux plugin cache from the Git tree,
+    # replacing the owned launcher with the shipped Darwin placeholder and
+    # dropping the Linux binary. Use only the checksum-verified staged kernel
+    # to repair an exact owned reset before the ordinary install transaction.
+    if [ "$PLATFORM" = linux ] && [ "${CN_PRODUCT:-claude}" = claude ] &&
+       [ "${INSTALL_DISPOSABLE_ACQUISITION:-false}" != true ]; then
+        local cache_repair_capability=""
+        cache_repair_capability=$("$BINARY_PATH" setup-products repair-capabilities </dev/null 2>/dev/null) || cache_repair_capability=""
+        if [ "$cache_repair_capability" = cache-repair-v1 ]; then
+            "$BINARY_PATH" setup-products repair-cache --bootstrap --yes </dev/null || exit 1
+        fi
+    fi
+
     if disposable_acquisition "$live_dir" "$live_published"; then
         # Acquisition into a disposable Codex bundle must not Commit a live
         # consumer. setup-codex registers the durable runtime afterwards.
