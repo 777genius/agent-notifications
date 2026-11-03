@@ -1872,7 +1872,10 @@ jobs:
           bash bin/install_no_interpreters_lifecycle_test.sh "$PWD/bin/claude-notifications"
 
       - name: Run install.sh unit tests
-        run: bash bin/install_test.sh
+        run: |
+          bash bin/install_test.sh
+          bash bin/install_adapter_test.sh
+          bash bin/init_missing_ownership_test.sh
 
       - name: Qualify real Go config and setup installers (isolated, offline)
         run: python3 scripts/config_e2e_test.py

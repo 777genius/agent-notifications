@@ -123,9 +123,49 @@ if ! curl -fsSL https://raw.githubusercontent.com/777genius/agent-notifications/
   echo "Installer download failed; resources were not installed." >&2
   exit 1
 fi
-if ! chmod +x "$INSTALLER" || ! "$INSTALLER"; then
+INSTALL_ARGS=()
+# A previous uninstall/manual reset may have removed the ownership ledger
+# while leaving executable bytes in the plugin cache. The ordinary installer
+# skips an existing binary; an explicit Linux init must instead republish a
+# checksum-verified runtime and establish ownership before policy setup.
+if [ "$(uname -s 2>/dev/null)" = Linux ]; then
+  config_home="${XDG_CONFIG_HOME:-}"
+  if [ -z "$config_home" ] && [ -n "${HOME:-}" ]; then
+    config_home="$HOME/.config"
+  fi
+  case "$config_home" in
+    /*) [ -f "$config_home/agent-notifications/ownership.json" ] || INSTALL_ARGS+=(--force) ;;
+    "") ;; # Go will report a missing home/config directory; do not guess.
+    *) echo "XDG_CONFIG_HOME must be an absolute path for Linux managed setup." >&2; exit 1 ;;
+  esac
+fi
+if ! chmod +x "$INSTALLER" || ! "$INSTALLER" "${INSTALL_ARGS[@]}"; then
   echo "Installer failed; agent-notify setup was not attempted." >&2
   exit 1
+fi
+# An offline --force can retain an existing binary without publishing
+# ownership. A regular-looking ledger may also be corrupt or symlinked.
+# Use the existing read-only Go status to validate the managed snapshot;
+# configuration may still need preparing during the following setup.
+if [ "$(uname -s 2>/dev/null)" = Linux ]; then
+  ledger="$config_home/agent-notifications/ownership.json"
+  owner_binary="${CLAUDE_PLUGIN_ROOT}/bin/claude-notifications"
+  if [ -z "$config_home" ] || [ -L "$ledger" ] || [ ! -f "$ledger" ] || [ ! -x "$owner_binary" ]; then
+    echo "Managed runtime ownership was not established. Restore a verified runtime and rerun /init; existing files were retained." >&2
+    exit 1
+  fi
+  owner_status=$("$owner_binary" setup-notifications status --json </dev/null 2>/dev/null) || :
+  case "$owner_status" in
+    *'"generation":'[1-9]*)
+      case "$owner_status" in
+        *'"reason":"installation_invalid"'*|*'"reason":"managed_runtime_required"'*|*'"reason":"recovery_required"'*|*'"reason":"owner_conflict"'*|*'"reason":"runtime_conflict"'*)
+          echo "Managed runtime ownership validation failed. Inspect the installed runtime before retrying /init." >&2
+          exit 1 ;;
+      esac ;;
+    *)
+      echo "Managed runtime ownership validation failed. Inspect the installed runtime before retrying /init." >&2
+      exit 1 ;;
+  esac
 fi
 if [ "$SKIP_AGENT_NOTIFY" != true ]; then
   case "$(uname -s 2>/dev/null)" in
