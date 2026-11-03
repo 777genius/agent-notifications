@@ -141,6 +141,13 @@ if ! chmod +x "$INSTALLER" || ! "$INSTALLER" "${INSTALL_ARGS[@]}"; then
   echo "Installer failed; agent-notify setup was not attempted." >&2
   exit 1
 fi
+# An offline --force may retain an existing binary and return success without
+# publishing the missing ownership ledger. Never claim init succeeded or run
+# agent-notify against that unregistered bundle.
+if [ "${#INSTALL_ARGS[@]}" -gt 0 ] && [ ! -f "$config_home/agent-notifications/ownership.json" ]; then
+  echo "Managed runtime ownership was not established. Restore network access and rerun /init; existing files were retained." >&2
+  exit 1
+fi
 if [ "$SKIP_AGENT_NOTIFY" != true ]; then
   case "$(uname -s 2>/dev/null)" in
     MINGW*|MSYS*|CYGWIN*) NOTIFY_BIN="${CLAUDE_PLUGIN_ROOT}/bin/claude-notifications.bat"; NOTIFY_READY=(-f "$NOTIFY_BIN"); USE_WIZARD=true ;;
