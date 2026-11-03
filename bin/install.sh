@@ -2525,7 +2525,10 @@ stage_and_promote_runtime() (
         local cache_repair_capability=""
         cache_repair_capability=$("$BINARY_PATH" setup-products repair-capabilities </dev/null 2>/dev/null) || cache_repair_capability=""
         if [ "$cache_repair_capability" = cache-repair-v1 ]; then
-            "$BINARY_PATH" setup-products repair-cache --bootstrap --yes </dev/null || exit 1
+            # Hook environments can carry an unrelated control-root override.
+            # Automatic install repair always selects this user\x27s canonical
+            # Go control root; explicit CLI repair retains its own override API.
+            AGENT_NOTIFICATIONS_CONTROL_ROOT= "$BINARY_PATH" setup-products repair-cache --bootstrap --yes </dev/null || exit 1
         fi
     fi
 
