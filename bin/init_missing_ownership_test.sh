@@ -34,16 +34,31 @@ exit 0
 INSTALL
 chmod +x "$sandbox/mock/curl" "$sandbox/mock-installer"
 
-for scenario in missing present creates relative; do
+for scenario in missing present creates malformed symlink relative; do
   dir="$sandbox/$scenario"
   mkdir -p "$dir/plugin/bin" "$dir/config" "$dir/home"
   export CLAUDE_PLUGIN_ROOT="$dir/plugin"
   export XDG_CONFIG_HOME="$dir/config" HOME="$dir/home" INIT_CASE="$scenario"
   export INIT_STUB="$sandbox/mock-installer" INIT_ARGS_LOG="$dir/args"
   [ "$scenario" != relative ] || export XDG_CONFIG_HOME=relative-config
-  if [ "$scenario" = present ]; then
+  cat > "$dir/plugin/bin/claude-notifications" <<'RUNTIME'
+#!/bin/bash
+[ "$1 $2" = 'setup-notifications status' ] || exit 91
+case "$INIT_CASE" in
+  malformed|symlink) printf '{"reason":"installation_invalid","generation":1}\n'; exit 1 ;;
+  *) printf '{"reason":"configuration_required","generation":1}\n'; exit 1 ;;
+esac
+RUNTIME
+  chmod +x "$dir/plugin/bin/claude-notifications"
+  if [ "$scenario" = present ] || [ "$scenario" = malformed ] || [ "$scenario" = symlink ]; then
     mkdir -p "$XDG_CONFIG_HOME/agent-notifications"
     printf 'TEST existing ledger\n' > "$XDG_CONFIG_HOME/agent-notifications/ownership.json"
+    if [ "$scenario" = malformed ]; then
+      printf '{not valid JSON\n' > "$XDG_CONFIG_HOME/agent-notifications/ownership.json"
+    elif [ "$scenario" = symlink ]; then
+      mv "$XDG_CONFIG_HOME/agent-notifications/ownership.json" "$dir/foreign-ledger"
+      ln -s "$dir/foreign-ledger" "$XDG_CONFIG_HOME/agent-notifications/ownership.json"
+    fi
   fi
   result=0
   PATH="$sandbox/mock:$PATH" bash "$sandbox/init.sh" > "$dir/log" 2>&1 || result=$?
@@ -62,6 +77,11 @@ for scenario in missing present creates relative; do
       grep -qx -- --force "$dir/args"
       [ -f "$XDG_CONFIG_HOME/agent-notifications/ownership.json" ]
       ;;
+    malformed|symlink)
+      [ "$result" -ne 0 ] || { echo "$scenario ledger accepted" >&2; exit 1; }
+      grep -q 'Managed runtime ownership validation failed\|Managed runtime ownership was not established' "$dir/log"
+      [ ! -s "$dir/args" ] || { echo "$scenario ledger forced installation" >&2; exit 1; }
+      ;;
     relative)
       [ "$result" -ne 0 ] || { echo 'relative config home accepted' >&2; exit 1; }
       grep -q 'XDG_CONFIG_HOME must be an absolute path' "$dir/log"
@@ -69,4 +89,4 @@ for scenario in missing present creates relative; do
       ;;
   esac
 done
-echo 'PASS: /init rejects relative config homes and offline missing ownership; registered/fresh installs continue'
+echo 'PASS: /init rejects missing, malformed, linked or relative ownership; valid and fresh managed installs continue'
