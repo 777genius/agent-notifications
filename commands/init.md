@@ -123,7 +123,18 @@ if ! curl -fsSL https://raw.githubusercontent.com/777genius/agent-notifications/
   echo "Installer download failed; resources were not installed." >&2
   exit 1
 fi
-if ! chmod +x "$INSTALLER" || ! "$INSTALLER"; then
+INSTALL_ARGS=()
+# A previous uninstall/manual reset may have removed the ownership ledger
+# while leaving executable bytes in the plugin cache. The ordinary installer
+# skips an existing binary; an explicit Linux init must instead republish a
+# checksum-verified runtime and establish ownership before policy setup.
+if [ "$(uname -s 2>/dev/null)" = Linux ] && [ -n "${HOME:-}" ]; then
+  config_home="${XDG_CONFIG_HOME:-$HOME/.config}"
+  case "$config_home" in
+    /*) [ -f "$config_home/agent-notifications/ownership.json" ] || INSTALL_ARGS+=(--force) ;;
+  esac
+fi
+if ! chmod +x "$INSTALLER" || ! "$INSTALLER" "${INSTALL_ARGS[@]}"; then
   echo "Installer failed; agent-notify setup was not attempted." >&2
   exit 1
 fi
