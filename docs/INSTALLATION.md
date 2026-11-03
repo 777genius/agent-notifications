@@ -256,8 +256,13 @@ The bootstrap installer checks for managed files lost when Claude prunes an old
 versioned plugin cache. If exact recovery is possible, interactive setup offers
 to restore those files before preparing the normal installation plan. Declining
 leaves the installation unchanged. Explicit noninteractive installation performs
-the same repair automatically. Existing files with changed content or permissions
-remain conflicts; repair never overwrites them or resets configuration.
+the same repair automatically. Existing files with changed content or permissions remain conflicts, except
+for the exact Linux/amd64 Claude marketplace reinstall signature: a missing
+owned Linux executable together with the shipped macOS placeholder launcher;
+a byte-identical plugin SKILL.md that was reset from private 0600 to 0644 may
+also be restored. Only ledger-owned files in a versioned Claude cache are
+eligible, with verified recovery bytes and transactional checks. All other
+changes remain conflicts; repair never resets configuration.
 If the read-only repair preview cannot complete, bootstrap leaves the decision
 to the normal installer's existing validation, reinstall and journal recovery.
 Failures after repair starts stop setup instead of being ignored.
