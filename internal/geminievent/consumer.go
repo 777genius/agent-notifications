@@ -75,9 +75,16 @@ func message(f geminisource.Facts) (analyzer.Status, notification.Content, bool)
 // Admission before input: this function never starts a new four-second budget.
 func (c Consumer) Consume(parent context.Context, facts geminisource.Facts, deadline notification.Deadline) (out Receipt) {
 	out = Receipt{Status: "suppressed", Reason: "invalid_fact"}
+	attempted := false
 	defer func() {
 		if recover() != nil {
-			out = Receipt{Status: "suppressed", Reason: "consumer_unavailable"}
+			if attempted {
+				// A later admission failure cannot erase a completed channel
+				// or imply that the invocation had no effects.
+				out.Status, out.Reason = "unknown", "delivery_uncertain"
+			} else {
+				out = Receipt{Status: "suppressed", Reason: "consumer_unavailable"}
+			}
 		}
 	}()
 	status, content, supported := message(facts)
@@ -137,6 +144,7 @@ func (c Consumer) Consume(parent context.Context, facts geminisource.Facts, dead
 			} else {
 				// Explicit sound consent requests only the OS default cue.
 				// This observer has no trusted terminal or chat target.
+				attempted = true
 				out.Desktop = deliver(ctx, c.Desktop, notification.InformationalDesktopRequest(
 					content, uuid.NewString(), deadline, c.Config.IsSystemSoundEnabled()))
 			}
@@ -148,6 +156,7 @@ func (c Consumer) Consume(parent context.Context, facts geminisource.Facts, dead
 			if reason := claim(WebhookChannel); reason != "" {
 				out.Webhook = reason
 			} else {
+				attempted = true
 				out.Webhook = sendWebhook(ctx, c.SendWebhook, privateWebhookConfig(c.Config, string(status)), webhook.SendContext{
 					Status: status, Message: content.Body, RawBody: content.Body, AgentSource: string(config.AgentGemini),
 				})

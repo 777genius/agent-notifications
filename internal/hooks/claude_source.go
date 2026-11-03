@@ -1,6 +1,8 @@
 package hooks
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -70,4 +72,17 @@ func (ClaudeSource) Decode(_ context.Context, hookEvent string, input io.Reader)
 		return Event{}, err
 	}
 	return ev, nil
+}
+
+// skipUTF8BOM probes three bytes only after a possible UTF-8 BOM prefix.
+func skipUTF8BOM(input io.Reader) io.Reader {
+	reader := bufio.NewReader(input)
+	prefix, err := reader.Peek(1)
+	if err == nil && prefix[0] == 0xEF {
+		prefix, err = reader.Peek(3)
+		if err == nil && bytes.Equal(prefix, []byte{0xEF, 0xBB, 0xBF}) {
+			_, _ = reader.Discard(3)
+		}
+	}
+	return reader
 }

@@ -2,7 +2,7 @@
 
 The Qoder adapter hooks the same attention events as the Claude adapter:
 completion, questions, permission prompts, plan readiness, subagent
-completion, idle teammates and unexpected stop failures.
+completion and unexpected stop failures.
 Events arrive as native Qoder hook payloads;
 the dedicated native bundle registers one handler per event plus a platform
 executable. The common installer builds this bundle from the verified release
@@ -31,7 +31,7 @@ Older custom Qoder installations are not adopted or migrated by this flow.
 | `PermissionRequest` | permission request | on |
 | `PreToolUse` (matcher `ExitPlanMode\|AskUserQuestion`) | plan ready / question | on |
 | `SubagentStop` | subagent task complete | off (opt-in) |
-| `TeammateIdle` | idle teammate | on; records idle state, team-completion alert requires a stopped lead |
+| `TeammateIdle` | registered observation; no team-completion alert | silent; no verified Qoder-owned team-state source |
 
 `Stop` rides the Go SDK's Qoder transport. The other six events are decoded directly
 as strict hook JSON: the event name inside the payload must match the handler,
@@ -116,8 +116,10 @@ Per-event opt-in notes:
   suppresses it by default, and even with suppression lifted the explicit
   `notifications.notifyOnSubagentStop` flag must be true before a subagent
   completion notifies.
-- `TeammateIdle` needs a team identity in the payload (team name and teammate
-  name); without one the handler stays silent.
+- `TeammateIdle` remains registered and its payload is decoded, but it stays
+  silent. The adapter has no verified Qoder-owned team-state source or lead-stop
+  lifecycle. Team and teammate names alone do not authorize reading or claiming
+  Claude team state; Qoder observations never change that state.
 
 The hooks run synchronously so Qoder waits for delivery before continuing.
 Handlers remain observation-only and do not block task completion with a

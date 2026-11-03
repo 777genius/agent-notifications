@@ -14,9 +14,9 @@ import (
 // assumed by the notification pipeline. Every route is observation-only.
 type QoderSource struct{}
 
-// QoderHookEvents is the notification-suitable hook set wired end to end.
-// Mirrors the Claude adapter set (PreToolUse/Notification/Stop/SubagentStop/
-// TeammateIdle) plus native PermissionRequest and StopFailure.
+// QoderHookEvents is the registered native hook set. TeammateIdle remains
+// decodable but has no team effects without Qoder-owned team authority.
+// Other hooks cover attention, completion and native stop failures.
 var QoderHookEvents = []string{
 	"Stop",
 	"StopFailure",

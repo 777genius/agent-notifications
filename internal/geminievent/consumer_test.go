@@ -519,3 +519,38 @@ func TestClockWatcherPanicCancelsEffectWithoutCrashing(t *testing.T) {
 		t.Fatalf("unsafe clock failure outcome: %s, effect calls %d", data, calls)
 	}
 }
+
+// A late admission panic cannot erase an earlier submitted channel. Both
+// claimed channels remain consumed, and a panic before effects stays suppressed.
+func TestAdmissionPanicPreservesCompletedChannelFacts(t *testing.T) {
+	for _, late := range []bool{false, true} {
+		t.Run(fmt.Sprintf("afterDesktop=%t", late), func(t *testing.T) {
+			c, facts, deadline := consumerFixture(t)
+			c.Gate = testGate{channels: Channels{true, true}, check: func(_ context.Context, _ Binding, channel Channel) bool {
+				if !late || channel == WebhookChannel {
+					panic("PRIVATE_GATE_ERROR")
+				}
+				return true
+			}}
+			desktopCalls, webhookCalls := 0, 0
+			c.Desktop = deliveryFunc(func(context.Context, notification.Request) notification.Receipt {
+				desktopCalls++
+				return notification.Receipt{Status: "submitted"}
+			})
+			c.SendWebhook = func(context.Context, *config.Config, webhook.SendContext) error { webhookCalls++; return nil }
+			got := c.Consume(context.Background(), facts, deadline)
+			if late {
+				if got.Status != "unknown" || got.Reason != "delivery_uncertain" || got.Desktop != "submitted" || desktopCalls != 1 {
+					t.Fatalf("late panic erased completed desktop: %+v calls=%d", got, desktopCalls)
+				}
+			} else if got.Status != "suppressed" || got.Reason != "consumer_unavailable" || desktopCalls != 0 {
+				t.Fatalf("early panic reported an effect: %+v calls=%d", got, desktopCalls)
+			}
+			c.Gate = testGate{channels: Channels{true, true}}
+			repeated := c.Consume(context.Background(), facts, deadline)
+			if late && (repeated.Desktop != "duplicate" || repeated.Webhook != "duplicate" || desktopCalls != 1 || webhookCalls != 0) {
+				t.Fatalf("late panic reopened claimed channels: %+v desktop=%d webhook=%d", repeated, desktopCalls, webhookCalls)
+			}
+		})
+	}
+}

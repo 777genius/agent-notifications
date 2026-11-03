@@ -113,7 +113,7 @@ Claude/Codex setup also installs the `agent-notifications` MCP server and `agent
 | **OpenCode** | Root-session completion, questions, permissions and errors | Opt-in OS-default cue | No | [Setup and limits](docs/opencode-notifications.md) |
 | **Gemini CLI** | Turn completion and tool permissions | Opt-in OS-default cue | No | [Cross-platform setup and qualification](docs/gemini-notifications.md) |
 | **Cursor CLI** | Agent loop stopping; fixed informational text | Opt-in OS-default cue | No | [Qualified hosts, shared setup and profile authority](docs/cursor-notifications.md) |
-| **Qoder** | Completion, question, permission, plan and subagent/idle-teammate hooks; StopFailure errors/rate limits since v1.50.0 | Configured; five MP3s bundled, native audible proof pending | Not qualified; exact-chat focus unavailable | [Unified installation and native hooks](docs/QODER.md) |
+| **Qoder** | Completion, question, permission, plan and subagent hooks; StopFailure errors/rate limits since v1.50.0 | Configured; five MP3s bundled, native audible proof pending | Not qualified; exact-chat focus unavailable | [Unified installation and native hooks](docs/QODER.md) |
 | **Pi** | Final completed activity, blocking extension UI questions and final API errors | Yes, local TUI | Originating local terminal; native qualification varies by OS | [Common installation, modes, sound and terminal focus](docs/pi-notifications.md) |
 
 **[Detailed support matrix](docs/AGENT_SUPPORT_MATRIX.md)** — event coverage, sounds, terminal vs exact-chat navigation, currently unshipped Copilot work, evidence limits and effort estimates.
