@@ -211,7 +211,7 @@ func TestSetupProductsRepairBootstrapCancellationIsFatal(t *testing.T) {
 }
 
 func TestSetupProductsRepairLinuxMarketplaceReinstall(t *testing.T) {
-	if runtime.GOARCH != "amd64" {
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
 		t.Skip("issue #585 describes Linux amd64 marketplace assets")
 	}
 	base, err := filepath.EvalSymlinks(t.TempDir())
