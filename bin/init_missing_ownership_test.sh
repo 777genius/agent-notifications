@@ -34,12 +34,13 @@ exit 0
 INSTALL
 chmod +x "$sandbox/mock/curl" "$sandbox/mock-installer"
 
-for scenario in missing present creates; do
+for scenario in missing present creates relative; do
   dir="$sandbox/$scenario"
   mkdir -p "$dir/plugin/bin" "$dir/config" "$dir/home"
   export CLAUDE_PLUGIN_ROOT="$dir/plugin"
   export XDG_CONFIG_HOME="$dir/config" HOME="$dir/home" INIT_CASE="$scenario"
   export INIT_STUB="$sandbox/mock-installer" INIT_ARGS_LOG="$dir/args"
+  [ "$scenario" != relative ] || export XDG_CONFIG_HOME=relative-config
   if [ "$scenario" = present ]; then
     mkdir -p "$XDG_CONFIG_HOME/agent-notifications"
     printf 'TEST existing ledger\n' > "$XDG_CONFIG_HOME/agent-notifications/ownership.json"
@@ -61,6 +62,11 @@ for scenario in missing present creates; do
       grep -qx -- --force "$dir/args"
       [ -f "$XDG_CONFIG_HOME/agent-notifications/ownership.json" ]
       ;;
+    relative)
+      [ "$result" -ne 0 ] || { echo 'relative config home accepted' >&2; exit 1; }
+      grep -q 'XDG_CONFIG_HOME must be an absolute path' "$dir/log"
+      [ ! -f "$dir/args" ] || { echo 'relative config home invoked installer' >&2; exit 1; }
+      ;;
   esac
 done
-echo 'PASS: /init fails closed for offline existing binary without ownership; fresh or registered installs continue'
+echo 'PASS: /init rejects relative config homes and offline missing ownership; registered/fresh installs continue'
