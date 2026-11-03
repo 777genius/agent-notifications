@@ -270,3 +270,43 @@ func TestSetupProductsRepairLinuxMarketplaceReinstall(t *testing.T) {
 		t.Fatalf("idempotent reinstallation failed: code=%d stdout=%q stderr=%q", code, output.String(), prompts.String())
 	}
 }
+
+func TestSetupProductsBootstrapRepairRejectsUnclassifiedPreviewError(t *testing.T) {
+	for _, damage := range []string{"corrupt-ledger", "invalid-lock"} {
+		t.Run(damage, func(t *testing.T) {
+			base, err := filepath.EvalSymlinks(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			control := filepath.Join(base, "control")
+			runtimeRoot := filepath.Join(base, "plugins", "cache", "claude-notifications-go", "claude-notifications-go", "1.50.0")
+			if _, err := installruntime.Commit(setupCommandContext(t), installruntime.Request{
+				ControlRoot: control, RuntimeRoot: runtimeRoot, Owner: "existing-installer", ConsumerID: "claude-hooks",
+				Files: []installruntime.File{{Path: filepath.Join(runtimeRoot, "bin", "TEST-runtime"),
+					Data: []byte("TEST managed executable" + installruntime.WriterProtocolMarker), Mode: 0700}},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			switch damage {
+			case "corrupt-ledger":
+				err = os.WriteFile(filepath.Join(control, "ownership.json"), []byte("{TEST-corrupt"), 0600)
+			case "invalid-lock":
+				path := filepath.Join(control, ".component-install.lock")
+				err = os.Remove(path)
+				if err == nil {
+					err = os.Symlink(filepath.Join(base, "foreign-lock"), path)
+				}
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			before := setupCommandTree(t, base)
+			var output, prompts bytes.Buffer
+			code := runSetupProducts([]string{"repair-cache", "--control-root", control, "--bootstrap", "--yes"},
+				strings.NewReader(""), &output, &prompts)
+			if code == 0 || output.Len() != 0 || !reflect.DeepEqual(before, setupCommandTree(t, base)) {
+				t.Fatalf("bootstrap reported ready after %s: status=%d output=%q stderr=%q", damage, code, output.String(), prompts.String())
+			}
+		})
+	}
+}
