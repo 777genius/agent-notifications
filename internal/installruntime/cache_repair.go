@@ -200,8 +200,12 @@ func previewCacheRepairLocked(ctx context.Context, root string) (CacheRepairPlan
 	if err != nil {
 		return p, l, nil, err
 	}
-	if _, err = os.Lstat(filepath.Join(root, "transaction.json")); !os.IsNotExist(err) {
+	_, err = os.Lstat(filepath.Join(root, "transaction.json"))
+	if err == nil {
 		return p, l, nil, fmt.Errorf("%w: pending transaction", ErrCacheRepairInstallerRequired)
+	}
+	if !os.IsNotExist(err) {
+		return p, l, nil, err
 	}
 	if l.PendingMutation != nil || l.WriterFloor < 0 || l.WriterFloor > SupportedWriterFloor || l.DecoderFloor < 0 ||
 		(l.Native == nil && l.DecoderFloor != 0) || (l.Native != nil && l.DecoderFloor != l.Native.DecoderFloor) {
