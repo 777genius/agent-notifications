@@ -2,6 +2,7 @@ package installruntime
 
 import (
 	"context"
+	"errors"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -12,6 +13,11 @@ import (
 	"runtime"
 	"sort"
 )
+
+// ErrCacheRepairInstallerRequired marks conditions that the ordinary installer
+// must handle (such as a changed old cache or interrupted transaction). Other
+// preview errors must fail, not silently authorize continuation.
+var ErrCacheRepairInstallerRequired = errors.New("cache repair requires ordinary installer")
 
 // CacheRepairPlan is a read-only, exact observation. It authorizes no delivery
 // and carries no replacement bytes. RepairCache revalidates it under the locks.
@@ -195,11 +201,11 @@ func previewCacheRepairLocked(ctx context.Context, root string) (CacheRepairPlan
 		return p, l, nil, err
 	}
 	if _, err = os.Lstat(filepath.Join(root, "transaction.json")); !os.IsNotExist(err) {
-		return p, l, nil, fmt.Errorf("cache repair requires no pending transaction")
+		return p, l, nil, fmt.Errorf("%w: pending transaction", ErrCacheRepairInstallerRequired)
 	}
 	if l.PendingMutation != nil || l.WriterFloor < 0 || l.WriterFloor > SupportedWriterFloor || l.DecoderFloor < 0 ||
 		(l.Native == nil && l.DecoderFloor != 0) || (l.Native != nil && l.DecoderFloor != l.Native.DecoderFloor) {
-		return p, l, nil, fmt.Errorf("cache repair requires compatible unreserved ownership")
+		return p, l, nil, fmt.Errorf("%w: compatible unreserved ownership required", ErrCacheRepairInstallerRequired)
 	}
 	if l.ID != "" && l.Owner != "existing-installer" {
 		return p, l, nil, fmt.Errorf("foreign installation owner")
@@ -251,7 +257,7 @@ func previewCacheRepairLocked(ctx context.Context, root string) (CacheRepairPlan
 		}
 		if !want.Exists || !cacheOwnedPath(l, path) ||
 			(got.Exists && !linuxMarketplaceCacheReset(l, path, want, got, observed)) {
-			return p, l, nil, fmt.Errorf("managed fingerprint changed without transaction: %s", path)
+			return p, l, nil, fmt.Errorf("%w: managed fingerprint changed without transaction: %s", ErrCacheRepairInstallerRequired, path)
 		}
 		p.Paths = append(p.Paths, path)
 	}
