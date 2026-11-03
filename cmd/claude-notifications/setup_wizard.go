@@ -21,8 +21,8 @@ import (
 	"github.com/777genius/agent-notifications/internal/config"
 	"github.com/777genius/agent-notifications/internal/copilotvscodeinstall"
 	"github.com/777genius/agent-notifications/internal/cursorinstall"
+	"github.com/777genius/agent-notifications/internal/desktopinstall"
 	"github.com/777genius/agent-notifications/internal/installruntime"
-	"github.com/777genius/agent-notifications/internal/opencodeinstall"
 	"github.com/777genius/plugin-kit-ai/cli/installerui"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/adapters/pathpolicy"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/adapters/nativeconfig"
@@ -242,7 +242,7 @@ func executeSetupWizardWith(ctx context.Context, args []string, out, errOut io.W
 				return writeSetupWizardResult(out, jsonOut, setupwizard.Result{Action: string(req.Action), Outcome: "conflict", Reason: "concurrent_change"}, err)
 			}
 			if !containsProduct(confirmed.MCP.Selected, "cursor") {
-				return writeSetupWizardResult(out, jsonOut, setupwizard.Result{Action: string(req.Action), Outcome: "unchanged", Reason: "existing_opt_out", Targets: preservedUnitTargets(confirmed.MCP.Skipped)}, nil)
+				return writeSetupWizardResult(out, jsonOut, setupwizard.Result{Action: string(req.Action), Outcome: "unchanged", Reason: "existing_opt_out", Targets: setupwizard.PreservedUnitTargets(confirmed.MCP.Skipped)}, nil)
 			}
 		}
 		recorded, found, e := recordedCursorRequest(req)
@@ -343,7 +343,7 @@ func executeSetupWizardWith(ctx context.Context, args []string, out, errOut io.W
 	}
 	var result setupwizard.Result
 	if installOrUpdate {
-		result, err = runInstallOrUpdate(ctx, req, preserveExistingUnits)
+		result, err = setupwizard.InstallOrUpdate(ctx, req, preserveExistingUnits)
 	} else {
 		result, err = setupwizard.Run(ctx, req)
 	}
@@ -398,210 +398,6 @@ func validInstallOrUpdateRequest(req setupwizard.Request) bool {
 		seen[agent] = true
 	}
 	return true
-}
-
-func runInstallOrUpdate(ctx context.Context, req setupwizard.Request, preserveExistingUnits bool) (result setupwizard.Result, err error) {
-	var migration *setupwizard.StateMigrationOutcome
-	defer func() {
-		if migration != nil {
-			result.StateMigration = migration
-		}
-		if result.Reason == "concurrent_change" {
-			// The original auto selection is stale. A direct mutation retry
-			// would turn an opt-out into an implicit Add.
-			result.Command = nil
-			result.NextActions = nil
-		}
-	}()
-	// Auto mode inspects before it chooses Update/Add phases. Validate the UAP
-	// registry first so inspection cannot leak parser errors or recommend native
-	// recovery for an old schema that needs its previous installer.
-	if req.AgentNotify == nil || *req.AgentNotify {
-		if req.StateMigration != nil {
-			if err := setupwizard.CheckStateMigration(ctx, req.ControlRoot, *req.StateMigration); err != nil {
-				return setupwizard.StateMigrationFailure(req, err), err
-			}
-		} else {
-			prepared, err := setupwizard.PrepareStateMigration(ctx, req.ControlRoot)
-			if err != nil {
-				return setupwizard.StateMigrationFailure(req, err), err
-			}
-			req.StateMigration = &prepared
-		}
-	}
-	inspect := req
-	inspect.Action = setupwizard.ActionInspect
-	before, inspectErr := setupwizard.Run(ctx, inspect)
-	if inspectErr != nil {
-		return before, inspectErr
-	}
-	for _, next := range before.NextActions {
-		if next.Kind == "recover" || next.Kind == "resume" {
-			return setupwizard.Result{Action: string(req.Action), Outcome: "incomplete", Reason: "pending_setup_required", NextActions: before.NextActions}, setupwizard.ErrRefused
-		}
-	}
-	var preserved []string
-	if req.BootstrapMCP != nil {
-		current, generation, policy, e := setupwizard.ObserveBootstrapMCPWithPolicy(ctx, req)
-		if e == nil && (req.BootstrapExpectedGeneration != nil && generation != *req.BootstrapExpectedGeneration || req.BootstrapExpectedPolicy != nil && policy != *req.BootstrapExpectedPolicy) {
-			e = portablesetup.ErrConcurrentChange
-		}
-		if e == nil {
-			e = setupwizard.CheckBootstrapMCP(*req.BootstrapMCP, current)
-		}
-		if e != nil {
-			return setupwizard.Result{Action: string(req.Action), Outcome: "conflict", Reason: "concurrent_change"}, e
-		}
-		// Observe/check the full frozen projection above, including clients whose
-		// primary install failed. Only the ensuing effects may be narrowed.
-		req.Agents = readyBootstrapAgents(req.BootstrapMCP.Selected, req.BootstrapReadyClients)
-		preserved = append([]string(nil), req.BootstrapMCP.Skipped...)
-		if len(req.Agents) == 0 {
-			return setupwizard.Result{Action: string(req.Action), Outcome: "unchanged", Reason: "existing_opt_out", Targets: preservedUnitTargets(preserved)}, nil
-		}
-		if req.BootstrapExpectedGeneration == nil {
-			req.BootstrapExpectedGeneration = &generation
-		}
-		if req.BootstrapExpectedPolicy == nil {
-			req.BootstrapExpectedPolicy = &policy
-		}
-	} else if preserveExistingUnits {
-		selected, skipped, err := setupwizard.BootstrapAutoTargets(ctx, req, before)
-		if err != nil {
-			return setupwizard.Result{Action: string(req.Action), Outcome: "incomplete", Reason: "existing_units_unavailable"}, err
-		}
-		req.Agents, preserved = selected, skipped
-		if len(selected) == 0 {
-			return setupwizard.Result{Action: string(req.Action), Outcome: "unchanged", Reason: "existing_opt_out", Targets: preservedUnitTargets(preserved)}, nil
-		}
-		// Selection is a policy decision about currently live bindings. The
-		// package fetch can take time, so every later Plan and Run must still
-		// see this ledger generation (or one produced by our own phase).
-		expected := before.Generation
-		req.BootstrapExpectedGeneration = &expected
-	}
-	if req.PackageRoot == "" {
-		pinned, err := setupwizard.PinCurrentReleasePackage(ctx, req)
-		if err != nil {
-			return setupwizard.Result{Action: string(req.Action), Outcome: "incomplete", Reason: "package_acquisition_failed"}, err
-		}
-		req = pinned
-	}
-	// A group update can expose another behind client only after the first
-	// binding moves. Replan the original selection until every selected client
-	// is ready; a completed phase alone is not proof that the group is current.
-	for attempt := 0; attempt <= len(req.Agents); attempt++ {
-		plan, err := setupwizard.Plan(ctx, req)
-		if plan.Ready && (plan.Request.Action != req.Action || strings.Join(plan.Request.Agents, ",") != strings.Join(req.Agents, ",")) {
-			return setupwizard.Result{Action: string(req.Action), Outcome: "incomplete", Reason: "pending_setup_required"}, setupwizard.ErrRefused
-		}
-		if plan.Ready {
-			result, runErr := setupwizard.Run(ctx, plan.Request)
-			if migration == nil {
-				migration = result.StateMigration
-			}
-			if runErr != nil || result.ExitCode() != 0 {
-				return result, runErr
-			}
-			verified, verifyErr := verifyInstallOrUpdate(ctx, req, result)
-			verified.Targets = append(verified.Targets, preservedUnitTargets(preserved)...)
-			return verified, verifyErr
-		}
-		if plan.Result.Reason != "update_required" || !validInstallOrUpdateActions(req.Agents, plan.Result.NextActions) {
-			return plan.Result, err
-		}
-		for _, next := range plan.Result.NextActions {
-			phase := req
-			phase.Action = setupwizard.Action(next.Kind)
-			phase.Agents = append([]string(nil), next.Agents...)
-			phasePlan, planErr := setupwizard.Plan(ctx, phase)
-			if !phasePlan.Ready {
-				return phasePlan.Result, planErr
-			}
-			result, runErr := setupwizard.Run(ctx, phasePlan.Request)
-			if migration == nil {
-				migration = result.StateMigration
-			}
-			if runErr != nil || result.ExitCode() != 0 {
-				return result, runErr
-			}
-			if req.BootstrapExpectedGeneration != nil {
-				*req.BootstrapExpectedGeneration = result.Generation
-			}
-			// Our completed phase consumed its reviewed registry snapshot. Bind
-			// the next phase to the resulting current schema; never approve a
-			// second old-schema migration that appeared during this invocation.
-			current, prepareErr := setupwizard.PrepareStateMigration(ctx, req.ControlRoot)
-			if prepareErr != nil {
-				return setupwizard.StateMigrationFailure(req, prepareErr), prepareErr
-			}
-			if current.Required {
-				return setupwizard.StateMigrationFailure(req, uapinstaller.ErrPlanChanged), uapinstaller.ErrPlanChanged
-			}
-			req.StateMigration = &current
-		}
-	}
-	return setupwizard.Result{Action: string(req.Action), Outcome: "incomplete", Reason: "update_required_after_retries"}, setupwizard.ErrRefused
-}
-
-func preservedUnitTargets(clients []string) []setupwizard.TargetResult {
-	var targets []setupwizard.TargetResult
-	for _, client := range clients {
-		targets = append(targets, setupwizard.TargetResult{Client: client, Unit: "agent-notify", Outcome: "absent", Reason: "preserved_existing_opt_out"})
-	}
-	return targets
-}
-
-func validInstallOrUpdateActions(selected []string, next []setupwizard.NextAction) bool {
-	if len(next) < 1 || len(next) > 2 || next[0].Kind != "update" ||
-		(len(next) == 2 && next[1].Kind != "install") {
-		return false
-	}
-	allowed := map[string]bool{}
-	for _, agent := range selected {
-		allowed[agent] = true
-	}
-	seen := map[string]bool{}
-	for i, action := range next {
-		if len(action.Agents) == 0 {
-			return false
-		}
-		phaseSeen := map[string]bool{}
-		for _, agent := range action.Agents {
-			if !allowed[agent] || phaseSeen[agent] {
-				return false
-			}
-			phaseSeen[agent] = true
-			// A retained-empty installation needs a metadata-only update,
-			// then an install of the same selected client to restore delivery.
-			if seen[agent] && (i != 1 || next[0].Reason != "update_existing_before_add" || action.Reason != "add_after_update") {
-				return false
-			}
-			seen[agent] = true
-		}
-	}
-	return true
-}
-
-func verifyInstallOrUpdate(ctx context.Context, req setupwizard.Request, result setupwizard.Result) (setupwizard.Result, error) {
-	inspect := req
-	inspect.Action = setupwizard.ActionInspect
-	view, err := setupwizard.Run(ctx, inspect)
-	if err != nil {
-		return view, err
-	}
-	installed := map[string]bool{}
-	for _, target := range view.Targets {
-		if target.Unit == "agent-notify" && target.Outcome == "installed" {
-			installed[target.Client] = true
-		}
-	}
-	for _, agent := range req.Agents {
-		if !installed[agent] {
-			return setupwizard.Result{Action: string(req.Action), Outcome: "incomplete", Reason: "post_install_incomplete", Targets: view.Targets}, setupwizard.ErrRefused
-		}
-	}
-	return result, nil
 }
 
 func writeSetupWizardPromptError(out io.Writer, jsonOut bool, req setupwizard.Request, e error) int {
@@ -1206,7 +1002,7 @@ func commitConfirmedCursorConsent(ctx context.Context, r setupwizard.Request, re
 		if err != nil {
 			return deny(err)
 		}
-		file, err := opencodeinstall.StageCursorWindowsShortcut(key, home, fixed.Executable, true, s.Installation.Ledger)
+		file, err := desktopinstall.StageCursorWindowsShortcut(key, home, fixed.Executable, true, s.Installation.Ledger)
 		if err != nil {
 			return deny(err)
 		}

@@ -205,7 +205,7 @@ func TestWizardInstallOrUpdateFetchesCurrentRelease(t *testing.T) {
 		}
 		return nil, os.ErrNotExist
 	}
-	updated, err := runInstallOrUpdate(ctx, req, false)
+	updated, err := setupwizard.InstallOrUpdate(ctx, req, false)
 	if err != nil || (updated.Outcome != "completed" && updated.Outcome != "unchanged") {
 		t.Fatalf("new release update: %+v %v", updated, err)
 	}
@@ -266,7 +266,7 @@ func TestWizardInstallOrUpdateDoesNotUndoConcurrentOptOut(t *testing.T) {
 		}
 		return nil, os.ErrNotExist
 	}
-	result, err := runInstallOrUpdate(ctx, req, true)
+	result, err := setupwizard.InstallOrUpdate(ctx, req, true)
 	if !removed || err == nil || result.Outcome != "conflict" || result.Reason != "concurrent_change" {
 		t.Fatalf("auto update restored concurrent opt-out: %+v %v", result, err)
 	}
@@ -315,7 +315,7 @@ func TestWizardInstallOrUpdateRejectsOptOutBeforeIntentPublish(t *testing.T) {
 			t.Fatalf("concurrent opt-out: %+v %v", result, err)
 		}
 	}
-	result, err := runInstallOrUpdate(ctx, req, true)
+	result, err := setupwizard.InstallOrUpdate(ctx, req, true)
 	if !removed || err == nil || result.Outcome != "conflict" || result.Reason != "concurrent_change" {
 		t.Fatalf("stale update published intent: %+v %v", result, err)
 	}
@@ -327,23 +327,6 @@ func TestWizardInstallOrUpdateRejectsOptOutBeforeIntentPublish(t *testing.T) {
 	view, err := setupwizard.Run(ctx, inspect)
 	if err != nil || wizardCLINotifyDigest(view, "codex") != "" {
 		t.Fatalf("opt-out did not remain absent: %+v %v", view, err)
-	}
-}
-
-func TestWizardInstallOrUpdateRejectsUnselectedPrerequisite(t *testing.T) {
-	selected := []string{"claude"}
-	next := []setupwizard.NextAction{
-		{Kind: "update", Agents: []string{"codex"}},
-		{Kind: "install", Agents: []string{"claude"}},
-	}
-	if validInstallOrUpdateActions(selected, next) {
-		t.Fatal("bootstrap may not mutate an unselected sibling")
-	}
-	if validInstallOrUpdateActions(selected, []setupwizard.NextAction{{Kind: "update", Agents: []string{"claude", "claude"}}}) {
-		t.Fatal("duplicate client action accepted")
-	}
-	if validInstallOrUpdateActions(selected, []setupwizard.NextAction{{Kind: "repair", Agents: selected}}) {
-		t.Fatal("unexpected action accepted")
 	}
 }
 

@@ -133,8 +133,10 @@ object during this refactor.
    each requested client, allow existing unselected sibling bindings, and retain
    successful siblings' facts on failure.
 4. Update existing wizard error mappings to keep materialization/activation or
-   absence facts while reporting incomplete finalization. Use the existing
-   recovery path; do not retry effects automatically or invent a new command.
+   absence facts while reporting incomplete finalization. Installation resume
+   uses only the verified existing intent and acquired source; removal retains
+   its existing idempotent uninstall retry and normal admission. Do not retry
+   effects automatically or invent a new command.
 5. Split materializer identity/legacy recovery, engine composition, local
    package preparation, single/group lifecycle and result mapping into cohesive
    files in the same package. Do not rewrite transaction/recovery semantics.
@@ -217,6 +219,37 @@ this refactor must not silently alter the already sealed release source.
 - Baseline regression reproduction: two Qoder state/team probes and Gemini
   late-panic probe all fail on the audited baseline with the expected symptoms.
   The probes used temporary Go overlays; permanent regressions accompany fixes.
-- Implementation: pending.
-- Final independent implementation reviews: pending.
-- Exact-head validation and delivery: pending.
+- Implementation: all four slices implemented. The hook handler delegates to
+  product-owned policy; shared native mechanics have a neutral package owner;
+  portable operations preserve successful UAP results through host finalization;
+  install-or-update belongs to the setup application. Materializer and wizard
+  responsibilities are separated into cohesive files without a new framework.
+- Review round 1: non-author reviewers checked each slice. Corrections include
+  the selector/bootstrap CI path filter, selection of the exact group binding
+  while retaining unrelated profiles, suppression of the generic retry after a
+  checked `resume`, and recognition of completed group removals whose SDK target
+  materialization fields are empty. Both presentation regressions failed before
+  their fixes and passed afterwards. No SDK result is rewritten to manufacture
+  a successful overall operation.
+- Integrated review: independent reviewers inspect interactions between result
+  mapping, CLI presentation, setup phases, product state and native ownership;
+  the delivery PR records their final verdicts against the published tree.
+- Local verification: complete hook, Gemini event and portable materializer
+  suites pass with the race detector; focused finalization, recovery
+  presentation, selection and CLI contract regressions pass. Real fixture
+  lifecycle faults cover single/group install, final group inspection, and
+  single/group removal. A malformed foreign journal is neither ignored nor
+  recovered by the reporting path. Targeted `go vet` and formatting checks pass.
+- Source compatibility evidence: the native shortcut/spool implementation and
+  installation identities retain their behavior; existing native tests remain
+  present. Declaration comparisons account for all moved materializer/wizard
+  code, with the intentional result and admission changes reviewed separately.
+- Platform evidence: Windows native-mechanics test binaries and Darwin
+  native-mechanics builds compile. This environment cannot execute desktop COM
+  or prove visible delivery. Some existing daemon and CLI fixture tests also
+  fail on the unchanged baseline because Unix sockets or process-containment
+  inspection are unavailable here. No guard or test is weakened. Full platform
+  CI and its exact revision remain separately reported in the delivery PR.
+- Delivery: [PR #590](https://github.com/777genius/agent-notifications/pull/590).
+  Every commit is published immediately through the GitHub integration. Main
+  and the sealed release branches remain separate from this refactor.
