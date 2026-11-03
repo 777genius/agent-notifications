@@ -736,7 +736,7 @@ func TestNotificationInitWithoutWizard(t *testing.T) {
 			if err := os.MkdirAll(filepath.Join(bundle, "bin"), 0700); err != nil {
 				t.Fatal(err)
 			}
-			helper := "#!/bin/sh\nif [ \"$1\" = --help ] || [ \"$1\" = help ]; then exit 0; fi\nprintf '%s\\n' \"$*\" >> \"$HOME/calls\"\nexit 87\n"
+			helper := "#!/bin/sh\nif [ \"$1\" = --help ] || [ \"$1\" = help ]; then exit 0; fi\nif [ \"$1 $2\" = 'setup-notifications status' ]; then printf '{\"reason\":\"configuration_required\",\"generation\":1}\\n'; exit 1; fi\nprintf '%s\\n' \"$*\" >> \"$HOME/calls\"\nexit 87\n"
 			if err := os.WriteFile(filepath.Join(bundle, "bin", "claude-notifications"), []byte(helper), 0700); err != nil {
 				t.Fatal(err)
 			}
@@ -805,7 +805,7 @@ func TestNotificationInitRuntimeReadinessContract(t *testing.T) {
 			if err := os.MkdirAll(filepath.Join(bundle, "bin"), 0700); err != nil {
 				t.Fatal(err)
 			}
-			helper := "#!/bin/sh\nif [ \"$1\" = --help ]; then echo 'setup-notifications wizard'; exit 0; fi\nif [ \"$1 $2\" = 'setup-notifications --help' ]; then echo '--policy-only --preserve-enabled'; exit 0; fi\nprintf '%s\\n' \"$*\" >> \"$HOME/calls\"\n"
+			helper := "#!/bin/sh\nif [ \"$1\" = --help ]; then echo 'setup-notifications wizard'; exit 0; fi\nif [ \"$1 $2\" = 'setup-notifications --help' ]; then echo '--policy-only --preserve-enabled'; exit 0; fi\nif [ \"$1 $2\" = 'setup-notifications status' ]; then printf '{\"reason\":\"configuration_required\",\"generation\":1}\\n'; exit 1; fi\nprintf '%s\\n' \"$*\" >> \"$HOME/calls\"\n"
 			if err := os.WriteFile(filepath.Join(bundle, "bin", tc.filename), []byte(helper), tc.mode); err != nil {
 				t.Fatal(err)
 			}
@@ -830,6 +830,10 @@ curl() { printf '#!/bin/sh\nexit 0\n' > "$4"; }
 			if tc.wantCall {
 				if runErr != nil || !strings.Contains(string(calls), "setup-notifications configure") {
 					t.Fatalf("executable runtime not used: %v %s %s", runErr, output, calls)
+				}
+			} else if tc.name == "posix_not_executable" {
+				if runErr == nil || len(calls) != 0 || !strings.Contains(string(output), "Managed runtime ownership was not established") {
+					t.Fatalf("non-executable Linux runtime was not rejected: %v %s %s", runErr, output, calls)
 				}
 			} else if runErr != nil || len(calls) != 0 || !strings.Contains(string(output), "installer binary not found") {
 				t.Fatalf("non-executable runtime was not rejected: %v %s %s", runErr, output, calls)
