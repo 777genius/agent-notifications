@@ -135,6 +135,8 @@ if [ "$(uname -s 2>/dev/null)" = Linux ]; then
   fi
   case "$config_home" in
     /*) [ -f "$config_home/agent-notifications/ownership.json" ] || INSTALL_ARGS+=(--force) ;;
+    "") ;; # Go will report a missing home/config directory; do not guess.
+    *) echo "XDG_CONFIG_HOME must be an absolute path for Linux managed setup." >&2; exit 1 ;;
   esac
 fi
 if ! chmod +x "$INSTALLER" || ! "$INSTALLER" "${INSTALL_ARGS[@]}"; then
@@ -144,7 +146,8 @@ fi
 # An offline --force may retain an existing binary and return success without
 # publishing the missing ownership ledger. Never claim init succeeded or run
 # agent-notify against that unregistered bundle.
-if [ "${#INSTALL_ARGS[@]}" -gt 0 ] && [ ! -f "$config_home/agent-notifications/ownership.json" ]; then
+if [ "$(uname -s 2>/dev/null)" = Linux ] && [ -n "$config_home" ] &&
+   [ ! -f "$config_home/agent-notifications/ownership.json" ]; then
   echo "Managed runtime ownership was not established. Restore network access and rerun /init; existing files were retained." >&2
   exit 1
 fi
