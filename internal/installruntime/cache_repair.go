@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"sort"
 )
 
@@ -22,7 +23,8 @@ type CacheRepairPlan struct {
 }
 
 // PreviewCacheRepair never creates locks, directories, payloads or journals.
-// Only absent owned files in recorded Claude version caches are repairable.
+// Only missing owned cache files and one verified marketplace-reset signature
+// are repairable. Ordinary changed files remain conflicts.
 func PreviewCacheRepair(ctx context.Context, root string) (CacheRepairPlan, error) {
 	var zero CacheRepairPlan
 	if err := ctx.Err(); err != nil {
@@ -138,6 +140,53 @@ func cacheOwnedPath(l Ledger, path string) bool {
 	return cacheRuntimeRoot(l.RuntimeRoot) && pathWithinRoot(l.RuntimeRoot, path)
 }
 
+// A Claude marketplace reinstall can reintroduce the Git-shipped Darwin link
+// and the public skill mode while dropping the executable. This is a narrow
+// recognition rule, not permission to overwrite a changed managed file.
+// Every candidate must still have an exact recovery payload and pass Commit's
+// before-fingerprint, ownership, policy and journal checks.
+func linuxMarketplaceCacheReset(l Ledger, path string, want, got Identity, observed map[string]Identity) bool {
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" || !got.Exists || !cacheOwnedPath(l, path) {
+		return false
+	}
+	var root string
+	switch filepath.Base(path) {
+	case "claude-notifications":
+		root = filepath.Dir(filepath.Dir(path))
+		if path != filepath.Join(root, "bin", "claude-notifications") {
+			return false
+		}
+	case "SKILL.md":
+		root = filepath.Dir(filepath.Dir(filepath.Dir(path)))
+		if path != filepath.Join(root, "skills", "agent-notifications", "SKILL.md") {
+			return false
+		}
+	default:
+		return false
+	}
+	if !cacheRuntimeRoot(root) {
+		return false
+	}
+	binary := filepath.Join(root, "bin", "claude-notifications-linux-amd64")
+	ownedBinary, owned := l.Files[binary]
+	currentBinary, observedBinary := observed[binary]
+	if !owned || !ownedBinary.Exists || ownedBinary.Link != "" || !cacheOwnedPath(l, binary) || !observedBinary || currentBinary.Exists {
+		return false
+	}
+	alias := filepath.Join(root, "bin", "claude-notifications")
+	ownedAlias, owned := l.Files[alias]
+	currentAlias, observedAlias := observed[alias]
+	if !owned || !observedAlias || !ownedAlias.Exists || ownedAlias.Link != "claude-notifications-linux-amd64" ||
+		!cacheOwnedPath(l, alias) || !currentAlias.Exists || currentAlias.Link != "claude-notifications-darwin-arm64" {
+		return false
+	}
+	if path == alias {
+		return want == ownedAlias && got == currentAlias
+	}
+	return want.Exists && want.Link == "" && want.Mode == IdentityMode(0600) &&
+		got.Link == "" && got.Mode == IdentityMode(0644) && got.SHA256 != "" && got.SHA256 == want.SHA256
+}
+
 // Called only while holding the component and policy locks, including Prepare.
 func previewCacheRepairLocked(ctx context.Context, root string) (CacheRepairPlan, Ledger, []File, error) {
 	var p CacheRepairPlan
@@ -180,6 +229,7 @@ func previewCacheRepairLocked(ctx context.Context, root string) (CacheRepairPlan
 	}
 	sort.Strings(paths)
 	present := map[string]Identity{}
+	observed := make(map[string]Identity, len(paths))
 	for _, path := range paths {
 		if err = ctx.Err(); err != nil {
 			return p, l, nil, err
@@ -189,11 +239,18 @@ func previewCacheRepairLocked(ctx context.Context, root string) (CacheRepairPlan
 		if e != nil {
 			return p, l, nil, e
 		}
+		observed[path] = got
 		if got == want {
 			present[path] = got
+		}
+	}
+	for _, path := range paths {
+		want, got := l.Files[path], observed[path]
+		if got == want {
 			continue
 		}
-		if got.Exists || !want.Exists || !cacheOwnedPath(l, path) {
+		if !want.Exists || !cacheOwnedPath(l, path) ||
+			(got.Exists && !linuxMarketplaceCacheReset(l, path, want, got, observed)) {
 			return p, l, nil, fmt.Errorf("managed fingerprint changed without transaction: %s", path)
 		}
 		p.Paths = append(p.Paths, path)
@@ -201,7 +258,7 @@ func previewCacheRepairLocked(ctx context.Context, root string) (CacheRepairPlan
 	files := make([]File, 0, len(p.Paths))
 	for _, path := range p.Paths {
 		want := l.Files[path]
-		file := File{Path: path, Link: want.Link, Mode: want.Mode}
+		file := File{Path: path, Before: observed[path], Link: want.Link, Mode: want.Mode}
 		if want.Link == "" {
 			file.Data, err = cacheReplica(root, paths, present, want)
 		} else {
