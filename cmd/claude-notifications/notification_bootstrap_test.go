@@ -722,6 +722,15 @@ func TestNotificationInitWithoutWizard(t *testing.T) {
 			t.Setenv("TMPDIR", home)
 			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
 			t.Setenv("CODEX_HOME", filepath.Join(home, "codex"))
+			// These legacy-wizard tests exercise a recorded installation, not
+			// first-install ownership. The installer below is intentionally inert.
+			control := filepath.Join(home, "xdg", "agent-notifications")
+			if err := os.MkdirAll(control, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(control, "ownership.json"), []byte("TEST recorded ownership"), 0600); err != nil {
+				t.Fatal(err)
+			}
 			bundle := filepath.Join(home, "bundle")
 			t.Setenv("CLAUDE_PLUGIN_ROOT", bundle)
 			if err := os.MkdirAll(filepath.Join(bundle, "bin"), 0700); err != nil {
@@ -801,7 +810,17 @@ func TestNotificationInitRuntimeReadinessContract(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Setenv("HOME", home)
+			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
 			t.Setenv("CLAUDE_PLUGIN_ROOT", bundle)
+			// Only executable-readiness differs between these cases. The mocked
+			// installer has no owned-state publication, so seed that prerequisite.
+			control := filepath.Join(home, "xdg", "agent-notifications")
+			if err := os.MkdirAll(control, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(control, "ownership.json"), []byte("TEST recorded ownership"), 0600); err != nil {
+				t.Fatal(err)
+			}
 			script := `uname() { echo ` + tc.uname + `; }
 curl() { printf '#!/bin/sh\nexit 0\n' > "$4"; }
 ` + body
