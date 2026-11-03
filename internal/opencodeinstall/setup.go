@@ -16,13 +16,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/777genius/agent-notifications/internal/desktopinstall"
 	"github.com/777genius/agent-notifications/internal/installruntime"
 	"github.com/777genius/agent-notifications/internal/opencodeplugin"
 	uap "github.com/777genius/plugin-kit-ai/install/integrationctl/opencodeplugin"
 )
 
 const (
-	consumerID = "opencode-notifications"
+	consumerID = desktopinstall.OpenCodeConsumerID
 	pluginName = "agent-notifications.js"
 )
 

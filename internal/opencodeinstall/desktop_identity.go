@@ -1,17 +1,18 @@
 package opencodeinstall
 
-// DesktopProduct selects an installer-owned observer identity.
-// Config and native event data cannot supply an AUMID, shortcut or namespace.
-type DesktopProduct uint8
+import "github.com/777genius/agent-notifications/internal/desktopinstall"
+
+// Compatibility aliases retain the installer entry points used by existing callers.
+type DesktopProduct = desktopinstall.DesktopProduct
 
 const (
-	OpenCodeDesktop DesktopProduct = iota + 1
-	GeminiDesktop
-	CopilotVSCodeDesktop
-	CursorDesktop
-	OpenCodeToastAppID      = "Genius.AgentNotifications.OpenCode"
-	GeminiToastAppID        = "Genius.AgentNotifications.Gemini"
-	CopilotVSCodeToastAppID = "Genius.AgentNotifications.CopilotVSCode"
-	CursorToastAppID        = "Genius.AgentNotifications.Cursor"
-	GeminiConsumerID        = "gemini-notifications"
+	OpenCodeDesktop         = desktopinstall.OpenCodeDesktop
+	GeminiDesktop           = desktopinstall.GeminiDesktop
+	CopilotVSCodeDesktop    = desktopinstall.CopilotVSCodeDesktop
+	CursorDesktop           = desktopinstall.CursorDesktop
+	OpenCodeToastAppID      = desktopinstall.OpenCodeToastAppID
+	GeminiToastAppID        = desktopinstall.GeminiToastAppID
+	CopilotVSCodeToastAppID = desktopinstall.CopilotVSCodeToastAppID
+	CursorToastAppID        = desktopinstall.CursorToastAppID
+	GeminiConsumerID        = desktopinstall.GeminiConsumerID
 )

@@ -16,8 +16,8 @@ import (
 	"github.com/777genius/agent-notifications/internal/agentnotify/portable"
 	"github.com/777genius/agent-notifications/internal/agentnotify/registration"
 	"github.com/777genius/agent-notifications/internal/copilotvscodeinstall"
+	"github.com/777genius/agent-notifications/internal/desktopinstall"
 	"github.com/777genius/agent-notifications/internal/installruntime"
-	"github.com/777genius/agent-notifications/internal/opencodeinstall"
 )
 
 var (
@@ -461,7 +461,7 @@ func revokeExactBinding(ctx context.Context, req Request, present bool) error {
 			if err != nil {
 				return err
 			}
-			file, err := opencodeinstall.StageCursorWindowsShortcut(key, home, executable, false, snap.Ledger)
+			file, err := desktopinstall.StageCursorWindowsShortcut(key, home, executable, false, snap.Ledger)
 			if err != nil {
 				return err
 			}
