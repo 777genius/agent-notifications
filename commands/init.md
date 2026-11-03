@@ -128,8 +128,11 @@ INSTALL_ARGS=()
 # while leaving executable bytes in the plugin cache. The ordinary installer
 # skips an existing binary; an explicit Linux init must instead republish a
 # checksum-verified runtime and establish ownership before policy setup.
-if [ "$(uname -s 2>/dev/null)" = Linux ] && [ -n "${HOME:-}" ]; then
-  config_home="${XDG_CONFIG_HOME:-$HOME/.config}"
+if [ "$(uname -s 2>/dev/null)" = Linux ]; then
+  config_home="${XDG_CONFIG_HOME:-}"
+  if [ -z "$config_home" ] && [ -n "${HOME:-}" ]; then
+    config_home="$HOME/.config"
+  fi
   case "$config_home" in
     /*) [ -f "$config_home/agent-notifications/ownership.json" ] || INSTALL_ARGS+=(--force) ;;
   esac
