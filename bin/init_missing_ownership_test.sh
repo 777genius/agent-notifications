@@ -24,7 +24,8 @@ cp "$INIT_STUB" "$out"
 CURL
 cat > "$sandbox/mock-installer" <<'INSTALL'
 #!/bin/bash
-printf '%s\n' "$*" > "$INIT_ARGS_LOG"
+: > "$INIT_ARGS_LOG"
+for arg in "$@"; do printf '%s\n' "$arg" >> "$INIT_ARGS_LOG"; done
 if [ "$INIT_CASE" = "creates" ]; then
   mkdir -p "$XDG_CONFIG_HOME/agent-notifications"
   printf 'TEST managed ledger\n' > "$XDG_CONFIG_HOME/agent-notifications/ownership.json"
