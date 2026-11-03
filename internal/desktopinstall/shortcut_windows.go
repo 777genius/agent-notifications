@@ -87,10 +87,6 @@ func stageWindowsShortcutFor(home, target string, id desktopIdentity) (installru
 	return installruntime.File{Path: path, Before: before, Data: data, Mode: 0600}, nil
 }
 
-func stageWindowsShortcutForSetup(home, target string, desktop bool, ledger installruntime.Ledger) (*installruntime.File, error) {
-	return StageWindowsShortcut(OpenCodeDesktop, home, target, desktop, ledger)
-}
-
 // StageWindowsShortcut reuses the existing COM renderer and owned-file CAS
 // staging for a fixed observer identity. It never publishes shortcut bytes.
 func StageWindowsShortcut(product DesktopProduct, home, target string, desktop bool, ledger installruntime.Ledger) (*installruntime.File, error) {

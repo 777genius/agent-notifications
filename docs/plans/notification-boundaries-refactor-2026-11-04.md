@@ -231,6 +231,10 @@ this refactor must not silently alter the already sealed release source.
   materialization fields are empty. Both presentation regressions failed before
   their fixes and passed afterwards. No SDK result is rewritten to manufacture
   a successful overall operation.
+- CI follow-up: the Linux linter found an unused OpenCode-specific forwarding
+  helper copied into `desktopinstall`. Removed the unused Windows and non-Windows
+  copies; the live product delegate stays in `opencodeinstall`. This cleanup
+  changes no native operation and is checked by a further independent review.
 - Integrated review: independent reviewers inspect interactions between result
   mapping, CLI presentation, setup phases, product state and native ownership;
   the delivery PR records their final verdicts against the published tree.
