@@ -1875,6 +1875,7 @@ jobs:
         run: |
           bash bin/install_test.sh
           bash bin/install_adapter_test.sh
+          bash bin/init_missing_ownership_test.sh
 
       - name: Qualify real Go config and setup installers (isolated, offline)
         run: python3 scripts/config_e2e_test.py
