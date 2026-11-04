@@ -16,8 +16,20 @@ import (
 )
 
 func TestGroupUninstallPreservesResultsWhenProfileCleanupFails(t *testing.T) {
+	testUninstallProfileCleanupRetry(t, true)
+}
+
+func TestSingleUninstallPreservesResultsWhenProfileCleanupFails(t *testing.T) {
+	testUninstallProfileCleanupRetry(t, false)
+}
+
+func testUninstallProfileCleanupRetry(t *testing.T, group bool) {
+	t.Helper()
 	req := installedClaudeSelectionRequest(t)
-	req.Action, req.Agents, req.ExternalUninstalled = ActionUninstall, []string{"claude", "codex"}, true
+	req.Action, req.ExternalUninstalled = ActionUninstall, true
+	if group {
+		req.Agents = []string{"claude", "codex"}
+	}
 	req.CodexHome = t.TempDir()
 	snapshot, err := installruntime.ReadInstalledSnapshot(req.ControlRoot)
 	if err != nil {
@@ -30,6 +42,10 @@ func TestGroupUninstallPreservesResultsWhenProfileCleanupFails(t *testing.T) {
 	data := liveDataRoot(mat, req.InstallationID, string(portable.Claude))
 	if data == "" {
 		t.Fatal("installed Claude data root is missing")
+	}
+	sentinel := filepath.Join(data, "TEST-retained-user-data")
+	if err := os.WriteFile(sentinel, []byte("preserve user data"), 0600); err != nil {
+		t.Fatal(err)
 	}
 	injected := false
 	req.Progress = func(phase string) {
@@ -50,14 +66,37 @@ func TestGroupUninstallPreservesResultsWhenProfileCleanupFails(t *testing.T) {
 	if retained, err := mat.RetainedEmpty(req.InstallationID); err != nil || !retained {
 		t.Fatalf("fixture did not commit group removal: retained=%v err=%v", retained, err)
 	}
-	want := map[string]string{"claude": "completed", "codex": "unchanged"}
+	want := map[string]string{"claude": "completed"}
+	if group {
+		want["codex"] = "unchanged"
+	}
 	for _, target := range removed.Targets {
 		if target.Unit == "agent-notify" && target.Outcome == want[target.Client] {
 			delete(want, target.Client)
 		}
 	}
 	if len(want) != 0 {
-		t.Fatalf("committed group results hidden by cleanup failure: missing=%v result=%+v", want, removed)
+		t.Errorf("committed removal results hidden by cleanup failure: missing=%v result=%+v", want, removed)
+	}
+	req.Progress = nil
+	retried, err := Run(testCtx(t), req)
+	if !errors.As(err, &malformed) || retried.Outcome != "incomplete" {
+		t.Errorf("retained retry reported success with malformed sidecar: %+v %v", retried, err)
+	}
+	profiles := map[string]string{"claude": req.ClaudeConfig, "codex": req.CodexHome, "cursor": "TEST-unselected-profile"}
+	if err := writeLiveProfiles(data, profiles); err != nil {
+		t.Fatal(err)
+	}
+	retried, err = Run(testCtx(t), req)
+	if err != nil || retried.Outcome != "unchanged" || !retried.DataRetained {
+		t.Fatalf("repaired retained cleanup did not finish: %+v %v", retried, err)
+	}
+	profiles, err = readLiveProfiles(data)
+	if err != nil || profiles["claude"] != "" || group && profiles["codex"] != "" || !group && profiles["codex"] != req.CodexHome || profiles["cursor"] != "TEST-unselected-profile" {
+		t.Fatalf("retained cleanup selected the wrong profile facts: %v %v", profiles, err)
+	}
+	if body, err := os.ReadFile(sentinel); err != nil || string(body) != "preserve user data" {
+		t.Fatalf("cleanup changed retained user data: %q %v", body, err)
 	}
 }
 

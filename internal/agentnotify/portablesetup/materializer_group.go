@@ -308,7 +308,7 @@ func (m Materializer) RemoveGroup(ctx context.Context, reqs []MaterializeRequest
 	prepared, err := m.prepareRemove(ctx, eng, uapinstaller.Request{
 		Operation: uapinstaller.OpRemove, InstallationID: reqs[0].Identity.InstallationID,
 		OperationID: reqs[0].OperationID, ClientExecutable: engineReq.ClientExecutable,
-		ExternalUninstalled: reqs[0].ExternalUninstalled || reqs[1].ExternalUninstalled,
+		ExternalUninstalled: reqs[0].ExternalUninstalled && reqs[1].ExternalUninstalled,
 		Targets:             targets,
 	}, reqs...)
 	if err != nil {

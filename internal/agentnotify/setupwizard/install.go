@@ -128,7 +128,7 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 		}
 	}
 	if !retainedMetadataUpdate(mat, id, req.Action) && (req.Action == ActionInstall || req.Action == ActionUpdate || req.Action == ActionRepair) && len(notifyAgents) > 0 {
-		failed, reason, err := bindNotifyPreviews(ctx, &req, req, snap, runtimeRoot, notifyAgents)
+		failed, reason, _, err := bindNotifyPreviews(ctx, &req, req, snap, runtimeRoot, notifyAgents)
 		if err != nil {
 			if reason == "" {
 				return mapPreviewFailure(ctx, req, failed, mat, id, err, out)

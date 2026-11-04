@@ -2,6 +2,7 @@ package hooks
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/777genius/agent-notifications/internal/analyzer"
@@ -187,10 +188,17 @@ func (h *Handler) handleTeammateIdle(ev Event, p TeammateIdlePayload) error {
 		return nil
 	}
 
-	// All conditions met — send notification
+	status := analyzer.StatusTaskComplete
+	gitBranch := platform.GetGitBranch(ev.Session.CWD)
+	folderName := filepath.Base(ev.Session.CWD)
+	if h.cfg.ShouldFilter(string(status), gitBranch, folderName) {
+		logging.Debug("TeammateIdle: notification suppressed by filter: status=%s branch=%q folder=%s", status, gitBranch, folderName)
+		return nil
+	}
+
+	// All conditions met — send notification.
 	logging.Debug("TeammateIdle: all teammates idle + lead stopped for team %q, sending notification", p.TeamName)
 
-	status := analyzer.StatusTaskComplete
 	body := fmt.Sprintf("Team %q: all teammates finished work", p.TeamName)
 
 	stateKey := teamInfo.LeadSessionID

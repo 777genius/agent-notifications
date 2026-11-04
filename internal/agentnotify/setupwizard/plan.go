@@ -171,7 +171,7 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 					Kind: "data_compatibility", Reason: domain.PluginDataCompatibilityWarning,
 				})
 			} else {
-				failed, reason, err := bindNotifyPreviews(ctx, &req, acquired, ev.snap, ev.runtimeRoot, ev.notifyAgents)
+				failed, reason, previewed, err := bindNotifyPreviews(ctx, &req, acquired, ev.snap, ev.runtimeRoot, ev.notifyAgents)
 				if err != nil {
 					if reason == "" {
 						mapped, mappedErr := mapPreviewFailure(ctx, req, failed, mat, id, err, ev.out)
@@ -185,6 +185,15 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 					ev.out.Outcome, ev.out.Reason = "incomplete", reason
 					plan.Result = attachWizardCommand(req, ev.out)
 					return plan, err
+				}
+				if !previewed && req.Action == ActionRepair {
+					clients := make([]string, 0, len(ev.notifyAgents))
+					for _, agent := range ev.notifyAgents {
+						clients = append(clients, string(agent))
+					}
+					warning := "warning: no repair preview succeeded for " + strings.Join(clients, ", ") + "; an exact package revision or update is required"
+					text += " " + warning
+					plan.annotations = append(plan.annotations, warning)
 				}
 			}
 			if (req.Action == ActionUpdate || req.Action == ActionRepair) && !retainedMetadataUpdate(mat, id, req.Action) {
@@ -330,10 +339,11 @@ func annotateRequiredUpdate(text string, out Result) string {
 	return text
 }
 
-func bindNotifyPreviews(ctx context.Context, req *Request, previewReq Request, snap installruntime.InstalledSnapshot, runtimeRoot string, notifyAgents []portable.Integration) (portable.Integration, string, error) {
+func bindNotifyPreviews(ctx context.Context, req *Request, previewReq Request, snap installruntime.InstalledSnapshot, runtimeRoot string, notifyAgents []portable.Integration) (portable.Integration, string, bool, error) {
 	if req == nil {
-		return "", "", nil
+		return "", "", false, nil
 	}
+	previewed := false
 	for _, agent := range notifyAgents {
 		try := previewReq
 		try.PackageRoots = req.PackageRoots
@@ -347,19 +357,20 @@ func bindNotifyPreviews(ctx context.Context, req *Request, previewReq Request, s
 			if req.Action == ActionRepair && len(notifyAgents) > 1 && (exactRepairRevision(err) || portablesetup.IsUpdateRequired(err)) {
 				continue
 			}
-			return agent, "", err
+			return agent, "", previewed, err
 		}
 		if reserved := req.BindingIDs[string(agent)]; reserved != "" && preview.BindingID != "" && preview.BindingID != reserved {
-			return agent, "binding_id_drift", ErrRefused
+			return agent, "binding_id_drift", previewed, ErrRefused
 		}
 		if err := bindSourceIdentity(req, preview); err != nil {
-			return agent, "source_identity_drift", err
+			return agent, "source_identity_drift", previewed, err
 		}
+		previewed = true
 		previewReq.TreeDigest = req.TreeDigest
 		previewReq.HelperDigest = req.HelperDigest
 		previewReq.HelperVersion = req.HelperVersion
 	}
-	return "", "", nil
+	return "", "", previewed, nil
 }
 
 func bindSourceIdentity(req *Request, preview uapinstaller.Plan) error {

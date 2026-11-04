@@ -300,6 +300,16 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 		for _, agent := range notifyAgents {
 			out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "unchanged", Reason: "already_absent"})
 		}
+		for _, agent := range notifyAgents {
+			dataRoot, err := retainedProfileDataRoot(mat, id.InstallationID, req.DataReceiptIDs[string(agent)])
+			if err == nil {
+				err = clearLiveProfile(dataRoot, string(agent))
+			}
+			if err != nil {
+				out.Outcome, out.Reason = "incomplete", err.Error()
+				return out, err
+			}
+		}
 		out, err = removeHooks(out)
 		if err != nil || out.Outcome == "incomplete" || out.Outcome == "invalid" {
 			return out, err
@@ -397,11 +407,11 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 				return conflict, err
 			}
 			if errors.Is(err, portablesetup.ErrAlreadyAbsent) {
+				out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "unchanged", Reason: "already_absent"})
 				if clearErr := clearLiveProfile(dataRoot, string(agent)); clearErr != nil {
 					out.Outcome, out.Reason = "incomplete", clearErr.Error()
 					return out, clearErr
 				}
-				out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "unchanged", Reason: "already_absent"})
 				continue
 			}
 			if errors.Is(err, portablesetup.ErrExternalUninstall) {
@@ -409,6 +419,7 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 			}
 			return portableRemoveFailed(agent, req, out, err), err
 		}
+		out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "completed"})
 		if err := clearLiveProfile(dataRoot, string(agent)); err != nil {
 			out.Outcome, out.Reason = "incomplete", err.Error()
 			return out, err
@@ -419,7 +430,6 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 			return out, err
 		}
 		out.Generation = generation
-		out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "completed"})
 	}
 	out, err = removeHooks(out)
 	if err != nil || out.Outcome == "incomplete" || out.Outcome == "invalid" {
@@ -428,6 +438,35 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 	out = markRetainedEmpty(mat, id.InstallationID, uninstallOutcome(out, "already_absent"))
 	reportProgress(req, "complete")
 	return out, nil
+}
+
+// A resumed uninstall has an exact frozen data receipt. A fresh retained retry
+// may use the sole receipt, but must not choose among unrelated retained roots.
+func retainedProfileDataRoot(mat portablesetup.Materializer, installationID, receiptID string) (string, error) {
+	state, err := mat.Store.Load()
+	if err != nil {
+		return "", err
+	}
+	for _, installation := range state.Installations {
+		if installation.InstallationID != installationID {
+			continue
+		}
+		if receiptID != "" {
+			if receipt, ok := installation.DataReceipts[receiptID]; ok && receipt.Locator != "" {
+				return receipt.Locator, nil
+			}
+			return "", fmt.Errorf("%w: retained profile data receipt is unavailable", ErrRefused)
+		}
+		if len(installation.DataReceipts) == 1 {
+			for _, receipt := range installation.DataReceipts {
+				if receipt.Locator != "" {
+					return receipt.Locator, nil
+				}
+			}
+		}
+		return "", fmt.Errorf("%w: retained profile cleanup requires an exact data receipt", ErrRefused)
+	}
+	return "", fmt.Errorf("%w: retained profile installation is unavailable", ErrRefused)
 }
 
 // Successful removal reports the effects already recorded for its targets,

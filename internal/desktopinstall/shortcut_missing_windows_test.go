@@ -104,7 +104,7 @@ func TestWindowsPortableMissingShortcutLifecycle(t *testing.T) {
 					t.Fatalf("missing owned shortcut %s: %+v %v", operation, file, err)
 				}
 				request := installruntime.Request{ControlRoot: root, RuntimeRoot: run, Owner: ledger.Owner, ConsumerID: key,
-					RefreshOnly: repair, RemoveConsumer: !repair, ExpectedGeneration: &ledger.Generation, Files: []installruntime.File{*file}}
+					RefreshOnly: true, ExpectedGeneration: &ledger.Generation, Files: []installruntime.File{*file}}
 				foreign := []byte("TEST concurrent foreign replacement")
 				if err := os.WriteFile(path, foreign, 0600); err != nil {
 					t.Fatal(err)
@@ -128,6 +128,20 @@ func TestWindowsPortableMissingShortcutLifecycle(t *testing.T) {
 				after, err := installruntime.Commit(ctx, request)
 				if err != nil {
 					t.Fatalf("missing shortcut kernel %s: %v", operation, err)
+				}
+				if !repair {
+					// Match production revoke: retire the shortcut through file CAS,
+					// then remove its consumer using the resulting generation.
+					if !reflect.DeepEqual(after.Consumers[key], ledger.Consumers[key]) {
+						t.Fatal("shortcut file retirement removed its consumer early")
+					}
+					after, err = installruntime.Commit(ctx, installruntime.Request{
+						ControlRoot: root, RuntimeRoot: run, Owner: ledger.Owner, ConsumerID: key,
+						RemoveConsumer: true, ExpectedGeneration: &after.Generation,
+					})
+					if err != nil {
+						t.Fatalf("consumer removal after shortcut retirement: %v", err)
+					}
 				}
 				if !reflect.DeepEqual(after.Consumers["sibling"], ledger.Consumers["sibling"]) {
 					t.Fatal("shortcut lifecycle changed sibling")

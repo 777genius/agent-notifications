@@ -17,8 +17,8 @@ import (
 	"github.com/777genius/agent-notifications/internal/webhook"
 )
 
-// maxNotifyDelaySeconds bounds notifyDelaySeconds so the desktop grace-period
-// delay can never push the hook past the timeout configured in hooks.json.
+// maxNotifyDelaySeconds bounds the configured desktop grace-period delay.
+// Other hook work shares the host timeout; this is not a total execution budget.
 const maxNotifyDelaySeconds = 25
 
 // Test seams for the focus-aware / delayed desktop notification path.
@@ -135,7 +135,7 @@ func (h *Handler) sendNotifications(status analyzer.Status, body, actions, sessi
 // from issue #93.
 //
 // When notifyDelaySeconds > 0 the hook waits that many seconds (bounded by
-// maxNotifyDelaySeconds to stay within the hook timeout) before delivering, so a
+// maxNotifyDelaySeconds) before delivering, so a
 // quick task you are already watching can finish before any banner appears. When
 // notifyOnlyWhenUnfocused is set, the notification is dropped if the terminal
 // window has OS focus at delivery time - checked after the delay, so the two
@@ -216,35 +216,41 @@ func (h *Handler) maybeEmitDesktopPermissionGuidance(err error) {
 		return
 	}
 
-	if !h.shouldEmitPermissionGuidance() {
+	stampPath, emit := h.permissionGuidanceStamp()
+	if !emit {
 		return
 	}
 
 	message := "[agent-notifications] macOS is blocking Agent Notifications. Open System Settings > Notifications > Agent Notifications and enable notifications. This can happen after older ad-hoc installs or stale notification permissions."
-	fmt.Printf("{\"systemMessage\":%q}\n", message)
+	if _, err := fmt.Printf("{\"systemMessage\":%q}\n", message); err != nil {
+		logging.Warn("Failed to print notification permission guidance: %v", err)
+		return
+	}
+	// The cooldown records successful output, not an attempt to print it.
+	if stampPath == "" {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(stampPath), 0o755); err != nil {
+		return
+	}
+	if err := os.WriteFile(stampPath, []byte(time.Now().Format(time.RFC3339)), 0o644); err != nil {
+		logging.Warn("Failed to record notification permission guidance: %v", err)
+	}
 }
 
-func (h *Handler) shouldEmitPermissionGuidance() bool {
+func (h *Handler) permissionGuidanceStamp() (string, bool) {
 	cacheDir, err := os.UserCacheDir()
 	if err != nil || cacheDir == "" {
-		return true
+		return "", true
 	}
 
-	stampDir := filepath.Join(cacheDir, "claude-notifications-go")
-	stampPath := filepath.Join(stampDir, "macos-notification-permission-reminder")
+	stampPath := filepath.Join(cacheDir, "claude-notifications-go", "macos-notification-permission-reminder")
 
 	if info, err := os.Stat(stampPath); err == nil {
 		if time.Since(info.ModTime()) < 24*time.Hour {
-			return false
+			return stampPath, false
 		}
 	}
 
-	if err := os.MkdirAll(stampDir, 0o755); err != nil {
-		return true
-	}
-	if err := os.WriteFile(stampPath, []byte(time.Now().Format(time.RFC3339)), 0o644); err != nil {
-		return true
-	}
-
-	return true
+	return stampPath, true
 }

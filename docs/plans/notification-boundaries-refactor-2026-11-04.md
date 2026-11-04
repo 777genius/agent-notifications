@@ -109,6 +109,14 @@ queueing cannot safely be handled by moving a shared state write to a callback:
 pending/unknown effects and independent channel retries need a reviewed policy,
 coordinated with #594. This refactor preserves the existing contract.
 
+[Host hook execution budget #598](https://github.com/777genius/agent-notifications/issues/598)
+tracks the inherited difference between the 25-second desktop delay cap and the
+total host timeout. A product/entrypoint deadline must account for prework,
+delivery and shutdown; this extraction does not invent a shared hard-coded
+deadline. The comments no longer claim the delay cap guarantees total completion.
+The inherited timestamp-free Claude Stop identity and ExitPlanMode/Stop overlap
+during delayed delivery are included in #594's turn-reservation acceptance.
+
 ## Implementation slices
 
 ### S1. Product-owned hook state and lifecycle
@@ -522,3 +530,43 @@ channel policy, and final acceptance requires CI on the synchronized source.
 One earlier Ubuntu physical-source job used an unqualified AWS kernel tuple;
 its `NOT_RUN` failure is not treated as a test pass. The existing qualified
 hosted pool and all native assertions remain the acceptance boundary.
+
+### Synchronized-source qualification and correction
+
+The synchronized `8859e23` head and GitHub synthetic merge `093c0389` have the
+same source tree. Thirteen of its fifteen full workflows passed, including both
+Darwin Go versions, recovery, Claude, Gemini, Selector, Pi and CodeQL. Two failures
+required distinct treatment:
+
+- Both Windows Go jobs reached and passed shortcut mode-drift admission, but the
+  new removal fixture incorrectly combined file retirement with portable consumer
+  removal. The fixture now follows production's existing two commits: file CAS,
+  then consumer removal at the returned generation. Repair, foreign replacement,
+  ownership and sibling assertions stay intact; the kernel is unchanged.
+- The Ubuntu physical job again used the unqualified AWS kernel tuple. Its real
+  ioctl checks passed, but positive test-materializer qualification was NOT_RUN.
+  This remains a failed qualification, requiring the existing supported hosted
+  environment with the same assertions rather than a wider allowlist.
+
+The subsequent complete reviews added bounded corrections within the established
+ownership and result contracts: warn when every multi-client repair preview was
+skipped; preserve single removal/absence facts before sidecar cleanup; complete
+retained-empty cleanup using the recorded data receipt or an unambiguous retained
+root; and require both target attestations before setting the SDK's request-wide
+external-removal flag. Public old-source fixtures reproduce missing facts,
+stale retained profiles and cross-client attestation promotion.
+
+Claude team completion now honors the same suppress-filter inputs before either
+notification channel. Permission guidance records its daily cooldown only after
+stdout succeeds. Existing tests cover suppressed/unmatched team completion and
+the native Darwin failed-output, successful-output and cooldown sequence. The
+Gemini panic regression also asserts the desktop claim stays consumed on replay
+when admission panics before any effect.
+
+Non-inline review notes were checked as well. SDK component-name validation and
+owned projection/native-object boundaries did not demonstrate arbitrary foreign
+MCP mutation; the Windows Known Folder fixture passed its bounded temporary-root
+assertions on both native Go versions. Existing Local frozen-name recovery remains
+#592. The inherited hook turn-reservation and execution-budget policies remain
+#594 and #598. Final workflow URLs, native execution evidence and merge status
+are recorded on #590 for the actual published correction head.
