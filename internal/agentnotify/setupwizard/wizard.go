@@ -161,6 +161,7 @@ type TargetResult struct {
 	// Lifecycle facts and the current external attempt are independent.
 	Materialization string `json:"materialization,omitempty"`
 	Activation      string `json:"activation,omitempty"`
+	Verification    string `json:"verification,omitempty"`
 	GroupPhase      string `json:"groupPhase,omitempty"`
 	FailureStage    string `json:"failureStage,omitempty"`
 	Client          string `json:"client"`
@@ -1599,6 +1600,8 @@ func inspect(ctx context.Context, req Request, agents []portable.Integration, sn
 				out.Targets = append(out.Targets, TargetResult{
 					Client: string(agent), Unit: "agent-notify", Outcome: "installed",
 					Reason: binding.ClientBindingID, Profile: profile,
+					Materialization: string(binding.Materialization),
+					Activation:      string(binding.Activation), Verification: string(binding.Verification),
 					TreeDigest: digest,
 				})
 			}
@@ -4261,6 +4264,12 @@ func attachReadiness(req Request, agents []portable.Integration, out Result, mut
 	}
 	restartPending := false
 	for _, agent := range agents {
+		// Inspect has no per-client MCP receipt authority: it cannot turn a
+		// delivered notification into a setup verification, or claim failure.
+		delivery := "not_verified"
+		if req.Action == ActionInspect {
+			delivery = "not_tracked"
+		}
 		fact := ReadinessFact{
 			Client:     string(agent),
 			Runtime:    runtime,
@@ -4268,7 +4277,7 @@ func attachReadiness(req Request, agents []portable.Integration, out Result, mut
 			MCP:        "not_checked",
 			Permission: "not_checked",
 			Restart:    "not_required",
-			Delivery:   "not_verified",
+			Delivery:   delivery,
 		}
 		for _, target := range out.Targets {
 			if target.Client != string(agent) {
@@ -4348,6 +4357,12 @@ func offerPostSetupActions(req Request, agents []portable.Integration, out Resul
 			},
 			Reason: "permission_explicit_phase",
 		})
+	}
+	// Inspect is read-only and cannot learn whether the user already sent
+	// a notification through a separate MCP session. Do not repeat a stale
+	// next action on every inspection; installation still offers a first test.
+	if req.Action == ActionInspect {
+		return out
 	}
 	if !has("test-notification") {
 		out.NextActions = append(out.NextActions, NextAction{

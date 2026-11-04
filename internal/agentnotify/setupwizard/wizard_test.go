@@ -2235,6 +2235,11 @@ func TestWizardInstallInspectUninstall(t *testing.T) {
 			if target.TreeDigest == "" {
 				t.Fatalf("inspect omitted tree digest: %+v", target)
 			}
+			if target.Materialization != string(domain.MaterializationMaterialized) ||
+				target.Activation != "manual_activation_required" ||
+				target.Verification != "package_validated" {
+				t.Fatalf("inspect misreported durable UAP lifecycle facts: %+v", target)
+			}
 		}
 	}
 	if !found {
@@ -4351,8 +4356,8 @@ func TestWizardMixedPerClientOptOuts(t *testing.T) {
 		t.Fatal("inspect omitted readiness")
 	}
 	for _, fact := range view.Readiness {
-		if fact.Permission != "not_checked" || fact.Delivery != "not_verified" {
-			t.Fatalf("readiness mixed download with delivery: %+v", fact)
+		if fact.Permission != "not_checked" || fact.Delivery != "not_tracked" {
+			t.Fatalf("read-only inspect incorrectly verified notification delivery: %+v", fact)
 		}
 	}
 	if err := os.WriteFile(filepath.Join(pkg, "plugin.json"), []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent-notify","version":"1.0.1"}`), 0600); err != nil {
