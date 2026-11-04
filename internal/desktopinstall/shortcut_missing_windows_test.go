@@ -65,6 +65,37 @@ func TestWindowsPortableMissingShortcutLifecycle(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
+				id, err := portableWindowsIdentity(product, integration, key, ledger)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := windowsShortcutReadyIdentity(id, root, primary, home); err != nil {
+					t.Fatalf("initial COM identity/readiness: %v", err)
+				}
+				owned, ok := installruntime.OwnedFile(ledger, path)
+				if !ok {
+					t.Fatal("shortcut ownership missing")
+				}
+				if err := os.Chmod(path, 0444); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = os.Chmod(path, os.FileMode(owned.Mode)) })
+				changed, err := installruntime.Fingerprint(path)
+				if err != nil || changed.SHA256 != owned.SHA256 || changed.Mode == owned.Mode {
+					t.Fatalf("fixture did not isolate Windows read-only drift: owned=%+v actual=%+v %v", owned, changed, err)
+				}
+				if err := windowsShortcutReadyIdentity(id, root, primary, home); err == nil {
+					t.Fatal("mode-only shortcut drift remained ready")
+				}
+				if _, err := stage(key, home, primary, repair, ledger); err == nil {
+					t.Fatal("mode-only shortcut drift passed mutation admission")
+				}
+				if err := os.Chmod(path, os.FileMode(owned.Mode)); err != nil {
+					t.Fatal(err)
+				}
+				if err := windowsShortcutReadyIdentity(id, root, primary, home); err != nil {
+					t.Fatalf("restored shortcut identity/readiness: %v", err)
+				}
 				if err := os.Remove(path); err != nil {
 					t.Fatal(err)
 				}

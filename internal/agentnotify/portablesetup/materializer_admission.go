@@ -89,6 +89,9 @@ func (m Materializer) VerifyRecoveryAuthority(ctx context.Context, req Materiali
 	if ctx == nil {
 		return ErrPreflight
 	}
+	if err := validateMigrationRecovery(req); err != nil {
+		return err
+	}
 	if req.Integration == portable.CopilotVSCode {
 		if err := m.validate(req, false); err != nil {
 			return err

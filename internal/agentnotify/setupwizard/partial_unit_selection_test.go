@@ -3,6 +3,8 @@
 package setupwizard
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -12,6 +14,55 @@ import (
 	"github.com/777genius/agent-notifications/internal/codexsetup"
 	"github.com/777genius/agent-notifications/internal/testenv"
 )
+
+func TestExplicitNotifyPreservesOmittedCodexHooks(t *testing.T) {
+	for _, action := range []Action{ActionUpdate, ActionRepair} {
+		for _, perClient := range []bool{false, true} {
+			name := string(action) + "/global"
+			if perClient {
+				name = string(action) + "/per-client"
+			}
+			t.Run(name, func(t *testing.T) {
+				req, _, _, _ := uninstallProfileFixture(t)
+				req.Action, req.Hooks = action, nil
+				if perClient {
+					req.AgentNotify, req.CodexAgentNotify = nil, boolPtr(true)
+					// A different client's explicit hook choice cannot select Codex hooks.
+					req.ClaudeHooks = boolPtr(true)
+				}
+				plan, err := Plan(testCtx(t), req)
+				if err != nil || !plan.Ready || plan.Request.CodexHooks == nil || *plan.Request.CodexHooks {
+					t.Fatalf("explicit notify enabled omitted Codex hooks: %+v %v", plan, err)
+				}
+				explicit := req
+				explicit.CodexHooks = boolPtr(true)
+				explicitPlan, _ := Plan(testCtx(t), explicit)
+				if explicitPlan.Request.CodexHooks == nil || !*explicitPlan.Request.CodexHooks {
+					t.Fatal("explicit Codex hook choice was rewritten")
+				}
+				// Stop at the existing public progress boundary after hook effects,
+				// before SDK native activation. This checks selection, not activation.
+				ctx, cancel := context.WithCancel(testCtx(t))
+				defer cancel()
+				admitted := false
+				req.Progress = func(phase string) {
+					if phase == "agent-notify" {
+						admitted = true
+						cancel()
+					}
+				}
+				before := policyConflictFiles(t, req.CodexHome)
+				got, err := Run(ctx, req)
+				if !admitted || !errors.Is(err, context.Canceled) {
+					t.Fatalf("notify-only update did not reach native admission: %+v %v", got, err)
+				}
+				if codexsetup.HasManagedHooks(req.CodexHome) || !reflect.DeepEqual(before, policyConflictFiles(t, req.CodexHome)) {
+					t.Fatal("omitted Codex hooks changed the client profile")
+				}
+			})
+		}
+	}
+}
 
 func installedCodexHooksOnlyRequest(t *testing.T) Request {
 	t.Helper()

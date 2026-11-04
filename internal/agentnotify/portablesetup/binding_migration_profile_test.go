@@ -71,6 +71,25 @@ func TestRefreshProjectionRequiresFrozenProfile(t *testing.T) {
 	if err := os.MkdirAll(wrong.ClientConfigRoot, 0700); err != nil {
 		t.Fatal(err)
 	}
+	pendingPath := filepath.Join(req.Identity.RuntimeRoot, "TEST-migration-recovery")
+	_, err = installruntime.Commit(testCtx(t), installruntime.Request{
+		ControlRoot: req.Identity.ControlRoot, RuntimeRoot: req.Identity.RuntimeRoot,
+		Owner: req.Identity.Owner, ConsumerID: "existing", RefreshOnly: true,
+		ExpectedGeneration: &confirmed.Generation, Reservation: confirmed.PendingMutation,
+		Files: []installruntime.File{{Path: pendingPath, Data: []byte("recovered"), Mode: 0700}},
+		Fault: func(phase string) error {
+			if phase == "transaction" {
+				return errors.New("TEST interrupted migration transaction")
+			}
+			return nil
+		},
+	})
+	if err == nil {
+		t.Fatal("migration transaction was not interrupted")
+	}
+	if _, err := os.Stat(filepath.Join(req.Identity.ControlRoot, "transaction.json")); err != nil {
+		t.Fatal("pending migration transaction missing", err)
+	}
 	before := registryFixtureFiles(t, root)
 	// Admission holds the existing process lease; its owner record is ephemeral.
 	before[mat.Roots.LockFile] = strings.SplitN(before[mat.Roots.LockFile], " sha256:", 2)[0]
@@ -85,6 +104,9 @@ func TestRefreshProjectionRequiresFrozenProfile(t *testing.T) {
 	got, err := mat.RefreshProjection(testCtx(t), req)
 	if err != nil || got != replacement {
 		t.Fatalf("exact frozen profile refresh: got=%+v err=%v", got, err)
+	}
+	if data, err := os.ReadFile(pendingPath); err != nil || string(data) != "recovered" {
+		t.Fatalf("admitted migration did not recover pending transaction: %q %v", data, err)
 	}
 	snap, err := installruntime.ReadInstalledSnapshot(old.ControlRoot)
 	if err != nil || snap.Ledger.PendingMutation == nil || !portable.ExactCommittedBinding(snap.Ledger, old) || !portable.ExactCommittedBinding(snap.Ledger, replacement) {

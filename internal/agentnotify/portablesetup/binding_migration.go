@@ -5,9 +5,43 @@ import (
 
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/domain"
 
+	"github.com/777genius/agent-notifications/install/uapinstaller"
 	"github.com/777genius/agent-notifications/internal/agentnotify/portable"
 	"github.com/777genius/agent-notifications/internal/installruntime"
 )
+
+// Recovery may change installed files, so first match the request against the
+// durable, fingerprint-verified migration intent. The full UAP and locator
+// checks below still run after replay has restored a readable installation.
+func validateMigrationRecovery(req MaterializeRequest) error {
+	if req.Operation != uapinstaller.OpRefreshProjection && !req.restoreMigrationProjection {
+		if req.HandoffAction != "" {
+			return fmt.Errorf("%w: handoff action override requires validated migration projection", ErrPreflight)
+		}
+		return nil
+	}
+	ledger, _, err := installruntime.ReadOwnership(req.Identity.ControlRoot)
+	if err != nil {
+		return err
+	}
+	intent, target, err := readMigrationIntentTarget(ledger, req.Identity.ControlRoot, req.Integration)
+	if err != nil || intent.Action != req.HandoffAction || target.InstallationID != req.Identity.InstallationID || target.Profile != req.ClientConfigRoot {
+		return fmt.Errorf("%w: migration recovery intent differs", ErrPreflight)
+	}
+	selected := target.NewBinding
+	if req.restoreMigrationProjection {
+		selected = target.OldBinding
+	}
+	want := Identity{InstallationID: selected.InstallationID, ComponentID: selected.ComponentID, Owner: selected.Owner,
+		ScopeRoot: selected.ScopeRoot, ControlRoot: selected.ControlRoot, GlobalConfig: selected.GlobalConfig,
+		RuntimeRoot: selected.RuntimeRoot, Primary: selected.Primary}
+	got := req.Identity
+	got.ScopeRoot, got.ControlRoot, got.GlobalConfig, got.RuntimeRoot = physicalRoot(got.ScopeRoot), physicalRoot(got.ControlRoot), physicalRoot(got.GlobalConfig), physicalRoot(got.RuntimeRoot)
+	if got != want || selected.Integration != req.Integration {
+		return fmt.Errorf("%w: migration recovery identity differs", ErrPreflight)
+	}
+	return nil
+}
 
 func (m Materializer) validateRefreshHandoff(req MaterializeRequest) error {
 	if req.HandoffAction != "update" && req.HandoffAction != "repair" {

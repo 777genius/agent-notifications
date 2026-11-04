@@ -3,6 +3,7 @@ package setupwizard
 import (
 	"context"
 	"errors"
+	"maps"
 	"path/filepath"
 	"strings"
 
@@ -145,6 +146,12 @@ func resumeFromPendingIntent(req Request, agents []portable.Integration, snap in
 }
 
 func restoreOmittedFromIntent(req Request, agents []portable.Integration, intent portablesetup.Intent) (Request, []portable.Integration, error) {
+	req.BindingIDs = maps.Clone(req.BindingIDs)
+	req.DataReceiptIDs = maps.Clone(req.DataReceiptIDs)
+	req.MigrationBindings = maps.Clone(req.MigrationBindings)
+	req.RemovalBindings = maps.Clone(req.RemovalBindings)
+	req.MCPConfig = maps.Clone(req.MCPConfig)
+	req.LocalConfig = copyLocalConfig(req.LocalConfig)
 	localSelectionOmitted := req.LocalConfig == nil
 
 	intentAgents := intentClients(intent)
@@ -552,6 +559,8 @@ func pendingIntentConflict(req Request, err error, out Result) (Result, bool) {
 }
 
 func retryRequestFromIntent(req Request, intent portablesetup.Intent) Request {
+	req.BindingIDs = maps.Clone(req.BindingIDs)
+	req.DataReceiptIDs = maps.Clone(req.DataReceiptIDs)
 	if req.LocalConfig != nil {
 		cp := *req.LocalConfig
 		req.LocalConfig = &cp

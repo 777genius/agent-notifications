@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/777genius/agent-notifications/internal/agentnotify/portablesetup"
 	"github.com/777genius/agent-notifications/internal/installruntime"
 )
 
@@ -92,6 +93,24 @@ func TestInspectReportsUnreadableLiveProfileWithoutChangingInstalledState(t *tes
 		t.Fatalf("absent legacy profile inspection: %+v %v", got, err)
 	}
 	assertInstalled(got, "")
+	// An independently unreadable pending intent must add recovery guidance
+	// without replacing the typed profile failure or its primary reason.
+	if err := os.WriteFile(profilePath, []byte("{"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	plantPendingIntent(t, testCtx(t), req.ControlRoot, req.RuntimeRoot, snapshot.Ledger.Generation, portablesetup.Intent{
+		Version: 0, SetupIntentID: "unreadable-profile-intent", Action: "install", Stage: "confirmed",
+		Targets: []portablesetup.IntentTarget{{Client: "claude", Units: []string{"agent-notify"}}},
+	})
+	before := policyConflictFiles(t, filepath.Dir(req.ControlRoot))
+	got, err = Run(testCtx(t), req)
+	if !errors.As(err, &syntax) || got.Outcome != "incomplete" || got.Reason != "live_profile_unavailable" || len(got.NextActions) != 1 || got.NextActions[0].Reason != "pending_intent_unreadable" {
+		t.Fatalf("pending intent replaced the known profile failure: %+v %v", got, err)
+	}
+	assertInstalled(got, "")
+	if after := policyConflictFiles(t, filepath.Dir(req.ControlRoot)); !reflect.DeepEqual(before, after) {
+		t.Fatal("inspection changed profile or pending intent facts")
+	}
 }
 
 func TestInspectProfileErrorKeepsRecoveryFacts(t *testing.T) {

@@ -3,13 +3,63 @@
 package setupwizard
 
 import (
+	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/777genius/agent-notifications/internal/agentnotify/portable"
 	"github.com/777genius/agent-notifications/internal/codexsetup"
+	"github.com/777genius/agent-notifications/internal/installruntime"
 	"github.com/777genius/agent-notifications/internal/testenv"
 )
+
+func TestGroupUninstallPreservesResultsWhenProfileCleanupFails(t *testing.T) {
+	req := installedClaudeSelectionRequest(t)
+	req.Action, req.Agents, req.ExternalUninstalled = ActionUninstall, []string{"claude", "codex"}, true
+	req.CodexHome = t.TempDir()
+	snapshot, err := installruntime.ReadInstalledSnapshot(req.ControlRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mat, err := materializer(req, snapshot, req.RuntimeRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := liveDataRoot(mat, req.InstallationID, string(portable.Claude))
+	if data == "" {
+		t.Fatal("installed Claude data root is missing")
+	}
+	injected := false
+	req.Progress = func(phase string) {
+		if phase == "agent-notify" {
+			// Admission has checked the original profile. Damage only its host
+			// sidecar so SDK removal commits before host cleanup observes it.
+			if err := os.WriteFile(filepath.Join(data, liveProfileFile), []byte("{"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			injected = true
+		}
+	}
+	removed, err := Run(testCtx(t), req)
+	var malformed *json.SyntaxError
+	if !injected || !errors.As(err, &malformed) || removed.Outcome != "incomplete" {
+		t.Fatalf("expected post-removal sidecar failure: %+v %v", removed, err)
+	}
+	if retained, err := mat.RetainedEmpty(req.InstallationID); err != nil || !retained {
+		t.Fatalf("fixture did not commit group removal: retained=%v err=%v", retained, err)
+	}
+	want := map[string]string{"claude": "completed", "codex": "unchanged"}
+	for _, target := range removed.Targets {
+		if target.Unit == "agent-notify" && target.Outcome == want[target.Client] {
+			delete(want, target.Client)
+		}
+	}
+	if len(want) != 0 {
+		t.Fatalf("committed group results hidden by cleanup failure: missing=%v result=%+v", want, removed)
+	}
+}
 
 func TestUninstallAbsentPortablePreservesHookRemoval(t *testing.T) {
 	ctx := testCtx(t)

@@ -531,7 +531,7 @@ func windowsShortcutReadyIdentity(id desktopIdentity, controlRoot, executable, h
 	if err != nil {
 		return err
 	}
-	if !actual.Exists || actual.Link != "" || actual.SHA256 != owned.SHA256 {
+	if !actual.Exists || actual.Link != "" || actual != owned {
 		return fmt.Errorf("%s toast shortcut changed", id.label)
 	}
 	target, appID, arguments, err := InspectWindowsShortcut(path)

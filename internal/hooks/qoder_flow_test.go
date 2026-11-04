@@ -215,15 +215,15 @@ func TestQoderAttentionHookFlow(t *testing.T) {
 }
 
 func TestQoderSubagentStopOptIn(t *testing.T) {
-	payload := func(session string) string {
-		return fmt.Sprintf(`{"session_id":%q,"cwd":"/TEST-qoder","hook_event_name":"SubagentStop","last_assistant_message":"Sub done"}`, session)
+	payload := func(session string, active bool) string {
+		return fmt.Sprintf(`{"session_id":%q,"cwd":"/TEST-qoder","hook_event_name":"SubagentStop","stop_hook_active":%t,"last_assistant_message":"Sub done"}`, session, active)
 	}
 
 	// Discriminator: opt-in disabled must stay silent.
 	handler, notify, _ := newTestHandler(t, codexTestConfig())
 	handler.product = ProductQoder
 	handler.source = QoderSource{}
-	if err := handler.HandleHook("SubagentStop", strings.NewReader(payload(fmt.Sprintf("../../qoder-sub-off-%d", time.Now().UnixNano())))); err != nil {
+	if err := handler.HandleHook("SubagentStop", strings.NewReader(payload(fmt.Sprintf("../../qoder-sub-off-%d", time.Now().UnixNano()), false))); err != nil {
 		t.Fatal(err)
 	}
 	if notify.wasCalled() {
@@ -238,11 +238,18 @@ func TestQoderSubagentStopOptIn(t *testing.T) {
 	handler, notify, _ = newTestHandler(t, cfg)
 	handler.product = ProductQoder
 	handler.source = QoderSource{}
-	if err := handler.HandleHook("SubagentStop", strings.NewReader(payload(fmt.Sprintf("../../qoder-sub-on-%d", time.Now().UnixNano())))); err != nil {
+	session := fmt.Sprintf("../../qoder-sub-on-%d", time.Now().UnixNano())
+	if err := handler.HandleHook("SubagentStop", strings.NewReader(payload(session, true))); err != nil {
+		t.Fatal(err)
+	}
+	if notify.wasCalled() {
+		t.Fatal("continuing subagent notified despite stop_hook_active")
+	}
+	if err := handler.HandleHook("SubagentStop", strings.NewReader(payload(session, false))); err != nil {
 		t.Fatal(err)
 	}
 	call := notify.lastCall()
-	if call == nil || call.status != analyzer.StatusTaskComplete || !strings.Contains(call.message, "Sub done") {
+	if notify.callCount() != 1 || call == nil || call.status != analyzer.StatusTaskComplete || !strings.Contains(call.message, "Sub done") {
 		t.Fatalf("subagent completion missing: %+v", call)
 	}
 }
@@ -407,7 +414,7 @@ func TestQoderInteractiveStateUsesOnlyProductIdentity(t *testing.T) {
 // A Qoder team name is not authority to use a Claude team. Reject that path
 // without consuming its claim; the subsequent genuine Claude event still owns
 // and delivers the existing wait-all completion.
-func TestQoderTeammateIdleCannotConsumeClaudeCompletion(t *testing.T) {
+func TestQoderStopAndTeammateIdleCannotConsumeClaudeCompletion(t *testing.T) {
 	root := t.TempDir()
 	for _, key := range []string{"TMPDIR", "TMP", "TEMP"} {
 		t.Setenv(key, root)
@@ -433,12 +440,20 @@ func TestQoderTeammateIdleCannotConsumeClaudeCompletion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	stop := `{"session_id":"claude-lead","cwd":"/qoder","hook_event_name":"Stop","stop_hook_active":false,"last_assistant_message":"Qoder done"}`
+	if err := h.HandleHook("Stop", strings.NewReader(stop)); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(statePath)
+	if err != nil || string(after) != string(before) || notify.callCount() != 1 || notify.lastCall().status != analyzer.StatusTaskComplete {
+		t.Fatalf("Qoder Stop used Claude team policy: deliveries=%d before=%s after=%s error=%v", notify.callCount(), before, after, err)
+	}
 	input := `{"session_id":"qoder-session","cwd":"/qoder","hook_event_name":"TeammateIdle","team_name":"same-name","teammate_name":"worker"}`
 	if err := h.HandleHook("TeammateIdle", strings.NewReader(input)); err != nil {
 		t.Fatal(err)
 	}
-	after, err := os.ReadFile(statePath)
-	if err != nil || string(after) != string(before) || notify.callCount() != 0 {
+	after, err = os.ReadFile(statePath)
+	if err != nil || string(after) != string(before) || notify.callCount() != 1 {
 		t.Fatalf("Qoder affected Claude team: deliveries=%d before=%s after=%s error=%v", notify.callCount(), before, after, err)
 	}
 	h.product, h.source = ProductClaude, ClaudeSource{}
@@ -447,7 +462,7 @@ func TestQoderTeammateIdleCannotConsumeClaudeCompletion(t *testing.T) {
 		t.Fatal(err)
 	}
 	state, err := h.teamStateMgr.LoadState("same-name")
-	if err != nil || state == nil || state.LeadStopped || state.NotifiedAt == 0 || notify.callCount() != 1 {
+	if err != nil || state == nil || state.LeadStopped || state.NotifiedAt == 0 || notify.callCount() != 2 {
 		t.Fatalf("Claude completion changed: state=%+v deliveries=%d error=%v", state, notify.callCount(), err)
 	}
 }

@@ -76,6 +76,18 @@ func siblingCompatibilityUnavailable(agent portable.Integration, req Request, ou
 }
 
 func groupNotifyFailed(agents []portable.Integration, req Request, out Result, err error) Result {
+	var handoff portablesetup.GroupHandoffError
+	if errors.As(err, &handoff) {
+		out = portableInstallFailed(handoff.Integration, req, out, err)
+		names := make([]string, 0, len(agents))
+		for _, agent := range agents {
+			names = append(names, string(agent))
+		}
+		if next := operationRecovery(req, names, out.Reason, "resume"); len(next.Command) != 0 {
+			out.NextActions = append(out.NextActions, next)
+		}
+		return out
+	}
 	var persisted portablesetup.ResultError
 	if errors.As(err, &persisted) && persisted.Finalization {
 		return portableFinalizationFailed(agents, req, out, persisted)

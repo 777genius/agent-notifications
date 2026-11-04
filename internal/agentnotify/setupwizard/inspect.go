@@ -290,6 +290,9 @@ func reportPendingWizardIntent(req Request, snap installruntime.InstalledSnapsho
 	}
 	intent, err := portablesetup.ReadIntent(req.ControlRoot)
 	if err != nil || intent.SetupIntentID != pending.ID {
+		if out.Outcome == "completed" {
+			out.Outcome, out.Reason = "incomplete", "pending_intent_unreadable"
+		}
 		out.NextActions = append(out.NextActions, NextAction{Kind: "recover", Reason: "pending_intent_unreadable"})
 		return out
 	}

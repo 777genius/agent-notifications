@@ -36,8 +36,10 @@ Older custom Qoder installations are not adopted or migrated by this flow.
 `Stop` rides the Go SDK's Qoder transport. The other six events are decoded directly
 as strict hook JSON: the event name inside the payload must match the handler,
 oversized payloads are rejected, and no transcript path is assumed —
-everything is derived from the event payload itself. Continuation turns never
-notify. The Qoder wire carries no turn or subagent identity, so identical
+everything is derived from the event payload itself. The documented
+[`stop_hook_active` continuation flag](https://docs.qoder.com/cli/hooks) suppresses
+both `Stop` and `SubagentStop` notifications. The current mapping does not use
+turn or subagent identity, so identical
 re-prompts or identical subagent completions within the dedup window collapse
 to a single notification. `PermissionRequest` notifications name the tool and are labeled
 `Qoder requests permission`. A native `StopFailure` is **not** a successful completion:

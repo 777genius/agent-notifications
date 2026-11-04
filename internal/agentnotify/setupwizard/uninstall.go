@@ -339,15 +339,17 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 			return out, fmt.Errorf("group remove returned %d results", len(got))
 		}
 		for i, agent := range notifyAgents {
-			if err := clearLiveProfile(dataRoots[i], string(agent)); err != nil {
-				out.Outcome, out.Reason = "incomplete", err.Error()
-				return out, err
-			}
 			if got[i].AlreadyAbsent {
 				out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "unchanged", Reason: "already_absent"})
 				continue
 			}
 			out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "completed"})
+		}
+		for i, agent := range notifyAgents {
+			if err := clearLiveProfile(dataRoots[i], string(agent)); err != nil {
+				out.Outcome, out.Reason = "incomplete", err.Error()
+				return out, err
+			}
 		}
 		generation, err = rereadWizardGeneration(req.ControlRoot, out.reservation)
 		if err != nil {

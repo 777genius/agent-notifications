@@ -124,7 +124,7 @@ func (m Materializer) ApplyGroup(ctx context.Context, reqs []MaterializeRequest)
 			Profile: reqs[i].ClientConfigRoot,
 		}, string(packageOperation(reqs[i])))
 		if err != nil {
-			return nil, err
+			return nil, GroupHandoffError{Integration: reqs[i].Integration, Err: err}
 		}
 		generation = gen
 		if next != nil {

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/777genius/agent-notifications/install/uapinstaller"
+	"github.com/777genius/agent-notifications/internal/agentnotify/portable"
 )
 
 func IsUpdateRequired(err error) bool {
@@ -31,6 +32,16 @@ func wrapUpdateRequired(err error) error {
 	}
 	return err
 }
+
+// GroupHandoffError identifies the selected client whose host handoff failed
+// before the SDK group operation. It carries no uncommitted SDK result facts.
+type GroupHandoffError struct {
+	Integration portable.Integration
+	Err         error
+}
+
+func (e GroupHandoffError) Error() string { return e.Err.Error() }
+func (e GroupHandoffError) Unwrap() error { return e.Err }
 
 // ResultError keeps the installer Result when a mutation already happened.
 // Mapping that to a bool or an empty Binding would hide a managed commit.

@@ -406,7 +406,8 @@ corrections stay inside the same admission, ownership and reporting boundaries:
   Native tests cover Local and Cursor through actual shortcut and kernel APIs.
 - Make the synthetic native reader recognize cancellation that already revoked
   its request. The started-process test explicitly cancels after publishing its
-  exact identity; a separate real-deadline test covers revocation before reading.
+  exact identity; a separate entered-launch cancellation test covers revocation
+  before reading. Its finite parent deadline is only a hang bound.
   Active read/parse errors, revoke-before-stop ordering and cleanup stay asserted.
 
 Non-author critics reviewed these corrections in multiple rounds and found two
@@ -471,3 +472,53 @@ must not reject a later absent sibling merely because their common wizard intent
 is still open. The public three-client uninstall regression failed against the
 first guard and passes with the bounded delegation. No replay or cleanup authority
 is added to the no-op branch.
+
+### Final review against the continued E2E changes
+
+CodeRabbit's `e18fb67` review identified nine further boundary issues. Each was
+reproduced or tied to an existing native identity invariant before correction,
+and every change received independent non-author review:
+
+- Match the durable, fingerprint-verified migration intent before replaying any
+  kernel/UAP journal. Full installed/UAP/locator checks still run after replay.
+  The real interrupted-transaction fixture rejects a changed profile without
+  replay and permits the matching frozen refresh.
+- Preserve the failing client's identity for a host handoff error before an SDK
+  group operation. A public later-client failure reports that client and offers
+  a resume command only when the existing intent verification permits it.
+- An unreadable or mismatched pending intent cannot leave inspection marked
+  completed. Existing profile or recovery failures retain their precedence.
+- Request derivation owns every map and Local configuration it writes, including
+  the exported Local scope restoration path that bypasses normal evaluation.
+  Public inspect, retry/conflict and restoration cases preserve caller data.
+- Omitted hooks are preserved per client even when notifications were explicitly
+  selected. Keep the original all-units-omitted distinction for notification-only
+  missing-binding and retained-source preflight; explicit choices still win.
+- Report all confirmed group removal results before cleanup of host profile
+  metadata. A cleanup failure remains incomplete while retaining actual removals
+  and prior absence independently.
+- Windows shortcut readiness compares the full existing file identity, including
+  mode, as mutation admission already does. The native test changes only mode,
+  preserves SHA bytes, requires refusal and restores the original identity.
+- Decode Qoder's documented subagent continuation flag in its own wire adapter.
+  The shared Claude decoder is unchanged. The existing opt-in flow now covers a
+  continuation followed by genuine completion in the same session; product/team
+  isolation also covers Qoder Stop using a Claude lead session ID.
+- The pre-read cancellation fixture must enter the actual launch callback before
+  it cancels. It proves request revocation, no started/receipt effect, zero stops
+  for an unstarted process and removal of the private attempt.
+
+The hypothetical SDK result containing targets but no outcome was traced through
+the pinned producer. No such production path was found; no speculative result
+policy change was added. Group binding-ID and retained-removal findings in the
+same review were already addressed in `4a8c2bb`. Queue-time webhook policy remains
+the explicitly scoped #596 follow-up.
+
+The independent release sequence has now completed: #588 integrated candidate C
+with exact C tree and preserved ancestry; #589 activated its platform rows as
+`509969f9`. The previous merge-order restriction is therefore satisfied. This
+refactor adopts those main-branch changes without modifying release artifacts or
+channel policy, and final acceptance requires CI on the synchronized source.
+One earlier Ubuntu physical-source job used an unqualified AWS kernel tuple;
+its `NOT_RUN` failure is not treated as a test pass. The existing qualified
+hosted pool and all native assertions remain the acceptance boundary.

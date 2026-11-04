@@ -15,12 +15,19 @@ import (
 
 func TestContextNativeRevokedRequestBeforeFixtureRead(t *testing.T) {
 	ops, _, stopped := contextNativeFixture(t)
+	// The finite parent bounds a stuck fixture. Cancellation is triggered only
+	// after request publication has reached the actual launch boundary.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
 	launch := ops.launch
 	var directory string
+	entered := false
 	ops.launch = func(ctx context.Context, request, receipt string) error {
+		entered = true
 		directory = filepath.Dir(request)
 		// Hold the synthetic native reader until the actual cancellation callback
 		// has revoked its request. No native identity or effect has been published.
+		cancel()
 		<-ctx.Done()
 		until := time.Now().Add(time.Second)
 		for {
@@ -33,7 +40,7 @@ func TestContextNativeRevokedRequestBeforeFixtureRead(t *testing.T) {
 			time.Sleep(time.Millisecond)
 		}
 		err := launch(ctx, request, receipt)
-		if !errors.Is(err, context.DeadlineExceeded) {
+		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("revoked native reader: %v", err)
 		}
 		for _, path := range []string{strings.TrimSuffix(request, ".request") + ".started", receipt} {
@@ -43,11 +50,9 @@ func TestContextNativeRevokedRequestBeforeFixtureRead(t *testing.T) {
 		}
 		return err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
-	defer cancel()
 	err := runContextNativeApp(ctx, contextNativeClock{}, "/TEST-owned-helper", []string{"-title", "Pi"}, ops)
-	if !errors.Is(err, context.DeadlineExceeded) || *stopped != 0 {
-		t.Fatalf("unstarted native app cancellation=%v stopped=%d", err, *stopped)
+	if !entered || !errors.Is(err, context.Canceled) || *stopped != 0 {
+		t.Fatalf("unstarted native app entered=%t cancellation=%v stopped=%d", entered, err, *stopped)
 	}
 	if _, err := os.Stat(directory); !os.IsNotExist(err) {
 		t.Fatal("private attempt not removed", err)

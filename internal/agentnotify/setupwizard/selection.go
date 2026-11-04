@@ -235,12 +235,15 @@ func repairRequestsMissingHooks(req Request, hookAgents []portable.Integration) 
 // preserveLiveUnits keeps omitted update/repair unit flags on the currently
 // managed units. Omission must not add a unit the user left off.
 func preserveLiveUnits(ctx context.Context, req Request, agents []portable.Integration) (Request, error) {
-	preserveHooks := unitFlagsOmitted(req)
+	allUnitsOmitted := unitFlagsOmitted(req)
+	preserveHooks := false
 	preserveNotify := false
 	for _, agent := range agents {
+		if (agent == portable.Claude || agent == portable.Codex) && req.Hooks == nil && perClientHooks(req, agent) == nil {
+			preserveHooks = true
+		}
 		if agent != portable.CopilotVSCode && req.AgentNotify == nil && perClientNotify(req, agent) == nil {
 			preserveNotify = true
-			break
 		}
 	}
 	if !preserveHooks && !preserveNotify {
@@ -264,7 +267,7 @@ func preserveLiveUnits(ctx context.Context, req Request, agents []portable.Integ
 		}
 	}
 	for _, agent := range agents {
-		if preserveHooks {
+		if req.Hooks == nil && perClientHooks(req, agent) == nil {
 			switch agent {
 			case portable.Claude:
 				req.ClaudeHooks = boolPtr(hooksManaged(req, agent))
@@ -277,7 +280,7 @@ func preserveLiveUnits(ctx context.Context, req Request, agents []portable.Integ
 		}
 		hasHooks := (agent == portable.Claude || agent == portable.Codex) &&
 			agentUnit(req.Hooks, perClientHooks(req, agent), false)
-		if !preserveHooks && !notifyLive[portablesetup.ClientID(agent)] && !hasHooks {
+		if !allUnitsOmitted && !notifyLive[portablesetup.ClientID(agent)] && !hasHooks {
 			// A notification-only request still needs the existing missing-binding
 			// or retained-source preflight. Absence alone is not an explicit opt-out.
 			continue
