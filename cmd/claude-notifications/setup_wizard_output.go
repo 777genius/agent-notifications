@@ -63,6 +63,9 @@ func writeSetupWizardSummary(out io.Writer, result setupwizard.Result) {
 			_, _ = fmt.Fprintf(out, " (%s)", target.Reason)
 		}
 		_, _ = fmt.Fprintln(out)
+		if result.Action == "inspect" && target.Unit == "agent-notify" && (target.Activation != "" || target.Verification != "") {
+			_, _ = fmt.Fprintf(out, "    UAP activation: %s. Verification: %s.\n", safeSetupText(target.Activation), safeSetupText(target.Verification))
+		}
 		if target.ConfigPath != "" {
 			_, _ = fmt.Fprintln(out, "    MCP config: "+setupDisplayPath(target.ConfigPath))
 		}
@@ -73,6 +76,16 @@ func writeSetupWizardSummary(out io.Writer, result setupwizard.Result) {
 	for _, fact := range result.Readiness {
 		_, _ = fmt.Fprintf(out, "  %s - runtime: %s; hooks: %s; notification tool: %s\n", setupClientName(fact.Client), readableSetupState(fact.Runtime), readableSetupState(fact.Hooks), readableSetupState(fact.MCP))
 		_, _ = fmt.Fprintf(out, "    Permission: %s. Restart: %s. Delivery: %s.\n", readableSetupState(fact.Permission), readableSetupState(fact.Restart), readableSetupState(fact.Delivery))
+	}
+	// Read-only inspection has no durable receipt from a user's later MCP call.
+	// Never confuse this field with the separate UAP activation verification.
+	if result.Action == "inspect" {
+		for _, fact := range result.Readiness {
+			if fact.Delivery == "not_tracked" && fact.MCP == "installed" {
+				_, _ = fmt.Fprintln(out, "  Delivery is not tracked by setup; check the notify receipt in the originating chat.")
+				break
+			}
+		}
 	}
 	if len(result.NextActions) > 0 || len(result.Command) > 0 {
 		_, _ = fmt.Fprintln(out, "\nNext steps:")
@@ -164,7 +177,7 @@ func writeSetupWizardIncomplete(out io.Writer, result setupwizard.Result) {
 		}
 		_, _ = fmt.Fprintf(out, "  %s  %s\n", setupClientName(target.Client), state)
 	}
-	_, _ = fmt.Fprintln(out, "  Delivery  not verified")
+	_, _ = fmt.Fprintln(out, "  Delivery  not tested by setup (separate from client activation)")
 	if strings.HasPrefix(result.Reason, "state_migration_") {
 		switch result.Reason {
 		case "state_migration_changed":
@@ -225,6 +238,12 @@ func setupFailureDescription(result setupwizard.Result) string {
 		return "a managed runtime is required."
 	case "package_acquisition_failed", "recorded_package_unavailable", "package_required":
 		return "the installation package is unavailable."
+	case "activation_incomplete", "migration_activation_pending":
+		return "plugin registration was saved, but client activation is not verified."
+	case "portable_install_failed":
+		return "the notification tool setup failed; inspect the selected client's registration and activation."
+	case "post_install_incomplete":
+		return "post-install inspection could not confirm the selected notification tool."
 	case "invalid_arguments", "invalid_action":
 		return "setup arguments are invalid."
 	}

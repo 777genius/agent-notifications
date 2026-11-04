@@ -141,6 +141,7 @@ type TargetResult struct {
 	// Lifecycle facts and the current external attempt are independent.
 	Materialization string `json:"materialization,omitempty"`
 	Activation      string `json:"activation,omitempty"`
+	Verification    string `json:"verification,omitempty"`
 	GroupPhase      string `json:"groupPhase,omitempty"`
 	FailureStage    string `json:"failureStage,omitempty"`
 	Client          string `json:"client"`

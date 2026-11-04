@@ -150,6 +150,30 @@ func TestActivationPartialRecoveryUsesAcquiredSource(t *testing.T) {
 			if len(before.Installations) != 1 || len(before.Installations[0].Clients) != 2 {
 				t.Fatalf("committed registrations missing: %+v", before)
 			}
+			if row.name == "claude-first" {
+				// The CLI may fail while MCP files remain installed. Inspect
+				// must preserve the durable failed state, not infer activation
+				// from those files or a separate successful notify receipt.
+				inspectReq := req
+				inspectReq.Action, inspectReq.Yes = ActionInspect, false
+				view, inspectErr := Run(testCtx(t), inspectReq)
+				if inspectErr != nil {
+					t.Fatalf("inspect committed failed activation: %v", inspectErr)
+				}
+				observed := false
+				for _, target := range view.Targets {
+					if target.Client != "claude" || target.Unit != "agent-notify" {
+						continue
+					}
+					observed = true
+					if target.Activation != string(domain.ActivationFailed) || target.Verification != string(domain.VerificationFailed) {
+						t.Fatalf("inspect fabricated UAP success: %+v", target)
+					}
+				}
+				if !observed {
+					t.Fatalf("failed Claude binding missing from inspect: %+v", view.Targets)
+				}
+			}
 			traceBefore, _ := os.ReadFile(filepath.Join(codexRoot, "TEST-trace"))
 			if err := os.Remove(archive); err != nil {
 				t.Fatal(err)
