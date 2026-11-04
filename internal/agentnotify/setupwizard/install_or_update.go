@@ -24,7 +24,7 @@ func InstallOrUpdate(ctx context.Context, req Request, preserveExistingUnits boo
 			result.Targets = retainCommittedPhaseTargets(committed, result.Targets)
 			result.Targets = append(result.Targets, PreservedUnitTargets(preserved)...)
 			result.Action = string(req.Action)
-			if result.Outcome == "completed" || result.Outcome == "unchanged" || result.Outcome == "" {
+			if result.Outcome == "completed" || result.Outcome == "unchanged" || result.Outcome == "cancelled" || result.Outcome == "" {
 				result.Outcome = "incomplete"
 			}
 		}
