@@ -25,6 +25,9 @@ func validateGroupIdentities(reqs []MaterializeRequest) (map[string]Identity, er
 	base := reqs[0].Identity
 	for _, req := range reqs {
 		client := ClientID(req.Integration)
+		if req.ExpectedGeneration != reqs[0].ExpectedGeneration {
+			return nil, fmt.Errorf("%w: group generation differs for %s", ErrConcurrentChange, client)
+		}
 		if req.Integration != portable.Claude && req.Integration != portable.Codex && req.Integration != portable.CopilotVSCode && req.Integration != portable.Pi {
 			return nil, fmt.Errorf("%w: unsupported group client %s", ErrPreflight, client)
 		}
@@ -39,6 +42,17 @@ func validateGroupIdentities(reqs []MaterializeRequest) (map[string]Identity, er
 		identities[client] = id
 	}
 	return identities, nil
+}
+
+// groupMutationRequest retains Local's generation admission regardless of the
+// selected clients' order. Other groups keep their first request's admission.
+func groupMutationRequest(reqs []MaterializeRequest) *MaterializeRequest {
+	for i := range reqs {
+		if reqs[i].Integration == portable.CopilotVSCode {
+			return &reqs[i]
+		}
+	}
+	return &reqs[0]
 }
 
 func (m Materializer) ApplyGroup(ctx context.Context, reqs []MaterializeRequest) (_ []portable.Binding, finalErr error) {
@@ -107,12 +121,13 @@ func (m Materializer) ApplyGroup(ctx context.Context, reqs []MaterializeRequest)
 	if err := m.recoverOwnedJournals(ctx, reqs...); err != nil {
 		return nil, err
 	}
-	release, err := m.beginMutation(ctx, &reqs[0])
+	mutationReq := groupMutationRequest(reqs)
+	release, err := m.beginMutation(ctx, mutationReq)
 	if err != nil {
 		return nil, err
 	}
 	defer release()
-	generation := reqs[0].ExpectedGeneration
+	generation := mutationReq.ExpectedGeneration
 	var res *installruntime.PendingMutation
 	// The shared source must survive any outcome after the first handoff starts.
 	handoffStarted = true
@@ -281,12 +296,13 @@ func (m Materializer) RemoveGroup(ctx context.Context, reqs []MaterializeRequest
 			{Integration: reqs[1].Integration, AlreadyAbsent: true},
 		}, nil
 	}
-	release, err := m.beginMutation(ctx, &reqs[0])
+	mutationReq := groupMutationRequest(reqs)
+	release, err := m.beginMutation(ctx, mutationReq)
 	if err != nil {
 		return nil, err
 	}
 	defer release()
-	generation := reqs[0].ExpectedGeneration
+	generation := mutationReq.ExpectedGeneration
 	engineReq := reqs[0]
 	for _, req := range reqs {
 		if req.Integration == portable.Claude {

@@ -2958,6 +2958,34 @@ func TestLocalNativeGroupComposesSharedCanonicalPackage(t *testing.T) {
 			if !localFirst {
 				reqs[0], reqs[1] = reqs[1], reqs[0]
 			}
+			stale := append([]MaterializeRequest(nil), reqs...)
+			for i := range stale {
+				if stale[i].Integration == portable.CopilotVSCode {
+					stale[i].ExpectedGeneration--
+				}
+			}
+			beforeStale := registryFixtureFiles(t, root)
+			if _, err := mat.ApplyGroup(testCtx(t), stale); !errors.Is(err, ErrConcurrentChange) {
+				t.Errorf("stale selected Local generation accepted: %v", err)
+			}
+			if !reflect.DeepEqual(beforeStale, registryFixtureFiles(t, root)) {
+				t.Fatal("stale group generation changed files, journals or managed state")
+			}
+			stale = append([]MaterializeRequest(nil), reqs...)
+			for i := range stale {
+				stale[i].ExpectedGeneration--
+			}
+			beforeLedger, _, err := installruntime.ReadOwnership(local.Identity.ControlRoot)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := mat.ApplyGroup(testCtx(t), stale); !errors.Is(err, ErrConcurrentChange) {
+				t.Fatalf("equally stale Local group generations accepted: %v", err)
+			}
+			afterLedger, recovery, err := installruntime.ReadOwnership(local.Identity.ControlRoot)
+			if err != nil || recovery || !reflect.DeepEqual(beforeLedger, afterLedger) {
+				t.Fatal("equally stale group changed installed ownership or left a kernel journal", err)
+			}
 			bindings, err := mat.ApplyGroup(testCtx(t), reqs)
 			if err != nil {
 				t.Fatal("actual public group apply", err)

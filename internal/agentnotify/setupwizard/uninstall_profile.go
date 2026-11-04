@@ -46,7 +46,10 @@ func guardUninstallLiveProfile(mat portablesetup.Materializer, installationID, c
 			if err == nil && root != known {
 				err = fmt.Errorf("recorded Codex profile %s is not %s", known, root)
 			}
-		} else {
+		}
+		if err == nil && (recorded == "" || live.NativeProfileRoot != "") {
+			// A host sidecar cannot override the binding's recorded native root.
+			// Rootless legacy bindings retain their explicit host-profile proof.
 			err = codex.ValidateBindingProfile(root, live)
 		}
 	}

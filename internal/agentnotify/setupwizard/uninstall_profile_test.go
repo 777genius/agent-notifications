@@ -111,7 +111,7 @@ func clearLegacyCodexProfile(t *testing.T, req Request, mat portablesetup.Materi
 }
 
 func TestUninstallCodexProfileRefusalPrecedesNativeObservation(t *testing.T) {
-	for _, scenario := range []string{"missing-wrong-home", "missing-managed-parent-home", "legacy-wrong-home", "legacy-wrong-home-explicit-flag", "recorded-managed-parent-home", "recorded-wrong-home", "malformed-record"} {
+	for _, scenario := range []string{"missing-wrong-home", "missing-managed-parent-home", "legacy-wrong-home", "legacy-wrong-home-explicit-flag", "recorded-managed-parent-home", "recorded-wrong-home", "stale-matching-sidecar", "malformed-record"} {
 		t.Run(scenario, func(t *testing.T) {
 			req, mat, binding, data := uninstallProfileFixture(t)
 			root := filepath.Dir(req.ControlRoot)
@@ -132,9 +132,12 @@ func TestUninstallCodexProfileRefusalPrecedesNativeObservation(t *testing.T) {
 				}
 			} else if scenario == "recorded-managed-parent-home" {
 				req.CodexHome = root
-			} else if scenario == "recorded-wrong-home" {
+			} else if scenario == "recorded-wrong-home" || scenario == "stale-matching-sidecar" {
 				if err := recordLiveProfile(data, "codex", other); err != nil {
 					t.Fatal(err)
+				}
+				if scenario == "stale-matching-sidecar" {
+					req.CodexHome = other
 				}
 			} else if err := os.WriteFile(filepath.Join(data, liveProfileFile), []byte("{"), 0600); err != nil {
 				t.Fatal(err)
@@ -177,9 +180,15 @@ func main() {
 }
 
 func TestUninstallCodexKnownProfileAdmitsObservation(t *testing.T) {
-	for _, proof := range []string{"host-profile", "native-profile"} {
+	for _, proof := range []string{"host-profile", "native-profile", "legacy-host-profile"} {
 		t.Run(proof, func(t *testing.T) {
-			req, _, _, data := uninstallProfileFixture(t)
+			req, mat, _, data := uninstallProfileFixture(t)
+			if proof == "legacy-host-profile" {
+				clearLegacyCodexProfile(t, req, mat, data)
+				if err := recordLiveProfile(data, "codex", req.CodexHome); err != nil {
+					t.Fatal(err)
+				}
+			}
 			if proof == "native-profile" {
 				if err := os.Remove(filepath.Join(data, liveProfileFile)); err != nil {
 					t.Fatal(err)

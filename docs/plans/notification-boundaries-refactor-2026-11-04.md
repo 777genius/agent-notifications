@@ -570,3 +570,44 @@ assertions on both native Go versions. Existing Local frozen-name recovery remai
 #592. The inherited hook turn-reservation and execution-budget policies remain
 #594 and #598. Final workflow URLs, native execution evidence and merge status
 are recorded on #590 for the actual published correction head.
+
+### Final admission and repeat-outcome review
+
+The complete `cd387cd` review reproduced three remaining boundary defects. Group
+requests now reject inconsistent expected generations before composition or
+recovery, and select the Local request for the existing mutation admission in
+either client order. The same existing public fixture covers unequal generations,
+equally stale generations, both orders and the successful install/repair controls.
+The equally stale check preserves existing composition/recovery ordering; its
+unchanged-state assertion concerns the durable ledger and journal.
+
+A matching host Codex sidecar can no longer override a managed binding's native
+profile root. The existing profile proof now runs before observation or intent
+publication even when that sidecar matches. The public stale-sidecar regression
+preserves all owned state, and a rootless legacy binding with explicit host-profile
+proof remains accepted. Hooks-only uninstall now uses the common outcome mapper:
+the first actual removal completes, while a repeated absent removal stays
+unchanged/already_absent. The Gemini panic fixture additionally proves that an
+unclaimed webhook remains eligible exactly once after early admission panic.
+
+All corrections received independent non-author review. The complete portable
+group race subset passed in 31.846 seconds, Codex profile controls in 13.160 seconds,
+public uninstall controls in 7.644 seconds and the Gemini panic regression in
+1.035 seconds. Native Windows and Darwin qualification on the previous published
+head passed both Go versions; Ubuntu Cursor passed on the existing qualified
+Azure tuple without changing its gate. Final acceptance still requires the new
+published head and its actual synthetic merge tree.
+
+The inherited Claude multi-record final-response grouping limitation is explicitly
+tracked in #594. The parser lacks a verified response-grouping identifier; joining
+all assistant records in a turn would also include intermediate/tool commentary.
+Qoder AskUserQuestion cooldown/event pairing is tracked in #599 pending a pinned
+native event contract. Neither product-policy limitation is represented as fixed.
+
+The previous head's Gemini Intel macOS permission flow timed out before the deny
+turn produced an observed provider request or independent hook record. Its driver,
+toolchain and runner image matched the earlier passing candidate. This evidence
+does not prove a harmless flake or absent hook execution: capture was bounded and
+the preceding approval hook reported cache_unavailable. No timeout, assertion or
+qualification gate was relaxed. The exact final candidate must pass its native
+matrix; the original failure and any retry remain visible in #590's evidence.

@@ -564,6 +564,9 @@ func TestAdmissionPanicPreservesCompletedChannelFacts(t *testing.T) {
 			if repeated.Desktop != "duplicate" || (desktopCalls == 1) != tc.late {
 				t.Fatalf("admission panic reopened desktop claim: %+v desktop=%d", repeated, desktopCalls)
 			}
+			if !tc.late && (repeated.Webhook != "submitted" || webhookCalls != 1) {
+				t.Fatalf("early panic consumed unclaimed webhook channel: %+v webhook=%d", repeated, webhookCalls)
+			}
 			if tc.late && (repeated.Desktop != "duplicate" || repeated.Webhook != "duplicate" || desktopCalls != 1 || webhookCalls != 0) {
 				t.Fatalf("late panic reopened claimed channels: %+v desktop=%d webhook=%d", repeated, desktopCalls, webhookCalls)
 			}

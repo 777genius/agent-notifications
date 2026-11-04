@@ -4225,6 +4225,10 @@ func TestWizardCodexHooksWithoutConfigure(t *testing.T) {
 	if err == nil && strings.Contains(string(data), "codex-hook-wrapper") {
 		t.Fatalf("hooks survived uninstall: %s", data)
 	}
+	repeated, err := Run(ctx, req)
+	if err != nil || repeated.Outcome != "unchanged" || repeated.Reason != "already_absent" {
+		t.Fatalf("hooks-only retry invented a completed removal: %+v %v", repeated, err)
+	}
 }
 
 func TestWizardNotifyInstallReportsProgress(t *testing.T) {

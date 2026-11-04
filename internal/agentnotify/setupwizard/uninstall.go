@@ -283,7 +283,7 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 		if err != nil || out.Outcome == "incomplete" || out.Outcome == "invalid" {
 			return out, err
 		}
-		out.Outcome = "completed"
+		out = uninstallOutcome(out, "already_absent")
 		reportProgress(req, "complete")
 		return out, nil
 	}
