@@ -209,11 +209,9 @@ func (n *dbusNotifications) Submit(ctx context.Context, r notification.Request) 
 	if r.Silent {
 		hints["suppress-sound"] = dbus.MakeVariant(true)
 	}
-	icon := ""
 	if n.agentNotifyPresentation {
 		// Use immutable embedded assets: no cache path, symlink or user-controlled
 		// icon can be read or adopted by a running MCP notification.
-		icon = "claude-notifications"
 		if image, ok := agentNotifyImageData(); ok {
 			hints["image-data"] = dbus.MakeVariant(image)
 		}
@@ -231,7 +229,7 @@ func (n *dbusNotifications) Submit(ctx context.Context, r notification.Request) 
 	if n.bodyMarkup {
 		body = html.EscapeString(body)
 	}
-	err := n.conn.Object("org.freedesktop.Notifications", "/org/freedesktop/Notifications").CallWithContext(ctx, "org.freedesktop.Notifications.Notify", 0, "agent-notifications", uint32(0), icon, r.Content.Title, body, []string{}, hints, expire).Store(&id)
+	err := n.conn.Object("org.freedesktop.Notifications", "/org/freedesktop/Notifications").CallWithContext(ctx, "org.freedesktop.Notifications.Notify", 0, "agent-notifications", uint32(0), "", r.Content.Title, body, []string{}, hints, expire).Store(&id)
 	return id, err
 }
 
