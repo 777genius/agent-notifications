@@ -35,7 +35,11 @@ case "$1 ${2:-}" in
         while [ "$#" -gt 0 ]; do
             if [ "$1" = --intent-file ]; then
                 if [[ "$2" = *selector-pi-runtime-intent.json ]] && [ "${TEST_PI_CANCEL:-false}" = true ]; then exit 0; fi
-                printf 'TEST immutable checkpoint' > "$2"
+                intent_path=$2
+                if [ "${TEST_PI_PLATFORM:-}" = "Windows (Git Bash)" ]; then
+                    intent_path=$(cygpath -u "$intent_path") || exit 97
+                fi
+                printf 'TEST immutable checkpoint' > "$intent_path"
                 break
             fi
             shift
@@ -72,7 +76,12 @@ case "$1 ${2:-}" in
         mkdir -p "$target"
         cp "$TEST_PI_HELPER" "$target/$entry"
         touch "$TEST_PI_CASE/runtime-installed" ;;
-    'setup-products preflight') exit "${TEST_PI_PREFLIGHT_EXIT:-0}" ;;
+    'setup-products preflight')
+        if [ "${TEST_PI_PLATFORM:-}" = "Windows (Git Bash)" ]; then
+            case "$4" in [A-Za-z]:\\*) ;; *) exit 97 ;; esac
+            [ -f "$(cygpath -u "$4")" ] || exit 97
+        fi
+        exit "${TEST_PI_PREFLIGHT_EXIT:-0}" ;;
     'setup-notifications --help') printf '%s\n' '--policy-only --preserve-enabled' ;;
     'setup-notifications wizard')
         if [ "$4" = inspect ]; then printf '{"targets":[]}\n'; else exit "${TEST_PI_WIZARD_EXIT:-0}"; fi ;;
@@ -83,7 +92,7 @@ chmod +x "$TEST_PI_HELPER"
 cat > "$SANDBOX/runner" <<'PI_MAIN'
 #!/bin/bash
 source "$TEST_PI_FUNCTIONS"
-abort_if_wsl_environment() { :; }; detect_platform() { :; }; require_installer_runtime() { :; }
+abort_if_wsl_environment() { :; }; detect_platform() { [ -z "${TEST_PI_PLATFORM:-}" ] || PLATFORM=$TEST_PI_PLATFORM; }; require_installer_runtime() { :; }
 check_prerequisites() { :; }; print_header() { :; }; report_progress() { :; }; bootstrap_promotion() { :; }
 resolve_bootstrap_release() { BOOTSTRAP_TAG=v2.0.0; }
 stage_config_helper() { _CONFIG_STAGE="$TEST_PI_CASE/stage"; mkdir "$_CONFIG_STAGE"; _CONFIG_HELPER=$TEST_PI_HELPER; }
@@ -187,6 +196,18 @@ for selector in (['--product','pi'], ['--products','pi']):
         for key,want in (('pi-desktop',desktop),('pi-webhook',webhook)):
             assert ('--'+key+'='+str(want).lower()).encode() in install
         assert b'--pi-channel-preimage=absent' in install and stages==['runtime'], (stages,out)
+# Windows Git Bash must send native absolute paths to both the refreshed
+# prepare/intent-args and the direct Pi refresh preflight.
+if os.name == 'nt':
+    code,calls,stages,out=run(['--product','pi'],
+                              {'TEST_PI_PREPARED':'true', 'TEST_PI_PLATFORM':'Windows (Git Bash)'})
+    assert code==0, out
+    preflights=matching(calls,['setup-products','preflight'])
+    assert len(preflights)>=2, (preflights,out)
+    for args in preflights:
+        path=value(args,'--intent-file')
+        assert path[1:3]==b':\\' and path.endswith(b'selector-intent.json') or (
+            path[1:3]==b':\\' and path.endswith(b'selector-pi-runtime-intent.json')), args
 # A fresh managed runtime advances generation; route through a new Pi-only checkpoint.
 code,calls,stages,out=run(['--product','pi'], {'TEST_PI_PREPARED':'true'})
 assert code==0 and len(matching(calls,['setup-products','prepare']))==2, out
