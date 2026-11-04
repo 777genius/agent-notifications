@@ -122,7 +122,8 @@ func TestFreedesktopAgentNotifyPresentationOnPrivateSessionBus(t *testing.T) {
 			if want := tc.mcp && tc.sound && tc.serverSupportsCue; hasCue != want || hasCue && cue.Value() != "message-new-instant" {
 				t.Fatalf("unsound cue consent/capabilities: present=%t value=%v want=%t", hasCue, cue.Value(), want)
 			}
-			_, suppresses := hints["suppress-sound"]
+			suppressHint, hasSuppress := hints["suppress-sound"]
+			suppresses := hasSuppress && suppressHint.Value() == true
 			if suppresses != tc.silent {
 				t.Fatalf("sound opt-out not preserved: suppressed=%t want=%t", suppresses, tc.silent)
 			}
