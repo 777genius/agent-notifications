@@ -19,7 +19,20 @@ func TestAgentNotifyEmbeddedIconIsBoundedAndImmutable(t *testing.T) {
 	if got := dbus.SignatureOf(icon).String(); got != "(iiibiiay)" {
 		t.Fatalf("invalid image-data D-Bus signature: %s", got)
 	}
-}
+	visible, uniform := 0, true
+	for i := 0; i+3 < len(icon.Data); i += 4 {
+		if icon.Data[i+3] != 0 {
+			visible++
+		}
+		if icon.Data[i] != icon.Data[0] || icon.Data[i+1] != icon.Data[1] ||
+			icon.Data[i+2] != icon.Data[2] || icon.Data[i+3] != icon.Data[3] {
+			uniform = false
+		}
+	}
+	if visible == 0 || uniform {
+		t.Fatalf("embedded icon lacks visible pixel variation: visible=%d uniform=%t", visible, uniform)
+	}
+
 
 // An actual private D-Bus Notify service observes presentation bytes, policy
 // opt-outs and exactly one external effect per request. Other freedesktop
@@ -44,12 +57,14 @@ func TestFreedesktopAgentNotifyPresentationOnPrivateSessionBus(t *testing.T) {
 	for i, tc := range []struct {
 		name              string
 		mcp, sound        bool
+		silent            bool
 		serverSupportsCue bool
 	}{
-		{"mcp enabled", true, true, true},
-		{"mcp sound opt-out", true, false, true},
-		{"mcp no system sound", true, true, false},
-		{"non-mcp unchanged", false, true, true},
+		{"mcp enabled", true, true, false, true},
+		{"mcp sound opt-out", true, false, true, true},
+		{"mcp no system sound", true, true, false, false},
+		{"non-mcp unchanged", false, true, false, true},
+		{"mcp policy off, silent unset", true, false, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if tc.serverSupportsCue {
@@ -61,7 +76,7 @@ func TestFreedesktopAgentNotifyPresentationOnPrivateSessionBus(t *testing.T) {
 			port.AgentNotifyPresentation = tc.mcp
 			r := linuxNoneRequest(clock)
 			r.Policy.SoundEnabled = tc.sound
-			r.Silent = !tc.sound
+			r.Silent = tc.silent
 			if ready := port.CheckReadiness(ctx, r); ready.Status != "ready" || server.last.Load() != uint32(i) {
 				t.Fatalf("readiness had side effects: %+v, notify=%d", ready, server.last.Load())
 			}
@@ -84,7 +99,7 @@ func TestFreedesktopAgentNotifyPresentationOnPrivateSessionBus(t *testing.T) {
 				t.Fatalf("unsound cue consent/capabilities: hints=%v want=%t", hints, want)
 			}
 			_, suppresses := hints["suppress-sound"]
-			if suppresses != !tc.sound {
+			if suppresses != tc.silent {
 				t.Fatalf("sound opt-out not preserved: hints=%v", hints)
 			}
 		})

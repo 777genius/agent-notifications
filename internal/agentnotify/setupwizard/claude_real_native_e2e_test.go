@@ -135,4 +135,11 @@ func TestWizardClaudeNativeSkillsDirLifecycleE2E(t *testing.T) {
 	if len(LiveNotifyClients(control, []string{"claude"})) != 0 {
 		t.Fatal("native removal retained a live UAP Claude binding")
 	}
+	after, err := exec.CommandContext(ctx, executable, "plugin", "list", "--json").Output()
+	if err != nil {
+		t.Fatalf("native Claude listing after removal failed: %v", err)
+	}
+	if got := claude.PluginStatusFromList(after, "agent-notify", managedPath); got != claude.StatusAbsent {
+		t.Fatalf("native Claude still sees removed plugin or returned an unrecognized listing: status=%d", got)
+	}
 }
