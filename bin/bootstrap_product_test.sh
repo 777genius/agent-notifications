@@ -91,12 +91,21 @@ source "$SANDBOX/functions.sh"
         while IFS= read -r -d '' value; do argv+=("$value"); done < "$trace"
     }
     for operation in prepare confirm preflight migration-apply; do
-        selector_collect "$operation" --products opencode --intent-file "$_SELECTOR_INTENT"
+        if [ "$operation" = migration-apply ]; then
+            selector_collect "$operation" --intent-file "$_SELECTOR_INTENT"
+        else
+            selector_collect "$operation" --products opencode --intent-file "$_SELECTOR_INTENT"
+        fi
         read_intent_trace
-        [ "${#argv[@]}" -eq 6 ] && [ "${argv[0]}" = setup-products ] && [ "${argv[1]}" = "$operation" ] &&
-            [ "${argv[2]}" = --products ] && [ "${argv[3]}" = opencode ] &&
-            [ "${argv[4]}" = --intent-file ] && [ "${argv[5]}" = "$native_intent" ] ||
-            { echo "Git Bash selector $operation passed a non-native intent path" >&2; exit 1; }
+        if [ "$operation" = migration-apply ]; then
+            [ "${#argv[@]}" -eq 4 ] && [ "${argv[2]}" = --intent-file ] && [ "${argv[3]}" = "$native_intent" ] ||
+                { echo "Git Bash migration-apply passed a non-native intent path" >&2; exit 1; }
+        else
+            [ "${#argv[@]}" -eq 6 ] && [ "${argv[2]}" = --products ] && [ "${argv[3]}" = opencode ] &&
+                [ "${argv[4]}" = --intent-file ] && [ "${argv[5]}" = "$native_intent" ] ||
+                { echo "Git Bash selector $operation passed a non-native intent path" >&2; exit 1; }
+        fi
+        [ "${argv[0]}" = setup-products ] && [ "${argv[1]}" = "$operation" ] || exit 1
     done
     if load_frozen_dispatch; then echo "Intent-args helper refusal was lost" >&2; exit 1; fi
     read_intent_trace
