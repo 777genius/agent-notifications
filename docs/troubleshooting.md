@@ -26,6 +26,46 @@ generic "unavailable". Reinstalling is unnecessary when the current status call
 succeeds. Remote or isolated worker sessions must expose their own MCP tools;
 installation in the operator's profile does not establish access inside a worker.
 
+## Linux MCP alerts work, but Claude setup still reports incomplete
+
+A working `notify` call and an incomplete UAP activation are **different facts**.
+The MCP server can be reachable from a running Claude session even when the
+installer has not verified the exact managed `agent-notify@skills-dir` plugin.
+UAP activates that client by running `claude plugin list --json` and requiring
+an enabled `agent-notify@skills-dir` entry with the exact managed `installPath`
+and user scope. A failed or unrecognized listing cannot be replaced with an
+assumption based on a successful notification.
+
+To diagnose without changing state:
+
+1. Run `setup-notifications wizard --action inspect --agents claude --json`
+   using the installed executable and its existing control-root arguments;
+   retain the `reason`, `targets` and `nextActions` from the result.
+2. In the **same Claude configuration profile** used at installation, run
+   `claude plugin list --json`. Check `agent-notify@skills-dir` for
+   `enabled: true`, `scope: user`, and the expected `installPath`.
+   If it is absent, disabled or points somewhere else, identify the profile
+   and any explicit opt-out before attempting a repair. Do not override
+   settings, replace managed files, or delete `~/.config/uap` as a shortcut.
+3. Use a validated `activate` or `resume` command from the wizard's
+   `nextActions` only after resolving the actual verification failure.
+   Restart Claude to load changed plugin state. A working `notify` receipt
+   does not authorize marking UAP activation or verification as successful.
+
+`delivery_not_verified` in wizard inspection is a request to **test delivery**,
+not evidence that delivery has failed. The installer does not persist MCP
+notification receipts; calling `notify` successfully will not clear this
+status. A `submitted` receipt proves the desktop server accepted the request,
+not that a banner was visible or audible on the user's screen.
+
+On Linux, the separate hook path uses the configured plugin icon and plays
+the configured hook audio itself. The explicit MCP path currently sends a
+freedesktop D-Bus notification without an app-icon value and does not play that
+custom hook audio. It allows the desktop server's own sound when enabled.
+Therefore a successful KDE/Wayland MCP notification can appear without the
+hook's icon or sound. This is not proof of failed MCP registration; desktop
+presentation parity needs separate native qualification.
+
 ### `connection closed: initialize response` during concurrent startup
 
 Older portable launchers can exhaust their installation-lease deadline when
