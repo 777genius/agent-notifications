@@ -96,6 +96,9 @@ func (m Materializer) Remove(ctx context.Context, req MaterializeRequest) (final
 	if err != nil {
 		return err
 	}
+	if _, err := portable.ExactLocator(pb); err != nil {
+		return fmt.Errorf("%w: existing locator differs for %s: %v", ErrPreflight, req.Integration, err)
+	}
 	if needsFreeze {
 		generation, err := m.freezeLegacyUninstallBindings(ctx, []legacyUninstallBinding{{
 			identity: req.Identity, client: *found, receipt: receipt, profile: req.ClientConfigRoot, binding: pb,

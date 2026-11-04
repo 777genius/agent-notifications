@@ -358,3 +358,59 @@ this refactor must not silently alter the already sealed release source.
 - Delivery: [PR #590](https://github.com/777genius/agent-notifications/pull/590).
   Every commit is published immediately through the GitHub integration. Main
   and the sealed release branches remain separate from this refactor.
+
+### Continued E2E review
+
+The full platform checkpoint for `ec35261018358f255a8db81a0a2b25cb9e23f33e`
+remains historical evidence. Twelve later inline threads and the accompanying
+review summary were rechecked before continuing delivery. Two threads repeated
+the already fixed frozen-profile and composed-snapshot findings. The remaining
+corrections stay inside the same admission, ownership and reporting boundaries:
+
+- Reject mixed normalized group operations before composition or recovery.
+  Check every selected Local/Cursor authority before shared recovery, including
+  the earlier public `Run` kernel replay. A shared recovery request must identify
+  one control root; the read-only authority API rejects nil context. Actual
+  interrupted transactions prove refusal without replay and valid continuation.
+- Check the exact single-removal locator before freezing or publishing its
+  intent. A missing locator remains valid for an already revoked removal retry.
+  For unanchored managed Codex uninstall, require exact canonical recorded-profile
+  equality, or the pinned SDK's profile/binding proof when the host sidecar is absent,
+  before native observation or intent effects. Existing recorded-profile conflicts
+  and malformed metadata remain errors.
+- Copy caller MCP configuration before both pending restoration and discovery.
+  Returned Local retry argv now carries supplied exact MCP and skill names through
+  additive JSON flags and the real CLI parser. Existing boolean defaults and
+  explicit consent remain unchanged; omitted frozen-source reconstruction is
+  still the separate #592 follow-up.
+- Preserve each omitted notification selection on update/repair even when hooks
+  were explicit. Explicit global/per-client choices retain precedence. The
+  existing missing-sibling repair fixture now explicitly requests both units;
+  all its refusal and no-mutation assertions remain intact.
+- Derive successful uninstall outcomes from actual hook/notification removals,
+  including retained-empty portable state. Codex removal uses the transactional
+  `Replaced` fact so an empty retry remains unchanged. Inspection propagates
+  unreadable live-profile metadata with its typed cause and binding ID while
+  retaining known installed facts; readable absent legacy metadata remains valid.
+- Permit an externally missing owned Windows shortcut to be retired or repaired
+  while preserving registration, peer and edited-file checks. Carry its admitted
+  preimage through COM rendering to kernel CAS, rejecting a concurrent replacement.
+  Native tests cover Local and Cursor through actual shortcut and kernel APIs.
+- Make the synthetic native reader recognize cancellation that already revoked
+  its request. The started-process test explicitly cancels after publishing its
+  exact identity; a separate real-deadline test covers revocation before reading.
+  Active read/parse errors, revoke-before-stop ordering and cleanup stay asserted.
+
+Non-author critics reviewed these corrections in multiple rounds and found two
+additional paths before publication: early public kernel replay and the misleading
+already-absent hook result. Both were reproduced and corrected. Regressions cover
+public Plan/Run, returned argv, actual materializer lifecycles and interrupted
+transactions rather than private helper output alone.
+
+Local Codex activation/removal still encounters the baseline container `/proc`
+containment limitation. The new profile-admission fixture uses the SDK's supported
+manual materialization and cancels its positive public uninstall after durable
+absence attestation; it does not claim native activation or completed SDK removal.
+Windows COM and Darwin physical-profile authority require native CI. The delivery
+PR records fresh workflow results for the published revision, separately from
+local tests and from the sealed release's external qualification requirements.

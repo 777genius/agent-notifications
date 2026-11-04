@@ -1,6 +1,7 @@
 package setupwizard
 
 import (
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 
@@ -155,8 +156,20 @@ func localRetryCommand(req Request) []string {
 	retry.ClientExecutable = clientExecutable(req, portable.CopilotVSCode)
 	retry.ScopeRoot = filepath.Dir(req.LocalConfig.ProfileSettingsPath)
 	command := RetryCommand(retry)
-	return append(command, "--local-settings", req.LocalConfig.ProfileSettingsPath,
+	command = append(command, "--local-settings", req.LocalConfig.ProfileSettingsPath,
 		"--local-native-stop", boolFlag(req.LocalConfig.NativeStop),
 		"--local-mcp", boolFlag(len(req.LocalConfig.MCPServers) > 0),
 		"--local-skills", boolFlag(len(req.LocalConfig.Skills) > 0))
+	for _, selection := range []struct {
+		flag  string
+		names []string
+	}{{"--local-mcp-names", req.LocalConfig.MCPServers}, {"--local-skill-names", req.LocalConfig.Skills}} {
+		if len(selection.names) > 0 {
+			// String slices have no unsupported JSON values. Keep exact names;
+			// a boolean alone would reselect the legacy CLI defaults.
+			names, _ := json.Marshal(selection.names)
+			command = append(command, selection.flag, string(names))
+		}
+	}
+	return command
 }

@@ -75,6 +75,8 @@ installation is offered inspect, add/reinstall, uninstall, update, or repair.
   --local-native-stop true|false  Independent Local Stop selection
   --local-mcp true|false       Independent Local MCP selection
   --local-skills true|false    Independent Local skill selection
+  --local-mcp-names JSON      Exact MCP name array; requires --local-mcp true
+  --local-skill-names JSON    Exact skill name array; requires --local-skills true
   --installation-id ID
   --mcp-config PATH           Owned Codex MCP config to hand off; omit to use an existing config.toml in the selected Codex profile
   --claude-mcp-config PATH    Owned Claude MCP config to hand off; omit to use an existing .claude.json in the selected Claude profile
@@ -472,6 +474,7 @@ func parseSetupWizard(args []string) (setupwizard.Request, bool, error) {
 	allowed := map[string]bool{
 		"action": true, "agents": true, "hooks": true, "agent-notify": true,
 		"local-settings": true, "local-native-stop": true, "local-mcp": true, "local-skills": true,
+		"local-mcp-names": true, "local-skill-names": true,
 		"claude-hooks": true, "codex-hooks": true, "claude-agent-notify": true, "codex-agent-notify": true,
 		"package": true, "plugin-root": true, "control-root": true, "runtime-root": true, "global-config": true,
 		"codex-home": true, "claude-config": true, "client-executable": true, "helper": true,
@@ -662,12 +665,14 @@ func parseSetupWizard(args []string) (setupwizard.Request, bool, error) {
 		req.ClientExecutables = map[string]string{"cursor": req.ClientExecutable}
 	}
 	req.InstallationID = values["installation-id"]
+	localSelection := values["local-settings"] != "" || values["local-native-stop"] != "" || values["local-mcp"] != "" || values["local-skills"] != "" ||
+		values["local-mcp-names"] != "" || values["local-skill-names"] != ""
 	if containsProduct(req.Agents, "copilot-vscode") {
 		if len(req.Agents) != 1 || req.ScopeRoot == "" || req.ClientExecutable == "" {
 			return req, jsonOut, errors.New("invalid_arguments")
 		}
 		req.ClientExecutables = map[string]string{"copilot-vscode": req.ClientExecutable}
-		if values["local-settings"] != "" || values["local-native-stop"] != "" || values["local-mcp"] != "" || values["local-skills"] != "" {
+		if localSelection {
 			if values["local-settings"] != filepath.Join(req.ScopeRoot, "settings.json") {
 				return req, jsonOut, errors.New("invalid_arguments")
 			}
@@ -682,8 +687,10 @@ func parseSetupWizard(args []string) (setupwizard.Request, bool, error) {
 				}
 			}
 			for key, dest := range map[string]*[]string{"local-mcp": &req.LocalConfig.MCPServers, "local-skills": &req.LocalConfig.Skills} {
+				on := false
 				if value := values[key]; value != "" {
-					on, e := parseBoolFlag(value)
+					var e error
+					on, e = parseBoolFlag(value)
 					if e != nil {
 						return req, jsonOut, e
 					}
@@ -695,9 +702,27 @@ func parseSetupWizard(args []string) (setupwizard.Request, bool, error) {
 						*dest = []string{name}
 					}
 				}
+				nameFlag := "local-mcp-names"
+				if key == "local-skills" {
+					nameFlag = "local-skill-names"
+				}
+				if value := values[nameFlag]; value != "" {
+					var names []string
+					if !on || json.Unmarshal([]byte(value), &names) != nil || len(names) == 0 {
+						return req, jsonOut, errors.New("invalid_arguments")
+					}
+					seen := make(map[string]bool, len(names))
+					for _, name := range names {
+						if name == "" || seen[name] {
+							return req, jsonOut, errors.New("invalid_arguments")
+						}
+						seen[name] = true
+					}
+					*dest = names
+				}
 			}
 		}
-	} else if values["local-settings"] != "" || values["local-native-stop"] != "" || values["local-mcp"] != "" || values["local-skills"] != "" {
+	} else if localSelection {
 		return req, jsonOut, errors.New("invalid_arguments")
 	}
 	if values["mcp-config"] != "" || values["claude-mcp-config"] != "" {

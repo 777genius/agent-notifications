@@ -129,8 +129,11 @@ func stagePortableWindowsShortcut(id desktopIdentity, err error, key, home, targ
 		}
 		owned, ok := installruntime.OwnedFile(ledger, path)
 		actual, err := installruntime.Fingerprint(path)
-		if err != nil || !ok || !owned.Exists || owned.Link != "" || actual != owned {
+		if err != nil || !ok || !owned.Exists || owned.Link != "" || actual.Exists && actual != owned {
 			return nil, errors.New("local toast shortcut changed")
+		}
+		if !actual.Exists {
+			return &installruntime.File{Path: path, Before: actual, Remove: true}, nil
 		}
 		actualTarget, appID, arguments, err := InspectWindowsShortcut(path)
 		if err != nil || !SameWindowsFile(actualTarget, target) || appID != id.appID || arguments != "--help" {
@@ -199,6 +202,7 @@ func stageWindowsShortcutForIdentity(id desktopIdentity, home, target string, de
 		return nil, err
 	}
 	if desktop {
+		var ownedBefore installruntime.Identity
 		path, err := windowsShortcutPathFor(home, id)
 		if err != nil {
 			return nil, err
@@ -212,12 +216,15 @@ func stageWindowsShortcutForIdentity(id desktopIdentity, home, target string, de
 			}
 			observed, err := installruntime.Fingerprint(ownedPath)
 			owned, ok := installruntime.OwnedFile(ledger, ownedPath)
-			if err != nil || !ok || observed != owned {
+			if err != nil || !ok || !owned.Exists || owned.Link != "" || observed.Exists && observed != owned {
 				return nil, fmt.Errorf("%s toast shortcut changed", id.label)
 			}
-			actualTarget, appID, arguments, err := InspectWindowsShortcut(ownedPath)
-			if err == nil && SameWindowsFile(actualTarget, target) && appID == id.appID && arguments == "--help" {
-				return nil, nil
+			ownedBefore = observed
+			if observed.Exists {
+				actualTarget, appID, arguments, err := InspectWindowsShortcut(ownedPath)
+				if err == nil && SameWindowsFile(actualTarget, target) && appID == id.appID && arguments == "--help" {
+					return nil, nil
+				}
 			}
 		}
 		file, err := stageWindowsShortcutFor(home, target, id)
@@ -229,6 +236,11 @@ func stageWindowsShortcutForIdentity(id desktopIdentity, home, target string, de
 		}
 		if ownedPath != "" && ledger.Consumers[id.consumer].Registration == "" {
 			return nil, fmt.Errorf("%s toast shortcut path is owned by another consumer", id.label)
+		}
+		if ownedPath != "" {
+			// Rendering may take time. Preserve the admitted preimage, including
+			// absence, so a replacement cannot become the kernel's CAS authority.
+			file.Before = ownedBefore
 		}
 		return &file, nil
 	}

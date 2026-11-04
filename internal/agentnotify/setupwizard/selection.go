@@ -235,31 +235,52 @@ func repairRequestsMissingHooks(req Request, hookAgents []portable.Integration) 
 // preserveLiveUnits keeps omitted update/repair unit flags on the currently
 // managed units. Omission must not add a unit the user left off.
 func preserveLiveUnits(ctx context.Context, req Request, agents []portable.Integration) (Request, error) {
-	if !unitFlagsOmitted(req) {
+	preserveHooks := unitFlagsOmitted(req)
+	preserveNotify := false
+	for _, agent := range agents {
+		if agent != portable.CopilotVSCode && req.AgentNotify == nil && perClientNotify(req, agent) == nil {
+			preserveNotify = true
+			break
+		}
+	}
+	if !preserveHooks && !preserveNotify {
 		return req, nil
 	}
-	view, err := inspectUAPState(ctx, req)
-	if err != nil {
-		return req, err
-	}
 	notifyLive := map[string]bool{}
-	for _, installation := range view.Installations {
-		if req.InstallationID != "" && installation.InstallationID != req.InstallationID {
-			continue
+	if preserveNotify {
+		view, err := inspectUAPState(ctx, req)
+		if err != nil {
+			return req, err
 		}
-		for _, binding := range installation.Bindings {
-			if binding.ClientID != "" {
-				notifyLive[binding.ClientID] = true
+		for _, installation := range view.Installations {
+			if req.InstallationID != "" && installation.InstallationID != req.InstallationID {
+				continue
+			}
+			for _, binding := range installation.Bindings {
+				if binding.ClientID != "" {
+					notifyLive[binding.ClientID] = true
+				}
 			}
 		}
 	}
 	for _, agent := range agents {
-		hooks, notify := boolPtr(hooksManaged(req, agent)), boolPtr(notifyLive[portablesetup.ClientID(agent)])
+		if preserveHooks {
+			switch agent {
+			case portable.Claude:
+				req.ClaudeHooks = boolPtr(hooksManaged(req, agent))
+			case portable.Codex:
+				req.CodexHooks = boolPtr(hooksManaged(req, agent))
+			}
+		}
+		if req.AgentNotify != nil || perClientNotify(req, agent) != nil {
+			continue
+		}
+		notify := boolPtr(notifyLive[portablesetup.ClientID(agent)])
 		switch agent {
 		case portable.Claude:
-			req.ClaudeHooks, req.ClaudeAgentNotify = hooks, notify
+			req.ClaudeAgentNotify = notify
 		case portable.Codex:
-			req.CodexHooks, req.CodexAgentNotify = hooks, notify
+			req.CodexAgentNotify = notify
 		case portable.Pi:
 			req.PiAgentNotify = notify
 		case portable.Cursor:

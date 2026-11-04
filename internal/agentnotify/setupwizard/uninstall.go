@@ -205,7 +205,7 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 				out.Outcome, out.Reason = "incomplete", "client_executable_required"
 				return out, ErrRefused
 			}
-			if err := guardLiveProfile(mat, id.InstallationID, string(agent), clientConfig(req, agent)); err != nil {
+			if err := guardUninstallLiveProfile(mat, id.InstallationID, string(agent), clientConfig(req, agent)); err != nil {
 				if mapped, handled := mapAmbiguous(err, out); handled {
 					return mapped, err
 				}
@@ -292,13 +292,7 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 		if err != nil || out.Outcome == "incomplete" || out.Outcome == "invalid" {
 			return out, err
 		}
-		out.Outcome, out.Reason = "unchanged", "portable_absent"
-		for _, target := range out.Targets {
-			if target.Unit == "hooks" && target.Outcome == "completed" {
-				out.Outcome, out.Reason = "completed", ""
-				break
-			}
-		}
+		out = uninstallOutcome(out, "portable_absent")
 		reportProgress(req, "complete")
 		return out, nil
 	}
@@ -306,14 +300,11 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 		for _, agent := range notifyAgents {
 			out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "unchanged", Reason: "already_absent"})
 		}
-		if out.Outcome == "" {
-			out.Outcome, out.Reason = "unchanged", "already_absent"
-		}
 		out, err = removeHooks(out)
 		if err != nil || out.Outcome == "incomplete" || out.Outcome == "invalid" {
 			return out, err
 		}
-		out = markRetainedEmpty(mat, id.InstallationID, out)
+		out = markRetainedEmpty(mat, id.InstallationID, uninstallOutcome(out, "already_absent"))
 		reportProgress(req, "complete")
 		return out, nil
 	}
@@ -347,7 +338,6 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 			out.Outcome, out.Reason = "incomplete", "portable_remove_failed"
 			return out, fmt.Errorf("group remove returned %d results", len(got))
 		}
-		removed := 0
 		for i, agent := range notifyAgents {
 			if err := clearLiveProfile(dataRoots[i], string(agent)); err != nil {
 				out.Outcome, out.Reason = "incomplete", err.Error()
@@ -357,7 +347,6 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 				out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "unchanged", Reason: "already_absent"})
 				continue
 			}
-			removed++
 			out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "completed"})
 		}
 		generation, err = rereadWizardGeneration(req.ControlRoot, out.reservation)
@@ -370,21 +359,10 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 		if err != nil || out.Outcome == "incomplete" || out.Outcome == "invalid" {
 			return out, err
 		}
-		if removed == 0 {
-			if out.Reason == "" {
-				out.Reason = "already_absent"
-			}
-			out.Outcome = "unchanged"
-			out = markRetainedEmpty(mat, id.InstallationID, out)
-			reportProgress(req, "complete")
-			return out, nil
-		}
-		out.Outcome = "completed"
-		out = markRetainedEmpty(mat, id.InstallationID, out)
+		out = markRetainedEmpty(mat, id.InstallationID, uninstallOutcome(out, "already_absent"))
 		reportProgress(req, "complete")
 		return out, nil
 	}
-	removed := 0
 	expectedCodexSpec := managedCodexPluginSpec(mat, id.InstallationID)
 	for _, agent := range notifyAgents {
 		if agent == portable.Codex && !req.ExternalUninstalled {
@@ -433,7 +411,6 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 			out.Outcome, out.Reason = "incomplete", err.Error()
 			return out, err
 		}
-		removed++
 		generation, err = rereadWizardGeneration(req.ControlRoot, out.reservation)
 		if err != nil {
 			out.Outcome, out.Reason = "incomplete", err.Error()
@@ -446,19 +423,22 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 	if err != nil || out.Outcome == "incomplete" || out.Outcome == "invalid" {
 		return out, err
 	}
-	if removed == 0 {
-		if out.Reason == "" {
-			out.Reason = "already_absent"
-		}
-		out.Outcome = "unchanged"
-		out = markRetainedEmpty(mat, id.InstallationID, out)
-		reportProgress(req, "complete")
-		return out, nil
-	}
-	out.Outcome = "completed"
-	out = markRetainedEmpty(mat, id.InstallationID, out)
+	out = markRetainedEmpty(mat, id.InstallationID, uninstallOutcome(out, "already_absent"))
 	reportProgress(req, "complete")
 	return out, nil
+}
+
+// Successful removal reports the effects already recorded for its targets,
+// including hooks when every selected portable binding was already absent.
+func uninstallOutcome(out Result, absentReason string) Result {
+	out.Outcome, out.Reason = "unchanged", absentReason
+	for _, target := range out.Targets {
+		if (target.Unit == "hooks" || target.Unit == "agent-notify") && target.Outcome == "completed" {
+			out.Outcome, out.Reason = "completed", ""
+			break
+		}
+	}
+	return out
 }
 
 func managedCodexPluginSpec(mat portablesetup.Materializer, installationID string) string {

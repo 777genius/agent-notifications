@@ -51,3 +51,45 @@ func TestUninstallAbsentPortablePreservesHookRemoval(t *testing.T) {
 		t.Fatalf("absent unchanged units reported removal: %+v %v", unchanged, err)
 	}
 }
+
+func TestUninstallRetainedEmptyPreservesHookRemoval(t *testing.T) {
+	req := installedCodexHooksOnlyRequest(t)
+	probe := buildProbe(t)
+	req.PackageRoot = filepath.Join(filepath.Dir(req.ControlRoot), "package")
+	writePackage(t, req.PackageRoot, probe)
+	req.ScopeRoot = filepath.Join(filepath.Dir(req.ControlRoot), "scope")
+	if err := os.MkdirAll(req.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	req.Hooks, req.AgentNotify = boolPtr(false), boolPtr(true)
+	req.ClientExecutable, req.Helper = probe, probe
+	req.Agents = []string{"claude"}
+	req.ClaudeConfig = filepath.Join(filepath.Dir(req.ControlRoot), "claude")
+	if err := os.MkdirAll(req.ClaudeConfig, 0700); err != nil {
+		t.Fatal(err)
+	}
+	req.ClaudeRunner = listingRunner{configRoot: req.ClaudeConfig}
+	installed, err := Run(testCtx(t), req)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("install portable fixture: %+v %v", installed, err)
+	}
+	req.InstallationID = installed.InstallationID
+	req.Action, req.ExternalUninstalled = ActionUninstall, true
+	removed, err := Run(testCtx(t), req)
+	if err != nil || removed.Outcome != "completed" || !removed.DataRetained || !codexsetup.HasManagedHooks(req.CodexHome) {
+		t.Fatalf("retire portable fixture while retaining hooks: %+v %v", removed, err)
+	}
+	req.Hooks = boolPtr(true)
+	req.Agents = []string{"claude", "codex"}
+	removed, err = Run(testCtx(t), req)
+	if err != nil || codexsetup.HasManagedHooks(req.CodexHome) || !removed.DataRetained {
+		t.Fatalf("remove hooks beside retained data: %+v %v", removed, err)
+	}
+	if removed.Outcome != "completed" || removed.Reason != "" {
+		t.Fatalf("completed hooks were relabeled already absent: %+v", removed)
+	}
+	unchanged, err := Run(testCtx(t), req)
+	if err != nil || unchanged.Outcome != "unchanged" || unchanged.Reason != "already_absent" || !unchanged.DataRetained {
+		t.Fatalf("empty retry invented a completed removal: %+v %v", unchanged, err)
+	}
+}

@@ -96,6 +96,10 @@ func run(ctx context.Context, req *Request) (Result, error) {
 			ev.out.Outcome, ev.out.Reason = "conflict", "concurrent_change"
 			return ev.out, ErrRefused
 		}
+		if err := verifyWizardKernelRecovery(ctx, *req, ev.snap, ev.runtimeRoot, ev.notifyAgents); err != nil {
+			ev.out.Outcome, ev.out.Reason = "incomplete", "recovery_required"
+			return ev.out, err
+		}
 		release, err := installruntime.AcquireCoordinatorLease(ctx, req.ControlRoot)
 		if err != nil {
 			ev.out.Outcome, ev.out.Reason = "incomplete", "recovery_required"
@@ -156,6 +160,9 @@ func evaluate(ctx context.Context, req *Request, requireYes bool) evaluated {
 		out.Outcome, out.Reason = "invalid", "context_required"
 		return evaluated{out: out, err: ErrRefused, stop: true}
 	}
+	// Both pending-intent restoration and discovery fill omitted MCP paths.
+	// Plan and Run own those additions, including when evaluation later refuses.
+	req.MCPConfig = maps.Clone(req.MCPConfig)
 	switch req.Action {
 	case ActionInstall, ActionUninstall, ActionInspect, ActionUpdate, ActionRepair:
 	default:

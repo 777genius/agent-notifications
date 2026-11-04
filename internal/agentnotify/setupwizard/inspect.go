@@ -2,6 +2,7 @@ package setupwizard
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -188,7 +189,7 @@ func inspect(ctx context.Context, req Request, agents []portable.Integration, sn
 					continue
 				}
 				found = true
-				profile, _ := recordedLiveProfile(installation.DataReceipts[binding.DataReceiptID].Locator, string(agent))
+				profile, profileErr := recordedLiveProfile(installation.DataReceipts[binding.DataReceiptID].Locator, string(agent))
 				digest := installation.Source.TreeDigest
 				if binding.PackageRevision != nil && binding.PackageRevision.TreeDigest != "" {
 					digest = binding.PackageRevision.TreeDigest
@@ -198,6 +199,10 @@ func inspect(ctx context.Context, req Request, agents []portable.Integration, sn
 					Reason: binding.ClientBindingID, Profile: profile,
 					TreeDigest: digest,
 				})
+				if profileErr != nil {
+					out.Outcome, out.Reason = "incomplete", "live_profile_unavailable"
+					return out, fmt.Errorf("live profile for binding %s: %w", binding.ClientBindingID, profileErr)
+				}
 			}
 		}
 		if !found {

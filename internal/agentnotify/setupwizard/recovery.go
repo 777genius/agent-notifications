@@ -53,8 +53,15 @@ func recoverWizardJournals(ctx context.Context, mat portablesetup.Materializer, 
 	if len(agents) == 0 {
 		return nil
 	}
-	agent := agents[0]
-	return mat.RecoverJournals(ctx, portablesetup.MaterializeRequest{
+	requests := make([]portablesetup.MaterializeRequest, 0, len(agents))
+	for _, agent := range agents {
+		requests = append(requests, wizardRecoveryRequest(id, req, agent))
+	}
+	return mat.RecoverGroupJournals(ctx, requests)
+}
+
+func wizardRecoveryRequest(id portablesetup.Identity, req Request, agent portable.Integration) portablesetup.MaterializeRequest {
+	return portablesetup.MaterializeRequest{
 		LocalConfig:      req.LocalConfig,
 		Identity:         id,
 		Integration:      agent,
@@ -62,7 +69,31 @@ func recoverWizardJournals(ctx context.Context, mat portablesetup.Materializer, 
 		ClientConfigRoot: clientConfig(req, agent),
 		ClientExecutable: clientExecutable(req, agent),
 		HelperExecutable: req.Helper,
-	})
+	}
+}
+
+func verifyWizardKernelRecovery(ctx context.Context, req Request, snap installruntime.InstalledSnapshot, runtimeRoot string, agents []portable.Integration) error {
+	var selected []portable.Integration
+	for _, agent := range agents {
+		if agent == portable.CopilotVSCode || agent == portable.Cursor {
+			selected = append(selected, agent)
+		}
+	}
+	if len(selected) == 0 {
+		return nil
+	}
+	mat, err := materializer(req, snap, runtimeRoot)
+	if err != nil {
+		return err
+	}
+	for _, agent := range selected {
+		// The read-only check addresses stored installation/binding authority.
+		// It does not reserve a new identity or invoke mutation callbacks.
+		if err := mat.VerifyRecoveryAuthority(ctx, wizardRecoveryRequest(portablesetup.Identity{}, req, agent)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func recoveryIDs(view uapinstaller.Inspection) []string {

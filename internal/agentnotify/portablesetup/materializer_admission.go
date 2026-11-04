@@ -43,9 +43,52 @@ func (m Materializer) RecoverJournals(ctx context.Context, req MaterializeReques
 	return m.recoverOwnedJournals(ctx, req)
 }
 
+// RecoverGroupJournals checks every selected client's recorded authority before
+// recovering the shared kernel and UAP journals once.
+func (m Materializer) RecoverGroupJournals(ctx context.Context, reqs []MaterializeRequest) error {
+	return m.recoverOwnedJournals(ctx, reqs...)
+}
+
 // recoverOwnedJournals restores a pending Notifications kernel journal, then
 // releases the coordinator lease before UAP Recover (§7.4.2).
-func (m Materializer) recoverOwnedJournals(ctx context.Context, req MaterializeRequest) error {
+func (m Materializer) recoverOwnedJournals(ctx context.Context, reqs ...MaterializeRequest) error {
+	if ctx == nil || len(reqs) == 0 {
+		return ErrPreflight
+	}
+	for _, req := range reqs[1:] {
+		if physicalRoot(req.Identity.ControlRoot) != physicalRoot(reqs[0].Identity.ControlRoot) {
+			return fmt.Errorf("%w: group recovery requires one control root", ErrPreflight)
+		}
+	}
+	for _, req := range reqs {
+		if err := m.VerifyRecoveryAuthority(ctx, req); err != nil {
+			return err
+		}
+	}
+	req := reqs[0]
+	release, err := installruntime.AcquireCoordinatorLease(ctx, req.Identity.ControlRoot)
+	if err != nil {
+		return err
+	}
+	_, recoverErr := installruntime.Recover(ctx, req.Identity.ControlRoot)
+	release()
+	if recoverErr != nil {
+		return recoverErr
+	}
+	eng, err := m.engine(req, new(uint64), nil)
+	if err != nil {
+		return err
+	}
+	_, err = eng.RecoverCurrent(ctx)
+	return err
+}
+
+// VerifyRecoveryAuthority checks the selected client's recorded authority
+// without acquiring a mutation lease or replaying either journal.
+func (m Materializer) VerifyRecoveryAuthority(ctx context.Context, req MaterializeRequest) error {
+	if ctx == nil {
+		return ErrPreflight
+	}
 	if req.Integration == portable.CopilotVSCode {
 		if err := m.validate(req, false); err != nil {
 			return err
@@ -107,21 +150,7 @@ func (m Materializer) recoverOwnedJournals(ctx context.Context, req MaterializeR
 			}
 		}
 	}
-	release, err := installruntime.AcquireCoordinatorLease(ctx, req.Identity.ControlRoot)
-	if err != nil {
-		return err
-	}
-	_, recoverErr := installruntime.Recover(ctx, req.Identity.ControlRoot)
-	release()
-	if recoverErr != nil {
-		return recoverErr
-	}
-	eng, err := m.engine(req, new(uint64), nil)
-	if err != nil {
-		return err
-	}
-	_, err = eng.RecoverCurrent(ctx)
-	return err
+	return nil
 }
 
 func explicitAbs(p string) bool {
