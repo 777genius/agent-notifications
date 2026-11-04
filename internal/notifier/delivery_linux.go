@@ -27,6 +27,9 @@ type sessionNotifications interface {
 type FreedesktopDelivery struct {
 	Clock BootClock
 	Open  func(context.Context) (sessionNotifications, error)
+	// AgentNotifyPresentation is set only by the explicit MCP composition.
+	// Other products retain their existing icon and system-sound contract.
+	AgentNotifyPresentation bool
 }
 
 var _ notification.DeliveryPort = (*FreedesktopDelivery)(nil)
@@ -120,6 +123,11 @@ func (d *FreedesktopDelivery) checkAndDeliver(ctx context.Context, r notificatio
 	if readOnly {
 		return finish("ready", "permission_authorized")
 	}
+	if d.AgentNotifyPresentation {
+		if native, ok := session.(*dbusNotifications); ok {
+			native.agentNotifyPresentation = true
+		}
+	}
 	_, err = session.Submit(operation, r)
 	if err != nil {
 		// Notify is a one-way D-Bus handoff. Once invoked, an error cannot prove
@@ -134,6 +142,8 @@ type dbusNotifications struct {
 	capabilitiesOnce sync.Once
 	capabilitiesErr  error
 	bodyMarkup       bool
+	soundAvailable   bool
+	agentNotifyPresentation bool
 }
 
 func openSessionNotifications(ctx context.Context) (sessionNotifications, error) {
@@ -172,8 +182,11 @@ func (n *dbusNotifications) Ready(ctx context.Context) error {
 		var capabilities []string
 		n.capabilitiesErr = n.conn.Object("org.freedesktop.Notifications", "/org/freedesktop/Notifications").CallWithContext(ctx, "org.freedesktop.Notifications.GetCapabilities", 0).Store(&capabilities)
 		for _, capability := range capabilities {
-			if capability == "body-markup" {
+			switch capability {
+			case "body-markup":
 				n.bodyMarkup = true
+			case "sound":
+				n.soundAvailable = true
 			}
 		}
 	})
@@ -196,6 +209,21 @@ func (n *dbusNotifications) Submit(ctx context.Context, r notification.Request) 
 	if r.Silent {
 		hints["suppress-sound"] = dbus.MakeVariant(true)
 	}
+	icon := ""
+	if n.agentNotifyPresentation {
+		// Use immutable embedded assets: no cache path, symlink or user-controlled
+		// icon can be read or adopted by a running MCP notification.
+		icon = "claude-notifications"
+		if image, ok := agentNotifyImageData(); ok {
+			hints["image-data"] = dbus.MakeVariant(image)
+		}
+		// Hook notifications play custom sounds separately; explicit MCP
+		// asks the desktop for one themed cue only when consent and the
+		// freedesktop server's sound capability agree.
+		if !r.Silent && r.Policy.SoundEnabled && n.soundAvailable {
+			hints["sound-name"] = dbus.MakeVariant("message-new-instant")
+		}
+	}
 	var id uint32
 	body := desktopBodyWithSubtitle(r.Content)
 	// Body markup is XML-based. Literal session/question text must not create
@@ -203,7 +231,7 @@ func (n *dbusNotifications) Submit(ctx context.Context, r notification.Request) 
 	if n.bodyMarkup {
 		body = html.EscapeString(body)
 	}
-	err := n.conn.Object("org.freedesktop.Notifications", "/org/freedesktop/Notifications").CallWithContext(ctx, "org.freedesktop.Notifications.Notify", 0, "agent-notifications", uint32(0), "", r.Content.Title, body, []string{}, hints, expire).Store(&id)
+	err := n.conn.Object("org.freedesktop.Notifications", "/org/freedesktop/Notifications").CallWithContext(ctx, "org.freedesktop.Notifications.Notify", 0, "agent-notifications", uint32(0), icon, r.Content.Title, body, []string{}, hints, expire).Store(&id)
 	return id, err
 }
 
