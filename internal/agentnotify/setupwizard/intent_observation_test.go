@@ -68,7 +68,7 @@ func TestInspectUntrustedPendingIntentIsIncomplete(t *testing.T) {
 			before := policyConflictFiles(t, filepath.Dir(control))
 			var got Result
 			if mode == "tampered" {
-				got = reportPendingWizardIntent(Request{ControlRoot: control}, observed, Result{Action: ActionInspect, Outcome: "completed"})
+				got = reportPendingWizardIntent(Request{ControlRoot: control}, observed, Result{Action: string(ActionInspect), Outcome: "completed"})
 			} else {
 				got, err = Run(ctx, Request{Action: ActionInspect, Agents: []string{"claude"}, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global, Helper: primary})
 				if err != nil {
