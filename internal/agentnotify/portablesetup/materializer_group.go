@@ -297,7 +297,7 @@ func (m Materializer) RemoveGroup(ctx context.Context, reqs []MaterializeRequest
 		OperationID: reqs[0].OperationID, ClientExecutable: engineReq.ClientExecutable,
 		ExternalUninstalled: reqs[0].ExternalUninstalled || reqs[1].ExternalUninstalled,
 		Targets:             targets,
-	}, reqs[0])
+	}, reqs...)
 	if err != nil {
 		return nil, err
 	}

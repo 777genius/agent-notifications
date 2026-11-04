@@ -278,7 +278,12 @@ func evaluate(ctx context.Context, req *Request, requireYes bool) evaluated {
 		return evaluated{agents: agents, snap: snap, runtimeRoot: runtimeRoot, out: out}
 	}
 	if req.Action == ActionUpdate || req.Action == ActionRepair {
-		*req = preserveLiveUnits(ctx, *req, agents)
+		preserved, err := preserveLiveUnits(ctx, *req, agents)
+		if err != nil {
+			out.Outcome, out.Reason = "incomplete", "existing_units_unavailable"
+			return evaluated{agents: agents, snap: snap, runtimeRoot: runtimeRoot, out: out, err: err, stop: true}
+		}
+		*req = preserved
 	}
 	hookAgents, notifyAgents := selectedUnits(*req, agents)
 	if len(hookAgents) == 0 && len(notifyAgents) == 0 {

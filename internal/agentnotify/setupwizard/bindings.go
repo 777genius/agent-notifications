@@ -92,6 +92,7 @@ func bindRepairPackages(ctx context.Context, req *Request, snap installruntime.I
 	if len(candidates) == 0 {
 		return
 	}
+	req.PackageRoots = copyPackageRoots(req.PackageRoots)
 	if req.PackageRoots == nil {
 		req.PackageRoots = map[string]string{}
 	}

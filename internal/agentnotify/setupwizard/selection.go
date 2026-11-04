@@ -234,17 +234,22 @@ func repairRequestsMissingHooks(req Request, hookAgents []portable.Integration) 
 
 // preserveLiveUnits keeps omitted update/repair unit flags on the currently
 // managed units. Omission must not add a unit the user left off.
-func preserveLiveUnits(ctx context.Context, req Request, agents []portable.Integration) Request {
+func preserveLiveUnits(ctx context.Context, req Request, agents []portable.Integration) (Request, error) {
 	if !unitFlagsOmitted(req) {
-		return req
+		return req, nil
+	}
+	view, err := inspectUAPState(ctx, req)
+	if err != nil {
+		return req, err
 	}
 	notifyLive := map[string]bool{}
-	if view, err := inspectUAPState(ctx, req); err == nil {
-		for _, installation := range view.Installations {
-			for _, binding := range installation.Bindings {
-				if binding.ClientID != "" {
-					notifyLive[binding.ClientID] = true
-				}
+	for _, installation := range view.Installations {
+		if req.InstallationID != "" && installation.InstallationID != req.InstallationID {
+			continue
+		}
+		for _, binding := range installation.Bindings {
+			if binding.ClientID != "" {
+				notifyLive[binding.ClientID] = true
 			}
 		}
 	}
@@ -261,7 +266,7 @@ func preserveLiveUnits(ctx context.Context, req Request, agents []portable.Integ
 			req.CursorAgentNotify = notify
 		}
 	}
-	return req
+	return req, nil
 }
 
 func perClientHooks(req Request, agent portable.Integration) *bool {

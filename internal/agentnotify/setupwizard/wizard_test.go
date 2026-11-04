@@ -18,6 +18,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -8539,7 +8540,7 @@ func TestLocalExplicitSelectionAndIntentRetry(t *testing.T) {
 		t.Run(strconv.Itoa(bits), func(t *testing.T) {
 			cfg := &vscode.LocalConfig{ProfileSettingsPath: filepath.Join(root, "settings.json"), QualifiedTuple: vscode.QualifiedDarwinTESTTuple(), TargetShell: vscodelocalhooks.Target{Shell: vscodelocalhooks.MacOSSH}, NativeStop: bits&1 != 0}
 			if bits&2 != 0 {
-				cfg.MCPServers = []string{"agent-notify"}
+				cfg.MCPServers = []string{"agent-notifications"}
 			}
 			if bits&4 != 0 {
 				cfg.Skills = []string{"agent-notifications"}
@@ -8563,9 +8564,15 @@ func TestLocalExplicitSelectionAndIntentRetry(t *testing.T) {
 			if err := json.Unmarshal(body, &durable); err != nil {
 				t.Fatal(err)
 			}
+			// The current intent persists selected unit booleans, not component
+			// names. With no supplied LocalConfig, recovery uses product defaults.
 			retry := retryRequestFromIntent(Request{Helper: req.Helper, ClientExecutable: req.ClientExecutable}, durable)
-			if retry.LocalConfig == nil || retry.LocalConfig.ProfileSettingsPath != cfg.ProfileSettingsPath || retry.LocalConfig.QualifiedTuple != cfg.QualifiedTuple || retry.LocalConfig.TargetShell != cfg.TargetShell || retry.LocalConfig.NativeStop != cfg.NativeStop || len(retry.LocalConfig.MCPServers) != len(cfg.MCPServers) || len(retry.LocalConfig.Skills) != len(cfg.Skills) {
+			if retry.LocalConfig == nil || retry.LocalConfig.ProfileSettingsPath != cfg.ProfileSettingsPath || retry.LocalConfig.QualifiedTuple != cfg.QualifiedTuple || retry.LocalConfig.TargetShell != cfg.TargetShell || retry.LocalConfig.NativeStop != cfg.NativeStop || !slices.Equal(retry.LocalConfig.MCPServers, cfg.MCPServers) || !slices.Equal(retry.LocalConfig.Skills, cfg.Skills) {
 				t.Fatalf("Local retry scope lost: %+v", retry.LocalConfig)
+			}
+			resumed, _, err := restoreOmittedFromIntent(Request{Action: ActionInstall}, nil, durable)
+			if err != nil || resumed.LocalConfig == nil || !slices.Equal(resumed.LocalConfig.MCPServers, cfg.MCPServers) || !slices.Equal(resumed.LocalConfig.Skills, cfg.Skills) {
+				t.Fatalf("Local resumed component selection changed: %+v %v", resumed.LocalConfig, err)
 			}
 			cmd := strings.Join(localRetryCommand(retry), " ")
 			for _, expected := range []string{"--local-settings " + cfg.ProfileSettingsPath, "--helper " + req.Helper, "--local-native-stop " + strconv.FormatBool(cfg.NativeStop), "--local-mcp " + strconv.FormatBool(bits&2 != 0), "--local-skills " + strconv.FormatBool(bits&4 != 0)} {

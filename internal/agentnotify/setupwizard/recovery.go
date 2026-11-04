@@ -428,10 +428,7 @@ func unitsUniform(want map[string]unitSelection) (unitSelection, bool) {
 }
 
 func applyIntentUnits(req Request, want map[string]unitSelection) Request {
-	if req.LocalConfig != nil {
-		cp := *req.LocalConfig
-		req.LocalConfig = &cp
-	}
+	req.LocalConfig = copyLocalConfig(req.LocalConfig)
 	if uniform, ok := unitsUniform(want); ok && !uniform.local {
 		req.Hooks = boolPtr(uniform.hooks)
 		req.AgentNotify = boolPtr(uniform.notify)
@@ -455,11 +452,16 @@ func applyIntentUnits(req Request, want map[string]unitSelection) Request {
 			}
 			req.LocalConfig.TargetShell.Shell = vscodelocalhooks.Shell(req.LocalConfig.QualifiedTuple.TargetShell)
 			req.LocalConfig.NativeStop = sel.nativeStop
-			req.LocalConfig.MCPServers, req.LocalConfig.Skills = nil, nil
-			if sel.mcp {
+			// Intent units record enablement, not component names. Preserve an
+			// explicit package selection; only omitted names use product defaults.
+			if !sel.mcp {
+				req.LocalConfig.MCPServers = nil
+			} else if len(req.LocalConfig.MCPServers) == 0 {
 				req.LocalConfig.MCPServers = []string{"agent-notifications"}
 			}
-			if sel.skills {
+			if !sel.skills {
+				req.LocalConfig.Skills = nil
+			} else if len(req.LocalConfig.Skills) == 0 {
 				req.LocalConfig.Skills = []string{"agent-notifications"}
 			}
 		case "pi":

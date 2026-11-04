@@ -37,15 +37,18 @@ func contextNativeFixture(t *testing.T) (contextNativeOperations, *contextNative
 		},
 	}
 	ops.launch = func(ctx context.Context, request, receipt string) error {
+		// Match OwnedRequest.consume: claim before reading the request or
+		// publishing .started, so cancellation cannot be followed by a new
+		// synthetic lease after the helper has already announced its identity.
+		if err := writePrivate(strings.TrimSuffix(request, ".request")+".claim", []byte{}); err != nil {
+			t.Fatal(err)
+		}
 		data, err := readPrivate(request, 16384)
 		if err != nil || json.Unmarshal(data, &captured) != nil {
 			t.Fatal("request unavailable", err)
 		}
 		started, _ := json.Marshal(contextNativeStarted{1, captured.CorrelationID, captured.Nonce, process})
 		if err := writePrivate(strings.TrimSuffix(request, ".request")+".started", started); err != nil {
-			t.Fatal(err)
-		}
-		if err := writePrivate(strings.TrimSuffix(request, ".request")+".claim", []byte{}); err != nil {
 			t.Fatal(err)
 		}
 		response, _ := json.Marshal(map[string]any{"schemaVersion": 1, "correlationID": captured.CorrelationID, "nonce": captured.Nonce, "notificationID": captured.CorrelationID, "status": "submitted", "reason": "os_accepted", "retrySafe": false})

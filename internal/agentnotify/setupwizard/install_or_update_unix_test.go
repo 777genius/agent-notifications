@@ -75,8 +75,8 @@ func TestVerifyInstallOrUpdateRejectsIncompleteInspection(t *testing.T) {
 	if err != nil || !bytes.Equal(before, after) {
 		t.Fatalf("verification replayed pending journal: %v", err)
 	}
-	// An inspection error must retain the mutation action too: the CLI gives
-	// inspect its intentional read-only exit semantics, even with an error.
+	// An inspection error must retain the mutation action too. Result.ExitCode
+	// carries inspection's reporting convention; the CLI separately checks errors.
 	if err := os.WriteFile(path, []byte("{"), 0600); err != nil {
 		t.Fatal(err)
 	}

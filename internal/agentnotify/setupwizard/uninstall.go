@@ -287,6 +287,12 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 			return out, err
 		}
 		out.Outcome, out.Reason = "unchanged", "portable_absent"
+		for _, target := range out.Targets {
+			if target.Unit == "hooks" && target.Outcome == "completed" {
+				out.Outcome, out.Reason = "completed", ""
+				break
+			}
+		}
 		reportProgress(req, "complete")
 		return out, nil
 	}

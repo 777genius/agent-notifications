@@ -172,7 +172,7 @@ func (m Materializer) apply(ctx context.Context, eng *uapinstaller.Engine, req u
 
 // prepareRemove is the §5.5.2 read-only removal preflight. It refuses a pending
 // journal and verifies the managed artifact before locator revoke or Apply.
-func (m Materializer) prepareRemove(ctx context.Context, eng *uapinstaller.Engine, req uapinstaller.Request, expected MaterializeRequest) (*uapinstaller.PreparedOperation, error) {
+func (m Materializer) prepareRemove(ctx context.Context, eng *uapinstaller.Engine, req uapinstaller.Request, expected ...MaterializeRequest) (*uapinstaller.PreparedOperation, error) {
 	view, err := eng.Inspect(ctx)
 	if err != nil {
 		return nil, err
@@ -189,26 +189,40 @@ func (m Materializer) prepareRemove(ctx context.Context, eng *uapinstaller.Engin
 		return nil, err
 	}
 
-	// Removal freezes recorded delivery, including its original Stop/components.
-	// Requested deselection is not replacement removal authority.
-	if expected.Integration == portable.CopilotVSCode {
-		facts, ok := prepared.Plan().SelectedDelivery.LocalFacts()
-		if len(prepared.Plan().Targets) > 0 {
-			for _, target := range prepared.Plan().Targets {
-				if target.ClientID == ClientID(expected.Integration) {
-					facts, ok = target.SelectedDelivery.LocalFacts()
+	plan := prepared.Plan()
+	for index, selected := range expected {
+		// Removal freezes every selected Local client's recorded delivery,
+		// including its original Stop/components. Requested deselection is
+		// not replacement removal authority, regardless of group order.
+		if selected.Integration == portable.CopilotVSCode {
+			facts, ok := plan.SelectedDelivery.LocalFacts()
+			alreadyAbsent := false
+			if len(plan.Targets) > 0 {
+				ok = false
+				for _, target := range plan.Targets {
+					if target.ClientID == ClientID(selected.Integration) {
+						facts, ok = target.SelectedDelivery.LocalFacts()
+						// UAP gives an absent target no delivery authority.
+						// Only this explicit no-op may skip its comparison.
+						alreadyAbsent = target.NoChange
+						break
+					}
 				}
 			}
+			if !alreadyAbsent && (!ok || selected.LocalConfig == nil || facts.SettingsPath != selected.LocalConfig.ProfileSettingsPath || facts.Tuple != selected.LocalConfig.QualifiedTuple) {
+				_ = prepared.Close()
+				return nil, ErrPreflight
+			}
+			selected.LocalConfig = nil
 		}
-		if !ok || expected.LocalConfig == nil || facts.SettingsPath != expected.LocalConfig.ProfileSettingsPath || facts.Tuple != expected.LocalConfig.QualifiedTuple {
-			_ = prepared.Close()
-			return nil, ErrPreflight
+		// The enclosing plan retains the existing primary source/helper
+		// identity check; sibling delivery authority is checked above.
+		if index == 0 {
+			if err := confirmPreparedIdentity(selected, plan); err != nil {
+				_ = prepared.Close()
+				return nil, err
+			}
 		}
-		expected.LocalConfig = nil
-	}
-	if err := confirmPreparedIdentity(expected, prepared.Plan()); err != nil {
-		_ = prepared.Close()
-		return nil, err
 	}
 	return prepared, nil
 }

@@ -76,6 +76,16 @@ as follow-up debt. Its shared proof/lease owner is tightly coupled to the curren
 admission model. Do not replace that owner with an opaque generic authorization
 object during this refactor.
 
+Two inherited limitations identified during review have explicit follow-ups:
+[binding-keyed client facts #591](https://github.com/777genius/agent-notifications/issues/591)
+requires coordinated SDK indexing and legacy sidecar migration;
+[omitted Local component recovery #592](https://github.com/777genius/agent-notifications/issues/592)
+requires verified frozen-package resolution before Local adapter composition.
+Neither can be fixed safely by changing a map key or one component-name literal.
+This pass preserves available exact Local selections and keeps refusals when
+the selected names or source cannot be proved. It does not claim reconstruction
+of arbitrary component names from the boolean-only durable intent.
+
 ## Implementation slices
 
 ### S1. Product-owned hook state and lifecycle
@@ -265,6 +275,30 @@ this refactor must not silently alter the already sealed release source.
   mixed group-removal facts, scoped inspection and native cleanup semantics.
   These corrections stay inside the original result, admission and ownership
   boundaries; they introduce no new framework, retries or schema migration.
+- Additional review round: group removal checks every live selected Local
+  profile before revocation, independent of request order, while an explicitly
+  already-absent target remains an idempotent no-op. Real mixed Local/Codex
+  lifecycle regressions cover both orderings, mismatch refusal without writes,
+  exact cleanup and the absent sibling case. A first draft that refused absent
+  Local targets was caught by independent review and corrected before commit.
+- Caller-state and reporting corrections: repair copies the caller's package
+  map before filling per-client roots; omitted update/repair unit selection
+  propagates inspection failures and honors the requested installation ID.
+  Removing hooks still reports completed when the portable target was already
+  absent. The public inspect command returns a failure exit for an actual
+  inspection error, while a valid readable pending state remains reportable.
+- Local recovery review: preserve supplied exact MCP/skill selections when
+  restoring enabled units and clear only disabled units. The proposed blanket
+  legacy-name replacement was rejected because the shipped package declares
+  the canonical name. Exact-selection lifecycle coverage includes both package
+  spellings; omitted legacy source reconstruction is tracked in #592, not
+  represented as solved by the boolean intent tests.
+- CI fixture correction: a controlled delayed-publication reproduction showed
+  the native cancellation fixture recreating a claim after revocation. It now
+  claims before reading the request and publishing the started marker, matching
+  the existing Swift protocol. The same reproduction and focused race tests
+  pass without changing production code, deadlines or revocation assertions.
+  The matching CI failure does not expose its precise scheduling interleaving.
 - Local verification: complete hook, Gemini event and portable materializer
   suites pass with the race detector; focused finalization, recovery
   presentation, selection and CLI contract regressions pass. Real fixture
