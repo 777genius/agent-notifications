@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"maps"
+	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -18,7 +19,7 @@ import (
 )
 
 func TestInspectUntrustedPendingIntentIsIncomplete(t *testing.T) {
-	for _, mode := range []string{"unreadable", "mismatched", "valid"} {
+	for _, mode := range []string{"unreadable", "mismatched", "tampered", "valid"} {
 		t.Run(mode, func(t *testing.T) {
 			ctx := testCtx(t)
 			control, runtime, global, primary, generation := managedRuntime(t)
@@ -44,6 +45,18 @@ func TestInspectUntrustedPendingIntentIsIncomplete(t *testing.T) {
 				Files: []installruntime.File{{Path: path, Data: body, Mode: 0600}},
 			}); err != nil {
 				t.Fatal(err)
+			}
+			if mode == "tampered" {
+				// A parseable replacement with the same pending ID must not supply
+				// profile paths for the suggested resume command.
+				intent.Targets[0].Profile = filepath.Join(filepath.Dir(control), "TEST-forged-profile")
+				tampered, marshalErr := json.Marshal(intent)
+				if marshalErr != nil {
+					t.Fatal(marshalErr)
+				}
+				if writeErr := os.WriteFile(path, tampered, 0600); writeErr != nil {
+					t.Fatal(writeErr)
+				}
 			}
 			before := policyConflictFiles(t, filepath.Dir(control))
 			got, err := Run(ctx, Request{Action: ActionInspect, Agents: []string{"claude"}, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global, Helper: primary})
