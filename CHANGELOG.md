@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.51.0] - 2026-11-03
+
+### Added
+- Share the agent-notify notification backend across simultaneous chat sessions while preserving scoped lifecycle and delivery behavior ([#568](https://github.com/777genius/agent-notifications/pull/568)).
+- Add bounded opt-in Gemini hook admission diagnostics with guarded collection and negative tests.
+- Improve AI-agent discovery resources and refresh installation and agent support guidance ([#581](https://github.com/777genius/agent-notifications/pull/581)).
+
+### Fixed
+- Recover exact checksum-verified Linux Claude marketplace cache files after reinstall without overwriting foreign edits, and fail closed when /init cannot validate managed ownership ([#586](https://github.com/777genius/agent-notifications/pull/586), [#585](https://github.com/777genius/agent-notifications/issues/585)).
+- Make Pages deployment reruns safe and verify the live website ([#583](https://github.com/777genius/agent-notifications/pull/583)).
+- Tighten release source-CI provenance and preserve additional offline Codex hook diagnostics ([#576](https://github.com/777genius/agent-notifications/pull/576), [#584](https://github.com/777genius/agent-notifications/pull/584)).
+
+### Platform notes
+- The basic five-platform release profile requires independent same-source signed and notarized macOS artifacts, downloadable canaries and disposable Codex checks before publication. Full eleven-cell OpenCode, native desktop visibility, physical Intel and cold-start qualification are not claimed.
+
+
 ## [1.50.1] - 2026-11-02
 
 ### Fixed
