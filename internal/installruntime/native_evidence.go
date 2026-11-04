@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
 	"github.com/777genius/agent-notifications/internal/notifier/nativeprotocol"
 )
 

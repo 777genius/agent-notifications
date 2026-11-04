@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"path/filepath"
 	"strings"
+
 	"github.com/777genius/agent-notifications/internal/strictjson"
 )
 
