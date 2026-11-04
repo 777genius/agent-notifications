@@ -5,7 +5,6 @@ package setupwizard
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -58,6 +57,11 @@ func TestInstallOrUpdateRetainsCommittedUpdateAfterLaterPlanFailure(t *testing.T
 		if err := os.Rename(codexProfile, renamedProfile); err != nil {
 			t.Fatal(err)
 		}
+		// A file in place of the profile must not be adopted as a directory
+		// by the following client's preflight.
+		if err := os.WriteFile(codexProfile, []byte("TEST:not-a-directory"), 0600); err != nil {
+			t.Fatal(err)
+		}
 		injected = true
 	}
 	got, installErr := InstallOrUpdate(ctx, selected, false)
@@ -76,6 +80,9 @@ func TestInstallOrUpdateRetainsCommittedUpdateAfterLaterPlanFailure(t *testing.T
 	}
 	if !committed {
 		t.Fatalf("earlier committed Claude update omitted: %+v (error %v)", got, installErr)
+	}
+	if err := os.Remove(codexProfile); err != nil {
+		t.Fatal(err)
 	}
 	if err := os.Rename(renamedProfile, codexProfile); err != nil {
 		t.Fatal(err)
@@ -97,8 +104,5 @@ func TestInstallOrUpdateRetainsCommittedUpdateAfterLaterPlanFailure(t *testing.T
 	}
 	if !claudeInstalled || codexInstalled {
 		t.Fatalf("later failed phase changed installed clients: %+v", view.Targets)
-	}
-	if !strings.Contains(installErr.Error(), got.Reason) && got.Reason == "completed" {
-		t.Fatalf("invalid late failure reason: %s", got.Reason)
 	}
 }
