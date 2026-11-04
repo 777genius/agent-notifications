@@ -209,8 +209,8 @@ if os.name == 'nt':
         assert path[1:3]==b':\\' and path.endswith((
             b'selector-intent.json', b'selector-pi-runtime-intent.json')), args
     # Inspect is a read-only status query and does not accept an intent file; only
-# the install wizard receives the converted bootstrap intent.
-wizard_calls=matching(calls,['setup-notifications','wizard','--action','install'])
+    # the install wizard receives the converted bootstrap intent.
+    wizard_calls=matching(calls,['setup-notifications','wizard','--action','install'])
     assert wizard_calls, out
     for args in wizard_calls:
         path=value(args,'--bootstrap-intent-file')
