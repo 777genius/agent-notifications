@@ -47,6 +47,17 @@ test('candidate preflight rejects the retired workflow but other modes keep thei
   prepared['.github/workflows/release.yml'] = 'name: legacy tag release\n';
   validate(prepared, { ...options, mode: 'prepared-promotion' });
 });
+test('candidate preflight fails closed on non-ENOENT workflow read errors', () => {
+  for (const code of ['EACCES', 'ENOTDIR', 'EIO']) {
+    const files = fixture();
+    const failure = Object.assign(new Error('Cannot inspect retired workflow'), { code });
+    assert.throws(() => validatePreflight(path => {
+      if (path === '.github/workflows/release.yml') throw failure;
+      assert.ok(path in files, `Missing fixture ${path}`);
+      return files[path]!;
+    }, options, C), error => error === failure, code);
+  }
+});
 test('prepared promotion binds all five rows to C while distribution source S remains distinct', () =>
   validate(fixture(true), { ...options, mode: 'prepared-promotion' }));
 test('ordinary snapshot permits product version changes before release preparation', () => {
