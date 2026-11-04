@@ -94,11 +94,11 @@ func TestFreedesktopAgentNotifyPresentationOnPrivateSessionBus(t *testing.T) {
 				if icon != "" || !hasImage {
 					t.Fatalf("missing immutable MCP icon: app=%q present=%t", icon, hasImage)
 				}
-				// godbus Export converts an incoming D-Bus struct to []interface{},
-				// then Store reconstructs it as []Variant (signature "av").
+				// godbus Export decodes a D-Bus struct into []interface{},
+				// then Store reconstructs the Variant with local signature "av".
 				// Validate the actual received fields and bytes instead of that
 				// reconstructed signature; the outgoing wire signature is checked above.
-				fields, ok := image.Value().([]dbus.Variant)
+				fields, ok := image.Value().([]any)
 				if !ok || len(fields) != 7 {
 					t.Fatalf("malformed MCP image fields: type=%T", image.Value())
 				}
@@ -106,14 +106,14 @@ func TestFreedesktopAgentNotifyPresentationOnPrivateSessionBus(t *testing.T) {
 				if !ok {
 					t.Fatal("missing embedded MCP image")
 				}
-				if fields[0].Value() != want.Width || fields[1].Value() != want.Height ||
-					fields[2].Value() != want.Rowstride || fields[3].Value() != want.HasAlpha ||
-					fields[4].Value() != want.BitsPerSample || fields[5].Value() != want.Channels {
+				if fields[0] != want.Width || fields[1] != want.Height ||
+					fields[2] != want.Rowstride || fields[3] != want.HasAlpha ||
+					fields[4] != want.BitsPerSample || fields[5] != want.Channels {
 					t.Fatal("MCP image metadata changed in D-Bus delivery")
 				}
-				pixels, ok := fields[6].Value().([]byte)
+				pixels, ok := fields[6].([]byte)
 				if !ok || !bytes.Equal(pixels, want.Data) {
-					t.Fatalf("MCP image bytes changed in D-Bus delivery: type=%T size=%d", fields[6].Value(), len(pixels))
+					t.Fatalf("MCP image bytes changed in D-Bus delivery: type=%T size=%d", fields[6], len(pixels))
 				}
 			} else if icon != "" || hasImage {
 				t.Fatalf("changed another provider's icon: app=%q image=%t", icon, hasImage)
