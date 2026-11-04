@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -110,5 +111,34 @@ func TestSetupProductsLocalIndependentSelection(t *testing.T) {
 	}
 	if _, err := parseSetupProducts([]string{"confirm", "--products", "claude", "--local-native-stop=true"}); err == nil {
 		t.Fatal("Local selection expanded legacy request")
+	}
+}
+
+func TestSetupProductsWindowsNativeIntentPath(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("native Windows filepath contract")
+	}
+	intent := filepath.Join(t.TempDir(), "TEST intent stage with spaces", "selector-intent.json")
+	for _, tc := range []struct {
+		name, path string
+		allow      bool
+	}{
+		{"native", intent, true},
+		{"forward-slashes", filepath.ToSlash(intent), false},
+		{"git-bash-posix", "/tmp/TEST intent stage/selector-intent.json", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, operation := range []string{"prepare", "intent-args", "preflight", "migration-apply"} {
+				args := []string{operation}
+				if operation == "prepare" || operation == "preflight" {
+					args = append(args, "--products", "opencode")
+				}
+				args = append(args, "--intent-file", tc.path)
+				_, err := parseSetupProducts(args)
+				if (err == nil) != tc.allow {
+					t.Fatalf("%s path %q: accepted=%v, want %v, err=%v", operation, tc.path, err == nil, tc.allow, err)
+				}
+			}
+		})
 	}
 }
