@@ -4296,7 +4296,9 @@ refresh_pi_integration_intent() {
     [ "$_FROZEN_CONTROL" = "$control" ] && [ "$_FROZEN_RUNTIME" = "$runtime" ] &&
         [ "$_FROZEN_PI" = "$profile" ] && [ "$_PI_EXEC" = "$client" ] &&
         [ "$_FROZEN_GLOBAL_CONFIG" = "$config" ] && [ "${_FROZEN_PI_CHANNELS[*]}" = "$expected_channels" ] || return 1
-    "$_CONFIG_HELPER" setup-products preflight --intent-file "$_SELECTOR_INTENT" "${effects[@]}" </dev/null
+    local preflight_intent
+    preflight_intent=$(selector_intent_argument "$_SELECTOR_INTENT") || return 1
+    "$_CONFIG_HELPER" setup-products preflight --intent-file "$preflight_intent" "${effects[@]}" </dev/null
 }
 
 bootstrap_abs_command() {
