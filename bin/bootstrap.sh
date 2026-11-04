@@ -4416,10 +4416,13 @@ setup_agent_notify_wizard() {
         --package "$package_root"
     case "$PRODUCT" in cursor|pi) ;; *) set -- "$@" --plugin-root "$plugin_root" ;; esac
     if [ -n "$_SELECTOR_INTENT" ]; then
+        local wizard_intent wizard_progress
+        wizard_intent=$(selector_intent_argument "$_SELECTOR_INTENT") || return 1
         if [ "$PRODUCT" != cursor ] && [ -n "$_PARALLEL_READY_CLIENTS" ]; then
-            set -- "$@" --bootstrap-ready-clients "$_PARALLEL_READY_CLIENTS" --bootstrap-progress-file "$_PROGRESS_JOURNAL"
+            wizard_progress=$(selector_intent_argument "$_PROGRESS_JOURNAL") || return 1
+            set -- "$@" --bootstrap-ready-clients "$_PARALLEL_READY_CLIENTS" --bootstrap-progress-file "$wizard_progress"
         fi
-        set -- "$@" --bootstrap-intent-file "$_SELECTOR_INTENT" --control-root "$_FROZEN_CONTROL" --global-config "$_FROZEN_GLOBAL_CONFIG"
+        set -- "$@" --bootstrap-intent-file "$wizard_intent" --control-root "$_FROZEN_CONTROL" --global-config "$_FROZEN_GLOBAL_CONFIG"
         [ -z "$_FROZEN_RUNTIME" ] || set -- "$@" --runtime-root "$_FROZEN_RUNTIME"
         if [ "$PRODUCT" != cursor ] && [ "$PRODUCT" != pi ]; then
             [ -z "$_FROZEN_CODEX_MCP" ] || set -- "$@" --mcp-config "$_FROZEN_CODEX_MCP"
