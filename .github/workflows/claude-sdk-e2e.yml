@@ -127,9 +127,13 @@ jobs:
         run: |
           set -euo pipefail
           root="${RUNNER_TEMP}/NEWTEST-claude-native-2.1.317"
-          mkdir -p "$root"
-          chmod 700 "$root"
+          mkdir -p "$root/home" "$root/xdg-config"
+          chmod 700 "$root" "$root/home" "$root/xdg-config"
+          export HOME="$root/home" XDG_CONFIG_HOME="$root/xdg-config"
           npm_config_cache="$root/npm-cache" npm --prefix "$root" install --ignore-scripts --no-audit --no-fund --no-save @anthropic-ai/claude-code@2.1.317
+          # Pinned Claude requires its native postinstall; execute exactly that
+          # trusted package script, not arbitrary dependency lifecycle hooks.
+          node "$root/node_modules/@anthropic-ai/claude-code/install.cjs"
           executable="$(realpath "$root/node_modules/.bin/claude")"
           test -f "$executable"
           "$executable" --version | grep -Fq '2.1.317'
