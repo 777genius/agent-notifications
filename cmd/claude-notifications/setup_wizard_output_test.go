@@ -209,3 +209,20 @@ func TestSetupWizardClaudeActivationAndDeliveryAreIndependent(t *testing.T) {
 		}
 	}
 }
+
+// Generic portable failures must not collapse to the unhelpful "needs
+// inspection" banner when UAP returned a typed setup stage.
+func TestSetupWizardPortableFailureDescriptions(t *testing.T) {
+	for _, tc := range []struct{ reason, want string }{
+		{"portable_install_failed", "notification tool setup failed"},
+		{"post_install_incomplete", "post-install inspection could not confirm"},
+		{"activation_incomplete", "client activation is not verified"},
+	} {
+		t.Run(tc.reason, func(t *testing.T) {
+			got := setupFailureDescription(setupwizard.Result{Outcome: "incomplete", Reason: tc.reason})
+			if !strings.Contains(got, tc.want) {
+				t.Fatalf("reason=%s description=%q", tc.reason, got)
+			}
+		})
+	}
+}
