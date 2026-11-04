@@ -206,8 +206,8 @@ if os.name == 'nt':
     assert len(preflights)>=2, (preflights,out)
     for args in preflights:
         path=value(args,'--intent-file')
-        assert path[1:3]==b':\\' and path.endswith(b'selector-intent.json') or (
-            path[1:3]==b':\\' and path.endswith(b'selector-pi-runtime-intent.json')), args
+        assert path[1:3]==b':\\' and path.endswith((
+            b'selector-intent.json', b'selector-pi-runtime-intent.json')), args
 # A fresh managed runtime advances generation; route through a new Pi-only checkpoint.
 code,calls,stages,out=run(['--product','pi'], {'TEST_PI_PREPARED':'true'})
 assert code==0 and len(matching(calls,['setup-products','prepare']))==2, out
