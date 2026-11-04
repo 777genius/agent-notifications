@@ -150,3 +150,63 @@ func TestSetupWizardMaintenanceWarningOutput(t *testing.T) {
 		}
 	}
 }
+
+
+// A successful MCP notify does not rewrite UAP activation state or the setup
+// read-only delivery fact. Human output must distinguish these two observations
+// without manufacturing installation success or changing the JSON contract.
+func TestSetupWizardClaudeActivationAndDeliveryAreIndependent(t *testing.T) {
+	failed := setupwizard.Result{
+		Action: "install", Outcome: "incomplete", Reason: "activation_incomplete",
+		Targets: []setupwizard.TargetResult{{Client: "claude", Unit: "agent-notify", Outcome: "incomplete",
+			Materialization: "materialized", Activation: "failed"}},
+	}
+	var out bytes.Buffer
+	if code := writeSetupWizardResult(&out, false, failed, nil); code == 0 {
+		t.Fatalf("activation failure returned success: %s", out.String())
+	}
+	for _, want := range []string{
+		"registration was saved, but client activation is not verified",
+		"registration saved; needs inspection",
+		"Delivery  not tested by setup (separate from client activation)",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("missing %q: %s", want, out.String())
+		}
+	}
+	if strings.Contains(out.String(), "Installation complete") || strings.Contains(out.String(), "activation verified") {
+		t.Fatalf("claimed success: %s", out.String())
+	}
+	out.Reset()
+	if code := writeSetupWizardResult(&out, true, failed, nil); code == 0 {
+		t.Fatal("incomplete JSON result returned success")
+	}
+	var decoded setupwizard.Result
+	if err := json.Unmarshal(out.Bytes(), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Reason != "activation_incomplete" || decoded.Targets[0].Activation != "failed" {
+		t.Fatalf("failed UAP evidence lost: %+v", decoded)
+	}
+
+	inspect := setupwizard.Result{
+		Action: "inspect", Outcome: "completed",
+		Targets: []setupwizard.TargetResult{{Client: "claude", Unit: "agent-notify", Outcome: "installed"}},
+		Readiness: []setupwizard.ReadinessFact{{Client: "claude", Runtime: "installed", MCP: "installed",
+			Delivery: "not_verified"}},
+		NextActions: []setupwizard.NextAction{{Kind: "test-notification", Agents: []string{"claude"}, Reason: "delivery_not_verified"}},
+	}
+	out.Reset()
+	if code := writeSetupWizardResult(&out, false, inspect, nil); code != 0 {
+		t.Fatalf("inspect exit %d", code)
+	}
+	for _, want := range []string{
+		"Delivery: not verified",
+		"Delivery is not tracked by setup; a successful notify call does not change this field.",
+		"Ask Claude to send a test notification",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("missing %q: %s", want, out.String())
+		}
+	}
+}
