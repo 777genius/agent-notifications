@@ -48,11 +48,11 @@ func TestInstallOrUpdateRetainsCommittedUpdateAfterLaterPlanFailure(t *testing.T
 	selected.PackageRoot = candidate
 	renamedProfile := codexProfile + "-unavailable"
 	injected := false
-	selected.ClientProgress = func(client, phase, outcome string) {
-		if injected || client != "claude" || phase != "verification" || outcome != "done" {
+	selected.Progress = func(phase string) {
+		if injected || phase != "complete" {
 			return
 		}
-		// The actual first phase reached its native activation boundary.
+		// The actual first Run phase has completed all managed effects.
 		// Make only the next, unselected-in-this-phase profile unavailable.
 		if err := os.Rename(codexProfile, renamedProfile); err != nil {
 			t.Fatal(err)
@@ -66,7 +66,7 @@ func TestInstallOrUpdateRetainsCommittedUpdateAfterLaterPlanFailure(t *testing.T
 	}
 	got, installErr := InstallOrUpdate(ctx, selected, false)
 	if !injected {
-		t.Fatalf("fixture did not reach the committed-client verification phase: %+v %v", got, installErr)
+		t.Fatalf("fixture did not reach the completed first Run phase: %+v %v", got, installErr)
 	}
 	if installErr == nil || got.ExitCode() == 0 || got.Outcome == "completed" || got.Reason == "" {
 		t.Fatalf("late Plan failure was masked: %+v %v", got, installErr)
