@@ -4354,8 +4354,8 @@ func TestWizardMixedPerClientOptOuts(t *testing.T) {
 		t.Fatal("inspect omitted readiness")
 	}
 	for _, fact := range view.Readiness {
-		if fact.Permission != "not_checked" || fact.Delivery != "not_verified" {
-			t.Fatalf("readiness mixed download with delivery: %+v", fact)
+		if fact.Permission != "not_checked" || fact.Delivery != "not_tracked" {
+			t.Fatalf("read-only inspect incorrectly verified notification delivery: %+v", fact)
 		}
 	}
 	if err := os.WriteFile(filepath.Join(pkg, "plugin.json"), []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent-notify","version":"1.0.1"}`), 0600); err != nil {
