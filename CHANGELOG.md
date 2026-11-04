@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.51.1] - 2026-11-04
+
+### Fixed
+- Convert Git Bash-generated intent paths at the Windows native setup-products boundary, restoring one-command OpenCode installation without weakening Windows path validation ([#603](https://github.com/777genius/agent-notifications/pull/603), [#602](https://github.com/777genius/agent-notifications/issues/602)).
+- Clarify Claude UAP activation versus MCP delivery status: read-only inspection preserves real activation evidence and does not indefinitely claim unverified delivery after a successful independent notification ([#597](https://github.com/777genius/agent-notifications/pull/597), [#585](https://github.com/777genius/agent-notifications/issues/585)).
+- Include an embedded icon and a capability- and consent-gated system sound request for explicit Linux MCP Freedesktop notifications ([#597](https://github.com/777genius/agent-notifications/pull/597)).
+- Reject release candidate preflight when the retired tag-triggered release workflow reappears, and prevent its changes from being classified as metadata-only ([#604](https://github.com/777genius/agent-notifications/pull/604), [#607](https://github.com/777genius/agent-notifications/pull/607)).
+
+### Platform notes
+- Linux Claude marketplace reinstall recovery from v1.51.0 remains included; the reporter confirmed recovery and removal of the earlier `installed_bundle_required` symptom.
+- A successful `notify` handoff does not prove an exact managed Claude UAP plugin activation. Install verification still requires the enabled user-scope `agent-notify@skills-dir` binding; inspections will not fabricate success for another profile or plugin.
+- The Linux MCP icon and system sound hint are covered by native D-Bus transport tests. Visible KDE/Wayland banners and audible playback still depend on host desktop capabilities, consent, mute and notification settings; physical KDE observation is not claimed.
+- Release qualification uses the owner-approved basic five-platform profile with independently signed and notarized macOS artifacts, downloaded-asset canaries and disposable Codex tests before publication. Full eleven-cell OpenCode, physical desktop visibility and cold-start coverage are not claimed.
+
 ## [1.51.0] - 2026-11-03
 
 ### Added
