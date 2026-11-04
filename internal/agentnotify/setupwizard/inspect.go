@@ -200,7 +200,7 @@ func inspect(ctx context.Context, req Request, agents []portable.Integration, sn
 					Client: string(agent), Unit: "agent-notify", Outcome: "installed",
 					Reason: binding.ClientBindingID, Profile: profile,
 					Materialization: string(binding.Materialization),
-					Activation: string(binding.Activation), Verification: string(binding.Verification),
+					Activation:      string(binding.Activation), Verification: string(binding.Verification),
 					TreeDigest: digest,
 				})
 				if profileErr != nil {
