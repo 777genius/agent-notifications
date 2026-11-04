@@ -177,6 +177,16 @@ func (h *Handler) handleTeammateIdle(ev Event, p TeammateIdlePayload) error {
 		return fmt.Errorf("teammate idle: record idle state: %w", err)
 	}
 
+	// A suppressed teammate must not consume the team's completion claim.
+	// An eligible lead Stop can still claim the already-recorded idle members.
+	status := analyzer.StatusTaskComplete
+	gitBranch := platform.GetGitBranch(ev.Session.CWD)
+	folderName := filepath.Base(ev.Session.CWD)
+	if h.cfg.ShouldFilter(string(status), gitBranch, folderName) {
+		logging.Debug("TeammateIdle: notification suppressed by filter: status=%s branch=%q folder=%s", status, gitBranch, folderName)
+		return nil
+	}
+
 	// Check readiness and claim completion under the same team file lock.
 	claimed, err := h.teamStateMgr.ClaimAllIdle(p.TeamName, teamInfo.Members)
 	if err != nil {
@@ -185,14 +195,6 @@ func (h *Handler) handleTeammateIdle(ev Event, p TeammateIdlePayload) error {
 
 	if !claimed {
 		logging.Debug("TeammateIdle: not all conditions met yet for team %q", p.TeamName)
-		return nil
-	}
-
-	status := analyzer.StatusTaskComplete
-	gitBranch := platform.GetGitBranch(ev.Session.CWD)
-	folderName := filepath.Base(ev.Session.CWD)
-	if h.cfg.ShouldFilter(string(status), gitBranch, folderName) {
-		logging.Debug("TeammateIdle: notification suppressed by filter: status=%s branch=%q folder=%s", status, gitBranch, folderName)
 		return nil
 	}
 

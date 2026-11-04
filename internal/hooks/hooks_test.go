@@ -2964,6 +2964,29 @@ func TestHandler_TeammateIdle_SendsWhenAllReady(t *testing.T) {
 			if bobState != nil && bobState.LastTaskCompleteTime != 0 {
 				t.Fatal("team completion started the teammate's cooldown")
 			}
+			if !tc.deliver {
+				// The suppressed teammate may become the last idle member, but
+				// must not consume the team's claim before an eligible lead Stop.
+				teamState, err := teamMgr.LoadState(teamName)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !teamState.LeadStopped || teamState.NotifiedAt != 0 ||
+					teamState.IdleMembers["alice"] == 0 || teamState.IdleMembers["bob"] == 0 {
+					t.Fatalf("suppressed teammate lost the pending team completion: %+v", teamState)
+				}
+				leadStop := buildHookDataJSON(HookData{
+					SessionID:      sessionID,
+					TranscriptPath: createTempTranscript(t, buildTranscriptWithTools([]string{"Write"}, 50)),
+					CWD:            filepath.Join(t.TempDir(), "lead-project"),
+				})
+				if err := handler.HandleHook("Stop", leadStop); err != nil {
+					t.Fatal(err)
+				}
+				if mockNotif.callCount() != 1 || !mockWH.wasCalled() {
+					t.Fatalf("eligible lead Stop lost team completion: desktop=%d webhook=%v", mockNotif.callCount(), mockWH.wasCalled())
+				}
+			}
 		})
 	}
 }
