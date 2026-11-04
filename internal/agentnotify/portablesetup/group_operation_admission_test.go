@@ -76,7 +76,7 @@ func TestMaterializerGroupRecoveryRejectsDifferentControlRoots(t *testing.T) {
 		}
 	}
 	beforeFirst, beforeSecond := registryFixtureFiles(t, firstRoot), registryFixtureFiles(t, secondRoot)
-	if err := mat.VerifyRecoveryAuthority(nil, first); !errors.Is(err, ErrPreflight) {
+	if err := mat.VerifyRecoveryAuthority(nil, first); !errors.Is(err, ErrPreflight) { //nolint:staticcheck // Deliberately verify nil-context rejection.
 		t.Errorf("nil recovery authority context accepted: %v", err)
 	}
 	if err := mat.RecoverGroupJournals(ctx, []MaterializeRequest{first, second}); !errors.Is(err, ErrPreflight) {

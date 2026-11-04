@@ -224,9 +224,10 @@ func TestUninstallCodexLegacyExactRegistryAdmission(t *testing.T) {
 	for _, evidence := range []string{"wrong-name", "wrong-source", "exact"} {
 		t.Run(evidence, func(t *testing.T) {
 			name, source := shared.ManagedMarketplaceName(binding.PhysicalArtifact), binding.TargetLocator
-			if evidence == "wrong-name" {
+			switch evidence {
+			case "wrong-name":
 				name = "foreign-marketplace"
-			} else if evidence == "wrong-source" {
+			case "wrong-source":
 				source = filepath.Join(filepath.Dir(source), "foreign-artifact")
 			}
 			config := fmt.Sprintf("[marketplaces.%s]\nsource = %q\nsource_type = \"local\"\n", name, source)

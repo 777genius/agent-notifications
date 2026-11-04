@@ -78,13 +78,14 @@ func TestWizardGroupRecoveryChecksEverySelectedAuthority(t *testing.T) {
 				}
 				req := Request{Action: ActionInstall, Agents: []string{"codex", "copilot-vscode"}, Yes: true, Hooks: boolPtr(false), AgentNotify: boolPtr(true), LocalConfig: cfg, PackageRoot: pkg, CodexHome: codexHome, ClientExecutable: primary, Helper: primary, ControlRoot: control, RuntimeRoot: runtimeRoot, GlobalConfig: global, ScopeRoot: profile, Primary: id.Primary, InstallationID: id.InstallationID}
 				restore := func() { req.LocalConfig = cfg }
-				if drift == "invalid-local-selection" {
+				switch drift {
+				case "invalid-local-selection":
 					req.LocalConfig = nil
-				} else if drift == "public-invalid-local-composition" {
+				case "public-invalid-local-composition":
 					changed := *cfg
 					changed.QualifiedTuple.QualificationID = "TEST-unqualified"
 					req.LocalConfig = &changed
-				} else {
+				default:
 					state, err := mat.Store.Load()
 					if err != nil {
 						t.Fatal(err)
