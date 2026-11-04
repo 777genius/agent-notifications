@@ -151,7 +151,6 @@ func TestSetupWizardMaintenanceWarningOutput(t *testing.T) {
 	}
 }
 
-
 // A successful MCP notify does not rewrite UAP activation state or the setup
 // read-only delivery fact. Human output must distinguish these two observations
 // without manufacturing installation success or changing the JSON contract.
