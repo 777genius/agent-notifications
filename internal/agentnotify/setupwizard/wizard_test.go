@@ -2236,8 +2236,8 @@ func TestWizardInstallInspectUninstall(t *testing.T) {
 				t.Fatalf("inspect omitted tree digest: %+v", target)
 			}
 			if target.Materialization != string(domain.MaterializationMaterialized) ||
-				target.Activation != string(domain.ActivationActive) ||
-				target.Verification != string(domain.VerificationInstalled) {
+				target.Activation != "manual_activation_required" ||
+				target.Verification != "package_validated" {
 				t.Fatalf("inspect misreported durable UAP lifecycle facts: %+v", target)
 			}
 		}
