@@ -85,22 +85,27 @@ source "$SANDBOX/functions.sh"
             intent-args) return 37 ;;
         esac
     }
+    read_intent_trace() {
+        argv=()
+        local value
+        while IFS= read -r -d '' value; do argv+=("$value"); done < "$trace"
+    }
     for operation in prepare confirm preflight migration-apply; do
         selector_collect "$operation" --products opencode --intent-file "$_SELECTOR_INTENT"
-        mapfile -d '' -t argv < "$trace"
+        read_intent_trace
         [ "${#argv[@]}" -eq 6 ] && [ "${argv[0]}" = setup-products ] && [ "${argv[1]}" = "$operation" ] &&
             [ "${argv[2]}" = --products ] && [ "${argv[3]}" = opencode ] &&
             [ "${argv[4]}" = --intent-file ] && [ "${argv[5]}" = "$native_intent" ] ||
             { echo "Git Bash selector $operation passed a non-native intent path" >&2; exit 1; }
     done
     if load_frozen_dispatch; then echo "Intent-args helper refusal was lost" >&2; exit 1; fi
-    mapfile -d '' -t argv < "$trace"
+    read_intent_trace
     [ "${#argv[@]}" -eq 4 ] && [ "${argv[1]}" = intent-args ] &&
         [ "${argv[2]}" = --intent-file ] && [ "${argv[3]}" = "$native_intent" ] ||
         { echo "Git Bash intent-args passed a non-native intent path" >&2; exit 1; }
     PLATFORM=Linux
     selector_collect prepare --products opencode --intent-file "$_SELECTOR_INTENT"
-    mapfile -d '' -t argv < "$trace"
+    read_intent_trace
     [ "${argv[5]}" = "$_SELECTOR_INTENT" ] || { echo "POSIX selector path was changed" >&2; exit 1; }
     PLATFORM="Windows (Git Bash)"
     cygpath() { return 69; }
