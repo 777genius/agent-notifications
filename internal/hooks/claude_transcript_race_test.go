@@ -47,8 +47,8 @@ func TestClaudeStopAppendBetweenParseAndSettle(t *testing.T) {
 	if err := h.HandleHook("Stop", payload); err != nil {
 		t.Fatal(err)
 	}
-	if parseCalls != 2 {
-		t.Fatalf("expected an initial parse and one settlement reparse, got %d", parseCalls)
+	if parseCalls != 1 {
+		t.Fatalf("test seam must append exactly once after the initial parse, got %d", parseCalls)
 	}
 	if mock.callCount() != 1 || !strings.Contains(mock.lastCall().message, "Ready after parse") {
 		t.Fatalf("late transcript record omitted: calls=%d last=%+v", mock.callCount(), mock.lastCall())
