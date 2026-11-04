@@ -3,6 +3,7 @@
 package notifier
 
 import (
+	"bytes"
 	"context"
 	"testing"
 	"time"
@@ -16,8 +17,8 @@ func TestAgentNotifyEmbeddedIconIsBoundedAndImmutable(t *testing.T) {
 		!icon.HasAlpha || icon.BitsPerSample != 8 || icon.Channels != 4 || len(icon.Data) != 64*64*4 {
 		t.Fatalf("invalid freedesktop image: ok=%t w=%d h=%d stride=%d channels=%d bytes=%d", ok, icon.Width, icon.Height, icon.Rowstride, icon.Channels, len(icon.Data))
 	}
-	if got := dbus.SignatureOf(icon).String(); got != "(iiibiiay)" {
-		t.Fatalf("invalid image-data D-Bus signature: %s", got)
+	if got := dbus.MakeVariant(icon).Signature().String(); got != "(iiibiiay)" {
+		t.Fatalf("invalid outgoing image-data D-Bus signature: %s", got)
 	}
 	visible, uniform := 0, true
 	for i := 0; i+3 < len(icon.Data); i += 4 {
@@ -90,19 +91,40 @@ func TestFreedesktopAgentNotifyPresentationOnPrivateSessionBus(t *testing.T) {
 			icon := server.appIcon.Load().(string)
 			image, hasImage := hints["image-data"]
 			if tc.mcp {
-				if icon != "" || !hasImage || image.Signature().String() != "(iiibiiay)" {
-					t.Fatalf("missing immutable MCP icon: app=%q hints=%v", icon, hints)
+				if icon != "" || !hasImage {
+					t.Fatalf("missing immutable MCP icon: app=%q present=%t", icon, hasImage)
+				}
+				// godbus Export converts an incoming D-Bus struct to []interface{},
+				// then Store reconstructs it as []Variant (signature "av").
+				// Validate the actual received fields and bytes instead of that
+				// reconstructed signature; the outgoing wire signature is checked above.
+				fields, ok := image.Value().([]dbus.Variant)
+				if !ok || len(fields) != 7 {
+					t.Fatalf("malformed MCP image fields: type=%T", image.Value())
+				}
+				want, ok := agentNotifyImageData()
+				if !ok {
+					t.Fatal("missing embedded MCP image")
+				}
+				if fields[0].Value() != want.Width || fields[1].Value() != want.Height ||
+					fields[2].Value() != want.Rowstride || fields[3].Value() != want.HasAlpha ||
+					fields[4].Value() != want.BitsPerSample || fields[5].Value() != want.Channels {
+					t.Fatal("MCP image metadata changed in D-Bus delivery")
+				}
+				pixels, ok := fields[6].Value().([]byte)
+				if !ok || !bytes.Equal(pixels, want.Data) {
+					t.Fatalf("MCP image bytes changed in D-Bus delivery: type=%T size=%d", fields[6].Value(), len(pixels))
 				}
 			} else if icon != "" || hasImage {
-				t.Fatalf("changed another provider's icon: app=%q hints=%v", icon, hints)
+				t.Fatalf("changed another provider's icon: app=%q image=%t", icon, hasImage)
 			}
 			cue, hasCue := hints["sound-name"]
 			if want := tc.mcp && tc.sound && tc.serverSupportsCue; hasCue != want || hasCue && cue.Value() != "message-new-instant" {
-				t.Fatalf("unsound cue consent/capabilities: hints=%v want=%t", hints, want)
+				t.Fatalf("unsound cue consent/capabilities: present=%t value=%v want=%t", hasCue, cue.Value(), want)
 			}
 			_, suppresses := hints["suppress-sound"]
 			if suppresses != tc.silent {
-				t.Fatalf("sound opt-out not preserved: hints=%v", hints)
+				t.Fatalf("sound opt-out not preserved: suppressed=%t want=%t", suppresses, tc.silent)
 			}
 		})
 	}
