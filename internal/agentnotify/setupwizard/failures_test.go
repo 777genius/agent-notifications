@@ -92,13 +92,48 @@ func TestPortableRemoveFinalizationFailureKeepsCompletedAbsence(t *testing.T) {
 			t.Fatalf("removal finalization: %+v", got)
 		}
 		for _, target := range got.Targets {
-			if target.Outcome != "unchanged" || target.Reason != "already_absent" || target.Materialization != string(domain.MaterializationAbsent) {
+			if target.Outcome != "completed" || target.Reason != "" || target.Materialization != string(domain.MaterializationAbsent) {
 				t.Fatalf("completed removal lost: %+v", target)
 			}
 		}
 		unrelated := portableRemoveFailed(portable.Pi, Request{Action: ActionUninstall}, Result{}, err)
 		if len(unrelated.Targets) != 1 || unrelated.Targets[0].Outcome != "incomplete" || unrelated.Targets[0].Materialization != "" {
 			t.Fatalf("removal inferred absence for an unreported client: %+v", unrelated)
+		}
+	}
+}
+
+func TestPortableRemoveFinalizationDistinguishesPriorAbsence(t *testing.T) {
+	for _, unchanged := range []bool{false, true} {
+		outcome := uapinstaller.OutcomeCompleted
+		if unchanged {
+			outcome = uapinstaller.OutcomeUnchanged
+		}
+		result := uapinstaller.Result{Operation: uapinstaller.OpRemove, Outcome: outcome,
+			Binding: uapinstaller.BindingFacts{ClientID: "claude", BindingID: "bound-claude"},
+			Targets: []uapinstaller.ClientResult{
+				{ClientID: "claude", BindingID: "bound-claude"},
+				{ClientID: "codex", Materialization: string(domain.MaterializationAbsent)},
+			}}
+		// RemoveGroup reports a previously absent client explicitly, while
+		// leaving Materialization empty for a binding removed by this operation.
+		err := portablesetup.ResultError{Result: result, Err: errors.New("handoff cleanup refused"), Finalization: true}
+		got := groupRemoveFailed([]portable.Integration{portable.Claude, portable.Codex, portable.Pi}, Request{Action: ActionUninstall}, Result{}, err)
+		if got.Outcome != "incomplete" || got.Reason != "portable_finalization_incomplete" || len(got.Targets) != 3 {
+			t.Fatalf("removal finalization: %+v", got)
+		}
+		wantOutcome, wantReason := "completed", ""
+		if outcome == uapinstaller.OutcomeUnchanged {
+			wantOutcome, wantReason = "unchanged", "already_absent"
+		}
+		if target := got.Targets[0]; target.Outcome != wantOutcome || target.Reason != wantReason || target.Materialization != string(domain.MaterializationAbsent) {
+			t.Fatalf("current operation %s relabeled: %+v", outcome, target)
+		}
+		if target := got.Targets[1]; target.Outcome != "unchanged" || target.Reason != "already_absent" || target.Materialization != string(domain.MaterializationAbsent) {
+			t.Fatalf("prior absence relabeled: %+v", target)
+		}
+		if target := got.Targets[2]; target.Outcome != "incomplete" || target.Materialization != "" {
+			t.Fatalf("unreported target gained removal facts: %+v", target)
 		}
 	}
 }

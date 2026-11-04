@@ -72,16 +72,19 @@ func offerPostSetupActions(req Request, agents []portable.Integration, out Resul
 	if req.Action == ActionUninstall {
 		return out
 	}
-	notifyReady := false
+	notifyReady := make(map[string]bool)
 	for _, target := range out.Targets {
 		if target.Unit == "agent-notify" && (target.Outcome == "completed" || target.Outcome == "installed") {
-			notifyReady = true
-			break
+			notifyReady[target.Client] = true
 		}
 	}
 	names := make([]string, len(agents))
+	notifyNames := make([]string, 0, len(agents))
 	for i, agent := range agents {
 		names[i] = string(agent)
+		if notifyReady[names[i]] {
+			notifyNames = append(notifyNames, names[i])
+		}
 	}
 	has := func(kind string) bool {
 		for _, next := range out.NextActions {
@@ -99,13 +102,13 @@ func offerPostSetupActions(req Request, agents []portable.Integration, out Resul
 			Kind: "restart-client", Agents: names, Reason: "pending_client_restart",
 		})
 	}
-	if !notifyReady {
+	if len(notifyNames) == 0 {
 		return out
 	}
 	if req.Action != ActionInspect && explicitAbs(req.ControlRoot) && out.Generation != 0 && !has("request-permission") {
 		out.NextActions = append(out.NextActions, NextAction{
 			Kind:   "request-permission",
-			Agents: names,
+			Agents: notifyNames,
 			Command: []string{
 				"setup-notifications", "request-permission",
 				"--control-root", req.ControlRoot,
@@ -116,7 +119,7 @@ func offerPostSetupActions(req Request, agents []portable.Integration, out Resul
 	}
 	if !has("test-notification") {
 		out.NextActions = append(out.NextActions, NextAction{
-			Kind: "test-notification", Agents: names, Command: []string{"notify"},
+			Kind: "test-notification", Agents: notifyNames, Command: []string{"notify"},
 			Reason: "delivery_not_verified",
 		})
 	}

@@ -170,7 +170,7 @@ part of the install-or-update ownership move.
 | --- | --- |
 | Hook state isolation | Same ID in Claude/Qoder; path-like Qoder ID; Qoder team event leaves Claude state untouched; real Claude team completion remains correct |
 | Hook compatibility | Existing Claude/Codex/Qoder classification, privacy, dedup, StopFailure, cooldown, opt-out and shared delivery tests |
-| Partial effect receipts | Gemini late admission panic retains the earlier submitted desktop fact; early panic remains suppressed; no second attempt |
+| Partial effect receipts | Gemini late admission panic retains definitive submitted/rejected/suppressed receipts; an in-flight or unknown effect stays unknown; early panic remains suppressed; no second attempt |
 | Portable finalization | Real committed single/group operation followed by a controlled failure; exact materialization/activation or removal facts retained; no false success or automatic effect retry |
 | Setup lifecycle | Install → inspect → update/repair → remove, both clients, mixed opt-outs, pending recovery, policy drift after confirmation, partial activation and retained data |
 | CLI boundary | Existing flag grammar, clean JSON/stdout, exit codes, non-TTY behavior and PTY consent tests |
@@ -238,6 +238,33 @@ this refactor must not silently alter the already sealed release source.
 - Integrated review: independent reviewers inspect interactions between result
   mapping, CLI presentation, setup phases, product state and native ownership;
   the delivery PR records their final verdicts against the published tree.
+- Post-PR review: reproduced the reported setup boundary failures before their
+  fixes. Explicit installation inspection now scopes bindings and retained-data
+  facts to that installation. Post-install verification refuses an incomplete
+  inspection even when installed targets remain visible. Planning propagates
+  unreadable recovery-state errors before acquisition or readiness; inspection
+  never repairs the malformed journal. Valid known recovery stays owned by Run.
+  Initial and final inspection errors inside install-or-update retain the
+  requested mutation action, so the read-only inspect exit convention cannot
+  turn a failed setup into CLI success. Their original causes remain available.
+- Result precision: finalization preserves the distinction between a removal
+  performed by this operation and a previously absent group target, using the
+  pinned SDK's actual result shapes. Notification follow-up actions identify
+  only ready selected clients; the global permission command and selected-client
+  restart behavior stay unchanged. Gemini uses the same receipt aggregation on
+  normal completion and a later admission panic, retaining definite effects and
+  uncertainty without reopening a durable claim.
+- Native ownership follow-up: fixed-product Windows shortcut staging now checks
+  ledger ownership before admitting an existing removal preimage, while still
+  allowing an externally absent owned file to be retired. The transaction kernel
+  already refused out-of-band owned-file drift; this closes the earlier staging
+  boundary rather than claiming a demonstrated deletion bypass. Regression
+  coverage includes owned, absent and user-edited files for both fixed products.
+- Further independent review: each post-PR correction is reviewed by a
+  non-author critic, including the real pending-journal verification fixture,
+  mixed group-removal facts, scoped inspection and native cleanup semantics.
+  These corrections stay inside the original result, admission and ownership
+  boundaries; they introduce no new framework, retries or schema migration.
 - Local verification: complete hook, Gemini event and portable materializer
   suites pass with the race detector; focused finalization, recovery
   presentation, selection and CLI contract regressions pass. Real fixture

@@ -75,15 +75,13 @@ func message(f geminisource.Facts) (analyzer.Status, notification.Content, bool)
 // Admission before input: this function never starts a new four-second budget.
 func (c Consumer) Consume(parent context.Context, facts geminisource.Facts, deadline notification.Deadline) (out Receipt) {
 	out = Receipt{Status: "suppressed", Reason: "invalid_fact"}
-	attempted := false
 	defer func() {
 		if recover() != nil {
-			if attempted {
-				// A later admission failure cannot erase a completed channel
-				// or imply that the invocation had no effects.
-				out.Status, out.Reason = "unknown", "delivery_uncertain"
-			} else {
-				out = Receipt{Status: "suppressed", Reason: "consumer_unavailable"}
+			// Completed receipts remain authoritative. An effect in progress is
+			// marked unknown before its call; an admission panic is no effect.
+			out = aggregateReceipt(out)
+			if out.Status == "suppressed" {
+				out.Reason = "consumer_unavailable"
 			}
 		}
 	}()
@@ -137,32 +135,35 @@ func (c Consumer) Consume(parent context.Context, facts geminisource.Facts, dead
 		return ""
 	}
 	if channels.Desktop && c.Config.IsStatusDesktopEnabled(string(status)) {
-		out.Desktop = "unavailable"
-		if c.Desktop != nil {
-			if reason := claim(DesktopChannel); reason != "" {
-				out.Desktop = reason
-			} else {
-				// Explicit sound consent requests only the OS default cue.
-				// This observer has no trusted terminal or chat target.
-				attempted = true
-				out.Desktop = deliver(ctx, c.Desktop, notification.InformationalDesktopRequest(
-					content, uuid.NewString(), deadline, c.Config.IsSystemSoundEnabled()))
-			}
+		if c.Desktop == nil {
+			out.Desktop = "unavailable"
+		} else if reason := claim(DesktopChannel); reason != "" {
+			out.Desktop = reason
+		} else {
+			// Explicit sound consent requests only the OS default cue.
+			// This observer has no trusted terminal or chat target.
+			request := notification.InformationalDesktopRequest(
+				content, uuid.NewString(), deadline, c.Config.IsSystemSoundEnabled())
+			out.Desktop = "unknown"
+			out.Desktop = deliver(ctx, c.Desktop, request)
 		}
 	}
 	if channels.Webhook && c.Config.IsStatusWebhookEnabled(string(status)) {
-		out.Webhook = "unavailable"
-		if c.SendWebhook != nil {
-			if reason := claim(WebhookChannel); reason != "" {
-				out.Webhook = reason
-			} else {
-				attempted = true
-				out.Webhook = sendWebhook(ctx, c.SendWebhook, privateWebhookConfig(c.Config, string(status)), webhook.SendContext{
-					Status: status, Message: content.Body, RawBody: content.Body, AgentSource: string(config.AgentGemini),
-				})
-			}
+		if c.SendWebhook == nil {
+			out.Webhook = "unavailable"
+		} else if reason := claim(WebhookChannel); reason != "" {
+			out.Webhook = reason
+		} else {
+			cfg := privateWebhookConfig(c.Config, string(status))
+			payload := webhook.SendContext{Status: status, Message: content.Body, RawBody: content.Body, AgentSource: string(config.AgentGemini)}
+			out.Webhook = "unknown"
+			out.Webhook = sendWebhook(ctx, c.SendWebhook, cfg, payload)
 		}
 	}
+	return aggregateReceipt(out)
+}
+
+func aggregateReceipt(out Receipt) Receipt {
 	switch {
 	case out.Desktop == "unknown" || out.Webhook == "unknown":
 		out.Status, out.Reason = "unknown", "delivery_uncertain"

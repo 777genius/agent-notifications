@@ -147,6 +147,74 @@ func TestWindowsGeminiShortcutRejectsForeignAndUntrustedIdentity(t *testing.T) {
 	}
 }
 
+func TestWindowsFixedShortcutRemovalPreservesUserEdits(t *testing.T) {
+	for _, product := range []DesktopProduct{OpenCodeDesktop, GeminiDesktop} {
+		id, _ := identityFor(product)
+		for _, state := range []string{"owned", "absent", "edited"} {
+			t.Run(id.label+"/"+state, func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+				defer cancel()
+				base, err := installruntime.CanonicalPath(t.TempDir())
+				if err != nil {
+					t.Fatal(err)
+				}
+				root, run := filepath.Join(base, "control"), filepath.Join(base, "runtime")
+				path, receipt := filepath.Join(base, id.shortcut), filepath.Join(root, "TEST-registration.json")
+				ledger, err := installruntime.Commit(ctx, installruntime.Request{
+					ControlRoot: root, RuntimeRoot: run, Owner: "existing-installer", ConsumerID: id.consumer,
+					Consumer: installruntime.Consumer{Registration: receipt},
+					Files: []installruntime.File{
+						{Path: path, Data: []byte("TEST owned shortcut bytes"), Mode: 0600},
+						{Path: receipt, Data: []byte("TEST registration"), Mode: 0600},
+					},
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if state == "absent" {
+					if err := os.Remove(path); err != nil {
+						t.Fatal(err)
+					}
+				} else if state == "edited" {
+					if err := os.WriteFile(path, []byte("TEST user-edited shortcut"), 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				before, err := installruntime.Fingerprint(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				file, err := StageWindowsShortcut(product, filepath.Join(base, "changed-profile"), "", false, ledger)
+				if state == "edited" {
+					if err == nil || file != nil {
+						t.Fatalf("user edit admitted for removal: %+v %v", file, err)
+					}
+					if got, readErr := os.ReadFile(path); readErr != nil || string(got) != "TEST user-edited shortcut" {
+						t.Fatalf("user edit changed: %q %v", got, readErr)
+					}
+					return
+				}
+				if err != nil || file == nil || !file.Remove || file.Path != path || file.Before != before {
+					t.Fatalf("%s cleanup lost its observed preimage: %+v %v", state, file, err)
+				}
+				ledger, err = installruntime.Commit(ctx, installruntime.Request{
+					ControlRoot: root, RuntimeRoot: run, Owner: "existing-installer", ConsumerID: id.consumer,
+					RefreshOnly: true, Files: []installruntime.File{*file},
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, ok := installruntime.OwnedFile(ledger, path); ok {
+					t.Fatal("removed shortcut remained owned")
+				}
+				if _, err := os.Lstat(path); !os.IsNotExist(err) {
+					t.Fatalf("shortcut was not absent: %v", err)
+				}
+			})
+		}
+	}
+}
+
 func TestWindowsCurrentProfileUsesKnownProgramsFolder(t *testing.T) {
 	home, err := os.UserHomeDir()
 	if err != nil {

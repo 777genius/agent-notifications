@@ -242,6 +242,12 @@ func stageWindowsShortcutForIdentity(id desktopIdentity, home, target string, de
 	if err != nil {
 		return nil, err
 	}
+	owned, ok := installruntime.OwnedFile(ledger, ownedPath)
+	if !ok || !owned.Exists || owned.Link != "" || before.Exists && before != owned {
+		return nil, fmt.Errorf("%s toast shortcut changed", id.label)
+	}
+	// Missing owned files can be retired, but existing foreign bytes cannot
+	// become the removal preimage. Carry this observation into the kernel CAS.
 	return &installruntime.File{Path: ownedPath, Before: before, Remove: true}, nil
 }
 

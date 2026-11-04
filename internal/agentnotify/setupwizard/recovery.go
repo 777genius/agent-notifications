@@ -16,9 +16,9 @@ import (
 
 // annotatePendingRecovery reports kernel and UAP recovery without recovering.
 // Plan skips source-dependent Prepare while a journal is pending (§7.4.2, §9.2).
-func annotatePendingRecovery(ctx context.Context, req Request, snap installruntime.InstalledSnapshot, text string, out *Result) (string, bool) {
+func annotatePendingRecovery(ctx context.Context, req Request, snap installruntime.InstalledSnapshot, text string, out *Result) (string, bool, error) {
 	if out == nil {
-		return text, false
+		return text, false, nil
 	}
 	pending := false
 	if snap.Recovery {
@@ -27,8 +27,13 @@ func annotatePendingRecovery(ctx context.Context, req Request, snap installrunti
 		pending = true
 	}
 	view, err := inspectUAPState(ctx, req)
-	if err != nil || !view.Recovery.Required {
-		return text, pending
+	if err != nil {
+		out.Outcome, out.Reason = "incomplete", "recovery_required"
+		out.NextActions = append(out.NextActions, NextAction{Kind: "recover", Reason: err.Error()})
+		return text + " recovery-pending=untrusted", true, err
+	}
+	if !view.Recovery.Required {
+		return text, pending, nil
 	}
 	ids := recoveryIDs(view)
 	reason := strings.Join(ids, ",")
@@ -41,7 +46,7 @@ func annotatePendingRecovery(ctx context.Context, req Request, snap installrunti
 		text += " recovery-pending=untrusted"
 	}
 	out.NextActions = append(out.NextActions, NextAction{Kind: "recover", Reason: reason})
-	return text, true
+	return text, true, nil
 }
 
 func recoverWizardJournals(ctx context.Context, mat portablesetup.Materializer, id portablesetup.Identity, req Request, agents []portable.Integration) error {

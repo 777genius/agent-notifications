@@ -78,7 +78,12 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 			}
 		}
 		var recoveryPending bool
-		text, recoveryPending = annotatePendingRecovery(ctx, req, ev.snap, text, &ev.out)
+		var recoveryErr error
+		text, recoveryPending, recoveryErr = annotatePendingRecovery(ctx, req, ev.snap, text, &ev.out)
+		if recoveryErr != nil {
+			plan.Text, plan.Result = text, attachWizardCommand(req, ev.out)
+			return plan, recoveryErr
+		}
 		if len(ev.notifyAgents) > 0 && !recoveryPending {
 			acquired, release, err := acquirePlanPackage(ctx, req, ev.notifyAgents)
 			if err != nil {
@@ -226,7 +231,12 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 			acquired.HelperVersion = req.HelperVersion
 		}
 	} else {
-		text, _ = annotatePendingRecovery(ctx, req, ev.snap, text, &ev.out)
+		var recoveryErr error
+		text, _, recoveryErr = annotatePendingRecovery(ctx, req, ev.snap, text, &ev.out)
+		if recoveryErr != nil {
+			plan.Text, plan.Result = text, attachWizardCommand(req, ev.out)
+			return plan, recoveryErr
+		}
 	}
 	if req.Action == ActionUninstall {
 		if prereqs := uninstallManualPrerequisites(ctx, req, ev.snap, ev.runtimeRoot, ev.notifyAgents); len(prereqs) > 0 {

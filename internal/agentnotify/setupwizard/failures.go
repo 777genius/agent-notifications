@@ -252,6 +252,11 @@ func groupRemoveFailed(agents []portable.Integration, req Request, out Result, e
 			if removed || item.ClientID != "" && item.Materialization == string(domain.MaterializationAbsent) {
 				target.Outcome, target.Reason = "unchanged", "already_absent"
 				target.Materialization = string(domain.MaterializationAbsent)
+				// An explicit absent target was absent before this group
+				// operation. Otherwise a completed removal performed the work.
+				if removed && persisted.Result.Outcome == uapinstaller.OutcomeCompleted && item.Materialization != string(domain.MaterializationAbsent) {
+					target.Outcome, target.Reason = "completed", ""
+				}
 			}
 		}
 		out.Targets = append(out.Targets, target)

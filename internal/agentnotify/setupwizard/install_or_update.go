@@ -2,6 +2,7 @@ package setupwizard
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 
@@ -45,6 +46,7 @@ func InstallOrUpdate(ctx context.Context, req Request, preserveExistingUnits boo
 	inspect.Action = ActionInspect
 	before, inspectErr := Run(ctx, inspect)
 	if inspectErr != nil {
+		before.Action = string(req.Action)
 		return before, inspectErr
 	}
 	for _, next := range before.NextActions {
@@ -201,8 +203,15 @@ func verifyInstallOrUpdate(ctx context.Context, req Request, result Result) (Res
 	inspect := req
 	inspect.Action = ActionInspect
 	view, err := Run(ctx, inspect)
-	if err != nil {
-		return view, err
+	// Inspect can report recovery-required state without an error while still
+	// listing installed clients. Neither that state nor an inspection error
+	// proves a complete setup; keep the mutation action's failure exit semantics.
+	if err != nil || view.Outcome != "completed" {
+		view.Action, view.Outcome = string(req.Action), "incomplete"
+		if view.Reason == "" {
+			view.Reason = "post_install_incomplete"
+		}
+		return view, errors.Join(ErrRefused, err)
 	}
 	installed := map[string]bool{}
 	for _, target := range view.Targets {

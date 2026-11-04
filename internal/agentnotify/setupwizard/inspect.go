@@ -165,6 +165,7 @@ func firstBindingProfile(bindings []uapinstaller.InspectedBinding) string {
 }
 
 func inspect(ctx context.Context, req Request, agents []portable.Integration, snap installruntime.InstalledSnapshot, runtimeRoot string, out Result) (Result, error) {
+	out.InstallationID = req.InstallationID
 	mat, err := materializer(req, snap, runtimeRoot)
 	if err != nil {
 		out.Outcome, out.Reason = "incomplete", err.Error()
@@ -179,6 +180,9 @@ func inspect(ctx context.Context, req Request, agents []portable.Integration, sn
 	for _, agent := range agents {
 		found := false
 		for _, installation := range state.Installations {
+			if req.InstallationID != "" && installation.InstallationID != req.InstallationID {
+				continue
+			}
 			for _, binding := range installation.Clients {
 				if binding.ClientID != portablesetup.ClientID(agent) {
 					continue
@@ -240,7 +244,7 @@ func inspect(ctx context.Context, req Request, agents []portable.Integration, sn
 }
 
 func markInspectedIdentity(view uapinstaller.Inspection, out Result) Result {
-	if len(view.Installations) == 1 {
+	if out.InstallationID == "" && len(view.Installations) == 1 {
 		out.InstallationID = view.Installations[0].InstallationID
 	}
 	return markInspectedDataRetained(view, out)
@@ -248,6 +252,9 @@ func markInspectedIdentity(view uapinstaller.Inspection, out Result) Result {
 
 func markInspectedDataRetained(view uapinstaller.Inspection, out Result) Result {
 	for _, installation := range view.Installations {
+		if out.InstallationID != "" && installation.InstallationID != out.InstallationID {
+			continue
+		}
 		if installation.DataRetained {
 			out.DataRetained = true
 			return out
