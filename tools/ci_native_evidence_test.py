@@ -64,7 +64,8 @@ class EvidenceFixture(fixture.ScopeFixture):
 
     def test_every_tracked_product_input_and_mode_blocks(self):
         for path in ['internal/runtime.go', 'go.mod', 'Makefile', '.github/workflows/ci-macos.yml',
-                     'tools/ci_native_evidence.py', '.claude-plugin/plugin.json', 'docs/UNKNOWN.md']:
+                     'tools/ci_native_evidence.py', '.claude-plugin/plugin.json', 'docs/UNKNOWN.md',
+                     '.github/workflows/release.yml']:
             with self.subTest(path=path):
                 self.git('reset', '--hard', self.base)
                 self.promote()
