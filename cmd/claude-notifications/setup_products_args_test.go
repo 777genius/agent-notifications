@@ -139,6 +139,22 @@ func TestSetupProductsWindowsNativeIntentPath(t *testing.T) {
 					t.Fatalf("%s path %q: accepted=%v, want %v, err=%v", operation, tc.path, err == nil, tc.allow, err)
 				}
 			}
+			for _, parse := range []struct {
+				name string
+				call func([]string) error
+			}{
+				{"wizard-intent", func(args []string) error { _, _, err := stripBootstrapIntentFile(args); return err }},
+				{"wizard-progress", func(args []string) error { _, _, err := stripBootstrapProgressFile(args); return err }},
+			} {
+				flag := "--bootstrap-intent-file"
+				if parse.name == "wizard-progress" {
+					flag = "--bootstrap-progress-file"
+				}
+				err := parse.call([]string{flag, tc.path})
+				if (err == nil) != tc.allow {
+					t.Fatalf("%s path %q: accepted=%v, want %v, err=%v", parse.name, tc.path, err == nil, tc.allow, err)
+				}
+			}
 		})
 	}
 }
