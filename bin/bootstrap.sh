@@ -3551,18 +3551,18 @@ selector_intent_argument() {
 # Retain the child status and raw bytes until the complete record is checked.
 selector_collect() {
     local operation=$1; shift
-    local status=0 i
+    local status=0 i args_count=$#
     local -a helper_args=("$@")
-    for ((i=0; i<${#helper_args[@]}; i++)); do
+    for ((i=0; i<args_count; i++)); do
         [ "${helper_args[i]}" = --intent-file ] || continue
-        [ "$((i + 1))" -lt "${#helper_args[@]}" ] || return 2
+        [ "$((i + 1))" -lt "$args_count" ] || return 2
         helper_args[i + 1]=$(selector_intent_argument "${helper_args[i + 1]}") || return 1
     done
     _SELECTOR_RESULT="$_CONFIG_STAGE/selector-$operation.result"
     if [ "$_PROMPT_OPEN" = true ]; then
-        "$_CONFIG_HELPER" setup-products "$operation" "${helper_args[@]}" <&3 2>&3 3>&- >"$_SELECTOR_RESULT" || status=$?
+        "$_CONFIG_HELPER" setup-products "$operation" ${helper_args[@]+"${helper_args[@]}"} <&3 2>&3 3>&- >"$_SELECTOR_RESULT" || status=$?
     else
-        "$_CONFIG_HELPER" setup-products "$operation" "${helper_args[@]}" </dev/null 3>&- >"$_SELECTOR_RESULT" || status=$?
+        "$_CONFIG_HELPER" setup-products "$operation" ${helper_args[@]+"${helper_args[@]}"} </dev/null 3>&- >"$_SELECTOR_RESULT" || status=$?
     fi
     [ "$status" -eq 0 ] || return "$status"
     local size
