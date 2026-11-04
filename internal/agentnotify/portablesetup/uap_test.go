@@ -2481,6 +2481,9 @@ func TestMaterializerLocalIndependentPublicPrepare(t *testing.T) {
 // regardless of its position in a group. Native components are removed using
 // that recorded selection; an alternate settings file must not grant authority.
 func TestLocalRemoveGroupChecksEverySelectedProfile(t *testing.T) {
+	if runtime.GOOS == "darwin" && runtime.GOARCH != "arm64" {
+		t.Skip("Local selected delivery has no qualified Darwin Intel tuple")
+	}
 	for _, test := range []struct{ localFirst, localAbsent bool }{{true, false}, {false, false}, {true, true}, {false, true}} {
 		t.Run(fmt.Sprintf("local-first=%t/absent=%t", test.localFirst, test.localAbsent), func(t *testing.T) {
 			localFirst := test.localFirst
