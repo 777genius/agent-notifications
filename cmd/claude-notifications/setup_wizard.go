@@ -449,9 +449,7 @@ func wizardPrintableCommand(command []string) []string {
 	if err != nil || strings.TrimSpace(executable) == "" {
 		executable = "claude-notifications"
 	}
-	out := make([]string, 0, len(command)+1)
-	out = append(out, executable)
-	return append(out, command...)
+	return append([]string{executable}, command...)
 }
 
 func parseSetupWizard(args []string) (setupwizard.Request, bool, error) {
