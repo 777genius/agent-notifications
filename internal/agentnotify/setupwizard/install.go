@@ -300,17 +300,17 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 			out.Outcome, out.Reason = "incomplete", "portable_install_failed"
 			return out, fmt.Errorf("group apply returned %d bindings", len(got))
 		}
+		// Both clients are committed. Preserve those facts before any fallible
+		// generation read, receipt persistence or live-profile write.
+		for i, agent := range notifyAgents {
+			out.Targets = append(out.Targets, completedNotifyTarget(mat, got[i].InstallationID, string(agent), got[i].BindingID))
+		}
 		generation, err = rereadWizardGeneration(req.ControlRoot, out.reservation)
 		if err != nil {
 			out.Outcome, out.Reason = "incomplete", err.Error()
 			return out, err
 		}
 		out.Generation = generation
-		// ApplyGroup has already committed both clients. Record every
-		// successful target before a later sidecar write can fail.
-		for i, agent := range notifyAgents {
-			out.Targets = append(out.Targets, completedNotifyTarget(mat, got[i].InstallationID, string(agent), got[i].BindingID))
-		}
 		for i, agent := range notifyAgents {
 			id.InstallationID = got[i].InstallationID
 			if err := persistKnownReceipt(ctx, req, runtimeRoot, mat, id.InstallationID, string(agent), out.reservation); err != nil {
@@ -462,13 +462,15 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 				return portableInstallFailed(agent, req, out, err), err
 			}
 		}
+		// The current client is committed even if a subsequent ownership
+		// generation read fails. Do not erase earlier completed siblings.
+		out.Targets = append(out.Targets, completedNotifyTarget(mat, got.InstallationID, string(agent), got.BindingID))
 		generation, err = rereadWizardGeneration(req.ControlRoot, out.reservation)
 		if err != nil {
 			out.Outcome, out.Reason = "incomplete", err.Error()
 			return out, err
 		}
 		out.Generation = generation
-		out.Targets = append(out.Targets, completedNotifyTarget(mat, got.InstallationID, string(agent), got.BindingID))
 		id.InstallationID = got.InstallationID
 		if err := persistKnownReceipt(ctx, req, runtimeRoot, mat, id.InstallationID, string(agent), out.reservation); err != nil {
 			out.Outcome, out.Reason = "incomplete", err.Error()

@@ -208,6 +208,11 @@ func verifyInstallOrUpdate(ctx context.Context, req Request, result Result) (Res
 	// proves a complete setup; keep the mutation action's failure exit semantics.
 	if err != nil || view.Outcome != "completed" {
 		view.Action, view.Outcome = string(req.Action), "incomplete"
+		if len(view.Targets) == 0 {
+			// Early inspection failure cannot erase the prior phase's
+			// committed client facts; preserve its failure semantics.
+			view.Targets = append([]TargetResult(nil), result.Targets...)
+		}
 		if view.Reason == "" {
 			view.Reason = "post_install_incomplete"
 		}
