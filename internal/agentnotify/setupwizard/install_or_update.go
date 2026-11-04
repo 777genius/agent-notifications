@@ -16,10 +16,17 @@ import (
 func InstallOrUpdate(ctx context.Context, req Request, preserveExistingUnits bool) (result Result, err error) {
 	var migration *StateMigrationOutcome
 	var committed []TargetResult
+	var preserved []string
 	defer func() {
 		if len(committed) > 0 && (err != nil || result.Outcome != "completed" && result.Outcome != "unchanged") {
+			// Retain the actual failure kind (especially concurrent_change and
+			// invalid) while preserving earlier committed effects and opt-outs.
 			result.Targets = retainCommittedPhaseTargets(committed, result.Targets)
-			result.Action, result.Outcome = string(req.Action), "incomplete"
+			result.Targets = append(result.Targets, PreservedUnitTargets(preserved)...)
+			result.Action = string(req.Action)
+			if result.Outcome == "completed" || result.Outcome == "unchanged" || result.Outcome == "" {
+				result.Outcome = "incomplete"
+			}
 		}
 		if migration != nil {
 			result.StateMigration = migration
@@ -59,7 +66,6 @@ func InstallOrUpdate(ctx context.Context, req Request, preserveExistingUnits boo
 			return Result{Action: string(req.Action), Outcome: "incomplete", Reason: "pending_setup_required", NextActions: before.NextActions}, ErrRefused
 		}
 	}
-	var preserved []string
 	if req.BootstrapMCP != nil {
 		current, generation, policy, e := ObserveBootstrapMCPWithPolicy(ctx, req)
 		if e == nil && (req.BootstrapExpectedGeneration != nil && generation != *req.BootstrapExpectedGeneration || req.BootstrapExpectedPolicy != nil && policy != *req.BootstrapExpectedPolicy) {
