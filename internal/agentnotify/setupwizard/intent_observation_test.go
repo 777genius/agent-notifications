@@ -121,6 +121,47 @@ func TestPendingIntentPresentationPreservesCallerBindings(t *testing.T) {
 	}
 }
 
+// A conflicting CLI MCP config must not be copied into a suggested retry:
+// the pending intent already froze the only path that can be resumed safely.
+func TestPendingIntentMCPConflictRetryUsesFrozenPath(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtimeRoot, global, primary, generation := managedRuntime(t)
+	profile := filepath.Join(filepath.Dir(control), "TEST-codex-profile")
+	frozen := filepath.Join(profile, "config.toml")
+	conflicting := filepath.Join(filepath.Dir(control), "TEST-unrelated", "config.toml")
+	intent := portablesetup.Intent{Version: 1, SetupIntentID: "TEST-frozen-mcp-conflict", Action: "install",
+		Stage: "confirmed", ExpectedGeneration: generation, Targets: []portablesetup.IntentTarget{{
+			Client: "codex", Profile: profile, MCPConfig: frozen, Units: []string{"agent-notify"},
+		}}}
+	plantPendingIntent(t, ctx, control, runtimeRoot, generation, intent)
+	req := Request{Action: ActionInstall, Agents: []string{"codex"}, Yes: true,
+		ControlRoot: control, RuntimeRoot: runtimeRoot, GlobalConfig: global, Helper: primary,
+		CodexHome: profile, MCPConfig: map[string]string{"codex": conflicting, "claude": "TEST-caller-claude"}}
+	before := policyConflictFiles(t, filepath.Dir(control))
+	conflict, handled := pendingIntentConflict(req, portablesetup.ErrIntentConflict, Result{Action: "install"})
+	if !handled || conflict.Outcome != "conflict" || conflict.Reason != "pending_intent_conflict" {
+		t.Fatalf("pending MCP conflict lost: %+v", conflict)
+	}
+	index := slices.Index(conflict.Command, "--mcp-config")
+	if index < 0 || index+1 >= len(conflict.Command) || conflict.Command[index+1] != frozen ||
+		slices.Contains(conflict.Command, conflicting) {
+		t.Fatalf("retry did not use frozen MCP path: %v", conflict.Command)
+	}
+	retry := retryRequestFromIntent(req, intent)
+	if retry.MCPConfig["codex"] != frozen || retry.MCPConfig["claude"] != req.MCPConfig["claude"] {
+		t.Fatalf("retry changed unrelated MCP choice: %+v", retry.MCPConfig)
+	}
+	if req.MCPConfig["codex"] != conflicting {
+		t.Fatal("retry mutated caller-owned MCP choices")
+	}
+	if restored, _, err := restoreOmittedFromIntent(retry, []portable.Integration{portable.Codex}, intent); err != nil || restored.MCPConfig["codex"] != frozen {
+		t.Fatalf("offered retry still conflicts with frozen intent: %+v %v", restored.MCPConfig, err)
+	}
+	if after := policyConflictFiles(t, filepath.Dir(control)); !reflect.DeepEqual(before, after) {
+		t.Fatal("retry presentation changed owned or pending files")
+	}
+}
+
 func TestRestoreLocalIntentScopeOwnsRestoredBindingMaps(t *testing.T) {
 	root := t.TempDir()
 	old := portable.Binding{Version: 1, Integration: portable.CopilotVSCode, InstallationID: "pending-installation", BindingID: "pending-local", ScopeID: "user", ComponentID: "component", Owner: "existing-installer",

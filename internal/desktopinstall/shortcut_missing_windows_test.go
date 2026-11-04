@@ -55,6 +55,15 @@ func TestWindowsPortableMissingShortcutLifecycle(t *testing.T) {
 				if integration == portable.CopilotVSCode {
 					stage, product = StageLocalWindowsShortcut, CopilotVSCodeDesktop
 				}
+				// A valid portable key cannot stage a shortcut pointing to any
+				// caller-supplied executable other than its registered command.
+				foreignTarget := filepath.Join(run, "TEST-foreign.exe")
+				if file, err := stage(key, home, foreignTarget, true, ledger); err == nil || file != nil {
+					t.Fatalf("foreign shortcut target accepted: %+v %v", file, err)
+				}
+				if checked, recovery, err := installruntime.ReadOwnership(root); err != nil || recovery || !reflect.DeepEqual(checked, ledger) {
+					t.Fatalf("foreign shortcut staging changed owned state: recovery=%v %v", recovery, err)
+				}
 				file, err := stage(key, home, primary, true, ledger)
 				if err != nil || file == nil {
 					t.Fatalf("initial COM shortcut: %+v %v", file, err)

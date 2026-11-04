@@ -115,6 +115,12 @@ func stagePortableWindowsShortcut(id desktopIdentity, err error, key, home, targ
 	if err != nil {
 		return nil, err
 	}
+	if desktop {
+		selected := ledger.Consumers[key]
+		if len(selected.Commands) != 1 || !SameWindowsFile(selected.Commands[0], target) {
+			return nil, errors.New("portable desktop shortcut target differs from registered command")
+		}
+	}
 	if !desktop {
 		path, err := ownedWindowsShortcutPathFor(ledger, id)
 		if err != nil {

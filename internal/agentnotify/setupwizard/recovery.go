@@ -561,6 +561,7 @@ func pendingIntentConflict(req Request, err error, out Result) (Result, bool) {
 func retryRequestFromIntent(req Request, intent portablesetup.Intent) Request {
 	req.BindingIDs = maps.Clone(req.BindingIDs)
 	req.DataReceiptIDs = maps.Clone(req.DataReceiptIDs)
+	req.MCPConfig = maps.Clone(req.MCPConfig)
 	if req.LocalConfig != nil {
 		cp := *req.LocalConfig
 		req.LocalConfig = &cp
@@ -609,6 +610,14 @@ func retryRequestFromIntent(req Request, intent portablesetup.Intent) Request {
 				retry.DataReceiptIDs = map[string]string{}
 			}
 			retry.DataReceiptIDs[target.Client] = target.DataReceiptID
+		}
+		if target.MCPConfig != "" {
+			if retry.MCPConfig == nil {
+				retry.MCPConfig = map[string]string{}
+			}
+			// A conflicting caller path must not survive the retry derived from
+			// a frozen pending intent. Keep other clients' choices unchanged.
+			retry.MCPConfig[target.Client] = target.MCPConfig
 		}
 		switch target.Client {
 		case "copilot-vscode":
