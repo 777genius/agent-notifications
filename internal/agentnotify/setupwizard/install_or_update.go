@@ -15,7 +15,12 @@ import (
 // phase; the caller owns argument parsing, confirmation and presentation.
 func InstallOrUpdate(ctx context.Context, req Request, preserveExistingUnits bool) (result Result, err error) {
 	var migration *StateMigrationOutcome
+	var committed []TargetResult
 	defer func() {
+		if len(committed) > 0 && (err != nil || result.Outcome != "completed" && result.Outcome != "unchanged") {
+			result.Targets = retainCommittedPhaseTargets(committed, result.Targets)
+			result.Action, result.Outcome = string(req.Action), "incomplete"
+		}
 		if migration != nil {
 			result.StateMigration = migration
 		}
@@ -139,6 +144,12 @@ func InstallOrUpdate(ctx context.Context, req Request, preserveExistingUnits boo
 			if runErr != nil || result.ExitCode() != 0 {
 				return result, runErr
 			}
+			// Only completed public Run phases establish committed target facts.
+			for _, target := range result.Targets {
+				if target.Outcome == "completed" && slices.Contains(phase.Agents, target.Client) {
+					committed = append(committed, target)
+				}
+			}
 			if req.BootstrapExpectedGeneration != nil {
 				*req.BootstrapExpectedGeneration = result.Generation
 			}
@@ -156,6 +167,44 @@ func InstallOrUpdate(ctx context.Context, req Request, preserveExistingUnits boo
 		}
 	}
 	return Result{Action: string(req.Action), Outcome: "incomplete", Reason: "update_required_after_retries"}, ErrRefused
+}
+
+// retainCommittedPhaseTargets preserves verified earlier effects after a later
+// failure, without replacing the latter's failure reason or aliasing target rows.
+func retainCommittedPhaseTargets(committed, current []TargetResult) []TargetResult {
+	out := make([]TargetResult, 0, len(committed)+len(current))
+	for i, earlier := range committed {
+		superseded := false
+		for _, newer := range committed[i+1:] {
+			if newer.Client == earlier.Client && newer.Unit == earlier.Unit {
+				superseded = true
+				break
+			}
+		}
+		if superseded {
+			continue
+		}
+		alreadyReported, changedLater := false, false
+		for _, target := range current {
+			if target.Client != earlier.Client || target.Unit != earlier.Unit {
+				continue
+			}
+			if target.Outcome == earlier.Outcome && target.Materialization == earlier.Materialization &&
+				target.Activation == earlier.Activation && target.Reason == earlier.Reason {
+				alreadyReported = true
+			} else {
+				changedLater = true
+			}
+		}
+		if alreadyReported && !changedLater {
+			continue
+		}
+		if changedLater && earlier.Reason == "" {
+			earlier.Reason = "committed_in_prior_phase"
+		}
+		out = append(out, earlier)
+	}
+	return append(out, current...)
 }
 
 // PreservedUnitTargets reports existing per-client opt-outs without implying
