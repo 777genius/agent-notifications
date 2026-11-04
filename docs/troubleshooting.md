@@ -58,13 +58,15 @@ notification receipts; calling `notify` successfully will not clear this
 status. A `submitted` receipt proves the desktop server accepted the request,
 not that a banner was visible or audible on the user's screen.
 
-On Linux, the separate hook path uses the configured plugin icon and plays
-the configured hook audio itself. The explicit MCP path currently sends a
-freedesktop D-Bus notification without an app-icon value and does not play that
-custom hook audio. It allows the desktop server's own sound when enabled.
-Therefore a successful KDE/Wayland MCP notification can appear without the
-hook's icon or sound. This is not proof of failed MCP registration; desktop
-presentation parity needs separate native qualification.
+On Linux, the hook path still uses the configured plugin icon and plays
+the configured hook audio itself. The explicit MCP path uses the **embedded
+default icon** via freedesktop `image-data` and requests a themed
+`message-new-instant` sound only when the global sound policy allows it and
+the desktop server reports sound capability. A `sound: false` opt-out sends
+`suppress-sound` instead. This does not play the hook's custom MP3 or override
+desktop notification settings, mute, volume or Do Not Disturb. D-Bus acceptance
+proves transport, not audible playback or display on a particular KDE/Wayland
+desktop; native screen/audio qualification is a separate gate.
 
 ### `connection closed: initialize response` during concurrent startup
 
