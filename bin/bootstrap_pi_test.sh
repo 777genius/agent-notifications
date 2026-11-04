@@ -208,6 +208,11 @@ if os.name == 'nt':
         path=value(args,'--intent-file')
         assert path[1:3]==b':\\' and path.endswith((
             b'selector-intent.json', b'selector-pi-runtime-intent.json')), args
+    wizard_calls=matching(calls,['setup-notifications','wizard'])
+    assert wizard_calls, out
+    for args in wizard_calls:
+        path=value(args,'--bootstrap-intent-file')
+        assert path[1:3]==b':\\' and path.endswith(b'selector-pi-runtime-intent.json'), args
 # A fresh managed runtime advances generation; route through a new Pi-only checkpoint.
 code,calls,stages,out=run(['--product','pi'], {'TEST_PI_PREPARED':'true'})
 assert code==0 and len(matching(calls,['setup-products','prepare']))==2, out
