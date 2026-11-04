@@ -81,7 +81,7 @@ func writeSetupWizardSummary(out io.Writer, result setupwizard.Result) {
 	// Never confuse this field with the separate UAP activation verification.
 	if result.Action == "inspect" {
 		for _, fact := range result.Readiness {
-			if fact.Delivery == "not_tracked" {
+			if fact.Delivery == "not_tracked" && fact.MCP == "installed" {
 				_, _ = fmt.Fprintln(out, "  Delivery is not tracked by setup; check the notify receipt in the originating chat.")
 				break
 			}
