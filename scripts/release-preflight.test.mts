@@ -29,10 +29,35 @@ function fixture(promotion = false): Record<string, string> {
   return files;
 }
 const validate = (files: Record<string, string>, opts = options, head = C) => validatePreflight(path => {
+  if (path === '.github/workflows/release.yml' && !(path in files)) {
+    const missing = new Error('Missing retired workflow') as NodeJS.ErrnoException;
+    missing.code = 'ENOENT';
+    throw missing;
+  }
   assert.ok(path in files, `Missing fixture ${path}`); return files[path]!;
 }, opts, head);
 
 test('honest candidate retains published old channels and documentation', () => validate(fixture()));
+test('candidate preflight rejects the retired workflow but other modes keep their contract', () => {
+  const files = fixture();
+  files['.github/workflows/release.yml'] = 'name: legacy tag release\n';
+  assert.throws(() => validate(files), /Retired release.yml must be absent/);
+  validate(files, { mode: 'snapshot' });
+  const prepared = fixture(true);
+  prepared['.github/workflows/release.yml'] = 'name: legacy tag release\n';
+  validate(prepared, { ...options, mode: 'prepared-promotion' });
+});
+test('candidate preflight fails closed on non-ENOENT workflow read errors', () => {
+  for (const code of ['EACCES', 'ENOTDIR', 'EIO']) {
+    const files = fixture();
+    const failure = Object.assign(new Error('Cannot inspect retired workflow'), { code });
+    assert.throws(() => validatePreflight(path => {
+      if (path === '.github/workflows/release.yml') throw failure;
+      assert.ok(path in files, `Missing fixture ${path}`);
+      return files[path]!;
+    }, options, C), error => error === failure, code);
+  }
+});
 test('prepared promotion binds all five rows to C while distribution source S remains distinct', () =>
   validate(fixture(true), { ...options, mode: 'prepared-promotion' }));
 test('ordinary snapshot permits product version changes before release preparation', () => {

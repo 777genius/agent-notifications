@@ -101,6 +101,15 @@ export function validatePreflight(read: Read, options: Options, head?: string): 
   const heading = `## [${version}]`;
   requireValue(read('CHANGELOG.md').split('\n').some(line => line === heading || line.startsWith(`${heading} - `)), 'Missing release changelog heading');
   if (options.mode === 'snapshot') return;
+  if (options.mode === 'candidate') {
+    let retiredWorkflowPresent = true;
+    try { read('.github/workflows/release.yml'); }
+    catch (error) {
+      if ((error as { code?: string }).code !== 'ENOENT') throw error;
+      retiredWorkflowPresent = false;
+    }
+    requireValue(!retiredWorkflowPresent, 'Retired release.yml must be absent for candidate preflight');
+  }
   requireValue(options.sourceSHA && sha.test(options.sourceSHA), 'Explicit lowercase 40-character --source-sha is required');
   if (options.mode === 'candidate') requireValue(head === options.sourceSHA, 'Candidate HEAD differs from --source-sha');
   if (options.mode === 'prepared-promotion') {
