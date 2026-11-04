@@ -122,6 +122,20 @@ func TestWizardClaudeNativeSkillsDirLifecycleE2E(t *testing.T) {
 	if err != nil || view.ExitCode() != 0 || len(view.Readiness) != 1 || view.Readiness[0].Delivery != "not_tracked" {
 		t.Fatalf("inspected native installation incorrectly: outcome=%q reason=%q delivery=%+v err=%v", view.Outcome, view.Reason, view.Readiness, err)
 	}
+	if view.Readiness[0].MCP != "installed" {
+		t.Fatalf("inspected Claude MCP readiness = %q, want installed", view.Readiness[0].MCP)
+	}
+	activeClaude := false
+	for _, target := range view.Targets {
+		if target.Client == "claude" && target.Unit == "agent-notify" &&
+			target.Outcome == "installed" && target.Activation == string(domain.ActivationActive) &&
+			target.Verification == string(domain.VerificationInstalled) {
+			activeClaude = true
+		}
+	}
+	if !activeClaude {
+		t.Fatalf("inspect did not preserve native active Claude binding: %+v", view.Targets)
+	}
 	for _, action := range view.NextActions {
 		if action.Kind == "test-notification" {
 			t.Fatalf("inspect repeated a test it cannot verify: %+v", view.NextActions)
