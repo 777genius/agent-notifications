@@ -237,6 +237,8 @@ func setupFailureDescription(result setupwizard.Result) string {
 		return "the installation package is unavailable."
 	case "activation_incomplete", "migration_activation_pending":
 		return "plugin registration was saved, but client activation is not verified."
+	case "portable_install_failed":
+		return "the notification tool setup failed; inspect the selected client's registration and activation."
 	case "post_install_incomplete":
 		return "post-install inspection could not confirm the selected notification tool."
 	case "invalid_arguments", "invalid_action":
