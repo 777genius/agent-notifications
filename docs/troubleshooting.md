@@ -31,6 +31,8 @@ installation in the operator's profile does not establish access inside a worker
 A working `notify` call and an incomplete UAP activation are **different facts**.
 The MCP server can be reachable from a running Claude session even when the
 installer has not verified the exact managed `agent-notify@skills-dir` plugin.
+New read-only wizard inspection shows the stored `activation` and
+`verification` of each installed UAP binding separately from MCP delivery.
 UAP activates that client by running `claude plugin list --json` and requiring
 an enabled `agent-notify@skills-dir` entry with the exact managed `installPath`
 and user scope. A failed or unrecognized listing cannot be replaced with an
