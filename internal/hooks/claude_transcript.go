@@ -170,7 +170,6 @@ func claudeStopHasUnflushedReply(messages []jsonl.Message, final string) bool {
 	return strings.Join(strings.Fields(strings.Join(last, " ")), " ") != final
 }
 
-
 // transcriptSizeBeforeParse records a baseline before the initial JSONL read.
 // An append during parsing must not become the settle loop's baseline.
 func transcriptSizeBeforeParse(path string) int64 {
