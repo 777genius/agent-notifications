@@ -148,7 +148,7 @@ GitHub Actions run on every push:
 - **ci-ubuntu.yml** — Tests on Ubuntu
 - **ci-macos.yml** — Tests on macOS
 - **ci-windows.yml** — Tests on Windows
-- **release.yml** — Builds and publishes release binaries
+- **basic-release.yml** — Owner-dispatched five-platform sealed draft (after candidate CI and macOS signing); publication is separate
 
 All three platform CIs must pass before merging.
 

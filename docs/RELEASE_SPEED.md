@@ -191,8 +191,7 @@ merge or publish. A failed receipt is retained; a recovery observation needs a
 new receipt path and only the missing phase should be rerun.
 
 An explicitly enumerated release-tools-only PR may use scoped tooling contracts
-instead of expensive native runtime CI. A same-repository release promotion or
-additive stable-tag exclusion may reuse full native qualification only after
+instead of expensive native runtime CI. A same-repository release promotion may reuse full native qualification only after
 comparing all tracked product inputs and modes with the actual tested checkout.
 The evidence binds the source, workflow, run and attempt; scoped/reused results
 cannot become source native evidence. Promotion P still runs its current-head

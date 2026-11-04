@@ -3,7 +3,6 @@
 import argparse
 import json
 import os
-import re
 from pathlib import Path
 import subprocess
 import sys
@@ -35,7 +34,6 @@ TOOLS = frozenset({
 # match; no directory patterns, additions, removals or executable docs qualify.
 METADATA = frozenset({'release-channels.tsv', 'docs/RELEASE.md',
                       'docs/RELEASE_SPEED.md', 'docs/PLATFORM_RELEASE_CHANNELS.md'})
-RELEASE_WORKFLOW = '.github/workflows/release.yml'
 PLATFORMS = {('darwin', 'amd64'), ('darwin', 'arm64'), ('linux', 'amd64'),
              ('linux', 'arm64'), ('windows', 'amd64')}
 
@@ -57,24 +55,6 @@ def blob(revision, path):
     return git('show', revision + ':' + path)
 
 
-def stable_exclusion_only(before, after):
-    """Exactly one additive stable tag exclusion in the existing tags list."""
-    old, new = before.splitlines(keepends=True), after.splitlines(keepends=True)
-    if len(new) != len(old) + 1 or not before.endswith(b'\n') or not after.endswith(b'\n'):
-        return False
-    for index, line in enumerate(new):
-        if (re.fullmatch(rb"      - '!v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)'\n", line)
-                and line not in old and new[:index] + new[index + 1:] == old):
-            # The literal surrounding header and contiguous tag entries make
-            # placement structural without interpreting arbitrary workflow YAML.
-            prefix = b''.join(new[:index])
-            section = prefix.split(b'\non:\n  push:\n    tags:\n')
-            return len(section) == 2 and b"      - 'v*'\n" in section[1].splitlines(keepends=True) and all(
-                re.fullmatch(rb"      - '[^'\n]+'\n", item)
-                for item in section[1].splitlines(keepends=True))
-    return False
-
-
 def equivalent_tree(source, target):
     """Compare every tracked entry including mode, submodule and symlink OID."""
     old, new = entries(source), entries(target)
@@ -86,8 +66,6 @@ def equivalent_tree(source, target):
         if old[path][:2] != ['100644', 'blob'] or new[path][:2] != ['100644', 'blob']:
             return False
         if path in METADATA:
-            continue
-        if path == RELEASE_WORKFLOW and stable_exclusion_only(blob(source, path), blob(target, path)):
             continue
         return False
     return True
@@ -114,15 +92,11 @@ def equivalent_source(event_name, event):
     if not changes:
         return None
     paths = {paths[0] for _, paths in changes}
-    if (paths == {RELEASE_WORKFLOW} and all(status == 'M' for status, _ in changes)
-            and stable_exclusion_only(blob(merge_base, RELEASE_WORKFLOW), blob(head, RELEASE_WORKFLOW))):
-        source = base
-    elif 'release-channels.tsv' in paths:
-        # A stacked promotion includes C's version/product changes against
-        # main. Compare against frozen C below, not against the older PR base.
-        source = channel_source(head)
-    else:
+    if 'release-channels.tsv' not in paths:
         return None
+    # A stacked promotion includes C's version/product changes against
+    # main. Compare against frozen C below, not against the older PR base.
+    source = channel_source(head)
     # Frozen product source must belong to this PR history. Never accept a
     # channel pointer to arbitrary otherwise similar code.
     git('merge-base', '--is-ancestor', source, head)
