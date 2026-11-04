@@ -64,7 +64,7 @@ func writeSetupWizardSummary(out io.Writer, result setupwizard.Result) {
 		}
 		_, _ = fmt.Fprintln(out)
 		if result.Action == "inspect" && target.Unit == "agent-notify" && (target.Activation != "" || target.Verification != "") {
-			_, _ = fmt.Fprintf(out, "    UAP activation: %s. Verification: %s.\\n", safeSetupText(target.Activation), safeSetupText(target.Verification))
+			_, _ = fmt.Fprintf(out, "    UAP activation: %s. Verification: %s.\n", safeSetupText(target.Activation), safeSetupText(target.Verification))
 		}
 		if target.ConfigPath != "" {
 			_, _ = fmt.Fprintln(out, "    MCP config: "+setupDisplayPath(target.ConfigPath))
