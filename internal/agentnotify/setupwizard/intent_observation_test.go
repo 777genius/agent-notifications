@@ -46,7 +46,14 @@ func TestInspectUntrustedPendingIntentIsIncomplete(t *testing.T) {
 			}); err != nil {
 				t.Fatal(err)
 			}
+			var observed installruntime.InstalledSnapshot
 			if mode == "tampered" {
+				// Freeze a valid read-only snapshot before a different process
+				// changes the file; a new Run would reject it even earlier.
+				observed, err = installruntime.ReadInstalledSnapshot(control)
+				if err != nil {
+					t.Fatal(err)
+				}
 				// A parseable replacement with the same pending ID must not supply
 				// profile paths for the suggested resume command.
 				intent.Targets[0].Profile = filepath.Join(filepath.Dir(control), "TEST-forged-profile")
@@ -59,9 +66,14 @@ func TestInspectUntrustedPendingIntentIsIncomplete(t *testing.T) {
 				}
 			}
 			before := policyConflictFiles(t, filepath.Dir(control))
-			got, err := Run(ctx, Request{Action: ActionInspect, Agents: []string{"claude"}, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global, Helper: primary})
-			if err != nil {
-				t.Fatal(err)
+			var got Result
+			if mode == "tampered" {
+				got = reportPendingWizardIntent(Request{ControlRoot: control}, observed, Result{Action: ActionInspect, Outcome: "completed"})
+			} else {
+				got, err = Run(ctx, Request{Action: ActionInspect, Agents: []string{"claude"}, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global, Helper: primary})
+				if err != nil {
+					t.Fatal(err)
+				}
 			}
 			wantOutcome, wantReason, wantAction := "incomplete", "pending_intent_unreadable", "recover"
 			if mode == "valid" {
