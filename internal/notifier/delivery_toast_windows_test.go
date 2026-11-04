@@ -46,7 +46,7 @@ func TestOpenCodeToastUsesSeparateIdentityAndRejectsMissingShortcut(t *testing.T
 	if err := s.Submit(context.Background(), notification.Request{}); err != nil {
 		t.Fatal(err)
 	}
-	if got.AppID != desktopinstall.OpenCodeToastAppID || got.AppID == windowsToastAppID {
+	if got.AppID != "Genius.AgentNotifications.OpenCode" || got.AppID == windowsToastAppID {
 		t.Fatalf("OpenCode toast identity = %q", got.AppID)
 	}
 }

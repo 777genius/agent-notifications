@@ -93,3 +93,27 @@ func TestUninstallRetainedEmptyPreservesHookRemoval(t *testing.T) {
 		t.Fatalf("empty retry invented a completed removal: %+v %v", unchanged, err)
 	}
 }
+
+func TestSequentialUninstallWithAbsentSiblingsFinishesReservation(t *testing.T) {
+	req := installedClaudeSelectionRequest(t)
+	req.Action, req.Agents, req.ExternalUninstalled = ActionUninstall, []string{"claude", "codex", "pi"}, true
+	req.CodexHome, req.PiAgentDir = t.TempDir(), t.TempDir()
+	removed, err := Run(testCtx(t), req)
+	if err != nil || removed.Outcome != "completed" || !removed.DataRetained {
+		t.Fatalf("sequential removal with absent siblings: %+v %v", removed, err)
+	}
+	if live := LiveNotifyClients(req.ControlRoot, req.Agents); len(live) != 0 {
+		t.Fatalf("sequential uninstall left live clients: %v", live)
+	}
+	view := req
+	view.Action = ActionInspect
+	inspected, err := Run(testCtx(t), view)
+	if err != nil || inspected.Outcome != "completed" {
+		t.Fatalf("sequential uninstall left pending work: %+v %v", inspected, err)
+	}
+	for _, next := range inspected.NextActions {
+		if next.Kind == "recover" || next.Kind == "resume" {
+			t.Fatalf("sequential uninstall did not finish its reservation: %+v", inspected.NextActions)
+		}
+	}
+}

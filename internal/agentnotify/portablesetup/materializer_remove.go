@@ -28,7 +28,7 @@ func (m Materializer) Remove(ctx context.Context, req MaterializeRequest) (final
 	}
 	installation, ok := findInstallation(state, req.Identity.InstallationID)
 	if ok && installation.DataRetained && len(installation.Clients) == 0 {
-		return nil
+		return m.retainedRemoveSettled(ctx, req)
 	}
 	if err := m.validate(req, false); err != nil {
 		return err
@@ -39,7 +39,7 @@ func (m Materializer) Remove(ctx context.Context, req MaterializeRequest) (final
 	}
 	installation, ok = findInstallation(state, req.Identity.InstallationID)
 	if ok && installation.DataRetained && len(installation.Clients) == 0 {
-		return nil
+		return m.retainedRemoveSettled(ctx, req)
 	}
 	if !ok {
 		return fmt.Errorf("%w: portable binding is not installed", ErrPreflight)
@@ -161,4 +161,45 @@ func (m Materializer) Remove(ctx context.Context, req MaterializeRequest) (final
 		return err
 	}
 	return m.Kernel.finishHandoff(ctx, reqBody, res)
+}
+
+// retainedRemoveSettled checks only durable pending work. A no-op retry must
+// neither recover it nor require the obsolete package or client executable.
+func (m Materializer) retainedRemoveSettled(ctx context.Context, req MaterializeRequest) error {
+	if req.Identity.ControlRoot == "" {
+		return fmt.Errorf("%w: retained removal requires the managed control root", ErrPreflight)
+	}
+	ledger, recovery, err := installruntime.ReadOwnership(req.Identity.ControlRoot)
+	if err != nil {
+		return err
+	}
+	// The wizard retains its own reservation between sequential targets and
+	// finalizes it after all removals. This no-op never replays or clears it.
+	if recovery || ledger.PendingMutation != nil && !req.KeepReservation {
+		return fmt.Errorf("%w: portable runtime finalization remains pending", uapinstaller.ErrRecoveryRequired)
+	}
+	if pending := ledger.PendingMutation; pending != nil {
+		if pending.Owner != req.Identity.Owner {
+			return fmt.Errorf("%w: pending reservation belongs to another owner", uapinstaller.ErrRecoveryRequired)
+		}
+		intent, err := ReadIntent(req.Identity.ControlRoot)
+		if err != nil {
+			return err
+		}
+		if !intentMatches(intent, pending.ID, "uninstall", string(req.Integration), req.SourceDigest, req.TreeDigest, req.HelperDigest, req.HelperVersion) {
+			return fmt.Errorf("%w: pending intent does not match retained uninstall", uapinstaller.ErrRecoveryRequired)
+		}
+	}
+	eng, err := m.engine(req, new(uint64), nil)
+	if err != nil {
+		return err
+	}
+	view, err := eng.Inspect(ctx)
+	if err != nil {
+		return err
+	}
+	if view.Recovery.Required {
+		return fmt.Errorf("%w: UAP finalization remains pending", uapinstaller.ErrRecoveryRequired)
+	}
+	return nil
 }

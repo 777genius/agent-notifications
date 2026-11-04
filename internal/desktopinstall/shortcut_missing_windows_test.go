@@ -85,9 +85,11 @@ func TestWindowsPortableMissingShortcutLifecycle(t *testing.T) {
 				if err != nil || !bytes.Equal(got, foreign) {
 					t.Fatalf("CAS rejection changed replacement: %q %v", got, err)
 				}
-				snapshot, err := installruntime.ReadInstalledSnapshot(root)
-				if err != nil || snapshot.Recovery || !reflect.DeepEqual(snapshot.Ledger, ledger) {
-					t.Fatalf("CAS rejection changed ledger: %+v %v", snapshot, err)
+				// The foreign replacement intentionally fails installed readiness.
+				// Compare durable ownership and journal state without admitting it.
+				recorded, recovery, err := installruntime.ReadOwnership(root)
+				if err != nil || recovery || !reflect.DeepEqual(recorded, ledger) {
+					t.Fatalf("CAS rejection changed ownership: %+v recovery=%v %v", recorded, recovery, err)
 				}
 				if err := os.Remove(path); err != nil {
 					t.Fatal(err)

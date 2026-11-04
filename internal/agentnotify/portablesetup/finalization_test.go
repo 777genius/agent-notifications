@@ -289,7 +289,18 @@ func TestGroupFinalInspectionMatchesSelectedBindingAndPreservesSiblings(t *testi
 	if err != nil || len(got) != 1 || got[0] != selected {
 		t.Fatalf("selected binding confused with sibling: %+v %v", got, err)
 	}
+	primaryOnly := uapinstaller.Result{InstallationID: req.Identity.InstallationID,
+		Binding: uapinstaller.BindingFacts{ClientID: "claude", BindingID: selected.BindingID}}
+	got, err = installedGroupBindings([]MaterializeRequest{req}, primaryOnly, view)
+	if err != nil || len(got) != 1 || got[0] != selected {
+		t.Fatalf("exact primary binding fallback rejected: %+v %v", got, err)
+	}
 	view.Installations[0].Bindings = []uapinstaller.InspectedBinding{siblingFact}
+	unidentified := uapinstaller.Result{InstallationID: req.Identity.InstallationID,
+		Targets: []uapinstaller.ClientResult{{ClientID: "claude"}}}
+	if _, err := installedGroupBindings([]MaterializeRequest{req}, unidentified, view); !errors.Is(err, ErrPreflight) {
+		t.Fatalf("unidentified result substituted the sole sibling: %v", err)
+	}
 	if _, err := installedGroupBindings([]MaterializeRequest{req}, result, view); !errors.Is(err, ErrPreflight) {
 		t.Fatalf("missing selected binding substituted sibling: %v", err)
 	}

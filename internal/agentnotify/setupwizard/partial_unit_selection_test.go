@@ -5,6 +5,8 @@ package setupwizard
 import (
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/777genius/agent-notifications/internal/codexsetup"
@@ -74,8 +76,20 @@ func TestOmittedNotifyPreservesExplicitClientOverrides(t *testing.T) {
 	if err := os.MkdirAll(req.CodexHome, 0700); err != nil {
 		t.Fatal(err)
 	}
-	req.AgentNotify, req.CodexAgentNotify = nil, boolPtr(true)
+	req.AgentNotify = nil
+	before := policyConflictFiles(t, filepath.Dir(req.ControlRoot))
 	plan, err := Plan(testCtx(t), req)
+	if err == nil || plan.Ready || plan.Result.Reason != "not_installed" || plan.Request.CodexAgentNotify != nil {
+		t.Fatalf("omitted notification-only request lost missing sibling: %+v %v", plan, err)
+	}
+	if got, err := Run(testCtx(t), req); err == nil || got.Reason != "not_installed" {
+		t.Fatalf("missing sibling mutated live client: %+v %v", got, err)
+	}
+	if after := policyConflictFiles(t, filepath.Dir(req.ControlRoot)); !reflect.DeepEqual(before, after) {
+		t.Fatal("missing sibling preflight changed installed files")
+	}
+	req.AgentNotify, req.CodexAgentNotify = nil, boolPtr(true)
+	plan, err = Plan(testCtx(t), req)
 	if err == nil || plan.Ready || plan.Result.Reason != "not_installed" ||
 		plan.Request.ClaudeAgentNotify == nil || !*plan.Request.ClaudeAgentNotify ||
 		plan.Request.CodexAgentNotify == nil || !*plan.Request.CodexAgentNotify {
@@ -92,5 +106,44 @@ func TestOmittedNotifyPreservesExplicitClientOverrides(t *testing.T) {
 	if err != nil || !plan.Ready || plan.Request.ClaudeAgentNotify != nil ||
 		plan.Request.CodexAgentNotify == nil || *plan.Request.CodexAgentNotify {
 		t.Fatalf("explicit global/client selection was rewritten: %+v %v", plan, err)
+	}
+}
+
+func TestOmittedNotifyRetainedUpdatePreservesDataWithoutInstallingClient(t *testing.T) {
+	req := installedClaudeSelectionRequest(t)
+	req.Action, req.AgentNotify, req.ExternalUninstalled = ActionUninstall, nil, true
+	removed, err := Run(testCtx(t), req)
+	if err != nil || removed.Outcome != "completed" || !removed.DataRetained {
+		t.Fatalf("retain installed data: %+v %v", removed, err)
+	}
+	statePath := filepath.Join(filepath.Dir(req.ControlRoot), "uap", "state", "state-v2.json")
+	sentinel := filepath.Join(retainedDataRoot(t, statePath), "keep.txt")
+	if err := os.WriteFile(sentinel, []byte("retain\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	req.PackageRoot = filepath.Join(filepath.Dir(req.ControlRoot), "updated-package")
+	writePackage(t, req.PackageRoot, req.Helper)
+	if err := os.WriteFile(filepath.Join(req.PackageRoot, "plugin.json"), []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent-notify","version":"1.0.1"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	req.Action, req.ExternalUninstalled = ActionUpdate, false
+	plan, err := Plan(testCtx(t), req)
+	if err != nil || !plan.Ready || !strings.Contains(plan.Text, "metadata-only") {
+		t.Fatalf("retained metadata plan: %+v %v", plan, err)
+	}
+	updated, err := Run(testCtx(t), plan.Request)
+	if err != nil || updated.Outcome != "completed" || updated.Reason != "retained_source_updated" {
+		t.Fatalf("retained metadata update: %+v %v", updated, err)
+	}
+	if live := LiveNotifyClients(req.ControlRoot, req.Agents); len(live) != 0 {
+		t.Fatalf("metadata update installed a client: %v", live)
+	}
+	req.Action = ActionInstall
+	added, err := Run(testCtx(t), req)
+	if err != nil || added.Outcome != "completed" || added.InstallationID != req.InstallationID {
+		t.Fatalf("reinstall retained installation: %+v %v", added, err)
+	}
+	if body, err := os.ReadFile(sentinel); err != nil || string(body) != "retain\n" {
+		t.Fatalf("retained data changed: %q %v", body, err)
 	}
 }

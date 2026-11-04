@@ -93,3 +93,86 @@ func TestInspectReportsUnreadableLiveProfileWithoutChangingInstalledState(t *tes
 	}
 	assertInstalled(got, "")
 }
+
+func TestInspectProfileErrorKeepsRecoveryFacts(t *testing.T) {
+	for _, pending := range []struct {
+		name        string
+		kernel, uap bool
+		unreadable  bool
+	}{
+		{name: "kernel", kernel: true},
+		{name: "uap", uap: true},
+		{name: "both", kernel: true, uap: true},
+		{name: "unreadable-uap", kernel: true, uap: true, unreadable: true},
+	} {
+		t.Run(pending.name, func(t *testing.T) {
+			req := installedClaudeSelectionRequest(t)
+			ctx := testCtx(t)
+			snap, err := installruntime.ReadInstalledSnapshot(req.ControlRoot)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mat, err := materializer(req, snap, req.RuntimeRoot)
+			if err != nil {
+				t.Fatal(err)
+			}
+			bindings, err := liveClientBindings(mat, req.InstallationID, "claude")
+			if err != nil || len(bindings) != 1 {
+				t.Fatalf("installed binding: %+v %v", bindings, err)
+			}
+			data, err := bindingDataRoot(mat, req.InstallationID, bindings[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(data, liveProfileFile), []byte("{"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if pending.kernel {
+				plantWizardKernelJournal(t, ctx, req.ControlRoot, req.RuntimeRoot)
+			}
+			if pending.uap {
+				plantWizardJournal(t, req.ControlRoot)
+			}
+			if pending.unreadable {
+				if err := os.WriteFile(wizardPendingJournalPath(req.ControlRoot), []byte("{"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			req.Action, req.Agents = ActionInspect, []string{"claude", "codex"}
+			req.CodexHome = t.TempDir()
+			before := policyConflictFiles(t, filepath.Dir(req.ControlRoot))
+			got, err := Run(ctx, req)
+			var syntax *json.SyntaxError
+			if !errors.As(err, &syntax) || !strings.Contains(err.Error(), bindings[0].ClientBindingID) || got.Outcome != "incomplete" || got.Reason != "recovery_required" {
+				t.Errorf("inspection lost profile cause or recovery precedence: %+v %v", got, err)
+			}
+			if pending.unreadable && (err == nil || !strings.Contains(err.Error(), "wizard-pending-op")) {
+				t.Errorf("inspection lost the UAP read error beside the profile error: %v", err)
+			}
+			kernel, uap := false, false
+			for _, next := range got.NextActions {
+				if next.Kind == "recover" {
+					kernel = kernel || next.Reason == "kernel-journal"
+					uap = uap || strings.Contains(next.Reason, "wizard-pending-op")
+				}
+			}
+			if kernel != pending.kernel || uap != pending.uap {
+				t.Errorf("profile error hid recovery actions: %+v", got.NextActions)
+			}
+			installed, absent := false, false
+			for _, target := range got.Targets {
+				if target.Unit != "agent-notify" {
+					continue
+				}
+				installed = installed || target.Client == "claude" && target.Outcome == "installed" && target.Reason == bindings[0].ClientBindingID && target.Profile == "" && target.TreeDigest != ""
+				absent = absent || target.Client == "codex" && target.Outcome == "absent"
+			}
+			if !installed || !absent {
+				t.Errorf("profile error hid selected installation facts: %+v", got.Targets)
+			}
+			if after := policyConflictFiles(t, filepath.Dir(req.ControlRoot)); !reflect.DeepEqual(before, after) {
+				t.Fatal("read-only inspection changed installed state, profile or pending journals")
+			}
+		})
+	}
+}

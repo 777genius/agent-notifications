@@ -275,6 +275,13 @@ func preserveLiveUnits(ctx context.Context, req Request, agents []portable.Integ
 		if req.AgentNotify != nil || perClientNotify(req, agent) != nil {
 			continue
 		}
+		hasHooks := (agent == portable.Claude || agent == portable.Codex) &&
+			agentUnit(req.Hooks, perClientHooks(req, agent), false)
+		if !preserveHooks && !notifyLive[portablesetup.ClientID(agent)] && !hasHooks {
+			// A notification-only request still needs the existing missing-binding
+			// or retained-source preflight. Absence alone is not an explicit opt-out.
+			continue
+		}
 		notify := boolPtr(notifyLive[portablesetup.ClientID(agent)])
 		switch agent {
 		case portable.Claude:

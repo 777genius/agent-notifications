@@ -102,6 +102,13 @@ compatibility input even when the host supplies exact KnownTargets. A host-only
 field addition is ineffective; the SDK contract and dependency must change.
 The selected mutation scope and all-binding compatibility gate remain intact.
 
+[Webhook outcome policy #596](https://github.com/777genius/agent-notifications/issues/596)
+tracks the inherited queue-time notification/cooldown contract, explicitly
+required by #251 and the existing queued-webhook test. Remote failures after
+queueing cannot safely be handled by moving a shared state write to a callback:
+pending/unknown effects and independent channel retries need a reviewed policy,
+coordinated with #594. This refactor preserves the existing contract.
+
 ## Implementation slices
 
 ### S1. Product-owned hook state and lifecycle
@@ -383,10 +390,11 @@ corrections stay inside the same admission, ownership and reporting boundaries:
   additive JSON flags and the real CLI parser. Existing boolean defaults and
   explicit consent remain unchanged; omitted frozen-source reconstruction is
   still the separate #592 follow-up.
-- Preserve each omitted notification selection on update/repair even when hooks
-  were explicit. Explicit global/per-client choices retain precedence. The
-  existing missing-sibling repair fixture now explicitly requests both units;
-  all its refusal and no-mutation assertions remain intact.
+- Preserve omitted notification selection when update/repair explicitly selects
+  a supported hooks branch. Explicit global/per-client choices retain precedence.
+  A notification-only request with no live binding keeps the existing missing
+  binding or retained-source preflight; absence alone is not an explicit opt-out.
+  The original missing-sibling API and CLI inputs and refusal assertions remain.
 - Derive successful uninstall outcomes from actual hook/notification removals,
   including retained-empty portable state. Codex removal uses the transactional
   `Replaced` fact so an empty retry remains unchanged. Inspection propagates
@@ -414,3 +422,52 @@ absence attestation; it does not claim native activation or completed SDK remova
 Windows COM and Darwin physical-profile authority require native CI. The delivery
 PR records fresh workflow results for the published revision, separately from
 local tests and from the sealed release's external qualification requirements.
+
+### Native E2E correction round
+
+Native Ubuntu/macOS runs exposed a selection regression in the continued-review
+changes: hooks-off notification-only updates with no live binding were cancelled
+before the existing missing-binding or retained-source preflight. The per-client
+selection guard now retains that preflight without changing all-omitted requests
+or explicit overrides. The original eight internal retained/missing tests and
+two CLI scenarios retain their expectations. A public Claude fixture also checks
+install, retained uninstall, metadata-only update, no intermediate client, and
+reinstallation with the same identity and data. It failed against `e18fb67` with
+`empty_units` and passes with the correction. The combined focused selection and
+inspection suite passes locally with the race detector.
+
+Inspection now accumulates typed live-profile errors while continuing selected
+target and kernel/UAP recovery observation. Pending recovery keeps precedence,
+both causes remain available when the UAP journal is unreadable, and the command
+does not change installed files or journals. Four real interrupted-transaction
+cases cover kernel, UAP, both, and an unreadable UAP journal.
+
+Native Darwin ARM64 at `e18fb67` ran all six group recovery authority cases,
+including public `Run` with replaced physical Local profiles in both selected-client
+orders, with no skips. Native Windows identified a test-oracle error: its intentionally foreign
+shortcut correctly failed installed-file readiness. The comparison now uses the
+strict ownership reader to prove unchanged durable ledger and absent journal;
+foreign-byte, CAS-refusal, actual repair/removal and readiness assertions remain.
+Final acceptance uses native Windows execution of the published revision;
+the corresponding workflow evidence is recorded in #590.
+
+The OpenCode Windows toast regression compares the historical literal AppID to
+the rendered result, so moving a constant cannot conceal an identity change.
+
+Group finalization now requires an exact result binding ID, including the existing
+primary-binding fallback, before matching the inspection or recording host facts.
+An ID-less SDK result fails closed while preserving any already committed result.
+This is result-contract hardening; no public wrong-sibling exploit is claimed.
+The focused regression and existing real install, unchanged-repeat, mixed-revision
+repair and final-inspection-failure controls pass with race detection.
+
+A retained-empty direct removal retry now refuses an unfinished kernel transaction,
+host finalization or UAP journal instead of returning false success. The check is
+read-only and still accepts a settled retry without obsolete source/client paths.
+The wizard's existing `KeepReservation` delegation remains valid when the recorded
+owner and intent match; actual journals are always refused. Review caught the
+sequential multi-client case before publication: removing the only live client
+must not reject a later absent sibling merely because their common wizard intent
+is still open. The public three-client uninstall regression failed against the
+first guard and passes with the bounded delegation. No replay or cleanup authority
+is added to the no-op branch.

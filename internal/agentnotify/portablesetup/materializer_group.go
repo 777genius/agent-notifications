@@ -217,13 +217,16 @@ func installedGroupBindings(reqs []MaterializeRequest, result uapinstaller.Resul
 		if selectedID == "" && result.Binding.ClientID == ClientID(req.Integration) {
 			selectedID = result.Binding.BindingID
 		}
+		if selectedID == "" {
+			return nil, fmt.Errorf("%w: group result omitted binding identity for %s", ErrPreflight, req.Integration)
+		}
 		matches := 0
 		for _, installation := range view.Installations {
 			if installation.InstallationID != req.Identity.InstallationID {
 				continue
 			}
 			for _, binding := range installation.Bindings {
-				if binding.ClientID != ClientID(req.Integration) || selectedID != "" && binding.BindingID != selectedID {
+				if binding.ClientID != ClientID(req.Integration) || binding.BindingID != selectedID {
 					continue
 				}
 				matches++

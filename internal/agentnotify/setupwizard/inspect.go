@@ -2,6 +2,7 @@ package setupwizard
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -178,6 +179,7 @@ func inspect(ctx context.Context, req Request, agents []portable.Integration, sn
 		return out, err
 	}
 	out.Outcome = "completed"
+	var profileReadErr error
 	for _, agent := range agents {
 		found := false
 		for _, installation := range state.Installations {
@@ -201,7 +203,7 @@ func inspect(ctx context.Context, req Request, agents []portable.Integration, sn
 				})
 				if profileErr != nil {
 					out.Outcome, out.Reason = "incomplete", "live_profile_unavailable"
-					return out, fmt.Errorf("live profile for binding %s: %w", binding.ClientBindingID, profileErr)
+					profileReadErr = errors.Join(profileReadErr, fmt.Errorf("live profile for binding %s: %w", binding.ClientBindingID, profileErr))
 				}
 			}
 		}
@@ -236,7 +238,7 @@ func inspect(ctx context.Context, req Request, agents []portable.Integration, sn
 	if err != nil {
 		out.Outcome, out.Reason = "incomplete", "recovery_required"
 		out.NextActions = append(out.NextActions, NextAction{Kind: "recover", Reason: err.Error()})
-		return out, err
+		return out, errors.Join(profileReadErr, err)
 	}
 	if view.Recovery.Required {
 		out.Outcome, out.Reason = "incomplete", "recovery_required"
@@ -245,7 +247,7 @@ func inspect(ctx context.Context, req Request, agents []portable.Integration, sn
 		})
 	}
 	out = markInspectedIdentity(view, out)
-	return reportPendingWizardIntent(req, snap, out), nil
+	return reportPendingWizardIntent(req, snap, out), profileReadErr
 }
 
 func markInspectedIdentity(view uapinstaller.Inspection, out Result) Result {

@@ -3175,9 +3175,6 @@ func TestWizardRepairBothClientsMissingOneDoesNotMutateLive(t *testing.T) {
 		t.Fatalf("uninstall claude: %+v %v", removed, err)
 	}
 	req.Action = ActionRepair
-	// Request both notification units explicitly; omission preserves only the
-	// still-installed units, while this case must refuse the missing sibling.
-	req.AgentNotify = boolPtr(true)
 	got, err := Run(ctx, req)
 	if err == nil || got.Reason != "not_installed" {
 		t.Fatalf("repair missing sibling: %+v %v", got, err)
