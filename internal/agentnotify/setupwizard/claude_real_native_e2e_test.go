@@ -107,6 +107,16 @@ func TestWizardClaudeNativeSkillsDirLifecycleE2E(t *testing.T) {
 	if err := json.Unmarshal(out, &listing); err != nil {
 		t.Fatal("native plugin list is not an array")
 	}
+	entryFound := false
+	for _, entry := range listing {
+		if entry["id"] == "agent-notify@skills-dir" && entry["enabled"] == true &&
+			entry["scope"] == "user" && entry["installPath"] == managedPath {
+			entryFound = true
+		}
+	}
+	if !entryFound {
+		t.Fatal("native listing omitted enabled user-scope managed @skills-dir identity")
+	}
 	req.Action, req.Yes = ActionInspect, false
 	view, err := Run(ctx, req)
 	if err != nil || view.ExitCode() != 0 || len(view.Readiness) != 1 || view.Readiness[0].Delivery != "not_tracked" {
