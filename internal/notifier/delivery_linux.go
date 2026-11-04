@@ -25,8 +25,8 @@ type sessionNotifications interface {
 // FreedesktopDelivery is the Linux explicit-notify adapter. It makes one
 // session-bus Notify call and never falls back after a possible D-Bus effect.
 type FreedesktopDelivery struct {
-	Clock                   BootClock
-	Open                    func(context.Context) (sessionNotifications, error)
+	Clock BootClock
+	Open  func(context.Context) (sessionNotifications, error)
 	// AgentNotifyPresentation is set only by the explicit MCP composition.
 	// Other products retain their existing icon and system-sound contract.
 	AgentNotifyPresentation bool
