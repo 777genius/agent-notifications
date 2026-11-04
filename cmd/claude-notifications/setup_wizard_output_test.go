@@ -213,6 +213,39 @@ func TestSetupWizardClaudeActivationAndDeliveryAreIndependent(t *testing.T) {
 
 // Generic portable failures must not collapse to the unhelpful "needs
 // inspection" banner when UAP returned a typed setup stage.
+func TestSetupWizardHumanInspectShowsUAPFailureSeparately(t *testing.T) {
+	result := setupwizard.Result{
+		Action: "inspect", Outcome: "completed",
+		Targets: []setupwizard.TargetResult{{
+			Client: "claude", Unit: "agent-notify", Outcome: "installed",
+			Materialization: "materialized", Activation: "failed", Verification: "failed",
+		}},
+		Readiness: []setupwizard.ReadinessFact{{Client: "claude", Runtime: "installed", MCP: "installed", Delivery: "not_tracked"}},
+	}
+	var out bytes.Buffer
+	if code := writeSetupWizardResult(&out, false, result, nil); code != 0 {
+		t.Fatalf("read-only inspect should not fail: %d", code)
+	}
+	if !strings.Contains(out.String(), "UAP activation: failed. Verification: failed.\n") {
+		t.Fatalf("lost actual UAP failure despite installed MCP: %s", out.String())
+	}
+	if strings.Contains(out.String(), "activation verified") || strings.Contains(out.String(), "Delivery: verified") {
+		t.Fatalf("read-only inspection forged verification: %s", out.String())
+	}
+	out.Reset()
+	if code := writeSetupWizardResult(&out, true, result, nil); code != 0 {
+		t.Fatalf("JSON inspect: %d", code)
+	}
+	var decoded setupwizard.Result
+	if err := json.Unmarshal(out.Bytes(), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Targets[0].Verification != "failed" || decoded.Targets[0].Activation != "failed" ||
+		decoded.Readiness[0].Delivery != "not_tracked" {
+		t.Fatalf("JSON lost independent truth: %+v", decoded)
+	}
+}
+
 func TestSetupWizardPortableFailureDescriptions(t *testing.T) {
 	for _, tc := range []struct{ reason, want string }{
 		{"portable_install_failed", "notification tool setup failed"},
