@@ -74,7 +74,7 @@ func TestInstallOrUpdateRetainsCommittedUpdateAfterLaterPlanFailure(t *testing.T
 	committed := false
 	for _, target := range got.Targets {
 		if target.Client == "claude" && target.Unit == "agent-notify" &&
-			target.Outcome == "completed" && target.Materialization == "materialized" {
+			target.Outcome == "completed" && target.Reason != "" && target.TreeDigest != "" {
 			committed = true
 		}
 	}
