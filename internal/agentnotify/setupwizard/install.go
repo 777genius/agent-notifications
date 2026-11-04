@@ -313,7 +313,10 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 		}
 		for i, agent := range notifyAgents {
 			id.InstallationID = got[i].InstallationID
-			_ = persistKnownReceipt(ctx, req, runtimeRoot, mat, id.InstallationID, string(agent), out.reservation)
+			if err := persistKnownReceipt(ctx, req, runtimeRoot, mat, id.InstallationID, string(agent), out.reservation); err != nil {
+				out.Outcome, out.Reason = "incomplete", err.Error()
+				return out, err
+			}
 			if err := recordLiveProfile(got[i].DataRoot, string(agent), clientConfig(req, agent)); err != nil {
 				out.Outcome, out.Reason = "incomplete", err.Error()
 				return out, err
@@ -467,7 +470,10 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 		out.Generation = generation
 		out.Targets = append(out.Targets, completedNotifyTarget(mat, got.InstallationID, string(agent), got.BindingID))
 		id.InstallationID = got.InstallationID
-		_ = persistKnownReceipt(ctx, req, runtimeRoot, mat, id.InstallationID, string(agent), out.reservation)
+		if err := persistKnownReceipt(ctx, req, runtimeRoot, mat, id.InstallationID, string(agent), out.reservation); err != nil {
+			out.Outcome, out.Reason = "incomplete", err.Error()
+			return out, err
+		}
 		if err := recordLiveProfile(got.DataRoot, string(agent), clientConfig(req, agent)); err != nil {
 			out.Outcome, out.Reason = "incomplete", err.Error()
 			return out, err
