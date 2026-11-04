@@ -54,11 +54,12 @@ To diagnose without changing state:
    Restart Claude to load changed plugin state. A working `notify` receipt
    does not authorize marking UAP activation or verification as successful.
 
-`delivery_not_verified` in wizard inspection is a request to **test delivery**,
-not evidence that delivery has failed. The installer does not persist MCP
-notification receipts; calling `notify` successfully will not clear this
-status. A `submitted` receipt proves the desktop server accepted the request,
-not that a banner was visible or audible on the user's screen.
+Read-only wizard inspection reports `delivery: not_tracked`, not
+`delivery_not_verified`, and offers no repeated test action. Immediately
+following installation, the `delivery_not_verified` next action asks for an
+initial test; it is not evidence of failed delivery. Setup does not persist
+MCP notification receipts. A `submitted` receipt proves the desktop server
+accepted the request, not that the banner was visible or audible.
 
 On Linux, the hook path still uses the configured plugin icon and plays
 the configured hook audio itself. The explicit MCP path uses the **embedded
@@ -68,7 +69,11 @@ the desktop server reports sound capability. A `sound: false` opt-out sends
 `suppress-sound` instead. This does not play the hook's custom MP3 or override
 desktop notification settings, mute, volume or Do Not Disturb. D-Bus acceptance
 proves transport, not audible playback or display on a particular KDE/Wayland
-desktop; native screen/audio qualification is a separate gate.
+desktop; native screen/audio qualification is a separate gate. This
+presentation applies to the direct Freedesktop transport used by Claude MCP.
+An eligible Codex desktop-thread callback uses a separate authenticated Linux
+portal; its styling is currently unchanged, and this fix does not claim icon or
+sound parity for that navigable portal path.
 
 ### `connection closed: initialize response` during concurrent startup
 
