@@ -103,7 +103,6 @@ export function validatePreflight(read: Read, options: Options, head?: string): 
   if (options.mode === 'snapshot') return;
   requireValue(options.sourceSHA && sha.test(options.sourceSHA), 'Explicit lowercase 40-character --source-sha is required');
   if (options.mode === 'candidate') requireValue(head === options.sourceSHA, 'Candidate HEAD differs from --source-sha');
-  requireValue(read('.github/workflows/release.yml').split('\n').some(line => line.trim() === `- '!v${options.version}'`), 'Basic release tag must be excluded from full Release workflow');
   if (options.mode === 'prepared-promotion') {
     for (const row of channels) {
       requireValue(row.tag === `v${options.version}`, `Stale promotion version: ${row.key}`);

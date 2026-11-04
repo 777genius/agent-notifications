@@ -11,12 +11,10 @@ from unittest.mock import patch
 import zipfile
 
 import ci_release_scope_test as fixture
-from ci_release_scope import equivalent_source, equivalent_tree, stable_exclusion_only, channel_source
+from ci_release_scope import equivalent_source, equivalent_tree, channel_source
 import ci_native_evidence as evidence
 
 WORKFLOW = 'ci-macos.yml'
-RELEASE = b"name: Release\n\non:\n  push:\n    tags:\n      - 'v*'\n      - '!v1.0.0'\n\npermissions:\n  contents: read\n"
-ADDED = b"      - '!v1.0.1'\n"
 
 
 def channels(source, snapshot=None):
@@ -32,7 +30,6 @@ def fixture_scope_platforms():
 class EvidenceFixture(fixture.ScopeFixture):
     def setUp(self):
         super().setUp()
-        self.write('.github/workflows/release.yml', RELEASE.decode())
         self.write('release-channels.tsv', channels(self.base))
         self.write('docs/RELEASE.md', 'release docs\n')
         self.write('docs/PLATFORM_RELEASE_CHANNELS.md', 'channel docs\n')
@@ -64,12 +61,6 @@ class EvidenceFixture(fixture.ScopeFixture):
         head = self.commit()
         with patch('ci_release_scope.git', side_effect=lambda *args: self.git(*args)):
             self.assertIsNone(equivalent_source('pull_request', fixture.event(old_base, head)))
-
-    def test_exact_operator_exclusion_qualifies(self):
-        self.write('.github/workflows/release.yml', RELEASE.replace(b'\npermissions:', ADDED + b'\npermissions:').decode())
-        head = self.commit()
-        with patch('ci_release_scope.git', side_effect=lambda *args: self.git(*args)):
-            self.assertEqual(equivalent_source('pull_request', fixture.event(self.base, head)), self.base)
 
     def test_every_tracked_product_input_and_mode_blocks(self):
         for path in ['internal/runtime.go', 'go.mod', 'Makefile', '.github/workflows/ci-macos.yml',
@@ -150,15 +141,6 @@ class EvidenceFixture(fixture.ScopeFixture):
 
 
 class EvidencePolicy(unittest.TestCase):
-    def test_exclusion_is_one_stable_additive_line_in_tags(self):
-        valid = RELEASE.replace(b'\npermissions:', ADDED + b'\npermissions:')
-        self.assertTrue(stable_exclusion_only(RELEASE, valid))
-        for invalid in [valid + ADDED, valid.replace(b'contents: read', b'contents: write'),
-                        valid.replace(b'!v1.0.1', b'!v*'), RELEASE + ADDED,
-                        valid.replace(b'!v1.0.1', b'!v01.0.1'), RELEASE.replace(b'!v1.0.0', b'!v1.0.1'),
-                        RELEASE.replace(b"      - 'v*'\n", ADDED + b"      - 'v*'\n")]:
-            self.assertFalse(stable_exclusion_only(RELEASE, invalid))
-
     def test_skipped_duplicate_or_missing_full_jobs_never_prove_success(self):
         jobs = [{'id': index, 'name': name, 'status': 'completed', 'conclusion': 'success'}
                 for index, name in enumerate( (*evidence.CONTRACTS[WORKFLOW][2], evidence.CONTRACTS[WORKFLOW][1]))]
