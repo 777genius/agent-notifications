@@ -2235,6 +2235,9 @@ func TestWizardInstallInspectUninstall(t *testing.T) {
 			if target.TreeDigest == "" {
 				t.Fatalf("inspect omitted tree digest: %+v", target)
 			}
+			if target.Materialization == "" || target.Activation == "" || target.Verification == "" {
+				t.Fatalf("inspect omitted durable UAP lifecycle facts: %+v", target)
+			}
 		}
 	}
 	if !found {
