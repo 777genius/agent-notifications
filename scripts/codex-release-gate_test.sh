@@ -5,7 +5,7 @@ check() { expected=$1; shift; actual=$(sh "$selector" "$@"); [ "$actual" = "$exp
 check not-required --paths
 check not-required --paths README.md docs/guide.md CHANGELOG.md
 check required --first-release
-for path in go.mod go.sum .github/workflows/ci-linux.yml .github/workflows/release.yml .codex-plugin/plugin.json .claude-plugin/plugin.json .claude-plugin/marketplace.json hooks/hooks-codex.json config/config.json setup.sh bin/hook-wrapper.sh bin/hook-wrapper.cmd bin/codex-hook-wrapper.sh bin/codex-hook-wrapper.cmd bin/install.sh bin/bootstrap.sh sounds/tone.wav swift-notifier/main.swift claude_icon.png scripts/codex-release-gate.sh scripts/codex-release-gate_test.sh cmd/claude-notifications/main.go; do
+for path in go.mod go.sum .github/workflows/ci-linux.yml .github/workflows/basic-release.yml .codex-plugin/plugin.json .claude-plugin/plugin.json .claude-plugin/marketplace.json hooks/hooks-codex.json config/config.json setup.sh bin/hook-wrapper.sh bin/hook-wrapper.cmd bin/codex-hook-wrapper.sh bin/codex-hook-wrapper.cmd bin/install.sh bin/bootstrap.sh sounds/tone.wav swift-notifier/main.swift claude_icon.png scripts/codex-release-gate.sh scripts/codex-release-gate_test.sh cmd/claude-notifications/main.go; do
  check required --paths "$path"
  check required --paths README.md "$path"
 done
