@@ -123,6 +123,10 @@ source "$SANDBOX/functions.sh"
         echo "Failed native path conversion was ignored" >&2; exit 1
     fi
     [ ! -e "$trace" ] || { echo "Helper ran after path conversion refusal" >&2; exit 1; }
+    if load_frozen_dispatch; then
+        echo "Failed intent-args path conversion was ignored" >&2; exit 1
+    fi
+    [ ! -e "$trace" ] || { echo "Intent-args ran after path conversion refusal" >&2; exit 1; }
 )
 # CHLD from the job-list queries reproduces Bash's adjacent-substitution trap
 # parser failure without timing a signal. The shell itself is never its child.
