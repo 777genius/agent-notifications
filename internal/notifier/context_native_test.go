@@ -37,15 +37,26 @@ func contextNativeFixture(t *testing.T) (contextNativeOperations, *contextNative
 		},
 	}
 	ops.launch = func(ctx context.Context, request, receipt string) error {
+		// Match OwnedRequest.consume: claim before reading the request or
+		// publishing .started, so cancellation cannot be followed by a new
+		// synthetic lease after the helper has already announced its identity.
+		if err := writePrivate(strings.TrimSuffix(request, ".request")+".claim", []byte{}); err != nil {
+			t.Fatal(err)
+		}
 		data, err := readPrivate(request, 16384)
-		if err != nil || json.Unmarshal(data, &captured) != nil {
-			t.Fatal("request unavailable", err)
+		if err != nil {
+			// Cancellation can revoke admission before the native reader starts.
+			// Only that missing request is an expected cancellation outcome.
+			if os.IsNotExist(err) && ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return err
+		}
+		if err := json.Unmarshal(data, &captured); err != nil {
+			return err
 		}
 		started, _ := json.Marshal(contextNativeStarted{1, captured.CorrelationID, captured.Nonce, process})
 		if err := writePrivate(strings.TrimSuffix(request, ".request")+".started", started); err != nil {
-			t.Fatal(err)
-		}
-		if err := writePrivate(strings.TrimSuffix(request, ".request")+".claim", []byte{}); err != nil {
 			t.Fatal(err)
 		}
 		response, _ := json.Marshal(map[string]any{"schemaVersion": 1, "correlationID": captured.CorrelationID, "nonce": captured.Nonce, "notificationID": captured.CorrelationID, "status": "submitted", "reason": "os_accepted", "retrySafe": false})
@@ -97,6 +108,10 @@ func TestContextNativeStillRequiresFiniteParentDeadline(t *testing.T) {
 
 func TestContextNativeCancellationRevokesBeforeStoppingExactApp(t *testing.T) {
 	ops, _, stopped := contextNativeFixture(t)
+	// Cancel after the exact process has announced itself. The finite parent
+	// bounds a stuck fixture; its timer does not choose the interleaving tested.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
 	launch := ops.launch
 	var directory string
 	ops.launch = func(ctx context.Context, request, receipt string) error {
@@ -107,6 +122,7 @@ func TestContextNativeCancellationRevokesBeforeStoppingExactApp(t *testing.T) {
 		if err := os.Remove(receipt); err != nil {
 			t.Fatal(err)
 		}
+		cancel()
 		<-ctx.Done()
 		// Joining open must not leave its independently launched app admitted.
 		// Hold that join until the cancellation lease has actually disappeared.
@@ -137,9 +153,7 @@ func TestContextNativeCancellationRevokesBeforeStoppingExactApp(t *testing.T) {
 		}
 		return stop(process, executable)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
-	defer cancel()
-	if err := runContextNativeApp(ctx, contextNativeClock{}, "/TEST-owned-helper", []string{"-title", "Pi", "-message", "fixed"}, ops); !errors.Is(err, context.DeadlineExceeded) || *stopped != 1 {
+	if err := runContextNativeApp(ctx, contextNativeClock{}, "/TEST-owned-helper", []string{"-title", "Pi", "-message", "fixed"}, ops); !errors.Is(err, context.Canceled) || *stopped != 1 {
 		t.Fatalf("cancel=%v stopped=%d", err, *stopped)
 	}
 	if _, err := os.Stat(directory); !os.IsNotExist(err) {

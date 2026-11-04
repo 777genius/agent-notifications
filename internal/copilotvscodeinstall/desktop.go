@@ -10,8 +10,8 @@ import (
 	"github.com/777genius/agent-notifications/internal/copilotvscodeevent"
 	"github.com/777genius/agent-notifications/internal/cursorevent"
 	"github.com/777genius/agent-notifications/internal/cursorinstall"
+	"github.com/777genius/agent-notifications/internal/desktopinstall"
 	"github.com/777genius/agent-notifications/internal/notification"
-	"github.com/777genius/agent-notifications/internal/opencodeinstall"
 	"github.com/777genius/agent-notifications/internal/webhook"
 )
 
@@ -42,15 +42,15 @@ func NewCursorWebhookSender(g CursorGate, b cursorevent.Binding, send cursoreven
 
 // PrepareCursorNativeSpool uses the existing private directory and lock owner.
 func PrepareCursorNativeSpool(ctx context.Context, root string) (string, error) {
-	return opencodeinstall.PrepareNativeSpoolFor(ctx, root, opencodeinstall.CursorDesktop)
+	return desktopinstall.PrepareNativeSpoolFor(ctx, root, desktopinstall.CursorDesktop)
 }
 
-const CopilotVSCodeToastAppID = opencodeinstall.CopilotVSCodeToastAppID
+const CopilotVSCodeToastAppID = desktopinstall.CopilotVSCodeToastAppID
 
 // PrepareNativeSpool reuses the existing product spool ownership/deadline rules.
 // Only a later explicit setup caller may prepare it; Gate never creates assets.
 func PrepareNativeSpool(ctx context.Context, root string) (string, error) {
-	return opencodeinstall.PrepareNativeSpoolFor(ctx, root, opencodeinstall.CopilotVSCodeDesktop)
+	return desktopinstall.PrepareNativeSpoolFor(ctx, root, desktopinstall.CopilotVSCodeDesktop)
 }
 
 // NewDesktop accepts only the native informational route. The other-platform

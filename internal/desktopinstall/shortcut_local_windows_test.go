@@ -1,6 +1,6 @@
 //go:build windows
 
-package opencodeinstall
+package desktopinstall
 
 import (
 	"bytes"
@@ -111,8 +111,8 @@ func TestWindowsLocalShortcutRetainedUntilLastBinding(t *testing.T) {
 	if err := windowsShortcutReadyIdentity(id, root, primary, home); err != nil {
 		t.Fatal(err)
 	}
-	actualTarget, appID, args, err := inspectWindowsShortcut(path)
-	if err != nil || !sameWindowsFile(actualTarget, primary) || appID != CopilotVSCodeToastAppID || args != "--help" {
+	actualTarget, appID, args, err := InspectWindowsShortcut(path)
+	if err != nil || !SameWindowsFile(actualTarget, primary) || appID != CopilotVSCodeToastAppID || args != "--help" {
 		t.Fatalf("surviving COM identity: %q %q %q %v", actualTarget, appID, args, err)
 	}
 	file, err = StageLocalWindowsShortcut(keyB, home, primary, false, l)

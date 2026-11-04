@@ -58,13 +58,3 @@ func admitBootstrapReadyClients(req *setupwizard.Request, ready []string) error 
 	req.BootstrapReadyClients = append([]string(nil), ready...)
 	return nil
 }
-
-func readyBootstrapAgents(selected, ready []string) []string {
-	var result []string
-	for _, id := range selected {
-		if len(ready) == 0 || containsProduct(ready, id) {
-			result = append(result, id)
-		}
-	}
-	return result
-}

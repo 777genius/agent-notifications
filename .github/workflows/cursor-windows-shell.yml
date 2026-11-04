@@ -50,7 +50,7 @@ jobs:
           go test ./internal/cursorinstall -count=1
           go test ./internal/cursorsource -run '^TestQualifiedWindowsPowerShellBOM$' -count=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          go test ./internal/opencodeinstall -run '^TestWindowsPortableShortcutNonSharingPrimary$' -count=1
+          go test ./internal/desktopinstall -run '^TestWindowsPortableShortcutNonSharingPrimary$' -count=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           go build -ldflags='-s -w' -o $binary ./cmd/claude-notifications
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

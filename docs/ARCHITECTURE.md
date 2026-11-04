@@ -54,6 +54,62 @@ The config Store owns selection and raw patch writes; see [OS paths and recovery
 
 ## Core Components
 
+### Application and adapter boundaries
+
+Agent event protocols stay independent. `internal/hooks` adapts Claude, Codex and
+Qoder through the existing `EventSource` contract. The handler owns resource
+cleanup and the shared notification sequence; `claude_policy.go`,
+`codex_policy.go` and `qoder_policy.go` own classification. Claude transcript and
+team behavior live alongside its policy. Persistence receives the selected
+`eventKeys.stateKey`, not presentation metadata. In particular, Qoder's hashed
+state must never select a Claude session file, and Qoder events cannot mutate
+Claude team state.
+
+The newer observer adapters retain their individual admission, clocks, claims
+and installation leases. `internal/notification.DeliveryPort` is their shared
+desktop boundary. A receipt describes effects already observed: a later panic
+cannot turn a submitted desktop notification into a wholly suppressed event.
+An uncertain effect is not permission to retry it.
+
+`internal/desktopinstall` owns the platform mechanics already shared by
+OpenCode, Gemini, Cursor and Copilot in VS Code: fixed native identities,
+Windows shortcut staging/readiness and private macOS spool preparation. It
+depends on installation and portable identity contracts, never on the notifier
+or a product installer. Product registration, consent and retained native
+leases remain in their product adapters. Existing OpenCode entry points delegate
+to this package for compatibility; moving mechanics does not expand supported
+platforms or establish physical click-to-focus qualification.
+
+`internal/agentnotify/setupwizard` owns the installation application flow:
+
+| Responsibility | Source |
+| --- | --- |
+| Public request/result contracts | `contracts.go` |
+| Admission, recovery coordination and operation dispatch | `wizard.go` |
+| Read-only preflight and source binding | `plan.go` |
+| Bounded update/add phases with preserved opt-outs | `install_or_update.go` |
+| Install and removal lifecycle | `install.go`, `uninstall.go` |
+| Recorded intent and recovery | `intent.go`, `recovery.go` |
+| Installed facts and binding identity | `inspect.go`, `bindings.go` |
+| Concrete UAP and discovery composition | `composition.go` |
+| Unit selection and caller-visible outcomes | `selection.go`, `result.go`, `failures.go` |
+
+The CLI still parses arguments, obtains terminal confirmation and renders
+results. It calls this application flow rather than choosing its own update/add
+algorithm. Cursor/Local consent composition retains its existing owner and
+ordering; it is not generalized into a second setup controller.
+
+`internal/agentnotify/portablesetup` connects UAP materialization to the managed
+runtime. UAP Apply and host finalization are separate stages. `ResultError`
+retains the exact installer result after partial mutation or a later failure;
+finalization failures keep successful activation/removal facts while the
+overall operation remains incomplete. The existing recovery path remains
+authoritative. Neither extraction changes the durable `installruntime`
+transaction kernel or stored schemas.
+
+The audit, scoped decisions and verification record are in the
+[boundary refactor plan](plans/notification-boundaries-refactor-2026-11-04.md).
+
 ### 1. Platform Layer (`internal/platform`)
 
 **Purpose**: Abstract OS-specific operations for cross-platform compatibility.

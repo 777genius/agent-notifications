@@ -108,6 +108,26 @@ cleanup_test_dir() {
     fi
 }
 
+# Public downloads require a real source bundle version beside bin/. Each
+# installation also owns its HOME/XDG state, including the managed ledger.
+setup_real_bundle_dir() {
+    setup_test_dir
+    [ -n "$TEST_DIR" ] || return 1
+    REAL_BUNDLE_DIR="$TEST_DIR"
+    mkdir -p "$REAL_BUNDLE_DIR/bin" "$REAL_BUNDLE_DIR/.claude-plugin" || return 1
+    cp "$REPO_ROOT/.claude-plugin/plugin.json" "$REAL_BUNDLE_DIR/.claude-plugin/plugin.json" || return 1
+    test_env_setup "$REAL_BUNDLE_DIR/environment" || return 1
+    TEST_DIR="$REAL_BUNDLE_DIR/bin"
+}
+
+cleanup_real_bundle_dir() {
+    # Restore TMPDIR before deleting the case that contains its private temp
+    # directory. The next case must start outside the previous installation.
+    test_env_setup "$SUITE_DIR" || return 1
+    TEST_DIR="$REAL_BUNDLE_DIR"
+    cleanup_test_dir
+}
+
 write_installed_plugin_registry() {
     local output_path="$1"
     local version="$2"
@@ -2360,13 +2380,16 @@ test_real_full_install() {
         return
     fi
 
-    setup_test_dir
+    setup_real_bundle_dir || exit 1
 
     set +e
     output=$(INSTALL_TARGET_DIR="$TEST_DIR" run_with_timeout 120 bash "$INSTALL_SCRIPT" 2>&1)
     exit_code=$?
     set -e
 
+    if [ "$exit_code" -ne 0 ]; then
+        printf '%s\n' "$output"
+    fi
     assert_exit_code 0 $exit_code "Install completed successfully"
     # On Windows, wrapper is .bat file; on Unix it's a symlink
     if is_windows; then
@@ -2375,7 +2398,7 @@ test_real_full_install() {
         assert_file_exists "$TEST_DIR/claude-notifications" "Symlink created"
     fi
 
-    cleanup_test_dir
+    cleanup_real_bundle_dir || exit 1
 }
 
 test_real_binary_runs() {
@@ -2396,7 +2419,7 @@ test_real_binary_runs() {
         return
     fi
 
-    setup_test_dir
+    setup_real_bundle_dir || exit 1
 
     INSTALL_TARGET_DIR="$TEST_DIR" run_with_timeout 120 bash "$INSTALL_SCRIPT" 2>&1 || true
 
@@ -2417,7 +2440,7 @@ test_real_binary_runs() {
         TESTS_RUN=$((TESTS_RUN + 1))
     fi
 
-    cleanup_test_dir
+    cleanup_real_bundle_dir || exit 1
 }
 
 test_real_utilities_installed() {
@@ -2438,7 +2461,7 @@ test_real_utilities_installed() {
         return
     fi
 
-    setup_test_dir
+    setup_real_bundle_dir || exit 1
 
     INSTALL_TARGET_DIR="$TEST_DIR" run_with_timeout 120 bash "$INSTALL_SCRIPT" 2>&1 || true
 
@@ -2453,7 +2476,7 @@ test_real_utilities_installed() {
         assert_file_exists "$TEST_DIR/list-sounds" "list-sounds installed"
     fi
 
-    cleanup_test_dir
+    cleanup_real_bundle_dir || exit 1
 }
 
 test_real_terminal_notifier_macos() {
@@ -2479,7 +2502,7 @@ test_real_terminal_notifier_macos() {
         return
     fi
 
-    setup_test_dir
+    setup_real_bundle_dir || exit 1
 
     INSTALL_TARGET_DIR="$TEST_DIR" run_with_timeout 120 bash "$INSTALL_SCRIPT" 2>&1 || true
 
@@ -2487,7 +2510,7 @@ test_real_terminal_notifier_macos() {
     assert_dir_exists "$TEST_DIR/ClaudeNotifier.app" "ClaudeNotifier.app installed"
     assert_executable "$TEST_DIR/ClaudeNotifier.app/Contents/MacOS/terminal-notifier-modern" "terminal-notifier-modern executable"
 
-    cleanup_test_dir
+    cleanup_real_bundle_dir || exit 1
 }
 
 #=============================================================================
@@ -2889,7 +2912,7 @@ test_hook_wrapper_real_download() {
         return
     fi
 
-    setup_test_dir
+    setup_real_bundle_dir || exit 1
 
     # Copy wrapper and install script (but NOT binary)
     cp "$SCRIPT_DIR/hook-wrapper.sh" "$TEST_DIR/"
@@ -2906,7 +2929,7 @@ test_hook_wrapper_real_download() {
         assert_file_exists "$TEST_DIR/claude-notifications" "Binary downloaded via wrapper"
     fi
 
-    cleanup_test_dir
+    cleanup_real_bundle_dir || exit 1
 }
 
 test_hook_wrapper_real_no_redownload() {
@@ -2922,7 +2945,7 @@ test_hook_wrapper_real_no_redownload() {
         return
     fi
 
-    setup_test_dir
+    setup_real_bundle_dir || exit 1
 
     # First install binary normally
     INSTALL_TARGET_DIR="$TEST_DIR" bash "$INSTALL_SCRIPT" 2>&1 || true
@@ -2954,7 +2977,7 @@ test_hook_wrapper_real_no_redownload() {
         fail_test "Existing binary not re-downloaded" "mtime changed: $mtime_before -> $mtime_after"
     fi
 
-    cleanup_test_dir
+    cleanup_real_bundle_dir || exit 1
 }
 
 test_hook_wrapper_real_binary_runs() {
@@ -2970,7 +2993,7 @@ test_hook_wrapper_real_binary_runs() {
         return
     fi
 
-    setup_test_dir
+    setup_real_bundle_dir || exit 1
 
     # Copy wrapper and install script
     cp "$SCRIPT_DIR/hook-wrapper.sh" "$TEST_DIR/"
@@ -2985,7 +3008,7 @@ test_hook_wrapper_real_binary_runs() {
         fail_test "Binary executes via wrapper" "Output: $output"
     fi
 
-    cleanup_test_dir
+    cleanup_real_bundle_dir || exit 1
 }
 
 test_hook_wrapper_real_concurrent_calls() {
@@ -3001,7 +3024,7 @@ test_hook_wrapper_real_concurrent_calls() {
         return
     fi
 
-    setup_test_dir
+    setup_real_bundle_dir || exit 1
 
     # Copy wrapper and install script
     cp "$SCRIPT_DIR/hook-wrapper.sh" "$TEST_DIR/"
@@ -3037,7 +3060,7 @@ test_hook_wrapper_real_concurrent_calls() {
         fi
     fi
 
-    cleanup_test_dir
+    cleanup_real_bundle_dir || exit 1
 }
 
 #=============================================================================

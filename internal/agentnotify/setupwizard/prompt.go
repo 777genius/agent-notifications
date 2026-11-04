@@ -494,7 +494,7 @@ func attachCommand(req Request, out Result) Result {
 		return out
 	}
 	for _, next := range out.NextActions {
-		if next.Kind == "activate" {
+		if next.Kind == "activate" || next.Kind == "resume" {
 			// This existing recovery owns the normalized acquired source.
 			// A second retry would resurrect the disposable staging archive.
 			return out
