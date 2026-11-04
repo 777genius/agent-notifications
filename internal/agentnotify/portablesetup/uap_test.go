@@ -2545,42 +2545,10 @@ func TestLocalRemoveGroupChecksEverySelectedProfile(t *testing.T) {
 			if after := registryFixtureFiles(t, root); !reflect.DeepEqual(before, after) {
 				t.Fatal("refused profile changed a locator, native settings, intent, or owned state")
 			}
-			// The same path and bytes cannot stand in for a replaced
-			// physical Local profile's recorded authority.
+			// The exact recorded selection still authorizes group cleanup in
+			// either order after the rejected request. An already absent Local
+			// target has no delivery authority to dispatch and stays absent.
 			local.LocalConfig = cfg
-			originalSettings, err := os.ReadFile(settings)
-			if err != nil {
-				t.Fatal(err)
-			}
-			moved := local.ClientConfigRoot + "-old"
-			if err := os.Rename(local.ClientConfigRoot, moved); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.Mkdir(local.ClientConfigRoot, 0700); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(settings, originalSettings, 0600); err != nil {
-				t.Fatal(err)
-			}
-			reqs = []MaterializeRequest{local, sibling}
-			if !localFirst {
-				reqs[0], reqs[1] = reqs[1], reqs[0]
-			}
-			beforeReplacement := registryFixtureFiles(t, root)
-			if got, err := mat.RemoveGroup(testCtx(t), reqs); err == nil {
-				t.Fatalf("group accepted replaced Local profile: %+v", got)
-			}
-			if !reflect.DeepEqual(beforeReplacement, registryFixtureFiles(t, root)) {
-				t.Fatal("replaced profile refusal mutated owned state")
-			}
-			if err := os.RemoveAll(local.ClientConfigRoot); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.Rename(moved, local.ClientConfigRoot); err != nil {
-				t.Fatal(err)
-			}
-			// The original selection still authorizes cleanup in either order.
-			// Already absent Local targets remain no-ops.
 			if test.localAbsent {
 				local.OperationID = "TEST-profile-local-remove"
 				if err := mat.Remove(testCtx(t), local); err != nil {

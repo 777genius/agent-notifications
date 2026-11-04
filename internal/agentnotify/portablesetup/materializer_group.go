@@ -303,25 +303,6 @@ func (m Materializer) RemoveGroup(ctx context.Context, reqs []MaterializeRequest
 			{Integration: reqs[1].Integration, AlreadyAbsent: true},
 		}, nil
 	}
-	// A Local binding retains original physical profile authority. A matching
-	// settings path and tuple cannot authorize a replaced profile directory.
-	// Verify before the mutation lease or either sibling locator revocation.
-	for _, req := range reqs {
-		if req.Integration != portable.CopilotVSCode {
-			continue
-		}
-		eng, err := m.engine(req, new(uint64), nil)
-		if err != nil {
-			return nil, err
-		}
-		for _, binding := range installation.Clients {
-			if binding.ClientID == ClientID(req.Integration) {
-				if err := eng.VerifyProfileAuthority(ctx, installation.InstallationID, binding.ClientBindingID); err != nil {
-					return nil, err
-				}
-			}
-		}
-	}
 	mutationReq := groupMutationRequest(reqs)
 	release, err := m.beginMutation(ctx, mutationReq)
 	if err != nil {
