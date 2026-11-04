@@ -61,6 +61,55 @@ env -u HOME USERPROFILE="$SANDBOX/windows profile" CLAUDE_HOME="$SANDBOX/legacy 
     bash -c 'source "$1"; [ "$CLAUDE_HOME" = "$2" ]' \
     _ "$SANDBOX/functions.sh" "$SANDBOX/explicit config"
 source "$SANDBOX/functions.sh"
+# Regression for #602: the shell must keep its POSIX intent filename while the
+# native setup-products helper receives the same file as a Windows absolute path.
+# Exercise every intent consumer, including the direct intent-args call.
+(
+    _CONFIG_STAGE="$SANDBOX/TEST selector stage with spaces"
+    mkdir -p "$_CONFIG_STAGE"
+    _SELECTOR_INTENT="$_CONFIG_STAGE/selector-intent.json"
+    _CONFIG_HELPER=trace_intent_helper
+    _PROMPT_OPEN=false
+    PLATFORM="Windows (Git Bash)"
+    trace="$SANDBOX/selector-intent-argv"
+    case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*) ;;
+        *) cygpath() { [ "$1" = -w ] || return 2; printf 'C:\\TEST stage\\%s\n' "${2##*/}"; } ;;
+    esac
+    native_intent=$(cygpath -w "$_SELECTOR_INTENT")
+    trace_intent_helper() {
+        printf '%s\0' "$@" > "$trace"
+        case "$2" in
+            prepare) printf 'prepared\n' ;;
+            confirm) printf 'approved\n' ;;
+            intent-args) return 37 ;;
+        esac
+    }
+    for operation in prepare confirm preflight migration-apply; do
+        selector_collect "$operation" --products opencode --intent-file "$_SELECTOR_INTENT"
+        mapfile -d '' -t argv < "$trace"
+        [ "${#argv[@]}" -eq 6 ] && [ "${argv[0]}" = setup-products ] && [ "${argv[1]}" = "$operation" ] &&
+            [ "${argv[2]}" = --products ] && [ "${argv[3]}" = opencode ] &&
+            [ "${argv[4]}" = --intent-file ] && [ "${argv[5]}" = "$native_intent" ] ||
+            { echo "Git Bash selector $operation passed a non-native intent path" >&2; exit 1; }
+    done
+    if load_frozen_dispatch; then echo "Intent-args helper refusal was lost" >&2; exit 1; fi
+    mapfile -d '' -t argv < "$trace"
+    [ "${#argv[@]}" -eq 4 ] && [ "${argv[1]}" = intent-args ] &&
+        [ "${argv[2]}" = --intent-file ] && [ "${argv[3]}" = "$native_intent" ] ||
+        { echo "Git Bash intent-args passed a non-native intent path" >&2; exit 1; }
+    PLATFORM=Linux
+    selector_collect prepare --products opencode --intent-file "$_SELECTOR_INTENT"
+    mapfile -d '' -t argv < "$trace"
+    [ "${argv[5]}" = "$_SELECTOR_INTENT" ] || { echo "POSIX selector path was changed" >&2; exit 1; }
+    PLATFORM="Windows (Git Bash)"
+    cygpath() { return 69; }
+    rm -f "$trace"
+    if selector_collect prepare --products opencode --intent-file "$_SELECTOR_INTENT"; then
+        echo "Failed native path conversion was ignored" >&2; exit 1
+    fi
+    [ ! -e "$trace" ] || { echo "Helper ran after path conversion refusal" >&2; exit 1; }
+)
 # CHLD from the job-list queries reproduces Bash's adjacent-substitution trap
 # parser failure without timing a signal. The shell itself is never its child.
 bash -c '
