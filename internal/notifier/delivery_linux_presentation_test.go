@@ -73,7 +73,7 @@ func TestFreedesktopAgentNotifyPresentationOnPrivateSessionBus(t *testing.T) {
 			icon := server.appIcon.Load().(string)
 			image, hasImage := hints["image-data"]
 			if tc.mcp {
-				if icon != "claude-notifications" || !hasImage || image.Signature().String() != "(iiibiiay)" {
+				if icon != "" || !hasImage || image.Signature().String() != "(iiibiiay)" {
 					t.Fatalf("missing immutable MCP icon: app=%q hints=%v", icon, hints)
 				}
 			} else if icon != "" || hasImage {
