@@ -18,6 +18,8 @@ type testNotifications struct {
 	last            atomic.Uint32
 	body            atomic.Value
 	title           atomic.Value
+	appIcon         atomic.Value
+	hints           atomic.Value
 	actions         atomic.Value
 	silent          atomic.Bool
 	capabilities    []string
@@ -36,7 +38,9 @@ func (s *testNotifications) GetCapabilities() ([]string, *dbus.Error) {
 	return s.capabilities, nil
 }
 
-func (s *testNotifications) Notify(_ string, _ uint32, _ string, title string, body string, actions []string, hints map[string]dbus.Variant, _ int32) (uint32, *dbus.Error) {
+func (s *testNotifications) Notify(_ string, _ uint32, icon string, title string, body string, actions []string, hints map[string]dbus.Variant, _ int32) (uint32, *dbus.Error) {
+	s.appIcon.Store(icon)
+	s.hints.Store(hints)
 	s.body.Store(body)
 	s.title.Store(title)
 	s.actions.Store(actions)
