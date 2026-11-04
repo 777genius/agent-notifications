@@ -85,7 +85,7 @@ func TestWizardClaudeNativeSkillsDirLifecycleE2E(t *testing.T) {
 			continue
 		}
 		for _, binding := range installation.Clients {
-			if binding.ClientID == domain.ClientClaude {
+			if binding.ClientID == string(domain.ClientClaude) {
 				if binding.Activation != domain.ActivationActive || binding.Verification != domain.VerificationInstalled {
 					t.Fatalf("native client not verified: activation=%q verification=%q", binding.Activation, binding.Verification)
 				}
