@@ -3537,15 +3537,32 @@ close_prompt() {
     if [ "$_PROMPT_OPEN" = true ]; then exec 3>&-; _PROMPT_OPEN=false; fi
 }
 
+# Keep the shell's intent path POSIX for its own file operations. A native
+# Windows helper requires a clean Windows absolute path for --intent-file.
+selector_intent_argument() {
+    if [ "${PLATFORM:-}" = "Windows (Git Bash)" ]; then
+        command -v cygpath >/dev/null 2>&1 || { echo "Git Bash cygpath is required for native Windows paths." >&2; return 1; }
+        cygpath -w "$1"
+    else
+        printf '%s\n' "$1"
+    fi
+}
+
 # Retain the child status and raw bytes until the complete record is checked.
 selector_collect() {
     local operation=$1; shift
-    local status=0
+    local status=0 i args_count=$#
+    local -a helper_args=("$@")
+    for ((i=0; i<args_count; i++)); do
+        [ "${helper_args[i]}" = --intent-file ] || continue
+        [ "$((i + 1))" -lt "$args_count" ] || return 2
+        helper_args[i + 1]=$(selector_intent_argument "${helper_args[i + 1]}") || return 1
+    done
     _SELECTOR_RESULT="$_CONFIG_STAGE/selector-$operation.result"
     if [ "$_PROMPT_OPEN" = true ]; then
-        "$_CONFIG_HELPER" setup-products "$operation" "$@" <&3 2>&3 3>&- >"$_SELECTOR_RESULT" || status=$?
+        "$_CONFIG_HELPER" setup-products "$operation" ${helper_args[@]+"${helper_args[@]}"} <&3 2>&3 3>&- >"$_SELECTOR_RESULT" || status=$?
     else
-        "$_CONFIG_HELPER" setup-products "$operation" "$@" </dev/null 3>&- >"$_SELECTOR_RESULT" || status=$?
+        "$_CONFIG_HELPER" setup-products "$operation" ${helper_args[@]+"${helper_args[@]}"} </dev/null 3>&- >"$_SELECTOR_RESULT" || status=$?
     fi
     [ "$status" -eq 0 ] || return "$status"
     local size
@@ -3582,8 +3599,9 @@ load_frozen_dispatch() {
     _FROZEN_GLOBAL_CONFIG=""
     _FROZEN_STATE_MIGRATION_REQUIRED=""
     _FROZEN_PI_CHANNELS=()
-    local result="$_CONFIG_STAGE/intent-args.result" status=0 size key value seen=""
-    "$_CONFIG_HELPER" setup-products intent-args --intent-file "$_SELECTOR_INTENT" >"$result" </dev/null || status=$?
+    local result="$_CONFIG_STAGE/intent-args.result" status=0 size key value seen="" intent_arg
+    intent_arg=$(selector_intent_argument "$_SELECTOR_INTENT") || return 1
+    "$_CONFIG_HELPER" setup-products intent-args --intent-file "$intent_arg" >"$result" </dev/null || status=$?
     [ "$status" -eq 0 ] || return "$status"
     size=$(LC_ALL=C wc -c <"$result") || return 1
     [ "$size" -gt 0 ] && [ "$size" -le 65536 ] || return 1
@@ -4278,7 +4296,9 @@ refresh_pi_integration_intent() {
     [ "$_FROZEN_CONTROL" = "$control" ] && [ "$_FROZEN_RUNTIME" = "$runtime" ] &&
         [ "$_FROZEN_PI" = "$profile" ] && [ "$_PI_EXEC" = "$client" ] &&
         [ "$_FROZEN_GLOBAL_CONFIG" = "$config" ] && [ "${_FROZEN_PI_CHANNELS[*]}" = "$expected_channels" ] || return 1
-    "$_CONFIG_HELPER" setup-products preflight --intent-file "$_SELECTOR_INTENT" "${effects[@]}" </dev/null
+    local preflight_intent
+    preflight_intent=$(selector_intent_argument "$_SELECTOR_INTENT") || return 1
+    "$_CONFIG_HELPER" setup-products preflight --intent-file "$preflight_intent" "${effects[@]}" </dev/null
 }
 
 bootstrap_abs_command() {
@@ -4396,10 +4416,13 @@ setup_agent_notify_wizard() {
         --package "$package_root"
     case "$PRODUCT" in cursor|pi) ;; *) set -- "$@" --plugin-root "$plugin_root" ;; esac
     if [ -n "$_SELECTOR_INTENT" ]; then
+        local wizard_intent wizard_progress
+        wizard_intent=$(selector_intent_argument "$_SELECTOR_INTENT") || return 1
         if [ "$PRODUCT" != cursor ] && [ -n "$_PARALLEL_READY_CLIENTS" ]; then
-            set -- "$@" --bootstrap-ready-clients "$_PARALLEL_READY_CLIENTS" --bootstrap-progress-file "$_PROGRESS_JOURNAL"
+            wizard_progress=$(selector_intent_argument "$_PROGRESS_JOURNAL") || return 1
+            set -- "$@" --bootstrap-ready-clients "$_PARALLEL_READY_CLIENTS" --bootstrap-progress-file "$wizard_progress"
         fi
-        set -- "$@" --bootstrap-intent-file "$_SELECTOR_INTENT" --control-root "$_FROZEN_CONTROL" --global-config "$_FROZEN_GLOBAL_CONFIG"
+        set -- "$@" --bootstrap-intent-file "$wizard_intent" --control-root "$_FROZEN_CONTROL" --global-config "$_FROZEN_GLOBAL_CONFIG"
         [ -z "$_FROZEN_RUNTIME" ] || set -- "$@" --runtime-root "$_FROZEN_RUNTIME"
         if [ "$PRODUCT" != cursor ] && [ "$PRODUCT" != pi ]; then
             [ -z "$_FROZEN_CODEX_MCP" ] || set -- "$@" --mcp-config "$_FROZEN_CODEX_MCP"
