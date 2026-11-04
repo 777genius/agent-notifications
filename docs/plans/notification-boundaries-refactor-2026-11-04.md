@@ -611,3 +611,33 @@ does not prove a harmless flake or absent hook execution: capture was bounded an
 the preceding approval hook reported cache_unavailable. No timeout, assertion or
 qualification gate was relaxed. The exact final candidate must pass its native
 matrix; the original failure and any retry remain visible in #590's evidence.
+
+### Complete the existing public-network installer diagnostic
+
+The final native log review found that the optional Darwin network diagnostic
+aborted at its first actual install even when the enclosing job was green. The
+unchanged main `509969f9` job `126569294390` reproduces the same failure. Its test,
+installer and workflow are identical to main: the fixture supplied a bare
+temporary target, while the existing installer requires the adjacent source
+bundle manifest before selecting a release. A direct source-level reproduction
+confirmed that the missing manifest alone causes refusal; the original CI test
+captured and discarded the installer error output.
+
+Repair only this existing E2E fixture. Its eight real-network install/wrapper
+cases now create a disposable bundle with the checkout's exact manifest beside
+`bin`, and reuse the existing environment helper for independent HOME/XDG state
+and managed ledgers. Cleanup restores the suite's temporary environment before
+deleting the case owner. This prevents one case from leaving a live ledger that
+refers to files removed before the next case. Failed full-install output is now
+visible before the original assertion. Production installer code, public release
+URLs, source-version pinning, checksums, native assertions and workflow gates are
+unchanged.
+
+Both independent non-author reviews are clear. The existing mode regression
+passes all three checks; the default offline/mock suite passes 161 assertions
+with zero failures and 13 expected platform/network skips. Bash syntax and diff
+checks pass. Acceptance additionally requires all applicable real-network C/F
+cases to execute successfully on native Darwin, rather than relying on the
+enclosing job's existing continue-on-error policy. These tests exercise the
+current shell installer against the published runtime; final refactor Go/native
+qualification remains a separate requirement on the new published tree.
