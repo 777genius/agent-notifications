@@ -6,6 +6,7 @@ import (
 	"context"
 	"os/exec"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -22,6 +23,7 @@ type testNotifications struct {
 	hints           atomic.Value
 	actions         atomic.Value
 	silent          atomic.Bool
+	capabilitiesMu  sync.RWMutex
 	capabilities    []string
 	capabilityError *dbus.Error
 	capabilityCalls atomic.Uint32
@@ -29,13 +31,15 @@ type testNotifications struct {
 
 func (s *testNotifications) GetCapabilities() ([]string, *dbus.Error) {
 	s.capabilityCalls.Add(1)
+	s.capabilitiesMu.RLock()
+	defer s.capabilitiesMu.RUnlock()
 	if s.capabilityError != nil {
 		return nil, s.capabilityError
 	}
 	if s.capabilities == nil {
 		return []string{}, nil
 	}
-	return s.capabilities, nil
+	return append([]string(nil), s.capabilities...), nil
 }
 
 func (s *testNotifications) Notify(_ string, _ uint32, icon string, title string, body string, actions []string, hints map[string]dbus.Variant, _ int32) (uint32, *dbus.Error) {

@@ -67,11 +67,13 @@ func TestFreedesktopAgentNotifyPresentationOnPrivateSessionBus(t *testing.T) {
 		{"mcp policy off, silent unset", true, false, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			server.capabilitiesMu.Lock()
 			if tc.serverSupportsCue {
 				server.capabilities = []string{"body", "sound"}
 			} else {
 				server.capabilities = []string{"body"}
 			}
+			server.capabilitiesMu.Unlock()
 			port := NewFreedesktopDelivery(clock)
 			port.AgentNotifyPresentation = tc.mcp
 			r := linuxNoneRequest(clock)
