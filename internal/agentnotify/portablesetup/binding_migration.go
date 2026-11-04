@@ -18,7 +18,7 @@ func (m Materializer) validateRefreshHandoff(req MaterializeRequest) error {
 		return fmt.Errorf("%w: managed runtime snapshot unavailable", ErrPreflight)
 	}
 	intent, target, err := readMigrationIntentTarget(snap.Ledger, req.Identity.ControlRoot, req.Integration)
-	if err != nil || intent.Action != req.HandoffAction || target.InstallationID != req.Identity.InstallationID {
+	if err != nil || intent.Action != req.HandoffAction || target.InstallationID != req.Identity.InstallationID || target.Profile != req.ClientConfigRoot {
 		return fmt.Errorf("%w: projection refresh intent differs", ErrPreflight)
 	}
 	old, replacement := *target.OldBinding, *target.NewBinding

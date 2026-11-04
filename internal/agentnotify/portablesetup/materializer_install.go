@@ -28,7 +28,12 @@ func (m Materializer) Install(ctx context.Context, req MaterializeRequest) (_ po
 	if composeErr != nil {
 		return portable.Binding{}, composeErr
 	}
-	defer closePackage()
+	handoffStarted := false
+	defer func() {
+		if !handoffStarted {
+			closePackage()
+		}
+	}()
 
 	template, err := Complete(req.Identity, req.Integration, ClientID(req.Integration), string(domain.ScopeUser), req.Identity.ScopeRoot, req.Identity.ControlRoot)
 	if err != nil {
@@ -59,6 +64,9 @@ func (m Materializer) Install(ctx context.Context, req MaterializeRequest) (_ po
 	} else if req.HandoffAction != "" {
 		return portable.Binding{}, fmt.Errorf("%w: handoff action override requires validated migration projection", ErrPreflight)
 	}
+	// Once handoff starts, recovery or a later SDK commit may need this source.
+	// Retain it on every subsequent outcome, not only successful finalization.
+	handoffStarted = true
 	gen, res, err := m.Kernel.handoffForward(ctx, Request{
 		Binding: template, ExpectedGeneration: req.ExpectedGeneration, Discovery: req.Discovery,
 		SourceRevision: req.SourceRevision, SourceDigest: req.SourceDigest,

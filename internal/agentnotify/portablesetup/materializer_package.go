@@ -54,8 +54,9 @@ func declaredServerName(packageRoot string) string {
 // composeLocalPackage supplies binding-specific canonical bytes only in an
 // owned private snapshot. The shared release tree is never modified. Prepare
 // computes the resulting identity; the host freezes it in the existing intent
-// TreeDigest and verifies it again on retry.
-func (m Materializer) composeLocalPackage(ctx context.Context, req MaterializeRequest, retain bool) (Materializer, MaterializeRequest, func(), error) {
+// TreeDigest and verifies it again on retry. A durable snapshot lives in the
+// acquisition area; the caller owns its cleanup until handoff begins.
+func (m Materializer) composeLocalPackage(ctx context.Context, req MaterializeRequest, durable bool) (Materializer, MaterializeRequest, func(), error) {
 	noop := func() {}
 	if req.Integration != portable.CopilotVSCode || req.LocalConfig == nil {
 		return m, req, noop, nil
@@ -144,7 +145,7 @@ func (m Materializer) composeLocalPackage(ctx context.Context, req MaterializeRe
 	}
 
 	builder := packagesnapshot.Builder{}
-	if retain {
+	if durable {
 		builder.TempRoot = filepath.Join(filepath.Dir(filepath.Dir(m.Roots.StateFile)), "acquired")
 		if err := os.MkdirAll(builder.TempRoot, 0700); err != nil {
 			return m, req, noop, err
@@ -172,7 +173,7 @@ func (m Materializer) composeLocalPackage(ctx context.Context, req MaterializeRe
 		return m, req, noop, err
 	}
 
-	if retain {
+	if durable {
 		// Retain the digest-frozen canonical source in the existing acquisition
 		// area so installed retries do not depend on transient proof scratch.
 		if err := filepath.WalkDir(frozen.Root, func(path string, entry os.DirEntry, err error) error {
@@ -187,7 +188,6 @@ func (m Materializer) composeLocalPackage(ctx context.Context, req MaterializeRe
 			cleanup()
 			return m, req, noop, err
 		}
-		cleanup = noop
 	}
 
 	req.LocalConfig, req.PackageRoot = &cfg, frozen.Root

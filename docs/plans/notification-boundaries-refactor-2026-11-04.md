@@ -86,6 +86,22 @@ This pass preserves available exact Local selections and keeps refusals when
 the selected names or source cannot be proved. It does not claim reconstruction
 of arbitrary component names from the boolean-only durable intent.
 
+Further review identified inherited policy work outside the extraction:
+[shared Cursor shortcut targets #593](https://github.com/777genius/agent-notifications/issues/593)
+needs a policy for distinct verified primaries and legitimate primary upgrades;
+[delayed Claude Stop reservations #594](https://github.com/777genius/agent-notifications/issues/594)
+needs explicit in-flight, expiry and failed-send semantics without recording a
+successful delivery before the effect. Client-facts atomic publication and
+shared-writer coordination are included in #591's storage work. No shortcut
+identity, event-lock lifetime or delivery-claim policy is changed here.
+
+[SDK group sibling compatibility #595](https://github.com/777genius/agent-notifications/issues/595)
+tracks a separately verified SDK limitation: a same-source group can preserve an
+unselected third client, but a new-revision group update lacks that client's
+compatibility input even when the host supplies exact KnownTargets. A host-only
+field addition is ineffective; the SDK contract and dependency must change.
+The selected mutation scope and all-binding compatibility gate remain intact.
+
 ## Implementation slices
 
 ### S1. Product-owned hook state and lifecycle
@@ -299,6 +315,30 @@ this refactor must not silently alter the already sealed release source.
   the existing Swift protocol. The same reproduction and focused race tests
   pass without changing production code, deadlines or revocation assertions.
   The matching CI failure does not expose its precise scheduling interleaving.
+- Subsequent review round: direct projection refresh now compares the request
+  profile to its frozen migration target before handoff. A real reserved Codex
+  migration proves the host refusal and the valid-profile continuation. Before
+  the fix the SDK also refused the mismatch; this closes the host boundary and
+  is not evidence of a successful wrong-profile mutation.
+- Durable attestation: uninstall propagates all failures to persist observed
+  external removal before entering subsequent removal work. A real native-list
+  fixture corrupts the owned pending intent at that boundary; the original
+  typed snapshot error, reservation, ledger, UAP state and locator survive.
+  A positive control persists the attestation and reaches removal, then cancels
+  deliberately; it does not claim a completed native uninstall in this container.
+- Composed source ownership: single and group operations release only their
+  newly created Local snapshot when returning before the first kernel handoff
+  begins. After entering handoff they retain it on every outcome, because later
+  recovery or SDK state can require it. Real lifecycle regressions reproduced
+  the early leak for single and both group orders, preserve original and already
+  committed sources, and verify retention after a later source-confirmation
+  refusal. The kernel, source schema and post-handoff cleanup policy are unchanged.
+- Current-head review: a real three-client lifecycle disproved the suggested
+  host-only KnownTargets fix. Same-source grouped installation preserves the
+  unselected Claude binding, profile, consumer and locator. A new-revision group
+  and a direct SDK Prepare with exact sibling facts both refuse with the same
+  missing compatibility-input error. Track the SDK change in #595; do not ship
+  unused propagation or bypass its compatibility gate.
 - Local verification: complete hook, Gemini event and portable materializer
   suites pass with the race detector; focused finalization, recovery
   presentation, selection and CLI contract regressions pass. Real fixture

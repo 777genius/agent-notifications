@@ -30,7 +30,10 @@ func holdCodexUninstall(ctx context.Context, req *Request, mat portablesetup.Mat
 		}
 		if attestCodexExternalUninstall(ctx, clientExecutable(*req, agent), req.CodexHome, managedCodexPluginSpec(mat, id.InstallationID)) {
 			req.ExternalUninstalled = true
-			_ = persistExternalUninstalled(ctx, *req, runtimeRoot, out.reservation)
+			if err := persistExternalUninstalled(ctx, *req, runtimeRoot, out.reservation); err != nil {
+				out.Outcome, out.Reason = "incomplete", err.Error()
+				return out, err
+			}
 			return out, nil
 		}
 		err = mat.Remove(ctx, portablesetup.MaterializeRequest{
@@ -237,7 +240,10 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 		out.Outcome, out.Reason = "incomplete", err.Error()
 		return out, err
 	}
-	_ = persistExternalUninstalled(ctx, req, runtimeRoot, out.reservation)
+	if err := persistExternalUninstalled(ctx, req, runtimeRoot, out.reservation); err != nil {
+		out.Outcome, out.Reason = "incomplete", err.Error()
+		return out, err
+	}
 	out.Generation = snap.Ledger.Generation
 	if len(notifyAgents) > 0 {
 		// §7.5: persist removal intent, then satisfy Codex attestation before
@@ -384,7 +390,10 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 		if agent == portable.Codex && !req.ExternalUninstalled {
 			if attestCodexExternalUninstall(ctx, clientExecutable(req, agent), req.CodexHome, expectedCodexSpec) {
 				req.ExternalUninstalled = true
-				_ = persistExternalUninstalled(ctx, req, runtimeRoot, out.reservation)
+				if err := persistExternalUninstalled(ctx, req, runtimeRoot, out.reservation); err != nil {
+					out.Outcome, out.Reason = "incomplete", err.Error()
+					return out, err
+				}
 			}
 		}
 		target, targetErr := targetIdentity(id, req, snap, mat, agent)

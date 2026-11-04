@@ -72,6 +72,7 @@ func (m Materializer) ApplyGroup(ctx context.Context, reqs []MaterializeRequest)
 		sharedPackage = sharedPackage && req.PackageRoot == reqs[0].PackageRoot
 	}
 	reqs = append([]MaterializeRequest(nil), reqs...)
+	handoffStarted := false
 	for i := range reqs {
 		if reqs[i].Integration != portable.CopilotVSCode {
 			continue
@@ -80,7 +81,11 @@ func (m Materializer) ApplyGroup(ctx context.Context, reqs []MaterializeRequest)
 		if err != nil {
 			return nil, err
 		}
-		defer closePackage()
+		defer func() {
+			if !handoffStarted {
+				closePackage()
+			}
+		}()
 		m, reqs[i] = composed, local
 		if sharedPackage {
 			for j := range reqs {
@@ -106,6 +111,8 @@ func (m Materializer) ApplyGroup(ctx context.Context, reqs []MaterializeRequest)
 	defer release()
 	generation := reqs[0].ExpectedGeneration
 	var res *installruntime.PendingMutation
+	// The shared source must survive any outcome after the first handoff starts.
+	handoffStarted = true
 	for i := range reqs {
 		gen, next, err := m.Kernel.handoffForward(ctx, Request{
 			Binding: templates[i], ExpectedGeneration: generation, Discovery: reqs[i].Discovery,
