@@ -192,17 +192,18 @@ func TestSetupWizardClaudeActivationAndDeliveryAreIndependent(t *testing.T) {
 		Action: "inspect", Outcome: "completed",
 		Targets: []setupwizard.TargetResult{{Client: "claude", Unit: "agent-notify", Outcome: "installed"}},
 		Readiness: []setupwizard.ReadinessFact{{Client: "claude", Runtime: "installed", MCP: "installed",
-			Delivery: "not_verified"}},
-		NextActions: []setupwizard.NextAction{{Kind: "test-notification", Agents: []string{"claude"}, Reason: "delivery_not_verified"}},
+			Delivery: "not_tracked"}},
 	}
 	out.Reset()
 	if code := writeSetupWizardResult(&out, false, inspect, nil); code != 0 {
 		t.Fatalf("inspect exit %d", code)
 	}
+	if strings.Contains(out.String(), "Ask Claude to send a test notification") {
+		t.Fatalf("inspect repeated an unverifiable notification test: %s", out.String())
+	}
 	for _, want := range []string{
-		"Delivery: not verified",
-		"Delivery is not tracked by setup; a successful notify call does not change this field.",
-		"Ask Claude to send a test notification",
+		"Delivery: not tracked",
+		"Delivery is not tracked by setup; check the notify receipt in the originating chat.",
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("missing %q: %s", want, out.String())
