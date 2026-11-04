@@ -291,6 +291,13 @@ func (m Materializer) RemoveGroup(ctx context.Context, reqs []MaterializeRequest
 		return nil, fmt.Errorf("%w: portable binding is not installed", ErrPreflight)
 	}
 	if installation.DataRetained && len(installation.Clients) == 0 {
+		// An empty retained installation may still have a pending host or UAP
+		// operation. Neither client may claim absence until it is settled.
+		for _, req := range reqs {
+			if err := m.retainedRemoveSettled(ctx, req); err != nil {
+				return nil, err
+			}
+		}
 		return []GroupRemoveResult{
 			{Integration: reqs[0].Integration, AlreadyAbsent: true},
 			{Integration: reqs[1].Integration, AlreadyAbsent: true},

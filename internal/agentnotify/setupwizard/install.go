@@ -306,8 +306,12 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 			return out, err
 		}
 		out.Generation = generation
+		// ApplyGroup has already committed both clients. Record every
+		// successful target before a later sidecar write can fail.
 		for i, agent := range notifyAgents {
 			out.Targets = append(out.Targets, completedNotifyTarget(mat, got[i].InstallationID, string(agent), got[i].BindingID))
+		}
+		for i, agent := range notifyAgents {
 			id.InstallationID = got[i].InstallationID
 			_ = persistKnownReceipt(ctx, req, runtimeRoot, mat, id.InstallationID, string(agent), out.reservation)
 			if err := recordLiveProfile(got[i].DataRoot, string(agent), clientConfig(req, agent)); err != nil {

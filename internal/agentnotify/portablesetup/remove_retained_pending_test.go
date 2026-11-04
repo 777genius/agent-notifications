@@ -69,6 +69,31 @@ func TestMaterializerRetainedRemoveRetryRequiresSettledState(t *testing.T) {
 			case "uap-journal":
 				plantUAPPendingJournal(t, mat.Roots.OperationsDir, mat.Roots.ManagedRoot, "TEST-retained-uap-pending")
 			}
+			// A group retry cannot bypass the same settled-state checks
+			// used by a single-client retry, regardless of target order.
+			group := []MaterializeRequest{req, req}
+			group[0].Integration, group[1].Integration = portable.Claude, portable.Codex
+			beforeGroup := registryFixtureFiles(t, root)
+			for _, keep := range []bool{false, true} {
+				group[0].KeepReservation, group[1].KeepReservation = keep, keep
+				for _, reversed := range []bool{false, true} {
+					selected := append([]MaterializeRequest(nil), group...)
+					if reversed {
+						selected[0], selected[1] = selected[1], selected[0]
+					}
+					removed, groupErr := mat.RemoveGroup(testCtx(t), selected)
+					if pending == "settled" {
+						if groupErr != nil || len(removed) != 2 || !removed[0].AlreadyAbsent || !removed[1].AlreadyAbsent {
+							t.Fatalf("settled group retry failed (keep=%v, reversed=%v): %+v %v", keep, reversed, removed, groupErr)
+						}
+					} else if len(removed) != 0 || !errors.Is(groupErr, uapinstaller.ErrRecoveryRequired) {
+						t.Fatalf("group bypassed %s (keep=%v, reversed=%v): %+v %v", pending, keep, reversed, removed, groupErr)
+					}
+				}
+			}
+			if !reflect.DeepEqual(beforeGroup, registryFixtureFiles(t, root)) {
+				t.Fatal("retained group retry changed persisted files")
+			}
 			if pending == "settled" {
 				// Settled removal does not require the obsolete source or client.
 				req.PackageRoot, req.ClientExecutable, req.ClientConfigRoot = "", "", ""
