@@ -161,6 +161,7 @@ type TargetResult struct {
 	// Lifecycle facts and the current external attempt are independent.
 	Materialization string `json:"materialization,omitempty"`
 	Activation      string `json:"activation,omitempty"`
+	Verification    string `json:"verification,omitempty"`
 	GroupPhase      string `json:"groupPhase,omitempty"`
 	FailureStage    string `json:"failureStage,omitempty"`
 	Client          string `json:"client"`
@@ -1599,6 +1600,8 @@ func inspect(ctx context.Context, req Request, agents []portable.Integration, sn
 				out.Targets = append(out.Targets, TargetResult{
 					Client: string(agent), Unit: "agent-notify", Outcome: "installed",
 					Reason: binding.ClientBindingID, Profile: profile,
+					Materialization: string(binding.Materialization),
+					Activation: string(binding.Activation), Verification: string(binding.Verification),
 					TreeDigest: digest,
 				})
 			}
