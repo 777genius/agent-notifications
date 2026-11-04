@@ -32,7 +32,7 @@ func TestAgentNotifyEmbeddedIconIsBoundedAndImmutable(t *testing.T) {
 	if visible == 0 || uniform {
 		t.Fatalf("embedded icon lacks visible pixel variation: visible=%d uniform=%t", visible, uniform)
 	}
-
+}
 
 // An actual private D-Bus Notify service observes presentation bytes, policy
 // opt-outs and exactly one external effect per request. Other freedesktop
