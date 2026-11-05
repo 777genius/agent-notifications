@@ -4,6 +4,7 @@ package portablesetup
 
 import (
 	"crypto/sha256"
+	"errors"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -239,12 +240,20 @@ func TestGroupUpdateCodexLocalPreservesUnselectedClaude(t *testing.T) {
 		})
 	}
 	updated, err := mat.ApplyGroup(ctx, []MaterializeRequest{codexReq, local})
-	if err != nil || len(updated) != 2 {
-		t.Fatalf("update selected Codex+Local with live Claude: %+v %v", updated, err)
+	// The frozen Local SDK route is Prepared, not native-activation-attested.
+	// A committed group update must report that remaining host handoff honestly,
+	// even when the two selected managed revisions were physically written.
+	var incomplete ResultError
+	if len(updated) != 0 || !errors.As(err, &incomplete) || incomplete.Finalization ||
+		incomplete.Result.Outcome != uapinstaller.OutcomeIncomplete ||
+		incomplete.Result.Reason != "committed binding is not activated" ||
+		!incomplete.Result.Mutated || len(incomplete.Result.Targets) != 2 {
+		t.Fatalf("selected group update did not preserve truthful committed result: %+v %+v %v", updated, incomplete.Result, err)
 	}
-	for _, binding := range updated {
-		if binding.Integration == portable.Claude || binding.BindingID == claudeID {
-			t.Fatalf("unselected Claude returned as update target: %+v", updated)
+	for _, target := range incomplete.Result.Targets {
+		if target.ClientID != ClientID(portable.Codex) && target.ClientID != ClientID(portable.CopilotVSCode) ||
+			target.BindingID == claudeID {
+			t.Fatalf("unselected Claude included in group update result: %+v", incomplete.Result.Targets)
 		}
 	}
 	after, err := mat.Store.Load()
