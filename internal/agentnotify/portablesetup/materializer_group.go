@@ -158,12 +158,15 @@ func (m Materializer) ApplyGroup(ctx context.Context, reqs []MaterializeRequest)
 	if err != nil {
 		return nil, err
 	}
-	// Existing exact-BindingID host facts for every live unselected sibling
-	// are observational only; the user-selected group still has two targets.
-	known, err := m.knownTargets(reqs[0].Identity.InstallationID,
-		ClientID(reqs[0].Integration), ClientID(reqs[1].Integration))
-	if err != nil {
-		return nil, err
+	// Only group updates need observational compatibility facts. Keep
+	// Install/Repair independent of unrelated sidecar availability or errors.
+	var known []uapinstaller.TargetFacts
+	if packageOperation(reqs[0]) == uapinstaller.OpUpdate {
+		known, err = m.knownTargets(reqs[0].Identity.InstallationID,
+			ClientID(reqs[0].Integration), ClientID(reqs[1].Integration))
+		if err != nil {
+			return nil, err
+		}
 	}
 	var targets []uapinstaller.ClientTarget
 	for _, req := range reqs {
