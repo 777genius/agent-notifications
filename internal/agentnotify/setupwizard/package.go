@@ -316,6 +316,9 @@ func RetainCurrentReleasePackage(ctx context.Context, req Request) (Request, err
 		if validatePendingPackage(ctx, shared) != nil {
 			return req, err
 		}
+		// A verified shared candidate won the race. The exclusive composition
+		// source is not retained by anyone; do not leak it across retries.
+		_ = os.RemoveAll(stage)
 	}
 	req.PackageRoot = filepath.Join(parent, acquiredExtractName)
 	return req, nil

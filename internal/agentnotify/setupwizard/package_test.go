@@ -182,9 +182,15 @@ func TestPackageCompositionCleanupPreservesSharedAndPendingSource(t *testing.T) 
 	if err != nil || archiveTree != canonical {
 		t.Fatalf("public143c archive framing differs: %s %s %v", archiveTree, canonical, err)
 	}
+	competingStage := filepath.Dir(competing.PackageRoot)
 	winner, err := RetainCurrentReleasePackage(ctx, competing)
 	if err != nil || winner.PackageRoot != candidate.PackageRoot {
 		t.Fatal("concurrent publication changed candidate", err)
+	}
+	// The losing exclusive composition must be removed by the successful
+	// publish path, not left to an optional cleanup callback.
+	if _, err := os.Stat(competingStage); !os.IsNotExist(err) {
+		t.Fatalf("losing composition stage leaked after shared reuse: %v", err)
 	}
 	releaseCompeting()
 	releaseB()
