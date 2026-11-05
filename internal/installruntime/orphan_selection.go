@@ -166,7 +166,7 @@ func orphanPortablePaths(root string, l Ledger, key string, c Consumer) ([]strin
 		return nil, fmt.Errorf("portable identity differs from recorded installation")
 	}
 	switch b.Integration {
-	case "claude", "codex", "copilot-vscode", "cursor":
+	case "claude", "codex", "copilot-vscode", "cursor", "pi":
 	default:
 		return nil, fmt.Errorf("unsupported portable integration")
 	}
