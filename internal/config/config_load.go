@@ -49,8 +49,13 @@ func load(path, pluginRoot string) (*Config, error) {
 		config.Statuses[status] = info
 	}
 
-	// Apply defaults for missing fields
+	// The decoder starts from a 1.0 default, so zero here is an explicit
+	// user setting. Keep it silent rather than treating it as omitted.
+	explicitMute := config.Notifications.Desktop.Volume == 0
 	config.applyDefaults(pluginRoot)
+	if explicitMute {
+		config.Notifications.Desktop.Volume = 0
+	}
 
 	return config, nil
 }

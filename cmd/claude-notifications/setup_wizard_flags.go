@@ -77,8 +77,8 @@ func writeSetupWizardResult(out io.Writer, jsonOut bool, result setupwizard.Resu
 		if e := json.NewEncoder(out).Encode(result); e != nil {
 			return 1
 		}
-	} else {
-		writeSetupWizardSummary(out, result)
+	} else if e := writeSetupWizardSummary(out, result); e != nil {
+		return 1
 	}
 
 	if result.ExitCode() != 0 {
@@ -109,18 +109,27 @@ func wizardPrintableCommand(command []string) []string {
 
 func parseSetupWizard(args []string) (setupwizard.Request, bool, error) {
 	var req setupwizard.Request
+	// Detect only a literal JSON output switch before bounded argument
+	// validation. Malformed inputs must retain the requested machine format.
+	earlyJSON := false
+	for _, arg := range args {
+		if arg == "--json" {
+			earlyJSON = true
+			break
+		}
+	}
 	if len(args) > 64 {
-		return req, false, errors.New("invalid_arguments")
+		return req, earlyJSON, errors.New("invalid_arguments")
 	}
 	total := 0
 	for _, arg := range args {
 		total += len(arg)
 		if len(arg) > 4096 || !utf8.ValidString(arg) || strings.IndexFunc(arg, unicode.IsControl) >= 0 {
-			return req, false, errors.New("invalid_arguments")
+			return req, earlyJSON, errors.New("invalid_arguments")
 		}
 	}
 	if total > 16384 {
-		return req, false, errors.New("invalid_arguments")
+		return req, earlyJSON, errors.New("invalid_arguments")
 	}
 	values := map[string]string{}
 	jsonOut := false
