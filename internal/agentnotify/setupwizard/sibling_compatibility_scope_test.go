@@ -99,3 +99,39 @@ func TestGroupCompatibilityKnownClaudeCodexOrderKeepsVerifiedRecovery(t *testing
 		}
 	}
 }
+
+// A single Plan preview can fail on Claude/Codex before a mixed group Apply
+// ever reaches groupNotifyFailed. The outer confirmed selection still fences
+// the legacy recovery; selecting Pi/Local never implicitly adds Codex/Claude.
+func TestSiblingCompatibilityMixedPlanPreviewCannotExpandSelection(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		agent portable.Integration
+		selected []string
+		legacy bool
+	}{
+		{"claude-with-pi", portable.Claude, []string{"claude", "pi"}, false},
+		{"pi-before-claude", portable.Claude, []string{"pi", "claude"}, false},
+		{"codex-with-local", portable.Codex, []string{"codex", "copilot-vscode"}, false},
+		{"local-before-codex", portable.Codex, []string{"copilot-vscode", "codex"}, false},
+		{"claude-only", portable.Claude, []string{"claude"}, true},
+		{"codex-with-claude", portable.Codex, []string{"codex", "claude"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := Request{Action: ActionUpdate, Agents: tc.selected}
+			out := Result{Action: string(req.Action), Command: []string{"setup-notifications", "wizard", "--action", "update", "--agents", "claude,codex"}}
+			got, err := mapPreviewFailure(context.Background(), req, tc.agent, portablesetup.Materializer{}, portablesetup.Identity{},
+				uapinstaller.ErrTargetFactsUnavailable, out)
+			if err == nil || got.Reason != "sibling_compatibility_unavailable" {
+				t.Fatalf("preview failure lost: %+v / %v", got, err)
+			}
+			if tc.legacy {
+				if len(got.NextActions) != 1 || !reflect.DeepEqual(got.NextActions[0].Agents, []string{"claude", "codex"}) {
+					t.Fatalf("known Claude/Codex advice lost: %+v", got)
+				}
+			} else if len(got.NextActions) != 0 || len(got.Command) != 0 {
+				t.Fatalf("mixed Plan added unselected target: %+v", got)
+			}
+		})
+	}
+}
