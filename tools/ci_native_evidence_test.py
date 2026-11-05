@@ -44,7 +44,7 @@ class EvidenceFixture(fixture.ScopeFixture):
 
     def test_main_promotion_requires_unique_exact_merge_and_frozen_inputs(self):
         head = self.promote()
-        self.git('checkout', '-qb', 'main', self.base)
+        self.git('checkout', '-qB', 'promotion-main-TEST', self.base)
         self.git('merge', '--no-ff', '-m', 'test: promotion merge', head)
         merged = self.git('rev-parse', 'HEAD').decode().strip()
         payload = {'ref': 'refs/heads/main', 'before': self.base, 'after': merged,
@@ -75,6 +75,7 @@ class EvidenceFixture(fixture.ScopeFixture):
             lambda x: x['base'].update(sha='f' * 40),
             lambda x: x['head'].update(sha='f' * 40),
             lambda x: x['head'].update(repo={'full_name': 'foreign/repo'}),
+            lambda x: x['head'].update(repo='untrusted'),
             lambda x: x.update(head=None),
             lambda x: x.update(base=None),
         ):

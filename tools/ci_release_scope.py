@@ -122,14 +122,14 @@ def merged_main_promotion(event):
     if not isinstance(source, dict) or not isinstance(target, dict):
         return None
     head = source.get('sha')
-    if (not isinstance(head, str) or not SHA.fullmatch(head)
+    if (not isinstance(source.get('repo'), dict) or not isinstance(target.get('repo'), dict)
+            or not isinstance(head, str) or not SHA.fullmatch(head)
             or not isinstance(pr.get('merged_at'), str) or not pr['merged_at']
             or pr.get('merge_commit_sha') != after
             or target.get('ref') != 'main' or target.get('sha') != before
             or (source.get('repo') or {}).get('full_name') != name
             or (target.get('repo') or {}).get('full_name') != name
-            or (len(parents) == 3 and parents[2] != head)
-            ):
+            or (len(parents) == 3 and parents[2] != head)):
         return None
     try:
         if git('rev-parse', head + '^{tree}') != git('rev-parse', after + '^{tree}'):
