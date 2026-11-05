@@ -15,7 +15,26 @@ import (
 // phase; the caller owns argument parsing, confirmation and presentation.
 func InstallOrUpdate(ctx context.Context, req Request, preserveExistingUnits bool) (result Result, err error) {
 	var migration *StateMigrationOutcome
+	var committed []TargetResult
+	var preserved []string
 	defer func() {
+		if len(committed) > 0 && (err != nil || result.Outcome != "completed" && result.Outcome != "unchanged") {
+			// Retain the actual failure kind (especially concurrent_change and
+			// invalid) while preserving earlier committed effects and opt-outs.
+			result.Targets = retainCommittedPhaseTargets(committed, result.Targets)
+			for _, target := range PreservedUnitTargets(preserved) {
+				if !slices.ContainsFunc(result.Targets, func(existing TargetResult) bool {
+					return existing.Client == target.Client && existing.Unit == target.Unit &&
+						existing.Outcome == target.Outcome && existing.Reason == target.Reason
+				}) {
+					result.Targets = append(result.Targets, target)
+				}
+			}
+			result.Action = string(req.Action)
+			if result.Outcome == "completed" || result.Outcome == "unchanged" || result.Outcome == "cancelled" || result.Outcome == "" {
+				result.Outcome = "incomplete"
+			}
+		}
 		if migration != nil {
 			result.StateMigration = migration
 		}
@@ -54,7 +73,6 @@ func InstallOrUpdate(ctx context.Context, req Request, preserveExistingUnits boo
 			return Result{Action: string(req.Action), Outcome: "incomplete", Reason: "pending_setup_required", NextActions: before.NextActions}, ErrRefused
 		}
 	}
-	var preserved []string
 	if req.BootstrapMCP != nil {
 		current, generation, policy, e := ObserveBootstrapMCPWithPolicy(ctx, req)
 		if e == nil && (req.BootstrapExpectedGeneration != nil && generation != *req.BootstrapExpectedGeneration || req.BootstrapExpectedPolicy != nil && policy != *req.BootstrapExpectedPolicy) {
@@ -118,6 +136,16 @@ func InstallOrUpdate(ctx context.Context, req Request, preserveExistingUnits boo
 				return result, runErr
 			}
 			verified, verifyErr := verifyInstallOrUpdate(ctx, req, result)
+			if verifyErr != nil {
+				// The last Run may have committed even when verification cannot
+				// observe its effects. Keep its completed rows distinct from the
+				// failed inspection, just like earlier successful phases.
+				for _, target := range result.Targets {
+					if target.Outcome == "completed" && slices.Contains(req.Agents, target.Client) {
+						committed = append(committed, target)
+					}
+				}
+			}
 			verified.Targets = append(verified.Targets, PreservedUnitTargets(preserved)...)
 			return verified, verifyErr
 		}
@@ -139,6 +167,12 @@ func InstallOrUpdate(ctx context.Context, req Request, preserveExistingUnits boo
 			if runErr != nil || result.ExitCode() != 0 {
 				return result, runErr
 			}
+			// Only completed public Run phases establish committed target facts.
+			for _, target := range result.Targets {
+				if target.Outcome == "completed" && slices.Contains(phase.Agents, target.Client) {
+					committed = append(committed, target)
+				}
+			}
 			if req.BootstrapExpectedGeneration != nil {
 				*req.BootstrapExpectedGeneration = result.Generation
 			}
@@ -156,6 +190,48 @@ func InstallOrUpdate(ctx context.Context, req Request, preserveExistingUnits boo
 		}
 	}
 	return Result{Action: string(req.Action), Outcome: "incomplete", Reason: "update_required_after_retries"}, ErrRefused
+}
+
+// retainCommittedPhaseTargets preserves verified earlier effects after a later
+// failure, without replacing the latter's failure reason or aliasing target rows.
+func retainCommittedPhaseTargets(committed, current []TargetResult) []TargetResult {
+	out := make([]TargetResult, 0, len(committed)+len(current))
+	for i, earlier := range committed {
+		superseded := false
+		for _, newer := range committed[i+1:] {
+			if newer.Client == earlier.Client && newer.Unit == earlier.Unit {
+				superseded = true
+				break
+			}
+		}
+		if superseded {
+			continue
+		}
+		// The completed row's Reason may hold a verified binding ID. Preserve
+		// it unchanged even when the same client fails in a later phase;
+		// separate completed and incomplete rows convey their own outcomes.
+		alreadyReported := false
+		for _, target := range current {
+			if target.Client == earlier.Client && target.Unit == earlier.Unit &&
+				target.Outcome == earlier.Outcome && target.Reason == earlier.Reason &&
+				target.TreeDigest == earlier.TreeDigest &&
+				target.Materialization == earlier.Materialization && target.Activation == earlier.Activation &&
+				target.Verification == earlier.Verification && target.GroupPhase == earlier.GroupPhase {
+				alreadyReported = true
+				break
+			}
+		}
+		if alreadyReported {
+			continue
+		}
+		earlier.Warnings = append([]string(nil), earlier.Warnings...)
+		out = append(out, earlier)
+	}
+	for _, target := range current {
+		target.Warnings = append([]string(nil), target.Warnings...)
+		out = append(out, target)
+	}
+	return out
 }
 
 // PreservedUnitTargets reports existing per-client opt-outs without implying

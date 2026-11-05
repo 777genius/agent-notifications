@@ -102,6 +102,8 @@ type Materializer struct {
 	// engine it constructs. Nil retains the Claude/Codex composition.
 	Registry *clients.Registry
 	Progress func(client, phase, outcome string)
+	// Test synchronization at the pre-lease RemoveGroup snapshot boundary.
+	beforeGroupRemoveMutation func()
 }
 
 func NewMaterializer(roots UAPRoots) (Materializer, error) {

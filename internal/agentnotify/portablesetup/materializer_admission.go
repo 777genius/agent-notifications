@@ -20,21 +20,29 @@ func (m Materializer) beginMutation(ctx context.Context, req *MaterializeRequest
 	if err != nil {
 		return nil, err
 	}
-	if _, err = installruntime.Recover(ctx, req.Identity.ControlRoot); err != nil {
+	if err := m.resumeMutationUnderLease(ctx, req); err != nil {
 		release()
 		return nil, err
+	}
+	return release, nil
+}
+
+// resumeMutationUnderLease recovers the host and validates generation while
+// the caller holds the coordinator lease. Retained-empty removal must inspect
+// and refuse pending work before invoking this recovery.
+func (m Materializer) resumeMutationUnderLease(ctx context.Context, req *MaterializeRequest) error {
+	if _, err := installruntime.Recover(ctx, req.Identity.ControlRoot); err != nil {
+		return err
 	}
 	snap, err := installruntime.ReadInstalledSnapshot(req.Identity.ControlRoot)
 	if err != nil {
-		release()
-		return nil, err
+		return err
 	}
 	if req.Integration == portable.CopilotVSCode && req.ExpectedGeneration != snap.Ledger.Generation {
-		release()
-		return nil, ErrConcurrentChange
+		return ErrConcurrentChange
 	}
 	req.ExpectedGeneration = snap.Ledger.Generation
-	return release, nil
+	return nil
 }
 
 // RecoverJournals restores the Notifications kernel journal, then UAP
