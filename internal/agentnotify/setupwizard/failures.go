@@ -102,6 +102,16 @@ func groupNotifyFailed(agents []portable.Integration, req Request, out Result, e
 	if errors.As(err, &persisted) && persisted.Finalization {
 		return portableFinalizationFailed(agents, req, out, persisted)
 	}
+	// A group preflight may report a bare SDK error with no persisted
+	// per-client facts. Even then, the entire selected group must be checked
+	// before offering a legacy Claude/Codex recovery.
+	if errors.Is(err, uapinstaller.ErrCompatibilityUnavailable) || errors.Is(err, uapinstaller.ErrTargetFactsUnavailable) {
+		for _, agent := range agents {
+			if agent != portable.Claude && agent != portable.Codex {
+				return siblingCompatibilityUnavailable(agent, req, out)
+			}
+		}
+	}
 	if !errors.As(err, &persisted) || (len(persisted.Result.Targets) == 0 && persisted.Result.Client.ClientID == "") {
 		if len(agents) == 0 {
 			return portableInstallFailed("", req, out, err)
@@ -118,13 +128,6 @@ func groupNotifyFailed(agents []portable.Integration, req Request, out Result, e
 	if errors.Is(err, uapinstaller.ErrCompatibilityUnavailable) || errors.Is(err, uapinstaller.ErrTargetFactsUnavailable) {
 		if len(agents) == 0 {
 			return siblingCompatibilityUnavailable("", req, out)
-		}
-		// A mixed group may begin with Claude/Codex. Check the whole
-		// actual selection before suggesting the legacy two-client update.
-		for _, agent := range agents {
-			if agent != portable.Claude && agent != portable.Codex {
-				return siblingCompatibilityUnavailable(agent, req, out)
-			}
 		}
 		return siblingCompatibilityUnavailable(agents[0], req, out)
 	}
