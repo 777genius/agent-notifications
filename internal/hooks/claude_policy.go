@@ -40,6 +40,7 @@ func (h *Handler) classifyClaudeHook(ev Event, keys eventKeys, bench *benchmark.
 
 		// Analyze and allow legacy payloads to settle before checking age: a
 		// long-running turn may not have flushed its final record yet.
+		preParseSize := transcriptSizeBeforeParse(ev.Session.TranscriptPath)
 		bench.Start("stop.analyze")
 		status, parsedMessages, err = h.handleStopEvent(ev)
 		bench.Elapsed("stop.analyze")
@@ -47,7 +48,7 @@ func (h *Handler) classifyClaudeHook(ev Event, keys eventKeys, bench *benchmark.
 			return nil, err
 		}
 		if strings.TrimSpace(p.AssistantMessage) == "" {
-			status, parsedMessages = h.settleClaudeTranscript(ev, status, parsedMessages)
+			status, parsedMessages = h.settleClaudeTranscript(ev, status, parsedMessages, preParseSize)
 		}
 
 		// A headless resume of a finished session fires Stop without appending
@@ -116,6 +117,7 @@ func (h *Handler) classifyClaudeHook(ev Event, keys eventKeys, bench *benchmark.
 		}
 		// Opted in and not suppressed: handle like Stop.
 		logging.Debug("SubagentStop: notifications enabled (config), processing")
+		preParseSize := transcriptSizeBeforeParse(ev.Session.TranscriptPath)
 		bench.Start("stop.analyze")
 		status, parsedMessages, err = h.handleStopEvent(ev)
 		bench.Elapsed("stop.analyze")
@@ -123,7 +125,7 @@ func (h *Handler) classifyClaudeHook(ev Event, keys eventKeys, bench *benchmark.
 			return nil, err
 		}
 		if strings.TrimSpace(p.Stop.AssistantMessage) == "" {
-			status, parsedMessages = h.settleClaudeTranscript(ev, status, parsedMessages)
+			status, parsedMessages = h.settleClaudeTranscript(ev, status, parsedMessages, preParseSize)
 		}
 		status, insight = h.enrichClaudeStop(status, p.Stop.AssistantMessage, parsedMessages)
 		result.cleanup = true
