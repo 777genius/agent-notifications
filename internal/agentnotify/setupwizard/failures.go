@@ -68,9 +68,17 @@ func siblingCompatibilityUnavailable(agent portable.Integration, req Request, ou
 	// The known two-client recovery applies only to Claude/Codex. An SDK
 	// compatibility refusal for Pi, Cursor or Local must never propose
 	// mutating unrelated, unselected Claude/Codex bindings.
-	if agent != portable.Claude && agent != portable.Codex {
+	knownPair := agent == portable.Claude || agent == portable.Codex
+	for _, selected := range req.Agents {
+		if selected != string(portable.Claude) && selected != string(portable.Codex) {
+			knownPair = false
+			break
+		}
+	}
+	if !knownPair {
 		// A failed compatibility preflight must not carry an earlier
-		// recommendation to mutate unselected clients.
+		// recommendation to mutate unselected clients, whether it came
+		// from an individual Plan preview or a grouped Apply.
 		out.NextActions = nil
 		out.Command = nil
 		return out
