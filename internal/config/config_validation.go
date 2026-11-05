@@ -2,12 +2,13 @@ package config
 
 import (
 	"fmt"
+	"math"
 )
 
 // Validate validates the configuration
 func (c *Config) Validate() error {
 	// Validate volume
-	if c.Notifications.Desktop.Volume < 0.0 || c.Notifications.Desktop.Volume > 1.0 {
+	if math.IsNaN(c.Notifications.Desktop.Volume) || c.Notifications.Desktop.Volume < 0.0 || c.Notifications.Desktop.Volume > 1.0 {
 		return fmt.Errorf("desktop volume must be between 0.0 and 1.0 (got %.2f)", c.Notifications.Desktop.Volume)
 	}
 
