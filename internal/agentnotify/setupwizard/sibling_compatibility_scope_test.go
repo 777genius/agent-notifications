@@ -46,3 +46,51 @@ func TestSiblingCompatibilityKnownClaudeCodexRecommendationUnchanged(t *testing.
 		})
 	}
 }
+
+// A group result must not derive a cross-client retry from agents[0] only.
+// Persisted SDK error facts take the real groupNotifyFailed branch rather than
+// testing siblingCompatibilityUnavailable in isolation.
+func TestGroupCompatibilityMixedSelectionNeverRecommendsUnselectedClient(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		agents []portable.Integration
+	}{
+		{"claude-pi", []portable.Integration{portable.Claude, portable.Pi}},
+		{"pi-claude", []portable.Integration{portable.Pi, portable.Claude}},
+		{"codex-local", []portable.Integration{portable.Codex, portable.CopilotVSCode}},
+		{"local-codex", []portable.Integration{portable.CopilotVSCode, portable.Codex}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			selected := make([]string, 0, len(tc.agents))
+			for _, agent := range tc.agents {
+				selected = append(selected, string(agent))
+			}
+			req := Request{Action: ActionUpdate, Agents: selected}
+			for _, cause := range []error{uapinstaller.ErrCompatibilityUnavailable, uapinstaller.ErrTargetFactsUnavailable} {
+				persisted := portablesetup.ResultError{Err: cause, Result: uapinstaller.Result{Client: uapinstaller.ClientResult{ClientID: string(tc.agents[0])}}}
+				out := Result{Action: string(req.Action), Command: []string{"setup-notifications", "wizard", "--action", "update", "--agents", "claude,codex"},
+					NextActions: []NextAction{{Kind: "update", Agents: []string{"claude", "codex"}}}}
+				got := groupNotifyFailed(tc.agents, req, out, persisted)
+				if got.Outcome != "incomplete" || got.Reason != "sibling_compatibility_unavailable" ||
+					len(got.NextActions) != 0 || len(got.Command) != 0 {
+					t.Fatalf("mixed group suggested unselected update for %v: %+v", cause, got)
+				}
+			}
+		})
+	}
+}
+
+func TestGroupCompatibilityKnownClaudeCodexOrderKeepsVerifiedRecovery(t *testing.T) {
+	for _, order := range [][]portable.Integration{
+		{portable.Claude, portable.Codex}, {portable.Codex, portable.Claude},
+	} {
+		req := Request{Action: ActionUpdate, Agents: []string{string(order[0]), string(order[1])}}
+		persisted := portablesetup.ResultError{Err: uapinstaller.ErrCompatibilityUnavailable,
+			Result: uapinstaller.Result{Client: uapinstaller.ClientResult{ClientID: string(order[0])}}}
+		got := groupNotifyFailed(order, req, Result{Action: string(req.Action)}, persisted)
+		if len(got.NextActions) != 1 || got.NextActions[0].Kind != "update" ||
+			!reflect.DeepEqual(got.NextActions[0].Agents, []string{"claude", "codex"}) {
+			t.Fatalf("verified legacy group recovery changed for %v: %+v", order, got)
+		}
+	}
+}
