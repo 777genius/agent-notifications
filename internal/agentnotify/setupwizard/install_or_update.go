@@ -25,7 +25,7 @@ func InstallOrUpdate(ctx context.Context, req Request, preserveExistingUnits boo
 			for _, target := range PreservedUnitTargets(preserved) {
 				if !slices.ContainsFunc(result.Targets, func(existing TargetResult) bool {
 					return existing.Client == target.Client && existing.Unit == target.Unit &&
-						existing.Reason == target.Reason
+						existing.Outcome == target.Outcome && existing.Reason == target.Reason
 				}) {
 					result.Targets = append(result.Targets, target)
 				}
