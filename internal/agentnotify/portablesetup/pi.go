@@ -2,6 +2,7 @@ package portablesetup
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/777genius/agent-notifications/internal/agentnotify/piauthority"
 	"github.com/777genius/agent-notifications/internal/agentnotify/portable"
@@ -27,13 +28,13 @@ func (m Materializer) commitPiBinding(ctx context.Context, req MaterializeReques
 		return 0, err
 	}
 	if err := piauthority.RetirePreparation(ctx, b, selected, m.Kernel.ExpectedPolicy); err != nil {
-		return 0, err
+		return 0, fmt.Errorf("Pi preparation retirement: %w", err)
 	}
 	if err := piauthority.CommitChoices(ctx, b, m.PiChoices, selected, m.Kernel.ExpectedPolicy); err != nil {
-		return 0, err
+		return 0, fmt.Errorf("Pi channel choices: %w", err)
 	}
 	if err := piauthority.Publish(ctx, b, m.Roots.StateFile); err != nil {
-		return 0, err
+		return 0, fmt.Errorf("Pi committed revision publication: %w", err)
 	}
 	s, err = installruntime.ReadInstalledSnapshot(b.ControlRoot)
 	return s.Ledger.Generation, err
