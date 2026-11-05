@@ -144,6 +144,47 @@ func (s Service) matchingReservation(req Request, action string) (*installruntim
 	return &cp, nil
 }
 
+// An unchanged consumer still belongs to the current reservation. Do not
+// confuse a confirmed update/repair with a new install, or let a foreign
+// pending operation turn an idempotent publication into a bypass.
+func checkIdempotentBindingReservation(req Request, pending *installruntime.PendingMutation) error {
+	if pending == nil {
+		if req.Reservation != nil {
+			return fmt.Errorf("%w: stale binding reservation", ErrConcurrentChange)
+		}
+		return nil
+	}
+	if pending.Owner != req.Binding.Owner || pending.IntentRef != IntentPath(req.Binding.ControlRoot) {
+		return fmt.Errorf("%w: unrelated binding reservation", ErrIntentConflict)
+	}
+	if req.Reservation != nil && *req.Reservation != *pending {
+		return fmt.Errorf("%w: binding reservation changed", ErrConcurrentChange)
+	}
+	intent, err := ReadIntent(req.Binding.ControlRoot)
+	if err != nil {
+		return fmt.Errorf("%w: pending binding intent missing: %v", ErrPreflight, err)
+	}
+	switch intent.Action {
+	case "install", "update", "repair":
+	default:
+		return fmt.Errorf("%w: pending %s", ErrIntentConflict, intent.Action)
+	}
+	if !intentMatches(intent, pending.ID, intent.Action, string(req.Binding.Integration), req.SourceDigest, req.TreeDigest, req.HelperDigest, req.HelperVersion) {
+		return fmt.Errorf("%w: pending %s does not select this client", ErrIntentConflict, intent.Action)
+	}
+	for _, target := range intent.Targets {
+		if target.Client != string(req.Binding.Integration) || target.InstallationID == "" && target.BindingID == "" {
+			continue
+		}
+		if target.InstallationID != "" && target.InstallationID != req.Binding.InstallationID ||
+			target.BindingID != "" && target.BindingID != req.Binding.BindingID {
+			continue
+		}
+		return nil
+	}
+	return fmt.Errorf("%w: pending intent does not select committed binding", ErrIntentConflict)
+}
+
 func (s Service) CommitBinding(ctx context.Context, req Request) (portable.Binding, error) {
 	if ctx == nil {
 		return portable.Binding{}, ErrPreflight
@@ -162,7 +203,7 @@ func (s Service) CommitBinding(ctx context.Context, req Request) (portable.Bindi
 	if existing, ok := snap.Ledger.Consumers[key]; ok && reflect.DeepEqual(existing, consumer) {
 		// Identical registration is not permission to bypass an unrelated
 		// in-flight handoff or removal reservation.
-		if _, err := s.matchingReservation(req, "install"); err != nil {
+		if err := checkIdempotentBindingReservation(req, snap.Ledger.PendingMutation); err != nil {
 			return portable.Binding{}, err
 		}
 		if err := s.checkPolicy(ctx, req.Binding.ControlRoot); err != nil {

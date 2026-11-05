@@ -86,13 +86,9 @@ func (d Document) effectiveProfile(assets AssetContext, data []byte) (*Config, e
 	// A nonempty literal root prevents applyDefaults consulting the environment.
 	// Missing statuses were already present before decode and merged above.
 	if d.schema == 1 {
-		// A decoded zero overrides the preloaded 1.0 default, and is not an
-		// absent volume. Do not reactivate sound while applying legacy defaults.
-		explicitMute := c.Notifications.Desktop.Volume == 0
+		// Existing schema-1 clients historically interpret 0 as an omitted
+		// volume. Changing that contract requires an explicit migration.
 		c.applyDefaults(".")
-		if explicitMute {
-			c.Notifications.Desktop.Volume = 0
-		}
 	}
 	if err := c.Validate(); err != nil {
 		return nil, &Error{Code: ConfigInvalid}

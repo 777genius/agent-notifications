@@ -70,6 +70,24 @@ func admitBootstrapWizardIntent(path string, r setupwizard.Request) (setupwizard
 	return r, &intent, nil
 }
 
+// selectedCursorBinding treats an unbound historical profile as potentially
+// selected, but never grants presence from another recorded installation or
+// a different concrete profile.
+func selectedCursorBinding(state statev2.StateFileV2, installationID, profile string) bool {
+	for _, installation := range state.Installations {
+		if installationID != "" && installation.InstallationID != installationID {
+			continue
+		}
+		for _, binding := range installation.Clients {
+			if binding.ClientID == "cursor" &&
+				(binding.NativeProfileRoot == "" || sameCursorScopeRoot(binding.NativeProfileRoot, profile)) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // Keep exact registration spelling unless Windows confirms a case-only variant
 // names the same directory. An alias or unresolved path grants no authority.
 func sameCursorScopeRoot(recorded, selected string) bool {
@@ -399,16 +417,8 @@ func composeCursorWizard(ctx context.Context, req setupwizard.Request) (_ setupw
 				if e != nil {
 					return req, e
 				}
-				for _, installation := range state.Installations {
-					if req.InstallationID != "" && installation.InstallationID != req.InstallationID {
-						continue
-					}
-					for _, binding := range installation.Clients {
-						if binding.ClientID == "cursor" && (binding.NativeProfileRoot == "" ||
-							sameCursorScopeRoot(binding.NativeProfileRoot, req.CursorConfig)) {
-							return req, absentErr
-						}
-					}
+				if selectedCursorBinding(state, req.InstallationID, req.CursorConfig) {
+					return req, absentErr
 				}
 			}
 			for key, consumer := range snapshot.Ledger.Consumers {
@@ -436,18 +446,7 @@ func composeCursorWizard(ctx context.Context, req setupwizard.Request) (_ setupw
 		if e != nil {
 			return req, e
 		}
-		live := false
-		for _, installation := range state.Installations {
-			if req.InstallationID != "" && installation.InstallationID != req.InstallationID {
-				continue
-			}
-			for _, binding := range installation.Clients {
-				if binding.ClientID == "cursor" &&
-					(binding.NativeProfileRoot == "" || sameCursorScopeRoot(binding.NativeProfileRoot, req.CursorConfig)) {
-					live = true
-				}
-			}
-		}
+		live := selectedCursorBinding(state, req.InstallationID, req.CursorConfig)
 		if !live {
 			off := false
 			req.CursorAgentNotify = &off

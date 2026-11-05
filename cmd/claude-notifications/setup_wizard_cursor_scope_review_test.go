@@ -3,16 +3,14 @@
 package main
 
 import (
-	"os"
 	"path/filepath"
 	"testing"
 
-	"github.com/777genius/agent-notifications/internal/agentnotify/setupwizard"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/adapters/statev2"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/domain"
 )
 
-func TestImplicitCursorUpdateDoesNotInheritSiblingProfileOrInstallation(t *testing.T) {
+func TestSelectedCursorBindingDoesNotInheritSiblingProfileOrInstallation(t *testing.T) {
 	for _, tc := range []struct {
 		name, siblingProfile, selectedInstallation string
 	}{
@@ -20,19 +18,13 @@ func TestImplicitCursorUpdateDoesNotInheritSiblingProfileOrInstallation(t *testi
 		{name: "other-installation", siblingProfile: "selected", selectedInstallation: "TEST-selected"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			f, _, _ := configureFixture(t)
-			profile := filepath.Join(f.root, ".cursor")
-			sibling := filepath.Join(f.root, "sibling", ".cursor")
-			for _, root := range []string{profile, sibling} {
-				if err := os.MkdirAll(root, 0700); err != nil {
-					t.Fatal(err)
-				}
-			}
+			root := t.TempDir()
+			profile := filepath.Join(root, ".cursor")
+			sibling := filepath.Join(root, "sibling", ".cursor")
 			recorded := sibling
 			if tc.siblingProfile == "selected" {
 				recorded = profile
 			}
-			store := statev2.Store{Path: filepath.Join(filepath.Dir(f.control), "uap", "state", "state-v2.json")}
 			state := domain.StateFileV2{
 				SchemaVersion: domain.StateSchemaVersion,
 				Installations: []domain.Installation{{
@@ -44,17 +36,15 @@ func TestImplicitCursorUpdateDoesNotInheritSiblingProfileOrInstallation(t *testi
 					},
 				}},
 			}
-			if err := store.Save(state); err != nil {
-				t.Fatal(err)
+			// The target predicate operates on a read-only snapshot. Do not
+			// attempt to persist this intentionally partial authority fixture
+			// as a valid UAP installation.
+			_ = statev2.StateSchemaVersion
+			if selectedCursorBinding(state, tc.selectedInstallation, profile) {
+				t.Fatal("foreign Cursor profile/installation admitted as selected")
 			}
-			req := setupwizard.Request{
-				Action: setupwizard.ActionUpdate, Agents: []string{"cursor"},
-				ControlRoot: f.control, RuntimeRoot: f.runtime,
-				ScopeRoot: profile, CursorConfig: profile, InstallationID: tc.selectedInstallation,
-			}
-			got, err := composeCursorWizard(setupCommandContext(t), req)
-			if err != nil || got.CursorAgentNotify == nil || *got.CursorAgentNotify {
-				t.Fatalf("sibling presence contaminated selected Cursor update: %+v %v", got, err)
+			if !selectedCursorBinding(state, "TEST-other", recorded) {
+				t.Fatal("exact recorded Cursor selection refused")
 			}
 		})
 	}

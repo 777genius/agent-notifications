@@ -49,13 +49,9 @@ func load(path, pluginRoot string) (*Config, error) {
 		config.Statuses[status] = info
 	}
 
-	// The decoder starts from a 1.0 default, so zero here is an explicit
-	// user setting. Keep it silent rather than treating it as omitted.
-	explicitMute := config.Notifications.Desktop.Volume == 0
+	// Preserve the schema-1 historical zero-as-default behavior. Schema-2
+	// Effective handles an explicitly muted volume without this fallback.
 	config.applyDefaults(pluginRoot)
-	if explicitMute {
-		config.Notifications.Desktop.Volume = 0
-	}
 
 	return config, nil
 }
