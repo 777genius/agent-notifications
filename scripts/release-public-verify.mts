@@ -138,6 +138,8 @@ export async function verifyPublicRelease(input: PublicReleaseInputs) {
     controller: controller.map(({ path, sha256 }) => ({ path, sha256 })),
     pages: { runID: input.pagesRunID, runAttempt: pages.run_attempt, headSHA: pages.head_sha,
       workflow: pages.path, event: pages.event, conclusion: pages.conclusion,
+      actor: (pages.actor as {login?: string})?.login,
+      triggeringActor: (pages.triggering_actor as {login?: string})?.login,
       jobs: jobs.map(job => ({ name: job.name, headSHA: job.head_sha, conclusion: job.conclusion })) },
     loader: { url: url.href, size: loader.length, sha256: hash(loader), expectedSHA256: hash(expectedLoader) },
     retainedLegacy: { sourceSHA: legacyTarget.sha,
