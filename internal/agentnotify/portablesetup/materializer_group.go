@@ -289,14 +289,13 @@ func (m Materializer) RemoveGroup(ctx context.Context, reqs []MaterializeRequest
 		m.beforeGroupRemoveMutation()
 	}
 	mutationReq := groupMutationRequest(reqs)
-	release, err := m.beginMutation(ctx, mutationReq)
+	// Lock before checking retained-empty membership: a competing installer
+	// must not turn an absent group into a live one between check and return.
+	release, err := installruntime.AcquireCoordinatorLease(ctx, mutationReq.Identity.ControlRoot)
 	if err != nil {
 		return nil, err
 	}
 	defer release()
-	// beginMutation has acquired and recovered the shared coordinator lease.
-	// Membership, receipts and retained-empty state must come from this fresh
-	// snapshot so a client installed by an earlier holder is not skipped.
 	state, err := m.Store.Load()
 	if err != nil {
 		return nil, err
@@ -306,8 +305,8 @@ func (m Materializer) RemoveGroup(ctx context.Context, reqs []MaterializeRequest
 		return nil, fmt.Errorf("%w: portable binding is not installed", ErrPreflight)
 	}
 	if installation.DataRetained && len(installation.Clients) == 0 {
-		// An empty retained installation may still have a pending host or UAP
-		// operation. Neither client may claim absence until it is settled.
+		// A retained-empty retry must refuse pending journals without replay.
+		// Recovering before this check would silently change its no-op contract.
 		for _, req := range reqs {
 			if err := m.retainedRemoveSettled(ctx, req); err != nil {
 				return nil, err
@@ -317,6 +316,20 @@ func (m Materializer) RemoveGroup(ctx context.Context, reqs []MaterializeRequest
 			{Integration: reqs[0].Integration, AlreadyAbsent: true},
 			{Integration: reqs[1].Integration, AlreadyAbsent: true},
 		}, nil
+	}
+	if err := m.resumeMutationUnderLease(ctx, mutationReq); err != nil {
+		return nil, err
+	}
+	// Recovery and selection now share the held coordinator lease. Read the
+	// current UAP installation/client membership after host recovery, before
+	// either client's preflight or locator revocation.
+	state, err = m.Store.Load()
+	if err != nil {
+		return nil, err
+	}
+	installation, ok = findInstallation(state, reqs[0].Identity.InstallationID)
+	if !ok || installation.DataRetained && len(installation.Clients) == 0 {
+		return nil, fmt.Errorf("%w: portable group installation changed during recovery", ErrConcurrentChange)
 	}
 	generation := mutationReq.ExpectedGeneration
 	engineReq := reqs[0]
