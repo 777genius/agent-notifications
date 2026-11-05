@@ -105,10 +105,10 @@ func TestGroupCompatibilityKnownClaudeCodexOrderKeepsVerifiedRecovery(t *testing
 // the legacy recovery; selecting Pi/Local never implicitly adds Codex/Claude.
 func TestSiblingCompatibilityMixedPlanPreviewCannotExpandSelection(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		agent portable.Integration
+		name     string
+		agent    portable.Integration
 		selected []string
-		legacy bool
+		legacy   bool
 	}{
 		{"claude-with-pi", portable.Claude, []string{"claude", "pi"}, false},
 		{"pi-before-claude", portable.Claude, []string{"pi", "claude"}, false},
