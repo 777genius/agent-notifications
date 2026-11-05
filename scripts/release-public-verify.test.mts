@@ -124,7 +124,12 @@ test('public verifier CLI validates publication and fails closed on incomplete o
     await t.test('owner-dispatched exact main Pages run qualifies', async () => {
       f.update({ 'actions/runs/51': { ...(f.state['actions/runs/51'] as object), event: 'workflow_dispatch',
         actor: { login: '777genius' }, triggering_actor: { login: '777genius' } } });
-      assert.equal((await f.run()).status, 0); f.update({});
+      const result = await f.run(); assert.equal(result.status, 0, result.stderr);
+      const receipt = JSON.parse(result.stdout);
+      assert.equal(receipt.pages.event, 'workflow_dispatch');
+      assert.equal(receipt.pages.actor, '777genius');
+      assert.equal(receipt.pages.triggeringActor, '777genius');
+      f.update({});
     });
     const cases: Array<[string, State, RegExp]> = [
       ['missing asset', { 'releases/17/assets?per_page=100': f.assets.slice(1) }, /all 29 assets/],
@@ -136,6 +141,8 @@ test('public verifier CLI validates publication and fails closed on incomplete o
       ['downloaded bytes mismatch', { 'releases/assets/1': { bytes: Buffer.from('CORRUPT').toString('base64') } }, /digest mismatch/],
       ['stale main', { 'git/ref/heads/main': { ref: 'refs/heads/main', object: { type: 'commit', sha: O } } }, /heads\/main must point/],
       ['Pages untrusted dispatch', { 'actions/runs/51': { ...(f.state['actions/runs/51'] as object), event: 'workflow_dispatch', actor: { login: 'other' }, triggering_actor: { login: 'other' } } }, /Pages run must/],
+      ['Pages dispatch with only trusted actor', { 'actions/runs/51': { ...(f.state['actions/runs/51'] as object), event: 'workflow_dispatch', actor: { login: '777genius' }, triggering_actor: { login: 'other' } } }, /Pages run must/],
+      ['Pages dispatch with only trusted triggering actor', { 'actions/runs/51': { ...(f.state['actions/runs/51'] as object), event: 'workflow_dispatch', actor: { login: 'other' }, triggering_actor: { login: '777genius' } } }, /Pages run must/],
       ['Pages wrong SHA', { 'actions/runs/51': { ...(f.state['actions/runs/51'] as object), head_sha: O } }, /Pages run must/],
       ['Pages skipped deploy despite globally green run', { 'actions/runs/51/attempts/2/jobs?per_page=100': { total_count: 2,
         jobs: [{ name: 'verify', head_sha: M, status: 'completed', conclusion: 'success' },
