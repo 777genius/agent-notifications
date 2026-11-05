@@ -22,7 +22,14 @@ func InstallOrUpdate(ctx context.Context, req Request, preserveExistingUnits boo
 			// Retain the actual failure kind (especially concurrent_change and
 			// invalid) while preserving earlier committed effects and opt-outs.
 			result.Targets = retainCommittedPhaseTargets(committed, result.Targets)
-			result.Targets = append(result.Targets, PreservedUnitTargets(preserved)...)
+			for _, target := range PreservedUnitTargets(preserved) {
+				if !slices.ContainsFunc(result.Targets, func(existing TargetResult) bool {
+					return existing.Client == target.Client && existing.Unit == target.Unit &&
+						existing.Reason == target.Reason
+				}) {
+					result.Targets = append(result.Targets, target)
+				}
+			}
 			result.Action = string(req.Action)
 			if result.Outcome == "completed" || result.Outcome == "unchanged" || result.Outcome == "cancelled" || result.Outcome == "" {
 				result.Outcome = "incomplete"
@@ -129,6 +136,16 @@ func InstallOrUpdate(ctx context.Context, req Request, preserveExistingUnits boo
 				return result, runErr
 			}
 			verified, verifyErr := verifyInstallOrUpdate(ctx, req, result)
+			if verifyErr != nil {
+				// The last Run may have committed even when verification cannot
+				// observe its effects. Keep its completed rows distinct from the
+				// failed inspection, just like earlier successful phases.
+				for _, target := range result.Targets {
+					if target.Outcome == "completed" && slices.Contains(req.Agents, target.Client) {
+						committed = append(committed, target)
+					}
+				}
+			}
 			verified.Targets = append(verified.Targets, PreservedUnitTargets(preserved)...)
 			return verified, verifyErr
 		}
