@@ -6,7 +6,9 @@ import json
 import os
 from pathlib import Path
 import re
+import subprocess
 import sys
+from urllib.parse import quote
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
 import ci_native_evidence as native  # noqa: E402
@@ -38,9 +40,103 @@ def checks(repository, source):
                 'invalid source check identity')
         result.append({'id': row['id'], 'name': row['name'], 'status': row.get('status'),
                        'conclusion': row.get('conclusion'), 'app_id': app['id'],
-                       'app_slug': app.get('slug'), 'suite_id': suite['id']})
+                       'app_slug': app.get('slug'), 'suite_id': suite['id'],
+                       'output_title': (row.get('output') or {}).get('title'),
+                       'output_summary': (row.get('output') or {}).get('summary')})
     require(result and len({row['id'] for row in result}) == len(result), 'ambiguous source check census')
     return sorted(result, key=lambda row: row['id'])
+
+
+def recovered_merged_pull(repository, source, run):
+    """Recover GitHub's removed PR association using immutable checkout evidence."""
+    branch = run.get('head_branch')
+    if not isinstance(branch, str) or not branch or run.get('event') != 'pull_request':
+        return None
+    owner = repository.split('/')[0]
+    candidates = native.gh('repos/' + repository + '/pulls?state=closed&head='
+                           + quote(owner + ':' + branch, safe='') + '&per_page=100')
+    if not isinstance(candidates, list) or len(candidates) != 1:
+        return None
+    number = candidates[0].get('number')
+    if type(number) is not int or number < 1:
+        return None
+    pr = native.gh('repos/' + repository + '/pulls/' + str(number))
+    if pr.get('number') != number:
+        return None
+    if (pr.get('merged') is not True or pr.get('merge_commit_sha') != source
+            or not isinstance(run.get('created_at'), str) or not isinstance(pr.get('merged_at'), str)
+            or run['created_at'] >= pr['merged_at'] or (pr.get('head') or {}).get('ref') != branch):
+        return None
+    # PR base changes can replace the tested workflow between the run and
+    # merge.  GitHub's issue timeline is independent of the job's own output.
+    timeline = []
+    for page in range(1, 11):
+        batch = native.gh('repos/' + repository + '/issues/' + str(number) +
+                          '/timeline?per_page=100&page=' + str(page))
+        if not isinstance(batch, list):
+            return None
+        timeline.extend(batch)
+        if len(batch) < 100:
+            break
+    else:
+        return None
+    if any(item.get('event') in ('base_ref_changed', 'base_ref_force_pushed')
+           and (not isinstance(item.get('created_at'), str)
+                or run['created_at'] <= item['created_at'] <= pr['merged_at'])
+           for item in timeline):
+        return None
+    workflow = (run.get('path') or '').removeprefix('.github/workflows/')
+    if workflow not in native.CONTRACTS:
+        return None
+    path = 'repos/' + repository + '/actions/runs/' + str(run['id'])
+    jobs = native.pages(path + '/jobs?filter=all', 'jobs')
+    receipts = [job for job in jobs if job.get('name') == native.CONTRACTS[workflow][1]
+                and job.get('status') == 'completed' and job.get('conclusion') == 'success'
+                and job.get('run_attempt') == run.get('run_attempt')]
+    if len(receipts) != 1 or type(receipts[0].get('id')) is not int:
+        return None
+    artifacts = native.pages(path + '/artifacts', 'artifacts')
+    items = [item for item in artifacts if item.get('name') == native.artifact_name(workflow, run['id'], run['run_attempt'])]
+    if len(items) != 1:
+        return None
+    proof = native.download_receipt(items[0])
+    native.validate_receipt(proof, workflow, run, repository)
+    tested = proof['tested_commit']
+    endpoint = 'repos/' + repository + '/actions/jobs/' + str(receipts[0]['id']) + '/logs'
+    result = subprocess.run(['gh', 'api', endpoint], capture_output=True, timeout=45)
+    if result.returncode and b'terminal escape sequences' in result.stderr:
+        # Newer gh refuses escape sequences unless explicitly permitted; older
+        # releases do not implement this flag and read logs without it.
+        result = subprocess.run(['gh', 'api', '--allow-escape-sequences', endpoint],
+                                capture_output=True, timeout=45)
+    if result.returncode:
+        return None
+    logs = result.stdout
+    if len(logs) > 20_000_000:
+        return None
+    # Actions checkout's own fetch output binds the actual PR merge ref to the
+    # receipt commit, independently of receipt-authored source metadata.
+    ref = 'refs/remotes/pull/' + str(pr['number']) + '/merge'
+    expected = '+' + tested + ':' + ref
+    lines = logs.decode('utf-8', errors='strict').splitlines()
+    steps = [step for step in receipts[0].get('steps', [])
+             if step.get('name') == 'Run actions/checkout@v7' and step.get('conclusion') == 'success']
+    if len(steps) != 1:
+        return None
+    start, end = steps[0].get('started_at'), steps[0].get('completed_at')
+    if not isinstance(start, str) or not isinstance(end, str):
+        return None
+    # GitHub job step times have second precision; allow the complete end second.
+    window = [line for line in lines if len(line) >= 19 and start[:19] <= line[:19] <= end[:19]]
+    if (sum('##[group]Run actions/checkout@v7' in line for line in window) != 1
+            or sum('[command]' in line and 'git ' in line and expected in line for line in window) != 1):
+        return None
+    commit = native.gh('repos/' + repository + '/git/commits/' + tested)
+    parents = [parent.get('sha') for parent in commit.get('parents', [])]
+    if (commit.get('sha') != tested or parents != [(pr.get('base') or {}).get('sha'), source]
+            or (commit.get('tree') or {}).get('sha') != proof['tested_tree']):
+        return None
+    return pr
 
 
 def authentic_candidate_pull(repository, source, run):
@@ -48,9 +144,16 @@ def authentic_candidate_pull(repository, source, run):
     # Otherwise GitHub executes a synthetic merge containing unreviewed base
     # workflow code, which can manufacture its own "native receipt" artifact.
     pulls = run.get('pull_requests')
-    if run.get('event') != 'pull_request' or not isinstance(pulls, list) or len(pulls) != 1:
+    if run.get('event') != 'pull_request' or not isinstance(pulls, list):
         return False
-    pr = pulls[0]
+    if not pulls:
+        pr = recovered_merged_pull(repository, source, run)
+        if pr is None:
+            return False
+    elif len(pulls) == 1:
+        pr = pulls[0]
+    else:
+        return False
     base, head = pr.get('base') or {}, pr.get('head') or {}
     repo_id = (run.get('head_repository') or {}).get('id')
     base_sha = base.get('sha')
@@ -353,6 +456,18 @@ def verify(source, repository):
                     require(retry is not None,
                             'latest successful source check masked a failure: ' + check['name'])
                     ignored_retries.append(retry)
+            continue
+        # CodeRabbit explicitly cancelled only because GitHub closed the PR.
+        # This grants no review: the owner still performs the technical review.
+        if (check['name'] == 'CodeRabbit' and check['app_slug'] == 'coderabbitai'
+                and check['status'] == 'completed' and check['conclusion'] == 'cancelled'
+                and check['output_title'] == 'Review cancelled'
+                and isinstance(check['output_summary'], str)
+                and check['output_summary'].startswith('Result: Cancelled - Pull request is closed\n')
+                and all(value['run'].get('event') == 'pull_request' for value in selected.values())
+                and not any(row['id'] < check['id'] and history_keys[row['id']] == history_keys[check['id']]
+                            and row['conclusion'] not in NON_BLOCKING for row in eligible)):
+            ignored.append({'check_id': check['id'], 'reason': 'review_cancelled_pr_closed_no_review_granted'})
             continue
         exception = obsolete_placeholder(check, runs, selected, repository, source, old_jobs)
         require(exception is not None, 'latest source check did not succeed: ' + check['name'])
