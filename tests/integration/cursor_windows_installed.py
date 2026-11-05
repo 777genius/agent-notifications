@@ -132,6 +132,11 @@ def finish(test, native):
     root = test['root']; cli = test['cli']
     assert test['hooks'].read_bytes() == test['installed']
     records = test['records']
+    # The loopback webhook can arrive after the Cursor CLI has exited.
+    # Observe for a bounded TEST-only window; still require exactly one event.
+    deadline = time.monotonic() + 3
+    while not records and time.monotonic() < deadline:
+        time.sleep(.05)
     assert len(records)==1, records
     expected = {'notification_type':'agent_stopping','status':'agent_stopping','agent_source':'cursor',
                 'message':'Cursor CLI is stopping','title':'Cursor CLI','source':'claude-notifications'}
