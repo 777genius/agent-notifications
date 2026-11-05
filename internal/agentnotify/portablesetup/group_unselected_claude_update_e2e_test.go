@@ -164,6 +164,8 @@ func TestGroupUpdateCodexLocalPreservesUnselectedClaude(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	localProfileBefore := registryFixtureFiles(t, local.ClientConfigRoot)
+	codexProfileBefore := registryFixtureFiles(t, codexReq.ClientConfigRoot)
 	for _, tc := range []struct {
 		name  string
 		stale bool
@@ -206,6 +208,10 @@ func TestGroupUpdateCodexLocalPreservesUnselectedClaude(t *testing.T) {
 			currentState, readErr := os.ReadFile(mat.Roots.StateFile)
 			if readErr != nil || !reflect.DeepEqual(stateBeforeUpdate, currentState) {
 				t.Fatalf("refusal changed SDK state: %v", readErr)
+			}
+			if !reflect.DeepEqual(localProfileBefore, registryFixtureFiles(t, local.ClientConfigRoot)) ||
+				!reflect.DeepEqual(codexProfileBefore, registryFixtureFiles(t, codexReq.ClientConfigRoot)) {
+				t.Fatal("refused update changed selected native client profiles")
 			}
 		})
 	}
