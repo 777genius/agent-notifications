@@ -67,13 +67,18 @@ func TestGroupCompatibilityMixedSelectionNeverRecommendsUnselectedClient(t *test
 			}
 			req := Request{Action: ActionUpdate, Agents: selected}
 			for _, cause := range []error{uapinstaller.ErrCompatibilityUnavailable, uapinstaller.ErrTargetFactsUnavailable} {
-				persisted := portablesetup.ResultError{Err: cause, Result: uapinstaller.Result{Client: uapinstaller.ClientResult{ClientID: string(tc.agents[0])}}}
-				out := Result{Action: string(req.Action), Command: []string{"setup-notifications", "wizard", "--action", "update", "--agents", "claude,codex"},
-					NextActions: []NextAction{{Kind: "update", Agents: []string{"claude", "codex"}}}}
-				got := groupNotifyFailed(tc.agents, req, out, persisted)
-				if got.Outcome != "incomplete" || got.Reason != "sibling_compatibility_unavailable" ||
-					len(got.NextActions) != 0 || len(got.Command) != 0 {
-					t.Fatalf("mixed group suggested unselected update for %v: %+v", cause, got)
+				for _, failure := range []error{
+					cause,
+					portablesetup.ResultError{Err: cause},
+					portablesetup.ResultError{Err: cause, Result: uapinstaller.Result{Client: uapinstaller.ClientResult{ClientID: string(tc.agents[0])}}},
+				} {
+					out := Result{Action: string(req.Action), Command: []string{"setup-notifications", "wizard", "--action", "update", "--agents", "claude,codex"},
+						NextActions: []NextAction{{Kind: "update", Agents: []string{"claude", "codex"}}}}
+					got := groupNotifyFailed(tc.agents, req, out, failure)
+					if got.Outcome != "incomplete" || got.Reason != "sibling_compatibility_unavailable" ||
+						len(got.NextActions) != 0 || len(got.Command) != 0 {
+						t.Fatalf("mixed group suggested unselected update for %v: %+v", failure, got)
+					}
 				}
 			}
 		})
