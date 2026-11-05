@@ -12,7 +12,7 @@ from unittest.mock import patch
 import zipfile
 
 import ci_release_scope_test as fixture
-from ci_release_scope import equivalent_source, equivalent_tree, channel_source
+from ci_release_scope import equivalent_source, equivalent_tree, channel_source, merged_pulls
 import ci_native_evidence as evidence
 
 WORKFLOW = 'ci-macos.yml'
@@ -118,6 +118,12 @@ class EvidenceFixture(fixture.ScopeFixture):
                 return (head + '\n').encode()
             return self.git(*arguments)
 
+        # One-parent squash also qualifies when the reviewed head is locally present.
+        with patch.dict(os.environ, {'GITHUB_REPOSITORY': 'owner/repo'}), \
+             patch('ci_release_scope.merged_pulls', return_value=[pr]), \
+             patch('ci_release_scope.git', side_effect=lambda *args: self.git(*args)):
+            self.assertEqual(equivalent_source('push', payload), self.base)
+
         with patch.dict(os.environ, {'GITHUB_REPOSITORY': 'owner/repo'}), \
              patch('ci_release_scope.merged_pulls', return_value=[pr]), \
              patch('ci_release_scope.git', side_effect=read_missing):
@@ -132,6 +138,22 @@ class EvidenceFixture(fixture.ScopeFixture):
              patch('ci_release_scope.merged_pulls', return_value=[pr]), \
              patch('ci_release_scope.git', side_effect=wrong_ref):
             self.assertIsNone(equivalent_source('push', payload))
+
+    def test_merged_pull_api_endpoint_json_and_errors(self):
+        revision = 'a' * 40
+        command = ['gh', 'api', 'repos/owner/repo/commits/' + revision + '/pulls?per_page=2']
+        result = subprocess.CompletedProcess(command, 0, b'[{"number":1}]')
+        with patch('ci_release_scope.subprocess.run', return_value=result) as invoke:
+            self.assertEqual(merged_pulls('owner/repo', revision), [{'number': 1}])
+            invoke.assert_called_once_with(command, check=True, capture_output=True, timeout=30)
+        with patch('ci_release_scope.subprocess.run',
+                   side_effect=subprocess.CalledProcessError(1, command)):
+            with self.assertRaises(subprocess.CalledProcessError):
+                merged_pulls('owner/repo', revision)
+        with patch('ci_release_scope.subprocess.run',
+                   return_value=subprocess.CompletedProcess(command, 0, b'invalid-json')):
+            with self.assertRaises(ValueError):
+                merged_pulls('owner/repo', revision)
 
     def test_promotion_freezes_release_commit_not_source_snapshot(self):
         head = self.promote()
