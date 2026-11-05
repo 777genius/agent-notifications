@@ -146,6 +146,19 @@ func PreviewOrphanConsumer(controlRoot string, req OrphanRecoveryRequest) (Orpha
 	p.SelectedPaths = append([]string(nil), d.Files...)
 	p.SelectedCount, p.ExpectedPolicy = len(p.SelectedPaths), d.Policy
 	if err == nil {
+		// Preview is informational, but it must not advertise admissibility
+		// for a proof that the real transaction validator rejects.
+		for _, absence := range d.RuntimeAbsences {
+			if !validOrphanAbsence(absence) {
+				err = orphanConflict("absence", absence.Path, fmt.Errorf("invalid orphan absence proof"))
+				break
+			}
+		}
+		if err == nil && d.RegistrationAbsence != nil && !validOrphanAbsence(*d.RegistrationAbsence) {
+			err = orphanConflict("absence", d.RegistrationAbsence.Path, fmt.Errorf("invalid registration absence proof"))
+		}
+	}
+	if err == nil {
 		refreshed, e := refreshLedgerIdentities(l)
 		err = e
 		p.NativeValidated = e == nil

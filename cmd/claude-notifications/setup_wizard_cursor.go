@@ -387,13 +387,22 @@ func composeCursorWizard(ctx context.Context, req setupwizard.Request) (_ setupw
 			if e != nil || view.Recovery.Required {
 				return req, setupwizard.ErrRefused
 			}
-			for _, installation := range view.Installations {
-				if req.InstallationID != "" && installation.InstallationID != req.InstallationID {
-					return req, absentErr
+			// An unrelated installation's Cursor must not convert this
+			// profile's verified absence into a failed selected inspection.
+			if len(view.Installations) != 0 {
+				state, e := (statev2.Store{Path: filepath.Join(cfg.StateRoot, "state-v2.json")}).Load()
+				if e != nil {
+					return req, e
 				}
-				for _, binding := range installation.Bindings {
-					if binding.ClientID == "cursor" {
-						return req, absentErr
+				for _, installation := range state.Installations {
+					if req.InstallationID != "" && installation.InstallationID != req.InstallationID {
+						continue
+					}
+					for _, binding := range installation.Clients {
+						if binding.ClientID == "cursor" && (binding.NativeProfileRoot == "" ||
+							sameCursorScopeRoot(binding.NativeProfileRoot, req.CursorConfig)) {
+							return req, absentErr
+						}
 					}
 				}
 			}
@@ -402,7 +411,11 @@ func composeCursorWizard(ctx context.Context, req setupwizard.Request) (_ setupw
 					continue
 				}
 				var binding portable.Binding
-				if json.Unmarshal([]byte(consumer.Registration), &binding) != nil || binding.Integration == portable.Cursor {
+				if json.Unmarshal([]byte(consumer.Registration), &binding) != nil {
+					return req, portable.ErrInvalid
+				}
+				if binding.Integration == portable.Cursor &&
+					sameCursorScopeRoot(binding.ScopeRoot, req.CursorConfig) {
 					return req, portable.ErrInvalid
 				}
 			}
@@ -420,8 +433,14 @@ func composeCursorWizard(ctx context.Context, req setupwizard.Request) (_ setupw
 		}
 		live := false
 		for _, installation := range state.Installations {
+			if req.InstallationID != "" && installation.InstallationID != req.InstallationID {
+				continue
+			}
 			for _, binding := range installation.Clients {
-				live = live || binding.ClientID == "cursor"
+				if binding.ClientID == "cursor" &&
+					(binding.NativeProfileRoot == "" || sameCursorScopeRoot(binding.NativeProfileRoot, req.CursorConfig)) {
+					live = true
+				}
 			}
 		}
 		if !live {
