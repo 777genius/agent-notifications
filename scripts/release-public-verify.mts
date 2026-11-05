@@ -104,8 +104,10 @@ export async function verifyPublicRelease(input: PublicReleaseInputs) {
   const expectedLoader = stagedLoader(controller[0]!.bytes, input.mainSHA);
   const pages = read(gh, `actions/runs/${input.pagesRunID}`);
   need(String(pages.id) === input.pagesRunID && pages.head_sha === input.mainSHA && pages.head_branch === 'main' &&
-    pages.event === 'push' && pages.path === '.github/workflows/landing.yml' &&
-    pages.status === 'completed' && pages.conclusion === 'success', 'Pages run must be successful Landing push for the exact main SHA');
+    (pages.event === 'push' || pages.event === 'workflow_dispatch' &&
+      (pages.actor as {login?:string})?.login === '777genius' &&
+      (pages.triggering_actor as {login?:string})?.login === '777genius') && pages.path === '.github/workflows/landing.yml' &&
+    pages.status === 'completed' && pages.conclusion === 'success', 'Pages run must be a successful trusted Landing run for the exact main SHA');
   positiveID(pages.run_attempt, 'Pages run attempt required');
   const jobsResponse = read(gh, `actions/runs/${input.pagesRunID}/attempts/${pages.run_attempt}/jobs?per_page=100`);
   need(Array.isArray(jobsResponse.jobs) && jobsResponse.jobs.length < 100 &&
