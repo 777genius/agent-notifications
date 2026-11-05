@@ -4,6 +4,7 @@ package portablesetup
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -42,6 +43,24 @@ func TestPiCommonLifecycleAndAuthority(t *testing.T) {
 
 	installed, err := mat.Install(testCtx(t), req)
 	if err != nil {
+		// Keep the genuine error and print only bounded disposable state facts
+		// to locate a regression in the pinned SDK/host callback boundary.
+		var saved ResultError
+		if errors.As(err, &saved) {
+			t.Logf("Pi SDK outcome=%s reason=%q mutated=%t", saved.Result.Outcome, saved.Result.Reason, saved.Result.Mutated)
+		}
+		state, loadErr := mat.Store.Load()
+		if loadErr == nil {
+			for _, installation := range state.Installations {
+				for _, client := range installation.Clients {
+					if client.ClientID == "pi" {
+						t.Logf("Pi UAP binding: scope=%s materialization=%s activation=%s verification=%s dataReceipt=%t profileAuthority=%t nativeAttempt=%t",
+							client.Scope, client.Materialization, client.Activation, client.Verification,
+							installation.DataReceipts[client.DataReceiptID].DataReceiptID != "", client.ProfileAuthority != nil, client.NativeActivationAttempt != "")
+					}
+				}
+			}
+		}
 		t.Fatal(err)
 	}
 	name, _ := installed.Filename()
