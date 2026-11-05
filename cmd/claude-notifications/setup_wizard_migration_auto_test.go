@@ -164,7 +164,9 @@ func TestWizardInstallOrUpdateRegistryPreflight(t *testing.T) {
 				t.Fatalf("unsafe auto preflight: %+v %v", result, err)
 			}
 			var output bytes.Buffer
-			writeSetupWizardSummary(&output, result)
+			if err := writeSetupWizardSummary(&output, result); err != nil {
+				t.Fatal(err)
+			}
 			if !strings.Contains(output.String(), tc.advice) || strings.Contains(output.String(), "PRIVATE_CONFIG_CANARY") || strings.Contains(output.String(), "Resume saved activation") {
 				t.Fatalf("unsafe migration advice: %s", output.String())
 			}

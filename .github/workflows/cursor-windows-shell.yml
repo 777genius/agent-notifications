@@ -3,13 +3,20 @@ on:
   push:
     branches: [feat/cursor-windows-cli]
   workflow_dispatch:
+  # Exercise the genuine installed Cursor/OS path when this qualification workflow changes.
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - '.github/workflows/cursor-windows-shell.yml'
 permissions:
   contents: read
 # Installed native qualification and manual runs retain independent evidence and cleanup.
 jobs:
   native-shell:
+    # Do not execute a fork's modified workflow against the pinned vendor CLI.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: windows-2025
-    timeout-minutes: 12
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
         with:
@@ -62,6 +69,24 @@ jobs:
         env:
           CURSOR_TEST_INSTALLED: '1'
         run: python -B tests/integration/cursor_windows_shell_e2e.py
+      - name: Genuine Cursor Stop with BOTH desktop and webhook consent
+        shell: pwsh
+        env:
+          CURSOR_TEST_INSTALLED: '1'
+          CURSOR_TEST_BOTH: '1'
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $source = $env:CURSOR_TEST_ROOT
+          $root = Join-Path ([System.IO.Path]::GetTempPath()) ('TEST-cursor-windows-both-' + [Guid]::NewGuid())
+          New-Item -ItemType Directory -Path $root | Out-Null
+          Copy-Item -LiteralPath (Join-Path $source 'dist-package') -Destination (Join-Path $root 'dist-package') -Recurse
+          Copy-Item -LiteralPath (Join-Path $source 'stage') -Destination (Join-Path $root 'stage') -Recurse
+          Copy-Item -LiteralPath (Join-Path $source 'agent-notify-portable-windows-amd64.zip') -Destination $root
+          "CURSOR_TEST_BOTH_ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          $env:CURSOR_TEST_ROOT = $root
+          $env:CURSOR_TEST_AGENT = Join-Path $root 'dist-package/cursor-agent.cmd'
+          python -B tests/integration/cursor_windows_shell_e2e.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Diagnose failed TEST installed state without sending events
         if: failure()
         shell: pwsh
@@ -73,6 +98,11 @@ jobs:
         run: |
           & "$env:SystemRoot/System32/WindowsPowerShell/v1.0/powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File tests/integration/cursor_windows_toast_watch.ps1 -RestoreOnly
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ($env:CURSOR_TEST_BOTH_ROOT) {
+            $env:CURSOR_TEST_ROOT = $env:CURSOR_TEST_BOTH_ROOT
+            & "$env:SystemRoot/System32/WindowsPowerShell/v1.0/powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File tests/integration/cursor_windows_toast_watch.ps1 -RestoreOnly
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
       - name: Retain native qualification evidence
         if: always()
         uses: actions/upload-artifact@v7
@@ -91,4 +121,10 @@ jobs:
             ${{ env.CURSOR_TEST_ROOT }}/TEST-audit-restored
             ${{ env.CURSOR_TEST_ROOT }}/*.stdout
             ${{ env.CURSOR_TEST_ROOT }}/*.stderr
+            ${{ env.CURSOR_TEST_BOTH_ROOT }}/native-shell-result.json
+            ${{ env.CURSOR_TEST_BOTH_ROOT }}/installed-result.json
+            ${{ env.CURSOR_TEST_BOTH_ROOT }}/toast-processes.json
+            ${{ env.CURSOR_TEST_BOTH_ROOT }}/TEST-audit-restored
+            ${{ env.CURSOR_TEST_BOTH_ROOT }}/*.stdout
+            ${{ env.CURSOR_TEST_BOTH_ROOT }}/*.stderr
           if-no-files-found: warn

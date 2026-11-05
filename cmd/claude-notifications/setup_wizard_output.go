@@ -9,9 +9,31 @@ import (
 	"github.com/777genius/agent-notifications/internal/agentnotify/setupwizard"
 )
 
+// The formatter deliberately emits best-effort individual lines, but the CLI
+// must still report a failed or short write instead of claiming a printed result.
+type setupSummaryWriter struct {
+	io.Writer
+	err error
+}
+
+func (w *setupSummaryWriter) Write(p []byte) (int, error) {
+	if w.err != nil {
+		return 0, w.err
+	}
+	n, err := w.Writer.Write(p)
+	if err == nil && n != len(p) {
+		err = io.ErrShortWrite
+	}
+	w.err = err
+	return n, err
+}
+
 // Installation and observed delivery are separate facts. A completed mutation
 // must never imply that the client restarted, trusted hooks, or displayed an alert.
-func writeSetupWizardSummary(out io.Writer, result setupwizard.Result) {
+func writeSetupWizardSummary(out io.Writer, result setupwizard.Result) (writeErr error) {
+	observed := &setupSummaryWriter{Writer: out}
+	out = observed
+	defer func() { writeErr = observed.err }()
 	if m := result.StateMigration; m != nil {
 		_, _ = fmt.Fprintf(out, "UAP registry migration %s: schema %d -> %d.\n", m.Outcome, m.SourceSchema, m.TargetSchema)
 		if m.BackupPath != "" {
@@ -138,6 +160,7 @@ func writeSetupWizardSummary(out io.Writer, result setupwizard.Result) {
 			}
 		}
 	}
+	return observed.err
 }
 
 // Failure defaults contain only finite presentation categories. Raw CLI errors,
