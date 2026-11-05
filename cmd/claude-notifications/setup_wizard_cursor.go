@@ -287,6 +287,11 @@ func commitConfirmedCursorConsent(ctx context.Context, r setupwizard.Request, re
 	return result, nil
 }
 func sameWizardBootstrapScope(actual, expected setupwizard.Request) bool {
+	// A caller-supplied installation identity cannot widen the frozen
+	// bootstrap scope, even when all profile and executable paths match.
+	if actual.InstallationID != expected.InstallationID {
+		return false
+	}
 	if containsProduct(expected.Agents, "pi") {
 		if actual.PiAgentDir != expected.PiAgentDir || !samePiChoice(actual.PiDesktop, expected.PiDesktop) || !samePiChoice(actual.PiWebhook, expected.PiWebhook) || actual.PiChannelPreimage != expected.PiChannelPreimage {
 			return false
