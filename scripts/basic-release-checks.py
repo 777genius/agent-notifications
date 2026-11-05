@@ -67,6 +67,24 @@ def recovered_merged_pull(repository, source, run):
             or not isinstance(run.get('created_at'), str) or not isinstance(pr.get('merged_at'), str)
             or run['created_at'] >= pr['merged_at'] or (pr.get('head') or {}).get('ref') != branch):
         return None
+    # PR base changes can replace the tested workflow between the run and
+    # merge.  GitHub's issue timeline is independent of the job's own output.
+    timeline = []
+    for page in range(1, 11):
+        batch = native.gh('repos/' + repository + '/issues/' + str(number) +
+                          '/timeline?per_page=100&page=' + str(page))
+        if not isinstance(batch, list):
+            return None
+        timeline.extend(batch)
+        if len(batch) < 100:
+            break
+    else:
+        return None
+    if any(item.get('event') in ('base_ref_changed', 'base_ref_force_pushed')
+           and (not isinstance(item.get('created_at'), str)
+                or run['created_at'] <= item['created_at'] <= pr['merged_at'])
+           for item in timeline):
+        return None
     workflow = (run.get('path') or '').removeprefix('.github/workflows/')
     if workflow not in native.CONTRACTS:
         return None

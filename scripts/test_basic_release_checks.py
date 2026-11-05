@@ -466,9 +466,11 @@ class AdmissionTests(unittest.TestCase):
                '2026-01-01T00:00:01Z [command]git fetch +' + SOURCE
                + ':refs/remotes/pull/559/merge').encode()
         original = self.api.__call__
+        timeline = []
         def api(path, binary=False):
             if '/pulls?' in path: return [{'number': 559}]
             if path.endswith('/pulls/559'): return copy.deepcopy(pr)
+            if '/issues/559/timeline?' in path: return timeline
             if path.endswith('/jobs/876/logs'): return log
             if '/git/commits/' in path:
                 return {'sha': SOURCE, 'parents': [{'sha': BASE}, {'sha': SOURCE}], 'tree': {'sha': TREE}}
@@ -483,6 +485,9 @@ class AdmissionTests(unittest.TestCase):
             pr['base']['sha'] = 'd' * 40
             self.assertFalse(checks.authentic_candidate_pull(REPO, SOURCE, run))
             pr['base']['sha'] = BASE
+            timeline.append({'event': 'base_ref_changed', 'created_at': '2026-01-01T00:30:00Z'})
+            self.assertFalse(checks.authentic_candidate_pull(REPO, SOURCE, run))
+            timeline.clear()
             log = b'2026-01-01T00:00:00Z ##[group]Run actions/checkout@v7\n'
             self.assertFalse(checks.authentic_candidate_pull(REPO, SOURCE, run))
             log = ('2026-01-01T00:00:00Z ##[group]Run actions/checkout@v7\n'
