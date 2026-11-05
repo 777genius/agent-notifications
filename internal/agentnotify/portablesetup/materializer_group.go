@@ -158,6 +158,13 @@ func (m Materializer) ApplyGroup(ctx context.Context, reqs []MaterializeRequest)
 	if err != nil {
 		return nil, err
 	}
+	// Existing exact-BindingID host facts for every live unselected sibling
+	// are observational only; the user-selected group still has two targets.
+	known, err := m.knownTargets(reqs[0].Identity.InstallationID,
+		ClientID(reqs[0].Integration), ClientID(reqs[1].Integration))
+	if err != nil {
+		return nil, err
+	}
 	var targets []uapinstaller.ClientTarget
 	for _, req := range reqs {
 		targets = append(targets, uapinstaller.ClientTarget{
@@ -170,7 +177,7 @@ func (m Materializer) ApplyGroup(ctx context.Context, reqs []MaterializeRequest)
 		Operation: packageOperation(reqs[0]), PackageRoot: reqs[0].PackageRoot,
 		InstallationID: reqs[0].Identity.InstallationID, OperationID: reqs[0].OperationID,
 		RequiredComponents: groupRequiredComponents(reqs), ClientExecutable: reqs[0].ClientExecutable,
-		Targets: targets,
+		Targets: targets, KnownTargets: known,
 	}, reqs...)
 	if err != nil {
 		return nil, persistResult(result, wrapUpdateRequired(err))

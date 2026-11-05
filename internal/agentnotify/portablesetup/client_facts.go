@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 
 	"github.com/777genius/agent-notifications/install/uapinstaller"
 )
@@ -52,7 +53,7 @@ func recordClientFact(dataRoot string, fact clientFact, clientID string) error {
 	return os.WriteFile(clientFactsPath(dataRoot), body, 0600)
 }
 
-func (m Materializer) knownTargets(installationID, selected string) ([]uapinstaller.TargetFacts, error) {
+func (m Materializer) knownTargets(installationID string, selected ...string) ([]uapinstaller.TargetFacts, error) {
 	if installationID == "" {
 		return nil, nil
 	}
@@ -70,7 +71,7 @@ func (m Materializer) knownTargets(installationID, selected string) ([]uapinstal
 	}
 	var out []uapinstaller.TargetFacts
 	for _, binding := range installation.Clients {
-		if binding.ClientID == selected {
+		if slices.Contains(selected, binding.ClientID) {
 			continue
 		}
 		fact, ok := facts[binding.ClientID]
