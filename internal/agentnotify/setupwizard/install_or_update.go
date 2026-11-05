@@ -207,23 +207,22 @@ func retainCommittedPhaseTargets(committed, current []TargetResult) []TargetResu
 		if superseded {
 			continue
 		}
-		alreadyReported, changedLater := false, false
+		// The completed row's Reason may hold a verified binding ID. Preserve
+		// it unchanged even when the same client fails in a later phase;
+		// separate completed and incomplete rows convey their own outcomes.
+		alreadyReported := false
 		for _, target := range current {
-			if target.Client != earlier.Client || target.Unit != earlier.Unit {
-				continue
-			}
-			if target.Outcome == earlier.Outcome && target.Materialization == earlier.Materialization &&
-				target.Activation == earlier.Activation && target.Reason == earlier.Reason {
+			if target.Client == earlier.Client && target.Unit == earlier.Unit &&
+				target.Outcome == earlier.Outcome && target.Reason == earlier.Reason &&
+				target.TreeDigest == earlier.TreeDigest &&
+				target.Materialization == earlier.Materialization && target.Activation == earlier.Activation &&
+				target.Verification == earlier.Verification && target.GroupPhase == earlier.GroupPhase {
 				alreadyReported = true
-			} else {
-				changedLater = true
+				break
 			}
 		}
-		if alreadyReported && !changedLater {
+		if alreadyReported {
 			continue
-		}
-		if changedLater && earlier.Reason == "" {
-			earlier.Reason = "committed_in_prior_phase"
 		}
 		earlier.Warnings = append([]string(nil), earlier.Warnings...)
 		out = append(out, earlier)
