@@ -31,16 +31,17 @@ func TestRetainCommittedPhaseTargetsPreservesFailure(t *testing.T) {
 
 func TestRetainCommittedPhaseTargetsSameClientTransition(t *testing.T) {
 	prior := []TargetResult{
-		{Client: "claude", Unit: "agent-notify", Outcome: "completed", Materialization: "materialized"},
-		{Client: "claude", Unit: "agent-notify", Outcome: "completed", Materialization: "materialized"},
+		{Client: "claude", Unit: "agent-notify", Outcome: "completed", Materialization: "materialized", Reason: "prior-verified-binding", TreeDigest: "digest-1"},
+		{Client: "claude", Unit: "agent-notify", Outcome: "completed", Materialization: "materialized", Reason: "prior-verified-binding", TreeDigest: "digest-1"},
 	}
 	failure := []TargetResult{{Client: "claude", Unit: "agent-notify", Outcome: "incomplete", Reason: "failed_add_after_update"}}
 	got := retainCommittedPhaseTargets(prior, failure)
-	if len(got) != 2 || got[0].Outcome != "completed" || got[0].Reason != "committed_in_prior_phase" ||
+	if len(got) != 2 || got[0].Outcome != "completed" || got[0].Reason != "prior-verified-binding" ||
+		got[0].TreeDigest != "digest-1" || got[1].Outcome != "incomplete" ||
 		got[1].Reason != "failed_add_after_update" {
 		t.Fatalf("conflated phases: %+v", got)
 	}
-	equal := []TargetResult{{Client: "claude", Unit: "agent-notify", Outcome: "completed", Materialization: "materialized"}}
+	equal := []TargetResult{{Client: "claude", Unit: "agent-notify", Outcome: "completed", Materialization: "materialized", Reason: "prior-verified-binding", TreeDigest: "digest-1"}}
 	if copied := retainCommittedPhaseTargets(prior, equal); !reflect.DeepEqual(copied, equal) {
 		t.Fatalf("duplicate completed: %+v", copied)
 	}
