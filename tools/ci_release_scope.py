@@ -92,6 +92,18 @@ def merged_pulls(repository, commit):
     return json.loads(response)
 
 
+def ensure_merged_head(number, head):
+    """Fetch only the bound PR ref when a squash-merged head is not in main history."""
+    try:
+        git('cat-file', '-e', head + '^{commit}')
+        return True
+    except subprocess.CalledProcessError:
+        if type(number) is not int or number <= 0:
+            return False
+        git('fetch', '--no-tags', 'origin', 'refs/pull/' + str(number) + '/head')
+        return git('rev-parse', 'FETCH_HEAD').decode().strip() == head
+
+
 def merged_main_promotion(event):
     """Only an exact-tree, uniquely associated main merge can reuse frozen release inputs."""
     if not isinstance(event, dict) or event.get('ref') != 'refs/heads/main':
@@ -130,6 +142,8 @@ def merged_main_promotion(event):
             or (source.get('repo') or {}).get('full_name') != name
             or (target.get('repo') or {}).get('full_name') != name
             or (len(parents) == 3 and parents[2] != head)):
+        return None
+    if not ensure_merged_head(pr.get('number'), head):
         return None
     try:
         if git('rev-parse', head + '^{tree}') != git('rev-parse', after + '^{tree}'):

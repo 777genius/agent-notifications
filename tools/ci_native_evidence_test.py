@@ -95,6 +95,43 @@ class EvidenceFixture(fixture.ScopeFixture):
         changed_pr['base']['sha'] = merged
         self.assertIsNone(source_for([changed_pr], after_change))
 
+    def test_squash_head_missing_from_main_fetches_exact_pr_ref_or_denies_reuse(self):
+        head = self.promote()
+        self.git('checkout', '-qB', 'promotion-squash-TEST', self.base)
+        self.write('release-channels.tsv', channels(self.base, 'b' * 40))
+        self.write('docs/PLATFORM_RELEASE_CHANNELS.md', 'promotion docs\n')
+        squashed = self.commit()
+        payload = {'ref': 'refs/heads/main', 'before': self.base, 'after': squashed,
+                   'repository': {'full_name': 'owner/repo'}}
+        pr = fixture.event(self.base, head)['pull_request']
+        pr.update(merged_at='2026-11-05T10:00:31Z', merge_commit_sha=squashed)
+        pr['base']['ref'] = 'main'
+
+        def read_missing(*arguments):
+            if arguments == ('cat-file', '-e', head + '^{commit}'):
+                raise subprocess.CalledProcessError(1, 'git')
+            if arguments and arguments[0] == 'fetch':
+                self.assertEqual(arguments, ('fetch', '--no-tags', 'origin', 'refs/pull/1/head'))
+                return b''
+            if arguments == ('rev-parse', 'FETCH_HEAD'):
+                return (head + '\n').encode()
+            return self.git(*arguments)
+
+        with patch.dict(os.environ, {'GITHUB_REPOSITORY': 'owner/repo'}), \
+             patch('ci_release_scope.merged_pulls', return_value=[pr]), \
+             patch('ci_release_scope.git', side_effect=read_missing):
+            self.assertEqual(equivalent_source('push', payload), self.base)
+
+        def wrong_ref(*arguments):
+            if arguments == ('rev-parse', 'FETCH_HEAD'):
+                return ('f' * 40 + '\n').encode()
+            return read_missing(*arguments)
+
+        with patch.dict(os.environ, {'GITHUB_REPOSITORY': 'owner/repo'}), \
+             patch('ci_release_scope.merged_pulls', return_value=[pr]), \
+             patch('ci_release_scope.git', side_effect=wrong_ref):
+            self.assertIsNone(equivalent_source('push', payload))
+
     def test_promotion_freezes_release_commit_not_source_snapshot(self):
         head = self.promote()
         with patch('ci_release_scope.git', side_effect=lambda *args: self.git(*args)):
