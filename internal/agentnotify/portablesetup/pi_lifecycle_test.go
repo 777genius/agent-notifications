@@ -46,6 +46,15 @@ func TestPiCommonLifecycleAndAuthority(t *testing.T) {
 	}
 	name, _ := installed.Filename()
 	selector := filepath.Join(installed.DataRoot, name)
+	// A committed Pi callback must publish a private canonical locator before
+	// the installed policy gate reads it. Distinguish locator failure from policy.
+	if _, readErr := portable.ReadPiBinding(selector); readErr != nil {
+		info, statErr := os.Lstat(selector)
+		if statErr != nil {
+			t.Fatalf("installed Pi locator missing before authority check: %v; %v", readErr, statErr)
+		}
+		t.Fatalf("installed Pi locator refused before authority check: %v; mode=%v size=%d", readErr, info.Mode(), info.Size())
+	}
 	readRuntime := func() piauthority.Runtime {
 		t.Helper()
 		body, err := os.ReadFile(filepath.Join(installed.DataRoot, piauthority.RuntimeFile))
