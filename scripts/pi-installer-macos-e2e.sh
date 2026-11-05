@@ -103,20 +103,21 @@ if grep -Fq 'pi prerequisite unavailable' "$evidence/public-real-pi.log"; then e
 # candidate despite the two installers' private HOME roots. Remove ONLY this
 # disposable baseline's own verified app registration before candidate begins.
 # Do not unregister unknown, active, foreign or non-TEST applications.
-public_native=$("$python" - "$root/public" <<'PYOWNED'
+public_native=$("$python" - "$root/public" "$public_status" <<'PYOWNED'
 import json, plistlib, sys
 from pathlib import Path
 base = Path(sys.argv[1]).resolve(strict=True)
+completed = sys.argv[2] == '0'
 owned_root = (base / 'home').resolve(strict=True)
 ledger = owned_root / 'Library/Application Support/agent-notifications/ownership.json'
 if not ledger.is_file():
-    raise SystemExit(0)
+    raise SystemExit('completed public install missing native ownership ledger' if completed else 0)
 native = (json.loads(ledger.read_text()).get('Native') or {}).get('Path')
 if not native:
-    raise SystemExit(0)
+    raise SystemExit('completed public install missing native app path' if completed else 0)
 p = Path(native)
 if not p.is_absolute() or not p.is_dir():
-    raise SystemExit(0)
+    raise SystemExit('completed public install has unavailable native app path' if completed else 0)
 real = p.resolve(strict=True)
 if p != real or not real.is_relative_to(owned_root) or real.suffix != '.app':
     raise SystemExit('refused non-owned public LaunchServices cleanup')
