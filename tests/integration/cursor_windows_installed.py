@@ -70,9 +70,11 @@ def prepare(root, agent):
         '/statuses/agent_stopping/webhook/enabled':True}}
     cli('config-edit',['config','edit','--stdin','--expect-revision',inspection['revision']],json.dumps(edits).encode())
     common = ['--scope-root',str(root/'home/.cursor'),'--client-executable',str(agent),'--control-root',str(control)]
-    def install(name, enabled):
+    def install(name, enabled, explicit_channels=True):
         intent = primary.parent/(name+'-intent.json')
-        channels = ['--products','cursor','--agent-notify'] + (['--desktop','--webhook'] if enabled else [])
+        channels = ['--products','cursor','--agent-notify']
+        if explicit_channels:
+            channels += ['--desktop' if enabled else '--desktop=false', '--webhook' if enabled else '--webhook=false']
         cli(name+'-prepare',['setup-products','prepare',*channels,*common,'--intent-file',str(intent)])
         frozen = json.loads(intent.read_bytes())
         scopes = {k:base64.b64decode(v,validate=True).decode() for k,v in frozen['scopes'].items()}
@@ -82,7 +84,7 @@ def prepare(root, agent):
             args += ['--'+key,scopes[key]]
         cli(name,args)
         policy = json.loads((control/'agent-notifications.json').read_bytes())
-        assert policy['route']['cursorNotifications'] == {'desktop':enabled,'webhook':enabled}
+        assert policy['route']['cursorNotifications'] == {'desktop':enabled,'webhook':enabled}, (name,policy['route']['cursorNotifications'])
     foreign_stop = json.loads((root/'home/.cursor/hooks.json').read_bytes())['hooks']['stop']
     install('cursor-enable',True)
     ownership = json.loads((control/'ownership.json').read_bytes())
@@ -143,7 +145,7 @@ def finish(test, native):
     assert len(records)==1, 'disabled webhook'
     # Trusted installation generation is deliberately part of the duplicate key.
     # Match the established Linux lifecycle: update must preserve disabled consent.
-    test['install']('cursor-update',False)
+    test['install']('cursor-update',False,explicit_channels=False)
     cli('cursor-replay-after-update',['cursor-event','stop','--binding',test['selector']],payload)
     assert len(records)==1, 'update changed disabled consent'
     cli('cursor-uninstall',['setup-notifications','wizard','--action','uninstall','--agents','cursor','--hooks','false','--agent-notify','true',*test['common'],'--yes','--json'])
