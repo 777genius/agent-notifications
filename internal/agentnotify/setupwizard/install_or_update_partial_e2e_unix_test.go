@@ -94,6 +94,16 @@ func TestInstallOrUpdateRetainsCommittedUpdateAfterLaterPlanFailure(t *testing.T
 	if err != nil || view.Outcome != "completed" {
 		t.Fatalf("read-only installed observation: %+v %v", view, err)
 	}
+	// Verify the actual installed plugin payload, not only state metadata.
+	candidateSkill, err := os.ReadFile(filepath.Join(candidate, "skills", "agent-notifications", "SKILL.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding := inspectedWizardBinding(t, ctx, control, "claude")
+	installedSkill, err := os.ReadFile(filepath.Join(binding.TargetPath, "skills", "agent-notifications", "SKILL.md"))
+	if err != nil || string(installedSkill) != string(candidateSkill) {
+		t.Fatalf("committed Claude plugin skill did not match candidate: %v", err)
+	}
 	claudeInstalled, codexInstalled := false, false
 	for _, target := range view.Targets {
 		if target.Unit != "agent-notify" || target.Outcome != "installed" {
