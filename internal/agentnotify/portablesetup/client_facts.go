@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/777genius/agent-notifications/install/uapinstaller"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/domain"
@@ -20,6 +22,16 @@ type clientFact struct {
 }
 
 func clientFactsPath(dataRoot string) string { return filepath.Join(dataRoot, clientFactsFile) }
+
+// Match the public SDK's explicit clean-path admission before any host handoff.
+// The SDK revalidates facts again under its own mutation lock.
+func validObservedFactPath(path string) bool {
+	if !explicitAbs(path) || !utf8.ValidString(path) || len(path) > 4096 || strings.ContainsRune(path, 0) {
+		return false
+	}
+	volume := filepath.VolumeName(path)
+	return !strings.HasPrefix(volume, `\\`) && !strings.HasPrefix(volume, "//")
+}
 
 func readClientFacts(dataRoot string) (map[string]clientFact, error) {
 	body, err := os.ReadFile(clientFactsPath(dataRoot))
@@ -95,6 +107,16 @@ func (m Materializer) readKnownTargets(installationID string, requireAll bool, s
 				return nil, fmt.Errorf("%w: unselected live client %s has missing or stale binding facts", ErrPreflight, binding.ClientID)
 			}
 			continue
+		}
+		if requireAll && !validObservedFactPath(fact.ConfigRoot) {
+			return nil, fmt.Errorf("%w: unselected live client %s has invalid profile facts", ErrPreflight, binding.ClientID)
+		}
+		if requireAll {
+			cliRequired := (domain.SelectedDelivery{}).EffectiveTraitsForScope(
+				domain.ClientID(binding.ClientID), domain.InstallScope(binding.Scope)).LifecycleKind == domain.LifecycleCLIRegistry
+			if (fact.Executable == "" && cliRequired) || (fact.Executable != "" && !validObservedFactPath(fact.Executable)) {
+				return nil, fmt.Errorf("%w: unselected live client %s has invalid executable facts", ErrPreflight, binding.ClientID)
+			}
 		}
 		if info, err := os.Stat(fact.ConfigRoot); err != nil || !info.IsDir() {
 			if requireAll {
