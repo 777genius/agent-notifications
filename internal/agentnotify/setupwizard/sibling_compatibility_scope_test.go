@@ -14,7 +14,7 @@ func TestSiblingCompatibilityFailureNeverProposesUnselectedOtherProduct(t *testi
 	for _, agent := range []portable.Integration{portable.Pi, portable.Cursor, portable.CopilotVSCode, ""} {
 		t.Run(string(agent), func(t *testing.T) {
 			req := Request{Action: ActionUpdate, Agents: []string{string(agent)}}
-			got := siblingCompatibilityUnavailable(agent, req, Result{Action: string(req.Action)})
+			got := siblingCompatibilityUnavailable(agent, req, Result{Action: string(req.Action), NextActions: []NextAction{{Kind: "update", Agents: []string{"claude", "codex"}}}})
 			if got.Outcome != "incomplete" || got.Reason != "sibling_compatibility_unavailable" ||
 				len(got.NextActions) != 0 {
 				t.Fatalf("unsupported sibling recovery must refuse without expanding selection: %+v", got)
@@ -26,7 +26,7 @@ func TestSiblingCompatibilityFailureNeverProposesUnselectedOtherProduct(t *testi
 			// Exercise the same mapper used by Plan: changing only a failing SDK
 			// error type must not fabricate Claude/Codex update authority.
 			mapped, err := mapPreviewFailure(context.Background(), req, agent, portablesetup.Materializer{}, portablesetup.Identity{},
-				uapinstaller.ErrTargetFactsUnavailable, Result{Action: string(req.Action)})
+				uapinstaller.ErrTargetFactsUnavailable, Result{Action: string(req.Action), NextActions: []NextAction{{Kind: "update", Agents: []string{"claude", "codex"}}}})
 			if err == nil || len(mapped.NextActions) != 0 || mapped.Reason != "sibling_compatibility_unavailable" {
 				t.Fatalf("preview fabricated sibling mutation: %+v / %v", mapped, err)
 			}

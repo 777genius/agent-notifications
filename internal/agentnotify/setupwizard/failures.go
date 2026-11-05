@@ -69,6 +69,9 @@ func siblingCompatibilityUnavailable(agent portable.Integration, req Request, ou
 	// compatibility refusal for Pi, Cursor or Local must never propose
 	// mutating unrelated, unselected Claude/Codex bindings.
 	if agent != portable.Claude && agent != portable.Codex {
+		// A failed compatibility preflight must not carry an earlier
+		// recommendation to mutate unselected clients.
+		out.NextActions = nil
 		return out
 	}
 	retry := req
