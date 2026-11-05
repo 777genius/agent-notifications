@@ -102,9 +102,16 @@ def recovered_merged_pull(repository, source, run):
     proof = native.download_receipt(items[0])
     native.validate_receipt(proof, workflow, run, repository)
     tested = proof['tested_commit']
-    logs = subprocess.run(['gh', 'api', '--allow-escape-sequences', 'repos/' + repository +
-                           '/actions/jobs/' + str(receipts[0]['id']) + '/logs'],
-                          check=True, capture_output=True, timeout=45).stdout
+    endpoint = 'repos/' + repository + '/actions/jobs/' + str(receipts[0]['id']) + '/logs'
+    result = subprocess.run(['gh', 'api', endpoint], capture_output=True, timeout=45)
+    if result.returncode and b'terminal escape sequences' in result.stderr:
+        # Newer gh refuses escape sequences unless explicitly permitted; older
+        # releases do not implement this flag and read logs without it.
+        result = subprocess.run(['gh', 'api', '--allow-escape-sequences', endpoint],
+                                capture_output=True, timeout=45)
+    if result.returncode:
+        return None
+    logs = result.stdout
     if len(logs) > 20_000_000:
         return None
     # Actions checkout's own fetch output binds the actual PR merge ref to the

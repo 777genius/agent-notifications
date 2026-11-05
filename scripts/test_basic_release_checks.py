@@ -480,8 +480,14 @@ class AdmissionTests(unittest.TestCase):
         with patch.object(native, 'gh', side_effect=api), \
              patch.object(native, 'download_receipt', return_value=proof), \
              patch.object(native, 'validate_receipt'), \
-             patch.object(checks.subprocess, 'run', side_effect=lambda *a, **k: type('Result', (), {'stdout': log})()):
+             patch.object(checks.subprocess, 'run', side_effect=lambda *a, **k: type('Result', (), {'stdout': log, 'stderr': b'', 'returncode': 0})()):
             self.assertTrue(checks.authentic_candidate_pull(REPO, SOURCE, run))
+            guard = type('Result', (), {'stdout': b'', 'stderr': b'terminal escape sequences', 'returncode': 1})()
+            success = type('Result', (), {'stdout': log, 'stderr': b'', 'returncode': 0})()
+            with patch.object(checks.subprocess, 'run', side_effect=[guard, success]) as calls:
+                self.assertTrue(checks.authentic_candidate_pull(REPO, SOURCE, run))
+                self.assertNotIn('--allow-escape-sequences', calls.call_args_list[0].args[0])
+                self.assertIn('--allow-escape-sequences', calls.call_args_list[1].args[0])
             pr['base']['sha'] = 'd' * 40
             self.assertFalse(checks.authentic_candidate_pull(REPO, SOURCE, run))
             pr['base']['sha'] = BASE
