@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/777genius/agent-notifications/install/uapinstaller"
@@ -178,6 +179,12 @@ func TestGroupUpdateCodexLocalPreservesUnselectedClaude(t *testing.T) {
 		if !ok || beforeBinding.PackageRevision == nil || afterBinding.PackageRevision == nil ||
 			beforeBinding.PackageRevision.TreeDigest == afterBinding.PackageRevision.TreeDigest {
 			t.Fatalf("selected client did not receive new revision: %+v", old)
+		}
+		// The Codex and frozen Local projectors both place selected raw Skills
+		// under the managed target root, not the native profile settings path.
+		skill, err := os.ReadFile(filepath.Join(afterBinding.TargetLocator, "skills", "agent-notifications", "SKILL.md"))
+		if err != nil || !strings.Contains(string(skill), "description: Updated selected clients") {
+			t.Fatalf("selected %s native Skill did not receive update: %s %v", old.Integration, skill, err)
 		}
 	}
 	claudeName, err := claudeBinding.Filename()
