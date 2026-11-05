@@ -114,6 +114,8 @@ class API:
                 self.check_reads += 1
                 if self.check_reads == 2 and self.after_checks:
                     self.after_checks(self)
+        elif path == prefix + 'pulls':
+            return []
         elif path.startswith(prefix + 'compare/'):
             ancestor, _, candidate = path.removeprefix(prefix + 'compare/').partition('...')
             return {'status': 'ahead' if ancestor == BASE and candidate == SOURCE else 'diverged',
@@ -429,6 +431,64 @@ class AdmissionTests(unittest.TestCase):
                 mutate(self.api.runs[0])
                 with self.assertRaisesRegex(ValueError, 'latest source workflow did not succeed'):
                     self.verify()
+
+    def test_closed_coderabbit_exception_is_specific_and_never_masks_failure(self):
+        for run in self.api.runs:
+            run.update(event='pull_request', head_branch='fix/release-candidate')
+        row = {'id': 90000, 'name': 'CodeRabbit', 'status': 'completed', 'conclusion': 'cancelled',
+               'head_sha': SOURCE, 'app': {'id': 6, 'slug': 'coderabbitai'},
+               'check_suite': {'id': 600}, 'output': {'title': 'Review cancelled',
+               'summary': 'Result: Cancelled - Pull request is closed\nRun ID: example'}}
+        self.api.checks.append(row)
+        self.assertEqual(self.verify()['status'], 'passed')
+        row['output']['summary'] = 'Result: Cancelled - another reason'
+        with self.assertRaisesRegex(ValueError, 'latest source check'):
+            self.verify()
+        row['output']['summary'] = 'Result: Cancelled - Pull request is closed\nRun ID: example'
+        self.api.checks.append({**row, 'id': 89999, 'conclusion': 'failure'})
+        with self.assertRaisesRegex(ValueError, 'latest source check'):
+            self.verify()
+
+    def test_recovered_merged_pr_requires_checkout_and_exact_parents(self):
+        run = self.api.runs[0]
+        run.update(event='pull_request', head_branch='fix/release-candidate', pull_requests=[],
+                   created_at='2026-01-01T00:00:00Z')
+        pr = {'number': 559, 'merged': True, 'merge_commit_sha': SOURCE,
+              'merged_at': '2026-01-01T01:00:00Z',
+              'head': {'ref': run['head_branch'], 'sha': SOURCE, 'repo': {'id': REPO_ID}},
+              'base': {'ref': 'main', 'sha': BASE, 'repo': {'id': REPO_ID}}}
+        proof = {'tested_commit': SOURCE, 'tested_tree': TREE}
+        job = {'id': 876, 'name': native.CONTRACTS['ci-macos.yml'][1],
+               'status': 'completed', 'conclusion': 'success', 'run_attempt': 1,
+               'steps': [{'name': 'Run actions/checkout@v7', 'conclusion': 'success',
+                          'started_at': '2026-01-01T00:00:00Z', 'completed_at': '2026-01-01T00:00:02Z'}]}
+        log = ('2026-01-01T00:00:00Z ##[group]Run actions/checkout@v7\n'
+               '2026-01-01T00:00:01Z [command]git fetch +' + SOURCE
+               + ':refs/remotes/pull/559/merge').encode()
+        original = self.api.__call__
+        def api(path, binary=False):
+            if '/pulls?' in path: return [{'number': 559}]
+            if path.endswith('/pulls/559'): return copy.deepcopy(pr)
+            if path.endswith('/jobs/876/logs'): return log
+            if '/git/commits/' in path:
+                return {'sha': SOURCE, 'parents': [{'sha': BASE}, {'sha': SOURCE}], 'tree': {'sha': TREE}}
+            return original(path, binary)
+        run['path'] = '.github/workflows/ci-macos.yml'
+        self.api.jobs[run['id']] = [job]
+        with patch.object(native, 'gh', side_effect=api), \
+             patch.object(native, 'download_receipt', return_value=proof), \
+             patch.object(native, 'validate_receipt'), \
+             patch.object(checks.subprocess, 'run', side_effect=lambda *a, **k: type('Result', (), {'stdout': log})()):
+            self.assertTrue(checks.authentic_candidate_pull(REPO, SOURCE, run))
+            pr['base']['sha'] = 'd' * 40
+            self.assertFalse(checks.authentic_candidate_pull(REPO, SOURCE, run))
+            pr['base']['sha'] = BASE
+            log = b'2026-01-01T00:00:00Z ##[group]Run actions/checkout@v7\n'
+            self.assertFalse(checks.authentic_candidate_pull(REPO, SOURCE, run))
+            log = ('2026-01-01T00:00:00Z ##[group]Run actions/checkout@v7\n'
+                   '2026-01-01T00:00:01Z [command]git fetch +' + SOURCE + ':refs/remotes/pull/559/merge').encode()
+            pr['merged_at'] = '2025-01-01T00:00:00Z'
+            self.assertFalse(checks.authentic_candidate_pull(REPO, SOURCE, run))
 
     def test_pre_main_pr_rejects_foreign_merge_base_even_when_compare_says_ahead(self):
         for run in self.api.runs:
