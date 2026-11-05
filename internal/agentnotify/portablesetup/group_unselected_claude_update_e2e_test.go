@@ -4,6 +4,7 @@ package portablesetup
 
 import (
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -151,6 +152,62 @@ func TestGroupUpdateCodexLocalPreservesUnselectedClaude(t *testing.T) {
 		req.PackageRoot, req.ExpectedGeneration = next, snapshot.Ledger.Generation
 		req.Operation = uapinstaller.OpUpdate
 		req.OperationID = "TEST-three-client-group-update"
+	}
+	// Missing or stale Claude facts must be refused before a selected host
+	// handoff can publish a pending reservation or modify the UAP state.
+	factsPath := clientFactsPath(filepath.Dir(mat.Roots.StateFile))
+	originalFacts, err := os.ReadFile(factsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stateBeforeUpdate, err := os.ReadFile(mat.Roots.StateFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name  string
+		stale bool
+	}{
+		{name: "missing-claude-facts"},
+		{name: "stale-claude-binding", stale: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			facts, readErr := readClientFacts(filepath.Dir(mat.Roots.StateFile))
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if tc.stale {
+				fact := facts["claude"]
+				fact.BindingID = "TEST-stale-claude-binding"
+				facts["claude"] = fact
+			} else {
+				delete(facts, "claude")
+			}
+			body, marshalErr := json.Marshal(facts)
+			if marshalErr != nil {
+				t.Fatal(marshalErr)
+			}
+			if writeErr := os.WriteFile(factsPath, body, 0600); writeErr != nil {
+				t.Fatal(writeErr)
+			}
+			t.Cleanup(func() {
+				if writeErr := os.WriteFile(factsPath, originalFacts, 0600); writeErr != nil {
+					t.Fatal(writeErr)
+				}
+			})
+			if _, applyErr := mat.ApplyGroup(ctx, []MaterializeRequest{codexReq, local}); applyErr == nil ||
+				!strings.Contains(applyErr.Error(), "unselected live client claude") {
+				t.Fatalf("unverified Claude facts did not refuse pre-handoff: %v", applyErr)
+			}
+			currentSnapshot, snapErr := installruntime.ReadInstalledSnapshot(base.Identity.ControlRoot)
+			if snapErr != nil || !reflect.DeepEqual(snapshot.Ledger, currentSnapshot.Ledger) {
+				t.Fatalf("refusal changed host reservation/ledger: %v", snapErr)
+			}
+			currentState, readErr := os.ReadFile(mat.Roots.StateFile)
+			if readErr != nil || !reflect.DeepEqual(stateBeforeUpdate, currentState) {
+				t.Fatalf("refusal changed SDK state: %v", readErr)
+			}
+		})
 	}
 	updated, err := mat.ApplyGroup(ctx, []MaterializeRequest{codexReq, local})
 	if err != nil || len(updated) != 2 {
