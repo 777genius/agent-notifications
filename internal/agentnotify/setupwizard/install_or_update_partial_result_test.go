@@ -8,9 +8,10 @@ import (
 func TestRetainCommittedPhaseTargetsPreservesFailure(t *testing.T) {
 	prior := []TargetResult{{
 		Client: "claude", Unit: "agent-notify", Outcome: "completed", Materialization: "materialized",
+		Warnings: []string{"committed-warning"},
 	}}
 	failure := []TargetResult{
-		{Client: "codex", Unit: "agent-notify", Outcome: "incomplete", Reason: "source_mismatch", FailureStage: "preflight"},
+		{Client: "codex", Unit: "agent-notify", Outcome: "incomplete", Reason: "source_mismatch", FailureStage: "preflight", Warnings: []string{"failed-warning"}},
 		{Client: "pi", Unit: "agent-notify", Outcome: "absent", Reason: "preserved_existing_opt_out"},
 	}
 	got := retainCommittedPhaseTargets(prior, failure)
@@ -20,8 +21,11 @@ func TestRetainCommittedPhaseTargetsPreservesFailure(t *testing.T) {
 	}
 	got[0].Outcome = "mutated"
 	got[1].Reason = "mutated"
-	if prior[0].Outcome != "completed" || failure[0].Reason != "source_mismatch" {
-		t.Fatal("aliased input")
+	got[0].Warnings[0] = "changed-prior"
+	got[1].Warnings[0] = "changed-later"
+	if prior[0].Outcome != "completed" || prior[0].Warnings[0] != "committed-warning" ||
+		failure[0].Reason != "source_mismatch" || failure[0].Warnings[0] != "failed-warning" {
+		t.Fatal("aliased target or warning arrays")
 	}
 }
 
