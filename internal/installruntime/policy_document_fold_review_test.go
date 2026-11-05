@@ -18,8 +18,8 @@ func TestRawPolicyRejectsUnicodeEquivalentKeys(t *testing.T) {
 	}
 	before := map[string]json.RawMessage{
 		"schemaVersion": json.RawMessage("1"),
-		"enabled": json.RawMessage("false"),
-		"route": json.RawMessage(`{"desktop":true,"deſktop":false}`),
+		"enabled":       json.RawMessage("false"),
+		"route":         json.RawMessage(`{"desktop":true,"deſktop":false}`),
 	}
 	after := []byte(`{"schemaVersion":1,"enabled":false,"route":{"deſktop":false,"desktop":true}}`)
 	if err := validateRawPolicyDocument(before, after); err == nil {

@@ -34,7 +34,7 @@ func TestReuseNativeGenerationKeepsFreshAttestation(t *testing.T) {
 func TestPurgeRefusesMismatchedObservedAndRemovedPaths(t *testing.T) {
 	change := &NativeChange{Purge: true,
 		Before: NativeRecord{Path: "/controlled/live.app", SHA256: "digest"},
-		After: NativeRecord{Path: "/controlled/other.app", SHA256: "digest"}}
+		After:  NativeRecord{Path: "/controlled/other.app", SHA256: "digest"}}
 	if err := validateNative(change); err == nil || !strings.Contains(err.Error(), "purge paths must match") {
 		t.Fatalf("purge admitted different observed and removed paths: %v", err)
 	}
