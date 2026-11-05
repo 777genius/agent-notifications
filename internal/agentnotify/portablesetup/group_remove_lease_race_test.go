@@ -11,10 +11,11 @@ import (
 	"github.com/777genius/agent-notifications/internal/installruntime"
 )
 
-// Reproduce a competing install after RemoveGroup reads membership but before
-// the coordinator lease. This is the public materializer route, not a mock
-// of SDK removal. The TEST callback only controls the ordering.
-func TestRemoveGroupSeesClientInstalledWhileWaitingForMutationLease(t *testing.T) {
+// Exercise a competing public Install at RemoveGroup's pre-lease boundary.
+// The group must then use the newly published membership for both clients
+// and revoke both locators. This verifies effects and the pre-lease ordering
+// fixture, not every possible read/lease interleaving or native host process.
+func TestRemoveGroupSeesClientInstalledBeforeLeasedMembershipSnapshot(t *testing.T) {
 	ctx := testCtx(t)
 	mat, claude, root := registryMaterializerFixture(t)
 	claude.Integration = portable.Claude
