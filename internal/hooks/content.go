@@ -94,7 +94,8 @@ func (h *Handler) prepareHookContent(ev Event, keys eventKeys, hookEvent string,
 	//   final message must not collapse into one notification.
 	// - Qoder StopFailure: an actual failure must not collapse into a previous
 	//   successful Stop with identical copy. A replay of the same native
-	//   payload after the event lock expires is bounded by its payload digest.
+	//   payload after the event lock expires is bounded by its payload digest;
+	//   only the last delivered digest is kept, so A, B, A notifies three times.
 	// Turn-level duplicates of the event itself stay bounded by the
 	// turn+tool/agent(+call)-scoped dedup lock.
 	skipContentDedup := status == analyzer.StatusPermissionRequest ||

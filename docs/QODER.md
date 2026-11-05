@@ -46,7 +46,9 @@ to a single notification. `PermissionRequest` notifications name the tool and ar
 only the documented `rate_limit` class maps to `api_error_overloaded`, and all
 other errors map to the generic `agent_error` status. Error text, details and
 last assistant message are excluded from notification copy. A replay of the
-same native failure payload within three minutes notifies once. The payload has
+last delivered native failure payload within three minutes notifies once; only
+that most recent digest is kept, so a replay arriving after a different failure
+was delivered notifies again. The payload has
 no timestamp or request id, so a genuine repeat failure with byte-identical
 payload in that window is also collapsed. Only a digest of the payload and class
 is kept in session state. Configured
