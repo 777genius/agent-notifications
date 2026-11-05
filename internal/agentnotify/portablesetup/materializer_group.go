@@ -282,6 +282,21 @@ func (m Materializer) RemoveGroup(ctx context.Context, reqs []MaterializeRequest
 	if _, err := validateGroupIdentities(reqs); err != nil {
 		return nil, err
 	}
+	// Synchronize a competing install at the boundary that previously read
+	// UAP membership before the mutation lease. Test-only hook, never enabled
+	// by production construction.
+	if m.beforeGroupRemoveMutation != nil {
+		m.beforeGroupRemoveMutation()
+	}
+	mutationReq := groupMutationRequest(reqs)
+	release, err := m.beginMutation(ctx, mutationReq)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	// beginMutation has acquired and recovered the shared coordinator lease.
+	// Membership, receipts and retained-empty state must come from this fresh
+	// snapshot so a client installed by an earlier holder is not skipped.
 	state, err := m.Store.Load()
 	if err != nil {
 		return nil, err
@@ -303,12 +318,6 @@ func (m Materializer) RemoveGroup(ctx context.Context, reqs []MaterializeRequest
 			{Integration: reqs[1].Integration, AlreadyAbsent: true},
 		}, nil
 	}
-	mutationReq := groupMutationRequest(reqs)
-	release, err := m.beginMutation(ctx, mutationReq)
-	if err != nil {
-		return nil, err
-	}
-	defer release()
 	generation := mutationReq.ExpectedGeneration
 	engineReq := reqs[0]
 	for _, req := range reqs {
