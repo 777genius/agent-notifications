@@ -89,6 +89,16 @@ func TestGroupUpdateCodexLocalPreservesUnselectedClaude(t *testing.T) {
 	codexReq.Integration, codexReq.ClientConfigRoot = portable.Codex, codexRoot
 	codexReq.Identity.ScopeRoot = codexRoot
 
+	// Local adds a frozen Stop hook to the canonical package. Install Claude
+	// from that same composed source before the selected Codex+Local add, so
+	// the three-client fixture does not request a new revision via OpInstall.
+	_, sharedLocal, closeShared, err := mat.composeLocalPackage(ctx, local, false)
+	if err != nil {
+		t.Fatal("compose shared initial package:", err)
+	}
+	defer closeShared()
+	claudeReq.PackageRoot = sharedLocal.PackageRoot
+
 	claudeBinding, err := mat.Install(ctx, claudeReq)
 	if err != nil {
 		t.Fatal("install initial unselected Claude:", err)
