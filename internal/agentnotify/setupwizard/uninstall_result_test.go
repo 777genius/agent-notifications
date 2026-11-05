@@ -186,7 +186,14 @@ func TestUninstallRetainedEmptyPreservesHookRemoval(t *testing.T) {
 func TestSequentialUninstallWithAbsentSiblingsFinishesReservation(t *testing.T) {
 	req := installedClaudeSelectionRequest(t)
 	req.Action, req.Agents, req.ExternalUninstalled = ActionUninstall, []string{"claude", "codex", "pi"}, true
-	req.CodexHome, req.PiAgentDir = t.TempDir(), t.TempDir()
+	req.CodexHome = t.TempDir()
+	// Pi's SDK mutation authority requires the real physical profile path.
+	// macOS t.TempDir may be spelled /tmp while its physical root is /private/tmp.
+	var err error
+	req.PiAgentDir, err = filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	removed, err := Run(testCtx(t), req)
 	if err != nil || removed.Outcome != "completed" || !removed.DataRetained {
 		t.Fatalf("sequential removal with absent siblings: %+v %v", removed, err)
