@@ -4,8 +4,8 @@ package portablesetup
 
 import (
 	"crypto/sha256"
-	"errors"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
