@@ -3,11 +3,18 @@ on:
   push:
     branches: [feat/cursor-windows-cli]
   workflow_dispatch:
+  # Exercise the genuine installed Cursor/OS path when this qualification workflow changes.
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - '.github/workflows/cursor-windows-shell.yml'
 permissions:
   contents: read
 # Installed native qualification and manual runs retain independent evidence and cleanup.
 jobs:
   native-shell:
+    # Do not execute a fork's modified workflow against the pinned vendor CLI.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: windows-2025
     timeout-minutes: 12
     steps:
