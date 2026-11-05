@@ -130,7 +130,7 @@ func groupNotifyFailed(agents []portable.Integration, req Request, out Result, e
 			}
 			if errors.As(err, &persisted) {
 				for _, agent := range agents {
-					if string(agent) == persisted.Result.Client.ClientID {
+					if portablesetup.ClientID(agent) == persisted.Result.Client.ClientID {
 						failed = agent
 						break
 					}

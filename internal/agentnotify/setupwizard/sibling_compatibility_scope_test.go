@@ -74,12 +74,12 @@ func TestGroupCompatibilityMixedSelectionNeverRecommendsUnselectedClient(t *test
 				for _, failure := range []error{
 					cause,
 					portablesetup.ResultError{Err: cause},
-					portablesetup.ResultError{Err: cause, Result: uapinstaller.Result{Client: uapinstaller.ClientResult{ClientID: string(tc.agents[0])}}},
-					portablesetup.ResultError{Err: cause, Result: uapinstaller.Result{Client: uapinstaller.ClientResult{ClientID: string(tc.agents[1])}}},
+					portablesetup.ResultError{Err: cause, Result: uapinstaller.Result{Client: uapinstaller.ClientResult{ClientID: portablesetup.ClientID(tc.agents[0])}}},
+					portablesetup.ResultError{Err: cause, Result: uapinstaller.Result{Client: uapinstaller.ClientResult{ClientID: portablesetup.ClientID(tc.agents[1])}}},
 				} {
 					out := Result{Action: string(req.Action), Command: []string{"setup-notifications", "wizard", "--action", "update", "--agents", "claude,codex"},
 						NextActions: []NextAction{{Kind: "update", Agents: []string{"claude", "codex"}}}}
-					got := groupNotifyFailed(tc.agents, req, out, failure)
+					got := attachWizardCommand(req, groupNotifyFailed(tc.agents, req, out, failure))
 					if got.Outcome != "incomplete" || got.Reason != "sibling_compatibility_unavailable" ||
 						len(got.NextActions) != 0 || len(got.Command) != 0 {
 						t.Fatalf("mixed group suggested unselected update for %v: %+v", failure, got)
@@ -89,7 +89,12 @@ func TestGroupCompatibilityMixedSelectionNeverRecommendsUnselectedClient(t *test
 					failed := string(tc.agents[0])
 					var persisted portablesetup.ResultError
 					if errors.As(failure, &persisted) && persisted.Result.Client.ClientID != "" {
-						failed = persisted.Result.Client.ClientID
+						for _, agent := range tc.agents {
+							if portablesetup.ClientID(agent) == persisted.Result.Client.ClientID {
+								failed = string(agent)
+								break
+							}
+						}
 					}
 					if len(got.Targets) != 1 || got.Targets[0].Client != failed || got.Targets[0].Outcome != "incomplete" {
 						t.Fatalf("failed client misattributed for %v: got %+v, want %s", failure, got.Targets, failed)
@@ -107,7 +112,7 @@ func TestGroupCompatibilityKnownClaudeCodexOrderKeepsVerifiedRecovery(t *testing
 		req := Request{Action: ActionUpdate, Agents: []string{string(order[0]), string(order[1])}}
 		persisted := portablesetup.ResultError{Err: uapinstaller.ErrCompatibilityUnavailable,
 			Result: uapinstaller.Result{Client: uapinstaller.ClientResult{ClientID: string(order[0])}}}
-		got := groupNotifyFailed(order, req, Result{Action: string(req.Action)}, persisted)
+		got := attachWizardCommand(req, groupNotifyFailed(order, req, Result{Action: string(req.Action)}, persisted))
 		if len(got.NextActions) != 1 || got.NextActions[0].Kind != "update" ||
 			!reflect.DeepEqual(got.NextActions[0].Agents, []string{"claude", "codex"}) {
 			t.Fatalf("verified legacy group recovery changed for %v: %+v", order, got)
@@ -140,6 +145,7 @@ func TestSiblingCompatibilityMixedPlanPreviewCannotExpandSelection(t *testing.T)
 			out := Result{Action: string(req.Action), Command: []string{"setup-notifications", "wizard", "--action", "update", "--agents", "claude,codex"}}
 			got, err := mapPreviewFailure(context.Background(), req, tc.agent, portablesetup.Materializer{}, portablesetup.Identity{},
 				uapinstaller.ErrTargetFactsUnavailable, out)
+			got = attachWizardCommand(req, got)
 			if err == nil || got.Reason != "sibling_compatibility_unavailable" {
 				t.Fatalf("preview failure lost: %+v / %v", got, err)
 			}
