@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PR-only release operator scope. Unknown changes retain full native CI."""
+"""Strict PR release scope and exact-tree main promotion; unknown inputs run full CI."""
 import argparse
 import json
 import os
