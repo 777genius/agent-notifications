@@ -197,6 +197,11 @@ func TestGroupUpdateCodexLocalPreservesUnselectedClaude(t *testing.T) {
 			fact.Executable = ""
 			facts["claude"] = fact
 		}},
+		{"wrong-existing-claude-config-root", func(facts map[string]clientFact) {
+			fact := facts["claude"]
+			fact.ConfigRoot = codexRoot
+			facts["claude"] = fact
+		}},
 		{"unclean-claude-config-root", func(facts map[string]clientFact) {
 			fact := facts["claude"]
 			fact.ConfigRoot = claudeRoot + "/../" + filepath.Base(claudeRoot)

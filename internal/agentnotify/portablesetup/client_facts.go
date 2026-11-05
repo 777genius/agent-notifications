@@ -118,11 +118,18 @@ func (m Materializer) readKnownTargets(installationID string, requireAll bool, s
 				return nil, fmt.Errorf("%w: unselected live client %s has invalid executable facts", ErrPreflight, binding.ClientID)
 			}
 		}
-		if info, err := os.Stat(fact.ConfigRoot); err != nil || !info.IsDir() {
+		info, statErr := os.Stat(fact.ConfigRoot)
+		if statErr != nil || !info.IsDir() {
 			if requireAll {
 				return nil, fmt.Errorf("%w: unselected live client %s profile unavailable", ErrPreflight, binding.ClientID)
 			}
 			continue
+		}
+		if requireAll {
+			recorded, recordedErr := os.Stat(binding.NativeProfileRoot)
+			if recordedErr != nil || !recorded.IsDir() || !os.SameFile(info, recorded) {
+				return nil, fmt.Errorf("%w: unselected live client %s profile differs from recorded binding", ErrPreflight, binding.ClientID)
+			}
 		}
 		if m.Roots.RequireLiveProfiles {
 			receipt := installation.DataReceipts[binding.DataReceiptID]
