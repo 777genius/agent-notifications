@@ -65,6 +65,24 @@ func siblingCompatibilityUnavailable(agent portable.Integration, req Request, ou
 	if agent != "" {
 		out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "incomplete", Reason: out.Reason})
 	}
+	// The known two-client recovery applies only to Claude/Codex. An SDK
+	// compatibility refusal for Pi, Cursor or Local must never propose
+	// mutating unrelated, unselected Claude/Codex bindings.
+	knownPair := agent == portable.Claude || agent == portable.Codex
+	for _, selected := range req.Agents {
+		if selected != string(portable.Claude) && selected != string(portable.Codex) {
+			knownPair = false
+			break
+		}
+	}
+	if !knownPair {
+		// A failed compatibility preflight must not carry an earlier
+		// recommendation to mutate unselected clients, whether it came
+		// from an individual Plan preview or a grouped Apply.
+		out.NextActions = nil
+		out.Command = nil
+		return out
+	}
 	retry := req
 	retry.Action = ActionUpdate
 	retry.Yes = true
@@ -91,6 +109,35 @@ func groupNotifyFailed(agents []portable.Integration, req Request, out Result, e
 	var persisted portablesetup.ResultError
 	if errors.As(err, &persisted) && persisted.Finalization {
 		return portableFinalizationFailed(agents, req, out, persisted)
+	}
+	// A group preflight may report a bare SDK error with no persisted
+	// per-client facts. Even then, the entire selected group must be checked
+	// before offering a legacy Claude/Codex recovery.
+	if errors.Is(err, uapinstaller.ErrCompatibilityUnavailable) || errors.Is(err, uapinstaller.ErrTargetFactsUnavailable) {
+		unsupportedSelection := false
+		for _, agent := range agents {
+			if agent != portable.Claude && agent != portable.Codex {
+				unsupportedSelection = true
+				break
+			}
+		}
+		if unsupportedSelection {
+			// The selection controls whether recovery is safe, but the
+			// reported failed client still owns the diagnostic target.
+			failed := portable.Integration("")
+			if len(agents) != 0 {
+				failed = agents[0]
+			}
+			if errors.As(err, &persisted) {
+				for _, agent := range agents {
+					if portablesetup.ClientID(agent) == persisted.Result.Client.ClientID {
+						failed = agent
+						break
+					}
+				}
+			}
+			return siblingCompatibilityUnavailable(failed, req, out)
+		}
 	}
 	if !errors.As(err, &persisted) || (len(persisted.Result.Targets) == 0 && persisted.Result.Client.ClientID == "") {
 		if len(agents) == 0 {

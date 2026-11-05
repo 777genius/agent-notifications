@@ -72,6 +72,8 @@ type Handler struct {
 	// codexEnricher is the DIP seam for Codex turn classification; nil
 	// selects the built-in payload heuristic. See CodexTurnEnricher.
 	codexEnricher CodexTurnEnricher
+	// Test seam for a deterministic append between JSONL parse and settle.
+	afterClaudeTranscriptParse func()
 }
 
 // NewHandler creates a new hook handler

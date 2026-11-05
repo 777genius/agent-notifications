@@ -146,6 +146,11 @@ func reportProgress(req Request, phase string) {
 // Keep Local's exact selection on all Plan/Run fallback commands as well as
 // target-specific next actions. Legacy retry construction remains unchanged.
 func attachWizardCommand(req Request, out Result) Result {
+	// An unavailable sibling is not an invitation to retry the same refused
+	// mixed selection. Do not reconstruct a command after clearing recovery.
+	if out.Reason == "sibling_compatibility_unavailable" && len(out.NextActions) == 0 {
+		return out
+	}
 	authoritative := len(out.Command) != 0
 	out = attachCommand(req, out)
 	if !authoritative && req.LocalConfig != nil && len(out.Command) != 0 {

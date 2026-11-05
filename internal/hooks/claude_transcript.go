@@ -47,6 +47,9 @@ func (h *Handler) handleStopEvent(ev Event) (analyzer.Status, []jsonl.Message, e
 		return analyzer.StatusUnknown, nil, nil
 	}
 
+	if h.afterClaudeTranscriptParse != nil {
+		h.afterClaudeTranscriptParse()
+	}
 	logging.Debug("Analyzed status: %s", status)
 	return status, messages, nil
 }
@@ -167,19 +170,29 @@ func claudeStopHasUnflushedReply(messages []jsonl.Message, final string) bool {
 	return strings.Join(strings.Fields(strings.Join(last, " ")), " ") != final
 }
 
+// transcriptSizeBeforeParse records a baseline before the initial JSONL read.
+// An append during parsing must not become the settle loop's baseline.
+func transcriptSizeBeforeParse(path string) int64 {
+	if path == "" {
+		return -1
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return -1
+	}
+	return info.Size()
+}
+
 // Older Claude versions may omit last_assistant_message. In that case only,
 // wait briefly for an existing transcript to grow. A stat avoids reparsing an
 // unchanged large transcript; elapsed time bounds both sleeps and reparses.
-func (h *Handler) settleClaudeTranscript(ev Event, status analyzer.Status, messages []jsonl.Message) (analyzer.Status, []jsonl.Message) {
+func (h *Handler) settleClaudeTranscript(ev Event, status analyzer.Status, messages []jsonl.Message, preParseSize int64) (analyzer.Status, []jsonl.Message) {
 	path := ev.Session.TranscriptPath
 	if path == "" || !platform.FileExists(path) || claudeStopStatusSettled(status) || claudeTranscriptHasClosingText(messages) {
 		return status, messages
 	}
 	deadline := time.Now().Add(transcriptSettleWait)
-	lastSize := int64(-1)
-	if info, err := os.Stat(path); err == nil {
-		lastSize = info.Size()
-	}
+	lastSize := preParseSize
 	for time.Now().Before(deadline) {
 		settleSleepFunc(transcriptSettleInterval)
 		info, err := os.Stat(path)
