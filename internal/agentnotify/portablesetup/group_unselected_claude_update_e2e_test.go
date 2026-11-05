@@ -58,7 +58,7 @@ func TestGroupUpdateCodexLocalPreservesUnselectedClaude(t *testing.T) {
 	cfg := &vscode.LocalConfig{
 		ProfileSettingsPath: settings, QualifiedTuple: tuple,
 		TargetShell: vscodelocalhooks.Target{Shell: vscodelocalhooks.Shell(tuple.TargetShell)},
-		NativeStop: true, MCPServers: []string{"agent-notifications"}, Skills: []string{"agent-notifications"},
+		NativeStop:  true, MCPServers: []string{"agent-notifications"}, Skills: []string{"agent-notifications"},
 	}
 	setLocalHooks := func(binding portable.Binding) {
 		t.Helper()
