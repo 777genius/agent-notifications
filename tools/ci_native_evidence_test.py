@@ -41,6 +41,59 @@ class EvidenceFixture(fixture.ScopeFixture):
         self.write('docs/PLATFORM_RELEASE_CHANNELS.md', 'promotion docs\n')
         return self.commit()
 
+
+    def test_main_promotion_requires_unique_exact_merged_pr_and_frozen_receipts(self):
+        # A genuine merge commit has the same tree as its reviewed release-only head.
+        head = self.promote()
+        self.git('checkout', '-qb', 'main', self.base)
+        self.git('merge', '--no-ff', '-m', 'test: release promotion merge', head)
+        merged = self.git('rev-parse', 'HEAD').decode().strip()
+        payload = {'ref': 'refs/heads/main', 'before': self.base, 'after': merged,
+                   'repository': {'full_name': 'owner/repo'}}
+        pr = fixture.event(self.base, head)['pull_request']
+        pr.update(merged_at='2026-11-05T10:00:31Z', merge_commit_sha=merged)
+        pr['base']['ref'] = 'main'
+        env = {'GITHUB_REPOSITORY': 'owner/repo'}
+
+        def fake_api(command, **_options):
+            self.assertEqual(command[:2], ['gh', 'api'])
+            self.assertIn(merged, command[2])
+            return subprocess.CompletedProcess(command, 0, json.dumps([pr]).encode())
+
+        with patch.dict(os.environ, env), \
+             patch('ci_release_scope.git', side_effect=lambda *args: self.git(*args)), \
+             patch('ci_release_scope.subprocess.run', side_effect=fake_api):
+            self.assertEqual(equivalent_source('push', payload), self.base)
+            for changed in [
+                {'ref': 'refs/heads/develop'},
+                {'before': 'f' * 40},
+                {'after': 'e' * 40},
+                {'repository': {'full_name': 'other/repo'}},
+            ]:
+                self.assertIsNone(equivalent_source('push', {**payload, **changed}))
+
+        for mutation in (
+            lambda x: x.update(merged_at=None),
+            lambda x: x.update(merge_commit_sha=head),
+            lambda x: x['base'].update(ref='develop'),
+            lambda x: x['base'].update(sha='f' * 40),
+            lambda x: x['head'].update(sha='f' * 40),
+            lambda x: x['head'].update(repo={'full_name': 'foreign/repo'}),
+        ):
+            changed = copy.deepcopy(pr)
+            mutation(changed)
+            with patch.dict(os.environ, env), \
+                 patch('ci_release_scope.git', side_effect=lambda *args: self.git(*args)), \
+                 patch('ci_release_scope.subprocess.run',
+                       return_value=subprocess.CompletedProcess([], 0, json.dumps([changed]).encode())):
+                self.assertIsNone(equivalent_source('push', payload))
+        for associated in ([], [pr, pr]):
+            with patch.dict(os.environ, env), \
+                 patch('ci_release_scope.git', side_effect=lambda *args: self.git(*args)), \
+                 patch('ci_release_scope.subprocess.run',
+                       return_value=subprocess.CompletedProcess([], 0, json.dumps(associated).encode())):
+                self.assertIsNone(equivalent_source('push', payload))
+
     def test_promotion_freezes_release_commit_not_source_snapshot(self):
         head = self.promote()
         with patch('ci_release_scope.git', side_effect=lambda *args: self.git(*args)):

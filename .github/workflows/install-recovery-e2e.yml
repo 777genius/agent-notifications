@@ -31,6 +31,7 @@ jobs:
     permissions:
       contents: read
       actions: read
+      pull-requests: read
     outputs:
       mode: ${{ github.event_name == 'pull_request' && github.event.action == 'edited' && github.event.changes.base != null && 'full' || steps.release-scope.outputs.mode || steps.classify.outputs.mode }}
     steps:
@@ -260,6 +261,7 @@ jobs:
     permissions:
       contents: read
       actions: read
+      pull-requests: read
     steps:
       - uses: actions/checkout@v7
         with:

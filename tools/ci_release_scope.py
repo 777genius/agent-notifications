@@ -82,8 +82,59 @@ def channel_source(revision):
     return rows[0][3]
 
 
+
+def merged_main_promotion(event):
+    """Only an exact-tree, uniquely associated main merge can reuse frozen release inputs."""
+    if not isinstance(event, dict) or event.get('ref') != 'refs/heads/main':
+        return None
+    repository = event.get('repository')
+    if not isinstance(repository, dict):
+        return None
+    name, after, before = repository.get('full_name'), event.get('after'), event.get('before')
+    if (not isinstance(name, str) or name != os.environ.get('GITHUB_REPOSITORY')
+            or not isinstance(after, str) or not SHA.fullmatch(after)
+            or not isinstance(before, str) or not SHA.fullmatch(before)
+            or git('rev-parse', 'HEAD').decode().strip() != after):
+        return None
+    parents = git('rev-list', '--parents', '-n', '1', after).decode().split()
+    if len(parents) not in (2, 3) or parents[0] != after or parents[1] != before:
+        return None
+    paths = git('diff', '--name-only', '-z', '--no-renames', before, after, '--').split(b'\\0')
+    if b'release-channels.tsv' not in paths:
+        return None
+    response = subprocess.run(
+        ['gh', 'api', 'repos/' + name + '/commits/' + after + '/pulls?per_page=2'],
+        check=True, capture_output=True, timeout=30).stdout
+    associated = json.loads(response)
+    if not isinstance(associated, list) or len(associated) != 1:
+        return None
+    pr = associated[0]
+    if not isinstance(pr, dict):
+        return None
+    source = pr.get('head') or {}
+    target = pr.get('base') or {}
+    head = source.get('sha')
+    if (not isinstance(head, str) or not SHA.fullmatch(head)
+            or not isinstance(pr.get('merged_at'), str) or not pr['merged_at']
+            or pr.get('merge_commit_sha') != after
+            or target.get('ref') != 'main' or target.get('sha') != before
+            or (source.get('repo') or {}).get('full_name') != name
+            or (target.get('repo') or {}).get('full_name') != name
+            or (len(parents) == 3 and parents[2] != head)
+            or git('rev-parse', head + '^{tree}') != git('rev-parse', after + '^{tree}')):
+        return None
+    return pr
+
 def equivalent_source(event_name, event):
     pr = pr_identity(event_name, event)
+    if not pr and event_name == 'push':
+        candidate = merged_main_promotion(event)
+        if candidate:
+            # Reuse the same strict PR identity and frozen candidate verification.
+            pr = pr_identity('pull_request', {
+                'action': 'synchronize', 'number': candidate.get('number'),
+                'repository': event['repository'], 'pull_request': candidate,
+            })
     if not pr or pr['head']['repo']['full_name'] != event['repository']['full_name']:
         return None
     base, head = pr['base']['sha'], pr['head']['sha']

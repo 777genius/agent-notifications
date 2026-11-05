@@ -38,6 +38,7 @@ jobs:
     permissions:
       contents: read
       actions: read
+      pull-requests: read
     outputs:
       mode: ${{ steps.classify.outputs.mode }}
     steps:
@@ -65,6 +66,7 @@ jobs:
     permissions:
       contents: read
       actions: read
+      pull-requests: read
     steps:
       - uses: actions/checkout@v7
         with:
