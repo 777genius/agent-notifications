@@ -119,6 +119,13 @@ func groupNotifyFailed(agents []portable.Integration, req Request, out Result, e
 		if len(agents) == 0 {
 			return siblingCompatibilityUnavailable("", req, out)
 		}
+		// A mixed group may begin with Claude/Codex. Check the whole
+		// actual selection before suggesting the legacy two-client update.
+		for _, agent := range agents {
+			if agent != portable.Claude && agent != portable.Codex {
+				return siblingCompatibilityUnavailable(agent, req, out)
+			}
+		}
 		return siblingCompatibilityUnavailable(agents[0], req, out)
 	}
 	committed := false
