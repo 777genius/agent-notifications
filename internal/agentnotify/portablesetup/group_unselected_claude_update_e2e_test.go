@@ -261,13 +261,24 @@ func TestGroupUpdateCodexLocalRetainsPreparedHandoffAndClaude(t *testing.T) {
 			t.Fatalf("unselected Claude included in group update result: %+v", incomplete.Result.Targets)
 		}
 	}
-	// The user-scoped Local path retains Prepared after actual managed writes.
-	// Its incomplete result is not issue #595's completed-activation acceptance:
-	// confirm the host reservation was retained rather than falsely finalized.
+	// Local's prepared lifecycle is not issue #595's completed-activation
+	// acceptance. An incomplete SDK result may still follow successful host
+	// callbacks: assert either the exact committed consumers with no reservation,
+	// or a retained, identifiable reservation. Never infer which one happened.
 	hostAfter, err := installruntime.ReadInstalledSnapshot(base.Identity.ControlRoot)
-	if err != nil || hostAfter.Ledger.PendingMutation == nil ||
-		hostAfter.Ledger.PendingMutation.ID == "" {
-		t.Fatalf("incomplete group update lost recoverable host reservation: %v", err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pending := hostAfter.Ledger.PendingMutation; pending != nil {
+		if pending.ID == "" || pending.Owner == "" {
+			t.Fatalf("incomplete group update retained an unidentified reservation: %+v", pending)
+		}
+	} else {
+		for _, binding := range append(append([]portable.Binding(nil), selected...), claudeBinding) {
+			if !portable.ExactCommittedBinding(hostAfter.Ledger, binding) {
+				t.Fatalf("incomplete SDK result lost a committed host consumer: %+v", binding)
+			}
+		}
 	}
 	after, err := mat.Store.Load()
 	if err != nil {
