@@ -70,11 +70,11 @@ def prepare(root, agent):
         '/statuses/agent_stopping/webhook/enabled':True}}
     cli('config-edit',['config','edit','--stdin','--expect-revision',inspection['revision']],json.dumps(edits).encode())
     common = ['--scope-root',str(root/'home/.cursor'),'--client-executable',str(agent),'--control-root',str(control)]
-    def install(name, enabled, explicit_channels=True):
+    def install(name, desktop, webhook, explicit_channels=True):
         intent = primary.parent/(name+'-intent.json')
         channels = ['--products','cursor','--agent-notify']
         if explicit_channels:
-            channels += ['--desktop' if enabled else '--desktop=false', '--webhook' if enabled else '--webhook=false']
+            channels += ['--desktop' if desktop else '--desktop=false', '--webhook' if webhook else '--webhook=false']
         cli(name+'-prepare',['setup-products','prepare',*channels,*common,'--intent-file',str(intent)])
         frozen = json.loads(intent.read_bytes())
         scopes = {k:base64.b64decode(v,validate=True).decode() for k,v in frozen['scopes'].items()}
@@ -84,9 +84,11 @@ def prepare(root, agent):
             args += ['--'+key,scopes[key]]
         cli(name,args)
         policy = json.loads((control/'agent-notifications.json').read_bytes())
-        assert policy['route']['cursorNotifications'] == {'desktop':enabled,'webhook':enabled}, (name,policy['route']['cursorNotifications'])
+        assert policy['route']['cursorNotifications'] == {'desktop':desktop,'webhook':webhook}, (name,policy['route']['cursorNotifications'])
     foreign_stop = json.loads((root/'home/.cursor/hooks.json').read_bytes())['hooks']['stop']
-    install('cursor-enable',True)
+    # Native desktop submission can spend the fixed 4s Stop budget;
+    # qualify webhook in an independent observed-event invocation.
+    install('cursor-enable',True,False)
     ownership = json.loads((control/'ownership.json').read_bytes())
     shortcuts = [pathlib.Path(p) for p in ownership['Files'] if pathlib.Path(p).name == 'Cursor Notifications.lnk']
     assert len(shortcuts)==1 and shortcuts[0].is_file(), 'owned Cursor shortcut absent'
@@ -132,25 +134,25 @@ def finish(test, native):
     root = test['root']; cli = test['cli']
     assert test['hooks'].read_bytes() == test['installed']
     records = test['records']
-    # The loopback webhook can arrive after the Cursor CLI has exited.
-    # Observe for a bounded TEST-only window; still require exactly one event.
-    deadline = time.monotonic() + 3
-    while not records and time.monotonic() < deadline:
-        time.sleep(.05)
-    assert len(records)==1, records
+    assert records == [], 'desktop-only native Stop unexpectedly sent webhook'
     expected = {'notification_type':'agent_stopping','status':'agent_stopping','agent_source':'cursor',
                 'message':'Cursor CLI is stopping','title':'Cursor CLI','source':'claude-notifications'}
-    assert all(records[0].get(k)==v for k,v in expected.items()), records
     payload = (root/'native-stop.json').read_bytes()
     cli('cursor-replay',['cursor-event','stop','--binding',test['selector']],payload)
-    assert len(records)==1, 'duplicate webhook'
-    test['install']('cursor-disable',False)
-    disabled = json.loads(payload); disabled['generation_id']=str(uuid.uuid4())
+    assert records == [], 'replayed native Stop sent unconsented webhook'
+    # Use the actual installed observer with the native Cursor event bytes but
+    # a new event identity to verify webhook independent of desktop latency.
+    test['install']('cursor-webhook-only',False,True)
+    webhook_event = json.loads(payload); webhook_event['generation_id']=str(uuid.uuid4())
+    cli('cursor-webhook-event',['cursor-event','stop','--binding',test['selector']],json.dumps(webhook_event).encode())
+    assert len(records)==1 and all(records[0].get(k)==v for k,v in expected.items()), records
+    test['install']('cursor-disable',False,False)
+    disabled = dict(webhook_event); disabled['generation_id']=str(uuid.uuid4())
     cli('cursor-disabled-event',['cursor-event','stop','--binding',test['selector']],json.dumps(disabled).encode())
     assert len(records)==1, 'disabled webhook'
     # Trusted installation generation is deliberately part of the duplicate key.
     # Match the established Linux lifecycle: update must preserve disabled consent.
-    test['install']('cursor-update',False,explicit_channels=False)
+    test['install']('cursor-update',False,False,explicit_channels=False)
     cli('cursor-replay-after-update',['cursor-event','stop','--binding',test['selector']],payload)
     assert len(records)==1, 'update changed disabled consent'
     cli('cursor-uninstall',['setup-notifications','wizard','--action','uninstall','--agents','cursor','--hooks','false','--agent-notify','true',*test['common'],'--yes','--json'])
