@@ -114,10 +114,29 @@ func groupNotifyFailed(agents []portable.Integration, req Request, out Result, e
 	// per-client facts. Even then, the entire selected group must be checked
 	// before offering a legacy Claude/Codex recovery.
 	if errors.Is(err, uapinstaller.ErrCompatibilityUnavailable) || errors.Is(err, uapinstaller.ErrTargetFactsUnavailable) {
+		unsupportedSelection := false
 		for _, agent := range agents {
 			if agent != portable.Claude && agent != portable.Codex {
-				return siblingCompatibilityUnavailable(agent, req, out)
+				unsupportedSelection = true
+				break
 			}
+		}
+		if unsupportedSelection {
+			// The selection controls whether recovery is safe, but the
+			// reported failed client still owns the diagnostic target.
+			failed := portable.Integration("")
+			if len(agents) != 0 {
+				failed = agents[0]
+			}
+			if errors.As(err, &persisted) {
+				for _, agent := range agents {
+					if string(agent) == persisted.Result.Client.ClientID {
+						failed = agent
+						break
+					}
+				}
+			}
+			return siblingCompatibilityUnavailable(failed, req, out)
 		}
 	}
 	if !errors.As(err, &persisted) || (len(persisted.Result.Targets) == 0 && persisted.Result.Client.ClientID == "") {
