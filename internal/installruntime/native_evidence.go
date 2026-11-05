@@ -55,15 +55,25 @@ func verifyNativeEvidence(ctx context.Context, bundle string, attestation []byte
 	if expected.ExecutableSHA256 != hex.EncodeToString(digest[:]) {
 		return 0, fmt.Errorf("native offline executable fingerprint mismatch")
 	}
-	if err := nativePlatformCheck(ctx, bundle); err != nil {
-		return 0, err
-	}
-	// Signature verifies bundle integrity, not publisher trust. Bind staged bytes
-	// around the probe; additional supported actions do not enable those actions.
+	// Capture the attested tree before platform qualification: a verifier must
+	// not be able to swap a previously fingerprinted executable before probe.
+	// This is an additional fence, not a replacement for OS signature checks.
 	before, err := treeFingerprint(bundle)
 	if err != nil {
 		return 0, err
 	}
+	if err := nativePlatformCheck(ctx, bundle); err != nil {
+		return 0, err
+	}
+	afterPlatform, err := treeFingerprint(bundle)
+	if err != nil {
+		return 0, err
+	}
+	if before != afterPlatform {
+		return 0, fmt.Errorf("native changed during platform qualification")
+	}
+	// Signature verifies bundle integrity, not publisher trust. Bind staged
+	// bytes before and after the bounded capabilities probe.
 	output, err := boundedCommand(ctx, filepath.Join(bundle, "Contents", "MacOS", "terminal-notifier-modern"), "--capabilities-json")
 	if err != nil {
 		return 0, fmt.Errorf("native capabilities probe: %w", err)
