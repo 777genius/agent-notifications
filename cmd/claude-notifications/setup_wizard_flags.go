@@ -442,9 +442,18 @@ func quoteWizardArgs(args []string) []string {
 func quotePowerShellArgs(args []string) []string {
 	out := make([]string, len(args))
 	for i, arg := range args {
-		// Single-quoted PowerShell strings preserve $, backticks, and all other
-		// metacharacters; apostrophes are represented by two apostrophes.
-		out[i] = "'" + strings.ReplaceAll(arg, "'", "''") + "'"
+		// Single quotes keep metacharacters inert; doubled apostrophes stay
+		// literal in both Windows PowerShell and PowerShell 7.
+		quoted := "'" + strings.ReplaceAll(arg, "'", "''") + "'"
+		if i > 0 && (args[i-1] == "--local-mcp-names" || args[i-1] == "--local-skill-names") && strings.ContainsRune(arg, '"') {
+			// Windows PowerShell 5.1 strips bare embedded quotes when invoking
+			// native programs. PowerShell 7.3+ preserves them. Render only
+			// these bounded JSON argv fields according to the active shell.
+			legacy := "'" + strings.ReplaceAll(strings.ReplaceAll(arg, "\"", "\\\""), "'", "''") + "'"
+			out[i] = "$(if ($PSVersionTable.PSVersion -lt [version]'7.3' -or $PSNativeCommandArgumentPassing -eq 'Legacy') { " + legacy + " } else { " + quoted + " })"
+		} else {
+			out[i] = quoted
+		}
 	}
 	if len(out) > 0 {
 		out[0] = "& " + out[0]
