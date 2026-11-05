@@ -83,6 +83,15 @@ def channel_source(revision):
 
 
 
+
+def merged_pulls(repository, commit):
+    """Read the GitHub-owned merge association, never PR body or branch metadata."""
+    response = subprocess.run(
+        ['gh', 'api', 'repos/' + repository + '/commits/' + commit + '/pulls?per_page=2'],
+        check=True, capture_output=True, timeout=30).stdout
+    return json.loads(response)
+
+
 def merged_main_promotion(event):
     """Only an exact-tree, uniquely associated main merge can reuse frozen release inputs."""
     if not isinstance(event, dict) or event.get('ref') != 'refs/heads/main':
@@ -99,20 +108,19 @@ def merged_main_promotion(event):
     parents = git('rev-list', '--parents', '-n', '1', after).decode().split()
     if len(parents) not in (2, 3) or parents[0] != after or parents[1] != before:
         return None
-    paths = git('diff', '--name-only', '-z', '--no-renames', before, after, '--').split(b'\\0')
+    paths = git('diff', '--name-only', '-z', '--no-renames', before, after, '--').split(b'\0')
     if b'release-channels.tsv' not in paths:
         return None
-    response = subprocess.run(
-        ['gh', 'api', 'repos/' + name + '/commits/' + after + '/pulls?per_page=2'],
-        check=True, capture_output=True, timeout=30).stdout
-    associated = json.loads(response)
+    associated = merged_pulls(name, after)
     if not isinstance(associated, list) or len(associated) != 1:
         return None
     pr = associated[0]
     if not isinstance(pr, dict):
         return None
-    source = pr.get('head') or {}
-    target = pr.get('base') or {}
+    source = pr.get('head')
+    target = pr.get('base')
+    if not isinstance(source, dict) or not isinstance(target, dict):
+        return None
     head = source.get('sha')
     if (not isinstance(head, str) or not SHA.fullmatch(head)
             or not isinstance(pr.get('merged_at'), str) or not pr['merged_at']
@@ -121,7 +129,12 @@ def merged_main_promotion(event):
             or (source.get('repo') or {}).get('full_name') != name
             or (target.get('repo') or {}).get('full_name') != name
             or (len(parents) == 3 and parents[2] != head)
-            or git('rev-parse', head + '^{tree}') != git('rev-parse', after + '^{tree}')):
+            ):
+        return None
+    try:
+        if git('rev-parse', head + '^{tree}') != git('rev-parse', after + '^{tree}'):
+            return None
+    except subprocess.SubprocessError:
         return None
     return pr
 
