@@ -225,9 +225,14 @@ func retainCommittedPhaseTargets(committed, current []TargetResult) []TargetResu
 		if changedLater && earlier.Reason == "" {
 			earlier.Reason = "committed_in_prior_phase"
 		}
+		earlier.Warnings = append([]string(nil), earlier.Warnings...)
 		out = append(out, earlier)
 	}
-	return append(out, current...)
+	for _, target := range current {
+		target.Warnings = append([]string(nil), target.Warnings...)
+		out = append(out, target)
+	}
+	return out
 }
 
 // PreservedUnitTargets reports existing per-client opt-outs without implying
