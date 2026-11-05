@@ -41,6 +41,7 @@ func TestRemoveGroupSeesClientInstalledWhileWaitingForMutationLease(t *testing.T
 
 	reached := 0
 	var codexBinding portable.Binding
+	competingInstall := codex // Freeze install ID and consent before configuring removal.
 	mat.beforeGroupRemoveMutation = func() {
 		reached++
 		if reached != 1 {
@@ -48,7 +49,7 @@ func TestRemoveGroupSeesClientInstalledWhileWaitingForMutationLease(t *testing.T
 		}
 		competitor := mat
 		competitor.beforeGroupRemoveMutation = nil
-		codexBinding, err = competitor.Install(ctx, codex)
+		codexBinding, err = competitor.Install(ctx, competingInstall)
 		if err != nil {
 			t.Fatalf("competing Codex install: %v", err)
 		}
