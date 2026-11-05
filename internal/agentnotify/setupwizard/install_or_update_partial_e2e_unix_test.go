@@ -100,7 +100,9 @@ func TestInstallOrUpdateRetainsCommittedUpdateAfterLaterPlanFailure(t *testing.T
 		t.Fatal(err)
 	}
 	binding := inspectedWizardBinding(t, ctx, control, "claude")
-	installedSkill, err := os.ReadFile(filepath.Join(binding.TargetPath, "skills", "agent-notifications", "SKILL.md"))
+	// The pinned Claude adapter isolates the verified source beneath
+	// .agentplugins-runtime; TargetPath itself is the skills-dir plugin root.
+	installedSkill, err := os.ReadFile(filepath.Join(binding.TargetPath, ".agentplugins-runtime", "skills", "agent-notifications", "SKILL.md"))
 	if err != nil || string(installedSkill) != string(candidateSkill) {
 		t.Fatalf("committed Claude plugin skill did not match candidate: %v", err)
 	}
