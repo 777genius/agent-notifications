@@ -135,6 +135,8 @@ def finish(test, native):
     assert test['hooks'].read_bytes() == test['installed']
     records = test['records']
     assert records == [], 'desktop-only native Stop unexpectedly sent webhook'
+    # The OS process receipt must predate direct replay. Otherwise a replayed
+    # event could create the sole Toast and falsely qualify the native Stop.
     expected = {'notification_type':'agent_stopping','status':'agent_stopping','agent_source':'cursor',
                 'message':'Cursor CLI is stopping','title':'Cursor CLI','source':'claude-notifications'}
     payload = (root/'native-stop.json').read_bytes()
