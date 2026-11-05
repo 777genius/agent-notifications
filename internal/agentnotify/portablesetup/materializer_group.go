@@ -133,7 +133,7 @@ func (m Materializer) ApplyGroup(ctx context.Context, reqs []MaterializeRequest)
 	// reservation. Observational checks are needed only for group updates.
 	var known []uapinstaller.TargetFacts
 	if packageOperation(reqs[0]) == uapinstaller.OpUpdate {
-		known, err = m.knownTargets(reqs[0].Identity.InstallationID,
+		known, err = m.requiredGroupUpdateKnownTargets(reqs[0].Identity.InstallationID,
 			ClientID(reqs[0].Integration), ClientID(reqs[1].Integration))
 		if err != nil {
 			return nil, err
