@@ -134,7 +134,7 @@ func (m Materializer) ApplyGroup(ctx context.Context, reqs []MaterializeRequest)
 	var known []uapinstaller.TargetFacts
 	if packageOperation(reqs[0]) == uapinstaller.OpUpdate {
 		known, err = m.requiredGroupUpdateKnownTargets(reqs[0].Identity.InstallationID,
-			ClientID(reqs[0].Integration), ClientID(reqs[1].Integration))
+			reqs[0].Identity.ControlRoot, ClientID(reqs[0].Integration), ClientID(reqs[1].Integration))
 		if err != nil {
 			return nil, err
 		}

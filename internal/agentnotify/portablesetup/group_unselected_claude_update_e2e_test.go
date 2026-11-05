@@ -27,7 +27,7 @@ import (
 
 // Public host/SDK three-client lifecycle for #595: update only Codex+Local,
 // retaining the exact live Claude binding and installed native profile bytes.
-func TestGroupUpdateCodexLocalPreservesUnselectedClaude(t *testing.T) {
+func TestGroupUpdateCodexLocalRetainsPreparedHandoffAndClaude(t *testing.T) {
 	if runtime.GOOS == "darwin" && runtime.GOARCH != "arm64" {
 		t.Skip("Local selected delivery has no qualified Darwin Intel tuple")
 	}
@@ -261,6 +261,14 @@ func TestGroupUpdateCodexLocalPreservesUnselectedClaude(t *testing.T) {
 			t.Fatalf("unselected Claude included in group update result: %+v", incomplete.Result.Targets)
 		}
 	}
+	// The user-scoped Local path retains Prepared after actual managed writes.
+	// Its incomplete result is not issue #595's completed-activation acceptance:
+	// confirm the host reservation was retained rather than falsely finalized.
+	hostAfter, err := installruntime.ReadInstalledSnapshot(base.Identity.ControlRoot)
+	if err != nil || hostAfter.Ledger.PendingMutation == nil ||
+		hostAfter.Ledger.PendingMutation.ID == "" {
+		t.Fatalf("incomplete group update lost recoverable host reservation: %v", err)
+	}
 	after, err := mat.Store.Load()
 	if err != nil {
 		t.Fatal(err)
@@ -272,6 +280,17 @@ func TestGroupUpdateCodexLocalPreservesUnselectedClaude(t *testing.T) {
 	if !reflect.DeepEqual(unchanged, current.Clients[claudeID]) ||
 		!reflect.DeepEqual(claudeFiles, registryFixtureFiles(t, unchanged.TargetLocator)) {
 		t.Fatal("unselected Claude binding or installed native files changed")
+	}
+	postFacts, err := readClientFacts(filepath.Dir(mat.Roots.StateFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, old := range selected {
+		fact := postFacts[ClientID(old.Integration)]
+		if fact.BindingID != current.Clients[old.BindingID].ClientBindingID ||
+			fact.ConfigRoot == "" || fact.ConfigRoot != old.ScopeRoot {
+			t.Fatalf("incomplete group update left selected facts stale: %s %+v", old.Integration, fact)
+		}
 	}
 	for _, old := range selected {
 		beforeBinding := initial.Clients[old.BindingID]

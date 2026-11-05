@@ -10,6 +10,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/777genius/agent-notifications/install/uapinstaller"
+	"github.com/777genius/agent-notifications/internal/agentnotify/portable"
+	"github.com/777genius/agent-notifications/internal/installruntime"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/domain"
 )
 
@@ -68,16 +70,16 @@ func recordClientFact(dataRoot string, fact clientFact, clientID string) error {
 }
 
 func (m Materializer) knownTargets(installationID string, selected ...string) ([]uapinstaller.TargetFacts, error) {
-	return m.readKnownTargets(installationID, false, selected...)
+	return m.readKnownTargets(installationID, "", false, selected...)
 }
 
 // Group updates must prove every unselected live binding before host handoff.
 // Other paths keep the existing advisory facts behavior.
-func (m Materializer) requiredGroupUpdateKnownTargets(installationID string, selected ...string) ([]uapinstaller.TargetFacts, error) {
-	return m.readKnownTargets(installationID, true, selected...)
+func (m Materializer) requiredGroupUpdateKnownTargets(installationID, controlRoot string, selected ...string) ([]uapinstaller.TargetFacts, error) {
+	return m.readKnownTargets(installationID, controlRoot, true, selected...)
 }
 
-func (m Materializer) readKnownTargets(installationID string, requireAll bool, selected ...string) ([]uapinstaller.TargetFacts, error) {
+func (m Materializer) readKnownTargets(installationID, controlRoot string, requireAll bool, selected ...string) ([]uapinstaller.TargetFacts, error) {
 	if installationID == "" {
 		return nil, nil
 	}
@@ -95,6 +97,14 @@ func (m Materializer) readKnownTargets(installationID string, requireAll bool, s
 	facts, err := readClientFacts(filepath.Dir(m.Roots.StateFile))
 	if err != nil {
 		return nil, err
+	}
+	var ledger installruntime.Ledger
+	if requireAll {
+		snapshot, readErr := installruntime.ReadInstalledSnapshot(controlRoot)
+		if readErr != nil {
+			return nil, readErr
+		}
+		ledger = snapshot.Ledger
 	}
 	var out []uapinstaller.TargetFacts
 	for _, binding := range installation.Clients {
@@ -125,11 +135,8 @@ func (m Materializer) readKnownTargets(installationID string, requireAll bool, s
 			}
 			continue
 		}
-		if requireAll {
-			recorded, recordedErr := os.Stat(binding.NativeProfileRoot)
-			if recordedErr != nil || !recorded.IsDir() || !os.SameFile(info, recorded) {
-				return nil, fmt.Errorf("%w: unselected live client %s profile differs from recorded binding", ErrPreflight, binding.ClientID)
-			}
+		if requireAll && !matchesRecordedHostProfile(ledger, installationID, binding, info) {
+			return nil, fmt.Errorf("%w: unselected live client %s profile differs from recorded binding", ErrPreflight, binding.ClientID)
 		}
 		if m.Roots.RequireLiveProfiles {
 			receipt := installation.DataReceipts[binding.DataReceiptID]
@@ -143,4 +150,32 @@ func (m Materializer) readKnownTargets(installationID string, requireAll bool, s
 		out = append(out, uapinstaller.TargetFacts{ClientID: binding.ClientID, BindingID: binding.ClientBindingID, ConfigRoot: fact.ConfigRoot, Executable: fact.Executable})
 	}
 	return out, nil
+}
+
+// User-scope CLI clients need not persist NativeProfileRoot in UAP. Their
+// immutable host consumer registration already binds the selected ScopeRoot.
+// Check its exact original physical directory, not only a mutable facts file.
+func matchesRecordedHostProfile(ledger installruntime.Ledger, installationID string, binding domain.ClientBinding, factRoot os.FileInfo) bool {
+	found := false
+	for key, consumer := range ledger.Consumers {
+		if !strings.HasPrefix(key, "portable:") {
+			continue
+		}
+		var recorded portable.Binding
+		if json.Unmarshal([]byte(consumer.Registration), &recorded) != nil ||
+			recorded.InstallationID != installationID || recorded.BindingID != binding.ClientBindingID ||
+			ClientID(recorded.Integration) != binding.ClientID {
+			continue
+		}
+		wantKey, _, _, err := recorded.Registration()
+		if err != nil || wantKey != key || !portable.ExactCommittedBinding(ledger, recorded) {
+			return false
+		}
+		root, err := os.Stat(recorded.ScopeRoot)
+		if err != nil || !root.IsDir() || !os.SameFile(root, factRoot) {
+			return false
+		}
+		found = true
+	}
+	return found
 }
