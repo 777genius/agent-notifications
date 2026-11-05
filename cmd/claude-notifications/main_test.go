@@ -514,6 +514,19 @@ func TestCursorEventOriginalAdmissionDeadline(t *testing.T) {
 		t.Fatal(err)
 	}
 	<-ctx.Done()
+	// Go's timer and the kernel boot clock can cross this boundary a few
+	// milliseconds apart, especially under Windows CI virtualization. Check
+	// expiry against the original boot-clock deadline without extending it.
+	clockWaitLimit := time.Now().Add(250 * time.Millisecond)
+	for {
+		if _, stillValid := observation.Remaining(clock, deadline); !stillValid {
+			break
+		}
+		if time.Now().After(clockWaitLimit) {
+			t.Fatal("admission context expired before original boot-clock deadline")
+		}
+		time.Sleep(time.Millisecond)
+	}
 	receipt := (cursorevent.Consumer{Clock: clock}).Consume(context.Background(), facts, deadline)
 	if receipt.Status != "suppressed" || receipt.Reason != "expired" {
 		t.Fatalf("original deadline replaced: %+v", receipt)
