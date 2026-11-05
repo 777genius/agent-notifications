@@ -5,9 +5,12 @@ package portablesetup
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
+	"github.com/777genius/agent-notifications/install/uapinstaller"
 	"github.com/777genius/agent-notifications/internal/agentnotify/portable"
+	"github.com/777genius/agent-notifications/internal/installruntime"
 )
 
 // Group selection excludes both selected clients; only exact live sibling
@@ -45,5 +48,33 @@ func TestKnownTargetsExcludeAllSelectedGroupClients(t *testing.T) {
 	}
 	if stale, err := mat.knownTargets(claude.Identity.InstallationID, "codex"); err != nil || len(stale) != 0 {
 		t.Fatalf("stale facts authorized compatibility: %+v %v", stale, err)
+	}
+
+	// Invalid sibling facts must refuse before a host handoff intent is
+	// published, not strand a pending reservation requiring later recovery.
+	snapBefore, err := installruntime.ReadInstalledSnapshot(claude.Identity.ControlRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stateBefore, err := os.ReadFile(mat.Roots.StateFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(clientFactsPath(filepath.Dir(mat.Roots.StateFile)), []byte("{"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	claude.Operation, codex.Operation = uapinstaller.OpUpdate, uapinstaller.OpUpdate
+	claude.ExpectedGeneration, codex.ExpectedGeneration = snapBefore.Ledger.Generation, snapBefore.Ledger.Generation
+	claude.OperationID, codex.OperationID = "TEST-refuse-malformed-facts", "TEST-refuse-malformed-facts"
+	if _, err := mat.ApplyGroup(testCtx(t), []MaterializeRequest{claude, codex}); err == nil {
+		t.Fatal("malformed compatibility facts admitted group update")
+	}
+	snapAfter, err := installruntime.ReadInstalledSnapshot(claude.Identity.ControlRoot)
+	if err != nil || !reflect.DeepEqual(snapBefore.Ledger, snapAfter.Ledger) {
+		t.Fatalf("invalid facts changed host reservation or ledger: %v", err)
+	}
+	stateAfter, err := os.ReadFile(mat.Roots.StateFile)
+	if err != nil || !reflect.DeepEqual(stateBefore, stateAfter) {
+		t.Fatalf("invalid facts changed SDK state: %v", err)
 	}
 }
