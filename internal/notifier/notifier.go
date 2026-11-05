@@ -10,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
 	"github.com/gen2brain/beeep"
 
 	"github.com/777genius/agent-notifications/internal/analyzer"

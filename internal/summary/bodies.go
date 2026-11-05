@@ -3,6 +3,7 @@ package summary
 import (
 	"fmt"
 	"strings"
+
 	"github.com/777genius/agent-notifications/internal/analyzer"
 	"github.com/777genius/agent-notifications/internal/config"
 	"github.com/777genius/agent-notifications/pkg/jsonl"
