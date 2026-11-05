@@ -72,6 +72,7 @@ func siblingCompatibilityUnavailable(agent portable.Integration, req Request, ou
 		// A failed compatibility preflight must not carry an earlier
 		// recommendation to mutate unselected clients.
 		out.NextActions = nil
+		out.Command = nil
 		return out
 	}
 	retry := req
