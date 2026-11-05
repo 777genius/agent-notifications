@@ -73,7 +73,7 @@ func admitBootstrapWizardIntent(path string, r setupwizard.Request) (setupwizard
 // selectedCursorBinding treats an unbound historical profile as potentially
 // selected, but never grants presence from another recorded installation or
 // a different concrete profile.
-func selectedCursorBinding(state statev2.StateFileV2, installationID, profile string) bool {
+func selectedCursorBinding(state domain.StateFileV2, installationID, profile string) bool {
 	for _, installation := range state.Installations {
 		if installationID != "" && installation.InstallationID != installationID {
 			continue

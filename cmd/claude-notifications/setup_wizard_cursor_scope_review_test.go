@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/adapters/statev2"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/domain"
 )
 
@@ -39,7 +38,6 @@ func TestSelectedCursorBindingDoesNotInheritSiblingProfileOrInstallation(t *test
 			// The target predicate operates on a read-only snapshot. Do not
 			// attempt to persist this intentionally partial authority fixture
 			// as a valid UAP installation.
-			_ = statev2.StateSchemaVersion
 			if selectedCursorBinding(state, tc.selectedInstallation, profile) {
 				t.Fatal("foreign Cursor profile/installation admitted as selected")
 			}
