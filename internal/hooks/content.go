@@ -44,6 +44,12 @@ func (h *Handler) prepareHookContent(ev Event, keys eventKeys, hookEvent string,
 			stopHash = claudeStopPayloadHash(p.AssistantMessage, turnTS)
 		}
 	}
+	if ev.Product == ProductQoder && ev.Kind() == EventStopFailure {
+		// Qoder has no turn id. A host replay repeats the exact native payload,
+		// while an independent failure carries its own error details. Only the
+		// digest of class and payload is persisted, never the raw error text.
+		stopHash = claudeStopPayloadHash(string(ev.Raw), "qoder-stop-failure\x00"+string(status))
+	}
 	bench.Elapsed("message.generate")
 
 	// Acquire content lock to prevent race between different hooks (Stop vs Notification)
@@ -86,14 +92,21 @@ func (h *Handler) prepareHookContent(ev Event, keys eventKeys, hookEvent string,
 	// - Codex SubagentStop: parallel subagents finishing with an identical
 	//   final message must not collapse into one notification.
 	// - Qoder StopFailure: an actual failure must not collapse into a previous
-	//   successful Stop with identical copy; its class-scoped event lock still
-	//   suppresses duplicate invocations.
+	//   successful Stop with identical copy. A replay of the same native
+	//   payload after the event lock expires is bounded by its payload digest.
 	// Turn-level duplicates of the event itself stay bounded by the
 	// turn+tool/agent(+call)-scoped dedup lock.
 	skipContentDedup := status == analyzer.StatusPermissionRequest ||
-		(ev.Product == ProductCodex && (ev.Kind() == EventPreToolUse || ev.Kind() == EventSubagentStop)) ||
-		(ev.Product == ProductQoder && ev.Kind() == EventStopFailure)
-	if !skipContentDedup {
+		(ev.Product == ProductCodex && (ev.Kind() == EventPreToolUse || ev.Kind() == EventSubagentStop))
+	if ev.Product == ProductQoder && ev.Kind() == EventStopFailure {
+		isDuplicateFailure, failureErr := h.stateMgr.IsDuplicateStopPayload(keys.stateKey, stopHash, 180)
+		if failureErr != nil {
+			logging.Warn("Failed to check duplicate Qoder StopFailure payload: %v", failureErr)
+		} else if isDuplicateFailure {
+			logging.Debug("Duplicate Qoder StopFailure payload detected within 3 minutes, skipping")
+			return hookContent{}, false
+		}
+	} else if !skipContentDedup {
 		isDuplicateStop, stopErr := h.stateMgr.IsDuplicateStopPayload(keys.stateKey, stopHash, 180)
 		if stopErr != nil {
 			logging.Warn("Failed to check duplicate Stop payload: %v", stopErr)
