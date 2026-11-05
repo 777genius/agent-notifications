@@ -167,24 +167,37 @@ func TestGroupUpdateCodexLocalPreservesUnselectedClaude(t *testing.T) {
 	localProfileBefore := registryFixtureFiles(t, local.ClientConfigRoot)
 	codexProfileBefore := registryFixtureFiles(t, codexReq.ClientConfigRoot)
 	for _, tc := range []struct {
-		name  string
-		stale bool
+		name   string
+		mutate func(map[string]clientFact)
 	}{
-		{name: "missing-claude-facts"},
-		{name: "stale-claude-binding", stale: true},
+		{"missing-claude-facts", func(facts map[string]clientFact) { delete(facts, "claude") }},
+		{"stale-claude-binding", func(facts map[string]clientFact) {
+			fact := facts["claude"]
+			fact.BindingID = "TEST-stale-claude-binding"
+			facts["claude"] = fact
+		}},
+		{"relative-claude-executable", func(facts map[string]clientFact) {
+			fact := facts["claude"]
+			fact.Executable = "relative/probe"
+			facts["claude"] = fact
+		}},
+		{"missing-claude-executable", func(facts map[string]clientFact) {
+			fact := facts["claude"]
+			fact.Executable = ""
+			facts["claude"] = fact
+		}},
+		{"unclean-claude-config-root", func(facts map[string]clientFact) {
+			fact := facts["claude"]
+			fact.ConfigRoot = claudeRoot + "/../" + filepath.Base(claudeRoot)
+			facts["claude"] = fact
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			facts, readErr := readClientFacts(filepath.Dir(mat.Roots.StateFile))
 			if readErr != nil {
 				t.Fatal(readErr)
 			}
-			if tc.stale {
-				fact := facts["claude"]
-				fact.BindingID = "TEST-stale-claude-binding"
-				facts["claude"] = fact
-			} else {
-				delete(facts, "claude")
-			}
+			tc.mutate(facts)
 			body, marshalErr := json.Marshal(facts)
 			if marshalErr != nil {
 				t.Fatal(marshalErr)
