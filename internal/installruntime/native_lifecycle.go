@@ -15,6 +15,9 @@ func validateNative(change *NativeChange) error {
 	if change == nil {
 		return nil
 	}
+	if change.Purge && change.Before.Path != change.After.Path {
+		return fmt.Errorf("native purge paths must match")
+	}
 	if err := checkNativeParents(change); err != nil {
 		return err
 	}
@@ -278,11 +281,13 @@ func allocateNativeStage(ctx context.Context, parent string, expected []PathAnch
 	}
 	child, err := root.Open(name)
 	if err != nil {
+		_ = root.Remove(name)
 		return "", "", err
 	}
 	id, err := openedDirectoryIdentity(child)
 	_ = child.Close()
 	if err != nil {
+		_ = root.Remove(name)
 		return "", "", err
 	}
 	return filepath.Join(parent, name), id, nil

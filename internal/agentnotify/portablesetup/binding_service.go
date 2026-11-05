@@ -160,6 +160,11 @@ func (s Service) CommitBinding(ctx context.Context, req Request) (portable.Bindi
 		return portable.Binding{}, err
 	}
 	if existing, ok := snap.Ledger.Consumers[key]; ok && reflect.DeepEqual(existing, consumer) {
+		// Identical registration is not permission to bypass an unrelated
+		// in-flight handoff or removal reservation.
+		if _, err := s.matchingReservation(req, "install"); err != nil {
+			return portable.Binding{}, err
+		}
 		if err := s.checkPolicy(ctx, req.Binding.ControlRoot); err != nil {
 			return portable.Binding{}, err
 		}

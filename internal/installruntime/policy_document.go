@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"runtime"
 	"strings"
+	"unicode"
 )
 
 // rawPolicyRequest has no caller path, assets, consent or lifecycle authority.
@@ -62,12 +63,26 @@ func validateRawPolicyDocument(before map[string]json.RawMessage, data []byte) e
 	return nil
 }
 
+// encoding/json folds Unicode case equivalents when matching struct fields.
+// Reject collisions (including deſktop / desktop) before publishing raw bytes.
+func foldPolicyKey(key string) string {
+	return strings.Map(func(r rune) rune {
+		for {
+			next := unicode.SimpleFold(r)
+			if next <= r {
+				return next
+			}
+			r = next
+		}
+	}, key)
+}
+
 func unambiguousPolicyValue(value any) bool {
 	switch v := value.(type) {
 	case map[string]any:
 		seen := map[string]bool{}
 		for key, child := range v {
-			folded := strings.ToLower(key)
+			folded := foldPolicyKey(key)
 			if seen[folded] || !unambiguousPolicyValue(child) {
 				return false
 			}

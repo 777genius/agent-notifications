@@ -70,6 +70,23 @@ func admitBootstrapWizardIntent(path string, r setupwizard.Request) (setupwizard
 	return r, &intent, nil
 }
 
+// Keep exact registration spelling unless Windows confirms a case-only variant
+// names the same directory. An alias or unresolved path grants no authority.
+func sameCursorScopeRoot(recorded, selected string) bool {
+	if recorded == selected {
+		return true
+	}
+	if runtime.GOOS != "windows" || !strings.EqualFold(recorded, selected) {
+		return false
+	}
+	a, err := os.Stat(recorded)
+	if err != nil || !a.IsDir() {
+		return false
+	}
+	b, err := os.Stat(selected)
+	return err == nil && b.IsDir() && os.SameFile(a, b)
+}
+
 // Record selection uses immutable registration bytes, even when physical assets
 // are replaced. It neither allocates a binding nor chooses a sorted consumer.
 func recordedCursorRequest(r setupwizard.Request) (portable.Binding, bool, error) {
@@ -87,7 +104,7 @@ func recordedCursorRequest(r setupwizard.Request) (portable.Binding, bool, error
 		if json.Unmarshal([]byte(consumer.Registration), &b) != nil {
 			return selected, false, portable.ErrInvalid
 		}
-		if b.Integration != portable.Cursor || b.ScopeRoot != r.ScopeRoot || r.InstallationID != "" && b.InstallationID != r.InstallationID {
+		if b.Integration != portable.Cursor || !sameCursorScopeRoot(b.ScopeRoot, r.ScopeRoot) || r.InstallationID != "" && b.InstallationID != r.InstallationID {
 			continue
 		}
 		if found || b.ControlRoot != r.ControlRoot || b.ComponentID != ledger.ID || b.Owner != ledger.Owner || b.RuntimeRoot != ledger.RuntimeRoot || !portable.ExactCommittedBinding(ledger, b) || r.BindingIDs["cursor"] != "" && b.BindingID != r.BindingIDs["cursor"] {
@@ -667,7 +684,7 @@ func reserveCursorCaller(ctx context.Context, req setupwizard.Request, snapshot 
 		} else {
 			fixed, e = cursorPendingHandoff(binding, snapshot, cfg, installed, client, pendingIntent)
 		}
-		if e != nil || fixed.QualificationID != cursorHostQualification() {
+		if e != nil || (req.Action != setupwizard.ActionUninstall && fixed.QualificationID != cursorHostQualification()) {
 			return deny(portable.ErrInvalid)
 		}
 		req.CursorAuthority = &fixed
@@ -798,7 +815,21 @@ func cursorCallerDeclaredName(root string) string {
 		defer func() { _ = file.Close() }()
 		body, err = io.ReadAll(io.LimitReader(file, (1<<20)+1))
 	} else {
-		body, err = os.ReadFile(filepath.Join(root, "plugin.json"))
+		path := filepath.Join(root, "plugin.json")
+		info, e := os.Lstat(path)
+		if e != nil || !info.Mode().IsRegular() || info.Size() > 1<<20 {
+			return ""
+		}
+		file, e := os.Open(path)
+		if e != nil {
+			return ""
+		}
+		defer func() { _ = file.Close() }()
+		opened, e := file.Stat()
+		if e != nil || !opened.Mode().IsRegular() || !os.SameFile(info, opened) {
+			return ""
+		}
+		body, err = io.ReadAll(io.LimitReader(file, (1<<20)+1))
 	}
 	var manifest struct {
 		Name string `json:"name"`

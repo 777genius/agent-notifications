@@ -63,7 +63,9 @@ func importNativeGenerations(record NativeRecord) []NativeGeneration {
 	if record.PreviousPath != "" && record.PreviousSHA256 != "" {
 		add(NativeGeneration{
 			DirectoryID: record.PreviousDirectoryID, Path: record.PreviousPath, SHA256: record.PreviousSHA256,
-			DecoderFloor: record.DecoderFloor, InstalledTreeSHA256: installedNativeHash(record.PreviousSHA256, nil),
+			// The fallback has no retained decoder evidence; do not borrow
+			// the floor of the newer active generation.
+			InstalledTreeSHA256: installedNativeHash(record.PreviousSHA256, nil),
 		})
 	}
 	return out
@@ -107,8 +109,14 @@ func publishNativeRecord(before, after NativeRecord) NativeRecord {
 	if match := nativeGenerationByDigest(NativeRecord{Published: gens}, after.SHA256); match != nil {
 		after.Path = match.Path
 		after.DirectoryID = match.DirectoryID
-		after.Attestation = append([]byte(nil), match.Attestation...)
-		after.InstalledTreeSHA256 = match.InstalledTreeSHA256
+		// A historical generation may predate offline attestation; a
+		// verified fresh attestation for identical bytes must survive reuse.
+		if len(match.Attestation) != 0 {
+			after.Attestation = append([]byte(nil), match.Attestation...)
+			after.InstalledTreeSHA256 = match.InstalledTreeSHA256
+		} else {
+			after.InstalledTreeSHA256 = installedNativeHash(after.SHA256, after.Attestation)
+		}
 		if after.DecoderFloor < match.DecoderFloor {
 			after.DecoderFloor = match.DecoderFloor
 		}
