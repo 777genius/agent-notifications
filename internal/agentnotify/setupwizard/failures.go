@@ -65,6 +65,12 @@ func siblingCompatibilityUnavailable(agent portable.Integration, req Request, ou
 	if agent != "" {
 		out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "incomplete", Reason: out.Reason})
 	}
+	// The known two-client recovery applies only to Claude/Codex. An SDK
+	// compatibility refusal for Pi, Cursor or Local must never propose
+	// mutating unrelated, unselected Claude/Codex bindings.
+	if agent != portable.Claude && agent != portable.Codex {
+		return out
+	}
 	retry := req
 	retry.Action = ActionUpdate
 	retry.Yes = true
