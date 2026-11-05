@@ -2,6 +2,7 @@ package setupwizard
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"testing"
 
@@ -43,6 +44,9 @@ func TestSiblingCompatibilityKnownClaudeCodexRecommendationUnchanged(t *testing.
 				!reflect.DeepEqual(got.NextActions[0].Agents, []string{"claude", "codex"}) {
 				t.Fatalf("known verified recovery changed: %+v", got)
 			}
+			if want := []string{"setup-notifications", "wizard", "--action", "update", "--agents", "claude,codex", "--yes"}; !reflect.DeepEqual(got.NextActions[0].Command, want) {
+				t.Fatalf("known recovery command changed: got %v, want %v", got.NextActions[0].Command, want)
+			}
 		})
 	}
 }
@@ -71,6 +75,7 @@ func TestGroupCompatibilityMixedSelectionNeverRecommendsUnselectedClient(t *test
 					cause,
 					portablesetup.ResultError{Err: cause},
 					portablesetup.ResultError{Err: cause, Result: uapinstaller.Result{Client: uapinstaller.ClientResult{ClientID: string(tc.agents[0])}}},
+					portablesetup.ResultError{Err: cause, Result: uapinstaller.Result{Client: uapinstaller.ClientResult{ClientID: string(tc.agents[1])}}},
 				} {
 					out := Result{Action: string(req.Action), Command: []string{"setup-notifications", "wizard", "--action", "update", "--agents", "claude,codex"},
 						NextActions: []NextAction{{Kind: "update", Agents: []string{"claude", "codex"}}}}
@@ -78,6 +83,16 @@ func TestGroupCompatibilityMixedSelectionNeverRecommendsUnselectedClient(t *test
 					if got.Outcome != "incomplete" || got.Reason != "sibling_compatibility_unavailable" ||
 						len(got.NextActions) != 0 || len(got.Command) != 0 {
 						t.Fatalf("mixed group suggested unselected update for %v: %+v", failure, got)
+					}
+					// Selecting a non-Claude/Codex sibling decides retry policy;
+					// it cannot replace the actual failed client's diagnostic.
+					failed := string(tc.agents[0])
+					var persisted portablesetup.ResultError
+					if errors.As(failure, &persisted) && persisted.Result.Client.ClientID != "" {
+						failed = persisted.Result.Client.ClientID
+					}
+					if len(got.Targets) != 1 || got.Targets[0].Client != failed || got.Targets[0].Outcome != "incomplete" {
+						t.Fatalf("failed client misattributed for %v: got %+v, want %s", failure, got.Targets, failed)
 					}
 				}
 			}
@@ -96,6 +111,9 @@ func TestGroupCompatibilityKnownClaudeCodexOrderKeepsVerifiedRecovery(t *testing
 		if len(got.NextActions) != 1 || got.NextActions[0].Kind != "update" ||
 			!reflect.DeepEqual(got.NextActions[0].Agents, []string{"claude", "codex"}) {
 			t.Fatalf("verified legacy group recovery changed for %v: %+v", order, got)
+		}
+		if want := []string{"setup-notifications", "wizard", "--action", "update", "--agents", "claude,codex", "--yes"}; !reflect.DeepEqual(got.NextActions[0].Command, want) {
+			t.Fatalf("verified group recovery command changed for %v: got %v, want %v", order, got.NextActions[0].Command, want)
 		}
 	}
 }
