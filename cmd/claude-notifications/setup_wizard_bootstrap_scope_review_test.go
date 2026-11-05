@@ -10,9 +10,9 @@ func TestBootstrapScopeRejectsChangedInstallationIdentity(t *testing.T) {
 	// A confirmed bootstrap request does not choose a separate installation
 	// identity; an explicitly supplied one must not widen the selected scope.
 	expected := setupwizard.Request{
-		Agents: []string{"cursor"},
+		Agents:      []string{"cursor"},
 		ControlRoot: "/TEST-control",
-		ScopeRoot: "/TEST-profile", CursorConfig: "/TEST-profile",
+		ScopeRoot:   "/TEST-profile", CursorConfig: "/TEST-profile",
 		ClientExecutables: map[string]string{"cursor": "/TEST-client"},
 	}
 	if !sameWizardBootstrapScope(expected, expected) {
