@@ -45,9 +45,10 @@ func (h *Handler) prepareHookContent(ev Event, keys eventKeys, hookEvent string,
 		}
 	}
 	if ev.Product == ProductQoder && ev.Kind() == EventStopFailure {
-		// Qoder has no turn id. A host replay repeats the exact native payload,
-		// while an independent failure carries its own error details. Only the
-		// digest of class and payload is persisted, never the raw error text.
+		// Qoder has no turn id, timestamp or request id, so a host replay and a
+		// genuine failure with byte-identical payload are indistinguishable;
+		// both collapse within the replay window. Only the digest of class and
+		// payload is persisted, never the raw error text.
 		stopHash = claudeStopPayloadHash(string(ev.Raw), "qoder-stop-failure\x00"+string(status))
 	}
 	bench.Elapsed("message.generate")
