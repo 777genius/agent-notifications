@@ -74,3 +74,57 @@ sed '/^main "\$@"$/d' "$ROOT/bin/bootstrap.sh" > "$LAB/bootstrap-functions.sh"
     bootstrap_promotion; [ "$(cat "$LAB/foreign")" = 'foreign canary' ]
 )
 echo 'PASS bootstrap promotion private handoff and refusal'
+
+# Regression for #585: a new Claude marketplace cache already contains an
+# executable, while the managed ledger still owns the previous version.
+# The installer must run its existing verified relocation path, not short-cut
+# with "Binary already installed". No actual network or user profile touched.
+profile="$LAB/TEST-cache-upgrade"
+newroot="$profile/.claude/plugins/cache/claude-notifications-go/claude-notifications-go/1.51.2"
+oldroot="$profile/.claude/plugins/cache/claude-notifications-go/claude-notifications-go/1.51.0"
+export XDG_CONFIG_HOME="$profile/.config" INSTALL_TARGET_DIR="$newroot/bin"
+mkdir -p "$INSTALL_TARGET_DIR" "$XDG_CONFIG_HOME/agent-notifications"
+printf '%s\n' 'agent-notifications-managed-writer-protocol-v1' > "$INSTALL_TARGET_DIR/claude-notifications-linux-amd64"
+chmod +x "$INSTALL_TARGET_DIR/claude-notifications-linux-amd64"
+cat > "$LAB/cache-upgrade.sh" <<'CACHE'
+#!/bin/bash
+set -eu
+source "$LAB/install-functions.sh"
+abort_if_wsl_environment() { :; }; check_required_tools() { :; }; check_write_permissions() { :; }
+detect_platform() { PLATFORM=linux; ARCH=amd64; BINARY_NAME=claude-notifications-linux-amd64; BINARY_PATH="$SCRIPT_DIR/$BINARY_NAME"; }
+acquire_lock() { :; }; release_lock() { :; }; create_symlink() { :; }
+download_utilities() { :; }; install_linux_notification_desktop_entry() { :; }; install_gnome_activate_window_extension() { return 1; }
+cleanup() { :; }; pin_release_urls() { :; }; guard_install_paths() { :; }; verify_executable() { :; }
+desktop_runtime_usable() { :; }; windows_native_hooks_update_required() { return 1; }
+check_github_availability() { OFFLINE_MODE=false; [ "$CACHE_CASE" != offline ] || OFFLINE_MODE=true; }
+stage_and_promote_runtime() { printf 'VERIFIED-RELOCATE\n' >> "$LAB/upgrade.trace"; }
+main
+CACHE
+for case in stale same malformed foreign offline; do
+    : > "$LAB/upgrade.trace"
+    case "$case" in
+        stale|offline) root_in_ledger="$oldroot" ;;
+        same) root_in_ledger="$newroot" ;;
+        foreign) root_in_ledger="$profile/other-managed-runtime" ;;
+        malformed) root_in_ledger="$oldroot" ;;
+    esac
+    if [ "$case" = malformed ]; then
+        echo '{invalid' > "$XDG_CONFIG_HOME/agent-notifications/ownership.json"
+    else
+        printf '{"Consumers":{"claude-hooks":{"RuntimeRoot":"%s"}}}\n' "$root_in_ledger" > "$XDG_CONFIG_HOME/agent-notifications/ownership.json"
+    fi
+    actual=0
+    CACHE_CASE="$case" CN_PRODUCT=claude bash "$LAB/cache-upgrade.sh" > "$LAB/upgrade-$case.out" 2>&1 || actual=$?
+    case "$case" in
+        stale)
+            [ "$actual" = 0 ] && grep -qx VERIFIED-RELOCATE "$LAB/upgrade.trace" || { cat "$LAB/upgrade-$case.out"; echo 'stale Claude cache skipped verified relocation' >&2; exit 1; }
+            ;;
+        offline)
+            [ "$actual" != 0 ] && [ ! -s "$LAB/upgrade.trace" ] || { cat "$LAB/upgrade-$case.out"; echo 'offline stale cache incorrectly reported success' >&2; exit 1; }
+            ;;
+        *)
+            [ "$actual" = 0 ] && [ ! -s "$LAB/upgrade.trace" ] || { cat "$LAB/upgrade-$case.out"; echo "unexpected relocation for $case" >&2; exit 1; }
+            ;;
+    esac
+done
+echo 'PASS Linux Claude cache upgrade requires verified relocation; same, malformed, foreign and offline outcomes preserved'
