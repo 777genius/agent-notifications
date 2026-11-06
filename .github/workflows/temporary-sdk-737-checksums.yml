@@ -1,0 +1,27 @@
+name: Temporary merged SDK 737 Go checksums
+on:
+  push:
+    branches: [fix/pin-merged-uap-sdk-737-20261106]
+    paths: [.github/workflows/temporary-sdk-737-checksums.yml]
+permissions:
+  contents: read
+jobs:
+  checksum:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Resolve Go proxy and checksum DB evidence for exact merged UAP 737 SHA
+        env:
+          GOPROXY: https://proxy.golang.org
+          GOSUMDB: sum.golang.org
+        run: |
+          set -euo pipefail
+          go mod download -json github.com/777genius/plugin-kit-ai/install/integrationctl@v0.1.1-0.20261106113838-982e7a619b32
+          go mod download -json github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins@v0.0.0-20261106113838-982e7a619b32
