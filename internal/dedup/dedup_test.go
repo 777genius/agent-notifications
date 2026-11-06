@@ -283,3 +283,77 @@ func TestCleanupForSession_RemoveError(t *testing.T) {
 	// Restore permissions for cleanup
 	_ = os.Chmod(testTempDir, 0755)
 }
+
+func TestAcquireLockWithTTLRetainsDelayedAttemptAcrossOldTwoSecondWindow(t *testing.T) {
+	root := t.TempDir()
+	first := &Manager{tempDir: root}
+	otherProcess := &Manager{tempDir: root}
+	acquired, err := first.AcquireLockWithTTL("known-turn", 60, "Stop")
+	require.NoError(t, err)
+	require.True(t, acquired)
+	lock := first.getLockPath("known-turn", "Stop")
+	old := time.Now().Add(-3 * time.Second)
+	require.NoError(t, os.Chtimes(lock, old, old))
+	acquired, err = otherProcess.AcquireLockWithTTL("known-turn", 60, "Stop")
+	require.NoError(t, err)
+	require.False(t, acquired, "pending Claude Stop must survive the old event-lock TTL")
+	acquired, err = otherProcess.AcquireLockWithTTL("another-turn", 60, "Stop")
+	require.NoError(t, err)
+	require.True(t, acquired, "a separate turn must not be suppressed")
+	old = time.Now().Add(-61 * time.Second)
+	require.NoError(t, os.Chtimes(lock, old, old))
+	acquired, err = otherProcess.AcquireLockWithTTL("known-turn", 60, "Stop")
+	require.NoError(t, err)
+	require.True(t, acquired, "crash-retained marker must eventually expire")
+}
+
+// A crash after native submission but before updating the delivered-state
+// file is ambiguous. This marker can delay a replay, not guarantee exactly-once
+// after its finite TTL expires. The test deliberately retains this limitation.
+func TestDelayedStopMarkerExpiresAfterPostDeliveryCrash(t *testing.T) {
+	root := t.TempDir()
+	previous := &Manager{tempDir: root}
+	restarted := &Manager{tempDir: root}
+	owned, err := previous.AcquireLockWithTTL("crashed-after-send", 60, "Stop")
+	require.NoError(t, err)
+	require.True(t, owned)
+	// The real notification may have reached the OS, but no success receipt
+	// was persisted because the process died before its state update.
+	lock := previous.getLockPath("crashed-after-send", "Stop")
+	old := time.Now().Add(-61 * time.Second)
+	require.NoError(t, os.Chtimes(lock, old, old))
+	admitted, err := restarted.AcquireLockWithTTL("crashed-after-send", 60, "Stop")
+	require.NoError(t, err)
+	require.True(t, admitted, "marker expiry cannot establish whether the OS already displayed a banner")
+}
+
+func TestAcquireLockWithTTLFailsClosedOnUnknownAge(t *testing.T) {
+	root := t.TempDir()
+	owner := &Manager{tempDir: root}
+	unknown := &Manager{tempDir: root, fileAge: func(string) int64 { return -1 }}
+	acquired, err := owner.AcquireLockWithTTL("turn", 60, "Stop")
+	require.NoError(t, err)
+	require.True(t, acquired)
+	acquired, err = unknown.AcquireLockWithTTL("turn", 60, "Stop")
+	require.NoError(t, err)
+	require.False(t, acquired, "unknown timestamp cannot prove a delayed lease expired")
+}
+
+func TestAcquireLockWithTTLRecoversAfterConcurrentOwnerRelease(t *testing.T) {
+	root := t.TempDir()
+	owner := &Manager{tempDir: root}
+	acquired, err := owner.AcquireLockWithTTL("released-between-checks", 60, "Stop")
+	require.NoError(t, err)
+	require.True(t, acquired)
+	// Simulate an owner releasing after O_EXCL says the marker exists,
+	// but before a second claimant reads the age.
+	other := &Manager{tempDir: root, fileAge: func(path string) int64 {
+		if err := os.Remove(path); err != nil {
+			t.Fatalf("simulated owner release: %v", err)
+		}
+		return -1
+	}}
+	acquired, err = other.AcquireLockWithTTL("released-between-checks", 60, "Stop")
+	require.NoError(t, err)
+	require.True(t, acquired, "released marker should be atomically acquired")
+}

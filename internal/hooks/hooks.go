@@ -77,6 +77,10 @@ type Handler struct {
 	codexEnricher CodexTurnEnricher
 	// Test seam for a deterministic append between JSONL parse and settle.
 	afterClaudeTranscriptParse func()
+	// Only the calling host hook entrypoint may bind its finite deadline.
+	// Zero retains legacy behavior for library/tests and other integrations.
+	hookDeadline time.Time
+	hookNow      func() time.Time
 }
 
 // NewHandler creates a new hook handler
@@ -196,6 +200,41 @@ func eventToolName(ev Event) string {
 	return ""
 }
 
+// BindHookDeadline lets the real Claude/Codex entrypoint own its host timeout.
+// It does not change the plugin configuration or other agents' policy.
+func (h *Handler) BindHookDeadline(deadline time.Time) {
+	if h != nil {
+		h.hookDeadline = deadline
+	}
+}
+
+func (h *Handler) deliveryTimeNow() time.Time {
+	if h.hookNow != nil {
+		return h.hookNow()
+	}
+	return time.Now()
+}
+
+// availableDesktopBudget reserves time for native submission and cleanup.
+// Zero deadline means no entrypoint-bound budget was supplied.
+func (h *Handler) availableDesktopBudget() (time.Duration, bool) {
+	if h.hookDeadline.IsZero() {
+		return 0, false
+	}
+	return h.hookDeadline.Sub(h.deliveryTimeNow()) - 5*time.Second, true
+}
+
+// gitBranch is an optional presentation/filter fact. A stalled git process
+// must not outlive the calling host hook's remaining budget.
+func (h *Handler) gitBranch(cwd string) string {
+	if h.hookDeadline.IsZero() {
+		return platform.GetGitBranch(cwd)
+	}
+	ctx, cancel := context.WithDeadline(context.Background(), h.hookDeadline)
+	defer cancel()
+	return platform.GetGitBranchContext(ctx, cwd)
+}
+
 // HandleHook handles a hook event
 func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 	// Benchmark instrumentation (enabled via config debug.benchmark)
@@ -229,7 +268,16 @@ func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 	// Ensure webhook sender waits for in-flight requests before exit
 	defer func() {
 		bench.Start("webhook.shutdown")
-		if err := h.webhookSvc.Shutdown(5 * time.Second); err != nil {
+		shutdownBudget := 5 * time.Second
+		if !h.hookDeadline.IsZero() {
+			if left := h.hookDeadline.Sub(h.deliveryTimeNow()); left < shutdownBudget {
+				shutdownBudget = left
+				if shutdownBudget < 0 {
+					shutdownBudget = 0
+				}
+			}
+		}
+		if err := h.webhookSvc.Shutdown(shutdownBudget); err != nil {
 			logging.Warn("Failed to shutdown webhook sender: %v", err)
 		}
 		bench.Elapsed("webhook.shutdown")
@@ -291,9 +339,11 @@ func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 		defer h.cleanupOldLocks()
 	}
 	status, parsedMessages := classified.status, classified.messages
+	verifiedClaudeStopTurn := false
 	if deferClaudeStopLock {
 		if userTS := jsonl.GetLastUserTimestamp(parsedMessages); userTS != "" {
 			keys.lockKey = claudeStopTurnLockKey(ev.Session.SessionID, userTS)
+			verifiedClaudeStopTurn = true
 		}
 	}
 
@@ -305,18 +355,25 @@ func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 
 	// Check suppress-filters before any state mutations (dedup lock, cooldowns)
 	bench.Start("git.branch")
-	{
-		gitBranch := platform.GetGitBranch(ev.Session.CWD)
-		bench.Elapsed("git.branch")
-		folderName := filepath.Base(ev.Session.CWD)
-		if h.cfg.ShouldFilter(string(status), gitBranch, folderName) {
-			logging.Debug("Notification suppressed by filter: status=%s branch=%q folder=%s", status, gitBranch, folderName)
-			return nil
-		}
+	gitBranch := h.gitBranch(ev.Session.CWD)
+	bench.Elapsed("git.branch")
+	folderName := filepath.Base(ev.Session.CWD)
+	if h.cfg.ShouldFilter(string(status), gitBranch, folderName) {
+		logging.Debug("Notification suppressed by filter: status=%s branch=%q folder=%s", status, gitBranch, folderName)
+		return nil
 	}
 
-	// Phase 2: Acquire lock before sending (per hook event type)
-	acquired, err := h.dedupMgr.AcquireLock(keys.lockKey, hookEvent)
+	// A known Claude turn with delayed desktop-only delivery can remain
+	// in-flight after the ordinary two-second event lock expires. Retain its
+	// turn-scoped marker for at most one minute, but never hold the content
+	// lock over the delay. Distinct turns and Codex/Qoder use legacy policy.
+	pendingDelayedStop := verifiedClaudeStopTurn && h.cfg.GetNotifyDelaySeconds() > 0 &&
+		h.cfg.IsStatusDesktopEnabled(string(status)) && !h.cfg.IsStatusWebhookEnabled(string(status))
+	lockTTL := int64(2)
+	if pendingDelayedStop {
+		lockTTL = 60
+	}
+	acquired, err := h.dedupMgr.AcquireLockWithTTL(keys.lockKey, lockTTL, hookEvent)
 	if err != nil {
 		return fmt.Errorf("failed to acquire lock: %w", err)
 	}
@@ -324,9 +381,21 @@ func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 		logging.Debug("Failed to acquire lock (duplicate), skipping")
 		return nil
 	}
+	// Definitive no-effect outcomes release this attempt. A successful
+	// delivery retains the short-lived marker so a parallel invocation that
+	// already passed content inspection cannot send a duplicate.
+	keepPendingStop := false
+	if pendingDelayedStop {
+		defer func() {
+			if !keepPendingStop {
+				if releaseErr := h.dedupMgr.ReleaseLock(keys.lockKey, hookEvent); releaseErr != nil {
+					logging.Warn("Failed to clear undelivered Claude Stop reservation: %v", releaseErr)
+				}
+			}
+		}()
+	}
 
 	logging.Debug("Lock acquired, proceeding with notification")
-	// Note: Lock is NOT released - it ages out naturally after 2s to prevent rapid duplicates
 
 	// Check cooldown for question status BEFORE updating notification time.
 	// The cooldown exists to collapse Claude's paired PreToolUse/Notification
@@ -382,6 +451,10 @@ func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 		return nil
 	}
 
+	// Reuse the admission-time Git branch even if that probe returned empty.
+	// Requerying before the desktop delay can consume another timeout.
+	details := h.notificationDetails(ev, classified.insight)
+	details.branch, details.branchFetched = gitBranch, true
 	// Send notifications
 	bench.Start("notify.send")
 	recordedDelivery := false
@@ -390,8 +463,11 @@ func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 		if err := h.stateMgr.UpdateLastNotificationWithIdentity(keys.stateKey, status, content.message, content.stopHash, content.body, content.turnTS, hookEvent); err != nil {
 			logging.Warn("Failed to update last notification: %v", err)
 		}
-	}, h.notificationDetails(ev, classified.insight))
+	}, details)
 	bench.Elapsed("notify.send")
+	if delivery.delivered() {
+		keepPendingStop = true
+	}
 
 	if !recordedDelivery && !delivery.delivered() {
 		logging.Debug("No notification delivery was recorded (all channels disabled, suppressed, or failed)")

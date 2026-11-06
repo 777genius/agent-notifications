@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
 	"fmt"
 	"github.com/777genius/agent-notifications/internal/testenv"
 	"io"
@@ -272,5 +274,95 @@ func TestLegacyClaudeCLIKeepsLoudErrors(t *testing.T) {
 	res = runCLI(t, env, ``, "handle-hook")
 	if res.exitCode == 0 {
 		t.Error("missing event name must exit non-zero")
+	}
+}
+
+func TestHostHookDeadlineConstantsMatchShippedManifests(t *testing.T) {
+	for _, tc := range []struct {
+		path  string
+		limit time.Duration
+	}{
+		{"hooks/hooks.json", claudeHookHostTimeout},
+		{"hooks/hooks-codex.json", codexHookHostTimeout},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			data, err := os.ReadFile(filepath.Join(repoRoot(t), tc.path))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var manifest struct {
+				Hooks map[string][]struct {
+					Hooks []struct {
+						Timeout int `json:"timeout"`
+					} `json:"hooks"`
+				} `json:"hooks"`
+			}
+			if err := json.Unmarshal(data, &manifest); err != nil {
+				t.Fatal(err)
+			}
+			if len(manifest.Hooks) == 0 {
+				t.Fatal("empty installed host hooks")
+			}
+			for event, groups := range manifest.Hooks {
+				for _, group := range groups {
+					for _, handler := range group.Hooks {
+						if time.Duration(handler.Timeout)*time.Second != tc.limit {
+							t.Fatalf("%s timeout=%ds, binary bound=%v", event, handler.Timeout, tc.limit)
+						}
+					}
+				}
+			}
+		})
+	}
+}
+
+// Native Codex's observation command must remain silent and exit zero even
+// if an unrelated git metadata command stalls. No Codex or model process runs.
+func TestCodexCLIStalledGitFailsOpenWithinHostBudget(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX executable shell fixture; native Windows CI covers Codex CLI containment")
+	}
+	env := codexCLIEnv(t)
+	var home string
+	for _, entry := range env {
+		if strings.HasPrefix(entry, "HOME=") {
+			home = strings.TrimPrefix(entry, "HOME=")
+			break
+		}
+	}
+	if home == "" {
+		t.Fatal("isolated HOME not configured")
+	}
+	url := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer url.Close()
+	cfg := fmt.Sprintf(`{"notifications":{"desktop":{"enabled":false},"webhook":{"enabled":true,"preset":"custom","format":"json","url":%q}}}`, url.URL)
+	path := filepath.Join(home, ".claude", "claude-notifications-go", "config.json")
+	if err := os.WriteFile(path, []byte(cfg), 0600); err != nil {
+		t.Fatal(err)
+	}
+	binDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(binDir, "git"), []byte("#!/bin/sh\nexec sleep 6\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	env = append(env, "PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	binary := buildCLIBinary(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, binary, "handle-hook", "PermissionRequest", "--product", "codex")
+	cmd.Env = env
+	cmd.Stdin = strings.NewReader(`{"session_id":"codex-offline-stall","turn_id":"turn-1","hook_event_name":"PermissionRequest","tool_name":"shell","tool_input":{},"cwd":"/tmp"}`)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	start := time.Now()
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("Codex hook failed or timed out: %v (%v)", err, time.Since(start))
+	}
+	if ctx.Err() != nil || time.Since(start) >= 5*time.Second {
+		t.Fatal("Codex hook exceeded provider-free host limit")
+	}
+	if stdout.Len() != 0 || stderr.Len() != 0 {
+		t.Fatalf("Codex leaked output on stalled git: stdout=%q stderr=%q", stdout.String(), stderr.String())
 	}
 }

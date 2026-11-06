@@ -67,10 +67,18 @@ func (m *Manager) CheckEarlyDuplicate(sessionID string, hookEvent ...string) boo
 	return false
 }
 
-// AcquireLock performs Phase 2 lock acquisition
-// Returns true if lock was successfully acquired
-// hookEvent parameter is optional - if provided, uses hook-specific lock file
+// AcquireLock performs the existing short, two-second event lock.
 func (m *Manager) AcquireLock(sessionID string, hookEvent ...string) (bool, error) {
+	return m.AcquireLockWithTTL(sessionID, 2, hookEvent...)
+}
+
+// AcquireLockWithTTL retains a longer event-scoped lock only when its caller
+// has a bounded delivery lifecycle (Claude's delayed desktop-only Stop).
+// The marker is a pending attempt, never a claim of successful delivery.
+func (m *Manager) AcquireLockWithTTL(sessionID string, ttlSeconds int64, hookEvent ...string) (bool, error) {
+	if ttlSeconds < 2 || ttlSeconds > 60 {
+		return false, fmt.Errorf("invalid lock TTL")
+	}
 	lockPath := m.getLockPath(sessionID, hookEvent...)
 
 	// Try to create lock atomically
@@ -87,8 +95,19 @@ func (m *Manager) AcquireLock(sessionID string, hookEvent ...string) (bool, erro
 	// Lock exists - check if it's stale
 	age := m.lockAge(lockPath)
 
-	// If lock is fresh (<2s), we're a duplicate
-	if age >= 0 && age < 2 {
+	// An unavailable timestamp is not proof of expiry for a retained
+	// pending Stop. Preserve legacy two-second lock behavior elsewhere.
+	if ttlSeconds > 2 && age < 0 {
+		// A concurrent owner may have removed the marker between our
+		// failed exclusive create and age inspection. Retry O_EXCL once,
+		// without ever deleting an existing unknown-age marker.
+		created, err = platform.AtomicCreateFile(lockPath)
+		if err != nil {
+			return false, fmt.Errorf("failed to retry unknown-age lock: %w", err)
+		}
+		return created, nil
+	}
+	if age >= 0 && age < ttlSeconds {
 		return false, nil
 	}
 
