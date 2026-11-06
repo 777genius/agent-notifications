@@ -396,6 +396,7 @@ func TestClaudeStopDelayedDesktopDifferentUserTurnIsIndependent(t *testing.T) {
 	// the user's final text. This must remain a separate notification.
 	messages := buildTranscriptWithTools([]string{"Write"}, 300)
 	messages[0].Timestamp = "2025-01-01T12:00:02Z"
+	messages[1].Timestamp = "2025-01-01T12:00:03Z"
 	if err := os.WriteFile(transcript, []byte{}, 0600); err != nil {
 		t.Fatal(err)
 	}

@@ -307,6 +307,26 @@ func TestAcquireLockWithTTLRetainsDelayedAttemptAcrossOldTwoSecondWindow(t *test
 	require.True(t, acquired, "crash-retained marker must eventually expire")
 }
 
+// A crash after native submission but before updating the delivered-state
+// file is ambiguous. This marker can delay a replay, not guarantee exactly-once
+// after its finite TTL expires. The test deliberately retains this limitation.
+func TestDelayedStopMarkerExpiresAfterPostDeliveryCrash(t *testing.T) {
+	root := t.TempDir()
+	previous := &Manager{tempDir: root}
+	restarted := &Manager{tempDir: root}
+	owned, err := previous.AcquireLockWithTTL("crashed-after-send", 60, "Stop")
+	require.NoError(t, err)
+	require.True(t, owned)
+	// The real notification may have reached the OS, but no success receipt
+	// was persisted because the process died before its state update.
+	lock := previous.getLockPath("crashed-after-send", "Stop")
+	old := time.Now().Add(-61 * time.Second)
+	require.NoError(t, os.Chtimes(lock, old, old))
+	admitted, err := restarted.AcquireLockWithTTL("crashed-after-send", 60, "Stop")
+	require.NoError(t, err)
+	require.True(t, admitted, "marker expiry cannot establish whether the OS already displayed a banner")
+}
+
 func TestAcquireLockWithTTLFailsClosedOnUnknownAge(t *testing.T) {
 	root := t.TempDir()
 	owner := &Manager{tempDir: root}
