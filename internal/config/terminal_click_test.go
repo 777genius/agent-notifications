@@ -43,8 +43,8 @@ func TestInvalidTerminalClickConsentVersion(t *testing.T) {
 		raw := `{"schemaVersion":2,"agents":{"qoder":{"notifications":{"desktop":{"clickToFocus":true,"terminalClickConsentVersion":` + version + `}}}}}`
 		d, err := ParseDocument([]byte(raw), "/TEST-config.json", true)
 		if err != nil {
-				t.Fatal(err)
-			}
+			t.Fatal(err)
+		}
 		if _, err := d.Effective(AssetContext{Agent: AgentQoder}); err == nil {
 			t.Fatalf("accepted invalid consent marker %s", version)
 		}
