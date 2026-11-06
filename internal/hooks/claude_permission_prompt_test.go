@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/777genius/agent-notifications/internal/analyzer"
+	"github.com/777genius/agent-notifications/internal/sessionname"
 )
 
 func TestClaudeNotificationPermissionPromptUsesHostMessage(t *testing.T) {
@@ -21,8 +22,10 @@ func TestClaudeNotificationPermissionPromptUsesHostMessage(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h, notifier, _ := newTestHandler(t, codexTestConfig())
+			sessionID := "test-claude-permission-" + strings.ReplaceAll(tc.name, " ", "-")
+			expectedPrefix := "[" + sessionname.GenerateSessionLabel(sessionID) + " .] "
 			data, err := json.Marshal(HookData{
-				SessionID:        "test-claude-permission-" + strings.ReplaceAll(tc.name, " ", "-"),
+				SessionID:        sessionID,
 				HookEventName:    "Notification",
 				NotificationType: tc.notificationType,
 				Message:          tc.prompt,
@@ -37,8 +40,10 @@ func TestClaudeNotificationPermissionPromptUsesHostMessage(t *testing.T) {
 				t.Fatalf("expected one desktop notification, got %d", notifier.callCount())
 			}
 			got := notifier.lastCall()
-			if got.status != tc.wantStatus || !strings.HasSuffix(got.message, tc.wantBody) {
-				t.Fatalf("notification = %q (%s), want suffix %q (%s)", got.message, got.status, tc.wantBody, tc.wantStatus)
+			if got.status != tc.wantStatus || !strings.HasPrefix(got.message, expectedPrefix) ||
+				strings.TrimPrefix(got.message, expectedPrefix) != tc.wantBody {
+				t.Fatalf("notification = %q (%s), want prefix %q and body %q (%s)",
+					got.message, got.status, expectedPrefix, tc.wantBody, tc.wantStatus)
 			}
 		})
 	}
