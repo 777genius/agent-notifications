@@ -247,7 +247,7 @@ var booleanNotifierFlags = map[string]struct{}{
 // "-group") from being mistaken for the flag and corrupting the argument that
 // follows it.
 func setNotifierFlag(args []string, flag, value string) []string {
-	rewritten := make([]string, 0, len(args)+2)
+	rewritten := make([]string, 0, len(args))
 	replaced := false
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
