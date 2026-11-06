@@ -58,7 +58,7 @@ type FocusHints struct {
 	ZellijTabName string
 	ZellijMode    string
 	Strict        *notification.TerminalTarget
-	StrictSound   bool // native default cue only; ignored by legacy daemon messages
+	StrictSound   bool   // native default cue only; ignored by legacy daemon messages
 	StrictOwner   string // DBus unique owner of notification service; daemon-only
 }
 
