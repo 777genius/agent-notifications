@@ -22,6 +22,11 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - name: Resolve reproducible SDK commit module checksums
+        shell: bash
+        run: |
+          go mod download -json github.com/777genius/plugin-kit-ai/install/integrationctl@v0.1.1-0.20261106093230-f401557f9d1c
+          go mod download -json github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins@v0.0.0-20261106093230-f401557f9d1c
       - name: Trace exact SDK completion predicates without changing production dependencies
         shell: bash
         run: |
