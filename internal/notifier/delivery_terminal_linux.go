@@ -77,7 +77,12 @@ func (d *TerminalDesktopDelivery) Deliver(ctx context.Context, r notification.Re
 	snapshot := *r.Terminal
 	// An old daemon refuses notify_strict rather than interpreting it as a
 	// legacy approximate focus. Do not retry after an ambiguous handoff.
-	response, err := client.SendNotificationContext(op, r.Content.Title, desktopBodyWithSubtitle(r.Content), "", daemon.FocusHints{Strict: &snapshot, StrictSound: !r.Silent && r.Policy.SoundEnabled}, 30)
+	response, err := client.SendNotificationContext(op, r.Content.Title, desktopBodyWithSubtitle(r.Content), r.AppIcon, daemon.FocusHints{Strict: &snapshot, StrictSound: !r.Silent && r.Policy.SoundEnabled}, 30)
+	// Only an explicit pre-submission rejection from an old daemon may
+	// fall back. Transport errors and ambiguous results are never retried.
+	if errors.Is(err, daemon.ErrStrictUnsupported) {
+		return d.informational(op, r)
+	}
 	if err != nil || response == nil || !response.Success || response.NotificationID == 0 {
 		reason := "handoff_unconfirmed"
 		if errors.Is(op.Err(), context.DeadlineExceeded) {
@@ -102,10 +107,15 @@ func (n *Notifier) sendVerifiedTerminal(title, body, appIcon, sound string, opts
 	if err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	parent := opts.executionContext
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parent, 12*time.Second)
 	defer cancel()
 	r := notification.Request{
 		Content:       notification.Content{Title: title, Body: body, Category: "info"},
+		AppIcon:       appIcon,
 		CorrelationID: uuid.NewString(),
 		Deadline:      notification.Deadline{BootID: boot, NotAfter: now + 12},
 		Policy: notification.PolicySnapshot{
@@ -118,6 +128,9 @@ func (n *Notifier) sendVerifiedTerminal(title, body, appIcon, sound string, opts
 	receipt := NewTerminalDesktopDelivery(clock).Deliver(ctx, r)
 	if receipt.Status != "submitted" {
 		return errors.New("strict_terminal_handoff_unconfirmed")
+	}
+	if opts.executionContext != nil {
+		return n.playSoundContext(ctx, sound, opts)
 	}
 	n.playSoundUnlessMuted(sound, opts)
 	return nil

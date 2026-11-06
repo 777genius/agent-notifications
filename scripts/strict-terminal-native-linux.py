@@ -70,8 +70,15 @@ def qualify(binary, candidate, output):
             lab.run(["xdotool", "windowactivate", "--sync", distractor])
             N.wait_for(lambda: active() == distractor)
             if scenario == "spoof":
-                if row["focus"] or displayed() != 0:
-                    raise RuntimeError("forged window created a focus-capable banner")
+                if row["focus"] or row["window"] != sender_window:
+                    raise RuntimeError("forged window was accepted as a focus target")
+                N.wait_for(lambda: displayed() == 1)
+                # The daemon really displayed a banner, but it must have no
+                # executable focus action, even if clicked by native input.
+                lab.run(["xdotool", "mousemove", "1100", "70", "click", "1"])
+                time.sleep(1)
+                if active() != distractor:
+                    raise RuntimeError("forged daemon banner focused a foreign terminal")
             else:
                 if not row["focus"] or row["window"] != sender_window:
                     raise RuntimeError("native sender did not prove its own terminal")
@@ -103,7 +110,7 @@ def qualify(binary, candidate, output):
                     if active() != distractor:
                         raise RuntimeError("revoked consent still focused native terminal")
             report["cases"].append({"scenario": scenario, "status": "passed",
-                                    "real_daemon": True, "physical_click": scenario != "spoof",
+                                    "real_daemon": True, "physical_click": True,
                                     "focus_restored": scenario == "positive",
                                     "sender_exited_before_click": True})
             lab.run(["dunstctl", "close-all"])

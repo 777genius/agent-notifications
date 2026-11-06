@@ -78,6 +78,7 @@ type PolicySnapshot struct {
 
 type Request struct {
 	Content       Content
+	AppIcon       string // strict terminal banner's configured icon, never a focus target
 	CorrelationID string // UUID assigned by the durable admission owner
 	Deadline      Deadline
 	Policy        PolicySnapshot

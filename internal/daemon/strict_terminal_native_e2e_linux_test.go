@@ -64,19 +64,32 @@ func TestStrictTerminalNativeSender(t *testing.T) {
 	if err != nil || !cfg.TerminalClickAuthorized() {
 		t.Fatal("TEST consent fixture rejected", err)
 	}
-	if name == "spoof" {
-		if spoof := os.Getenv("TEST_STRICT_SPOOF_WINDOW"); spoof == "" {
-			t.Fatal("no other window supplied")
-		} else {
-			t.Setenv("WINDOWID", spoof)
-		}
-	}
 	origin, ok := CaptureStrictTerminal(ctx, cfg, config.AgentQoder, control, ledger.ID, ledger.Generation)
 	if name == "spoof" {
-		if ok || origin != nil {
-			t.Fatal("another terminal's WINDOWID was accepted as our ancestor")
+		// Capture the genuine sender first, then forge only its window ID.
+		// The daemon must reject this payload independently of the client.
+		if !ok || origin == nil {
+			t.Fatal("cannot construct bound negative target")
 		}
-		writeStrictNativeReceipt(t, root, name, false, "", os.Getpid())
+		spoof := os.Getenv("TEST_STRICT_SPOOF_WINDOW")
+		if spoof == "" {
+			t.Fatal("no other window supplied")
+		}
+		t.Setenv("WINDOWID", spoof)
+		if rejected, allowed := CaptureStrictTerminal(ctx, cfg, config.AgentQoder, control, ledger.ID, ledger.Generation); allowed || rejected != nil {
+			t.Fatal("foreign WINDOWID was accepted at capture")
+		}
+		forged := *origin
+		forged.WindowID = spoof
+		client, err := NewClient()
+		if err != nil {
+			t.Fatal(err)
+		}
+		response, err := client.SendNotificationContext(ctx, "TEST strict terminal", "TEST strict spoof", "", FocusHints{Strict: &forged}, 25)
+		if err != nil || response == nil || !response.Success || response.FocusEnabled || response.NotificationID == 0 {
+			t.Fatalf("daemon did not reject forged strict focus: %+v %v", response, err)
+		}
+		writeStrictNativeReceipt(t, root, name, false, origin.WindowID, os.Getpid())
 		return
 	}
 	if !ok || origin == nil {

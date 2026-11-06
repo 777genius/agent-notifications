@@ -11,8 +11,10 @@ on:
       - 'internal/geminievent/**'
       - 'internal/cursorevent/**'
       - 'internal/hooks/**'
+      - 'internal/installruntime/**'
       - 'cmd/claude-notifications/**'
       - 'scripts/strict-terminal-native-linux.py'
+      - 'scripts/pi-native-preflight.py'
       - 'go.mod'
       - 'go.sum'
   workflow_dispatch:

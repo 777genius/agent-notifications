@@ -6,6 +6,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -18,6 +19,10 @@ import (
 	"syscall"
 	"time"
 )
+
+// ErrStrictUnsupported confirms an old daemon rejected the unknown type
+// before submitting any notification. Other failures remain uncertain.
+var ErrStrictUnsupported = errors.New("strict notification unsupported")
 
 // Client communicates with the daemon via Unix socket
 type Client struct {
@@ -87,6 +92,9 @@ func (c *Client) SendNotificationContext(ctx context.Context, title, body, appIc
 	}
 
 	if resp.Error != "" {
+		if req.Type == MessageTypeNotifyStrict && resp.Error == "unknown message type" {
+			return nil, ErrStrictUnsupported
+		}
 		return nil, fmt.Errorf("daemon error: %s", resp.Error)
 	}
 

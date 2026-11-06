@@ -125,9 +125,13 @@ func (n *Notifier) SendDesktop(status analyzer.Status, message, sessionID, cwd s
 	// installed CLI composer, never from a notification body or session ID.
 	if sendOpts.terminal != nil {
 		if focusEnabled && platform.IsLinux() {
+			if sendOpts.hookPresentation != nil && subtitle != "" {
+				cleanMessage = subtitle + "\n" + cleanMessage
+			}
 			return n.sendVerifiedTerminal(title, cleanMessage, appIcon, statusInfo.Sound, sendOpts)
 		}
 		focusEnabled = false // unqualified platform: informational only
+		sendOpts.noFocus = true // context-backed macOS notifications stay action-free
 	}
 	if sendOpts.executionContext != nil {
 		return n.sendNativeDesktopContext(sendOpts.executionContext, statusInfo.Sound, title, cleanMessage, subtitle, sessionID, cwd, appIcon, sendOpts)
