@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/777genius/agent-notifications/internal/claudesource"
 	"github.com/777genius/agent-notifications/internal/codexsource"
@@ -13,6 +14,15 @@ import (
 	"github.com/777genius/agent-notifications/internal/hooks"
 	"github.com/777genius/agent-notifications/internal/logging"
 )
+
+// Native hook schemas independently configure a 30-second timeout for each
+// host. Count binary startup/config/parsing time, and reserve close time.
+const (
+	claudeHookHostTimeout = 30 * time.Second // hooks/hooks.json
+	codexHookHostTimeout  = 30 * time.Second // hooks/hooks-codex.json
+)
+
+var hookBinaryStartedAt = time.Now()
 
 // runHandleHook routes a handle-hook invocation. Without a --product flag it
 // is the legacy Claude path, byte-for-byte compatible with previous releases
@@ -189,6 +199,7 @@ func handleCodexHook(publicEvent string) {
 		return
 	}
 
+	handler.BindHookDeadline(hookBinaryStartedAt.Add(codexHookHostTimeout))
 	if err := handler.HandleHook(publicEvent, bytes.NewReader(raw)); err != nil {
 		logging.Error("codex: hook failed: %v", err)
 	}
@@ -233,6 +244,9 @@ func handleHook(hookEvent string) {
 		os.Exit(1)
 	}
 
+	// Preserve a conservative bound from binary startup (including decoding
+	// and config work) instead of starting the budget at the delay itself.
+	handler.BindHookDeadline(hookBinaryStartedAt.Add(claudeHookHostTimeout))
 	// Handle hook
 	if err := handler.HandleHook(hookEvent, os.Stdin); err != nil {
 		errorhandler.HandleCriticalError(err, "Failed to handle hook")

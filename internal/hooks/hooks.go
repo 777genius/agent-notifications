@@ -75,6 +75,10 @@ type Handler struct {
 	codexEnricher CodexTurnEnricher
 	// Test seam for a deterministic append between JSONL parse and settle.
 	afterClaudeTranscriptParse func()
+	// Only the calling host hook entrypoint may bind its finite deadline.
+	// Zero retains legacy behavior for library/tests and other integrations.
+	hookDeadline time.Time
+	hookNow      func() time.Time
 }
 
 // NewHandler creates a new hook handler
@@ -194,6 +198,30 @@ func eventToolName(ev Event) string {
 	return ""
 }
 
+// BindHookDeadline lets the real Claude/Codex entrypoint own its host timeout.
+// It does not change the plugin configuration or other agents' policy.
+func (h *Handler) BindHookDeadline(deadline time.Time) {
+	if h != nil {
+		h.hookDeadline = deadline
+	}
+}
+
+func (h *Handler) deliveryTimeNow() time.Time {
+	if h.hookNow != nil {
+		return h.hookNow()
+	}
+	return time.Now()
+}
+
+// availableDesktopBudget reserves time for native submission and cleanup.
+// Zero deadline means no entrypoint-bound budget was supplied.
+func (h *Handler) availableDesktopBudget() (time.Duration, bool) {
+	if h.hookDeadline.IsZero() {
+		return 0, false
+	}
+	return h.hookDeadline.Sub(h.deliveryTimeNow()) - 5*time.Second, true
+}
+
 // HandleHook handles a hook event
 func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 	// Benchmark instrumentation (enabled via config debug.benchmark)
@@ -227,7 +255,16 @@ func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 	// Ensure webhook sender waits for in-flight requests before exit
 	defer func() {
 		bench.Start("webhook.shutdown")
-		if err := h.webhookSvc.Shutdown(5 * time.Second); err != nil {
+		shutdownBudget := 5 * time.Second
+		if !h.hookDeadline.IsZero() {
+			if left := h.hookDeadline.Sub(h.deliveryTimeNow()); left < shutdownBudget {
+				shutdownBudget = left
+				if shutdownBudget < 0 {
+					shutdownBudget = 0
+				}
+			}
+		}
+		if err := h.webhookSvc.Shutdown(shutdownBudget); err != nil {
 			logging.Warn("Failed to shutdown webhook sender: %v", err)
 		}
 		bench.Elapsed("webhook.shutdown")

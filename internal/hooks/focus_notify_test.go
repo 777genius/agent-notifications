@@ -285,3 +285,49 @@ func TestClaudeStopDelayedDesktopReservesTurnPastTwoSecondLock(t *testing.T) {
 		t.Fatalf("replay entered its own delayed delivery: %d", got)
 	}
 }
+
+// A configured delay must not consume the hook's remaining time and then
+// falsely mark a desktop notification as delivered.
+func TestSendDesktopNotification_DeadlineExhaustionDoesNotDeliver(t *testing.T) {
+	delay := 20
+	h, n, _ := newTestHandler(t, focusNotifyConfig(nil, &delay))
+	now := time.Unix(1_700_000_000, 0)
+	h.hookNow = func() time.Time { return now }
+	h.BindHookDeadline(now.Add(18 * time.Second)) // 13s after reserved cleanup
+	oldSleep := sleepFunc
+	called := false
+	sleepFunc = func(time.Duration) { called = true }
+	defer func() { sleepFunc = oldSleep }()
+	if h.sendDesktopNotification(analyzer.StatusTaskComplete, "Done", "session", "/repo") {
+		t.Fatal("deadline-exhausted delay reported delivery")
+	}
+	if called || n.wasCalled() {
+		t.Fatal("deadline-exhausted delay slept or sent a banner")
+	}
+}
+
+func TestSendDesktopNotification_DeadlineCountsElapsedPreworkAndSuspend(t *testing.T) {
+	delay := 6
+	h, n, _ := newTestHandler(t, focusNotifyConfig(nil, &delay))
+	now := time.Unix(1_700_000_000, 0)
+	h.hookNow = func() time.Time { return now }
+	h.BindHookDeadline(now.Add(16 * time.Second))
+	oldSleep := sleepFunc
+	slept := time.Duration(0)
+	sleepFunc = func(d time.Duration) { slept = d; now = now.Add(d) }
+	defer func() { sleepFunc = oldSleep }()
+	if !h.sendDesktopNotification(analyzer.StatusTaskComplete, "Done", "session", "/repo") {
+		t.Fatal("delay with adequate budget was not delivered")
+	}
+	if slept != 6*time.Second || !n.wasCalled() {
+		t.Fatalf("delay=%v, notified=%t", slept, n.wasCalled())
+	}
+	// A machine can suspend or stall after admission but before delivery.
+	now = now.Add(10 * time.Second)
+	if h.sendDesktopNotification(analyzer.StatusTaskComplete, "Done", "session", "/repo") {
+		t.Fatal("post-suspend expired deadline was still admitted")
+	}
+	if n.callCount() != 1 {
+		t.Fatal("expired second attempt reached notifier")
+	}
+}
