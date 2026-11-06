@@ -1,6 +1,8 @@
 package hooks
 
 import (
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -236,5 +238,50 @@ func TestHandleHook_DelayDoesNotHoldContentLock(t *testing.T) {
 		assert.NoError(t, err)
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for delayed hook to finish")
+	}
+}
+
+func TestClaudeStopDelayedDesktopReservesTurnPastTwoSecondLock(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	delay := 5
+	cfg := focusNotifyConfig(nil, &delay)
+	cfg.Notifications.Webhook.Enabled = false
+	h, delivered, _ := newTestHandler(t, cfg)
+	sessionID := "test-delayed-stop-pending-20261106"
+	transcript := createTempTranscript(t, buildTranscriptWithTools([]string{"Write"}, 300))
+	payload := HookData{SessionID: sessionID, TranscriptPath: transcript, LastAssistantMessage: "Done.", CWD: t.TempDir()}
+	oldSleep := sleepFunc
+	sleepEntered := make(chan struct{}, 1)
+	releaseSleep := make(chan struct{})
+	firstDone := make(chan error, 1)
+	sleepFunc = func(time.Duration) {
+		select {
+		case sleepEntered <- struct{}{}:
+		default:
+		}
+		<-releaseSleep
+	}
+	defer func() { close(releaseSleep); <-firstDone; sleepFunc = oldSleep }()
+	go func() { firstDone <- h.HandleHook("Stop", buildHookDataJSON(payload)) }()
+	select {
+	case <-sleepEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first Stop never reached the delayed desktop branch")
+	}
+	key := claudeStopTurnLockKey(sessionID, "2025-01-01T12:00:00Z")
+	lock := filepath.Join(os.TempDir(), "claude-notification-"+key+"-Stop.lock")
+	defer func() { _ = h.dedupMgr.ReleaseLock(key, "Stop") }()
+	old := time.Now().Add(-3 * time.Second)
+	if err := os.Chtimes(lock, old, old); err != nil {
+		t.Fatalf("age the real event lock: %v", err)
+	}
+	if err := h.HandleHook("Stop", buildHookDataJSON(payload)); err != nil {
+		t.Fatalf("replayed Stop: %v", err)
+	}
+	if delivered.callCount() != 0 {
+		t.Fatalf("replay submitted before original delay finished: %d", delivered.callCount())
+	}
+	if got := len(sleepEntered); got != 0 {
+		t.Fatalf("replay entered its own delayed delivery: %d", got)
 	}
 }

@@ -289,9 +289,11 @@ func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 		defer h.cleanupOldLocks()
 	}
 	status, parsedMessages := classified.status, classified.messages
+	verifiedClaudeStopTurn := false
 	if deferClaudeStopLock {
 		if userTS := jsonl.GetLastUserTimestamp(parsedMessages); userTS != "" {
 			keys.lockKey = claudeStopTurnLockKey(ev.Session.SessionID, userTS)
+			verifiedClaudeStopTurn = true
 		}
 	}
 
@@ -313,8 +315,17 @@ func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 		}
 	}
 
-	// Phase 2: Acquire lock before sending (per hook event type)
-	acquired, err := h.dedupMgr.AcquireLock(keys.lockKey, hookEvent)
+	// A known Claude turn with delayed desktop-only delivery can remain
+	// in-flight after the ordinary two-second event lock expires. Retain its
+	// turn-scoped marker for at most one minute, but never hold the content
+	// lock over the delay. Distinct turns and Codex/Qoder use legacy policy.
+	pendingDelayedStop := verifiedClaudeStopTurn && h.cfg.GetNotifyDelaySeconds() > 0 &&
+		h.cfg.IsStatusDesktopEnabled(string(status)) && !h.cfg.IsStatusWebhookEnabled(string(status))
+	lockTTL := int64(2)
+	if pendingDelayedStop {
+		lockTTL = 60
+	}
+	acquired, err := h.dedupMgr.AcquireLockWithTTL(keys.lockKey, lockTTL, hookEvent)
 	if err != nil {
 		return fmt.Errorf("failed to acquire lock: %w", err)
 	}
@@ -322,9 +333,21 @@ func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 		logging.Debug("Failed to acquire lock (duplicate), skipping")
 		return nil
 	}
+	// Definitive no-effect outcomes release this attempt. A successful
+	// delivery retains the short-lived marker so a parallel invocation that
+	// already passed content inspection cannot send a duplicate.
+	keepPendingStop := false
+	if pendingDelayedStop {
+		defer func() {
+			if !keepPendingStop {
+				if releaseErr := h.dedupMgr.ReleaseLock(keys.lockKey, hookEvent); releaseErr != nil {
+					logging.Warn("Failed to clear undelivered Claude Stop reservation: %v", releaseErr)
+				}
+			}
+		}()
+	}
 
 	logging.Debug("Lock acquired, proceeding with notification")
-	// Note: Lock is NOT released - it ages out naturally after 2s to prevent rapid duplicates
 
 	// Check cooldown for question status BEFORE updating notification time.
 	// The cooldown exists to collapse Claude's paired PreToolUse/Notification
@@ -390,6 +413,9 @@ func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 		}
 	}, h.notificationDetails(ev, classified.insight))
 	bench.Elapsed("notify.send")
+	if delivery.delivered() {
+		keepPendingStop = true
+	}
 
 	if !recordedDelivery && !delivery.delivered() {
 		logging.Debug("No notification delivery was recorded (all channels disabled, suppressed, or failed)")

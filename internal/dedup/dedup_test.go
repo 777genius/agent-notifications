@@ -283,3 +283,38 @@ func TestCleanupForSession_RemoveError(t *testing.T) {
 	// Restore permissions for cleanup
 	_ = os.Chmod(testTempDir, 0755)
 }
+
+func TestAcquireLockWithTTLRetainsDelayedAttemptAcrossOldTwoSecondWindow(t *testing.T) {
+	root := t.TempDir()
+	first := &Manager{tempDir: root}
+	otherProcess := &Manager{tempDir: root}
+	acquired, err := first.AcquireLockWithTTL("known-turn", 60, "Stop")
+	require.NoError(t, err)
+	require.True(t, acquired)
+	lock := first.getLockPath("known-turn", "Stop")
+	old := time.Now().Add(-3 * time.Second)
+	require.NoError(t, os.Chtimes(lock, old, old))
+	acquired, err = otherProcess.AcquireLockWithTTL("known-turn", 60, "Stop")
+	require.NoError(t, err)
+	require.False(t, acquired, "pending Claude Stop must survive the old event-lock TTL")
+	acquired, err = otherProcess.AcquireLockWithTTL("another-turn", 60, "Stop")
+	require.NoError(t, err)
+	require.True(t, acquired, "a separate turn must not be suppressed")
+	old = time.Now().Add(-61 * time.Second)
+	require.NoError(t, os.Chtimes(lock, old, old))
+	acquired, err = otherProcess.AcquireLockWithTTL("known-turn", 60, "Stop")
+	require.NoError(t, err)
+	require.True(t, acquired, "crash-retained marker must eventually expire")
+}
+
+func TestAcquireLockWithTTLFailsClosedOnUnknownAge(t *testing.T) {
+	root := t.TempDir()
+	owner := &Manager{tempDir: root}
+	unknown := &Manager{tempDir: root, fileAge: func(string) int64 { return -1 }}
+	acquired, err := owner.AcquireLockWithTTL("turn", 60, "Stop")
+	require.NoError(t, err)
+	require.True(t, acquired)
+	acquired, err = unknown.AcquireLockWithTTL("turn", 60, "Stop")
+	require.NoError(t, err)
+	require.False(t, acquired, "unknown timestamp cannot prove a delayed lease expired")
+}
