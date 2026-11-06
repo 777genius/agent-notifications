@@ -34,7 +34,7 @@ func exactGhosttyNotifierArgs(title, message, script string) []string {
 }
 
 func boundGhosttyNotifierArgs(title, message, bundleID, cwd, terminalID string) []string {
-	if strings.TrimSpace(terminalID) == "" {
+	if strings.TrimSpace(terminalID) == "" || !isUsableFocusCWD(cwd) {
 		return exactGhosttyNotifierArgs(title, message, "")
 	}
 	return exactGhosttyNotifierArgs(title, message, buildGhosttyFocusScript(bundleID, cwd, terminalID))
