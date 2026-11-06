@@ -54,7 +54,15 @@
 | **P3 — Cursor** | То же для selected local Cursor CLI; отличать Cursor IDE/remote/cloud, сохранить UAP proof | Stop remains informational; click корректен только для подтверждённой CLI session |
 | **P4 — E2E & docs** | OS native test, security review, exact-head CI, README/support matrix/site только по доказанному support | Merge после green полного CI и click E2E на поддерживаемых платформах; postmerge CI повторно |
 
-P0 решает последовательность: если для Qoder всё уже работает, **первый PR — тесты/документы**. Если Gemini/ Cursor не дают локального origin, не надо строить более сложный route; реализовать только квалифицированные пары.
+**P0 выполняется инкрементально:** один реально доступный локальный host/terminal для каждого кандидата → решение, существует ли безопасный путь → только затем расширение на конкретные macOS/Linux/Windows варианты. Не требовать прохождения всей OS-матрицы *до первого* маленького изменения; требовать отдельный physical-click E2E **перед обещанием поддержки на каждой заявленной платформе**. Если для Qoder всё уже работает, первый PR — characterization tests/документация. Если Gemini/Cursor не дают локального origin, не увеличивать архитектуру.
+
+### Проверенные ограничения существующего native delivery
+
+- **Cursor:** internal/copilotvscodeinstall/desktop.go:65-73 в текущем production code *намеренно отвергает* любой request с Navigation != None, Policy.ClickToFocus=true либо ненулевым DesktopTarget. Для новой функции недостаточно поменять флаг в cursorevent.Consumer: сначала нужен доказанный typed route с сохранением именно этого single-lease security gate. Отказ/неизвестный результат не должен приводить к второму отправлению уведомления.
+- **Linux:** internal/notifier/delivery_linux.go:59-67 разрешает native navigation только для Provider=codex + ThreadID + verified Linux binding. Простое помещение Gemini/Cursor session ID в этот target недопустимо. У Win/macOS есть свои отдельные activation/signing boundaries — их тоже не перепрыгивать.
+- **Конфигурация:** internal/config/config_defaults.go задаёт глобальный ClickToFocus=true; внутренний Config уже содержит effective booleans. Поэтому этот inherited default **не равен новому явному согласию** Gemini/Cursor/Qoder. В P0 отдельно проверить, можно ли сохранить explicit agents.<agent>.notifications.desktop.clickToFocus=true на существующей schema 2, не вводя новых настроек. Если нет, не включать feature автоматически и вынести минимальный UX consent decision перед implementation.
+- **Приоритет доказательства:** selected installed binary + local OS user/session + конкретный route bound to native window. Даже при валидном hook provenance две одинаковые рабочие директории, PID/title reuse и remote forwarded env не делают window идентичность доверенной. Native callback должен revalidate immutable ownership at click time.
+- **Доказательная база:** обычный headless GitHub CI проверяет политику и native API contracts; interactive physical click+visible window требует настоящего desktop runner/owner evidence, без имитации успеха. Не распространять результат одной OS/terminal пары на другие.
 
 ## 5. Минимальные обязательные E2E
 
