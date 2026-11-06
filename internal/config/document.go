@@ -18,10 +18,12 @@ const MaxDocumentDepth = 128
 // Document owns immutable original bytes. Accessors return independent copies.
 // Runtime expansion must never be persisted as a Document.
 type Document struct {
-	original  []byte
-	schema    int
-	ambiguous string
-	revision  string
+	original     []byte
+	physicalPath string
+	exists       bool
+	schema       int
+	ambiguous    string
+	revision     string
 }
 
 func (d Document) Bytes() []byte      { return bytes.Clone(d.original) }
@@ -98,7 +100,7 @@ func ParseDocument(data []byte, physicalPath string, exists bool) (Document, err
 	if decodeTyped(data, &typed) != nil {
 		return fail(ConfigInvalid, 0)
 	}
-	d := Document{original: bytes.Clone(data), schema: schema}
+	d := Document{original: bytes.Clone(data), physicalPath: physicalPath, exists: exists, schema: schema}
 	d.ambiguous = ambiguousFields(data, reflect.TypeOf(Config{}), "")
 	if schema == 2 && d.ambiguous != "" {
 		return fail(ConfigInvalid, 0)

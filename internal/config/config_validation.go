@@ -12,6 +12,10 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("desktop volume must be between 0.0 and 1.0 (got %.2f)", c.Notifications.Desktop.Volume)
 	}
 
+	if v := c.Notifications.Desktop.TerminalClickConsentVersion; v != nil && *v != 1 {
+		return fmt.Errorf("terminalClickConsentVersion must be 1 when set")
+	}
+
 	// Validate webhook preset (only if webhooks are enabled)
 	validPresets := map[string]bool{
 		"slack":    true,

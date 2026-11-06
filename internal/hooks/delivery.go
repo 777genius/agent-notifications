@@ -119,6 +119,15 @@ func (h *Handler) sendNotifications(status analyzer.Status, body, actions, sessi
 				Body: joined, Question: details[0].question,
 			}))
 		}
+		// Qoder's legacy notifier may otherwise attach approximate actions.
+		// A trusted local origin is bound only by the managed Qoder composer.
+		if h.product == ProductQoder {
+			if h.terminalFocus != nil {
+				opts = append(opts, h.terminalFocus)
+			} else {
+				opts = append(opts, notifier.WithoutFocus())
+			}
+		}
 		delivery.desktopDelivered = h.sendDesktopNotification(status, enhancedMessage, sessionID, cwd, opts...)
 		if delivery.desktopDelivered && !delivery.webhookQueued && onFirstDelivery != nil {
 			onFirstDelivery()

@@ -23,7 +23,7 @@ func (n *Notifier) sendNativeDesktopContext(ctx context.Context, sound, title, b
 	if subtitle != "" {
 		body = subtitle + "\n" + body
 	}
-	if !n.cfg.Notifications.Desktop.ClickToFocus {
+	if !n.cfg.Notifications.Desktop.ClickToFocus || opts.noFocus {
 		if _, ok := ctx.Deadline(); !ok {
 			return errors.New("delivery_deadline_required")
 		}
@@ -58,7 +58,7 @@ func (n *Notifier) sendNativeDesktopContext(ctx context.Context, sound, title, b
 		return err
 	}
 	hints := daemon.FocusHints{}
-	if n.cfg.Notifications.Desktop.ClickToFocus {
+	if n.cfg.Notifications.Desktop.ClickToFocus && !opts.noFocus {
 		target := daemon.GetTerminalName()
 		windowID := daemon.GetX11WindowID(target)
 		if session := os.Getenv("XDG_SESSION_TYPE"); session != "" && session != "x11" {

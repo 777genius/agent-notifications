@@ -5,6 +5,11 @@ type Config struct {
 	Notifications NotificationsConfig   `json:"notifications"`
 	Statuses      map[string]StatusInfo `json:"statuses"`
 	Debug         DebugConfig           `json:"debug,omitempty"`
+
+	// Derived solely from an explicit schema-2 agent profile, never defaults.
+	terminalClickAuthorized bool
+	terminalClickPath       string
+	terminalClickRevision   string
 }
 
 // DebugConfig represents debug/diagnostic settings
@@ -44,17 +49,18 @@ type NotificationsConfig struct {
 
 // DesktopConfig represents desktop notification settings
 type DesktopConfig struct {
-	Enabled          bool    `json:"enabled"`
-	Sound            bool    `json:"sound"`
-	SystemSound      *bool   `json:"systemSound,omitempty"` // OS default cue for supported native observers; opt-in (default: off)
-	TerminalBell     *bool   `json:"terminalBell"`          // Send BEL to /dev/tty for terminal tab indicators (default: true)
-	Volume           float64 `json:"volume"`                // Volume level 0.0-1.0, default 1.0 (full volume)
-	AudioDevice      string  `json:"audioDevice"`           // Audio output device name (empty = system default)
-	AppIcon          string  `json:"appIcon"`               // Path to app icon
-	ClickToFocus     bool    `json:"clickToFocus"`          // macOS/Linux/Windows: activate the originating terminal window on notification click (default: true)
-	ShowSessionLabel *bool   `json:"showSessionLabel"`      // Include the "[name id]" session label in the notification title (default: true)
-	TerminalBundleID string  `json:"terminalBundleId"`      // macOS: override auto-detected terminal bundle ID (empty = auto)
-	ZellijFocus      string  `json:"zellijFocus,omitempty"` // Linux: "auto" (default), "pane" (zellij 0.44.1+), "tab" (legacy), "off"
+	Enabled                     bool    `json:"enabled"`
+	Sound                       bool    `json:"sound"`
+	SystemSound                 *bool   `json:"systemSound,omitempty"` // OS default cue for native observers
+	TerminalBell                *bool   `json:"terminalBell"`
+	Volume                      float64 `json:"volume"`
+	AudioDevice                 string  `json:"audioDevice"`
+	AppIcon                     string  `json:"appIcon"`
+	ClickToFocus                bool    `json:"clickToFocus"`
+	TerminalClickConsentVersion *int    `json:"terminalClickConsentVersion,omitempty"` // Fresh opt-in for Qoder/Gemini/Cursor
+	ShowSessionLabel            *bool   `json:"showSessionLabel"`
+	TerminalBundleID            string  `json:"terminalBundleId"`
+	ZellijFocus                 string  `json:"zellijFocus,omitempty"`
 }
 
 // WebhookConfig represents webhook settings
