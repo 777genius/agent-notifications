@@ -26,7 +26,7 @@ func (n *Notifier) sendNativeDesktopContext(ctx context.Context, sound, title, b
 	}
 	bundleID := terminalBundleContext(ctx, n.cfg.Notifications.Desktop.TerminalBundleID)
 	args := []string{"-title", title, "-message", body}
-	if n.cfg.Notifications.Desktop.ClickToFocus && bundleID != "" {
+	if n.cfg.Notifications.Desktop.ClickToFocus && !opts.noFocus && bundleID != "" {
 		if mux, ok := multiplexerArgsContext(ctx, title, body, bundleID, opts.runtimeRoot); ok {
 			args = mux
 		} else {

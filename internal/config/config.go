@@ -5,6 +5,9 @@ type Config struct {
 	Notifications NotificationsConfig   `json:"notifications"`
 	Statuses      map[string]StatusInfo `json:"statuses"`
 	Debug         DebugConfig           `json:"debug,omitempty"`
+
+	// Derived solely from an explicit schema-2 agent profile, never defaults.
+	terminalClickAuthorized bool
 }
 
 // DebugConfig represents debug/diagnostic settings
@@ -51,7 +54,8 @@ type DesktopConfig struct {
 	Volume           float64 `json:"volume"`                // Volume level 0.0-1.0, default 1.0 (full volume)
 	AudioDevice      string  `json:"audioDevice"`           // Audio output device name (empty = system default)
 	AppIcon          string  `json:"appIcon"`               // Path to app icon
-	ClickToFocus     bool    `json:"clickToFocus"`          // macOS/Linux/Windows: activate the originating terminal window on notification click (default: true)
+	ClickToFocus               bool    `json:"clickToFocus"`                  // macOS/Linux/Windows: activate the originating terminal window on notification click (default: true)
+	TerminalClickConsentVersion *int    `json:"terminalClickConsentVersion,omitempty"` // Explicit fresh agent-specific opt-in
 	ShowSessionLabel *bool   `json:"showSessionLabel"`      // Include the "[name id]" session label in the notification title (default: true)
 	TerminalBundleID string  `json:"terminalBundleId"`      // macOS: override auto-detected terminal bundle ID (empty = auto)
 	ZellijFocus      string  `json:"zellijFocus,omitempty"` // Linux: "auto" (default), "pane" (zellij 0.44.1+), "tab" (legacy), "off"

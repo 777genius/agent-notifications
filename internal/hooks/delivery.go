@@ -119,6 +119,12 @@ func (h *Handler) sendNotifications(status analyzer.Status, body, actions, sessi
 				Body: joined, Question: details[0].question,
 			}))
 		}
+		// Qoder's legacy notifier may otherwise attach an approximate native
+		// focus action even without a verified originating terminal. Keep the
+		// banner and sound; a qualified origin adapter can enable it later.
+		if h.product == ProductQoder {
+			opts = append(opts, notifier.WithoutFocus())
+		}
 		delivery.desktopDelivered = h.sendDesktopNotification(status, enhancedMessage, sessionID, cwd, opts...)
 		if delivery.desktopDelivered && !delivery.webhookQueued && onFirstDelivery != nil {
 			onFirstDelivery()

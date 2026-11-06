@@ -7,6 +7,7 @@ type SendOption func(*sendOptions)
 
 type sendOptions struct {
 	muteSound                 bool
+	noFocus                   bool
 	hookPresentation          *HookPresentation
 	executionContext          context.Context
 	runtimeRoot, nativeHelper string
@@ -37,6 +38,12 @@ func WithHookPresentation(content HookPresentation) SendOption {
 // centre and is visible once the user is available again.
 func WithoutSound() SendOption {
 	return func(o *sendOptions) { o.muteSound = true }
+}
+
+// WithoutFocus preserves the banner and sound while suppressing all click
+// actions for this particular notification. It never changes global policy.
+func WithoutFocus() SendOption {
+	return func(o *sendOptions) { o.noFocus = true }
 }
 
 // resolveSendOptions folds the variadic options into a value. A nil option is
