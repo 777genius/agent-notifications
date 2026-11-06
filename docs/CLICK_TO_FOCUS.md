@@ -247,7 +247,7 @@ If the Python API is not available, the plugin falls back to standard `tmux sele
 
 ## Windows
 
-Clicking a notification raises the terminal **window** that started the task. Enabled by the same `clickToFocus` flag; no extra configuration. In Warp, the toast also carries `WARP_FOCUS_URL`, and the click handler opens that session deep link first so the originating tab/pane is selected before the generic HWND fallback.
+For the **existing qualified Windows terminal routes**, clicking a notification raises the terminal **window** that started the task. This is **not** a Windows focus route for Qoder/Gemini/Cursor, which remain informational-only outside verified local Linux/X11. For the existing route, the `clickToFocus` setting applies; in Warp, the toast can carry `WARP_FOCUS_URL` to select the originating tab/pane before the generic HWND fallback.
 
 How it works (no admin rights, no COM server):
 
