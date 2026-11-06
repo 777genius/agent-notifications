@@ -30,7 +30,15 @@ func selectTerminalNotifierArgsWithDetector(title, message, bundleID, cwd, ghost
 			logging.Debug("%s detected, using multiplexer-specific -execute", muxName)
 			return muxArgs
 		} else if muxName != "" {
-			logging.Debug("%s detected but target capture failed, falling back to -activate", muxName)
+			logging.Debug("%s detected but target capture failed", muxName)
+		}
+		// A cwd is not an authenticated Claude session identity. For ordinary
+		// Ghostty notifications a missing captured terminal ID must never
+		// create an approximate click action or fall back to activating the app.
+		// An independently verified multiplexer target above remains eligible.
+		if isGhosttyBundleID(bundleID) && strings.TrimSpace(ghosttyTerminalID) == "" {
+			logging.Debug("Ghostty click disabled: no verified terminal ID")
+			clickToFocus = false
 		}
 	}
 	return buildTerminalNotifierArgsWithOptions(title, message, bundleID, cwd, ghosttyTerminalID, clickToFocus)
