@@ -84,6 +84,10 @@ newroot="$profile/.claude/plugins/cache/claude-notifications-go/claude-notificat
 oldroot="$profile/.claude/plugins/cache/claude-notifications-go/claude-notifications-go/1.51.0"
 export XDG_CONFIG_HOME="$profile/.config" INSTALL_TARGET_DIR="$newroot/bin"
 mkdir -p "$INSTALL_TARGET_DIR" "$XDG_CONFIG_HOME/agent-notifications"
+# The Go ledger records canonical paths. Git Bash can map /tmp to a
+# different physical root, so the fixture must store the physical path too.
+canonical_newroot="$(cd -P -- "$newroot" && pwd -P)"
+oldroot="${canonical_newroot%/*}/1.51.0"
 printf '%s\n' 'agent-notifications-managed-writer-protocol-v1' > "$INSTALL_TARGET_DIR/claude-notifications-linux-amd64"
 chmod +x "$INSTALL_TARGET_DIR/claude-notifications-linux-amd64"
 # A logical cache alias must compare against the physical root in the ledger.
@@ -92,6 +96,8 @@ alias_root="$profile/cache-alias"
 alias_new="$alias_root/plugins/cache/claude-notifications-go/claude-notifications-go/1.51.2"
 alias_old_physical="$alias_base/plugins/cache/claude-notifications-go/claude-notifications-go/1.51.0"
 mkdir -p "$alias_base/plugins/cache/claude-notifications-go/claude-notifications-go/1.51.2/bin"
+canonical_alias_newroot="$(cd -P -- "$alias_base/plugins/cache/claude-notifications-go/claude-notifications-go/1.51.2" && pwd -P)"
+alias_old_physical="${canonical_alias_newroot%/*}/1.51.0"
 ln -s "$alias_base" "$alias_root"
 printf '%s\n' 'agent-notifications-managed-writer-protocol-v1' > "$alias_new/bin/claude-notifications-linux-amd64"
 chmod +x "$alias_new/bin/claude-notifications-linux-amd64"
@@ -115,7 +121,7 @@ for case in stale aliased same malformed foreign offline; do
     case "$case" in
         stale|offline) root_in_ledger="$oldroot" ;;
         aliased) INSTALL_TARGET_DIR="$alias_new/bin"; export INSTALL_TARGET_DIR; root_in_ledger="$alias_old_physical" ;;
-        same) root_in_ledger="$newroot" ;;
+        same) root_in_ledger="$canonical_newroot" ;;
         foreign) root_in_ledger="$profile/other-managed-runtime" ;;
         malformed) root_in_ledger="$oldroot" ;;
     esac
