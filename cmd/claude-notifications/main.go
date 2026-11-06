@@ -8,12 +8,12 @@ import (
 	"strings"
 	"time"
 
+	notifyruntime "github.com/777genius/agent-notifications/internal/agentnotify/runtime"
 	"github.com/777genius/agent-notifications/internal/config"
 	"github.com/777genius/agent-notifications/internal/errorhandler"
 	"github.com/777genius/agent-notifications/internal/installruntime"
 	"github.com/777genius/agent-notifications/internal/notifier"
 	"github.com/777genius/agent-notifications/internal/thirdpartynotices"
-	notifyruntime "github.com/777genius/agent-notifications/internal/agentnotify/runtime"
 )
 
 var version = config.ConsumerVersion
