@@ -79,7 +79,7 @@ func TestWithoutFocusKeepsInformationalBanner(t *testing.T) {
 	previous := beeepNotify
 	t.Cleanup(func() { beeepNotify = previous })
 	called := 0
-	beeepNotify = func(_, _, _ string) error {
+	beeepNotify = func(_, _ string, _ any) error {
 		called++
 		return nil
 	}
