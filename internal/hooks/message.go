@@ -13,6 +13,16 @@ import (
 // generateMessage generates a notification body and action summary.
 // If messages are provided (from handleStopEvent), uses them directly to avoid re-reading the transcript.
 func (h *Handler) generateMessage(ev Event, status analyzer.Status, messages []jsonl.Message, insight *TurnInsight) (body, actions string) {
+	// A permission prompt must describe the actual host request, not an
+	// unrelated transcript summary. Keep the body bounded and one-line.
+	if ev.Product == ProductClaude && status == analyzer.StatusPermissionRequest {
+		if p, ok := ev.Payload.(NotificationPayload); ok {
+			if message := strings.Join(strings.Fields(p.Message), " "); message != "" {
+				return truncateRunes(message, 180), ""
+			}
+		}
+		return summary.GenerateSimple(status, h.cfg), ""
+	}
 	// Codex bodies come from payload fields, never from the Claude-format
 	// transcript parser: the Codex rollout JSONL is a different schema.
 	if ev.Product == ProductCodex || ev.Product == ProductQoder {

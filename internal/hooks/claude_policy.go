@@ -25,8 +25,11 @@ func (h *Handler) classifyClaudeHook(ev Event, keys eventKeys, bench *benchmark.
 	case PreToolUsePayload:
 		return h.classifyInteractiveTool(ev, p, keys.stateKey), nil
 	case NotificationPayload:
-		logging.Debug("Notification event received → question status")
-		status = analyzer.StatusQuestion
+		if p.NotificationType == "permission_prompt" {
+			status = analyzer.StatusPermissionRequest
+		} else {
+			status = analyzer.StatusQuestion
+		}
 	case StopPayload:
 		// A Stop event is the MAIN agent finishing, so suppress only when its
 		// transcript_path actually points at a subagent/teammate transcript

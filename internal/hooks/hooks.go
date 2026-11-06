@@ -27,6 +27,8 @@ import (
 type HookData struct {
 	SessionTitle         json.RawMessage `json:"session_title,omitempty"`
 	ToolInput            json.RawMessage `json:"tool_input,omitempty"`
+	NotificationType     string          `json:"notification_type,omitempty"`
+	Message              string          `json:"message,omitempty"`
 	TranscriptPath       string          `json:"transcript_path"`
 	LastAssistantMessage string          `json:"last_assistant_message,omitempty"`
 	SessionID            string          `json:"session_id"`
