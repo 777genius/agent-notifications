@@ -8,6 +8,8 @@ import (
 	"strings"
 )
 
+// codexNativeTitle resolves the latest exact-session title from the local
+// Codex index after validating the optional rollout's ownership.
 func codexNativeTitle(id, transcript string) string {
 	home := os.Getenv("CODEX_HOME")
 	if home == "" {
