@@ -725,8 +725,8 @@ Set-Acl -LiteralPath $env:CLAUDE_SDK_TEST_LAB -AclObject $acl
                 "ExitPlanMode", "plan_ready", "Plan", "TEST-plan"))
             self.check("PreToolUse_AskUserQuestion_question", lambda: self.interactive(
                 "AskUserQuestion", "question", "Question", "TEST-question"))
-            self.check("Notification_permission_prompt_question", lambda: self.emit(
-                "Notification", "TEST-permission", "question", "Question",
+            self.check("Notification_permission_prompt_permission_request", lambda: self.emit(
+                "Notification", "TEST-permission", "permission_request", "Fixture permission needed",
                 fields={"notification_type": "permission_prompt", "message": "Fixture permission needed"}))
             self.check("Stop_message_installed_and_actual_wrapper_argv", lambda: self.emit(
                 "Stop", "TEST-stop", "task_complete", "Stop fixture complete.", trace=True,

@@ -52,7 +52,7 @@ func (ClaudeSource) Decode(_ context.Context, hookEvent string, input io.Reader)
 	case "PreToolUse":
 		ev.Payload = PreToolUsePayload{ToolName: wire.ToolName, ToolInput: append(json.RawMessage(nil), wire.ToolInput...)}
 	case "Notification":
-		ev.Payload = NotificationPayload{}
+		ev.Payload = NotificationPayload{NotificationType: wire.NotificationType, Message: wire.Message}
 	case "Stop":
 		ev.Payload = StopPayload{AssistantMessage: wire.LastAssistantMessage}
 	case "SubagentStop":
