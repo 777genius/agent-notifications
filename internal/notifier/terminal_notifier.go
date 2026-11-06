@@ -25,6 +25,16 @@ func selectTerminalNotifierArgs(title, message, bundleID, cwd, ghosttyTerminalID
 // The detector seam lets tests prove that disabled navigation never captures
 // or invokes a terminal multiplexer, independently of machine environment.
 func selectTerminalNotifierArgsWithDetector(title, message, bundleID, cwd, ghosttyTerminalID string, clickToFocus bool, cfg *config.Config, detect func(string, string, string, *config.Config) ([]string, string)) []string {
+	// tmux display-message without an originating TMUX_PANE reads the
+	// currently selected pane, which may have changed after the hook.
+	// For Ghostty, bypass this guessed mux action altogether. An exact
+	// stored terminal ID can still take the separate exact-ID route.
+	if clickToFocus && isGhosttyBundleID(bundleID) && IsTmux() &&
+		!strings.HasPrefix(os.Getenv("TMUX_PANE"), "%") {
+		logging.Debug("Ghostty tmux click disabled: originating pane unavailable")
+		return buildTerminalNotifierArgsWithOptions(title, message, bundleID, cwd,
+			ghosttyTerminalID, strings.TrimSpace(ghosttyTerminalID) != "")
+	}
 	if clickToFocus {
 		if muxArgs, muxName := detect(title, message, bundleID, cfg); muxArgs != nil {
 			logging.Debug("%s detected, using multiplexer-specific -execute", muxName)

@@ -98,7 +98,14 @@ func (m *Manager) AcquireLockWithTTL(sessionID string, ttlSeconds int64, hookEve
 	// An unavailable timestamp is not proof of expiry for a retained
 	// pending Stop. Preserve legacy two-second lock behavior elsewhere.
 	if ttlSeconds > 2 && age < 0 {
-		return false, nil
+		// A concurrent owner may have removed the marker between our
+		// failed exclusive create and age inspection. Retry O_EXCL once,
+		// without ever deleting an existing unknown-age marker.
+		created, err = platform.AtomicCreateFile(lockPath)
+		if err != nil {
+			return false, fmt.Errorf("failed to retry unknown-age lock: %w", err)
+		}
+		return created, nil
 	}
 	if age >= 0 && age < ttlSeconds {
 		return false, nil

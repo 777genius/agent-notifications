@@ -338,3 +338,22 @@ func TestAcquireLockWithTTLFailsClosedOnUnknownAge(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, acquired, "unknown timestamp cannot prove a delayed lease expired")
 }
+
+func TestAcquireLockWithTTLRecoversAfterConcurrentOwnerRelease(t *testing.T) {
+	root := t.TempDir()
+	owner := &Manager{tempDir: root}
+	acquired, err := owner.AcquireLockWithTTL("released-between-checks", 60, "Stop")
+	require.NoError(t, err)
+	require.True(t, acquired)
+	// Simulate an owner releasing after O_EXCL says the marker exists,
+	// but before a second claimant reads the age.
+	other := &Manager{tempDir: root, fileAge: func(path string) int64 {
+		if err := os.Remove(path); err != nil {
+			t.Fatalf("simulated owner release: %v", err)
+		}
+		return -1
+	}}
+	acquired, err = other.AcquireLockWithTTL("released-between-checks", 60, "Stop")
+	require.NoError(t, err)
+	require.True(t, acquired, "released marker should be atomically acquired")
+}

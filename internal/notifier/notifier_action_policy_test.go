@@ -94,6 +94,8 @@ func TestSelectTerminalNotifierArgsGhosttyRequiresOrigin(t *testing.T) {
 		}
 	})
 	t.Run("verified multiplexer remains eligible", func(t *testing.T) {
+		t.Setenv("TMUX", "/tmp/test-tmux.sock,2,0")
+		t.Setenv("TMUX_PANE", "%17")
 		detector := func(_, _, _ string, _ *config.Config) ([]string, string) {
 			return []string{"-title", "Title", "-message", "Body", "-execute", "verified-pane"}, "tmux"
 		}
@@ -115,4 +117,39 @@ func TestSelectTerminalNotifierArgsGhosttyRequiresOrigin(t *testing.T) {
 			t.Fatal("disabled focus invoked multiplexer detector")
 		}
 	})
+}
+
+// When TMUX_PANE is unavailable, tmux's active-pane lookup can select an
+// unrelated pane after a focus change. Ghostty must never use that target.
+func TestGhosttyRejectsUnboundTmuxActivePaneFallback(t *testing.T) {
+	t.Setenv("TMUX", "/tmp/test-tmux.sock,2,0")
+	t.Setenv("TMUX_PANE", "")
+	cfg := config.DefaultConfig()
+	called := false
+	detector := func(_, _, _ string, _ *config.Config) ([]string, string) {
+		called = true
+		return []string{"-title", "Title", "-message", "Body", "-execute", "wrong-active-pane"}, "tmux"
+	}
+	args := selectTerminalNotifierArgsWithDetector("Title", "Body", "com.mitchellh.ghostty", "/repo", "", true, cfg, detector)
+	if called {
+		t.Fatal("unverified Ghostty tmux consulted the guessed active pane")
+	}
+	for _, arg := range args {
+		if arg == "-activate" || arg == "-execute" {
+			t.Fatalf("unverified origin installed a focus action: %v", args)
+		}
+	}
+	withID := selectTerminalNotifierArgsWithDetector("Title", "Body", "com.mitchellh.ghostty", "/repo", "term-17", true, cfg, detector)
+	if called {
+		t.Fatal("exact Ghostty ID must not consult the guessed tmux pane")
+	}
+	found := false
+	for _, arg := range withID {
+		if strings.Contains(arg, "--ghostty-terminal-id") && strings.Contains(arg, "term-17") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("exact Ghostty terminal callback missing: %v", withID)
+	}
 }

@@ -10,6 +10,8 @@ import (
 
 	"github.com/777genius/agent-notifications/internal/analyzer"
 	"github.com/777genius/agent-notifications/internal/config"
+	"github.com/777genius/agent-notifications/internal/platform"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -248,7 +250,7 @@ func TestClaudeStopDelayedDesktopReservesTurnPastTwoSecondLock(t *testing.T) {
 	cfg := focusNotifyConfig(nil, &delay)
 	cfg.Notifications.Webhook.Enabled = false
 	h, delivered, _ := newTestHandler(t, cfg)
-	sessionID := "test-delayed-stop-pending-20261106"
+	sessionID := "test-delayed-stop-pending-"+uuid.NewString()
 	transcript := createTempTranscript(t, buildTranscriptWithTools([]string{"Write"}, 300))
 	payload := HookData{SessionID: sessionID, TranscriptPath: transcript, LastAssistantMessage: "Done.", CWD: t.TempDir()}
 	oldSleep := sleepFunc
@@ -279,7 +281,7 @@ func TestClaudeStopDelayedDesktopReservesTurnPastTwoSecondLock(t *testing.T) {
 		t.Fatal("first Stop never reached the delayed desktop branch")
 	}
 	key := claudeStopTurnLockKey(sessionID, "2025-01-01T12:00:00Z")
-	lock := filepath.Join(os.TempDir(), "claude-notification-"+key+"-Stop.lock")
+	lock := filepath.Join(platform.TempDir(), "claude-notification-"+key+"-Stop.lock")
 	defer func() { _ = h.dedupMgr.ReleaseLock(key, "Stop") }()
 	old := time.Now().Add(-3 * time.Second)
 	if err := os.Chtimes(lock, old, old); err != nil {
@@ -352,7 +354,7 @@ func TestClaudeStopDelayedDesktopNoEffectReleasesTurnReservation(t *testing.T) {
 	cfg := focusNotifyConfig(&focused, &delay)
 	cfg.Notifications.Webhook.Enabled = false
 	h, n, _ := newTestHandler(t, cfg)
-	sessionID := "test-delayed-stop-noeffect-20261106"
+	sessionID := "test-delayed-stop-noeffect-"+uuid.NewString()
 	transcript := createTempTranscript(t, buildTranscriptWithTools([]string{"Write"}, 300))
 	payload := HookData{SessionID: sessionID, TranscriptPath: transcript, LastAssistantMessage: "Done.", CWD: t.TempDir()}
 	oldSleep := sleepFunc
@@ -386,7 +388,7 @@ func TestClaudeStopDelayedDesktopDifferentUserTurnIsIndependent(t *testing.T) {
 	cfg := focusNotifyConfig(nil, &delay)
 	cfg.Notifications.Webhook.Enabled = false
 	h, n, _ := newTestHandler(t, cfg)
-	sessionID := "test-delayed-stop-second-turn-20261106"
+	sessionID := "test-delayed-stop-second-turn-"+uuid.NewString()
 	transcript := createTempTranscript(t, buildTranscriptWithTools([]string{"Write"}, 300))
 	payload := HookData{SessionID: sessionID, TranscriptPath: transcript, LastAssistantMessage: "Done.", CWD: t.TempDir()}
 	oldSleep := sleepFunc
