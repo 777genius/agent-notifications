@@ -37,7 +37,7 @@ func TestStrictTerminalNativeSender(t *testing.T) {
 	ledger, err := installruntime.Commit(ctx, installruntime.Request{
 		ControlRoot: control, RuntimeRoot: runtime, Owner: "existing-installer",
 		ConsumerID: "qoder-notifications",
-		Files: []installruntime.File{{Path: hook, Data: []byte("inert TEST hook"), Mode: 0700}},
+		Files:      []installruntime.File{{Path: hook, Data: []byte("inert TEST hook"), Mode: 0700}},
 	})
 	if err != nil {
 		t.Fatal(err)
