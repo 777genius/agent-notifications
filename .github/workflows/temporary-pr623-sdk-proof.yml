@@ -46,10 +46,7 @@ jobs:
           p.write_text("".join(output))
           PY
           gofmt -w _sdk/install/integrationctl/agentplugins/installer/group_user_prepared_completion.go
-          (cd _sdk/install/integrationctl/agentplugins && go test -count=1 -run '^TestUserGroupPreparedUpdate(RepeatedIdenticalFrozenDeliveries|ConflictingRepeatedFrozenDeliveryFailsClosed)          go mod edit -replace=github.com/777genius/plugin-kit-ai/install/integrationctl=./_sdk/install/integrationctl
-          go mod edit -replace=github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins=./_sdk/install/integrationctl/agentplugins
-          go test -mod=mod -count=1 -run '^TestGroupUpdateCodexLocalCompletesAndPreservesUnselectedClaude$' -v ./internal/agentnotify/portablesetup
- ./installer)
+          (cd _sdk/install/integrationctl/agentplugins && go test -count=1 -run '^TestUserGroupPreparedUpdate(RepeatedIdenticalFrozenDeliveries|ConflictingRepeatedFrozenDeliveryFailsClosed)$' ./installer)
           go mod edit -replace=github.com/777genius/plugin-kit-ai/install/integrationctl=./_sdk/install/integrationctl
           go mod edit -replace=github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins=./_sdk/install/integrationctl/agentplugins
           go test -mod=mod -count=1 -run '^TestGroupUpdateCodexLocalCompletesAndPreservesUnselectedClaude$' -v ./internal/agentnotify/portablesetup
