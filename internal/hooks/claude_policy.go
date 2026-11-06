@@ -182,7 +182,7 @@ func (h *Handler) handleTeammateIdle(ev Event, p TeammateIdlePayload) error {
 	// A suppressed teammate must not consume the team's completion claim.
 	// An eligible lead Stop can still claim the already-recorded idle members.
 	status := analyzer.StatusTaskComplete
-	gitBranch := platform.GetGitBranch(ev.Session.CWD)
+	gitBranch := h.gitBranch(ev.Session.CWD)
 	folderName := filepath.Base(ev.Session.CWD)
 	if h.cfg.ShouldFilter(string(status), gitBranch, folderName) {
 		logging.Debug("TeammateIdle: notification suppressed by filter: status=%s branch=%q folder=%s", status, gitBranch, folderName)
@@ -209,11 +209,15 @@ func (h *Handler) handleTeammateIdle(ev Event, p TeammateIdlePayload) error {
 	if stateKey == "" {
 		stateKey = ev.Session.SessionID
 	}
+	// Share the admission-time branch result with delivery, even when empty.
+	// Re-running Git can exceed the host hook deadline before the banner.
+	details := h.notificationDetails(ev, nil)
+	details.branch, details.branchFetched = gitBranch, true
 	h.sendNotifications(status, body, "", ev.Session.SessionID, ev.Session.CWD, func() {
 		if err := h.stateMgr.UpdateLastNotificationWithIdentity(stateKey, status, body, "", body, "", "TeammateIdle"); err != nil {
 			logging.Warn("TeammateIdle: failed to update notification state: %v", err)
 		}
-	}, h.notificationDetails(ev, nil))
+	}, details)
 
 	logging.Debug("=== Hook completed: TeammateIdle (team notification sent) ===")
 	return nil
