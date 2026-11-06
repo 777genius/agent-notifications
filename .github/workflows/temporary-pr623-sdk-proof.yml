@@ -1,0 +1,49 @@
+name: Temporary PR623 SDK proof diagnosis
+on:
+  push:
+    branches: [fix/group-known-targets-595-20261105]
+    paths:
+      - .github/workflows/temporary-pr623-sdk-proof.yml
+permissions:
+  contents: read
+jobs:
+  trace-user-group-completion:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: 777genius/universal-agent-plugins
+          ref: e68925df597ee48f5af56592bd8007455e9aeebd
+          path: _sdk
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Trace exact SDK completion predicates without changing production dependencies
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("_sdk/install/integrationctl/agentplugins/installer/group_user_prepared_completion.go")
+          lines = p.read_text().splitlines(keepends=True)
+          output = []
+          for index, line in enumerate(lines, 1):
+              indent = line[:len(line)-len(line.lstrip())]
+              if line.strip() == "return false":
+                  output.append(indent + 'fmt.Printf("SDK-PROOF-FAIL at line '+str(index)+'\\n")\n')
+              if line.lstrip().startswith("return binding.ClientBindingID == frozen.BindingID"):
+                  output.append(indent+'fmt.Printf("SDK-PROOF-BINDING saved=%+v frozen=%+v plan=%+v\\n", binding, frozen, plan)\n')
+              if line.lstrip().startswith("return err == nil && plan.Scope"):
+                  output.append(indent+'fmt.Printf("SDK-PROOF-TARGET err=%v frozen=%+v plan=%+v\\n", err, frozen, plan)\n')
+              if line.lstrip().startswith("return hasPrepared &&"):
+                  output.append(indent+'fmt.Printf("SDK-PROOF-COMPLETE prepared=%t remaining=%d\\n", hasPrepared, len(targets))\n')
+              output.append(line)
+          p.write_text("".join(output))
+          PY
+          gofmt -w _sdk/install/integrationctl/agentplugins/installer/group_user_prepared_completion.go
+          go mod edit -replace=github.com/777genius/plugin-kit-ai/install/integrationctl=./_sdk/install/integrationctl
+          go mod edit -replace=github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins=./_sdk/install/integrationctl/agentplugins
+          go test -mod=mod -count=1 -run '^TestGroupUpdateCodexLocalCompletesAndPreservesUnselectedClaude$' -v ./internal/agentnotify/portablesetup
