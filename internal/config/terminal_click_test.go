@@ -84,7 +84,11 @@ func TestTerminalClickDeniesChangedSelection(t *testing.T) {
 }
 
 func TestTerminalClickRecheckRejectsSwappedOrRevokedConfig(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.json")
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "config.json")
 	original := []byte(`{"schemaVersion":2,"agents":{"qoder":{"notifications":{"desktop":{"clickToFocus":true,"terminalClickConsentVersion":1}}}}}`)
 	if err := os.WriteFile(path, original, 0600); err != nil {
 		t.Fatal(err)
@@ -124,7 +128,10 @@ func TestTerminalClickLinkedParentDeniedAtSelection(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("Linux config selection contract")
 	}
-	root := t.TempDir()
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	actual := filepath.Join(root, "actual")
 	alias := filepath.Join(root, "linked-parent")
 	if err := os.MkdirAll(actual, 0700); err != nil {

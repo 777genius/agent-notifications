@@ -57,6 +57,32 @@ In the shared file selected by `config path`:
 | `clickToFocus` | `true` | Enable click-to-focus on supported macOS, Linux and Windows terminals |
 | `terminalBundleId` | `""` | macOS only: override auto-detected terminal. Use bundle ID like `com.googlecode.iterm2` |
 
+### Guarded local CLI routing (Qoder, Gemini CLI, Cursor CLI)
+
+This new route is **separate from the legacy terminal-app matrix above**. For Qoder CLI, Gemini CLI and Cursor CLI, an inherited or previously saved `clickToFocus: true` does **not** enable navigation. The existing agent support matrix remains unchanged until each installed CLI/OS pair has been physically qualified.
+
+The strict route is limited to a **verified local Linux/X11 window**. It requires the selected installed agent, a real terminal ancestor confirmed by the X11 XRes server (not a window title or `_NET_WM_PID`), the current installation generation, and the unchanged, explicit agent consent. The daemon authenticates its local sender and rechecks consent, window lifetime and installation when the notification is clicked. An unverified origin, SSH/remote/headless session, Wayland compositor, or macOS/Windows falls back to an ordinary informational notification rather than focusing the last-used window.
+
+For an eligible test profile, **back up the selected configuration** and explicitly enable the agent in an existing schema-2 document. This is an example of the relevant fields, not a replacement for other settings:
+
+```json
+{
+  "schemaVersion": 2,
+  "notifications": { "desktop": { "clickToFocus": true } },
+  "agents": {
+    "qoder": {
+      "notifications": {
+        "desktop": { "clickToFocus": true, "terminalClickConsentVersion": 1 }
+      }
+    }
+  }
+}
+```
+
+Use the same agent-local settings under `agents.gemini` or `agents.cursor` for those agents. The global `clickToFocus: false` remains an absolute veto. The existing `config edit` command does not edit `/agents/...` paths, so edit and inspect schema-2 agent profiles manually, preserving all other profiles. Do not enable navigation by copying an old saved `clickToFocus: true` alone.
+
+The CI workflow `strict-terminal-native-linux.yml` tests a real X11 desktop, the product daemon, notification-center banner, physical mouse click, and negative revoke/spoof cases. Its sender is an isolated native Go fixture **not a real authenticated Qoder, Gemini or Cursor turn**, so this proof by itself does not grant general agent support or claim qualification on every terminal. A local process running with the user's own OS privileges is outside this notifier's sandbox; this route prevents accidental/wrong target selection, not arbitrary actions from already-compromised same-user processes.
+
 ## macOS
 
 Auto-detects your terminal via `TERM_PROGRAM` / `__CFBundleIdentifier`. The installer provides the signed, notarized `ClaudeNotifier.app` helper. Its bundled `terminal-notifier-modern` executable handles delivery; this is not a dependency on the standalone `terminal-notifier` package.
