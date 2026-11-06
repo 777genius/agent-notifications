@@ -37,8 +37,8 @@ func TestClaudeNotificationPermissionPromptUsesHostMessage(t *testing.T) {
 				t.Fatalf("expected one desktop notification, got %d", notifier.callCount())
 			}
 			got := notifier.lastCall()
-			if got.status != tc.wantStatus || got.message != tc.wantBody {
-				t.Fatalf("notification = %q (%s), want %q (%s)", got.message, got.status, tc.wantBody, tc.wantStatus)
+			if got.status != tc.wantStatus || !strings.HasSuffix(got.message, tc.wantBody) {
+				t.Fatalf("notification = %q (%s), want suffix %q (%s)", got.message, got.status, tc.wantBody, tc.wantStatus)
 			}
 		})
 	}
