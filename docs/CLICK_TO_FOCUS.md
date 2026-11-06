@@ -81,7 +81,7 @@ For an eligible test profile, **back up the selected configuration** and explici
 
 Use the same agent-local settings under `agents.gemini` or `agents.cursor` for those agents. The global `clickToFocus: false` remains an absolute veto. The existing `config edit` command does not edit `/agents/...` paths, so edit and inspect schema-2 agent profiles manually, preserving all other profiles. Do not enable navigation by copying an old saved `clickToFocus: true` alone.
 
-The CI workflow `strict-terminal-native-linux.yml` tests a real X11 desktop, the product daemon, notification-center banner, physical mouse click, and negative revoke/spoof cases. Its sender is an isolated native Go fixture **not a real authenticated Qoder, Gemini or Cursor turn**, so this proof by itself does not grant general agent support or claim qualification on every terminal. A local process running with the user's own OS privileges is outside this notifier's sandbox; this route prevents accidental/wrong target selection, not arbitrary actions from already-compromised same-user processes.
+The CI workflow `strict-terminal-native-linux.yml` tests a real X11 desktop, the product daemon, notification-center banner, synthetic X11 click through `xdotool` under Xvfb, and negative revoke/spoof cases. Its sender is an isolated native Go fixture **not a real authenticated Qoder, Gemini or Cursor turn**, so this proof by itself does not grant general agent support or claim qualification on every terminal. A local process running with the user's own OS privileges is outside this notifier's sandbox; this route prevents accidental/wrong target selection, not arbitrary actions from already-compromised same-user processes.
 
 ## macOS
 

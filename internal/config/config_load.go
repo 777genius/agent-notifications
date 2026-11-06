@@ -173,6 +173,7 @@ func loadFromPluginRoot(pluginRoot string, agent AgentID, warn func(string)) (*C
 			initial, resolveErr := Resolve(raw)
 			if resolveErr != nil || !initial.Exists || initial.Path != selection.Path {
 				cfg.BindTerminalClickSelection("")
+				warn("terminal click-to-focus disabled: could not verify the selected config path without resolving parent links")
 			}
 		}
 	}
