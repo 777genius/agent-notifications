@@ -137,8 +137,11 @@ func runGeminiEvent(args []string, input io.ReadCloser, output io.Writer) (code 
 			diagnostic.fail(err, false)
 			return
 		}
-		consumer := geminievent.Consumer{Gate: gate, Binding: gate.binding(), Config: cfg, Clock: clock,
-			Cache: &geminievent.RecentCache{Root: filepath.Join(a.ControlRoot, "gemini-observations"), Clock: clock}, Desktop: newGeminiDesktopPort(gate)}
+		binding := gate.binding()
+		origin := notifier.CaptureLocalTerminal(ctx, cfg, config.AgentGemini, a.ControlRoot, binding.InstallationID, binding.Generation)
+		consumer := geminievent.Consumer{Gate: gate, Binding: binding, Config: cfg, Clock: clock,
+			Cache: &geminievent.RecentCache{Root: filepath.Join(a.ControlRoot, "gemini-observations"), Clock: clock},
+			Desktop: newGeminiDesktopPort(gate), TerminalClick: origin}
 		consumer.SendWebhook = func(ctx context.Context, cfg *config.Config, message webhook.SendContext) error {
 			release, err := gate.acquire(ctx, geminievent.WebhookChannel)
 			if err != nil {

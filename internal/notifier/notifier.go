@@ -120,6 +120,15 @@ func (n *Notifier) SendDesktop(status analyzer.Status, message, sessionID, cwd s
 		logging.Warn("App icon not found: %s, using default", appIcon)
 		appIcon = ""
 	}
+	// Strict local terminal actions are separate from the historical
+	// heuristic focus routes. A target is supplied only by a verified
+	// installed CLI composer, never from a notification body or session ID.
+	if sendOpts.terminal != nil {
+		if focusEnabled && platform.IsLinux() {
+			return n.sendVerifiedTerminal(title, cleanMessage, appIcon, statusInfo.Sound, sendOpts)
+		}
+		focusEnabled = false // unqualified platform: informational only
+	}
 	if sendOpts.executionContext != nil {
 		return n.sendNativeDesktopContext(sendOpts.executionContext, statusInfo.Sound, title, cleanMessage, subtitle, sessionID, cwd, appIcon, sendOpts)
 	}

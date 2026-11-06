@@ -296,6 +296,7 @@ func (s *Server) handleNotification(req *NotifyRequest) (*NotifyResponse, error)
 	return &NotifyResponse{
 		Success:        true,
 		NotificationID: id,
+		FocusEnabled: strict && strictAllowed,
 	}, nil
 }
 

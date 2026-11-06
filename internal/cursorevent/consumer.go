@@ -48,6 +48,7 @@ type Consumer struct {
 	Gate        Gate
 	Config      *config.Config
 	Desktop     notification.DeliveryPort
+	TerminalClick *notification.TerminalTarget
 	SendWebhook WebhookSender
 	Clock       observation.Clock
 	Cache       *observation.RecentCache
@@ -115,9 +116,10 @@ func (c Consumer) Consume(parent context.Context, f source.Facts, d notification
 				out.Reason = reason
 			} else {
 				attempted = true
-				out.Desktop = deliver(ctx, c.Desktop, notification.InformationalDesktopRequest(
+				request := notification.WithTerminalClick(notification.InformationalDesktopRequest(
 					notification.Content{Title: "Cursor CLI", Body: "Cursor CLI is stopping", Category: "info"},
-					uuid.NewString(), d, c.Config.IsSystemSoundEnabled()))
+					uuid.NewString(), d, c.Config.IsSystemSoundEnabled()), c.TerminalClick, c.Config.TerminalClickAuthorized())
+				out.Desktop = deliver(ctx, c.Desktop, request)
 			}
 		}
 	}

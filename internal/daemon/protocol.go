@@ -69,6 +69,7 @@ type NotifyRequest struct {
 type NotifyResponse struct {
 	Success        bool   `json:"success"`
 	NotificationID uint32 `json:"notification_id"`
+	FocusEnabled   bool   `json:"focus_enabled,omitempty"`
 	Error          string `json:"error,omitempty"`
 }
 

@@ -1,6 +1,10 @@
 package notifier
 
-import "context"
+import (
+	"context"
+
+	"github.com/777genius/agent-notifications/internal/notification"
+)
 
 // SendOption customises a single desktop notification delivery.
 type SendOption func(*sendOptions)
@@ -11,6 +15,7 @@ type sendOptions struct {
 	hookPresentation          *HookPresentation
 	executionContext          context.Context
 	runtimeRoot, nativeHelper string
+	terminal *notification.TerminalTarget
 }
 
 // WithInstalledRuntime supplies paths already verified by the installation
@@ -44,6 +49,17 @@ func WithoutSound() SendOption {
 // actions for this particular notification. It never changes global policy.
 func WithoutFocus() SendOption {
 	return func(o *sendOptions) { o.noFocus = true }
+}
+
+// WithTerminalTarget accepts only a trusted composition snapshot. The
+// native backend independently checks the config, installation and window.
+func WithTerminalTarget(origin *notification.TerminalTarget) SendOption {
+	return func(o *sendOptions) {
+		if origin != nil {
+			snapshot := *origin
+			o.terminal = &snapshot
+		}
+	}
 }
 
 // resolveSendOptions folds the variadic options into a value. A nil option is

@@ -73,7 +73,11 @@ func (c *Client) SendNotificationContext(ctx context.Context, title, body, appIc
 			FocusZellijTabName: hints.ZellijTabName,
 			FocusZellijMode:    hints.ZellijMode,
 			Timeout:            timeout,
+			Strict:             hints.Strict,
 		},
+	}
+	if hints.Strict != nil {
+		req.Type = MessageTypeNotifyStrict
 	}
 
 	resp, err := c.sendContext(ctx, req)

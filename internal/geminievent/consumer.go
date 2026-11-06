@@ -43,6 +43,7 @@ type Consumer struct {
 	Binding     Binding
 	Config      *config.Config
 	Desktop     notification.DeliveryPort
+	TerminalClick *notification.TerminalTarget
 	Clock       Clock
 	Cache       *RecentCache
 	SendWebhook WebhookSender
@@ -140,10 +141,10 @@ func (c Consumer) Consume(parent context.Context, facts geminisource.Facts, dead
 		} else if reason := claim(DesktopChannel); reason != "" {
 			out.Desktop = reason
 		} else {
-			// Explicit sound consent requests only the OS default cue.
-			// This observer has no trusted terminal or chat target.
-			request := notification.InformationalDesktopRequest(
-				content, uuid.NewString(), deadline, c.Config.IsSystemSoundEnabled())
+			// Default remains informational. Only the trusted composer can
+			// supply a verified local terminal for the opted-in agent.
+			request := notification.WithTerminalClick(notification.InformationalDesktopRequest(
+				content, uuid.NewString(), deadline, c.Config.IsSystemSoundEnabled()), c.TerminalClick, c.Config.TerminalClickAuthorized())
 			out.Desktop = "unknown"
 			out.Desktop = deliver(ctx, c.Desktop, request)
 		}

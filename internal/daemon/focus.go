@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/777genius/agent-notifications/internal/notification"
 	"github.com/777genius/agent-notifications/internal/warpfocus"
 )
 
@@ -56,6 +57,7 @@ type FocusHints struct {
 	ZellijPaneID  string
 	ZellijTabName string
 	ZellijMode    string
+	Strict        *notification.TerminalTarget
 }
 
 var openFocusURL = warpfocus.Open
