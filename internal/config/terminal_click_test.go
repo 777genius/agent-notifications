@@ -1,6 +1,11 @@
 package config
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"runtime"
+	"testing"
+)
 
 func TestFreshTerminalClickConsent(t *testing.T) {
 	cases := []struct {
@@ -75,5 +80,42 @@ func TestTerminalClickDeniesChangedSelection(t *testing.T) {
 	ordinary.BindTerminalClickSelection("/TEST/config.json")
 	if !ordinary.TerminalClickAuthorized() {
 		t.Fatal("unchanged regular file selection lost consent")
+	}
+}
+
+func TestTerminalClickRecheckRejectsSwappedOrRevokedConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	original := []byte(`{"schemaVersion":2,"agents":{"qoder":{"notifications":{"desktop":{"clickToFocus":true,"terminalClickConsentVersion":1}}}}}`)
+	if err := os.WriteFile(path, original, 0600); err != nil {
+		t.Fatal(err)
+	}
+	doc, err := ParseDocument(original, path, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !RecheckTerminalClickConsent(path, doc.Revision(), AgentQoder) {
+		t.Fatal("unchanged selected config lost explicit consent")
+	}
+	if err := os.WriteFile(path, []byte(`{"schemaVersion":2,"agents":{"qoder":{"notifications":{"desktop":{"clickToFocus":false}}}}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if RecheckTerminalClickConsent(path, doc.Revision(), AgentQoder) {
+		t.Fatal("revoked config was still accepted")
+	}
+	if runtime.GOOS == "windows" {
+		return // Nonprivileged Windows CI cannot create symlinks reliably.
+	}
+	if err := os.WriteFile(path, original, 0600); err != nil {
+		t.Fatal(err)
+	}
+	archived := filepath.Join(filepath.Dir(path), "archived.json")
+	if err := os.Rename(path, archived); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(archived, path); err != nil {
+		t.Fatal(err)
+	}
+	if RecheckTerminalClickConsent(path, doc.Revision(), AgentQoder) {
+		t.Fatal("symlink replacement bypassed immutable selected file")
 	}
 }
