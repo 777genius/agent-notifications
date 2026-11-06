@@ -5,6 +5,7 @@
 package daemon
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -188,12 +189,13 @@ func (s *Server) handleConnection(conn net.Conn) {
 	resp.Type = req.Type
 
 	switch req.Type {
-	case MessageTypeNotify:
-		if req.Notify == nil {
-			s.sendError(conn, "missing notify payload")
+	case MessageTypeNotify, MessageTypeNotifyStrict:
+		if req.Notify == nil || (req.Type == MessageTypeNotifyStrict && req.Notify.Strict == nil) ||
+			(req.Type == MessageTypeNotify && req.Notify.Strict != nil) {
+			s.sendError(conn, "missing or conflicting notify payload")
 			return
 		}
-		notifyResp, err := s.handleNotification(req.Notify)
+		notifyResp, err := s.handleNotification(req.Notify, req.Type == MessageTypeNotifyStrict)
 		if err != nil {
 			resp.Error = err.Error()
 		} else {
@@ -235,10 +237,10 @@ func (s *Server) handleConnection(conn net.Conn) {
 }
 
 // handleNotification processes a notification request
-func (s *Server) handleNotification(req *NotifyRequest) (*NotifyResponse, error) {
+func (s *Server) handleNotification(req *NotifyRequest, strict bool) (*NotifyResponse, error) {
 	// Determine focus target
 	focusTarget := req.FocusTarget
-	if focusTarget == "" {
+	if focusTarget == "" && !strict {
 		focusTarget = GetTerminalName()
 	}
 
@@ -248,20 +250,28 @@ func (s *Server) handleNotification(req *NotifyRequest) (*NotifyResponse, error)
 		timeout = 30 * time.Second
 	}
 
-	// Create notification with click action
+	// Failure to validate a strict origin leaves an ordinary banner, with
+	// no callback; the daemon must never guess which window to raise.
+	strictAllowed := false
+	if strict {
+		op, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		strictAllowed = StrictTerminalAuthorized(op, req.Strict)
+		cancel()
+	}
 	n := notify.Notification{
 		AppName:       "claude-notifications",
 		AppIcon:       req.AppIcon,
 		Summary:       req.Title,
 		Body:          req.Body,
 		ExpireTimeout: timeout,
-		Actions: []notify.Action{
-			{Key: "default", Label: "Focus Terminal"},
-		},
 		Hints: map[string]dbus.Variant{
 			"desktop-entry":  dbus.MakeVariant(GetNotificationDesktopEntryID(focusTarget)),
 			"suppress-sound": dbus.MakeVariant(true),
 		},
+	}
+
+	if !strict || strictAllowed {
+		n.Actions = []notify.Action{{Key: "default", Label: "Focus Terminal"}}
 	}
 
 	// Send notification
@@ -270,28 +280,31 @@ func (s *Server) handleNotification(req *NotifyRequest) (*NotifyResponse, error)
 		return nil, fmt.Errorf("failed to send notification: %w", err)
 	}
 
-	// Store focus context
-	s.focusCtxMu.Lock()
-	s.focusCtx[id] = FocusHints{
-		TerminalName:  focusTarget,
-		FolderName:    req.FocusFolder,
-		ProjectPath:   req.FocusProjectPath,
-		IDEPID:        req.FocusIDEPID,
-		WindowID:      req.FocusWindowID,
-		WindowTitle:   req.FocusWindowTitle,
-		WezTermPaneID: req.FocusWezTermPaneID,
-		WezTermSocket: req.FocusWezTermSocket,
-		WarpFocusURL:  req.FocusWarpURL,
-		ZellijSession: req.FocusZellijSession,
-		ZellijPaneID:  req.FocusZellijPaneID,
-		ZellijTabName: req.FocusZellijTabName,
-		ZellijMode:    req.FocusZellijMode,
+	// A strict callback owns only its verified snapshot. Legacy focus
+	// paths retain their unchanged hints, without new agent authority.
+	if !strict || strictAllowed {
+		hints := FocusHints{
+			TerminalName: focusTarget, FolderName: req.FocusFolder,
+			ProjectPath: req.FocusProjectPath, IDEPID: req.FocusIDEPID,
+			WindowID: req.FocusWindowID, WindowTitle: req.FocusWindowTitle,
+			WezTermPaneID: req.FocusWezTermPaneID, WezTermSocket: req.FocusWezTermSocket,
+			WarpFocusURL: req.FocusWarpURL, ZellijSession: req.FocusZellijSession,
+			ZellijPaneID: req.FocusZellijPaneID, ZellijTabName: req.FocusZellijTabName,
+			ZellijMode: req.FocusZellijMode,
+		}
+		if strict {
+			captured := *req.Strict
+			hints = FocusHints{Strict: &captured}
+		}
+		s.focusCtxMu.Lock()
+		s.focusCtx[id] = hints
+		s.focusCtxMu.Unlock()
 	}
-	s.focusCtxMu.Unlock()
-
-	log.Printf("[INFO] Notification sent: ID=%d, focus_target=%s, focus_folder=%s, focus_window_id=%s, focus_window_title=%q, wezterm_pane=%s, zellij=%s/%s mode=%s",
-		id, focusTarget, req.FocusFolder, req.FocusWindowID, req.FocusWindowTitle, req.FocusWezTermPaneID,
-		req.FocusZellijSession, req.FocusZellijPaneID, req.FocusZellijMode)
+	if strict {
+		log.Printf("[INFO] Strict terminal notification sent: ID=%d, focus_enabled=%t", id, strictAllowed)
+	} else {
+		log.Printf("[INFO] Notification sent: ID=%d, focus_target=%s", id, focusTarget)
+	}
 
 	return &NotifyResponse{
 		Success:        true,
@@ -308,13 +321,26 @@ func (s *Server) onActionInvoked(sig *notify.ActionInvokedSignal) {
 		return
 	}
 
-	// Get focus target
-	s.focusCtxMu.RLock()
+	// Consume strict callbacks atomically before any potentially slow OS
+	// operation. Replayed clicks cannot trigger repeated window changes.
+	s.focusCtxMu.Lock()
 	hints, exists := s.focusCtx[sig.ID]
-	s.focusCtxMu.RUnlock()
-
+	if exists && hints.Strict != nil {
+		delete(s.focusCtx, sig.ID)
+	}
+	s.focusCtxMu.Unlock()
 	if !exists {
 		log.Printf("[WARN] No focus context for notification %d", sig.ID)
+		return
+	}
+	if hints.Strict != nil {
+		op, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+		defer cancel()
+		if err := ActivateStrictTerminal(op, hints.Strict); err != nil {
+			log.Printf("[WARN] Strict terminal focus refused")
+		} else {
+			log.Printf("[INFO] Strict terminal focus succeeded")
+		}
 		return
 	}
 

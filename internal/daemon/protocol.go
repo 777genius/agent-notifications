@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/777genius/agent-notifications/internal/notification"
 )
 
 // Common errors
@@ -25,6 +27,8 @@ type MessageType string
 
 const (
 	MessageTypeNotify MessageType = "notify"
+	// Strict focus must not be understood as the legacy approximate route.
+	MessageTypeNotifyStrict MessageType = "notify_strict"
 	MessageTypePing   MessageType = "ping"
 	MessageTypeStop   MessageType = "stop"
 )
@@ -63,6 +67,7 @@ type NotifyRequest struct {
 	FocusZellijMode    string `json:"focus_zellij_mode,omitempty"`     // "pane", "tab" or "off", resolved in the hook process
 	FocusWarpURL       string `json:"focus_warp_url,omitempty"`        // Warp pane deep link ($WARP_FOCUS_URL)
 	Timeout            int    `json:"timeout"`                         // Notification timeout in seconds
+	Strict             *notification.TerminalTarget `json:"strict,omitempty"`
 }
 
 // NotifyResponse contains the result of a notification request
