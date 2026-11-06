@@ -37,7 +37,7 @@ def qualify(binary, candidate, output):
             return lab.run(["xdotool", "getactivewindow"])[0].strip()
         def displayed():
             return int(lab.run(["dunstctl", "count", "displayed"])[0].strip())
-        for scenario in ("positive", "revoke", "spoof"):
+        for scenario in ("positive", "revoke", "policy_revoke", "spoof"):
             lab.run(["dunstctl", "close-all"])
             lab.run(["dunstctl", "history-clear"])
             N.wait_for(lambda: displayed() == 0)
@@ -84,6 +84,14 @@ def qualify(binary, candidate, output):
                     tmp.write_text(json.dumps(data) + "\n")
                     os.chmod(tmp, 0o600)
                     os.replace(tmp, cfg)
+                if scenario == "policy_revoke":
+                    policy = root / scenario / "control" / "agent-notifications.json"
+                    data = json.loads(policy.read_text())
+                    data["enabled"] = False
+                    tmp = policy.with_suffix(".test-tmp")
+                    tmp.write_text(json.dumps(data) + "\n")
+                    os.chmod(tmp, 0o600)
+                    os.replace(tmp, policy)
                 lab.run(["xdotool", "mousemove", "1100", "70", "click", "1"])
                 if scenario == "positive":
                     N.wait_for(lambda: active() == sender_window, seconds=8)

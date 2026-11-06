@@ -77,7 +77,7 @@ func (d *TerminalDesktopDelivery) Deliver(ctx context.Context, r notification.Re
 	snapshot := *r.Terminal
 	// An old daemon refuses notify_strict rather than interpreting it as a
 	// legacy approximate focus. Do not retry after an ambiguous handoff.
-	response, err := client.SendNotificationContext(op, r.Content.Title, desktopBodyWithSubtitle(r.Content), "", daemon.FocusHints{Strict: &snapshot}, 30)
+	response, err := client.SendNotificationContext(op, r.Content.Title, desktopBodyWithSubtitle(r.Content), "", daemon.FocusHints{Strict: &snapshot, StrictSound: !r.Silent && r.Policy.SoundEnabled}, 30)
 	if err != nil || response == nil || !response.Success || response.NotificationID == 0 {
 		reason := "handoff_unconfirmed"
 		if errors.Is(op.Err(), context.DeadlineExceeded) {

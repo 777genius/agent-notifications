@@ -74,6 +74,7 @@ func (c *Client) SendNotificationContext(ctx context.Context, title, body, appIc
 			FocusZellijMode:    hints.ZellijMode,
 			Timeout:            timeout,
 			Strict:             hints.Strict,
+			StrictSound:        hints.StrictSound,
 		},
 	}
 	if hints.Strict != nil {

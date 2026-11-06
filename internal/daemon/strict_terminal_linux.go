@@ -72,6 +72,24 @@ func procIdentity(pid int) (procBirth, error) {
 	return parseProcBirth(data)
 }
 
+// policyProof is an unlocked bounded reader: the original Qoder hook may
+// already hold the installer policy lease while the shared daemon submits the
+// banner. A second lease here would deadlock. Validate stable bytes around
+// the read and require the same digest again when the click arrives.
+func policyProof(controlRoot string) (string, bool) {
+	path := filepath.Join(controlRoot, "agent-notifications.json")
+	before, err := installruntime.Fingerprint(path)
+	if err != nil || !before.Exists || before.Link != "" || before.SHA256 == "" {
+		return "", false
+	}
+	policy, err := installruntime.ReadUserPolicy(controlRoot)
+	if err != nil || !policy.Enabled {
+		return "", false
+	}
+	after, err := installruntime.Fingerprint(path)
+	return before.SHA256, err == nil && after == before
+}
+
 func ownProcessAncestor(pid int) (uint64, bool) {
 	seen := make(map[int]bool)
 	for current, depth := os.Getpid(), 0; current > 1 && depth < 80 && !seen[current]; depth++ {
@@ -123,6 +141,10 @@ func CaptureStrictTerminal(ctx context.Context, cfg *config.Config, agent config
 	if !ok || !config.RecheckTerminalClickConsent(selected, revision, agent) {
 		return nil, false
 	}
+	policySHA, ok := policyProof(controlRoot)
+	if !ok {
+		return nil, false
+	}
 	for _, key := range []string{"SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY"} {
 		if os.Getenv(key) != "" {
 			return nil, false
@@ -152,6 +174,7 @@ func CaptureStrictTerminal(ctx context.Context, cfg *config.Config, agent config
 		OwnerPID: pid, OwnerBirth: birth,
 		ConfigPath: selected, ConfigRevision: revision,
 		ControlRoot: controlRoot, InstallationID: installationID, Generation: generation,
+		PolicySHA256: policySHA,
 	}, true
 }
 
@@ -174,6 +197,10 @@ func StrictTerminalAuthorized(ctx context.Context, target *notification.Terminal
 	if !config.RecheckTerminalClickConsent(target.ConfigPath, target.ConfigRevision, agent) {
 		return false
 	}
+	policySHA, ok := policyProof(target.ControlRoot)
+	if !ok || policySHA != target.PolicySHA256 {
+		return false
+	}
 	id, err := normalizeX11WindowID(target.WindowID)
 	if err != nil || id == "0" || id != target.WindowID {
 		return false
@@ -187,7 +214,8 @@ func StrictTerminalAuthorized(ctx context.Context, target *notification.Terminal
 		return false
 	}
 	snap, err := installruntime.ReadInstalledSnapshot(target.ControlRoot)
-	if err != nil || snap.Recovery || snap.Ledger.ID != target.InstallationID ||
+	if err != nil || snap.Recovery || !snap.Enabled ||
+		snap.Ledger.ID != target.InstallationID ||
 		snap.Ledger.Generation != target.Generation || snap.Ledger.PendingMutation != nil {
 		return false
 	}

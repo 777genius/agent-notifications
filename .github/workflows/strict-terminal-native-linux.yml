@@ -29,10 +29,14 @@ jobs:
       GOWORK: 'off'
       GOTOOLCHAIN: local
       CGO_ENABLED: '1'
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ env.SOURCE_SHA }}
           persist-credentials: false
+      - name: Verify exact source SHA
+        run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
       - uses: actions/setup-go@v7
         with:
           go-version: '1.27.1'
@@ -59,7 +63,7 @@ jobs:
           import json,os
           data=json.load(open(os.path.join(os.environ["RUNNER_TEMP"],"strict-terminal-native-result.json")))
           assert data["status"] == "passed" and data["owned_children_collected"] is True
-          assert [x["scenario"] for x in data["cases"]] == ["positive","revoke","spoof"]
+          assert [x["scenario"] for x in data["cases"]] == ["positive","revoke","policy_revoke","spoof"]
           assert all(x["status"]=="passed" for x in data["cases"])
           assert all(x["sender_exited_before_click"] for x in data["cases"])
           PY
@@ -67,7 +71,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: strict-terminal-native-${{ github.sha }}
+          name: strict-terminal-native-${{ env.SOURCE_SHA }}
           path: ${{ runner.temp }}/strict-terminal-native-result.json
           if-no-files-found: warn
           retention-days: 14

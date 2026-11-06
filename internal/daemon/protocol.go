@@ -68,6 +68,7 @@ type NotifyRequest struct {
 	FocusWarpURL       string                       `json:"focus_warp_url,omitempty"`        // Warp pane deep link ($WARP_FOCUS_URL)
 	Timeout            int                          `json:"timeout"`                         // Notification timeout in seconds
 	Strict             *notification.TerminalTarget `json:"strict,omitempty"`
+	StrictSound        bool                         `json:"strict_sound,omitempty"`
 }
 
 // NotifyResponse contains the result of a notification request

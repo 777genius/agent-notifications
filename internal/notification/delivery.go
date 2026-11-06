@@ -56,6 +56,7 @@ type TerminalTarget struct {
 	ControlRoot    string
 	InstallationID string
 	Generation     uint64
+	PolicySHA256   string // selected managed user policy; changed/disabled policy revokes click
 }
 
 // Deadline is captured at transport admission, before validation or locks.

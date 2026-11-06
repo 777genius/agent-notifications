@@ -27,7 +27,7 @@ func TestStrictTerminalNativeSender(t *testing.T) {
 		t.Fatal("private TEST root required")
 	}
 	name := os.Getenv("TEST_STRICT_TERMINAL_CASE")
-	if name != "positive" && name != "revoke" && name != "spoof" {
+	if name != "positive" && name != "revoke" && name != "policy_revoke" && name != "spoof" {
 		t.Fatal("unsupported fixture case")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)

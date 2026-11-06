@@ -266,7 +266,7 @@ func (s *Server) handleNotification(req *NotifyRequest, strict bool) (*NotifyRes
 		ExpireTimeout: timeout,
 		Hints: map[string]dbus.Variant{
 			"desktop-entry":  dbus.MakeVariant(GetNotificationDesktopEntryID(focusTarget)),
-			"suppress-sound": dbus.MakeVariant(true),
+			"suppress-sound": dbus.MakeVariant(!strict || !req.StrictSound),
 		},
 	}
 
