@@ -58,7 +58,8 @@ func TestInvalidTerminalClickConsentVersion(t *testing.T) {
 
 func TestTerminalClickDeniesChangedSelection(t *testing.T) {
 	raw := []byte(`{"schemaVersion":2,"agents":{"qoder":{"notifications":{"desktop":{"clickToFocus":true,"terminalClickConsentVersion":1}}}}}`)
-	d, err := ParseDocument(raw, "/TEST/config.json", true)
+	selected := filepath.Join(t.TempDir(), "config.json")
+	d, err := ParseDocument(raw, selected, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +67,7 @@ func TestTerminalClickDeniesChangedSelection(t *testing.T) {
 	if err != nil || !cfg.TerminalClickAuthorized() {
 		t.Fatal("fresh exact config should authorize opt-in", err)
 	}
-	cfg.BindTerminalClickSelection("/TEST/current-config-link")
+	cfg.BindTerminalClickSelection(filepath.Join(filepath.Dir(selected), "current-config-link"))
 	if cfg.TerminalClickAuthorized() {
 		t.Fatal("mutable symlink/selection must not authorize focus")
 	}
@@ -77,7 +78,7 @@ func TestTerminalClickDeniesChangedSelection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ordinary.BindTerminalClickSelection("/TEST/config.json")
+	ordinary.BindTerminalClickSelection(selected)
 	if !ordinary.TerminalClickAuthorized() {
 		t.Fatal("unchanged regular file selection lost consent")
 	}
