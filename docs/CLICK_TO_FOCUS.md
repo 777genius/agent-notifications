@@ -63,6 +63,8 @@ This guarded route is **separate from the legacy terminal-app matrix**. For Qode
 
 The strict route is limited to a **verified local Linux/X11 window**. It requires the selected installed agent, a real terminal ancestor confirmed by the X11 XRes server (not a window title or `_NET_WM_PID`), the current installation generation, and the unchanged, explicit agent consent. The daemon authenticates its local sender and rechecks consent, window lifetime and installation when the notification is clicked. An unverified origin, SSH/remote/headless session, Wayland compositor, or macOS/Windows falls back to an ordinary informational notification rather than focusing the last-used window.
 
+**Strict-route host requirements:** a local X11 desktop and terminal-provided `WINDOWID`, `/usr/bin/python3`, `libX11.so.6`, `libXRes.so.1` (XRes 1.2), and `/usr/bin/xdotool`. These are **host dependencies of this route**, not additional requirements for ordinary notifications. Missing X11 ownership proof or a required tool leaves a safe, informational banner.
+
 Strict routing also requires the selected configuration path to stay unchanged after resolving parent links. A config reached through a symlinked parent, including a symlinked `HOME`, deliberately disables strict focus while leaving ordinary notifications working. For an opt-in profile that needs focus, set `AGENT_NOTIFICATIONS_CONFIG` to the **physical absolute path** of the existing configuration file rather than relaxing the selection check.
 
 For an eligible test profile, **back up the selected configuration** and explicitly enable the agent in an existing schema-2 document. This is an example of the relevant fields, not a replacement for other settings:

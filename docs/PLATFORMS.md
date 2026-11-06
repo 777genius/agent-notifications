@@ -10,7 +10,7 @@
 **Self-contained runtime after setup:**
 - ✅ Binaries auto-download from GitHub Releases
 - ✅ Pure Go - no C compiler needed
-- ✅ All libraries bundled
+- ✅ Core Go notification libraries bundled; guarded Linux/X11 terminal focus needs the host tools listed in the [focus guide](CLICK_TO_FOCUS.md#guarded-local-cli-routing-qoder-gemini-cli-cursor-cli)
 - ✅ Works offline after first setup
 
 **Windows-specific features:**
