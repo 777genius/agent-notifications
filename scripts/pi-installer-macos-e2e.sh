@@ -98,6 +98,43 @@ fi
 printf '%s\n' "$public_outcome" > "$evidence/public-real-pi.outcome"
 if grep -Fq 'pi prerequisite unavailable' "$evidence/public-real-pi.log"; then exit 1; fi
 
+# LaunchServices is system-wide: a successful public baseline leaves a real
+# callback reader that can take precedence over the *separately installed*
+# candidate despite the two installers' private HOME roots. Remove ONLY this
+# disposable baseline's own verified app registration before candidate begins.
+# Do not unregister unknown, active, foreign or non-TEST applications.
+public_native=$("$python" - "$root/public" "$public_status" <<'PYOWNED'
+import json, plistlib, sys
+from pathlib import Path
+base = Path(sys.argv[1]).resolve(strict=True)
+completed = sys.argv[2] == '0'
+owned_root = (base / 'home').resolve(strict=True)
+ledger = owned_root / 'Library/Application Support/agent-notifications/ownership.json'
+if not ledger.is_file():
+    raise SystemExit('completed public install missing native ownership ledger' if completed else 0)
+native = (json.loads(ledger.read_text()).get('Native') or {}).get('Path')
+if not native:
+    raise SystemExit('completed public install missing native app path' if completed else 0)
+p = Path(native)
+if not p.is_absolute() or not p.is_dir():
+    raise SystemExit('completed public install has unavailable native app path' if completed else 0)
+real = p.resolve(strict=True)
+if p != real or not real.is_relative_to(owned_root) or real.suffix != '.app':
+    raise SystemExit('refused non-owned public LaunchServices cleanup')
+with (real / 'Contents/Info.plist').open('rb') as file:
+    bundle_id = plistlib.load(file).get('CFBundleIdentifier')
+if bundle_id != 'com.777genius.agent-notifications':
+    raise SystemExit('refused foreign public LaunchServices cleanup')
+print(real)
+PYOWNED
+)
+if [ -n "$public_native" ]; then
+    lsregister=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+    "$lsregister" -u "$public_native"
+    rm -rf -- "$public_native"
+    printf '%s\n' 'retired only the owned disposable public callback reader before independent candidate' > "$evidence/public-native-isolation.txt"
+fi
+
 # Download the released inputs once, retain their original manifest, and verify
 # original bytes before reusing only the authentic signed native helper.
 stable_tag=v1.50.0

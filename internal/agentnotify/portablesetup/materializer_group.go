@@ -129,6 +129,16 @@ func (m Materializer) ApplyGroup(ctx context.Context, reqs []MaterializeRequest)
 	defer release()
 	generation := mutationReq.ExpectedGeneration
 	var res *installruntime.PendingMutation
+	// An invalid sidecar must be rejected before writing a host handoff
+	// reservation. Observational checks are needed only for group updates.
+	var known []uapinstaller.TargetFacts
+	if packageOperation(reqs[0]) == uapinstaller.OpUpdate {
+		known, err = m.requiredGroupUpdateKnownTargets(reqs[0].Identity.InstallationID,
+			reqs[0].Identity.ControlRoot, ClientID(reqs[0].Integration), ClientID(reqs[1].Integration))
+		if err != nil {
+			return nil, err
+		}
+	}
 	// The shared source must survive any outcome after the first handoff starts.
 	handoffStarted = true
 	for i := range reqs {
@@ -170,7 +180,7 @@ func (m Materializer) ApplyGroup(ctx context.Context, reqs []MaterializeRequest)
 		Operation: packageOperation(reqs[0]), PackageRoot: reqs[0].PackageRoot,
 		InstallationID: reqs[0].Identity.InstallationID, OperationID: reqs[0].OperationID,
 		RequiredComponents: groupRequiredComponents(reqs), ClientExecutable: reqs[0].ClientExecutable,
-		Targets: targets,
+		Targets: targets, KnownTargets: known,
 	}, reqs...)
 	if err != nil {
 		return nil, persistResult(result, wrapUpdateRequired(err))

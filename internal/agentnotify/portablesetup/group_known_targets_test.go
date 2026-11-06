@@ -1,0 +1,80 @@
+//go:build linux || darwin
+
+package portablesetup
+
+import (
+	"os"
+	"path/filepath"
+	"reflect"
+	"testing"
+
+	"github.com/777genius/agent-notifications/install/uapinstaller"
+	"github.com/777genius/agent-notifications/internal/agentnotify/portable"
+	"github.com/777genius/agent-notifications/internal/installruntime"
+)
+
+// Group selection excludes both selected clients; only exact live sibling
+// facts may be observed by the SDK. A stale sidecar cannot grant authority.
+func TestKnownTargetsExcludeAllSelectedGroupClients(t *testing.T) {
+	mat, claude, root := registryMaterializerFixture(t)
+	claude.Integration = portable.Claude
+	mat.Roots.ClaudeRunner = listingRunner{configRoot: claude.ClientConfigRoot}
+	codex := claude
+	codex.Integration = portable.Codex
+	codex.ClientConfigRoot = filepath.Join(root, "TEST-group-known-codex")
+	if err := os.MkdirAll(codex.ClientConfigRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mat.ApplyGroup(testCtx(t), []MaterializeRequest{claude, codex}); err != nil {
+		t.Fatal("real group installation:", err)
+	}
+	all, err := mat.knownTargets(claude.Identity.InstallationID)
+	if err != nil || len(all) != 2 {
+		t.Fatalf("committed group facts missing: %+v %v", all, err)
+	}
+	selected, err := mat.knownTargets(claude.Identity.InstallationID, "claude", "codex")
+	if err != nil || len(selected) != 0 {
+		t.Fatalf("selected clients leaked into compatibility only: %+v %v", selected, err)
+	}
+	sibling, err := mat.knownTargets(claude.Identity.InstallationID, "codex")
+	if err != nil || len(sibling) != 1 || sibling[0].ClientID != "claude" ||
+		sibling[0].BindingID == "" || sibling[0].ConfigRoot != claude.ClientConfigRoot {
+		t.Fatalf("unselected Claude facts lost: %+v %v", sibling, err)
+	}
+	if err := recordClientFact(filepath.Dir(mat.Roots.StateFile), clientFact{
+		BindingID: "TEST-stale-binding", ConfigRoot: claude.ClientConfigRoot, Executable: claude.ClientExecutable,
+	}, "claude"); err != nil {
+		t.Fatal(err)
+	}
+	if stale, err := mat.knownTargets(claude.Identity.InstallationID, "codex"); err != nil || len(stale) != 0 {
+		t.Fatalf("stale facts authorized compatibility: %+v %v", stale, err)
+	}
+
+	// Invalid sibling facts must refuse before a host handoff intent is
+	// published, not strand a pending reservation requiring later recovery.
+	snapBefore, err := installruntime.ReadInstalledSnapshot(claude.Identity.ControlRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stateBefore, err := os.ReadFile(mat.Roots.StateFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(clientFactsPath(filepath.Dir(mat.Roots.StateFile)), []byte("{"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	claude.Operation, codex.Operation = uapinstaller.OpUpdate, uapinstaller.OpUpdate
+	claude.ExpectedGeneration, codex.ExpectedGeneration = snapBefore.Ledger.Generation, snapBefore.Ledger.Generation
+	claude.OperationID, codex.OperationID = "TEST-refuse-malformed-facts", "TEST-refuse-malformed-facts"
+	if _, err := mat.ApplyGroup(testCtx(t), []MaterializeRequest{claude, codex}); err == nil {
+		t.Fatal("malformed compatibility facts admitted group update")
+	}
+	snapAfter, err := installruntime.ReadInstalledSnapshot(claude.Identity.ControlRoot)
+	if err != nil || !reflect.DeepEqual(snapBefore.Ledger, snapAfter.Ledger) {
+		t.Fatalf("invalid facts changed host reservation or ledger: %v", err)
+	}
+	stateAfter, err := os.ReadFile(mat.Roots.StateFile)
+	if err != nil || !reflect.DeepEqual(stateBefore, stateAfter) {
+		t.Fatalf("invalid facts changed SDK state: %v", err)
+	}
+}
