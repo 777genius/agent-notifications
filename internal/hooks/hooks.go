@@ -222,6 +222,17 @@ func (h *Handler) availableDesktopBudget() (time.Duration, bool) {
 	return h.hookDeadline.Sub(h.deliveryTimeNow()) - 5*time.Second, true
 }
 
+// gitBranch is an optional presentation/filter fact. A stalled git process
+// must not outlive the calling host hook's remaining budget.
+func (h *Handler) gitBranch(cwd string) string {
+	if h.hookDeadline.IsZero() {
+		return platform.GetGitBranch(cwd)
+	}
+	ctx, cancel := context.WithDeadline(context.Background(), h.hookDeadline)
+	defer cancel()
+	return platform.GetGitBranchContext(ctx, cwd)
+}
+
 // HandleHook handles a hook event
 func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 	// Benchmark instrumentation (enabled via config debug.benchmark)
@@ -343,7 +354,7 @@ func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 	// Check suppress-filters before any state mutations (dedup lock, cooldowns)
 	bench.Start("git.branch")
 	{
-		gitBranch := platform.GetGitBranch(ev.Session.CWD)
+		gitBranch := h.gitBranch(ev.Session.CWD)
 		bench.Elapsed("git.branch")
 		folderName := filepath.Base(ev.Session.CWD)
 		if h.cfg.ShouldFilter(string(status), gitBranch, folderName) {

@@ -59,7 +59,7 @@ func (h *Handler) sendNotifications(status analyzer.Status, body, actions, sessi
 	var delivery notificationDelivery
 
 	sessionName := sessionname.GenerateSessionLabel(sessionID)
-	gitBranch := platform.GetGitBranch(cwd)
+	gitBranch := h.gitBranch(cwd)
 	folderName := filepath.Base(cwd)
 
 	joined := joinMessageParts(body, actions)
