@@ -8,6 +8,8 @@ type Config struct {
 
 	// Derived solely from an explicit schema-2 agent profile, never defaults.
 	terminalClickAuthorized bool
+	terminalClickPath       string
+	terminalClickRevision   string
 }
 
 // DebugConfig represents debug/diagnostic settings

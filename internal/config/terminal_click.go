@@ -1,6 +1,9 @@
 package config
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"path/filepath"
+)
 
 // TerminalClickAuthorized requires fresh, explicit per-agent consent. It never
 // proves the originating OS window is local or safely targetable.
@@ -40,4 +43,28 @@ func (d Document) hasTerminalClickConsent(agent AgentID) bool {
 	a := p.Notifications.Desktop
 	return a.ClickToFocus != nil && *a.ClickToFocus &&
 		a.TerminalClickConsentVersion != nil && *a.TerminalClickConsentVersion == 1
+}
+
+// TerminalClickSelection is the immutable selected-config proof for a single
+// agent notification, not a permission to focus by itself. It is absent for
+// seeded defaults, legacy schema or inherited permissions.
+func (c *Config) TerminalClickSelection() (path, revision string, ok bool) {
+	if c == nil || !c.TerminalClickAuthorized() || c.terminalClickPath == "" || c.terminalClickRevision == "" {
+		return "", "", false
+	}
+	return c.terminalClickPath, c.terminalClickRevision, true
+}
+
+// RecheckTerminalClickConsent refuses changed/revoked config at click time.
+// The raw global veto is checked after parsing; nothing is enabled by defaults.
+func RecheckTerminalClickConsent(path, revision string, agent AgentID) bool {
+	if !filepath.IsAbs(path) || filepath.Clean(path) != path || revision == "" {
+		return false
+	}
+	snap, err := ReadFileSnapshot(path, MaxDocumentBytes)
+	if err != nil || snap.PhysicalPath != path {
+		return false
+	}
+	doc, err := ParseDocument(snap.Bytes, snap.PhysicalPath, true)
+	return err == nil && doc.Revision() == revision && doc.hasTerminalClickConsent(agent)
 }

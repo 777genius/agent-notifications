@@ -42,6 +42,10 @@ func (d Document) Effective(assets AssetContext) (*Config, error) {
 	cfg, err := d.effectiveProfile(assets, data)
 	if err == nil {
 		cfg.terminalClickAuthorized = d.hasTerminalClickConsent(assets.Agent)
+		if cfg.terminalClickAuthorized && d.exists && filepath.IsAbs(d.physicalPath) {
+			cfg.terminalClickPath = d.physicalPath
+			cfg.terminalClickRevision = d.Revision()
+		}
 	}
 	return cfg, err
 }
