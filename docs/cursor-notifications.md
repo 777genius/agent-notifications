@@ -40,9 +40,7 @@ A native `stop` event causes a fixed informational alert: **Cursor CLI is stoppi
 Cursor delivery is informational and silent by default. Since v1.50.0, it
 can explicitly request the OS default notification cue with
 `notifications.desktop.systemSound=true` and the existing master sound switch.
-This is **not** configurable MP3/volume output, a guarantee of an audible cue,
-or click-to-focus. Focus-aware suppression and task-text analysis are not
-promised. Desktop and webhook consent are separate. Same-generation duplicates are suppressed. Linux installed E2E observed notification-service delivery; macOS arm64 included a visible notification; Windows CI observed the installed child's successful Toast API submission, not a visible interactive banner.
+This is **not** configurable MP3/volume output, a guarantee of an audible cue, or permission to focus by itself. **Guarded Click-to-Focus** is available only on a verified local Linux/X11 originating terminal window, with explicit `agents.cursor` schema-2 consent (`clickToFocus: true`, `terminalClickConsentVersion: 1`) and a valid installed binding. Global `clickToFocus: false` vetoes it. Other sessions receive an informational alert without a focus action. It does **not** navigate to an exact Cursor IDE chat; an authenticated installed Cursor CLI-to-click E2E remains unqualified. [Requirements](CLICK_TO_FOCUS.md#guarded-local-cli-routing-qoder-gemini-cli-cursor-cli). Focus-aware suppression and task-text analysis are not promised. Desktop and webhook consent are separate. Same-generation duplicates are suppressed. Linux installed E2E observed notification-service delivery; macOS arm64 included a visible notification; Windows CI observed the installed child's successful Toast API submission, not a visible interactive banner.
 
 ## Inspect, disable and remove
 

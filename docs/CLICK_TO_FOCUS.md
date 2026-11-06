@@ -6,7 +6,7 @@ Clicking a notification activates your terminal window — no more hunting for t
 
 ## Supported Terminals & IDEs
 
-Quick reference before the platform-by-platform detail below. Precision levels: **pane/tab** targets the exact split or tab; **window** raises the whole app window (may land on the wrong tab if several are open); **best-effort** falls back to a generic name/title match that can pick the wrong window.
+Quick reference for **legacy Claude/Codex/Pi terminal routes** before the platform-by-platform detail below. Qoder/Gemini/Cursor have a **separate**, guarded Linux/X11-only window route described further down; the legacy terminal matrix does not qualify additional agents. Precision levels: **pane/tab** targets the exact split or tab; **window** raises an app window; **best-effort** may otherwise match by title (not permitted by the new guarded route).
 
 | App | <img src="assets/platforms/apple.svg" width="14" height="14" alt=""/> macOS | <img src="assets/platforms/linux.svg" width="14" height="14" alt=""/> Linux | <img src="assets/platforms/windows.svg" width="14" height="14" alt=""/> Windows | Notes |
 |---|---|---|---|---|
@@ -54,14 +54,16 @@ In the shared file selected by `config path`:
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `clickToFocus` | `true` | Enable click-to-focus on supported macOS, Linux and Windows terminals |
+| `clickToFocus` | `true` (legacy defaults) | Legacy terminal focus on supported agents/platforms; **Qoder/Gemini/Cursor are off until explicit per-agent schema-2 consent** |
 | `terminalBundleId` | `""` | macOS only: override auto-detected terminal. Use bundle ID like `com.googlecode.iterm2` |
 
 ### Guarded local CLI routing (Qoder, Gemini CLI, Cursor CLI)
 
-This new route is **separate from the legacy terminal-app matrix above**. For Qoder CLI, Gemini CLI and Cursor CLI, an inherited or previously saved `clickToFocus: true` does **not** enable navigation. The existing agent support matrix remains unchanged until each installed CLI/OS pair has been physically qualified.
+This guarded route is **separate from the legacy terminal-app matrix**. For Qoder CLI, Gemini CLI and Cursor CLI, an inherited or previously saved `clickToFocus: true` never enables navigation. The [agent support matrix](AGENT_SUPPORT_MATRIX.md#implemented-integrations-channels-and-navigation) records this as **guarded opt-in local Linux/X11 window focus**, not fully qualified per-CLI click support.
 
 The strict route is limited to a **verified local Linux/X11 window**. It requires the selected installed agent, a real terminal ancestor confirmed by the X11 XRes server (not a window title or `_NET_WM_PID`), the current installation generation, and the unchanged, explicit agent consent. The daemon authenticates its local sender and rechecks consent, window lifetime and installation when the notification is clicked. An unverified origin, SSH/remote/headless session, Wayland compositor, or macOS/Windows falls back to an ordinary informational notification rather than focusing the last-used window.
+
+**Strict-route host requirements:** a local X11 desktop and terminal-provided `WINDOWID`, `/usr/bin/python3`, `libX11.so.6`, `libXRes.so.1` (XRes 1.2), and `/usr/bin/xdotool`. These are **host dependencies of this route**, not additional requirements for ordinary notifications. Missing X11 ownership proof or a required tool leaves a safe, informational banner.
 
 Strict routing also requires the selected configuration path to stay unchanged after resolving parent links. A config reached through a symlinked parent, including a symlinked `HOME`, deliberately disables strict focus while leaving ordinary notifications working. For an opt-in profile that needs focus, set `AGENT_NOTIFICATIONS_CONFIG` to the **physical absolute path** of the existing configuration file rather than relaxing the selection check.
 
@@ -83,7 +85,7 @@ For an eligible test profile, **back up the selected configuration** and explici
 
 Use the same agent-local settings under `agents.gemini` or `agents.cursor` for those agents. The global `clickToFocus: false` remains an absolute veto. The existing `config edit` command does not edit `/agents/...` paths, so edit and inspect schema-2 agent profiles manually, preserving all other profiles. Do not enable navigation by copying an old saved `clickToFocus: true` alone.
 
-The CI workflow `strict-terminal-native-linux.yml` tests a real X11 desktop, the product daemon, notification-center banner, synthetic X11 click through `xdotool` under Xvfb, and negative revoke/spoof cases. Its sender is an isolated native Go fixture **not a real authenticated Qoder, Gemini or Cursor turn**, so this proof by itself does not grant general agent support or claim qualification on every terminal. A local process running with the user's own OS privileges is outside this notifier's sandbox; this route prevents accidental/wrong target selection, not arbitrary actions from already-compromised same-user processes.
+The CI workflow `strict-terminal-native-linux.yml` verifies the real X11 desktop, product daemon, dunst banner, synthetic X11 click through `xdotool` under Xvfb, and consent-revocation/spoofing negatives. Its sender is an isolated native Go fixture **not an authenticated installed Qoder, Gemini or Cursor CLI turn**. Thus the shared guarded mechanism is exercised, but the entire native CLI → notification → click → correct window path remains unqualified for each agent. Same-user compromised processes are outside the notifier's sandbox; this path prevents accidental/wrong-window activation, not arbitrary actions by a compromised user process.
 
 ## macOS
 
@@ -247,7 +249,7 @@ If the Python API is not available, the plugin falls back to standard `tmux sele
 
 ## Windows
 
-Clicking a notification raises the terminal **window** that started the task. Enabled by the same `clickToFocus` flag; no extra configuration. In Warp, the toast also carries `WARP_FOCUS_URL`, and the click handler opens that session deep link first so the originating tab/pane is selected before the generic HWND fallback.
+For the **existing qualified Windows terminal routes**, clicking a notification raises the terminal **window** that started the task. This is **not** a Windows focus route for Qoder/Gemini/Cursor, which remain informational-only outside verified local Linux/X11. For the existing route, the `clickToFocus` setting applies; in Warp, the toast can carry `WARP_FOCUS_URL` to select the originating tab/pane before the generic HWND fallback.
 
 How it works (no admin rights, no COM server):
 
