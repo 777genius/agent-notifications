@@ -22,6 +22,24 @@ func selectTerminalNotifierArgs(title, message, bundleID, cwd, ghosttyTerminalID
 	return selectTerminalNotifierArgsWithDetector(title, message, bundleID, cwd, ghosttyTerminalID, clickToFocus, cfg, detectMultiplexerArgs)
 }
 
+// exactGhosttyNotifierArgs emits an actionable notification only when the
+// caller already resolved a specific terminal-ID callback. In particular,
+// an empty script must never degrade into an app-level "-activate".
+func exactGhosttyNotifierArgs(title, message, script string) []string {
+	args := []string{"-title", title, "-message", message}
+	if script != "" {
+		args = append(args, "-execute", script)
+	}
+	return args
+}
+
+func boundGhosttyNotifierArgs(title, message, bundleID, cwd, terminalID string) []string {
+	if strings.TrimSpace(terminalID) == "" {
+		return exactGhosttyNotifierArgs(title, message, "")
+	}
+	return exactGhosttyNotifierArgs(title, message, buildGhosttyFocusScript(bundleID, cwd, terminalID))
+}
+
 // The detector seam lets tests prove that disabled navigation never captures
 // or invokes a terminal multiplexer, independently of machine environment.
 func selectTerminalNotifierArgsWithDetector(title, message, bundleID, cwd, ghosttyTerminalID string, clickToFocus bool, cfg *config.Config, detect func(string, string, string, *config.Config) ([]string, string)) []string {
@@ -31,9 +49,8 @@ func selectTerminalNotifierArgsWithDetector(title, message, bundleID, cwd, ghost
 	// stored terminal ID can still take the separate exact-ID route.
 	if clickToFocus && isGhosttyBundleID(bundleID) && IsTmux() &&
 		!strings.HasPrefix(os.Getenv("TMUX_PANE"), "%") {
-		logging.Debug("Ghostty tmux click disabled: originating pane unavailable")
-		return buildTerminalNotifierArgsWithOptions(title, message, bundleID, cwd,
-			ghosttyTerminalID, strings.TrimSpace(ghosttyTerminalID) != "")
+		logging.Debug("Ghostty tmux route unavailable: only a verified terminal-ID action is allowed")
+		return boundGhosttyNotifierArgs(title, message, bundleID, cwd, ghosttyTerminalID)
 	}
 	if clickToFocus {
 		if muxArgs, muxName := detect(title, message, bundleID, cfg); muxArgs != nil {
@@ -50,6 +67,9 @@ func selectTerminalNotifierArgsWithDetector(title, message, bundleID, cwd, ghost
 			logging.Debug("Ghostty click disabled: no verified terminal ID")
 			clickToFocus = false
 		}
+	}
+	if clickToFocus && isGhosttyBundleID(bundleID) {
+		return boundGhosttyNotifierArgs(title, message, bundleID, cwd, ghosttyTerminalID)
 	}
 	return buildTerminalNotifierArgsWithOptions(title, message, bundleID, cwd, ghosttyTerminalID, clickToFocus)
 }
