@@ -253,7 +253,7 @@ func TestGroupUpdateCodexLocalCompletesAndPreservesUnselectedClaude(t *testing.T
 		if errors.As(err, &resultErr) {
 			t.Logf("SDK group outcome=%s reason=%q mutated=%t", resultErr.Result.Outcome, resultErr.Result.Reason, resultErr.Result.Mutated)
 			for _, target := range resultErr.Result.Targets {
-				t.Logf("SDK selected client=%s activation=%s verification=%s policy=%s nativeEffect=%s phase=%s", target.ClientID, target.Activation, target.Verification, target.Policy, target.NativeEffect, target.GroupPhase)
+				t.Logf("SDK selected client=%s activation=%s verification=%s policy=%s phase=%s", target.ClientID, target.Activation, target.Verification, target.Policy, target.GroupPhase)
 			}
 		}
 		if state, loadErr := mat.Store.Load(); loadErr == nil {
