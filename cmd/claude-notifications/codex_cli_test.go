@@ -337,7 +337,7 @@ func TestCodexCLIStalledGitFailsOpenWithinHostBudget(t *testing.T) {
 	path := filepath.Join(home, ".claude", "claude-notifications-go", "config.json")
 	if err := os.WriteFile(path, []byte(cfg), 0600); err != nil { t.Fatal(err) }
 	binDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(binDir, "git"), []byte("#!/bin/sh\\nexec sleep 6\\n"), 0755); err != nil {
+	if err := os.WriteFile(filepath.Join(binDir, "git"), []byte("#!/bin/sh\nexec sleep 6\n"), 0755); err != nil {
 		t.Fatal(err)
 	}
 	env = append(env, "PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
