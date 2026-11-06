@@ -6,7 +6,9 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -74,6 +76,13 @@ func TestStrictTerminalNativeSender(t *testing.T) {
 		spoof := os.Getenv("TEST_STRICT_SPOOF_WINDOW")
 		if spoof == "" {
 			t.Fatal("no other window supplied")
+		}
+		// This exercises the XRes server-derived PID guard: even if a
+		// different X11 client forges _NET_WM_PID to identify the genuine
+		// terminal, it cannot acquire the other window's click target.
+		if err := exec.CommandContext(ctx, "/usr/bin/xprop", "-id", spoof,
+			"-f", "_NET_WM_PID", "32c", "-set", "_NET_WM_PID", strconv.Itoa(origin.OwnerPID)).Run(); err != nil {
+			t.Fatal("failed to forge the harmless TEST EWMH property", err)
 		}
 		t.Setenv("WINDOWID", spoof)
 		if rejected, allowed := CaptureStrictTerminal(ctx, cfg, config.AgentQoder, control, ledger.ID, ledger.Generation); allowed || rejected != nil {

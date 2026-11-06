@@ -48,7 +48,7 @@ jobs:
       - name: Install actual GUI/audio test host dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install --no-install-recommends -y libasound2-dev dbus-daemon dbus-bin dunst xvfb openbox xterm xdotool tmux pulseaudio pulseaudio-utils alsa-utils libasound2-plugins libnotify-bin ffmpeg fonts-dejavu-core
+          sudo apt-get install --no-install-recommends -y libasound2-dev dbus-daemon dbus-bin dunst xvfb openbox xterm xdotool x11-utils libxres1 tmux pulseaudio pulseaudio-utils alsa-utils libasound2-plugins libnotify-bin ffmpeg fonts-dejavu-core
       - name: Build installed-format product binary and strict Go native test executable
         run: |
           mkdir -p "$RUNNER_TEMP/TEST-strict-build"

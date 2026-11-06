@@ -49,6 +49,7 @@ type TerminalTarget struct {
 	Agent          string
 	Display        string
 	WindowID       string
+	WindowNonce    string // 128-bit marker scoped to the X11 window lifetime
 	OwnerPID       int
 	OwnerBirth     uint64
 	ConfigPath     string

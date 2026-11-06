@@ -107,26 +107,7 @@ func ownProcessAncestor(pid int) (uint64, bool) {
 }
 
 func x11WindowOwner(ctx context.Context, display, id string) (int, error) {
-	if !localX11Display.MatchString(display) {
-		return 0, errors.New("remote_display")
-	}
-	normalized, err := normalizeX11WindowID(id)
-	if err != nil || normalized == "0" {
-		return 0, errors.New("invalid_x11_window")
-	}
-	op, cancel := context.WithTimeout(ctx, 750*time.Millisecond)
-	defer cancel()
-	cmd := exec.CommandContext(op, strictFocusXdotool, "getwindowpid", normalized)
-	cmd.Env = append(os.Environ(), "DISPLAY="+display)
-	out, err := cmd.Output()
-	if err != nil {
-		return 0, err
-	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(out)))
-	if err != nil || pid <= 1 {
-		return 0, errors.New("window_owner_unavailable")
-	}
-	return pid, nil
+	return xresWindowPID(ctx, display, id, "owner", "")
 }
 
 // CaptureStrictTerminal never uses source/model-provided session IDs, cwd or
@@ -169,8 +150,19 @@ func CaptureStrictTerminal(ctx context.Context, cfg *config.Config, agent config
 	if !ok {
 		return nil, false
 	}
+	nonce, err := windowNonce()
+	if err != nil {
+		return nil, false
+	}
+	// The per-window marker disappears when X11 destroys this window. It is
+	// bounded and checked again at click time, so a reused numeric XID
+	// cannot activate a later window in the same terminal process.
+	markedPID, err := xresWindowPID(ctx, display, id, "mark", nonce)
+	if err != nil || markedPID != pid {
+		return nil, false
+	}
 	return &notification.TerminalTarget{
-		Agent: string(agent), Display: display, WindowID: id,
+		Agent: string(agent), Display: display, WindowID: id, WindowNonce: nonce,
 		OwnerPID: pid, OwnerBirth: birth,
 		ConfigPath: selected, ConfigRevision: revision,
 		ControlRoot: controlRoot, InstallationID: installationID, Generation: generation,
@@ -209,7 +201,7 @@ func StrictTerminalAuthorized(ctx context.Context, target *notification.Terminal
 	if err != nil || birth.start != target.OwnerBirth {
 		return false
 	}
-	pid, err := x11WindowOwner(ctx, target.Display, id)
+	pid, err := xresWindowPID(ctx, target.Display, id, "check", target.WindowNonce)
 	if err != nil || pid != target.OwnerPID {
 		return false
 	}
