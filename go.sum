@@ -10,10 +10,10 @@ git.sr.ht/~jackmordaunt/go-toast v1.1.2 h1:/yrfI55LRt1M7H1vkaw+NaH1+L1CDxrqDltwm
 git.sr.ht/~jackmordaunt/go-toast v1.1.2/go.mod h1:jA4OqHKTQ4AFBdwrSnwnskUIIS3HYzlJSgdzCKqfavo=
 github.com/777genius/plugin-kit-ai/cli v0.0.0-20261028163038-6ca8dc291616 h1:E15kwOVyYffbrPJZQY2S4IZNlVJCkOFZ6PfR/+LiXy4=
 github.com/777genius/plugin-kit-ai/cli v0.0.0-20261028163038-6ca8dc291616/go.mod h1:YMLz4J9Tp3Q3+U3wq8KvsTdVGB6ksOhs2d5hiR5MytQ=
-github.com/777genius/plugin-kit-ai/install/integrationctl v0.1.1-0.20261106045848-e68925df597e h1:lSdO8hvjpcbynSYSnRke1dQefMCKOHdS4xRtSGF3qgs=
-github.com/777genius/plugin-kit-ai/install/integrationctl v0.1.1-0.20261106045848-e68925df597e/go.mod h1:6nRbEZWlE39/de8JuDKIYcjB8k7mflMaYIYO9JTyyZk=
-github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins v0.0.0-20261106045848-e68925df597e h1:zgWGhuWZ35K4cz8n1u8mZA1kt0G5gZiSK1NXbxUX5q8=
-github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins v0.0.0-20261106045848-e68925df597e/go.mod h1:wXDjIKhMkezFaC7q0CViM5TcL+VKOQFF2+cjBlC5Q7M=
+github.com/777genius/plugin-kit-ai/install/integrationctl v0.1.1-0.20261106093230-f401557f9d1c h1:nclXWMEh8im/oj702hBc8YmmJSlUUj6W1VZjTRwGFmE=
+github.com/777genius/plugin-kit-ai/install/integrationctl v0.1.1-0.20261106093230-f401557f9d1c/go.mod h1:6nRbEZWlE39/de8JuDKIYcjB8k7mflMaYIYO9JTyyZk=
+github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins v0.0.0-20261106093230-f401557f9d1c h1:4HUEWXJB0x0bIK89xnq2BdwVerhue5S1tuyZe1RnCt8=
+github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins v0.0.0-20261106093230-f401557f9d1c/go.mod h1:wXDjIKhMkezFaC7q0CViM5TcL+VKOQFF2+cjBlC5Q7M=
 github.com/777genius/plugin-kit-ai/sdk v1.3.1-0.20261028163038-6ca8dc291616 h1:oIWO8p9ip50P6mLWsGzAlyuZkKJU6qOXF2WgwlUEuQs=
 github.com/777genius/plugin-kit-ai/sdk v1.3.1-0.20261028163038-6ca8dc291616/go.mod h1:nV/mzXKxAWX0qRaOpxD9mco2shm+Oym5nefWmeita20=
 github.com/MakeNowJust/heredoc v1.0.0 h1:cXCdzVdstXyiTqTvfqk9SDHpKNjxuom+DOlyEeQ4pzQ=
