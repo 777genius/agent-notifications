@@ -5,7 +5,6 @@ package portablesetup
 import (
 	"crypto/sha256"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -22,12 +21,13 @@ import (
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients/claude"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients/codex"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients/vscode"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/domain"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/vscodelocalhooks"
 )
 
 // Public host/SDK three-client lifecycle for #595: update only Codex+Local,
 // retaining the exact live Claude binding and installed native profile bytes.
-func TestGroupUpdateCodexLocalRetainsPreparedHandoffAndClaude(t *testing.T) {
+func TestGroupUpdateCodexLocalCompletesAndPreservesUnselectedClaude(t *testing.T) {
 	if runtime.GOOS == "darwin" && runtime.GOARCH != "arm64" {
 		t.Skip("Local selected delivery has no qualified Darwin Intel tuple")
 	}
@@ -245,39 +245,27 @@ func TestGroupUpdateCodexLocalRetainsPreparedHandoffAndClaude(t *testing.T) {
 		})
 	}
 	updated, err := mat.ApplyGroup(ctx, []MaterializeRequest{codexReq, local})
-	// The frozen Local SDK route is Prepared, not native-activation-attested.
-	// A committed group update must report that remaining host handoff honestly,
-	// even when the two selected managed revisions were physically written.
-	var incomplete ResultError
-	if len(updated) != 0 || !errors.As(err, &incomplete) || incomplete.Finalization ||
-		incomplete.Result.Outcome != uapinstaller.OutcomeIncomplete ||
-		incomplete.Result.Reason != "committed binding is not activated" ||
-		!incomplete.Result.Mutated || len(incomplete.Result.Targets) != 2 {
-		t.Fatalf("selected group update did not preserve truthful committed result: %+v %+v %v", updated, incomplete.Result, err)
+	if err != nil || len(updated) != 2 {
+		t.Fatalf("selected group update did not complete: bindings=%+v err=%v", updated, err)
 	}
-	for _, target := range incomplete.Result.Targets {
-		if target.ClientID != ClientID(portable.Codex) && target.ClientID != ClientID(portable.CopilotVSCode) ||
-			target.BindingID == claudeID {
-			t.Fatalf("unselected Claude included in group update result: %+v", incomplete.Result.Targets)
+	for i, binding := range updated {
+		if binding.BindingID != selected[i].BindingID || binding.Integration != selected[i].Integration ||
+			binding.BindingID == claudeID || binding.InstallationID != base.Identity.InstallationID {
+			t.Fatalf("completed group returned wrong selected binding: %+v", updated)
 		}
 	}
-	// Local's prepared lifecycle is not issue #595's completed-activation
-	// acceptance. An incomplete SDK result may still follow successful host
-	// callbacks: assert either the exact committed consumers with no reservation,
-	// or a retained, identifiable reservation. Never infer which one happened.
+	// Completing the managed file operation must finish the host reservation.
+	// Local stays Prepared: this does not attest live VS Code activation.
 	hostAfter, err := installruntime.ReadInstalledSnapshot(base.Identity.ControlRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pending := hostAfter.Ledger.PendingMutation; pending != nil {
-		if pending.ID == "" || pending.Owner == "" {
-			t.Fatalf("incomplete group update retained an unidentified reservation: %+v", pending)
-		}
-	} else {
-		for _, binding := range append(append([]portable.Binding(nil), selected...), claudeBinding) {
-			if !portable.ExactCommittedBinding(hostAfter.Ledger, binding) {
-				t.Fatalf("incomplete SDK result lost a committed host consumer: %+v", binding)
-			}
+	if hostAfter.Ledger.PendingMutation != nil {
+		t.Fatalf("completed group retained host reservation: %+v", hostAfter.Ledger.PendingMutation)
+	}
+	for _, binding := range append(append([]portable.Binding(nil), updated...), claudeBinding) {
+		if !portable.ExactCommittedBinding(hostAfter.Ledger, binding) {
+			t.Fatalf("completed group lost exact host consumer: %+v", binding)
 		}
 	}
 	after, err := mat.Store.Load()
@@ -296,16 +284,27 @@ func TestGroupUpdateCodexLocalRetainsPreparedHandoffAndClaude(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var originalClientFacts map[string]clientFact
+	if err := json.Unmarshal(originalFacts, &originalClientFacts); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(postFacts["claude"], originalClientFacts["claude"]) {
+		t.Fatal("completed group changed unselected Claude host facts")
+	}
 	for _, old := range selected {
 		fact := postFacts[ClientID(old.Integration)]
 		if fact.BindingID != current.Clients[old.BindingID].ClientBindingID ||
 			fact.ConfigRoot == "" || fact.ConfigRoot != old.ScopeRoot {
-			t.Fatalf("incomplete group update left selected facts stale: %s %+v", old.Integration, fact)
+			t.Fatalf("completed group update left selected facts stale: %s %+v", old.Integration, fact)
 		}
 	}
 	for _, old := range selected {
 		beforeBinding := initial.Clients[old.BindingID]
 		afterBinding, ok := current.Clients[old.BindingID]
+		if old.Integration == portable.CopilotVSCode && (afterBinding.Activation != domain.ActivationPrepared ||
+			afterBinding.Verification != domain.VerificationPackageValid) {
+			t.Fatalf("Local was falsely activated instead of prepared: %+v", afterBinding)
+		}
 		if !ok || beforeBinding.PackageRevision == nil || afterBinding.PackageRevision == nil ||
 			beforeBinding.PackageRevision.TreeDigest == afterBinding.PackageRevision.TreeDigest {
 			t.Fatalf("selected client did not receive new revision: %+v", old)
