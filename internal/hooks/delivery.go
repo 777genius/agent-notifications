@@ -59,7 +59,13 @@ func (h *Handler) sendNotifications(status analyzer.Status, body, actions, sessi
 	var delivery notificationDelivery
 
 	sessionName := sessionname.GenerateSessionLabel(sessionID)
-	gitBranch := h.gitBranch(cwd)
+	gitBranch := ""
+	if len(details) > 0 && details[0].branchFetched {
+		gitBranch = details[0].branch
+	} else {
+		// TeammateIdle and legacy/direct sends have no admission snapshot.
+		gitBranch = h.gitBranch(cwd)
+	}
 	folderName := filepath.Base(cwd)
 
 	joined := joinMessageParts(body, actions)

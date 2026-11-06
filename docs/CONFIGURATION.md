@@ -335,7 +335,9 @@ other off for the same status.
 Two independent options cut notification noise when you're already watching the terminal:
 
 - **`notifyOnlyWhenUnfocused`** - skip the desktop notification only when the focused terminal window can be matched to the current Claude session. On Linux this works on X11 terminals that export `$WINDOWID`, and in [JetBrains IDE terminals](CLICK_TO_FOCUS.md#jetbrains-ides).
-- **`notifyDelaySeconds`** - wait N seconds before delivering, so a quick task can finish before any banner appears (capped at 25s to stay within the hook timeout).
+- **`notifyDelaySeconds`** - wait N seconds before delivering, so a quick task can finish before any banner appears (configured delay capped at 25s).
+
+For Claude/Codex hooks, the native host's 30-second execution limit also covers startup, transcript processing, Git lookup, desktop submission and shutdown. The hook reserves five seconds for submission and cleanup: **if the full configured delay no longer fits, the desktop banner is skipped rather than shortened or reported as delivered**. In practice, a 25-second delay is usually too long after normal prework; shorter delays can also be skipped if the host already consumed the budget or slept. Webhooks remain independent, without waiting for desktop delay. Other agent entrypoints retain their existing timing contract.
 
 They compose: with both set, the plugin waits, then notifies only if the terminal still isn't focused - "tell me once I've looked away."
 

@@ -353,14 +353,12 @@ func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 
 	// Check suppress-filters before any state mutations (dedup lock, cooldowns)
 	bench.Start("git.branch")
-	{
-		gitBranch := h.gitBranch(ev.Session.CWD)
-		bench.Elapsed("git.branch")
-		folderName := filepath.Base(ev.Session.CWD)
-		if h.cfg.ShouldFilter(string(status), gitBranch, folderName) {
-			logging.Debug("Notification suppressed by filter: status=%s branch=%q folder=%s", status, gitBranch, folderName)
-			return nil
-		}
+	gitBranch := h.gitBranch(ev.Session.CWD)
+	bench.Elapsed("git.branch")
+	folderName := filepath.Base(ev.Session.CWD)
+	if h.cfg.ShouldFilter(string(status), gitBranch, folderName) {
+		logging.Debug("Notification suppressed by filter: status=%s branch=%q folder=%s", status, gitBranch, folderName)
+		return nil
 	}
 
 	// A known Claude turn with delayed desktop-only delivery can remain
@@ -451,6 +449,10 @@ func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 		return nil
 	}
 
+	// Reuse the admission-time Git branch even if that probe returned empty.
+	// Requerying before the desktop delay can consume another timeout.
+	details := h.notificationDetails(ev, classified.insight)
+	details.branch, details.branchFetched = gitBranch, true
 	// Send notifications
 	bench.Start("notify.send")
 	recordedDelivery := false
@@ -459,7 +461,7 @@ func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 		if err := h.stateMgr.UpdateLastNotificationWithIdentity(keys.stateKey, status, content.message, content.stopHash, content.body, content.turnTS, hookEvent); err != nil {
 			logging.Warn("Failed to update last notification: %v", err)
 		}
-	}, h.notificationDetails(ev, classified.insight))
+	}, details)
 	bench.Elapsed("notify.send")
 	if delivery.delivered() {
 		keepPendingStop = true
