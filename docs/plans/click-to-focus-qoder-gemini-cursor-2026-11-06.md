@@ -35,7 +35,7 @@
 
 1. **Capture only a proven local origin** в уже доверенном hook process после текущей проверки выбранной установки и прав. OS target/UID, процессное происхождение, профиль/поколение и route должны быть независимо проверены. TERM_PROGRAM, WT_SESSION, TMUX_PANE, WARP_FOCUS_URL, WINDOWID, PID, session ID, cwd или title — только hints, не полномочие по отдельности.
 2. **Не менять источник событий и политику доставки.** Qoder остаётся через hooks.Handler/legacy notifier. Gemini и Cursor остаются в своих typed consumers и lease/recheck/cache/consent. Сохранить NotAfter deadline, single-effect semantics, no retry after unknown native result, независимые webhook/sound настройки.
-3. **Qoder:** сначала characterization текущего focus в installed CLI. Исправлять только конкретный дефект и подтверждать, что новый capture не заимствует raw Claude-only Ghostty identity и не ведёт к ошибочному окну.
+3. **Qoder:** сначала characterization текущего focus в installed CLI. Важный отдельный guard: legacy hooks.Handler / notifier не интерпретирует notification.Navigation=None. Если origin неизвестен/не прошёл проверку, нужен **per-notification no-focus** (например, узкий SendOption по образцу существующего WithoutSound), который запрещает все OS focus/activation actions **при сохранённом баннере**. Не мутировать общий Config.ClickToFocus, не отключать desktop channel; macOS helper не получает -activate/-execute, Linux daemon не получает focus hints/action, Windows toast не получает activation URI. Независимо проверить, что legacy fallback тоже не переключает окно. Не заимствовать raw Claude-only Ghostty session capture.
 4. **Gemini/Cursor:** только после позитивного proof-of-origin добавить **узкий terminal-target маршрут** к уже существующему desktop delivery/OS callback. Такой target должен быть отделён от Codex Desktop chat; не переделывать старые агенты или OpenCode. Если native adapter принимает достаточную цель без новой публичной структуры — предпочесть малый adapter.
 5. **Снимок клика фиксируется при доставке**, живёт до самого click после смерти sender, проверяет owner/установку/поколение и корректно отказывает при отозванном разрешении, чужом окне, повторно использованном PID, update/remove. Не искать «текущее» окно в момент клика.
 6. **Политика:** при remote/headless/unknown origin оставлять Navigation=None и обычное уведомление. Навигация BestEffort только если доказан local target; при невозможности безопасно сфокусировать — не переключать ничего. Не менять Required/None семантику существующих агентов.
@@ -68,7 +68,8 @@
 
 - Installed **публичная** версия CLI и конкретная OS/arch, test source SHA и подписанный helper / D-Bus daemon / Windows protocol handler. Проверить *физический клик* после остановки sender, и что сфокусировалось точно нужное окно.
 - Два терминала с одинаковым cwd/title; два разных профиля; PID/HWND reuse; смена terminal tab; TUI и remote/headless; stale installation generation after update/removal; отказ прав, отсутствие window manager; double click.
-- Провал безопасен: без подтверждённого target — обыкновенный баннер, никакого switch в чужую сессию. Права не запрашивать обходными методами; OS-accepted и мок-клик **не** дают права менять README на Supported.
+- Провал безопасен: без подтверждённого target — обыкновенный баннер, никакого switch в чужую сессию. Для Qoder проверить отдельную per-notification no-focus ветку на macOS/Linux/Windows; не спутать её с modern Navigation=None. Права не запрашивать обходными методами; OS-accepted и мок-клик **не** дают права менять README на Supported.
+- **Opt-out E2E:** при включённом desktop и валидном local target физический click **не** должен менять фокус, если (a) общий clickToFocus=false либо (b) разрешение для этого агента явно выключено. **Upgrade E2E:** старый сохранённый профиль без явного согласия на новую навигацию после обновления остаётся без focus action; баннер, звук и webhook ведут себя по прежнему. Не использовать для этого новый публичный feature flag.
 - Сохранить sound mute, webhook-only consent, session dedup, anti-spam, event classification, one-shot effect. Gemini turn ended ≠ success, Cursor Stop ≠ success, Qoder StopFailure ≠ completion.
 - Focused unit/regression для boundary, native E2E на Linux/macOS/Windows, UAP install/update/uninstall, exact-head Go race+CI; review + SHA-guarded squash merge + postmerge проверки.
 
@@ -83,6 +84,13 @@
 | Фокус по одному project folder, title, последнему активному окну | 1 | Неоднозначность и неверная сессия |
 
 **Оценка (грубая, не квота):** Qoder 50–180 prod LOC, Gemini 120–330, Cursor 120–350, shared adapter 150–400, tests/OS E2E 700–1700. **~1140–2960 изменённых LOC** после успешного P0. Если доказанного маршрута нет — меньший scope, а не 10k новых строк.
+
+## 7.0. Результаты критики и принятые изменения
+
+- **CodeRabbit (независимый первый проход):** [inline review в PR #628](https://github.com/777genius/agent-notifications/pull/628). Найдено: Qoder использует legacy notifier, поэтому современный Navigation=None не отключает возможный Linux focus callback; **принято**, добавлен обязательный per-notification no-focus путь для всех трёх OS. Также **приняты** negative E2E с global/agent opt-out и старым профилем после update.
+- **Повторное исследование исходников:** internal/copilotvscodeinstall/desktop.go прямо отвергает навигацию Cursor; modern Linux backend знает лишь Codex Desktop target; у config global ClickToFocus=true. План ограничен точечным расширением после реального provenance proof, не «переключением флага» и не глобальной автоматической активацией.
+- **Codex security review / Strix:** запрошены, но внешние сервисы сообщили о лимите Codex reviews и проблеме оплаты Strix. Это **не зачтённые** проверки, нельзя писать «все независимые агенты одобрили». Повторить при доступности; CodeRabbit и авторское adversarial review не подменяют native E2E.
+- Финальные source/OS/UX security gate относятся к последующим implementation PR, а не к самому плану.
 
 ## 7. Запрос критическим агентам перед кодом
 
