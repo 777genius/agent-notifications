@@ -120,7 +120,9 @@ for case in stale same malformed foreign offline; do
             [ "$actual" = 0 ] && grep -qx VERIFIED-RELOCATE "$LAB/upgrade.trace" || { cat "$LAB/upgrade-$case.out"; echo 'stale Claude cache skipped verified relocation' >&2; exit 1; }
             ;;
         offline)
-            [ "$actual" != 0 ] && [ ! -s "$LAB/upgrade.trace" ] || { cat "$LAB/upgrade-$case.out"; echo 'offline stale cache incorrectly reported success' >&2; exit 1; }
+            [ "$actual" != 0 ] && [ ! -s "$LAB/upgrade.trace" ] &&
+                grep -Fq 'A verified release is required to relocate the versioned Claude cache; existing ownership retained.' "$LAB/upgrade-$case.out" ||
+                { cat "$LAB/upgrade-$case.out"; echo 'offline stale cache incorrectly reported success' >&2; exit 1; }
             ;;
         *)
             [ "$actual" = 0 ] && [ ! -s "$LAB/upgrade.trace" ] || { cat "$LAB/upgrade-$case.out"; echo "unexpected relocation for $case" >&2; exit 1; }
