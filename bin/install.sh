@@ -1079,6 +1079,31 @@ check_github_availability() {
     return 0
 }
 
+# A Claude marketplace update may prepopulate a new cache binary while the
+# managed ledger still owns the previous version. Only choose the existing
+# checksum-verified relocation flow; do not edit or adopt ledger files here.
+versioned_claude_cache_needs_update() {
+    [ "$PLATFORM" = linux ] && [ "${CN_PRODUCT:-claude}" = claude ] || return 1
+    [ "${INSTALL_DISPOSABLE_ACQUISITION:-false}" != true ] || return 1
+    local current="${SCRIPT_DIR%/}" root ledger previous=""
+    root="${current%/bin}"
+    [ "$root" != "$current" ] || return 1
+    case "$root" in
+        */plugins/cache/claude-notifications-go/claude-notifications-go/[0-9]*.[0-9]*.[0-9]*) ;;
+        *) return 1 ;;
+    esac
+    ledger="${XDG_CONFIG_HOME:-${HOME:+$HOME/.config}}/agent-notifications/ownership.json"
+    [ -f "$ledger" ] && [ ! -L "$ledger" ] || return 1
+    if usable_python3; then
+        previous=$(python3 -I -c 'import json,sys; data=json.load(open(sys.argv[1])); print(data.get("Consumers",{}).get("claude-hooks",{}).get("RuntimeRoot",""))' "$ledger" 2>/dev/null) || return 1
+    elif usable_node; then
+        previous=$(NODE_OPTIONS= NODE_PATH= node --no-warnings -e 'const data=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));process.stdout.write((data.Consumers||{})["claude-hooks"]?.RuntimeRoot||"")' "$ledger" 2>/dev/null) || return 1
+    else
+        return 1
+    fi
+    [ "$previous" != "$root" ] && [ "${previous%/*}" = "${root%/*}" ]
+}
+
 # Check if binary already exists
 check_existing() {
     if [ "$FORCE_UPDATE" = true ]; then
@@ -2609,11 +2634,24 @@ main() {
         detect_platform
     fi
 
+    # A populated new cache is not proof of managed ownership. Relocate it
+    # through the existing pinned-release Go transaction, even without --force.
+    CACHE_RELOCATION_REQUIRED=false
+    if versioned_claude_cache_needs_update; then
+        CACHE_RELOCATION_REQUIRED=true
+        FORCE_UPDATE=true
+        echo -e "${BLUE}🔄 Managed Claude cache version changed; verifying release and relocating ownership${NC}"
+    fi
+
     # Offline forced updates must stop before any installation work.
     if [ "$FORCE_UPDATE" = true ] && [ -z "${INSTALL_STAGED_ASSETS:-}" ]; then
         if ! check_github_availability || [ "$OFFLINE_MODE" = true ]; then
             echo ""
             echo -e "${YELLOW}⚠ Keeping existing installation (GitHub unreachable)${NC}"
+            if [ "$CACHE_RELOCATION_REQUIRED" = true ]; then
+                echo "A verified release is required to relocate the versioned Claude cache; existing ownership retained." >&2
+                return 1
+            fi
             if [ -f "$BINARY_PATH" ]; then print_install_promotion; return 0; fi
             return 1
         fi
