@@ -50,4 +50,3 @@ func claudeNativeTitle(id, transcript string) string {
 	}
 	return generated
 }
-
