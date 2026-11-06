@@ -84,13 +84,14 @@ func TestStrictTerminalNativeSender(t *testing.T) {
 			"-f", "_NET_WM_PID", "32c", "-set", "_NET_WM_PID", strconv.Itoa(origin.OwnerPID)).Run(); err != nil {
 			t.Fatal("failed to forge the harmless TEST EWMH property", err)
 		}
-		// A valid marker must NOT let another X11 client's window through:
-		// XRes server ownership is checked independently from EWMH/PID and
-		// the same string marker on a different native XID.
-		if err := exec.CommandContext(ctx, "/usr/bin/xprop", "-id", spoof,
-			"-f", "_AGENT_NOTIFICATIONS_STRICT_ORIGIN", "8s", "-set",
-			"_AGENT_NOTIFICATIONS_STRICT_ORIGIN", origin.WindowNonce).Run(); err != nil {
-			t.Fatal("failed to seed spoof window TEST marker", err)
+		// A valid marker must NOT let another X11 client's window through.
+		// xprop -set may silently skip an atom that has never existed, so
+		// use the production XRes marker writer and assert it really wrote
+		// the genuine marker on the foreign TEST window.
+		foreignPID, marker, err := xresWindowRecord(ctx, os.Getenv("DISPLAY"), spoof, "mark", origin.WindowNonce)
+		if err != nil || marker != origin.WindowNonce || foreignPID == origin.OwnerPID {
+			t.Fatalf("failed to seed a foreign window with the genuine marker: pid=%d marker_matches=%t err=%v",
+				foreignPID, marker == origin.WindowNonce, err)
 		}
 		t.Setenv("WINDOWID", spoof)
 		if rejected, allowed := CaptureStrictTerminal(ctx, cfg, config.AgentQoder, control, ledger.ID, ledger.Generation); allowed || rejected != nil {
