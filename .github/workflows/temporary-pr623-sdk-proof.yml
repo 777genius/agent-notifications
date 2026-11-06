@@ -15,7 +15,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: 777genius/universal-agent-plugins
-          ref: e68925df597ee48f5af56592bd8007455e9aeebd
+          ref: f401557f9d1cb2a75efc376c1eba79ccda71937f
           path: _sdk
           persist-credentials: false
       - uses: actions/setup-go@v7
@@ -46,6 +46,10 @@ jobs:
           p.write_text("".join(output))
           PY
           gofmt -w _sdk/install/integrationctl/agentplugins/installer/group_user_prepared_completion.go
+          (cd _sdk/install/integrationctl/agentplugins && go test -count=1 -run '^TestUserGroupPreparedUpdate(RepeatedIdenticalFrozenDeliveries|ConflictingRepeatedFrozenDeliveryFailsClosed)          go mod edit -replace=github.com/777genius/plugin-kit-ai/install/integrationctl=./_sdk/install/integrationctl
+          go mod edit -replace=github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins=./_sdk/install/integrationctl/agentplugins
+          go test -mod=mod -count=1 -run '^TestGroupUpdateCodexLocalCompletesAndPreservesUnselectedClaude$' -v ./internal/agentnotify/portablesetup
+ ./installer)
           go mod edit -replace=github.com/777genius/plugin-kit-ai/install/integrationctl=./_sdk/install/integrationctl
           go mod edit -replace=github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins=./_sdk/install/integrationctl/agentplugins
           go test -mod=mod -count=1 -run '^TestGroupUpdateCodexLocalCompletesAndPreservesUnselectedClaude$' -v ./internal/agentnotify/portablesetup
