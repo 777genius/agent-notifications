@@ -107,7 +107,7 @@ Hard preservation rules:
 7. **CLI E2E**: public hook routing, basic delivery with stubs, config/usage/exit-code behavior, and Windows lazy update command compatibility. Existing installer E2E is retained as a regression gate but not claimed to be reimplemented.
 8. **CI truthfulness**: collect each current-head status and relevant job logs. A cancelled, skipped, red, stale-head or runner-unqualified test is not success. Rerun only legitimate infrastructure failures; do not bypass native qualification policies.
 9. **Review**: at least two completed review rounds of the implemented diff, including one independent external bot/human review if available. Classify each finding as actionable, inherited with link, or false positive with evidence. Fix actionable findings, then rerun affected tests and review the final integrated head.
-10. **Merge gate**: draft until all applicable exact-head gates pass, there is no unresolved blocking review, and no release frozen-source conflict. On merge, verify new `main` head and postmerge workflows; do not publish a release automatically.
+10. **Merge gate**: keep Draft during implementation; mark Ready for actual current-head native CI because this repository skips essential Windows/macOS jobs on drafts. Restore Draft if a blocking issue emerges, and merge only after all applicable exact-head gates pass with no unresolved blocking reviews or frozen-source conflict. On merge, verify new `main` head and postmerge workflows; do not publish a release automatically.
 
 ## Risks and rollback
 
@@ -137,3 +137,7 @@ Rollback is a normal revert per slice. Because no new persistent format, plugin 
 
 - 2026-11-06: verified live main, the already-merged #590/#612, open #623/#625 and #616's inherited follow-ups; inspected major remaining source files, Go 1.25.8 requirement and three OS CI workflows.
 - Current environment has only Go 1.23.2 and cannot reach github.com directly via shell; all repository writes go through the authorized GitHub connection and executable verification must come from GitHub Actions. This is **not** a completed local test.
+
+- 2026-11-06: S1 `3c21390`, S2 `11ad6bc`, S3 `639e11c` moved declarations within the original Go packages; Go imports corrected at `0c819241` after first exact-head `go fmt` failure. Ubuntu CI `42131956970` on corrected S1–S3 HEAD completed success with full 1.25/1.26 Go test shards and Lint. Source-token comparison gave exact declaration equivalence: notifier 18,181 chars; Linux focus 17,288; summary 11,136 after grouping. Linux tags retained.
+- 2026-11-06: S4 `a243a46` separated main-package command adapters. Filename `command_win_focus.go` deliberately avoids the implicit Windows-only `_windows.go` constraint; the cross-platform CLI dispatch retains the symbol. The fully integrated branch still needs exact-head CI/review and has not been merged.
+- 2026-11-06: CodeRabbit completed plan and first S1–S3 source reviews without blocking inline findings. PR description now follows the `Test plan`/`CLA` template; docstring-count expansion on moved original functions was rejected as nonfunctional noise. Second integrated review remains required.
