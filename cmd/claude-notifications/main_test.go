@@ -101,7 +101,6 @@ func TestLazyUpdateQuoting(t *testing.T) {
 	}
 }
 
-
 func TestPowerShellSingleQuotedEscapesUnicodeApostrophes(t *testing.T) {
 	for _, quote := range []rune{'\'', '\u2018', '\u2019', '\u201a', '\u201b'} {
 		input := "C:\\Users\\O" + string(quote) + "Brien\\bash.exe"
