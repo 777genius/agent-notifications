@@ -40,6 +40,8 @@ jobs:
                   output.append(indent+'fmt.Printf("SDK-PROOF-TARGET err=%v frozen=%+v plan=%+v\\n", err, frozen, plan)\n')
               if line.lstrip().startswith("return hasPrepared &&"):
                   output.append(indent+'fmt.Printf("SDK-PROOF-COMPLETE prepared=%t remaining=%d\\n", hasPrepared, len(targets))\n')
+              if line.lstrip().startswith("return completedProjectDeliveryIdentity(frozen, current)"):
+                  output.append(indent+'fmt.Printf("SDK-PROOF-DELIVERY equality: client=%t scope=%t context=%t artifact=%t active=%t nativeRoot=%t profile=%t authority=%t selected=%t frozen=%+v current=%+v\\n", frozen.ClientID == current.ClientID, frozen.Scope == current.Scope, frozen.TargetContext == current.TargetContext, frozen.PhysicalArtifactID == current.PhysicalArtifactID, frozen.ActivePath == current.ActivePath, frozen.NativeRegistryRoot == current.NativeRegistryRoot, frozen.ProfileNamespace() == current.ProfileNamespace(), domain.SameProfileAuthority(frozen.ProfileAuthority(), current.ProfileAuthority()), reflect.DeepEqual(frozen.SelectedDelivery, current.SelectedDelivery), frozen, current)\n')
               output.append(line)
           p.write_text("".join(output))
           PY
