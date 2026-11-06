@@ -119,3 +119,36 @@ func TestTerminalClickRecheckRejectsSwappedOrRevokedConfig(t *testing.T) {
 		t.Fatal("symlink replacement bypassed immutable selected file")
 	}
 }
+
+func TestTerminalClickLinkedParentDeniedAtSelection(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux config selection contract")
+	}
+	root := t.TempDir()
+	actual := filepath.Join(root, "actual")
+	alias := filepath.Join(root, "linked-parent")
+	if err := os.MkdirAll(actual, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(actual, alias); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(actual, "config.json")
+	data := []byte(`{"schemaVersion":2,"agents":{"qoder":{"notifications":{"desktop":{"clickToFocus":true,"terminalClickConsentVersion":1}}}}}`)
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(OverrideEnv, filepath.Join(alias, "config.json"))
+	linked, err := LoadForAgentQuiet(root, AgentQoder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if linked.TerminalClickAuthorized() {
+		t.Fatal("linked parent granted an unrevocable terminal click action")
+	}
+	t.Setenv(OverrideEnv, path)
+	direct, err := LoadForAgentQuiet(root, AgentQoder)
+	if err != nil || !direct.TerminalClickAuthorized() {
+		t.Fatal("real selected file lost explicit terminal click consent", err)
+	}
+}
