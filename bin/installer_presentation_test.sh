@@ -75,6 +75,13 @@ sed '/^main "\$@"$/d' "$ROOT/bin/bootstrap.sh" > "$LAB/bootstrap-functions.sh"
 )
 echo 'PASS bootstrap promotion private handoff and refusal'
 
+# Only test Linux's managed-cache path contract on POSIX hosts. Git Bash
+# exposes /tmp through MSYS, while native Python/Node use Win32 paths; a
+# pretend PLATFORM=linux on Windows cannot reproduce Linux's canonical ledger.
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) echo 'SKIP Linux-only Claude cache relocation (Windows path semantics)'; exit 0 ;;
+esac
+
 # Regression for #585: a new Claude marketplace cache already contains an
 # executable, while the managed ledger still owns the previous version.
 # The installer must run its existing verified relocation path, not short-cut
