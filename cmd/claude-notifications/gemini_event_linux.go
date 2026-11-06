@@ -8,5 +8,5 @@ import (
 )
 
 func newGeminiDesktopPort(gate geminiGate) notification.DeliveryPort {
-	return geminiLeasedDesktop{gate: gate, port: notifier.NewFreedesktopDelivery(notifier.SystemBootClock{})}
+	return geminiLeasedDesktop{gate: gate, port: notifier.NewTerminalDesktopDelivery(notifier.SystemBootClock{})}
 }

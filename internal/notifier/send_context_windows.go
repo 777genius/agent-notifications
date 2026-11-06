@@ -16,7 +16,7 @@ func (n *Notifier) sendNativeDesktopContext(ctx context.Context, sound, title, b
 		body = subtitle + "\n" + body
 	}
 	toast := windowsToastPayload{AppID: windowsToastAppID, Title: title, Body: body, Icon: icon, Silent: true}
-	if n.cfg.Notifications.Desktop.ClickToFocus {
+	if n.cfg.Notifications.Desktop.ClickToFocus && !opts.noFocus {
 		if err := winfocus.EnsureRegistered(); err != nil {
 			return err
 		}

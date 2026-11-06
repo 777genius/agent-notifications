@@ -42,6 +42,24 @@ type DesktopTarget struct {
 	TeamID          string
 }
 
+// TerminalTarget is a verified local-origin *snapshot*, not an agent/model ID.
+// The Linux native callback must recheck all of this against the live window,
+// the selected user's configuration and installed generation before focusing.
+type TerminalTarget struct {
+	Agent          string
+	Display        string
+	WindowID       string
+	WindowNonce    string // 128-bit marker scoped to the X11 window lifetime
+	OwnerPID       int
+	OwnerBirth     uint64
+	ConfigPath     string
+	ConfigRevision string
+	ControlRoot    string
+	InstallationID string
+	Generation     uint64
+	PolicySHA256   string // selected managed user policy; changed/disabled policy revokes click
+}
+
 // Deadline is captured at transport admission, before validation or locks.
 // Seconds are boot-continuous seconds including suspend, not Unix wall time.
 type Deadline struct {
@@ -61,11 +79,13 @@ type PolicySnapshot struct {
 
 type Request struct {
 	Content       Content
+	AppIcon       string // strict terminal banner's configured icon, never a focus target
 	CorrelationID string // UUID assigned by the durable admission owner
 	Deadline      Deadline
 	Policy        PolicySnapshot
 	Navigation    Navigation // empty defaults to Required
 	Target        DesktopTarget
+	Terminal      *TerminalTarget // only a trusted local CLI composer may set this
 	Silent        bool
 }
 

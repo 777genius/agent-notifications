@@ -62,15 +62,16 @@ type webhookInterface interface {
 
 // Handler handles hook events
 type Handler struct {
-	cfg          *config.Config
-	dedupMgr     *dedup.Manager
-	stateMgr     *state.Manager
-	teamStateMgr *teamstate.Manager
-	notifierSvc  notifierInterface
-	webhookSvc   webhookInterface
-	pluginRoot   string
-	product      Product
-	source       EventSource
+	cfg           *config.Config
+	dedupMgr      *dedup.Manager
+	stateMgr      *state.Manager
+	teamStateMgr  *teamstate.Manager
+	notifierSvc   notifierInterface
+	webhookSvc    webhookInterface
+	pluginRoot    string
+	product       Product
+	source        EventSource
+	terminalFocus notifier.SendOption // request-local verified Qoder action, nil if unqualified
 	// codexEnricher is the DIP seam for Codex turn classification; nil
 	// selects the built-in payload heuristic. See CodexTurnEnricher.
 	codexEnricher CodexTurnEnricher
@@ -141,6 +142,18 @@ func newHandlerWithConfig(pluginRoot string, cfg *config.Config, product Product
 func (h *Handler) RestrictChannels(desktop, webhook bool) {
 	h.cfg.Notifications.Desktop.Enabled = h.cfg.Notifications.Desktop.Enabled && desktop
 	h.cfg.Notifications.Webhook.Enabled = h.cfg.Notifications.Webhook.Enabled && webhook
+}
+
+// BindManagedTerminalClick is available only to a Qoder hook that already
+// holds its verified installed policy/channel lease. Legacy unmanaged hooks
+// and remote/headless sessions cannot attach a click action.
+func (h *Handler) BindManagedTerminalClick(ctx context.Context, root, installationID string, generation uint64) {
+	if h == nil || h.product != ProductQoder || h.cfg == nil || !h.cfg.IsDesktopEnabled() {
+		return
+	}
+	if origin := notifier.CaptureLocalTerminal(ctx, h.cfg, config.AgentQoder, root, installationID, generation); origin != nil {
+		h.terminalFocus = notifier.WithTerminalTarget(origin)
+	}
 }
 
 // eventSource returns the injected source, defaulting to the legacy Claude

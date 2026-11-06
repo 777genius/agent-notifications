@@ -162,6 +162,21 @@ func loadFromPluginRoot(pluginRoot string, agent AgentID, warn func(string)) (*C
 	assets, legacy := ConsumerContext(pluginRoot)
 	assets.Agent = agent
 	_, cfg, selection, err := ReadDocumentSelection(ReadRequest{Env: env, Assets: assets, Legacy: legacy, ReadSnapshot: ReadFileSnapshot})
+	if err == nil && cfg != nil {
+		cfg.BindTerminalClickSelection(selection.Path)
+		if cfg.TerminalClickAuthorized() {
+			// Preserve the original selection: Resolve normally canonicalizes
+			// linked parents. A later parent-link retarget could otherwise
+			// leave a live action authorized by the old physical file.
+			raw := env
+			raw.Canonicalize = nil
+			initial, resolveErr := Resolve(raw)
+			if resolveErr != nil || !initial.Exists || initial.Path != selection.Path {
+				cfg.BindTerminalClickSelection("")
+				warn("terminal click-to-focus disabled: could not verify the selected config path without resolving parent links")
+			}
+		}
+	}
 	for _, diagnostic := range append(selection.Diagnostics, ConsumerDiagnostics()...) {
 		warn(string(diagnostic.Code))
 	}

@@ -85,6 +85,7 @@ func isTimeSensitiveStatus(status analyzer.Status) bool {
 // (used when the desktop is in Do Not Disturb).
 func (n *Notifier) SendDesktop(status analyzer.Status, message, sessionID, cwd string, opts ...SendOption) error {
 	sendOpts := resolveSendOptions(opts)
+	focusEnabled := n.cfg.Notifications.Desktop.ClickToFocus && !sendOpts.noFocus
 
 	// Send terminal bell for terminal tab indicators (e.g. Ghostty, tmux,
 	// Windows Terminal). Platform-specific; see bell_other.go / bell_windows.go.
@@ -119,6 +120,19 @@ func (n *Notifier) SendDesktop(status analyzer.Status, message, sessionID, cwd s
 		logging.Warn("App icon not found: %s, using default", appIcon)
 		appIcon = ""
 	}
+	// Strict local terminal actions are separate from the historical
+	// heuristic focus routes. A target is supplied only by a verified
+	// installed CLI composer, never from a notification body or session ID.
+	if sendOpts.terminal != nil {
+		if focusEnabled && platform.IsLinux() {
+			if sendOpts.hookPresentation != nil && subtitle != "" {
+				cleanMessage = subtitle + "\n" + cleanMessage
+			}
+			return n.sendVerifiedTerminal(title, cleanMessage, appIcon, statusInfo.Sound, sendOpts)
+		}
+		focusEnabled = false    // unqualified platform: informational only
+		sendOpts.noFocus = true // context-backed macOS notifications stay action-free
+	}
 	if sendOpts.executionContext != nil {
 		return n.sendNativeDesktopContext(sendOpts.executionContext, statusInfo.Sound, title, cleanMessage, subtitle, sessionID, cwd, appIcon, sendOpts)
 	}
@@ -135,7 +149,7 @@ func (n *Notifier) SendDesktop(status analyzer.Status, message, sessionID, cwd s
 				sessionID,
 				false, // Ordinary delivery must respect Focus for every status.
 				cwd,
-				n.cfg.Notifications.Desktop.ClickToFocus,
+				focusEnabled,
 				n.nativeNotificationSound(statusInfo.Sound, sendOpts),
 			); err != nil {
 				var permissionErr *NotificationPermissionDeniedError
@@ -166,7 +180,7 @@ func (n *Notifier) SendDesktop(status analyzer.Status, message, sessionID, cwd s
 	}
 
 	// Linux: Try daemon for click-to-focus support
-	if platform.IsLinux() && n.cfg.Notifications.Desktop.ClickToFocus {
+	if platform.IsLinux() && focusEnabled {
 		if err := sendLinuxNotification(title, cleanMessage, appIcon, n.cfg, cwd); err != nil {
 			logging.Warn("Linux daemon notification failed, falling back to beeep: %v", err)
 			// Fall through to beeep
@@ -178,7 +192,7 @@ func (n *Notifier) SendDesktop(status analyzer.Status, message, sessionID, cwd s
 	}
 
 	// Windows: use a bounded WinRT toast with protocol activation for click-to-focus support.
-	if platform.IsWindows() && n.cfg.Notifications.Desktop.ClickToFocus {
+	if platform.IsWindows() && focusEnabled {
 		if err := sendWindowsNotification(title, cleanMessage, appIcon, n.cfg, cwd); err != nil {
 			logging.Warn("Windows click-to-focus notification failed, falling back to beeep: %v", err)
 			// Fall through to beeep

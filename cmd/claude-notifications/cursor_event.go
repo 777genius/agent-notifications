@@ -98,7 +98,8 @@ func runCursorEvent(argv []string, input io.ReadCloser, output io.Writer) (code 
 	if err != nil {
 		return 0
 	}
-	consumer := cursorevent.Consumer{Binding: binding, Gate: gate, Config: effective, Clock: clock,
+	origin := notifier.CaptureLocalTerminal(ctx, effective, config.AgentCursor, b.ControlRoot, binding.InstallationID, binding.Generation)
+	consumer := cursorevent.Consumer{Binding: binding, Gate: gate, Config: effective, Clock: clock, TerminalClick: origin,
 		Cache:   &observation.RecentCache{Root: b.DataRoot, Clock: clock},
 		Desktop: copilotvscodeinstall.NewCursorDesktop(gate, binding, newCursorDesktopPort(b, fixed.Executable)),
 		SendWebhook: copilotvscodeinstall.NewCursorWebhookSender(gate, binding, func(ctx context.Context, cfg *config.Config, message webhook.SendContext) error {

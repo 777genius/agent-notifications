@@ -24,9 +24,9 @@ Desktop alerts are silent by default. Since **v1.50.0**, they can request the
 `sound` setting is enabled. This is not Claude/Codex custom audio, configured
 volume/device playback or evidence of audible sound on every host.
 Webhooks still require separate consent and configured endpoints.
-Click-to-focus, questions, errors, plans, reviews, session-limit alerts,
-MCP notification tools and the `agent-notifications` skill are not Gemini
-capabilities. Claude/Codex capabilities and OpenCode limits remain separate.
+**Guarded terminal-window Click-to-Focus** is an explicit opt-in for a verified **local Linux/X11** origin. The installed Gemini observer must have an active binding and a selected schema-2 `agents.gemini` profile with `clickToFocus: true` and `terminalClickConsentVersion: 1`; a global `clickToFocus: false` vetoes it. It activates only the originating terminal **window**, never an exact chat/pane. Missing permission, Wayland, remote/headless or macOS/Windows leave the alert informational. The strict X11 daemon/click fixture passed, but a genuine authenticated Gemini-to-click path is **not yet qualified**. [Details](CLICK_TO_FOCUS.md#guarded-local-cli-routing-qoder-gemini-cli-cursor-cli).
+
+Questions, errors, plans, reviews, session-limit alerts, MCP notification tools and the `agent-notifications` skill are not Gemini capabilities. Claude/Codex capabilities and OpenCode limits remain separate.
 
 ## Installation
 
@@ -83,8 +83,7 @@ Gemini's built-in notifications or modify their settings.
 Use the installer's reported configuration path and Gemini guide rather
 than the Claude/Codex portable MCP wizard. The `agents.gemini` profile
 controls the two supported statuses and allowed delivery channels. The v1.50.0
-`systemSound` option requests the OS default cue after consent;
-it cannot enable other event types or Click to Focus. Channel consent belongs to Gemini;
+`systemSound` option requests the OS default cue after consent; it cannot enable other event types or grant Click-to-Focus. Strict Linux/X11 window focus requires **separate per-agent terminal-click consent**. Channel consent belongs to Gemini;
 OpenCode consent is separate. Webhook consent alone does not configure an endpoint.
 
 Duplicate suppression records attempts per channel for a 60-second window, with
@@ -114,6 +113,7 @@ The native CLI and production lifecycle checks passed on all five targets for th
 | Windows amd64 native shell / notification API / visual desktop | Native CLI, production lifecycle and webhook passed; notification API and visual desktop unverified |
 | Linux amd64/arm64 native shell and webhook / desktop | Native CLI and production install/update/remove/webhook passed; desktop API and visual desktop unverified |
 | macOS Intel native CLI | Native CLI, production lifecycle and webhook passed; visual desktop unverified |
+| Guarded Linux/X11 terminal-window focus | Shared strict Xvfb/dunst/Xterm daemon test: synthetic `xdotool` click from an isolated Go sender; **not** an authenticated installed Gemini CLI-to-click qualification |
 | Public Agent Notifications availability | macOS amd64/arm64, Linux amd64/arm64 and Windows amd64; see [current platform versions](PLATFORM_RELEASE_CHANNELS.md) |
 
 A macOS observation will not imply Windows/Linux GUI verification. Injected
