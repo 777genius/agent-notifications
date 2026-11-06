@@ -4,6 +4,7 @@ package portablesetup
 
 import (
 	"crypto/sha256"
+	"errors"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -245,6 +246,30 @@ func TestGroupUpdateCodexLocalCompletesAndPreservesUnselectedClaude(t *testing.T
 		})
 	}
 	updated, err := mat.ApplyGroup(ctx, []MaterializeRequest{codexReq, local})
+	if err != nil {
+		// Bounded failure-only evidence identifies which saved SDK proof is
+		// absent without weakening native activation or the acceptance gate.
+		var resultErr ResultError
+		if errors.As(err, &resultErr) {
+			t.Logf("SDK group outcome=%s reason=%q mutated=%t", resultErr.Result.Outcome, resultErr.Result.Reason, resultErr.Result.Mutated)
+			for _, target := range resultErr.Result.Targets {
+				t.Logf("SDK selected client=%s activation=%s verification=%s policy=%s nativeEffect=%s phase=%s", target.ClientID, target.Activation, target.Verification, target.Policy, target.NativeEffect, target.GroupPhase)
+			}
+		}
+		if state, loadErr := mat.Store.Load(); loadErr == nil {
+			if installation, ok := findInstallation(state, base.Identity.InstallationID); ok {
+				for _, binding := range installation.Clients {
+					receipt, hasReceipt := installation.DataReceipts[binding.DataReceiptID]
+					_, hasLocalDelivery := binding.SelectedDelivery.LocalFacts()
+					t.Logf("SDK saved client=%s activation=%s verification=%s receiptOwned=%t receiptDigest=%t localDelivery=%t localObservation=%t nativeOwners=%d nativeRoot=%t nativeAttempt=%t nativePending=%t",
+						binding.ClientID, binding.Activation, binding.Verification,
+						hasReceipt && receipt.State == domain.DataReceiptOwned, receipt.OwnershipDigest != "",
+						hasLocalDelivery, binding.LocalEntryObservation != nil, len(binding.NativeObjects),
+						binding.NativeProfileRoot != "", binding.NativeActivationAttempt != "", binding.PendingNativeIntent != nil)
+				}
+			}
+		}
+	}
 	if err != nil || len(updated) != 2 {
 		t.Fatalf("selected group update did not complete: bindings=%+v err=%v", updated, err)
 	}
