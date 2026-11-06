@@ -30,7 +30,7 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/777genius/agent-notifications.svg)](https://pkg.go.dev/github.com/777genius/agent-notifications)
 [![codecov](https://codecov.io/gh/777genius/agent-notifications/graph/badge.svg?branch=main)](https://codecov.io/gh/777genius/agent-notifications)
 
-Desktop notifications for **Claude, Codex CLI, OpenCode, Gemini CLI, Cursor CLI, Qoder and Pi** on **macOS, Linux and Windows**. Supported architectures and events vary by agent; see the support table and linked setup guides. Claude, Codex and Pi's local terminal UI support configured sounds and click-to-focus where qualified. OpenCode, Gemini CLI and Cursor CLI offer an opt-in OS-default notification sound. Qoder includes five built-in MP3 assets; its native audible playback and focus behavior are not qualified.
+Desktop notifications for **Claude, Codex CLI, OpenCode, Gemini CLI, Cursor CLI, Qoder and Pi** on **macOS, Linux and Windows**. Supported architectures and events vary by agent; see the support table and linked guides. Claude, Codex and Pi provide OS-dependent terminal focus where qualified. **Qoder CLI, Gemini CLI and Cursor CLI have a separate guarded, explicit opt-in for the originating terminal window on verified local Linux/X11**; unsupported or unverified origins remain informational-only. This is window focus, not exact desktop-chat navigation, and installed authenticated CLI-to-click E2E remains unqualified. OpenCode, Gemini and Cursor offer an optional OS-default sound cue; Qoder includes five built-in MP3 assets with separate native audio qualification.
 
 <p align="center">
   <img width="100%" alt="macOS, Windows, Linux (left to right)" src="docs/images/notification-platform-labels.svg" />
@@ -97,8 +97,8 @@ Claude/Codex setup also installs the `agent-notifications` MCP server and `agent
 ## Features
 
 - **Task and attention alerts:** completions, questions, tool approvals and more, depending on the agent. See the table below.
-- **Click-to-focus (Claude/Codex/Pi) and configured sounds:** focus the originating terminal or editor where qualified; choose built-in or custom sounds, volume and audio output. Qoder's built-in assets are included; native audible playback still needs qualification. [Supported terminals](docs/CLICK_TO_FOCUS.md) · [Sound settings](docs/CONFIGURATION.md#sound-options)
-- **Optional system sound (OpenCode/Gemini/Cursor):** enable `notifications.desktop.systemSound=true` with the master sound switch enabled. This requests the OS-default notification cue; it does not provide custom audio, volume control or click-to-focus. [Sound settings](docs/CONFIGURATION.md#sound-options)
+- **Click-to-focus:** Claude/Codex/Pi use their existing OS-dependent terminal/editor routes. Qoder/Gemini/Cursor use **guarded Linux/X11 window focus only after explicit per-agent consent** and verified local origin; per-CLI authenticated click qualification is still outstanding. Other hosts retain informational alerts. [Requirements and configuration](docs/CLICK_TO_FOCUS.md#guarded-local-cli-routing-qoder-gemini-cli-cursor-cli)
+- **Sounds:** Claude/Codex/Pi support their configured audio where qualified; Qoder bundles five MP3s (native audible qualification pending). OpenCode/Gemini/Cursor can request the OS-default cue with `notifications.desktop.systemSound=true` and the master sound switch. **Sound consent never grants window focus.** [Sound settings](docs/CONFIGURATION.md#sound-options)
 - **Useful context:** Claude/Codex desktop alerts show project, git branch and native session names, with generated labels as fallback. OpenCode desktop alerts show native session names when available. Question alerts show the current question when supplied by the host. OpenCode webhooks retain generic text. [Session context](docs/CONFIGURATION.md#session-context) · [OpenCode context](docs/opencode-notifications.md)
 - **Less noise (Claude/Codex):** optional focus-aware desktop delivery, delays, filters and subagent alerts. Plugin-level Do Not Disturb detection is Linux-only. [Configuration](docs/CONFIGURATION.md#focus-aware--delayed-notifications) · [Do Not Disturb](docs/DO_NOT_DISTURB.md)
 - **Webhooks:** Slack, Discord, Telegram, Lark/Feishu and custom endpoints. [Integration guides](docs/webhooks/README.md)
@@ -111,19 +111,21 @@ Claude/Codex setup also installs the `agent-notifications` MCP server and `agent
 | **Claude Code** | Completions, reviews, questions, plans, session limits and API errors | Yes | Terminal/editor, OS-dependent | [Notification types](docs/NOTIFICATION_TYPES.md) |
 | **Codex CLI** | Turn completion and tool permissions; experimental question hooks and final-message question/error detection | Yes | Terminal/editor where supported; separately configured Codex desktop chat route | [Setup and limits](docs/CODEX.md) |
 | **OpenCode** | Root-session completion, questions, permissions and errors | Opt-in OS-default cue | No | [Setup and limits](docs/opencode-notifications.md) |
-| **Gemini CLI** | Turn completion and tool permissions | Opt-in OS-default cue | No | [Cross-platform setup and qualification](docs/gemini-notifications.md) |
-| **Cursor CLI** | Agent loop stopping; fixed informational text | Opt-in OS-default cue | No | [Qualified hosts, shared setup and profile authority](docs/cursor-notifications.md) |
-| **Qoder** | Completion, question, permission, plan and subagent hooks; StopFailure errors/rate limits since v1.50.0 | Configured; five MP3s bundled, native audible proof pending | Not qualified; exact-chat focus unavailable | [Unified installation and native hooks](docs/QODER.md) |
+| **Gemini CLI** | Turn completion and tool permissions | Opt-in OS-default cue | Guarded Linux/X11 window, explicit opt-in; CLI-to-click E2E pending | [Cross-platform setup and limits](docs/gemini-notifications.md) |
+| **Cursor CLI** | Agent loop stopping; fixed informational text | Opt-in OS-default cue | Guarded Linux/X11 window, explicit opt-in; CLI-to-click E2E pending | [Qualified hosts and setup](docs/cursor-notifications.md) |
+| **Qoder** | Completion, question, permission, plan and subagent hooks; StopFailure errors/rate limits since v1.50.0 | Configured; five MP3s bundled, native audible proof pending | Guarded Linux/X11 window, explicit opt-in; no exact-chat focus; CLI-to-click E2E pending | [Native hooks and setup](docs/QODER.md) |
 | **Pi** | Final completed activity, blocking extension UI questions and final API errors | Yes, local TUI | Originating local terminal; native qualification varies by OS | [Common installation, modes, sound and terminal focus](docs/pi-notifications.md) |
 
 **[Detailed support matrix](docs/AGENT_SUPPORT_MATRIX.md)** — event coverage, sounds, terminal vs exact-chat navigation, currently unshipped Copilot work, evidence limits and effort estimates.
+
+For Qoder/Gemini/Cursor, guarded focus requires an active managed installation, a **schema-2 selected config** with `agents.<id>.notifications.desktop.clickToFocus: true` and `terminalClickConsentVersion: 1`, and a verified **local X11 window**. It never follows a guessed title or an old window; a revoked consent or unverified host leaves a normal banner without a focus action. [Enable guarded focus](docs/CLICK_TO_FOCUS.md#guarded-local-cli-routing-qoder-gemini-cli-cursor-cli).
 
 Pi's process/lifecycle acceptance uses 27 cases per OS on Linux, macOS and
 Windows in isolated TEST profiles. Those checks do not establish full native
 macOS/Windows desktop acceptance; remaining coverage is tracked in
 [#561](https://github.com/777genius/agent-notifications/issues/561).
 
-OpenCode, Gemini and Cursor's optional OS-default cue (`systemSound`) has been available since v1.50.0. It remains opt-in and does not enable click-to-focus.
+OpenCode, Gemini and Cursor's optional OS-default cue (`systemSound`) is independent of navigation. OpenCode has no click-to-focus route; Gemini/Cursor require separate explicit Linux/X11 terminal-click consent.
 
 OpenCode V1 and V2 use one installed plugin. The installer does not restrict agent CLI versions. See [OpenCode setup, release reports and delivery limits](docs/opencode-notifications.md) for qualification of specific versions and platforms.
 

@@ -1,6 +1,6 @@
 # Agent support: capabilities, evidence and expansion
 
-Audit updated for the v1.50.0 promotion on 2026-11-01. This is a **source-and-documentation review**, not fresh native desktop acceptance. For platform/version gates use the linked agent guides and [release channels](PLATFORM_RELEASE_CHANNELS.md).
+Navigation capability reviewed against [#629](https://github.com/777genius/agent-notifications/pull/629) on 2026-11-06. Event and audio evidence below retains its own earlier scope. **Implemented guarded Linux/X11 focus is not the same as end-to-end qualification of a real authenticated CLI turn and its notification click.** Platform/version evidence remains in the linked guides.
 
 The v1.50.0 artifacts are frozen at [7da3329d (C5)](https://github.com/777genius/agent-notifications/commit/7da3329d625eae9cdb29ce665f413e9fb9d03d3a). This source includes Qoder's `StopFailure` handler and five bundled MP3 additions from [#558](https://github.com/777genius/agent-notifications/pull/558), covered by source/package/runtime tests. Native audible qualification remains pending in [#562](https://github.com/777genius/agent-notifications/issues/562); packaged assets and unit checks do not establish full Qoder desktop acceptance.
 
@@ -22,27 +22,27 @@ Legend: **Yes** = implemented; **Limited** = only under the stated event/host co
 
 Sources: [Claude/Codex/Qoder product event boundary](../internal/hooks/event.go), [shared hook handler](../internal/hooks/hooks.go), [OpenCode consumer](../internal/opencodeevent/consumer.go), [Gemini consumer](../internal/geminievent/consumer.go), [Cursor consumer](../internal/cursorevent/consumer.go); [Qoder](QODER.md), [Codex](CODEX.md), [OpenCode](opencode-notifications.md), [Gemini](gemini-notifications.md), [Cursor](cursor-notifications.md).
 
-## Shipped integrations: channels and navigation
+## Implemented integrations: channels and navigation
 
 | Agent | Desktop | Webhooks | Configured sounds | Click: local terminal/window | Click: exact desktop chat |
 | --- | --- | --- | --- | --- | --- |
 | Claude Code | Yes | Yes | Yes | Supported, OS/terminal-dependent; pane precision varies | Not established |
 | Codex CLI | Yes | Yes | Yes | Legacy terminal focus where supported | Separate verified, configured Codex-desktop navigation path; platform/installation qualification matters |
 | OpenCode | Yes | Yes | Opt-in OS-default `systemSound` cue since v1.50.0 | No: `Navigation=None` | No |
-| Gemini CLI | Yes | Yes | Opt-in OS-default `systemSound` cue since v1.50.0 | No: `Navigation=None` | No |
-| Cursor CLI | Yes (qualified hosts only) | Yes | Opt-in OS-default `systemSound` cue since v1.50.0 | No: `Navigation=None` | No |
-| Qoder CLI | Yes | Yes | Configured cues; v1.50.0 bundles all five MP3s, native audible qualification pending (issue #562) | **Not qualified**: Claude-only Ghostty capture; generic legacy window activation must not be advertised as exact/guaranteed | No |
+| Gemini CLI | Yes | Yes | Opt-in OS-default `systemSound` cue since v1.50.0 | **Guarded opt-in local Linux/X11 window**; authenticated Gemini-to-click E2E not yet qualified | No |
+| Cursor CLI | Yes (qualified hosts only) | Yes | Opt-in OS-default `systemSound` cue since v1.50.0 | **Guarded opt-in local Linux/X11 window** on eligible hosts; authenticated Cursor-to-click E2E not yet qualified | No |
+| Qoder CLI | Yes | Yes | Configured cues; five MP3s bundled, native audible proof pending (issue #562) | **Guarded opt-in local Linux/X11 window**; authenticated Qoder-to-click E2E not yet qualified | No |
 | Pi | Local TUI only | Yes, explicit consent | Yes, configured local TUI | Originating terminal; Linux desktop suite, owner-observed Mac banner/click; full macOS/Windows native acceptance pending | No |
 
-“Desktop” means the implementation provides a submission path; it does **not** mean visible banners or physical click callbacks were observed on every platform. [Terminal / IDE focus precision](CLICK_TO_FOCUS.md) explains window versus pane/tab and the OS permissions.
+“Desktop” means an implemented submission path, not visible UI acceptance on every OS. **Guarded** means the code can offer a window-focus action only with per-agent schema-2 consent and a verified local X11 terminal origin; **qualified** additionally requires the genuine installed agent's authenticated event → banner → click → correct window evidence. PR [#629](https://github.com/777genius/agent-notifications/pull/629) verified the shared strict daemon with Xvfb/dunst/Xterm and a synthetic `xdotool` click using an isolated Go sender, **not** three authenticated CLI turns. Unverified origins, Wayland, remote/headless and macOS/Windows have informational notifications only for these three agents. [Detailed consent and focus rules](CLICK_TO_FOCUS.md#guarded-local-cli-routing-qoder-gemini-cli-cursor-cli).
 
 Pi's process/lifecycle suite uses 27 cases per OS on Linux, macOS and Windows
 with isolated TEST profiles. This scope does not establish full native
 macOS/Windows desktop acceptance; see [#561](https://github.com/777genius/agent-notifications/issues/561).
 
-Important implementation detail: `internal/hooks/hooks.go` and `internal/notifier/notifier.go` share sound, desktop and webhook delivery across Claude, Codex and Qoder. However, terminal-target capture for Ghostty is explicitly Claude-only. Qoder's setup guide currently describes `clickToFocus` as inert. The shared lower-level notifier can attempt generic activation when enabled; its existence is **not** evidence that Qoder has reliable, session-bound navigation. Resolve the documentation/runtime ambiguity with a native test before promoting support.
+Implementation boundary: Qoder's **managed** installed hooks use [the guarded terminal target](../internal/hooks/hooks.go); Gemini and Cursor bind the same source-derived target through their installed observer consumers. The pre-existing Claude-only Ghostty capture is a different route. Focus is limited to the proven local X11 window (not a pane or exact desktop chat); consent, installation generation and X11 ownership/lifetime are rechecked on click.
 
-Modern observer consumers use narrow fact types and separate registered-consent gates: [OpenCode](../internal/opencodeevent/consumer.go), [Gemini](../internal/geminievent/consumer.go), [Cursor](../internal/cursorevent/consumer.go). All three select `Navigation=None` and do not provide a trusted local terminal origin. OpenCode, Gemini and Cursor can explicitly request an OS-default cue since v1.50.0 ([#555](https://github.com/777genius/agent-notifications/pull/555)). Missing or false opt-in remains silent; this is not configurable audio or a guarantee of an audible cue on every host. Internal Copilot-in-VS-Code follows the same source policy but is not publicly shipped.
+Modern observer consumers retain narrow native facts and separate installation/channel gates: [OpenCode](../internal/opencodeevent/consumer.go), [Gemini](../internal/geminievent/consumer.go), [Cursor](../internal/cursorevent/consumer.go). OpenCode stays `Navigation=None`. Gemini and Cursor attach `Navigation=BestEffort` plus an immutable terminal origin **only when the strict Linux/X11 consent and origin checks pass**; otherwise they remain informational (`Navigation=None`). Optional `systemSound` is independent from navigation and never grants focus. The internal Copilot-in-VS-Code integration remains out of the public agent list.
 
 ## Additional implementations and candidates (not advertised as shipped)
 
@@ -77,9 +77,9 @@ Upstream references: [Qoder hooks](https://docs.qoder.com/cli/hooks), [Cursor ho
 
 See the existing [navigation design and review](plans/notification-navigation-adapters-plan-2026-10-03.md). Preserve its privacy, code-signing and native callback-lifetime constraints; avoid rebuilding that subsystem.
 
-## Rough incremental engineering scope
+## Historical pre-#629 engineering estimates
 
-Estimates below are **changed LOC** (not a measurement of currently missing code), against current main, excluding the released Pi integration from PR #539 and potential large native harnesses. They include validation in the test column but are **not** promises that an unsupported upstream event exists.
+The figures below are **historical pre-#629 planning estimates**, not current missing-code or remaining-effort estimates. The guarded Linux/X11 terminal-origin route for Qoder/Gemini/Cursor has since been implemented. Additional authenticated installed-CLI click qualification and expansion beyond local X11 are separate work.
 
 | Workstream | Production changed LOC | Focused tests changed LOC |
 | --- | ---: | ---: |
@@ -90,17 +90,17 @@ Estimates below are **changed LOC** (not a measurement of currently missing code
 | Cursor CLI: differentiated Stop, sound, trusted focus and extra events if qualified | 200–550 | 300–700 |
 | Copilot in VS Code: decide public scope, local-window focus and sound | 200–480 | 300–650 |
 
-Subtotal: roughly **1,150–2,850 production LOC** and **1,780–3,920 focused-test LOC**, plus **150–300 docs/data LOC** and perhaps **800–2,500 OS native installed-E2E/fixture LOC**; about **3,900–9,600 changed LOC** for this broad scope. Exact desktop-chat navigation for every IDE, cross-OS authorization and a fully repeatable interactive physical-click harness are **separate higher-risk projects** and may exceed those numbers.
+Historical subtotal: roughly **1,150–2,850 production LOC**, **1,780–3,920 test LOC**, plus documentation and native E2E harnesses; **not** a forecast of work left after #629. Exact desktop-chat navigation and cross-OS authorization remain separate, higher-risk efforts.
 
 A **new** GitHub Copilot CLI or Kiro CLI installer/adapter is each a different effort, provisionally **1,500–4,000 additional changed LOC** including tests/install qualification. Native upstream compatibility and sandbox restrictions can invalidate these ranges. Pi's native validation harness illustrates how full OS-specific acceptance can dominate adapter code.
 
-## Acceptance before changing a capability from “No” to “Supported”
+## Acceptance before upgrading “Guarded” to fully qualified support
 
 - Actual installed product + pinned public CLI version on the claimed OS and architecture.
 - Correct native event and suppression of abort, continuation, duplicate and unrelated/subagent cases.
 - Independent desktop and webhook consent; installation update/disable/remove preserves unrelated integrations.
 - Visible banner and audible cue when promised, including muted, permission-denied and fallback cases.
-- Real **physical click** after the producer exits: the correct originating window or pane is activated; native target identity and privacy checks survive update/restart. Record weaker accuracy explicitly.
+- Real installed **authenticated CLI event → OS banner → click** after the producer exits, with focus confirmed on the correct originating window/pane. The strict CI's synthetic X11 click from a Go fixture validates shared mechanism but does not satisfy per-CLI qualification.
 - Clean review, source-bound native test evidence and CI at the exact candidate revision. Unknown/failed native outcomes are not successes.
 
 This document is a **planning/support audit**. It deliberately changes no runtime capability flags or installation policies.

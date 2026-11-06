@@ -86,8 +86,15 @@ Gemini uses separate desktop/webhook consent, independently of
 OpenCode. Shared selection flags apply to each selected observer, but consent is
 stored per agent. Webhook endpoints are configured separately. The two fixed
 signals are turn completed and tool permission requested; completion does not
-mean success or final answer. Sound/focus settings cannot enable those features
-for Gemini. No question/error/plan/review or nested-agent parity is promised.
+mean success or final answer. Audio and focus options cannot add new event
+types. Guarded terminal-window focus is **separate**: eligible Qoder/Gemini/Cursor
+installed hooks can explicitly opt in on verified **local Linux/X11**, using
+schema-2 `agents.<id>.notifications.desktop.clickToFocus: true` and
+`terminalClickConsentVersion: 1`. Global `clickToFocus: false` vetoes it;
+unverified/other OS sessions remain informational. The shared synthetic X11
+click test is not an authenticated per-CLI click qualification. See
+[focus requirements](CLICK_TO_FOCUS.md#guarded-local-cli-routing-qoder-gemini-cli-cursor-cli).
+No question/error/plan/review or nested-agent parity is promised.
 The portable MCP/skill wizard remains Claude/Codex only. Gemini built-in alerts
 may duplicate desktop delivery: choose one source manually or webhook-only.
 Setup does not alter built-in notification settings.

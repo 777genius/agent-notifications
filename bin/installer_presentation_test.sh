@@ -86,6 +86,15 @@ export XDG_CONFIG_HOME="$profile/.config" INSTALL_TARGET_DIR="$newroot/bin"
 mkdir -p "$INSTALL_TARGET_DIR" "$XDG_CONFIG_HOME/agent-notifications"
 printf '%s\n' 'agent-notifications-managed-writer-protocol-v1' > "$INSTALL_TARGET_DIR/claude-notifications-linux-amd64"
 chmod +x "$INSTALL_TARGET_DIR/claude-notifications-linux-amd64"
+# A logical cache alias must compare against the physical root in the ledger.
+alias_base="$LAB/cache-upgrade-physical"
+alias_root="$profile/cache-alias"
+alias_new="$alias_root/plugins/cache/claude-notifications-go/claude-notifications-go/1.51.2"
+alias_old_physical="$alias_base/plugins/cache/claude-notifications-go/claude-notifications-go/1.51.0"
+mkdir -p "$alias_base/plugins/cache/claude-notifications-go/claude-notifications-go/1.51.2/bin"
+ln -s "$alias_base" "$alias_root"
+printf '%s\n' 'agent-notifications-managed-writer-protocol-v1' > "$alias_new/bin/claude-notifications-linux-amd64"
+chmod +x "$alias_new/bin/claude-notifications-linux-amd64"
 cat > "$LAB/cache-upgrade.sh" <<'CACHE'
 #!/bin/bash
 set -eu
@@ -100,10 +109,12 @@ check_github_availability() { OFFLINE_MODE=false; [ "$CACHE_CASE" != offline ] |
 stage_and_promote_runtime() { printf 'VERIFIED-RELOCATE\n' >> "$LAB/upgrade.trace"; }
 main
 CACHE
-for case in stale same malformed foreign offline; do
+for case in stale aliased same malformed foreign offline; do
     : > "$LAB/upgrade.trace"
+    export INSTALL_TARGET_DIR="$newroot/bin"
     case "$case" in
         stale|offline) root_in_ledger="$oldroot" ;;
+        aliased) INSTALL_TARGET_DIR="$alias_new/bin"; export INSTALL_TARGET_DIR; root_in_ledger="$alias_old_physical" ;;
         same) root_in_ledger="$newroot" ;;
         foreign) root_in_ledger="$profile/other-managed-runtime" ;;
         malformed) root_in_ledger="$oldroot" ;;
@@ -116,7 +127,7 @@ for case in stale same malformed foreign offline; do
     actual=0
     CACHE_CASE="$case" CN_PRODUCT=claude bash "$LAB/cache-upgrade.sh" > "$LAB/upgrade-$case.out" 2>&1 || actual=$?
     case "$case" in
-        stale)
+        stale|aliased)
             [ "$actual" = 0 ] && grep -qx VERIFIED-RELOCATE "$LAB/upgrade.trace" || { cat "$LAB/upgrade-$case.out"; echo 'stale Claude cache skipped verified relocation' >&2; exit 1; }
             ;;
         offline)

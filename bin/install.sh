@@ -1085,7 +1085,9 @@ check_github_availability() {
 versioned_claude_cache_needs_update() {
     [ "$PLATFORM" = linux ] && [ "${CN_PRODUCT:-claude}" = claude ] || return 1
     [ "${INSTALL_DISPOSABLE_ACQUISITION:-false}" != true ] || return 1
-    local current="${SCRIPT_DIR%/}" root ledger previous=""
+    local current root ledger previous=""
+    # Match the Go writer's CanonicalPath(target) for symlinked cache ancestors.
+    current="$(cd -P -- "$SCRIPT_DIR" 2>/dev/null && pwd -P)" || return 1
     root="${current%/bin}"
     [ "$root" != "$current" ] || return 1
     case "$root" in

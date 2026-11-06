@@ -90,9 +90,7 @@ file path when using a separate TEST profile. Qoder inherits global
 notification settings; an optional schema version 2 `agents.qoder` profile
 provides overrides. Merge this into the existing document rather than replacing
 other agents' settings. Omitted fields continue to inherit global settings;
-this example deliberately disables sound for Qoder. `clickToFocus` is shown for
-schema completeness only: click-to-focus capture is currently Claude-only and
-the knob is inert for Qoder.
+this example deliberately disables sound **and guarded focus** for Qoder. For verified **local Linux/X11** terminal windows, managed Qoder hooks can opt in with `agents.qoder.notifications.desktop.clickToFocus: true` and `terminalClickConsentVersion: 1` in the selected schema-2 config. An inherited/global `clickToFocus: true` alone is insufficient; a global `false` vetoes focus. Non-local/unverified sessions keep informational banners. This raises the originating terminal **window**, not an exact Qoder Desktop chat. [Consent and proof requirements](CLICK_TO_FOCUS.md#guarded-local-cli-routing-qoder-gemini-cli-cursor-cli).
 
 ```json
 {
@@ -142,7 +140,7 @@ Use that executable for lifecycle commands (retain `--config-root` and
 ```
 
 Reload Qoder after installation, update or removal so existing sessions pick up
-the changed hooks. Click-to-focus to the exact existing Qoder chat is unavailable.
+the changed hooks. Guarded terminal-window focus is Linux/X11-only and optional; opening the exact existing Qoder Desktop chat remains unavailable. The shared strict X11 click test uses an isolated Go sender, not a real authenticated Qoder turn, so per-CLI click E2E is still unqualified.
 
 ## Build a standalone native package
 
