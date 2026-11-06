@@ -250,7 +250,7 @@ func TestClaudeStopDelayedDesktopReservesTurnPastTwoSecondLock(t *testing.T) {
 	cfg := focusNotifyConfig(nil, &delay)
 	cfg.Notifications.Webhook.Enabled = false
 	h, delivered, _ := newTestHandler(t, cfg)
-	sessionID := "test-delayed-stop-pending-"+uuid.NewString()
+	sessionID := "test-delayed-stop-pending-" + uuid.NewString()
 	transcript := createTempTranscript(t, buildTranscriptWithTools([]string{"Write"}, 300))
 	payload := HookData{SessionID: sessionID, TranscriptPath: transcript, LastAssistantMessage: "Done.", CWD: t.TempDir()}
 	oldSleep := sleepFunc
@@ -354,7 +354,7 @@ func TestClaudeStopDelayedDesktopNoEffectReleasesTurnReservation(t *testing.T) {
 	cfg := focusNotifyConfig(&focused, &delay)
 	cfg.Notifications.Webhook.Enabled = false
 	h, n, _ := newTestHandler(t, cfg)
-	sessionID := "test-delayed-stop-noeffect-"+uuid.NewString()
+	sessionID := "test-delayed-stop-noeffect-" + uuid.NewString()
 	transcript := createTempTranscript(t, buildTranscriptWithTools([]string{"Write"}, 300))
 	payload := HookData{SessionID: sessionID, TranscriptPath: transcript, LastAssistantMessage: "Done.", CWD: t.TempDir()}
 	oldSleep := sleepFunc
@@ -388,7 +388,7 @@ func TestClaudeStopDelayedDesktopDifferentUserTurnIsIndependent(t *testing.T) {
 	cfg := focusNotifyConfig(nil, &delay)
 	cfg.Notifications.Webhook.Enabled = false
 	h, n, _ := newTestHandler(t, cfg)
-	sessionID := "test-delayed-stop-second-turn-"+uuid.NewString()
+	sessionID := "test-delayed-stop-second-turn-" + uuid.NewString()
 	transcript := createTempTranscript(t, buildTranscriptWithTools([]string{"Write"}, 300))
 	payload := HookData{SessionID: sessionID, TranscriptPath: transcript, LastAssistantMessage: "Done.", CWD: t.TempDir()}
 	oldSleep := sleepFunc
