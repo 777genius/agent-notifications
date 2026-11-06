@@ -162,6 +162,9 @@ func loadFromPluginRoot(pluginRoot string, agent AgentID, warn func(string)) (*C
 	assets, legacy := ConsumerContext(pluginRoot)
 	assets.Agent = agent
 	_, cfg, selection, err := ReadDocumentSelection(ReadRequest{Env: env, Assets: assets, Legacy: legacy, ReadSnapshot: ReadFileSnapshot})
+	if err == nil && cfg != nil {
+		cfg.BindTerminalClickSelection(selection.Path)
+	}
 	for _, diagnostic := range append(selection.Diagnostics, ConsumerDiagnostics()...) {
 		warn(string(diagnostic.Code))
 	}

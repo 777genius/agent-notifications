@@ -4,7 +4,9 @@ package daemon
 
 import (
 	"context"
+	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -53,5 +55,44 @@ func TestStrictTerminalNeverFollowsUnverifiedWindow(t *testing.T) {
 		if StrictTerminalAuthorized(context.Background(), target) {
 			t.Fatal("unverified terminal granted click action", target)
 		}
+	}
+}
+
+func TestStrictPeerCredentialsBindRealTerminalAncestry(t *testing.T) {
+	listener, err := net.Listen("unix", filepath.Join(t.TempDir(), "test-socket"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	client, err := net.Dial("unix", listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	server, err := listener.Accept()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+	pid, ok := strictPeer(server)
+	if !ok || pid != os.Getpid() {
+		t.Fatalf("kernel peer identity differs: %v, %v", pid, ok)
+	}
+	self, err := procIdentity(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := &notification.TerminalTarget{OwnerPID: os.Getpid(), OwnerBirth: self.start}
+	if !strictPeerMatchesOrigin(server, target) {
+		t.Fatal("kernel-authorized originating process denied")
+	}
+	target.OwnerBirth++
+	if strictPeerMatchesOrigin(server, target) {
+		t.Fatal("reused PID with mismatching birth was authorized")
+	}
+	target.OwnerBirth--
+	target.OwnerPID = os.Getpid() + 1000000
+	if strictPeerMatchesOrigin(server, target) {
+		t.Fatal("unrelated process was accepted as the terminal")
 	}
 }

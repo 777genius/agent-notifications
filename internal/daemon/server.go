@@ -202,6 +202,10 @@ func (s *Server) handleConnection(conn net.Conn) {
 			s.sendError(conn, "missing or conflicting notify payload")
 			return
 		}
+		if req.Type == MessageTypeNotifyStrict && !strictPeerMatchesOrigin(conn, req.Notify.Strict) {
+			s.sendError(conn, "unverified_sender")
+			return
+		}
 		notifyResp, err := s.handleNotification(req.Notify, req.Type == MessageTypeNotifyStrict)
 		if err != nil {
 			resp.Error = err.Error()

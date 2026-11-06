@@ -55,6 +55,21 @@ func (c *Config) TerminalClickSelection() (path, revision string, ok bool) {
 	return c.terminalClickPath, c.terminalClickRevision, true
 }
 
+// BindTerminalClickSelection denies click routing when the effective profile
+// came through a mutable symlink/alias. The callback only has the physical
+// inode; without this check it could miss a selection switched after notify.
+// Ordinary desktop notifications remain unaffected.
+func (c *Config) BindTerminalClickSelection(selected string) {
+	if c == nil {
+		return
+	}
+	if selected != c.terminalClickPath || selected == "" {
+		c.terminalClickAuthorized = false
+		c.terminalClickPath = ""
+		c.terminalClickRevision = ""
+	}
+}
+
 // RecheckTerminalClickConsent refuses changed/revoked config at click time.
 // The raw global veto is checked after parsing; nothing is enabled by defaults.
 func RecheckTerminalClickConsent(path, revision string, agent AgentID) bool {
