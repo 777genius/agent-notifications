@@ -266,6 +266,24 @@ func TestGroupUpdateCodexLocalCompletesAndPreservesUnselectedClaude(t *testing.T
 						hasReceipt && receipt.State == domain.DataReceiptOwned, receipt.OwnershipDigest != "",
 						hasLocalDelivery, binding.LocalEntryObservation != nil, len(binding.NativeObjects),
 						binding.NativeProfileRoot != "", binding.NativeActivationAttempt != "", binding.PendingNativeIntent != nil)
+					if binding.ClientID == "vscode" {
+						observationRevisionMatches := false
+						if binding.LocalEntryObservation != nil {
+							observationRevisionMatches = reflect.DeepEqual(binding.LocalEntryObservation.Facts().RevisionBasis, binding.SelectedDelivery)
+						}
+						profileRootMatches := false
+						if facts, selected := binding.SelectedDelivery.LocalFacts(); selected {
+							profileRootMatches = facts.ProfileRoot == binding.NativeProfileRoot
+						}
+						t.Logf("SDK saved Local ownership proof: validObservation=%t matchingRevision=%t matchingProfileRoot=%t ownsNativeEntry=%t",
+							binding.ValidateLocalEntryObservation() == nil, observationRevisionMatches,
+							profileRootMatches, binding.SelectedDelivery.OwnsProfileEntry(binding.NativeObjects))
+					}
+					t.Logf("SDK saved lifecycle client=%s materialized=%t authentication=%s policy=%s nativeRootMatchesConfig=%t",
+						binding.ClientID, binding.Materialization == domain.MaterializationMaterialized,
+						binding.Authentication, binding.Policy, binding.NativeProfileRoot == map[string]string{
+							"codex": codexReq.ClientConfigRoot, "vscode": local.ClientConfigRoot,
+						}[binding.ClientID])
 				}
 			}
 		}
