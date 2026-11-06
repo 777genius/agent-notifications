@@ -324,7 +324,10 @@ func TestSendDesktopNotification_DeadlineCountsElapsedPreworkAndSuspend(t *testi
 	h.BindHookDeadline(now.Add(16 * time.Second))
 	oldSleep := sleepFunc
 	slept := time.Duration(0)
-	sleepFunc = func(d time.Duration) { slept = d; now = now.Add(d) }
+	sleepFunc = func(d time.Duration) {
+		slept = d
+		now = now.Add(d)
+	}
 	defer func() { sleepFunc = oldSleep }()
 	if !h.sendDesktopNotification(analyzer.StatusTaskComplete, "Done", "session", "/repo") {
 		t.Fatal("delay with adequate budget was not delivered")
@@ -356,7 +359,10 @@ func TestClaudeStopDelayedDesktopNoEffectReleasesTurnReservation(t *testing.T) {
 	oldFocus := isTerminalFocused
 	sleepFunc = func(time.Duration) {}
 	isTerminalFocused = func(_, _ string) bool { return focused }
-	defer func() { sleepFunc = oldSleep; isTerminalFocused = oldFocus }()
+	defer func() {
+		sleepFunc = oldSleep
+		isTerminalFocused = oldFocus
+	}()
 	key := claudeStopTurnLockKey(sessionID, "2025-01-01T12:00:00Z")
 	defer func() { _ = h.dedupMgr.ReleaseLock(key, "Stop") }()
 	if err := h.HandleHook("Stop", buildHookDataJSON(payload)); err != nil {
@@ -388,7 +394,10 @@ func TestClaudeStopDelayedDesktopDifferentUserTurnIsIndependent(t *testing.T) {
 	defer func() { sleepFunc = oldSleep }()
 	first := claudeStopTurnLockKey(sessionID, "2025-01-01T12:00:00Z")
 	second := claudeStopTurnLockKey(sessionID, "2025-01-01T12:00:02Z")
-	defer func() { _ = h.dedupMgr.ReleaseLock(first, "Stop"); _ = h.dedupMgr.ReleaseLock(second, "Stop") }()
+	defer func() {
+		_ = h.dedupMgr.ReleaseLock(first, "Stop")
+		_ = h.dedupMgr.ReleaseLock(second, "Stop")
+	}()
 	if err := h.HandleHook("Stop", buildHookDataJSON(payload)); err != nil {
 		t.Fatal(err)
 	}
@@ -403,11 +412,20 @@ func TestClaudeStopDelayedDesktopDifferentUserTurnIsIndependent(t *testing.T) {
 	// createTempTranscript writes JSONL in the same format.
 	for _, msg := range messages {
 		encoded, err := json.Marshal(msg)
-		if err != nil { t.Fatal(err) }
+		if err != nil {
+			t.Fatal(err)
+		}
 		file, err := os.OpenFile(transcript, os.O_APPEND|os.O_WRONLY, 0600)
-		if err != nil { t.Fatal(err) }
-		if _, err := file.Write(append(encoded, '\n')); err != nil { _ = file.Close(); t.Fatal(err) }
-		if err := file.Close(); err != nil { t.Fatal(err) }
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := file.Write(append(encoded, '\n')); err != nil {
+			_ = file.Close()
+			t.Fatal(err)
+		}
+		if err := file.Close(); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := h.HandleHook("Stop", buildHookDataJSON(payload)); err != nil {
 		t.Fatal(err)

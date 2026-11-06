@@ -279,7 +279,7 @@ func TestLegacyClaudeCLIKeepsLoudErrors(t *testing.T) {
 
 func TestHostHookDeadlineConstantsMatchShippedManifests(t *testing.T) {
 	for _, tc := range []struct {
-		path string
+		path  string
 		limit time.Duration
 	}{
 		{"hooks/hooks.json", claudeHookHostTimeout},
@@ -292,7 +292,9 @@ func TestHostHookDeadlineConstantsMatchShippedManifests(t *testing.T) {
 			}
 			var manifest struct {
 				Hooks map[string][]struct {
-					Hooks []struct { Timeout int `json:"timeout"` } `json:"hooks"`
+					Hooks []struct {
+						Timeout int `json:"timeout"`
+					} `json:"hooks"`
 				} `json:"hooks"`
 			}
 			if err := json.Unmarshal(data, &manifest); err != nil {
@@ -328,14 +330,18 @@ func TestCodexCLIStalledGitFailsOpenWithinHostBudget(t *testing.T) {
 			break
 		}
 	}
-	if home == "" { t.Fatal("isolated HOME not configured") }
+	if home == "" {
+		t.Fatal("isolated HOME not configured")
+	}
 	url := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer url.Close()
 	cfg := fmt.Sprintf(`{"notifications":{"desktop":{"enabled":false},"webhook":{"enabled":true,"preset":"custom","format":"json","url":%q}}}`, url.URL)
 	path := filepath.Join(home, ".claude", "claude-notifications-go", "config.json")
-	if err := os.WriteFile(path, []byte(cfg), 0600); err != nil { t.Fatal(err) }
+	if err := os.WriteFile(path, []byte(cfg), 0600); err != nil {
+		t.Fatal(err)
+	}
 	binDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(binDir, "git"), []byte("#!/bin/sh\nexec sleep 6\n"), 0755); err != nil {
 		t.Fatal(err)
