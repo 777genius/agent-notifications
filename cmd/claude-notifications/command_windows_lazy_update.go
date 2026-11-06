@@ -192,6 +192,18 @@ func shellSingleQuoted(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", `'"'"'`) + "'"
 }
 
+// powershellSingleQuoted escapes all PowerShell single-quote delimiters,
+// including curly Unicode quotes accepted by the PowerShell tokenizer.
 func powershellSingleQuoted(value string) string {
-	return "'" + strings.ReplaceAll(value, "'", "''") + "'"
+	var b strings.Builder
+	b.WriteByte('\'')
+	for _, r := range value {
+		switch r {
+		case '\'', '\u2018', '\u2019', '\u201a', '\u201b':
+			b.WriteRune(r)
+		}
+		b.WriteRune(r)
+	}
+	b.WriteByte('\'')
+	return b.String()
 }

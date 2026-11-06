@@ -101,6 +101,17 @@ func TestLazyUpdateQuoting(t *testing.T) {
 	}
 }
 
+
+func TestPowerShellSingleQuotedEscapesUnicodeApostrophes(t *testing.T) {
+	for _, quote := range []rune{'\'', '\u2018', '\u2019', '\u201a', '\u201b'} {
+		input := "C:\\Users\\O" + string(quote) + "Brien\\bash.exe"
+		want := "'C:\\Users\\O" + string([]rune{quote, quote}) + "Brien\\bash.exe'"
+		if got := powershellSingleQuoted(input); got != want {
+			t.Errorf("quote %U: powershellSingleQuoted(%q) = %q, want %q", quote, input, got, want)
+		}
+	}
+}
+
 func TestWindowsLazyUpdateCommandUsesThreadSleep(t *testing.T) {
 	command := windowsLazyUpdatePowerShellCommand(`C:\Program Files\Git\bin\bash.exe`, `echo ok`)
 
