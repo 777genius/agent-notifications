@@ -208,3 +208,34 @@ func TestGhosttyExactCallbackConstructionNeverDegradesToActivate(t *testing.T) {
 		}
 	}
 }
+
+func TestGhosttyRejectsMalformedTmuxPaneID(t *testing.T) {
+	cfg := config.DefaultConfig()
+	for _, pane := range []string{"%", "%abc", "%42x", "%-1", "42", ""} {
+		t.Run("pane-"+pane, func(t *testing.T) {
+			t.Setenv("TMUX", "/tmp/test-tmux.sock,2,0")
+			t.Setenv("TMUX_PANE", pane)
+			called := false
+			args := selectTerminalNotifierArgsWithDetector(
+				"Title", "Body", "com.mitchellh.ghostty", "/repo", "", true, cfg,
+				func(_, _, _ string, _ *config.Config) ([]string, string) {
+					called = true
+					return []string{"-execute", "guessed-pane"}, "tmux"
+				},
+			)
+			if called {
+				t.Fatal("malformed tmux pane id entered the guessed target detector")
+			}
+			for _, arg := range args {
+				if arg == "-activate" || arg == "-execute" {
+					t.Fatalf("malformed tmux pane installed a click action: %v", args)
+				}
+			}
+		})
+	}
+	for _, pane := range []string{"%0", "%17", "%1024"} {
+		if !validCapturedTmuxPaneID(pane) {
+			t.Fatalf("valid captured tmux pane %q rejected", pane)
+		}
+	}
+}

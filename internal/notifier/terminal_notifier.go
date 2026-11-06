@@ -40,6 +40,16 @@ func boundGhosttyNotifierArgs(title, message, bundleID, cwd, terminalID string) 
 	return exactGhosttyNotifierArgs(title, message, buildGhosttyFocusScript(bundleID, cwd, terminalID))
 }
 
+// A captured tmux pane must be an actual numeric %ID, not merely start with
+// '%'. tmux's active-pane fallback is not proof of the original hook's pane.
+func validCapturedTmuxPaneID(pane string) bool {
+	if len(pane) < 2 || pane[0] != '%' {
+		return false
+	}
+	_, err := strconv.ParseUint(pane[1:], 10, 64)
+	return err == nil
+}
+
 // The detector seam lets tests prove that disabled navigation never captures
 // or invokes a terminal multiplexer, independently of machine environment.
 func selectTerminalNotifierArgsWithDetector(title, message, bundleID, cwd, ghosttyTerminalID string, clickToFocus bool, cfg *config.Config, detect func(string, string, string, *config.Config) ([]string, string)) []string {
@@ -48,7 +58,7 @@ func selectTerminalNotifierArgsWithDetector(title, message, bundleID, cwd, ghost
 	// For Ghostty, bypass this guessed mux action altogether. An exact
 	// stored terminal ID can still take the separate exact-ID route.
 	if clickToFocus && isGhosttyBundleID(bundleID) && IsTmux() &&
-		!strings.HasPrefix(os.Getenv("TMUX_PANE"), "%") {
+		!validCapturedTmuxPaneID(os.Getenv("TMUX_PANE")) {
 		logging.Debug("Ghostty tmux route unavailable: only a verified terminal-ID action is allowed")
 		return boundGhosttyNotifierArgs(title, message, bundleID, cwd, ghosttyTerminalID)
 	}
