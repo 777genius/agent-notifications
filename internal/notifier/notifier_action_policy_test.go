@@ -153,3 +153,58 @@ func TestGhosttyRejectsUnboundTmuxActivePaneFallback(t *testing.T) {
 		t.Fatalf("exact Ghostty terminal callback missing: %v", withID)
 	}
 }
+
+func TestGhosttyExactCallbackConstructionNeverDegradesToActivate(t *testing.T) {
+	cfg := config.DefaultConfig()
+	noMux := func(_, _, _ string, _ *config.Config) ([]string, string) { return nil, "" }
+	cases := []struct {
+		name    string
+		cwd     string
+		id      string
+		wantCmd bool
+	}{
+		{name: "missing origin", cwd: "/repo", id: "", wantCmd: false},
+		{name: "missing cwd despite origin", cwd: "", id: "term-17", wantCmd: false},
+		{name: "valid origin and cwd", cwd: "/repo", id: "term-17", wantCmd: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			args := selectTerminalNotifierArgsWithDetector(
+				"Title", "Body", "com.mitchellh.ghostty", tc.cwd, tc.id, true, cfg, noMux,
+			)
+			hasExecute := false
+			for _, v := range args {
+				if v == "-activate" {
+					t.Fatalf("Ghostty must never degrade to an approximate app focus: %v", args)
+				}
+				if v == "-execute" {
+					hasExecute = true
+				}
+			}
+			if hasExecute != tc.wantCmd {
+				t.Fatalf("exact action=%t, want=%t: %v", hasExecute, tc.wantCmd, args)
+			}
+		})
+	}
+	// Simulate an unavailable focus executable or script resolver. The
+	// final action assembler must treat an empty script as banner-only.
+	for _, arg := range exactGhosttyNotifierArgs("Title", "Body", "") {
+		if arg == "-activate" || arg == "-execute" {
+			t.Fatal("failed script resolution still installed a click action")
+		}
+	}
+	t.Setenv("TMUX", "/tmp/test-tmux.sock,2,0")
+	t.Setenv("TMUX_PANE", "")
+	args := selectTerminalNotifierArgsWithDetector(
+		"Title", "Body", "com.mitchellh.ghostty", "", "term-17", true, cfg,
+		func(_, _, _ string, _ *config.Config) ([]string, string) {
+			t.Fatal("unverified tmux fallback must not be queried")
+			return nil, ""
+		},
+	)
+	for _, arg := range args {
+		if arg == "-activate" || arg == "-execute" {
+			t.Fatalf("missing cwd and tmux pane installed a click action: %v", args)
+		}
+	}
+}
