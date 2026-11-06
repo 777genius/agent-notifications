@@ -1,6 +1,7 @@
 package hooks
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"sync"
@@ -261,7 +262,16 @@ func TestClaudeStopDelayedDesktopReservesTurnPastTwoSecondLock(t *testing.T) {
 		}
 		<-releaseSleep
 	}
-	defer func() { close(releaseSleep); <-firstDone; sleepFunc = oldSleep }()
+	defer func() {
+		close(releaseSleep)
+		if err := <-firstDone; err != nil {
+			t.Errorf("original delayed Stop failed: %v", err)
+		}
+		if count := delivered.callCount(); count != 1 {
+			t.Errorf("original Stop delivered %d banners, want exactly one", count)
+		}
+		sleepFunc = oldSleep
+	}()
 	go func() { firstDone <- h.HandleHook("Stop", buildHookDataJSON(payload)) }()
 	select {
 	case <-sleepEntered:
@@ -329,5 +339,79 @@ func TestSendDesktopNotification_DeadlineCountsElapsedPreworkAndSuspend(t *testi
 	}
 	if n.callCount() != 1 {
 		t.Fatal("expired second attempt reached notifier")
+	}
+}
+
+func TestClaudeStopDelayedDesktopNoEffectReleasesTurnReservation(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	delay := 4
+	focused := true
+	cfg := focusNotifyConfig(&focused, &delay)
+	cfg.Notifications.Webhook.Enabled = false
+	h, n, _ := newTestHandler(t, cfg)
+	sessionID := "test-delayed-stop-noeffect-20261106"
+	transcript := createTempTranscript(t, buildTranscriptWithTools([]string{"Write"}, 300))
+	payload := HookData{SessionID: sessionID, TranscriptPath: transcript, LastAssistantMessage: "Done.", CWD: t.TempDir()}
+	oldSleep := sleepFunc
+	oldFocus := isTerminalFocused
+	sleepFunc = func(time.Duration) {}
+	isTerminalFocused = func(_, _ string) bool { return focused }
+	defer func() { sleepFunc = oldSleep; isTerminalFocused = oldFocus }()
+	key := claudeStopTurnLockKey(sessionID, "2025-01-01T12:00:00Z")
+	defer func() { _ = h.dedupMgr.ReleaseLock(key, "Stop") }()
+	if err := h.HandleHook("Stop", buildHookDataJSON(payload)); err != nil {
+		t.Fatal(err)
+	}
+	if n.callCount() != 0 {
+		t.Fatal("focus-suppressed first Stop emitted a banner")
+	}
+	focused = false
+	if err := h.HandleHook("Stop", buildHookDataJSON(payload)); err != nil {
+		t.Fatal(err)
+	}
+	if n.callCount() != 1 {
+		t.Fatalf("definitive no-effect reserved the turn forever: %d", n.callCount())
+	}
+}
+
+func TestClaudeStopDelayedDesktopDifferentUserTurnIsIndependent(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	delay := 3
+	cfg := focusNotifyConfig(nil, &delay)
+	cfg.Notifications.Webhook.Enabled = false
+	h, n, _ := newTestHandler(t, cfg)
+	sessionID := "test-delayed-stop-second-turn-20261106"
+	transcript := createTempTranscript(t, buildTranscriptWithTools([]string{"Write"}, 300))
+	payload := HookData{SessionID: sessionID, TranscriptPath: transcript, LastAssistantMessage: "Done.", CWD: t.TempDir()}
+	oldSleep := sleepFunc
+	sleepFunc = func(time.Duration) {}
+	defer func() { sleepFunc = oldSleep }()
+	first := claudeStopTurnLockKey(sessionID, "2025-01-01T12:00:00Z")
+	second := claudeStopTurnLockKey(sessionID, "2025-01-01T12:00:02Z")
+	defer func() { _ = h.dedupMgr.ReleaseLock(first, "Stop"); _ = h.dedupMgr.ReleaseLock(second, "Stop") }()
+	if err := h.HandleHook("Stop", buildHookDataJSON(payload)); err != nil {
+		t.Fatal(err)
+	}
+	// A real newer user turn changes the trusted timestamp without changing
+	// the user's final text. This must remain a separate notification.
+	messages := buildTranscriptWithTools([]string{"Write"}, 300)
+	messages[0].Timestamp = "2025-01-01T12:00:02Z"
+	if err := os.WriteFile(transcript, []byte{}, 0600); err != nil {
+		t.Fatal(err)
+	}
+	// createTempTranscript writes JSONL in the same format.
+	for _, msg := range messages {
+		encoded, err := json.Marshal(msg)
+		if err != nil { t.Fatal(err) }
+		file, err := os.OpenFile(transcript, os.O_APPEND|os.O_WRONLY, 0600)
+		if err != nil { t.Fatal(err) }
+		if _, err := file.Write(append(encoded, '\n')); err != nil { _ = file.Close(); t.Fatal(err) }
+		if err := file.Close(); err != nil { t.Fatal(err) }
+	}
+	if err := h.HandleHook("Stop", buildHookDataJSON(payload)); err != nil {
+		t.Fatal(err)
+	}
+	if count := n.callCount(); count != 2 {
+		t.Fatalf("distinct user turn suppressed despite separate marker: count=%d", count)
 	}
 }

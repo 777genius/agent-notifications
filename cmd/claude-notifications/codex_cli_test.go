@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"github.com/777genius/agent-notifications/internal/testenv"
 	"io"
@@ -272,5 +273,42 @@ func TestLegacyClaudeCLIKeepsLoudErrors(t *testing.T) {
 	res = runCLI(t, env, ``, "handle-hook")
 	if res.exitCode == 0 {
 		t.Error("missing event name must exit non-zero")
+	}
+}
+
+func TestHostHookDeadlineConstantsMatchShippedManifests(t *testing.T) {
+	for _, tc := range []struct {
+		path string
+		limit time.Duration
+	}{
+		{"hooks/hooks.json", claudeHookHostTimeout},
+		{"hooks/hooks-codex.json", codexHookHostTimeout},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			data, err := os.ReadFile(filepath.Join(repoRoot(t), tc.path))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var manifest struct {
+				Hooks map[string][]struct {
+					Hooks []struct { Timeout int `json:"timeout"` } `json:"hooks"`
+				} `json:"hooks"`
+			}
+			if err := json.Unmarshal(data, &manifest); err != nil {
+				t.Fatal(err)
+			}
+			if len(manifest.Hooks) == 0 {
+				t.Fatal("empty installed host hooks")
+			}
+			for event, groups := range manifest.Hooks {
+				for _, group := range groups {
+					for _, handler := range group.Hooks {
+						if time.Duration(handler.Timeout)*time.Second != tc.limit {
+							t.Fatalf("%s timeout=%ds, binary bound=%v", event, handler.Timeout, tc.limit)
+						}
+					}
+				}
+			}
+		})
 	}
 }
