@@ -130,7 +130,7 @@ func (n *Notifier) SendDesktop(status analyzer.Status, message, sessionID, cwd s
 			}
 			return n.sendVerifiedTerminal(title, cleanMessage, appIcon, statusInfo.Sound, sendOpts)
 		}
-		focusEnabled = false // unqualified platform: informational only
+		focusEnabled = false    // unqualified platform: informational only
 		sendOpts.noFocus = true // context-backed macOS notifications stay action-free
 	}
 	if sendOpts.executionContext != nil {

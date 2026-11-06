@@ -69,6 +69,16 @@ def qualify(binary, candidate, output):
             N.wait_for(lambda: not Path("/proc/" + str(row["sender"])).exists(), seconds=8)
             lab.run(["xdotool", "windowactivate", "--sync", distractor])
             N.wait_for(lambda: active() == distractor)
+            if scenario == "positive":
+                # A forged ActionInvoked signal from a different D-Bus client
+                # must NOT consume the strict click or focus the window.
+                lab.run(["dbus-send", "--session", "--type=signal",
+                         "/org/freedesktop/Notifications",
+                         "org.freedesktop.Notifications.ActionInvoked",
+                         f"uint32:{row['notification_id']}", "string:default"])
+                time.sleep(0.4)
+                if active() != distractor:
+                    raise RuntimeError("forged D-Bus action changed focus")
             if scenario == "spoof":
                 if row["focus"] or row["window"] != sender_window:
                     raise RuntimeError("forged window was accepted as a focus target")
@@ -112,7 +122,8 @@ def qualify(binary, candidate, output):
             report["cases"].append({"scenario": scenario, "status": "passed",
                                     "real_daemon": True, "physical_click": True,
                                     "focus_restored": scenario == "positive",
-                                    "sender_exited_before_click": True})
+                                    "sender_exited_before_click": True,
+                                    "forged_signal_ignored": scenario == "positive"})
             lab.run(["dunstctl", "close-all"])
             lab.stop(proc)
         report["status"] = "passed"

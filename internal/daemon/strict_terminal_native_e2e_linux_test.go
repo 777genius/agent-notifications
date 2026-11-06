@@ -89,7 +89,7 @@ func TestStrictTerminalNativeSender(t *testing.T) {
 		if err != nil || response == nil || !response.Success || response.FocusEnabled || response.NotificationID == 0 {
 			t.Fatalf("daemon did not reject forged strict focus: %+v %v", response, err)
 		}
-		writeStrictNativeReceipt(t, root, name, false, origin.WindowID, os.Getpid())
+		writeStrictNativeReceipt(t, root, name, false, origin.WindowID, os.Getpid(), response.NotificationID)
 		return
 	}
 	if !ok || origin == nil {
@@ -106,17 +106,18 @@ func TestStrictTerminalNativeSender(t *testing.T) {
 	if err != nil || response == nil || !response.Success || !response.FocusEnabled || response.NotificationID == 0 {
 		t.Fatalf("native strict handoff not confirmed: %+v %v", response, err)
 	}
-	writeStrictNativeReceipt(t, root, name, true, origin.WindowID, os.Getpid())
+	writeStrictNativeReceipt(t, root, name, true, origin.WindowID, os.Getpid(), response.NotificationID)
 }
 
-func writeStrictNativeReceipt(t *testing.T, root, scenario string, focus bool, window string, sender int) {
+func writeStrictNativeReceipt(t *testing.T, root, scenario string, focus bool, window string, sender int, notificationID uint32) {
 	t.Helper()
 	data, err := json.Marshal(struct {
-		Scenario string `json:"scenario"`
-		Focus    bool   `json:"focus"`
-		Window   string `json:"window"`
-		Sender   int    `json:"sender"`
-	}{scenario, focus, window, sender})
+		Scenario       string `json:"scenario"`
+		Focus          bool   `json:"focus"`
+		Window         string `json:"window"`
+		Sender         int    `json:"sender"`
+		NotificationID uint32 `json:"notification_id"`
+	}{scenario, focus, window, sender, notificationID})
 	if err != nil {
 		t.Fatal(err)
 	}

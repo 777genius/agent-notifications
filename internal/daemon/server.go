@@ -124,6 +124,13 @@ func (s *Server) Run() error {
 		go s.idleChecker()
 	}
 
+	// Strict actions use a raw D-Bus signal so their sender can be checked.
+	// The legacy notifier callback does not expose signal sender identity.
+	ready := make(chan struct{})
+	s.wg.Add(1)
+	go s.listenStrictActions(ready)
+	<-ready
+
 	// Accept connections
 	s.wg.Add(1)
 	go s.acceptLoop()
@@ -250,12 +257,17 @@ func (s *Server) handleNotification(req *NotifyRequest, strict bool) (*NotifyRes
 		timeout = 30 * time.Second
 	}
 
-	// Failure to validate a strict origin leaves an ordinary banner, with
-	// no callback; the daemon must never guess which window to raise.
+	// Failure to validate an origin or the unique notification-server
+	// owner leaves only a banner. Unauthenticated D-Bus ActionInvoked signals
+	// must never activate a terminal, even with a known notification ID.
 	strictAllowed := false
+	strictOwner := ""
 	if strict {
 		op, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		strictAllowed = StrictTerminalAuthorized(op, req.Strict)
+		if strictAllowed {
+			strictOwner, strictAllowed = s.notificationServiceOwner(op)
+		}
 		cancel()
 	}
 	n := notify.Notification{
@@ -294,7 +306,7 @@ func (s *Server) handleNotification(req *NotifyRequest, strict bool) (*NotifyRes
 		}
 		if strict {
 			captured := *req.Strict
-			hints = FocusHints{Strict: &captured}
+			hints = FocusHints{Strict: &captured, StrictOwner: strictOwner}
 		}
 		s.focusCtxMu.Lock()
 		s.focusCtx[id] = hints
@@ -321,29 +333,24 @@ func (s *Server) onActionInvoked(sig *notify.ActionInvokedSignal) {
 		return
 	}
 
+	// The notify library does not expose the D-Bus signal sender. Strict
+	// callbacks are handled only by listenStrictActions after owner matching.
+	s.focusCtxMu.RLock()
+	hints, exists := s.focusCtx[sig.ID]
+	s.focusCtxMu.RUnlock()
+	if exists && hints.Strict != nil {
+		return
+	}
+
 	// Consume strict callbacks atomically before any potentially slow OS
 	// operation. Replayed clicks cannot trigger repeated window changes.
-	s.focusCtxMu.Lock()
-	hints, exists := s.focusCtx[sig.ID]
-	if exists && hints.Strict != nil {
-		delete(s.focusCtx, sig.ID)
-	}
-	s.focusCtxMu.Unlock()
+	s.focusCtxMu.RLock()
+	hints, exists = s.focusCtx[sig.ID]
+	s.focusCtxMu.RUnlock()
 	if !exists {
 		log.Printf("[WARN] No focus context for notification %d", sig.ID)
 		return
 	}
-	if hints.Strict != nil {
-		op, cancel := context.WithTimeout(context.Background(), 4*time.Second)
-		defer cancel()
-		if err := ActivateStrictTerminal(op, hints.Strict); err != nil {
-			log.Printf("[WARN] Strict terminal focus refused")
-		} else {
-			log.Printf("[INFO] Strict terminal focus succeeded")
-		}
-		return
-	}
-
 	// Attempt to focus
 	log.Printf("[INFO] Attempting to focus: %s (folder: %s, window_id: %s, window_title: %q, wezterm_pane: %s, zellij: %s/%s mode=%s)",
 		hints.TerminalName, hints.FolderName, hints.WindowID, hints.WindowTitle, hints.WezTermPaneID,
@@ -360,12 +367,76 @@ func (s *Server) onActionInvoked(sig *notify.ActionInvokedSignal) {
 	s.focusCtxMu.Unlock()
 }
 
+// notificationServiceOwner captures the D-Bus unique sender of the live
+// notification service. A well-known name or a notification ID is not proof.
+func (s *Server) notificationServiceOwner(ctx context.Context) (string, bool) {
+	var owner string
+	err := s.conn.BusObject().CallWithContext(ctx, "org.freedesktop.DBus.GetNameOwner", 0, "org.freedesktop.Notifications").Store(&owner)
+	return owner, err == nil && len(owner) > 1 && owner[0] == ':'
+}
+
+// listenStrictActions receives the raw signal (including Sender) alongside
+// the legacy library. It never acts on a guessed sender or a reused ID.
+func (s *Server) listenStrictActions(ready chan<- struct{}) {
+	defer s.wg.Done()
+	signals := make(chan *dbus.Signal, 32)
+	s.conn.Signal(signals)
+	defer s.conn.RemoveSignal(signals)
+	close(ready)
+	for {
+		select {
+		case <-s.done:
+			return
+		case sig, open := <-signals:
+			if !open {
+				return
+			}
+			if sig == nil || sig.Name != "org.freedesktop.Notifications.ActionInvoked" ||
+				sig.Path != dbus.ObjectPath("/org/freedesktop/Notifications") ||
+				len(sig.Body) != 2 {
+				continue
+			}
+			id, okID := sig.Body[0].(uint32)
+			action, okAction := sig.Body[1].(string)
+			if !okID || !okAction || action != "default" {
+				continue
+			}
+			s.focusCtxMu.Lock()
+			hints, exists := s.focusCtx[id]
+			if !exists || hints.Strict == nil || hints.StrictOwner == "" || hints.StrictOwner != sig.Sender {
+				s.focusCtxMu.Unlock()
+				continue
+			}
+			delete(s.focusCtx, id)
+			s.focusCtxMu.Unlock()
+			ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+			if err := ActivateStrictTerminal(ctx, hints.Strict); err != nil {
+				log.Printf("[WARN] Strict terminal focus refused")
+			} else {
+				log.Printf("[INFO] Strict terminal focus succeeded")
+			}
+			cancel()
+		}
+	}
+}
+
 // onNotificationClosed is called when a notification is closed
 func (s *Server) onNotificationClosed(sig *notify.NotificationClosedSignal) {
-	// Clean up focus context
 	s.focusCtxMu.Lock()
-	delete(s.focusCtx, sig.ID)
+	hints, exists := s.focusCtx[sig.ID]
+	if !exists || hints.Strict == nil {
+		delete(s.focusCtx, sig.ID)
+		s.focusCtxMu.Unlock()
+		return
+	}
 	s.focusCtxMu.Unlock()
+	// Some servers emit NotificationClosed before ActionInvoked. Give the
+	// authenticated raw callback a brief window, then discard the target.
+	time.AfterFunc(2*time.Second, func() {
+		s.focusCtxMu.Lock()
+		delete(s.focusCtx, sig.ID)
+		s.focusCtxMu.Unlock()
+	})
 }
 
 // updateActivity updates the last activity timestamp

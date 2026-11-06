@@ -68,6 +68,7 @@ jobs:
           assert [x["scenario"] for x in data["cases"]] == ["positive","revoke","policy_revoke","spoof"]
           assert all(x["status"]=="passed" for x in data["cases"])
           assert all(x["sender_exited_before_click"] for x in data["cases"])
+          assert data["cases"][0]["forged_signal_ignored"] is True
           PY
       - name: Preserve exact native outcome (including failures)
         if: always()
