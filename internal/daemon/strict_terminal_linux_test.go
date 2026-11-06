@@ -63,17 +63,17 @@ func TestStrictPeerCredentialsBindRealTerminalAncestry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 	client, err := net.Dial("unix", listener.Addr().String())
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	server, err := listener.Accept()
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer server.Close()
+	defer func() { _ = server.Close() }()
 	pid, ok := strictPeer(server)
 	if !ok || pid != os.Getpid() {
 		t.Fatalf("kernel peer identity differs: %v, %v", pid, ok)
