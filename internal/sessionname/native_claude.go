@@ -7,6 +7,8 @@ import (
 	"strings"
 )
 
+// claudeNativeTitle reads bounded exact-session transcript metadata and
+// prefers a custom title over a generated title.
 func claudeNativeTitle(id, transcript string) string {
 	if !filepath.IsAbs(transcript) || filepath.Base(transcript) != id+".jsonl" ||
 		strings.Contains(filepath.ToSlash(transcript), "/subagents/") {
