@@ -44,14 +44,14 @@ type WebhookSender func(context.Context, *config.Config, webhook.SendContext) er
 // Desktop is likewise an effect owner; macOS already owns its helper lease.
 // Consumer never wraps either effect owner in a second lease.
 type Consumer struct {
-	Binding     Binding
-	Gate        Gate
-	Config      *config.Config
-	Desktop     notification.DeliveryPort
+	Binding       Binding
+	Gate          Gate
+	Config        *config.Config
+	Desktop       notification.DeliveryPort
 	TerminalClick *notification.TerminalTarget
-	SendWebhook WebhookSender
-	Clock       observation.Clock
-	Cache       *observation.RecentCache
+	SendWebhook   WebhookSender
+	Clock         observation.Clock
+	Cache         *observation.RecentCache
 }
 
 // Receipt reports boundary acceptance, never visibility. Causes/IDs stay private.

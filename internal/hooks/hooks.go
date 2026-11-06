@@ -60,15 +60,15 @@ type webhookInterface interface {
 
 // Handler handles hook events
 type Handler struct {
-	cfg          *config.Config
-	dedupMgr     *dedup.Manager
-	stateMgr     *state.Manager
-	teamStateMgr *teamstate.Manager
-	notifierSvc  notifierInterface
-	webhookSvc   webhookInterface
-	pluginRoot   string
-	product      Product
-	source       EventSource
+	cfg           *config.Config
+	dedupMgr      *dedup.Manager
+	stateMgr      *state.Manager
+	teamStateMgr  *teamstate.Manager
+	notifierSvc   notifierInterface
+	webhookSvc    webhookInterface
+	pluginRoot    string
+	product       Product
+	source        EventSource
 	terminalFocus notifier.SendOption // request-local verified Qoder action, nil if unqualified
 	// codexEnricher is the DIP seam for Codex turn classification; nil
 	// selects the built-in payload heuristic. See CodexTurnEnricher.

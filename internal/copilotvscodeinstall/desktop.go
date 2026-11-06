@@ -66,7 +66,7 @@ func NewDesktop(g Gate, b copilotvscodeevent.Binding, spool string, backend noti
 }
 
 type localDesktop struct {
-	backend notification.DeliveryPort
+	backend       notification.DeliveryPort
 	allowTerminal bool
 }
 

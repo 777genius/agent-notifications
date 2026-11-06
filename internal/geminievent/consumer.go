@@ -39,14 +39,14 @@ type Gate interface {
 type WebhookSender func(context.Context, *config.Config, webhook.SendContext) error
 
 type Consumer struct {
-	Gate        Gate
-	Binding     Binding
-	Config      *config.Config
-	Desktop     notification.DeliveryPort
+	Gate          Gate
+	Binding       Binding
+	Config        *config.Config
+	Desktop       notification.DeliveryPort
 	TerminalClick *notification.TerminalTarget
-	Clock       Clock
-	Cache       *RecentCache
-	SendWebhook WebhookSender
+	Clock         Clock
+	Cache         *RecentCache
+	SendWebhook   WebhookSender
 }
 
 // Receipt never includes native IDs, paths, config or error causes.

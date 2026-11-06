@@ -6,10 +6,10 @@ func TestWithTerminalClickRequiresTrustedOptIn(t *testing.T) {
 	base := InformationalDesktopRequest(Content{Title: "Cursor CLI", Body: "Stopping", Category: "info"}, "request", Deadline{}, false)
 	target := &TerminalTarget{Agent: "cursor", WindowID: "123", OwnerPID: 42}
 	for _, tc := range []struct {
-		name string
-		target *TerminalTarget
+		name       string
+		target     *TerminalTarget
 		authorized bool
-		want bool
+		want       bool
 	}{
 		{"no_target", nil, true, false},
 		{"no_consent", target, false, false},

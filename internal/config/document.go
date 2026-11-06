@@ -18,12 +18,12 @@ const MaxDocumentDepth = 128
 // Document owns immutable original bytes. Accessors return independent copies.
 // Runtime expansion must never be persisted as a Document.
 type Document struct {
-	original  []byte
+	original     []byte
 	physicalPath string
-	exists bool
-	schema    int
-	ambiguous string
-	revision  string
+	exists       bool
+	schema       int
+	ambiguous    string
+	revision     string
 }
 
 func (d Document) Bytes() []byte      { return bytes.Clone(d.original) }

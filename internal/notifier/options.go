@@ -15,7 +15,7 @@ type sendOptions struct {
 	hookPresentation          *HookPresentation
 	executionContext          context.Context
 	runtimeRoot, nativeHelper string
-	terminal *notification.TerminalTarget
+	terminal                  *notification.TerminalTarget
 }
 
 // WithInstalledRuntime supplies paths already verified by the installation
