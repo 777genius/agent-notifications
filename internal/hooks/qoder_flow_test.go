@@ -466,3 +466,38 @@ func TestQoderStopAndTeammateIdleCannotConsumeClaudeCompletion(t *testing.T) {
 		t.Fatalf("Claude completion changed: state=%+v deliveries=%d error=%v", state, notify.callCount(), err)
 	}
 }
+
+// A replayed StopFailure after the short event lock has expired is the same
+// failure. Independent failures, other classes, other sessions and a real
+// successful Stop must still notify.
+func TestQoderStopFailureReplayAfterLockExpiryNotifiesOnce(t *testing.T) {
+	handler, notify, _ := newTestHandler(t, qoderFailureTestConfig())
+	handler.dedupMgr = dedup.NewManagerWithFileAge(func(string) int64 { return 10 })
+	handler.product, handler.source = ProductQoder, QoderSource{}
+	session := fmt.Sprintf("../../qoder-failure-replay-%d", time.Now().UnixNano())
+	failure := func(id, errorType, details string) string {
+		return fmt.Sprintf(`{"session_id":%q,"cwd":"/TEST-qoder","hook_event_name":"StopFailure","error_type":%q,"error":"PRIVATE_ERROR","error_details":%q}`, id, errorType, details)
+	}
+	send := func(event, input string, want int) {
+		t.Helper()
+		if err := handler.HandleHook(event, strings.NewReader(input)); err != nil {
+			t.Fatal(err)
+		}
+		if len(notify.calls) != want {
+			t.Fatalf("%s %s: %d notifications; want %d", event, input, len(notify.calls), want)
+		}
+	}
+	send("StopFailure", failure(session, "server_error", "req-1"), 1)
+	send("StopFailure", failure(session, "server_error", "req-1"), 1)
+	send("StopFailure", failure(session, "server_error", "req-2"), 2)
+	send("StopFailure", failure(session, "rate_limit", "req-2"), 3)
+	send("StopFailure", failure(session+"-other", "server_error", "req-1"), 4)
+	send("Stop", fmt.Sprintf(`{"session_id":%q,"cwd":"/TEST-qoder","hook_event_name":"Stop","stop_hook_active":false,"last_assistant_message":"Done"}`, session), 5)
+	state, err := handler.stateMgr.Load(qoderKeys(Event{Session: SessionContext{SessionID: session}}).stateKey)
+	if err != nil || state == nil {
+		t.Fatalf("missing Qoder state: %v", err)
+	}
+	if strings.Contains(fmt.Sprintf("%+v", *state), "PRIVATE_ERROR") {
+		t.Fatal("raw Qoder failure text persisted")
+	}
+}

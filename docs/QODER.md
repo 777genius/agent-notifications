@@ -45,7 +45,13 @@ to a single notification. `PermissionRequest` notifications name the tool and ar
 `Qoder requests permission`. A native `StopFailure` is **not** a successful completion:
 only the documented `rate_limit` class maps to `api_error_overloaded`, and all
 other errors map to the generic `agent_error` status. Error text, details and
-last assistant message are excluded from notification copy; configured
+last assistant message are excluded from notification copy. A replay of the
+last delivered native failure payload within three minutes notifies once; only
+that most recent digest is kept, so a replay arriving after a different failure
+was delivered notifies again. The payload has
+no timestamp or request id, so a genuine repeat failure with byte-identical
+payload in that window is also collapsed. Only a digest of the payload and class
+is kept in session state. Configured
 webhook/desktop channel consent still applies. Source/runtime tests of this
 event do not establish visible platform banners; native E2E qualification is
 separate.
