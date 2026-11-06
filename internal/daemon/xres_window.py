@@ -79,39 +79,58 @@ def main():
             intern = symbol(x, "XInternAtom", [ct.c_void_p, ct.c_char_p, ct.c_int], ct.c_ulong)
             get_prop = symbol(x, "XGetWindowProperty", [ct.c_void_p, ct.c_ulong, ct.c_ulong, ct.c_long, ct.c_long, ct.c_int, ct.c_ulong, ct.POINTER(ct.c_ulong), ct.POINTER(ct.c_int), ct.POINTER(ct.c_ulong), ct.POINTER(ct.c_ulong), ct.POINTER(ct.c_void_p)], ct.c_int)
             free = symbol(x, "XFree", [ct.c_void_p], ct.c_int)
-            name = b"_AGENT_NOTIFICATIONS_STRICT_ORIGIN"
-            atom = intern(open_x, name, 0 if mode == "mark" else 1)
-            if not atom:
-                fail()
-            actual, fmt, count, remaining, data = ct.c_ulong(), ct.c_int(), ct.c_ulong(), ct.c_ulong(), ct.c_void_p()
-            rc = get_prop(open_x, xid, atom, 0, 128, 0, 31, ct.byref(actual), ct.byref(fmt), ct.byref(count), ct.byref(remaining), ct.byref(data))
-            if rc != 0 or remaining.value != 0:
-                fail()
+            sync = symbol(x, "XSync", [ct.c_void_p, ct.c_int], ct.c_int)
+            marking = mode == "mark"
+            if marking:
+                grab = symbol(x, "XGrabServer", [ct.c_void_p], ct.c_int)
+                ungrab = symbol(x, "XUngrabServer", [ct.c_void_p], ct.c_int)
+                # Two hook children may capture the same window together.
+                # The grab makes read-or-create atomic at the X server, so
+                # they share one marker for the entire window lifetime.
+                grab(open_x)
             try:
-                if actual.value == 0 and not data:
-                    values = []
-                elif actual.value == 31 and fmt.value == 8 and data and count.value <= 512:
-                    raw = ct.string_at(data, count.value).decode("ascii")
-                    values = raw.split(",") if raw else []
-                    if any(not re.fullmatch(r"[0-9a-f]{32}", v) for v in values):
+                name = b"_AGENT_NOTIFICATIONS_STRICT_ORIGIN"
+                atom = intern(open_x, name, 0 if marking else 1)
+                if not atom:
+                    fail()
+                actual, fmt, count, remaining, data = ct.c_ulong(), ct.c_int(), ct.c_ulong(), ct.c_ulong(), ct.c_void_p()
+                rc = get_prop(open_x, xid, atom, 0, 128, 0, 31, ct.byref(actual), ct.byref(fmt), ct.byref(count), ct.byref(remaining), ct.byref(data))
+                if rc != 0 or remaining.value != 0:
+                    fail()
+                try:
+                    if actual.value == 0 and not data:
+                        values = []
+                    elif actual.value == 31 and fmt.value == 8 and data and count.value <= 512:
+                        raw = ct.string_at(data, count.value).decode("ascii")
+                        values = raw.split(",") if raw else []
+                        if any(not re.fullmatch(r"[0-9a-f]{32}", v) for v in values):
+                            fail()
+                    else:
+                        fail()
+                finally:
+                    if data:
+                        free(data)
+                if mode == "check":
+                    if nonce not in values:
                         fail()
                 else:
-                    fail()
+                    # Reuse an existing marker: later hook events and banners
+                    # must not evict still-actionable earlier notifications.
+                    # Existing comma-separated markers from old clients stay
+                    # valid until the original X11 window is destroyed.
+                    marker = values[-1] if values else nonce
+                    if not values:
+                        change = symbol(x, "XChangeProperty", [ct.c_void_p, ct.c_ulong, ct.c_ulong, ct.c_ulong, ct.c_int, ct.c_int, ct.c_void_p, ct.c_int], ct.c_int)
+                        buf = ct.create_string_buffer(marker.encode("ascii"))
+                        change(open_x, xid, atom, 31, 8, 0, ct.cast(buf, ct.c_void_p), len(marker))
+                        sync(open_x, 0)
             finally:
-                if data:
-                    free(data)
-            if mode == "check":
-                if nonce not in values:
-                    fail()
-            else:
-                change = symbol(x, "XChangeProperty", [ct.c_void_p, ct.c_ulong, ct.c_ulong, ct.c_ulong, ct.c_int, ct.c_int, ct.c_void_p, ct.c_int], ct.c_int)
-                sync = symbol(x, "XSync", [ct.c_void_p, ct.c_int], ct.c_int)
-                values = (values + [nonce])[-8:]
-                encoded = ",".join(values).encode("ascii")
-                buf = ct.create_string_buffer(encoded)
-                change(open_x, xid, atom, 31, 8, 0, ct.cast(buf, ct.c_void_p), len(encoded))
-                sync(open_x, 0)
-        print(pid)
+                if marking:
+                    ungrab(open_x)
+                    sync(open_x, 0)
+            print(pid, marker) if marking else print(pid)
+        else:
+            print(pid)
     finally:
         close_display(open_x)
 

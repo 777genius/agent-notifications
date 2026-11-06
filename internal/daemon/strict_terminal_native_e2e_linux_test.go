@@ -115,6 +115,19 @@ func TestStrictTerminalNativeSender(t *testing.T) {
 	if err != nil || response == nil || !response.Success || !response.FocusEnabled || response.NotificationID == 0 {
 		t.Fatalf("native strict handoff not confirmed: %+v %v", response, err)
 	}
+	if name == "positive" {
+		// A busy agent can run many PreToolUse hooks without creating another
+		// banner. They must not invalidate the earlier notification's click.
+		for i := 0; i < 12; i++ {
+			next, qualified := CaptureStrictTerminal(ctx, cfg, config.AgentQoder, control, ledger.ID, ledger.Generation)
+			if !qualified || next == nil || next.WindowNonce != origin.WindowNonce {
+				t.Fatal("new hook evicted an earlier live window marker")
+			}
+		}
+		if !StrictTerminalAuthorized(ctx, origin) {
+			t.Fatal("earlier notification lost its click target")
+		}
+	}
 	writeStrictNativeReceipt(t, root, name, true, origin.WindowID, os.Getpid(), response.NotificationID)
 }
 

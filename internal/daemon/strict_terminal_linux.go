@@ -157,10 +157,11 @@ func CaptureStrictTerminal(ctx context.Context, cfg *config.Config, agent config
 	// The per-window marker disappears when X11 destroys this window. It is
 	// bounded and checked again at click time, so a reused numeric XID
 	// cannot activate a later window in the same terminal process.
-	markedPID, err := xresWindowPID(ctx, display, id, "mark", nonce)
-	if err != nil || markedPID != pid {
+	markedPID, stableNonce, err := xresWindowRecord(ctx, display, id, "mark", nonce)
+	if err != nil || markedPID != pid || stableNonce == "" {
 		return nil, false
 	}
+	nonce = stableNonce
 	return &notification.TerminalTarget{
 		Agent: string(agent), Display: display, WindowID: id, WindowNonce: nonce,
 		OwnerPID: pid, OwnerBirth: birth,
