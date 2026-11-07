@@ -301,7 +301,7 @@ hides native and generated names without hiding the question or project.
 | `desktop.showSessionLabel` | `true` | Show the native session name, with `[name id]` as fallback. Questions identify the session in the native macOS subtitle or the body on backends without subtitles. `false` hides both kinds of session label without hiding the actual question. |
 | `respectJudgeMode` | `true` | Honor `CLAUDE_HOOK_JUDGE_MODE=true` env var to suppress notifications |
 | `notifyOnlyWhenUnfocused` | `false` | Skip the desktop notification only when the focused terminal window can be matched to the current Claude session. Best-effort per platform; if focus can't be determined the notification is still shown. |
-| `notifyDelaySeconds` | `0` | Wait N seconds before delivering a desktop notification (capped at 25s by the hook timeout). With `notifyOnlyWhenUnfocused`, focus is re-checked after the wait. Webhooks are unaffected. |
+| `notifyDelaySeconds` | `0` | Wait N seconds before delivering a desktop notification (configured delay capped at 25s). Claude/Codex hooks skip desktop delivery when the full delay exceeds the remaining host-hook budget. With `notifyOnlyWhenUnfocused`, focus is re-checked after the wait. Webhooks are unaffected. |
 | `respectDoNotDisturb` | `"off"` | Honour the desktop's Do Not Disturb state. `"silent"` still delivers the banner (so it reaches the notification centre) but skips the plugin's sound; `"suppress"` skips the notification entirely. Linux only for now (KDE Plasma, GNOME, XFCE, dunst); other platforms always report "not in DND". Webhooks are unaffected. See [Do Not Disturb](DO_NOT_DISTURB.md). |
 | `respectDisplaySleep` | `false` | Skip the plugin's own sound while every display is asleep; the banner is still delivered. macOS only for now; other platforms always report "not asleep". Independent of `respectDoNotDisturb`. Webhooks are unaffected. |
 | `replaceNotificationsPerSession` | `false` | macOS only. Let a session's newest desktop notification **replace** its previous banner in place instead of stacking a new one. Different sessions never collide. Default `false` keeps every banner so unread alerts are never silently dropped. |
@@ -335,7 +335,9 @@ other off for the same status.
 Two independent options cut notification noise when you're already watching the terminal:
 
 - **`notifyOnlyWhenUnfocused`** - skip the desktop notification only when the focused terminal window can be matched to the current Claude session. On Linux this works on X11 terminals that export `$WINDOWID`, and in [JetBrains IDE terminals](CLICK_TO_FOCUS.md#jetbrains-ides).
-- **`notifyDelaySeconds`** - wait N seconds before delivering, so a quick task can finish before any banner appears (capped at 25s to stay within the hook timeout).
+- **`notifyDelaySeconds`** - wait N seconds before delivering, so a quick task can finish before any banner appears (configured delay capped at 25s).
+
+For Claude/Codex hooks, the native host's 30-second execution limit also covers startup, transcript processing, Git lookup, desktop submission and shutdown. The hook reserves five seconds for submission and cleanup: **if the full configured delay no longer fits, the desktop banner is skipped rather than shortened or reported as delivered**. In practice, a 25-second delay is usually too long after normal prework; shorter delays can also be skipped if the host already consumed the budget or slept. Webhooks remain independent, without waiting for desktop delay. Other agent entrypoints retain their existing timing contract.
 
 They compose: with both set, the plugin waits, then notifies only if the terminal still isn't focused - "tell me once I've looked away."
 

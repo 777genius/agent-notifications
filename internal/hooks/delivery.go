@@ -59,7 +59,13 @@ func (h *Handler) sendNotifications(status analyzer.Status, body, actions, sessi
 	var delivery notificationDelivery
 
 	sessionName := sessionname.GenerateSessionLabel(sessionID)
-	gitBranch := platform.GetGitBranch(cwd)
+	gitBranch := ""
+	if len(details) > 0 && details[0].branchFetched {
+		gitBranch = details[0].branch
+	} else {
+		// TeammateIdle and legacy/direct sends have no admission snapshot.
+		gitBranch = h.gitBranch(cwd)
+	}
 	folderName := filepath.Base(cwd)
 
 	joined := joinMessageParts(body, actions)
@@ -162,13 +168,29 @@ func (h *Handler) sendNotifications(status analyzer.Status, body, actions, sessi
 //
 // Webhook delivery is unaffected by any of these options.
 func (h *Handler) sendDesktopNotification(status analyzer.Status, message, sessionID, cwd string, opts ...notifier.SendOption) bool {
-	if delay := h.cfg.GetNotifyDelaySeconds(); delay > 0 {
-		if delay > maxNotifyDelaySeconds {
-			logging.Warn("notifyDelaySeconds=%d exceeds the hook timeout budget; clamping to %ds", delay, maxNotifyDelaySeconds)
-			delay = maxNotifyDelaySeconds
+	delay := h.cfg.GetNotifyDelaySeconds()
+	if delay > maxNotifyDelaySeconds {
+		logging.Warn("notifyDelaySeconds=%d exceeds the configured delay cap; clamping to %ds", delay, maxNotifyDelaySeconds)
+		delay = maxNotifyDelaySeconds
+	}
+	if budget, bounded := h.availableDesktopBudget(); bounded {
+		if budget <= 0 || time.Duration(delay)*time.Second > budget {
+			// Never spend the remaining host-hook lifetime sleeping only to
+			// be killed before native submission/cleanup. Webhooks already
+			// started independently above. An unavailable desktop is not sent.
+			logging.Debug("Desktop delay suppressed: host hook budget exhausted")
+			return false
 		}
+	}
+	if delay > 0 {
 		logging.Debug("Delaying desktop notification by %ds", delay)
 		sleepFunc(time.Duration(delay) * time.Second)
+	}
+	// The host may have been suspended during the wait: recheck immediately
+	// before any notification side effect rather than claiming delivery.
+	if budget, bounded := h.availableDesktopBudget(); bounded && budget <= 0 {
+		logging.Debug("Desktop notification suppressed: host hook deadline reached")
+		return false
 	}
 
 	if h.cfg.ShouldNotifyOnlyWhenUnfocused() && isTerminalFocused(sessionID, cwd) {

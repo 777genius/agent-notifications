@@ -22,16 +22,64 @@ func selectTerminalNotifierArgs(title, message, bundleID, cwd, ghosttyTerminalID
 	return selectTerminalNotifierArgsWithDetector(title, message, bundleID, cwd, ghosttyTerminalID, clickToFocus, cfg, detectMultiplexerArgs)
 }
 
+// exactGhosttyNotifierArgs emits an actionable notification only when the
+// caller already resolved a specific terminal-ID callback. In particular,
+// an empty script must never degrade into an app-level "-activate".
+func exactGhosttyNotifierArgs(title, message, script string) []string {
+	args := []string{"-title", title, "-message", message}
+	if script != "" {
+		args = append(args, "-execute", script)
+	}
+	return args
+}
+
+func boundGhosttyNotifierArgs(title, message, bundleID, cwd, terminalID string) []string {
+	if strings.TrimSpace(terminalID) == "" || !isUsableFocusCWD(cwd) {
+		return exactGhosttyNotifierArgs(title, message, "")
+	}
+	return exactGhosttyNotifierArgs(title, message, buildGhosttyFocusScript(bundleID, cwd, terminalID))
+}
+
+// A captured tmux pane must be an actual numeric %ID, not merely start with
+// '%'. tmux's active-pane fallback is not proof of the original hook's pane.
+func validCapturedTmuxPaneID(pane string) bool {
+	if len(pane) < 2 || pane[0] != '%' {
+		return false
+	}
+	_, err := strconv.ParseUint(pane[1:], 10, 64)
+	return err == nil
+}
+
 // The detector seam lets tests prove that disabled navigation never captures
 // or invokes a terminal multiplexer, independently of machine environment.
 func selectTerminalNotifierArgsWithDetector(title, message, bundleID, cwd, ghosttyTerminalID string, clickToFocus bool, cfg *config.Config, detect func(string, string, string, *config.Config) ([]string, string)) []string {
+	// tmux display-message without an originating TMUX_PANE reads the
+	// currently selected pane, which may have changed after the hook.
+	// For Ghostty, bypass this guessed mux action altogether. An exact
+	// stored terminal ID can still take the separate exact-ID route.
+	if clickToFocus && isGhosttyBundleID(bundleID) && IsTmux() &&
+		!validCapturedTmuxPaneID(os.Getenv("TMUX_PANE")) {
+		logging.Debug("Ghostty tmux route unavailable: only a verified terminal-ID action is allowed")
+		return boundGhosttyNotifierArgs(title, message, bundleID, cwd, ghosttyTerminalID)
+	}
 	if clickToFocus {
 		if muxArgs, muxName := detect(title, message, bundleID, cfg); muxArgs != nil {
 			logging.Debug("%s detected, using multiplexer-specific -execute", muxName)
 			return muxArgs
 		} else if muxName != "" {
-			logging.Debug("%s detected but target capture failed, falling back to -activate", muxName)
+			logging.Debug("%s detected but target capture failed", muxName)
 		}
+		// A cwd is not an authenticated Claude session identity. For ordinary
+		// Ghostty notifications a missing captured terminal ID must never
+		// create an approximate click action or fall back to activating the app.
+		// An independently verified multiplexer target above remains eligible.
+		if isGhosttyBundleID(bundleID) && strings.TrimSpace(ghosttyTerminalID) == "" {
+			logging.Debug("Ghostty click disabled: no verified terminal ID")
+			clickToFocus = false
+		}
+	}
+	if clickToFocus && isGhosttyBundleID(bundleID) {
+		return boundGhosttyNotifierArgs(title, message, bundleID, cwd, ghosttyTerminalID)
 	}
 	return buildTerminalNotifierArgsWithOptions(title, message, bundleID, cwd, ghosttyTerminalID, clickToFocus)
 }

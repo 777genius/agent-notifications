@@ -3,8 +3,10 @@ package hooks
 import "github.com/777genius/agent-notifications/internal/sessionname"
 
 type hookNotificationDetails struct {
-	title    string
-	question string
+	title         string
+	question      string
+	branch        string
+	branchFetched bool // an empty captured branch is still a completed lookup
 }
 
 func (h *Handler) notificationDetails(ev Event, insight *TurnInsight) hookNotificationDetails {
