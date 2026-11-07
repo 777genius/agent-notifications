@@ -8,7 +8,10 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
+
+	"github.com/777genius/agent-notifications/internal/windowscallback"
 )
 
 func orphanEnvelope(t *testing.T, body []byte) []byte {
@@ -144,9 +147,58 @@ func TestOrphanCodecRoundTripPreservesCompleteDecision(t *testing.T) {
 	}
 }
 
+// Breakage: schema5 metadata-only recovery drops a previously charged Windows
+// generation while updating an otherwise compatible ledger schema6. The
+// schema5 transaction carrier remains ordinary-orphan-only; it carries no
+// Windows participant or publication, but its before/after images preserve the
+// permanent retained binding.
+func TestOrphanSchema5PreservesPostWindowsRetention(t *testing.T) {
+	f := newOrphanFixture(t)
+	f.abandon(t, true)
+	tx := f.interrupt(t, "transaction")
+	binding := windowscallback.Binding{
+		SnapshotPath: `\\?\C:\TEST\windows-callback\aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\generation.wne`,
+		SHA256:       strings.Repeat("a", 64),
+	}
+	for _, image := range []*Ledger{&tx.Before, &tx.After} {
+		image.Schema = WindowsGenerationLedgerSchema
+		image.WriterFloor = WindowsGenerationWriterFloor
+		image.WindowsRetained = []windowscallback.Binding{binding}
+	}
+	body, err := marshalTransaction(tx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := decodeTransaction(orphanEnvelope(t, body))
+	if err != nil || !reflect.DeepEqual(got.Before.WindowsRetained, tx.Before.WindowsRetained) ||
+		!reflect.DeepEqual(got.After.WindowsRetained, tx.After.WindowsRetained) {
+		t.Fatalf("schema5 lost post-Windows retained generation: %+v %v", got, err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(body, &fields); err != nil {
+		t.Fatal(err)
+	}
+	var after map[string]json.RawMessage
+	if err := json.Unmarshal(fields["After"], &after); err != nil {
+		t.Fatal(err)
+	}
+	after["WindowsRetained"] = json.RawMessage(`[]`)
+	fields["After"], err = json.Marshal(after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bad, err := json.Marshal(fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := decodeTransaction(orphanEnvelope(t, bad)); err == nil {
+		t.Fatal("schema5 discarded a permanent Windows generation")
+	}
+}
+
 // Frozen former transaction shape: adding an omitted recovery field must never
-// change the legacy bytes. The actual frozen base decoder is also executed in
-// worker evidence against a schema5 journal, before any publication.
+// change the legacy bytes. TestFrozenActualMainReaderProvenanceAndExecution
+// runs the checked-in exact base decoder before any publication.
 type formerTransaction struct {
 	OpenCodeInit  *File      `json:",omitempty"`
 	OpenCodePurge *PurgeTree `json:",omitempty"`
