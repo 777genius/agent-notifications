@@ -7,12 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.51.3] - 2026-11-06
+## [1.51.3] - 2026-11-07
 
 ### Added
 - Add guarded local Linux/X11 click-to-focus for Qoder, Gemini CLI and Cursor CLI when the originating terminal window can be safely verified ([#629](https://github.com/777genius/agent-notifications/pull/629)).
 
 ### Fixed
+- Improve provider-free Claude and Codex hook reliability, including notification deduplication and bounded Git discovery ([#636](https://github.com/777genius/agent-notifications/pull/636)).
 - Classify Claude `permission_prompt` notifications as permission requests, showing the bounded host-provided message instead of an unrelated question or transcript ([#633](https://github.com/777genius/agent-notifications/pull/633), [#632](https://github.com/777genius/agent-notifications/issues/632)).
 - Repair Linux Claude marketplace upgrades between versioned plugin caches by relocating managed ownership through the existing checksum-verified transaction, including symlinked cache ancestors, and refuse offline migration without verified assets ([#634](https://github.com/777genius/agent-notifications/pull/634), [#585](https://github.com/777genius/agent-notifications/issues/585)).
 - Preserve unselected live portable integration bindings during group updates and use the verified pinned SDK group-update contract ([#595](https://github.com/777genius/agent-notifications/issues/595), [#630](https://github.com/777genius/agent-notifications/pull/630)).
