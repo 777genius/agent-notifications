@@ -63,8 +63,12 @@ policy budget is R=103ms/T=430ms, not a measured maximum or a runtime grant.
 
 Private protocol 1 wraps unchanged neutral wire 1. Native IDs/timestamps and
 original source ingress/anchor/deadline remain private; outbound delivery is
-owned by Go admission. No native content, paths, prompts, errors or diagnostics
-are printed by the plugin. Failed and unqualified cells stay silent. Synthetic
+owned by Go admission. No native content, paths, prompts or raw errors are printed by the
+plugin. Failed and unqualified cells never emit notifications. An installed,
+owned host with a completed native profile may emit one generic, content-free
+startup warning; unrendered/unowned plugins stay silent. See
+[compatibility and diagnostics](../docs/opencode-notifications.md#compatibility-and-diagnostics).
+Synthetic
 composition tests and ordinary Node proc checks do not qualify native Bun,
 installed E2E, suspend behavior or any of the five packaged platform cells.
 
