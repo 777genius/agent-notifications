@@ -39,9 +39,10 @@ test('clock and profile receipts are closed prerequisites; malformed proof is un
   protocol: 1, semantic: 'eligible', generation, resourceClosure: 'reaped_or_not_started', version,
  })));
  for (const [generation, version] of [['v1', '1.18.33'], ['v1', '1.18.99'], ['v2', '2.0.21'],
-  ['v2', '2.2.6'], ['v2', '2.99.0']]) assert.equal(eligible(generation, version).version, version);
+  ['v2', '2.2.6'], ['v2', '2.99.0'], ['v2', '2.99.0-rc.1+build.03']]) assert.equal(eligible(generation, version).version, version);
  for (const [generation, version] of [['v1', '2.2.6'], ['v2', '1.18.33'], ['v2', '3.0.0'],
-  ['v2', '02.2.6'], ['v2', '2.2'], ['v2', 'PRIVATE_SENTINEL']]) {
+  ['v2', '02.2.6'], ['v2', '2.2'], ['v2', '2.2.6-01'], ['v2', '2.2.6-a..b'],
+  ['v2', '2.2.6-a.'], ['v2', '2.2.6+build..x'], ['v2', 'PRIVATE_SENTINEL']]) {
   assert.throws(() => eligible(generation, version));
  }
  assert.throws(() => profileReceipt(Buffer.from('{"protocol":1,"semantic":"eligible","generation":"v2","resourceClosure":"reaped_or_not_started"}')));
