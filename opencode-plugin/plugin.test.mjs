@@ -172,3 +172,41 @@ test('installed V1/V2 refusal logs one safe reason without disclosing host data'
   assert.equal(JSON.stringify(rows).includes('TEST-private-path'),false);
  }finally{console.error=previous;}
 });
+
+test('V2 native observer eligibility follows independently verified host version across compatible 2.x', async()=>{
+ const {build}=await import('esbuild');
+ const key='TEST-native-v2-version-'+process.pid;
+ const access=`globalThis[${JSON.stringify(key)}]`;
+ const stubs={
+  './owned-host.mjs':`export const prepareOwnedHost=async()=>${access}.owned;`,
+  './clock-cells.mjs':'export const selectClockCell=()=>({});',
+  './platform-clock.mjs':'export const createPlatformClock=()=>{};',
+  './ipc.mjs':`export const createPreparedDelivery=()=>${access}.delivery;`,
+  './native-v1.mjs':'export const createNativeV1=()=>{};',
+  './native-v2.mjs':`export const createNativeV2=()=>${access}.view;export const createRPCCheckpoint=()=>({});`,
+  'universal-agent-plugins-opencode-events/v1':'export const createObserver=()=>{};',
+  'universal-agent-plugins-opencode-events/v2':`export const createV2Observer=opts=>{ ${access}.eligibility=opts.runtimeEligibility; return {start(){},dispose(){}};};`,
+ };
+ const built=await build({entryPoints:[new URL('./plugin.mjs',import.meta.url).pathname],bundle:true,
+  write:false,platform:'node',format:'esm',plugins:[{name:'v2-version-ports',setup(b){
+   b.onResolve({filter:/.*/},a=>Object.hasOwn(stubs,a.path)?{path:a.path,namespace:'fixture'}:undefined);
+   b.onLoad({filter:/.*/,namespace:'fixture'},a=>({contents:stubs[a.path],loader:'js'}));
+  }}]});
+ const {default:plugin}=await import('data:text/javascript;base64,'+Buffer.from(built.outputFiles[0].text).toString('base64'));
+ try {
+  for(const version of ['2.0.21','2.2.6','2.99.0']){
+   globalThis[key]={owned:{hostVersion:version,isOwned:()=>true,runtimeEligibility:()=> 'supported',
+    registry:{},origin:'a'.repeat(64),dispose:async()=>({reaped:true})},
+    delivery:{activate:async()=>true,clock:{},dispose(){},invalidate(){},nativeIngress(){}},
+    view:{native:{},reset(){}}};
+   const context={app:{version},location:{directory:'/TEST-future-v2'},
+    event:{subscribe(){}},session:{get(){},context(){}},permission:{get(){},list(){}},rpc:{register(){}}};
+   const stop=await plugin.setup(context);
+   assert.equal(typeof stop,'function');
+   assert.equal(globalThis[key].eligibility(),'supported',version);
+   context.app.version='2.0.0';
+   if(version!=='2.0.0')assert.equal(globalThis[key].eligibility(),'unverified','reported version mismatch');
+   await stop();
+  }
+ }finally{delete globalThis[key];}
+});
