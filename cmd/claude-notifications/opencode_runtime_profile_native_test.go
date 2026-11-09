@@ -22,7 +22,7 @@ import (
 )
 
 const portDeniedReceipt = "{\"protocol\":1,\"semantic\":\"unverified\",\"generation\":\"none\",\"resourceClosure\":\"reaped_or_not_started\"}\n"
-const portEligibleReceipt = "{\"protocol\":1,\"semantic\":\"eligible\",\"generation\":\"v2\",\"resourceClosure\":\"reaped_or_not_started\"}\n"
+const portEligibleReceipt = "{\"protocol\":1,\"semantic\":\"eligible\",\"generation\":\"v2\",\"resourceClosure\":\"reaped_or_not_started\",\"version\":\"2.0.21\"}\n"
 
 // Both TEST parent programs retain actual Start/Wait and independent streams.
 // Returning the consumed input length keeps draining stderr after the file cap.
