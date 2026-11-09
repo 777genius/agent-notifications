@@ -4040,7 +4040,7 @@ async function server(input, options = {}) {
     try {
       if (!await delivery.activate() || holder.retired) {
         compositionDiagnostic(diagnostics, "v1.activation.denied");
-        warning("activation_unavailable");
+        if (!holder.retired && owned.isOwned()) warning("activation_unavailable");
         stop();
         return silent;
       }
@@ -4089,7 +4089,7 @@ async function server(input, options = {}) {
         }
       } });
     } catch {
-      warning("activation_unavailable");
+      if (!holder.retired && owned.isOwned()) warning("activation_unavailable");
       stop();
       return silent;
     }
@@ -4152,7 +4152,7 @@ async function setup(context) {
       view = createNativeV2(context, context.location, delivery.nativeIngress, delivery.invalidate);
       if (!await delivery.activate()) {
         compositionDiagnostic(diagnostics, "v2.activation.denied");
-        warning("activation_unavailable");
+        if (!stopped && owned.isOwned()) warning("activation_unavailable");
         await stop();
         return;
       }
@@ -4225,7 +4225,7 @@ async function setup(context) {
       observer.start();
       return stop;
     } catch {
-      warning("activation_unavailable");
+      if (!stopped && owned.isOwned()) warning("activation_unavailable");
       await stop();
     }
   })();
