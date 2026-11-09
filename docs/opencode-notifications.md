@@ -87,6 +87,51 @@ prerequisites report unqualified and stop business phases. Historical observatio
 below retain their original source and scope; they do not qualify a newer binary
 or V2 by themselves.
 
+## Compatibility and diagnostics
+
+OpenCode provides two distinct plugin APIs: V1 calls the installed `server`
+hook; V2 calls `setup` and subscribes to native events. Installing the plugin
+does not itself prove that the **native notification observer** is qualified.
+The UAP family classifier already accepts compatible V1/V2 releases broadly;
+the more restrictive notification guard must also authenticate the live
+OpenCode process, independent native event source and clock. Its historical
+source/clock evidence remains scoped to listed images and platforms. Therefore
+**OpenCode 2.2.6 may load the plugin while its notification observer remains
+unqualified**. Do not treat a successful installation or a new-version parse
+as evidence of desktop/webhook delivery.
+
+The runtime profile now supplies the version independently observed from its
+held native host. V2 requires the version reported by `context.app` to match
+that independent observation, rather than compare with a hardcoded patch
+version. This removes the JS-only patch allowlist, **not** the native
+qualification requirements. Unknown future binaries will still be refused
+until their supported source, reader and clock contracts can be established.
+
+For a genuine installed/owned host whose profile returns an unqualified result,
+the plugin prints one generic diagnostic:
+
+```text
+Agent Notifications OpenCode v2: notifications disabled (host runtime not qualified). Update Agent Notifications and see docs/opencode-notifications.md#compatibility-and-diagnostics.
+```
+
+It can also report `native clock policy unavailable` or `native activation
+unavailable` after verified startup. These fixed messages contain no prompts,
+session IDs, paths, version strings, exception messages or environment values.
+An unrendered, unowned or unverified helper exit does not gain a diagnostic
+channel. Optional detailed `diagnostics: true` remains separate and never
+authorizes delivery. After updating the managed plugin and binary, **restart
+OpenCode**. If the warning persists on a new OpenCode release, consult
+[issue #642](https://github.com/777genius/agent-notifications/issues/642)
+for the native qualification status; changing `context.app.version`, setting
+an environment flag or replacing binary hashes will not make it safe to emit.
+
+OpenCode bundles its own **Bun runtime**, used to execute the plugin. It is
+not an additional dependency installed by Agent Notifications. Historical
+macOS/Windows source-time adapters additionally check Bun binary identities.
+That check is a separate source-compatibility boundary, not an OpenCode
+version resolver. It must not be replaced with a loose range until native
+clock equivalence is independently tested.
+
 ## Install or update
 
 Install OpenCode first. In the [guided installer](https://777genius.github.io/agent-notifications/#install),
