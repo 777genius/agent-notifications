@@ -81,8 +81,14 @@ function parseJSON(bytes2, max = 4096) {
   return JSON.parse(text);
 }
 function profileReceipt(output) {
-  const receipt = closed(parseJSON(output, 1024), ["protocol", "semantic", "generation", "resourceClosure"]);
-  if (receipt.protocol !== 1 || receipt.resourceClosure !== "reaped_or_not_started" || !(receipt.semantic === "unverified" && receipt.generation === "none" || receipt.semantic === "eligible" && ["v1", "v2"].includes(receipt.generation))) invalid();
+  const receipt = closed(
+    parseJSON(output, 1024),
+    ["protocol", "semantic", "generation", "resourceClosure", "version"],
+    ["protocol", "semantic", "generation", "resourceClosure"]
+  );
+  const eligible = receipt.semantic === "eligible" && ["v1", "v2"].includes(receipt.generation) && typeof receipt.version === "string" && /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(receipt.version) && receipt.version.startsWith(receipt.generation === "v1" ? "1." : "2.");
+  const denied = receipt.semantic === "unverified" && receipt.generation === "none" && !Object.hasOwn(receipt, "version");
+  if (receipt.protocol !== 1 || receipt.resourceClosure !== "reaped_or_not_started" || !(eligible || denied)) invalid();
   return Object.freeze(receipt);
 }
 function clockReceipt(output) {
@@ -2661,7 +2667,7 @@ var identity2 = (name) => {
   return Object.freeze({ name, dev: stat.dev, ino: stat.ino, size: stat.isDirectory() ? void 0 : stat.size, mtime: stat.isDirectory() ? void 0 : stat.mtimeNs, mode: stat.mode });
 };
 var equal = (a, b) => ["name", "dev", "ino", "size", "mtime", "mode"].every((key) => a[key] === b[key]);
-async function prepareOwnedHost(directory2, generation, appVersion, diagnostics = false) {
+async function prepareOwnedHost(directory2, generation, appVersion, diagnostics = false, onUnavailable) {
   let registry, privateCwd;
   try {
     if (!/^[a-f0-9]{64}$/.test(origin) || !absoluteNativePath(directory2)) return;
@@ -2687,11 +2693,19 @@ async function prepareOwnedHost(directory2, generation, appVersion, diagnostics 
     });
     const response = await registry.profile({ isCurrent: isOwned });
     const receipt = profileReceipt(response.output);
-    if (response.status !== "ok" || receipt.semantic !== "eligible" || receipt.generation !== generation || !isOwned() || generation === "v2" && appVersion !== "2.0.21") throw new TypeError("runtime_unverified");
+    const current = isOwned();
+    if (response.status === "ok" && current && (receipt.semantic !== "eligible" || receipt.generation !== generation || generation === "v2" && appVersion !== receipt.version)) {
+      try {
+        onUnavailable?.("runtime_unverified");
+      } catch {
+      }
+    }
+    if (response.status !== "ok" || receipt.semantic !== "eligible" || receipt.generation !== generation || !current || generation === "v2" && appVersion !== receipt.version) throw new TypeError("runtime_unverified");
     let disposed = false;
     return Object.freeze({
       registry,
       origin,
+      hostVersion: receipt.version,
       isOwned: () => !disposed && isOwned(),
       runtimeEligibility: () => !disposed && isOwned() ? "supported" : "unverified",
       async dispose() {
@@ -3919,6 +3933,18 @@ var compositionDiagnostic = (enabled, stage) => {
   } catch {
   }
 };
+var startupWarning = (generation) => {
+  let reported = false;
+  return (code) => {
+    if (reported) return;
+    reported = true;
+    const reason = code === "runtime_unverified" ? "host runtime not qualified" : code === "policy_unavailable" ? "native clock policy unavailable" : "native activation unavailable";
+    try {
+      console.error("Agent Notifications OpenCode " + generation + ": notifications disabled (" + reason + "). Update Agent Notifications and see docs/opencode-notifications.md#compatibility-and-diagnostics.");
+    } catch {
+    }
+  };
+};
 var servers = /* @__PURE__ */ new WeakMap();
 var setups = /* @__PURE__ */ new WeakMap();
 var silent = Object.freeze({ event() {
@@ -3969,7 +3995,8 @@ async function server(input, options = {}) {
   const holder = { directory: input.directory, retired: false };
   const starting = (async () => {
     let diagnostics = false;
-    const owned = await prepareOwnedHost(input.directory, "v1", void 0, diagnostics = options?.diagnostics === true);
+    const warning = startupWarning("v1");
+    const owned = await prepareOwnedHost(input.directory, "v1", void 0, diagnostics = options?.diagnostics === true, warning);
     if (!owned) {
       compositionDiagnostic(diagnostics, "v1.owned.denied");
       return silent;
@@ -3981,6 +4008,7 @@ async function server(input, options = {}) {
     const policy = selectClockCell("v1");
     if (!policy) {
       compositionDiagnostic(diagnostics, "v1.policy.denied");
+      warning("policy_unavailable");
       await owned.dispose();
       return silent;
     }
@@ -4012,6 +4040,7 @@ async function server(input, options = {}) {
     try {
       if (!await delivery.activate() || holder.retired) {
         compositionDiagnostic(diagnostics, "v1.activation.denied");
+        warning("activation_unavailable");
         stop();
         return silent;
       }
@@ -4060,6 +4089,7 @@ async function server(input, options = {}) {
         }
       } });
     } catch {
+      warning("activation_unavailable");
       stop();
       return silent;
     }
@@ -4073,7 +4103,8 @@ async function setup(context) {
   if (setups.has(context)) return setups.get(context);
   const starting = (async () => {
     let diagnostics = false;
-    const owned = await prepareOwnedHost(context.location?.directory, "v2", context.app?.version, diagnostics = context.options?.diagnostics === true);
+    const warning = startupWarning("v2");
+    const owned = await prepareOwnedHost(context.location?.directory, "v2", context.app?.version, diagnostics = context.options?.diagnostics === true, warning);
     if (!owned) {
       compositionDiagnostic(diagnostics, "v2.owned.denied");
       return;
@@ -4082,6 +4113,7 @@ async function setup(context) {
     const display = context.client?.session?.get ? createDisplayContext(context.client) : void 0;
     if (!policy) {
       compositionDiagnostic(diagnostics, "v2.policy.denied");
+      warning("policy_unavailable");
       await owned.dispose();
       return;
     }
@@ -4091,7 +4123,7 @@ async function setup(context) {
       workspaceID: context.location.workspaceID,
       projectID: context.location.project?.id
     });
-    const isNativeOwned = () => owned.isOwned() && context.app?.version === "2.0.21" && context.location?.directory === location2.directory && context.location?.workspaceID === location2.workspaceID && context.location?.project?.id === location2.projectID;
+    const isNativeOwned = () => owned.isOwned() && context.app?.version === owned.hostVersion && context.location?.directory === location2.directory && context.location?.workspaceID === location2.workspaceID && context.location?.project?.id === location2.projectID;
     const delivery = createPreparedDelivery({
       registry: owned.registry,
       origin: owned.origin,
@@ -4120,6 +4152,7 @@ async function setup(context) {
       view = createNativeV2(context, context.location, delivery.nativeIngress, delivery.invalidate);
       if (!await delivery.activate()) {
         compositionDiagnostic(diagnostics, "v2.activation.denied");
+        warning("activation_unavailable");
         await stop();
         return;
       }
@@ -4192,6 +4225,7 @@ async function setup(context) {
       observer.start();
       return stop;
     } catch {
+      warning("activation_unavailable");
       await stop();
     }
   })();
