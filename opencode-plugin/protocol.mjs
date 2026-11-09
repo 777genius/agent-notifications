@@ -65,7 +65,7 @@ export function profileReceipt(output) {
   // not context.app or user configuration. No particular patch is privileged.
   const eligible = receipt.semantic === 'eligible' && ['v1', 'v2'].includes(receipt.generation) &&
     typeof receipt.version === 'string' &&
-    /^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$/.test(receipt.version) &&
+    /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(receipt.version) &&
     receipt.version.startsWith(receipt.generation === 'v1' ? '1.' : '2.');
   const denied = receipt.semantic === 'unverified' && receipt.generation === 'none' &&
     !Object.hasOwn(receipt, 'version');
