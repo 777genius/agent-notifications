@@ -138,3 +138,37 @@ test('native V1 factory disposal revokes synchronously and shares pending owned 
   }
  }finally{delete globalThis[key];}
 });
+
+test('installed V1/V2 refusal logs one safe reason without disclosing host data', async()=>{
+ const {build}=await import('esbuild');
+ const stubs={
+  './owned-host.mjs':`export const prepareOwnedHost=async(...args)=>{args[4]?.('runtime_unverified');return undefined;};`,
+  './clock-cells.mjs':'export const selectClockCell=()=>undefined;',
+  './platform-clock.mjs':'export const createPlatformClock=()=>{};',
+  './ipc.mjs':'export const createPreparedDelivery=()=>{};',
+  './native-v1.mjs':'export const createNativeV1=()=>{};',
+  './native-v2.mjs':'export const createNativeV2=()=>{};export const createRPCCheckpoint=()=>{};',
+  'universal-agent-plugins-opencode-events/v1':'export const createObserver=()=>{};',
+  'universal-agent-plugins-opencode-events/v2':'export const createV2Observer=()=>{};',
+ };
+ const built=await build({entryPoints:[new URL('./plugin.mjs',import.meta.url).pathname],
+  bundle:true,write:false,platform:'node',format:'esm',plugins:[{name:'native-denial-fixture',setup(b){
+   b.onResolve({filter:/.*/},args=>Object.hasOwn(stubs,args.path)?{path:args.path,namespace:'fixture'}:undefined);
+   b.onLoad({filter:/.*/,namespace:'fixture'},args=>({contents:stubs[args.path],loader:'js'}));
+  }}]});
+ const {default:plugin}=await import('data:text/javascript;base64,'+Buffer.from(built.outputFiles[0].text).toString('base64'));
+ const rows=[],previous=console.error;
+ console.error=(...args)=>rows.push(args);
+ try {
+  const client={session:{get(){},messages(){}}},input={directory:'/TEST-private-path',client};
+  const context={app:{version:'2.2.6'},location:{directory:'/TEST-private-path'},
+   event:{subscribe(){}},session:{get(){},context(){}},permission:{get(){},list(){}},rpc:{register(){}}};
+  assert.equal(await plugin.server(input),await plugin.server(input));
+  assert.equal(await plugin.setup(context),await plugin.setup(context));
+  assert.deepEqual(rows,[
+   ['Agent Notifications OpenCode v1: notifications disabled (host runtime not qualified). Update Agent Notifications and see docs/opencode-notifications.md#compatibility-and-diagnostics.'],
+   ['Agent Notifications OpenCode v2: notifications disabled (host runtime not qualified). Update Agent Notifications and see docs/opencode-notifications.md#compatibility-and-diagnostics.'],
+  ]);
+  assert.equal(JSON.stringify(rows).includes('TEST-private-path'),false);
+ }finally{console.error=previous;}
+});
