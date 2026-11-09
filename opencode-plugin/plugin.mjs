@@ -14,6 +14,22 @@ const compositionDiagnostic = (enabled, stage) => {
   try { console.error('Agent Notifications OpenCode composition: ' + stage); } catch {}
 };
 
+// One safe, bounded status per installed startup. Never print host-provided
+// errors, paths, session data, version strings or environment values.
+const startupWarning = (generation) => {
+  let reported = false;
+  return (code) => {
+    if (reported) return;
+    reported = true;
+    const reason = code === 'runtime_unverified' ? 'host runtime not qualified' :
+      code === 'policy_unavailable' ? 'native clock policy unavailable' : 'native activation unavailable';
+    try {
+      console.error('Agent Notifications OpenCode ' + generation + ': notifications disabled (' + reason +
+        '). Update Agent Notifications and see docs/opencode-notifications.md#compatibility-and-diagnostics.');
+    } catch {}
+  };
+};
+
 const servers = new WeakMap(), setups = new WeakMap();
 const silent = Object.freeze({ event() {} });
 async function reportDelivery(delivery, diagnostics = false) {
@@ -42,7 +58,8 @@ async function server(input, options = {}) {
   const holder = { directory: input.directory, retired: false };
   const starting = (async () => {
     let diagnostics = false;
-    const owned = await prepareOwnedHost(input.directory, 'v1', undefined, (diagnostics = options?.diagnostics === true));
+    const warning = startupWarning('v1');
+    const owned = await prepareOwnedHost(input.directory, 'v1', undefined, (diagnostics = options?.diagnostics === true), warning);
     if (!owned) {
       compositionDiagnostic(diagnostics, 'v1.owned.denied');
       return silent;
@@ -51,6 +68,7 @@ async function server(input, options = {}) {
     const policy = selectClockCell('v1');
     if (!policy) {
       compositionDiagnostic(diagnostics, 'v1.policy.denied');
+      warning('policy_unavailable');
       await owned.dispose(); return silent;
     }
     let observer, view, stopped = false, stopping;
@@ -72,6 +90,7 @@ async function server(input, options = {}) {
     try {
       if (!await delivery.activate() || holder.retired) {
         compositionDiagnostic(diagnostics, 'v1.activation.denied');
+        warning('activation_unavailable');
         stop(); return silent;
       }
       compositionDiagnostic(diagnostics, 'v1.activation.ok');
@@ -111,7 +130,7 @@ async function server(input, options = {}) {
           display.release(snapshot); stop();
         }
       } });
-    } catch { stop(); return silent; }
+    } catch { warning('activation_unavailable'); stop(); return silent; }
   })();
   holder.starting = starting; servers.set(input.client, holder);
   return starting;
@@ -123,7 +142,8 @@ async function setup(context) {
   if (setups.has(context)) return setups.get(context);
   const starting = (async () => {
     let diagnostics = false;
-    const owned = await prepareOwnedHost(context.location?.directory, 'v2', context.app?.version, (diagnostics = context.options?.diagnostics === true));
+    const warning = startupWarning('v2');
+    const owned = await prepareOwnedHost(context.location?.directory, 'v2', context.app?.version, (diagnostics = context.options?.diagnostics === true), warning);
     if (!owned) {
       compositionDiagnostic(diagnostics, 'v2.owned.denied');
       return;
@@ -134,6 +154,7 @@ async function setup(context) {
     const display = context.client?.session?.get ? createDisplayContext(context.client) : undefined;
     if (!policy) {
       compositionDiagnostic(diagnostics, 'v2.policy.denied');
+      warning('policy_unavailable');
       await owned.dispose(); return;
     }
     let observer, view, stopped = false, connection;
@@ -155,6 +176,7 @@ async function setup(context) {
       view = createNativeV2(context, context.location, delivery.nativeIngress, delivery.invalidate);
       if (!await delivery.activate()) {
         compositionDiagnostic(diagnostics, 'v2.activation.denied');
+        warning('activation_unavailable');
         await stop(); return;
       }
       compositionDiagnostic(diagnostics, 'v2.activation.ok');
@@ -207,7 +229,7 @@ async function setup(context) {
         emit: (event, handoff) => { const fact = view.project(event); return fact ? reportDelivery(delivery.emit(fact, handoff), diagnostics) : undefined; } });
       observer.start();
       return stop;
-    } catch { await stop(); }
+    } catch { warning('activation_unavailable'); await stop(); }
   })();
   setups.set(context, starting);
   return starting;
