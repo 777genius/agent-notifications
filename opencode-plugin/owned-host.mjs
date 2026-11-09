@@ -13,7 +13,7 @@ const identity = (name) => {
   return Object.freeze({ name, dev: stat.dev, ino: stat.ino, size: stat.isDirectory() ? undefined : stat.size, mtime: stat.isDirectory() ? undefined : stat.mtimeNs, mode: stat.mode });
 };
 const equal = (a, b) => ['name', 'dev', 'ino', 'size', 'mtime', 'mode'].every((key) => a[key] === b[key]);
-export async function prepareOwnedHost(directory, generation, appVersion, diagnostics = false) {
+export async function prepareOwnedHost(directory, generation, appVersion, diagnostics = false, onUnavailable) {
   let registry, privateCwd;
   try {
     if (!/^[a-f0-9]{64}$/.test(origin) || !absoluteNativePath(directory)) return;
@@ -30,10 +30,17 @@ export async function prepareOwnedHost(directory, generation, appVersion, diagno
       diagnostics, osEnv: pick(process.platform === 'win32' ? ['SystemRoot', 'WINDIR'] : []), deliveryEnv: pick(deliveryKeys) });
     const response = await registry.profile({ isCurrent: isOwned });
     const receipt = profileReceipt(response.output);
-    // generation is the closed helper contract, not raw semver/range authority.
-    // The helper's only V2 image is 2.0.21; ctx.app independently must agree.
+    // A successfully returned, closed profile from the owned host can safely
+    // report lack of qualification. A missing/unrendered/foreign binding stays
+    // silent: caller data must not create a diagnostics channel.
+    const current = isOwned();
+    if (response.status === 'ok' && current &&
+        (receipt.semantic !== 'eligible' || receipt.generation !== generation ||
+         generation === 'v2' && appVersion !== '2.0.21')) {
+      try { onUnavailable?.('runtime_unverified'); } catch {}
+    }
     if (response.status !== 'ok' || receipt.semantic !== 'eligible' || receipt.generation !== generation ||
-        !isOwned() || generation === 'v2' && appVersion !== '2.0.21') throw new TypeError('runtime_unverified');
+        !current || generation === 'v2' && appVersion !== '2.0.21') throw new TypeError('runtime_unverified');
     let disposed = false;
     return Object.freeze({ registry, origin, isOwned: () => !disposed && isOwned(),
       runtimeEligibility: () => !disposed && isOwned() ? 'supported' : 'unverified',
