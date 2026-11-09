@@ -96,7 +96,7 @@ func runtimeProfileOperation(ctx context.Context, args []string, input io.ReadCl
 	if len(args) != 2 || args[0] != "--protocol" || args[1] != "1" {
 		return 2
 	}
-	result := runtimeProfileReceipt{1, "unverified", "none", "reaped_or_not_started"}
+	result := runtimeProfileReceipt{Protocol: 1, Semantic: "unverified", Generation: "none", ResourceClosure: "reaped_or_not_started"}
 	// This scope has no asynchronous probe. Until the one synchronous call below,
 	// not-started is positive proof; afterwards its Cmd.Run/Wait return proves reap.
 	raw, err := opencodeevent.ReadOwnedBounded(ctx, input)
