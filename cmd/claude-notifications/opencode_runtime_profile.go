@@ -32,6 +32,9 @@ type runtimeProfileReceipt struct {
 	Semantic        string `json:"semantic"`
 	Generation      string `json:"generation"`
 	ResourceClosure string `json:"resourceClosure"`
+	// Native host --version after a successful held process/image probe.
+	// Empty on denied profiles; user-supplied plugin context cannot set this.
+	Version         string `json:"version,omitempty"`
 }
 
 // Live image proof is deliberately separate from official host qualification.
@@ -118,6 +121,7 @@ func runtimeProfileOperation(ctx context.Context, args []string, input io.ReadCl
 				generation := qualify(profile.Clone(), before)
 				if generation == observerV1 && profile.Family == opencodehost.ModernV1 || generation == observerV2 && profile.Family == opencodehost.V2 {
 					result.Semantic = "eligible"
+					result.Version = profile.Version
 					if generation == observerV1 {
 						result.Generation = "v1"
 					} else {
