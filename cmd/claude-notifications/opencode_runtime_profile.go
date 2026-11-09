@@ -34,7 +34,7 @@ type runtimeProfileReceipt struct {
 	ResourceClosure string `json:"resourceClosure"`
 	// Native host --version after a successful held process/image probe.
 	// Empty on denied profiles; user-supplied plugin context cannot set this.
-	Version         string `json:"version,omitempty"`
+	Version string `json:"version,omitempty"`
 }
 
 // Live image proof is deliberately separate from official host qualification.
