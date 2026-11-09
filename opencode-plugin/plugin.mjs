@@ -90,7 +90,7 @@ async function server(input, options = {}) {
     try {
       if (!await delivery.activate() || holder.retired) {
         compositionDiagnostic(diagnostics, 'v1.activation.denied');
-        warning('activation_unavailable');
+        if (!holder.retired && owned.isOwned()) warning('activation_unavailable');
         stop(); return silent;
       }
       compositionDiagnostic(diagnostics, 'v1.activation.ok');
@@ -130,7 +130,7 @@ async function server(input, options = {}) {
           display.release(snapshot); stop();
         }
       } });
-    } catch { warning('activation_unavailable'); stop(); return silent; }
+    } catch { if (!holder.retired && owned.isOwned()) warning('activation_unavailable'); stop(); return silent; }
   })();
   holder.starting = starting; servers.set(input.client, holder);
   return starting;
@@ -176,7 +176,7 @@ async function setup(context) {
       view = createNativeV2(context, context.location, delivery.nativeIngress, delivery.invalidate);
       if (!await delivery.activate()) {
         compositionDiagnostic(diagnostics, 'v2.activation.denied');
-        warning('activation_unavailable');
+        if (!stopped && owned.isOwned()) warning('activation_unavailable');
         await stop(); return;
       }
       compositionDiagnostic(diagnostics, 'v2.activation.ok');
@@ -229,7 +229,7 @@ async function setup(context) {
         emit: (event, handoff) => { const fact = view.project(event); return fact ? reportDelivery(delivery.emit(fact, handoff), diagnostics) : undefined; } });
       observer.start();
       return stop;
-    } catch { warning('activation_unavailable'); await stop(); }
+    } catch { if (!stopped && owned.isOwned()) warning('activation_unavailable'); await stop(); }
   })();
   setups.set(context, starting);
   return starting;
