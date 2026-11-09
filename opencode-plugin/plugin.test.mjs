@@ -166,8 +166,8 @@ test('installed V1/V2 refusal logs one safe reason without disclosing host data'
   assert.equal(await plugin.server(input),await plugin.server(input));
   assert.equal(await plugin.setup(context),await plugin.setup(context));
   assert.deepEqual(rows,[
-   ['Agent Notifications OpenCode v1: notifications disabled (host runtime not qualified). Update Agent Notifications and see docs/opencode-notifications.md#compatibility-and-diagnostics.'],
-   ['Agent Notifications OpenCode v2: notifications disabled (host runtime not qualified). Update Agent Notifications and see docs/opencode-notifications.md#compatibility-and-diagnostics.'],
+   ['Agent Notifications OpenCode v1: notifications disabled (host runtime not qualified). Update Agent Notifications and see https://github.com/777genius/agent-notifications/blob/main/docs/opencode-notifications.md#compatibility-and-diagnostics.'],
+   ['Agent Notifications OpenCode v2: notifications disabled (host runtime not qualified). Update Agent Notifications and see https://github.com/777genius/agent-notifications/blob/main/docs/opencode-notifications.md#compatibility-and-diagnostics.'],
   ]);
   assert.equal(JSON.stringify(rows).includes('TEST-private-path'),false);
  }finally{console.error=previous;}
