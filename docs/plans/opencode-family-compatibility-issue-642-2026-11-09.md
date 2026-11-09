@@ -43,3 +43,36 @@ Changing an exact string into `>=2` or copying a reported hash would not work en
 - [ ] Unsupported/unknown contracts communicate a visible actionable reason rather than silently stopping.
 
 The generic family classifier in UAP is already broad. Changing only `tested_exact` there is **not** sufficient: the actual native qualification, JS and Go clocks, admission and reader semantics are independent. Do not tick these gates without evidence.
+
+## Implementation checkpoint — 2026-11-09
+
+**Completed, limited to the owned V1/V2 startup boundary:** Go's verified
+native-host probe now includes its observed version in the closed profile
+receipt only on eligibility. JS compares V2 `context.app.version` to that
+runtime-attested value, without an exact `2.0.21` gate; the strict profile
+decoder rejects mismatched generations and malformed versions. Unqualified
+owned profiles and qualified startup failures yield at most one content-free
+warning per startup. Render placeholders and public config remain untrusted.
+The tracked JS bundle is regenerated from the reproducible build.
+
+**Review 1 — architecture / scope:** keep one native Go profile operation and
+the existing single JS entrypoint; no new process supervisor, version map,
+feature flag, SDK fork or UAP generic-family reimplementation. The UAP
+`Resolve` broad classifier is already compatible; native observer
+qualification is independent.
+
+**Review 2 — security / privacy:** refused to replace exact native image and
+clock qualification with a version range, caller-supplied hash, Bun version
+override or OS notifier side channel. The profile's optional version is
+generated exclusively after held parent + probe + native observer and clock
+qualification; unverified responses carry no version. The fixed warning never
+prints source values and unrendered/unowned attempts remain silent.
+
+**Review 3 — lifecycle / E2E:** suppress activation warnings on normal V1
+retirement, V2 disposal and revoked ownership; preserve actual child reaping,
+session suppression, multi-step completion and cancellation. Confirmed that
+synthetic source tests **cannot** qualify OpenCode 2.2.6, and a passing JS
+suite is not evidence that a real 2.2.6 turn produces a banner. The native
+version-independent source/clock qualification and physical installed E2E
+are still open; no merge or release should occur while those gates remain
+unchecked.
