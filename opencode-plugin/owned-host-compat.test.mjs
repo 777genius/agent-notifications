@@ -24,7 +24,7 @@ test('verified V1/V2 host versions are dynamic; denied profiles report only afte
       sourcefile: 'owned-host-compat-fixture.mjs' },
     bundle: true, write: false, platform: 'node', format: 'esm',
     plugins: [{ name: 'fixture-registry-port', setup(builder) {
-      builder.onResolve({ filter: /^\\.\\/process-registry\\.mjs$/ }, () => ({ path: 'registry', namespace: 'fixture' }));
+      builder.onResolve({ filter: /process-registry[.]mjs$/, }, () => ({ path: 'registry', namespace: 'fixture' }));
       builder.onLoad({ filter: /.*/, namespace: 'fixture' }, () => ({ loader: 'js', contents:
         'export const absoluteNativePath = p => typeof p === "string" && p.length > 0;' +
         'export const createProcessRegistry = () => ({ profile: async () => globalThis[' + JSON.stringify(key) +
