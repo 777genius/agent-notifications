@@ -25,7 +25,7 @@ const startupWarning = (generation) => {
       code === 'policy_unavailable' ? 'native clock policy unavailable' : 'native activation unavailable';
     try {
       console.error('Agent Notifications OpenCode ' + generation + ': notifications disabled (' + reason +
-        '). Update Agent Notifications and see docs/opencode-notifications.md#compatibility-and-diagnostics.');
+        '). Update Agent Notifications and see https://github.com/777genius/agent-notifications/blob/main/docs/opencode-notifications.md#compatibility-and-diagnostics.');
     } catch {}
   };
 };
