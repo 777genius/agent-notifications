@@ -160,7 +160,7 @@ async function setup(context) {
     let observer, view, stopped = false, connection;
     const location = Object.freeze({ directory: context.location.directory, workspaceID: context.location.workspaceID,
       projectID: context.location.project?.id });
-    const isNativeOwned = () => owned.isOwned() && context.app?.version === '2.0.21' &&
+    const isNativeOwned = () => owned.isOwned() && context.app?.version === owned.hostVersion &&
       context.location?.directory === location.directory && context.location?.workspaceID === location.workspaceID &&
       context.location?.project?.id === location.projectID;
     const delivery = createPreparedDelivery({ registry: owned.registry, origin: owned.origin, policy,
