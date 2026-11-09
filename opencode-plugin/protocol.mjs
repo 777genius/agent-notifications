@@ -58,10 +58,19 @@ export function parseJSON(bytes, max = 4096) {
 }
 
 export function profileReceipt(output) {
-  const receipt = closed(parseJSON(output, 1024), ['protocol', 'semantic', 'generation', 'resourceClosure']);
+  const receipt = closed(parseJSON(output, 1024),
+    ['protocol', 'semantic', 'generation', 'resourceClosure', 'version'],
+    ['protocol', 'semantic', 'generation', 'resourceClosure']);
+  // The version is supplied by the held host's own isolated --version probe,
+  // not context.app or user configuration. No particular patch is privileged.
+  const eligible = receipt.semantic === 'eligible' && ['v1', 'v2'].includes(receipt.generation) &&
+    typeof receipt.version === 'string' &&
+    /^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$/.test(receipt.version) &&
+    receipt.version.startsWith(receipt.generation === 'v1' ? '1.' : '2.');
+  const denied = receipt.semantic === 'unverified' && receipt.generation === 'none' &&
+    !Object.hasOwn(receipt, 'version');
   if (receipt.protocol !== 1 || receipt.resourceClosure !== 'reaped_or_not_started' ||
-      !((receipt.semantic === 'unverified' && receipt.generation === 'none') ||
-        (receipt.semantic === 'eligible' && ['v1', 'v2'].includes(receipt.generation)))) invalid();
+      !(eligible || denied)) invalid();
   return Object.freeze(receipt);
 }
 export function clockReceipt(output) {
