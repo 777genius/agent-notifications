@@ -36,13 +36,13 @@ export async function prepareOwnedHost(directory, generation, appVersion, diagno
     const current = isOwned();
     if (response.status === 'ok' && current &&
         (receipt.semantic !== 'eligible' || receipt.generation !== generation ||
-         generation === 'v2' && appVersion !== '2.0.21')) {
+         generation === 'v2' && appVersion !== receipt.version)) {
       try { onUnavailable?.('runtime_unverified'); } catch {}
     }
     if (response.status !== 'ok' || receipt.semantic !== 'eligible' || receipt.generation !== generation ||
-        !current || generation === 'v2' && appVersion !== '2.0.21') throw new TypeError('runtime_unverified');
+        !current || generation === 'v2' && appVersion !== receipt.version) throw new TypeError('runtime_unverified');
     let disposed = false;
-    return Object.freeze({ registry, origin, isOwned: () => !disposed && isOwned(),
+    return Object.freeze({ registry, origin, hostVersion: receipt.version, isOwned: () => !disposed && isOwned(),
       runtimeEligibility: () => !disposed && isOwned() ? 'supported' : 'unverified',
       async dispose() {
         disposed = true;
