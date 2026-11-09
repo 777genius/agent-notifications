@@ -111,7 +111,7 @@ For a genuine installed/owned host whose profile returns an unqualified result,
 the plugin prints one generic diagnostic:
 
 ```text
-Agent Notifications OpenCode v2: notifications disabled (host runtime not qualified). Update Agent Notifications and see docs/opencode-notifications.md#compatibility-and-diagnostics.
+Agent Notifications OpenCode v2: notifications disabled (host runtime not qualified). Update Agent Notifications and see https://github.com/777genius/agent-notifications/blob/main/docs/opencode-notifications.md#compatibility-and-diagnostics.
 ```
 
 It can also report `native clock policy unavailable` or `native activation
