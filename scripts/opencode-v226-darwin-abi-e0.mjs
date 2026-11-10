@@ -51,8 +51,8 @@ async function main() {
     const bootKey=Buffer.from('kern.bootsessionuuid\0'), buffer=new Uint32Array(16), size=new BigUint64Array(1);
     function readBoot(){
       buffer.fill(0);size[0]=BigInt(buffer.byteLength);
-      return darwinBoot(new Uint8Array(buffer.buffer),size[0],
-        lib.sysctlbyname(address(ptr(bootKey)),aligned(buffer),aligned(size),null,0n));
+      const status=lib.sysctlbyname(address(ptr(bootKey)),aligned(buffer),aligned(size),null,0n);
+      return darwinBoot(new Uint8Array(buffer.buffer),size[0],status);
     }
     phase = 'clock_boot';
     clock=createNativeClock({
