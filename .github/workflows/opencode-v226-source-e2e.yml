@@ -57,7 +57,7 @@ jobs:
           python -B scripts/opencode-v226-source-e2e.py \
             --archive "$RUNNER_TEMP/opencode-linux-x64-2.2.6.tar.gz" \
             --report "$RUNNER_TEMP/opencode-v226-source-safe.json"
-      - name: Prove stock OpenCode 2.2.6 refuses +12s source wall-clock skew
+      - name: Assert test-only +12s future source timestamp fails independent observation
         shell: bash
         run: |
           set -euo pipefail
@@ -65,12 +65,28 @@ jobs:
             --archive "$RUNNER_TEMP/opencode-linux-x64-2.2.6.tar.gz" \
             --clock-skew-negative \
             --report "$RUNNER_TEMP/opencode-v226-clock-skew-safe.json"
-      - name: Upload sanitized source clock-skew negative
+      - name: Upload sanitized future source clock-skew negative
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: opencode-v226-clock-skew-${{ github.event.pull_request.head.sha || github.sha }}
           path: ${{ runner.temp }}/opencode-v226-clock-skew-safe.json
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Assert test-only -12s past source timestamp fails independent observation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -B scripts/opencode-v226-source-e2e.py \
+            --archive "$RUNNER_TEMP/opencode-linux-x64-2.2.6.tar.gz" \
+            --clock-skew-past-negative \
+            --report "$RUNNER_TEMP/opencode-v226-clock-skew-past-safe.json"
+      - name: Upload sanitized past source clock-skew negative
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: opencode-v226-clock-skew-past-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/opencode-v226-clock-skew-past-safe.json
           if-no-files-found: warn
           retention-days: 14
       - name: Preserve only SHA-verified public archive for offline E2E analysis
