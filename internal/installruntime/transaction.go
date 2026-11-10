@@ -774,6 +774,22 @@ func Commit(ctx context.Context, r Request) (result Ledger, resultErr error) {
 		if replacing[path] && !got.Exists && want.Exists {
 			continue
 		}
+		if r.cacheRepair {
+			// The private cache-repair adapter already classified this exact
+			// marketplace reset under the same locks. Admit only a prepared
+			// replacement that restores the recorded identity from the
+			// observed preimage; never admit arbitrary managed drift.
+			approved := false
+			for _, file := range prepared {
+				if file.Path == path && file.Before == got && desired(file) == want {
+					approved = true
+					break
+				}
+			}
+			if approved {
+				continue
+			}
+		}
 		return l, fmt.Errorf("managed fingerprint changed without transaction: %s", path)
 	}
 	nextData, _ := json.Marshal(l)

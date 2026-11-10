@@ -26,6 +26,55 @@ generic "unavailable". Reinstalling is unnecessary when the current status call
 succeeds. Remote or isolated worker sessions must expose their own MCP tools;
 installation in the operator's profile does not establish access inside a worker.
 
+## Linux MCP alerts work, but Claude setup still reports incomplete
+
+A working `notify` call and an incomplete UAP activation are **different facts**.
+The MCP server can be reachable from a running Claude session even when the
+installer has not verified the exact managed `agent-notify@skills-dir` plugin.
+New read-only wizard inspection shows the stored `activation` and
+`verification` of each installed UAP binding separately from MCP delivery.
+UAP activates that client by running `claude plugin list --json` and requiring
+an enabled `agent-notify@skills-dir` entry with the exact managed `installPath`
+and user scope. A failed or unrecognized listing cannot be replaced with an
+assumption based on a successful notification.
+
+To diagnose without changing state:
+
+1. Run `setup-notifications wizard --action inspect --agents claude --json`
+   using the installed executable and its existing control-root arguments;
+   retain the `reason`, `targets` and `nextActions` from the result.
+2. In the **same Claude configuration profile** used at installation, run
+   `claude plugin list --json`. Check `agent-notify@skills-dir` for
+   `enabled: true`, `scope: user`, and the expected `installPath`.
+   If it is absent, disabled or points somewhere else, identify the profile
+   and any explicit opt-out before attempting a repair. Do not override
+   settings, replace managed files, or delete `~/.config/uap` as a shortcut.
+3. Use a validated `activate` or `resume` command from the wizard's
+   `nextActions` only after resolving the actual verification failure.
+   Restart Claude to load changed plugin state. A working `notify` receipt
+   does not authorize marking UAP activation or verification as successful.
+
+Read-only wizard inspection reports `delivery: not_tracked`, not
+`delivery_not_verified`, and offers no repeated test action. Immediately
+following installation, the `delivery_not_verified` next action asks for an
+initial test; it is not evidence of failed delivery. Setup does not persist
+MCP notification receipts. A `submitted` receipt proves the desktop server
+accepted the request, not that the banner was visible or audible.
+
+On Linux, the hook path still uses the configured plugin icon and plays
+the configured hook audio itself. The explicit MCP path uses the **embedded
+default icon** via freedesktop `image-data` and requests a themed
+`message-new-instant` sound only when the global sound policy allows it and
+the desktop server reports sound capability. A `sound: false` opt-out sends
+`suppress-sound` instead. This does not play the hook's custom MP3 or override
+desktop notification settings, mute, volume or Do Not Disturb. D-Bus acceptance
+proves transport, not audible playback or display on a particular KDE/Wayland
+desktop; native screen/audio qualification is a separate gate. This
+presentation applies to the direct Freedesktop transport used by Claude MCP.
+An eligible Codex desktop-thread callback uses a separate authenticated Linux
+portal; its styling is currently unchanged, and this fix does not claim icon or
+sound parity for that navigable portal path.
+
 ### `connection closed: initialize response` during concurrent startup
 
 Older portable launchers can exhaust their installation-lease deadline when
@@ -50,6 +99,30 @@ AGENT_NOTIFY_STARTUP_STRESS=1 GOWORK=off go test ./cmd/claude-notifications \
 ```
 
 This test sends no desktop notification and changes no operator profile.
+
+### Many chats and the shared notification backend
+
+Portable MCP adapters now share one backend per installed binding, provider and
+profile. Each chat retains a lightweight stdio adapter that captures its own call
+metadata. Eight is a regression-test size, not a supported maximum. The shared
+service lifecycle test covers 32 clients by default and 32/64/128 with:
+
+```sh
+AGENT_NOTIFY_SHARED_STRESS=1 GOWORK=off go test ./cmd/claude-notifications \
+  -run '^TestPortableSharedDaemonLifecycle$' -count=1 -v -timeout=4m
+```
+
+This exercises initialization, tools/list, status, one backend per binding and
+reconnection after terminating only the test backend. It sends no notification.
+The service exits after ten idle minutes and restarts on a later call. Existing
+notification rate limits still apply; simultaneous chats do not imply unlimited
+notification throughput. After a request has been transmitted, a lost response
+is reported as `unknown` with `retry_safe=false`; do not resend automatically.
+
+The endpoint is an authenticated, encrypted loopback connection selected from
+private plugin data. Removing a binding or refreshing the installed primary
+invalidates the old service. Restart the client after updating the package so
+new MCP sessions use the shared adapter.
 
 ## OpenCode notifications missing or duplicated
 

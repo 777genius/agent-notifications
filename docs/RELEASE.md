@@ -12,7 +12,7 @@ For a release that skips a platform, promote only its qualified
 rows and global Latest on the previously qualified version. Publish source
 branches before activating the immutable source SHAs in the channel index.
 
-The current all-platform channels and GitHub Latest select v1.50.0, using the
+The current all-platform channels and GitHub Latest select v1.51.3, using the
 owner-approved basic profile and separate macOS E2E described below. This does
 not establish eleven-cell OpenCode or full native qualification. Before
 the v1.48.4 unified promotion, Linux amd64/arm64 and Windows amd64 selected
@@ -29,7 +29,7 @@ without extending the four-second limit; qualification must use the new binary.
 For v1.48.5, the owner selected basic Linux/Windows artifact checks and separate
 macOS E2E/signing instead of the long eleven-cell OpenCode qualification. Use
 `basic-release.yml`; the full `unified-release.yml` operator and its historical
-v1.48.4 reports remain unchanged. The legacy tag workflow excludes both tags.
+v1.48.4 reports remain unchanged. The legacy tag-triggered workflow has since been retired.
 This reduced profile does not grant installed OpenCode business, full native,
 clock/source-epoch, visible desktop or cold-start qualification.
 
@@ -60,8 +60,8 @@ clock/source-epoch, visible desktop or cold-start qualification.
 
 The basic operator now accepts stable semver tags. Before dispatch, run the
 [candidate and prepared-promotion preflight](RELEASE_SPEED.md), retain current-C
-CI/signing and explicitly exclude the new tag from the legacy full release
-workflow in both candidate C and executed operator main O. The historical
+CI/signing. The retired tag-triggered release workflow no longer requires
+per-version exclusions. The historical
 v1.48.5 basic scope above remains the minimum, not an installed-business claim.
 
 Release-only operator and promotion PRs can reuse native CI only with the
@@ -81,8 +81,8 @@ separate downloaded-asset canaries, macOS/Codex E2E and final verified fan-in.
 ### Unified v1.48.4 operator
 
 For v1.48.4, use the manual `unified-release.yml` workflow instead of the legacy
-tag-triggered Linux/Windows workflow. The latter explicitly excludes this tag;
-its non-business native fixture has an unobservable production admission gate.
+tag-triggered Linux/Windows workflow. The retired tag-triggered workflow was not used for this release;
+its non-business native fixture had an unobservable production admission gate.
 The manual operator preserves that denial and qualifies the bounded installed
 business/lifecycle scope with fresh clock and packaged-reader prerequisites.
 It does not grant full native, source-epoch, time-policy, desktop visibility or
@@ -216,9 +216,9 @@ and their evidence on the release PR; the selector itself does not run or prove 
 > retries the download inside the 30s hook budget, so users get repeated stalls until the
 > release finishes building.
 >
-> Prepare the bump on a release branch, tag that exact commit (`release.yml` triggers on the
-> tag, not on `main`), qualify the draft, follow the owner request scope below,
-> publish its assets when authorized. Only a release qualified for every supported
+> Prepare the bump on a release branch. After exact-source CI and trusted signing,
+> dispatch `basic-release.yml` from `main`; it seals assets and creates the
+> immutable tag and a draft. Do not manually push a version tag. Only a release qualified for every supported
 > platform may fast-forward `main` to that same SHA. For partial v1.48.1, do not
 > fast-forward the version bump to `main`: promote the Linux/Windows source and
 > channel controller as described below, retaining all five legacy macOS versions.
@@ -231,24 +231,25 @@ git commit -m "chore(release): vX.Y.Z"
 git push -u origin release/vX.Y.Z
 ```
 
-**Wait for ALL CI checks to pass before tagging:**
+**Wait for ALL CI checks to pass before dispatching the release operator:**
 
 ```bash
 gh run list --limit 5          # check status
 gh run watch <run-id>          # wait for a specific run
 ```
 
-All three workflows must be green: Ubuntu CI, macOS CI, Windows CI. If any fail — fix, push again, and wait. Do NOT create the tag until CI is green.
+All three workflows must be green: Ubuntu CI, macOS CI, Windows CI. If any fail — fix, push again, and wait. Do not create the tag yourself; the qualified operator creates it after sealing.
 
 ## 5. Prepare and qualify a draft, then request publication
 
 ```bash
-git tag vX.Y.Z                 # on the release branch commit
-git push origin vX.Y.Z
-gh run watch                   # wait for release.yml to finish
+# After qualifying the exact candidate SHA and owner-triggered macOS signing run:
+gh workflow run basic-release.yml --ref main \
+  -f candidate_sha=CANDIDATE_SHA -f release_tag=vX.Y.Z -f signing_run=SIGNING_RUN_ID
+gh run watch RUN_ID            # observe the sealed draft creation; it does not publish
 ```
 
-Before creating the v1.48.1 draft, `release.yml` checks the downloaded artifacts
+Historically, for v1.48.1, the retired `release.yml` checked downloaded artifacts
 on three native targets with `scripts/release-artifact-e2e.py`: Linux amd64/arm64
 and Windows amd64. The workflow has no macOS build, signing or helper upload jobs.
 Artifact checks do not establish visible desktop banners.

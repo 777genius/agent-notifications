@@ -2008,6 +2008,31 @@ func TestSetupWizardInspectPendingJournalE2E(t *testing.T) {
 	}
 }
 
+// An unreadable journal is a failed inspection, distinct from a successfully
+// reported recovery requirement. The JSON report remains available either way.
+func TestSetupWizardInspectMalformedJournalE2E(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	env := newWizardCLIEnv(t, ctx, false)
+	plantWizardCLIPendingJournal(t, env.control)
+	path := filepath.Join(filepath.Dir(env.control), "uap", "state", "operations", "wizard-pending-op.json")
+	if err := os.WriteFile(path, []byte("{"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	args := []string{"--action", "inspect", "--agents", "codex", "--codex-home", env.codexHome, "--json", "--control-root", env.control, "--runtime-root", env.runtime, "--helper", env.probe}
+	if code := executeSetupWizardWith(ctx, args, &out, io.Discard, strings.NewReader(""), false); code != 1 {
+		t.Fatalf("unreadable state reported command success: %d %s", code, out.String())
+	}
+	view := decodeWizardJSON(t, out)
+	if view.Action != "inspect" || view.Outcome != "incomplete" || view.Reason != "recovery_required" || len(view.NextActions) == 0 || view.NextActions[0].Kind != "recover" {
+		t.Fatalf("inspection failure lost its report: %+v", view)
+	}
+	if body, err := os.ReadFile(path); err != nil || string(body) != "{" {
+		t.Fatalf("inspection changed unreadable journal: %q %v", body, err)
+	}
+}
+
 func TestSetupWizardInspectPendingKernelJournalE2E(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

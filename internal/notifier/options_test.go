@@ -60,3 +60,37 @@ func TestSendDesktop_AcceptsSendOptions(t *testing.T) {
 		t.Errorf("SendDesktop with WithoutSound returned %v", err)
 	}
 }
+
+func TestWithoutFocusPreservesSoundPolicy(t *testing.T) {
+	o := resolveSendOptions([]SendOption{WithoutFocus()})
+	if !o.noFocus || o.muteSound {
+		t.Fatalf("WithoutFocus must disable actions, not sound: %+v", o)
+	}
+	both := resolveSendOptions([]SendOption{WithoutSound(), WithoutFocus()})
+	if !both.noFocus || !both.muteSound {
+		t.Fatalf("focus and sound policy must compose: %+v", both)
+	}
+}
+
+func TestWithoutFocusKeepsInformationalBanner(t *testing.T) {
+	if notifierGOOS != "linux" {
+		t.Skip("Linux plain banner test")
+	}
+	previous := beeepNotify
+	t.Cleanup(func() { beeepNotify = previous })
+	called := 0
+	beeepNotify = func(_, _ string, _ any) error {
+		called++
+		return nil
+	}
+	cfg := config.DefaultConfig()
+	cfg.Notifications.Desktop.Sound = false
+	n := New(cfg)
+	t.Cleanup(func() { _ = n.Close() })
+	if err := n.SendDesktop(analyzer.StatusTaskComplete, "Done", "s", "/tmp/project", WithoutFocus()); err != nil {
+		t.Fatal(err)
+	}
+	if called != 1 {
+		t.Fatalf("expected one ordinary banner without daemon focus, got %d", called)
+	}
+}

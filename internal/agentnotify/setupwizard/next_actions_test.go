@@ -190,8 +190,25 @@ func TestOfferPostSetupActionsInspectSkipsPermission(t *testing.T) {
 	}
 	got := offerPostSetupActions(req, []portable.Integration{portable.Codex}, out, false)
 	for _, next := range got.NextActions {
-		if next.Kind == "request-permission" {
-			t.Fatalf("inspect offered permission dialog: %+v", got.NextActions)
+		if next.Kind == "request-permission" || next.Kind == "test-notification" {
+			t.Fatalf("read-only inspect offered an unprovable effect: %+v", got.NextActions)
+		}
+	}
+}
+
+// Read-only inspect cannot consume the MCP chat's receipt; distinguish this
+// unknown observation from post-install verification that remains actionable.
+func TestInspectReadinessDoesNotInventDeliveryVerification(t *testing.T) {
+	got := attachReadiness(Request{Action: ActionInspect}, []portable.Integration{portable.Claude}, Result{
+		Action: "inspect", Outcome: "completed",
+		Targets: []TargetResult{{Client: "claude", Unit: "agent-notify", Outcome: "installed"}},
+	}, false)
+	if len(got.Readiness) != 1 || got.Readiness[0].Delivery != "not_tracked" {
+		t.Fatalf("inspect readiness = %+v", got.Readiness)
+	}
+	for _, next := range got.NextActions {
+		if next.Kind == "test-notification" {
+			t.Fatalf("repeated test on inspect: %+v", got.NextActions)
 		}
 	}
 }

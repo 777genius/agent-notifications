@@ -5,18 +5,17 @@ import hashlib
 import io
 import json
 import os
+import subprocess
 from pathlib import Path
 import unittest
 from unittest.mock import patch
 import zipfile
 
 import ci_release_scope_test as fixture
-from ci_release_scope import equivalent_source, equivalent_tree, stable_exclusion_only, channel_source
+from ci_release_scope import equivalent_source, equivalent_tree, channel_source, merged_pulls
 import ci_native_evidence as evidence
 
 WORKFLOW = 'ci-macos.yml'
-RELEASE = b"name: Release\n\non:\n  push:\n    tags:\n      - 'v*'\n      - '!v1.0.0'\n\npermissions:\n  contents: read\n"
-ADDED = b"      - '!v1.0.1'\n"
 
 
 def channels(source, snapshot=None):
@@ -32,7 +31,6 @@ def fixture_scope_platforms():
 class EvidenceFixture(fixture.ScopeFixture):
     def setUp(self):
         super().setUp()
-        self.write('.github/workflows/release.yml', RELEASE.decode())
         self.write('release-channels.tsv', channels(self.base))
         self.write('docs/RELEASE.md', 'release docs\n')
         self.write('docs/PLATFORM_RELEASE_CHANNELS.md', 'channel docs\n')
@@ -43,6 +41,119 @@ class EvidenceFixture(fixture.ScopeFixture):
         self.write('release-channels.tsv', channels(self.base, 'b' * 40))
         self.write('docs/PLATFORM_RELEASE_CHANNELS.md', 'promotion docs\n')
         return self.commit()
+
+
+    def test_main_promotion_requires_unique_exact_merge_and_frozen_inputs(self):
+        head = self.promote()
+        self.git('checkout', '-qB', 'promotion-main-TEST', self.base)
+        self.git('merge', '--no-ff', '-m', 'test: promotion merge', head)
+        merged = self.git('rev-parse', 'HEAD').decode().strip()
+        payload = {'ref': 'refs/heads/main', 'before': self.base, 'after': merged,
+                   'repository': {'full_name': 'owner/repo'}}
+        pr = fixture.event(self.base, head)['pull_request']
+        pr.update(merged_at='2026-11-05T10:00:31Z', merge_commit_sha=merged)
+        pr['base']['ref'] = 'main'
+        env = {'GITHUB_REPOSITORY': 'owner/repo'}
+
+        def source_for(items, event=payload):
+            with patch.dict(os.environ, env), \
+                 patch('ci_release_scope.git', side_effect=lambda *args: self.git(*args)), \
+                 patch('ci_release_scope.merged_pulls', return_value=items):
+                return equivalent_source('push', event)
+
+        self.assertEqual(source_for([pr]), self.base)
+        for changed in [
+            {'ref': 'refs/heads/develop'},
+            {'before': 'f' * 40},
+            {'after': 'e' * 40},
+            {'repository': {'full_name': 'other/repo'}},
+        ]:
+            self.assertIsNone(source_for([pr], {**payload, **changed}))
+        for mutation in (
+            lambda x: x.update(merged_at=None),
+            lambda x: x.update(merge_commit_sha=head),
+            lambda x: x['base'].update(ref='develop'),
+            lambda x: x['base'].update(sha='f' * 40),
+            lambda x: x['head'].update(sha='f' * 40),
+            lambda x: x['head'].update(repo={'full_name': 'foreign/repo'}),
+            lambda x: x['head'].update(repo='untrusted'),
+            lambda x: x.update(head=None),
+            lambda x: x.update(base=None),
+        ):
+            changed = copy.deepcopy(pr)
+            mutation(changed)
+            self.assertIsNone(source_for([changed]))
+        for items in ([], [pr, pr], None, 'untrusted'):
+            self.assertIsNone(source_for(items))
+
+        # The merged source is now different from its qualified PR head.
+        self.write('internal/runtime.go', 'unreviewed main-only product change\n')
+        tampered = self.commit()
+        after_change = {**payload, 'after': tampered, 'before': merged}
+        changed_pr = copy.deepcopy(pr)
+        changed_pr['merged_at'] = '2026-11-05T10:01:00Z'
+        changed_pr['merge_commit_sha'] = tampered
+        changed_pr['base']['sha'] = merged
+        self.assertIsNone(source_for([changed_pr], after_change))
+
+    def test_squash_head_missing_from_main_fetches_exact_pr_ref_or_denies_reuse(self):
+        head = self.promote()
+        self.git('checkout', '-qB', 'promotion-squash-TEST', self.base)
+        self.write('release-channels.tsv', channels(self.base, 'b' * 40))
+        self.write('docs/PLATFORM_RELEASE_CHANNELS.md', 'promotion docs\n')
+        squashed = self.commit()
+        payload = {'ref': 'refs/heads/main', 'before': self.base, 'after': squashed,
+                   'repository': {'full_name': 'owner/repo'}}
+        pr = fixture.event(self.base, head)['pull_request']
+        pr.update(merged_at='2026-11-05T10:00:31Z', merge_commit_sha=squashed)
+        pr['base']['ref'] = 'main'
+
+        def read_missing(*arguments):
+            if arguments == ('cat-file', '-e', head + '^{commit}'):
+                raise subprocess.CalledProcessError(1, 'git')
+            if arguments and arguments[0] == 'fetch':
+                self.assertEqual(arguments, ('fetch', '--no-tags', 'origin', 'refs/pull/1/head'))
+                return b''
+            if arguments == ('rev-parse', 'FETCH_HEAD'):
+                return (head + '\n').encode()
+            return self.git(*arguments)
+
+        # One-parent squash also qualifies when the reviewed head is locally present.
+        with patch.dict(os.environ, {'GITHUB_REPOSITORY': 'owner/repo'}), \
+             patch('ci_release_scope.merged_pulls', return_value=[pr]), \
+             patch('ci_release_scope.git', side_effect=lambda *args: self.git(*args)):
+            self.assertEqual(equivalent_source('push', payload), self.base)
+
+        with patch.dict(os.environ, {'GITHUB_REPOSITORY': 'owner/repo'}), \
+             patch('ci_release_scope.merged_pulls', return_value=[pr]), \
+             patch('ci_release_scope.git', side_effect=read_missing):
+            self.assertEqual(equivalent_source('push', payload), self.base)
+
+        def wrong_ref(*arguments):
+            if arguments == ('rev-parse', 'FETCH_HEAD'):
+                return ('f' * 40 + '\n').encode()
+            return read_missing(*arguments)
+
+        with patch.dict(os.environ, {'GITHUB_REPOSITORY': 'owner/repo'}), \
+             patch('ci_release_scope.merged_pulls', return_value=[pr]), \
+             patch('ci_release_scope.git', side_effect=wrong_ref):
+            self.assertIsNone(equivalent_source('push', payload))
+
+    def test_merged_pull_api_endpoint_json_and_errors(self):
+        revision = 'a' * 40
+        command = ['gh', 'api', 'repos/owner/repo/commits/' + revision + '/pulls?per_page=2']
+        result = subprocess.CompletedProcess(command, 0, b'[{"number":1}]')
+        with patch('ci_release_scope.subprocess.run', return_value=result) as invoke:
+            self.assertEqual(merged_pulls('owner/repo', revision), [{'number': 1}])
+            invoke.assert_called_once_with(command, check=True, capture_output=True, timeout=30)
+        with patch('ci_release_scope.subprocess.run',
+                   side_effect=subprocess.CalledProcessError(1, command)):
+            with self.assertRaises(subprocess.CalledProcessError):
+                merged_pulls('owner/repo', revision)
+        with patch('ci_release_scope.subprocess.run',
+                   return_value=subprocess.CompletedProcess(command, 0, b'invalid-json')):
+            with self.assertRaises(ValueError):
+                merged_pulls('owner/repo', revision)
 
     def test_promotion_freezes_release_commit_not_source_snapshot(self):
         head = self.promote()
@@ -65,15 +176,10 @@ class EvidenceFixture(fixture.ScopeFixture):
         with patch('ci_release_scope.git', side_effect=lambda *args: self.git(*args)):
             self.assertIsNone(equivalent_source('pull_request', fixture.event(old_base, head)))
 
-    def test_exact_operator_exclusion_qualifies(self):
-        self.write('.github/workflows/release.yml', RELEASE.replace(b'\npermissions:', ADDED + b'\npermissions:').decode())
-        head = self.commit()
-        with patch('ci_release_scope.git', side_effect=lambda *args: self.git(*args)):
-            self.assertEqual(equivalent_source('pull_request', fixture.event(self.base, head)), self.base)
-
     def test_every_tracked_product_input_and_mode_blocks(self):
         for path in ['internal/runtime.go', 'go.mod', 'Makefile', '.github/workflows/ci-macos.yml',
-                     'tools/ci_native_evidence.py', '.claude-plugin/plugin.json', 'docs/UNKNOWN.md']:
+                     'tools/ci_native_evidence.py', '.claude-plugin/plugin.json', 'docs/UNKNOWN.md',
+                     '.github/workflows/release.yml']:
             with self.subTest(path=path):
                 self.git('reset', '--hard', self.base)
                 self.promote()
@@ -150,15 +256,6 @@ class EvidenceFixture(fixture.ScopeFixture):
 
 
 class EvidencePolicy(unittest.TestCase):
-    def test_exclusion_is_one_stable_additive_line_in_tags(self):
-        valid = RELEASE.replace(b'\npermissions:', ADDED + b'\npermissions:')
-        self.assertTrue(stable_exclusion_only(RELEASE, valid))
-        for invalid in [valid + ADDED, valid.replace(b'contents: read', b'contents: write'),
-                        valid.replace(b'!v1.0.1', b'!v*'), RELEASE + ADDED,
-                        valid.replace(b'!v1.0.1', b'!v01.0.1'), RELEASE.replace(b'!v1.0.0', b'!v1.0.1'),
-                        RELEASE.replace(b"      - 'v*'\n", ADDED + b"      - 'v*'\n")]:
-            self.assertFalse(stable_exclusion_only(RELEASE, invalid))
-
     def test_skipped_duplicate_or_missing_full_jobs_never_prove_success(self):
         jobs = [{'id': index, 'name': name, 'status': 'completed', 'conclusion': 'success'}
                 for index, name in enumerate( (*evidence.CONTRACTS[WORKFLOW][2], evidence.CONTRACTS[WORKFLOW][1]))]

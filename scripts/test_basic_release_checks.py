@@ -114,6 +114,8 @@ class API:
                 self.check_reads += 1
                 if self.check_reads == 2 and self.after_checks:
                     self.after_checks(self)
+        elif path == prefix + 'pulls':
+            return []
         elif path.startswith(prefix + 'compare/'):
             ancestor, _, candidate = path.removeprefix(prefix + 'compare/').partition('...')
             return {'status': 'ahead' if ancestor == BASE and candidate == SOURCE else 'diverged',
@@ -430,6 +432,75 @@ class AdmissionTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'latest source workflow did not succeed'):
                     self.verify()
 
+    def test_closed_coderabbit_exception_is_specific_and_never_masks_failure(self):
+        for run in self.api.runs:
+            run.update(event='pull_request', head_branch='fix/release-candidate')
+        row = {'id': 90000, 'name': 'CodeRabbit', 'status': 'completed', 'conclusion': 'cancelled',
+               'head_sha': SOURCE, 'app': {'id': 6, 'slug': 'coderabbitai'},
+               'check_suite': {'id': 600}, 'output': {'title': 'Review cancelled',
+               'summary': 'Result: Cancelled - Pull request is closed\nRun ID: example'}}
+        self.api.checks.append(row)
+        self.assertEqual(self.verify()['status'], 'passed')
+        row['output']['summary'] = 'Result: Cancelled - another reason'
+        with self.assertRaisesRegex(ValueError, 'latest source check'):
+            self.verify()
+        row['output']['summary'] = 'Result: Cancelled - Pull request is closed\nRun ID: example'
+        self.api.checks.append({**row, 'id': 89999, 'conclusion': 'failure'})
+        with self.assertRaisesRegex(ValueError, 'latest source check'):
+            self.verify()
+
+    def test_recovered_merged_pr_requires_checkout_and_exact_parents(self):
+        run = self.api.runs[0]
+        run.update(event='pull_request', head_branch='fix/release-candidate', pull_requests=[],
+                   created_at='2026-01-01T00:00:00Z')
+        pr = {'number': 559, 'merged': True, 'merge_commit_sha': SOURCE,
+              'merged_at': '2026-01-01T01:00:00Z',
+              'head': {'ref': run['head_branch'], 'sha': SOURCE, 'repo': {'id': REPO_ID}},
+              'base': {'ref': 'main', 'sha': BASE, 'repo': {'id': REPO_ID}}}
+        proof = {'tested_commit': SOURCE, 'tested_tree': TREE}
+        job = {'id': 876, 'name': native.CONTRACTS['ci-macos.yml'][1],
+               'status': 'completed', 'conclusion': 'success', 'run_attempt': 1,
+               'steps': [{'name': 'Run actions/checkout@v7', 'conclusion': 'success',
+                          'started_at': '2026-01-01T00:00:00Z', 'completed_at': '2026-01-01T00:00:02Z'}]}
+        log = ('2026-01-01T00:00:00Z ##[group]Run actions/checkout@v7\n'
+               '2026-01-01T00:00:01Z [command]git fetch +' + SOURCE
+               + ':refs/remotes/pull/559/merge').encode()
+        original = self.api.__call__
+        timeline = []
+        def api(path, binary=False):
+            if '/pulls?' in path: return [{'number': 559}]
+            if path.endswith('/pulls/559'): return copy.deepcopy(pr)
+            if '/issues/559/timeline?' in path: return timeline
+            if path.endswith('/jobs/876/logs'): return log
+            if '/git/commits/' in path:
+                return {'sha': SOURCE, 'parents': [{'sha': BASE}, {'sha': SOURCE}], 'tree': {'sha': TREE}}
+            return original(path, binary)
+        run['path'] = '.github/workflows/ci-macos.yml'
+        self.api.jobs[run['id']] = [job]
+        with patch.object(native, 'gh', side_effect=api), \
+             patch.object(native, 'download_receipt', return_value=proof), \
+             patch.object(native, 'validate_receipt'), \
+             patch.object(checks.subprocess, 'run', side_effect=lambda *a, **k: type('Result', (), {'stdout': log, 'stderr': b'', 'returncode': 0})()):
+            self.assertTrue(checks.authentic_candidate_pull(REPO, SOURCE, run))
+            guard = type('Result', (), {'stdout': b'', 'stderr': b'terminal escape sequences', 'returncode': 1})()
+            success = type('Result', (), {'stdout': log, 'stderr': b'', 'returncode': 0})()
+            with patch.object(checks.subprocess, 'run', side_effect=[guard, success]) as calls:
+                self.assertTrue(checks.authentic_candidate_pull(REPO, SOURCE, run))
+                self.assertNotIn('--allow-escape-sequences', calls.call_args_list[0].args[0])
+                self.assertIn('--allow-escape-sequences', calls.call_args_list[1].args[0])
+            pr['base']['sha'] = 'd' * 40
+            self.assertFalse(checks.authentic_candidate_pull(REPO, SOURCE, run))
+            pr['base']['sha'] = BASE
+            timeline.append({'event': 'base_ref_changed', 'created_at': '2026-01-01T00:30:00Z'})
+            self.assertFalse(checks.authentic_candidate_pull(REPO, SOURCE, run))
+            timeline.clear()
+            log = b'2026-01-01T00:00:00Z ##[group]Run actions/checkout@v7\n'
+            self.assertFalse(checks.authentic_candidate_pull(REPO, SOURCE, run))
+            log = ('2026-01-01T00:00:00Z ##[group]Run actions/checkout@v7\n'
+                   '2026-01-01T00:00:01Z [command]git fetch +' + SOURCE + ':refs/remotes/pull/559/merge').encode()
+            pr['merged_at'] = '2025-01-01T00:00:00Z'
+            self.assertFalse(checks.authentic_candidate_pull(REPO, SOURCE, run))
+
     def test_pre_main_pr_rejects_foreign_merge_base_even_when_compare_says_ahead(self):
         for run in self.api.runs:
             run.update(event='pull_request', head_branch='fix/release-candidate')
@@ -507,8 +578,129 @@ class AdmissionTests(unittest.TestCase):
                     {'id': 20001, 'name': name, 'status': status, 'conclusion': conclusion}, first))
                 self.api.checks.append(self.api.check(
                     {'id': 20002, 'name': name, 'status': 'completed', 'conclusion': 'success'}, later))
-                with self.assertRaisesRegex(ValueError, 'latest successful source check masked a failure'):
+                with self.assertRaisesRegex(ValueError, 'latest source check did not succeed'):
                     self.verify()
+
+    def shared_workflow_histories(self):
+        for run in self.api.runs:
+            run.update(event='pull_request', head_branch='fix/release-candidate')
+        name = 'Classify macOS CI scope'
+        pairs = []
+        for index, workflow in enumerate(('ci-macos.yml', 'install-recovery-e2e.yml'), 1):
+            origin = API.run(index, workflow, 'cancelled')
+            origin.update(event='pull_request', head_branch='fix/release-candidate')
+            self.api.runs.append(origin)
+            selected = next(run for run in self.api.runs if run['path'] == origin['path']
+                            and run['conclusion'] == 'success')
+            older = self.api.check({'id': index, 'name': name, 'status': 'completed',
+                                    'conclusion': 'cancelled'}, origin)
+            newer = self.api.check({'id': 20000 + index, 'name': name, 'status': 'completed',
+                                    'conclusion': 'success'}, selected)
+            self.api.checks.extend((older, newer))
+            pairs.append((origin, older, selected, newer))
+        return pairs
+
+    def test_identical_scope_names_keep_each_workflows_own_successful_retry(self):
+        pairs = self.shared_workflow_histories()
+        ignored = self.verify()['ignored_successful_retries']
+        self.assertEqual({row['check_id'] for row in ignored}, {1, 2})
+        self.assertEqual({(row['origin_run']['path'], row['replacement_run']['path']) for row in ignored},
+                         {(origin['path'], selected['path']) for origin, _, selected, _ in pairs})
+
+    def test_other_workflows_success_cannot_mask_latest_failure_or_pending(self):
+        for status, conclusion in (('completed', 'failure'), ('queued', None), ('in_progress', None)):
+            with self.subTest(status=status):
+                self.api = API()
+                native.gh.side_effect = self.api
+                pairs = self.shared_workflow_histories()
+                pairs[0][3].update(status=status, conclusion=conclusion)
+                with self.assertRaisesRegex(ValueError, 'latest source check did not succeed'):
+                    self.verify()
+
+    def test_orphan_ambiguous_or_invalid_workflow_origin_cannot_hide_failure(self):
+        for fault in ('orphan', 'ambiguous', 'invalid-path', 'foreign-owner'):
+            with self.subTest(fault=fault):
+                self.api = API()
+                native.gh.side_effect = self.api
+                origin, newer = API.run(201, 'release.yml'), API.run(203, 'release.yml')
+                if fault != 'orphan':
+                    self.api.runs.append(origin)
+                if fault == 'ambiguous':
+                    duplicate = API.run(202, 'unified-release.yml')
+                    duplicate['check_suite_id'] = origin['check_suite_id']
+                    self.api.runs.append(duplicate)
+                elif fault == 'invalid-path':
+                    origin['path'] = 'untrusted/release.yml'
+                elif fault == 'foreign-owner':
+                    origin['head_repository'] = {'full_name': 'other/repo'}
+                self.api.runs.append(newer)
+                for run, number, conclusion in ((origin, 20001, 'failure'), (newer, 20002, 'success')):
+                    self.api.checks.append(self.api.check(
+                        {'id': number, 'name': 'Additional shared qualification',
+                         'status': 'completed', 'conclusion': conclusion}, run))
+                with self.assertRaises(ValueError):
+                    self.verify()
+
+    def metadata_skip_after_cancelled_placeholder(self):
+        for run in self.api.runs:
+            run.update(event='pull_request', head_branch='fix/release-candidate')
+        name = ("github.event.action == 'edited' && false && "
+                "format('Metadata edit ignored (macOS {0})', matrix.go) || format('Test on macOS ({0})', matrix.go)")
+        origin, job, older = self.api.placeholder('ci-macos.yml', name)
+        metadata = API.run(99, 'ci-macos.yml', 'skipped')
+        metadata.update(event='pull_request', head_branch='fix/release-candidate')
+        self.api.runs.append(metadata)
+        self.api.jobs[99] = []
+        for number, label in ((20001, name), (20002, "false && 'Metadata edit ignored (scope)'")):
+            skipped = {'id': number, 'name': label, 'status': 'completed', 'conclusion': 'skipped',
+                       'run_attempt': 1, 'steps': []}
+            self.api.jobs[99].append(skipped)
+            self.api.checks.append(self.api.check(skipped, metadata))
+        return origin, job, older
+
+    def test_later_metadata_skip_does_not_replace_full_workflow_history(self):
+        _, _, older = self.metadata_skip_after_cancelled_placeholder()
+        result = self.verify()
+        self.assertEqual([row['check_id'] for row in result['ignored_superseded_placeholders']], [older['id']])
+        self.assertEqual(result['ignored_superseded_conditionals'], [])
+        self.assertEqual(len(result['check_census']), len(self.api.checks))
+
+    def test_metadata_skip_never_retires_real_or_pending_history_or_missing_full_proof(self):
+        for fault in ('executed', 'failure', 'pending', 'missing-full-proof'):
+            with self.subTest(fault=fault):
+                self.api = API()
+                native.gh.side_effect = self.api
+                _, job, row = self.metadata_skip_after_cancelled_placeholder()
+                if fault == 'executed':
+                    job['steps'] = [{'name': 'actually executed'}]
+                elif fault == 'failure':
+                    row['conclusion'] = 'failure'
+                elif fault == 'pending':
+                    row.update(status='in_progress', conclusion=None)
+                else:
+                    self.api.jobs[10][0]['conclusion'] = 'failure'
+                with self.assertRaises(ValueError):
+                    self.verify()
+
+    def test_bad_check_in_skipped_run_still_blocks_beside_other_workflows_green(self):
+        self.shared_workflow_histories()
+        skipped = API.run(99, 'optional-release.yml', 'skipped')
+        self.api.runs.append(skipped)
+        row = self.api.check({'id': 30000, 'name': 'Classify macOS CI scope',
+                              'status': 'completed', 'conclusion': 'failure'}, skipped)
+        self.api.checks.append(row)
+        with self.assertRaisesRegex(ValueError, 'latest source check did not succeed'):
+            self.verify()
+
+    def test_non_actions_history_keeps_strict_name_and_app_grouping(self):
+        for run, number, conclusion in ((self.api.runs[0], 20001, 'failure'),
+                                        (self.api.runs[1], 20002, 'success')):
+            row = self.api.check({'id': number, 'name': 'Vendor qualification',
+                                  'status': 'completed', 'conclusion': conclusion}, run)
+            row['app'] = {'id': 42, 'slug': 'vendor-app'}
+            self.api.checks.append(row)
+        with self.assertRaisesRegex(ValueError, 'latest successful source check masked a failure'):
+            self.verify()
 
     def test_pre_main_same_repo_pr_retry_can_supersede_failure(self):
         for run in self.api.runs:

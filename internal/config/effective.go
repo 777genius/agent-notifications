@@ -39,7 +39,15 @@ func (d Document) Effective(assets AssetContext) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	return d.effectiveProfile(assets, data)
+	cfg, err := d.effectiveProfile(assets, data)
+	if err == nil {
+		cfg.terminalClickAuthorized = d.hasTerminalClickConsent(assets.Agent)
+		if cfg.terminalClickAuthorized && d.exists && filepath.IsAbs(d.physicalPath) {
+			cfg.terminalClickPath = d.physicalPath
+			cfg.terminalClickRevision = d.Revision()
+		}
+	}
+	return cfg, err
 }
 
 func (d Document) effectiveProfile(assets AssetContext, data []byte) (*Config, error) {
@@ -86,6 +94,8 @@ func (d Document) effectiveProfile(assets AssetContext, data []byte) (*Config, e
 	// A nonempty literal root prevents applyDefaults consulting the environment.
 	// Missing statuses were already present before decode and merged above.
 	if d.schema == 1 {
+		// Existing schema-1 clients historically interpret 0 as an omitted
+		// volume. Changing that contract requires an explicit migration.
 		c.applyDefaults(".")
 	}
 	if err := c.Validate(); err != nil {

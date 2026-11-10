@@ -23,12 +23,12 @@ import (
 // shared ledger retains generated Codex commands, legacy OpenCode argv, and
 // canonical portable registration JSON. The old retained-reference decoder
 // rejects those legitimate records before the metadata-only recovery can run.
-func TestOrphanRecoveryRealCLISixKnownConsumers(t *testing.T) {
+func TestOrphanRecoveryRealCLISevenKnownConsumers(t *testing.T) {
 	compiler, err := orphanCLIObserveCompiler() // Observe caches before HOME isolation.
 	if err != nil {
 		t.Fatal(err)
 	}
-	root, err := os.MkdirTemp(os.Getenv("TMPDIR"), "TEST-orphan-six-consumers-")
+	root, err := os.MkdirTemp(os.Getenv("TMPDIR"), "TEST-orphan-seven-consumers-")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,23 +133,23 @@ func TestOrphanRecoveryRealCLISixKnownConsumers(t *testing.T) {
 	legacyRegistration := filepath.Join(root, "config", "opencode", "plugins", "agent-notifications.js")
 	embeddedPut(t, legacyRegistration, []byte("// TEST retained legacy OpenCode registration\n"), 0600)
 	before := commit(primary, "opencode-notifications", installruntime.Consumer{Registration: legacyRegistration, Commands: []string{filepath.Join(primary, filepath.Base(portable.PlatformPrimary())), "opencode-event", "--protocol", "1"}}, nil)
-	for _, integration := range []portable.Integration{portable.Claude, portable.Codex} {
-		binding := portable.Binding{Version: 1, Integration: integration, InstallationID: "TEST-six-consumers", BindingID: "TEST-" + string(integration), ScopeID: "user", ComponentID: before.ID, Owner: before.Owner, ScopeRoot: filepath.Join(root, string(integration)), DataRoot: filepath.Join(root, "data"), ControlRoot: control, GlobalConfig: filepath.Join(control, "agent-notifications.json"), RuntimeRoot: primary, Primary: portable.PlatformPrimary()}
+	for _, integration := range []portable.Integration{portable.Claude, portable.Codex, portable.Pi} {
+		binding := portable.Binding{Version: 1, Integration: integration, InstallationID: "TEST-seven-consumers", BindingID: "TEST-" + string(integration), ScopeID: "user", ComponentID: before.ID, Owner: before.Owner, ScopeRoot: filepath.Join(root, string(integration)), DataRoot: filepath.Join(root, "data"), ControlRoot: control, GlobalConfig: filepath.Join(control, "agent-notifications.json"), RuntimeRoot: primary, Primary: portable.PlatformPrimary()}
 		id, consumer, _, e := binding.Registration()
 		if e != nil {
 			t.Fatal(e)
 		}
 		before = commit(primary, id, consumer, nil)
 	}
-	if len(before.Consumers) != 6 || len(before.Files) != 49 || before.Native != nil {
-		t.Fatalf("six native-free consumers/49 files required: %+v", before)
+	if len(before.Consumers) != 7 || len(before.Files) != 49 || before.Native != nil {
+		t.Fatalf("seven native-free consumers/49 files required: %+v", before)
 	}
 	rawPolicy := []byte("{\n  \"schemaVersion\":1, \"enabled\":false, \"unknownOperatorField\":{\"keep\":true},\n  \"route\":{\"navigation\":false}, \"setupState\":{\"foreignConsent\":false}\n}\n")
 	embeddedPut(t, filepath.Join(control, "agent-notifications.json"), rawPolicy, 0600)
 	if _, err = installruntime.ReadInstalledSnapshot(control); err != nil {
 		t.Fatalf("initial published snapshot: %v", err)
 	}
-	sentinel := filepath.Join(evidence, "six-consumers-outside", "control")
+	sentinel := filepath.Join(evidence, "seven-consumers-outside", "control")
 	embeddedPut(t, filepath.Join(sentinel, "ownership-sentinel"), []byte("TEST outside all consumer roots\n"), 0600)
 	outsideBefore := orphanCLITree(t, sentinel)
 	retainedPrimary, retainedCodex := orphanCLITree(t, primary), orphanCLITree(t, filepath.Dir(liveCodex))
@@ -171,12 +171,12 @@ func TestOrphanRecoveryRealCLISixKnownConsumers(t *testing.T) {
 		t.Fatal(err)
 	}
 	beforeControl := orphanCLITree(t, control)
-	orphanCLIArtifact(t, evidence, "six-consumers-before.json", before)
+	orphanCLIArtifact(t, evidence, "seven-consumers-before.json", before)
 	args := []string{"internal-install-runtime", "--recover-orphan-consumer", "--consumer", orphanID, "--runtime-root", orphan, "--control-root", control, "--expected-installation-id", before.ID, "--expected-generation", strconv.FormatUint(before.Generation, 10), "--json"}
 	preview := orphanCLIRun(t, binary, env, evidence, 0, append(append([]string(nil), args...), "--dry-run")...)
 	var result runtimeRecoveryResult
 	if err = json.Unmarshal(preview, &result); err != nil || !result.Admissible || result.SelectedCount != 21 || !reflect.DeepEqual(result.SelectedPaths, selected) || result.Generation != before.Generation {
-		t.Fatalf("six known consumers preview: %s %v", preview, err)
+		t.Fatalf("seven known consumers preview: %s %v", preview, err)
 	}
 	if !reflect.DeepEqual(beforeControl, orphanCLITree(t, control)) {
 		t.Fatal("dry-run mutated control")
@@ -200,7 +200,7 @@ func TestOrphanRecoveryRealCLISixKnownConsumers(t *testing.T) {
 	}
 	expected.Generation++
 	expected.PolicyGeneration++
-	if !reflect.DeepEqual(after, expected) || len(after.Files) != 28 || len(after.Consumers) != 5 || after.Native != nil {
+	if !reflect.DeepEqual(after, expected) || len(after.Files) != 28 || len(after.Consumers) != 6 || after.Native != nil {
 		t.Fatalf("unexpected recovery delta: got=%+v want=%+v", after, expected)
 	}
 	if !bytes.Equal(rawPolicy, embeddedRead(t, filepath.Join(control, "agent-notifications.json"))) || !reflect.DeepEqual(retainedPrimary, orphanCLITree(t, primary)) || !reflect.DeepEqual(retainedCodex, orphanCLITree(t, filepath.Dir(liveCodex))) || !bytes.Equal(legacyBefore, embeddedRead(t, legacyRegistration)) {
@@ -229,8 +229,8 @@ func TestOrphanRecoveryRealCLISixKnownConsumers(t *testing.T) {
 	if !reflect.DeepEqual(outsideBefore, orphanCLITree(t, sentinel)) {
 		t.Fatal("outside TEST sentinel changed")
 	}
-	orphanCLIArtifact(t, evidence, "six-consumers-after.json", after)
-	orphanCLIArtifact(t, evidence, "six-consumers-proof.json", map[string]any{"initial_consumers": 6, "retained_consumers": 5, "selected_files": 21, "retained_files": 28, "native": nil, "fixture": root})
+	orphanCLIArtifact(t, evidence, "seven-consumers-after.json", after)
+	orphanCLIArtifact(t, evidence, "seven-consumers-proof.json", map[string]any{"initial_consumers": 7, "retained_consumers": 6, "selected_files": 21, "retained_files": 28, "native": nil, "fixture": root})
 	complete = true
-	t.Logf("PROVED six known consumers: 49->28 files, generation %d->%d; fixture=%s evidence=%s", before.Generation, after.Generation, root, evidence)
+	t.Logf("PROVED seven known consumers: 49->28 files, generation %d->%d; fixture=%s evidence=%s", before.Generation, after.Generation, root, evidence)
 }

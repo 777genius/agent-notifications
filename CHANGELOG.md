@@ -7,6 +7,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.51.3] - 2026-11-07
+
+### Added
+- Add guarded local Linux/X11 click-to-focus for Qoder, Gemini CLI and Cursor CLI when the originating terminal window can be safely verified ([#629](https://github.com/777genius/agent-notifications/pull/629)).
+
+### Fixed
+- Improve provider-free Claude and Codex hook reliability, including notification deduplication and bounded Git discovery ([#636](https://github.com/777genius/agent-notifications/pull/636)).
+- Classify Claude `permission_prompt` notifications as permission requests, showing the bounded host-provided message instead of an unrelated question or transcript ([#633](https://github.com/777genius/agent-notifications/pull/633), [#632](https://github.com/777genius/agent-notifications/issues/632)).
+- Repair Linux Claude marketplace upgrades between versioned plugin caches by relocating managed ownership through the existing checksum-verified transaction, including symlinked cache ancestors, and refuse offline migration without verified assets ([#634](https://github.com/777genius/agent-notifications/pull/634), [#585](https://github.com/777genius/agent-notifications/issues/585)).
+- Preserve unselected live portable integration bindings during group updates and use the verified pinned SDK group-update contract ([#595](https://github.com/777genius/agent-notifications/issues/595), [#630](https://github.com/777genius/agent-notifications/pull/630)).
+- Retain committed selected installer targets following a late installation failure, and keep portable group removal tied to its owned lease ([#606](https://github.com/777genius/agent-notifications/pull/606), [#608](https://github.com/777genius/agent-notifications/pull/608)).
+
+### Platform notes
+- X11 click-to-focus is limited to safe local sessions; Wayland, remote terminals and unsupported desktop environments are not implied to support it.
+- Release publication still requires exact-candidate CI, owner-dispatched macOS signing/notarization, a complete sealed draft and downloaded-asset canaries. CI does not establish a visible banner on the original reporter's machine.
+
+## [1.51.2] - 2026-11-05
+
+### Fixed
+- Convert Git Bash-generated intent paths at the Windows native setup-products boundary, restoring one-command OpenCode installation without weakening Windows path validation ([#603](https://github.com/777genius/agent-notifications/pull/603), [#602](https://github.com/777genius/agent-notifications/issues/602)).
+- Clarify Claude UAP activation versus MCP delivery status: read-only inspection preserves real activation evidence and does not indefinitely claim unverified delivery after a successful independent notification ([#597](https://github.com/777genius/agent-notifications/pull/597), [#585](https://github.com/777genius/agent-notifications/issues/585)).
+- Include an embedded icon and a capability- and consent-gated system sound request for explicit Linux MCP Freedesktop notifications ([#597](https://github.com/777genius/agent-notifications/pull/597)).
+- Reject release candidate preflight when the retired tag-triggered release workflow reappears, and prevent its changes from being classified as metadata-only ([#604](https://github.com/777genius/agent-notifications/pull/604), [#607](https://github.com/777genius/agent-notifications/pull/607)).
+- Fix Claude Stop transcript append detection across a parse/stat race ([#609](https://github.com/777genius/agent-notifications/issues/609)).
+- Prevent setup recovery from suggesting updates to unselected integrations ([#618](https://github.com/777genius/agent-notifications/pull/618), [#595](https://github.com/777genius/agent-notifications/issues/595)).
+
+### Platform notes
+- Linux Claude marketplace reinstall recovery from v1.51.0 remains included; the reporter confirmed recovery and removal of the earlier `installed_bundle_required` symptom.
+- A successful `notify` handoff does not prove an exact managed Claude UAP plugin activation. Install verification still requires the enabled user-scope `agent-notify@skills-dir` binding; inspections will not fabricate success for another profile or plugin.
+- The Linux MCP icon and system sound hint are covered by native D-Bus transport tests. Visible KDE/Wayland banners and audible playback still depend on host desktop capabilities, consent, mute and notification settings; physical KDE observation is not claimed.
+- Release qualification uses the owner-approved basic five-platform profile with independently signed and notarized macOS artifacts, downloaded-asset canaries and disposable Codex tests before publication. Full eleven-cell OpenCode, physical desktop visibility and cold-start coverage are not claimed.
+
+## [1.51.0] - 2026-11-03
+
+### Added
+- Share the agent-notify notification backend across simultaneous chat sessions while preserving scoped lifecycle and delivery behavior ([#568](https://github.com/777genius/agent-notifications/pull/568)).
+- Add bounded opt-in Gemini hook admission diagnostics with guarded collection and negative tests.
+- Improve AI-agent discovery resources and refresh installation and agent support guidance ([#581](https://github.com/777genius/agent-notifications/pull/581)).
+
+### Fixed
+- Recover exact checksum-verified Linux Claude marketplace cache files after reinstall without overwriting foreign edits, and fail closed when /init cannot validate managed ownership ([#586](https://github.com/777genius/agent-notifications/pull/586), [#585](https://github.com/777genius/agent-notifications/issues/585)).
+- Make Pages deployment reruns safe and verify the live website ([#583](https://github.com/777genius/agent-notifications/pull/583)).
+- Tighten release source-CI provenance and preserve additional offline Codex hook diagnostics ([#576](https://github.com/777genius/agent-notifications/pull/576), [#584](https://github.com/777genius/agent-notifications/pull/584)).
+
+### Platform notes
+- The basic five-platform release profile requires independent same-source signed and notarized macOS artifacts, downloadable canaries and disposable Codex checks before publication. Full eleven-cell OpenCode, native desktop visibility, physical Intel and cold-start qualification are not claimed.
+
+
+## [1.50.1] - 2026-11-02
+
+### Fixed
+- Revalidate Pi's selected profile after shared-runtime preparation so common installer setup no longer stops with `concurrent_change` ([#575](https://github.com/777genius/agent-notifications/pull/575)).
+- Explain Pi's selected PATH lookup and the explicit `--pi-executable` recovery option when the installer cannot find Pi ([#575](https://github.com/777genius/agent-notifications/pull/575)).
+- Keep public installer renderer cleanup in its owning shell so stopping a download animation cannot remove the parent installer stage ([#575](https://github.com/777genius/agent-notifications/pull/575)).
+- Keep MCP notification tools available when multiple chats start concurrently, reuse verified startup snapshots under shared read leases, and preserve bounded startup diagnostics ([#564](https://github.com/777genius/agent-notifications/pull/564)).
+
+### Platform notes
+- Uses the basic five-platform artifact profile with separate downloaded macOS/Codex checks. Pi validation covers actual installation, hooks and lifecycle behavior; native desktop banner, audio and click qualification is not claimed.
+
 ## [1.50.0] - 2026-11-01
 
 ### Added

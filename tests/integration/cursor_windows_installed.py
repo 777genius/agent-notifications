@@ -70,9 +70,11 @@ def prepare(root, agent):
         '/statuses/agent_stopping/webhook/enabled':True}}
     cli('config-edit',['config','edit','--stdin','--expect-revision',inspection['revision']],json.dumps(edits).encode())
     common = ['--scope-root',str(root/'home/.cursor'),'--client-executable',str(agent),'--control-root',str(control)]
-    def install(name, enabled):
+    def install(name, desktop, webhook, explicit_channels=True):
         intent = primary.parent/(name+'-intent.json')
-        channels = ['--products','cursor','--agent-notify'] + (['--desktop','--webhook'] if enabled else [])
+        channels = ['--products','cursor','--agent-notify']
+        if explicit_channels:
+            channels += ['--desktop' if desktop else '--desktop=false', '--webhook' if webhook else '--webhook=false']
         cli(name+'-prepare',['setup-products','prepare',*channels,*common,'--intent-file',str(intent)])
         frozen = json.loads(intent.read_bytes())
         scopes = {k:base64.b64decode(v,validate=True).decode() for k,v in frozen['scopes'].items()}
@@ -82,9 +84,12 @@ def prepare(root, agent):
             args += ['--'+key,scopes[key]]
         cli(name,args)
         policy = json.loads((control/'agent-notifications.json').read_bytes())
-        assert policy['route']['cursorNotifications'] == {'desktop':enabled,'webhook':enabled}
+        assert policy['route']['cursorNotifications'] == {'desktop':desktop,'webhook':webhook}, (name,policy['route']['cursorNotifications'])
     foreign_stop = json.loads((root/'home/.cursor/hooks.json').read_bytes())['hooks']['stop']
-    install('cursor-enable',True)
+    # Native desktop submission can spend the fixed 4s Stop budget;
+    # qualify webhook in an independent observed-event invocation.
+    dual = os.environ.get('CURSOR_TEST_BOTH') == '1'
+    install('cursor-enable',True,dual)
     ownership = json.loads((control/'ownership.json').read_bytes())
     shortcuts = [pathlib.Path(p) for p in ownership['Files'] if pathlib.Path(p).name == 'Cursor Notifications.lnk']
     assert len(shortcuts)==1 and shortcuts[0].is_file(), 'owned Cursor shortcut absent'
@@ -122,7 +127,7 @@ def prepare(root, agent):
     while not (root/'toast-watch-ready').exists() and time.monotonic()<limit and watcher.poll() is None:
         time.sleep(.05)
     assert (root/'toast-watch-ready').exists(), 'OS process watcher not ready'
-    return {'root':root,'primary':primary,'env':env,'cli':cli,'install':install,'common':common,
+    return {'root':root,'primary':primary,'env':env,'cli':cli,'install':install,'common':common,'dual':dual,
             'records':records,'results':results,'hooks':hooks,'installed':installed,'selector':selector,
             'close':close_sink,'close_watcher':close_watcher,'foreign_stop':foreign_stop,'shortcut':shortcuts[0]}
 
@@ -130,20 +135,40 @@ def finish(test, native):
     root = test['root']; cli = test['cli']
     assert test['hooks'].read_bytes() == test['installed']
     records = test['records']
-    assert len(records)==1, records
+    if test['dual']:
+        assert len(records)==1, ('native dual-channel Stop must deliver webhook',records)
+    else:
+        assert records == [], 'desktop-only native Stop unexpectedly sent webhook'
+    # Seal the native Toast receipt BEFORE any replay can create one.
+    test['close_watcher'](); atexit.unregister(test['close_watcher'])
+    assert (root/'TEST-audit-restored').read_text().strip()=='restored'
+    toast = json.loads((root/'toast-processes.json').read_text(encoding='utf-8-sig'))
+    starts = [r for r in toast if r['kind']=='start']; stops = [r for r in toast if r['kind']=='stop']
+    assert len(starts)==len(stops)==1 and starts[0]['pid']==stops[0]['pid'] and stops[0]['exit']==0, toast
     expected = {'notification_type':'agent_stopping','status':'agent_stopping','agent_source':'cursor',
                 'message':'Cursor CLI is stopping','title':'Cursor CLI','source':'claude-notifications'}
-    assert all(records[0].get(k)==v for k,v in expected.items()), records
+    if test['dual']:
+        assert all(records[0].get(k)==v for k,v in expected.items()), records
     payload = (root/'native-stop.json').read_bytes()
     cli('cursor-replay',['cursor-event','stop','--binding',test['selector']],payload)
-    assert len(records)==1, 'duplicate webhook'
-    test['install']('cursor-disable',False)
-    disabled = json.loads(payload); disabled['generation_id']=str(uuid.uuid4())
+    if test['dual']:
+        assert len(records)==1, 'native dual-channel replay duplicated webhook'
+        webhook_event = json.loads(payload)
+    else:
+        assert records == [], 'replayed native Stop sent unconsented webhook'
+        # This second channel-specific observation uses the captured native event,
+        # not a claim about simultaneous delivery within the fixed budget.
+        test['install']('cursor-webhook-only',False,True)
+        webhook_event = json.loads(payload); webhook_event['generation_id']=str(uuid.uuid4())
+        cli('cursor-webhook-event',['cursor-event','stop','--binding',test['selector']],json.dumps(webhook_event).encode())
+        assert len(records)==1 and all(records[0].get(k)==v for k,v in expected.items()), records
+    test['install']('cursor-disable',False,False)
+    disabled = dict(webhook_event); disabled['generation_id']=str(uuid.uuid4())
     cli('cursor-disabled-event',['cursor-event','stop','--binding',test['selector']],json.dumps(disabled).encode())
     assert len(records)==1, 'disabled webhook'
     # Trusted installation generation is deliberately part of the duplicate key.
     # Match the established Linux lifecycle: update must preserve disabled consent.
-    test['install']('cursor-update',False)
+    test['install']('cursor-update',False,False,explicit_channels=False)
     cli('cursor-replay-after-update',['cursor-event','stop','--binding',test['selector']],payload)
     assert len(records)==1, 'update changed disabled consent'
     cli('cursor-uninstall',['setup-notifications','wizard','--action','uninstall','--agents','cursor','--hooks','false','--agent-notify','true',*test['common'],'--yes','--json'])
@@ -151,11 +176,6 @@ def finish(test, native):
     assert remaining == test['foreign_stop'], 'foreign Stop changed'
     assert not test['shortcut'].exists(), 'owned Cursor shortcut remains'
     assert not pathlib.Path(test['selector']).exists(), 'locator remains active'
-    test['close_watcher'](); atexit.unregister(test['close_watcher'])
-    assert (root/'TEST-audit-restored').read_text().strip()=='restored'
-    toast = json.loads((root/'toast-processes.json').read_text(encoding='utf-8-sig'))
-    starts = [r for r in toast if r['kind']=='start']; stops = [r for r in toast if r['kind']=='stop']
-    assert len(starts)==len(stops)==1 and starts[0]['pid']==stops[0]['pid'] and stops[0]['exit']==0, toast
     test['close'](); atexit.unregister(test['close'])
     result = {'native':native,'lifecycle':test['results'],'webhooks':records,'toastOSSubmission':toast,'visibleToast':'NOT_RUN',
               'installedBinarySHA256':hashlib.sha256(test['primary'].read_bytes()).hexdigest()}

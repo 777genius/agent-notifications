@@ -10,8 +10,8 @@ import (
 	"github.com/777genius/agent-notifications/internal/copilotvscodeevent"
 	"github.com/777genius/agent-notifications/internal/cursorevent"
 	"github.com/777genius/agent-notifications/internal/cursorinstall"
+	"github.com/777genius/agent-notifications/internal/desktopinstall"
 	"github.com/777genius/agent-notifications/internal/notification"
-	"github.com/777genius/agent-notifications/internal/opencodeinstall"
 	"github.com/777genius/agent-notifications/internal/webhook"
 )
 
@@ -28,7 +28,12 @@ func NewCursorDesktop(g CursorGate, b cursorevent.Binding, backend notification.
 	if runtime.GOOS == "darwin" {
 		spool = filepath.Join(g.gate.Binding.ControlRoot, "cursor-native-spool")
 	}
-	return NewDesktop(g.gate, localCursorBinding(b), spool, backend)
+	desktop := NewDesktop(g.gate, localCursorBinding(b), spool, backend)
+	if local, ok := desktop.(localDesktop); ok {
+		local.allowTerminal = true // Cursor only; Copilot remains informational
+		return local
+	}
+	return desktop
 }
 
 // NewCursorWebhookSender converts only the consumer's typed handoff. The
@@ -42,15 +47,15 @@ func NewCursorWebhookSender(g CursorGate, b cursorevent.Binding, send cursoreven
 
 // PrepareCursorNativeSpool uses the existing private directory and lock owner.
 func PrepareCursorNativeSpool(ctx context.Context, root string) (string, error) {
-	return opencodeinstall.PrepareNativeSpoolFor(ctx, root, opencodeinstall.CursorDesktop)
+	return desktopinstall.PrepareNativeSpoolFor(ctx, root, desktopinstall.CursorDesktop)
 }
 
-const CopilotVSCodeToastAppID = opencodeinstall.CopilotVSCodeToastAppID
+const CopilotVSCodeToastAppID = desktopinstall.CopilotVSCodeToastAppID
 
 // PrepareNativeSpool reuses the existing product spool ownership/deadline rules.
 // Only a later explicit setup caller may prepare it; Gate never creates assets.
 func PrepareNativeSpool(ctx context.Context, root string) (string, error) {
-	return opencodeinstall.PrepareNativeSpoolFor(ctx, root, opencodeinstall.CopilotVSCodeDesktop)
+	return desktopinstall.PrepareNativeSpoolFor(ctx, root, desktopinstall.CopilotVSCodeDesktop)
 }
 
 // NewDesktop accepts only the native informational route. The other-platform
@@ -60,14 +65,20 @@ func NewDesktop(g Gate, b copilotvscodeevent.Binding, spool string, backend noti
 	return localDesktop{backend: desktopPort(g, b, spool, backend)}
 }
 
-type localDesktop struct{ backend notification.DeliveryPort }
+type localDesktop struct {
+	backend       notification.DeliveryPort
+	allowTerminal bool
+}
 
 func (p localDesktop) Deliver(ctx context.Context, r notification.Request) notification.Receipt {
-	// An explicitly opted-in OS cue is permitted without giving a local Stop
-	// observation authority to navigate. Silent requests may still suppress
-	// sound even when the initial policy allowed it (e.g. mute/DND).
-	if p.backend == nil || r.Navigation != notification.None ||
-		r.Policy.ClickToFocus || r.Target != (notification.DesktopTarget{}) ||
+	// Copilot VS Code is informational only. Cursor may use an already
+	// verified, source-bound terminal snapshot through the same retained
+	// desktop lease. Neither route accepts a Codex Desktop thread ID.
+	info := r.Navigation == notification.None && !r.Policy.ClickToFocus && r.Terminal == nil
+	cursorTerminal := p.allowTerminal && r.Navigation == notification.BestEffort &&
+		r.Policy.ClickToFocus && r.Terminal != nil && r.Terminal.Agent == string(config.AgentCursor)
+	if p.backend == nil || (!info && !cursorTerminal) ||
+		r.Target != (notification.DesktopTarget{}) ||
 		(!r.Silent && !r.Policy.SoundEnabled) || !r.Policy.Valid ||
 		!r.Policy.ExplicitEnabled || !r.Policy.DesktopEnabled {
 		return notification.Receipt{CorrelationID: r.CorrelationID, Status: "rejected", Reason: "local_route_unavailable"}

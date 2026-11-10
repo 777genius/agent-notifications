@@ -77,7 +77,8 @@ function env(_m: Meta): NodeJS.ProcessEnv {
     CLAUDE_HOME: p('claude'), CLAUDE_CONFIG_DIR: p('claude'), APPDATA: p('appdata'), LOCALAPPDATA: p('localappdata'),
     XDG_CONFIG_HOME: p('config'), XDG_CACHE_HOME: p('cache'), XDG_DATA_HOME: p('data'), XDG_STATE_HOME: p('state'),
     XDG_RUNTIME_DIR: p('run'), XDG_CONFIG_DIRS: p('config-dirs'), XDG_DATA_DIRS: p('data-dirs'),
-    TMPDIR: p('tmp'), TMP: p('tmp'), TEMP: p('tmp'), TERM: 'xterm-256color', LANG: 'en_US.UTF-8' };
+    TMPDIR: p('tmp'), TMP: p('tmp'), TEMP: p('tmp'), TERM: 'xterm-256color', LANG: 'en_US.UTF-8',
+    RUST_LOG: 'info,codex_hooks=trace' };
 }
 async function run(m: Meta, executable: string, argv: string[], cwd = p('TEST-project')) {
   const commandEnv = env(m);

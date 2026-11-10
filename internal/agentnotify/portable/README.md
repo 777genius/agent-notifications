@@ -4,12 +4,22 @@ The projected package invokes its notification binary with exactly
 `portable-launch --locator agent-notify-<64 lowercase SHA256 hex>.json`.
 Only PLUGIN_DATA is used to select identity; PLUGIN_ROOT is passed through but
 never interpreted as a client identifier. HOME, PATH, cwd and MCP clientInfo
-cannot select the integration. The launcher starts the ledger-authorized regular
-primary with `portable-primary` and the same bounded selector. That primary
-revalidates the locator, installation, its own executable path and the parent-pinned
-ledger SHA256 (a fixed internal argument) before entering
-the existing MCP composition. No setup, repair, network or permission action
-exists in this route. Unsupported platforms fail closed.
+cannot select the integration. Each launcher keeps a lightweight stdio MCP adapter, so caller metadata stays
+specific to each chat and each call. Adapters share one local backend per exact
+registered binding and installed-primary SHA256. Separate providers/profiles and
+runtime epochs use separate services. No chat-count limit of eight exists.
+
+Private endpoint state lives below `PLUGIN_DATA/.shared-mcp`. A starter validates
+the complete installed snapshot under the existing setup lease before executing
+`portable-shared-daemon`; the daemon holds a singleton lock and independently
+validates its executable and expected SHA256. Metadata-only discovery never
+authorizes execution. Legacy `portable-primary` remains compatible.
+
+The backend listens only on an ephemeral IPv4 loopback port with pinned mutual
+TLS 1.3. The random credential stays in private owner-only state, never in argv
+or on the wire. No service registration, setup, repair, or permission action is
+performed by this route. See `../sharedrpc` and `../sharedstate` for transport and
+filesystem boundaries. Unsupported platforms fail closed.
 
 ## Plan and consumer contract
 
@@ -38,7 +48,7 @@ delivery metadata, not a second authoritative managed file: do not add their
 removable PLUGIN_DATA path to Ledger.Files, since cache loss must not invalidate
 the permanent installation.
 
-Every launch checks the current installed snapshot and acquires the existing
+Each elected service startup checks the current installed snapshot and acquires the existing
 setup lease (disabled notification policy still permits MCP status). Current
 owner, installation, runtime, consumer record, recovery, generation/policy floor
 and fingerprints are checked. Per-request policy reads check the binding again;
@@ -62,8 +72,12 @@ including common macOS aliases: setup must provide physical paths.
 A five-second context bounds lock acquisition; regular filesystem syscalls,
 including the existing kernel's fingerprint reads, have no hard wall-time bound.
 The launch lease covers Start and is released before the primary acquires its
-own lease, avoiding a child-start deadlock. Cancellation kills/reaps the owned
-primary; no shell or daemon is added. Security assumes the existing kernel's
+own lease, avoiding a child-start deadlock. The backend is detached from any one chat and exits after ten idle minutes.
+Closing a bridge does not terminate peers. Calls reconnect before transmitting
+content if the backend has exited; a transmitted notification is never silently
+resent. Shutdown drains handlers before removing its own endpoint record.
+Binding removal or primary refresh invalidates the old service, including replay
+requests; policy snapshots also verify the same primary epoch before delivery. Security assumes the existing kernel's
 trusted same-user setup boundary: this does not sandbox a malicious process
 already able to rewrite private owner state outside the component lock.
 
@@ -86,3 +100,14 @@ backend. No installed activation, UAP decorator, discovery collision/handoff,
 real native retention or full E2E qualification is claimed. Darwin execution
 and unsupported-platform behavior beyond the existing contract remain separate
 platform gates.
+
+## Shared-service qualification
+
+`TestPortableSharedDaemonLifecycle` runs real stdio bridge and backend processes
+in a fresh temporary installation. It checks 32 simultaneous clients, exactly one
+backend, per-call contexts, restart through an already initialized bridge, closing
+all bridges, private state removal, protocol-clean stdout and process cleanup.
+`AGENT_NOTIFY_SHARED_STRESS=1` adds 64 and 128 clients. These tests use an injected
+clock and prohibit native delivery; desktop display/click confirmation remains a
+separate installed-client check. RPC tests exercise real service/journal replay
+with an injected OS boundary and uncertain transport outcomes without resending.

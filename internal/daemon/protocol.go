@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/777genius/agent-notifications/internal/notification"
 )
 
 // Common errors
@@ -25,8 +27,10 @@ type MessageType string
 
 const (
 	MessageTypeNotify MessageType = "notify"
-	MessageTypePing   MessageType = "ping"
-	MessageTypeStop   MessageType = "stop"
+	// Strict focus must not be understood as the legacy approximate route.
+	MessageTypeNotifyStrict MessageType = "notify_strict"
+	MessageTypePing         MessageType = "ping"
+	MessageTypeStop         MessageType = "stop"
 )
 
 // Request is the wrapper for all IPC requests
@@ -46,29 +50,32 @@ type Response struct {
 
 // NotifyRequest contains notification details sent to the daemon
 type NotifyRequest struct {
-	Title              string `json:"title"`
-	Body               string `json:"body"`
-	AppIcon            string `json:"app_icon,omitempty"`              // Icon path or name shown by the notification server
-	FocusTarget        string `json:"focus_target"`                    // Terminal identifier (empty = auto-detect)
-	FocusFolder        string `json:"focus_folder,omitempty"`          // Project folder name for window-specific focus
-	FocusProjectPath   string `json:"focus_project_path,omitempty"`    // JetBrains project root, to tell same-named projects apart
-	FocusIDEPID        int    `json:"focus_ide_pid,omitempty"`         // JetBrains IDE process, to tell its windows from another process's
-	FocusWindowID      string `json:"focus_window_id,omitempty"`       // Exact X11 window ID captured in the hook process
-	FocusWindowTitle   string `json:"focus_window_title,omitempty"`    // Exact window title captured in the hook process when available
-	FocusWezTermPaneID string `json:"focus_wezterm_pane_id,omitempty"` // WezTerm pane ID ($WEZTERM_PANE)
-	FocusWezTermSocket string `json:"focus_wezterm_socket,omitempty"`  // WezTerm unix socket ($WEZTERM_UNIX_SOCKET)
-	FocusZellijSession string `json:"focus_zellij_session,omitempty"`  // Zellij session name ($ZELLIJ_SESSION_NAME)
-	FocusZellijPaneID  string `json:"focus_zellij_pane_id,omitempty"`  // Zellij pane ID ($ZELLIJ_PANE_ID)
-	FocusZellijTabName string `json:"focus_zellij_tab_name,omitempty"` // Zellij tab name, captured only for the tab fallback
-	FocusZellijMode    string `json:"focus_zellij_mode,omitempty"`     // "pane", "tab" or "off", resolved in the hook process
-	FocusWarpURL       string `json:"focus_warp_url,omitempty"`        // Warp pane deep link ($WARP_FOCUS_URL)
-	Timeout            int    `json:"timeout"`                         // Notification timeout in seconds
+	Title              string                       `json:"title"`
+	Body               string                       `json:"body"`
+	AppIcon            string                       `json:"app_icon,omitempty"`              // Icon path or name shown by the notification server
+	FocusTarget        string                       `json:"focus_target"`                    // Terminal identifier (empty = auto-detect)
+	FocusFolder        string                       `json:"focus_folder,omitempty"`          // Project folder name for window-specific focus
+	FocusProjectPath   string                       `json:"focus_project_path,omitempty"`    // JetBrains project root, to tell same-named projects apart
+	FocusIDEPID        int                          `json:"focus_ide_pid,omitempty"`         // JetBrains IDE process, to tell its windows from another process's
+	FocusWindowID      string                       `json:"focus_window_id,omitempty"`       // Exact X11 window ID captured in the hook process
+	FocusWindowTitle   string                       `json:"focus_window_title,omitempty"`    // Exact window title captured in the hook process when available
+	FocusWezTermPaneID string                       `json:"focus_wezterm_pane_id,omitempty"` // WezTerm pane ID ($WEZTERM_PANE)
+	FocusWezTermSocket string                       `json:"focus_wezterm_socket,omitempty"`  // WezTerm unix socket ($WEZTERM_UNIX_SOCKET)
+	FocusZellijSession string                       `json:"focus_zellij_session,omitempty"`  // Zellij session name ($ZELLIJ_SESSION_NAME)
+	FocusZellijPaneID  string                       `json:"focus_zellij_pane_id,omitempty"`  // Zellij pane ID ($ZELLIJ_PANE_ID)
+	FocusZellijTabName string                       `json:"focus_zellij_tab_name,omitempty"` // Zellij tab name, captured only for the tab fallback
+	FocusZellijMode    string                       `json:"focus_zellij_mode,omitempty"`     // "pane", "tab" or "off", resolved in the hook process
+	FocusWarpURL       string                       `json:"focus_warp_url,omitempty"`        // Warp pane deep link ($WARP_FOCUS_URL)
+	Timeout            int                          `json:"timeout"`                         // Notification timeout in seconds
+	Strict             *notification.TerminalTarget `json:"strict,omitempty"`
+	StrictSound        bool                         `json:"strict_sound,omitempty"`
 }
 
 // NotifyResponse contains the result of a notification request
 type NotifyResponse struct {
 	Success        bool   `json:"success"`
 	NotificationID uint32 `json:"notification_id"`
+	FocusEnabled   bool   `json:"focus_enabled,omitempty"`
 	Error          string `json:"error,omitempty"`
 }
 

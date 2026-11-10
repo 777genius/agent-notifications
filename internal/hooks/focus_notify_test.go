@@ -1,12 +1,17 @@
 package hooks
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/777genius/agent-notifications/internal/analyzer"
 	"github.com/777genius/agent-notifications/internal/config"
+	"github.com/777genius/agent-notifications/internal/platform"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -236,5 +241,198 @@ func TestHandleHook_DelayDoesNotHoldContentLock(t *testing.T) {
 		assert.NoError(t, err)
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for delayed hook to finish")
+	}
+}
+
+func TestClaudeStopDelayedDesktopReservesTurnPastTwoSecondLock(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	delay := 5
+	cfg := focusNotifyConfig(nil, &delay)
+	cfg.Notifications.Webhook.Enabled = false
+	h, delivered, _ := newTestHandler(t, cfg)
+	sessionID := "test-delayed-stop-pending-" + uuid.NewString()
+	transcript := createTempTranscript(t, buildTranscriptWithTools([]string{"Write"}, 300))
+	payload := HookData{SessionID: sessionID, TranscriptPath: transcript, LastAssistantMessage: "Done.", CWD: t.TempDir()}
+	oldSleep := sleepFunc
+	sleepEntered := make(chan struct{}, 1)
+	releaseSleep := make(chan struct{})
+	firstDone := make(chan error, 1)
+	sleepFunc = func(time.Duration) {
+		select {
+		case sleepEntered <- struct{}{}:
+		default:
+		}
+		<-releaseSleep
+	}
+	defer func() {
+		close(releaseSleep)
+		if err := <-firstDone; err != nil {
+			t.Errorf("original delayed Stop failed: %v", err)
+		}
+		if count := delivered.callCount(); count != 1 {
+			t.Errorf("original Stop delivered %d banners, want exactly one", count)
+		}
+		sleepFunc = oldSleep
+	}()
+	go func() { firstDone <- h.HandleHook("Stop", buildHookDataJSON(payload)) }()
+	select {
+	case <-sleepEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first Stop never reached the delayed desktop branch")
+	}
+	key := claudeStopTurnLockKey(sessionID, "2025-01-01T12:00:00Z")
+	lock := filepath.Join(platform.TempDir(), "claude-notification-"+key+"-Stop.lock")
+	defer func() { _ = h.dedupMgr.ReleaseLock(key, "Stop") }()
+	old := time.Now().Add(-3 * time.Second)
+	if err := os.Chtimes(lock, old, old); err != nil {
+		t.Fatalf("age the real event lock: %v", err)
+	}
+	if err := h.HandleHook("Stop", buildHookDataJSON(payload)); err != nil {
+		t.Fatalf("replayed Stop: %v", err)
+	}
+	if delivered.callCount() != 0 {
+		t.Fatalf("replay submitted before original delay finished: %d", delivered.callCount())
+	}
+	if got := len(sleepEntered); got != 0 {
+		t.Fatalf("replay entered its own delayed delivery: %d", got)
+	}
+}
+
+// A configured delay must not consume the hook's remaining time and then
+// falsely mark a desktop notification as delivered.
+func TestSendDesktopNotification_DeadlineExhaustionDoesNotDeliver(t *testing.T) {
+	delay := 20
+	h, n, _ := newTestHandler(t, focusNotifyConfig(nil, &delay))
+	now := time.Unix(1_700_000_000, 0)
+	h.hookNow = func() time.Time { return now }
+	h.BindHookDeadline(now.Add(18 * time.Second)) // 13s after reserved cleanup
+	oldSleep := sleepFunc
+	called := false
+	sleepFunc = func(time.Duration) { called = true }
+	defer func() { sleepFunc = oldSleep }()
+	if h.sendDesktopNotification(analyzer.StatusTaskComplete, "Done", "session", "/repo") {
+		t.Fatal("deadline-exhausted delay reported delivery")
+	}
+	if called || n.wasCalled() {
+		t.Fatal("deadline-exhausted delay slept or sent a banner")
+	}
+}
+
+func TestSendDesktopNotification_DeadlineCountsElapsedPreworkAndSuspend(t *testing.T) {
+	delay := 6
+	h, n, _ := newTestHandler(t, focusNotifyConfig(nil, &delay))
+	now := time.Unix(1_700_000_000, 0)
+	h.hookNow = func() time.Time { return now }
+	h.BindHookDeadline(now.Add(16 * time.Second))
+	oldSleep := sleepFunc
+	slept := time.Duration(0)
+	sleepFunc = func(d time.Duration) {
+		slept = d
+		now = now.Add(d)
+	}
+	defer func() { sleepFunc = oldSleep }()
+	if !h.sendDesktopNotification(analyzer.StatusTaskComplete, "Done", "session", "/repo") {
+		t.Fatal("delay with adequate budget was not delivered")
+	}
+	if slept != 6*time.Second || !n.wasCalled() {
+		t.Fatalf("delay=%v, notified=%t", slept, n.wasCalled())
+	}
+	// A machine can suspend or stall after admission but before delivery.
+	now = now.Add(10 * time.Second)
+	if h.sendDesktopNotification(analyzer.StatusTaskComplete, "Done", "session", "/repo") {
+		t.Fatal("post-suspend expired deadline was still admitted")
+	}
+	if n.callCount() != 1 {
+		t.Fatal("expired second attempt reached notifier")
+	}
+}
+
+func TestClaudeStopDelayedDesktopNoEffectReleasesTurnReservation(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	delay := 4
+	focused := true
+	cfg := focusNotifyConfig(&focused, &delay)
+	cfg.Notifications.Webhook.Enabled = false
+	h, n, _ := newTestHandler(t, cfg)
+	sessionID := "test-delayed-stop-noeffect-" + uuid.NewString()
+	transcript := createTempTranscript(t, buildTranscriptWithTools([]string{"Write"}, 300))
+	payload := HookData{SessionID: sessionID, TranscriptPath: transcript, LastAssistantMessage: "Done.", CWD: t.TempDir()}
+	oldSleep := sleepFunc
+	oldFocus := isTerminalFocused
+	sleepFunc = func(time.Duration) {}
+	isTerminalFocused = func(_, _ string) bool { return focused }
+	defer func() {
+		sleepFunc = oldSleep
+		isTerminalFocused = oldFocus
+	}()
+	key := claudeStopTurnLockKey(sessionID, "2025-01-01T12:00:00Z")
+	defer func() { _ = h.dedupMgr.ReleaseLock(key, "Stop") }()
+	if err := h.HandleHook("Stop", buildHookDataJSON(payload)); err != nil {
+		t.Fatal(err)
+	}
+	if n.callCount() != 0 {
+		t.Fatal("focus-suppressed first Stop emitted a banner")
+	}
+	focused = false
+	if err := h.HandleHook("Stop", buildHookDataJSON(payload)); err != nil {
+		t.Fatal(err)
+	}
+	if n.callCount() != 1 {
+		t.Fatalf("definitive no-effect reserved the turn forever: %d", n.callCount())
+	}
+}
+
+func TestClaudeStopDelayedDesktopDifferentUserTurnIsIndependent(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	delay := 3
+	cfg := focusNotifyConfig(nil, &delay)
+	cfg.Notifications.Webhook.Enabled = false
+	h, n, _ := newTestHandler(t, cfg)
+	sessionID := "test-delayed-stop-second-turn-" + uuid.NewString()
+	transcript := createTempTranscript(t, buildTranscriptWithTools([]string{"Write"}, 300))
+	payload := HookData{SessionID: sessionID, TranscriptPath: transcript, LastAssistantMessage: "Done.", CWD: t.TempDir()}
+	oldSleep := sleepFunc
+	sleepFunc = func(time.Duration) {}
+	defer func() { sleepFunc = oldSleep }()
+	first := claudeStopTurnLockKey(sessionID, "2025-01-01T12:00:00Z")
+	second := claudeStopTurnLockKey(sessionID, "2025-01-01T12:00:02Z")
+	defer func() {
+		_ = h.dedupMgr.ReleaseLock(first, "Stop")
+		_ = h.dedupMgr.ReleaseLock(second, "Stop")
+	}()
+	if err := h.HandleHook("Stop", buildHookDataJSON(payload)); err != nil {
+		t.Fatal(err)
+	}
+	// A real newer user turn changes the trusted timestamp without changing
+	// the user's final text. This must remain a separate notification.
+	messages := buildTranscriptWithTools([]string{"Write"}, 300)
+	messages[0].Timestamp = "2025-01-01T12:00:02Z"
+	messages[1].Timestamp = "2025-01-01T12:00:03Z"
+	if err := os.WriteFile(transcript, []byte{}, 0600); err != nil {
+		t.Fatal(err)
+	}
+	// createTempTranscript writes JSONL in the same format.
+	for _, msg := range messages {
+		encoded, err := json.Marshal(msg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		file, err := os.OpenFile(transcript, os.O_APPEND|os.O_WRONLY, 0600)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := file.Write(append(encoded, '\n')); err != nil {
+			_ = file.Close()
+			t.Fatal(err)
+		}
+		if err := file.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := h.HandleHook("Stop", buildHookDataJSON(payload)); err != nil {
+		t.Fatal(err)
+	}
+	if count := n.callCount(); count != 2 {
+		t.Fatalf("distinct user turn suppressed despite separate marker: count=%d", count)
 	}
 }

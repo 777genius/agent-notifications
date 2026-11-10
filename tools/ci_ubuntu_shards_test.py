@@ -46,15 +46,23 @@ class UbuntuShards(unittest.TestCase):
         stub.write_text('''#!/usr/bin/env python3
 import json, os, sys
 from pathlib import Path
+if sys.argv[1:] == ['env', 'GOMODCACHE']:
+    print(os.environ['TEST_GO_MODCACHE'])
+    sys.exit(0)
 if sys.argv[1:] == ['list', './...']:
     print(os.environ['TEST_PACKAGES'])
     sys.exit(int(os.environ.get('TEST_LIST_EXIT', '0')))
 Path(os.environ['TEST_GO_ARGS']).write_text(json.dumps(sys.argv[1:]))
+Path(os.environ['TEST_GO_ENV']).write_text(json.dumps({'GOMODCACHE': os.getenv('GOMODCACHE')}))
 sys.exit(int(os.environ.get('TEST_TEST_EXIT', '0')))
 ''')
         stub.chmod(0o755)
-        self.env = {**os.environ, 'PATH': str(self.bin) + os.pathsep + os.environ['PATH'],
-                    'TEST_PACKAGES': '\n'.join(PACKAGES), 'TEST_GO_ARGS': str(self.root / 'args.json')}
+        self.module_cache = self.root / 'prepared-modules'
+        self.module_cache.mkdir()
+        inherited = {key: value for key, value in os.environ.items() if key != 'GOMODCACHE'}
+        self.env = {**inherited, 'PATH': str(self.bin) + os.pathsep + os.environ['PATH'],
+                    'TEST_PACKAGES': '\n'.join(PACKAGES), 'TEST_GO_ARGS': str(self.root / 'args.json'),
+                    'TEST_GO_ENV': str(self.root / 'go-env.json'), 'TEST_GO_MODCACHE': str(self.module_cache)}
 
     def shard(self, shard, **env):
         return subprocess.run(['bash', str(SCRIPT), shard], cwd=self.root, env={**self.env, **env},
@@ -79,6 +87,18 @@ sys.exit(int(os.environ.get('TEST_TEST_EXIT', '0')))
         flattened = sum([v for k, v in actual.items() if k != 'cmd-setup'], [])
         self.assertCountEqual(flattened, PACKAGES)
         self.assertEqual(len(flattened), len(set(flattened)))
+
+    def test_nested_builds_reuse_prepared_modules_without_inheriting_user_home(self):
+        result = self.shard('cmd-other')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads((self.root / 'go-env.json').read_text())['GOMODCACHE'],
+                         str(self.module_cache))
+        explicit = self.root / 'explicit-modules'
+        explicit.mkdir()
+        result = self.shard('cmd-other', GOMODCACHE=str(explicit))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads((self.root / 'go-env.json').read_text())['GOMODCACHE'],
+                         str(explicit))
 
     def test_invalid_empty_or_failed_list_never_runs_tests_and_test_failure_propagates(self):
         for shard, env in [('unknown', {}), ('cmd-other', {'TEST_PACKAGES': MODULE}),
