@@ -38,9 +38,12 @@ export default {id:'test-oc226-source',async setup(ctx){
  void(async()=>{try{for await(const entry of ctx.event.subscribe({signal:controller.signal})){
    if(!entry||typeof entry.type!=='string')continue;
    const e=entry.data??entry.properties??{};
-   write({phase:'event',type:entry.type,hasData:typeof e==='object'&&e!==null,
+   write({phase:'event',type:entry.type,sessionID:e.sessionID??e.form?.sessionID,hasData:typeof e==='object'&&e!==null,
     hasSequence:Number.isSafeInteger(entry.durable?.seq),
-    hasTime:Number.isSafeInteger(entry.created)&&entry.created>0});
+    hasTime:Number.isSafeInteger(entry.created)&&entry.created>0,
+    toolBinding:entry.type==='form.created'?typeof e.form?.metadata?.tool?.messageID==='string'&&typeof e.form?.metadata?.tool?.id==='string':
+      entry.type==='permission.asked'?e.source?.type==='tool'&&typeof e.source.messageID==='string'&&typeof e.source.id==='string':undefined,
+    userInbox:e.item?.type==='user'});
  }}catch{write({phase:'reader_closed'});}})();
  return ()=>{controller.abort();write({phase:'cleanup'});};
 }};'''
@@ -122,6 +125,7 @@ def run(archive, root, receiver=None):
         config = {'model': 'test/test', 'providers': {'test': {
             'package': '@opencode/ai/providers/openai-compatible', 'settings': settings,
             'models': {'test': {'name': 'TEST model', 'limit': {'context': 32000, 'output': 1024}}}}}}
+        config['permissions'] = [{'action':'shell','resource':'*','effect':'ask'}]
         (paths['project'] / 'opencode.json').write_text(json.dumps(config), encoding='utf-8')
         if receiver is not None:
             receiver = receiver.resolve(strict=True)
@@ -192,7 +196,7 @@ def run(archive, root, receiver=None):
                 request('/api/session/' + sid + '/prompt', {'text': 'TEST-native-source-turn'})
                 request('/api/experimental/session/' + sid + '/wait', method='POST')
                 observed = wait(lambda: {r['type'] for r in rows() if r.get('phase') == 'event'}
-                                if any(r.get('phase') == 'event' and r.get('type') == 'session.execution.succeeded'
+                                if any(r.get('phase') == 'event' and r.get('type') == 'session.execution.succeeded' and r.get('sessionID') == sid
                                        for r in rows()) else None, 35, 'native_source_events_missing')
                 print('source-stage: provider-request='+str(bool(provider.bodies)).lower()+
                       ',execution-start='+str('session.execution.started' in observed).lower(), flush=True)
@@ -203,9 +207,77 @@ def run(archive, root, receiver=None):
                 # Native V2 envelope time is on entry.created, not event.data.time.
                 terminal = {'session.execution.started', 'session.step.ended',
                             'session.execution.succeeded'}
-                if not all(any(r.get('type') == kind and r.get('hasSequence') and r.get('hasTime')
-                               for r in rows()) for kind in terminal):
+                if not all(any(r.get('type') == kind and r.get('sessionID') == sid and r.get('hasSequence') and r.get('hasTime')
+                               for r in rows()) for kind in terminal) or not any(
+                        r.get('type') == 'session.inbox.enqueued' and r.get('sessionID') == sid and
+                        r.get('userInbox') for r in rows()):
                     raise RuntimeError('native_source_envelope_unverified')
+                # Independently verify native pending question, reply and settled turn.
+                question_begin = len(rows())
+                prior_requests = len(provider.bodies)
+                provider.mode = 'question'
+                question = request('/api/session', {'title': 'TEST-source-question',
+                                    'location': {'directory': str(paths['project'])}})
+                question_sid = question['data']['id']
+                request('/api/session/' + question_sid + '/prompt', {'text': 'TEST-source-question'})
+                forms = wait(lambda: request('/api/session/' + question_sid + '/form').get('data', []),
+                             35, 'source_native_question_missing')
+                question_rows = rows()[question_begin:]
+                if len(provider.bodies) <= prior_requests or not any(
+                        r.get('type') == 'form.created' and r.get('sessionID') == question_sid and
+                        not r.get('hasSequence') and r.get('hasTime') and r.get('toolBinding') for r in question_rows):
+                    raise RuntimeError('source_native_question_unverified')
+                request('/api/session/' + question_sid + '/form/' + forms[0]['id'] + '/reply',
+                        {'answer': {'q0': 'Yes'}})
+                wait(lambda: any(r.get('type') == 'form.replied' and r.get('sessionID') == question_sid
+                                 for r in rows()[question_begin:]), 15, 'source_question_reply_unseen')
+                request('/api/experimental/session/' + question_sid + '/wait', method='POST')
+                wait(lambda: any(r.get('type') == 'session.execution.succeeded' and r.get('sessionID') == question_sid
+                                 for r in rows()[question_begin:]), 35, 'source_question_terminal_missing')
+                provider.mode = 'success'
+                print('source-stage: question-verified', flush=True)
+                # Permission.asked is likewise ephemeral, and needs an independent live pending snapshot.
+                permission_begin = len(rows())
+                prior_requests = len(provider.bodies)
+                provider.mode = 'permission'
+                permission = request('/api/session', {'title': 'TEST-source-permission',
+                                      'location': {'directory': str(paths['project'])}})
+                permission_sid = permission['data']['id']
+                request('/api/session/' + permission_sid + '/prompt', {'text': 'TEST-source-permission'})
+                pending = wait(lambda: request('/api/session/' + permission_sid + '/permission').get('data', []),
+                               35, 'source_native_permission_missing')
+                permission_rows = rows()[permission_begin:]
+                if len(provider.bodies) <= prior_requests or not any(
+                        r.get('type') == 'permission.asked' and r.get('sessionID') == permission_sid and
+                        not r.get('hasSequence') and r.get('hasTime') and r.get('toolBinding') for r in permission_rows):
+                    raise RuntimeError('source_native_permission_unverified')
+                request('/api/session/' + permission_sid + '/permission/' + pending[0]['id'] + '/reply',
+                        {'decision': 'reject'})
+                wait(lambda: any(r.get('type') == 'permission.replied' and r.get('sessionID') == permission_sid
+                                 for r in rows()[permission_begin:]), 15, 'source_permission_reply_unseen')
+                provider.mode = 'success'
+                print('source-stage: permission-verified', flush=True)
+                # Permanent provider failure must produce a durable native terminal (not a received clock).
+                failure_begin = len(rows())
+                prior_requests = len(provider.bodies)
+                provider.mode = 'failure'
+                failed = request('/api/session', {'title': 'TEST-source-terminal',
+                                  'location': {'directory': str(paths['project'])}})
+                failed_sid = failed['data']['id']
+                request('/api/session/' + failed_sid + '/prompt', {'text': 'TEST-source-terminal'})
+                try:
+                    request('/api/experimental/session/' + failed_sid + '/wait', method='POST')
+                except urllib.error.HTTPError as err:
+                    if not 400 <= err.code <= 599:
+                        raise
+                failure_rows = wait(lambda: [r for r in rows()[failure_begin:] if
+                                   r.get('type') == 'session.execution.failed' and r.get('sessionID') == failed_sid],
+                                    35, 'source_terminal_error_missing')
+                if len(provider.bodies) <= prior_requests or not any(
+                        r.get('hasSequence') and r.get('hasTime') for r in failure_rows):
+                    raise RuntimeError('source_terminal_error_unverified')
+                provider.mode = 'success'
+                print('source-stage: terminal-error-verified', flush=True)
                 if webhook is not None:
                     log_file = root / 'host.private.log'
                     if log_file.stat().st_size > 512 * 1024:
@@ -222,6 +294,8 @@ def run(archive, root, receiver=None):
                         'officialBinarySHA256': binary_sha,
                         'realNativeProviderTurn': True, 'sourceSubscriberLoaded': True,
                         'sourceEnvelopeShapeObserved': True,
+                        'sourceQuestionObserved': True, 'sourcePermissionObserved': True,
+                        'sourceTerminalErrorObserved': True, 'attentionEventsAreEphemeral': True,
                         'installedDeniedStartup': webhook is not None,
                         'observedEventTypes': sorted(observed),
                         'nativeObserverQualified': False, 'nativeClockQualified': False,
@@ -261,7 +335,11 @@ def main():
                            'native_source_events_missing', 'local_provider_unused', 'native_execution_start_unseen',
                            'native_source_envelope_unverified', 'managed_install_unverified',
                            'private_host_log_limit', 'single_denial_diagnostic_missing',
-                           'denied_host_delivered_webhook'}
+                           'denied_host_delivered_webhook', 'source_native_question_missing',
+                           'source_native_question_unverified', 'source_question_reply_unseen',
+                           'source_question_terminal_missing', 'source_native_permission_missing',
+                           'source_native_permission_unverified', 'source_permission_reply_unseen',
+                           'source_terminal_error_missing', 'source_terminal_error_unverified'}
             reason = str(error) if type(error) is RuntimeError and str(error) in safe_errors else 'unexpected'
             result = {'status': 'unqualified', 'failureType': type(error).__name__, 'failureCode': reason,
                       'nativeObserverQualified': False, 'nativeClockQualified': False,
