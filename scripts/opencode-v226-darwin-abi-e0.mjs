@@ -13,7 +13,8 @@ const grants = { nativeObserverQualified:false, nativeClockQualified:false, noti
 let phase = 'entry';
 const reasons = new Set(['platform_unverified','helper_unverified','image_unverified',
   'native_ffi_unavailable','native_clock_unavailable','go_clock_unavailable',
-  'clock_tuple_mismatch','clock_containment_unverified','clock_disposal_unverified']);
+  'clock_tuple_mismatch','clock_containment_unverified','clock_disposal_unverified',
+  'clock_pause_nonmonotonic']);
 function requireValue(value, code) { if (!value) throw new Error(code); }
 async function sha256(file) {
   const sum = createHash('sha256');
@@ -66,7 +67,8 @@ async function main() {
       close(){} // The owning finally closes libSystem once after disposal.
     }, 'darwin-kernel');
     let maxBracket=0n;
-    for(let round=0;round<3;round++){
+    // Extended real-FFI E0 scheduling sample, not independently qualified Q/R/T.
+    for(let round=0;round<12;round++){
       phase = 'clock_sample';
       const before=sample(clock);
       phase = 'go_helper';
@@ -90,13 +92,23 @@ async function main() {
         before.wallNS-2000000n<=wall && wall<=after.wallNS+2000000n,'clock_containment_unverified');
       if(width>maxBracket)maxBracket=width;
     }
+    // Observe monotonic counter and wall reading across an actual timer pause.
+    // A positive observation never registers a clock cell or delivery authority.
+    phase = 'clock_pause_stress';
+    const pauseBefore = sample(clock);
+    await new Promise(resolve => setTimeout(resolve, 75));
+    const pauseAfter = sample(clock);
+    requireValue(pauseAfter.boot === pauseBefore.boot && pauseAfter.domain === pauseBefore.domain &&
+      pauseAfter.loNS >= pauseBefore.loNS && pauseAfter.wallNS >= pauseBefore.wallNS,
+      'clock_pause_nonmonotonic');
     phase = 'clock_disposal';
     clock.dispose();
     let denied=false;try{clock.sample();}catch{denied=true;}
     requireValue(denied,'clock_disposal_unverified');
     requireValue(await sha256(process.execPath)===officialImage,'image_unverified');
     return { status:'observed_ffi_e0_only',platform:'darwin',arch:'arm64',
-      hostVersion:'2.2.6',embeddedBunVersion:'1.4.4',comparisonRounds:3,
+      hostVersion:'2.2.6',embeddedBunVersion:'1.4.4',comparisonRounds:12,
+      delayedCounterAndWallNonregressionObserved:true,
       maxCounterSpanNS:String(maxBracket),disposalRefused:true,...grants };
   } finally { try{clock?.dispose();}catch{} try{library?.close();}catch{} }
 }
