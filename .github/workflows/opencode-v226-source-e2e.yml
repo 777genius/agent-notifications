@@ -5,6 +5,7 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - 'scripts/opencode-v226-source-e2e.py'
+      - 'scripts/opencode-v226-clock-e0.mjs'
       - '.github/workflows/opencode-v226-source-e2e.yml'
   workflow_dispatch:
 
@@ -115,6 +116,34 @@ jobs:
         with:
           name: opencode-v226-denied-${{ github.event.pull_request.head.sha || github.sha }}
           path: ${{ runner.temp }}/opencode-v226-denied-safe.json
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Observe stock OpenCode 2.2.6 Bun/Go clock E0 without qualification grants
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/TEST-opencode-v226-clock"
+          python - <<'PY'
+          import importlib.util, os, pathlib
+          source = pathlib.Path('scripts/opencode-v226-source-e2e.py').resolve()
+          spec = importlib.util.spec_from_file_location('source_e2e', source)
+          module = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+          root = pathlib.Path(os.environ['RUNNER_TEMP'])
+          module.official_binary(root/'opencode-linux-x64-2.2.6.tar.gz',
+                                 root/'TEST-opencode-v226-clock'/'opencode')
+          PY
+          env -i BUN_BE_BUN=1 PATH="$PATH" HOME="$RUNNER_TEMP/TEST-opencode-v226-clock" \
+            "$RUNNER_TEMP/TEST-opencode-v226-clock/opencode" \
+            "$GITHUB_WORKSPACE/scripts/opencode-v226-clock-e0.mjs" \
+            "$RUNNER_TEMP/an-qualification-unreleased" \
+            | tee "$RUNNER_TEMP/opencode-v226-clock-e0-safe.json"
+      - name: Upload bounded stock-clock observations
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: opencode-v226-clock-e0-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/opencode-v226-clock-e0-safe.json
           if-no-files-found: warn
           retention-days: 14
       - name: Upload closed source-only result
