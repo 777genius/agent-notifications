@@ -1,0 +1,52 @@
+name: OpenCode 2.2.6 native source prequalification
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - 'scripts/opencode-v226-source-e2e.py'
+      - '.github/workflows/opencode-v226-source-e2e.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: opencode-v226-source-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  actual-source:
+    # Do not execute code from untrusted forks.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out exact PR candidate
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Download and verify immutable official OpenCode 2.2.6
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/opencode-linux-x64-2.2.6.tar.gz"
+          curl --fail --location --silent --show-error --max-time 120 --max-filesize 160000000 \
+            'https://github.com/anomalyco/opencode/releases/download/v2.2.6/opencode-linux-x64.tar.gz' \
+            --output "$archive"
+          printf '%s  %s\n' '08bb21d6326ce740d91cce7ebe88a6536933f6e1e30353b91a06b01f25da306c' "$archive" | sha256sum --check --status
+          python -B scripts/opencode-v226-source-e2e.py \
+            --archive "$archive" --report "$RUNNER_TEMP/opencode-v226-source-safe.json"
+      - name: Upload closed source-only result
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: opencode-v226-native-source-${{ github.sha }}
+          path: ${{ runner.temp }}/opencode-v226-source-safe.json
+          if-no-files-found: warn
+          retention-days: 14
