@@ -484,12 +484,16 @@ def run(archive, root, receiver=None, clock_skew_negative=False):
                 except urllib.error.HTTPError as err:
                     if not 400 <= err.code <= 599:
                         raise
-                failure_rows = wait(lambda: [r for r in rows()[failure_begin:] if
-                                   r.get('type') == 'session.execution.failed' and r.get('sessionID') == failed_sid],
-                                    35, 'source_terminal_error_missing')
-                if len(provider.bodies) <= prior_requests or not any(
-                        r.get('hasSequence') and r.get('hasTime') for r in failure_rows):
-                    raise RuntimeError('source_terminal_error_unverified')
+                def failed_events():
+                    return [r for r in rows()[failure_begin:] if
+                            r.get('type') == 'session.execution.failed' and r.get('sessionID') == failed_sid]
+                # An initial non-durable event can precede its completed native
+                # envelope. Never count that event as valid terminal evidence.
+                wait(failed_events, 35, 'source_terminal_error_missing')
+                if len(provider.bodies) <= prior_requests:
+                    raise RuntimeError('source_terminal_provider_unused')
+                wait(lambda: [r for r in failed_events() if r.get('hasSequence') is True and
+                              r.get('hasTime') is True], 5, 'source_terminal_error_unverified')
                 er1=wait(lambda: next((r for r in rows() if r.get('phase')=='native-error' and
                                       r.get('sessionID')==failed_sid),None),10,'native_r1_error_missing')
                 if er1.get('valid') is not True or er1.get('runParts') != 3:
@@ -576,6 +580,7 @@ def main():
                            'source_question_terminal_missing', 'source_native_permission_missing',
                            'source_native_permission_unverified', 'source_permission_reply_unseen',
                            'source_terminal_error_missing', 'source_terminal_error_unverified',
+                           'source_terminal_provider_unused',
                            'native_session_projection_missing', 'native_session_projection_unverified',
                            'source_receiver_sample_invalid', 'source_receiver_counter_nonmonotonic',
                            'source_go_clock_sample_unavailable', 'source_go_clock_sample_invalid',
