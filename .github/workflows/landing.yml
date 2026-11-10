@@ -49,7 +49,19 @@ jobs:
         if: github.event_name != 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 ../scripts/stage-released-loader.py .output/public/install.sh
+        run: |
+          set -euo pipefail
+          # The loader pins an immutable index: never deploy a public installer
+          # whose selected release is still a draft (or is missing entirely).
+          while IFS= read -r tag; do
+            published=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" \
+              --json isDraft,publishedAt --jq 'select(.isDraft == false and .publishedAt != null) | .publishedAt') || exit 1
+            if [ -z "$published" ]; then
+              echo "Refusing unpublished platform channel: $tag" >&2
+              exit 1
+            fi
+          done < <(awk -F '\t' '$1 !~ /^#/ && NF == 6 {print $3}' ../release-channels.tsv | sort -u)
+          python3 ../scripts/stage-released-loader.py .output/public/install.sh
       - uses: actions/upload-artifact@v7
         with:
           name: notification-landing
