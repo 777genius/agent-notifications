@@ -34,6 +34,7 @@ import {spawnSync} from 'node:child_process';
 const write=value=>appendFileSync(process.env.AN_TEST_TRACE,JSON.stringify(value)+'\n');
 export default {id:'test-oc226-source',async setup(ctx){
  let view;
+ const nativeSessions=new Map();
  try{ view=createNativeV2(ctx,ctx.location,()=>{},()=>{write({phase:'native-uncertain'});}); }
  catch{ write({phase:'native-constructor-denied'}); }
  // TEST-only adversarial +12s wall-clock modification in the official process.
@@ -51,6 +52,15 @@ export default {id:'test-oc226-source',async setup(ctx){
  void(async()=>{try{for await(const entry of ctx.event.subscribe({signal:controller.signal})){
    if(!entry||typeof entry.type!=='string')continue;
    const e=entry.data??entry.properties??{};
+   const nativeSID=e.sessionID??e.form?.sessionID;
+   let sessionState;
+   if(typeof nativeSID==='string'){
+     sessionState=nativeSessions.get(nativeSID);
+     if(!sessionState){ sessionState={};nativeSessions.set(nativeSID,sessionState); }
+     if(entry.type==='session.execution.started')sessionState.runID=entry.id;
+     if(entry.type==='session.inbox.delivered')sessionState.userID=e.inboxID;
+     if(entry.type==='session.step.started')sessionState.assistantID=e.assistantMessageID;
+   }
    try{
      const mapped=view?.native.correlate(entry);
      if(mapped?.sessionID)write({phase:'native-projection',type:entry.type,sessionID:mapped.sessionID,
@@ -85,6 +95,37 @@ export default {id:'test-oc226-source',async setup(ctx){
     toolBinding:entry.type==='form.created'?typeof e.form?.metadata?.tool?.messageID==='string'&&typeof e.form?.metadata?.tool?.id==='string':
       entry.type==='permission.asked'?e.source?.type==='tool'&&typeof e.source.messageID==='string'&&typeof e.source.id==='string':undefined,
     userInbox:e.item?.type==='user'});
+   if(entry.type==='form.created' && typeof nativeSID==='string' && sessionState){
+     void(async()=>{try{
+       const tool=e.form?.metadata?.tool;
+       const run={sessionID:nativeSID,turnID:sessionState.runID,userID:sessionState.userID,
+         messageID:tool?.messageID,requestID:e.form?.id,callID:tool?.id};
+       const proof=await view?.native.questionSource(run,new AbortController().signal);
+       write({phase:'native-question',sessionID:nativeSID,valid:proof?.rootSession===true &&
+         proof?.tool==='question' && proof?.requestID===run.requestID,
+         hasSource:!!tool,runParts:[run.turnID,run.userID,run.messageID,run.callID].filter(x=>typeof x==='string'&&x).length});
+     }catch{write({phase:'native-question',sessionID:nativeSID,valid:false,runParts:0});}})();
+   }
+   if(entry.type==='permission.asked' && typeof nativeSID==='string' && sessionState){
+     void(async()=>{try{
+       const source=e.source;
+       const run={sessionID:nativeSID,turnID:sessionState.runID,userID:sessionState.userID,
+         messageID:source?.messageID,requestID:e.id,callID:source?.id};
+       const proof=await view?.native.currentPermission(run,new AbortController().signal);
+       write({phase:'native-permission',sessionID:nativeSID,valid:proof?.rootSession===true &&
+         proof?.pending===true && proof?.requestID===run.requestID,
+         runParts:[run.turnID,run.userID,run.messageID,run.callID].filter(x=>typeof x==='string'&&x).length});
+     }catch{write({phase:'native-permission',sessionID:nativeSID,valid:false,runParts:0});}})();
+   }
+   if(entry.type==='session.execution.failed'&&typeof e.sessionID==='string'){
+     void(async()=>{try{
+       const run={sessionID:e.sessionID,turnID:sessionState?.runID,userID:sessionState?.userID,
+         messageID:sessionState?.assistantID,terminalEventID:entry.id,terminalCreated:entry.created};
+       const proof=await view?.native.assistant(run,new AbortController().signal);
+       write({phase:'native-error',sessionID:e.sessionID,valid:proof?.final===true&&proof?.outcome==='error',
+         runParts:[run.turnID,run.userID,run.messageID].filter(x=>typeof x==='string'&&x.length>0).length});
+     }catch{write({phase:'native-error',sessionID:e.sessionID,valid:false,runParts:0});}})();
+   }
    if(entry.type==='session.execution.succeeded'&&typeof e.sessionID==='string'){
      try{
        const info=await ctx.session.get({sessionID:e.sessionID});
@@ -94,6 +135,14 @@ export default {id:'test-oc226-source',async setup(ctx){
          location:typeof info?.location?.directory==='string',rows:Array.isArray(value),
          assistant:Array.isArray(value)&&value.some(x=>x.type==='assistant')});
      }catch{write({phase:'projection',sessionID:e.sessionID,matched:false});}
+     try{
+       const run={sessionID:e.sessionID,turnID:sessionState?.runID,userID:sessionState?.userID,
+         messageID:sessionState?.assistantID,terminalEventID:entry.id,terminalCreated:entry.created};
+       const proof=await view?.native.assistant(run,new AbortController().signal);
+       write({phase:'native-assistant',sessionID:e.sessionID,valid:proof?.final===true&&proof?.outcome==='success',
+         hasOriginalMessage:typeof proof?.messageID==='string',runParts:
+         [run.turnID,run.userID,run.messageID].filter(x=>typeof x==='string'&&x.length>0).length});
+     }catch{write({phase:'native-assistant',sessionID:e.sessionID,valid:false,runParts:0});}
    }
  }}catch{write({phase:'reader_closed'});}})();
  return ()=>{controller.abort();write({phase:'cleanup'});};
@@ -362,6 +411,12 @@ def run(archive, root, receiver=None, clock_skew_negative=False):
                 if not all(projection.get(k) is True for k in
                            ('matched', 'root', 'projectID', 'location', 'rows', 'assistant')):
                     raise RuntimeError('native_session_projection_unverified')
+                # R1 source-only adapter check, not independent native authority.
+                # Fail closed if the exact production projection cannot read this turn.
+                r1 = wait(lambda: next((r for r in rows() if r.get('phase')=='native-assistant' and
+                                        r.get('sessionID')==sid),None), 20, 'native_reader_r1_sample_missing')
+                if r1.get('valid') is not True or r1.get('runParts') != 3:
+                    raise RuntimeError('native_assistant_projection_unverified')
                 print('source-stage: native-session-projection-verified', flush=True)
                 # Independently verify native pending question, reply and settled turn.
                 question_begin = len(rows())
@@ -378,6 +433,10 @@ def run(archive, root, receiver=None, clock_skew_negative=False):
                         r.get('type') == 'form.created' and r.get('sessionID') == question_sid and
                         not r.get('hasSequence') and r.get('hasTime') and r.get('toolBinding') for r in question_rows):
                     raise RuntimeError('source_native_question_unverified')
+                qr1=wait(lambda: next((r for r in rows() if r.get('phase')=='native-question' and
+                                      r.get('sessionID')==question_sid),None),10,'native_r1_question_missing')
+                if qr1.get('valid') is not True or qr1.get('runParts') != 4:
+                    raise RuntimeError('native_question_projection_unverified')
                 request('/api/session/' + question_sid + '/form/' + forms[0]['id'] + '/reply',
                         {'answer': {'q0': 'Yes'}})
                 wait(lambda: any(r.get('type') == 'form.replied' and r.get('sessionID') == question_sid
@@ -402,6 +461,10 @@ def run(archive, root, receiver=None, clock_skew_negative=False):
                         r.get('type') == 'permission.asked' and r.get('sessionID') == permission_sid and
                         not r.get('hasSequence') and r.get('hasTime') and r.get('toolBinding') for r in permission_rows):
                     raise RuntimeError('source_native_permission_unverified')
+                pr1=wait(lambda: next((r for r in rows() if r.get('phase')=='native-permission' and
+                                      r.get('sessionID')==permission_sid),None),10,'native_r1_permission_missing')
+                if pr1.get('valid') is not True or pr1.get('runParts') != 4:
+                    raise RuntimeError('native_permission_projection_unverified')
                 request('/api/session/' + permission_sid + '/permission/' + pending[0]['id'] + '/reply',
                         {'decision': 'reject'})
                 wait(lambda: any(r.get('type') == 'permission.replied' and r.get('sessionID') == permission_sid
@@ -427,6 +490,10 @@ def run(archive, root, receiver=None, clock_skew_negative=False):
                 if len(provider.bodies) <= prior_requests or not any(
                         r.get('hasSequence') and r.get('hasTime') for r in failure_rows):
                     raise RuntimeError('source_terminal_error_unverified')
+                er1=wait(lambda: next((r for r in rows() if r.get('phase')=='native-error' and
+                                      r.get('sessionID')==failed_sid),None),10,'native_r1_error_missing')
+                if er1.get('valid') is not True or er1.get('runParts') != 3:
+                    raise RuntimeError('native_error_projection_unverified')
                 provider.mode = 'success'
                 print('source-stage: terminal-error-verified', flush=True)
                 if webhook is not None:
@@ -449,6 +516,10 @@ def run(archive, root, receiver=None, clock_skew_negative=False):
                         'sameProcessReceiverQ0Observed': True,
                         'productionNativeV2CorrelationR0Observed': True,
                         'nativeV2R0SampleCount': len(native_rows),
+                        'productionNativeV2AssistantR1Observed': True,
+                        'productionNativeV2QuestionR1Observed': True,
+                        'productionNativeV2PermissionR1Observed': True,
+                        'productionNativeV2TerminalErrorR1Observed': True,
                         'sourceToReceiverLagMinMS': min(receiver_lags),
                         'sourceToReceiverLagMaxMS': max(receiver_lags),
                         'sourceToReceiverSampleCount': len(receiver_lags),
@@ -511,7 +582,11 @@ def main():
                            'source_go_clock_epoch_unverified',
                            'native_reader_projection_unverified',
                            'source_clock_skew_injection_missing', 'source_clock_skew_not_refused',
-                           'negative_native_reader_projection_unverified'}
+                           'negative_native_reader_projection_unverified',
+                           'native_reader_r1_sample_missing', 'native_r1_question_missing',
+                           'native_r1_permission_missing', 'native_r1_error_missing',
+                           'native_assistant_projection_unverified', 'native_question_projection_unverified',
+                           'native_permission_projection_unverified', 'native_error_projection_unverified'}
             reason = str(error) if type(error) is RuntimeError and str(error) in safe_errors else 'unexpected'
             result = {'status': 'unqualified', 'failureType': type(error).__name__, 'failureCode': reason,
                       'nativeObserverQualified': False, 'nativeClockQualified': False,
