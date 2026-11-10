@@ -32,6 +32,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Download and verify immutable official OpenCode 2.2.6
+        id: official
         shell: bash
         run: |
           set -euo pipefail
@@ -40,8 +41,20 @@ jobs:
             'https://github.com/anomalyco/opencode/releases/download/v2.2.6/opencode-linux-x64.tar.gz' \
             --output "$archive"
           printf '%s  %s\n' '08bb21d6326ce740d91cce7ebe88a6536933f6e1e30353b91a06b01f25da306c' "$archive" | sha256sum --check --status
+      - name: Observe real native V2 source without delivery grants
+        shell: bash
+        run: |
           python -B scripts/opencode-v226-source-e2e.py \
-            --archive "$archive" --report "$RUNNER_TEMP/opencode-v226-source-safe.json"
+            --archive "$RUNNER_TEMP/opencode-linux-x64-2.2.6.tar.gz" \
+            --report "$RUNNER_TEMP/opencode-v226-source-safe.json"
+      - name: Preserve only SHA-verified public archive for offline E2E analysis
+        if: always() && steps.official.outcome == 'success'
+        uses: actions/upload-artifact@v7
+        with:
+          name: opencode-v226-public-host-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/opencode-linux-x64-2.2.6.tar.gz
+          if-no-files-found: error
+          retention-days: 1
       - name: Upload closed source-only result
         if: always()
         uses: actions/upload-artifact@v7
