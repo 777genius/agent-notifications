@@ -1334,6 +1334,7 @@ def qualify(args, report):
             profiles = [x['value'] for x in trace(root) if x['kind']=='profile']
             require(len(profiles)==1 and profiles[0].get('nativePID')==server.pid and profiles[0]['code']==0 and not profiles[0]['bad'] and not profiles[0]['forced'] and profiles[0]['actualClose'], 'profile_query_unclosed')
             receipt = profiles[0]['receipt']
+            require(isinstance(receipt, dict), 'profile_receipt_schema')
             fields = ('protocol','semantic','generation','resourceClosure')
             if receipt.get('semantic') == 'eligible':
                 closed(receipt, (*fields, 'version'), 'profile_receipt_schema')
