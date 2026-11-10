@@ -40,7 +40,7 @@ export default {id:'test-oc226-source',async setup(ctx){
    const e=entry.data??entry.properties??{};
    write({phase:'event',type:entry.type,hasData:typeof e==='object'&&e!==null,
     hasSequence:Number.isSafeInteger(entry.durable?.seq),
-    hasTime:typeof e.time==='number'||typeof e.time?.created==='number'||typeof e.info?.time?.created==='number'});
+    hasTime:Number.isSafeInteger(entry.created)&&entry.created>0});
  }}catch{write({phase:'reader_closed'});}})();
  return ()=>{controller.abort();write({phase:'cleanup'});};
 }};'''
@@ -179,11 +179,18 @@ def run(archive, root):
                     raise RuntimeError('local_provider_unused')
                 if 'session.execution.started' not in observed:
                     raise RuntimeError('native_execution_start_unseen')
+                # Native V2 envelope time is on entry.created, not event.data.time.
+                terminal = {'session.execution.started', 'session.step.ended',
+                            'session.execution.succeeded'}
+                if not all(any(r.get('type') == kind and r.get('hasSequence') and r.get('hasTime')
+                               for r in rows()) for kind in terminal):
+                    raise RuntimeError('native_source_envelope_unverified')
                 return {'status': 'passed_source_only', 'version': '2.2.6',
                         'upstreamTagCommit': OFFICIAL_TAG_SHA,
                         'officialArchiveSHA256': OFFICIAL_ARCHIVE_SHA256,
                         'officialBinarySHA256': binary_sha,
                         'realNativeProviderTurn': True, 'sourceSubscriberLoaded': True,
+                        'sourceEnvelopeShapeObserved': True,
                         'observedEventTypes': sorted(observed),
                         'nativeObserverQualified': False, 'nativeClockQualified': False,
                         'notificationDeliveryQualified': False}
@@ -214,7 +221,8 @@ def main():
                            'official_version_command_failed', 'official_version_format_unexpected', 'official_host_exited',
                            'native_startup_timeout', 'source_autoload_missing',
                            'host_capabilities_mismatch', 'private_trace_limit',
-                           'native_source_events_missing', 'local_provider_unused', 'native_execution_start_unseen'}
+                           'native_source_events_missing', 'local_provider_unused', 'native_execution_start_unseen',
+                           'native_source_envelope_unverified'}
             reason = str(error) if type(error) is RuntimeError and str(error) in safe_errors else 'unexpected'
             result = {'status': 'unqualified', 'failureType': type(error).__name__, 'failureCode': reason,
                       'nativeObserverQualified': False, 'nativeClockQualified': False,
