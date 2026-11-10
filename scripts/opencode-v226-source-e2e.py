@@ -197,9 +197,17 @@ def run(archive, root, receiver=None):
                 def rows():
                     if not trace.exists():
                         return []
-                    if trace.stat().st_size > 2 * 1024 * 1024:
+                    # The official host appends trace records concurrently. A
+                    # snapshot may end mid-append: inspect only newline-terminated
+                    # records, but reject any malformed completed record.
+                    with trace.open('rb') as stream:
+                        payload = stream.read(2 * 1024 * 1024 + 1)
+                    if len(payload) > 2 * 1024 * 1024:
                         raise RuntimeError('private_trace_limit')
-                    return [json.loads(line) for line in trace.read_text().splitlines()]
+                    last_line = payload.rfind(b'\n')
+                    if last_line < 0:
+                        return []
+                    return [json.loads(line) for line in payload[:last_line].splitlines()]
 
                 def ready():
                     if host.poll() is not None:
