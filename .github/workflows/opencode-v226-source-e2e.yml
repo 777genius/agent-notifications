@@ -7,6 +7,14 @@ on:
       - 'scripts/opencode-v226-source-e2e.py'
       - 'scripts/opencode-v226-clock-e0.mjs'
       - 'scripts/opencode-v226-darwin-abi-e0.mjs'
+      - 'scripts/opencode-semantic-e2e.py'
+      - 'opencode-plugin/**'
+      - 'cmd/claude-notifications/opencode*.go'
+      - 'internal/opencodecodec/**'
+      - 'internal/opencodeevent/**'
+      - 'internal/opencodeplugin/**'
+      - 'go.mod'
+      - 'go.sum'
       - '.github/workflows/opencode-v226-source-e2e.yml'
   workflow_dispatch:
 
