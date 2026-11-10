@@ -157,9 +157,14 @@ jobs:
           retention-days: 14
 
   darwin-arm64-image:
+    name: darwin-arm64-native (${{ matrix.os }})
     # Image/Bun discovery only, no native clock admission or notifications.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-26]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
@@ -223,7 +228,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: opencode-v226-darwin-arm64-${{ github.event.pull_request.head.sha || github.sha }}
+          name: opencode-v226-darwin-arm64-${{ matrix.os }}-${{ github.event.pull_request.head.sha || github.sha }}
           path: ${{ runner.temp }}/opencode-v226-darwin-image-safe.json
           if-no-files-found: warn
           retention-days: 14
@@ -256,7 +261,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: opencode-v226-darwin-denied-${{ github.event.pull_request.head.sha || github.sha }}
+          name: opencode-v226-darwin-denied-${{ matrix.os }}-${{ github.event.pull_request.head.sha || github.sha }}
           path: ${{ runner.temp }}/opencode-v226-darwin-denied-safe.json
           if-no-files-found: warn
           retention-days: 14
@@ -274,7 +279,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: opencode-v226-darwin-ffi-e0-${{ github.event.pull_request.head.sha || github.sha }}
+          name: opencode-v226-darwin-ffi-e0-${{ matrix.os }}-${{ github.event.pull_request.head.sha || github.sha }}
           path: ${{ runner.temp }}/opencode-v226-darwin-ffi-e0-safe.json
           if-no-files-found: warn
           retention-days: 14
