@@ -151,7 +151,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: opencode-v226-native-source-${{ github.sha }}
+          name: opencode-v226-native-source-${{ github.event.pull_request.head.sha || github.sha }}
           path: ${{ runner.temp }}/opencode-v226-source-safe.json
           if-no-files-found: warn
           retention-days: 14
@@ -244,6 +244,22 @@ jobs:
           go build -trimpath -ldflags="-s -w" -o "$RUNNER_TEMP/TEST-opencode-v226-darwin/receiver" ./cmd/claude-notifications
           go version -m "$RUNNER_TEMP/TEST-opencode-v226-darwin/receiver" | grep -F "vcs.revision=$EXPECTED_HEAD"
           go version -m "$RUNNER_TEMP/TEST-opencode-v226-darwin/receiver" | grep -F 'vcs.modified=false'
+      - name: Observe real macOS ARM64 V2 source and installed-denied events
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -B scripts/opencode-v226-source-e2e.py \
+            --archive "$RUNNER_TEMP/opencode-darwin-arm64.zip" \
+            --receiver "$RUNNER_TEMP/TEST-opencode-v226-darwin/receiver" \
+            --report "$RUNNER_TEMP/opencode-v226-darwin-denied-safe.json"
+      - name: Upload sanitized macOS source/denial evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: opencode-v226-darwin-denied-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/opencode-v226-darwin-denied-safe.json
+          if-no-files-found: warn
+          retention-days: 14
       - name: Observe genuine Bun 1.4.4 Darwin FFI/Go E0 (never grant notifications)
         shell: bash
         run: |

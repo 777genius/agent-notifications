@@ -21,8 +21,12 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import zipfile
 
-OFFICIAL_ARCHIVE_SHA256 = "08bb21d6326ce740d91cce7ebe88a6536933f6e1e30353b91a06b01f25da306c"
+OFFICIAL_ARCHIVE_HASHES = {
+    'linux': '08bb21d6326ce740d91cce7ebe88a6536933f6e1e30353b91a06b01f25da306c',
+    'darwin': '15491608f6b0bc4debe5eac35eab629a2b07ea9a1fbac68ad53bcea59fcc4b45',
+}
 OFFICIAL_TAG_SHA = "dc2ffcf8bf26f9e669b6aa22b95f50e12be15e06"
 TRACE_PLUGIN = r'''import {appendFileSync} from 'node:fs';
 const write=value=>appendFileSync(process.env.AN_TEST_TRACE,JSON.stringify(value)+'\n');
@@ -44,6 +48,16 @@ export default {id:'test-oc226-source',async setup(ctx){
     toolBinding:entry.type==='form.created'?typeof e.form?.metadata?.tool?.messageID==='string'&&typeof e.form?.metadata?.tool?.id==='string':
       entry.type==='permission.asked'?e.source?.type==='tool'&&typeof e.source.messageID==='string'&&typeof e.source.id==='string':undefined,
     userInbox:e.item?.type==='user'});
+   if(entry.type==='session.execution.succeeded'&&typeof e.sessionID==='string'){
+     try{
+       const info=await ctx.session.get({sessionID:e.sessionID});
+       const value=await ctx.session.context({sessionID:e.sessionID});
+       write({phase:'projection',sessionID:e.sessionID,matched:info?.id===e.sessionID,
+         root:info?.parentID===undefined,projectID:typeof info?.projectID==='string',
+         location:typeof info?.location?.directory==='string',rows:Array.isArray(value),
+         assistant:Array.isArray(value)&&value.some(x=>x.type==='assistant')});
+     }catch{write({phase:'projection',sessionID:e.sessionID,matched:false});}
+   }
  }}catch{write({phase:'reader_closed'});}})();
  return ()=>{controller.abort();write({phase:'cleanup'});};
 }};'''
@@ -65,18 +79,28 @@ def wait(fn, seconds, label):
 
 
 def official_binary(archive, target):
-    if not archive.is_file() or archive.stat().st_size > 160 * 1024 * 1024 or digest(archive) != OFFICIAL_ARCHIVE_SHA256:
+    system = sys.platform
+    expected = OFFICIAL_ARCHIVE_HASHES.get(system)
+    if expected is None or not archive.is_file() or not 0 < archive.stat().st_size <= 160 * 1024 * 1024 or digest(archive) != expected:
         raise RuntimeError('official_archive_unverified')
-    with tarfile.open(archive, mode='r:gz') as tar:
-        files = [m for m in tar.getmembers() if Path(m.name).name == 'opencode' and m.isfile()]
-        if len(files) != 1 or not 0 < files[0].size <= 250 * 1024 * 1024:
-            raise RuntimeError('official_executable_not_unique')
-        with tar.extractfile(files[0]) as source, target.open('xb') as dest:
-            while chunk := source.read(1024 * 1024):
-                dest.write(chunk)
+    if system == 'darwin':
+        with zipfile.ZipFile(archive) as packed:
+            files = [m for m in packed.infolist() if not m.is_dir() and Path(m.filename).name == 'opencode']
+            if len(files) != 1 or not 0 < files[0].file_size <= 350 * 1024 * 1024:
+                raise RuntimeError('official_executable_not_unique')
+            with packed.open(files[0]) as source, target.open('xb') as dest:
+                while chunk := source.read(1024 * 1024):
+                    dest.write(chunk)
+    else:
+        with tarfile.open(archive, mode='r:gz') as packed:
+            files = [m for m in packed.getmembers() if Path(m.name).name == 'opencode' and m.isfile()]
+            if len(files) != 1 or not 0 < files[0].size <= 250 * 1024 * 1024:
+                raise RuntimeError('official_executable_not_unique')
+            with packed.extractfile(files[0]) as source, target.open('xb') as dest:
+                while chunk := source.read(1024 * 1024):
+                    dest.write(chunk)
     target.chmod(0o700)
     return digest(target)
-
 
 def run(archive, root, receiver=None):
     spec = importlib.util.spec_from_file_location('existing_native_provider',
@@ -212,6 +236,12 @@ def run(archive, root, receiver=None):
                         r.get('type') == 'session.inbox.enqueued' and r.get('sessionID') == sid and
                         r.get('userInbox') for r in rows()):
                     raise RuntimeError('native_source_envelope_unverified')
+                projection = wait(lambda: next((r for r in rows() if r.get('phase') == 'projection' and
+                                    r.get('sessionID') == sid), None), 20, 'native_session_projection_missing')
+                if not all(projection.get(k) is True for k in
+                           ('matched', 'root', 'projectID', 'location', 'rows', 'assistant')):
+                    raise RuntimeError('native_session_projection_unverified')
+                print('source-stage: native-session-projection-verified', flush=True)
                 # Independently verify native pending question, reply and settled turn.
                 question_begin = len(rows())
                 prior_requests = len(provider.bodies)
@@ -290,10 +320,11 @@ def run(archive, root, receiver=None):
                         raise RuntimeError('denied_host_delivered_webhook')
                 return {'status': 'passed_denied_only' if webhook else 'passed_source_only', 'version': '2.2.6',
                         'upstreamTagCommit': OFFICIAL_TAG_SHA,
-                        'officialArchiveSHA256': OFFICIAL_ARCHIVE_SHA256,
+                        'officialArchiveSHA256': OFFICIAL_ARCHIVE_HASHES[sys.platform],
                         'officialBinarySHA256': binary_sha,
                         'realNativeProviderTurn': True, 'sourceSubscriberLoaded': True,
                         'sourceEnvelopeShapeObserved': True,
+                        'nativeSessionProjectionObserved': True,
                         'sourceQuestionObserved': True, 'sourcePermissionObserved': True,
                         'sourceTerminalErrorObserved': True, 'attentionEventsAreEphemeral': True,
                         'installedDeniedStartup': webhook is not None,
@@ -339,7 +370,8 @@ def main():
                            'source_native_question_unverified', 'source_question_reply_unseen',
                            'source_question_terminal_missing', 'source_native_permission_missing',
                            'source_native_permission_unverified', 'source_permission_reply_unseen',
-                           'source_terminal_error_missing', 'source_terminal_error_unverified'}
+                           'source_terminal_error_missing', 'source_terminal_error_unverified',
+                           'native_session_projection_missing', 'native_session_projection_unverified'}
             reason = str(error) if type(error) is RuntimeError and str(error) in safe_errors else 'unexpected'
             result = {'status': 'unqualified', 'failureType': type(error).__name__, 'failureCode': reason,
                       'nativeObserverQualified': False, 'nativeClockQualified': False,
