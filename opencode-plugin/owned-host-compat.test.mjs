@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, realpathSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, realpathSync, writeFileSync, rmSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -59,6 +59,17 @@ test('verified V1/V2 host versions are dynamic; denied profiles report only afte
     const untrustedWarnings = [];
     assert.equal(await prepareOwnedHost(root, 'v2', '2.2.6', false, code => untrustedWarnings.push(code)), undefined);
     assert.deepEqual(untrustedWarnings, [], 'untrusted helper exit is not an authenticated diagnostic');
+    // A same-inode, same-size native helper edited in place must revoke ownership.
+    // This tests the nanosecond mtime field, not only dev/ino/size/mode.
+    globalThis[key].response = { status: 'ok', output: receipt('eligible', 'v2', '2.2.6') };
+    const mutable = await prepareOwnedHost(root, 'v2', '2.2.6');
+    assert.ok(mutable);
+    const oldTime = new Date(Date.now() - 120_000);
+    utimesSync(executable, oldTime, oldTime);
+    assert.equal(mutable.isOwned(), false, 'mtime-only mutation revokes the owned binding');
+    assert.equal(mutable.runtimeEligibility(), 'unverified');
+    assert.deepEqual(await mutable.dispose(), { reaped: true });
+
   } finally {
     delete globalThis[key];
     rmSync(root, { recursive: true, force: true });

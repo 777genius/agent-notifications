@@ -12,7 +12,7 @@ const identity = (name) => {
   const stat = statSync(name, { bigint: true });
   return Object.freeze({ name, dev: stat.dev, ino: stat.ino, size: stat.isDirectory() ? undefined : stat.size, mtime: stat.isDirectory() ? undefined : stat.mtimeNs, mode: stat.mode });
 };
-const equal = (a, b) => ['name', 'dev', 'ino', 'size', 'mtime', 'mode'].every((key) => a[key] === b[key]);
+const equal = (a, b) => ['name', 'dev', 'ino', 'size', 'mtimeNs', 'mode'].every((key) => a[key] === b[key]);
 export async function prepareOwnedHost(directory, generation, appVersion, diagnostics = false, onUnavailable) {
   let registry, privateCwd;
   try {
