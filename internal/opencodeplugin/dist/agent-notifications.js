@@ -4152,7 +4152,7 @@ async function setup(context) {
       view = createNativeV2(context, context.location, delivery.nativeIngress, delivery.invalidate);
       if (!await delivery.activate()) {
         compositionDiagnostic(diagnostics, "v2.activation.denied");
-        if (!stopped && owned.isOwned()) warning("activation_unavailable");
+        if (!stopped && isNativeOwned()) warning("activation_unavailable");
         await stop();
         return;
       }
@@ -4225,7 +4225,7 @@ async function setup(context) {
       observer.start();
       return stop;
     } catch {
-      if (!stopped && owned.isOwned()) warning("activation_unavailable");
+      if (!stopped && isNativeOwned()) warning("activation_unavailable");
       await stop();
     }
   })();

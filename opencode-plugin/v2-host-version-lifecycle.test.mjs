@@ -59,6 +59,24 @@ test('V2 matches independently admitted host version and revokes on live context
     assert.equal(globalThis[key].stops, 1);
     assert.equal(globalThis[key].eligibility(), 'unverified', 'disposing the host revokes ownership');
     assert.deepEqual(rows, [], 'clean lifecycle must not warn');
+    // Revocation while async activation is pending is not an activation failure.
+    disposed = false;
+    let entered, release;
+    const entering = new Promise(resolve => { entered = resolve; });
+    const pending = new Promise(resolve => { release = resolve; });
+    globalThis[key].delivery = { ...globalThis[key].delivery,
+      activate: async () => { entered(); await pending; return false; },
+    };
+    const changed = { ...context, app: { version: '2.2.6' },
+      location: { directory: '/TEST', workspaceID: 'ws', project: { id: 'project' } },
+    };
+    const refused = plugin.setup(changed);
+    await entering;
+    changed.app.version = '2.2.7';
+    release();
+    assert.equal(await refused, undefined);
+    assert.deepEqual(rows, [], 'host version drift must not produce a startup warning');
+
   } finally {
     console.error = prior;
     delete globalThis[key];

@@ -176,7 +176,7 @@ async function setup(context) {
       view = createNativeV2(context, context.location, delivery.nativeIngress, delivery.invalidate);
       if (!await delivery.activate()) {
         compositionDiagnostic(diagnostics, 'v2.activation.denied');
-        if (!stopped && owned.isOwned()) warning('activation_unavailable');
+        if (!stopped && isNativeOwned()) warning('activation_unavailable');
         await stop(); return;
       }
       compositionDiagnostic(diagnostics, 'v2.activation.ok');
@@ -229,7 +229,7 @@ async function setup(context) {
         emit: (event, handoff) => { const fact = view.project(event); return fact ? reportDelivery(delivery.emit(fact, handoff), diagnostics) : undefined; } });
       observer.start();
       return stop;
-    } catch { if (!stopped && owned.isOwned()) warning('activation_unavailable'); await stop(); }
+    } catch { if (!stopped && isNativeOwned()) warning('activation_unavailable'); await stop(); }
   })();
   setups.set(context, starting);
   return starting;
