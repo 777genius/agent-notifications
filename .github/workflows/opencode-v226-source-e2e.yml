@@ -154,3 +154,75 @@ jobs:
           path: ${{ runner.temp }}/opencode-v226-source-safe.json
           if-no-files-found: warn
           retention-days: 14
+
+  darwin-arm64-image:
+    # Image/Bun discovery only, no native clock admission or notifications.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Verify official Darwin arm64 2.2.6 archive, executable and Bun
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = arm64
+          curl --fail --location --silent --show-error --max-time 120 --max-filesize 150000000 \
+            'https://github.com/anomalyco/opencode/releases/download/v2.2.6/opencode-darwin-arm64.zip' \
+            --output "$RUNNER_TEMP/opencode-darwin-arm64.zip"
+          printf '%s  %s\n' '15491608f6b0bc4debe5eac35eab629a2b07ea9a1fbac68ad53bcea59fcc4b45' \
+            "$RUNNER_TEMP/opencode-darwin-arm64.zip" | shasum -a 256 --check --status
+          python - <<'PY'
+          import hashlib, json, os, pathlib, stat, subprocess, zipfile
+          root = pathlib.Path(os.environ['RUNNER_TEMP'])
+          target = root / 'TEST-opencode-v226-darwin'
+          target.mkdir(mode=0o700)
+          with zipfile.ZipFile(root / 'opencode-darwin-arm64.zip') as archive:
+              matches = [info for info in archive.infolist()
+                         if not info.is_dir() and pathlib.PurePosixPath(info.filename).name == 'opencode']
+              if len(matches) != 1:
+                  raise RuntimeError('official_macos_image_not_unique')
+              info = matches[0]
+              kind = (info.external_attr >> 16) & 0o170000
+              if kind not in (0, stat.S_IFREG) or not 0 < info.file_size <= 350000000:
+                  raise RuntimeError('official_macos_image_type_or_size')
+              binary = target / 'opencode'
+              with archive.open(info) as source, binary.open('xb') as output:
+                  total = 0
+                  while data := source.read(1048576):
+                      total += len(data)
+                      if total > 350000000:
+                          raise RuntimeError('official_macos_image_extraction_limit')
+                      output.write(data)
+          binary.chmod(0o700)
+          with binary.open('rb') as source:
+              image_sha = hashlib.file_digest(source, 'sha256').hexdigest()
+          env = {'BUN_BE_BUN': '1', 'HOME': str(target),
+                 'TMPDIR': str(target), 'PATH': os.environ.get('PATH', '/usr/bin:/bin')}
+          result = subprocess.run([str(binary), '--version'], env=env,
+                                  capture_output=True, text=True, timeout=20, cwd=target)
+          if result.returncode or result.stdout.strip() != '1.4.4':
+              raise RuntimeError('official_macos_bun_unverified')
+          safe = {'status':'observed_image_only', 'platform':'darwin', 'arch':'arm64',
+                  'hostVersion':'2.2.6', 'embeddedBunVersion':'1.4.4',
+                  'officialArchiveSHA256':'15491608f6b0bc4debe5eac35eab629a2b07ea9a1fbac68ad53bcea59fcc4b45',
+                  'officialExecutableSHA256':image_sha,
+                  'nativeObserverQualified':False, 'nativeClockQualified':False,
+                  'notificationDeliveryQualified':False}
+          (root/'opencode-v226-darwin-image-safe.json').write_text(json.dumps(safe, sort_keys=True) + '\n')
+          print(json.dumps(safe, sort_keys=True))
+          PY
+      - name: Upload only fixed image/Bun observations
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: opencode-v226-darwin-arm64-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/opencode-v226-darwin-image-safe.json
+          if-no-files-found: warn
+          retention-days: 14
