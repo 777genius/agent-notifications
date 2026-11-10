@@ -721,6 +721,24 @@ class AdmissionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'latest successful source check masked a failure'):
             self.verify()
 
+    def test_target_pr_retry_requires_same_authenticated_pr_and_source(self):
+        for run in self.api.runs:
+            run.update(event='pull_request', head_branch='fix/release-candidate')
+        first, later = API.run(201, 'release.yml', 'cancelled'), API.run(202, 'release.yml')
+        for run in (first, later):
+            run.update(event='pull_request_target', head_branch='fix/release-candidate')
+        self.api.runs.extend((first, later))
+        for run, number, conclusion in ((first, 20001, 'cancelled'), (later, 20002, 'success')):
+            self.api.checks.append(self.api.check({'id': number, 'name': 'installer',
+                'status': 'completed', 'conclusion': conclusion}, run))
+        self.assertEqual(self.verify()['ignored_successful_retries'][0]['check_id'], 20001)
+        for field, value in (('number', 560), ('base', {'ref': 'main', 'sha': 'd' * 40, 'repo': {'id': REPO_ID}})):
+            saved = copy.deepcopy(later['pull_requests'][0][field])
+            later['pull_requests'][0][field] = value
+            with self.assertRaisesRegex(ValueError, 'latest successful source check masked a failure'):
+                self.verify()
+            later['pull_requests'][0][field] = saved
+
     def test_completed_same_workflow_main_retry_is_proven_not_name_only(self):
         first, later = API.run(201, 'release.yml', 'failure'), API.run(202, 'release.yml')
         self.api.runs.extend((first, later))
