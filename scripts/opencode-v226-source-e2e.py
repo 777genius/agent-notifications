@@ -138,7 +138,8 @@ def run(archive, root):
                     req = urllib.request.Request(f'http://127.0.0.1:{port}' + endpoint,
                                                  data=payload, method=method, headers=headers)
                     with urllib.request.urlopen(req, timeout=35) as resp:
-                        return json.loads(resp.read())
+                        raw = resp.read()
+                        return json.loads(raw) if raw else None
 
                 def rows():
                     if not trace.exists():
