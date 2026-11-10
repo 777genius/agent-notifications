@@ -82,6 +82,7 @@ def run(archive, root):
     spec.loader.exec_module(native)
     binary = root / 'opencode'
     binary_sha = official_binary(archive, binary)
+    print('source-stage: archive-verified', flush=True)
     names = dict(home='home', config='config', project='TEST-project', data='data',
                  cache='cache', state='state', runtime='runtime', temp='temp', bun='bun')
     paths = {k: root / v for k, v in names.items()}
@@ -108,6 +109,7 @@ def run(archive, root):
                              text=True, capture_output=True, timeout=20)
     if version.returncode or not re.fullmatch(r'(?:opencode\s+)?2\.2\.6', version.stdout.strip()):
         raise RuntimeError('official_version_probe_failed')
+    print('source-stage: version-verified', flush=True)
     provider = native.Endpoint()
     provider.version = '2.2.6'
     threading.Thread(target=provider.serve_forever, daemon=True).start()
@@ -152,8 +154,10 @@ def run(archive, root):
                         return None
 
                 wait(ready, 70, 'native_startup_timeout')
+                print('source-stage: native-started', flush=True)
                 loaded = wait(lambda: next((r for r in rows() if r.get('phase') == 'loaded'), None),
                               25, 'source_autoload_missing')
+                print('source-stage: plugin-loaded', flush=True)
                 capabilities = ('subscribe', 'sessionGet', 'sessionContext', 'permissionGet',
                                 'permissionList', 'rpcRegister')
                 if loaded.get('version') != '2.2.6' or any(loaded.get(k) is not True for k in capabilities):
@@ -161,6 +165,7 @@ def run(archive, root):
                 session = request('/api/session', {'title': 'TEST-source-2.2.6',
                                      'location': {'directory': str(paths['project'])}})
                 sid = session['data']['id']
+                print('source-stage: session-created', flush=True)
                 request('/api/session/' + sid + '/prompt', {'text': 'TEST-native-source-turn'})
                 request('/api/experimental/session/' + sid + '/wait', method='POST')
                 observed = wait(lambda: {r['type'] for r in rows() if r.get('phase') == 'event'}
@@ -199,7 +204,13 @@ def main():
             result = run(args.archive, Path(temp))
         except Exception as error:
             # Never leak native session IDs, paths, model messages or provider errors.
-            result = {'status': 'unqualified', 'failureType': type(error).__name__,
+            safe_errors = {'official_archive_unverified', 'official_executable_not_unique',
+                           'official_version_probe_failed', 'official_host_exited',
+                           'native_startup_timeout', 'source_autoload_missing',
+                           'host_capabilities_mismatch', 'private_trace_limit',
+                           'native_source_events_missing', 'real_provider_turn_unproved'}
+            reason = str(error) if type(error) is RuntimeError and str(error) in safe_errors else 'unexpected'
+            result = {'status': 'unqualified', 'failureType': type(error).__name__, 'failureCode': reason,
                       'nativeObserverQualified': False, 'nativeClockQualified': False,
                       'notificationDeliveryQualified': False}
             args.report.write_text(json.dumps(result) + '\n')
