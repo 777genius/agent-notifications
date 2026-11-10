@@ -37,6 +37,20 @@ failed_logs() {
     fi
 }
 trap failed_logs EXIT
+
+# The public plain-mode bootstrap keeps underlying command output in private
+# diagnostics. Assert the exact failure there without exporting that private
+# log (which may contain host paths, identifiers or other sensitive values).
+installer_said() {
+    local profile=$1 visible=$2 expected=$3 log
+    if grep -Fq -- "$expected" "$visible"; then return 0; fi
+    [ -d "$profile/diagnostics" ] && [ ! -L "$profile/diagnostics" ] || return 1
+    for log in "$profile"/diagnostics/installer-*.log; do
+        [ -f "$log" ] && [ ! -L "$log" ] || continue
+        if grep -Fq -- "$expected" "$log"; then return 0; fi
+    done
+    return 1
+}
 "$python" - "$evidence" "$source_sha" "$repo/scripts/pi-installer-macos-e2e.sh" <<'PYHOST'
 import hashlib, json, os, platform, sys
 from pathlib import Path
@@ -80,7 +94,7 @@ missing_status=0
 run_installer "$root/missing" /usr/bin:/bin:/usr/sbin:/sbin "$evidence/public-install.sh" \
     "$evidence/public-missing-path.log" || missing_status=$?
 [ "$missing_status" -ne 0 ]
-grep -Fq 'setup-products: pi prerequisite unavailable: not found in selected PATH' "$evidence/public-missing-path.log"
+installer_said "$root/missing" "$evidence/public-missing-path.log" 'setup-products: pi prerequisite unavailable: not found in selected PATH'
 printf '%s\n' "$missing_status" > "$evidence/public-missing-path.exit"
 
 # Retain the original released installation regression separately from candidate
@@ -92,11 +106,11 @@ printf '%s\n' "$public_status" > "$evidence/public-real-pi.exit"
 if [ "$public_status" -eq 0 ]; then
     public_outcome=completed
 else
-    grep -Fq 'concurrent_change' "$evidence/public-real-pi.log"
+    installer_said "$root/public" "$evidence/public-real-pi.log" 'concurrent_change'
     public_outcome=failed_concurrent_change
 fi
 printf '%s\n' "$public_outcome" > "$evidence/public-real-pi.outcome"
-if grep -Fq 'pi prerequisite unavailable' "$evidence/public-real-pi.log"; then exit 1; fi
+if installer_said "$root/public" "$evidence/public-real-pi.log" 'pi prerequisite unavailable'; then exit 1; fi
 
 # LaunchServices is system-wide: a successful public baseline leaves a real
 # callback reader that can take precedence over the *separately installed*
