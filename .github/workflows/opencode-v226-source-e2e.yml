@@ -66,7 +66,8 @@ jobs:
           if-no-files-found: error
           retention-days: 1
       - name: Package the exact tracked source for offline native analysis
-        if: steps.official.outcome == 'success'
+        id: package
+        if: !cancelled() && steps.official.outcome == 'success'
         shell: bash
         env:
           EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -75,7 +76,7 @@ jobs:
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
           git archive --format=tar.gz -o "$RUNNER_TEMP/agent-notifications-source.tar.gz" HEAD
       - name: Upload public source snapshot (non-release)
-        if: steps.official.outcome == 'success'
+        if: !cancelled() && steps.package.outcome == 'success'
         uses: actions/upload-artifact@v7
         with:
           name: an-v226-source-${{ github.event.pull_request.head.sha || github.sha }}
@@ -83,13 +84,15 @@ jobs:
           if-no-files-found: error
           retention-days: 1
       - name: Prepare pinned Go compiler for disposable test binary
-        if: steps.official.outcome == 'success'
+        id: go
+        if: !cancelled() && steps.official.outcome == 'success'
         uses: actions/setup-go@v7
         with:
           go-version: '1.26.10'
           cache: false
       - name: Build exact-source unreleased Linux receiver
-        if: steps.official.outcome == 'success'
+        id: build
+        if: !cancelled() && steps.go.outcome == 'success'
         shell: bash
         env:
           EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -104,7 +107,7 @@ jobs:
           go version -m "$RUNNER_TEMP/an-qualification-unreleased" | grep -F "vcs.revision=$EXPECTED_HEAD"
           go version -m "$RUNNER_TEMP/an-qualification-unreleased" | grep -F "vcs.modified=false"
       - name: Upload unreleased native test candidate (no qualification grant)
-        if: steps.official.outcome == 'success'
+        if: !cancelled() && steps.build.outcome == 'success'
         uses: actions/upload-artifact@v7
         with:
           name: an-v226-unreleased-native-${{ github.event.pull_request.head.sha || github.sha }}
@@ -112,6 +115,7 @@ jobs:
           if-no-files-found: error
           retention-days: 1
       - name: Verify installed managed V2 refusal (never grant delivery)
+        if: !cancelled() && steps.build.outcome == 'success'
         shell: bash
         run: |
           set -euo pipefail
@@ -128,6 +132,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
       - name: Observe stock OpenCode 2.2.6 Bun/Go clock E0 without qualification grants
+        if: !cancelled() && steps.build.outcome == 'success'
         shell: bash
         run: |
           set -euo pipefail
@@ -142,7 +147,7 @@ jobs:
           module.official_binary(root/'opencode-linux-x64-2.2.6.tar.gz',
                                  root/'TEST-opencode-v226-clock'/'opencode')
           PY
-          env -i BUN_BE_BUN=1 PATH="$PATH" HOME="$RUNNER_TEMP/TEST-opencode-v226-clock" \
+          env -i BUN_BE_BUN=1 PATH="/usr/bin:/bin" HOME="$RUNNER_TEMP/TEST-opencode-v226-clock" \
             "$RUNNER_TEMP/TEST-opencode-v226-clock/opencode" \
             "$GITHUB_WORKSPACE/scripts/opencode-v226-clock-e0.mjs" \
             "$RUNNER_TEMP/an-qualification-unreleased" \
