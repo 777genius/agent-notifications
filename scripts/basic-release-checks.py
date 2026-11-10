@@ -140,6 +140,7 @@ def recovered_merged_pull(repository, source, run):
 
 
 def authentic_candidate_pull(repository, source, run, allow_target=False):
+    """Authenticate a same-repository candidate PR and its ancestor base."""
     # The candidate's PR must have run against a base already contained in C.
     # Otherwise GitHub executes a synthetic merge containing unreviewed base
     # workflow code, which can manufacture its own "native receipt" artifact.
@@ -313,6 +314,7 @@ def superseded_conditional(check, latest, runs, selected, repository, source, ol
 
 
 def superseded_successful_retry(older, latest, runs, repository, source, job_cache):
+    """Prove a successful run supersedes an older failed check in the same workflow."""
     # A green same-named check cannot retire a failure from another workflow,
     # an unfinished job, or an action_required/stale/startup_failure result.
     if (older['status'] != 'completed' or older['conclusion'] not in ('failure', 'cancelled', 'timed_out')
