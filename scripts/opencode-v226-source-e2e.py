@@ -45,6 +45,8 @@ export default {id:'test-oc226-source',async setup(ctx){
    write({phase:'event',type:entry.type,sessionID:e.sessionID??e.form?.sessionID,hasData:typeof e==='object'&&e!==null,
     hasSequence:Number.isSafeInteger(entry.durable?.seq),
     hasTime:Number.isSafeInteger(entry.created)&&entry.created>0,
+    // Private trace only, never included in exported CI results.
+    createdMs:Number.isSafeInteger(entry.created)&&entry.created>0?entry.created:null,
     toolBinding:entry.type==='form.created'?typeof e.form?.metadata?.tool?.messageID==='string'&&typeof e.form?.metadata?.tool?.id==='string':
       entry.type==='permission.asked'?e.source?.type==='tool'&&typeof e.source.messageID==='string'&&typeof e.source.id==='string':undefined,
     userInbox:e.item?.type==='user'});
@@ -213,6 +215,7 @@ def run(archive, root, receiver=None):
                                 'permissionList', 'rpcRegister')
                 if loaded.get('version') != '2.2.6' or any(loaded.get(k) is not True for k in capabilities):
                     raise RuntimeError('host_capabilities_mismatch')
+                source_wall_start_ms = int(time.time() * 1000)
                 session = request('/api/session', {'title': 'TEST-source-2.2.6',
                                      'location': {'directory': str(paths['project'])}})
                 sid = session['data']['id']
@@ -222,6 +225,7 @@ def run(archive, root, receiver=None):
                 observed = wait(lambda: {r['type'] for r in rows() if r.get('phase') == 'event'}
                                 if any(r.get('phase') == 'event' and r.get('type') == 'session.execution.succeeded' and r.get('sessionID') == sid
                                        for r in rows()) else None, 35, 'native_source_events_missing')
+                source_wall_end_ms = int(time.time() * 1000)
                 print('source-stage: provider-request='+str(bool(provider.bodies)).lower()+
                       ',execution-start='+str('session.execution.started' in observed).lower(), flush=True)
                 if not provider.bodies:
@@ -236,6 +240,16 @@ def run(archive, root, receiver=None):
                         r.get('type') == 'session.inbox.enqueued' and r.get('sessionID') == sid and
                         r.get('userInbox') for r in rows()):
                     raise RuntimeError('native_source_envelope_unverified')
+                # Observation only: native event creation should fall within the
+                # independent runner wall-time window of this genuine turn.
+                # This coarse check is NOT a Bun 1.4.4 clock accuracy proof.
+                source_rows = (r for r in rows() if r.get('phase') == 'event' and
+                               r.get('sessionID') == sid and r.get('type') in terminal and
+                               r.get('hasSequence') and r.get('hasTime'))
+                if any(not isinstance(r.get('createdMs'), int) or
+                       not source_wall_start_ms - 5000 <= r['createdMs'] <= source_wall_end_ms + 5000
+                       for r in source_rows):
+                    raise RuntimeError('native_source_epoch_unverified')
                 projection = wait(lambda: next((r for r in rows() if r.get('phase') == 'projection' and
                                     r.get('sessionID') == sid), None), 20, 'native_session_projection_missing')
                 if not all(projection.get(k) is True for k in
@@ -324,6 +338,7 @@ def run(archive, root, receiver=None):
                         'officialBinarySHA256': binary_sha,
                         'realNativeProviderTurn': True, 'sourceSubscriberLoaded': True,
                         'sourceEnvelopeShapeObserved': True,
+                        'sourceEpochPlausibilityObserved': True,
                         'nativeSessionProjectionObserved': True,
                         'sourceQuestionObserved': True, 'sourcePermissionObserved': True,
                         'sourceTerminalErrorObserved': True, 'attentionEventsAreEphemeral': True,
@@ -364,7 +379,7 @@ def main():
                            'native_startup_timeout', 'source_autoload_missing',
                            'host_capabilities_mismatch', 'private_trace_limit',
                            'native_source_events_missing', 'local_provider_unused', 'native_execution_start_unseen',
-                           'native_source_envelope_unverified', 'managed_install_unverified',
+                           'native_source_envelope_unverified', 'native_source_epoch_unverified', 'managed_install_unverified',
                            'private_host_log_limit', 'single_denial_diagnostic_missing',
                            'denied_host_delivered_webhook', 'source_native_question_missing',
                            'source_native_question_unverified', 'source_question_reply_unseen',
