@@ -203,7 +203,8 @@ def run(archive, root, receiver=None):
                         raise RuntimeError('official_host_exited')
                     try:
                         return request('/api/location')
-                    except (urllib.error.URLError, TimeoutError):
+                    except OSError:
+                        # Includes urllib errors, timeouts, and raw socket resets.
                         return None
 
                 wait(ready, 70, 'native_startup_timeout')
