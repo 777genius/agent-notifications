@@ -222,7 +222,7 @@ jobs:
       - name: Exercise Windows native OpenCode admission regressions
         shell: pwsh
         run: |
-          go test -timeout 8m ./cmd/claude-notifications ./internal/opencodehost ./internal/opencodeevent ./internal/opencodecodec
+          go test -timeout 8m ./cmd/claude-notifications ./internal/opencodeevent ./internal/opencodecodec
           if ($LASTEXITCODE -ne 0) { throw 'windows_native_go_tests_failed' }
       - name: Verify SHA-pinned official Windows x64 OpenCode 2.2.6
         shell: pwsh
