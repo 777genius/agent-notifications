@@ -9,7 +9,7 @@ const expectedImage = '50503d24577fa4117a7c95ee85b2cd679606a87eacf20ca54ed5db5c9
 const grants = { nativeObserverQualified: false, nativeClockQualified: false, notificationDeliveryQualified: false };
 const allowed = new Set(['wrong_platform', 'wrong_bun', 'invalid_helper', 'host_image_mismatch',
   'clock_unavailable', 'clock_sample_invalid', 'go_clock_unavailable', 'clock_tuple_mismatch',
-  'clock_containment_unverified', 'clock_disposal_failed']);
+  'clock_containment_unverified', 'clock_disposal_failed', 'clock_stress_nonmonotonic']);
 function requireTrue(ok, code) { if (!ok) throw new Error(code); }
 const decimal = x => {
   requireTrue(typeof x === 'string' && /^(0|[1-9][0-9]{0,18})$/.test(x), 'clock_sample_invalid');
@@ -42,7 +42,9 @@ async function main() {
   let maxSpan = 0n;
   try {
     clock = await createPlatformClock();
-    for (let trial=0; trial<3; trial++) {
+    // Multiple official-Bun/Go comparisons, including scheduling pressure.
+    // This is still E0 observation, never a reviewed Q/R/T policy.
+    for (let trial=0; trial<12; trial++) {
       const before = readSource(clock);
       const run = spawnSync(helper, ['opencode-clock','--protocol','1'],
         { timeout: 2000, maxBuffer: 1024, env: {PATH:'/usr/bin:/bin'} });
@@ -66,13 +68,22 @@ async function main() {
         'clock_containment_unverified');
       if (span > maxSpan) maxSpan = span;
     }
+    // Probe counter/wall monotonicity across an actual timer delay; do not
+    // infer a source-event Q bound or a clock trust grant from this pause.
+    const pauseBefore = readSource(clock);
+    await new Promise(resolve => setTimeout(resolve, 75));
+    const pauseAfter = readSource(clock);
+    requireTrue(pauseAfter.boot === pauseBefore.boot && pauseAfter.domain === pauseBefore.domain &&
+      pauseAfter.loNS >= pauseBefore.loNS && pauseAfter.wallNS >= pauseBefore.wallNS,
+      'clock_stress_nonmonotonic');
     clock.dispose();
     let refused = false;
     try { clock.sample(); } catch { refused = true; }
     requireTrue(refused, 'clock_disposal_failed');
     requireTrue(await digest(process.execPath) === expectedImage, 'host_image_mismatch');
     return { status:'observed_e0_only', stockHostVersion:'2.2.6', stockBunVersion:'1.4.4',
-      originalGoClockComparisonRounds:3, maxCounterSpanNS:String(maxSpan), disposalRefused:true, ...grants };
+      originalGoClockComparisonRounds:12, delayedCounterAndWallNonregressionObserved:true,
+      maxCounterSpanNS:String(maxSpan), disposalRefused:true, ...grants };
   } finally { try { clock?.dispose(); } catch {} }
 }
 try {
