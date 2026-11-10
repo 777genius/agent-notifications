@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - Separate native Codex and Claude session title readers ([#638](https://github.com/777genius/agent-notifications/pull/638)).
-- Improve Pi macOS installer diagnostics and isolate Windows Pi cache tests ([#644](https://github.com/777genius/agent-notifications/pull/644), [#569](https://github.com/777genius/agent-notifications/pull/569)).
+- Improve Pi macOS installer E2E diagnostic checks and isolate Windows Pi cache tests ([#644](https://github.com/777genius/agent-notifications/pull/644), [#569](https://github.com/777genius/agent-notifications/pull/569)).
 - Harden fork pull request routing for Pi macOS E2E ([#579](https://github.com/777genius/agent-notifications/pull/579)).
 
 ## [1.51.3] - 2026-11-07
