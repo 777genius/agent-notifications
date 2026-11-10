@@ -154,7 +154,6 @@ func TestPlatformImagesCannotBindCopiedReader(t *testing.T) {
 	}
 }
 
-
 func TestObserved226StillNeedsNativeReader(t *testing.T) {
 	for _, image := range []struct{ goos, goarch, sha string }{
 		{"linux", "amd64", "50503d24577fa4117a7c95ee85b2cd679606a87eacf20ca54ed5db5c9e1cf895"},
