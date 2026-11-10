@@ -139,14 +139,18 @@ def recovered_merged_pull(repository, source, run):
     return pr
 
 
-def authentic_candidate_pull(repository, source, run):
+def authentic_candidate_pull(repository, source, run, allow_target=False):
+    """Authenticate a same-repository candidate PR and its ancestor base."""
     # The candidate's PR must have run against a base already contained in C.
     # Otherwise GitHub executes a synthetic merge containing unreviewed base
     # workflow code, which can manufacture its own "native receipt" artifact.
     pulls = run.get('pull_requests')
-    if run.get('event') != 'pull_request' or not isinstance(pulls, list):
+    events = ('pull_request', 'pull_request_target') if allow_target else ('pull_request',)
+    if run.get('event') not in events or not isinstance(pulls, list):
         return False
     if not pulls:
+        if run.get('event') != 'pull_request':
+            return False
         pr = recovered_merged_pull(repository, source, run)
         if pr is None:
             return False
@@ -310,6 +314,7 @@ def superseded_conditional(check, latest, runs, selected, repository, source, ol
 
 
 def superseded_successful_retry(older, latest, runs, repository, source, job_cache):
+    """Prove a successful run supersedes an older failed check in the same workflow."""
     # A green same-named check cannot retire a failure from another workflow,
     # an unfinished job, or an action_required/stale/startup_failure result.
     if (older['status'] != 'completed' or older['conclusion'] not in ('failure', 'cancelled', 'timed_out')
@@ -324,7 +329,12 @@ def superseded_successful_retry(older, latest, runs, repository, source, job_cac
     # a prior failed PR attempt. Never use a PR retry to overrule an existing
     # main-push authority for this workflow and source.
     main_retry = replacement.get('event') == 'push' and replacement.get('head_branch') == 'main'
-    pre_main_retry = (authentic_candidate_pull(repository, source, replacement)
+    target_retry = (origin.get('event') == replacement.get('event') == 'pull_request_target'
+                    and authentic_candidate_pull(repository, source, origin, allow_target=True)
+                    and len(origin['pull_requests']) == len(replacement.get('pull_requests') or []) == 1
+                    and origin['pull_requests'][0].get('number') == replacement['pull_requests'][0].get('number'))
+    pre_main_retry = ((target_retry or replacement.get('event') == 'pull_request')
+                      and authentic_candidate_pull(repository, source, replacement, allow_target=target_retry)
                       and not any(run.get('path') == replacement.get('path')
                                   and run.get('head_sha') == source and run.get('event') == 'push'
                                   and run.get('head_branch') == 'main'
@@ -336,7 +346,8 @@ def superseded_successful_retry(older, latest, runs, repository, source, job_cac
             or origin.get('head_sha') != source or replacement.get('head_sha') != source
             or (origin.get('head_repository') or {}).get('full_name') != repository
             or (replacement.get('head_repository') or {}).get('full_name') != repository
-            or origin.get('event') not in ('push', 'pull_request')
+            or origin.get('event') not in ('push', 'pull_request', 'pull_request_target')
+            or (origin.get('event') == 'pull_request_target' and not target_retry)
             or not (main_retry or pre_main_retry)
             or origin.get('status') != 'completed'
             or replacement.get('status') != 'completed' or replacement.get('conclusion') != 'success'
