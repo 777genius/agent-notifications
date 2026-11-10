@@ -29,9 +29,13 @@ OFFICIAL_ARCHIVE_HASHES = {
 }
 OFFICIAL_TAG_SHA = "dc2ffcf8bf26f9e669b6aa22b95f50e12be15e06"
 TRACE_PLUGIN = r'''import {appendFileSync} from 'node:fs';
+import {createNativeV2} from '../test-support/native-v2.mjs';
 import {spawnSync} from 'node:child_process';
 const write=value=>appendFileSync(process.env.AN_TEST_TRACE,JSON.stringify(value)+'\n');
 export default {id:'test-oc226-source',async setup(ctx){
+ let view;
+ try{ view=createNativeV2(ctx,ctx.location,()=>{},()=>{write({phase:'native-uncertain'});}); }
+ catch{ write({phase:'native-constructor-denied'}); }
  write({phase:'loaded',version:ctx.app?.version,
    subscribe:typeof ctx.event?.subscribe==='function',
    sessionGet:typeof ctx.session?.get==='function',
@@ -43,6 +47,13 @@ export default {id:'test-oc226-source',async setup(ctx){
  void(async()=>{try{for await(const entry of ctx.event.subscribe({signal:controller.signal})){
    if(!entry||typeof entry.type!=='string')continue;
    const e=entry.data??entry.properties??{};
+   try{
+     const mapped=view?.native.correlate(entry);
+     if(mapped?.sessionID)write({phase:'native-projection',type:entry.type,sessionID:mapped.sessionID,
+       observedSequence:Number.isSafeInteger(mapped.sequence?.seq),
+       nativeScope:typeof mapped.location==='string',
+       nativeEventKey:typeof entry.id==='string'});
+   }catch{write({phase:'native-projection-denied',type:entry.type});}
    // Private receive-side samples only; shared process/clock cannot grant Q.
    const receivedWallMs=Date.now(), receivedMonoNS=process.hrtime.bigint().toString();
    // An independent Go wall/boot sample is requested only in the isolated
@@ -140,6 +151,9 @@ def run(archive, root, receiver=None):
     subprocess.run(['git', 'init', '-q', str(paths['project'])], check=True, timeout=10)
     plugins = paths['config'] / 'plugins'
     plugins.mkdir(mode=0o700)
+    test_support = paths['config'] / 'test-support'
+    test_support.mkdir(mode=0o700)
+    (test_support / 'native-v2.mjs').write_bytes((Path(__file__).resolve().parent.parent / 'opencode-plugin/native-v2.mjs').read_bytes())
     (plugins / 'test-oc226-source.js').write_text(TRACE_PLUGIN, encoding='utf-8')
     trace = root / 'native-events.private.jsonl'
     env = {'PATH': os.environ.get('PATH', '/usr/bin:/bin'), 'HOME': str(paths['home']),
@@ -290,6 +304,14 @@ def run(archive, root, receiver=None):
                        not re.fullmatch(r'[1-9][0-9]*', r['receivedMonoNS'])
                        for r in source_rows):
                     raise RuntimeError('source_receiver_sample_invalid')
+                # Source-only R0: execute the actual production native-v2 correlator
+                # against the genuine host stream, without granting admission.
+                native_snapshot = rows()
+                native_rows = [r for r in native_snapshot if r.get('phase') == 'native-projection' and r.get('sessionID') == sid]
+                if any(r.get('phase') in ('native-uncertain', 'native-constructor-denied') for r in native_snapshot) or not all(
+                    any(r.get('type') == kind and r.get('observedSequence') for r in native_rows)
+                    for kind in terminal):
+                    raise RuntimeError('native_reader_projection_unverified')
                 receipt_ticks = [int(r['receivedMonoNS']) for r in source_rows]
                 if any(b < a for a, b in zip(receipt_ticks, receipt_ticks[1:])):
                     raise RuntimeError('source_receiver_counter_nonmonotonic')
@@ -401,6 +423,8 @@ def run(archive, root, receiver=None):
                         'sourceEnvelopeShapeObserved': True,
                         'sourceEpochPlausibilityObserved': True,
                         'sameProcessReceiverQ0Observed': True,
+                        'productionNativeV2CorrelationR0Observed': True,
+                        'nativeV2R0SampleCount': len(native_rows),
                         'sourceToReceiverLagMinMS': min(receiver_lags),
                         'sourceToReceiverLagMaxMS': max(receiver_lags),
                         'sourceToReceiverSampleCount': len(receiver_lags),
@@ -456,7 +480,8 @@ def main():
                            'native_session_projection_missing', 'native_session_projection_unverified',
                            'source_receiver_sample_invalid', 'source_receiver_counter_nonmonotonic',
                            'source_go_clock_sample_unavailable', 'source_go_clock_sample_invalid',
-                           'source_go_clock_epoch_unverified'}
+                           'source_go_clock_epoch_unverified',
+                           'native_reader_projection_unverified'}
             reason = str(error) if type(error) is RuntimeError and str(error) in safe_errors else 'unexpected'
             result = {'status': 'unqualified', 'failureType': type(error).__name__, 'failureCode': reason,
                       'nativeObserverQualified': False, 'nativeClockQualified': False,
