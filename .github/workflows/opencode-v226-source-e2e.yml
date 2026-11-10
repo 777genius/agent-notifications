@@ -201,6 +201,70 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+
+  windows-x64-official-image:
+    name: windows-x64-official-image-observation
+    # Normal Windows CI may skip native jobs on OpenCode-only changes.
+    # This checks genuine official bytes but never authorizes notifications.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - name: Check out exact PR candidate
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Set up Go from module
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Exercise Windows native OpenCode admission regressions
+        shell: pwsh
+        run: |
+          go test -timeout 8m ./cmd/claude-notifications ./internal/opencodehost ./internal/opencodeevent ./internal/opencodecodec
+          if ($LASTEXITCODE -ne 0) { throw 'windows_native_go_tests_failed' }
+      - name: Verify SHA-pinned official Windows x64 OpenCode 2.2.6
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $archive = Join-Path $env:RUNNER_TEMP 'opencode-windows-x64-2.2.6.zip'
+          $unpacked = Join-Path $env:RUNNER_TEMP 'opencode-windows-x64-2.2.6'
+          $report = Join-Path $env:RUNNER_TEMP 'opencode-v226-windows-safe.json'
+          Invoke-WebRequest -Uri 'https://github.com/anomalyco/opencode/releases/download/v2.2.6/opencode-windows-x64.zip' -OutFile $archive
+          $expected = 'f75c16b33b8523fe1ff41e7d97e3ae654a47d59a0e327def24db2d9291bb24be'
+          if ((Get-Item -LiteralPath $archive).Length -gt 160000000 -or
+              (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant() -cne $expected) {
+            throw 'official_windows_archive_unverified'
+          }
+          Expand-Archive -LiteralPath $archive -DestinationPath $unpacked
+          $executables = @(Get-ChildItem -LiteralPath $unpacked -Recurse -File -Filter 'opencode.exe')
+          if ($executables.Count -ne 1) { throw 'official_windows_executable_not_unique' }
+          $versionOutput = & $executables[0].FullName --version 2>&1
+          if ($LASTEXITCODE -ne 0 -or (($versionOutput | Out-String) -notmatch '(?<![0-9])2\.2\.6(?![0-9])')) {
+            throw 'official_windows_host_version_unverified'
+          }
+          $evidence = [ordered]@{
+            status = 'observed_official_windows_image_only'
+            platform = 'windows'
+            architecture = 'amd64'
+            hostVersion = '2.2.6'
+            officialArchiveSHA256 = $expected
+            officialBinarySHA256 = (Get-FileHash -LiteralPath $executables[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            nativeObserverQualified = $false
+            nativeClockQualified = $false
+            notificationDeliveryQualified = $false
+          }
+          [System.IO.File]::WriteAllText($report, ($evidence | ConvertTo-Json -Compress) + [Environment]::NewLine)
+      - name: Upload public-image-only receipt without private logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: opencode-v226-windows-image-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/opencode-v226-windows-safe.json
+          if-no-files-found: warn
+          retention-days: 14
+
   darwin-arm64-image:
     name: darwin-arm64-native (${{ matrix.os }})
     # Image/Bun discovery only, no native clock admission or notifications.
