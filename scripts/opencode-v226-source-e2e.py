@@ -102,7 +102,6 @@ def run(archive, root):
            'OPENCODE_DISABLE_AUTOUPDATE': 'true',
            'OPENCODE_DISABLE_DEFAULT_PLUGINS': 'true',
            'OPENCODE_DISABLE_MODELS_FETCH': 'true',
-           'OPENCODE_DISABLE_PROJECT_CONFIG': 'true',
            'OPENCODE_DISABLE_SHARE': 'true',
            'OPENCODE_PASSWORD': 'test-only', 'OPENCODE_SERVER_PASSWORD': 'test-only'}
     version = subprocess.run([str(binary), '--version'], cwd=paths['project'], env=env,
@@ -174,8 +173,12 @@ def run(archive, root):
                 observed = wait(lambda: {r['type'] for r in rows() if r.get('phase') == 'event'}
                                 if any(r.get('phase') == 'event' and r.get('type') == 'session.execution.succeeded'
                                        for r in rows()) else None, 35, 'native_source_events_missing')
-                if not provider.bodies or 'session.execution.started' not in observed:
-                    raise RuntimeError('real_provider_turn_unproved')
+                print('source-stage: provider-request='+str(bool(provider.bodies)).lower()+
+                      ',execution-start='+str('session.execution.started' in observed).lower(), flush=True)
+                if not provider.bodies:
+                    raise RuntimeError('local_provider_unused')
+                if 'session.execution.started' not in observed:
+                    raise RuntimeError('native_execution_start_unseen')
                 return {'status': 'passed_source_only', 'version': '2.2.6',
                         'upstreamTagCommit': OFFICIAL_TAG_SHA,
                         'officialArchiveSHA256': OFFICIAL_ARCHIVE_SHA256,
@@ -211,7 +214,7 @@ def main():
                            'official_version_command_failed', 'official_version_format_unexpected', 'official_host_exited',
                            'native_startup_timeout', 'source_autoload_missing',
                            'host_capabilities_mismatch', 'private_trace_limit',
-                           'native_source_events_missing', 'real_provider_turn_unproved'}
+                           'native_source_events_missing', 'local_provider_unused', 'native_execution_start_unseen'}
             reason = str(error) if type(error) is RuntimeError and str(error) in safe_errors else 'unexpected'
             result = {'status': 'unqualified', 'failureType': type(error).__name__, 'failureCode': reason,
                       'nativeObserverQualified': False, 'nativeClockQualified': False,
