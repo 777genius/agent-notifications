@@ -75,7 +75,7 @@ def official_binary(archive, target):
     return digest(target)
 
 
-def run(archive, root):
+def run(archive, root, receiver=None):
     spec = importlib.util.spec_from_file_location('existing_native_provider',
         Path(__file__).resolve().parent / 'opencode-semantic-e2e.py')
     native = importlib.util.module_from_spec(spec)
@@ -114,12 +114,33 @@ def run(archive, root):
     provider = native.Endpoint()
     provider.version = '2.2.6'
     threading.Thread(target=provider.serve_forever, daemon=True).start()
+    webhook = native.Endpoint(webhook=True) if receiver is not None else None
+    if webhook is not None:
+        threading.Thread(target=webhook.serve_forever, daemon=True).start()
     try:
         settings = {'baseURL': f'http://127.0.0.1:{provider.server_port}/v1', 'apiKey': 'test-only'}
         config = {'model': 'test/test', 'providers': {'test': {
             'package': '@opencode/ai/providers/openai-compatible', 'settings': settings,
             'models': {'test': {'name': 'TEST model', 'limit': {'context': 32000, 'output': 1024}}}}}}
         (paths['project'] / 'opencode.json').write_text(json.dumps(config), encoding='utf-8')
+        if receiver is not None:
+            receiver = receiver.resolve(strict=True)
+            env['AGENT_NOTIFICATIONS_CONFIG'] = str(root / 'notifications.json')
+            (root / 'notifications.json').write_text(json.dumps({'notifications': {
+                'desktop': {'enabled': False},
+                'webhook': {'enabled': True, 'preset': 'custom', 'format': 'json',
+                            'url': f'http://127.0.0.1:{webhook.server_port}/webhook'}}}), encoding='utf-8')
+            command = [str(receiver), 'setup-opencode', 'install',
+                       '--control-root', str(root / 'control'),
+                       '--runtime-root', str(root / 'native-runtime'),
+                       '--opencode-config-dir', str(paths['config']),
+                       '--home', str(paths['home']),
+                       '--xdg-config-home', str(paths['config']),
+                       '--binary', str(receiver), '--webhook']
+            result = subprocess.run(command, cwd=paths['project'], env=env,
+                                    capture_output=True, text=True, timeout=60)
+            if result.returncode or not (plugins / 'agent-notifications.js').is_file():
+                raise RuntimeError('managed_install_unverified')
         with socket.socket() as listener:
             listener.bind(('127.0.0.1', 0))
             port = listener.getsockname()[1]
@@ -185,12 +206,23 @@ def run(archive, root):
                 if not all(any(r.get('type') == kind and r.get('hasSequence') and r.get('hasTime')
                                for r in rows()) for kind in terminal):
                     raise RuntimeError('native_source_envelope_unverified')
-                return {'status': 'passed_source_only', 'version': '2.2.6',
+                if webhook is not None:
+                    log_file = root / 'host.private.log'
+                    if log_file.stat().st_size > 512 * 1024:
+                        raise RuntimeError('private_host_log_limit')
+                    host_log = log_file.read_bytes().decode('utf-8', errors='replace')
+                    if host_log.count('notifications disabled (host runtime not qualified)') != 1:
+                        raise RuntimeError('single_denial_diagnostic_missing')
+                    time.sleep(.5)  # bounded post-terminal guard against delayed callbacks
+                    if webhook.bodies:
+                        raise RuntimeError('denied_host_delivered_webhook')
+                return {'status': 'passed_denied_only' if webhook else 'passed_source_only', 'version': '2.2.6',
                         'upstreamTagCommit': OFFICIAL_TAG_SHA,
                         'officialArchiveSHA256': OFFICIAL_ARCHIVE_SHA256,
                         'officialBinarySHA256': binary_sha,
                         'realNativeProviderTurn': True, 'sourceSubscriberLoaded': True,
                         'sourceEnvelopeShapeObserved': True,
+                        'installedDeniedStartup': webhook is not None,
                         'observedEventTypes': sorted(observed),
                         'nativeObserverQualified': False, 'nativeClockQualified': False,
                         'notificationDeliveryQualified': False}
@@ -205,16 +237,21 @@ def run(archive, root):
     finally:
         provider.shutdown()
         provider.server_close()
+        if webhook is not None:
+            webhook.shutdown()
+            webhook.server_close()
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--archive', type=Path, required=True)
     parser.add_argument('--report', type=Path, required=True)
+    parser.add_argument('--receiver', type=Path,
+                        help='Exact-source unreleased AN candidate; prove fail-closed denial only')
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix='TEST-opencode-v226-', dir=os.environ.get('RUNNER_TEMP')) as temp:
         try:
-            result = run(args.archive, Path(temp))
+            result = run(args.archive, Path(temp), args.receiver)
         except Exception as error:
             # Never leak native session IDs, paths, model messages or provider errors.
             safe_errors = {'official_archive_unverified', 'official_executable_not_unique',
@@ -222,7 +259,9 @@ def main():
                            'native_startup_timeout', 'source_autoload_missing',
                            'host_capabilities_mismatch', 'private_trace_limit',
                            'native_source_events_missing', 'local_provider_unused', 'native_execution_start_unseen',
-                           'native_source_envelope_unverified'}
+                           'native_source_envelope_unverified', 'managed_install_unverified',
+                           'private_host_log_limit', 'single_denial_diagnostic_missing',
+                           'denied_host_delivered_webhook'}
             reason = str(error) if type(error) is RuntimeError and str(error) in safe_errors else 'unexpected'
             result = {'status': 'unqualified', 'failureType': type(error).__name__, 'failureCode': reason,
                       'nativeObserverQualified': False, 'nativeClockQualified': False,

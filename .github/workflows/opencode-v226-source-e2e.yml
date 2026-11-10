@@ -101,6 +101,22 @@ jobs:
           path: ${{ runner.temp }}/an-qualification-unreleased
           if-no-files-found: error
           retention-days: 1
+      - name: Verify installed managed V2 refusal (never grant delivery)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -B scripts/opencode-v226-source-e2e.py \
+            --archive "$RUNNER_TEMP/opencode-linux-x64-2.2.6.tar.gz" \
+            --receiver "$RUNNER_TEMP/an-qualification-unreleased" \
+            --report "$RUNNER_TEMP/opencode-v226-denied-safe.json"
+      - name: Upload only sanitized installed-denial evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: opencode-v226-denied-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/opencode-v226-denied-safe.json
+          if-no-files-found: warn
+          retention-days: 14
       - name: Upload closed source-only result
         if: always()
         uses: actions/upload-artifact@v7
