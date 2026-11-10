@@ -37,11 +37,13 @@ export default {id:'test-oc226-source',async setup(ctx){
  const nativeSessions=new Map();
  try{ view=createNativeV2(ctx,ctx.location,()=>{},()=>{write({phase:'native-uncertain'});}); }
  catch{ write({phase:'native-constructor-denied'}); }
- // TEST-only adversarial +12s wall-clock modification in the official process.
- // No production module is changed and no notification grant can be created.
- const clockSkewTest=process.env.AN_TEST_CLOCK_SKEW==='12000';
- if(clockSkewTest){const sourceNow=Date.now.bind(Date);Date.now=()=>sourceNow()+12000;}
- write({phase:'loaded',version:ctx.app?.version,clockSkewTest,
+ // Test-only clock perturbation. Keep an unmodified receiver wall witness
+ // before skewing Date.now; neither witness nor observer authorizes delivery.
+ const baselineNow=Date.now.bind(Date);
+ const skew=process.env.AN_TEST_CLOCK_SKEW;
+ const clockSkewMS=skew==='12000'||skew==='-12000'?Number(skew):0;
+ if(clockSkewMS)Date.now=()=>baselineNow()+clockSkewMS;
+ write({phase:'loaded',version:ctx.app?.version,clockSkewMS,
    subscribe:typeof ctx.event?.subscribe==='function',
    sessionGet:typeof ctx.session?.get==='function',
    sessionContext:typeof ctx.session?.context==='function',
@@ -69,7 +71,7 @@ export default {id:'test-oc226-source',async setup(ctx){
        nativeEventKey:typeof entry.id==='string'});
    }catch{write({phase:'native-projection-denied',type:entry.type});}
    // Private receive-side samples only; shared process/clock cannot grant Q.
-   const receivedWallMs=Date.now(), receivedMonoNS=process.hrtime.bigint().toString();
+   const receivedWallMs=baselineNow(), receivedMonoNS=process.hrtime.bigint().toString();
    // An independent Go wall/boot sample is requested only in the isolated
    // installed-denial TEST. This is cross-process T0 observation, not trust.
    let goClock;
@@ -188,7 +190,7 @@ def official_binary(archive, target):
     target.chmod(0o700)
     return digest(target)
 
-def run(archive, root, receiver=None, clock_skew_negative=False):
+def run(archive, root, receiver=None, clock_skew_ms=0):
     spec = importlib.util.spec_from_file_location('existing_native_provider',
         Path(__file__).resolve().parent / 'opencode-semantic-e2e.py')
     native = importlib.util.module_from_spec(spec)
@@ -215,7 +217,7 @@ def run(archive, root, receiver=None, clock_skew_negative=False):
            'XDG_STATE_HOME': str(paths['state']), 'XDG_RUNTIME_DIR': str(paths['runtime']),
            'BUN_INSTALL_CACHE_DIR': str(paths['bun']), 'TMPDIR': str(paths['temp']),
            'OPENCODE_CONFIG_DIR': str(paths['config']), 'AN_TEST_TRACE': str(trace),
-           **({'AN_TEST_CLOCK_SKEW':'12000'} if clock_skew_negative else {}),
+           **({'AN_TEST_CLOCK_SKEW':str(clock_skew_ms)} if clock_skew_ms else {}),
            'OPENCODE_DISABLE_AUTOUPDATE': 'true',
            'OPENCODE_DISABLE_DEFAULT_PLUGINS': 'true',
            'OPENCODE_DISABLE_MODELS_FETCH': 'true',
@@ -315,7 +317,7 @@ def run(archive, root, receiver=None, clock_skew_negative=False):
                                 'permissionList', 'rpcRegister')
                 if loaded.get('version') != '2.2.6' or any(loaded.get(k) is not True for k in capabilities):
                     raise RuntimeError('host_capabilities_mismatch')
-                if loaded.get('clockSkewTest') is not clock_skew_negative:
+                if loaded.get('clockSkewMS') != clock_skew_ms:
                     raise RuntimeError('source_clock_skew_injection_missing')
                 source_wall_start_ms = int(time.time() * 1000)
                 session = request('/api/session', {'title': 'TEST-source-2.2.6',
@@ -350,19 +352,29 @@ def run(archive, root, receiver=None, clock_skew_negative=False):
                                r.get('hasSequence') and r.get('hasTime')]
                 if not source_rows or any(not isinstance(r.get('createdMs'), int) for r in source_rows):
                     raise RuntimeError('native_source_epoch_unverified')
-                if clock_skew_negative:
-                    # The independent runner wall clock rejects the original
-                    # host envelope after the deliberate 12s future shift.
-                    # Check native correlator continues to observe real events
-                    # without mistaking R0 observation for business authority.
-                    if not all(r['createdMs'] > source_wall_end_ms + 5000 for r in source_rows):
+                if clock_skew_ms:
+                    # This is an independent TEST assertion, not an OpenCode
+                    # admission decision. Baseline wall was captured before the
+                    # test plugin changes Date.now, and is checked against the
+                    # separate runner clock to prevent a same-process false pass.
+                    if any(type(r.get('receivedWallMs')) is not int or
+                           not source_wall_start_ms - 5000 <= r['receivedWallMs'] <= source_wall_end_ms + 5000
+                           for r in source_rows):
+                        raise RuntimeError('source_receiver_sample_invalid')
+                    if clock_skew_ms > 0:
+                        skew_observed = all(r['createdMs'] > r['receivedWallMs'] + 5000 for r in source_rows)
+                    else:
+                        skew_observed = all(r['createdMs'] < r['receivedWallMs'] - 5000 for r in source_rows)
+                    if not skew_observed:
                         raise RuntimeError('source_clock_skew_not_refused')
                     negative_native = [r for r in rows() if r.get('phase') == 'native-projection' and r.get('sessionID') == sid]
                     if not all(any(r.get('type') == kind and r.get('observedSequence') for r in negative_native)
                                for kind in terminal):
                         raise RuntimeError('negative_native_reader_projection_unverified')
                     return {'status':'passed_clock_skew_negative_only','version':'2.2.6',
-                            'clockSkewTestMS':12000,'sourceFutureTimestampRejected':True,
+                            'clockSkewTestMS':clock_skew_ms,
+                            'sourceFutureTimestampRejected':clock_skew_ms > 0,
+                            'sourcePastTimestampRejected':clock_skew_ms < 0,
                             'nativeR0StillObserved':True,
                             'nativeObserverQualified':False,'nativeClockQualified':False,
                             'notificationDeliveryQualified':False}
@@ -558,14 +570,18 @@ def main():
     parser.add_argument('--report', type=Path, required=True)
     parser.add_argument('--receiver', type=Path,
                         help='Exact-source unreleased AN candidate; prove fail-closed denial only')
-    parser.add_argument('--clock-skew-negative', action='store_true',
-                        help='Isolated TEST-only +12s host wall shift; require source epoch refusal')
+    skew = parser.add_mutually_exclusive_group()
+    skew.add_argument('--clock-skew-negative', action='store_true',
+                      help='Isolated TEST-only +12s host wall shift; assert source epoch mismatch')
+    skew.add_argument('--clock-skew-past-negative', action='store_true',
+                      help='Isolated TEST-only -12s host wall shift; assert source epoch mismatch')
     args = parser.parse_args()
-    if args.clock_skew_negative and args.receiver is not None:
-        parser.error('clock-skew-negative and installed receiver are mutually exclusive')
+    if (args.clock_skew_negative or args.clock_skew_past_negative) and args.receiver is not None:
+        parser.error('clock skew tests and installed receiver are mutually exclusive')
+    skew_ms = 12000 if args.clock_skew_negative else -12000 if args.clock_skew_past_negative else 0
     with tempfile.TemporaryDirectory(prefix='TEST-opencode-v226-', dir=os.environ.get('RUNNER_TEMP')) as temp:
         try:
-            result = run(args.archive, Path(temp), args.receiver, args.clock_skew_negative)
+            result = run(args.archive, Path(temp), args.receiver, skew_ms)
         except Exception as error:
             # Never leak native session IDs, paths, model messages or provider errors.
             safe_errors = {'official_archive_unverified', 'official_executable_not_unique',
