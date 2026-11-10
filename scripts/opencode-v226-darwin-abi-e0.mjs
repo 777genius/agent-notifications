@@ -10,6 +10,7 @@ import { address, createNativeClock, darwinABI, darwinBoot, machNS, positiveNS }
 
 const officialImage = '90e4d03597b03d2051b65b4d793467764e55bacd8e22bf4824479c7233ea0e15';
 const grants = { nativeObserverQualified:false, nativeClockQualified:false, notificationDeliveryQualified:false };
+let phase = 'entry';
 const reasons = new Set(['platform_unverified','helper_unverified','image_unverified',
   'native_ffi_unavailable','native_clock_unavailable','go_clock_unavailable',
   'clock_tuple_mismatch','clock_containment_unverified','clock_disposal_unverified']);
@@ -35,11 +36,14 @@ async function main() {
   requireValue(process.platform === 'darwin' && process.arch === 'arm64' && globalThis.Bun?.version === '1.4.4', 'platform_unverified');
   const helper=process.argv[2];
   requireValue(typeof helper === 'string' && isAbsolute(helper), 'helper_unverified');
+  phase = 'held_image';
   requireValue(await sha256(process.execPath) === officialImage, 'image_unverified');
+  phase = 'ffi_load';
   let library, clock;
   try {
     try { library=dlopen('/usr/lib/libSystem.B.dylib',darwinABI); }
     catch { throw new Error('native_ffi_unavailable'); }
+    phase = 'ffi_timebase';
     const lib=library.symbols, aligned=x=>address(ptr(x),x.BYTES_PER_ELEMENT);
     const base=new Uint32Array(2);
     requireValue(lib.mach_timebase_info(aligned(base)) === 0 && base[0] > 0 && base[1] > 0, 'native_ffi_unavailable');
@@ -50,6 +54,7 @@ async function main() {
       return darwinBoot(new Uint8Array(buffer.buffer),size[0],
         lib.sysctlbyname(address(ptr(bootKey)),aligned(buffer),aligned(size),null,0n));
     }
+    phase = 'clock_boot';
     clock=createNativeClock({
       imageSHA256:officialImage,
       readBoot,
@@ -62,11 +67,15 @@ async function main() {
     }, 'darwin-kernel');
     let maxBracket=0n;
     for(let round=0;round<3;round++){
+      phase = 'clock_sample';
       const before=sample(clock);
+      phase = 'go_helper';
       const run=spawnSync(helper,['opencode-clock','--protocol','1'],{
         timeout:2000,maxBuffer:1024,env:{PATH:'/usr/bin:/bin'}});
+      phase = 'clock_sample_after';
       const after=sample(clock);
       requireValue(!run.error && run.status===0 && run.stdout?.length>0 && run.stdout.length<=1024,'go_clock_unavailable');
+      phase = 'clock_comparison';
       const raw=run.stdout.toString('utf8');
       let g;try{g=JSON.parse(raw);}catch{throw new Error('go_clock_unavailable');}
       requireValue(raw===JSON.stringify(g)+'\n' && g.protocol===1 &&
@@ -81,6 +90,7 @@ async function main() {
         before.wallNS-2000000n<=wall && wall<=after.wallNS+2000000n,'clock_containment_unverified');
       if(width>maxBracket)maxBracket=width;
     }
+    phase = 'clock_disposal';
     clock.dispose();
     let denied=false;try{clock.sample();}catch{denied=true;}
     requireValue(denied,'clock_disposal_unverified');
@@ -92,6 +102,8 @@ async function main() {
 }
 try { console.log(JSON.stringify(await main())); }
 catch(error){
-  console.log(JSON.stringify({status:'unqualified',failureCode:reasons.has(error?.message)?error.message:'unqualified',...grants}));
+  const code = reasons.has(error?.message) ? error.message :
+    error?.message === 'clock_unavailable' ? 'clock_unavailable' : 'unqualified';
+  console.log(JSON.stringify({status:'unqualified',failureCode:code+'_'+phase,...grants}));
   process.exitCode=1;
 }
