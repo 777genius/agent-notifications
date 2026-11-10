@@ -107,8 +107,10 @@ def run(archive, root):
            'OPENCODE_PASSWORD': 'test-only', 'OPENCODE_SERVER_PASSWORD': 'test-only'}
     version = subprocess.run([str(binary), '--version'], cwd=paths['project'], env=env,
                              text=True, capture_output=True, timeout=20)
-    if version.returncode or not re.fullmatch(r'(?:opencode\s+)?2\.2\.6', version.stdout.strip()):
-        raise RuntimeError('official_version_probe_failed')
+    if version.returncode:
+        raise RuntimeError('official_version_command_failed')
+    if not re.search(r'(?<![0-9])2\.2\.6(?![0-9])', version.stdout):
+        raise RuntimeError('official_version_format_unexpected')
     print('source-stage: version-verified', flush=True)
     provider = native.Endpoint()
     provider.version = '2.2.6'
@@ -205,7 +207,7 @@ def main():
         except Exception as error:
             # Never leak native session IDs, paths, model messages or provider errors.
             safe_errors = {'official_archive_unverified', 'official_executable_not_unique',
-                           'official_version_probe_failed', 'official_host_exited',
+                           'official_version_command_failed', 'official_version_format_unexpected', 'official_host_exited',
                            'native_startup_timeout', 'source_autoload_missing',
                            'host_capabilities_mismatch', 'private_trace_limit',
                            'native_source_events_missing', 'real_provider_turn_unproved'}
