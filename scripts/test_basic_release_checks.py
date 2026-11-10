@@ -722,6 +722,7 @@ class AdmissionTests(unittest.TestCase):
             self.verify()
 
     def test_target_pr_retry_requires_same_authenticated_pr_and_source(self):
+        """Reject target PR retries unless both attempts identify the same trusted PR."""
         for run in self.api.runs:
             run.update(event='pull_request', head_branch='fix/release-candidate')
         first, later = API.run(201, 'release.yml', 'cancelled'), API.run(202, 'release.yml')
