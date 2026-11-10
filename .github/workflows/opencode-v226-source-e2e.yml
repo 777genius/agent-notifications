@@ -57,6 +57,22 @@ jobs:
           python -B scripts/opencode-v226-source-e2e.py \
             --archive "$RUNNER_TEMP/opencode-linux-x64-2.2.6.tar.gz" \
             --report "$RUNNER_TEMP/opencode-v226-source-safe.json"
+      - name: Prove stock OpenCode 2.2.6 refuses +12s source wall-clock skew
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -B scripts/opencode-v226-source-e2e.py \
+            --archive "$RUNNER_TEMP/opencode-linux-x64-2.2.6.tar.gz" \
+            --clock-skew-negative \
+            --report "$RUNNER_TEMP/opencode-v226-clock-skew-safe.json"
+      - name: Upload sanitized source clock-skew negative
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: opencode-v226-clock-skew-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/opencode-v226-clock-skew-safe.json
+          if-no-files-found: warn
+          retention-days: 14
       - name: Preserve only SHA-verified public archive for offline E2E analysis
         if: always() && steps.official.outcome == 'success'
         uses: actions/upload-artifact@v7

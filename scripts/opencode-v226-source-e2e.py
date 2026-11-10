@@ -36,7 +36,11 @@ export default {id:'test-oc226-source',async setup(ctx){
  let view;
  try{ view=createNativeV2(ctx,ctx.location,()=>{},()=>{write({phase:'native-uncertain'});}); }
  catch{ write({phase:'native-constructor-denied'}); }
- write({phase:'loaded',version:ctx.app?.version,
+ // TEST-only adversarial +12s wall-clock modification in the official process.
+ // No production module is changed and no notification grant can be created.
+ const clockSkewTest=process.env.AN_TEST_CLOCK_SKEW==='12000';
+ if(clockSkewTest){const sourceNow=Date.now.bind(Date);Date.now=()=>sourceNow()+12000;}
+ write({phase:'loaded',version:ctx.app?.version,clockSkewTest,
    subscribe:typeof ctx.event?.subscribe==='function',
    sessionGet:typeof ctx.session?.get==='function',
    sessionContext:typeof ctx.session?.context==='function',
@@ -135,7 +139,7 @@ def official_binary(archive, target):
     target.chmod(0o700)
     return digest(target)
 
-def run(archive, root, receiver=None):
+def run(archive, root, receiver=None, clock_skew_negative=False):
     spec = importlib.util.spec_from_file_location('existing_native_provider',
         Path(__file__).resolve().parent / 'opencode-semantic-e2e.py')
     native = importlib.util.module_from_spec(spec)
@@ -162,6 +166,7 @@ def run(archive, root, receiver=None):
            'XDG_STATE_HOME': str(paths['state']), 'XDG_RUNTIME_DIR': str(paths['runtime']),
            'BUN_INSTALL_CACHE_DIR': str(paths['bun']), 'TMPDIR': str(paths['temp']),
            'OPENCODE_CONFIG_DIR': str(paths['config']), 'AN_TEST_TRACE': str(trace),
+           **({'AN_TEST_CLOCK_SKEW':'12000'} if clock_skew_negative else {}),
            'OPENCODE_DISABLE_AUTOUPDATE': 'true',
            'OPENCODE_DISABLE_DEFAULT_PLUGINS': 'true',
            'OPENCODE_DISABLE_MODELS_FETCH': 'true',
@@ -261,6 +266,8 @@ def run(archive, root, receiver=None):
                                 'permissionList', 'rpcRegister')
                 if loaded.get('version') != '2.2.6' or any(loaded.get(k) is not True for k in capabilities):
                     raise RuntimeError('host_capabilities_mismatch')
+                if loaded.get('clockSkewTest') is not clock_skew_negative:
+                    raise RuntimeError('source_clock_skew_injection_missing')
                 source_wall_start_ms = int(time.time() * 1000)
                 session = request('/api/session', {'title': 'TEST-source-2.2.6',
                                      'location': {'directory': str(paths['project'])}})
@@ -292,8 +299,25 @@ def run(archive, root, receiver=None):
                 source_rows = [r for r in rows() if r.get('phase') == 'event' and
                                r.get('sessionID') == sid and r.get('type') in terminal and
                                r.get('hasSequence') and r.get('hasTime')]
-                if not source_rows or any(not isinstance(r.get('createdMs'), int) or
-                       not source_wall_start_ms - 5000 <= r['createdMs'] <= source_wall_end_ms + 5000
+                if not source_rows or any(not isinstance(r.get('createdMs'), int) for r in source_rows):
+                    raise RuntimeError('native_source_epoch_unverified')
+                if clock_skew_negative:
+                    # The independent runner wall clock rejects the original
+                    # host envelope after the deliberate 12s future shift.
+                    # Check native correlator continues to observe real events
+                    # without mistaking R0 observation for business authority.
+                    if not all(r['createdMs'] > source_wall_end_ms + 5000 for r in source_rows):
+                        raise RuntimeError('source_clock_skew_not_refused')
+                    negative_native = [r for r in rows() if r.get('phase') == 'native-projection' and r.get('sessionID') == sid]
+                    if not all(any(r.get('type') == kind and r.get('observedSequence') for r in negative_native)
+                               for kind in terminal):
+                        raise RuntimeError('negative_native_reader_projection_unverified')
+                    return {'status':'passed_clock_skew_negative_only','version':'2.2.6',
+                            'clockSkewTestMS':12000,'sourceFutureTimestampRejected':True,
+                            'nativeR0StillObserved':True,
+                            'nativeObserverQualified':False,'nativeClockQualified':False,
+                            'notificationDeliveryQualified':False}
+                if any(not source_wall_start_ms - 5000 <= r['createdMs'] <= source_wall_end_ms + 5000
                        for r in source_rows):
                     raise RuntimeError('native_source_epoch_unverified')
                 # Observational Q0: receiver wall/monotonic vs original event
@@ -459,10 +483,14 @@ def main():
     parser.add_argument('--report', type=Path, required=True)
     parser.add_argument('--receiver', type=Path,
                         help='Exact-source unreleased AN candidate; prove fail-closed denial only')
+    parser.add_argument('--clock-skew-negative', action='store_true',
+                        help='Isolated TEST-only +12s host wall shift; require source epoch refusal')
     args = parser.parse_args()
+    if args.clock_skew_negative and args.receiver is not None:
+        parser.error('clock-skew-negative and installed receiver are mutually exclusive')
     with tempfile.TemporaryDirectory(prefix='TEST-opencode-v226-', dir=os.environ.get('RUNNER_TEMP')) as temp:
         try:
-            result = run(args.archive, Path(temp), args.receiver)
+            result = run(args.archive, Path(temp), args.receiver, args.clock_skew_negative)
         except Exception as error:
             # Never leak native session IDs, paths, model messages or provider errors.
             safe_errors = {'official_archive_unverified', 'official_executable_not_unique',
@@ -481,7 +509,9 @@ def main():
                            'source_receiver_sample_invalid', 'source_receiver_counter_nonmonotonic',
                            'source_go_clock_sample_unavailable', 'source_go_clock_sample_invalid',
                            'source_go_clock_epoch_unverified',
-                           'native_reader_projection_unverified'}
+                           'native_reader_projection_unverified',
+                           'source_clock_skew_injection_missing', 'source_clock_skew_not_refused',
+                           'negative_native_reader_projection_unverified'}
             reason = str(error) if type(error) is RuntimeError and str(error) in safe_errors else 'unexpected'
             result = {'status': 'unqualified', 'failureType': type(error).__name__, 'failureCode': reason,
                       'nativeObserverQualified': False, 'nativeClockQualified': False,
