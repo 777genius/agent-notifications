@@ -42,7 +42,10 @@ export default {id:'test-oc226-source',async setup(ctx){
  void(async()=>{try{for await(const entry of ctx.event.subscribe({signal:controller.signal})){
    if(!entry||typeof entry.type!=='string')continue;
    const e=entry.data??entry.properties??{};
+   // Private receive-side samples only; shared process/clock cannot grant Q.
+   const receivedWallMs=Date.now(), receivedMonoNS=process.hrtime.bigint().toString();
    write({phase:'event',type:entry.type,sessionID:e.sessionID??e.form?.sessionID,hasData:typeof e==='object'&&e!==null,
+    receivedWallMs,receivedMonoNS,
     hasSequence:Number.isSafeInteger(entry.durable?.seq),
     hasTime:Number.isSafeInteger(entry.created)&&entry.created>0,
     // Private trace only, never included in exported CI results.
@@ -244,13 +247,25 @@ def run(archive, root, receiver=None):
                 # Observation only: native event creation should fall within the
                 # independent runner wall-time window of this genuine turn.
                 # This coarse check is NOT a Bun 1.4.4 clock accuracy proof.
-                source_rows = (r for r in rows() if r.get('phase') == 'event' and
+                source_rows = [r for r in rows() if r.get('phase') == 'event' and
                                r.get('sessionID') == sid and r.get('type') in terminal and
-                               r.get('hasSequence') and r.get('hasTime'))
-                if any(not isinstance(r.get('createdMs'), int) or
+                               r.get('hasSequence') and r.get('hasTime')]
+                if not source_rows or any(not isinstance(r.get('createdMs'), int) or
                        not source_wall_start_ms - 5000 <= r['createdMs'] <= source_wall_end_ms + 5000
                        for r in source_rows):
                     raise RuntimeError('native_source_epoch_unverified')
+                # Observational Q0: receiver wall/monotonic vs original event
+                # timestamp on the official image, not an independent source,
+                # clock qualification, policy row or authorization grant.
+                if any(type(r.get('receivedWallMs')) is not int or
+                       not isinstance(r.get('receivedMonoNS'), str) or
+                       not re.fullmatch(r'[1-9][0-9]*', r['receivedMonoNS'])
+                       for r in source_rows):
+                    raise RuntimeError('source_receiver_sample_invalid')
+                receipt_ticks = [int(r['receivedMonoNS']) for r in source_rows]
+                if any(b < a for a, b in zip(receipt_ticks, receipt_ticks[1:])):
+                    raise RuntimeError('source_receiver_counter_nonmonotonic')
+                receiver_lags = [r['receivedWallMs'] - r['createdMs'] for r in source_rows]
                 projection = wait(lambda: next((r for r in rows() if r.get('phase') == 'projection' and
                                     r.get('sessionID') == sid), None), 20, 'native_session_projection_missing')
                 if not all(projection.get(k) is True for k in
@@ -340,6 +355,10 @@ def run(archive, root, receiver=None):
                         'realNativeProviderTurn': True, 'sourceSubscriberLoaded': True,
                         'sourceEnvelopeShapeObserved': True,
                         'sourceEpochPlausibilityObserved': True,
+                        'sameProcessReceiverQ0Observed': True,
+                        'sourceToReceiverLagMinMS': min(receiver_lags),
+                        'sourceToReceiverLagMaxMS': max(receiver_lags),
+                        'sourceToReceiverSampleCount': len(receiver_lags),
                         'nativeSessionProjectionObserved': True,
                         'sourceQuestionObserved': True, 'sourcePermissionObserved': True,
                         'sourceTerminalErrorObserved': True, 'attentionEventsAreEphemeral': True,
@@ -387,7 +406,8 @@ def main():
                            'source_question_terminal_missing', 'source_native_permission_missing',
                            'source_native_permission_unverified', 'source_permission_reply_unseen',
                            'source_terminal_error_missing', 'source_terminal_error_unverified',
-                           'native_session_projection_missing', 'native_session_projection_unverified'}
+                           'native_session_projection_missing', 'native_session_projection_unverified',
+                           'source_receiver_sample_invalid', 'source_receiver_counter_nonmonotonic'}
             reason = str(error) if type(error) is RuntimeError and str(error) in safe_errors else 'unexpected'
             result = {'status': 'unqualified', 'failureType': type(error).__name__, 'failureCode': reason,
                       'nativeObserverQualified': False, 'nativeClockQualified': False,
