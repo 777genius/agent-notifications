@@ -29,6 +29,7 @@ OFFICIAL_ARCHIVE_HASHES = {
 }
 OFFICIAL_TAG_SHA = "dc2ffcf8bf26f9e669b6aa22b95f50e12be15e06"
 TRACE_PLUGIN = r'''import {appendFileSync} from 'node:fs';
+import {spawnSync} from 'node:child_process';
 const write=value=>appendFileSync(process.env.AN_TEST_TRACE,JSON.stringify(value)+'\n');
 export default {id:'test-oc226-source',async setup(ctx){
  write({phase:'loaded',version:ctx.app?.version,
@@ -44,8 +45,24 @@ export default {id:'test-oc226-source',async setup(ctx){
    const e=entry.data??entry.properties??{};
    // Private receive-side samples only; shared process/clock cannot grant Q.
    const receivedWallMs=Date.now(), receivedMonoNS=process.hrtime.bigint().toString();
+   // An independent Go wall/boot sample is requested only in the isolated
+   // installed-denial TEST. This is cross-process T0 observation, not trust.
+   let goClock;
+   if(entry.type==='session.execution.succeeded'&&process.env.AN_TEST_GO_CLOCK){
+     try{
+       const p=spawnSync(process.env.AN_TEST_GO_CLOCK,['opencode-clock','--protocol','1'],
+         {timeout:2000,maxBuffer:1024,env:{PATH:'/usr/bin:/bin'}});
+       if(!p.error&&p.status===0&&p.stdout?.length>0&&p.stdout.length<=1024){
+         const g=JSON.parse(p.stdout.toString('utf8'));
+         if(g.protocol===1&&Object.keys(g).join('|')===
+            'protocol|boot|clockDomain|clockKind|monoLoNs|monoHiNs|wallUnixNs|uncertaintyNs')
+           goClock={boot:g.boot,domain:g.clockDomain,kind:g.clockKind,
+             loNS:g.monoLoNs,hiNS:g.monoHiNs,wallUnixNS:g.wallUnixNs,uncertaintyNS:g.uncertaintyNs};
+       }
+     }catch{}
+   }
    write({phase:'event',type:entry.type,sessionID:e.sessionID??e.form?.sessionID,hasData:typeof e==='object'&&e!==null,
-    receivedWallMs,receivedMonoNS,
+    receivedWallMs,receivedMonoNS,...(goClock?{goClock}:{}),
     hasSequence:Number.isSafeInteger(entry.durable?.seq),
     hasTime:Number.isSafeInteger(entry.created)&&entry.created>0,
     // Private trace only, never included in exported CI results.
@@ -158,6 +175,9 @@ def run(archive, root, receiver=None):
         (paths['project'] / 'opencode.json').write_text(json.dumps(config), encoding='utf-8')
         if receiver is not None:
             receiver = receiver.resolve(strict=True)
+            # Exact-source unreleased Go executable for the source-only clock
+            # comparison, not a bypass to native admission or a delivery grant.
+            env['AN_TEST_GO_CLOCK'] = str(receiver)
             env['AGENT_NOTIFICATIONS_CONFIG'] = str(root / 'notifications.json')
             (root / 'notifications.json').write_text(json.dumps({'notifications': {
                 'desktop': {'enabled': False},
@@ -274,6 +294,23 @@ def run(archive, root, receiver=None):
                 if any(b < a for a, b in zip(receipt_ticks, receipt_ticks[1:])):
                     raise RuntimeError('source_receiver_counter_nonmonotonic')
                 receiver_lags = [r['receivedWallMs'] - r['createdMs'] for r in source_rows]
+                go_source_lag_ns = None
+                if receiver is not None:
+                    go_rows = [r for r in source_rows if r.get('type') == 'session.execution.succeeded']
+                    go = go_rows[0].get('goClock') if go_rows else None
+                    if not isinstance(go, dict) or set(go) != {'boot', 'domain', 'kind', 'loNS', 'hiNS', 'wallUnixNS', 'uncertaintyNS'} or \
+                       not isinstance(go['boot'], str) or not isinstance(go['domain'], str) or \
+                       go['kind'] not in {'linux-boottime', 'darwin-monotonic-raw'} or \
+                       any(not isinstance(go.get(key), str) or not re.fullmatch(r'[1-9][0-9]*', go[key])
+                           for key in ('loNS', 'hiNS', 'wallUnixNS', 'uncertaintyNS')):
+                        raise RuntimeError('source_go_clock_sample_unavailable')
+                    if int(go['hiNS']) < int(go['loNS']) or int(go['uncertaintyNS']) < 0:
+                        raise RuntimeError('source_go_clock_sample_invalid')
+                    go_source_lag_ns = int(go['wallUnixNS']) - go_rows[0]['createdMs'] * 1000000
+                    # Preserve the existing coarse observational wall window.
+                    # A bounded observed delta is not a worst-case independent T.
+                    if abs(go_source_lag_ns) > 5000000000:
+                        raise RuntimeError('source_go_clock_epoch_unverified')
                 projection = wait(lambda: next((r for r in rows() if r.get('phase') == 'projection' and
                                     r.get('sessionID') == sid), None), 20, 'native_session_projection_missing')
                 if not all(projection.get(k) is True for k in
@@ -367,6 +404,8 @@ def run(archive, root, receiver=None):
                         'sourceToReceiverLagMinMS': min(receiver_lags),
                         'sourceToReceiverLagMaxMS': max(receiver_lags),
                         'sourceToReceiverSampleCount': len(receiver_lags),
+                        'independentGoWallT0Observed': go_source_lag_ns is not None,
+                        'sourceToGoWallDeltaNS': str(go_source_lag_ns) if go_source_lag_ns is not None else None,
                         'nativeSessionProjectionObserved': True,
                         'sourceQuestionObserved': True, 'sourcePermissionObserved': True,
                         'sourceTerminalErrorObserved': True, 'attentionEventsAreEphemeral': True,
@@ -415,7 +454,9 @@ def main():
                            'source_native_permission_unverified', 'source_permission_reply_unseen',
                            'source_terminal_error_missing', 'source_terminal_error_unverified',
                            'native_session_projection_missing', 'native_session_projection_unverified',
-                           'source_receiver_sample_invalid', 'source_receiver_counter_nonmonotonic'}
+                           'source_receiver_sample_invalid', 'source_receiver_counter_nonmonotonic',
+                           'source_go_clock_sample_unavailable', 'source_go_clock_sample_invalid',
+                           'source_go_clock_epoch_unverified'}
             reason = str(error) if type(error) is RuntimeError and str(error) in safe_errors else 'unexpected'
             result = {'status': 'unqualified', 'failureType': type(error).__name__, 'failureCode': reason,
                       'nativeObserverQualified': False, 'nativeClockQualified': False,
