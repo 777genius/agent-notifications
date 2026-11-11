@@ -445,10 +445,15 @@ def run(archive, root, receiver=None, clock_skew_ms=0):
                     if not all(any(r.get('type') == kind and r.get('observedSequence') for r in negative_native)
                                for kind in terminal):
                         raise RuntimeError('negative_native_reader_projection_unverified')
-                    return {'status':'passed_clock_skew_negative_only','version':'2.2.6',
+                    # This assertion is the TEST HARNESS comparing native
+                    # source epoch to a separate wall witness. No installed
+                    # receiver is running in skew mode, so never describe this
+                    # as a production timestamp rejection or delivery denial.
+                    return {'status':'passed_clock_skew_observation_only','version':'2.2.6',
                             'clockSkewTestMS':clock_skew_ms,
-                            'sourceFutureTimestampRejected':clock_skew_ms > 0,
-                            'sourcePastTimestampRejected':clock_skew_ms < 0,
+                            'sourceFutureWallMismatchObserved':clock_skew_ms > 0,
+                            'sourcePastWallMismatchObserved':clock_skew_ms < 0,
+                            'productionAdmissionExercised':False,
                             'nativeR0StillObserved':True,
                             'nativeObserverQualified':False,'nativeClockQualified':False,
                             'notificationDeliveryQualified':False}
