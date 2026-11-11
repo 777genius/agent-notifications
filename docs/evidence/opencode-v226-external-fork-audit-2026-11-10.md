@@ -150,6 +150,16 @@ it does not establish source authenticity or qualify the copied clock bounds.
 
 ## Acceptance evidence required before a positive E2E or merge
 
+The vendored `universal-agent-plugins-opencode-events-0.3.0.tgz` has SHA-256
+`c3d5aaaf6ecc3116b48ab1ae3f0e00b47720f239df9938f0c499d03f2c21a752`.
+Its 12 regular file contents were independently compared as Git blob IDs with
+the public UAP tree at
+[`3e438a228809c0839c1704721ade3a2385d98bf5`](https://github.com/777genius/universal-agent-plugins/tree/3e438a228809c0839c1704721ade3a2385d98bf5/sdk/opencode-js):
+all 12 matched their `sdk/opencode-js` paths. This confirms those packaged
+file contents match that source tree; it does not prove a reproducible npm
+archive, qualify OpenCode 2.2.6 or validate an arbitrary `--sdk-source-sha`
+provided to the semantic harness.
+
 On local macOS ARM64, an additional TEST-only unqualified prototype received
 one completion webhook before a second real OpenCode 2.2.6 turn. During that
 turn the local provider was held, the installed plugin bytes were edited, and
