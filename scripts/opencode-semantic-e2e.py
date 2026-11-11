@@ -25,6 +25,7 @@ PINS = {
     '2.0.21': 'f916986543348d7953d8d43aa048516cdbc3f84f4d0dc9c0c5b9d1da3030cea7',
 }
 MACOS_ARM64_PINS = {
+    '2.0.21': '0b2b68c1efaf20a29aaf636c2ffccc1abb56243a82f48cce45e257d232e03442',
     '2.2.6': '90e4d03597b03d2051b65b4d793467764e55bacd8e22bf4824479c7233ea0e15',
 }
 COPY = {
@@ -296,7 +297,7 @@ def qualify_owned(args, cleanup):
                      '--cache', str(root / 'npm-cache'), '@opencode-ai/plugin@1.18.33'])
     command([str(binary), 'setup-opencode', 'install', *common, '--binary', str(binary), '--webhook',
              *(['--desktop'] if args.desktop else [])])
-    if args.version == '2.2.6':
+    if args.version in ('2.0.21', '2.2.6'):
         # OpenCode consumes the managed policy snapshot; the ambient config
         # written above is not a grant for this installation.
         config_args = [str(binary), 'config']
@@ -306,7 +307,7 @@ def qualify_owned(args, cleanup):
                 pathlib.Path(inspected['selection']['path']).resolve() !=
                 (root / 'control' / 'agent-notifications.json').resolve()):
             raise RuntimeError('managed OpenCode policy inspection failed')
-        edits = {'/notifications/desktop/enabled': False,
+        edits = {'/notifications/desktop/enabled': args.desktop,
                  '/notifications/webhook/enabled': True,
                  '/notifications/webhook/preset': 'custom', '/notifications/webhook/format': 'json',
                  '/notifications/webhook/url': f'http://127.0.0.1:{webhook.server_port}/webhook'}
