@@ -252,7 +252,31 @@ def prepare_windows_private_root(root):
         raise RuntimeError('windows_private_root_unverified')
 
 
-def run(archive, root, receiver=None, clock_skew_ms=0):
+def stop_official_host_tree(host):
+    """Reap the actual test-host process tree on restart and final cleanup."""
+    if host.poll() is not None:
+        host.wait(timeout=5)
+        return
+    if sys.platform == 'win32':
+        try:
+            subprocess.run(['taskkill', '/PID', str(host.pid), '/T', '/F'],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                           timeout=10, check=False)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+        if host.poll() is None:
+            host.kill()
+        host.wait(timeout=5)
+    else:
+        os.killpg(host.pid, signal.SIGTERM)
+        try:
+            host.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            os.killpg(host.pid, signal.SIGKILL)
+            host.wait(timeout=5)
+
+
+def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False):
     spec = importlib.util.spec_from_file_location('existing_native_provider',
         Path(__file__).resolve().parent / 'opencode-semantic-e2e.py')
     native = importlib.util.module_from_spec(spec)
@@ -595,7 +619,56 @@ def run(archive, root, receiver=None, clock_skew_ms=0):
                     time.sleep(.5)  # bounded post-terminal guard against delayed callbacks
                     if webhook.bodies:
                         raise RuntimeError('denied_host_delivered_webhook')
-                return {'status': 'passed_denied_only' if webhook else 'passed_source_only', 'version': '2.2.6',
+                    if restart_denial:
+                        # Two genuine host lifetimes against the SAME managed
+                        # plugin, consent scope and private receiver. This
+                        # tests fail-closed restart, never delivery eligibility.
+                        stop_official_host_tree(host)
+                        previous_trace_length = len(rows())
+                        host = subprocess.Popen(
+                            [str(binary), 'serve', '--hostname', '127.0.0.1',
+                             '--port', str(port), '--print-logs'],
+                            cwd=paths['project'], env=env, stdout=log, stderr=log,
+                            start_new_session=(sys.platform != 'win32'),
+                            creationflags=(subprocess.CREATE_NEW_PROCESS_GROUP
+                                           if sys.platform == 'win32' else 0))
+                        wait(ready, 70, 'restart_host_unavailable')
+                        wait(lambda: next((r for r in rows()[previous_trace_length:]
+                                          if r.get('phase') == 'loaded'
+                                          and r.get('version') == '2.2.6'), None),
+                             25, 'restart_plugin_not_loaded')
+                        before_restart_requests = len(provider.bodies)
+                        new_session = request('/api/session', {
+                            'title': 'TEST-source-restart',
+                            'location': {'directory': str(paths['project'])}})
+                        new_sid = new_session['data']['id']
+                        request('/api/session/' + new_sid + '/prompt',
+                                {'text': 'TEST-native-source-restart'})
+                        request('/api/experimental/session/' + new_sid + '/wait',
+                                method='POST')
+                        wait(lambda: any(
+                            r.get('phase') == 'event' and
+                            r.get('type') == 'session.execution.succeeded' and
+                            r.get('sessionID') == new_sid
+                            for r in rows()[previous_trace_length:]),
+                             35, 'restart_source_completion_missing')
+                        if len(provider.bodies) <= before_restart_requests:
+                            raise RuntimeError('restart_provider_unused')
+                        time.sleep(.5)  # Cover late callbacks after the new turn.
+                        if webhook.bodies:
+                            raise RuntimeError('restart_denied_host_delivered_webhook')
+                        log.flush()
+                        if log_file.stat().st_size > 512 * 1024:
+                            raise RuntimeError('private_host_log_limit')
+                        # Exactly one content-free refusal for each lifetime.
+                        if log_file.read_bytes().decode('utf-8', errors='replace').count(
+                                'notifications disabled (host runtime not qualified)') != 2:
+                            raise RuntimeError('restart_denial_diagnostic_missing')
+                        print('source-stage: restart-denial-verified', flush=True)
+                return {'status': ('passed_restart_denied_only' if restart_denial else
+                                   'passed_denied_only' if webhook else 'passed_source_only'),
+                        'installedRestartDenialObserved': restart_denial,
+                        'version': '2.2.6',
                         'upstreamTagCommit': OFFICIAL_TAG_SHA,
                         'officialArchiveSHA256': OFFICIAL_ARCHIVE_HASHES[sys.platform],
                         'officialBinarySHA256': binary_sha,
@@ -622,26 +695,7 @@ def run(archive, root, receiver=None, clock_skew_ms=0):
                         'nativeObserverQualified': False, 'nativeClockQualified': False,
                         'notificationDeliveryQualified': False}
             finally:
-                if host.poll() is None:
-                    if sys.platform == 'win32':
-                        # Tear down the real Windows host process tree, not just
-                        # the parent. Never print or upload private host output.
-                        try:
-                            subprocess.run(['taskkill', '/PID', str(host.pid), '/T', '/F'],
-                                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                           timeout=10, check=False)
-                        except (OSError, subprocess.TimeoutExpired):
-                            pass
-                        if host.poll() is None:
-                            host.kill()
-                        host.wait(timeout=5)
-                    else:
-                        os.killpg(host.pid, signal.SIGTERM)
-                        try:
-                            host.wait(timeout=5)
-                        except subprocess.TimeoutExpired:
-                            os.killpg(host.pid, signal.SIGKILL)
-                            host.wait(timeout=5)
+                stop_official_host_tree(host)
     finally:
         provider.shutdown()
         provider.server_close()
@@ -661,14 +715,19 @@ def main():
                       help='Isolated TEST-only +12s host wall shift; assert source epoch mismatch')
     skew.add_argument('--clock-skew-past-negative', action='store_true',
                       help='Isolated TEST-only -12s host wall shift; assert source epoch mismatch')
+    parser.add_argument('--restart-denial', action='store_true',
+                        help='With installed receiver, restart the official host and prove denial persists')
     args = parser.parse_args()
+    if args.restart_denial and (args.receiver is None or
+                                args.clock_skew_negative or args.clock_skew_past_negative):
+        parser.error('restart denial requires an installed receiver and no clock-skew mode')
     if (args.clock_skew_negative or args.clock_skew_past_negative) and args.receiver is not None:
         parser.error('clock skew tests and installed receiver are mutually exclusive')
     skew_ms = 12000 if args.clock_skew_negative else -12000 if args.clock_skew_past_negative else 0
     with tempfile.TemporaryDirectory(prefix='TEST-opencode-v226-', dir=os.environ.get('RUNNER_TEMP')) as temp:
         try:
             prepare_windows_private_root(Path(temp))
-            result = run(args.archive, Path(temp), args.receiver, skew_ms)
+            result = run(args.archive, Path(temp), args.receiver, skew_ms, args.restart_denial)
         except Exception as error:
             # Never leak native session IDs, paths, model messages or provider errors.
             safe_errors = {'official_archive_unverified', 'official_executable_not_unique',
@@ -680,7 +739,10 @@ def main():
                            'windows_private_root_unverified', 'managed_install_command_failed',
                            'managed_plugin_file_missing', 'managed_install_unverified',
                            'private_host_log_limit', 'single_denial_diagnostic_missing',
-                           'denied_host_delivered_webhook', 'source_native_question_missing',
+                           'denied_host_delivered_webhook', 'restart_host_unavailable',
+                           'restart_plugin_not_loaded', 'restart_source_completion_missing',
+                           'restart_provider_unused', 'restart_denied_host_delivered_webhook',
+                           'restart_denial_diagnostic_missing', 'source_native_question_missing',
                            'source_native_question_unverified', 'source_question_reply_unseen',
                            'source_question_terminal_missing', 'source_native_permission_missing',
                            'source_native_permission_unverified', 'source_permission_reply_unseen',
