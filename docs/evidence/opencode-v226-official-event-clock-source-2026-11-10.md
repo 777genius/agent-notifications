@@ -137,9 +137,9 @@ The official Darwin ARM64 executable also passes strict Apple code-signature
 verification with identifier `opencode`, Apple generic anchor and Developer ID
 team `5NZ4Q7NXJ4`. The same requirement rejects a modified byte, and a wrong
 team requirement rejects the unmodified image. This is a possible building
-block for future publisher-bound host discovery; it does not bind the checked
-file to a live process, prove event semantics or a clock bound, or authorize
-other builds by the same signer. `spctl --assess --type execute` rejects this
+block for future publisher-bound host discovery; it does not by itself prove
+event semantics or a clock bound, or authorize other builds by the same signer.
+`spctl --assess --type execute` rejects this
 standalone CLI as not being an app, so no notarization conclusion is inferred
 from the signature check.
 
@@ -151,6 +151,13 @@ not prove a stable process lifetime, prevent PID reuse or executable swaps,
 establish source/event semantics, or authorize an otherwise unqualified host.
 Any production use would need to compose and independently review it with
 the existing held-process and clock checks.
+
+The Darwin held-image path now additionally checks this live publisher for the
+exact 2.2.6 candidate before its existing final process, mapping and lifetime
+revalidation. A focused native test accepts the official test process and
+rejects unrelated and reaped processes. This adds a required condition only;
+it does not register a qualified observer or clock row, expand the image
+allowlist, or establish generic V2 support.
 
 For the exact macOS ARM64 2.2.6 image, the candidate wall witness now reads
 Darwin `clock_gettime(CLOCK_REALTIME)` independently of JavaScript `Date.now`.

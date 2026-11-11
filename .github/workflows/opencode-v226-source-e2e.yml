@@ -13,6 +13,8 @@ on:
       - 'scripts/opencode-semantic-e2e.py'
       - 'opencode-plugin/**'
       - 'cmd/claude-notifications/opencode*.go'
+      - 'cmd/claude-notifications/opencode*.c'
+      - 'cmd/claude-notifications/opencode*.h'
       - 'internal/opencodecodec/**'
       - 'internal/opencodeevent/**'
       - 'internal/opencodeplugin/**'
@@ -484,6 +486,11 @@ jobs:
           go build -trimpath -ldflags="-s -w" -o "$RUNNER_TEMP/TEST-opencode-v226-darwin/receiver" ./cmd/claude-notifications
           go version -m "$RUNNER_TEMP/TEST-opencode-v226-darwin/receiver" | grep -F "vcs.revision=$EXPECTED_HEAD"
           go version -m "$RUNNER_TEMP/TEST-opencode-v226-darwin/receiver" | grep -F 'vcs.modified=false'
+      - name: Verify production publisher check on a live official process
+        shell: bash
+        env:
+          AN_TEST_OFFICIAL_OPENCODE: ${{ runner.temp }}/TEST-opencode-v226-darwin/opencode
+        run: go test ./cmd/claude-notifications -run '^TestRuntimeDarwinOpenCodePublisher$' -count=1
       - name: Observe real macOS ARM64 V2 source and installed-denied events
         shell: bash
         run: |

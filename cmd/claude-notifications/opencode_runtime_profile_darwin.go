@@ -3,7 +3,7 @@
 package main
 
 /*
-#cgo LDFLAGS: -lproc
+#cgo LDFLAGS: -lproc -framework Security -framework CoreFoundation
 #include "opencode_runtime_profile_darwin.h"
 */
 import "C"
@@ -152,6 +152,11 @@ func holdRuntimeLiveImage(ctx context.Context, in runtimeProfileInput) (*runtime
 		}
 		ha, e := runtimeFileHash(ctx, image)
 		hb, e1 := runtimeFileHash(ctx, target)
+		// The observed 2.2.6 Darwin candidate additionally requires the live
+		// kernel guest's publisher. This check is not a reader or clock grant.
+		if e == nil && ha == "90e4d03597b03d2051b65b4d793467764e55bacd8e22bf4824479c7233ea0e15" && !runtimeDarwinOpenCodePublisher(in.NativePID) {
+			return fail()
+		}
 		end, e2 := runtimeDarwinProcessInfo(in.NativePID)
 		na, e3 := os.Stat(live.Name)
 		nb, e4 := os.Stat(in.HostExecutable)
@@ -172,3 +177,6 @@ func holdRuntimeLiveImage(ctx context.Context, in runtimeProfileInput) (*runtime
 
 func runtimeDarwinWatch(pid int) int     { return int(C.an_runtime_watch(C.int(pid))) }
 func runtimeDarwinUnchanged(fd int) bool { return C.an_runtime_unchanged(C.int(fd)) == 1 }
+func runtimeDarwinOpenCodePublisher(pid int) bool {
+	return pid > 0 && uint64(pid) <= 0x7fffffff && C.an_runtime_opencode_publisher(C.int(pid)) == 1
+}
