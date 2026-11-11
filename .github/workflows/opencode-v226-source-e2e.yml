@@ -8,6 +8,7 @@ on:
       - 'scripts/test_opencode_v226_go_clock.py'
       - 'scripts/opencode-v226-clock-e0.mjs'
       - 'scripts/opencode-v226-darwin-abi-e0.mjs'
+      - 'scripts/opencode-v226-darwin-signature-e0.py'
       - 'scripts/opencode-semantic-e2e.py'
       - 'opencode-plugin/**'
       - 'cmd/claude-notifications/opencode*.go'
@@ -448,6 +449,21 @@ jobs:
         with:
           name: opencode-v226-darwin-arm64-${{ matrix.os }}-${{ github.event.pull_request.head.sha || github.sha }}
           path: ${{ runner.temp }}/opencode-v226-darwin-image-safe.json
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Observe official Darwin signing identity without admission
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -B scripts/opencode-v226-darwin-signature-e0.py \
+            "$RUNNER_TEMP/TEST-opencode-v226-darwin/opencode" \
+            | tee "$RUNNER_TEMP/opencode-v226-darwin-signature-safe.json"
+      - name: Upload sanitized Darwin signature observation
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: opencode-v226-darwin-signature-${{ matrix.os }}-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/opencode-v226-darwin-signature-safe.json
           if-no-files-found: warn
           retention-days: 14
       - name: Build exact-source Darwin Go clock witness (non-release)

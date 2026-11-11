@@ -133,6 +133,16 @@ establish a universal bound or grant qualification.
 
 Draft #643 adds 12 actual embedded-Bun/Go clock comparisons on each observed Linux x64 and macOS ARM64 port, plus a timer-delayed wall/counter nonregression observation (commits `1cec7ed`, `688d755`). The explicit reports retain `nativeObserverQualified=false`, `nativeClockQualified=false` and `notificationDeliveryQualified=false`. They do not establish event-source Q, reader R, time translation T, native admission or desktop/webhook delivery. A failed observation is a useful evidence gap, not grounds for bypassing admission.
 
+The official Darwin ARM64 executable also passes strict Apple code-signature
+verification with identifier `opencode`, Apple generic anchor and Developer ID
+team `5NZ4Q7NXJ4`. The same requirement rejects a modified byte, and a wrong
+team requirement rejects the unmodified image. This is a possible building
+block for future publisher-bound host discovery; it does not bind the checked
+file to a live process, prove event semantics or a clock bound, or authorize
+other builds by the same signer. `spctl --assess --type execute` rejects this
+standalone CLI as not being an app, so no notarization conclusion is inferred
+from the signature check.
+
 For the exact macOS ARM64 2.2.6 image, the candidate wall witness now reads
 Darwin `clock_gettime(CLOCK_REALTIME)` independently of JavaScript `Date.now`.
 The existing qualified images retain their previous clock implementation. On
