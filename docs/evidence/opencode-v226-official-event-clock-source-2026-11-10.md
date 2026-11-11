@@ -37,6 +37,23 @@ The same pinned official [`Bus.makePayload` source](https://github.com/anomalyco
 3. **Translation/freshness (T):** independently measure source event wall vs trusted Go clock source on real official 2.2.6/Bun 1.4.4 for each platform, with reviewed worst-case bounds and safety margins. Include positive and negative time shifts, queue/steer delays, replay, restart, provenance swap and revocation. The existing 103/430/224-ms older-image rows **cannot** be copied to this binary.
 4. **Installed authorization:** only after Q/R/T and compatible UAP native-observer binding can a new trusted cell be considered. Then prove accepted root completion, question, permission and terminal error through installed 2.2.6 to consented webhook and applicable real desktop on final SHA, with negatives for replay, revocation, stale events and restart. Existing source-E2E `passed_denied_only` and E0 clock observations never satisfy that gate.
 
+## Bun 1.4.4 FFI source checkpoint
+
+The upstream `bun-v1.4.4` tag resolves to
+[`38afee6c84fcf48c0edb2466aa4b27d287a59c30`](https://github.com/oven-sh/bun/tree/38afee6c84fcf48c0edb2466aa4b27d287a59c30).
+Its [`ffi_body.rs`](https://github.com/oven-sh/bun/blob/38afee6c84fcf48c0edb2466aa4b27d287a59c30/src/runtime/ffi/ffi_body.rs)
+SHA-256 is `111f0b5b74e210eb5cb798bcad2e9528bac99c82caa4e57587b40b9fc1a1011a`;
+the 1.4.2 file is `73595190f84a807ff0dc7867afc4fac43cbca2f5d9fa3cd31c5be6a5cd165dfe`.
+The 1.4.4 FFI trampoline exposes `Bun__FFI__jsValueToSlotSlow`, replacing the
+previous separate integer conversion bindings. Its pinned
+[`JSCFFIBridge.cpp`](https://github.com/oven-sh/bun/blob/38afee6c84fcf48c0edb2466aa4b27d287a59c30/src/jsc/bindings/JSCFFIBridge.cpp#L133-L159)
+(SHA-256 `960b2a1dca2e9e7146a31848d6701f6004e20f17c9f95a09f7af5f6bc224f489`)
+performs pointer-object handling and delegates conversion to JavaScriptCore's
+`writeSlotFromJSValue`. This identifies the changed boundary to audit; it does
+not independently prove the native pointer/u64 ABI, the OpenCode binary's source
+provenance or a timing bound. The real-image E0 and successful fork delivery
+remain observations, not substitutes for those checks.
+
 ## Additional genuine-image stress, still E0 only
 
 Draft #643 adds 12 actual embedded-Bun/Go clock comparisons on each observed Linux x64 and macOS ARM64 port, plus a timer-delayed wall/counter nonregression observation (commits `1cec7ed`, `688d755`). The explicit reports retain `nativeObserverQualified=false`, `nativeClockQualified=false` and `notificationDeliveryQualified=false`. They do not establish event-source Q, reader R, time translation T, native admission or desktop/webhook delivery. A failed observation is a useful evidence gap, not grounds for bypassing admission.

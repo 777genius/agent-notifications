@@ -31,6 +31,21 @@ test('clock selection refuses versions outside the compiled platform policy', ()
   assert.equal(findClockCell([next, next], 'darwin', 'arm64', 'v2', '2.2.6'), undefined);
 });
 
+test('the official 2.2.6 candidate can be described but cannot select a policy', () => {
+  // The source root and numeric bounds are synthetic test data, not evidence.
+  const candidate = { protocol: 1, generation: 'v2', goos: 'darwin', goarch: 'arm64',
+    ...describeClockSource('darwin', 'arm64'),
+    images: [{ version: '2.2.6', imageSHA256: '90e4d03597b03d2051b65b4d793467764e55bacd8e22bf4824479c7233ea0e15' }],
+    algorithmSourceMerkleSHA256: 'd'.repeat(64), nativeReadBoundNS: '103000000',
+    comparisonBoundNS: '430000000', translationBoundNS: '224000000', sourceWallBoundNS: '2000000' };
+  assert.equal(describeClockPolicy(candidate).images[0].version, '2.2.6');
+  for (const change of [r => { r.images[0].imageSHA256 = 'a'.repeat(64); },
+    r => { r.goarch = 'amd64'; }, r => { r.images[0].version = '2.2.7'; }]) {
+    const bad = structuredClone(candidate); change(bad); assert.throws(() => describeClockPolicy(bad));
+  }
+  assert.equal(selectClockCell('v2', '2.2.6'), undefined);
+});
+
 test('actual LP64/Win64 ABI contracts use output pointers, unsigned counters and VOID status', () => {
   assert.deepEqual(darwinABI, {
     mach_continuous_time: { returns: 'u64', args: [] },

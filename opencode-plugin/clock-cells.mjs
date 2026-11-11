@@ -32,8 +32,13 @@ export function describeClockPolicy(row) {
   const descriptor = describeClockSource(row.goos, row.goarch);
   const legacy = row.goos === 'linux' && row.goarch === 'amd64';
   const pins = legacy ? images[row.generation] : undefined;
+  // Recognition of the official candidate is only a description of its
+  // shape. It creates no compiled row, clock bound, or runtime authority.
+  const darwin226Candidate = row.goos === 'darwin' && row.goarch === 'arm64' && row.generation === 'v2' &&
+    Array.isArray(row.images) && row.images.length === 1 && row.images[0]?.version === '2.2.6' &&
+    row.images[0]?.imageSHA256 === '90e4d03597b03d2051b65b4d793467764e55bacd8e22bf4824479c7233ea0e15';
   const versions = legacy ? pins?.map(pin => pin[0]) :
-    row.generation === 'v1' ? ['1.18.33'] : row.generation === 'v2' ? ['2.0.21'] : undefined;
+    row.generation === 'v1' ? ['1.18.33'] : row.generation === 'v2' ? [darwin226Candidate ? '2.2.6' : '2.0.21'] : undefined;
   if (row.protocol !== 1 || !versions || row.sourceKind !== descriptor.sourceKind || row.rawKind !== descriptor.rawKind ||
       !hashOK(row.algorithmSourceMerkleSHA256) || !Array.isArray(row.images) || row.images.length !== versions.length)
     throw new TypeError('qualification_unverified');
