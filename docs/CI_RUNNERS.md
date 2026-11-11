@@ -1,26 +1,28 @@
 # CI runner routing
 
-Ordinary Linux and Apple Silicon jobs use the installed Ubicloud and Namespace
-integrations. Runner routing is separate from semantic `matrix.os`, platform,
+Ordinary Linux jobs use GitHub-hosted runners. Apple Silicon jobs retain the
+installed Namespace integration. Runner routing is separate from semantic
+`matrix.os`, platform,
 architecture, check names and artifact identities. Windows and Intel Macs retain
 their original GitHub runners.
 
-| Original runner | Repository variable | Configured managed runner |
+| Original runner | Repository variable | Configured runner |
 | --- | --- | --- |
-| `ubuntu-latest`, `ubuntu-24.04` | `CI_LINUX_RUNNER` | `ubicloud-standard-4` |
-| `ubuntu-22.04` | `CI_LINUX_2204_RUNNER` | `ubicloud-standard-4-ubuntu-2204` |
-| `ubuntu-24.04-arm` | `CI_LINUX_ARM_RUNNER` | `ubicloud-standard-4-arm` |
-| `ubuntu-22.04-arm` | `CI_LINUX_ARM_2204_RUNNER` | `ubicloud-standard-4-arm-ubuntu-2204` |
+| `ubuntu-latest`, `ubuntu-24.04` | `CI_LINUX_RUNNER` | `ubuntu-latest` |
+| `ubuntu-22.04` | `CI_LINUX_2204_RUNNER` | `ubuntu-22.04` |
+| `ubuntu-24.04-arm` | `CI_LINUX_ARM_RUNNER` | `ubuntu-24.04-arm` |
+| `ubuntu-22.04-arm` | `CI_LINUX_ARM_2204_RUNNER` | `ubuntu-22.04-arm` |
 | `macos-15` | `CI_MACOS_15_RUNNER` | `namespace-profile-macos-15` |
 | `macos-26` | `CI_MACOS_26_RUNNER` | `namespace-profile-macos-26` |
 
-Ubicloud labels follow its [official runner types](https://www.ubicloud.com/docs/github-actions-integration/runner-types).
+The Linux variables select GitHub-hosted labels; preserve the explicit Ubuntu
+22.04 and ARM mappings when updating them.
 The routing expression retains the original runner when a variable is empty or
 removed. A pull request whose head repository differs from `github.repository`,
 including a missing/unknown head repository, always uses the original runner.
 Same-repository PRs, pushes and dispatches use the configured runner.
 
-## Coverage and evidence
+## Coverage and historical migration evidence
 
 Routing covers ordinary Ubuntu/macOS CI, landing checks/deployment, Claude SDK
 blackbox E2E, selector bootstrap, install recovery (including root/APFS tests),
@@ -52,8 +54,8 @@ These contracts require new qualification before changing provider:
   `accepted Ubuntu24.04/kernel tuple required`; the attempted whole-installer
   routing at `4142a20` independently confirmed that refusal. Matching Ubuntu
   release/architecture does not qualify the frozen kernel/physical tuple.
-  Both ordinary Go test versions and installer E2E use managed routing; the
-  separate physical job preserves all original commands/positive markers and
+  Both ordinary Go test versions and installer E2E use repository-variable
+  routing; the separate physical job preserves all original commands/positive markers and
   is required by both Ubuntu aggregates and native-input evidence.
 - `pi-installed-linux.yml`: the installed Pi process now exercises a real
   shared Cursor binding through install, update and Pi-only removal. It uses
@@ -117,7 +119,8 @@ ordinary qualified run; skipped evidence is never accepted. Normal PR, push and
 manual checkout identities and release pins retain their existing behavior.
 
 Remove the applicable repository variable to restore the original GitHub runner
-without editing semantic matrices. Workflow changes affect future runs only;
+without editing semantic matrices. Do not restore retired Ubicloud labels.
+Workflow changes affect future runs only;
 existing frozen tags and the already-created `v1.48.1` release run 37519336110 are
 not restarted, cancelled or republished by this migration.
 
