@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Observe real OpenCode 2.2.6 V2 source events, without granting notification eligibility.
+"""Observe real OpenCode 2.2.6 V2 source events and optional installed delivery.
 
 Run in disposable CI with a pinned official archive. Private logs never enter the report.
 """
@@ -173,6 +173,29 @@ def wait(fn, seconds, label):
     raise RuntimeError(label)
 
 
+def wait_for_delivery(webhook, event_type, message):
+    def matching():
+        with webhook.lock:
+            bodies = list(webhook.bodies)
+        for raw in bodies:
+            try:
+                payload = json.loads(raw)
+            except (ValueError, UnicodeDecodeError):
+                raise RuntimeError('delivery_payload_invalid')
+            if not isinstance(payload, dict):
+                raise RuntimeError('delivery_payload_invalid')
+            if payload.get('notification_type') == event_type:
+                if (payload.get('agent_source') != 'opencode' or payload.get('message') != message or
+                        payload.get('title') != 'OpenCode' or payload.get('session_id') != '' or
+                        set(payload) != {'schema_version', 'status', 'notification_type', 'agent_source',
+                                         'message', 'timestamp', 'session_id', 'source', 'title'} or
+                        b'PRIVATE_' in raw):
+                    raise RuntimeError('delivery_payload_invalid')
+                return True
+        return False
+    wait(matching, 15, 'expected_delivery_missing')
+
+
 
 def valid_native_go_t0_sample(value, platform):
     """Strict, observational Go E0 frame check; never grants native qualification."""
@@ -276,7 +299,7 @@ def stop_official_host_tree(host):
             host.wait(timeout=5)
 
 
-def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False):
+def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False, expect_delivery=False):
     spec = importlib.util.spec_from_file_location('existing_native_provider',
         Path(__file__).resolve().parent / 'opencode-semantic-e2e.py')
     native = importlib.util.module_from_spec(spec)
@@ -527,6 +550,8 @@ def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False):
                 if r1.get('valid') is not True or r1.get('runParts') != 3:
                     raise RuntimeError('native_assistant_projection_unverified')
                 print('source-stage: native-session-projection-verified', flush=True)
+                if expect_delivery:
+                    wait_for_delivery(webhook, 'task_complete', 'Task completed')
                 # Independently verify native pending question, reply and settled turn.
                 question_begin = len(rows())
                 prior_requests = len(provider.bodies)
@@ -546,6 +571,8 @@ def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False):
                                       r.get('sessionID')==question_sid),None),10,'native_r1_question_missing')
                 if qr1.get('valid') is not True or qr1.get('runParts') != 4:
                     raise RuntimeError('native_question_projection_unverified')
+                if expect_delivery:
+                    wait_for_delivery(webhook, 'question', 'OpenCode asked a question')
                 request('/api/session/' + question_sid + '/form/' + forms[0]['id'] + '/reply',
                         {'answer': {'q0': 'Yes'}})
                 wait(lambda: any(r.get('type') == 'form.replied' and r.get('sessionID') == question_sid
@@ -574,6 +601,8 @@ def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False):
                                       r.get('sessionID')==permission_sid),None),10,'native_r1_permission_missing')
                 if pr1.get('valid') is not True or pr1.get('runParts') != 4:
                     raise RuntimeError('native_permission_projection_unverified')
+                if expect_delivery:
+                    wait_for_delivery(webhook, 'permission_request', 'OpenCode requested permission')
                 request('/api/session/' + permission_sid + '/permission/' + pending[0]['id'] + '/reply',
                         {'decision': 'reject'})
                 wait(lambda: any(r.get('type') == 'permission.replied' and r.get('sessionID') == permission_sid
@@ -607,9 +636,11 @@ def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False):
                                       r.get('sessionID')==failed_sid),None),10,'native_r1_error_missing')
                 if er1.get('valid') is not True or er1.get('runParts') != 3:
                     raise RuntimeError('native_error_projection_unverified')
+                if expect_delivery:
+                    wait_for_delivery(webhook, 'opencode_error', 'An error needs your attention')
                 provider.mode = 'success'
                 print('source-stage: terminal-error-verified', flush=True)
-                if webhook is not None:
+                if webhook is not None and not expect_delivery:
                     log_file = root / 'host.private.log'
                     if log_file.stat().st_size > 512 * 1024:
                         raise RuntimeError('private_host_log_limit')
@@ -665,7 +696,8 @@ def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False):
                                 'notifications disabled (host runtime not qualified)') != 2:
                             raise RuntimeError('restart_denial_diagnostic_missing')
                         print('source-stage: restart-denial-verified', flush=True)
-                return {'status': ('passed_restart_denied_only' if restart_denial else
+                return {'status': ('passed_delivery_observed' if expect_delivery else
+                                   'passed_restart_denied_only' if restart_denial else
                                    'passed_denied_only' if webhook else 'passed_source_only'),
                         'installedRestartDenialObserved': restart_denial,
                         'version': '2.2.6',
@@ -690,7 +722,8 @@ def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False):
                         'nativeSessionProjectionObserved': True,
                         'sourceQuestionObserved': True, 'sourcePermissionObserved': True,
                         'sourceTerminalErrorObserved': True, 'attentionEventsAreEphemeral': True,
-                        'installedDeniedStartup': webhook is not None,
+                        'installedDeniedStartup': webhook is not None and not expect_delivery,
+                        'installedDeliveryObserved': expect_delivery,
                         'observedEventTypes': sorted(observed),
                         'nativeObserverQualified': False, 'nativeClockQualified': False,
                         'notificationDeliveryQualified': False}
@@ -709,7 +742,7 @@ def main():
     parser.add_argument('--archive', type=Path, required=True)
     parser.add_argument('--report', type=Path, required=True)
     parser.add_argument('--receiver', type=Path,
-                        help='Exact-source unreleased AN candidate; prove fail-closed denial only')
+                        help='Exact-source AN candidate to install for denial or delivery observation')
     skew = parser.add_mutually_exclusive_group()
     skew.add_argument('--clock-skew-negative', action='store_true',
                       help='Isolated TEST-only +12s host wall shift; assert source epoch mismatch')
@@ -717,7 +750,12 @@ def main():
                       help='Isolated TEST-only -12s host wall shift; assert source epoch mismatch')
     parser.add_argument('--restart-denial', action='store_true',
                         help='With installed receiver, restart the official host and prove denial persists')
+    parser.add_argument('--expect-delivery', action='store_true',
+                        help='Require actual installed delivery for each genuine source event')
     args = parser.parse_args()
+    if args.expect_delivery and (args.receiver is None or args.restart_denial or
+                                 args.clock_skew_negative or args.clock_skew_past_negative):
+        parser.error('delivery requires an installed receiver and excludes denial and clock-skew modes')
     if args.restart_denial and (args.receiver is None or
                                 args.clock_skew_negative or args.clock_skew_past_negative):
         parser.error('restart denial requires an installed receiver and no clock-skew mode')
@@ -727,7 +765,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix='TEST-opencode-v226-', dir=os.environ.get('RUNNER_TEMP')) as temp:
         try:
             prepare_windows_private_root(Path(temp))
-            result = run(args.archive, Path(temp), args.receiver, skew_ms, args.restart_denial)
+            result = run(args.archive, Path(temp), args.receiver, skew_ms, args.restart_denial, args.expect_delivery)
         except Exception as error:
             # Never leak native session IDs, paths, model messages or provider errors.
             safe_errors = {'official_archive_unverified', 'official_executable_not_unique',
@@ -739,6 +777,7 @@ def main():
                            'windows_private_root_unverified', 'managed_install_command_failed',
                            'managed_plugin_file_missing', 'managed_install_unverified',
                            'private_host_log_limit', 'single_denial_diagnostic_missing',
+                           'expected_delivery_missing', 'delivery_payload_invalid',
                            'denied_host_delivered_webhook', 'restart_host_unavailable',
                            'restart_plugin_not_loaded', 'restart_source_completion_missing',
                            'restart_provider_unused', 'restart_denied_host_delivered_webhook',
