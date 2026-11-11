@@ -137,7 +137,12 @@ export default {id:'test-oc226-source',async setup(ctx){
        const run={sessionID:e.sessionID,turnID:sessionState?.runID,userID:sessionState?.userID,
          messageID:sessionState?.assistantID,terminalEventID:entry.id,terminalCreated:entry.created};
        const proof=await view?.native.assistant(run,new AbortController().signal);
+       const rows=await ctx.session.context({sessionID:e.sessionID});
+       const idle=Array.isArray(rows)&&rows.find(x=>x.type==='idle'&&x.id===`msg_${entry.id.slice(4)}`);
+       const assistant=Array.isArray(rows)&&rows.find(x=>x.type==='assistant'&&x.id===run.messageID);
        write({phase:'native-error',sessionID:e.sessionID,valid:proof?.final===true&&proof?.outcome==='error',
+         outputLimitIdle:idle?.outcome==='failed'&&idle.error?.type==='output-limit',
+         assistantErrorAbsent:assistant?.type==='assistant'&&assistant.error==null,
          runParts:[run.turnID,run.userID,run.messageID].filter(x=>typeof x==='string'&&x.length>0).length});
      }catch{write({phase:'native-error',sessionID:e.sessionID,valid:false,runParts:0});}})();
    }
@@ -893,7 +898,9 @@ def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False, exp
                 limit_proof = wait(lambda: next((r for r in rows() if r.get('phase') == 'native-error' and
                                                  r.get('sessionID') == limited_sid), None),
                                    10, 'native_r1_output_limit_missing')
-                if limit_proof.get('valid') is not True or limit_proof.get('runParts') != 3:
+                if (limit_proof.get('valid') is not True or limit_proof.get('runParts') != 3 or
+                        limit_proof.get('outputLimitIdle') is not True or
+                        limit_proof.get('assistantErrorAbsent') is not True):
                     raise RuntimeError('native_output_limit_projection_unverified')
                 if expect_delivery:
                     wait_for_delivery(webhook, 'opencode_error', 'An error needs your attention')
