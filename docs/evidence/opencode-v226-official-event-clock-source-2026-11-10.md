@@ -214,12 +214,25 @@ The installed notification binary was a TEST-only prototype with unqualified
 reader/clock data, not the production candidate.
 
 The first native turn succeeded but its expected completion webhook did not
-arrive within the harness deadline. Four later turns using that same prototype
-binary each delivered one completion webhook. Nine further turns using a
+arrive within the harness deadline. Ten later turns using that same prototype
+binary each delivered one completion webhook. Nineteen further turns using a
 separate TEST-only build with composition diagnostics enabled also each
 delivered one. The first missed delivery was not reproduced or explained; its
 native execution and terminal step succeeded. These results demonstrate a real
 local model path but do not establish production qualification or reliability.
+
+In a separate scripted-provider experiment, forcing a 750 ms delay before the
+native reader opened produced a successful native turn without a webhook; its
+undelayed control delivered normally. A TEST-only attempt to await reader
+priming did not fix the forced-delay case, and both delayed runs recorded a
+checkpoint lookup timeout. This demonstrates a failure under the injected
+delay, but does not prove it caused the earlier real-model miss. Neither the
+delay nor the unsuccessful priming experiment was applied to the product.
+An additional TEST-only variant began the first native iterator read before
+the same injected delay and delivered the completion webhook. This suggests
+that opening the stream earlier can prevent the injected loss. It is not yet
+a production fix: buffering before the SDK observes an event must preserve the
+original ingress clock sample and avoid extending freshness or replay budgets.
 
 For comparison, the clean ordinary product binary at `2ab6c3e3` delivered a
 completion webhook from the pinned OpenCode 2.0.21 Darwin ARM64 executable
