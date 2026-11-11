@@ -193,6 +193,29 @@ def official_binary(archive, target):
         target.chmod(0o700)
     return digest(target)
 
+def prepare_windows_private_root(root):
+    """Use the established native ACL fixture before creating any owned children.
+
+    Windows installed notifications reject a sandbox inheriting broad runner
+    permissions. This hardens TEST-only custody; it never grants observer admission.
+    """
+    if sys.platform != 'win32':
+        return
+    helper = Path(__file__).resolve().parent / 'opencode-private-root-windows.go'
+    if not helper.is_file():
+        raise RuntimeError('windows_private_root_unverified')
+    try:
+        result = subprocess.run(
+            ['go', 'run', str(helper), str(root)],
+            cwd=helper.parent.parent, capture_output=True, timeout=90,
+            check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        raise RuntimeError('windows_private_root_unverified') from None
+    if result.returncode != 0:
+        # Do not log helper output or any Windows profile / ACL identities.
+        raise RuntimeError('windows_private_root_unverified')
+
+
 def run(archive, root, receiver=None, clock_skew_ms=0):
     spec = importlib.util.spec_from_file_location('existing_native_provider',
         Path(__file__).resolve().parent / 'opencode-semantic-e2e.py')
@@ -272,8 +295,11 @@ def run(archive, root, receiver=None, clock_skew_ms=0):
                        '--binary', str(receiver), '--webhook']
             result = subprocess.run(command, cwd=paths['project'], env=env,
                                     capture_output=True, text=True, timeout=60)
-            if result.returncode or not (plugins / 'agent-notifications.js').is_file():
-                raise RuntimeError('managed_install_unverified')
+            if result.returncode:
+                # Installer stdout/stderr are private. Report only the stage.
+                raise RuntimeError('managed_install_command_failed')
+            if not (plugins / 'agent-notifications.js').is_file():
+                raise RuntimeError('managed_plugin_file_missing')
         with socket.socket() as listener:
             listener.bind(('127.0.0.1', 0))
             port = listener.getsockname()[1]
@@ -606,6 +632,7 @@ def main():
     skew_ms = 12000 if args.clock_skew_negative else -12000 if args.clock_skew_past_negative else 0
     with tempfile.TemporaryDirectory(prefix='TEST-opencode-v226-', dir=os.environ.get('RUNNER_TEMP')) as temp:
         try:
+            prepare_windows_private_root(Path(temp))
             result = run(args.archive, Path(temp), args.receiver, skew_ms)
         except Exception as error:
             # Never leak native session IDs, paths, model messages or provider errors.
@@ -614,7 +641,9 @@ def main():
                            'native_startup_timeout', 'source_autoload_missing',
                            'host_capabilities_mismatch', 'private_trace_limit',
                            'native_source_events_missing', 'local_provider_unused', 'native_execution_start_unseen',
-                           'native_source_envelope_unverified', 'native_source_epoch_unverified', 'managed_install_unverified',
+                           'native_source_envelope_unverified', 'native_source_epoch_unverified',
+                           'windows_private_root_unverified', 'managed_install_command_failed',
+                           'managed_plugin_file_missing', 'managed_install_unverified',
                            'private_host_log_limit', 'single_denial_diagnostic_missing',
                            'denied_host_delivered_webhook', 'source_native_question_missing',
                            'source_native_question_unverified', 'source_question_reply_unseen',
