@@ -1015,8 +1015,11 @@ def main():
     skew_ms = 12000 if args.clock_skew_negative else -12000 if args.clock_skew_past_negative else 0
     with OwnedTemporaryDirectory(prefix='TEST-opencode-v226-', dir=os.environ.get('RUNNER_TEMP')) as temp:
         try:
-            prepare_windows_private_root(Path(temp))
-            result = run(args.archive, Path(temp), args.receiver, skew_ms, args.restart_denial, args.expect_delivery, args.native_app, args.skew_after_delivery, args.service, args.darwin_live_signer.resolve(strict=True) if args.darwin_live_signer else None, args.mutate_peer_events, args.observe_auto_compaction)
+            # On macOS the default /var temporary path aliases /private/var.
+            # The owned-host boundary deliberately rejects alias paths.
+            root = Path(temp).resolve(strict=True)
+            prepare_windows_private_root(root)
+            result = run(args.archive, root, args.receiver, skew_ms, args.restart_denial, args.expect_delivery, args.native_app, args.skew_after_delivery, args.service, args.darwin_live_signer.resolve(strict=True) if args.darwin_live_signer else None, args.mutate_peer_events, args.observe_auto_compaction)
             result['serviceMode'] = args.service
             result['liveSignerObserved'] = args.darwin_live_signer is not None
             result['peerEventIDTimestampAndSessionIsolationObserved'] = args.mutate_peer_events

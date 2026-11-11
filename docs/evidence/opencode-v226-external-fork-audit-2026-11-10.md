@@ -180,6 +180,14 @@ preserved the edited bytes. The temporary harness added the already-reviewed
 matched the product lock, but its source commit was not independently verified.
 This is a 2.0.21 regression, not a 2.2.6 production grant.
 
+The macOS source-only service harness failed four local runs with
+`single_denial_diagnostic_missing` when its temporary root used the default
+`/var/folders` alias. With an otherwise equivalent canonical `/private/tmp`
+root, the installed receiver reported denial for both host lifetimes. Resolving
+the temporary root before setup also passed with the default temporary
+directory. These observations concern the test root and denied startup only;
+they do not establish that every aliased product installation is supported.
+
 1. The public CI artifact's installed webhook delivery was reproduced as described above. Still independently verify a receiver built from the exact candidate HEAD and the applicable native desktop presentation; do not compare unrelated binaries.
 2. Independently review the specific 2.2.6 V2 event reader and held-process provenance, and the Bun 1.4.4 FFI/JSValue-to-slot source behavior. Bind the runtime and native image evidence without caller-provided authority or fake clock rows.
 3. Establish per-platform original `Event.Payload.created` source/JS `Date.now()` wall semantics, Go monotonic-to-wall translation, measured worst-case bounds plus reviewed error margins, reboot/clock adjustment/suspend/stale-event negatives, and invalidation on process/image changes.
