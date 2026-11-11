@@ -207,8 +207,8 @@ def wait_for_delivery(webhook, event_type, message):
     wait(matching, 15, 'expected_delivery_missing')
 
 
-def verify_macos_desktop(root):
-    """Correlate this TEST install's private submissions to OS banner logs."""
+def desktop_submitted(root):
+    """Return only owned TEST submissions; no content leaves this process."""
     spool = root / 'control' / 'opencode-native-spool'
     uuid_pattern = r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}'
     def submitted():
@@ -232,11 +232,16 @@ def verify_macos_desktop(root):
                 except (OSError, ValueError, TypeError, AttributeError):
                     raise RuntimeError('desktop_receipt_invalid')
         return ids
-    # Completion, question, permission, provider failure and output-limit failure.
-    ids = wait(lambda: (values if len(values := submitted()) >= 5 else None), 15,
-               'desktop_submissions_missing')
+    return submitted()
+
+
+def verify_macos_desktop(ids, started_at):
+    """Correlate one distinct submission for each TEST stage with OS banners."""
+    uuid_pattern = r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}'
+    if len(ids) != 5:
+        raise RuntimeError('desktop_submissions_missing')
     time.sleep(2)  # Allow macOS unified logging to flush this private test's submissions.
-    log = subprocess.run(['/usr/bin/log', 'show', '--last', '10m', '--style', 'syslog',
+    log = subprocess.run(['/usr/bin/log', 'show', '--start', started_at, '--style', 'syslog',
                           '--predicate', 'process == "usernoted" AND eventMessage CONTAINS '
                                          '"com.777genius.agent-notifications"'],
                          capture_output=True, text=True, timeout=60)
@@ -616,6 +621,7 @@ def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False, exp
                     with webhook.lock:
                         webhook.bodies.clear()
                     (root / 'skew.trigger').touch(exist_ok=False)
+                desktop_log_start = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
                 source_wall_start_ms = int(time.time() * 1000)
                 session = request('/api/session', {'title': 'TEST-source-2.2.6',
                                      'location': {'directory': str(paths['project'])}})
@@ -753,8 +759,19 @@ def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False, exp
                 if r1.get('valid') is not True or r1.get('runParts') != 3:
                     raise RuntimeError('native_assistant_projection_unverified')
                 print('source-stage: native-session-projection-verified', flush=True)
+                desktop_ids = set()
+                desktop_stages = {}
+                def capture_desktop(stage):
+                    if native_app is None:
+                        return
+                    fresh = wait(lambda: desktop_submitted(root) - desktop_ids, 15, 'desktop_submissions_missing')
+                    if len(fresh) != 1:
+                        raise RuntimeError('desktop_submissions_ambiguous')
+                    desktop_ids.update(fresh)
+                    desktop_stages[stage] = next(iter(fresh))
                 if expect_delivery:
                     wait_for_delivery(webhook, 'task_complete', 'Task completed')
+                    capture_desktop('completion')
                 if observe_compaction:
                     # The first turn seeded context. The loopback provider now
                     # returns a context-length error once, forcing a genuine
@@ -783,6 +800,8 @@ def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False, exp
                                 new_bodies = list(webhook.bodies[prior_delivery_count:])
                             return any(json.loads(body).get('notification_type') == 'task_complete' for body in new_bodies)
                         wait(new_completion, 15, 'source_auto_compaction_delivery_missing')
+                        capture_desktop('compaction')
+                        desktop_stages.pop('compaction', None)
                     provider.mode = 'success'
                     print('source-stage: auto-compaction-verified', flush=True)
                 # Independently verify native pending question, reply and settled turn.
@@ -806,13 +825,17 @@ def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False, exp
                     raise RuntimeError('native_question_projection_unverified')
                 if expect_delivery:
                     wait_for_delivery(webhook, 'question', 'OpenCode asked a question')
-                request('/api/session/' + question_sid + '/form/' + forms[0]['id'] + '/reply',
-                        {'answer': {'q0': 'Yes'}})
-                wait(lambda: any(r.get('type') == 'form.replied' and r.get('sessionID') == question_sid
-                                 for r in rows()[question_begin:]), 15, 'source_question_reply_unseen')
-                request('/api/experimental/session/' + question_sid + '/wait', method='POST')
-                wait(lambda: any(r.get('type') == 'session.execution.succeeded' and r.get('sessionID') == question_sid
-                                 for r in rows()[question_begin:]), 35, 'source_question_terminal_missing')
+                    capture_desktop('question')
+                def finish_question():
+                    request('/api/session/' + question_sid + '/form/' + forms[0]['id'] + '/reply',
+                            {'answer': {'q0': 'Yes'}})
+                    wait(lambda: any(r.get('type') == 'form.replied' and r.get('sessionID') == question_sid
+                                     for r in rows()[question_begin:]), 15, 'source_question_reply_unseen')
+                    request('/api/experimental/session/' + question_sid + '/wait', method='POST')
+                    wait(lambda: any(r.get('type') == 'session.execution.succeeded' and r.get('sessionID') == question_sid
+                                     for r in rows()[question_begin:]), 35, 'source_question_terminal_missing')
+                if native_app is None:
+                    finish_question()
                 provider.mode = 'success'
                 print('source-stage: question-verified', flush=True)
                 # Permission.asked is likewise ephemeral, and needs an independent live pending snapshot.
@@ -836,10 +859,14 @@ def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False, exp
                     raise RuntimeError('native_permission_projection_unverified')
                 if expect_delivery:
                     wait_for_delivery(webhook, 'permission_request', 'OpenCode requested permission')
-                request('/api/session/' + permission_sid + '/permission/' + pending[0]['id'] + '/reply',
-                        {'decision': 'reject'})
-                wait(lambda: any(r.get('type') == 'permission.replied' and r.get('sessionID') == permission_sid
-                                 for r in rows()[permission_begin:]), 15, 'source_permission_reply_unseen')
+                    capture_desktop('permission')
+                def finish_permission():
+                    request('/api/session/' + permission_sid + '/permission/' + pending[0]['id'] + '/reply',
+                            {'decision': 'reject'})
+                    wait(lambda: any(r.get('type') == 'permission.replied' and r.get('sessionID') == permission_sid
+                                     for r in rows()[permission_begin:]), 15, 'source_permission_reply_unseen')
+                if native_app is None:
+                    finish_permission()
                 provider.mode = 'success'
                 print('source-stage: permission-verified', flush=True)
                 # Permanent provider failure must produce a durable native terminal (not a received clock).
@@ -871,6 +898,7 @@ def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False, exp
                     raise RuntimeError('native_error_projection_unverified')
                 if expect_delivery:
                     wait_for_delivery(webhook, 'opencode_error', 'An error needs your attention')
+                    capture_desktop('provider_failure')
                 provider.mode = 'success'
                 print('source-stage: terminal-error-verified', flush=True)
                 # A real output-limit terminal stores its error on the native
@@ -905,9 +933,16 @@ def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False, exp
                     raise RuntimeError('native_output_limit_projection_unverified')
                 if expect_delivery:
                     wait_for_delivery(webhook, 'opencode_error', 'An error needs your attention')
+                    capture_desktop('output_limit')
                 provider.mode = 'success'
                 print('source-stage: output-limit-verified', flush=True)
-                desktop_count = verify_macos_desktop(root) if native_app is not None else 0
+                desktop_count = 0
+                if native_app is not None:
+                    if set(desktop_stages) != {'completion', 'question', 'permission', 'provider_failure', 'output_limit'}:
+                        raise RuntimeError('desktop_submissions_missing')
+                    desktop_count = verify_macos_desktop(set(desktop_stages.values()), desktop_log_start)
+                    finish_question()
+                    finish_permission()
                 if webhook is not None and not expect_delivery:
                     log_file = root / 'host.private.log'
                     if log_file.stat().st_size > 512 * 1024:
@@ -1083,7 +1118,7 @@ def main():
                            'managed_webhook_configuration_failed',
                            'private_host_log_limit', 'single_denial_diagnostic_missing',
                            'expected_delivery_missing', 'delivery_payload_invalid',
-                           'desktop_receipt_invalid', 'desktop_submissions_missing',
+                           'desktop_receipt_invalid', 'desktop_submissions_ambiguous', 'desktop_submissions_missing',
                            'desktop_presentation_log_unavailable', 'desktop_presentations_missing',
                            'skewed_host_delivered_webhook',
                            'denied_host_delivered_webhook', 'restart_host_unavailable',
