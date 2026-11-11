@@ -17,6 +17,26 @@ This is a scoped evidence review for [issue #642](https://github.com/777genius/a
 4. Its own `FORK.md` confirms that Bun 1.4.4 FFI differs from 1.4.2 and that the local macOS desktop helper was ad-hoc re-signed with `LSUIElement=true`. Neither circumstance is evidence that a published, signed Agent Notifications product has an accepted desktop delivery.
 5. The fork's `third_party/integrationctl` vendoring and module `replace` are local-build expedients. They must not be copied into the product or treated as UAP's native trust review.
 
+## Local test of the exact public fork artifact — 2026-11-11
+
+On macOS 15.6.1 ARM64, the exact public CI artifact (ZIP SHA-256
+`d67b6f596470596dd2e2fb64907d1ab1bc38e7342f2f90fe51affe3ec2360406`,
+matching GitHub's artifact digest; executable SHA-256
+`511e8af2718bf6f07d11af480d496a37be9181277148fb54a6df4a59b3d05e6c`)
+was installed in an isolated TEST home with the official OpenCode 2.2.6
+ARM64 image and a loopback-only model provider and webhook. A genuine source
+completion and the native assistant projection were observed, but no completion
+webhook arrived within the delivery assertion's 15-second window. The test
+failed `expected_delivery_missing` before reaching the question, permission,
+and error scenarios. A second diagnostic run also had no completion webhook;
+its attempt to enable plugin diagnostics via a file path was rejected by
+OpenCode as a non-directory and therefore did not establish the failure phase.
+
+This is a scoped negative result for that artifact and test setup, not proof
+that the reporter's different local build or macOS 26 configuration cannot
+deliver. The reason for missing delivery remains undetermined; the result does
+not qualify the fork's reader or clock or authorize its trust rows.
+
 ## Existing independent observations (not admission)
 
 - [PR #643 native source E2E](https://github.com/777genius/agent-notifications/actions/runs/42768432303) passed genuine source/installed-denied scenarios on Linux x64, macOS 15 ARM64 and macOS 26 ARM64 with official OpenCode 2.2.6/Bun 1.4.4.
