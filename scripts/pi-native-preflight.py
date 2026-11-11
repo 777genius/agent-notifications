@@ -149,7 +149,7 @@ def wait_for(predicate, seconds=8, failure="fixture_readiness_timeout"):
 
 def linux_desktop(lab, terminal_lifetime=90):
     """Owned X11/PulseAudio session reused by the actual installed-Pi fixture."""
-    names = ("dbus-daemon", "Xvfb", "openbox", "dunst", "xterm", "xdotool", "pulseaudio", "pactl", "parec", "aplay", "notify-send", "ffmpeg")
+    names = ("dbus-daemon", "Xvfb", "openbox", "dunst", "xterm", "xdotool", "sleep", "pulseaudio", "pactl", "parec", "aplay", "notify-send", "ffmpeg")
     paths = {name: shutil.which(name) for name in names}
     lab.report["tools"] = {name: {"available": bool(path), **({"sha256": digest(path)} if path else {})} for name, path in paths.items()}
     if not all(paths.values()):
@@ -186,8 +186,14 @@ def linux_desktop(lab, terminal_lifetime=90):
     window_ids = []
     for role in ("origin", "distractor"):
         title = "TEST-pi-" + role + "-" + nonce
-        lab.start([paths["xterm"], "-T", title, "-e", sys.executable, "-c", "import time; time.sleep(" + str(terminal_lifetime) + ")"])
+        # The Actions setup-python interpreter may need LD_LIBRARY_PATH,
+        # deliberately absent from this private fixture environment. Use the
+        # system sleep binary to hold a real xterm open without inheriting host
+        # loader paths or weakening X11 foreground/window observations.
+        terminal = lab.start([paths["xterm"], "-T", title, "-e", paths["sleep"], str(terminal_lifetime)])
         def search():
+            if terminal.poll() is not None:
+                raise Unqualified("xterm_fixture_exited")
             out, status = lab.run([paths["xdotool"], "search", "--onlyvisible", "--name", "^" + title + "$"], check=False)
             return out.strip().splitlines()[0] if status == 0 and out.strip() else None
         window_ids.append(wait_for(search, failure="xterm_window_not_visible"))
