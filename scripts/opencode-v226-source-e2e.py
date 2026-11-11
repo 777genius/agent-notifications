@@ -347,21 +347,26 @@ def stop_official_host_tree(host):
             host.wait(timeout=5)
 
 
-def cleanup_with_sharing_retry(cleanup, windows, clock=time.monotonic, pause=time.sleep):
-    """Retry only a transient Windows sharing violation; never ignore it."""
+def cleanup_with_sharing_retry(cleanup, windows, clock=time.monotonic, pause=time.sleep, owned_root=None):
+    """Retry narrowly identified Windows cleanup races; never ignore failure."""
     deadline = clock() + 5
     while True:
         try:
             return cleanup()
         except PermissionError as error:
-            if not windows or getattr(error, 'winerror', None) != 32 or clock() >= deadline:
+            code = getattr(error, 'winerror', None)
+            # Windows CI returned access denied for this SQLite file after
+            # host exit. Do not retry other ACL failures, paths or platforms.
+            shm = os.path.join(owned_root, 'data', 'opencode', 'opencode.db-shm') if owned_root else None
+            same_shm = shm and error.filename and os.path.normcase(os.path.abspath(error.filename)) == os.path.normcase(os.path.abspath(shm))
+            if not windows or not (code == 32 or code == 5 and same_shm) or clock() >= deadline:
                 raise
             pause(.1)
 
 
 class OwnedTemporaryDirectory(tempfile.TemporaryDirectory):
     def cleanup(self):
-        return cleanup_with_sharing_retry(super().cleanup, sys.platform == 'win32')
+        return cleanup_with_sharing_retry(super().cleanup, sys.platform == 'win32', owned_root=self.name)
 
 
 PEER_PLUGIN = r'''import {appendFileSync} from 'node:fs';

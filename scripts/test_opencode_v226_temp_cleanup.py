@@ -1,6 +1,7 @@
 """Bounded cleanup retries must not hide persistent or unrelated failures."""
 import importlib.util
 from pathlib import Path
+import os
 import unittest
 
 spec = importlib.util.spec_from_file_location('source_e2e', Path(__file__).with_name('opencode-v226-source-e2e.py'))
@@ -15,6 +16,38 @@ def sharing_error(code):
 
 
 class CleanupTest(unittest.TestCase):
+    def test_retries_access_denied_only_for_owned_sqlite_shm(self):
+        root = os.path.abspath('TEST-owned-root')
+        target = os.path.join(root, 'data', 'opencode', 'opencode.db-shm')
+        calls = []
+
+        def transient():
+            calls.append(1)
+            if len(calls) == 1:
+                error = PermissionError(13, 'TEST only', target)
+                error.winerror = 5
+                raise error
+            return 'closed'
+
+        self.assertEqual(source.cleanup_with_sharing_retry(transient, True, lambda: 0, lambda _: None, root), 'closed')
+        self.assertEqual(len(calls), 2)
+
+        for path, windows in ((os.path.join(root, 'other'), True), (target, False)):
+            def denied():
+                error = PermissionError(13, 'TEST only', path)
+                error.winerror = 5
+                raise error
+            with self.assertRaises(PermissionError):
+                source.cleanup_with_sharing_retry(denied, windows, lambda: 0, lambda _: None, root)
+
+        times = iter((0, 5))
+        def persistent():
+            error = PermissionError(13, 'TEST only', target)
+            error.winerror = 5
+            raise error
+        with self.assertRaises(PermissionError):
+            source.cleanup_with_sharing_retry(persistent, True, lambda: next(times), lambda _: None, root)
+
     def test_retries_windows_sharing_violation_until_cleanup(self):
         calls, delays = [], []
 
