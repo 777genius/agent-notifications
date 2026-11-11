@@ -71,6 +71,15 @@ the application's bundle identifier. This observes OS presentation on macOS
 15.6.1; it does not prove that a person saw each banner or establish behavior on
 macOS 26.
 
+The reusable source E2E now also supports a signed `--native-app` in positive
+mode. A subsequent run with the **non-diagnostic** TEST prototype correlated
+five `submitted` native spool receipts to five macOS `usernoted` banner entries
+by the test installation's own request identifiers; all four fixed-copy
+webhook scenarios also passed. This avoids attributing an unrelated banner from
+the same app to the test. The receipt and log correlation confirms submission
+and OS presentation counts; the aggregate banner count is not a per-event-type
+mapping. The run does not convert the prototype's copied trust data into proof.
+
 These builds intentionally copy unqualified source/clock claims for a local
 experiment. They are neither PR artifacts nor safe release candidates. The
 positive result isolates the remaining work to authenticating and qualifying
@@ -96,6 +105,22 @@ isolated, that arbitrary plugins cannot alter the source clock, or that replay
 and provenance are qualified. In particular, delivery in this experiment is
 not a test that a stale timestamp reaching the observer would be accepted or
 rejected: instrumentation showed that the modified timestamp did not reach it.
+
+The pinned upstream [promise adapter](https://github.com/anomalyco/opencode/blob/dc2ffcf8bf26f9e669b6aa22b95f50e12be15e06/packages/plugin/src/promise/adapter.ts#L331-L341)
+(SHA-256 `e5e8603c64b3b0a8432fea05f5ff01c329dc8e3a5dde00235996ba086e2db27b`)
+independently shows each `event.subscribe` stream maps events through the
+OpenCode event schema encoder. This explains the observed boundary as a
+plausible source-level mechanism; the experiment alone does not prove the
+encoder's behavior for every nested property or subscriber type.
+
+Separately, a TEST-only prototype deliberately changed the completion's
+`created` value by -120 seconds **inside the observer's own reader** before
+correlation. The diagnostic confirmed the injection and the preparation
+boundary reported `prep.catch.birth`; no webhook arrived within 15 seconds.
+The control prototype above delivered normally. The injected build SHA-256 was
+`d50262bea929f6613cf12e826e3529b2a8fd9a7b6186e666aa45a956b971cf79`.
+This demonstrates rejection at that boundary for this injected stale value;
+it does not establish source authenticity or qualify the copied clock bounds.
 
 ## Existing independent observations (not admission)
 

@@ -54,6 +54,35 @@ not independently prove the native pointer/u64 ABI, the OpenCode binary's source
 provenance or a timing bound. The real-image E0 and successful fork delivery
 remain observations, not substitutes for those checks.
 
+The same Bun tag's [WebKit dependency definition](https://github.com/oven-sh/bun/blob/38afee6c84fcf48c0edb2466aa4b27d287a59c30/scripts/build/deps/webkit.ts#L1-L6)
+defaults to WebKit commit `d6375c72affe0f70222cdcb45012b10f0bf3a9d5`.
+Its [CurrentTime.cpp](https://github.com/oven-sh/WebKit/blob/d6375c72affe0f70222cdcb45012b10f0bf3a9d5/Source/WTF/wtf/CurrentTime.cpp)
+has SHA-256 `917066d3283b21bfe5173eab3bf575c3d95740d0e34080007807f582083df866`,
+identical to the pinned CurrentTime source previously audited for Bun 1.4.2.
+On Darwin that source reads wall time using `clock_gettime(CLOCK_REALTIME)`
+and continuous time using `mach_continuous_time`. This narrows the source
+delta, but a build can override the WebKit revision; byte-identical source for
+this file does not itself prove the shipped executable's full build provenance,
+the active Effect clock, or a scheduling/error bound.
+
+At that WebKit revision, the [FFI conversion source](https://github.com/oven-sh/WebKit/blob/d6375c72affe0f70222cdcb45012b10f0bf3a9d5/Source/JavaScriptCore/ffi/FFIConversions.cpp#L311-L413)
+(SHA-256 `e7c979e4a01e3e64306579cfb533b7b457dbc4ab2eaac9c839f483a0dd3e55f6`)
+maps null pointer arguments to zero and dispatches pointer and unsigned-64-bit
+arguments to separate conversion paths; its u64 return path constructs a
+BigInt. The product additionally rejects non-safe or misaligned numeric
+addresses and validates u64 arithmetic. This narrows the Bun slow-path audit,
+but does not by itself cover every JIT/fast path, ABI, buffer lifetime or
+prove which source was compiled into the executing OpenCode binary.
+
+The same pinned [FFI inline-cache implementation](https://github.com/oven-sh/WebKit/blob/d6375c72affe0f70222cdcb45012b10f0bf3a9d5/Source/JavaScriptCore/ffi/FFIICStub.cpp#L163-L223)
+and [DFG implementation](https://github.com/oven-sh/WebKit/blob/d6375c72affe0f70222cdcb45012b10f0bf3a9d5/Source/JavaScriptCore/ffi/FFIDFGCodegen.cpp#L246-L304)
+also contain separate integer/BigInt and numeric-pointer conversion paths,
+with cases outside their fast paths delegated to slower handling. On the local
+official macOS ARM64 2.2.6 image, an optional E0 stress run completed 4,096
+additional native-clock samples after twelve independent Go comparisons;
+counter and wall observations did not regress. This demonstrates repeated
+calls on one machine, not which JIT tier executed or a worst-case bound.
+
 ## Additional genuine-image stress, still E0 only
 
 Draft #643 adds 12 actual embedded-Bun/Go clock comparisons on each observed Linux x64 and macOS ARM64 port, plus a timer-delayed wall/counter nonregression observation (commits `1cec7ed`, `688d755`). The explicit reports retain `nativeObserverQualified=false`, `nativeClockQualified=false` and `notificationDeliveryQualified=false`. They do not establish event-source Q, reader R, time translation T, native admission or desktop/webhook delivery. A failed observation is a useful evidence gap, not grounds for bypassing admission.

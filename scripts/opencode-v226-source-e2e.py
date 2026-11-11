@@ -196,6 +196,48 @@ def wait_for_delivery(webhook, event_type, message):
     wait(matching, 15, 'expected_delivery_missing')
 
 
+def verify_macos_desktop(root):
+    """Correlate this TEST install's private submissions to OS banner logs."""
+    spool = root / 'control' / 'opencode-native-spool'
+    uuid_pattern = r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}'
+    def submitted():
+        ids = set()
+        if not spool.is_dir():
+            return ids
+        for directory in spool.iterdir():
+            if not directory.is_dir() or not re.fullmatch(uuid_pattern, directory.name):
+                continue
+            for receipt in directory.glob('*.receipt'):
+                try:
+                    with receipt.open('rb') as stream:
+                        raw = stream.read(8193)
+                    if len(raw) > 8192:
+                        raise ValueError('receipt too large')
+                    value = json.loads(raw)
+                    if (value.get('schemaVersion') == 1 and value.get('status') == 'submitted' and
+                            value.get('correlationID') == directory.name and
+                            value.get('notificationID') == directory.name):
+                        ids.add(directory.name)
+                except (OSError, ValueError, TypeError, AttributeError):
+                    raise RuntimeError('desktop_receipt_invalid')
+        return ids
+    ids = wait(lambda: (values if len(values := submitted()) >= 4 else None), 15,
+               'desktop_submissions_missing')
+    time.sleep(2)  # Allow macOS unified logging to flush this private test's submissions.
+    log = subprocess.run(['/usr/bin/log', 'show', '--last', '10m', '--style', 'syslog',
+                          '--predicate', 'process == "usernoted" AND eventMessage CONTAINS '
+                                         '"com.777genius.agent-notifications"'],
+                         capture_output=True, text=True, timeout=60)
+    if log.returncode:
+        raise RuntimeError('desktop_presentation_log_unavailable')
+    presented = set(re.findall(r'Presenting <NotificationRecord app:"com\.777genius\.agent-notifications"'
+                               r'[^\n]*?req:"(' + uuid_pattern + r')"[^\n]*?> as banner', log.stdout))
+    count = len(ids & presented)
+    if count < 4:
+        raise RuntimeError('desktop_presentations_missing')
+    return count
+
+
 
 def valid_native_go_t0_sample(value, platform):
     """Strict, observational Go E0 frame check; never grants native qualification."""
@@ -299,7 +341,7 @@ def stop_official_host_tree(host):
             host.wait(timeout=5)
 
 
-def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False, expect_delivery=False):
+def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False, expect_delivery=False, native_app=None):
     spec = importlib.util.spec_from_file_location('existing_native_provider',
         Path(__file__).resolve().parent / 'opencode-semantic-e2e.py')
     native = importlib.util.module_from_spec(spec)
@@ -376,8 +418,10 @@ def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False, exp
                        '--home', str(paths['home']),
                        '--xdg-config-home', str(paths['config']),
                        '--binary', str(receiver), '--webhook']
+            if native_app is not None:
+                command += ['--desktop', '--native-app', str(native_app.resolve(strict=True))]
             result = subprocess.run(command, cwd=paths['project'], env=env,
-                                    capture_output=True, text=True, timeout=60)
+                                    capture_output=True, text=True, timeout=100 if native_app else 60)
             if result.returncode:
                 # Installer stdout/stderr are private. Report only the stage.
                 raise RuntimeError('managed_install_command_failed')
@@ -401,7 +445,7 @@ def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False, exp
                 revision = inspected['revision']
             except (ValueError, KeyError, TypeError):
                 raise RuntimeError('managed_webhook_configuration_failed')
-            edits = {'/notifications/desktop/enabled': False,
+            edits = {'/notifications/desktop/enabled': native_app is not None,
                      '/notifications/webhook/enabled': True,
                      '/notifications/webhook/preset': 'custom',
                      '/notifications/webhook/format': 'json',
@@ -689,6 +733,7 @@ def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False, exp
                     wait_for_delivery(webhook, 'opencode_error', 'An error needs your attention')
                 provider.mode = 'success'
                 print('source-stage: terminal-error-verified', flush=True)
+                desktop_count = verify_macos_desktop(root) if native_app is not None else 0
                 if webhook is not None and not expect_delivery:
                     log_file = root / 'host.private.log'
                     if log_file.stat().st_size > 512 * 1024:
@@ -773,6 +818,7 @@ def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False, exp
                         'sourceTerminalErrorObserved': True, 'attentionEventsAreEphemeral': True,
                         'installedDeniedStartup': webhook is not None and not expect_delivery,
                         'installedDeliveryObserved': expect_delivery,
+                        'desktopSubmissionAndBannerCount': desktop_count,
                         'observedEventTypes': sorted(observed),
                         'nativeObserverQualified': False, 'nativeClockQualified': False,
                         'notificationDeliveryQualified': False}
@@ -792,6 +838,8 @@ def main():
     parser.add_argument('--report', type=Path, required=True)
     parser.add_argument('--receiver', type=Path,
                         help='Exact-source AN candidate to install for denial or delivery observation')
+    parser.add_argument('--native-app', type=Path,
+                        help='Verified signed macOS app; require correlated desktop banner presentation')
     skew = parser.add_mutually_exclusive_group()
     skew.add_argument('--clock-skew-negative', action='store_true',
                       help='Isolated TEST-only +12s host wall shift; assert source epoch mismatch')
@@ -804,6 +852,8 @@ def main():
     parser.add_argument('--installed-clock-skew', action='store_true',
                         help='With a skew mode and receiver, observe that no webhook arrives')
     args = parser.parse_args()
+    if args.native_app is not None and (sys.platform != 'darwin' or not args.expect_delivery):
+        parser.error('native app requires macOS and delivery mode')
     if args.installed_clock_skew and (args.receiver is None or args.restart_denial or
                                       not (args.clock_skew_negative or args.clock_skew_past_negative)):
         parser.error('installed clock skew requires a receiver and a clock-skew mode')
@@ -819,7 +869,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix='TEST-opencode-v226-', dir=os.environ.get('RUNNER_TEMP')) as temp:
         try:
             prepare_windows_private_root(Path(temp))
-            result = run(args.archive, Path(temp), args.receiver, skew_ms, args.restart_denial, args.expect_delivery)
+            result = run(args.archive, Path(temp), args.receiver, skew_ms, args.restart_denial, args.expect_delivery, args.native_app)
         except Exception as error:
             # Never leak native session IDs, paths, model messages or provider errors.
             safe_errors = {'official_archive_unverified', 'official_executable_not_unique',
@@ -833,6 +883,8 @@ def main():
                            'managed_webhook_configuration_failed',
                            'private_host_log_limit', 'single_denial_diagnostic_missing',
                            'expected_delivery_missing', 'delivery_payload_invalid',
+                           'desktop_receipt_invalid', 'desktop_submissions_missing',
+                           'desktop_presentation_log_unavailable', 'desktop_presentations_missing',
                            'skewed_host_delivered_webhook',
                            'denied_host_delivered_webhook', 'restart_host_unavailable',
                            'restart_plugin_not_loaded', 'restart_source_completion_missing',

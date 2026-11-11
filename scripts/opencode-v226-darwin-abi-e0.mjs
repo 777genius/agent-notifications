@@ -92,6 +92,20 @@ async function main() {
         before.wallNS-2000000n<=wall && wall<=after.wallNS+2000000n,'clock_containment_unverified');
       if(width>maxBracket)maxBracket=width;
     }
+    // Optional repeated native calls exercise the same pinned image, pointers,
+    // sysctl, Mach counter and conversion after warm-up. This remains sampled
+    // behavior: it does not claim a JIT tier, worst-case bound or qualification.
+    const stressRounds = process.argv[3] === '--stress' ? 4096 : 0;
+    if (stressRounds) {
+      phase = 'clock_repeat_stress';
+      let previous = sample(clock);
+      for (let round = 0; round < stressRounds; round++) {
+        const current = sample(clock);
+        requireValue(current.boot === previous.boot && current.loNS >= previous.loNS &&
+          current.wallNS >= previous.wallNS, 'clock_pause_nonmonotonic');
+        previous = current;
+      }
+    }
     // Observe monotonic counter and wall reading across an actual timer pause.
     // A positive observation never registers a clock cell or delivery authority.
     phase = 'clock_pause_stress';
@@ -108,6 +122,7 @@ async function main() {
     requireValue(await sha256(process.execPath)===officialImage,'image_unverified');
     return { status:'observed_ffi_e0_only',platform:'darwin',arch:'arm64',
       hostVersion:'2.2.6',embeddedBunVersion:'1.4.4',comparisonRounds:12,
+      repeatedNativeSamples:stressRounds,
       delayedCounterAndWallNonregressionObserved:true,
       maxCounterSpanNS:String(maxBracket),disposalRefused:true,...grants };
   } finally { try{clock?.dispose();}catch{} try{library?.close();}catch{} }
