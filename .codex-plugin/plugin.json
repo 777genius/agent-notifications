@@ -1,6 +1,6 @@
 {
     "name": "claude-notifications-go",
-    "version": "1.51.3",
+    "version": "1.51.4",
     "hooks": "./hooks/hooks-codex.json",
     "description": "Desktop notifications for coding agents with sounds and click-to-focus navigation.",
     "author": {

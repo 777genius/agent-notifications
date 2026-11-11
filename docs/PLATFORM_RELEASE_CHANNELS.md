@@ -6,12 +6,12 @@ release commit, an immutable source commit, and its platform branch.
 
 | Platform | Qualified version | Source branch |
 | --- | --- | --- |
-| Linux amd64 / arm64, Windows amd64 | 1.51.3 | `release/platform-linux-windows` |
-| macOS amd64 / arm64 | 1.51.3 | `release/platform-macos` |
+| Linux amd64 / arm64, Windows amd64 | 1.51.4 | `release/platform-linux-windows` |
+| macOS amd64 / arm64 | 1.51.4 | `release/platform-macos` |
 
-All five platform rows, GitHub Latest and main manifests select 1.51.3. This
-complete asset set includes Linux, Windows and macOS native/portable packages and
-the signed, notarized macOS helper. Release checks use the owner-approved basic
+The five public platform channels and GitHub Latest select **v1.51.4**. The published v1.51.4 asset
+set includes Linux, Windows and macOS native/portable packages and the signed,
+notarized macOS helper. Release checks use the owner-approved basic
 five-platform artifact profile and separate macOS E2E. The eleven-cell OpenCode
 installed-business suite was not run; these checks do not establish full native,
 clock/source-epoch, visible desktop or cold-start qualification. A platform channel can also select an explicitly
