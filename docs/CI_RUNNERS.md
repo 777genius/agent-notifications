@@ -8,7 +8,7 @@ their original GitHub runners.
 
 | Original runner | Repository variable | Configured runner |
 | --- | --- | --- |
-| `ubuntu-latest`, `ubuntu-24.04` | `CI_LINUX_RUNNER` | `ubuntu-latest` |
+| `ubuntu-latest`, `ubuntu-24.04` | `CI_LINUX_RUNNER` | `ubuntu-24.04` |
 | `ubuntu-22.04` | `CI_LINUX_2204_RUNNER` | `ubuntu-22.04` |
 | `ubuntu-24.04-arm` | `CI_LINUX_ARM_RUNNER` | `ubuntu-24.04-arm` |
 | `ubuntu-22.04-arm` | `CI_LINUX_ARM_2204_RUNNER` | `ubuntu-22.04-arm` |
@@ -16,7 +16,8 @@ their original GitHub runners.
 | `macos-26` | `CI_MACOS_26_RUNNER` | `namespace-profile-macos-26` |
 
 The Linux variables select GitHub-hosted labels; preserve the explicit Ubuntu
-22.04 and ARM mappings when updating them.
+22.04 and ARM mappings when updating them. The generic Linux override is pinned
+to Ubuntu 24.04 to preserve the previous Ubuntu baseline as `ubuntu-latest` moves.
 The routing expression retains the original runner when a variable is empty or
 removed. A pull request whose head repository differs from `github.repository`,
 including a missing/unknown head repository, always uses the original runner.
