@@ -63,5 +63,53 @@ class SDKSourceTest(unittest.TestCase):
                 semantic.sdk_contents_match_source(archive, root, revision)
 
 
+    def test_requires_executable_files_and_refuses_symlink_source(self):
+        with tempfile.TemporaryDirectory(prefix='TEST-sdk-modes-') as tmp:
+            root = Path(tmp)
+            subprocess.run(['git', 'init', '-q', str(root)], check=True)
+            package = root / 'sdk/opencode-js'
+            package.mkdir(parents=True)
+            (package / 'index.js').write_bytes(b'original')
+            (package / 'tool.sh').write_bytes(b'#!/bin/sh\nexit 0\n')
+            subprocess.run(['git', '-C', str(root), 'add', 'sdk/opencode-js'], check=True)
+            # Force the Git executable bit even when the Windows worktree lacks it.
+            subprocess.run(['git', '-C', str(root), 'update-index', '--chmod=+x',
+                            'sdk/opencode-js/tool.sh'], check=True)
+            identity = ['-c', 'core.hooksPath=/dev/null', '-c', 'user.name=test',
+                        '-c', 'user.email=test@example.invalid']
+            subprocess.run(['git', '-C', str(root), *identity, 'commit', '-qm',
+                            'TEST regular executable source'], check=True)
+            revision = subprocess.check_output(
+                ['git', '-C', str(root), 'rev-parse', 'HEAD'], text=True).strip()
+            archive = root / 'TEST-modes.tgz'
+            with tarfile.open(archive, 'w:gz') as tar:
+                member = tarfile.TarInfo('package/index.js')
+                member.size = len(b'original')
+                tar.addfile(member, io.BytesIO(b'original'))
+            with self.assertRaisesRegex(ValueError, 'member set'):
+                semantic.sdk_contents_match_source(archive, root, revision)
+            with tarfile.open(archive, 'w:gz') as tar:
+                for name, content in [('index.js', b'original'),
+                                      ('tool.sh', b'#!/bin/sh\nexit 0\n')]:
+                    member = tarfile.TarInfo('package/' + name)
+                    member.size = len(content)
+                    tar.addfile(member, io.BytesIO(content))
+            self.assertTrue(semantic.sdk_contents_match_source(archive, root, revision))
+
+            # Insert a symlink in the Git tree without needing OS symlink rights.
+            link_sha = subprocess.check_output(
+                ['git', '-C', str(root), 'hash-object', '-w', '--stdin'],
+                input=b'index.js').decode().strip()
+            subprocess.run(['git', '-C', str(root), 'update-index', '--add',
+                            '--cacheinfo', f'120000,{link_sha},sdk/opencode-js/link.js'],
+                           check=True)
+            subprocess.run(['git', '-C', str(root), *identity, 'commit', '-qm',
+                            'TEST non-regular SDK source'], check=True)
+            symlink_revision = subprocess.check_output(
+                ['git', '-C', str(root), 'rev-parse', 'HEAD'], text=True).strip()
+            with self.assertRaisesRegex(ValueError, 'non-regular entry'):
+                semantic.sdk_contents_match_source(archive, root, symlink_revision)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -70,8 +70,11 @@ def sdk_contents_match_source(tarball, checkout, revision):
             continue
         meta, name = item.split(b'\t', 1)
         mode, kind, object_id = meta.split(b' ')
-        if mode == b'100644' and kind == b'blob':
-            tracked[name.decode('utf-8')] = object_id.decode('ascii')
+        # Git mode 100755 is a regular executable file too. Any other entry
+        # (symlink/submodule) makes the source/package audit unrepresentable.
+        if kind != b'blob' or mode not in (b'100644', b'100755'):
+            raise ValueError('SDK source commit contains non-regular entry')
+        tracked[name.decode('utf-8')] = object_id.decode('ascii')
     seen = set()
     with tarfile.open(tarball, 'r:gz') as archive:
         for member in archive:
