@@ -77,6 +77,26 @@ positive result isolates the remaining work to authenticating and qualifying
 the actual 2.2.6 source, reader and clock contracts rather than implementing a
 second notification transport.
 
+## Other-subscriber mutation observation
+
+Using another TEST-only diagnostic build based on the same prototype, a plugin
+loaded ahead of the observer changed its own received completion envelope's
+`created` value by -120 seconds. A control run left it unchanged. Both runs
+delivered one completion webhook. In a follow-up with an artificial 250 ms
+delay before the observer consumed its completion, instrumentation confirmed
+that its event object was not the other subscriber's object and that its native
+timestamp still equalled the original, not the modified value. A further run
+confirmed the shared witness was present before comparing identities. The
+witness-enabled diagnostic binary SHA-256 was
+`d0bfceb3a7363ad65782e5b87ce2f75df7d1334ab7f9f531f0d0539c2585a9f7`.
+
+This is a single macOS ARM64 observation using instrumented, unqualified
+prototype code. It does not prove that every field or publication route is
+isolated, that arbitrary plugins cannot alter the source clock, or that replay
+and provenance are qualified. In particular, delivery in this experiment is
+not a test that a stale timestamp reaching the observer would be accepted or
+rejected: instrumentation showed that the modified timestamp did not reach it.
+
 ## Existing independent observations (not admission)
 
 - [PR #643 native source E2E](https://github.com/777genius/agent-notifications/actions/runs/42768432303) passed genuine source/installed-denied scenarios on Linux x64, macOS 15 ARM64 and macOS 26 ARM64 with official OpenCode 2.2.6/Bun 1.4.4.
