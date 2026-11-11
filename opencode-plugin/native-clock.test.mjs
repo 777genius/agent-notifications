@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, renameSync, rmSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { address, closeAll, createNativeClock, darwinABI, darwinBoot, filetimeNS,
+import { address, closeAll, createNativeClock, darwinABI, darwinRealtimeABI, darwinBoot, filetimeNS, realtimeNS,
   interruptABI, interruptNS, machNS, uint64, withWallOffset, windowsBoot, windowsKernelABI, windowsNtABI } from './native-clock-contract.mjs';
 import { parseUptime } from './linux-clock.mjs';
 import { findClockCell, selectClockCell } from './clock-cells.mjs';
@@ -52,6 +52,7 @@ test('actual LP64/Win64 ABI contracts use output pointers, unsigned counters and
     mach_timebase_info: { returns: 'i32', args: ['ptr'] },
     sysctlbyname: { returns: 'i32', args: ['ptr', 'ptr', 'ptr', 'ptr', 'u64'] },
   });
+  assert.deepEqual(darwinRealtimeABI, { ...darwinABI, clock_gettime: { returns: 'i32', args: ['i32', 'ptr'] } });
   assert.deepEqual(windowsKernelABI, {
     GetSystemDirectoryW: { returns: 'u32', args: ['ptr', 'u32'] },
     LoadLibraryExW: { returns: 'u64', args: ['ptr', 'u64', 'u32'] },
@@ -65,6 +66,13 @@ test('actual LP64/Win64 ABI contracts use output pointers, unsigned counters and
   assert.equal(address(4096, 8), 4096);
   assert.throws(() => { interruptABI.returns = 'u64'; });
   assert.throws(() => { windowsKernelABI.LoadLibraryExW.args[1] = 'u32'; });
+});
+
+test('Darwin realtime timespec rejects malformed and overflowing values', () => {
+  assert.equal(realtimeNS(1700000000n, 123456789n), 1700000000123456789n);
+  assert.equal(realtimeNS(9223372036n, 854775807n), MAX);
+  for (const args of [[0n, 0n], [-1n, 1n], [1n, -1n], [1n, 1000000000n],
+    [9223372036n, 854775808n], [1, 0n], [1n, 0]]) denied(() => realtimeNS(...args));
 });
 
 test('unsigned FFI conversion rejects lossy numbers and native range errors', () => {

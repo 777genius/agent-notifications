@@ -45,6 +45,7 @@ async function main() {
   requireValue(await sha256(process.execPath) === officialImage, 'image_unverified');
   phase = 'ffi_load';
   let library, clock;
+  const originalDateNow = Date.now;
   try {
     try { library=dlopen('/usr/lib/libSystem.B.dylib',darwinABI); }
     catch { throw new Error('native_ffi_unavailable'); }
@@ -61,6 +62,8 @@ async function main() {
     }
     phase = 'clock_boot';
     const productionSource = process.argv.slice(3).includes('--production-source');
+    const shiftJSWall = process.argv.slice(3).includes('--shift-js-wall');
+    requireValue(!shiftJSWall || productionSource, 'native_clock_unavailable');
     let wrongImageRefused = false;
     if (productionSource) {
       // TEST only: a reported path to unrelated system bytes must not satisfy
@@ -84,6 +87,7 @@ async function main() {
       },
       close(){} // The owning finally closes libSystem once after disposal.
     }, 'darwin-kernel');
+    if (shiftJSWall) Date.now = () => originalDateNow() + 12000;
     let maxBracket=0n;
     // Extended real-FFI E0 scheduling sample, not independently qualified Q/R/T.
     for(let round=0;round<12;round++){
@@ -146,11 +150,12 @@ async function main() {
     return { status:'observed_ffi_e0_only',platform:'darwin',arch:'arm64',
       hostVersion:'2.2.6',embeddedBunVersion:'1.4.4',comparisonRounds:12,
       productionNativeClockObserved:productionSource,
+      shiftedJSWallIgnored:shiftJSWall,
       wrongNativeImageRefused:wrongImageRefused,
       repeatedNativeSamples:stressRounds,
       delayedCounterAndWallNonregressionObserved:true,
       maxCounterSpanNS:String(maxBracket),disposalRefused:true,...grants };
-  } finally { try{clock?.dispose();}catch{} try{library?.close();}catch{} }
+  } finally { Date.now = originalDateNow; try{clock?.dispose();}catch{} try{library?.close();}catch{} }
 }
 try { console.log(JSON.stringify(await main())); }
 catch(error){

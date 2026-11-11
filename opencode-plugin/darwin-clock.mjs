@@ -1,5 +1,7 @@
 import { pinNativeImage } from './native-clock-image.mjs';
-import { address, closeAll, createNativeClock, darwinABI, darwinBoot, machNS, positiveNS, unavailable } from './native-clock-contract.mjs';
+import { address, closeAll, createNativeClock, darwinABI, darwinRealtimeABI, darwinBoot, machNS, positiveNS, realtimeNS, unavailable } from './native-clock-contract.mjs';
+
+const independentWallImage = '90e4d03597b03d2051b65b4d793467764e55bacd8e22bf4824479c7233ea0e15';
 
 // Async ABI preparation only; the returned sample/dispose methods are sync.
 export async function createDarwinClock({ signal } = {}) {
@@ -12,7 +14,8 @@ export async function createDarwinClock({ signal } = {}) {
     const { dlopen, ptr } = await import('bun:ffi');
     if (signal?.aborted) unavailable();
     if (typeof dlopen !== 'function' || typeof ptr !== 'function') unavailable();
-    const library = dlopen('/usr/lib/libSystem.B.dylib', darwinABI);
+    const independentWall = image.imageSHA256 === independentWallImage;
+    const library = dlopen('/usr/lib/libSystem.B.dylib', independentWall ? darwinRealtimeABI : darwinABI);
     releases.push(() => library.close());
     const lib = library.symbols, aligned = view => address(ptr(view), view.BYTES_PER_ELEMENT);
     const base = new Uint32Array(2);
@@ -20,6 +23,7 @@ export async function createDarwinClock({ signal } = {}) {
     const numer = base[0], denom = base[1];
     const name = Buffer.from('kern.bootsessionuuid\0');
     const buffer = new Uint32Array(16), size = new BigUint64Array(1);
+    const wall = independentWall ? new BigInt64Array(2) : undefined;
     function readBoot() {
       buffer.fill(0); size[0] = BigInt(buffer.byteLength);
       const status = lib.sysctlbyname(address(ptr(name)), aligned(buffer), aligned(size), null, 0n);
@@ -29,6 +33,11 @@ export async function createDarwinClock({ signal } = {}) {
       imageSHA256: image.imageSHA256,
       readBoot, readCounter: () => machNS(lib.mach_continuous_time(), numer, denom),
       readWall() {
+        if (independentWall) {
+          wall.fill(0n);
+          if (lib.clock_gettime(0, aligned(wall)) !== 0) unavailable(); // Darwin CLOCK_REALTIME
+          return realtimeNS(wall[0], wall[1]);
+        }
         const ms = Date.now();
         if (!Number.isSafeInteger(ms)) unavailable();
         return positiveNS(BigInt(ms) * 1000000n);

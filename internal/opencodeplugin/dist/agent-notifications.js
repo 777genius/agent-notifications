@@ -219,6 +219,10 @@ function interruptNS(ticks) {
 function filetimeNS(ticks) {
   return positiveNS((uint64(ticks) - 116444736000000000n) * 100n);
 }
+function realtimeNS(seconds, nanoseconds) {
+  if (typeof seconds !== "bigint" || typeof nanoseconds !== "bigint" || seconds < 0n || nanoseconds < 0n || nanoseconds >= 1000000000n) unavailable();
+  return positiveNS(seconds * 1000000000n + nanoseconds);
+}
 function darwinBoot(bytes2, length, status) {
   if (status !== 0 || length !== 37n || !(bytes2 instanceof Uint8Array) || bytes2.length < 37 || bytes2[36] !== 0 || !bytes2.subarray(0, 36).every((b) => b > 0 && b < 128)) unavailable();
   const boot = Buffer.from(bytes2.subarray(0, 36)).toString("ascii").toLowerCase();
@@ -301,7 +305,7 @@ function createNativeClock(port, domain) {
   }
   return Object.freeze({ sample, dispose, imageSHA256: port.imageSHA256 });
 }
-var unavailable, U64, darwinABI, windowsKernelABI, windowsNtABI, interruptABI;
+var unavailable, U64, darwinABI, darwinRealtimeABI, windowsKernelABI, windowsNtABI, interruptABI;
 var init_native_clock_contract = __esm({
   "native-clock-contract.mjs"() {
     "use strict";
@@ -314,6 +318,12 @@ var init_native_clock_contract = __esm({
       mach_continuous_time: ["u64"],
       mach_timebase_info: ["i32", "ptr"],
       sysctlbyname: ["i32", "ptr", "ptr", "ptr", "ptr", "u64"]
+    });
+    darwinRealtimeABI = abi({
+      mach_continuous_time: ["u64"],
+      mach_timebase_info: ["i32", "ptr"],
+      sysctlbyname: ["i32", "ptr", "ptr", "ptr", "ptr", "u64"],
+      clock_gettime: ["i32", "i32", "ptr"]
     });
     windowsKernelABI = abi({
       GetSystemDirectoryW: ["u32", "ptr", "u32"],
@@ -427,7 +437,8 @@ async function createDarwinClock({ signal } = {}) {
     const { dlopen, ptr } = await import("bun:ffi");
     if (signal?.aborted) unavailable();
     if (typeof dlopen !== "function" || typeof ptr !== "function") unavailable();
-    const library = dlopen("/usr/lib/libSystem.B.dylib", darwinABI);
+    const independentWall = image.imageSHA256 === independentWallImage;
+    const library = dlopen("/usr/lib/libSystem.B.dylib", independentWall ? darwinRealtimeABI : darwinABI);
     releases.push(() => library.close());
     const lib = library.symbols, aligned = (view) => address(ptr(view), view.BYTES_PER_ELEMENT);
     const base = new Uint32Array(2);
@@ -435,11 +446,17 @@ async function createDarwinClock({ signal } = {}) {
     const numer = base[0], denom = base[1];
     const name = Buffer.from("kern.bootsessionuuid\0");
     const buffer = new Uint32Array(16), size = new BigUint64Array(1);
+    const wall = independentWall ? new BigInt64Array(2) : void 0;
     return createNativeClock({
       imageSHA256: image.imageSHA256,
       readBoot: readBoot2,
       readCounter: () => machNS(lib.mach_continuous_time(), numer, denom),
       readWall() {
+        if (independentWall) {
+          wall.fill(0n);
+          if (lib.clock_gettime(0, aligned(wall)) !== 0) unavailable();
+          return realtimeNS(wall[0], wall[1]);
+        }
         const ms = Date.now();
         if (!Number.isSafeInteger(ms)) unavailable();
         return positiveNS(BigInt(ms) * 1000000n);
@@ -461,11 +478,13 @@ async function createDarwinClock({ signal } = {}) {
     signal?.removeEventListener("abort", abort);
   }
 }
+var independentWallImage;
 var init_darwin_clock = __esm({
   "darwin-clock.mjs"() {
     "use strict";
     init_native_clock_image();
     init_native_clock_contract();
+    independentWallImage = "90e4d03597b03d2051b65b4d793467764e55bacd8e22bf4824479c7233ea0e15";
   }
 });
 

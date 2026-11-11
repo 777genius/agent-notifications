@@ -123,6 +123,21 @@ unqualified and the experiment is not a release E2E.
 
 Draft #643 adds 12 actual embedded-Bun/Go clock comparisons on each observed Linux x64 and macOS ARM64 port, plus a timer-delayed wall/counter nonregression observation (commits `1cec7ed`, `688d755`). The explicit reports retain `nativeObserverQualified=false`, `nativeClockQualified=false` and `notificationDeliveryQualified=false`. They do not establish event-source Q, reader R, time translation T, native admission or desktop/webhook delivery. A failed observation is a useful evidence gap, not grounds for bypassing admission.
 
+For the exact macOS ARM64 2.2.6 image, the candidate wall witness now reads
+Darwin `clock_gettime(CLOCK_REALTIME)` independently of JavaScript `Date.now`.
+The existing qualified images retain their previous clock implementation. On
+the real image, 12 comparisons with an independent Go helper and 4,096 native
+samples passed with JavaScript wall time shifted forward 12 seconds; a wrong
+image was refused. This is an E0 observation, not qualification of the new
+clock algorithm or proof of the producer's event-time bound.
+
+An isolated TEST-only prototype with copied, unqualified trust rows delivered
+four real OpenCode event webhooks and produced five correlated native macOS
+banners. Separate runs shifting the event source by plus and minus 12 seconds
+observed no webhook. These runs exercise behavior only: their copied trust rows
+are not evidence for production admission and the rejection phase was not
+identified.
+
 **Decision:** maintain `native_source_pending` in UAP and keep #643 Draft. The
 exact Bun image is recognized for custody tests only; do not register an
 OpenCode 2.2.6 trusted reader, clock-policy row or release claim based on this
