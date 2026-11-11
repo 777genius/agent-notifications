@@ -867,6 +867,38 @@ def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False, exp
                     wait_for_delivery(webhook, 'opencode_error', 'An error needs your attention')
                 provider.mode = 'success'
                 print('source-stage: terminal-error-verified', flush=True)
+                # A real output-limit terminal stores its error on the native
+                # idle row, rather than on the preceding assistant row.
+                if expect_delivery:
+                    with webhook.lock:
+                        webhook.bodies.clear()
+                limit_begin = len(rows())
+                prior_requests = len(provider.bodies)
+                provider.mode = 'output-limit'
+                limited = request('/api/session', {'title': 'TEST-source-output-limit',
+                                  'location': {'directory': str(paths['project'])}})
+                limited_sid = limited['data']['id']
+                request('/api/session/' + limited_sid + '/prompt', {'text': 'TEST-source-output-limit'})
+                try:
+                    request('/api/experimental/session/' + limited_sid + '/wait', method='POST')
+                except urllib.error.HTTPError as err:
+                    if not 400 <= err.code <= 599:
+                        raise
+                wait(lambda: any(r.get('type') == 'session.execution.failed' and
+                                 r.get('sessionID') == limited_sid and r.get('hasSequence') is True and
+                                 r.get('hasTime') is True for r in rows()[limit_begin:]),
+                     35, 'source_output_limit_missing')
+                if len(provider.bodies) < prior_requests + 3:
+                    raise RuntimeError('source_output_limit_provider_unused')
+                limit_proof = wait(lambda: next((r for r in rows() if r.get('phase') == 'native-error' and
+                                                 r.get('sessionID') == limited_sid), None),
+                                   10, 'native_r1_output_limit_missing')
+                if limit_proof.get('valid') is not True or limit_proof.get('runParts') != 3:
+                    raise RuntimeError('native_output_limit_projection_unverified')
+                if expect_delivery:
+                    wait_for_delivery(webhook, 'opencode_error', 'An error needs your attention')
+                provider.mode = 'success'
+                print('source-stage: output-limit-verified', flush=True)
                 desktop_count = verify_macos_desktop(root) if native_app is not None else 0
                 if webhook is not None and not expect_delivery:
                     log_file = root / 'host.private.log'
@@ -942,6 +974,7 @@ def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False, exp
                         'productionNativeV2QuestionR1Observed': True,
                         'productionNativeV2PermissionR1Observed': True,
                         'productionNativeV2TerminalErrorR1Observed': True,
+                        'productionNativeV2OutputLimitR1Observed': True,
                         'sourceToReceiverLagMinMS': min(receiver_lags),
                         'sourceToReceiverLagMaxMS': max(receiver_lags),
                         'sourceToReceiverSampleCount': len(receiver_lags),
@@ -1053,7 +1086,9 @@ def main():
                            'source_question_terminal_missing', 'source_native_permission_missing',
                            'source_native_permission_unverified', 'source_permission_reply_unseen',
                            'source_terminal_error_missing', 'source_terminal_error_unverified',
-                           'source_terminal_provider_unused',
+                           'source_terminal_provider_unused', 'source_output_limit_missing',
+                           'source_output_limit_provider_unused', 'native_r1_output_limit_missing',
+                           'native_output_limit_projection_unverified',
                            'native_session_projection_missing', 'native_session_projection_unverified',
                            'source_receiver_sample_invalid', 'source_receiver_counter_nonmonotonic',
                            'source_go_clock_sample_unavailable', 'source_go_clock_sample_invalid',

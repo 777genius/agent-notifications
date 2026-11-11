@@ -198,7 +198,7 @@ class Handler(BaseHTTPRequestHandler):
         if not request.get('stream'):
             response = {'id': 'chatcmpl-test', 'object': 'chat.completion', 'created': int(time.time()),
                 'model': 'test', 'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': answer},
-                                            'finish_reason': 'stop'}],
+                                            'finish_reason': 'length' if mode == 'output-limit' else 'stop'}],
                 'usage': {'prompt_tokens': 10, 'completion_tokens': 6, 'total_tokens': 16}}
             data = json.dumps(response).encode()
             self.send_response(200)
@@ -213,7 +213,7 @@ class Handler(BaseHTTPRequestHandler):
                             'function': {'name': call[0], 'arguments': json.dumps(call[1])}}]}, None))
             deltas.append(({}, 'tool_calls'))
         else:
-            deltas.extend([({'content': answer}, None), ({}, 'stop')])
+            deltas.extend([({'content': answer}, None), ({}, 'length' if mode == 'output-limit' else 'stop')])
         self.send_response(200)
         self.send_header('Content-Type', 'text/event-stream')
         self.end_headers()
