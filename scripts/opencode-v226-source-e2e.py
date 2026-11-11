@@ -281,7 +281,9 @@ def run(archive, root, receiver=None, clock_skew_ms=0):
             host = subprocess.Popen([str(binary), 'serve', '--hostname', '127.0.0.1',
                                      '--port', str(port), '--print-logs'],
                                     cwd=paths['project'], env=env, stdout=log, stderr=log,
-                                    start_new_session=True)
+                                    start_new_session=(sys.platform != 'win32'),
+                                    creationflags=(subprocess.CREATE_NEW_PROCESS_GROUP
+                                                   if sys.platform == 'win32' else 0))
             try:
                 def request(endpoint, body=None, method=None):
                     payload = None if body is None else json.dumps(body).encode()
