@@ -83,6 +83,20 @@ additional native-clock samples after twelve independent Go comparisons;
 counter and wall observations did not regress. This demonstrates repeated
 calls on one machine, not which JIT tier executed or a worst-case bound.
 
+The exact official Darwin ARM64 image and Bun 1.4.4 tuple can now pass the
+separate file-custody check. With `--production-source`, the E0 test exercises
+the actual `createDarwinClock()`/held-image path, rather than only an equivalent
+test construction. On macOS 15.6.1 it completed twelve Go comparisons and
+4,096 repeat samples. This adds no compiled clock-policy row or UAP observer
+grant; the installed 2.2.6 host remains denied until those separate gates are
+properly qualified.
+
+A later production-source E0 attempt failed the former combined clock
+containment check; the exact failed subcondition was not recorded. After adding
+separate, content-free span/tick/wall diagnostic codes, a new run passed,
+including a deliberate wrong-image rejection. The original failure is not
+explained by that success and must not be discarded when considering a bound.
+
 ## Additional genuine-image stress, still E0 only
 
 Draft #643 adds 12 actual embedded-Bun/Go clock comparisons on each observed Linux x64 and macOS ARM64 port, plus a timer-delayed wall/counter nonregression observation (commits `1cec7ed`, `688d755`). The explicit reports retain `nativeObserverQualified=false`, `nativeClockQualified=false` and `notificationDeliveryQualified=false`. They do not establish event-source Q, reader R, time translation T, native admission or desktop/webhook delivery. A failed observation is a useful evidence gap, not grounds for bypassing admission.

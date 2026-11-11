@@ -7,13 +7,16 @@ import { spawnSync } from 'node:child_process';
 import { isAbsolute } from 'node:path';
 import { dlopen, ptr } from 'bun:ffi';
 import { address, createNativeClock, darwinABI, darwinBoot, machNS, positiveNS } from '../opencode-plugin/native-clock-contract.mjs';
+import { createDarwinClock } from '../opencode-plugin/darwin-clock.mjs';
 
 const officialImage = '90e4d03597b03d2051b65b4d793467764e55bacd8e22bf4824479c7233ea0e15';
 const grants = { nativeObserverQualified:false, nativeClockQualified:false, notificationDeliveryQualified:false };
 let phase = 'entry';
 const reasons = new Set(['platform_unverified','helper_unverified','image_unverified',
   'native_ffi_unavailable','native_clock_unavailable','go_clock_unavailable',
-  'clock_tuple_mismatch','clock_containment_unverified','clock_disposal_unverified',
+  'clock_tuple_mismatch','clock_containment_unverified','clock_span_unverified',
+  'clock_tick_containment_unverified','clock_wall_containment_unverified',
+  'clock_disposal_unverified','wrong_image_not_refused',
   'clock_pause_nonmonotonic']);
 function requireValue(value, code) { if (!value) throw new Error(code); }
 async function sha256(file) {
@@ -56,7 +59,21 @@ async function main() {
       return darwinBoot(new Uint8Array(buffer.buffer),size[0],status);
     }
     phase = 'clock_boot';
-    clock=createNativeClock({
+    const productionSource = process.argv.slice(3).includes('--production-source');
+    let wrongImageRefused = false;
+    if (productionSource) {
+      // TEST only: a reported path to unrelated system bytes must not satisfy
+      // the pinned candidate, even with the actual Bun 1.4.4 runtime present.
+      const originalPath = process.execPath;
+      try {
+        process.execPath = '/usr/bin/true';
+        const unexpected = await createDarwinClock();
+        unexpected.dispose();
+      } catch (error) { wrongImageRefused = error?.message === 'clock_unavailable'; }
+      finally { process.execPath = originalPath; }
+      requireValue(wrongImageRefused, 'wrong_image_not_refused');
+    }
+    clock=productionSource ? await createDarwinClock() : createNativeClock({
       imageSHA256:officialImage,
       readBoot,
       readCounter:()=>machNS(lib.mach_continuous_time(),numer,denom),
@@ -88,14 +105,15 @@ async function main() {
       const lo=ns(g.monoLoNs),hi=ns(g.monoHiNs),wall=ns(g.wallUnixNs),uncertainty=ns(g.uncertaintyNs);
       requireValue(hi>=lo && uncertainty===hi-lo+3000000n,'go_clock_unavailable');
       const width=after.hiNS-before.loNS;
-      requireValue(width>=0n && width<=224000000n && before.loNS<=lo && hi<=after.hiNS &&
-        before.wallNS-2000000n<=wall && wall<=after.wallNS+2000000n,'clock_containment_unverified');
+      requireValue(width>=0n && width<=224000000n,'clock_span_unverified');
+      requireValue(before.loNS<=lo && hi<=after.hiNS,'clock_tick_containment_unverified');
+      requireValue(before.wallNS-2000000n<=wall && wall<=after.wallNS+2000000n,'clock_wall_containment_unverified');
       if(width>maxBracket)maxBracket=width;
     }
     // Optional repeated native calls exercise the same pinned image, pointers,
     // sysctl, Mach counter and conversion after warm-up. This remains sampled
     // behavior: it does not claim a JIT tier, worst-case bound or qualification.
-    const stressRounds = process.argv[3] === '--stress' ? 4096 : 0;
+    const stressRounds = process.argv.slice(3).includes('--stress') ? 4096 : 0;
     if (stressRounds) {
       phase = 'clock_repeat_stress';
       let previous = sample(clock);
@@ -122,6 +140,8 @@ async function main() {
     requireValue(await sha256(process.execPath)===officialImage,'image_unverified');
     return { status:'observed_ffi_e0_only',platform:'darwin',arch:'arm64',
       hostVersion:'2.2.6',embeddedBunVersion:'1.4.4',comparisonRounds:12,
+      productionNativeClockObserved:productionSource,
+      wrongNativeImageRefused:wrongImageRefused,
       repeatedNativeSamples:stressRounds,
       delayedCounterAndWallNonregressionObserved:true,
       maxCounterSpanNS:String(maxBracket),disposalRefused:true,...grants };

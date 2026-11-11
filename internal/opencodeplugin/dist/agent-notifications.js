@@ -390,6 +390,9 @@ var init_native_clock_image = __esm({
       ["win32", "x64", "1.3.14", "52f60248a576b34c9a6dcaa27e0a7f08089af35bcdc0dfb10c04d3e00a98314c"],
       ["darwin", "x64", "1.4.2", "4642b7da61279c8aa5d389d9f29454936e449fea6bc510689e9cc976fff6579f"],
       ["darwin", "arm64", "1.4.2", "0b2b68c1efaf20a29aaf636c2ffccc1abb56243a82f48cce45e257d232e03442"],
+      // Image custody candidate only. Native observer and clock-policy admission
+      // remain independent and do not grant delivery for this image.
+      ["darwin", "arm64", "1.4.4", "90e4d03597b03d2051b65b4d793467764e55bacd8e22bf4824479c7233ea0e15"],
       ["win32", "x64", "1.4.2", "ec7a3909bad41ef88e4650f737ab6f0b0c402a7f49a588812d0a79820c2dfc1f"]
     ].map(Object.freeze));
     same2 = (a, b) => ["dev", "ino", "size", "mtimeNs", "ctimeNs"].every((k) => a[k] === b[k]);

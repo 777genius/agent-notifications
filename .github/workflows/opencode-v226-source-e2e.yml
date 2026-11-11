@@ -519,7 +519,7 @@ jobs:
             HOME="$RUNNER_TEMP/TEST-opencode-v226-darwin" TMPDIR="$RUNNER_TEMP/TEST-opencode-v226-darwin" \
             "$RUNNER_TEMP/TEST-opencode-v226-darwin/opencode" \
             "$GITHUB_WORKSPACE/scripts/opencode-v226-darwin-abi-e0.mjs" \
-            "$RUNNER_TEMP/TEST-opencode-v226-darwin/receiver" --stress \
+            "$RUNNER_TEMP/TEST-opencode-v226-darwin/receiver" --stress --production-source \
             | tee "$RUNNER_TEMP/opencode-v226-darwin-ffi-e0-safe.json"
       - name: Upload closed Darwin FFI E0 observation only
         if: always()
