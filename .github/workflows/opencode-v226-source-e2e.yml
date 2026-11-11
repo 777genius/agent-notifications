@@ -5,6 +5,7 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - 'scripts/opencode-v226-source-e2e.py'
+      - 'scripts/test_opencode_v226_go_clock.py'
       - 'scripts/opencode-v226-clock-e0.mjs'
       - 'scripts/opencode-v226-darwin-abi-e0.mjs'
       - 'scripts/opencode-semantic-e2e.py'
@@ -41,6 +42,8 @@ jobs:
         uses: actions/setup-python@v7
         with:
           python-version: '3.12'
+      - name: Check strict Go T0 observational frames (all three OS kinds)
+        run: python -B -m unittest discover -s scripts -p 'test_opencode_v226_go_clock.py'
       - name: Download and verify immutable official OpenCode 2.2.6
         id: official
         shell: bash
@@ -223,6 +226,11 @@ jobs:
         uses: actions/setup-python@v7
         with:
           python-version: '3.12'
+      - name: Check strict Go T0 frame constraints (no qualification grant)
+        shell: pwsh
+        run: |
+          python -B -m unittest discover -s scripts -p 'test_opencode_v226_go_clock.py'
+          if ($LASTEXITCODE -ne 0) { throw 'windows_go_t0_frame_tests_failed' }
       - name: Exercise Windows native OpenCode admission regressions
         shell: pwsh
         run: |
@@ -337,6 +345,8 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
+      - name: Check source Go T0 parser on macOS
+        run: python -B -m unittest discover -s scripts -p 'test_opencode_v226_go_clock.py'
       - name: Verify official Darwin arm64 2.2.6 archive, executable and Bun
         shell: bash
         run: |
