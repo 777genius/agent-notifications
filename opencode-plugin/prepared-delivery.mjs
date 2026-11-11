@@ -21,7 +21,7 @@ export function anchorMatches(anchor, before, after, policy) {
 // Ports are private composition dependencies. The plugin never accepts them
 // from host configuration/environment; only the closed compiled ledger supplies policy.
 export function createPreparedDelivery({ registry, origin, policy, isOwned, onInvalidate, onDiagnostic, enrich, sourceFactory = createPlatformClock }) {
-  let epoch, source, anchor, activation, pending, last, ingress, observedIngress, disposed = false;
+  let epoch, source, anchor, activation, pending, last, ingress, observedIngress, lastClockMs, disposed = false;
   const originals = new Map(), prepared = new WeakMap(), captured = new WeakMap();
   const refuse = reason => {
     try { onDiagnostic?.(reason); } catch {}
@@ -30,7 +30,7 @@ export function createPreparedDelivery({ registry, origin, policy, isOwned, onIn
   function invalidate(reason = 'clock') {
     if (!epoch && !source && !pending) return;
     const attempt = pending; pending = undefined;
-    epoch = undefined; originals.clear(); anchor = undefined; activation = undefined; ingress = undefined; observedIngress = undefined; last = undefined;
+    epoch = undefined; originals.clear(); anchor = undefined; activation = undefined; ingress = undefined; observedIngress = undefined; last = undefined; lastClockMs = undefined;
     attempt?.controller.abort();
     const retired = source; source = undefined;
     try { retired?.dispose(); } catch {}
@@ -55,7 +55,17 @@ export function createPreparedDelivery({ registry, origin, policy, isOwned, onIn
   const ms = (record) => Number(record.loNS / 1000000n);
   const clock = Object.freeze({ id: policy.sourceKind ?? (policy.rawKind === 'linux-boottime' ? 'linux-proc-boottime' : policy.rawKind), now() {
     // Retain the high-water sample even when the SDK consumes a buffered event.
-    const record = ingress ?? sample(); ingress = undefined; observedIngress = record; return ms(record);
+    const original = ingress ?? sample(); ingress = undefined;
+    let tick = ms(original);
+    // Checkpoint setup may sample after prefetch. Keep SDK time monotonic
+    // while retaining the actual earlier event ingress as source provenance.
+    if (lastClockMs !== undefined && tick < lastClockMs) {
+      tick = ms(sample());
+      if (tick < lastClockMs) { invalidate(); bad(); }
+    }
+    lastClockMs = tick;
+    observedIngress = { original, tick };
+    return tick;
   } });
   async function activate() {
     if (disposed) return false;
@@ -116,12 +126,12 @@ export function createPreparedDelivery({ registry, origin, policy, isOwned, onIn
     })();
     return attempt.promise;
   }
-  function retain(record) {
+  function retain(record, handoffTickMs = ms(record)) {
     if (!epoch) bad();
     for (const [tick] of originals) if (record.loNS - tick > 30000000000n) originals.delete(tick);
     // SDK handoffs carry integer milliseconds. Keep the first genuine sample
     // in that bucket and serialize its exact counter, without restamping it.
-    const tick = record.loNS / 1000000n * 1000000n;
+    const tick = BigInt(handoffTickMs) * 1000000n;
     if (!originals.has(tick)) {
       if (originals.size >= 256) { invalidate(); bad(); }
       originals.set(tick, Object.freeze({ sample: record, epoch, anchor }));
@@ -147,9 +157,11 @@ export function createPreparedDelivery({ registry, origin, policy, isOwned, onIn
     ingress = held.record;
   }
   function nativeIngress(event) {
-    const record = observedIngress; observedIngress = undefined;
-    if (['form.created', 'permission.asked', 'session.execution.succeeded', 'session.execution.failed'].includes(event?.type))
-      retain(record ?? sample());
+    const observed = observedIngress; observedIngress = undefined;
+    if (['form.created', 'permission.asked', 'session.execution.succeeded', 'session.execution.failed'].includes(event?.type)) {
+      if (observed) retain(observed.original, observed.tick);
+      else retain(sample());
+    }
   }
   const current = (record, handoff) => {
     if (disposed || epoch !== record.epoch) return false;

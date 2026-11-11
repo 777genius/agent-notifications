@@ -3179,7 +3179,7 @@ function anchorMatches(anchor, before, after, policy) {
   }, after, policy.comparisonBoundNS);
 }
 function createPreparedDelivery({ registry, origin: origin2, policy, isOwned, onInvalidate, onDiagnostic, enrich, sourceFactory = createPlatformClock }) {
-  let epoch, source, anchor, activation, pending, last, ingress, observedIngress, disposed = false;
+  let epoch, source, anchor, activation, pending, last, ingress, observedIngress, lastClockMs, disposed = false;
   const originals = /* @__PURE__ */ new Map(), prepared = /* @__PURE__ */ new WeakMap(), captured = /* @__PURE__ */ new WeakMap();
   const refuse = (reason) => {
     try {
@@ -3199,6 +3199,7 @@ function createPreparedDelivery({ registry, origin: origin2, policy, isOwned, on
     ingress = void 0;
     observedIngress = void 0;
     last = void 0;
+    lastClockMs = void 0;
     attempt?.controller.abort();
     const retired = source;
     source = void 0;
@@ -3231,10 +3232,19 @@ function createPreparedDelivery({ registry, origin: origin2, policy, isOwned, on
   }
   const ms = (record) => Number(record.loNS / 1000000n);
   const clock = Object.freeze({ id: policy.sourceKind ?? (policy.rawKind === "linux-boottime" ? "linux-proc-boottime" : policy.rawKind), now() {
-    const record = ingress ?? sample();
+    const original = ingress ?? sample();
     ingress = void 0;
-    observedIngress = record;
-    return ms(record);
+    let tick = ms(original);
+    if (lastClockMs !== void 0 && tick < lastClockMs) {
+      tick = ms(sample());
+      if (tick < lastClockMs) {
+        invalidate();
+        bad();
+      }
+    }
+    lastClockMs = tick;
+    observedIngress = { original, tick };
+    return tick;
   } });
   async function activate() {
     if (disposed) return false;
@@ -3321,10 +3331,10 @@ function createPreparedDelivery({ registry, origin: origin2, policy, isOwned, on
     })();
     return attempt.promise;
   }
-  function retain(record) {
+  function retain(record, handoffTickMs = ms(record)) {
     if (!epoch) bad();
     for (const [tick2] of originals) if (record.loNS - tick2 > 30000000000n) originals.delete(tick2);
-    const tick = record.loNS / 1000000n * 1000000n;
+    const tick = BigInt(handoffTickMs) * 1000000n;
     if (!originals.has(tick)) {
       if (originals.size >= 256) {
         invalidate();
@@ -3359,10 +3369,12 @@ function createPreparedDelivery({ registry, origin: origin2, policy, isOwned, on
     ingress = held2.record;
   }
   function nativeIngress(event) {
-    const record = observedIngress;
+    const observed = observedIngress;
     observedIngress = void 0;
-    if (["form.created", "permission.asked", "session.execution.succeeded", "session.execution.failed"].includes(event?.type))
-      retain(record ?? sample());
+    if (["form.created", "permission.asked", "session.execution.succeeded", "session.execution.failed"].includes(event?.type)) {
+      if (observed) retain(observed.original, observed.tick);
+      else retain(sample());
+    }
   }
   const current = (record, handoff) => {
     if (disposed || epoch !== record.epoch) return false;

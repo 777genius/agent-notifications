@@ -211,8 +211,8 @@ test('prefetched ingress preserves the original sample and monotonic high-water'
  await setup(async({delivery,advance,writeClock,fact,root})=>{
   assert.equal(await delivery.activate(),true);advance(60000000n);
   const native={type:'session.execution.succeeded'},event=fact(),token=delivery.captureIngress(native);
-  advance(700000000n);delivery.clock.now();delivery.armIngress(token,native);
-  const born=delivery.clock.now();assert.equal(born,1000060);delivery.nativeIngress(native);
+  advance(700000000n);const laterClock=delivery.clock.now();delivery.armIngress(token,native);
+  const born=delivery.clock.now();assert.equal(born,laterClock,'prefetch must not reverse the SDK clock');delivery.nativeIngress(native);
   await writeClock();const c=new AbortController(),handoff={signal:c.signal,clockID:delivery.clock.id,ingressMonotonicMs:born,metadataDeadline:born+2000,isCurrent:()=>true};
   assert.equal(await delivery.beforeEmit(event,handoff),true);await delivery.emit(event,handoff);
   const frame=parseJSON(await fs.readFile(path.join(root,'event-frame')));assert.equal(frame.provenance.ingressTickNS,'1000060000000');
