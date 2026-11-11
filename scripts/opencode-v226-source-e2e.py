@@ -401,7 +401,7 @@ export default {id:'test-oc226-peer',async setup(ctx){
 }};'''
 
 
-def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False, expect_delivery=False, native_app=None, skew_after_delivery=False, service=False, live_signer=None, mutate_peer=False, observe_compaction=False):
+def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False, expect_delivery=False, native_app=None, skew_after_delivery=False, service=False, live_signer=None, mutate_peer=False, observe_compaction=False, native_peer=None):
     spec = importlib.util.spec_from_file_location('existing_native_provider',
         Path(__file__).resolve().parent / 'opencode-semantic-e2e.py')
     native = importlib.util.module_from_spec(spec)
@@ -539,6 +539,7 @@ def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False, exp
                                     start_new_session=(sys.platform != 'win32'),
                                     creationflags=(subprocess.CREATE_NEW_PROCESS_GROUP
                                                    if sys.platform == 'win32' else 0))
+            peer_witness = None
             try:
                 def request(endpoint, body=None, method=None):
                     payload = None if body is None else json.dumps(body).encode()
@@ -577,6 +578,10 @@ def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False, exp
 
                 wait(ready, 70, 'native_startup_timeout')
                 print('source-stage: native-started', flush=True)
+                if native_peer is not None:
+                    from opencode_v226_darwin_peer_e0 import NativePeerObservation
+                    peer_witness = NativePeerObservation(host, port, native_peer)
+                    peer_witness.start()
                 if live_signer is not None:
                     def live_signature(pid):
                         result = subprocess.run([str(live_signer), str(pid)], cwd=root, env=env,
@@ -655,6 +660,9 @@ def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False, exp
                                r.get('hasSequence') and r.get('hasTime')]
                 if not source_rows or any(not isinstance(r.get('createdMs'), int) for r in source_rows):
                     raise RuntimeError('native_source_epoch_unverified')
+                if peer_witness is not None:
+                    peer_witness.verify_and_close(source_rows, sid)
+                    print('source-stage: native-peer-e0-verified', flush=True)
                 if mutate_peer:
                     def peer_isolated():
                         peer = [r for r in peer_rows() if r.get('phase') == 'peer' and r.get('sessionID') == sid]
@@ -1033,7 +1041,11 @@ def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False, exp
                         'nativeObserverQualified': False, 'nativeClockQualified': False,
                         'notificationDeliveryQualified': False}
             finally:
-                stop_official_host_tree(host)
+                try:
+                    if peer_witness is not None:
+                        peer_witness.close()
+                finally:
+                    stop_official_host_tree(host)
     finally:
         provider.shutdown()
         provider.server_close()
@@ -1067,6 +1079,8 @@ def main():
                         help='Exercise the isolated OpenCode serve --service entry')
     parser.add_argument('--darwin-live-signer', type=Path,
                         help='TEST-only helper to observe the running Darwin process signature')
+    parser.add_argument('--darwin-native-peer', type=Path,
+                        help='TEST-only native process/socket ownership witness')
     parser.add_argument('--mutate-peer-events', action='store_true',
                         help='Test whether another plugin can mutate this observer subscription')
     parser.add_argument('--observe-auto-compaction', action='store_true',
@@ -1076,6 +1090,8 @@ def main():
         parser.error('native app requires macOS and delivery mode')
     if args.darwin_live_signer is not None and sys.platform != 'darwin':
         parser.error('live signature observation requires macOS')
+    if args.darwin_native_peer is not None and (sys.platform != 'darwin' or args.clock_skew_negative or args.clock_skew_past_negative):
+        parser.error('native peer observation requires macOS and excludes clock skew')
     if args.mutate_peer_events and (args.clock_skew_negative or args.clock_skew_past_negative):
         parser.error('peer mutation and clock skew require separate observations')
     if args.observe_auto_compaction and (args.clock_skew_negative or args.clock_skew_past_negative):
@@ -1100,9 +1116,10 @@ def main():
             # The owned-host boundary deliberately rejects alias paths.
             root = Path(temp).resolve(strict=True)
             prepare_windows_private_root(root)
-            result = run(args.archive, root, args.receiver, skew_ms, args.restart_denial, args.expect_delivery, args.native_app, args.skew_after_delivery, args.service, args.darwin_live_signer.resolve(strict=True) if args.darwin_live_signer else None, args.mutate_peer_events, args.observe_auto_compaction)
+            result = run(args.archive, root, args.receiver, skew_ms, args.restart_denial, args.expect_delivery, args.native_app, args.skew_after_delivery, args.service, args.darwin_live_signer.resolve(strict=True) if args.darwin_live_signer else None, args.mutate_peer_events, args.observe_auto_compaction, args.darwin_native_peer.resolve(strict=True) if args.darwin_native_peer else None)
             result['serviceMode'] = args.service
             result['liveSignerObserved'] = args.darwin_live_signer is not None
+            result['nativePeerCompletionE0Observed'] = args.darwin_native_peer is not None
             result['peerEventIDTimestampAndSessionIsolationObserved'] = args.mutate_peer_events
             result['autoCompactionObserved'] = args.observe_auto_compaction
         except Exception as error:
@@ -1139,6 +1156,9 @@ def main():
                            'native_reader_projection_unverified',
                            'source_clock_skew_injection_missing', 'source_clock_skew_not_refused',
                            'live_signer_observation_unverified',
+                           'peer_host_not_live', 'peer_identity_unverified', 'peer_feed_not_ready',
+                           'peer_endpoint_changed', 'peer_socket_unverified', 'peer_negative_failed',
+                           'peer_events_unverified', 'peer_close_unverified', 'peer_cleanup_failed',
                            'peer_subscription_missing', 'peer_stream_isolation_unverified',
                            'source_auto_compaction_missing', 'source_auto_compaction_unverified', 'source_auto_compaction_delivery_missing',
                            'negative_native_reader_projection_unverified',
