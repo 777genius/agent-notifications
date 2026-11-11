@@ -12,7 +12,7 @@ on:
       - 'scripts/test_opencode_v226_temp_cleanup.py'
       - 'scripts/opencode-v226-clock-e0.mjs'
       - 'scripts/opencode-v226-darwin-abi-e0.mjs'
-      - 'scripts/opencode-v226-darwin-peer-e0.c'
+      - 'scripts/testdata/opencode-v226-darwin-peer-e0.c'
       - 'scripts/opencode_v226_darwin_peer_e0.py'
       - 'scripts/opencode-v226-darwin-signature-e0.py'
       - 'scripts/opencode-v226-darwin-live-signature-e0.swift'
@@ -493,7 +493,7 @@ jobs:
           go build -trimpath -ldflags="-s -w" -o "$RUNNER_TEMP/TEST-opencode-v226-darwin/receiver" ./cmd/claude-notifications
           go version -m "$RUNNER_TEMP/TEST-opencode-v226-darwin/receiver" | grep -F "vcs.revision=$EXPECTED_HEAD"
           go version -m "$RUNNER_TEMP/TEST-opencode-v226-darwin/receiver" | grep -F 'vcs.modified=false'
-          clang -Wall -Wextra -Werror -O2 scripts/opencode-v226-darwin-peer-e0.c \
+          clang -Wall -Wextra -Werror -O2 scripts/testdata/opencode-v226-darwin-peer-e0.c \
             -o "$RUNNER_TEMP/TEST-opencode-v226-darwin/native-peer-e0"
       - name: Verify production publisher check on a live official process
         shell: bash
