@@ -538,7 +538,9 @@ jobs:
           set -euo pipefail
           python -B scripts/opencode-v226-source-e2e.py \
             --archive "$RUNNER_TEMP/opencode-darwin-arm64.zip" \
-            --clock-skew-negative \
+            --darwin-native-peer "$RUNNER_TEMP/TEST-opencode-v226-darwin/native-peer-e0" \
+            --darwin-live-signer "$RUNNER_TEMP/TEST-opencode-v226-darwin/live-signer-e0" \
+            --service --clock-skew-negative \
             --report "$RUNNER_TEMP/opencode-v226-darwin-future-skew-safe.json"
       - name: Observe -12s source clock mismatch on macOS (no admission)
         shell: bash

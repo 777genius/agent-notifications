@@ -1098,8 +1098,8 @@ def main():
         parser.error('native app requires macOS and delivery mode')
     if args.darwin_live_signer is not None and sys.platform != 'darwin':
         parser.error('live signature observation requires macOS')
-    if args.darwin_native_peer is not None and (sys.platform != 'darwin' or args.clock_skew_negative or args.clock_skew_past_negative):
-        parser.error('native peer observation requires macOS and excludes clock skew')
+    if args.darwin_native_peer is not None and sys.platform != 'darwin':
+        parser.error('native peer observation requires macOS')
     if args.mutate_peer_events and (args.clock_skew_negative or args.clock_skew_past_negative):
         parser.error('peer mutation and clock skew require separate observations')
     if args.observe_auto_compaction and (args.clock_skew_negative or args.clock_skew_past_negative):
