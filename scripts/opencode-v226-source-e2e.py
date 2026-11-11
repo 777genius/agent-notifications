@@ -347,6 +347,23 @@ def stop_official_host_tree(host):
             host.wait(timeout=5)
 
 
+def cleanup_with_sharing_retry(cleanup, windows, clock=time.monotonic, pause=time.sleep):
+    """Retry only a transient Windows sharing violation; never ignore it."""
+    deadline = clock() + 5
+    while True:
+        try:
+            return cleanup()
+        except PermissionError as error:
+            if not windows or getattr(error, 'winerror', None) != 32 or clock() >= deadline:
+                raise
+            pause(.1)
+
+
+class OwnedTemporaryDirectory(tempfile.TemporaryDirectory):
+    def cleanup(self):
+        return cleanup_with_sharing_retry(super().cleanup, sys.platform == 'win32')
+
+
 PEER_PLUGIN = r'''import {appendFileSync} from 'node:fs';
 const write=x=>appendFileSync(process.env.AN_TEST_PEER_TRACE,JSON.stringify(x)+'\n');
 export default {id:'test-oc226-peer',async setup(ctx){
@@ -996,7 +1013,7 @@ def main():
     if (args.clock_skew_negative or args.clock_skew_past_negative) and args.receiver is not None and not args.installed_clock_skew:
         parser.error('clock skew tests and installed receiver are mutually exclusive')
     skew_ms = 12000 if args.clock_skew_negative else -12000 if args.clock_skew_past_negative else 0
-    with tempfile.TemporaryDirectory(prefix='TEST-opencode-v226-', dir=os.environ.get('RUNNER_TEMP')) as temp:
+    with OwnedTemporaryDirectory(prefix='TEST-opencode-v226-', dir=os.environ.get('RUNNER_TEMP')) as temp:
         try:
             prepare_windows_private_root(Path(temp))
             result = run(args.archive, Path(temp), args.receiver, skew_ms, args.restart_denial, args.expect_delivery, args.native_app, args.skew_after_delivery, args.service, args.darwin_live_signer.resolve(strict=True) if args.darwin_live_signer else None, args.mutate_peer_events, args.observe_auto_compaction)
