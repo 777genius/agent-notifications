@@ -185,8 +185,14 @@ The macOS source-only service harness failed four local runs with
 `/var/folders` alias. With an otherwise equivalent canonical `/private/tmp`
 root, the installed receiver reported denial for both host lifetimes. Resolving
 the temporary root before setup also passed with the default temporary
-directory. These observations concern the test root and denied startup only;
-they do not establish that every aliased product installation is supported.
+directory. Inspection of the retained TEST run showed the installer rendered
+canonical runtime/control paths while OpenCode supplied an aliased project
+directory. The owned-host boundary formerly rejected that project alias before
+the diagnostic. A revised local product build accepts the alias, revalidates
+its resolved path and identity on each ownership check, and produced both
+expected denial diagnostics in the same real-host service scenario. A unit
+test also confirms that retargeting the project link revokes ownership. These
+are denied-startup observations, not 2.2.6 delivery qualification.
 
 1. The public CI artifact's installed webhook delivery was reproduced as described above. Still independently verify a receiver built from the exact candidate HEAD and the applicable native desktop presentation; do not compare unrelated binaries.
 2. Independently review the specific 2.2.6 V2 event reader and held-process provenance, and the Bun 1.4.4 FFI/JSValue-to-slot source behavior. Bind the runtime and native image evidence without caller-provided authority or fake clock rows.

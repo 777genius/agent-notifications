@@ -2683,20 +2683,24 @@ init_protocol();
 var executable = "__AGENT_NOTIFICATIONS_EXECUTABLE__";
 var controlRoot = "__AGENT_NOTIFICATIONS_CONTROL_ROOT__";
 var origin = "__AGENT_NOTIFICATIONS_ORIGIN__";
-var identity2 = (name) => {
-  if (!absoluteNativePath(name) || realpathSync(name) !== name) throw new TypeError("binding_unverified");
-  const stat = statSync(name, { bigint: true });
-  return Object.freeze({ name, dev: stat.dev, ino: stat.ino, size: stat.isDirectory() ? void 0 : stat.size, mtime: stat.isDirectory() ? void 0 : stat.mtimeNs, mode: stat.mode });
+var identity2 = (name, allowAlias = false) => {
+  if (!absoluteNativePath(name)) throw new TypeError("binding_unverified");
+  const realpath = realpathSync(name);
+  if (!allowAlias && realpath !== name) throw new TypeError("binding_unverified");
+  const stat = statSync(realpath, { bigint: true });
+  if (allowAlias && !stat.isDirectory()) throw new TypeError("binding_unverified");
+  return Object.freeze({ name, realpath, dev: stat.dev, ino: stat.ino, size: stat.isDirectory() ? void 0 : stat.size, mtime: stat.isDirectory() ? void 0 : stat.mtimeNs, mode: stat.mode });
 };
-var equal = (a, b) => ["name", "dev", "ino", "size", "mtime", "mode"].every((key) => a[key] === b[key]);
+var equal = (a, b) => ["name", "realpath", "dev", "ino", "size", "mtime", "mode"].every((key) => a[key] === b[key]);
 async function prepareOwnedHost(directory2, generation, appVersion, diagnostics = false, onUnavailable) {
   let registry, privateCwd;
   try {
     if (!/^[a-f0-9]{64}$/.test(origin) || !absoluteNativePath(directory2)) return;
-    const files = [executable, controlRoot, directory2, process.execPath].map(identity2);
+    const inputs = [[executable, false], [controlRoot, false], [directory2, true], [process.execPath, false]];
+    const files = inputs.map(([name, allowAlias]) => identity2(name, allowAlias));
     const isOwned = () => {
       try {
-        return files.every((original) => equal(original, identity2(original.name)));
+        return files.every((original, index) => equal(original, identity2(original.name, inputs[index][1])));
       } catch {
         return false;
       }

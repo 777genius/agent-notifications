@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, realpathSync, writeFileSync, rmSync, utimesSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, realpathSync, symlinkSync, writeFileSync, rmSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -62,6 +62,16 @@ test('verified V1/V2 host versions are dynamic; denied profiles report only afte
     // A same-inode, same-size native helper edited in place must revoke ownership.
     // This tests the nanosecond mtime field, not only dev/ino/size/mode.
     globalThis[key].response = { status: 'ok', output: receipt('eligible', 'v2', '2.2.6') };
+    const project = join(root, 'project'), other = join(root, 'other'), alias = join(root, 'project-alias');
+    mkdirSync(project); mkdirSync(other);
+    symlinkSync(project, alias, process.platform === 'win32' ? 'junction' : 'dir');
+    const aliased = await prepareOwnedHost(alias, 'v2', '2.2.6');
+    assert.ok(aliased?.isOwned(), 'a stable project alias retains ownership');
+    rmSync(alias);
+    symlinkSync(other, alias, process.platform === 'win32' ? 'junction' : 'dir');
+    assert.equal(aliased.isOwned(), false, 'retargeting the project alias revokes ownership');
+    assert.deepEqual(await aliased.dispose(), { reaped: true });
+
     const mutable = await prepareOwnedHost(root, 'v2', '2.2.6');
     assert.ok(mutable);
     const oldTime = new Date(Date.now() - 120_000);
