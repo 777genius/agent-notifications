@@ -36,6 +36,11 @@ const write=value=>appendFileSync(process.env.AN_TEST_TRACE,JSON.stringify(value
 export default {id:'test-oc226-source',async setup(ctx){
  let view;
  const nativeSessions=new Map();
+ let compactionHook;
+ if(process.env.AN_TEST_COMPACTION==='1')compactionHook=await ctx.session.hook('http.request',input=>{
+   const headers=new Headers(input.request.headers);headers.set('x-test-kind',input.kind);
+   input.request=new Request(input.request,{headers});
+ });
  try{ view=createNativeV2(ctx,ctx.location,()=>{},()=>{write({phase:'native-uncertain'});}); }
  catch{ write({phase:'native-constructor-denied'}); }
  // Test-only clock perturbation. Keep an unmodified receiver wall witness
@@ -155,7 +160,7 @@ export default {id:'test-oc226-source',async setup(ctx){
      }catch{write({phase:'native-assistant',sessionID:e.sessionID,valid:false,runParts:0});}
    }
  }}catch{write({phase:'reader_closed'});}})();
- return ()=>{controller.abort();write({phase:'cleanup'});};
+ return async()=>{controller.abort();await compactionHook?.dispose();write({phase:'cleanup'});};
 }};'''
 
 
@@ -363,7 +368,7 @@ export default {id:'test-oc226-peer',async setup(ctx){
 }};'''
 
 
-def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False, expect_delivery=False, native_app=None, skew_after_delivery=False, service=False, live_signer=None, mutate_peer=False):
+def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False, expect_delivery=False, native_app=None, skew_after_delivery=False, service=False, live_signer=None, mutate_peer=False, observe_compaction=False):
     spec = importlib.util.spec_from_file_location('existing_native_provider',
         Path(__file__).resolve().parent / 'opencode-semantic-e2e.py')
     native = importlib.util.module_from_spec(spec)
@@ -398,6 +403,7 @@ def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False, exp
            'BUN_INSTALL_CACHE_DIR': str(paths['bun']), 'TMPDIR': str(paths['temp']),
            'OPENCODE_CONFIG_DIR': str(paths['config']), 'AN_TEST_TRACE': str(trace),
            **({'AN_TEST_PEER_TRACE':str(peer_trace)} if mutate_peer else {}),
+           **({'AN_TEST_COMPACTION':'1'} if observe_compaction else {}),
            **({'AN_TEST_CLOCK_SKEW':str(clock_skew_ms)} if clock_skew_ms else {}),
            **({'AN_TEST_CLOCK_SKEW_TRIGGER':str(root / 'skew.trigger')} if skew_after_delivery else {}),
            'OPENCODE_DISABLE_AUTOUPDATE': 'true',
@@ -721,6 +727,36 @@ def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False, exp
                 print('source-stage: native-session-projection-verified', flush=True)
                 if expect_delivery:
                     wait_for_delivery(webhook, 'task_complete', 'Task completed')
+                if observe_compaction:
+                    # The first turn seeded context. The loopback provider now
+                    # returns a context-length error once, forcing a genuine
+                    # native automatic compaction and subsequent completion.
+                    compaction_begin = len(rows())
+                    with provider.lock:
+                        provider.mode, provider.attempts = 'overflow', 0
+                    if expect_delivery:
+                        with webhook.lock:
+                            prior_delivery_count = len(webhook.bodies)
+                    request('/api/session/' + sid + '/prompt', {'text': 'TEST-source-compaction'})
+                    request('/api/experimental/session/' + sid + '/wait', method='POST')
+                    def compacted():
+                        snapshot = rows()[compaction_begin:]
+                        kinds = {r.get('type') for r in snapshot if r.get('sessionID') == sid}
+                        proof = next((r for r in snapshot if r.get('phase') == 'native-assistant' and
+                                      r.get('sessionID') == sid), None)
+                        return {'session.compaction.started', 'session.compaction.ended',
+                                'session.execution.succeeded'}.issubset(kinds) and proof
+                    proof = wait(compacted, 35, 'source_auto_compaction_missing')
+                    if proof.get('valid') is not True or proof.get('runParts') != 3:
+                        raise RuntimeError('source_auto_compaction_unverified')
+                    if expect_delivery:
+                        def new_completion():
+                            with webhook.lock:
+                                new_bodies = list(webhook.bodies[prior_delivery_count:])
+                            return any(json.loads(body).get('notification_type') == 'task_complete' for body in new_bodies)
+                        wait(new_completion, 15, 'source_auto_compaction_delivery_missing')
+                    provider.mode = 'success'
+                    print('source-stage: auto-compaction-verified', flush=True)
                 # Independently verify native pending question, reply and settled turn.
                 question_begin = len(rows())
                 prior_requests = len(provider.bodies)
@@ -935,6 +971,8 @@ def main():
                         help='TEST-only helper to observe the running Darwin process signature')
     parser.add_argument('--mutate-peer-events', action='store_true',
                         help='Test whether another plugin can mutate this observer subscription')
+    parser.add_argument('--observe-auto-compaction', action='store_true',
+                        help='Observe a real automatic compaction and its final native assistant')
     args = parser.parse_args()
     if args.native_app is not None and (sys.platform != 'darwin' or not args.expect_delivery):
         parser.error('native app requires macOS and delivery mode')
@@ -942,6 +980,8 @@ def main():
         parser.error('live signature observation requires macOS')
     if args.mutate_peer_events and (args.clock_skew_negative or args.clock_skew_past_negative):
         parser.error('peer mutation and clock skew require separate observations')
+    if args.observe_auto_compaction and (args.clock_skew_negative or args.clock_skew_past_negative):
+        parser.error('compaction and clock skew require separate observations')
     if args.installed_clock_skew and (args.receiver is None or args.restart_denial or
                                       not (args.clock_skew_negative or args.clock_skew_past_negative)):
         parser.error('installed clock skew requires a receiver and a clock-skew mode')
@@ -959,10 +999,11 @@ def main():
     with tempfile.TemporaryDirectory(prefix='TEST-opencode-v226-', dir=os.environ.get('RUNNER_TEMP')) as temp:
         try:
             prepare_windows_private_root(Path(temp))
-            result = run(args.archive, Path(temp), args.receiver, skew_ms, args.restart_denial, args.expect_delivery, args.native_app, args.skew_after_delivery, args.service, args.darwin_live_signer.resolve(strict=True) if args.darwin_live_signer else None, args.mutate_peer_events)
+            result = run(args.archive, Path(temp), args.receiver, skew_ms, args.restart_denial, args.expect_delivery, args.native_app, args.skew_after_delivery, args.service, args.darwin_live_signer.resolve(strict=True) if args.darwin_live_signer else None, args.mutate_peer_events, args.observe_auto_compaction)
             result['serviceMode'] = args.service
             result['liveSignerObserved'] = args.darwin_live_signer is not None
             result['peerEventIDTimestampAndSessionIsolationObserved'] = args.mutate_peer_events
+            result['autoCompactionObserved'] = args.observe_auto_compaction
         except Exception as error:
             # Never leak native session IDs, paths, model messages or provider errors.
             safe_errors = {'official_archive_unverified', 'official_executable_not_unique',
@@ -996,6 +1037,7 @@ def main():
                            'source_clock_skew_injection_missing', 'source_clock_skew_not_refused',
                            'live_signer_observation_unverified',
                            'peer_subscription_missing', 'peer_stream_isolation_unverified',
+                           'source_auto_compaction_missing', 'source_auto_compaction_unverified', 'source_auto_compaction_delivery_missing',
                            'negative_native_reader_projection_unverified',
                            'native_reader_r1_sample_missing', 'native_r1_question_missing',
                            'native_r1_permission_missing', 'native_r1_error_missing',

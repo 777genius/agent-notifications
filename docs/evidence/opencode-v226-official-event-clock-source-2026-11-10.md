@@ -204,6 +204,14 @@ unit cases cover manual, missing, reordered, foreign-scope, wrong-marker and
 new-user paths. These observations use unqualified prototype trust data and
 do not grant production admission.
 
+The real-host source harness now exercises automatic compaction and the final
+native assistant proof in CI. In a local TEST-only delivery run it observed a
+new completion after compaction; the pre-fix TEST binary failed the same
+delivery assertion. Additional isolated prototype scenarios passed for
+child-tool execution, steering, separate locations and same-session recovery
+after queueing, dismissal, permission rejection and provider failure. These
+remain prototype observations, not qualified production notification E2E.
+
 Two further runs repeated the same-host control and ±12-second shift using a
 separate TEST-only build that forced the existing fixed-code composition
 diagnostics on. Each run recorded one successful activation, a control
