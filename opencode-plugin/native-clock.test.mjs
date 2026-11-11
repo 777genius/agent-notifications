@@ -230,7 +230,7 @@ function deliveryFixture(rawKind = 'darwin-monotonic-raw', generation = 'v2', fa
   const initial = rawKind === 'linux-boottime' ? 1000000000000n :
     rawKind === 'darwin-monotonic-raw' ? 1000000000007n : 1000000000100n;
   const wallBase = 1700000000000000000n;
-  let tick = initial, closes = 0, cancels = 0, events = 0, frame, mutate, receiptMutation, helperGate, queued, spawnGap = 0n, helperDelays = [];
+  let tick = initial, closes = 0, cancels = 0, events = 0, frame, mutate, receiptMutation, helperGate, queued, spawnGap = 0n, helperDelays = [], owned = true;
   const calls = [], helpers = [];
   const source = { imageSHA256: 'a'.repeat(64), sample() {
     calls.push('sample');
@@ -263,12 +263,12 @@ function deliveryFixture(rawKind = 'darwin-monotonic-raw', generation = 'v2', fa
     sourceKind: rawKind === 'linux-boottime' ? 'linux-proc-boottime' : rawKind === 'darwin-monotonic-raw' ?
       'darwin-mach-continuous' : 'windows-interrupt-precise', sourceWallBoundNS: 2000000n,
     nativeReadBoundNS: 103000000n, comparisonBoundNS: 430000000n, translationBoundNS: 224000000n };
-  const delivery = createPreparedDelivery({ registry, origin: 'a'.repeat(64), policy, isOwned: () => true,
+  const delivery = createPreparedDelivery({ registry, origin: 'a'.repeat(64), policy, isOwned: () => owned,
     sourceFactory: factory ? options => factory(options, source) : () => source });
   return { delivery, source, calls, helpers, advance(n) { tick += n; }, tick: () => tick,
     closes: () => closes, cancels: () => cancels, events: () => events, frame: () => parseJSON(frame),
     mutate(fn) { mutate = fn; }, receipt(fn) { receiptMutation = fn; }, gap(n) { spawnGap = n; },
-    helperDelays(values) { helperDelays = [...values]; }, gateHelper(gate) { helperGate = gate; }, queue(gate) { queued = gate; },
+    helperDelays(values) { helperDelays = [...values]; }, revoke() { owned = false; }, gateHelper(gate) { helperGate = gate; }, queue(gate) { queued = gate; },
     fact() { return { version: 1, kind: 'question_asked', sessionID: 's', turnID: 'original-turn', requestID: 'r', rootSession: true,
       provenance: { generation, observationID: 'original-observation', nativeTime: Number((wallBase + tick - initial) / 1000000n),
         timeBasis: generation === 'v1' ? 'assistant_created_lower_bound' : 'envelope_created',
@@ -310,6 +310,31 @@ test('activation keeps rejecting invalid or repeatedly slow calibration', async 
       assert.equal(f.closes(), 1);
       assert.equal(f.cancels(), 1);
     } finally { f.delivery.dispose(); }
+  }
+});
+
+test('slow calibration retry refuses revoked ownership or a forged second helper', async () => {
+  for (const rawKind of ['linux-boottime', 'darwin-monotonic-raw', 'windows-interrupt-precise']) {
+    for (const mode of ['revoked', 'wrong-boot', 'wrong-wall']) {
+      const f = deliveryFixture(rawKind);
+      let receipts = 0;
+      try {
+        f.helperDelays([300000000n, 10000000n]);
+        f.receipt(r => {
+          if (++receipts !== 2) return r; // First bracket is valid but exceeds the fixed bound.
+          if (mode === 'revoked') { f.revoke(); return r; }
+          if (mode === 'wrong-boot') return { ...r, boot: changedBoot };
+          return { ...r, wallUnixNs: String(BigInt(r.wallUnixNs) + 5000000000n) };
+        });
+        assert.equal(await f.delivery.activate(), false, mode + '/' + rawKind);
+        assert.equal(f.helpers.length, 2, 'the invalid second helper cannot trigger another retry');
+        assert.equal(f.helpers[0].deadline, f.helpers[1].deadline);
+        assert.equal(f.delivery.ready(), false);
+        assert.equal(f.cancels(), 1);
+        assert.equal(f.closes(), 1);
+        assert.equal(f.events(), 0);
+      } finally { f.delivery.dispose(); }
+    }
   }
 });
 
