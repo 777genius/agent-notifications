@@ -75,6 +75,24 @@ def sdk_contents_match_source(tarball, checkout, revision):
         if kind != b'blob' or mode not in (b'100644', b'100755'):
             raise ValueError('SDK source commit contains non-regular entry')
         tracked[name.decode('utf-8')] = object_id.decode('ascii')
+    # npm packs the package.json `files` allowlist, not every tracked test,
+    # fixture and script in the source tree. This audited SDK uses flat literal
+    # file names; reject patterns/directories rather than guessing npm semantics.
+    try:
+        raw_manifest = subprocess.check_output(['git', '-C', str(checkout), 'show', revision + ':sdk/opencode-js/package.json'])
+        declared = json.loads(raw_manifest)['files']
+    except (subprocess.CalledProcessError, ValueError, KeyError, TypeError) as error:
+        raise ValueError('SDK source package manifest unavailable') from error
+    if not isinstance(declared, list) or not declared or any(
+            not isinstance(name, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]*', name)
+            for name in declared) or len(set(declared)) != len(declared):
+        raise ValueError('SDK source package files are not flat literals')
+    expected = set(declared) | {'package.json'}
+    # npm always includes root README and licence files when present.
+    for path in tracked:
+        relative = path[len('sdk/opencode-js/'):]
+        if '/' not in relative and re.fullmatch(r'(?i)(readme|licen[cs]e|copying)(\..*)?', relative):
+            expected.add(relative)
     seen = set()
     with tarfile.open(tarball, 'r:gz') as archive:
         for member in archive:
@@ -93,7 +111,6 @@ def sdk_contents_match_source(tarball, checkout, revision):
                 raise ValueError('SDK packaged file differs from source commit')
     if not seen:
         raise ValueError('SDK tarball is empty')
-    expected = {path[len('sdk/opencode-js/'):] for path in tracked}
     if seen != expected:
         raise ValueError('SDK tarball member set differs from source commit')
     return True

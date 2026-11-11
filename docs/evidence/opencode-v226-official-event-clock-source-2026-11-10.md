@@ -221,6 +221,13 @@ delivered one. The first missed delivery was not reproduced or explained; its
 native execution and terminal step succeeded. These results demonstrate a real
 local model path but do not establish production qualification or reliability.
 
+For comparison, the clean ordinary product binary at `2ab6c3e3` delivered a
+completion webhook from the pinned OpenCode 2.0.21 Darwin ARM64 executable
+using the same real local model and TEST-only loopback proxy. The packed SDK
+contents matched the public `3e438a2` source commit. The temporary harness
+was modified to route only that test provider to Ollama; no desktop result or
+OpenCode 2.2.6 production qualification is implied.
+
 The real-host source harness now exercises automatic compaction and the final
 native assistant proof in CI. In a local TEST-only delivery run it observed a
 new completion after compaction; the pre-fix TEST binary failed the same

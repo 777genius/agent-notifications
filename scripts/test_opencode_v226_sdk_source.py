@@ -1,5 +1,6 @@
 import importlib.util
 import io
+import json
 from pathlib import Path
 import subprocess
 import tarfile
@@ -20,6 +21,10 @@ class SDKSourceTest(unittest.TestCase):
             source = root / 'sdk/opencode-js/index.js'
             source.parent.mkdir(parents=True)
             source.write_bytes(b'original')
+            manifest = json.dumps({'files': ['index.js']}).encode()
+            (source.parent / 'package.json').write_bytes(manifest)
+            (source.parent / 'README.md').write_bytes(b'documentation')
+            (source.parent / 'unpublished.test.js').write_bytes(b'not packed')
             subprocess.run(['git', '-C', str(root), 'add', '.'], check=True)
             subprocess.run(['git', '-C', str(root), '-c', 'core.hooksPath=/dev/null',
                             '-c', 'user.name=iliya', '-c', 'user.email=iliyazelenkog@gmail.com',
@@ -31,6 +36,12 @@ class SDKSourceTest(unittest.TestCase):
                                           ('package/../escape', b'original', False)]:
                 with self.subTest(name=name, expected=expected):
                     with tarfile.open(archive, 'w:gz') as tar:
+                        metadata = tarfile.TarInfo('package/package.json')
+                        metadata.size = len(manifest)
+                        tar.addfile(metadata, io.BytesIO(manifest))
+                        readme = tarfile.TarInfo('package/README.md')
+                        readme.size = len(b'documentation')
+                        tar.addfile(readme, io.BytesIO(b'documentation'))
                         member = tarfile.TarInfo(name)
                         member.size = len(data)
                         tar.addfile(member, io.BytesIO(data))
@@ -39,6 +50,13 @@ class SDKSourceTest(unittest.TestCase):
                     else:
                         with self.assertRaises(ValueError):
                             semantic.sdk_contents_match_source(archive, root, revision)
+            with tarfile.open(archive, 'w:gz') as tar:
+                for name, data in [('package.json', manifest), ('index.js', b'original')]:
+                    member = tarfile.TarInfo('package/' + name)
+                    member.size = len(data)
+                    tar.addfile(member, io.BytesIO(data))
+            with self.assertRaisesRegex(ValueError, 'member set'):
+                semantic.sdk_contents_match_source(archive, root, revision)
 
 
     def test_rejects_subset_of_tracked_sdk_files(self):
@@ -49,6 +67,8 @@ class SDKSourceTest(unittest.TestCase):
             package.mkdir(parents=True)
             (package / 'index.js').write_bytes(b'original')
             (package / 'missing.js').write_bytes(b'other')
+            manifest = json.dumps({'files': ['index.js', 'missing.js']}).encode()
+            (package / 'package.json').write_bytes(manifest)
             subprocess.run(['git', '-C', str(root), 'add', 'sdk/opencode-js'], check=True)
             subprocess.run(['git', '-C', str(root), '-c', 'core.hooksPath=/dev/null',
                             '-c', 'user.name=test', '-c', 'user.email=test@example.invalid',
@@ -56,6 +76,9 @@ class SDKSourceTest(unittest.TestCase):
             revision = subprocess.check_output(['git', '-C', str(root), 'rev-parse', 'HEAD'], text=True).strip()
             archive = root / 'TEST-partial.tgz'
             with tarfile.open(archive, 'w:gz') as tar:
+                metadata = tarfile.TarInfo('package/package.json')
+                metadata.size = len(manifest)
+                tar.addfile(metadata, io.BytesIO(manifest))
                 member = tarfile.TarInfo('package/index.js')
                 member.size = len(b'original')
                 tar.addfile(member, io.BytesIO(b'original'))
@@ -71,6 +94,8 @@ class SDKSourceTest(unittest.TestCase):
             package.mkdir(parents=True)
             (package / 'index.js').write_bytes(b'original')
             (package / 'tool.sh').write_bytes(b'#!/bin/sh\nexit 0\n')
+            manifest = json.dumps({'files': ['index.js', 'tool.sh']}).encode()
+            (package / 'package.json').write_bytes(manifest)
             subprocess.run(['git', '-C', str(root), 'add', 'sdk/opencode-js'], check=True)
             # Force the Git executable bit even when the Windows worktree lacks it.
             subprocess.run(['git', '-C', str(root), 'update-index', '--chmod=+x',
@@ -83,13 +108,16 @@ class SDKSourceTest(unittest.TestCase):
                 ['git', '-C', str(root), 'rev-parse', 'HEAD'], text=True).strip()
             archive = root / 'TEST-modes.tgz'
             with tarfile.open(archive, 'w:gz') as tar:
+                metadata = tarfile.TarInfo('package/package.json')
+                metadata.size = len(manifest)
+                tar.addfile(metadata, io.BytesIO(manifest))
                 member = tarfile.TarInfo('package/index.js')
                 member.size = len(b'original')
                 tar.addfile(member, io.BytesIO(b'original'))
             with self.assertRaisesRegex(ValueError, 'member set'):
                 semantic.sdk_contents_match_source(archive, root, revision)
             with tarfile.open(archive, 'w:gz') as tar:
-                for name, content in [('index.js', b'original'),
+                for name, content in [('package.json', manifest), ('index.js', b'original'),
                                       ('tool.sh', b'#!/bin/sh\nexit 0\n')]:
                     member = tarfile.TarInfo('package/' + name)
                     member.size = len(content)
