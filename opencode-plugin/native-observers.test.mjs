@@ -587,3 +587,19 @@ for(const kind of ['question_asked','terminal_error'])test(`native V1 ${kind} re
   assert.deepEqual(later,['get','messages']);
  }finally{h.dispose();}
 });
+
+// An output-limit failure belongs to the exact terminal idle row, not the
+// preceding assistant. Unrelated or cancelled idle rows grant no authority.
+test('native V2 binds output-limit error to its terminal idle',async()=>{
+ for(const mode of ['output-limit','wrong-id','cancelled','cancelled-assistant','wrong-outcome']){
+  const h=v2();try{
+   await until(()=>h.markers()===1);h.birth();
+   h.event('session.step.ended',{assistantMessageID:'msg_assistant',type:'assistant'});
+   const end=h.event('session.execution.failed');
+   h.setRows([{id:'inbox-user',type:'user'},{id:'msg_assistant',type:'assistant',finish:'length',time:{created:1700000000005,completed:end.created},...(mode==='cancelled-assistant'?{error:{type:'cancelled'}}:{})},
+    {id:mode==='wrong-id'?'msg_other':`msg_${end.id.slice(4)}`,type:'idle',outcome:mode==='wrong-outcome'?'success':'failed',error:{type:mode==='cancelled'?'cancelled':'output-limit'}}]);
+   if(mode==='output-limit'){await until(()=>h.facts.length===1);assert.equal(h.facts[0].kind,'terminal_error');assert.equal(h.facts[0].provenance.nativeEventID,end.id);}
+   else {await until(()=>h.diagnostics.includes('terminal_assistant_unverified'));assert.equal(h.facts.length,0);}
+  }finally{await h.stop();}
+ }
+});

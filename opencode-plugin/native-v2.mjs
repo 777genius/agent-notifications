@@ -160,7 +160,11 @@ export function createNativeV2(context, ownedLocation, onIngress, onUncertainty)
     let outcome;
     if (terminal.type === 'session.execution.succeeded' && step.type === 'session.step.ended' &&
         row.finish === 'stop' && row.error == null) outcome = 'success';
-    if (terminal.type === 'session.execution.failed' && row.error && !cancelled(row.error)) outcome = 'error';
+    // OpenCode records output-limit failures on the terminal idle row, not
+    // on the preceding assistant row. Bind it to this exact native event.
+    const idle = value.find((item) => item.type === 'idle' && item.id === terminalMessageID);
+    if (terminal.type === 'session.execution.failed' &&
+        (row.error ? !cancelled(row.error) : idle?.outcome === 'failed' && idle.error?.type === 'output-limit')) outcome = 'error';
     if (!outcome) return;
     return Object.freeze({ ...proof, messageID: row.id, role: 'assistant', summary: false, final: true, outcome });
   }
