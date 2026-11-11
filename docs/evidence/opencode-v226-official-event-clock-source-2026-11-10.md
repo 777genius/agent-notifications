@@ -140,6 +140,15 @@ that never worked, but does not identify the rejection phase. These runs
 exercise behavior only: their copied trust rows are not evidence for production
 admission.
 
+The reported `serve --service` entry was also exercised on macOS ARM64 with
+an isolated service configuration and loopback model provider. The ordinary
+candidate refused startup and sent no webhook. A separate TEST-only prototype
+with unqualified copied trust rows delivered the four event webhooks and had
+five desktop submissions correlated with actual macOS banners. Service mode
+changes the host's working directory and credential handling; testing this
+entry therefore covers the reporter's launch path, but does not grant its
+observer or clock qualification.
+
 Two further runs repeated the same-host control and ±12-second shift using a
 separate TEST-only build that forced the existing fixed-code composition
 diagnostics on. Each run recorded one successful activation, a control

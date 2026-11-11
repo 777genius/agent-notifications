@@ -475,12 +475,22 @@ jobs:
             --archive "$RUNNER_TEMP/opencode-darwin-arm64.zip" \
             --receiver "$RUNNER_TEMP/TEST-opencode-v226-darwin/receiver" \
             --report "$RUNNER_TEMP/opencode-v226-darwin-denied-safe.json"
+      - name: Observe the reported macOS service entry and restart denial
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -B scripts/opencode-v226-source-e2e.py \
+            --archive "$RUNNER_TEMP/opencode-darwin-arm64.zip" \
+            --receiver "$RUNNER_TEMP/TEST-opencode-v226-darwin/receiver" \
+            --service --restart-denial --report "$RUNNER_TEMP/opencode-v226-darwin-service-denied-safe.json"
       - name: Upload sanitized macOS source/denial evidence
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: opencode-v226-darwin-denied-${{ matrix.os }}-${{ github.event.pull_request.head.sha || github.sha }}
-          path: ${{ runner.temp }}/opencode-v226-darwin-denied-safe.json
+          path: |
+            ${{ runner.temp }}/opencode-v226-darwin-denied-safe.json
+            ${{ runner.temp }}/opencode-v226-darwin-service-denied-safe.json
           if-no-files-found: warn
           retention-days: 14
       # Same genuine official-image source/time negatives as Linux/Windows.

@@ -342,7 +342,7 @@ def stop_official_host_tree(host):
             host.wait(timeout=5)
 
 
-def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False, expect_delivery=False, native_app=None, skew_after_delivery=False):
+def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False, expect_delivery=False, native_app=None, skew_after_delivery=False, service=False):
     spec = importlib.util.spec_from_file_location('existing_native_provider',
         Path(__file__).resolve().parent / 'opencode-semantic-e2e.py')
     native = importlib.util.module_from_spec(spec)
@@ -355,6 +355,10 @@ def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False, exp
     paths = {k: root / v for k, v in names.items()}
     for directory in paths.values():
         directory.mkdir(mode=0o700)
+    if service:
+        # Service mode ignores OPENCODE_PASSWORD and reads its own config.
+        # Both config and registration remain in this disposable TEST root.
+        (paths['config'] / 'service.json').write_text(json.dumps({'password': 'test-only'}), encoding='utf-8')
     subprocess.run(['git', 'init', '-q', str(paths['project'])], check=True, timeout=10)
     plugins = paths['config'] / 'plugins'
     plugins.mkdir(mode=0o700)
@@ -465,8 +469,8 @@ def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False, exp
             listener.bind(('127.0.0.1', 0))
             port = listener.getsockname()[1]
         with (root / 'host.private.log').open('wb') as log:
-            host = subprocess.Popen([str(binary), 'serve', '--hostname', '127.0.0.1',
-                                     '--port', str(port), '--print-logs'],
+            host = subprocess.Popen([str(binary), 'serve', *(['--service'] if service else []),
+                                     '--hostname', '127.0.0.1', '--port', str(port), '--print-logs'],
                                     cwd=paths['project'], env=env, stdout=log, stderr=log,
                                     start_new_session=(sys.platform != 'win32'),
                                     creationflags=(subprocess.CREATE_NEW_PROCESS_GROUP
@@ -768,7 +772,7 @@ def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False, exp
                         stop_official_host_tree(host)
                         previous_trace_length = len(rows())
                         host = subprocess.Popen(
-                            [str(binary), 'serve', '--hostname', '127.0.0.1',
+                            [str(binary), 'serve', *(['--service'] if service else []), '--hostname', '127.0.0.1',
                              '--port', str(port), '--print-logs'],
                             cwd=paths['project'], env=env, stdout=log, stderr=log,
                             start_new_session=(sys.platform != 'win32'),
@@ -870,6 +874,8 @@ def main():
                         help='With a skew mode and receiver, observe that no webhook arrives')
     parser.add_argument('--skew-after-delivery', action='store_true',
                         help='First require successful delivery in the same host, then apply the skew')
+    parser.add_argument('--service', action='store_true',
+                        help='Exercise the isolated OpenCode serve --service entry')
     args = parser.parse_args()
     if args.native_app is not None and (sys.platform != 'darwin' or not args.expect_delivery):
         parser.error('native app requires macOS and delivery mode')
@@ -890,7 +896,8 @@ def main():
     with tempfile.TemporaryDirectory(prefix='TEST-opencode-v226-', dir=os.environ.get('RUNNER_TEMP')) as temp:
         try:
             prepare_windows_private_root(Path(temp))
-            result = run(args.archive, Path(temp), args.receiver, skew_ms, args.restart_denial, args.expect_delivery, args.native_app, args.skew_after_delivery)
+            result = run(args.archive, Path(temp), args.receiver, skew_ms, args.restart_denial, args.expect_delivery, args.native_app, args.skew_after_delivery, args.service)
+            result['serviceMode'] = args.service
         except Exception as error:
             # Never leak native session IDs, paths, model messages or provider errors.
             safe_errors = {'official_archive_unverified', 'official_executable_not_unique',
