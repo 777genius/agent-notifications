@@ -540,6 +540,7 @@ def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False, exp
                                     creationflags=(subprocess.CREATE_NEW_PROCESS_GROUP
                                                    if sys.platform == 'win32' else 0))
             peer_witness = None
+            peer_wall_deltas = None
             try:
                 def request(endpoint, body=None, method=None):
                     payload = None if body is None else json.dumps(body).encode()
@@ -661,7 +662,7 @@ def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False, exp
                 if not source_rows or any(not isinstance(r.get('createdMs'), int) for r in source_rows):
                     raise RuntimeError('native_source_epoch_unverified')
                 if peer_witness is not None:
-                    peer_witness.verify_and_close(source_rows, sid)
+                    peer_wall_deltas = peer_witness.verify_and_close(source_rows, sid)
                     # The witness binds a TCP tuple to a PID/start time. Check
                     # the live publisher again after the same observation;
                     # these snapshots are still not a held process lease.
@@ -695,6 +696,12 @@ def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False, exp
                         skew_observed = all(r['createdMs'] < r['receivedWallMs'] - 5000 for r in source_rows)
                     if not skew_observed:
                         raise RuntimeError('source_clock_skew_not_refused')
+                    # Independent Python/OS receive-time witness: this only
+                    # observes the injected discrepancy; it grants no Q bound.
+                    if peer_wall_deltas is not None and (
+                            clock_skew_ms > 0 and peer_wall_deltas[0] <= 5000000000 or
+                            clock_skew_ms < 0 and peer_wall_deltas[1] >= -5000000000):
+                        raise RuntimeError('peer_wall_skew_unverified')
                     negative_native = [r for r in rows() if r.get('phase') == 'native-projection' and r.get('sessionID') == sid]
                     if not all(any(r.get('type') == kind and r.get('observedSequence') for r in negative_native)
                                for kind in terminal):
@@ -715,6 +722,8 @@ def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False, exp
                                 'installedReceiverObserved': True,
                                 'sameHostPriorDeliveryObserved': skew_after_delivery,
                                 'receiverRejectionPhaseKnown': False,
+                                **({'peerSourceMinusArrivalMinNS': str(peer_wall_deltas[0]),
+                                    'peerSourceMinusArrivalMaxNS': str(peer_wall_deltas[1])} if peer_wall_deltas is not None else {}),
                                 'nativeObserverQualified': False, 'nativeClockQualified': False,
                                 'notificationDeliveryQualified': False}
                     # This assertion is the TEST HARNESS comparing native
@@ -727,6 +736,8 @@ def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False, exp
                             'sourcePastWallMismatchObserved':clock_skew_ms < 0,
                             'productionAdmissionExercised':False,
                             'nativeR0StillObserved':True,
+                            **({'peerSourceMinusArrivalMinNS': str(peer_wall_deltas[0]),
+                                'peerSourceMinusArrivalMaxNS': str(peer_wall_deltas[1])} if peer_wall_deltas is not None else {}),
                             'nativeObserverQualified':False,'nativeClockQualified':False,
                             'notificationDeliveryQualified':False}
                 if any(not source_wall_start_ms - 5000 <= r['createdMs'] <= source_wall_end_ms + 5000
@@ -1029,6 +1040,8 @@ def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False, exp
                         'sameProcessReceiverQ0Observed': True,
                         'productionNativeV2CorrelationR0Observed': True,
                         'nativeV2R0SampleCount': len(native_rows),
+                        **({'peerSourceMinusArrivalMinNS': str(peer_wall_deltas[0]),
+                            'peerSourceMinusArrivalMaxNS': str(peer_wall_deltas[1])} if peer_wall_deltas is not None else {}),
                         'productionNativeV2AssistantR1Observed': True,
                         'productionNativeV2QuestionR1Observed': True,
                         'productionNativeV2PermissionR1Observed': True,
@@ -1169,6 +1182,7 @@ def main():
                            'peer_host_not_live', 'peer_identity_unverified', 'peer_feed_not_ready',
                            'peer_endpoint_changed', 'peer_socket_unverified', 'peer_negative_failed',
                            'peer_events_unverified', 'peer_close_unverified', 'peer_cleanup_failed',
+                           'peer_wall_skew_unverified',
                            'peer_subscription_missing', 'peer_stream_isolation_unverified',
                            'source_auto_compaction_missing', 'source_auto_compaction_unverified', 'source_auto_compaction_delivery_missing',
                            'negative_native_reader_projection_unverified',

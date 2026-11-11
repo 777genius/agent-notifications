@@ -19,7 +19,7 @@ class NativePeerObservation:
         self.ready = threading.Event()
         self.stopping = threading.Event()
         self.thread = None
-        self.events = set()
+        self.events = {}
         self.events_lock = threading.Lock()
         self.error = None
         self.connected = False
@@ -59,6 +59,7 @@ class NativePeerObservation:
             self.local_port = local[1]
             while not self.stopping.is_set():
                 line = response.readline(262145)
+                received_wall_ns = time.time_ns()
                 if not line:
                     break
                 if len(line) > 262144:
@@ -87,9 +88,9 @@ class NativePeerObservation:
                         not isinstance(values[3], str) or not values[3]):
                     raise RuntimeError('bad_identity')
                 with self.events_lock:
-                    if len(self.events) >= 4096:
-                        raise RuntimeError('event_limit')
-                    self.events.add(values)
+                    if len(self.events) >= 4096 or values in self.events:
+                        raise RuntimeError('event_limit_or_duplicate')
+                    self.events[values] = received_wall_ns
         except Exception:
             if not self.stopping.is_set():
                 self.error = 'peer_feed_failed'
@@ -124,6 +125,7 @@ class NativePeerObservation:
         while True:
             with self.events_lock:
                 matched = expected.issubset(self.events)
+                deltas = [event[2] * 1000000 - self.events[event] for event in expected] if matched else []
             if matched:
                 break
             if self.error or time.monotonic() >= end:
@@ -141,6 +143,7 @@ class NativePeerObservation:
             if time.monotonic() >= end:
                 raise RuntimeError('peer_close_unverified')
             time.sleep(.05)
+        return min(deltas), max(deltas)
 
     def close(self):
         if self.stopping.is_set():

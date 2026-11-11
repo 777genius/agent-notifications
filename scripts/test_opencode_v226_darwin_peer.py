@@ -53,7 +53,8 @@ class NativePeerParserTest(unittest.TestCase):
         peer = self.read([self.marker, self.event])
         self.assertTrue(peer.connected)
         self.assertIsNone(peer.error)
-        self.assertEqual(peer.events, {('session.execution.started', 'evt_test', 1, 'ses_test')})
+        self.assertEqual(set(peer.events), {('session.execution.started', 'evt_test', 1, 'ses_test')})
+        self.assertGreater(peer.events[('session.execution.started', 'evt_test', 1, 'ses_test')], 0)
 
     def test_missing_or_duplicate_marker_fails_closed(self):
         for events in ([self.event], [self.marker, self.marker]):
