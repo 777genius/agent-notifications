@@ -382,6 +382,7 @@ export default async function(){record({phase:'loaded',version:'v1'});return{eve
         for case in args.cases.split(','):
             child_flow = case.startswith('child-')
             foreign_flow = case.startswith('foreign-')
+            inflight_edit = case == 'foreign-inflight'
             removed_flow = case.startswith('removed-') or foreign_flow
             recovery = case.startswith('recover-')
             mode = case[len('recover-'):] if recovery else case.split('-', 1)[1] if child_flow or removed_flow else case
@@ -404,7 +405,12 @@ export default async function(){record({phase:'loaded',version:'v1'});return{eve
                 wait(lambda: any(x.get('phase') == 'cleanup' for x in rows()[old_trace:]), 'native plugin disposal')
                 wait(lambda: any(x.get('phase') == 'loaded' for x in rows()[old_trace:]), 'native plugin reload')
                 mode = 'success'
-            if removed_flow and not removed:
+            if inflight_edit and not any(result.get('case') == 'success' and result.get('alerts') == ['task_complete']
+                                         for result in cases):
+                raise ValueError('in-flight foreign edit requires a successful control delivery')
+            if inflight_edit and removed:
+                raise ValueError('in-flight foreign edit requires an intact installation')
+            if removed_flow and not removed and not inflight_edit:
                 if foreign_flow:
                     if not any(result.get('case') == 'success' and result.get('alerts') == ['task_complete']
                                for result in cases):
@@ -434,7 +440,7 @@ export default async function(){record({phase:'loaded',version:'v1'});return{eve
                 subprocess.run(['git', 'init', '-q', str(target)], check=True)
                 (target / 'opencode.json').write_text(json.dumps(configuration))
                 req('/api/location', directory=target)
-            provider.mode, provider.attempts = ('cancel' if mode == 'queue-cancel' else mode), 0
+            provider.mode, provider.attempts = ('cancel' if mode == 'queue-cancel' or inflight_edit else mode), 0
             provider.entered.clear()
             provider.release.clear()
             body = {'title': 'TEST-' + mode}
@@ -477,7 +483,13 @@ export default async function(){record({phase:'loaded',version:'v1'});return{eve
             prompt = {'parts': [{'type': 'text', 'text': marker}]} if v1 else {'text': marker}
             with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
                 initial = pool.submit(req, prefix + sid + ('/message' if v1 else '/prompt'), prompt)
-                if mode in ('queue', 'steer', 'cancel', 'queue-cancel'):
+                if inflight_edit:
+                    wait(provider.entered.is_set, 'held primary provider before foreign edit')
+                    foreign_bytes = installed.read_bytes() + b'\n// TEST-only foreign edit during turn\n'
+                    installed.write_bytes(foreign_bytes)
+                    removed = True
+                    provider.release.set()
+                elif mode in ('queue', 'steer', 'cancel', 'queue-cancel'):
                     wait(provider.entered.is_set, 'held primary provider')
                     if mode == 'queue-cancel':
                         second = pool.submit(req, prefix + sid + '/prompt', {'text': marker + '-queued', 'delivery': 'queue'})

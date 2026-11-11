@@ -150,6 +150,15 @@ it does not establish source authenticity or qualify the copied clock bounds.
 
 ## Acceptance evidence required before a positive E2E or merge
 
+On local macOS ARM64, an additional TEST-only unqualified prototype received
+one completion webhook before a second real OpenCode 2.2.6 turn. During that
+turn the local provider was held, the installed plugin bytes were edited, and
+the provider was released. Native execution succeeded, but no webhook arrived
+during the 30-second negative window; the foreign edit was preserved. The
+scenario also rejected a run without the earlier positive control. This is a
+real-host revocation observation, not production qualification: the prototype
+uses unqualified test trust data and a local scripted provider.
+
 1. The public CI artifact's installed webhook delivery was reproduced as described above. Still independently verify a receiver built from the exact candidate HEAD and the applicable native desktop presentation; do not compare unrelated binaries.
 2. Independently review the specific 2.2.6 V2 event reader and held-process provenance, and the Bun 1.4.4 FFI/JSValue-to-slot source behavior. Bind the runtime and native image evidence without caller-provided authority or fake clock rows.
 3. Establish per-platform original `Event.Payload.created` source/JS `Date.now()` wall semantics, Go monotonic-to-wall translation, measured worst-case bounds plus reviewed error margins, reboot/clock adjustment/suspend/stale-event negatives, and invalidation on process/image changes.
