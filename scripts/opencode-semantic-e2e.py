@@ -209,7 +209,10 @@ def qualify_owned(args, cleanup):
         native_os, native_arch, pins = 'darwin', 'arm64', MACOS_ARM64_PINS
     else:
         raise ValueError('semantic checkpoint has no pinned image for this platform')
+    # A lockfile match authenticates tarball bytes, not the claimed source
+    # revision. Independent source-to-tarball evidence is still required.
     provenance = {'schema_version': 1, 'candidate_sha': source_sha, 'sdk_source_sha': args.sdk_source_sha,
+        'sdk_source_sha_verified': False,
         'sdk_tarball_sha256': digest(tarball), 'uap_observer_pin': observer_pin,
         'lock_sha256': digest(lock), 'bundled_js_source_sha256': digest(repo / 'internal/opencodeplugin/dist/agent-notifications.js'),
         'native_os': native_os, 'native_arch': native_arch, 'product_build_vcs': 'clean_exact_checkout'}
@@ -666,7 +669,8 @@ def main():
     parser.add_argument('--sandbox', type=pathlib.Path, required=True)
     parser.add_argument('--report', type=pathlib.Path, required=True)
     parser.add_argument('--sdk-tarball', type=pathlib.Path, required=True)
-    parser.add_argument('--sdk-source-sha', required=True)
+    parser.add_argument('--sdk-source-sha', required=True,
+                        help='Claimed SDK source revision; this harness does not verify its provenance')
     parser.add_argument('--desktop', action='store_true', help='capture real Notify calls on a private Linux D-Bus')
     parser.add_argument('--cases', help='comma-separated subset; defaults to the qualified version-specific matrix')
     args = parser.parse_args()
