@@ -1,6 +1,7 @@
 """Closed native desktop receipt regression tests; no OS presenter or webhook."""
 import importlib.util
 import json
+from threading import Lock
 from pathlib import Path
 import tempfile
 import unittest
@@ -10,6 +11,7 @@ spec = importlib.util.spec_from_file_location('opencode_v226_source', source)
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 desktop_submitted = module.desktop_submitted
+wait_for_delivery = module.wait_for_delivery
 
 
 class NativeDesktopReceiptTests(unittest.TestCase):
@@ -86,6 +88,28 @@ class NativeDesktopReceiptTests(unittest.TestCase):
                 self.receipt.write_bytes(raw)
                 with self.assertRaisesRegex(RuntimeError, '^desktop_receipt_invalid$'):
                     desktop_submitted(self.root)
+
+
+
+class FreshWebhookEvidenceTests(unittest.TestCase):
+    def test_stale_matching_webhook_does_not_qualify_new_event(self):
+        matching = json.dumps({
+            'schema_version': 1, 'status': 'submitted',
+            'notification_type': 'question', 'agent_source': 'opencode',
+            'message': 'OpenCode asked a question', 'timestamp': 'TEST',
+            'session_id': '', 'source': 'TEST', 'title': 'OpenCode'
+        }).encode('utf-8')
+
+        class FakeWebhook:
+            def __init__(self):
+                self.lock = Lock()
+                self.bodies = [matching]
+
+        webhook = FakeWebhook()
+        with self.assertRaisesRegex(RuntimeError, '^expected_delivery_missing$'):
+            wait_for_delivery(webhook, 'question', 'OpenCode asked a question', after=1, timeout=.02)
+        webhook.bodies.append(matching)
+        wait_for_delivery(webhook, 'question', 'OpenCode asked a question', after=1, timeout=.02)
 
 
 if __name__ == '__main__':

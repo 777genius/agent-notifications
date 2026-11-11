@@ -184,11 +184,12 @@ def wait(fn, seconds, label):
     raise RuntimeError(label)
 
 
-def wait_for_delivery(webhook, event_type, message):
+def wait_for_delivery(webhook, event_type, message, after=0, timeout=15):
+    """Require a fresh webhook emitted after the verified source stage started."""
     def matching():
         with webhook.lock:
             bodies = list(webhook.bodies)
-        for raw in bodies:
+        for raw in bodies[after:]:
             try:
                 payload = json.loads(raw)
             except (ValueError, UnicodeDecodeError):
@@ -204,7 +205,7 @@ def wait_for_delivery(webhook, event_type, message):
                     raise RuntimeError('delivery_payload_invalid')
                 return True
         return False
-    wait(matching, 15, 'expected_delivery_missing')
+    wait(matching, timeout, 'expected_delivery_missing')
 
 
 def desktop_submitted(root):
@@ -818,6 +819,11 @@ def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False, exp
                 print('source-stage: native-session-projection-verified', flush=True)
                 desktop_ids = set()
                 desktop_stages = {}
+                def webhook_cursor():
+                    if webhook is None:
+                        return 0
+                    with webhook.lock:
+                        return len(webhook.bodies)
                 def capture_desktop(stage):
                     if native_app is None:
                         return
@@ -862,6 +868,7 @@ def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False, exp
                     provider.mode = 'success'
                     print('source-stage: auto-compaction-verified', flush=True)
                 # Independently verify native pending question, reply and settled turn.
+                question_delivery_cursor = webhook_cursor()
                 question_begin = len(rows())
                 prior_requests = len(provider.bodies)
                 provider.mode = 'question'
@@ -881,7 +888,7 @@ def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False, exp
                 if qr1.get('valid') is not True or qr1.get('runParts') != 4:
                     raise RuntimeError('native_question_projection_unverified')
                 if expect_delivery:
-                    wait_for_delivery(webhook, 'question', 'OpenCode asked a question')
+                    wait_for_delivery(webhook, 'question', 'OpenCode asked a question', after=question_delivery_cursor)
                     capture_desktop('question')
                 def finish_question():
                     request('/api/session/' + question_sid + '/form/' + forms[0]['id'] + '/reply',
@@ -896,6 +903,7 @@ def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False, exp
                 provider.mode = 'success'
                 print('source-stage: question-verified', flush=True)
                 # Permission.asked is likewise ephemeral, and needs an independent live pending snapshot.
+                permission_delivery_cursor = webhook_cursor()
                 permission_begin = len(rows())
                 prior_requests = len(provider.bodies)
                 provider.mode = 'permission'
@@ -915,7 +923,7 @@ def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False, exp
                 if pr1.get('valid') is not True or pr1.get('runParts') != 4:
                     raise RuntimeError('native_permission_projection_unverified')
                 if expect_delivery:
-                    wait_for_delivery(webhook, 'permission_request', 'OpenCode requested permission')
+                    wait_for_delivery(webhook, 'permission_request', 'OpenCode requested permission', after=permission_delivery_cursor)
                     capture_desktop('permission')
                 def finish_permission():
                     request('/api/session/' + permission_sid + '/permission/' + pending[0]['id'] + '/reply',
@@ -927,6 +935,7 @@ def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False, exp
                 provider.mode = 'success'
                 print('source-stage: permission-verified', flush=True)
                 # Permanent provider failure must produce a durable native terminal (not a received clock).
+                failure_delivery_cursor = webhook_cursor()
                 failure_begin = len(rows())
                 prior_requests = len(provider.bodies)
                 provider.mode = 'failure'
@@ -954,7 +963,7 @@ def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False, exp
                 if er1.get('valid') is not True or er1.get('runParts') != 3:
                     raise RuntimeError('native_error_projection_unverified')
                 if expect_delivery:
-                    wait_for_delivery(webhook, 'opencode_error', 'An error needs your attention')
+                    wait_for_delivery(webhook, 'opencode_error', 'An error needs your attention', after=failure_delivery_cursor)
                     capture_desktop('provider_failure')
                 provider.mode = 'success'
                 print('source-stage: terminal-error-verified', flush=True)
@@ -963,6 +972,7 @@ def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False, exp
                 if expect_delivery:
                     with webhook.lock:
                         webhook.bodies.clear()
+                limit_delivery_cursor = webhook_cursor()
                 limit_begin = len(rows())
                 prior_requests = len(provider.bodies)
                 provider.mode = 'output-limit'
@@ -989,7 +999,7 @@ def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False, exp
                         limit_proof.get('assistantErrorAbsent') is not True):
                     raise RuntimeError('native_output_limit_projection_unverified')
                 if expect_delivery:
-                    wait_for_delivery(webhook, 'opencode_error', 'An error needs your attention')
+                    wait_for_delivery(webhook, 'opencode_error', 'An error needs your attention', after=limit_delivery_cursor)
                     capture_desktop('output_limit')
                 provider.mode = 'success'
                 print('source-stage: output-limit-verified', flush=True)
