@@ -354,9 +354,9 @@ export default {id:'test-oc226-peer',async setup(ctx){
    const e=next.value;
    if(!['session.execution.started','session.step.ended','session.execution.succeeded'].includes(e?.type))continue;
    const original={type:e.type,id:e.id,created:e.created,sessionID:e.data?.sessionID};
-   let blocked=false;try{e.created=1;e.id='TEST-mutated-peer-id';}catch{blocked=true;}
+   let blocked=false;try{e.created=1;e.id='TEST-mutated-peer-id';e.data.sessionID='TEST-mutated-peer-session';}catch{blocked=true;}
    write({phase:'peer',...original,mutationBlocked:blocked,
-     mutationApplied:e.created===1&&e.id==='TEST-mutated-peer-id'});
+     mutationApplied:e.created===1&&e.id==='TEST-mutated-peer-id'&&e.data?.sessionID==='TEST-mutated-peer-session'});
   }
  }catch{write({phase:'failed'});}})();
  return ()=>controller.abort();
@@ -962,7 +962,7 @@ def main():
             result = run(args.archive, Path(temp), args.receiver, skew_ms, args.restart_denial, args.expect_delivery, args.native_app, args.skew_after_delivery, args.service, args.darwin_live_signer.resolve(strict=True) if args.darwin_live_signer else None, args.mutate_peer_events)
             result['serviceMode'] = args.service
             result['liveSignerObserved'] = args.darwin_live_signer is not None
-            result['peerEventIDAndTimestampIsolationObserved'] = args.mutate_peer_events
+            result['peerEventIDTimestampAndSessionIsolationObserved'] = args.mutate_peer_events
         except Exception as error:
             # Never leak native session IDs, paths, model messages or provider errors.
             safe_errors = {'official_archive_unverified', 'official_executable_not_unique',
