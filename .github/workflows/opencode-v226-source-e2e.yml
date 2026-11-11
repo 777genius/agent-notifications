@@ -166,6 +166,24 @@ jobs:
           path: ${{ runner.temp }}/opencode-v226-denied-safe.json
           if-no-files-found: warn
           retention-days: 14
+      - name: Verify real installed 2.2.6 restart remains denied, no webhook
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -B scripts/opencode-v226-source-e2e.py \
+            --archive "$RUNNER_TEMP/opencode-linux-x64-2.2.6.tar.gz" \
+            --receiver "$RUNNER_TEMP/an-qualification-unreleased" \
+            --restart-denial \
+            --report "$RUNNER_TEMP/opencode-v226-restart-denied-safe.json"
+      - name: Upload only sanitized real-host restart-denial evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: opencode-v226-restart-denied-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/opencode-v226-restart-denied-safe.json
+          if-no-files-found: warn
+          retention-days: 14
       - name: Observe stock OpenCode 2.2.6 Bun/Go clock E0 without qualification grants
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         shell: bash
