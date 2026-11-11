@@ -5,6 +5,7 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - 'scripts/opencode-v226-source-e2e.py'
+      - 'scripts/ci-ubuntu-mirror.sh'
       - 'scripts/test_opencode_v226_go_clock.py'
       - 'scripts/opencode-v226-clock-e0.mjs'
       - 'scripts/opencode-v226-darwin-abi-e0.mjs'
@@ -139,6 +140,7 @@ jobs:
           GOWORK: off
         run: |
           set -euo pipefail
+          bash scripts/ci-ubuntu-mirror.sh
           sudo apt-get update -qq
           sudo apt-get install -y libasound2-dev
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
