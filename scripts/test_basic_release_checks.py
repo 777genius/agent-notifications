@@ -771,6 +771,29 @@ class AdmissionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'latest successful source check masked a failure'):
             self.verify()
 
+    def test_only_owner_signing_rerun_retires_earlier_attempt(self):
+        """Admit an exact trusted signing rerun, never an unrelated dispatch."""
+        run = API.run(201, 'macos-qualification.yml')
+        run.update(run_attempt=2, event='workflow_dispatch', head_branch='release/macos-signing',
+                   actor={'login': '777genius'}, triggering_actor={'login': '777genius'})
+        self.api.runs.append(run)
+        old = {'id': 20001, 'name': 'Sign helper', 'status': 'completed', 'conclusion': 'failure', 'run_attempt': 1}
+        new = {'id': 20002, 'name': 'Sign helper', 'status': 'completed', 'conclusion': 'success', 'run_attempt': 2}
+        self.api.jobs[201] = [old, new]
+        self.api.checks.extend((self.api.check(old, run), self.api.check(new, run)))
+        self.assertEqual(self.verify()['ignored_successful_retries'][0]['check_id'], 20001)
+        for field, value in (('head_branch', 'main'), ('actor', {'login': 'outsider'}),
+                             ('triggering_actor', {'login': 'outsider'}),
+                             ('path', '.github/workflows/untrusted.yml')):
+            saved = run[field]
+            run[field] = value
+            with self.assertRaisesRegex(ValueError, 'latest successful source check masked a failure'):
+                self.verify()
+            run[field] = saved
+        old['run_attempt'] = 2
+        with self.assertRaisesRegex(ValueError, 'latest successful source check masked a failure'):
+            self.verify()
+
     def test_missing_concrete_job_receipt_and_bad_custody_are_rejected(self):
         for mutation in ('missing-job', 'skipped-job', 'missing-receipt', 'digest', 'source', 'attempt', 'mode'):
             with self.subTest(mutation=mutation):

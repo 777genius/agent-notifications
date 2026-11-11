@@ -325,6 +325,14 @@ def superseded_successful_retry(older, latest, runs, repository, source, job_cac
     if len(origins) != 1 or len(replacements) != 1:
         return None
     origin, replacement = origins[0], replacements[0]
+    # The owner may rerun a failed signing job after an external service
+    # outage. Only a newer attempt of that very same trusted run can retire it.
+    signing_retry = (origin.get('id') == replacement.get('id')
+                     and replacement.get('event') == 'workflow_dispatch'
+                     and replacement.get('path') == '.github/workflows/macos-qualification.yml'
+                     and replacement.get('head_branch') == 'release/macos-signing'
+                     and (replacement.get('actor') or {}).get('login') == '777genius'
+                     and (replacement.get('triggering_actor') or {}).get('login') == '777genius')
     # Before main promotion a verified same-repository PR can also supersede
     # a prior failed PR attempt. Never use a PR retry to overrule an existing
     # main-push authority for this workflow and source.
@@ -346,9 +354,10 @@ def superseded_successful_retry(older, latest, runs, repository, source, job_cac
             or origin.get('head_sha') != source or replacement.get('head_sha') != source
             or (origin.get('head_repository') or {}).get('full_name') != repository
             or (replacement.get('head_repository') or {}).get('full_name') != repository
-            or origin.get('event') not in ('push', 'pull_request', 'pull_request_target')
+            or origin.get('event') not in ('push', 'pull_request', 'pull_request_target', 'workflow_dispatch')
             or (origin.get('event') == 'pull_request_target' and not target_retry)
-            or not (main_retry or pre_main_retry)
+            or (origin.get('event') == 'workflow_dispatch' and not signing_retry)
+            or not (main_retry or pre_main_retry or signing_retry)
             or origin.get('status') != 'completed'
             or replacement.get('status') != 'completed' or replacement.get('conclusion') != 'success'
             or origin['id'] > replacement['id']):
