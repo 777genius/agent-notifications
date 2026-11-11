@@ -662,6 +662,14 @@ def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False, exp
                     raise RuntimeError('native_source_epoch_unverified')
                 if peer_witness is not None:
                     peer_witness.verify_and_close(source_rows, sid)
+                    # The witness binds a TCP tuple to a PID/start time. Check
+                    # the live publisher again after the same observation;
+                    # these snapshots are still not a held process lease.
+                    if (live_signer is not None and
+                            (host.poll() is not None or
+                             live_signature(host.pid) != {'publisherMatches': True, 'wrongTeamRefused': True} or
+                             host.poll() is not None)):
+                        raise RuntimeError('live_signer_observation_unverified')
                     print('source-stage: native-peer-e0-verified', flush=True)
                 if mutate_peer:
                     def peer_isolated():
@@ -1120,6 +1128,8 @@ def main():
             result['serviceMode'] = args.service
             result['liveSignerObserved'] = args.darwin_live_signer is not None
             result['nativePeerCompletionE0Observed'] = args.darwin_native_peer is not None
+            result['nativePeerPublisherBeforeAfterObserved'] = (
+                args.darwin_native_peer is not None and args.darwin_live_signer is not None)
             result['peerEventIDTimestampAndSessionIsolationObserved'] = args.mutate_peer_events
             result['autoCompactionObserved'] = args.observe_auto_compaction
         except Exception as error:
