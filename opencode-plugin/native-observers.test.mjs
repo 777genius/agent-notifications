@@ -276,6 +276,32 @@ test('native V2 marker consumption, sparse seq14->16 and original run/terminal I
   assert.equal(h.facts[1].provenance.nativeTime,end.created);
  }finally{await h.stop();}
 });
+// Real 2.2.6 auto-compaction replaces the user row with a marker derived from
+// the compaction-start event. Only the same live run and exact marker qualify.
+test('native V2 completion after automatic compaction retains user lineage',async()=>{
+ for(const mode of ['valid','manual','missing-end','wrong-marker','new-user','wrong-start-scope','wrong-end-scope','stale-start']){
+  const h=v2();try{
+   await until(()=>h.markers()===1);const run=h.birth();
+   const start=h.event('session.compaction.started',{reason:mode==='manual'?'manual':'auto'},mode==='stale-start'?2:undefined,
+    {directory:mode==='wrong-start-scope'?'/OTHER':directory});
+   if(mode!=='missing-end')h.event('session.compaction.ended',{reason:mode==='manual'?'manual':'auto'},undefined,
+    {directory:mode==='wrong-end-scope'?'/OTHER':directory});
+   if(mode==='new-user'){
+    h.event('session.inbox.enqueued',{inboxID:'new-user',item:{type:'user'}});
+    h.event('session.inbox.delivered',{inboxID:'new-user'});
+   }
+   h.event('session.step.started',{assistantMessageID:'msg_assistant',type:'assistant'});
+   h.event('session.step.ended',{assistantMessageID:'msg_assistant',type:'assistant'});
+   const end=h.event('session.execution.succeeded');
+   h.setRows([{id:mode==='wrong-marker'?'msg_other':`msg_${start.id.slice(4)}`,type:'compaction'},
+    {id:'msg_assistant',type:'assistant',finish:'stop',time:{created:1700000000005,completed:end.created}},
+    {id:`msg_${end.id.slice(4)}`,type:'idle'}]);
+   if(mode==='valid'){
+    await until(()=>h.facts.length===1);assert.equal(h.facts[0].turnID,run.id);
+   }else {for(let i=0;i<30;i++)await pause();assert.deepEqual(h.facts,[],mode);}
+  }finally{await h.stop();}
+ }
+});
 // Red if a close event during all asynchronous preparation can spawn a question.
 test('native V2 close during beforeEmit suppresses the final marker/effect',async()=>{
  let release,reached=false;const held=new Promise(r=>release=r);

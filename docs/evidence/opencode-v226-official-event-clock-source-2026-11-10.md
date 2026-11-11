@@ -193,6 +193,17 @@ This is evidence for this particular subscription-isolation scenario, not a
 general protection against arbitrary code sharing the OpenCode process or a
 reader qualification. The private correlation values are never exported.
 
+An independent TEST-only installed prototype exposed a completion failure
+after automatic compaction: the real 2.2.6 context contained a compaction
+marker rather than the original user row. The marker ID corresponded to the
+native compaction-start event. The V2 adapter now accepts that replacement
+only after a matching ordered, same-scope automatic start/end in the current
+run and an exact marker in the final context. A repeated real-host TEST run
+delivered one completion for both retry and automatic compaction; negative
+unit cases cover manual, missing, reordered, foreign-scope, wrong-marker and
+new-user paths. These observations use unqualified prototype trust data and
+do not grant production admission.
+
 Two further runs repeated the same-host control and ±12-second shift using a
 separate TEST-only build that forced the existing fixed-code composition
 diagnostics on. Each run recorded one successful activation, a control

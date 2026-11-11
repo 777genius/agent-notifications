@@ -3717,8 +3717,11 @@ function createNativeV2(context, ownedLocation, onIngress, onUncertainty) {
     if (!b) return { sessionID: sid };
     const nativeScope = scope(event.location) ?? scope(p.location);
     if (nativeScope) b.scope = nativeScope;
+    const d = event.durable;
+    const durable = d?.aggregateID === sid && Number.isSafeInteger(d.seq) && d.seq > 0 && Number.isSafeInteger(d.version) && d.version > 0 ? d : void 0;
     if (["session.moved", "session.deleted"].includes(type)) {
       b.run = void 0;
+      b.compaction = void 0;
       b.forms.clear();
       b.requests.clear();
     }
@@ -3727,7 +3730,10 @@ function createNativeV2(context, ownedLocation, onIngress, onUncertainty) {
       b.user = void 0;
       b.assistant = void 0;
       b.step = void 0;
+      b.runSequence = durable && Object.freeze({ seq: durable.seq, version: durable.version });
+      b.userSequence = void 0;
       b.terminal = void 0;
+      b.compaction = void 0;
       b.forms.clear();
       b.requests.clear();
     }
@@ -3745,9 +3751,21 @@ function createNativeV2(context, ownedLocation, onIngress, onUncertainty) {
     if (type === "session.inbox.delivered") {
       const kind = b.inbox.get(p.inboxID);
       b.inbox.delete(p.inboxID);
-      if (kind === "user") b.user = p.inboxID;
+      if (kind === "user") {
+        b.user = p.inboxID;
+        b.compaction = void 0;
+        b.userSequence = durable && b.runSequence && durable.version === b.runSequence.version && durable.seq > b.runSequence.seq ? Object.freeze({ seq: durable.seq, version: durable.version }) : void 0;
+      }
     }
     if (type === "session.inbox.cancelled") b.inbox.delete(p.inboxID);
+    if (type === "session.compaction.started") {
+      b.compaction = p.reason === "auto" && id5(b.run) && id5(b.user) && id5(event.id) && event.id.startsWith("evt_") && same3(nativeScope, own) && durable && b.userSequence && durable.version === b.userSequence.version && durable.seq > b.userSequence.seq ? Object.freeze({ id: event.id, run: b.run, user: b.user, seq: durable.seq, version: durable.version, ended: false }) : void 0;
+    }
+    if (type === "session.compaction.ended") {
+      const c = b.compaction;
+      b.compaction = c && !c.ended && p.reason === "auto" && c.run === b.run && c.user === b.user && same3(nativeScope, own) && durable && durable.version === c.version && durable.seq > c.seq ? Object.freeze({ ...c, ended: true }) : void 0;
+    }
+    if (type === "session.compaction.failed") b.compaction = void 0;
     const compaction = type.startsWith("session.compaction.") || p.type === "compaction";
     if (type === "session.step.started") {
       b.assistant = compaction ? void 0 : p.assistantMessageID;
@@ -3809,7 +3827,6 @@ function createNativeV2(context, ownedLocation, onIngress, onUncertainty) {
       }
       b.requests.set(requestID, Object.freeze({ eventID: event.id, created: event.created, run: b.run, messageID, callID }));
     }
-    const durable = event.durable;
     return {
       sessionID: sid,
       ...nativeScope ? { location: nativeScope.directory } : {},
@@ -3817,7 +3834,7 @@ function createNativeV2(context, ownedLocation, onIngress, onUncertainty) {
       ...requestID !== void 0 ? { requestID } : {},
       ...callID !== void 0 ? { callID } : {},
       ...compaction ? { compaction: true } : {},
-      ...durable ? { sequence: { aggregate: durable.aggregateID, seq: durable.seq, version: durable.version } } : {}
+      ...d ? { sequence: { aggregate: d.aggregateID, seq: d.seq, version: d.version } } : {}
     };
   }
   const binding = (run) => {
@@ -3844,7 +3861,12 @@ function createNativeV2(context, ownedLocation, onIngress, onUncertainty) {
       if (!id5(row?.id) || seen.has(row.id) || !rowTypes.has(row.type) || row.sessionID !== void 0 && row.sessionID !== run.sessionID) return;
       seen.add(row.id);
     }
-    if (value.findLast((row) => row.type === "user")?.id !== b.user) return;
+    const lastUser = value.findLast((row) => row.type === "user");
+    if (lastUser?.id !== b.user) {
+      const c = b.compaction, marker = c && `msg_${c.id.slice(4)}`;
+      const latestCompaction = value.findLast((row) => row.type === "compaction");
+      if (lastUser || !c?.ended || c.run !== b.run || c.user !== b.user || latestCompaction?.id !== marker) return;
+    }
     return value;
   }
   async function assistant(run, signal) {
