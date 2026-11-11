@@ -65,7 +65,7 @@ async function server(input, options = {}) {
       return silent;
     }
     if (holder.retired) { await owned.dispose(); return silent; }
-    const policy = selectClockCell('v1');
+    const policy = selectClockCell('v1', owned.hostVersion);
     if (!policy) {
       compositionDiagnostic(diagnostics, 'v1.policy.denied');
       warning('policy_unavailable');
@@ -148,7 +148,7 @@ async function setup(context) {
       compositionDiagnostic(diagnostics, 'v2.owned.denied');
       return;
     }
-    const policy = selectClockCell('v2');
+    const policy = selectClockCell('v2', owned.hostVersion);
     // The official V2 session API is not the V1 title lookup API. No synthetic
     // client/events: when that native client is unavailable, display stays neutral.
     const display = context.client?.session?.get ? createDisplayContext(context.client) : undefined;

@@ -74,9 +74,18 @@ export function describeClockPolicy(row) {
     ...(sourceWallBoundNS === undefined ? {} : { sourceWallBoundNS }) });
 }
 const cells = Object.freeze(compiledRows.map(describeClockPolicy));
-export function selectClockCell(generation) {
+// Pure selection seam; passing rows here does not register them or create authority.
+export function findClockCell(rows, goos, goarch, generation, version) {
+  if (typeof version !== 'string' || !version) return undefined;
+  // Runtime callers provide the version from the held host's qualified
+  // profile. A future independently qualified image must select its own
+  // clock policy, rather than accidentally reuse another version's bounds.
+  const matches = rows.filter(cell => cell.goos === goos && cell.goarch === goarch && cell.generation === generation &&
+    cell.images.some(image => image.version === version));
+  return matches.length === 1 ? matches[0] : undefined;
+}
+export function selectClockCell(generation, version) {
   const goos = process.platform === 'win32' ? 'windows' : process.platform;
   const goarch = process.arch === 'x64' ? 'amd64' : process.arch;
-  const matches = cells.filter(cell => cell.goos === goos && cell.goarch === goarch && cell.generation === generation);
-  return matches.length === 1 ? matches[0] : undefined;
+  return findClockCell(cells, goos, goarch, generation, version);
 }

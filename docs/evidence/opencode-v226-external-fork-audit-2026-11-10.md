@@ -41,6 +41,13 @@ local scripted model, not the reporter's macOS 26 or a physical desktop banner.
 It demonstrates functional delivery by this fork, but does not qualify its
 reused reader/clock bounds or establish production admission safety.
 
+With the same public artifact and managed webhook, two additional runs shifted
+the source process `Date.now()` by +12 seconds and -12 seconds. Each observed
+the corresponding source timestamp mismatch against an unshifted witness and
+no webhook within 15 seconds. The test cannot identify where delivery was
+stopped; these bounded observations do not establish an admission rejection,
+a worst-case timing bound, or resistance to other clock and replay cases.
+
 ## Existing independent observations (not admission)
 
 - [PR #643 native source E2E](https://github.com/777genius/agent-notifications/actions/runs/42768432303) passed genuine source/installed-denied scenarios on Linux x64, macOS 15 ARM64 and macOS 26 ARM64 with official OpenCode 2.2.6/Bun 1.4.4.

@@ -9,7 +9,7 @@ test('V2 matches independently admitted host version and revokes on live context
   const port = `globalThis[${JSON.stringify(key)}]`;
   const stubs = {
     './owned-host.mjs': `export const prepareOwnedHost=async()=>${port}.owned;`,
-    './clock-cells.mjs': 'export const selectClockCell=()=>({generation:"v2"});',
+    './clock-cells.mjs': `export const selectClockCell=(generation,version)=>{${port}.selected=[generation,version];return {generation:"v2"};};`,
     './platform-clock.mjs': 'export const createPlatformClock=async()=>{throw Error("not_native");};',
     './ipc.mjs': `export const createPreparedDelivery=()=>${port}.delivery;`,
     './display.ts': 'export const createDisplayContext=()=>({});',
@@ -47,6 +47,7 @@ test('V2 matches independently admitted host version and revokes on live context
     };
     const cleanup = await plugin.setup(context);
     assert.equal(typeof cleanup, 'function');
+    assert.deepEqual(globalThis[key].selected, ['v2', '2.2.6']);
     assert.equal(globalThis[key].starts, 1);
     assert.equal(globalThis[key].eligibility(), 'supported');
     context.app.version = '2.99.0';

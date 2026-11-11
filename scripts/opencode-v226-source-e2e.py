@@ -524,6 +524,23 @@ def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False, exp
                     if not all(any(r.get('type') == kind and r.get('observedSequence') for r in negative_native)
                                for kind in terminal):
                         raise RuntimeError('negative_native_reader_projection_unverified')
+                    if webhook is not None:
+                        # Observe the actual installed receiver with the same
+                        # skewed source. A missing webhook is not proof of the
+                        # precise rejection phase or of qualified admission.
+                        until = time.monotonic() + 15
+                        while time.monotonic() < until:
+                            with webhook.lock:
+                                if webhook.bodies:
+                                    raise RuntimeError('skewed_host_delivered_webhook')
+                            time.sleep(.08)
+                        return {'status': 'passed_installed_skew_no_webhook_observed',
+                                'version': '2.2.6', 'clockSkewTestMS': clock_skew_ms,
+                                'sourceClockMismatchObserved': True,
+                                'installedReceiverObserved': True,
+                                'receiverRejectionPhaseKnown': False,
+                                'nativeObserverQualified': False, 'nativeClockQualified': False,
+                                'notificationDeliveryQualified': False}
                     # This assertion is the TEST HARNESS comparing native
                     # source epoch to a separate wall witness. No installed
                     # receiver is running in skew mode, so never describe this
@@ -784,14 +801,19 @@ def main():
                         help='With installed receiver, restart the official host and prove denial persists')
     parser.add_argument('--expect-delivery', action='store_true',
                         help='Require actual installed delivery for each genuine source event')
+    parser.add_argument('--installed-clock-skew', action='store_true',
+                        help='With a skew mode and receiver, observe that no webhook arrives')
     args = parser.parse_args()
+    if args.installed_clock_skew and (args.receiver is None or args.restart_denial or
+                                      not (args.clock_skew_negative or args.clock_skew_past_negative)):
+        parser.error('installed clock skew requires a receiver and a clock-skew mode')
     if args.expect_delivery and (args.receiver is None or args.restart_denial or
                                  args.clock_skew_negative or args.clock_skew_past_negative):
         parser.error('delivery requires an installed receiver and excludes denial and clock-skew modes')
     if args.restart_denial and (args.receiver is None or
                                 args.clock_skew_negative or args.clock_skew_past_negative):
         parser.error('restart denial requires an installed receiver and no clock-skew mode')
-    if (args.clock_skew_negative or args.clock_skew_past_negative) and args.receiver is not None:
+    if (args.clock_skew_negative or args.clock_skew_past_negative) and args.receiver is not None and not args.installed_clock_skew:
         parser.error('clock skew tests and installed receiver are mutually exclusive')
     skew_ms = 12000 if args.clock_skew_negative else -12000 if args.clock_skew_past_negative else 0
     with tempfile.TemporaryDirectory(prefix='TEST-opencode-v226-', dir=os.environ.get('RUNNER_TEMP')) as temp:
@@ -811,6 +833,7 @@ def main():
                            'managed_webhook_configuration_failed',
                            'private_host_log_limit', 'single_denial_diagnostic_missing',
                            'expected_delivery_missing', 'delivery_payload_invalid',
+                           'skewed_host_delivered_webhook',
                            'denied_host_delivered_webhook', 'restart_host_unavailable',
                            'restart_plugin_not_loaded', 'restart_source_completion_missing',
                            'restart_provider_unused', 'restart_denied_host_delivered_webhook',

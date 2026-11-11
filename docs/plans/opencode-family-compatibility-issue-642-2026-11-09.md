@@ -76,3 +76,9 @@ suite is not evidence that a real 2.2.6 turn produces a banner. The native
 version-independent source/clock qualification and physical installed E2E
 are still open; no merge or release should occur while those gates remain
 unchecked.
+
+**Clock selection prerequisite:** the JS composition now selects its compiled
+clock policy by the host version from the independently verified runtime
+profile. Distinct qualified versions can therefore use distinct clock bounds;
+unknown, missing or ambiguous versions cannot fall back to the older policy.
+This does not add a 2.2.6 policy or authorize an unqualified image.

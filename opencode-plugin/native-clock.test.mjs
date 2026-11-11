@@ -5,12 +5,31 @@ import { resolve } from 'node:path';
 import { address, closeAll, createNativeClock, darwinABI, darwinBoot, filetimeNS,
   interruptABI, interruptNS, machNS, uint64, withWallOffset, windowsBoot, windowsKernelABI, windowsNtABI } from './native-clock-contract.mjs';
 import { parseUptime } from './linux-clock.mjs';
-import { selectClockCell } from './clock-cells.mjs';
+import { findClockCell, selectClockCell } from './clock-cells.mjs';
 
 const MAX = 9223372036854775807n, U64 = 18446744073709551615n;
 const boot = '00112233-4455-6677-8899-aabbccddeeff';
 const changedBoot = '11223344-4455-6677-8899-aabbccddeeff';
 const denied = fn => assert.throws(fn, { name: 'TypeError', message: 'clock_unavailable' });
+
+test('clock selection refuses versions outside the compiled platform policy', () => {
+  for (const generation of ['v1', 'v2']) {
+    const cell = selectClockCell(generation, generation === 'v1' ? '1.18.33' : '2.0.21');
+    if (!cell) continue; // No compiled policy for this test platform.
+    for (const image of cell.images) assert.equal(selectClockCell(generation, image.version), cell);
+    for (const version of ['', null, 0, '999.0.0']) assert.equal(selectClockCell(generation, version), undefined);
+  }
+  assert.equal(selectClockCell('v2', '2.2.6'), undefined);
+  assert.equal(selectClockCell('v2'), undefined);
+  // Isolated data only: this exercises multiple policies without registering any.
+  const base = { goos: 'darwin', goarch: 'arm64', generation: 'v2' };
+  const old = { ...base, images: [{ version: '2.0.21' }] };
+  const next = { ...base, images: [{ version: '2.2.6' }] };
+  assert.equal(findClockCell([old, next], 'darwin', 'arm64', 'v2', '2.0.21'), old);
+  assert.equal(findClockCell([old, next], 'darwin', 'arm64', 'v2', '2.2.6'), next);
+  assert.equal(findClockCell([old, next], 'darwin', 'arm64', 'v2'), undefined);
+  assert.equal(findClockCell([next, next], 'darwin', 'arm64', 'v2', '2.2.6'), undefined);
+});
 
 test('actual LP64/Win64 ABI contracts use output pointers, unsigned counters and VOID status', () => {
   assert.deepEqual(darwinABI, {
@@ -146,7 +165,7 @@ test('Linux arm64 shares official proc floor grammar; nearest int64 overflow is 
 });
 
 test('portable Node imports stay inert; absent native platform/image proof denies, cells remain closed', async () => {
-  const selected = [selectClockCell('v1'), selectClockCell('v2')];
+  const selected = [selectClockCell('v1', '1.18.33'), selectClockCell('v2', '2.0.21')];
   const { createDarwinClock } = await import('./darwin-clock.mjs');
   const { createWindowsClock } = await import('./windows-clock.mjs');
   const { pinNativeImage } = await import('./native-clock-image.mjs');
@@ -155,7 +174,7 @@ test('portable Node imports stay inert; absent native platform/image proof denie
   denied(pinNativeImage);
   await assert.rejects(createDarwinClock(), { message: 'clock_unavailable' });
   await assert.rejects(createWindowsClock(), { message: 'clock_unavailable' });
-  assert.deepEqual([selectClockCell('v1'), selectClockCell('v2')], selected);
+  assert.deepEqual([selectClockCell('v1', '1.18.33'), selectClockCell('v2', '2.0.21')], selected);
 });
 
 test('held source image proof binds exact file bytes and refuses replacement or use after release', async () => {
@@ -345,9 +364,9 @@ test('closed platform policy descriptions cannot populate qualification; no impl
         algorithmSourceMerkleSHA256: 'd'.repeat(64), nativeReadBoundNS: '103000000',
         comparisonBoundNS: '430000000', translationBoundNS: '224000000',
         ...(goos === 'linux' ? {} : { sourceWallBoundNS: '2000000' }) };
-      const selected = selectClockCell(generation);
+      const selected = selectClockCell(generation, generation === 'v1' ? '1.18.33' : '2.0.21');
       const policy = describeClockPolicy(row); assert.equal(policy.rawKind, descriptor.rawKind);
-      assert.ok(Object.isFrozen(policy)); assert.equal(selectClockCell(generation), selected);
+      assert.ok(Object.isFrozen(policy)); assert.equal(selectClockCell(generation, generation === 'v1' ? '1.18.33' : '2.0.21'), selected);
       for (const change of [r => { r.rawKind = 'unknown'; }, r => { r.sourceKind = 'wrong'; },
         r => { r.images[0].imageSHA256 = 'bad'; }, r => { r.images[0].version = '2.0.22'; },
         r => { r.goarch = '386'; }, r => { r.comparisonBoundNS = '2000000001'; }]) {
@@ -421,9 +440,9 @@ test('Linux amd64 image tuples, bounds and legacy profile ID formula remain equi
   for (const [row, expected] of vectors) {
     assert.equal(describeClockPolicy(row).profileID, expected);
     assert.equal(describeClockPolicy(row).calibrationID, expected + ':same-coordinate');
-    const selected = selectClockCell(row.generation);
+    const selected = selectClockCell(row.generation, row.generation === 'v1' ? '1.18.33' : '2.0.21');
     assert.throws(() => describeClockPolicy({ ...row, originalNativeAge: 'unverified_original_date' }));
-    assert.equal(selectClockCell(row.generation), selected);
+    assert.equal(selectClockCell(row.generation, row.generation === 'v1' ? '1.18.33' : '2.0.21'), selected);
   }
 });
 
@@ -502,11 +521,11 @@ test('original native age exception is explicit, image-exact and cannot select a
     algorithmSourceMerkleSHA256: 'd'.repeat(64), nativeReadBoundNS: '103000000',
     comparisonBoundNS: '430000000', translationBoundNS: '224000000', sourceWallBoundNS: '2000000',
     originalNativeAge: 'unverified_original_date' };
-  const selected = selectClockCell('v1'), policy = describeClockPolicy(row);
+  const selected = selectClockCell('v1', '1.18.33'), policy = describeClockPolicy(row);
   assert.equal(policy.originalNativeAge, 'unverified_original_date');
   // Independent Python canonical-JSON vector binds mode with the SAME image.
   assert.equal(policy.profileID, 'windows-amd64-windows-interrupt-precise-v1:591cfa5af34b8c88fca19f94bec620d2a5fce5c2558707e0b92ed61c8cceaff2');
-  assert.ok(Object.isFrozen(policy)); assert.equal(selectClockCell('v1'), selected);
+  assert.ok(Object.isFrozen(policy)); assert.equal(selectClockCell('v1', '1.18.33'), selected);
   for (const change of [r => { delete r.originalNativeAge; }, r => { r.originalNativeAge = 'bounded'; },
     r => { r.originalNativeAge = ''; }, r => { r.originalNativeAge = 'unknown'; },
     r => { r.images[0].imageSHA256 = 'a'.repeat(64); }, r => { r.images[0].version = '1.18.34'; },

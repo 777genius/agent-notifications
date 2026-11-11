@@ -3017,11 +3017,15 @@ function describeClockPolicy(row) {
   });
 }
 var cells = Object.freeze(clock_qualification_data_default.map(describeClockPolicy));
-function selectClockCell(generation) {
+function findClockCell(rows, goos, goarch, generation, version) {
+  if (typeof version !== "string" || !version) return void 0;
+  const matches = rows.filter((cell) => cell.goos === goos && cell.goarch === goarch && cell.generation === generation && cell.images.some((image) => image.version === version));
+  return matches.length === 1 ? matches[0] : void 0;
+}
+function selectClockCell(generation, version) {
   const goos = process.platform === "win32" ? "windows" : process.platform;
   const goarch = process.arch === "x64" ? "amd64" : process.arch;
-  const matches = cells.filter((cell) => cell.goos === goos && cell.goarch === goarch && cell.generation === generation);
-  return matches.length === 1 ? matches[0] : void 0;
+  return findClockCell(cells, goos, goarch, generation, version);
 }
 
 // linux-clock.mjs
@@ -4005,7 +4009,7 @@ async function server(input, options = {}) {
       await owned.dispose();
       return silent;
     }
-    const policy = selectClockCell("v1");
+    const policy = selectClockCell("v1", owned.hostVersion);
     if (!policy) {
       compositionDiagnostic(diagnostics, "v1.policy.denied");
       warning("policy_unavailable");
@@ -4109,7 +4113,7 @@ async function setup(context) {
       compositionDiagnostic(diagnostics, "v2.owned.denied");
       return;
     }
-    const policy = selectClockCell("v2");
+    const policy = selectClockCell("v2", owned.hostVersion);
     const display = context.client?.session?.get ? createDisplayContext(context.client) : void 0;
     if (!policy) {
       compositionDiagnostic(diagnostics, "v2.policy.denied");
