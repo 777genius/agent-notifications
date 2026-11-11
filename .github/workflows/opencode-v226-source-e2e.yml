@@ -268,6 +268,40 @@ jobs:
           $report = Join-Path $env:RUNNER_TEMP 'opencode-v226-windows-source-safe.json'
           python -B scripts/opencode-v226-source-e2e.py --archive $archive --report $report
           if ($LASTEXITCODE -ne 0) { throw 'windows_source_e2e_failed' }
+      - name: Build exact-head unreleased Windows receiver (no native qualification grant)
+        shell: pwsh
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          GOWORK: off
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ((git rev-parse HEAD).Trim() -cne $env:EXPECTED_HEAD) { throw 'windows_candidate_checkout_changed' }
+          $candidate = Join-Path $env:RUNNER_TEMP 'an-opencode-v226-windows-unreleased.exe'
+          go build -trimpath -ldflags '-s -w' -o $candidate ./cmd/claude-notifications
+          if ($LASTEXITCODE -ne 0) { throw 'windows_unreleased_build_failed' }
+          $build = (go version -m $candidate 2>&1) -join "`n"
+          if ($LASTEXITCODE -ne 0 -or
+              -not $build.Contains("vcs.revision=$env:EXPECTED_HEAD") -or
+              -not $build.Contains('vcs.modified=false')) {
+            throw 'windows_candidate_source_binding_unverified'
+          }
+      - name: Observe installed official Windows V2 refusal and zero webhook effects
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $archive = Join-Path $env:RUNNER_TEMP 'opencode-windows-x64-2.2.6.zip'
+          $candidate = Join-Path $env:RUNNER_TEMP 'an-opencode-v226-windows-unreleased.exe'
+          $report = Join-Path $env:RUNNER_TEMP 'opencode-v226-windows-denied-safe.json'
+          python -B scripts/opencode-v226-source-e2e.py --archive $archive --receiver $candidate --report $report
+          if ($LASTEXITCODE -ne 0) { throw 'windows_installed_denial_e2e_failed' }
+      - name: Upload sanitized Windows installed-denial evidence (never private host logs)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: opencode-v226-windows-denied-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/opencode-v226-windows-denied-safe.json
+          if-no-files-found: warn
+          retention-days: 14
       - name: Upload sanitized Windows source-only evidence
         if: always()
         uses: actions/upload-artifact@v7
