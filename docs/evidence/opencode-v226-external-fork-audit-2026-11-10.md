@@ -48,6 +48,35 @@ no webhook within 15 seconds. The test cannot identify where delivery was
 stopped; these bounded observations do not establish an admission rejection,
 a worst-case timing bound, or resistance to other clock and replay cases.
 
+## Isolated prototype on the current PR base — 2026-11-11
+
+A separate TEST-only build based on PR commit `91829eb5` used a local copy of
+the integrationctl dependency and copied the fork's **unqualified** 2.2.6
+reader and clock data solely to find integration failures. Its executable
+SHA-256 was `f1adada59cad4a0f6bcf38314973b37b3dbc4a0f96a14316d978952e9641fcf9`.
+With the official macOS ARM64 OpenCode 2.2.6 image, the managed install and
+scripted local provider, completion, question, permission and error each reached
+the configured loopback webhook. Separate ±12-second source clock shifts
+produced no webhook in the bounded observation window; the rejection phase was
+not established.
+
+A second TEST-only build, differing by diagnostic logging (executable SHA-256
+`6cfc1c22909c0059de148250030e45232e9bd593e61e2a660b038e6e7fd600fc`), used
+the verified signed v1.51.4 `ClaudeNotifier.app` (archive SHA-256
+`61775c6c2535c4f4c829012ff0e07a48f3af26fceb46f1d262e895ac26b0b551`).
+Its managed receiver reported five desktop and webhook submissions across the
+four scenarios; the question turn also completed. For the test window, the
+macOS `usernoted` log contained five matching `presenting`/`banner` lines for
+the application's bundle identifier. This observes OS presentation on macOS
+15.6.1; it does not prove that a person saw each banner or establish behavior on
+macOS 26.
+
+These builds intentionally copy unqualified source/clock claims for a local
+experiment. They are neither PR artifacts nor safe release candidates. The
+positive result isolates the remaining work to authenticating and qualifying
+the actual 2.2.6 source, reader and clock contracts rather than implementing a
+second notification transport.
+
 ## Existing independent observations (not admission)
 
 - [PR #643 native source E2E](https://github.com/777genius/agent-notifications/actions/runs/42768432303) passed genuine source/installed-denied scenarios on Linux x64, macOS 15 ARM64 and macOS 26 ARM64 with official OpenCode 2.2.6/Bun 1.4.4.
