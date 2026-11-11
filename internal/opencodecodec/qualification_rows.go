@@ -29,6 +29,9 @@ var candidateImages = [...]struct {
 	{ImageKey{"darwin", "arm64", "serve", "90e4d03597b03d2051b65b4d793467764e55bacd8e22bf4824479c7233ea0e15"}, Candidate{"2.2.6", "v2"}},
 	{ImageKey{"windows", "amd64", "serve", "52f60248a576b34c9a6dcaa27e0a7f08089af35bcdc0dfb10c04d3e00a98314c"}, Candidate{"1.18.33", "v1"}},
 	{ImageKey{"windows", "amd64", "serve", "ec7a3909bad41ef88e4650f737ab6f0b0c402a7f49a588812d0a79820c2dfc1f"}, Candidate{"2.0.21", "v2"}},
+	// Genuine official Windows 2.2.6 executable observed on x64 CI; source-only.
+	// No independent reader/clock qualification or notification permission.
+	{ImageKey{"windows", "amd64", "serve", "98cb0aa854c7c015cf6febafa7afb872c359bfe5a823a526f3b4fd347a9e9677"}, Candidate{"2.2.6", "v2"}},
 	// Exact accepted local-entry SOURCE keys; no Windows TUI inheritance.
 	{ImageKey{"linux", "amd64", "tui", "0abbb7c32ab0294c0a7bfa2705f9ff0df5dce5ab721d1f00cccfe393f2a11427"}, Candidate{"1.18.33", "v1"}},
 	{ImageKey{"linux", "amd64", "run", "0abbb7c32ab0294c0a7bfa2705f9ff0df5dce5ab721d1f00cccfe393f2a11427"}, Candidate{"1.18.33", "v1"}},

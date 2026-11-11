@@ -23,6 +23,11 @@ This is a scoped evidence review for [issue #642](https://github.com/777genius/a
 - Its Bun/Go E0 comparisons are actual platform observations, **not Q/R/T bounds or a source-to-binary guarantee**. The installed receiver correctly emits one fixed refusal diagnostic and zero webhook notifications. Thus `nativeObserverQualified=false`, `nativeClockQualified=false`, and `notificationDeliveryQualified=false` stay unchanged.
 - Companion [UAP #823](https://github.com/777genius/universal-agent-plugins/pull/823) keeps both official 2.2.6 image candidates `native_source_pending`. Targeted `go test -race ./opencodehost` passed on [run 42765955912](https://github.com/777genius/universal-agent-plugins/actions/runs/42765955912).
 
+## Windows x64 observation — 2026-11-11
+
+- [Exact-head CI #42926889289](https://github.com/777genius/agent-notifications/actions/runs/42926889289) independently fetched the official OpenCode 2.2.6 Windows x64 ZIP (SHA-256 `f75c16b33b8523fe1ff41e7d97e3ae654a47d59a0e327def24db2d9291bb24be`), found one executable, and checked its reported version. Its sanitized [receipt artifact #13816093110](https://github.com/777genius/agent-notifications/actions/runs/42926889289/artifacts/13816093110) records executable SHA-256 `98cb0aa854c7c015cf6febafa7afb872c359bfe5a823a526f3b4fd347a9e9677` and all three qualification flags `false`.
+- The corresponding Windows candidate row is **image discovery only**. There is no native V2 reader descriptor, trusted clock row, Windows source-event / installed OpenCode turn or accepted desktop/webhook delivery. CI's Windows Go regression tests and `--version` are not a native notification E2E; do not infer qualification from them.
+
 ## Acceptance evidence required before a positive E2E or merge
 
 1. Reproduce the fork's positive delivery **with the byte-identical public CI artifact** and record only the artifact identity/build revision and redacted acceptance/presentation outcome. Independently verify a receiver built from the exact candidate HEAD; do not compare unrelated binaries.

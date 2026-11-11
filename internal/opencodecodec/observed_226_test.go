@@ -8,6 +8,7 @@ func TestOpenCode226ObservedImagesDoNotGrantClock(t *testing.T) {
 	for _, tc := range []struct{ goos, goarch, image string }{
 		{"linux", "amd64", "50503d24577fa4117a7c95ee85b2cd679606a87eacf20ca54ed5db5c9e1cf895"},
 		{"darwin", "arm64", "90e4d03597b03d2051b65b4d793467764e55bacd8e22bf4824479c7233ea0e15"},
+		{"windows", "amd64", "98cb0aa854c7c015cf6febafa7afb872c359bfe5a823a526f3b4fd347a9e9677"},
 	} {
 		t.Run(tc.goos+"/"+tc.goarch, func(t *testing.T) {
 			key := ImageKey{GOOS: tc.goos, GOARCH: tc.goarch, Entry: "serve", SHA256: tc.image}
