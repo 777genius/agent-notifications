@@ -211,6 +211,11 @@ delivery assertion. Additional isolated prototype scenarios passed for
 child-tool execution, steering, separate locations and same-session recovery
 after queueing, dismissal, permission rejection and provider failure. These
 remain prototype observations, not qualified production notification E2E.
+After a successful control delivery, a separate TEST installation preserved a
+foreign edit to the installed plugin and emitted no completion or question
+webhook across the full negative observation windows. The semantic harness can
+repeat this as `--cases success,foreign-success,foreign-question` in its own
+disposable installation; it never repairs or deletes the edited file.
 
 Two further runs repeated the same-host control and ±12-second shift using a
 separate TEST-only build that forced the existing fixed-code composition

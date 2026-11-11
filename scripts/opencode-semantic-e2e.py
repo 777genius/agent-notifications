@@ -358,6 +358,7 @@ export default async function(){record({phase:'loaded',version:'v1'});return{eve
         return [json.loads(x) for x in trace.read_text().splitlines()] if trace.exists() else []
     cases = []
     removed = False
+    foreign_bytes = None
     try:
         def ready():
             if process.poll() is not None:
@@ -380,9 +381,12 @@ export default async function(){record({phase:'loaded',version:'v1'});return{eve
         prefix = '/session/' if v1 else '/api/session/'
         for case in args.cases.split(','):
             child_flow = case.startswith('child-')
-            removed_flow = case.startswith('removed-')
+            foreign_flow = case.startswith('foreign-')
+            removed_flow = case.startswith('removed-') or foreign_flow
             recovery = case.startswith('recover-')
             mode = case[len('recover-'):] if recovery else case.split('-', 1)[1] if child_flow or removed_flow else case
+            if (foreign_flow and removed and foreign_bytes is None) or (foreign_bytes is not None and not foreign_flow):
+                raise ValueError('foreign edit and removal require separate TEST installations')
             if case == 'reload':
                 if args.version != '2.0.21':
                     raise ValueError('native plugin reload belongs to the current V2 API')
@@ -401,14 +405,20 @@ export default async function(){record({phase:'loaded',version:'v1'});return{eve
                 wait(lambda: any(x.get('phase') == 'loaded' for x in rows()[old_trace:]), 'native plugin reload')
                 mode = 'success'
             if removed_flow and not removed:
-                command([str(binary), 'setup-opencode', 'remove', *common])
-                if installed.exists():
-                    raise AssertionError('remove retained installed plugin')
-                # The old in-memory bundle must be denied even if its old
-                # executable path is executable again, not just spawn-failed.
-                managed = root / ('runtime/claude-notifications-' + native_os + '-' + native_arch)
-                shutil.copyfile(binary, managed)
-                managed.chmod(0o755)
+                if foreign_flow:
+                    # Simulate a user edit in this disposable installation.
+                    # Do not remove or repair those foreign bytes afterwards.
+                    foreign_bytes = installed.read_bytes() + b'\n// TEST-only foreign edit\n'
+                    installed.write_bytes(foreign_bytes)
+                else:
+                    command([str(binary), 'setup-opencode', 'remove', *common])
+                    if installed.exists():
+                        raise AssertionError('remove retained installed plugin')
+                    # The old in-memory bundle must be denied even if its old
+                    # executable path is executable again, not just spawn-failed.
+                    managed = root / ('runtime/claude-notifications-' + native_os + '-' + native_arch)
+                    shutil.copyfile(binary, managed)
+                    managed.chmod(0o755)
                 removed = True
             if removed and not removed_flow:
                 raise ValueError('revocation cases must come last')
@@ -587,7 +597,10 @@ export default async function(){record({phase:'loaded',version:'v1'});return{eve
             print(json.dumps(cases[-1]), flush=True)
         if not removed:
             command([str(binary), 'setup-opencode', 'remove', *common])
-        if installed.exists():
+        if foreign_bytes is not None:
+            if not installed.is_file() or installed.read_bytes() != foreign_bytes:
+                raise AssertionError('foreign plugin edit was not preserved')
+        elif installed.exists():
             raise AssertionError('remove retained installed plugin')
         for body in webhook.bodies:
             payload = json.loads(body)
