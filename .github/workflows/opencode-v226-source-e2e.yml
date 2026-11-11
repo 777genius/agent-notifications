@@ -8,6 +8,7 @@ on:
       - 'scripts/ci-ubuntu-mirror.sh'
       - 'scripts/test_opencode_v226_go_clock.py'
       - 'scripts/test_opencode_v226_darwin_peer.py'
+      - 'scripts/test_opencode_v226_desktop_spool.py'
       - 'scripts/test_opencode_v226_temp_cleanup.py'
       - 'scripts/opencode-v226-clock-e0.mjs'
       - 'scripts/opencode-v226-darwin-abi-e0.mjs'

@@ -208,31 +208,61 @@ def wait_for_delivery(webhook, event_type, message):
 
 
 def desktop_submitted(root):
-    """Return only owned TEST submissions; no content leaves this process."""
+    """Return only owned TEST submissions with exact, correlated native receipts."""
     spool = root / 'control' / 'opencode-native-spool'
     uuid_pattern = r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}'
-    def submitted():
-        ids = set()
-        if not spool.is_dir():
-            return ids
-        for directory in spool.iterdir():
-            if not directory.is_dir() or not re.fullmatch(uuid_pattern, directory.name):
-                continue
-            for receipt in directory.glob('*.receipt'):
-                try:
-                    with receipt.open('rb') as stream:
-                        raw = stream.read(8193)
-                    if len(raw) > 8192:
-                        raise ValueError('receipt too large')
-                    value = json.loads(raw)
-                    if (value.get('schemaVersion') == 1 and value.get('status') == 'submitted' and
-                            value.get('correlationID') == directory.name and
-                            value.get('notificationID') == directory.name):
-                        ids.add(directory.name)
-                except (OSError, ValueError, TypeError, AttributeError):
-                    raise RuntimeError('desktop_receipt_invalid')
+    fields = {'schemaVersion', 'correlationID', 'nonce', 'notificationID',
+              'status', 'reason', 'retrySafe'}
+    rejected = {'malformed_request', 'unsupported_version', 'unsupported_action',
+                'invalid_file', 'expired', 'activation_required', 'permission_denied',
+                'unsupported_notifier', 'os_rejected'}
+
+    def unique_object(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError('duplicate receipt field')
+            result[key] = value
+        return result
+
+    ids = set()
+    if not spool.is_dir():
         return ids
-    return submitted()
+    for directory in spool.iterdir():
+        if not re.fullmatch(uuid_pattern, directory.name):
+            continue
+        if directory.is_symlink() or not directory.is_dir():
+            raise RuntimeError('desktop_receipt_invalid')
+        for receipt in directory.glob('*.receipt'):
+            try:
+                if receipt.is_symlink() or not receipt.is_file():
+                    raise ValueError('unsafe receipt')
+                nonce = receipt.name.removesuffix('.receipt')
+                if not re.fullmatch(uuid_pattern, nonce):
+                    raise ValueError('invalid nonce')
+                with receipt.open('rb') as stream:
+                    raw = stream.read(8193)
+                if len(raw) > 8192:
+                    raise ValueError('receipt too large')
+                value = json.loads(raw, object_pairs_hook=unique_object)
+                if (not isinstance(value, dict) or set(value) != fields or
+                        type(value['schemaVersion']) is not int or value['schemaVersion'] != 1 or
+                        value['correlationID'] != directory.name or
+                        value['nonce'] != nonce or value['notificationID'] != directory.name or
+                        value['retrySafe'] is not False):
+                    raise ValueError('receipt correlation invalid')
+                status, reason = value['status'], value['reason']
+                if status == 'submitted' and reason == 'os_accepted':
+                    ids.add(directory.name)
+                elif status == 'unknown' and reason == 'timeout':
+                    continue
+                elif status == 'rejected' and reason in rejected:
+                    continue
+                else:
+                    raise ValueError('receipt outcome invalid')
+            except (OSError, ValueError, TypeError, AttributeError):
+                raise RuntimeError('desktop_receipt_invalid') from None
+    return ids
 
 
 def verify_macos_desktop(ids, started_at):
