@@ -140,6 +140,14 @@ that never worked, but does not identify the rejection phase. These runs
 exercise behavior only: their copied trust rows are not evidence for production
 admission.
 
+Two further runs repeated the same-host control and ±12-second shift using a
+separate TEST-only build that forced the existing fixed-code composition
+diagnostics on. Each run recorded one successful activation, a control
+delivery, and `prep.catch.birth` after the shifted turn; no shifted webhook was
+observed. This identifies the refusal in that instrumented prototype, not in
+the ordinary build. The instrumentation and copied trust rows must not be
+treated as a production binary or as independent qualification.
+
 **Decision:** maintain `native_source_pending` in UAP and keep #643 Draft. The
 exact Bun image is recognized for custody tests only; do not register an
 OpenCode 2.2.6 trusted reader, clock-policy row or release claim based on this
