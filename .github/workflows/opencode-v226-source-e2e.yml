@@ -219,6 +219,10 @@ jobs:
         uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
+      - name: Set up Python for genuine Windows source probe
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
       - name: Exercise Windows native OpenCode admission regressions
         shell: pwsh
         run: |
@@ -256,6 +260,22 @@ jobs:
             notificationDeliveryQualified = $false
           }
           [System.IO.File]::WriteAllText($report, ($evidence | ConvertTo-Json -Compress) + [Environment]::NewLine)
+      - name: Exercise genuine official Windows 2.2.6 source events (no delivery grant)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $archive = Join-Path $env:RUNNER_TEMP 'opencode-windows-x64-2.2.6.zip'
+          $report = Join-Path $env:RUNNER_TEMP 'opencode-v226-windows-source-safe.json'
+          python -B scripts/opencode-v226-source-e2e.py --archive $archive --report $report
+          if ($LASTEXITCODE -ne 0) { throw 'windows_source_e2e_failed' }
+      - name: Upload sanitized Windows source-only evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: opencode-v226-windows-source-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/opencode-v226-windows-source-safe.json
+          if-no-files-found: warn
+          retention-days: 14
       - name: Upload public-image-only receipt without private logs
         if: always()
         uses: actions/upload-artifact@v7
