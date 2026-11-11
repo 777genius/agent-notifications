@@ -14,6 +14,7 @@ import shutil
 import signal
 import socket
 import subprocess
+import tarfile
 import threading
 import time
 import urllib.request
@@ -54,6 +55,42 @@ export default {id:'test-native-trace',async server(){record({phase:'loaded',ver
 
 def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def sdk_contents_match_source(tarball, checkout, revision):
+    """Match packaged file bytes to a commit; this does not prove archive origin."""
+    checkout = pathlib.Path(checkout).resolve(strict=True)
+    resolved = subprocess.check_output(['git', '-C', str(checkout), 'rev-parse', '--verify', revision + '^{commit}'], text=True).strip()
+    if resolved != revision:
+        raise ValueError('SDK source revision is not an exact commit')
+    tree = subprocess.check_output(['git', '-C', str(checkout), 'ls-tree', '-rz', '--full-tree', revision, '--', 'sdk/opencode-js/'])
+    tracked = {}
+    for item in tree.split(b'\0'):
+        if not item:
+            continue
+        meta, name = item.split(b'\t', 1)
+        mode, kind, object_id = meta.split(b' ')
+        if mode == b'100644' and kind == b'blob':
+            tracked[name.decode('utf-8')] = object_id.decode('ascii')
+    seen = set()
+    with tarfile.open(tarball, 'r:gz') as archive:
+        for member in archive:
+            if not member.isfile() or not member.name.startswith('package/'):
+                raise ValueError('SDK tarball contains a non-regular or unexpected entry')
+            relative = member.name[len('package/'):]
+            if not relative or relative.startswith('/') or any(part in ('', '.', '..') for part in relative.split('/')) or relative in seen:
+                raise ValueError('SDK tarball contains an ambiguous path')
+            seen.add(relative)
+            stream = archive.extractfile(member)
+            if stream is None:
+                raise ValueError('SDK tarball member is unreadable')
+            data = stream.read()
+            object_id = subprocess.check_output(['git', '-C', str(checkout), 'hash-object', '--stdin'], input=data).decode().strip()
+            if tracked.get('sdk/opencode-js/' + relative) != object_id:
+                raise ValueError('SDK packaged file differs from source commit')
+    if not seen:
+        raise ValueError('SDK tarball is empty')
+    return True
 
 
 def wait(predicate, label, seconds=30):
@@ -213,6 +250,8 @@ def qualify_owned(args, cleanup):
     # revision. Independent source-to-tarball evidence is still required.
     provenance = {'schema_version': 1, 'candidate_sha': source_sha, 'sdk_source_sha': args.sdk_source_sha,
         'sdk_source_sha_verified': False,
+        'sdk_source_contents_match': sdk_contents_match_source(tarball, args.sdk_source_checkout, args.sdk_source_sha)
+            if args.sdk_source_checkout else False,
         'sdk_tarball_sha256': digest(tarball), 'uap_observer_pin': observer_pin,
         'lock_sha256': digest(lock), 'bundled_js_source_sha256': digest(repo / 'internal/opencodeplugin/dist/agent-notifications.js'),
         'native_os': native_os, 'native_arch': native_arch, 'product_build_vcs': 'clean_exact_checkout'}
@@ -671,6 +710,8 @@ def main():
     parser.add_argument('--sdk-tarball', type=pathlib.Path, required=True)
     parser.add_argument('--sdk-source-sha', required=True,
                         help='Claimed SDK source revision; this harness does not verify its provenance')
+    parser.add_argument('--sdk-source-checkout', type=pathlib.Path,
+                        help='Optional Git checkout for comparing packaged files against the claimed commit')
     parser.add_argument('--desktop', action='store_true', help='capture real Notify calls on a private Linux D-Bus')
     parser.add_argument('--cases', help='comma-separated subset; defaults to the qualified version-specific matrix')
     args = parser.parse_args()

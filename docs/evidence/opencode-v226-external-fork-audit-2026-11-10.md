@@ -158,7 +158,9 @@ the public UAP tree at
 all 12 matched their `sdk/opencode-js` paths. This confirms those packaged
 file contents match that source tree; it does not prove a reproducible npm
 archive, qualify OpenCode 2.2.6 or validate an arbitrary `--sdk-source-sha`
-provided to the semantic harness.
+provided to the semantic harness. Its optional `--sdk-source-checkout` now
+compares each packed regular file against the specified Git commit and reports
+`sdk_source_contents_match` separately from archive provenance.
 
 On local macOS ARM64, an additional TEST-only unqualified prototype received
 one completion webhook before a second real OpenCode 2.2.6 turn. During that
