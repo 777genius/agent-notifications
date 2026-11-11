@@ -12,6 +12,7 @@ import { createDarwinClock } from '../opencode-plugin/darwin-clock.mjs';
 const officialImage = '90e4d03597b03d2051b65b4d793467764e55bacd8e22bf4824479c7233ea0e15';
 const grants = { nativeObserverQualified:false, nativeClockQualified:false, notificationDeliveryQualified:false };
 let phase = 'entry';
+let spanFailure;
 const reasons = new Set(['platform_unverified','helper_unverified','image_unverified',
   'native_ffi_unavailable','native_clock_unavailable','go_clock_unavailable',
   'clock_tuple_mismatch','clock_containment_unverified','clock_span_unverified',
@@ -105,6 +106,10 @@ async function main() {
       const lo=ns(g.monoLoNs),hi=ns(g.monoHiNs),wall=ns(g.wallUnixNs),uncertainty=ns(g.uncertaintyNs);
       requireValue(hi>=lo && uncertainty===hi-lo+3000000n,'go_clock_unavailable');
       const width=after.hiNS-before.loNS;
+      if (width < 0n || width > 224000000n) {
+        // A duration only, never a clock reading, boot identifier or path.
+        spanFailure = { round, spanNS: String(width), limitNS: '224000000' };
+      }
       requireValue(width>=0n && width<=224000000n,'clock_span_unverified');
       requireValue(before.loNS<=lo && hi<=after.hiNS,'clock_tick_containment_unverified');
       requireValue(before.wallNS-2000000n<=wall && wall<=after.wallNS+2000000n,'clock_wall_containment_unverified');
@@ -151,6 +156,7 @@ try { console.log(JSON.stringify(await main())); }
 catch(error){
   const code = reasons.has(error?.message) ? error.message :
     error?.message === 'clock_unavailable' ? 'clock_unavailable' : 'unqualified';
-  console.log(JSON.stringify({status:'unqualified',failureCode:code+'_'+phase,...grants}));
+  console.log(JSON.stringify({status:'unqualified',failureCode:code+'_'+phase,
+    ...(code==='clock_span_unverified' && spanFailure ? { spanFailure } : {}),...grants}));
   process.exitCode=1;
 }

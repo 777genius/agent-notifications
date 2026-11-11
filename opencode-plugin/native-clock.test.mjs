@@ -230,7 +230,7 @@ function deliveryFixture(rawKind = 'darwin-monotonic-raw', generation = 'v2', fa
   const initial = rawKind === 'linux-boottime' ? 1000000000000n :
     rawKind === 'darwin-monotonic-raw' ? 1000000000007n : 1000000000100n;
   const wallBase = 1700000000000000000n;
-  let tick = initial, closes = 0, cancels = 0, events = 0, frame, mutate, receiptMutation, helperGate, queued, spawnGap = 0n;
+  let tick = initial, closes = 0, cancels = 0, events = 0, frame, mutate, receiptMutation, helperGate, queued, spawnGap = 0n, helperDelays = [];
   const calls = [], helpers = [];
   const source = { imageSHA256: 'a'.repeat(64), sample() {
     calls.push('sample');
@@ -247,7 +247,7 @@ function deliveryFixture(rawKind = 'darwin-monotonic-raw', generation = 'v2', fa
         monoLoNs: String(tick + 1000000n), monoHiNs: String(tick + 2000000n),
         wallUnixNs: String(wallBase + tick - initial), uncertaintyNs: '4000000' };
       const output = Buffer.from(JSON.stringify(receiptMutation ? receiptMutation(receipt) : receipt));
-      tick += 10000000n;
+      tick += helperDelays.shift() ?? 10000000n;
       if (helperGate) await helperGate.promise;
       return { status: 'ok', output };
     },
@@ -267,7 +267,8 @@ function deliveryFixture(rawKind = 'darwin-monotonic-raw', generation = 'v2', fa
     sourceFactory: factory ? options => factory(options, source) : () => source });
   return { delivery, source, calls, helpers, advance(n) { tick += n; }, tick: () => tick,
     closes: () => closes, cancels: () => cancels, events: () => events, frame: () => parseJSON(frame),
-    mutate(fn) { mutate = fn; }, receipt(fn) { receiptMutation = fn; }, gap(n) { spawnGap = n; }, gateHelper(gate) { helperGate = gate; }, queue(gate) { queued = gate; },
+    mutate(fn) { mutate = fn; }, receipt(fn) { receiptMutation = fn; }, gap(n) { spawnGap = n; },
+    helperDelays(values) { helperDelays = [...values]; }, gateHelper(gate) { helperGate = gate; }, queue(gate) { queued = gate; },
     fact() { return { version: 1, kind: 'question_asked', sessionID: 's', turnID: 'original-turn', requestID: 'r', rootSession: true,
       provenance: { generation, observationID: 'original-observation', nativeTime: Number((wallBase + tick - initial) / 1000000n),
         timeBasis: generation === 'v1' ? 'assistant_created_lower_bound' : 'envelope_created',
@@ -280,6 +281,37 @@ function deliveryFixture(rawKind = 'darwin-monotonic-raw', generation = 'v2', fa
     },
   };
 }
+
+test('activation retries only slow, otherwise valid calibration inside the same deadline', async () => {
+  for (const generation of ['v1', 'v2']) {
+    const f = deliveryFixture('darwin-monotonic-raw', generation);
+    try {
+      const oldBirth = f.fact().provenance.nativeTime;
+      f.helperDelays([300000000n, 10000000n]);
+      assert.equal(await f.delivery.activate(), true);
+      assert.equal(f.helpers.length, 2);
+      assert.equal(f.helpers[0].deadline, f.helpers[1].deadline);
+      assert.equal(f.delivery.allowsBirth(oldBirth), false, 'failed sample must not stamp the epoch');
+      assert.equal(f.cancels(), 0);
+    } finally { f.delivery.dispose(); }
+  }
+});
+
+test('activation keeps rejecting invalid or repeatedly slow calibration', async () => {
+  for (const mode of ['invalid-boot', 'invalid-wall', 'always-slow']) {
+    const f = deliveryFixture();
+    try {
+      f.helperDelays([300000000n, 300000000n, 300000000n]);
+      if (mode === 'invalid-boot') f.receipt(r => ({ ...r, boot: changedBoot }));
+      if (mode === 'invalid-wall') f.receipt(r => ({ ...r, wallUnixNs: String(BigInt(r.wallUnixNs) + 5000000000n) }));
+      assert.equal(await f.delivery.activate(), false);
+      assert.equal(f.helpers.length, mode === 'always-slow' ? 3 : 1);
+      assert.equal(f.delivery.ready(), false);
+      assert.equal(f.closes(), 1);
+      assert.equal(f.cancels(), 1);
+    } finally { f.delivery.dispose(); }
+  }
+});
 
 test('async preparation finishes before helper and synchronous admission; exact native ingress/birth/anchor survive', async () => {
   for (const rawKind of ['linux-boottime', 'darwin-monotonic-raw', 'windows-interrupt-precise']) {

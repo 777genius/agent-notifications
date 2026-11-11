@@ -88,14 +88,29 @@ export function createPreparedDelivery({ registry, origin, policy, isOwned, onIn
         source = acquired; activation = undefined;
         if (policy.rawKind !== 'linux-boottime' &&
             !policy.images?.some(image => image.imageSHA256 === source.imageSHA256)) bad();
-        const before = sample();
-        const r = await registry.clock({ signal: attempt.controller.signal, isCurrent, deadline: attempt.deadline });
-        if (!isCurrent() || performance.now() >= attempt.deadline || r.status !== 'ok') bad();
-        const after = sample(), original = clockReceipt(r.output);
-        if (!anchorMatches(original, before, after, policy) || after.loNS - before.loNS > 2000000000n) bad();
-        anchor = original; activation = before;
-        epoch = Object.freeze({ id, started: before.loNS, after: after.hiNS });
-        return true;
+        // A calibration around a fully reaped helper can exceed the fixed
+        // bracket even when it completes inside the activation deadline.
+        // Retry only that case, before accepting any events: every accepted
+        // epoch still uses one complete bracket within the compiled bound.
+        for (let round = 0; round < 3; round++) {
+          const before = sample();
+          const r = await registry.clock({ signal: attempt.controller.signal, isCurrent, deadline: attempt.deadline });
+          if (!isCurrent() || performance.now() >= attempt.deadline || r.status !== 'ok') bad();
+          const after = sample(), original = clockReceipt(r.output);
+          const span = after.hiNS - before.loNS;
+          if (after.loNS - before.loNS > 2000000000n) bad();
+          if (span > policy.translationBoundNS) {
+            // Check every other invariant before retrying. This larger span is
+            // used only to classify refusal; it never becomes a policy or anchor.
+            if (!anchorMatches(original, before, after, { ...policy, translationBoundNS: span })) bad();
+            continue;
+          }
+          if (!anchorMatches(original, before, after, policy)) bad();
+          anchor = original; activation = before;
+          epoch = Object.freeze({ id, started: before.loNS, after: after.hiNS });
+          return true;
+        }
+        bad();
       } catch { if (pending === attempt) invalidate(); return false; }
       finally { clearTimeout(timer); if (pending === attempt) pending = undefined; }
     })();

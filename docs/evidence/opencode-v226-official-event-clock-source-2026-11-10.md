@@ -97,8 +97,25 @@ separate, content-free span/tick/wall diagnostic codes, a new run passed,
 including a deliberate wrong-image rejection. The original failure is not
 explained by that success and must not be discarded when considering a bound.
 
+Further local production-source sampling separated the subconditions. One of
+20 runs failed the 224 ms calibration span check. In a subsequent 40-run study,
+two spans exceeded it (approximately 528 ms and 271 ms); the other 38 runs
+passed and the largest passing span was approximately 100 ms. These samples
+show that the combined sample/helper span can exceed the bound on this host; they are neither
+a universal worst case nor proof of the earlier unclassified failure. Activation
+can retry an overlong but otherwise valid bracket around a reaped helper within its original two-second
+budget; it never accepts the overlong sample or changes the configured bound.
+In a separate TEST-only build using the same unqualified prototype data, an
+injected 300 ms delay after the first helper was followed by successful
+completion, question, permission and error webhooks. This exercises the retry
+against real OpenCode/Bun and Go processes; its copied trust data remain
+unqualified and the experiment is not a release E2E.
+
 ## Additional genuine-image stress, still E0 only
 
 Draft #643 adds 12 actual embedded-Bun/Go clock comparisons on each observed Linux x64 and macOS ARM64 port, plus a timer-delayed wall/counter nonregression observation (commits `1cec7ed`, `688d755`). The explicit reports retain `nativeObserverQualified=false`, `nativeClockQualified=false` and `notificationDeliveryQualified=false`. They do not establish event-source Q, reader R, time translation T, native admission or desktop/webhook delivery. A failed observation is a useful evidence gap, not grounds for bypassing admission.
 
-**Decision:** maintain `native_source_pending` in UAP and keep #643 Draft. Do not register an OpenCode 2.2.6 trusted reader, Bun image, clock-policy row or release claim based on this source audit.
+**Decision:** maintain `native_source_pending` in UAP and keep #643 Draft. The
+exact Bun image is recognized for custody tests only; do not register an
+OpenCode 2.2.6 trusted reader, clock-policy row or release claim based on this
+source audit.

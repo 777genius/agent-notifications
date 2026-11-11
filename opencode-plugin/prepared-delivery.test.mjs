@@ -160,7 +160,9 @@ test('V1 completion still requires the original bounded activation calibration',
  await setup(async({delivery,children,postGap,gapObserver})=>{
   postGap(300000000n);dc.subscribe('child_process',gapObserver);
   try{assert.equal(await delivery.activate(),false);}finally{dc.unsubscribe('child_process',gapObserver);}
-  assert.equal(delivery.ready(),false);assert.equal(children.length,1);assert.equal(children[0].closed,true);
+  // The first slow bracket is retried; this fixture's unchanged clock receipt
+  // is stale on the next attempt, so it must stop without a third child.
+  assert.equal(delivery.ready(),false);assert.equal(children.length,2);assert.ok(children.every(child=>child.closed));
  },'v1');
 });
 // Red if completion adds optional metadata/helper waits or restamps its anchor.
