@@ -279,14 +279,14 @@ jobs:
       # SOURCE-only test: original V2 created timestamps must not be treated
       # as trustworthy after independent +12s/-12s wall-clock perturbations.
       # These test runs neither install a receiver nor authorize delivery.
-      - name: Reject test-only +12s future native source time on Windows
+      - name: Observe +12s source clock mismatch on Windows (no admission)
         shell: pwsh
         run: |
           $archive = Join-Path $env:RUNNER_TEMP 'opencode-windows-x64-2.2.6.zip'
           $report = Join-Path $env:RUNNER_TEMP 'opencode-v226-windows-future-skew-safe.json'
           python -B scripts/opencode-v226-source-e2e.py --archive $archive --clock-skew-negative --report $report
           if ($LASTEXITCODE -ne 0) { throw 'windows_future_clock_skew_negative_failed' }
-      - name: Reject test-only -12s past native source time on Windows
+      - name: Observe -12s source clock mismatch on Windows (no admission)
         shell: pwsh
         run: |
           $archive = Join-Path $env:RUNNER_TEMP 'opencode-windows-x64-2.2.6.zip'
@@ -467,7 +467,7 @@ jobs:
           retention-days: 14
       # Same genuine official-image source/time negatives as Linux/Windows.
       # The 5-second independent test window is NOT a source Q/T grant.
-      - name: Reject test-only +12s future native source time on macOS
+      - name: Observe +12s source clock mismatch on macOS (no admission)
         shell: bash
         run: |
           set -euo pipefail
@@ -475,7 +475,7 @@ jobs:
             --archive "$RUNNER_TEMP/opencode-darwin-arm64.zip" \
             --clock-skew-negative \
             --report "$RUNNER_TEMP/opencode-v226-darwin-future-skew-safe.json"
-      - name: Reject test-only -12s past native source time on macOS
+      - name: Observe -12s source clock mismatch on macOS (no admission)
         shell: bash
         run: |
           set -euo pipefail
