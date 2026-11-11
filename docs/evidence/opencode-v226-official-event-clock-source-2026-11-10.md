@@ -185,6 +185,14 @@ changes the host's working directory and credential handling; testing this
 entry therefore covers the reporter's launch path, but does not grant its
 observer or clock qualification.
 
+On the same real service path, a second TEST plugin attempted to rewrite the
+event ID and creation time in its own subscription. A separate subscriber
+observed the original matching ID/time for execution start, step end and
+completion, and the TEST-only prototype delivered the expected webhooks.
+This is evidence for this particular subscription-isolation scenario, not a
+general protection against arbitrary code sharing the OpenCode process or a
+reader qualification. The private correlation values are never exported.
+
 Two further runs repeated the same-host control and ±12-second shift using a
 separate TEST-only build that forced the existing fixed-code composition
 diagnostics on. Each run recorded one successful activation, a control

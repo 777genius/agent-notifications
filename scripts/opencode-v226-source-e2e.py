@@ -96,7 +96,7 @@ export default {id:'test-oc226-source',async setup(ctx){
        }
      }catch{}
    }
-   write({phase:'event',type:entry.type,sessionID:e.sessionID??e.form?.sessionID,hasData:typeof e==='object'&&e!==null,
+   write({phase:'event',type:entry.type,id:entry.id,sessionID:e.sessionID??e.form?.sessionID,hasData:typeof e==='object'&&e!==null,
     receivedWallMs,receivedMonoNS,...(goClock?{goClock}:{}),
     hasSequence:Number.isSafeInteger(entry.durable?.seq),
     hasTime:Number.isSafeInteger(entry.created)&&entry.created>0,
@@ -342,7 +342,28 @@ def stop_official_host_tree(host):
             host.wait(timeout=5)
 
 
-def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False, expect_delivery=False, native_app=None, skew_after_delivery=False, service=False, live_signer=None):
+PEER_PLUGIN = r'''import {appendFileSync} from 'node:fs';
+const write=x=>appendFileSync(process.env.AN_TEST_PEER_TRACE,JSON.stringify(x)+'\n');
+export default {id:'test-oc226-peer',async setup(ctx){
+ const controller=new AbortController();
+ void(async()=>{try{
+  const stream=ctx.event.subscribe({signal:controller.signal});
+  const iterator=stream[Symbol.asyncIterator]();
+  write({phase:'ready'});
+  for(;;){const next=await iterator.next();if(next.done)break;
+   const e=next.value;
+   if(!['session.execution.started','session.step.ended','session.execution.succeeded'].includes(e?.type))continue;
+   const original={type:e.type,id:e.id,created:e.created,sessionID:e.data?.sessionID};
+   let blocked=false;try{e.created=1;e.id='TEST-mutated-peer-id';}catch{blocked=true;}
+   write({phase:'peer',...original,mutationBlocked:blocked,
+     mutationApplied:e.created===1&&e.id==='TEST-mutated-peer-id'});
+  }
+ }catch{write({phase:'failed'});}})();
+ return ()=>controller.abort();
+}};'''
+
+
+def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False, expect_delivery=False, native_app=None, skew_after_delivery=False, service=False, live_signer=None, mutate_peer=False):
     spec = importlib.util.spec_from_file_location('existing_native_provider',
         Path(__file__).resolve().parent / 'opencode-semantic-e2e.py')
     native = importlib.util.module_from_spec(spec)
@@ -367,12 +388,16 @@ def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False, exp
     (test_support / 'native-v2.mjs').write_bytes((Path(__file__).resolve().parent.parent / 'opencode-plugin/native-v2.mjs').read_bytes())
     (plugins / 'test-oc226-source.js').write_text(TRACE_PLUGIN, encoding='utf-8')
     trace = root / 'native-events.private.jsonl'
+    peer_trace = root / 'peer-events.private.jsonl'
+    if mutate_peer:
+        (plugins / 'test-oc226-peer.js').write_text(PEER_PLUGIN, encoding='utf-8')
     env = {'PATH': os.environ.get('PATH', '/usr/bin:/bin'), 'HOME': str(paths['home']),
            'LANG': 'C.UTF-8', 'TERM': 'dumb', 'XDG_CONFIG_HOME': str(paths['config']),
            'XDG_DATA_HOME': str(paths['data']), 'XDG_CACHE_HOME': str(paths['cache']),
            'XDG_STATE_HOME': str(paths['state']), 'XDG_RUNTIME_DIR': str(paths['runtime']),
            'BUN_INSTALL_CACHE_DIR': str(paths['bun']), 'TMPDIR': str(paths['temp']),
            'OPENCODE_CONFIG_DIR': str(paths['config']), 'AN_TEST_TRACE': str(trace),
+           **({'AN_TEST_PEER_TRACE':str(peer_trace)} if mutate_peer else {}),
            **({'AN_TEST_CLOCK_SKEW':str(clock_skew_ms)} if clock_skew_ms else {}),
            **({'AN_TEST_CLOCK_SKEW_TRIGGER':str(root / 'skew.trigger')} if skew_after_delivery else {}),
            'OPENCODE_DISABLE_AUTOUPDATE': 'true',
@@ -534,6 +559,15 @@ def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False, exp
                     raise RuntimeError('host_capabilities_mismatch')
                 if loaded.get('clockSkewMS') != clock_skew_ms:
                     raise RuntimeError('source_clock_skew_injection_missing')
+                if mutate_peer:
+                    def peer_rows():
+                        if not peer_trace.exists():
+                            return []
+                        payload = peer_trace.read_bytes()
+                        if len(payload) > 2 * 1024 * 1024:
+                            raise RuntimeError('private_trace_limit')
+                        return [json.loads(line) for line in payload[:payload.rfind(b'\n') + 1].splitlines()]
+                    wait(lambda: any(r.get('phase') == 'ready' for r in peer_rows()), 15, 'peer_subscription_missing')
                 if skew_after_delivery:
                     # Same host and receiver must deliver before perturbation;
                     # otherwise a dead or unqualified receiver could make the
@@ -581,6 +615,15 @@ def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False, exp
                                r.get('hasSequence') and r.get('hasTime')]
                 if not source_rows or any(not isinstance(r.get('createdMs'), int) for r in source_rows):
                     raise RuntimeError('native_source_epoch_unverified')
+                if mutate_peer:
+                    def peer_isolated():
+                        peer = [r for r in peer_rows() if r.get('phase') == 'peer' and r.get('sessionID') == sid]
+                        return all(any(p.get('type') == kind and p.get('id') == r.get('id') and
+                                       p.get('created') == r.get('createdMs') and
+                                       (p.get('mutationApplied') is True or p.get('mutationBlocked') is True)
+                                       for p in peer for r in source_rows if r.get('type') == kind)
+                                   for kind in terminal)
+                    wait(peer_isolated, 15, 'peer_stream_isolation_unverified')
                 if clock_skew_ms:
                     # This is an independent TEST assertion, not an OpenCode
                     # admission decision. Baseline wall was captured before the
@@ -890,11 +933,15 @@ def main():
                         help='Exercise the isolated OpenCode serve --service entry')
     parser.add_argument('--darwin-live-signer', type=Path,
                         help='TEST-only helper to observe the running Darwin process signature')
+    parser.add_argument('--mutate-peer-events', action='store_true',
+                        help='Test whether another plugin can mutate this observer subscription')
     args = parser.parse_args()
     if args.native_app is not None and (sys.platform != 'darwin' or not args.expect_delivery):
         parser.error('native app requires macOS and delivery mode')
     if args.darwin_live_signer is not None and sys.platform != 'darwin':
         parser.error('live signature observation requires macOS')
+    if args.mutate_peer_events and (args.clock_skew_negative or args.clock_skew_past_negative):
+        parser.error('peer mutation and clock skew require separate observations')
     if args.installed_clock_skew and (args.receiver is None or args.restart_denial or
                                       not (args.clock_skew_negative or args.clock_skew_past_negative)):
         parser.error('installed clock skew requires a receiver and a clock-skew mode')
@@ -912,9 +959,10 @@ def main():
     with tempfile.TemporaryDirectory(prefix='TEST-opencode-v226-', dir=os.environ.get('RUNNER_TEMP')) as temp:
         try:
             prepare_windows_private_root(Path(temp))
-            result = run(args.archive, Path(temp), args.receiver, skew_ms, args.restart_denial, args.expect_delivery, args.native_app, args.skew_after_delivery, args.service, args.darwin_live_signer.resolve(strict=True) if args.darwin_live_signer else None)
+            result = run(args.archive, Path(temp), args.receiver, skew_ms, args.restart_denial, args.expect_delivery, args.native_app, args.skew_after_delivery, args.service, args.darwin_live_signer.resolve(strict=True) if args.darwin_live_signer else None, args.mutate_peer_events)
             result['serviceMode'] = args.service
             result['liveSignerObserved'] = args.darwin_live_signer is not None
+            result['peerEventIDAndTimestampIsolationObserved'] = args.mutate_peer_events
         except Exception as error:
             # Never leak native session IDs, paths, model messages or provider errors.
             safe_errors = {'official_archive_unverified', 'official_executable_not_unique',
@@ -947,6 +995,7 @@ def main():
                            'native_reader_projection_unverified',
                            'source_clock_skew_injection_missing', 'source_clock_skew_not_refused',
                            'live_signer_observation_unverified',
+                           'peer_subscription_missing', 'peer_stream_isolation_unverified',
                            'negative_native_reader_projection_unverified',
                            'native_reader_r1_sample_missing', 'native_r1_question_missing',
                            'native_r1_permission_missing', 'native_r1_error_missing',

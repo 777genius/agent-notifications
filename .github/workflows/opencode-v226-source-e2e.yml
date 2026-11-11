@@ -509,7 +509,8 @@ jobs:
             --archive "$RUNNER_TEMP/opencode-darwin-arm64.zip" \
             --receiver "$RUNNER_TEMP/TEST-opencode-v226-darwin/receiver" \
             --darwin-live-signer "$RUNNER_TEMP/TEST-opencode-v226-darwin/live-signer-e0" \
-            --service --restart-denial --report "$RUNNER_TEMP/opencode-v226-darwin-service-denied-safe.json"
+            --service --restart-denial --mutate-peer-events \
+            --report "$RUNNER_TEMP/opencode-v226-darwin-service-denied-safe.json"
       - name: Upload sanitized macOS source/denial evidence
         if: always()
         uses: actions/upload-artifact@v7
