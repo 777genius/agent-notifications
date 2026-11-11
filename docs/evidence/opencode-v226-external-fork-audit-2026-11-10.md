@@ -194,6 +194,16 @@ expected denial diagnostics in the same real-host service scenario. A unit
 test also confirms that retargeting the project link revokes ownership. These
 are denied-startup observations, not 2.2.6 delivery qualification.
 
+As a separate positive regression, the exact clean product build at
+`2ab6c3e3da99f4845e37a03d647b445da007557b` and the pinned official 2.0.21
+Darwin ARM64 host completed a native TEST turn in a `/var/folders`-aliased
+project and delivered one webhook through the managed installation. Editing
+the plugin while a second turn was held suppressed the second webhook. The
+local harness was modified only to retain the alias and locate this checkout;
+its provider was scripted, no desktop presentation was checked, and the SDK
+package contents matched the independently retrieved `3e438a2` tree. This is
+not evidence of 2.2.6 production admission.
+
 1. The public CI artifact's installed webhook delivery was reproduced as described above. Still independently verify a receiver built from the exact candidate HEAD and the applicable native desktop presentation; do not compare unrelated binaries.
 2. Independently review the specific 2.2.6 V2 event reader and held-process provenance, and the Bun 1.4.4 FFI/JSValue-to-slot source behavior. Bind the runtime and native image evidence without caller-provided authority or fake clock rows.
 3. Establish per-platform original `Event.Payload.created` source/JS `Date.now()` wall semantics, Go monotonic-to-wall translation, measured worst-case bounds plus reviewed error margins, reboot/clock adjustment/suspend/stale-event negatives, and invalidation on process/image changes.
