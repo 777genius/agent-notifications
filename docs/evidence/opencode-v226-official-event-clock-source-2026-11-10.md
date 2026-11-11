@@ -133,10 +133,12 @@ clock algorithm or proof of the producer's event-time bound.
 
 An isolated TEST-only prototype with copied, unqualified trust rows delivered
 four real OpenCode event webhooks and produced five correlated native macOS
-banners. Separate runs shifting the event source by plus and minus 12 seconds
-observed no webhook. These runs exercise behavior only: their copied trust rows
-are not evidence for production admission and the rejection phase was not
-identified.
+banners. Separate runs first confirmed a completion webhook in the same host
+and installed receiver, then shifted its event source by plus or minus 12
+seconds and observed no subsequent webhook. The control rules out a receiver
+that never worked, but does not identify the rejection phase. These runs
+exercise behavior only: their copied trust rows are not evidence for production
+admission.
 
 **Decision:** maintain `native_source_pending` in UAP and keep #643 Draft. The
 exact Bun image is recognized for custody tests only; do not register an

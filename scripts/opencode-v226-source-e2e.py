@@ -29,7 +29,7 @@ OFFICIAL_ARCHIVE_HASHES = {
     'win32': 'f75c16b33b8523fe1ff41e7d97e3ae654a47d59a0e327def24db2d9291bb24be',
 }
 OFFICIAL_TAG_SHA = "dc2ffcf8bf26f9e669b6aa22b95f50e12be15e06"
-TRACE_PLUGIN = r'''import {appendFileSync} from 'node:fs';
+TRACE_PLUGIN = r'''import {appendFileSync,existsSync} from 'node:fs';
 import {createNativeV2} from '../test-support/native-v2.mjs';
 import {spawnSync} from 'node:child_process';
 const write=value=>appendFileSync(process.env.AN_TEST_TRACE,JSON.stringify(value)+'\n');
@@ -43,7 +43,8 @@ export default {id:'test-oc226-source',async setup(ctx){
  const baselineNow=Date.now.bind(Date);
  const skew=process.env.AN_TEST_CLOCK_SKEW;
  const clockSkewMS=skew==='12000'||skew==='-12000'?Number(skew):0;
- if(clockSkewMS)Date.now=()=>baselineNow()+clockSkewMS;
+ const skewTrigger=process.env.AN_TEST_CLOCK_SKEW_TRIGGER;
+ if(clockSkewMS)Date.now=()=>baselineNow()+(skewTrigger&&!existsSync(skewTrigger)?0:clockSkewMS);
  write({phase:'loaded',version:ctx.app?.version,clockSkewMS,
    subscribe:typeof ctx.event?.subscribe==='function',
    sessionGet:typeof ctx.session?.get==='function',
@@ -341,7 +342,7 @@ def stop_official_host_tree(host):
             host.wait(timeout=5)
 
 
-def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False, expect_delivery=False, native_app=None):
+def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False, expect_delivery=False, native_app=None, skew_after_delivery=False):
     spec = importlib.util.spec_from_file_location('existing_native_provider',
         Path(__file__).resolve().parent / 'opencode-semantic-e2e.py')
     native = importlib.util.module_from_spec(spec)
@@ -369,6 +370,7 @@ def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False, exp
            'BUN_INSTALL_CACHE_DIR': str(paths['bun']), 'TMPDIR': str(paths['temp']),
            'OPENCODE_CONFIG_DIR': str(paths['config']), 'AN_TEST_TRACE': str(trace),
            **({'AN_TEST_CLOCK_SKEW':str(clock_skew_ms)} if clock_skew_ms else {}),
+           **({'AN_TEST_CLOCK_SKEW_TRIGGER':str(root / 'skew.trigger')} if skew_after_delivery else {}),
            'OPENCODE_DISABLE_AUTOUPDATE': 'true',
            'OPENCODE_DISABLE_DEFAULT_PLUGINS': 'true',
            'OPENCODE_DISABLE_MODELS_FETCH': 'true',
@@ -516,6 +518,20 @@ def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False, exp
                     raise RuntimeError('host_capabilities_mismatch')
                 if loaded.get('clockSkewMS') != clock_skew_ms:
                     raise RuntimeError('source_clock_skew_injection_missing')
+                if skew_after_delivery:
+                    # Same host and receiver must deliver before perturbation;
+                    # otherwise a dead or unqualified receiver could make the
+                    # negative assertion pass without testing clock handling.
+                    baseline = request('/api/session', {'title': 'TEST-skew-control',
+                                       'location': {'directory': str(paths['project'])}})
+                    baseline_sid = baseline['data']['id']
+                    request('/api/session/' + baseline_sid + '/prompt', {'text': 'TEST-clock-control'})
+                    request('/api/experimental/session/' + baseline_sid + '/wait', method='POST')
+                    wait_for_delivery(webhook, 'task_complete', 'Task completed')
+                    time.sleep(.5)
+                    with webhook.lock:
+                        webhook.bodies.clear()
+                    (root / 'skew.trigger').touch(exist_ok=False)
                 source_wall_start_ms = int(time.time() * 1000)
                 session = request('/api/session', {'title': 'TEST-source-2.2.6',
                                      'location': {'directory': str(paths['project'])}})
@@ -582,6 +598,7 @@ def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False, exp
                                 'version': '2.2.6', 'clockSkewTestMS': clock_skew_ms,
                                 'sourceClockMismatchObserved': True,
                                 'installedReceiverObserved': True,
+                                'sameHostPriorDeliveryObserved': skew_after_delivery,
                                 'receiverRejectionPhaseKnown': False,
                                 'nativeObserverQualified': False, 'nativeClockQualified': False,
                                 'notificationDeliveryQualified': False}
@@ -851,12 +868,16 @@ def main():
                         help='Require actual installed delivery for each genuine source event')
     parser.add_argument('--installed-clock-skew', action='store_true',
                         help='With a skew mode and receiver, observe that no webhook arrives')
+    parser.add_argument('--skew-after-delivery', action='store_true',
+                        help='First require successful delivery in the same host, then apply the skew')
     args = parser.parse_args()
     if args.native_app is not None and (sys.platform != 'darwin' or not args.expect_delivery):
         parser.error('native app requires macOS and delivery mode')
     if args.installed_clock_skew and (args.receiver is None or args.restart_denial or
                                       not (args.clock_skew_negative or args.clock_skew_past_negative)):
         parser.error('installed clock skew requires a receiver and a clock-skew mode')
+    if args.skew_after_delivery and not args.installed_clock_skew:
+        parser.error('skew-after-delivery requires installed clock skew')
     if args.expect_delivery and (args.receiver is None or args.restart_denial or
                                  args.clock_skew_negative or args.clock_skew_past_negative):
         parser.error('delivery requires an installed receiver and excludes denial and clock-skew modes')
@@ -869,7 +890,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix='TEST-opencode-v226-', dir=os.environ.get('RUNNER_TEMP')) as temp:
         try:
             prepare_windows_private_root(Path(temp))
-            result = run(args.archive, Path(temp), args.receiver, skew_ms, args.restart_denial, args.expect_delivery, args.native_app)
+            result = run(args.archive, Path(temp), args.receiver, skew_ms, args.restart_denial, args.expect_delivery, args.native_app, args.skew_after_delivery)
         except Exception as error:
             # Never leak native session IDs, paths, model messages or provider errors.
             safe_errors = {'official_archive_unverified', 'official_executable_not_unique',
