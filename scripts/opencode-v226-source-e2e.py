@@ -383,6 +383,38 @@ def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False, exp
                 raise RuntimeError('managed_install_command_failed')
             if not (plugins / 'agent-notifications.js').is_file():
                 raise RuntimeError('managed_plugin_file_missing')
+            # The consumer reads the managed policy snapshot, not the ambient
+            # AGENT_NOTIFICATIONS_CONFIG document. Configure the actual channel
+            # through the public revision-fenced interface before starting the
+            # host; otherwise a qualified observer can never send a webhook.
+            config_args = [str(receiver), 'config']
+            target_args = ['--target', 'opencode', '--control-root', str(root / 'control')]
+            inspection = subprocess.run(config_args + ['inspect', *target_args, '--json'],
+                                        cwd=paths['project'], env=env, capture_output=True,
+                                        text=True, timeout=60)
+            try:
+                inspected = json.loads(inspection.stdout)
+                if (inspection.returncode or inspected.get('valid') is not True or
+                        Path(inspected['selection']['path']).resolve() !=
+                        (root / 'control' / 'agent-notifications.json').resolve()):
+                    raise ValueError('invalid managed configuration')
+                revision = inspected['revision']
+            except (ValueError, KeyError, TypeError):
+                raise RuntimeError('managed_webhook_configuration_failed')
+            edits = {'/notifications/desktop/enabled': False,
+                     '/notifications/webhook/enabled': True,
+                     '/notifications/webhook/preset': 'custom',
+                     '/notifications/webhook/format': 'json',
+                     '/notifications/webhook/url': f'http://127.0.0.1:{webhook.server_port}/webhook'}
+            for status in ('task_complete', 'question', 'permission_request', 'opencode_error'):
+                edits['/statuses/' + status + '/enabled'] = True
+                edits['/statuses/' + status + '/webhook/enabled'] = True
+            configured = subprocess.run(config_args + ['edit', *target_args, '--stdin',
+                                        '--expect-revision', revision], cwd=paths['project'], env=env,
+                                        input=json.dumps({'set': edits}), capture_output=True,
+                                        text=True, timeout=60)
+            if configured.returncode:
+                raise RuntimeError('managed_webhook_configuration_failed')
         with socket.socket() as listener:
             listener.bind(('127.0.0.1', 0))
             port = listener.getsockname()[1]
@@ -776,6 +808,7 @@ def main():
                            'native_source_envelope_unverified', 'native_source_epoch_unverified',
                            'windows_private_root_unverified', 'managed_install_command_failed',
                            'managed_plugin_file_missing', 'managed_install_unverified',
+                           'managed_webhook_configuration_failed',
                            'private_host_log_limit', 'single_denial_diagnostic_missing',
                            'expected_delivery_missing', 'delivery_payload_invalid',
                            'denied_host_delivered_webhook', 'restart_host_unavailable',

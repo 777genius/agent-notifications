@@ -24,18 +24,22 @@ On macOS 15.6.1 ARM64, the exact public CI artifact (ZIP SHA-256
 matching GitHub's artifact digest; executable SHA-256
 `511e8af2718bf6f07d11af480d496a37be9181277148fb54a6df4a59b3d05e6c`)
 was installed in an isolated TEST home with the official OpenCode 2.2.6
-ARM64 image and a loopback-only model provider and webhook. A genuine source
-completion and the native assistant projection were observed, but no completion
-webhook arrived within the delivery assertion's 15-second window. The test
-failed `expected_delivery_missing` before reaching the question, permission,
-and error scenarios. A second diagnostic run also had no completion webhook;
-its attempt to enable plugin diagnostics via a file path was rejected by
-OpenCode as a non-directory and therefore did not establish the failure phase.
+ARM64 image and a loopback-only model provider and webhook. The initial test
+failed `expected_delivery_missing`, but **that failure was a test setup error**:
+the receiver uses its managed policy snapshot, while the test enabled the
+webhook only in an unrelated ambient config file. A separately built diagnostic
+variant reported `channels_disabled`. That variant and a test which altered an
+already installed plugin are not evidence of the exact artifact's behavior.
 
-This is a scoped negative result for that artifact and test setup, not proof
-that the reporter's different local build or macOS 26 configuration cannot
-deliver. The reason for missing delivery remains undetermined; the result does
-not qualify the fork's reader or clock or authorize its trust rows.
+After configuring the managed OpenCode policy through the revision-fenced
+`config inspect` and `config edit` commands, the **unmodified, digest-verified
+public CI artifact** delivered the expected fixed-copy webhooks for genuine
+completion, question, permission and terminal-error events. The question and
+permission webhooks were observed before their pending requests were answered.
+This corrects the earlier negative conclusion. The run used macOS 15.6.1 and a
+local scripted model, not the reporter's macOS 26 or a physical desktop banner.
+It demonstrates functional delivery by this fork, but does not qualify its
+reused reader/clock bounds or establish production admission safety.
 
 ## Existing independent observations (not admission)
 
@@ -56,7 +60,7 @@ not qualify the fork's reader or clock or authorize its trust rows.
 
 ## Acceptance evidence required before a positive E2E or merge
 
-1. Reproduce the fork's positive delivery **with the byte-identical public CI artifact** and record only the artifact identity/build revision and redacted acceptance/presentation outcome. Independently verify a receiver built from the exact candidate HEAD; do not compare unrelated binaries.
+1. The public CI artifact's installed webhook delivery was reproduced as described above. Still independently verify a receiver built from the exact candidate HEAD and the applicable native desktop presentation; do not compare unrelated binaries.
 2. Independently review the specific 2.2.6 V2 event reader and held-process provenance, and the Bun 1.4.4 FFI/JSValue-to-slot source behavior. Bind the runtime and native image evidence without caller-provided authority or fake clock rows.
 3. Establish per-platform original `Event.Payload.created` source/JS `Date.now()` wall semantics, Go monotonic-to-wall translation, measured worst-case bounds plus reviewed error margins, reboot/clock adjustment/suspend/stale-event negatives, and invalidation on process/image changes.
 4. Only then authorize exactly reviewed reader/clock cells across both projects; run accepted installed root completion, question, permission, terminal error, duplicate/queue/restart/revocation, desktop and webhook E2E on supported physical platforms. Run regression and security CI on final exact SHA.
