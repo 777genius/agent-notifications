@@ -137,14 +137,14 @@ def cue(path):
         audio.writeframes(struct.pack("<" + "h" * len(samples), *samples))
 
 
-def wait_for(predicate, seconds=8):
+def wait_for(predicate, seconds=8, failure="fixture_readiness_timeout"):
     until = time.monotonic() + seconds
     while time.monotonic() < until:
         result = predicate()
         if result:
             return result
         time.sleep(0.05)
-    raise Unqualified("fixture_readiness_timeout")
+    raise Unqualified(failure)
 
 
 def linux_desktop(lab, terminal_lifetime=90):
@@ -161,7 +161,7 @@ def linux_desktop(lab, terminal_lifetime=90):
                                   cwd=lab.root, env=lab.env, pass_fds=(stream.fileno(),), stdout=subprocess.DEVNULL,
                                   stderr=subprocess.DEVNULL, start_new_session=True)
     lab.children.append(server)
-    display = wait_for(lambda: display_file.read_text().strip())
+    display = wait_for(lambda: display_file.read_text().strip(), failure="xvfb_display_not_ready")
     if not re.fullmatch(r"[0-9]{1,5}", display):
         raise Unqualified("invalid_owned_display")
     lab.env["DISPLAY"] = ":" + display
@@ -169,14 +169,14 @@ def linux_desktop(lab, terminal_lifetime=90):
     bus_socket = lab.root / "runtime/dbus"
     address = "unix:path=" + str(bus_socket)
     lab.start([paths["dbus-daemon"], "--session", "--nofork", "--address=" + address])
-    wait_for(lambda: bus_socket.exists())
+    wait_for(lambda: bus_socket.exists(), failure="dbus_socket_not_ready")
     lab.env["DBUS_SESSION_BUS_ADDRESS"] = address
     pulse_socket = lab.root / "runtime/pulse-native"
     lab.start([paths["pulseaudio"], "--daemonize=no", "--exit-idle-time=-1", "--disable-shm=yes", "--log-target=stderr", "-n",
                "--load=module-native-protocol-unix socket=" + str(pulse_socket) + " auth-anonymous=1",
                "--load=module-null-sink sink_name=TEST_pi_observer rate=48000 channels=1"])
     lab.env["PULSE_SERVER"] = "unix:" + str(pulse_socket)
-    wait_for(lambda: pulse_socket.exists())
+    wait_for(lambda: pulse_socket.exists(), failure="pulse_socket_not_ready")
     lab.run([paths["pactl"], "set-default-sink", "TEST_pi_observer"])
     (lab.root / "home/.asoundrc").write_text('pcm.!default { type pulse }\nctl.!default { type pulse }\n')
     dunst = lab.root / "dunstrc"
@@ -190,7 +190,7 @@ def linux_desktop(lab, terminal_lifetime=90):
         def search():
             out, status = lab.run([paths["xdotool"], "search", "--onlyvisible", "--name", "^" + title + "$"], check=False)
             return out.strip().splitlines()[0] if status == 0 and out.strip() else None
-        window_ids.append(wait_for(search))
+        window_ids.append(wait_for(search, failure="xterm_window_not_visible"))
     for window in window_ids:
         # The Xvfb display can be ready before Openbox publishes active-window
         # support. Retry the real WM activation/observation, never assume focus.
@@ -200,7 +200,7 @@ def linux_desktop(lab, terminal_lifetime=90):
                 return False
             observed, status = lab.run([paths["xdotool"], "getactivewindow"], check=False)
             return status == 0 and observed.strip() == window
-        wait_for(activated)
+        wait_for(activated, failure="window_activation_not_ready")
     return paths, server, window_ids
 
 
