@@ -10,6 +10,7 @@ on:
       - 'scripts/test_opencode_v226_darwin_peer.py'
       - 'scripts/test_opencode_v226_desktop_spool.py'
       - 'scripts/test_opencode_v226_temp_cleanup.py'
+      - 'scripts/test_opencode_v226_sdk_source.py'
       - 'scripts/opencode-v226-clock-e0.mjs'
       - 'scripts/opencode-v226-darwin-abi-e0.mjs'
       - 'scripts/testdata/opencode-v226-darwin-peer-e0.c'
