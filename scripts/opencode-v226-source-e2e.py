@@ -26,6 +26,7 @@ import zipfile
 OFFICIAL_ARCHIVE_HASHES = {
     'linux': '08bb21d6326ce740d91cce7ebe88a6536933f6e1e30353b91a06b01f25da306c',
     'darwin': '15491608f6b0bc4debe5eac35eab629a2b07ea9a1fbac68ad53bcea59fcc4b45',
+    'win32': 'f75c16b33b8523fe1ff41e7d97e3ae654a47d59a0e327def24db2d9291bb24be',
 }
 OFFICIAL_TAG_SHA = "dc2ffcf8bf26f9e669b6aa22b95f50e12be15e06"
 TRACE_PLUGIN = r'''import {appendFileSync} from 'node:fs';
@@ -171,9 +172,10 @@ def official_binary(archive, target):
     expected = OFFICIAL_ARCHIVE_HASHES.get(system)
     if expected is None or not archive.is_file() or not 0 < archive.stat().st_size <= 160 * 1024 * 1024 or digest(archive) != expected:
         raise RuntimeError('official_archive_unverified')
-    if system == 'darwin':
+    if system in ('darwin', 'win32'):
+        name = 'opencode.exe' if system == 'win32' else 'opencode'
         with zipfile.ZipFile(archive) as packed:
-            files = [m for m in packed.infolist() if not m.is_dir() and Path(m.filename).name == 'opencode']
+            files = [m for m in packed.infolist() if not m.is_dir() and Path(m.filename).name == name]
             if len(files) != 1 or not 0 < files[0].file_size <= 350 * 1024 * 1024:
                 raise RuntimeError('official_executable_not_unique')
             with packed.open(files[0]) as source, target.open('xb') as dest:
@@ -187,7 +189,8 @@ def official_binary(archive, target):
             with packed.extractfile(files[0]) as source, target.open('xb') as dest:
                 while chunk := source.read(1024 * 1024):
                     dest.write(chunk)
-    target.chmod(0o700)
+    if system != 'win32':
+        target.chmod(0o700)
     return digest(target)
 
 def run(archive, root, receiver=None, clock_skew_ms=0):
@@ -195,7 +198,7 @@ def run(archive, root, receiver=None, clock_skew_ms=0):
         Path(__file__).resolve().parent / 'opencode-semantic-e2e.py')
     native = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(native)
-    binary = root / 'opencode'
+    binary = root / ('opencode.exe' if sys.platform == 'win32' else 'opencode')
     binary_sha = official_binary(archive, binary)
     print('source-stage: archive-verified', flush=True)
     names = dict(home='home', config='config', project='TEST-project', data='data',
@@ -223,6 +226,13 @@ def run(archive, root, receiver=None, clock_skew_ms=0):
            'OPENCODE_DISABLE_MODELS_FETCH': 'true',
            'OPENCODE_DISABLE_SHARE': 'true',
            'OPENCODE_PASSWORD': 'test-only', 'OPENCODE_SERVER_PASSWORD': 'test-only'}
+    if sys.platform == 'win32':
+        # Preserve only Windows process-loader inputs, never the runner's tokens.
+        env.update({k: os.environ[k] for k in ('SystemRoot', 'WINDIR', 'ComSpec', 'PATHEXT')
+                    if k in os.environ})
+        env.update({'USERPROFILE': str(paths['home']), 'APPDATA': str(paths['config']),
+                    'LOCALAPPDATA': str(paths['data']), 'TEMP': str(paths['temp']),
+                    'TMP': str(paths['temp'])})
     version = subprocess.run([str(binary), '--version'], cwd=paths['project'], env=env,
                              text=True, capture_output=True, timeout=20)
     if version.returncode:
@@ -550,12 +560,25 @@ def run(archive, root, receiver=None, clock_skew_ms=0):
                         'notificationDeliveryQualified': False}
             finally:
                 if host.poll() is None:
-                    os.killpg(host.pid, signal.SIGTERM)
-                    try:
+                    if sys.platform == 'win32':
+                        # Tear down the real Windows host process tree, not just
+                        # the parent. Never print or upload private host output.
+                        try:
+                            subprocess.run(['taskkill', '/PID', str(host.pid), '/T', '/F'],
+                                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                           timeout=10, check=False)
+                        except (OSError, subprocess.TimeoutExpired):
+                            pass
+                        if host.poll() is None:
+                            host.kill()
                         host.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        os.killpg(host.pid, signal.SIGKILL)
-                        host.wait(timeout=5)
+                    else:
+                        os.killpg(host.pid, signal.SIGTERM)
+                        try:
+                            host.wait(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            os.killpg(host.pid, signal.SIGKILL)
+                            host.wait(timeout=5)
     finally:
         provider.shutdown()
         provider.server_close()
