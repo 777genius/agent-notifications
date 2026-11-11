@@ -78,8 +78,14 @@ export default {id:'test-oc226-source',async setup(ctx){
    let goClock;
    if(entry.type==='session.execution.succeeded'&&process.env.AN_TEST_GO_CLOCK){
      try{
+       // Windows native loader inputs are required for an independent Go
+       // witness; all other inherited environment (including tokens) is omitted.
+       const clockEnv={PATH:process.platform==='win32'?(process.env.PATH??''):'/usr/bin:/bin'};
+       if(process.platform==='win32')for(const k of ['SystemRoot','WINDIR']){
+         if(typeof process.env[k]==='string')clockEnv[k]=process.env[k];
+       }
        const p=spawnSync(process.env.AN_TEST_GO_CLOCK,['opencode-clock','--protocol','1'],
-         {timeout:2000,maxBuffer:1024,env:{PATH:'/usr/bin:/bin'}});
+         {timeout:2000,maxBuffer:1024,env:clockEnv});
        if(!p.error&&p.status===0&&p.stdout?.length>0&&p.stdout.length<=1024){
          const g=JSON.parse(p.stdout.toString('utf8'));
          if(g.protocol===1&&Object.keys(g).join('|')===
@@ -165,6 +171,36 @@ def wait(fn, seconds, label):
             return value
         time.sleep(.08)
     raise RuntimeError(label)
+
+
+
+def valid_native_go_t0_sample(value, platform):
+    """Strict, observational Go E0 frame check; never grants native qualification."""
+    keys = {'boot', 'domain', 'kind', 'loNS', 'hiNS', 'wallUnixNS', 'uncertaintyNS'}
+    if not isinstance(value, dict) or set(value) != keys:
+        return False
+    boot, domain, kind = value['boot'], value['domain'], value['kind']
+    if not isinstance(boot, str) or not re.fullmatch(
+            r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}', boot) or (
+            boot == '00000000-0000-0000-0000-000000000000'):
+        return False
+    if platform == 'linux':
+        parts = domain.split(':') if isinstance(domain, str) else []
+        if kind != 'linux-boottime' or len(parts) != 3 or parts[0] != 'linux-time' or any(
+                not re.fullmatch(r'[1-9][0-9]{0,19}', p) or int(p) > 18446744073709551615
+                for p in parts[1:]):
+            return False
+    elif (platform, kind, domain) not in (
+            ('darwin', 'darwin-monotonic-raw', 'darwin-kernel'),
+            ('win32', 'windows-interrupt-precise', 'windows-kernel')):
+        return False
+    values = [value[k] for k in ('loNS', 'hiNS', 'wallUnixNS', 'uncertaintyNS')]
+    if any(not isinstance(n, str) or not re.fullmatch(r'(?:0|[1-9][0-9]{0,18})', n) or
+           int(n) > 9223372036854775807 for n in values):
+        return False
+    lo, hi, wall, uncertainty = map(int, values)
+    return lo > 0 and wall > 0 and 0 <= hi - lo <= 100000000 and (
+        uncertainty == hi - lo + 3000000)
 
 
 def official_binary(archive, target):
@@ -443,14 +479,8 @@ def run(archive, root, receiver=None, clock_skew_ms=0):
                 if receiver is not None:
                     go_rows = [r for r in source_rows if r.get('type') == 'session.execution.succeeded']
                     go = go_rows[0].get('goClock') if go_rows else None
-                    if not isinstance(go, dict) or set(go) != {'boot', 'domain', 'kind', 'loNS', 'hiNS', 'wallUnixNS', 'uncertaintyNS'} or \
-                       not isinstance(go['boot'], str) or not isinstance(go['domain'], str) or \
-                       go['kind'] not in {'linux-boottime', 'darwin-monotonic-raw'} or \
-                       any(not isinstance(go.get(key), str) or not re.fullmatch(r'[1-9][0-9]*', go[key])
-                           for key in ('loNS', 'hiNS', 'wallUnixNS', 'uncertaintyNS')):
+                    if not valid_native_go_t0_sample(go, sys.platform):
                         raise RuntimeError('source_go_clock_sample_unavailable')
-                    if int(go['hiNS']) < int(go['loNS']) or int(go['uncertaintyNS']) < 0:
-                        raise RuntimeError('source_go_clock_sample_invalid')
                     go_source_lag_ns = int(go['wallUnixNS']) - go_rows[0]['createdMs'] * 1000000
                     # Preserve the existing coarse observational wall window.
                     # A bounded observed delta is not a worst-case independent T.
