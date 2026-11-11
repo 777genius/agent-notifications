@@ -90,6 +90,9 @@ def sdk_contents_match_source(tarball, checkout, revision):
                 raise ValueError('SDK packaged file differs from source commit')
     if not seen:
         raise ValueError('SDK tarball is empty')
+    expected = {path[len('sdk/opencode-js/'):] for path in tracked}
+    if seen != expected:
+        raise ValueError('SDK tarball member set differs from source commit')
     return True
 
 

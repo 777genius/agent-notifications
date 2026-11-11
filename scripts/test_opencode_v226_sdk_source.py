@@ -41,5 +41,27 @@ class SDKSourceTest(unittest.TestCase):
                             semantic.sdk_contents_match_source(archive, root, revision)
 
 
+    def test_rejects_subset_of_tracked_sdk_files(self):
+        with tempfile.TemporaryDirectory(prefix='TEST-sdk-subset-') as tmp:
+            root = Path(tmp)
+            subprocess.run(['git', 'init', '-q', str(root)], check=True)
+            package = root / 'sdk/opencode-js'
+            package.mkdir(parents=True)
+            (package / 'index.js').write_bytes(b'original')
+            (package / 'missing.js').write_bytes(b'other')
+            subprocess.run(['git', '-C', str(root), 'add', 'sdk/opencode-js'], check=True)
+            subprocess.run(['git', '-C', str(root), '-c', 'core.hooksPath=/dev/null',
+                            '-c', 'user.name=test', '-c', 'user.email=test@example.invalid',
+                            'commit', '-qm', 'TEST full source'], check=True)
+            revision = subprocess.check_output(['git', '-C', str(root), 'rev-parse', 'HEAD'], text=True).strip()
+            archive = root / 'TEST-partial.tgz'
+            with tarfile.open(archive, 'w:gz') as tar:
+                member = tarfile.TarInfo('package/index.js')
+                member.size = len(b'original')
+                tar.addfile(member, io.BytesIO(b'original'))
+            with self.assertRaisesRegex(ValueError, 'member set'):
+                semantic.sdk_contents_match_source(archive, root, revision)
+
+
 if __name__ == '__main__':
     unittest.main()
