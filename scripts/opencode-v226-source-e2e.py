@@ -232,7 +232,8 @@ def verify_macos_desktop(root):
                 except (OSError, ValueError, TypeError, AttributeError):
                     raise RuntimeError('desktop_receipt_invalid')
         return ids
-    ids = wait(lambda: (values if len(values := submitted()) >= 4 else None), 15,
+    # Completion, question, permission, provider failure and output-limit failure.
+    ids = wait(lambda: (values if len(values := submitted()) >= 5 else None), 15,
                'desktop_submissions_missing')
     time.sleep(2)  # Allow macOS unified logging to flush this private test's submissions.
     log = subprocess.run(['/usr/bin/log', 'show', '--last', '10m', '--style', 'syslog',
@@ -244,7 +245,7 @@ def verify_macos_desktop(root):
     presented = set(re.findall(r'Presenting <NotificationRecord app:"com\.777genius\.agent-notifications"'
                                r'[^\n]*?req:"(' + uuid_pattern + r')"[^\n]*?> as banner', log.stdout))
     count = len(ids & presented)
-    if count < 4:
+    if count < 5:
         raise RuntimeError('desktop_presentations_missing')
     return count
 
