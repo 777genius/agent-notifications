@@ -9,6 +9,7 @@ on:
       - 'scripts/opencode-v226-clock-e0.mjs'
       - 'scripts/opencode-v226-darwin-abi-e0.mjs'
       - 'scripts/opencode-v226-darwin-signature-e0.py'
+      - 'scripts/opencode-v226-darwin-live-signature-e0.swift'
       - 'scripts/opencode-semantic-e2e.py'
       - 'opencode-plugin/**'
       - 'cmd/claude-notifications/opencode*.go'
@@ -495,9 +496,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          /usr/bin/swiftc scripts/opencode-v226-darwin-live-signature-e0.swift \
+            -o "$RUNNER_TEMP/TEST-opencode-v226-darwin/live-signer-e0"
           python -B scripts/opencode-v226-source-e2e.py \
             --archive "$RUNNER_TEMP/opencode-darwin-arm64.zip" \
             --receiver "$RUNNER_TEMP/TEST-opencode-v226-darwin/receiver" \
+            --darwin-live-signer "$RUNNER_TEMP/TEST-opencode-v226-darwin/live-signer-e0" \
             --service --restart-denial --report "$RUNNER_TEMP/opencode-v226-darwin-service-denied-safe.json"
       - name: Upload sanitized macOS source/denial evidence
         if: always()

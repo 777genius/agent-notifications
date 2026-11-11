@@ -342,7 +342,7 @@ def stop_official_host_tree(host):
             host.wait(timeout=5)
 
 
-def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False, expect_delivery=False, native_app=None, skew_after_delivery=False, service=False):
+def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False, expect_delivery=False, native_app=None, skew_after_delivery=False, service=False, live_signer=None):
     spec = importlib.util.spec_from_file_location('existing_native_provider',
         Path(__file__).resolve().parent / 'opencode-semantic-e2e.py')
     native = importlib.util.module_from_spec(spec)
@@ -513,6 +513,18 @@ def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False, exp
 
                 wait(ready, 70, 'native_startup_timeout')
                 print('source-stage: native-started', flush=True)
+                if live_signer is not None:
+                    def live_signature(pid):
+                        result = subprocess.run([str(live_signer), str(pid)], cwd=root, env=env,
+                                                capture_output=True, timeout=30, check=True)
+                        return json.loads(result.stdout)
+                    own_signature = live_signature(os.getpid())
+                    if (host.poll() is not None or
+                            live_signature(host.pid) != {'publisherMatches': True, 'wrongTeamRefused': True} or
+                            set(own_signature) != {'publisherMatches', 'wrongTeamRefused'} or
+                            own_signature['publisherMatches'] is not False or
+                            host.poll() is not None):
+                        raise RuntimeError('live_signer_observation_unverified')
                 loaded = wait(lambda: next((r for r in rows() if r.get('phase') == 'loaded'), None),
                               25, 'source_autoload_missing')
                 print('source-stage: plugin-loaded', flush=True)
@@ -876,9 +888,13 @@ def main():
                         help='First require successful delivery in the same host, then apply the skew')
     parser.add_argument('--service', action='store_true',
                         help='Exercise the isolated OpenCode serve --service entry')
+    parser.add_argument('--darwin-live-signer', type=Path,
+                        help='TEST-only helper to observe the running Darwin process signature')
     args = parser.parse_args()
     if args.native_app is not None and (sys.platform != 'darwin' or not args.expect_delivery):
         parser.error('native app requires macOS and delivery mode')
+    if args.darwin_live_signer is not None and sys.platform != 'darwin':
+        parser.error('live signature observation requires macOS')
     if args.installed_clock_skew and (args.receiver is None or args.restart_denial or
                                       not (args.clock_skew_negative or args.clock_skew_past_negative)):
         parser.error('installed clock skew requires a receiver and a clock-skew mode')
@@ -896,8 +912,9 @@ def main():
     with tempfile.TemporaryDirectory(prefix='TEST-opencode-v226-', dir=os.environ.get('RUNNER_TEMP')) as temp:
         try:
             prepare_windows_private_root(Path(temp))
-            result = run(args.archive, Path(temp), args.receiver, skew_ms, args.restart_denial, args.expect_delivery, args.native_app, args.skew_after_delivery, args.service)
+            result = run(args.archive, Path(temp), args.receiver, skew_ms, args.restart_denial, args.expect_delivery, args.native_app, args.skew_after_delivery, args.service, args.darwin_live_signer.resolve(strict=True) if args.darwin_live_signer else None)
             result['serviceMode'] = args.service
+            result['liveSignerObserved'] = args.darwin_live_signer is not None
         except Exception as error:
             # Never leak native session IDs, paths, model messages or provider errors.
             safe_errors = {'official_archive_unverified', 'official_executable_not_unique',
@@ -929,6 +946,7 @@ def main():
                            'source_go_clock_epoch_unverified',
                            'native_reader_projection_unverified',
                            'source_clock_skew_injection_missing', 'source_clock_skew_not_refused',
+                           'live_signer_observation_unverified',
                            'negative_native_reader_projection_unverified',
                            'native_reader_r1_sample_missing', 'native_r1_question_missing',
                            'native_r1_permission_missing', 'native_r1_error_missing',

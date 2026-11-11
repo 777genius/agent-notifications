@@ -143,6 +143,15 @@ other builds by the same signer. `spctl --assess --type execute` rejects this
 standalone CLI as not being an app, so no notarization conclusion is inferred
 from the signature check.
 
+In a separate isolated macOS service run, the Security framework also
+accepted the live OpenCode PID under that publisher requirement; the same
+requirement rejected the test harness process and the wrong team requirement
+rejected OpenCode. This is a point-in-time live-signature observation. It does
+not prove a stable process lifetime, prevent PID reuse or executable swaps,
+establish source/event semantics, or authorize an otherwise unqualified host.
+Any production use would need to compose and independently review it with
+the existing held-process and clock checks.
+
 For the exact macOS ARM64 2.2.6 image, the candidate wall witness now reads
 Darwin `clock_gettime(CLOCK_REALTIME)` independently of JavaScript `Date.now`.
 The existing qualified images retain their previous clock implementation. On
