@@ -6,6 +6,14 @@
 
 The official OpenCode [`v2.2.6` Git tag](https://github.com/anomalyco/opencode/tree/v2.2.6) resolves to commit `dc2ffcf8bf26f9e669b6aa22b95f50e12be15e06` (checked against the GitHub Git-ref API, independently matching our real-source E2E's `OFFICIAL_TAG_SHA`).
 
+For the local Darwin ARM64 ZIP, `gh release verify-asset v2.2.6` against
+`anomalyco/opencode` verified the release attestation and digest
+`15491608f6b0bc4debe5eac35eab629a2b07ea9a1fbac68ad53bcea59fcc4b45`;
+the release attestation also names that tag's commit. A separate default
+`gh attestation verify` query for SLSA build provenance returned HTTP 404 for
+this digest. The release verification ties the downloaded bytes to the release,
+but does not independently establish how the binary was built from the source.
+
 At this immutable source commit:
 
 - [`packages/core/src/bus.ts`, lines 510–533](https://github.com/anomalyco/opencode/blob/dc2ffcf8bf26f9e669b6aa22b95f50e12be15e06/packages/core/src/bus.ts#L510-L533) constructs `Event.Payload` in `makePayload`. It sets the envelope's `created` to **`yield* Clock.currentTimeMillis`**, then passes the envelope through `publishEvent`. This is not an event-data `time` field and is not supplied by the Agent Notifications plugin.

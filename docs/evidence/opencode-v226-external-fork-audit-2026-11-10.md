@@ -86,6 +86,15 @@ positive result isolates the remaining work to authenticating and qualifying
 the actual 2.2.6 source, reader and clock contracts rather than implementing a
 second notification transport.
 
+An adapted TEST-only native semantic matrix also ran the real 2.2.6 process on
+macOS ARM64 with that prototype: one root completion and one coalesced queued
+turn each produced one completion; interruption and a child-session completion
+produced none; and an already loaded observer produced none after managed
+removal. Negative cases observed the existing 30-second late-delivery window.
+The adapter's source revision was not independently verified in this experiment,
+and the prototype has synthetic trust data. The results therefore exercise
+lifecycle behavior, not production qualification.
+
 ## Other-subscriber mutation observation
 
 Using another TEST-only diagnostic build based on the same prototype, a plugin
