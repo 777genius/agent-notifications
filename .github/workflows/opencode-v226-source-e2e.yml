@@ -276,6 +276,33 @@ jobs:
           $report = Join-Path $env:RUNNER_TEMP 'opencode-v226-windows-source-safe.json'
           python -B scripts/opencode-v226-source-e2e.py --archive $archive --report $report
           if ($LASTEXITCODE -ne 0) { throw 'windows_source_e2e_failed' }
+      # SOURCE-only test: original V2 created timestamps must not be treated
+      # as trustworthy after independent +12s/-12s wall-clock perturbations.
+      # These test runs neither install a receiver nor authorize delivery.
+      - name: Reject test-only +12s future native source time on Windows
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP 'opencode-windows-x64-2.2.6.zip'
+          $report = Join-Path $env:RUNNER_TEMP 'opencode-v226-windows-future-skew-safe.json'
+          python -B scripts/opencode-v226-source-e2e.py --archive $archive --clock-skew-negative --report $report
+          if ($LASTEXITCODE -ne 0) { throw 'windows_future_clock_skew_negative_failed' }
+      - name: Reject test-only -12s past native source time on Windows
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP 'opencode-windows-x64-2.2.6.zip'
+          $report = Join-Path $env:RUNNER_TEMP 'opencode-v226-windows-past-skew-safe.json'
+          python -B scripts/opencode-v226-source-e2e.py --archive $archive --clock-skew-past-negative --report $report
+          if ($LASTEXITCODE -ne 0) { throw 'windows_past_clock_skew_negative_failed' }
+      - name: Upload only sanitized Windows clock-skew negative receipts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: opencode-v226-windows-skew-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            ${{ runner.temp }}/opencode-v226-windows-future-skew-safe.json
+            ${{ runner.temp }}/opencode-v226-windows-past-skew-safe.json
+          if-no-files-found: warn
+          retention-days: 14
       - name: Build exact-head unreleased Windows receiver (no native qualification grant)
         shell: pwsh
         env:
@@ -436,6 +463,34 @@ jobs:
         with:
           name: opencode-v226-darwin-denied-${{ matrix.os }}-${{ github.event.pull_request.head.sha || github.sha }}
           path: ${{ runner.temp }}/opencode-v226-darwin-denied-safe.json
+          if-no-files-found: warn
+          retention-days: 14
+      # Same genuine official-image source/time negatives as Linux/Windows.
+      # The 5-second independent test window is NOT a source Q/T grant.
+      - name: Reject test-only +12s future native source time on macOS
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -B scripts/opencode-v226-source-e2e.py \
+            --archive "$RUNNER_TEMP/opencode-darwin-arm64.zip" \
+            --clock-skew-negative \
+            --report "$RUNNER_TEMP/opencode-v226-darwin-future-skew-safe.json"
+      - name: Reject test-only -12s past native source time on macOS
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -B scripts/opencode-v226-source-e2e.py \
+            --archive "$RUNNER_TEMP/opencode-darwin-arm64.zip" \
+            --clock-skew-past-negative \
+            --report "$RUNNER_TEMP/opencode-v226-darwin-past-skew-safe.json"
+      - name: Upload only sanitized macOS clock-skew negative receipts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: opencode-v226-darwin-skew-${{ matrix.os }}-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            ${{ runner.temp }}/opencode-v226-darwin-future-skew-safe.json
+            ${{ runner.temp }}/opencode-v226-darwin-past-skew-safe.json
           if-no-files-found: warn
           retention-days: 14
       - name: Observe genuine Bun 1.4.4 Darwin FFI/Go E0 (never grant notifications)
