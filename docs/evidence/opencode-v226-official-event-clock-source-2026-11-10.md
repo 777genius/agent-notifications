@@ -119,6 +119,16 @@ completion, question, permission and error webhooks. This exercises the retry
 against real OpenCode/Bun and Go processes; its copied trust data remain
 unqualified and the experiment is not a release E2E.
 
+On macOS 26 CI, exact candidate `2b7dc8a4` failed E0 with an observed
+466.9 ms bracket against the 224 ms limit. This is retained as a failed
+observation, not counted as a pass. The E0 harness now mirrors the bounded
+activation retry: at most three fully validated brackets per comparison within
+two seconds, never accepting an overlong bracket. Successful output lists every
+discarded duration; a failed run reports the final failed bracket. A local
+TEST injection of a 300 ms delay produced a
+322.5 ms discarded bracket followed by 12 valid comparisons; it does not
+establish a universal bound or grant qualification.
+
 ## Additional genuine-image stress, still E0 only
 
 Draft #643 adds 12 actual embedded-Bun/Go clock comparisons on each observed Linux x64 and macOS ARM64 port, plus a timer-delayed wall/counter nonregression observation (commits `1cec7ed`, `688d755`). The explicit reports retain `nativeObserverQualified=false`, `nativeClockQualified=false` and `notificationDeliveryQualified=false`. They do not establish event-source Q, reader R, time translation T, native admission or desktop/webhook delivery. A failed observation is a useful evidence gap, not grounds for bypassing admission.
