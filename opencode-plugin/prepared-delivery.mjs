@@ -21,8 +21,8 @@ export function anchorMatches(anchor, before, after, policy) {
 // Ports are private composition dependencies. The plugin never accepts them
 // from host configuration/environment; only the closed compiled ledger supplies policy.
 export function createPreparedDelivery({ registry, origin, policy, isOwned, onInvalidate, onDiagnostic, enrich, sourceFactory = createPlatformClock }) {
-  let epoch, source, anchor, activation, pending, last, ingress, disposed = false;
-  const originals = new Map(), prepared = new WeakMap();
+  let epoch, source, anchor, activation, pending, last, ingress, observedIngress, disposed = false;
+  const originals = new Map(), prepared = new WeakMap(), captured = new WeakMap();
   const refuse = reason => {
     try { onDiagnostic?.(reason); } catch {}
     return false;
@@ -30,7 +30,7 @@ export function createPreparedDelivery({ registry, origin, policy, isOwned, onIn
   function invalidate(reason = 'clock') {
     if (!epoch && !source && !pending) return;
     const attempt = pending; pending = undefined;
-    epoch = undefined; originals.clear(); anchor = undefined; activation = undefined; ingress = undefined; last = undefined;
+    epoch = undefined; originals.clear(); anchor = undefined; activation = undefined; ingress = undefined; observedIngress = undefined; last = undefined;
     attempt?.controller.abort();
     const retired = source; source = undefined;
     try { retired?.dispose(); } catch {}
@@ -54,8 +54,8 @@ export function createPreparedDelivery({ registry, origin, policy, isOwned, onIn
   }
   const ms = (record) => Number(record.loNS / 1000000n);
   const clock = Object.freeze({ id: policy.sourceKind ?? (policy.rawKind === 'linux-boottime' ? 'linux-proc-boottime' : policy.rawKind), now() {
-    if (ingress) { const original = ingress; ingress = undefined; last = original; return ms(original); }
-    return ms(sample());
+    // Retain the high-water sample even when the SDK consumes a buffered event.
+    const record = ingress ?? sample(); ingress = undefined; observedIngress = record; return ms(record);
   } });
   async function activate() {
     if (disposed) return false;
@@ -133,9 +133,23 @@ export function createPreparedDelivery({ registry, origin, policy, isOwned, onIn
         event?.type === 'session.status' && event.properties?.status?.type === 'idle' ||
         event?.type === 'message.updated' && event.properties?.info?.error != null) retain(record);
   }
+  // The token binds one early read to its event and source epoch; it cannot
+  // be reused or moved to a different event after revocation or reconnect.
+  function captureIngress(event) {
+    if (!epoch || !event || typeof event !== 'object') bad();
+    const token = {}; captured.set(token, { event, epoch, record: sample() }); return token;
+  }
+  function armIngress(token, event) {
+    const held = captured.get(token); captured.delete(token);
+    if (!held || held.event !== event || held.epoch !== epoch || !epoch) { invalidate(); bad(); }
+    const now = sample();
+    if (now.loNS - held.record.loNS > 30000000000n) { invalidate(); bad(); }
+    ingress = held.record;
+  }
   function nativeIngress(event) {
+    const record = observedIngress; observedIngress = undefined;
     if (['form.created', 'permission.asked', 'session.execution.succeeded', 'session.execution.failed'].includes(event?.type))
-      retain(last ?? sample());
+      retain(record ?? sample());
   }
   const current = (record, handoff) => {
     if (disposed || epoch !== record.epoch) return false;
@@ -224,7 +238,7 @@ export function createPreparedDelivery({ registry, origin, policy, isOwned, onIn
       },
     });
   }
-  return Object.freeze({ clock, activate, beginIngress, nativeIngress, beforeEmit, emit, invalidate,
+  return Object.freeze({ clock, activate, beginIngress, captureIngress, armIngress, nativeIngress, beforeEmit, emit, invalidate,
     allowsBirth(nativeTime) {
       return epoch && Number.isSafeInteger(nativeTime) && nativeTime > 0 &&
         BigInt(nativeTime) * 1000000n >= activation.wallNS + (epoch.after - activation.loNS);

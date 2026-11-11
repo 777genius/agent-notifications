@@ -3179,8 +3179,8 @@ function anchorMatches(anchor, before, after, policy) {
   }, after, policy.comparisonBoundNS);
 }
 function createPreparedDelivery({ registry, origin: origin2, policy, isOwned, onInvalidate, onDiagnostic, enrich, sourceFactory = createPlatformClock }) {
-  let epoch, source, anchor, activation, pending, last, ingress, disposed = false;
-  const originals = /* @__PURE__ */ new Map(), prepared = /* @__PURE__ */ new WeakMap();
+  let epoch, source, anchor, activation, pending, last, ingress, observedIngress, disposed = false;
+  const originals = /* @__PURE__ */ new Map(), prepared = /* @__PURE__ */ new WeakMap(), captured = /* @__PURE__ */ new WeakMap();
   const refuse = (reason) => {
     try {
       onDiagnostic?.(reason);
@@ -3197,6 +3197,7 @@ function createPreparedDelivery({ registry, origin: origin2, policy, isOwned, on
     anchor = void 0;
     activation = void 0;
     ingress = void 0;
+    observedIngress = void 0;
     last = void 0;
     attempt?.controller.abort();
     const retired = source;
@@ -3230,13 +3231,10 @@ function createPreparedDelivery({ registry, origin: origin2, policy, isOwned, on
   }
   const ms = (record) => Number(record.loNS / 1000000n);
   const clock = Object.freeze({ id: policy.sourceKind ?? (policy.rawKind === "linux-boottime" ? "linux-proc-boottime" : policy.rawKind), now() {
-    if (ingress) {
-      const original = ingress;
-      ingress = void 0;
-      last = original;
-      return ms(original);
-    }
-    return ms(sample());
+    const record = ingress ?? sample();
+    ingress = void 0;
+    observedIngress = record;
+    return ms(record);
   } });
   async function activate() {
     if (disposed) return false;
@@ -3340,9 +3338,31 @@ function createPreparedDelivery({ registry, origin: origin2, policy, isOwned, on
     ingress = record;
     if (["session.idle", "session.error", "question.asked", "permission.asked"].includes(event?.type) || event?.type === "session.status" && event.properties?.status?.type === "idle" || event?.type === "message.updated" && event.properties?.info?.error != null) retain(record);
   }
+  function captureIngress(event) {
+    if (!epoch || !event || typeof event !== "object") bad();
+    const token = {};
+    captured.set(token, { event, epoch, record: sample() });
+    return token;
+  }
+  function armIngress(token, event) {
+    const held2 = captured.get(token);
+    captured.delete(token);
+    if (!held2 || held2.event !== event || held2.epoch !== epoch || !epoch) {
+      invalidate();
+      bad();
+    }
+    const now = sample();
+    if (now.loNS - held2.record.loNS > 30000000000n) {
+      invalidate();
+      bad();
+    }
+    ingress = held2.record;
+  }
   function nativeIngress(event) {
+    const record = observedIngress;
+    observedIngress = void 0;
     if (["form.created", "permission.asked", "session.execution.succeeded", "session.execution.failed"].includes(event?.type))
-      retain(last ?? sample());
+      retain(record ?? sample());
   }
   const current = (record, handoff) => {
     if (disposed || epoch !== record.epoch) return false;
@@ -3461,6 +3481,8 @@ function createPreparedDelivery({ registry, origin: origin2, policy, isOwned, on
     clock,
     activate,
     beginIngress,
+    captureIngress,
+    armIngress,
     nativeIngress,
     beforeEmit,
     emit,
@@ -4227,10 +4249,14 @@ async function setup(context) {
         };
         signal.addEventListener("abort", abort, { once: true });
         const current = connection;
-        let iterator, snapshot;
+        let iterator, prefetched, snapshot;
+        if (delivery.ready()) {
+          iterator = context.event.subscribe({ signal: current.signal })[Symbol.asyncIterator]();
+          prefetched = Promise.resolve(iterator.next()).then((item) => ({ item, token: item.done ? void 0 : delivery.captureIngress(item.value) })).catch((error) => ({ error }));
+        }
         const opening = delivery.activate().then((ready) => {
           if (!ready || stopped || signal.aborted || current.signal.aborted) throw new TypeError("reader_unverified");
-          iterator = context.event.subscribe({ signal: current.signal })[Symbol.asyncIterator]();
+          if (!iterator) iterator = context.event.subscribe({ signal: current.signal })[Symbol.asyncIterator]();
         });
         return { [Symbol.asyncIterator]() {
           return this;
@@ -4239,9 +4265,28 @@ async function setup(context) {
           snapshot = void 0;
           try {
             await opening;
-            const item = await iterator.next();
+            let item;
+            let firstToken;
+            if (prefetched) {
+              const first = await prefetched;
+              prefetched = void 0;
+              if (first.error) throw first.error;
+              item = first.item;
+              firstToken = first.token;
+            } else item = await iterator.next();
             if (!item.done) snapshot = display?.capture(item.value);
             if (item.done) delivery.invalidate("reader");
+            if (firstToken) {
+              const value = item.value;
+              let armed = false;
+              return { done: false, get value() {
+                if (!armed) {
+                  armed = true;
+                  delivery.armIngress(firstToken, value);
+                }
+                return value;
+              } };
+            }
             return item;
           } catch {
             delivery.invalidate("reader");

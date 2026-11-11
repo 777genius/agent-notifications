@@ -187,18 +187,32 @@ async function setup(context) {
         const current = connection;
         // SDK owns the only reader/replacement budget. Reconnect gets a closed
         // anchor before opening native subscription/RPC; old identities are gone.
-        let iterator, snapshot;
+        let iterator, prefetched, snapshot;
+        if (delivery.ready()) {
+          iterator = context.event.subscribe({ signal: current.signal })[Symbol.asyncIterator]();
+          // Start reading before the SDK opens its checkpoint. Preserve the first
+          // sample even if checkpoint setup calls the clock before delivery.
+          prefetched = Promise.resolve(iterator.next()).then(item => ({ item, token: item.done ? undefined : delivery.captureIngress(item.value) })).catch(error => ({ error }));
+        }
         const opening = delivery.activate().then((ready) => {
           if (!ready || stopped || signal.aborted || current.signal.aborted) throw new TypeError('reader_unverified');
-          iterator = context.event.subscribe({ signal: current.signal })[Symbol.asyncIterator]();
+          if (!iterator) iterator = context.event.subscribe({ signal: current.signal })[Symbol.asyncIterator]();
         });
         return { [Symbol.asyncIterator]() { return this; }, async next() {
           display?.release(snapshot); snapshot = undefined;
           try {
             await opening;
-            const item = await iterator.next();
+            let item;
+            let firstToken;
+            if (prefetched) { const first = await prefetched; prefetched = undefined; if (first.error) throw first.error; item = first.item; firstToken = first.token; }
+            else item = await iterator.next();
             if (!item.done) snapshot = display?.capture(item.value);
             if (item.done) delivery.invalidate('reader');
+            // for-await reads value immediately before its synchronous observe.
+            if (firstToken) {
+              const value = item.value; let armed = false;
+              return { done: false, get value() { if (!armed) { armed = true; delivery.armIngress(firstToken, value); } return value; } };
+            }
             return item;
           } catch { delivery.invalidate('reader'); throw new TypeError('reader_unverified'); }
         }, async return() {
