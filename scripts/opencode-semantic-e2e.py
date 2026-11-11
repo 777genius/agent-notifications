@@ -406,6 +406,9 @@ export default async function(){record({phase:'loaded',version:'v1'});return{eve
                 mode = 'success'
             if removed_flow and not removed:
                 if foreign_flow:
+                    if not any(result.get('case') == 'success' and result.get('alerts') == ['task_complete']
+                               for result in cases):
+                        raise ValueError('foreign edit requires a successful control delivery')
                     # Simulate a user edit in this disposable installation.
                     # Do not remove or repair those foreign bytes afterwards.
                     foreign_bytes = installed.read_bytes() + b'\n// TEST-only foreign edit\n'
