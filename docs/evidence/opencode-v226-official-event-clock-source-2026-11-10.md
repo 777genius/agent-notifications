@@ -204,6 +204,23 @@ unit cases cover manual, missing, reordered, foreign-scope, wrong-marker and
 new-user paths. These observations use unqualified prototype trust data and
 do not grant production admission.
 
+## Actual local model in an unqualified TEST build
+
+On macOS ARM64, the pinned official OpenCode 2.2.6 executable ran turns against
+the locally installed Ollama `qwen2.5-coder:0.5b` model through a TEST-only
+OpenAI-compatible loopback proxy. The proxy verified the model name and a real
+`stop` response; no external model account or user authorization file was used.
+The installed notification binary was a TEST-only prototype with unqualified
+reader/clock data, not the production candidate.
+
+The first native turn succeeded but its expected completion webhook did not
+arrive within the harness deadline. Four later turns using that same prototype
+binary each delivered one completion webhook. Nine further turns using a
+separate TEST-only build with composition diagnostics enabled also each
+delivered one. The first missed delivery was not reproduced or explained; its
+native execution and terminal step succeeded. These results demonstrate a real
+local model path but do not establish production qualification or reliability.
+
 The real-host source harness now exercises automatic compaction and the final
 native assistant proof in CI. In a local TEST-only delivery run it observed a
 new completion after compaction; the pre-fix TEST binary failed the same
