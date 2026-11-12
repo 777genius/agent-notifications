@@ -87,16 +87,16 @@ This does not add a 2.2.6 policy or authorize an unqualified image.
 ## Native 2.2.6 producer/provenance decision — 2026-11-12
 
 **Decision (three review lenses: source, security, acceptance): keep 2.2.6
-production admission closed.** The official 2.2.6 public \`event.subscribe\`
-and \`/api/event\` expose JS-origin events through an ephemeral, bounded
+production admission closed.** The official 2.2.6 public `event.subscribe`
+and `/api/event` expose JS-origin events through an ephemeral, bounded
 SSE subscriber, not an independent original-event producer receipt. The
 4,096-frame per-subscriber queue may disconnect on overflow; a
-\`server.connected\` marker is a connection boundary, not a replay cursor.
-\`created\` uses the runtime/Effect wall-clock path (default \`Date.now\`);
+`server.connected` marker is a connection boundary, not a replay cursor.
+`created` uses the runtime/Effect wall-clock path (default `Date.now`);
 a process-owned socket or signed executable alone cannot prove the event
 publisher, source-clock origin, or bounded source-to-receiver delay. Exact
-official bytes observed on Linux, macOS and Windows and the Linux \`/proc\`
-and Darwin \`libproc\` socket E0 witnesses are useful negative/source
+official bytes observed on Linux, macOS and Windows and the Linux `/proc`
+and Darwin `libproc` socket E0 witnesses are useful negative/source
 evidence, but never product R/Q/T/ABI qualification.
 
 ### Smallest safe native reader contract (not implemented / not qualified)
@@ -113,7 +113,7 @@ evidence, but never product R/Q/T/ABI qualification.
 2. **Q / source and ABI:** qualify the *actual embedded Bun 1.4.4* ABI on
    each target platform, and independently read raw monotonic plus wall
    coordinates at the native source and receiver. Specify the coordinate
-   translation/error bound before taking samples. No JS \`Date.now\`,
+   translation/error bound before taking samples. No JS `Date.now`,
    borrowed 2.0.21 image row, semver inheritance or observed maximum
    may generate a clock grant.
 3. **T / ordering and loss:** prove bounded source→reader→Go admission
@@ -142,8 +142,8 @@ not add a generic event broker, background service, broad feature flag,
 or fake local signing key. This is an explicit unresolved dependency,
 not permission to weaken native admission.
 
-**Current acceptance flags:** \`nativeObserverQualified=false\`,
-\`nativeClockQualified=false\`,
-\`notificationDeliveryQualified=false\`. #643 remains Draft and v1.51.3
+**Current acceptance flags:** `nativeObserverQualified=false`,
+`nativeClockQualified=false`,
+`notificationDeliveryQualified=false`. #643 remains Draft and v1.51.3
 remains unpublished. Pi #644 premerge installed E2E and the verified
 post-merge matrices are separate evidence and cannot qualify 2.2.6.
