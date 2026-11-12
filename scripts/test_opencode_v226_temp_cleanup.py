@@ -48,6 +48,49 @@ class CleanupTest(unittest.TestCase):
         with self.assertRaises(PermissionError):
             source.cleanup_with_sharing_retry(persistent, True, lambda: next(times), lambda _: None, root)
 
+    def test_retries_access_denied_only_for_owned_bun_module(self):
+        root = os.path.abspath('TEST-owned-root')
+        target = os.path.join(root, 'temp', '.bun-3388477846-3cba9b8dc4fa4e45.node')
+        calls = []
+
+        def transient():
+            calls.append(1)
+            if len(calls) == 1:
+                error = PermissionError(13, 'TEST only', target)
+                error.winerror = 5
+                raise error
+            return 'closed'
+
+        self.assertEqual(source.cleanup_with_sharing_retry(
+            transient, True, lambda: 0, lambda _: None, root), 'closed')
+        self.assertEqual(len(calls), 2)
+
+        invalid = (
+            os.path.join(root, 'other', '.bun-3388477846-3cba9b8dc4fa4e45.node'),
+            os.path.join(root, 'temp', '.bun-3388477846-3cba9b8dc4fa4e45.node.txt'),
+            os.path.join(root, 'temp', '.bun-bad-3cba9b8dc4fa4e45.node'),
+            os.path.join(root, 'temp', '.bun-3388477846-3cba9b8dc4fa4e45.dll'),
+            os.path.join(root, 'temp', '..', 'other', '.bun-3388477846-3cba9b8dc4fa4e45.node'),
+        )
+        for path in invalid:
+            with self.subTest(path=path):
+                def denied():
+                    error = PermissionError(13, 'TEST only', path)
+                    error.winerror = 5
+                    raise error
+                with self.assertRaises(PermissionError):
+                    source.cleanup_with_sharing_retry(
+                        denied, True, lambda: 0, lambda _: None, root)
+
+        times = iter((0, 5))
+        def persistent():
+            error = PermissionError(13, 'TEST only', target)
+            error.winerror = 5
+            raise error
+        with self.assertRaises(PermissionError):
+            source.cleanup_with_sharing_retry(
+                persistent, True, lambda: next(times), lambda _: None, root)
+
     def test_retries_windows_sharing_violation_until_cleanup(self):
         calls, delays = [], []
 

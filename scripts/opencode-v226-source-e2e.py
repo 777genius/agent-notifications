@@ -401,7 +401,18 @@ def cleanup_with_sharing_retry(cleanup, windows, clock=time.monotonic, pause=tim
             # host exit. Do not retry other ACL failures, paths or platforms.
             shm = os.path.join(owned_root, 'data', 'opencode', 'opencode.db-shm') if owned_root else None
             same_shm = shm and error.filename and os.path.normcase(os.path.abspath(error.filename)) == os.path.normcase(os.path.abspath(shm))
-            if not windows or not (code == 32 or code == 5 and same_shm) or clock() >= deadline:
+            # Bun may still hold its extracted native module after its test host
+            # exits. Retry only an exact .bun-<pid>-<hex>.node under this
+            # owned fixture's temp directory; other WinError 5 stays fatal.
+            temp_dir = os.path.join(owned_root, 'temp') if owned_root else None
+            owned_bun_module = bool(
+                code == 5 and temp_dir and error.filename
+                and os.path.normcase(os.path.dirname(os.path.abspath(error.filename))) ==
+                    os.path.normcase(os.path.abspath(temp_dir))
+                and re.fullmatch(r'\\.bun-[0-9]{1,20}-[0-9a-f]{16}\\.node',
+                                 os.path.basename(error.filename))
+            )
+            if not windows or not (code == 32 or code == 5 and (same_shm or owned_bun_module)) or clock() >= deadline:
                 raise
             pause(.1)
 
