@@ -409,7 +409,7 @@ def cleanup_with_sharing_retry(cleanup, windows, clock=time.monotonic, pause=tim
                 code == 5 and temp_dir and error.filename
                 and os.path.normcase(os.path.dirname(os.path.abspath(error.filename))) ==
                     os.path.normcase(os.path.abspath(temp_dir))
-                and re.fullmatch(r'\\.bun-[0-9]{1,20}-[0-9a-f]{16}\\.node',
+                and re.fullmatch(r'\.bun-[0-9]{1,20}-[0-9a-f]{16}\.node',
                                  os.path.basename(error.filename))
             )
             if not windows or not (code == 32 or code == 5 and (same_shm or owned_bun_module)) or clock() >= deadline:
