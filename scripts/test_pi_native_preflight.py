@@ -47,6 +47,23 @@ class PrerequisiteEvidenceTests(unittest.TestCase):
             with self.subTest(output=output, code=code):
                 self.assertEqual(MODULE.owned_visible_xterm_window(output.replace("\\n", "\n"), code), expected)
 
+    def test_title_fallback_requires_unique_mapped_window_and_exact_held_pid(self):
+        cases = (
+            ("12345\\n", 0, "123\\n", 0, 123, "12345"),
+            ("12345\\n", 0, "999\\n", 0, 123, None),
+            ("12345\\n", 0, "123\\n", 1, 123, None),
+            ("12345\\n67890\\n", 0, "123\\n", 0, 123, None),
+            ("12345\\n", 1, "123\\n", 0, 123, None),
+            ("12345\\n", 0, "garbage\\n", 0, 123, None),
+            ("12345\\n", 0, "123\\n456\\n", 0, 123, None),
+        )
+        for titled, status, owner, owner_status, launched, expected in cases:
+            with self.subTest(titled=titled, owner=owner, status=status, owner_status=owner_status):
+                self.assertEqual(
+                    MODULE.verified_title_window(titled.replace("\\n", "\n"), status,
+                                                 owner.replace("\\n", "\n"), owner_status, launched),
+                    expected)
+
     def test_cue_has_real_nonzero_pcm_without_external_assets(self):
         with tempfile.TemporaryDirectory(prefix="TEST-pi-cue-") as name:
             path = Path(name) / "cue.wav"

@@ -156,6 +156,15 @@ def owned_visible_xterm_window(stdout, exit_code):
     return xid if xid.isascii() and xid.isdecimal() and int(xid) > 0 else None
 
 
+def verified_title_window(stdout, status, owner_stdout, owner_status, expected_pid):
+    """A unique visible title is only a locator; the X11 PID must match the held process."""
+    xid = owned_visible_xterm_window(stdout, status)
+    if xid is None or owner_status != 0:
+        return None
+    observed = owner_stdout.strip()
+    return xid if observed.isascii() and observed.isdecimal() and observed == str(expected_pid) else None
+
+
 def linux_desktop(lab, terminal_lifetime=90):
     """Owned X11/PulseAudio session reused by the actual installed-Pi fixture."""
     names = ("dbus-daemon", "Xvfb", "openbox", "dunst", "xterm", "xdotool", "sleep", "pulseaudio", "pactl", "parec", "aplay", "notify-send", "ffmpeg")
@@ -208,7 +217,22 @@ def linux_desktop(lab, terminal_lifetime=90):
             out, status = lab.run([paths["xdotool"], "search", "--onlyvisible", "--pid", str(terminal.pid)], check=False)
             lab.report["xterm_probe"] = {"role": role, "lookup_status": status,
                                          "visible_pid_window_count": len(out.strip().splitlines())}
-            return owned_visible_xterm_window(out, status)
+            direct = owned_visible_xterm_window(out, status)
+            if direct:
+                return direct
+            # The X11 PID search can omit a mapped client. A nonce title is
+            # only a locator; the independently read window PID MUST match.
+            titled, title_status = lab.run(
+                [paths["xdotool"], "search", "--onlyvisible", "--name", "^" + re.escape(title) + "$"],
+                check=False)
+            candidate = owned_visible_xterm_window(titled, title_status)
+            observed_pid, pid_status = lab.run(
+                [paths["xdotool"], "getwindowpid", candidate], check=False) if candidate else ("", 1)
+            verified = verified_title_window(titled, title_status, observed_pid, pid_status, terminal.pid)
+            lab.report["xterm_probe"].update(
+                title_visible_window_count=len(titled.strip().splitlines()),
+                title_owner_verified=verified is not None)
+            return verified
         # Hosted X11 window mapping may trail the ready Xvfb display. This
         # extends only fixture readiness; a real mapped window is still required.
         window_ids.append(wait_for(search, seconds=18, failure="xterm_window_not_visible"))
