@@ -556,6 +556,19 @@ def run(args):
     except Exception as error:
         report["failure"] = str(error)
     finally:
+        # The preflight probe lives in Lab's private report, not this uploaded
+        # acceptance record. Surface only fixed, bounded classifications so an
+        # X11 fixture failure is diagnosable without logging client/window IDs,
+        # paths, commands or native process output. This is not a PASS receipt.
+        probe = lab.report.get("xterm_probe")
+        if isinstance(probe, dict):
+            report["fixture_xterm_probe"] = {
+                "role": probe.get("role") if probe.get("role") in ("origin", "distractor") else "unknown",
+                "pid_lookup_ok": probe.get("lookup_status") == 0,
+                "single_pid_window": probe.get("visible_pid_window_count") == 1,
+                "single_title_window": probe.get("title_visible_window_count") == 1,
+                "title_owner_verified": probe.get("title_owner_verified") is True,
+            }
         # Preserve the closed tool/exit category of the first failed private
         # fixture command without exposing its stdout, stderr or environment.
         if "command_failure" in lab.report:
