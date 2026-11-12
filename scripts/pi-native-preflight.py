@@ -196,7 +196,9 @@ def linux_desktop(lab, terminal_lifetime=90):
                 raise Unqualified("xterm_fixture_exited")
             out, status = lab.run([paths["xdotool"], "search", "--onlyvisible", "--name", "^" + title + "$"], check=False)
             return out.strip().splitlines()[0] if status == 0 and out.strip() else None
-        window_ids.append(wait_for(search, failure="xterm_window_not_visible"))
+        # Hosted X11 window mapping may trail the ready Xvfb display. This
+        # extends only fixture readiness; a real mapped window is still required.
+        window_ids.append(wait_for(search, seconds=18, failure="xterm_window_not_visible"))
     for window in window_ids:
         # The Xvfb display can be ready before Openbox publishes active-window
         # support. Retry the real WM activation/observation, never assume focus.
