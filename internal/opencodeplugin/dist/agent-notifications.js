@@ -376,11 +376,14 @@ function holdFile(path2) {
 }
 function pinNativeImage() {
   const bun = globalThis.Bun?.version;
-  if (!images2.some((row) => row[0] === process.platform && row[1] === process.arch && row[2] === bun)) unavailable();
+  if (typeof bun !== "string" || bun === "") unavailable();
+  const open = process.platform === "darwin";
+  if (!open && !exact(bun)) unavailable();
   const path2 = realpathSync2(process.execPath), held2 = holdFile(path2);
   try {
-    if (!images2.some((row) => row[0] === process.platform && row[1] === process.arch && row[2] === bun && row[3] === held2.digest)) unavailable();
-    return Object.freeze({ imageSHA256: held2.digest, close: held2.close, verify() {
+    if (!open && !exact(bun, held2.digest)) unavailable();
+    const legacy = images2.some((row) => row[0] === process.platform && row[1] === process.arch && row[2] !== "1.4.4" && row[2] === bun && row[3] === held2.digest);
+    return Object.freeze({ imageSHA256: held2.digest, legacy, close: held2.close, verify() {
       if (globalThis.Bun?.version !== bun || realpathSync2(process.execPath) !== path2) unavailable();
       held2.verify();
     } });
@@ -389,7 +392,7 @@ function pinNativeImage() {
     unavailable();
   }
 }
-var images2, same2;
+var images2, same2, exact;
 var init_native_clock_image = __esm({
   "native-clock-image.mjs"() {
     "use strict";
@@ -406,6 +409,7 @@ var init_native_clock_image = __esm({
       ["win32", "x64", "1.4.2", "ec7a3909bad41ef88e4650f737ab6f0b0c402a7f49a588812d0a79820c2dfc1f"]
     ].map(Object.freeze));
     same2 = (a, b) => ["dev", "ino", "size", "mtimeNs", "ctimeNs"].every((k) => a[k] === b[k]);
+    exact = (bun, digest) => images2.some((row) => row[0] === process.platform && row[1] === process.arch && row[2] === bun && (digest === void 0 || row[3] === digest));
   }
 });
 
@@ -437,7 +441,7 @@ async function createDarwinClock({ signal } = {}) {
     const { dlopen, ptr } = await import("bun:ffi");
     if (signal?.aborted) unavailable();
     if (typeof dlopen !== "function" || typeof ptr !== "function") unavailable();
-    const independentWall = image.imageSHA256 === independentWallImage;
+    const independentWall = !image.legacy;
     const library = dlopen("/usr/lib/libSystem.B.dylib", independentWall ? darwinRealtimeABI : darwinABI);
     releases.push(() => library.close());
     const lib = library.symbols, aligned = (view) => address(ptr(view), view.BYTES_PER_ELEMENT);
@@ -478,13 +482,11 @@ async function createDarwinClock({ signal } = {}) {
     signal?.removeEventListener("abort", abort);
   }
 }
-var independentWallImage;
 var init_darwin_clock = __esm({
   "darwin-clock.mjs"() {
     "use strict";
     init_native_clock_image();
     init_native_clock_contract();
-    independentWallImage = "90e4d03597b03d2051b65b4d793467764e55bacd8e22bf4824479c7233ea0e15";
   }
 });
 
@@ -3044,10 +3046,21 @@ function describeClockPolicy(row) {
   });
 }
 var cells = Object.freeze(clock_qualification_data_default.map(describeClockPolicy));
+var familyReferenceVersion = "2.0.21";
+var inFamilyRange = (version) => {
+  const m = /^(0|[1-9]\d{0,5})\.(0|[1-9]\d{0,5})\.(0|[1-9]\d{0,5})$/.exec(version);
+  return m !== null && m[1] === "2" && (Number(m[2]) > 0 || Number(m[3]) >= 21);
+};
 function findClockCell(rows, goos, goarch, generation, version) {
   if (typeof version !== "string" || !version) return void 0;
-  const matches = rows.filter((cell) => cell.goos === goos && cell.goarch === goarch && cell.generation === generation && cell.images.some((image) => image.version === version));
-  return matches.length === 1 ? matches[0] : void 0;
+  const forVersion = (wanted) => rows.filter((cell) => cell.goos === goos && cell.goarch === goarch && cell.generation === generation && cell.images.some((image) => image.version === wanted));
+  const matches = forVersion(version);
+  if (matches.length === 1) return matches[0];
+  if (goos === "darwin" && goarch === "arm64" && generation === "v2" && inFamilyRange(version)) {
+    const reference = forVersion(familyReferenceVersion);
+    if (reference.length === 1) return reference[0];
+  }
+  return void 0;
 }
 function selectClockCell(generation, version) {
   const goos = process.platform === "win32" ? "windows" : process.platform;
@@ -3302,7 +3315,7 @@ function createPreparedDelivery({ registry, origin: origin2, policy, isOwned, on
         }
         source = acquired;
         activation = void 0;
-        if (policy.rawKind !== "linux-boottime" && !policy.images?.some((image) => image.imageSHA256 === source.imageSHA256)) bad();
+        if (policy.rawKind !== "linux-boottime" && policy.rawKind !== "darwin-monotonic-raw" && !policy.images?.some((image) => image.imageSHA256 === source.imageSHA256)) bad();
         for (let round = 0; round < 3; round++) {
           const before = sample();
           const r = await registry.clock({ signal: attempt.controller.signal, isCurrent, deadline: attempt.deadline });

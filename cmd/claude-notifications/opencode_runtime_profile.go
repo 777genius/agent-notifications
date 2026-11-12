@@ -43,6 +43,9 @@ type runtimeLiveImage struct {
 	GOOS, GOARCH, Entry, SHA256     string
 	Device, Inode, ProcessStartTick uint64
 	NativePID                       int
+	// Publisher is true only when the OS verified this exact live process as the
+	// official OpenCode publisher. It is identity evidence, not a reader or clock grant.
+	Publisher bool
 	// Complete OS fingerprint; lifetime handles deliberately stay outside equality.
 	fingerprint [32]byte
 }

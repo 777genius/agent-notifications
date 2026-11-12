@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"os"
 	"runtime"
+	"sync"
 	"syscall"
 	"time"
 	"unicode/utf8"
@@ -123,6 +124,7 @@ func holdRuntimeLiveImage(ctx context.Context, in runtimeProfileInput) (*runtime
 	release := func() { target.Close(); image.Close(); closeWatch() }
 	// SDK vnode continuity plus retained files is proof under the trusted
 	// cooperative immutable-image assumption, never arbitrary RAM immutability.
+	var publisher runtimeDarwinPublisherCache
 	read := func(ctx context.Context) (runtimeLiveImage, error) {
 		fail := func() (runtimeLiveImage, error) { return runtimeLiveImage{}, errRuntimePort }
 		if ctx.Err() != nil || os.Getppid() != in.NativePID || !runtimeDarwinUnchanged(watch) {
@@ -152,11 +154,6 @@ func holdRuntimeLiveImage(ctx context.Context, in runtimeProfileInput) (*runtime
 		}
 		ha, e := runtimeFileHash(ctx, image)
 		hb, e1 := runtimeFileHash(ctx, target)
-		// The observed 2.2.6 Darwin candidate additionally requires the live
-		// kernel guest's publisher. This check is not a reader or clock grant.
-		if e == nil && ha == "90e4d03597b03d2051b65b4d793467764e55bacd8e22bf4824479c7233ea0e15" && !runtimeDarwinOpenCodePublisher(in.NativePID) {
-			return fail()
-		}
 		end, e2 := runtimeDarwinProcessInfo(in.NativePID)
 		na, e3 := os.Stat(live.Name)
 		nb, e4 := os.Stat(in.HostExecutable)
@@ -165,7 +162,9 @@ func holdRuntimeLiveImage(ctx context.Context, in runtimeProfileInput) (*runtime
 		}
 		// Compatibility normalization must never normalize continuity evidence.
 		encoded, _ := json.Marshal(runtimeDarwinSnapshot{Process: live, FileCPU: cpu, FileSubtype: subtype, SHA: ha, Device: device, Inode: inode, Size: a.Size(), Modified: a.ModTime().UTC().Format(time.RFC3339Nano), Mode: uint32(a.Mode())})
-		return runtimeLiveImage{GOOS: "darwin", GOARCH: runtime.GOARCH, Entry: entry, SHA256: ha, NativePID: in.NativePID, fingerprint: sha256.Sum256(encoded)}, nil
+		fingerprint := sha256.Sum256(encoded)
+		return runtimeLiveImage{GOOS: "darwin", GOARCH: runtime.GOARCH, Entry: entry, SHA256: ha, NativePID: in.NativePID,
+			Publisher: publisher.verified(fingerprint, in.NativePID, entry), fingerprint: fingerprint}, nil
 	}
 	first, err := read(ctx)
 	if err != nil {
@@ -177,6 +176,29 @@ func holdRuntimeLiveImage(ctx context.Context, in runtimeProfileInput) (*runtime
 
 func runtimeDarwinWatch(pid int) int     { return int(C.an_runtime_watch(C.int(pid))) }
 func runtimeDarwinUnchanged(fd int) bool { return C.an_runtime_unchanged(C.int(fd)) == 1 }
+
+// runtimeDarwinPublisherCache answers the OS publisher check once per verified
+// live image fingerprint: a cold SecCode check costs seconds, while an unchanged
+// process and image keep the same answer. Only the official arm64 serve entry is
+// asked; every other image stays unverified.
+type runtimeDarwinPublisherCache struct {
+	mu          sync.Mutex
+	fingerprint [32]byte
+	known, ok   bool
+}
+
+func (c *runtimeDarwinPublisherCache) verified(fingerprint [32]byte, pid int, entry string) bool {
+	if entry != "serve" || runtime.GOARCH != "arm64" {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.known || c.fingerprint != fingerprint {
+		c.fingerprint, c.known, c.ok = fingerprint, true, runtimeDarwinOpenCodePublisher(pid)
+	}
+	return c.ok
+}
+
 func runtimeDarwinOpenCodePublisher(pid int) bool {
 	return pid > 0 && uint64(pid) <= 0x7fffffff && C.an_runtime_opencode_publisher(C.int(pid)) == 1
 }

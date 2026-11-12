@@ -17,9 +17,11 @@ test('clock selection refuses versions outside the compiled platform policy', ()
     const cell = selectClockCell(generation, generation === 'v1' ? '1.18.33' : '2.0.21');
     if (!cell) continue; // No compiled policy for this test platform.
     for (const image of cell.images) assert.equal(selectClockCell(generation, image.version), cell);
-    for (const version of ['', null, 0, '999.0.0']) assert.equal(selectClockCell(generation, version), undefined);
+    for (const version of ['', null, 0, '999.0.0', '3.0.0', '2.0.20', '2.2.7-beta']) assert.equal(selectClockCell(generation, version), undefined);
   }
-  assert.equal(selectClockCell('v2', '2.2.6'), undefined);
+  // darwin/arm64 V2 is admitted by family range (Go decides identity); other platforms stay exact.
+  const family = process.platform === 'darwin' && process.arch === 'arm64';
+  assert.equal(selectClockCell('v2', '2.2.6'), family ? selectClockCell('v2', '2.0.21') : undefined);
   assert.equal(selectClockCell('v2'), undefined);
   // Isolated data only: this exercises multiple policies without registering any.
   const base = { goos: 'darwin', goarch: 'arm64', generation: 'v2' };
@@ -31,7 +33,8 @@ test('clock selection refuses versions outside the compiled platform policy', ()
   assert.equal(findClockCell([next, next], 'darwin', 'arm64', 'v2', '2.2.6'), undefined);
 });
 
-test('the official 2.2.6 candidate can be described but cannot select a policy', () => {
+test('the official 2.2.6 candidate can be described and selects only the family reference policy', () => {
+  const family = process.platform === 'darwin' && process.arch === 'arm64';
   // The source root and numeric bounds are synthetic test data, not evidence.
   const candidate = { protocol: 1, generation: 'v2', goos: 'darwin', goarch: 'arm64',
     ...describeClockSource('darwin', 'arm64'),
@@ -43,7 +46,7 @@ test('the official 2.2.6 candidate can be described but cannot select a policy',
     r => { r.goarch = 'amd64'; }, r => { r.images[0].version = '2.2.7'; }]) {
     const bad = structuredClone(candidate); change(bad); assert.throws(() => describeClockPolicy(bad));
   }
-  assert.equal(selectClockCell('v2', '2.2.6'), undefined);
+  assert.equal(selectClockCell('v2', '2.2.6'), family ? selectClockCell('v2', '2.0.21') : undefined);
 });
 
 test('actual LP64/Win64 ABI contracts use output pointers, unsigned counters and VOID status', () => {
@@ -570,13 +573,21 @@ test('pre-epoch native birth stays denied without rebirth or provenance replacem
 // An authenticated but different native image must not inherit the descriptor.
 // Both hashes are inert test identities; production pins are untouched.
 test('well-formed wrong native image denies before counter/helper and disposes the binding', async () => {
-  for (const kind of ['darwin-monotonic-raw', 'windows-interrupt-precise']) {
-    const f = deliveryFixture(kind); f.source.imageSHA256 = 'b'.repeat(64);
-    assert.equal(await f.delivery.activate(), false);
-    assert.equal(f.calls.includes('sample'), false); assert.equal(f.helpers.length, 0);
-    assert.equal(f.closes(), 1); assert.equal(f.cancels(), 1);
-    f.delivery.dispose(); assert.equal(f.closes(), 1);
-  }
+  const f = deliveryFixture('windows-interrupt-precise'); f.source.imageSHA256 = 'b'.repeat(64);
+  assert.equal(await f.delivery.activate(), false);
+  assert.equal(f.calls.includes('sample'), false); assert.equal(f.helpers.length, 0);
+  assert.equal(f.closes(), 1); assert.equal(f.cancels(), 1);
+  f.delivery.dispose(); assert.equal(f.closes(), 1);
+});
+
+// Darwin identity belongs to the Go helper (live image plus verified publisher). The
+// JS layer must not re-pin release hashes, or every new official release is refused.
+test('darwin does not decide native image identity from a release hash', async () => {
+  const f = deliveryFixture('darwin-monotonic-raw'); f.source.imageSHA256 = 'b'.repeat(64);
+  try {
+    assert.equal(await f.delivery.activate(), true);
+    assert.equal(f.calls.includes('sample'), true);
+  } finally { f.delivery.dispose(); }
 });
 
 // Cancellation alone does not prove an unresolved preparation is bounded.

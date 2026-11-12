@@ -9,8 +9,10 @@ import (
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/opencodehost"
 )
 
+// runtimeImageKey is the identity every candidate, reader and clock lookup uses.
+// A publisher-verified family member resolves to the reviewed reference image.
 func runtimeImageKey(live runtimeLiveImage) opencodecodec.ImageKey {
-	return opencodecodec.ImageKey{GOOS: live.GOOS, GOARCH: live.GOARCH, Entry: live.Entry, SHA256: live.SHA256}
+	return qualificationKey(live)
 }
 
 // The entry is derived from the held native argv, never from event assertions.
@@ -57,7 +59,13 @@ func selectBoundNativeObserver(e opencodehost.VersionEvidence, actual opencodeho
 
 func qualifyRuntimeObserver(profile opencodehost.Profile, live runtimeLiveImage) runtimeObserverGeneration {
 	candidate, ok := opencodecodec.LookupCandidate(runtimeImageKey(live))
-	if !ok || profile.Version != candidate.Version || live.NativePID <= 0 {
+	// An exact image must match its qualified version. A family member carries the
+	// independently probed release version, which must stay inside the family range.
+	versionOK := profile.Version == candidate.Version
+	if familyEligible(live) {
+		versionOK = familyVersionOK(profile.Version)
+	}
+	if !ok || !versionOK || live.NativePID <= 0 {
 		return observerUnverified
 	}
 	// Each held native lease supplies its own private lifetime identity.
@@ -79,7 +87,7 @@ func qualifyRuntimeObserver(profile opencodehost.Profile, live runtimeLiveImage)
 	if bound {
 		identity := live.SHA256 + ":" + strconv.Itoa(live.NativePID) + ":" + strconv.FormatUint(live.ProcessStartTick, 10) + ":" +
 			strconv.FormatUint(live.Device, 10) + ":" + strconv.FormatUint(live.Inode, 10) + ":" + hex.EncodeToString(live.fingerprint[:])
-		generation := selectBoundNativeObserver(opencodehost.VersionEvidence{Version: profile.Version, Source: "host_runtime", ProbeStatus: "ok", ExecutableIdentity: identity}, reader)
+		generation := selectBoundNativeObserver(opencodehost.VersionEvidence{Version: candidate.Version, Source: "host_runtime", ProbeStatus: "ok", ExecutableIdentity: identity}, reader)
 		if _, clockErr := opencodeevent.SelectTrustedImageClock(runtimeImageKey(live)); clockErr != nil {
 			return observerUnverified
 		}
@@ -93,19 +101,20 @@ func qualifyRuntimeObserver(profile opencodehost.Profile, live runtimeLiveImage)
 // The reader tuple comes from independent qualification data, never by cloning
 // NativeObserverEvidence. Image and platform still come from this held parent.
 func runtimeReaderTuple(live runtimeLiveImage, version string) (opencodehost.NativeObserverTuple, bool) {
-	if _, ok := opencodecodec.LookupCandidate(runtimeImageKey(live)); !ok {
+	key := runtimeImageKey(live)
+	if _, ok := opencodecodec.LookupCandidate(key); !ok {
 		return opencodehost.NativeObserverTuple{}, false
 	}
 	entry, recognized := runtimeReaderEntry(live.Entry)
 	if !recognized {
 		return opencodehost.NativeObserverTuple{}, false
 	}
-	descriptor, described := opencodehost.NativeObserverEvidenceForEntry(version, live.GOOS, live.GOARCH, live.SHA256, entry)
+	descriptor, described := opencodehost.NativeObserverEvidenceForEntry(version, key.GOOS, key.GOARCH, key.SHA256, entry)
 	if !described {
 		return opencodehost.NativeObserverTuple{}, false
 	}
 	for _, reader := range qualifiedRuntimeReaders {
-		if reader == descriptor.Tuple && reader.Version == version && reader.ImageSHA256 == live.SHA256 && reader.GOOS == live.GOOS && reader.GOARCH == live.GOARCH && reader.Entry == entry {
+		if reader == descriptor.Tuple && reader.Version == version && reader.ImageSHA256 == key.SHA256 && reader.GOOS == key.GOOS && reader.GOARCH == key.GOARCH && reader.Entry == entry {
 			return reader, true
 		}
 	}

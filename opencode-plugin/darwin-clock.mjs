@@ -1,7 +1,6 @@
 import { pinNativeImage } from './native-clock-image.mjs';
 import { address, closeAll, createNativeClock, darwinABI, darwinRealtimeABI, darwinBoot, machNS, positiveNS, realtimeNS, unavailable } from './native-clock-contract.mjs';
 
-const independentWallImage = '90e4d03597b03d2051b65b4d793467764e55bacd8e22bf4824479c7233ea0e15';
 
 // Async ABI preparation only; the returned sample/dispose methods are sync.
 export async function createDarwinClock({ signal } = {}) {
@@ -14,7 +13,7 @@ export async function createDarwinClock({ signal } = {}) {
     const { dlopen, ptr } = await import('bun:ffi');
     if (signal?.aborted) unavailable();
     if (typeof dlopen !== 'function' || typeof ptr !== 'function') unavailable();
-    const independentWall = image.imageSHA256 === independentWallImage;
+    const independentWall = !image.legacy;
     const library = dlopen('/usr/lib/libSystem.B.dylib', independentWall ? darwinRealtimeABI : darwinABI);
     releases.push(() => library.close());
     const lib = library.symbols, aligned = view => address(ptr(view), view.BYTES_PER_ELEMENT);
