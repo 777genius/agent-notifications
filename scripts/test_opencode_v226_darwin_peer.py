@@ -1,4 +1,5 @@
 import json
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -74,6 +75,31 @@ class NativePeerParserTest(unittest.TestCase):
     def test_invalid_native_timestamp_fails_closed(self):
         bad = {**self.event, 'created': True}
         self.assertEqual(self.read([self.marker, bad]).error, 'peer_feed_failed')
+
+    def test_reader_failure_at_close_cannot_be_accepted(self):
+        rows = [
+            {'type': kind, 'id': f'evt_{index}', 'createdMs': index + 1}
+            for index, kind in enumerate((
+                'session.execution.started',
+                'session.step.ended',
+                'session.execution.succeeded',
+            ))
+        ]
+        peer = NativePeerObservation(
+            SimpleNamespace(pid=1234, poll=lambda: None), 12345, '/TEST-unused')
+        peer.expected_start = ['1', '2']
+        peer.local_port = 54321
+        peer.events = {
+            (row['type'], row['id'], row['createdMs'], 'ses_test'): 1
+            for row in rows
+        }
+        peer._check_pair = lambda: None
+        peer._tool = lambda *args: SimpleNamespace(returncode=1)
+        # Simulate the reader noticing a duplicate event while the socket
+        # check was in progress; close() must surface the joined reader error.
+        peer.close = lambda: setattr(peer, 'error', 'peer_feed_failed')
+        with self.assertRaisesRegex(RuntimeError, 'peer_feed_failed'):
+            peer.verify_and_close(rows, 'ses_test')
 
 
 if __name__ == '__main__':

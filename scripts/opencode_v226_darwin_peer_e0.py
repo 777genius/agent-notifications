@@ -143,6 +143,10 @@ class NativePeerObservation:
             time.sleep(.05)
         self._check_pair()
         self.close()
+        if self.error:
+            # close() joins the reader. Fail closed if it rejected an event
+            # while the concurrent socket ownership check was in progress.
+            raise RuntimeError('peer_feed_failed')
         end = time.monotonic() + 10
         while True:
             if self.host.poll() is not None:

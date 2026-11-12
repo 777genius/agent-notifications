@@ -121,8 +121,21 @@ class SDKSourceTest(unittest.TestCase):
                                       ('tool.sh', b'#!/bin/sh\nexit 0\n')]:
                     member = tarfile.TarInfo('package/' + name)
                     member.size = len(content)
+                    member.mode = 0o755 if name == 'tool.sh' else 0o644
                     tar.addfile(member, io.BytesIO(content))
             self.assertTrue(semantic.sdk_contents_match_source(archive, root, revision))
+
+            # Byte-identical package content is insufficient if a tracked
+            # executable loses its executable bit during packaging.
+            with tarfile.open(archive, 'w:gz') as tar:
+                for name, content in [('package.json', manifest), ('index.js', b'original'),
+                                      ('tool.sh', b'#!/bin/sh\nexit 0\n')]:
+                    member = tarfile.TarInfo('package/' + name)
+                    member.size = len(content)
+                    member.mode = 0o644
+                    tar.addfile(member, io.BytesIO(content))
+            with self.assertRaisesRegex(ValueError, 'executable mode'):
+                semantic.sdk_contents_match_source(archive, root, revision)
 
             # Insert a symlink in the Git tree without needing OS symlink rights.
             link_sha = subprocess.check_output(

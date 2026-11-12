@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { build } from 'esbuild';
+import { fileURLToPath } from 'node:url';
 
 // Isolated composition test: stubs the *qualified* Go/clock child ports. A
 // fabricated host version must never be mistaken for installed native E2E.
@@ -19,7 +20,7 @@ test('V2 matches independently admitted host version and revokes on live context
     'universal-agent-plugins-opencode-events/v1': 'export const createObserver=()=>{};',
     'universal-agent-plugins-opencode-events/v2': `export const createV2Observer=({runtimeEligibility})=>{ ${port}.eligibility=runtimeEligibility; return {start(){${port}.starts++},dispose(){${port}.stops++}};};`,
   };
-  const result = await build({ entryPoints: [new URL('./plugin.mjs', import.meta.url).pathname],
+  const result = await build({ entryPoints: [fileURLToPath(new URL('./plugin.mjs', import.meta.url))],
     bundle: true, write: false, platform: 'node', format: 'esm',
     plugins: [{ name: 'v2-boundary-ports', setup(b) {
       b.onResolve({ filter: /.*/ }, args => Object.hasOwn(stubs, args.path) ? { path: args.path, namespace: 'boundary' } : undefined);

@@ -74,7 +74,7 @@ def sdk_contents_match_source(tarball, checkout, revision):
         # (symlink/submodule) makes the source/package audit unrepresentable.
         if kind != b'blob' or mode not in (b'100644', b'100755'):
             raise ValueError('SDK source commit contains non-regular entry')
-        tracked[name.decode('utf-8')] = object_id.decode('ascii')
+        tracked[name.decode('utf-8')] = (object_id.decode('ascii'), mode == b'100755')
     # npm packs the package.json `files` allowlist, not every tracked test,
     # fixture and script in the source tree. This audited SDK uses flat literal
     # file names; reject patterns/directories rather than guessing npm semantics.
@@ -107,8 +107,11 @@ def sdk_contents_match_source(tarball, checkout, revision):
                 raise ValueError('SDK tarball member is unreadable')
             data = stream.read()
             object_id = subprocess.check_output(['git', '-C', str(checkout), 'hash-object', '--stdin'], input=data).decode().strip()
-            if tracked.get('sdk/opencode-js/' + relative) != object_id:
+            source = tracked.get('sdk/opencode-js/' + relative)
+            if source is None or source[0] != object_id:
                 raise ValueError('SDK packaged file differs from source commit')
+            if bool(member.mode & 0o111) != source[1]:
+                raise ValueError('SDK packaged executable mode differs from source commit')
     if not seen:
         raise ValueError('SDK tarball is empty')
     if seen != expected:
