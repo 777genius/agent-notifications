@@ -66,6 +66,69 @@ class PrerequisiteEvidenceTests(unittest.TestCase):
                                                  owner.replace("\\n", "\n"), owner_status, launched),
                     expected)
 
+    def test_xterm_relaunch_requires_fresh_owned_window_proof(self):
+        class Lab:
+            def __init__(self):
+                self.report, self.stopped = {}, []
+            def stop(self, child):
+                self.stopped.append(child)
+
+        lab, starts = Lab(), []
+        def launch():
+            child = object()
+            starts.append(child)
+            return child
+        def observe(child):
+            if child is starts[0]:
+                raise MODULE.Unqualified("xterm_window_not_visible")
+            return "12345"
+
+        self.assertEqual(MODULE.mapped_xterm_with_one_relaunch(lab, launch, observe), "12345")
+        self.assertEqual(len(starts), 2)
+        self.assertEqual(lab.stopped, [starts[0]])
+        self.assertIs(lab.report["xterm_mapping_relaunch"], True)
+
+    def test_xterm_relaunch_fails_if_both_fixtures_unmapped(self):
+        class Lab:
+            def __init__(self):
+                self.report, self.stopped = {}, []
+            def stop(self, child):
+                self.stopped.append(child)
+
+        lab, starts = Lab(), []
+        def launch():
+            child = object()
+            starts.append(child)
+            return child
+        def observe(_child):
+            raise MODULE.Unqualified("xterm_window_not_visible")
+
+        with self.assertRaisesRegex(MODULE.Unqualified, "^xterm_window_not_visible$"):
+            MODULE.mapped_xterm_with_one_relaunch(lab, launch, observe)
+        self.assertEqual(len(starts), 2)
+        self.assertEqual(lab.stopped, [starts[0]])
+
+    def test_xterm_relaunch_never_retries_other_errors(self):
+        class Lab:
+            def __init__(self):
+                self.report, self.stopped = {}, []
+            def stop(self, child):
+                self.stopped.append(child)
+
+        for failure in ("xterm_fixture_exited", "fixture_command_failed"):
+            lab, starts = Lab(), []
+            def launch():
+                starts.append(object())
+                return starts[-1]
+            def observe(_child):
+                raise MODULE.Unqualified(failure)
+            with self.subTest(failure=failure):
+                with self.assertRaisesRegex(MODULE.Unqualified, "^" + failure + "$"):
+                    MODULE.mapped_xterm_with_one_relaunch(lab, launch, observe)
+                self.assertEqual(len(starts), 1)
+                self.assertEqual(lab.stopped, [])
+                self.assertNotIn("xterm_mapping_relaunch", lab.report)
+
     def test_failed_fixture_command_never_exports_raw_process_output(self):
         with tempfile.TemporaryDirectory(prefix="TEST-pi-private-report-") as name:
             report = {}
