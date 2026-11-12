@@ -82,9 +82,10 @@ class Lab:
         if len(out) + len(err) > 256 * 1024:
             raise Unqualified("fixture_output_limit")
         if check and proc.returncode:
+            # Even CI fixture failures may contain private process output.
+            # Only closed, content-free diagnostics may enter uploaded reports.
             self.report["command_failure"] = {"tool": Path(argv[0]).name, "exit": proc.returncode,
-                                               "stdout": out.decode(errors="replace")[-6000:],
-                                               "stderr": err.decode(errors="replace")[-4000:]}
+                                               "stdout_bytes": len(out), "stderr_bytes": len(err)}
             raise Unqualified("fixture_command_failed")
         return out.decode("utf-8"), proc.returncode
 

@@ -1,5 +1,7 @@
 """Reject false prerequisite success independently of native desktop availability."""
 import importlib.util
+import json
+import sys
 from pathlib import Path
 import tempfile
 import unittest
@@ -63,6 +65,23 @@ class PrerequisiteEvidenceTests(unittest.TestCase):
                     MODULE.verified_title_window(titled.replace("\\n", "\n"), status,
                                                  owner.replace("\\n", "\n"), owner_status, launched),
                     expected)
+
+    def test_failed_fixture_command_never_exports_raw_process_output(self):
+        with tempfile.TemporaryDirectory(prefix="TEST-pi-private-report-") as name:
+            report = {}
+            lab = MODULE.Lab(Path(name), report)
+            sentinel = "TEST_PRIVATE_FIXTURE_OUTPUT"
+            with self.assertRaisesRegex(MODULE.Unqualified, "fixture_command_failed"):
+                lab.run([sys.executable, "-c",
+                         "import sys; sys.stdout.write('TEST_PRIVATE_FIXTURE_OUTPUT'); "
+                         "sys.stderr.write('TEST_PRIVATE_FIXTURE_OUTPUT'); sys.exit(23)"])
+            failure = report["command_failure"]
+            self.assertEqual(failure["exit"], 23)
+            self.assertEqual(failure["stdout_bytes"], len(sentinel))
+            self.assertEqual(failure["stderr_bytes"], len(sentinel))
+            self.assertNotIn(sentinel, json.dumps(report))
+            self.assertNotIn("stdout", failure)
+            self.assertNotIn("stderr", failure)
 
     def test_cue_has_real_nonzero_pcm_without_external_assets(self):
         with tempfile.TemporaryDirectory(prefix="TEST-pi-cue-") as name:
