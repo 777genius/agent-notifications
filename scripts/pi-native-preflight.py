@@ -147,6 +147,15 @@ def wait_for(predicate, seconds=8, failure="fixture_readiness_timeout"):
     raise Unqualified(failure)
 
 
+def owned_visible_xterm_window(stdout, exit_code):
+    """Accept exactly one mapped X11 window owned by the launched xterm PID."""
+    candidates = stdout.strip().splitlines()
+    if exit_code != 0 or len(candidates) != 1:
+        return None
+    xid = candidates[0].strip()
+    return xid if xid.isascii() and xid.isdecimal() and int(xid) > 0 else None
+
+
 def linux_desktop(lab, terminal_lifetime=90):
     """Owned X11/PulseAudio session reused by the actual installed-Pi fixture."""
     names = ("dbus-daemon", "Xvfb", "openbox", "dunst", "xterm", "xdotool", "sleep", "pulseaudio", "pactl", "parec", "aplay", "notify-send", "ffmpeg")
@@ -194,8 +203,12 @@ def linux_desktop(lab, terminal_lifetime=90):
         def search():
             if terminal.poll() is not None:
                 raise Unqualified("xterm_fixture_exited")
-            out, status = lab.run([paths["xdotool"], "search", "--onlyvisible", "--name", "^" + title + "$"], check=False)
-            return out.strip().splitlines()[0] if status == 0 and out.strip() else None
+            # An owned process PID is stronger evidence than a mutable X11
+            # title. The installed Pi product E2E already uses this query.
+            out, status = lab.run([paths["xdotool"], "search", "--onlyvisible", "--pid", str(terminal.pid)], check=False)
+            lab.report["xterm_probe"] = {"role": role, "lookup_status": status,
+                                         "visible_pid_window_count": len(out.strip().splitlines())}
+            return owned_visible_xterm_window(out, status)
         # Hosted X11 window mapping may trail the ready Xvfb display. This
         # extends only fixture readiness; a real mapped window is still required.
         window_ids.append(wait_for(search, seconds=18, failure="xterm_window_not_visible"))

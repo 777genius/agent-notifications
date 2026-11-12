@@ -36,6 +36,17 @@ class PrerequisiteEvidenceTests(unittest.TestCase):
         self.assertIs(result["desktop_qualified"], False)
         self.assertEqual(result["scope"], "synthetic_native_observers_only")
 
+    def test_visible_xterm_window_requires_one_owned_pid_match(self):
+        # Production caller selects --pid <launched xterm PID> first.
+        for output, code, expected in (
+            ("12345\\n", 0, "12345"), (" 12345\\n", 0, "12345"),
+            ("", 1, None), ("12345\\n", 1, None),
+            ("12345\\n67890\\n", 0, None),
+            ("0\\n", 0, None), ("not-a-window\\n", 0, None),
+        ):
+            with self.subTest(output=output, code=code):
+                self.assertEqual(MODULE.owned_visible_xterm_window(output.replace("\\n", "\n"), code), expected)
+
     def test_cue_has_real_nonzero_pcm_without_external_assets(self):
         with tempfile.TemporaryDirectory(prefix="TEST-pi-cue-") as name:
             path = Path(name) / "cue.wav"
