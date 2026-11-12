@@ -209,11 +209,46 @@ func portBoundedDiagnostic(name string) ([]byte, error) {
 	return io.ReadAll(io.LimitReader(f, 4097))
 }
 func portFailureDiagnostics(prefix string) string {
+	// TEST-only CI failures must never echo arbitrary fixture process output,
+	// even when a native host unexpectedly fails before its proof is published.
 	stage, stageErr := portBoundedDiagnostic(prefix + ".parent-stage")
 	status, statusErr := portBoundedDiagnostic(prefix + ".done")
 	diagnostic, diagnosticErr := portBoundedDiagnostic(prefix + ".stderr")
 	stdout, stdoutErr := portBoundedDiagnostic(prefix + ".receipt")
-	return fmt.Sprintf("parent stage=%q (%v); wait status=%q (%v); stderr=%q (%v); stdout=%q (%v)", stage, stageErr, status, statusErr, diagnostic, diagnosticErr, stdout, stdoutErr)
+	safeStage := "unrecognized"
+	switch string(stage) {
+	case "await_launch", "launch_read", "launch_invalid", "child_streams", "child_start_wait":
+		safeStage = string(stage)
+	}
+	safeWait := "unrecognized"
+	if string(status) == "ok" {
+		safeWait = "ok"
+	}
+	return fmt.Sprintf("parent stage=%s (read=%t); wait status=%s (read=%t); stderr_bytes=%d (read=%t); stdout_bytes=%d (read=%t)",
+		safeStage, stageErr == nil, safeWait, statusErr == nil,
+		len(diagnostic), diagnosticErr == nil, len(stdout), stdoutErr == nil)
+}
+
+// A failed native probe can emit arbitrary private stdout/stderr or a path
+// in an exec error. None of those strings may reach GitHub Actions test logs.
+func TestRuntimePortFailureDiagnosticsNeverLeaksRawOutput(t *testing.T) {
+	prefix := filepath.Join(t.TempDir(), "TEST-native")
+	for ext, value := range map[string]string{
+		".parent-stage": "TEST_PRIVATE_STAGE",
+		".done":         "start: TEST_PRIVATE_EXEC_PATH",
+		".stderr":       "TEST_PRIVATE_STDERR",
+		".receipt":      "TEST_PRIVATE_STDOUT",
+	} {
+		if err := os.WriteFile(prefix+ext, []byte(value), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	result := portFailureDiagnostics(prefix)
+	if strings.Contains(result, "TEST_PRIVATE") || !strings.Contains(result, "stderr_bytes=") ||
+		!strings.Contains(result, "stdout_bytes=") || !strings.Contains(result, "parent stage=unrecognized") ||
+		!strings.Contains(result, "wait status=unrecognized") {
+		t.Fatal("native failure diagnostic missing redaction or content-free evidence")
+	}
 }
 func portAssertDiagnostics(t *testing.T, prefix string) {
 	t.Helper()
