@@ -82,3 +82,68 @@ clock policy by the host version from the independently verified runtime
 profile. Distinct qualified versions can therefore use distinct clock bounds;
 unknown, missing or ambiguous versions cannot fall back to the older policy.
 This does not add a 2.2.6 policy or authorize an unqualified image.
+
+
+## Native 2.2.6 producer/provenance decision — 2026-11-12
+
+**Decision (three review lenses: source, security, acceptance): keep 2.2.6
+production admission closed.** The official 2.2.6 public \`event.subscribe\`
+and \`/api/event\` expose JS-origin events through an ephemeral, bounded
+SSE subscriber, not an independent original-event producer receipt. The
+4,096-frame per-subscriber queue may disconnect on overflow; a
+\`server.connected\` marker is a connection boundary, not a replay cursor.
+\`created\` uses the runtime/Effect wall-clock path (default \`Date.now\`);
+a process-owned socket or signed executable alone cannot prove the event
+publisher, source-clock origin, or bounded source-to-receiver delay. Exact
+official bytes observed on Linux, macOS and Windows and the Linux \`/proc\`
+and Darwin \`libproc\` socket E0 witnesses are useful negative/source
+evidence, but never product R/Q/T/ABI qualification.
+
+### Smallest safe native reader contract (not implemented / not qualified)
+
+1. **R / first-party source:** obtain events from a *host-core-owned* event
+   source before an arbitrary JS plugin or mutable public SSE subscriber
+   can forge fields. Bind the received original event ID, event type, root
+   session lineage and source generation to a live OS-held process
+   identity (PID plus start/exec epoch and executable identity). Use a
+   private OS-held channel or another independently demonstrated native
+   source primitive. Socket-to-PID ownership proves transport custody
+   only; it is insufficient without provenance of the core producer.
+   A plugin-provided nonce, digest, version or envelope is not a trust root.
+2. **Q / source and ABI:** qualify the *actual embedded Bun 1.4.4* ABI on
+   each target platform, and independently read raw monotonic plus wall
+   coordinates at the native source and receiver. Specify the coordinate
+   translation/error bound before taking samples. No JS \`Date.now\`,
+   borrowed 2.0.21 image row, semver inheritance or observed maximum
+   may generate a clock grant.
+3. **T / ordering and loss:** prove bounded source→reader→Go admission
+   delay, stable per-session order, fresh IDs and generation, bounded
+   queues, explicit failure on disconnect/overflow/unknown watermark,
+   replay, PID replacement, exec, cancellation and revocation. No
+   automatic resume from a live-only feed without a producer-backed
+   replay/durable cursor.
+4. **Delivery / final-SHA:** after R/Q/T/ABI and the UAP private binder
+   are independently reviewed and qualified, run **installed**, genuine
+   consented OpenCode 2.2.6 completion, question, permission and both
+   terminal-error scenarios; require per-stage fresh webhook receipts
+   and distinct correlated native desktop OS banner receipts. Include
+   same-run replay/revoke/in-flight/restart negatives and full
+   macOS/Linux/Windows final-SHA matrices. Until then keep the existing
+   V1 / 2.0.21 qualified paths unchanged.
+
+**Implementation boundary:** first investigate whether unmodified official
+2.2.6 exposes an independently verifiable host-core source primitive.
+If it does not, this immutable released binary cannot receive a product
+grant under the current trust model via its public SSE/plugin API. The
+minimal next engineering prerequisite is a first-party host-core
+transport/reader contract (possibly upstream), not additional negative
+source-only probes. Reuse the existing Go admission and UAP binder; do
+not add a generic event broker, background service, broad feature flag,
+or fake local signing key. This is an explicit unresolved dependency,
+not permission to weaken native admission.
+
+**Current acceptance flags:** \`nativeObserverQualified=false\`,
+\`nativeClockQualified=false\`,
+\`notificationDeliveryQualified=false\`. #643 remains Draft and v1.51.3
+remains unpublished. Pi #644 premerge installed E2E and the verified
+post-merge matrices are separate evidence and cannot qualify 2.2.6.
