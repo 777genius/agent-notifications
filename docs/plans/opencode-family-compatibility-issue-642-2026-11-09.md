@@ -147,3 +147,24 @@ not permission to weaken native admission.
 `notificationDeliveryQualified=false`. #643 remains Draft and v1.51.3
 remains unpublished. Pi #644 premerge installed E2E and the verified
 post-merge matrices are separate evidence and cannot qualify 2.2.6.
+
+## Owner decision, 2026-11-13: family admission on macOS arm64
+
+The owner chose range support over per-release pinning for official macOS arm64
+OpenCode 2.x, accepting the weaker evidence this implies. This supersedes the
+earlier "keep 2.2.6 production admission closed" position for that one platform.
+
+- Admission is by who the live process is: OS-verified publisher (Developer ID,
+  Team `5NZ4Q7NXJ4`, identifier `opencode`) plus a plain `2.x.y` at or above
+  `2.0.21`. The process then resolves to the reviewed 2.0.21 reference image, so
+  reader and clock rows are reused, not newly proven per release.
+- Unchanged: Linux, Windows, V1, the wire format, and the runtime clock anchors.
+  An unreviewed runtime that disagrees with the independent Go clock is refused.
+- Residual risks, accepted: the signature verifies the executable, not the code it
+  runs (`DYLD_*`, `BUN_BE_BUN`); reader and event-name semantics are assumed
+  stable across 2.x; plain `serve` shows rare missed deliveries (4 of 53 runs,
+  cause not found).
+- Evidence: official 2.2.6 and 2.2.7 darwin arm64 delivery through the repo
+  harness, refusal on an ad-hoc re-signed copy, and installed clock-skew refusal.
+- Follow-up: V1 above 1.18.33 and darwin amd64 are not covered; the event path
+  does not yet know the generation.

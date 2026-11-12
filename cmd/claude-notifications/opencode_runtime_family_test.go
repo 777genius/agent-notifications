@@ -36,6 +36,9 @@ func TestFamilyAdmitsOnlyVerifiedPublisherInRange(t *testing.T) {
 		{"v1 release", familyLive(unknown, true), "1.19.4", observerUnverified},
 		{"prerelease suffix", familyLive(unknown, true), "2.2.7-beta.1", observerUnverified},
 		{"malformed", familyLive(unknown, true), "2.2", observerUnverified},
+		{"signed number", familyLive(unknown, true), "+2.0.21", observerUnverified},
+		{"negative part", familyLive(unknown, true), "2.-0.21", observerUnverified},
+		{"leading zero", familyLive(unknown, true), "2.02.7", observerUnverified},
 		{"other entry", func() runtimeLiveImage { l := familyLive(unknown, true); l.Entry = "run"; return l }(), "2.2.7", observerUnverified},
 		{"other arch", func() runtimeLiveImage { l := familyLive(unknown, true); l.GOARCH = "amd64"; return l }(), "2.2.7", observerUnverified},
 	}

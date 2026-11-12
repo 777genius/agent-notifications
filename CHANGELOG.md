@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
-- Admit official, publisher-signed OpenCode 2.x (2.0.21 and newer) on macOS arm64 by release range instead of a per-release image hash. A new official release no longer needs its own table row; unsigned or re-signed binaries and versions outside the range are still refused, and the runtime clock checks are unchanged.
+- Admit official, publisher-signed OpenCode 2.x (2.0.21 and newer) on macOS arm64 by release range instead of a per-release image hash. A new official release no longer needs its own table row; unsigned or re-signed binaries and versions outside the range are still refused, and the runtime clock comparison still fails closed. On these runtimes the JS clock reads the independent CLOCK_REALTIME wall instead of `Date.now()` and no longer pins the Bun release.
 
 ## [1.51.4] - 2026-11-10
 

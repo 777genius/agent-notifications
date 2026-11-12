@@ -40,10 +40,12 @@ func familyVersionOK(version string) bool {
 		if p == "" || len(p) > 6 || (len(p) > 1 && p[0] == '0') {
 			return false
 		}
-		v, err := strconv.Atoi(p)
-		if err != nil || v < 0 {
-			return false
+		for _, r := range p {
+			if r < '0' || r > '9' {
+				return false
+			}
 		}
+		v, _ := strconv.Atoi(p)
 		n[i] = v
 	}
 	return n[0] == 2 && (n[1] > 0 || n[2] >= 21)

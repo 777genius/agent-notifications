@@ -89,12 +89,13 @@ const inFamilyRange = version => {
 };
 export function findClockCell(rows, goos, goarch, generation, version) {
   if (typeof version !== 'string' || !version) return undefined;
-  // Runtime callers provide the version from the held host's qualified
-  // profile. A future independently qualified image must select its own
-  // clock policy, rather than accidentally reuse another version's bounds.
+  // Runtime callers provide the version from the held host's qualified profile.
+  // An exact row for that version always wins; an ambiguous match selects nothing.
+  // Only the darwin/arm64 V2 family below may borrow the reference row.
   const forVersion = wanted => rows.filter(cell => cell.goos === goos && cell.goarch === goarch &&
     cell.generation === generation && cell.images.some(image => image.version === wanted));
   const matches = forVersion(version);
+  if (matches.length > 1) return undefined;
   if (matches.length === 1) return matches[0];
   // darwin/arm64 V2 family: the Go helper admits a publisher-verified release by
   // range and resolves it to the reviewed reference image (cmd/claude-notifications/

@@ -34,7 +34,7 @@ int an_runtime_opencode_publisher(int pid) {
   return 0;
  }
  SecRequirementRef requirement = NULL;
- status = SecRequirementCreateWithString(CFSTR("anchor apple generic and identifier \"opencode\" and certificate leaf[subject.OU] = \"5NZ4Q7NXJ4\""), kSecCSDefaultFlags, &requirement);
+ status = SecRequirementCreateWithString(CFSTR("anchor apple generic and identifier \"opencode\" and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = \"5NZ4Q7NXJ4\""), kSecCSDefaultFlags, &requirement);
  if (status == errSecSuccess && requirement) {
   status = SecCodeCheckValidity(code, kSecCSStrictValidate, requirement);
  } else {

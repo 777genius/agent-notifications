@@ -378,14 +378,14 @@ function holdFile(path2) {
 function pinNativeImage() {
   const bun = globalThis.Bun?.version;
   if (typeof bun !== "string" || bun === "") unavailable();
-  const open = process.platform === "darwin";
+  const open = process.platform === "darwin" && process.arch === "arm64";
   if (!open && !exact(bun)) unavailable();
   const path2 = realpathSync2(process.execPath);
-  if (open && basename(path2) !== "opencode") unavailable();
+  if (open && !opencodeNames.has(basename(path2))) unavailable();
   const held2 = holdFile(path2);
   try {
     if (!open && !exact(bun, held2.digest)) unavailable();
-    const legacy = images2.some((row) => row[0] === process.platform && row[1] === process.arch && row[2] !== "1.4.4" && row[2] === bun && row[3] === held2.digest);
+    const legacy = images2.some((row) => row[0] === process.platform && row[1] === process.arch && row[2] !== independentWallBun && row[2] === bun && row[3] === held2.digest);
     return Object.freeze({ imageSHA256: held2.digest, legacy, close: held2.close, verify() {
       if (globalThis.Bun?.version !== bun || realpathSync2(process.execPath) !== path2) unavailable();
       held2.verify();
@@ -395,7 +395,7 @@ function pinNativeImage() {
     unavailable();
   }
 }
-var images2, same2, exact;
+var images2, same2, opencodeNames, independentWallBun, exact;
 var init_native_clock_image = __esm({
   "native-clock-image.mjs"() {
     "use strict";
@@ -412,6 +412,8 @@ var init_native_clock_image = __esm({
       ["win32", "x64", "1.4.2", "ec7a3909bad41ef88e4650f737ab6f0b0c402a7f49a588812d0a79820c2dfc1f"]
     ].map(Object.freeze));
     same2 = (a, b) => ["dev", "ino", "size", "mtimeNs", "ctimeNs"].every((k) => a[k] === b[k]);
+    opencodeNames = /* @__PURE__ */ new Set(["opencode", "opencode.exe"]);
+    independentWallBun = "1.4.4";
     exact = (bun, digest) => images2.some((row) => row[0] === process.platform && row[1] === process.arch && row[2] === bun && (digest === void 0 || row[3] === digest));
   }
 });
@@ -3058,6 +3060,7 @@ function findClockCell(rows, goos, goarch, generation, version) {
   if (typeof version !== "string" || !version) return void 0;
   const forVersion = (wanted) => rows.filter((cell) => cell.goos === goos && cell.goarch === goarch && cell.generation === generation && cell.images.some((image) => image.version === wanted));
   const matches = forVersion(version);
+  if (matches.length > 1) return void 0;
   if (matches.length === 1) return matches[0];
   if (goos === "darwin" && goarch === "arm64" && generation === "v2" && inFamilyRange(version)) {
     const reference = forVersion(familyReferenceVersion);
@@ -3318,7 +3321,8 @@ function createPreparedDelivery({ registry, origin: origin2, policy, isOwned, on
         }
         source = acquired;
         activation = void 0;
-        if (policy.rawKind !== "linux-boottime" && policy.rawKind !== "darwin-monotonic-raw" && !policy.images?.some((image) => image.imageSHA256 === source.imageSHA256)) bad();
+        const goDecided = policy.rawKind === "darwin-monotonic-raw" && policy.goarch === "arm64";
+        if (policy.rawKind !== "linux-boottime" && !goDecided && !policy.images?.some((image) => image.imageSHA256 === source.imageSHA256)) bad();
         for (let round = 0; round < 3; round++) {
           const before = sample();
           const r = await registry.clock({ signal: attempt.controller.signal, isCurrent, deadline: attempt.deadline });

@@ -270,7 +270,7 @@ function deliveryFixture(rawKind = 'darwin-monotonic-raw', generation = 'v2', fa
     },
     cancel() { cancels++; calls.push('cancel'); },
   };
-  const policy = { generation, images: [{ imageSHA256: 'a'.repeat(64) }], profileID: 'TEST-inert-policy', calibrationID: 'TEST-inert-calibration', rawKind,
+  const policy = { generation, goarch: rawKind === 'darwin-monotonic-raw' ? 'arm64' : 'amd64', images: [{ imageSHA256: 'a'.repeat(64) }], profileID: 'TEST-inert-policy', calibrationID: 'TEST-inert-calibration', rawKind,
     sourceKind: rawKind === 'linux-boottime' ? 'linux-proc-boottime' : rawKind === 'darwin-monotonic-raw' ?
       'darwin-mach-continuous' : 'windows-interrupt-precise', sourceWallBoundNS: 2000000n,
     nativeReadBoundNS: 103000000n, comparisonBoundNS: 430000000n, translationBoundNS: 224000000n };

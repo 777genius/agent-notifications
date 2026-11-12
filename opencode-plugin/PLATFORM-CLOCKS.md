@@ -109,7 +109,9 @@ Bun1.3.14 and 2.0.21 / Bun1.4.2 for Darwin x64/arm64 and Windows x64. No
 non-Linux 1.18.34 identity is supplied, so it is denied. A source image guard
 hashes a held executable fd, checks the exact closed SHA/platform/arch/Bun
 tuple, and rechecks canonical executing-path and held/path stat identity,
-size, mtime and ctime during sampling. Missing bigint identity support or
+size, mtime and ctime during sampling. On Darwin arm64 the Go helper decides image
+identity (publisher-verified live process and release range) and this guard only
+requires the OpenCode executable name; every other platform keeps the closed tuple. Missing bigint identity support or
 changed disk evidence denies the port. This is conditional on trusted process
 globals/builtins and immutable protected mappings; it is not independent
 kernel live-image attestation or authentication against privileged tampering.

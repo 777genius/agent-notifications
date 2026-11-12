@@ -154,6 +154,10 @@ func holdRuntimeLiveImage(ctx context.Context, in runtimeProfileInput) (*runtime
 		}
 		ha, e := runtimeFileHash(ctx, image)
 		hb, e1 := runtimeFileHash(ctx, target)
+		// Asked inside the stability window: the process and both files are re-read
+		// and compared right below, so a swap after this point fails the read.
+		official := publisher.verified(runtimeDarwinPublisherKey{pid: in.NativePID, seconds: live.Seconds, micros: live.Micros,
+			sha: ha, device: device, inode: inode}, entry)
 		end, e2 := runtimeDarwinProcessInfo(in.NativePID)
 		na, e3 := os.Stat(live.Name)
 		nb, e4 := os.Stat(in.HostExecutable)
@@ -164,7 +168,7 @@ func holdRuntimeLiveImage(ctx context.Context, in runtimeProfileInput) (*runtime
 		encoded, _ := json.Marshal(runtimeDarwinSnapshot{Process: live, FileCPU: cpu, FileSubtype: subtype, SHA: ha, Device: device, Inode: inode, Size: a.Size(), Modified: a.ModTime().UTC().Format(time.RFC3339Nano), Mode: uint32(a.Mode())})
 		fingerprint := sha256.Sum256(encoded)
 		return runtimeLiveImage{GOOS: "darwin", GOARCH: runtime.GOARCH, Entry: entry, SHA256: ha, NativePID: in.NativePID,
-			Publisher: publisher.verified(fingerprint, in.NativePID, entry), fingerprint: fingerprint}, nil
+			Publisher: official, fingerprint: fingerprint}, nil
 	}
 	first, err := read(ctx)
 	if err != nil {
@@ -177,25 +181,34 @@ func holdRuntimeLiveImage(ctx context.Context, in runtimeProfileInput) (*runtime
 func runtimeDarwinWatch(pid int) int     { return int(C.an_runtime_watch(C.int(pid))) }
 func runtimeDarwinUnchanged(fd int) bool { return C.an_runtime_unchanged(C.int(fd)) == 1 }
 
-// runtimeDarwinPublisherCache answers the OS publisher check once per verified
-// live image fingerprint: a cold SecCode check costs seconds, while an unchanged
-// process and image keep the same answer. Only the official arm64 serve entry is
-// asked; every other image stays unverified.
+// runtimeDarwinPublisherCache reuses a positive OS publisher verdict for one exact
+// process and image: a cold SecCode check costs seconds, while an unchanged process
+// keeps the same answer. A negative verdict is never reused and is retried once, so
+// a transient OS failure cannot turn an official process into a refused one for the
+// whole lease. Only the arm64 serve entry is asked; every other image stays unverified.
+type runtimeDarwinPublisherKey struct {
+	pid             int
+	seconds, micros uint64
+	sha             string
+	device, inode   uint64
+}
 type runtimeDarwinPublisherCache struct {
-	mu          sync.Mutex
-	fingerprint [32]byte
-	known, ok   bool
+	mu  sync.Mutex
+	key runtimeDarwinPublisherKey
+	ok  bool
 }
 
-func (c *runtimeDarwinPublisherCache) verified(fingerprint [32]byte, pid int, entry string) bool {
+func (c *runtimeDarwinPublisherCache) verified(key runtimeDarwinPublisherKey, entry string) bool {
 	if entry != "serve" || runtime.GOARCH != "arm64" {
 		return false
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if !c.known || c.fingerprint != fingerprint {
-		c.fingerprint, c.known, c.ok = fingerprint, true, runtimeDarwinOpenCodePublisher(pid)
+	if c.ok && c.key == key {
+		return true
 	}
+	c.key = key
+	c.ok = runtimeDarwinOpenCodePublisher(key.pid) || runtimeDarwinOpenCodePublisher(key.pid)
 	return c.ok
 }
 
