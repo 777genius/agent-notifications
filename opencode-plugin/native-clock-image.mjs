@@ -1,5 +1,6 @@
 import { openSync, closeSync, readSync, fstatSync, statSync, realpathSync, constants } from 'node:fs';
 import { createHash } from 'node:crypto';
+import { basename } from 'node:path';
 import { unavailable } from './native-clock-contract.mjs';
 
 // Closed source candidate identities, NOT clock-policy or semantic grants.
@@ -41,7 +42,9 @@ export function holdFile(path) {
 // Darwin identity is not decided here: the Go helper independently holds the live
 // image of the owning process and verifies the publisher signature, so an exact
 // Bun/digest allowlist here would only re-pin every new official release. The
-// clock anchors still fail closed if this runtime disagrees with the Go clock.
+// runtime must still be the `opencode` executable, which keeps unrelated system
+// binaries out, and the clock anchors still fail closed if this runtime
+// disagrees with the Go clock.
 // `legacy` marks the reviewed releases whose wall coordinate is Date.now(); any
 // other darwin runtime uses the independent CLOCK_REALTIME coordinate instead.
 // Other platforms keep the closed list.
@@ -52,7 +55,9 @@ export function pinNativeImage() {
   if (typeof bun !== 'string' || bun === '') unavailable();
   const open = process.platform === 'darwin';
   if (!open && !exact(bun)) unavailable();
-  const path = realpathSync(process.execPath), held = holdFile(path);
+  const path = realpathSync(process.execPath);
+  if (open && basename(path) !== 'opencode') unavailable();
+  const held = holdFile(path);
   try {
     if (!open && !exact(bun, held.digest)) unavailable();
     const legacy = images.some(row => row[0] === process.platform && row[1] === process.arch && row[2] !== '1.4.4' &&

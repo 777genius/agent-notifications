@@ -340,6 +340,7 @@ var init_native_clock_contract = __esm({
 // native-clock-image.mjs
 import { openSync as openSync2, closeSync as closeSync2, readSync as readSync2, fstatSync as fstatSync2, statSync as statSync3, realpathSync as realpathSync2, constants as constants2 } from "node:fs";
 import { createHash as createHash3 } from "node:crypto";
+import { basename } from "node:path";
 function holdFile(path2) {
   const fd = openSync2(path2, constants2.O_RDONLY | (constants2.O_NOFOLLOW ?? 0));
   try {
@@ -379,7 +380,9 @@ function pinNativeImage() {
   if (typeof bun !== "string" || bun === "") unavailable();
   const open = process.platform === "darwin";
   if (!open && !exact(bun)) unavailable();
-  const path2 = realpathSync2(process.execPath), held2 = holdFile(path2);
+  const path2 = realpathSync2(process.execPath);
+  if (open && basename(path2) !== "opencode") unavailable();
+  const held2 = holdFile(path2);
   try {
     if (!open && !exact(bun, held2.digest)) unavailable();
     const legacy = images2.some((row) => row[0] === process.platform && row[1] === process.arch && row[2] !== "1.4.4" && row[2] === bun && row[3] === held2.digest);
