@@ -52,7 +52,7 @@ class NativePeerParserTest(unittest.TestCase):
     def test_fresh_marker_precedes_bounded_event(self):
         peer = self.read([self.marker, self.event])
         self.assertTrue(peer.connected)
-        self.assertIsNone(peer.error)
+        self.assertEqual(peer.error, 'peer_feed_failed', 'mocked EOF must not be a clean reader close')
         self.assertEqual(set(peer.events), {('session.execution.started', 'evt_test', 1, 'ses_test')})
         self.assertGreater(peer.events[('session.execution.started', 'evt_test', 1, 'ses_test')], 0)
 
@@ -60,6 +60,16 @@ class NativePeerParserTest(unittest.TestCase):
         for events in ([self.event], [self.marker, self.marker]):
             with self.subTest(events=events):
                 self.assertEqual(self.read(events).error, 'peer_feed_failed')
+
+    def test_same_event_id_with_changed_time_or_session_fails_closed(self):
+        for change in ({'created': 2}, {'data': {'sessionID': 'ses_other'}},
+                       {'type': 'session.step.ended'}):
+            with self.subTest(change=change):
+                duplicate = {**self.event, **change}
+                peer = self.read([self.marker, self.event, duplicate])
+                self.assertEqual(peer.error, 'peer_feed_failed')
+                self.assertEqual(len(peer.events), 1,
+                                 'reused event ID must not become a second source record')
 
     def test_invalid_native_timestamp_fails_closed(self):
         bad = {**self.event, 'created': True}

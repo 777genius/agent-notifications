@@ -21,6 +21,7 @@ class NativePeerObservation:
         self.stopping = threading.Event()
         self.thread = None
         self.events = {}
+        self.event_ids = set()
         self.events_lock = threading.Lock()
         self.error = None
         self.connected = False
@@ -65,7 +66,9 @@ class NativePeerObservation:
                 line = response.readline(262145)
                 received_wall_ns = time.time_ns()
                 if not line:
-                    break
+                    # Live-only SSE has no success/EOF terminator. An early
+                    # disconnect is uncertain, not a completed reader proof.
+                    raise RuntimeError('peer_stream_ended')
                 if len(line) > 262144:
                     raise RuntimeError('frame_limit')
                 if not line.startswith(b'data: '):
@@ -92,8 +95,11 @@ class NativePeerObservation:
                         not isinstance(values[3], str) or not values[3]):
                     raise RuntimeError('bad_identity')
                 with self.events_lock:
-                    if len(self.events) >= 4096 or values in self.events:
+                    if len(self.events) >= 4096 or values[1] in self.event_ids:
+                        # One host-native event ID cannot silently reappear
+                        # with a different time, session, or event kind.
                         raise RuntimeError('event_limit_or_duplicate')
+                    self.event_ids.add(values[1])
                     self.events[values] = received_wall_ns
         except Exception:
             if not self.stopping.is_set():
