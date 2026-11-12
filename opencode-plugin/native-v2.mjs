@@ -153,7 +153,7 @@ export function createNativeV2(context, ownedLocation, onIngress, onUncertainty)
     const terminal = b.terminal, step = terminal?.step;
     const row = value.find((item) => item.id === run.messageID);
     // Exact schema mapping, not a fabricated terminal or desired outcome.
-    const terminalMessageID = terminal?.id.startsWith('evt_') ? `msg_${terminal.id.slice(4)}` : undefined;
+    const terminalMessageID = typeof terminal?.id === 'string' && terminal.id.startsWith('evt_') ? `msg_${terminal.id.slice(4)}` : undefined;
     if (row?.type !== 'assistant' || !stamp(row.time?.completed) || !stamp(row.time?.created) ||
         followsAssistant(value, row) || step?.messageID !== row.id || step.compaction ||
         !terminalMessageID || value.findIndex((item) => item.type === 'idle' && item.id === terminalMessageID) <= value.indexOf(row)) return;

@@ -3914,7 +3914,7 @@ function createNativeV2(context, ownedLocation, onIngress, onUncertainty) {
     if (!value || signal.aborted || binding(run) !== b || b.assistant !== run.messageID) return;
     const terminal = b.terminal, step = terminal?.step;
     const row = value.find((item) => item.id === run.messageID);
-    const terminalMessageID = terminal?.id.startsWith("evt_") ? `msg_${terminal.id.slice(4)}` : void 0;
+    const terminalMessageID = typeof terminal?.id === "string" && terminal.id.startsWith("evt_") ? `msg_${terminal.id.slice(4)}` : void 0;
     if (row?.type !== "assistant" || !stamp2(row.time?.completed) || !stamp2(row.time?.created) || followsAssistant(value, row) || step?.messageID !== row.id || step.compaction || !terminalMessageID || value.findIndex((item) => item.type === "idle" && item.id === terminalMessageID) <= value.indexOf(row)) return;
     let outcome;
     if (terminal.type === "session.execution.succeeded" && step.type === "session.step.ended" && row.finish === "stop" && row.error == null) outcome = "success";

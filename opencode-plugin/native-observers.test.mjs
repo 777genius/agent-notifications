@@ -603,3 +603,32 @@ test('native V2 binds output-limit error to its terminal idle',async()=>{
   }finally{await h.stop();}
  }
 });
+
+ // The native adapter is a separate fail-closed port even when an upstream
+ // source violates its declared event-ID shape. Invalid IDs cannot crash the
+ // final source read or turn into an authorized completion.
+test('native V2 rejects malformed terminal IDs without throwing from native read', async () => {
+  for (const badID of [undefined, null, 42, {}, '']) {
+    const location = {directory, project:{id:'project'}};
+    const context = {session:{
+      get: async () => ({id:'s', projectID:'project', location:{directory}}),
+      context: async () => [
+        {id:'user', type:'user'},
+        {id:'msg_assistant', type:'assistant', finish:'stop', time:{created:1700000000001, completed:1700000000002}},
+        {id:'msg_other', type:'idle'},
+      ],
+    }};
+    const view = createNativeV2(context, location, () => {}, () => {throw Error('capacity');});
+    const send = (type, id, data={}) => view.native.correlate({
+      type, id, created:1700000000002, data:{sessionID:'s', ...data},
+    });
+    send('session.execution.started', 'evt_run');
+    send('session.inbox.enqueued', 'evt_queue', {inboxID:'user', item:{type:'user'}});
+    send('session.inbox.delivered', 'evt_deliver', {inboxID:'user'});
+    send('session.step.started', 'evt_step', {assistantMessageID:'msg_assistant', type:'assistant'});
+    send('session.step.ended', 'evt_step_end', {assistantMessageID:'msg_assistant', type:'assistant'});
+    send('session.execution.succeeded', badID);
+    const run = {sessionID:'s', turnID:'evt_run', userID:'user', messageID:'msg_assistant'};
+    assert.equal(await view.native.assistant(run, new AbortController().signal), undefined);
+  }
+});
