@@ -869,11 +869,10 @@ def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False, exp
                     if proof.get('valid') is not True or proof.get('runParts') != 3:
                         raise RuntimeError('source_auto_compaction_unverified')
                     if expect_delivery:
-                        def new_completion():
-                            with webhook.lock:
-                                new_bodies = list(webhook.bodies[prior_delivery_count:])
-                            return any(json.loads(body).get('notification_type') == 'task_complete' for body in new_bodies)
-                        wait(new_completion, 15, 'source_auto_compaction_delivery_missing')
+                        # Match the same schema, source, fixed-message and privacy checks
+                        # required by all other installed positive delivery stages.
+                        wait_for_delivery(webhook, 'task_complete', 'Task completed',
+                                          after=prior_delivery_count)
                         capture_desktop('compaction')
                         desktop_stages.pop('compaction', None)
                     provider.mode = 'success'
@@ -1189,8 +1188,8 @@ def main():
         parser.error('clock skew tests and installed receiver are mutually exclusive')
     skew_ms = 12000 if args.clock_skew_negative else -12000 if args.clock_skew_past_negative else 0
     peer_helper = args.linux_native_peer or args.darwin_native_peer
-    with OwnedTemporaryDirectory(prefix='TEST-opencode-v226-', dir=os.environ.get('RUNNER_TEMP')) as temp:
-        try:
+    try:
+        with OwnedTemporaryDirectory(prefix='TEST-opencode-v226-', dir=os.environ.get('RUNNER_TEMP')) as temp:
             # On macOS the default /var temporary path aliases /private/var.
             # The owned-host boundary deliberately rejects alias paths.
             root = Path(temp).resolve(strict=True)
@@ -1204,58 +1203,58 @@ def main():
                 args.darwin_native_peer is not None and args.darwin_live_signer is not None)
             result['peerEventIDTimestampAndSessionIsolationObserved'] = args.mutate_peer_events
             result['autoCompactionObserved'] = args.observe_auto_compaction
-        except Exception as error:
-            # Never leak native session IDs, paths, model messages or provider errors.
-            safe_errors = {'official_archive_unverified', 'official_executable_not_unique',
-                           'official_version_command_failed', 'official_version_format_unexpected', 'official_host_exited',
-                           'native_startup_timeout', 'source_autoload_missing',
-                           'host_capabilities_mismatch', 'private_trace_limit',
-                           'native_source_events_missing', 'local_provider_unused', 'native_execution_start_unseen',
-                           'native_source_envelope_unverified', 'native_source_epoch_unverified',
-                           'windows_private_root_unverified', 'managed_install_command_failed',
-                           'managed_plugin_file_missing', 'managed_install_unverified',
-                           'managed_webhook_configuration_failed',
-                           'private_host_log_limit', 'single_denial_diagnostic_missing',
-                           'expected_delivery_missing', 'delivery_payload_invalid',
-                           'desktop_receipt_invalid', 'desktop_submissions_ambiguous', 'desktop_submissions_missing',
-                           'desktop_presentation_log_unavailable', 'desktop_presentations_missing',
-                           'skewed_host_delivered_webhook',
-                           'denied_host_delivered_webhook', 'restart_host_unavailable',
-                           'restart_plugin_not_loaded', 'restart_source_completion_missing',
-                           'restart_provider_unused', 'restart_denied_host_delivered_webhook',
-                           'restart_denial_diagnostic_missing', 'source_native_question_missing',
-                           'source_native_question_unverified', 'source_question_reply_unseen',
-                           'source_question_terminal_missing', 'source_native_permission_missing',
-                           'source_native_permission_unverified', 'source_permission_reply_unseen',
-                           'source_terminal_error_missing', 'source_terminal_error_unverified',
-                           'source_terminal_provider_unused', 'source_output_limit_missing',
-                           'source_output_limit_provider_unused', 'native_r1_output_limit_missing',
-                           'native_output_limit_projection_unverified',
-                           'native_session_projection_missing', 'native_session_projection_unverified',
-                           'source_receiver_sample_invalid', 'source_receiver_counter_nonmonotonic',
-                           'source_go_clock_sample_unavailable', 'source_go_clock_sample_invalid',
-                           'source_go_clock_epoch_unverified',
-                           'native_reader_projection_unverified',
-                           'source_clock_skew_injection_missing', 'source_clock_skew_not_refused',
-                           'live_signer_observation_unverified',
-                           'peer_host_not_live', 'peer_identity_unverified', 'peer_feed_not_ready',
-                           'peer_endpoint_changed', 'peer_socket_unverified', 'peer_negative_failed',
-                           'peer_events_unverified', 'peer_close_unverified', 'peer_cleanup_failed',
-                           'peer_wall_skew_unverified',
-                           'peer_subscription_missing', 'peer_stream_isolation_unverified',
-                           'source_auto_compaction_missing', 'source_auto_compaction_unverified', 'source_auto_compaction_delivery_missing',
-                           'negative_native_reader_projection_unverified',
-                           'native_reader_r1_sample_missing', 'native_r1_question_missing',
-                           'native_r1_permission_missing', 'native_r1_error_missing',
-                           'native_assistant_projection_unverified', 'native_question_projection_unverified',
-                           'native_permission_projection_unverified', 'native_error_projection_unverified'}
-            reason = str(error) if type(error) is RuntimeError and str(error) in safe_errors else 'unexpected'
-            result = {'status': 'unqualified', 'failureType': type(error).__name__, 'failureCode': reason,
-                      'nativeObserverQualified': False, 'nativeClockQualified': False,
-                      'notificationDeliveryQualified': False}
-            args.report.write_text(json.dumps(result) + '\n')
-            print(json.dumps(result))
-            return 1
+    except Exception as error:
+        # Never leak native session IDs, paths, model messages or provider errors.
+        safe_errors = {'official_archive_unverified', 'official_executable_not_unique',
+                       'official_version_command_failed', 'official_version_format_unexpected', 'official_host_exited',
+                       'native_startup_timeout', 'source_autoload_missing',
+                       'host_capabilities_mismatch', 'private_trace_limit',
+                       'native_source_events_missing', 'local_provider_unused', 'native_execution_start_unseen',
+                       'native_source_envelope_unverified', 'native_source_epoch_unverified',
+                       'windows_private_root_unverified', 'managed_install_command_failed',
+                       'managed_plugin_file_missing', 'managed_install_unverified',
+                       'managed_webhook_configuration_failed',
+                       'private_host_log_limit', 'single_denial_diagnostic_missing',
+                       'expected_delivery_missing', 'delivery_payload_invalid',
+                       'desktop_receipt_invalid', 'desktop_submissions_ambiguous', 'desktop_submissions_missing',
+                       'desktop_presentation_log_unavailable', 'desktop_presentations_missing',
+                       'skewed_host_delivered_webhook',
+                       'denied_host_delivered_webhook', 'restart_host_unavailable',
+                       'restart_plugin_not_loaded', 'restart_source_completion_missing',
+                       'restart_provider_unused', 'restart_denied_host_delivered_webhook',
+                       'restart_denial_diagnostic_missing', 'source_native_question_missing',
+                       'source_native_question_unverified', 'source_question_reply_unseen',
+                       'source_question_terminal_missing', 'source_native_permission_missing',
+                       'source_native_permission_unverified', 'source_permission_reply_unseen',
+                       'source_terminal_error_missing', 'source_terminal_error_unverified',
+                       'source_terminal_provider_unused', 'source_output_limit_missing',
+                       'source_output_limit_provider_unused', 'native_r1_output_limit_missing',
+                       'native_output_limit_projection_unverified',
+                       'native_session_projection_missing', 'native_session_projection_unverified',
+                       'source_receiver_sample_invalid', 'source_receiver_counter_nonmonotonic',
+                       'source_go_clock_sample_unavailable', 'source_go_clock_sample_invalid',
+                       'source_go_clock_epoch_unverified',
+                       'native_reader_projection_unverified',
+                       'source_clock_skew_injection_missing', 'source_clock_skew_not_refused',
+                       'live_signer_observation_unverified',
+                       'peer_host_not_live', 'peer_identity_unverified', 'peer_feed_not_ready',
+                       'peer_endpoint_changed', 'peer_socket_unverified', 'peer_negative_failed',
+                       'peer_events_unverified', 'peer_close_unverified', 'peer_cleanup_failed',
+                       'peer_wall_skew_unverified',
+                       'peer_subscription_missing', 'peer_stream_isolation_unverified',
+                       'source_auto_compaction_missing', 'source_auto_compaction_unverified', 'source_auto_compaction_delivery_missing',
+                       'negative_native_reader_projection_unverified',
+                       'native_reader_r1_sample_missing', 'native_r1_question_missing',
+                       'native_r1_permission_missing', 'native_r1_error_missing',
+                       'native_assistant_projection_unverified', 'native_question_projection_unverified',
+                       'native_permission_projection_unverified', 'native_error_projection_unverified'}
+        reason = str(error) if type(error) is RuntimeError and str(error) in safe_errors else 'unexpected'
+        result = {'status': 'unqualified', 'failureType': type(error).__name__, 'failureCode': reason,
+                  'nativeObserverQualified': False, 'nativeClockQualified': False,
+                  'notificationDeliveryQualified': False}
+        args.report.write_text(json.dumps(result) + '\n')
+        print(json.dumps(result))
+        return 1
     args.report.write_text(json.dumps(result, sort_keys=True) + '\n')
     print(json.dumps(result, sort_keys=True))
     return 0

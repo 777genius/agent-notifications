@@ -1,5 +1,10 @@
 """Bounded cleanup retries must not hide persistent or unrelated failures."""
 import importlib.util
+import contextlib
+import io
+import json
+import tempfile
+from unittest.mock import patch
 from pathlib import Path
 import os
 import unittest
@@ -126,6 +131,44 @@ class CleanupTest(unittest.TestCase):
         with self.assertRaises(PermissionError):
             source.cleanup_with_sharing_retry(cleanup, True, lambda: next(times), lambda _: None)
         self.assertEqual(len(calls), 2)
+
+
+    def test_main_redacts_errors_from_temporary_directory_cleanup(self):
+        with tempfile.TemporaryDirectory(prefix='TEST-error-boundary-') as root:
+            report = Path(root) / 'safe.json'
+
+            class BrokenCleanup:
+                def __enter__(self):
+                    return root
+
+                def __exit__(self, _kind, _error, _traceback):
+                    raise OSError('PRIVATE_cleanup_path_and_name')
+
+            output = io.StringIO()
+            with contextlib.ExitStack() as stack:
+                stack.enter_context(patch.object(source, 'OwnedTemporaryDirectory', return_value=BrokenCleanup()))
+                stack.enter_context(patch.object(source, 'prepare_windows_private_root'))
+                stack.enter_context(patch.object(source, 'run', return_value={'status': 'passed_source_only'}))
+                stack.enter_context(patch('sys.argv', ['source-e2e', '--archive', str(Path(root) / 'TEST.zip'),
+                                                       '--report', str(report)]))
+                stack.enter_context(contextlib.redirect_stdout(output))
+                result = source.main()
+            self.assertEqual(result, 1)
+            evidence = json.loads(report.read_text())
+            self.assertEqual(evidence['failureType'], 'OSError')
+            self.assertEqual(evidence['failureCode'], 'unexpected')
+            self.assertFalse(evidence['nativeObserverQualified'])
+            self.assertNotIn('PRIVATE_', report.read_text() + output.getvalue())
+
+    def test_delivery_rejects_private_compaction_payload(self):
+        class Webhook:
+            def __init__(self):
+                import threading
+                self.lock = threading.Lock()
+                self.bodies = [b'{"notification_type":"task_complete","message":"PRIVATE_leak"}']
+
+        with self.assertRaisesRegex(RuntimeError, 'delivery_payload_invalid'):
+            source.wait_for_delivery(Webhook(), 'task_complete', 'Task completed', timeout=.01)
 
 
 if __name__ == '__main__':
