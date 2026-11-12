@@ -1142,6 +1142,8 @@ def main():
                         help='TEST-only helper to observe the running Darwin process signature')
     parser.add_argument('--darwin-native-peer', type=Path,
                         help='TEST-only native process/socket ownership witness')
+    parser.add_argument('--linux-native-peer', type=Path,
+                        help='TEST-only Linux /proc-held original server SSE socket witness')
     parser.add_argument('--mutate-peer-events', action='store_true',
                         help='Test whether another plugin can mutate this observer subscription')
     parser.add_argument('--observe-auto-compaction', action='store_true',
@@ -1153,6 +1155,10 @@ def main():
         parser.error('live signature observation requires macOS')
     if args.darwin_native_peer is not None and sys.platform != 'darwin':
         parser.error('native peer observation requires macOS')
+    if args.linux_native_peer is not None and not sys.platform.startswith('linux'):
+        parser.error('Linux peer observation requires Linux /proc')
+    if args.linux_native_peer is not None and args.darwin_native_peer is not None:
+        parser.error('select exactly one native peer witness')
     if args.mutate_peer_events and (args.clock_skew_negative or args.clock_skew_past_negative):
         parser.error('peer mutation and clock skew require separate observations')
     if args.observe_auto_compaction and (args.clock_skew_negative or args.clock_skew_past_negative):
@@ -1171,16 +1177,18 @@ def main():
     if (args.clock_skew_negative or args.clock_skew_past_negative) and args.receiver is not None and not args.installed_clock_skew:
         parser.error('clock skew tests and installed receiver are mutually exclusive')
     skew_ms = 12000 if args.clock_skew_negative else -12000 if args.clock_skew_past_negative else 0
+    peer_helper = args.linux_native_peer or args.darwin_native_peer
     with OwnedTemporaryDirectory(prefix='TEST-opencode-v226-', dir=os.environ.get('RUNNER_TEMP')) as temp:
         try:
             # On macOS the default /var temporary path aliases /private/var.
             # The owned-host boundary deliberately rejects alias paths.
             root = Path(temp).resolve(strict=True)
             prepare_windows_private_root(root)
-            result = run(args.archive, root, args.receiver, skew_ms, args.restart_denial, args.expect_delivery, args.native_app, args.skew_after_delivery, args.service, args.darwin_live_signer.resolve(strict=True) if args.darwin_live_signer else None, args.mutate_peer_events, args.observe_auto_compaction, args.darwin_native_peer.resolve(strict=True) if args.darwin_native_peer else None)
+            result = run(args.archive, root, args.receiver, skew_ms, args.restart_denial, args.expect_delivery, args.native_app, args.skew_after_delivery, args.service, args.darwin_live_signer.resolve(strict=True) if args.darwin_live_signer else None, args.mutate_peer_events, args.observe_auto_compaction, peer_helper.resolve(strict=True) if peer_helper else None)
             result['serviceMode'] = args.service
             result['liveSignerObserved'] = args.darwin_live_signer is not None
-            result['nativePeerCompletionE0Observed'] = args.darwin_native_peer is not None
+            result['nativePeerCompletionE0Observed'] = peer_helper is not None
+            result['nativePeerLinuxSocketPairE0Observed'] = args.linux_native_peer is not None
             result['nativePeerPublisherBeforeAfterObserved'] = (
                 args.darwin_native_peer is not None and args.darwin_live_signer is not None)
             result['peerEventIDTimestampAndSessionIsolationObserved'] = args.mutate_peer_events

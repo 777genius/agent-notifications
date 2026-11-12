@@ -5,6 +5,7 @@ import json
 import os
 import socket
 import subprocess
+import sys
 import threading
 import time
 
@@ -25,7 +26,10 @@ class NativePeerObservation:
         self.connected = False
 
     def _tool(self, *args):
-        return subprocess.run([self.helper, *map(str, args)], capture_output=True,
+        # Linux E0 uses an uninstalled Python procfs witness; Darwin retains
+        # the compiled Mach socket helper. Neither is a product reader grant.
+        command = [sys.executable, self.helper] if self.helper.endswith('.py') else [self.helper]
+        return subprocess.run([*command, *map(str, args)], capture_output=True,
                               text=True, timeout=8)
 
     def start(self):

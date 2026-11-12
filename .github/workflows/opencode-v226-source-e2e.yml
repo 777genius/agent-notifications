@@ -15,6 +15,8 @@ on:
       - 'scripts/opencode-v226-darwin-abi-e0.mjs'
       - 'scripts/testdata/opencode-v226-darwin-peer-e0.c'
       - 'scripts/opencode_v226_darwin_peer_e0.py'
+      - 'scripts/opencode_v226_linux_peer_e0.py'
+      - 'scripts/test_opencode_v226_linux_peer.py'
       - 'scripts/opencode-v226-darwin-signature-e0.py'
       - 'scripts/opencode-v226-darwin-live-signature-e0.swift'
       - 'scripts/opencode-semantic-e2e.py'
@@ -70,6 +72,7 @@ jobs:
         run: |
           python -B scripts/opencode-v226-source-e2e.py \
             --archive "$RUNNER_TEMP/opencode-linux-x64-2.2.6.tar.gz" \
+            --linux-native-peer "$GITHUB_WORKSPACE/scripts/opencode_v226_linux_peer_e0.py" \
             --report "$RUNNER_TEMP/opencode-v226-source-safe.json"
       - name: Assert test-only +12s future source timestamp fails independent observation
         shell: bash
