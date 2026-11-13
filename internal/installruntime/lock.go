@@ -42,9 +42,12 @@ func lockMode(ctx context.Context, path string, create, shared bool) (func(), er
 		return nil, fmt.Errorf("installation lock requires a deadline")
 	}
 	if create {
-		if err := ensureDir(filepath.Dir(path), 0700); err != nil {
+		if err := ensureLockDirectory(ctx, filepath.Dir(path), 0700); err != nil {
 			return nil, err
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	f, err := openLock(path, create)
 	if err != nil {

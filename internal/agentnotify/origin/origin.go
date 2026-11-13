@@ -101,6 +101,7 @@ func (o Context) Scope() (source, session string) {
 type RoutePolicy struct {
 	Platform            string
 	Linux               notification.LinuxBinding
+	Windows             notification.WindowsBinding
 	LocalRouting        bool
 	AllowUnknownCaller  bool
 	AllowCallerAsserted bool
@@ -141,6 +142,17 @@ func ResolveCodex(o Context, p RoutePolicy) Target {
 	}
 	if o.Provenance == CallerAsserted && !p.AllowCallerAsserted {
 		return no("caller_asserted_disabled")
+	}
+	if p.Platform == "windows" {
+		if !Text(p.Windows.SnapshotPath, 1024, true) || len(p.Windows.SHA256) != 64 || o.SessionID == "." || o.SessionID == ".." {
+			return no("windows_binding_unavailable")
+		}
+		for _, c := range p.Windows.SHA256 {
+			if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+				return no("windows_binding_unavailable")
+			}
+		}
+		return Target{Desktop: notification.DesktopTarget{Provider: "codex", ThreadID: o.SessionID, Windows: p.Windows}, Navigation: notification.NavigationResult{Capability: "available", Precision: "chat_id", Scope: "selected_windows_generation", Reason: "configured_codex_desktop"}}
 	}
 	if p.Platform == "linux" {
 		if !Text(p.Linux.SnapshotPath, 1024, true) || !Text(p.Linux.SHA256, 64, true) {

@@ -1,0 +1,51 @@
+{
+  "sourceCommit": "0f63de0",
+  "sourceCommitFull": "0f63de0dc409ddb849891d7c0526427612b86da5",
+  "sourceTree": "3bbfd65a8680cf5f2d9378dab9a7ba51451fc367",
+  "baselineKind": "exact git archive plus bounded current overlay test and missing-blob schema6 fixture",
+  "readerLabels": {
+    "transactionSchema": "schema1 through schema5 accepted; schema5 is orphan-metadata-only",
+    "ledgerSchema": "schema1 through schema4 accepted; no Windows ledger schema5",
+    "supportedWriterFloor": 4,
+    "windowsTransactionSchema6": "unreleased at this source commit",
+    "nativeRecordDecoderFloor": "separate NativeRecord contract; this frozen reader bundle does not relabel it"
+  },
+  "files": [
+    {
+      "sourcePath": "internal/installruntime/recovery.go",
+      "artifactPath": "testdata/frozen-readers/main-0f63de0/recovery.go",
+      "gitBlob": "17b25df10d41f2594dfc65fd62851cd63d4c32e2",
+      "sha256": "0aec21daf89ffe1424974071013b95a0f21d07e61d93fb5a216d34808d39f9b1",
+      "bytes": 14778
+    },
+    {
+      "sourcePath": "internal/installruntime/orphan_codec.go",
+      "artifactPath": "testdata/frozen-readers/main-0f63de0/orphan_codec.go",
+      "gitBlob": "93695bfeb274e9c9db7b290098e24c70a9b8df69",
+      "sha256": "da1776dece07709e1381a66694027771b698f6ddb60c60aa75a254c1d8b753e0",
+      "bytes": 4538
+    },
+    {
+      "sourcePath": "internal/installruntime/reservation.go",
+      "artifactPath": "testdata/frozen-readers/main-0f63de0/reservation.go",
+      "gitBlob": "6b9f50557610d5778125f0aec1e442f64cbe639f",
+      "sha256": "774dcf45ddab39c3117bb8ee79b1a4cecdcb0dd59dbce136facb8883e4d024f5",
+      "bytes": 7335
+    },
+    {
+      "sourcePath": "internal/installruntime/writer.go",
+      "artifactPath": "testdata/frozen-readers/main-0f63de0/writer.go",
+      "gitBlob": "0c46f42c7e1a3495151ae357bc2b1283da498bd7",
+      "sha256": "d1d4542254ca97c51bdcbf33465e408563ecbf365319b7be2245a145525e965b",
+      "bytes": 3613
+    }
+  ],
+  "overlay": {
+    "testPath": "testdata/frozen-readers/main-0f63de0-reader_test.go",
+    "testSHA256": "f0d5c5a5fd809c98af15e5215237156f23bd892e7c0ffa1abdafbb2aadb8b812",
+    "testBytes": 4619,
+    "fixturePath": "testdata/frozen-readers/windows6-missing-blobs.json",
+    "fixtureSHA256": "db4e1b19b7fa61229aeec8d103893305dbdc95d0c5b4a1b6ea70dfdc17386c4a",
+    "fixtureBytes": 1845
+  }
+}

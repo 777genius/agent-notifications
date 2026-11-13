@@ -59,7 +59,7 @@ func AcquireRegistration(ctx context.Context, root string, expected installrunti
 	}
 	desktop, webhook := ChannelsFromSnapshot(s, executable, goos, goarch)
 	r := s.Installation.Ledger.Consumers[consumerID].OpenCode
-	if (!desktop && !webhook) || s.Installation.Ledger.PendingMutation != nil || s.Installation.Ledger.Schema != 4 || s.Installation.Ledger.WriterFloor != installruntime.OpenCodeWriterFloor || r == nil || !r.Valid() || !r.OriginBound || r.Origin != origin {
+	if (!desktop && !webhook) || s.Installation.Ledger.PendingMutation != nil || !installruntime.OpenCodeLedgerCompatible(s.Installation.Ledger) || r == nil || !r.Valid() || !r.OriginBound || r.Origin != origin {
 		release()
 		return nil, errors.New("OpenCode registration unavailable")
 	}

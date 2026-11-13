@@ -63,7 +63,7 @@ func TestWindowsNoneSetupProvisionsJournalWithoutNative(t *testing.T) {
 	}
 }
 
-func TestWindowsLocalRoutingStillRequiresAppIdentity(t *testing.T) {
+func TestWindowsLocalRoutingRejectsMacAppIdentity(t *testing.T) {
 	o, r := windowsNoneFixture(t)
 	r.Route = &Route{LocalRouting: true, ApplicationPath: "/Applications/Chosen.app", TeamID: "TEAM123456"}
 	before := tree(t, filepath.Dir(o.ControlRoot))
@@ -71,7 +71,7 @@ func TestWindowsLocalRoutingStillRequiresAppIdentity(t *testing.T) {
 	if e == nil {
 		t.Fatal("windows local routing accepted")
 	}
-	wantReason(t, e, "unsupported_platform")
+	wantReason(t, e, "windows_callback_unavailable")
 	if !reflect.DeepEqual(before, tree(t, filepath.Dir(o.ControlRoot))) {
 		t.Fatal("failure mutated state")
 	}

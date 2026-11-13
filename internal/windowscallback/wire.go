@@ -53,7 +53,7 @@ func text(s string, max int) bool {
 	return true
 }
 func (s Snapshot) Validate() error {
-	if !hexValue(s.Generation, 32) || !text(s.CanonicalRoot, 32768) || !rootGrammar(s.CanonicalRoot) || !text(s.OwnerSID, 256) || !strings.HasPrefix(s.OwnerSID, "S-1-") || !hexValue(s.HelperSHA256, 64) || !text(s.AUMID, 128) {
+	if !generationPath(s.CanonicalRoot, s.Generation) || !text(s.OwnerSID, 256) || !strings.HasPrefix(s.OwnerSID, "S-1-") || !hexValue(s.HelperSHA256, 64) || !text(s.AUMID, 128) {
 		return ErrEnvelope
 	}
 	if len(s.CLSID) != 38 || s.CLSID[0] != '{' || s.CLSID[37] != '}' {
@@ -185,8 +185,7 @@ func rootGrammar(root string) bool {
 	if !text(root, 32768) || !strings.HasPrefix(root, `\\?\`) || len(root) < 7 {
 		return false
 	}
-	asciiDrive := (root[4] >= 'A' && root[4] <= 'Z') || (root[4] >= 'a' && root[4] <= 'z')
-	if !asciiDrive || root[5] != ':' || root[6] != '\\' || strings.Contains(root, "/") {
+	if root[4] < 'A' || root[4] > 'Z' || root[5] != ':' || root[6] != '\\' || strings.Contains(root, "/") {
 		return false
 	}
 	for _, part := range strings.Split(root[7:], `\`) {
@@ -195,6 +194,34 @@ func rootGrammar(root string) bool {
 		}
 	}
 	return true
+}
+
+// generationPath binds a snapshot's lowercase 32-hex generation to the exact
+// basename of its canonical extended-drive generation directory. It does not
+// normalize aliases, dot segments or alternate spellings.
+func generationPath(root, generation string) bool {
+	if !rootGrammar(root) || !hexValue(generation, 32) {
+		return false
+	}
+	suffix := `\` + generation
+	if !strings.HasSuffix(root, suffix) {
+		return false
+	}
+	parent := strings.TrimSuffix(root, suffix)
+	return parent == `\\?\`+string(root[4])+":" || rootGrammar(parent)
+}
+
+func bindingPath(path string) (string, bool) {
+	const suffix = `\generation.wne`
+	if !strings.HasSuffix(path, suffix) {
+		return "", false
+	}
+	root := strings.TrimSuffix(path, suffix)
+	start := strings.LastIndex(root, `\`)
+	if start < 0 || !generationPath(root, root[start+1:]) {
+		return "", false
+	}
+	return root, true
 }
 
 func threadID(id string) bool { return text(id, 4096) && id != "." && id != ".." }

@@ -99,6 +99,20 @@ func (b *Backend) policy(s installruntime.PolicySnapshot) (agentnotify.Policy, e
 				return p, errConfig
 			}
 		}
+		if raw, ok := m["windowsCallbackSnapshot"]; ok {
+			binding, e := object(raw)
+			if e != nil || len(binding) != 2 {
+				return p, errConfig
+			}
+			if field(binding, "snapshotPath", &p.Route.Windows.SnapshotPath, true) != nil || field(binding, "sha256", &p.Route.Windows.SHA256, true) != nil {
+				return p, errConfig
+			}
+			for key := range binding {
+				if key != "snapshotPath" && key != "sha256" {
+					return p, errConfig
+				}
+			}
+		}
 	}
 	if p.Route.LocalRouting {
 		p.Route.Platform = runtime.GOOS
@@ -205,7 +219,7 @@ func navigationStatus(s Status, p agentnotify.Policy, o *origin.Context, platfor
 	if !p.Delivery.ClickToFocus {
 		return no("disabled", "click_to_focus_disabled")
 	}
-	if (platform != "darwin" && platform != "linux") || s.OfflineCapability == "unsupported_platform" {
+	if (platform != "darwin" && platform != "linux" && platform != "windows") || s.OfflineCapability == "unsupported_platform" {
 		return no("unavailable", "unsupported_platform")
 	}
 	if s.OfflineCapability != "eligible" || !p.Delivery.ExplicitEnabled {
@@ -219,6 +233,9 @@ func navigationStatus(s Status, p agentnotify.Policy, o *origin.Context, platfor
 	n := target.Navigation
 	if n.Capability != "available" {
 		return no(n.Capability, n.Reason)
+	}
+	if platform == "windows" {
+		return agentnotify.NavigationStatus{Capability: "eligible", Precision: n.Precision, Scope: n.Scope, Reason: n.Reason}
 	}
 	if platform == "linux" {
 		if target.Desktop.Linux.SnapshotPath == "" {
