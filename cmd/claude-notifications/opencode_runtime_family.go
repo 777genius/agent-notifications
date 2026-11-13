@@ -27,10 +27,11 @@ func exactKey(live runtimeLiveImage) opencodecodec.ImageKey {
 	return opencodecodec.ImageKey{GOOS: live.GOOS, GOARCH: live.GOARCH, Entry: live.Entry, SHA256: live.SHA256}
 }
 
-// familyEligible is false for an image that already has its own qualified row:
-// an exact qualification (e.g. a reviewed V1 release) always wins over the family.
+// familyEligible covers V2 only: an image with a reviewed V1 row keeps that exact
+// qualification. Observed V2 rows (such as 2.2.6) have no reader or clock row of
+// their own, so they still resolve through the family reference.
 func familyEligible(live runtimeLiveImage) bool {
-	if _, exact := opencodecodec.LookupCandidate(exactKey(live)); exact {
+	if c, exact := opencodecodec.LookupCandidate(exactKey(live)); exact && c.Generation == "v1" {
 		return false
 	}
 	return live.Publisher && live.GOOS == familyReference.GOOS && live.GOARCH == familyReference.GOARCH &&

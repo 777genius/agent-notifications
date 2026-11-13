@@ -62,6 +62,14 @@ func TestFamilyKeepsExactQualifiedV1(t *testing.T) {
 	}
 }
 
+// Observed 2.2.6 (issue #642) has an exact candidate row but no reader or clock row.
+func TestFamilyStillCoversObservedV2Row(t *testing.T) {
+	live := familyLive("90e4d03597b03d2051b65b4d793467764e55bacd8e22bf4824479c7233ea0e15", true)
+	if got := qualifyRuntimeObserver(opencodehost.Profile{Version: "2.2.6"}, live); got != observerV2 {
+		t.Fatalf("official 2.2.6 = %v, want observerV2", got)
+	}
+}
+
 // A signed image never widens an exact qualified platform: Linux still needs its own row.
 func TestFamilyDoesNotLeakToOtherPlatforms(t *testing.T) {
 	live := familyLive("2222222222222222222222222222222222222222222222222222222222222222", true)
