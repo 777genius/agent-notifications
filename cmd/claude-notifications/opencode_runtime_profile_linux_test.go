@@ -22,7 +22,7 @@ import (
 )
 
 const runtimeReceiptGolden = "{\"protocol\":1,\"semantic\":\"unverified\",\"generation\":\"none\",\"resourceClosure\":\"reaped_or_not_started\"}\n"
-const qualifiedReceiptGolden = "{\"protocol\":1,\"semantic\":\"eligible\",\"generation\":\"v2\",\"resourceClosure\":\"reaped_or_not_started\"}\n"
+const qualifiedReceiptGolden = "{\"protocol\":1,\"semantic\":\"eligible\",\"generation\":\"v2\",\"resourceClosure\":\"reaped_or_not_started\",\"version\":\"2.0.21\"}\n"
 
 // Ordinary independent TEST native bytes. The serve process itself starts and
 // waits for the helper: the purported host and helper must never be siblings.

@@ -93,6 +93,51 @@ func TestRuntimeDarwinSDKRejectsAbsentProcess(t *testing.T) {
 	}
 }
 
+func TestRuntimeDarwinOpenCodePublisher(t *testing.T) {
+	if runtimeDarwinOpenCodePublisher(-1) || runtimeDarwinOpenCodePublisher(os.Getpid()) {
+		t.Fatal("invalid or unrelated process matched the OpenCode publisher")
+	}
+	image := os.Getenv("AN_TEST_OFFICIAL_OPENCODE")
+	if image == "" {
+		t.Skip("official OpenCode TEST image not provided")
+	}
+	file, err := os.Open(image)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest, err := runtimeFileHash(context.Background(), file)
+	_ = file.Close()
+	if err != nil || digest != "90e4d03597b03d2051b65b4d793467764e55bacd8e22bf4824479c7233ea0e15" {
+		t.Fatal("official TEST image digest mismatch")
+	}
+	dir := t.TempDir()
+	child := exec.Command(image, "-e", "setInterval(()=>{},1000)")
+	child.Dir = dir
+	child.Env = []string{"BUN_BE_BUN=1", "PATH=/usr/bin:/bin", "HOME=" + dir, "TMPDIR=" + dir}
+	if err := child.Start(); err != nil {
+		t.Fatal(err)
+	}
+	pid := child.Process.Pid
+	waited := false
+	defer func() {
+		if !waited {
+			_ = child.Process.Kill()
+			_ = child.Wait()
+		}
+	}()
+	if !runtimeDarwinOpenCodePublisher(pid) {
+		t.Fatal("official live process did not match the publisher")
+	}
+	if err := child.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	_ = child.Wait()
+	waited = true
+	if runtimeDarwinOpenCodePublisher(pid) {
+		t.Fatal("reaped process retained publisher authority")
+	}
+}
+
 // Red failure: start seconds/usecs and vnode remain identical on self-exec.
 // The retained native event epoch must revoke that otherwise equal snapshot.
 func TestRuntimeDarwinSameImageExecRevokesEpoch(t *testing.T) {

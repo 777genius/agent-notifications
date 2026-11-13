@@ -2,15 +2,52 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, renameSync, rmSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { address, closeAll, createNativeClock, darwinABI, darwinBoot, filetimeNS,
+import { address, closeAll, createNativeClock, darwinABI, darwinRealtimeABI, darwinBoot, filetimeNS, realtimeNS,
   interruptABI, interruptNS, machNS, uint64, withWallOffset, windowsBoot, windowsKernelABI, windowsNtABI } from './native-clock-contract.mjs';
 import { parseUptime } from './linux-clock.mjs';
-import { selectClockCell } from './clock-cells.mjs';
+import { findClockCell, selectClockCell } from './clock-cells.mjs';
 
 const MAX = 9223372036854775807n, U64 = 18446744073709551615n;
 const boot = '00112233-4455-6677-8899-aabbccddeeff';
 const changedBoot = '11223344-4455-6677-8899-aabbccddeeff';
 const denied = fn => assert.throws(fn, { name: 'TypeError', message: 'clock_unavailable' });
+
+test('clock selection refuses versions outside the compiled platform policy', () => {
+  for (const generation of ['v1', 'v2']) {
+    const cell = selectClockCell(generation, generation === 'v1' ? '1.18.33' : '2.0.21');
+    if (!cell) continue; // No compiled policy for this test platform.
+    for (const image of cell.images) assert.equal(selectClockCell(generation, image.version), cell);
+    for (const version of ['', null, 0, '999.0.0', '3.0.0', '2.0.20', '2.2.7-beta']) assert.equal(selectClockCell(generation, version), undefined);
+  }
+  // darwin/arm64 V2 is admitted by family range (Go decides identity); other platforms stay exact.
+  const family = process.platform === 'darwin' && process.arch === 'arm64';
+  assert.equal(selectClockCell('v2', '2.2.6'), family ? selectClockCell('v2', '2.0.21') : undefined);
+  assert.equal(selectClockCell('v2'), undefined);
+  // Isolated data only: this exercises multiple policies without registering any.
+  const base = { goos: 'darwin', goarch: 'arm64', generation: 'v2' };
+  const old = { ...base, images: [{ version: '2.0.21' }] };
+  const next = { ...base, images: [{ version: '2.2.6' }] };
+  assert.equal(findClockCell([old, next], 'darwin', 'arm64', 'v2', '2.0.21'), old);
+  assert.equal(findClockCell([old, next], 'darwin', 'arm64', 'v2', '2.2.6'), next);
+  assert.equal(findClockCell([old, next], 'darwin', 'arm64', 'v2'), undefined);
+  assert.equal(findClockCell([next, next], 'darwin', 'arm64', 'v2', '2.2.6'), undefined);
+});
+
+test('the official 2.2.6 candidate can be described and selects only the family reference policy', () => {
+  const family = process.platform === 'darwin' && process.arch === 'arm64';
+  // The source root and numeric bounds are synthetic test data, not evidence.
+  const candidate = { protocol: 1, generation: 'v2', goos: 'darwin', goarch: 'arm64',
+    ...describeClockSource('darwin', 'arm64'),
+    images: [{ version: '2.2.6', imageSHA256: '90e4d03597b03d2051b65b4d793467764e55bacd8e22bf4824479c7233ea0e15' }],
+    algorithmSourceMerkleSHA256: 'd'.repeat(64), nativeReadBoundNS: '103000000',
+    comparisonBoundNS: '430000000', translationBoundNS: '224000000', sourceWallBoundNS: '2000000' };
+  assert.equal(describeClockPolicy(candidate).images[0].version, '2.2.6');
+  for (const change of [r => { r.images[0].imageSHA256 = 'a'.repeat(64); },
+    r => { r.goarch = 'amd64'; }, r => { r.images[0].version = '2.2.7'; }]) {
+    const bad = structuredClone(candidate); change(bad); assert.throws(() => describeClockPolicy(bad));
+  }
+  assert.equal(selectClockCell('v2', '2.2.6'), family ? selectClockCell('v2', '2.0.21') : undefined);
+});
 
 test('actual LP64/Win64 ABI contracts use output pointers, unsigned counters and VOID status', () => {
   assert.deepEqual(darwinABI, {
@@ -18,6 +55,7 @@ test('actual LP64/Win64 ABI contracts use output pointers, unsigned counters and
     mach_timebase_info: { returns: 'i32', args: ['ptr'] },
     sysctlbyname: { returns: 'i32', args: ['ptr', 'ptr', 'ptr', 'ptr', 'u64'] },
   });
+  assert.deepEqual(darwinRealtimeABI, { ...darwinABI, clock_gettime: { returns: 'i32', args: ['i32', 'ptr'] } });
   assert.deepEqual(windowsKernelABI, {
     GetSystemDirectoryW: { returns: 'u32', args: ['ptr', 'u32'] },
     LoadLibraryExW: { returns: 'u64', args: ['ptr', 'u64', 'u32'] },
@@ -31,6 +69,13 @@ test('actual LP64/Win64 ABI contracts use output pointers, unsigned counters and
   assert.equal(address(4096, 8), 4096);
   assert.throws(() => { interruptABI.returns = 'u64'; });
   assert.throws(() => { windowsKernelABI.LoadLibraryExW.args[1] = 'u32'; });
+});
+
+test('Darwin realtime timespec rejects malformed and overflowing values', () => {
+  assert.equal(realtimeNS(1700000000n, 123456789n), 1700000000123456789n);
+  assert.equal(realtimeNS(9223372036n, 854775807n), MAX);
+  for (const args of [[0n, 0n], [-1n, 1n], [1n, -1n], [1n, 1000000000n],
+    [9223372036n, 854775808n], [1, 0n], [1n, 0]]) denied(() => realtimeNS(...args));
 });
 
 test('unsigned FFI conversion rejects lossy numbers and native range errors', () => {
@@ -146,7 +191,7 @@ test('Linux arm64 shares official proc floor grammar; nearest int64 overflow is 
 });
 
 test('portable Node imports stay inert; absent native platform/image proof denies, cells remain closed', async () => {
-  const selected = [selectClockCell('v1'), selectClockCell('v2')];
+  const selected = [selectClockCell('v1', '1.18.33'), selectClockCell('v2', '2.0.21')];
   const { createDarwinClock } = await import('./darwin-clock.mjs');
   const { createWindowsClock } = await import('./windows-clock.mjs');
   const { pinNativeImage } = await import('./native-clock-image.mjs');
@@ -155,7 +200,7 @@ test('portable Node imports stay inert; absent native platform/image proof denie
   denied(pinNativeImage);
   await assert.rejects(createDarwinClock(), { message: 'clock_unavailable' });
   await assert.rejects(createWindowsClock(), { message: 'clock_unavailable' });
-  assert.deepEqual([selectClockCell('v1'), selectClockCell('v2')], selected);
+  assert.deepEqual([selectClockCell('v1', '1.18.33'), selectClockCell('v2', '2.0.21')], selected);
 });
 
 test('held source image proof binds exact file bytes and refuses replacement or use after release', async () => {
@@ -196,7 +241,7 @@ function deliveryFixture(rawKind = 'darwin-monotonic-raw', generation = 'v2', fa
   const initial = rawKind === 'linux-boottime' ? 1000000000000n :
     rawKind === 'darwin-monotonic-raw' ? 1000000000007n : 1000000000100n;
   const wallBase = 1700000000000000000n;
-  let tick = initial, closes = 0, cancels = 0, events = 0, frame, mutate, receiptMutation, helperGate, queued, spawnGap = 0n;
+  let tick = initial, closes = 0, cancels = 0, events = 0, frame, mutate, receiptMutation, helperGate, queued, spawnGap = 0n, helperDelays = [], owned = true;
   const calls = [], helpers = [];
   const source = { imageSHA256: 'a'.repeat(64), sample() {
     calls.push('sample');
@@ -213,7 +258,7 @@ function deliveryFixture(rawKind = 'darwin-monotonic-raw', generation = 'v2', fa
         monoLoNs: String(tick + 1000000n), monoHiNs: String(tick + 2000000n),
         wallUnixNs: String(wallBase + tick - initial), uncertaintyNs: '4000000' };
       const output = Buffer.from(JSON.stringify(receiptMutation ? receiptMutation(receipt) : receipt));
-      tick += 10000000n;
+      tick += helperDelays.shift() ?? 10000000n;
       if (helperGate) await helperGate.promise;
       return { status: 'ok', output };
     },
@@ -225,15 +270,16 @@ function deliveryFixture(rawKind = 'darwin-monotonic-raw', generation = 'v2', fa
     },
     cancel() { cancels++; calls.push('cancel'); },
   };
-  const policy = { generation, images: [{ imageSHA256: 'a'.repeat(64) }], profileID: 'TEST-inert-policy', calibrationID: 'TEST-inert-calibration', rawKind,
+  const policy = { generation, goarch: rawKind === 'darwin-monotonic-raw' ? 'arm64' : 'amd64', images: [{ imageSHA256: 'a'.repeat(64) }], profileID: 'TEST-inert-policy', calibrationID: 'TEST-inert-calibration', rawKind,
     sourceKind: rawKind === 'linux-boottime' ? 'linux-proc-boottime' : rawKind === 'darwin-monotonic-raw' ?
       'darwin-mach-continuous' : 'windows-interrupt-precise', sourceWallBoundNS: 2000000n,
     nativeReadBoundNS: 103000000n, comparisonBoundNS: 430000000n, translationBoundNS: 224000000n };
-  const delivery = createPreparedDelivery({ registry, origin: 'a'.repeat(64), policy, isOwned: () => true,
+  const delivery = createPreparedDelivery({ registry, origin: 'a'.repeat(64), policy, isOwned: () => owned,
     sourceFactory: factory ? options => factory(options, source) : () => source });
   return { delivery, source, calls, helpers, advance(n) { tick += n; }, tick: () => tick,
     closes: () => closes, cancels: () => cancels, events: () => events, frame: () => parseJSON(frame),
-    mutate(fn) { mutate = fn; }, receipt(fn) { receiptMutation = fn; }, gap(n) { spawnGap = n; }, gateHelper(gate) { helperGate = gate; }, queue(gate) { queued = gate; },
+    mutate(fn) { mutate = fn; }, receipt(fn) { receiptMutation = fn; }, gap(n) { spawnGap = n; },
+    helperDelays(values) { helperDelays = [...values]; }, revoke() { owned = false; }, gateHelper(gate) { helperGate = gate; }, queue(gate) { queued = gate; },
     fact() { return { version: 1, kind: 'question_asked', sessionID: 's', turnID: 'original-turn', requestID: 'r', rootSession: true,
       provenance: { generation, observationID: 'original-observation', nativeTime: Number((wallBase + tick - initial) / 1000000n),
         timeBasis: generation === 'v1' ? 'assistant_created_lower_bound' : 'envelope_created',
@@ -246,6 +292,62 @@ function deliveryFixture(rawKind = 'darwin-monotonic-raw', generation = 'v2', fa
     },
   };
 }
+
+test('activation retries only slow, otherwise valid calibration inside the same deadline', async () => {
+  for (const generation of ['v1', 'v2']) {
+    const f = deliveryFixture('darwin-monotonic-raw', generation);
+    try {
+      const oldBirth = f.fact().provenance.nativeTime;
+      f.helperDelays([300000000n, 10000000n]);
+      assert.equal(await f.delivery.activate(), true);
+      assert.equal(f.helpers.length, 2);
+      assert.equal(f.helpers[0].deadline, f.helpers[1].deadline);
+      assert.equal(f.delivery.allowsBirth(oldBirth), false, 'failed sample must not stamp the epoch');
+      assert.equal(f.cancels(), 0);
+    } finally { f.delivery.dispose(); }
+  }
+});
+
+test('activation keeps rejecting invalid or repeatedly slow calibration', async () => {
+  for (const mode of ['invalid-boot', 'invalid-wall', 'always-slow']) {
+    const f = deliveryFixture();
+    try {
+      f.helperDelays([300000000n, 300000000n, 300000000n]);
+      if (mode === 'invalid-boot') f.receipt(r => ({ ...r, boot: changedBoot }));
+      if (mode === 'invalid-wall') f.receipt(r => ({ ...r, wallUnixNs: String(BigInt(r.wallUnixNs) + 5000000000n) }));
+      assert.equal(await f.delivery.activate(), false);
+      assert.equal(f.helpers.length, mode === 'always-slow' ? 3 : 1);
+      assert.equal(f.delivery.ready(), false);
+      assert.equal(f.closes(), 1);
+      assert.equal(f.cancels(), 1);
+    } finally { f.delivery.dispose(); }
+  }
+});
+
+test('slow calibration retry refuses revoked ownership or a forged second helper', async () => {
+  for (const rawKind of ['linux-boottime', 'darwin-monotonic-raw', 'windows-interrupt-precise']) {
+    for (const mode of ['revoked', 'wrong-boot', 'wrong-wall']) {
+      const f = deliveryFixture(rawKind);
+      let receipts = 0;
+      try {
+        f.helperDelays([300000000n, 10000000n]);
+        f.receipt(r => {
+          if (++receipts !== 2) return r; // First bracket is valid but exceeds the fixed bound.
+          if (mode === 'revoked') { f.revoke(); return r; }
+          if (mode === 'wrong-boot') return { ...r, boot: changedBoot };
+          return { ...r, wallUnixNs: String(BigInt(r.wallUnixNs) + 5000000000n) };
+        });
+        assert.equal(await f.delivery.activate(), false, mode + '/' + rawKind);
+        assert.equal(f.helpers.length, 2, 'the invalid second helper cannot trigger another retry');
+        assert.equal(f.helpers[0].deadline, f.helpers[1].deadline);
+        assert.equal(f.delivery.ready(), false);
+        assert.equal(f.cancels(), 1);
+        assert.equal(f.closes(), 1);
+        assert.equal(f.events(), 0);
+      } finally { f.delivery.dispose(); }
+    }
+  }
+});
 
 test('async preparation finishes before helper and synchronous admission; exact native ingress/birth/anchor survive', async () => {
   for (const rawKind of ['linux-boottime', 'darwin-monotonic-raw', 'windows-interrupt-precise']) {
@@ -345,9 +447,9 @@ test('closed platform policy descriptions cannot populate qualification; no impl
         algorithmSourceMerkleSHA256: 'd'.repeat(64), nativeReadBoundNS: '103000000',
         comparisonBoundNS: '430000000', translationBoundNS: '224000000',
         ...(goos === 'linux' ? {} : { sourceWallBoundNS: '2000000' }) };
-      const selected = selectClockCell(generation);
+      const selected = selectClockCell(generation, generation === 'v1' ? '1.18.33' : '2.0.21');
       const policy = describeClockPolicy(row); assert.equal(policy.rawKind, descriptor.rawKind);
-      assert.ok(Object.isFrozen(policy)); assert.equal(selectClockCell(generation), selected);
+      assert.ok(Object.isFrozen(policy)); assert.equal(selectClockCell(generation, generation === 'v1' ? '1.18.33' : '2.0.21'), selected);
       for (const change of [r => { r.rawKind = 'unknown'; }, r => { r.sourceKind = 'wrong'; },
         r => { r.images[0].imageSHA256 = 'bad'; }, r => { r.images[0].version = '2.0.22'; },
         r => { r.goarch = '386'; }, r => { r.comparisonBoundNS = '2000000001'; }]) {
@@ -421,9 +523,9 @@ test('Linux amd64 image tuples, bounds and legacy profile ID formula remain equi
   for (const [row, expected] of vectors) {
     assert.equal(describeClockPolicy(row).profileID, expected);
     assert.equal(describeClockPolicy(row).calibrationID, expected + ':same-coordinate');
-    const selected = selectClockCell(row.generation);
+    const selected = selectClockCell(row.generation, row.generation === 'v1' ? '1.18.33' : '2.0.21');
     assert.throws(() => describeClockPolicy({ ...row, originalNativeAge: 'unverified_original_date' }));
-    assert.equal(selectClockCell(row.generation), selected);
+    assert.equal(selectClockCell(row.generation, row.generation === 'v1' ? '1.18.33' : '2.0.21'), selected);
   }
 });
 
@@ -471,13 +573,21 @@ test('pre-epoch native birth stays denied without rebirth or provenance replacem
 // An authenticated but different native image must not inherit the descriptor.
 // Both hashes are inert test identities; production pins are untouched.
 test('well-formed wrong native image denies before counter/helper and disposes the binding', async () => {
-  for (const kind of ['darwin-monotonic-raw', 'windows-interrupt-precise']) {
-    const f = deliveryFixture(kind); f.source.imageSHA256 = 'b'.repeat(64);
-    assert.equal(await f.delivery.activate(), false);
-    assert.equal(f.calls.includes('sample'), false); assert.equal(f.helpers.length, 0);
-    assert.equal(f.closes(), 1); assert.equal(f.cancels(), 1);
-    f.delivery.dispose(); assert.equal(f.closes(), 1);
-  }
+  const f = deliveryFixture('windows-interrupt-precise'); f.source.imageSHA256 = 'b'.repeat(64);
+  assert.equal(await f.delivery.activate(), false);
+  assert.equal(f.calls.includes('sample'), false); assert.equal(f.helpers.length, 0);
+  assert.equal(f.closes(), 1); assert.equal(f.cancels(), 1);
+  f.delivery.dispose(); assert.equal(f.closes(), 1);
+});
+
+// Darwin identity belongs to the Go helper (live image plus verified publisher). The
+// JS layer must not re-pin release hashes, or every new official release is refused.
+test('darwin does not decide native image identity from a release hash', async () => {
+  const f = deliveryFixture('darwin-monotonic-raw'); f.source.imageSHA256 = 'b'.repeat(64);
+  try {
+    assert.equal(await f.delivery.activate(), true);
+    assert.equal(f.calls.includes('sample'), true);
+  } finally { f.delivery.dispose(); }
 });
 
 // Cancellation alone does not prove an unresolved preparation is bounded.
@@ -502,11 +612,11 @@ test('original native age exception is explicit, image-exact and cannot select a
     algorithmSourceMerkleSHA256: 'd'.repeat(64), nativeReadBoundNS: '103000000',
     comparisonBoundNS: '430000000', translationBoundNS: '224000000', sourceWallBoundNS: '2000000',
     originalNativeAge: 'unverified_original_date' };
-  const selected = selectClockCell('v1'), policy = describeClockPolicy(row);
+  const selected = selectClockCell('v1', '1.18.33'), policy = describeClockPolicy(row);
   assert.equal(policy.originalNativeAge, 'unverified_original_date');
   // Independent Python canonical-JSON vector binds mode with the SAME image.
   assert.equal(policy.profileID, 'windows-amd64-windows-interrupt-precise-v1:591cfa5af34b8c88fca19f94bec620d2a5fce5c2558707e0b92ed61c8cceaff2');
-  assert.ok(Object.isFrozen(policy)); assert.equal(selectClockCell('v1'), selected);
+  assert.ok(Object.isFrozen(policy)); assert.equal(selectClockCell('v1', '1.18.33'), selected);
   for (const change of [r => { delete r.originalNativeAge; }, r => { r.originalNativeAge = 'bounded'; },
     r => { r.originalNativeAge = ''; }, r => { r.originalNativeAge = 'unknown'; },
     r => { r.images[0].imageSHA256 = 'a'.repeat(64); }, r => { r.images[0].version = '1.18.34'; },

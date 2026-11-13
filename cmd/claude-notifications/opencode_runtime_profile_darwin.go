@@ -3,7 +3,7 @@
 package main
 
 /*
-#cgo LDFLAGS: -lproc
+#cgo LDFLAGS: -lproc -framework Security -framework CoreFoundation
 #include "opencode_runtime_profile_darwin.h"
 */
 import "C"
@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"os"
 	"runtime"
+	"sync"
 	"syscall"
 	"time"
 	"unicode/utf8"
@@ -123,6 +124,7 @@ func holdRuntimeLiveImage(ctx context.Context, in runtimeProfileInput) (*runtime
 	release := func() { target.Close(); image.Close(); closeWatch() }
 	// SDK vnode continuity plus retained files is proof under the trusted
 	// cooperative immutable-image assumption, never arbitrary RAM immutability.
+	var publisher runtimeDarwinPublisherCache
 	read := func(ctx context.Context) (runtimeLiveImage, error) {
 		fail := func() (runtimeLiveImage, error) { return runtimeLiveImage{}, errRuntimePort }
 		if ctx.Err() != nil || os.Getppid() != in.NativePID || !runtimeDarwinUnchanged(watch) {
@@ -152,6 +154,10 @@ func holdRuntimeLiveImage(ctx context.Context, in runtimeProfileInput) (*runtime
 		}
 		ha, e := runtimeFileHash(ctx, image)
 		hb, e1 := runtimeFileHash(ctx, target)
+		// Asked inside the stability window: the process and both files are re-read
+		// and compared right below, so a swap after this point fails the read.
+		official := publisher.verified(runtimeDarwinPublisherKey{pid: in.NativePID, seconds: live.Seconds, micros: live.Micros,
+			sha: ha, device: device, inode: inode}, entry)
 		end, e2 := runtimeDarwinProcessInfo(in.NativePID)
 		na, e3 := os.Stat(live.Name)
 		nb, e4 := os.Stat(in.HostExecutable)
@@ -160,7 +166,9 @@ func holdRuntimeLiveImage(ctx context.Context, in runtimeProfileInput) (*runtime
 		}
 		// Compatibility normalization must never normalize continuity evidence.
 		encoded, _ := json.Marshal(runtimeDarwinSnapshot{Process: live, FileCPU: cpu, FileSubtype: subtype, SHA: ha, Device: device, Inode: inode, Size: a.Size(), Modified: a.ModTime().UTC().Format(time.RFC3339Nano), Mode: uint32(a.Mode())})
-		return runtimeLiveImage{GOOS: "darwin", GOARCH: runtime.GOARCH, Entry: entry, SHA256: ha, NativePID: in.NativePID, fingerprint: sha256.Sum256(encoded)}, nil
+		fingerprint := sha256.Sum256(encoded)
+		return runtimeLiveImage{GOOS: "darwin", GOARCH: runtime.GOARCH, Entry: entry, SHA256: ha, NativePID: in.NativePID,
+			Publisher: official, fingerprint: fingerprint}, nil
 	}
 	first, err := read(ctx)
 	if err != nil {
@@ -172,3 +180,38 @@ func holdRuntimeLiveImage(ctx context.Context, in runtimeProfileInput) (*runtime
 
 func runtimeDarwinWatch(pid int) int     { return int(C.an_runtime_watch(C.int(pid))) }
 func runtimeDarwinUnchanged(fd int) bool { return C.an_runtime_unchanged(C.int(fd)) == 1 }
+
+// runtimeDarwinPublisherCache reuses a positive OS publisher verdict for one exact
+// process and image: a cold SecCode check costs seconds, while an unchanged process
+// keeps the same answer. A negative verdict is never reused and is retried once, so
+// a transient OS failure cannot turn an official process into a refused one for the
+// whole lease. Only the arm64 serve entry is asked; every other image stays unverified.
+type runtimeDarwinPublisherKey struct {
+	pid             int
+	seconds, micros uint64
+	sha             string
+	device, inode   uint64
+}
+type runtimeDarwinPublisherCache struct {
+	mu  sync.Mutex
+	key runtimeDarwinPublisherKey
+	ok  bool
+}
+
+func (c *runtimeDarwinPublisherCache) verified(key runtimeDarwinPublisherKey, entry string) bool {
+	if entry != "serve" || runtime.GOARCH != "arm64" {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.ok && c.key == key {
+		return true
+	}
+	c.key = key
+	c.ok = runtimeDarwinOpenCodePublisher(key.pid) || runtimeDarwinOpenCodePublisher(key.pid)
+	return c.ok
+}
+
+func runtimeDarwinOpenCodePublisher(pid int) bool {
+	return pid > 0 && uint64(pid) <= 0x7fffffff && C.an_runtime_opencode_publisher(C.int(pid)) == 1
+}

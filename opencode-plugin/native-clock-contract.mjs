@@ -23,6 +23,11 @@ export function interruptNS(ticks) { return positiveNS(uint64(ticks) * 100n); }
 export function filetimeNS(ticks) {
   return positiveNS((uint64(ticks) - 116444736000000000n) * 100n);
 }
+export function realtimeNS(seconds, nanoseconds) {
+  if (typeof seconds !== 'bigint' || typeof nanoseconds !== 'bigint' ||
+      seconds < 0n || nanoseconds < 0n || nanoseconds >= 1000000000n) unavailable();
+  return positiveNS(seconds * 1000000000n + nanoseconds);
+}
 export function darwinBoot(bytes, length, status) {
   if (status !== 0 || length !== 37n || !(bytes instanceof Uint8Array) || bytes.length < 37 ||
       bytes[36] !== 0 || !bytes.subarray(0, 36).every(b => b > 0 && b < 128)) unavailable();
@@ -54,6 +59,13 @@ function abi(definitions) {
 export const darwinABI = abi({
   mach_continuous_time: ['u64'], mach_timebase_info: ['i32', 'ptr'],
   sysctlbyname: ['i32', 'ptr', 'ptr', 'ptr', 'ptr', 'u64'],
+});
+// The 2.2.6 candidate additionally samples CLOCK_REALTIME independently of
+// mutable JavaScript Date.now. Existing qualified images retain their ABI.
+export const darwinRealtimeABI = abi({
+  mach_continuous_time: ['u64'], mach_timebase_info: ['i32', 'ptr'],
+  sysctlbyname: ['i32', 'ptr', 'ptr', 'ptr', 'ptr', 'u64'],
+  clock_gettime: ['i32', 'i32', 'ptr'],
 });
 export const windowsKernelABI = abi({
   GetSystemDirectoryW: ['u32', 'ptr', 'u32'], LoadLibraryExW: ['u64', 'ptr', 'u64', 'u32'],

@@ -5,6 +5,7 @@
 import argparse
 import base64
 import hashlib
+import hmac
 import json
 import os
 import pathlib
@@ -1332,7 +1333,19 @@ def qualify(args, report):
             wait_for(lambda: any(x['kind']=='profile' for x in trace(root)), 10, 'native parent profile')
             profiles = [x['value'] for x in trace(root) if x['kind']=='profile']
             require(len(profiles)==1 and profiles[0].get('nativePID')==server.pid and profiles[0]['code']==0 and not profiles[0]['bad'] and not profiles[0]['forced'] and profiles[0]['actualClose'], 'profile_query_unclosed')
-            receipt = closed(profiles[0]['receipt'], ('protocol','semantic','generation','resourceClosure'), 'profile_receipt_schema')
+            receipt = profiles[0]['receipt']
+            require(isinstance(receipt, dict), 'profile_receipt_schema')
+            fields = ('protocol','semantic','generation','resourceClosure')
+            if receipt.get('semantic') == 'eligible':
+                closed(receipt, (*fields, 'version'), 'profile_receipt_schema')
+                # capture.mjs HMAC-redacts all unknown strings, including the
+                # host's actual version. Compare it to the expected official
+                # binary without publishing a raw version or accepting caller input.
+                version = 'h:' + hmac.new((root/'trace-key').read_bytes(),
+                                          args.version.encode(), hashlib.sha256).hexdigest()[:24]
+                require(hmac.compare_digest(receipt['version'], version), 'profile_native_version_mismatch')
+            else:
+                closed(receipt, fields, 'profile_receipt_schema')
             require(receipt.get('protocol')==1, 'profile_protocol_mismatch')
             require(receipt.get('semantic')=='eligible' and receipt.get('generation')==('v2' if v2 else 'v1') and receipt.get('resourceClosure')=='reaped_or_not_started', 'production_profile_unqualified')
             # No public native command on this base proves complete production clock

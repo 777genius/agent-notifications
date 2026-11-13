@@ -14,6 +14,22 @@ const compositionDiagnostic = (enabled, stage) => {
   try { console.error('Agent Notifications OpenCode composition: ' + stage); } catch {}
 };
 
+// One safe, bounded status per installed startup. Never print host-provided
+// errors, paths, session data, version strings or environment values.
+const startupWarning = (generation) => {
+  let reported = false;
+  return (code) => {
+    if (reported) return;
+    reported = true;
+    const reason = code === 'runtime_unverified' ? 'host runtime not qualified' :
+      code === 'policy_unavailable' ? 'native clock policy unavailable' : 'native activation unavailable';
+    try {
+      console.error('Agent Notifications OpenCode ' + generation + ': notifications disabled (' + reason +
+        '). Update Agent Notifications and see https://github.com/777genius/agent-notifications/blob/main/docs/opencode-notifications.md#compatibility-and-diagnostics.');
+    } catch {}
+  };
+};
+
 const servers = new WeakMap(), setups = new WeakMap();
 const silent = Object.freeze({ event() {} });
 async function reportDelivery(delivery, diagnostics = false) {
@@ -42,15 +58,17 @@ async function server(input, options = {}) {
   const holder = { directory: input.directory, retired: false };
   const starting = (async () => {
     let diagnostics = false;
-    const owned = await prepareOwnedHost(input.directory, 'v1', undefined, (diagnostics = options?.diagnostics === true));
+    const warning = startupWarning('v1');
+    const owned = await prepareOwnedHost(input.directory, 'v1', undefined, (diagnostics = options?.diagnostics === true), warning);
     if (!owned) {
       compositionDiagnostic(diagnostics, 'v1.owned.denied');
       return silent;
     }
     if (holder.retired) { await owned.dispose(); return silent; }
-    const policy = selectClockCell('v1');
+    const policy = selectClockCell('v1', owned.hostVersion);
     if (!policy) {
       compositionDiagnostic(diagnostics, 'v1.policy.denied');
+      warning('policy_unavailable');
       await owned.dispose(); return silent;
     }
     let observer, view, stopped = false, stopping;
@@ -72,6 +90,7 @@ async function server(input, options = {}) {
     try {
       if (!await delivery.activate() || holder.retired) {
         compositionDiagnostic(diagnostics, 'v1.activation.denied');
+        if (!holder.retired && owned.isOwned()) warning('activation_unavailable');
         stop(); return silent;
       }
       compositionDiagnostic(diagnostics, 'v1.activation.ok');
@@ -111,7 +130,7 @@ async function server(input, options = {}) {
           display.release(snapshot); stop();
         }
       } });
-    } catch { stop(); return silent; }
+    } catch { if (!holder.retired && owned.isOwned()) warning('activation_unavailable'); stop(); return silent; }
   })();
   holder.starting = starting; servers.set(input.client, holder);
   return starting;
@@ -123,23 +142,25 @@ async function setup(context) {
   if (setups.has(context)) return setups.get(context);
   const starting = (async () => {
     let diagnostics = false;
-    const owned = await prepareOwnedHost(context.location?.directory, 'v2', context.app?.version, (diagnostics = context.options?.diagnostics === true));
+    const warning = startupWarning('v2');
+    const owned = await prepareOwnedHost(context.location?.directory, 'v2', context.app?.version, (diagnostics = context.options?.diagnostics === true), warning);
     if (!owned) {
       compositionDiagnostic(diagnostics, 'v2.owned.denied');
       return;
     }
-    const policy = selectClockCell('v2');
+    const policy = selectClockCell('v2', owned.hostVersion);
     // The official V2 session API is not the V1 title lookup API. No synthetic
     // client/events: when that native client is unavailable, display stays neutral.
     const display = context.client?.session?.get ? createDisplayContext(context.client) : undefined;
     if (!policy) {
       compositionDiagnostic(diagnostics, 'v2.policy.denied');
+      warning('policy_unavailable');
       await owned.dispose(); return;
     }
     let observer, view, stopped = false, connection;
     const location = Object.freeze({ directory: context.location.directory, workspaceID: context.location.workspaceID,
       projectID: context.location.project?.id });
-    const isNativeOwned = () => owned.isOwned() && context.app?.version === '2.0.21' &&
+    const isNativeOwned = () => owned.isOwned() && context.app?.version === owned.hostVersion &&
       context.location?.directory === location.directory && context.location?.workspaceID === location.workspaceID &&
       context.location?.project?.id === location.projectID;
     const delivery = createPreparedDelivery({ registry: owned.registry, origin: owned.origin, policy,
@@ -155,6 +176,7 @@ async function setup(context) {
       view = createNativeV2(context, context.location, delivery.nativeIngress, delivery.invalidate);
       if (!await delivery.activate()) {
         compositionDiagnostic(diagnostics, 'v2.activation.denied');
+        if (!stopped && isNativeOwned()) warning('activation_unavailable');
         await stop(); return;
       }
       compositionDiagnostic(diagnostics, 'v2.activation.ok');
@@ -165,18 +187,32 @@ async function setup(context) {
         const current = connection;
         // SDK owns the only reader/replacement budget. Reconnect gets a closed
         // anchor before opening native subscription/RPC; old identities are gone.
-        let iterator, snapshot;
+        let iterator, prefetched, snapshot;
+        if (delivery.ready()) {
+          iterator = context.event.subscribe({ signal: current.signal })[Symbol.asyncIterator]();
+          // Start reading before the SDK opens its checkpoint. Preserve the first
+          // sample even if checkpoint setup calls the clock before delivery.
+          prefetched = Promise.resolve(iterator.next()).then(item => ({ item, token: item.done ? undefined : delivery.captureIngress(item.value) })).catch(error => ({ error }));
+        }
         const opening = delivery.activate().then((ready) => {
           if (!ready || stopped || signal.aborted || current.signal.aborted) throw new TypeError('reader_unverified');
-          iterator = context.event.subscribe({ signal: current.signal })[Symbol.asyncIterator]();
+          if (!iterator) iterator = context.event.subscribe({ signal: current.signal })[Symbol.asyncIterator]();
         });
         return { [Symbol.asyncIterator]() { return this; }, async next() {
           display?.release(snapshot); snapshot = undefined;
           try {
             await opening;
-            const item = await iterator.next();
+            let item;
+            let firstToken;
+            if (prefetched) { const first = await prefetched; prefetched = undefined; if (first.error) throw first.error; item = first.item; firstToken = first.token; }
+            else item = await iterator.next();
             if (!item.done) snapshot = display?.capture(item.value);
             if (item.done) delivery.invalidate('reader');
+            // for-await reads value immediately before its synchronous observe.
+            if (firstToken) {
+              const value = item.value; let armed = false;
+              return { done: false, get value() { if (!armed) { armed = true; delivery.armIngress(firstToken, value); } return value; } };
+            }
             return item;
           } catch { delivery.invalidate('reader'); throw new TypeError('reader_unverified'); }
         }, async return() {
@@ -207,7 +243,7 @@ async function setup(context) {
         emit: (event, handoff) => { const fact = view.project(event); return fact ? reportDelivery(delivery.emit(fact, handoff), diagnostics) : undefined; } });
       observer.start();
       return stop;
-    } catch { await stop(); }
+    } catch { if (!stopped && isNativeOwned()) warning('activation_unavailable'); await stop(); }
   })();
   setups.set(context, starting);
   return starting;

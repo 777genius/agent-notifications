@@ -37,10 +37,14 @@ export function createNativeV2(context, ownedLocation, onIngress, onUncertainty)
     const b = state(sid); if (!b) return { sessionID: sid };
     const nativeScope = scope(event.location) ?? scope(p.location);
     if (nativeScope) b.scope = nativeScope;
-    if (['session.moved', 'session.deleted'].includes(type)) { b.run = undefined; b.forms.clear(); b.requests.clear(); }
+    const d = event.durable;
+    const durable = d?.aggregateID === sid && Number.isSafeInteger(d.seq) && d.seq > 0 &&
+      Number.isSafeInteger(d.version) && d.version > 0 ? d : undefined;
+    if (['session.moved', 'session.deleted'].includes(type)) { b.run = undefined; b.compaction = undefined; b.forms.clear(); b.requests.clear(); }
     if (type === 'session.execution.started') {
       b.run = event.id; b.user = undefined; b.assistant = undefined; b.step = undefined;
-      b.terminal = undefined; b.forms.clear(); b.requests.clear();
+      b.runSequence = durable && Object.freeze({ seq: durable.seq, version: durable.version }); b.userSequence = undefined;
+      b.terminal = undefined; b.compaction = undefined; b.forms.clear(); b.requests.clear();
     }
     if (type === 'session.inbox.enqueued' && id(p.inboxID) && id(p.item?.type)) {
       if (b.inbox.size >= 64 && !b.inbox.has(p.inboxID)) { onUncertainty(); return { sessionID: sid }; }
@@ -49,9 +53,28 @@ export function createNativeV2(context, ownedLocation, onIngress, onUncertainty)
     }
     if (type === 'session.inbox.delivered') {
       const kind = b.inbox.get(p.inboxID); b.inbox.delete(p.inboxID);
-      if (kind === 'user') b.user = p.inboxID;
+      if (kind === 'user') {
+        b.user = p.inboxID; b.compaction = undefined;
+        b.userSequence = durable && b.runSequence && durable.version === b.runSequence.version && durable.seq > b.runSequence.seq ?
+          Object.freeze({ seq: durable.seq, version: durable.version }) : undefined;
+      }
     }
     if (type === 'session.inbox.cancelled') b.inbox.delete(p.inboxID);
+    // An automatic compaction can replace the original user row in the
+    // public context. Preserve only its native started/ended lineage; the
+    // resulting context must still contain that exact compaction marker.
+    if (type === 'session.compaction.started') {
+      b.compaction = p.reason === 'auto' && id(b.run) && id(b.user) && id(event.id) && event.id.startsWith('evt_') &&
+        same(nativeScope, own) && durable && b.userSequence && durable.version === b.userSequence.version && durable.seq > b.userSequence.seq ?
+        Object.freeze({ id: event.id, run: b.run, user: b.user, seq: durable.seq, version: durable.version, ended: false }) : undefined;
+    }
+    if (type === 'session.compaction.ended') {
+      const c = b.compaction;
+      b.compaction = c && !c.ended && p.reason === 'auto' && c.run === b.run && c.user === b.user &&
+        same(nativeScope, own) && durable && durable.version === c.version && durable.seq > c.seq ?
+        Object.freeze({ ...c, ended: true }) : undefined;
+    }
+    if (type === 'session.compaction.failed') b.compaction = undefined;
     const compaction = type.startsWith('session.compaction.') || p.type === 'compaction';
     if (type === 'session.step.started') { b.assistant = compaction ? undefined : p.assistantMessageID; b.step = undefined; b.forms.clear(); b.requests.clear(); }
     if (['session.step.ended', 'session.step.failed'].includes(type)) b.step = Object.freeze({
@@ -80,11 +103,10 @@ export function createNativeV2(context, ownedLocation, onIngress, onUncertainty)
       if (b.requests.size >= 64) { onUncertainty(); return { sessionID: sid }; }
       b.requests.set(requestID, Object.freeze({ eventID: event.id, created: event.created, run: b.run, messageID, callID }));
     }
-    const durable = event.durable;
     return { sessionID: sid, ...(nativeScope ? { location: nativeScope.directory } : {}),
       ...(messageID !== undefined ? { messageID } : {}), ...(requestID !== undefined ? { requestID } : {}),
       ...(callID !== undefined ? { callID } : {}), ...(compaction ? { compaction: true } : {}),
-      ...(durable ? { sequence: { aggregate: durable.aggregateID, seq: durable.seq, version: durable.version } } : {}) };
+      ...(d ? { sequence: { aggregate: d.aggregateID, seq: d.seq, version: d.version } } : {}) };
   }
   const binding = (run) => {
     const b = bindings.get(run.sessionID);
@@ -116,7 +138,12 @@ export function createNativeV2(context, ownedLocation, onIngress, onUncertainty)
           row.sessionID !== undefined && row.sessionID !== run.sessionID) return;
       seen.add(row.id);
     }
-    if (value.findLast((row) => row.type === 'user')?.id !== b.user) return;
+    const lastUser = value.findLast((row) => row.type === 'user');
+    if (lastUser?.id !== b.user) {
+      const c = b.compaction, marker = c && `msg_${c.id.slice(4)}`;
+      const latestCompaction = value.findLast((row) => row.type === 'compaction');
+      if (lastUser || !c?.ended || c.run !== b.run || c.user !== b.user || latestCompaction?.id !== marker) return;
+    }
     return value;
   }
   async function assistant(run, signal) {
@@ -126,14 +153,18 @@ export function createNativeV2(context, ownedLocation, onIngress, onUncertainty)
     const terminal = b.terminal, step = terminal?.step;
     const row = value.find((item) => item.id === run.messageID);
     // Exact schema mapping, not a fabricated terminal or desired outcome.
-    const terminalMessageID = terminal?.id.startsWith('evt_') ? `msg_${terminal.id.slice(4)}` : undefined;
+    const terminalMessageID = typeof terminal?.id === 'string' && terminal.id.startsWith('evt_') ? `msg_${terminal.id.slice(4)}` : undefined;
     if (row?.type !== 'assistant' || !stamp(row.time?.completed) || !stamp(row.time?.created) ||
         followsAssistant(value, row) || step?.messageID !== row.id || step.compaction ||
         !terminalMessageID || value.findIndex((item) => item.type === 'idle' && item.id === terminalMessageID) <= value.indexOf(row)) return;
     let outcome;
     if (terminal.type === 'session.execution.succeeded' && step.type === 'session.step.ended' &&
         row.finish === 'stop' && row.error == null) outcome = 'success';
-    if (terminal.type === 'session.execution.failed' && row.error && !cancelled(row.error)) outcome = 'error';
+    // OpenCode records output-limit failures on the terminal idle row, not
+    // on the preceding assistant row. Bind it to this exact native event.
+    const idle = value.find((item) => item.type === 'idle' && item.id === terminalMessageID);
+    if (terminal.type === 'session.execution.failed' &&
+        (row.error ? !cancelled(row.error) : idle?.outcome === 'failed' && idle.error?.type === 'output-limit')) outcome = 'error';
     if (!outcome) return;
     return Object.freeze({ ...proof, messageID: row.id, role: 'assistant', summary: false, final: true, outcome });
   }

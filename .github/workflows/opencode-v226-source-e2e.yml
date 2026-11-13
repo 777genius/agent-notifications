@@ -1,0 +1,610 @@
+name: OpenCode 2.2.6 native source prequalification
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - 'scripts/opencode-v226-source-e2e.py'
+      - 'scripts/ci-ubuntu-mirror.sh'
+      - 'scripts/test_opencode_v226_go_clock.py'
+      - 'scripts/test_opencode_v226_darwin_peer.py'
+      - 'scripts/test_opencode_v226_desktop_spool.py'
+      - 'scripts/test_opencode_v226_temp_cleanup.py'
+      - 'scripts/test_opencode_v226_sdk_source.py'
+      - 'scripts/opencode-v226-clock-e0.mjs'
+      - 'scripts/opencode-v226-darwin-abi-e0.mjs'
+      - 'scripts/testdata/opencode-v226-darwin-peer-e0.c'
+      - 'scripts/opencode_v226_darwin_peer_e0.py'
+      - 'scripts/opencode_v226_linux_peer_e0.py'
+      - 'scripts/test_opencode_v226_linux_peer.py'
+      - 'scripts/opencode-v226-darwin-signature-e0.py'
+      - 'scripts/opencode-v226-darwin-live-signature-e0.swift'
+      - 'scripts/opencode-semantic-e2e.py'
+      - 'opencode-plugin/**'
+      - 'cmd/claude-notifications/opencode*.go'
+      - 'cmd/claude-notifications/opencode*.c'
+      - 'cmd/claude-notifications/opencode*.h'
+      - 'internal/opencodecodec/**'
+      - 'internal/opencodeevent/**'
+      - 'internal/opencodeplugin/**'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/opencode-v226-source-e2e.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: opencode-v226-source-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  actual-source:
+    # Do not execute code from untrusted forks.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out exact PR candidate
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Check strict Go T0 observational frames (all three OS kinds)
+        run: python -B -m unittest discover -s scripts -p 'test_opencode_v226_*.py'
+      - name: Download and verify immutable official OpenCode 2.2.6
+        id: official
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/opencode-linux-x64-2.2.6.tar.gz"
+          curl --fail --location --silent --show-error --max-time 120 --max-filesize 160000000 \
+            'https://github.com/anomalyco/opencode/releases/download/v2.2.6/opencode-linux-x64.tar.gz' \
+            --output "$archive"
+          printf '%s  %s\n' '08bb21d6326ce740d91cce7ebe88a6536933f6e1e30353b91a06b01f25da306c' "$archive" | sha256sum --check --status
+      - name: Observe real native V2 source without delivery grants
+        shell: bash
+        run: |
+          python -B scripts/opencode-v226-source-e2e.py \
+            --archive "$RUNNER_TEMP/opencode-linux-x64-2.2.6.tar.gz" \
+            --linux-native-peer "$GITHUB_WORKSPACE/scripts/opencode_v226_linux_peer_e0.py" \
+            --report "$RUNNER_TEMP/opencode-v226-source-safe.json"
+      - name: Assert test-only +12s future source timestamp fails independent observation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -B scripts/opencode-v226-source-e2e.py \
+            --archive "$RUNNER_TEMP/opencode-linux-x64-2.2.6.tar.gz" \
+            --clock-skew-negative \
+            --report "$RUNNER_TEMP/opencode-v226-clock-skew-safe.json"
+      - name: Upload sanitized future source clock-skew negative
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: opencode-v226-clock-skew-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/opencode-v226-clock-skew-safe.json
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Assert test-only -12s past source timestamp fails independent observation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -B scripts/opencode-v226-source-e2e.py \
+            --archive "$RUNNER_TEMP/opencode-linux-x64-2.2.6.tar.gz" \
+            --clock-skew-past-negative \
+            --report "$RUNNER_TEMP/opencode-v226-clock-skew-past-safe.json"
+      - name: Upload sanitized past source clock-skew negative
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: opencode-v226-clock-skew-past-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/opencode-v226-clock-skew-past-safe.json
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Preserve only SHA-verified public archive for offline E2E analysis
+        if: always() && steps.official.outcome == 'success'
+        uses: actions/upload-artifact@v7
+        with:
+          name: opencode-v226-public-host-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/opencode-linux-x64-2.2.6.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+      - name: Package the exact tracked source for offline native analysis
+        id: package
+        if: ${{ !cancelled() && steps.official.outcome == 'success' }}
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git archive --format=tar.gz -o "$RUNNER_TEMP/agent-notifications-source.tar.gz" HEAD
+      - name: Upload public source snapshot (non-release)
+        if: ${{ !cancelled() && steps.package.outcome == 'success' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: an-v226-source-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/agent-notifications-source.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+      - name: Prepare pinned Go compiler for disposable test binary
+        id: go
+        if: ${{ !cancelled() && steps.official.outcome == 'success' }}
+        uses: actions/setup-go@v7
+        with:
+          go-version: '1.26.10'
+          cache: false
+      - name: Build exact-source unreleased Linux receiver
+        id: build
+        if: ${{ !cancelled() && steps.go.outcome == 'success' }}
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          CGO_ENABLED: '1'
+          GOWORK: off
+        run: |
+          set -euo pipefail
+          bash scripts/ci-ubuntu-mirror.sh
+          sudo apt-get update -qq
+          sudo apt-get install -y libasound2-dev
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          go build -trimpath -ldflags="-s -w" -o "$RUNNER_TEMP/an-qualification-unreleased" ./cmd/claude-notifications
+          go version -m "$RUNNER_TEMP/an-qualification-unreleased" | grep -F "vcs.revision=$EXPECTED_HEAD"
+          go version -m "$RUNNER_TEMP/an-qualification-unreleased" | grep -F "vcs.modified=false"
+      - name: Upload unreleased native test candidate (no qualification grant)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: an-v226-unreleased-native-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/an-qualification-unreleased
+          if-no-files-found: error
+          retention-days: 1
+      - name: Verify installed managed V2 refusal (never grant delivery)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -B scripts/opencode-v226-source-e2e.py \
+            --archive "$RUNNER_TEMP/opencode-linux-x64-2.2.6.tar.gz" \
+            --receiver "$RUNNER_TEMP/an-qualification-unreleased" \
+            --report "$RUNNER_TEMP/opencode-v226-denied-safe.json"
+      - name: Upload only sanitized installed-denial evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: opencode-v226-denied-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/opencode-v226-denied-safe.json
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Verify real installed 2.2.6 restart remains denied, no webhook
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -B scripts/opencode-v226-source-e2e.py \
+            --archive "$RUNNER_TEMP/opencode-linux-x64-2.2.6.tar.gz" \
+            --receiver "$RUNNER_TEMP/an-qualification-unreleased" \
+            --restart-denial \
+            --report "$RUNNER_TEMP/opencode-v226-restart-denied-safe.json"
+      - name: Upload only sanitized real-host restart-denial evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: opencode-v226-restart-denied-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/opencode-v226-restart-denied-safe.json
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Observe stock OpenCode 2.2.6 Bun/Go clock E0 without qualification grants
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/TEST-opencode-v226-clock"
+          python - <<'PY'
+          import importlib.util, os, pathlib
+          source = pathlib.Path('scripts/opencode-v226-source-e2e.py').resolve()
+          spec = importlib.util.spec_from_file_location('source_e2e', source)
+          module = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+          root = pathlib.Path(os.environ['RUNNER_TEMP'])
+          module.official_binary(root/'opencode-linux-x64-2.2.6.tar.gz',
+                                 root/'TEST-opencode-v226-clock'/'opencode')
+          PY
+          env -i BUN_BE_BUN=1 PATH="/usr/bin:/bin" HOME="$RUNNER_TEMP/TEST-opencode-v226-clock" \
+            "$RUNNER_TEMP/TEST-opencode-v226-clock/opencode" \
+            "$GITHUB_WORKSPACE/scripts/opencode-v226-clock-e0.mjs" \
+            "$RUNNER_TEMP/an-qualification-unreleased" \
+            | tee "$RUNNER_TEMP/opencode-v226-clock-e0-safe.json"
+      - name: Upload bounded stock-clock observations
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: opencode-v226-clock-e0-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/opencode-v226-clock-e0-safe.json
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Upload closed source-only result
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: opencode-v226-native-source-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/opencode-v226-source-safe.json
+          if-no-files-found: warn
+          retention-days: 14
+
+
+  windows-x64-official-image:
+    name: windows-x64-official-image-observation
+    # Normal Windows CI may skip native jobs on OpenCode-only changes.
+    # This checks genuine official bytes but never authorizes notifications.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - name: Check out exact PR candidate
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Set up Go from module
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Set up Python for genuine Windows source probe
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Check strict Go T0 frame constraints (no qualification grant)
+        shell: pwsh
+        run: |
+          python -B -m unittest discover -s scripts -p 'test_opencode_v226_*.py'
+          if ($LASTEXITCODE -ne 0) { throw 'windows_go_t0_frame_tests_failed' }
+      - name: Exercise Windows native OpenCode admission regressions
+        shell: pwsh
+        run: |
+          go test -timeout 8m ./cmd/claude-notifications ./internal/opencodeevent ./internal/opencodecodec
+          if ($LASTEXITCODE -ne 0) { throw 'windows_native_go_tests_failed' }
+      - name: Verify SHA-pinned official Windows x64 OpenCode 2.2.6
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $archive = Join-Path $env:RUNNER_TEMP 'opencode-windows-x64-2.2.6.zip'
+          $unpacked = Join-Path $env:RUNNER_TEMP 'opencode-windows-x64-2.2.6'
+          $report = Join-Path $env:RUNNER_TEMP 'opencode-v226-windows-safe.json'
+          Invoke-WebRequest -Uri 'https://github.com/anomalyco/opencode/releases/download/v2.2.6/opencode-windows-x64.zip' -OutFile $archive
+          $expected = 'f75c16b33b8523fe1ff41e7d97e3ae654a47d59a0e327def24db2d9291bb24be'
+          if ((Get-Item -LiteralPath $archive).Length -gt 160000000 -or
+              (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant() -cne $expected) {
+            throw 'official_windows_archive_unverified'
+          }
+          Expand-Archive -LiteralPath $archive -DestinationPath $unpacked
+          $executables = @(Get-ChildItem -LiteralPath $unpacked -Recurse -File -Filter 'opencode.exe')
+          if ($executables.Count -ne 1) { throw 'official_windows_executable_not_unique' }
+          $versionOutput = & $executables[0].FullName --version 2>&1
+          if ($LASTEXITCODE -ne 0 -or (($versionOutput | Out-String) -notmatch '(?<![0-9])2\.2\.6(?![0-9])')) {
+            throw 'official_windows_host_version_unverified'
+          }
+          $evidence = [ordered]@{
+            status = 'observed_official_windows_image_only'
+            platform = 'windows'
+            architecture = 'amd64'
+            hostVersion = '2.2.6'
+            officialArchiveSHA256 = $expected
+            officialBinarySHA256 = (Get-FileHash -LiteralPath $executables[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            nativeObserverQualified = $false
+            nativeClockQualified = $false
+            notificationDeliveryQualified = $false
+          }
+          [System.IO.File]::WriteAllText($report, ($evidence | ConvertTo-Json -Compress) + [Environment]::NewLine)
+      - name: Exercise genuine official Windows 2.2.6 source events (no delivery grant)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $archive = Join-Path $env:RUNNER_TEMP 'opencode-windows-x64-2.2.6.zip'
+          $report = Join-Path $env:RUNNER_TEMP 'opencode-v226-windows-source-safe.json'
+          python -B scripts/opencode-v226-source-e2e.py --archive $archive --report $report
+          if ($LASTEXITCODE -ne 0) { throw 'windows_source_e2e_failed' }
+      # SOURCE-only test: original V2 created timestamps must not be treated
+      # as trustworthy after independent +12s/-12s wall-clock perturbations.
+      # These test runs neither install a receiver nor authorize delivery.
+      - name: Observe +12s source clock mismatch on Windows (no admission)
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP 'opencode-windows-x64-2.2.6.zip'
+          $report = Join-Path $env:RUNNER_TEMP 'opencode-v226-windows-future-skew-safe.json'
+          python -B scripts/opencode-v226-source-e2e.py --archive $archive --clock-skew-negative --report $report
+          if ($LASTEXITCODE -ne 0) { throw 'windows_future_clock_skew_negative_failed' }
+      - name: Observe -12s source clock mismatch on Windows (no admission)
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP 'opencode-windows-x64-2.2.6.zip'
+          $report = Join-Path $env:RUNNER_TEMP 'opencode-v226-windows-past-skew-safe.json'
+          python -B scripts/opencode-v226-source-e2e.py --archive $archive --clock-skew-past-negative --report $report
+          if ($LASTEXITCODE -ne 0) { throw 'windows_past_clock_skew_negative_failed' }
+      - name: Upload only sanitized Windows clock-skew negative receipts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: opencode-v226-windows-skew-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            ${{ runner.temp }}/opencode-v226-windows-future-skew-safe.json
+            ${{ runner.temp }}/opencode-v226-windows-past-skew-safe.json
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Build exact-head unreleased Windows receiver (no native qualification grant)
+        shell: pwsh
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          GOWORK: off
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ((git rev-parse HEAD).Trim() -cne $env:EXPECTED_HEAD) { throw 'windows_candidate_checkout_changed' }
+          $candidate = Join-Path $env:RUNNER_TEMP 'an-opencode-v226-windows-unreleased.exe'
+          go build -trimpath -ldflags '-s -w' -o $candidate ./cmd/claude-notifications
+          if ($LASTEXITCODE -ne 0) { throw 'windows_unreleased_build_failed' }
+          $build = (go version -m $candidate 2>&1) -join "`n"
+          if ($LASTEXITCODE -ne 0 -or
+              -not $build.Contains("vcs.revision=$env:EXPECTED_HEAD") -or
+              -not $build.Contains('vcs.modified=false')) {
+            throw 'windows_candidate_source_binding_unverified'
+          }
+      - name: Observe installed official Windows V2 refusal and zero webhook effects
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $archive = Join-Path $env:RUNNER_TEMP 'opencode-windows-x64-2.2.6.zip'
+          $candidate = Join-Path $env:RUNNER_TEMP 'an-opencode-v226-windows-unreleased.exe'
+          $report = Join-Path $env:RUNNER_TEMP 'opencode-v226-windows-denied-safe.json'
+          python -B scripts/opencode-v226-source-e2e.py --archive $archive --receiver $candidate --report $report
+          if ($LASTEXITCODE -ne 0) { throw 'windows_installed_denial_e2e_failed' }
+      - name: Upload sanitized Windows installed-denial evidence (never private host logs)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: opencode-v226-windows-denied-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/opencode-v226-windows-denied-safe.json
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Upload sanitized Windows source-only evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: opencode-v226-windows-source-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/opencode-v226-windows-source-safe.json
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Upload public-image-only receipt without private logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: opencode-v226-windows-image-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/opencode-v226-windows-safe.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  darwin-arm64-image:
+    name: darwin-arm64-native (${{ matrix.os }})
+    # Image/Bun discovery first; installed delivery and clock-skew refusal are observed below.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-26]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Check source Go T0 parser on macOS
+        run: python -B -m unittest discover -s scripts -p 'test_opencode_v226_*.py'
+      - name: Verify official Darwin arm64 2.2.6 archive, executable and Bun
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = arm64
+          curl --fail --location --silent --show-error --max-time 120 --max-filesize 150000000 \
+            'https://github.com/anomalyco/opencode/releases/download/v2.2.6/opencode-darwin-arm64.zip' \
+            --output "$RUNNER_TEMP/opencode-darwin-arm64.zip"
+          printf '%s  %s\n' '15491608f6b0bc4debe5eac35eab629a2b07ea9a1fbac68ad53bcea59fcc4b45' \
+            "$RUNNER_TEMP/opencode-darwin-arm64.zip" | shasum -a 256 --check --status
+          python - <<'PY'
+          import hashlib, json, os, pathlib, stat, subprocess, zipfile
+          root = pathlib.Path(os.environ['RUNNER_TEMP'])
+          target = root / 'TEST-opencode-v226-darwin'
+          target.mkdir(mode=0o700)
+          with zipfile.ZipFile(root / 'opencode-darwin-arm64.zip') as archive:
+              matches = [info for info in archive.infolist()
+                         if not info.is_dir() and pathlib.PurePosixPath(info.filename).name == 'opencode']
+              if len(matches) != 1:
+                  raise RuntimeError('official_macos_image_not_unique')
+              info = matches[0]
+              kind = (info.external_attr >> 16) & 0o170000
+              if kind not in (0, stat.S_IFREG) or not 0 < info.file_size <= 350000000:
+                  raise RuntimeError('official_macos_image_type_or_size')
+              binary = target / 'opencode'
+              with archive.open(info) as source, binary.open('xb') as output:
+                  total = 0
+                  while data := source.read(1048576):
+                      total += len(data)
+                      if total > 350000000:
+                          raise RuntimeError('official_macos_image_extraction_limit')
+                      output.write(data)
+          binary.chmod(0o700)
+          with binary.open('rb') as source:
+              image_sha = hashlib.file_digest(source, 'sha256').hexdigest()
+          env = {'BUN_BE_BUN': '1', 'HOME': str(target),
+                 'TMPDIR': str(target), 'PATH': os.environ.get('PATH', '/usr/bin:/bin')}
+          result = subprocess.run([str(binary), '--version'], env=env,
+                                  capture_output=True, text=True, timeout=20, cwd=target)
+          if result.returncode or result.stdout.strip() != '1.4.4':
+              raise RuntimeError('official_macos_bun_unverified')
+          safe = {'status':'observed_image_only', 'platform':'darwin', 'arch':'arm64',
+                  'hostVersion':'2.2.6', 'embeddedBunVersion':'1.4.4',
+                  'officialArchiveSHA256':'15491608f6b0bc4debe5eac35eab629a2b07ea9a1fbac68ad53bcea59fcc4b45',
+                  'officialExecutableSHA256':image_sha,
+                  'nativeObserverQualified':False, 'nativeClockQualified':False,
+                  'notificationDeliveryQualified':False}
+          (root/'opencode-v226-darwin-image-safe.json').write_text(json.dumps(safe, sort_keys=True) + '\n')
+          print(json.dumps(safe, sort_keys=True))
+          PY
+      - name: Upload only fixed image/Bun observations
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: opencode-v226-darwin-arm64-${{ matrix.os }}-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/opencode-v226-darwin-image-safe.json
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Observe official Darwin signing identity without admission
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -B scripts/opencode-v226-darwin-signature-e0.py \
+            "$RUNNER_TEMP/TEST-opencode-v226-darwin/opencode" \
+            | tee "$RUNNER_TEMP/opencode-v226-darwin-signature-safe.json"
+      - name: Upload sanitized Darwin signature observation
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: opencode-v226-darwin-signature-${{ matrix.os }}-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/opencode-v226-darwin-signature-safe.json
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Build exact-source Darwin Go clock witness (non-release)
+        uses: actions/setup-go@v7
+        with:
+          go-version: '1.26.10'
+          cache: false
+      - name: Compile native witness and verify clean candidate SHA
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          CGO_ENABLED: '1'
+          GOWORK: off
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          go build -trimpath -ldflags="-s -w" -o "$RUNNER_TEMP/TEST-opencode-v226-darwin/receiver" ./cmd/claude-notifications
+          go version -m "$RUNNER_TEMP/TEST-opencode-v226-darwin/receiver" | grep -F "vcs.revision=$EXPECTED_HEAD"
+          go version -m "$RUNNER_TEMP/TEST-opencode-v226-darwin/receiver" | grep -F 'vcs.modified=false'
+          clang -Wall -Wextra -Werror -O2 scripts/testdata/opencode-v226-darwin-peer-e0.c \
+            -o "$RUNNER_TEMP/TEST-opencode-v226-darwin/native-peer-e0"
+      - name: Verify production publisher check on a live official process
+        shell: bash
+        env:
+          AN_TEST_OFFICIAL_OPENCODE: ${{ runner.temp }}/TEST-opencode-v226-darwin/opencode
+        run: go test ./cmd/claude-notifications -run '^TestRuntimeDarwinOpenCodePublisher$' -count=1
+      - name: Observe real macOS ARM64 V2 source and installed delivery events
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -B scripts/opencode-v226-source-e2e.py \
+            --archive "$RUNNER_TEMP/opencode-darwin-arm64.zip" \
+            --receiver "$RUNNER_TEMP/TEST-opencode-v226-darwin/receiver" \
+            --expect-delivery \
+            --report "$RUNNER_TEMP/opencode-v226-darwin-delivery-safe.json"
+      - name: Observe the reported macOS service entry and delivery
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/swiftc scripts/opencode-v226-darwin-live-signature-e0.swift \
+            -o "$RUNNER_TEMP/TEST-opencode-v226-darwin/live-signer-e0"
+          python -B scripts/opencode-v226-source-e2e.py \
+            --archive "$RUNNER_TEMP/opencode-darwin-arm64.zip" \
+            --receiver "$RUNNER_TEMP/TEST-opencode-v226-darwin/receiver" \
+            --darwin-live-signer "$RUNNER_TEMP/TEST-opencode-v226-darwin/live-signer-e0" \
+            --darwin-native-peer "$RUNNER_TEMP/TEST-opencode-v226-darwin/native-peer-e0" \
+            --service --expect-delivery --mutate-peer-events --observe-auto-compaction \
+            --report "$RUNNER_TEMP/opencode-v226-darwin-service-delivery-safe.json"
+      - name: Observe installed macOS clock-skew refusal, before and after delivery
+        shell: bash
+        run: |
+          set -euo pipefail
+          for mode in "--clock-skew-negative --skew-after-delivery" "--clock-skew-past-negative"; do
+            python -B scripts/opencode-v226-source-e2e.py \
+              --archive "$RUNNER_TEMP/opencode-darwin-arm64.zip" \
+              --receiver "$RUNNER_TEMP/TEST-opencode-v226-darwin/receiver" \
+              --installed-clock-skew $mode \
+              --report "$RUNNER_TEMP/opencode-v226-darwin-skew-safe-${mode//[ -]/_}.json"
+          done
+      - name: Upload sanitized macOS source/delivery evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: opencode-v226-darwin-delivery-${{ matrix.os }}-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            ${{ runner.temp }}/opencode-v226-darwin-delivery-safe.json
+            ${{ runner.temp }}/opencode-v226-darwin-service-delivery-safe.json
+            ${{ runner.temp }}/opencode-v226-darwin-skew-safe-*.json
+          if-no-files-found: warn
+          retention-days: 14
+      # Same genuine official-image source/time negatives as Linux/Windows.
+      # The 5-second independent test window is NOT a source Q/T grant.
+      - name: Observe +12s source clock mismatch on macOS (no admission)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -B scripts/opencode-v226-source-e2e.py \
+            --archive "$RUNNER_TEMP/opencode-darwin-arm64.zip" \
+            --darwin-native-peer "$RUNNER_TEMP/TEST-opencode-v226-darwin/native-peer-e0" \
+            --darwin-live-signer "$RUNNER_TEMP/TEST-opencode-v226-darwin/live-signer-e0" \
+            --service --clock-skew-negative \
+            --report "$RUNNER_TEMP/opencode-v226-darwin-future-skew-safe.json"
+      - name: Observe -12s source clock mismatch on macOS (no admission)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -B scripts/opencode-v226-source-e2e.py \
+            --archive "$RUNNER_TEMP/opencode-darwin-arm64.zip" \
+            --clock-skew-past-negative \
+            --report "$RUNNER_TEMP/opencode-v226-darwin-past-skew-safe.json"
+      - name: Upload only sanitized macOS clock-skew negative receipts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: opencode-v226-darwin-skew-${{ matrix.os }}-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            ${{ runner.temp }}/opencode-v226-darwin-future-skew-safe.json
+            ${{ runner.temp }}/opencode-v226-darwin-past-skew-safe.json
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Observe genuine Bun 1.4.4 Darwin FFI/Go E0 (never grant notifications)
+        shell: bash
+        run: |
+          set -euo pipefail
+          env -i BUN_BE_BUN=1 PATH="/usr/bin:/bin" \
+            HOME="$RUNNER_TEMP/TEST-opencode-v226-darwin" TMPDIR="$RUNNER_TEMP/TEST-opencode-v226-darwin" \
+            "$RUNNER_TEMP/TEST-opencode-v226-darwin/opencode" \
+            "$GITHUB_WORKSPACE/scripts/opencode-v226-darwin-abi-e0.mjs" \
+            "$RUNNER_TEMP/TEST-opencode-v226-darwin/receiver" --stress --production-source \
+            | tee "$RUNNER_TEMP/opencode-v226-darwin-ffi-e0-safe.json"
+      - name: Observe independent Darwin wall clock under TEST-only JS clock shift
+        shell: bash
+        run: |
+          set -euo pipefail
+          env -i BUN_BE_BUN=1 PATH="/usr/bin:/bin" \
+            HOME="$RUNNER_TEMP/TEST-opencode-v226-darwin" TMPDIR="$RUNNER_TEMP/TEST-opencode-v226-darwin" \
+            "$RUNNER_TEMP/TEST-opencode-v226-darwin/opencode" \
+            "$GITHUB_WORKSPACE/scripts/opencode-v226-darwin-abi-e0.mjs" \
+            "$RUNNER_TEMP/TEST-opencode-v226-darwin/receiver" --stress --production-source --shift-js-wall \
+            | tee "$RUNNER_TEMP/opencode-v226-darwin-wall-shift-safe.json"
+      - name: Upload closed Darwin FFI E0 observation only
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: opencode-v226-darwin-ffi-e0-${{ matrix.os }}-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            ${{ runner.temp }}/opencode-v226-darwin-ffi-e0-safe.json
+            ${{ runner.temp }}/opencode-v226-darwin-wall-shift-safe.json
+          if-no-files-found: warn
+          retention-days: 14

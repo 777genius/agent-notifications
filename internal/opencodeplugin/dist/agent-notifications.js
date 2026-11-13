@@ -81,8 +81,14 @@ function parseJSON(bytes2, max = 4096) {
   return JSON.parse(text);
 }
 function profileReceipt(output) {
-  const receipt = closed(parseJSON(output, 1024), ["protocol", "semantic", "generation", "resourceClosure"]);
-  if (receipt.protocol !== 1 || receipt.resourceClosure !== "reaped_or_not_started" || !(receipt.semantic === "unverified" && receipt.generation === "none" || receipt.semantic === "eligible" && ["v1", "v2"].includes(receipt.generation))) invalid();
+  const receipt = closed(
+    parseJSON(output, 1024),
+    ["protocol", "semantic", "generation", "resourceClosure", "version"],
+    ["protocol", "semantic", "generation", "resourceClosure"]
+  );
+  const eligible = receipt.semantic === "eligible" && ["v1", "v2"].includes(receipt.generation) && typeof receipt.version === "string" && /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.test(receipt.version) && !receipt.version.split("+", 1)[0].split("-").slice(1).join("-").split(".").some((part) => part.length > 1 && part[0] === "0" && /^[0-9]+$/.test(part)) && receipt.version.startsWith(receipt.generation === "v1" ? "1." : "2.");
+  const denied = receipt.semantic === "unverified" && receipt.generation === "none" && !Object.hasOwn(receipt, "version");
+  if (receipt.protocol !== 1 || receipt.resourceClosure !== "reaped_or_not_started" || !(eligible || denied)) invalid();
   return Object.freeze(receipt);
 }
 function clockReceipt(output) {
@@ -213,6 +219,10 @@ function interruptNS(ticks) {
 function filetimeNS(ticks) {
   return positiveNS((uint64(ticks) - 116444736000000000n) * 100n);
 }
+function realtimeNS(seconds, nanoseconds) {
+  if (typeof seconds !== "bigint" || typeof nanoseconds !== "bigint" || seconds < 0n || nanoseconds < 0n || nanoseconds >= 1000000000n) unavailable();
+  return positiveNS(seconds * 1000000000n + nanoseconds);
+}
 function darwinBoot(bytes2, length, status) {
   if (status !== 0 || length !== 37n || !(bytes2 instanceof Uint8Array) || bytes2.length < 37 || bytes2[36] !== 0 || !bytes2.subarray(0, 36).every((b) => b > 0 && b < 128)) unavailable();
   const boot = Buffer.from(bytes2.subarray(0, 36)).toString("ascii").toLowerCase();
@@ -295,7 +305,7 @@ function createNativeClock(port, domain) {
   }
   return Object.freeze({ sample, dispose, imageSHA256: port.imageSHA256 });
 }
-var unavailable, U64, darwinABI, windowsKernelABI, windowsNtABI, interruptABI;
+var unavailable, U64, darwinABI, darwinRealtimeABI, windowsKernelABI, windowsNtABI, interruptABI;
 var init_native_clock_contract = __esm({
   "native-clock-contract.mjs"() {
     "use strict";
@@ -308,6 +318,12 @@ var init_native_clock_contract = __esm({
       mach_continuous_time: ["u64"],
       mach_timebase_info: ["i32", "ptr"],
       sysctlbyname: ["i32", "ptr", "ptr", "ptr", "ptr", "u64"]
+    });
+    darwinRealtimeABI = abi({
+      mach_continuous_time: ["u64"],
+      mach_timebase_info: ["i32", "ptr"],
+      sysctlbyname: ["i32", "ptr", "ptr", "ptr", "ptr", "u64"],
+      clock_gettime: ["i32", "i32", "ptr"]
     });
     windowsKernelABI = abi({
       GetSystemDirectoryW: ["u32", "ptr", "u32"],
@@ -324,6 +340,7 @@ var init_native_clock_contract = __esm({
 // native-clock-image.mjs
 import { openSync as openSync2, closeSync as closeSync2, readSync as readSync2, fstatSync as fstatSync2, statSync as statSync3, realpathSync as realpathSync2, constants as constants2 } from "node:fs";
 import { createHash as createHash3 } from "node:crypto";
+import { basename } from "node:path";
 function holdFile(path2) {
   const fd = openSync2(path2, constants2.O_RDONLY | (constants2.O_NOFOLLOW ?? 0));
   try {
@@ -360,11 +377,16 @@ function holdFile(path2) {
 }
 function pinNativeImage() {
   const bun = globalThis.Bun?.version;
-  if (!images2.some((row) => row[0] === process.platform && row[1] === process.arch && row[2] === bun)) unavailable();
-  const path2 = realpathSync2(process.execPath), held2 = holdFile(path2);
+  if (typeof bun !== "string" || bun === "") unavailable();
+  const open = process.platform === "darwin" && process.arch === "arm64";
+  if (!open && !exact(bun)) unavailable();
+  const path2 = realpathSync2(process.execPath);
+  if (open && !opencodeNames.has(basename(path2))) unavailable();
+  const held2 = holdFile(path2);
   try {
-    if (!images2.some((row) => row[0] === process.platform && row[1] === process.arch && row[2] === bun && row[3] === held2.digest)) unavailable();
-    return Object.freeze({ imageSHA256: held2.digest, close: held2.close, verify() {
+    if (!open && !exact(bun, held2.digest)) unavailable();
+    const legacy = images2.some((row) => row[0] === process.platform && row[1] === process.arch && row[2] !== independentWallBun && row[2] === bun && row[3] === held2.digest);
+    return Object.freeze({ imageSHA256: held2.digest, legacy, close: held2.close, verify() {
       if (globalThis.Bun?.version !== bun || realpathSync2(process.execPath) !== path2) unavailable();
       held2.verify();
     } });
@@ -373,7 +395,7 @@ function pinNativeImage() {
     unavailable();
   }
 }
-var images2, same2;
+var images2, same2, opencodeNames, independentWallBun, exact;
 var init_native_clock_image = __esm({
   "native-clock-image.mjs"() {
     "use strict";
@@ -384,9 +406,15 @@ var init_native_clock_image = __esm({
       ["win32", "x64", "1.3.14", "52f60248a576b34c9a6dcaa27e0a7f08089af35bcdc0dfb10c04d3e00a98314c"],
       ["darwin", "x64", "1.4.2", "4642b7da61279c8aa5d389d9f29454936e449fea6bc510689e9cc976fff6579f"],
       ["darwin", "arm64", "1.4.2", "0b2b68c1efaf20a29aaf636c2ffccc1abb56243a82f48cce45e257d232e03442"],
+      // Image custody candidate only. Native observer and clock-policy admission
+      // remain independent and do not grant delivery for this image.
+      ["darwin", "arm64", "1.4.4", "90e4d03597b03d2051b65b4d793467764e55bacd8e22bf4824479c7233ea0e15"],
       ["win32", "x64", "1.4.2", "ec7a3909bad41ef88e4650f737ab6f0b0c402a7f49a588812d0a79820c2dfc1f"]
     ].map(Object.freeze));
     same2 = (a, b) => ["dev", "ino", "size", "mtimeNs", "ctimeNs"].every((k) => a[k] === b[k]);
+    opencodeNames = /* @__PURE__ */ new Set(["opencode", "opencode.exe"]);
+    independentWallBun = "1.4.4";
+    exact = (bun, digest) => images2.some((row) => row[0] === process.platform && row[1] === process.arch && row[2] === bun && (digest === void 0 || row[3] === digest));
   }
 });
 
@@ -418,7 +446,8 @@ async function createDarwinClock({ signal } = {}) {
     const { dlopen, ptr } = await import("bun:ffi");
     if (signal?.aborted) unavailable();
     if (typeof dlopen !== "function" || typeof ptr !== "function") unavailable();
-    const library = dlopen("/usr/lib/libSystem.B.dylib", darwinABI);
+    const independentWall = !image.legacy;
+    const library = dlopen("/usr/lib/libSystem.B.dylib", independentWall ? darwinRealtimeABI : darwinABI);
     releases.push(() => library.close());
     const lib = library.symbols, aligned = (view) => address(ptr(view), view.BYTES_PER_ELEMENT);
     const base = new Uint32Array(2);
@@ -426,11 +455,17 @@ async function createDarwinClock({ signal } = {}) {
     const numer = base[0], denom = base[1];
     const name = Buffer.from("kern.bootsessionuuid\0");
     const buffer = new Uint32Array(16), size = new BigUint64Array(1);
+    const wall = independentWall ? new BigInt64Array(2) : void 0;
     return createNativeClock({
       imageSHA256: image.imageSHA256,
       readBoot: readBoot2,
       readCounter: () => machNS(lib.mach_continuous_time(), numer, denom),
       readWall() {
+        if (independentWall) {
+          wall.fill(0n);
+          if (lib.clock_gettime(0, aligned(wall)) !== 0) unavailable();
+          return realtimeNS(wall[0], wall[1]);
+        }
         const ms = Date.now();
         if (!Number.isSafeInteger(ms)) unavailable();
         return positiveNS(BigInt(ms) * 1000000n);
@@ -2655,20 +2690,24 @@ init_protocol();
 var executable = "__AGENT_NOTIFICATIONS_EXECUTABLE__";
 var controlRoot = "__AGENT_NOTIFICATIONS_CONTROL_ROOT__";
 var origin = "__AGENT_NOTIFICATIONS_ORIGIN__";
-var identity2 = (name) => {
-  if (!absoluteNativePath(name) || realpathSync(name) !== name) throw new TypeError("binding_unverified");
-  const stat = statSync(name, { bigint: true });
-  return Object.freeze({ name, dev: stat.dev, ino: stat.ino, size: stat.isDirectory() ? void 0 : stat.size, mtime: stat.isDirectory() ? void 0 : stat.mtimeNs, mode: stat.mode });
+var identity2 = (name, allowAlias = false) => {
+  if (!absoluteNativePath(name)) throw new TypeError("binding_unverified");
+  const realpath = realpathSync(name);
+  if (!allowAlias && realpath !== name) throw new TypeError("binding_unverified");
+  const stat = statSync(realpath, { bigint: true });
+  if (allowAlias && !stat.isDirectory()) throw new TypeError("binding_unverified");
+  return Object.freeze({ name, realpath, dev: stat.dev, ino: stat.ino, size: stat.isDirectory() ? void 0 : stat.size, mtime: stat.isDirectory() ? void 0 : stat.mtimeNs, mode: stat.mode });
 };
-var equal = (a, b) => ["name", "dev", "ino", "size", "mtime", "mode"].every((key) => a[key] === b[key]);
-async function prepareOwnedHost(directory2, generation, appVersion, diagnostics = false) {
+var equal = (a, b) => ["name", "realpath", "dev", "ino", "size", "mtime", "mode"].every((key) => a[key] === b[key]);
+async function prepareOwnedHost(directory2, generation, appVersion, diagnostics = false, onUnavailable) {
   let registry, privateCwd;
   try {
     if (!/^[a-f0-9]{64}$/.test(origin) || !absoluteNativePath(directory2)) return;
-    const files = [executable, controlRoot, directory2, process.execPath].map(identity2);
+    const inputs = [[executable, false], [controlRoot, false], [directory2, true], [process.execPath, false]];
+    const files = inputs.map(([name, allowAlias]) => identity2(name, allowAlias));
     const isOwned = () => {
       try {
-        return files.every((original) => equal(original, identity2(original.name)));
+        return files.every((original, index) => equal(original, identity2(original.name, inputs[index][1])));
       } catch {
         return false;
       }
@@ -2687,11 +2726,19 @@ async function prepareOwnedHost(directory2, generation, appVersion, diagnostics 
     });
     const response = await registry.profile({ isCurrent: isOwned });
     const receipt = profileReceipt(response.output);
-    if (response.status !== "ok" || receipt.semantic !== "eligible" || receipt.generation !== generation || !isOwned() || generation === "v2" && appVersion !== "2.0.21") throw new TypeError("runtime_unverified");
+    const current = isOwned();
+    if (response.status === "ok" && current && (receipt.semantic !== "eligible" || receipt.generation !== generation || generation === "v2" && appVersion !== receipt.version)) {
+      try {
+        onUnavailable?.("runtime_unverified");
+      } catch {
+      }
+    }
+    if (response.status !== "ok" || receipt.semantic !== "eligible" || receipt.generation !== generation || !current || generation === "v2" && appVersion !== receipt.version) throw new TypeError("runtime_unverified");
     let disposed = false;
     return Object.freeze({
       registry,
       origin,
+      hostVersion: receipt.version,
       isOwned: () => !disposed && isOwned(),
       runtimeEligibility: () => !disposed && isOwned() ? "supported" : "unverified",
       async dispose() {
@@ -2963,7 +3010,8 @@ function describeClockPolicy(row) {
   const descriptor = describeClockSource(row.goos, row.goarch);
   const legacy = row.goos === "linux" && row.goarch === "amd64";
   const pins = legacy ? images[row.generation] : void 0;
-  const versions = legacy ? pins?.map((pin) => pin[0]) : row.generation === "v1" ? ["1.18.33"] : row.generation === "v2" ? ["2.0.21"] : void 0;
+  const darwin226Candidate = row.goos === "darwin" && row.goarch === "arm64" && row.generation === "v2" && Array.isArray(row.images) && row.images.length === 1 && row.images[0]?.version === "2.2.6" && row.images[0]?.imageSHA256 === "90e4d03597b03d2051b65b4d793467764e55bacd8e22bf4824479c7233ea0e15";
+  const versions = legacy ? pins?.map((pin) => pin[0]) : row.generation === "v1" ? ["1.18.33"] : row.generation === "v2" ? [darwin226Candidate ? "2.2.6" : "2.0.21"] : void 0;
   if (row.protocol !== 1 || !versions || row.sourceKind !== descriptor.sourceKind || row.rawKind !== descriptor.rawKind || !hashOK(row.algorithmSourceMerkleSHA256) || !Array.isArray(row.images) || row.images.length !== versions.length)
     throw new TypeError("qualification_unverified");
   const nativeReadBoundNS = ns(row.nativeReadBoundNS), comparisonBoundNS = ns(row.comparisonBoundNS), translationBoundNS = ns(row.translationBoundNS);
@@ -3003,11 +3051,27 @@ function describeClockPolicy(row) {
   });
 }
 var cells = Object.freeze(clock_qualification_data_default.map(describeClockPolicy));
-function selectClockCell(generation) {
+var familyReferenceVersion = "2.0.21";
+var inFamilyRange = (version) => {
+  const m = /^(0|[1-9]\d{0,5})\.(0|[1-9]\d{0,5})\.(0|[1-9]\d{0,5})$/.exec(version);
+  return m !== null && m[1] === "2" && (Number(m[2]) > 0 || Number(m[3]) >= 21);
+};
+function findClockCell(rows, goos, goarch, generation, version) {
+  if (typeof version !== "string" || !version) return void 0;
+  const forVersion = (wanted) => rows.filter((cell) => cell.goos === goos && cell.goarch === goarch && cell.generation === generation && cell.images.some((image) => image.version === wanted));
+  const matches = forVersion(version);
+  if (matches.length > 1) return void 0;
+  if (matches.length === 1) return matches[0];
+  if (goos === "darwin" && goarch === "arm64" && generation === "v2" && inFamilyRange(version)) {
+    const reference = forVersion(familyReferenceVersion);
+    if (reference.length === 1) return reference[0];
+  }
+  return void 0;
+}
+function selectClockCell(generation, version) {
   const goos = process.platform === "win32" ? "windows" : process.platform;
   const goarch = process.arch === "x64" ? "amd64" : process.arch;
-  const matches = cells.filter((cell) => cell.goos === goos && cell.goarch === goarch && cell.generation === generation);
-  return matches.length === 1 ? matches[0] : void 0;
+  return findClockCell(cells, goos, goarch, generation, version);
 }
 
 // linux-clock.mjs
@@ -3134,8 +3198,8 @@ function anchorMatches(anchor, before, after, policy) {
   }, after, policy.comparisonBoundNS);
 }
 function createPreparedDelivery({ registry, origin: origin2, policy, isOwned, onInvalidate, onDiagnostic, enrich, sourceFactory = createPlatformClock }) {
-  let epoch, source, anchor, activation, pending, last, ingress, disposed = false;
-  const originals = /* @__PURE__ */ new Map(), prepared = /* @__PURE__ */ new WeakMap();
+  let epoch, source, anchor, activation, pending, last, ingress, observedIngress, lastClockMs, disposed = false;
+  const originals = /* @__PURE__ */ new Map(), prepared = /* @__PURE__ */ new WeakMap(), captured = /* @__PURE__ */ new WeakMap();
   const refuse = (reason) => {
     try {
       onDiagnostic?.(reason);
@@ -3152,7 +3216,9 @@ function createPreparedDelivery({ registry, origin: origin2, policy, isOwned, on
     anchor = void 0;
     activation = void 0;
     ingress = void 0;
+    observedIngress = void 0;
     last = void 0;
+    lastClockMs = void 0;
     attempt?.controller.abort();
     const retired = source;
     source = void 0;
@@ -3185,13 +3251,19 @@ function createPreparedDelivery({ registry, origin: origin2, policy, isOwned, on
   }
   const ms = (record) => Number(record.loNS / 1000000n);
   const clock = Object.freeze({ id: policy.sourceKind ?? (policy.rawKind === "linux-boottime" ? "linux-proc-boottime" : policy.rawKind), now() {
-    if (ingress) {
-      const original = ingress;
-      ingress = void 0;
-      last = original;
-      return ms(original);
+    const original = ingress ?? sample();
+    ingress = void 0;
+    let tick = ms(original);
+    if (lastClockMs !== void 0 && tick < lastClockMs) {
+      tick = ms(sample());
+      if (tick < lastClockMs) {
+        invalidate();
+        bad();
+      }
     }
-    return ms(sample());
+    lastClockMs = tick;
+    observedIngress = { original, tick };
+    return tick;
   } });
   async function activate() {
     if (disposed) return false;
@@ -3249,16 +3321,26 @@ function createPreparedDelivery({ registry, origin: origin2, policy, isOwned, on
         }
         source = acquired;
         activation = void 0;
-        if (policy.rawKind !== "linux-boottime" && !policy.images?.some((image) => image.imageSHA256 === source.imageSHA256)) bad();
-        const before = sample();
-        const r = await registry.clock({ signal: attempt.controller.signal, isCurrent, deadline: attempt.deadline });
-        if (!isCurrent() || performance3.now() >= attempt.deadline || r.status !== "ok") bad();
-        const after = sample(), original = clockReceipt(r.output);
-        if (!anchorMatches(original, before, after, policy) || after.loNS - before.loNS > 2000000000n) bad();
-        anchor = original;
-        activation = before;
-        epoch = Object.freeze({ id: id6, started: before.loNS, after: after.hiNS });
-        return true;
+        const goDecided = policy.rawKind === "darwin-monotonic-raw" && policy.goarch === "arm64";
+        if (policy.rawKind !== "linux-boottime" && !goDecided && !policy.images?.some((image) => image.imageSHA256 === source.imageSHA256)) bad();
+        for (let round = 0; round < 3; round++) {
+          const before = sample();
+          const r = await registry.clock({ signal: attempt.controller.signal, isCurrent, deadline: attempt.deadline });
+          if (!isCurrent() || performance3.now() >= attempt.deadline || r.status !== "ok") bad();
+          const after = sample(), original = clockReceipt(r.output);
+          const span = after.hiNS - before.loNS;
+          if (after.loNS - before.loNS > 2000000000n) bad();
+          if (span > policy.translationBoundNS) {
+            if (!anchorMatches(original, before, after, { ...policy, translationBoundNS: span })) bad();
+            continue;
+          }
+          if (!anchorMatches(original, before, after, policy)) bad();
+          anchor = original;
+          activation = before;
+          epoch = Object.freeze({ id: id6, started: before.loNS, after: after.hiNS });
+          return true;
+        }
+        bad();
       } catch {
         if (pending === attempt) invalidate();
         return false;
@@ -3269,10 +3351,10 @@ function createPreparedDelivery({ registry, origin: origin2, policy, isOwned, on
     })();
     return attempt.promise;
   }
-  function retain(record) {
+  function retain(record, handoffTickMs = ms(record)) {
     if (!epoch) bad();
     for (const [tick2] of originals) if (record.loNS - tick2 > 30000000000n) originals.delete(tick2);
-    const tick = record.loNS / 1000000n * 1000000n;
+    const tick = BigInt(handoffTickMs) * 1000000n;
     if (!originals.has(tick)) {
       if (originals.size >= 256) {
         invalidate();
@@ -3286,9 +3368,33 @@ function createPreparedDelivery({ registry, origin: origin2, policy, isOwned, on
     ingress = record;
     if (["session.idle", "session.error", "question.asked", "permission.asked"].includes(event?.type) || event?.type === "session.status" && event.properties?.status?.type === "idle" || event?.type === "message.updated" && event.properties?.info?.error != null) retain(record);
   }
+  function captureIngress(event) {
+    if (!epoch || !event || typeof event !== "object") bad();
+    const token = {};
+    captured.set(token, { event, epoch, record: sample() });
+    return token;
+  }
+  function armIngress(token, event) {
+    const held2 = captured.get(token);
+    captured.delete(token);
+    if (!held2 || held2.event !== event || held2.epoch !== epoch || !epoch) {
+      invalidate();
+      bad();
+    }
+    const now = sample();
+    if (now.loNS - held2.record.loNS > 30000000000n) {
+      invalidate();
+      bad();
+    }
+    ingress = held2.record;
+  }
   function nativeIngress(event) {
-    if (["form.created", "permission.asked", "session.execution.succeeded", "session.execution.failed"].includes(event?.type))
-      retain(last ?? sample());
+    const observed = observedIngress;
+    observedIngress = void 0;
+    if (["form.created", "permission.asked", "session.execution.succeeded", "session.execution.failed"].includes(event?.type)) {
+      if (observed) retain(observed.original, observed.tick);
+      else retain(sample());
+    }
   }
   const current = (record, handoff) => {
     if (disposed || epoch !== record.epoch) return false;
@@ -3407,6 +3513,8 @@ function createPreparedDelivery({ registry, origin: origin2, policy, isOwned, on
     clock,
     activate,
     beginIngress,
+    captureIngress,
+    armIngress,
     nativeIngress,
     beforeEmit,
     emit,
@@ -3667,8 +3775,11 @@ function createNativeV2(context, ownedLocation, onIngress, onUncertainty) {
     if (!b) return { sessionID: sid };
     const nativeScope = scope(event.location) ?? scope(p.location);
     if (nativeScope) b.scope = nativeScope;
+    const d = event.durable;
+    const durable = d?.aggregateID === sid && Number.isSafeInteger(d.seq) && d.seq > 0 && Number.isSafeInteger(d.version) && d.version > 0 ? d : void 0;
     if (["session.moved", "session.deleted"].includes(type)) {
       b.run = void 0;
+      b.compaction = void 0;
       b.forms.clear();
       b.requests.clear();
     }
@@ -3677,7 +3788,10 @@ function createNativeV2(context, ownedLocation, onIngress, onUncertainty) {
       b.user = void 0;
       b.assistant = void 0;
       b.step = void 0;
+      b.runSequence = durable && Object.freeze({ seq: durable.seq, version: durable.version });
+      b.userSequence = void 0;
       b.terminal = void 0;
+      b.compaction = void 0;
       b.forms.clear();
       b.requests.clear();
     }
@@ -3695,9 +3809,21 @@ function createNativeV2(context, ownedLocation, onIngress, onUncertainty) {
     if (type === "session.inbox.delivered") {
       const kind = b.inbox.get(p.inboxID);
       b.inbox.delete(p.inboxID);
-      if (kind === "user") b.user = p.inboxID;
+      if (kind === "user") {
+        b.user = p.inboxID;
+        b.compaction = void 0;
+        b.userSequence = durable && b.runSequence && durable.version === b.runSequence.version && durable.seq > b.runSequence.seq ? Object.freeze({ seq: durable.seq, version: durable.version }) : void 0;
+      }
     }
     if (type === "session.inbox.cancelled") b.inbox.delete(p.inboxID);
+    if (type === "session.compaction.started") {
+      b.compaction = p.reason === "auto" && id5(b.run) && id5(b.user) && id5(event.id) && event.id.startsWith("evt_") && same3(nativeScope, own) && durable && b.userSequence && durable.version === b.userSequence.version && durable.seq > b.userSequence.seq ? Object.freeze({ id: event.id, run: b.run, user: b.user, seq: durable.seq, version: durable.version, ended: false }) : void 0;
+    }
+    if (type === "session.compaction.ended") {
+      const c = b.compaction;
+      b.compaction = c && !c.ended && p.reason === "auto" && c.run === b.run && c.user === b.user && same3(nativeScope, own) && durable && durable.version === c.version && durable.seq > c.seq ? Object.freeze({ ...c, ended: true }) : void 0;
+    }
+    if (type === "session.compaction.failed") b.compaction = void 0;
     const compaction = type.startsWith("session.compaction.") || p.type === "compaction";
     if (type === "session.step.started") {
       b.assistant = compaction ? void 0 : p.assistantMessageID;
@@ -3759,7 +3885,6 @@ function createNativeV2(context, ownedLocation, onIngress, onUncertainty) {
       }
       b.requests.set(requestID, Object.freeze({ eventID: event.id, created: event.created, run: b.run, messageID, callID }));
     }
-    const durable = event.durable;
     return {
       sessionID: sid,
       ...nativeScope ? { location: nativeScope.directory } : {},
@@ -3767,7 +3892,7 @@ function createNativeV2(context, ownedLocation, onIngress, onUncertainty) {
       ...requestID !== void 0 ? { requestID } : {},
       ...callID !== void 0 ? { callID } : {},
       ...compaction ? { compaction: true } : {},
-      ...durable ? { sequence: { aggregate: durable.aggregateID, seq: durable.seq, version: durable.version } } : {}
+      ...d ? { sequence: { aggregate: d.aggregateID, seq: d.seq, version: d.version } } : {}
     };
   }
   const binding = (run) => {
@@ -3794,7 +3919,12 @@ function createNativeV2(context, ownedLocation, onIngress, onUncertainty) {
       if (!id5(row?.id) || seen.has(row.id) || !rowTypes.has(row.type) || row.sessionID !== void 0 && row.sessionID !== run.sessionID) return;
       seen.add(row.id);
     }
-    if (value.findLast((row) => row.type === "user")?.id !== b.user) return;
+    const lastUser = value.findLast((row) => row.type === "user");
+    if (lastUser?.id !== b.user) {
+      const c = b.compaction, marker = c && `msg_${c.id.slice(4)}`;
+      const latestCompaction = value.findLast((row) => row.type === "compaction");
+      if (lastUser || !c?.ended || c.run !== b.run || c.user !== b.user || latestCompaction?.id !== marker) return;
+    }
     return value;
   }
   async function assistant(run, signal) {
@@ -3804,11 +3934,12 @@ function createNativeV2(context, ownedLocation, onIngress, onUncertainty) {
     if (!value || signal.aborted || binding(run) !== b || b.assistant !== run.messageID) return;
     const terminal = b.terminal, step = terminal?.step;
     const row = value.find((item) => item.id === run.messageID);
-    const terminalMessageID = terminal?.id.startsWith("evt_") ? `msg_${terminal.id.slice(4)}` : void 0;
+    const terminalMessageID = typeof terminal?.id === "string" && terminal.id.startsWith("evt_") ? `msg_${terminal.id.slice(4)}` : void 0;
     if (row?.type !== "assistant" || !stamp2(row.time?.completed) || !stamp2(row.time?.created) || followsAssistant(value, row) || step?.messageID !== row.id || step.compaction || !terminalMessageID || value.findIndex((item) => item.type === "idle" && item.id === terminalMessageID) <= value.indexOf(row)) return;
     let outcome;
     if (terminal.type === "session.execution.succeeded" && step.type === "session.step.ended" && row.finish === "stop" && row.error == null) outcome = "success";
-    if (terminal.type === "session.execution.failed" && row.error && !cancelled(row.error)) outcome = "error";
+    const idle = value.find((item) => item.type === "idle" && item.id === terminalMessageID);
+    if (terminal.type === "session.execution.failed" && (row.error ? !cancelled(row.error) : idle?.outcome === "failed" && idle.error?.type === "output-limit")) outcome = "error";
     if (!outcome) return;
     return Object.freeze({ ...proof, messageID: row.id, role: "assistant", summary: false, final: true, outcome });
   }
@@ -3919,6 +4050,18 @@ var compositionDiagnostic = (enabled, stage) => {
   } catch {
   }
 };
+var startupWarning = (generation) => {
+  let reported = false;
+  return (code) => {
+    if (reported) return;
+    reported = true;
+    const reason = code === "runtime_unverified" ? "host runtime not qualified" : code === "policy_unavailable" ? "native clock policy unavailable" : "native activation unavailable";
+    try {
+      console.error("Agent Notifications OpenCode " + generation + ": notifications disabled (" + reason + "). Update Agent Notifications and see https://github.com/777genius/agent-notifications/blob/main/docs/opencode-notifications.md#compatibility-and-diagnostics.");
+    } catch {
+    }
+  };
+};
 var servers = /* @__PURE__ */ new WeakMap();
 var setups = /* @__PURE__ */ new WeakMap();
 var silent = Object.freeze({ event() {
@@ -3969,7 +4112,8 @@ async function server(input, options = {}) {
   const holder = { directory: input.directory, retired: false };
   const starting = (async () => {
     let diagnostics = false;
-    const owned = await prepareOwnedHost(input.directory, "v1", void 0, diagnostics = options?.diagnostics === true);
+    const warning = startupWarning("v1");
+    const owned = await prepareOwnedHost(input.directory, "v1", void 0, diagnostics = options?.diagnostics === true, warning);
     if (!owned) {
       compositionDiagnostic(diagnostics, "v1.owned.denied");
       return silent;
@@ -3978,9 +4122,10 @@ async function server(input, options = {}) {
       await owned.dispose();
       return silent;
     }
-    const policy = selectClockCell("v1");
+    const policy = selectClockCell("v1", owned.hostVersion);
     if (!policy) {
       compositionDiagnostic(diagnostics, "v1.policy.denied");
+      warning("policy_unavailable");
       await owned.dispose();
       return silent;
     }
@@ -4012,6 +4157,7 @@ async function server(input, options = {}) {
     try {
       if (!await delivery.activate() || holder.retired) {
         compositionDiagnostic(diagnostics, "v1.activation.denied");
+        if (!holder.retired && owned.isOwned()) warning("activation_unavailable");
         stop();
         return silent;
       }
@@ -4060,6 +4206,7 @@ async function server(input, options = {}) {
         }
       } });
     } catch {
+      if (!holder.retired && owned.isOwned()) warning("activation_unavailable");
       stop();
       return silent;
     }
@@ -4073,15 +4220,17 @@ async function setup(context) {
   if (setups.has(context)) return setups.get(context);
   const starting = (async () => {
     let diagnostics = false;
-    const owned = await prepareOwnedHost(context.location?.directory, "v2", context.app?.version, diagnostics = context.options?.diagnostics === true);
+    const warning = startupWarning("v2");
+    const owned = await prepareOwnedHost(context.location?.directory, "v2", context.app?.version, diagnostics = context.options?.diagnostics === true, warning);
     if (!owned) {
       compositionDiagnostic(diagnostics, "v2.owned.denied");
       return;
     }
-    const policy = selectClockCell("v2");
+    const policy = selectClockCell("v2", owned.hostVersion);
     const display = context.client?.session?.get ? createDisplayContext(context.client) : void 0;
     if (!policy) {
       compositionDiagnostic(diagnostics, "v2.policy.denied");
+      warning("policy_unavailable");
       await owned.dispose();
       return;
     }
@@ -4091,7 +4240,7 @@ async function setup(context) {
       workspaceID: context.location.workspaceID,
       projectID: context.location.project?.id
     });
-    const isNativeOwned = () => owned.isOwned() && context.app?.version === "2.0.21" && context.location?.directory === location2.directory && context.location?.workspaceID === location2.workspaceID && context.location?.project?.id === location2.projectID;
+    const isNativeOwned = () => owned.isOwned() && context.app?.version === owned.hostVersion && context.location?.directory === location2.directory && context.location?.workspaceID === location2.workspaceID && context.location?.project?.id === location2.projectID;
     const delivery = createPreparedDelivery({
       registry: owned.registry,
       origin: owned.origin,
@@ -4120,6 +4269,7 @@ async function setup(context) {
       view = createNativeV2(context, context.location, delivery.nativeIngress, delivery.invalidate);
       if (!await delivery.activate()) {
         compositionDiagnostic(diagnostics, "v2.activation.denied");
+        if (!stopped && isNativeOwned()) warning("activation_unavailable");
         await stop();
         return;
       }
@@ -4132,10 +4282,14 @@ async function setup(context) {
         };
         signal.addEventListener("abort", abort, { once: true });
         const current = connection;
-        let iterator, snapshot;
+        let iterator, prefetched, snapshot;
+        if (delivery.ready()) {
+          iterator = context.event.subscribe({ signal: current.signal })[Symbol.asyncIterator]();
+          prefetched = Promise.resolve(iterator.next()).then((item) => ({ item, token: item.done ? void 0 : delivery.captureIngress(item.value) })).catch((error) => ({ error }));
+        }
         const opening = delivery.activate().then((ready) => {
           if (!ready || stopped || signal.aborted || current.signal.aborted) throw new TypeError("reader_unverified");
-          iterator = context.event.subscribe({ signal: current.signal })[Symbol.asyncIterator]();
+          if (!iterator) iterator = context.event.subscribe({ signal: current.signal })[Symbol.asyncIterator]();
         });
         return { [Symbol.asyncIterator]() {
           return this;
@@ -4144,9 +4298,28 @@ async function setup(context) {
           snapshot = void 0;
           try {
             await opening;
-            const item = await iterator.next();
+            let item;
+            let firstToken;
+            if (prefetched) {
+              const first = await prefetched;
+              prefetched = void 0;
+              if (first.error) throw first.error;
+              item = first.item;
+              firstToken = first.token;
+            } else item = await iterator.next();
             if (!item.done) snapshot = display?.capture(item.value);
             if (item.done) delivery.invalidate("reader");
+            if (firstToken) {
+              const value = item.value;
+              let armed = false;
+              return { done: false, get value() {
+                if (!armed) {
+                  armed = true;
+                  delivery.armIngress(firstToken, value);
+                }
+                return value;
+              } };
+            }
             return item;
           } catch {
             delivery.invalidate("reader");
@@ -4192,6 +4365,7 @@ async function setup(context) {
       observer.start();
       return stop;
     } catch {
+      if (!stopped && isNativeOwned()) warning("activation_unavailable");
       await stop();
     }
   })();

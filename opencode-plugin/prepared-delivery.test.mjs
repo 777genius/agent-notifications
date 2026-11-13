@@ -160,7 +160,9 @@ test('V1 completion still requires the original bounded activation calibration',
  await setup(async({delivery,children,postGap,gapObserver})=>{
   postGap(300000000n);dc.subscribe('child_process',gapObserver);
   try{assert.equal(await delivery.activate(),false);}finally{dc.unsubscribe('child_process',gapObserver);}
-  assert.equal(delivery.ready(),false);assert.equal(children.length,1);assert.equal(children[0].closed,true);
+  // The first slow bracket is retried; this fixture's unchanged clock receipt
+  // is stale on the next attempt, so it must stop without a third child.
+  assert.equal(delivery.ready(),false);assert.equal(children.length,2);assert.ok(children.every(child=>child.closed));
  },'v1');
 });
 // Red if completion adds optional metadata/helper waits or restamps its anchor.
@@ -203,4 +205,26 @@ for(const kind of ['question_asked','terminal_error'])test(`V1 ${kind} still clo
   const h=handoff(),before=children.length;
   assert.equal(await delivery.beforeEmit(event,h),true);assert.equal(children.length,before+1);assert.equal(children.at(-1).closed,true);
  },'v1');
+});
+
+test('prefetched ingress preserves the original sample and monotonic high-water',async()=>{
+ await setup(async({delivery,advance,writeClock,fact,root})=>{
+  assert.equal(await delivery.activate(),true);advance(60000000n);
+  const native={type:'session.execution.succeeded'},event=fact(),token=delivery.captureIngress(native);
+  advance(700000000n);const laterClock=delivery.clock.now();delivery.armIngress(token,native);
+  const born=delivery.clock.now();assert.equal(born,laterClock,'prefetch must not reverse the SDK clock');delivery.nativeIngress(native);
+  await writeClock();const c=new AbortController(),handoff={signal:c.signal,clockID:delivery.clock.id,ingressMonotonicMs:born,metadataDeadline:born+2000,isCurrent:()=>true};
+  assert.equal(await delivery.beforeEmit(event,handoff),true);await delivery.emit(event,handoff);
+  const frame=parseJSON(await fs.readFile(path.join(root,'event-frame')));assert.equal(frame.provenance.ingressTickNS,'1000060000000');
+  assert.throws(()=>delivery.armIngress(token,native));assert.equal(delivery.ready(),false);
+ });
+});
+for (const mode of ['mismatch','expired','epoch','revoked']) test(`prefetched ingress rejects ${mode}`,async()=>{
+ await setup(async({delivery,advance,writeClock,revoke})=>{
+  assert.equal(await delivery.activate(),true);const event={type:'session.execution.succeeded'},token=delivery.captureIngress(event);
+  if(mode==='expired')advance(31000000000n);
+  if(mode==='epoch'){delivery.invalidate();await writeClock();assert.equal(await delivery.activate(),true);}
+  if(mode==='revoked')revoke();
+  assert.throws(()=>delivery.armIngress(token,mode==='mismatch'?{}:event));assert.equal(delivery.ready(),false);
+ });
 });

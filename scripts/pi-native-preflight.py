@@ -82,9 +82,10 @@ class Lab:
         if len(out) + len(err) > 256 * 1024:
             raise Unqualified("fixture_output_limit")
         if check and proc.returncode:
+            # Even CI fixture failures may contain private process output.
+            # Only closed, content-free diagnostics may enter uploaded reports.
             self.report["command_failure"] = {"tool": Path(argv[0]).name, "exit": proc.returncode,
-                                               "stdout": out.decode(errors="replace")[-6000:],
-                                               "stderr": err.decode(errors="replace")[-4000:]}
+                                               "stdout_bytes": len(out), "stderr_bytes": len(err)}
             raise Unqualified("fixture_command_failed")
         return out.decode("utf-8"), proc.returncode
 
@@ -137,19 +138,55 @@ def cue(path):
         audio.writeframes(struct.pack("<" + "h" * len(samples), *samples))
 
 
-def wait_for(predicate, seconds=8):
+def wait_for(predicate, seconds=8, failure="fixture_readiness_timeout"):
     until = time.monotonic() + seconds
     while time.monotonic() < until:
         result = predicate()
         if result:
             return result
         time.sleep(0.05)
-    raise Unqualified("fixture_readiness_timeout")
+    raise Unqualified(failure)
+
+
+def owned_visible_xterm_window(stdout, exit_code):
+    """Accept exactly one mapped X11 window owned by the launched xterm PID."""
+    candidates = stdout.strip().splitlines()
+    if exit_code != 0 or len(candidates) != 1:
+        return None
+    xid = candidates[0].strip()
+    return xid if xid.isascii() and xid.isdecimal() and int(xid) > 0 else None
+
+
+def verified_title_window(stdout, status, owner_stdout, owner_status, expected_pid):
+    """A unique visible title is only a locator; the X11 PID must match the held process."""
+    xid = owned_visible_xterm_window(stdout, status)
+    if xid is None or owner_status != 0:
+        return None
+    observed = owner_stdout.strip()
+    return xid if observed.isascii() and observed.isdecimal() and observed == str(expected_pid) else None
+
+
+def mapped_xterm_with_one_relaunch(lab, launch, observe):
+    """Recover once from an absent fixture mapping, never from failed provenance.
+
+    Terminate the first held process before a new attempt. Every successful
+    observation must prove a unique mapped X11 window belonging to the held
+    xterm PID. No product retry or native admission is authorized here.
+    """
+    terminal = launch()
+    try:
+        return observe(terminal)
+    except Unqualified as error:
+        if str(error) != "xterm_window_not_visible":
+            raise
+        lab.stop(terminal)
+    lab.report["xterm_mapping_relaunch"] = True
+    return observe(launch())
 
 
 def linux_desktop(lab, terminal_lifetime=90):
     """Owned X11/PulseAudio session reused by the actual installed-Pi fixture."""
-    names = ("dbus-daemon", "Xvfb", "openbox", "dunst", "xterm", "xdotool", "pulseaudio", "pactl", "parec", "aplay", "notify-send", "ffmpeg")
+    names = ("dbus-daemon", "Xvfb", "openbox", "dunst", "xterm", "xdotool", "sleep", "pulseaudio", "pactl", "parec", "aplay", "notify-send", "ffmpeg")
     paths = {name: shutil.which(name) for name in names}
     lab.report["tools"] = {name: {"available": bool(path), **({"sha256": digest(path)} if path else {})} for name, path in paths.items()}
     if not all(paths.values()):
@@ -161,7 +198,7 @@ def linux_desktop(lab, terminal_lifetime=90):
                                   cwd=lab.root, env=lab.env, pass_fds=(stream.fileno(),), stdout=subprocess.DEVNULL,
                                   stderr=subprocess.DEVNULL, start_new_session=True)
     lab.children.append(server)
-    display = wait_for(lambda: display_file.read_text().strip())
+    display = wait_for(lambda: display_file.read_text().strip(), failure="xvfb_display_not_ready")
     if not re.fullmatch(r"[0-9]{1,5}", display):
         raise Unqualified("invalid_owned_display")
     lab.env["DISPLAY"] = ":" + display
@@ -169,14 +206,14 @@ def linux_desktop(lab, terminal_lifetime=90):
     bus_socket = lab.root / "runtime/dbus"
     address = "unix:path=" + str(bus_socket)
     lab.start([paths["dbus-daemon"], "--session", "--nofork", "--address=" + address])
-    wait_for(lambda: bus_socket.exists())
+    wait_for(lambda: bus_socket.exists(), failure="dbus_socket_not_ready")
     lab.env["DBUS_SESSION_BUS_ADDRESS"] = address
     pulse_socket = lab.root / "runtime/pulse-native"
     lab.start([paths["pulseaudio"], "--daemonize=no", "--exit-idle-time=-1", "--disable-shm=yes", "--log-target=stderr", "-n",
                "--load=module-native-protocol-unix socket=" + str(pulse_socket) + " auth-anonymous=1",
                "--load=module-null-sink sink_name=TEST_pi_observer rate=48000 channels=1"])
     lab.env["PULSE_SERVER"] = "unix:" + str(pulse_socket)
-    wait_for(lambda: pulse_socket.exists())
+    wait_for(lambda: pulse_socket.exists(), failure="pulse_socket_not_ready")
     lab.run([paths["pactl"], "set-default-sink", "TEST_pi_observer"])
     (lab.root / "home/.asoundrc").write_text('pcm.!default { type pulse }\nctl.!default { type pulse }\n')
     dunst = lab.root / "dunstrc"
@@ -186,11 +223,40 @@ def linux_desktop(lab, terminal_lifetime=90):
     window_ids = []
     for role in ("origin", "distractor"):
         title = "TEST-pi-" + role + "-" + nonce
-        lab.start([paths["xterm"], "-T", title, "-e", sys.executable, "-c", "import time; time.sleep(" + str(terminal_lifetime) + ")"])
-        def search():
-            out, status = lab.run([paths["xdotool"], "search", "--onlyvisible", "--name", "^" + title + "$"], check=False)
-            return out.strip().splitlines()[0] if status == 0 and out.strip() else None
-        window_ids.append(wait_for(search))
+        # The Actions setup-python interpreter may need LD_LIBRARY_PATH,
+        # deliberately absent from this private fixture environment. Use the
+        # system sleep binary to hold a real xterm open without inheriting host
+        # loader paths or weakening X11 foreground/window observations.
+        def launch():
+            return lab.start([paths["xterm"], "-T", title, "-e", paths["sleep"], str(terminal_lifetime)])
+
+        def observe(terminal):
+            def search():
+                if terminal.poll() is not None:
+                    raise Unqualified("xterm_fixture_exited")
+                # Only a mapped X11 window owned by this held xterm PID may pass.
+                out, status = lab.run([paths["xdotool"], "search", "--onlyvisible", "--pid", str(terminal.pid)], check=False)
+                lab.report["xterm_probe"] = {"role": role, "lookup_status": status,
+                                             "visible_pid_window_count": len(out.strip().splitlines())}
+                direct = owned_visible_xterm_window(out, status)
+                if direct:
+                    return direct
+                # A unique nonce title is only a locator; PID must independently match.
+                titled, title_status = lab.run(
+                    [paths["xdotool"], "search", "--onlyvisible", "--name", "^" + re.escape(title) + "$"],
+                    check=False)
+                candidate = owned_visible_xterm_window(titled, title_status)
+                observed_pid, pid_status = lab.run(
+                    [paths["xdotool"], "getwindowpid", candidate], check=False) if candidate else ("", 1)
+                verified = verified_title_window(titled, title_status, observed_pid, pid_status, terminal.pid)
+                lab.report["xterm_probe"].update(
+                    title_visible_window_count=len(titled.strip().splitlines()),
+                    title_owner_verified=verified is not None)
+                return verified
+
+            return wait_for(search, seconds=18, failure="xterm_window_not_visible")
+
+        window_ids.append(mapped_xterm_with_one_relaunch(lab, launch, observe))
     for window in window_ids:
         # The Xvfb display can be ready before Openbox publishes active-window
         # support. Retry the real WM activation/observation, never assume focus.
@@ -200,7 +266,7 @@ def linux_desktop(lab, terminal_lifetime=90):
                 return False
             observed, status = lab.run([paths["xdotool"], "getactivewindow"], check=False)
             return status == 0 and observed.strip() == window
-        wait_for(activated)
+        wait_for(activated, failure="window_activation_not_ready")
     return paths, server, window_ids
 
 

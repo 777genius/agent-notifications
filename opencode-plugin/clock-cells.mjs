@@ -32,8 +32,13 @@ export function describeClockPolicy(row) {
   const descriptor = describeClockSource(row.goos, row.goarch);
   const legacy = row.goos === 'linux' && row.goarch === 'amd64';
   const pins = legacy ? images[row.generation] : undefined;
+  // Recognition of the official candidate is only a description of its
+  // shape. It creates no compiled row, clock bound, or runtime authority.
+  const darwin226Candidate = row.goos === 'darwin' && row.goarch === 'arm64' && row.generation === 'v2' &&
+    Array.isArray(row.images) && row.images.length === 1 && row.images[0]?.version === '2.2.6' &&
+    row.images[0]?.imageSHA256 === '90e4d03597b03d2051b65b4d793467764e55bacd8e22bf4824479c7233ea0e15';
   const versions = legacy ? pins?.map(pin => pin[0]) :
-    row.generation === 'v1' ? ['1.18.33'] : row.generation === 'v2' ? ['2.0.21'] : undefined;
+    row.generation === 'v1' ? ['1.18.33'] : row.generation === 'v2' ? [darwin226Candidate ? '2.2.6' : '2.0.21'] : undefined;
   if (row.protocol !== 1 || !versions || row.sourceKind !== descriptor.sourceKind || row.rawKind !== descriptor.rawKind ||
       !hashOK(row.algorithmSourceMerkleSHA256) || !Array.isArray(row.images) || row.images.length !== versions.length)
     throw new TypeError('qualification_unverified');
@@ -74,9 +79,36 @@ export function describeClockPolicy(row) {
     ...(sourceWallBoundNS === undefined ? {} : { sourceWallBoundNS }) });
 }
 const cells = Object.freeze(compiledRows.map(describeClockPolicy));
-export function selectClockCell(generation) {
+// Pure selection seam; passing rows here does not register them or create authority.
+const familyReferenceVersion = '2.0.21';
+// Same rule as familyVersionOK in cmd/claude-notifications/opencode_runtime_family.go:
+// plain release versions 2.x.y at or above the reference, no suffixes.
+const inFamilyRange = version => {
+  const m = /^(0|[1-9]\d{0,5})\.(0|[1-9]\d{0,5})\.(0|[1-9]\d{0,5})$/.exec(version);
+  return m !== null && m[1] === '2' && (Number(m[2]) > 0 || Number(m[3]) >= 21);
+};
+export function findClockCell(rows, goos, goarch, generation, version) {
+  if (typeof version !== 'string' || !version) return undefined;
+  // Runtime callers provide the version from the held host's qualified profile.
+  // An exact row for that version always wins; an ambiguous match selects nothing.
+  // Only the darwin/arm64 V2 family below may borrow the reference row.
+  const forVersion = wanted => rows.filter(cell => cell.goos === goos && cell.goarch === goarch &&
+    cell.generation === generation && cell.images.some(image => image.version === wanted));
+  const matches = forVersion(version);
+  if (matches.length > 1) return undefined;
+  if (matches.length === 1) return matches[0];
+  // darwin/arm64 V2 family: the Go helper admits a publisher-verified release by
+  // range and resolves it to the reviewed reference image (cmd/claude-notifications/
+  // opencode_runtime_family.go). Its compiled reference row supplies the clock
+  // policy, so a new release does not need its own row.
+  if (goos === 'darwin' && goarch === 'arm64' && generation === 'v2' && inFamilyRange(version)) {
+    const reference = forVersion(familyReferenceVersion);
+    if (reference.length === 1) return reference[0];
+  }
+  return undefined;
+}
+export function selectClockCell(generation, version) {
   const goos = process.platform === 'win32' ? 'windows' : process.platform;
   const goarch = process.arch === 'x64' ? 'amd64' : process.arch;
-  const matches = cells.filter(cell => cell.goos === goos && cell.goarch === goarch && cell.generation === generation);
-  return matches.length === 1 ? matches[0] : undefined;
+  return findClockCell(cells, goos, goarch, generation, version);
 }
