@@ -80,14 +80,32 @@ export function describeClockPolicy(row) {
 }
 const cells = Object.freeze(compiledRows.map(describeClockPolicy));
 // Pure selection seam; passing rows here does not register them or create authority.
+const familyReferenceVersion = '2.0.21';
+// Same rule as familyVersionOK in cmd/claude-notifications/opencode_runtime_family.go:
+// plain release versions 2.x.y at or above the reference, no suffixes.
+const inFamilyRange = version => {
+  const m = /^(0|[1-9]\d{0,5})\.(0|[1-9]\d{0,5})\.(0|[1-9]\d{0,5})$/.exec(version);
+  return m !== null && m[1] === '2' && (Number(m[2]) > 0 || Number(m[3]) >= 21);
+};
 export function findClockCell(rows, goos, goarch, generation, version) {
   if (typeof version !== 'string' || !version) return undefined;
-  // Runtime callers provide the version from the held host's qualified
-  // profile. A future independently qualified image must select its own
-  // clock policy, rather than accidentally reuse another version's bounds.
-  const matches = rows.filter(cell => cell.goos === goos && cell.goarch === goarch && cell.generation === generation &&
-    cell.images.some(image => image.version === version));
-  return matches.length === 1 ? matches[0] : undefined;
+  // Runtime callers provide the version from the held host's qualified profile.
+  // An exact row for that version always wins; an ambiguous match selects nothing.
+  // Only the darwin/arm64 V2 family below may borrow the reference row.
+  const forVersion = wanted => rows.filter(cell => cell.goos === goos && cell.goarch === goarch &&
+    cell.generation === generation && cell.images.some(image => image.version === wanted));
+  const matches = forVersion(version);
+  if (matches.length > 1) return undefined;
+  if (matches.length === 1) return matches[0];
+  // darwin/arm64 V2 family: the Go helper admits a publisher-verified release by
+  // range and resolves it to the reviewed reference image (cmd/claude-notifications/
+  // opencode_runtime_family.go). Its compiled reference row supplies the clock
+  // policy, so a new release does not need its own row.
+  if (goos === 'darwin' && goarch === 'arm64' && generation === 'v2' && inFamilyRange(version)) {
+    const reference = forVersion(familyReferenceVersion);
+    if (reference.length === 1) return reference[0];
+  }
+  return undefined;
 }
 export function selectClockCell(generation, version) {
   const goos = process.platform === 'win32' ? 'windows' : process.platform;

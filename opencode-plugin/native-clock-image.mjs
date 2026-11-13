@@ -1,5 +1,6 @@
 import { openSync, closeSync, readSync, fstatSync, statSync, realpathSync, constants } from 'node:fs';
 import { createHash } from 'node:crypto';
+import { basename } from 'node:path';
 import { unavailable } from './native-clock-contract.mjs';
 
 // Closed source candidate identities, NOT clock-policy or semantic grants.
@@ -38,13 +39,32 @@ export function holdFile(path) {
     return Object.freeze({ digest, verify, close() { if (!disposed) { disposed = true; closeSync(fd); } } });
   } catch { try { closeSync(fd); } catch {} unavailable(); }
 }
+// Darwin arm64 identity is not decided here: the Go helper independently holds the
+// live image of the owning process and verifies the publisher signature, so an
+// exact Bun/digest allowlist here would only re-pin every new official release.
+// The runtime must still be the OpenCode executable (npm packages ship it as
+// `opencode.exe` even on macOS), which keeps unrelated system binaries out, and
+// the clock anchors still fail closed if this runtime disagrees with the Go clock.
+// `legacy` marks the reviewed releases whose wall coordinate is Date.now(); any other
+// darwin arm64 runtime uses the independent CLOCK_REALTIME coordinate instead.
+// Every other platform and architecture keeps the closed list.
+const opencodeNames = new Set(['opencode', 'opencode.exe']);
+const independentWallBun = '1.4.4';
+const exact = (bun, digest) => images.some(row => row[0] === process.platform && row[1] === process.arch &&
+  row[2] === bun && (digest === undefined || row[3] === digest));
 export function pinNativeImage() {
   const bun = globalThis.Bun?.version;
-  if (!images.some(row => row[0] === process.platform && row[1] === process.arch && row[2] === bun)) unavailable();
-  const path = realpathSync(process.execPath), held = holdFile(path);
+  if (typeof bun !== 'string' || bun === '') unavailable();
+  const open = process.platform === 'darwin' && process.arch === 'arm64';
+  if (!open && !exact(bun)) unavailable();
+  const path = realpathSync(process.execPath);
+  if (open && !opencodeNames.has(basename(path))) unavailable();
+  const held = holdFile(path);
   try {
-    if (!images.some(row => row[0] === process.platform && row[1] === process.arch && row[2] === bun && row[3] === held.digest)) unavailable();
-    return Object.freeze({ imageSHA256: held.digest, close: held.close, verify() {
+    if (!open && !exact(bun, held.digest)) unavailable();
+    const legacy = images.some(row => row[0] === process.platform && row[1] === process.arch &&
+      row[2] !== independentWallBun && row[2] === bun && row[3] === held.digest);
+    return Object.freeze({ imageSHA256: held.digest, legacy, close: held.close, verify() {
       if (globalThis.Bun?.version !== bun || realpathSync(process.execPath) !== path) unavailable();
       held.verify();
     } });

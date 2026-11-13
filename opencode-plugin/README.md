@@ -55,7 +55,9 @@ weight two and clock/event children at weight one through actual close.
 Missing inner reaping proof permanently retains both profile reservations.
 
 Production clock selection uses reviewed compiled qualification rows, bound to
-the exact host image and semantic source. `createLinuxClock()` exposes the
+the exact host image and semantic source. The one exception is darwin arm64 V2,
+where the reviewed 2.0.21 row is the reference and an official publisher-signed
+2.x host is admitted by release range (see docs/opencode-notifications.md). `createLinuxClock()` exposes the
 actual synchronous proc reader for parent qualification; describing a closed
 manifest cannot register it. Only compiled reviewed evidence may populate
 `clock-qualification-data.mjs`, with the same independently selected Go policy. The fixed

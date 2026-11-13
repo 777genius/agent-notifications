@@ -104,8 +104,17 @@ The runtime profile now supplies the version independently observed from its
 held native host. V2 requires the version reported by `context.app` to match
 that independent observation, rather than compare with a hardcoded patch
 version. This removes the JS-only patch allowlist, **not** the native
-qualification requirements. Unknown future binaries will still be refused
-until their supported source, reader and clock contracts can be established.
+qualification requirements. On macOS arm64, an official OpenCode 2.x `serve`
+process whose publisher the operating system has verified (Developer ID, Team
+`5NZ4Q7NXJ4`, identifier `opencode`) and whose probed version is `2.0.21` or
+newer within major 2 is admitted by release range, so a new official release
+needs no new table row. Unsigned or re-signed binaries, other majors and
+pre-release versions are refused. On every other platform and for V1, unknown
+future binaries are still refused until their supported source, reader and
+clock contracts can be established. The signature verifies the executable, not
+the code it runs: a signed OpenCode started with `DYLD_*` or `BUN_BE_BUN` in its
+environment can still execute other code. That was already true for the pinned
+release and is not new, but it is not closed either.
 
 For a genuine installed/owned host whose profile returns an unqualified result,
 the plugin prints one generic diagnostic:
@@ -129,8 +138,11 @@ OpenCode bundles its own **Bun runtime**, used to execute the plugin. It is
 not an additional dependency installed by Agent Notifications. Historical
 macOS/Windows source-time adapters additionally check Bun binary identities.
 That check is a separate source-compatibility boundary, not an OpenCode
-version resolver. It must not be replaced with a loose range until native
-clock equivalence is independently tested.
+version resolver. On macOS arm64 the JS side no longer pins the release hash
+(the Go helper decides the live image and publisher) and only requires the
+`opencode` executable (`opencode.exe` in npm packages); the runtime clock
+comparison against the independent Go clock is unchanged and still fails closed.
+Other platforms keep the exact closed list.
 
 ## Install or update
 

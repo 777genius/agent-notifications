@@ -389,7 +389,7 @@ jobs:
 
   darwin-arm64-image:
     name: darwin-arm64-native (${{ matrix.os }})
-    # Image/Bun discovery only, no native clock admission or notifications.
+    # Image/Bun discovery first; installed delivery and clock-skew refusal are observed below.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     strategy:
       fail-fast: false
@@ -504,15 +504,16 @@ jobs:
         env:
           AN_TEST_OFFICIAL_OPENCODE: ${{ runner.temp }}/TEST-opencode-v226-darwin/opencode
         run: go test ./cmd/claude-notifications -run '^TestRuntimeDarwinOpenCodePublisher$' -count=1
-      - name: Observe real macOS ARM64 V2 source and installed-denied events
+      - name: Observe real macOS ARM64 V2 source and installed delivery events
         shell: bash
         run: |
           set -euo pipefail
           python -B scripts/opencode-v226-source-e2e.py \
             --archive "$RUNNER_TEMP/opencode-darwin-arm64.zip" \
             --receiver "$RUNNER_TEMP/TEST-opencode-v226-darwin/receiver" \
-            --report "$RUNNER_TEMP/opencode-v226-darwin-denied-safe.json"
-      - name: Observe the reported macOS service entry and restart denial
+            --expect-delivery \
+            --report "$RUNNER_TEMP/opencode-v226-darwin-delivery-safe.json"
+      - name: Observe the reported macOS service entry and delivery
         shell: bash
         run: |
           set -euo pipefail
@@ -523,16 +524,28 @@ jobs:
             --receiver "$RUNNER_TEMP/TEST-opencode-v226-darwin/receiver" \
             --darwin-live-signer "$RUNNER_TEMP/TEST-opencode-v226-darwin/live-signer-e0" \
             --darwin-native-peer "$RUNNER_TEMP/TEST-opencode-v226-darwin/native-peer-e0" \
-            --service --restart-denial --mutate-peer-events --observe-auto-compaction \
-            --report "$RUNNER_TEMP/opencode-v226-darwin-service-denied-safe.json"
-      - name: Upload sanitized macOS source/denial evidence
+            --service --expect-delivery --mutate-peer-events --observe-auto-compaction \
+            --report "$RUNNER_TEMP/opencode-v226-darwin-service-delivery-safe.json"
+      - name: Observe installed macOS clock-skew refusal, before and after delivery
+        shell: bash
+        run: |
+          set -euo pipefail
+          for mode in "--clock-skew-negative --skew-after-delivery" "--clock-skew-past-negative"; do
+            python -B scripts/opencode-v226-source-e2e.py \
+              --archive "$RUNNER_TEMP/opencode-darwin-arm64.zip" \
+              --receiver "$RUNNER_TEMP/TEST-opencode-v226-darwin/receiver" \
+              --installed-clock-skew $mode \
+              --report "$RUNNER_TEMP/opencode-v226-darwin-skew-safe-${mode//[ -]/_}.json"
+          done
+      - name: Upload sanitized macOS source/delivery evidence
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: opencode-v226-darwin-denied-${{ matrix.os }}-${{ github.event.pull_request.head.sha || github.sha }}
+          name: opencode-v226-darwin-delivery-${{ matrix.os }}-${{ github.event.pull_request.head.sha || github.sha }}
           path: |
-            ${{ runner.temp }}/opencode-v226-darwin-denied-safe.json
-            ${{ runner.temp }}/opencode-v226-darwin-service-denied-safe.json
+            ${{ runner.temp }}/opencode-v226-darwin-delivery-safe.json
+            ${{ runner.temp }}/opencode-v226-darwin-service-delivery-safe.json
+            ${{ runner.temp }}/opencode-v226-darwin-skew-safe-*.json
           if-no-files-found: warn
           retention-days: 14
       # Same genuine official-image source/time negatives as Linux/Windows.

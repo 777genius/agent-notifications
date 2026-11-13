@@ -96,7 +96,10 @@ export function createPreparedDelivery({ registry, origin, policy, isOwned, onIn
         });
         if (!isCurrent()) { try { acquired?.dispose(); } catch {} bad(); }
         source = acquired; activation = undefined;
-        if (policy.rawKind !== 'linux-boottime' &&
+        // Darwin arm64 identity is decided by the Go helper (live image + publisher), not
+        // by a release hash here; every other platform keeps the closed image list.
+        const goDecided = policy.rawKind === 'darwin-monotonic-raw' && policy.goarch === 'arm64';
+        if (policy.rawKind !== 'linux-boottime' && !goDecided &&
             !policy.images?.some(image => image.imageSHA256 === source.imageSHA256)) bad();
         // A calibration around a fully reaped helper can exceed the fixed
         // bracket even when it completes inside the activation deadline.
