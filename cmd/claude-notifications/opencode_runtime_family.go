@@ -23,7 +23,16 @@ var familyReference = opencodecodec.ImageKey{
 	SHA256: "0b2b68c1efaf20a29aaf636c2ffccc1abb56243a82f48cce45e257d232e03442",
 }
 
+func exactKey(live runtimeLiveImage) opencodecodec.ImageKey {
+	return opencodecodec.ImageKey{GOOS: live.GOOS, GOARCH: live.GOARCH, Entry: live.Entry, SHA256: live.SHA256}
+}
+
+// familyEligible is false for an image that already has its own qualified row:
+// an exact qualification (e.g. a reviewed V1 release) always wins over the family.
 func familyEligible(live runtimeLiveImage) bool {
+	if _, exact := opencodecodec.LookupCandidate(exactKey(live)); exact {
+		return false
+	}
 	return live.Publisher && live.GOOS == familyReference.GOOS && live.GOARCH == familyReference.GOARCH &&
 		live.Entry == familyReference.Entry
 }
@@ -57,5 +66,5 @@ func qualificationKey(live runtimeLiveImage) opencodecodec.ImageKey {
 	if familyEligible(live) {
 		return familyReference
 	}
-	return opencodecodec.ImageKey{GOOS: live.GOOS, GOARCH: live.GOARCH, Entry: live.Entry, SHA256: live.SHA256}
+	return exactKey(live)
 }

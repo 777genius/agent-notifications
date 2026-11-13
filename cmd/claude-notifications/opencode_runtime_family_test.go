@@ -51,6 +51,17 @@ func TestFamilyAdmitsOnlyVerifiedPublisherInRange(t *testing.T) {
 	}
 }
 
+// A reviewed exact image keeps its own row even when the OS verified its publisher.
+func TestFamilyKeepsExactQualifiedV1(t *testing.T) {
+	live := familyLive("139ddeb6a46ba276827bb8f79c7b28208621746e4fd6914d9ae71cc1a0a57524", true)
+	if familyEligible(live) {
+		t.Fatal("reviewed V1 image was remapped to the family reference")
+	}
+	if got := qualifyRuntimeObserver(opencodehost.Profile{Version: "1.18.33"}, live); got == observerV2 {
+		t.Fatalf("V1 image qualified as V2: %v", got)
+	}
+}
+
 // A signed image never widens an exact qualified platform: Linux still needs its own row.
 func TestFamilyDoesNotLeakToOtherPlatforms(t *testing.T) {
 	live := familyLive("2222222222222222222222222222222222222222222222222222222222222222", true)
