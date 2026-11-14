@@ -51,7 +51,6 @@ jobs:
           - { target: windows-amd64, runner: windows-2022 }
     env:
       GOWORK: off
-      GITHUB_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -85,6 +84,9 @@ jobs:
           echo "AN_RECEIVER=$out" >> "$GITHUB_ENV"
       - name: Deliver through V1 and V2 official releases
         shell: bash
+        env:
+          # Only used to resolve latest-v1 / latest-v2; the script drops it before any host runs.
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           python -B scripts/opencode-range-e2e.py \
             --receiver "$AN_RECEIVER" \

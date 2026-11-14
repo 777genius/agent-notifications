@@ -215,10 +215,21 @@ def main():
     parser.add_argument('--report', type=Path, required=True)
     args = parser.parse_args()
     h = load('opencode-v226-source-e2e')
+    # Resolve every tag first: the API token is only needed here and is dropped before
+    # any downloaded host runs. Hosts also get an explicit environment without it.
+    tags = {}
+    for release in args.release:
+        try:
+            tags[release] = resolve_release(release)
+        except Exception as error:
+            tags[release] = error
+    os.environ.pop('GITHUB_TOKEN', None)
     results = []
     for release in args.release:
         try:
-            tag = resolve_release(release)
+            if isinstance(tags[release], Exception):
+                raise tags[release]
+            tag = tags[release]
             with h.OwnedTemporaryDirectory(prefix='TEST-opencode-range-', dir=os.environ.get('RUNNER_TEMP')) as temp:
                 root = Path(temp).resolve(strict=True)
                 h.prepare_windows_private_root(root)
