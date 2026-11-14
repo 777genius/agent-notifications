@@ -166,5 +166,27 @@ earlier "keep 2.2.6 production admission closed" position for that one platform.
   cause not found).
 - Evidence: official 2.2.6 and 2.2.7 darwin arm64 delivery through the repo
   harness, refusal on an ad-hoc re-signed copy, and installed clock-skew refusal.
-- Follow-up: V1 above 1.18.33 and darwin amd64 are not covered; the event path
-  does not yet know the generation.
+- Follow-up (closed by the 2026-11-14 decision below): V1 above 1.18.33 and the
+  other platforms.
+
+## Owner decision, 2026-11-14: family admission on every platform and both generations
+
+The owner extended range support to the whole matrix: a new official OpenCode
+release must not need a code change on any platform.
+
+- V1 `1.18.33` and newer within major 1, and V2 `2.0.21` and newer within major 2,
+  on Linux, macOS and Windows (amd64 and arm64 where shipped). A release resolves
+  onto the reviewed reference release of its generation for the same platform and
+  entry; V1 keeps its `tui`/`run` local entries, V2 only `serve`.
+- Gate: macOS still requires the OS-verified publisher. Linux and Windows have no
+  cheap equivalent, so the range, the held live image and the independent clock
+  comparison are the whole gate. This is weaker than the previous per-hash pin and
+  is an accepted owner decision.
+- The event frame chooses between the Go-owned rows of the image (one per
+  generation), and each row is checked by the existing policy id and generation
+  match, so a mismatched generation is rejected.
+- Evidence: `scripts/opencode-range-e2e.py` and the `opencode-range-e2e` workflow
+  install the plugin into unmodified official releases (fixed tags plus the latest
+  V1 and V2) and require real webhook delivery on all five platform pairs. The old
+  Linux and Windows installed-denial steps were removed because that behavior no
+  longer exists.
