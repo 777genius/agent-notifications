@@ -21,6 +21,7 @@ import socket
 import subprocess
 import sys
 import threading
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -190,6 +191,9 @@ def run(args, root, tag):
                                 creationflags=(subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == 'win32' else 0))
         try:
             h.wait(ready, 70, 'native_startup_timeout')
+            # The plugin activates (runtime profile probe, clock calibration) after the host
+            # answers; a loopback model reply is instant, so give activation time to finish.
+            time.sleep(args.settle)
             for name, mode, kind, message, generations in SCENARIOS:
                 if generation not in generations or args.only and name not in args.only:
                     continue
@@ -201,6 +205,13 @@ def run(args, root, tag):
                 delivered.append(name)
                 print('range-stage: ' + name + '-delivered', flush=True)
                 provider.mode = 'success'
+        except Exception:
+            # The plugin's own startup diagnostic is a fixed, content-free line; show only it.
+            log.flush()
+            for line in (root / 'host.private.log').read_text(errors='replace').splitlines():
+                if 'Agent Notifications' in line:
+                    print('host-diagnostic: ' + line[:300], flush=True)
+            raise
         finally:
             h.stop_official_host_tree(host)
     return {'status': 'passed', 'generation': generation, 'version': version,
@@ -212,6 +223,7 @@ def main():
     parser.add_argument('--receiver', type=Path, required=True, help='Exact-source AN executable to install')
     parser.add_argument('--release', nargs='+', required=True, help='Release tags or latest-v1 / latest-v2')
     parser.add_argument('--only', nargs='+', choices=[s[0] for s in SCENARIOS], help='Run only these scenarios')
+    parser.add_argument('--settle', type=float, default=3, help='Seconds to wait after the host is ready')
     parser.add_argument('--report', type=Path, required=True)
     args = parser.parse_args()
     h = load('opencode-v226-source-e2e')
