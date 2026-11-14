@@ -157,7 +157,7 @@ func holdRuntimeLiveImage(ctx context.Context, in runtimeProfileInput) (*runtime
 		// Asked inside the stability window: the process and both files are re-read
 		// and compared right below, so a swap after this point fails the read.
 		official := publisher.verified(runtimeDarwinPublisherKey{pid: in.NativePID, seconds: live.Seconds, micros: live.Micros,
-			sha: ha, device: device, inode: inode}, entry)
+			sha: ha, device: device, inode: inode})
 		end, e2 := runtimeDarwinProcessInfo(in.NativePID)
 		na, e3 := os.Stat(live.Name)
 		nb, e4 := os.Stat(in.HostExecutable)
@@ -185,7 +185,7 @@ func runtimeDarwinUnchanged(fd int) bool { return C.an_runtime_unchanged(C.int(f
 // process and image: a cold SecCode check costs seconds, while an unchanged process
 // keeps the same answer. A negative verdict is never reused and is retried once, so
 // a transient OS failure cannot turn an official process into a refused one for the
-// whole lease. Only the arm64 serve entry is asked; every other image stays unverified.
+// whole lease.
 type runtimeDarwinPublisherKey struct {
 	pid             int
 	seconds, micros uint64
@@ -198,10 +198,7 @@ type runtimeDarwinPublisherCache struct {
 	ok  bool
 }
 
-func (c *runtimeDarwinPublisherCache) verified(key runtimeDarwinPublisherKey, entry string) bool {
-	if entry != "serve" || runtime.GOARCH != "arm64" {
-		return false
-	}
+func (c *runtimeDarwinPublisherCache) verified(key runtimeDarwinPublisherKey) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.ok && c.key == key {

@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"github.com/777genius/agent-notifications/internal/opencodeevent"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/opencodehost"
 	"testing"
 )
@@ -147,37 +146,27 @@ func TestPlatformImagesCannotBindCopiedReader(t *testing.T) {
 			if qualifyRuntimeObserver(opencodehost.Resolve(e), unknownPlatform) != observerUnverified {
 				t.Fatal("unknown platform inherited native observer authority")
 			}
+			// An unknown image is admitted only through the family range, and macOS also
+			// needs the OS-verified publisher (absent in this fixture).
 			live.SHA256 = "unknown"
-			if _, ok := runtimeReaderTuple(live, image.version); ok || qualifyRuntimeObserver(opencodehost.Resolve(e), live) != observerUnverified {
-				t.Fatal("unknown image inherited reader or clock eligibility")
+			if image.goos == "darwin" {
+				if _, ok := runtimeReaderTuple(live, image.version); ok || qualifyRuntimeObserver(opencodehost.Resolve(e), live) != observerUnverified {
+					t.Fatal("unsigned unknown darwin image inherited reader or clock eligibility")
+				}
 			}
 		})
 	}
 }
 
-// Without an OS-verified publisher an observed image inherits no reader or clock.
-// The publisher-verified darwin family path is covered by TestFamilyAdmitsOnlyVerifiedPublisherInRange.
+// An observed-only 2.2.6 image has no reader or clock row of its own. macOS refuses it
+// without an OS-verified publisher; Linux and Windows admit it through the family range.
 func TestObserved226WithoutPublisherStillNeedsNativeReader(t *testing.T) {
-	for _, image := range []struct{ goos, goarch, sha string }{
-		{"linux", "amd64", "50503d24577fa4117a7c95ee85b2cd679606a87eacf20ca54ed5db5c9e1cf895"},
-		{"darwin", "arm64", "90e4d03597b03d2051b65b4d793467764e55bacd8e22bf4824479c7233ea0e15"},
-		{"windows", "amd64", "98cb0aa854c7c015cf6febafa7afb872c359bfe5a823a526f3b4fd347a9e9677"},
-	} {
-		t.Run(image.goos+"/"+image.goarch, func(t *testing.T) {
-			live := runtimeLiveImage{GOOS: image.goos, GOARCH: image.goarch, Entry: "serve",
-				SHA256: image.sha, NativePID: 1, ProcessStartTick: 1, fingerprint: [32]byte{1}}
-			// These are pure data fixtures. No live held process or clock is faked.
-			if reader, ok := runtimeReaderTuple(live, "2.2.6"); ok || reader != (opencodehost.NativeObserverTuple{}) {
-				t.Fatal("observed-only image inherited qualified reader")
-			}
-			if _, err := opencodeevent.SelectTrustedImageClock(runtimeImageKey(live)); err == nil {
-				t.Fatal("observed-only image inherited product clock admission")
-			}
-			evidence := opencodehost.VersionEvidence{Version: "2.2.6", Source: "host_runtime",
-				ProbeStatus: "ok", ExecutableIdentity: "TEST-not-a-live-lease"}
-			if qualifyRuntimeObserver(opencodehost.Resolve(evidence), live) != observerUnverified {
-				t.Fatal("observed image acquired native authority without reader/clock proof")
-			}
-		})
+	live := runtimeLiveImage{GOOS: "darwin", GOARCH: "arm64", Entry: "serve",
+		SHA256: "90e4d03597b03d2051b65b4d793467764e55bacd8e22bf4824479c7233ea0e15", NativePID: 1, fingerprint: [32]byte{1}}
+	if reader, ok := runtimeReaderTuple(live, "2.2.6"); ok || reader != (opencodehost.NativeObserverTuple{}) {
+		t.Fatal("observed-only unsigned image inherited qualified reader")
+	}
+	if qualifyRuntimeObserver(opencodehost.Profile{Version: "2.2.6"}, live) != observerUnverified {
+		t.Fatal("observed unsigned image acquired native authority")
 	}
 }

@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { basename } from 'node:path';
 import { unavailable } from './native-clock-contract.mjs';
 
-// Closed source candidate identities, NOT clock-policy or semantic grants.
+// Reviewed release images, used only to recognise the legacy darwin wall coordinate.
 const images = Object.freeze([
   ['darwin', 'x64', '1.3.14', 'f53aae8eb68d832ab1bcd27bed88c02de910be61f4b5f90068ae8e93d5e794c9'],
   ['darwin', 'arm64', '1.3.14', '139ddeb6a46ba276827bb8f79c7b28208621746e4fd6914d9ae71cc1a0a57524'],
@@ -39,29 +39,23 @@ export function holdFile(path) {
     return Object.freeze({ digest, verify, close() { if (!disposed) { disposed = true; closeSync(fd); } } });
   } catch { try { closeSync(fd); } catch {} unavailable(); }
 }
-// Darwin arm64 identity is not decided here: the Go helper independently holds the
-// live image of the owning process and verifies the publisher signature, so an
-// exact Bun/digest allowlist here would only re-pin every new official release.
-// The runtime must still be the OpenCode executable (npm packages ship it as
-// `opencode.exe` even on macOS), which keeps unrelated system binaries out, and
-// the clock anchors still fail closed if this runtime disagrees with the Go clock.
-// `legacy` marks the reviewed releases whose wall coordinate is Date.now(); any other
-// darwin arm64 runtime uses the independent CLOCK_REALTIME coordinate instead.
-// Every other platform and architecture keeps the closed list.
+// Image identity is not decided here: the Go helper independently holds the live image
+// of the owning process and admits it (reviewed hash, or release range plus the OS
+// publisher check on macOS), so a closed Bun/digest allowlist here would only re-pin
+// every new official release. The runtime must still be the OpenCode executable (npm
+// packages ship it as `opencode.exe` even on macOS), which keeps unrelated binaries
+// out, and the clock anchors still fail closed if this runtime disagrees with the Go clock.
+// `legacy` marks the reviewed darwin releases whose wall coordinate is Date.now(); any
+// other runtime uses the independent CLOCK_REALTIME coordinate instead.
 const opencodeNames = new Set(['opencode', 'opencode.exe']);
 const independentWallBun = '1.4.4';
-const exact = (bun, digest) => images.some(row => row[0] === process.platform && row[1] === process.arch &&
-  row[2] === bun && (digest === undefined || row[3] === digest));
 export function pinNativeImage() {
   const bun = globalThis.Bun?.version;
   if (typeof bun !== 'string' || bun === '') unavailable();
-  const open = process.platform === 'darwin' && process.arch === 'arm64';
-  if (!open && !exact(bun)) unavailable();
   const path = realpathSync(process.execPath);
-  if (open && !opencodeNames.has(basename(path))) unavailable();
+  if (!opencodeNames.has(basename(path))) unavailable();
   const held = holdFile(path);
   try {
-    if (!open && !exact(bun, held.digest)) unavailable();
     const legacy = images.some(row => row[0] === process.platform && row[1] === process.arch &&
       row[2] !== independentWallBun && row[2] === bun && row[3] === held.digest);
     return Object.freeze({ imageSHA256: held.digest, legacy, close: held.close, verify() {

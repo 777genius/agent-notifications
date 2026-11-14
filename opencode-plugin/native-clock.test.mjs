@@ -19,9 +19,12 @@ test('clock selection refuses versions outside the compiled platform policy', ()
     for (const image of cell.images) assert.equal(selectClockCell(generation, image.version), cell);
     for (const version of ['', null, 0, '999.0.0', '3.0.0', '2.0.20', '2.2.7-beta']) assert.equal(selectClockCell(generation, version), undefined);
   }
-  // darwin/arm64 V2 is admitted by family range (Go decides identity); other platforms stay exact.
-  const family = process.platform === 'darwin' && process.arch === 'arm64';
-  assert.equal(selectClockCell('v2', '2.2.6'), family ? selectClockCell('v2', '2.0.21') : undefined);
+  // Every platform admits a release by generation range (Go decides identity): the
+  // reference row of that generation supplies the policy.
+  assert.equal(selectClockCell('v2', '2.3.0'), selectClockCell('v2', '2.0.21'));
+  assert.equal(selectClockCell('v1', '1.19.5'), selectClockCell('v1', '1.18.33'));
+  for (const [generation, version] of [['v1', '1.18.32'], ['v1', '2.0.21'], ['v2', '1.19.5'], ['v1', '1.0.142'], ['v2', '2.0.20']])
+    assert.equal(selectClockCell(generation, version), undefined);
   assert.equal(selectClockCell('v2'), undefined);
   // Isolated data only: this exercises multiple policies without registering any.
   const base = { goos: 'darwin', goarch: 'arm64', generation: 'v2' };
@@ -34,7 +37,6 @@ test('clock selection refuses versions outside the compiled platform policy', ()
 });
 
 test('the official 2.2.6 candidate can be described and selects only the family reference policy', () => {
-  const family = process.platform === 'darwin' && process.arch === 'arm64';
   // The source root and numeric bounds are synthetic test data, not evidence.
   const candidate = { protocol: 1, generation: 'v2', goos: 'darwin', goarch: 'arm64',
     ...describeClockSource('darwin', 'arm64'),
@@ -46,7 +48,7 @@ test('the official 2.2.6 candidate can be described and selects only the family 
     r => { r.goarch = 'amd64'; }, r => { r.images[0].version = '2.2.7'; }]) {
     const bad = structuredClone(candidate); change(bad); assert.throws(() => describeClockPolicy(bad));
   }
-  assert.equal(selectClockCell('v2', '2.2.6'), family ? selectClockCell('v2', '2.0.21') : undefined);
+  assert.equal(selectClockCell('v2', '2.2.6'), selectClockCell('v2', '2.0.21'));
 });
 
 test('actual LP64/Win64 ABI contracts use output pointers, unsigned counters and VOID status', () => {
@@ -572,23 +574,18 @@ test('pre-epoch native birth stays denied without rebirth or provenance replacem
 
 // An authenticated but different native image must not inherit the descriptor.
 // Both hashes are inert test identities; production pins are untouched.
-test('well-formed wrong native image denies before counter/helper and disposes the binding', async () => {
-  const f = deliveryFixture('windows-interrupt-precise'); f.source.imageSHA256 = 'b'.repeat(64);
-  assert.equal(await f.delivery.activate(), false);
-  assert.equal(f.calls.includes('sample'), false); assert.equal(f.helpers.length, 0);
-  assert.equal(f.closes(), 1); assert.equal(f.cancels(), 1);
-  f.delivery.dispose(); assert.equal(f.closes(), 1);
-});
-
-// Darwin identity belongs to the Go helper (live image plus verified publisher). The
-// JS layer must not re-pin release hashes, or every new official release is refused.
-test('darwin does not decide native image identity from a release hash', async () => {
-  const f = deliveryFixture('darwin-monotonic-raw'); f.source.imageSHA256 = 'b'.repeat(64);
-  try {
-    assert.equal(await f.delivery.activate(), true);
-    assert.equal(f.calls.includes('sample'), true);
-  } finally { f.delivery.dispose(); }
-});
+// Image identity belongs to the Go helper (reviewed hash, or release range plus the
+// OS publisher check on macOS). The JS layer must not re-pin release hashes, or every
+// new official release is refused. The clock anchors still fail closed on disagreement.
+for (const kind of ['darwin-monotonic-raw', 'windows-interrupt-precise']) {
+  test(`${kind} does not decide native image identity from a release hash`, async () => {
+    const f = deliveryFixture(kind); f.source.imageSHA256 = 'b'.repeat(64);
+    try {
+      assert.equal(await f.delivery.activate(), true);
+      assert.equal(f.calls.includes('sample'), true);
+    } finally { f.delivery.dispose(); }
+  });
+}
 
 // Cancellation alone does not prove an unresolved preparation is bounded.
 // This uses the real existing 2s timer, with no native/FFI/process boundary.

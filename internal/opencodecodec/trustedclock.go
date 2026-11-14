@@ -33,6 +33,17 @@ func LookupCandidate(key ImageKey) (Candidate, bool) {
 	return Candidate{}, false
 }
 
+// ReferenceImage returns the reviewed image of one release for a platform entry.
+// Callers use it to resolve an unreviewed release onto its generation's reference.
+func ReferenceImage(goos, goarch, entry, version string) (ImageKey, bool) {
+	for _, item := range candidateImages {
+		if item.key.GOOS == goos && item.key.GOARCH == goarch && item.key.Entry == entry && item.candidate.Version == version {
+			return item.key, true
+		}
+	}
+	return ImageKey{}, false
+}
+
 // ValidOriginalNativeAge validates trusted metadata, never grants an image row.
 func ValidOriginalNativeAge(key ImageKey, candidate Candidate, mode string) bool {
 	if _, ok := LookupSourceDescriptor(key.GOOS, key.GOARCH); !ok {
