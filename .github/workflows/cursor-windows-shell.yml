@@ -8,6 +8,11 @@ on:
     types: [opened, synchronize, reopened]
     paths:
       - '.github/workflows/cursor-windows-shell.yml'
+# Cancel only obsolete ordinary PR checks; retain each manual or exact-source push qualification.
+concurrency:
+  group: cursor-windows-native-${{ github.event_name }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 # Installed native qualification and manual runs retain independent evidence and cleanup.
