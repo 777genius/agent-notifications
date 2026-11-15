@@ -20,6 +20,11 @@ on:
       - 'go.sum'
   workflow_dispatch:
 
+# Cancel only obsolete ordinary PR checks; retain each manual or exact-source push qualification.
+concurrency:
+  group: strict-terminal-native-${{ github.event_name }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
