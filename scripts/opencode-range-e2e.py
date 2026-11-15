@@ -250,10 +250,18 @@ def main():
             if isinstance(tags[release], Exception):
                 raise tags[release]
             tag = tags[release]
-            with h.OwnedTemporaryDirectory(prefix='TEST-opencode-range-', dir=os.environ.get('RUNNER_TEMP')) as temp:
-                root = Path(temp).resolve(strict=True)
-                h.prepare_windows_private_root(root)
-                result = run(args, root, tag)
+            result = None
+            try:
+                with h.OwnedTemporaryDirectory(prefix='TEST-opencode-range-', dir=os.environ.get('RUNNER_TEMP')) as temp:
+                    root = Path(temp).resolve(strict=True)
+                    h.prepare_windows_private_root(root)
+                    result = run(args, root, tag)
+            except PermissionError:
+                # Windows can keep a file of the stopped host locked for a moment. Once the
+                # delivery result exists, an unremoved scratch directory on a throwaway
+                # runner must not turn a proven delivery into a failure.
+                if result is None:
+                    raise
         except Exception as error:
             # Never leak native session IDs, paths, model messages or provider errors.
             code = str(error) if isinstance(error, RuntimeError) else type(error).__name__
