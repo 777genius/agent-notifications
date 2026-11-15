@@ -322,7 +322,15 @@ func TestRuntimeProfileActualProbeResultsWaitBeforeTypedReceipt(t *testing.T) {
 				qualify = ""
 			}
 			launchProfileHelper(t, in, in, "", qualify)
-			assertProfileReceipt(t, profileOutput(t, in))
+			if mode == "success" {
+				// No test authority here: the production family admission decides, and a
+				// V2 release inside the range is eligible on Linux without a reviewed image.
+				if got := string(profileOutput(t, in)); got != qualifiedReceiptGolden {
+					t.Fatalf("family admission receipt: %q", got)
+				}
+			} else {
+				assertProfileReceipt(t, profileOutput(t, in))
+			}
 			assertNoQualification(t, in)
 			if mode == "startfailure" {
 				assertNoProbe(t, in)
