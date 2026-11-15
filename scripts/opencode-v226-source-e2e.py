@@ -317,10 +317,15 @@ def valid_native_go_t0_sample(value, platform):
 
 
 def official_binary(archive, target):
-    system = sys.platform
-    expected = OFFICIAL_ARCHIVE_HASHES.get(system)
+    expected = OFFICIAL_ARCHIVE_HASHES.get(sys.platform)
     if expected is None or not archive.is_file() or not 0 < archive.stat().st_size <= 160 * 1024 * 1024 or digest(archive) != expected:
         raise RuntimeError('official_archive_unverified')
+    return extract_official_binary(archive, target)
+
+
+def extract_official_binary(archive, target):
+    """Extract the single OpenCode executable from a release archive, without pinning its hash."""
+    system = sys.platform
     if system in ('darwin', 'win32'):
         name = 'opencode.exe' if system == 'win32' else 'opencode'
         with zipfile.ZipFile(archive) as packed:
@@ -443,6 +448,70 @@ export default {id:'test-oc226-peer',async setup(ctx){
 }};'''
 
 
+def install_managed_plugin(receiver, root, paths, env, plugins, webhook, native_app):
+    """Install the managed plugin and configure its webhook (and optional desktop) channel.
+
+    Shared by the version-specific harnesses; returns the resolved receiver path."""
+    receiver = receiver.resolve(strict=True)
+    # Exact-source unreleased Go executable for the source-only clock
+    # comparison, not a bypass to native admission or a delivery grant.
+    env['AN_TEST_GO_CLOCK'] = str(receiver)
+    env['AGENT_NOTIFICATIONS_CONFIG'] = str(root / 'notifications.json')
+    (root / 'notifications.json').write_text(json.dumps({'notifications': {
+        'desktop': {'enabled': False},
+        'webhook': {'enabled': True, 'preset': 'custom', 'format': 'json',
+                    'url': f'http://127.0.0.1:{webhook.server_port}/webhook'}}}), encoding='utf-8')
+    command = [str(receiver), 'setup-opencode', 'install',
+               '--control-root', str(root / 'control'),
+               '--runtime-root', str(root / 'native-runtime'),
+               '--opencode-config-dir', str(paths['config']),
+               '--home', str(paths['home']),
+               '--xdg-config-home', str(paths['config']),
+               '--binary', str(receiver), '--webhook']
+    if native_app is not None:
+        command += ['--desktop', '--native-app', str(native_app.resolve(strict=True))]
+    result = subprocess.run(command, cwd=paths['project'], env=env,
+                            capture_output=True, text=True, timeout=100 if native_app else 60)
+    if result.returncode:
+        # Installer stdout/stderr are private. Report only the stage.
+        raise RuntimeError('managed_install_command_failed')
+    if not (plugins / 'agent-notifications.js').is_file():
+        raise RuntimeError('managed_plugin_file_missing')
+    # The consumer reads the managed policy snapshot, not the ambient
+    # AGENT_NOTIFICATIONS_CONFIG document. Configure the actual channel
+    # through the public revision-fenced interface before starting the
+    # host; otherwise a qualified observer can never send a webhook.
+    config_args = [str(receiver), 'config']
+    target_args = ['--target', 'opencode', '--control-root', str(root / 'control')]
+    inspection = subprocess.run(config_args + ['inspect', *target_args, '--json'],
+                                cwd=paths['project'], env=env, capture_output=True,
+                                text=True, timeout=60)
+    try:
+        inspected = json.loads(inspection.stdout)
+        if (inspection.returncode or inspected.get('valid') is not True or
+                Path(inspected['selection']['path']).resolve() !=
+                (root / 'control' / 'agent-notifications.json').resolve()):
+            raise ValueError('invalid managed configuration')
+        revision = inspected['revision']
+    except (ValueError, KeyError, TypeError):
+        raise RuntimeError('managed_webhook_configuration_failed')
+    edits = {'/notifications/desktop/enabled': native_app is not None,
+             '/notifications/webhook/enabled': True,
+             '/notifications/webhook/preset': 'custom',
+             '/notifications/webhook/format': 'json',
+             '/notifications/webhook/url': f'http://127.0.0.1:{webhook.server_port}/webhook'}
+    for status in ('task_complete', 'question', 'permission_request', 'opencode_error'):
+        edits['/statuses/' + status + '/enabled'] = True
+        edits['/statuses/' + status + '/webhook/enabled'] = True
+    configured = subprocess.run(config_args + ['edit', *target_args, '--stdin',
+                                '--expect-revision', revision], cwd=paths['project'], env=env,
+                                input=json.dumps({'set': edits}), capture_output=True,
+                                text=True, timeout=60)
+    if configured.returncode:
+        raise RuntimeError('managed_webhook_configuration_failed')
+    return receiver
+
+
 def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False, expect_delivery=False, native_app=None, skew_after_delivery=False, service=False, live_signer=None, mutate_peer=False, observe_compaction=False, native_peer=None):
     spec = importlib.util.spec_from_file_location('existing_native_provider',
         Path(__file__).resolve().parent / 'opencode-semantic-e2e.py')
@@ -514,63 +583,7 @@ def run(archive, root, receiver=None, clock_skew_ms=0, restart_denial=False, exp
         config['permissions'] = [{'action':'shell','resource':'*','effect':'ask'}]
         (paths['project'] / 'opencode.json').write_text(json.dumps(config), encoding='utf-8')
         if receiver is not None:
-            receiver = receiver.resolve(strict=True)
-            # Exact-source unreleased Go executable for the source-only clock
-            # comparison, not a bypass to native admission or a delivery grant.
-            env['AN_TEST_GO_CLOCK'] = str(receiver)
-            env['AGENT_NOTIFICATIONS_CONFIG'] = str(root / 'notifications.json')
-            (root / 'notifications.json').write_text(json.dumps({'notifications': {
-                'desktop': {'enabled': False},
-                'webhook': {'enabled': True, 'preset': 'custom', 'format': 'json',
-                            'url': f'http://127.0.0.1:{webhook.server_port}/webhook'}}}), encoding='utf-8')
-            command = [str(receiver), 'setup-opencode', 'install',
-                       '--control-root', str(root / 'control'),
-                       '--runtime-root', str(root / 'native-runtime'),
-                       '--opencode-config-dir', str(paths['config']),
-                       '--home', str(paths['home']),
-                       '--xdg-config-home', str(paths['config']),
-                       '--binary', str(receiver), '--webhook']
-            if native_app is not None:
-                command += ['--desktop', '--native-app', str(native_app.resolve(strict=True))]
-            result = subprocess.run(command, cwd=paths['project'], env=env,
-                                    capture_output=True, text=True, timeout=100 if native_app else 60)
-            if result.returncode:
-                # Installer stdout/stderr are private. Report only the stage.
-                raise RuntimeError('managed_install_command_failed')
-            if not (plugins / 'agent-notifications.js').is_file():
-                raise RuntimeError('managed_plugin_file_missing')
-            # The consumer reads the managed policy snapshot, not the ambient
-            # AGENT_NOTIFICATIONS_CONFIG document. Configure the actual channel
-            # through the public revision-fenced interface before starting the
-            # host; otherwise a qualified observer can never send a webhook.
-            config_args = [str(receiver), 'config']
-            target_args = ['--target', 'opencode', '--control-root', str(root / 'control')]
-            inspection = subprocess.run(config_args + ['inspect', *target_args, '--json'],
-                                        cwd=paths['project'], env=env, capture_output=True,
-                                        text=True, timeout=60)
-            try:
-                inspected = json.loads(inspection.stdout)
-                if (inspection.returncode or inspected.get('valid') is not True or
-                        Path(inspected['selection']['path']).resolve() !=
-                        (root / 'control' / 'agent-notifications.json').resolve()):
-                    raise ValueError('invalid managed configuration')
-                revision = inspected['revision']
-            except (ValueError, KeyError, TypeError):
-                raise RuntimeError('managed_webhook_configuration_failed')
-            edits = {'/notifications/desktop/enabled': native_app is not None,
-                     '/notifications/webhook/enabled': True,
-                     '/notifications/webhook/preset': 'custom',
-                     '/notifications/webhook/format': 'json',
-                     '/notifications/webhook/url': f'http://127.0.0.1:{webhook.server_port}/webhook'}
-            for status in ('task_complete', 'question', 'permission_request', 'opencode_error'):
-                edits['/statuses/' + status + '/enabled'] = True
-                edits['/statuses/' + status + '/webhook/enabled'] = True
-            configured = subprocess.run(config_args + ['edit', *target_args, '--stdin',
-                                        '--expect-revision', revision], cwd=paths['project'], env=env,
-                                        input=json.dumps({'set': edits}), capture_output=True,
-                                        text=True, timeout=60)
-            if configured.returncode:
-                raise RuntimeError('managed_webhook_configuration_failed')
+            receiver = install_managed_plugin(receiver, root, paths, env, plugins, webhook, native_app)
         with socket.socket() as listener:
             listener.bind(('127.0.0.1', 0))
             port = listener.getsockname()[1]

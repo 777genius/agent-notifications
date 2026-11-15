@@ -1,0 +1,102 @@
+name: OpenCode release-range installed delivery
+
+# Real installed delivery against unmodified official OpenCode releases of both
+# generations on every supported platform. Releases are not pinned by hash: the
+# fixed tags pin a regression set, and latest-v1 / latest-v2 resolve to the newest
+# published release, so a new OpenCode release is exercised without a code change.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - 'scripts/opencode-range-e2e.py'
+      - 'scripts/opencode-v226-source-e2e.py'
+      - 'scripts/opencode-semantic-e2e.py'
+      - 'scripts/ci-ubuntu-mirror.sh'
+      - 'opencode-plugin/**'
+      - 'cmd/claude-notifications/opencode*.go'
+      - 'cmd/claude-notifications/opencode*.c'
+      - 'cmd/claude-notifications/opencode*.h'
+      - 'internal/opencodecodec/**'
+      - 'internal/opencodeevent/**'
+      - 'internal/opencodeplugin/**'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/opencode-range-e2e.yml'
+  schedule:
+    - cron: '17 5 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: opencode-range-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  range:
+    # Do not execute code from untrusted forks.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: linux-amd64, runner: ubuntu-22.04 }
+          - { target: linux-arm64, runner: ubuntu-22.04-arm }
+          - { target: darwin-arm64, runner: macos-15 }
+          - { target: darwin-amd64, runner: macos-15-intel }
+          - { target: windows-amd64, runner: windows-2022 }
+    env:
+      GOWORK: off
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Install Linux build dependencies
+        if: startsWith(matrix.target, 'linux')
+        run: |
+          bash scripts/ci-ubuntu-mirror.sh
+          sudo apt-get update -qq
+          sudo apt-get install -y libasound2-dev
+      - name: Build exact-source receiver
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          out="$RUNNER_TEMP/an-receiver"
+          if [ "${{ startsWith(matrix.target, 'windows') }}" = "true" ]; then out="$out.exe"; fi
+          go build -trimpath -ldflags="-s -w" -o "$out" ./cmd/claude-notifications
+          go version -m "$out" | grep -F "vcs.revision=$EXPECTED_HEAD"
+          go version -m "$out" | grep -F 'vcs.modified=false'
+          echo "AN_RECEIVER=$out" >> "$GITHUB_ENV"
+      - name: Deliver through V1 and V2 official releases
+        shell: bash
+        env:
+          # Only used to resolve latest-v1 / latest-v2; the script drops it before any host runs.
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python -B scripts/opencode-range-e2e.py \
+            --receiver "$AN_RECEIVER" \
+            --release v1.19.5 v2.2.6 v2.3.0 latest-v1 latest-v2 \
+            --report "$RUNNER_TEMP/opencode-range-${{ matrix.target }}.json"
+      - name: Upload sanitized result
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: opencode-range-${{ matrix.target }}-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/opencode-range-${{ matrix.target }}.json
+          if-no-files-found: warn
+          retention-days: 14

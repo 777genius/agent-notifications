@@ -76,12 +76,21 @@ func (p runtimeGuardedDelivery) Deliver(ctx context.Context, r notification.Requ
 
 // Bind the consumed frame to the held owned descriptor's origin. Reading and
 // decoding retain the same Entry deadline; no probe or fresh budget is created.
-func consumeRuntimeBoundFrame(consumer opencodeevent.ComposedConsumer, entry *opencodeevent.Entry, input io.ReadCloser, origin string) opencodeevent.Receipt {
+func consumeRuntimeBoundFrame(consumer opencodeevent.ComposedConsumer, selections []opencodeevent.ClockSelection, entry *opencodeevent.Entry, input io.ReadCloser, origin string) opencodeevent.Receipt {
 	raw, err := opencodeevent.ReadOwnedBounded(entry.Context(), input)
 	if err != nil {
 		return opencodeevent.Receipt{Status: "rejected", Reason: "invalid_frame"}
 	}
-	frame, err := opencodeevent.DecodePrivate(raw, consumer.Selection)
+	// The frame's own generation picks the row; DecodePrivate checks it against the
+	// Go-owned selection, so a mismatched generation or policy id is rejected.
+	var frame opencodeevent.PrivateEvent
+	err = errRuntimePort
+	for _, selected := range selections {
+		if frame, err = opencodeevent.DecodePrivate(raw, selected); err == nil {
+			consumer.Selection = selected
+			break
+		}
+	}
 	if err != nil || frame.Origin != origin {
 		return opencodeevent.Receipt{Status: "rejected", Reason: "invalid_frame"}
 	}

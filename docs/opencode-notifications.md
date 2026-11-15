@@ -94,27 +94,34 @@ hook; V2 calls `setup` and subscribes to native events. Installing the plugin
 does not itself prove that the **native notification observer** is qualified.
 The UAP family classifier already accepts compatible V1/V2 releases broadly;
 the more restrictive notification guard must also authenticate the live
-OpenCode process, independent native event source and clock. Its historical
-source/clock evidence remains scoped to listed images and platforms. Therefore
-**OpenCode 2.2.6 may load the plugin while its notification observer remains
-unqualified**. Do not treat a successful installation or a new-version parse
-as evidence of desktop/webhook delivery.
+OpenCode process, independent native event source and clock. A release inside
+the supported range is admitted as described below; anything else may load the
+plugin while its notification observer stays unqualified, and a successful
+installation or version parse alone is not evidence of desktop/webhook delivery.
 
 The runtime profile now supplies the version independently observed from its
 held native host. V2 requires the version reported by `context.app` to match
 that independent observation, rather than compare with a hardcoded patch
 version. This removes the JS-only patch allowlist, **not** the native
-qualification requirements. On macOS arm64, an official OpenCode 2.x `serve`
-process whose publisher the operating system has verified (Developer ID, Team
-`5NZ4Q7NXJ4`, identifier `opencode`) and whose probed version is `2.0.21` or
-newer within major 2 is admitted by release range, so a new official release
-needs no new table row. Unsigned or re-signed binaries, other majors and
-pre-release versions are refused. On every other platform and for V1, unknown
-future binaries are still refused until their supported source, reader and
-clock contracts can be established. The signature verifies the executable, not
-the code it runs: a signed OpenCode started with `DYLD_*` or `BUN_BE_BUN` in its
-environment can still execute other code. That was already true for the pinned
-release and is not new, but it is not closed either.
+qualification requirements. Official releases are admitted by release range
+rather than by per-release hash: V1 `1.18.33` and newer within major 1, and V2
+`2.0.21` and newer within major 2, on Linux, macOS and Windows (amd64 and arm64
+where OpenCode ships them). Each release resolves onto the reviewed reference
+release of its generation for the same platform and entry, so a new official
+release needs no new table row. Pre-release builds, other majors and versions
+below the floor are refused. On macOS the operating system must additionally
+have verified the process publisher (Developer ID, Team `5NZ4Q7NXJ4`,
+identifier `opencode`), so unsigned or re-signed binaries are refused. Linux and
+Windows have no cheap equivalent, so there the range, the held live image and
+the independent clock comparison (which fails closed when the runtime disagrees
+with the Go clock) are the whole gate. This is a family-level assumption chosen
+by the owner, not per-release source evidence. The signature verifies the
+executable, not the code it runs: a signed OpenCode started with `DYLD_*` or
+`BUN_BE_BUN` in its environment can still execute other code. That was already
+true for the pinned release and is not new, but it is not closed either.
+The `opencode-range-e2e` workflow installs the plugin into official releases
+(fixed regression tags plus the latest V1 and V2) on all five platform pairs
+and requires real webhook delivery.
 
 For a genuine installed/owned host whose profile returns an unqualified result,
 the plugin prints one generic diagnostic:

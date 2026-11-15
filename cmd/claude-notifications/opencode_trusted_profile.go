@@ -9,10 +9,30 @@ import (
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/opencodehost"
 )
 
-// runtimeImageKey is the identity every candidate, reader and clock lookup uses.
-// A publisher-verified family member resolves to the reviewed reference image.
-func runtimeImageKey(live runtimeLiveImage) opencodecodec.ImageKey {
-	return qualificationKey(live)
+// runtimeSelections lists the reviewed clock rows an event from this held image may
+// be decoded against. An exact reviewed image has one; a family member has one per
+// generation whose reference image carries a reader and clock row for this entry.
+// The event frame picks among them, and each is checked against Go-owned rows only.
+func runtimeSelections(live runtimeLiveImage) []opencodeevent.ClockSelection {
+	var keys []opencodecodec.ImageKey
+	if _, exact := opencodecodec.LookupQualifiedClock(exactKey(live)); exact {
+		keys = append(keys, exactKey(live))
+	} else if familyTrusted(live) {
+		for _, g := range familyGenerations {
+			if key, ok := familyReferenceKey(live, g); ok {
+				keys = append(keys, key)
+			}
+		}
+	}
+	var selections []opencodeevent.ClockSelection
+	for _, key := range keys {
+		candidate, known := opencodecodec.LookupCandidate(key)
+		selected, err := opencodeevent.SelectTrustedImageClock(key)
+		if _, bound := runtimeReaderTuple(live, candidate.Version); known && err == nil && bound {
+			selections = append(selections, selected)
+		}
+	}
+	return selections
 }
 
 // The entry is derived from the held native argv, never from event assertions.
@@ -58,14 +78,11 @@ func selectBoundNativeObserver(e opencodehost.VersionEvidence, actual opencodeho
 }
 
 func qualifyRuntimeObserver(profile opencodehost.Profile, live runtimeLiveImage) runtimeObserverGeneration {
-	candidate, ok := opencodecodec.LookupCandidate(runtimeImageKey(live))
-	// An exact image must match its qualified version. A family member carries the
-	// independently probed release version, which must stay inside the family range.
-	versionOK := profile.Version == candidate.Version
-	if familyEligible(live) {
-		versionOK = familyVersionOK(profile.Version)
-	}
-	if !ok || !versionOK || live.NativePID <= 0 {
+	key, family := qualificationKey(live, profile.Version)
+	candidate, ok := opencodecodec.LookupCandidate(key)
+	// An exact image must match its qualified version. A family member's independently
+	// probed release version was already range-checked when its key was resolved.
+	if !ok || !family && profile.Version != candidate.Version || live.NativePID <= 0 {
 		return observerUnverified
 	}
 	// Each held native lease supplies its own private lifetime identity.
@@ -88,7 +105,7 @@ func qualifyRuntimeObserver(profile opencodehost.Profile, live runtimeLiveImage)
 		identity := live.SHA256 + ":" + strconv.Itoa(live.NativePID) + ":" + strconv.FormatUint(live.ProcessStartTick, 10) + ":" +
 			strconv.FormatUint(live.Device, 10) + ":" + strconv.FormatUint(live.Inode, 10) + ":" + hex.EncodeToString(live.fingerprint[:])
 		generation := selectBoundNativeObserver(opencodehost.VersionEvidence{Version: candidate.Version, Source: "host_runtime", ProbeStatus: "ok", ExecutableIdentity: identity}, reader)
-		if _, clockErr := opencodeevent.SelectTrustedImageClock(runtimeImageKey(live)); clockErr != nil {
+		if _, clockErr := opencodeevent.SelectTrustedImageClock(key); clockErr != nil {
 			return observerUnverified
 		}
 		if generation == observerV1 && candidate.Generation == "v1" || generation == observerV2 && candidate.Generation == "v2" {
@@ -101,7 +118,7 @@ func qualifyRuntimeObserver(profile opencodehost.Profile, live runtimeLiveImage)
 // The reader tuple comes from independent qualification data, never by cloning
 // NativeObserverEvidence. Image and platform still come from this held parent.
 func runtimeReaderTuple(live runtimeLiveImage, version string) (opencodehost.NativeObserverTuple, bool) {
-	key := runtimeImageKey(live)
+	key, _ := qualificationKey(live, version)
 	if _, ok := opencodecodec.LookupCandidate(key); !ok {
 		return opencodehost.NativeObserverTuple{}, false
 	}
