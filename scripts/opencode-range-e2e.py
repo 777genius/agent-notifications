@@ -219,6 +219,9 @@ def run(args, root, tag):
             raise
         finally:
             h.stop_official_host_tree(host)
+    if not delivered:
+        # A filter that leaves nothing to run must not look like a delivery proof.
+        raise RuntimeError('no_scenario_selected')
     return {'status': 'passed', 'generation': generation, 'version': version,
             'platform': sys.platform, 'delivered': delivered}
 
