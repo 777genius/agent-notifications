@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
-- Admit official OpenCode releases by range instead of a per-release image hash on every platform: V1 1.18.33 and newer (including the current 1.19.x) and V2 2.0.21 and newer, on Linux, macOS and Windows. Each release resolves onto the reviewed reference release of its generation, so a new official release no longer needs its own table row; on macOS the operating system must also verify the OpenCode publisher, and unsigned or re-signed binaries, other majors and pre-releases are refused. The runtime clock comparison still fails closed. The new `opencode-range-e2e` workflow checks real delivery on all five platform pairs, including the latest published V1 and V2.
+- Admit official OpenCode releases by range instead of a per-release image hash on every platform: V1 1.18.33 and newer (including the current 1.19.x) and V2 2.0.21 and newer, on Linux, macOS and Windows. Each release resolves onto the reviewed reference release of its generation, so a new official release no longer needs its own table row; on macOS the operating system must also verify the OpenCode publisher, so unsigned or re-signed binaries are refused there (Linux and Windows have no publisher check); other majors and pre-releases are refused on every platform. The runtime clock comparison still fails closed. The new `opencode-range-e2e` workflow checks real delivery on all five platform pairs, including the latest published V1 and V2.
 
 ## [1.51.4] - 2026-11-10
 

@@ -58,11 +58,16 @@ def resolve_release(release):
     match = re.fullmatch(r'latest-v([12])', release)
     if not match:
         return release
-    releases = json.loads(github(f'https://api.github.com/repos/{REPO}/releases?per_page=50', 32 * 1024 * 1024))
-    for item in releases:
-        if (not item['draft'] and not item['prerelease'] and
-                re.fullmatch(r'v' + match.group(1) + r'\.[0-9]+\.[0-9]+', item['tag_name'])):
-            return item['tag_name']
+    # Releases come newest first; follow the pages until a stable tag of the generation turns up.
+    for page in range(1, 11):
+        releases = json.loads(github(
+            f'https://api.github.com/repos/{REPO}/releases?per_page=50&page={page}', 32 * 1024 * 1024))
+        for item in releases:
+            if (not item['draft'] and not item['prerelease'] and
+                    re.fullmatch(r'v' + match.group(1) + r'\.[0-9]+\.[0-9]+', item['tag_name'])):
+                return item['tag_name']
+        if len(releases) < 50:
+            break
     raise RuntimeError('latest_release_unresolved')
 
 
