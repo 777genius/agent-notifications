@@ -175,3 +175,5 @@ Built with [Universal Agent Plugins](https://github.com/777genius/universal-agen
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development and testing. Pull requests are subject to the [Contributor License Agreement](.github/CLA.md); contributors keep copyright.
 
 GPL-3.0-or-later. See [LICENSE](LICENSE) and [third-party notices](internal/thirdpartynotices/THIRD_PARTY_NOTICES.txt).
+
+<!-- Disposable docs-only CI supersession E2E probe; do not merge. -->
