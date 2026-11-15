@@ -79,7 +79,7 @@ class ScopeFixture(unittest.TestCase):
 
     def test_exact_existing_prose_only_keeps_native_ci_lightweight(self):
         for path in PROSE:
-            self.write(path, 'revised prose\\n')
+            self.write(path, 'revised prose\n')
         head = self.commit()
         self.assertEqual(self.mode(), 'mode=docs')
         good = event(self.base, head)
@@ -90,7 +90,7 @@ class ScopeFixture(unittest.TestCase):
         fork['pull_request']['head']['repo']['full_name'] = 'fork/repo'
         self.assertEqual(self.mode(payload=fork), 'mode=full')
         self.assertEqual(self.mode('push', good), 'mode=full')
-        self.write('cmd/product.go', 'product change\\n')
+        self.write('cmd/product.go', 'product change\n')
         self.commit()
         self.assertEqual(self.mode(), 'mode=full')
 
@@ -101,7 +101,7 @@ class ScopeFixture(unittest.TestCase):
                 self.git('clean', '-fdq')
                 target = self.root / 'README.md'
                 if operation == 'add':
-                    self.write('docs/NEW.md', 'new file\\n')
+                    self.write('docs/NEW.md', 'new file\n')
                 elif operation == 'delete':
                     target.unlink()
                 elif operation == 'mode':
