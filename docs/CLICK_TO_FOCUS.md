@@ -140,6 +140,8 @@ Focus methods (tried in order, when the corresponding hints are present):
 7. **KDE Plasma**: `kdotool`
 8. **X11** (XFCE, MATE, Cinnamon, i3, bspwm): `xdotool`
 
+Each successful window-level step stops the chain. If Sway ancestry was tried but failed, the exact-title and compositor fallbacks remain available; `swaymsg` is not retried.
+
 Falls back to standard notifications if no focus tool is available.
 
 ### JetBrains IDEs
