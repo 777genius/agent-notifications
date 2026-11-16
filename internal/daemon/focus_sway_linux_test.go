@@ -150,6 +150,10 @@ func TestPickSwayView(t *testing.T) {
 		{"scratchpad window", FocusHints{AncestorPIDs: []int{7000}}, 30},
 		{"shared process: the title naming the folder wins", FocusHints{AncestorPIDs: []int{5000}, FolderName: "tests"}, 15},
 		{"shared process: the first title naming the folder wins", FocusHints{AncestorPIDs: []int{5000}, FolderName: "editor"}, 14},
+		{"shared process: exact title beats two matching folders", FocusHints{AncestorPIDs: []int{5000}, FolderName: "editor", WindowTitle: "tests - editor"}, 15},
+		{"shared process: exact title wins with no folder match", FocusHints{AncestorPIDs: []int{5000}, FolderName: "other", WindowTitle: "tests - editor"}, 15},
+		{"shared process: unmatched exact title falls back to folder", FocusHints{AncestorPIDs: []int{5000}, FolderName: "tests", WindowTitle: "absent"}, 15},
+		{"exact title in a more distant process cannot override nearest ancestor", FocusHints{AncestorPIDs: []int{4002, 5000}, WindowTitle: "tests - editor"}, 11},
 		{"shared process: no folder takes the first window", FocusHints{AncestorPIDs: []int{5000}}, 14},
 		{"shared process: no title naming the folder takes the first window", FocusHints{AncestorPIDs: []int{5000}, FolderName: "other"}, 14},
 		{"a title in another process does not count", FocusHints{AncestorPIDs: []int{5000}, FolderName: "notes"}, 14},
@@ -543,6 +547,77 @@ func useFakeWlrctl(t *testing.T, dir string) string {
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+// Xwayland terminals can share an exact title. The originating process must
+// win even if wmctrl could successfully focus a different window by title.
+func TestTryFocusWithHints_SwayPrecedesDuplicateTitle(t *testing.T) {
+	dir, swayLog := useFakeSwaymsg(t, fakeSwaymsg{tree: swayTreeFixture, reply: swayFocusOK})
+	wlrctlLog := useFakeWlrctl(t, dir)
+	wmctrlLog := filepath.Join(t.TempDir(), "wmctrl.log")
+	t.Setenv("WMCTRL_LOG", wmctrlLog)
+	writeFakeTool(t, dir, "wmctrl", `#!/bin/sh
+printf '%s\n' "$*" >> "$WMCTRL_LOG"
+`)
+
+	err := TryFocusWithHints(FocusHints{
+		TerminalName: "terminator", FolderName: "proj", WindowTitle: "same-title",
+		SwaySocket: testSwaySocket, AncestorPIDs: []int{4002, 4001},
+	})
+	if err != nil {
+		t.Fatalf("TryFocusWithHints() error = %v", err)
+	}
+	if got, want := readSwaymsgCalls(t, swayLog), [][]string{swayTreeCall(), swayFocusCall(11)}; !reflect.DeepEqual(got, want) {
+		t.Errorf("swaymsg calls = %q, want %q", got, want)
+	}
+	if fileExists(wmctrlLog) || fileExists(wlrctlLog) {
+		t.Error("title or wlrctl fallback ran after process-exact Sway focus")
+	}
+}
+
+// If no window belongs to an ancestor, keep exact-title focus as the fallback,
+// rather than forcing wlrctl's broad app_id selection.
+func TestTryFocusWithHints_SwayMissFallsBackToTitle(t *testing.T) {
+	dir, swayLog := useFakeSwaymsg(t, fakeSwaymsg{tree: swayTreeFixture, reply: swayFocusOK})
+	wlrctlLog := useFakeWlrctl(t, dir)
+	wmctrlLog := filepath.Join(t.TempDir(), "wmctrl.log")
+	t.Setenv("WMCTRL_LOG", wmctrlLog)
+	writeFakeTool(t, dir, "wmctrl", `#!/bin/sh
+printf '%s\n' "$*" >> "$WMCTRL_LOG"
+`)
+
+	err := TryFocusWithHints(FocusHints{
+		TerminalName: "terminator", FolderName: "proj", WindowTitle: "same-title",
+		SwaySocket: testSwaySocket, AncestorPIDs: []int{900, 901},
+	})
+	if err != nil {
+		t.Fatalf("TryFocusWithHints() error = %v", err)
+	}
+	if got, want := readSwaymsgCalls(t, swayLog), [][]string{swayTreeCall()}; !reflect.DeepEqual(got, want) {
+		t.Errorf("swaymsg calls = %q, want %q (one Sway attempt)", got, want)
+	}
+	if got, _ := os.ReadFile(wmctrlLog); string(got) != "-F -a same-title\n" {
+		t.Errorf("wmctrl ran %q, want exact-title fallback", got)
+	}
+	if fileExists(wlrctlLog) {
+		t.Error("wlrctl ran although exact-title fallback succeeded")
+	}
+}
+
+// An IDE or terminal server can own several Sway windows. Exact title remains
+// useful when multiple windows in that single PID share the project folder.
+func TestTryFocusWithHints_SharedPIDPrefersExactTitle(t *testing.T) {
+	_, swayLog := useFakeSwaymsg(t, fakeSwaymsg{tree: swayTreeFixture, reply: swayFocusOK})
+	err := TryFocusWithHints(FocusHints{
+		TerminalName: "terminator", FolderName: "editor", WindowTitle: "tests - editor",
+		SwaySocket: testSwaySocket, AncestorPIDs: []int{5000},
+	})
+	if err != nil {
+		t.Fatalf("TryFocusWithHints() error = %v", err)
+	}
+	if got, want := readSwaymsgCalls(t, swayLog), [][]string{swayTreeCall(), swayFocusCall(15)}; !reflect.DeepEqual(got, want) {
+		t.Errorf("swaymsg calls = %q, want %q", got, want)
+	}
 }
 
 // Sway sits ahead of wlrctl in the chain, and a window it focuses ends the chain,

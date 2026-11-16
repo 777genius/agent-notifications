@@ -104,9 +104,9 @@ func parseSwayViews(data []byte) ([]swayView, error) {
 
 // pickSwayView returns the window that hosts the session: one owned by the
 // nearest ancestor process that owns any window. Among several windows of that
-// process (a terminal server, an IDE with several projects) it prefers the first
-// whose title names the session's folder, and otherwise takes the first in tree
-// order.
+// process (a terminal server, an IDE with several projects) it prefers an
+// exact hook-captured window title, then a title naming the session's folder,
+// and finally the first window in tree order.
 func pickSwayView(views []swayView, hints FocusHints) (swayView, bool) {
 	titleMatches := windowTitleMatcher(hints)
 	for _, pid := range hints.AncestorPIDs {
@@ -118,6 +118,13 @@ func pickSwayView(views []swayView, hints FocusHints) (swayView, bool) {
 		}
 		if len(owned) == 0 {
 			continue
+		}
+		if hints.WindowTitle != "" {
+			for _, view := range owned {
+				if view.Name == hints.WindowTitle {
+					return view, true
+				}
+			}
 		}
 		if hints.FolderName != "" {
 			for _, view := range owned {
