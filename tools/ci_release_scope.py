@@ -8,7 +8,7 @@ import subprocess
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
-from ci_macos_scope import SHA, pr_identity, raw_changes  # noqa: E402
+from ci_macos_scope import PROSE, SHA, pr_identity, raw_changes  # noqa: E402
 
 # Exact paths only. Build/CI policy, versions, loader/installer, native harnesses,
 # dependencies and new operator files require full CI until explicitly reviewed.
@@ -189,6 +189,12 @@ def classify(event_name, event, diff):
     if not changes:
         return 'full'
     records, index, seen = diff[:-1].split(b'\0'), 0, set()
+    # Only an exact modification of pre-existing regular prose may skip native CI.
+    # An added/deleted file, mode change, product diff or ci:full label runs full CI.
+    if all(status == 'M' and paths[0] in PROSE
+           and records[i * 2].startswith(b':100644 100644 ')
+           for i, (status, paths) in enumerate(changes)):
+        return 'docs'
     for status, paths in changes:
         old_mode, new_mode, *_ = records[index].decode('ascii').split(' ')
         # Deletions, renames and all mode changes are outside this contract.
