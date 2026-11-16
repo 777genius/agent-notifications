@@ -12,7 +12,7 @@ func DetectFocusTools() map[string]bool {
 	tools := map[string]bool{}
 
 	// Check command-line tools
-	for _, tool := range []string{"wlrctl", "kdotool", "xdotool", "wmctrl", "gdbus", "busctl"} {
+	for _, tool := range []string{"swaymsg", "wlrctl", "kdotool", "xdotool", "wmctrl", "gdbus", "busctl"} {
 		_, err := exec.LookPath(tool)
 		tools[tool] = err == nil
 	}

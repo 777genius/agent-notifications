@@ -27,6 +27,7 @@ func GetFocusMethods() []FocusMethod {
 		{"GNOME Shell Eval (by window title)", byName(TryGnomeShellEvalByTitle)},
 		{"GNOME Shell Eval (by app)", byName(TryGnomeShellEval)},
 		{"GNOME Shell FocusApp", byName(TryGnomeFocusApp)},
+		{"sway (by process)", trySway},
 		{"wlrctl", byName(TryWlrctl)},
 		{"kdotool", tryKdotool},
 		{"xdotool", tryXdotool},
@@ -53,6 +54,8 @@ type FocusHints struct {
 	WezTermPaneID string
 	WezTermSocket string
 	WarpFocusURL  string
+	SwaySocket    string // Sway IPC socket ($SWAYSOCK); empty outside Sway
+	AncestorPIDs  []int  // hook process ancestry, nearest first; the nearest PID that owns a Sway window locates the terminal
 	ZellijSession string
 	ZellijPaneID  string
 	ZellijTabName string

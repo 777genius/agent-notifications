@@ -66,6 +66,8 @@ type NotifyRequest struct {
 	FocusZellijTabName string                       `json:"focus_zellij_tab_name,omitempty"` // Zellij tab name, captured only for the tab fallback
 	FocusZellijMode    string                       `json:"focus_zellij_mode,omitempty"`     // "pane", "tab" or "off", resolved in the hook process
 	FocusWarpURL       string                       `json:"focus_warp_url,omitempty"`        // Warp pane deep link ($WARP_FOCUS_URL)
+	FocusSwaySocket    string                       `json:"focus_sway_socket,omitempty"`     // Sway IPC socket ($SWAYSOCK)
+	FocusAncestorPIDs  []int                        `json:"focus_ancestor_pids,omitempty"`   // Hook process ancestry, nearest first, to find the terminal's Sway window
 	Timeout            int                          `json:"timeout"`                         // Notification timeout in seconds
 	Strict             *notification.TerminalTarget `json:"strict,omitempty"`
 	StrictSound        bool                         `json:"strict_sound,omitempty"`

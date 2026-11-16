@@ -133,7 +133,9 @@ Focus methods (tried in order):
 
 1. **Warp**: `xdg-open` of `$WARP_FOCUS_URL` (`warp://session/<uuid>`) when the hook ran inside Warp
 2. **GNOME**: `activate-window-by-title` extension, Shell Eval, FocusApp (GNOME 45+)
-3. **Sway / wlroots**: `wlrctl`
+3. **Sway / wlroots**:
+   - **Sway** (`swaymsg`): the window is picked by process ancestry. The hook records `$SWAYSOCK` and the process IDs of its ancestors, and a click raises the Sway window owned by the nearest ancestor. That is the exact window even with several windows of one terminal open, as long as each is its own process, which is the usual setup (one Alacritty process per window, for example). When one process owns several windows (a terminal server, an IDE with several projects), the window whose title names the project folder is preferred, and otherwise the first window in Sway's layout tree.
+   - **Other wlroots compositors**, and Sway when no ancestor owns a window (a session inside tmux, whose server does not descend from the terminal): `wlrctl`. It selects windows by `app_id`, so it cannot tell several windows of one terminal apart.
 4. **KDE Plasma**: `kdotool`
 5. **X11** (XFCE, MATE, Cinnamon, i3, bspwm): `xdotool`
 
@@ -148,7 +150,7 @@ Works in the built-in terminal of JetBrains IDEs. The plugin finds the IDE in th
 - KDE Plasma (`kdotool`) and X11 (`xdotool`) raise the window whose title starts with the project name. If none matches, they raise another window of the IDE.
 - Two open projects with the same name: in one IDE process, JetBrains adds each project's path to its title and the plugin picks the window with this session's path. In two processes of the same IDE the titles have no path, and the plugin picks the window of this session's IDE process.
 - With `notifyOnlyWhenUnfocused`, the notification is skipped while this project's IDE window is active (KDE Plasma: `kdotool`, X11: `xdotool`). It can't tell whether the IDE's terminal panel is open.
-- GNOME (`activate-window-by-title` extension) matches the project name anywhere in a window title. Sway (`wlrctl`) raises a window of the IDE, not always the project's.
+- GNOME (`activate-window-by-title` extension) matches the project name anywhere in a window title. Sway (`swaymsg`) picks among the windows of this session's IDE process by the same title rule as `kdotool` and `xdotool`, and raises another window of that process if none matches. Other wlroots compositors (`wlrctl`) raise a window of the IDE, not always the project's.
 
 ### Diagnostics
 
