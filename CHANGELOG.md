@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - Raise the window of the originating session when a notification is clicked on Sway, instead of an arbitrary window of the same terminal. `wlrctl` selects windows by `app_id` and activates every match, so it could not tell several windows of one terminal apart. The hook now records the Sway IPC socket and its own process ancestry, and the click asks Sway (`swaymsg`) for the window owned by the nearest ancestor process. That is exact when each terminal window is its own process; for one process that owns several windows it first tries the exact hook-captured title, then the project folder, then the first. `wlrctl` remains the fallback for other wlroots compositors and for sessions whose ancestry has no Sway window, such as a session inside tmux. The daemon protocol version is unchanged: an older daemon ignores the two new fields, and an older hook leaves them empty.
+- OpenCode: on a heavily loaded machine the clock check made at event time could take longer than its bound, which disabled notifications for the rest of the session. It is now measured up to three times within the same deadline; a mismatching clock reading, or a third reading that is still too slow, still disables them as before.
 
 ## [1.51.4] - 2026-11-10
 

@@ -182,7 +182,8 @@ export function createPreparedDelivery({ registry, origin, policy, isOwned, onIn
       if (!current(original, handoff)) return refuse('prep.current');
       if (event.rootSession !== true || !event.provenance) return refuse('prep.native');
       diagnosticStage = 'prep.catch.sample';
-      const before = sample(), remaining = handoff.metadataDeadline - clock.now();
+      let before = sample();
+      const remaining = handoff.metadataDeadline - clock.now();
       if (remaining <= 0) return refuse('prep.remaining');
       let after;
       if (completion) {
@@ -191,15 +192,26 @@ export function createPreparedDelivery({ registry, origin, policy, isOwned, onIn
         after = sample();
         if (!current(original, handoff)) return refuse('prep.current');
       } else {
-        diagnosticStage = 'prep.catch.helper';
-        const response = await registry.clock({ signal: handoff.signal, isCurrent: () => current(original, handoff),
-          deadline: performance.now() + Math.min(remaining, 2000) });
-        if (!current(original, handoff)) return refuse('prep.current_after_helper');
-        if (response.status !== 'ok') return refuse('prep.helper');
-        diagnosticStage = 'prep.catch.calibration';
-        after = sample();
-        const calibrationCheck = clockReceipt(response.output);
-        if (!anchorMatches(calibrationCheck, before, after, policy)) bad();
+        const deadline = performance.now() + Math.min(remaining, 2000);
+        // A helper that is merely slow to spawn and reap on a busy machine can
+        // overrun the fixed bracket while every other invariant holds. Measure
+        // again inside the same deadline (as activation does); an accepted
+        // calibration still passes the unchanged bound. Any other mismatch, or a
+        // third round that is still too slow, retires authority as before; a
+        // deadline, abort or busy registry refuses this event only.
+        for (let round = 0; ; round++) {
+          if (round > 0) { diagnosticStage = 'prep.catch.sample'; before = sample(); }
+          diagnosticStage = 'prep.catch.helper';
+          const response = await registry.clock({ signal: handoff.signal, isCurrent: () => current(original, handoff), deadline });
+          if (!current(original, handoff)) return refuse('prep.current_after_helper');
+          if (response.status !== 'ok') return refuse('prep.helper');
+          diagnosticStage = 'prep.catch.calibration';
+          after = sample();
+          const calibrationCheck = clockReceipt(response.output);
+          if (anchorMatches(calibrationCheck, before, after, policy)) break;
+          if (round >= 2 || !anchorMatches(calibrationCheck, before, after,
+            { ...policy, translationBoundNS: after.hiNS - before.loNS })) bad();
+        }
       }
       if (!overlaps(original.sample, after, policy.comparisonBoundNS) || after.loNS - before.loNS > 2000000000n) bad();
       // Keep the genuine PRE-ACTIVATION anchor; no completion restamping.
