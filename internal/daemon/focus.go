@@ -27,6 +27,7 @@ func GetFocusMethods() []FocusMethod {
 		{"GNOME Shell Eval (by window title)", byName(TryGnomeShellEvalByTitle)},
 		{"GNOME Shell Eval (by app)", byName(TryGnomeShellEval)},
 		{"GNOME Shell FocusApp", byName(TryGnomeFocusApp)},
+		{"sway (by process)", trySway},
 		{"wlrctl", byName(TryWlrctl)},
 		{"kdotool", tryKdotool},
 		{"xdotool", tryXdotool},
@@ -53,6 +54,8 @@ type FocusHints struct {
 	WezTermPaneID string
 	WezTermSocket string
 	WarpFocusURL  string
+	SwaySocket    string // Sway IPC socket ($SWAYSOCK); empty outside Sway
+	AncestorPIDs  []int  // hook process ancestry, nearest first; the nearest PID that owns a Sway window locates the terminal
 	ZellijSession string
 	ZellijPaneID  string
 	ZellijTabName string
@@ -107,6 +110,17 @@ func TryFocusWithHints(hints FocusHints) error {
 		}
 	}
 
+	// Prefer Sway's process ancestry to a window title: multiple Xwayland
+	// windows can have the same title, so title focus is only a fallback.
+	swayAttempted := !windowFocused && hints.SwaySocket != "" && len(hints.AncestorPIDs) > 0
+	if swayAttempted {
+		if err := trySway(hints); err == nil {
+			windowFocused = true
+		} else {
+			lastErr = err
+		}
+	}
+
 	if !windowFocused && strings.TrimSpace(hints.WindowTitle) != "" {
 		if err := tryWindowTitle(hints.WindowTitle); err == nil {
 			windowFocused = true
@@ -119,6 +133,9 @@ func TryFocusWithHints(hints FocusHints) error {
 
 	if !windowFocused {
 		for _, method := range GetFocusMethods() {
+			if swayAttempted && method.Name == "sway (by process)" {
+				continue // already tried before title focus
+			}
 			if err := method.Fn(hints); err != nil {
 				lastErr = err
 				continue

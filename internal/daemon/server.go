@@ -304,7 +304,8 @@ func (s *Server) handleNotification(req *NotifyRequest, strict bool) (*NotifyRes
 			ProjectPath: req.FocusProjectPath, IDEPID: req.FocusIDEPID,
 			WindowID: req.FocusWindowID, WindowTitle: req.FocusWindowTitle,
 			WezTermPaneID: req.FocusWezTermPaneID, WezTermSocket: req.FocusWezTermSocket,
-			WarpFocusURL: req.FocusWarpURL, ZellijSession: req.FocusZellijSession,
+			WarpFocusURL: req.FocusWarpURL, SwaySocket: req.FocusSwaySocket,
+			AncestorPIDs: req.FocusAncestorPIDs, ZellijSession: req.FocusZellijSession,
 			ZellijPaneID: req.FocusZellijPaneID, ZellijTabName: req.FocusZellijTabName,
 			ZellijMode: req.FocusZellijMode,
 		}
@@ -356,9 +357,9 @@ func (s *Server) onActionInvoked(sig *notify.ActionInvokedSignal) {
 		return
 	}
 	// Attempt to focus
-	log.Printf("[INFO] Attempting to focus: %s (folder: %s, window_id: %s, window_title: %q, wezterm_pane: %s, zellij: %s/%s mode=%s)",
+	log.Printf("[INFO] Attempting to focus: %s (folder: %s, window_id: %s, window_title: %q, wezterm_pane: %s, zellij: %s/%s mode=%s, sway_ancestors: %d)",
 		hints.TerminalName, hints.FolderName, hints.WindowID, hints.WindowTitle, hints.WezTermPaneID,
-		hints.ZellijSession, hints.ZellijPaneID, hints.ZellijMode)
+		hints.ZellijSession, hints.ZellijPaneID, hints.ZellijMode, len(hints.AncestorPIDs))
 	if err := TryFocusWithHints(hints); err != nil {
 		log.Printf("[ERROR] Focus failed: %v", err)
 	} else {

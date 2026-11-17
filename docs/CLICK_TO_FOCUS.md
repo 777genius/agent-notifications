@@ -129,13 +129,18 @@ Uses a background D-Bus daemon. Auto-detects terminal and compositor.
 | JetBrains IDEs (IntelliJ IDEA, PhpStorm, WebStorm, PyCharm, GoLand, …) | GNOME, KDE, Sway, X11 — the IDE window, not the terminal tab |
 | Any other | Fallback by name |
 
-Focus methods (tried in order):
+Focus methods (tried in order, when the corresponding hints are present):
 
 1. **Warp**: `xdg-open` of `$WARP_FOCUS_URL` (`warp://session/<uuid>`) when the hook ran inside Warp
-2. **GNOME**: `activate-window-by-title` extension, Shell Eval, FocusApp (GNOME 45+)
-3. **Sway / wlroots**: `wlrctl`
-4. **KDE Plasma**: `kdotool`
-5. **X11** (XFCE, MATE, Cinnamon, i3, bspwm): `xdotool`
+2. **Exact X11 window ID**: `xdotool` or `wmctrl` when the hook captured an ID
+3. **Sway** (`swaymsg`): the window is picked by process ancestry. The hook records `$SWAYSOCK` and the process IDs of its ancestors, and a click raises the Sway window owned by the nearest ancestor. That is the exact window even with several windows of one terminal open, as long as each is its own process, which is the usual setup (one Alacritty process per window, for example). When one process owns several windows (a terminal server, an IDE with several projects), an exact window title captured by the hook is preferred; otherwise it matches the project folder, then falls back to the first window in Sway's layout tree.
+4. **Exact captured window title**: `wmctrl` or `xdotool` if Sway ancestry did not succeed
+5. **GNOME**: `activate-window-by-title` extension, Shell Eval, FocusApp (GNOME 45+)
+6. **wlroots fallback**: `wlrctl` for other wlroots compositors and Sway when no ancestor owns a window (such as a session inside tmux). It selects windows by `app_id`, so it cannot tell multiple windows of one terminal apart.
+7. **KDE Plasma**: `kdotool`
+8. **X11** (XFCE, MATE, Cinnamon, i3, bspwm): `xdotool`
+
+Each successful window-level step stops the chain. If Sway ancestry was tried but failed, the exact-title and compositor fallbacks remain available; `swaymsg` is not retried.
 
 Falls back to standard notifications if no focus tool is available.
 
@@ -148,7 +153,7 @@ Works in the built-in terminal of JetBrains IDEs. The plugin finds the IDE in th
 - KDE Plasma (`kdotool`) and X11 (`xdotool`) raise the window whose title starts with the project name. If none matches, they raise another window of the IDE.
 - Two open projects with the same name: in one IDE process, JetBrains adds each project's path to its title and the plugin picks the window with this session's path. In two processes of the same IDE the titles have no path, and the plugin picks the window of this session's IDE process.
 - With `notifyOnlyWhenUnfocused`, the notification is skipped while this project's IDE window is active (KDE Plasma: `kdotool`, X11: `xdotool`). It can't tell whether the IDE's terminal panel is open.
-- GNOME (`activate-window-by-title` extension) matches the project name anywhere in a window title. Sway (`wlrctl`) raises a window of the IDE, not always the project's.
+- GNOME (`activate-window-by-title` extension) matches the project name anywhere in a window title. Sway (`swaymsg`) first tries the exact hook-captured title among windows owned by this session's IDE process, then uses the same project-title rule as `kdotool` and `xdotool`, and raises another window of that process if neither matches. Other wlroots compositors (`wlrctl`) raise a window of the IDE, not always the project's.
 
 ### Diagnostics
 

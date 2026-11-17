@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Admit official OpenCode releases by range instead of a per-release image hash on every platform: V1 1.18.33 and newer (including the current 1.19.x) and V2 2.0.21 and newer, on Linux, macOS and Windows. Each release resolves onto the reviewed reference release of its generation, so a new official release no longer needs its own table row; on macOS the operating system must also verify the OpenCode publisher, so unsigned or re-signed binaries are refused there (Linux and Windows have no publisher check); other majors and pre-releases are refused on every platform. The runtime clock comparison still fails closed. The new `opencode-range-e2e` workflow checks real delivery on all five platform pairs, including the latest published V1 and V2.
 
+### Fixed
+- Raise the window of the originating session when a notification is clicked on Sway, instead of an arbitrary window of the same terminal. `wlrctl` selects windows by `app_id` and activates every match, so it could not tell several windows of one terminal apart. The hook now records the Sway IPC socket and its own process ancestry, and the click asks Sway (`swaymsg`) for the window owned by the nearest ancestor process. That is exact when each terminal window is its own process; for one process that owns several windows it first tries the exact hook-captured title, then the project folder, then the first. `wlrctl` remains the fallback for other wlroots compositors and for sessions whose ancestry has no Sway window, such as a session inside tmux. The daemon protocol version is unchanged: an older daemon ignores the two new fields, and an older hook leaves them empty.
+
 ## [1.51.4] - 2026-11-10
 
 ### Changed

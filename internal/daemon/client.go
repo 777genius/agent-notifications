@@ -73,6 +73,8 @@ func (c *Client) SendNotificationContext(ctx context.Context, title, body, appIc
 			FocusWezTermPaneID: hints.WezTermPaneID,
 			FocusWezTermSocket: hints.WezTermSocket,
 			FocusWarpURL:       hints.WarpFocusURL,
+			FocusSwaySocket:    hints.SwaySocket,
+			FocusAncestorPIDs:  hints.AncestorPIDs,
 			FocusZellijSession: hints.ZellijSession,
 			FocusZellijPaneID:  hints.ZellijPaneID,
 			FocusZellijTabName: hints.ZellijTabName,

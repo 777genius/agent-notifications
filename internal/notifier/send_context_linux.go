@@ -66,6 +66,7 @@ func (n *Notifier) sendNativeDesktopContext(ctx context.Context, sound, title, b
 		}
 		pane, socket := daemon.GetWezTermFocusHints(target)
 		hints = daemon.FocusHints{TerminalName: target, FolderName: daemon.GetFocusFolderName(target, cwd), ProjectPath: daemon.GetFocusProjectPath(target, cwd), IDEPID: daemon.GetFocusIDEPID(target), WindowID: windowID, WindowTitle: daemon.GetExactWindowTitleContext(ctx, target), WezTermPaneID: pane, WezTermSocket: socket, WarpFocusURL: warpfocus.FromEnvContext(ctx)}
+		hints.SwaySocket, hints.AncestorPIDs = daemon.GetSwayFocusHints()
 		applyZellijFocusHintsContext(ctx, n.cfg, &hints)
 	}
 	response, err := client.SendNotificationContext(ctx, title, body, icon, hints, 30)

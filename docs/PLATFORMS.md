@@ -44,7 +44,7 @@ Clicking an eligible notification can activate the originating terminal window o
 | JetBrains IDEs (IntelliJ IDEA, PhpStorm, WebStorm, PyCharm, GoLand, …) | GNOME, KDE, Sway, X11 — the IDE window, not the terminal tab |
 | Any other | Fallback by name |
 
-Linux focus methods (tried in order): Warp session URL (`xdg-open`), GNOME extension, GNOME Shell Eval, GNOME FocusApp, wlrctl (Sway/wlroots), kdotool (KDE), xdotool (X11).
+Linux focus methods (tried in order when hints are present): Warp session URL (`xdg-open`), exact X11 window ID (`xdotool`/`wmctrl`), Sway ancestry (`swaymsg`), captured exact title (`wmctrl`/`xdotool`), GNOME extension/Shell Eval/FocusApp, `wlrctl` (other wlroots compositors and Sway ancestry misses), `kdotool` (KDE), `xdotool` (X11). Each window-level step stops on success; if Sway ancestry fails, its command is not repeated while the title and compositor fallbacks proceed.
 
 **Multiplexers:** tmux and kitty (macOS only), zellij and WezTerm (macOS & Linux) — click switches to the correct pane/tab. Linux zellij targets the exact pane; see the [Click-to-Focus Guide](CLICK_TO_FOCUS.md#multiplexers) for the full per-platform breakdown.
 
