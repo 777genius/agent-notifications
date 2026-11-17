@@ -38,6 +38,7 @@ jobs:
     permissions:
       contents: read
       actions: read
+      pull-requests: read
     outputs:
       mode: ${{ steps.classify.outputs.mode }}
     steps:
@@ -65,6 +66,7 @@ jobs:
     permissions:
       contents: read
       actions: read
+      pull-requests: read
     steps:
       - uses: actions/checkout@v7
         with:
@@ -1707,7 +1709,7 @@ jobs:
           retention-days: 7
   opencode-plugin:
     needs: scope
-    if: ${{ !cancelled() && github.event_name != 'workflow_dispatch' && needs.scope.outputs.mode != 'release-tools' && needs.scope.outputs.mode != 'release-equivalent' }}
+    if: ${{ !cancelled() && github.event_name != 'workflow_dispatch' && needs.scope.outputs.mode != 'release-tools' && needs.scope.outputs.mode != 'release-equivalent' && needs.scope.outputs.mode != 'docs' }}
     name: OpenCode plugin bundle
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || vars.CI_LINUX_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 10
@@ -1731,7 +1733,7 @@ jobs:
 
   go-tests:
     needs: scope
-    if: ${{ !cancelled() && github.event_name != 'workflow_dispatch' && needs.scope.outputs.mode != 'release-tools' && needs.scope.outputs.mode != 'release-equivalent' }}
+    if: ${{ !cancelled() && github.event_name != 'workflow_dispatch' && needs.scope.outputs.mode != 'release-tools' && needs.scope.outputs.mode != 'release-equivalent' && needs.scope.outputs.mode != 'docs' }}
     name: Ubuntu Go tests (${{ matrix.go }}, ${{ matrix.shard }})
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || vars.CI_LINUX_RUNNER || 'ubuntu-24.04' }}
     timeout-minutes: 40
@@ -1808,7 +1810,7 @@ jobs:
 
   installer-native:
     needs: scope
-    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (!cancelled() && github.event_name != 'workflow_dispatch' && needs.scope.outputs.mode != 'release-tools' && needs.scope.outputs.mode != 'release-equivalent') }}
+    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (!cancelled() && github.event_name != 'workflow_dispatch' && needs.scope.outputs.mode != 'release-tools' && needs.scope.outputs.mode != 'release-equivalent' && needs.scope.outputs.mode != 'docs') }}
     name: Ubuntu installers and native E2E (${{ matrix.go }})
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || vars.CI_LINUX_RUNNER || 'ubuntu-24.04' }}
     timeout-minutes: 40
@@ -1874,7 +1876,10 @@ jobs:
           bash bin/install_no_interpreters_lifecycle_test.sh "$PWD/bin/claude-notifications"
 
       - name: Run install.sh unit tests
-        run: bash bin/install_test.sh
+        run: |
+          bash bin/install_test.sh
+          bash bin/install_adapter_test.sh
+          bash bin/init_missing_ownership_test.sh
 
       - name: Qualify real Go config and setup installers (isolated, offline)
         run: python3 scripts/config_e2e_test.py
@@ -1897,7 +1902,7 @@ jobs:
 
   cursor-physical:
     needs: scope
-    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (!cancelled() && github.event_name != 'workflow_dispatch' && needs.scope.outputs.mode != 'release-tools' && needs.scope.outputs.mode != 'release-equivalent') }}
+    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (!cancelled() && github.event_name != 'workflow_dispatch' && needs.scope.outputs.mode != 'release-tools' && needs.scope.outputs.mode != 'release-equivalent' && needs.scope.outputs.mode != 'docs') }}
     name: Cursor physical Ubuntu qualification (1.26)
     # The frozen positive materializer requires the qualified Ubuntu/kernel tuple.
     runs-on: ubuntu-24.04
@@ -1984,7 +1989,7 @@ jobs:
 
   test:
     needs: [scope, go-tests, installer-native, cursor-physical]
-    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (always() && !cancelled() && github.event_name != 'workflow_dispatch' && needs.scope.outputs.mode != 'release-tools' && needs.scope.outputs.mode != 'release-equivalent') }}
+    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (always() && !cancelled() && github.event_name != 'workflow_dispatch' && needs.scope.outputs.mode != 'release-tools' && needs.scope.outputs.mode != 'release-equivalent' && needs.scope.outputs.mode != 'docs') }}
     # Keep the established required-check names while retries target only failed shards.
     name: Test on Ubuntu (${{ matrix.go }})
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || vars.CI_LINUX_RUNNER || 'ubuntu-latest' }}
@@ -2058,7 +2063,7 @@ jobs:
 
   lint:
     needs: scope
-    if: ${{ !cancelled() && github.event_name != 'workflow_dispatch' && needs.scope.outputs.mode != 'release-tools' && needs.scope.outputs.mode != 'release-equivalent' }}
+    if: ${{ !cancelled() && github.event_name != 'workflow_dispatch' && needs.scope.outputs.mode != 'release-tools' && needs.scope.outputs.mode != 'release-equivalent' && needs.scope.outputs.mode != 'docs' }}
     name: Lint
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || vars.CI_LINUX_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 15

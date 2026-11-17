@@ -11,9 +11,9 @@ const rows: { key: string; support: Record<SupportedAgent, Support> }[] = [
   { key: "permission", support: { claude: "yes", codex: "yes", opencode: "yes", gemini: "yes", cursor: "no", qoder: "yes", pi: "no" } },
   { key: "review", support: { claude: "yes", codex: "no", opencode: "no", gemini: "no", cursor: "no", qoder: "no", pi: "no" } },
   { key: "plan", support: { claude: "yes", codex: "no", opencode: "no", gemini: "no", cursor: "no", qoder: "yes", pi: "no" } },
-  { key: "limit", support: { claude: "yes", codex: "conditional", opencode: "no", gemini: "no", cursor: "no", qoder: "no", pi: "no" } },
-  { key: "error", support: { claude: "yes", codex: "conditional", opencode: "yes", gemini: "no", cursor: "no", qoder: "no", pi: "yes" } },
-  { key: "sound", support: { claude: "yes", codex: "yes", opencode: "no", gemini: "no", cursor: "no", qoder: "yes", pi: "conditional" } },
+  { key: "limit", support: { claude: "yes", codex: "conditional", opencode: "no", gemini: "no", cursor: "no", qoder: "conditional", pi: "no" } },
+  { key: "error", support: { claude: "yes", codex: "conditional", opencode: "yes", gemini: "no", cursor: "no", qoder: "yes", pi: "yes" } },
+  { key: "sound", support: { claude: "yes", codex: "yes", opencode: "conditional", gemini: "conditional", cursor: "conditional", qoder: "conditional", pi: "conditional" } },
   { key: "focus", support: { claude: "conditional", codex: "conditional", opencode: "no", gemini: "no", cursor: "no", qoder: "no", pi: "conditional" } },
   { key: "webhook", support: { claude: "yes", codex: "yes", opencode: "yes", gemini: "yes", cursor: "yes", qoder: "yes", pi: "yes" } },
 ];

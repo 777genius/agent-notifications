@@ -99,6 +99,10 @@ func sendViaDaemon(title, body, appIcon, cwd string, cfg *config.Config) error {
 	wezTermPaneID, wezTermSocket := daemon.GetWezTermFocusHints(focusTarget)
 	warpFocusURL := warpfocus.FromEnv()
 
+	// Sway names a window by the process that owns it, so the hook records its own
+	// ancestry for the daemon to match against Sway's window tree.
+	swaySocket, ancestorPIDs := daemon.GetSwayFocusHints()
+
 	hints := daemon.FocusHints{
 		TerminalName:  focusTarget,
 		FolderName:    folderName,
@@ -109,6 +113,8 @@ func sendViaDaemon(title, body, appIcon, cwd string, cfg *config.Config) error {
 		WezTermPaneID: wezTermPaneID,
 		WezTermSocket: wezTermSocket,
 		WarpFocusURL:  warpFocusURL,
+		SwaySocket:    swaySocket,
+		AncestorPIDs:  ancestorPIDs,
 	}
 
 	// Zellij is not tied to a focus target the way WezTerm is: it runs inside

@@ -188,7 +188,9 @@ func TestRegistryMigrationDiagnosticsExplainDistinctNextSteps(t *testing.T) {
 				t.Fatalf("bootstrap next step missing: %s", diagnostic)
 			}
 			var output bytes.Buffer
-			writeSetupWizardSummary(&output, setupwizard.Result{Action: "install", Outcome: "incomplete", Reason: tc.reason})
+			if err := writeSetupWizardSummary(&output, setupwizard.Result{Action: "install", Outcome: "incomplete", Reason: tc.reason}); err != nil {
+				t.Fatal(err)
+			}
 			if !strings.Contains(output.String(), tc.want) || strings.Contains(output.String(), "Resume saved activation") || strings.Contains(output.String(), "retry:") {
 				t.Fatalf("wizard migration advice: %s", output.String())
 			}

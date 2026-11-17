@@ -146,10 +146,27 @@ func TestPlatformImagesCannotBindCopiedReader(t *testing.T) {
 			if qualifyRuntimeObserver(opencodehost.Resolve(e), unknownPlatform) != observerUnverified {
 				t.Fatal("unknown platform inherited native observer authority")
 			}
+			// An unknown image is admitted only through the family range, and macOS also
+			// needs the OS-verified publisher (absent in this fixture).
 			live.SHA256 = "unknown"
-			if _, ok := runtimeReaderTuple(live, image.version); ok || qualifyRuntimeObserver(opencodehost.Resolve(e), live) != observerUnverified {
-				t.Fatal("unknown image inherited reader or clock eligibility")
+			if image.goos == "darwin" {
+				if _, ok := runtimeReaderTuple(live, image.version); ok || qualifyRuntimeObserver(opencodehost.Resolve(e), live) != observerUnverified {
+					t.Fatal("unsigned unknown darwin image inherited reader or clock eligibility")
+				}
 			}
 		})
+	}
+}
+
+// An observed-only 2.2.6 image has no reader or clock row of its own. macOS refuses it
+// without an OS-verified publisher; Linux and Windows admit it through the family range.
+func TestObserved226WithoutPublisherStillNeedsNativeReader(t *testing.T) {
+	live := runtimeLiveImage{GOOS: "darwin", GOARCH: "arm64", Entry: "serve",
+		SHA256: "90e4d03597b03d2051b65b4d793467764e55bacd8e22bf4824479c7233ea0e15", NativePID: 1, fingerprint: [32]byte{1}}
+	if reader, ok := runtimeReaderTuple(live, "2.2.6"); ok || reader != (opencodehost.NativeObserverTuple{}) {
+		t.Fatal("observed-only unsigned image inherited qualified reader")
+	}
+	if qualifyRuntimeObserver(opencodehost.Profile{Version: "2.2.6"}, live) != observerUnverified {
+		t.Fatal("observed unsigned image acquired native authority")
 	}
 }

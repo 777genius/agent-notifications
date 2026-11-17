@@ -32,6 +32,9 @@ type runtimeProfileReceipt struct {
 	Semantic        string `json:"semantic"`
 	Generation      string `json:"generation"`
 	ResourceClosure string `json:"resourceClosure"`
+	// Native host --version after a successful held process/image probe.
+	// Empty on denied profiles; user-supplied plugin context cannot set this.
+	Version string `json:"version,omitempty"`
 }
 
 // Live image proof is deliberately separate from official host qualification.
@@ -40,6 +43,9 @@ type runtimeLiveImage struct {
 	GOOS, GOARCH, Entry, SHA256     string
 	Device, Inode, ProcessStartTick uint64
 	NativePID                       int
+	// Publisher is true only when the OS verified this exact live process as the
+	// official OpenCode publisher. It is identity evidence, not a reader or clock grant.
+	Publisher bool
 	// Complete OS fingerprint; lifetime handles deliberately stay outside equality.
 	fingerprint [32]byte
 }
@@ -93,7 +99,7 @@ func runtimeProfileOperation(ctx context.Context, args []string, input io.ReadCl
 	if len(args) != 2 || args[0] != "--protocol" || args[1] != "1" {
 		return 2
 	}
-	result := runtimeProfileReceipt{1, "unverified", "none", "reaped_or_not_started"}
+	result := runtimeProfileReceipt{Protocol: 1, Semantic: "unverified", Generation: "none", ResourceClosure: "reaped_or_not_started"}
 	// This scope has no asynchronous probe. Until the one synchronous call below,
 	// not-started is positive proof; afterwards its Cmd.Run/Wait return proves reap.
 	raw, err := opencodeevent.ReadOwnedBounded(ctx, input)
@@ -118,6 +124,7 @@ func runtimeProfileOperation(ctx context.Context, args []string, input io.ReadCl
 				generation := qualify(profile.Clone(), before)
 				if generation == observerV1 && profile.Family == opencodehost.ModernV1 || generation == observerV2 && profile.Family == opencodehost.V2 {
 					result.Semantic = "eligible"
+					result.Version = profile.Version
 					if generation == observerV1 {
 						result.Generation = "v1"
 					} else {

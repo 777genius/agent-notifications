@@ -175,19 +175,19 @@ func installedRevision(ctx context.Context, b portable.Binding, path string, sna
 // Only runtime preparation supplies an exact staged, absent primary path.
 // Delivery/publication always use installedRevision and require live owned bytes.
 func installedRevisionWithPrimaryRepair(ctx context.Context, b portable.Binding, path string, snapshot installruntime.InstalledSnapshot, active bool, missingPrimary string) (pisource.Revision, domain.ClientBinding, error) {
-	deny := func() (pisource.Revision, domain.ClientBinding, error) {
-		return pisource.Revision{}, domain.ClientBinding{}, ErrDenied
+	deny := func(stage string) (pisource.Revision, domain.ClientBinding, error) {
+		return pisource.Revision{}, domain.ClientBinding{}, fmt.Errorf("%w: %s", ErrDenied, stage)
 	}
 	if ctx == nil || ctx.Err() != nil || b.Integration != portable.Pi || path != stateFile(b) || b.CheckSnapshot(snapshot) != nil {
-		return deny()
+		return deny("binding-snapshot")
 	}
 	before, err := installruntime.Fingerprint(path)
 	if err != nil || !before.Exists || before.Link != "" {
-		return deny()
+		return deny("state-file")
 	}
 	state, err := (statev2.Store{Path: path}).Load()
 	if err != nil {
-		return deny()
+		return deny("state-load")
 	}
 	var selected *domain.ClientBinding
 	for _, installation := range state.Installations {
@@ -196,44 +196,44 @@ func installedRevisionWithPrimaryRepair(ctx context.Context, b portable.Binding,
 		}
 		c, ok := installation.Clients[b.BindingID]
 		if selected != nil || !ok || installation.NeedsRebind || c.ClientID != string(domain.ClientPi) || c.Scope != string(domain.ScopeUser) || c.Scope != b.ScopeID || c.ClientBindingID != b.BindingID || c.PackageRevision == nil || c.NativeActivationAttempt != "" || c.PendingNativeIntent != nil || c.Materialization != domain.MaterializationMaterialized {
-			return deny()
+			return deny("binding-record")
 		}
 		verified := c.Verification == domain.VerificationInstalled || c.Verification == domain.VerificationPackageValid
 		if active && (c.Activation != domain.ActivationActive || !verified || c.Policy != domain.PolicyAllowed) {
-			return deny()
+			return deny("active-lifecycle")
 		}
 		if c.ClientBindingID != domain.ComputeClientBindingID(b.InstallationID, c.ClientID, c.Scope, c.TargetLocator) || pi.New().ValidateBindingProfile(c.NativeProfileRoot, c) != nil {
-			return deny()
+			return deny("native-profile")
 		}
 		data, ok := installation.DataReceipts[c.DataReceiptID]
 		base := filepath.Join(filepath.Dir(filepath.Dir(path)), "plugin-data")
 		if !ok || data.Locator != b.DataRoot || data.Scope != c.Scope || data.PhysicalBackend != c.PhysicalArtifact || data.State != domain.DataReceiptOwned || (providers.PluginDataManager{Base: base}).ValidateData(ctx, data) != nil {
-			return deny()
+			return deny("data-receipt")
 		}
 		selected = &c
 	}
 	if selected == nil {
-		return deny()
+		return deny("binding-not-found")
 	}
 	registry, err := clients.NewRegistry(pi.New())
 	if err != nil {
-		return deny()
+		return deny("registry")
 	}
 	engine, err := installer.New(installer.Config{StateRoot: filepath.Dir(path), Registry: registry})
 	if err != nil || engine.VerifyProfileAuthority(ctx, b.InstallationID, b.BindingID) != nil {
-		return deny()
+		return deny("profile-authority")
 	}
 	projection := shared.ManagedPackageDigest(*selected)
 	if err := (providers.Stager{}).Verify(ctx, selected.TargetLocator, projection); err != nil {
-		return deny()
+		return deny("managed-projection")
 	}
 	descriptorFile, err := nativeconfig.New().ReadExactFile(filepath.Join(selected.TargetLocator, pi.DescriptorName))
 	if err != nil || !descriptorFile.Exists {
-		return deny()
+		return deny("descriptor-file")
 	}
 	var descriptor pi.Descriptor
 	if json.Unmarshal(descriptorFile.Body, &descriptor) != nil || descriptor.SchemaVersion != 1 || descriptor.BootstrapVersion != pi.BootstrapVersion || descriptor.ActivePath != selected.TargetLocator || descriptor.PackageRoot != selected.TargetLocator || descriptor.DataRoot != b.DataRoot || descriptor.CanonicalTreeDigest != selected.PackageRevision.TreeDigest {
-		return deny()
+		return deny("descriptor-fields")
 	}
 	executable, err := portable.ResolvePrimaryExecutable(snapshot.Ledger, b.Primary)
 	if err != nil {
@@ -242,21 +242,21 @@ func installedRevisionWithPrimaryRepair(ctx context.Context, b portable.Binding,
 		// absent staged file; existing edited or linked bytes never qualify.
 		wanted := filepath.Join(b.RuntimeRoot, filepath.FromSlash(b.Primary))
 		if missingPrimary == "" || missingPrimary != wanted {
-			return deny()
+			return deny("primary-missing")
 		}
 		absent, readErr := installruntime.Fingerprint(missingPrimary)
 		if readErr != nil || absent != (installruntime.Identity{}) {
-			return deny()
+			return deny("primary-absence")
 		}
 		executable = missingPrimary
 	}
 	primary, ok := snapshot.Ledger.Files[executable]
 	if !ok {
-		return deny()
+		return deny("primary-ledger")
 	}
 	after, err := installruntime.Fingerprint(path)
 	if err != nil || after != before || ctx.Err() != nil {
-		return deny()
+		return deny("state-readback")
 	}
 	return pisource.Revision{ProjectionDigest: projection, CanonicalDigest: selected.PackageRevision.TreeDigest, BootstrapVersion: pi.BootstrapVersion, BindingID: b.BindingID, RuntimeRoot: b.RuntimeRoot, PrimarySHA256: primary.SHA256}, *selected, nil
 }

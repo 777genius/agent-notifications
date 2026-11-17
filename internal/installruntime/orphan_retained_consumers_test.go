@@ -235,3 +235,73 @@ func TestOrphanRetainedConsumersRejectUnknownOrSharedReferences(t *testing.T) {
 		})
 	}
 }
+
+// Pi shares the exact v1 portable registration bytes/primary command codec.
+// A retained Pi binding must protect its references without blocking recovery
+// of an unrelated deleted runtime. The negative case must still fail closed.
+func TestOrphanRetainedPiCodecPreservesRetainedReferences(t *testing.T) {
+	for _, overlap := range []bool{false, true} {
+		name := "independent"
+		if overlap {
+			name = "overlapping-selected-runtime"
+		}
+		t.Run(name, func(t *testing.T) {
+			f := newRetainedConsumersFixture(t)
+			replaced := false
+			var piKey string
+			for key, consumer := range f.before.Consumers {
+				if !strings.HasPrefix(key, "portable:") {
+					continue
+				}
+				var binding retainedBindingFixture
+				if err := json.Unmarshal([]byte(consumer.Registration), &binding); err != nil {
+					t.Fatal(err)
+				}
+				if binding.Integration != "codex" {
+					continue
+				}
+				delete(f.before.Consumers, key)
+				binding.Integration = "pi"
+				binding.BindingID = "TEST-pi"
+				if overlap {
+					binding.DataRoot = f.runtime
+				}
+				piKey, consumer = retainedBindingConsumer(t, binding)
+				f.before.Consumers[piKey] = consumer
+				replaced = true
+				break
+			}
+			if !replaced {
+				t.Fatal("retained portable fixture lacks replacement candidate")
+			}
+			f.saveLedger(t)
+			f.abandon(t, true)
+			images := orphanControlImages(t, f.control)
+			req := f.recoveryRequest()
+			preview, err := PreviewOrphanConsumer(f.control, req)
+			if overlap {
+				if err == nil || preview.Admissible || preview.ConflictCode != "shared_reference" {
+					t.Fatalf("Pi overlap admitted: %+v %v", preview, err)
+				}
+				assertOrphanImages(t, images)
+				if _, err := RecoverOrphanConsumer(f.ctx, f.control, req); err == nil {
+					t.Fatal("overlapping Pi reference admitted in commit")
+				}
+				assertOrphanImages(t, images)
+				return
+			}
+			if err != nil || !preview.Admissible || preview.SelectedCount != len(f.orphanPaths) {
+				t.Fatalf("independent retained Pi blocked preview: %+v %v", preview, err)
+			}
+			assertOrphanImages(t, images)
+			after, err := RecoverOrphanConsumer(f.ctx, f.control, req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertOrphanDelta(t, f, after, false)
+			if _, ok := after.Consumers[piKey]; !ok {
+				t.Fatal("retained Pi consumer lost during unrelated orphan recovery")
+			}
+		})
+	}
+}

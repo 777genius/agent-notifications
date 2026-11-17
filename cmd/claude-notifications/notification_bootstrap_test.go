@@ -722,12 +722,21 @@ func TestNotificationInitWithoutWizard(t *testing.T) {
 			t.Setenv("TMPDIR", home)
 			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
 			t.Setenv("CODEX_HOME", filepath.Join(home, "codex"))
+			// These legacy-wizard tests exercise a recorded installation, not
+			// first-install ownership. The installer below is intentionally inert.
+			control := filepath.Join(home, "xdg", "agent-notifications")
+			if err := os.MkdirAll(control, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(control, "ownership.json"), []byte("TEST recorded ownership"), 0600); err != nil {
+				t.Fatal(err)
+			}
 			bundle := filepath.Join(home, "bundle")
 			t.Setenv("CLAUDE_PLUGIN_ROOT", bundle)
 			if err := os.MkdirAll(filepath.Join(bundle, "bin"), 0700); err != nil {
 				t.Fatal(err)
 			}
-			helper := "#!/bin/sh\nif [ \"$1\" = --help ] || [ \"$1\" = help ]; then exit 0; fi\nprintf '%s\\n' \"$*\" >> \"$HOME/calls\"\nexit 87\n"
+			helper := "#!/bin/sh\nif [ \"$1\" = --help ] || [ \"$1\" = help ]; then exit 0; fi\nif [ \"$1 $2\" = 'setup-notifications status' ]; then printf '{\"reason\":\"configuration_required\",\"generation\":1}\\n'; exit 1; fi\nprintf '%s\\n' \"$*\" >> \"$HOME/calls\"\nexit 87\n"
 			if err := os.WriteFile(filepath.Join(bundle, "bin", "claude-notifications"), []byte(helper), 0700); err != nil {
 				t.Fatal(err)
 			}
@@ -796,12 +805,22 @@ func TestNotificationInitRuntimeReadinessContract(t *testing.T) {
 			if err := os.MkdirAll(filepath.Join(bundle, "bin"), 0700); err != nil {
 				t.Fatal(err)
 			}
-			helper := "#!/bin/sh\nif [ \"$1\" = --help ]; then echo 'setup-notifications wizard'; exit 0; fi\nif [ \"$1 $2\" = 'setup-notifications --help' ]; then echo '--policy-only --preserve-enabled'; exit 0; fi\nprintf '%s\\n' \"$*\" >> \"$HOME/calls\"\n"
+			helper := "#!/bin/sh\nif [ \"$1\" = --help ]; then echo 'setup-notifications wizard'; exit 0; fi\nif [ \"$1 $2\" = 'setup-notifications --help' ]; then echo '--policy-only --preserve-enabled'; exit 0; fi\nif [ \"$1 $2\" = 'setup-notifications status' ]; then printf '{\"reason\":\"configuration_required\",\"generation\":1}\\n'; exit 1; fi\nprintf '%s\\n' \"$*\" >> \"$HOME/calls\"\n"
 			if err := os.WriteFile(filepath.Join(bundle, "bin", tc.filename), []byte(helper), tc.mode); err != nil {
 				t.Fatal(err)
 			}
 			t.Setenv("HOME", home)
+			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
 			t.Setenv("CLAUDE_PLUGIN_ROOT", bundle)
+			// Only executable-readiness differs between these cases. The mocked
+			// installer has no owned-state publication, so seed that prerequisite.
+			control := filepath.Join(home, "xdg", "agent-notifications")
+			if err := os.MkdirAll(control, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(control, "ownership.json"), []byte("TEST recorded ownership"), 0600); err != nil {
+				t.Fatal(err)
+			}
 			script := `uname() { echo ` + tc.uname + `; }
 curl() { printf '#!/bin/sh\nexit 0\n' > "$4"; }
 ` + body
@@ -811,6 +830,10 @@ curl() { printf '#!/bin/sh\nexit 0\n' > "$4"; }
 			if tc.wantCall {
 				if runErr != nil || !strings.Contains(string(calls), "setup-notifications configure") {
 					t.Fatalf("executable runtime not used: %v %s %s", runErr, output, calls)
+				}
+			} else if tc.name == "posix_not_executable" {
+				if runErr == nil || len(calls) != 0 || !strings.Contains(string(output), "Managed runtime ownership was not established") {
+					t.Fatalf("non-executable Linux runtime was not rejected: %v %s %s", runErr, output, calls)
 				}
 			} else if runErr != nil || len(calls) != 0 || !strings.Contains(string(output), "installer binary not found") {
 				t.Fatalf("non-executable runtime was not rejected: %v %s %s", runErr, output, calls)

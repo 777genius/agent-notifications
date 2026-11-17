@@ -2,7 +2,7 @@
 
 Agent Notifications supports managed Cursor CLI Stop notifications through the public Universal Agent Plugins (UAP) SDK. Install, update, disable and uninstall preserve unrelated hooks. Cursor IDE is a separate product and is not covered by this integration.
 
-The common product selection is available in [platform release v1.49.11](PLATFORM_RELEASE_CHANNELS.md). Earlier platform channels can retain the separate Cursor setup contract from their release notes.
+The common product selection is available in [platform release v1.50.0](PLATFORM_RELEASE_CHANNELS.md). Earlier platform channels can retain the separate Cursor setup contract from their release notes.
 
 ## Qualified hosts
 
@@ -37,12 +37,10 @@ Run the same command to update. Fresh installs default to desktop on and webhook
 
 A native `stop` event causes a fixed informational alert: **Cursor CLI is stopping**. A stopped agent loop does not establish successful task completion. Unknown status values are suppressed; the notification does not classify questions, plans, permissions or errors.
 
-Published v1.49.11 Cursor delivery is silent and informational. Unreleased source
+Cursor delivery is informational and silent by default. Since v1.50.0, it
 can explicitly request the OS default notification cue with
 `notifications.desktop.systemSound=true` and the existing master sound switch.
-This is **not** configurable MP3/volume output, a guarantee of an audible cue,
-or click-to-focus. Focus-aware suppression and task-text analysis are not
-promised. Desktop and webhook consent are separate. Same-generation duplicates are suppressed. Linux installed E2E observed notification-service delivery; macOS arm64 included a visible notification; Windows CI observed the installed child's successful Toast API submission, not a visible interactive banner.
+This is **not** configurable MP3/volume output, a guarantee of an audible cue, or permission to focus by itself. **Guarded Click-to-Focus** is available only on a verified local Linux/X11 originating terminal window, with explicit `agents.cursor` schema-2 consent (`clickToFocus: true`, `terminalClickConsentVersion: 1`) and a valid installed binding. Global `clickToFocus: false` vetoes it. Other sessions receive an informational alert without a focus action. It does **not** navigate to an exact Cursor IDE chat; an authenticated installed Cursor CLI-to-click E2E remains unqualified. [Requirements](CLICK_TO_FOCUS.md#guarded-local-cli-routing-qoder-gemini-cli-cursor-cli). Focus-aware suppression and task-text analysis are not promised. Desktop and webhook consent are separate. Same-generation duplicates are suppressed. Linux installed E2E observed notification-service delivery; macOS arm64 included a visible notification; Windows CI observed the installed child's successful Toast API submission, not a visible interactive banner.
 
 ## Inspect, disable and remove
 

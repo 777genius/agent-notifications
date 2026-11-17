@@ -5,6 +5,7 @@ package notifier
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/777genius/agent-notifications/internal/config"
@@ -46,7 +47,7 @@ func TestApplyZellijFocusHints_OutsideZellij(t *testing.T) {
 	var hints daemon.FocusHints
 	applyZellijFocusHints(zellijFocusConfig("auto"), &hints)
 
-	if hints != (daemon.FocusHints{}) {
+	if !reflect.DeepEqual(hints, daemon.FocusHints{}) {
 		t.Errorf("applyZellijFocusHints() left %+v, want the zero value", hints)
 	}
 }
@@ -60,7 +61,7 @@ func TestApplyZellijFocusHints_PaneNeedsNoLayout(t *testing.T) {
 	applyZellijFocusHints(zellijFocusConfig("pane"), &hints)
 
 	want := daemon.FocusHints{ZellijSession: "cubic-weasel", ZellijPaneID: "2", ZellijMode: daemon.ZellijFocusModePane}
-	if hints != want {
+	if !reflect.DeepEqual(hints, want) {
 		t.Errorf("applyZellijFocusHints() = %+v, want %+v", hints, want)
 	}
 }
@@ -83,7 +84,7 @@ func TestApplyZellijFocusHints_TabCapturesTabName(t *testing.T) {
 		ZellijTabName: "claude",
 		ZellijMode:    daemon.ZellijFocusModeTab,
 	}
-	if hints != want {
+	if !reflect.DeepEqual(hints, want) {
 		t.Errorf("applyZellijFocusHints() = %+v, want %+v", hints, want)
 	}
 }
@@ -103,7 +104,7 @@ func TestApplyZellijFocusHints_TabWithoutTabNameDegradesToOff(t *testing.T) {
 	applyZellijFocusHints(zellijFocusConfig("tab"), &hints)
 
 	want := daemon.FocusHints{ZellijSession: "cubic-weasel", ZellijPaneID: "2", ZellijMode: daemon.ZellijFocusModeOff}
-	if hints != want {
+	if !reflect.DeepEqual(hints, want) {
 		t.Errorf("applyZellijFocusHints() = %+v, want %+v", hints, want)
 	}
 }

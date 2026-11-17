@@ -3,13 +3,17 @@ package hooks
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/777genius/agent-notifications/internal/analyzer"
 	"github.com/777genius/agent-notifications/internal/config"
+	"github.com/777genius/agent-notifications/internal/dedup"
 	"github.com/777genius/agent-notifications/internal/qodersource"
+	"github.com/777genius/agent-notifications/internal/teamstate"
 )
 
 // Exercise real SDK decode and policy together: continuation, duplicates and
@@ -64,10 +68,17 @@ func qoderFailureTestConfig() *config.Config {
 	return cfg
 }
 
+// These hook-policy fixtures keep invocation locks logically fresh while
+// exercising real atomic files. Native lock expiration is covered by dedup tests.
+func qoderFreshLocks() *dedup.Manager {
+	return dedup.NewManagerWithFileAge(func(string) int64 { return 0 })
+}
+
 // An actual Qoder StopFailure is not a successful Stop, and host error text
 // may contain credentials/requests. Only the fixed class reaches delivery.
 func TestQoderStopFailureRoutesWithoutLeakingRawProviderError(t *testing.T) {
 	handler, notify, _ := newTestHandler(t, qoderFailureTestConfig())
+	handler.dedupMgr = qoderFreshLocks()
 	handler.product, handler.source = ProductQoder, QoderSource{}
 	for _, tc := range []struct {
 		errorType string
@@ -106,6 +117,7 @@ func TestQoderStopFailureRoutesWithoutLeakingRawProviderError(t *testing.T) {
 // event-scoped lock still suppresses an exact repeated failure invocation.
 func TestQoderStopFailureDoesNotCollideWithCompletedTurnDedup(t *testing.T) {
 	handler, notify, _ := newTestHandler(t, qoderFailureTestConfig())
+	handler.dedupMgr = qoderFreshLocks()
 	handler.product, handler.source = ProductQoder, QoderSource{}
 	session := fmt.Sprintf("../../qoder-stop-vs-failure-%d", time.Now().UnixNano())
 	stop := fmt.Sprintf(`{"session_id":%q,"cwd":"/TEST-qoder","hook_event_name":"Stop","stop_hook_active":false,"last_assistant_message":"Qoder stopped unexpectedly"}`, session)
@@ -203,15 +215,15 @@ func TestQoderAttentionHookFlow(t *testing.T) {
 }
 
 func TestQoderSubagentStopOptIn(t *testing.T) {
-	payload := func(session string) string {
-		return fmt.Sprintf(`{"session_id":%q,"cwd":"/TEST-qoder","hook_event_name":"SubagentStop","last_assistant_message":"Sub done"}`, session)
+	payload := func(session string, active bool) string {
+		return fmt.Sprintf(`{"session_id":%q,"cwd":"/TEST-qoder","hook_event_name":"SubagentStop","stop_hook_active":%t,"last_assistant_message":"Sub done"}`, session, active)
 	}
 
 	// Discriminator: opt-in disabled must stay silent.
 	handler, notify, _ := newTestHandler(t, codexTestConfig())
 	handler.product = ProductQoder
 	handler.source = QoderSource{}
-	if err := handler.HandleHook("SubagentStop", strings.NewReader(payload(fmt.Sprintf("../../qoder-sub-off-%d", time.Now().UnixNano())))); err != nil {
+	if err := handler.HandleHook("SubagentStop", strings.NewReader(payload(fmt.Sprintf("../../qoder-sub-off-%d", time.Now().UnixNano()), false))); err != nil {
 		t.Fatal(err)
 	}
 	if notify.wasCalled() {
@@ -226,11 +238,18 @@ func TestQoderSubagentStopOptIn(t *testing.T) {
 	handler, notify, _ = newTestHandler(t, cfg)
 	handler.product = ProductQoder
 	handler.source = QoderSource{}
-	if err := handler.HandleHook("SubagentStop", strings.NewReader(payload(fmt.Sprintf("../../qoder-sub-on-%d", time.Now().UnixNano())))); err != nil {
+	session := fmt.Sprintf("../../qoder-sub-on-%d", time.Now().UnixNano())
+	if err := handler.HandleHook("SubagentStop", strings.NewReader(payload(session, true))); err != nil {
+		t.Fatal(err)
+	}
+	if notify.wasCalled() {
+		t.Fatal("continuing subagent notified despite stop_hook_active")
+	}
+	if err := handler.HandleHook("SubagentStop", strings.NewReader(payload(session, false))); err != nil {
 		t.Fatal(err)
 	}
 	call := notify.lastCall()
-	if call == nil || call.status != analyzer.StatusTaskComplete || !strings.Contains(call.message, "Sub done") {
+	if notify.callCount() != 1 || call == nil || call.status != analyzer.StatusTaskComplete || !strings.Contains(call.message, "Sub done") {
 		t.Fatalf("subagent completion missing: %+v", call)
 	}
 }
@@ -304,6 +323,7 @@ func TestQoderEventsDeliverWhileContentLockHeld(t *testing.T) {
 			noSuppress := false
 			cfg.Notifications.SuppressForSubagents = &noSuppress
 			h, notifier, _ := newTestHandler(t, cfg)
+			h.dedupMgr = qoderFreshLocks()
 			h.product = ProductQoder
 			h.source = QoderSource{}
 			ev, err := h.source.Decode(context.Background(), kind, strings.NewReader(payload))
@@ -314,6 +334,11 @@ func TestQoderEventsDeliverWhileContentLockHeld(t *testing.T) {
 			ok, err := h.dedupMgr.AcquireContentLock(key)
 			if err != nil || !ok {
 				t.Fatalf("hold lock: %v %v", ok, err)
+			}
+			lockPath := filepath.Join(root, fmt.Sprintf("claude-notification-%s-content.lock", key))
+			before, err := os.Stat(lockPath)
+			if err != nil {
+				t.Fatal(err)
 			}
 			defer func() {
 				if err := h.dedupMgr.ReleaseContentLock(key); err != nil {
@@ -330,9 +355,114 @@ func TestQoderEventsDeliverWhileContentLockHeld(t *testing.T) {
 			if got := notifier.callCount(); got != want {
 				t.Fatalf("deliveries while lock held = %d, want %d", got, want)
 			}
-			if ok, err := h.dedupMgr.AcquireContentLock(key); err != nil || ok {
-				t.Fatalf("handler removed another event's lock: %v %v", ok, err)
+			after, err := os.Stat(lockPath)
+			if err != nil || !os.SameFile(before, after) {
+				t.Fatalf("handler removed or replaced another event's lock: %v", err)
 			}
 		})
+	}
+}
+
+// Qoder must use its hashed identity for every state write, including the
+// interactive-tool update before notification admission. Raw IDs are display
+// metadata and must neither mutate Claude state nor become filesystem paths.
+func TestQoderInteractiveStateUsesOnlyProductIdentity(t *testing.T) {
+	for _, session := range []string{"shared-session", "part/../path-like"} {
+		t.Run(session, func(t *testing.T) {
+			root := t.TempDir()
+			for _, key := range []string{"TMPDIR", "TMP", "TEMP"} {
+				t.Setenv(key, root)
+			}
+			h, _, _ := newTestHandler(t, codexTestConfig())
+			h.product, h.source = ProductQoder, QoderSource{}
+			rawPath := filepath.Join(root, "claude-session-state-"+session+".json")
+			var original []byte
+			if session == "shared-session" {
+				if err := h.stateMgr.UpdateInteractiveTool(session, "CLAUDE_SENTINEL", "/claude"); err != nil {
+					t.Fatal(err)
+				}
+				var err error
+				original, err = os.ReadFile(rawPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			input := fmt.Sprintf(`{"session_id":%q,"cwd":"/qoder","hook_event_name":"PreToolUse","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"Continue?"}]}}`, session)
+			if err := h.HandleHook("PreToolUse", strings.NewReader(input)); err != nil {
+				t.Fatal(err)
+			}
+			raw, err := os.ReadFile(rawPath)
+			if original == nil {
+				if !os.IsNotExist(err) {
+					t.Fatalf("Qoder raw path was written: %s (error %v)", rawPath, err)
+				}
+			} else if err != nil || string(raw) != string(original) {
+				t.Fatalf("Qoder changed Claude state: %s (error %v)", raw, err)
+			}
+			ev, err := h.source.Decode(context.Background(), "PreToolUse", strings.NewReader(input))
+			if err != nil {
+				t.Fatal(err)
+			}
+			state, err := h.stateMgr.Load(qoderKeys(ev).stateKey)
+			if err != nil || state == nil || state.LastInteractiveTool != "AskUserQuestion" || state.CWD != "/qoder" {
+				t.Fatalf("Qoder interactive state missing from product identity: %+v (error %v)", state, err)
+			}
+		})
+	}
+}
+
+// A Qoder team name is not authority to use a Claude team. Reject that path
+// without consuming its claim; the subsequent genuine Claude event still owns
+// and delivers the existing wait-all completion.
+func TestQoderStopAndTeammateIdleCannotConsumeClaudeCompletion(t *testing.T) {
+	root := t.TempDir()
+	for _, key := range []string{"TMPDIR", "TMP", "TEMP"} {
+		t.Setenv(key, root)
+	}
+	claudeRoot := t.TempDir()
+	teamDir := filepath.Join(claudeRoot, "teams", "same-name")
+	if err := os.MkdirAll(teamDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(teamDir, "config.json"), []byte(`{"name":"same-name","leadSessionId":"claude-lead","members":[{"name":"worker","agentType":"worker"}]}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := codexTestConfig()
+	cfg.Notifications.TeamMode = "wait-all"
+	h, notify, _ := newTestHandler(t, cfg)
+	h.product, h.source = ProductQoder, QoderSource{}
+	h.teamStateMgr = teamstate.NewManager(claudeRoot)
+	if err := h.teamStateMgr.RecordLeadStopped("same-name"); err != nil {
+		t.Fatal(err)
+	}
+	statePath := filepath.Join(root, "claude-team-notify-same-name.json")
+	before, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stop := `{"session_id":"claude-lead","cwd":"/qoder","hook_event_name":"Stop","stop_hook_active":false,"last_assistant_message":"Qoder done"}`
+	if err := h.HandleHook("Stop", strings.NewReader(stop)); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(statePath)
+	if err != nil || string(after) != string(before) || notify.callCount() != 1 || notify.lastCall().status != analyzer.StatusTaskComplete {
+		t.Fatalf("Qoder Stop used Claude team policy: deliveries=%d before=%s after=%s error=%v", notify.callCount(), before, after, err)
+	}
+	input := `{"session_id":"qoder-session","cwd":"/qoder","hook_event_name":"TeammateIdle","team_name":"same-name","teammate_name":"worker"}`
+	if err := h.HandleHook("TeammateIdle", strings.NewReader(input)); err != nil {
+		t.Fatal(err)
+	}
+	after, err = os.ReadFile(statePath)
+	if err != nil || string(after) != string(before) || notify.callCount() != 1 {
+		t.Fatalf("Qoder affected Claude team: deliveries=%d before=%s after=%s error=%v", notify.callCount(), before, after, err)
+	}
+	h.product, h.source = ProductClaude, ClaudeSource{}
+	input = `{"session_id":"claude-lead","cwd":"/claude","hook_event_name":"TeammateIdle","team_name":"same-name","teammate_name":"worker"}`
+	if err := h.HandleHook("TeammateIdle", strings.NewReader(input)); err != nil {
+		t.Fatal(err)
+	}
+	state, err := h.teamStateMgr.LoadState("same-name")
+	if err != nil || state == nil || state.LeadStopped || state.NotifiedAt == 0 || notify.callCount() != 2 {
+		t.Fatalf("Claude completion changed: state=%+v deliveries=%d error=%v", state, notify.callCount(), err)
 	}
 }

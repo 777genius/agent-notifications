@@ -1,8 +1,10 @@
 package platform
 
 import (
+	"context"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // GitMetadata contains commonly requested git values for a working tree.
@@ -20,6 +22,28 @@ type GitMetadata struct {
 // Returns empty string if not in a git repository or on error.
 func GetGitBranch(cwd string) string {
 	return getGitOutput(cwd, "rev-parse", "--abbrev-ref", "HEAD")
+}
+
+// GetGitBranchContext bounds a hook's optional git metadata lookup. A git
+// subprocess (or a descendant holding stdout) must not consume the host hook
+// deadline. Fail open with no branch label; never delay the notification.
+func GetGitBranchContext(ctx context.Context, cwd string) string {
+	if ctx == nil || ctx.Err() != nil || cwd == "" {
+		return ""
+	}
+	op, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(op, "git", "-C", cwd, "rev-parse", "--abbrev-ref", "HEAD")
+	cmd.WaitDelay = 200 * time.Millisecond
+	output, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	value := strings.TrimSpace(string(output))
+	if value == "HEAD" {
+		return ""
+	}
+	return value
 }
 
 // GetGitMetadata returns commonly used git metadata for the given directory.

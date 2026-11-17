@@ -15,6 +15,9 @@ export default defineNuxtConfig({
       title: "Agent Notifications",
     },
   },
+  runtimeConfig: {
+    public: { siteUrl },
+  },
   modules: ["@nuxtjs/i18n"],
   css: ["~/assets/main.css"],
   nitro: {
@@ -26,6 +29,7 @@ export default defineNuxtConfig({
     locales: [...supportedLocales],
     defaultLocale: "en",
     strategy: "prefix_except_default",
+    trailingSlash: true,
     langDir: "locales",
     baseUrl: siteOrigin,
     detectBrowserLanguage: {

@@ -234,3 +234,29 @@ func TestUnverifiedOriginalAgeKeepsReportedDOBAndBudgets(t *testing.T) {
 		t.Fatal("unknown trusted mode accepted")
 	}
 }
+
+// A read stretched past the qualified bound is measured again, a few times at most.
+func TestTrustedClockRemeasuresAWideSample(t *testing.T) {
+	selection := independentSelection("v1")
+	good, wide := independentSnapshot(), independentSnapshot()
+	wide.MonoHiNs = wide.MonoLoNs + 100000001
+	wide.UncertaintyNs = 103000001
+	for name, run := range map[string]struct {
+		wideReads int
+		ok        bool
+	}{"recovers": {2, true}, "gives up": {clockSampleAttempts, false}} {
+		t.Run(name, func(t *testing.T) {
+			reads := 0
+			c := TrustedClock{Selection: selection, Source: snapshotFunc(func() (ClockSnapshot, error) {
+				reads++
+				if reads <= run.wideReads {
+					return wide, nil
+				}
+				return good, nil
+			})}
+			if _, err := c.Snapshot(context.Background()); (err == nil) != run.ok || reads > clockSampleAttempts {
+				t.Fatalf("err=%v reads=%d", err, reads)
+			}
+		})
+	}
+}

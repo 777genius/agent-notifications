@@ -126,7 +126,7 @@ func TestCursorExecutableAuthorityFollowsSelectedProfile(t *testing.T) {
 
 func TestPreservedCursorUnitProjectsSkippedInsteadOfCompleted(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "result.json")
-	body, err := json.Marshal(setupwizard.Result{Action: "install", Outcome: "unchanged", Reason: "existing_opt_out", Targets: preservedUnitTargets([]string{"cursor"})})
+	body, err := json.Marshal(setupwizard.Result{Action: "install", Outcome: "unchanged", Reason: "existing_opt_out", Targets: setupwizard.PreservedUnitTargets([]string{"cursor"})})
 	if err != nil {
 		t.Fatal(err)
 	}

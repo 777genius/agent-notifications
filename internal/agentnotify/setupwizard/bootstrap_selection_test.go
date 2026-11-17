@@ -124,3 +124,43 @@ func TestBootstrapMCPObservationRefusesUnknownState(t *testing.T) {
 		t.Fatal("pending recovery became fresh")
 	}
 }
+
+// The common installer freezes Pi's profile after preparing the runtime.
+// Dropping Pi from the admission observation falsely reports concurrent_change.
+func TestBootstrapPiAdmissionPreservesConfirmedProfile(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtimeRoot, global, primary, generation := managedRuntime(t)
+	profile := filepath.Join(filepath.Dir(control), "TEST-pi-agent")
+	r := Request{Action: ActionInstall, Yes: true, Agents: []string{"pi"},
+		Hooks: boolPtr(false), AgentNotify: boolPtr(true),
+		ControlRoot: control, RuntimeRoot: runtimeRoot, GlobalConfig: global,
+		PiAgentDir: profile, ClientExecutable: primary}
+	projection, observedGeneration, policy, err := ObserveBootstrapMCPWithPolicy(ctx, r)
+	if err != nil || observedGeneration != generation || string(projection.Profiles["pi"]) != profile {
+		t.Fatalf("confirmed Pi profile: %+v generation=%d err=%v", projection, observedGeneration, err)
+	}
+	r.BootstrapMCP = &BootstrapMCPSelection{Selected: []string{"pi"}, Projection: projection}
+	r.BootstrapExpectedGeneration, r.BootstrapExpectedPolicy = &generation, &policy
+	before, err := os.ReadFile(filepath.Join(control, "ownership.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev := evaluate(ctx, &r, true)
+	if ev.stop || ev.err != nil {
+		t.Fatalf("unchanged Pi profile refused: %+v %v", ev.out, ev.err)
+	}
+	r.PiAgentDir = profile + "-other"
+	result, err := Run(ctx, r)
+	if err == nil || result.Outcome != "conflict" || result.Reason != "concurrent_change" {
+		t.Fatalf("changed Pi profile admitted: %+v %v", result, err)
+	}
+	after, err := os.ReadFile(filepath.Join(control, "ownership.json"))
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("read-only admission changed ownership: %v", err)
+	}
+	for _, path := range []string{profile, r.PiAgentDir} {
+		if _, err := os.Lstat(path); !os.IsNotExist(err) {
+			t.Fatalf("admission created Pi profile %s: %v", path, err)
+		}
+	}
+}

@@ -2477,6 +2477,112 @@ func TestMaterializerLocalIndependentPublicPrepare(t *testing.T) {
 	}
 }
 
+// Every selected Local request must match the recorded delivery authority,
+// regardless of its position in a group. Native components are removed using
+// that recorded selection; an alternate settings file must not grant authority.
+func TestLocalRemoveGroupChecksEverySelectedProfile(t *testing.T) {
+	if runtime.GOOS == "darwin" && runtime.GOARCH != "arm64" {
+		t.Skip("Local selected delivery has no qualified Darwin Intel tuple")
+	}
+	for _, test := range []struct{ localFirst, localAbsent bool }{{true, false}, {false, false}, {true, true}, {false, true}} {
+		t.Run(fmt.Sprintf("local-first=%t/absent=%t", test.localFirst, test.localAbsent), func(t *testing.T) {
+			localFirst := test.localFirst
+			mat, local, root := registryMaterializerFixture(t)
+			local.Integration = portable.CopilotVSCode
+			local.Identity.ScopeRoot = local.ClientConfigRoot
+			settings := filepath.Join(local.ClientConfigRoot, "settings.json")
+			if err := os.WriteFile(settings, []byte(`{"foreign":true}`), 0600); err != nil {
+				t.Fatal(err)
+			}
+			tuple := vscode.SourceQualifiedTESTTuple(runtime.GOOS)
+			if runtime.GOOS == "darwin" {
+				tuple = vscode.QualifiedDarwinTESTTuple()
+			}
+			cfg := &vscode.LocalConfig{ProfileSettingsPath: settings, QualifiedTuple: tuple, TargetShell: vscodelocalhooks.Target{Shell: vscodelocalhooks.Shell(tuple.TargetShell)}, MCPServers: []string{"agent-notifications"}, Skills: []string{"agent-notifications"}}
+			adapter, err := vscode.NewLocal(*cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mat.Registry, err = clients.NewRegistry(adapter, codex.New())
+			if err != nil {
+				t.Fatal(err)
+			}
+			local.LocalConfig = cfg
+			if _, err := mat.Install(testCtx(t), local); err != nil {
+				t.Fatal("Local public install", err)
+			}
+			sibling := local
+			sibling.Integration, sibling.LocalConfig = portable.Codex, nil
+			sibling.ClientConfigRoot = filepath.Join(root, "TEST-codex")
+			if err := os.MkdirAll(sibling.ClientConfigRoot, 0700); err != nil {
+				t.Fatal(err)
+			}
+			sibling.OperationID = "TEST-profile-sibling-install"
+			sibling.ExternalUninstalled = true
+			if _, err := mat.Install(testCtx(t), sibling); err != nil {
+				t.Fatal("sibling public install", err)
+			}
+			snap, err := installruntime.ReadInstalledSnapshot(local.Identity.ControlRoot)
+			if err != nil {
+				t.Fatal(err)
+			}
+			local.ExpectedGeneration, sibling.ExpectedGeneration = snap.Ledger.Generation, snap.Ledger.Generation
+			local.OperationID, sibling.OperationID = "TEST-profile-group-remove", "TEST-profile-group-remove"
+			selected := *cfg
+			selected.ProfileSettingsPath = filepath.Join(local.ClientConfigRoot, "other-settings.json")
+			local.LocalConfig = &selected
+			before := registryFixtureFiles(t, root)
+			if err := mat.Remove(testCtx(t), local); !errors.Is(err, ErrPreflight) {
+				t.Fatalf("single removal accepted another settings file: %v", err)
+			}
+			reqs := []MaterializeRequest{local, sibling}
+			if !localFirst {
+				reqs[0], reqs[1] = reqs[1], reqs[0]
+			}
+			if got, err := mat.RemoveGroup(testCtx(t), reqs); !errors.Is(err, ErrPreflight) {
+				t.Fatalf("group removal accepted another settings file: %+v %v", got, err)
+			}
+			if after := registryFixtureFiles(t, root); !reflect.DeepEqual(before, after) {
+				t.Fatal("refused profile changed a locator, native settings, intent, or owned state")
+			}
+			// The exact recorded selection still authorizes group cleanup in
+			// either order after the rejected request. An already absent Local
+			// target has no delivery authority to dispatch and stays absent.
+			local.LocalConfig = cfg
+			if test.localAbsent {
+				local.OperationID = "TEST-profile-local-remove"
+				if err := mat.Remove(testCtx(t), local); err != nil {
+					t.Fatalf("remove Local before group: %v", err)
+				}
+				snap, err = installruntime.ReadInstalledSnapshot(local.Identity.ControlRoot)
+				if err != nil {
+					t.Fatal(err)
+				}
+				local.ExpectedGeneration, sibling.ExpectedGeneration = snap.Ledger.Generation, snap.Ledger.Generation
+				local.OperationID = sibling.OperationID
+			}
+			reqs = []MaterializeRequest{local, sibling}
+			if !localFirst {
+				reqs[0], reqs[1] = reqs[1], reqs[0]
+			}
+			removed, err := mat.RemoveGroup(testCtx(t), reqs)
+			if err != nil {
+				t.Fatalf("recorded selection refused: %v", err)
+			}
+			for _, item := range removed {
+				wantAbsent := test.localAbsent && item.Integration == portable.CopilotVSCode
+				if item.AlreadyAbsent != wantAbsent {
+					t.Fatalf("removed target absence: %+v want %t", item, wantAbsent)
+				}
+			}
+			state, err := mat.Store.Load()
+			if err != nil || len(state.Installations) != 1 || len(state.Installations[0].Clients) != 0 || !state.Installations[0].DataRetained {
+				t.Fatalf("recorded selection did not complete removal: %+v %v", state, err)
+			}
+		})
+	}
+}
+
 // Hold the actual public mutation lock so Apply fails only after the host
 // reservation and both revocations; retry must recover the same frozen owners.
 func TestLocalRemoveGroupFailedApplyExactOwnerRetry(t *testing.T) {
@@ -2851,6 +2957,34 @@ func TestLocalNativeGroupComposesSharedCanonicalPackage(t *testing.T) {
 			reqs := []MaterializeRequest{local, sibling}
 			if !localFirst {
 				reqs[0], reqs[1] = reqs[1], reqs[0]
+			}
+			stale := append([]MaterializeRequest(nil), reqs...)
+			for i := range stale {
+				if stale[i].Integration == portable.CopilotVSCode {
+					stale[i].ExpectedGeneration--
+				}
+			}
+			beforeStale := registryFixtureFiles(t, root)
+			if _, err := mat.ApplyGroup(testCtx(t), stale); !errors.Is(err, ErrConcurrentChange) {
+				t.Errorf("stale selected Local generation accepted: %v", err)
+			}
+			if !reflect.DeepEqual(beforeStale, registryFixtureFiles(t, root)) {
+				t.Fatal("stale group generation changed files, journals or managed state")
+			}
+			stale = append([]MaterializeRequest(nil), reqs...)
+			for i := range stale {
+				stale[i].ExpectedGeneration--
+			}
+			beforeLedger, _, err := installruntime.ReadOwnership(local.Identity.ControlRoot)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := mat.ApplyGroup(testCtx(t), stale); !errors.Is(err, ErrConcurrentChange) {
+				t.Fatalf("equally stale Local group generations accepted: %v", err)
+			}
+			afterLedger, recovery, err := installruntime.ReadOwnership(local.Identity.ControlRoot)
+			if err != nil || recovery || !reflect.DeepEqual(beforeLedger, afterLedger) {
+				t.Fatal("equally stale group changed installed ownership or left a kernel journal", err)
 			}
 			bindings, err := mat.ApplyGroup(testCtx(t), reqs)
 			if err != nil {

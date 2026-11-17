@@ -2,6 +2,128 @@
 
 Common installation and runtime issues.
 
+## An agent says the notification tool is unavailable after successful setup
+
+The `agent-notifications` skill is an instruction file; the `notify` and
+`notification_status` tools come from its MCP server. Some clients defer tool
+definitions until the agent searches for them. An agent must search its available
+tools for Agent Notifications, `agent_notifications`, `notification_status` or
+`notify` before treating an absent initial definition as a failed installation.
+MCP resources and shell `PATH` checks do not establish MCP tool availability.
+
+Ask the agent to discover and call `notification_status` with `{}` in the affected
+chat. A successful reply proves server connectivity for that session. Inspect its
+configuration and navigation fields separately from tool availability; it does
+not send a notification or verify lifecycle hooks, OS permission, banner display
+or click navigation. A requested test notification should use `notify` and retain
+the receipt: `submitted` means OS acceptance; confirm visible display separately.
+
+If discovery finds no matching tools, restart the selected client and open a new
+session after setup. If a tool is found but fails to start or connect, retain the
+actual error and check that client's plugin/MCP configuration and the profile
+selected during installation. Report which of these checks failed instead of a
+generic "unavailable". Reinstalling is unnecessary when the current status call
+succeeds. Remote or isolated worker sessions must expose their own MCP tools;
+installation in the operator's profile does not establish access inside a worker.
+
+## Linux MCP alerts work, but Claude setup still reports incomplete
+
+A working `notify` call and an incomplete UAP activation are **different facts**.
+The MCP server can be reachable from a running Claude session even when the
+installer has not verified the exact managed `agent-notify@skills-dir` plugin.
+New read-only wizard inspection shows the stored `activation` and
+`verification` of each installed UAP binding separately from MCP delivery.
+UAP activates that client by running `claude plugin list --json` and requiring
+an enabled `agent-notify@skills-dir` entry with the exact managed `installPath`
+and user scope. A failed or unrecognized listing cannot be replaced with an
+assumption based on a successful notification.
+
+To diagnose without changing state:
+
+1. Run `setup-notifications wizard --action inspect --agents claude --json`
+   using the installed executable and its existing control-root arguments;
+   retain the `reason`, `targets` and `nextActions` from the result.
+2. In the **same Claude configuration profile** used at installation, run
+   `claude plugin list --json`. Check `agent-notify@skills-dir` for
+   `enabled: true`, `scope: user`, and the expected `installPath`.
+   If it is absent, disabled or points somewhere else, identify the profile
+   and any explicit opt-out before attempting a repair. Do not override
+   settings, replace managed files, or delete `~/.config/uap` as a shortcut.
+3. Use a validated `activate` or `resume` command from the wizard's
+   `nextActions` only after resolving the actual verification failure.
+   Restart Claude to load changed plugin state. A working `notify` receipt
+   does not authorize marking UAP activation or verification as successful.
+
+Read-only wizard inspection reports `delivery: not_tracked`, not
+`delivery_not_verified`, and offers no repeated test action. Immediately
+following installation, the `delivery_not_verified` next action asks for an
+initial test; it is not evidence of failed delivery. Setup does not persist
+MCP notification receipts. A `submitted` receipt proves the desktop server
+accepted the request, not that the banner was visible or audible.
+
+On Linux, the hook path still uses the configured plugin icon and plays
+the configured hook audio itself. The explicit MCP path uses the **embedded
+default icon** via freedesktop `image-data` and requests a themed
+`message-new-instant` sound only when the global sound policy allows it and
+the desktop server reports sound capability. A `sound: false` opt-out sends
+`suppress-sound` instead. This does not play the hook's custom MP3 or override
+desktop notification settings, mute, volume or Do Not Disturb. D-Bus acceptance
+proves transport, not audible playback or display on a particular KDE/Wayland
+desktop; native screen/audio qualification is a separate gate. This
+presentation applies to the direct Freedesktop transport used by Claude MCP.
+An eligible Codex desktop-thread callback uses a separate authenticated Linux
+portal; its styling is currently unchanged, and this fix does not claim icon or
+sound parity for that navigable portal path.
+
+### `connection closed: initialize response` during concurrent startup
+
+Older portable launchers can exhaust their installation-lease deadline when
+several chats or plugin discovery start together. They redundantly fingerprint
+the complete managed installation before and under the shared component lock,
+then repeat both checks in the installed primary. A successful single startup
+does not rule out this concurrency failure. The launcher now validates one full
+snapshot under a shared read lock in each process. Read-only startups may run
+together; installation writers still require the exclusive lock. Integrity,
+recovery and binding checks remain in place. Startup failures report a fixed stderr reason such as
+`portable-launch: installation_lease_timeout` or `portable_binding_invalid`;
+these diagnostics never enter MCP stdout. A timeout does not mean the binding
+is corrupt. An invalid binding still requires inspection of the installation.
+
+The production bridge test covers eight simultaneous initialize, tools/list
+and status exchanges in an isolated installation. To exercise a ledger of
+approximately 230MB as well, run:
+
+```sh
+AGENT_NOTIFY_STARTUP_STRESS=1 GOWORK=off go test ./cmd/claude-notifications \
+  -run '^TestPortableConcurrentStartup$' -count=1 -v -timeout=4m
+```
+
+This test sends no desktop notification and changes no operator profile.
+
+### Many chats and the shared notification backend
+
+Portable MCP adapters now share one backend per installed binding, provider and
+profile. Each chat retains a lightweight stdio adapter that captures its own call
+metadata. Eight is a regression-test size, not a supported maximum. The shared
+service lifecycle test covers 32 clients by default and 32/64/128 with:
+
+```sh
+AGENT_NOTIFY_SHARED_STRESS=1 GOWORK=off go test ./cmd/claude-notifications \
+  -run '^TestPortableSharedDaemonLifecycle$' -count=1 -v -timeout=4m
+```
+
+This exercises initialization, tools/list, status, one backend per binding and
+reconnection after terminating only the test backend. It sends no notification.
+The service exits after ten idle minutes and restarts on a later call. Existing
+notification rate limits still apply; simultaneous chats do not imply unlimited
+notification throughput. After a request has been transmitted, a lost response
+is reported as `unknown` with `retry_safe=false`; do not resend automatically.
+
+The endpoint is an authenticated, encrypted loopback connection selected from
+private plugin data. Removing a binding or refreshing the installed primary
+invalidates the old service. Restart the client after updating the package so
+new MCP sessions use the shared adapter.
+
 ## OpenCode notifications missing or duplicated
 
 - Confirm the host version with `opencode --version`. Published support: 1.18.33. The dual-API candidate is tested with 1.18.33,

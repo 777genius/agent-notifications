@@ -13,4 +13,5 @@ int an_runtime_region(int pid, uint64_t address, struct an_runtime_region *out);
 int an_runtime_args(int pid, unsigned char *out, size_t capacity, size_t *length);
 int an_runtime_watch(int pid);
 int an_runtime_unchanged(int fd);
+int an_runtime_opencode_publisher(int pid);
 #endif

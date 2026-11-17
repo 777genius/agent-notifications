@@ -126,7 +126,13 @@ func applyCodexHooks(ctx context.Context, req Request, reservation *installrunti
 		Context: ctx, ControlRoot: req.ControlRoot, CodexHome: req.CodexHome,
 		PluginRoot: pluginRoot, Remove: remove, Reservation: reservation,
 	})
-	return codexHooksTarget(result, err)
+	target, err = codexHooksTarget(result, err)
+	if remove && err == nil && !result.Replaced {
+		// Replaced is observed while the transaction removes owned handlers.
+		// Retiring stale consumer metadata alone does not remove a live hook.
+		target.Outcome, target.Reason = "unchanged", "already_absent"
+	}
+	return target, err
 }
 
 func codexHooksTarget(result codexsetup.Result, err error) (TargetResult, error) {

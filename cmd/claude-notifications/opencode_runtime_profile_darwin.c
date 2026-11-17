@@ -13,6 +13,37 @@
 #include <fcntl.h>
 #include <time.h>
 #include <mach/machine.h>
+#include <CoreFoundation/CoreFoundation.h>
+#include <Security/Security.h>
+
+int an_runtime_opencode_publisher(int pid) {
+ if (pid <= 0) return 0;
+ CFNumberRef number = CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &pid);
+ if (!number) return 0;
+ const void *keys[] = { kSecGuestAttributePid };
+ const void *values[] = { number };
+ CFDictionaryRef attributes = CFDictionaryCreate(kCFAllocatorDefault, keys, values, 1,
+     &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+ CFRelease(number);
+ if (!attributes) return 0;
+ SecCodeRef code = NULL;
+ OSStatus status = SecCodeCopyGuestWithAttributes(NULL, attributes, kSecCSDefaultFlags, &code);
+ CFRelease(attributes);
+ if (status != errSecSuccess || !code) {
+  if (code) CFRelease(code);
+  return 0;
+ }
+ SecRequirementRef requirement = NULL;
+ status = SecRequirementCreateWithString(CFSTR("anchor apple generic and identifier \"opencode\" and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = \"5NZ4Q7NXJ4\""), kSecCSDefaultFlags, &requirement);
+ if (status == errSecSuccess && requirement) {
+  status = SecCodeCheckValidity(code, kSecCSStrictValidate, requirement);
+ } else {
+  status = errSecParam;
+ }
+ if (requirement) CFRelease(requirement);
+ CFRelease(code);
+ return status == errSecSuccess;
+}
 
 #ifndef PROC_PIDARCHINFO
 // Apple xnu-10063.121.3 bsd/sys/proc_info_private.h, blob

@@ -89,6 +89,9 @@ func buildConfirmedBootstrapIntent(ctx context.Context, a setupProductsArgs, e p
 	}
 	for _, f := range facts {
 		if containsProduct(a.Products, f.ID) && (!f.Selectable || !f.Present) {
+			if f.ID == "pi" && f.Reason == "not found in selected PATH" {
+				return i, nil, fmt.Errorf("pi prerequisite unavailable: %s; install Pi first and verify `command -v pi` in this shell, then retry; for an existing installation outside PATH, pass --pi-executable /absolute/path/to/pi", f.Reason)
+			}
 			return i, nil, fmt.Errorf("%s prerequisite unavailable: %s", f.ID, f.Reason)
 		}
 	}

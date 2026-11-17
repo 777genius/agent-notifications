@@ -108,8 +108,12 @@ type PreToolUsePayload struct {
 	ToolInput json.RawMessage
 }
 
-// NotificationPayload is the Claude permission-prompt Notification event.
-type NotificationPayload struct{}
+// NotificationPayload is a Claude Notification event. The user-visible message
+// is sourced from the host, never from raw tool input.
+type NotificationPayload struct {
+	NotificationType string
+	Message          string
+}
 
 // TeammateIdlePayload is the Claude team event.
 type TeammateIdlePayload struct {

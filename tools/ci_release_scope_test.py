@@ -9,6 +9,7 @@ import tempfile
 import unittest
 
 from ci_release_scope import TOOLS, classify
+from ci_macos_scope import PROSE
 
 CLASSIFIER = Path(__file__).with_name('ci_release_scope.py').resolve()
 IDENTITY = {'GIT_AUTHOR_NAME': 'iliya', 'GIT_AUTHOR_EMAIL': 'iliyazelenkog@gmail.com',
@@ -31,6 +32,8 @@ class ScopeFixture(unittest.TestCase):
         self.git('init', '-q')
         self.git('config', 'core.filemode', 'true')
         self.write('scripts/release-progress.mts', 'original\n')
+        for path in PROSE:
+            self.write(path, 'original prose\n')
         self.git('add', '.')
         self.check_identity()
         self.git('commit', '-qm', 'test: fixture base')
@@ -73,6 +76,41 @@ class ScopeFixture(unittest.TestCase):
             self.write(path, 'reviewed operator change\n')
         self.commit()
         self.assertEqual(self.mode(), 'mode=release-tools')
+
+    def test_exact_existing_prose_only_keeps_native_ci_lightweight(self):
+        for path in PROSE:
+            self.write(path, 'revised prose\n')
+        head = self.commit()
+        self.assertEqual(self.mode(), 'mode=docs')
+        good = event(self.base, head)
+        full = copy.deepcopy(good)
+        full['pull_request']['labels'].append({'name': 'ci:full'})
+        self.assertEqual(self.mode(payload=full), 'mode=full')
+        fork = copy.deepcopy(good)
+        fork['pull_request']['head']['repo']['full_name'] = 'fork/repo'
+        self.assertEqual(self.mode(payload=fork), 'mode=full')
+        self.assertEqual(self.mode('push', good), 'mode=full')
+        self.write('cmd/product.go', 'product change\n')
+        self.commit()
+        self.assertEqual(self.mode(), 'mode=full')
+
+    def test_prose_add_delete_mode_and_symlink_force_full(self):
+        for operation in ['add', 'delete', 'mode', 'symlink']:
+            with self.subTest(operation=operation):
+                self.git('reset', '--hard', self.base)
+                self.git('clean', '-fdq')
+                target = self.root / 'README.md'
+                if operation == 'add':
+                    self.write('docs/NEW.md', 'new file\n')
+                elif operation == 'delete':
+                    target.unlink()
+                elif operation == 'mode':
+                    target.chmod(0o755)
+                else:
+                    target.unlink()
+                    target.symlink_to('docs/DO_NOT_DISTURB.md')
+                self.commit()
+                self.assertEqual(self.mode(), 'mode=full')
 
     def test_product_version_ci_build_and_unknown_paths_force_full(self):
         for path in ['cmd/claude-notifications/main.go', '.claude-plugin/plugin.json',

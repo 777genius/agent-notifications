@@ -317,8 +317,10 @@ func TestAdmissionCapacityAndVerifiedRetention(t *testing.T) {
 // Catches an old loaded observer borrowing a new incarnation at identical paths,
 // even when another consumer retains the same ledger ID across removal.
 func TestAdmissionOldOriginAfterSharedReinstall(t *testing.T) {
-	ctx, a, r, _ := admissionFixture(t)
-	tryAdmission(t, ctx, a, r, Admitted)
+	// Setup has its own 60s limit; each modeled command has an independent
+	// 10s deadline that cannot inherit the setup context's elapsed time.
+	ctx, a, r, _ := admissionStoreFixture(t)
+	tryAdmissionCommand(t, context.Background(), a, r, Admitted)
 	l := r.Expected.Installation.Ledger
 	consumer := l.Consumers["opencode-notifications"]
 	if _, err := installruntime.Commit(ctx, installruntime.Request{ControlRoot: a.ControlRoot, RuntimeRoot: l.RuntimeRoot, Owner: l.Owner, ConsumerID: "shared-fixture", Consumer: installruntime.Consumer{Registration: "retained-fixture"}, ExpectedGeneration: &l.Generation}); err != nil {
@@ -355,9 +357,9 @@ func TestAdmissionOldOriginAfterSharedReinstall(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tryAdmission(t, ctx, a, r, SnapshotChanged)
+	tryAdmissionCommand(t, context.Background(), a, r, SnapshotChanged)
 	r.Origin = reg.Origin
-	tryAdmission(t, ctx, a, r, Admitted)
+	tryAdmissionCommand(t, context.Background(), a, r, Admitted)
 }
 
 // Catches refreshing a sender budget after store contention, or leaking outer

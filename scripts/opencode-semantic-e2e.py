@@ -14,6 +14,7 @@ import shutil
 import signal
 import socket
 import subprocess
+import tarfile
 import threading
 import time
 import urllib.request
@@ -23,6 +24,10 @@ PINS = {
     '1.18.33': '0abbb7c32ab0294c0a7bfa2705f9ff0df5dce5ab721d1f00cccfe393f2a11427',
     '2.0.0': '5bba9cb9e7676b8349b9f685dae9911dc0e9da51a1f5b3e5aa8805e08243c407',
     '2.0.21': 'f916986543348d7953d8d43aa048516cdbc3f84f4d0dc9c0c5b9d1da3030cea7',
+}
+MACOS_ARM64_PINS = {
+    '2.0.21': '0b2b68c1efaf20a29aaf636c2ffccc1abb56243a82f48cce45e257d232e03442',
+    '2.2.6': '90e4d03597b03d2051b65b4d793467764e55bacd8e22bf4824479c7233ea0e15',
 }
 COPY = {
     'task_complete': 'Task completed',
@@ -50,6 +55,68 @@ export default {id:'test-native-trace',async server(){record({phase:'loaded',ver
 
 def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def sdk_contents_match_source(tarball, checkout, revision):
+    """Match packaged file bytes to a commit; this does not prove archive origin."""
+    checkout = pathlib.Path(checkout).resolve(strict=True)
+    resolved = subprocess.check_output(['git', '-C', str(checkout), 'rev-parse', '--verify', revision + '^{commit}'], text=True).strip()
+    if resolved != revision:
+        raise ValueError('SDK source revision is not an exact commit')
+    tree = subprocess.check_output(['git', '-C', str(checkout), 'ls-tree', '-rz', '--full-tree', revision, '--', 'sdk/opencode-js/'])
+    tracked = {}
+    for item in tree.split(b'\0'):
+        if not item:
+            continue
+        meta, name = item.split(b'\t', 1)
+        mode, kind, object_id = meta.split(b' ')
+        # Git mode 100755 is a regular executable file too. Any other entry
+        # (symlink/submodule) makes the source/package audit unrepresentable.
+        if kind != b'blob' or mode not in (b'100644', b'100755'):
+            raise ValueError('SDK source commit contains non-regular entry')
+        tracked[name.decode('utf-8')] = (object_id.decode('ascii'), mode == b'100755')
+    # npm packs the package.json `files` allowlist, not every tracked test,
+    # fixture and script in the source tree. This audited SDK uses flat literal
+    # file names; reject patterns/directories rather than guessing npm semantics.
+    try:
+        raw_manifest = subprocess.check_output(['git', '-C', str(checkout), 'show', revision + ':sdk/opencode-js/package.json'])
+        declared = json.loads(raw_manifest)['files']
+    except (subprocess.CalledProcessError, ValueError, KeyError, TypeError) as error:
+        raise ValueError('SDK source package manifest unavailable') from error
+    if not isinstance(declared, list) or not declared or any(
+            not isinstance(name, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]*', name)
+            for name in declared) or len(set(declared)) != len(declared):
+        raise ValueError('SDK source package files are not flat literals')
+    expected = set(declared) | {'package.json'}
+    # npm always includes root README and licence files when present.
+    for path in tracked:
+        relative = path[len('sdk/opencode-js/'):]
+        if '/' not in relative and re.fullmatch(r'(?i)(readme|licen[cs]e|copying)(\..*)?', relative):
+            expected.add(relative)
+    seen = set()
+    with tarfile.open(tarball, 'r:gz') as archive:
+        for member in archive:
+            if not member.isfile() or not member.name.startswith('package/'):
+                raise ValueError('SDK tarball contains a non-regular or unexpected entry')
+            relative = member.name[len('package/'):]
+            if not relative or relative.startswith('/') or any(part in ('', '.', '..') for part in relative.split('/')) or relative in seen:
+                raise ValueError('SDK tarball contains an ambiguous path')
+            seen.add(relative)
+            stream = archive.extractfile(member)
+            if stream is None:
+                raise ValueError('SDK tarball member is unreadable')
+            data = stream.read()
+            object_id = subprocess.check_output(['git', '-C', str(checkout), 'hash-object', '--stdin'], input=data).decode().strip()
+            source = tracked.get('sdk/opencode-js/' + relative)
+            if source is None or source[0] != object_id:
+                raise ValueError('SDK packaged file differs from source commit')
+            if bool(member.mode & 0o111) != source[1]:
+                raise ValueError('SDK packaged executable mode differs from source commit')
+    if not seen:
+        raise ValueError('SDK tarball is empty')
+    if seen != expected:
+        raise ValueError('SDK tarball member set differs from source commit')
+    return True
 
 
 def wait(predicate, label, seconds=30):
@@ -134,7 +201,7 @@ class Handler(BaseHTTPRequestHandler):
         if not request.get('stream'):
             response = {'id': 'chatcmpl-test', 'object': 'chat.completion', 'created': int(time.time()),
                 'model': 'test', 'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': answer},
-                                            'finish_reason': 'stop'}],
+                                            'finish_reason': 'length' if mode == 'output-limit' else 'stop'}],
                 'usage': {'prompt_tokens': 10, 'completion_tokens': 6, 'total_tokens': 16}}
             data = json.dumps(response).encode()
             self.send_response(200)
@@ -149,7 +216,7 @@ class Handler(BaseHTTPRequestHandler):
                             'function': {'name': call[0], 'arguments': json.dumps(call[1])}}]}, None))
             deltas.append(({}, 'tool_calls'))
         else:
-            deltas.extend([({'content': answer}, None), ({}, 'stop')])
+            deltas.extend([({'content': answer}, None), ({}, 'length' if mode == 'output-limit' else 'stop')])
         self.send_response(200)
         self.send_header('Content-Type', 'text/event-stream')
         self.end_headers()
@@ -198,14 +265,26 @@ def qualify_owned(args, cleanup):
     integrity = 'sha512-' + base64.b64encode(hashlib.sha512(tarball.read_bytes()).digest()).decode()
     if integrity != observer_pin['integrity'] or not re.fullmatch('[0-9a-f]{40}', args.sdk_source_sha):
         raise ValueError('reviewed SDK candidate differs from the product lock integrity')
+    system, machine = os.uname().sysname, os.uname().machine
+    if (system, machine) == ('Linux', 'x86_64'):
+        native_os, native_arch, pins = 'linux', 'amd64', PINS
+    elif (system, machine) == ('Darwin', 'arm64'):
+        native_os, native_arch, pins = 'darwin', 'arm64', MACOS_ARM64_PINS
+    else:
+        raise ValueError('semantic checkpoint has no pinned image for this platform')
+    # A lockfile match authenticates tarball bytes, not the claimed source
+    # revision. Independent source-to-tarball evidence is still required.
     provenance = {'schema_version': 1, 'candidate_sha': source_sha, 'sdk_source_sha': args.sdk_source_sha,
+        'sdk_source_sha_verified': False,
+        'sdk_source_contents_match': sdk_contents_match_source(tarball, args.sdk_source_checkout, args.sdk_source_sha)
+            if args.sdk_source_checkout else False,
         'sdk_tarball_sha256': digest(tarball), 'uap_observer_pin': observer_pin,
         'lock_sha256': digest(lock), 'bundled_js_source_sha256': digest(repo / 'internal/opencodeplugin/dist/agent-notifications.js'),
-        'native_os': 'linux', 'native_arch': 'amd64', 'product_build_vcs': 'clean_exact_checkout'}
-    if digest(opencode) != PINS[args.version]:
-        raise ValueError('native Linux amd64 OpenCode binary differs from acquisition pin')
-    if os.uname().machine != 'x86_64' or os.uname().sysname != 'Linux':
-        raise ValueError('semantic checkpoint requires native Linux amd64')
+        'native_os': native_os, 'native_arch': native_arch, 'product_build_vcs': 'clean_exact_checkout'}
+    if args.version not in pins or digest(opencode) != pins[args.version]:
+        raise ValueError('OpenCode executable differs from the platform acquisition pin')
+    if args.desktop and native_os != 'linux':
+        raise ValueError('private D-Bus desktop capture requires Linux')
     root = args.sandbox.resolve()
     root.mkdir(mode=0o700, parents=True, exist_ok=False)
     project = root / 'TEST-project'
@@ -273,8 +352,8 @@ def qualify_owned(args, cleanup):
     (project / 'opencode.json').write_text(json.dumps(configuration))
     common = ['--control-root', str(root / 'control'), '--runtime-root', str(root / 'runtime'),
               '--opencode-config-dir', str(config_dir), '--home', str(home), '--xdg-config-home', env['XDG_CONFIG_HOME']]
-    def command(argv):
-        result = subprocess.run(argv, cwd=project, env=env, capture_output=True, text=True, timeout=60)
+    def command(argv, stdin=None):
+        result = subprocess.run(argv, cwd=project, env=env, input=stdin, capture_output=True, text=True, timeout=60)
         if result.returncode:
             raise RuntimeError(f'{pathlib.Path(argv[0]).name} {argv[1]} failed: {result.returncode}')
         return result.stdout
@@ -286,6 +365,25 @@ def qualify_owned(args, cleanup):
                      '--cache', str(root / 'npm-cache'), '@opencode-ai/plugin@1.18.33'])
     command([str(binary), 'setup-opencode', 'install', *common, '--binary', str(binary), '--webhook',
              *(['--desktop'] if args.desktop else [])])
+    if args.version in ('2.0.21', '2.2.6'):
+        # OpenCode consumes the managed policy snapshot; the ambient config
+        # written above is not a grant for this installation.
+        config_args = [str(binary), 'config']
+        target_args = ['--target', 'opencode', '--control-root', str(root / 'control')]
+        inspected = json.loads(command(config_args + ['inspect', *target_args, '--json']))
+        if (inspected.get('valid') is not True or
+                pathlib.Path(inspected['selection']['path']).resolve() !=
+                (root / 'control' / 'agent-notifications.json').resolve()):
+            raise RuntimeError('managed OpenCode policy inspection failed')
+        edits = {'/notifications/desktop/enabled': args.desktop,
+                 '/notifications/webhook/enabled': True,
+                 '/notifications/webhook/preset': 'custom', '/notifications/webhook/format': 'json',
+                 '/notifications/webhook/url': f'http://127.0.0.1:{webhook.server_port}/webhook'}
+        for status in COPY:
+            edits['/statuses/' + status + '/enabled'] = True
+            edits['/statuses/' + status + '/webhook/enabled'] = True
+        command(config_args + ['edit', *target_args, '--stdin', '--expect-revision', inspected['revision']],
+                json.dumps({'set': edits}))
     installed = config_dir / 'plugins/agent-notifications.js'
     installed_digest = digest(installed)
     tracing = TRACE_PLUGIN
@@ -329,6 +427,7 @@ export default async function(){record({phase:'loaded',version:'v1'});return{eve
         return [json.loads(x) for x in trace.read_text().splitlines()] if trace.exists() else []
     cases = []
     removed = False
+    foreign_bytes = None
     try:
         def ready():
             if process.poll() is not None:
@@ -351,9 +450,13 @@ export default async function(){record({phase:'loaded',version:'v1'});return{eve
         prefix = '/session/' if v1 else '/api/session/'
         for case in args.cases.split(','):
             child_flow = case.startswith('child-')
-            removed_flow = case.startswith('removed-')
+            foreign_flow = case.startswith('foreign-')
+            inflight_edit = case == 'foreign-inflight'
+            removed_flow = case.startswith('removed-') or foreign_flow
             recovery = case.startswith('recover-')
             mode = case[len('recover-'):] if recovery else case.split('-', 1)[1] if child_flow or removed_flow else case
+            if (foreign_flow and removed and foreign_bytes is None) or (foreign_bytes is not None and not foreign_flow):
+                raise ValueError('foreign edit and removal require separate TEST installations')
             if case == 'reload':
                 if args.version != '2.0.21':
                     raise ValueError('native plugin reload belongs to the current V2 API')
@@ -371,15 +474,29 @@ export default async function(){record({phase:'loaded',version:'v1'});return{eve
                 wait(lambda: any(x.get('phase') == 'cleanup' for x in rows()[old_trace:]), 'native plugin disposal')
                 wait(lambda: any(x.get('phase') == 'loaded' for x in rows()[old_trace:]), 'native plugin reload')
                 mode = 'success'
-            if removed_flow and not removed:
-                command([str(binary), 'setup-opencode', 'remove', *common])
-                if installed.exists():
-                    raise AssertionError('remove retained installed plugin')
-                # The old in-memory bundle must be denied even if its old
-                # executable path is executable again, not just spawn-failed.
-                managed = root / 'runtime/claude-notifications-linux-amd64'
-                shutil.copyfile(binary, managed)
-                managed.chmod(0o755)
+            if inflight_edit and not any(result.get('case') == 'success' and result.get('alerts') == ['task_complete']
+                                         for result in cases):
+                raise ValueError('in-flight foreign edit requires a successful control delivery')
+            if inflight_edit and removed:
+                raise ValueError('in-flight foreign edit requires an intact installation')
+            if removed_flow and not removed and not inflight_edit:
+                if foreign_flow:
+                    if not any(result.get('case') == 'success' and result.get('alerts') == ['task_complete']
+                               for result in cases):
+                        raise ValueError('foreign edit requires a successful control delivery')
+                    # Simulate a user edit in this disposable installation.
+                    # Do not remove or repair those foreign bytes afterwards.
+                    foreign_bytes = installed.read_bytes() + b'\n// TEST-only foreign edit\n'
+                    installed.write_bytes(foreign_bytes)
+                else:
+                    command([str(binary), 'setup-opencode', 'remove', *common])
+                    if installed.exists():
+                        raise AssertionError('remove retained installed plugin')
+                    # The old in-memory bundle must be denied even if its old
+                    # executable path is executable again, not just spawn-failed.
+                    managed = root / ('runtime/claude-notifications-' + native_os + '-' + native_arch)
+                    shutil.copyfile(binary, managed)
+                    managed.chmod(0o755)
                 removed = True
             if removed and not removed_flow:
                 raise ValueError('revocation cases must come last')
@@ -392,7 +509,7 @@ export default async function(){record({phase:'loaded',version:'v1'});return{eve
                 subprocess.run(['git', 'init', '-q', str(target)], check=True)
                 (target / 'opencode.json').write_text(json.dumps(configuration))
                 req('/api/location', directory=target)
-            provider.mode, provider.attempts = ('cancel' if mode == 'queue-cancel' else mode), 0
+            provider.mode, provider.attempts = ('cancel' if mode == 'queue-cancel' or inflight_edit else mode), 0
             provider.entered.clear()
             provider.release.clear()
             body = {'title': 'TEST-' + mode}
@@ -435,7 +552,13 @@ export default async function(){record({phase:'loaded',version:'v1'});return{eve
             prompt = {'parts': [{'type': 'text', 'text': marker}]} if v1 else {'text': marker}
             with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
                 initial = pool.submit(req, prefix + sid + ('/message' if v1 else '/prompt'), prompt)
-                if mode in ('queue', 'steer', 'cancel', 'queue-cancel'):
+                if inflight_edit:
+                    wait(provider.entered.is_set, 'held primary provider before foreign edit')
+                    foreign_bytes = installed.read_bytes() + b'\n// TEST-only foreign edit during turn\n'
+                    installed.write_bytes(foreign_bytes)
+                    removed = True
+                    provider.release.set()
+                elif mode in ('queue', 'steer', 'cancel', 'queue-cancel'):
                     wait(provider.entered.is_set, 'held primary provider')
                     if mode == 'queue-cancel':
                         second = pool.submit(req, prefix + sid + '/prompt', {'text': marker + '-queued', 'delivery': 'queue'})
@@ -558,7 +681,10 @@ export default async function(){record({phase:'loaded',version:'v1'});return{eve
             print(json.dumps(cases[-1]), flush=True)
         if not removed:
             command([str(binary), 'setup-opencode', 'remove', *common])
-        if installed.exists():
+        if foreign_bytes is not None:
+            if not installed.is_file() or installed.read_bytes() != foreign_bytes:
+                raise AssertionError('foreign plugin edit was not preserved')
+        elif installed.exists():
             raise AssertionError('remove retained installed plugin')
         for body in webhook.bodies:
             payload = json.loads(body)
@@ -604,11 +730,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--binary', type=pathlib.Path, required=True)
     parser.add_argument('--opencode', type=pathlib.Path, required=True)
-    parser.add_argument('--version', choices=PINS, required=True)
+    parser.add_argument('--version', choices=sorted(set(PINS) | set(MACOS_ARM64_PINS)), required=True)
     parser.add_argument('--sandbox', type=pathlib.Path, required=True)
     parser.add_argument('--report', type=pathlib.Path, required=True)
     parser.add_argument('--sdk-tarball', type=pathlib.Path, required=True)
-    parser.add_argument('--sdk-source-sha', required=True)
+    parser.add_argument('--sdk-source-sha', required=True,
+                        help='Claimed SDK source revision; this harness does not verify its provenance')
+    parser.add_argument('--sdk-source-checkout', type=pathlib.Path,
+                        help='Optional Git checkout for comparing packaged files against the claimed commit')
     parser.add_argument('--desktop', action='store_true', help='capture real Notify calls on a private Linux D-Bus')
     parser.add_argument('--cases', help='comma-separated subset; defaults to the qualified version-specific matrix')
     args = parser.parse_args()

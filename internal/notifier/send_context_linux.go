@@ -23,7 +23,7 @@ func (n *Notifier) sendNativeDesktopContext(ctx context.Context, sound, title, b
 	if subtitle != "" {
 		body = subtitle + "\n" + body
 	}
-	if !n.cfg.Notifications.Desktop.ClickToFocus {
+	if !n.cfg.Notifications.Desktop.ClickToFocus || opts.noFocus {
 		if _, ok := ctx.Deadline(); !ok {
 			return errors.New("delivery_deadline_required")
 		}
@@ -58,7 +58,7 @@ func (n *Notifier) sendNativeDesktopContext(ctx context.Context, sound, title, b
 		return err
 	}
 	hints := daemon.FocusHints{}
-	if n.cfg.Notifications.Desktop.ClickToFocus {
+	if n.cfg.Notifications.Desktop.ClickToFocus && !opts.noFocus {
 		target := daemon.GetTerminalName()
 		windowID := daemon.GetX11WindowID(target)
 		if session := os.Getenv("XDG_SESSION_TYPE"); session != "" && session != "x11" {
@@ -66,6 +66,7 @@ func (n *Notifier) sendNativeDesktopContext(ctx context.Context, sound, title, b
 		}
 		pane, socket := daemon.GetWezTermFocusHints(target)
 		hints = daemon.FocusHints{TerminalName: target, FolderName: daemon.GetFocusFolderName(target, cwd), ProjectPath: daemon.GetFocusProjectPath(target, cwd), IDEPID: daemon.GetFocusIDEPID(target), WindowID: windowID, WindowTitle: daemon.GetExactWindowTitleContext(ctx, target), WezTermPaneID: pane, WezTermSocket: socket, WarpFocusURL: warpfocus.FromEnvContext(ctx)}
+		hints.SwaySocket, hints.AncestorPIDs = daemon.GetSwayFocusHints()
 		applyZellijFocusHintsContext(ctx, n.cfg, &hints)
 	}
 	response, err := client.SendNotificationContext(ctx, title, body, icon, hints, 30)

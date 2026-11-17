@@ -14,9 +14,9 @@ import (
 // assumed by the notification pipeline. Every route is observation-only.
 type QoderSource struct{}
 
-// QoderHookEvents is the notification-suitable hook set wired end to end.
-// Mirrors the Claude adapter set (PreToolUse/Notification/Stop/SubagentStop/
-// TeammateIdle) plus native PermissionRequest and StopFailure.
+// QoderHookEvents is the registered native hook set. TeammateIdle remains
+// decodable but has no team effects without Qoder-owned team authority.
+// Other hooks cover attention, completion and native stop failures.
 var QoderHookEvents = []string{
 	"Stop",
 	"StopFailure",
@@ -59,7 +59,10 @@ func (QoderSource) Decode(ctx context.Context, event string, input io.Reader) (E
 	if !IsQoderHookEvent(event) {
 		return Event{}, fmt.Errorf("unsupported qoder event %q", event)
 	}
-	var wire HookData
+	var wire struct {
+		HookData
+		StopHookActive bool `json:"stop_hook_active"`
+	}
 	if err := json.Unmarshal(raw, &wire); err != nil {
 		return Event{}, fmt.Errorf("qoder hook payload is invalid")
 	}
@@ -82,7 +85,7 @@ func (QoderSource) Decode(ctx context.Context, event string, input io.Reader) (E
 	case "PermissionRequest":
 		ev.Payload = PermissionRequestPayload{ToolName: wire.ToolName, ToolInput: append(json.RawMessage(nil), wire.ToolInput...)}
 	case "SubagentStop":
-		ev.Payload = SubagentStopPayload{Stop: StopPayload{AssistantMessage: wire.LastAssistantMessage}}
+		ev.Payload = SubagentStopPayload{Stop: StopPayload{AssistantMessage: wire.LastAssistantMessage, Continuation: wire.StopHookActive}}
 	case "TeammateIdle":
 		ev.Payload = TeammateIdlePayload{TeamName: wire.TeamName, TeammateName: wire.TeammateName}
 	case "PreToolUse":

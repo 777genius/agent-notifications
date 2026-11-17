@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -38,10 +39,12 @@ func repairBootstrapCache(ctx context.Context, a setupProductsArgs, input io.Rea
 	plan, err := installruntime.PreviewCacheRepair(observe, root)
 	cancel()
 	if err != nil {
-		// This optional read-only step must not replace the existing installer
-		// decision: it may repair a non-cache file, retire an old Claude cache,
-		// or replay a journal. Those writers retain their normal locked checks.
-		if a.BootstrapCacheRepair && ctx.Err() == nil {
+		// Only known ordinary-installer cases may defer. An invalid ledger,
+		// failed ownership inspection or lock timeout must fail here instead
+		// of reporting an unearned "ready" to the caller.
+		if a.BootstrapCacheRepair && ctx.Err() == nil &&
+			(errors.Is(err, installruntime.ErrCacheRepairInstallerRequired) ||
+				errors.Is(err, installruntime.ErrPolicyRecovery)) {
 			return writeSelectorResult(ctx, output, "ready\n")
 		}
 		return err

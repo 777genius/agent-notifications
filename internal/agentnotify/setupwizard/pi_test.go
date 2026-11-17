@@ -56,6 +56,12 @@ func TestPiWizardReservedHandoffAndFreshConsumer(t *testing.T) {
 		t.Fatal(err)
 	}
 	req := Request{Action: ActionInstall, Agents: []string{"pi"}, Hooks: &off, AgentNotify: &on, Yes: true, PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtimeRoot, GlobalConfig: global, PiAgentDir: profile, ClientExecutable: primary, Helper: primary, PiDesktop: &off, PiWebhook: &on}
+	projection, confirmedGeneration, confirmedPolicy, err := ObserveBootstrapMCPWithPolicy(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.BootstrapMCP = &BootstrapMCPSelection{Selected: req.Agents, Projection: projection}
+	req.BootstrapExpectedGeneration, req.BootstrapExpectedPolicy = &confirmedGeneration, &confirmedPolicy
 	plan, err := Plan(ctx, req)
 	if err != nil || !plan.Ready {
 		t.Fatalf("plan: %+v %v", plan.Result, err)
@@ -99,6 +105,7 @@ func TestPiWizardReservedHandoffAndFreshConsumer(t *testing.T) {
 	}
 	// UAP may skip its package callback on unchanged bytes. Explicit channel
 	// opt-out remains a real policy operation in the same normal wizard.
+	req.BootstrapMCP, req.BootstrapExpectedGeneration, req.BootstrapExpectedPolicy = nil, nil, nil
 	req.PiWebhook = &off
 	result, err = Run(ctx, req)
 	if err != nil || (result.Outcome != "completed" && result.Outcome != "unchanged") {
