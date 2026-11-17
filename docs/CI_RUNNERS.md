@@ -84,6 +84,15 @@ The stock Ubuntu 24.04.5 runner moved from `6.17.0-1022-azure` to
 only, with the existing Linux amd64, Ubuntu release, ext4 ancestry and original
 profile token requirements. Unknown kernels continue to refuse.
 
+Some stock `ubuntu-24.04` runners are hosted on AWS and report
+`7.0.0-1014-aws`. The tuple otherwise matches (linux/amd64, ext4), but that
+kernel has not been qualified, so the Cursor physical job refuses it by design
+(2 of the last 12 Ubuntu CI runs). This is runner drift, not a product failure:
+rerun the failed job to land on a qualified kernel. Do not add a kernel to the
+list without running the real directory identity/swap, Cursor, materializer,
+caller and recovery contracts on it and recording its own qualification
+identity, as was done for `7.0.0-1017-azure`.
+
 The historical P1 receipt remains evidence for the original kernel only. The
 kernel 7 qualification has its own `source-ci-pr497` identity. Before merging
 [PR 497](https://github.com/777genius/agent-notifications/pull/497), its Go 1.26
