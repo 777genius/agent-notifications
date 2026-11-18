@@ -141,3 +141,49 @@ func TestLegacyMigrationAndCorruptPrivateStateFailClosed(t *testing.T) {
 		t.Fatal("private damage blocked revocation", err)
 	}
 }
+
+// Regression: a Windows callback setup promotes the shared journal to schema
+// and writer floor 6 without changing the existing OpenCode registration.
+// Event-time acquisition must still use its original origin/owned bundle fence.
+func TestOpenCodeRegistrationSurvivesWindowsLedgerPromotion(t *testing.T) {
+	ctx, request, _ := fixture(t)
+	// The fixture must advertise v6 writer compatibility before promoting a
+	// shared ledger; this does not create a Windows native callback in the test.
+	binary := append(fixtureBinary("linux", "amd64", "v1"), []byte(installruntime.WindowsWriterProtocolMarker)...)
+	if err := os.WriteFile(request.BinarySource, binary, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := Apply(ctx, request); err != nil {
+		t.Fatal(err)
+	}
+	l, _, err := installruntime.ReadOwnership(request.ControlRoot)
+	if err != nil || l.Schema != 4 || l.WriterFloor != installruntime.OpenCodeWriterFloor {
+		t.Fatalf("unexpected original ledger: %+v %v", l, err)
+	}
+	registration := l.Consumers[consumerID].OpenCode
+	if registration == nil || !registration.Valid() {
+		t.Fatal("registered OpenCode origin missing")
+	}
+	l.Schema, l.WriterFloor = installruntime.WindowsGenerationLedgerSchema, installruntime.WindowsGenerationWriterFloor
+	encoded, err := json.MarshalIndent(l, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(request.ControlRoot, "ownership.json"), append(encoded, '\n'), 0600); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := installruntime.ReadPolicySnapshot(ctx, request.ControlRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	executable := filepath.Join(request.RuntimeRoot, linuxTestBinaryName)
+	lease, err := AcquireRegistration(ctx, request.ControlRoot, snapshot, executable, "linux", "amd64", registration.Origin)
+	if err != nil {
+		t.Fatalf("valid promoted OpenCode registration refused: %v", err)
+	}
+	desktop, webhook := lease.Channels()
+	lease.Close()
+	if !desktop || webhook {
+		t.Fatalf("promoted event channels changed: desktop=%v webhook=%v", desktop, webhook)
+	}
+}

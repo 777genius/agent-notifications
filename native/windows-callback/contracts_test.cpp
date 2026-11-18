@@ -1,6 +1,8 @@
-// Inert wire + lifecycle tests. No Windows API calls, registration or UI effects.
+// Inert wire + lifecycle tests. No registration, SDK target or UI effects; finite fixture/hash operations.
+#define NOMINMAX
 #include "wire.h"
 #include "attempt.h"
+#include "capacity.h"
 #include <fstream>
 #include <iterator>
 #include <iostream>
@@ -72,6 +74,11 @@ int main(int argc,char** argv){try{
  }check(rejected);
  }
  for(const std::string bad:{std::string("\xc0\xaf"),std::string("\xed\xa0\x80"),std::string("\xf4\x90\x80\x80"),std::string("\0",1),std::string("\xc2\x80")})check(!text(bad,4096));
+ // Body alone permits HT and LF, as admitted by the Go content contract.
+ check(text("first\nsecond\t&<>",4096,true));
+ check(!text("first\nsecond",4096)&&!text("first\tsecond",4096));
+ for(const auto bad:{uint8_t(0),uint8_t(13),uint8_t(26),uint8_t(127)})
+  check(!text(std::string(1,char(bad)),4096,true));
  for(const std::string id:{std::string("."),std::string("..")}) {
   bool uriRejected=false,recordRejected=false;try{uri(id);}catch(...){uriRejected=true;}
   auto bad=record;bad.thread=id;try{bad.validate();}catch(...){recordRejected=true;}
@@ -124,5 +131,13 @@ int main(int argc,char** argv){try{
  first.drain();
  one.join();
  check(slots.pending()==0);
+ // Breakage: concurrent producer/callback charge limits disagree, or a valid
+ // independent overflow ledger is accepted. These fixtures were authored from
+ // the numeric wire layout independently of both production codecs.
+ const auto quota=CapacityState::read(fixture(std::string(argv[1])+"/capacity.wcap"));
+ check(quota.records==1023&&quota.attempts==2047&&quota.attemptBytes==67076096);
+ const auto full=CapacityState::read(quota.nextAttempt());check(full.attempts==2048&&full.attemptBytes==67108864);
+ bool refused=false;try{full.nextAttempt();}catch(...){refused=true;}check(refused);
+ refused=false;try{CapacityState::read(fixture(std::string(argv[1])+"/capacity-overflow.wcap"));}catch(...){refused=true;}check(refused);
  std::cout<<"inert WinEnvelope1 and callback lifecycle contracts passed\n";return 0;
  }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}

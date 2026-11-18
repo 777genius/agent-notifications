@@ -132,7 +132,7 @@ func TestInstallDiagnosticEscapedBoundedPath(t *testing.T) {
 				if err := json.Unmarshal(out.Bytes(), &result); err != nil {
 					t.Fatal(err)
 				}
-				if result.Generation != ledger.Generation || result.Reason != "installation_invalid" || result.Diagnostic == nil || result.Diagnostic.Code != "managed_file_missing" || result.Diagnostic.Path != path || result.Diagnostic.Action != action {
+				if result.Generation != ledger.Generation || result.Reason != "installation_invalid" || result.Diagnostic == nil || result.Diagnostic.Snapshot == nil || result.Diagnostic.Admission != nil || result.Diagnostic.Snapshot.Code != "managed_file_missing" || result.Diagnostic.Snapshot.Path != path || result.Diagnostic.Snapshot.Action != action {
 					t.Fatalf("bad result: %+v output=%q", result, output)
 				}
 				if !strings.Contains(output, `quoted\"\n\u001b-hook`) {

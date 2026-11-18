@@ -337,6 +337,9 @@ func validTarget(t origin.Target) bool {
 	if t.Desktop.Linux.SnapshotPath != "" {
 		binding = t.Desktop.Provider == "codex" && origin.Text(t.Desktop.Linux.SnapshotPath, 1024, true) && origin.Text(t.Desktop.Linux.SHA256, 64, true)
 	}
+	if t.Desktop.Windows != (notification.WindowsBinding{}) {
+		binding = t.Desktop.Provider == "codex" && t.Desktop.Linux == (notification.LinuxBinding{}) && t.Desktop.ApplicationPath == "" && t.Desktop.TeamID == "" && origin.Text(t.Desktop.Windows.SnapshotPath, 1024, true) && origin.Text(t.Desktop.Windows.SHA256, 64, true)
+	}
 	return n.Scope != "" && n.Precision == "chat_id" && origin.Text(t.Desktop.ThreadID, 256, true) && binding
 }
 func snapshot(p Policy, t origin.Target) journal.Snapshot {
@@ -352,6 +355,9 @@ func snapshot(p Policy, t origin.Target) journal.Snapshot {
 	application, identity := t.Desktop.ApplicationPath, t.Desktop.TeamID
 	if t.Desktop.Linux.SnapshotPath != "" {
 		application, identity = t.Desktop.Linux.SnapshotPath, t.Desktop.Linux.SHA256
+	}
+	if t.Desktop.Windows != (notification.WindowsBinding{}) {
+		application, identity = t.Desktop.Windows.SnapshotPath, t.Desktop.Windows.SHA256
 	}
 	return journal.Snapshot{Target: journal.Target{Kind: kind, ID: t.Desktop.ThreadID, Application: application, Identity: identity}, Policy: string(b), Navigation: journal.Navigation{Capability: t.Navigation.Capability, Precision: t.Navigation.Precision, Scope: t.Navigation.Scope, Reason: t.Navigation.Reason}}
 }

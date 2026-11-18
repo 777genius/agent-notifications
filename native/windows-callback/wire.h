@@ -13,7 +13,7 @@ inline bool hex(const std::string& s, size_t n) {
  return std::all_of(s.begin(),s.end(),[](char c){return (c>='0'&&c<='9')||(c>='a'&&c<='f');});
 }
 // Validate scalars independently of WinRT conversion (which may replace bad UTF-8).
-inline bool text(const std::string& s,size_t maximum) {
+inline bool text(const std::string& s,size_t maximum,bool body=false) {
  if (s.empty() || s.size()>maximum) return false;
  for (size_t i=0;i<s.size();) {
   const auto first=static_cast<unsigned char>(s[i++]); uint32_t cp=first; unsigned count=0;
@@ -26,7 +26,7 @@ inline bool text(const std::string& s,size_t maximum) {
   if((c&0xc0)!=0x80)return false;
   cp=(cp<<6)|(c&63);
   }
-  if((count==1&&cp<0x80)||(count==2&&cp<0x800)||(count==3&&cp<0x10000)||cp>0x10ffff||(cp>=0xd800&&cp<=0xdfff)||cp<32||(cp>=127&&cp<=159))return false;
+  if((count==1&&cp<0x80)||(count==2&&cp<0x800)||(count==3&&cp<0x10000)||cp>0x10ffff||(cp>=0xd800&&cp<=0xdfff)||(cp<32&&(!body||(cp!='\t'&&cp!='\n')))||(cp>=127&&cp<=159))return false;
  }
  return true;
 }
