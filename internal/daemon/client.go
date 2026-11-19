@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -57,6 +58,31 @@ func (c *Client) SendNotification(
 // SendNotificationContext uses the same daemon protocol and retains the caller's
 // deadline through dial, write and read. It is the existing focus-on protocol.
 func (c *Client) SendNotificationContext(ctx context.Context, title, body, appIcon string, hints FocusHints, timeout int) (*NotifyResponse, error) {
+	return c.SendNotificationWithOptionsContext(ctx, title, body, appIcon, hints, timeout, NotifyOptions{})
+}
+
+// NotifyOptions are per-request delivery options that are not focus hints.
+type NotifyOptions struct {
+	// ReplaceKey is the session id whose previous notification this one
+	// replaces. Empty keeps the notification unique.
+	ReplaceKey string
+	// NoFocus sends the notification without a click action.
+	NoFocus bool
+}
+
+// SendNotificationWithOptionsContext is SendNotificationContext with
+// replacement and focus options.
+func (c *Client) SendNotificationWithOptionsContext(ctx context.Context, title, body, appIcon string, hints FocusHints, timeout int, opts NotifyOptions) (*NotifyResponse, error) {
+	if opts.NoFocus {
+		// An older daemon ignores NoFocus and would add a click action.
+		ping, err := c.pingContext(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if ping == nil || !slices.Contains(ping.Capabilities, CapabilityNoFocus) {
+			return nil, ErrNoFocusUnsupported
+		}
+	}
 	req := Request{
 		Type:    MessageTypeNotify,
 		Version: ProtocolVersion,
@@ -82,6 +108,8 @@ func (c *Client) SendNotificationContext(ctx context.Context, title, body, appIc
 			Timeout:            timeout,
 			Strict:             hints.Strict,
 			StrictSound:        hints.StrictSound,
+			ReplaceKey:         opts.ReplaceKey,
+			NoFocus:            opts.NoFocus,
 		},
 	}
 	if hints.Strict != nil {

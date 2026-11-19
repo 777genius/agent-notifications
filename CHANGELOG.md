@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Linux: `notifications.replaceNotificationsPerSession` now works on Linux too ([#663](https://github.com/777genius/agent-notifications/issues/663)). The notification daemon keeps the freedesktop notification id of each session's live notification and passes it as `replaces_id` on that session's next one, so the banner is updated in place instead of stacking. Notifications without a session id stay unique; after a daemon restart, or once the notification is closed, the session's next notification is a new one. With `desktop.clickToFocus: false`, replaceable notifications still go through the daemon, without a click action. The daemon protocol version is unchanged: an older daemon ignores the two new fields and stacks as before. Because an older daemon would also add a click action, the hook first checks that the running daemon advertises the new behaviour; if it doesn't (an older daemon still running right after an upgrade), notifications with `clickToFocus: false` are delivered without replacement until that daemon exits.
+
 ### Changed
 - Admit official OpenCode releases by range instead of a per-release image hash on every platform: V1 1.18.33 and newer (including the current 1.19.x) and V2 2.0.21 and newer, on Linux, macOS and Windows. Each release resolves onto the reviewed reference release of its generation, so a new official release no longer needs its own table row; on macOS the operating system must also verify the OpenCode publisher, so unsigned or re-signed binaries are refused there (Linux and Windows have no publisher check); other majors and pre-releases are refused on every platform. The runtime clock comparison still fails closed. The new `opencode-range-e2e` workflow checks real delivery on all five platform pairs, including the latest published V1 and V2.
 
