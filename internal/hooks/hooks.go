@@ -446,6 +446,24 @@ func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 		}
 	}
 
+	// Claude follows an AskUserQuestion/ExitPlanMode PreToolUse with a
+	// permission_prompt Notification for the same dialog (#662). Since that
+	// Notification is a permission request (#633), the question cooldown above
+	// no longer sees it; drop it here when the tool was just notified. Other
+	// permission prompts keep notifying.
+	if ev.Product == ProductClaude && ev.Kind() == EventNotification && status == analyzer.StatusPermissionRequest {
+		suppress, err := h.stateMgr.ShouldSuppressPermissionAfterInteractiveTool(
+			keys.stateKey,
+			h.cfg.GetSuppressQuestionAfterAnyNotificationSeconds(),
+		)
+		if err != nil {
+			logging.Warn("Failed to check interactive-tool permission pairing: %v", err)
+		} else if suppress {
+			logging.Debug("Permission prompt suppressed: paired with a just-notified interactive tool")
+			return nil
+		}
+	}
+
 	content, ok := h.prepareHookContent(ev, keys, hookEvent, classified, bench)
 	if !ok {
 		return nil

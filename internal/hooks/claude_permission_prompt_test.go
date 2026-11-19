@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/777genius/agent-notifications/internal/analyzer"
+	"github.com/777genius/agent-notifications/internal/config"
 	"github.com/777genius/agent-notifications/internal/sessionname"
 )
 
@@ -47,4 +48,81 @@ func TestClaudeNotificationPermissionPromptUsesHostMessage(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Claude fires PreToolUse for AskUserQuestion/ExitPlanMode and then a
+// permission_prompt Notification for the same dialog (#662). Only the first
+// may notify; unrelated permission prompts still do.
+func TestClaudeInteractiveToolPermissionPromptPairing(t *testing.T) {
+	cfg := codexTestConfig()
+	cfg.Statuses["plan_ready"] = config.StatusInfo{Title: "Plan Ready"}
+
+	send := func(t *testing.T, h *Handler, hookEvent string, data HookData) {
+		t.Helper()
+		data.HookEventName = hookEvent
+		raw, err := json.Marshal(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := h.HandleHook(hookEvent, strings.NewReader(string(raw))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	permission := HookData{NotificationType: "permission_prompt", Message: "Claude needs your permission to use AskUserQuestion"}
+
+	for _, tc := range []struct {
+		name, tool string
+		wantStatus analyzer.Status
+	}{
+		{"question", "AskUserQuestion", analyzer.StatusQuestion},
+		{"plan", "ExitPlanMode", analyzer.StatusPlanReady},
+	} {
+		t.Run("paired "+tc.name+" is suppressed", func(t *testing.T) {
+			h, notifier, _ := newTestHandler(t, cfg)
+			sessionID := "test-claude-paired-" + tc.name
+			send(t, h, "PreToolUse", HookData{SessionID: sessionID, ToolName: tc.tool, CWD: "/test"})
+			p := permission
+			p.SessionID, p.CWD = sessionID, "/test"
+			send(t, h, "Notification", p)
+			if notifier.callCount() != 1 || notifier.lastCall().status != tc.wantStatus {
+				t.Fatalf("calls=%d last=%v, want one %s notification", notifier.callCount(), notifier.lastCall(), tc.wantStatus)
+			}
+		})
+	}
+
+	t.Run("stale interactive tool does not suppress", func(t *testing.T) {
+		h, notifier, _ := newTestHandler(t, cfg)
+		sessionID := "test-claude-paired-stale"
+		send(t, h, "PreToolUse", HookData{SessionID: sessionID, ToolName: "AskUserQuestion", CWD: "/test"})
+		st, err := h.stateMgr.Load(sessionID)
+		if err != nil || st == nil {
+			t.Fatalf("load state: %v %v", st, err)
+		}
+		window := int64(cfg.GetSuppressQuestionAfterAnyNotificationSeconds())
+		st.LastTimestamp -= window
+		st.LastNotificationTime -= window
+		if err := h.stateMgr.Save(st); err != nil {
+			t.Fatal(err)
+		}
+		p := permission
+		p.SessionID, p.CWD = sessionID, "/test"
+		send(t, h, "Notification", p)
+		if notifier.callCount() != 2 || notifier.lastCall().status != analyzer.StatusPermissionRequest {
+			t.Fatalf("calls=%d last=%v, want a permission notification", notifier.callCount(), notifier.lastCall())
+		}
+	})
+
+	t.Run("undelivered interactive tool does not suppress", func(t *testing.T) {
+		h, notifier, _ := newTestHandler(t, cfg)
+		sessionID := "test-claude-paired-undelivered"
+		if err := h.stateMgr.UpdateInteractiveTool(sessionID, "AskUserQuestion", "/test"); err != nil {
+			t.Fatal(err)
+		}
+		p := permission
+		p.SessionID, p.CWD = sessionID, "/test"
+		send(t, h, "Notification", p)
+		if notifier.callCount() != 1 || notifier.lastCall().status != analyzer.StatusPermissionRequest {
+			t.Fatalf("calls=%d, want one permission notification", notifier.callCount())
+		}
+	})
 }

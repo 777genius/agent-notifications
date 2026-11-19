@@ -466,3 +466,26 @@ func TestQoderStopAndTeammateIdleCannotConsumeClaudeCompletion(t *testing.T) {
 		t.Fatalf("Claude completion changed: state=%+v deliveries=%d error=%v", state, notify.callCount(), err)
 	}
 }
+
+// The Claude-only interactive-tool pairing (#662) must not swallow a Qoder
+// permission request that follows a notified interactive tool.
+func TestQoderPermissionRequestAfterInteractiveToolStillNotifies(t *testing.T) {
+	cfg := codexTestConfig()
+	cfg.Statuses["plan_ready"] = config.StatusInfo{Title: "Plan Ready"}
+	handler, notify, _ := newTestHandler(t, cfg)
+	handler.product = ProductQoder
+	handler.source = QoderSource{}
+	session := fmt.Sprintf("../../qoder-pair-%d", time.Now().UnixNano())
+	payload := func(event, extra string) string {
+		return fmt.Sprintf(`{"session_id":%q,"cwd":"/TEST-qoder","hook_event_name":%q%s}`, session, event, extra)
+	}
+	if err := handler.HandleHook("PreToolUse", strings.NewReader(payload("PreToolUse", `,"tool_name":"ExitPlanMode"`))); err != nil {
+		t.Fatal(err)
+	}
+	if err := handler.HandleHook("PermissionRequest", strings.NewReader(payload("PermissionRequest", `,"tool_name":"Bash"`))); err != nil {
+		t.Fatal(err)
+	}
+	if len(notify.calls) != 2 || notify.lastCall().status != analyzer.StatusPermissionRequest {
+		t.Fatalf("calls=%d last=%+v, want plan then permission", len(notify.calls), notify.lastCall())
+	}
+}
