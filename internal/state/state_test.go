@@ -795,7 +795,7 @@ func TestManager_IsDuplicateMessage_EmptyLastMessage(t *testing.T) {
 	assert.False(t, isDuplicate, "should not be duplicate when last message is empty")
 }
 
-func TestManager_ShouldSuppressPermissionAfterInteractiveTool(t *testing.T) {
+func TestManager_ConsumeInteractiveToolPermissionPair(t *testing.T) {
 	now := platform.CurrentTimestamp()
 	for _, tc := range []struct {
 		name     string
@@ -820,9 +820,14 @@ func TestManager_ShouldSuppressPermissionAfterInteractiveTool(t *testing.T) {
 				tc.state.SessionID = sessionID
 				require.NoError(t, mgr.Save(tc.state))
 			}
-			got, err := mgr.ShouldSuppressPermissionAfterInteractiveTool(sessionID, tc.cooldown)
+			got, err := mgr.ConsumeInteractiveToolPermissionPair(sessionID, tc.cooldown)
 			require.NoError(t, err)
 			assert.Equal(t, tc.want, got)
+
+			// The pairing is single-use: a second prompt never matches.
+			again, err := mgr.ConsumeInteractiveToolPermissionPair(sessionID, tc.cooldown)
+			require.NoError(t, err)
+			assert.False(t, again, "pairing must be consumed")
 		})
 	}
 }

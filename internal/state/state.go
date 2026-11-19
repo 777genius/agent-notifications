@@ -301,34 +301,35 @@ func (m *Manager) ShouldSuppressQuestionAfterAnyNotification(sessionID string, c
 	return shouldSuppress, nil
 }
 
-// ShouldSuppressPermissionAfterInteractiveTool reports whether a permission
-// prompt is the paired echo of an AskUserQuestion or ExitPlanMode tool that
-// was already notified. Claude fires PreToolUse for these tools and then a
+// ConsumeInteractiveToolPermissionPair reports whether a permission prompt may
+// be the paired echo of an AskUserQuestion or ExitPlanMode tool that was
+// already notified. Claude fires PreToolUse for these tools and then a
 // permission_prompt Notification for the same dialog a few seconds later
-// (#662). It suppresses only when, within cooldownSeconds, such a tool was
+// (#662). A pair is pending when, within cooldownSeconds, such a tool was
 // recorded and a PreToolUse notification was delivered after it.
-func (m *Manager) ShouldSuppressPermissionAfterInteractiveTool(sessionID string, cooldownSeconds int) (bool, error) {
-	if cooldownSeconds <= 0 {
-		return false, nil
-	}
-
+//
+// The pairing is single-use: any recorded interactive tool is cleared, so
+// later permission prompts are never matched against it.
+func (m *Manager) ConsumeInteractiveToolPermissionPair(sessionID string, cooldownSeconds int) (bool, error) {
 	state, err := m.Load(sessionID)
 	if err != nil {
 		return false, err
 	}
-	if state == nil || state.LastTimestamp == 0 || state.LastNotificationTime == 0 {
-		return false, nil
-	}
-	if state.LastInteractiveTool != "AskUserQuestion" && state.LastInteractiveTool != "ExitPlanMode" {
-		return false, nil
-	}
-	if state.LastNotificationEvent != "PreToolUse" || state.LastNotificationTime < state.LastTimestamp {
+	if state == nil || (state.LastInteractiveTool != "AskUserQuestion" && state.LastInteractiveTool != "ExitPlanMode") {
 		return false, nil
 	}
 
 	now := platform.CurrentTimestamp()
 	window := int64(cooldownSeconds)
-	return now-state.LastTimestamp < window && now-state.LastNotificationTime < window, nil
+	paired := cooldownSeconds > 0 && state.LastTimestamp != 0 && state.LastNotificationTime != 0 &&
+		state.LastNotificationEvent == "PreToolUse" && state.LastNotificationTime >= state.LastTimestamp &&
+		now-state.LastTimestamp < window && now-state.LastNotificationTime < window
+
+	state.LastInteractiveTool = ""
+	if err := m.Save(state); err != nil {
+		return false, err
+	}
+	return paired, nil
 }
 
 // normalizeMessage normalizes a message for comparison by:

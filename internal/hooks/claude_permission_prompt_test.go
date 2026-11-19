@@ -68,7 +68,7 @@ func TestClaudeInteractiveToolPermissionPromptPairing(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	permission := HookData{NotificationType: "permission_prompt", Message: "Claude needs your permission to use AskUserQuestion"}
+	permission := HookData{NotificationType: "permission_prompt", Message: "Claude needs your permission"}
 
 	for _, tc := range []struct {
 		name, tool string
@@ -89,6 +89,32 @@ func TestClaudeInteractiveToolPermissionPromptPairing(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("specific permission prompt after interactive tool still notifies", func(t *testing.T) {
+		h, notifier, _ := newTestHandler(t, cfg)
+		sessionID := "test-claude-paired-specific"
+		send(t, h, "PreToolUse", HookData{SessionID: sessionID, ToolName: "AskUserQuestion", CWD: "/test"})
+		send(t, h, "Notification", HookData{SessionID: sessionID, CWD: "/test", NotificationType: "permission_prompt", Message: "Claude needs your permission to use Bash"})
+		if notifier.callCount() != 2 || notifier.lastCall().status != analyzer.StatusPermissionRequest {
+			t.Fatalf("calls=%d last=%v, want a permission notification", notifier.callCount(), notifier.lastCall())
+		}
+	})
+
+	t.Run("pairing is single-use", func(t *testing.T) {
+		h, notifier, _ := newTestHandler(t, cfg)
+		sessionID := "test-claude-paired-once"
+		send(t, h, "PreToolUse", HookData{SessionID: sessionID, ToolName: "AskUserQuestion", CWD: "/test"})
+		p := permission
+		p.SessionID, p.CWD = sessionID, "/test"
+		send(t, h, "Notification", p)
+		if err := h.dedupMgr.ReleaseLock(sessionID, "Notification"); err != nil {
+			t.Fatal(err)
+		}
+		send(t, h, "Notification", p)
+		if notifier.callCount() != 2 || notifier.lastCall().status != analyzer.StatusPermissionRequest {
+			t.Fatalf("calls=%d last=%v, want question then one permission notification", notifier.callCount(), notifier.lastCall())
+		}
+	})
 
 	t.Run("stale interactive tool does not suppress", func(t *testing.T) {
 		h, notifier, _ := newTestHandler(t, cfg)
@@ -125,4 +151,18 @@ func TestClaudeInteractiveToolPermissionPromptPairing(t *testing.T) {
 			t.Fatalf("calls=%d, want one permission notification", notifier.callCount())
 		}
 	})
+}
+
+func TestIsGenericClaudePermissionPrompt(t *testing.T) {
+	for msg, want := range map[string]bool{
+		"":                                  true,
+		"Claude needs your permission":      true,
+		"  claude needs your permission.  ": true,
+		"Claude needs your permission to use Bash":                                          false,
+		"Dangerous rm operation on statically-unresolvable target. Do you want to proceed?": false,
+	} {
+		if got := isGenericClaudePermissionPrompt(msg); got != want {
+			t.Errorf("isGenericClaudePermissionPrompt(%q) = %v, want %v", msg, got, want)
+		}
+	}
 }

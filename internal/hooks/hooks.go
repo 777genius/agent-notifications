@@ -446,21 +446,23 @@ func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 		}
 	}
 
-	// Claude follows an AskUserQuestion/ExitPlanMode PreToolUse with a
+	// Claude follows an AskUserQuestion/ExitPlanMode PreToolUse with a generic
 	// permission_prompt Notification for the same dialog (#662). Since that
 	// Notification is a permission request (#633), the question cooldown above
-	// no longer sees it; drop it here when the tool was just notified. Other
-	// permission prompts keep notifying.
-	if ev.Product == ProductClaude && ev.Kind() == EventNotification && status == analyzer.StatusPermissionRequest {
-		suppress, err := h.stateMgr.ShouldSuppressPermissionAfterInteractiveTool(
-			keys.stateKey,
-			h.cfg.GetSuppressQuestionAfterAnyNotificationSeconds(),
-		)
-		if err != nil {
-			logging.Warn("Failed to check interactive-tool permission pairing: %v", err)
-		} else if suppress {
-			logging.Debug("Permission prompt suppressed: paired with a just-notified interactive tool")
-			return nil
+	// no longer sees it; drop it here when the tool was just notified. A prompt
+	// with specific text (for example "...to use Bash") always notifies.
+	if ev.Product == ProductClaude && status == analyzer.StatusPermissionRequest {
+		if p, ok := ev.Payload.(NotificationPayload); ok {
+			paired, err := h.stateMgr.ConsumeInteractiveToolPermissionPair(
+				keys.stateKey,
+				h.cfg.GetSuppressQuestionAfterAnyNotificationSeconds(),
+			)
+			if err != nil {
+				logging.Warn("Failed to check interactive-tool permission pairing: %v", err)
+			} else if paired && isGenericClaudePermissionPrompt(p.Message) {
+				logging.Debug("Permission prompt suppressed: generic echo of a just-notified interactive tool")
+				return nil
+			}
 		}
 	}
 
