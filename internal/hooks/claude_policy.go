@@ -64,6 +64,7 @@ func (h *Handler) classifyClaudeHook(ev Event, keys eventKeys, bench *benchmark.
 		}
 
 		// Team mode: check if this session is a team lead and suppress if needed
+		teamCompletionClaimed := false
 		if h.cfg.GetTeamMode() == "wait-all" {
 			if teamInfo := h.teamStateMgr.DetectTeamLead(ev.Session.SessionID); teamInfo != nil {
 				logging.Debug("Stop: team lead detected for team %q (members: %d), checking team state",
@@ -87,6 +88,7 @@ func (h *Handler) classifyClaudeHook(ev Event, keys eventKeys, bench *benchmark.
 				}
 
 				// This hook owns the completion; proceed with notification.
+				teamCompletionClaimed = true
 				logging.Debug("Stop: team %q all teammates idle, sending notification", teamInfo.TeamName)
 			}
 		} else if h.cfg.GetTeamMode() == "never" {
@@ -98,6 +100,11 @@ func (h *Handler) classifyClaudeHook(ev Event, keys eventKeys, bench *benchmark.
 		// teamMode "always" or not a team lead: fall through to normal processing
 
 		status, insight = h.enrichClaudeStop(status, p.AssistantMessage, parsedMessages)
+		// The team-done notification belongs to the whole team, so it goes out
+		// whoever started the lead's final turn.
+		if !teamCompletionClaimed && h.skipAgentInitiatedTurn(status, parsedMessages) {
+			return nil, nil
+		}
 		// Note: We don't delete session state here to preserve cooldown info
 		// State files have TTL and will be cleaned up automatically
 		result.cleanup = true
