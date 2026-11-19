@@ -59,6 +59,9 @@ type DesktopConfig struct {
 	ClickToFocus                bool    `json:"clickToFocus"`
 	TerminalClickConsentVersion *int    `json:"terminalClickConsentVersion,omitempty"` // Fresh opt-in for Qoder/Gemini/Cursor
 	ShowSessionLabel            *bool   `json:"showSessionLabel"`
+	TitleTemplate               *string `json:"titleTemplate,omitempty"`  // Optional headline template; see docs/CONFIGURATION.md
+	HeaderTemplate              *string `json:"headerTemplate,omitempty"` // Optional context-line template (macOS subtitle, first body line elsewhere)
+	BodyTemplate                *string `json:"bodyTemplate,omitempty"`   // Optional body template; {header} places the context line
 	TerminalBundleID            string  `json:"terminalBundleId"`
 	ZellijFocus                 string  `json:"zellijFocus,omitempty"`
 }
@@ -118,6 +121,11 @@ type StatusInfo struct {
 	Webhook *StatusChannelConfig `json:"webhook,omitempty"`
 	Title   string               `json:"title"`
 	Sound   string               `json:"sound"`
+
+	// Per-status desktop template overrides; nil inherits notifications.desktop.
+	TitleTemplate  *string `json:"titleTemplate,omitempty"`
+	HeaderTemplate *string `json:"headerTemplate,omitempty"`
+	BodyTemplate   *string `json:"bodyTemplate,omitempty"`
 }
 
 // SuppressFilter defines conditions for suppressing notifications.

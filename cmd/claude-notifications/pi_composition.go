@@ -26,7 +26,8 @@ func resolveInstalledPiConsumer(ctx context.Context, selector string, facts piso
 		Desktop: func(ctx context.Context, request pievent.DesktopRequest) error {
 			return notifier.New(cfg).SendDesktopContext(ctx, request.Status, request.Body, request.SessionID, request.CWD,
 				notifier.WithInstalledRuntime(assets.RuntimeRoot, assets.NativeHelper),
-				notifier.WithHookPresentation(notifier.HookPresentation{SessionName: "Pi", Folder: filepath.Base(request.CWD), Body: request.Body}))
+				notifier.WithHookPresentation(notifier.HookPresentation{SessionName: "Pi", Folder: filepath.Base(request.CWD), Body: request.Body}),
+				notifier.WithTemplateData(notifier.TemplateData{SessionName: "Pi", SessionID: request.SessionID, Folder: filepath.Base(request.CWD), Body: request.Body, Agent: "pi"}))
 		},
 		SendWebhook: func(ctx context.Context, cfg *config.Config, send webhook.SendContext) error {
 			sender := webhook.NewWithContext(ctx, cfg)

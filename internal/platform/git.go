@@ -3,6 +3,7 @@ package platform
 import (
 	"context"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -44,6 +45,47 @@ func GetGitBranchContext(ctx context.Context, cwd string) string {
 		return ""
 	}
 	return value
+}
+
+// GetGitRepoNameContext returns the repository name for cwd: the basename of
+// the main working tree, so linked worktrees and subdirectories report the
+// repository rather than their own folder. Like GetGitBranchContext it is
+// bounded by ctx and fails open with "".
+func GetGitRepoNameContext(ctx context.Context, cwd string) string {
+	if ctx == nil || ctx.Err() != nil || cwd == "" {
+		return ""
+	}
+	// --path-format needs git 2.31+; older git fails and falls back below.
+	if common := gitOutputContext(ctx, cwd, "rev-parse", "--path-format=absolute", "--git-common-dir"); common != "" {
+		return repoNameFromCommonDir(common)
+	}
+	if top := gitOutputContext(ctx, cwd, "rev-parse", "--show-toplevel"); top != "" {
+		return filepath.Base(top)
+	}
+	return ""
+}
+
+// repoNameFromCommonDir maps "<repo>/.git" to "<repo>" and a bare
+// "<repo>.git" to "<repo>".
+func repoNameFromCommonDir(dir string) string {
+	dir = filepath.Clean(dir)
+	base := filepath.Base(dir)
+	if base == ".git" {
+		return filepath.Base(filepath.Dir(dir))
+	}
+	return strings.TrimSuffix(base, ".git")
+}
+
+func gitOutputContext(ctx context.Context, cwd string, args ...string) string {
+	op, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(op, "git", append([]string{"-C", cwd}, args...)...)
+	cmd.WaitDelay = 200 * time.Millisecond
+	output, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(output))
 }
 
 // GetGitMetadata returns commonly used git metadata for the given directory.
