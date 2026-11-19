@@ -4,7 +4,12 @@ package daemon
 
 import (
 	"errors"
+	"net"
+	"path/filepath"
+	"slices"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/777genius/agent-notifications/internal/notification"
 	"github.com/esiqveland/notify"
@@ -155,5 +160,90 @@ func TestStrictNotificationIgnoresReplaceKey(t *testing.T) {
 	}
 	if got := s.replaceID("session-a"); got != 1 {
 		t.Errorf("session-a live id = %d, want 1 (unchanged by strict)", got)
+	}
+}
+
+// gatedNotifier blocks the first send until released, to overlap a second
+// request of the same session with it.
+type gatedNotifier struct {
+	notify.Notifier
+	mu      sync.Mutex
+	sent    []notify.Notification
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (g *gatedNotifier) SendNotification(n notify.Notification) (uint32, error) {
+	g.mu.Lock()
+	g.sent = append(g.sent, n)
+	first := len(g.sent) == 1
+	g.mu.Unlock()
+	if first {
+		close(g.entered)
+		<-g.release
+		return 7, nil
+	}
+	if n.ReplacesID != 0 {
+		return n.ReplacesID, nil
+	}
+	return 8, nil
+}
+
+// Two concurrent first notifications of one session must not both be new:
+// the second waits for the first and replaces it.
+func TestReplaceKeyConcurrentSendsShareOneNotification(t *testing.T) {
+	g := &gatedNotifier{entered: make(chan struct{}), release: make(chan struct{})}
+	s := &Server{notifier: g, focusCtx: make(map[uint32]FocusHints)}
+	ids := make(chan uint32, 2)
+	send := func() {
+		resp, err := s.handleNotification(&NotifyRequest{Title: "t", ReplaceKey: "session-a"}, false)
+		if err != nil {
+			t.Error(err)
+			ids <- 0
+			return
+		}
+		ids <- resp.NotificationID
+	}
+	go send()
+	<-g.entered
+	go send()
+	// Give the second request time to reach the send if it were not held.
+	time.Sleep(100 * time.Millisecond)
+	g.mu.Lock()
+	overlapped := len(g.sent)
+	g.mu.Unlock()
+	close(g.release)
+	first, second := <-ids, <-ids
+	if overlapped != 1 {
+		t.Fatalf("second send started while the first was in flight (%d sends)", overlapped)
+	}
+	if first != 7 || second != 7 || g.sent[1].ReplacesID != 7 {
+		t.Fatalf("ids %d, %d; second ReplacesID %d; want both 7", first, second, g.sent[1].ReplacesID)
+	}
+}
+
+// The ping reply tells a hook that this daemon honours no_focus.
+func TestPingAdvertisesNoFocus(t *testing.T) {
+	socket := filepath.Join(t.TempDir(), "d.sock")
+	listener, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = listener.Close() }()
+	server := &Server{startTime: time.Now()}
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		server.wg.Add(1)
+		server.handleConnection(conn)
+	}()
+	ping, err := (&Client{socketPath: socket}).Ping()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(ping.Capabilities, CapabilityNoFocus) {
+		t.Fatalf("capabilities = %v, want %q", ping.Capabilities, CapabilityNoFocus)
 	}
 }

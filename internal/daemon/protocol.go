@@ -17,7 +17,15 @@ import (
 var (
 	ErrDaemonNotAvailable = errors.New("daemon not available")
 	ErrDaemonNotRunning   = errors.New("daemon not running")
+	// ErrNoFocusUnsupported means the running daemon predates NotifyRequest.NoFocus
+	// and would add a click action anyway. Nothing was sent.
+	ErrNoFocusUnsupported = errors.New("daemon does not support actionless notifications")
 )
+
+// CapabilityNoFocus is advertised in PingResponse.Capabilities by a daemon that
+// honours NotifyRequest.NoFocus and NotifyRequest.ReplaceKey. An older daemon
+// ignores both fields, so a NoFocus request is checked against it first.
+const CapabilityNoFocus = "no_focus"
 
 // Protocol version for compatibility checking
 const ProtocolVersion = "1.0"
@@ -92,6 +100,8 @@ type NotifyResponse struct {
 type PingResponse struct {
 	Version string `json:"version"`
 	Uptime  int64  `json:"uptime"` // Seconds since daemon started
+	// Capabilities lists optional request fields this daemon honours.
+	Capabilities []string `json:"capabilities,omitempty"`
 }
 
 // GetSocketPath returns the Unix socket path for the daemon.

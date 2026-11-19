@@ -440,7 +440,7 @@ On Linux the option uses the freedesktop Notifications `replaces_id`. The backgr
 - Conversation grouping in Notification Center is unchanged - it stays on the session thread (`-threadID`).
 - Notifications with no session id (or `unknown`) always stay unique, so unrelated alerts are never collapsed.
 - Trade-off: a replaced banner disappears from Notification Center, so earlier alerts from that session are no longer visible. Leave it off (the default) if you step away and need to catch up on every alert.
-- Linux: the ids live only in the daemon's memory. After the daemon restarts (it exits after 5 minutes without notifications) or once a session's notification is closed, that session's next notification is a new one. If the daemon cannot be started, notifications are still delivered, without replacement.
+- Linux: the ids live only in the daemon's memory. After the daemon restarts (it exits after 5 minutes without notifications) or once a session's notification is closed, that session's next notification is a new one. If the daemon cannot be started, or an older daemon from before this option worked on Linux is still running, notifications are still delivered, without replacement. With `clickToFocus: true` an older daemon simply stacks them; with `clickToFocus: false` the hook does not use it, so no click action appears. An older daemon exits after 5 minutes without notifications.
 
 ### Sound Options
 

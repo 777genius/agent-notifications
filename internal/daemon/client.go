@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -72,6 +73,16 @@ type NotifyOptions struct {
 // SendNotificationWithOptionsContext is SendNotificationContext with
 // replacement and focus options.
 func (c *Client) SendNotificationWithOptionsContext(ctx context.Context, title, body, appIcon string, hints FocusHints, timeout int, opts NotifyOptions) (*NotifyResponse, error) {
+	if opts.NoFocus {
+		// An older daemon ignores NoFocus and would add a click action.
+		ping, err := c.pingContext(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if ping == nil || !slices.Contains(ping.Capabilities, CapabilityNoFocus) {
+			return nil, ErrNoFocusUnsupported
+		}
+	}
 	req := Request{
 		Type:    MessageTypeNotify,
 		Version: ProtocolVersion,

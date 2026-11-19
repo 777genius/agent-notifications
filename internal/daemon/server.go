@@ -36,6 +36,9 @@ type Server struct {
 	// memory only, so a daemon restart starts every session afresh.
 	replaceIDs   map[string]uint32
 	replaceIDsMu sync.Mutex
+	// replaceLocks serialize lookup, send and record per session, so two
+	// concurrent first notifications of one session cannot both be new.
+	replaceLocks map[string]*sync.Mutex
 
 	// Idle timeout for auto-shutdown
 	idleTimeout  time.Duration
@@ -222,8 +225,9 @@ func (s *Server) handleConnection(conn net.Conn) {
 
 	case MessageTypePing:
 		resp.Ping = &PingResponse{
-			Version: ProtocolVersion,
-			Uptime:  int64(time.Since(s.startTime).Seconds()),
+			Version:      ProtocolVersion,
+			Uptime:       int64(time.Since(s.startTime).Seconds()),
+			Capabilities: []string{CapabilityNoFocus},
 		}
 
 	case MessageTypeStop:
@@ -302,6 +306,9 @@ func (s *Server) handleNotification(req *NotifyRequest, strict bool) (*NotifyRes
 		replaceKey = req.ReplaceKey
 	}
 	if replaceKey != "" {
+		// Not replaceIDsMu: NotificationClosed callbacks must not wait on a send.
+		unlock := s.lockReplaceKey(replaceKey)
+		defer unlock()
 		n.ReplacesID = s.replaceID(replaceKey)
 	}
 
@@ -450,6 +457,22 @@ func (s *Server) listenStrictActions(ready chan<- struct{}) {
 			cancel()
 		}
 	}
+}
+
+// lockReplaceKey holds key's send lock until the returned func is called.
+func (s *Server) lockReplaceKey(key string) func() {
+	s.replaceIDsMu.Lock()
+	if s.replaceLocks == nil {
+		s.replaceLocks = make(map[string]*sync.Mutex)
+	}
+	lock, ok := s.replaceLocks[key]
+	if !ok {
+		lock = &sync.Mutex{}
+		s.replaceLocks[key] = lock
+	}
+	s.replaceIDsMu.Unlock()
+	lock.Lock()
+	return lock.Unlock
 }
 
 // replaceID returns the id of the live notification that key's next

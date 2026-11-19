@@ -28,7 +28,7 @@ func (n *Notifier) sendNativeDesktopContext(ctx context.Context, sound, title, b
 	// keeps each session's live notification id. Without the daemon the
 	// notification is still delivered, as a new one.
 	replaceKey := replacementSessionKey(sessionID, n.cfg.ShouldReplaceNotificationsPerSession())
-	if !focus && (replaceKey == "" || !daemon.StartDaemonOnDemandContext(ctx)) {
+	plain := func() error {
 		if _, ok := ctx.Deadline(); !ok {
 			return errors.New("delivery_deadline_required")
 		}
@@ -51,6 +51,9 @@ func (n *Notifier) sendNativeDesktopContext(ctx context.Context, sound, title, b
 			return errors.New("desktop_handoff_unconfirmed")
 		}
 		return n.playSoundContext(ctx, sound, opts)
+	}
+	if !focus && (replaceKey == "" || !daemon.StartDaemonOnDemandContext(ctx)) {
+		return plain()
 	}
 	if focus && !daemon.StartDaemonOnDemandContext(ctx) {
 		if ctx.Err() != nil {
@@ -75,6 +78,11 @@ func (n *Notifier) sendNativeDesktopContext(ctx context.Context, sound, title, b
 		applyZellijFocusHintsContext(ctx, n.cfg, &hints)
 	}
 	response, err := client.SendNotificationWithOptionsContext(ctx, title, body, icon, hints, 30, daemon.NotifyOptions{ReplaceKey: replaceKey, NoFocus: !focus})
+	if errors.Is(err, daemon.ErrNoFocusUnsupported) {
+		// Checked before any send: an older daemon is running, so deliver
+		// without replacement rather than with an unwanted click action.
+		return plain()
+	}
 	if err != nil {
 		return err
 	}

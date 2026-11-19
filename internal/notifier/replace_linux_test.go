@@ -4,6 +4,7 @@ package notifier
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -125,5 +126,50 @@ func TestLinuxReplaceKeyContext(t *testing.T) {
 	}
 	if port.calls != 0 {
 		t.Fatalf("one-shot delivery also used (%d calls)", port.calls)
+	}
+}
+
+// An older daemon ignores no_focus and would add a click action, so a
+// replace-only request is not sent to it: the hook path falls back to beeep.
+func TestLinuxReplaceKeyOldDaemonHook(t *testing.T) {
+	requests := serveFakeDaemonWithCapabilities(t, nil)
+	cfg := config.DefaultConfig()
+	cfg.Notifications.Desktop.ClickToFocus = false
+	err := sendViaDaemon("title", "body", "", t.TempDir(), cfg, false, "session-a")
+	if !errors.Is(err, daemon.ErrNoFocusUnsupported) {
+		t.Fatalf("err = %v, want ErrNoFocusUnsupported", err)
+	}
+	select {
+	case req := <-requests:
+		t.Fatalf("notification sent to an older daemon: %+v", req.Notify)
+	default:
+	}
+}
+
+// The context path delivers through the one-shot D-Bus call instead.
+func TestLinuxReplaceKeyOldDaemonContext(t *testing.T) {
+	previous := contextPlainLinuxDelivery
+	t.Cleanup(func() { contextPlainLinuxDelivery = previous })
+	port := &contextCapturePort{}
+	contextPlainLinuxDelivery = func(BootClock) notification.DeliveryPort { return port }
+	requests := serveFakeDaemonWithCapabilities(t, nil)
+	withFatalLinuxBeeep(t)
+	enabled := true
+	cfg := config.DefaultConfig()
+	cfg.Notifications.Desktop.ClickToFocus = false
+	cfg.Notifications.Desktop.Sound = false
+	cfg.Notifications.ReplaceNotificationsPerSession = &enabled
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := New(cfg).SendDesktopContext(ctx, analyzer.StatusTaskComplete, "body", "native-session", t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	if port.calls != 1 {
+		t.Fatalf("one-shot delivery calls = %d, want 1", port.calls)
+	}
+	select {
+	case req := <-requests:
+		t.Fatalf("notification sent to an older daemon: %+v", req.Notify)
+	default:
 	}
 }
