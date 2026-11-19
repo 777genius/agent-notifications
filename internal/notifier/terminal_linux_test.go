@@ -89,7 +89,7 @@ func TestSendViaDaemonSwayHints(t *testing.T) {
 
 			cfg := config.DefaultConfig()
 			cfg.Notifications.Desktop.ClickToFocus = true
-			if err := sendViaDaemon("title", "body", "", filepath.Join(t.TempDir(), "proj"), cfg); err != nil {
+			if err := sendViaDaemon("title", "body", "", filepath.Join(t.TempDir(), "proj"), cfg, true, ""); err != nil {
 				t.Fatal(err)
 			}
 

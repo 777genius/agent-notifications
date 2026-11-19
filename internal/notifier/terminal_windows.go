@@ -37,7 +37,7 @@ func EnsureClaudeNotificationsApp() error { return nil }
 // --- Linux daemon helpers: stubs so the notifier package compiles on Windows ---
 
 // sendLinuxNotification returns an error on Windows (the Linux daemon is Linux-only).
-func sendLinuxNotification(title, body, appIcon string, cfg *config.Config, cwd string) error {
+func sendLinuxNotification(title, body, appIcon string, cfg *config.Config, cwd string, focus bool, replaceKey string) error {
 	return fmt.Errorf("Linux notifications not available on Windows")
 }
 

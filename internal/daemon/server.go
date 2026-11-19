@@ -31,6 +31,12 @@ type Server struct {
 	focusCtx   map[uint32]FocusHints
 	focusCtxMu sync.RWMutex
 
+	// Replaceable notifications: session id -> id of that session's live
+	// notification, passed as replaces_id on the session's next one. Kept in
+	// memory only, so a daemon restart starts every session afresh.
+	replaceIDs   map[string]uint32
+	replaceIDsMu sync.Mutex
+
 	// Idle timeout for auto-shutdown
 	idleTimeout  time.Duration
 	lastActivity time.Time
@@ -67,6 +73,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		conn:         conn,
 		startTime:    time.Now(),
 		focusCtx:     make(map[uint32]FocusHints),
+		replaceIDs:   make(map[string]uint32),
 		idleTimeout:  cfg.IdleTimeout,
 		lastActivity: time.Now(),
 		done:         make(chan struct{}),
@@ -286,19 +293,39 @@ func (s *Server) handleNotification(req *NotifyRequest, strict bool) (*NotifyRes
 		},
 	}
 
-	if !strict || strictAllowed {
+	focus := (strict && strictAllowed) || (!strict && !req.NoFocus)
+	if focus {
 		n.Actions = []notify.Action{{Key: "default", Label: "Focus Terminal"}}
+	}
+	replaceKey := ""
+	if !strict {
+		replaceKey = req.ReplaceKey
+	}
+	if replaceKey != "" {
+		n.ReplacesID = s.replaceID(replaceKey)
 	}
 
 	// Send notification
 	id, err := s.notifier.SendNotification(n)
 	if err != nil {
+		if replaceKey != "" {
+			s.forgetReplaceKey(replaceKey)
+		}
 		return nil, fmt.Errorf("failed to send notification: %w", err)
+	}
+	if replaceKey != "" {
+		s.rememberReplaceID(replaceKey, id)
 	}
 
 	// A strict callback owns only its verified snapshot. Legacy focus
 	// paths retain their unchanged hints, without new agent authority.
-	if !strict || strictAllowed {
+	if !focus && n.ReplacesID != 0 {
+		// The replaced notification's click target must not outlive it.
+		s.focusCtxMu.Lock()
+		delete(s.focusCtx, id)
+		s.focusCtxMu.Unlock()
+	}
+	if focus {
 		hints := FocusHints{
 			TerminalName: focusTarget, FolderName: req.FocusFolder,
 			ProjectPath: req.FocusProjectPath, IDEPID: req.FocusIDEPID,
@@ -425,8 +452,48 @@ func (s *Server) listenStrictActions(ready chan<- struct{}) {
 	}
 }
 
+// replaceID returns the id of the live notification that key's next
+// notification replaces, or 0 when there is none.
+func (s *Server) replaceID(key string) uint32 {
+	s.replaceIDsMu.Lock()
+	defer s.replaceIDsMu.Unlock()
+	return s.replaceIDs[key]
+}
+
+// rememberReplaceID records id as key's live notification. Per the
+// freedesktop spec a replacement returns the replaced id, but a server that
+// ignores replaces_id returns a new one; the newest id is the one to replace.
+func (s *Server) rememberReplaceID(key string, id uint32) {
+	s.replaceIDsMu.Lock()
+	defer s.replaceIDsMu.Unlock()
+	if s.replaceIDs == nil {
+		s.replaceIDs = make(map[string]uint32)
+	}
+	s.replaceIDs[key] = id
+}
+
+// forgetReplaceKey makes key's next notification a new one.
+func (s *Server) forgetReplaceKey(key string) {
+	s.replaceIDsMu.Lock()
+	defer s.replaceIDsMu.Unlock()
+	delete(s.replaceIDs, key)
+}
+
+// forgetReplaceID drops every key whose live notification is id. A closed
+// notification cannot be replaced, so the session's next one is new.
+func (s *Server) forgetReplaceID(id uint32) {
+	s.replaceIDsMu.Lock()
+	defer s.replaceIDsMu.Unlock()
+	for key, live := range s.replaceIDs {
+		if live == id {
+			delete(s.replaceIDs, key)
+		}
+	}
+}
+
 // onNotificationClosed is called when a notification is closed
 func (s *Server) onNotificationClosed(sig *notify.NotificationClosedSignal) {
+	s.forgetReplaceID(sig.ID)
 	s.focusCtxMu.Lock()
 	hints, exists := s.focusCtx[sig.ID]
 	if !exists || hints.Strict == nil {

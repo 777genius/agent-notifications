@@ -19,11 +19,16 @@ import (
 
 var contextPlainLinuxDelivery = func(clock BootClock) notification.DeliveryPort { return NewFreedesktopDelivery(clock) }
 
-func (n *Notifier) sendNativeDesktopContext(ctx context.Context, sound, title, body, subtitle, _, cwd, icon string, opts sendOptions) error {
+func (n *Notifier) sendNativeDesktopContext(ctx context.Context, sound, title, body, subtitle, sessionID, cwd, icon string, opts sendOptions) error {
 	if subtitle != "" {
 		body = subtitle + "\n" + body
 	}
-	if !n.cfg.Notifications.Desktop.ClickToFocus || opts.noFocus {
+	focus := n.cfg.Notifications.Desktop.ClickToFocus && !opts.noFocus
+	// Replacing a session's previous notification needs the daemon, which
+	// keeps each session's live notification id. Without the daemon the
+	// notification is still delivered, as a new one.
+	replaceKey := replacementSessionKey(sessionID, n.cfg.ShouldReplaceNotificationsPerSession())
+	if !focus && (replaceKey == "" || !daemon.StartDaemonOnDemandContext(ctx)) {
 		if _, ok := ctx.Deadline(); !ok {
 			return errors.New("delivery_deadline_required")
 		}
@@ -47,7 +52,7 @@ func (n *Notifier) sendNativeDesktopContext(ctx context.Context, sound, title, b
 		}
 		return n.playSoundContext(ctx, sound, opts)
 	}
-	if !daemon.StartDaemonOnDemandContext(ctx) {
+	if focus && !daemon.StartDaemonOnDemandContext(ctx) {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -58,7 +63,7 @@ func (n *Notifier) sendNativeDesktopContext(ctx context.Context, sound, title, b
 		return err
 	}
 	hints := daemon.FocusHints{}
-	if n.cfg.Notifications.Desktop.ClickToFocus && !opts.noFocus {
+	if focus {
 		target := daemon.GetTerminalName()
 		windowID := daemon.GetX11WindowID(target)
 		if session := os.Getenv("XDG_SESSION_TYPE"); session != "" && session != "x11" {
@@ -69,7 +74,7 @@ func (n *Notifier) sendNativeDesktopContext(ctx context.Context, sound, title, b
 		hints.SwaySocket, hints.AncestorPIDs = daemon.GetSwayFocusHints()
 		applyZellijFocusHintsContext(ctx, n.cfg, &hints)
 	}
-	response, err := client.SendNotificationContext(ctx, title, body, icon, hints, 30)
+	response, err := client.SendNotificationWithOptionsContext(ctx, title, body, icon, hints, 30, daemon.NotifyOptions{ReplaceKey: replaceKey, NoFocus: !focus})
 	if err != nil {
 		return err
 	}

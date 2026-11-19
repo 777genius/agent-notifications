@@ -71,6 +71,13 @@ type NotifyRequest struct {
 	Timeout            int                          `json:"timeout"`                         // Notification timeout in seconds
 	Strict             *notification.TerminalTarget `json:"strict,omitempty"`
 	StrictSound        bool                         `json:"strict_sound,omitempty"`
+	// ReplaceKey is the session id of a notification that replaces the same
+	// session's previous one (replaceNotificationsPerSession). Empty keeps the
+	// notification unique. Ignored for strict requests.
+	ReplaceKey string `json:"replace_key,omitempty"`
+	// NoFocus sends the notification without a click action or focus context,
+	// for requests routed through the daemon only to be replaceable.
+	NoFocus bool `json:"no_focus,omitempty"`
 }
 
 // NotifyResponse contains the result of a notification request

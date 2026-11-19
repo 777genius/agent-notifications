@@ -133,8 +133,8 @@ func (c *Config) ShouldRespectDisplaySleep() bool {
 
 // ShouldReplaceNotificationsPerSession returns true if a newer desktop
 // notification from the same session should replace that session's previous
-// banner instead of stacking a new one (default: false). macOS only; other
-// delivery paths always stack.
+// banner instead of stacking a new one (default: false). macOS and Linux;
+// other delivery paths always stack.
 func (c *Config) ShouldReplaceNotificationsPerSession() bool {
 	if c.Notifications.ReplaceNotificationsPerSession == nil {
 		return false // Default: stack, never replace
