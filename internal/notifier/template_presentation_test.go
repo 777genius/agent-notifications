@@ -189,6 +189,24 @@ func TestDesktopTemplatesLengthLimitsAndEmptyTitle(t *testing.T) {
 	}
 }
 
+// The 100-character limit applies to the rendered title and context line,
+// not to placeholder values used in the body.
+func TestDesktopTemplatesKeepFullSessionNameInBody(t *testing.T) {
+	long := fullData
+	long.SessionName = strings.Repeat("session ", 20)
+	mutate := func(c *config.Config) {
+		c.Notifications.Desktop.TitleTemplate = ptr("{sessionName}")
+		c.Notifications.Desktop.BodyTemplate = ptr("{sessionName}")
+	}
+	p, _ := templatedPresentation(t, analyzer.StatusTaskComplete, mutate, WithTemplateData(long))
+	if p.Body != long.SessionName {
+		t.Fatalf("body = %q, want the full session name", p.Body)
+	}
+	if utf8.RuneCountInString(p.Title) > 100 || !strings.HasSuffix(p.Title, "…") {
+		t.Fatalf("title not limited: %q", p.Title)
+	}
+}
+
 // Callers without explicit template data (Pi, direct sends) still get the
 // hook presentation values; "." is never shown as a folder.
 func TestDesktopTemplatesFallBackToHookPresentation(t *testing.T) {

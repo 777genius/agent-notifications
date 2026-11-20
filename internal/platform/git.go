@@ -55,14 +55,37 @@ func GetGitRepoNameContext(ctx context.Context, cwd string) string {
 	if ctx == nil || ctx.Err() != nil || cwd == "" {
 		return ""
 	}
-	// --path-format needs git 2.31+; older git fails and falls back below.
-	if common := gitOutputContext(ctx, cwd, "rev-parse", "--path-format=absolute", "--git-common-dir"); common != "" {
-		return repoNameFromCommonDir(common)
+	// These rev-parse options are all older than git 2.13. git prints each
+	// on its own line; --git-dir and --git-common-dir may be relative to cwd.
+	out := gitOutputContext(ctx, cwd, "rev-parse", "--show-toplevel", "--git-dir", "--git-common-dir")
+	lines := strings.Split(out, "\n")
+	if len(lines) != 3 || lines[0] == "" {
+		return ""
 	}
-	if top := gitOutputContext(ctx, cwd, "rev-parse", "--show-toplevel"); top != "" {
-		return filepath.Base(top)
+	for i := range lines {
+		lines[i] = strings.TrimSpace(lines[i])
 	}
-	return ""
+	top := lines[0]
+	gitDir, commonDir := absUnder(cwd, lines[1]), absUnder(cwd, lines[2])
+	// A linked worktree has its own git dir inside the shared common dir,
+	// which belongs to the main working tree. Otherwise cwd is in the main
+	// working tree, even when its git dir lives elsewhere (--separate-git-dir).
+	if gitDir != commonDir {
+		return repoNameFromCommonDir(commonDir)
+	}
+	return filepath.Base(top)
+}
+
+// absUnder resolves a path printed by git relative to cwd, following symlinks
+// where possible so equal directories compare equal.
+func absUnder(cwd, p string) string {
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(cwd, p)
+	}
+	if resolved, err := filepath.EvalSymlinks(p); err == nil {
+		p = resolved
+	}
+	return filepath.Clean(p)
 }
 
 // repoNameFromCommonDir maps "<repo>/.git" to "<repo>" and a bare

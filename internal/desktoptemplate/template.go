@@ -75,48 +75,19 @@ func References(template, name string) bool {
 // The text before the first placeholder and after the last one is kept, and
 // the text between two placeholders is a separator. An empty placeholder is
 // dropped together with the separator before it, or the separator after it
-// when no earlier placeholder was rendered. Opening brackets directly before a
-// placeholder and closing brackets directly after it wrap that placeholder and
-// are dropped with it, so "{statusTitle} [{sessionName}]" renders just the
-// status title when there is no session name. Values are inserted literally.
-// Unknown placeholders render empty; Validate rejects them before a template
-// reaches Render.
+// when no earlier placeholder was rendered. A matching bracket pair ((), [],
+// {} or <>) around one or more placeholders forms a group that renders like a
+// single placeholder: it keeps both brackets while any placeholder inside it
+// renders, and it is dropped whole, with one adjacent separator, when all of
+// them are empty. So "{statusTitle} [{sessionName}]" renders just the status
+// title when there is no session name, and "[{folder} {branch}]" renders
+// "[project]" outside a git repository. Brackets that do not enclose a
+// placeholder, or have no partner, stay literal. Values are inserted
+// literally. Unknown placeholders render empty; Validate rejects them before
+// a template reaches Render.
 func Render(template string, values map[string]string) string {
-	matches := placeholderPattern.FindAllStringSubmatchIndex(template, -1)
-	if len(matches) == 0 {
-		return template
-	}
-	type slot struct{ open, value, close, sep string }
-	slots := make([]slot, len(matches))
-	prefix := template[:matches[0][0]]
-	suffix := template[matches[len(matches)-1][1]:]
-	for i, m := range matches {
-		slots[i].value = values[template[m[2]:m[3]]]
-		if i == 0 {
-			prefix, slots[i].open = splitTrailing(prefix, openBrackets)
-		} else {
-			between := template[matches[i-1][1]:m[0]]
-			slots[i-1].close, between = splitLeading(between, closeBrackets)
-			slots[i].sep, slots[i].open = splitTrailing(between, openBrackets)
-		}
-	}
-	slots[len(slots)-1].close, suffix = splitLeading(suffix, closeBrackets)
-
-	var out strings.Builder
-	out.WriteString(prefix)
-	rendered := false
-	for _, s := range slots {
-		if s.value == "" {
-			continue
-		}
-		if rendered {
-			out.WriteString(s.sep)
-		}
-		out.WriteString(s.open + s.value + s.close)
-		rendered = true
-	}
-	out.WriteString(suffix)
-	return out.String()
+	out, _ := renderItems(parse(template), values)
+	return out
 }
 
 const (
@@ -124,20 +95,143 @@ const (
 	closeBrackets = ")]}>"
 )
 
-// splitLeading splits s after its leading run of characters from set.
-func splitLeading(s, set string) (run, rest string) {
-	i := 0
-	for i < len(s) && strings.IndexByte(set, s[i]) >= 0 {
-		i++
-	}
-	return s[:i], s[i:]
+// item is literal text, a placeholder, or a bracket group that encloses at
+// least one placeholder.
+type item struct {
+	text        string
+	placeholder string
+	group       *group
 }
 
-// splitTrailing splits s before its trailing run of characters from set.
-func splitTrailing(s, set string) (rest, run string) {
-	i := len(s)
-	for i > 0 && strings.IndexByte(set, s[i-1]) >= 0 {
-		i--
+type group struct {
+	open, close string
+	items       []item
+}
+
+func (it item) slot() bool { return it.placeholder != "" || it.group != nil }
+
+// parse splits template into items, pairing brackets with a stack. A pair is a
+// group only when it encloses a placeholder; otherwise it is literal text.
+func parse(template string) []item {
+	type frame struct {
+		open  byte
+		items []item
+		slots bool
 	}
-	return s[:i], s[i:]
+	stack := []*frame{{}}
+	appendText := func(f *frame, text string) {
+		if n := len(f.items); n > 0 && !f.items[n-1].slot() {
+			f.items[n-1].text += text
+			return
+		}
+		f.items = append(f.items, item{text: text})
+	}
+	// flatten moves an unpaired frame's content into its parent as literal
+	// opening text followed by its items.
+	flatten := func(parent, f *frame, closing string) {
+		appendText(parent, string(f.open))
+		for _, it := range f.items {
+			if it.slot() {
+				parent.items = append(parent.items, it)
+				parent.slots = true
+			} else {
+				appendText(parent, it.text)
+			}
+		}
+		if closing != "" {
+			appendText(parent, closing)
+		}
+	}
+	matches := placeholderPattern.FindAllStringSubmatchIndex(template, -1)
+	pos := 0
+	for i := 0; i <= len(matches); i++ {
+		end := len(template)
+		if i < len(matches) {
+			end = matches[i][0]
+		}
+		for ; pos < end; pos++ {
+			c := template[pos]
+			top := stack[len(stack)-1]
+			switch {
+			case strings.IndexByte(openBrackets, c) >= 0:
+				stack = append(stack, &frame{open: c})
+			case len(stack) > 1 && strings.IndexByte(closeBrackets, c) >= 0 &&
+				strings.IndexByte(openBrackets, top.open) == strings.IndexByte(closeBrackets, c):
+				stack = stack[:len(stack)-1]
+				parent := stack[len(stack)-1]
+				if top.slots {
+					parent.items = append(parent.items, item{group: &group{open: string(top.open), close: string(c), items: top.items}})
+					parent.slots = true
+				} else {
+					flatten(parent, top, string(c))
+				}
+			default:
+				appendText(top, template[pos:pos+1])
+			}
+		}
+		if i < len(matches) {
+			top := stack[len(stack)-1]
+			top.items = append(top.items, item{placeholder: template[matches[i][2]:matches[i][3]]})
+			top.slots = true
+			pos = matches[i][1]
+		}
+	}
+	for len(stack) > 1 {
+		top := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		flatten(stack[len(stack)-1], top, "")
+	}
+	return stack[0].items
+}
+
+// renderItems renders a sequence and reports whether any placeholder in it
+// rendered a value.
+func renderItems(items []item, values map[string]string) (string, bool) {
+	first, last := -1, -1
+	for i, it := range items {
+		if it.slot() {
+			if first < 0 {
+				first = i
+			}
+			last = i
+		}
+	}
+	var out strings.Builder
+	if first < 0 {
+		for _, it := range items {
+			out.WriteString(it.text)
+		}
+		return out.String(), false
+	}
+	for _, it := range items[:first] {
+		out.WriteString(it.text)
+	}
+	rendered := false
+	sep := ""
+	for _, it := range items[first : last+1] {
+		if !it.slot() {
+			sep += it.text
+			continue
+		}
+		value := ""
+		if it.group != nil {
+			if inner, ok := renderItems(it.group.items, values); ok {
+				value = it.group.open + inner + it.group.close
+			}
+		} else {
+			value = values[it.placeholder]
+		}
+		if value != "" {
+			if rendered {
+				out.WriteString(sep)
+			}
+			out.WriteString(value)
+			rendered = true
+		}
+		sep = ""
+	}
+	for _, it := range items[last+1:] {
+		out.WriteString(it.text)
+	}
+	return out.String(), rendered
 }

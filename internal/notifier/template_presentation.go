@@ -76,7 +76,7 @@ func templatePlaceholderValues(status analyzer.Status, statusTitle, legacyMessag
 	return map[string]string{
 		desktoptemplate.StatusTitle: statusTitle,
 		desktoptemplate.Status:      string(status),
-		desktoptemplate.SessionName: shortenTitle(data.SessionName, templateLineLimit),
+		desktoptemplate.SessionName: data.SessionName,
 		desktoptemplate.SessionID:   data.SessionID,
 		desktoptemplate.Folder:      data.Folder,
 		desktoptemplate.Repo:        data.Repo,

@@ -27,6 +27,22 @@ func TestRenderCollapsesEmptyPlaceholders(t *testing.T) {
 		{"", ""},
 		{"{ a } {a} {", "{ a } A {"},
 		{"{a}{b}{c}", "ABC"},
+		// A bracket pair around several placeholders keeps both brackets
+		// while any of them renders, and goes whole when all are empty.
+		{"[{a} {missing}]", "[A]"},
+		{"[{missing} {a}]", "[A]"},
+		{"[{a} {b}]", "[A B]"},
+		{"{a} [{missing} {missing}]", "A"},
+		{"{a} ({b} [{missing}])", "A (B)"},
+		{"{a} ({missing} [{missing}])", "A"},
+		{"{a} ( {missing} )", "A"},
+		// Unpaired or placeholder-free brackets stay literal.
+		{"[{a}", "[A"},
+		{"{a}]", "A]"},
+		{"(x) {a}", "(x) A"},
+		{"[{a})", "[A)"},
+		{"{a} · {missing} · {c}", "A · C"},
+		{"«{a}» — {c}", "«A» — C"},
 	} {
 		if got := Render(tc.template, values); got != tc.want {
 			t.Errorf("Render(%q) = %q, want %q", tc.template, got, tc.want)

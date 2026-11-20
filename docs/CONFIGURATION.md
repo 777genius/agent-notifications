@@ -382,8 +382,10 @@ Rendering rules:
 
 - An empty placeholder is dropped together with one adjacent separator, so
   `{branch} · {folder}` outside a git repository renders just the folder.
-  Brackets around a placeholder go with it: `{statusTitle} [{sessionName}]`
-  renders just the status title when there is no session name.
+  Brackets around placeholders go with them: `{statusTitle} [{sessionName}]`
+  renders just the status title when there is no session name. A bracket
+  pair around several placeholders stays while any of them has a value, so
+  `[{folder} {branch}]` renders `[project]` outside a git repository.
 - The title and the context line are single lines of at most 100 characters,
   and longer text ends in `…`. A title that renders empty falls back to the
   default title.
@@ -393,8 +395,8 @@ Rendering rules:
   stay literal. `{header}` is accepted only in `bodyTemplate`.
 - Templates render `{sessionName}` even when `desktop.showSessionLabel` is
   `false`; that option only affects the default layout.
-- `{repo}` runs one git command, and only when a template for the notified
-  status uses it.
+- `{repo}` and, for Pi, `{branch}` each run one git command, and only when a
+  template for the notified status uses them.
 
 Templates change presentation only, not which notifications are sent. They
 apply to desktop notifications from Claude Code, Codex, Qoder and Pi hooks; the

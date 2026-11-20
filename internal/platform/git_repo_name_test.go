@@ -64,4 +64,20 @@ func TestGetGitRepoNameContext(t *testing.T) {
 	if got := GetGitRepoNameContext(ctx, worktree); got != "my-repo" {
 		t.Fatalf("worktree = %q, want my-repo", got)
 	}
+
+	// A working tree whose git dir is stored elsewhere reports the working
+	// tree's name, not the git dir's.
+	separate := filepath.Join(t.TempDir(), "separate-project")
+	meta := filepath.Join(t.TempDir(), "project-meta")
+	if err := os.MkdirAll(filepath.Join(separate, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := runGitCommand(separate, "init", "--separate-git-dir", meta); err != nil {
+		t.Skipf("git init --separate-git-dir failed: %v", err)
+	}
+	for _, dir := range []string{separate, filepath.Join(separate, "src")} {
+		if got := GetGitRepoNameContext(ctx, dir); got != "separate-project" {
+			t.Fatalf("separate git dir from %s = %q, want separate-project", dir, got)
+		}
+	}
 }
