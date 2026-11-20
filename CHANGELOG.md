@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Configurable desktop notification layout: `notifications.desktop.titleTemplate`, `headerTemplate` and `bodyTemplate`, with per-status overrides under `statuses.<name>`, using placeholders such as `{statusTitle}`, `{repo}`, `{branch}`, `{sessionName}` and `{question}` ([#664](https://github.com/777genius/agent-notifications/issues/664)). Empty placeholders collapse with their separator, unknown placeholders are rejected when the configuration is validated, and without templates notifications are unchanged.
+
 ### Changed
 - Admit official OpenCode releases by range instead of a per-release image hash on every platform: V1 1.18.33 and newer (including the current 1.19.x) and V2 2.0.21 and newer, on Linux, macOS and Windows. Each release resolves onto the reviewed reference release of its generation, so a new official release no longer needs its own table row; on macOS the operating system must also verify the OpenCode publisher, so unsigned or re-signed binaries are refused there (Linux and Windows have no publisher check); other majors and pre-releases are refused on every platform. The runtime clock comparison still fails closed. The new `opencode-range-e2e` workflow checks real delivery on all five platform pairs, including the latest published V1 and V2.
 
