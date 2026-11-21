@@ -30,7 +30,7 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/777genius/agent-notifications.svg)](https://pkg.go.dev/github.com/777genius/agent-notifications)
 [![codecov](https://codecov.io/gh/777genius/agent-notifications/graph/badge.svg?branch=main)](https://codecov.io/gh/777genius/agent-notifications)
 
-Desktop notifications for **Claude, Codex CLI, OpenCode, Gemini CLI, Cursor CLI, Qoder and Pi** on **macOS, Linux and Windows**. Supported architectures and events vary by agent; see the support table and linked guides. Claude, Codex and Pi provide OS-dependent terminal focus where qualified. **Qoder CLI, Gemini CLI and Cursor CLI have a separate guarded, explicit opt-in for the originating terminal window on verified local Linux/X11**; unsupported or unverified origins remain informational-only. This is window focus, not exact desktop-chat navigation, and installed authenticated CLI-to-click E2E remains unqualified. OpenCode, Gemini and Cursor offer an optional OS-default sound cue; Qoder includes five built-in MP3 assets with separate native audio qualification.
+Desktop notifications for **Claude Code, Codex CLI, OpenCode, Gemini CLI, Cursor CLI, Qoder and Pi** on **macOS, Linux and Windows**. Features and platform requirements vary by agent; see [Supported Agents](#supported-agents).
 
 <p align="center">
   <img width="100%" alt="macOS, Windows, Linux (left to right)" src="docs/images/notification-platform-labels.svg" />
@@ -108,30 +108,19 @@ Claude/Codex setup also installs the `agent-notifications` MCP server and `agent
 
 | Agent | Alerts | Sounds | Click-to-focus | Details |
 | --- | --- | --- | --- | --- |
-| **Claude Code** | Completions, reviews, questions, plans, session limits and API errors | Yes | Terminal/editor, OS-dependent | [Notification types](docs/NOTIFICATION_TYPES.md) |
-| **Codex CLI** | Turn completion and tool permissions; experimental question hooks and final-message question/error detection | Yes | Terminal/editor where supported; separately configured Codex desktop chat route | [Setup and limits](docs/CODEX.md) |
-| **OpenCode** | Root-session completion, questions, permissions and errors | Opt-in OS-default cue | No | [Setup and limits](docs/opencode-notifications.md) |
-| **Gemini CLI** | Turn completion and tool permissions | Opt-in OS-default cue | Guarded Linux/X11 window, explicit opt-in; CLI-to-click E2E pending | [Cross-platform setup and limits](docs/gemini-notifications.md) |
-| **Cursor CLI** | Agent loop stopping; fixed informational text | Opt-in OS-default cue | Guarded Linux/X11 window, explicit opt-in; CLI-to-click E2E pending | [Qualified hosts and setup](docs/cursor-notifications.md) |
-| **Qoder** | Completion, question, permission, plan and subagent hooks; StopFailure errors/rate limits since v1.50.0 | Configured; five MP3s bundled, native audible proof pending | Guarded Linux/X11 window, explicit opt-in; no exact-chat focus; CLI-to-click E2E pending | [Native hooks and setup](docs/QODER.md) |
-| **Pi** | Final completed activity, blocking extension UI questions and final API errors | Yes, local TUI | Originating local terminal; native qualification varies by OS | [Common installation, modes, sound and terminal focus](docs/pi-notifications.md) |
+| **Claude Code** | Completions, reviews, questions, plans, session limits and API errors | Configured sounds | Terminal/editor; OS-dependent | [Notification types](docs/NOTIFICATION_TYPES.md) |
+| **Codex CLI** | Turn completion, tool permissions; experimental question hooks and final-text question/error detection | Configured sounds | Terminal/editor where supported; separately configured desktop-chat route | [Setup and limits](docs/CODEX.md) |
+| **OpenCode V1/V2** | Root-session completion, questions, permissions and errors | Opt-in OS-default cue | No | [Setup and limits](docs/opencode-notifications.md) |
+| **Gemini CLI** | Turn ended (not necessarily success), tool permissions | Opt-in OS-default cue | Linux/X11 window, opt-in | [Setup and limits](docs/gemini-notifications.md) |
+| **Cursor CLI** | Agent loop stopped, including aborts/errors; informational text | Opt-in OS-default cue | Linux/X11 window, opt-in | [Qualified hosts and setup](docs/cursor-notifications.md) |
+| **Qoder CLI** | Completion, questions, permissions, plans, opt-in subagent alerts and errors/rate limits | Configured sounds; 5 bundled MP3s | Linux/X11 window, opt-in | [Native hooks and setup](docs/QODER.md) |
+| **Pi** | Final completion/errors; blocking extension UI questions | Configured sounds, local TUI | Local terminal, local TUI | [Setup and modes](docs/pi-notifications.md) |
 
-**[Detailed support matrix](docs/AGENT_SUPPORT_MATRIX.md)** — event coverage, sounds, terminal vs exact-chat navigation, currently unshipped Copilot work, evidence limits and effort estimates.
+**Linux/X11 focus (Qoder, Gemini, Cursor):** Requires explicit opt-in and a verified local terminal; other environments show informational notifications. The shared focus mechanism is tested, but the complete installed, authenticated CLI → notification → click flow is not yet verified. This focuses a window, not an exact desktop chat. [Setup and test coverage](docs/CLICK_TO_FOCUS.md#guarded-local-cli-routing-qoder-gemini-cli-cursor-cli).
 
-For Qoder/Gemini/Cursor, guarded focus requires an active managed installation, a **schema-2 selected config** with `agents.<id>.notifications.desktop.clickToFocus: true` and `terminalClickConsentVersion: 1`, and a verified **local X11 window**. It never follows a guessed title or an old window; a revoked consent or unverified host leaves a normal banner without a focus action. [Enable guarded focus](docs/CLICK_TO_FOCUS.md#guarded-local-cli-routing-qoder-gemini-cli-cursor-cli).
+**Native desktop checks still open:** [Pi on macOS/Windows (#561)](https://github.com/777genius/agent-notifications/issues/561) and [Qoder audible playback (#562)](https://github.com/777genius/agent-notifications/issues/562).
 
-Pi's process/lifecycle acceptance uses 27 cases per OS on Linux, macOS and
-Windows in isolated TEST profiles. Those checks do not establish full native
-macOS/Windows desktop acceptance; remaining coverage is tracked in
-[#561](https://github.com/777genius/agent-notifications/issues/561).
-
-OpenCode, Gemini and Cursor's optional OS-default cue (`systemSound`) is independent of navigation. OpenCode has no click-to-focus route; Gemini/Cursor require separate explicit Linux/X11 terminal-click consent.
-
-OpenCode V1 and V2 use one installed plugin. The installer does not restrict agent CLI versions. See [OpenCode setup, release reports and delivery limits](docs/opencode-notifications.md) for qualification of specific versions and platforms.
-
-Gemini CLI versions are not restricted by the installer. See [the Gemini guide](docs/gemini-notifications.md) for platform evidence and limits. A completed Gemini turn does not necessarily mean task success or a final answer. Gemini alerts and OpenCode webhooks use generic text; OpenCode desktop alerts may include native session titles and current question text. Gemini's built-in notifications can cause duplicate desktop alerts; choose one desktop source or use Agent Notifications for webhooks only.
-
-For OpenCode on stock Windows V1, the original event age is not always independently verifiable. A delayed completion may notify once and recur after the 24-hour claim lifetime; filters, provenance, deduplication and limits still apply. One-shot `opencode run` delivery at host shutdown is best effort; use a persistent host for sustained delivery.
+[Detailed support matrix](docs/AGENT_SUPPORT_MATRIX.md) · [Terminal compatibility](docs/CLICK_TO_FOCUS.md)
 
 ## Settings
 
