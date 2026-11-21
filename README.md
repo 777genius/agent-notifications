@@ -108,15 +108,15 @@ Claude/Codex setup also installs the `agent-notifications` MCP server and `agent
 
 | Agent | Alerts | Sounds | Click-to-focus | Details |
 | --- | --- | --- | --- | --- |
-| **Claude Code** | Completions, reviews, questions, plans, session limits and API errors | Configured sounds | Terminal/editor; OS-dependent | [Notification types](docs/NOTIFICATION_TYPES.md) |
-| **Codex CLI** | Turn completion, tool permissions; experimental question hooks and final-text question/error detection | Configured sounds | Terminal/editor where supported; separately configured desktop-chat route | [Setup and limits](docs/CODEX.md) |
+| **Claude Code** | Completions, reviews, questions, plans, session limits and API errors | Configurable sounds | Terminal/editor; OS-dependent | [Notification types](docs/NOTIFICATION_TYPES.md) |
+| **Codex CLI** | Turn completion, tool permissions; experimental question hooks and final-text question/error detection | Configurable sounds | Terminal/editor where supported; separately configured desktop-chat route | [Setup and limits](docs/CODEX.md) |
 | **OpenCode V1/V2** | Root-session completion, questions, permissions and errors | Opt-in OS-default cue | No | [Setup and limits](docs/opencode-notifications.md) |
 | **Gemini CLI** | Turn ended (not necessarily success), tool permissions | Opt-in OS-default cue | Linux/X11 window, opt-in | [Setup and limits](docs/gemini-notifications.md) |
 | **Cursor CLI** | Agent loop stopped, including aborts/errors; informational text | Opt-in OS-default cue | Linux/X11 window, opt-in | [Qualified hosts and setup](docs/cursor-notifications.md) |
-| **Qoder CLI** | Completion, questions, permissions, plans, opt-in subagent alerts and errors/rate limits | Configured sounds; 5 bundled MP3s | Linux/X11 window, opt-in | [Native hooks and setup](docs/QODER.md) |
-| **Pi** | Final completion/errors; blocking extension UI questions | Configured sounds, local TUI | Local terminal, local TUI | [Setup and modes](docs/pi-notifications.md) |
+| **Qoder CLI** | Completion, questions, permissions, plans, opt-in subagent alerts and errors/rate limits | Configurable sounds; 5 bundled MP3s | Linux/X11 window, opt-in | [Native hooks and setup](docs/QODER.md) |
+| **Pi** | Final completion/API errors; blocking extension UI questions | Configurable sounds, local TUI | Local terminal, local TUI | [Setup and modes](docs/pi-notifications.md) |
 
-**Linux/X11 focus (Qoder, Gemini, Cursor):** Requires explicit opt-in and a verified local terminal; other environments show informational notifications. The shared focus mechanism is tested, but the complete installed, authenticated CLI → notification → click flow is not yet verified. This focuses a window, not an exact desktop chat. [Setup and test coverage](docs/CLICK_TO_FOCUS.md#guarded-local-cli-routing-qoder-gemini-cli-cursor-cli).
+**Linux/X11 focus (Qoder, Gemini, Cursor):** Requires explicit opt-in and a verified local terminal window; unsupported or unverified origins receive notifications without a focus action. The shared focus mechanism is tested, but the complete installed, authenticated CLI → notification → click flow is not yet verified. This focuses a window, not an exact desktop chat. [Setup and test coverage](docs/CLICK_TO_FOCUS.md#guarded-local-cli-routing-qoder-gemini-cli-cursor-cli).
 
 **Native desktop checks still open:** [Pi on macOS/Windows (#561)](https://github.com/777genius/agent-notifications/issues/561) and [Qoder audible playback (#562)](https://github.com/777genius/agent-notifications/issues/562).
 
