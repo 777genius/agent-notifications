@@ -452,14 +452,14 @@ func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 	// no longer sees it; drop it here when the tool was just notified. A prompt
 	// with specific text (for example "...to use Bash") always notifies.
 	if ev.Product == ProductClaude && status == analyzer.StatusPermissionRequest {
-		if p, ok := ev.Payload.(NotificationPayload); ok {
+		if p, ok := ev.Payload.(NotificationPayload); ok && isGenericClaudePermissionPrompt(p.Message) {
 			paired, err := h.stateMgr.ConsumeInteractiveToolPermissionPair(
 				keys.stateKey,
 				h.cfg.GetSuppressQuestionAfterAnyNotificationSeconds(),
 			)
 			if err != nil {
 				logging.Warn("Failed to check interactive-tool permission pairing: %v", err)
-			} else if paired && isGenericClaudePermissionPrompt(p.Message) {
+			} else if paired {
 				logging.Debug("Permission prompt suppressed: generic echo of a just-notified interactive tool")
 				return nil
 			}
