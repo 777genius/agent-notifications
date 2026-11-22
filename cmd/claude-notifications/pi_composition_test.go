@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/777genius/agent-notifications/internal/analyzer"
 	"github.com/777genius/agent-notifications/internal/config"
@@ -49,5 +50,15 @@ func TestPiTemplateDataFillsGitFactsOnlyWhenReferenced(t *testing.T) {
 	data = piTemplateData(ctx, cfg, request)
 	if data.Repo != "pi-repo" || data.Branch != "pi-branch" {
 		t.Fatalf("git facts = repo %q branch %q, want pi-repo and pi-branch", data.Repo, data.Branch)
+	}
+
+	// A Pi event may reach desktop after native work consumed most of the
+	// single admitted deadline. Optional Git data must yield to the webhook.
+	cfg.Notifications.Webhook.Enabled = true
+	shortCtx, cancel := context.WithTimeout(ctx, 9*time.Second)
+	defer cancel()
+	data = piTemplateData(shortCtx, cfg, request)
+	if data.Repo != "" || data.Branch != "" {
+		t.Fatalf("optional metadata consumed webhook reserve: %+v", data)
 	}
 }
