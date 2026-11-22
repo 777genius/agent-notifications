@@ -202,5 +202,70 @@ class ClassifierRunnerPolicy(unittest.TestCase):
 
 
 
+
+
+class HeavyNativeDraftTierPolicy(unittest.TestCase):
+    """Run source-accurate workflow admission checks before any native jobs."""
+
+    def test_native_draft_deferred_until_ready_without_losing_manual_or_schedule(self):
+        import re
+
+        root = Path(__file__).resolve().parents[1] / '.github' / 'workflows'
+        workflows = {
+            'pi-installed-linux.yml': ('linux',),
+            'pi-installed-macos.yml': ('macos',),
+            'pi-installed-windows.yml': ('build-process',),
+            'strict-terminal-native-linux.yml': ('strict-terminal',),
+            'pi-native-contracts.yml': ('native',),
+            'opencode-range-e2e.yml': ('range',),
+            'opencode-v226-source-e2e.yml': (
+                'actual-source', 'windows-x64-official-image', 'darwin-arm64-image'),
+        }
+        simple = "if: github.event_name != 'pull_request' || github.event.pull_request.draft != true"
+        fork = ("if: github.event_name != 'pull_request' || "
+                "(github.event.pull_request.head.repo.full_name == github.repository && "
+                "github.event.pull_request.draft != true)")
+        for filename, jobs in workflows.items():
+            with self.subTest(workflow=filename):
+                source = (root / filename).read_text()
+                header, separator, job_source = source.partition('\njobs:\n')
+                self.assertTrue(separator, filename + ': missing job declaration')
+                self.assertIn('types: [opened, synchronize, reopened, ready_for_review]', header)
+                self.assertIn('  workflow_dispatch:', header)
+                if filename == 'opencode-range-e2e.yml':
+                    self.assertIn('  schedule:', header)
+                if filename in ('pi-installed-linux.yml', 'pi-installed-macos.yml'):
+                    self.assertIn('  workflow_call:', header)
+                blocks = dict(re.findall(
+                    r'(?ms)^  ([a-z][\w-]+):\n(.*?)(?=^  [a-z][\w-]+:\s*$|\Z)',
+                    job_source,
+                ))
+                for job in jobs:
+                    self.assertIn(job, blocks, filename + ': lost E2E job')
+                    expected = fork if filename.startswith('opencode-') else simple
+                    self.assertIn('    ' + expected + '\n', blocks[job])
+                    self.assertIn('    timeout-minutes:', blocks[job])
+                    self.assertNotIn('continue-on-error: true', blocks[job])
+        win = (root / 'pi-installed-windows.yml').read_text()
+        self.assertIn(
+            "if: github.event_name == 'workflow_dispatch' && github.repository == "
+            "'777genius/agent-notifications' && github.actor == '777genius'",
+            win,
+        )
+        # Evaluate both expressions' actual event acceptance independently:
+        for kind in ('simple', 'fork'):
+            for event in ('pull_request', 'workflow_dispatch', 'schedule', 'workflow_call'):
+                for draft in (False, True):
+                    for same_repo in (False, True):
+                        accepted = event != 'pull_request' or (
+                            not draft and (same_repo or kind == 'simple'))
+                        if event != 'pull_request':
+                            self.assertTrue(accepted, (kind, event, draft))
+                        elif draft or (kind == 'fork' and not same_repo):
+                            self.assertFalse(accepted, (kind, event, draft, same_repo))
+                        else:
+                            self.assertTrue(accepted, (kind, event, draft, same_repo))
+
+
 if __name__ == '__main__':
     unittest.main()
