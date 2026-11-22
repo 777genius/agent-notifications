@@ -4,7 +4,9 @@ package notifier
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net"
 	"path/filepath"
 	"testing"
 	"time"
@@ -171,5 +173,103 @@ func TestLinuxReplaceKeyOldDaemonContext(t *testing.T) {
 	case req := <-requests:
 		t.Fatalf("notification sent to an older daemon: %+v", req.Notify)
 	default:
+	}
+}
+
+ 
+// The fake daemon passes startup readiness, then fails the capability probe
+// or the Notify response. Only the former is safe to retry through plain D-Bus.
+func serveDaemonWithInjectedFailure(t *testing.T, failOnPing bool) <-chan daemon.Request {
+	t.Helper()
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	listener, err := net.Listen("unix", daemon.GetSocketPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	notifications := make(chan daemon.Request, 2)
+	go func() {
+		pings := 0
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			var req daemon.Request
+			if json.NewDecoder(conn).Decode(&req) == nil {
+				if req.Type == daemon.MessageTypePing {
+					pings++
+					if pings == 2 && failOnPing {
+						_ = conn.Close()
+						continue
+					}
+					_ = json.NewEncoder(conn).Encode(daemon.Response{
+						Type: req.Type,
+						Ping: &daemon.PingResponse{Capabilities: []string{daemon.CapabilityNoFocus}},
+					})
+				} else {
+					notifications <- req
+					// The daemon might have delivered a notification before
+					// its response connection failed.
+				}
+			}
+			_ = conn.Close()
+		}
+	}()
+	return notifications
+}
+
+func TestLinuxReplaceKeyPingFailureFallsBackBeforeNotify(t *testing.T) {
+	previous := contextPlainLinuxDelivery
+	t.Cleanup(func() { contextPlainLinuxDelivery = previous })
+	port := &contextCapturePort{}
+	contextPlainLinuxDelivery = func(BootClock) notification.DeliveryPort { return port }
+	notifications := serveDaemonWithInjectedFailure(t, true)
+	enabled := true
+	cfg := config.DefaultConfig()
+	cfg.Notifications.Desktop.ClickToFocus = false
+	cfg.Notifications.Desktop.Sound = false
+	cfg.Notifications.ReplaceNotificationsPerSession = &enabled
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := New(cfg).SendDesktopContext(ctx, analyzer.StatusTaskComplete, "body", "session-a", t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	if port.calls != 1 {
+		t.Fatalf("plain fallback calls = %d, want 1", port.calls)
+	}
+	select {
+	case req := <-notifications:
+		t.Fatalf("Notify submitted before ping failure: %+v", req)
+	default:
+	}
+}
+
+func TestLinuxReplaceKeyNotifyResponseFailureNeverRetries(t *testing.T) {
+	previous := contextPlainLinuxDelivery
+	t.Cleanup(func() { contextPlainLinuxDelivery = previous })
+	port := &contextCapturePort{}
+	contextPlainLinuxDelivery = func(BootClock) notification.DeliveryPort { return port }
+	notifications := serveDaemonWithInjectedFailure(t, false)
+	enabled := true
+	cfg := config.DefaultConfig()
+	cfg.Notifications.Desktop.ClickToFocus = false
+	cfg.Notifications.Desktop.Sound = false
+	cfg.Notifications.ReplaceNotificationsPerSession = &enabled
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := New(cfg).SendDesktopContext(ctx, analyzer.StatusTaskComplete, "body", "session-a", t.TempDir()); err == nil {
+		t.Fatal("expected uncertain Notify response failure")
+	}
+	if port.calls != 0 {
+		t.Fatalf("uncertain Notify response must not trigger plain duplicate (%d calls)", port.calls)
+	}
+	select {
+	case req := <-notifications:
+		if req.Notify == nil {
+			t.Fatalf("no Notify submitted: %+v", req)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Notify request never reached fake daemon")
 	}
 }
