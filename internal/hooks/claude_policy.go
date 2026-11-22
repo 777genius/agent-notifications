@@ -232,5 +232,5 @@ func (h *Handler) handleTeammateIdle(ev Event, p TeammateIdlePayload) error {
 // opens; prompts for other tools name the tool or the operation.
 func isGenericClaudePermissionPrompt(message string) bool {
 	m := strings.ToLower(strings.TrimRight(strings.TrimSpace(message), ".!"))
-	return m == "" || m == "claude needs your permission"
+	return m == "claude needs your permission"
 }
