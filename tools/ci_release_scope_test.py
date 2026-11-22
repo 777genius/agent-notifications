@@ -179,5 +179,28 @@ class ScopeFixture(unittest.TestCase):
         self.assertEqual(self.mode(payload=event(base, head)), 'mode=release-tools')
 
 
+
+class ClassifierRunnerPolicy(unittest.TestCase):
+    def test_read_only_scope_jobs_do_not_queue_on_native_pool(self):
+        # These jobs classify Git/Actions evidence, not native E2E. Maintain
+        # the exact final native matrices on their original qualified runners.
+        import re
+
+        root = Path(__file__).resolve().parents[1]
+        for name in ('ci-ubuntu.yml', 'ci-macos.yml', 'ci-windows.yml',
+                     'install-recovery-e2e.yml'):
+            with self.subTest(workflow=name):
+                workflow = (root / '.github/workflows' / name).read_text()
+                scope = re.search(
+                    r'(?ms)^  scope:\n(.*?)(?=^  [a-z][\w-]+:\s*$|\Z)',
+                    workflow,
+                )
+                self.assertIsNotNone(scope)
+                self.assertIn('    runs-on: ubuntu-latest\n', scope.group(1))
+                self.assertNotIn('vars.CI_LINUX_RUNNER', scope.group(1))
+                self.assertIn('CI_NATIVE_WORKFLOW:', scope.group(1))
+
+
+
 if __name__ == '__main__':
     unittest.main()
