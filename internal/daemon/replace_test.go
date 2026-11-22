@@ -3,6 +3,7 @@
 package daemon
 
 import (
+	"context"
 	"errors"
 	"net"
 	"path/filepath"
@@ -94,6 +95,41 @@ func TestReplaceKeyForgottenWhenNotificationCloses(t *testing.T) {
 	}
 	if third != other || n.sent[3].ReplacesID != other {
 		t.Errorf("closing session-a's notification must not affect session-b: got %d replacing %d, want %d", third, n.sent[3].ReplacesID, other)
+	}
+}
+
+// The desktop notification service may restart independently of our daemon.
+// Cached IDs from its previous owner must not overwrite another session.
+func TestReplacementIDsInvalidateWhenServiceOwnerChanges(t *testing.T) {
+	n := &replaceNotifier{}
+	s := newReplaceServer(n)
+	owner := ":1.100"
+	s.replaceOwnerLookup = func(context.Context) (string, bool) { return owner, true }
+	a1 := sendReplaceable(t, s, "session-a", false)
+	owner = ":1.101"
+	n.next = 0 // restarted service reuses its counter
+	b1 := sendReplaceable(t, s, "session-b", false)
+	a2 := sendReplaceable(t, s, "session-a", false)
+	if a1 != 1 || b1 != 1 || a2 != 2 {
+		t.Fatalf("IDs after restart = %d, %d, %d; want 1, 1, 2", a1, b1, a2)
+	}
+	if n.sent[1].ReplacesID != 0 || n.sent[2].ReplacesID != 0 {
+		t.Fatalf("stale replacement IDs after restart: b=%d a=%d", n.sent[1].ReplacesID, n.sent[2].ReplacesID)
+	}
+}
+
+func TestReplacementIDsInvalidateWhenServiceOwnerUnknown(t *testing.T) {
+	n := &replaceNotifier{}
+	s := newReplaceServer(n)
+	owner := ":1.100"
+	valid := true
+	s.replaceOwnerLookup = func(context.Context) (string, bool) { return owner, valid }
+	sendReplaceable(t, s, "session-a", false)
+	valid = false
+	sendReplaceable(t, s, "session-a", false)
+	sendReplaceable(t, s, "session-a", false)
+	if n.sent[1].ReplacesID != 0 || n.sent[2].ReplacesID != 0 {
+		t.Fatalf("unverified owner reused IDs: %d, %d", n.sent[1].ReplacesID, n.sent[2].ReplacesID)
 	}
 }
 
