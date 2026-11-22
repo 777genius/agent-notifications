@@ -25,7 +25,7 @@ Same-repository PRs, pushes and dispatches use the configured runner.
 
 ## Coverage and historical migration evidence
 
-Routing covers ordinary Ubuntu/macOS CI, landing checks/deployment, selector
+Routing covers ordinary Ubuntu/macOS CI, landing verification, selector
 bootstrap, install recovery (including root/APFS tests),
 qualification candidate builds, signing smoke, and future release version/build,
 notifier, publishing and artifact E2E jobs. Existing commands, permissions,
@@ -52,6 +52,11 @@ These contracts require new qualification before changing provider:
   `CI_MACOS_15_RUNNER` do not apply to this job. It requires `pwsh`; the routed
   Linux runner failed before the SDK checks because PowerShell was unavailable
   ([run 45067168388](https://github.com/777genius/agent-notifications/actions/runs/45067168388/job/137345805680)).
+- `landing.yml`: `deploy` uses stock `ubuntu-24.04` because
+  `actions/jekyll-build-pages` pulls a Docker image during job preparation.
+  `CI_LINUX_RUNNER` does not apply to this job; `verify` keeps ordinary routing.
+  The routed Linux runner failed before checkout because Docker was unavailable
+  ([run 45079148244](https://github.com/777genius/agent-notifications/actions/runs/45079148244/job/137389364516)).
 - `ci-ubuntu.yml`: `cursor-mkdir-diagnostic` and `cursor-installed-e` retain
   `ubuntu-24.04`. Their frozen carrier, pinned checkout and qualified physical
   machine/runner evidence are outside ordinary CI routing.
