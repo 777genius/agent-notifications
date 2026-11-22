@@ -15,6 +15,7 @@ import (
 type SessionState struct {
 	SessionID               string `json:"session_id"`
 	LastInteractiveTool     string `json:"last_interactive_tool"`
+	LastInteractiveNotifiedTime int64 `json:"last_interactive_notified_ts,omitempty"`
 	LastTimestamp           int64  `json:"last_ts"`
 	LastTaskCompleteTime    int64  `json:"last_task_complete_ts,omitempty"`
 	LastNotificationTime    int64  `json:"last_notification_ts,omitempty"`
@@ -112,6 +113,7 @@ func (m *Manager) UpdateInteractiveTool(sessionID, toolName, cwd string) error {
 
 	state.LastInteractiveTool = toolName
 	state.LastTimestamp = platform.CurrentTimestamp()
+	state.LastInteractiveNotifiedTime = 0
 	state.CWD = cwd
 
 	return m.Save(state)
@@ -229,6 +231,11 @@ func (m *Manager) UpdateLastNotificationWithIdentity(sessionID string, status an
 	state.LastNotificationBody = body
 	state.LastNotificationTurn = turn
 	state.LastNotificationEvent = event
+	// Preserve the pairing evidence even if a different permission or
+	// notification is delivered before Claude's generic permission echo.
+	if event == "PreToolUse" && (state.LastInteractiveTool == "AskUserQuestion" || state.LastInteractiveTool == "ExitPlanMode") && state.LastTimestamp != 0 && state.LastNotificationTime >= state.LastTimestamp {
+		state.LastInteractiveNotifiedTime = state.LastNotificationTime
+	}
 	if stopHash != "" {
 		state.LastStopPayloadHash = stopHash
 		state.LastStopPayloadTime = state.LastNotificationTime
@@ -321,11 +328,12 @@ func (m *Manager) ConsumeInteractiveToolPermissionPair(sessionID string, cooldow
 
 	now := platform.CurrentTimestamp()
 	window := int64(cooldownSeconds)
-	paired := cooldownSeconds > 0 && state.LastTimestamp != 0 && state.LastNotificationTime != 0 &&
-		state.LastNotificationEvent == "PreToolUse" && state.LastNotificationTime >= state.LastTimestamp &&
-		now-state.LastTimestamp < window && now-state.LastNotificationTime < window
+	paired := cooldownSeconds > 0 && state.LastTimestamp != 0 && state.LastInteractiveNotifiedTime >= state.LastTimestamp &&
+		state.LastInteractiveNotifiedTime != 0 && now >= state.LastTimestamp && now >= state.LastInteractiveNotifiedTime &&
+		now-state.LastTimestamp < window && now-state.LastInteractiveNotifiedTime < window
 
 	state.LastInteractiveTool = ""
+	state.LastInteractiveNotifiedTime = 0
 	if err := m.Save(state); err != nil {
 		return false, err
 	}
