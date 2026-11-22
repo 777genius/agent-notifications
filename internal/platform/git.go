@@ -2,6 +2,7 @@ package platform
 
 import (
 	"context"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -35,6 +36,7 @@ func GetGitBranchContext(ctx context.Context, cwd string) string {
 	op, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(op, "git", "-C", cwd, "rev-parse", "--abbrev-ref", "HEAD")
+	cmd.Env = gitDiscoveryEnv()
 	cmd.WaitDelay = 200 * time.Millisecond
 	output, err := cmd.Output()
 	if err != nil {
@@ -103,12 +105,29 @@ func gitOutputContext(ctx context.Context, cwd string, args ...string) string {
 	op, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(op, "git", append([]string{"-C", cwd}, args...)...)
+	cmd.Env = gitDiscoveryEnv()
 	cmd.WaitDelay = 200 * time.Millisecond
 	output, err := cmd.Output()
 	if err != nil {
 		return ""
 	}
 	return strings.TrimSpace(string(output))
+}
+
+// gitDiscoveryEnv keeps repository selection tied to cwd, not the shell that
+// launched the hook (which might be inside a different Git repository).
+func gitDiscoveryEnv() []string {
+	env := os.Environ()
+	filtered := make([]string, 0, len(env))
+	for _, entry := range env {
+		key, _, _ := strings.Cut(entry, "=")
+		switch key {
+		case "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR":
+			continue
+		}
+		filtered = append(filtered, entry)
+	}
+	return filtered
 }
 
 // GetGitMetadata returns commonly used git metadata for the given directory.
