@@ -173,6 +173,6 @@ func TestGetGitMetadata_RealRepo(t *testing.T) {
 func runGitCommand(dir string, args ...string) error {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	cmd.Env = append(gitDiscoveryEnv(), "GIT_TERMINAL_PROMPT=0")
 	return cmd.Run()
 }
