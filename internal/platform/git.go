@@ -122,7 +122,7 @@ func gitDiscoveryEnv() []string {
 	for _, entry := range env {
 		key, _, _ := strings.Cut(entry, "=")
 		switch key {
-		case "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR":
+		case "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES":
 			continue
 		}
 		filtered = append(filtered, entry)
