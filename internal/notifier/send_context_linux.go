@@ -78,9 +78,12 @@ func (n *Notifier) sendNativeDesktopContext(ctx context.Context, sound, title, b
 		applyZellijFocusHintsContext(ctx, n.cfg, &hints)
 	}
 	response, err := client.SendNotificationWithOptionsContext(ctx, title, body, icon, hints, 30, daemon.NotifyOptions{ReplaceKey: replaceKey, NoFocus: !focus})
-	if errors.Is(err, daemon.ErrNoFocusUnsupported) {
-		// Checked before any send: an older daemon is running, so deliver
-		// without replacement rather than with an unwanted click action.
+	if errors.Is(err, daemon.ErrNoFocusUnsupported) || errors.Is(err, daemon.ErrNoFocusProbeFailed) {
+		// Both failures occur before Notify submission; after submission
+		// a fallback could duplicate an already-delivered banner.
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		return plain()
 	}
 	if err != nil {
