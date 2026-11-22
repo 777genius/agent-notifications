@@ -51,31 +51,56 @@ jobs:
           python -B scripts/test_acquire_pi_native.py -v
           python -B scripts/test_pi_native_fixture.py -v
       - name: Acquire exact official standalone
-        shell: pwsh
+        shell: python
         env:
           PI_PLATFORM: ${{ matrix.platform }}
           PI_ARCH: ${{ matrix.arch }}
           PYTHON_EXECUTABLE: ${{ steps.native_python.outputs.path }}
         run: |
-          $ErrorActionPreference = 'Stop'
-          $python = $env:PYTHON_EXECUTABLE
-          if (!$python -or !(Test-Path -LiteralPath $python -PathType Leaf)) { throw 'Setup Python physical executable unavailable' }
-          $root = Join-Path $env:RUNNER_TEMP 'TEST-pi-native-contracts'
-          $report = Join-Path $env:RUNNER_TEMP 'pi-native-contracts/acquisition.json'
-          & $python -B scripts/acquire-pi-native.py --download --platform $env:PI_PLATFORM --arch $env:PI_ARCH --output $root --report $report
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          if (!(Test-Path -LiteralPath $report -PathType Leaf)) { throw 'Pi acquisition receipt missing' }
+          import os
+          from pathlib import Path
+          import subprocess
+
+          python = os.environ.get('PYTHON_EXECUTABLE', '')
+          if not python or not Path(python).is_file():
+              raise SystemExit('Setup Python physical executable unavailable')
+          temp = Path(os.environ['RUNNER_TEMP'])
+          root = temp / 'TEST-pi-native-contracts'
+          report = temp / 'pi-native-contracts/acquisition.json'
+          result = subprocess.run([
+              python, '-B', 'scripts/acquire-pi-native.py',
+              '--download',
+              '--platform', os.environ['PI_PLATFORM'],
+              '--arch', os.environ['PI_ARCH'],
+              '--output', str(root),
+              '--report', str(report),
+          ])
+          if result.returncode:
+              raise SystemExit(result.returncode if result.returncode > 0 else 128 - result.returncode)
+          if not report.is_file():
+              raise SystemExit('Pi acquisition receipt missing')
       - name: Real Pi loader provider and lifecycle events
-        shell: pwsh
+        shell: python
         env:
           PYTHON_EXECUTABLE: ${{ steps.native_python.outputs.path }}
         run: |
-          $ErrorActionPreference = 'Stop'
-          $evidence = Join-Path $env:RUNNER_TEMP 'pi-native-contracts'
-          $pin = Get-Content -LiteralPath (Join-Path $evidence 'acquisition.json') -Raw | ConvertFrom-Json
-          & $env:PYTHON_EXECUTABLE -B scripts/pi-native-contracts.py --pi-executable $pin.executable --report (Join-Path $evidence 'events.json')
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          if (!(Test-Path -LiteralPath (Join-Path $evidence 'events.json') -PathType Leaf)) { throw 'Pi event receipt missing' }
+          import json
+          import os
+          from pathlib import Path
+          import subprocess
+
+          evidence = Path(os.environ['RUNNER_TEMP']) / 'pi-native-contracts'
+          pin = json.loads((evidence / 'acquisition.json').read_text(encoding='utf-8'))
+          report = evidence / 'events.json'
+          result = subprocess.run([
+              os.environ['PYTHON_EXECUTABLE'], '-B', 'scripts/pi-native-contracts.py',
+              '--pi-executable', pin['executable'],
+              '--report', str(report),
+          ])
+          if result.returncode:
+              raise SystemExit(result.returncode if result.returncode > 0 else 128 - result.returncode)
+          if not report.is_file():
+              raise SystemExit('Pi event receipt missing')
       - name: Build narrow native Windows ConPTY fixture
         if: matrix.platform == 'windows'
         shell: pwsh
@@ -90,18 +115,29 @@ jobs:
           cmd.exe /d /s /c $cmd
           if ($LASTEXITCODE -ne 0) { throw 'Native ConPTY fixture compile failed' }
       - name: Actual TUI prompt and reply on native PTY or ConPTY
-        shell: pwsh
+        shell: python
         env:
           PYTHON_EXECUTABLE: ${{ steps.native_python.outputs.path }}
         run: |
-          $ErrorActionPreference = 'Stop'
-          $evidence = Join-Path $env:RUNNER_TEMP 'pi-native-contracts'
-          $pin = Get-Content -LiteralPath (Join-Path $evidence 'acquisition.json') -Raw | ConvertFrom-Json
-          $tuiArgs = @('--pi-executable', $pin.executable, '--report', (Join-Path $evidence 'tui.json'))
-          if ($IsWindows) { $tuiArgs += @('--pty-bridge', (Join-Path $env:RUNNER_TEMP 'TEST-pi-conpty.exe')) }
-          & $env:PYTHON_EXECUTABLE -B scripts/pi-native-tui.py @tuiArgs
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          if (!(Test-Path -LiteralPath (Join-Path $evidence 'tui.json') -PathType Leaf)) { throw 'Pi TUI receipt missing' }
+          import json
+          import os
+          from pathlib import Path
+          import subprocess
+
+          temp = Path(os.environ['RUNNER_TEMP'])
+          evidence = temp / 'pi-native-contracts'
+          pin = json.loads((evidence / 'acquisition.json').read_text(encoding='utf-8'))
+          report = evidence / 'tui.json'
+          args = ['--pi-executable', pin['executable'], '--report', str(report)]
+          if os.name == 'nt':
+              args += ['--pty-bridge', str(temp / 'TEST-pi-conpty.exe')]
+          result = subprocess.run([
+              os.environ['PYTHON_EXECUTABLE'], '-B', 'scripts/pi-native-tui.py', *args,
+          ])
+          if result.returncode:
+              raise SystemExit(result.returncode if result.returncode > 0 else 128 - result.returncode)
+          if not report.is_file():
+              raise SystemExit('Pi TUI receipt missing')
       - name: Preserve bounded contract evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
