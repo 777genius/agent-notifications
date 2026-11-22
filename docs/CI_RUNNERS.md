@@ -25,8 +25,8 @@ Same-repository PRs, pushes and dispatches use the configured runner.
 
 ## Coverage and historical migration evidence
 
-Routing covers ordinary Ubuntu/macOS CI, landing checks/deployment, Claude SDK
-blackbox E2E, selector bootstrap, install recovery (including root/APFS tests),
+Routing covers ordinary Ubuntu/macOS CI, landing checks/deployment, selector
+bootstrap, install recovery (including root/APFS tests),
 qualification candidate builds, signing smoke, and future release version/build,
 notifier, publishing and artifact E2E jobs. Existing commands, permissions,
 certificate/keychain handling, matrix coverage and release custody are retained.
@@ -38,7 +38,8 @@ The isolated runner canary in
 passed all four Ubuntu ARM 22.04/24.04 and Namespace macOS 15/26 cells. Ubuntu
 reported the expected OS/architecture and PowerShell 7.6.5; macOS 15/26 provided
 PowerShell 7.6.0/7.6.6. x64 Ubicloud and Namespace had earlier pilot evidence.
-No extra PowerShell installation or test-step changes are needed for SDK jobs.
+These historical canary results apply to the tested images; the current Claude
+SDK runner exception is listed below.
 Provider/OS evidence is distinct from application E2E or signing evidence; the
 first routed application runs must still pass their existing checks.
 
@@ -46,6 +47,11 @@ first routed application runs must still pass their existing checks.
 
 These contracts require new qualification before changing provider:
 
+- `claude-sdk-e2e.yml`: `sdk-blackbox` uses its explicit `matrix.runner` labels:
+  `ubuntu-24.04`, `macos-15` and `windows-2025`. `CI_LINUX_RUNNER` and
+  `CI_MACOS_15_RUNNER` do not apply to this job. It requires `pwsh`; the routed
+  Linux runner failed before the SDK checks because PowerShell was unavailable
+  ([run 45067168388](https://github.com/777genius/agent-notifications/actions/runs/45067168388/job/137345805680)).
 - `ci-ubuntu.yml`: `cursor-mkdir-diagnostic` and `cursor-installed-e` retain
   `ubuntu-24.04`. Their frozen carrier, pinned checkout and qualified physical
   machine/runner evidence are outside ordinary CI routing.
