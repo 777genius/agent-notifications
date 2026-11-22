@@ -804,14 +804,14 @@ func TestManager_ConsumeInteractiveToolPermissionPair(t *testing.T) {
 		want     bool
 	}{
 		{"no state", nil, 7, false},
-		{"question notified", &SessionState{LastInteractiveTool: "AskUserQuestion", LastTimestamp: now, LastInteractiveNotifiedTime: now, LastNotificationTime: now, LastNotificationEvent: "PreToolUse"}, 7, true},
-		{"plan notified", &SessionState{LastInteractiveTool: "ExitPlanMode", LastTimestamp: now - 6, LastInteractiveNotifiedTime: now - 6, LastNotificationTime: now - 6, LastNotificationEvent: "PreToolUse"}, 7, true},
-		{"cooldown disabled", &SessionState{LastInteractiveTool: "AskUserQuestion", LastTimestamp: now, LastInteractiveNotifiedTime: now, LastNotificationTime: now, LastNotificationEvent: "PreToolUse"}, 0, false},
-		{"tool outside window", &SessionState{LastInteractiveTool: "AskUserQuestion", LastTimestamp: now - 7, LastInteractiveNotifiedTime: now - 7, LastNotificationTime: now - 7, LastNotificationEvent: "PreToolUse"}, 7, false},
+		{"question notified", &SessionState{LastInteractiveTool: "AskUserQuestion", LastTimestamp: now, PairNotifiedTime: now, LastNotificationTime: now, LastNotificationEvent: "PreToolUse"}, 7, true},
+		{"plan notified", &SessionState{LastInteractiveTool: "ExitPlanMode", LastTimestamp: now - 6, PairNotifiedTime: now - 6, LastNotificationTime: now - 6, LastNotificationEvent: "PreToolUse"}, 7, true},
+		{"cooldown disabled", &SessionState{LastInteractiveTool: "AskUserQuestion", LastTimestamp: now, PairNotifiedTime: now, LastNotificationTime: now, LastNotificationEvent: "PreToolUse"}, 0, false},
+		{"tool outside window", &SessionState{LastInteractiveTool: "AskUserQuestion", LastTimestamp: now - 7, PairNotifiedTime: now - 7, LastNotificationTime: now - 7, LastNotificationEvent: "PreToolUse"}, 7, false},
 		{"tool not notified", &SessionState{LastInteractiveTool: "AskUserQuestion", LastTimestamp: now}, 7, false},
-		{"notification before tool", &SessionState{LastInteractiveTool: "AskUserQuestion", LastTimestamp: now, LastInteractiveNotifiedTime: now - 1, LastNotificationTime: now - 1, LastNotificationEvent: "PreToolUse"}, 7, false},
-		{"unrelated notification cannot invalidate a delivered pair", &SessionState{LastInteractiveTool: "AskUserQuestion", LastTimestamp: now - 3, LastInteractiveNotifiedTime: now - 3, LastNotificationTime: now - 2, LastNotificationEvent: "Notification"}, 7, true},
-		{"other tool", &SessionState{LastInteractiveTool: "Bash", LastTimestamp: now, LastInteractiveNotifiedTime: now, LastNotificationTime: now, LastNotificationEvent: "PreToolUse"}, 7, false},
+		{"notification before tool", &SessionState{LastInteractiveTool: "AskUserQuestion", LastTimestamp: now, PairNotifiedTime: now - 1, LastNotificationTime: now - 1, LastNotificationEvent: "PreToolUse"}, 7, false},
+		{"unrelated notification cannot invalidate a delivered pair", &SessionState{LastInteractiveTool: "AskUserQuestion", LastTimestamp: now - 3, PairNotifiedTime: now - 3, LastNotificationTime: now - 2, LastNotificationEvent: "Notification"}, 7, true},
+		{"other tool", &SessionState{LastInteractiveTool: "Bash", LastTimestamp: now, PairNotifiedTime: now, LastNotificationTime: now, LastNotificationEvent: "PreToolUse"}, 7, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mgr := newTestManager(t)
