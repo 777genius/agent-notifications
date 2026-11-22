@@ -46,11 +46,27 @@ func resolveInstalledPiConsumer(ctx context.Context, selector string, facts piso
 func piTemplateData(ctx context.Context, cfg *config.Config, request pievent.DesktopRequest) notifier.TemplateData {
 	data := notifier.TemplateData{SessionName: "Pi", SessionID: request.SessionID, Folder: filepath.Base(request.CWD), Body: request.Body, Agent: "pi"}
 	templates := cfg.DesktopTemplatesFor(string(request.Status))
+	if !templates.References(desktoptemplate.Branch) && !templates.References(desktoptemplate.Repo) {
+		return data
+	}
+	if ctx == nil || ctx.Err() != nil {
+		return data
+	}
+	// Desktop is admitted before webhook under one 25s Pi deadline. Optional
+	// metadata must not exhaust the webhook's existing 10s HTTP allowance.
+	const gitBudget = 200 * time.Millisecond
+	if cfg.IsStatusWebhookEnabled(string(request.Status)) {
+		if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) <= 10*time.Second+gitBudget {
+			return data
+		}
+	}
+	gitCtx, cancel := context.WithTimeout(ctx, gitBudget)
+	defer cancel()
 	if templates.References(desktoptemplate.Branch) {
-		data.Branch = platform.GetGitBranchContext(ctx, request.CWD)
+		data.Branch = platform.GetGitBranchContext(gitCtx, request.CWD)
 	}
 	if templates.References(desktoptemplate.Repo) {
-		data.Repo = platform.GetGitRepoNameContext(ctx, request.CWD)
+		data.Repo = platform.GetGitRepoNameContext(gitCtx, request.CWD)
 	}
 	return data
 }
