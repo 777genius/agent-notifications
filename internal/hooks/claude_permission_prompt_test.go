@@ -100,6 +100,16 @@ func TestClaudeInteractiveToolPermissionPromptPairing(t *testing.T) {
 		}
 	})
 
+	t.Run("empty permission prompt after interactive tool still notifies", func(t *testing.T) {
+		h, notifier, _ := newTestHandler(t, cfg)
+		sessionID := "test-claude-paired-empty"
+		send(t, h, "PreToolUse", HookData{SessionID: sessionID, ToolName: "AskUserQuestion", CWD: "/test"})
+		send(t, h, "Notification", HookData{SessionID: sessionID, CWD: "/test", NotificationType: "permission_prompt"})
+		if notifier.callCount() != 2 || notifier.lastCall().status != analyzer.StatusPermissionRequest {
+			t.Fatalf("calls=%d last=%v, want the empty permission request delivered", notifier.callCount(), notifier.lastCall())
+		}
+	})
+
 	t.Run("pairing is single-use", func(t *testing.T) {
 		h, notifier, _ := newTestHandler(t, cfg)
 		sessionID := "test-claude-paired-once"
@@ -155,7 +165,7 @@ func TestClaudeInteractiveToolPermissionPromptPairing(t *testing.T) {
 
 func TestIsGenericClaudePermissionPrompt(t *testing.T) {
 	for msg, want := range map[string]bool{
-		"":                                  true,
+		"":                                  false,
 		"Claude needs your permission":      true,
 		"  claude needs your permission.  ": true,
 		"Claude needs your permission to use Bash":                                          false,
