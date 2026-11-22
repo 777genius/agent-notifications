@@ -55,8 +55,11 @@ func piTemplateData(ctx context.Context, cfg *config.Config, request pievent.Des
 	// Desktop is admitted before webhook under one 25s Pi deadline. Optional
 	// metadata must not exhaust the webhook's existing 10s HTTP allowance.
 	const gitBudget = 200 * time.Millisecond
+	// Each Git helper can need another 200ms to drain an inherited pipe
+	// after cancellation. Reserve both cleanup windows before webhook time.
+	const gitCleanupReserve = 2 * 200 * time.Millisecond
 	if cfg.IsStatusWebhookEnabled(string(request.Status)) {
-		if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) <= 10*time.Second+gitBudget {
+		if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) <= 10*time.Second+gitBudget+gitCleanupReserve {
 			return data
 		}
 	}
