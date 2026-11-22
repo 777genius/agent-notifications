@@ -25,6 +25,10 @@ import (
 // before submitting any notification. Other failures remain uncertain.
 var ErrStrictUnsupported = errors.New("strict notification unsupported")
 
+// ErrNoFocusProbeFailed means no Notify request was submitted because the
+// no-focus capability check failed; a plain fallback cannot duplicate it.
+var ErrNoFocusProbeFailed = errors.New("no-focus capability probe failed")
+
 // Client communicates with the daemon via Unix socket
 type Client struct {
 	socketPath string
@@ -77,7 +81,7 @@ func (c *Client) SendNotificationWithOptionsContext(ctx context.Context, title, 
 		// An older daemon ignores NoFocus and would add a click action.
 		ping, err := c.pingContext(ctx)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("%w: %w", ErrNoFocusProbeFailed, err)
 		}
 		if ping == nil || !slices.Contains(ping.Capabilities, CapabilityNoFocus) {
 			return nil, ErrNoFocusUnsupported
