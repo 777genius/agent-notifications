@@ -353,7 +353,7 @@ func TurnOrigin(messages []Message) (kind string, known bool) {
 		// Collect the batch: user inputs back to the previous assistant
 		// record or tool result. Other record types are skipped.
 		kind = ""
-		human, compactSummary := false, false
+		human, compactSummary, nonSummary := false, false, false
 		for ; i >= 0; i-- {
 			msg := messages[i]
 			if msg.Type == "assistant" || isToolResult(msg) {
@@ -364,6 +364,8 @@ func TurnOrigin(messages []Message) (kind string, known bool) {
 			}
 			if msg.IsCompactSummary {
 				compactSummary = true
+			} else {
+				nonSummary = true
 			}
 			if msg.Origin != nil && msg.Origin.Kind != "" {
 				if msg.Origin.Kind == OriginKindHuman {
@@ -378,7 +380,7 @@ func TurnOrigin(messages []Message) (kind string, known bool) {
 			return OriginKindHuman, true
 		}
 		midTurn := i >= 0 && isToolResult(messages[i])
-		if !midTurn && (kind != "" || !compactSummary) {
+		if !midTurn && (kind != "" || nonSummary || !compactSummary) {
 			return kind, true
 		}
 		// The batch continues an earlier turn; inspect the batch before it.
