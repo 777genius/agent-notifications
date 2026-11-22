@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/777genius/agent-notifications/internal/config"
@@ -46,7 +47,18 @@ func TestTemplateDataRepoOnlyWhenReferenced(t *testing.T) {
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := exec.Command("git", "-C", root, "init").Run(); err != nil {
+	cmd := exec.Command("git", "-C", root, "init")
+	// Isolate the child process without modifying the test runner's Git state.
+	for _, entry := range os.Environ() {
+		key, _, _ := strings.Cut(entry, "=")
+		switch key {
+		case "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES":
+			continue
+		}
+		cmd.Env = append(cmd.Env, entry)
+	}
+	cmd.Env = append(cmd.Env, "GIT_TERMINAL_PROMPT=0")
+	if err := cmd.Run(); err != nil {
 		t.Skipf("git init failed: %v", err)
 	}
 	without := templateTestHandler(true, "{branch}")
