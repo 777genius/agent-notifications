@@ -42,7 +42,7 @@ concurrency:
 jobs:
   actual-source:
     # Do not execute code from untrusted forks.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.draft != true)
     runs-on: ubuntu-22.04
     timeout-minutes: 15
     steps:
@@ -207,7 +207,7 @@ jobs:
     name: windows-x64-official-image-observation
     # Normal Windows CI may skip native jobs on OpenCode-only changes.
     # This checks genuine official bytes but never authorizes notifications.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.draft != true)
     runs-on: windows-2022
     timeout-minutes: 20
     steps:
@@ -338,7 +338,7 @@ jobs:
   darwin-arm64-image:
     name: darwin-arm64-native (${{ matrix.os }})
     # Image/Bun discovery first; installed delivery and clock-skew refusal are observed below.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.draft != true)
     strategy:
       fail-fast: false
       matrix:

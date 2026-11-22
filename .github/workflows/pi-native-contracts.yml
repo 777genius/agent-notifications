@@ -2,6 +2,7 @@ name: Pi actual native process contracts
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
 
 permissions:
@@ -13,6 +14,7 @@ concurrency:
 
 jobs:
   native:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft != true
     name: Pi 1.4 native events / ${{ matrix.platform }}
     runs-on: ${{ matrix.platform == 'linux' && (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || vars.CI_LINUX_RUNNER || 'ubuntu-24.04') || matrix.platform == 'darwin' && (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'macos-15' || vars.CI_MACOS_15_RUNNER || 'macos-15') || 'windows-2025' }}
     timeout-minutes: 12
