@@ -81,3 +81,32 @@ func TestGetGitRepoNameContext(t *testing.T) {
 		}
 	}
 }
+
+func TestGitMetadataContextIgnoresInheritedRepoSelection(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	wrong := filepath.Join(t.TempDir(), "wrong-repo")
+	wanted := filepath.Join(t.TempDir(), "wanted-repo")
+	for _, root := range []string{wrong, wanted} {
+		if err := os.MkdirAll(root, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := runGitCommand(root, "init"); err != nil {
+			t.Skipf("git init failed: %v", err)
+		}
+	}
+	if err := runGitCommand(wanted, "branch", "-m", "wanted-branch"); err != nil {
+		t.Skipf("git branch rename failed: %v", err)
+	}
+	t.Setenv("GIT_DIR", filepath.Join(wrong, ".git"))
+	t.Setenv("GIT_WORK_TREE", wrong)
+	t.Setenv("GIT_COMMON_DIR", filepath.Join(wrong, ".git"))
+	ctx := context.Background()
+	if got := GetGitRepoNameContext(ctx, wanted); got != "wanted-repo" {
+		t.Fatalf("repo name = %q, want wanted-repo", got)
+	}
+	if got := GetGitBranchContext(ctx, wanted); got != "wanted-branch" {
+		t.Fatalf("branch = %q, want wanted-branch", got)
+	}
+}
