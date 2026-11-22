@@ -96,6 +96,9 @@ func TestGitMetadataContextIgnoresInheritedRepoSelection(t *testing.T) {
 			t.Skipf("git init failed: %v", err)
 		}
 	}
+	if err := runGitCommand(wanted, "-c", "user.email=test@test.com", "-c", "user.name=Test", "commit", "--allow-empty", "-m", "initial"); err != nil {
+		t.Skipf("git fixture commit failed: %v", err)
+	}
 	if err := runGitCommand(wanted, "branch", "-m", "wanted-branch"); err != nil {
 		t.Skipf("git branch rename failed: %v", err)
 	}
