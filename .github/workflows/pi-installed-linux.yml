@@ -2,6 +2,7 @@ name: Pi installed Linux product
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - '.github/workflows/pi-installed-linux.yml'
       - 'scripts/pi-*'
@@ -32,6 +33,7 @@ concurrency:
 
 jobs:
   linux:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft != true
     name: Actual installed Pi / Linux
     # The mixed Pi/Cursor case requires Cursor's existing qualified Azure
     # kernel/ext4 ancestry, just like ci-ubuntu.yml's cursor-physical job.
