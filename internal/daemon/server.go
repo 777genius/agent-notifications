@@ -39,6 +39,12 @@ type Server struct {
 	// replaceLocks serialize lookup, send and record per session, so two
 	// concurrent first notifications of one session cannot both be new.
 	replaceLocks map[string]*sync.Mutex
+	// Notification IDs belong to one D-Bus service owner, not to the daemon.
+	// Serializing replaceable sends prevents concurrent sessions from
+	// restoring stale IDs across a service restart.
+	replaceSendMu sync.Mutex
+	replaceOwner string
+	replaceOwnerLookup func(context.Context) (string, bool)
 
 	// Idle timeout for auto-shutdown
 	idleTimeout  time.Duration
@@ -92,6 +98,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		return nil, fmt.Errorf("failed to create notifier: %w", err)
 	}
 	s.notifier = notifier
+	s.replaceOwnerLookup = s.notificationServiceOwner
 
 	return s, nil
 }
@@ -306,9 +313,12 @@ func (s *Server) handleNotification(req *NotifyRequest, strict bool) (*NotifyRes
 		replaceKey = req.ReplaceKey
 	}
 	if replaceKey != "" {
-		// Not replaceIDsMu: NotificationClosed callbacks must not wait on a send.
+		// Keep owner validation, send and cache update together across sessions.
+		s.replaceSendMu.Lock()
+		defer s.replaceSendMu.Unlock()
 		unlock := s.lockReplaceKey(replaceKey)
 		defer unlock()
+		s.refreshReplaceOwner()
 		n.ReplacesID = s.replaceID(replaceKey)
 	}
 
@@ -473,6 +483,35 @@ func (s *Server) lockReplaceKey(key string) func() {
 	s.replaceIDsMu.Unlock()
 	lock.Lock()
 	return lock.Unlock
+}
+
+// refreshReplaceOwner drops all old IDs when the unique D-Bus owner changes
+// or cannot be established. Fail safe with a new banner, never overwrite a
+// different session's notification after a desktop service restart.
+func (s *Server) refreshReplaceOwner() {
+	if s.replaceOwnerLookup == nil { // Only test servers omit a real D-Bus connection.
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	owner, ok := s.replaceOwnerLookup(ctx)
+	if !ok || len(owner) < 2 || owner[0] != ':' {
+		owner = ""
+	}
+	s.replaceIDsMu.Lock()
+	changed := owner == "" || owner != s.replaceOwner
+	if changed {
+		clear(s.replaceIDs)
+	}
+	s.replaceOwner = owner
+	s.replaceIDsMu.Unlock()
+	if changed {
+		// Reused IDs from a restarted notification service must not inherit
+		// old click-to-focus targets either.
+		s.focusCtxMu.Lock()
+		clear(s.focusCtx)
+		s.focusCtxMu.Unlock()
+	}
 }
 
 // replaceID returns the id of the live notification that key's next
