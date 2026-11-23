@@ -109,10 +109,18 @@ func claudePermissionRecentTool(session SessionContext) string {
 		if json.Unmarshal(content, &blocks) != nil {
 			return ""
 		}
+		// Incomplete correlation records can hide an additional prompt or a
+		// result. Never silently skip missing IDs and then claim uniqueness.
+		for _, item := range blocks {
+			if (item.Type == "tool_use" && item.ID == "") ||
+				(item.Type == "tool_result" && item.ToolUseID == "") {
+				return ""
+			}
+		}
 		// Walk newest to oldest, so a later tool_result suppresses its
 		// earlier tool_use even when both occur in one model turn.
 		for _, item := range blocks {
-			if item.Type == "tool_result" && item.ToolUseID != "" {
+			if item.Type == "tool_result" {
 				completed[item.ToolUseID] = true
 				delete(pending, item.ToolUseID)
 			}
