@@ -110,6 +110,25 @@ func TestClaudePermissionRecentToolRequiresUniqueFreshUnresolvedRecord(t *testin
 			t.Fatalf("ignored the other in-flight tool: %q", name)
 		}
 	})
+	for _, malformed := range []struct{ kind, brokenType, idKey string }{
+		{"tool use without id", "tool_use", "id"},
+		{"tool result without tool_use_id", "tool_result", "tool_use_id"},
+	} {
+		t.Run(malformed.kind+" cannot hide pending work", func(t *testing.T) {
+			broken := map[string]any{"type": malformed.brokenType, "name": "Edit"}
+			if malformed.brokenType == "tool_result" {
+				broken["content"] = "tool result"
+			}
+			s := writeClaudePermissionFixture(t, "test-idless",
+				claudeToolRecord("test-idless", "call-valid", "Bash", now),
+				map[string]any{"type": "assistant", "sessionId": "test-idless",
+					"timestamp": now.Format(time.RFC3339Nano), "message": map[string]any{
+						"role": "assistant", "content": []any{broken}}})
+			if name := claudePermissionRecentTool(s); name != "" {
+				t.Fatalf("missing correlation ID leaked guessed tool: %q", name)
+			}
+		})
+	}
 	t.Run("stale unresolved plus fresh call is ambiguous", func(t *testing.T) {
 		s := writeClaudePermissionFixture(t, "test-stale-parallel",
 			claudeToolRecord("test-stale-parallel", "call-old", "Bash", now.Add(-50*time.Second)),
