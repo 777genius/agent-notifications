@@ -171,6 +171,7 @@ func getGitOutput(cwd string, args ...string) string {
 	}
 
 	cmd := exec.Command("git", append([]string{"-C", cwd}, args...)...)
+	cmd.Env = gitDiscoveryEnv()
 	output, err := cmd.Output()
 	if err != nil {
 		return ""
