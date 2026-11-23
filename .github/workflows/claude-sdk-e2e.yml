@@ -28,7 +28,8 @@ jobs:
   sdk-blackbox:
     if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}
     name: Claude SDK ${{ matrix.os }}
-    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && matrix.runner || matrix.runner == 'ubuntu-24.04' && (vars.CI_LINUX_RUNNER || 'ubuntu-24.04') || matrix.runner }}
+    # All platforms require pwsh, which the native Linux CI image does not provide.
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
