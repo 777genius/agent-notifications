@@ -52,9 +52,10 @@ func inspectInitializedForEnable(ctx context.Context, o Options, s installruntim
 	parseErr := decoder.Decode(&owner)
 	if parseErr == nil {
 		parseErr = decoder.Decode(&struct{}{})
-		if parseErr == io.EOF {
+		switch parseErr {
+		case io.EOF:
 			parseErr = nil
-		} else if parseErr == nil {
+		case nil:
 			parseErr = fmt.Errorf("unexpected extra ownership data")
 		}
 	}
