@@ -3,11 +3,12 @@
 package setup
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/777genius/agent-notifications/internal/installruntime"
 )
 
-func inspectInitializedForEnable(_ Options, _ installruntime.PolicySnapshot) error {
+func inspectInitializedForEnable(_ context.Context, _ Options, _ installruntime.PolicySnapshot) error {
 	return fail("unsupported_platform", fmt.Errorf("private setup state is unavailable"))
 }
