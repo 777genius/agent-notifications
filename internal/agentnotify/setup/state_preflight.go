@@ -100,6 +100,13 @@ func inspectProvisionContinuation(o Options, s installruntime.PolicySnapshot, ow
 	// Only a fully staged journal may progress under Apply's exclusive locks,
 	// identity checks and namespace comparison. No journal.Open/Initialize in
 	// the read-only path (they might create files).
+	for _, name := range []string{"journal", "native-spool"} {
+		info, err := os.Lstat(filepath.Join(stage, name))
+		if err != nil || !info.IsDir() {
+			return fail("initialization_recovery_required",
+				fmt.Errorf("interrupted setup directories are missing or unsafe; preserve private state"))
+		}
+	}
 	for _, name := range []string{
 		"journal/namespace", "journal/journal.json", "journal/lock",
 		"native-spool/.spool.lock",
