@@ -59,6 +59,11 @@ func claudePermissionRecentTool(session SessionContext) string {
 		}
 		tail = tail[cut+1:]
 	}
+	// The last record may still be being written. An incomplete tail must
+	// never make an older tool appear to be the only pending operation.
+	if len(tail) == 0 || tail[len(tail)-1] != '\n' {
+		return ""
+	}
 	// A concurrent append would invalidate the snapshot. Keep the original
 	// host message rather than guessing from unstable evidence.
 	if after, err := file.Stat(); err != nil || after.Size() != before.Size() {
