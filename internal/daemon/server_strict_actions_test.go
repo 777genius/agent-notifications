@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/777genius/agent-notifications/internal/notification"
+	"github.com/esiqveland/notify"
 	"github.com/godbus/dbus/v5"
 )
 
@@ -358,4 +359,48 @@ func TestLegacyFocusConsumptionIsAtomicAndDoesNotTakeStrictReplacement(t *testin
 	if s.takeStrictAction(strictTestSignal(1)) != replacement.Strict {
 		t.Fatal("strict replacement was lost after the legacy callback")
 	}
+}
+
+func TestStrictCloseDoesNotExpireReusedReplacementID(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		n := &replaceNotifier{}
+		s := newReplaceServer(n)
+		owner := ":1.42"
+		s.replaceOwnerLookup = func(context.Context) (string, bool) { return owner, true }
+		s.refreshReplaceOwner()
+		s.focusCtx[1] = strictTestHints(1)
+		s.onNotificationClosed(&notify.NotificationClosedSignal{ID: 1, Reason: notify.ReasonDismissedByUser})
+
+		// A restarted service recycles the closed strict notification's ID
+		// for a new session before the old two-second grace period expires.
+		owner = ":1.43"
+		id := sendReplaceable(t, s, "new-session", false)
+		if id != 1 || n.sent[0].ReplacesID != 0 {
+			t.Fatalf("new owner must create a new banner with recycled ID 1: id=%d replaces=%d", id, n.sent[0].ReplacesID)
+		}
+		time.Sleep(2 * time.Second)
+		synctest.Wait()
+
+		hints, exists := s.focusCtx[id]
+		if !exists || hints.Strict != nil || hints.TerminalName != "kitty" {
+			t.Fatal("old strict close timer removed the new session's focus target")
+		}
+		if got := s.replaceID("new-session"); got != id {
+			t.Fatalf("old strict close discarded the new session's replacement ID: %d", got)
+		}
+		if s.takeStrictAction(strictTestSignal(id)) != nil {
+			t.Fatal("old-owner strict replay consumed the new legacy notification")
+		}
+		if replaced := sendReplaceable(t, s, "new-session", false); replaced != id {
+			t.Fatalf("new session failed to replace its live notification: %d", replaced)
+		}
+
+		s.onNotificationClosed(&notify.NotificationClosedSignal{ID: id, Reason: notify.ReasonDismissedByUser})
+		if _, exists := s.focusCtx[id]; exists || s.replaceID("new-session") != 0 {
+			t.Fatal("closing the replacement retained its focus target or session ID")
+		}
+		if next := sendReplaceable(t, s, "new-session", false); next == id {
+			t.Fatal("new notification reused the closed replacement")
+		}
+	})
 }
