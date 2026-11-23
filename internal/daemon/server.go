@@ -506,10 +506,15 @@ func (s *Server) refreshReplaceOwner() {
 	s.replaceOwner = owner
 	s.replaceIDsMu.Unlock()
 	if changed {
-		// Reused IDs from a restarted notification service must not inherit
-		// old click-to-focus targets either.
+		// Preserve strict click targets verified against the current owner,
+		// including those created before the first replacement request.
+		// Unverified or previous-owner targets may refer to recycled IDs.
 		s.focusCtxMu.Lock()
-		clear(s.focusCtx)
+		for id, hints := range s.focusCtx {
+			if owner == "" || hints.Strict == nil || hints.StrictOwner != owner {
+				delete(s.focusCtx, id)
+			}
+		}
 		s.focusCtxMu.Unlock()
 	}
 }

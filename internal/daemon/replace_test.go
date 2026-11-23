@@ -133,6 +133,49 @@ func TestReplacementIDsInvalidateWhenServiceOwnerUnknown(t *testing.T) {
 	}
 }
 
+// The first replacement-owner check must not invalidate a strict click
+// captured earlier against that same live D-Bus owner. Restarted services and
+// unknown owners still invalidate obsolete or unverifiable focus targets.
+func TestReplaceOwnerPreservesOnlyCurrentVerifiedStrictTargets(t *testing.T) {
+	s := newReplaceServer(&replaceNotifier{})
+	owner := ":1.100"
+	s.replaceOwnerLookup = func(context.Context) (string, bool) { return owner, true }
+	s.focusCtx[1] = FocusHints{Strict: &notification.TerminalTarget{}, StrictOwner: owner}
+	s.focusCtx[2] = FocusHints{Strict: &notification.TerminalTarget{}, StrictOwner: ":1.99"}
+	s.focusCtx[3] = FocusHints{TerminalName: "kitty"}
+
+	s.refreshReplaceOwner() // Initial lookup, no previous replaceOwner.
+	if _, ok := s.focusCtx[1]; !ok {
+		t.Fatal("first lookup deleted strict focus authorized for current owner")
+	}
+	if _, ok := s.focusCtx[2]; ok {
+		t.Fatal("first lookup retained strict focus from a different owner")
+	}
+	if _, ok := s.focusCtx[3]; ok {
+		t.Fatal("first lookup retained unverifiable legacy focus target")
+	}
+
+	s.rememberReplaceID("session-a", 7)
+	owner = ":1.101" // Notification server restarted and may recycle IDs.
+	s.focusCtx[4] = FocusHints{Strict: &notification.TerminalTarget{}, StrictOwner: owner}
+	s.refreshReplaceOwner()
+	if _, ok := s.focusCtx[1]; ok {
+		t.Fatal("owner change retained obsolete strict focus target")
+	}
+	if _, ok := s.focusCtx[4]; !ok {
+		t.Fatal("owner change deleted already-verified new-owner strict focus")
+	}
+	if id := s.replaceID("session-a"); id != 0 {
+		t.Fatalf("owner change retained stale replace ID %d", id)
+	}
+
+	s.replaceOwnerLookup = func(context.Context) (string, bool) { return "", false }
+	s.refreshReplaceOwner()
+	if _, ok := s.focusCtx[4]; ok {
+		t.Fatal("unknown service owner retained strict focus")
+	}
+}
+
 // A restarted daemon has no ids, so the next notification is new.
 func TestReplaceKeyLostOnDaemonRestart(t *testing.T) {
 	n := &replaceNotifier{}
