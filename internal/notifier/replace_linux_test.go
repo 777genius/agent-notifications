@@ -176,7 +176,6 @@ func TestLinuxReplaceKeyOldDaemonContext(t *testing.T) {
 	}
 }
 
-
 // The fake daemon passes startup readiness, then fails the capability probe
 // or the Notify response. Only the former is safe to retry through plain D-Bus.
 func serveDaemonWithInjectedFailure(t *testing.T, failOnPing bool) <-chan daemon.Request {
