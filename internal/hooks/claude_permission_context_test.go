@@ -80,6 +80,22 @@ func TestClaudePermissionRecentToolRequiresUniqueFreshUnresolvedRecord(t *testin
 			t.Fatalf("ignored the other in-flight tool: %q", name)
 		}
 	})
+	t.Run("incomplete append cannot lend an older tool identity", func(t *testing.T) {
+		s := writeClaudePermissionFixture(t, "test-unflushed",
+			claudeToolRecord("test-unflushed", "call-1", "Bash", now))
+		file, err := os.OpenFile(s.TranscriptPath, os.O_APPEND|os.O_WRONLY, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, writeErr := file.WriteString(`{"type":"assistant","message":{"content":[`)
+		closeErr := file.Close()
+		if writeErr != nil || closeErr != nil {
+			t.Fatal(writeErr, closeErr)
+		}
+		if name := claudePermissionRecentTool(s); name != "" {
+			t.Fatalf("guessed from unstable transcript tail: %q", name)
+		}
+	})
 	t.Run("old tool does not become current prompt", func(t *testing.T) {
 		s := writeClaudePermissionFixture(t, "test-old",
 			claudeToolRecord("test-old", "call-1", "Bash", now.Add(-2*time.Minute)))
