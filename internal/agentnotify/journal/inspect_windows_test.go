@@ -69,8 +69,22 @@ func TestWindowsReadOnlySnapshotHandlePermitsAtomicReplacement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	candidate := filepath.Join(root, "candidate-snapshot.json")
-	if err := os.WriteFile(candidate, body, 0600); err != nil {
+	// Use the writer's own private-file creation primitive. os.WriteFile
+	// inherits ambient Windows ACLs, which does not qualify a journal
+	// snapshot on a restricted private root.
+	candidate, err := openFile(dir, "candidate-snapshot.json", oWRONLY|oCREAT|oEXCL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := candidate.Write(body); err != nil {
+		_ = candidate.Close()
+		t.Fatal(err)
+	}
+	if err := candidate.Sync(); err != nil {
+		_ = candidate.Close()
+		t.Fatal(err)
+	}
+	if err := candidate.Close(); err != nil {
 		t.Fatal(err)
 	}
 	// Publish through the actual journal writer, rather than os.Rename
