@@ -123,7 +123,7 @@ func TestGitMetadataContextIgnoresInheritedRepoSelection(t *testing.T) {
 }
 
 // Windows treats environment variable names case-insensitively. A mixed-case
-// GIT_DIR must not override the repository selected by the caller\u0027s cwd.
+// GIT_DIR must not override the repository selected by the caller's cwd.
 func TestGitDiscoveryEnvIgnoresMixedCaseOnWindows(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("Windows environment-key matching")
