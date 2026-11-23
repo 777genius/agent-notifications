@@ -1,6 +1,7 @@
 name: Navigation Linux portal owner fence native TEST
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - '.github/workflows/navigation-linux-portal-owner-fence.yml'
       - 'tests/integration/navigation_linux_portal_owner_fence_ci.ts'
@@ -17,6 +18,7 @@ concurrency:
 
 jobs:
   owner-fence:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft != true
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     env:
