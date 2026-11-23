@@ -56,6 +56,36 @@ func TestClaudePermissionRecentToolRequiresUniqueFreshUnresolvedRecord(t *testin
 			t.Fatalf("unexpected permission body: %q", body)
 		}
 	})
+	t.Run("ordinary Claude user text does not break tool matching", func(t *testing.T) {
+		s := writeClaudePermissionFixture(t, "test-text",
+			map[string]any{"type": "user", "sessionId": "test-text",
+				"message": map[string]any{"role": "user", "content": "Please continue"}},
+			claudeToolRecord("test-text", "call-1", "Bash", now))
+		if tool := claudePermissionRecentTool(s); tool != "Bash" {
+			t.Fatalf("string-form Claude user message suppressed tool evidence: %q", tool)
+		}
+	})
+	for _, unsafe := range []struct{ label, line string }{
+		{"malformed JSON", "not json\n"},
+		{"oversized line", strings.Repeat("x", claudePermissionMaxRecord+1)+"\n"},
+	} {
+		t.Run(unsafe.label+" cannot hide another operation", func(t *testing.T) {
+			s := writeClaudePermissionFixture(t, "test-bad",
+				claudeToolRecord("test-bad", "call-1", "Bash", now))
+			file, err := os.OpenFile(s.TranscriptPath, os.O_APPEND|os.O_WRONLY, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, writeErr := file.WriteString(unsafe.line)
+			closeErr := file.Close()
+			if writeErr != nil || closeErr != nil {
+				t.Fatal(writeErr, closeErr)
+			}
+			if name := claudePermissionRecentTool(s); name != "" {
+				t.Fatalf("partial evidence produced tool label: %q", name)
+			}
+		})
+	}
 	t.Run("completed call is not a permission candidate", func(t *testing.T) {
 		s := writeClaudePermissionFixture(t, "test-done",
 			claudeToolRecord("test-done", "call-1", "Bash", now),
