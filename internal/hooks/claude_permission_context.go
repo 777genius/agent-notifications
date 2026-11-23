@@ -45,20 +45,10 @@ func claudePermissionRecentTool(session SessionContext) string {
 	if stat.Size() > claudePermissionTailBytes {
 		return ""
 	}
-	start := int64(0)
 	tail := make([]byte, int(stat.Size()))
-	n, err := file.ReadAt(tail, start)
+	n, err := file.ReadAt(tail, 0)
 	if (err != nil && err != io.EOF) || n != len(tail) {
 		return ""
-	}
-	// The first line of a nonzero-offset tail may be a fragment. Never
-	// interpret it as an intact message even if it happens to be valid JSON.
-	if start > 0 {
-		cut := bytes.IndexByte(tail, '\n')
-		if cut < 0 {
-			return ""
-		}
-		tail = tail[cut+1:]
 	}
 	// The last record may still be being written. An incomplete tail must
 	// never make an older tool appear to be the only pending operation.
