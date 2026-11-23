@@ -176,9 +176,11 @@ func (n *Notifier) SendDesktop(status analyzer.Status, message, sessionID, cwd s
 		cleanMessage = subtitle + "\n" + cleanMessage
 	}
 
-	// Linux: Try daemon for click-to-focus support
-	if platform.IsLinux() && focusEnabled {
-		if err := sendLinuxNotification(title, cleanMessage, appIcon, n.cfg, cwd); err != nil {
+	// Linux: Try daemon for click-to-focus support and for replacing a
+	// session's previous notification (replaceNotificationsPerSession).
+	replaceKey := replacementSessionKey(sessionID, n.cfg.ShouldReplaceNotificationsPerSession())
+	if platform.IsLinux() && (focusEnabled || replaceKey != "") {
+		if err := sendLinuxNotification(title, cleanMessage, appIcon, n.cfg, cwd, focusEnabled, replaceKey); err != nil {
 			logging.Warn("Linux daemon notification failed, falling back to beeep: %v", err)
 			// Fall through to beeep
 		} else {

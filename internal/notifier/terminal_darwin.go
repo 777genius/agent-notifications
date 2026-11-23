@@ -248,7 +248,7 @@ func EnsureClaudeNotificationsApp() error {
 
 // sendLinuxNotification is a stub for macOS.
 // On macOS, click-to-focus is handled via terminal-notifier.
-func sendLinuxNotification(title, body, appIcon string, cfg *config.Config, cwd string) error {
+func sendLinuxNotification(title, body, appIcon string, cfg *config.Config, cwd string, focus bool, replaceKey string) error {
 	return fmt.Errorf("Linux notifications not available on macOS")
 }
 

@@ -456,6 +456,26 @@ func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 		}
 	}
 
+	// Claude follows an AskUserQuestion/ExitPlanMode PreToolUse with a generic
+	// permission_prompt Notification for the same dialog (#662). Since that
+	// Notification is a permission request (#633), the question cooldown above
+	// no longer sees it; drop it here when the tool was just notified. A prompt
+	// with specific text (for example "...to use Bash") always notifies.
+	if ev.Product == ProductClaude && status == analyzer.StatusPermissionRequest {
+		if p, ok := ev.Payload.(NotificationPayload); ok && isGenericClaudePermissionPrompt(p.Message) {
+			paired, err := h.stateMgr.ConsumeInteractiveToolPermissionPair(
+				keys.stateKey,
+				h.cfg.GetSuppressQuestionAfterAnyNotificationSeconds(),
+			)
+			if err != nil {
+				logging.Warn("Failed to check interactive-tool permission pairing: %v", err)
+			} else if paired {
+				logging.Debug("Permission prompt suppressed: generic echo of a just-notified interactive tool")
+				return nil
+			}
+		}
+	}
+
 	content, ok := h.prepareHookContent(ev, keys, hookEvent, classified, bench)
 	if !ok {
 		return nil
