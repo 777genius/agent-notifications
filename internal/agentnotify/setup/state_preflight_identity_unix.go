@@ -25,7 +25,17 @@ func inspectPersistedStageIdentity(rootPath, expected string) error {
 	if err != nil {
 		return err
 	}
+	// The journal decoder reads namespace/snapshot but does not open its
+	// permanent lock. A damaged or publicly readable lock would make Apply
+	// fail after preflight, so verify it with the same privateFile contract.
+	journalLock, lockErr := privateFile(journalDir, "lock", 8*1024*1024)
+	if lockErr == nil {
+		lockErr = journalLock.Close()
+	}
 	_ = journalDir.Close()
+	if lockErr != nil {
+		return lockErr
+	}
 	spool, err := openChild(stage, "native-spool")
 	if err != nil {
 		return err
