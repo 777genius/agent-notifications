@@ -25,7 +25,7 @@ func InspectReadOnly(ctx context.Context, o Options) (string, error) {
 		return "", err
 	}
 	defer func() { _ = dir.Close() }()
-	d, err := s.read(dir)
+	d, err := s.readInspection(dir)
 	if err != nil {
 		return "", err
 	}
