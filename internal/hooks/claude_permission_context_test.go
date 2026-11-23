@@ -102,6 +102,26 @@ func TestClaudePermissionRecentToolRequiresUniqueFreshUnresolvedRecord(t *testin
 			t.Fatalf("guessed among concurrent calls: %q", name)
 		}
 	})
+	t.Run("reused id across records cannot collapse competing tools", func(t *testing.T) {
+		s := writeClaudePermissionFixture(t, "test-reused-id",
+			claudeToolRecord("test-reused-id", "call-reused", "Bash", now),
+			claudeToolRecord("test-reused-id", "call-reused", "Edit", now))
+		if name := claudePermissionRecentTool(s); name != "" {
+			t.Fatalf("reused tool ID produced false unique permission: %q", name)
+		}
+	})
+	t.Run("reused id within record cannot collapse competing tools", func(t *testing.T) {
+		s := writeClaudePermissionFixture(t, "test-same-record-reuse",
+			map[string]any{"type": "assistant", "sessionId": "test-same-record-reuse",
+				"timestamp": now.Format(time.RFC3339Nano), "message": map[string]any{
+					"role": "assistant", "content": []any{
+						map[string]any{"type": "tool_use", "id": "call-reused", "name": "Bash"},
+						map[string]any{"type": "tool_use", "id": "call-reused", "name": "Edit"},
+					}}})
+		if name := claudePermissionRecentTool(s); name != "" {
+			t.Fatalf("duplicate tool_use ID in one record produced false unique permission: %q", name)
+		}
+	})
 	t.Run("unknown concurrent tool prevents a false single match", func(t *testing.T) {
 		s := writeClaudePermissionFixture(t, "test-unknown",
 			claudeToolRecord("test-unknown", "call-1", "Bash", now),
