@@ -110,9 +110,9 @@ func TestClaudePermissionRecentToolRequiresUniqueFreshUnresolvedRecord(t *testin
 			t.Fatalf("ignored the other in-flight tool: %q", name)
 		}
 	})
-	for _, malformed := range []struct{ kind, brokenType, idKey string }{
-		{"tool use without id", "tool_use", "id"},
-		{"tool result without tool_use_id", "tool_result", "tool_use_id"},
+	for _, malformed := range []struct{ kind, brokenType string }{
+		{"tool use without id", "tool_use"},
+		{"tool result without tool_use_id", "tool_result"},
 	} {
 		t.Run(malformed.kind+" cannot hide pending work", func(t *testing.T) {
 			broken := map[string]any{"type": malformed.brokenType, "name": "Edit"}
