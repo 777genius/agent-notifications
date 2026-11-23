@@ -3,6 +3,7 @@
 package setup
 
 import (
+	"context"
 	"bytes"
 	"encoding/hex"
 	"encoding/json"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/777genius/agent-notifications/internal/agentnotify/journal"
 	"github.com/777genius/agent-notifications/internal/installruntime"
 )
 
@@ -18,7 +20,7 @@ import (
 // The ordinary setup preflight used to validate only route/config/runtime and
 // announce "ready" for a missing journal or a policy enabled without setupState.
 // Neither an inspection nor a failed setup may adopt/reset private state (#585).
-func inspectInitializedForEnable(o Options, s installruntime.PolicySnapshot) error {
+func inspectInitializedForEnable(ctx context.Context, o Options, s installruntime.PolicySnapshot) error {
 	if err := installruntime.CheckPrivateControlRoot(o.ControlRoot); err != nil {
 		return fail("managed_runtime_required", err)
 	}
@@ -68,13 +70,13 @@ func inspectInitializedForEnable(o Options, s installruntime.PolicySnapshot) err
 		return fail("initialization_recovery_required", fmt.Errorf("invalid ownership token: %w", err))
 	}
 
-	return inspectProvisionContinuation(o, s, owner)
+	return inspectProvisionContinuation(ctx, o, s, owner)
 }
 
 // A complete interrupted journal is resumable by Apply. Preflight must not
 // block a legitimate retry after journal_initialized or ownership_ready, nor
 // claim readiness for an abandoned pre-initialization stage (#585).
-func inspectProvisionContinuation(o Options, s installruntime.PolicySnapshot, owner ownership) error {
+func inspectProvisionContinuation(ctx context.Context, o Options, s installruntime.PolicySnapshot, owner ownership) error {
 	root := o.ControlRoot
 	state := filepath.Join(root, "state")
 	stage := filepath.Join(root, stageName)
@@ -91,7 +93,10 @@ func inspectProvisionContinuation(o Options, s installruntime.PolicySnapshot, ow
 			return fail("initialization_recovery_required",
 				fmt.Errorf("unexpected retained or overlapping setup stage; preserve state"))
 		}
-		return checkProvisioned(o, s)
+		if err := checkProvisioned(o, s); err != nil {
+			return err
+		}
+		return inspectInitializedJournal(ctx, o, state, owner.Namespace)
 	}
 	if stageErr != nil || !stageInfo.IsDir() {
 		return fail("initialization_recovery_required",
@@ -131,6 +136,25 @@ func inspectProvisionContinuation(o Options, s installruntime.PolicySnapshot, ow
 			return fail("initialization_recovery_required",
 				fmt.Errorf("interrupted setup journal is incomplete or unsafe; preserve private state"))
 		}
+	}
+	return inspectInitializedJournal(ctx, o, stage, owner.Namespace)
+}
+
+// journal.Open is a read-only transaction: it uses the existing lock, parses
+// canonical bounded records, validates the namespace, and does not create or
+// repair the journal. A structural check alone can call a corrupt journal
+// "ready" and cause a later enable failure (#585).
+func inspectInitializedJournal(ctx context.Context, o Options, state, expectedNamespace string) error {
+	store, err := journal.Open(ctx, journal.Options{
+		Root: filepath.Join(state, "journal"), Clock: o.JournalClock,
+	})
+	if err != nil {
+		return fail("initialization_recovery_required",
+			fmt.Errorf("persisted setup journal is unreadable or inconsistent; preserve it for recovery: %w", err))
+	}
+	if expectedNamespace != "" && store.Namespace() != expectedNamespace {
+		return fail("initialization_recovery_required",
+			fmt.Errorf("persisted setup journal namespace does not match ownership"))
 	}
 	return nil
 }
