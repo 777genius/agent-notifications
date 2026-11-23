@@ -1,0 +1,144 @@
+package hooks
+
+import (
+	"bytes"
+	"encoding/json"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+)
+
+const (
+	claudePermissionTailBytes = 256 * 1024
+	claudePermissionMaxRecord = 64 * 1024
+	claudePermissionMaxAge = 45 * time.Second
+)
+
+// claudePermissionRecentTool is only an optional, advisory label for Claude's
+// generic delayed permission notification. A transcript does not identify the
+// currently displayed permission dialog; never present this as the exact
+// command being approved, and never render tool_input or tool output.
+func claudePermissionRecentTool(session SessionContext) string {
+	if session.SessionID == "" || session.TranscriptPath == "" ||
+		!filepath.IsAbs(session.TranscriptPath) ||
+		filepath.Clean(session.TranscriptPath) != session.TranscriptPath ||
+		filepath.Base(session.TranscriptPath) != session.SessionID+".jsonl" {
+		return ""
+	}
+	before, err := os.Lstat(session.TranscriptPath)
+	if err != nil || !before.Mode().IsRegular() || before.Size() == 0 {
+		return ""
+	}
+	file, err := os.Open(session.TranscriptPath)
+	if err != nil {
+		return ""
+	}
+	defer func() { _ = file.Close() }()
+	stat, err := file.Stat()
+	if err != nil || !stat.Mode().IsRegular() || stat.Size() != before.Size() {
+		return ""
+	}
+	length := stat.Size()
+	if length > claudePermissionTailBytes {
+		length = claudePermissionTailBytes
+	}
+	start := stat.Size() - length
+	tail := make([]byte, int(length))
+	n, err := file.ReadAt(tail, start)
+	if (err != nil && err != io.EOF) || n != len(tail) {
+		return ""
+	}
+	// The first line of a nonzero-offset tail may be a fragment. Never
+	// interpret it as an intact message even if it happens to be valid JSON.
+	if start > 0 {
+		cut := bytes.IndexByte(tail, '\n')
+		if cut < 0 {
+			return ""
+		}
+		tail = tail[cut+1:]
+	}
+	// A concurrent append would invalidate the snapshot. Keep the original
+	// host message rather than guessing from unstable evidence.
+	if after, err := file.Stat(); err != nil || after.Size() != before.Size() {
+		return ""
+	}
+	completed := make(map[string]bool)
+	pending := make(map[string]string)
+	now := time.Now()
+	lines := bytes.Split(tail, []byte{'\n'})
+	for i := len(lines)-1; i >= 0; i-- {
+		if len(lines[i]) == 0 || len(lines[i]) > claudePermissionMaxRecord {
+			continue
+		}
+		var record struct {
+			Type      string `json:"type"`
+			SessionID string `json:"sessionId"`
+			Timestamp string `json:"timestamp"`
+			Message   struct {
+				Content []struct {
+					Type      string `json:"type"`
+					ID        string `json:"id"`
+					ToolUseID string `json:"tool_use_id"`
+					Name      string `json:"name"`
+				} `json:"content"`
+			} `json:"message"`
+		}
+		if json.Unmarshal(lines[i], &record) != nil || record.SessionID != session.SessionID {
+			continue
+		}
+		// Walk newest to oldest, so a later tool_result suppresses its
+		// earlier tool_use even when both occur in one model turn.
+		for _, item := range record.Message.Content {
+			if item.Type == "tool_result" && item.ToolUseID != "" {
+				completed[item.ToolUseID] = true
+				delete(pending, item.ToolUseID)
+			}
+		}
+		if record.Type != "assistant" {
+			continue
+		}
+		at, err := time.Parse(time.RFC3339Nano, record.Timestamp)
+		if err != nil || at.After(now.Add(5*time.Second)) || now.Sub(at) > claudePermissionMaxAge {
+			continue
+		}
+		for _, item := range record.Message.Content {
+			if item.Type != "tool_use" || item.ID == "" || completed[item.ID] {
+				continue
+			}
+			if name := safeClaudeToolLabel(item.Name); name != "" {
+				pending[item.ID] = name
+			}
+		}
+	}
+	if len(pending) != 1 {
+		return ""
+	}
+	for _, name := range pending {
+		return name
+	}
+	return ""
+}
+
+// Restrict names to fixed non-sensitive tool identities. Dynamic MCP names,
+// descriptions, shell input, file paths and transcript text never reach a banner.
+func safeClaudeToolLabel(name string) string {
+	switch name {
+	case "Bash", "PowerShell", "Read", "Edit", "Write", "MultiEdit",
+		"NotebookEdit", "Glob", "Grep", "WebFetch", "WebSearch", "Agent", "Task":
+		return name
+	default:
+		return ""
+	}
+}
+
+func claudePermissionBody(host string, session SessionContext) string {
+	host = strings.Join(strings.Fields(host), " ")
+	if isGenericClaudePermissionPrompt(host) {
+		if tool := claudePermissionRecentTool(session); tool != "" {
+			return truncateRunes(host+" (recent tool: "+tool+")", 180)
+		}
+	}
+	return truncateRunes(host, 180)
+}
