@@ -13,7 +13,7 @@ import (
 const (
 	claudePermissionTailBytes = 256 * 1024
 	claudePermissionMaxRecord = 64 * 1024
-	claudePermissionMaxAge = 45 * time.Second
+	claudePermissionMaxAge    = 45 * time.Second
 )
 
 // claudePermissionRecentTool is only an optional, advisory label for Claude's
@@ -69,7 +69,7 @@ func claudePermissionRecentTool(session SessionContext) string {
 	pending := make(map[string]pendingTool)
 	now := time.Now()
 	lines := bytes.Split(tail, []byte{'\n'})
-	for i := len(lines)-1; i >= 0; i-- {
+	for i := len(lines) - 1; i >= 0; i-- {
 		if len(lines[i]) == 0 {
 			continue
 		}

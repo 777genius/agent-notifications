@@ -67,7 +67,7 @@ func TestClaudePermissionRecentToolRequiresUniqueFreshUnresolvedRecord(t *testin
 	})
 	for _, unsafe := range []struct{ label, line string }{
 		{"malformed JSON", "not json\n"},
-		{"oversized line", strings.Repeat("x", claudePermissionMaxRecord+1)+"\n"},
+		{"oversized line", strings.Repeat("x", claudePermissionMaxRecord+1) + "\n"},
 	} {
 		t.Run(unsafe.label+" cannot hide another operation", func(t *testing.T) {
 			s := writeClaudePermissionFixture(t, "test-bad",
