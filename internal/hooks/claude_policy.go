@@ -232,3 +232,12 @@ func (h *Handler) handleTeammateIdle(ev Event, p TeammateIdlePayload) error {
 	logging.Debug("=== Hook completed: TeammateIdle (team notification sent) ===")
 	return nil
 }
+
+// isGenericClaudePermissionPrompt reports whether a Claude permission_prompt
+// message carries no detail beyond "Claude needs your permission". Claude
+// sends this bare text for the dialog an AskUserQuestion or ExitPlanMode
+// opens; prompts for other tools name the tool or the operation.
+func isGenericClaudePermissionPrompt(message string) bool {
+	m := strings.ToLower(strings.TrimRight(strings.TrimSpace(message), ".!"))
+	return m == "claude needs your permission"
+}

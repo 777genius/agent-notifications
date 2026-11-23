@@ -45,7 +45,7 @@ type NotificationsConfig struct {
 	NotifyDelaySeconds                          *int             `json:"notifyDelaySeconds"`             // Wait N seconds before delivering a desktop notification (paired with notifyOnlyWhenUnfocused, it re-checks focus after the wait), default: 0
 	RespectDoNotDisturb                         *string          `json:"respectDoNotDisturb,omitempty"`  // How to treat the desktop's Do Not Disturb state: "off" (default), "silent" (deliver the banner, skip the sound), "suppress" (skip the notification entirely)
 	RespectDisplaySleep                         *bool            `json:"respectDisplaySleep"`            // Skip the plugin's own sound while every display is asleep (macOS only), default: false
-	ReplaceNotificationsPerSession              *bool            `json:"replaceNotificationsPerSession"` // macOS: replace a session's previous banner with its newest desktop notification instead of stacking, default: false
+	ReplaceNotificationsPerSession              *bool            `json:"replaceNotificationsPerSession"` // macOS and Linux: replace a session's previous banner with its newest desktop notification instead of stacking, default: false
 }
 
 // DesktopConfig represents desktop notification settings

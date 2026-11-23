@@ -21,6 +21,13 @@ const testHookSwaySocket = "/run/user/1000/sway-ipc.1000.4242.sock"
 // the notification requests it receives.
 func serveFakeDaemon(t *testing.T) <-chan daemon.Request {
 	t.Helper()
+	return serveFakeDaemonWithCapabilities(t, []string{daemon.CapabilityNoFocus})
+}
+
+// serveFakeDaemonWithCapabilities is serveFakeDaemon advertising capabilities
+// in its ping reply; nil plays a daemon from before capabilities existed.
+func serveFakeDaemonWithCapabilities(t *testing.T, capabilities []string) <-chan daemon.Request {
+	t.Helper()
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 	listener, err := net.Listen("unix", daemon.GetSocketPath())
 	if err != nil {
@@ -39,7 +46,7 @@ func serveFakeDaemon(t *testing.T) <-chan daemon.Request {
 			if json.NewDecoder(conn).Decode(&req) == nil {
 				resp := daemon.Response{Type: req.Type}
 				if req.Type == daemon.MessageTypePing {
-					resp.Ping = &daemon.PingResponse{Version: daemon.ProtocolVersion}
+					resp.Ping = &daemon.PingResponse{Version: daemon.ProtocolVersion, Capabilities: capabilities}
 				} else {
 					requests <- req
 					resp.Notify = &daemon.NotifyResponse{Success: true, NotificationID: 23}
@@ -89,7 +96,7 @@ func TestSendViaDaemonSwayHints(t *testing.T) {
 
 			cfg := config.DefaultConfig()
 			cfg.Notifications.Desktop.ClickToFocus = true
-			if err := sendViaDaemon("title", "body", "", filepath.Join(t.TempDir(), "proj"), cfg); err != nil {
+			if err := sendViaDaemon("title", "body", "", filepath.Join(t.TempDir(), "proj"), cfg, true, ""); err != nil {
 				t.Fatal(err)
 			}
 
