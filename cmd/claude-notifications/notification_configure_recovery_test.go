@@ -69,3 +69,29 @@ func TestNotificationConfigureRefusesMissingRetainedJournalBeforeMutation(t *tes
 		t.Fatal("configure recreated or modified a lost journal")
 	}
 }
+
+func TestNotificationConfigureRefusesCorruptJournalBeforeEnable(t *testing.T) {
+	f, req, deps := configureFixture(t)
+	req.Provider = "claude"
+	req.PolicyOnly = true
+	if result, err := configureNotifications(setupCommandContext(t), req, deps); err != nil {
+		t.Fatalf("healthy first setup failed: %+v %v", result, err)
+	}
+	file := filepath.Join(f.control, "state", "journal", "journal.json")
+	if err := os.WriteFile(file, []byte("{not valid journal\\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	req.PreserveEnabled = true
+	before := setupCommandTree(t, f.root)
+	result, err := configureNotifications(setupCommandContext(t), req, deps)
+	if err == nil || result.Reason != "initialization_recovery_required" {
+		t.Fatalf("corrupt but existing journal was accepted: %+v %v", result, err)
+	}
+	if len(result.Stages) == 0 || result.Stages[len(result.Stages)-1].Name != "preflight" ||
+		result.Stages[len(result.Stages)-1].Outcome != "failed" {
+		t.Fatalf("corrupt journal reached mutating stage: %+v", result.Stages)
+	}
+	if !reflect.DeepEqual(before, setupCommandTree(t, f.root)) {
+		t.Fatal("preflight altered corrupt user journal or registration")
+	}
+}
