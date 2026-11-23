@@ -75,6 +75,32 @@ func TestInspectChecksInitializationAdmissionBeforeEnable(t *testing.T) {
 			t.Fatal("read-only preflight replayed incomplete provisioning")
 		}
 	})
+	t.Run("enabled intent cannot promote interrupted ownership", func(t *testing.T) {
+		o, r := fixture(t)
+		o.Fault = func(step string) error {
+			if step == "journal_initialized" {
+				return fmt.Errorf("interrupted journal")
+			}
+			return nil
+		}
+		result, err := Apply(contextFor(t), o, r)
+		wantReason(t, err, "initialization_interrupted")
+		o.Fault = nil
+		on := true
+		if _, err := installruntime.Commit(contextFor(t), installruntime.Request{
+			ControlRoot: o.ControlRoot, RuntimeRoot: o.RuntimeRoot, Owner: o.Owner,
+			ConsumerID: o.ConsumerID, RefreshOnly: true, PolicyOnly: true,
+			ExpectedGeneration: &result.Generation, PolicyEnabled: &on,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		r.ExpectedGeneration = snapshot(t, o).Installation.Ledger.Generation
+		before := tree(t, o.ControlRoot)
+		wantReason(t, Inspect(contextFor(t), o, r, []byte(globalConfig)), "initialization_recovery_required")
+		if !reflect.DeepEqual(before, tree(t, o.ControlRoot)) {
+			t.Fatal("preflight mutated an enabled interrupted journal")
+		}
+	})
 	for _, phase := range []string{"journal_initialized", "ownership_ready"} {
 		t.Run("fully staged journal can resume at "+phase, func(t *testing.T) {
 			o, r := fixture(t)
